@@ -11,7 +11,8 @@
  * as it would have, and raises its own "Cannot find resource". On a hit the game's call, its arguments, its result and
  * the request it fills are the game's, byte for byte.
  *
- * What it records (log lines are development builds only; counters are in every build): once per distinct
+ * What it records (every request is logged in development builds only; a release build logs the failed requests alone, see
+ * Release failures below; counters are in every build): once per distinct
  * (type, name, index) and then at the 2nd, 4th, 8th ... repeat, so a request that is made thousands of times does not
  * fill the log: one `resource_request` line with the key (type, name, index), the owner, whether an allocator was
  * passed, the return value, the call site (the game's return address as a pinned virtual address, and its name when it
@@ -25,6 +26,12 @@
  * counted and logged as one `resource_request_table_full` warning, once. At most kMaxLines request lines are written;
  * the next is replaced by one `resource_request_cap` warning, once. Both limits leave the game's call untouched.
  *
+ * Release failures (#1797). A build that is not a development build writes `resource_request_miss` for a call that returned
+ * nonzero, and nothing for one that succeeded: at the key's 1st, 2nd, 4th, 8th ... repeat, and at most kFailureLinesPerWindow
+ * lines per kFailureWindowMs window (CLOCK_MONOTONIC). The first failure of a later window writes one
+ * `resource_request_miss_suppressed` line {count, window_ms, limit} with the failures the earlier windows dropped, then its
+ * own line. Atomics only; the game's call, result and request are untouched.
+ *
  * Counters (hook_report.h), registered by RegisterCounters():
  *   resource_request_calls          the game called the function (the thunk's call counter)
  *   resource_request_thunk_faults   the thunk had no original
@@ -32,7 +39,7 @@
  *   resource_overlay_failed         manifest misses whose loose file could not be served (the game's error follows)
  *
  * Every build. The constructor sequence installs the hook in every build (ctor_sequence.h); nevr_build::kIsDev decides
- * only whether the log lines are written. The handler runs its overlay with no frame live across game code that holds
+ * only whether every request is logged or the failed ones alone. The handler runs its overlay with no frame live across game code that holds
  * a destructor, and it logs after the original has returned, so no logging frame is live while game code runs. It may
  * run on any thread the game uses for resource requests. Built with -fno-exceptions (callback_thunk.h).
  */
@@ -50,6 +57,11 @@ inline constexpr int kCounterCount = 4;
 inline constexpr unsigned kKeySlots = 8192;
 inline constexpr unsigned kProbeLimit = 64;
 inline constexpr unsigned kMaxLines = 16384;
+// A release build writes a failed request (the game's function returned nonzero), and only that, with at most
+// kFailureLinesPerWindow lines per kFailureWindowMs window; the next failure after a window that dropped some writes one
+// `resource_request_miss_suppressed` line with the exact count first (the shape of docs/standards/logging.md Rule 16).
+inline constexpr unsigned kFailureLinesPerWindow = 10;
+inline constexpr unsigned kFailureWindowMs = 10000;
 // The overlay's served and failed lines share this cap (one `resource_overlay_cap` line when they are reached).
 inline constexpr unsigned kOverlayLines = 32;
 
@@ -94,6 +106,11 @@ void SetGameFnsForTest(const GameFns* fns) noexcept;
 // base + its pinned vaddr (and writes `out`); otherwise the name of the first symbol that does not, after one WARN line
 // per refused symbol {"event":"resource_overlay_resolve",...}.
 const char* ResolveGameFnsForTest(std::uint64_t base, SymbolLookup lookup, GameFns* out) noexcept;
+// Test support: the millisecond clock the failure window reads (nullptr: CLOCK_MONOTONIC). ResetForTest restores it.
+using ClockMs = std::uint64_t (*)() noexcept;
+void SetClockForTest(ClockMs clock) noexcept;
+// Test support: the clock the failure window reads right now (the injected one, else CLOCK_MONOTONIC in milliseconds).
+std::uint64_t WindowClockMsForTest() noexcept;
 void ResetForTest() noexcept;
 
 struct Totals {

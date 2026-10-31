@@ -363,14 +363,72 @@ jobs:
         test -x "$protoc"
         just proto
 
+    # ccache 4.14.2 from its release tarball, checked against the digest measured when this pin was written (the
+    # builder image has none, and changing the image is a separate release). Not on PATH: PATH is part of every mingw
+    # package ABI (see the vcpkg install above), so the launcher is named by absolute path below.
+    - name: Install pinned ccache
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/ccache.tgz" https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-linux-x86_64-musl-static.tar.gz
+        echo "d540ba01f160addbd3dd5e18eda9bd34005591b095c09ac8ae9d0a1b655e7ef5  $RUNNER_TEMP/ccache.tgz" | sha256sum -c -
+        mkdir -p "$RUNNER_TEMP/ccache"
+        tar -xzf "$RUNNER_TEMP/ccache.tgz" --strip-components=1 -C "$RUNNER_TEMP/ccache" ccache-4.14.2-linux-x86_64-musl-static/ccache
+        "$RUNNER_TEMP/ccache/ccache" --version | grep -x "ccache version 4.14.2"
+        # The settings reach every later step, because every later step that compiles goes through the launcher the configure
+        # step names (the dist target and, off a tag, Verify). $GITHUB_WORKSPACE, not ${{ github.workspace }} (the host's path in
+        # a container job). tools/ccache.conf is the config local builds use; the size cap is CI's own and no base_dir is set
+        # (the workspace path is fixed). Only PATH is kept out of GITHUB_ENV (it is part of every mingw package ABI).
+        {
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache"
+          echo "CCACHE_CONFIGPATH=$GITHUB_WORKSPACE/tools/ccache.conf"
+          echo "CCACHE_MAXSIZE=500M"
+          echo "CCACHE_COMPILERCHECK=content"
+        } >> "$GITHUB_ENV"
+
+    # A cache is restorable only from the run's own ref and the default branch, and a tag cannot read another tag's: the
+    # entry a new tag restores was saved on main (a hand-run `gh workflow run build.yml --ref main`); a dispatch on a tag
+    # feeds the release run of that same tag. The key carries the toolchain, so a new compiler starts a fresh cache.
+    - name: Restore the ccache
+      id: ccache_cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: .ccache
+        key: ccache-mingw-release-v1-${{ steps.vcpkg.outputs.gcc }}-4.14.2-${{ github.sha }}
+        restore-keys: |
+          ccache-mingw-release-v1-${{ steps.vcpkg.outputs.gcc }}-4.14.2-
+
     - name: Configure CMake
       # Never signs here, and nothing in this workflow signs: the release signer signs the draft's files
       # afterwards (RELEASING.md).
       # The private-CA path (NEVR_CODESIGN_REQUIRED, `just sign`) is for local development builds only.
-      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF
+      run: |
+        set -euo pipefail
+        cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF \
+          -DCMAKE_C_COMPILER_LAUNCHER="$RUNNER_TEMP/ccache/ccache" -DCMAKE_CXX_COMPILER_LAUNCHER="$RUNNER_TEMP/ccache/ccache"
 
     - name: Build
-      run: cmake --build --preset mingw-release
+      run: |
+        set -euo pipefail
+        "$RUNNER_TEMP/ccache/ccache" --zero-stats
+        cmake --build --preset mingw-release
+
+    # Saved right after the build, so a failure in a later step (Verify takes 35 minutes) does not lose it. A
+    # release-event run is the last on its tag and nothing can restore its entry, so it saves nothing.
+    - name: Save the ccache
+      if: github.event_name != 'release'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: .ccache
+        key: ccache-mingw-release-v1-${{ steps.vcpkg.outputs.gcc }}-4.14.2-${{ github.sha }}
+
+    # Diagnostics only: a failure here (a renamed ccache key, no DLL because Build failed) must not fail the build.
+    - name: ccache statistics
+      if: always()
+      continue-on-error: true
+      run: |
+        "$RUNNER_TEMP/ccache/ccache" --show-stats --verbose
+        "$RUNNER_TEMP/ccache/ccache" --show-config | grep -E 'cache_dir|max_size|sloppiness|hash_dir|compiler_check|base_dir'
+        sha256sum build/mingw-release/bin/BugSplat64.dll build/mingw-release/bin/nevr-runtime.dll
 
     # What the build actually stamped, logged and checked against the version computed above: the DLL's
     # one identity literal "NEVR-BUILD <version> <commit40>" (each of the two DLLs carries it) must carry exactly that version and this

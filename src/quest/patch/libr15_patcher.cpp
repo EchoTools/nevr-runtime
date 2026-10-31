@@ -231,6 +231,146 @@ const Region* ProtectedRegionAt(const std::vector<Region>& regions, std::uint64_
   return nullptr;
 }
 
+// ---- the input's own references to the slot area (#1737, row C8) ---------------------------------------------------
+//
+// An input libr15 that another patch already touched can keep state words of its own in the page slack after the image
+// end, the bytes the slot area takes (the reference build's two, at 0x37d2540 and 0x37d2560, read and written by ADRP+ADD+LDR/STR
+// pairs). The scan reads every executable PT_LOAD as A64 words. It follows each ADRP whose page lies at most kReferenceReach
+// below the zone through the next kReferenceWindowWords words, tracking the registers that hold the page or an address derived
+// from it (ADD immediate, MOV, and the base register of load/store, LDUR/STUR and LDP/STP), and reports the first address that
+// lies within kReferenceAccessBytes of the zone. ADR is checked on its own. It looks at code only: a pointer held in data is not
+// found (none exists in the three accepted inputs).
+//
+// Limits: the scan does NOT detect these forms. Each is a way the input can still reach the slot area after this check passes.
+//   - the second register of an LDP/STP of Q registers: the scan checks the base and the first 16 bytes at the pair's address,
+//     so a pair whose second register lands at address + 16 inside the zone is not reported;
+//   - register-offset loads and stores (LDR Xt, [Xn, Xm {, LSL}]), whose address depends on Xm, which the scan does not evaluate;
+//   - index arithmetic after a register-form ADD (ADD Xd, Xn, Xm), which the scan does not evaluate: Xd keeps the value it had
+//     before the ADD, so a later access through Xd is judged on that stale value;
+//   - absolute addresses built by MOVZ/MOVK (or MOVN), which the scan does not decode;
+//   - any reference that sits more than kReferenceWindowWords (32) words after the ADRP that starts it, or in code the scan does not
+//     reach through a branch (B, BR and RET end the window; BL does not).
+// The known reference words stay clear of the slot area because of the gap (kSlotAreaGap), not because of this scan: the scan is
+// a guard for other inputs, and the pinned test (ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots) checks the
+// reference build's own words with the gap in place.
+struct SlotAreaReference {
+  std::uint64_t site = 0;
+  std::uint64_t target = 0;
+  const char* form = "";
+};
+
+constexpr std::uint64_t kReferenceWindowWords = 32;
+constexpr std::uint64_t kReferenceAccessBytes = 16;   // the widest single access: LDP of two X registers, or a Q register
+constexpr std::uint64_t kReferenceReach = 0x1000000;  // ADD #imm12, LSL #12 reaches 0xFFF000 past its ADRP's page
+
+bool FindSlotAreaReference(const std::vector<std::uint8_t>& d, const Elf& elf, std::uint64_t zoneBegin, std::uint64_t zoneEnd,
+                           SlotAreaReference* hit) {
+  auto touches = [&](std::uint64_t target) { return target < zoneEnd && target + kReferenceAccessBytes > zoneBegin; };
+  auto report = [&](std::uint64_t site, std::uint64_t target, const char* form) {
+    hit->site = site;
+    hit->target = target;
+    hit->form = form;
+    return true;
+  };
+  for (const Elf64_Phdr& p : elf.ph) {
+    if (p.p_type != PT_LOAD || (p.p_flags & PF_X) == 0) continue;
+    const std::uint64_t count = p.p_filesz / 4;  // ParseElf checked that the file range is inside the file
+    auto word = [&](std::uint64_t i) { return Read32(d, p.p_offset + 4 * i); };
+    for (std::uint64_t i = 0; i < count; ++i) {
+      const std::uint64_t pc = p.p_vaddr + 4 * i;
+      const std::uint32_t w = word(i);
+      if ((w & 0x9F000000u) == 0x10000000u) {  // ADR
+        const std::uint32_t imm = (((w >> 5) & 0x7FFFFu) << 2) | ((w >> 29) & 3u);
+        const std::int64_t offset = static_cast<std::int64_t>(imm ^ 0x100000u) - 0x100000;
+        const std::uint64_t target = pc + static_cast<std::uint64_t>(offset);
+        if (touches(target)) return report(pc, target, "adr");
+        continue;
+      }
+      unsigned rd = 0;
+      std::uint64_t page = 0;
+      if (!DecodeAdrp(w, pc, &rd, &page) || rd == 31) continue;
+      if (page >= zoneEnd || page + kReferenceReach <= zoneBegin) continue;
+      std::uint64_t val[32] = {};
+      bool live[32] = {};
+      val[rd] = page;
+      live[rd] = true;
+      for (std::uint64_t j = 1; j <= kReferenceWindowWords && i + j < count; ++j) {
+        const std::uint64_t pc2 = pc + 4 * j;
+        const std::uint32_t w2 = word(i + j);
+        const unsigned rt = w2 & 0x1Fu;
+        const unsigned rn = (w2 >> 5) & 0x1Fu;
+        const bool based = rn != 31 && live[rn];
+        // B, BR and RET end the straight-line window (BL does not).
+        if ((w2 & 0xFC000000u) == 0x14000000u || (w2 & 0xFFFFFC1Fu) == 0xD61F0000u || (w2 & 0xFFFFFC1Fu) == 0xD65F0000u) break;
+        if ((w2 & 0xFF000000u) == 0x91000000u) {  // ADD Xd, Xn, #imm12 {, LSL #12}
+          if (based) {
+            const std::uint64_t v = val[rn] + (static_cast<std::uint64_t>((w2 >> 10) & 0xFFFu) << (((w2 >> 22) & 1u) != 0 ? 12 : 0));
+            if (touches(v)) return report(pc2, v, "add");
+            if (rt != 31) {
+              val[rt] = v;
+              live[rt] = true;
+            }
+          } else if (rt != 31) {
+            live[rt] = false;
+          }
+          continue;
+        }
+        if ((w2 & 0x3B000000u) == 0x39000000u) {  // LDR/STR, unsigned immediate, any size, integer or vector
+          const unsigned size = (w2 >> 30) & 3u;
+          const bool vec = ((w2 >> 26) & 1u) != 0;
+          const unsigned opc = (w2 >> 22) & 3u;
+          const unsigned scale = (vec && size == 0 && (opc & 2u) != 0) ? 4u : size;
+          if (based) {
+            const std::uint64_t t = val[rn] + (static_cast<std::uint64_t>((w2 >> 10) & 0xFFFu) << scale);
+            if (touches(t)) return report(pc2, t, "load/store");
+          }
+          if (!vec && opc != 0 && rt != 31) live[rt] = false;  // a load into Rt
+          continue;
+        }
+        if ((w2 & 0x3B200C00u) == 0x38000000u) {  // LDUR/STUR
+          const bool vec = ((w2 >> 26) & 1u) != 0;
+          const unsigned opc = (w2 >> 22) & 3u;
+          if (based) {
+            const std::int64_t offset = static_cast<std::int64_t>(((w2 >> 12) & 0x1FFu) ^ 0x100u) - 0x100;
+            const std::uint64_t t = val[rn] + static_cast<std::uint64_t>(offset);
+            if (touches(t)) return report(pc2, t, "load/store");
+          }
+          if (!vec && opc != 0 && rt != 31) live[rt] = false;
+          continue;
+        }
+        if ((w2 & 0x3A000000u) == 0x28000000u) {  // LDP/STP/LDNP/STNP, any addressing mode
+          const unsigned opc = (w2 >> 30) & 3u;
+          const bool vec = ((w2 >> 26) & 1u) != 0;
+          const unsigned scale = vec ? 2u + opc : (opc == 2u ? 3u : 2u);
+          if (based) {
+            const std::int64_t offset = static_cast<std::int64_t>(((w2 >> 15) & 0x7Fu) ^ 0x40u) - 0x40;
+            const std::uint64_t t = val[rn] + static_cast<std::uint64_t>(offset * (std::int64_t{1} << scale));
+            if (touches(val[rn]) || touches(t)) return report(pc2, t, "pair");
+          }
+          continue;
+        }
+        if ((w2 & 0xFFE0FFE0u) == 0xAA0003E0u) {  // MOV Xd, Xm (ORR Xd, XZR, Xm)
+          const unsigned rm = (w2 >> 16) & 0x1Fu;
+          if (rt != 31) {
+            if (rm != 31 && live[rm]) {
+              val[rt] = val[rm];
+              live[rt] = true;
+            } else {
+              live[rt] = false;
+            }
+          }
+          continue;
+        }
+        if ((w2 & 0x1F000000u) == 0x10000000u) {  // another ADR or ADRP overwrites Rd
+          if (rt != 31) live[rt] = false;
+          continue;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 namespace {
@@ -283,7 +423,7 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
 
   // Identity first: an input that is already our output must say so, not read as "another build".
   const std::uint64_t pinnedEnd = spec.expectedImageEnd.value_or(imageEnd);
-  const std::uint64_t pinnedSlotArea = RoundUp(pinnedEnd, kSlotAlignment);
+  const std::uint64_t pinnedSlotArea = SlotAreaFor(pinnedEnd, spec.slotAreaGap);
   if (liveId != spec.stockBuildId) {
     const BuildIdBytes derived = DeriveBuildId(spec.stockBuildId, CanonicalTable(spec.rows, spec.rowCount, extra, pinnedSlotArea));
     if (liveId == derived) {
@@ -301,7 +441,7 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
   if (spec.expectedImageEnd.has_value() && imageEnd != *spec.expectedImageEnd) {
     return Failed(Refuse("layout_image_end", "", "the writable PT_LOAD ends at " + Hex(imageEnd) + ", expected " + Hex(*spec.expectedImageEnd)), stockSha);
   }
-  const std::uint64_t slotArea = RoundUp(imageEnd, kSlotAlignment);
+  const std::uint64_t slotArea = SlotAreaFor(imageEnd, spec.slotAreaGap);
   const std::uint64_t newEnd = slotArea + kSlotBytes * spec.rowCount;
   const std::uint64_t newEndPage = RoundUp(newEnd, 4096);
   for (std::size_t i = 0; i < elf.ph.size(); ++i) {
@@ -321,6 +461,21 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
   }
   if (bssIndex == elf.sh.size()) {
     return Failed(Refuse("layout_bss_section", "", "no NOBITS section ends at the image end " + Hex(imageEnd)), stockSha);
+  }
+
+  // The input's own code must not use the bytes the patch is about to claim: its state words would be the slots (#1737, row C8).
+  SlotAreaReference reference;
+  if (FindSlotAreaReference(stock, elf, slotArea, newEnd, &reference)) {
+    PatchResult refused = Failed(Refuse("slot_area_referenced", "",
+                                        "the input's code at " + Hex(reference.site) + " (" + reference.form + ") reaches " + Hex(reference.target) +
+                                            ", inside the slot area " + Hex(slotArea) + ".." + Hex(newEnd) +
+                                            ": the input keeps its own state there, so a slot would be one of its words"),
+                                 stockSha);
+    refused.summary["site"] = Hex(reference.site);
+    refused.summary["target"] = Hex(reference.target);
+    refused.summary["slot_area"] = Hex(slotArea);
+    refused.summary["slot_area_end"] = Hex(newEnd);
+    return refused;
   }
 
   // The bytes no row may reach, the ones the tool writes itself first so that they are named for what they are.

@@ -10,7 +10,7 @@ and the runtime source.
 
 | Step | Address | What happens |
 | --- | --- | --- |
-| pnsrad.dll caller | `CR15Game::CreateNetServiceProviders`, `0x140109810` | reads the provider name (the strings at `0x1416d35c4` "pnsovr" and `0x1416d35e8` "pnsdemo", which the runtime rewrites to "pnsrad") and reaches the module loader within three calls |
+| pnsrad.dll caller | `CR15Game::CreateNetServiceProviders`, `0x140109810` | passes the provider name (the strings at `0x1416d35c4` "pnsovr" and `0x1416d35e8` "pnsdemo") to the provider loader `CNSProvider::LoadByName`, `0x140606690`, which the runtime hooks (`src/runtime/patch/provider_name_redirect.cpp`) to pass "pnsrad" for both; the loader reaches the module loader within three calls |
 | pnsradmatchmaking.dll caller | `LoadMatchmakingSupport`, `0x14060b810` | see `docs/reference/matchmaking-module-reload.md` |
 | Module loader | `0x14105aa70` -> `0x14105ab40` | `GetModuleHandleA` (`0x1400eaf40`) first; when the module is not loaded, `0x1400eb0f0` loads it, then the loader resolves and calls the module's `RadPluginSet*` exports (`InitNonMemoryStatics`, `0x14105a600`) and further exports, all before it returns |
 | The load | `0x1400eb0f0` | `call [0x1416c3210]` at `0x1400eb13d`: `KERNEL32!LoadLibraryW`. Right after it returns, `GetProcAddress` (`[0x1416c3208]`) and a call through the result (`0x1400eb185`) |

@@ -14,7 +14,7 @@ answers whether the renderer may create one of them:
 The switch is on by default. `InitPfxTev()` reads the kill file once and logs one INFO line for the state. Past 64 decision
 lines per process, one WARNING is written and the rest are counted only (`GetPfxTevStats()`).
 
-## Not yet wired
+## Not yet wired (#1631)
 
 Nothing calls `PfxTevAllows` on this tree. The renderer that creates effects is pfx (issue #1631, the parity table row
 `pfx`), which is not in q15t. Until #1631 lands, the switch has no effect on a headset.

@@ -48,17 +48,13 @@ constexpr size_t NETSERVER_LOGGING_SIZE = 4;
 constexpr uintptr_t LOGGING_SUBJECT = 0xFFB0E;
 constexpr size_t LOGGING_SUBJECT_SIZE = 2;
 
-/// Address: FUN_140f7f8b0 (CBroadcaster::InitializeFromJson, 1440 bytes)
-/// Called from FUN_140145b30 (CR15NetDedicatedLobby constructor)
-/// Reference: String "|allow_incoming" at 0x141cd0480
-/// Forces "allow_incoming" key in netconfig_dedicatedserver.json to always be true.
-/// NOTE: _local/config.json does NOT feed this function (only overrides dedicated_port
-/// and port_retries). The game asset already has allow_incoming: true but this patch
-/// ensures it regardless of asset state or parse failure.
-/// Original: Complex parsing logic
-/// Patched: MOV eax, 1
-constexpr uintptr_t ALLOW_INCOMING = 0xF7F904;
-constexpr size_t ALLOW_INCOMING_SIZE = 5;
+/// Address: CBroadcaster::Initialize (0x140F7FE50, 900 bytes; ReVault "Initialize", tag broadcaster)
+/// Its one caller is FUN_140F7F8B0 (CBroadcaster::InitializeFromJson, call site 0x140F7FE30), which builds the
+/// netconfig mask from the JSON ("|allow_incoming" at 0x141CD0480 is bit 0). The mask is the fourth parameter (R9).
+/// _local/config.json does not feed this function.
+/// Hooked (N83): the detour sets bit 0 before the original runs (runtime/patch/broadcaster_allow_incoming.h).
+/// Prologue: 48 8B C4 48 89 58 10 4C 89 48 20 (MOV RAX,RSP; MOV [RAX+0x10],RBX; MOV [RAX+0x20],R9).
+constexpr uintptr_t BROADCASTER_INITIALIZE = 0xF7FE50;
 
 /// Address: FUN_140116720 + 0x81D (Within PreprocessCommandLine)
 /// Reference: String "-spectatorstream" at 0x1416d27b8
@@ -411,14 +407,16 @@ constexpr uintptr_t BUGSPLAT_CRASH_HANDLER = 0x0DBBC0;
 // Other Patches
 // ============================================================================
 
-/// Allows -noovr without requiring -spectatorstream
-constexpr uintptr_t NOOVR_SPECTATOR = 0x11690D;
-constexpr size_t NOOVR_SPECTATOR_SIZE = 2;
-
-/// ReVault VA 0x1401d3850: Deadlock monitor thread — loops Sleep(1000), logs "Deadlock detected!"
-/// Patch at +0x31 disables the panic condition check
-constexpr uintptr_t DEADLOCK_MONITOR = 0x1D3881;
-constexpr size_t DEADLOCK_MONITOR_SIZE = 2;
+/// -noovr requires -spectatorstream (cr15game.cpp:0x631 assert). patch/noovr_arglookup.cpp answers the game's
+/// "spectatorstream" argument lookup as found at the -noovr call site only; these pins are what it validates first.
+/// CMainArgs::FindArgIndexBySymbol(args, symbol) returns the value stored for a symbol in the argument table (zero-extended 32-bit), or -1 when the symbol is absent. Prologue: MOV R8,[RCX+0xa0].
+constexpr uintptr_t CMAINARGS_FIND_ARG_INDEX_BY_SYMBOL = 0x1400D56A0;
+constexpr unsigned char CMAINARGS_FIND_ARG_INDEX_BY_SYMBOL_PROLOGUE[12] = {0x4C, 0x8B, 0x81, 0xA0, 0x00, 0x00,
+                                                                           0x00, 0x4D, 0x85, 0xC0, 0x74, 0x3C};
+/// The -noovr call: CALL FindArgIndexBySymbol (5 bytes) at this VA, then CMP RAX,-1; JNE (the assert is skipped when
+/// the lookup is not -1). The return address of that CALL is the waiver site (cmdline_waiver.h).
+constexpr uintptr_t NOOVR_ARG_LOOKUP_CALL = 0x140116904;
+constexpr unsigned char NOOVR_ARG_LOOKUP_CONSUMER[6] = {0x48, 0x83, 0xF8, 0xFF, 0x75, 0x35};
 
 // ============================================================================
 // Oculus Platform SDK Optimization (PatchBlockOculusSDK)
@@ -453,26 +451,19 @@ constexpr uintptr_t WWISE_INIT = 0x209920;         // Wwise initialization
 constexpr uintptr_t WWISE_RENDERAUDIO = 0xFA5610;  // Audio rendering loop
 
 // ============================================================================
-// Loading Tips Patches (PatchDisableLoadingTips)
+// Loading Tips (src/runtime/patch/loading_tips.cpp, server only)
 // ============================================================================
+// The `Enter` function of each loading-tip script node. Each is hooked to return at once on a server; the
+// evidence for the identities is in loading_tips.cpp.
 
-/// Address: R15PickLoadingTipNode (0x140bd9670)
-/// Entry point for picking a random loading tip during loading screens
-/// Patched to immediately return in server mode to avoid unnecessary processing
-constexpr uintptr_t LOADING_TIP_PICK = 0xBD9670;
-constexpr size_t LOADING_TIP_PICK_SIZE = 1;
+/// Address: CR15PickLoadingTipNode::Enter (0x140bd9670)
+constexpr uintptr_t LOADING_TIP_PICK_ENTER = 0xBD9670;
 
-/// Address: R15SelectLoadingTipNode (0x140be6d10)
-/// Core logic for selecting a loading tip
-/// Patched to immediately return in server mode
-constexpr uintptr_t LOADING_TIP_SELECT = 0xBE6D10;
-constexpr size_t LOADING_TIP_SELECT_SIZE = 1;
+/// Address: CR15SelectLoadingTipByIndexNode::Enter (0x140be6d10)
+constexpr uintptr_t LOADING_TIP_SELECT_BY_INDEX_ENTER = 0xBE6D10;
 
-/// Address: R15SelectLoadingTipNode_2 (0x140be7c90)
-/// Secondary implementation of tip selection logic
-/// Patched to immediately return in server mode
-constexpr uintptr_t LOADING_TIP_SELECT_2 = 0xBE7C90;
-constexpr size_t LOADING_TIP_SELECT_2_SIZE = 1;
+/// Address: CR15SelectLoadingTipNode::Enter (0x140be7c90)
+constexpr uintptr_t LOADING_TIP_SELECT_ENTER = 0xBE7C90;
 
 // ============================================================================
 // Frame Pacing / Timing (CPrecisionSleep::BusyWait)
@@ -555,6 +546,12 @@ constexpr uintptr_t NETGAME_GAME_OFFSET = 8;
 /// Offset within the game object of the game thread's call queue, what QueueGameThreadCall takes as
 /// its first argument (NetGameScheduleReturnToLobby queues its callback on the same one).
 constexpr uintptr_t GAME_CALL_QUEUE_OFFSET = 8;
+
+/// Offset within the game object of a count of entries in the array at +0x1EE0 (the array CActorSpace::FindActor walks by
+/// id; what the entries are is not established). The game's queued
+/// return-to-lobby callback (echovr.exe 0x1401a4ad0) tests it first: while it is non-zero the callback only sets a pending
+/// flag (bit 42 of the lobby flags) and returns, and CR15NetGame::Update (0x1401bbdb0) asks again when it is 0.
+constexpr uintptr_t GAME_DEFER_COUNT_OFFSET = 0x1F10;
 
 // ============================================================================
 // Arena Rules Override (CJson_GetFloat hook)
@@ -672,6 +669,20 @@ constexpr uintptr_t PROVIDER_STRING_DMO = 0x16D714C;
 /// (N14: EULA acceptance cached per-platform-prefix, so a ???- prefix breaks cache lookup).
 constexpr uintptr_t XPID_PLATFORM_FALLBACK_PREFIX = 0x16D0F9C;
 constexpr size_t XPID_PLATFORM_FALLBACK_PREFIX_SIZE = 4;
+
+// ============================================================================
+// Net service provider loader (patch/provider_name_redirect.cpp)
+// ============================================================================
+
+/// CNSProvider::LoadByName (ReVault FUN_140606690, 565 bytes): loads the platform module named by its second argument
+/// into a provider slot. CR15Game::CreateNetServiceProviders (0x140109810) calls it three times, with "pnsovr",
+/// "pnsdemo" and "pnsrad". The runtime's hook hands the original "pnsrad" for the first two. Win64, four pointer
+/// arguments, returns 0 on success. Prologue (24 bytes, none position dependent): mov [rsp+10h],rbx;
+/// mov [rsp+18h],rbp; mov [rsp+20h],rsi; push r14; sub rsp,430h.
+constexpr uintptr_t CNSPROVIDER_LOAD_BY_NAME = 0x606690;
+constexpr unsigned char CNSPROVIDER_LOAD_BY_NAME_PROLOGUE[24] = {
+    0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89,
+    0x74, 0x24, 0x20, 0x41, 0x56, 0x48, 0x81, 0xEC, 0x30, 0x04, 0x00, 0x00};
 
 // ============================================================================
 // Asset CDN / Loadout Hooks

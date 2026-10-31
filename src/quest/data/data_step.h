@@ -1,7 +1,9 @@
 /* The first-run data step (docs/adr/0011-quest-game-data-first-run.md): decide from the data roots, fetch when the
  * data is missing, and say so in words a player can read when it cannot be had.
  *
- * Decide (plan.h) picks use, fetch or replace; RunFetch does the download, verification, extraction and swap. A fetch
+ * Decide (plan.h) picks use, fetch or replace; RunFetch does the download, verification, extraction and swap. When the
+ * data is in use and its manifest is in the pinned table (package_pins.h), the package files the manifest points into are
+ * checked and a `data_packages` event says the result; a failure is logged and the data is still used. A fetch
  * that fails is shown through `present` (the visible message, the floor of the plan) and held through `hold` so it can
  * be read before the caller ends the process. Nothing here exits, throws or touches the game: the caller (the
  * permission-wait hook's after-storage step) owns the process.
@@ -16,6 +18,7 @@
 #include <vector>
 
 #include "quest/data/fetch.h"
+#include "quest/data/package_pins.h"
 #include "quest/sentinel/data_root.h"
 
 namespace nevr_quest::data {
@@ -83,12 +86,26 @@ struct StepConfig {
   std::function<void()> announce;                           // once, when a download is certain to start (after the space check); null: none
   std::function<void(const std::string& message)> present;  // the visible message; null: none
   std::function<void()> hold;                                // after the message, so it can be read; null: none
-  std::function<void(const Event&)> on_step;                // data_check; null: none
+  std::function<void(const Event&)> on_step;                // data_check, data_packages; null: none
+  // The events the step logs at Warning (a `data_packages` failure, a marker that could not be written). Null: they go
+  // to `on_step`, at its level.
+  std::function<void(const Event&)> on_step_warn;
   // Read-only seams for the data version the step logs (`data_version`, `manifest_sha256`). Null: the real filesystem.
   // `list_dir` gives the names in a directory (none when it cannot be read); `read_file` fills `bytes` with a whole
   // file of at most 16 MiB and says whether it could.
   std::function<std::vector<std::string>(const std::string& dir)> list_dir;
   std::function<bool(const std::string& path, std::string& bytes)> read_file;
+  // Seams for the package check (package_pins.h). Null: the real filesystem.
+  // `file_size` gives the length of a regular file and says whether it is there. `hash_file` streams a file through
+  // sha256 and gives the 64 lowercase hex characters; false when it cannot be read to its end (a test injects results
+  // so it needs no 690 MB file). `write_file` writes `bytes` as the whole content of `path` (a temporary, then a
+  // rename) and says whether it did.
+  std::function<bool(const std::string& path, std::uint64_t& bytes)> file_size;
+  std::function<bool(const std::string& path, std::string& sha256_hex)> hash_file;
+  std::function<bool(const std::string& path, const std::string& bytes)> write_file;
+  // Test seam: the table of pinned data sets. Null: the pinned table (package_pins.h).
+  const PinnedDataSet* pinned_sets = nullptr;
+  std::size_t pinned_set_count = 0;
 };
 
 // The roots the leftovers are put right on: `recovery_roots`, or every candidate when it is empty, without the legacy

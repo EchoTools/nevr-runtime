@@ -4,6 +4,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <time.h>
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -45,6 +47,13 @@ std::atomic<std::uint64_t> g_lineTicket{0};  // request lines asked for; the fir
 std::atomic<std::uint64_t> g_unlogged{0};
 std::atomic<bool> g_tableFullSaid{false};
 std::atomic<bool> g_capSaid{false};
+
+// A release build's failure lines: the window the last written line belongs to ((window number << 32) | lines written in it)
+// and the failures the windows so far dropped and have not yet said. The window number is the clock's milliseconds divided by
+// kFailureWindowMs, plus one, so the initial 0 is no window.
+std::atomic<std::uint64_t> g_failWindow{0};
+std::atomic<std::uint64_t> g_failDropped{0};
+std::atomic<ClockMs> g_clock{nullptr};
 
 // The overlay's counters and its line cap (kOverlayLines, shared by the served and the failed lines).
 std::atomic<std::uint64_t> g_overlayServed{0};
@@ -105,6 +114,80 @@ const unsigned char* LoadPointer(const unsigned char* base, std::size_t at) noex
   return reinterpret_cast<const unsigned char*>(v);
 }
 
+std::uint64_t NowMs() noexcept {
+  const ClockMs clock = g_clock.load(std::memory_order_relaxed);
+  if (clock != nullptr) return clock();
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<std::uint64_t>(ts.tv_sec) * 1000u + static_cast<std::uint64_t>(ts.tv_nsec) / 1000000u;
+}
+
+// The line for a call that returned nonzero (the manifest has no such resource): the key, the return value and the call
+// site. The request is not read. Development and release builds write the same line.
+void WriteMiss(std::uint64_t type, std::uint64_t name, std::uint64_t index, std::uint64_t ret, std::uint64_t seen,
+               const void* caller) noexcept {
+  const std::uint64_t pinnedCaller =
+      static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(caller)) - g_loadBase.load(std::memory_order_relaxed);
+  char typeHex[19], nameHex[19], retHex[19], callerHex[19];
+  sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_miss",
+                      {{"type", sentinel::HexString(typeHex, type)},
+                       {"name", sentinel::HexString(nameHex, name)},
+                       {"index", index},
+                       {"ret", sentinel::HexString(retHex, ret)},
+                       {"seen", seen},
+                       {"site", SiteName(pinnedCaller)},
+                       {"caller", sentinel::HexString(callerHex, pinnedCaller)},
+                       {"tid", ThreadId()}});
+}
+
+// Takes one of the window's kFailureLinesPerWindow places. True: write the line, after one summary line when `*carried` is
+// nonzero (the failures dropped since the last line was written). False: the window is full and the failure is counted.
+// Atomics only: no lock and no destructor in the game's frame.
+bool TakeFailurePlace(std::uint64_t* carried) noexcept {
+  *carried = 0;
+  const std::uint64_t window = NowMs() / kFailureWindowMs + 1;
+  std::uint64_t held = g_failWindow.load(std::memory_order_acquire);
+  for (;;) {
+    const std::uint64_t heldWindow = held >> 32;
+    const std::uint64_t count = held & 0xffffffffULL;
+    if (heldWindow < window) {
+      // First failure of a new window: it opens the window and reports what the last ones dropped.
+      if (!g_failWindow.compare_exchange_weak(held, (window << 32) | 1, std::memory_order_acq_rel)) continue;
+      *carried = g_failDropped.exchange(0, std::memory_order_relaxed);
+      return true;
+    }
+    if (count >= kFailureLinesPerWindow) {
+      g_failDropped.fetch_add(1, std::memory_order_relaxed);
+      return false;
+    }
+    if (g_failWindow.compare_exchange_weak(held, held + 1, std::memory_order_acq_rel)) return true;
+  }
+}
+
+// A release build's only request line: a call that returned nonzero. The per-key schedule (1st, 2nd, 4th ... repeat)
+// keeps one missing resource asked for in a loop from using the window, and the window bounds the rest.
+void NoteReleaseFailure(std::uint64_t type, std::uint64_t name, std::uint64_t index, std::uint64_t ret,
+                        const void* caller) noexcept {
+  const std::uint64_t seen = Touch(KeyOf(type, name, index));
+  if (seen == 0) {
+    // No slot for this key: its repeats cannot be told apart, so each is a candidate for the window.
+    g_unlogged.fetch_add(1, std::memory_order_relaxed);
+    if (!g_tableFullSaid.exchange(true, std::memory_order_relaxed)) {
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_table_full",
+                          {{"slots", kKeySlots}, {"probe_limit", kProbeLimit}});
+    }
+  } else if ((seen & (seen - 1)) != 0) {
+    return;
+  }
+  std::uint64_t carried = 0;
+  if (!TakeFailurePlace(&carried)) return;
+  if (carried != 0) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_miss_suppressed",
+                        {{"count", carried}, {"window_ms", kFailureWindowMs}, {"limit", kFailureLinesPerWindow}});
+  }
+  WriteMiss(type, name, index, ret, seen, caller);
+}
+
 // Logs one request when its key's count is a power of two (1, 2, 4, 8 ...) and the line cap is not reached. Runs after
 // the game's function returned, on the thread that called it.
 void Note(std::uint64_t type, std::uint64_t name, std::uint64_t index, const void* owner, const void* allocator,
@@ -126,6 +209,10 @@ void Note(std::uint64_t type, std::uint64_t name, std::uint64_t index, const voi
     }
     return;
   }
+  if (ret != 0) {
+    WriteMiss(type, name, index, ret, seen, caller);
+    return;
+  }
   const std::uint64_t pinnedCaller =
       static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(caller)) - g_loadBase.load(std::memory_order_relaxed);
   char typeHex[19], nameHex[19], ownerHex[19], retHex[19], callerHex[19];
@@ -134,18 +221,6 @@ void Note(std::uint64_t type, std::uint64_t name, std::uint64_t index, const voi
   const char* const retText = sentinel::HexString(retHex, ret);
   const char* const callerText = sentinel::HexString(callerHex, pinnedCaller);
   const char* const site = SiteName(pinnedCaller);
-  if (ret != 0) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "resource_request_miss",
-                        {{"type", typeText},
-                         {"name", nameText},
-                         {"index", index},
-                         {"ret", retText},
-                         {"seen", seen},
-                         {"site", site},
-                         {"caller", callerText},
-                         {"tid", ThreadId()}});
-    return;
-  }
   const char* const ownerText = sentinel::HexString(ownerHex, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(owner)));
   if (request == nullptr) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "resource_request",
@@ -340,7 +415,11 @@ std::uint64_t Handler(FillThunk::Fn original, const void* caller, CResourceManag
     }
   }
   const std::uint64_t ret = original(manager, type, name, unused, allocator, owner, index, request);
-  if (g_logRequests.load(std::memory_order_relaxed)) Note(type, name, index, owner, allocator, ret, caller, request);
+  if (g_logRequests.load(std::memory_order_relaxed)) {
+    Note(type, name, index, owner, allocator, ret, caller, request);
+  } else if (ret != 0) {
+    NoteReleaseFailure(type, name, index, ret, caller);
+  }
   return ret;
 }
 
@@ -466,6 +545,10 @@ void ArmForTest(std::uint64_t loadBase, bool logRequests) noexcept {
 
 void SetGameFnsForTest(const GameFns* fns) noexcept { g_fns.store(fns, std::memory_order_release); }
 
+std::uint64_t WindowClockMsForTest() noexcept { return NowMs(); }
+
+void SetClockForTest(ClockMs clock) noexcept { g_clock.store(clock, std::memory_order_relaxed); }
+
 void ResetForTest() noexcept {
   for (KeySlot& slot : g_slots) {
     slot.key.store(0, std::memory_order_relaxed);
@@ -479,6 +562,9 @@ void ResetForTest() noexcept {
   g_overlayFailed.store(0, std::memory_order_relaxed);
   g_overlayTicket.store(0, std::memory_order_relaxed);
   g_overlayCapSaid.store(false, std::memory_order_relaxed);
+  g_failWindow.store(0, std::memory_order_relaxed);
+  g_failDropped.store(0, std::memory_order_relaxed);
+  g_clock.store(nullptr, std::memory_order_relaxed);
   g_fns.store(nullptr, std::memory_order_release);
   g_logRequests.store(false, std::memory_order_relaxed);
   g_loadBase.store(0, std::memory_order_relaxed);

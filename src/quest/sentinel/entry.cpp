@@ -163,6 +163,7 @@ bool InstallPermissionWaitHook() noexcept {
     // says whether it went in; a refused install leaves the game's QUIT as it is.
     nevr_quest::quit::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
+    nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();
 }
 
@@ -195,7 +196,7 @@ bool InstallRenderConfigHook(nevr_quest::texture_quality::Level level, bool from
     return nevr_quest::render_config::Install(level, fromConfig);
 }
 
-// The resource request hook (#871, #1737 C5): installed in every build; only its log lines are development builds only
+// The resource request hook (#871, #1737 C5): installed in every build; only its per-request log lines are development builds only; a release build logs failed requests, rate limited
 // (ResourceRequestLogEnabled, the `logLines` argument). A refused install is logged by GotHook and leaves the game's call intact.
 bool ResourceRequestLogEnabled() noexcept { return nevr_build::kIsDev; }
 bool RegisterResourceRequestCounters() noexcept { return nevr_quest::resource_request::RegisterCounters(); }

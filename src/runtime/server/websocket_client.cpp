@@ -155,6 +155,8 @@ size_t WebSocketClient::DiscardPendingMessages() {
 
 VOID WebSocketClient::SetMessageHandler(MessageCallback callback) { messageCallback_ = callback; }
 
+VOID WebSocketClient::SetReceiveObserver(MessageCallback callback) { receiveObserver_ = callback; }
+
 VOID WebSocketClient::SetConnectionHandler(ConnectionCallback callback) { connectionCallback_ = callback; }
 
 VOID WebSocketClient::SetBearerTokenRefresher(BearerTokenRefresher refresher) {
@@ -267,6 +269,12 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
         }
 
         auto parsed = nevr_game_server::ParseServerDbFrame(payload, queueCapacity);
+        if (receiveObserver_) {
+          for (auto& received : parsed.messages) {
+            VOID* observed = received.payload.empty() ? nullptr : received.payload.data();
+            receiveObserver_(received.msgId, observed, received.payload.size());
+          }
+        }
         bool queueFull = false;
         {
           std::lock_guard<std::mutex> lock(receivedMessagesMutex_);

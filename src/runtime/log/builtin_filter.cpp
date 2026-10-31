@@ -1078,7 +1078,7 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     ObserveGpuHung(buf);
 
     /* #1294: the game's report of its own connection to the local bridge is a Debug line. The helper matches
-     * game lines only (an nEVR line is never demoted here, N77). */
+     * game lines only (a line the runtime writes is never demoted here, N77). */
     if (nevr_bridge_line::IsBridgeConnectionLine(buf)) level = LOG_LEVEL_DEBUG;
 
     if (ShouldSuppress(buf, level)) {

@@ -8,8 +8,8 @@
  * The one root that counts is the root the engine reads this launch. With an OBB file the OBB skip ran before this
  * (CSysFile::Init mounts in android_main, ahead of the game's Initialize) and the game recorded the root it served
  * (obb_skip::CurrentRoot); without one CSysFile::Init returned at "OBB not found" and the skip never ran. Then
- * CSysInfo::GetDataRootDir decides: our hook on it answers the media root when ResolveRoot found the game's manifest
- * (data::kManifestPath) there and the hook took (obb_skip::DataRootRedirect, #866), and the function answers the legacy root otherwise.
+ * CSysInfo::GetDataRootDir decides: our hook on it answers the root ResolveRoot chose (obb_skip::DataRootRedirect, #866), the
+ * media root unless the legacy root alone holds the game's data.
  * `data_step_start` logs the root and where it came from (`engine_root_source`: obb_skip, data_root_hook or
  * engine_default). So:
  *   - Storage not granted and the engine reads the legacy root (shared storage): nothing is looked at, fetched or
@@ -19,7 +19,10 @@
  *     reads it through a skipped mount or through the data-root hook.
  *   - data::RunDataStep looks at that root only (StepConfig::engine_root), after (development builds only) putting the
  *     leftovers of an interrupted install right (RecoverReplaced, CleanLeftovers):
- *   - data already there: nothing is fetched and one `data_check action=use` line says so;
+ *   - data already there: nothing is fetched and one `data_check action=use` line says so; when its manifest is a pinned
+ *     data set (data/package_pins.h) one `data_packages` line then says whether the package files are whole (`outcome`
+ *     verified, or `unpinned` for a manifest outside the table), and a missing, short, oversize or mismatching package is a
+ *     Warning that names it; the data is used either way;
  *   - data missing or of another build, in a development build (Options::allow_fetch): the fetch runs into that root;
  *   - data missing or of another build, in a release build: nothing is fetched or written; the player is shown
  *     data::kGameDataMissing (install with Echo Launcher), it is not held (Options::hold_ms 0), a `data_step outcome=missing`
@@ -116,6 +119,10 @@ bool Install(const Options& options) noexcept;
 // The step itself, for the host test. `outcome` is how the permission wait ended: without a grant the legacy root is
 // skipped (see above).
 void AfterStorage(permission_wait::StorageOutcome outcome) noexcept;
+
+// Whether the engine reads shared storage this launch: true when its root is the legacy (shared storage) root. The
+// permission-wait hook asks for the storage permissions only then (permission_wait_hook.h, StorageNeededFn).
+bool StorageNeeded() noexcept;
 
 // The download's bounds. A transfer that moves less than kMinBytesPerSecond for kStallSeconds ends as a transport
 // failure (a network failure to the player), which the fetch retries from the part's size with its backoff; a

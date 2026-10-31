@@ -1,1 +1,0 @@
-The invite code page no longer shows a dead Ready At Dawn web address; it reads "<coming soon>" where the invite link will be.

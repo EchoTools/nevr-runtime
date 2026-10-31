@@ -44,12 +44,13 @@ imports have value 0, the third is defined in libr15 itself):
   without a callback goes to the original.
 - `AStorageManager_getMountedObbPath`: after the skip, return the root `ResolveRoot` chose (the media root when it holds
   `_data`, else the legacy root `/storage/emulated/0/readyatdawn`); before it, the original.
-- `CSysInfo::GetDataRootDir` (#866): when `ResolveRoot` found the media root holding the game's manifest (not only a `_data`
-  directory), return that root; otherwise call the original. It exists for the launch with no OBB file, where neither hook
+- `CSysInfo::GetDataRootDir` (#866): return the root `ResolveRoot` chose, the media root unless the legacy root alone holds
+  the game's data (#932, #965), in which case the legacy root. The file's own body is not consulted once `ResolveRoot` has
+  run; before it, the original answers. It exists for the launch with no OBB file, where neither hook
   above runs. By code reading (ADR 0013, Premise C; not observed on a headset), libr15 calls the function from two sites
   only, both through this slot, and both read the pointer. It is installed whether or not the
-  other two took, and `Install()` returns true only when all three did. `obb_skip::DataRootRedirect()` is non-null only when the
-  manifest was found under the media root and this slot took; the data step takes the engine's root from it (ADR 0013, Design 3).
+  other two took, and `Install()` returns true only when all three did. `obb_skip::DataRootRedirect()` is non-null whenever the
+  slot took and `ResolveRoot` has run; the data step takes the engine's root from it (ADR 0013, Design 3).
 - The path hook is installed first and the mount hook only when it took: a skipped mount with no path served would record
   an empty path and the game would retry for the same time.
 
@@ -71,6 +72,21 @@ refused mount: the same ~30 s, elsewhere), or it binds to the library's own copy
 ever called, runs the refused mount regardless of this hook). The sentinel counters do not show either; only the logcat
 deviation lines do (a second `Loading OBB from`, any `mounting encrypted OBBs is no longer supported`, a ~30 s gap).
 
+## Reference build
+
+The community reference libr15 (EchoTools/echoApkPatch, `configs/libr15.so.yaml`) carries two patches in this module's
+area. `CSysFile::Init` (`0xf85260`) becomes `ret` ("Remove OBB loading", yaml:1-9), so Init returns at its first word and
+the mount and path hooks are never called. `CSysInfo::GetDataRootDir` (`0xf87250`) becomes `return <media literal>`
+(`adrp x0`, `add x0`, `ret`; yaml:46-60), so the body never reads `gOBBPath`. Our answer does not depend on the body: once
+`ResolveRoot` has run, the hook answers the same root on either file, and on a file whose media literal is renamed to
+the r15 package it is the same string the body would return.
+
+| File | `CSysFile::Init` | `GetDataRootDir` body | Engine answer with the legacy root holding no data alone |
+| --- | --- | --- | --- |
+| stock | runs; the mount is answered by the hook | `gOBBPath`, else the legacy literal | media (ResolveRoot) |
+| reference, package renamed to `r15` | returns at its first word | media literal | media (ResolveRoot) |
+| reference, as shipped (`afk`) | returns at its first word | media literal, `afk` | media, `r15` (`kMediaRoot`); the body's `afk` path is not returned |
+
 ## Prediction (logcat, every launch that has an OBB file)
 
 - one `Loading OBB from '<path>'`, then `OBB mounted at '/storage/emulated/0/readyatdawn'`, then
@@ -79,8 +95,8 @@ deviation lines do (a second `Loading OBB from`, any `mounting encrypted OBBs is
 - engine initialization follows immediately instead of at +30 s.
 
 A launch with no OBB file logs `OBB not found` at step 1 of the Context and returns before the mount, so none of these lines
-appear and the skip never runs; the engine reads the legacy root, or the media root when `ResolveRoot` found the manifest there and the `GetDataRootDir` hook took
-(ADR 0013).
+appear and the skip never runs; the engine reads the root `ResolveRoot` chose, the media root unless the legacy root alone holds the data, through the
+`GetDataRootDir` hook (ADR 0013).
 
 It does not claim the not-responding dialog is gone: `android_main` still runs the rest of `CSysOS::Init` before it
 services the looper, and that remaining time is not measured. A missing extracted tree under
