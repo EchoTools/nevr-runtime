@@ -185,7 +185,10 @@ FUN_14151e280("…\\cresourcemanager.cpp",0x410,0xe8cc523d0fc9e5fe,
 ```
 
 There is no fallback in this function in either binary: no loose file, no file server, no download. **An asset
-the engine can load is an asset some added manifest lists.**
+the engine can load is an asset some added manifest lists.** On Quest, the game's function is not the whole
+story: our `FillResourceFileRequest` hook (`src/quest/sentinel/resource_request_hook.cpp`, `ServeLoose`) and the
+reference build's cave (`q15t-upstream/tools/qcp_patches.py`, P9) serve a loose file from the platform data
+directory when the manifest misses. The function itself still has no fallback.
 
 ## Reading it
 
@@ -499,7 +502,7 @@ engine.
 | Lobby settings arrive after `mpl_lobby_b2`'s component systems are created, or lack the key | no `[PACKAGE]` line, no add; at `L`, the failure rows below |
 | `echovr\_local\…\manifests\<P>` absent | `[PACKAGE] Level 'mpl_lobby_b2' downloading '/rad15-dlc/win10/manifests/<p>' (attempt 1 of 5)` before the `More than one …` warning, then `Received HTTP status code …` (warning) or retry lines, then `Failed to download manifest …` (warning) |
 | `P` lists an asset that is already loaded | the add stops at that record; records merged before it stay merged and point at packages that were never opened, so later loads of those assets fail their read; the refusal text appears only if `Assert`/`OutputError` log it |
-| An asset `L`'s archive lists is in no added set | `FillResourceFileRequest` fails (`Cannot find resource %s:%s when EnableFileServerAccess_ is disabled`, if logged); the archive thread stops walking; `Error occured while streaming archive %s`; `LoadLevel` returns the error; `Failed to load level` and state `load failed` |
+| An asset `L`'s archive lists is in no added set | `FillResourceFileRequest` fails (`Cannot find resource %s:%s when EnableFileServerAccess_ is disabled`, if logged; on Quest our hook and the reference build first serve a loose file from the platform data directory, so this error follows only when that file is missing or cannot be opened); the archive thread stops walking; `Error occured while streaming archive %s`; `LoadLevel` returns the error; `Failed to load level` and state `load failed` |
 | A `CScriptResource` `L` lists has no DLL in `scripts\` | `Failed to load script DLL %s.`; that asset reaches state 3 and the archive fails |
 | An asset type has no factory | `No resource type registered for asset type %s` (warning) from the archive thread |
 | A game server with bit 2 set (by `PatchEnableServer`, if `0x140157fb0` has run) loads `L` | the handler adds nothing and the warning is not logged; the game server fails `L` as in the "in no added set" row unless `P` was added there some other way |

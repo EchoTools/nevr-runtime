@@ -11,6 +11,7 @@
 #include <cfloat>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -227,6 +228,37 @@ TEST(ServerBotsGameType, TheSymbolsAreTheServicesHashes) {
     EXPECT_EQ(kGameTypes[i].symbol, service[i].second) << service[i].first;
     EXPECT_EQ(kGameTypes[i].bots, std::string(service[i].first).rfind("social", 0) != 0) << service[i].first;
   }
+}
+
+// #982: the session start frame's game type, as the runtime stores it for the public Arena round default.
+TEST(ServerBotsGameType, TheSessionStartFramesTypeIsReadByName) {
+  const auto typeOf = [](const std::string& settings) {
+    const std::vector<uint8_t> f = Frame(settings, kEntrants);
+    return nevr_game_type_table::GameTypeOfSessionStart(f.data(), f.size());
+  };
+  EXPECT_EQ(typeOf(kServiceSettings), std::optional<std::string>("echo_arena")) << "the service's signed symbol";
+  EXPECT_EQ(typeOf(R"({"gametype":"echo_combat"})"), std::optional<std::string>("echo_combat"));
+  EXPECT_EQ(typeOf(R"({"gametype":"echo_arena_private"})"), std::optional<std::string>("echo_arena_private"));
+  EXPECT_EQ(typeOf(R"({"gametype":301069346851901302})"), std::optional<std::string>("social_2.0"));
+}
+
+TEST(ServerBotsGameType, ASessionStartFrameWithoutAKnownTypeStoresNothing) {
+  const auto typeOf = [](const std::string& settings) {
+    const std::vector<uint8_t> f = Frame(settings, kEntrants);
+    return nevr_game_type_table::GameTypeOfSessionStart(f.data(), f.size());
+  };
+  EXPECT_FALSE(typeOf(R"({"level":"mpl_arena_a"})").has_value()) << "no gametype key";
+  EXPECT_FALSE(typeOf(R"({"gametype":"echo_nothing"})").has_value()) << "a name the table does not know";
+  EXPECT_FALSE(typeOf(R"({"gametype":42})").has_value()) << "a number the table does not know";
+  EXPECT_FALSE(typeOf("not json").has_value());
+  EXPECT_FALSE(typeOf("[1,2]").has_value()) << "settings that are not an object";
+
+  const std::vector<uint8_t> f = Frame(kServiceSettings, kEntrants);
+  EXPECT_FALSE(nevr_game_type_table::GameTypeOfSessionStart(nullptr, f.size()).has_value());
+  EXPECT_FALSE(nevr_game_type_table::GameTypeOfSessionStart(f.data(), kSessionStartHeaderSize).has_value())
+      << "a frame with no room for settings";
+  EXPECT_FALSE(nevr_game_type_table::GameTypeOfSessionStart(f.data(), kSessionStartHeaderSize + 5).has_value())
+      << "a settings string that does not end inside the frame";
 }
 
 TEST(ServerBotsGameType, ReadAsTheServiceWritesItOrByName) {

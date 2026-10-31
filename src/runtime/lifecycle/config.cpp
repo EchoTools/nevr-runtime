@@ -364,61 +364,6 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   return result;
 }
 
-/// Public Arena round length on a server with no arena.round_time in config.yaml: 8:00 (#982).
-constexpr FLOAT kArenaPublicRoundTimeDefault = 480.0f;
-
-/// Logs the round_time decision when it changes (applied, or the reason it was not), so one server run shows the
-/// order of the session's game type and the reads (#982). Unchanged decisions are not logged again.
-void LogRoundTimeDecision(const nevr_arena_round_time::RoundTimeDecision& decision,
-                          const std::optional<std::string>& gameType, const CHAR* path, FLOAT gameDefault) {
-  static std::mutex s_lastMutex;
-  static std::string s_lastKey;
-  const std::string key = std::string(decision.reason) + "|" + gameType.value_or("");
-  std::lock_guard<std::mutex> lock(s_lastMutex);
-  if (key == s_lastKey) return;
-  s_lastKey = key;
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] arena_round_time default=%.0fs applied=%d reason=%s game_type=%s path=%s game_default=%.0fs",
-      kArenaPublicRoundTimeDefault, decision.applied ? 1 : 0, std::string(decision.reason).c_str(),
-      gameType ? gameType->c_str() : "none", path, gameDefault);
-}
-
-/// <summary>
-/// Hook for CJson_GetFloat to override arena rule config values at load time.
-/// Matches specific JSON path suffixes and returns overridden values from config.json.
-/// </summary>
-FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 required) {
-  FLOAT result = EchoVR::CJsonGetFloat(root, path, defaultValue, required);
-
-  if (path != NULL) {
-    // point_score_celebration_time (but not the _private variant)
-    if (g_arenaCelebrationTime > 0.0f && strstr(path, "point_score_celebration_time") != NULL &&
-        strstr(path, "_private") == NULL) {
-      return g_arenaCelebrationTime;
-    }
-    // round_time (but not round_time_private). A server without arena.round_time starts a public Arena
-    // session at 8:00 (#982); the _private paths, every other game type and a read before any session keep the
-    // game's value.
-    if (strstr(path, "round_time") != NULL && strstr(path, "_private") == NULL &&
-        strstr(path, "round_timer") == NULL && strstr(path, "sudden_death_round_time") == NULL) {
-      if (g_arenaRoundTime > 0.0f) return g_arenaRoundTime;
-      if (g_isServer) {
-        const std::optional<std::string> gameType = nevr_arena_round_time::SessionGameType();
-        const auto decision = nevr_arena_round_time::DecideRoundTimeDefault(gameType);
-        LogRoundTimeDecision(decision, gameType, path, result);
-        if (decision.applied) return kArenaPublicRoundTimeDefault;
-      }
-    }
-    // mercy_win_point_spread (but not the _private variant)
-    if (g_arenaMercyScore > 0.0f && strstr(path, "mercy_win_point_spread") != NULL &&
-        strstr(path, "_private") == NULL) {
-      return g_arenaMercyScore;
-    }
-  }
-
-  return result;
-}
-
 /// <summary>
 /// Helper function to get a service host from config.json with fallback logic.
 /// Fallback chain: service_key -> loginservice_host -> default_url
