@@ -84,7 +84,6 @@ func TestModePatchesOptionalSubsystemPrologues(t *testing.T) {
 		want []byte
 	}{
 		{"OVR branch", 0x1580E5, []byte{0x0F, 0x85, 0xC7, 0x00, 0x00, 0x00}},
-		{"no OVR spectator", 0x11690D, []byte{0x75, 0x35}},
 		{"deadlock monitor", 0x1D3881, []byte{0x7E, 0x0A}},
 		{"loading tip pick", 0xBD9670, []byte{0x48, 0x89, 0x5C, 0x24, 0x10}},
 		{"loading tip select", 0xBE6D10, []byte{0x48, 0x89, 0x54, 0x24, 0x10}},
@@ -164,7 +163,6 @@ func TestModePatchesTargetsDoNotOverlap(t *testing.T) {
 		{"offline logon", 0x1AC83E, 6},
 		{"offline tutorial", 0xA7C685, 5},
 		{"OVR branch", 0x1580E5, 6},
-		{"no OVR spectator", 0x11690D, 2},
 		{"deadlock monitor", 0x1D3881, 2},
 		{"loading tip pick", 0xBD9670, 1},
 		{"loading tip select", 0xBE6D10, 1},

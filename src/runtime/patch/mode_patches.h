@@ -11,7 +11,6 @@ VOID PatchEnableHeadless(PVOID pGame);
 VOID PatchBypassOvrPlatform();
 VOID PatchEnableServer();
 VOID PatchEnableOffline();
-VOID PatchNoOvrRequiresSpectatorStream();
 VOID PatchDeadlockMonitor();
 VOID PatchBlockOculusSDK();
 VOID PatchDisableWwise();

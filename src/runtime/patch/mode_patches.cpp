@@ -748,24 +748,6 @@ VOID PatchEnableOffline() {
 }
 
 // ============================================================================
-// PatchNoOvrRequiresSpectatorStream — allow -noovr without spectator stream
-// ============================================================================
-
-/// <summary>
-/// Patches the game to allow -noovr (demo accounts) without use of spectator stream. This provides a temporary player
-/// profile.
-/// </summary>
-/// <returns>None</returns>
-VOID PatchNoOvrRequiresSpectatorStream() {
-  using namespace nevr_patch_addresses;
-
-  // Bypass the error check that requires "-spectatorstream" when using "-noovr"
-  const BYTE noOvrPatch[] = {0xEB, 0x35};  // JMP +0x35 (skip error code)
-  static_assert(sizeof(noOvrPatch) == NOOVR_SPECTATOR_SIZE, "NOOVR_SPECTATOR patch size mismatch");
-  ApplyPatch(NOOVR_SPECTATOR, noOvrPatch, sizeof(noOvrPatch));
-}
-
-// ============================================================================
 // PatchDeadlockMonitor — disable deadlock detection for debugging
 // ============================================================================
 
