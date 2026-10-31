@@ -11,7 +11,9 @@
 #include <psapi.h>
 #include <setjmp.h>
 
+#include "nevr/pc/nevr_common.h"  // N97: the one ValidatePrologue
 #include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
 #include "runtime/hook/patching.h"
 #include "core/globals.h"
 #include "core/logging.h"
@@ -19,6 +21,7 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/hook/process_memory.h"
+#include "runtime/patch/broadcaster_allow_incoming.h"
 #include "runtime/patch/broadcaster_pointer_guard.h"
 #include "runtime/patch/checked_patch.h"
 
@@ -346,31 +349,6 @@ VOID PatchBypassOvrPlatform() {
 }
 
 // ============================================================================
-// PatchDisableLoadingTips — RET the loading tip functions
-// ============================================================================
-
-/// <summary>
-/// Patches the loading tips system to immediately return, avoiding unnecessary log spam and processing.
-/// The loading tips system requires resources that may not be properly configured in server mode.
-/// </summary>
-/// <returns>None</returns>
-VOID PatchDisableLoadingTips() {
-  using namespace nevr_patch_addresses;
-
-  // Patch R15PickLoadingTipNode to immediately return (RET = 0xC3)
-  // All three loading tip functions use the same single-byte RET patch
-  const BYTE retPatch[] = {0xC3};
-  static_assert(sizeof(retPatch) == LOADING_TIP_PICK_SIZE, "LOADING_TIP_PICK patch size mismatch");
-  static_assert(sizeof(retPatch) == LOADING_TIP_SELECT_SIZE, "LOADING_TIP_SELECT patch size mismatch");
-  static_assert(sizeof(retPatch) == LOADING_TIP_SELECT_2_SIZE, "LOADING_TIP_SELECT_2 patch size mismatch");
-  ApplyPatch(LOADING_TIP_PICK, retPatch, sizeof(retPatch));
-  ApplyPatch(LOADING_TIP_SELECT, retPatch, sizeof(retPatch));
-  ApplyPatch(LOADING_TIP_SELECT_2, retPatch, sizeof(retPatch));
-
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Disabled loading tips system for server mode");
-}
-
-// ============================================================================
 // InitializeGlobalGameSpace hook — skip client-only setup in server mode
 // ============================================================================
 
@@ -603,6 +581,66 @@ static VOID BugSplatCrashHandlerHook(INT64 exitCode) {
 }
 
 // ============================================================================
+// Broadcaster allow_incoming — P13 (#1774)
+// ============================================================================
+
+/// <summary>
+/// A failed install of the broadcaster hook: a server stops (ServerFatal, N102), since a dedicated server without
+/// allow_incoming accepts no connections; a client logs a Warning and goes on without the hook.
+/// </summary>
+static void EscalateBroadcasterAllowIncomingFailure(const char* cause) {
+  if (g_isServer) {
+    ServerFatal("%s", cause);
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] %s — allow_incoming is not forced, a dedicated lobby may refuse connections", cause);
+  }
+}
+
+/// <summary>
+/// Hooks CBroadcaster::Initialize (0x140F7FE50) so a dedicated lobby always accepts incoming connections: the detour
+/// sets allow_incoming (bit 0) in the netconfig mask before the original runs. The site's first 11 bytes are checked
+/// before anything is written (N120).
+/// </summary>
+static void InstallBroadcasterAllowIncoming() {
+  using nevr_broadcaster_allow_incoming::BroadcasterInitializeFn;
+  using nevr_broadcaster_allow_incoming::kBroadcasterInitializePrologue;
+  using nevr_broadcaster_allow_incoming::OriginalBroadcasterInitialize;
+
+  constexpr char kHex[] = "0123456789abcdef";
+  const BYTE* site = reinterpret_cast<const BYTE*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::BROADCASTER_INITIALIZE);
+  if (!nevr::ValidatePrologue(site, kBroadcasterInitializePrologue.data(), kBroadcasterInitializePrologue.size())) {
+    constexpr std::size_t kHexLen = 2 * kBroadcasterInitializePrologue.size();
+    char expected[kHexLen + 1] = {};
+    char actual[kHexLen + 1] = {};
+    for (std::size_t i = 0; i < kBroadcasterInitializePrologue.size(); ++i) {
+      const BYTE want = kBroadcasterInitializePrologue[i];
+      expected[2 * i] = kHex[(want >> 4) & 0xF];
+      expected[2 * i + 1] = kHex[want & 0xF];
+      actual[2 * i] = kHex[(site[i] >> 4) & 0xF];
+      actual[2 * i + 1] = kHex[site[i] & 0xF];
+    }
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] hook refused name=BroadcasterInitialize va=0x%llX expected=%s actual=%s",
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(site)), expected, actual);
+    EscalateBroadcasterAllowIncomingFailure("CBroadcaster::Initialize prologue does not match this build");
+    return;
+  }
+
+  OriginalBroadcasterInitialize =
+      reinterpret_cast<BroadcasterInitializeFn>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::BROADCASTER_INITIALIZE);
+  if (!PatchDetour(&OriginalBroadcasterInitialize,
+                   reinterpret_cast<PVOID>(nevr_broadcaster_allow_incoming::BroadcasterInitializeHook),
+                   "BroadcasterInitialize")) {
+    EscalateBroadcasterAllowIncomingFailure("CBroadcaster::Initialize detour did not install");
+    return;
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] hooked name=BroadcasterInitialize va=0x%llX why=\"dedicated lobby always accepts incoming connections (allow_incoming forced true)\"",
+      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(site)));
+}
+
+// ============================================================================
 // PatchEnableServer — force dedicated server mode
 // ============================================================================
 
@@ -635,13 +673,9 @@ VOID PatchEnableServer() {
   static_assert(sizeof(loggingSubject) == LOGGING_SUBJECT_SIZE, "LOGGING_SUBJECT patch size mismatch");
   ApplyPatch(LOGGING_SUBJECT, loggingSubject, sizeof(loggingSubject));
 
-  // Force "allow_incoming" to always be true in CBroadcaster::InitializeFromJson
-  // (FUN_140f7f8b0, called from CR15NetDedicatedLobby constructor).
-  // This reads from netconfig_dedicatedserver.json (game asset), NOT _local/config.json.
-  // The byte patch is necessary because _local/config.json doesn't feed this function.
-  const BYTE allowIncoming[] = {0xB8, 0x01, 0x00, 0x00, 0x00};  // MOV eax, 1
-  static_assert(sizeof(allowIncoming) == ALLOW_INCOMING_SIZE, "ALLOW_INCOMING patch size mismatch");
-  ApplyPatch(ALLOW_INCOMING, allowIncoming, sizeof(allowIncoming));
+  // Force allow_incoming on in the dedicated lobby's netconfig mask: a detour on CBroadcaster::Initialize
+  // (N83, P13). Server only; the install stops the server if the hook cannot be placed.
+  InstallBroadcasterAllowIncoming();
 
   // Bypass "-spectatorstream" requirement (string ref at 0x1416d27b8)
   // This pass runs after the first original PreprocessCommandLine call has returned, so it is the

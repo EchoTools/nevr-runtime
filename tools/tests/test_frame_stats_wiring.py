@@ -158,7 +158,8 @@ class RuntimeSideTest(unittest.TestCase):
 class LivenessRowTest(unittest.TestCase):
     def test_the_perf_stats_row_says_it_is_expected_only_in_a_pcvr_session(self):
         header = read("src/runtime/hook/hook_liveness.h")
-        self.assertRegex(header, r"kBroadcasterReceiveLocal,\s*kOvrGetPerfStats,\s*kCount")
+        self.assertRegex(header, r"kBroadcasterReceiveLocal,\s*kOvrGetPerfStats,\s*kLoadingTipPick,\s*"
+                                 r"kLoadingTipSelectByIndex,\s*kLoadingTipSelect,\s*kCount")
         cpp = strip_comments(read("src/runtime/hook/hook_liveness.cpp"))
         self.assertIn('{"ovr_GetPerfStats", "PCVR session only", false},', cpp)
         self.assertEqual(cpp.count(", true}"), 1, "a second guaranteedAbsentOnServer row would be swallowed")

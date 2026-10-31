@@ -48,17 +48,13 @@ constexpr size_t NETSERVER_LOGGING_SIZE = 4;
 constexpr uintptr_t LOGGING_SUBJECT = 0xFFB0E;
 constexpr size_t LOGGING_SUBJECT_SIZE = 2;
 
-/// Address: FUN_140f7f8b0 (CBroadcaster::InitializeFromJson, 1440 bytes)
-/// Called from FUN_140145b30 (CR15NetDedicatedLobby constructor)
-/// Reference: String "|allow_incoming" at 0x141cd0480
-/// Forces "allow_incoming" key in netconfig_dedicatedserver.json to always be true.
-/// NOTE: _local/config.json does NOT feed this function (only overrides dedicated_port
-/// and port_retries). The game asset already has allow_incoming: true but this patch
-/// ensures it regardless of asset state or parse failure.
-/// Original: Complex parsing logic
-/// Patched: MOV eax, 1
-constexpr uintptr_t ALLOW_INCOMING = 0xF7F904;
-constexpr size_t ALLOW_INCOMING_SIZE = 5;
+/// Address: CBroadcaster::Initialize (0x140F7FE50, 900 bytes; ReVault "Initialize", tag broadcaster)
+/// Its one caller is FUN_140F7F8B0 (CBroadcaster::InitializeFromJson, call site 0x140F7FE30), which builds the
+/// netconfig mask from the JSON ("|allow_incoming" at 0x141CD0480 is bit 0). The mask is the fourth parameter (R9).
+/// _local/config.json does not feed this function.
+/// Hooked (N83): the detour sets bit 0 before the original runs (runtime/patch/broadcaster_allow_incoming.h).
+/// Prologue: 48 8B C4 48 89 58 10 4C 89 48 20 (MOV RAX,RSP; MOV [RAX+0x10],RBX; MOV [RAX+0x20],R9).
+constexpr uintptr_t BROADCASTER_INITIALIZE = 0xF7FE50;
 
 /// Address: FUN_140116720 + 0x81D (Within PreprocessCommandLine)
 /// Reference: String "-spectatorstream" at 0x1416d27b8
@@ -460,26 +456,19 @@ constexpr uintptr_t WWISE_INIT = 0x209920;         // Wwise initialization
 constexpr uintptr_t WWISE_RENDERAUDIO = 0xFA5610;  // Audio rendering loop
 
 // ============================================================================
-// Loading Tips Patches (PatchDisableLoadingTips)
+// Loading Tips (src/runtime/patch/loading_tips.cpp, server only)
 // ============================================================================
+// The `Enter` function of each loading-tip script node. Each is hooked to return at once on a server; the
+// evidence for the identities is in loading_tips.cpp.
 
-/// Address: R15PickLoadingTipNode (0x140bd9670)
-/// Entry point for picking a random loading tip during loading screens
-/// Patched to immediately return in server mode to avoid unnecessary processing
-constexpr uintptr_t LOADING_TIP_PICK = 0xBD9670;
-constexpr size_t LOADING_TIP_PICK_SIZE = 1;
+/// Address: CR15PickLoadingTipNode::Enter (0x140bd9670)
+constexpr uintptr_t LOADING_TIP_PICK_ENTER = 0xBD9670;
 
-/// Address: R15SelectLoadingTipNode (0x140be6d10)
-/// Core logic for selecting a loading tip
-/// Patched to immediately return in server mode
-constexpr uintptr_t LOADING_TIP_SELECT = 0xBE6D10;
-constexpr size_t LOADING_TIP_SELECT_SIZE = 1;
+/// Address: CR15SelectLoadingTipByIndexNode::Enter (0x140be6d10)
+constexpr uintptr_t LOADING_TIP_SELECT_BY_INDEX_ENTER = 0xBE6D10;
 
-/// Address: R15SelectLoadingTipNode_2 (0x140be7c90)
-/// Secondary implementation of tip selection logic
-/// Patched to immediately return in server mode
-constexpr uintptr_t LOADING_TIP_SELECT_2 = 0xBE7C90;
-constexpr size_t LOADING_TIP_SELECT_2_SIZE = 1;
+/// Address: CR15SelectLoadingTipNode::Enter (0x140be7c90)
+constexpr uintptr_t LOADING_TIP_SELECT_ENTER = 0xBE7C90;
 
 // ============================================================================
 // Frame Pacing / Timing (CPrecisionSleep::BusyWait)

@@ -402,7 +402,7 @@ shows when `lockoutcountdownactive` is true.
 | Expressions | layouts, constant-0 `lockoutcountdownactive` **H** | FeatureFlag shift width (8-bit vs 32-bit), no effect for indexes 0-7 **H** |
 | `SetEarlyQuitWarningShown` | clears bit 46, fires the event **H** | |
 | Scripts | | only the Quest libraries' bodies were read; the PC `.dll` twins carry the same strings and event tables (**M**); their graphs were not compared |
-| This repo's runtime | | PC only: `src/runtime/patch/early_quit_lockout.cpp` hooks the PC setter and expression and patches the PC mask; nothing on Quest |
+| This repo's runtime | | PC only: `src/runtime/patch/early_quit_lockout.cpp` hooks the PC setter and expression and replaces the PC feature-flag callback; nothing on Quest |
 
 ## 6. The runtime, and the two readings of +0x18
 
@@ -410,8 +410,9 @@ shows when `lockoutcountdownactive` is true.
 
 `src/runtime/patch/early_quit_lockout.cpp`:
 
-- `KeepFeatureFlagBit1` writes `0xff` over the mask immediate at `0x1401618b9`, so the scripts see exactly the bits
-  the service sends.
+- `FeatureFlagsCallbackHook` replaces the whole feature-flag callback at `0x1401618b0` (35 bytes; its 16 prologue
+  bytes are checked first). It stores the service's byte as sent, where the stock callback masks it with `0xdd`, then
+  dispatches the event word at `0x1416dcd78`, so the scripts see exactly the bits the service sends.
 - `PenaltyExpressionHook` runs after `0x140d96190` and sets `lockoutcountdownactive` = `lockoutcountdownsec > 0`
   (`CountdownActive`, `early_quit_lockout_rules.h`).
 - `SetPenaltyHook` runs after the setter. `AfterSetPenalty(incoming, stored, now)` writes `+0x64828` and bit 45:

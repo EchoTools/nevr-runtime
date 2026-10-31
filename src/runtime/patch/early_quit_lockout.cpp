@@ -1,5 +1,6 @@
 #include "runtime/patch/early_quit_lockout.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <array>
@@ -7,11 +8,13 @@
 #include <cstring>
 #include <ctime>
 
+#include <cstdio>
+#include <string>
+
 #include "core/logging.h"
 #include "nevr/pc/nevr_common.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
-#include "runtime/hook/process_memory.h"
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/patch/early_quit_lockout_rules.h"
 
@@ -40,12 +43,18 @@ constexpr std::array<std::uint8_t, 16> kPenaltyExpressionPrologue = {0x48, 0x89,
                                                                      0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57};
 using PenaltyExpressionFn = void (*)(void* expression, void* output, void* thread, void* context);
 
-// The SNSEarlyQuitFeatureFlags callback (Quest CR15NetGame::EarlyQuitFeatureFlagsCB 0x126ac24): MOV RAX,[RDX+8];
-// MOVZX EDX,byte [RAX]; AND DL,0xDD; MOV [RCX+0x64847],DL. The mask's immediate is at +9.
+// The SNSEarlyQuitFeatureFlags callback, CR15NetGame::EarlyQuitFeatureFlagsCB (Quest 0x126ac24), 35 bytes: MOV
+// RAX,[RDX+8]; MOVZX EDX,byte [RAX]; AND DL,0xDD; MOV [RCX+0x64847],DL; LEA RDX,[event word]; AND RDX,-8; MOV
+// RDX,[RDX]; JMP DispatchEventToSession. The stock mask 0xDD clears bits 1 and 5. The hook replaces the whole
+// callback; its 16 prologue bytes (the mask among them) are checked before the replacement is installed.
+constexpr const char* kFeatureFlagsName = "EarlyQuitFeatureFlagsCB";
 constexpr std::uint64_t kFeatureFlagsCallbackVA = 0x1401618B0;
-constexpr std::array<std::uint8_t, 16> kFeatureFlagsCallbackBytes = {0x48, 0x8B, 0x42, 0x08, 0x0F, 0xB6, 0x10, 0x80,
-                                                                     0xE2, 0xDD, 0x88, 0x91, 0x47, 0x48, 0x06, 0x00};
-constexpr std::size_t kFeatureFlagsMaskOffset = 9;
+constexpr std::array<std::uint8_t, 16> kFeatureFlagsCallbackPrologue = {0x48, 0x8B, 0x42, 0x08, 0x0F, 0xB6, 0x10, 0x80,
+                                                                        0xE2, 0xDD, 0x88, 0x91, 0x47, 0x48, 0x06, 0x00};
+constexpr std::size_t kFeatureFlagsPayloadOffset = 8;      // message+8: the payload pointer
+constexpr std::size_t kFeatureFlagsStoreOffset = 0x64847;  // netGame byte the callback stores
+// The event word the callback loads: 0xc690a8ff1cf8af99, delegate_onearlyquitfeatureflagsupdate.
+constexpr std::uint64_t kFeatureFlagsEventVA = 0x1416DCD78;
 
 // CR15NetGame::DispatchEventToSession: (netGame, event). The session-event trace may have detoured it.
 constexpr std::uint64_t kDispatchEventVA = 0x1401A9FE0;
@@ -127,24 +136,57 @@ void HookChecked(std::uint64_t va, const std::array<std::uint8_t, Size>& prologu
     nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] %s hook installed va=0x%llx\n", name, static_cast<unsigned long long>(va));
 }
 
-void KeepFeatureFlagBit1() {
-  void* target = nevr::ResolveVA_Checked(g_gameBase, kFeatureFlagsCallbackVA);
-  if (!nevr::ValidatePrologue(target, kFeatureFlagsCallbackBytes.data(), kFeatureFlagsCallbackBytes.size())) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] feature-flag mask patch skipped va=0x%llx reason=bytes_mismatch\n",
-                           static_cast<unsigned long long>(kFeatureFlagsCallbackVA));
+std::string HexBytes(const void* address, std::size_t count) {
+  if (address == nullptr) return "unreadable";
+  std::string out;
+  char byte[4];
+  for (std::size_t i = 0; i < count; ++i) {
+    std::snprintf(byte, sizeof(byte), "%02x", static_cast<const std::uint8_t*>(address)[i]);
+    out += byte;
+  }
+  return out;
+}
+
+// The replacement for the whole callback. The byte the service sent is stored as it is (the stock mask is not
+// applied), then the event the game's data holds is dispatched, as the stock tail call did.
+void FeatureFlagsCallbackHook(void* netGame, void* message) {
+  auto* bytes = static_cast<std::uint8_t*>(netGame);
+  const std::uint8_t* payload = nullptr;
+  std::memcpy(&payload, static_cast<const std::uint8_t*>(message) + kFeatureFlagsPayloadOffset, sizeof(payload));
+  const std::uint8_t sent = *payload;
+  const std::uint8_t before = bytes[kFeatureFlagsStoreOffset];
+  bytes[kFeatureFlagsStoreOffset] = sent;
+  Log(EchoVR::LogLevel::Debug, "[NEVR.EARLYQUIT] feature flags set value=0x%02x was=0x%02x", sent, before);
+  const void* eventWord = nevr::ResolveVA_Checked(g_gameBase, kFeatureFlagsEventVA);
+  if (eventWord == nullptr) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.EARLYQUIT] feature flags event not raised: event word unreadable va=0x%llX",
+        static_cast<unsigned long long>(kFeatureFlagsEventVA));
     return;
   }
-  // The game service decides which bits are set; the client keeps them all.
-  std::uint8_t keepAll = 0xFF;
-  DWORD error = ERROR_SUCCESS;
-  if (ProcessMemcpy(static_cast<std::uint8_t*>(target) + kFeatureFlagsMaskOffset, &keepAll, sizeof(keepAll), &error)) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] feature-flag mask 0xdd -> 0xff va=0x%llx\n",
-                           static_cast<unsigned long long>(kFeatureFlagsCallbackVA + kFeatureFlagsMaskOffset));
-  } else {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] warn; feature-flag mask patch failed va=0x%llx error=%lu\n",
-                           static_cast<unsigned long long>(kFeatureFlagsCallbackVA + kFeatureFlagsMaskOffset),
-                           static_cast<unsigned long>(error));
+  std::uint64_t event = 0;
+  std::memcpy(&event, eventWord, sizeof(event));
+  Dispatch(netGame, event);
+}
+
+// Replaces the callback once its 16 prologue bytes match. On a mismatch the stock callback stays, with its mask.
+void ReplaceFeatureFlagsCallback() {
+  void* target = nevr::ResolveVA_Checked(g_gameBase, kFeatureFlagsCallbackVA);
+  if (!nevr::ValidatePrologue(target, kFeatureFlagsCallbackPrologue.data(), kFeatureFlagsCallbackPrologue.size())) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.EARLYQUIT] hook skipped name=%s va=0x%llX reason=prologue_mismatch expected=%s actual=%s "
+        "(the stock callback keeps its mask 0xdd, so the feature flags are cut to bits 0, 2-4, 6 and 7)",
+        kFeatureFlagsName, static_cast<unsigned long long>(kFeatureFlagsCallbackVA),
+        HexBytes(kFeatureFlagsCallbackPrologue.data(), kFeatureFlagsCallbackPrologue.size()).c_str(),
+        HexBytes(target, kFeatureFlagsCallbackPrologue.size()).c_str());
+    return;
   }
+  void* original = target;  // PatchDetour reads the target from here; the trampoline is never called.
+  if (!PatchDetour(&original, reinterpret_cast<PVOID>(&FeatureFlagsCallbackHook), kFeatureFlagsName)) return;
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.EARLYQUIT] hooked name=EarlyQuitFeatureFlagsCB va=0x%llX why=\"the client keeps every feature-flag bit "
+      "the service sends (the stock callback clears bits 1 and 5)\"",
+      static_cast<unsigned long long>(kFeatureFlagsCallbackVA));
 }
 
 }  // namespace
@@ -155,7 +197,7 @@ void Install(std::uintptr_t gameBase) {
               "SetEarlyQuitPenaltyLevel");
   HookChecked(kPenaltyExpressionVA, kPenaltyExpressionPrologue, g_originalPenaltyExpression,
               reinterpret_cast<PVOID>(&PenaltyExpressionHook), "EarlyQuitPenaltyExpression");
-  KeepFeatureFlagBit1();
+  ReplaceFeatureFlagsCallback();
 }
 
 }  // namespace nevr_early_quit_lockout
