@@ -30,6 +30,15 @@ least as often as the source was expected) is reported as `package_already_renam
 second run over its own output writes the same entries again.
 
     quest_apk_rename_package.py rename --apk IN.apk --out OUT.apk [--from com.readyatdawn.afk] [--to com.readyatdawn.r15]
+                                       [--label TEXT]
+
+LABEL. The reference build's launcher label reads "Echo Combat (port)"; the project's APK reads "Echo VR". With
+`--label TEXT` the output's AndroidManifest.xml also has its `<application>` label replaced by TEXT, in place, through
+`quest_apk_label.set_label`, after the package rename and in both the renamed and the already-renamed case. Nothing else
+changes because of it: every other entry is byte for byte what it is without the flag. A label the editor refuses (longer
+than the old one, referenced by another attribute, ...) is a refusal and nothing is written. Without the flag the
+manifest's label is left as it is and the record has no label fields; with it the record carries `label_from` and
+`label_to`.
 
 One JSON line on standard output per run (tag NEVR.QUEST.RENAME, the event, the counts, the sha256 in and out of
 every changed entry); a refusal is one JSON line on standard error and exit status 1.
@@ -46,6 +55,7 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import quest_apk_label as ql  # noqa: E402
 import quest_apk_version as qv  # noqa: E402
 
 TAG = "NEVR.QUEST.RENAME"
@@ -127,13 +137,31 @@ def _check_names(old: str, new: str) -> None:
         raise RenameError("the source and target package names are the same")
 
 
+def _relabel(data: bytes, label: str, record: dict) -> bytes:
+    """The manifest `data` with its launcher label set to `label`; the record gains `label_from` and `label_to`, and the
+    manifest's `changed` entry names the final bytes. A label the editor refuses is a RenameError."""
+    try:
+        before = ql.label_of(data)
+        out = ql.set_label(data, label)
+        after = ql.label_of(out)
+    except ql.LabelError as error:
+        raise RenameError(f"{MANIFEST}: the launcher label was not set to {label!r}: {error}") from None
+    record["label_from"], record["label_to"] = before, after
+    entry = record["changed"].get(MANIFEST)
+    if entry is not None:
+        entry["sha256_out"] = _sha(out)
+    elif out != data:
+        record["changed"][MANIFEST] = {"sha256_in": _sha(data), "sha256_out": _sha(out)}
+    return out
+
+
 def _in_meta_inf(name: str) -> bool:
     return name.startswith("META-INF/") or name == "META-INF"
 
 
-def rename_apk(src: Path, dst: Path, old: str = DEFAULT_FROM, new: str = DEFAULT_TO) -> dict:
+def rename_apk(src: Path, dst: Path, old: str = DEFAULT_FROM, new: str = DEFAULT_TO, label: str | None = None) -> dict:
     """Write `dst` from `src`; returns the record the CLI logs. RenameError (nothing written) unless every rule in the
-    module docstring holds."""
+    module docstring holds. A `label` also sets the manifest's launcher label (see LABEL in the module docstring)."""
     _check_names(old, new)
     if src.resolve() == dst.resolve():
         raise RenameError("the output is the input file: the tool never edits an APK in place")
@@ -193,6 +221,8 @@ def rename_apk(src: Path, dst: Path, old: str = DEFAULT_FROM, new: str = DEFAULT
                             raise RenameError(f"{info.filename}: the result still holds the source string, or lost the target")
                         record["changed"][info.filename] = {"sha256_in": _sha(data), "sha256_out": _sha(out)}
                         data = out
+                    if label is not None and info.filename == MANIFEST:
+                        data = _relabel(data, label, record)
                     copy = zipfile.ZipInfo(info.filename, info.date_time)
                     copy.compress_type = info.compress_type
                     copy.external_attr = info.external_attr
@@ -216,9 +246,10 @@ def main(argv=None) -> int:
     rename.add_argument("--out", type=Path, required=True)
     rename.add_argument("--from", dest="old", default=DEFAULT_FROM)
     rename.add_argument("--to", dest="new", default=DEFAULT_TO)
+    rename.add_argument("--label", default=None, help="also set the manifest's launcher label to this text (in place, no longer than the old one)")
     args = parser.parse_args(argv)
     try:
-        print(json.dumps(rename_apk(args.apk, args.out, args.old, args.new)))
+        print(json.dumps(rename_apk(args.apk, args.out, args.old, args.new, args.label)))
         return 0
     except (OSError, zipfile.BadZipFile, RenameError) as error:
         print(json.dumps({"tag": TAG, "event": "package_rename_refused", "apk": args.apk.name, "reason": str(error)}),

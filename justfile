@@ -224,9 +224,11 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 
 # The base of a reference-build APK (#1737): copies the reference APK `apk` to `out` with its package renamed from com.readyatdawn.afk
 # to com.readyatdawn.r15 (the manifest's UTF-16 string, 5 strings in libr15.so, 2 in libassetpatch.so; counts asserted, META-INF dropped),
-# then `just android-repack-apk <out>` repacks it. tools/quest_apk_rename_package.py says what it refuses; it logs one JSON line.
-quest-reference-base apk out:
-    python3 -I tools/quest_apk_rename_package.py rename --apk "{{ apk }}" --out "{{ out }}"
+# then `just android-repack-apk <out>` repacks it. The output also carries the launcher label `label` (default "Echo VR"; the reference build
+# reads "Echo Combat (port)"), set in place in the manifest by tools/quest_apk_label.py through the rename tool's --label, so a `label` longer
+# than the reference's is a refusal. tools/quest_apk_rename_package.py says what it refuses; it logs one JSON line.
+quest-reference-base apk out label="Echo VR":
+    python3 -I tools/quest_apk_rename_package.py rename --apk "{{ apk }}" --out "{{ out }}" --label "{{ label }}"
 
 # Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
 # forwarding to the renamed original. Produces a zipaligned APK, signed with the Quest key in pass, and
