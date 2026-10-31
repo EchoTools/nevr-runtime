@@ -69,6 +69,8 @@ void StoreSessionGameType(const std::string& gameType, const char* source, const
       "round_time_reads_without_type=%u%s",
       gameType.c_str(), source, sessionId.c_str(), previous ? previous->c_str() : "none", readsWithoutType,
       missed ? " (the game read round_time before this type was known; those reads kept the game's own value)" : "");
+  // #1785: the step follows the type (Combat's physics is tuned for 30 a second, not the Arena rate).
+  ApplySessionTimestep(gameType, sessionId);
 }
 
 }  // namespace
