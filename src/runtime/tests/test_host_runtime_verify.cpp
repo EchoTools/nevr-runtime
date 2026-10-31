@@ -289,11 +289,18 @@ struct Outcome {
   std::string stderr_text;  // what the host wrote to the standard error handle (the NEVR.STOP line)
 };
 
-// The one NEVR.STOP line of a run that stopped the game, parsed; fails the test when there is not exactly one.
+// The one NEVR.STOP line of a run that stopped the game, parsed; fails the test when there is not exactly one. A stop
+// writes two lines to the standard error handle: the JSON line (#1252), then the plain notice line (#1533).
 nlohmann::json OneStopLine(const Outcome& outcome) {
   EXPECT_FALSE(outcome.stderr_text.empty());
-  EXPECT_EQ(outcome.stderr_text.find('\n'), outcome.stderr_text.size() - 1) << outcome.stderr_text;
-  return outcome.stderr_text.empty() ? nlohmann::json() : nlohmann::json::parse(outcome.stderr_text);
+  const std::size_t first_end = outcome.stderr_text.find('\n');
+  EXPECT_NE(first_end, std::string::npos) << outcome.stderr_text;
+  if (first_end == std::string::npos) return nlohmann::json();
+  const std::string notice = outcome.stderr_text.substr(first_end + 1);
+  EXPECT_EQ(notice.rfind("nEVR couldn't start: ", 0), 0u) << "the second line is the plain notice: " << outcome.stderr_text;
+  EXPECT_EQ(notice.find('\n'), notice.size() - 1)
+      << "two lines in all, however often the detour runs: " << outcome.stderr_text;
+  return nlohmann::json::parse(outcome.stderr_text.substr(0, first_end));
 }
 
 std::string Utf8(const std::wstring& wide) {
@@ -622,8 +629,9 @@ TEST_F(HostRuntimeVerify, ARuntimeSignedByARootThatIsNotPinnedIsRefused) {
   ASSERT_FALSE(other.empty());
   policy_.rootDer.assign(other.begin(), other.end());
   StageCopy("nevr-runtime.signed");
-  // The verifier reports the first failing step of the chain it builds, here the time stamp's.
-  ExpectRefused(Run(), host_sha256_, "timestamp invalid", "signature");
+  // The verifier reports the first failing step of the chain it builds, here the time stamp's. A time stamp it cannot
+  // place is told as the PC's clock (StopNoticeTextFor, #1533), whatever the chain status behind it.
+  ExpectRefused(Run(), host_sha256_, "timestamp invalid", "date or time is wrong");
 }
 
 TEST_F(HostRuntimeVerify, ARuntimeThatCannotBeOpenedForReadingIsRefusedAsUnreadable) {

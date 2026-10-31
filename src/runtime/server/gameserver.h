@@ -8,6 +8,7 @@
 #include "runtime/server/constants.h"
 #include "abi/echovr.h"
 #include "core/pch.h"
+#include "runtime/server/ended_session_watchdog.h"
 #include "runtime/server/main_thread_handoff.h"
 #include "runtime/server/server_context.h"
 #include "runtime/server/telemetry_streamer.h"
@@ -52,6 +53,9 @@ class GameServerLib : public EchoVR::IServerLib {
   /// @param registrationFailed  true if we're shutting down because registration was rejected.
   void BeginGracefulShutdown(bool registrationFailed);
 
+  /// Stops the exit watchdog a CODE_ENDED armed (#1756): a new session started on this server.
+  void CancelEndedSessionWatchdog();
+
  private:
   std::unique_ptr<nevr_game_server::ServerContext> m_context;
   std::unique_ptr<WebSocketClient> m_wsClient;
@@ -76,6 +80,10 @@ class GameServerLib : public EchoVR::IServerLib {
   // a warning when it is reached from any other.
   std::atomic<DWORD> m_registryThreadId{0};
 
+  // #1756: ends the process when a session the service ended is still running after the exit grace. Armed from the
+  // ServerDB receive thread on CODE_ENDED; cancelled by a new session. Destroyed (and its thread joined) with this.
+  nevr_game_server::EndedSessionWatchdog m_endedSessionWatchdog;
+
   // Joinable handle for the shutdown thread — replaces detached thread.
   // Joined in ~GameServerLib to prevent use-after-free on member destruction.
   std::thread m_shutdownThread;
@@ -83,6 +91,7 @@ class GameServerLib : public EchoVR::IServerLib {
   // Helper methods
   void RegisterBroadcasterCallbacks();
   void RegisterTcpCallbacks();
+  void ArmEndedSessionWatchdog(const std::string& sessionId);
   void ProcessPendingReconnect();
   void UnregisterAllCallbacks();
 

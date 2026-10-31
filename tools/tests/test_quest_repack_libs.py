@@ -27,9 +27,13 @@ import quest_repack_libs as libs  # noqa: E402
 import work_root  # noqa: E402
 from quest_patcher_standin import MARKER, make_standin, recorded_argv, recorded_runs  # noqa: E402
 from test_quest_repack_version import DEV_VERSION, JUSTFILE, MISSING, RepackFixture  # noqa: E402
+from test_quest_runtime_pin import OLD as RUNTIME_STOCK_MD5, SECOND as RUNTIME_SECOND_MD5, make_elf, make_runtime  # noqa: E402
+import quest_runtime_pin as qrp  # noqa: E402
 
 LIBR15 = b"\x7fELF the game\0" * 50  # what RepackFixture.make_inputs puts under lib/arm64-v8a/libr15.so
 PATCHED_LIBR15 = LIBR15 + MARKER  # what the stand-in patcher (quest_patcher_standin.py) makes of it
+RUNTIME = "lib/arm64-v8a/libvrapi.so"
+STORE_VRAPI = make_elf(b"\0" * 8, b"the store's own libvrapi, no md5 list\0")  # a libvrapi that carries no checksum list
 AARCH64_MISSING = [t for t in ("clang", "ld.lld", "llvm-nm", "llvm-readelf") if shutil.which(t) is None]
 GAME_ID = "b243509c08ce677aeb95fa348016949b3fc45230"  # the fixture libr15's build ID (the pinned one, kLibR15BuildId)
 OTHER_ID = "0123456789abcdef0123456789abcdef01234567"
@@ -538,6 +542,83 @@ class VerifySignedTest(unittest.TestCase):
         self.assertEqual(self.run_verify(), [])
         self.assertEqual(len(recorded_runs(self.patcher.resolve())), 1)
 
+    # ---- the reference runtime's libvrapi.so is pinned to the signed libr15.so (#1737) ----------------------------------
+
+    def use_runtime(self, copy: bytes | None = None) -> bytes:
+        """The source APK carries the reference runtime; the staged and signed copy is `copy`, by default the runtime
+        pinned to the md5 of the staged libr15.so. Returns that copy."""
+        self.store[RUNTIME] = make_runtime()
+        if copy is None:
+            copy = make_runtime(hashlib.md5(self.staged["libr15.so"]).hexdigest())
+        self.staged["libvrapi.so"] = copy
+        self.signed[RUNTIME] = copy
+        return copy
+
+    def test_a_runtime_pinned_to_the_signed_libr15_passes_and_its_digests_are_printed(self):
+        copy = self.use_runtime()
+        self.assertEqual(self.run_verify(), [])
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("verify-signed OK", result.stdout)
+        self.assertIn(f"libvrapi.so sha256 source  {self.digest(make_runtime())}", result.stdout)
+        self.assertIn(f"libvrapi.so sha256 signed  {self.digest(copy)}", result.stdout)
+
+    def test_an_unpinned_runtime_is_refused_by_name(self):
+        self.use_runtime(make_runtime())
+        problem = self.only_problem()
+        self.assertIn("lib/arm64-v8a/libvrapi.so: the signed APK holds the source APK's runtime unpinned", problem)
+        self.assertIn(hashlib.md5(self.staged["libr15.so"]).hexdigest(), problem)
+        self.assertEqual(self.run_cli().returncode, 1)
+
+    def test_a_runtime_pinned_to_another_libr15_is_refused(self):
+        self.use_runtime(make_runtime(hashlib.md5(b"another libr15").hexdigest()))
+        self.assertIn("not hold the source APK's runtime pinned to the signed libr15.so", self.only_problem())
+
+    def test_a_runtime_pinned_to_the_store_libr15_is_refused(self):
+        self.use_runtime(make_runtime(hashlib.md5(b"the game").hexdigest()))  # the md5 of the unpatched file
+        self.assertIn("not hold the source APK's runtime pinned to the signed libr15.so", self.only_problem())
+
+    def test_a_runtime_missing_from_the_signed_apk_is_refused(self):
+        self.use_runtime()
+        del self.signed[RUNTIME]
+        del self.staged["libvrapi.so"]
+        problem = self.only_problem()
+        self.assertIn("lib/arm64-v8a/libvrapi.so: the pinned runtime belongs here, missing from the signed APK", problem)
+
+    def test_a_runtime_that_cannot_be_pinned_is_refused_with_the_reason(self):
+        self.use_runtime()
+        self.store[RUNTIME] = make_runtime(sites=11)
+        problem = self.only_problem()
+        self.assertIn("cannot be pinned to the signed libr15.so", problem)
+        self.assertIn("44 immediate runs", problem)
+
+    def test_a_source_runtime_whose_first_entry_is_damaged_is_refused_not_pinned_elsewhere(self):
+        self.use_runtime()
+        self.store[RUNTIME] = make_runtime().replace(RUNTIME_STOCK_MD5.encode(), b"x" * 32, 1)
+        problem = self.only_problem()
+        self.assertIn("cannot be pinned to the signed libr15.so", problem)
+        self.assertIn(f"is {RUNTIME_SECOND_MD5}, expected {RUNTIME_STOCK_MD5}", problem)
+
+    def test_a_runtime_with_another_entry_replaced_is_refused(self):
+        md5 = hashlib.md5(self.staged["libr15.so"]).hexdigest()
+        wrong, _ = qrp.pin_data(make_runtime(), md5, 1, RUNTIME_SECOND_MD5)  # the pin's own tool, aimed at index 1
+        self.use_runtime(wrong)
+        self.assertIn("not hold the source APK's runtime pinned to the signed libr15.so", self.only_problem())
+
+    def test_a_libvrapi_with_no_checksum_list_is_held_to_the_store_bytes(self):
+        self.store[RUNTIME] = STORE_VRAPI
+        self.signed[RUNTIME] = STORE_VRAPI
+        self.assertEqual(self.run_verify(), [])
+        self.signed[RUNTIME] = STORE_VRAPI + b"x"
+        problem = self.only_problem()
+        self.assertIn("lib/arm64-v8a/libvrapi.so: the signed APK holds different bytes than the store APK", problem)
+
+    def test_a_pinned_runtime_staged_beside_a_plugin_manifest_is_not_an_unlisted_plugin(self):
+        self.use_runtime()
+        self.add_manifest([{"name": "plugin", "file": "libplugin.so", "enabled": True, "early": False,
+                            "sha256": hashlib.sha256(self.staged["libplugin.so"]).hexdigest()}])
+        self.assertEqual(self.run_verify(), [])
+
 
 class WritePluginManifestTest(unittest.TestCase):
     """`write_plugin_manifest` hashes the staged copy, the bytes the APK will carry, not the file the recipe was given."""
@@ -966,6 +1047,49 @@ class RepackPatchesLibr15Test(RepackFixture):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(f"android-repack-apk: FAIL - {empty}/nlohmann/json.hpp not found (json_include)", result.stderr)
         self.assertFalse(self.signed.exists())
+
+    # ---- the reference runtime's libvrapi.so (#1737) ---------------------------------------------------------------------
+
+    def add_libvrapi(self, data: bytes) -> None:
+        """Adds lib/arm64-v8a/libvrapi.so to the fixture's store APK."""
+        with zipfile.ZipFile(self.apk, "a", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(RUNTIME, data)
+
+    def test_a_reference_runtime_is_pinned_to_the_staged_libr15_and_stored(self):
+        self.make_inputs(DEV_VERSION)
+        self.add_libvrapi(make_runtime())
+        result = self.run_recipe("", "", "", str(self.patcher))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        pinned = make_runtime(hashlib.md5(PATCHED_LIBR15).hexdigest())
+        with zipfile.ZipFile(self.signed) as out:
+            self.assertEqual(out.read(RUNTIME), pinned)
+            self.assertEqual(out.getinfo(RUNTIME).compress_type, zipfile.ZIP_STORED)
+        self.assertIn('"event": "runtime_pinned"', result.stdout)
+        self.assertIn(f"libvrapi.so sha256 signed  {hashlib.sha256(pinned).hexdigest()}", result.stdout)
+
+    def test_a_libvrapi_with_no_checksum_list_is_left_as_the_store_has_it(self):
+        self.make_inputs(DEV_VERSION)
+        self.add_libvrapi(STORE_VRAPI)
+        result = self.run_recipe("", "", "", str(self.patcher))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("carries no runtime md5 list: left as it is", result.stdout)
+        with zipfile.ZipFile(self.signed) as out:
+            self.assertEqual(out.read(RUNTIME), STORE_VRAPI)
+
+    def test_a_reference_runtime_that_cannot_be_pinned_stops_the_recipe_with_no_signed_apk(self):
+        self.make_inputs(DEV_VERSION)
+        self.add_libvrapi(make_runtime(sites=11))
+        result = self.run_recipe("", "", "", str(self.patcher))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("runtime_pin_refused", result.stderr)
+        self.assertFalse(self.signed.exists())
+
+    def test_an_apk_with_no_libvrapi_stages_none(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.run_recipe("", "", "", str(self.patcher))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with zipfile.ZipFile(self.signed) as out:
+            self.assertNotIn(RUNTIME, out.namelist())
 
 
 if __name__ == "__main__":

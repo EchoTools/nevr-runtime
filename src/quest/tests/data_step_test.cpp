@@ -4,9 +4,14 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <map>
 #include <set>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
+#include <utility>
 #include <vector>
 
 #include "quest/data/data_step.h"
@@ -79,6 +84,7 @@ struct Rig {
   std::vector<std::string> shown;   // what present() received, in order
   std::vector<std::string> order;   // "announce", "present" and "hold", in call order
   std::vector<std::string> events;
+  std::vector<std::string> warns;  // the events that went out at Warning
 
   explicit Rig(const std::string& zip_bytes = GoodZip()) : zip(zip_bytes) {
     g_present = &present;
@@ -103,6 +109,11 @@ struct Rig {
       std::string line = e.name;
       for (const auto& f : e.fields) line += " " + f.first + "=" + f.second;
       events.push_back(line);
+    };
+    config.on_step_warn = [this](const Event& e) {
+      std::string line = e.name;
+      for (const auto& f : e.fields) line += " " + f.first + "=" + f.second;
+      warns.push_back(line);
     };
   }
   ~Rig() { g_present = nullptr; }
@@ -130,8 +141,11 @@ TEST(DataInTheMediaRootIsUsedAndNotFetched) {
   CHECK_EQ(net.calls, 0);
   CHECK(rig.shown.empty());
   CHECK(rig.order.empty());  // data that is there is not announced
-  CHECK_EQ(rig.events.size(), static_cast<std::size_t>(1));
+  CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
   CHECK(Contains(rig.events[0], "data_check action=use source=android_media"));
+  CHECK(Contains(rig.events[1], "data_packages "));  // a manifest outside the pinned table: said, not checked
+  CHECK(Contains(rig.events[1], "outcome=unpinned"));
+  CHECK(rig.warns.empty());
 }
 
 TEST(DataInTheLegacyRootIsUsedAndNotFetched) {
@@ -601,6 +615,428 @@ TEST(AFetchLogsTheVersionAndManifestHashOfTheDataItPlaced) {
   const std::string manifest = Pattern(20000);
   CHECK(Contains(rig.events[1], "data_version root=" + rig.Root()));
   CHECK(Contains(rig.events[1], "data_version=5932408047 manifest_sha256=" + Sha256Hex(manifest.data(), manifest.size())));
+}
+
+// ---- the package files of a pinned data set (package_pins.h) ----
+
+namespace {
+
+constexpr const char* kPackageDir = "_data/5932408047/rad15/android/packages/";
+constexpr const char* kPinnedManifestBytes = "pinned manifest";
+constexpr const char* kWarnConsequence =
+    "consequence=the game keeps running on the data that is there; the lobby may load in pieces until the pack is "
+    "installed again";
+
+// A rig whose manifest is in a pinned table of its own (the real table's manifest digest cannot be forged from bytes): two
+// small packages, `_0` unhashed and `_1` hashed, with the filesystem, the hash and the marker write all injected.
+struct PinnedRig : Rig {
+  std::string p0_sha = Sha256Hex("AAAA", 4);
+  std::string p1_sha = Sha256Hex("BBBBBB", 6);
+  std::string manifest_sha = Sha256Hex(kPinnedManifestBytes, std::strlen(kPinnedManifestBytes));
+  PinnedPackage packages[2] = {{0, 4, p0_sha.c_str(), false}, {1, 6, p1_sha.c_str(), true}};
+  PinnedDataSet set = {manifest_sha.c_str(), packages, 2};
+  std::map<std::string, std::uint64_t> sizes;  // the package files the fake filesystem has
+  std::string marker;                         // the marker file's content when has_marker
+  bool has_marker = false;
+  std::string digest = p1_sha;  // what hash_file answers
+  bool hash_readable = true;
+  bool write_ok = true;
+  int size_calls = 0;
+  int hash_calls = 0;
+  std::vector<std::string> hashed;
+  std::vector<std::pair<std::string, std::string>> writes;
+
+  PinnedRig() {
+    present = {Media(), Media("_data"), Media(kManifestRel)};
+    sizes[PackagePath(0)] = 4;
+    sizes[PackagePath(1)] = 6;
+    config.pinned_sets = &set;
+    config.pinned_set_count = 1;
+    config.list_dir = [](const std::string& dir) {
+      return dir == Media("_data") ? std::vector<std::string>{"5932408047"} : std::vector<std::string>{};
+    };
+    config.read_file = [this](const std::string& path, std::string& bytes) {
+      if (path == Media(kManifestRel)) {
+        bytes = kPinnedManifestBytes;
+        return true;
+      }
+      if (path == MarkerPath() && has_marker) {
+        bytes = marker;
+        return true;
+      }
+      return false;
+    };
+    config.file_size = [this](const std::string& path, std::uint64_t& bytes) {
+      ++size_calls;
+      const auto it = sizes.find(path);
+      if (it == sizes.end()) return false;
+      bytes = it->second;
+      return true;
+    };
+    config.hash_file = [this](const std::string& path, std::string& out) {
+      ++hash_calls;
+      hashed.push_back(path);
+      if (!hash_readable) return false;
+      out = digest;
+      return true;
+    };
+    config.write_file = [this](const std::string& path, const std::string& bytes) {
+      writes.emplace_back(path, bytes);
+      return write_ok;
+    };
+  }
+  static std::string PackagePath(unsigned index) {
+    return Media(std::string(kPackageDir) + "48037dc70b0ecab2_" + std::to_string(index));
+  }
+  static std::string MarkerPath() { return Media("nevr-data-packages.verified"); }
+  std::string MarkerFor(const std::string& build) const { return manifest_sha + " " + build + "\n"; }
+  // The step as nothing in it may fetch, announce or show a message.
+  void CheckUsedWithoutFetch(const StepResult& r, const OneShotTransport& net) const {
+    CHECK_EQ(r.outcome, StepOutcome::kUsed);
+    CHECK_EQ(r.action, DataAction::kUse);
+    CHECK_EQ(r.root, Media());
+    CHECK_EQ(net.calls, 0);
+    CHECK(shown.empty());
+    CHECK(order.empty());  // no announce, no present, no hold
+    CHECK(r.message.empty());
+  }
+};
+
+}  // namespace
+
+TEST(AShortPackageIsWarnedAboutAndTheDataIsStillUsed) {
+  PinnedRig rig;
+  rig.sizes[PinnedRig::PackagePath(1)] = 5;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(Contains(rig.warns[0],
+                 "data_packages root=" + Media() +
+                     " data_version=5932408047 package=48037dc70b0ecab2_1 outcome=short expected_bytes=6 found_bytes=5 " +
+                     kWarnConsequence));
+  CHECK_EQ(rig.events.size(), static_cast<std::size_t>(1));  // data_check only: no second data_packages line
+  CHECK_EQ(rig.hash_calls, 0);                                // the sizes did not match: nothing is hashed
+  CHECK(rig.writes.empty());                                  // and no marker is written
+  CHECK(!Exists(rig.Root()));                                 // no fetch root, no stock re-fetch
+}
+
+TEST(AMissingPackageIsWarnedAboutWithNoFoundBytes) {
+  PinnedRig rig;
+  rig.sizes.erase(PinnedRig::PackagePath(1));
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=missing expected_bytes=6 found_bytes=none "));
+  CHECK_EQ(rig.hash_calls, 0);
+  CHECK(rig.writes.empty());
+}
+
+TEST(AnOversizePackageIsWarnedAbout) {
+  PinnedRig rig;
+  rig.sizes[PinnedRig::PackagePath(0)] = 5;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(Contains(rig.warns[0], "package=48037dc70b0ecab2_0 outcome=oversize expected_bytes=4 found_bytes=5 "));
+}
+
+TEST(OnlyTheFirstFailingPackageIsReportedInOrder) {
+  PinnedRig rig;
+  rig.sizes[PinnedRig::PackagePath(0)] = 3;
+  rig.sizes[PinnedRig::PackagePath(1)] = 2;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(Contains(rig.warns[0], "package=48037dc70b0ecab2_0 outcome=short expected_bytes=4 found_bytes=3 "));
+  CHECK(!Contains(rig.warns[0], "_1"));
+}
+
+TEST(AFailingPackageIsWarnedAboutWhenTheEngineRootIsNamedAndWhenAFetchIsNotAllowed) {
+  {
+    PinnedRig rig;
+    rig.config.engine_root = nevr_quest::data_root::kMediaRoot;
+    rig.sizes[PinnedRig::PackagePath(1)] = 5;
+    OneShotTransport net(rig.zip, true);
+    const StepResult r = RunDataStep(rig.config, net);
+    rig.CheckUsedWithoutFetch(r, net);
+    CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+    CHECK(Contains(rig.warns[0], "outcome=short"));
+  }
+  {
+    PinnedRig rig;
+    rig.config.allow_fetch = false;  // a release build: it still looks, and it still uses the data
+    rig.sizes[PinnedRig::PackagePath(1)] = 5;
+    OneShotTransport net(rig.zip, true);
+    const StepResult r = RunDataStep(rig.config, net);
+    rig.CheckUsedWithoutFetch(r, net);
+    CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  }
+}
+
+TEST(WholePackagesAreHashedOnceAndTheMarkerIsWritten) {
+  PinnedRig rig;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK(rig.warns.empty());
+  CHECK_EQ(rig.size_calls, 2);  // both packages are measured
+  CHECK_EQ(rig.hash_calls, 1);  // only the pack's added package is hashed
+  CHECK_EQ(rig.hashed.size(), static_cast<std::size_t>(1));
+  CHECK_EQ(rig.hashed.empty() ? std::string() : rig.hashed[0], PinnedRig::PackagePath(1));
+  CHECK_EQ(rig.writes.size(), static_cast<std::size_t>(1));
+  CHECK_EQ(rig.writes.empty() ? std::string() : rig.writes[0].first, PinnedRig::MarkerPath());
+  CHECK_EQ(rig.writes.empty() ? std::string() : rig.writes[0].second, rig.manifest_sha + " " + kBuild + "\n");
+  CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
+  CHECK(Contains(rig.events[1], "data_packages root=" + Media() + " data_version=5932408047 manifest_sha256=" +
+                                    rig.manifest_sha + " outcome=verified packages=2 sha=checked"));
+}
+
+TEST(ASizeIsCheckedOnEveryLaunchButTheHashOnlyOncePerBuild) {
+  PinnedRig rig;
+  rig.has_marker = true;
+  rig.marker = rig.MarkerFor(kBuild);
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK_EQ(rig.size_calls, 2);
+  CHECK_EQ(rig.hash_calls, 0);
+  CHECK(rig.writes.empty());
+  CHECK(Contains(rig.events.back(), "outcome=verified packages=2 sha=skipped"));
+
+  // The marker of another build, or of another manifest, does not count: the package is hashed again.
+  PinnedRig other_build;
+  other_build.has_marker = true;
+  other_build.marker = other_build.MarkerFor("0123456789abcdef0123456789abcdef01234567");
+  OneShotTransport net2(other_build.zip, true);
+  RunDataStep(other_build.config, net2);
+  CHECK_EQ(other_build.hash_calls, 1);
+  CHECK_EQ(other_build.writes.size(), static_cast<std::size_t>(1));
+  CHECK(Contains(other_build.events.back(), "sha=checked"));
+
+  PinnedRig other_manifest;
+  other_manifest.has_marker = true;
+  other_manifest.marker = std::string(64, '0') + " " + kBuild + "\n";
+  OneShotTransport net3(other_manifest.zip, true);
+  RunDataStep(other_manifest.config, net3);
+  CHECK_EQ(other_manifest.hash_calls, 1);
+
+  // A short size is still caught on a launch that skips the hash.
+  PinnedRig short_again;
+  short_again.has_marker = true;
+  short_again.marker = short_again.MarkerFor(kBuild);
+  short_again.sizes[PinnedRig::PackagePath(1)] = 1;
+  OneShotTransport net4(short_again.zip, true);
+  RunDataStep(short_again.config, net4);
+  CHECK_EQ(short_again.warns.size(), static_cast<std::size_t>(1));
+}
+
+TEST(WithoutABuildIdNothingIsHashedAndNoMarkerIsWritten) {
+  PinnedRig rig;
+  rig.config.build_id.clear();
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK_EQ(rig.hash_calls, 0);
+  CHECK(rig.writes.empty());
+  CHECK(Contains(rig.events.back(), "outcome=verified packages=2 sha=not_due"));
+}
+
+TEST(AHashThatDoesNotMatchIsWarnedAboutAndNoMarkerIsWritten) {
+  PinnedRig rig;
+  rig.digest = std::string(64, 'f');
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK_EQ(rig.hash_calls, 1);
+  CHECK(rig.writes.empty());
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=sha_mismatch expected_bytes=6 found_bytes=6 "));
+  CHECK(Contains(rig.warns[0], kWarnConsequence));
+  CHECK_EQ(rig.events.size(), static_cast<std::size_t>(1));  // no `verified` line after a failure
+}
+
+TEST(AFileThatCannotBeReadToItsEndIsWarnedAboutAndNoMarkerIsWritten) {
+  PinnedRig rig;
+  rig.hash_readable = false;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK(rig.writes.empty());
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=unreadable "));
+}
+
+TEST(AMarkerThatCannotBeWrittenIsWarnedAboutAndTheCheckStillPasses) {
+  PinnedRig rig;
+  rig.write_ok = false;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(Contains(rig.warns[0], "data_packages_marker "));
+  CHECK(Contains(rig.warns[0], "result=write_failed"));
+  CHECK(Contains(rig.events.back(), "outcome=verified packages=2 sha=checked"));
+}
+
+TEST(AManifestOutsideThePinnedTableIsNotCheckedAndIsUsedAsBefore) {
+  PinnedRig rig;
+  rig.config.pinned_sets = nullptr;  // the real table: the test manifest is not in it
+  rig.config.pinned_set_count = 0;
+  rig.sizes.clear();                 // nothing is there, and nothing is asked
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK_EQ(rig.size_calls, 0);
+  CHECK_EQ(rig.hash_calls, 0);
+  CHECK(rig.writes.empty());
+  CHECK(rig.warns.empty());
+  CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
+  CHECK(Contains(rig.events[1], "data_packages "));
+  CHECK(Contains(rig.events[1], "outcome=unpinned"));
+}
+
+TEST(TheDataIsNotCheckedWhenItIsFetchedOrReplaced) {
+  PinnedRig rig;
+  rig.present = {Media(), Media("_data")};  // `_data` there, the manifest is not: replace, not use
+  rig.PutOldData();
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.action, DataAction::kReplace);
+  CHECK_EQ(rig.size_calls, 0);
+  CHECK(rig.warns.empty());
+  for (const std::string& e : rig.events) CHECK(!Contains(e, "data_packages"));
+}
+
+TEST(ThePinnedTableHoldsTheCombatPackAsRecorded) {
+  CHECK_EQ(kPinnedDataSetCount, static_cast<std::size_t>(1));
+  const PinnedDataSet* set = FindPinnedDataSet("e1c4903622e4acf5b747f591868ef67d623e619ee63fd4af0268a593874a63e1");
+  CHECK(set != nullptr);
+  if (set == nullptr) return;
+  CHECK_EQ(set->count, static_cast<std::size_t>(2));
+  CHECK_EQ(set->packages[0].index, 0u);
+  CHECK_EQ(set->packages[0].bytes, std::uint64_t{929620177});
+  CHECK_EQ(std::string(set->packages[0].sha256), std::string("14d26efc718a8f8135039e47bd1321cbb556fc4181bf95ffcb5ef59c406a5a3b"));
+  CHECK(!set->packages[0].hashed);
+  CHECK_EQ(set->packages[1].index, 1u);
+  CHECK_EQ(set->packages[1].bytes, std::uint64_t{689617013});
+  CHECK_EQ(std::string(set->packages[1].sha256), std::string("decc77fdfc8ecd3b75ad3120f33dd1980a6a1f8c4c50f566ceb6483d9092db02"));
+  CHECK(set->packages[1].hashed);
+  // The package file names are made from the manifest id of kManifestPath, which the table does not repeat.
+  CHECK(Contains(kManifestPath, "/48037dc70b0ecab2"));
+  // The stock manifest (and any other) is not in the table.
+  CHECK(FindPinnedDataSet(std::string(64, '0')) == nullptr);
+  CHECK(FindPinnedDataSet("none") == nullptr);
+}
+
+TEST(TheStockManifestIsNotInThePinnedTable) {
+  // A wrong pin for the stock data would make every player download it again; the table holds the combat pack's alone.
+  CHECK(FindPinnedDataSet("762c16ae58c9bc70eee071d8c0e2e8fc0408d1f0691032164029294c5cb7ec48") == nullptr);
+  CHECK_EQ(kPinnedDataSetCount, static_cast<std::size_t>(1));
+  CHECK_EQ(sizeof(kPinnedDataSets) / sizeof(kPinnedDataSets[0]), static_cast<std::size_t>(1));
+}
+
+TEST(WithNoWarningSinkAFailureReachesTheStepSinkAtItsLevel) {
+  PinnedRig rig;
+  rig.config.on_step_warn = nullptr;  // the documented fallback: the warning goes to on_step
+  rig.sizes[PinnedRig::PackagePath(1)] = 5;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK(rig.warns.empty());
+  CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));  // data_check, then the failure
+  CHECK(Contains(rig.events[1], "data_packages root=" + Media() + " data_version=5932408047 package=48037dc70b0ecab2_1 outcome=short"));
+}
+
+// The production defaults of the file seams (a stat, a chunked hash, a temporary and a rename, a bounded read) over a real
+// directory: file_size, hash_file, write_file and read_file are left null. The pinned set is a custom one, with the
+// manifest digest taken from the bytes written and two packages of "abc".
+TEST(TheRealFileSeamsCheckSizesHashAndMarkerOnDisk) {
+  Rig rig;
+  const std::string root = rig.scratch.Path("real");
+  ::mkdir(root.c_str(), 0755);
+  const std::string manifest_bytes = "a real manifest on disk";
+  const std::string manifest_sha = Sha256Hex(manifest_bytes.data(), manifest_bytes.size());
+  const std::string pkg0 = root + "/" + kPackageDir + "48037dc70b0ecab2_0";
+  const std::string pkg1 = root + "/" + kPackageDir + "48037dc70b0ecab2_1";
+  const std::string marker = root + "/nevr-data-packages.verified";
+  MakeTree(root, kManifestRel, manifest_bytes);
+  MakeTree(root, std::string(kPackageDir) + "48037dc70b0ecab2_0", "abc");
+  MakeTree(root, std::string(kPackageDir) + "48037dc70b0ecab2_1", "abc");
+
+  const char* const abc_sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+  CHECK_EQ(Sha256Hex("abc", 3), std::string(abc_sha));
+  const PinnedPackage packages[2] = {{0, 3, abc_sha, false}, {1, 3, abc_sha, true}};
+  const PinnedDataSet set = {manifest_sha.c_str(), packages, 2};
+  rig.config.pinned_sets = &set;
+  rig.config.pinned_set_count = 1;
+  rig.config.engine_root = root;
+  rig.config.exists = &MappedExists;  // the real filesystem (the mapped roots are not under the scratch directory)
+  CHECK(!rig.config.file_size && !rig.config.hash_file && !rig.config.write_file && !rig.config.read_file &&
+        !rig.config.list_dir);
+
+  auto run = [&](const char* what) {
+    rig.events.clear();
+    rig.warns.clear();
+    OneShotTransport net(rig.zip, true);
+    const StepResult r = RunDataStep(rig.config, net);
+    if (r.outcome != StepOutcome::kUsed || r.action != DataAction::kUse || r.root != root || net.calls != 0 ||
+        !rig.shown.empty() || !rig.order.empty()) {
+      std::fprintf(stderr, "  the data was not simply used: %s\n", what);
+      CHECK(false);
+    }
+  };
+
+  // First launch of the build: both sizes match, the added package is hashed, the marker is written whole.
+  run("first launch");
+  CHECK(rig.warns.empty());
+  CHECK(!rig.events.empty() && Contains(rig.events.back(), "outcome=verified packages=2 sha=checked"));
+  CHECK_EQ(ReadFile(marker), manifest_sha + " " + kBuild + "\n");
+  CHECK(!Exists(marker + ".tmp"));  // the temporary was renamed away
+
+  // Second launch: the marker names this manifest and build, so the hash is skipped.
+  run("second launch");
+  CHECK(rig.warns.empty());
+  CHECK(!rig.events.empty() && Contains(rig.events.back(), "outcome=verified packages=2 sha=skipped"));
+
+  // One byte of _1 changed, same size, and no marker: the hash catches it. No marker is written, the data is still used.
+  WriteFile(pkg1, "abd");
+  CHECK_EQ(::unlink(marker.c_str()), 0);
+  run("changed byte");
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(!rig.warns.empty() &&
+        Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=sha_mismatch expected_bytes=3 found_bytes=3 "));
+  CHECK(!Exists(marker));
+  CHECK_EQ(rig.events.size(), static_cast<std::size_t>(1));  // data_check only: no `verified` line
+
+  // Shorter and longer than pinned: the real sizes are reported.
+  WriteFile(pkg1, "a");
+  run("truncated");
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=short expected_bytes=3 found_bytes=1 "));
+  WriteFile(pkg1, "abcd");
+  run("extended");
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=oversize expected_bytes=3 found_bytes=4 "));
+
+  // Absent, or something that is not a regular file: missing.
+  CHECK_EQ(::unlink(pkg1.c_str()), 0);
+  run("deleted");
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=missing expected_bytes=3 found_bytes=none "));
+  CHECK_EQ(::mkdir(pkg1.c_str(), 0755), 0);
+  run("a directory in its place");
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "outcome=missing"));
+
+  // The stock package is reported first when it fails too.
+  CHECK_EQ(::unlink(pkg0.c_str()), 0);
+  run("stock package gone");
+  CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "package=48037dc70b0ecab2_0 outcome=missing"));
 }
 
 TEST(TheMissingOutcomeHasAName) {

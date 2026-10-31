@@ -88,7 +88,7 @@ inline uint32_t ParseBotsPerSession(const char* text, std::string* problem) {
 
 // ---- The session settings -----------------------------------------------------------------------------------------
 
-constexpr size_t kSessionStartHeaderSize = 36;
+using nevr_game_type_table::kSessionStartHeaderSize;
 /// Two teams, as the service's arena and combat matches have.
 constexpr int kNumTeams = 2;
 

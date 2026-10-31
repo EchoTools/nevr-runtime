@@ -1,6 +1,6 @@
 # ADR 0018: a log of every resource request the Quest game makes
 
-Status: accepted, implemented (`src/quest/sentinel/resource_request_hook.{h,cpp}`, #871). Installed in development builds only (`nevr_build::kIsDev`); a release build skips both of its constructor steps and registers no counters. The hook only reads: the game's call, its arguments, its result and the request it fills are the game's, byte for byte.
+Status: accepted, implemented (`src/quest/sentinel/resource_request_hook.{h,cpp}`, #871; the loose-file overlay, #1737 C5). Installed in every build; the per-request log lines are development builds only (`nevr_build::kIsDev`), and a release build writes the failed requests alone, rate limited (the amendment on release failures below). On a manifest hit the hook only reads: the game's call, its arguments, its result and the request it fills are the game's, byte for byte. On a manifest miss it may serve a loose file (see the amendment below).
 Not yet observed on a headset: the "Prediction" section is what the first run must show.
 
 ## Context
@@ -21,7 +21,7 @@ The handler logs after the original has returned, so no logging frame is live wh
 
 Two counters, `resource_request_calls` and `resource_request_thunk_faults` (the reporter's table holds `kMaxReportCounters`, 128; `integration_hooks_test` sums every hook's counters against it). Everything else is a per-event line, not a counter.
 
-The constructor sequence asks `Steps::ResourceRequestLogWanted` (`nevr_build::kIsDev`). A release build skips `register_resource_request_counters` and `install_resource_request_log` with the reason `release_build`; a development build whose counters were refused skips the install with `counters_refused` and the hook's own rule logs that it installed nothing. The install runs right after the Vulkan extension window, before token auth.
+The constructor sequence registers the counters and installs the hook in every build; no step is skipped by build flavour. `nevr_build::kIsDev` decides only whether the request lines are written (`Steps::ResourceRequestLogWanted`, passed to the install as its log flag). If the counters were refused, the install still runs and the install line says counters `refused`. The install runs right after the Vulkan extension window, before token auth.
 
 ## Prediction (written before a headset run)
 
@@ -36,4 +36,22 @@ What would prove it wrong: no `resource_request` line before the main menu (the 
 
 ## Not claimed
 
-That a request can be rewritten at this seam: this log only reads. What `x3` carries (the body does not use it). The thread identity of any caller (the log decides). The hook on other builds of libr15: the slot and the six call sites are pinned to build id `b243509c08ce677aeb95fa348016949b3fc45230` and checked against the real library by `just test-quest-hooks-pinned`.
+That a request can be rewritten at this seam on a manifest hit: the hook reads it and never writes it there. What `x3` carries (the body does not use it). The thread identity of any caller (the log decides). The hook on other builds of libr15: the slot and the six call sites are pinned to build id `b243509c08ce677aeb95fa348016949b3fc45230` and checked against the real library by `just test-quest-hooks-pinned`.
+
+## Amendment (#1797): failed requests in a release build
+
+A release build writes one `resource_request_miss` line for a call that returned nonzero, the same line a development build writes (key, return value, call site, thread id; a symbol hash, never a name string, and nothing of the request), so a lobby that half-loaded leaves its failed loads in the sentinel log. It writes nothing for a request that succeeded. The hook was already in the path and already holds the result, so the added work per request is one comparison of the result against zero; a failure additionally costs one key-table probe and one compare-and-swap, with atomics only (no lock and no destructor in the game's frame, as for the rest of the handler).
+
+Bounds, which leave the game's call untouched. A failing key is written at its 1st, 2nd, 4th, 8th ... repeat (the `seen` field), the schedule of the development lines, so one missing resource asked for in a loop does not use the window. At most `kFailureLinesPerWindow` (10) lines are written in a `kFailureWindowMs` (10000 ms, `CLOCK_MONOTONIC`) window; windows are the clock divided by the window length. The first failure of a later window writes one `resource_request_miss_suppressed` line with `count` (the failures the earlier windows dropped), `window_ms` and `limit` before its own line, the shape of `docs/standards/logging.md` Rule 16; a window that dropped none writes no such line, and a count not yet said when the process ends is not written. A key that found no slot in the key table is announced by `resource_request_table_full`, once, and its failures take their places in the window like any other. A development build is unchanged: it writes every failure under the `resource_request_cap` line cap, with no window.
+
+Not verified on a headset: that a half-loaded lobby produces failed requests through this function (the hook sees the manifest search's result, not a failure that happens after the request is filled, for example in the read itself).
+
+## Amendment (#1737 C5): the loose-file overlay
+
+Installed in every build, not only development builds. The request log lines stay development-only (`nevr_build::kIsDev`); the overlay's counters are registered in every build.
+
+On a manifest miss (the handler's own binary search of the manifest finds no record for the (type, name) pair, the same search the game runs), the handler serves a loose file in the platform data directory, with the same steps as the reference build's cave (`q15t-upstream/tools/qcp_patches.py`, P9): `GetUnpackagedResourcePath`, then `CSysFile::Open` (flags 1), then `CSysFile::Size`, then the request's owner, index, handle, uncompressed size, memory space and valid word. Only `ServeLoose` writes the request. If any of the three stages fails, the game's function runs as it would have and raises its own "Cannot find resource". A manifest hit never reaches the overlay: the game's call runs first, as before.
+
+Logging: a served file is one `resource_overlay_served` line and a failed stage one `resource_overlay_failed` line, both development-only, sharing a cap of 32 lines. The counters `resource_overlay_served` and `resource_overlay_failed` count in every build, so a release build reports overlay outcomes through the counters only.
+
+Known risk: the open file handle is not closed (the reference build does not close it either). See the #1737 C5 pull request for the risk list.

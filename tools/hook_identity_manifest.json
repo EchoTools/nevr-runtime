@@ -158,6 +158,11 @@
       "prologue": "488b91c801000033"
     },
     {
+      "va": "0x140F7FE50",
+      "name": "BROADCASTER_INITIALIZE",
+      "prologue": "488bc4488958104c"
+    },
+    {
       "va": "0x140F80ED0",
       "name": "BroadcasterListen (CBroadcaster::Listen)",
       "prologue": "48895c241048896c"

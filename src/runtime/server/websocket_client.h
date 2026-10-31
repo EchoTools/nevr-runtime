@@ -83,6 +83,11 @@ class WebSocketClient {
   /// <param name="callback">The callback function</param>
   VOID SetMessageHandler(MessageCallback callback);
 
+  /// Sets a callback invoked on the WebSocket receive thread for each message, before it is queued for the game
+  /// thread. It sees a message even when the game thread has stopped calling Update() (#1756). It must be quick and
+  /// must not touch game memory. Set it before Connect().
+  VOID SetReceiveObserver(MessageCallback callback);
+
   /// <summary>
   /// Callback function type for connection state changes.
   /// Parameter: TRUE if connected, FALSE if disconnected
@@ -117,6 +122,9 @@ class WebSocketClient {
 
   // Message receive callback
   MessageCallback messageCallback_;
+
+  // Receive-thread observer (SetReceiveObserver)
+  MessageCallback receiveObserver_;
 
   // Connection state change callback
   ConnectionCallback connectionCallback_;
