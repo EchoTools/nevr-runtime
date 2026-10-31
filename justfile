@@ -607,8 +607,13 @@ _release-quest-apk label tag store_apk plugin variant pack pack_meta:
     echo "$label: packaging the $tag loader asset at ${head:0:7}" >&2
     loader_sha=$(python3 -I tools/quest_release_loader.py fetch --tag "$tag" --out "$out/loader")
     python3 tools/package_release.py quest-library --lib "$out/loader/libovrplatformloader.so" --version "$ver" --commit "$tag_commit"
+    # The combat APK runs libq15t_early.so in the early phase, before android_main reads the heap sizes (src/quest/plugins/q15t/README.md).
+    early=""
+    if [ "$variant" = combat ]; then early="libq15t_early.so"; fi
     if [ -n "$pack" ]; then
-        just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "" "" "$pack" "$pack_meta"
+        just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "$early" "" "$pack" "$pack_meta"
+    elif [ -n "$early" ]; then
+        just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "$early"
     else
         just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver"
     fi
