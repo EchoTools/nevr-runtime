@@ -57,6 +57,7 @@ set(PATCHES_SOURCES
     "lifecycle/config_yaml_source.cpp"
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
+    "patch/loading_tips.cpp"
     "patch/coop_ai_trace.cpp"
     "lifecycle/crash_recovery.cpp"
     "lifecycle/return_to_lobby.cpp"
@@ -189,6 +190,7 @@ set(PATCHES_HEADERS
     "lifecycle/service_config.h"
     "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
+    "patch/loading_tips.h"
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
     "patch/arena_public_clock.h"
@@ -1607,6 +1609,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_early_quit_lockout PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_early_quit_lockout DISCOVERY_MODE PRE_TEST)
 
+    # #1774 (P46): the SNSEarlyQuitFeatureFlags callback, replaced whole under MinHook against a fake game image.
+    add_executable(test_early_quit_feature_flags tests/test_early_quit_feature_flags.cpp patch/early_quit_lockout.cpp
+      hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_early_quit_feature_flags.cpp patch/early_quit_lockout.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_early_quit_feature_flags PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_early_quit_feature_flags PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_early_quit_feature_flags PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_early_quit_feature_flags DISCOVERY_MODE PRE_TEST)
+
     # test_lobby_full_backoff.cpp (#1011, header-only patch/lobby_full_backoff_rules.h): the lobby-full retry policy.
     add_executable(test_lobby_full_backoff tests/test_lobby_full_backoff.cpp)
     target_include_directories(test_lobby_full_backoff PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -1686,6 +1698,16 @@ if(BUILD_TESTING)
     target_include_directories(test_hooking PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_hooking PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
+
+    # #1774: the loading-tip node hooks, installed into a hand-assembled image under real MinHook (no game binary).
+    add_executable(test_loading_tips tests/test_loading_tips.cpp patch/loading_tips.cpp hook/hook_guard.cpp
+      hook/hook_liveness.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_loading_tips.cpp patch/loading_tips.cpp hook/hook_guard.cpp
+      hook/hook_liveness.cpp log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_loading_tips PRIVATE NEVR_USE_MINHOOK)
+    target_include_directories(test_loading_tips PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_loading_tips PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_loading_tips DISCOVERY_MODE PRE_TEST)
 
     # DllLoadHook load-filter test (#361): the real LoadLibrary hooks under MinHook.
     add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)

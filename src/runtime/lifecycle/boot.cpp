@@ -30,6 +30,7 @@
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
+#include "runtime/patch/loading_tips.h"
 #include "runtime/frame/frame_stats.h"
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/server_team_size_install.h"
@@ -690,7 +691,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // Apply patches to force the game to load as a server.
   if (g_isServer) {
     PatchEnableServer();
-    PatchDisableLoadingTips();
+    // #1774: the loading-tip script nodes return at once on a server (patch/loading_tips.h).
+    nevr_loading_tips::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
     PatchDisableWwise();
     PatchLogServerProfile();
     // Issue #63: co-op AI bots stand still on community servers; log what gates them.
