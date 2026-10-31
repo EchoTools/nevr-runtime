@@ -185,7 +185,9 @@ TEST_F(HeadlessGfxSettings, AMismatchedPrologueInstallsNothingAndNamesTheBytes) 
   EXPECT_NE(warning.find("expected=48895c2410488974"), std::string::npos) << warning;
   EXPECT_NE(warning.find("actual=48895cdb10488974"), std::string::npos) << warning;
   for (std::size_t i = 0; i < g_logged.size(); ++i) {
-    if (g_logged[i].find("prologue_mismatch") != std::string::npos) EXPECT_EQ(g_levels[i], EchoVR::LogLevel::Warning);
+    if (g_logged[i].find("prologue_mismatch") != std::string::npos) {
+      EXPECT_EQ(g_levels[i], EchoVR::LogLevel::Warning);
+    }
   }
 }
 
