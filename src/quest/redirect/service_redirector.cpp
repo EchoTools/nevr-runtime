@@ -44,6 +44,9 @@ void ResetCountersForTest() noexcept {
   c.exceptions.store(0);
   c.urlRedirected.store(0);
   c.urlPassThrough.store(0);
+  c.loginFallbackVersioned.store(0);
+  c.loginFallbackKept.store(0);
+  c.loginFallbackFailed.store(0);
 }
 
 bool IsServiceHostKey(const char* key) noexcept {
@@ -181,9 +184,60 @@ const char* ServiceRedirector::ApplyChecked(const char* result, bool graphRule) 
   return chosen;
 }
 
+void ServiceRedirector::SetBuildIdentity(const BuildIdentity& identity) noexcept {
+  try {
+    identity_ = identity;
+  } catch (const std::exception&) {
+    identity_ = BuildIdentity{};  // a failed copy leaves the rule off
+  }
+}
+
+const char* ServiceRedirector::ApplyFallback(const char* key, const char* fallback) noexcept {
+  if (!active_ || key == nullptr || fallback == nullptr || !identity_.Valid()) return fallback;
+  if (std::string_view(key) != std::string_view(kLoginHostKey)) return fallback;
+  const std::string_view url(fallback);
+  if (!IsWsUrl(url)) return fallback;
+
+  RedirectCounters& counters = GlobalCounters();
+  if (HasQuery(url)) {
+    // A patched fallback already carries its own tuple: it stays as written, with no second '?'.
+    counters.loginFallbackKept.fetch_add(1, std::memory_order_relaxed);
+    return fallback;
+  }
+  if (url.size() > kMaxValueBytes) return fallback;
+
+  try {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    for (const FallbackEntry& e : fallbackCache_) {
+      if (e.interned != nullptr && std::string_view(e.original) == url) return e.interned;
+    }
+    const std::string composed = Compose(url, identity_);
+    const nevr::lifecycle::InternResult interned = intern_(composed);
+    if (interned.status != nevr::lifecycle::InternStatus::kSuccess || interned.pointer == nullptr) {
+      counters.loginFallbackFailed.fetch_add(1, std::memory_order_relaxed);
+      return fallback;
+    }
+    // A full table composes again on each call for a fifth distinct fallback; the pool still holds one copy.
+    for (FallbackEntry& e : fallbackCache_) {
+      if (e.interned == nullptr) {
+        e.original.assign(url.data(), url.size());
+        e.interned = interned.pointer;
+        break;
+      }
+    }
+    counters.loginFallbackVersioned.fetch_add(1, std::memory_order_relaxed);
+    return interned.pointer;
+  } catch (const std::exception&) {
+    counters.loginFallbackFailed.fetch_add(1, std::memory_order_relaxed);
+    return fallback;
+  }
+}
+
 void ServiceRedirector::Prewarm() noexcept {
   if (!active_) return;
   for (const BuiltinDefault& d : kBuiltinDefaults) (void)Apply(d.key, d.value);
+  // kBuiltinDefaults[1] is the login_host default, the stock fallback BeginLogIn passes.
+  (void)ApplyFallback(kLoginHostKey, kBuiltinDefaults[1].value);
 }
 
 Counters ServiceRedirector::counters() const noexcept {

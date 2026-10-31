@@ -333,4 +333,60 @@ TEST(ServerTimestep, TheRecordsKeepWhatWasStoredForTheOtherThread) {
   EXPECT_EQ(flag.Load(), FlagOutcome::kFieldMissing);
 }
 
+// #1785: the step follows the session's game type.
+using nevr_server_timestep::RateSource;
+using nevr_server_timestep::TickRateForGameType;
+using nevr_server_timestep::kCombatTickRateHz;
+
+TEST(SessionTickRate, CombatSessionsGetTheRateTheirPhysicsWasTunedFor) {
+  for (const char* type : {"echo_combat", "echo_combat_private", "echo_combat_tournament"}) {
+    const auto rate = TickRateForGameType(type, kDefaultTickRateHz, false);
+    EXPECT_EQ(rate.hz, 30u) << type;
+    EXPECT_EQ(rate.source, RateSource::kCombatDefault) << type;
+    EXPECT_EQ(StepMicroseconds(rate.hz), kGameDefaultStepUs) << type << ": the game's own 30 a second step";
+  }
+}
+
+TEST(SessionTickRate, ArenaAndEveryOtherTypeKeepTheDefaultRate) {
+  for (const char* type : {"echo_arena", "echo_arena_private", "social_2.0", "unknown", ""}) {
+    const auto rate = TickRateForGameType(type, kDefaultTickRateHz, false);
+    EXPECT_EQ(rate.hz, 120u) << type;
+    EXPECT_EQ(rate.source, RateSource::kDefault) << type;
+    EXPECT_EQ(StepMicroseconds(rate.hz), 8333u) << type;
+  }
+}
+
+TEST(SessionTickRate, AnExplicitConfiguredRateWinsForEveryType) {
+  for (const char* type : {"echo_combat", "echo_combat_private", "echo_arena", "social_2.0"}) {
+    const auto rate = TickRateForGameType(type, 60, true);
+    EXPECT_EQ(rate.hz, 60u) << type;
+    EXPECT_EQ(rate.source, RateSource::kConfig) << type;
+  }
+  EXPECT_EQ(TickRateForGameType("echo_combat", 0, true).hz, 0u) << "0 keeps the game's own step, for Combat too";
+  EXPECT_EQ(TickRateForGameType("echo_arena", 0, true).hz, 0u);
+}
+
+TEST(SessionTickRate, ACombatTypeNeedsTheWholePrefix) {
+  EXPECT_FALSE(nevr_server_timestep::IsCombatGameType("echo_comba"));
+  EXPECT_FALSE(nevr_server_timestep::IsCombatGameType("xecho_combat"));
+  EXPECT_TRUE(nevr_server_timestep::IsCombatGameType("echo_combat"));
+}
+
+TEST(SessionTickRate, TheSessionRateIsWrittenToTheStepSlotAndReadBack) {
+  // The write ApplySessionTimestep makes (config.cpp), driven on a buffer: a boot-time Arena step, then a Combat
+  // session, then an Arena session again, each read back.
+  uint64_t slot = kGameDefaultStepUs;
+  auto session = [&](const char* type) {
+    return ApplyStep(true, TickRateForGameType(type, kDefaultTickRateHz, false).hz, &slot);
+  };
+  EXPECT_EQ(session("echo_arena").outcome, StepOutcome::kSet);
+  EXPECT_EQ(slot, 8333u);
+  const auto combat = session("echo_combat");
+  EXPECT_EQ(combat.outcome, StepOutcome::kSet);
+  EXPECT_EQ(combat.was, 8333u);
+  EXPECT_EQ(slot, kGameDefaultStepUs);
+  EXPECT_EQ(session("echo_arena").outcome, StepOutcome::kSet);
+  EXPECT_EQ(slot, 8333u) << "the next Arena session on the same process gets 120 again";
+}
+
 }  // namespace

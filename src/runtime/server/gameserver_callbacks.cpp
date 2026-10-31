@@ -7,7 +7,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 #include <exception>
+#include <optional>
 #include <string>
 #include <thread>
 #include <curl/curl.h>
@@ -18,6 +20,7 @@
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
+#include "runtime/server/game_type_table.h"
 #include "runtime/server/lobby_settings_relay.h"
 #include "runtime/server/protobuf_transport.h"
 #include "runtime/server/registration_envelope.h"
@@ -38,6 +41,7 @@
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat / NevrCfgGetFlatCsv (N133 S4b: config.yaml reads)
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/patch/server_bots.h"
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/hook/patching.h"
 #include "core/nevr_curl.h"
@@ -49,6 +53,27 @@
 #include "core/logging.h"
 
 using namespace nevr_game_server;
+
+namespace {
+
+/// Stores the session's game type for the public Arena round default (#982) and says so, with the type it replaces and
+/// how many round_time reads found no type since the last session, so one server run shows the order of the session
+/// messages and the game's reads. A public Arena session whose type arrived after such a read is a Warning: those
+/// reads kept the game's own round length.
+void StoreSessionGameType(const std::string& gameType, const char* source, const std::string& sessionId) {
+  const std::optional<std::string> previous = nevr_arena_round_time::SetSessionGameType(gameType);
+  const std::uint32_t readsWithoutType = nevr_arena_round_time::TakeReadsWithoutType();
+  const bool missed = readsWithoutType > 0 && nevr_arena_round_time::DecideRoundTimeDefault(gameType).applied;
+  Log(missed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] session game type stored game_type=%s source=%s session=%s previous=%s "
+      "round_time_reads_without_type=%u%s",
+      gameType.c_str(), source, sessionId.c_str(), previous ? previous->c_str() : "none", readsWithoutType,
+      missed ? " (the game read round_time before this type was known; those reads kept the game's own value)" : "");
+  // #1785: the step follows the type (Combat's physics is tuned for 30 a second, not the Arena rate).
+  ApplySessionTimestep(gameType, sessionId);
+}
+
+}  // namespace
 
 // --- TCP Broadcaster Callbacks ---
 
@@ -135,7 +160,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
       // It is stored for every session, telemetry or not: the public Arena round default reads it (#982).
       const auto gameType = nevr_telemetry_header::GameTypeForSession(sessionCreate.settings_json(),
                                                                       sessionCreate.lobby_type() == 1);
-      nevr_arena_round_time::SetSessionGameType(gameType.gameType);
+      StoreSessionGameType(gameType.gameType, "session_create", sessionCreate.lobby_session_id());
 
       // Start telemetry streaming for this session
       if (g_telemetryEnabled) {
@@ -796,6 +821,14 @@ void GameServerLib::RegisterTcpCallbacks() {
       // message does. Once we move to nevr-server-rs with a proper protobuf protocol,
       // this passthrough goes away — the protobuf should carry everything.
       auto* broadcaster = GetContext().GetBroadcaster();
+      // #982: this frame is what the game starts the session from, so its game type is stored before the game sees
+      // it. The protobuf session create normally arrives first and stores the same type; a service that sends the
+      // frame alone, or in the other order, no longer leaves the game reading the previous session's type or none.
+      if (const auto frameType =
+              nevr_game_type_table::GameTypeOfSessionStart(static_cast<const uint8_t*>(data), size)) {
+        StoreSessionGameType(*frameType, "legacy_session_start", nevr_server_bots::SessionIdOf(
+                                                                      static_cast<const uint8_t*>(data), size));
+      }
       // #1423: a session start with no broadcaster is not forwarded, so it must not keep the last one's bots flag.
       nevr_server_bots::ForgetSession();
       if (broadcaster) {

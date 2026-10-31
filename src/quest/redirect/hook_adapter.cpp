@@ -13,6 +13,13 @@ namespace {
 
 using sentinel::GotStatus;
 std::atomic<ServiceRedirector*> g_redirector{nullptr};
+// The identity the login_host fallback rule appends. Empty until SetLoginIdentity; the rule is off then. A function-local
+// static, not a namespace-scope object: the sentinel's ELF constructor calls SetLoginIdentity, and a namespace-scope
+// std::string would have its own initializer in an order this file does not control.
+BuildIdentity& LoginIdentity() {
+  static BuildIdentity identity;
+  return identity;
+}
 
 struct Installation {
   std::mutex mutex;
@@ -85,6 +92,11 @@ const char* ApplyUrlActive(const char* url) noexcept {
   return redirector == nullptr ? url : redirector->ApplyUrl(url);
 }
 
+const char* ApplyFallbackActive(const char* key, const char* fallback) noexcept {
+  ServiceRedirector* const redirector = g_redirector.load(std::memory_order_acquire);
+  return redirector == nullptr ? fallback : redirector->ApplyFallback(key, fallback);
+}
+
 // libr15's two slots (the config-string reader and the HTTP connect) are installed together.
 GotStatus InstallLibR15SlotsLocked(Installation& s, sentinel::ImageLookup lookup) {
   const GotStatus tstring = InstallSlotLocked(Slot::kLibR15, s.libr15Hook, s.options.targets.libr15, lookup,
@@ -108,7 +120,20 @@ bool RegisterRedirectCounters() noexcept {
   // The CSysHttp::CreateConnection decisions alone (#408): `redirect_applied` also counts the config-key reads.
   ok = sentinel::RegisterReportCounter("redirect_url_redirected", &c.urlRedirected) && ok;
   ok = sentinel::RegisterReportCounter("redirect_url_pass_through", &c.urlPassThrough) && ok;
+  // The login_host fallback decisions (login_fallback.h): versioned for a stock fallback, kept for one that already has a query.
+  ok = sentinel::RegisterReportCounter("redirect_login_fallback_versioned", &c.loginFallbackVersioned) && ok;
+  ok = sentinel::RegisterReportCounter("redirect_login_fallback_kept", &c.loginFallbackKept) && ok;
+  ok = sentinel::RegisterReportCounter("redirect_login_fallback_failed", &c.loginFallbackFailed,
+                                       sentinel::ReportKind::kFaults) && ok;
   return ok;
+}
+
+void SetLoginIdentity(const BuildIdentity& identity) noexcept {
+  try {
+    LoginIdentity() = identity;
+  } catch (const std::exception&) {
+    LoginIdentity() = BuildIdentity{};  // a failed copy leaves the rule off
+  }
 }
 
 InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config, const InstallOptions& options) {
@@ -138,10 +163,12 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
       off.featureEnabled = false;
       return off;
     }
+    redirector->SetBuildIdentity(LoginIdentity());
     redirector->Prewarm();
     const Counters warmed = redirector->counters();
     sentinel::LogFields(sentinel::LogLevel::kInfo, "redirect_install",
                         {{"target", "redirect"}, {"status", "prewarmed"},
+                         {"login_fallback", LoginIdentity().Valid() ? "armed" : "no_identity"},
                          {"policy_runs", static_cast<long long>(warmed.policyRuns)},
                          {"redirected", static_cast<long long>(warmed.redirected)},
                          {"failures", static_cast<long long>(warmed.failures)}});
@@ -151,6 +178,7 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
     s.report.featureEnabled = true;
     SetApply(&ApplyActive);
     SetApplyUrl(&ApplyUrlActive);
+    SetApplyFallback(&ApplyFallbackActive);
     g_redirector.store(redirector, std::memory_order_release);
   } else {
     LogInstall("redirect", GotStatus::kAlreadyInstalled);
@@ -199,6 +227,7 @@ void RemoveRedirectHooks() {
   ArmThunk(Slot::kCreateConnection, false);
   SetApply(nullptr);
   SetApplyUrl(nullptr);
+  SetApplyFallback(nullptr);
   g_redirector.store(nullptr, std::memory_order_release);
   s.redirector = nullptr;
   s.report = InstallReport{};
@@ -210,6 +239,7 @@ void ArmHandlersForTest(ServiceRedirector* redirector) {
   g_redirector.store(redirector, std::memory_order_release);
   SetApply(redirector != nullptr ? &ApplyActive : nullptr);
   SetApplyUrl(redirector != nullptr ? &ApplyUrlActive : nullptr);
+  SetApplyFallback(redirector != nullptr ? &ApplyFallbackActive : nullptr);
   ArmThunk(Slot::kLibR15, redirector != nullptr);
   ArmThunk(Slot::kMatchmaking, redirector != nullptr);
   ArmThunk(Slot::kCreateConnection, redirector != nullptr);
