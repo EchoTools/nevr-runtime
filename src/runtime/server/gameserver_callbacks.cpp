@@ -17,7 +17,10 @@
 #include "core/auth_token.h"
 #include "core/auth_token_refresh.h"
 #include "runtime/lifecycle/arena_round_time.h"
+#include "runtime/lifecycle/crash_recovery.h"  // PerformGracefulShutdown
 #include "runtime/lifecycle/return_to_lobby.h"
+#include "runtime/lifecycle/return_to_lobby_queue.h"
+#include "runtime/server/ended_session_watchdog.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/game_type_table.h"
@@ -155,6 +158,8 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
             "[NEVR.GAMESERVER] Failed to start session (state=%d, expected Registered=%d)",
             static_cast<int>(self->GetContext().GetState()), static_cast<int>(ServerState::Registered));
       }
+      // A new session on this server: the exit watchdog of the session that ended before it (#1756) must not fire.
+      self->CancelEndedSessionWatchdog();
 
       // The game type is the engine's symbol from the settings JSON; the lobby type is only the fallback (#996).
       // It is stored for every session, telemetry or not: the public Arena round default reads it (#982).
@@ -783,6 +788,41 @@ static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT6
   }
 }
 
+// How long after ServerDB's CODE_ENDED the process may stay up before it is ended (#1756). The clean path takes
+// milliseconds (the game's return to lobby, then the state machine's exit); this is far above it, and the configured
+// empty-server hold (network.empty_server_ttl_seconds) is added because that hold deliberately keeps the process up.
+static constexpr std::chrono::milliseconds kEndedSessionExitGrace{15000};
+
+void GameServerLib::ArmEndedSessionWatchdog(const std::string& sessionId) {
+  const auto delay = kEndedSessionExitGrace + std::chrono::milliseconds(nevr_return_to_lobby::HoldTtlMs());
+  const bool armed = m_endedSessionWatchdog.Arm(delay, sessionId, [](const std::string& id) {
+    // Game memory is read here only to say why the game did not leave. This is not the game thread and the game may
+    // be in any state, so every read goes through ReadProcessMemory on this process: a bad pointer reads as
+    // "unknown" and cannot fault in front of the exit below.
+    const auto read = [](const void* from, void* to, size_t size) {
+      SIZE_T got = 0;
+      return ReadProcessMemory(GetCurrentProcess(), from, to, size, &got) != FALSE && got == size;
+    };
+    const void* context = g_pGame;
+    const void* netGame = nullptr;
+    if (context == nullptr || !read(static_cast<const unsigned char*>(context) + nevr_patch_addresses::CONTEXT_NETGAME_OFFSET,
+                                    &netGame, sizeof(netGame))) {
+      netGame = nullptr;
+    }
+    const uint64_t deferCount = nevr_return_to_lobby_queue::DeferCount(netGame, read);
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] service-ended session's process is still running after the exit grace session_id=%s "
+        "defer_count=%lld — the game did not leave the session, ending the process so the slot is released",
+        id.c_str(), deferCount == UINT64_MAX ? -1LL : static_cast<long long>(deferCount));
+    PerformGracefulShutdown(0);
+  });
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] session ended by ServerDB (receive thread) session_id=%s exit_watchdog=%s delay_ms=%lld",
+      sessionId.c_str(), armed ? "armed" : "already_armed_or_fired", static_cast<long long>(delay.count()));
+}
+
+void GameServerLib::CancelEndedSessionWatchdog() { m_endedSessionWatchdog.Cancel(); }
+
 void GameServerLib::RegisterTcpCallbacks() {
   auto& cb = m_context->GetCallbackRegistry();
 
@@ -802,6 +842,15 @@ void GameServerLib::RegisterTcpCallbacks() {
   // It must be: two branches below hand it to CBroadcaster::ReceiveLocalEvent
   // (echovr.exe 0x140F87AA0), which passes the msg pointer on, as mutable, to every
   // listener registered for the symbol (issue #43).
+  // #1756: the service ending the session is what makes this server leave. The game does that itself when its
+  // return to lobby runs; this makes sure the process leaves when it does not. The observer runs on the WebSocket
+  // receive thread, so it sees CODE_ENDED even when the game thread has stopped calling Update().
+  m_wsClient->SetReceiveObserver([this](EchoVR::SymbolId msgId, VOID* data, UINT64 size) {
+    std::string endedSession;
+    if (!nevr_game_server::ParseServiceEndedSession(msgId, data, static_cast<size_t>(size), &endedSession)) return;
+    ArmEndedSessionWatchdog(endedSession);
+  });
+
   m_wsClient->SetMessageHandler([this](EchoVR::SymbolId msgId, VOID* data, UINT64 size) {
     if (msgId == SYM_PROTOBUF_MSG) {
       OnTcpMsgProtobuf(this, nullptr, {}, data, nullptr, size);

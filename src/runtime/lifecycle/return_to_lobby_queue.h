@@ -49,6 +49,34 @@ inline Verdict Check(const void* netGame) {
   return storage != nullptr ? Verdict::Ready : Verdict::QueueNotAllocated;
 }
 
+/// The count at game+0x1F10 (0x1401a4ad0 defers the return to lobby while it is non-zero), or UINT64_MAX when
+/// the net game or its game object is not there. For the log line that says why a return did not happen (#1756).
+/// `read(from, to, size)` copies `size` bytes and returns false when they cannot be read. A caller off the game
+/// thread passes one that cannot fault (ReadProcessMemory on the process itself); the default is a plain copy.
+template <typename Reader>
+inline uint64_t DeferCount(const void* netGame, Reader read) {
+  if (netGame == nullptr) return UINT64_MAX;
+  const void* game = nullptr;
+  if (!read(static_cast<const unsigned char*>(netGame) + nevr_patch_addresses::NETGAME_GAME_OFFSET, &game,
+            sizeof(game)) ||
+      game == nullptr) {
+    return UINT64_MAX;
+  }
+  uint64_t count = 0;
+  if (!read(static_cast<const unsigned char*>(game) + nevr_patch_addresses::GAME_DEFER_COUNT_OFFSET, &count,
+            sizeof(count))) {
+    return UINT64_MAX;
+  }
+  return count;
+}
+
+inline uint64_t DeferCount(const void* netGame) {
+  return DeferCount(netGame, [](const void* from, void* to, size_t size) {
+    std::memcpy(to, from, size);
+    return true;
+  });
+}
+
 inline const char* Name(Verdict verdict) {
   switch (verdict) {
     case Verdict::Ready:
