@@ -17,9 +17,9 @@
  *     fallback root when neither candidate holds `_data`), so the game records the root it would have used
  *     after the timeout.
  *   - CSysInfo::GetDataRootDir (#866): with no OBB file CSysFile::Init returns at "OBB not found", before any mount, so
- *     the two hooks above never run and the engine reads the legacy root whatever ResolveRoot found. When ResolveRoot
- *     found the Android/media root holding the game's manifest (the data step's own completeness check), this hook
- *     answers the engine's data-root question with that root; for every other resolution it calls the original.
+ *     the two hooks above never run and the engine's own question is the only one. This hook answers it with the root
+ *     ResolveRoot chose: the media root, unless the legacy root alone holds the game's data (the same root a skipped mount
+ *     serves). Once ResolveRoot has run, the file's own body is not consulted; before it, the original answers.
  *     By code reading (a scan of the pinned libr15, ADR 0013 Premise C; not observed on a headset), the function has two
  *     callers, both through this slot, and both only read the returned pointer.
  * The path hook is installed first and the mount hook only when it took: a mount skipped without the path
@@ -31,7 +31,7 @@
  *   obb_mount_skipped              the mount request was answered with "mounted"
  *   obb_path_served                the fallback data root was returned for a path request
  *   obb_mount_thunk_faults / obb_path_thunk_faults   a thunk had no original
- *   data_root_served               the engine's data-root question was answered with the media root
+ *   data_root_served               the engine's data-root question was answered with the root ResolveRoot chose
  *   data_root_thunk_faults         the data-root thunk had no original
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
@@ -54,7 +54,9 @@ inline constexpr int kCounterCount = 6;
 bool RegisterCounters() noexcept;
 
 // Arms the handlers and installs the thunks in libr15.so (path, mount, then the data root). One line
-// {"event":"obb_skip_install",...} says what was installed. True only when all three slots hold their thunks.
+// {"event":"obb_skip_install",...} says what was installed; when the data-root slot took, one line
+// {"event":"data_root_original",...} says which body the file's own GetDataRootDir has. True only when all three slots hold
+// their thunks.
 bool Install() noexcept;
 
 // Install() with its outside world given: the filesystem ResolveRoot reads and the three slot installers. Install() is
@@ -78,9 +80,9 @@ bool InstallIfCounted(bool countersRegistered) noexcept;
 // the data is complete". The one-argument form uses `exists` for both. Install() calls it with the real filesystem; call it
 // before the game's first mount request. Until it runs, the game's own fallback root is served.
 //
-// The root the ENGINE is told to read with no OBB file (DataRootRedirect) is narrower than the root served to a skipped
-// mount: the media root, and only when it holds the manifest, not merely a `_data` directory. A `_data` an older installer
-// left behind, partial or of another build, must not take the engine away from complete data in the legacy root (#932).
+// The root the ENGINE is told to read with no OBB file (DataRootRedirect) is the root a skipped mount serves: the media
+// root, unless the legacy root alone holds the game's data (#932, #965). A `_data` an older installer left behind, partial
+// or of another build, does not take the engine away from complete data in the legacy root.
 void ResolveRoot(data_root::ExistsFn exists) noexcept;
 void ResolveRoot(data_root::ExistsFn dirExists, data_root::ExistsFn fileExists) noexcept;
 
@@ -92,9 +94,9 @@ bool DirectoryExists(const char* path) noexcept;
 // pinned zip), so DirectoryExists would call present data missing.
 bool PathExists(const char* path) noexcept;
 
-// The media root the engine is told to read, or nullptr when it is not: non-null only when ResolveRoot found the
-// media root holding the game's manifest (not only a `_data` directory) AND the data-root hook is installed (the slot took). It is what the
-// first-run data step treats as the engine's root when no mount was skipped (data_wiring.cpp, #866).
+// The root the hook answers the engine's data-root question with: the root ResolveRoot chose, non-null whenever the data-root
+// hook is installed (the slot took) and ResolveRoot has run; nullptr otherwise. The first-run data step treats it as the
+// engine's root when no mount was skipped (data_wiring.cpp, #866).
 const char* DataRootRedirect() noexcept;
 
 // Test support: arms the handlers without touching a GOT slot, marks the data-root hook installed, and clears the

@@ -3,8 +3,9 @@
  * The game asks CSysInfo::GetDataRootDir (libr15 0xf87250), which returns gOBBPath when it is set and
  * otherwise the literal /storage/emulated/0/readyatdawn (pinned_targets.h). The OBB skip (obb_skip_hook.h)
  * decides what gOBBPath holds, so the root it serves is chosen here: the first candidate that holds the game's
- * `_data` directory. With no OBB file nothing is mounted and gOBBPath stays empty; the same module's hook on
- * GetDataRootDir then answers the media root when it is the winner (#866), and the legacy literal is answered otherwise.
+ * `_data` directory. The hook on GetDataRootDir answers the media root unless the legacy root alone holds the
+ * data (obb_skip_hook.cpp, ResolveRoot), whatever the file's own body returns. With no OBB file nothing is
+ * mounted and gOBBPath stays empty.
  *
  *   1. /sdcard/Android/media/com.readyatdawn.r15/files   the data root: Android's app-specific media directory, where
  *                                                        the echo.taxi installer puts the data
@@ -26,6 +27,8 @@ namespace nevr_quest::data_root {
 
 // The data root: the installer app's directory under Android/media (needs no storage permission to read).
 inline constexpr const char* kMediaRoot = "/sdcard/Android/media/com.readyatdawn.r15/files";
+// The directory every media root sits under: the reference build's GetDataRootDir body names the afk package under it.
+inline constexpr const char* kMediaDirPrefix = "/sdcard/Android/media/";
 // The legacy root: the game's own fallback and tools/quest-install.sh's target.
 inline constexpr const char* kLegacyRoot = "/storage/emulated/0/readyatdawn";
 // What proves a root holds the game's data.

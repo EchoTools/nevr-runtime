@@ -740,7 +740,7 @@ void DataOnlyInTheLegacyRootStillNeedsTheGrantWithNoObbFile() {
   rig.BootRequest(&DeniedCheck);
   QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
   QCHECK(g_shown.size() == 2 && g_shown[0] == nevr_quest::data::kNeedsStoragePermission);
-  QCHECK(Has(LineOf("data_step_start"), "\"engine_root_source\":\"engine_default\""));
+  QCHECK(Has(LineOf("data_step_start"), "\"engine_root_source\":\"data_root_hook\""));  // the hook answers the legacy root too (C1)
 }
 
 // A `_data` under the media root that is not this version's (no manifest) is not what the engine is sent to read: with
@@ -754,7 +754,7 @@ void StaleMediaDataAndCompleteLegacyDataKeepsTheEngineOnTheLegacyRoot() {
     obb::ArmForTest();
     rig.BootRequest(granted ? &GrantedCheck : &DeniedCheck);
     const std::string start = LineOf("data_step_start");
-    QCHECK(Has(start, "\"engine_root\":\"" + Legacy() + "\"") && Has(start, "\"engine_root_source\":\"engine_default\""));
+    QCHECK(Has(start, "\"engine_root\":\"" + Legacy() + "\"") && Has(start, "\"engine_root_source\":\"data_root_hook\""));
     if (granted) {
       QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
       QCHECK(Has(LineOf("data_check"), "\"action\":\"use\"") && Has(LineOf("data_check"), "\"root\":\"" + Legacy() + "\""));
@@ -776,14 +776,16 @@ void CompleteMediaDataIsTheEnginesRootEvenWhenLegacyDataIsCompleteToo() {
   QCHECK(Has(start, "\"engine_root\":\"" + Media() + "\"") && Has(start, "\"engine_root_source\":\"data_root_hook\""));
 }
 
-void NeitherRootCompleteLeavesTheEngineOnTheLegacyRoot() {
+// Neither root complete: the engine is answered the media root (C1 default), so the data step reads that root.
+void NeitherRootCompleteIsTheEnginesMediaRoot() {
   Rig rig;
   StaleDataIn(Media());
   StaleDataIn(Legacy());
   obb::ResolveRoot(&FakeExists);
   obb::ArmForTest();
   rig.BootRequest(&DeniedCheck);
-  QCHECK(Has(LineOf("data_step_start"), "\"engine_root_source\":\"engine_default\""));
+  const std::string start = LineOf("data_step_start");
+  QCHECK(Has(start, "\"engine_root\":\"" + Media() + "\"") && Has(start, "\"engine_root_source\":\"data_root_hook\""));
   QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
 }
 
@@ -1279,7 +1281,7 @@ int main() {
   WithoutTheDataRootHookTheMediaRootIsNotTheEngineRoot();
   StaleMediaDataAndCompleteLegacyDataKeepsTheEngineOnTheLegacyRoot();
   CompleteMediaDataIsTheEnginesRootEvenWhenLegacyDataIsCompleteToo();
-  NeitherRootCompleteLeavesTheEngineOnTheLegacyRoot();
+  NeitherRootCompleteIsTheEnginesMediaRoot();
   AGrantedUnwritableRootEndsWithTheStepsOwnReason();
   TheStepRunsOnceWhenTheMicrophoneIsDeniedAndAnotherCheckFollows();
   TheStepRunsOnceWhenTheMicrophoneIsGrantedAndARequestFollows();

@@ -156,7 +156,8 @@ using LibR15SetDelimitedErrorMessageThunk =
 // 0x37623e0 and the path buffer at 0x37623f0, copies the result into gOBBPath (0x3762470), logs
 // "OBB mounted at '%s'" and sets the flag byte. A NULL path zero-fills gOBBPath and logs the same line.
 // GetDataRootDir (0xf87250) returns gOBBPath when its first byte is non-zero, else
-// "/storage/emulated/0/readyatdawn" (0x2b2f5c3).
+// "/storage/emulated/0/readyatdawn" (0x2b2f5c3). The reference build's body is `return <media literal>` (three words and a
+// `ret`), so it never reads gOBBPath; the data-root hook answers the root ResolveRoot chose whatever the body returns.
 struct AStorageManagerOpaque;
 using ObbCallbackFn = void (*)(const char* filename, std::int32_t state, void* data);
 using MountObbSig = void(AStorageManagerOpaque* manager, const char* filename, const char* key, ObbCallbackFn callback,
