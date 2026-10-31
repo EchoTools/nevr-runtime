@@ -1090,4 +1090,41 @@ namespace gfx_layout {
 inline constexpr std::size_t kMsaa = 0x1c;
 }
 
+// NRadEngine::CGRawInterfaceVK::Free(VkDeviceMemory_T*, unsigned long begin, unsigned long, unsigned long end), defined in libr15
+// at 0x1885410 (832 bytes; ReVault lists it at 0x1985410): the engine's free for a range of a VkDeviceMemory block (#1759). It
+// keeps the free ranges in a fixed array in .bss (vk_hole_table.h): it extends the entry next to the freed range, else appends
+// a new entry with no bound check. JUMP_SLOT 0x37008d8 (`readelf -rW` on the pinned image; the callers in libr15 reach it
+// through its PLT stub). x2 is not read by the function. The three crash offsets of #1759 (+0x1885480, +0x1885630, +0x18856c8)
+// are loads in its scans of that array.
+inline constexpr const char* kVkFreeSymbol = "_ZN10NRadEngine16CGRawInterfaceVK4FreeEP16VkDeviceMemory_Tmmm";
+using VkFreeSig = void(void* memory, unsigned long begin, unsigned long unused, unsigned long end);
+struct LibR15VkFreeTag {};
+using LibR15VkFreeThunk = CallbackThunk<LibR15VkFreeTag, VkFreeSig>;
+inline GotTarget LibR15VkFree() {
+  return {kLibR15, kVkFreeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x37008d8ULL};
+}
+inline constexpr PinnedFunction kVkFree = {"_ZN10NRadEngine16CGRawInterfaceVK4FreeEP16VkDeviceMemory_Tmmm", 0x1885410,
+                                           {0xd100c3ff, 0xa90153f5, 0xa9027bf3, 0xd000f8a8}, 4};
+// The two blocks of Free the guard's layout rests on, read from the pinned image (objdump -d, got_pinned_test checks both):
+//   0x188544c: adrp x9, 0x3796000; ldr w11, [x9, #0x688]      the entry count, the word at 0x3796688
+//              cbz w11; adrp x10, 0x3791000; mov x12, xzr; add x10, x10, #0x698   the scan starts at 0x3791688 + 0x10
+//   0x1885710: ldp; adrp x13, 0x3791000; add x13, x13, #0x688; mov w15, #0x28; add w12, w11, #1; mov w14, #0x5000
+//              (the count is stored at table + 0x5000, an entry is 0x28 bytes, so the array holds 0x5000 / 0x28 = 512 entries and
+//              the word after the last is the count itself); the append that follows (the next six words at 0x1885728) stores the
+//              new count and then the entry at index `old count`, with no compare against 512 anywhere in between.
+inline constexpr PinnedCode kVkFreeCountBlock = {"CGRawInterfaceVK::Free entry count and scan start", 0x188544cULL,
+                                                 {0xb000f889, 0xb946892b, 0x3400046b, 0x9000f86a, 0xaa1f03ec, 0x911a614a}, 6};
+inline constexpr PinnedCode kVkFreeAppendBlock = {"CGRawInterfaceVK::Free append of a new entry", 0x1885710ULL,
+                                                  {0xa97fa52a, 0x9000f86d, 0x911a21ad, 0x5280050f, 0x1100056c, 0x528a000e}, 6};
+inline constexpr PinnedCode kVkFreeAppendStore = {"CGRawInterfaceVK::Free append stores", 0x1885728ULL,
+                                                  {0x9b0f356b, 0xb82e69ac, 0xa9000573, 0xa9012963, 0xf9001169, 0x889ffd1f}, 6};
+// The array this layout names (.bss of the pinned image; ReVault shows each address 0x100000 higher).
+namespace vk_hole_layout {
+inline constexpr std::uint64_t kTableVaddr = 0x3791688ULL;  // entry 0
+inline constexpr std::uint64_t kCountVaddr = 0x3796688ULL;  // a 32-bit count, directly after entry 511
+inline constexpr std::uint32_t kEntryBytes = 0x28;
+inline constexpr std::uint32_t kCapacity = 512;
+static_assert(kTableVaddr + static_cast<std::uint64_t>(kEntryBytes) * kCapacity == kCountVaddr, "the count follows the last entry");
+}  // namespace vk_hole_layout
+
 }  // namespace sentinel::pinned

@@ -37,6 +37,7 @@
 #include "render_config.h"
 #include "texture_menu_hook.h"
 #include "texture_quality_hook.h"
+#include "vk_free_guard.h"
 #include "resource_request_hook.h"
 #include "toast_presenter.h"
 #include "vk_ext_window.h"
@@ -169,7 +170,12 @@ bool InstallPermissionWaitHook() noexcept {
 
 // The Vulkan extension window (#868): the device extensions libr15 requires stay inside the 128 entries it reads. A
 // refused install is logged by GotHook and leaves the game's calls intact.
-bool InstallVkExtWindowHook() noexcept { return nevr_quest::vk_window::Install(); }
+bool InstallVkExtWindowHook() noexcept {
+    // Libr15's array of free GPU ranges has no bound check (#1759): a free that would overflow it leaks the range instead. Its
+    // vk_free_guard_install line says whether it went in; a refused install leaves the game's Free as it is.
+    nevr_quest::vk_free_guard::Install();
+    return nevr_quest::vk_window::Install();
+}
 
 // The game never refuses a headset for its OS build number (#945). A refused install is logged by GotHook and by the
 // hook's own line, and leaves the game's call intact.
