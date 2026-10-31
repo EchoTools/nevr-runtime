@@ -287,6 +287,7 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   config.fetch.sleep_ms = [](unsigned ms) { Sleep(ms); };
   config.fetch.on_event = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kInfo, e); };
   config.on_step = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kInfo, e); };
+  config.on_step_warn = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kWarn, e); };
   std::string lastMessage;
   config.present = [&lastMessage](const std::string& message) {
     lastMessage = message;
