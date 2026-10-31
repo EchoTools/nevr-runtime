@@ -1,0 +1,1 @@
+A game-data pack with a missing or incomplete file is now noticed at launch and recorded in the log, so a half-loaded lobby can be traced to it.

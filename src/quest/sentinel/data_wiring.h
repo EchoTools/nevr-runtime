@@ -19,7 +19,10 @@
  *     reads it through a skipped mount or through the data-root hook.
  *   - data::RunDataStep looks at that root only (StepConfig::engine_root), after (development builds only) putting the
  *     leftovers of an interrupted install right (RecoverReplaced, CleanLeftovers):
- *   - data already there: nothing is fetched and one `data_check action=use` line says so;
+ *   - data already there: nothing is fetched and one `data_check action=use` line says so; when its manifest is a pinned
+ *     data set (data/package_pins.h) one `data_packages` line then says whether the package files are whole (`outcome`
+ *     verified, or `unpinned` for a manifest outside the table), and a missing, short, oversize or mismatching package is a
+ *     Warning that names it; the data is used either way;
  *   - data missing or of another build, in a development build (Options::allow_fetch): the fetch runs into that root;
  *   - data missing or of another build, in a release build: nothing is fetched or written; the player is shown
  *     data::kGameDataMissing (install with Echo Launcher), it is not held (Options::hold_ms 0), a `data_step outcome=missing`
