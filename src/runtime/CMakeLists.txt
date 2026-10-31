@@ -1580,6 +1580,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_early_quit_lockout PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_early_quit_lockout DISCOVERY_MODE PRE_TEST)
 
+    # #1774 (P46): the SNSEarlyQuitFeatureFlags callback, replaced whole under MinHook against a fake game image.
+    add_executable(test_early_quit_feature_flags tests/test_early_quit_feature_flags.cpp patch/early_quit_lockout.cpp
+      hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_early_quit_feature_flags.cpp patch/early_quit_lockout.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_early_quit_feature_flags PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_early_quit_feature_flags PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_early_quit_feature_flags PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_early_quit_feature_flags DISCOVERY_MODE PRE_TEST)
+
     # test_lobby_full_backoff.cpp (#1011, header-only patch/lobby_full_backoff_rules.h): the lobby-full retry policy.
     add_executable(test_lobby_full_backoff tests/test_lobby_full_backoff.cpp)
     target_include_directories(test_lobby_full_backoff PRIVATE ${CMAKE_SOURCE_DIR}/src)
