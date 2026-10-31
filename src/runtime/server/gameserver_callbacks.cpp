@@ -796,11 +796,11 @@ void GameServerLib::ArmEndedSessionWatchdog(const std::string& sessionId) {
   const bool armed = m_endedSessionWatchdog.Arm(delay, sessionId, [](const std::string& id) {
     // g_pGame is read on this thread only to say why the game did not leave; a stale or null pointer reads as "unknown".
     const void* netGame = g_pGame ? nevr_return_to_lobby_queue::NetGameFromContext(g_pGame) : nullptr;
-    const uint64_t scripts = nevr_return_to_lobby_queue::RunningScripts(netGame);
+    const uint64_t deferCount = nevr_return_to_lobby_queue::DeferCount(netGame);
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.GAMESERVER] service-ended session still running after the exit grace session_id=%s "
-        "running_scripts=%lld — the game never left the session, ending the process so the slot is released",
-        id.c_str(), scripts == UINT64_MAX ? -1LL : static_cast<long long>(scripts));
+        "defer_count=%lld — the game never left the session, ending the process so the slot is released",
+        id.c_str(), deferCount == UINT64_MAX ? -1LL : static_cast<long long>(deferCount));
     PerformGracefulShutdown(0);
   });
   Log(EchoVR::LogLevel::Info,

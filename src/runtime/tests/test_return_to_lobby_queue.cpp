@@ -102,24 +102,24 @@ TEST(ReturnToLobbyQueue, EveryVerdictHasADistinctName) {
   EXPECT_STREQ(Name(Verdict::QueueNotAllocated), "queue_not_allocated");
 }
 
-// #1756: the running-script count the game's return-to-lobby callback defers on (echovr.exe 0x1401a4ad0), read for the
+// #1756: the count at game+0x1F10 the game's return-to-lobby callback defers on (echovr.exe 0x1401a4ad0), read for the
 // log line that says why a service-ended session did not leave.
-TEST(ReturnToLobbyQueue, RunningScriptsReadsTheCountTheGameDefersOn) {
+TEST(ReturnToLobbyQueue, DeferCountReadsTheCountTheGameDefersOn) {
   struct BigGame {
     unsigned char bytes[0x2000] = {};
   } game;
   const uint64_t count = 3;
-  std::memcpy(game.bytes + nevr_patch_addresses::GAME_SCRIPT_COUNT_OFFSET, &count, sizeof(count));
+  std::memcpy(game.bytes + nevr_patch_addresses::GAME_DEFER_COUNT_OFFSET, &count, sizeof(count));
   FakeNetGame netGame;
   netGame.SetGame(&game);
-  EXPECT_EQ(nevr_return_to_lobby_queue::RunningScripts(&netGame), 3U);
-  EXPECT_EQ(nevr_patch_addresses::GAME_SCRIPT_COUNT_OFFSET, 0x1F10U);
+  EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(&netGame), 3U);
+  EXPECT_EQ(nevr_patch_addresses::GAME_DEFER_COUNT_OFFSET, 0x1F10U);
 }
 
-TEST(ReturnToLobbyQueue, RunningScriptsIsUnknownWithoutAGameObject) {
+TEST(ReturnToLobbyQueue, DeferCountIsUnknownWithoutAGameObject) {
   FakeNetGame netGame;
-  EXPECT_EQ(nevr_return_to_lobby_queue::RunningScripts(&netGame), UINT64_MAX);
-  EXPECT_EQ(nevr_return_to_lobby_queue::RunningScripts(nullptr), UINT64_MAX);
+  EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(&netGame), UINT64_MAX);
+  EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(nullptr), UINT64_MAX);
 }
 
 }  // namespace

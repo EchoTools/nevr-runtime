@@ -38,7 +38,7 @@ class EndedSessionExitWiring(unittest.TestCase):
         self.assertIn("m_endedSessionWatchdog.Arm(", body)
         warning = body[body.index("LogLevel::Warning"):body.index("PerformGracefulShutdown(0)")]
         self.assertIn("session_id=%s", warning)
-        self.assertIn("running_scripts=", warning)
+        self.assertIn("defer_count=", warning)
 
     def test_the_delay_adds_the_empty_server_hold_to_the_grace(self):
         body = extract_braced_function(callbacks(), "void GameServerLib::ArmEndedSessionWatchdog(const std::string& sessionId)")

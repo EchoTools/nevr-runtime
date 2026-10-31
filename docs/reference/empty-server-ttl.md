@@ -43,14 +43,14 @@ players to that match; making an empty server joinable for up to the TTL needs a
 When ServerDB sends `LobbySessionEvent` `CODE_ENDED` the match is over for the service and nothing will be routed
 to the server again. The game normally leaves on its own: the runtime asks it to return to lobby, the queued callback
 (`echovr.exe 0x1401a4ad0`) calls `LeaveGame` and switches the net game to Lobby, and `state_machine.cpp` exits the
-process. That callback does nothing while the game's running-script count (`game + 0x1F10`) is non-zero, and nothing
+process. That callback does nothing while the count at `game + 0x1F10` (the length of the array at `game + 0x1EE0`; what its entries are is not established) is non-zero, and nothing
 on the runtime side checked that the return ever happened.
 
 `nevr_game_server::EndedSessionWatchdog` (`src/runtime/server/ended_session_watchdog.h`) is that check. The
 WebSocket receive thread arms it when a `CODE_ENDED` frame arrives (`WebSocketClient::SetReceiveObserver`), before the
 frame is queued for the game thread, so it works when the game thread has stopped calling `Update()`. After 15 s plus
 `network.empty_server_ttl_seconds`, if the process is still alive it logs a Warning with the session id and the
-running-script count and ends the process through `PerformGracefulShutdown(0)`. A new session on the server cancels it.
+`defer_count` (that same count) and ends the process through `PerformGracefulShutdown(0)`. A new session on the server cancels it.
 
 ## Not verified
 
