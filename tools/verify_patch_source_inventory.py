@@ -29,6 +29,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/broadcaster_guard.cpp",
     "patch/coop_ai_trace.cpp",
     "patch/credits_text.cpp",
+    "patch/deadlock_monitor.cpp",
     "patch/early_quit_lockout.cpp",
     "patch/evrp_package.cpp",
     "patch/gpu_score.cpp",
@@ -63,7 +64,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 42
+EXPECTED_PATCH_SOURCE_COUNT = 43
 
 
 class InventoryError(Exception):

@@ -418,11 +418,6 @@ constexpr unsigned char CMAINARGS_FIND_ARG_INDEX_BY_SYMBOL_PROLOGUE[12] = {0x4C,
 constexpr uintptr_t NOOVR_ARG_LOOKUP_CALL = 0x140116904;
 constexpr unsigned char NOOVR_ARG_LOOKUP_CONSUMER[6] = {0x48, 0x83, 0xF8, 0xFF, 0x75, 0x35};
 
-/// ReVault VA 0x1401d3850: Deadlock monitor thread — loops Sleep(1000), logs "Deadlock detected!"
-/// Patch at +0x31 disables the panic condition check
-constexpr uintptr_t DEADLOCK_MONITOR = 0x1D3881;
-constexpr size_t DEADLOCK_MONITOR_SIZE = 2;
-
 // ============================================================================
 // Oculus Platform SDK Optimization (PatchBlockOculusSDK)
 // ============================================================================

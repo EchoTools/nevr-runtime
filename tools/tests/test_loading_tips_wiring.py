@@ -86,18 +86,20 @@ class DetourTest(unittest.TestCase):
 class LivenessRowTest(unittest.TestCase):
     def test_the_three_ids_follow_the_last_existing_id_in_order(self):
         header = strip_comments(read("src/runtime/hook/hook_liveness.h"))
-        self.assertRegex(header, r"kOvrGetPerfStats,\s*kLoadingTipPick,\s*kLoadingTipSelectByIndex,\s*"
-                                 r"kLoadingTipSelect,\s*kCount")
+        self.assertRegex(header, r"kOvrGetPerfStats,(\s*k\w+,)*\s*kLoadingTipPick,\s*kLoadingTipSelectByIndex,\s*"
+                                 r"kLoadingTipSelect,(\s*k\w+,)*\s*kCount")
 
     def test_the_three_rows_follow_the_same_order_and_none_is_guaranteed_absent(self):
         cpp = strip_comments(read("src/runtime/hook/hook_liveness.cpp"))
         self.assertRegex(
             cpp,
             r'\{"ovr_GetPerfStats", "PCVR session only", false\},\s*'
+            r'(\{"[^"]*", "[^"]*", false(, true)?\},\s*)*'
             r'\{"CR15PickLoadingTipNode::Enter", "server mode, loading screen", false\},\s*'
             r'\{"CR15SelectLoadingTipByIndexNode::Enter", "server mode, loading screen", false\},\s*'
             r'\{"CR15SelectLoadingTipNode::Enter", "server mode, loading screen", false\},')
-        self.assertEqual(cpp.count(", true}"), 1)
+        guaranteed_absent = re.findall(r'\{"[^"]*", "[^"]*", true[},]', cpp)  # third field: guaranteedAbsentOnServer
+        self.assertEqual(len(guaranteed_absent), 1)
 
 
 if __name__ == "__main__":
