@@ -1175,6 +1175,175 @@ void TheBuildsOwnCrashFolderIsTriedFirstAndNeverCreated() {
   RemoveTree(Dir() + "/ov");
 }
 
+// ---- the previous session's log is kept whole (#1797 4b) ----
+
+std::vector<std::string> SessionNames() {
+  std::vector<std::string> names;
+  for (const std::string& name : ListDir()) {
+    if (name.rfind("nevr-sentinel.session-", 0) == 0) names.push_back(name);
+  }
+  return names;
+}
+
+const std::string kPreviousText = "{\"ts_unix_ms\":1,\"level\":\"INFO\",\"msg\":\"auth poll 9\"}\n{\"ts_unix_ms\":2,\"level\":\"INFO\",\"msg\":\"last line\"}\n";
+
+void ThePreviousSessionIsKeptWholeAtTheFirstOpen() {
+  ClearLogs();
+  g_fakeNow = 900001;
+  WriteFile(LogPath(), kPreviousText);
+  CHECK(sentinel::PreviousSessionLog().empty());
+  sentinel::ResetSessionForTest();  // a new process: the first open of it keeps the file that is there
+  Captured().clear();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "new session line");
+  const std::string kept = Dir() + "/nevr-sentinel.session-900001.log";
+  CHECK(ReadAll(kept) == kPreviousText);  // whole, byte for byte
+  const std::string now = ReadAll(LogPath());
+  CHECK(now.find("new session line") != std::string::npos);
+  CHECK(now.find("auth poll 9") == std::string::npos);  // the new session starts a file of its own
+  CHECK(sentinel::PreviousSessionLog() == kept);
+  CHECK(SessionNames().size() == 1);
+  // Told once, at Info, in logcat and in the new file.
+  const std::vector<nlohmann::json> told = Events("sentinel_log_session_kept");
+  CHECK(told.size() == 1);
+  if (told.size() == 1) {
+    CHECK(told[0].value("_prio", 0) == 4);
+    CHECK(told[0].value("kept_as", "") == kept);
+    CHECK(told[0].value("bytes", 0) == static_cast<int>(kPreviousText.size()));
+  }
+  CHECK(now.find("\"event\":\"sentinel_log_session_kept\"") != std::string::npos);
+
+  // The same process opening again (closed, or rotated by size) does not keep its own file as a session.
+  sentinel::CloseDiskLog();
+  g_fakeNow = 900002;
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "same session again");
+  CHECK(SessionNames().size() == 1);
+  CHECK(ReadAll(LogPath()).find("new session line") != std::string::npos);
+  CHECK(Events("sentinel_log_session_kept").size() == 1);
+  ClearLogs();
+}
+
+void SessionsAreNeverReplacedAndThePreviousIsTheNewest() {
+  ClearLogs();
+  g_fakeNow = 910000;
+  WriteFile(LogPath(), "first session\n");
+  sentinel::ResetSessionForTest();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "second session");
+  sentinel::CloseDiskLog();
+  g_fakeNow = 920000;
+  sentinel::ResetSessionForTest();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "third session");
+  CHECK(ReadAll(Dir() + "/nevr-sentinel.session-910000.log") == "first session\n");  // still there, unchanged
+  CHECK(ReadAll(Dir() + "/nevr-sentinel.session-920000.log").find("second session") != std::string::npos);
+  CHECK(sentinel::PreviousSessionLog() == Dir() + "/nevr-sentinel.session-920000.log");
+  // Two sessions kept in the same millisecond: the second does not replace the first, and it is the newer.
+  sentinel::CloseDiskLog();
+  sentinel::ResetSessionForTest();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "fourth session");
+  CHECK(ReadAll(Dir() + "/nevr-sentinel.session-920000.log").find("second session") != std::string::npos);
+  CHECK(ReadAll(Dir() + "/nevr-sentinel.session-920000.1.log").find("third session") != std::string::npos);
+  CHECK(sentinel::PreviousSessionLog() == Dir() + "/nevr-sentinel.session-920000.1.log");
+  CHECK(SessionNames().size() == 3);
+  ClearLogs();
+}
+
+void AnEmptyOrAbsentLogIsNotKept() {
+  ClearLogs();
+  g_fakeNow = 930000;
+  Captured().clear();
+  sentinel::ResetSessionForTest();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "no file before");
+  CHECK(SessionNames().empty() && Events("sentinel_log_session_kept").empty());
+  ClearLogs();
+  WriteFile(LogPath(), "");
+  sentinel::ResetSessionForTest();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "empty file before");
+  CHECK(SessionNames().empty() && Events("sentinel_log_session_kept").empty());
+  CHECK(sentinel::PreviousSessionLog().empty());
+  ClearLogs();
+}
+
+// Only a regular file is a log to keep: a folder at the log path is left where it is.
+void AFolderAtTheLogPathIsNotKept() {
+  ClearLogs();
+  g_fakeNow = 935000;
+  CHECK(::mkdir(LogPath().c_str(), 0755) == 0);
+  sentinel::ResetSessionForTest();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "folder at the log path");
+  CHECK(SessionNames().empty());
+  CHECK(IsDir(LogPath()));
+  ::rmdir(LogPath().c_str());
+  ClearLogs();
+}
+
+int FailingSessionRename(const char*, const char*) {
+  errno = EACCES;
+  return -1;
+}
+
+void AFailedKeepLosesNothingAndIsToldOnce() {
+  ClearLogs();
+  g_fakeNow = 940000;
+  WriteFile(LogPath(), kPreviousText);
+  sentinel::SetRenameForTest(&FailingSessionRename);
+  sentinel::ResetSessionForTest();
+  Captured().clear();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "after a failed keep");
+  sentinel::CloseDiskLog();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "and again");
+  sentinel::SetRenameForTest(nullptr);
+  const std::string disk = ReadAll(LogPath());
+  CHECK(disk.find("auth poll 9") != std::string::npos);  // the old lines are still there, in the same file
+  CHECK(disk.find("after a failed keep") != std::string::npos);
+  CHECK(SessionNames().empty());
+  const std::vector<nlohmann::json> failed = Events("sentinel_log_session_keep_failed");
+  CHECK(failed.size() == 1);  // not retried, so not repeated
+  if (failed.size() == 1) {
+    CHECK(failed[0].value("_prio", 0) == 5);
+    CHECK(failed[0].value("errno", 0) == EACCES);
+    CHECK(failed[0].value("kept_as", "").find("nevr-sentinel.session-940000.log") != std::string::npos);
+  }
+  ClearLogs();
+}
+
+void OnlySessionFilesAreThePreviousSession() {
+  ClearLogs();
+  WriteFile(Dir() + "/nevr-sentinel.5000.log", "rotated by size\n");  // the size bound's name
+  WriteFile(Dir() + "/nevr-sentinel.session-abc.log", "not a number\n");
+  WriteFile(Dir() + "/nevr-sentinel.session-77.txt", "not a log\n");
+  WriteFile(Dir() + "/other.session-99.log", "not ours\n");
+  WriteFile(Dir() + "/abcdefghijklmnopqrstuv123.log", "the same length as a session name, another prefix\n");
+  WriteFile(Dir() + "/nevr-sentinel.session-.5.log", "no time\n");
+  CHECK(sentinel::PreviousSessionLog().empty());
+  WriteFile(Dir() + "/nevr-sentinel.session-77.log", "a session\n");
+  CHECK(sentinel::PreviousSessionLog() == Dir() + "/nevr-sentinel.session-77.log");
+  ::unlink((Dir() + "/nevr-sentinel.5000.log").c_str());
+  ::unlink((Dir() + "/nevr-sentinel.session-abc.log").c_str());
+  ::unlink((Dir() + "/nevr-sentinel.session-77.txt").c_str());
+  ::unlink((Dir() + "/nevr-sentinel.session-77.log").c_str());
+  ::unlink((Dir() + "/other.session-99.log").c_str());
+  ::unlink((Dir() + "/abcdefghijklmnopqrstuv123.log").c_str());
+  ::unlink((Dir() + "/nevr-sentinel.session-.5.log").c_str());
+  ClearLogs();
+}
+
+void ThePreviousSessionIsInTheLogFolder() {
+  RemoveTree(Dir() + "/ps");
+  g_fakeNow = 950000;
+  Cands c;
+  c.Add("only", Dir() + "/ps/files", Dir());
+  c.Install();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "first session in the folder");
+  sentinel::CloseDiskLog();
+  sentinel::ResetSessionForTest();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "second session in the folder");
+  CHECK(sentinel::PreviousSessionLog() == sentinel::LogDir() + "/nevr-sentinel.session-950000.log");
+  CHECK(ReadAll(sentinel::PreviousSessionLog()).find("first session in the folder") != std::string::npos);
+  CHECK(!ReadAll(sentinel::LogDir() + "/nevr-sentinel.log").empty());
+  CHECK(access((Dir() + "/nevr-sentinel.session-950000.log").c_str(), F_OK) != 0);  // not beside the config
+  sentinel::SetLogDirCandidatesForTest(nullptr, 0);
+  RemoveTree(Dir() + "/ps");
+}
+
 void TheBuiltInListIsTheOverrideAloneInATestBuild() {
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
   CHECK(sentinel::LogDir() == Dir());
@@ -1235,6 +1404,13 @@ int main() {
   ALinkBelowTheTrustedPartIsNotFollowed();
   AFirstCandidateThatCannotBeUsedFallsThrough();
   TheFolderIsChosenAgainWhenItVanishes();
+  ThePreviousSessionIsKeptWholeAtTheFirstOpen();
+  SessionsAreNeverReplacedAndThePreviousIsTheNewest();
+  AnEmptyOrAbsentLogIsNotKept();
+  AFolderAtTheLogPathIsNotKept();
+  AFailedKeepLosesNothingAndIsToldOnce();
+  OnlySessionFilesAreThePreviousSession();
+  ThePreviousSessionIsInTheLogFolder();
   ClearLogs();
   ::rmdir(Dir().c_str());
   CHECK(Leaks().empty());

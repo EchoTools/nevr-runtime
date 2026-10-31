@@ -8,10 +8,12 @@
 #include <nlohmann/json.hpp>
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <iterator>
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/stat.h>
@@ -49,8 +51,10 @@ bool g_rotateFailed = false;     // the last rename failed; retried after kOpenR
 // The chosen log folder. Fixed buffers, not std::string: a namespace-scope std::string has a dynamic
 // initializer and an atexit destructor, and the ELF constructor logs before either could be set up.
 constexpr std::size_t kMaxDirBytes = 400;
+constexpr char kSessionPrefix[] = "nevr-sentinel.session-";
 char g_logDir[kMaxDirBytes + 1] = "";
 bool g_dirResolved = false;
+bool g_sessionKept = false;      // this process has already dealt with the log a previous process left
 // Lines about choosing the folder wait here for the disk: they are made while the open is in progress (g_mutex
 // held), and the file they belong in is not open until it has succeeded. Logcat has them at once.
 struct PendingLine {
@@ -194,16 +198,64 @@ void FailOpen(int err, const char* what) {
   ReportDiskFailure(what, err, &g_openFailureReported);
 }
 
+void QueueLine(nevr_quest::LogLevel level, const nlohmann::json& line);
+
+// The first open of a process keeps the log a previous process left: it is renamed, whole, to
+// `nevr-sentinel.session-<unix ms>.log` (a name that does not exist yet; nothing is ever replaced or deleted), so
+// the new session starts a file of its own and the one before it is still readable from its first line. An absent or
+// empty log leaves nothing to keep. A rename that fails leaves the old log where it is, appended to as before, and is
+// told once; it is not retried in this process.
+void KeepPreviousSession(const std::string& dir, const std::string& path) {
+  if (g_sessionKept) return;
+  g_sessionKept = true;
+  struct stat st {};
+  if (::lstat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size == 0) return;
+  const std::string base = dir + "/" + kSessionPrefix + std::to_string(NowMs());
+  for (int n = 0; n < 1000; ++n) {
+    const std::string kept = base + (n == 0 ? "" : "." + std::to_string(n)) + ".log";
+    struct stat taken {};
+    if (::lstat(kept.c_str(), &taken) == 0) continue;
+    nlohmann::json line = nlohmann::json::object();
+    line["kept_as"] = kept;
+    line["bytes"] = static_cast<long long>(st.st_size);
+    if ((g_rename != nullptr ? g_rename : &::rename)(path.c_str(), kept.c_str()) != 0) {
+      line["event"] = "sentinel_log_session_keep_failed";
+      line["errno"] = errno;
+      line["error"] = std::strerror(errno);
+      line["msg"] = "the previous session's log stays in nevr-sentinel.log and this session appends to it";
+      QueueLine(nevr_quest::LogLevel::kWarn, line);
+    } else {
+      line["event"] = "sentinel_log_session_kept";
+      line["msg"] = "the previous session's log is kept whole in kept_as; this session starts nevr-sentinel.log";
+      QueueLine(nevr_quest::LogLevel::kInfo, line);
+    }
+    return;
+  }
+}
+
 // Rotates a log at the size bound, then opens `dir`/nevr-sentinel.log. The open is non-blocking and
 // never follows a symlink.
 int OpenLogFile(const std::string& dir) {
   const std::string path = dir + "/nevr-sentinel.log";
+  KeepPreviousSession(dir, path);
   RotateIfLarge(dir, path);
   return ::open(path.c_str(), O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW, 0644);
 }
 
-// One line about choosing the folder: logcat now, the disk when the log is open (the pending queue). Every
-// line names the candidate and its folder; a failure adds the errno and its text.
+// One line about the log itself: logcat now, the disk when the log is open (the pending queue).
+void QueueLine(nevr_quest::LogLevel level, const nlohmann::json& line) {
+  const std::string text = line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+  __android_log_write(Priority(level), NEVR_TAG, text.c_str());
+  if (g_pendingHead == g_pendingCount) g_pendingHead = g_pendingCount = 0;
+  if (g_pendingCount < kMaxPending && text.size() < sizeof(g_pending[0].text)) {
+    g_pending[g_pendingCount].level = level;
+    std::memcpy(g_pending[g_pendingCount].text, text.c_str(), text.size() + 1);
+    ++g_pendingCount;
+  }
+}
+
+// One line about choosing the folder. Every line names the candidate and its folder; a failure adds the errno
+// and its text.
 void ReportChoice(nevr_quest::LogLevel level, const char* event, const char* name, const std::string& dir,
                   int err, const char* msg) {
   nlohmann::json line = nlohmann::json::object();
@@ -215,14 +267,7 @@ void ReportChoice(nevr_quest::LogLevel level, const char* event, const char* nam
     line["error"] = std::strerror(err);
   }
   line["msg"] = msg;
-  const std::string text = line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-  __android_log_write(Priority(level), NEVR_TAG, text.c_str());
-  if (g_pendingHead == g_pendingCount) g_pendingHead = g_pendingCount = 0;
-  if (g_pendingCount < kMaxPending && text.size() < sizeof(g_pending[0].text)) {
-    g_pending[g_pendingCount].level = level;
-    std::memcpy(g_pending[g_pendingCount].text, text.c_str(), text.size() + 1);
-    ++g_pendingCount;
-  }
+  QueueLine(level, line);
 }
 
 // g_mutex held. Opens the log in the chosen folder; with none chosen yet, takes the first candidate whose
@@ -353,6 +398,56 @@ bool EnsureDirBelow(const LogDirCandidate& c) {
 }
 
 const char* FilesDir() { return NEVR_QUEST_FILES_DIR; }
+
+// "<digits>" or "<digits>.<digits>" between the prefix and ".log": the session's unix ms and its collision number.
+static bool ParseSessionName(const char* name, unsigned long long* ms, unsigned long long* n) {
+  const std::size_t prefix = sizeof(kSessionPrefix) - 1;
+  const std::size_t len = std::strlen(name);
+  if (len <= prefix + 4 || std::strncmp(name, kSessionPrefix, prefix) != 0 || std::strcmp(name + len - 4, ".log") != 0) {
+    return false;
+  }
+  const std::string middle(name + prefix, len - prefix - 4);
+  const std::size_t dot = middle.find('.');
+  const std::string first = middle.substr(0, dot);
+  const std::string second = dot == std::string::npos ? "0" : middle.substr(dot + 1);
+  for (const std::string* part : {&first, &second}) {
+    if (part->empty()) return false;
+    for (const char c : *part) {
+      if (c < '0' || c > '9') return false;
+    }
+  }
+  *ms = std::strtoull(first.c_str(), nullptr, 10);
+  *n = std::strtoull(second.c_str(), nullptr, 10);
+  return true;
+}
+
+std::string PreviousSessionLog() {
+  const std::string dir = LogDir();
+  DIR* handle = ::opendir(dir.c_str());
+  if (handle == nullptr) return "";
+  std::string best;
+  unsigned long long bestMs = 0;
+  unsigned long long bestN = 0;
+  while (const dirent* entry = ::readdir(handle)) {
+    unsigned long long ms = 0;
+    unsigned long long n = 0;
+    if (!ParseSessionName(entry->d_name, &ms, &n)) continue;
+    if (best.empty() || ms > bestMs || (ms == bestMs && n > bestN)) {
+      best = entry->d_name;
+      bestMs = ms;
+      bestN = n;
+    }
+  }
+  ::closedir(handle);
+  return best.empty() ? best : dir + "/" + best;
+}
+
+void ResetSessionForTest() {
+  Lock lock;
+  g_sessionKept = false;
+  if (g_fd >= 0) ::close(g_fd);
+  g_fd = -1;
+}
 
 std::string LogDir() {
   Lock lock;

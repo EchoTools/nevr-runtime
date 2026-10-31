@@ -47,6 +47,16 @@ bool EnsureDirBelow(const LogDirCandidate& c);
 // repeated while it keeps failing the same way), then one Info, event `sentinel_log_dir`, for the winner.
 std::string LogDir();
 
+// The log of the session before this one, kept whole (the file `nevr-sentinel.session-<unix ms>.log` in LogDir() with
+// the highest time, then the highest collision number), or "" when there is none. The first open of a process renames
+// the log a previous process left to such a name, so the log upload reads two files: LogDir()/nevr-sentinel.log (this
+// session) and this one. A session that ran past kMaxDiskLogBytes also left size-rotated files beside it
+// (`nevr-sentinel.<unix ms>.log`); those are not named here and are never deleted.
+std::string PreviousSessionLog();
+
+// Test seam: the next open behaves as the first open of a new process (it keeps the log that is there).
+void ResetSessionForTest();
+
 // One line of the on-disk log: a single JSON object ending in '\n', no ANSI, valid UTF-8 (invalid bytes in
 // `message` are replaced). A `message` that is itself a JSON object is flattened into the line: its fields stay
 // fields, its `ts_ms` is dropped, its `level` is kept (else `level` names `level`); any other message becomes `msg`.
@@ -76,8 +86,8 @@ bool WriteAll(int fd, const char* data, std::size_t size, int* err, WriteFn writ
 // left a partial record in the file; a failure that wrote nothing leaves it as it was.
 bool WriteRecord(int fd, const std::string& line, bool* torn, int* err, WriteFn write);
 
-// The on-disk log is rotated (renamed to a name that does not exist yet, never deleted) when it
-// reaches this size: at open, and in-process once this run has written that much. A rename that
+// The on-disk log is kept by session (see PreviousSessionLog) and is also rotated (renamed to a name that does not exist
+// yet, never deleted) when it reaches this size: at open, and in-process once this run has written that much. A rename that
 // fails is logged once to logcat and not attempted again for kOpenRetryMs; the log keeps growing
 // meanwhile, and a rotation that later succeeds re-arms the report.
 inline constexpr long long kMaxDiskLogBytes = 1024 * 1024;
