@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from tools.tests.test_runtime_lifecycle_invariants import extract_braced_function
+from tools.verify_host_seams import DEFINE as HOST_TEST_SEAM_DEFINE
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,7 +41,9 @@ class ThePcSendStartsInTheHostBeforeTheRuntimeLoads(unittest.TestCase):
     def test_no_real_send_runs_under_the_host_test_harnesses(self):
         text = (ROOT / "src/runtime/host/crash_send_host.cpp").read_text()
         body = text[text.index("void StartCrashSend("):]
-        self.assertRegex(body, r"#if defined\(NEVR_HOST_TESTING\)\s*(//[^\n]*\n\s*)*(static_cast<void>\(diagnostics\);\s*)?return;")
+        # The define's name comes from the seam check: only that check and its test spell it (tools/verify_host_seams.py).
+        gate = rf"#if defined\({HOST_TEST_SEAM_DEFINE}\)\s*(//[^\n]*\n\s*)*(static_cast<void>\(diagnostics\);\s*)?return;"
+        self.assertRegex(body, gate)
 
 
 class TheHostWritesItsOwnReportOnlyWithoutTheRuntime(unittest.TestCase):

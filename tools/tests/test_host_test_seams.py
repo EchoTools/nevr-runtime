@@ -151,6 +151,48 @@ class SeamSymbolTest(unittest.TestCase):
     def test_a_clean_object_has_none(self):
         self.assertEqual(seams.seam_symbols(self.NM.splitlines()[0]), [])
 
+    # nm of an object whose unit calls two inline header functions (core/crash_send.h), as the MinGW compiler writes it: each
+    # function has a COMDAT section symbol named by its mangled name and a defined symbol named by its demangled one. The
+    # mangled text ends "...OffsetESt17...", which spells "test" without being one.
+    INLINE_NM = (
+        "0000000000000000 t .text$_ZN15nevr_crash_send17ParseModuleOffsetESt17basic_string_viewIcSt11char_traitsIcEEPNS_7AddressE\n"
+        "0000000000000000 p .pdata$_ZN15nevr_crash_send17ParseModuleOffsetESt17basic_string_viewIcSt11char_traitsIcEEPNS_7AddressE\n"
+        "0000000000000000 r .xdata$_ZN15nevr_crash_send17ParseModuleOffsetESt17basic_string_viewIcSt11char_traitsIcEEPNS_7AddressE\n"
+        "0000000000000000 T nevr_crash_send::ParseModuleOffset(std::basic_string_view<char, std::char_traits<char> >, "
+        "nevr_crash_send::Address*)\n"
+    )
+
+    def test_a_section_symbol_is_not_read_for_the_word_test_in_its_mangled_name(self):
+        self.assertEqual(seams.seam_symbols(self.INLINE_NM), [])
+
+    def test_the_demangled_symbol_of_an_inline_seam_is_still_found(self):
+        nm = self.INLINE_NM + "0000000000000000 T nevr_crash_send::ReadDiskForTest()\n" \
+                              "0000000000000000 t .text$_ZN15nevr_crash_send14ReadDiskForTestEv\n"
+        self.assertEqual([line.split(None, 2)[2] for line in seams.seam_symbols(nm)], ["nevr_crash_send::ReadDiskForTest()"])
+
+
+class SharedUnitSeamTest(unittest.TestCase):
+    """crash_report.cpp is the one report writer the host, nevr_core, the Quest sentinel and two test programs compile; its
+    ResetForTest cannot sit behind a define that only nevr_host_core carries, so the check names it."""
+
+    NM = "0000000000006060 T nevr_crash::ResetForTest()\n0000000000006070 T nevr_crash::ForgetEverythingForTest()\n"
+
+    def test_the_named_seam_of_its_own_unit_is_allowed_and_nothing_else_in_that_unit(self):
+        found = seams.seam_symbols(self.NM, unit="crash_report.cpp")
+        self.assertEqual([line.split(None, 2)[2] for line in found], ["nevr_crash::ForgetEverythingForTest()"])
+
+    def test_the_same_name_in_another_unit_is_a_seam(self):
+        self.assertEqual(len(seams.seam_symbols(self.NM, unit="crash_capture.cpp")), 2)
+        self.assertEqual(len(seams.seam_symbols(self.NM)), 2)
+
+    def test_the_named_seam_exists_in_the_unit_it_is_named_for(self):
+        text = (REPO / "src" / "core" / "crash_report.cpp").read_text(encoding="utf-8")
+        self.assertIn("void ResetForTest() {", text)
+        for unit, names in seams.SHARED_UNIT_SEAMS.items():
+            self.assertTrue(names, unit)
+            for name, reason in names.items():
+                self.assertTrue(reason, name)
+
 
 class HelpersReadSeamsOnlyUnderTheDefineTest(unittest.TestCase):
     def test_the_helpers_read_the_seams_only_under_the_define(self):
