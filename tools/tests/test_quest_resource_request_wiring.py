@@ -49,8 +49,15 @@ class TheHookIsInstalledInEveryBuild(unittest.TestCase):
         self.assertLess(source.index("steps.ResourceRequestLogWanted()"), source.index("steps.RegisterResourceRequestCounters()"))
 
     def test_the_entry_passes_the_build_flag_only_as_the_log_flag(self):
+        # entry.cpp holds kIsDev for other features too (the texture menu and probe options, PnsProviderEnabled), so the
+        # count is not the pin. The pin is the path: the install never reads the build flag, it takes its log flag from the
+        # argument, and the one read for this hook is ResourceRequestLogEnabled, the answer the production steps ask.
         source = strip_comments((ROOT / "src/quest/sentinel/entry.cpp").read_text())
-        self.assertEqual(source.count("nevr_build::kIsDev"), 1)
+        install = extract_braced_function(source, "bool InstallResourceRequestLogHook(")
+        self.assertNotIn("kIsDev", install)
+        self.assertIn("InstallCounted(countersRegistered, logLines)", install)
+        answer = extract_braced_function(source, "bool ResourceRequestLogEnabled(")
+        self.assertEqual(answer.count("kIsDev"), 1, answer)
         self.assertRegex(source, r"bool\s+InstallResourceRequestLogHook\(bool countersRegistered,\s*bool logLines\)\s*noexcept\s*\{\s*return\s+nevr_quest::resource_request::InstallCounted\(countersRegistered,\s*logLines\)\s*;")
 
 

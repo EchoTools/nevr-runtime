@@ -104,10 +104,6 @@ const unsigned char* LoadPointer(const unsigned char* base, std::size_t at) noex
   std::memcpy(&v, base + at, sizeof(v));
   return reinterpret_cast<const unsigned char*>(v);
 }
-template <typename T>
-void Store(unsigned char* request, std::size_t at, T value) noexcept {
-  std::memcpy(request + at, &value, sizeof(value));
-}
 
 // Logs one request when its key's count is a power of two (1, 2, 4, 8 ...) and the line cap is not reached. Runs after
 // the game's function returned, on the thread that called it.
@@ -245,9 +241,11 @@ const char* StageName(Stage stage) noexcept {
 Served ServeLoose(const GameFns& fns, CResourceManagerOpaque* manager, std::uint64_t type, std::uint64_t name,
                   void* allocator, void* owner, std::uint64_t index, unsigned char* request) noexcept {
   Served out{Stage::kServed, 0, 0, 0};
+  // The only writes to the request in this file: a copy of each field's bytes at its offset, inside this function.
+  const auto put = [request](std::size_t at, const auto& value) noexcept { std::memcpy(request + at, &value, sizeof(value)); };
   fns.clearRequest(request);
-  Store<std::uint64_t>(request, layout::kOwner, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(owner)));
-  Store<std::uint64_t>(request, layout::kIndex, index);
+  put(layout::kOwner, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(owner)));
+  put(layout::kIndex, index);
   out.ret = fns.unpackagedPath(manager, type, name, request + layout::kLoosePath);
   if (out.ret != 0) {
     out.stage = Stage::kPath;
@@ -265,10 +263,10 @@ Served ServeLoose(const GameFns& fns, CResourceManagerOpaque* manager, std::uint
     out.stage = Stage::kSize;
     return out;
   }
-  Store<std::uint64_t>(request, layout::kSize, static_cast<std::uint64_t>(out.size));
-  Store<std::uint64_t>(request, layout::kUncompressedSize, static_cast<std::uint64_t>(out.size));
-  Store<std::uint64_t>(request, layout::kMemSpace, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(allocator)));
-  Store<std::uint32_t>(request, layout::kValid, 1);
+  put(layout::kSize, static_cast<std::uint64_t>(out.size));
+  put(layout::kUncompressedSize, static_cast<std::uint64_t>(out.size));
+  put(layout::kMemSpace, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(allocator)));
+  put(layout::kValid, std::uint32_t{1});
   return out;
 }
 
