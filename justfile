@@ -222,6 +222,12 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
     echo "Renamed original -> $out/libovrplatformloader_orig.so (soname patched)"
     readelf -d "$out/libovrplatformloader_orig.so" | grep -i soname
 
+# The base of a reference-build APK (#1737): copies the reference APK `apk` to `out` with its package renamed from com.readyatdawn.afk
+# to com.readyatdawn.r15 (the manifest's UTF-16 string, 5 strings in libr15.so, 2 in libassetpatch.so; counts asserted, META-INF dropped),
+# then `just android-repack-apk <out>` repacks it. tools/quest_apk_rename_package.py says what it refuses; it logs one JSON line.
+quest-reference-base apk out:
+    python3 -I tools/quest_apk_rename_package.py rename --apk "{{ apk }}" --out "{{ out }}"
+
 # Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
 # forwarding to the renamed original. Produces a zipaligned APK, signed with the Quest key in pass, and
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
@@ -366,6 +372,25 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     "$patcher" --stock "$work/orig/lib/arm64-v8a/libr15.so" --out "$work/stage/lib/arm64-v8a/libr15.so" \
         --report "$work/libr15-patch-report.json" ${extra[@]+"${extra[@]}"}
     [ -s "$work/stage/lib/arm64-v8a/libr15.so" ] || { echo "the libr15 patcher wrote no libr15.so: $patcher" >&2; exit 1; }
+    # 3b'. libvrapi.so: when the source APK's is the reference runtime (it carries the md5 list its modules gate on; the store's own
+    # library carries none and is left as it is), the list's stock entry is replaced by the md5 of the libr15.so just staged, so
+    # the modules accept it (tools/quest_runtime_pin.py). The md5 is computed from the staged file here, never stored: any change
+    # to the libr15 bytes changes it. The result is staged STORED, and verify-signed below recomputes it from the signed libr15.so.
+    apk_entries="$(unzip -Z1 "$apk")"
+    if grep -qxF 'lib/arm64-v8a/libvrapi.so' <<<"$apk_entries"; then
+        unzip -o -q "$apk" lib/arm64-v8a/libvrapi.so -d "$work/orig"
+        pin_status=0
+        python3 -I tools/quest_runtime_pin.py detect --libvrapi "$work/orig/lib/arm64-v8a/libvrapi.so" || pin_status=$?
+        case "$pin_status" in
+            0)
+                python3 -I tools/quest_runtime_pin.py pin --libvrapi "$work/orig/lib/arm64-v8a/libvrapi.so" \
+                    --libr15 "$work/stage/lib/arm64-v8a/libr15.so" --out "$work/stage/lib/arm64-v8a/libvrapi.so"
+                stage_libs+=(lib/arm64-v8a/libvrapi.so)
+                ;;
+            3) echo "android-repack-apk: the APK's libvrapi.so carries no runtime md5 list: left as it is" ;;
+            *) echo "android-repack-apk: quest_runtime_pin.py detect failed ($pin_status) on the APK's libvrapi.so" >&2; exit 1 ;;
+        esac
+    fi
     for p in ${plugins[@]+"${plugins[@]}"}; do
         cp "$p" "$work/stage/lib/arm64-v8a/$(basename "$p")"
         stage_libs+=("lib/arm64-v8a/$(basename "$p")")
@@ -427,7 +452,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo ""
     # Every library of the store APK (the loader aside, which the shim replaces) is in the SIGNED apk with its bytes, libr15.so
     # being the patcher's output for the store's (the tool runs again here, on its own copy; its three digests are printed),
-    # and every staged library is there as staged.
+    # a reference runtime's libvrapi.so being the pin tool's output for the signed libr15.so, and every staged library is there as staged.
     python3 -I tools/quest_repack_libs.py verify-signed --source "$apk" --signed "$signed" --stage "$work/stage" \
         --patcher "$patcher" --scratch "$work" ${extra[@]+"${extra[@]}"}
     done_ok=1

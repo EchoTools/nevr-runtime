@@ -19,7 +19,11 @@ named like a game library would silently take that library's place and the signe
       here, on a copy of the store file in a temporary directory (under --scratch when given), with the same
       --extra-rows file the recipe gave it, and the sha-256 of the store file, of the patcher's output and of the signed
       entry are printed. A signed libr15 that is the store's bytes, a patcher run on another input, a missing entry, a
-      patcher that fails or writes no file, and a patcher whose output is the store file are each a named problem. The staged
+      patcher that fails or writes no file, and a patcher whose output is the store file are each a named problem. When the
+      source APK's libvrapi.so is the reference runtime (it carries the checksum list of tools/quest_runtime_pin.py; the
+      store's own library does not), the signed APK's libvrapi.so must equal the pin tool's output for the source file and
+      the md5 of the SIGNED libr15.so, and the three digests are printed; an unpinned copy and a copy pinned to another
+      libr15 are each a named problem. Without a runtime the library is compared with the store's bytes. The staged
       pack (stage-pack) is held to the same rule: each of its files is in the signed APK with the staged bytes, STORED, the
       signed APK carries no `assets/nevr-pack/` entry that was not staged (so a build with no pack carries none), and the
       signed APK is under 4 GiB.
@@ -84,6 +88,9 @@ import sys
 import tempfile
 import zipfile
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import quest_runtime_pin as runtime_pin  # noqa: E402
+
 ABI_DIR = "lib/arm64-v8a"
 # The manifest of packaged plugins (docs/adr/0019-quest-plugin-loader.md, section 2): written only when a plugin is packaged.
 # Its name is a lib*.so name so the installer extracts it beside the plugins; the loader reads it as JSON, never as a library.
@@ -97,6 +104,9 @@ REPLACED_ON_PURPOSE = f"{ABI_DIR}/libovrplatformloader.so"
 # The other one: the patcher's output takes libr15's place (docs/adr/0021 section 9). It is compared with that output,
 # never with the store's bytes.
 PATCHED_LIBRARY = f"{ABI_DIR}/libr15.so"
+# The third: the reference runtime (tools/quest_runtime_pin.py) takes its own checksum list pinned to the final libr15. The
+# store's own libvrapi.so carries no such list and is compared with the store's bytes like every other library.
+PINNED_LIBRARY = f"{ABI_DIR}/libvrapi.so"
 # The patcher reads and writes one file of about 58 MB; a run that takes longer than this is a hang.
 PATCHER_TIMEOUT_SECONDS = 600
 _CHUNK = 1 << 20
@@ -282,7 +292,7 @@ def plugin_manifest_problems(stage: pathlib.Path) -> list[str]:
         if actual != entry.get("sha256"):
             problems.append(f"{MANIFEST_ENTRY}: the sha256 it lists for {file_name} is {entry.get('sha256')}, "
                             f"the staged file's is {actual}")
-    own = set(STAGED_BY_RECIPE) | {pathlib.Path(PATCHED_LIBRARY).name}
+    own = set(STAGED_BY_RECIPE) | {pathlib.Path(PATCHED_LIBRARY).name, pathlib.Path(PINNED_LIBRARY).name}
     for staged in sorted(p for p in (stage / ABI_DIR).iterdir() if p.is_file()):
         if staged.name in own or staged.name in listed:
             continue
@@ -290,15 +300,56 @@ def plugin_manifest_problems(stage: pathlib.Path) -> list[str]:
     return problems
 
 
+def entry_md5(archive: zipfile.ZipFile, name: str) -> str:
+    digest = hashlib.md5(usedforsecurity=False)
+    with archive.open(name) as stream:
+        while chunk := stream.read(_CHUNK):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def source_is_reference_runtime(original: zipfile.ZipFile) -> bool:
+    """True when the source APK's libvrapi.so carries the reference runtime's checksum list (the store's does not)."""
+    return PINNED_LIBRARY in original.namelist() and runtime_pin.carries_table(original.read(PINNED_LIBRARY))
+
+
+def pinned_runtime_problems(original: zipfile.ZipFile, result: zipfile.ZipFile) -> list[str]:
+    """The problems with the signed APK's libvrapi.so: it must be the pin tool's output for the source APK's libvrapi.so
+    and the SIGNED libr15.so, byte for byte. An unpinned copy, a copy pinned to another libr15 and a missing entry are each named."""
+    if PINNED_LIBRARY not in result.namelist():
+        return [f"{PINNED_LIBRARY}: the pinned runtime belongs here, missing from the signed APK"]
+    if PATCHED_LIBRARY not in result.namelist():
+        return [f"{PINNED_LIBRARY}: cannot be checked, the signed APK has no {PATCHED_LIBRARY} to pin it to"]
+    signed_md5 = entry_md5(result, PATCHED_LIBRARY)
+    source = original.read(PINNED_LIBRARY)
+    try:
+        expected, report = runtime_pin.pin_data(source, signed_md5)
+    except runtime_pin.PinError as error:
+        return [f"{PINNED_LIBRARY}: the source APK's runtime cannot be pinned to the signed libr15.so (md5 {signed_md5}): {error}"]
+    signed = result.read(PINNED_LIBRARY)
+    print(f"quest_repack_libs: libvrapi.so sha256 source  {runtime_pin.sha256_hex(source)}", flush=True)
+    print(f"quest_repack_libs: libvrapi.so sha256 pinned  {runtime_pin.sha256_hex(expected)} (libr15.so md5 {signed_md5})", flush=True)
+    print(f"quest_repack_libs: libvrapi.so sha256 signed  {runtime_pin.sha256_hex(signed)}", flush=True)
+    if signed == expected:
+        return []
+    if signed == source:
+        return [f"{PINNED_LIBRARY}: the signed APK holds the source APK's runtime unpinned: its modules would refuse "
+                f"the signed libr15.so (md5 {signed_md5})"]
+    return [f"{PINNED_LIBRARY}: the signed APK does not hold the source APK's runtime pinned to the signed libr15.so "
+            f"(md5 {signed_md5}): another libr15 or another edit"]
+
+
 def verify_signed(source: pathlib.Path, signed: pathlib.Path, stage: pathlib.Path, patcher: pathlib.Path,
                   extra_rows: pathlib.Path | None = None, scratch: pathlib.Path | None = None) -> list[str]:
     """The problems found in `signed`; empty when every original library survived, libr15.so is the patcher's output
-    for the store APK's and every staged one is there. The three digests of libr15.so are printed."""
+    for the store APK's, the reference runtime (when the source APK carries one) is pinned to the signed libr15.so and
+    every staged one is there. The three digests of libr15.so are printed."""
     problems: list[str] = []
     with zipfile.ZipFile(source) as original, zipfile.ZipFile(signed) as result:
         present = set(result.namelist())
+        runtime = source_is_reference_runtime(original)
         for entry in lib_entries(original):
-            if entry in (REPLACED_ON_PURPOSE, PATCHED_LIBRARY):
+            if entry in (REPLACED_ON_PURPOSE, PATCHED_LIBRARY) or (runtime and entry == PINNED_LIBRARY):
                 continue
             if entry not in present:
                 problems.append(f"{entry}: in the store APK, missing from the signed APK")
@@ -321,6 +372,8 @@ def verify_signed(source: pathlib.Path, signed: pathlib.Path, stage: pathlib.Pat
                                 "nothing was patched")
         for label in ("store", "patched", "signed"):
             print(f"quest_repack_libs: libr15.so sha256 {label:<7} {digests.get(label, '(not available)')}", flush=True)
+        if runtime:
+            problems.extend(pinned_runtime_problems(original, result))
         staged_dir = stage / ABI_DIR
         for staged in sorted(p for p in staged_dir.iterdir() if p.is_file()):
             entry = f"{ABI_DIR}/{staged.name}"
