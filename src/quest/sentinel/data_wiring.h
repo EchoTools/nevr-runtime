@@ -117,6 +117,10 @@ bool Install(const Options& options) noexcept;
 // skipped (see above).
 void AfterStorage(permission_wait::StorageOutcome outcome) noexcept;
 
+// Whether the engine reads shared storage this launch: true when its root is the legacy (shared storage) root. The
+// permission-wait hook asks for the storage permissions only then (permission_wait_hook.h, StorageNeededFn).
+bool StorageNeeded() noexcept;
+
 // The download's bounds. A transfer that moves less than kMinBytesPerSecond for kStallSeconds ends as a transport
 // failure (a network failure to the player), which the fetch retries from the part's size with its backoff; a
 // connection that does not open ends after kConnectTimeoutSeconds.

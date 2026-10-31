@@ -798,6 +798,27 @@ void WithoutTheDataRootHookTheMediaRootIsNotTheEngineRoot() {
   QCHECK(Has(LineOf("data_step_start"), "\"engine_root\":\"" + Legacy() + "\""));
 }
 
+// The predicate the permission-wait hook asks before it requests the storage permissions (#1737 C2): storage is needed
+// exactly when the engine reads the legacy (shared storage) root.
+void StorageNeededFollowsTheEngineRoot() {
+  {
+    Rig rig;  // the media root holds the data and the data-root hook is armed: the engine reads media, no storage needed
+    NoObbFileAndTheMediaRootHoldsTheData();
+    QCHECK(!dw::StorageNeeded());
+  }
+  {
+    Rig rig;  // the legacy root is the engine's root
+    DataIn(Legacy());
+    QCHECK(dw::StorageNeeded());
+  }
+  {
+    Rig rig;  // the data-root hook was never armed: the engine reads the legacy root, whatever is in media
+    DataIn(Media());
+    obb::ResolveRoot(&FakeExists);
+    QCHECK(dw::StorageNeeded());
+  }
+}
+
 // ---- the step runs once across both paths ----
 
 // Mic denied: the game checks, sees "denied", asks (RequestPermissions) and the step runs there. A later CheckPermission
@@ -1277,6 +1298,7 @@ int main() {
   AReleaseBuildFindsTheDataInTheMediaRootWithNoObbFileAndSaysNothing();
   DataOnlyInTheLegacyRootStillNeedsTheGrantWithNoObbFile();
   WithoutTheDataRootHookTheMediaRootIsNotTheEngineRoot();
+  StorageNeededFollowsTheEngineRoot();
   StaleMediaDataAndCompleteLegacyDataKeepsTheEngineOnTheLegacyRoot();
   CompleteMediaDataIsTheEnginesRootEvenWhenLegacyDataIsCompleteToo();
   NeitherRootCompleteLeavesTheEngineOnTheLegacyRoot();

@@ -95,6 +95,8 @@ bool Has(const std::string& line, const char* text) { return line.find(text) != 
 
 const char* g_requesterResult = "requested";
 const char* const* g_requesterNames = nullptr;
+// The first name the requester was asked for, read inside the call: the handler's array is gone after it returns.
+const char* g_requesterFirst = nullptr;
 std::uint64_t g_requesterCount = 0;
 int g_requesterCode = -1;
 int g_requesterCalls = 0;
@@ -102,6 +104,7 @@ int g_requesterCalls = 0;
 const char* Requester(const char* const* names, std::uint64_t count, int requestCode) noexcept {
   ++g_requesterCalls;
   g_requesterNames = names;
+  g_requesterFirst = count > 0 && names != nullptr ? names[0] : nullptr;
   g_requesterCount = count;
   g_requesterCode = requestCode;
   g_events.push_back("ours");
@@ -112,6 +115,7 @@ void ResetRequester(const char* result) {
   g_lines.clear();
   g_requesterResult = result;
   g_requesterNames = nullptr;
+  g_requesterFirst = nullptr;
   g_requesterCount = 0;
   g_requesterCode = -1;
   g_requesterCalls = 0;
@@ -403,6 +407,173 @@ void TheCheckThunkWithoutTheHookIsTheGamesCall() {
   QCHECK(g_checkCalls == 1);
 }
 
+// ---- storage needed or not, and the reference build's no-op original (#1737 C2) --------------------------------------
+
+bool NotNeeded() noexcept { return false; }
+bool Needed() noexcept { return true; }
+
+// Sets the requester answer, the original's kind and the storage predicate. Call after Reset, which clears them.
+void ArrangeC2(const char* result, pw::OriginalKind kind, pw::StorageNeededFn needed) {
+  ResetRequester(result);
+  pw::SetRequester(&Requester);
+  pw::SetOriginalKind(kind);
+  pw::SetStorageNeeded(needed);
+}
+
+void ClassifyOriginalWordPinsBothInputs() {
+  QCHECK(pw::ClassifyOriginalWord(0xd10103ffu) == pw::OriginalKind::kCallsJava);
+  QCHECK(pw::ClassifyOriginalWord(0xd65f03c0u) == pw::OriginalKind::kReturnsAtOnce);
+  QCHECK(pw::ClassifyOriginalWord(0u) == pw::OriginalKind::kUnknown);
+  QCHECK(pw::ClassifyOriginalWord(0xd10103feu) == pw::OriginalKind::kUnknown);
+  QCHECK(std::strcmp(pw::OriginalKindName(pw::OriginalKind::kCallsJava), "calls_java") == 0);
+  QCHECK(std::strcmp(pw::OriginalKindName(pw::OriginalKind::kReturnsAtOnce), "returns_at_once") == 0);
+  QCHECK(std::strcmp(pw::OriginalKindName(pw::OriginalKind::kUnknown), "unknown") == 0);
+}
+
+void StorageNotNeededAsksOnlyTheMicrophoneAndDoesNotWait() {
+  Reset(-1);
+  ArrangeC2("requested", pw::OriginalKind::kUnknown, &NotNeeded);
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  g_afterCalls = 0;
+  pw::SetAfterStorage(&AfterStorage);
+  const auto start = std::chrono::steady_clock::now();
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_requesterCalls == 1 && g_requesterCount == 1 && g_requesterFirst == kMic);
+  QCHECK(g_namesSeen == nullptr);  // the game's function was not called
+  QCHECK(ElapsedMs(start) < 100);
+  QCHECK(pw::CurrentCounts().waits == 0);
+  QCHECK(g_afterCalls == 1 && g_afterOutcome == pw::StorageOutcome::kDeniedNotRequested);
+  const std::vector<std::string> requests = Lines("permission_request");
+  QCHECK(requests.size() == 1 && Has(requests[0], "\"asked\":1") && Has(requests[0], "\"storage_needed\":\"no\"") &&
+         Has(requests[0], "\"path\":\"ours\""));
+  const std::vector<std::string> waits = Lines("permission_wait");
+  QCHECK(!waits.empty() && Has(waits.back(), "\"state\":\"not_requested\"") &&
+         Has(waits.back(), "\"reason\":\"storage_not_needed\""));
+}
+
+void OnlyStorageNamesAndNotNeededIsHisNoOp() {
+  const char* const storageOnly[2] = {kRead, kWrite};
+  Reset(-1);  // the storage is denied
+  ArrangeC2("requested", pw::OriginalKind::kUnknown, &NotNeeded);
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  g_afterCalls = 0;
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(storageOnly, 2);
+  QCHECK(g_requesterCalls == 0);
+  QCHECK(g_namesSeen == nullptr);
+  QCHECK(pw::CurrentCounts().no_request == 1);
+  const std::vector<std::string> requests = Lines("permission_request");
+  QCHECK(requests.size() == 1 && Has(requests[0], "\"path\":\"none\"") && Has(requests[0], "\"result\":\"not_needed\""));
+  QCHECK(g_afterCalls == 1 && g_afterOutcome == pw::StorageOutcome::kDeniedNotRequested);
+
+  Reset(0);  // the storage is granted already
+  ArrangeC2("requested", pw::OriginalKind::kUnknown, &NotNeeded);
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  g_afterCalls = 0;
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(storageOnly, 2);
+  QCHECK(g_namesSeen == nullptr && pw::CurrentCounts().no_request == 1);
+  QCHECK(g_afterCalls == 1 && g_afterOutcome == pw::StorageOutcome::kAlreadyGranted);
+}
+
+void StorageNeededKeepsOurRequestAndWait() {
+  Reset(3);
+  ArrangeC2("requested", pw::OriginalKind::kUnknown, &Needed);
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_requesterCalls == 1 && g_requesterNames == kBoot && g_requesterCount == 3);
+  QCHECK(g_requesterCode == pw::kRequestCode);
+  QCHECK(g_namesSeen == nullptr);
+  QCHECK(pw::CurrentCounts().waits == 1 && pw::CurrentCounts().granted == 1);
+  const std::vector<std::string> requests = Lines("permission_request");
+  QCHECK(requests.size() == 1 && Has(requests[0], "\"storage_needed\":\"yes\""));
+}
+
+void OnRefTheNoOpOriginalIsNotWaitedOn() {
+  Reset(-1);
+  ArrangeC2("no_app", pw::OriginalKind::kReturnsAtOnce, &Needed);
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  g_afterCalls = 0;
+  pw::SetAfterStorage(&AfterStorage);
+  const auto start = std::chrono::steady_clock::now();
+  RequestEntry()(kBoot, 3);
+  QCHECK(ElapsedMs(start) < 200);
+  QCHECK(pw::CurrentCounts().waits == 0 && pw::CurrentCounts().timeouts == 0);
+  QCHECK(g_afterCalls == 1 && g_afterOutcome == pw::StorageOutcome::kDeniedNotRequested);
+  bool called = false;
+  for (const std::string& e : g_events) {
+    if (e == "request") called = true;
+  }
+  QCHECK(called);  // the game's function ran; on the reference build it is `ret`
+  QCHECK(pw::CurrentCounts().game_requests == 0);
+  const std::vector<std::string> requests = Lines("permission_request");
+  QCHECK(requests.size() == 1 && Has(requests[0], "\"path\":\"game_noop\""));
+  const std::vector<std::string> waits = Lines("permission_wait");
+  QCHECK(!waits.empty() && Has(waits.back(), "\"reason\":\"original_no_op\""));
+}
+
+void OnRefOurRequestStillWaits() {
+  Reset(3);
+  ArrangeC2("requested", pw::OriginalKind::kReturnsAtOnce, &Needed);
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  RequestEntry()(kBoot, 3);
+  QCHECK(pw::CurrentCounts().waits == 1 && pw::CurrentCounts().granted == 1);
+  QCHECK(g_namesSeen == nullptr);
+  QCHECK(pw::CurrentCounts().game_requests == 0);
+}
+
+void OnStockTheGamesRequestWaits() {
+  Reset(3);
+  ArrangeC2("no_app", pw::OriginalKind::kCallsJava, &Needed);
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_namesSeen == kBoot && g_countSeen == 3);
+  QCHECK(pw::CurrentCounts().waits == 1 && pw::CurrentCounts().granted == 1);
+  QCHECK(pw::CurrentCounts().game_requests == 1);
+  const std::vector<std::string> requests = Lines("permission_request");
+  QCHECK(requests.size() == 1 && Has(requests[0], "\"path\":\"game\""));
+}
+
+void TheWaitIsBoundedOnEveryInput() {
+  const pw::OriginalKind kinds[3] = {pw::OriginalKind::kUnknown, pw::OriginalKind::kCallsJava,
+                                     pw::OriginalKind::kReturnsAtOnce};
+  const char* const results[2] = {"requested", "no_app"};
+  const pw::StorageNeededFn neededs[2] = {&Needed, &NotNeeded};
+  for (pw::OriginalKind kind : kinds) {
+    for (const char* result : results) {
+      for (pw::StorageNeededFn needed : neededs) {
+        Reset(-1);
+        ArrangeC2(result, kind, needed);
+        pw::ArmForTest(&ModelCheck, 5, 40);
+        g_afterCalls = 0;
+        pw::SetAfterStorage(&AfterStorage);
+        const auto start = std::chrono::steady_clock::now();
+        RequestEntry()(kBoot, 3);
+        QCHECK(ElapsedMs(start) < 2000);
+        QCHECK(g_afterCalls == 1);
+        const pw::Counts c = pw::CurrentCounts();
+        QCHECK((c.waits == 1 && c.timeouts == 1) || c.waits == 0);
+      }
+    }
+  }
+}
+
+void OnlyTheBootRequestDecidesWhenNotNeeded() {
+  Reset(-1);
+  ArrangeC2("requested", pw::OriginalKind::kUnknown, &NotNeeded);
+  pw::ArmForTest(&ModelCheck, 5, 40);
+  g_afterCalls = 0;
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(kBoot, 3);
+  const int callsAfterBoot = g_checkCalls;
+  const char* const script[1] = {kWrite};
+  RequestEntry()(script, 1);  // a script node's request: storage only, so nothing is asked and nothing is checked
+  QCHECK(pw::CurrentCounts().requests == 2);
+  QCHECK(pw::CurrentCounts().waits == 0);
+  QCHECK(g_afterCalls == 1);
+  QCHECK(g_checkCalls == callsAfterBoot);
+}
+
 }  // namespace
 
 // A player who taps Deny waits out the cap before the game's own error: it is what a person waits (30 s).
@@ -516,6 +687,15 @@ int main() {
   WithoutARequesterTheGameAsksAndTheLineSaysSo();
   EveryRequestGoesThroughTheRequesterAndOnlyTheFirstFewAreLogged();
   TheRequestCodeIsOneTheActivityAccepts();
+  ClassifyOriginalWordPinsBothInputs();
+  StorageNotNeededAsksOnlyTheMicrophoneAndDoesNotWait();
+  OnlyStorageNamesAndNotNeededIsHisNoOp();
+  StorageNeededKeepsOurRequestAndWait();
+  OnRefTheNoOpOriginalIsNotWaitedOn();
+  OnRefOurRequestStillWaits();
+  OnStockTheGamesRequestWaits();
+  TheWaitIsBoundedOnEveryInput();
+  OnlyTheBootRequestDecidesWhenNotNeeded();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "permission_wait_hook_test: %d check(s) failed\n", quest_test::Failures());

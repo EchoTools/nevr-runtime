@@ -37,9 +37,29 @@ class TheEntryArmsTheRequester(unittest.TestCase):
 class TheHandlerCallsTheGameOnlyWhenTheRequesterCouldNot(unittest.TestCase):
     def test_the_original_is_behind_the_requested_test(self):
         body = extract_braced_function(code("permission_wait_hook.cpp"), "void RequestHandler(")
-        self.assertIn("request(names, count, kRequestCode)", body)
-        self.assertRegex(body, r'const bool ours = std::strcmp\(result, "requested"\) == 0;\s*if \(!ours\) \{\s*original\(names, count\);')
+        self.assertIn("request(askNames, askCount, kRequestCode)", body)
+        self.assertRegex(
+            body,
+            r'const bool ours = std::strcmp\(result, "requested"\) == 0;\s*path = "ours";\s*made = true;\s*if \(!ours\) \{\s*original\(askNames, askCount\);',
+        )
         self.assertEqual(body.count("original("), 1)
+
+
+class TheHandlerWaitsOnlyWhenStorageWasAskedAndARequestReachedJava(unittest.TestCase):
+    def test_the_wait_is_behind_needed_and_made(self):
+        body = extract_braced_function(code("permission_wait_hook.cpp"), "void RequestHandler(")
+        self.assertIn("if (needed && made) {", body)
+        self.assertLess(body.index("if (needed && made) {"), body.index("wait(names, count)"))
+
+
+class TheEntryDecidesStorageNeededFromTheEngineRoot(unittest.TestCase):
+    def test_the_predicate_is_set_before_the_hook_is_installed(self):
+        body = extract_braced_function(code("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
+        self.assertIn("nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);", body)
+        self.assertLess(
+            body.index("SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded)"),
+            body.index("permission_wait::Install()"),
+        )
 
 
 class TheRequestIsBuiltLikeTheHookPath(unittest.TestCase):

@@ -474,6 +474,21 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "libr15 %s: .dynsym value is not 0xf873ec\n", pinned::kRequestPermissionsSymbol);
     QCHECK(false);
   }
+  // The first word the hook classifies (ClassifyOriginalWord, #1737 C2): the symbol is defined at the pinned address, and the
+  // store file's word there is the stock word, `sub sp,sp,#0x40`.
+  if (DynamicSymbolValue(r15, pinned::kRequestPermissionsSymbol) != pinned::kRequestPermissionsVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kRequestPermissionsSymbol,
+                 static_cast<unsigned long long>(pinned::kRequestPermissionsVaddr));
+    QCHECK(false);
+  }
+  {
+    std::uint32_t firstWord = 0;
+    std::memcpy(&firstWord, static_cast<const unsigned char*>(r15.mem) + pinned::kRequestPermissionsVaddr, sizeof(firstWord));
+    if (firstWord != pinned::kRequestPermissionsStockWord) {
+      std::fprintf(stderr, "libr15 CSysInfo::RequestPermissions: first word is %#x, not the store file's stock word\n", firstWord);
+      QCHECK(false);
+    }
+  }
   if (DynamicSymbolValue(r15, pinned::kCheckPermissionSymbol) != pinned::kCheckPermissionVaddr) {
     std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kCheckPermissionSymbol,
                  static_cast<unsigned long long>(pinned::kCheckPermissionVaddr));

@@ -241,6 +241,8 @@ EngineRootChoice EngineRoot() {
   return {data_root::kLegacyRoot, "engine_default"};
 }
 
+bool StorageNeeded() noexcept { return EngineRoot().root == data_root::kLegacyRoot; }
+
 void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   const EngineRootChoice choice = EngineRoot();
   const std::string& engineRoot = choice.root;
