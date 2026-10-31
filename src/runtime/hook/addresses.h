@@ -556,6 +556,11 @@ constexpr uintptr_t NETGAME_GAME_OFFSET = 8;
 /// its first argument (NetGameScheduleReturnToLobby queues its callback on the same one).
 constexpr uintptr_t GAME_CALL_QUEUE_OFFSET = 8;
 
+/// Offset within the game object of the count of its running scripts (the array at +0x1EE0). The game's queued
+/// return-to-lobby callback (echovr.exe 0x1401a4ad0) tests it first: with any script running it only sets a pending
+/// flag (bit 42 of the lobby flags) and returns, and CR15NetGame::Update (0x1401bbdb0) asks again when it is 0.
+constexpr uintptr_t GAME_SCRIPT_COUNT_OFFSET = 0x1F10;
+
 // ============================================================================
 // Arena Rules Override (CJson_GetFloat hook)
 // ============================================================================

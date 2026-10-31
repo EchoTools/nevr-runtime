@@ -49,6 +49,18 @@ inline Verdict Check(const void* netGame) {
   return storage != nullptr ? Verdict::Ready : Verdict::QueueNotAllocated;
 }
 
+/// The game's running-script count (0x1401a4ad0 defers the return to lobby while it is non-zero), or UINT64_MAX when
+/// the net game or its game object is not there. For the log line that says why a return did not happen (#1756).
+inline uint64_t RunningScripts(const void* netGame) {
+  if (netGame == nullptr) return UINT64_MAX;
+  const void* game = ReadPointer(netGame, nevr_patch_addresses::NETGAME_GAME_OFFSET);
+  if (game == nullptr) return UINT64_MAX;
+  uint64_t count = 0;
+  std::memcpy(&count, static_cast<const unsigned char*>(game) + nevr_patch_addresses::GAME_SCRIPT_COUNT_OFFSET,
+              sizeof(count));
+  return count;
+}
+
 inline const char* Name(Verdict verdict) {
   switch (verdict) {
     case Verdict::Ready:

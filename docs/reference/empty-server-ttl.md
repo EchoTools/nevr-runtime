@@ -38,6 +38,20 @@ reject and a `LobbySessionEvent` `CODE_ENDED` to the game server. A game-server-
 (`server/evr_pipeline_lobby.go`, `SignalEndedSession`) only leaves the match stream. So within the hold the server is up but Nakama no longer routes
 players to that match; making an empty server joinable for up to the TTL needs a Nakama change.
 
+## A session the service ended must release the server
+
+When ServerDB sends `LobbySessionEvent` `CODE_ENDED` the match is over for the service and nothing will be routed
+to the server again. The game normally leaves on its own: the runtime asks it to return to lobby, the queued callback
+(`echovr.exe 0x1401a4ad0`) calls `LeaveGame` and switches the net game to Lobby, and `state_machine.cpp` exits the
+process. That callback does nothing while the game's running-script count (`game + 0x1F10`) is non-zero, and nothing
+on the runtime side checked that the return ever happened.
+
+`nevr_game_server::EndedSessionWatchdog` (`src/runtime/server/ended_session_watchdog.h`) is that check. The
+WebSocket receive thread arms it when a `CODE_ENDED` frame arrives (`WebSocketClient::SetReceiveObserver`), before the
+frame is queued for the game thread, so it works when the game thread has stopped calling `Update()`. After 15 s plus
+`network.empty_server_ttl_seconds`, if the process is still alive it logs a Warning with the session id and the
+running-script count and ends the process through `PerformGracefulShutdown(0)`. A new session on the server cancels it.
+
 ## Not verified
 
 No live server run. `Update 0x1401bbdb0` also calls `0x1401a89f0` every frame while a game flag
