@@ -29,7 +29,7 @@ One game, two binaries, one codebase: a feature is written once, with a per-bina
 | Quest sentinel | `src/quest/` | a separate CMake project (NDK, arm64); `libr15.so` is patched on the host at build time (ADR 0021, N151) |
 | Quest plugins | `src/quest/plugins/q15t`, `src/quest/plugins/autopilot`, `src/quest/plugin/` | the Quest plugin loader (ADR 0019), q15t modules, the autopilot route (ADR 0025); in no release or package-dev APK |
 | Content packs and game data | `docs/reference/content-packs.md`, `content-pack-hosting.md`, `tools/echomod/`, `src/runtime/patch/{asset_cdn,resource_override,evrp_package}.cpp`, `src/quest/data/` | game data served by plugins, hosted on the CDN, named by the signed manifest (ADR 0028, 0029) |
-| Core installer | `installer/` (Rust crate `nevr-install`), `tools/package-release/` | one install method for PC and Quest (ADR 0023, 0024) |
+| Core installer | `installer/` (Rust crate; the binary is `install-nevr-runtime`), `tools/package-release/` | one install method for PC and Quest (ADR 0023, 0024) |
 | Python tools | `tools/`, `tools/tests/` | gate checks (`verify_*.py`), release and Quest-APK tooling, scenario harness (`tools/scenario/`), Windows VM rig (`tools/winvm/`) |
 | Go suites | `tests/system`, `tests/plugins`, `tests/quest`, `tests/crash-ingest` | ground-truth and system tests; some write into a game install |
 | Release and signing | `RELEASING.md`, `.github/workflows/`, `tools/release_*.py`, `release-headlines/` | tag, draft, CI build, signer, publish; the Quest APK is built and published outside CI |

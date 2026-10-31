@@ -33,7 +33,7 @@ service, and shows a short code. The player posts the code in Discord and a main
 - **The seam on PC:** no settings-row seam. The nearest are the inserted menu cards (`src/runtime/patch/menu_page.h`,
   `menu_cards.h`, #906) and the text writer (`src/runtime/patch/ui_text.h`, #896).
 - **Log files.** PC: the run log written by `src/runtime/log/builtin_filter.cpp` and `nevr-boot.jsonl`
-  (`src/runtime/log/boot_log_tee.cpp`) in the `logs` folder under the nEVR root (`nevr_root::LogsDir`). Quest:
+  (`src/runtime/log/boot_log_tee.cpp`) in the `logs` folder under the nevr root (`nevr_root::LogsDir`). Quest:
   `nevr-sentinel.log` and its rotated files (`src/quest/sentinel/sentinel_log.cpp`) in the game's files folder.
 
 ## Decision
