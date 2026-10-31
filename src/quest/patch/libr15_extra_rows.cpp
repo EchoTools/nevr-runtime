@@ -22,6 +22,7 @@ PatchSpec PublicSpec() {
   spec.stockSha256 = kLibR15StockSha256;
   for (const char* sha : kLibR15ReferenceSha256) spec.alsoSha256.emplace_back(sha);
   spec.expectedImageEnd = kStockImageEnd;
+  spec.slotAreaGap = kSlotAreaGap;
   return spec;
 }
 

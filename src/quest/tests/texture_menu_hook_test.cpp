@@ -921,6 +921,81 @@ void TheCountersRegisterAndLeaveTheRestOfTheTable() {
   sentinel::StopReporter();
 }
 
+// ---- the reference input's start rule (#1737 C4) ------------------------------------------------------------------------------
+
+// On the reference libr15, with a `stock` configuration and no marker, the start is his rule: the settings file's msaa index V,
+// at level kLow + V (no file or no key: V=2, High). The rule is queued as the player's marker, so the next launch reads it there.
+void ReferenceRuleWithNoSettingsFileStartsAtHigh() {
+  Reset(tq::Level::kStock, true);
+  tq::SetInputForTest(tq::EyeInput::kReference);
+  const std::string dir = MakeSettingsDirectory(nullptr);
+  QCHECK(!dir.empty());
+  g_appDataDir = dir;
+  Capture log;
+  QCHECK(Eye().first == 3072 && Eye().second == 3380);  // High on a Quest 3
+  QCHECK(tq::LatchedLevel() == tq::Level::kHigh);
+  QCHECK(tm::PollOnceForTest() > 0);
+  QCHECK(CountLines("\"source\":\"reference_rule\"") == 1);
+  QCHECK(CountLines("\"reference_file\":\"missing\"") == 1);
+  QCHECK(ReadMarker(dir) == R"({"menu_index":3})");  // High, queued as the player's marker
+  RemoveSettingsDirectory(dir);
+}
+
+void ReferenceRuleReadsTheMsaaIndexOfTheSettingsFile() {
+  Reset(tq::Level::kStock, true);
+  tq::SetInputForTest(tq::EyeInput::kReference);
+  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 1, "sharpening": 0.5}})");
+  QCHECK(!dir.empty());
+  g_appDataDir = dir;
+  Capture log;
+  QCHECK(Eye().first == 2376 && Eye().second == 2568);  // Medium on a Quest 3: kLow + 1
+  QCHECK(tq::LatchedLevel() == tq::Level::kMedium);
+  QCHECK(tm::PollOnceForTest() > 0);
+  QCHECK(CountLines("\"reference_file\":\"read\"") == 1);
+  QCHECK(ReadMarker(dir) == R"({"menu_index":2})");
+  RemoveSettingsDirectory(dir);
+}
+
+void AConfiguredLowOutranksTheReferenceRule() {
+  Reset(tq::Level::kLow, true);
+  tq::SetInputForTest(tq::EyeInput::kReference);
+  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 3}})");
+  QCHECK(!dir.empty());
+  g_appDataDir = dir;
+  Capture log;
+  QCHECK(Eye().first == 1680 && Eye().second == 1760);  // Low: the configuration stands, the rule does not run
+  QCHECK(tq::LatchedLevel() == tq::Level::kLow);
+  tm::PollOnceForTest();
+  QCHECK(CountLines("\"source\":\"reference_rule\"") == 0);
+  RemoveSettingsDirectory(dir);
+}
+
+void APlayersMarkerOutranksTheReferenceRule() {
+  Reset(tq::Level::kStock, true);
+  tq::SetInputForTest(tq::EyeInput::kReference);
+  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 3}})", R"({"menu_index":0})");
+  QCHECK(!dir.empty());
+  g_appDataDir = dir;
+  Capture log;
+  QCHECK(Eye().first == 1344 && Eye().second == 1408);  // Very Low: the marker, not msaa 3 (High)
+  QCHECK(tq::LatchedLevel() == tq::Level::kVeryLow);
+  QCHECK(CountLines("\"source\":\"reference_rule\"") == 0);
+  RemoveSettingsDirectory(dir);
+}
+
+void TheStockInputNeverUsesTheReferenceRule() {
+  Reset(tq::Level::kStock, true);
+  tq::SetInputForTest(tq::EyeInput::kStock);
+  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 3}})");
+  QCHECK(!dir.empty());
+  g_appDataDir = dir;
+  Capture log;
+  QCHECK(Eye().first == kQ3W && Eye().second == kQ3H);  // stock: the runtime's own size
+  QCHECK(tq::LatchedLevel() == tq::Level::kStock);
+  QCHECK(CountLines("\"source\":\"reference_rule\"") == 0);
+  RemoveSettingsDirectory(dir);
+}
+
 }  // namespace
 
 int main() {
@@ -954,6 +1029,11 @@ int main() {
   ARefusedApplyAndAFailedRebuildAreLoudLinesWithTheirConsequence();
   TheInstallRefusesAndSaysWhyOnAHostWithoutLibr15();
   TheCountersRegisterAndLeaveTheRestOfTheTable();
+  ReferenceRuleWithNoSettingsFileStartsAtHigh();
+  ReferenceRuleReadsTheMsaaIndexOfTheSettingsFile();
+  AConfiguredLowOutranksTheReferenceRule();
+  APlayersMarkerOutranksTheReferenceRule();
+  TheStockInputNeverUsesTheReferenceRule();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "texture_menu_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

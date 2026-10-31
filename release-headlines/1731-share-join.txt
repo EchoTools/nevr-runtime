@@ -1,1 +1,0 @@
-After you create an invite, the JOIN button on the share page now takes you into the match you just made.
