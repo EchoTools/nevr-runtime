@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/pch.h"
+#include <string>
 #include "abi/echovr.h"
 #include "runtime/lifecycle/server_timestep.h"
 
@@ -25,6 +26,10 @@ UINT64 LoadLocalConfigHook(PVOID pGame);
 /// with the step written and the value it replaced. boot.cpp reports this, not the configured rate, when it
 /// says what step the server runs on.
 nevr_server_timestep::StepWrite ServerStepWrite();
+
+/// #1785: sets the server's step for a session of `gameType` (Combat 30 a second, Arena the default 120, an explicit
+/// network.tick_rate_hz for all) when the session opens. A client writes nothing.
+void ApplySessionTimestep(const std::string& gameType, const std::string& sessionId);
 
 /// #515: logs once what the clock the server runs on holds (its step and mode bits), so a run's log says
 /// whether the step NEVR wrote is live. Called from the per-frame tick on one tick (frame/tick.cpp).
