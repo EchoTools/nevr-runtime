@@ -14,12 +14,12 @@
 //
 // A text is never logged, only its size: the invite code goes through here.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -84,8 +84,8 @@ inline constexpr uint64_t kMaxActors = 0xfffe;
 /// The packed identity the component lookup takes for the actor at `index` (as the game's script nodes build it).
 inline constexpr uint64_t kActorIdentBase = 0x0000ffffffff0000ULL;
 
-/// The index of `actor` in the names array of the gamespace `gs`; false when not there or when memory cannot be read.
-/// `p.Read(address, out, length)` is a reader that can refuse.
+/// PC (echovr.exe): the index of `actor` in the names array of the gamespace `gs`; false when not there or when memory cannot
+/// be read. `p.Read(address, out, length)` is a reader that can refuse.
 template <typename Platform>
 inline bool FindActorIndex(Platform& p, uintptr_t gs, uint64_t actor, uint64_t* index) {
   uint64_t table = 0, names = 0, count = 0;
@@ -99,6 +99,46 @@ inline bool FindActorIndex(Platform& p, uintptr_t gs, uint64_t actor, uint64_t* 
     if (all[i] == actor) {
       *index = i;
       return true;
+    }
+  }
+  return false;
+}
+
+/// Quest (libr15.so): the same table pointer, a different table. CncaGameSpace::LocalActor (ELF symbol, link address
+/// 0x18042d4) reads `[gs+0x370]` as the table, `[table+0x00]` as a name-sorted array of 16-byte entries (the name as a
+/// signed 64-bit key at +0, the actor index as a u16 at +8) and `[table+0x30]` as the entry count, and binary-searches it
+/// with signed compares. The actor's identity is `kActorIdentBase | index`, as on the PC.
+inline constexpr size_t kQuestMapEntriesOffset = 0x00;
+inline constexpr size_t kQuestMapCountOffset = 0x30;
+inline constexpr size_t kQuestMapStride = 16;
+inline constexpr size_t kQuestMapIndexOffset = 8;
+
+/// The index of `actor` in the sorted name map of the Quest gamespace `gs`; false when not there or when memory cannot be read.
+template <typename Platform>
+inline bool FindActorInSortedMap(Platform& p, uintptr_t gs, uint64_t actor, uint64_t* index) {
+  uint64_t table = 0, entries = 0, count = 0;
+  if (!p.Read(gs + kSpaceActorTableOffset, &table, sizeof(table)) || table == 0) return false;
+  if (!p.Read(static_cast<uintptr_t>(table) + kQuestMapEntriesOffset, &entries, sizeof(entries)) || entries == 0) return false;
+  if (!p.Read(static_cast<uintptr_t>(table) + kQuestMapCountOffset, &count, sizeof(count))) return false;
+  if (count == 0 || count > kMaxActors) return false;
+  const auto wanted = static_cast<int64_t>(actor);
+  uint64_t low = 0, high = count;
+  while (low < high) {
+    const uint64_t mid = low + (high - low) / 2;
+    const uintptr_t entry = static_cast<uintptr_t>(entries) + static_cast<uintptr_t>(mid) * kQuestMapStride;
+    uint64_t name = 0;
+    if (!p.Read(entry, &name, sizeof(name))) return false;
+    const auto key = static_cast<int64_t>(name);
+    if (key == wanted) {
+      uint16_t found = 0;
+      if (!p.Read(entry + kQuestMapIndexOffset, &found, sizeof(found)) || found == 0xffff) return false;
+      *index = found;
+      return true;
+    }
+    if (key < wanted) {
+      low = mid + 1;
+    } else {
+      high = mid;
     }
   }
   return false;
@@ -120,24 +160,15 @@ inline const char* OutcomeName(Outcome o) {
   return "unknown";
 }
 
-/// Whether a platform looks a canvas up by the actor's name (the Quest's CComponentHandle<CCanvasUICS>::Find, which finds
-/// the actor in the gamespace or the ones below it): `bool FindCanvasByName(uintptr_t gs, uint64_t actor, uintptr_t* cs,
-/// uint32_t* handle)`, true when the actor has a canvas.
-template <typename P, typename = void>
-struct FindsCanvasByName : std::false_type {};
-template <typename P>
-struct FindsCanvasByName<P, std::void_t<decltype(std::declval<P&>().FindCanvasByName(
-                                uintptr_t{}, uint64_t{}, static_cast<uintptr_t*>(nullptr), static_cast<uint32_t*>(nullptr)))>>
-    : std::true_type {};
-
 /// Writes `request` through the platform `p`, which provides:
 ///   uintptr_t Game();                                          the game object, 0 before there is one
 ///   uintptr_t GameSpace(uintptr_t game, uint64_t index);       the index-th gamespace, 0 past the last
 ///   bool Read(uintptr_t address, void* out, size_t length);    a read that can refuse
+///   bool FindActor(uintptr_t gs, uint64_t actor, uint64_t* index);   the actor's index in `gs` (FindActorIndex on the PC,
+///                                                              FindActorInSortedMap on the Quest: the table differs)
 ///   bool FindCanvas(uintptr_t gs, uint64_t ident, uintptr_t* cs, uint32_t* handle);   the actor's canvas component
 ///   bool SetText(uintptr_t cs, uint32_t handle, uint64_t element, const char* text);  true when the element exists
-/// or, in place of Read and FindCanvas, FindCanvasByName (above). Game thread only: the canvas component is the UI's own
-/// state.
+/// Game thread only: the canvas component is the UI's own state.
 template <typename Platform>
 inline Outcome Apply(Platform& p, const Request& request) {
   if (CheckRequest(request) != Check::Ok) return Outcome::Refused;
@@ -146,21 +177,13 @@ inline Outcome Apply(Platform& p, const Request& request) {
   for (size_t i = 0; i < kMaxGameSpaces; ++i) {
     const uintptr_t gs = p.GameSpace(game, i);
     if (gs == 0) break;
-    if constexpr (FindsCanvasByName<Platform>::value) {
-      uintptr_t cs = 0;
-      uint32_t handle = 0;
-      if (!p.FindCanvasByName(gs, request.target.actor, &cs, &handle) || cs == 0) continue;
-      return p.SetText(cs, handle, request.target.element, request.text.c_str()) ? Outcome::Written
-                                                                                : Outcome::NotWritten;
-    } else {
-      uint64_t index = 0;
-      if (!FindActorIndex(p, gs, request.target.actor, &index)) continue;
-      uintptr_t cs = 0;
-      uint32_t handle = 0;
-      if (!p.FindCanvas(gs, kActorIdentBase | index, &cs, &handle) || cs == 0) return Outcome::NoCanvas;
-      return p.SetText(cs, handle, request.target.element, request.text.c_str()) ? Outcome::Written
-                                                                                : Outcome::NotWritten;
-    }
+    uint64_t index = 0;
+    if (!p.FindActor(gs, request.target.actor, &index)) continue;
+    uintptr_t cs = 0;
+    uint32_t handle = 0;
+    if (!p.FindCanvas(gs, kActorIdentBase | index, &cs, &handle) || cs == 0) return Outcome::NoCanvas;
+    return p.SetText(cs, handle, request.target.element, request.text.c_str()) ? Outcome::Written
+                                                                              : Outcome::NotWritten;
   }
   return Outcome::NoActor;
 }
@@ -213,6 +236,12 @@ class Pending {
     if (entries_.size() >= kMaxPending) return Check::Full;
     entries_.push_back(Entry{std::move(request), nowMs, nowMs, 0});
     return Check::Ok;
+  }
+
+  /// Forgets every request that waits (a test starting over).
+  void Clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    entries_.clear();
   }
 
   size_t Size() const {
@@ -268,5 +297,64 @@ class Pending {
   mutable std::mutex mutex_;
   std::vector<Entry> entries_;
 };
+
+// ---- one frame of the writer, the same on both binaries ----
+
+enum class LogLevel { Info, Warning };
+using LogFn = void (*)(LogLevel level, const std::string& line);
+
+/// `0x` and the digits without padding, as `%llx` writes them.
+inline std::string HexShort(uint64_t v) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string digits;
+  do {
+    digits.insert(digits.begin(), kHex[v & 0xfu]);
+    v >>= 4;
+  } while (v != 0);
+  return "0x" + digits;
+}
+
+/// The line for a request the game is not ready for yet: never the text, only its size.
+inline std::string WaitingLine(const Report& r) {
+  return std::string("[NEVR.UI] text waiting actor=") + Hex64(r.request.target.actor) + " element=" +
+         Hex64(r.request.target.element) + " bytes=" + std::to_string(r.request.text.size()) +
+         " attempts=" + std::to_string(r.attempts) + " outcome=" + OutcomeName(r.outcome);
+}
+
+/// What the gamespaces look like when a request finds no actor: one line per gamespace, so a miss explains itself. The
+/// platform adds the table's own fields (`p.ActorTableProbe(gs)`: they differ by binary).
+template <typename Platform>
+inline void ProbeSpaces(Platform& p, LogFn log) {
+  const uintptr_t game = p.Game();
+  if (game == 0) return;
+  for (size_t i = 0; i < kMaxGameSpaces; ++i) {
+    const uintptr_t gs = p.GameSpace(game, i);
+    if (gs == 0) {
+      log(LogLevel::Info, std::string("[NEVR.UI] text probe spaces=") + std::to_string(i));
+      return;
+    }
+    log(LogLevel::Info, std::string("[NEVR.UI] text probe space=") + std::to_string(i) + " gs=" + HexShort(gs) +
+                            p.ActorTableProbe(gs));
+  }
+}
+
+/// Tries the requests that are due and logs each one that is done. `firstWrite` latches the one `text first write` line,
+/// which the platform words (`p.FirstWriteLine()`: the writing thread and the game-loop thread). Game thread only.
+template <typename Platform>
+inline void RunFrame(Pending& pending, Platform& p, uint64_t nowMs, std::atomic<bool>& firstWrite, LogFn log) {
+  for (const Report& r : pending.Drain(p, nowMs)) {
+    if (!r.done) {
+      // The first miss and then one a 5 s: a request the page never answers must explain itself before its give-up.
+      if (r.attempts == 1 || r.attempts % 50 == 0) {
+        log(LogLevel::Info, WaitingLine(r));
+        if (r.attempts == 1 && r.outcome == Outcome::NoActor) ProbeSpaces(p, log);
+      }
+      continue;
+    }
+    log(r.dropped ? LogLevel::Warning : LogLevel::Info, ReportLine(r));
+    if (!r.dropped && !firstWrite.exchange(true)) log(LogLevel::Info, p.FirstWriteLine());
+  }
+}
+
 
 }  // namespace nevr_ui_text

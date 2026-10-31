@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "nevr/symbol_hash.h"
+#include "runtime/patch/menu_cards.h"
 
 namespace nevr_friends_level {
 
@@ -186,6 +187,20 @@ inline bool EditTransforms(const Bytes& in, Bytes* out, std::string* why) {
     for (const std::size_t at : list) Put(&b, at + 0x34, kHiddenY);
   *out = std::move(b);
   return true;
+}
+
+// The main menu's transform table carries two edits: the four buttons' order (#1679, nevr_menu_cards::PlaceButtons,
+// which serves only the pinned stock table) and the panel's (EditTransforms, which moves other actors). Transforms of one
+// resource do not chain (resource_override.h: the first that serves wins; the Quest's read-finished hook serves once), so
+// the panel's edit is made on the table with the buttons placed. `sha256Hex` is the delivered table's, `pin` the stock
+// table's; `buttons_placed` says whether the buttons moved (false on a table that is not the pinned stock one, which the
+// panel still edits). False, with `why`, when the panel's edit refuses the table.
+inline bool EditTransformsWithButtons(const Bytes& in, const std::string& sha256Hex, const std::string& pin, Bytes* out,
+                                      std::string* why, bool* buttons_placed) {
+  const nevr_menu_cards::SlotResult r = nevr_menu_cards::PlaceButtons(in.data(), in.size(), sha256Hex, pin);
+  const bool placed = r.verdict == nevr_menu_cards::Verdict::Patched;
+  if (buttons_placed != nullptr) *buttons_placed = placed;
+  return EditTransforms(placed ? r.bytes : in, out, why);
 }
 
 // ---- CActorDataResource: the actors' local transforms ----

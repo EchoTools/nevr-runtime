@@ -19,9 +19,11 @@
 #include <vector>
 
 #include "menu_cards_swap.h"
+#include "quest/data/sha256.h"
 #include "nevr/symbol_hash.h"
 #include "runtime/patch/friends_canvas.h"
 #include "runtime/patch/friends_level.h"
+#include "runtime/patch/menu_cards.h"
 #include "runtime/patch/ui_canvas.h"
 
 namespace nevr_quest::friends_panel {
@@ -63,8 +65,11 @@ inline Kind Classify(const menu_cards::Delivery& d) {
 }
 
 // The bytes the panel serves for `kind`, built from the delivered `data`. False, with `why`, when the delivered bytes are
-// not what the build expects (the stock buffer then stays).
-inline bool Build(Kind kind, const unsigned char* data, std::size_t size, std::vector<std::uint8_t>* out, std::string* why) {
+// not what the build expects (the stock buffer then stays). The transform table is served with the four main-menu buttons
+// placed too (#1679, nevr_friends_level::EditTransformsWithButtons; `buttons_placed` says whether they moved): the
+// read-finished hook serves a table once, so both edits are in the one table it serves.
+inline bool Build(Kind kind, const unsigned char* data, std::size_t size, std::vector<std::uint8_t>* out, std::string* why,
+                  bool* buttons_placed = nullptr) {
   namespace fc = nevr_friends_canvas;
   namespace fl = nevr_friends_level;
   namespace uc = nevr_ui_canvas;
@@ -81,7 +86,9 @@ inline bool Build(Kind kind, const unsigned char* data, std::size_t size, std::v
       return true;
     }
     case Kind::kPointerMeshes: return fl::EditPointerMeshes(in, out, why);
-    case Kind::kTransforms: return fl::EditTransforms(in, out, why);
+    case Kind::kTransforms:
+      return fl::EditTransformsWithButtons(in, nevr_quest::data::Sha256Hex(data, size), nevr_menu_cards::kStockTransformSha256,
+                                           out, why, buttons_placed);
     case Kind::kActorData: return fl::EditActorData(in, out, why);
     case Kind::kPageElements: return fl::EditPageElements(in, out, why);
     case Kind::kScripts: return fl::EditScripts(in, out, why);

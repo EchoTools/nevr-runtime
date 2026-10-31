@@ -37,8 +37,10 @@ NEVR_HOOK_RECORD(kDlopenHook, DlopenThunk, &HookedDlopen);
 }  // namespace
 
 sentinel::GotTarget LibR15Dlopen() {
-  return {sentinel::pinned::kLibR15, "dlopen", sentinel::RelocKind::kJumpSlot,
-          sentinel::pinned::LibR15PatchedBuildId(), 0x36c6380ULL};
+  // Service-side (#1737): the login and matchmaking installs run from this hook.
+  return sentinel::GotTarget{sentinel::pinned::kLibR15, "dlopen", sentinel::RelocKind::kJumpSlot,
+                             sentinel::pinned::LibR15PatchedBuildId(), 0x36c6380ULL}
+      .ServiceSide();
 }
 
 DlopenInstall InstallDlopenHook(sentinel::GotStatus* status) noexcept {

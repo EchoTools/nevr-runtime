@@ -7,8 +7,8 @@
 //     libr15's own CResourceManager::AddPackage slot, right after the first stock set the game adds;
 //   - every component event the game sends, seen before the game through libr15's SendComponentEvent slot (rows,
 //     INVITE FRIENDS, the profile pop-up's buttons);
-//   - the texts, written on the game thread through the game's own canvas functions (CComponentHandle<CCanvasUICS>::Find,
-//     CCanvasUICS::SetText);
+//   - the texts, posted to the Quest's UI text writer (quest/invite/ui_text_quest.h), which writes them on the game
+//     thread through the game's own canvas functions;
 //   - the pictures, set through the game's dynamic-texture behaviour (CCanvasUICS::ElementID, FindBehavior,
 //     CR15DynLoadTextureBehavior::LoadAndApplyTexture), each friend's picture encoded to ASTC and copied over the
 //     slot's payload when the game reads it.

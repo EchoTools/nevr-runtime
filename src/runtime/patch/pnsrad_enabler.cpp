@@ -6,8 +6,9 @@
  * EchoVR selects between social platform DLLs ("pnsovr", "pnsdemo", "pnsrad")
  * via flag-driven logic. This module:
  *
- *   1. Overwrites "pnsovr" and "pnsdemo" string data so all code paths load
- *      pnsrad.dll regardless of flags.
+ *   1. Redirects the provider loader's "pnsovr" and "pnsdemo" names to
+ *      "pnsrad" (runtime/patch/provider_name_redirect.h), so all code paths
+ *      load pnsrad.dll regardless of flags.
  *
  *   2. NOPs the OVR platform branch so PlatformModuleDecisionAndInitialize
  *      takes Path 2 (full networking).
@@ -31,6 +32,8 @@
 
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/provider_identity.h"
+#include "runtime/patch/provider_name_redirect.h"
+#include "runtime/lifecycle/crash_recovery.h"  // ServerFatal: mode-gated (fatal on a server, a Warning on a client)
 #include "runtime/patch/pnsrad_diag_queue.h"
 #include "runtime/patch/pnsrad_load_queue.h"
 #include "runtime/hook/dll_load_hook.h"
@@ -59,11 +62,6 @@
 /* --------------------------------------------------------------------
  * Patch addresses (RVA from image base)
  * -------------------------------------------------------------------- */
-
-// echovr.exe string data
-static constexpr uintptr_t STR_PNSOVR  = 0x16d35c4;
-static constexpr uintptr_t STR_PNSDEMO = 0x16d35e8;
-static constexpr size_t    STR_SIZE    = 7;  // "pnsrad\0"
 
 // OVR platform branch — 6-byte JNE in PlatformModuleDecisionAndInitialize
 static constexpr uintptr_t OVR_BRANCH = 0x1580e5;
@@ -509,55 +507,19 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
 void nevr_pnsrad_enabler::Init(uintptr_t base_addr) {
     RegisterMatchmakingReloadCheck();
 #ifdef _WIN32
-    // Total echovr.exe patches Patch 1/2/3 below can apply — named so the
+    // Total echovr.exe patches counted below (the provider-name redirect and Patch 3) — named so the
     // "init complete" summary can show a baseline instead of a bare count.
-    constexpr int kEchovrPatchCount = 3;
+    constexpr int kEchovrPatchCount = 2;
     int patched = 0;
 
-    /* Patch 1: "pnsovr" -> "pnsrad" */
-    {
-        auto* p = reinterpret_cast<uint8_t*>(base_addr + STR_PNSOVR);
-        if (std::memcmp(p, "pnsovr", 6) == 0) {
-            DWORD err = 0;
-            if (ProcessMemcpy(p, "pnsrad\0", STR_SIZE, &err)) {
-                Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad patched \"pnsovr\" -> \"pnsrad\" rva=0x%x",
-                    (unsigned)STR_PNSOVR);
-                patched++;
-            } else {
-                Log(EchoVR::LogLevel::Warning,
-                    "[NEVR.PATCH] pnsrad PatchMemory FAILED for pnsovr->pnsrad rva=0x%x error=%lu",
-                    (unsigned)STR_PNSOVR, err);
-            }
-        } else if (std::memcmp(p, "pnsrad", 6) == 0) {
-            Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad pnsovr already \"pnsrad\"");
-        } else {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.PATCH] pnsrad unexpected bytes at pnsovr string rva=0x%x — NOT patched "
-                "(version drift?)", (unsigned)STR_PNSOVR);
-        }
-    }
-
-    /* Patch 2: "pnsdemo" -> "pnsrad" */
-    {
-        auto* p = reinterpret_cast<uint8_t*>(base_addr + STR_PNSDEMO);
-        if (std::memcmp(p, "pnsdemo", 7) == 0) {
-            DWORD err = 0;
-            if (ProcessMemcpy(p, "pnsrad\0", STR_SIZE, &err)) {
-                Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad patched \"pnsdemo\" -> \"pnsrad\" rva=0x%x",
-                    (unsigned)STR_PNSDEMO);
-                patched++;
-            } else {
-                Log(EchoVR::LogLevel::Warning,
-                    "[NEVR.PATCH] pnsrad PatchMemory FAILED for pnsdemo->pnsrad rva=0x%x error=%lu",
-                    (unsigned)STR_PNSDEMO, err);
-            }
-        } else if (std::memcmp(p, "pnsrad", 6) == 0) {
-            Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad pnsdemo already \"pnsrad\"");
-        } else {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.PATCH] pnsrad unexpected bytes at pnsdemo string rva=0x%x — NOT patched "
-                "(version drift?)", (unsigned)STR_PNSDEMO);
-        }
+    /* Provider name: "pnsovr" and "pnsdemo" load "pnsrad" (provider_name_redirect.h). A server that cannot
+     * install it would load the stock module, so ServerFatal refuses to start it; a client logs the Warning
+     * and continues. */
+    if (nevr_provider_name_redirect::Install(base_addr)) {
+        patched++;
+    } else {
+        ServerFatal("pnsrad provider name redirect (CNSProvider::LoadByName) not installed: pnsovr and pnsdemo "
+                    "would load the stock social module");
     }
 
     /* Patch 3: OVR platform branch — NOP the 6-byte JNE */

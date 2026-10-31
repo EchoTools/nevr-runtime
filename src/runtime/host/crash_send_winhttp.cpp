@@ -148,7 +148,7 @@ nevr_crash_send::PostResult WinHttpPost(void* context, const std::string& url, c
     return result;
   }
 
-  Handle session(api, api->open(L"nEVR-host", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
+  Handle session(api, api->open(L"nevr-host", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
                                 WINHTTP_NO_PROXY_BYPASS, 0));
   if (session.value == nullptr) {
     result.errorCode = static_cast<long>(GetLastError());

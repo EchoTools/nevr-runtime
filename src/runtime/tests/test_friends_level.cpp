@@ -215,6 +215,44 @@ TEST(FriendsLevel, ScriptsGiveEachRowAndTheSwitchItsOwnButtonInstance) {
   EXPECT_FALSE(fl::EditScripts(out, &out, &why));  // the panel has six button instances now, not SEASON INFO's one
 }
 
+// The main menu's transform table serves both edits (#1679 and the panel): on the pinned table the four buttons stand
+// play, join, create, tutorial from the left and the panel is placed; on a table that is not the pinned one the buttons keep
+// their stock slots and the panel is still placed. PlaceButtons compares the digest with the pin, so a test passes both.
+TEST(FriendsLevel, TheTransformTableGetsTheButtonsPlacedAndThePanelsEdit) {
+  const char* dir = std::getenv("NEVR_MNU_MASTER_DIR");
+  if (dir == nullptr || *dir == '\0') GTEST_SKIP() << "NEVR_MNU_MASTER_DIR not set";
+  std::ifstream file(std::string(dir) + "/CTransformCRWin10/mnu_master.bin", std::ios::binary);
+  const Bytes table((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  ASSERT_FALSE(table.empty());
+  const std::vector<std::uint64_t> order = nevr_menu_cards::ButtonOrder();
+  const auto panelPosition = [](const Bytes& b) {
+    std::size_t entry = 0, count = 0;
+    EXPECT_TRUE(fl::detail::Flat(b, &entry, &count));
+    const auto at = fl::detail::EntriesOf(b, entry, count, fl::kPanel);
+    return at.empty() ? F3{} : Get<F3>(b, at[0] + 0x30);
+  };
+  Bytes out;
+  std::string why;
+  bool placed = false;
+  ASSERT_TRUE(fl::EditTransformsWithButtons(table, "pinned", "pinned", &out, &why, &placed)) << why;
+  EXPECT_TRUE(placed);
+  std::vector<nevr_menu_slots::Placement> seen;
+  ASSERT_EQ(nevr_menu_slots::Read(out.data(), out.size(), order.data(), order.size(), &seen), nevr_menu_slots::Status::Ok);
+  ASSERT_EQ(seen.size(), 4u);
+  for (std::size_t i = 0; i < seen.size(); ++i) EXPECT_EQ(seen[i].slot, static_cast<unsigned>(i + 1)) << i;
+  EXPECT_EQ(panelPosition(out), fl::kPanelPosition);
+
+  Bytes stockOrder;
+  ASSERT_TRUE(fl::EditTransformsWithButtons(table, "another table", "pinned", &stockOrder, &why, &placed)) << why;
+  EXPECT_FALSE(placed);
+  std::vector<nevr_menu_slots::Placement> before, after;
+  ASSERT_EQ(nevr_menu_slots::Read(table.data(), table.size(), order.data(), order.size(), &before), nevr_menu_slots::Status::Ok);
+  ASSERT_EQ(nevr_menu_slots::Read(stockOrder.data(), stockOrder.size(), order.data(), order.size(), &after),
+            nevr_menu_slots::Status::Ok);
+  for (std::size_t i = 0; i < before.size() && i < after.size(); ++i) EXPECT_EQ(after[i].slot, before[i].slot) << i;
+  EXPECT_EQ(panelPosition(stockOrder), fl::kPanelPosition);
+}
+
 // The stock level: every edit applies and its result is the size it should be.
 TEST(FriendsLevel, EveryEditAppliesToTheStockLevel) {
   const char* dir = std::getenv("NEVR_MNU_MASTER_DIR");

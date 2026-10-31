@@ -1,0 +1,1 @@
+The main menu's SEASON INFO card is now a FRIENDS list on PC and Quest, with each friend's picture, status, profile and stats, and party invites.

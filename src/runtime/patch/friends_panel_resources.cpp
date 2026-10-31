@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "core/logging.h"
+#include "runtime/patch/asset_cache.h"
 #include "runtime/patch/friends_canvas.h"
 #include "runtime/patch/friends_level.h"
 #include "runtime/patch/friends_package.h"
@@ -97,6 +98,17 @@ bool BuildProfile(const Bytes& in, Bytes* out, std::string* why) {
   return true;
 }
 
+// The main menu's transform table, with the four buttons placed first (#1679): the panel's transform is registered at
+// boot, before the main-menu cards (boot.cpp), so it is the one that serves this table, and it serves both edits.
+bool EditTransforms(const Bytes& in, Bytes* out, std::string* why) {
+  bool placed = false;
+  const bool ok = fl::EditTransformsWithButtons(in, nevr_asset_cache::Sha256Hex(in.data(), in.size()),
+                                                nevr_menu_cards::kStockTransformSha256, out, why, &placed);
+  Log(EchoVR::LogLevel::Info, "[NEVR.MENU] friends panel transforms: main-menu buttons %s",
+      placed ? "placed (play, join, create, tutorial)" : "left in the stock order (the table is not the pinned stock one)");
+  return ok;
+}
+
 constexpr std::uint64_t kCanvasType = EchoVR::CSymbol64Hash("CUICanvasResource");
 static_assert(EchoVR::CSymbol64Hash("Win10", kCanvasType) == 0x59A9BD6E4525ECC4ULL, "the canvases' on-disk type");
 
@@ -104,7 +116,7 @@ std::array<Edit, 7> g_edits = {{
     {"friends panel canvas", kCanvasType, fc::kSeasonCanvas, &BuildPanel, {}, {}, false},
     {"friend profile canvas", kCanvasType, fc::kPopupCanvas, &BuildProfile, {}, {}, false},
     {"friends panel pointer meshes", fl::kPointerMeshType, fl::kLevel, &fl::EditPointerMeshes, {}, {}, false},
-    {"friends panel transforms", fl::kTransformType, fl::kLevel, &fl::EditTransforms, {}, {}, false},
+    {"friends panel transforms", fl::kTransformType, fl::kLevel, &EditTransforms, {}, {}, false},
     {"friends panel actor data", fl::kActorDataType, fl::kLevel, &fl::EditActorData, {}, {}, false},
     {"friends panel page elements", fl::kPageElementType, fl::kLevel, &fl::EditPageElements, {}, {}, false},
     {"friends panel scripts", fl::kScriptType, fl::kLevel, &fl::EditScripts, {}, {}, false},

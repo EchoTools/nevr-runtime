@@ -239,4 +239,6 @@ void OfferResolved(const std::vector<nevr_invite::Answer>& answers) {
   }
 }
 
+void OfferMatch(std::string_view match_id) { TheJoiner().Offer(match_id, nevr_invite_service::Active()); }
+
 }  // namespace nevr_invite_join_game

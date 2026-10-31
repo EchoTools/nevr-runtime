@@ -31,7 +31,7 @@ inline bool ModulePackageName(char* out, std::size_t n) {
   cmd[r] = 0;
   if (char* colon = std::strchr(cmd, ':')) *colon = 0;
   if (std::strchr(cmd, '.') == nullptr || std::strchr(cmd, '/') != nullptr || std::strlen(cmd) > 160 || std::strlen(cmd) >= n) return false;
-  std::snprintf(out, n, "%s", cmd);
+  std::snprintf(out, n, "%.160s", cmd);  // the check above admits at most 160 characters; the precision lets the compiler see it
   return true;
 }
 

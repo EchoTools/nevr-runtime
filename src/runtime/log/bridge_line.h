@@ -1,10 +1,10 @@
 #pragma once
 
 // #1294: the game reports its own connection to the local bridge at the default level (for example
-// `[EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:<port>...`). The bridge is nEVR's
-// own loopback listener, so these lines carry no operator signal at the default level. The built-in
-// filter demotes a game line that names the loopback address to Debug; it does not touch a line that
-// names any other address, and it never touches an nEVR line (N77).
+// `[EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:<port>...`). The bridge is this
+// runtime's own loopback listener, so these lines carry no operator signal at the default level.
+// The built-in filter demotes a game line that names the loopback address to Debug; it does not touch
+// a line that names any other address, and it never touches a line the runtime writes (N77).
 
 #include <cstddef>
 #include <cstring>

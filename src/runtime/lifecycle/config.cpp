@@ -106,6 +106,11 @@ VOID LoadEarlyConfig() {
 // alone, as the legacy patch did. The outcome is recorded for boot.cpp's log line (ServerStepWrite).
 static nevr_server_timestep::StepRecord g_stepRecord;
 
+// #1785: whether network.tick_rate_hz held a valid value in config.yaml. An explicit rate applies to every game type;
+// without one the rate follows the session's game type (ApplySessionTimestep). Written once at config load, read from
+// the session-create callback.
+static std::atomic<bool> g_tickRateConfigured{false};
+
 nevr_server_timestep::StepWrite ServerStepWrite() { return g_stepRecord.Load(); }
 
 static void ApplyServerTimestep() {
@@ -115,6 +120,8 @@ static void ApplyServerTimestep() {
     rateText = NevrCfgGetFlat("nevr_tick_rate_hz");
     std::string rateProblem;
     g_headlessTickRateHz = nevr_server_timestep::ParseTickRateHz(rateText, &rateProblem);
+    g_tickRateConfigured.store(rateText != nullptr && rateText[0] != '\0' && rateProblem.empty(),
+                               std::memory_order_relaxed);
     if (!rateProblem.empty()) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.PATCH] network.tick_rate_hz=%s is %s (allowed 0 or %u..%u); using %u Hz", rateText,
@@ -167,6 +174,41 @@ static void ApplyServerTimestep() {
     case StepOutcome::kNotServer:
     case StepOutcome::kNotApplied:
       break;  // a client: nothing was written, nothing to say
+  }
+}
+
+// #1785: a session's step by its game type. The step slot is a plain field of the clock the game runs on, so it is
+// written again when a session opens: Combat gets the 30 a second its physics was tuned for (the game's damping is
+// per step, not per second), Arena and every other type the configured/default rate, and an explicit
+// network.tick_rate_hz wins for all. The same plan, bounds checks and read-back as the boot write (ApplyStep, N31).
+// Called from the session-create callbacks (server/gameserver_callbacks.cpp) with the type they stored.
+void ApplySessionTimestep(const std::string& gameType, const std::string& sessionId) {
+  using nevr_server_timestep::StepOutcome;
+  try {
+    const nevr_server_timestep::SessionRate rate = nevr_server_timestep::TickRateForGameType(
+        gameType, g_headlessTickRateHz, g_tickRateConfigured.load(std::memory_order_relaxed));
+    CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
+    const bool readable = nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan);
+    uint64_t* stepField =
+        nevr_server_timestep::FieldAt(readable ? state : nullptr, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
+    const nevr_server_timestep::StepWrite w =
+        nevr_server_timestep::ApplyStep(g_isServer != FALSE, rate.hz, stepField);
+    if (w.outcome == StepOutcome::kNotServer) return;
+    const bool failed = nevr_server_timestep::StepFailed(w.outcome);
+    // N122: a mode decision logs its outcome at Info even when the step was already that value.
+    Log(failed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] session tick rate game_type=%s session=%s rate_hz=%u source=%s step_us=%u was_us=%llu "
+        "outcome=%s%s",
+        gameType.c_str(), sessionId.c_str(), static_cast<unsigned>(rate.hz),
+        nevr_server_timestep::RateSourceName(rate.source), static_cast<unsigned>(w.stepUs),
+        static_cast<unsigned long long>(w.was), nevr_server_timestep::OutcomeName(w.outcome),
+        failed ? " (the session runs on the step the server had before it)" : "");
+  } catch (const std::bad_alloc&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (out of memory)",
+        gameType.c_str());
+  } catch (const std::exception&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (std::exception)",
+        gameType.c_str());
   }
 }
 
@@ -361,61 +403,6 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   }
 
   ApplyServerTimestep();
-  return result;
-}
-
-/// Public Arena round length on a server with no arena.round_time in config.yaml: 8:00 (#982).
-constexpr FLOAT kArenaPublicRoundTimeDefault = 480.0f;
-
-/// Logs the round_time decision when it changes (applied, or the reason it was not), so one server run shows the
-/// order of the session's game type and the reads (#982). Unchanged decisions are not logged again.
-void LogRoundTimeDecision(const nevr_arena_round_time::RoundTimeDecision& decision,
-                          const std::optional<std::string>& gameType, const CHAR* path, FLOAT gameDefault) {
-  static std::mutex s_lastMutex;
-  static std::string s_lastKey;
-  const std::string key = std::string(decision.reason) + "|" + gameType.value_or("");
-  std::lock_guard<std::mutex> lock(s_lastMutex);
-  if (key == s_lastKey) return;
-  s_lastKey = key;
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] arena_round_time default=%.0fs applied=%d reason=%s game_type=%s path=%s game_default=%.0fs",
-      kArenaPublicRoundTimeDefault, decision.applied ? 1 : 0, std::string(decision.reason).c_str(),
-      gameType ? gameType->c_str() : "none", path, gameDefault);
-}
-
-/// <summary>
-/// Hook for CJson_GetFloat to override arena rule config values at load time.
-/// Matches specific JSON path suffixes and returns overridden values from config.json.
-/// </summary>
-FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 required) {
-  FLOAT result = EchoVR::CJsonGetFloat(root, path, defaultValue, required);
-
-  if (path != NULL) {
-    // point_score_celebration_time (but not the _private variant)
-    if (g_arenaCelebrationTime > 0.0f && strstr(path, "point_score_celebration_time") != NULL &&
-        strstr(path, "_private") == NULL) {
-      return g_arenaCelebrationTime;
-    }
-    // round_time (but not round_time_private). A server without arena.round_time starts a public Arena
-    // session at 8:00 (#982); the _private paths, every other game type and a read before any session keep the
-    // game's value.
-    if (strstr(path, "round_time") != NULL && strstr(path, "_private") == NULL &&
-        strstr(path, "round_timer") == NULL && strstr(path, "sudden_death_round_time") == NULL) {
-      if (g_arenaRoundTime > 0.0f) return g_arenaRoundTime;
-      if (g_isServer) {
-        const std::optional<std::string> gameType = nevr_arena_round_time::SessionGameType();
-        const auto decision = nevr_arena_round_time::DecideRoundTimeDefault(gameType);
-        LogRoundTimeDecision(decision, gameType, path, result);
-        if (decision.applied) return kArenaPublicRoundTimeDefault;
-      }
-    }
-    // mercy_win_point_spread (but not the _private variant)
-    if (g_arenaMercyScore > 0.0f && strstr(path, "mercy_win_point_spread") != NULL &&
-        strstr(path, "_private") == NULL) {
-      return g_arenaMercyScore;
-    }
-  }
-
   return result;
 }
 

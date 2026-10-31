@@ -525,8 +525,14 @@ TEST(HostStopNotice, EveryStopWritesOneStopLineToStandardErrorHoweverOftenTheDet
     SCOPED_TRACE(line);
     RunStopWith(line);
     ASSERT_FALSE(g_stderr.empty());
-    EXPECT_EQ(g_stderr.find('\n'), g_stderr.size() - 1) << "one line, three detour runs: " << g_stderr;
-    const nlohmann::json record = nlohmann::json::parse(g_stderr);
+    // The JSON line (#1252), then the one plain notice line (#1533): two lines, three detour runs.
+    const std::size_t json_end = g_stderr.find('\n');
+    ASSERT_NE(json_end, std::string::npos) << g_stderr;
+    const std::string notice = g_stderr.substr(json_end + 1);
+    EXPECT_EQ(notice.rfind("nEVR couldn't start: ", 0), 0u) << g_stderr;
+    EXPECT_EQ(notice.find('\n'), notice.size() - 1)
+        << "one stop line and one notice, three detour runs: " << g_stderr;
+    const nlohmann::json record = nlohmann::json::parse(g_stderr.substr(0, json_end));
     EXPECT_EQ(record.at("tag"), "NEVR.STOP");
     EXPECT_EQ(record.at("event"), "stop");
     EXPECT_EQ(record.at("stopped"), true);

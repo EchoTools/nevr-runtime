@@ -54,7 +54,7 @@ add_library(nevr_quest_friends STATIC
 set_source_files_properties(../friends/friends_hooks_quest.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_friends PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_include_directories(nevr_quest_friends PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
-target_link_libraries(nevr_quest_friends PUBLIC nevr_quest_got_hook nevr_quest_token_auth nevr_quest_social nevr::plugin_sdk
+target_link_libraries(nevr_quest_friends PUBLIC nevr_quest_got_hook nevr_quest_token_auth nevr_quest_social nevr_quest_invite_join nevr::plugin_sdk
   PRIVATE unofficial-astcenc::astcenc zstd::libzstd ZLIB::ZLIB nlohmann_json::nlohmann_json)
 target_compile_options(nevr_quest_friends PRIVATE -Wall -Wextra -Werror -fvisibility=hidden -fvisibility-inlines-hidden)
 

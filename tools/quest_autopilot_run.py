@@ -48,7 +48,10 @@ PACKAGE = "com.readyatdawn.r15"
 ACTIVITY = f"{PACKAGE}/com.oculus.gles3jni.MainActivity"
 FILES = f"/sdcard/Android/data/{PACKAGE}/files"
 CONFIG = f"{FILES}/config.yaml"
-SENTINEL_LOG = f"{FILES}/nevr-sentinel.log"
+# The runtime writes nevr-sentinel.log in the Android/media files folder; the Android/data one is read when an older
+# build left it there.
+MEDIA_FILES = f"/sdcard/Android/media/{PACKAGE}/files"
+SENTINEL_LOGS = (f"{MEDIA_FILES}/nevr-sentinel.log", f"{FILES}/nevr-sentinel.log")
 PLUGIN = "nevr_autopilot"
 PROX_CLOSE = "com.oculus.vrpowermanager.prox_close"
 PROX_RESTORE = "com.oculus.vrpowermanager.automation_disable"
@@ -326,7 +329,10 @@ def main(argv: list[str] | None = None) -> int:
     if stopped is not None:
         rec.write("run_end", result=stopped[0], reason=stopped[1])
         return stopped[2]
-    adb.run("pull", SENTINEL_LOG, str(run_dir / "nevr-sentinel.log"), check=False)
+    for remote in SENTINEL_LOGS:
+        adb.run("pull", remote, str(run_dir / "nevr-sentinel.log"), check=False)
+        if (run_dir / "nevr-sentinel.log").exists():
+            break
     code, reasons = verdict(seen)
     rec.write("run_end", result="pass" if code == 0 else "fail", reasons=reasons, outcome=seen["outcome"],
               steps_logged=seen["steps"], route_loaded=seen["route_loaded"], route_start=seen["route_start"],

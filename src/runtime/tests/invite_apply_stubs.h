@@ -15,6 +15,7 @@ struct Record {
   std::vector<nevr_ui_text::Request> posted;                // every text the applier posted, oldest first
   std::size_t join_offers = 0;                              // calls to nevr_invite_join_game::OfferResolved
   std::size_t offered_answers = 0;                          // answers handed to OfferResolved, all calls
+  std::vector<std::string> matches_offered;                 // every match handed to OfferMatch (the share page's JOIN), oldest first
   std::vector<std::string> logged;                          // every line the applier logged through Log()
 };
 

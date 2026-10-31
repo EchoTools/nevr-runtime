@@ -1,10 +1,13 @@
 #include "quest/data/data_step.h"
 
 #include <dirent.h>
+#include <sys/stat.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 
+#include "quest/data/package_pins.h"
 #include "quest/data/sha256.h"
 #include "quest/data/staging.h"
 
@@ -93,6 +96,146 @@ DataVersion FindDataVersion(const StepConfig& config, const std::string& root) {
   std::string folders;
   for (std::size_t i = 0; i < names.size() && i < 4; ++i) folders += (i == 0 ? "" : ",") + names[i];
   return {folders, "none"};
+}
+
+// ---- the package files of a pinned data set (package_pins.h) ----
+
+constexpr std::size_t kHashChunkBytes = 64u * 1024u;
+
+bool FileSizeReal(const std::string& path, std::uint64_t& bytes) {
+  struct stat st;
+  if (::stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) return false;
+  bytes = static_cast<std::uint64_t>(st.st_size);
+  return true;
+}
+
+// The sha256 of a whole file, read in chunks: a package is hundreds of MiB and never fits a string.
+bool HashFileReal(const std::string& path, std::string& sha256_hex) {
+  std::FILE* f = std::fopen(path.c_str(), "rb");
+  if (f == nullptr) return false;
+  Sha256 sha;
+  std::string chunk(kHashChunkBytes, '\0');
+  bool ok = true;
+  for (;;) {
+    const std::size_t n = std::fread(&chunk[0], 1, chunk.size(), f);
+    if (n > 0) sha.Update(chunk.data(), n);
+    if (n < chunk.size()) {
+      ok = std::ferror(f) == 0;
+      break;
+    }
+  }
+  std::fclose(f);
+  if (!ok) return false;
+  sha256_hex = sha.Hex();
+  return true;
+}
+
+// `bytes` as the whole content of `path`: written to `<path>.tmp`, then renamed over it.
+bool WriteFileReal(const std::string& path, const std::string& bytes) {
+  const std::string tmp = path + ".tmp";
+  std::FILE* f = std::fopen(tmp.c_str(), "wb");
+  if (f == nullptr) return false;
+  const bool wrote = std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+  const bool closed = std::fclose(f) == 0;
+  if (!wrote || !closed || std::rename(tmp.c_str(), path.c_str()) != 0) {
+    std::remove(tmp.c_str());
+    return false;
+  }
+  return true;
+}
+
+// The file whose whole content says the pack's package was hashed on this build: `<manifest sha256> <build id>\n`.
+constexpr const char* kPackagesMarkerName = "nevr-data-packages.verified";
+
+void EmitInfo(const StepConfig& config, const Event& e) {
+  if (config.on_step) config.on_step(e);
+}
+
+void EmitWarn(const StepConfig& config, const Event& e) {
+  if (config.on_step_warn) config.on_step_warn(e);
+  else if (config.on_step) config.on_step(e);
+}
+
+// Checks the package files of a data set the manifest of which is pinned (package_pins.h) and logs one `data_packages`
+// event: the first package that fails (Warning, with what the step does next), or the verified result. The data is used
+// whatever the result: a replacement fetch would hand a player of the pack the stock data and not bring the pack back.
+// Sizes are checked on every launch; the pack's added package is hashed only when every size matched and this build has
+// not hashed it yet (the marker file). A manifest outside the table is not checked.
+void CheckPackages(const StepConfig& config, const std::string& root, const DataVersion& held) {
+  const PinnedDataSet* set = config.pinned_sets != nullptr
+                                 ? FindPinnedDataSet(held.manifest_sha256, config.pinned_sets, config.pinned_set_count)
+                                 : FindPinnedDataSet(held.manifest_sha256);
+  if (set == nullptr) {
+    EmitInfo(config, {"data_packages",
+                      {{"root", root},
+                       {"data_version", held.folder},
+                       {"manifest_sha256", held.manifest_sha256},
+                       {"outcome", "unpinned"}}});
+    return;
+  }
+  const std::string manifest_id = std::string(kManifestPath).substr(std::string(kManifestPath).rfind('/') + 1);
+  const std::string dir = root + "/_data/" + held.folder + "/rad15/android/" + kPackagesDir + "/";
+  auto fail = [&](const std::string& package, const char* outcome, std::uint64_t expected, const std::string& found) {
+    EmitWarn(config, {"data_packages",
+                      {{"root", root},
+                       {"data_version", held.folder},
+                       {"package", package},
+                       {"outcome", outcome},
+                       {"expected_bytes", std::to_string(expected)},
+                       {"found_bytes", found},
+                       {"consequence",
+                        "the game keeps running on the data that is there; the lobby may load in pieces until the "
+                        "pack is installed again"}}});
+  };
+  for (std::size_t i = 0; i < set->count; ++i) {
+    const PinnedPackage& pin = set->packages[i];
+    const std::string name = manifest_id + "_" + std::to_string(pin.index);
+    std::uint64_t found = 0;
+    const std::string path = dir + name;
+    const bool there = config.file_size ? config.file_size(path, found) : FileSizeReal(path, found);
+    if (!there) return fail(name, "missing", pin.bytes, "none");
+    if (found != pin.bytes) return fail(name, found < pin.bytes ? "short" : "oversize", pin.bytes, std::to_string(found));
+  }
+
+  // Every size matched. The pack's added package is hashed once per build; without a build id there is nothing to
+  // record the hash against, so it is not hashed.
+  const char* sha = "not_due";
+  if (!config.build_id.empty()) {
+    const std::string marker_path = root + "/" + kPackagesMarkerName;
+    const std::string marker = std::string(held.manifest_sha256) + " " + config.build_id + "\n";
+    std::string held_marker;
+    const bool read = config.read_file ? config.read_file(marker_path, held_marker) : ReadFileReal(marker_path, held_marker);
+    if (read && held_marker == marker) {
+      sha = "skipped";
+    } else {
+      for (std::size_t i = 0; i < set->count; ++i) {
+        const PinnedPackage& pin = set->packages[i];
+        if (!pin.hashed) continue;
+        const std::string name = manifest_id + "_" + std::to_string(pin.index);
+        std::string digest;
+        const std::string path = dir + name;
+        const bool hashed = config.hash_file ? config.hash_file(path, digest) : HashFileReal(path, digest);
+        if (!hashed) return fail(name, "unreadable", pin.bytes, std::to_string(pin.bytes));
+        if (digest != pin.sha256) return fail(name, "sha_mismatch", pin.bytes, std::to_string(pin.bytes));
+      }
+      sha = "checked";
+      const bool wrote = config.write_file ? config.write_file(marker_path, marker) : WriteFileReal(marker_path, marker);
+      if (!wrote) {
+        EmitWarn(config, {"data_packages_marker",
+                          {{"root", root},
+                           {"path", marker_path},
+                           {"result", "write_failed"},
+                           {"consequence", "the package digest is checked again on the next launch"}}});
+      }
+    }
+  }
+  EmitInfo(config, {"data_packages",
+                    {{"root", root},
+                     {"data_version", held.folder},
+                     {"manifest_sha256", held.manifest_sha256},
+                     {"outcome", "verified"},
+                     {"packages", std::to_string(set->count)},
+                     {"sha", sha}}});
 }
 
 }  // namespace
@@ -213,8 +356,9 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
   if (engine_root) decision.root = config.engine_root.c_str();
   result.action = decision.action;
   result.root = decision.root;
+  DataVersion held{"none", "none"};
+  if (config.on_step || decision.action == DataAction::kUse) held = FindDataVersion(config, decision.root);
   if (config.on_step) {
-    const DataVersion held = FindDataVersion(config, decision.root);
     config.on_step({"data_check",
                     {{"action", ActionName(decision.action)},
                      {"source", decision.source},
@@ -223,6 +367,7 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
                      {"manifest_sha256", held.manifest_sha256}}});
   }
   if (decision.action == DataAction::kUse) {
+    CheckPackages(config, decision.root, held);
     if (!config.allow_fetch) {
       result.outcome = StepOutcome::kUsed;
       return result;

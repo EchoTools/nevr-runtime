@@ -32,6 +32,7 @@
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
+#include "runtime/patch/loading_tips.h"
 #include "runtime/frame/frame_stats.h"
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/server_team_size_install.h"
@@ -585,8 +586,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       // (:75) the NEVR_MODULE_HOST_IS_NOOVR flag the modules read, which is the
       // behaviour -noovr exists to produce (the login platform code does not depend on it:
       // SelectPlatformCode follows the game's own No VR flag, bit 20, which -noovr does not set). The game's own
-      // -noovr-requires--spectatorstream assert is bypassed by
-      // PatchNoOvrRequiresSpectatorStream, inert unless the token is present.
+      // -noovr-requires--spectatorstream assert is bypassed by the argument-lookup hook
+      // (patch/noovr_arglookup.cpp), inert unless the token is present.
       g_noOvr = TRUE;
     }
   }
@@ -695,7 +696,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // Apply patches to force the game to load as a server.
   if (g_isServer) {
     PatchEnableServer();
-    PatchDisableLoadingTips();
+    // #1774: the loading-tip script nodes return at once on a server (patch/loading_tips.h).
+    nevr_loading_tips::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
     PatchDisableWwise();
     PatchLogServerProfile();
     // Issue #63: co-op AI bots stand still on community servers; log what gates them.

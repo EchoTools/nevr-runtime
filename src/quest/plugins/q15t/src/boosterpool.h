@@ -13,7 +13,7 @@
 // name, from every other caller, reaches the real function unchanged. The result is what the code-word row produces: the
 // booster allocation never sees the suffixed name.
 //
-// Option: Q15T_LEVELNAME (the same as levelname; the two are one feature and must be on together). Default OFF.
+// Option: Q15T_LEVELNAME (the same as levelname; the two are one feature and must be on together). Default ON; kill file levelname.off (combat_gates.h).
 #pragma once
 
 #include <cstdint>

@@ -14,9 +14,11 @@ proto_pin := "259a506a3e1b490ba3482e24e92ba4db"
 # base_dir is the main checkout, so every worktree under it hashes the same relative include paths.
 export CMAKE_C_COMPILER_LAUNCHER := env("NEVR_CCACHE", `command -v ccache 2>/dev/null || true`)
 export CMAKE_CXX_COMPILER_LAUNCHER := env("NEVR_CCACHE", `command -v ccache 2>/dev/null || true`)
-export CCACHE_CONFIGPATH := justfile_directory() / "tools/ccache.conf"
+# One config for every build, kept in the cache directory (tools/ccache_config.sh copies tools/ccache.conf there): a path inside a
+# worktree dies with the worktree, and a process that still carries it falls back to ccache's 5 GiB default (#1736).
 export CCACHE_BASEDIR := `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`
 export CCACHE_DIR := if path_exists("/mnt/games/cache/ccache") == "true" { "/mnt/games/cache/ccache" } else { env("HOME") / ".cache/ccache" }
+export CCACHE_CONFIGPATH := `tools/ccache_config.sh "$(if [ -d /mnt/games/cache/ccache ]; then echo /mnt/games/cache/ccache; else echo "$HOME/.cache/ccache"; fi)" 2>/dev/null || echo "$PWD/tools/ccache.conf"`
 
 # Show available recipes (default)
 default:
@@ -38,7 +40,7 @@ generate-symcache:
         --if-pin-changed
 
 # Configure CMake (fails early with the fix when a fresh worktree lacks its build inputs)
-configure: generate-symcache _vcpkg-mingw _proto-current _build-inputs
+configure: _build-guard generate-symcache _vcpkg-mingw _proto-current _build-inputs
     @unset VCPKG_ROOT && cmake --preset {{ preset }} > /dev/null 2>&1 || (unset VCPKG_ROOT && cmake --preset {{ preset }})
 
 # Regenerate gen/ when it is not the output for the pinned BSR commit (after vcpkg, whose protoc does the work)
@@ -107,6 +109,24 @@ install-train-guard-timer:
 remove-worktree *args:
     python3 -I tools/remove_worktree.py {{ args }}
 
+# The fixed build checkout (tools/build_checkout.py, #1736) is built only while `git status --porcelain` is empty; every other tree is
+# not checked. Builds that are cached come from that one clean directory (AGENTS.md, "Builds").
+_build-guard:
+    @python3 -I tools/build_checkout.py guard
+
+# Check REV out in the fixed build checkout (creating it the first time) and print where it is; refuses when it is not clean.
+# Build there with `cd $(just build-checkout-path) && just build-android`.
+build-checkout rev="origin/main":
+    python3 -I tools/build_checkout.py sync {{ rev }}
+
+# The path of the fixed build checkout ($NEVR_BUILD_CHECKOUT, else <work root>/build-checkout/nevr-runtime).
+build-checkout-path:
+    @python3 -I tools/build_checkout.py path
+
+# The compiler cache's statistics as the builds see it (the repo's config, not ccache's 5 GiB default that a bare `ccache -s` reads).
+ccache-stats:
+    ccache -s
+
 # Build all components
 build: configure
     @cmake --build --preset {{ preset }}
@@ -140,14 +160,18 @@ clean:
 # --- Android / Quest (arm64-v8a) ---
 # Self-contained NDK sub-project at src/quest (root CMake is MinGW-only).
 # NDK: r26d by default; override with ANDROID_NDK_HOME.
-# The Quest configure lines clear the ccache launcher: that build embeds the worktree path in its debug info (no -ffile-prefix-map),
-# so an object cached from one worktree would put that worktree's path into another's .so.
+# The Quest configure lines keep the ccache launcher only in the fixed, clean build checkout (tools/build_checkout.py, #1736): there
+# the directory is the same on every build, so a cached object is the one a fresh compile would write. Anywhere else the launcher is
+# cleared, so no worktree's directory is put into another's .so.
 
 ndk := env("ANDROID_NDK_HOME", "/home/andrew/src/android-ndk-r26d")
 
 # Configure the Android arm64-v8a build (NDK r26d, API 26, static libc++)
-configure-android:
-    cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
+configure-android: _build-guard
+    #!/usr/bin/env bash
+    set -euo pipefail
+    launcher=$(python3 -I tools/build_checkout.py quest-launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")
+    cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
 
 # Build the Android arm64-v8a crash-reporter .so
 # Job count: CMAKE_BUILD_PARALLEL_LEVEL, else 4 (a bare -j would use every core and override the variable).
@@ -197,6 +221,14 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
     rm -f "$out/libovrplatformloader.so"
     echo "Renamed original -> $out/libovrplatformloader_orig.so (soname patched)"
     readelf -d "$out/libovrplatformloader_orig.so" | grep -i soname
+
+# The base of a reference-build APK (#1737): copies the reference APK `apk` to `out` with its package renamed from com.readyatdawn.afk
+# to com.readyatdawn.r15 (the manifest's UTF-16 string, 5 strings in libr15.so, 2 in libassetpatch.so; counts asserted, META-INF dropped),
+# then `just android-repack-apk <out>` repacks it. The output also carries the launcher label `label` (default "Echo VR"; the reference build
+# reads "Echo Combat (port)"), set in place in the manifest by tools/quest_apk_label.py through the rename tool's --label, so a `label` longer
+# than the reference's is a refusal. tools/quest_apk_rename_package.py says what it refuses; it logs one JSON line.
+quest-reference-base apk out label="Echo VR":
+    python3 -I tools/quest_apk_rename_package.py rename --apk "{{ apk }}" --out "{{ out }}" --label "{{ label }}"
 
 # Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
 # forwarding to the renamed original. Produces a zipaligned APK, signed with the Quest key in pass, and
@@ -342,6 +374,25 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     "$patcher" --stock "$work/orig/lib/arm64-v8a/libr15.so" --out "$work/stage/lib/arm64-v8a/libr15.so" \
         --report "$work/libr15-patch-report.json" ${extra[@]+"${extra[@]}"}
     [ -s "$work/stage/lib/arm64-v8a/libr15.so" ] || { echo "the libr15 patcher wrote no libr15.so: $patcher" >&2; exit 1; }
+    # 3b'. libvrapi.so: when the source APK's is the reference runtime (it carries the md5 list its modules gate on; the store's own
+    # library carries none and is left as it is), the list's stock entry is replaced by the md5 of the libr15.so just staged, so
+    # the modules accept it (tools/quest_runtime_pin.py). The md5 is computed from the staged file here, never stored: any change
+    # to the libr15 bytes changes it. The result is staged STORED, and verify-signed below recomputes it from the signed libr15.so.
+    apk_entries="$(unzip -Z1 "$apk")"
+    if grep -qxF 'lib/arm64-v8a/libvrapi.so' <<<"$apk_entries"; then
+        unzip -o -q "$apk" lib/arm64-v8a/libvrapi.so -d "$work/orig"
+        pin_status=0
+        python3 -I tools/quest_runtime_pin.py detect --libvrapi "$work/orig/lib/arm64-v8a/libvrapi.so" || pin_status=$?
+        case "$pin_status" in
+            0)
+                python3 -I tools/quest_runtime_pin.py pin --libvrapi "$work/orig/lib/arm64-v8a/libvrapi.so" \
+                    --libr15 "$work/stage/lib/arm64-v8a/libr15.so" --out "$work/stage/lib/arm64-v8a/libvrapi.so"
+                stage_libs+=(lib/arm64-v8a/libvrapi.so)
+                ;;
+            3) echo "android-repack-apk: the APK's libvrapi.so carries no runtime md5 list: left as it is" ;;
+            *) echo "android-repack-apk: quest_runtime_pin.py detect failed ($pin_status) on the APK's libvrapi.so" >&2; exit 1 ;;
+        esac
+    fi
     for p in ${plugins[@]+"${plugins[@]}"}; do
         cp "$p" "$work/stage/lib/arm64-v8a/$(basename "$p")"
         stage_libs+=("lib/arm64-v8a/$(basename "$p")")
@@ -403,7 +454,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo ""
     # Every library of the store APK (the loader aside, which the shim replaces) is in the SIGNED apk with its bytes, libr15.so
     # being the patcher's output for the store's (the tool runs again here, on its own copy; its three digests are printed),
-    # and every staged library is there as staged.
+    # a reference runtime's libvrapi.so being the pin tool's output for the signed libr15.so, and every staged library is there as staged.
     python3 -I tools/quest_repack_libs.py verify-signed --source "$apk" --signed "$signed" --stage "$work/stage" \
         --patcher "$patcher" --scratch "$work" ${extra[@]+"${extra[@]}"}
     done_ok=1
@@ -488,10 +539,11 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
 
 # The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the store
 # APK. Private: package-dev only (a release packages CI's loader, release-quest-apk).
-_quest-apk store_apk:
+_quest-apk store_apk: _build-guard
     #!/usr/bin/env bash
     set -euo pipefail
-    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
+    launcher=$(python3 -I tools/build_checkout.py quest-launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")
+    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
@@ -524,7 +576,7 @@ build-quest-q15t: configure-android
         tools/check_quest_static_init.sh --plugin "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" "$out/$lib"
         grep -qaF "$id" "$out/$lib" || { echo "build-quest-q15t: $lib does not name libr15 build id $id" >&2; exit 1; }
     done
-    grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 build_id=$id" "$out/libq15t.so" \
+    grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 hz_level=1 build_id=$id" "$out/libq15t.so" \
         || { echo "build-quest-q15t: libq15t.so does not carry the shipped defaults (q15t-config marker)" >&2; exit 1; }
     (cd "$out" && sha256sum libq15t.so libq15t_early.so)
 
@@ -751,7 +803,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_party_follow_dedup --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook --target test_server_bots
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_early_quit_feature_flags --target test_lobby_full_backoff --target test_party_follow_dedup --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_log_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook --target test_server_bots --target test_deadlock_monitor test_arena_rules_hook test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -926,6 +978,12 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
+    bin="build/{{ preset }}/bin/test_early_quit_feature_flags.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_lobby_full_backoff.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -987,7 +1045,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_crash_send test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook test_server_team_size test_server_bots; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_crash_send test_log_send test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook test_server_team_size test_server_bots test_deadlock_monitor test_arena_rules_hook test_server_bots test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1680,6 +1738,13 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/login_title_hook_test" -ldl
     timeout 120 "$out/login_title_hook_test"
+    # The login_host fallback (#1737 C7): the pure rules and the TString handler's fallback step, driven through the
+    # thunk entry with fakes, built as the sentinel builds the thunk unit (no exceptions).
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_fallback_test.cpp \
+        src/quest/redirect/tstring_thunks.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/login_fallback_test" -ldl
+    timeout 60 "$out/login_fallback_test"
     # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
     # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -c \
@@ -1699,6 +1764,9 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/obb_skip_hook_test" -ldl
     timeout 120 "$out/obb_skip_hook_test"
+    # The data-path rewrite of the pinned service-only libr15 (#1737): afk prefix to the running package, exact segment only.
+    "${cxx[@]}" -fno-exceptions src/quest/tests/path_rewrite_test.cpp -o "$out/path_rewrite_test"
+    timeout 60 "$out/path_rewrite_test"
     # The process ends when the game's android_main returns (#621): the real handler through the thunk entry,
     # and a real process ended under a writer that saves the way the Quest code saves.
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/process_end_fixture_provider.cpp \
@@ -1759,6 +1827,14 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/quit_hook_test" -ldl
     timeout 120 "$out/quit_hook_test"
+    # libr15's array of free GPU ranges has no bound check (#1759): the real handler through the thunk entry against a model of
+    # CGRawInterfaceVK::Free laid out as the game's (512 entries, the count after the last), the pinned words refused when one
+    # differs, and the fill and the leaks in the log.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/vk_free_guard_test.cpp \
+        src/quest/sentinel/vk_free_guard.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/vk_free_guard_test" -ldl
+    timeout 120 "$out/vk_free_guard_test"
     # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
     # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone).
     # The handler includes the build-tree header generated/nevr_build_info.h; a stub stands in for it here.
@@ -1776,6 +1852,10 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/texture_quality_hook_test" -ldl
     timeout 120 "$out/texture_quality_hook_test"
+    # The reference libr15's eye-size route, pure half (#1737 C4): the RefreshRTSize body classifier, the reference start index's
+    # parse, the index-to-level map and the float truncation. No game, no hook.
+    "${cxx[@]}" -fno-exceptions src/quest/tests/refresh_eye_size_test.cpp -o "$out/refresh_eye_size_test"
+    timeout 120 "$out/refresh_eye_size_test"
     # The Texture Resolution control (#1012), pure half: the two settings documents rewritten in memory, the saved value read back,
     # the level <-> menu index mapping. Built with exceptions, like quest_config.cpp; no game header.
     "${cxx[@]}" -isystem "$out/attach_json_inc" src/quest/tests/texture_menu_test.cpp src/quest/sentinel/texture_menu.cpp \
@@ -1841,7 +1921,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # The Quest join (#966 S4, ADR 0017): the staging, the route and repeat gates, and the begin order, against a fake game block at
     # the Quest offsets (kQuestLayout). The service's two symbols are stubbed inside the test. Built without exceptions.
     "${cxx[@]}" -fno-exceptions -pthread -isystem "$out/attach_json_inc" src/quest/tests/invite_join_quest_test.cpp \
-        src/quest/invite/join_game_quest.cpp src/quest/invite/frame_dispatch.cpp src/quest/data/sha256.cpp \
+        src/quest/invite/join_game_quest.cpp src/quest/invite/ui_text_quest.cpp src/quest/invite/frame_dispatch.cpp src/quest/data/sha256.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]:0:2}" -o "$out/invite_join_quest_test" -ldl
     timeout 120 "$out/invite_join_quest_test"
@@ -2030,8 +2110,11 @@ test-quest-patcher json_include="": (quest-patcher json_include)
 # `signed_libr15` (docs/adr/0021 test 5): the lib/arm64-v8a/libr15.so extracted from the SIGNED APK of a repack; with it
 # SignedApkLibr15IsThePatchersOutput requires that file to equal the tool's output for the stock file byte for byte and to
 # carry the patched build ID. Without it that test is not run and the run says so by name.
+# `reference_libr15s` (#1737, row C8): the reference build's own patched libr15.so files, space-separated; with them
+# ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots patches each and requires its state words to stay clear of the
+# slot area. Without them that test is not run and the run says so by name.
 # Fail-close, including when the file is absent.
-test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patcher json_include)
+test-quest-patcher-pinned libr15 json_include="" signed_libr15="" reference_libr15s="": (quest-patcher json_include)
     #!/usr/bin/env bash
     set -euo pipefail
     libr15="{{ libr15 }}"; signed_libr15="{{ signed_libr15 }}"
@@ -2039,6 +2122,11 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patche
     [ -z "$signed_libr15" ] || [ -f "$signed_libr15" ] || { echo "test-quest-patcher-pinned: signed libr15.so not found: $signed_libr15" >&2; exit 1; }
     signed_arg=()
     if [ -n "$signed_libr15" ]; then signed_arg=("--signed-libr15=$signed_libr15"); fi
+    ref_arg=()
+    for f in {{ reference_libr15s }}; do
+        [ -f "$f" ] || { echo "test-quest-patcher-pinned: reference libr15.so not found: $f" >&2; exit 1; }
+        ref_arg+=("--reference-libr15=$f")
+    done
     out="build/quest-patcher"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $libr15" | sha256sum -c -
     scratch="$out/pinned-scratch"
@@ -2047,10 +2135,13 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patche
     g++ -std=c++17 -O1 -Wall -Wextra -Werror -Isrc -Isdk/include -pthread \
         src/quest/tests/libr15_patcher_pinned_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
         -o "$out/libr15_patcher_pinned_test"
-    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} | tee "$scratch/run.log"
+    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} ${ref_arg[@]+"${ref_arg[@]}"} | tee "$scratch/run.log"
     # With a signed file the test must have run and passed: a run that dropped it (SKIP) is not a pass of test 5.
     if [ -n "$signed_libr15" ]; then
         grep -qx 'PASS SignedApkLibr15IsThePatchersOutput' "$scratch/run.log" || { echo "test-quest-patcher-pinned: SignedApkLibr15IsThePatchersOutput did not run and pass" >&2; exit 1; }
+    fi
+    if [ -n "{{ reference_libr15s }}" ]; then
+        grep -qx 'PASS ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots' "$scratch/run.log" || { echo "test-quest-patcher-pinned: the reference-file test did not run and pass" >&2; exit 1; }
     fi
     echo "test-quest-patcher-pinned: the tool's output on the pinned libr15 is as the table says"
 

@@ -16,6 +16,7 @@
 #include "credits_text.h"
 #include "hook_log.h"
 #include "hook_report.h"
+#include "path_rewrite_hook.h"
 #include "sentinel.h"
 #include "sentinel_log.h"
 #include "splash_skip_hook.h"
@@ -473,6 +474,11 @@ class ProductionSteps final : public Steps {
   bool AttachLibR15() override {
     const AttachStepOutcome outcome = RunAttachStep(BuildAttachOptions());
     detail_ = outcome.detail;
+    // The pinned service-only file names its data directory by the afk package (#1737): its file calls are pointed at the
+    // running package's media directory. Only on that file; logs its own outcome.
+    if (std::strcmp(outcome.detail, libr15_patch::kReasonPinnedServiceOnly) == 0) {
+      nevr_quest::path_rewrite::InstallForServiceOnly();
+    }
     return outcome.verified;
   }
 
@@ -574,8 +580,8 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
-  bool InstallResourceRequestLog(bool countersRegistered) override {
-    const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered);
+  bool InstallResourceRequestLog(bool countersRegistered, bool logLines) override {
+    const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered, logLines);
     detail_ = ok ? "ok" : "got_hook_refused";
     return ok;
   }

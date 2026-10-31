@@ -156,7 +156,8 @@ using LibR15SetDelimitedErrorMessageThunk =
 // 0x37623e0 and the path buffer at 0x37623f0, copies the result into gOBBPath (0x3762470), logs
 // "OBB mounted at '%s'" and sets the flag byte. A NULL path zero-fills gOBBPath and logs the same line.
 // GetDataRootDir (0xf87250) returns gOBBPath when its first byte is non-zero, else
-// "/storage/emulated/0/readyatdawn" (0x2b2f5c3).
+// "/storage/emulated/0/readyatdawn" (0x2b2f5c3). The reference build's body is `return <media literal>` (three words and a
+// `ret`), so it never reads gOBBPath; the data-root hook answers the root ResolveRoot chose whatever the body returns.
 struct AStorageManagerOpaque;
 using ObbCallbackFn = void (*)(const char* filename, std::int32_t state, void* data);
 using MountObbSig = void(AStorageManagerOpaque* manager, const char* filename, const char* key, ObbCallbackFn callback,
@@ -208,6 +209,12 @@ struct OvrJavaOpaque;
 using GetSystemPropertyIntSig = int(const OvrJavaOpaque* java, int property);
 struct LibR15GetSystemPropertyIntTag {};
 using LibR15GetSystemPropertyIntThunk = CallbackThunk<LibR15GetSystemPropertyIntTag, GetSystemPropertyIntSig>;
+// NRadEngine::CVR::RefreshRTSize() (libr15 0x1a709a0, no argument, no result), the function that makes the eye-size query. The
+// reference build's eye size is decided on this function's JUMP_SLOT (0x36dbd10, texture_quality_hook.h, #1737 C4).
+inline constexpr const char* kRefreshRTSizeSymbol = "_ZN10NRadEngine3CVR13RefreshRTSizeEv";
+using RefreshRTSizeSig = void();
+struct LibR15RefreshRTSizeTag {};
+using LibR15RefreshRTSizeThunk = CallbackThunk<LibR15RefreshRTSizeTag, RefreshRTSizeSig>;
 // NRadEngine::CResourceManager::FillResourceFileRequest(CSymbol64 type, CSymbol64 name, unsigned long long,
 // CAllocator*, void*, unsigned long long, SFileRequestData&), defined in libr15 at 0x25439f0 (524 bytes; ReVault lists it
 // at 0x26439f0): the single manifest resolver (#871). It clears the request (ClearFileRequestData, 0x2a9759c), binary-searches
@@ -231,20 +238,58 @@ using LibR15FillResourceFileRequestThunk =
 inline constexpr const char* kFillResourceFileRequestSymbol =
     "_ZN10NRadEngine16CResourceManager23FillResourceFileRequestENS_9CSymbol64ES1_yPNS_10CAllocatorEPvyRNS_16SFileRequestDataE";
 
-// SFileRequestData (0x470 bytes), the fields the log-only hook reads after a hit (ClearFileRequestData, 0x2a9759c, sets
-// +0x10 and +0x418 to -1; the hit overwrites both). Measured on the pinned libr15 from the function's own stores
-// (0x2543a2c-0x2543bf8).
+// The libr15 functions the loose-file overlay calls (resource_request_hook.cpp). None is hooked: the overlay resolves each
+// by its symbol and proves the address is the load base plus the pinned vaddr. ReVault shows every vaddr 0x100000 higher.
+//   ClearFileRequestData(SFileRequestData&) (0x2a9759c): the first call of FillResourceFileRequest; it sets the request's
+//     +0x10 and +0x418 to -1 and clears the rest.
+//   CResourceManager::GetUnpackagedResourcePath(CSymbol64 type, CSymbol64 name, CFixedStringT<512>&) const (0x25441b8): writes
+//     the loose file's path into the request's +0x18 buffer; returns 0 on success.
+//   CSysFile::Open(char const*, unsigned int flags, long& handle) (0xf85538, static): flags 1 is O_RDONLY; returns 0 on success.
+//   CSysFile::Size(long handle, unsigned long long* size) (0xf859fc, static): returns 0 on success.
+inline constexpr const char* kClearFileRequestDataSymbol =
+    "_ZN10NRadEngine20ClearFileRequestDataERNS_16SFileRequestDataE";
+inline constexpr std::uint64_t kClearFileRequestDataVaddr = 0x2a9759c;
+inline constexpr const char* kGetUnpackagedResourcePathSymbol =
+    "_ZNK10NRadEngine16CResourceManager25GetUnpackagedResourcePathENS_9CSymbol64ES1_RNS_13CFixedStringTILy512EEE";
+inline constexpr std::uint64_t kGetUnpackagedResourcePathVaddr = 0x25441b8;
+inline constexpr const char* kCSysFileOpenSymbol = "_ZN10NRadEngine8CSysFile4OpenEPKcjPl";
+inline constexpr std::uint64_t kCSysFileOpenVaddr = 0xf85538;
+inline constexpr const char* kCSysFileSizeSymbol = "_ZN10NRadEngine8CSysFile4SizeElPy";
+inline constexpr std::uint64_t kCSysFileSizeVaddr = 0xf859fc;
+
+// SFileRequestData (0x470 bytes). The log reads the fields after a hit (ClearFileRequestData, 0x2a9759c, sets +0x10 and +0x418
+// to -1; the hit overwrites both). Measured on the pinned libr15 from the function's own stores (0x2543a2c-0x2543bf8). The loose
+// file overlay writes the fields from kOwner to kValid on a miss (resource_request_hook.cpp, ServeLoose).
 namespace resource_request_layout {
 inline constexpr std::size_t kRequestBytes = 0x470;
+inline constexpr std::size_t kOwner = 0x0;               // u64: the owner (the CResource* for a base load), stored by the stock fill
+inline constexpr std::size_t kIndex = 0x8;               // u64: the buffer or mip index, stored by the stock fill
 inline constexpr std::size_t kPackageHandle = 0x10;      // i64: the package file handle, -1 when none
+inline constexpr std::size_t kLoosePath = 0x18;          // char[512]: the loose file's path (GetUnpackagedResourcePath)
 inline constexpr std::size_t kChunkIndex = 0x418;        // i64: the manifest record's chunk index, -1 when none
 inline constexpr std::size_t kChunkFileOffset = 0x420;   // u64: the chunk's offset in the package file
 inline constexpr std::size_t kChunkCompressed = 0x428;   // u64: the chunk's compressed size
 inline constexpr std::size_t kChunkDecompressed = 0x430; // u64: the chunk's decompressed size
 inline constexpr std::size_t kOffsetInChunk = 0x438;     // u64: the resource's offset inside the chunk
 inline constexpr std::size_t kSize = 0x440;              // u64: the resource's size
+inline constexpr std::size_t kUncompressedSize = 0x448;  // u64: the resource's size as the stock hit path stores it
 inline constexpr std::size_t kAlignment = 0x450;         // u64: the record's alignment
+inline constexpr std::size_t kMemSpace = 0x460;          // u64: the allocator the request was made with
+inline constexpr std::size_t kValid = 0x468;             // u32: 1 on a hit
 }  // namespace resource_request_layout
+
+// The manifest CResourceManager::FillResourceFileRequest searches (0x2543a30-0x2543a90). The manager's pointer at +8 is the
+// manifest; the manifest holds the record array at +0 and the record count at +0x30. A record is 32 bytes: the type (i64, the
+// first key compared), the name (i64, compared when the types are equal), then the chunk and offsets. The search compares
+// both keys as signed 64-bit values and the count as unsigned (resource_request_hook.cpp, ManifestMisses).
+namespace resource_manifest_layout {
+inline constexpr std::size_t kManagerManifest = 0x8;
+inline constexpr std::size_t kManifestRecords = 0x0;
+inline constexpr std::size_t kManifestCount = 0x30;
+inline constexpr std::size_t kRecordShift = 5;  // 32-byte records
+inline constexpr std::size_t kRecordType = 0x0;
+inline constexpr std::size_t kRecordName = 0x8;
+}  // namespace resource_manifest_layout
 
 // The six call sites of the stub in libr15 (ELF scan of bl to 0xf30730; pinned vaddrs, the address of the bl). The game
 // return address a handler sees is the bl plus 4. got_pinned_test.cpp checks each is a bl to the stub in the real library.
@@ -315,6 +360,7 @@ using LibR15AndroidMainThunk = CallbackThunk<LibR15AndroidMainTag, AndroidMainSi
 // permission-wait hook makes the request itself instead. It keeps no state and does not wait for the answer; the boot
 // call in CR15Game::Initialize is followed at once by CncaGame::Initialize, whose package-manifest read needs the
 // storage permissions (#640). The three names it gets there are RECORD_AUDIO, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE.
+// The reference build holds `ret` at its first word; the permission-wait hook classifies that word (ClassifyOriginalWord).
 using RequestPermissionsSig = void(const char* const* names, std::uint64_t count);
 struct LibR15RequestPermissionsTag {};
 using LibR15RequestPermissionsThunk = CallbackThunk<LibR15RequestPermissionsTag, RequestPermissionsSig>;
@@ -337,6 +383,10 @@ struct LibR15CheckPermissionTag {};
 using LibR15CheckPermissionThunk = CallbackThunk<LibR15CheckPermissionTag, CheckPermissionSig>;
 inline constexpr const char* kRequestPermissionsSymbol =
     "_ZN10NRadEngine8CSysInfo18RequestPermissionsENS_10CArrayViewIPKcLy0EEE";
+inline constexpr std::uint64_t kRequestPermissionsVaddr = 0xf873ec;
+// First instruction. Store file: sub sp,sp,#0x40 (bytes ff0301d1). Reference build's byte patch: ret (bytes c0035fd6).
+inline constexpr std::uint32_t kRequestPermissionsStockWord = 0xd10103ff;
+inline constexpr std::uint32_t kRequestPermissionsReturnWord = 0xd65f03c0;
 
 // NRadEngine::CVR::ShowSystemUI(), defined in libr15 at 0x1a73990 (exported; ReVault 0x1b73990): `mov w1, #1` and a tail
 // call of vrapi_ShowSystemUI(&java, 1). libr15 calls it through its own PLT (stub 0xf47880, JUMP_SLOT 0x36fb328) from
@@ -645,13 +695,13 @@ inline GotTarget CrashLateSignal(const CrashLateModule& m) {
 
 // libr15.so's slot for CJson::TString, defined in libr15 itself (JUMP_SLOT 0x36ebe08).
 inline GotTarget LibR15TString() {
-  return {kLibR15, kTStringSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ebe08ULL};
+  return GotTarget{kLibR15, kTStringSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ebe08ULL}.ServiceSide();  // #1737
 }
 
 // libr15.so's slot for CSysHttp::CreateConnection(unsigned long&, char const*), defined in libr15 itself
 // (JUMP_SLOT 0x36e8028, readelf -rW on the pinned image).
 inline GotTarget LibR15CreateConnection() {
-  return {kLibR15, kCreateConnectionSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e8028ULL};
+  return GotTarget{kLibR15, kCreateConnectionSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e8028ULL}.ServiceSide();  // #1737
 }
 
 // libr15.so's slot for CR15NetGame::SetDelimitedErrorMessage, defined in libr15 itself
@@ -728,6 +778,24 @@ inline GotTarget LibR15UserProviderId() {
 inline constexpr const char* kCanvasSetTextSymbol =
     "_ZN10NRadEngine11CCanvasUICS7SetTextENS_18SCompactPoolHandleENS_9CSymbol64EPKc";
 inline constexpr std::uint64_t kCanvasSetTextVaddr = 0x139111c;
+// The UI text writer's other two game calls (runtime/patch/ui_text.h; the PC's are in runtime/patch/ui_text.cpp), with the prologue words
+// the writer checks before it calls them. SetText is the function above, called directly (the versions-label hook sits on the
+// PLT slot, not on the code). The words are the store libr15's; got_pinned_test.cpp compares them with the real file.
+//   NRadEngine::CncaGame::GameSpace(unsigned long long) (.dynsym 0x17e17fc, 36 bytes, no relative operand): x0 = the game
+//   object (a CR15Game, whose `this` it is), x1 = the index; `index < [x0+0x1f78] ? [[x0+0x1f48] + index*16 + 8] : 0`. The PC's
+//   GetGameSpace is the same function at +0x1f50 and +0x1f80. ReVault 0x18e17fc.
+inline constexpr std::uint64_t kGameSpaceVaddr = 0x17e17fc;
+inline constexpr std::uint32_t kGameSpaceCode[9] = {0xf94fbc08, 0xeb01011f, 0x540000a9, 0xf94fa408, 0x8b011108,
+                                                    0xf9400500, 0xd65f03c0, 0xaa1f03e0, 0xd65f03c0};
+//   NRadEngine::CLocalComponentHandle<NRadEngine::CCanvasUICS>::Find(CncaGameSpaceMT*, SActor, CSymbol64) (.dynsym 0x1cbb408,
+//   344 bytes): x0 = the handle it fills ({CCanvasUICS*, u32 handle}), x1 = the gamespace, x2 = the actor's identity
+//   (0x0000ffffffff0000 | index), x3 = the component symbol (canvasui); it leaves x0's canvas null when there is none. The
+//   words are the first twelve, up to the ADRP at 0x1cbb438. ReVault 0x1dbb408.
+inline constexpr std::uint64_t kCanvasFindVaddr = 0x1cbb408;
+inline constexpr std::uint32_t kCanvasFindCode[12] = {0xd10183ff, 0xf90013f8, 0xa9035bf7, 0xa90453f5, 0xa9057bf3, 0xaa0003f4,
+                                                      0xa9008be1, 0xb4000901, 0xaa0103f5, 0xf9424821, 0xaa0303f3, 0xb4000761};
+//   CCanvasUICS::SetText's first six words (the BL after them is relative and not pinned).
+inline constexpr std::uint32_t kCanvasSetTextCode[6] = {0xb4000243, 0xd10083ff, 0xa9017bf3, 0xaa0303f3, 0x92407c21, 0x910023e3};
 inline constexpr std::uint64_t kCanvasSetTextStub = 0xf50440;
 inline constexpr std::size_t kCanvasSetTextStubCallers = 40;  // b/bl to the stub in the executable segments; none to the function
 using CanvasSetTextSig = std::uint64_t(void* canvas, std::uint32_t handle, std::uint64_t item, const char* text);
@@ -773,6 +841,12 @@ inline GotTarget LibR15GetDeviceExtensionsVulkan() {
 // value 0).
 inline GotTarget LibR15GetSystemPropertyInt() {
   return {kLibR15, kGetSystemPropertyIntSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36fa728ULL};
+}
+
+// libr15.so's slot for CVR::RefreshRTSize, defined in libr15 itself (JUMP_SLOT 0x36dbd10, `readelf -rW` on the pinned image; the
+// seven PLT callers of its stub reach it through this slot, the live apply calls it at the vaddr below).
+inline GotTarget LibR15RefreshRTSize() {
+  return {kLibR15, kRefreshRTSizeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36dbd10ULL};
 }
 
 // The five VrApi imports the render-configuration log reads (docs/adr/0022-render-config-log.md). Each is an imported JUMP_SLOT
@@ -973,6 +1047,27 @@ inline constexpr PinnedFunction kVrDisplayLost = {"_ZN10NRadEngine3CVR11DisplayL
 inline constexpr PinnedFunction kLocalAppDataDirectory = {
     "_ZN10NRadEngine8CSysInfo24GetLocalAppDataDirectoryERNS_13CFixedStringTILy512EEE", 0xf86d88,
     {0xf81d0ff6, 0xa90153f5, 0xa9027bf3, 0xaa0003f3}, 4};
+// The reference build's eye-size route (#1737 C4, refresh_eye_size.h): CGRenderConfig::CustomViewportScale (six words; it returns the two
+// floats of the viewport scale in s0 and s1), the vrapi PLT stub that RefreshRTSize calls ids 5 and 6 through, and the eye
+// globals RefreshRTSize reads and writes. Identical in the stock and the reference file.
+struct PinnedCode {
+  const char* name;
+  std::uint64_t vaddr;
+  std::uint32_t code[6];
+  std::size_t words;
+};
+inline constexpr PinnedCode kCustomViewportScale = {"CGRenderConfig::CustomViewportScale", 0x188d0f4ULL,
+                                                    {0xf000f868, 0x9101a108, 0x8b000d08, 0xbd411100, 0xbd411501, 0xd65f03c0},
+                                                    6};
+inline constexpr PinnedCode kVrapiPltStub = {"vrapi_GetSystemPropertyInt PLT stub", 0xf46080ULL,
+                                             {0x90013db0, 0xf9439611, 0x911ca210, 0xd61f0220, 0, 0},
+                                             4};
+namespace eye_layout {
+inline constexpr std::uint64_t kStoredPairVaddr = 0x37a33e0ULL;    // {int32 w, int32 h}: RefreshRTSize's result (fcvtzs)
+inline constexpr std::uint64_t kOverridePairVaddr = 0x37a33e8ULL;  // {int32 w, int32 h}: SetRTSizeOverride's; non-zero skips the query
+inline constexpr std::uint64_t kOvrJavaVaddr = 0x37a3550ULL;       // the ovrJava object the game passes to vrapi
+}  // namespace eye_layout
+
 using RefreshRTSizeFn = void (*)();
 using EngineResizeFn = int (*)(void* engine, std::uint32_t width, std::uint32_t height, std::int32_t mode);
 using VrFlagFn = int (*)();
@@ -994,5 +1089,42 @@ inline constexpr std::size_t kDisplayMode = 0x16d38;
 namespace gfx_layout {
 inline constexpr std::size_t kMsaa = 0x1c;
 }
+
+// NRadEngine::CGRawInterfaceVK::Free(VkDeviceMemory_T*, unsigned long begin, unsigned long, unsigned long end), defined in libr15
+// at 0x1885410 (832 bytes; ReVault lists it at 0x1985410): the engine's free for a range of a VkDeviceMemory block (#1759). It
+// keeps the free ranges in a fixed array in .bss (vk_hole_table.h): it extends the entry next to the freed range, else appends
+// a new entry with no bound check. JUMP_SLOT 0x37008d8 (`readelf -rW` on the pinned image; the callers in libr15 reach it
+// through its PLT stub). x2 is not read by the function. The three crash offsets of #1759 (+0x1885480, +0x1885630, +0x18856c8)
+// are loads in its scans of that array.
+inline constexpr const char* kVkFreeSymbol = "_ZN10NRadEngine16CGRawInterfaceVK4FreeEP16VkDeviceMemory_Tmmm";
+using VkFreeSig = void(void* memory, unsigned long begin, unsigned long unused, unsigned long end);
+struct LibR15VkFreeTag {};
+using LibR15VkFreeThunk = CallbackThunk<LibR15VkFreeTag, VkFreeSig>;
+inline GotTarget LibR15VkFree() {
+  return {kLibR15, kVkFreeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x37008d8ULL};
+}
+inline constexpr PinnedFunction kVkFree = {"_ZN10NRadEngine16CGRawInterfaceVK4FreeEP16VkDeviceMemory_Tmmm", 0x1885410,
+                                           {0xd100c3ff, 0xa90153f5, 0xa9027bf3, 0xd000f8a8}, 4};
+// The two blocks of Free the guard's layout rests on, read from the pinned image (objdump -d, got_pinned_test checks both):
+//   0x188544c: adrp x9, 0x3796000; ldr w11, [x9, #0x688]      the entry count, the word at 0x3796688
+//              cbz w11; adrp x10, 0x3791000; mov x12, xzr; add x10, x10, #0x698   the scan starts at 0x3791688 + 0x10
+//   0x1885710: ldp; adrp x13, 0x3791000; add x13, x13, #0x688; mov w15, #0x28; add w12, w11, #1; mov w14, #0x5000
+//              (the count is stored at table + 0x5000, an entry is 0x28 bytes, so the array holds 0x5000 / 0x28 = 512 entries and
+//              the word after the last is the count itself); the append that follows (the next six words at 0x1885728) stores the
+//              new count and then the entry at index `old count`, with no compare against 512 anywhere in between.
+inline constexpr PinnedCode kVkFreeCountBlock = {"CGRawInterfaceVK::Free entry count and scan start", 0x188544cULL,
+                                                 {0xb000f889, 0xb946892b, 0x3400046b, 0x9000f86a, 0xaa1f03ec, 0x911a614a}, 6};
+inline constexpr PinnedCode kVkFreeAppendBlock = {"CGRawInterfaceVK::Free append of a new entry", 0x1885710ULL,
+                                                  {0xa97fa52a, 0x9000f86d, 0x911a21ad, 0x5280050f, 0x1100056c, 0x528a000e}, 6};
+inline constexpr PinnedCode kVkFreeAppendStore = {"CGRawInterfaceVK::Free append stores", 0x1885728ULL,
+                                                  {0x9b0f356b, 0xb82e69ac, 0xa9000573, 0xa9012963, 0xf9001169, 0x889ffd1f}, 6};
+// The array this layout names (.bss of the pinned image; ReVault shows each address 0x100000 higher).
+namespace vk_hole_layout {
+inline constexpr std::uint64_t kTableVaddr = 0x3791688ULL;  // entry 0
+inline constexpr std::uint64_t kCountVaddr = 0x3796688ULL;  // a 32-bit count, directly after entry 511
+inline constexpr std::uint32_t kEntryBytes = 0x28;
+inline constexpr std::uint32_t kCapacity = 512;
+static_assert(kTableVaddr + static_cast<std::uint64_t>(kEntryBytes) * kCapacity == kCountVaddr, "the count follows the last entry");
+}  // namespace vk_hole_layout
 
 }  // namespace sentinel::pinned

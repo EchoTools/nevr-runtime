@@ -55,6 +55,15 @@ std::vector<std::string> Lines(const char* event) {
   return out;
 }
 
+// A string field's text, up to its closing quote (Field stops at the first comma, which a list value contains).
+std::string Text(const std::string& line, const char* key) {
+  const std::string needle = std::string("\"") + key + "\":\"";
+  const std::size_t at = line.find(needle);
+  if (at == std::string::npos) return "<absent>";
+  const std::size_t begin = at + needle.size();
+  return line.substr(begin, line.find('"', begin) - begin);
+}
+
 std::string Field(const std::string& line, const char* key) {
   const std::string needle = std::string("\"") + key + "\":";
   const std::size_t at = line.find(needle);
@@ -706,6 +715,122 @@ void OnlyThePanelsClassesAndNamesAreOffered() {
   }
 }
 
+// ---- the four buttons' slots (#1679) -----------------------------------------------------------------
+
+// A transform table of the format menu_slots.h reads: a 56-byte descriptor, then 176-byte entries (owner at +0x08, the pose
+// at +0x20, a marker at +0x90). The real table is 52,680 bytes of the game's own; the four buttons stand at the stock slots.
+std::vector<unsigned char> StockTable(bool withCreate = true) {
+  struct E {
+    std::uint64_t owner;
+    float x, w;
+  };
+  std::vector<E> es = {{0x1111, 0.0f, 0.0f},
+                       {nevr_menu_cards::kJoinOwner, 2.15f, -0.174f},
+                       {nevr_menu_cards::kPlayOwner, 0.73f, -0.061f},
+                       {nevr_menu_cards::kTutorialOwner, -0.73f, 0.061f}};
+  if (withCreate) es.push_back({nevr_menu_cards::kCreateOwner, -2.15f, 0.174f});
+  std::vector<unsigned char> b(56 + es.size() * 176, 0);
+  Desc(b, 0, es.size(), 176);
+  for (std::size_t i = 0; i < es.size(); ++i) {
+    const std::size_t at = 56 + i * 176;
+    const float rot[4] = {0.0f, 1.0f, 0.0f, es[i].w}, pos[3] = {es[i].x, -0.275f, 5.5f}, scale[3] = {1.0f, 1.0f, 1.0f};
+    std::memcpy(b.data() + at + 0x08, &es[i].owner, 8);
+    std::memcpy(b.data() + at + 0x20, rot, 16);
+    std::memcpy(b.data() + at + 0x30, pos, 12);
+    std::memcpy(b.data() + at + 0x3C, scale, 12);
+    b[at + 0x48] = static_cast<unsigned char>(i + 1);  // just past the pose
+    b[at + 0x90] = static_cast<unsigned char>(i + 1);
+  }
+  return b;
+}
+
+constexpr std::uint64_t kTable = nevr_menu_cards::kTransformType;
+
+// The level's transform table under mnu_master_lowspec, pinned: it is served with Play, Join, Create, Tutorial from the left,
+// through the game's allocator, and the log line says where each stands (read back from the bytes served).
+void APinnedTransformTableIsServedWithTheButtonsInOrder() {
+  std::vector<unsigned char> table = StockTable();
+  Reset("");
+  static std::string pin;
+  pin = Sha(table);
+  mc::ArmSlotPinForTest(pin.c_str());
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 0, table.data(), table.size(), &g_alloc, 0x10, kTable, kName);
+  QCHECK(Call(block) == kCallbackResult);
+  QCHECK(g_seen.calls == 1 && g_seen.buffer != table.data() && g_seen.size == table.size());
+  QCHECK(g_allocCalls == 1 && g_lastAllocSize == table.size() && g_lastAlignment == 0x10 && g_freeCalls == 0);
+  QCHECK(table == StockTable());  // the game's own buffer is untouched
+  const std::vector<std::uint64_t> order = nevr_menu_cards::ButtonOrder();
+  std::vector<nevr_menu_slots::Placement> seen;
+  QCHECK(nevr_menu_slots::Read(g_seen.bytes.data(), g_seen.bytes.size(), order.data(), order.size(), &seen) ==
+         nevr_menu_slots::Status::Ok);
+  QCHECK(seen.size() == 4 && seen[0].slot == 1 && seen[1].slot == 2 && seen[2].slot == 3 && seen[3].slot == 4);
+  const std::vector<std::string> lines = Lines("menu_slots_swap");
+  QCHECK(lines.size() == 1);
+  if (!lines.empty()) {
+    QCHECK(Text(lines[0], "slots_before") == "join:1@2.150,play:2@0.730,tutorial:3@-0.730,create:4@-2.150");
+    QCHECK(Text(lines[0], "slots_after") == "play:1@2.150,join:2@0.730,create:3@-0.730,tutorial:4@-2.150");
+    QCHECK(Field(lines[0], "slot_play") == "1" && Field(lines[0], "slot_join") == "2" && Field(lines[0], "slot_create") == "3" &&
+           Field(lines[0], "slot_tutorial") == "4");
+    QCHECK(Field(lines[0], "bytes_before") == std::to_string(table.size()) &&
+           Field(lines[0], "bytes_after") == std::to_string(table.size()));
+  }
+  QCHECK(Lines("menu_cards_swap").empty() && mc::CurrentTotals().pages == 0);
+}
+
+void ATransformTableThatIsNotPinnedIsLeftAloneAndSaysWhy() {
+  std::vector<unsigned char> table = StockTable();
+  Reset("");
+  static const std::string zeros(64, '0');
+  mc::ArmSlotPinForTest(zeros.c_str());
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 0, table.data(), table.size(), &g_alloc, 0x10, kTable, kName);
+  QCHECK(Call(block) == kCallbackResult);
+  QCHECK(g_seen.buffer == table.data() && g_allocCalls == 0);
+  const std::vector<std::string> lines = Lines("menu_slots_skip");
+  QCHECK(lines.size() == 1 && Field(lines[0], "reason") == "\"table_not_pinned\"");
+  QCHECK(Lines("menu_slots_swap").empty());
+  const std::vector<std::string> seen = Lines("menu_slots_table");
+  QCHECK(seen.size() == 1 && Field(seen[0], "pin") == "\"mismatch\"");
+}
+
+// Pinned, but one of the four is missing from the table: nothing is served, and the status is the reason.
+void APinnedTransformTableMissingAButtonIsRefusedAndKept() {
+  std::vector<unsigned char> table = StockTable(false);
+  Reset("");
+  static std::string pin;
+  pin = Sha(table);
+  mc::ArmSlotPinForTest(pin.c_str());
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 0, table.data(), table.size(), &g_alloc, 0x10, kTable, kName);
+  QCHECK(Call(block) == kCallbackResult);
+  QCHECK(g_seen.buffer == table.data() && g_allocCalls == 0);
+  const std::vector<std::string> lines = Lines("menu_slots_skip");
+  QCHECK(lines.size() == 1 && Field(lines[0], "reason") == "\"missing_owner\"");
+}
+
+// Only the table class under the Quest level's name is offered: the same class under the PC name, or another class under
+// the Quest name, is neither touched nor logged as a table.
+void OnlyTheTransformClassUnderTheQuestNameIsOffered() {
+  std::vector<unsigned char> table = StockTable();
+  const std::pair<std::uint64_t, std::uint64_t> cases[] = {{kTable, nevr_menu_cards::kPageName}, {kTable ^ 1, kName}};
+  for (const auto& c : cases) {
+    Reset("");
+    static std::string pin;
+    pin = Sha(table);
+    mc::ArmSlotPinForTest(pin.c_str());
+    Block block;
+    Resource res;
+    Fill(block, res, 4, 0, table.data(), table.size(), &g_alloc, 0x10, c.first, c.second);
+    QCHECK(Call(block) == kCallbackResult);
+    QCHECK(g_seen.buffer == table.data() && g_allocCalls == 0 && Lines("menu_slots_table").empty() &&
+           Lines("menu_slots_swap").empty());
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -735,6 +860,10 @@ int main() {
   ThePanelCanvasIsServedBuiltFromTheDeliveredOne();
   APanelTableThatIsNotStockIsLeftAndSaysWhy();
   OnlyThePanelsClassesAndNamesAreOffered();
+  APinnedTransformTableIsServedWithTheButtonsInOrder();
+  ATransformTableThatIsNotPinnedIsLeftAloneAndSaysWhy();
+  APinnedTransformTableMissingAButtonIsRefusedAndKept();
+  OnlyTheTransformClassUnderTheQuestNameIsOffered();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "menu_cards_hook_test: %d check(s) failed\n", quest_test::Failures());

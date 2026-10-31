@@ -27,7 +27,8 @@ struct Job {
   WinHttpPostContext post;
 };
 
-bool RandomBytes(std::uint8_t* bytes, std::size_t count) {
+// Used only outside NEVR_HOST_TESTING (the #else branch below); nevr_host_core defines it.
+[[maybe_unused]] bool RandomBytes(std::uint8_t* bytes, std::size_t count) {
   return SystemFunction036(bytes, static_cast<ULONG>(count)) != FALSE;
 }
 
@@ -49,7 +50,7 @@ void LogEvent(const nevr_crash_send::LogEvent& event) {
   }
 }
 
-DWORD WINAPI SendThread(LPVOID parameter) {
+[[maybe_unused]] DWORD WINAPI SendThread(LPVOID parameter) {
   // Never freed: the process ends with the thread.
   Job* job = static_cast<Job*>(parameter);
   try {

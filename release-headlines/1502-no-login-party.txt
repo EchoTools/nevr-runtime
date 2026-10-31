@@ -1,1 +1,0 @@
-Your party no longer appears when you log in; one is made when you send your first invite.

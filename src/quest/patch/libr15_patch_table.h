@@ -29,6 +29,13 @@ inline constexpr std::uint64_t kRevaultBias = 0x100000;
 /// the store APK for this table).
 inline constexpr const char* kLibR15StockBuildId = "b243509c08ce677aeb95fa348016949b3fc45230";
 inline constexpr const char* kLibR15StockSha256 = "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20";
+// The reference build's own byte-patched libr15 files the patcher also takes as input (#1737): the same build ID and layout,
+// other bytes where it patched. The first is that file with its package-name strings replaced by this package's; the second is
+// the file as the reference build ships it.
+inline constexpr const char* kLibR15ReferenceSha256[] = {
+    "936aa6a3e289484742bcf23900ffa6a185e277628a1690529140cd34a26c8d67",
+    "6e9db28d612019b0e5b2e2ab515e1f9bd15d1a8f8d345060160e3172864540e1",
+};
 
 constexpr std::uint64_t RoundUp(std::uint64_t value, std::uint64_t alignment) {
   return (value + alignment - 1) / alignment * alignment;
@@ -36,10 +43,16 @@ constexpr std::uint64_t RoundUp(std::uint64_t value, std::uint64_t alignment) {
 
 /// The end of the stock file's writable PT_LOAD (p_vaddr + p_memsz, `__end__`/`_end` in its .dynsym; the end of .bss).
 inline constexpr std::uint64_t kStockImageEnd = 0x37d2538;
-/// The slot area starts at the next 64-byte boundary (.bss's own alignment) and holds one 8-byte slot per row.
+/// The slot area holds one 8-byte slot per row. It starts kSlotAreaGap bytes after the image end, at the next 64-byte
+/// boundary (.bss's own alignment). The page's slack after the image end is where other patches of this libr15 keep their own
+/// state words (the reference build's two at 0x37d2540 and 0x37d2560, the community patcher's latches at 0x37d2540, 0x37d2560
+/// and 0x37d2570), so the gap leaves that part of the page to them. The patcher also refuses an input whose own code reaches
+/// the slot area (libr15_patcher.cpp, `slot_area_referenced`).
 inline constexpr std::uint64_t kSlotAlignment = 64;
 inline constexpr std::uint64_t kSlotBytes = 8;
-inline constexpr std::uint64_t kSlotAreaVaddr = RoundUp(kStockImageEnd, kSlotAlignment);
+inline constexpr std::uint64_t kSlotAreaGap = 0x100;
+constexpr std::uint64_t SlotAreaFor(std::uint64_t imageEnd, std::uint64_t gap) { return RoundUp(imageEnd + gap, kSlotAlignment); }
+inline constexpr std::uint64_t kSlotAreaVaddr = SlotAreaFor(kStockImageEnd, kSlotAreaGap);
 
 enum class RowKind : std::uint8_t {
   kInlineHook,   // the first 3 words become the slot stub (stub_codec.h)
@@ -110,8 +123,9 @@ constexpr bool TableIsWellFormed() {
   return true;
 }
 static_assert(TableIsWellFormed(), "libr15_patch_table.h: a row is malformed");
-static_assert(kSlotAreaVaddr == 0x37d2540, "the slot area starts at the 64-byte boundary after the stock image end");
-static_assert(kSlotAreaVaddr + kSlotBytes * kRowCount == 0x37d2570, "ADR 0021 section 4: the grown end is 0x37d2570");
+static_assert(kSlotAreaVaddr == 0x37d2640, "the slot area starts at the 64-byte boundary kSlotAreaGap bytes after the stock image end");
+static_assert(kSlotAreaVaddr + kSlotBytes * kRowCount == 0x37d2670, "ADR 0021 section 4: the grown end is 0x37d2670");
+static_assert(kSlotAreaVaddr + kSlotBytes * kRowCount <= RoundUp(kStockImageEnd, 4096), "the grown end stays inside the page the linker already maps");
 
 /// Limits of the extra-rows file, format 1 (ADR 0021 section 11).
 inline constexpr const char* kExtraRowsFormat = "nevr-libr15-extra-rows";

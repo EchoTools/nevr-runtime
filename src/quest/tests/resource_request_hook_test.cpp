@@ -1,23 +1,29 @@
-// Host test for the log-only resource request hook (#871 steps 2 and 3): the real handler
-// (src/quest/sentinel/resource_request_hook.cpp), built without exceptions as the sentinel builds it, driven
-// through the thunk's entry with a stand-in for CResourceManager::FillResourceFileRequest that fills a request the
-// way the pinned function does (the field map in pinned_targets.h, resource_request_layout). No GOT slot is touched:
-// got_pinned_test.cpp resolves the pinned slot and the six call sites in the real library, and tests/quest
+// Host test for the resource request hook and its loose-file overlay (#871 steps 2 and 3; #1737 C5): the real handler
+// (src/quest/sentinel/resource_request_hook.cpp), built without exceptions as the sentinel builds it, driven through the
+// thunk's entry with a stand-in for CResourceManager::FillResourceFileRequest that searches a fake manifest, and with
+// stand-ins for the four libr15 functions the overlay calls. The manager, the manifest and the request use the layouts
+// in pinned_targets.h (resource_manifest_layout, resource_request_layout), pinned below by static_assert. No GOT slot is
+// touched: got_pinned_test.cpp resolves the pinned slot and the six call sites in the real library, and tests/quest
 // TestHookFramesCarryNoPersonality covers the frames.
 //
 // Built and run by `just test-quest-hooks`.
 
 #include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <set>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "hook_log.h"
@@ -29,9 +35,35 @@ namespace {
 
 namespace rr = nevr_quest::resource_request;
 namespace layout = sentinel::pinned::resource_request_layout;
+namespace manifest = sentinel::pinned::resource_manifest_layout;
 using sentinel::pinned::CResourceManagerOpaque;
 
-// ---- the log ---------------------------------------------------------------------------------------
+// ---- the manifest and the manager, in the layout the game reads -------------------------------------------------------
+
+struct Record {  // 32 bytes: the type and the name are the keys the search compares
+  std::int64_t type;
+  std::int64_t name;
+  unsigned char rest[16];
+};
+static_assert(sizeof(Record) == (std::size_t{1} << manifest::kRecordShift), "a manifest record is 32 bytes");
+static_assert(offsetof(Record, type) == manifest::kRecordType, "the type is the first key");
+static_assert(offsetof(Record, name) == manifest::kRecordName, "the name follows the type");
+
+struct Manifest {
+  const Record* records;  // +0
+  unsigned char pad[manifest::kManifestCount - sizeof(const Record*)];
+  std::uint64_t count;  // +0x30
+};
+static_assert(offsetof(Manifest, records) == manifest::kManifestRecords, "the record array is at +0");
+static_assert(offsetof(Manifest, count) == manifest::kManifestCount, "the record count is at +0x30");
+
+struct Manager {
+  unsigned char pad[manifest::kManagerManifest];
+  const Manifest* manifest;  // +8
+};
+static_assert(offsetof(Manager, manifest) == manifest::kManagerManifest, "the manifest pointer is at +8");
+
+// ---- the log ---------------------------------------------------------------------------------------------------------
 
 std::mutex g_logMutex;
 std::vector<std::string> g_lines;
@@ -61,7 +93,9 @@ std::string Field(const std::string& line, const char* key) {
   return line.substr(begin, end - begin);
 }
 
-// ---- the game's function ---------------------------------------------------------------------------
+// ---- the game's function (FillResourceFileRequest) ----------------------------------------------------------------------
+
+std::mutex g_fakeMutex;  // the fakes run on any thread the concurrency test uses
 
 struct Fill {
   int calls = 0;
@@ -70,8 +104,8 @@ struct Fill {
   void* allocator = nullptr;
   void* owner = nullptr;
   unsigned char* request = nullptr;
-  std::uint64_t missName = 0;  // a request for this name misses
-  unsigned char wrote[layout::kRequestBytes] = {};  // the request as the stand-in left it
+  bool allHits = false;  // every key is a hit (the big tables): no manifest search
+  unsigned char wrote[layout::kRequestBytes] = {};  // the request as the stand-in left it on a hit
   bool wroteAny = false;
 };
 Fill g_fill;
@@ -81,15 +115,36 @@ constexpr std::int64_t kHandle = 7, kChunk = 3;
 constexpr std::uint64_t kChunkOffset = 0x100000, kChunkCompressed = 0x2000, kChunkDecompressed = 0x4000;
 constexpr std::uint64_t kOffsetInChunk = 0x40, kSize = 0x1000, kAlignment = 0x10;
 constexpr std::uint64_t kMissReturn = 0xdead0000beefULL;
+constexpr std::uint64_t kRegisterStub = 0x351127d67ULL;  // the `unused` argument the calls pass
 
 template <typename T>
 void Put(unsigned char* request, std::size_t at, T value) {
   std::memcpy(request + at, &value, sizeof(value));
 }
+template <typename T>
+T Get(const unsigned char* request, std::size_t at) {
+  T value{};
+  std::memcpy(&value, request + at, sizeof(value));
+  return value;
+}
 
-// What FillResourceFileRequest does to the request on a hit (pinned 0x2543a2c-0x2543bf8): clear, then the stores.
+// The key is in the manifest by a linear search: the test's own reading of the table, independent of the hook's binary search.
+bool ManifestHas(const CResourceManagerOpaque* manager, std::uint64_t type, std::uint64_t name) {
+  if (manager == nullptr) return false;
+  const Manifest* table = reinterpret_cast<const Manager*>(manager)->manifest;
+  if (table == nullptr) return false;
+  for (std::uint64_t i = 0; i < table->count; ++i) {
+    const Record& r = table->records[i];
+    if (r.type == static_cast<std::int64_t>(type) && r.name == static_cast<std::int64_t>(name)) return true;
+  }
+  return false;
+}
+
+// What FillResourceFileRequest does (pinned 0x2543a28-0x2543bf8): clear the request, then on a hit the stores; on a miss it
+// returns the error object and leaves the request clear.
 std::uint64_t FakeFill(CResourceManagerOpaque* manager, std::uint64_t type, std::uint64_t name, std::uint64_t unused,
                        void* allocator, void* owner, std::uint64_t index, unsigned char* request) {
+  std::lock_guard<std::mutex> lock(g_fakeMutex);
   g_threadedCalls.fetch_add(1, std::memory_order_relaxed);
   ++g_fill.calls;
   g_fill.manager = manager;
@@ -100,9 +155,10 @@ std::uint64_t FakeFill(CResourceManagerOpaque* manager, std::uint64_t type, std:
   g_fill.owner = owner;
   g_fill.index = index;
   g_fill.request = request;
-  if (name == g_fill.missName) return kMissReturn;
+  if (request != nullptr) std::memset(request, 0, layout::kRequestBytes);
+  const bool hit = g_fill.allHits || ManifestHas(manager, type, name);
+  if (!hit) return kMissReturn;
   if (request == nullptr) return 0;
-  std::memset(request, 0, layout::kRequestBytes);
   Put<std::int64_t>(request, layout::kPackageHandle, kHandle);
   Put<std::int64_t>(request, layout::kChunkIndex, kChunk);
   Put<std::uint64_t>(request, layout::kChunkFileOffset, kChunkOffset);
@@ -116,22 +172,157 @@ std::uint64_t FakeFill(CResourceManagerOpaque* manager, std::uint64_t type, std:
   return 0;
 }
 
-// The call the game makes: through the thunk's entry. Not inlined, so the entry's return address is inside this function.
+// ---- the four libr15 functions the overlay calls -----------------------------------------------------------------------
+
+constexpr std::int64_t kOverlayHandle = 0x2a;
+constexpr unsigned long long kLooseSize = 0x7d00;
+constexpr const char* kLoosePath = "/data/loose/file";
+
+struct Overlay {
+  int seq = 0;  // the order the calls happened in
+  int clearCalls = 0, pathCalls = 0, openCalls = 0, sizeCalls = 0;
+  int clearSeq = 0, pathSeq = 0;
+  unsigned char* clearRequest = nullptr;
+  const CResourceManagerOpaque* pathManager = nullptr;
+  std::uint64_t pathType = 0, pathName = 0;
+  unsigned char* pathBuf = nullptr;
+  const char* openPath = nullptr;
+  unsigned openFlags = 0;
+  long* openHandle = nullptr;
+  long sizeHandle = 0;
+  int pathRet = 0, openRet = 0, sizeRet = 0;
+};
+Overlay g_ov;
+
+int Total(const Overlay& o) { return o.clearCalls + o.pathCalls + o.openCalls + o.sizeCalls; }
+
+void FakeClear(unsigned char* request) {
+  std::lock_guard<std::mutex> lock(g_fakeMutex);
+  ++g_ov.clearCalls;
+  g_ov.clearSeq = ++g_ov.seq;
+  g_ov.clearRequest = request;
+}
+
+int FakePath(const CResourceManagerOpaque* manager, std::uint64_t type, std::uint64_t name, unsigned char* path) {
+  std::lock_guard<std::mutex> lock(g_fakeMutex);
+  ++g_ov.pathCalls;
+  g_ov.pathSeq = ++g_ov.seq;
+  g_ov.pathManager = manager;
+  g_ov.pathType = type;
+  g_ov.pathName = name;
+  g_ov.pathBuf = path;
+  if (g_ov.pathRet == 0) std::memcpy(path, kLoosePath, std::strlen(kLoosePath) + 1);
+  return g_ov.pathRet;
+}
+
+int FakeOpen(const char* path, unsigned flags, long* handle) {
+  std::lock_guard<std::mutex> lock(g_fakeMutex);
+  ++g_ov.openCalls;
+  ++g_ov.seq;
+  g_ov.openPath = path;
+  g_ov.openFlags = flags;
+  g_ov.openHandle = handle;
+  if (g_ov.openRet == 0) *handle = static_cast<long>(kOverlayHandle);
+  return g_ov.openRet;
+}
+
+int FakeSize(long handle, unsigned long long* size) {
+  std::lock_guard<std::mutex> lock(g_fakeMutex);
+  ++g_ov.sizeCalls;
+  ++g_ov.seq;
+  g_ov.sizeHandle = handle;
+  if (g_ov.sizeRet == 0) *size = kLooseSize;
+  return g_ov.sizeRet;
+}
+
+const rr::GameFns kFakeFns = {&FakeClear, &FakePath, &FakeOpen, &FakeSize};
+
+// ---- symbol lookup for the resolve tests -----------------------------------------------------------------------------
+
+struct SymbolPin {
+  const char* name;
+  std::uint64_t vaddr;
+};
+const SymbolPin kPins[4] = {
+    {sentinel::pinned::kClearFileRequestDataSymbol, sentinel::pinned::kClearFileRequestDataVaddr},
+    {sentinel::pinned::kGetUnpackagedResourcePathSymbol, sentinel::pinned::kGetUnpackagedResourcePathVaddr},
+    {sentinel::pinned::kCSysFileOpenSymbol, sentinel::pinned::kCSysFileOpenVaddr},
+    {sentinel::pinned::kCSysFileSizeSymbol, sentinel::pinned::kCSysFileSizeVaddr},
+};
+std::uint64_t g_lookupBase = 0;
+const char* g_lookupNull = nullptr;   // this symbol does not resolve
+const char* g_lookupWrong = nullptr;  // this symbol resolves 8 bytes past its pinned address
+
+void* FakeLookup(const char* symbol) {
+  for (const SymbolPin& pin : kPins) {
+    if (std::strcmp(pin.name, symbol) != 0) continue;
+    if (g_lookupNull != nullptr && std::strcmp(g_lookupNull, symbol) == 0) return nullptr;
+    std::uint64_t address = g_lookupBase + pin.vaddr;
+    if (g_lookupWrong != nullptr && std::strcmp(g_lookupWrong, symbol) == 0) address += 8;
+    return reinterpret_cast<void*>(static_cast<std::uintptr_t>(address));
+  }
+  return nullptr;
+}
+
+// ---- the manifest and the calls --------------------------------------------------------------------------------------
+
+struct Key {
+  std::int64_t type;
+  std::int64_t name;
+};
+
+Key K(std::uint64_t type, std::uint64_t name) { return Key{static_cast<std::int64_t>(type), static_cast<std::int64_t>(name)}; }
+
+bool KeyLess(const Key& a, const Key& b) { return a.type != b.type ? a.type < b.type : a.name < b.name; }
+
+std::vector<Record> g_records;
+Manifest g_manifest{};
+Manager g_manager{};
+CResourceManagerOpaque* g_callManager = reinterpret_cast<CResourceManagerOpaque*>(&g_manager);
+
+// Builds the manifest from `keys`, sorted by (type, name) as signed values: the order the game's search needs.
+void SetManifest(std::vector<Key> keys) {
+  std::sort(keys.begin(), keys.end(), KeyLess);
+  g_records.assign(keys.size(), Record{});
+  for (std::size_t i = 0; i < keys.size(); ++i) {
+    g_records[i].type = keys[i].type;
+    g_records[i].name = keys[i].name;
+  }
+  g_manifest.records = g_records.empty() ? nullptr : g_records.data();
+  g_manifest.count = g_records.size();
+  g_manager.manifest = &g_manifest;
+}
+
+// The game's call, through the thunk's entry. Not inlined, so the entry's return address is inside this function.
 __attribute__((noinline)) std::uint64_t Call(std::uint64_t type, std::uint64_t name, std::uint64_t index,
                                              unsigned char* request, void* owner = nullptr, void* allocator = nullptr) {
   const rr::FillThunk::Fn entry = reinterpret_cast<rr::FillThunk::Fn>(rr::FillThunk::EntryAddress());
-  const std::uint64_t r = entry(reinterpret_cast<CResourceManagerOpaque*>(0x1000), type, name, 0x351127d67ULL, allocator,
-                                owner, index, request);
+  const std::uint64_t r =
+      entry(g_callManager, type, name, kRegisterStub, allocator, owner, index, request);
   asm volatile("" ::: "memory");  // not a tail call
   return r;
 }
 
 constexpr std::uint64_t kBaseType = 0x4a4c32c49300b8a0ULL;
 constexpr std::uint64_t kMipType = 0x43f216c5d7d2b47fULL;
+constexpr std::uint64_t kMissName = 0x66;  // not in the default manifest
 
-void Reset(std::uint64_t base = 0) {
+// The default manifest: every name the tests call as a hit. kMissName and 0x33 are the misses.
+std::vector<Key> DefaultKeys() {
+  return {K(kBaseType, 0x11),   K(kBaseType, 0x22), K(kBaseType, 0x44), K(kBaseType, 0x55), K(kBaseType, 0x56),
+          K(kBaseType, 0x77),   K(kBaseType, 0x88), K(kBaseType, 0x99), K(kBaseType, 0x9a), K(kBaseType, 0xaa),
+          K(kBaseType, 0xab),   K(kBaseType, 0xbb), K(kBaseType, 0xcc), K(kMipType, 0x55),
+          K(kMipType, 0xabcdef0123456789ULL)};
+}
+
+void ResetOverlay() { g_ov = Overlay(); }
+
+// Clears every fake and the hook. `base` arms the hook with that load base (0: unarmed); `overlay` installs the overlay's
+// game functions. Logging is on (ArmForTest's logRequests) whenever the hook is armed.
+void Reset(std::uint64_t base = 0, bool overlay = false) {
   g_fill = Fill();
   g_threadedCalls = 0;
+  ResetOverlay();
   {
     std::lock_guard<std::mutex> lock(g_logMutex);
     g_lines.clear();
@@ -139,12 +330,33 @@ void Reset(std::uint64_t base = 0) {
   rr::ResetForTest();
   rr::FillThunk::Reset();
   *rr::FillThunk::OriginalOut() = reinterpret_cast<void*>(&FakeFill);
-  if (base != 0) rr::ArmForTest(base);
+  SetManifest(DefaultKeys());
+  g_callManager = reinterpret_cast<CResourceManagerOpaque*>(&g_manager);
+  rr::SetGameFnsForTest(overlay ? &kFakeFns : nullptr);
+  if (base != 0) rr::ArmForTest(base, true);
 }
 
 long long MyTid() { return static_cast<long long>(::syscall(SYS_gettid)); }
 
-// ---- tests -----------------------------------------------------------------------------------------
+// A hit reaches the game's function once and never the overlay; a miss the overlay serves never reaches the game.
+void ExpectHit(std::uint64_t type, std::uint64_t name) {
+  unsigned char request[layout::kRequestBytes] = {};
+  const int calls = g_fill.calls;
+  const int overlayCalls = Total(g_ov);
+  QCHECK(Call(type, name, 0, request) == 0);
+  QCHECK(g_fill.calls == calls + 1);
+  QCHECK(Total(g_ov) == overlayCalls);
+}
+void ExpectServedMiss(std::uint64_t type, std::uint64_t name) {
+  unsigned char request[layout::kRequestBytes] = {};
+  const int calls = g_fill.calls;
+  const int clears = g_ov.clearCalls;
+  QCHECK(Call(type, name, 0, request) == 0);
+  QCHECK(g_fill.calls == calls);
+  QCHECK(g_ov.clearCalls == clears + 1);
+}
+
+// ---- tests -----------------------------------------------------------------------------------------------------------
 
 void AnUnarmedThunkPassesThroughAndLogsNothing() {
   Reset();
@@ -162,19 +374,18 @@ void TheGameGetsItsOwnResultArgumentsAndRequestBack() {
   int ownerObject = 0, allocatorObject = 0;
   QCHECK(Call(kBaseType, 0x22, 1, request, &ownerObject, &allocatorObject) == 0);
   QCHECK(g_fill.calls == 1);
-  QCHECK(g_fill.manager == reinterpret_cast<CResourceManagerOpaque*>(0x1000));
+  QCHECK(g_fill.manager == g_callManager);
   QCHECK(g_fill.type == kBaseType && g_fill.name == 0x22 && g_fill.index == 1);
-  QCHECK(g_fill.unused == 0x351127d67ULL);
+  QCHECK(g_fill.unused == kRegisterStub);
   QCHECK(g_fill.owner == &ownerObject && g_fill.allocator == &allocatorObject && g_fill.request == request);
   // The handler wrote nothing to the request after the game's function filled it.
   QCHECK(g_fill.wroteAny && std::memcmp(request, g_fill.wrote, layout::kRequestBytes) == 0);
-  // A miss returns the game's error object, unchanged.
-  g_fill.missName = 0x33;
+  // A miss with no overlay returns the game's error object, unchanged.
   QCHECK(Call(kBaseType, 0x33, 0, request) == kMissReturn);
 }
 
 void AHitIsLoggedWithTheKeyTheOwnerTheSiteAndTheFilledFields() {
-  Reset(1);
+  Reset(1, true);
   unsigned char request[layout::kRequestBytes] = {};
   int ownerObject = 0, allocatorObject = 0;
   QCHECK(Call(kMipType, 0xabcdef0123456789ULL, 9, request, &ownerObject, &allocatorObject) == 0);
@@ -208,13 +419,13 @@ void AHitIsLoggedWithTheKeyTheOwnerTheSiteAndTheFilledFields() {
 }
 
 void ARepeatIsLoggedAtEachPowerOfTwoAndADifferentKeyIsLoggedAgain() {
-  Reset(1);
+  Reset(1, true);
   unsigned char request[layout::kRequestBytes] = {};
   for (int i = 0; i < 9; ++i) Call(kBaseType, 0x55, 0, request);
   std::vector<std::string> seen;
   for (const std::string& l : Lines("resource_request")) seen.push_back(Field(l, "seen"));
   QCHECK((seen == std::vector<std::string>{"1", "2", "4", "8"}));
-  Reset(1);
+  Reset(1, true);
   Call(kBaseType, 0x55, 0, request);
   Call(kBaseType, 0x55, 1, request);        // another index
   Call(kBaseType, 0x56, 0, request);        // another name
@@ -224,10 +435,9 @@ void ARepeatIsLoggedAtEachPowerOfTwoAndADifferentKeyIsLoggedAgain() {
 }
 
 void AMissIsLoggedAsAMissWithoutReadingTheRequest() {
-  Reset(1);
-  g_fill.missName = 0x66;
+  Reset(1);  // no overlay: the game's own error
   // A null request on a miss: the handler must not read it.
-  QCHECK(Call(kBaseType, 0x66, 2, nullptr) == kMissReturn);
+  QCHECK(Call(kBaseType, kMissName, 2, nullptr) == kMissReturn);
   QCHECK(Lines("resource_request").empty());
   const std::vector<std::string> lines = Lines("resource_request_miss");
   QCHECK(lines.size() == 1);
@@ -238,8 +448,8 @@ void AMissIsLoggedAsAMissWithoutReadingTheRequest() {
   QCHECK(Field(lines[0], "tid") == std::to_string(MyTid()));
   QCHECK(Field(lines[0], "handle") == "<absent>");
   // A second miss of the same key follows the same schedule (1, 2, 4 ...).
-  Call(kBaseType, 0x66, 2, nullptr);
-  Call(kBaseType, 0x66, 2, nullptr);
+  Call(kBaseType, kMissName, 2, nullptr);
+  Call(kBaseType, kMissName, 2, nullptr);
   QCHECK(Lines("resource_request_miss").size() == 2);
 }
 
@@ -287,13 +497,13 @@ void ALoggedSiteNameIsTheNamedSite() {
   Reset();
   unsigned char request[layout::kRequestBytes] = {};
   // The return address of Call's entry call is unknown until a call is made; make one to learn it, then set the base.
-  rr::ArmForTest(1);
+  rr::ArmForTest(1, true);
   Call(kBaseType, 0x99, 0, request);
   const std::string first = Field(Lines("resource_request").back(), "caller");
   const unsigned long long off1 = std::strtoull(first.c_str() + 1, nullptr, 16);  // returnAddress - 1
   const std::uint64_t returnAddress = off1 + 1;
   Reset();
-  rr::ArmForTest(returnAddress - knownReturn);
+  rr::ArmForTest(returnAddress - knownReturn, true);
   Call(kBaseType, 0x9a, 0, request);
   const std::string site = Field(Lines("resource_request").back(), "site");
   QCHECK(site == "\"mip_request\"");
@@ -337,6 +547,7 @@ void ConcurrentCallsOfOneKeyLogEachPowerOfTwoExactlyOnce() {
 
 void TheKeyTableIsBoundedAndSaysSoOnce() {
   Reset(1);
+  g_fill.allHits = true;  // every key is a hit: the table is the subject, not the manifest
   unsigned char request[layout::kRequestBytes] = {};
   unsigned long long keys = 0;
   while (keys < 30000 && Lines("resource_request_table_full").empty()) {
@@ -360,6 +571,7 @@ void TheKeyTableIsBoundedAndSaysSoOnce() {
 
 void TheLineCountIsBoundedAndSaysSoOnce() {
   Reset(1);
+  g_fill.allHits = true;
   unsigned char request[layout::kRequestBytes] = {};
   int calls = 0;
   // 3000 keys, each called 32 times: 6 lines per key (1, 2, 4, 8, 16, 32) would be 18000 lines, over the cap.
@@ -377,13 +589,267 @@ void TheLineCountIsBoundedAndSaysSoOnce() {
   QCHECK(Lines("resource_request_table_full").empty());
 }
 
+// (1) The manifest search: every present key is a hit, and a key before, between and after the records is a miss.
+void TheManifestSearchFindsEveryKeyAndOnlyThoseKeys() {
+  const std::size_t sizes[] = {1, 2, 3, 8, 33};
+  const std::uint64_t negativeType = 0xe8cc523d0fc9e5feULL;
+  for (std::size_t n : sizes) {
+    std::vector<Key> keys;
+    for (std::size_t i = 0; i < n; ++i) {
+      // Negative and positive keys, both types: the names are unique, so no two records are the same key.
+      const std::int64_t type = (i % 3 == 0) ? static_cast<std::int64_t>(negativeType) : static_cast<std::int64_t>(i * 7) - 40;
+      const std::int64_t name = (i % 2 == 0) ? -static_cast<std::int64_t>(i * 1000 + 5) : static_cast<std::int64_t>(0x100 * i + 3);
+      keys.push_back(Key{type, name});
+    }
+    Reset(1, true);
+    SetManifest(keys);
+    for (const Key& k : keys) ExpectHit(static_cast<std::uint64_t>(k.type), static_cast<std::uint64_t>(k.name));
+    // Probes just below, just above and between the present keys: none is in the table, so each is a miss the overlay serves.
+    std::vector<Key> probes;
+    for (const Key& k : keys) {
+      probes.push_back(Key{k.type, k.name - 1});
+      probes.push_back(Key{k.type, k.name + 1});
+    }
+    probes.push_back(Key{keys.front().type - 1, 0});  // before every record
+    probes.push_back(Key{keys.back().type + 1, 0});   // after every record
+    std::size_t misses = 0;
+    for (const Key& p : probes) {
+      if (std::find_if(keys.begin(), keys.end(), [&](const Key& k) { return k.type == p.type && k.name == p.name; }) != keys.end()) {
+        continue;
+      }
+      ExpectServedMiss(static_cast<std::uint64_t>(p.type), static_cast<std::uint64_t>(p.name));
+      ++misses;
+    }
+    QCHECK(misses > 0);
+  }
+}
+
+// (2) A miss with a loose file present: the overlay serves it, the game's function is not called, and the request is the
+// layout the cave writes.
+void AMissWithALooseFileIsServedWithTheCavesLayout() {
+  Reset(1, true);
+  unsigned char request[layout::kRequestBytes];
+  std::memset(request, 0xEE, sizeof(request));
+  int ownerObject = 0, allocatorObject = 0;
+  QCHECK(Call(kBaseType, kMissName, 2, request, &ownerObject, &allocatorObject) == 0);
+  QCHECK(g_fill.calls == 0);  // the game's function was not called
+  // clearRequest first, then the path, the open and the size, in that order.
+  QCHECK(g_ov.clearCalls == 1 && g_ov.pathCalls == 1 && g_ov.openCalls == 1 && g_ov.sizeCalls == 1);
+  QCHECK(g_ov.clearRequest == request);
+  QCHECK(g_ov.clearSeq < g_ov.pathSeq);
+  // The request fields.
+  QCHECK(Get<std::uint64_t>(request, layout::kOwner) == reinterpret_cast<std::uintptr_t>(&ownerObject));
+  QCHECK(Get<std::uint64_t>(request, layout::kIndex) == 2);
+  QCHECK(Get<std::int64_t>(request, layout::kPackageHandle) == kOverlayHandle);
+  QCHECK(Get<std::uint64_t>(request, layout::kSize) == kLooseSize);
+  QCHECK(Get<std::uint64_t>(request, layout::kUncompressedSize) == kLooseSize);
+  QCHECK(Get<std::uint64_t>(request, layout::kMemSpace) == reinterpret_cast<std::uintptr_t>(&allocatorObject));
+  QCHECK(Get<std::uint32_t>(request, layout::kValid) == 1);
+  QCHECK(std::strcmp(reinterpret_cast<const char*>(request + layout::kLoosePath), kLoosePath) == 0);
+  // The calls' arguments.
+  QCHECK(g_ov.pathManager == g_callManager);
+  QCHECK(g_ov.pathType == kBaseType && g_ov.pathName == kMissName);
+  QCHECK(g_ov.pathBuf == request + layout::kLoosePath);
+  QCHECK(g_ov.openPath == reinterpret_cast<const char*>(request + layout::kLoosePath));
+  QCHECK(g_ov.openFlags == 1);
+  QCHECK(g_ov.openHandle == reinterpret_cast<long*>(request + layout::kPackageHandle));
+  QCHECK(g_ov.sizeHandle == kOverlayHandle);
+  QCHECK(rr::CurrentOverlayTotals().served == 1 && rr::CurrentOverlayTotals().failed == 0);
+}
+
+// (3) A stage failure: the game's function runs with the original arguments, its result is returned, the request holds
+// what it left (cleared), and the failure is one WARN line naming the stage and the return value.
+void AStageFailureFallsThroughToTheGame() {
+  struct Case {
+    const char* stage;
+    int Overlay::*field;
+    int ret;
+  };
+  const Case cases[] = {{"path", &Overlay::pathRet, 5}, {"open", &Overlay::openRet, 6}, {"size", &Overlay::sizeRet, 7}};
+  for (const Case& c : cases) {
+    Reset(1, true);
+    g_ov.*(c.field) = c.ret;
+    unsigned char request[layout::kRequestBytes];
+    std::memset(request, 0xEE, sizeof(request));
+    int ownerObject = 0, allocatorObject = 0;
+    QCHECK(Call(kBaseType, kMissName, 2, request, &ownerObject, &allocatorObject) == kMissReturn);
+    QCHECK(g_fill.calls == 1);
+    QCHECK(g_fill.type == kBaseType && g_fill.name == kMissName && g_fill.index == 2);
+    QCHECK(g_fill.owner == &ownerObject && g_fill.allocator == &allocatorObject && g_fill.request == request);
+    QCHECK(g_fill.unused == kRegisterStub);
+    // The game's function cleared the request; nothing the overlay wrote is left in it.
+    unsigned char zero[layout::kRequestBytes] = {};
+    QCHECK(std::memcmp(request, zero, sizeof(zero)) == 0);
+    QCHECK(rr::CurrentOverlayTotals().failed == 1 && rr::CurrentOverlayTotals().served == 0);
+    const std::vector<std::string> lines = Lines("resource_overlay_failed");
+    QCHECK(lines.size() == 1);
+    if (lines.size() == 1) {
+      QCHECK(Field(lines[0], "stage") == std::string("\"") + c.stage + "\"");
+      QCHECK(Field(lines[0], "ret") == std::to_string(c.ret));
+    }
+    QCHECK(Lines("resource_overlay_served").empty());
+  }
+}
+
+// (4) A hit never touches the overlay.
+void AHitNeverTouchesTheOverlay() {
+  Reset(1, true);
+  ExpectHit(kBaseType, 0x11);
+  ExpectHit(kMipType, 0xabcdef0123456789ULL);
+  QCHECK(g_ov.clearCalls == 0 && g_ov.pathCalls == 0 && g_ov.openCalls == 0 && g_ov.sizeCalls == 0);
+  QCHECK(rr::CurrentOverlayTotals().served == 0 && rr::CurrentOverlayTotals().failed == 0);
+}
+
+// (5) The game's functions unavailable: a miss passes through to the game.
+void WithoutTheGameFunctionsAMissPassesThrough() {
+  Reset(1, false);
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kBaseType, kMissName, 0, request) == kMissReturn);
+  QCHECK(g_fill.calls == 1);
+  QCHECK(g_ov.clearCalls == 0 && g_ov.pathCalls == 0 && g_ov.openCalls == 0 && g_ov.sizeCalls == 0);
+}
+
+// (6) A null manager, and a null manifest pointer: the game's function runs, and nothing crashes.
+void ANullManagerOrManifestPassesThrough() {
+  Reset(1, true);
+  unsigned char request[layout::kRequestBytes] = {};
+  g_callManager = nullptr;
+  QCHECK(Call(kBaseType, kMissName, 0, request) == kMissReturn);
+  QCHECK(g_fill.calls == 1);
+  g_callManager = reinterpret_cast<CResourceManagerOpaque*>(&g_manager);
+  g_manager.manifest = nullptr;
+  QCHECK(Call(kBaseType, kMissName, 0, request) == kMissReturn);
+  QCHECK(g_fill.calls == 2);
+  QCHECK(g_ov.clearCalls == 0);
+  g_manager.manifest = &g_manifest;
+}
+
+// (7) A miss with no request: the game's function runs; the overlay is not called.
+void AMissWithoutARequestPassesThrough() {
+  Reset(1, true);
+  QCHECK(Call(kBaseType, kMissName, 0, nullptr) == kMissReturn);
+  QCHECK(g_fill.calls == 1);
+  QCHECK(g_ov.clearCalls == 0);
+}
+
+// (8) Logging off: the overlay still serves and counts; no request line is written.
+void WithLoggingOffTheOverlayStillServes() {
+  Reset(1, true);
+  rr::ArmForTest(1, false);
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kBaseType, 0x11, 0, request) == 0);  // a hit
+  QCHECK(Call(kBaseType, kMissName, 0, request) == 0);  // a miss, served
+  QCHECK(g_fill.calls == 1);
+  QCHECK(rr::CurrentOverlayTotals().served == 1);
+  QCHECK(Lines("resource_request").empty());
+  QCHECK(Lines("resource_request_miss").empty());
+  QCHECK(Lines("resource_overlay_served").empty());
+  QCHECK(rr::CurrentTotals().lines == 0);
+}
+
+// (9) Logging on, a hit: the request line is as it was.
+void ALoggedHitIsUnchanged() {
+  Reset(1, true);
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kBaseType, 0x11, 0, request) == 0);
+  const std::vector<std::string> lines = Lines("resource_request");
+  QCHECK(lines.size() == 1);
+  if (!lines.empty()) {
+    QCHECK(Field(lines[0], "seen") == "1");
+    QCHECK(lines[0].find("\"truncated\"") == std::string::npos);
+  }
+}
+
+// (10) Served in development: one INFO line with the key, the size, the handle, the owner, the site and the thread; and no
+// request line for it.
+void AServedMissIsOneOverlayLine() {
+  Reset(1, true);
+  unsigned char request[layout::kRequestBytes] = {};
+  int ownerObject = 0;
+  QCHECK(Call(kBaseType, kMissName, 3, request, &ownerObject) == 0);
+  QCHECK(Lines("resource_request").empty());
+  QCHECK(Lines("resource_request_miss").empty());
+  const std::vector<std::string> lines = Lines("resource_overlay_served");
+  QCHECK(lines.size() == 1);
+  if (lines.size() != 1) return;
+  const std::string& l = lines[0];
+  char hex[19];
+  QCHECK(Field(l, "type") == "\"0x4a4c32c49300b8a0\"");
+  QCHECK(Field(l, "name") == "\"0x0000000000000066\"");
+  QCHECK(Field(l, "index") == "3");
+  QCHECK(Field(l, "owner") == std::string("\"") + sentinel::HexString(hex, reinterpret_cast<std::uint64_t>(&ownerObject)) + "\"");
+  QCHECK(Field(l, "size") == std::to_string(kLooseSize));
+  QCHECK(Field(l, "handle") == std::to_string(kOverlayHandle));
+  QCHECK(Field(l, "site") == "\"unknown\"");
+  QCHECK(Field(l, "tid") == std::to_string(MyTid()));
+  QCHECK(l.find("\"level\":\"info\"") != std::string::npos);
+}
+
+// (11) The overlay's line cap: 32 lines of served and failed in all, then one cap line; the counters keep counting.
+void TheOverlayLineCapIsBoundedAndSaysSoOnce() {
+  Reset(1, true);
+  unsigned char request[layout::kRequestBytes] = {};
+  for (int i = 0; i < 100; ++i) {
+    g_ov.pathRet = (i % 4 == 3) ? 5 : 0;  // a quarter of the misses fail at the path stage
+    Call(kBaseType, kMissName, 0, request);
+  }
+  QCHECK(rr::CurrentOverlayTotals().served == 75);
+  QCHECK(rr::CurrentOverlayTotals().failed == 25);
+  QCHECK(Lines("resource_overlay_served").size() + Lines("resource_overlay_failed").size() == rr::kOverlayLines);
+  QCHECK(Lines("resource_overlay_cap").size() == 1);
+  QCHECK(Lines("resource_overlay_served").size() + Lines("resource_overlay_failed").size() == 32);
+}
+
+// (12) The resolve: every symbol at its pinned address; one null; one wrong address.
+void TheGameFunctionsResolveOnlyAtTheirPinnedAddresses() {
+  const std::uint64_t base = 0x7000000000ULL;
+  g_lookupBase = base;
+  g_lookupNull = nullptr;
+  g_lookupWrong = nullptr;
+  rr::GameFns out{};
+  Reset();
+  QCHECK(rr::ResolveGameFnsForTest(base, &FakeLookup, &out) == nullptr);
+  QCHECK(out.clearRequest != nullptr && out.unpackagedPath != nullptr && out.open != nullptr && out.size != nullptr);
+  QCHECK(Lines("resource_overlay_resolve").empty());
+
+  Reset();
+  g_lookupNull = sentinel::pinned::kCSysFileOpenSymbol;
+  const char* refused = rr::ResolveGameFnsForTest(base, &FakeLookup, &out);
+  QCHECK(refused != nullptr && std::strcmp(refused, sentinel::pinned::kCSysFileOpenSymbol) == 0);
+  std::vector<std::string> lines = Lines("resource_overlay_resolve");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Field(lines[0], "result") == "\"refused\"");
+    QCHECK(Field(lines[0], "symbol") == std::string("\"") + sentinel::pinned::kCSysFileOpenSymbol + "\"");
+    char hex[19];
+    QCHECK(Field(lines[0], "expected") == std::string("\"") + sentinel::HexString(hex, base + sentinel::pinned::kCSysFileOpenVaddr) + "\"");
+    QCHECK(Field(lines[0], "actual") == "\"0x0000000000000000\"");
+  }
+  g_lookupNull = nullptr;
+
+  Reset();
+  g_lookupWrong = sentinel::pinned::kCSysFileSizeSymbol;
+  refused = rr::ResolveGameFnsForTest(base, &FakeLookup, &out);
+  QCHECK(refused != nullptr && std::strcmp(refused, sentinel::pinned::kCSysFileSizeSymbol) == 0);
+  lines = Lines("resource_overlay_resolve");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    char expectedHex[19], actualHex[19];
+    const std::uint64_t expected = base + sentinel::pinned::kCSysFileSizeVaddr;
+    QCHECK(Field(lines[0], "expected") == std::string("\"") + sentinel::HexString(expectedHex, expected) + "\"");
+    QCHECK(Field(lines[0], "actual") == std::string("\"") + sentinel::HexString(actualHex, expected + 8) + "\"");
+  }
+  g_lookupWrong = nullptr;
+}
+
+// (13) The counters: four, and a refused registration says how many it got.
 void TheCountersAreRegisteredAndARefusedOneIsSaid() {
   sentinel::StopReporter();  // forget anything registered earlier in this process
   Reset();
   QCHECK(rr::RegisterCounters());
   QCHECK(Lines("resource_request_counters").empty());
   sentinel::StopReporter();
-  // One slot left of the two it needs: refused, said once, false.
+  // One slot left of the four it needs: refused, said once, false.
   static std::atomic<std::uint64_t> spare[sentinel::kMaxReportCounters];
   for (unsigned i = 0; i + 1 < sentinel::kMaxReportCounters; ++i) {
     QCHECK(sentinel::RegisterReportCounter("spare", &spare[i]));
@@ -394,34 +860,291 @@ void TheCountersAreRegisteredAndARefusedOneIsSaid() {
   QCHECK(lines.size() == 1);
   if (!lines.empty()) {
     QCHECK(Field(lines[0], "result") == "\"refused\"");
-    QCHECK(Field(lines[0], "registered") == "1" && Field(lines[0], "wanted") == "2");
+    QCHECK(Field(lines[0], "registered") == "1" && Field(lines[0], "wanted") == "4");
   }
   sentinel::StopReporter();
-  QCHECK(rr::kCounterCount == 2);
+  QCHECK(rr::kCounterCount == 4);
 }
 
+// (14) Without libr15 the install is refused and says why; the counters being refused does not stop the install's own line.
 void WithoutLibr15TheInstallIsRefusedAndSaysWhy() {
   Reset();
-  QCHECK(!rr::Install());
+  QCHECK(!rr::Install(true));
   const std::vector<std::string> lines = Lines("resource_request_install");
   QCHECK(lines.size() == 1);
   if (!lines.empty()) {
     QCHECK(Field(lines[0], "result") == "\"failed\"");
     QCHECK(Field(lines[0], "slot") == "\"module_not_loaded\"");
     QCHECK(Field(lines[0], "load_base") == "\"0x0000000000000000\"");
+    QCHECK(Field(lines[0], "overlay") == "\"module_not_loaded\"");
+    QCHECK(Field(lines[0], "log") == "1");
+    QCHECK(Field(lines[0], "counters") == "\"registered\"");
   }
-  // The counters were refused: nothing is installed or armed, and the line says why.
   Reset();
-  QCHECK(!rr::InstallIfCounted(false));
-  const std::vector<std::string> skipped = Lines("resource_request_install");
-  QCHECK(skipped.size() == 1);
-  if (!skipped.empty()) {
-    QCHECK(Field(skipped[0], "result") == "\"skipped\"");
-    QCHECK(Field(skipped[0], "why") == "\"counters_refused\"");
+  QCHECK(!rr::InstallCounted(false, false));
+  const std::vector<std::string> refused = Lines("resource_request_install");
+  QCHECK(refused.size() == 1);
+  if (!refused.empty()) {
+    QCHECK(Field(refused[0], "counters") == "\"refused\"");
+    QCHECK(Field(refused[0], "log") == "0");
   }
+}
+
+// (15) Concurrency: four threads, a hit and a miss each time: no crash, and the counts add up.
+void ConcurrentHitsAndServedMissesAddUp() {
+  Reset(1, true);
+  std::atomic<int> nonzero{0};
+  std::vector<std::thread> threads;
+  for (int t = 0; t < 4; ++t) {
+    threads.emplace_back([&nonzero] {
+      unsigned char request[layout::kRequestBytes] = {};
+      for (int i = 0; i < 100; ++i) {
+        const std::uint64_t name = (i % 2 == 0) ? 0xbb : kMissName;
+        if (Call(kBaseType, name, 0, request) != 0) nonzero.fetch_add(1, std::memory_order_relaxed);
+      }
+    });
+  }
+  for (std::thread& t : threads) t.join();
+  QCHECK(nonzero.load() == 0);
+  QCHECK(g_threadedCalls.load() == 200);                  // the hits reached the game
+  QCHECK(rr::CurrentOverlayTotals().served == 200);       // the misses were served
+  QCHECK(g_ov.clearCalls == 200);
+  QCHECK(g_threadedCalls.load() + static_cast<int>(rr::CurrentOverlayTotals().served) == 400);
+}
+
+// (16) A served request returns exactly 0, and the game's function (which would return nonzero) is not reached.
+void AServedRequestReturnsZeroAndTheGameIsNotCalled() {
+  Reset(1, true);
   unsigned char request[layout::kRequestBytes] = {};
-  Call(kBaseType, 0xcc, 0, request);
-  QCHECK(Lines("resource_request").empty());  // the skipped install armed nothing
+  const std::uint64_t r = Call(kBaseType, kMissName, 0, request);
+  QCHECK(r == 0);
+  QCHECK(g_fill.calls == 0);
+}
+
+// ---- a release build: failures only, rate limited (#1797 4a) -------------------------------------------------------------
+
+std::atomic<std::uint64_t> g_nowMs{0};
+std::uint64_t FakeNow() noexcept { return g_nowMs.load(std::memory_order_relaxed); }
+constexpr std::uint64_t kT0 = 20000;  // a multiple of kFailureWindowMs: the window [kT0, kT0 + 10000)
+
+// The hook armed as a release build arms it (logRequests off), with the failure window's clock under the test's hand.
+void ReleaseReset(bool overlay = false) {
+  Reset(1, overlay);
+  rr::ArmForTest(1, false);
+  g_nowMs = kT0;
+  rr::SetClockForTest(&FakeNow);
+}
+
+// A miss of a distinct name: one key per call, so the per-key schedule never drops one.
+std::uint64_t MissOf(std::uint64_t n) { return 0x1000000 + n; }
+
+// (R1) A failed request is one miss line in a release build, with the key, the return value and the call site; the request
+// is not read, and the game gets its own result back.
+void AReleaseBuildLogsAFailedRequest() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kBaseType, kMissName, 3, request) == kMissReturn);
+  QCHECK(g_fill.calls == 1);
+  QCHECK(Lines("resource_request").empty());
+  const std::vector<std::string> lines = Lines("resource_request_miss");
+  QCHECK(lines.size() == 1);
+  if (lines.empty()) return;
+  QCHECK(lines[0].find("\"level\":\"warn\"") != std::string::npos);
+  QCHECK(Field(lines[0], "type") == "\"0x4a4c32c49300b8a0\"");
+  QCHECK(Field(lines[0], "name") == "\"0x0000000000000066\"");
+  QCHECK(Field(lines[0], "index") == "3");
+  QCHECK(Field(lines[0], "ret") == "\"0x0000dead0000beef\"");
+  QCHECK(Field(lines[0], "seen") == "1");
+  QCHECK(Field(lines[0], "tid") == std::to_string(MyTid()));
+  QCHECK(Field(lines[0], "handle") == "<absent>");
+  QCHECK(Field(lines[0], "owner") == "<absent>");
+}
+
+// (R2) A request that succeeds writes nothing in a release build, and the game's call is as it was.
+void AReleaseBuildLogsNoSuccess() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kBaseType, 0x11, 0, request) == 0);
+  QCHECK(Call(kMipType, 0xabcdef0123456789ULL, 7, request) == 0);
+  QCHECK(g_fill.calls == 2);
+  QCHECK(g_lines.empty());
+  QCHECK(rr::CurrentTotals().lines == 0);
+}
+
+// (R3) A failure with no request is logged without reading it.
+void AReleaseFailureWithoutARequestIsLogged() {
+  ReleaseReset();
+  QCHECK(Call(kBaseType, kMissName, 0, nullptr) == kMissReturn);
+  QCHECK(Lines("resource_request_miss").size() == 1);
+}
+
+// (R4) The same failing key follows the per-key schedule (1, 2, 4, 8 ...): a loop that asks for one missing resource
+// thousands of times writes a few lines, not one window's worth.
+void ARepeatedReleaseFailureIsLoggedAtEachPowerOfTwo() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  for (int i = 0; i < 9; ++i) Call(kBaseType, kMissName, 0, request);
+  const std::vector<std::string> lines = Lines("resource_request_miss");
+  QCHECK(lines.size() == 4);  // the 1st, 2nd, 4th and 8th
+  if (lines.size() == 4) {
+    QCHECK(Field(lines[0], "seen") == "1");
+    QCHECK(Field(lines[1], "seen") == "2");
+    QCHECK(Field(lines[2], "seen") == "4");
+    QCHECK(Field(lines[3], "seen") == "8");
+  }
+  QCHECK(Lines("resource_request_miss_suppressed").empty());
+}
+
+// (R5) At most kFailureLinesPerWindow lines in one window, whatever the keys, and the game still gets every result.
+void AReleaseWindowWritesAtMostTheLimit() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  for (std::uint64_t n = 0; n < rr::kFailureLinesPerWindow + 5; ++n) {
+    QCHECK(Call(kBaseType, MissOf(n), 0, request) == kMissReturn);
+  }
+  QCHECK(g_fill.calls == static_cast<int>(rr::kFailureLinesPerWindow + 5));
+  QCHECK(Lines("resource_request_miss").size() == rr::kFailureLinesPerWindow);
+  QCHECK(Lines("resource_request_miss_suppressed").empty());  // said at the next window, not inside this one
+}
+
+// (R6) The last millisecond of the window is still the window; the first of the next is a new one. The failure that opens it
+// writes the count of the lines the old one dropped, before its own line.
+void ANewWindowStartsWithTheCountOfWhatTheLastDropped() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  for (std::uint64_t n = 0; n < rr::kFailureLinesPerWindow + 5; ++n) Call(kBaseType, MissOf(n), 0, request);
+  g_nowMs = kT0 + rr::kFailureWindowMs - 1;
+  Call(kBaseType, MissOf(100), 0, request);
+  QCHECK(Lines("resource_request_miss").size() == rr::kFailureLinesPerWindow);
+  QCHECK(Lines("resource_request_miss_suppressed").empty());
+  g_nowMs = kT0 + rr::kFailureWindowMs;
+  Call(kBaseType, MissOf(101), 0, request);
+  const std::vector<std::string> summary = Lines("resource_request_miss_suppressed");
+  QCHECK(summary.size() == 1);
+  if (!summary.empty()) {
+    QCHECK(summary[0].find("\"level\":\"warn\"") != std::string::npos);
+    QCHECK(Field(summary[0], "count") == "6");  // 5 over the limit, plus the one at the last millisecond
+    QCHECK(Field(summary[0], "window_ms") == std::to_string(rr::kFailureWindowMs));
+    QCHECK(Field(summary[0], "limit") == std::to_string(rr::kFailureLinesPerWindow));
+  }
+  QCHECK(Lines("resource_request_miss").size() == rr::kFailureLinesPerWindow + 1);
+  // The summary precedes the new window's first line.
+  std::size_t summaryAt = g_lines.size(), lastMissAt = g_lines.size();
+  for (std::size_t i = 0; i < g_lines.size(); ++i) {
+    if (g_lines[i].find("\"event\":\"resource_request_miss_suppressed\"") != std::string::npos) summaryAt = i;
+    if (g_lines[i].find("\"event\":\"resource_request_miss\"") != std::string::npos) lastMissAt = i;
+  }
+  QCHECK(summaryAt + 1 == lastMissAt);
+  // Said once: the next window's first failure has nothing new to say.
+  g_nowMs = kT0 + 2 * rr::kFailureWindowMs;
+  Call(kBaseType, MissOf(102), 0, request);
+  QCHECK(Lines("resource_request_miss_suppressed").size() == 1);
+}
+
+// (R7) A quiet window writes no summary, and counts restart: the next window may write the limit again.
+void AQuietWindowWritesNoSummaryAndTheLimitRestarts() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  for (std::uint64_t n = 0; n < rr::kFailureLinesPerWindow; ++n) Call(kBaseType, MissOf(n), 0, request);
+  g_nowMs = kT0 + 3 * rr::kFailureWindowMs;
+  for (std::uint64_t n = 0; n < rr::kFailureLinesPerWindow; ++n) Call(kBaseType, MissOf(1000 + n), 0, request);
+  QCHECK(Lines("resource_request_miss").size() == 2 * rr::kFailureLinesPerWindow);
+  QCHECK(Lines("resource_request_miss_suppressed").empty());
+}
+
+// (R8) Threads racing for one window: exactly the limit is written and every other failure is counted, none lost.
+void ConcurrentReleaseFailuresWriteExactlyTheLimitAndCountTheRest() {
+  ReleaseReset();
+  constexpr int kThreads = 8, kPerThread = 100;
+  std::vector<std::thread> threads;
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([t] {
+      unsigned char request[layout::kRequestBytes] = {};
+      for (int i = 0; i < kPerThread; ++i) {
+        Call(kBaseType, MissOf(static_cast<std::uint64_t>(t * kPerThread + i)), 0, request);
+      }
+    });
+  }
+  for (std::thread& th : threads) th.join();
+  QCHECK(g_threadedCalls == kThreads * kPerThread);
+  QCHECK(Lines("resource_request_miss").size() == rr::kFailureLinesPerWindow);
+  g_nowMs = kT0 + rr::kFailureWindowMs;
+  unsigned char request[layout::kRequestBytes] = {};
+  Call(kBaseType, MissOf(5000), 0, request);
+  const std::vector<std::string> summary = Lines("resource_request_miss_suppressed");
+  QCHECK(summary.size() == 1);
+  if (!summary.empty()) QCHECK(Field(summary[0], "count") == std::to_string(kThreads * kPerThread - rr::kFailureLinesPerWindow));
+}
+
+// (R9) A served overlay request is not a failure; an overlay stage that fails falls to the game, whose error is the one miss.
+void AReleaseOverlayServeIsNotAFailureAndAFailedStageIsOne() {
+  ReleaseReset(true);
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kBaseType, kMissName, 0, request) == 0);  // served from a loose file
+  QCHECK(g_lines.empty());
+  g_ov.openRet = 2;  // the loose file cannot be opened: the game's own error follows
+  QCHECK(Call(kBaseType, 0x67, 0, request) == kMissReturn);
+  QCHECK(Lines("resource_request_miss").size() == 1);
+  QCHECK(Lines("resource_overlay_failed").empty());  // the overlay's own lines stay development-only
+}
+
+// (R10) The key table full does not hide a failure: a failure whose key found no slot is still written, inside the limit.
+void AFullKeyTableDoesNotHideAReleaseFailure() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  unsigned long long calls = 0;
+  // Every call opens a new window, so the limit never drops one and each distinct failure writes its line.
+  while (calls < 30000 && Lines("resource_request_table_full").empty()) {
+    g_nowMs += rr::kFailureWindowMs;
+    Call(kBaseType, MissOf(calls), 0, request);
+    ++calls;
+  }
+  QCHECK(Lines("resource_request_table_full").size() == 1);
+  QCHECK(calls > rr::kProbeLimit && calls < rr::kKeySlots);
+  for (int i = 0; i < 100; ++i) {
+    g_nowMs += rr::kFailureWindowMs;
+    Call(kBaseType, MissOf(calls), 0, request);
+    ++calls;
+  }
+  QCHECK(Lines("resource_request_miss").size() == calls);
+  QCHECK(Lines("resource_request_table_full").size() == 1);
+}
+
+// (R11) A development build is as it was: every failure is written (no window), and no summary line is ever written.
+void ADevelopmentBuildHasNoFailureWindow() {
+  Reset(1);
+  g_nowMs = kT0;
+  rr::SetClockForTest(&FakeNow);
+  unsigned char request[layout::kRequestBytes] = {};
+  for (std::uint64_t n = 0; n < 3 * rr::kFailureLinesPerWindow; ++n) Call(kBaseType, MissOf(n), 0, request);
+  QCHECK(Lines("resource_request_miss").size() == 3 * rr::kFailureLinesPerWindow);
+  QCHECK(Lines("resource_request_miss_suppressed").empty());
+}
+
+// (R13) A thread that read the clock just before another one opened the next window belongs to that window: it neither
+// reopens the old one nor takes an extra place.
+void AnEarlierClockReadDoesNotReopenAnOlderWindow() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  g_nowMs = kT0 + rr::kFailureWindowMs;
+  for (std::uint64_t n = 0; n < rr::kFailureLinesPerWindow; ++n) Call(kBaseType, MissOf(n), 0, request);
+  g_nowMs = kT0;  // a straggler read the clock before the window turned
+  Call(kBaseType, MissOf(500), 0, request);
+  QCHECK(Lines("resource_request_miss").size() == rr::kFailureLinesPerWindow);
+  QCHECK(Lines("resource_request_miss_suppressed").empty());
+}
+
+// (R12) With no injected clock the window reads CLOCK_MONOTONIC in milliseconds.
+void TheProductionClockIsMonotonicMilliseconds() {
+  rr::ResetForTest();
+  timespec before{}, after{};
+  clock_gettime(CLOCK_MONOTONIC, &before);
+  const std::uint64_t got = rr::WindowClockMsForTest();
+  clock_gettime(CLOCK_MONOTONIC, &after);
+  const auto ms = [](const timespec& t) {
+    return static_cast<std::uint64_t>(t.tv_sec) * 1000u + static_cast<std::uint64_t>(t.tv_nsec) / 1000000u;
+  };
+  QCHECK(got >= ms(before) && got <= ms(after));
 }
 
 }  // namespace
@@ -443,6 +1166,33 @@ int main() {
   TheLineCountIsBoundedAndSaysSoOnce();
   TheCountersAreRegisteredAndARefusedOneIsSaid();
   WithoutLibr15TheInstallIsRefusedAndSaysWhy();
+  TheManifestSearchFindsEveryKeyAndOnlyThoseKeys();
+  AMissWithALooseFileIsServedWithTheCavesLayout();
+  AStageFailureFallsThroughToTheGame();
+  AHitNeverTouchesTheOverlay();
+  WithoutTheGameFunctionsAMissPassesThrough();
+  ANullManagerOrManifestPassesThrough();
+  AMissWithoutARequestPassesThrough();
+  WithLoggingOffTheOverlayStillServes();
+  ALoggedHitIsUnchanged();
+  AServedMissIsOneOverlayLine();
+  TheOverlayLineCapIsBoundedAndSaysSoOnce();
+  TheGameFunctionsResolveOnlyAtTheirPinnedAddresses();
+  ConcurrentHitsAndServedMissesAddUp();
+  AServedRequestReturnsZeroAndTheGameIsNotCalled();
+  AReleaseBuildLogsAFailedRequest();
+  AReleaseBuildLogsNoSuccess();
+  AReleaseFailureWithoutARequestIsLogged();
+  ARepeatedReleaseFailureIsLoggedAtEachPowerOfTwo();
+  AReleaseWindowWritesAtMostTheLimit();
+  ANewWindowStartsWithTheCountOfWhatTheLastDropped();
+  AQuietWindowWritesNoSummaryAndTheLimitRestarts();
+  ConcurrentReleaseFailuresWriteExactlyTheLimitAndCountTheRest();
+  AReleaseOverlayServeIsNotAFailureAndAFailedStageIsOne();
+  AFullKeyTableDoesNotHideAReleaseFailure();
+  ADevelopmentBuildHasNoFailureWindow();
+  AnEarlierClockReadDoesNotReopenAnOlderWindow();
+  TheProductionClockIsMonotonicMilliseconds();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "resource_request_hook_test: %d check(s) failed\n", quest_test::Failures());

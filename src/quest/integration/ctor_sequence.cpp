@@ -178,19 +178,16 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The OBB-mount skip (#319, #572) runs on every launch: no feature and no configuration turns it off.
     const bool obbCounters =
         r.Run(StepId::kRegisterObbSkipCounters, [&] { return steps.RegisterObbSkipCounters(); });
-    // The resource request log (#871) is for development builds: a release build registers nothing for it.
+    // The resource request hook (#871, #1737 C5) runs on every build and registers its counters on every launch. Whether
+    // every request is logged is the development question: a release build logs the failed requests only, the hook runs.
     bool resourceWanted = false;
     try {
       resourceWanted = steps.ResourceRequestLogWanted();
     } catch (const std::exception&) {
-      resourceWanted = false;  // cannot tell: not wanted
+      resourceWanted = false;  // cannot tell: the lines are not wanted; the hook still installs
     }
-    bool resourceCounters = false;
-    if (resourceWanted) {
-      resourceCounters = r.Run(StepId::kRegisterResourceRequestCounters, [&] { return steps.RegisterResourceRequestCounters(); });
-    } else {
-      r.Skip(StepId::kRegisterResourceRequestCounters, "release_build");
-    }
+    const bool resourceCounters =
+        r.Run(StepId::kRegisterResourceRequestCounters, [&] { return steps.RegisterResourceRequestCounters(); });
     // The texture-quality hook (#943) and the Texture Resolution control (#1012) run on every launch, at every level (`stock`
     // included: the game's settings menu can raise the level while the game runs), so their counters are registered on every
     // launch.
@@ -253,20 +250,11 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // CR15NetGame::Initialize asks for the number after the constructor.
     r.Run(StepId::kInstallOsBuildGate, [&] { return steps.InstallOsBuildGate(); });
 
-    // The log-only resource request hook (#871): a development build only, and only with its counters. Every libr15 slot
-    // it needs exists from the start; the game requests resources after the constructor.
-    if (!resourceWanted) {
-      r.Skip(StepId::kInstallResourceRequestLog, "release_build");
-    } else if (!resourceCounters) {
-      try {
-        steps.InstallResourceRequestLog(false);  // the hook's own rule logs that it installs nothing
-      } catch (const std::exception&) {
-        // Contained like every step; the outcome is the skip below either way.
-      }
-      r.Skip(StepId::kInstallResourceRequestLog, "counters_refused");
-    } else {
-      r.Run(StepId::kInstallResourceRequestLog, [&] { return steps.InstallResourceRequestLog(true); });
-    }
+    // The resource request hook (#871, #1737 C5): every build, with or without its counters (the install line says which),
+    // and its log lines only when the development question says so. Every libr15 slot it needs exists from the start; the
+    // game requests resources after the constructor.
+    r.Run(StepId::kInstallResourceRequestLog,
+          [&] { return steps.InstallResourceRequestLog(resourceCounters, resourceWanted); });
 
     // The eye-buffer size libr15 creates its swap chain with (#943) and the control that changes it (#1012): every launch, no
     // feature. libr15 asks for the size when it starts the game, after the constructor. Before the hardware dump, which shares

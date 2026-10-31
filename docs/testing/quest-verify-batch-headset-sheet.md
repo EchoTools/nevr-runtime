@@ -40,7 +40,7 @@ adb logcat -c && adb logcat -v time > batch-<headset>.log
 ```
 
 Search it with `grep -F '<text>' batch-<headset>.log`. If logcat rolled over, also pull the sentinel's own log at the
-end: `adb pull /sdcard/Android/data/com.readyatdawn.r15/files/nevr-sentinel.log .`
+end: `adb pull /sdcard/Android/media/com.readyatdawn.r15/files/nevr-sentinel.log .` (on a headset where that file is absent, the same name in `/sdcard/Android/data/com.readyatdawn.r15/files/`)
 
 **Sentinel lines** are JSON under the logcat tag `NEVR-Sentinel`, for example `{"event":"code_write_skipped",...}`.
 A row names the event and the fields to check. Counters appear as `{"event":"hook_counter","counter":"<name>",

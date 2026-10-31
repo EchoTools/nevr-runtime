@@ -127,6 +127,20 @@ std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
   return 0;
 }
 
+// True when a NOBITS section (.bss) of the file holds [vaddr, vaddr + size).
+bool NobitsHolds(const LoadedElf& elf, std::uint64_t vaddr, std::uint64_t size) {
+  const std::vector<char>& b = elf.bytes;
+  Elf64_Ehdr eh;
+  std::memcpy(&eh, b.data(), sizeof(eh));
+  if (eh.e_shoff == 0 || eh.e_shoff + eh.e_shnum * sizeof(Elf64_Shdr) > b.size()) return false;
+  std::vector<Elf64_Shdr> sh(eh.e_shnum);
+  std::memcpy(sh.data(), b.data() + eh.e_shoff, eh.e_shnum * sizeof(Elf64_Shdr));
+  for (const Elf64_Shdr& s : sh) {
+    if (s.sh_type == SHT_NOBITS && s.sh_addr <= vaddr && vaddr + size <= s.sh_addr + s.sh_size) return true;
+  }
+  return false;
+}
+
 // `text` is a whole NUL-terminated string in the file (a NUL before and after it).
 bool HoldsString(const std::vector<char>& file, const char* text) {
   std::string needle(1, '\0');
@@ -233,9 +247,22 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15ValidateGfxSettings(), "libr15 NRadGame::ValidateGfxSettings JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15ApplyRuntimeGfxSettings(), "libr15 NRadGame::ApplyRuntimeGfxSettings JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CheckForResize(), "libr15 CEngine::CheckForResize JUMP_SLOT");
+  // The free of GPU ranges (#1759): its slot, its first words, and the words the guard's layout rests on.
+  CheckTarget(r15, pinned::LibR15VkFree(), "libr15 CGRawInterfaceVK::Free(VkDeviceMemory_T*, ...) JUMP_SLOT");
+  for (const pinned::PinnedCode* block :
+       {&pinned::kVkFreeCountBlock, &pinned::kVkFreeAppendBlock, &pinned::kVkFreeAppendStore}) {
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block->vaddr, block->code, block->words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the words at %#llx differ from the pinned ones\n", block->name,
+                   static_cast<unsigned long long>(block->vaddr));
+      QCHECK(false);
+    }
+  }
+  // The array and its count lie in .bss, and the count follows the last of 512 entries.
+  QCHECK(NobitsHolds(r15, pinned::vk_hole_layout::kTableVaddr,
+                     pinned::vk_hole_layout::kCountVaddr + sizeof(std::uint32_t) - pinned::vk_hole_layout::kTableVaddr));
   for (const pinned::PinnedFunction* f :
        {&pinned::kRefreshRTSize, &pinned::kEngineResize, &pinned::kVrInitialized, &pinned::kVrGraphicsInitialized,
-        &pinned::kVrDisplayLost, &pinned::kLocalAppDataDirectory}) {
+        &pinned::kVrDisplayLost, &pinned::kLocalAppDataDirectory, &pinned::kVkFree}) {
     if (DynamicSymbolValue(r15, f->name) != f->vaddr) {
       std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", f->name, static_cast<unsigned long long>(f->vaddr));
       QCHECK(false);
@@ -427,6 +454,34 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
+  // The UI text writer's three game calls (runtime/patch/ui_text.h, quest/invite/ui_text_quest.cpp): each at its pinned address with
+  // the words the writer checks. The Itanium-mangled name of each is the .dynsym entry at that address.
+  const struct {
+    const char* name;
+    std::uint64_t vaddr;
+    const std::uint32_t* words;
+    std::size_t count;
+    const char* symbol;
+  } textCalls[] = {
+      {"CncaGame::GameSpace", pinned::kGameSpaceVaddr, pinned::kGameSpaceCode, sizeof(pinned::kGameSpaceCode) / 4,
+       "_ZN10NRadEngine8CncaGame9GameSpaceEy"},
+      {"CLocalComponentHandle<CCanvasUICS>::Find", pinned::kCanvasFindVaddr, pinned::kCanvasFindCode,
+       sizeof(pinned::kCanvasFindCode) / 4,
+       "_ZN10NRadEngine21CLocalComponentHandleINS_11CCanvasUICSEE4FindEPNS_15CncaGameSpaceMTENS_6SActorENS_9CSymbol64E"},
+      {"CCanvasUICS::SetText", pinned::kCanvasSetTextVaddr, pinned::kCanvasSetTextCode, sizeof(pinned::kCanvasSetTextCode) / 4,
+       pinned::kCanvasSetTextSymbol},
+  };
+  for (const auto& call : textCalls) {
+    if (DynamicSymbolValue(r15, call.symbol) != call.vaddr) {
+      std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", call.name, static_cast<unsigned long long>(call.vaddr));
+      QCHECK(false);
+    }
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + call.vaddr, call.words, call.count * 4) != 0) {
+      std::fprintf(stderr, "libr15 %s: first instructions differ from the pinned ones\n", call.name);
+      QCHECK(false);
+    }
+  }
+
   // CGTextureResource::ForceLoadAllMips, which the UI texture hook calls through the address it proves: its first
   // four instructions are the ones ui_texture_mips.cpp checks before calling it. The inline hook rows (the widget
   // update, the lobby-full handlers, the texture attach) are not pinned here: the patcher pinned test checks every row's
@@ -445,6 +500,21 @@ int main(int argc, char** argv) {
   if (DynamicSymbolValue(r15, pinned::kRequestPermissionsSymbol) != 0xf873ecULL) {
     std::fprintf(stderr, "libr15 %s: .dynsym value is not 0xf873ec\n", pinned::kRequestPermissionsSymbol);
     QCHECK(false);
+  }
+  // The first word the hook classifies (ClassifyOriginalWord, #1737 C2): the symbol is defined at the pinned address, and the
+  // store file's word there is the stock word, `sub sp,sp,#0x40`.
+  if (DynamicSymbolValue(r15, pinned::kRequestPermissionsSymbol) != pinned::kRequestPermissionsVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kRequestPermissionsSymbol,
+                 static_cast<unsigned long long>(pinned::kRequestPermissionsVaddr));
+    QCHECK(false);
+  }
+  {
+    std::uint32_t firstWord = 0;
+    std::memcpy(&firstWord, static_cast<const unsigned char*>(r15.mem) + pinned::kRequestPermissionsVaddr, sizeof(firstWord));
+    if (firstWord != pinned::kRequestPermissionsStockWord) {
+      std::fprintf(stderr, "libr15 CSysInfo::RequestPermissions: first word is %#x, not the store file's stock word\n", firstWord);
+      QCHECK(false);
+    }
   }
   if (DynamicSymbolValue(r15, pinned::kCheckPermissionSymbol) != pinned::kCheckPermissionVaddr) {
     std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kCheckPermissionSymbol,

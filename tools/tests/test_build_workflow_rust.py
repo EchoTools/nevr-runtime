@@ -4,8 +4,8 @@ The builder image holds Arch's MinGW GCC and no Rust, so `rustup` in the install
 v5.19.0 tag build (run 40790413315). The toolchain is installed by a step in build.yml: a pinned rustup-init,
 checked against its SHA-256 before it runs, a pinned toolchain and the Windows target. The tools are handed to the
 later steps through GITHUB_ENV, never PATH (a job that installs vcpkg must not edit PATH, #816), and the installer
-step calls cargo by its absolute path. It sits before the step that builds the installer and runs on the same
-condition.
+step calls cargo by its absolute path. Both steps are in the `installer` job, which runs for the same events as the
+build that needs them (#1770); neither step has a condition of its own.
 """
 
 import pathlib
@@ -36,9 +36,14 @@ class RustToolchainStep(unittest.TestCase):
     def test_it_comes_before_the_step_that_builds_the_installer(self) -> None:
         self.assertLess(self.text.index(f"- name: {INSTALL}"), self.text.index(f"- name: {BUILD_STEP}"))
 
-    def test_it_runs_on_the_same_condition_as_the_installer_step(self) -> None:
-        self.assertIn("if: steps.release.outputs.version != ''", self.install)
-        self.assertIn("if: steps.release.outputs.version != ''", self.build)
+    def test_neither_step_has_a_step_level_condition_the_installer_job_carries_it(self) -> None:
+        self.assertNotIn("if:", self.install)
+        self.assertNotIn("if:", self.build)
+        job = re.search(r"^  installer:\n(.*?)(?=^  \S|\Z)", self.text, re.S | re.M)
+        self.assertIsNotNone(job, "build.yml has no `installer` job")
+        self.assertIn("github.ref_type == 'tag'", job.group(0))
+        self.assertIn("github.event_name == 'release'", job.group(0))
+        self.assertLess(job.group(0).index(f"- name: {INSTALL}"), job.group(0).index(f"- name: {BUILD_STEP}"))
 
     def test_rustup_init_is_a_pinned_version_checked_against_its_sha256_before_it_runs(self) -> None:
         self.assertRegex(self.install, r"rustup/archive/\d+\.\d+\.\d+/x86_64-unknown-linux-gnu/rustup-init")

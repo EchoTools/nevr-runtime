@@ -119,6 +119,22 @@ build, what to do) is not optional.
   sha256 of that file, both read from the root and never from the pins, so a report says which data the player has; `none` when
   there is none), `data_fetch` (start, progress at a coarse interval, retry, verified, failed with the reason),
   `data_extract`, `data_swap`, and after a fetch a `data_version` event with the same two fields for the data it placed. No URL query strings or credentials in them (there are none).
+- **The packages.** The presence check above reads the manifest alone. When the data is in use and the manifest's sha256 (the
+  `manifest_sha256` of `data_check`) is in the pinned table `src/quest/data/package_pins.h`, the step also checks the package files
+  the manifest points into, `<root>/_data/<version folder>/rad15/android/packages/<manifest id>_<index>`. The table names a data set
+  by its manifest digest and lists each package with its byte length and, for the file a bundled content pack adds, its sha256; today
+  it holds the combat pack's manifest. The stock manifest is not in the table, and a manifest outside it is logged as `data_packages`
+  `outcome=unpinned` and used as before. Every launch measures each pinned package, in index order (`CheckPackages`,
+  `src/quest/data/data_step.cpp`). Only when every length matched, and only on the first launch of a build, the pack's added package
+  is hashed in 64 KiB chunks; the marker file `<root>/nevr-data-packages.verified`, whose whole content is `<manifest sha256>
+  <build id>\n`, is then written (a temporary and a rename), and a later launch with the same content skips the hash (`sha=skipped`).
+  With no build id nothing is hashed or written (`sha=not_due`). A package that is missing, short, oversize, unreadable or of the wrong
+  digest ends the check at the first one with a single `data_packages` Warning (`root`, `data_version`, `package`, `outcome`
+  `missing|short|oversize|sha_mismatch|unreadable`, `expected_bytes`, `found_bytes`, `consequence`); no marker is written. The decision
+  stays "use": a stock re-fetch would give a player of the pack the stock data and not bring the pack back, so the step logs and the
+  game starts on the data that is there. It shows the player no message. When the APK carries the pack, the pack step that follows
+  (ADR 0029, idempotence) writes a missing or wrong package again. Success is one `data_packages` info line (`outcome=verified`,
+  `packages`, `sha=checked|skipped|not_due`).
 
 ## What the player sees (the open problem)
 

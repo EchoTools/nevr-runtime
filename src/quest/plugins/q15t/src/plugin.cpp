@@ -38,6 +38,7 @@
 #include "shieldgamma.h"
 #include "sendguard.h"
 #include "tablestep.h"
+#include "combat_gates.h"
 #include "voipdrop.h"
 #include "wallfire.h"
 #include "weapon_arm.h"
@@ -76,6 +77,9 @@
 // ReVault 0x212ba74, 84 bytes) is the PC build's Link kind (4), so the Bind sets the link flag and not the Quest flag and no menu script is told it runs on a Quest headset (R1_functions.md:90).
 #ifndef Q15T_GATE_LINK
 #define Q15T_GATE_LINK 0
+#endif
+#ifndef Q15T_LEVELNAME
+#define Q15T_LEVELNAME 0
 #endif
 #ifndef Q15T_LINK_GATE_LIBS
 #define Q15T_LINK_GATE_LIBS "none"  // the CMake default names the combat menu scripts
@@ -156,9 +160,6 @@
 #ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
 #define Q15T_SHIELDGAMMA 0
 #endif
-#ifndef Q15T_LEVELNAME
-#define Q15T_LEVELNAME 0
-#endif
 #ifndef Q15T_SHADERSTEP
 #define Q15T_SHADERSTEP 0
 #endif
@@ -201,7 +202,8 @@ NEVR_DECLARE_SUPPORTED_BUILD_IDS(Q15T_BUILD_ID);
 #define Q15T_MARK_STR(x) Q15T_MARK_STR2(x)
 extern "C" __attribute__((used, retain, visibility("hidden"))) const char q15t_config_marker[] =
     "q15t-config ec_words=[" Q15T_MARK_EC_WORDS "] ecfx_default_on=" Q15T_MARK_STR(Q15T_ECFX_DEFAULT_ON)
-    " gate_link=" Q15T_MARK_STR(Q15T_GATE_LINK) " build_id=" Q15T_BUILD_ID;
+    " gate_link=" Q15T_MARK_STR(Q15T_GATE_LINK) " gate_perm=" Q15T_MARK_STR(Q15T_GATE_PERM) " gate_bots=" Q15T_MARK_STR(Q15T_GATE_BOTS)
+    " levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " hz_level=" Q15T_MARK_STR(Q15T_HZ_MATCH90) " build_id=" Q15T_BUILD_ID;
 
 namespace {
 
@@ -401,7 +403,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
   SetClockRaise(raise);
   const NevrLogField start[] = {{"game_build_id", id}, {"pinned", Q15T_BUILD_ID},
                                 {"clock_candidate", raise ? "1" : "0"}, {"clock_arg", clock_arg},
-                                {"hz_mode", Q15T_HZ_MATCH90 ? "match90" : "witness"}, {"t26", Q15T_T26 ? "1" : "0"},
+                                {"hz_mode", Q15T_HZ_MATCH90 ? "level" : "witness"}, {"t26", Q15T_T26 ? "1" : "0"},
                                 {"modules", kCompiledModules}};
   Log(NEVR_LOG_INFO, "q15t init", start, 7);
   if (has_clock_arg && !raise && std::strcmp(clock_arg, "log") != 0) {
@@ -414,6 +416,15 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
   }
   Report("vrapi_SetClockLevels", InstallClockLevels(ctx->base_addr, Q15T_SLOT_SETCLOCKLEVELS));
   Report("vrapi_SetDisplayRefreshRate", InstallRefreshRate(ctx->base_addr, Q15T_SLOT_SETDISPLAYREFRESHRATE));
+  // The three combat gates (combat_gates.h): what is built, less what a kill file turns off; the bot-body gate only with levelname.
+  [[maybe_unused]] const CombatGatesChoice gates =
+      DecideCombatGates({Q15T_GATE_PERM != 0, Q15T_GATE_BOTS != 0, Q15T_LEVELNAME != 0}, ReadCombatGatesOffFiles());
+  {
+    const NevrLogField f[] = {{"gate_perm", gates.perm ? "on" : "off"},        {"gate_perm_reason", gates.perm ? "installing" : gates.perm_reason},
+                              {"gate_bots", gates.bots ? "on" : "off"},        {"gate_bots_reason", gates.bots ? "installing" : gates.bots_reason},
+                              {"levelname", gates.levelname ? "on" : "off"},   {"levelname_reason", gates.levelname ? "installing" : gates.levelname_reason}};
+    Log(NEVR_LOG_INFO, "q15t_combat_gates_install: which combat gates this run installs (a Quest gets combat permission, the combat bot body, the full global_mp)", f, 6);
+  }
 #if Q15T_PFX
   InitPfxGate();  // the gate every pfx* module reads; logs its own "pfx gate" line (pfx.h)
 #endif
@@ -521,8 +532,15 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
   ReportModule("sendguard", InstallSendGuard(base));
 #endif
 #if Q15T_LEVELNAME
-  ReportModule("levelname", InstallLevelName(base));
-  ReportModule("boosterpool", InstallBoosterPool(base));  // the companion word row, as a GOT hook (boosterpool.h)
+  if (gates.levelname) {
+    ReportModule("levelname", InstallLevelName(base));
+    ReportModule("boosterpool", InstallBoosterPool(base));  // the companion word row, as a GOT hook (boosterpool.h)
+  } else {
+    InstallResult off;
+    off.reason = gates.levelname_reason;  // "off_file": levelname.off turns the pair off together
+    ReportModule("levelname", off);
+    ReportModule("boosterpool", off);
+  }
 #endif
 #if Q15T_SENSORWD
   ReportModule("sensorwd", InstallSensorWd(base));
@@ -573,9 +591,14 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
     LogNums(NEVR_LOG_INFO, "game tick callbacks", ticks, 2);
   }
 #if Q15T_GATE_PERM
-  Report("PartyMemberHeadsetType (permissions gate)",
-         InstallPartyHeadsetGate(ctx->base_addr, Q15T_SLOT_PARTYMEMBERHEADSETTYPE, {Q15T_PERM_FN_LO, Q15T_PERM_FN_HI},
-                                 Q15T_REAL_PARTYMEMBERHEADSETTYPE));
+  if (gates.perm) {
+    ReportModule("gate_perm", InstallPartyHeadsetGate(ctx->base_addr, Q15T_SLOT_PARTYMEMBERHEADSETTYPE, {Q15T_PERM_FN_LO, Q15T_PERM_FN_HI},
+                                                      Q15T_REAL_PARTYMEMBERHEADSETTYPE));
+  } else {
+    InstallResult off;
+    off.reason = gates.perm_reason;
+    ReportModule("gate_perm", off);
+  }
 #endif
 #if Q15T_GATE_BOTS || Q15T_GATE_LINK
   // The link gate answers only the script libraries the policy names (headset_gates.h): the build's list, or the first line of
@@ -597,7 +620,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
   // One wrapper on the one CVR::HeadsetType slot serves both gates; a gate that is off gets an empty caller range.
   Report("CVR::HeadsetType (caller-range gates)",
          InstallHeadsetGate(ctx->base_addr, Q15T_SLOT_HEADSETTYPE,
-                            Q15T_GATE_BOTS ? CallerRange{Q15T_BOTS_FN_LO, Q15T_BOTS_FN_HI} : CallerRange{0, 0}, Q15T_REAL_HEADSETTYPE,
+                            gates.bots ? CallerRange{Q15T_BOTS_FN_LO, Q15T_BOTS_FN_HI} : CallerRange{0, 0}, Q15T_REAL_HEADSETTYPE,
                             Q15T_GATE_LINK ? CallerRange{Q15T_LINK_FN_LO, Q15T_LINK_FN_HI} : CallerRange{0, 0}, kLinkHeadset));
 #endif
   // Always 0 from here: a non-zero return makes the loader dlclose the plugin, which is fatal once any word is swapped. A module's

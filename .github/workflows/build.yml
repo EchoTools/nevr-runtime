@@ -120,6 +120,67 @@ jobs:
         if [ "$kind" = draft ]; then echo "draft=true" >> "$GITHUB_OUTPUT"; else echo "draft=false" >> "$GITHUB_OUTPUT"; fi
         echo "draft release of $GITHUB_REF_NAME: $kind"
 
+  # The core installer (installer/, ADR 0023) is built in parallel with the DLL build: it needs the builder image's
+  # MinGW linker and installer/Cargo.lock, not the DLLs. The build job waits for this job's artifact inside a step
+  # (a `needs` edge would start the build job only after this one ends) and then splits the debug info, strips and
+  # links the exe once the dist target has named the package.
+  installer:
+    needs: guard
+    timeout-minutes: 20
+    if: ${{ !cancelled() && needs.guard.result == 'success' && needs.guard.outputs.built != 'true' && (github.event_name == 'release' || github.ref_type == 'tag') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/echotools/nevr-runtime-builder:256b66be91d7   # the same tag as the build job
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    # The builder image holds Arch's MinGW GCC and no Rust, so the installer job installs the toolchain itself (#1309):
+    # rustup-init at a pinned version, checked against its SHA-256 before it runs, a pinned toolchain and the Windows
+    # target. Cargo and rustup live under the runner's temp directory (HOME in this container belongs to the runner
+    # user, not to root, which rustup-init would call a sudo mistake; RUSTUP_INIT_SKIP_SUDO_CHECK says it is not) and
+    # reach the steps after this one through GITHUB_ENV. PATH is not edited: a job that installs vcpkg keeps the PATH
+    # its binary cache was keyed on (#816, #819), so the installer step calls cargo by its absolute path.
+    - name: Install the Rust toolchain for the core installer
+      shell: bash
+      run: |
+        set -euo pipefail
+        export RUSTUP_HOME="$RUNNER_TEMP/rustup" CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_INIT_SKIP_SUDO_CHECK=yes
+        curl --proto '=https' --tlsv1.2 -fsSL -o rustup-init https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init
+        echo "20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  rustup-init" | sha256sum -c -
+        chmod +x rustup-init
+        ./rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.99.1 --target x86_64-pc-windows-gnu
+        rm rustup-init
+        echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+        echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+
+    # The core installer that install.ps1 runs: built locked from the committed Cargo.lock for Windows with the same
+    # mingw the DLLs use. A release build has no DWARF unless asked, and verify_symbols.py requires the symbol file to
+    # carry it, hence line tables. It is built and linked once, as install-nevr-runtime.exe (#1492); the old name is a
+    # copy made in the packaging step of the build job.
+    - name: Build the core installer for Windows
+      shell: bash
+      env:
+        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+        CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+      run: |
+        set -euo pipefail
+        "$CARGO_HOME/bin/cargo" build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin install-nevr-runtime --target-dir build/installer
+        test -s build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+
+    - name: Upload the unstripped core installer
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: core-installer-unstripped
+        path: build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+        if-no-files-found: error
+        retention-days: 1
+
   build:
     needs: guard
     # An `if:` with no status function gets an implicit success(), and success() is false when ANY ancestor
@@ -131,6 +192,8 @@ jobs:
     permissions:
       contents: read
       packages: read
+      # The wait step reads the installer job's conclusion from the jobs API of this run.
+      actions: read
     outputs:
       version: ${{ steps.release.outputs.version }}
       draft: ${{ needs.guard.outputs.draft }}
@@ -300,14 +363,72 @@ jobs:
         test -x "$protoc"
         just proto
 
+    # ccache 4.14.2 from its release tarball, checked against the digest measured when this pin was written (the
+    # builder image has none, and changing the image is a separate release). Not on PATH: PATH is part of every mingw
+    # package ABI (see the vcpkg install above), so the launcher is named by absolute path below.
+    - name: Install pinned ccache
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/ccache.tgz" https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-linux-x86_64-musl-static.tar.gz
+        echo "d540ba01f160addbd3dd5e18eda9bd34005591b095c09ac8ae9d0a1b655e7ef5  $RUNNER_TEMP/ccache.tgz" | sha256sum -c -
+        mkdir -p "$RUNNER_TEMP/ccache"
+        tar -xzf "$RUNNER_TEMP/ccache.tgz" --strip-components=1 -C "$RUNNER_TEMP/ccache" ccache-4.14.2-linux-x86_64-musl-static/ccache
+        "$RUNNER_TEMP/ccache/ccache" --version | grep -x "ccache version 4.14.2"
+        # The settings reach every later step, because every later step that compiles goes through the launcher the configure
+        # step names (the dist target and, off a tag, Verify). $GITHUB_WORKSPACE, not ${{ github.workspace }} (the host's path in
+        # a container job). tools/ccache.conf is the config local builds use; the size cap is CI's own and no base_dir is set
+        # (the workspace path is fixed). Only PATH is kept out of GITHUB_ENV (it is part of every mingw package ABI).
+        {
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache"
+          echo "CCACHE_CONFIGPATH=$GITHUB_WORKSPACE/tools/ccache.conf"
+          echo "CCACHE_MAXSIZE=500M"
+          echo "CCACHE_COMPILERCHECK=content"
+        } >> "$GITHUB_ENV"
+
+    # A cache is restorable only from the run's own ref and the default branch, and a tag cannot read another tag's: the
+    # entry a new tag restores was saved on main (a hand-run `gh workflow run build.yml --ref main`); a dispatch on a tag
+    # feeds the release run of that same tag. The key carries the toolchain, so a new compiler starts a fresh cache.
+    - name: Restore the ccache
+      id: ccache_cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: .ccache
+        key: ccache-mingw-release-v1-${{ steps.vcpkg.outputs.gcc }}-4.14.2-${{ github.sha }}
+        restore-keys: |
+          ccache-mingw-release-v1-${{ steps.vcpkg.outputs.gcc }}-4.14.2-
+
     - name: Configure CMake
       # Never signs here, and nothing in this workflow signs: the release signer signs the draft's files
       # afterwards (RELEASING.md).
       # The private-CA path (NEVR_CODESIGN_REQUIRED, `just sign`) is for local development builds only.
-      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF
+      run: |
+        set -euo pipefail
+        cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF \
+          -DCMAKE_C_COMPILER_LAUNCHER="$RUNNER_TEMP/ccache/ccache" -DCMAKE_CXX_COMPILER_LAUNCHER="$RUNNER_TEMP/ccache/ccache"
 
     - name: Build
-      run: cmake --build --preset mingw-release
+      run: |
+        set -euo pipefail
+        "$RUNNER_TEMP/ccache/ccache" --zero-stats
+        cmake --build --preset mingw-release
+
+    # Saved right after the build, so a failure in a later step (Verify takes 35 minutes) does not lose it. A
+    # release-event run is the last on its tag and nothing can restore its entry, so it saves nothing.
+    - name: Save the ccache
+      if: github.event_name != 'release'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: .ccache
+        key: ccache-mingw-release-v1-${{ steps.vcpkg.outputs.gcc }}-4.14.2-${{ github.sha }}
+
+    # Diagnostics only: a failure here (a renamed ccache key, no DLL because Build failed) must not fail the build.
+    - name: ccache statistics
+      if: always()
+      continue-on-error: true
+      run: |
+        "$RUNNER_TEMP/ccache/ccache" --show-stats --verbose
+        "$RUNNER_TEMP/ccache/ccache" --show-config | grep -E 'cache_dir|max_size|sloppiness|hash_dir|compiler_check|base_dir'
+        sha256sum build/mingw-release/bin/BugSplat64.dll build/mingw-release/bin/nevr-runtime.dll
 
     # What the build actually stamped, logged and checked against the version computed above: the DLL's
     # one identity literal "NEVR-BUILD <version> <commit40>" (each of the two DLLs carries it) must carry exactly that version and this
@@ -325,8 +446,10 @@ jobs:
 
     # `just verify` runs test-quest-hooks, which copies the NDK's jni.h ({{ ndk }} in the justfile), so this job needs the
     # NDK the quest job has. Set up here, after the build and before Verify, so the vcpkg binary cache and its
-    # ABI hash are untouched (tools/tests/test_build_workflow_ndk.py, #837).
+    # ABI hash are untouched (tools/tests/test_build_workflow_ndk.py, #837). Tag builds skip Verify (#1008), the only
+    # step that needs the NDK, so they skip this step too.
     - name: Set up the Android NDK
+      if: github.ref_type != 'tag'
       uses: ./.github/actions/setup-ndk
 
     # Tag builds skip Verify (#1008): every commit on main already passed `just verify` on its PR, and the tag's
@@ -369,46 +492,50 @@ jobs:
           [[ "$tar_entries" == *echovr_server.exe* ]]
         done
 
-    # The builder image holds Arch's MinGW GCC and no Rust, so the installer's toolchain is installed here, on the
-    # same condition as the build that needs it (#1309): rustup-init at a pinned version, checked against its SHA-256
-    # before it runs, a pinned toolchain and the Windows target. Cargo and rustup live under the runner's temp
-    # directory (HOME in this container belongs to the runner user, not to root, which rustup-init would call a sudo
-    # mistake; RUSTUP_INIT_SKIP_SUDO_CHECK says it is not) and reach the steps after this one
-    # through GITHUB_ENV. PATH is not edited: a job that installs vcpkg keeps the PATH its binary cache was keyed
-    # on (#816, #819), so the installer step calls cargo by its absolute path.
-    - name: Install the Rust toolchain for the core installer
-      if: steps.release.outputs.version != ''
-      shell: bash
-      run: |
-        set -euo pipefail
-        export RUSTUP_HOME="$RUNNER_TEMP/rustup" CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_INIT_SKIP_SUDO_CHECK=yes
-        curl --proto '=https' --tlsv1.2 -fsSL -o rustup-init https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init
-        echo "20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  rustup-init" | sha256sum -c -
-        chmod +x rustup-init
-        ./rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.99.1 --target x86_64-pc-windows-gnu
-        rm rustup-init
-        echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
-        echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
-
-    # The core installer (installer/, ADR 0023) that install.ps1 runs: built locked from the committed Cargo.lock for
-    # Windows with the same mingw the DLLs use, then put through the dist target's sequence: debug info split into
-    # dist/symbols/<package>/install-nevr-runtime.exe.dbg, stripped, linked to it. A release build has no DWARF unless asked,
-    # and verify_symbols.py requires the symbol file to carry it, hence line tables. It rides in the zip as its own
-    # file, so the signed manifest's `contents` covers it. It runs after the dist target, which recreates dist/symbols.
-    # It is built and linked once, as install-nevr-runtime.exe (#1492); the old name is a copy made in the packaging step.
-    - name: Build the core installer for Windows
+    # The core installer is built by the installer job, in parallel with this job. This step waits for that job's
+    # conclusion from the jobs API (a job's `conclusion` is set when it completes): `needs` would start this job only
+    # after the installer job ends. "absent" is a job the run does not list yet. The deadline is the timeout, and the
+    # sleep is the one wait in this step.
+    - name: Wait for the core installer job
       if: steps.release.outputs.version != ''
       shell: bash
       env:
-        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
-        CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        deadline=$((SECONDS + 900))        # out: 900 s, then fail loudly
+        while :; do
+          # A poll that fails (an API error, a rate limit, a body without `jobs`) is "unreadable" and tried again until the deadline.
+          c=$(curl -fsS --retry 3 --retry-all-errors -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            | python3 -c 'import json,sys; j=[x for x in json.load(sys.stdin)["jobs"] if x["name"]=="installer"]; print((j[0]["conclusion"] or "running") if j else "absent")') || c=unreadable
+          echo "installer job: $c"
+          case "$c" in success) break;; running|absent|unreadable) ;; *) echo "installer job ended: $c" >&2; exit 1;; esac
+          [ "$SECONDS" -lt "$deadline" ] || { echo "installer job still $c after 900 s" >&2; exit 1; }
+          sleep 10
+        done
+
+    - name: Download the core installer
+      if: steps.release.outputs.version != ''
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      with:
+        name: core-installer-unstripped
+        path: core-installer
+
+    # The installer's debug info is split into dist/symbols/<package>/install-nevr-runtime.exe.dbg, the exe is stripped and
+    # linked to it: the sequence the dist target runs for the DLLs. It runs after the dist target, which recreates
+    # dist/symbols, and it rides in the zip as its own file, so the signed manifest's `contents` covers it.
+    - name: Split, strip and link the core installer's symbols
+      if: steps.release.outputs.version != ''
+      shell: bash
       run: |
         set -euo pipefail
         packages=(dist/nevr-runtime-v*/)
         test "${#packages[@]}" -eq 1
         name=$(basename "${packages[0]%/}")
         exe=build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
-        "$CARGO_HOME/bin/cargo" build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin install-nevr-runtime --target-dir build/installer
+        mkdir -p "$(dirname "$exe")"
+        cp core-installer/install-nevr-runtime.exe "$exe"
         x86_64-w64-mingw32-objcopy --only-keep-debug "$exe" "dist/symbols/$name/install-nevr-runtime.exe.dbg"
         x86_64-w64-mingw32-strip --strip-all "$exe"
         x86_64-w64-mingw32-objcopy "--add-gnu-debuglink=dist/symbols/$name/install-nevr-runtime.exe.dbg" "$exe"

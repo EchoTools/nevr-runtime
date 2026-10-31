@@ -78,7 +78,9 @@ TEST(NetgunBulletIds, OnlyTheBulletIdChanges) {
       const size_t at = EntryAt(e) + nb::kBulletOffset;
       inBullet = i >= at && i < at + 8;
     }
-    if (!inBullet) EXPECT_EQ(r.bytes[i], stock[i]) << "byte " << i;
+    if (!inBullet) {
+      EXPECT_EQ(r.bytes[i], stock[i]) << "byte " << i;
+    }
   }
 }
 

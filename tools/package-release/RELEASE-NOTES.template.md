@@ -50,7 +50,7 @@ Windows Defender or SmartScreen may warn about a file that is not signed.
 
 ## Notes
 @IF_APK@- The Windows log is `%LOCALAPPDATA%\nevr\echovr\logs\nevr-*.jsonl`; the Quest log is
-@IF_APK@  `/sdcard/Android/data/com.readyatdawn.r15/files/nevr-sentinel.log`.
+@IF_APK@  `/sdcard/Android/media/com.readyatdawn.r15/files/nevr-sentinel.log`, and the session before it beside it as `nevr-sentinel.session-<number>.log`.
 @IF_APK@- The version is `@VERSION@`, in both artifacts.
 @IF_NOAPK@- The Windows log is `%LOCALAPPDATA%\nevr\echovr\logs\nevr-*.jsonl`.
 @IF_NOAPK@- The version is `@VERSION@`; `BugSplat64.dll` and `nevr-runtime.dll` each carry it with the commit in one identity string,

@@ -26,8 +26,6 @@ inline constexpr Pin kFind{"CComponentHandle<CCanvasUICS>::Find", 0x16fe628, {0x
 // CComponentHandle<CCanvasUICS>::RefreshCache() const.
 inline constexpr Pin kRefreshCache{"CComponentHandle<CCanvasUICS>::RefreshCache", 0x12da698,
                                    {0xd101c3ff, 0xa90363f9, 0xa9045bf7, 0xa90553f5}};
-// CCanvasUICS::SetText(SCompactPoolHandle, CSymbol64, char const*): sentinel::pinned::kCanvasSetTextVaddr.
-inline constexpr Pin kSetText{"CCanvasUICS::SetText", 0x139111c, {0xb4000243, 0xd10083ff, 0xa9017bf3, 0xaa0303f3}};
 // CCanvasUICS::ElementID(SCompactPoolHandle, CSymbol64) const: the primitive id, ~0 for none (SUIPrimitiveID::Valid).
 inline constexpr Pin kElementId{"CCanvasUICS::ElementID", 0x13931b0, {0xf81f0ffe, 0x92407c21, 0x910023e3, 0x97ede4c5}};
 // CCanvasUICS::FindBehavior(CSymbol64 type, SUIBehaviorID).
@@ -35,7 +33,7 @@ inline constexpr Pin kFindBehavior{"CCanvasUICS::FindBehavior", 0x138ff74, {0xd1
 // CR15DynLoadTextureBehavior::LoadAndApplyTexture(CSymbol64 texture).
 inline constexpr Pin kLoadAndApplyTexture{"CR15DynLoadTextureBehavior::LoadAndApplyTexture", 0x20f31c8,
                                           {0xd10143ff, 0xa90207f6, 0xa90353f5, 0xa9047bf3}};
-inline constexpr Pin kAll[] = {kFind, kRefreshCache, kSetText, kElementId, kFindBehavior, kLoadAndApplyTexture};
+inline constexpr Pin kAll[] = {kFind, kRefreshCache, kElementId, kFindBehavior, kLoadAndApplyTexture};
 
 // The CR15DynLoadTextureBehavior type symbol Enter passes to FindBehavior, and its value in the pinned file.
 inline constexpr std::uint64_t kBehaviourTypeVaddr = 0x2ba17a0;
@@ -65,7 +63,6 @@ static_assert(sizeof(BehaviourId) == 24, "SUIBehaviorID is 24 bytes");
 
 using FindFn = void (*)(void* handle, void* gameSpace, std::uint64_t actor, std::uint64_t component);
 using RefreshCacheFn = void (*)(void* handle);
-using SetTextFn = std::uint64_t (*)(void* canvas, std::uint32_t handle, std::uint64_t element, const char* text);
 using ElementIdFn = std::uint32_t (*)(void* canvas, std::uint32_t handle, std::uint64_t element);
 using FindBehaviorFn = void* (*)(void* canvas, std::uint64_t type, const BehaviourId* id);
 using LoadAndApplyTextureFn = void (*)(void* behaviour, std::uint64_t texture);

@@ -1,1 +1,0 @@
-On combat maps, the magnum, SMG, Chain and rifle netgun weapons now fire the assault's bullet.

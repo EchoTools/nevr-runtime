@@ -282,8 +282,8 @@ after a crash, until the next start). No client log line carries it (the sentine
 and, because of the hook order above, the game's own); the server logs it at Info when it is
 verified (`evr_device_auth.go`, `DeviceAuthVerifyRpc`). A crash while a code is live can put it in
 a minidump: the sentinel's Breakpad handler writes dumps to the first writable of
-`/sdcard/Android/data/com.readyatdawn.r15/files/nevr-crashes`, the app-internal `files`
-directory and `/data/local/tmp` (`sentinel/sentinel.cpp`), and a dump holds process memory: the
+`/sdcard/Android/media/com.readyatdawn.r15/files/nevr-crashes`, `/sdcard/Android/data/com.readyatdawn.r15/files/nevr-crashes`, the app-internal `files`
+directory and `/data/local/tmp` (`sentinel/crash_dir.h`), and a dump holds process memory: the
 game's error block while it shows the code, library buffers (libcurl's request and response) and
 anything else. The client overwrites these copies when it is done with them: the board (on
 withdraw and on each publish), the hooks' stack copies and their record of the block, the flow's
@@ -900,8 +900,11 @@ slot is logged and not retried. When all 16 cache entries were computed under th
 state, a further distinct value is not remembered and each read of it runs the policy again.
 
 The relocation resolves the PLT stub `0xf28e40` to the defined `CJson::TString` at `0xfa2e7c`,
-not to the unrelated function at `0x10a2e7c`. The `libr15.so` string locations `0x2bae9b8`,
-`0x2baeca2` and `0x2baecf7` are unverified and must not be patched from this record.
+not to the unrelated function at `0x10a2e7c`. The `libr15.so` string at `0x2bae9b8` is the `login_host`
+fallback of the `BeginLogIn` read (`wss://login.readyatdawn.com/rad/rad15_live`). It is not patched: the
+build tuple is appended at run time by the TString handler (`HandleTString` in `src/quest/redirect/tstring_thunks.cpp`
+asks the fallback decision, which composes the tuple with `Compose` in `src/quest/redirect/login_fallback.h`). The `libr15.so` string locations `0x2baeca2` and `0x2baecf7`
+are unverified and must not be patched from this record.
 ReVault's `source: imported` on a decompilation describes how it entered the warehouse; only the
 ELF's own symbol and relocation tables establish a GOT hook.
 

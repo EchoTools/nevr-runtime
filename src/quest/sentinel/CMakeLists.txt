@@ -79,6 +79,7 @@ add_library(ovrplatformloader SHARED
   main_level.cpp
   login_title_hook.cpp
   obb_skip_hook.cpp
+  path_rewrite_hook.cpp
   process_end_hook.cpp
   crash_first_hook.cpp
   permission_request.cpp
@@ -90,6 +91,7 @@ add_library(ovrplatformloader SHARED
   render_config_hook.cpp
   ui_texture_mips.cpp
   quit_hook.cpp
+  vk_free_guard.cpp
   pns_provider_hook.cpp
   os_build_gate_hook.cpp
   resource_request_hook.cpp
@@ -122,7 +124,7 @@ target_link_libraries(ovrplatformloader PRIVATE nevr::plugin_sdk nevr_quest_got_
 # src/quest/CMakeLists.txt) is compiled without exception support so its frames carry no
 # personality or LSDA; see the contract in callback_thunk.h. tests/quest
 # TestHookFramesCarryNoPersonality pins it.
-set_source_files_properties(entry.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp main_level.cpp login_title_hook.cpp obb_skip_hook.cpp process_end_hook.cpp crash_first_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp texture_menu_hook.cpp ui_texture_mips.cpp quit_hook.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(entry.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp main_level.cpp login_title_hook.cpp obb_skip_hook.cpp path_rewrite_hook.cpp process_end_hook.cpp crash_first_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp texture_menu_hook.cpp ui_texture_mips.cpp quit_hook.cpp vk_free_guard.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # The Quest join on a resolved invite code (#966, S4). Its std::function<bool()> and std::function<std::int64_t()>
 # come through the shared invite_join.h; libc++ marks those templates' type info default-visibility, so an object
@@ -130,7 +132,7 @@ set_source_files_properties(entry.cpp login_prompt_hook.cpp ../invite/frame_disp
 # --exclude-libs (below) keeps it out of the export set, the same as nevr_quest_data_wiring. It is on the hook path
 # (entry.cpp calls RegisterAnswerApplier, reached from HookedNetGameUpdate), so it is built without exceptions, and with hidden
 # default visibility and the warnings-as-errors flags its siblings nevr_quest_data_wiring and nevr_quest_invite use.
-add_library(nevr_quest_invite_join STATIC ../invite/join_game_quest.cpp)
+add_library(nevr_quest_invite_join STATIC ../invite/join_game_quest.cpp ../invite/ui_text_quest.cpp)
 target_include_directories(nevr_quest_invite_join PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../..

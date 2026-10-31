@@ -69,6 +69,15 @@ inline std::string TextOr(const nlohmann::json& object, const char* key) {
   return field == nullptr ? std::string() : field->get<std::string>();
 }
 
+// A click's own fields (the typed code, the create page's settings) are what the game puts in the metric's `event_detail`
+// object; the panel and event names stay at the top. The top level wins when a key is in both.
+inline std::string DetailTextOr(const nlohmann::json& object, const char* key) {
+  if (const nlohmann::json* top = StringField(object, key)) return top->get<std::string>();
+  const auto detail = object.find("event_detail");
+  if (detail == object.end() || !detail->is_object()) return std::string();
+  return TextOr(*detail, key);
+}
+
 inline bool IsEvent(const nlohmann::json& object, const char* panel_name, const char* event_name) {
   const nlohmann::json* panel = StringField(object, "panel_name");
   const nlohmann::json* event = StringField(object, "event_name");
@@ -90,14 +99,57 @@ inline Metric ParseMetric(std::string_view line) {
 
   if (detail::IsEvent(doc, "create_game_review_settings", "create_invite")) {
     metric.kind = Kind::Create;
-    metric.region = detail::TextOr(doc, "Server_region");
-    metric.expires_text = detail::TextOr(doc, "Expires_after");
+    metric.region = detail::DetailTextOr(doc, "Server_region");
+    metric.expires_text = detail::DetailTextOr(doc, "Expires_after");
   } else if (detail::IsEvent(doc, "join_via_code", "join")) {
     metric.kind = Kind::Join;
-    metric.join_code = detail::TextOr(doc, "join_code");
+    metric.join_code = detail::DetailTextOr(doc, "join_code");
     if (metric.join_code == "<invalid>") metric.join_code.clear();
   }
   return metric;
+}
+
+// What a wizard metric line holds, without its values: each top-level key with its kind and, for text, its length ("s5"; "invalid"
+// for the game's "<invalid>" mark). A join click that carries no usable code is logged with this, so the next reader can see which
+// key the game really sends the typed code under without a code, a name or a token reaching the log (docs/standards/logging.md, Rule 4).
+inline std::string MetricShape(std::string_view line) {
+  if (line.empty() || line.size() > kMetricMaxBytes) return "unreadable";
+  const nlohmann::json doc = nlohmann::json::parse(line.begin(), line.end(), nullptr, false);
+  if (!doc.is_object()) return "unreadable";
+  std::string out;
+  for (auto it = doc.begin(); it != doc.end(); ++it) {
+    if (!out.empty()) out += ',';
+    out += it.key() + '=';
+    if (it->is_string()) {
+      const std::string text = it->get<std::string>();
+      out += text == "<invalid>" ? std::string("invalid") : "s" + std::to_string(text.size());
+    } else if (it->is_number()) {
+      out += "number";
+    } else if (it->is_boolean()) {
+      out += "bool";
+    } else if (it->is_null()) {
+      out += "null";
+    } else if (it->is_object()) {
+      out += "{" + MetricShape(it->dump()) + "}";  // one more level: a nested object's own keys and kinds
+    } else {
+      out += "array";
+    }
+  }
+  return out;
+}
+
+// The share page's JOIN button (#1731). Its page script (`8c3244ce60942e17.dll`, ReVault) sends one deep_linking click metric and
+// nothing else: panel `create_game_summary`, event `join` (the script's strings at 0x180008438 and 0x180008470). The game has no
+// function that joins on it, so a client that reads the click starts the join of the match it just created.
+inline bool IsShareJoin(std::string_view line) {
+  if (line.empty() || line.size() > kMetricMaxBytes) return false;
+  const nlohmann::json doc = nlohmann::json::parse(line.begin(), line.end(), nullptr, false);
+  return doc.is_object() && detail::TextOr(doc, "panel_type") == "deep_linking" &&
+         detail::IsEvent(doc, "create_game_summary", "join");
+}
+
+inline std::string ShareJoinClickLine() {
+  return "[NEVR.INVITE] wizard click seen event=join panel=create_game_summary";
 }
 
 // ---- the code ----

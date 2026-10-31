@@ -34,6 +34,10 @@ enum Id : int {
   kBroadcasterListen,
   kBroadcasterReceiveLocal,
   kOvrGetPerfStats,
+  kDeadlockMonitorMain,
+  kLoadingTipPick,
+  kLoadingTipSelectByIndex,
+  kLoadingTipSelect,
   kCount
 };
 

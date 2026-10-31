@@ -45,6 +45,7 @@
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/early_quit_lockout.h"
 #include "runtime/patch/lobby_full_backoff.h"
+#include "runtime/patch/noovr_arglookup.h"
 #include "runtime/patch/menu_version_label.h"
 #include "runtime/patch/social_facade.h"
 #include "runtime/patch/splash_skip.h"
@@ -609,7 +610,7 @@ static VOID InitializeAfterGameImageGuard() {
 
   // --- Startup patches (applied before CLI parsing) ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] applying startup patches...\n");
-  PatchNoOvrRequiresSpectatorStream();
+  nevr_noovr_arglookup::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
   PatchDeadlockMonitor();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] startup patches applied\n");
 

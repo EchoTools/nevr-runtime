@@ -7,6 +7,21 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 ([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
 when, they appear in all capitals, as shown here.
 
+## Do what was asked
+
+These come before every other rule in this file.
+
+- **Build the request as given.** Add no step, criterion, order or check the request does not contain. Permission to do
+  something is not a request to do it.
+- **Decide two-way doors.** Make a reversible choice yourself, take the answer a professional engineer would take, and
+  report it. Ask only about one-way actions and real dilemmas.
+- **Pass on intent, not orders.** When you direct another seat, give it the owner's goal and let it finish its work. Never
+  tell it to stop unless the owner said to.
+- **Every check carries a decision rule.** Before any test, build or check, write down the result that would change what
+  you do and the action it would trigger. A check with no such result, or whose failure a later step the owner already
+  named would catch, is cut.
+- **Done is the owner's stated done.** Add no criteria to it.
+
 The logging standard below is part of this contract:
 
 @docs/standards/logging.md
@@ -707,6 +722,12 @@ your seat name, for example `claude-main` or `codex`.
 - **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
   Never interrupt another agent's build.
 - **At most three heavy builds at once per seat,** so the usage window and memory both hold.
+- **Cached builds come from one fixed, clean checkout.** The merge foreman builds in `<work root>/build-checkout/nevr-runtime`
+  (`$NEVR_BUILD_CHECKOUT`), moved to the commit with `just build-checkout <rev>`, and a build there refuses unless
+  `git status --porcelain` is empty (`tools/build_checkout.py guard`). The path never changes, so the Quest build keeps the
+  ccache launcher only there; in any other tree its debug info would carry that tree's path, and the launcher is off. Nobody edits
+  that checkout. One config (`tools/ccache.conf`, copied into the cache directory) is read by every build; `just ccache-stats` shows
+  the cache as the builds see it, where a bare `ccache -s` shows ccache's 5 GiB default (#1736).
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
   Never point a build at `~/.vcpkg` directly.
 - **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test

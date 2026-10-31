@@ -1,5 +1,6 @@
 // The FRIENDS panel's platform on the Quest (friends_quest.h): the functions the shared panel logic calls
-// (friends_panel_platform.h), the UI text writer's game half (ui_text_writer.h), the pictures set and the pictures.
+// (friends_panel_platform.h), the UI text writer's entry points (ui_text_writer.h, forwarded to the Quest's writer,
+// quest/invite/ui_text_quest.h), the pictures set and the pictures.
 // Built with exceptions: the panel logic contains its own failures; the frame work and the picture server catch
 // everything before they return to a game frame.
 
@@ -31,6 +32,7 @@
 #include "quest/friends/friends_quest_internal.h"
 #include "quest/friends/friends_quest_pins.h"
 #include "quest/invite/frame_dispatch.h"
+#include "quest/invite/ui_text_quest.h"
 #include "quest/sentinel/menu_cards_hook.h"
 #include "quest/sentinel/sentinel_log.h"
 #include "runtime/patch/friends_canvas.h"
@@ -38,7 +40,6 @@
 #include "runtime/patch/friends_panel_platform.h"
 #include "runtime/patch/menu_friends_avatars.h"
 #include "runtime/patch/menu_friends_pack.h"
-#include "runtime/patch/ui_text.h"
 #include "runtime/patch/ui_text_writer.h"
 
 namespace nevr_quest_friends {
@@ -53,13 +54,11 @@ struct State {
   std::atomic<std::uintptr_t> base{0};  // libr15's load address once every pin matched
   pins::FindFn find = nullptr;
   pins::RefreshCacheFn refreshCache = nullptr;
-  pins::SetTextFn setText = nullptr;
   pins::ElementIdFn elementId = nullptr;
   pins::FindBehaviorFn findBehavior = nullptr;
   pins::LoadAndApplyTextureFn loadAndApplyTexture = nullptr;
   std::uint64_t behaviourType = 0;
   std::string dataRoot;
-  nevr_ui_text::Pending pending;
   std::mutex picturesMutex;
   std::map<std::uint64_t, std::vector<std::uint8_t>> pictures;  // slot name -> ASTC payload, for the rest of the process
   nevr::quest_auth::CurlHttpClient* http = nullptr;
@@ -125,18 +124,6 @@ std::uintptr_t GameSpace() {
   std::memcpy(&gs, reinterpret_cast<const unsigned char*>(game) + pins::kGameSpaceOffset, sizeof(gs));
   return gs;
 }
-
-// The text writer's platform (ui_text.h Apply): one game space, the canvas looked up by the actor's name.
-struct TextPlatform {
-  std::uintptr_t Game() { return nevr_quest_friends::GameSpace() != 0 ? 1 : 0; }
-  std::uintptr_t GameSpace(std::uintptr_t /*game*/, std::uint64_t index) { return index == 0 ? nevr_quest_friends::GameSpace() : 0; }
-  bool FindCanvasByName(std::uintptr_t gs, std::uint64_t actor, std::uintptr_t* cs, std::uint32_t* handle) {
-    return FindCanvas(gs, actor, cs, handle);
-  }
-  bool SetText(std::uintptr_t cs, std::uint32_t handle, std::uint64_t element, const char* text) {
-    return S().setText(reinterpret_cast<void*>(cs), handle, element, text) != 0;
-  }
-};
 
 // ---- the pictures set ----
 
@@ -278,7 +265,6 @@ const char* PrepareFriendsPanel() noexcept {
     if (!PinsMatch(base)) return nullptr;
     s.find = reinterpret_cast<pins::FindFn>(base + pins::kFind.vaddr);
     s.refreshCache = reinterpret_cast<pins::RefreshCacheFn>(base + pins::kRefreshCache.vaddr);
-    s.setText = reinterpret_cast<pins::SetTextFn>(base + pins::kSetText.vaddr);
     s.elementId = reinterpret_cast<pins::ElementIdFn>(base + pins::kElementId.vaddr);
     s.findBehavior = reinterpret_cast<pins::FindBehaviorFn>(base + pins::kFindBehavior.vaddr);
     s.loadAndApplyTexture = reinterpret_cast<pins::LoadAndApplyTextureFn>(base + pins::kLoadAndApplyTexture.vaddr);
@@ -401,38 +387,19 @@ bool PicturesReady() { return nevr_quest_friends::S().base.load(std::memory_orde
 
 }  // namespace nevr_friends_platform
 
-// ---- the UI text writer's game half ----
+// ---- the UI text writer ----
 
+// The panel posts through ui_text_writer.h, as on PC; on the Quest that is the Quest's writer (ui_text_quest.h), the same
+// shared queue with libr15's address table. Its OnFrame runs from the panel's frame work (FrameWork above), so the texts
+// are written whether or not the invite feature registered its own frame work.
 namespace nevr_ui_text {
 
 void Install(std::uintptr_t /*gameBase*/) {}
 
-bool Ready() { return nevr_quest_friends::S().base.load(std::memory_order_acquire) != 0; }
+bool Ready() { return nevr_quest::ui_text::Ready(); }
 
-Check Post(Request request) {
-  const Check check = nevr_quest_friends::S().pending.Post(std::move(request), nevr_quest_friends::NowMsValue());
-  if (check != Check::Ok) nevr_friends_platform::Log(nevr_friends_platform::Level::Warning, "[NEVR.UI] text refused reason=%s", CheckName(check));
-  return check;
-}
+Check Post(Request request) { return nevr_quest::ui_text::Post(std::move(request)); }
 
-void OnFrame() {
-  nevr_quest_friends::State& s = nevr_quest_friends::S();
-  if (!Ready() || s.pending.Size() == 0) return;
-  nevr_quest_friends::TextPlatform platform;
-  for (const Report& r : s.pending.Drain(platform, nevr_quest_friends::NowMsValue())) {
-    if (!r.done) {
-      // The first miss and then one a 5 s: a request the page never answers must explain itself before its give-up.
-      if (r.attempts == 1 || r.attempts % 50 == 0) {
-        nevr_friends_platform::Log(nevr_friends_platform::Level::Info,
-                                   "[NEVR.UI] text waiting actor=%s element=%s bytes=%zu attempts=%d outcome=%s",
-                                   Hex64(r.request.target.actor).c_str(), Hex64(r.request.target.element).c_str(),
-                                   r.request.text.size(), r.attempts, OutcomeName(r.outcome));
-      }
-      continue;
-    }
-    nevr_friends_platform::Log(r.dropped ? nevr_friends_platform::Level::Warning : nevr_friends_platform::Level::Info, "%s",
-                               ReportLine(r).c_str());
-  }
-}
+void OnFrame() { nevr_quest::ui_text::OnFrame(); }
 
 }  // namespace nevr_ui_text

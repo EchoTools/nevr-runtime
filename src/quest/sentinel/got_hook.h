@@ -133,6 +133,11 @@ enum class HookPriority : std::uint8_t { kNormal, kCritical };
 using BuildIdAliasFn = const char* (*)(const char* liveNote);
 BuildIdAliasFn SetBuildIdAlias(BuildIdAliasFn fn);
 
+// A live build ID that a service-side target (GotTarget::serviceSide) accepts in place of its own (#1737). Attach sets it
+// once, to the stock ID, when the live libr15 is a pinned file run in service-only mode: then only the service-side hooks
+// install on it, and every other libr15 hook refuses as build_id_mismatch. nullptr (the default): no such ID.
+void SetServiceSideBuildId(const char* liveNote) noexcept;
+
 // What to hook. Every string must outlive the handle (string literals).
 struct GotTarget {
   const char* module;   // soname, or a path whose last segment is the soname
@@ -142,6 +147,7 @@ struct GotTarget {
   std::optional<std::uint64_t> slotVaddr;  // pinned link-time address of the slot
   const void* expectedOriginal;            // exact slot value, or nullptr to require plausibility
   HookPriority priority = HookPriority::kNormal;  // kCritical: may use the registry's reserve (kCriticalReserve)
+  bool serviceSide = false;  // a service-side hook (sign-in, matchmaking, redirect): see SetServiceSideBuildId
 
   GotTarget(const char* moduleName, const char* symbolName, RelocKind relocKind,
             const char* build = nullptr, std::optional<std::uint64_t> pinnedSlot = std::nullopt,
@@ -152,6 +158,13 @@ struct GotTarget {
         buildId(build),
         slotVaddr(pinnedSlot),
         expectedOriginal(original) {}
+
+  // The same target, marked as a service-side hook (SetServiceSideBuildId).
+  GotTarget ServiceSide() const {
+    GotTarget copy = *this;
+    copy.serviceSide = true;
+    return copy;
+  }
 
   // The same target, taken from the registry's reserve when the registry is otherwise full.
   GotTarget Critical() const {

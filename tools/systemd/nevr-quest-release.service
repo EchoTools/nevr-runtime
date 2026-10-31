@@ -16,9 +16,12 @@ Environment=RELEASE_PUBLIC_BASE=https://evr.echo.taxi
 # home. Without this the unit's gpg reads ~/.gnupg, which has no secret key (systemd.exec(5): Environment=).
 Environment=GNUPGHOME=%h/.config/gnupg
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+# The probe runs before anything else, every minute: one GitHub call, no git and no credential. Exit 1 (idle) skips the unit
+# without failing it; exit 255 (the probe itself failed) fails it, which starts the failure notice.
+ExecCondition=/usr/bin/python3 -I %h/src/nevr-runtime-work/release-timer/checkout/tools/quest_release_timer.py --probe
 # The checkout is the timer's own: it moves it to the freshly fetched origin/main, and the tool refuses a dirty one or one
 # that is not at origin/main.
 ExecStartPre=/usr/bin/git -C %h/src/nevr-runtime-work/release-timer/checkout fetch --quiet origin main
 ExecStartPre=/usr/bin/git -C %h/src/nevr-runtime-work/release-timer/checkout switch --quiet --detach origin/main
-ExecStart=/usr/bin/python3 -I %h/src/nevr-runtime-work/release-timer/checkout/tools/quest_release_timer.py
+ExecStart=/usr/bin/python3 -I %h/src/nevr-runtime-work/release-timer/checkout/tools/quest_release_timer.py --stage-draft
 TimeoutStartSec=3h

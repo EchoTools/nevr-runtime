@@ -28,6 +28,7 @@ using Thunk = sentinel::pinned::LibR15AsyncResourceIOCallbackThunk;
 sentinel::GotHook g_hook;
 std::atomic<void* const*> g_contextSlot{nullptr};
 std::atomic<const char*> g_pin{nevr_menu_cards::kQuestStockPageSha256};
+std::atomic<const char*> g_slotPin{nevr_menu_cards::kStockTransformSha256};
 std::atomic<unsigned long long> g_deliveries{0};
 std::atomic<unsigned long long> g_pages{0};
 std::atomic<unsigned long long> g_swapped{0};
@@ -183,28 +184,75 @@ void OfferNetgun(unsigned char* data, const Delivery& d, nevr_netgun_bullets::Re
 // The FRIENDS panel's resources (#1535, the Quest twin of the PC transforms): built from the delivered bytes by the
 // shared builders, before any game code runs (it allocates; outside_game_call.h). False, with the reason, when refused.
 NEVR_OUTSIDE_GAME_CALL bool PrepareFriends(friends_panel::Kind kind, const unsigned char* data, std::size_t size,
-                                           std::vector<std::uint8_t>* out, std::string* why) noexcept {
-  return friends_panel::Build(kind, data, size, out, why);
+                                           std::vector<std::uint8_t>* out, std::string* why, bool* buttonsPlaced) noexcept {
+  return friends_panel::Build(kind, data, size, out, why, buttonsPlaced);
 }
 
 // Serves the panel's resource in place of the delivered one. As for the net-gun resources nothing is cached: SwapIn copies
-// the served bytes into a buffer from the game's own allocator, and the game's original buffer is not freed here.
-void OfferFriends(unsigned char* data, const Delivery& d, friends_panel::Kind kind) noexcept {
+// the served bytes into a buffer from the game's own allocator, and the game's original buffer is not freed here. False
+// when nothing was served (the reason is logged).
+bool OfferFriends(unsigned char* data, const Delivery& d, friends_panel::Kind kind) noexcept {
   std::vector<std::uint8_t> built;
   std::string why;
-  if (!PrepareFriends(kind, d.buffer, static_cast<std::size_t>(d.size), &built, &why)) {
+  bool buttonsPlaced = false;
+  if (!PrepareFriends(kind, d.buffer, static_cast<std::size_t>(d.size), &built, &why, &buttonsPlaced)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "friends_panel_skip",
                         {{"resource", friends_panel::KindName(kind)}, {"bytes", d.size}, {"reason", why.c_str()}});
-    return;
+    return false;
   }
   const Swap swap = SwapIn(data, built.data(), built.size(), ReleaseAllocator());
   if (swap != Swap::Swapped) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "friends_panel_skip",
                         {{"resource", friends_panel::KindName(kind)}, {"bytes", d.size}, {"reason", SwapName(swap)}});
-    return;
+    return false;
   }
   sentinel::LogFields(sentinel::LogLevel::kInfo, "friends_panel_swap",
-                      {{"resource", friends_panel::KindName(kind)}, {"bytes_before", d.size}, {"bytes_after", built.size()}});
+                      {{"resource", friends_panel::KindName(kind)}, {"bytes_before", d.size}, {"bytes_after", built.size()},
+                       {"buttons", kind != friends_panel::Kind::kTransforms ? "not_this_table" : buttonsPlaced ? "placed" : "stock_order"}});
+  return true;
+}
+
+// The main-menu level's transform table (#1679): the four buttons stand where the actors' transforms put them, so a pinned
+// stock table is served with Play, Join, Create and Tutorial given the slots of that order from the left (the PC rewrite,
+// runtime/patch/menu_slots.h, decides the bytes; the table is the same 52,680 bytes on PC). Any other buffer is left alone
+// and says why. The size does not change, and SwapIn copies the served bytes into the game's own buffer, so nothing is kept.
+// The slots in the log line are read back from the bytes served: slot 1 is the left of the screen.
+void OfferSlots(unsigned char* data, const Delivery& d) noexcept {
+  if (d.size > nevr_menu_slots::kMaxResourceBytes) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_slots_skip", {{"reason", "table_too_large"}, {"bytes", d.size}});
+    return;
+  }
+  const std::size_t size = static_cast<std::size_t>(d.size);
+  const std::string sha = nevr_quest::data::Sha256Hex(d.buffer, size);
+  const char* const pin = g_slotPin.load(std::memory_order_acquire);
+  const nevr_menu_cards::SlotResult r = nevr_menu_cards::PlaceButtons(d.buffer, size, sha, pin);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_slots_table",
+                      {{"bytes", d.size}, {"sha256", sha.c_str()}, {"pin", sha == pin ? "match" : "mismatch"}});
+  if (r.verdict == nevr_menu_cards::Verdict::NotStock) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_slots_skip", {{"reason", "table_not_pinned"}});
+    return;
+  }
+  if (r.verdict == nevr_menu_cards::Verdict::Refused) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_slots_skip", {{"reason", nevr_menu_slots::StatusName(r.status)}});
+    return;
+  }
+  const Swap swap = SwapIn(data, r.bytes.data(), r.bytes.size(), ReleaseAllocator());
+  if (swap != Swap::Swapped) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_slots_skip", {{"reason", SwapName(swap)}});
+    return;
+  }
+  const std::string before = nevr_menu_cards::SlotLine(r.before);
+  const std::string after = nevr_menu_cards::SlotLine(r.after);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_slots_swap",
+                      {{"result", "swapped"},
+                       {"bytes_before", d.size},
+                       {"bytes_after", r.bytes.size()},
+                       {"slots_before", before.c_str()},
+                       {"slots_after", after.c_str()},
+                       {"slot_play", nevr_menu_cards::SlotOf(r.after, nevr_menu_cards::kPlayOwner)},
+                       {"slot_join", nevr_menu_cards::SlotOf(r.after, nevr_menu_cards::kJoinOwner)},
+                       {"slot_create", nevr_menu_cards::SlotOf(r.after, nevr_menu_cards::kCreateOwner)},
+                       {"slot_tutorial", nevr_menu_cards::SlotOf(r.after, nevr_menu_cards::kTutorialOwner)}});
 }
 
 // Runs before the game's callback, on whichever thread finished the read. Never throws (the unit has no exceptions).
@@ -225,9 +273,15 @@ void Offer(unsigned char* data) noexcept {
     OfferNetgun(data, d, netgun);
     return;
   }
+  // The FRIENDS panel's resources. Its transform table is the main menu's, which carries the buttons' order too (#1679): the
+  // panel serves both edits in one table, and when the panel refuses the table the buttons are placed on their own.
   const friends_panel::Kind friends = friends_panel::Classify(d);
   if (friends != friends_panel::Kind::kNone) {
-    OfferFriends(data, d, friends);
+    if (!OfferFriends(data, d, friends) && friends == friends_panel::Kind::kTransforms) OfferSlots(data, d);
+    return;
+  }
+  if (d.classSymbol == nevr_menu_cards::kTransformType && d.nameSymbol == nevr_menu_cards::kQuestPageName) {
+    OfferSlots(data, d);
     return;
   }
   // The page is the CR15UIPage2CR resource under mnu_master_lowspec. The name is also the main-menu level's, so about sixty
@@ -292,6 +346,8 @@ void ArmForTest(const char* pinHex, void* const* contextSlot) noexcept {
   Thunk::Arm(kHook);
 }
 
+void ArmSlotPinForTest(const char* pinHex) noexcept { g_slotPin.store(pinHex, std::memory_order_release); }
+
 void ResetForTest() noexcept {
   g_pictureServer.store(nullptr, std::memory_order_release);
   g_deliveries.store(0, std::memory_order_relaxed);
@@ -308,6 +364,7 @@ void ResetForTest() noexcept {
     p.nameSymbol.store(0, std::memory_order_relaxed);
   }
   g_pin.store(nevr_menu_cards::kQuestStockPageSha256, std::memory_order_release);
+  g_slotPin.store(nevr_menu_cards::kStockTransformSha256, std::memory_order_release);
   g_contextSlot.store(nullptr, std::memory_order_release);
   Cache* const old = g_cache.exchange(nullptr, std::memory_order_acq_rel);
   delete old;  // tests only: no game thread is running
