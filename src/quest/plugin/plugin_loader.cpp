@@ -130,11 +130,21 @@ NvrGameContext Loader::ContextFor(const PlanEntry& entry, const char* pluginView
   ctx.get_plugin_info = &Loader::GetLoadedPluginInfo;
   ctx.plugin_id = entry.item.name.c_str();
   ctx.log = &Loader::HostLog;
-  ctx.level_symbol = 0;
-  ctx.level_name = nullptr;
+  const MainLevel level = platform_.CurrentMainLevel();
+  ctx.level_symbol = level.symbol;
+  ctx.level_name = level.name;
   ctx.game_build_id = pluginViewBuildId;
   ctx.quest = platform_.QuestHostApi();
   return ctx;
+}
+
+void Loader::RefreshMainLevel() {
+  if (contexts_.empty()) return;  // no plugin holds a context yet: nothing to keep current, and no read of the game
+  const MainLevel level = platform_.CurrentMainLevel();
+  for (NvrGameContext& ctx : contexts_) {
+    ctx.level_symbol = level.symbol;
+    ctx.level_name = level.name;
+  }
 }
 
 void Loader::Load(PlanEntry& entry) {

@@ -454,11 +454,13 @@ void ValidateHostRecords(const Expectation& expect) {
     }
     return;
   }
-  // A hooked run whose runtime did not load stops the game: one more record, the game_stop, however many calls arrived.
+  // A hooked run whose runtime did not load stops the game: two more records, the game_stop and then the
+  // console_notice that says whether a console took the plain line (#1533), however many calls arrived.
   const bool stops = !expect.dispatched;
   Require(CountRecords(records, "versions", "") == 1, "a hooked run did not record exactly one versions record");
-  Require(records.size() == (stops ? 7u : 6u),
-          "a hooked run recorded something other than its six decisions (and the stop, when it stopped)");
+  Require(records.size() == (stops ? 8u : 6u),
+          "a hooked run recorded something other than its six decisions (and the stop and its console notice, "
+          "when it stopped)");
   if (expect.no_install_event) {
     // The load did not wait for the install, so the install record can land after the load's: all of them
     // must still be there (the load flushes the journal again), in whatever order the race gave.
@@ -504,6 +506,9 @@ void ValidateHostRecords(const Expectation& expect) {
     Require(records[6].value("event", "") == "game_stop" && records[6].value("reason", "") == expect.load_record &&
                 records[6].value("exit_code", 0) == 78,
             "the game_stop record does not follow the load and name its cause and exit code 78");
+    Require(records[7].value("event", "") == "console_notice" && records[7].value("reason", "") == expect.load_record &&
+                records[7].contains("written") && records[7].at("written").is_boolean(),
+            "the console_notice record does not follow the game_stop and name its cause and whether a console took the line");
   }
 }
 
@@ -835,7 +840,8 @@ void StageRuntimeFixture(const std::wstring& root, const wchar_t* fixture) {
 
 // `count` copies of one child at once, all sharing this process's environment (so one log directory and one named
 // log mutex), each waited for.
-void RunChildrenAtOnce(const std::wstring& command_line, int count, const char* label) {
+// Returns the pid of each child, so a short count can name the children that left no record.
+std::vector<DWORD> RunChildrenAtOnce(const std::wstring& command_line, int count, const char* label) {
   STARTUPINFOW startup = {};
   startup.cb = sizeof(startup);
   startup.dwFlags = STARTF_USESTDHANDLES;
@@ -856,6 +862,7 @@ void RunChildrenAtOnce(const std::wstring& command_line, int count, const char* 
     }
   }
   std::vector<HANDLE> processes;
+  std::vector<DWORD> pids;
   std::fflush(stdout);
   std::fflush(stderr);
   for (int at = 0; at < count; ++at) {
@@ -866,6 +873,7 @@ void RunChildrenAtOnce(const std::wstring& command_line, int count, const char* 
             "could not launch a scenario child");
     CloseHandle(process.hThread);
     processes.push_back(process.hProcess);
+    pids.push_back(process.dwProcessId);
   }
   CloseHandle(null_error);
   bool failed = false;
@@ -883,6 +891,27 @@ void RunChildrenAtOnce(const std::wstring& command_line, int count, const char* 
     }
   }
   if (failed) Fail("a scenario child failed or timed out");
+  return pids;
+}
+
+// Every child in `pids` must have left its own record of `step`. A short count names the pids that left none, so a
+// failure says which processes lost their record and not only that one did.
+void RequireRecordFromEachPid(const std::vector<nlohmann::json>& records, const std::vector<DWORD>& pids,
+                              const char* step, const char* message) {
+  std::vector<unsigned long long> missing;
+  for (const DWORD pid : pids) {
+    bool found = false;
+    for (const nlohmann::json& record : records) {
+      found = found || (record.value("event", "") == "host_attach" && record.value("step", "") == step &&
+                        record.value("pid", 0ull) == static_cast<unsigned long long>(pid));
+    }
+    if (!found) missing.push_back(pid);
+  }
+  if (missing.empty()) return;
+  std::fprintf(stderr, "bootstrap attach test: step %s has no record from pid(s):", step);
+  for (const unsigned long long pid : missing) std::fprintf(stderr, " %llu", pid);
+  std::fprintf(stderr, " (of %zu children)\n", pids.size());
+  Fail(message);
 }
 
 void RunChild(const std::wstring& command_line, const char* label) {
@@ -994,13 +1023,14 @@ int RunSuite() {
   constexpr int kConcurrentRuns = 12;
   for (int round = 0; round < 3; ++round) {
     use_scenario_directory(L"exit-at-once-together-" + std::to_wstring(round));
-    RunChildrenAtOnce(L"\"" + std::wstring(self, length) + L"\" --child exit-at-once", kConcurrentRuns,
-                      "exit-at-once-together");
+    const std::vector<DWORD> pids =
+        RunChildrenAtOnce(L"\"" + std::wstring(self, length) + L"\" --child exit-at-once", kConcurrentRuns,
+                          "exit-at-once-together");
     const std::vector<nlohmann::json> records = ReadHostRecords();
-    Require(CountRecords(records, "host_attach", "prologue_check") == static_cast<std::size_t>(kConcurrentRuns),
-            "twelve processes that ended at once did not each leave the prologue mismatch record");
-    Require(CountRecords(records, "host_attach", "image_check") == static_cast<std::size_t>(kConcurrentRuns),
-            "twelve processes that ended at once did not each leave the image check record");
+    RequireRecordFromEachPid(records, pids, "prologue_check",
+                             "twelve processes that ended at once did not each leave the prologue mismatch record");
+    RequireRecordFromEachPid(records, pids, "image_check",
+                             "twelve processes that ended at once did not each leave the image check record");
     std::set<std::pair<unsigned long long, unsigned long long>> keys;
     for (const nlohmann::json& record : records) {
       if (record.value("event", "") != "host_attach") continue;

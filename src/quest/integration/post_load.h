@@ -51,6 +51,13 @@ struct PostLoadActions {
 // from a test). Not for use while dlopen can run on another thread.
 void SetPostLoadActions(const PostLoadActions& actions);
 
+// A function the dlopen hook calls for every non-null handle, before the actions above run and whether or not any is wanted.
+// It must not throw and must not call game code. The crash-first hook uses it to hook the provider libraries' sigaction and
+// signal slots when they load (sentinel/crash_first_hook.h, #1605). Set once at install; null: none. Not cleared by
+// SetPostLoadActions.
+using ModuleLoadedFn = void (*)(const char* name, void* handle) noexcept;
+void SetModuleLoadedObserver(ModuleLoadedFn fn) noexcept;
+
 // True while at least one action is still wanted and unsettled.
 bool PostLoadPending() noexcept;
 

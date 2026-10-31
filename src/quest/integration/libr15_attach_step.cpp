@@ -47,6 +47,7 @@ const char* AttachDetail(const libr15_patch::AttachResult& result) {
     case AttachStatus::kVerified: return "verified";
     case AttachStatus::kAlreadyVerified: return "already_verified";
     case AttachStatus::kNotPatched: return libr15_patch::kReasonNotPatched;
+    case AttachStatus::kPinnedServiceOnly: return libr15_patch::kReasonPinnedServiceOnly;
     case AttachStatus::kBuildIdMismatch: return libr15_patch::kReasonBuildIdMismatch;
     case AttachStatus::kRowFailed:
     case AttachStatus::kTrampolineFailed: {

@@ -49,6 +49,7 @@ add_library(nevr_quest_integration STATIC
   stage_log.cpp
   bridge_uri.cpp
   production_steps.cpp
+  crash_send_step.cpp
   self_check_wiring.cpp
   dlopen_hook.cpp
   social_shim.cpp)

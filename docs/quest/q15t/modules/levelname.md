@@ -1,8 +1,9 @@
 # Module `levelname` (row R04, the source build's "G7")
 
 Files: `src/levelname.{h,cpp}`, `src/quest/tests/q15t/levelname_test.cpp`, `src/quest/tests/q15t/mod/levelname.sh`, `src/quest/tests/q15t/mutants.d/levelname.sh`.
-Option macro for the main seat to wire: `Q15T_LEVELNAME`, default **OFF** (gameplay: it needs a full-size global_mp level in
-the pack, and the companion word row below). API: `InstallResult InstallLevelName(std::uintptr_t base)`; no tick.
+Option macro: `Q15T_LEVELNAME`, default **ON** (the source combat build applies it); kill file `levelname.off` in the plugin data
+directory turns levelname and boosterpool off together, and the bot-body gate with them (`src/quest/plugins/q15t/src/combat_gates.h`). It needs a
+full-size global_mp level in the pack. API: `InstallResult InstallLevelName(std::uintptr_t base)`; no tick.
 
 ## Row covered
 

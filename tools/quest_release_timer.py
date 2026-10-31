@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Quest half of a release, run by a user timer on the publisher's machine (RELEASING.md, "The Quest half of the
-train"; #1210). Usage: quest_release_timer.py [--tag vX.Y.Z] | --notify-failure | --tag vX.Y.Z --reset-failures
+train"; #1210). Usage: quest_release_timer.py [--tag vX.Y.Z | --stage-draft] | --probe | --notify-failure | --tag vX.Y.Z --reset-failures
 
 The store APK, the Quest signing key and the R2 credential never leave this machine, so no workflow builds the Quest APK.
 The train (release-train.yml) publishes the GitHub release; this tool sees the new tag and finishes the release:
@@ -23,6 +23,17 @@ The train (release-train.yml) publishes the GitHub release; this tool sees the n
   notify           courier Teth to verify the live publish, and Spritz (the owner is never bonked, #1410)
   variant_*        the unlisted variant APK, below
   cleanup          the worktree, the signer snapshot and the variant scratch, by exact path
+
+The draft stage (`--stage-draft`, which the user unit runs). The release is cut as a draft and its APK can be built before
+it is published, so this stage takes the newest release that is a draft newer than the newest published one and carries its
+loader asset uploaded (`choose_tag`); otherwise the newest published one, as without the flag. For a draft it does the
+steps up to build_apk, then waits for the publication (`await_published`, a poll every 10 seconds for up to 45 minutes),
+checks the APK's loader against the published asset (`verify_loader`) and that beta has not moved (`recheck_beta`), and
+runs publish_apk, the dispatch and everything after them unchanged. Nothing reaches R2 while the release is a draft. A
+draft that is deleted, is not published within 45 minutes, or fails before it is published is recorded as
+`draft_abandoned` and left to the published path: its failures are not counted, and the run exits 0. `--probe` (the unit's
+ExecCondition) makes one GitHub call and exits 0 when a run has work, 1 when it is idle and 255 on an error; it tests
+whether a run holds the lock, without keeping it, and runs no step.
 
 The variant. Every release also gets an unlisted second APK, nevr-runtime-<tag>-q15t-quest.apk, in the same run, built
 from the release's own loader asset plus two plugin libraries from a private build and published beside the main APK. It
@@ -97,6 +108,7 @@ from collections.abc import Callable
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from publish_quest_apk import FETCH_TIMEOUT_SECONDS, Failure, Log, NoRedirect, public_base, sha256_file  # noqa: E402 - the sibling tool's log, failure, fetch and hash
 from release_preflight import commit_of, parse_ls_remote  # noqa: E402 - the preflight's reading of tags and its commit rule
+from quest_release_loader import asset_name as loader_asset_name  # noqa: E402 - the loader asset's name, from the loader tool's one source
 
 REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE")
 SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
@@ -112,9 +124,19 @@ USER_AGENT = "nevr-runtime-quest-release-timer"  # the release host answers 403 
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")  # always fullmatch: `$` would pass a trailing newline
 RUN_ID = re.compile(r"/actions/runs/([0-9]+)")
 RELEASE_SLUG = "EchoTools/nevr-runtime"
+RELEASE_LISTING = f"repos/{RELEASE_SLUG}/releases?per_page=10"  # the REST list a draft is chosen from (`gh api`)
 SIGNER_SLUG = "thesprockee/release-signer"
 PUBLISHING_JOBS = ("Commit the manifest record", "Publish to R2", "A run that published nothing is red")
 MAX_FAILURES = 3
+# The probe's clock (`--probe`, the unit's ExecCondition). A counted failure holds its tag back for RETRY_SPACING, and a
+# run that has not started for HEARTBEAT is asked for even with nothing to do, so the run history shows the timer is alive.
+RETRY_SPACING = datetime.timedelta(minutes=30)
+HEARTBEAT = datetime.timedelta(minutes=30)
+PROBE_RECORD_SPACING = datetime.timedelta(minutes=10)  # the probe writes its decision when it changes, else this often
+# A draft's APK is built while the draft waits for its publication: polled every PUBLISH_POLL_SECONDS, given up after
+# PUBLISH_WAIT_SECONDS. The signer's upload accepts only a published release, so a draft that never publishes uploads nothing.
+PUBLISH_POLL_SECONDS = 10
+PUBLISH_WAIT_SECONDS = 2700
 GAME_DATA_PLATFORM = "android-arm64"  # the Quest half of a release carries the game-data entry of this platform only
 SLOT_WAITS = 60
 SLOT_WAIT_SECONDS = 60
@@ -142,6 +164,21 @@ class StepFailure(Failure):
 
 class Refusal(StepFailure):
     """A precondition that is not met (a dirty checkout, a checkout not at origin/main): logged as `refused`, never counted."""
+
+
+class DraftAbandoned(Exception):
+    """A draft that will not be published (deleted while it waited, or not published within PUBLISH_WAIT_SECONDS): logged as
+    `draft_abandoned` with its reason, never counted, and the run exits 0. Nothing of the draft reaches R2."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def work_root(env: dict[str, str]) -> pathlib.Path:
+    """The scratch directory of the timer; the lock the probe tests lives in it."""
+    home = pathlib.Path(os.path.expanduser("~"))
+    return pathlib.Path(env.get("QUEST_RELEASE_WORK_ROOT") or home / "src" / "nevr-runtime-work" / "release-timer")
 
 
 def subprocess_runner(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
@@ -191,12 +228,13 @@ class Timer:
         home = pathlib.Path(os.path.expanduser("~"))
         self.repo = pathlib.Path(env.get("QUEST_RELEASE_REPO") or pathlib.Path(__file__).resolve().parents[1])
         self.signer_repo = pathlib.Path(env.get("QUEST_RELEASE_SIGNER_REPO") or home / "src" / "release-signer")
-        self.work = pathlib.Path(env.get("QUEST_RELEASE_WORK_ROOT") or home / "src" / "nevr-runtime-work" / "release-timer")
+        self.work = work_root(env)
         # What every command gets. The R2 credential and the GitHub token are added by the one or two steps that use them.
         self.child = {k: v for k, v in env.items() if k not in SECRET_ENV and k not in VARIANT_ENV and k != "GH_TOKEN"}
         self.part = "main"  # what a failure now belongs to: the main release, or the variant that follows it
         self.main_done = False  # the tag's history has `main_complete`: only the variant is left, whatever beta lists
         self.scratch_made = False  # this run made the variant scratch directory
+        self.stage = "published"  # "draft" when this run builds a draft's APK and publishes it once the release is published
 
     def redact(self, text: str) -> str:
         for secret in self.secrets:
@@ -403,6 +441,58 @@ class Timer:
         steps = [e.get("step") for e in read_events(self.log.path) if e.get("tag") == tag and e.get("event") == "step_ok"]
         return "verify_live" in steps and "notify" not in steps
 
+    def await_published(self, tag: str) -> None:
+        """A draft's APK waits here for the release to be published. Each poll reads the release's `isDraft` with no credential
+        (the waiting steps get none). A poll that finds it published returns; a view that fails means the release is gone
+        (DraftAbandoned "gone"); PUBLISH_WAIT_SECONDS of polls without publication is DraftAbandoned "wait_expired". The sleep
+        follows each poll that still sees a draft, so a publication at the Nth poll is N-1 sleeps."""
+        step = "await_published"
+        argv = [self.gh, "release", "view", tag, "-R", RELEASE_SLUG, "--json", "isDraft"]
+        for poll in range(PUBLISH_WAIT_SECONDS // PUBLISH_POLL_SECONDS):
+            view = self.runner(argv, cwd=None, env=self.child)
+            if view.returncode != 0:
+                raise DraftAbandoned("gone")
+            try:
+                draft = json.loads(view.stdout)["isDraft"]
+            except (ValueError, KeyError, TypeError) as error:
+                raise StepFailure(step, "the release view is unreadable") from error
+            if not isinstance(draft, bool):
+                raise StepFailure(step, "the release view's isDraft is not a boolean")
+            if not draft:
+                self.ok(step, polls=poll + 1)
+                return
+            self.sleep(PUBLISH_POLL_SECONDS)
+        raise DraftAbandoned("wait_expired")
+
+    def verify_loader(self, tag: str, worktree: pathlib.Path) -> None:
+        """The APK was built before the publication, from the loader the draft carried. Before anything reaches R2 its loader is
+        held to the digest of the PUBLISHED loader asset: a loader that changed in between is a failure, and nothing is uploaded."""
+        step = "verify_loader"
+        name = loader_asset_name(tag[1:])
+        listing = self.cmd(step, [self.gh, "release", "view", tag, "-R", RELEASE_SLUG, "--json", "assets"]).stdout
+        try:
+            assets = json.loads(listing)["assets"]
+        except (ValueError, KeyError, TypeError) as error:
+            raise StepFailure(step, "the published release's assets are unreadable") from error
+        found = [a for a in assets if isinstance(a, dict) and a.get("name") == name and a.get("state") == "uploaded"]
+        digest = str(found[0].get("digest", "")) if len(found) == 1 else ""
+        if not digest.startswith("sha256:"):
+            raise StepFailure(step, f"the published release has no uploaded {name} with a sha256 digest")
+        apk = worktree / "build" / "quest-release" / tag / f"nevr-runtime-{tag}-quest.apk"
+        self.cmd(step, ["python3", "-I", str(worktree / "tools" / "quest_release_loader.py"), "verify-apk", "--apk", str(apk),
+                        "--sha256", digest.removeprefix("sha256:")], worktree)
+        self.ok(step, asset=name)
+
+    def recheck_beta(self, binary: pathlib.Path, signer_dir: pathlib.Path, beta: str) -> None:
+        """Beta is read again after the wait. A beta that moved while the draft was built means the decision check_listed made
+        (the game data carried from `beta`) no longer holds, so nothing is published or dispatched."""
+        step = "check_listed"
+        now = self.live_beta(binary, signer_dir, step)
+        if now != beta:
+            raise StepFailure(step, f"the live manifest's beta moved from {beta or 'none'} to {now or 'none'} while the release "
+                                    "was a draft; nothing was published")
+        self.ok(step, beta_rechecked=beta)
+
     def release(self, tag: str) -> None:
         version = tag[1:]
         signer_dir = self.work / f"release-signer-{tag}"
@@ -456,6 +546,13 @@ class Timer:
         self.cmd("build_apk", ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G",
                                "just", "release-quest-apk", tag], worktree, build_env)
         self.ok("build_apk")
+        if self.stage == "draft":
+            # The APK was built while the release was a draft. Nothing below runs before the release is published, and the
+            # loader and beta are held to what they were when the build started (RELEASING.md, "The Quest half of the train").
+            self.await_published(tag)
+            self.part = "main"
+            self.verify_loader(tag, worktree)
+            self.recheck_beta(binary, signer_dir, beta)
 
         publish_env = {**self.r2, "GH_TOKEN": self.token, "RELEASE_SIGNER_BIN": str(binary),
                        "RELEASE_SIGNER_DIR": str(signer_dir), "GH_BIN": self.gh}
@@ -799,7 +896,7 @@ def recent_notice(events: list[dict], step: str, digest: str, now: datetime.date
 
 def notify_failure(env: dict[str, str], runner: Runner, log_path: pathlib.Path) -> int:
     """Courier the last failed or refused event to Spritz, unless the same step and error was couriered under NOTICE_QUIET ago
-    (a standing refusal repeats on every 30-minute run). The courier is recorded as `failure_notified` and a skipped one as
+    (a standing refusal repeats on every run of the timer). The courier is recorded as `failure_notified` and a skipped one as
     `failure_notice_suppressed`; a log that cannot take the record is a failure, never silence."""
     events = read_events(log_path)
     recorded = [e for e in events if e.get("event") in ("failed", "refused")]
@@ -835,8 +932,17 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
     parser.add_argument("--notify-failure", action="store_true", help="courier the last recorded failure to spritz")
     parser.add_argument("--reset-failures", action="store_true",
                         help="with --tag: record that the failures of that tag so far no longer count toward the three tries")
+    parser.add_argument("--stage-draft", action="store_true",
+                        help="also take a draft release: its APK is built while it waits to be published (the user unit's run)")
+    parser.add_argument("--probe", action="store_true",
+                        help="one GitHub call: exit 0 when a run has work, 1 when idle, 255 on an error (the unit's ExecCondition)")
     args = parser.parse_args(argv)
     path = state_log_path(env)
+    if args.probe:
+        if args.tag or args.stage_draft or args.notify_failure or args.reset_failures:
+            sys.stderr.write("quest-release-timer: --probe takes no other option\n")
+            return 1
+        return probe(env, runner, path, datetime.datetime.now(datetime.timezone.utc))
     if args.notify_failure:
         return notify_failure(env, runner, path)
     if args.tag and not TAG.fullmatch(args.tag):
@@ -844,6 +950,9 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         return 1
     if args.reset_failures and not args.tag:
         sys.stderr.write("quest-release-timer: --reset-failures needs --tag vX.Y.Z\n")
+        return 1
+    if args.stage_draft and (args.tag or args.reset_failures):
+        sys.stderr.write("quest-release-timer: --stage-draft chooses its tag itself: it takes no --tag or --reset-failures\n")
         return 1
     log = None
     timer = None
@@ -874,14 +983,20 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         timer.token = token
         log.event("step_ok", step="token")
         tag = args.tag
-        if not tag:
+        stage = "published"
+        if not tag and args.stage_draft:
+            tag, stage = choose_tag(timer.cmd("list", [timer.gh, "api", RELEASE_LISTING]).stdout, read_events(path))
+            log.event("step_ok", step="list", newest=tag, stage=stage)
+        elif not tag:
             tag = newest_published(timer.cmd("list", [timer.gh, "release", "list", "--repo", RELEASE_SLUG, "--json",
                                                       "tagName,isDraft", "--limit", "20"]).stdout)
             log.event("step_ok", step="list", newest=tag)
         log.base["tag"] = tag
         history = [e for e in read_events(path) if e.get("tag") == tag]
         timer.main_done = any(e.get("event") == "main_complete" for e in history)
-        timer.part = "variant" if timer.main_done else "main"  # before the sweep, so a failure of it carries the right part
+        timer.stage = stage
+        # Before the sweep, so a failure of it carries the right part. A draft's failures are "draft" until it is published.
+        timer.part = "draft" if stage == "draft" else ("variant" if timer.main_done else "main")
         timer.sweep_scratch(tag)
         if any(e.get("event") == "done" for e in history):
             log.event("nothing_to_do", reason="done")
@@ -897,6 +1012,11 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         timer.release(tag)
         log.event("done")
         return 0
+    except DraftAbandoned as abandoned:
+        # The draft's worktree and scratch were removed by release(). Exit 0: the unit is not failed and nothing is counted.
+        sys.stderr.write(f"quest-release-timer: draft abandoned: {abandoned.reason}\n")
+        log.event("draft_abandoned", reason=abandoned.reason)
+        return 0
     except Refusal as refusal:
         sys.stderr.write(f"quest-release-timer: {refusal.step}: {refusal}\n")
         if log is not None:
@@ -906,6 +1026,9 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         sys.stderr.write(f"quest-release-timer: {failure.step}: {failure}\n")
         if log is not None:
             _record(log, "failed", failure.step, str(failure), part_of(timer))
+            if draft_pending(timer):
+                log.event("draft_abandoned", reason=f"failed:{failure.step}")
+                return 0
         return 1
     except Failure as failure:
         sys.stderr.write(f"quest-release-timer: {failure}\n")
@@ -921,6 +1044,9 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         sys.stderr.write(f"quest-release-timer: unexpected: {message}\n")
         if log is not None:
             _record(log, "failed", "unexpected", message, part_of(timer))
+            if draft_pending(timer):
+                log.event("draft_abandoned", reason="failed:unexpected")
+                return 0
         return 1
     finally:
         if lock is not None:
@@ -957,7 +1083,118 @@ def history_since_reset(history: list[dict]) -> list[dict]:
 
 
 def counted_failures(history: list[dict]) -> list[dict]:
-    return [e for e in history_since_reset(history) if e.get("event") == "failed"]
+    # A failure before a draft's publication is the draft's own (it abandons the draft, see draft_pending) and never one of the three.
+    return [e for e in history_since_reset(history) if e.get("event") == "failed" and e.get("part") != "draft"]
+
+
+_EPOCH = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+
+
+def event_time(event: dict) -> datetime.datetime:
+    """The record's own time. One that cannot be read counts as the oldest time, so it never holds back a retry or the heartbeat."""
+    try:
+        when = datetime.datetime.fromisoformat(str(event["ts"]))
+    except (KeyError, ValueError):
+        return _EPOCH
+    return when if when.tzinfo else when.replace(tzinfo=datetime.timezone.utc)
+
+
+def version_key(tag: str) -> tuple[int, ...]:
+    return tuple(int(n) for n in tag[1:].split("."))
+
+
+def loader_uploaded(release: dict, tag: str) -> bool:
+    """The release's Quest loader asset, which build.yml attaches to the draft, is uploaded (GitHub's listing says so)."""
+    name = loader_asset_name(tag[1:])
+    assets = release.get("assets") or []
+    return any(isinstance(a, dict) and a.get("name") == name and a.get("state") == "uploaded" for a in assets)
+
+
+def choose_tag(listing: str, events: list[dict]) -> tuple[str, str]:
+    """(tag, stage). The stage is "draft" for the newest draft that is newer than the newest published release, carries its
+    uploaded loader asset and has no `draft_abandoned` in its history; otherwise the newest published release, "published".
+    The listing is the REST list (`gh api repos/<slug>/releases`), whose fields are `tag_name` and `draft`."""
+    try:
+        releases = json.loads(listing)
+    except ValueError as error:
+        raise StepFailure("list", "the release list is not JSON") from error
+    if not isinstance(releases, list):
+        raise StepFailure("list", "the release list is not a list")
+    releases = [r for r in releases if isinstance(r, dict) and TAG.fullmatch(str(r.get("tag_name", "")))]
+    published = [r["tag_name"] for r in releases if not r.get("draft")]
+    newest = max(published, key=version_key) if published else None
+    abandoned = {e.get("tag") for e in events if e.get("event") == "draft_abandoned"}
+    drafts = [r["tag_name"] for r in releases
+              if r.get("draft") and r["tag_name"] not in abandoned
+              and (newest is None or version_key(r["tag_name"]) > version_key(newest))
+              and loader_uploaded(r, r["tag_name"])]
+    if drafts:
+        return max(drafts, key=version_key), "draft"
+    if newest is None:
+        raise StepFailure("list", "no published vX.Y.Z release")
+    return newest, "published"
+
+
+def decide(tag: str, events: list[dict], now: datetime.datetime, busy: bool) -> tuple[str, str]:
+    """(decision, reason) of one probe: "work" when a run would do something, else "idle". A held lock is idle, because a run
+    is going. Work: the tag is not done and holds fewer than MAX_FAILURES counted failures with the newest RETRY_SPACING old;
+    or no run has started within HEARTBEAT."""
+    if busy:
+        return "idle", "a run holds the lock"
+    history = [e for e in events if e.get("tag") == tag]
+    if not any(e.get("event") == "done" for e in history):
+        failures = counted_failures(history)
+        if len(failures) < MAX_FAILURES and (not failures or now - event_time(failures[-1]) >= RETRY_SPACING):
+            return "work", f"{tag} is not done"
+    if not any(e.get("event") == "start" and now - event_time(e) < HEARTBEAT for e in events):
+        return "work", "no run has started within the heartbeat"
+    return "idle", f"nothing for {tag} yet"
+
+
+def lock_held(work: pathlib.Path) -> bool:
+    """Whether a run holds timer.lock. The probe tries the lock without waiting and gives it back at once."""
+    fd = take_lock(work)
+    if fd is None:
+        return True
+    os.close(fd)
+    return False
+
+
+def probe(env: dict[str, str], runner: Runner, path: pathlib.Path, now: datetime.datetime) -> int:
+    """`--probe`, the unit's ExecCondition: one GitHub call (no git, no step, no credential), then 0 when a run has work, 1 when
+    it is idle, 255 when the probe itself failed. A failure is recorded as `failed` at step `probe`, which the unit's failure
+    notice reads. A decision is written when it changes and at most every PROBE_RECORD_SPACING, so an idle timer adds no lines."""
+    gh = env.get("GH_BIN", "gh-spritz")
+    child = {k: v for k, v in env.items() if k not in SECRET_ENV and k not in VARIANT_ENV and k != "GH_TOKEN"}
+    log = None
+    try:
+        events = read_events(path)
+        log = Log(path, "")
+        try:
+            result = runner([gh, "api", RELEASE_LISTING], cwd=None, env=child)
+            if result.returncode != 0:
+                raise StepFailure("probe", f"{pathlib.Path(gh).name} api exited {result.returncode}")
+            tag, _stage = choose_tag(result.stdout, events)
+            decision, reason = decide(tag, events, now, lock_held(work_root(env)))
+        except StepFailure as failure:
+            sys.stderr.write(f"quest-release-timer: {failure.step}: {failure}\n")
+            _record(log, "failed", "probe", str(failure), "main")
+            return 255
+        previous = [e for e in events if e.get("event") == "probe"]
+        if not previous or previous[-1].get("decision") != decision or now - event_time(previous[-1]) >= PROBE_RECORD_SPACING:
+            log.event("probe", decision=decision, reason=reason, tag=tag)
+        return 0 if decision == "work" else 1
+    except (Failure, OSError) as failure:
+        sys.stderr.write(f"quest-release-timer: probe: {failure}\n")
+        return 255
+    finally:
+        if log is not None:
+            log.close()
+
+
+def draft_pending(timer: "Timer | None") -> bool:
+    """A draft run whose release is not published yet: a failure of it abandons the draft (`draft_abandoned`), not counted."""
+    return timer is not None and timer.stage == "draft" and timer.part == "draft"
 
 
 def _record(log: Log, event: str, step: str, error: str, part: str = "main") -> None:

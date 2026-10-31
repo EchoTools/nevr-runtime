@@ -187,7 +187,7 @@ operator channel (`server/evr_runtime_event_remotelogset.go:556`).
   `RequestRaisesRequireCount` (a login-connection send of it does not raise the router's outstanding-request
   count).
 - `docs/reference/legacy-translator.md`: the v2/v3 header words are not identified.
-- The runtime originates remote logs only for the self-checks (section 6) and the crash report upload (section 8).
+- The runtime originates remote logs only for the self-checks (section 6). A crash report is not a remote log (section 7).
 
 Where the websocket URL is built, and what it carries:
 
@@ -276,40 +276,11 @@ differently because of how it was stamped.
 
 Run-card checks not registered yet are listed in issue #451.
 
-## 7. Crash report upload
+## 7. Crash reports are not remote logs
 
-A crash leaves a readable report in the crash folder (PC `%LOCALAPPDATA%\nevr\echovr\crashes`, Quest `nevr-crashes`).
-The first logged-in session after it sends that report over this channel, once. There is no separate crash endpoint:
-the frame is the same `SNSRemoteLogSetv3` on the login connection, and the service journals it per user
-(`server/evr_remotelog_journal.go`). `src/runtime/compat/crash_upload.h` is the one implementation; the PC runtime
-(`ws_bridge.cpp` `WireSelfChecks`) and the Quest sentinel (`production_steps.cpp` `StartBridge`) each supply the crash
-folder, the build string and a log sink, and `self_check.h` supplies the sender and the logged-in user
-(`RegisterFlushHook`, `SendRemoteLogStrings`, `LoggedInUser`).
-
-- **Which files.** `<stem>.report.txt` is a pending report (`kReportSuffix`); `<stem>.dmp` beside it, or the dump a
-  report named `<dump>.report.txt` belongs to, is its minidump. A dedicated server never installs the upload.
-- **The frame.** One frame per report, level 8 (error). Strings are JSON objects with `message`
-  `nevr_crash_report`, `message_type` `NEVR_CRASH_REPORT`, `userid`, `report_id` (the stem), `build`, `part`
-  (`report` or `minidump`), `chunk`, `chunks` and `data`; a minidump chunk also has `encoding` `base64` and `bytes`.
-  The report text is cut at `kMaxReportBytes` (48 KiB) on a character boundary and split into 16 KiB chunks; the
-  minidump goes along when the file is at most `kMaxMinidumpBytes` (96 KiB) and the whole frame stays under
-  `kMaxSetPayloadBytes` (224 KiB, below the service's 256 KiB per set, `server/evr_remotelogset.go`
-  `maxRemoteLogPayload`). A minidump left out is named in the log line (`minidump=too_large|frame_budget|unreadable|none`)
-  and stays on the device.
-- **Once.** The report is renamed to `<stem>.report.txt.sent` when the sender accepts the frame; the next start finds
-  nothing to send. A remote log has no acknowledgement (the frame is sent without the require flag), so a frame lost
-  after the sender took it is lost; the `.sent` report and the local minidump remain. A sender that refuses leaves the
-  report in place and the next pass (5 s later, or the next session) sends it. At most three reports per pass.
-- **Where it runs.** On the thread that calls `nevr_self_check::Flush` (PC: the per-frame tick; Quest: the token-auth
-  poll), never from the crash handler, never under the loader lock, and only while a session is logged in.
-- **Log lines.** PC `[NEVR.CRASH] crash report upload <armed|off|sent|not_sent|unreadable|mark_failed> ...`; Quest
-  `crash_upload {state, report, report_bytes, minidump, minidump_bytes, detail}`. A report's text and the minidump are
-  never logged, only their sizes.
-- **The service's journal** keeps seven days and 4 MiB per user (`server/evr_remotelog_journal.go`
-  `storageWrite`); a 224 KiB frame is within that but displaces older entries of the same user.
-- **Tests.** `src/runtime/tests/test_crash_upload.cpp` (the files, the frame read back by a decoder that shares no
-  code with the codec, the mark, the refusal and retry, the size limits, the per-pass cap) and the three new cases in
-  `test_self_check.cpp`.
+A remote log needs the game to load, log in and hold a connection, so it can never carry a crash that happens during
+startup or loading. A crash report goes to nevr-api over HTTPS instead, from the host and the sentinel, before the game
+connects: `docs/reference/crash-report.md`, "Sent to us".
 
 ## 8. What is not established
 

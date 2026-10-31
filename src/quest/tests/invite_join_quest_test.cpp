@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <deque>
 #include <string>
 #include <thread>
@@ -16,6 +17,7 @@
 #include "quest/invite/frame_dispatch.h"
 #include "quest/invite/join_game_quest.h"
 #include "quest/invite/join_log_fields.h"
+#include "quest/invite/ui_text_quest.h"
 #include "runtime/patch/invite_join.h"
 #include "runtime/patch/invite_match_api.h"
 
@@ -24,13 +26,20 @@ namespace {
 // The service's state and resolved matches, set by each test: the join's frame side reads them through the stubs below.
 bool g_serviceActive = true;
 std::deque<std::string> g_matches;
+std::deque<nevr_invite_match::ShareText> g_texts;  // the texts the service's answers asked for (#1726)
 int g_takeCalls = 0;
 
 }  // namespace
 
 namespace nevr_invite_match {
 bool ServiceActive() noexcept { return g_serviceActive; }
-bool ResolvedMatchPending() noexcept { return !g_matches.empty(); }
+bool ResolvedMatchPending() noexcept { return !g_matches.empty() || !g_texts.empty(); }
+bool TakeShareText(ShareText* out) noexcept {
+  if (out == nullptr || g_texts.empty()) return false;
+  *out = g_texts.front();
+  g_texts.pop_front();
+  return true;
+}
 bool TakeResolvedMatch(char* out, std::size_t capacity, std::size_t* length) noexcept {
   ++g_takeCalls;
   if (g_matches.empty()) {
@@ -371,6 +380,7 @@ void TestOnTickThreadIsTheThreadThatRanTick() {
 void ResetFrameTest() {
   nevr_quest::invite::frame::ResetForTest();
   g_matches.clear();
+  g_texts.clear();
   g_takeCalls = 0;
   g_serviceActive = true;
 }
@@ -468,6 +478,182 @@ void TestJoinLineSplitsIntoFields() {
 
 }  // namespace
 
+
+// ---- #1726: the share page's texts, through the shared writer with the Quest's address table ----
+
+// One Quest gamespace as the game lays it out: [gs+0x370] -> table, [table+0] -> a name-sorted array of 16-byte entries (name,
+// then the actor index as a u16 at +8), [table+0x30] -> the count.
+struct FakeSpace {
+  alignas(8) unsigned char space[0x400] = {};
+  alignas(8) unsigned char table[0x100] = {};
+  std::vector<unsigned char> entries;
+  void Set(const std::vector<std::pair<std::uint64_t, std::uint16_t>>& list) {
+    entries.assign(list.size() * 16, 0);
+    for (std::size_t i = 0; i < list.size(); ++i) {
+      std::memcpy(entries.data() + i * 16, &list[i].first, 8);
+      std::memcpy(entries.data() + i * 16 + 8, &list[i].second, 2);
+    }
+    const std::uint64_t t = reinterpret_cast<std::uintptr_t>(table);
+    const std::uint64_t e = reinterpret_cast<std::uintptr_t>(entries.data());
+    const std::uint64_t n = list.size();
+    std::memcpy(space + 0x370, &t, 8);
+    std::memcpy(table + 0x00, &e, 8);
+    std::memcpy(table + 0x30, &n, 8);
+  }
+};
+
+class FakeCalls final : public nevr_quest::ui_text::GameCalls {
+ public:
+  const char* states[3] = {"ok", "ok", "ok"};
+  std::uintptr_t game = 0x1000;
+  FakeSpace* space = nullptr;
+  bool canvas = true;
+  int pins = 0;
+  int gameSpaceCalls = 0;
+  std::uint64_t lastIdent = 0;
+  std::uint64_t lastSymbol = 0;
+  std::vector<std::pair<std::uint64_t, std::string>> written;  // element, text
+  std::vector<std::string> lines;
+  std::uint64_t now = 1000;
+
+  bool Pin(const char* (&state)[3]) override {
+    ++pins;
+    for (int i = 0; i < 3; ++i) state[i] = states[i];
+    return std::strcmp(states[0], "ok") == 0 && std::strcmp(states[1], "ok") == 0 && std::strcmp(states[2], "ok") == 0;
+  }
+  std::uintptr_t Game() override { return game; }
+  std::uintptr_t GameSpace(std::uintptr_t, std::uint64_t index) override {
+    ++gameSpaceCalls;
+    return index == 0 && space != nullptr ? reinterpret_cast<std::uintptr_t>(space->space) : 0;
+  }
+  bool Read(std::uintptr_t address, void* out, std::size_t length) override {
+    std::memcpy(out, reinterpret_cast<const void*>(address), length);
+    return true;
+  }
+  bool FindCanvas(std::uintptr_t, std::uint64_t ident, std::uintptr_t* canvasOut, std::uint32_t* handle) override {
+    lastIdent = ident;
+    if (!canvas) return false;
+    *canvasOut = 0xc0ffee;
+    *handle = 7;
+    return true;
+  }
+  bool SetText(std::uintptr_t, std::uint32_t, std::uint64_t element, const char* text) override {
+    written.emplace_back(element, text);
+    return true;
+  }
+  std::uint64_t NowMs() override { return now; }
+  std::string FirstWriteLine() override { return "[NEVR.UI] text first write on_game_thread=true"; }
+  void Log(nevr_ui_text::LogLevel, const std::string& line) override { lines.push_back(line); }
+};
+
+nevr_invite_match::ShareText MakeText(std::uint64_t actor, std::uint64_t element, const char* field, const char* text) {
+  nevr_invite_match::ShareText t;
+  t.actor = actor;
+  t.element = element;
+  std::strncpy(t.field, field, sizeof(t.field) - 1);
+  t.length = std::strlen(text);
+  std::memcpy(t.text, text, t.length);
+  return t;
+}
+
+constexpr std::uint64_t kLinkActor = 0xc3f9f167b2a06043ULL;
+constexpr std::uint64_t kLinkElement = 0x3657cd7405999810ULL;
+
+// A created code's three texts reach the writer on the next frame, and the link is written as `<coming soon>` into the link
+// actor's canvas element, the actor found in the Quest's name-sorted table (signed order: 0xa9.. < 0xc3.. < 0x0e.. as int64).
+void TestCreatedCodeWritesTheComingSoonLink() {
+  ResetFrameTest();
+  FakeAccess access;
+  FakeCalls calls;
+  FakeSpace space;
+  space.Set({{0xa9bd0cb4e6f2004cULL, 3}, {0xc3f9f167b2a06043ULL, 11}, {0x0ec8e16986ef88c8ULL, 12}});
+  calls.space = &space;
+  nevr_quest::ui_text::ResetForTest(&calls);
+  nevr_quest_invite_join::SetFrameAccessForTest(&access);
+  g_texts.push_back(MakeText(0xa9bd0cb4e6f2004cULL, 0x35e290123dfa9c72ULL, "code", "K7M2Q"));
+  g_texts.push_back(MakeText(0x0ec8e16986ef88c8ULL, 0xd38c12d22d3552ebULL, "expires", "EXPIRES: 05:38 UTC"));
+  g_texts.push_back(MakeText(kLinkActor, kLinkElement, "link", "<coming soon>"));
+  CHECK(nevr_quest_invite_join::RegisterAnswerApplier());
+  nevr_quest::invite::frame::Tick();
+  CHECK(g_texts.empty());
+  CHECK(calls.written.size() == 3);
+  bool linkWritten = false;
+  for (const auto& w : calls.written) linkWritten = linkWritten || (w.first == kLinkElement && w.second == "<coming soon>");
+  CHECK(linkWritten);
+  CHECK(calls.lastIdent == (0x0000ffffffff0000ULL | 11));  // the last write was the link actor, index 11 in the table
+  CHECK(Contains(access.lines, "[NEVR.INVITE] text posted field=link bytes=13"));
+  CHECK(Contains(access.lines, "[NEVR.INVITE] text posted field=code bytes=5"));
+  CHECK(Contains(calls.lines, "[NEVR.UI] text writer ready game_space=ok find_canvas=ok set_text=ok"));
+  CHECK(Contains(calls.lines, "[NEVR.UI] text written actor=0xc3f9f167b2a06043 element=0x3657cd7405999810 bytes=13 attempts=1"));
+  CHECK(!Contains(calls.lines, "K7M2Q") && !Contains(access.lines, "K7M2Q"));  // a code is never logged
+  nevr_quest_invite_join::SetFrameAccessForTest(nullptr);
+  nevr_quest::ui_text::ResetForTest(nullptr);
+}
+
+// A libr15 whose pinned words differ turns the writer off: nothing is called, each text says writer_off and the off line names
+// the call that did not match.
+void TestWriterOffWhenAPinMismatches() {
+  ResetFrameTest();
+  FakeAccess access;
+  FakeCalls calls;
+  calls.states[1] = "prologue_mismatch";
+  nevr_quest::ui_text::ResetForTest(&calls);
+  nevr_quest_invite_join::SetFrameAccessForTest(&access);
+  g_texts.push_back(MakeText(kLinkActor, kLinkElement, "link", "<coming soon>"));
+  g_texts.push_back(MakeText(0xa9bd0cb4e6f2004cULL, 0x35e290123dfa9c72ULL, "code", "K7M2Q"));
+  CHECK(nevr_quest_invite_join::RegisterAnswerApplier());
+  nevr_quest::invite::frame::Tick();
+  CHECK(calls.written.empty());
+  CHECK(calls.gameSpaceCalls == 0);
+  CHECK(calls.pins == 1);  // the pins are checked once; the second text meets the same verdict
+  CHECK(Contains(access.lines, "[NEVR.INVITE] text not posted field=link bytes=13 reason=writer_off"));
+  CHECK(Contains(access.lines, "[NEVR.INVITE] text not posted field=code bytes=5 reason=writer_off"));
+  CHECK(Contains(calls.lines, "[NEVR.UI] text writer off game_space=ok find_canvas=prologue_mismatch set_text=ok"));
+  nevr_quest_invite_join::SetFrameAccessForTest(nullptr);
+  nevr_quest::ui_text::ResetForTest(nullptr);
+}
+
+// A frame with no text waiting and nothing ever posted never touches the game or the pins.
+void TestIdleFrameTouchesNoTextCalls() {
+  ResetFrameTest();
+  FakeAccess access;
+  FakeCalls calls;
+  nevr_quest::ui_text::ResetForTest(&calls);
+  nevr_quest_invite_join::SetFrameAccessForTest(&access);
+  CHECK(nevr_quest_invite_join::RegisterAnswerApplier());
+  nevr_quest::invite::frame::Tick();
+  nevr_quest::invite::frame::Tick();
+  CHECK(calls.pins == 0 && calls.gameSpaceCalls == 0 && calls.lines.empty());
+  nevr_quest_invite_join::SetFrameAccessForTest(nullptr);
+  nevr_quest::ui_text::ResetForTest(nullptr);
+}
+
+// A page that does not hold the actor yet is tried again on later frames and explains the miss once; when the actor appears it is
+// written. The wait is the writer's own (nevr_ui_text::Pending), not a Quest copy.
+void TestAnActorThatIsNotThereYetIsRetriedThenWritten() {
+  ResetFrameTest();
+  FakeAccess access;
+  FakeCalls calls;
+  FakeSpace space;
+  space.Set({{0x10, 1}});
+  calls.space = &space;
+  nevr_quest::ui_text::ResetForTest(&calls);
+  nevr_quest_invite_join::SetFrameAccessForTest(&access);
+  g_texts.push_back(MakeText(kLinkActor, kLinkElement, "link", "<coming soon>"));
+  CHECK(nevr_quest_invite_join::RegisterAnswerApplier());
+  nevr_quest::invite::frame::Tick();
+  CHECK(calls.written.empty());
+  CHECK(Contains(calls.lines, "[NEVR.UI] text waiting actor=0xc3f9f167b2a06043 element=0x3657cd7405999810 bytes=13 attempts=1 outcome=no_actor"));
+  CHECK(Contains(calls.lines, "[NEVR.UI] text probe space=0 gs=0x"));
+  space.Set({{kLinkActor, 11}, {0x10, 1}});  // kLinkActor is negative as int64: it sorts before 0x10
+  calls.now += 100;
+  nevr_quest::invite::frame::Tick();
+  CHECK(calls.written.size() == 1 && calls.written[0].second == "<coming soon>");
+  CHECK(Contains(calls.lines, "bytes=13 attempts=2"));
+  nevr_quest_invite_join::SetFrameAccessForTest(nullptr);
+  nevr_quest::ui_text::ResetForTest(nullptr);
+}
+
 int main() {
   TestStagesBeforeBegin();
   TestQuestOffsetsOnly();
@@ -492,6 +678,10 @@ int main() {
   TestAppliedAnswerWhileServiceOffIsNotOffered();
   TestIdleFrameDoesNotTakeMatches();
   TestJoinLineSplitsIntoFields();
+  TestCreatedCodeWritesTheComingSoonLink();
+  TestWriterOffWhenAPinMismatches();
+  TestIdleFrameTouchesNoTextCalls();
+  TestAnActorThatIsNotThereYetIsRetriedThenWritten();
   if (g_failures != 0) {
     std::fprintf(stderr, "invite_join_quest_test: %d failure(s)\n", g_failures);
     return 1;

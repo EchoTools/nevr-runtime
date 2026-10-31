@@ -9,7 +9,7 @@ thunks** (the source's mechanism). **No code page is written.**
 
 ## Option and default
 
-`Q15T_DRONEMUZZLE`, default **OFF**. The source is TEST ONLY: the source build's dronemuzzle:1 ("dronemuzzle.on (TEST ONLY ..."), `:29` ("Off (no
+`Q15T_DRONEMUZZLE`, default **ON** (#1625: the wave19a on-list turns on `dronemuzzle.on`). The source is TEST ONLY: the source build's dronemuzzle:1 ("dronemuzzle.on (TEST ONLY ..."), `:29` ("Off (no
 dronemuzzle.on in the source build's data directory): the switch is read, nothing else"). The plugin has no file switch. **It needs dronekill**
 (`Q15T_DRONEKILL` with `shot` or `lockon`, the default words): the thunks act only while `DroneKillShotVelocity` answers non-null, i.e. inside
 a drone shot's `FireBulletLocal`. Without dronekill's FireBulletLocal word `InstallDroneMuzzle` still installs, logs a WARNING (`shot_source=NONE

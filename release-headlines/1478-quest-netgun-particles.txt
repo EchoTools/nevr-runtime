@@ -1,1 +1,0 @@
-The magnum, smg, Chain and rifle bullets now have particle effects on Quest, as on PC.

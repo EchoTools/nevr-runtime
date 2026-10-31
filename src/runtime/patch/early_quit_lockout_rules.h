@@ -13,6 +13,11 @@
 //          passes it to the setter as its third argument (R8); the login path
 //          (CR14LocalPlayerCS_ParseEarlyQuitData, 0x14017e330) passes -1. The setter never reads it and writes
 //          -1 to the countdown expiry the scripts read (netGame+0x64828), so the hook writes the expiry there.
+// The layout the runtime reads is the stamp at +0x18 and the expiry at +0x20, with the expiry 0 or -1 for none.
+// The game service's layout in nakama main is a second one: it writes the lockout's end in the stamp field (+0x18),
+// zero at +0x20, and a clear as a stamp of 0. The setter's gate would drop such a clear, and a shorter legacy
+// lockout than the one stored, so the hook opens the gate for a legacy-shaped update by writing -1 to the stored
+// stamp (netGame+0x64820) before it calls the setter. ReadIntake tells the two layouts apart.
 // The fixture shared with the game service's test is in test_early_quit_lockout.cpp.
 
 #include <cstddef>
@@ -59,6 +64,23 @@ inline bool ParseUpdate(const std::uint8_t* bytes, std::size_t size, Update* out
 
 // The setter's gate (0x1401ae2f0-0x1401ae2f9: CMP RAX,-1; JE take; CMP RAX,RDX; JGE skip).
 inline bool SetterTakes(std::int64_t storedBefore, std::int64_t stamp) { return storedBefore == -1 || storedBefore < stamp; }
+
+// Compatibility with the game service that writes the lockout's end in the stamp field. Remove it, with
+// ReadIntake's use in SetPenaltyHook and the legacy tests, once nakama main writes the stamp-and-expiry layout
+// (nakama branch feat/712-early-quit-stamp-expiry); tracked in #1830.
+// A legacy lockout is read only when its end is further off than the clocks of client and service can differ.
+constexpr std::int64_t kLegacySlackSec = 30;
+
+struct Intake {
+  bool legacy;          // the update is in nakama main's layout: the end is in the stamp field and +0x20 is zero
+  std::int64_t expiry;  // the lockout's end in Unix seconds; 0 or less for none
+};
+
+inline Intake ReadIntake(std::int64_t stamp, std::int64_t expiry, std::int64_t now) {
+  if (expiry == 0 && stamp > now + kLegacySlackSec) return {true, stamp};  // legacy lockout: stamp is the end
+  if (expiry == 0 && stamp <= 0) return {true, 0};                         // legacy clear: stamp 0, nothing in force
+  return {false, expiry};                                                  // the stamp-and-expiry layout, or the login path (-1)
+}
 
 // What the countdown should be once the setter has run.
 struct Countdown {

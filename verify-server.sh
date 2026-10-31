@@ -21,9 +21,18 @@
 #   notelem    default + -no-telemetry         (telemetry explicitly disabled)
 #   timestep   default + -fixedtimestep -timestep 120  (the time-step options a server strips, #515)
 #
-# It deploys into the game install of the main checkout (NEVR_GAME_ROOT overrides), takes the same
-# one-run-at-a-time lock as launch-client.sh, and puts every file it deployed back on exit, including
-# when it is interrupted.
+# NEVR_GAME_ROOT names a copy of the install and is required: this script never deploys into the install
+# itself (AGENTS.md, "The game install"). It takes the same one-run-at-a-time lock as launch-client.sh, and puts
+# every file it deployed back on exit, including when it is interrupted.
+#
+# Exit status: 0 only when the game ran for the whole window (or was stopped by this script) and the run's log
+# holds every required line below. Otherwise 1, with each failure named on stderr and as the last line of
+# summary.txt. A game that exited nonzero before the window ended is a failure whatever its code (a host stop is
+# exit 78). Setup errors exit 2, 3 or 4 as before.
+#   required lines: "Finished initializing engine" (the headless-boot witness, N7-N10) always; "LOGIN SUCCESS" and
+#   "registration successful" too when the install has its own config.yaml. The offline config written below
+#   cannot log in, so it requires only the boot line.
+# The summary's counts are read from server.log, this run's Wine capture, and the summary names that file.
 #
 # Never pipe this script's log through grep while it runs — grep block-buffers
 # and the run looks hung. Read the files after it exits.
@@ -37,6 +46,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO" || exit 1
 # shellcheck source=tools/lib/game_install.sh
 source tools/lib/game_install.sh
+[ -n "${NEVR_GAME_ROOT:-}" ] || { echo "ERROR: verify-server.sh needs NEVR_GAME_ROOT=<a copy of the install>; a verification run never deploys into the install itself (AGENTS.md, \"The game install\")" >&2; exit 2; }
 GAME_ROOT=$(resolve_game_root) || exit $?
 GAME_DIR="$GAME_ROOT/echovr/bin/win10"
 [ -d "$GAME_DIR" ] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT to the checkout that has echovr/)" >&2; exit 2; }
@@ -136,6 +146,7 @@ deploy() {
 }
 WINE_PID=""
 WINE_RUNNING=0
+EARLY_EXIT=0
 restore() {
   trap - EXIT
   # Only while the game is still ours to stop: after `wait` has reaped it the PID may be reused.
@@ -169,10 +180,14 @@ fi
 # an install's own config.yaml is used as it is. The runtime reads config.yaml from the nevr root (#1255), so the
 # offline config goes there, beside nevr-runtime.dll, and the restore trap removes it afterwards. An install that
 # has a _local/config.yaml is left alone: the runtime copies that one into the root and reads the copy.
+CONFIG_SOURCE=install
 if [ ! -e "$GAME_ROOT/echovr/_local/config.yaml" ] && [ ! -e "$GAME_DIR/$NEVR_ROOT_REL/config.yaml" ]; then
+  CONFIG_SOURCE=offline
   printf 'services:\n  socket_uri: ""\n  allow_offline_server: true\n' > "$OUT/offline-config.yaml"
   deploy "$OUT/offline-config.yaml" "$GAME_DIR/$NEVR_ROOT_REL/config.yaml"
 fi
+REQUIRED=("Finished initializing engine")
+if [ "$CONFIG_SOURCE" = install ]; then REQUIRED+=("LOGIN SUCCESS" "registration successful"); fi
 
 export WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"
 
@@ -210,7 +225,7 @@ while [ "$elapsed" -lt "$RUN_SECONDS" ]; do
   wait -n "$WINE_PID" "$sampler"
   kill "$sampler" 2>/dev/null
   wait "$sampler" 2>/dev/null
-  kill -0 "$WINE_PID" 2>/dev/null || { echo "process exited early at t=$((SECONDS-started_at))s" >> "$OUT/context.txt"; break; }
+  kill -0 "$WINE_PID" 2>/dev/null || { EARLY_EXIT=1; echo "process exited early at t=$((SECONDS-started_at))s" >> "$OUT/context.txt"; break; }
   elapsed=$((elapsed+POLL_SECONDS))
   pids=$(game_pids | tr '\n' ' ')
   n=$(count_game_windows "$pids")
@@ -227,11 +242,35 @@ WINE_RUNNING=0
 echo "$RC" > "$OUT/exit_code.txt"
 
 find "$GAME_ROOT/echovr/" -iname '*.dmp' -newermt '-1 minute' 2>/dev/null | wc -l > "$OUT/dumps_after.txt"
-ls -t "$GAME_DIR/logs/"*.jsonl 2>/dev/null | head -1 > "$OUT/jsonl_path.txt"
+# The game's log for THIS run is the newest nevr-*.jsonl written since the run started, in the nevr root's logs folder
+# (the install-root layout, ADR 0012), not the executable's folder. The host's nevr-bootstrap.jsonl is not the game's log.
+# It is copied into the run's directory now (#1297): the test that made the game copy deletes it when the run ends, and a
+# log left in the copy goes with it. A copy that does not match the original fails the run.
+RUN_LOGDIR="$GAME_ROOT/echovr/.wineprefix/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs"
+RUN_LOG_COPY="$OUT/game-log.jsonl"
+run_log=""
+for f in "$RUN_LOGDIR"/nevr-*.jsonl; do
+  [ -f "$f" ] || continue
+  case "$f" in */nevr-bootstrap.jsonl) continue ;; esac
+  [ "$(stat -c %Y "$f")" -ge "$RUN_START_EPOCH" ] && run_log="$f"
+done
+copied_to=none
+if [ -n "$run_log" ]; then
+  if ! cp -p -- "$run_log" "$RUN_LOG_COPY" || ! cmp -s -- "$run_log" "$RUN_LOG_COPY"; then
+    echo "ERROR: could not copy the game log $run_log to $RUN_LOG_COPY (the log would be lost with the game copy)" >&2
+    exit 1
+  fi
+  copied_to="$RUN_LOG_COPY"
+  echo "$run_log" > "$OUT/jsonl_path.txt"
+else
+  echo "no game log written since this run started ($RUN_LOGDIR)" > "$OUT/jsonl_path.txt"
+fi
 
 # Summary is read back FROM THE FILES — never from a live pipe.
 {
   echo "--- $RUN_NAME (${ARGS[*]}) ---"
+  echo "config              = $CONFIG_SOURCE (install: the install's own config.yaml; offline: written by this script)"
+  echo "counts read from    = $LOG (this run's Wine capture)"
   echo "exit_code           = $(cat "$OUT/exit_code.txt")"
   echo "DISPLAY             = ${DISPLAY:-<unset>}"
   echo "max_game_windows    = $MAX_WINDOWS   (-1 = xdotool unavailable)"
@@ -250,6 +289,26 @@ ls -t "$GAME_DIR/logs/"*.jsonl 2>/dev/null | head -1 > "$OUT/jsonl_path.txt"
   echo "engine flags lines  = $(grep -c 'engine flags' "$LOG")"
   grep 'engine flags' "$LOG" || true
   echo "log                 = $LOG"
+  echo "game log copy       = $copied_to"
   # A host that stopped the game before the runtime ran leaves no game log; the host's record says why (#1122).
   echo "host stop           = $(host_stop_cause "$GAME_ROOT/echovr/.wineprefix/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs" "$RUN_START_EPOCH" || echo none)"
-} | tee "$OUT/summary.txt"
+} > "$OUT/summary.txt"
+
+# The verdict is read back from the files above, after the summary is written. It sets the exit status.
+FAILURES=()
+if [ "$EARLY_EXIT" -eq 1 ] && [ "$RC" -ne 0 ]; then
+  FAILURES+=("the game exited with code $RC before the run window ended")
+fi
+for pat in "${REQUIRED[@]}"; do
+  grep -qF "$pat" "$LOG" || FAILURES+=("no '$pat' line in $LOG")
+done
+if [ "${#FAILURES[@]}" -eq 0 ]; then
+  echo "result              = PASS (required lines: ${REQUIRED[*]})" >> "$OUT/summary.txt"
+else
+  echo "result              = FAIL: $(printf '%s; ' "${FAILURES[@]}")" >> "$OUT/summary.txt"
+fi
+cat "$OUT/summary.txt"
+if [ "${#FAILURES[@]}" -ne 0 ]; then
+  echo "verify-server: FAIL $RUN_NAME: $(printf '%s; ' "${FAILURES[@]}")" >&2
+  exit 1
+fi

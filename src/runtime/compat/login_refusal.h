@@ -98,6 +98,14 @@ inline std::string RefusedLoginCause(int httpStatus, std::string_view configSour
          std::string(kPasswordKey) + " in config.yaml";
 }
 
+// #1293: the one line a client says for a refused sign-in. It names the status, the config that was loaded and what
+// to do; the server's keys do not apply, because a client signs in with the token it presents.
+inline std::string ClientRefusedCause(int httpStatus, std::string_view configSource) {
+  return "the service did not accept this sign-in (HTTP " + std::to_string(httpStatus) +
+         "); config: " + ConfigSourceText(configSource) +
+         "; not asking again until the sign-in changes; restart Echo VR to sign in again";
+}
+
 // A client says a refusal once per sign-in. The key is the bearer the refused socket presented (empty: a
 // client with no sign-in), so a different sign-in is a new refusal and says it again.
 class ClientRefusalLatch {

@@ -19,6 +19,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# ccache refuses a compile that carries CMake's C++20 module-scan flags (-fmodules-ts, -fmodule-mapper, -fdeps-*): it counts it
+# uncacheable. No source here is a module, so a build that goes through a ccache launcher (the fixed build checkout, #1736) skips the
+# scan, as the root CMakeLists.txt does; a build without a launcher is unchanged.
+if(CMAKE_CXX_COMPILER_LAUNCHER MATCHES "ccache")
+  set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+endif()
+
 # The same commit built in two worktrees must give the same bytes (#658): keep the repository root and the build
 # directory out of __FILE__, assertions and debug info, as the root CMakeLists.txt does for the Windows DLLs. The
 # build tree is <repo>/build/<preset>, so its mapping is relative too.
@@ -267,8 +274,11 @@ if(TARGET nevr_quest_got_hook)
 
   # Install-code host test (partial install, idempotency, gating). Linked against the whole login
   # archive so the install, its thunks and the backend are present.
-  add_executable(login_prerequisites_install_test tests/login_prerequisites_install_test.cpp)
+  # The install is compiled into the test as well, with the test-only macro, so the test's slot seam (login_prerequisites.h) exists;
+  # the library's copy has none.
+  add_executable(login_prerequisites_install_test tests/login_prerequisites_install_test.cpp login/login_prerequisites_install.cpp)
   target_link_libraries(login_prerequisites_install_test PRIVATE nevr_quest_login)
+  target_compile_definitions(login_prerequisites_install_test PRIVATE NEVR_QUEST_TESTING)
   # -fno-exceptions: the test arms the entitlement hook's thunk (callback_thunk.h refuses other units).
   target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror -fno-exceptions)
 

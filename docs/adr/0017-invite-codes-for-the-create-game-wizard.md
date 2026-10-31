@@ -140,10 +140,10 @@ the runtime (`src/runtime/patch/`), not a service configuration and not a plugin
   worker.
 - **Show the result.** Each frame, on the game-loop thread, `nevr_invite_apply::OnFrame` takes the answers the worker holds
   and posts their texts to the UI text writer (#896; `patch/invite_answer_text.h` is the rule). A created code: the code and
-  `EXPIRES: HH:MM UTC` in the share page's code and expiry elements. A refused create, or an `ok` whose body holds no code
+  `EXPIRES: HH:MM UTC` in the share page's code and expiry elements, and `<coming soon>` in its link element (the stock link
+  text is a dead domain; #1726 turns it into the code's link). A refused create, or an `ok` whose body holds no code
   the client may show: the reason where the code would be, the expiry cleared. A refused resolve: the reason in the entry
-  page's title. A resolved code writes nothing; the join below does the rest. No link text is written: the service answers
-  a match id, and a join is by code. The texts are never logged, only the field and the size.
+  page's title. A resolved code writes nothing; the join below does the rest. The texts are never logged, only the field and the size.
 - **Join.** On a resolved code, from the main menu the dispatcher stages the `-lobbyid` block and runs
   `BeginMultiplayerLobby`; from a lobby or match it calls `CR15NetClientLobby::Join`. Both prologues are validated
   at boot (N97); on a mismatch that hook is not installed and its line says why. The service starts before the hooks and
@@ -213,6 +213,11 @@ Consequences for the package:
 - The package carries the card elements as our own data (the element records and the pins), never the stock page or
   a page derived from it.
 - The pins make the cards build-specific: on any other game build the cards are off and the log says why.
+- The order of the four main-menu buttons (Play, Join, Create, Tutorial from the left) is the order of the slots in the
+  level's transform table (`CTransformCR`, the same bytes on PC and Quest), not of the page's element array: the game
+  stands each card where its owner actor's transform says. `runtime/patch/menu_slots.h` gives the four owners the
+  poses of the four slots in that order, behind its own pin (`kStockTransformSha256`), and both platforms call it through
+  `PlaceButtons` (`runtime/patch/menu_cards.h`). Each run logs the slot of each button, read back from the bytes served.
 - The cards are English only until another language is built.
 - A change to the package contents (a pin table) is a change to what a release carries and goes through the
   release checks.
@@ -224,6 +229,16 @@ Consequences for the package:
 The service contract is platform-neutral. PC is built first (the PC addresses and prologues above). Quest has the
 same scripts and the same `Join` body (`libr15.so`, ReVault virtual address `0x13462a8`) and gets its own hook in
 `src/quest`, through that project's own mechanism, against the same RPCs.
+
+The wizard's texts are written by one writer on both binaries (`patch/ui_text.h`: the queue, the actor lookup, the write, the
+log lines). Only the address table and the memory it reads differ. On the Quest (`quest/invite/ui_text_quest.cpp`) the game
+object is the frame hook's netgame +8; `CncaGame::GameSpace(index)` (libr15 `0x17e17fc`; the PC's `GetGameSpace`, the same
+function with the array at `+0x1f48` and the count at `+0x1f78`), `CLocalComponentHandle<CCanvasUICS>::Find` (`0x1cbb408`) and
+`CCanvasUICS::SetText` (`0x139111c`) are each pinned by their prologue words (`sentinel/pinned_targets.h`; ReVault lists each
+`0x100000` higher). The Quest's actor table differs from the PC's: `[gs+0x370]` is a name-sorted array of 16-byte entries (a
+signed 64-bit name, the actor index as a u16 at `+8`, the count at `table+0x30`), read as `CncaGameSpace::LocalActor` reads it
+(`nevr_ui_text::FindActorInSortedMap`). The answers reach it through `nevr_invite_match::TakeShareText`, filed by the same take
+that files a resolved match.
 
 ## Security
 
@@ -283,7 +298,7 @@ this feature carries that requirement.
   connection (`SelectRemoteBearer`); the RPC call with it is not measured.
 - The argument layout of the submit function `0x140113960`. It is measured before the hook is written, and the hook
   validates the prologue bytes it records.
-- That the share page's code and expiry actors and elements (the modkit author's findings) are the ones the shipped build
+- That the share page's code, expiry and link actors and elements (the modkit author's findings) are the ones the shipped build
   draws, from a write made by this tree: a wrong id is a request the writer drops with `reason=no_actor` or `no_canvas`.
 - Anything on Quest beyond the static reading above.
 

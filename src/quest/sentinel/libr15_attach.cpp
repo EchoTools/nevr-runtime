@@ -1,5 +1,6 @@
 #include "libr15_attach.h"
 
+#include <fcntl.h>
 #include <pthread.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -13,6 +14,7 @@
 #include "mapping_perms.h"
 #include "pinned_targets.h"
 #include "process_end_hook.h"
+#include "quest/data/sha256.h"
 #include "quest/patch/libr15_patch_identity.h"
 #include "quest/patch/libr15_patch_table.h"
 #include "quest/patch/stub_codec.h"
@@ -51,6 +53,39 @@ class LockGuard {
 };
 
 void DefaultEnd(int exitCode, const char* reason) noexcept { process_end::EndWithExitCode(exitCode, reason); }
+
+// The file's sha256, read in chunks (never the whole 58 MB at once).
+bool DefaultDigest(const char* path, char* out) noexcept {
+  const int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return false;
+  data::Sha256 sha;
+  static unsigned char chunk[64 * 1024];  // under g_mutex: Attach is the only caller
+  bool ok = true;
+  for (;;) {
+    const ssize_t got = read(fd, chunk, sizeof chunk);
+    if (got == 0) break;
+    if (got < 0) {
+      if (errno == EINTR) continue;
+      ok = false;
+      break;
+    }
+    sha.Update(chunk, static_cast<std::size_t>(got));
+  }
+  close(fd);
+  if (!ok) return false;
+  const std::string hex = sha.Hex();
+  if (hex.size() != 64) return false;
+  std::memcpy(out, hex.c_str(), 65);
+  return true;
+}
+
+// The libr15 hooks that do not install on a service-only file (#1737); each logs its own refusal
+// (`build_id_mismatch` for a GOT hook, `not_verified` for a row or the credits slot).
+constexpr const char* kServiceOnlySkipped =
+    "inline_rows,credits_text,clock,frame_dispatch,login_prompt,social,obb_skip,process_end,crash_first,permission_wait,"
+    "vk_ext_window,os_build_gate,texture_quality,render_config,menu_cards,wizard_metric,splash_skip,ui_texture_mips,"
+    "pns_provider";
+constexpr const char* kServiceOnlyKept = "tstring_redirect,create_connection_redirect,dlopen(login,matchmaking)";
 
 std::size_t PageSize() {
   const long size = sysconf(_SC_PAGESIZE);
@@ -302,6 +337,7 @@ const char* AttachStatusName(AttachStatus status) {
     case AttachStatus::kBuildIdMismatch: return "build_id_mismatch";
     case AttachStatus::kRowFailed: return "row_failed";
     case AttachStatus::kTrampolineFailed: return "trampoline_failed";
+    case AttachStatus::kPinnedServiceOnly: return "pinned_service_only";
   }
   return "unknown";
 }
@@ -341,6 +377,22 @@ AttachResult Attach(const AttachOptions& options) {
     return Refused(AttachStatus::kNoBuildId, "no_build_id");
   }
   if (std::strcmp(liveId, patch::kLibR15StockBuildId) == 0) {
+    char digest[65] = {};
+    const FileDigestFn digestFn = options.digest != nullptr ? options.digest : &DefaultDigest;
+    if (image.name[0] != '\0' && digestFn(image.name, digest)) {
+      for (const char* pinned : kLibR15ServiceOnlySha256) {
+        if (std::strcmp(digest, pinned) != 0) continue;
+        char prefix[13] = {};
+        std::memcpy(prefix, digest, 12);
+        sentinel::SetServiceSideBuildId(patch::kLibR15StockBuildId);
+        sentinel::LogFields(LogLevel::kInfo, "libr15_pinned_accept",
+                            {{"status", "accepted"}, {"sha256_prefix", prefix}, {"build_id", liveId},
+                             {"mode", "service_only"}, {"kept", kServiceOnlyKept}, {"skipped", kServiceOnlySkipped},
+                             {"consequence", "the file is not ours: none of our libr15 patches is applied; sign-in, "
+                                             "matchmaking and the server redirect are"}});
+        return Refused(AttachStatus::kPinnedServiceOnly, kReasonPinnedServiceOnly);
+      }
+    }
     LogRefusal(kReasonNotPatched, liveId);
     return Refused(AttachStatus::kNotPatched, kReasonNotPatched);
   }

@@ -24,10 +24,13 @@ struct GameSetter {
   std::int64_t stored = -1;
 
   // One update as the hook sees it: the stamp and expiry the game service sent, then the hook's decision.
+  // Mirrors SetPenaltyHook: a legacy-shaped update opens the gate (-1) before the setter's own gate runs.
   Countdown Receive(std::int64_t stamp, std::int64_t expiry, std::int64_t now) {
+    const nevr_early_quit_lockout::Intake intake = nevr_early_quit_lockout::ReadIntake(stamp, expiry, now);
+    if (intake.legacy) stored = -1;
     const std::int64_t before = stored;
     if (stored == -1 || stored < stamp) stored = stamp;
-    return nevr_early_quit_lockout::AfterSetPenalty(before, stored, stamp, expiry, now);
+    return nevr_early_quit_lockout::AfterSetPenalty(before, stored, stamp, intake.expiry, now);
   }
 };
 
@@ -174,4 +177,110 @@ TEST(EarlyQuitLockout, CountdownActiveWhileSecondsRemain) {
   EXPECT_TRUE(nevr_early_quit_lockout::CountdownActive(900));
   EXPECT_FALSE(nevr_early_quit_lockout::CountdownActive(0));
   EXPECT_FALSE(nevr_early_quit_lockout::CountdownActive(-5));
+}
+
+// Legacy layout (nakama main): the end is in the stamp field and +0x20 is zero, so the future stamp is the end.
+TEST(EarlyQuitLockout, LegacyFutureEndStartsTheCountdownToIt) {
+  GameSetter game;
+  const Countdown c = game.Receive(kNow + 600, 0, kNow);
+  EXPECT_TRUE(c.applied);
+  EXPECT_EQ(c.expiry, kNow + 600);
+  EXPECT_TRUE(c.active);
+}
+
+// The stamp-and-expiry layout (nakama branch feat/712), with a future expiry at +0x20 and the stamp about now.
+TEST(EarlyQuitLockout, Layout712FutureExpiryStartsTheCountdownToIt) {
+  GameSetter game;
+  const Countdown c = game.Receive(kNow, kNow + 600, kNow);
+  EXPECT_TRUE(c.applied);
+  EXPECT_EQ(c.expiry, kNow + 600);
+  EXPECT_TRUE(c.active);
+}
+
+// A legacy end already over starts no countdown, and the expiry the hook writes is -1.
+TEST(EarlyQuitLockout, LegacyExpiredEndLeavesNoCountdown) {
+  GameSetter game;
+  const Countdown c = game.Receive(kNow - 1, 0, kNow);
+  EXPECT_TRUE(c.applied);
+  EXPECT_EQ(c.expiry, -1);
+  EXPECT_FALSE(c.active);
+}
+
+// A stamp-and-expiry update whose expiry is already over starts no countdown.
+TEST(EarlyQuitLockout, Layout712ExpiredExpiryLeavesNoCountdown) {
+  GameSetter game;
+  const Countdown c = game.Receive(kNow, kNow - 1, kNow);
+  EXPECT_TRUE(c.applied);
+  EXPECT_EQ(c.expiry, -1);
+  EXPECT_FALSE(c.active);
+}
+
+// A legacy clear (stamp 0) ends an active lockout: the gate is opened, so the setter stores 0.
+TEST(EarlyQuitLockout, LegacyClearEndsAnActiveLockout) {
+  GameSetter game;
+  ASSERT_TRUE(game.Receive(kNow + 600, 0, kNow).active);
+  const Countdown c = game.Receive(0, 0, kNow + 10);
+  EXPECT_TRUE(c.applied);
+  EXPECT_EQ(c.expiry, -1);
+  EXPECT_FALSE(c.active);
+  EXPECT_EQ(game.stored, 0);
+}
+
+// A stamp-and-expiry clear (expiry 0 after an active lockout, stamp newer) ends the lockout.
+TEST(EarlyQuitLockout, Layout712ClearEndsAnActiveLockout) {
+  GameSetter game;
+  ASSERT_TRUE(game.Receive(kNow, kNow + 600, kNow).active);
+  const Countdown c = game.Receive(kNow + 1, 0, kNow + 1);
+  EXPECT_TRUE(c.applied);
+  EXPECT_EQ(c.expiry, -1);
+  EXPECT_FALSE(c.active);
+}
+
+// A shorter legacy lockout replaces a longer one, as the stamp-and-expiry layout's shorter expiry does.
+TEST(EarlyQuitLockout, LegacyShorterLockoutReplacesALongerOne) {
+  GameSetter game;
+  ASSERT_EQ(game.Receive(kNow + 600, 0, kNow).expiry, kNow + 600);
+  const Countdown c = game.Receive(kNow + 120, 0, kNow + 1);
+  EXPECT_TRUE(c.applied);
+  EXPECT_EQ(c.expiry, kNow + 120);
+  EXPECT_TRUE(c.active);
+}
+
+// Proves a legacy update is not blocked by a stored stamp equal to its end: the login call stores that stamp, and
+// the legacy update for the same end still starts the countdown because the hook opens the gate for it.
+TEST(EarlyQuitLockout, LegacyUpdateAfterTheLoginCallStartsTheCountdown) {
+  GameSetter game;
+  EXPECT_FALSE(game.Receive(kNow + 600, -1, kNow).active);
+  const Countdown c = game.Receive(kNow + 600, 0, kNow);
+  EXPECT_TRUE(c.applied);
+  EXPECT_EQ(c.expiry, kNow + 600);
+  EXPECT_TRUE(c.active);
+}
+
+// A stamp-and-expiry clear whose stamp is 10 s ahead of the client clock is not read as a legacy lockout (the
+// slack is 30 s), so it clears the countdown. The login path's -1 is never read as legacy either.
+TEST(EarlyQuitLockout, ClockSkewWithinTheSlackIsNotALegacyLockout) {
+  GameSetter game;
+  ASSERT_TRUE(game.Receive(kNow, kNow + 600, kNow).active);
+  const Countdown c = game.Receive(kNow + 10, 0, kNow);
+  EXPECT_TRUE(c.applied);
+  EXPECT_FALSE(c.active);
+  EXPECT_FALSE(nevr_early_quit_lockout::ReadIntake(kNow + 600, -1, kNow).legacy);
+}
+
+// The golden legacy update, byte for byte: the end 1'790'975'600 is in the stamp field and +0x20 is zero.
+TEST(EarlyQuitLockout, TheGoldenLegacyUpdateParsesToTheEndInTheStamp) {
+  const std::vector<std::uint8_t> bytes =
+      FromHex("000000000000000000000000000000008877665544332211" "701ec06a00000000" "0000000000000000"
+              "03000000110000000200000002010000");
+  ASSERT_EQ(bytes.size(), nevr_early_quit_lockout::kUpdateSize);
+  nevr_early_quit_lockout::Update update{};
+  ASSERT_TRUE(nevr_early_quit_lockout::ParseUpdate(bytes.data(), bytes.size(), &update));
+  EXPECT_EQ(update.stamp, 1'790'975'600);
+  EXPECT_EQ(update.expiry, 0);
+  GameSetter game;
+  const Countdown c = game.Receive(update.stamp, update.expiry, kNow);
+  EXPECT_TRUE(c.applied);
+  EXPECT_EQ(c.expiry, 1'790'975'600);
+  EXPECT_TRUE(c.active);
 }

@@ -4950,6 +4950,9 @@ TEST(WsBridgeFrameLog, LogsEveryMessageInABatchedFrame) {
   EXPECT_TRUE(TestLogContains("msg=1 sym=0x43e6963ac76beee4"));
   EXPECT_TRUE(TestLogContains("msg=2 sym=0x2222222222222222"));
   EXPECT_TRUE(TestLogContains("len=7"));
+  // Per-message detail is Debug on a server too (#1292): an Info record here is a per-frame line at the default level.
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Debug, "msg=0 sym=0x1111111111111111"));
+  EXPECT_FALSE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "msg=0 sym=0x1111111111111111"));
 }
 
 TEST(WsBridgeFrameLog, StopsAtATruncatedMessageAndSaysSo) {
@@ -5288,20 +5291,15 @@ TEST(WsBridgeLobbyFrameLog, ARequestHeardFromTheServerAndAReplyHeardFromTheGameA
   EXPECT_FALSE(TestLogContains("lobby "));
 }
 
-// A dedicated server already logs every message of every frame at Info (LogFrameMessages); the client
-// records must not double that, so on a server ObserveSocialFrames stays as silent as it was.
-TEST(WsBridgeLobbyFrameLog, AServerGetsNoLobbyRecordFromTheSocialObserver) {
+// The lobby records are the same on a server as on a client (#1292): LogFrameMessages is Debug on both, so
+// the Info records do not double anything, and a server's record of a find is the one a client writes.
+TEST(WsBridgeLobbyFrameLog, AServerWritesTheLobbyRecordsToo) {
   using namespace lobby_frame_test;
-  const BOOL wasServer = g_isServer;
-  g_isServer = TRUE;
-  ClearTestLogs();
-  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({1, 2}, Guid(0xd0))));
-  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1})));
-  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
-  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
-  g_isServer = wasServer;
-  std::lock_guard<std::mutex> lock(g_testLogMutex);
-  EXPECT_TRUE(g_testLogMessages.empty()) << "first line: " << (g_testLogMessages.empty() ? "" : g_testLogMessages[0]);
+  ClientRun run;
+  g_isServer = TRUE;  // ClientRun's limiter and clock; only the run mode differs. Its destructor restores it.
+  TestHook_ObserveSocialFrames("game->server", 2,
+                               BuildMarkedMessage(kFindSym, FindPayload({1001, 1002, 1003}, Guid(0xd0))));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "[NEVR.WS] lobby find requested conn=2 mode="));
 }
 
 // ---- #1413: the party and the request a session record names ----
@@ -6933,13 +6931,13 @@ void ExpectClientSaysRefusalOnce(RefusingService& service, uint16_t port) {
   GameSocket first;
   ASSERT_TRUE(first.Connect(port, "/login"));
   ASSERT_TRUE(first.WaitForClose()) << "the refused login socket was left open";
-  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  ASSERT_TRUE(WaitForLogLines("login refused conn=", 1));
   EXPECT_EQ(service.Requests(), 1);
   GameSocket second;
   ASSERT_TRUE(second.Connect(port, "/login"));
   ASSERT_TRUE(second.WaitForClose()) << "the next login socket was left open";
   EXPECT_EQ(service.Requests(), 1) << "the client went back to the service with a sign-in it was refused for";
-  EXPECT_EQ(LogLinesContaining("login refused (HTTP").size(), 1u) << "the refusal was said more than once";
+  EXPECT_EQ(LogLinesContaining("login refused conn=").size(), 1u) << "the refusal was said more than once";
   EXPECT_EQ(ServerFatalCalls(), 0) << "a client must not stop";
 }
 
@@ -7069,12 +7067,12 @@ void ExpectADifferentSignInIsTriedAgain(RefusingService& service, uint16_t port)
   GameSocket first;
   ASSERT_TRUE(first.Connect(port, "/login"));
   ASSERT_TRUE(first.WaitForClose());
-  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  ASSERT_TRUE(WaitForLogLines("login refused conn=", 1));
   g_testToken = "sign-in-B";
   GameSocket second;
   ASSERT_TRUE(second.Connect(port, "/login"));
   ASSERT_TRUE(second.WaitForClose());
-  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 2)) << "a new sign-in's refusal was not said";
+  ASSERT_TRUE(WaitForLogLines("login refused conn=", 2)) << "a new sign-in's refusal was not said";
   EXPECT_EQ(service.Requests(), 2) << "a sign-in that was not refused before was not tried";
   g_testToken = nullptr;
 }
@@ -7094,7 +7092,7 @@ TEST_F(RefusedLoginClientTest, ALoginAfterARefusedOneIsStillALoginNotAShareOfNot
   GameSocket first;
   ASSERT_TRUE(first.Connect(port_, "/login"));
   ASSERT_TRUE(first.WaitForClose());
-  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  ASSERT_TRUE(WaitForLogLines("login refused conn=", 1));
   GameSocket second;
   ASSERT_TRUE(second.Connect(port_, "/login"));
   ASSERT_TRUE(second.WaitForClose());

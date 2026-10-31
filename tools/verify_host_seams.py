@@ -7,7 +7,8 @@ nevr_host_core defines. This check looks at what is compiled, not at how the sou
 
   1. every unit of nevr_host_core is compiled twice with the build's own compiler and flags
      (compile_commands.json), with the define and without it, and the objects are read with nm:
-       - no defined symbol of the object compiled without the define may say it is a seam, and
+       - no defined symbol of the object compiled without the define may say it is a seam (a seam of a shared
+         unit that cannot sit behind the define is named in SHARED_UNIT_SEAMS, with the reason), and
        - every symbol that exists only with the define must say it is a seam (or be a standard-library
          template the seam instantiates), so a seam added under a name the pattern does not know is a failure;
   2. no compile command outside src/runtime/host/ and src/runtime/tests/ carries the define, and no host unit
@@ -47,6 +48,18 @@ ALLOWED_DEFINITION = ("src/runtime/CMakeLists.txt",
 # A defined symbol whose demangled name says it is a seam.
 SEAM_SYMBOL = re.compile(r"ForTest|Seam|Probe|FailWrites|g_fail_|g_emit_sink|g_record_pause|Claimed|claimed_"
                          r"|RuntimeRendezvous::Context\(|test", re.IGNORECASE)
+# Seams that are named, by unit, because the unit is shared and cannot put them behind the define. A unit here is
+# compiled into the host, into nevr_core, into the Quest sentinel and into test programs outside nevr_host_core;
+# a gate on NEVR_HOST_TESTING would need the define on a src/core compile command, which step 2 forbids, and those
+# test programs would lose the seam. Only the exact demangled name in the exact unit passes; any other seam-like
+# symbol of the unit, and the same name in another unit, still fails.
+SHARED_UNIT_SEAMS = {
+    "crash_report.cpp": {
+        "nevr_crash::ResetForTest()":
+            "src/core/crash_report.cpp is the one crash report writer shared by the host, nevr_core, the Quest sentinel, "
+            "test_crash_send and the Quest host test; the seam empties its log ring and written flag",
+    },
+}
 # A symbol the define adds that is a standard-library template instantiation, not a seam (the throwing seam
 # instantiates std::runtime_error's typeinfo).
 LIBRARY_SYMBOL = re.compile(r"\bstd::|_ZT[ISV]St|_ZNSt|_ZSt|\.refptr\.")
@@ -98,12 +111,18 @@ def nm_tool(compiler):
     return str(path.with_name(path.name[:match.start()] + "nm"))
 
 
-def seam_symbols(nm_output):
-    """Defined symbols (not 'U') in `nm -C` output whose name says it is a seam."""
+def seam_symbols(nm_output, unit=None):
+    """Defined symbols (not 'U') in `nm -C` output whose name says it is a seam. `unit` is the file name of the
+    compiled unit; a seam SHARED_UNIT_SEAMS names for that unit passes. A COMDAT section symbol (`.text$_ZN...`, `.pdata$`,
+    `.xdata$`) is a section label that nm does not demangle: its mangled text can spell "test" inside other words
+    (`...OffsetESt17...`), and the function it labels has its own demangled symbol, which is checked."""
     found = []
+    named = SHARED_UNIT_SEAMS.get(unit, {})
     for line in nm_output.splitlines():
         parts = line.split(None, 2)
         if len(parts) < 3 or len(parts[1]) != 1 or parts[1] in "Uu":
+            continue
+        if parts[2].startswith(".") or parts[2].strip() in named:
             continue
         if SEAM_SYMBOL.search(parts[2]):
             found.append(line.strip())
@@ -262,7 +281,7 @@ def main(argv):
             listings[label] = listing.stdout
         if len(listings) != 2 or not all(listings.values()):
             continue
-        seams = seam_symbols(listings["without"])
+        seams = seam_symbols(listings["without"], unit=name)
         unnamed = define_only_unnamed(defined_symbols(listings["with"]), defined_symbols(listings["without"]))
         print(f"verify_host_seams: {name}: compiled without -D{DEFINE}, {len(seams)} seam-like symbol(s); "
               f"{len(unnamed)} define-only symbol(s) not named as a seam")

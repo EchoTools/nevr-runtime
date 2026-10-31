@@ -36,10 +36,11 @@ constexpr std::uint32_t kStepWordWant = 0x52800408;
 constexpr std::uintptr_t kStepOffset = 0x98;  // CTableXT growth step within the CGShaderSetResource object
 constexpr std::uint64_t kStock = 0x20, kWant = 1;
 
-// The three data words that hold CreateInstance's address (ReVault xrefs to 0x1a0707c, [data]: 0x3387f9c, 0x34fb0f8, 0x375ddd0),
-// as ELF vaddrs. Each is swapped on its own, checked against base + kCreateInstance, so a slot that holds something else is refused.
-constexpr int kSlotCount = 3;
-constexpr std::uintptr_t kSlots[kSlotCount] = {0x3287f9c, 0x33fb0f8, 0x365ddd0};
+// The data word that holds CreateInstance's address, as an ELF vaddr: the CFactory<CGShaderSetResource> vtable word at 0x365ddd0, the
+// only dynamic relocation of the pinned libr15.so whose target is CreateInstance (`readelf -r`: R_AARCH64_ABS64 at 0x365ddd0 to 0x190707c).
+// It is swapped through InstallImportHook, checked against base + kCreateInstance, so a slot that holds something else is refused.
+constexpr int kSlotCount = 1;
+constexpr std::uintptr_t kSlots[kSlotCount] = {0x365ddd0};
 
 using CreateFn = void* (*)(void* unused, void* init);
 
@@ -79,7 +80,7 @@ void* Wrapper(void* unused, void* init) {
 }
 
 using WrapperFn = void* (*)(void*, void*);
-constexpr WrapperFn kWrappers[kSlotCount] = {&Wrapper<0>, &Wrapper<1>, &Wrapper<2>};
+constexpr WrapperFn kWrappers[kSlotCount] = {&Wrapper<0>};
 
 }  // namespace
 

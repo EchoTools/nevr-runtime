@@ -19,6 +19,7 @@
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
 #include "quest/invite/frame_dispatch.h"
+#include "main_level.h"
 #include "menu_cards_hook.h"
 #include "quest/invite/wizard_metric_hook.h"
 #include "quest/invite/join_game_quest.h"
@@ -28,6 +29,8 @@
 #include "permission_request.h"
 #include "permission_wait_hook.h"
 #include "crash_first_hook.h"
+#include "quest/integration/dlopen_hook.h"
+#include "quest/integration/post_load.h"
 #include "pns_provider_hook.h"
 #include "process_end_hook.h"
 #include "quit_hook.h"
@@ -40,6 +43,7 @@
 #include "pinned_targets.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/entry_hooks.h"
+#include "quest/redirect/hook_adapter.h"
 
 #include <jni.h>
 
@@ -122,9 +126,18 @@ bool InstallObbSkipHook(bool countersRegistered) noexcept {
 void SetProcessEndCallback(void (*callback)() noexcept) noexcept { nevr_quest::process_end::SetBeforeExit(callback); }
 bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(); }
 
-// Our crash handler stays first (#1605): libr15's sigaction and signal slots keep the game's crash handler from displacing it.
-// A refused install is logged by GotHook and leaves the game's calls intact.
-bool InstallCrashFirstHook() noexcept { return nevr_quest::crash_first::Install(); }
+// Our crash handler stays first (#1605): libr15's sigaction and signal slots keep the game's crash handler from displacing it,
+// and the dlopen hook (live on every launch from here) hooks the same two slots of libpnsrad, libpnsradmatchmaking and
+// libpnsovr when the game loads them. A refused install is logged by GotHook and leaves the game's calls intact.
+bool InstallCrashFirstHook() noexcept {
+    const bool slots = nevr_quest::crash_first::Install();
+    nevr_quest::integration::SetModuleLoadedObserver(&nevr_quest::crash_first::OnModuleLoaded);
+    sentinel::GotStatus status = sentinel::GotStatus::kNotInstalled;
+    const bool dlopenLive = nevr_quest::integration::InstallDlopenHook(&status) == nevr_quest::integration::DlopenInstall::kOk;
+    sentinel::LogFields(dlopenLive ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "crash_first_late_install",
+                        {{"result", dlopenLive ? "armed" : "dlopen_hook_refused"}, {"status", sentinel::GotStatusName(status)}});
+    return slots && dlopenLive;
+}
 
 namespace {
 // The game's permission request on its own activity, with the hook's request code (#947): the activity is the one
@@ -150,6 +163,7 @@ bool InstallPermissionWaitHook() noexcept {
     // says whether it went in; a refused install leaves the game's QUIT as it is.
     nevr_quest::quit::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
+    nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();
 }
 
@@ -182,12 +196,12 @@ bool InstallRenderConfigHook(nevr_quest::texture_quality::Level level, bool from
     return nevr_quest::render_config::Install(level, fromConfig);
 }
 
-// The log-only resource request hook (#871): development builds only. A refused install is logged by GotHook and leaves the
-// game's call intact.
+// The resource request hook (#871, #1737 C5): installed in every build; only its per-request log lines are development builds only; a release build logs failed requests, rate limited
+// (ResourceRequestLogEnabled, the `logLines` argument). A refused install is logged by GotHook and leaves the game's call intact.
 bool ResourceRequestLogEnabled() noexcept { return nevr_build::kIsDev; }
 bool RegisterResourceRequestCounters() noexcept { return nevr_quest::resource_request::RegisterCounters(); }
-bool InstallResourceRequestLogHook(bool countersRegistered) noexcept {
-    return nevr_quest::resource_request::InstallIfCounted(countersRegistered);
+bool InstallResourceRequestLogHook(bool countersRegistered, bool logLines) noexcept {
+    return nevr_quest::resource_request::InstallCounted(countersRegistered, logLines);
 }
 
 // The clock-level override (#928). It owns no slot: the render-configuration hook owns vrapi_SetClockLevels and asks the
@@ -219,6 +233,10 @@ bool InstallWizardMetricHook() noexcept {
     return observer;
 }
 
+// The game's main level for the plugins (#1106). The source and the frame work register once; a refused frame work is logged
+// by main_level::Install, and the plugins then keep the level they were given at init.
+bool InstallPluginMainLevel() noexcept { return nevr_quest::main_level::Install(); }
+
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
 bool InstallLoginPromptHook(bool countersRegistered) noexcept {
@@ -247,7 +265,13 @@ const char* nevr_sentinel_marker() {
 // DT_NEEDED closure, before libr15's JNI_OnLoad / ANativeActivity_onCreate.
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
+    // The crash handlers first (#1689): a crash anywhere below, the begin record and the UI looper capture included, leaves a
+    // report the next start sends. Arm is idempotent: the sequence's first step calls it again after setting the log sink.
+    sentinel::Arm();
     nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);
+    // The login_host fallback carries this build's tuple (login_fallback.h): set before the sequence installs the redirect.
+    nevr_quest::redirect::SetLoginIdentity(
+        {"nevr_quest", nevr_build::kIsDev ? "dev" : "release", nevr_build::kVersion, nevr_build::kCommit});
     // #829: the thread that loads the library takes the UI looper for the floor message's presenter (it logs what it found).
     nevr_quest::toast::CaptureUiLooper();
     // Everything the constructor does is one sequence (integration/ctor_sequence.h): crash reporter,

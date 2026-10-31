@@ -273,8 +273,9 @@ static constexpr uint64_t VA_AFK_PATCH = 0x1401BC1E2;
 
 // Source: revault string search "pnsovr"/"pnsdemo", commit e1803da
 // String data for social platform DLL selection at ~0x140109xxx.
-// The game passes these to CModuleLoader (fcn.140606690).
-// Overwriting forces all paths to load pnsrad.dll.
+// The game passes these to CNSProvider::LoadByName (fcn.140606690), the provider loader.
+// The runtime hooks that loader and hands it "pnsrad" for both names (runtime/patch/provider_name_redirect.h),
+// so all paths load pnsrad.dll.
 static constexpr uint64_t VA_SOCIAL_PLUGIN_STR_PNSOVR  = 0x1416d35c4;  // xref 0x140109993
 static constexpr uint64_t VA_SOCIAL_PLUGIN_STR_PNSDEMO = 0x1416d35e8;  // xref 0x140109a2b
 

@@ -2,7 +2,7 @@
 
 Files: `src/peerclamp.{h,cpp}`, `src/quest/tests/q15t/peerclamp_test.cpp`, `src/quest/tests/q15t/mod/peerclamp.sh`, `src/quest/tests/q15t/mutants.d/peerclamp.sh`.
 
-Option macro for the main seat to wire: `Q15T_PEERCLAMP`, default **OFF** (source: "TEST ONLY", the source build's peerclamp:1; `Switch()` is
+Option macro for the main seat to wire: `Q15T_PEERCLAMP`, default **ON** (#1625: the wave19a on-list turns on `peerclamp.on`; source: "TEST ONLY", the source build's peerclamp:1; `Switch()` is
 true only for `peerclamp.on` or `debug.<app>.peerclamp 1`, `:181-200`; `source-build peerclamp_install` `:210-211`). No file switch is
 kept (the source's is an enabling switch). API: `InstallResult InstallPeerClamp(std::uintptr_t base)`; seam `InstallPeerClampAt(base,
 slot, real, invalid_vaddr)`; `PeerClampCount()`. No tick. The module changes game state (writes a stamp): the plugin's capability

@@ -1258,6 +1258,17 @@ static void SwitchTests() {
   EcStats s = EcStatsNow();
   CHECK(s.types == 1 && !s.equip_store && !s.hide_write, "ec.on must win and only its first line counts: types %u equip %d hide %d", s.types, s.equip_store, s.hide_write);
   CHECK(EcDataFileExists("ec.on") && !EcDataFileExists("nothere"), "EcDataFileExists");
+  // ec.off is a kill file: it beats ec.on, the presets and the build's default words, and installs nothing
+  f = std::fopen((d + "/ec.off").c_str(), "w");
+  std::fclose(f);
+  ResetAll();
+  SetEcDirForTest(tmpl);
+  r = InstallEc(g_base);
+  CHECK(std::string(r.reason) == "off" && *W(kEcSlotRecvfrom) == reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "recvfrom")) &&
+            *W(kEcSlotSendto) == reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "sendto")),
+        "ec.off with ec.on and a preset beside it: must install nothing: reason %s", r.reason);
+  CHECK(HasLine("kill_file=ec.off") && HasLine("ec: off") && !HasLine("ec: on"), "ec.off: no 'off' record naming the kill file, or an 'ec: on' line");
+  unlink((d + "/ec.off").c_str());
   unlink((d + "/ec.on").c_str());
   unlink((d + "/ec_preset1.on").c_str());
   rmdir(tmpl);

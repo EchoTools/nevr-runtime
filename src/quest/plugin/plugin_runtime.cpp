@@ -162,6 +162,19 @@ void FinishPlugins(const char* reasonToken) noexcept {
   }
 }
 
+void RefreshMainLevel() noexcept {
+  try {
+    if (Instance() == nullptr) return;
+    // Called from the game's update hook: it never waits. A pass holding the loader (a plugin's init on another thread)
+    // skips this frame; the next frame refreshes.
+    std::unique_lock<std::mutex> lock(Instance()->mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return;
+    Instance()->loader.RefreshMainLevel();
+  } catch (const std::exception& error) {
+    Contained("refresh", error);
+  }
+}
+
 void ResetPluginsForTest() noexcept {
   delete Instance();
   Instance() = nullptr;

@@ -112,7 +112,6 @@ BRAND_PROSE_SPELLINGS = {
     "installer/src/main.rs": {"nEVR"},  # the usage line and the root refusal an operator reads (#1353)
     "installer/tests/nevr_root.rs": {"nEVR"},  # the refusal reason the test asserts (#1353)
     "tools/package-release/install.ps1": {"nEVR"},  # the header comment on -Root (#1353)
-    "release-headlines/1533-console-notice.txt": {"nEVR"},  # the player's one line: the brand in prose (#1623)
 }
 
 

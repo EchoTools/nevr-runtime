@@ -1,7 +1,6 @@
 #include "quest/sentinel/crash_report_quest.h"
 
 #include "core/crash_report.h"
-#include "runtime/compat/crash_upload.h"
 #include "quest/sentinel/elf_build_id.h"
 #include "quest/sentinel/sentinel.h"
 #include "quest/sentinel/sentinel_log.h"
@@ -155,10 +154,10 @@ bool RenameFile(const char* from, const char* to) { return ::rename(from, to) ==
 // `<dump path without .dmp>` + the report suffix: the report beside its minidump, under the same stem.
 bool BesideMinidump(const char* dump_path, char* buffer, std::size_t capacity) {
   std::size_t length = std::strlen(dump_path);
-  const char* dmp = nevr_crash_upload::kMinidumpSuffix;
+  const char* dmp = nevr_crash::kMinidumpSuffix;
   const std::size_t dmp_length = std::strlen(dmp);
   if (length >= dmp_length && std::strcmp(dump_path + length - dmp_length, dmp) == 0) length -= dmp_length;
-  const char* suffix = nevr_crash_upload::kReportSuffix;
+  const char* suffix = nevr_crash::kReportSuffix;
   if (length + std::strlen(suffix) + 1 > capacity) return false;
   std::memcpy(buffer, dump_path, length);
   std::memcpy(buffer + length, suffix, std::strlen(suffix) + 1);
@@ -178,7 +177,7 @@ bool ReportPath(const nevr_crash::CrashInfo& info, char* buffer, std::size_t cap
   AppendDec(buffer, capacity, &length, static_cast<std::uint64_t>(::time(nullptr)));
   AppendText(buffer, capacity, &length, "-");
   AppendDec(buffer, capacity, &length, info.thread_id);
-  AppendText(buffer, capacity, &length, nevr_crash_upload::kReportSuffix);
+  AppendText(buffer, capacity, &length, nevr_crash::kReportSuffix);
   return true;
 }
 

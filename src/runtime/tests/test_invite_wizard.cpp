@@ -93,6 +93,61 @@ TEST(InviteMetric, AJoinCodeThatIsNotTextIsNoCode) {
   EXPECT_EQ(m.join_code, "");
 }
 
+TEST(InviteMetric, TheShapeNamesEachKeyAndItsKindAndNeverAValue) {
+  const std::string shape = nevr_invite::MetricShape(JoinLine("K7M2Q"));
+  EXPECT_NE(shape.find("join_code=s5"), std::string::npos) << shape;
+  EXPECT_NE(shape.find("panel_name=s13"), std::string::npos) << shape;
+  EXPECT_EQ(shape.find("K7M2Q"), std::string::npos) << shape;
+  EXPECT_EQ(shape.find("OVR-ORG-123"), std::string::npos) << shape;
+  EXPECT_NE(nevr_invite::MetricShape(JoinLine("<invalid>")).find("join_code=invalid"), std::string::npos);
+  EXPECT_EQ(nevr_invite::MetricShape(R"({"a":1,"b":true,"c":null,"d":[1],"e":{"f":"xy"}})"), "a=number,b=bool,c=null,d=array,e={f=s2}");
+  EXPECT_EQ(nevr_invite::MetricShape("not json"), "unreadable");
+  EXPECT_EQ(nevr_invite::MetricShape(""), "unreadable");
+}
+
+// The game's own metric (measured live on 2026-10-30, a typed code and a create click): the panel and event names at the top,
+// the click's own fields in a nested `event_detail` object. The top-level keys the first version of the parser read were
+// the echovr-modkit author's report and never matched, so a typed code reached no request.
+TEST(InviteMetric, TheClicksOwnFieldsAreReadFromTheNestedEventDetail) {
+  const Metric join = nevr_invite::ParseMetric(
+      R"({"panel_type":"deep_linking","panel_name":"join_via_code","event_name":"join","event_detail":{"join_code":"K7M2Q"}})");
+  EXPECT_EQ(join.kind, Kind::Join);
+  EXPECT_EQ(join.join_code, "K7M2Q");
+  const Metric create = nevr_invite::ParseMetric(
+      R"({"panel_type":"deep_linking","panel_name":"create_game_review_settings","event_name":"create_invite","event_detail":{"Server_region":"US WEST","Expires_after":"3 HOURS"}})");
+  EXPECT_EQ(create.kind, Kind::Create);
+  EXPECT_EQ(create.region, "US WEST");
+  EXPECT_EQ(create.expires_text, "3 HOURS");
+  const Metric invalid = nevr_invite::ParseMetric(
+      R"({"panel_type":"deep_linking","panel_name":"join_via_code","event_name":"join","event_detail":{"join_code":"<invalid>"}})");
+  EXPECT_EQ(invalid.join_code, "");
+  const Metric both = nevr_invite::ParseMetric(
+      R"({"panel_type":"deep_linking","panel_name":"join_via_code","event_name":"join","join_code":"AAAAA","event_detail":{"join_code":"BBBBB"}})");
+  EXPECT_EQ(both.join_code, "AAAAA");  // the top level wins when a key is in both
+  const Metric notObject = nevr_invite::ParseMetric(
+      R"({"panel_type":"deep_linking","panel_name":"join_via_code","event_name":"join","event_detail":"K7M2Q"})");
+  EXPECT_EQ(notObject.join_code, "");
+}
+
+// The share page's JOIN (#1731): the page script's own strings (`8c3244ce60942e17.dll`, ReVault) name the panel and the event.
+TEST(InviteMetric, TheSharePagesJoinIsRecognisedByItsPanelAndEventAndNothingElseIs) {
+  EXPECT_TRUE(nevr_invite::IsShareJoin(
+      R"({"panel_type":"deep_linking","panel_name":"create_game_summary","event_name":"join","user_id":"OVR-ORG-1"})"));
+  EXPECT_TRUE(nevr_invite::IsShareJoin(
+      R"({"panel_type":"deep_linking","panel_name":"create_game_summary","event_name":"join","event_detail":{}})"));
+  EXPECT_FALSE(nevr_invite::IsShareJoin(
+      R"({"panel_type":"deep_linking","panel_name":"create_game_summary","event_name":"exit"})"));
+  EXPECT_FALSE(nevr_invite::IsShareJoin(
+      R"({"panel_type":"deep_linking","panel_name":"join_via_code","event_name":"join"})"));
+  EXPECT_FALSE(nevr_invite::IsShareJoin(
+      R"({"panel_type":"other","panel_name":"create_game_summary","event_name":"join"})"));
+  EXPECT_FALSE(nevr_invite::IsShareJoin("not json"));
+  EXPECT_FALSE(nevr_invite::IsShareJoin(""));
+  EXPECT_EQ(nevr_invite::ParseMetric(R"({"panel_type":"deep_linking","panel_name":"create_game_summary","event_name":"join"})").kind,
+            Kind::NotWizard);  // the parser the typed code and the create use does not take it
+  EXPECT_EQ(nevr_invite::ShareJoinClickLine(), "[NEVR.INVITE] wizard click seen event=join panel=create_game_summary");
+}
+
 TEST(InviteMetric, OtherWizardClicksAreNotRequests) {
   const std::string other =
       R"({"panel_type":"deep_linking","panel_name":"create_game_review_settings","event_name":"back"})";

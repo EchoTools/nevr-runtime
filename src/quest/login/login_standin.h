@@ -50,6 +50,9 @@ void SetForTest(std::uint64_t org, const char* token, const char* nonce, const c
 void SetUserIdForTest(std::uint64_t user) noexcept;
 // Back to the unpublished state, so the next Generate draws fresh values.
 void ResetForTest() noexcept;
+// Scripts the random draws Generate makes (nullptr: arc4random_buf again), so a test can force the user-id redraw.
+using RandomFn = void (*)(void* buf, std::size_t n);
+void SetRandomForTest(RandomFn fn) noexcept;
 #endif
 
 }  // namespace nevr_quest_login::StandIn

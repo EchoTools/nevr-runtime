@@ -776,9 +776,6 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
     if (chunk == 0) break;
     written += chunk;
   }
-  FlushFileBuffers(file);
-  LeaveCriticalSection(&g_log_local_lock);
-  if (locked) ReleaseMutex(lock);
   if (marked_unreliable) {
     // The one record that says the log is no longer serialized: written to the open file, without the lock,
     // from a fixed buffer (this can be the crash callback).
@@ -791,10 +788,18 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
     const std::size_t record_length = record.Finish();
     DWORD record_written = 0;
     if (record_length != 0) {
+      // Written inside the in-process section. Written after LeaveCriticalSection it raced another thread's line on the
+      // same file, a thread that holds neither the mutex (the lock is unreliable) nor this section.
       WriteFile(file, buffer, static_cast<DWORD>(record_length), &record_written, nullptr);
-      FlushFileBuffers(file);
     }
   }
+  LeaveCriticalSection(&g_log_local_lock);
+  if (locked) ReleaseMutex(lock);
+  // The flush is after the release, not inside the wait's hold: FlushFileBuffers is the slow step, and holding the
+  // named mutex across it made processes that end together queue for the bounded exit wait behind each other's fsync
+  // (#1152). The line and the lock record are already in the file; the file is flushed before this call returns, so the
+  // process is not allowed to end before its records reach the disk.
+  FlushFileBuffers(file);
   CloseHandle(file);
   return ok != FALSE && written == length;
 }

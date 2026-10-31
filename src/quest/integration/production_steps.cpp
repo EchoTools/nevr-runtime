@@ -16,6 +16,7 @@
 #include "credits_text.h"
 #include "hook_log.h"
 #include "hook_report.h"
+#include "path_rewrite_hook.h"
 #include "sentinel.h"
 #include "sentinel_log.h"
 #include "splash_skip_hook.h"
@@ -27,10 +28,12 @@
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/dlopen_hook.h"
 #include "quest/integration/entry_hooks.h"
+#include "quest/integration/crash_send_step.h"
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/libr15_attach_step.h"
 #include "quest/integration/post_load.h"
+#include "quest/integration/hook_registry_check.h"
 #include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
@@ -45,7 +48,6 @@
 #include "quest/social/menu_version_label.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
-#include "runtime/compat/crash_upload.h"
 #include "runtime/compat/friend_request_check.h"
 #include "runtime/compat/party_leave_check.h"
 #include "runtime/compat/party_share_check.h"
@@ -324,21 +326,6 @@ void SelfCheckLog(const nevr_self_check::LogRecord& record) {
                        {"expected", record.expected.c_str()}, {"observed", record.observed.c_str()}});
 }
 
-// Crash report upload (runtime/compat/crash_upload.h, #1605): one sentinel log line per event. A report's text and the
-// minidump are never logged, only their sizes.
-void CrashUploadLog(const nevr_crash_upload::LogEvent& e) {
-  const std::string event = e.event;
-  if (event == "armed" || event == "off") {
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "crash_upload",
-                        {{"state", e.event}, {"dir", e.report.c_str()}, {"detail", e.detail.c_str()}});
-    return;
-  }
-  sentinel::LogFields(event == "sent" ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "crash_upload",
-                      {{"state", e.event}, {"report", e.report.c_str()}, {"report_bytes", e.reportBytes},
-                       {"minidump", e.minidump.c_str()}, {"minidump_bytes", e.minidumpBytes},
-                       {"detail", e.detail.c_str()}});
-}
-
 // Self-check "party_data_share" (#398): hands each message of a frame to the check, which pairs the service's
 // answers (server to game) with the requests that were sent (game to server, and the facade's own through
 // SendSocialFrame, which the frame tap does not show). Runs on the thread that carries the frame: the frame
@@ -431,6 +418,9 @@ class ProductionSteps final : public Steps {
   void ArmCrashReporter() override {
     sentinel::SetLogSink(&HookLogToDisk);
     sentinel::Arm();
+    // The reports a past crash left go to nevr-api now, from the lowest layer, on a thread of its own (core/crash_send.h):
+    // before the config, the bridge, the login or the game exist, and whether or not any of them comes up.
+    nevr_quest::integration::StartCrashSend(sentinel::DumpDir(), NEVR_QUEST_PROJECT_VERSION);
   }
 
   const nevr_quest::ResolvedConfig& ResolveConfig() override {
@@ -450,6 +440,8 @@ class ProductionSteps final : public Steps {
   }
 
   PluginCounts PlanPlugins() override {
+    // The level source and its frame work go in before any plugin context exists (#1106). Registering twice is a no-op.
+    nevr_quest::integration::InstallPluginMainLevel();
     const nevr_quest::plugin::PlanCounts counts = nevr_quest::plugin::PlanPlugins(
         sentinel::ActiveConfig().plugins, nevr_quest::integration::ResourceRequestLogEnabled(),
         sentinel::ActiveConfig().fileRejected);
@@ -479,6 +471,11 @@ class ProductionSteps final : public Steps {
   bool AttachLibR15() override {
     const AttachStepOutcome outcome = RunAttachStep(BuildAttachOptions());
     detail_ = outcome.detail;
+    // The pinned service-only file names its data directory by the afk package (#1737): its file calls are pointed at the
+    // running package's media directory. Only on that file; logs its own outcome.
+    if (std::strcmp(outcome.detail, libr15_patch::kReasonPinnedServiceOnly) == 0) {
+      nevr_quest::path_rewrite::InstallForServiceOnly();
+    }
     return outcome.verified;
   }
 
@@ -580,8 +577,8 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
-  bool InstallResourceRequestLog(bool countersRegistered) override {
-    const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered);
+  bool InstallResourceRequestLog(bool countersRegistered, bool logLines) override {
+    const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered, logLines);
     detail_ = ok ? "ok" : "got_hook_refused";
     return ok;
   }
@@ -654,17 +651,16 @@ class ProductionSteps final : public Steps {
       hooks.log = &SelfCheckLog;
       hooks.build = NEVR_QUEST_PROJECT_VERSION;
       ApplySelfCheck(&config.tap, hooks);
-      // The report a crash left in nevr-crashes goes out once, on the first logged-in session after it (#1605).
-      nevr_crash_upload::Config crash;
-      crash.dir = sentinel::DumpDir();  // empty when the crash reporter is not armed: the upload then says it is off
-      crash.build = NEVR_QUEST_PROJECT_VERSION;
-      crash.log = &CrashUploadLog;
-      nevr_crash_upload::Install(std::move(crash));
       // The process ends when the game's android_main returns (#621): its report goes out first (best effort).
       nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408
       nevr_self_check::Register({"matchmaking_reload_redirect",
                                  "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
                                  &MatchmakingReloadProbe});
+      // A hook the registry had no room for is not installed (#1618 starved the matchmaking redirect that way): the result
+      // fails, naming the hook that lost, the first time it is polled after a refusal.
+      nevr_self_check::Register({nevr_quest::integration::kHookRegistryCheckName,
+                                 nevr_quest::integration::kHookRegistryCheckExpected,
+                                 &nevr_quest::integration::HookRegistryProbe});
     }
     config.connector = rt.connector.get();
     config.log = RouterLog();
@@ -838,6 +834,27 @@ void ShutdownIntegration() noexcept {
   }
 }
 
+namespace {
+
+// One line when the constructor's sequence is done: Error, with the names, when a hook lost for want of room in the registry
+// (got_hook.h); Info with the counts otherwise. Hooks that install after the game loads its libraries (the login, the
+// matchmaking redirect) come later: their refusal is the registry's own Error line and the self-check's result.
+void LogRegistrySummary() noexcept {
+  try {
+    const sentinel::RegistryStats stats = sentinel::RegistrySnapshot();
+    const std::string text = DescribeRegistry(stats);
+    sentinel::LogFields(stats.refused == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "hook_registry",
+                        {{"action", "summary"}, {"status", stats.refused == 0 ? "ok" : "refused"},
+                         {"capacity", static_cast<long long>(stats.capacity)}, {"used", static_cast<long long>(stats.used)},
+                         {"high_water", static_cast<long long>(stats.highWater)},
+                         {"refused", static_cast<long long>(stats.refused)}, {"detail", text.c_str()}});
+  } catch (const std::exception&) {
+    sentinel::EmitFixed(nevr_quest::LogLevel::kError, "hook registry summary could not be written");
+  }
+}
+
+}  // namespace
+
 void RunSentinelConstructor() noexcept {
   ProductionSteps steps;
   const ConstructorReport report = RunConstructorSequence(steps);
@@ -850,6 +867,7 @@ void RunSentinelConstructor() noexcept {
       case StepState::kThrew: ++failed; break;
     }
   }
+  LogRegistrySummary();  // before the done line: a hook the registry refused is named at Error, not buried in the counts
   sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor",
                       {{"action", "done"}, {"steps_ok", ok}, {"steps_failed", failed}, {"steps_skipped", skipped}});
 }

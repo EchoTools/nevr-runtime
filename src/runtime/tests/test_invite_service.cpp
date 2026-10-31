@@ -333,7 +333,10 @@ void DrainMatches() {
 nevr_invite::Plan CreatePlan() {
   nevr_invite::Metric metric;
   metric.kind = nevr_invite::Kind::Create;
-  return nevr_invite::PlanRequest(metric, {});
+  nevr_invite::Choices choices;  // a create without the wizard's choices is Skip::Incomplete and never reaches the service
+  choices.experience = "arena";
+  choices.mode = "custom";
+  return nevr_invite::PlanRequest(metric, choices);
 }
 
 }  // namespace
@@ -454,3 +457,80 @@ TEST(InviteMatch, NothingWaitingIsFalseAndANullArgumentIsRefused) {
   EXPECT_FALSE(nevr_invite_match::TakeResolvedMatch(nullptr, sizeof buffer, &length));
   EXPECT_FALSE(nevr_invite_match::TakeResolvedMatch(buffer, sizeof buffer, nullptr));
 }
+
+// The texts the answers ask the wizard's pages to show (nevr_invite_match::TakeShareText), filed by the same take as the matches.
+// Falsifier: a created code that leaves the share page's link, or a refused resolve that leaves the entry page's title, unfiled.
+namespace {
+
+std::vector<nevr_invite_match::ShareText> TakeTexts() {
+  std::vector<nevr_invite_match::ShareText> out;
+  nevr_invite_match::ShareText text;
+  while (nevr_invite_match::TakeShareText(&text)) out.push_back(text);
+  return out;
+}
+
+}  // namespace
+
+TEST(InviteShareText, ACreatedCodeFilesItsCodeItsExpiryAndTheComingSoonLink) {
+  DrainMatches();
+  TakeTexts();
+  Guard guard;
+  const std::string body = std::string(R"({"code":"K7M2Q","match_id":")") + kMatchIdA + R"(","expires_at":"2026-10-21T05:38:59.63Z"})";
+  LoopbackServer server({Script{Script::Kind::Reply, 200, body, ""}});
+  Rig rig;
+  nevr_invite_service::Start(rig.Settings(Switch::On, server.Base()));
+
+  ASSERT_EQ(nevr_invite_service::Submit(CreatePlan()), Submit::Queued);
+  ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(std::chrono::seconds(10)));
+  EXPECT_FALSE(TakeMatch().ok) << "a created code names no match to join";
+  const std::vector<nevr_invite_match::ShareText> texts = TakeTexts();
+  ASSERT_EQ(texts.size(), 3u);
+  EXPECT_STREQ(texts[0].field, "code");
+  EXPECT_STREQ(texts[0].text, "K7M2Q");
+  EXPECT_EQ(texts[0].actor, 0xa9bd0cb4e6f2004cULL);
+  EXPECT_STREQ(texts[1].field, "expires");
+  EXPECT_STREQ(texts[1].text, "EXPIRES: 05:38 UTC");
+  EXPECT_STREQ(texts[2].field, "link");
+  EXPECT_STREQ(texts[2].text, "<coming soon>");
+  EXPECT_EQ(texts[2].length, 13u);
+  EXPECT_EQ(texts[2].actor, 0xc3f9f167b2a06043ULL);
+  EXPECT_EQ(texts[2].element, 0x3657cd7405999810ULL);
+  EXPECT_TRUE(TakeTexts().empty());
+}
+
+TEST(InviteShareText, ARefusedResolveFilesTheEntryTitleAndAResolvedOneFilesNoText) {
+  DrainMatches();
+  TakeTexts();
+  {
+    Guard guard;
+    LoopbackServer server({Script{Script::Kind::Reply, 404, R"({"message":"invalid"})", ""}});
+    Rig rig;
+    nevr_invite_service::Start(rig.Settings(Switch::On, server.Base()));
+    ASSERT_EQ(nevr_invite_service::Submit(Resolve()), Submit::Queued);
+    ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(std::chrono::seconds(10)));
+    EXPECT_FALSE(TakeMatch().ok);
+    const std::vector<nevr_invite_match::ShareText> texts = TakeTexts();
+    ASSERT_EQ(texts.size(), 1u);
+    EXPECT_STREQ(texts[0].field, "entry_title");
+    EXPECT_STREQ(texts[0].text, "INVALID CODE");
+  }
+  {
+    Guard guard;
+    const std::string body = std::string(R"({"match_id":")") + kMatchIdA + R"("})";
+    LoopbackServer server({Script{Script::Kind::Reply, 200, body, ""}});
+    Rig rig;
+    nevr_invite_service::Start(rig.Settings(Switch::On, server.Base()));
+    ASSERT_EQ(nevr_invite_service::Submit(Resolve()), Submit::Queued);
+    ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(std::chrono::seconds(10)));
+    EXPECT_TRUE(TakeMatch().ok);
+    EXPECT_TRUE(TakeTexts().empty());
+  }
+}
+
+TEST(InviteShareText, NothingWaitingIsFalseAndANullArgumentIsRefused) {
+  TakeTexts();
+  nevr_invite_match::ShareText text;
+  EXPECT_FALSE(nevr_invite_match::TakeShareText(&text));
+  EXPECT_FALSE(nevr_invite_match::TakeShareText(nullptr));
+}
+

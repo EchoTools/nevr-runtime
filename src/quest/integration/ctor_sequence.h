@@ -44,7 +44,10 @@
 //                                    slot, on every launch, right after the OBB skip; no counters
 //      InstallCrashFirst             our crash handler stays first (#1605): two libr15 slots (libc sigaction and signal), on
 //                                    every launch, right after the process-end hook; no counters. The game installs its own crash
-//                                    handler after the constructor, and the hook keeps that request from displacing ours
+//                                    handler after the constructor, and the hook keeps that request from displacing ours. The
+//                                    step also makes the dlopen hook live (idempotent: InstallDlopenHook below finds it
+//                                    installed) so the same two slots of libpnsrad, libpnsradmatchmaking and libpnsovr are hooked
+//                                    when the game loads them
 //      InstallPermissionWait         the game waits for the storage permission it just asked for (#640): one
 //                                    libr15 slot (CSysInfo::RequestPermissions), on every launch, right after
 //                                    the process-end hook; no counters
@@ -55,11 +58,13 @@
 //                                    (CSysInfo::OSBuildVersion), on every launch, right after the Vulkan extension
 //                                    window; no counters. CR15NetGame::Initialize, its only caller, runs after the
 //                                    constructor.
-//      InstallResourceRequestLog     the log-only resource request hook (#871): one libr15 slot
-//                                    (CResourceManager::FillResourceFileRequest), in a development build only
-//                                    (Steps::ResourceRequestLogWanted; a release build skips it and registers no
-//                                    counters), right after the OS build floor hook. Its counters are registered
-//                                    with the others (step 3).
+//      InstallResourceRequestLog     the resource request hook (#871, #1737 C5): one libr15 slot
+//                                    (CResourceManager::FillResourceFileRequest), on every launch, right after the OS
+//                                    build floor hook. It records every request in a development build only
+//                                    (Steps::ResourceRequestLogWanted decides the `logLines` argument; a release build
+//                                    records the failed requests alone, rate limited, #1797) and serves a loose
+//                                    file on a manifest miss in every build. Its counters are registered with the others
+//                                    (step 3), on every launch.
 //      InstallTextureQuality         the eye-buffer size libr15 creates its swap chain with (#943): one libr15 slot
 //                                    (vrapi_GetSystemPropertyInt), on every launch, right after the OS build floor hook (and the resource request log, when wanted) and
 //                                    before the hardware dump (which then shares the slot); the level is the config's
@@ -113,12 +118,20 @@
 //   login not installed     -> the rad provider (#1220) is not installed: it sends no login of its own
 //   release build           -> the rad provider (#1220) is not installed, whatever the configuration asks
 //   obb counters fail       -> the OBB-mount skip is not installed
-//   resource request counters fail -> the resource request log is not installed
+//   resource request counters fail -> the resource request hook still installs, with its counters reported as refused;
+//                                     the lines are as the development question says (logLines)
 //   texture counters fail   -> the texture-quality hook and the Texture Resolution control are not installed
 //   clock-levels counters fail -> the clock-level override is not armed (it stays off)
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
+//
+// The hook registry (sentinel/got_hook.h) is sized for every hook the build declares (sentinel/hook_budget.h), and the login
+// and matchmaking-redirect hooks take their entries from a reserve the others cannot use. That is what keeps them installable
+// whatever the order above installs the rest in: they install after the game loads libpnsrad* (step 11 and the dlopen hook),
+// long after this sequence filled the registry with the libr15 hooks, the crash handler's among them, so no order of the steps
+// can put them first. A hook refused for want of room is an Error line naming it, a `hook_registry` summary line when this
+// sequence is done, and the self-check `hook_registry_has_room` (integration/hook_registry_check.h).
 //
 // Nothing here blocks: no step waits on the network, a thread or a lock held by the game.
 #pragma once
@@ -222,10 +235,11 @@ class Steps {
   virtual bool RegisterLoginPromptCounters() = 0;
   // The OBB-mount skip's counters (#319), registered on every launch.
   virtual bool RegisterObbSkipCounters() = 0;
-  // Whether the log-only resource request hook (#871) is wanted: a development build (nevr_build::kIsDev). A release build
-  // registers no counters for it and installs nothing.
+  // Whether the resource request hook (#871) writes a line for every request: a development build (nevr_build::kIsDev). The
+  // hook is installed in every build and a release build still writes its failed requests (#1797); this answers only for
+  // the per-request lines (the `logLines` argument of InstallResourceRequestLog).
   virtual bool ResourceRequestLogWanted() = 0;
-  // The resource request log's counters (#871), registered when ResourceRequestLogWanted.
+  // The resource request hook's counters (#871, #1737 C5), registered on every launch.
   virtual bool RegisterResourceRequestCounters() = 0;
   // The texture-quality hook's counters (#943) and the Texture Resolution control's (#1012), registered on every launch.
   virtual bool RegisterTextureQualityCounters() = 0;
@@ -250,8 +264,8 @@ class Steps {
   virtual bool InstallObbSkip(bool countersRegistered) = 0;
   // The process ends when the game's android_main returns (#621): one libr15 slot, on every launch.
   virtual bool InstallProcessEnd() = 0;
-  // Our crash handler stays first (#1605): libr15's sigaction and signal slots, on every launch. True when both slots hold
-  // their thunks.
+  // Our crash handler stays first (#1605): libr15's sigaction and signal slots, on every launch, and the dlopen hook that hooks
+  // the provider libraries' slots when they load. True when both libr15 slots hold their thunks and the dlopen hook is live.
   virtual bool InstallCrashFirst() = 0;
   // The game waits for the storage permission it just asked for (#640): one libr15 slot, on every launch.
   virtual bool InstallPermissionWait() = 0;
@@ -261,9 +275,9 @@ class Steps {
   // The game never refuses a headset for its OS build number (#945): one libr15 slot (CSysInfo::OSBuildVersion), on
   // every launch.
   virtual bool InstallOsBuildGate() = 0;
-  // `countersRegistered`: the result of RegisterResourceRequestCounters (the hook's own rule: without its counters it logs the
-  // skip and installs nothing). True when the FillResourceFileRequest slot holds the thunk.
-  virtual bool InstallResourceRequestLog(bool countersRegistered) = 0;
+  // `countersRegistered`: the result of RegisterResourceRequestCounters (the install line says which). `logLines`: the result
+  // of ResourceRequestLogWanted. True when the FillResourceFileRequest slot holds the thunk.
+  virtual bool InstallResourceRequestLog(bool countersRegistered, bool logLines) = 0;
   // The eye-buffer size (#943): one libr15 slot, on every launch. `choice` is the level and where it came from;
   // `countersRegistered` is the result of RegisterTextureQualityCounters. The step applies the
   // hook's own rule (texture_quality::InstallIfCounted): without its counters it logs the skip and installs nothing.

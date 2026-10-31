@@ -22,6 +22,8 @@ std::string Format(const char* level, const char* fmt, ...) {
     return line;
 }
 
+using nevr::kPluginLogHeldLines;
+
 NEVR_DEFINE_PLUGIN_LOG("[test_plugin]")
 
 TEST(PluginLogger, LineIsPrefixLevelMessage) {
@@ -33,24 +35,6 @@ TEST(PluginLogger, LineIsPrefixLevelMessage) {
 TEST(PluginLogger, LongMessagesAreNotTruncated) {
     const std::string big(5000, 'x');
     EXPECT_EQ(Format("ERROR", "%s", big.c_str()), "[p] ERROR " + big);
-}
-
-// The macro-generated functions write one line per call to stderr, with the level their name says.
-TEST(PluginLogger, GeneratedFunctionsWriteTheirLevelToStderr) {
-    const char* temp = std::getenv("TEMP");
-    const std::string path = std::string(temp != nullptr ? temp : ".") + "\\plugin_logger_test.txt";
-    ASSERT_NE(std::freopen(path.c_str(), "w", stderr), nullptr);
-    PluginLog("a %d", 1);
-    PluginLogWarning("b %d", 2);
-    PluginLogError("c %d", 3);
-    std::fflush(stderr);
-    std::FILE* in = std::fopen(path.c_str(), "r");
-    ASSERT_NE(in, nullptr);
-    char buf[256] = {};
-    const std::size_t n = std::fread(buf, 1, sizeof(buf) - 1, in);
-    std::fclose(in);
-    std::remove(path.c_str());
-    EXPECT_EQ(std::string(buf, n), "[test_plugin] INFO a 1\n[test_plugin] WARNING b 2\n[test_plugin] ERROR c 3\n");
 }
 
 // --- #598: bound to the host's log ---
@@ -166,6 +150,81 @@ TEST(PluginLoggerHost, RebindingToAnotherContextFollowsIt) {
     const std::string err = CaptureStderr([] { PluginLog("after unbind"); });
     EXPECT_EQ(err, "[test_plugin] INFO after unbind\n");
     EXPECT_TRUE(g_hostCalls.empty());
+}
+
+// --- lines logged before the bind are held, then written when the bind decides where they go ---
+
+// Before a bind the lines are held (nothing reaches stderr); the bind writes them through the host, in order.
+TEST(PluginLoggerHeld, LinesLoggedBeforeABindReachTheHostInOrderWhenItBinds) {
+    PluginLogState() = {};
+    g_hostCalls.clear();
+    const std::string err = CaptureStderr([] {
+        PluginLog("early %d", 1);
+        PluginLogFields(NEVR_LOG_WARNING, "early fields", {{"k", "v"}});
+        const NvrGameContext ctx = V6Context();
+        EXPECT_TRUE(PluginLogBind(&ctx));
+    });
+    EXPECT_EQ(err, "") << "a bind with a host log writes the held lines through the host, not to stderr";
+    ASSERT_EQ(g_hostCalls.size(), 2u);
+    EXPECT_EQ(g_hostCalls[0].id, "bound-plugin");
+    EXPECT_EQ(g_hostCalls[0].level, NEVR_LOG_INFO);
+    EXPECT_EQ(g_hostCalls[0].message, "early 1");
+    EXPECT_EQ(g_hostCalls[1].level, NEVR_LOG_WARNING);
+    EXPECT_EQ(g_hostCalls[1].message, "early fields");
+    ASSERT_EQ(g_hostCalls[1].fields.size(), 1u);
+    EXPECT_EQ(g_hostCalls[1].fields[0], (std::pair<std::string, std::string>("k", "v")));
+    PluginLog("after");
+    EXPECT_EQ(g_hostCalls.size(), 3u) << "after the bind a line goes straight to the host";
+    PluginLogState() = {};
+}
+
+// A held line keeps its own copy of the text: the caller's buffer may change after the call.
+TEST(PluginLoggerHeld, AHeldLineKeepsItsOwnCopyOfItsText) {
+    PluginLogState() = {};
+    g_hostCalls.clear();
+    std::string value = "first";
+    PluginLogFields(NEVR_LOG_INFO, "held", {{"k", value.c_str()}});
+    value[0] = 'X';
+    const NvrGameContext ctx = V6Context();
+    ASSERT_TRUE(PluginLogBind(&ctx));
+    ASSERT_EQ(g_hostCalls.size(), 1u);
+    ASSERT_EQ(g_hostCalls[0].fields.size(), 1u);
+    EXPECT_EQ(g_hostCalls[0].fields[0], (std::pair<std::string, std::string>("k", "first")));
+    PluginLogState() = {};
+}
+
+// Past the cap a held line is counted, not kept; the bind writes the kept lines and then the count.
+TEST(PluginLoggerHeld, LinesPastTheCapAreCountedAndTheBindReportsTheCount) {
+    PluginLogState() = {};
+    g_hostCalls.clear();
+    const std::size_t dropped = 10;
+    for (std::size_t i = 0; i < kPluginLogHeldLines + dropped; ++i) PluginLog("line %zu", i);
+    const NvrGameContext ctx = V6Context();
+    ASSERT_TRUE(PluginLogBind(&ctx));
+    ASSERT_EQ(g_hostCalls.size(), kPluginLogHeldLines + 1);
+    EXPECT_EQ(g_hostCalls[kPluginLogHeldLines - 1].message, "line 255");
+    EXPECT_EQ(g_hostCalls.back().level, NEVR_LOG_WARNING);
+    EXPECT_EQ(g_hostCalls.back().message, "lines logged before bind were dropped (buffer full)");
+    ASSERT_EQ(g_hostCalls.back().fields.size(), 1u);
+    EXPECT_EQ(g_hostCalls.back().fields[0], (std::pair<std::string, std::string>("count", "10")));
+    PluginLogState() = {};
+}
+
+// A bind with no host log writes the held lines to stderr, in order, behind a line that says why.
+TEST(PluginLoggerHeld, WithNoHostLogTheHeldLinesGoToStderrBehindANoteThatSaysSo) {
+    PluginLogState() = {};
+    const std::string err = CaptureStderr([] {
+        PluginLog("a %d", 1);
+        PluginLogError("b");
+        NvrGameContext ctx = V6Context();
+        ctx.log = nullptr;
+        EXPECT_FALSE(PluginLogBind(&ctx));
+    });
+    EXPECT_EQ(err,
+              "[test_plugin] WARNING no host log function; the lines logged before bind follow on stderr\n"
+              "[test_plugin] INFO a 1\n"
+              "[test_plugin] ERROR b\n");
+    PluginLogState() = {};
 }
 
 }  // namespace

@@ -27,7 +27,7 @@ using Json = nlohmann::json;
 
 // A menu document: a DISPLAY page of other settings, the graphics page that holds the msaa row between two others, and a page
 // of another platform's with a row of the same path that is not the one we rewrite (it has no `rows` list holding it).
-const char* kMenu = R"({
+const char* kMenu = R"json({
   "serialized": 1,
   "pages": [
     {"name": "DISPLAY", "rows": [
@@ -39,10 +39,10 @@ const char* kMenu = R"({
       {"path": "graphics|temporalaa", "name": "Temporal AA", "value": true, "type": "NAMED FLAG"}
     ]}
   ]
-})";
+})json";
 
 // A settings document: the shape of the quest section with its settings and pages lists, a rift section and a voice section.
-const char* kGameSettings = R"({
+const char* kGameSettings = R"json({
   "rift": {"settings": [{"path": "game|experimentalthrowing", "value": 0, "operator": "remove"}]},
   "quest": {
     "settings": [
@@ -53,7 +53,7 @@ const char* kGameSettings = R"({
     "pages": ["ECHO COMBAT", "DISPLAY", "GRAPHICS (1/3)", "GRAPHICS (2/3)"]
   },
   "voiploudness": {"settings": [{"path": "game|voiploudnesslevel", "value": 0.0, "operator": "remove"}], "pages": ["VOICE LOUDNESS"]}
-})";
+})json";
 
 const Json* PageNamed(const Json& doc, const std::string& name) {
   for (const Json& page : doc["pages"]) {
@@ -172,11 +172,11 @@ void TheSettingsDocumentStopsHidingTheControlAndItsPage() {
 }
 
 void ASettingsDocumentWithoutTheRemovalIsLeftAlone() {
-  const tm::Result r = tm::RewriteGameSettings(R"({"quest": {"settings": [{"path": "graphics|sharpening"}], "pages": ["GRAPHICS (1/3)"]}})");
+  const tm::Result r = tm::RewriteGameSettings(R"json({"quest": {"settings": [{"path": "graphics|sharpening"}], "pages": ["GRAPHICS (1/3)"]}})json");
   QCHECK(r.status == tm::Status::kShapeMismatch && r.text.empty());
   QCHECK(tm::RewriteGameSettings("not json").status == tm::Status::kNotJson);
   // A page removal alone is not the document we rewrite: the control would be listed but not shown.
-  QCHECK(tm::RewriteGameSettings(R"({"quest": {"pages": ["GRAPHICS (1/3)"]}})").status == tm::Status::kShapeMismatch);
+  QCHECK(tm::RewriteGameSettings(R"json({"quest": {"pages": ["GRAPHICS (1/3)"]}})json").status == tm::Status::kShapeMismatch);
 }
 
 void TheRewriteDoesNotChangeItsOwnOutput() {
@@ -190,43 +190,55 @@ void TheRewriteDoesNotChangeItsOwnOutput() {
   QCHECK(tm::RewriteGameSettings(settings.text).status == tm::Status::kShapeMismatch);
 }
 
-// ---- the saved value ------------------------------------------------------------------------------------------------------
+// ---- the player's marker ---------------------------------------------------------------------------------------------------
 
-int Saved(const char* text) { return tm::SavedMenuIndex(text, std::strlen(text)); }
+int Marked(const char* text) { return tm::MarkedMenuIndex(text, std::strlen(text)); }
 
-void TheSavedValueIsReadFromTheSettingsFile() {
-  QCHECK(Saved(R"({"graphics": {"msaa": 3}})") == 3);
-  QCHECK(Saved(R"({"graphics":{"msaa":0}})") == 0);
-  QCHECK(Saved("{\"graphics\" : {\"msaa\"\t:\r\n 5 }}") == 5);
-  QCHECK(Saved(R"({"msaa": 1, "other": 4})") == 1);
-  QCHECK(Saved(R"({"msaa": 1, "msaa": 4})") == 1);  // the first one
-  QCHECK(Saved(R"({"msaa": 5})") == 5);
+void TheMarkedValueIsReadFromTheMarkerFile() {
+  QCHECK(Marked(R"({"menu_index": 3})") == 3);
+  QCHECK(Marked(R"({"menu_index":0})") == 0);
+  QCHECK(Marked("{\"menu_index\" \t:\r\n 5 }") == 5);
+  QCHECK(Marked(R"({"menu_index": 1, "other": 4})") == 1);
+  QCHECK(Marked(R"({"menu_index": 1, "menu_index": 4})") == 1);  // the first one
+  // The game's own slot is not the marker: a settings file that held the setting is not read as a choice.
+  QCHECK(Marked(R"({"graphics": {"msaa": 4}})") == -1);
+  QCHECK(Marked(R"({"graphics": {"msaa": 0}})") == -1);
+}
+
+void TheMarkerTextRoundTripsAndStaysInTheMenu() {
+  for (int index = 0; index < 6; ++index) {
+    const std::string text = tm::MarkerText(index);
+    QCHECK(Json::parse(text) == Json::parse("{\"menu_index\":" + std::to_string(index) + "}"));  // valid JSON
+    QCHECK(Marked(text.c_str()) == index);
+  }
+  QCHECK(Marked(tm::MarkerText(-4).c_str()) == 0);
+  QCHECK(Marked(tm::MarkerText(99).c_str()) == 5);
 }
 
 void ANumberOutsideTheMenuIsClamped() {
-  QCHECK(Saved(R"({"msaa": 6})") == 5);
-  QCHECK(Saved(R"({"msaa": 99999999999999999999})") == 5);
-  QCHECK(Saved(R"({"msaa": -1})") == 0);
-  QCHECK(Saved(R"({"msaa": -300})") == 0);
+  QCHECK(Marked(R"({"menu_index": 6})") == 5);
+  QCHECK(Marked(R"({"menu_index": 99999999999999999999})") == 5);
+  QCHECK(Marked(R"({"menu_index": -1})") == 0);
+  QCHECK(Marked(R"({"menu_index": -300})") == 0);
 }
 
 void NothingUsableIsMinusOne() {
-  QCHECK(Saved("") == -1);
-  QCHECK(Saved("{}") == -1);
-  QCHECK(Saved(R"({"msaaa": 3})") == -1);
-  QCHECK(Saved(R"({"Msaa": 3})") == -1);
-  QCHECK(Saved(R"({"msaa": "3"})") == -1);
-  QCHECK(Saved(R"({"msaa": null})") == -1);
-  QCHECK(Saved(R"({"msaa": true})") == -1);
-  QCHECK(Saved(R"({"msaa": 2.5})") == -1);
-  QCHECK(Saved(R"({"msaa": 2e1})") == -1);
-  QCHECK(Saved(R"({"msaa" 3})") == -1);
-  QCHECK(tm::SavedMenuIndex(nullptr, 10) == -1);
+  QCHECK(Marked("") == -1);
+  QCHECK(Marked("{}") == -1);
+  QCHECK(Marked(R"({"menu_indexx": 3})") == -1);
+  QCHECK(Marked(R"({"Menu_index": 3})") == -1);
+  QCHECK(Marked(R"({"menu_index": "3"})") == -1);
+  QCHECK(Marked(R"({"menu_index": null})") == -1);
+  QCHECK(Marked(R"({"menu_index": true})") == -1);
+  QCHECK(Marked(R"({"menu_index": 2.5})") == -1);
+  QCHECK(Marked(R"({"menu_index": 2e1})") == -1);
+  QCHECK(Marked(R"({"menu_index" 3})") == -1);
+  QCHECK(tm::MarkedMenuIndex(nullptr, 10) == -1);
   // The size bounds the read: a number cut off by the end of the text is read as far as it goes, a key cut off is not a key.
-  QCHECK(tm::SavedMenuIndex("\"msaa\":34", 8) == 3);
-  QCHECK(tm::SavedMenuIndex("\"msaa\":34", 9) == 5);
-  QCHECK(tm::SavedMenuIndex("\"msaa\":3", 7) == -1);
-  QCHECK(tm::SavedMenuIndex("\"msaa\":34", 3) == -1);
+  QCHECK(tm::MarkedMenuIndex("\"menu_index\":34", 14) == 3);
+  QCHECK(tm::MarkedMenuIndex("\"menu_index\":34", 15) == 5);
+  QCHECK(tm::MarkedMenuIndex("\"menu_index\":3", 13) == -1);
+  QCHECK(tm::MarkedMenuIndex("\"menu_index\":34", 3) == -1);
 }
 
 }  // namespace
@@ -241,7 +253,8 @@ int main() {
   TheSettingsDocumentStopsHidingTheControlAndItsPage();
   ASettingsDocumentWithoutTheRemovalIsLeftAlone();
   TheRewriteDoesNotChangeItsOwnOutput();
-  TheSavedValueIsReadFromTheSettingsFile();
+  TheMarkedValueIsReadFromTheMarkerFile();
+  TheMarkerTextRoundTripsAndStaysInTheMenu();
   ANumberOutsideTheMenuIsClamped();
   NothingUsableIsMinusOne();
   if (quest_test::Failures() != 0) {

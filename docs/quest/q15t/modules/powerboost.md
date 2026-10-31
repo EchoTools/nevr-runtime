@@ -11,11 +11,11 @@ markers reach `CR15NetDamageableCS::Heal` as enormous heals.
 
 ## Option macro and default (for the main seat to wire; I wired nothing)
 
-`Q15T_POWERBOOST` (an integer), default **0 = OFF**. The source: "powerboost.on (TEST ONLY ... STAGE 0" (the source build's powerboost:1),
+`Q15T_POWERBOOST` (an integer), default **3 = cone** (#1625: the wave19a on-list ships an empty `powerboost.on`, which the source reads as `swallow cone`). The source: "powerboost.on (TEST ONLY ... STAGE 0" (the source build's powerboost:1),
 "Off (no powerboost.on in the source build's data directory): the switch is read, nothing else"; the on-file's first line selects `swallow` /
 `cone` (`:36`, `:400`); QA turns it on with stage 0 = read-only (`powerboost1.on`, `:421`). Numbering offset to keep in mind:
 the plugin's enum is `kPowerboostRead = 1` (the source's "stage 0", read-only), `kPowerboostSwallow = 2` (source `swallow`),
-`kPowerboostCone = 3` (source `cone`). Proposed values: `0` off (default), `1` read-only (the QA setting), `2` swallow, `3` cone.
+`kPowerboostCone = 3` (source `cone`). Values: `0` off, `1` read-only, `2` swallow, `3` cone (default).
 
 API: `InstallResult InstallPowerboost(std::uintptr_t base, int stage, bool net_tick, const PowerboostFns* fns = nullptr)`;
 `void PowerboostGameTick(std::uintptr_t game)` (from the ExclusiveUpdateGame tick: only stores the game pointer);

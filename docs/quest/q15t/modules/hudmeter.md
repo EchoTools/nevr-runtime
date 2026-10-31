@@ -3,7 +3,7 @@
 Files: `src/hudmeter.{h,cpp}`, `src/quest/plugins/q15t/src/pbhud_log.h` (shared with powerboost / shieldgamma), `src/quest/tests/q15t/hudmeter_test.cpp`,
 `src/quest/tests/q15t/pbhud_image.h`, `src/quest/tests/q15t/mod/hudmeter.sh` (+ `src/quest/tests/q15t/mod/pbhud_ndk.sh`), `src/quest/tests/q15t/mutants.d/hudmeter.sh`.
 
-Option macro for the main seat to wire: `Q15T_HUDMETER`, default **OFF (0)**; `1` = on (guard). The source:
+Option macro for the main seat to wire: `Q15T_HUDMETER`, default **ON (1)** (#1625: the wave19a on-list turns on `hudmeter.on`); `0` = off. The source:
 `hudmeter.on` "Off: the switch is read, nothing else" (`<source build>/the source build's hudmeter:49`); the QA
 recipe turns it on. API: `InstallResult InstallHudmeter(std::uintptr_t base)`; no tick.
 

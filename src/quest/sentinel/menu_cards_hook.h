@@ -24,6 +24,13 @@
  * whatever it is called; `menu_cards_page` for each delivery of the page (class, name, byte count, digest, pin state);
  * `menu_cards_swap` / `menu_cards_skip` with the reason. The page's bytes are never logged.
  *
+ * The same handler places the four buttons (#1679, runtime/patch/menu_slots.h): the game stands each card where its actor's
+ * transform says, so the level's CTransformCR (class `CTransformCR`, name mnu_master_lowspec, the 52,680 bytes the PC level
+ * has) is served, when it is the pinned stock table (kStockTransformSha256), with Play, Join, Create and Tutorial given the
+ * four slots in that order from the left. Events: `menu_slots_table` for each delivery (byte count, digest, pin state),
+ * `menu_slots_swap` with the slots before and after read back from the bytes served (`slots_after` reads left to right, and
+ * `slot_play`, `slot_join`, `slot_create`, `slot_tutorial` are the same slots as numbers), `menu_slots_skip` with the reason.
+ *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h (the handler's frames are live
  * while the game's allocator and callback run). Building the page and hashing it run before any game code and are
  * marked NEVR_OUTSIDE_GAME_CALL.
@@ -48,6 +55,8 @@ bool Install() noexcept;
 // Test support: arms the handler without touching a GOT slot, with the pin the test chooses ("" = unset) and the address
 // of the 8-byte slot that holds the memory context pointer (nullptr = the game has no context).
 void ArmForTest(const char* pinHex, void* const* contextSlot) noexcept;
+// Test support: the digest the transform table is pinned to (the real table is 52,680 bytes of the game's own; a test builds a small one).
+void ArmSlotPinForTest(const char* pinHex) noexcept;
 void ResetForTest() noexcept;
 
 struct Totals {

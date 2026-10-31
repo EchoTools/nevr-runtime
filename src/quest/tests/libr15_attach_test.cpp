@@ -210,6 +210,64 @@ TEST(AnotherBuildIdIsABuildIdMismatch) {
   ExpectNothingInstalled(live, "\"reason\":\"build_id_mismatch\"");
 }
 
+// ---- #1737: the one pinned libr15 that is run in service-only mode ----------------------------------------------------
+
+constexpr const char* kPinned = "6e9db28d612019b0e5b2e2ab515e1f9bd15d1a8f8d345060160e3172864540e1";
+
+bool PinnedDigest(const char*, char* out) noexcept {
+  std::memcpy(out, kPinned, 65);
+  return true;
+}
+
+bool OneBitOffDigest(const char*, char* out) noexcept {
+  std::memcpy(out, kPinned, 65);
+  out[63] = '0';  // ...e1 -> ...e0: one bit
+  return true;
+}
+
+TEST(ThePinnedStockIdFileIsAcceptedInServiceOnlyModeAndNothingIsInstalled) {
+  Env env;
+  LiveImage live(Stock());
+  g_live = &live;
+  live.FillCanaries();
+  libr15_patch::AttachOptions o = Opts();
+  o.digest = &PinnedDigest;
+  const AttachResult r = libr15_patch::Attach(o);
+  CHECK_EQ(r.status, AttachStatus::kPinnedServiceOnly);
+  CHECK(r.reason == "libr15_pinned_service_only");
+  CHECK(!libr15_patch::Verified());
+  CHECK(live.SlotsAreCanaries());
+  CHECK(g.ends.empty());
+  CHECK_EQ(g.mapCalls, 0);
+  const std::string* line = FindLine("\"event\":\"libr15_pinned_accept\"");
+  CHECK(line != nullptr);
+  if (line != nullptr) {
+    CHECK(Has(*line, "\"sha256_prefix\":\"6e9db28d6120\""));
+    CHECK(Has(*line, "\"mode\":\"service_only\""));
+    CHECK(Has(*line, "\"build_id\":\"b243509c08ce677aeb95fa348016949b3fc45230\""));
+  }
+  CHECK_EQ(CountLines("\"reason\":\"libr15_not_patched\""), 0);
+  sentinel::SetServiceSideBuildId(nullptr);
+}
+
+TEST(AStockIdFileOneBitOffThePinIsNotPatched) {
+  Env env;
+  LiveImage live(Stock());
+  g_live = &live;
+  live.FillCanaries();
+  libr15_patch::AttachOptions o = Opts();
+  o.digest = &OneBitOffDigest;
+  const AttachResult r = libr15_patch::Attach(o);
+  CHECK_EQ(r.status, AttachStatus::kNotPatched);
+  CHECK_EQ(CountLines("libr15_pinned_accept"), 0);
+  ExpectNothingInstalled(live, "\"reason\":\"libr15_not_patched\"");
+}
+
+TEST(ThePinListHasExactlyOneEntry) {
+  CHECK_EQ(sizeof(libr15_patch::kLibR15ServiceOnlySha256) / sizeof(libr15_patch::kLibR15ServiceOnlySha256[0]), 1u);
+  CHECK(std::strcmp(libr15_patch::kLibR15ServiceOnlySha256[0], kPinned) == 0);
+}
+
 TEST(ALibr15PatchedWithoutExtraRowsIsAMismatchForAnAttachThatHasThem) {
   Env env;
   LiveImage live(PatchedBytes());

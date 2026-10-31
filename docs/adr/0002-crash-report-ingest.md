@@ -1,8 +1,9 @@
 # ADR 0002: Crash reports reach the game service through a spool and a deferred uploader
 
-Status: accepted. The HTTPS spool and sink below are not implemented. The readable report is delivered through the
-remote-log channel instead (`docs/engine/remote-log.md`, section 7), which needs no endpoint. The sink side of this
-ADR is specified by `tests/crash-ingest/crash_ingest_contract_test.go`.
+Status: accepted. The HTTPS spool and sink below are not implemented. The readable report is sent by the BugSplat64.dll
+host and the Quest sentinel straight to nevr-api's `POST /v3/crash-reports` (`docs/reference/crash-report.md`, "Sent to
+us"); the remote-log channel is not used (`docs/engine/remote-log.md`, section 7). The sink side of this ADR is specified
+by `tests/crash-ingest/crash_ingest_contract_test.go`.
 
 ## Context
 

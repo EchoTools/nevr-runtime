@@ -335,3 +335,201 @@ TEST(MenuCards, TheStockPinIsAWellFormedDigest) {
   EXPECT_EQ(pin.size(), 64u);
   EXPECT_EQ(pin.find_first_not_of("0123456789abcdef"), std::string::npos);
 }
+
+// ---- #1679: where the four buttons stand (menu_slots.h) -------------------------------------------------------------
+// The level's transform table is written here the way the format says (its own writer, not the production one): a
+// 56-byte descriptor and 176-byte entries, the owner at +0x08, the pose at +0x20 and a marker in the tail that no
+// placement may touch.
+namespace {
+
+namespace slots = nevr_menu_slots;
+
+struct Actor {
+  uint64_t owner = 0;
+  float rotation[4] = {0.0f, 1.0f, 0.0f, 0.0f};
+  float position[3] = {0.0f, 0.0f, 0.0f};
+  float scale[3] = {1.0f, 1.0f, 1.0f};
+  uint8_t marker = 0;
+};
+
+Actor At(uint64_t owner, float x, float rotationW, uint8_t marker) {
+  Actor a;
+  a.owner = owner;
+  a.rotation[3] = rotationW;
+  a.position[0] = x;
+  a.position[1] = -0.275f;
+  a.position[2] = 5.5f;
+  a.marker = marker;
+  return a;
+}
+
+std::vector<uint8_t> Table(const std::vector<Actor>& actors) {
+  std::vector<uint8_t> b(slots::kDescriptorBytes + actors.size() * slots::kEntryBytes, 0);
+  Desc(b, 0, actors.size(), slots::kEntryBytes);
+  for (size_t i = 0; i < actors.size(); ++i) {
+    const size_t e = slots::kDescriptorBytes + i * slots::kEntryBytes;
+    Put64(b, e, 0xabfe651c8d260515ULL);
+    Put64(b, e + slots::kOwnerOffset, actors[i].owner);
+    std::memcpy(b.data() + e + slots::kPoseOffset, actors[i].rotation, 16);
+    std::memcpy(b.data() + e + slots::kPoseOffset + 16, actors[i].position, 12);
+    std::memcpy(b.data() + e + slots::kPoseOffset + 28, actors[i].scale, 12);
+    Put64(b, e + 0x68, 0xabfe651c8d260515ULL);
+    b[e + 0x48] = actors[i].marker;  // just past the pose: a placement that writes too far changes it
+    b[e + 0x90] = actors[i].marker;
+  }
+  return b;
+}
+
+// The stock main-menu level in miniature: three other actors, and the four buttons at the stock slots (Join, Play,
+// Tutorial, Create from the left) with the arc's rotations.
+std::vector<Actor> StockActors() {
+  return {At(0x1111, 0.0f, 0.0f, 1),
+          At(nevr_menu_cards::kJoinOwner, 2.15f, -0.174f, 2),
+          At(nevr_menu_cards::kPlayOwner, 0.73f, -0.061f, 3),
+          At(0x2222, 9.0f, 0.0f, 4),
+          At(nevr_menu_cards::kTutorialOwner, -0.73f, 0.061f, 5),
+          At(nevr_menu_cards::kCreateOwner, -2.15f, 0.174f, 6),
+          At(0x3333, -9.0f, 0.0f, 7)};
+}
+
+std::string Names(const std::vector<slots::Placement>& p) {
+  std::vector<slots::Placement> bySlot = p;
+  std::sort(bySlot.begin(), bySlot.end(), [](const slots::Placement& a, const slots::Placement& b) { return a.slot < b.slot; });
+  std::string s;
+  for (const slots::Placement& x : bySlot) s += std::string(s.empty() ? "" : ",") + nevr_menu_cards::ButtonName(x.owner);
+  return s;
+}
+
+}  // namespace
+
+TEST(MenuSlots, ReadsTheButtonsFromTheLeftByDecreasingX) {
+  const std::vector<uint8_t> in = Table(StockActors());
+  const std::vector<uint64_t> owners = nevr_menu_cards::ButtonOrder();
+  std::vector<slots::Placement> p;
+  ASSERT_EQ(slots::Read(in.data(), in.size(), owners.data(), owners.size(), &p), slots::Status::Ok);
+  EXPECT_EQ(Names(p), "join,play,tutorial,create");
+  ASSERT_EQ(p.size(), 4u);
+  // In the order asked for: Play, Join, Create, Tutorial stand in slots 2, 1, 4, 3.
+  EXPECT_EQ(p[0].slot, 2u);
+  EXPECT_EQ(p[1].slot, 1u);
+  EXPECT_EQ(p[2].slot, 4u);
+  EXPECT_EQ(p[3].slot, 3u);
+  EXPECT_FLOAT_EQ(p[1].x, 2.15f);
+}
+
+TEST(MenuSlots, EachButtonTakesTheWholePoseOfTheSlotItIsPlacedIn) {
+  const std::vector<uint8_t> in = Table(StockActors());
+  const std::vector<uint64_t> order = nevr_menu_cards::ButtonOrder();
+  std::vector<uint8_t> out;
+  std::vector<slots::Placement> before, after;
+  ASSERT_EQ(slots::Place(in.data(), in.size(), order.data(), order.size(), &out, &before, &after), slots::Status::Ok);
+  EXPECT_EQ(Names(before), "join,play,tutorial,create");
+  EXPECT_EQ(Names(after), "play,join,create,tutorial");
+
+  // Play stands at the old Join slot with its arc rotation, Join at Play's, Create at Tutorial's, Tutorial at Create's; every
+  // other byte of every entry (the owner, the parent, the marker, the three other actors) is as it was.
+  std::vector<Actor> want = StockActors();
+  const Actor join = want[1], play = want[2], tutorial = want[4], create = want[5];
+  auto pose = [](Actor& to, const Actor& from) {
+    std::memcpy(to.rotation, from.rotation, sizeof(to.rotation));
+    std::memcpy(to.position, from.position, sizeof(to.position));
+    std::memcpy(to.scale, from.scale, sizeof(to.scale));
+  };
+  pose(want[2], join);      // Play takes slot 1
+  pose(want[1], play);      // Join takes slot 2
+  pose(want[5], tutorial);  // Create takes slot 3
+  pose(want[4], create);    // Tutorial takes slot 4
+  EXPECT_EQ(out, Table(want));
+  EXPECT_EQ(out.size(), in.size());
+}
+
+TEST(MenuSlots, PlacingTheOrderTheTableAlreadyHasChangesNothing) {
+  const std::vector<uint8_t> in = Table(StockActors());
+  const std::vector<uint64_t> order = {nevr_menu_cards::kJoinOwner, nevr_menu_cards::kPlayOwner, nevr_menu_cards::kTutorialOwner,
+                                       nevr_menu_cards::kCreateOwner};
+  std::vector<uint8_t> out;
+  std::vector<slots::Placement> before, after;
+  ASSERT_EQ(slots::Place(in.data(), in.size(), order.data(), order.size(), &out, &before, &after), slots::Status::Ok);
+  EXPECT_EQ(out, in);
+}
+
+TEST(MenuSlots, ASubsetKeepsToTheSlotsItsOwnersHold) {
+  // Two owners trade; the actor standing between them in x, and the rest, stay.
+  const std::vector<uint8_t> in = Table(StockActors());
+  const std::vector<uint64_t> order = {nevr_menu_cards::kCreateOwner, nevr_menu_cards::kPlayOwner};
+  std::vector<uint8_t> out;
+  std::vector<slots::Placement> before, after;
+  ASSERT_EQ(slots::Place(in.data(), in.size(), order.data(), order.size(), &out, &before, &after), slots::Status::Ok);
+  std::vector<slots::Placement> p;
+  ASSERT_EQ(slots::Read(out.data(), out.size(), order.data(), order.size(), &p), slots::Status::Ok);
+  EXPECT_EQ(p[0].slot, 1u);
+  EXPECT_FLOAT_EQ(p[0].x, 0.73f);  // Create now stands where Play stood: the left of the two
+  EXPECT_FLOAT_EQ(p[1].x, -2.15f);
+}
+
+TEST(MenuSlots, RefusesWhatItCannotPlaceAndChangesNothing) {
+  const std::vector<uint8_t> in = Table(StockActors());
+  const std::vector<uint64_t> order = nevr_menu_cards::ButtonOrder();
+  std::vector<uint8_t> out;
+  std::vector<slots::Placement> before, after;
+  auto place = [&](const std::vector<uint8_t>& table, const std::vector<uint64_t>& o) {
+    return slots::Place(table.data(), table.size(), o.data(), o.size(), &out, &before, &after);
+  };
+
+  EXPECT_EQ(place(in, {}), slots::Status::NothingToPlace);
+  EXPECT_EQ(place(in, {order[0], order[0]}), slots::Status::DuplicateOwner);
+  EXPECT_EQ(place(in, {order[0], 0x9999}), slots::Status::MissingOwner);
+
+  std::vector<Actor> twice = StockActors();
+  twice.push_back(At(nevr_menu_cards::kPlayOwner, 0.1f, 0.0f, 8));
+  EXPECT_EQ(place(Table(twice), order), slots::Status::DuplicateOwner);
+
+  std::vector<Actor> tied = StockActors();
+  tied[5].position[0] = tied[4].position[0];
+  EXPECT_EQ(place(Table(tied), order), slots::Status::AmbiguousSlots);
+
+  EXPECT_EQ(place(std::vector<uint8_t>(in.begin(), in.end() - 1), order), slots::Status::Truncated);
+  EXPECT_EQ(place(std::vector<uint8_t>(in.begin(), in.begin() + 20), order), slots::Status::Truncated);
+  std::vector<uint8_t> longer = in;
+  longer.push_back(0);
+  EXPECT_EQ(place(longer, order), slots::Status::BadDescriptor);
+  std::vector<uint8_t> lying = in;
+  Put64(lying, 0x08, 1);
+  EXPECT_EQ(place(lying, order), slots::Status::BadDescriptor);
+}
+
+TEST(MenuCards, ThePinDecidesWhetherTheButtonsAreOrdered) {
+  const std::vector<uint8_t> table = Table(StockActors());
+  const nevr_menu_cards::SlotResult placed = nevr_menu_cards::PlaceButtons(table.data(), table.size(), "pin", "pin");
+  ASSERT_EQ(placed.verdict, nevr_menu_cards::Verdict::Patched);
+  EXPECT_EQ(nevr_menu_cards::SlotLine(placed.before), "join:1@2.150,play:2@0.730,tutorial:3@-0.730,create:4@-2.150");
+  EXPECT_EQ(nevr_menu_cards::SlotLine(placed.after), "play:1@2.150,join:2@0.730,create:3@-0.730,tutorial:4@-2.150");
+  EXPECT_EQ(placed.bytes.size(), table.size());
+
+  const nevr_menu_cards::SlotResult other = nevr_menu_cards::PlaceButtons(table.data(), table.size(), "other", "pin");
+  EXPECT_EQ(other.verdict, nevr_menu_cards::Verdict::NotStock);
+  EXPECT_TRUE(other.bytes.empty());
+
+  const std::vector<uint8_t> noButtons = Table({At(0x1111, 1.0f, 0.0f, 1)});
+  const nevr_menu_cards::SlotResult refused = nevr_menu_cards::PlaceButtons(noButtons.data(), noButtons.size(), "pin", "pin");
+  EXPECT_EQ(refused.verdict, nevr_menu_cards::Verdict::Refused);
+  EXPECT_EQ(refused.status, slots::Status::MissingOwner);
+  EXPECT_TRUE(refused.bytes.empty());
+  EXPECT_TRUE(refused.after.empty());
+}
+
+TEST(MenuCards, TheButtonsAreOrderedPlayJoinCreateTutorial) {
+  EXPECT_EQ(nevr_menu_cards::ButtonOrder(),
+            (std::vector<uint64_t>{nevr_menu_cards::kPlayOwner, nevr_menu_cards::kJoinOwner, nevr_menu_cards::kCreateOwner,
+                                   nevr_menu_cards::kTutorialOwner}));
+  EXPECT_EQ(nevr_menu_cards::kPlayOwner, 0xa3d3ef315cb999dbULL);
+  EXPECT_EQ(nevr_menu_cards::kTutorialOwner, 0xd763e348e835f249ULL);
+}
+
+TEST(MenuCards, TheTransformTableIsKnownByTheClassSymbolTheLoaderCallbackReports) {
+  // The headset's loader callback reported class 0x9c72178d05adb686 for the 52,680-byte table under mnu_master_lowspec.
+  EXPECT_EQ(nevr_menu_cards::kTransformType, 0x9c72178d05adb686ULL);
+  const std::string pin = nevr_menu_cards::kStockTransformSha256;
+  EXPECT_EQ(pin.size(), 64u);
+  EXPECT_EQ(pin.find_first_not_of("0123456789abcdef"), std::string::npos);
+}

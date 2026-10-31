@@ -44,23 +44,26 @@ Three writers in the tree already write fields as keys, each with a header of it
 
 ### Measured
 
-Counts cover the live sources and count call sites, not comments, declarations or definitions.
+Counts cover the live sources and count call sites, not comments, declarations or definitions. The rows that
+`tools/log_call_census.py <rev>` recounts are reproduced by it at `f41d66b4e0de7e5430bda7a133491be23dad5417` (the
+command reads the tree with git only); each recounted row names its scope. The rows marked "not recounted" have no
+script yet.
 
 | What | Count |
 | --- | --- |
 | printf `Log(` calls outside `src/quest/`, `src/runtime/tests/` and `Router::Log` | 1,045 in 63 files: `src/runtime` 983, `src/modules` 54, `src/core` 7, `plugins/common` 1 |
 | by level | Info 374, Warning 348, Debug 173, Error 110, an expression (a ternary or a variable) 40 |
-| by format | 225 literals with no conversion; 769 with conversions; 48 pass a string built elsewhere through `"%s"`; 3 formats are not literals |
-| subsystem | 36 leading tags; 57 calls carry none (the 48 `"%s"` calls and 9 literals). 13 tags in code are not rows of the standard's table: `NEVR.MIC` (61 calls), `NEVR.SOCIAL` (60), `TELEMETRY.DIAG` (32), `NEVR.SERVERDB` (28), `NEVR.ASSET` (13), `NEVR.PARTY` (9), `NEVR.TRACE` (8), `NEVR.ROOT` (8), `NEVR.BOOT` (5), `NEVR.COOPAI` (5), `NEVR.SERVER` (4), `NEVR.EARLYQUIT` (3), `NEVR.LOBBY` (3) |
-| identifiers in the text | 523 formats carry a `key=` token; 438 distinct keys (`name` 80, `reason` 66, `va` 51, `error` 33, `conn` 30) |
-| text keys that name a header key | `msg` 3, `level` 1, `event` 1, `tag` 1; `error` 33 and `plugin` 9, which section 2 keeps as field keys |
-| non-ASCII in formats | 187 formats: U+2014 (em dash) in 186, U+2192 in 1 |
+| by format (not recounted) | 225 literals with no conversion; 769 with conversions; 48 pass a string built elsewhere through `"%s"`; 3 formats are not literals |
+| subsystem (not recounted) | 36 leading tags; 57 calls carry none (the 48 `"%s"` calls and 9 literals). 13 tags in code are not rows of the standard's table: `NEVR.MIC` (61 calls), `NEVR.SOCIAL` (60), `TELEMETRY.DIAG` (32), `NEVR.SERVERDB` (28), `NEVR.ASSET` (13), `NEVR.PARTY` (9), `NEVR.TRACE` (8), `NEVR.ROOT` (8), `NEVR.BOOT` (5), `NEVR.COOPAI` (5), `NEVR.SERVER` (4), `NEVR.EARLYQUIT` (3), `NEVR.LOBBY` (3) |
+| identifiers in the text (not recounted) | 523 formats carry a `key=` token; 438 distinct keys (`name` 80, `reason` 66, `va` 51, `error` 33, `conn` 30) |
+| text keys that name a header key (not recounted) | `msg` 3, `level` 1, `event` 1, `tag` 1; `error` 33 and `plugin` 9, which section 2 keeps as field keys |
+| non-ASCII in formats (not recounted) | 187 formats: U+2014 (em dash) in 186, U+2192 in 1 |
 | other writers | `nevr_boot_log_tee::TeeFprintf` 84 calls (54 in `src/runtime/lifecycle/initialize.cpp`); the filter's `BlfLog` 12; `ServerFatal` 11; `FatalError` 10; `VehPrintf` 38 (26 on the runtime's crash path, N70; 12 in the unbuilt `plugins/crash-handler`); `fprintf`/`vfprintf` to stderr 49 outside `src/quest/` (tests, the launcher and the script checker included), 3 of them in `src/runtime/server/gameserver.cpp` printing a `%p` |
-| second loggers | a file-local `Log` in `src/runtime/server/messages.cpp` (10 of the 1,045) calls `EchoVR::WriteLog` directly, so it skips the boot sink; `Router::Log` in `src/runtime/compat/session_router.cpp` (43 calls) writes to a sink the router is given |
+| second loggers | a file-local `Log` in `src/runtime/server/messages.cpp` (10 of the 1,045, not recounted) calls `EchoVR::WriteLog` directly, so it skips the boot sink; `Router::Log` in `src/runtime/compat/session_router.cpp` (43 calls) writes to a sink the router is given |
 | exception text in a record | 3 calls pass `what()` (`src/runtime/patch/resource_override.cpp`, `src/runtime/patch/invite_wizard_hook.cpp`, `src/runtime/patch/invite_choice_hook.cpp`); Rule 4 names callback exception text |
-| plugins | `PluginLog`, `PluginLogWarning`, `PluginLogError`, `PluginLogDebug`, `PluginLogFields`: 88 calls |
-| Quest | `LogFields`/`LogFieldList` 235 calls in 40 files; 74 calls to local `Log` functions: members that forward a text line to the sink they are given (`src/quest/auth/session.cpp` 35, `src/quest/net/loopback_game_server.cpp` 19, `src/quest/net/remote_ws.cpp` 6) and the autopilot plugin's helper that calls the host's plugin log (`src/quest/plugins/autopilot/plugin.cpp` 14); 9 `__android_log_*` calls outside tests and stubs |
-| tests | 256 uses of text-search helpers (`TestLogContains` 165, `LogLinesContaining` 38, `TestLogContainsAtLevel` 29, `LogContains` 15, `WaitForLogLines` 9) in 3 files; 5 test files link a `Log` of their own |
+| plugins | `PluginLog`, `PluginLogWarning`, `PluginLogError`, `PluginLogDebug`, `PluginLogFields`: 76 calls in `src/` and `plugins/` outside tests (the census's scope; the earlier figure, 88, is not reproduced) |
+| Quest | `LogFields`/`LogFieldList` 233 calls under `src/quest/` outside tests (the census; the earlier figure, 235, is not reproduced); 74 calls to local `Log` functions (not recounted): members that forward a text line to the sink they are given (`src/quest/auth/session.cpp` 35, `src/quest/net/loopback_game_server.cpp` 19, `src/quest/net/remote_ws.cpp` 6) and the autopilot plugin's helper that calls the host's plugin log (`src/quest/plugins/autopilot/plugin.cpp` 14); 9 `__android_log_*` calls outside tests and stubs |
+| tests | 251 uses of text-search helpers (`TestLogContains`, `TestLogContainsAtLevel`, `LogLinesContaining`, `LogContains`, `WaitForLogLines`) in test directories (the census; the earlier figure, 256, and its per-helper split are not reproduced); 5 test files link a `Log` of their own (not recounted) |
 
 The level split is reproduced exactly by:
 
@@ -70,8 +73,9 @@ rg --pcre2 -U -o --no-filename '(?<![A-Za-z0-9_.>:])Log\(\s*EchoVR::LogLevel::(D
   src plugins | sort | uniq -c
 ```
 
-The other counts come from a comment-stripped scan that parses each call's arguments, or from `rg` with declarations,
-definitions and comment lines taken out; the scan is not in the tree.
+Recount and scope: `python3 tools/log_call_census.py f41d66b4e0de7e5430bda7a133491be23dad5417` prints every recounted row.
+Its regexes skip comment lines, trailing `//` comments and definitions (a return type before the name); the rows it does
+not cover are marked "not recounted" above.
 
 ### Who reads a record
 
@@ -500,7 +504,7 @@ retires the sentinel's own writer, as #841 requires; it is the platform twin of 
 - Every record repeats its key names, as TraceLogging events "include the event strings (provider name, event name, and
   field names) inside each event"; the retention cap bounds the folder, not the record.
 - The migration touches 1,045 printf calls, 84 `TeeFprintf` calls, 12 `BlfLog` calls, the plugin host path and, on the
-  Quest, 235 + 74 calls, with every reader of section "Who reads a record"; stage 1 changes no text any reader matches.
+  Quest, 233 + 74 calls, with every reader of section "Who reads a record"; stage 1 changes no text any reader matches.
 - Two deviations are stated, not hidden: the hand-written encoder (section 2) and the lock (section 5).
 - Stage 1 edits `src/runtime/log/builtin_filter.cpp`, whose `ParseJsonConfig` holds a `catch (...)`, a Hard Stop of the
   addendum; that pull request names the exception types.

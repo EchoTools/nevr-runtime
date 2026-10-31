@@ -53,7 +53,6 @@
 #include "runtime/compat/party_leave_check.h"
 #include "runtime/compat/party_share_check.h"
 #include "runtime/compat/self_check.h"
-#include "runtime/compat/crash_upload.h"
 #include "core/nevr_root.h"
 #include "runtime/compat/credential_cache_check.h"
 #include "runtime/compat/status_redirect_check.h"
@@ -477,11 +476,9 @@ static void LogSharedFrameDropped(std::size_t bytes) {
 
 // Every message in a bridged frame, by name, in arrival order. Nakama batches messages into one
 // frame (LoginSuccess, STcpConnectionUnrequireEvent and GameSettings arrive together), so logging
-// only the first symbol hid the rest. A dedicated server's message traffic is sparse and is the
-// only record of what the service told the game, so it logs at Info there; clients stay at Debug.
-// KNOWN-WRONG #1307: "sparse" has no measurement behind it.
+// only the first symbol hid the rest. Every message is a per-frame record, so it logs at Debug on a
+// server as on a client (docs/standards/logging.md, "You SHALL NOT": no INFO on a per-connection path).
 static int LogFrameMessages(const char* direction, int connIdx, const std::string& frame) {
-  const EchoVR::LogLevel level = g_isServer ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Debug;
   size_t offset = 0;
   int count = 0;
   nevr_evr_codec::Message message;
@@ -489,7 +486,7 @@ static int LogFrameMessages(const char* direction, int connIdx, const std::strin
     const nevr_evr_codec::ReadStatus status = nevr_evr_codec::ReadMessage(frame, offset, &message);
     if (status == nevr_evr_codec::ReadStatus::End || status == nevr_evr_codec::ReadStatus::BadMarker) break;
     const char* name = EchoVR::LookupSymbolName(message.symbol);
-    Log(level, "[NEVR.WS] %s conn=%d (%s) msg=%d sym=0x%016llx %s len=%llu", direction, connIdx,
+    Log(EchoVR::LogLevel::Debug, "[NEVR.WS] %s conn=%d (%s) msg=%d sym=0x%016llx %s len=%llu", direction, connIdx,
         ConnLabel(connIdx), count, static_cast<unsigned long long>(message.symbol), name ? name : "<unnamed>",
         static_cast<unsigned long long>(message.length));
     ++count;
@@ -503,7 +500,8 @@ static int LogFrameMessages(const char* direction, int connIdx, const std::strin
   }
   const size_t remaining = frame.size() - offset;
   if (remaining > 0) {
-    Log(level, "[NEVR.WS] %s conn=%d %zu bytes not in message framing", direction, connIdx, remaining);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.WS] %s conn=%d %zu bytes not in message framing", direction, connIdx,
+        remaining);
   }
   return count;
 }
@@ -591,9 +589,8 @@ static int LogGameToServerFrame(const std::string& frame, const std::string& wsC
 }
 
 // #929: a client's Info record of each lobby find and join request the game sends and each session success and
-// failure the service answers with. A dedicated server already logs every message of every frame at Info
-// (LogFrameMessages), so this runs on a client only. The fields are the operation, the lobby ids (GUIDs, never
-// names), the entrants as XPIDs and the failure code; the settings JSON of a request is remote text and is not read
+// failure the service answers with, on a server and a client alike. The fields are the operation, the lobby ids (GUIDs,
+// never names), the entrants as XPIDs and the failure code; the settings JSON of a request is remote text and is not read
 // out, and a failure's message is counted (message_bytes) and never copied (logging.md Rule 4). A failure frame
 // carries no lobby id, so a session record names the last request the game sent on this client, on any connection
 // (last_request), and the party it is in (party_id), not a request or a party it could pair with on its own conn
@@ -714,7 +711,7 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
     const uint64_t len = message.length;
     const bool fromServer = strcmp(direction, "server->game") == 0;
     const uint8_t* payload = message.payload;
-    if (!g_isServer) LogClientLobbyMessage(connIdx, fromServer, sym, payload, len);
+    LogClientLobbyMessage(connIdx, fromServer, sym, payload, len);
     // A display name arrives in a profile reply, whichever side asked for it (the game asks when a
     // friend is opened; the runtime asks for each friend, below).
     if (fromServer && sym == nevr_social_names::kProfileSuccess) {
@@ -735,10 +732,14 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
         }
       }
       if (nevr_social_roster::Global().Contains(replyFor)) {
-        Log(EchoVR::LogLevel::Info,
-            decoded ? "[NEVR.SOCIAL] friend name resolved account=%llu name_bytes=%zu"
-                    : "[NEVR.SOCIAL] friend profile reply could not be read account=%llu reply_bytes=%zu",
-            static_cast<unsigned long long>(replyFor), decoded ? displayName.size() : static_cast<size_t>(len));
+        if (decoded) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend name resolved account=%llu name_bytes=%zu",
+              static_cast<unsigned long long>(replyFor), displayName.size());
+        } else {
+          Log(EchoVR::LogLevel::Info,
+              "[NEVR.SOCIAL] friend profile reply could not be read account=%llu reply_bytes=%zu",
+              static_cast<unsigned long long>(replyFor), static_cast<size_t>(len));
+        }
       }
     }
     // Profile requests and replies, both ways, with the EvrId they carry (platform u64, account u64):
@@ -1026,22 +1027,6 @@ static void LogSelfCheck(const nevr_self_check::LogRecord& record) {
       record.pass ? 1 : 0, record.expected.c_str(), record.observed.c_str());
 }
 
-// Crash report upload (compat/crash_upload.h, #1605): the line is the operator's record that a report left, or why it
-// did not. A report's text and the minidump are never logged, only their sizes.
-static void LogCrashUpload(const nevr_crash_upload::LogEvent& e) {
-  const std::string event = e.event;
-  if (event == "armed" || event == "off") {
-    Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] crash report upload %s dir=\"%s\" detail=\"%s\"", e.event, e.report.c_str(),
-        e.detail.c_str());
-    return;
-  }
-  const bool failed = event != "sent";
-  Log(failed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
-      "[NEVR.CRASH] crash report upload %s report=%s report_bytes=%llu minidump=%s minidump_bytes=%llu detail=\"%s\"",
-      e.event, e.report.c_str(), static_cast<unsigned long long>(e.reportBytes), e.minidump.c_str(),
-      static_cast<unsigned long long>(e.minidumpBytes), e.detail.c_str());
-}
-
 static void WireSelfChecks() {
   nevr_self_check::SetEnabled(true);  // on in every build, first and unconditional (#451)
   nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408
@@ -1051,17 +1036,6 @@ static void WireSelfChecks() {
 #ifdef NEVR_PROJECT_VERSION
   nevr_self_check::SetBuild(NEVR_PROJECT_VERSION);
 #endif
-  // The report a crash left in the crash folder goes out once, on the first logged-in session after it. A dedicated
-  // server is not a player: it has no login session to send on.
-  if (!g_isServer) {
-    nevr_crash_upload::Config crash;
-    crash.dir = std::filesystem::path(nevr_root::CrashesDir(nevr_root::RootW()));
-#ifdef NEVR_PROJECT_VERSION
-    crash.build = NEVR_PROJECT_VERSION;
-#endif
-    crash.log = &LogCrashUpload;
-    nevr_crash_upload::Install(std::move(crash));
-  }
 }
 
 // Platform codes, the bridge's login platform, the remote Bearer choice and the /ws path test live in
@@ -1253,11 +1227,13 @@ static AdmittedSocket AdmitGameSocket(const ix::WebSocket* gameWs, const std::st
 static void LogAdmission(const AdmittedSocket& admitted, const ix::WebSocket* gameWs, const std::string& target,
                          nevr_socket_role::Listener listener, const char* path, uint64_t game) {
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.WS] game socket admitted conn=%d role=%s basis=%s listener=%s target=%s has_query=%s ws=%p path=%s game=%llu",
+      "[NEVR.WS] game socket admitted conn=%d role=%s basis=%s listener=%s target=%s has_query=%s path=%s game=%llu",
       admitted.admission.connIdx, nevr_socket_role::RoleName(admitted.admission.role),
       nevr_socket_role::BasisName(admitted.admission.basis), nevr_socket_role::ListenerName(listener),
-      LoggableTarget(target).c_str(), target.find('?') != std::string::npos ? "true" : "false",
-      static_cast<const void*>(gameWs), path, static_cast<unsigned long long>(game));
+      LoggableTarget(target).c_str(), target.find('?') != std::string::npos ? "true" : "false", path,
+      static_cast<unsigned long long>(game));
+  Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game socket conn=%d ws=%p", admitted.admission.connIdx,
+      static_cast<const void*>(gameWs));
 }
 
 // The remote ws for one game socket: URL (with the percent-encoded credentials), the Bearer header and the
@@ -1618,10 +1594,10 @@ static void OnRemoteLoginRefused(int httpStatus, const std::string& refusalKey, 
     firstTime = g_refusalLatch.ShouldSay(refusalKey);
   }
   if (firstTime) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.WS] login refused (HTTP %d) on conn=%d (%s): the service did not accept this sign-in; not asking "
-        "again until the sign-in changes",
-        httpStatus, connIdx, ConnLabel(connIdx));
+    // #1293: one line per refused sign-in, with the cause, the config loaded and the next step (ClientRefusedCause).
+    const std::string cause = nevr_login_refusal::ClientRefusedCause(httpStatus, NevrCfgSource());
+    Log(EchoVR::LogLevel::Warning, "[NEVR.WS] login refused conn=%d (%s): %s", connIdx, ConnLabel(connIdx),
+        cause.c_str());
   }
 }
 
@@ -2168,8 +2144,8 @@ void InstallWebSocketBridge() {
               const nevr_session_router::GameId id = routed->games.Register(&gameWs, connIdx);
               LogAdmission(admitted, &gameWs, msg->openInfo.uri, listener, "router", id);
               routed->router.OnGameOpen(id, nevr_session_router::OpenHint{role, true});
-              Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p) path=router game=%llu",
-                  connIdx, ConnLabel(connIdx), static_cast<void*>(&gameWs), static_cast<unsigned long long>(id));
+              Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s) path=router game=%llu",
+                  connIdx, ConnLabel(connIdx), static_cast<unsigned long long>(id));
               break;
             }
             LogAdmission(admitted, &gameWs, msg->openInfo.uri, listener, "legacy", 0);
@@ -2182,8 +2158,8 @@ void InstallWebSocketBridge() {
             // Don't inject LoginRequest — the session is already logged in.
             if (role == nevr_socket_role::Role::Matchmaker && loginRemote) {
               Log(EchoVR::LogLevel::Info,
-                  "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p), sharing login session (no LoginRequest)",
-                  connIdx, ConnLabel(connIdx), static_cast<void*>(&gameWs));
+                  "[NEVR.WS] Proxy: game connected (conn=%d, %s), sharing login session (no LoginRequest)",
+                  connIdx, ConnLabel(connIdx));
               auto pair = std::make_unique<ProxyPair>();
               pair->remoteWs = loginRemote;
               pair->remoteOpen = true;
@@ -2233,9 +2209,8 @@ void InstallWebSocketBridge() {
                       }
                       case ix::WebSocketMessageType::Close:
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] Remote closed (conn=%d, %s, ws=%p): code=%u",
-                            connIdx, ConnLabel(connIdx), static_cast<void*>(gameWsPtr),
-                            static_cast<unsigned int>(rmsg->closeInfo.code));
+                            "[NEVR.WS] Remote closed (conn=%d, %s): code=%u",
+                            connIdx, ConnLabel(connIdx), static_cast<unsigned int>(rmsg->closeInfo.code));
                         CloseGameSocketsForRemote(remoteAddress, connIdx,
                                                   static_cast<unsigned int>(rmsg->closeInfo.code));
                         break;
@@ -2477,9 +2452,8 @@ void InstallWebSocketBridge() {
                     }
                     case ix::WebSocketMessageType::Close:
                       Log(EchoVR::LogLevel::Info,
-                          "[NEVR.WS] Remote closed (conn=%d, %s, ws=%p): code=%u",
-                          connIdx, ConnLabel(connIdx), static_cast<void*>(gameWsPtr),
-                          static_cast<unsigned int>(rmsg->closeInfo.code));
+                          "[NEVR.WS] Remote closed (conn=%d, %s): code=%u",
+                          connIdx, ConnLabel(connIdx), static_cast<unsigned int>(rmsg->closeInfo.code));
                       // Not gameWsPtr->close() here: it deadlocks (blocks waiting for the server
                       // thread, which may be blocked on g_pairsMutex). The game sockets on this
                       // session are closed off this thread instead (#70).
@@ -2516,8 +2490,8 @@ void InstallWebSocketBridge() {
             ReleaseOffThread(std::move(previousLogin));
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p)", connIdx,
-                ConnLabel(connIdx), static_cast<void*>(gameWsPtr));
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s)", connIdx,
+                ConnLabel(connIdx));
             const std::string remoteDiagnostic =
                 nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
             Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());

@@ -88,7 +88,7 @@ class TheGamesRequestsAreIntercepted(unittest.TestCase):
         step = body(code("integration/production_steps.cpp"), "bool InstallCrashFirst() override")
         self.assertIn("nevr_quest::integration::InstallCrashFirstHook()", step)
         entry = code("sentinel/entry.cpp")
-        self.assertIn("bool InstallCrashFirstHook() noexcept { return nevr_quest::crash_first::Install(); }", entry)
+        self.assertIn("nevr_quest::crash_first::Install()", body(entry, "bool InstallCrashFirstHook() noexcept"))
 
     def test_the_hook_is_built_without_exceptions_and_the_host_test_runs_in_test_quest_hooks(self):
         cmake = (QUEST / "sentinel/CMakeLists.txt").read_text()
@@ -96,6 +96,46 @@ class TheGamesRequestsAreIntercepted(unittest.TestCase):
         justfile = (ROOT / "justfile").read_text()
         self.assertIn("src/quest/tests/crash_first_hook_test.cpp", justfile)
         self.assertIn("timeout 120 \"$out/crash_first_hook_test\"", justfile)
+
+
+class TheProviderLibrariesAreHookedWhenTheyLoad(unittest.TestCase):
+    def test_the_six_slots_are_pinned_with_the_build_ids_of_their_libraries(self):
+        pinned = code("sentinel/pinned_targets.h")
+        table = body(pinned, "kCrashLateModules[] =")
+        for module, build_id, sigaction, signal in (
+            ("kPnsrad", "kPnsradBuildId", "0x72de30ULL", "0x732df0ULL"),
+            ("kMatchmaking", "kMatchmakingBuildId", "0x6b6768ULL", "0x6bb350ULL"),
+            ("kPnsovr", "kPnsovrBuildId", "0x6dd218ULL", "0x6e2130ULL"),
+        ):
+            self.assertIn(f"{{{module}, {build_id}, {sigaction}, {signal}}}", table)
+        self.assertIn('kPnsradBuildId = "c58fb82e42d9ed6564744cfa10f05af74aedd0ee"', pinned)
+        self.assertIn('kPnsovrBuildId = "ca47bb8d03e6f43c1825133bbb9c15f174705c51"', pinned)
+
+    def test_the_dlopen_hook_hands_every_module_to_the_observer_before_any_action(self):
+        post_load = code("integration/post_load.cpp")
+        after = body(post_load, "void AfterDlopen(")
+        self.assertLess(after.index("observer(name, handle)"), after.index("RunSlot("))
+        self.assertLess(after.index("observer(name, handle)"), after.index("RunPlugins("))
+
+    def test_the_crash_first_step_arms_the_observer_and_makes_sure_the_dlopen_hook_is_live(self):
+        step = body(code("sentinel/entry.cpp"), "bool InstallCrashFirstHook() noexcept")
+        self.assertIn("SetModuleLoadedObserver(&nevr_quest::crash_first::OnModuleLoaded)", step)
+        self.assertIn("InstallDlopenHook(&status)", step)
+        self.assertIn("return slots && dlopenLive;", step)
+
+    def test_the_dlopen_hook_installs_once_however_many_steps_ask(self):
+        install = body(code("integration/dlopen_hook.cpp"), "DlopenInstall InstallDlopenHook(")
+        self.assertLess(install.index("g_installed.load("), install.index("InstallThunk<DlopenThunk>"))
+        self.assertIn("g_installed.store(true", install)
+
+    def test_each_provider_slot_has_its_own_thunk_record_and_handle_and_unmapped_libraries_release_theirs(self):
+        hook = code("sentinel/crash_first_hook.cpp")
+        for index in range(3):
+            self.assertIn(f"NEVR_CRASH_LATE_OPS({index})", hook)
+        macro = hook[hook.index("#define NEVR_CRASH_LATE_OPS(I)") : hook.index("#undef NEVR_CRASH_LATE_OPS")]
+        self.assertEqual(macro.count("NEVR_HOOK_RECORD("), 2)
+        on_loaded = body(hook, "void OnModuleLoaded(")
+        self.assertLess(on_loaded.index("ReleaseUnmappedLateModule("), on_loaded.index("EnsureLateModule("))
 
 
 if __name__ == "__main__":

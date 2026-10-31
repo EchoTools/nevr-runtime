@@ -4,7 +4,8 @@
 //
 // An answer from the invite worker (patch/invite_worker.h) goes in; the texts for the UI text writer (patch/ui_text.h) come
 // out:
-//   - a created code: the code and `EXPIRES: HH:MM UTC` in the share page's code and expiry elements;
+//   - a created code: the code and `EXPIRES: HH:MM UTC` in the share page's code and expiry elements, and `<coming soon>`
+//     in its link element (the stock text is a dead domain; the link becomes `echo.taxi/<code>` with #1726);
 //   - a refused create (or a body that holds no code): the reason where the code would be, the expiry cleared;
 //   - a refused resolve: the reason in the entry page's title;
 //   - a resolved code: nothing; starting the join is the next unit (D3).
@@ -12,7 +13,7 @@
 // No game, no thread, no clock. invite_answer_apply.cpp is the platform glue (the service, the writer, the log, the frame);
 // src/runtime/tests/test_invite_answer_text.cpp pins everything below on the host with a fake writer and a captured log.
 //
-// The share page's code and expiry actors and elements are the echovr-modkit author's findings (rad-links, MIT, by Dualgame),
+// The share page's code, expiry and link actors and elements are the echovr-modkit author's findings (rad-links, MIT, by Dualgame),
 // read from the PC build's resources; the entry title is the pair a live run of the writer already proved (tools/scenario/
 // scenarios/ui_text.yaml). None of the share page's ids has been written from this tree on a running game: a wrong id is a
 // request the writer drops with its cause (`[NEVR.UI] text dropped ... reason=no_actor|no_canvas`), never a crash.
@@ -27,13 +28,14 @@
 #include <utility>
 #include <vector>
 
+#include "runtime/patch/invite_match_api.h"
 #include "runtime/patch/invite_wizard.h"
 #include "runtime/patch/invite_worker.h"
 #include "runtime/patch/ui_text.h"
 
 namespace nevr_invite_text {
 
-enum class Field { Code, Expires, EntryTitle };
+enum class Field { Code, Expires, Link, EntryTitle };
 
 inline const char* FieldName(Field field) {
   switch (field) {
@@ -41,15 +43,20 @@ inline const char* FieldName(Field field) {
       return "code";
     case Field::Expires:
       return "expires";
+    case Field::Link:
+      return "link";
     case Field::EntryTitle:
       return "entry_title";
   }
   return "unknown";
 }
 
-// The share page (mnu_master page 41): INVITE CODE and EXPIRES actors, each written through its `canvasui` text element.
+// The share page (mnu_master page 41): INVITE CODE, EXPIRES and link actors, each written through its `canvasui` text element.
 inline constexpr nevr_ui_text::Target kCodeTarget{0xa9bd0cb4e6f2004cULL, 0x35e290123dfa9c72ULL};     // element "codetext"
 inline constexpr nevr_ui_text::Target kExpiresTarget{0x0ec8e16986ef88c8ULL, 0xd38c12d22d3552ebULL};  // its name is not in the symbol cache
+inline constexpr nevr_ui_text::Target kLinkTarget{0xc3f9f167b2a06043ULL, 0x3657cd7405999810ULL};     // element "link_text"
+/// What the link element reads until the invite link exists. The stock text is `www.readyatdawn.com/...`, a domain we do not own.
+inline constexpr const char* kLinkText = "<coming soon>";
 // The entry page (page 34): the ENTER CODE field's actor and the title bar above it.
 inline constexpr nevr_ui_text::Target kEntryTitleTarget{0xad97e58a7b13425fULL, 0xa8452de53657bd6eULL};  // element "title_text"
 
@@ -59,6 +66,8 @@ inline const nevr_ui_text::Target& TargetOf(Field field) {
       return kCodeTarget;
     case Field::Expires:
       return kExpiresTarget;
+    case Field::Link:
+      return kLinkTarget;
     case Field::EntryTitle:
       break;
   }
@@ -95,6 +104,7 @@ inline std::vector<Item> TextsFor(const nevr_invite::Answer& answer) {
     if (const auto created = nevr_invite::ParseCreated(answer.body)) {
       items.push_back(detail::MakeItem(Field::Code, created->code));
       items.push_back(detail::MakeItem(Field::Expires, created->expires_text));
+      items.push_back(detail::MakeItem(Field::Link, kLinkText));
       return items;
     }
     // The service said ok and sent no code the client may show: that is its failure, and a blank page says nothing.
@@ -111,12 +121,11 @@ using PostFn = std::function<nevr_ui_text::Check(nevr_ui_text::Request)>;
 using LogFn = std::function<void(nevr_invite::LogLevel, const std::string&)>;
 
 inline std::string PostedLine(Field field, std::size_t bytes) {
-  return std::string("[NEVR.INVITE] text posted field=") + FieldName(field) + " bytes=" + std::to_string(bytes);
+  return nevr_invite_match::PostedText(FieldName(field), bytes);
 }
 
 inline std::string NotPostedLine(Field field, std::size_t bytes, const char* reason) {
-  return std::string("[NEVR.INVITE] text not posted field=") + FieldName(field) + " bytes=" + std::to_string(bytes) +
-         " reason=" + reason;
+  return nevr_invite_match::NotPostedText(FieldName(field), bytes, reason);
 }
 
 /// Posts the texts of `answers`, oldest first. `writerReady` is the writer's own state: with it off nothing is posted and each

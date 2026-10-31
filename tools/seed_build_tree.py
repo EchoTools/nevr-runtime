@@ -19,18 +19,18 @@ build/ and moved into place when it is complete:
      "command line changed" and rebuilds. The new hash is computed from the command ninja prints for the copy
      (`ninja -t commands`) with the path replaced; an entry whose command cannot be found is dropped (the edge
      rebuilds, nothing wrong is kept);
-  4. a tracked source file that is byte-identical to the main checkout's gets the main checkout's mtime. A new
-     worktree's files carry the time of the checkout, newer than every object in the copy, and ninja decides by
-     mtime alone. A file that differs keeps its own mtime, so it rebuilds.
+  4. a tracked source file that is byte-identical to the main checkout's gets the main checkout's mtime; one that
+     differs gets the time of the seed. ninja decides by mtime alone, and a worktree's files may carry a time older
+     than the objects the main checkout built, so a differing file is made newer than every object in the copy and
+     rebuilds.
 
-The commit is a guard: the copy is made only when the main checkout's tree was built at the worktree's own commit.
-The commit (NEVR_GIT_COMMIT_FULL) and the version are defined on the few files that read them
-(cmake/nevr_build_identity.cmake), so a tree at another commit rebuilds those files and what links them, and the
-sources that differ; the guard is stricter than that needs. A copy whose build.ninja names a commit other than
-the worktree's HEAD is not made (the first build is the ordinary one, answered object by object from the shared
-compiler cache). A build.ninja from which the commit cannot be read (no such definition, or one that is not 40 hex
-digits) is refused too: the tool cannot show the tree is at this HEAD. The version carries `-dirty` when the tree
-was configured with uncommitted changes; such a tree is refused for the same reason.
+The commit is not a guard. The commit (NEVR_GIT_COMMIT_FULL), the version and the describe string (with `-dirty` when
+the tree was configured with uncommitted changes) are defined on the few files that read them
+(cmake/nevr_build_identity.cmake), and CMake reads them at configure time. A copy made from a tree at another commit,
+or configured with uncommitted changes, therefore has its configure re-run on the first build: its build.ninja is
+given the epoch as its mtime, older than CMakeLists.txt, so ninja regenerates the build before any compile edge. The
+identity readers, what links them and the differing sources rebuild; the rest of the copy is kept. A tree at the
+worktree's own commit and configured clean is copied as it is.
 
 The copy is scanned before it is moved into place. The checkout path is rewritten only as the tool knows it (the
 resolved path); a tree configured through another spelling of it (a link to the checkout) would keep that
@@ -263,11 +263,13 @@ def rewrite_text_files(copy: pathlib.Path, rewrite) -> int:
     return rewritten
 
 
-def align_source_mtimes(main: pathlib.Path, worktree: pathlib.Path) -> int:
-    """Give each tracked file that is byte-identical to the main checkout's the main checkout's mtime."""
+def align_source_mtimes(main: pathlib.Path, worktree: pathlib.Path) -> tuple[int, int]:
+    """Give each tracked file that is byte-identical to the main checkout's the main checkout's mtime, and each one that
+    differs the time now (newer than every object the copy holds, so it rebuilds). Returns (aligned, touched)."""
     listing = subprocess.run(["git", "-C", str(worktree), "ls-files", "-z"], check=True, capture_output=True,
                              env=_git_env()).stdout
-    aligned = 0
+    now = time.time_ns()
+    aligned = touched = 0
     for raw in listing.split(b"\0"):
         if not raw:
             continue
@@ -276,12 +278,14 @@ def align_source_mtimes(main: pathlib.Path, worktree: pathlib.Path) -> int:
         if mine.is_symlink() or theirs.is_symlink() or not mine.is_file() or not theirs.is_file():
             continue
         a, b = mine.stat(), theirs.stat()
-        if a.st_size != b.st_size or a.st_mtime_ns == b.st_mtime_ns:
-            continue
-        if filecmp.cmp(mine, theirs, shallow=False):
-            os.utime(mine, ns=(a.st_atime_ns, b.st_mtime_ns))
-            aligned += 1
-    return aligned
+        if a.st_size == b.st_size and filecmp.cmp(mine, theirs, shallow=False):
+            if a.st_mtime_ns != b.st_mtime_ns:
+                os.utime(mine, ns=(a.st_atime_ns, b.st_mtime_ns))
+                aligned += 1
+        else:
+            os.utime(mine, ns=(a.st_atime_ns, now))
+            touched += 1
+    return aligned, touched
 
 
 _COMMIT_DEFINE = re.compile(rb'NEVR_GIT_COMMIT_FULL=\\*"([0-9a-f]{40})')
@@ -400,21 +404,12 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
         have = _cache_value(src / "CMakeCache.txt", key)
         if have is None or pathlib.Path(have).resolve() != want:
             return Result("not-seeded", f"{src}/CMakeCache.txt has {key}={have}, not {want}: that tree was configured for another checkout")
-    commits = built_commits(src / "build.ninja")
-    if not commits:
-        return Result("not-seeded", f"cannot read the commit {src} was built at: {src}/build.ninja has no "
-                      "NEVR_GIT_COMMIT_FULL=<40 hex digits> on any command, so it cannot be shown to be at this worktree's HEAD, "
-                      "and a tree built at another commit is rebuilt whole")
     head = subprocess.run(["git", "-C", str(worktree), "rev-parse", "HEAD"], capture_output=True, text=True, env=_git_env())
     if head.returncode != 0:
         return Result("not-seeded", f"cannot read the HEAD of {worktree}: {head.stderr.strip()}")
-    if commits != {head.stdout.strip()}:
-        built = ", ".join(sorted(c[:8] for c in commits))
-        return Result("not-seeded", f"{src} was built at {built} and this worktree is at {head.stdout.strip()[:8]}: "
-                      "a tree is seeded only when it was built at the worktree's own commit")
-    if built_modified(src / "build.ninja"):
-        return Result("not-seeded", f"{src} was configured with uncommitted changes (its version ends in -dirty): "
-                      "a tree is seeded only when it was built from a clean checkout")
+    # The identity the tree was configured with. A tree at another commit, or configured dirty, carries another one, so
+    # its configure is re-run (see the module docstring); a tree that matches is copied as it is.
+    identity_stale = built_commits(src / "build.ninja") != {head.stdout.strip()} or built_modified(src / "build.ninja")
     busy = _running_in(src)
     if busy:
         return Result("not-seeded", f"a process is running in {src} (a build or a test): {busy[0]}")
@@ -446,12 +441,16 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
             st = (staging / name).stat()
             (staging / name).write_bytes(content)
             os.utime(staging / name, ns=(st.st_atime_ns, st.st_mtime_ns))
+        if identity_stale:
+            # ninja regenerates the build when build.ninja is older than one of its inputs (the CMakeLists.txt files
+            # of the worktree, which are newer than the epoch). The main checkout's mtime may not be older than them.
+            os.utime(staging / "build.ninja", ns=(0, 0))
         spellings = {str(main), given, _cache_value(src / "CMakeCache.txt", "CMAKE_HOME_DIRECTORY") or str(main)}
         left = leftover_main_path(staging, spellings, worktree)
         if left:
             return Result("not-seeded", f"the copy still names the main checkout after the rewrite ({left}): that tree was configured "
                           "through another spelling of its path, so building it would regenerate the main checkout's tree")
-        aligned = align_source_mtimes(main, worktree)
+        aligned, touched = align_source_mtimes(main, worktree)
         if dst.exists():
             dst.rmdir()
         os.rename(staging, dst)
@@ -463,7 +462,8 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
         shutil.rmtree(staging, ignore_errors=True)
     return Result("seeded", counts={
         "text_files_rewritten": files, "log_entries_kept": kept, "log_entries_dropped": dropped,
-        "deps_paths_rewritten": deps_paths, "source_mtimes_aligned": aligned,
+        "deps_paths_rewritten": deps_paths, "source_mtimes_aligned": aligned, "source_mtimes_touched": touched,
+        "configure_rerun": identity_stale,
     })
 
 
@@ -505,8 +505,11 @@ def main_cli(argv: list[str]) -> int:
     if result.status == "seeded":
         print(f"seeded build/{args.preset} from {args.main}/build/{args.preset}: {c['text_files_rewritten']} text files "
               f"rewritten, {c['log_entries_kept']} ninja log entries carried over ({c['log_entries_dropped']} dropped), "
-              f"{c['deps_paths_rewritten']} deps-log paths rewritten, {c['source_mtimes_aligned']} source mtimes aligned "
-              f"in {record['seconds']} s; the first build rebuilds only what differs from the main checkout's last build")
+              f"{c['deps_paths_rewritten']} deps-log paths rewritten, {c['source_mtimes_aligned']} source mtimes aligned, "
+              f"{c['source_mtimes_touched']} differing sources made newer"
+              + ("; the configure re-runs first (the tree was built at another commit or with uncommitted changes)"
+                 if c["configure_rerun"] else "")
+              + f", in {record['seconds']} s; the first build rebuilds only what differs from the main checkout's last build")
     elif result.status == "kept":
         print(f"kept: {result.reason}")
     elif result.status == "not-seeded":

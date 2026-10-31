@@ -484,6 +484,11 @@ TEST(TheFilesDigestAndImageEndArePinnedWhenTheSpecSaysSo) {
   World w;
   w.spec.stockSha256 = std::string(64, '0');
   ExpectRefusal(w.Patch(), "stock_sha256_mismatch", "", "wrong sha");
+  w.spec.alsoSha256 = {std::string(64, '1')};
+  ExpectRefusal(w.Patch(), "stock_sha256_mismatch", "", "a listed digest that is not the file's");
+  w.spec.alsoSha256 = {std::string(64, '1'), nevr_quest::data::Sha256Hex(w.elf.bytes.data(), w.elf.bytes.size())};
+  CHECK(w.Patch().ok);  // #1737: the file's digest may be any of the listed ones
+  w.spec.alsoSha256.clear();
   w.spec.stockSha256 = nevr_quest::data::Sha256Hex(w.elf.bytes.data(), w.elf.bytes.size());
   CHECK(w.Patch().ok);
   w.spec.expectedImageEnd = 0x14035f0;
@@ -2426,6 +2431,257 @@ TEST(TheShippedToolRefusesAFileThatIsNotThePinnedLibr15) {
   CHECK(Json::parse(ReadText(se))["reason"] == "stock_build_id_mismatch");
   CHECK_EQ(RunProcess({g_tool}, so, se), 2);
   for (const std::string& f : {stock, report, so, se}) std::remove(f.c_str());
+}
+
+// ---- the input's own references to the slot area (#1737, row C8) ----------------------------------------------------------
+
+constexpr std::uint64_t kRefAt = 0x1400600;  // free text: no row's word and no fixture word
+std::uint32_t AddImmLsl12(unsigned rd, unsigned rn, unsigned imm12) { return AddImm(rd, rn, imm12) | (1u << 22); }
+std::uint32_t Adr(std::uint64_t pc, std::uint64_t target, unsigned rd) {
+  const std::uint32_t d = static_cast<std::uint32_t>(static_cast<std::int64_t>(target) - static_cast<std::int64_t>(pc));
+  return 0x10000000u | ((d & 3u) << 29) | (((d >> 2) & 0x7FFFFu) << 5) | rd;
+}
+std::uint32_t StrW(unsigned rt, unsigned rn, unsigned byteOffset) { return 0xB9000000u | ((byteOffset / 4) << 10) | (rn << 5) | rt; }
+std::uint32_t Ldur(unsigned rt, unsigned rn, int imm9) { return 0xF8400000u | ((static_cast<std::uint32_t>(imm9) & 0x1FFu) << 12) | (rn << 5) | rt; }
+std::uint32_t LdpX(unsigned rt, unsigned rt2, unsigned rn, int byteOffset) {
+  return 0xA9400000u | ((static_cast<std::uint32_t>(byteOffset / 8) & 0x7Fu) << 15) | (rt2 << 10) | (rn << 5) | rt;
+}
+std::uint32_t LdrX(unsigned rt, unsigned rn, std::uint64_t byteOffset) {
+  std::uint32_t l = 0;
+  CHECK(EncodeLdrX(rt, rn, byteOffset, &l));
+  return l;
+}
+constexpr std::uint32_t kMovX10X9 = 0xAA0903EAu;  // orr x10, xzr, x9
+constexpr std::uint32_t kBranchPlus4 = 0x14000001u;
+void PlantAdrp(World& w, std::uint64_t at, std::uint64_t target, unsigned rd) {
+  std::uint32_t a = 0;
+  CHECK(EncodeAdrp(at, target, rd, &a));
+  w.elf.PutWord(at, a);
+}
+// The word at a vaddr of an output image.
+std::uint32_t WordOf(const std::vector<std::uint8_t>& image, std::uint64_t vaddr) {
+  std::uint32_t v = 0;
+  std::memcpy(&v, image.data() + SynthElf::FileOffsetOfText(vaddr), 4);
+  return v;
+}
+
+// Each form the scan reads, planted in the text of a fresh input. The site is the instruction that forms or uses the
+// address, the target the address it reaches. The synthetic text's filler words match no pattern of the scan, so the
+// planted words are the only ones it sees.
+struct ReferenceCase {
+  const char* what;
+  void (*plant)(World&);
+  std::uint64_t site;
+  std::uint64_t target;
+};
+
+TEST(AnInputWhoseCodeReachesTheSlotAreaIsRefusedNamingTheSiteAndTheTarget) {
+  const ReferenceCase cases[] = {
+      {"add",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, AddImm(9, 9, kSlotArea & 0xFFF));
+       },
+       kRefAt + 4, 0x1403600},
+      {"ldr",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, LdrX(0, 9, kSlotArea & 0xFFF));
+       },
+       kRefAt + 4, 0x1403600},
+      {"str w",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, StrW(0, 9, 0x604));
+       },
+       kRefAt + 4, 0x1403604},
+      {"ldur through an add",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, AddImm(9, 9, 0x5f0));
+         w.elf.PutWord(kRefAt + 8, Ldur(0, 9, 0x10));
+       },
+       kRefAt + 8, 0x1403600},
+      {"ldp through an add",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, AddImm(9, 9, 0x5f0));
+         w.elf.PutWord(kRefAt + 8, LdpX(0, 1, 9, 0x10));
+       },
+       kRefAt + 8, 0x1403600},
+      {"adr",
+       [](World& w) { w.elf.PutWord(kRefAt, Adr(kRefAt, kSlotArea + 8, 0)); },
+       kRefAt, 0x1403608},
+      {"mov copy",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, kMovX10X9);
+         w.elf.PutWord(kRefAt + 8, LdrX(0, 10, kSlotArea & 0xFFF));
+       },
+       kRefAt + 8, 0x1403600},
+      {"shifted add",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, 0x1402000, 9);
+         w.elf.PutWord(kRefAt + 4, AddImmLsl12(9, 9, 1));
+         w.elf.PutWord(kRefAt + 8, LdrX(0, 9, 0x600));
+       },
+       kRefAt + 8, 0x1403600},
+      {"window edge, in",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4 * 32, AddImm(9, 9, 0x600));
+       },
+       kRefAt + 128, 0x1403600},
+      {"16-byte width",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, AddImm(9, 9, 0x5f8));
+       },
+       kRefAt + 4, 0x14035f8},
+      {"vector ldr q",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, 0x3DC18120u);  // ldr q0, [x9, #0x600]
+       },
+       kRefAt + 4, 0x1403600},
+  };
+  for (const ReferenceCase& c : cases) {
+    World w;
+    c.plant(w);
+    const PatchResult r = w.Patch();
+    ExpectRefusal(r, "slot_area_referenced", "", c.what);
+    CHECK(r.summary["site"] == HexOf(c.site));
+    CHECK(r.summary["target"] == HexOf(c.target));
+  }
+}
+
+struct PlantCase {
+  const char* what;
+  void (*plant)(World&);
+};
+
+// Reaches of the scan that stop short of the slot area: the window's end, a branch, a load that overwrites the base, the
+// zone's edges. Each input is patched normally.
+TEST(AReferenceThatDoesNotReachTheSlotAreaIsNotRefused) {
+  const PlantCase cases[] = {
+      {"one word past the window",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4 * 33, AddImm(9, 9, 0x600));
+       }},
+      {"a branch ends the window",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, kBranchPlus4);
+         w.elf.PutWord(kRefAt + 8, AddImm(9, 9, 0x600));
+       }},
+      {"a load into the register ends the tracking",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, LdrX(9, 0, 0));
+         w.elf.PutWord(kRefAt + 8, AddImm(9, 9, 0x600));
+       }},
+      {"just below by a full access width",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, AddImm(9, 9, 0x5f0));
+       }},
+      {"exactly at the zone's end",
+       [](World& w) {
+         PlantAdrp(w, kRefAt, kSlotArea, 9);
+         w.elf.PutWord(kRefAt + 4, AddImm(9, 9, 0x618));
+       }},
+  };
+  for (const PlantCase& c : cases) {
+    World w;
+    c.plant(w);
+    const PatchResult r = w.Patch();
+    if (!r.ok) std::fprintf(stderr, "  %s: refused %s %s\n", c.what, r.refusal.code.c_str(), r.refusal.detail.c_str());
+    CHECK(r.ok);
+  }
+  World control;  // the ADRP+ADD of the credits fixture, already in every input: the scan accepts a normal pair
+  CHECK(control.Patch().ok);
+}
+
+TEST(ARefusedReferenceExitsOneAndTheRecordNamesTheSiteAndTarget) {
+  World w;
+  PlantAdrp(w, kRefAt, kSlotArea, 9);
+  w.elf.PutWord(kRefAt + 4, AddImm(9, 9, kSlotArea & 0xFFF));
+  const std::string stock = g_scratch + "/ref_stock.so", out = g_scratch + "/ref_out.so", report = g_scratch + "/ref_report.json";
+  WriteBytes(stock, w.elf.bytes);
+  std::remove(out.c_str());
+  std::ostringstream so, se;
+  CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", report}, w.spec, so, se), 1);
+  CHECK(!Exists(out));
+  CHECK(so.str().empty());
+  const Json err = Json::parse(se.str());
+  CHECK(err["reason"] == "slot_area_referenced");
+  CHECK(err["site"] == "0x1400604");
+  CHECK(err["target"] == "0x1403600");
+  CHECK(err["slot_area"] == "0x1403600");
+  CHECK(err["slot_area_end"] == "0x1403618");
+  CHECK(Json::parse(ReadText(report))["summary"]["status"] == "refused");
+  for (const std::string& f : {stock, report}) std::remove(f.c_str());
+}
+
+TEST(ASpecWithAGapPlacesTheSlotAreaPastIt) {
+  World w;
+  w.spec.slotAreaGap = 0x100;
+  const PatchResult r = w.Patch();
+  CHECK(r.ok);
+  if (!r.ok) {
+    std::fprintf(stderr, "  %s\n", r.summary.dump().c_str());
+    return;
+  }
+  CHECK(r.summary["slot_area"] == "0x1403700");      // RoundUp(0x14035f8 + 0x100, 64)
+  CHECK(r.summary["slot_area_end"] == "0x1403718");  // + 8 bytes per row, 3 rows
+  // The two inline stubs decode to their slots, and the credits pairs load from row 2's slot.
+  Stub stub{};
+  CHECK(EncodeSlotStub(kJoinVa, 0x1403700, &stub));
+  for (std::size_t i = 0; i < 3; ++i) CHECK_EQ(WordOf(r.output, kJoinVa + 4 * i), stub.words[i]);
+  CHECK(EncodeSlotStub(kFailVa, 0x1403708, &stub));
+  for (std::size_t i = 0; i < 3; ++i) CHECK_EQ(WordOf(r.output, kFailVa + 4 * i), stub.words[i]);
+  std::uint32_t adrp = 0, ldr = 0;
+  CHECK(EncodeAdrp(kAdrp0, 0x1403710, 8, &adrp));
+  CHECK(EncodeLdrX(8, 8, 0x710, &ldr));
+  CHECK_EQ(WordOf(r.output, kAdrp0), adrp);
+  CHECK_EQ(WordOf(r.output, kAdd0), ldr);
+  CHECK(EncodeAdrp(kAdrp1, 0x1403710, 12, &adrp));
+  CHECK(EncodeLdrX(12, 12, 0x710, &ldr));
+  CHECK_EQ(WordOf(r.output, kAdrp1), adrp);
+  CHECK_EQ(WordOf(r.output, kAdd1), ldr);
+  CHECK(r.summary["build_id"] == BuildIdHex(DeriveBuildId(StockId(), CanonicalTable(w.spec.rows, w.spec.rowCount, {}, 0x1403700))));
+  std::uint64_t memsz = 0;
+  std::memcpy(&memsz, r.output.data() + w.elf.PhdrMemszOffset(), 8);
+  CHECK_EQ(memsz, static_cast<std::uint64_t>(0x1403718 - kDataVaddr));
+  // The gap is part of what the pin means: the output is recognised under the gapped spec, and refused as another build without it.
+  ExpectRefusal(PatchLibr15(r.output, w.spec, {}, ""), "already_patched", "", "the gapped output under the gapped spec");
+  PatchSpec noGap = w.spec;
+  noGap.slotAreaGap = 0;
+  ExpectRefusal(PatchLibr15(r.output, noGap, {}, ""), "stock_build_id_mismatch", "", "the gapped output under a spec with no gap");
+}
+
+// The state words another build of this libr15 keeps in the slack, in miniature: two of them, where the reference build's
+// are. With no gap the slot area is on them and the input is refused; with the gap they are clear and the input is patched.
+TEST(AnInputsStateWordsInThePageSlackAreKeptClearByTheGap) {
+  World w;
+  PlantAdrp(w, kRefAt, kSlotArea, 9);
+  w.elf.PutWord(kRefAt + 4, AddImm(9, 9, kSlotArea & 0xFFF));
+  w.elf.PutWord(kRefAt + 8, 0xB9400128u);  // ldr w8, [x9]: the reference's own word
+  PlantAdrp(w, kRefAt + 16, kSlotArea + 0x20, 9);
+  w.elf.PutWord(kRefAt + 20, AddImm(9, 9, (kSlotArea + 0x20) & 0xFFF));
+  w.elf.PutWord(kRefAt + 24, 0xF900012Au);  // str x10, [x9]: the reference's own word
+  ExpectRefusal(w.Patch(), "slot_area_referenced", "", "the state words with no gap");
+  w.spec.slotAreaGap = 0x100;
+  const PatchResult r = w.Patch();
+  CHECK(r.ok);
+  if (!r.ok) {
+    std::fprintf(stderr, "  %s\n", r.summary.dump().c_str());
+    return;
+  }
+  CHECK(r.summary["slot_area"] == "0x1403700");
+  for (std::uint64_t off = 0; off < 32; off += 4) CHECK_EQ(WordOf(r.output, kRefAt + off), w.elf.WordAt(kRefAt + off));
+  static_assert(kSlotArea + 0x20 + 8 <= 0x1403700, "the second state word ends before the gapped slot area");
 }
 
 }  // namespace

@@ -68,13 +68,14 @@ bool InstallVkExtWindowHook() noexcept;  // true when the FindMethod and VrApi s
 // headset for its OS build number. No counters.
 bool InstallOsBuildGateHook() noexcept;  // true when the OSBuildVersion slot holds the thunk
 
-// The #871 log-only resource request hook (sentinel/resource_request_hook.h), through this seam for the same reason: it
-// records every FillResourceFileRequest call. Development builds only (the sequence asks nevr_build::kIsDev through
+// The #871 resource request hook (sentinel/resource_request_hook.h; #1737 C5 adds the loose-file overlay), through this seam
+// for the same reason: it records every FillResourceFileRequest call and serves a loose file on a manifest miss. Installed
+// in every build; its per-request log lines are development builds only, a release build logs failed requests (the sequence asks nevr_build::kIsDev through
 // ResourceRequestLogEnabled, defined in entry.cpp, which includes the generated nevr_build_info.h).
-bool ResourceRequestLogEnabled() noexcept;          // nevr_build::kIsDev
-bool RegisterResourceRequestCounters() noexcept;    // 2 counters
-// resource_request::InstallIfCounted(countersRegistered): true when the slot holds the thunk.
-bool InstallResourceRequestLogHook(bool countersRegistered) noexcept;
+bool ResourceRequestLogEnabled() noexcept;          // nevr_build::kIsDev: whether the hook writes a line per request
+bool RegisterResourceRequestCounters() noexcept;    // 4 counters
+// resource_request::InstallCounted(countersRegistered, logLines): true when the slot holds the thunk.
+bool InstallResourceRequestLogHook(bool countersRegistered, bool logLines) noexcept;
 // The #928 clock-level override (sentinel/clock_levels_hook.h), through this seam for the same reason: the CPU and GPU levels
 // libr15 asks VrApi for. It owns no slot; the render-configuration hook's handler asks it which levels to call with.
 bool RegisterClockLevelsCounters() noexcept;  // 2 counters
@@ -89,6 +90,11 @@ bool InstallMenuCardsHook() noexcept;
 // The #966 CREATE GAME / JOIN VIA CODE observer on libr15's MetricLog (invite/wizard_metric_hook.h, ADR 0017 slice S2), through
 // this seam for the same reason. No counters. True when the observer's handler is in the game's call.
 bool InstallWizardMetricHook() noexcept;
+
+// The game's main level for the plugins (#1106, sentinel/main_level.h): the source the plugin loader reads and the frame work
+// that keeps the plugins' contexts current. Called once, before the plugin plan; a refused frame work is logged there. No
+// counters. True when the frame work is registered.
+bool InstallPluginMainLevel() noexcept;
 
 // The #1220 rad provider in pnsovr's place (sentinel/pns_provider_hook.h), through this seam for the same reason: it
 // includes callback_thunk.h. No counters. A development build only (`PnsProviderEnabled` is nevr_build::kIsDev, defined in

@@ -63,6 +63,8 @@ constexpr std::uint16_t kOtherMachine = kMachineAarch64;
 // The running libr15 build the fake platform reports: the second ID the fixture lists.
 const char* const kGameBuild = "2222222222222222222222222222222222222222";
 const NevrQuestHostApi kFakeQuestApi{sizeof(NevrQuestHostApi), nullptr};
+// The main level the fake platform reports (its name is set beside it: the loader copies both, it does not look one up).
+constexpr std::uint64_t kArenaLevel = 0x42670f2bed45703cULL;
 
 std::vector<std::uint8_t> Slurp(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
@@ -111,6 +113,7 @@ class FakePlatform final : public Platform {
   }
   void PluginLine(std::uint32_t level, const std::string& line) override { lines.push_back({level, line}); }
   const NevrQuestHostApi* QuestHostApi() override { return questApi; }
+  MainLevel CurrentMainLevel() override { return level; }
 
   // Unloads the object for real (the next test sees a fresh library) after keeping a copy of what it recorded.
   void Close(void* handle) override {
@@ -155,6 +158,7 @@ class FakePlatform final : public Platform {
   std::map<std::string, std::string> openAs;       // file served from `memory` -> the fixture object that is mapped for it
   std::uintptr_t base = 0x7000000000;
   const NevrQuestHostApi* questApi = &kFakeQuestApi;
+  MainLevel level;  // the main level the game reports (#1106); none until a case sets it
   bool readFromDisk = true;
   std::string throwOnRead;
   std::string throwOnSymbol;
@@ -452,6 +456,11 @@ TEST(BuildIdVerdictNamesAnAbsentExportAndAnUnknownGame) {
   CHECK(DecideBuildId(nullptr, "") == BuildIdVerdict::kUndeclared);
 }
 
+const std::string& StockId() {
+  static const std::string id = nevr_quest::patch::kLibR15StockBuildId;
+  return id;
+}
+
 // ---- the loader, against real shared objects -----------------------------------------------------------------------
 
 TEST(LoaderLoadsANoopPluginWithOneRecord) {
@@ -570,6 +579,7 @@ TEST(LoaderSaysOnThePackagedRecordThatTheConfigFileWasRejected) {
 
 TEST(LoaderGivesThePluginTheQuestContext) {
   Env env;
+  env.platform.level = {kArenaLevel, "mpl_arena_a"};
   env.loader->Plan({Item("ok", "libfx_ok.so", false, true, R"({"k":"v"})")});
   env.loader->RunPhase(PluginPhase::Normal);
   const FxSeen* seen = env.platform.Seen("libfx_ok.so");
@@ -588,9 +598,10 @@ TEST(LoaderGivesThePluginTheQuestContext) {
   // The platform's Quest host services (#1202) reach the plugin as they are.
   CHECK_EQ(seen->covers_quest, 1);
   CHECK(seen->quest == env.platform.questApi);
-  // No source for the main level exists on Quest before the host tick: the fields are empty, not wrong.
-  CHECK_EQ(seen->level_symbol, std::uint64_t{0});
-  CHECK(seen->level_name == nullptr);
+  // The main level the platform reports when the context is built (#1106): its symbol, and the name the table gives it.
+  CHECK_EQ(seen->level_symbol, std::uint64_t{kArenaLevel});
+  CHECK(seen->level_name != nullptr);
+  if (seen->level_name != nullptr) CHECK_EQ(std::string(seen->level_name), std::string("mpl_arena_a"));
 }
 
 TEST(LoaderRoutesThePluginsLogLineThroughTheHostFormat) {
@@ -724,10 +735,6 @@ TEST(LoaderReadsTheRunningBuildAgainOnALaterPass) {
 
 // ---- the plugin identity (ADR 0021 section 12, test 10) ------------------------------------------------------------
 
-const std::string& StockId() {
-  static const std::string id = nevr_quest::patch::kLibR15StockBuildId;
-  return id;
-}
 // The live note of our patched libr15: what the running file carries once the patcher has written it.
 const std::string& DerivedId() {
   static const std::string id = nevr_quest::patch::PatchedBuildId();

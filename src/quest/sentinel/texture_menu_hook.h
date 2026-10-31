@@ -18,7 +18,8 @@
  *                                              reads `graphics|msaa` (SR15GfxSettings+0x1c) and asks for that level.
  *   CEngine::CheckForResize()                  once per rendered frame, on the render thread. The handler runs the original and
  *                                              then, when a level other than the applied one was asked for, the engine's own
- *                                              rebuild: CVR::RefreshRTSize (the existing eye-size hook answers it with the new level)
+ *                                              rebuild: CVR::RefreshRTSize (the eye-size route answers it with the new level: the
+ *                                              reference input's RefreshRTSize hook when installed, else the game's own function)
  *                                              and CEngine::Resize, which recreates the swap chain, the render targets and the pass
  *                                              framebuffers.
  *
@@ -27,11 +28,15 @@
  *
  * What a player meets, from one setting. The settings menu has a GRAPHICS page with one control, "Texture Resolution", of six
  * entries (Very Low, Low, Medium, High, Very High, Ultra), default Low (the headset's stock size, or the level the configuration
- * names). A change applies at the next rendered frame. The choice is saved by the game in settings_mp_v2_quest.json as the index
- * under "msaa" and read back at the next launch, before the swap chain is made (ResolveStart reads the file, because the game
- * delivers its settings after that). The configuration's graphics.texture_quality is the level when the player has not chosen:
- * the game's first delivery of its settings, when the file has no saved value, is changed to it, so the menu shows it and the
- * next save keeps it. A saved value always wins over the configuration.
+ * names). A change applies at the next rendered frame. The choice is remembered in a marker file of our own,
+ * nevr_texture_quality.json beside the game's settings (texture_menu.h), written by the poller after the player changes the control
+ * and read back at the next launch, before the swap chain is made (ResolveStart reads it, because the game delivers its settings
+ * after that). The game's own saved slot (`msaa` in settings_mp_v2_quest.json) is not read: a settings file that never held the
+ * setting reads 0, which is Very Low, and cannot say whether the player chose. A player who never chose starts at the default: the
+ * configuration's graphics.texture_quality, Low for `stock`; on the reference libr15 with a `stock` configuration it is the reference
+ * build's own start rule (its settings file's `msaa` index, default High), queued once as the marker. The game's first delivery of its
+ * settings is changed to the marker's level, or to that default when there is no marker, so the menu shows it. A marker always wins
+ * over the configuration.
  *
  * What the apply refuses, and why. It waits for the engine's ready flag and for the VR layer to be initialised and not
  * display-lost (CheckForResize itself and ApplyRuntimeGfxSettings test the same). It refuses for good when the engine's resize
@@ -97,7 +102,9 @@ struct Totals {
   unsigned long long equalCommits;     // level changes committed without a rebuild (same eye size)
   unsigned long long refused;          // applies refused for good
   unsigned long long failed;           // rebuilds the engine reported as failed
-  unsigned long long configOverrides;  // first deliveries changed to the configuration's level
+  unsigned long long configOverrides;  // first deliveries changed to the default level (the player had not chosen)
+  unsigned long long markerWrites;     // the player's choices written to the marker file
+  unsigned long long markerFailures;   // the player's choices that could not be written
   bool disabled;                       // the live apply is off for this process
   const char* disabledWhy;
 };

@@ -187,13 +187,14 @@ void CheckBuildId(const LoadedElf& elf, const char* expected) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 5) {
+  if (argc != 6) {
     std::fprintf(stderr,
-                 "usage: got_pinned_test <libr15.so> <libpnsradmatchmaking.so> <libpnsovr.so> <lib7f2363b8976491aa.so>\n");
+                 "usage: got_pinned_test <libr15.so> <libpnsradmatchmaking.so> <libpnsovr.so> <lib7f2363b8976491aa.so> "
+                 "<libpnsrad.so>\n");
     return 2;
   }
-  LoadedElf r15, mm, ovr, script;
-  if (!Load(argv[1], &r15) || !Load(argv[2], &mm) || !Load(argv[3], &ovr) || !Load(argv[4], &script)) {
+  LoadedElf r15, mm, ovr, script, rad;
+  if (!Load(argv[1], &r15) || !Load(argv[2], &mm) || !Load(argv[3], &ovr) || !Load(argv[4], &script) || !Load(argv[5], &rad)) {
     std::fprintf(stderr, "got_pinned_test: cannot load an AArch64 ELF64 from the given paths\n");
     return 2;
   }
@@ -204,6 +205,13 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15ClockGettime(), "libr15 clock_gettime JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15Sigaction(), "libr15 sigaction JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15Signal(), "libr15 signal JUMP_SLOT");
+  // The provider libraries the crash-first hook reaches after they load (#1605): both slots of each, and each build ID.
+  CheckBuildId(rad, pinned::kPnsradBuildId);
+  for (const pinned::CrashLateModule& module : pinned::kCrashLateModules) {
+    const LoadedElf& elf = std::strcmp(module.module, pinned::kPnsrad) == 0 ? rad : (std::strcmp(module.module, pinned::kPnsovr) == 0 ? ovr : mm);
+    CheckTarget(elf, pinned::CrashLateSigaction(module), module.module);
+    CheckTarget(elf, pinned::CrashLateSignal(module), module.module);
+  }
   CheckTarget(r15, pinned::LibR15TString(), "libr15 CJson::TString JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CreateConnection(), "libr15 CSysHttp::CreateConnection JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15ConfigRequestSend(), "libr15 SNSConfigRequestv24Send JUMP_SLOT");
@@ -419,6 +427,34 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
+  // The UI text writer's three game calls (runtime/patch/ui_text.h, quest/invite/ui_text_quest.cpp): each at its pinned address with
+  // the words the writer checks. The Itanium-mangled name of each is the .dynsym entry at that address.
+  const struct {
+    const char* name;
+    std::uint64_t vaddr;
+    const std::uint32_t* words;
+    std::size_t count;
+    const char* symbol;
+  } textCalls[] = {
+      {"CncaGame::GameSpace", pinned::kGameSpaceVaddr, pinned::kGameSpaceCode, sizeof(pinned::kGameSpaceCode) / 4,
+       "_ZN10NRadEngine8CncaGame9GameSpaceEy"},
+      {"CLocalComponentHandle<CCanvasUICS>::Find", pinned::kCanvasFindVaddr, pinned::kCanvasFindCode,
+       sizeof(pinned::kCanvasFindCode) / 4,
+       "_ZN10NRadEngine21CLocalComponentHandleINS_11CCanvasUICSEE4FindEPNS_15CncaGameSpaceMTENS_6SActorENS_9CSymbol64E"},
+      {"CCanvasUICS::SetText", pinned::kCanvasSetTextVaddr, pinned::kCanvasSetTextCode, sizeof(pinned::kCanvasSetTextCode) / 4,
+       pinned::kCanvasSetTextSymbol},
+  };
+  for (const auto& call : textCalls) {
+    if (DynamicSymbolValue(r15, call.symbol) != call.vaddr) {
+      std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", call.name, static_cast<unsigned long long>(call.vaddr));
+      QCHECK(false);
+    }
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + call.vaddr, call.words, call.count * 4) != 0) {
+      std::fprintf(stderr, "libr15 %s: first instructions differ from the pinned ones\n", call.name);
+      QCHECK(false);
+    }
+  }
+
   // CGTextureResource::ForceLoadAllMips, which the UI texture hook calls through the address it proves: its first
   // four instructions are the ones ui_texture_mips.cpp checks before calling it. The inline hook rows (the widget
   // update, the lobby-full handlers, the texture attach) are not pinned here: the patcher pinned test checks every row's
@@ -437,6 +473,21 @@ int main(int argc, char** argv) {
   if (DynamicSymbolValue(r15, pinned::kRequestPermissionsSymbol) != 0xf873ecULL) {
     std::fprintf(stderr, "libr15 %s: .dynsym value is not 0xf873ec\n", pinned::kRequestPermissionsSymbol);
     QCHECK(false);
+  }
+  // The first word the hook classifies (ClassifyOriginalWord, #1737 C2): the symbol is defined at the pinned address, and the
+  // store file's word there is the stock word, `sub sp,sp,#0x40`.
+  if (DynamicSymbolValue(r15, pinned::kRequestPermissionsSymbol) != pinned::kRequestPermissionsVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kRequestPermissionsSymbol,
+                 static_cast<unsigned long long>(pinned::kRequestPermissionsVaddr));
+    QCHECK(false);
+  }
+  {
+    std::uint32_t firstWord = 0;
+    std::memcpy(&firstWord, static_cast<const unsigned char*>(r15.mem) + pinned::kRequestPermissionsVaddr, sizeof(firstWord));
+    if (firstWord != pinned::kRequestPermissionsStockWord) {
+      std::fprintf(stderr, "libr15 CSysInfo::RequestPermissions: first word is %#x, not the store file's stock word\n", firstWord);
+      QCHECK(false);
+    }
   }
   if (DynamicSymbolValue(r15, pinned::kCheckPermissionSymbol) != pinned::kCheckPermissionVaddr) {
     std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kCheckPermissionSymbol,

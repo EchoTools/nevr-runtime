@@ -545,8 +545,9 @@ void ExpectHookedRecords(const std::vector<nlohmann::json>& records, const char*
   const int versions = Find(records, "versions", "", "");
   Require(versions >= 0, "a hooked run recorded no versions record after the verdict on the runtime");
   Require(wait < versions && versions < load, "the versions record is not between the install wait and the runtime load");
-  Require(records.size() == (expect_stop ? 7u : 6u),
-          "a hooked run recorded something other than its six decisions (and the stop, when it stopped)");
+  Require(records.size() == (expect_stop ? 8u : 6u),
+          "a hooked run recorded something other than its six decisions (and the stop and its console notice, "
+          "when it stopped)");
   Require(expect_stop == !loaded, "a run that did not load must stop, and one that loaded must not");
   const nlohmann::json& versions_record = records[static_cast<std::size_t>(versions)];
   Require(versions_record.value("host_sha256", "").size() == 64, "the versions record does not carry the host's sha256");
@@ -573,13 +574,19 @@ void ExpectHookedRecords(const std::vector<nlohmann::json>& records, const char*
               (loaded ? "dispatch" : "stop_game"),
           "the runtime-load record names the wrong degraded action");
   if (expect_stop) {
-    // The stop is the last record: it names the cause, the code and the host, and follows the load record.
-    const nlohmann::json& stop = records.back();
+    // The stop is followed only by the console_notice (#1533); it names the cause, the code and the host, and
+    // follows the load record.
+    const nlohmann::json& stop = records[records.size() - 2];
+    const nlohmann::json& notice = records.back();
+    Require(notice.value("event", "") == "console_notice" && notice.value("reason", "") == load_outcome &&
+                notice.contains("written") && notice.at("written").is_boolean(),
+            "the console_notice record does not follow the game_stop and name its cause and whether a console took "
+            "the line");
     Require(stop.value("event", "") == "game_stop" && stop.value("reason", "") == load_outcome &&
                 stop.value("exit_code", 0) == 78 && stop.value("host_identity", "").rfind("NEVR-BUILD ", 0) == 0,
             "the game_stop record does not name the cause, exit code 78 and the host's identity");
     Require(stop.contains("runtime_path"), "the game_stop record does not name the path searched");
-    Require(static_cast<int>(records.size()) - 1 > load, "the game_stop record does not follow the runtime-load record");
+    Require(static_cast<int>(records.size()) - 2 > load, "the game_stop record does not follow the runtime-load record");
   }
   Require(records[static_cast<std::size_t>(load)].contains("loader_lock_held") &&
               records[static_cast<std::size_t>(load)].at("loader_lock_held") == false,
@@ -715,6 +722,15 @@ nlohmann::json ExpectStopLine(const std::wstring& stderr_file, const std::wstrin
 
 // What a client would have been shown, as the shim wrote it; empty when the child was shown nothing.
 std::string StopNoticeOf(const std::wstring& local) { return ReadAll((local + L"\\stop-notice.txt").c_str()); }
+
+// The notice decision a stopped run recorded: the `notice` field of its game_stop record (the console_notice record
+// that follows it carries no such field, #1533).
+std::string RecordedNotice(const std::vector<nlohmann::json>& records) {
+  for (auto it = records.rbegin(); it != records.rend(); ++it) {
+    if (it->value("event", "") == "game_stop") return it->value("notice", "");
+  }
+  return "";
+}
 
 void ExpectNoStopLine(const std::wstring& stderr_file, const char* label) {
   if (!StopLines(stderr_file).empty()) {
@@ -920,7 +936,7 @@ int RunSuite() {
     ExpectHookedRecords(ReadHostRecords(dir), "runtime_absent", true);
     ExpectStopLine(stderr_file, dir, root, {true, 78, "runtime_absent", "nevr-runtime.dll is missing; path=", "game_stop"},
                    "missing-real-stop");
-    Require(!StopNoticeOf(dir).empty() && ReadHostRecords(dir).back().value("notice", "") == "shown",
+    Require(!StopNoticeOf(dir).empty() && RecordedNotice(ReadHostRecords(dir)) == "shown",
             "a client was not shown the notice before the host ended the game");
     std::printf("rendezvous test: [missing-real-stop] the host ended the game with exit code 78 and wrote one NEVR.STOP line\n");
   }
@@ -939,7 +955,7 @@ int RunSuite() {
     ExpectHookedRecords(records, "runtime_absent", true);
     ExpectStopLine(stderr_file, dir, root, {true, 78, "runtime_absent", "nevr-runtime.dll is missing; path=", "game_stop"},
                    "missing-real-stop-server");
-    Require(StopNoticeOf(dir).empty() && records.back().value("notice", "") == "suppressed_server_or_headless",
+    Require(StopNoticeOf(dir).empty() && RecordedNotice(records) == "suppressed_server_or_headless",
             "a -server run was shown a notice");
     std::printf("rendezvous test: [missing-real-stop-server] exit code 78, one NEVR.STOP line, no dialog\n");
   }

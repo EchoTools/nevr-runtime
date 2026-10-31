@@ -49,6 +49,7 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "pinned_targets.h"
+#include "quest/integration/hook_registry_check.h"
 #include "quest/patch/libr15_patch_table.h"
 #include "quest/plugin/plugin_identity.h"
 #include "quest/tests/test_check.h"
@@ -1290,43 +1291,165 @@ void InstallIsCompareAndSwap() {
   dlclose(m.handle);
 }
 
-// 64 hooks fit; the 65th is refused with one log line; removing frees the room.
+// The registry's budget (got_hook.h, hook_budget.h): a normal hook may fill it to kRegistryCapacity - kCriticalReserve, a
+// critical one to kRegistryCapacity; the hook that finds no room is refused with ONE Error line that names it and its
+// priority, is counted and remembered by name, and writes nothing; removing hooks gives the room back.
+//
+// The synthetic image holds 100 slots, so the capacity is reached across several images (a lookup that answers with the
+// image the hook belongs to).
+constexpr int kSlotsPerImage = 100;
+constexpr std::size_t kImagesForRegistry = (kRegistryCapacity + kSlotsPerImage - 1) / kSlotsPerImage + 1;
+
+struct RegistryFixture {
+  SynthImage images[kImagesForRegistry];
+  std::vector<GotHook> hooks;
+  explicit RegistryFixture(std::size_t count) : hooks(count) {
+    SynthSpec spec;
+    for (int i = 0; i < kSlotsPerImage; ++i) {
+      spec.rels.push_back({true, kRelroSlot + 8u * static_cast<unsigned>(i), spec.nums.jumpSlot, 1, 0});
+    }
+    for (SynthImage& image : images) Build(spec, reinterpret_cast<void*>(&AddImpl), &image);
+  }
+  static GotTarget Target(std::size_t i, HookPriority priority) {
+    GotTarget t = SynthTarget();
+    t.slotVaddr = kRelroSlot + 8u * static_cast<unsigned>(i % kSlotsPerImage);
+    t.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
+    t.priority = priority;
+    return t;
+  }
+  GotStatus InstallAt(std::size_t i, HookPriority priority) {
+    g_synth = &images[i / kSlotsPerImage];
+    void* out = nullptr;
+    return Install(hooks[i], Target(i, priority), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup);
+  }
+  void* SlotValue(std::size_t i) const {
+    return *reinterpret_cast<void**>(images[i / kSlotsPerImage].image.base + kRelroSlot + 8u * (i % kSlotsPerImage));
+  }
+  // The lookup answers with whichever image g_synth points at, so a hook is removed with its own image current.
+  GotStatus RemoveAt(std::size_t i) {
+    g_synth = &images[i / kSlotsPerImage];
+    return hooks[i].Remove();
+  }
+  ~RegistryFixture() {
+    for (std::size_t i = 0; i < hooks.size(); ++i) {
+      if (hooks[i].installed()) RemoveAt(i);
+    }
+    g_synth = nullptr;
+  }
+};
+
 void RegistryBound() {
   Prepare();
-  constexpr int kHooks = 65;
-  SynthSpec spec;
-  for (int i = 0; i < kHooks; ++i) {
-    spec.rels.push_back({true, kRelroSlot + 8u * static_cast<unsigned>(i), spec.nums.jumpSlot, 1, 0});
+  ResetRegistryCountersForTest();
+  const std::size_t held = RegistrySnapshot().used;  // slots earlier cases left reserved (a poisoned one stays held)
+  const std::size_t normalRoom = kRegistryCapacity - kCriticalReserve - held;
+  const std::size_t criticalRoom = kCriticalReserve;
+  RegistryFixture fx(normalRoom + criticalRoom + 2);
+  QCHECK(fx.hooks.size() <= kImagesForRegistry * kSlotsPerImage);
+
+  // The normal hooks fill the registry up to the reserve, every one installed.
+  std::size_t installed = 0;
+  for (std::size_t i = 0; i < normalRoom; ++i) {
+    if (fx.InstallAt(i, HookPriority::kNormal) == GotStatus::kOk) ++installed;
   }
-  SynthImage img;
-  Build(spec, reinterpret_cast<void*>(&AddImpl), &img);
-  g_synth = &img;
-  std::vector<GotHook> hooks(kHooks);
-  auto target = [](int i) {
-    GotTarget t = SynthTarget();
-    t.slotVaddr = kRelroSlot + 8u * static_cast<unsigned>(i);
-    t.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
-    return t;
-  };
-  void* out = nullptr;
-  int installed = 0;
-  for (int i = 0; i < kHooks - 1; ++i) {
-    if (Install(hooks[i], target(i), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup) == GotStatus::kOk) {
-      ++installed;
-    }
-  }
-  QCHECK(installed == 64);
+  QCHECK(installed == normalRoom);
+  QCHECK(RegistrySnapshot().used == kRegistryCapacity - kCriticalReserve);
+
+  // The next normal hook finds the reserve and is refused: one Error line, naming it, and the slot is not written.
   Captured().clear();
-  QCHECK_STATUS(Install(hooks[64], target(64), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
-                GotStatus::kRegistryFull);
+  const std::size_t refusedNormal = normalRoom;
+  QCHECK_STATUS(fx.InstallAt(refusedNormal, HookPriority::kNormal), GotStatus::kRegistryFull);
   QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"status\":\"registry_full\"") == 1);
-  QCHECK(*reinterpret_cast<void**>(img.image.base + kRelroSlot + 8u * 64) ==
-         reinterpret_cast<void*>(&AddImpl));  // the refused slot was not written
-  QCHECK_STATUS(hooks[0].Remove(), GotStatus::kOk);
-  QCHECK_STATUS(Install(hooks[64], target(64), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
-                GotStatus::kOk);
-  for (int i = 1; i < kHooks; ++i) QCHECK_STATUS(hooks[i].Remove(), GotStatus::kOk);
-  g_synth = nullptr;
+  QCHECK(Count(LogLevel::kError, "\"module\":\"synthetic.so\"") == 1 && Count(LogLevel::kError, "\"symbol\":\"alpha\"") == 1);
+  QCHECK(Count(LogLevel::kError, "\"priority\":\"normal\"") == 1);
+  QCHECK(Count(LogLevel::kError, "\"capacity\":" + std::to_string(kRegistryCapacity)) == 1);
+  QCHECK(Count(LogLevel::kError, "the game keeps its own code in the slot") == 1);
+  QCHECK(fx.SlotValue(refusedNormal) == reinterpret_cast<void*>(&AddImpl));
+
+  // A critical hook is not crowded out: it takes the reserve, the whole of it, however many normal hooks came first.
+  Captured().clear();
+  for (std::size_t i = 0; i < criticalRoom; ++i) {
+    QCHECK_STATUS(fx.InstallAt(refusedNormal + 1 + i, HookPriority::kCritical), GotStatus::kOk);
+  }
+  QCHECK(Errors() == 0);
+  QCHECK(RegistrySnapshot().used == kRegistryCapacity);
+
+  // Past the whole registry even a critical hook is refused, and says so as critical.
+  Captured().clear();
+  QCHECK_STATUS(fx.InstallAt(refusedNormal + 1 + criticalRoom, HookPriority::kCritical), GotStatus::kRegistryFull);
+  QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"priority\":\"critical\"") == 1);
+
+  // The counters and the ledger say who lost, in order.
+  const RegistryStats stats = RegistrySnapshot();
+  QCHECK(stats.capacity == kRegistryCapacity && stats.criticalReserve == kCriticalReserve);
+  QCHECK(stats.refused == 2 && stats.refusedCritical == 1 && stats.ledgerCount == 2);
+  QCHECK(stats.highWater == kRegistryCapacity);
+  QCHECK(std::strcmp(stats.lost[0].module, "synthetic.so") == 0 && std::strcmp(stats.lost[0].symbol, "alpha") == 0 &&
+         !stats.lost[0].critical);
+  QCHECK(stats.lost[1].critical);
+
+  // Removing a hook gives its entry back, to a critical hook first: the normal limit is still the reserve's edge.
+  QCHECK_STATUS(fx.RemoveAt(0), GotStatus::kOk);
+  QCHECK_STATUS(fx.InstallAt(refusedNormal, HookPriority::kNormal), GotStatus::kRegistryFull);
+  QCHECK_STATUS(fx.InstallAt(refusedNormal + 1 + criticalRoom, HookPriority::kCritical), GotStatus::kOk);
+  for (std::size_t i = 1; i < refusedNormal; ++i) QCHECK_STATUS(fx.RemoveAt(i), GotStatus::kOk);
+  QCHECK_STATUS(fx.InstallAt(refusedNormal, HookPriority::kNormal), GotStatus::kOk);  // below the reserve again
+}
+
+// The ledger keeps the first kRefusalLedgerSize names and counts every refusal after them.
+void RegistryLedgerIsBounded() {
+  Prepare();
+  ResetRegistryCountersForTest();
+  const std::size_t held = RegistrySnapshot().used;
+  const std::size_t normalRoom = kRegistryCapacity - kCriticalReserve - held;
+  RegistryFixture fx(normalRoom + kRefusalLedgerSize + 3);
+  for (std::size_t i = 0; i < normalRoom; ++i) QCHECK_STATUS(fx.InstallAt(i, HookPriority::kNormal), GotStatus::kOk);
+  for (std::size_t i = 0; i < kRefusalLedgerSize + 3; ++i) {
+    QCHECK_STATUS(fx.InstallAt(normalRoom + i, HookPriority::kNormal), GotStatus::kRegistryFull);
+  }
+  const RegistryStats stats = RegistrySnapshot();
+  QCHECK(stats.refused == kRefusalLedgerSize + 3 && stats.ledgerCount == kRefusalLedgerSize);
+  const std::string text = nevr_quest::integration::DescribeRegistry(stats);
+  QCHECK(text.find("refused=" + std::to_string(kRefusalLedgerSize + 3)) != std::string::npos);
+  QCHECK(text.find("lost=synthetic.so:alpha") != std::string::npos);
+  QCHECK(text.find("more=3") != std::string::npos);
+}
+
+// The self-check: passes once with the counts when nothing was refused, fails naming the hook the first time it is polled
+// after a refusal, and stays quiet until the count moves again.
+void RegistrySelfCheckNamesTheHookThatLost() {
+  Prepare();
+  ResetRegistryCountersForTest();
+  nevr_quest::integration::ResetHookRegistryCheckForTest();
+  nevr_self_check::Observation seen;
+  QCHECK(nevr_quest::integration::HookRegistryProbe(&seen));
+  QCHECK(seen.pass && seen.observed.find("refused=0") != std::string::npos);
+  QCHECK(!nevr_quest::integration::HookRegistryProbe(&seen));  // nothing new to say
+
+  const std::size_t held = RegistrySnapshot().used;
+  const std::size_t normalRoom = kRegistryCapacity - kCriticalReserve - held;
+  RegistryFixture fx(normalRoom + 2);
+  for (std::size_t i = 0; i < normalRoom; ++i) QCHECK_STATUS(fx.InstallAt(i, HookPriority::kNormal), GotStatus::kOk);
+  QCHECK_STATUS(fx.InstallAt(normalRoom, HookPriority::kNormal), GotStatus::kRegistryFull);
+  QCHECK(nevr_quest::integration::HookRegistryProbe(&seen));
+  QCHECK(!seen.pass);
+  QCHECK(seen.observed.find("refused=1") != std::string::npos && seen.observed.find("lost=synthetic.so:alpha") != std::string::npos);
+  QCHECK(seen.observed.size() <= nevr_self_check::kMaxTextBytes);
+  QCHECK(!nevr_quest::integration::HookRegistryProbe(&seen));
+  QCHECK_STATUS(fx.InstallAt(normalRoom + 1, HookPriority::kNormal), GotStatus::kRegistryFull);
+  QCHECK(nevr_quest::integration::HookRegistryProbe(&seen) && !seen.pass && seen.observed.find("refused=2") != std::string::npos);
+}
+
+// A target that asks for the reserve is the same target otherwise.
+void CriticalTargetIsTheSameTargetWithAPriority() {
+  const GotTarget base("libx.so", "sym", RelocKind::kGlobDat, "abcd", 0x1230ULL, reinterpret_cast<const void*>(0x10));
+  QCHECK(base.priority == HookPriority::kNormal);
+  const GotTarget critical = base.Critical();
+  QCHECK(critical.priority == HookPriority::kCritical);
+  QCHECK(std::strcmp(critical.module, "libx.so") == 0 && std::strcmp(critical.symbol, "sym") == 0 &&
+         critical.kind == RelocKind::kGlobDat && std::strcmp(critical.buildId, "abcd") == 0 &&
+         critical.slotVaddr.value() == 0x1230ULL && critical.expectedOriginal == reinterpret_cast<const void*>(0x10));
+  QCHECK(base.priority == HookPriority::kNormal);  // the original is untouched
 }
 
 void AfterStoreClobberObserver(void** slot, void*, StorePhase phase) {
@@ -1855,6 +1978,9 @@ int main(int argc, char** argv) {
   ReprotectFailureDoesNotHideAnEarlierFailure();
   RollbackCompareAndSwapFailureIsLogged();
   RegistryBound();
+  RegistryLedgerIsBounded();
+  RegistrySelfCheckNamesTheHookThatLost();
+  CriticalTargetIsTheSameTargetWithAPriority();
   ArmRefusesARecordOutsideTheSection();
   PoisonedSlotIsKeptWhenMapsAreUnreadable();
   ReporterStartStopRace();

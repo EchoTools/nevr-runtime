@@ -21,6 +21,7 @@
 #include "runtime/hook/hook_guard.h"
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/log/boot_replay.h"
+#include "runtime/log/bridge_line.h"
 #include "runtime/log/game_line_format.h"
 #include "runtime/log/gpu_hung_notice.h"
 #include "runtime/log/rate_limiter.h"
@@ -1075,6 +1076,10 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     MaybeEmitHealth();  /* N79 */
 
     ObserveGpuHung(buf);
+
+    /* #1294: the game's report of its own connection to the local bridge is a Debug line. The helper matches
+     * game lines only (a line the runtime writes is never demoted here, N77). */
+    if (nevr_bridge_line::IsBridgeConnectionLine(buf)) level = LOG_LEVEL_DEBUG;
 
     if (ShouldSuppress(buf, level)) {
         g_suppressed_count++;

@@ -103,12 +103,25 @@ enum class GotStatus : std::uint8_t {
   kNotInstalled,
   kModuleChanged,          // Remove: the module unloaded, moved or no longer resolves the slot
   kSlotChanged,            // the slot no longer holds the value this write expected (chained hook, reload)
-  kRegistryFull,           // more than 64 hooks in one process
+  kRegistryFull,           // the registry has no room for this hook (kRegistryCapacity, kCriticalReserve below)
   kSlotPoisoned,           // a failed Install left our entry possibly reachable through this slot
 };
 
 // Stable tokens for log lines and tests.
 const char* GotStatusName(GotStatus status);
+
+// The registry of reserved slots: one entry for every slot a handle holds, process-wide. Its size is a budget, not a guess:
+// hook_budget.h lists the handles every file declares, a static_assert there keeps the sum plus its headroom inside
+// kRegistryCapacity, and tools/tests/test_quest_hook_budget.py checks the list against the source.
+inline constexpr std::size_t kRegistryCapacity = 256;
+
+// The room only a kCritical hook may use. A hook the game cannot be played without (the login, the matchmaking redirect and
+// the login's prerequisites) takes its slot from the whole registry; every other hook stops kCriticalReserve entries short of
+// it, so no number of normal hooks, the crash handler's among them, can leave a critical one without a slot. Those hooks
+// install after the game loads libpnsrad* (the dlopen hook), long after the constructor filled the rest.
+inline constexpr std::size_t kCriticalReserve = 40;
+
+enum class HookPriority : std::uint8_t { kNormal, kCritical };
 
 // A second build ID a target may carry for a module (ADR 0021 section 12). The libr15 the game runs is a patched copy of the
 // stock file whose live GNU note is a derived ID, while a plugin's addresses are properties of the stock file: the caller
@@ -120,6 +133,11 @@ const char* GotStatusName(GotStatus status);
 using BuildIdAliasFn = const char* (*)(const char* liveNote);
 BuildIdAliasFn SetBuildIdAlias(BuildIdAliasFn fn);
 
+// A live build ID that a service-side target (GotTarget::serviceSide) accepts in place of its own (#1737). Attach sets it
+// once, to the stock ID, when the live libr15 is a pinned file run in service-only mode: then only the service-side hooks
+// install on it, and every other libr15 hook refuses as build_id_mismatch. nullptr (the default): no such ID.
+void SetServiceSideBuildId(const char* liveNote) noexcept;
+
 // What to hook. Every string must outlive the handle (string literals).
 struct GotTarget {
   const char* module;   // soname, or a path whose last segment is the soname
@@ -128,6 +146,8 @@ struct GotTarget {
   const char* buildId;  // lowercase hex GNU build ID, or nullptr to skip
   std::optional<std::uint64_t> slotVaddr;  // pinned link-time address of the slot
   const void* expectedOriginal;            // exact slot value, or nullptr to require plausibility
+  HookPriority priority = HookPriority::kNormal;  // kCritical: may use the registry's reserve (kCriticalReserve)
+  bool serviceSide = false;  // a service-side hook (sign-in, matchmaking, redirect): see SetServiceSideBuildId
 
   GotTarget(const char* moduleName, const char* symbolName, RelocKind relocKind,
             const char* build = nullptr, std::optional<std::uint64_t> pinnedSlot = std::nullopt,
@@ -138,6 +158,20 @@ struct GotTarget {
         buildId(build),
         slotVaddr(pinnedSlot),
         expectedOriginal(original) {}
+
+  // The same target, marked as a service-side hook (SetServiceSideBuildId).
+  GotTarget ServiceSide() const {
+    GotTarget copy = *this;
+    copy.serviceSide = true;
+    return copy;
+  }
+
+  // The same target, taken from the registry's reserve when the registry is otherwise full.
+  GotTarget Critical() const {
+    GotTarget copy = *this;
+    copy.priority = HookPriority::kCritical;
+    return copy;
+  }
 };
 
 // A loaded (or synthetic) ELF64 image: load bias and program headers.
@@ -177,13 +211,37 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
 // released, so a retry cannot publish a foreign hook that chains our entry as the original
 // and build a call cycle; it is refused with kSlotPoisoned. Nothing in the sentinel calls this:
 // the game's libraries are never unloaded, so there is no unload hook point to call it from.
-// A poisoned slot occupies one of the 64 registry entries for the rest of the process, and a
+// A poisoned slot occupies one registry entry for the rest of the process, and a
 // module reloaded at the same address gets kSlotPoisoned until this has released it.
 //
 // Residual window, not closed: a foreign writer that reads our entry inside the store-to-
 // rollback window and stores its own chain after a SUCCESSFUL rollback leaves a hook that
 // calls our entry through a slot we released rather than poisoned.
 void ReleasePoisonedSlotsIn(const void* begin, std::size_t length);
+
+// What the registry holds and what it turned away, for the start-up summary and the self-check. A refusal is
+// kRegistryFull: the hook was NOT installed and the game runs its own code in that slot.
+struct RegistryRefusal {
+  char module[64];
+  char symbol[48];
+  bool critical;
+};
+inline constexpr std::size_t kRefusalLedgerSize = 8;
+
+struct RegistryStats {
+  std::size_t capacity = kRegistryCapacity;
+  std::size_t criticalReserve = kCriticalReserve;
+  std::size_t used = 0;             // entries held now (poisoned ones included)
+  std::size_t highWater = 0;        // the most entries held at once, this process
+  std::size_t refused = 0;          // installs turned away for want of room, this process
+  std::size_t refusedCritical = 0;  // of those, how many were critical
+  std::size_t ledgerCount = 0;      // entries of `lost` that are filled (the first kRefusalLedgerSize refusals)
+  RegistryRefusal lost[kRefusalLedgerSize] = {};
+};
+RegistryStats RegistrySnapshot();
+
+// Test seam: empties the registry's counters and the refusal ledger. Slots held by live handles stay held.
+void ResetRegistryCountersForTest();
 
 // Test seam: how /proc/self/maps is opened (default: open(2) on that path). A test returns a
 // descriptor whose reads fail or end at once to show that unreadable maps never read as

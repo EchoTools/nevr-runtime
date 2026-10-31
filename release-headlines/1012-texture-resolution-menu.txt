@@ -1,1 +1,0 @@
-Quest: the settings menu has a Texture Resolution control, six levels from Very Low to Ultra, that applies at once and is remembered.

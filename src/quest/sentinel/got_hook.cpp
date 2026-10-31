@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "core/hook_lifecycle.h"
+#include "hook_budget.h"
 #include "hook_log.h"
 
 namespace sentinel {
@@ -39,7 +40,6 @@ class Lock {
   Lock& operator=(const Lock&) = delete;
 };
 
-constexpr std::size_t kMaxSlots = 64;
 struct SlotEntry {
   void** slot = nullptr;
   // Our entry was stored in this slot and may still be reachable through it (another
@@ -47,27 +47,53 @@ struct SlotEntry {
   // so a retry cannot publish that foreign hook as the original and build a call cycle.
   bool poisoned = false;
 };
-SlotEntry g_slots[kMaxSlots] = {};
+SlotEntry g_slots[kRegistryCapacity] = {};
 std::size_t g_slotCount = 0;
+std::size_t g_highWater = 0;
+std::size_t g_refused = 0;
+std::size_t g_refusedCritical = 0;
+RegistryRefusal g_ledger[kRefusalLedgerSize] = {};
+std::size_t g_ledgerCount = 0;
 
 std::atomic<StoreObserver> g_storeObserver{nullptr};
 std::atomic<ProtectFn> g_protect{nullptr};
 std::atomic<BuildIdAliasFn> g_buildIdAlias{nullptr};
+std::atomic<const char*> g_serviceSideBuildId{nullptr};
 
 int Protect(void* addr, std::size_t length, int prot) {
   const ProtectFn fn = g_protect.load(std::memory_order_acquire);
   return fn != nullptr ? fn(addr, length, prot) : mprotect(addr, length, prot);
 }
 
-GotStatus ReserveSlot(void** slot) {
+void CopyName(char* out, std::size_t capacity, const char* text) {
+  std::snprintf(out, capacity, "%s", text != nullptr ? text : "(null)");
+}
+
+// Reserves `slot`. A normal hook may fill the registry up to kRegistryCapacity - kCriticalReserve; a critical one, to
+// kRegistryCapacity. A refusal is counted and remembered by name (the first kRefusalLedgerSize), so the start-up summary
+// and the self-check can say which hook lost, whatever the log sink did with the line.
+GotStatus ReserveSlot(void** slot, const GotTarget& target) {
   const Lock lock;
   for (std::size_t i = 0; i < g_slotCount; ++i) {
     if (g_slots[i].slot == slot) {
       return g_slots[i].poisoned ? GotStatus::kSlotPoisoned : GotStatus::kAlreadyInstalled;
     }
   }
-  if (g_slotCount == kMaxSlots) return GotStatus::kRegistryFull;
+  const bool critical = target.priority == HookPriority::kCritical;
+  const std::size_t limit = critical ? kRegistryCapacity : kRegistryCapacity - kCriticalReserve;
+  if (g_slotCount >= limit) {
+    ++g_refused;
+    if (critical) ++g_refusedCritical;
+    if (g_ledgerCount < kRefusalLedgerSize) {
+      RegistryRefusal& lost = g_ledger[g_ledgerCount++];
+      CopyName(lost.module, sizeof(lost.module), target.module);
+      CopyName(lost.symbol, sizeof(lost.symbol), target.symbol);
+      lost.critical = critical;
+    }
+    return GotStatus::kRegistryFull;
+  }
   g_slots[g_slotCount++] = SlotEntry{slot, false};
+  if (g_slotCount > g_highWater) g_highWater = g_slotCount;
   return GotStatus::kOk;
 }
 
@@ -637,11 +663,31 @@ void LogFailure(const char* op, const GotTarget& t, GotStatus status, const char
              {"symbol", symbol}, {"reloc", RelocKindName(t.kind)}, {"errno", err}});
 }
 
+// The refusal for want of room, one Error line that names the hook that lost and says what that costs. The registry
+// is a budget (hook_budget.h): a line like this one means the budget no longer covers the build, which is a defect to fix,
+// not a condition to ride out.
+void LogRegistryFull(const GotTarget& t) {
+  const RegistryStats stats = RegistrySnapshot();
+  const bool critical = t.priority == HookPriority::kCritical;
+  LogFields(LogLevel::kError, "got_hook",
+            {{"op", "install"}, {"status", "registry_full"}, {"module", t.module}, {"symbol", t.symbol},
+             {"reloc", RelocKindName(t.kind)}, {"priority", critical ? "critical" : "normal"},
+             {"capacity", static_cast<long long>(stats.capacity)}, {"used", static_cast<long long>(stats.used)},
+             {"critical_reserve", static_cast<long long>(stats.criticalReserve)},
+             {"refused_total", static_cast<long long>(stats.refused)},
+             {"consequence", "this hook is not installed; the game keeps its own code in the slot"}});
+}
+
 // A target's build ID is accepted when it equals the module's live note, or the alias the registered function gives
 // that note (SetBuildIdAlias). The alias is asked at every install, with the note read for it, so what it maps can
 // change only with what it reads.
-bool BuildIdAccepted(const char* liveNote, const char* targetBuildId) {
+bool BuildIdAccepted(const char* liveNote, const GotTarget& target) {
+  const char* const targetBuildId = target.buildId;
   if (std::strcmp(liveNote, targetBuildId) == 0) return true;
+  if (target.serviceSide) {
+    const char* const service = g_serviceSideBuildId.load(std::memory_order_acquire);
+    if (service != nullptr && std::strcmp(liveNote, service) == 0) return true;
+  }
   const BuildIdAliasFn alias = g_buildIdAlias.load(std::memory_order_acquire);
   if (alias == nullptr) return false;
   const char* const mapped = alias(liveNote);
@@ -653,7 +699,7 @@ GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Pre
   if (!lookup(target.module, &out->image)) return GotStatus::kModuleNotLoaded;
   if (target.buildId != nullptr) {
     if (!ReadBuildId(out->image, out->actualBuildId, sizeof(out->actualBuildId)) ||
-        !BuildIdAccepted(out->actualBuildId, target.buildId)) {
+        !BuildIdAccepted(out->actualBuildId, target)) {
       return GotStatus::kBuildIdMismatch;
     }
   }
@@ -667,13 +713,17 @@ GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Pre
   } else if (current == nullptr || !IsExecutableAddress(current)) {
     return GotStatus::kOriginalImplausible;
   }
-  const GotStatus reserved = ReserveSlot(out->resolution.slot);
+  const GotStatus reserved = ReserveSlot(out->resolution.slot, target);
   if (reserved != GotStatus::kOk) return reserved;
   out->original = current;
   return GotStatus::kOk;
 }
 
 }  // namespace
+
+void SetServiceSideBuildId(const char* liveNote) noexcept {
+  g_serviceSideBuildId.store(liveNote, std::memory_order_release);
+}
 
 BuildIdAliasFn SetBuildIdAlias(BuildIdAliasFn fn) {
   return g_buildIdAlias.exchange(fn, std::memory_order_acq_rel);
@@ -708,6 +758,27 @@ void ReleasePoisonedSlotsIn(const void* begin, std::size_t length) {
       ++i;
     }
   }
+}
+
+RegistryStats RegistrySnapshot() {
+  const Lock lock;
+  RegistryStats stats;
+  stats.used = g_slotCount;
+  stats.highWater = g_highWater;
+  stats.refused = g_refused;
+  stats.refusedCritical = g_refusedCritical;
+  stats.ledgerCount = g_ledgerCount;
+  for (std::size_t i = 0; i < g_ledgerCount; ++i) stats.lost[i] = g_ledger[i];
+  return stats;
+}
+
+void ResetRegistryCountersForTest() {
+  const Lock lock;
+  g_highWater = g_slotCount;
+  g_refused = 0;
+  g_refusedCritical = 0;
+  g_ledgerCount = 0;
+  for (RegistryRefusal& entry : g_ledger) entry = RegistryRefusal{};
 }
 
 MapsOpener SetMapsOpener(MapsOpener opener) {
@@ -760,6 +831,10 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
       // published for it.
       [&] { return outcome != StoreOutcome::kNotStored; });
 
+  if (status == GotStatus::kRegistryFull) {
+    LogRegistryFull(target);
+    return status;
+  }
   if (stage != nevr::hook::AttachStage::kAttached) {
     LogFailure("install", target, status, nevr::hook::AttachStageName(stage), savedErrno,
                status == GotStatus::kBuildIdMismatch ? prepared.actualBuildId : nullptr);

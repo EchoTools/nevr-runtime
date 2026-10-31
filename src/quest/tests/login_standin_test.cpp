@@ -76,6 +76,31 @@ int main() {
     QCHECK((SI::UserId() >> 63) == 0 && SI::UserId() != 0 && SI::UserId() != SI::OrgId());
   }
 
+  // The user id is drawn again while it equals the org id. The collision is 2^-63 by chance, so the draws are scripted:
+  // org 5, then a user draw of 5 (redrawn), then 7. A Generate without the redraw keeps 5 and fails the first check.
+  {
+    static int draws = 0;
+    static const std::uint64_t kScript[] = {5, 5, 7};
+    SI::SetRandomForTest([](void* buf, std::size_t n) {
+      if (n != sizeof(std::uint64_t)) {
+        std::memset(buf, 0x5a, n);
+        return;
+      }
+      const std::uint64_t value = kScript[draws < 2 ? draws : 2];
+      ++draws;
+      std::memcpy(buf, &value, sizeof(value));
+    });
+    SI::ResetForTest();
+    draws = 0;
+    SI::Generate();
+    QCHECK(SI::OrgId() == 5);
+    QCHECK(SI::UserId() == 7);  // the colliding 5 was drawn again
+    QCHECK(SI::UserId() != SI::OrgId());
+    QCHECK(draws == 3);         // three eight-byte draws: the org, the colliding user, the redraw
+    SI::SetRandomForTest(nullptr);
+    SI::ResetForTest();
+  }
+
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "login_standin_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

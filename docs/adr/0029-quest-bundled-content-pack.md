@@ -98,6 +98,10 @@ line. A data step that failed or found no data (`kFailed`, `kMissing`) or ended 
     manifest), `pack_step` (`outcome` placed, current, stock_mismatch, invalid or failed; `id`, `version`, `root`, `duration_ms`,
     `status`) and, after a placement, `data_version` with the manifest digest read back from the root (so a report says which data is in
     place) and the pack's id and version.
+11. **The data step looks at the pack's packages too.** Before the pack step, the data step checks the package files of a pinned data
+    set (`src/quest/data/package_pins.h`, which holds the pack's manifest digest and the length and sha-256 of its packages; ADR 0011,
+    "The packages"). A missing or wrong package is a `data_packages` Warning and does not change the decision; the repair in item 5
+    follows when the APK carries the pack.
 
 ### 4. Platform parity
 

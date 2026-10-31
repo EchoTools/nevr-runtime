@@ -136,6 +136,13 @@ here until a passing run on a current build is recorded in that issue.
    a legacy `dbgcore.dll` there as `dbgcore.dll.legacy-<date>` and installs the two files. The only file of ours in
    the game folder is `BugSplat64.dll`. It deletes nothing, puts the folder back as it was if a
    step fails, and writes a `[NEVR.INSTALL]` log whose path it prints.
+
+   If you installed the beta by hand ([`docs/beta/INSTALL.md`](docs/beta/INSTALL.md)), the game folder already holds
+   our `BugSplat64.dll`, and `install.ps1` cannot record the game's own file it replaced. Put the game's file back
+   first: copy `%LOCALAPPDATA%\nevr\echovr\installer\aside\BugSplat64.dll.original` over `bin\win10\BugSplat64.dll`,
+   or use Verify Files (Steam or the Meta Horizon app). Then run `install.ps1`. If neither is possible, `install.ps1`
+   still installs, but it marks the game's file as unknown, and `uninstall.ps1` then refuses to run until the game's
+   file is restored.
 3. **Uninstall:** `uninstall.ps1 -Dir <bin\win10>` (plus `-Root <folder>` when `install.ps1` was given one) restores both and keeps the backups.
 4. **Quest:** the Quest APK is not on GitHub: it repacks the store game. When a release has one (its release
    notes say so), it is at `https://evr.echo.taxi/nevr-runtime/v<X.Y.Z>/nevr-runtime-v<X.Y.Z>-quest.apk`, the
@@ -312,7 +319,8 @@ into the runtime.
   and the plugin-side helpers, header-only
 - `src/extension/` — header-only published C ABI for the static modules and the scripting host
 - `src/launcher/` → `echovr_server.exe`, a `CreateProcess` wrapper spawning
-  `echovr.exe -server -headless -no-console` (a dedicated game server)
+  `echovr.exe -server -headless -no-console` (a dedicated game server); its window shows the server's run log
+  (`%LOCALAPPDATA%\nevr\echovr\logs`) until the server exits
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub, built
   separately from the community beta package
 - `src/quest/` — separate Android/Quest arm64 target

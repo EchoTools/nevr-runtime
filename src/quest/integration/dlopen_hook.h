@@ -22,7 +22,9 @@ sentinel::GotTarget LibR15Dlopen();
 
 enum class DlopenInstall : std::uint8_t { kOk, kFailed };
 
-// Installs the thunk. `status` receives GotHook's answer (logged by GotHook itself as well).
+// Installs the thunk. `status` receives GotHook's answer (logged by GotHook itself as well). Idempotent: once the thunk is
+// live, a further call answers kOk with kOk and installs nothing (two steps of the constructor sequence install it: crash-first
+// and the post-load actions).
 DlopenInstall InstallDlopenHook(sentinel::GotStatus* status) noexcept;
 
 // Registers the hook's counter (calls) with the reporter. Before StartReporter.

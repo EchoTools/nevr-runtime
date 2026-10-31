@@ -23,11 +23,15 @@ Neither library is in a release or package-dev APK. `just build-quest-q15t` buil
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, meshstep (`Q15T_MESHSTEP`, #1555), gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, shaderstep (#1553), instmodel, sendguard, ec, ecfx, the menu gate
-  (`Q15T_GATE_LINK`), `Q15T_SHIELDGAMMA=2`, and the new-profile gun hand (`Q15T_T26`).
+- On: fxtrail, voipdrop, custctx, meshstep (`Q15T_MESHSTEP`, #1555), gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, shaderstep (#1553), instmodel, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), ec, ecfx, droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), the menu gate
+  (`Q15T_GATE_LINK`), `Q15T_SHIELDGAMMA=2`, the new-profile gun hand (`Q15T_T26`), and the three combat gates
+  (`src/quest/plugins/q15t/src/combat_gates.h`): the party-permissions gate (`Q15T_GATE_PERM`, kill file `gate_perm.off`), levelname with boosterpool
+  (`Q15T_LEVELNAME`, kill file `levelname.off`) and the bot-body gate (`Q15T_GATE_BOTS`, kill file `gate_bots.off`). The bot-body
+  gate is installed only while levelname is: the combat bot body exists only in the full-size global_mp level. One
+  `q15t_combat_gates_install` line per run states which of the three are on and why. The refresh-rate level rule (`Q15T_HZ_MATCH90`: 90 Hz, 72 on a Quest 2, on combat maps and in the lobby; kill files `hzlevel.off`, `hzlobby90.off`, `hz72q2.off`) is on too.
 - `ec` is on with the words `types=VPTO equip hide` (`Q15T_EC_DEFAULT_WORDS`), and `ecfx` is on (`Q15T_ECFX_DEFAULT_ON`),
   with no switch file. A switch file in the plugin data directory still overrides the words.
-- Off: droneguard, peerclamp, dronekill, dronemuzzle, hudmeter, levelname (with its companion boosterpool), `Q15T_POWERBOOST=0`, `Q15T_GATE_PERM`, `Q15T_GATE_BOTS`.
+- Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).
 - The menu gate (`Q15T_GATE_LINK`) answers "no kind of headset" only to the 21 script libraries of the combat entries
   (`Q15T_LINK_GATE_LIBS`): the 20 of the combat menu and the lobby script (`libf808c072bb49da47.so`, which loads the lobby's combat
   wing); the other 26 libraries that bind the headset-type expression get the real answer. Each library's first bind logs `headset bind lib=<file> answered=<real|not-a-Quest>`. A `gate_libs.txt` in the plugin data

@@ -209,7 +209,7 @@ that each Kind and rank is true.
 | N4 | run | A server whose config fails to load, or whose shutdown hangs, exits; it never blocks forever (`ForceFatalExit` through the registered fatal handler; a teardown watchdog). | `src/core/nevr_config.h`, `src/core/nevr_config_policy.cpp`, `src/runtime/lifecycle/crash_recovery.cpp` | unchecked: nothing drives a failed config load or a hung shutdown |
 | N36 | run | Guarded initialization (`InitializeAfterGameImageGuard`) runs from the runtime's `initialize` (`runtime_entry.cpp`), which the host's detour on the game's main wrapper calls once, outside the loader lock, in the boot phase: it calls `nevr_boot_log_tee::Init()` before `InitializeFunctionPointers()`, and every return passes `nevr_boot_log_tee::Close()`. In the boot phase `Log()` reports through the boot tee (the sink `Init()` sets with `SetBootLogSink`), never the game's CLog, so code shared with later phases calls `Log()` and never branches on the phase. | `src/runtime/lifecycle/initialize.cpp`, `src/core/logging.cpp`, `src/runtime/log/boot_log_tee.cpp` | rank 2: `src/runtime/tests/test_boot_log_routing.cpp` (the routing); rank 3: verify (the call order), `tools/tests/test_patch_detour_logging.py` (the sink, the early return, no caller branching) |
 | (unnamed) | source | `DllMain` never runs plugin shutdown or unload (it holds the loader lock). | `src/runtime/lifecycle/dllmain.cpp` | rank 3: verify (sensor "Plugin detach teardown boundary", which names no rule) |
-| N43 | source | The boot log tee (`nevr_boot_log_tee`) deliberately opens and writes its file during initialization, through kernel32 calls only (no CRT locks), so it stays safe if a caller ever holds the loader lock; initialization runs from the host's wrapper detour, not from `DllMain`, so the addendum's no-file-I/O-from-DllMain rule does not reach it. | `src/runtime/log/boot_log_tee.h`, `src/runtime/log/boot_log_tee.cpp`, `src/runtime/lifecycle/initialize.cpp` | none |
+| N43 | source | The boot log tee (`nevr_boot_log_tee`) deliberately opens and writes its file during initialization, through kernel32 calls only (no CRT locks), so it stays safe if a caller ever holds the loader lock; initialization runs from the host's wrapper detour, not from `DllMain`, so the addendum's no-file-I/O-from-DllMain rule does not reach it. | `src/runtime/log/boot_log_tee.h`, `src/runtime/log/boot_log_tee.cpp`, `src/runtime/lifecycle/initialize.cpp` | rank 3: verify (N43: `boot_log_tee.cpp` has no CRT file call and opens and writes its file with `CreateFileA` and `WriteFile`); unchecked: that the tee is never entered with the loader lock held in a run |
 | N59 | source | Initialization calls `PatchDscProvider()` (the PSN/??? to DSC provider-string rewrite). | `src/runtime/lifecycle/initialize.cpp` | rank 3: verify |
 | N62 | source | The signal-delivered shutdown never takes the loader lock: its dependencies are resolved once at init (`ResolveShutdownDependencies`), nothing is resolved at shutdown, and the signal-context flag is `volatile sig_atomic_t`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/boot.cpp` | rank 3: verify |
 | N63 | run | A second signal during shutdown calls `ForceFatalExit`; it never sleeps and returns. | `src/runtime/lifecycle/crash_recovery.cpp` | unchecked: nothing sends a second signal; rank 3: verify |
@@ -259,7 +259,7 @@ that each Kind and rank is true.
 | N89 | run | The loader refuses a plugin whose function is built in (`log_filter.dll`). | `src/runtime/ext/plugin_loader.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp`; rank 3: verify |
 | N95 | source | `log-filter` is neither built nor packaged. | every tracked CMake file, `CMakeLists.txt` | rank 3: verify |
 | N114 | source | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 8. | `src/runtime/ext/plugin_loader.cpp`, `sdk/include/nevr/plugin_interface.h` | rank 3: verify |
-| N135 | run | A plugin logs through the host: every context the loader passes a plugin (init, per-frame, state change) carries that plugin's `plugin_id` (its `config.yaml` entry's name) and the host's `log` function (`HostPluginLog`), whose line is `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` through `Log()`; a plugin's text cannot start a second line or overrun the boot buffer (`plugin_log.h`); `plugin_logger.h` binds to it at init and falls back to stderr only before that or on a host older than v6. | `sdk/include/nevr/plugin_interface.h`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_log.h`, `sdk/include/nevr/plugin_logger.h` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`PluginLogApi`, `PluginLoaderDiagnosticTest`), `src/runtime/tests/test_plugin_log.cpp`, `src/runtime/tests/test_plugin_logger.cpp`; rank 3: `tools/tests/test_runtime_lifecycle_invariants.py` |
+| N135 | run | A plugin logs through the host: every context the loader passes a plugin (init, per-frame, state change) carries that plugin's `plugin_id` (its `config.yaml` entry's name) and the host's `log` function (`HostPluginLog`), whose line is `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` through `Log()`; a plugin's text cannot start a second line or overrun the boot buffer (`plugin_log.h`); `plugin_logger.h` holds the lines a plugin logs before its bind and writes them through the host at the bind, in order; stderr only on a host older than v6 or a context with no log function, and that bind says so there. | `sdk/include/nevr/plugin_interface.h`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_log.h`, `sdk/include/nevr/plugin_logger.h` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`PluginLogApi`, `PluginLoaderDiagnosticTest`), `src/runtime/tests/test_plugin_log.cpp`, `src/runtime/tests/test_plugin_logger.cpp`; rank 3: `tools/tests/test_runtime_lifecycle_invariants.py` |
 | N120 | run | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure, a failed byte write and a failed `GetProviderPrefix` (OVR-ORG) detour alike (`g_bootHookFailed` with a cause, so `boot.cpp` refuses the server), and the server bring-up prologues are validated at boot (`ValidatePrologue`, N97) with a mismatch escalated to `ServerFatal` (see N102). | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/boot.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`XpidPatchBoot`, `XpidPrefixDetourBoot`), `src/runtime/tests/test_server_bringup.cpp`; rank 3: verify, `tools/tests/test_server_bringup_wiring.py`; unchecked: the HookGuard verdict's escalation and `platform_compat`'s TLS-hook failure on a server (verify only) |
 | N133 | source | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 36 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | rank 2: `src/runtime/tests/test_behavioral.cpp`; rank 3: verify (N133 S7a-d) |
 | N134 | run | The plugin set is the ordered `plugins:` list in `config.yaml`, and a required plugin that fails to load is a failure (S6); plugins get `ctx_size` and the plugin-query API, and load in capability-priority order (S8). | `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_loader.h`, `src/runtime/ext/plugin_load_plan.h`, `src/runtime/lifecycle/service_config.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp`, `src/runtime/tests/test_plugin_load_plan.cpp`; rank 3: verify (N134 S8, N114 S7) |
@@ -297,7 +297,7 @@ that each Kind and rank is true.
 
 | Rule | Kind | Statement | Guards | Checked by |
 | --- | --- | --- | --- | --- |
-| N17 | run | A component that installs several hooks reports each outcome by name, plus one aggregate line at Info. | `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/pnsrad_enabler.cpp` | unchecked: nothing names it |
+| N17 | run | A component that installs several hooks reports each outcome by name, plus one aggregate line at Info. | `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/pnsrad_enabler.cpp` | rank 3: verify (N17: `platform_compat.cpp` names its three hooks and logs the aggregate at Info; `pnsrad_enabler.cpp` logs its aggregate at Info); unchecked: that each hook reports its own outcome by name (the sensor reads the aggregate lines only), and that a run emits the lines |
 | N18 | run | The built-in filter is validated by a measured suppression ratio (`docs/standards/logging.md` Rule 4); see N79. | `src/runtime/log/builtin_filter.cpp` | unchecked: verify (through N79) finds the summary code, not a measured ratio |
 | N45, N81 | source | No bare `[NEVR]` tag on a log line; use a subsystem tag from `docs/standards/logging.md` (`--help` strings in `cli.cpp` are not log lines). | `src/runtime`, `src/abi`, `src/core` | rank 3: verify |
 | N47, N94 | source | The `[NEVR.AUTH]` per-step detail lines are Debug, pinned by their text, and the level mapping that carries them is pinned too. | `src/modules/token-auth/src/token_auth.cpp`, `src/core/device_auth_flow.cpp`, `src/core/auth_token_refresh.h` | rank 3: verify |
@@ -309,7 +309,7 @@ that each Kind and rank is true.
 | N90 | run | pnsrad.dll's own `CLog::PrintfImpl` is hooked, so its output goes through the filter; the hook is installed from the live tick. | `src/runtime/log/builtin_filter.h`, `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | rank 3: verify; unchecked: that the hook installs and routes pnsrad output in a run |
 | N108 | source | `src/abi/` never includes `src/core/`. | `src/abi` | rank 3: verify |
 | N109 | source | `src/runtime/CMakeLists.txt` does not put its own source directory on the include path. | `src/runtime/CMakeLists.txt` | rank 3: verify |
-| N122, N124 | run | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled, the server bring-up prologue check). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp`, `src/runtime/lifecycle/state_machine.cpp` | rank 1: a run scored by `tests/smoke/score-log.sh`, by hand (nothing in verify) |
+| N122, N124 | run | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled, the server bring-up prologue check). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp`, `src/runtime/lifecycle/state_machine.cpp` | rank 3: `tools/tests/test_server_bringup_wiring.py` (the bring-up prologue outcome is logged at Info), `tools/tests/test_netgun_bullets_wiring.py` (the server-mode branch logs at Info); unchecked: the UPnP and telemetry decision lines, which no verify sensor or test names (`tests/smoke/score-log.sh` reads a captured run by hand) |
 
 #### The game folder
 
@@ -707,6 +707,12 @@ your seat name, for example `claude-main` or `codex`.
 - **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
   Never interrupt another agent's build.
 - **At most three heavy builds at once per seat,** so the usage window and memory both hold.
+- **Cached builds come from one fixed, clean checkout.** The merge foreman builds in `<work root>/build-checkout/nevr-runtime`
+  (`$NEVR_BUILD_CHECKOUT`), moved to the commit with `just build-checkout <rev>`, and a build there refuses unless
+  `git status --porcelain` is empty (`tools/build_checkout.py guard`). The path never changes, so the Quest build keeps the
+  ccache launcher only there; in any other tree its debug info would carry that tree's path, and the launcher is off. Nobody edits
+  that checkout. One config (`tools/ccache.conf`, copied into the cache directory) is read by every build; `just ccache-stats` shows
+  the cache as the builds see it, where a bare `ccache -s` shows ccache's 5 GiB default (#1736).
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
   Never point a build at `~/.vcpkg` directly.
 - **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
@@ -846,7 +852,9 @@ your seat name, for example `claude-main` or `codex`.
     `cp -a`, which it deletes when the run ends. A run writes into whatever copy it uses: the Wine
     registry under `echovr/.wineprefix`, the files it deploys, and logs. `launch-client.sh` reads the
     run's log under `echovr/.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr/logs`;
-    `verify-server.sh` reads `echovr/bin/win10/logs` (that the runtime writes there is unverified).
+    `verify-server.sh` reads its own run's capture, `$OUT/server.log` (the summary names the file), and exits 1 unless
+    the game ran its whole window and the capture holds the required boot line (`Finished initializing engine`, plus
+    `LOGIN SUCCESS` and `registration successful` for an install config). It refuses to run without `NEVR_GAME_ROOT`.
     `launch-client.sh` and `verify-server.sh` put back what they deploy on a normal or trapped exit,
     not after a SIGKILL: `launch-client.sh` only prints ERROR when its restore fails and then saves
     the leftover test DLL as the "original" on the next run, while `verify-server.sh` recovers from
@@ -914,10 +922,12 @@ your seat name, for example `claude-main` or `codex`.
   It then seeds `build/$PRESET` (`PRESET`, default `mingw-release`, as the justfile reads it) from the main
   checkout's, with `tools/seed_build_tree.py`: the configured tree is copied with the checkout path rewritten in its
   text files, ninja's deps log and ninja's build log (paths and command hashes), and the mtimes of source files
-  identical to the main checkout's are aligned, so a build that follows compiles only what differs. It seeds only an
-  absent or empty `build/$PRESET`, only a tree whose `build.ninja` names the commit it was built at (a tree that does not is refused) and that commit is this
-  worktree's HEAD, with no uncommitted changes (a tree configured with them has a `git describe` ending in `-dirty`), only when the copy no longer names the main checkout's path
-  (a tree configured through a link to the checkout is refused), and never when a `ninja`, `cmake` or `ctest` is running in the main checkout's tree. It
+  identical to the main checkout's are aligned, and a source that differs is made newer, so a build that follows compiles
+  only what differs. It seeds only an absent or empty `build/$PRESET`, and only when the copy no longer names the main
+  checkout's path (a tree configured through a link to the checkout is refused), and never when a `ninja`, `cmake` or
+  `ctest` is running in the main checkout's tree. A tree built at another commit, or configured with uncommitted changes
+  (`git describe` ends in `-dirty`), is seeded too: the commit and the describe string are read at configure time, so its
+  configure is re-run on the first build, and the identity readers rebuild. It
   never writes the main checkout, prints what it did or why it did not (a
   worktree that is not seeded still builds, from scratch), and appends one record to
   `$XDG_STATE_HOME/nevr-runtime/seed-build-tree.jsonl`.
@@ -927,7 +937,9 @@ your seat name, for example `claude-main` or `codex`.
   not the environment. The build fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored,
   never copied into a worktree, never compiled in); never print it.
 - **Client login test mechanics.** Run `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the
-  build's BugSplat64.dll; the nevr-runtime.dll beside it is deployed with it> --exit-after-login` from your checkout, where `<copy>` is a throwaway copy of the
+  build's BugSplat64.dll; the nevr-runtime.dll beside it is deployed with it> --exit-after-login` from your checkout. The
+  build is `mingw-plugin-dev` (the default `--dll`, #1230): a `mingw-release` host refuses its unsigned runtime and the
+  game stops with exit 78. `<copy>` is a throwaway copy of the
   install (see "The game install"), one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). It ends the run itself: exit 0 on `to logged in`;
   exit 1 on repeated `rad15_live failed` or `Service is unavailable` lines, a DLL that embeds no

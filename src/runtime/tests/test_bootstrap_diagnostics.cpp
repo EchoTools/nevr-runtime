@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstdio>
 #include <mutex>
+#include <regex>
 #include <set>
 #include <string>
 #include <vector>
@@ -623,6 +624,26 @@ std::string LockDiagnosis(const std::string& text) {
   return summary + (records.empty() ? std::string("(none)\n") : records);
 }
 
+// The lines of `text` that are neither an appended `H-T<tt>-L<nnnnn>` line nor a host_log_lock record, with their
+// line numbers: a line split, merged or garbled by an unlocked write shows here, where the counts only show its count (#1304).
+std::string StrayLines(const std::string& text) {
+  static const std::regex kAppended("H-T[0-9]{2}-L[0-9]{5}");
+  std::string strays;
+  std::size_t number = 0;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) break;
+    ++number;
+    const std::string line = text.substr(start, end - start);
+    if (!std::regex_match(line, kAppended) && line.find("host_log_lock") == std::string::npos) {
+      strays += "line " + std::to_string(number) + ": " + line + "\n";
+    }
+    start = end + 1;
+  }
+  return strays.empty() ? std::string("stray lines: (none)\n") : "stray lines:\n" + strays;
+}
+
 TEST(BootstrapDiagnostics, ConcurrentAppendersToOneFileLoseNoLine) {
   for (const int threads : {1, 2, 4, 8}) {
     const std::wstring local = MakeTempDir(L"local");
@@ -781,10 +802,12 @@ TEST(BootstrapDiagnostics, ConcurrentAppendersKeepEveryLineWhileTheLockIsHeldPas
   const std::string text = ReadAll(local + kLogsFile);
   const std::size_t expected = static_cast<std::size_t>(kThreads * kLines);
   const LineCount own = CountLinesWithPrefix(text, 'H');
-  EXPECT_EQ(own.lines, expected);
-  EXPECT_EQ(own.distinct, expected);
+  // A count that is off prints the lines that are neither an appended line nor the lock record, so the odd line is in
+  // the failure output (#1304).
+  EXPECT_EQ(own.lines, expected) << LockDiagnosis(text) << StrayLines(text);
+  EXPECT_EQ(own.distinct, expected) << LockDiagnosis(text) << StrayLines(text);
   // The degraded lock leaves one record in the file, which a count of every line would add to the appended ones.
-  EXPECT_EQ(CountLines(text).lines, expected + 1) << LockDiagnosis(text);
+  EXPECT_EQ(CountLines(text).lines, expected + 1) << LockDiagnosis(text) << StrayLines(text);
 }
 
 // The first appends of a process run the one-time initialization of the local lock. This helper is that first use:

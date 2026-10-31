@@ -4,6 +4,8 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/game_data_notice.h"
+#include "runtime/server/installed_levels.h"
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/lifecycle/return_to_lobby_hold.h"
 #include "runtime/lifecycle/initialize.h"
@@ -28,6 +30,7 @@
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
+#include "runtime/patch/loading_tips.h"
 #include "runtime/frame/frame_stats.h"
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/server_team_size_install.h"
@@ -64,6 +67,8 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/lifecycle/cmdline_strip.h"
+#include "runtime/lifecycle/cli_check.h"
+#include "runtime/lifecycle/cli_reject.h"
 #include "runtime/lifecycle/timestep_log.h"
 #include "core/build_identity.h"
 #include "core/cli_flags.h"
@@ -119,6 +124,13 @@ void PreflightRuntimeBootstrap() {
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
   if (argv == nullptr) return;
+
+  // #1253: a command line the run cannot use ends it here, before the game, the plugins or the bridge start
+  // (cli_check.h). The refusal names the token and why, with the build version, on stderr and in the log.
+  nevr_cli_check::Rejection rejection;
+  if (nevr_cli_check::Check(argc, argv, &rejection)) {
+    RejectCommandLine(WideToUtf8(argv[rejection.index]), WideToUtf8(rejection.why.c_str()));  // does not return
+  }
 
   for (int i = 0; i < argc; ++i) {
     const LPWSTR arg = argv[i];
@@ -278,6 +290,53 @@ static void LogTimestepArgs() {
   } catch (const std::exception&) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] time-step argument report failed (std::exception)");
   }
+}
+
+// #960: a game whose data folder holds no level manifest starts, finds nothing, and closes with no message. The
+// check is the registration's own manifest finder (FindManifestDirs), so the two agree on what counts as data.
+// Every run logs the result. A client with a screen also gets one dialog, opened on its own thread so the boot
+// thread is never held by a modal box (the graphics-driver notice's pattern, log/builtin_filter.cpp). Nothing
+// here stops the game.
+static DWORD WINAPI GameDataDialogThread(LPVOID text) {
+  MessageBoxA(nullptr, static_cast<const char*>(text), "Echo VR - game data missing",
+              MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+  return 0;
+}
+
+static void CheckGameData() {
+  char exePath[MAX_PATH] = {};
+  const DWORD length = GetModuleFileNameA(reinterpret_cast<HMODULE>(EchoVR::g_GameBaseAddress), exePath, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] game data check skipped: the game's exe path is unavailable error=%lu",
+        GetLastError());
+    return;
+  }
+  const std::filesystem::path exe(exePath);
+  const std::string dataDir = (nevr_game_server::InstallRootFromExe(exe) / "_data").string();
+  if (!nevr_game_server::FindManifestDirs(exe).empty()) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] game data present: level manifests under %s", dataDir.c_str());
+    return;
+  }
+  // The outcome of the dialog, named in the log line below. A failure to open it is logged with its error and
+  // the game is left to run; the line still says the player was not told.
+  std::string dialog = "not_shown reason=" + std::string(g_isServer ? "server_mode" : "headless");
+  if (nevr_game_data::DialogDue(g_isServer != FALSE, g_isHeadless != FALSE)) {
+    dialog = "not_shown reason=out_of_memory";
+    char* text = _strdup(nevr_game_data::Text(dataDir).c_str());
+    if (text != nullptr) {
+      HANDLE thread = CreateThread(nullptr, 0, GameDataDialogThread, text, 0, nullptr);
+      if (thread != nullptr) {
+        CloseHandle(thread);
+        dialog = "opened";
+      } else {
+        dialog = "not_shown reason=thread_failed error=" + std::to_string(GetLastError());
+      }
+    }
+  }
+  Log(EchoVR::LogLevel::Error,
+      "[NEVR.PATCH] game data missing: no level manifest under %s; the game cannot load and closes at start "
+      "dialog=%s",
+      dataDir.c_str(), dialog.c_str());
 }
 
 void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
@@ -522,8 +581,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       // (:75) the NEVR_MODULE_HOST_IS_NOOVR flag the modules read, which is the
       // behaviour -noovr exists to produce (the login platform code does not depend on it:
       // SelectPlatformCode follows the game's own No VR flag, bit 20, which -noovr does not set). The game's own
-      // -noovr-requires--spectatorstream assert is bypassed by
-      // PatchNoOvrRequiresSpectatorStream, inert unless the token is present.
+      // -noovr-requires--spectatorstream assert is bypassed by the argument-lookup hook
+      // (patch/noovr_arglookup.cpp), inert unless the token is present.
       g_noOvr = TRUE;
     }
   }
@@ -551,10 +610,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     }
   }
 
-  // Validate argument combinations
-  if (g_isServer && g_isOffline) {
-    FatalError("Arguments -server and -offline are mutually exclusive.", "Invalid arguments");
-  }
+  // The argument combinations (-server with -offline or -windowed) are refused in PreflightRuntimeBootstrap (#1253).
 
   // Detect dbgcore.dll in the game directory — prevents accidental hijack.
   // In the launcher path, BugSplat64.dll is loaded by echovr_game.dll. If a
@@ -635,7 +691,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // Apply patches to force the game to load as a server.
   if (g_isServer) {
     PatchEnableServer();
-    PatchDisableLoadingTips();
+    // #1774: the loading-tip script nodes return at once on a server (patch/loading_tips.h).
+    nevr_loading_tips::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
     PatchDisableWwise();
     PatchLogServerProfile();
     // Issue #63: co-op AI bots stand still on community servers; log what gates them.
@@ -660,6 +717,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   if (!g_isServer) {
     nevr_asset_cdn::Initialize();
   }
+
+  // #960: the game data check, every run. Before the client-only patches so a missing folder is logged even when they
+  // are skipped.
+  CheckGameData();
 
   // N148 (#938): the project section of the in-game CREDITS page. Client only: a server has no page, and the
   // decision is logged either way (N122/N124). Post-CLI-parse for the same reason as the CDN above. The

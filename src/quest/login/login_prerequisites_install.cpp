@@ -110,12 +110,22 @@ std::mutex& InstallMutex() {
 }
 std::atomic<bool> g_installed{false};
 PrerequisiteInstall g_result_storage;  // written once under InstallMutex(), then read-only
+#if defined(NEVR_QUEST_TESTING)
+InstallSeamFn g_install_seam = nullptr;  // test support: answers a slot without patching the GOT (login_prerequisites.h)
+#endif
 
 template <typename Thunk>
 bool Install(sentinel::GotHook& hook, const sentinel::HookRecord<Thunk>& record, const T::PinnedSlot& slot,
              std::uintptr_t base) {
+#if defined(NEVR_QUEST_TESTING)
+  if (g_install_seam != nullptr) {
+    const int answer = g_install_seam(slot.symbol);
+    if (answer >= 0) return answer == 1;
+  }
+#endif
   Thunk::Arm(record);
-  if (sentinel::InstallThunk<Thunk>(hook, T::TargetFor(slot, base)) == sentinel::GotStatus::kOk) return true;
+  // Critical, like the login hook these answers belong to: the registry's reserve (got_hook.h).
+  if (sentinel::InstallThunk<Thunk>(hook, T::TargetFor(slot, base).Critical()) == sentinel::GotStatus::kOk) return true;
   Thunk::Disarm();
   return false;
 }
@@ -249,5 +259,18 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   g_installed.store(true, std::memory_order_release);
   return result;
 }
+
+#if defined(NEVR_QUEST_TESTING)
+void SetInstallSeamForTest(InstallSeamFn seam) noexcept {
+  const std::lock_guard<std::mutex> lock(InstallMutex());
+  g_install_seam = seam;
+}
+
+void ResetInstallForTest() noexcept {
+  const std::lock_guard<std::mutex> lock(InstallMutex());
+  g_installed.store(false, std::memory_order_release);
+  g_result_storage = PrerequisiteInstall{};
+}
+#endif
 
 }  // namespace nevr_quest_login

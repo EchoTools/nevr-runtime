@@ -102,4 +102,43 @@ TEST(ReturnToLobbyQueue, EveryVerdictHasADistinctName) {
   EXPECT_STREQ(Name(Verdict::QueueNotAllocated), "queue_not_allocated");
 }
 
+// #1756: the count at game+0x1F10 the game's return-to-lobby callback defers on (echovr.exe 0x1401a4ad0), read for the
+// log line that says why a service-ended session did not leave.
+TEST(ReturnToLobbyQueue, DeferCountReadsTheCountTheGameDefersOn) {
+  struct BigGame {
+    unsigned char bytes[0x2000] = {};
+  } game;
+  const uint64_t count = 3;
+  std::memcpy(game.bytes + nevr_patch_addresses::GAME_DEFER_COUNT_OFFSET, &count, sizeof(count));
+  FakeNetGame netGame;
+  netGame.SetGame(&game);
+  EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(&netGame), 3U);
+  EXPECT_EQ(nevr_patch_addresses::GAME_DEFER_COUNT_OFFSET, 0x1F10U);
+}
+
+TEST(ReturnToLobbyQueue, DeferCountIsUnknownWhenAReadFails) {
+  struct BigGame {
+    unsigned char bytes[0x2000] = {};
+  } game;
+  FakeNetGame netGame;
+  netGame.SetGame(&game);
+  int reads = 0;
+  // The first read (the game object) works, the second (the count) fails: a stale game object.
+  const auto failSecond = [&reads](const void* from, void* to, size_t size) {
+    if (++reads == 2) return false;
+    std::memcpy(to, from, size);
+    return true;
+  };
+  EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(&netGame, failSecond), UINT64_MAX);
+  EXPECT_EQ(reads, 2);
+  EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(&netGame, [](const void*, void*, size_t) { return false; }),
+            UINT64_MAX);
+}
+
+TEST(ReturnToLobbyQueue, DeferCountIsUnknownWithoutAGameObject) {
+  FakeNetGame netGame;
+  EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(&netGame), UINT64_MAX);
+  EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(nullptr), UINT64_MAX);
+}
+
 }  // namespace

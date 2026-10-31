@@ -8,9 +8,13 @@
  * Two GOT hooks on libr15's `sigaction` and `signal` slots. For the five fatal signals (SIGSEGV, SIGBUS, SIGABRT, SIGILL,
  * SIGFPE) the hook REMEMBERS what the game asked for and does not install it, and answers the game's query for the old
  * action with what the game last asked for (before its first request: what the process had before the sentinel armed, so a
- * game that saves and restores sees a consistent history). Every other signal goes to libc untouched. The hooks cannot
- * reach a call another library makes (libpnsovr, libpnsrad and libpnsradmatchmaking also import both; they load later, and
- * this hook covers libr15 only), or a direct system call.
+ * game that saves and restores sees a consistent history). Every other signal goes to libc untouched. The hooks cannot reach
+ * a direct system call.
+ *
+ * libpnsrad, libpnsradmatchmaking and libpnsovr import both functions too. The game loads them after the constructor (none is
+ * a DT_NEEDED of libr15), so OnModuleLoaded hooks their slots right after the game's dlopen returns, before CModuleLoader
+ * calls the module's RadPluginMain, with the same handlers. A library's own ELF constructors run inside dlopen, before that
+ * moment, and are not covered.
  *
  * When a fatal signal arrives, our handler (OnSignal) runs, in this order, on the faulting thread:
  *   1. the report (core/crash_report.h): it needs the signal's ucontext for the registers and the backtrace;
@@ -32,6 +36,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "crash_first_arm.h"
 #include "pinned_targets.h"
@@ -43,10 +48,23 @@ namespace nevr_quest::crash_first {
 bool Install() noexcept;
 bool InstallAt(const sentinel::GotTarget& sigactionTarget, const sentinel::GotTarget& signalTarget) noexcept;
 
+// One provider library the late install reaches (pinned_targets.h kCrashLateModules): its name, the build ID and the two slots'
+// link-time addresses the install checks. The host test replaces the table with fixture libraries that carry no pin.
+struct LateModule {
+  const char* module;
+  const char* buildId;                          // nullptr: not checked
+  std::optional<std::uint64_t> sigactionSlot;   // nullopt: the one relocation of the symbol
+  std::optional<std::uint64_t> signalSlot;
+};
+inline constexpr int kLateModuleMax = 3;
+// Test support: replaces the table (at most kLateModuleMax entries; the strings must outlive it). nullptr, 0: the pinned one.
+void SetLateModulesForTest(const LateModule* modules, int count) noexcept;
+
 struct Counts {
   std::uint32_t displaced[kGuardedCount];  // requests to install a handler, kept instead of installed
   std::uint32_t queried;                   // requests that only asked for the current action
   std::uint32_t passedThrough;             // calls for any other signal
+  std::uint32_t lateInstalls;              // slots of provider libraries hooked after they loaded
 };
 Counts CurrentCounts() noexcept;
 

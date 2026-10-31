@@ -7,7 +7,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 #include <exception>
+#include <optional>
 #include <string>
 #include <thread>
 #include <curl/curl.h>
@@ -15,9 +17,13 @@
 #include "core/auth_token.h"
 #include "core/auth_token_refresh.h"
 #include "runtime/lifecycle/arena_round_time.h"
+#include "runtime/lifecycle/crash_recovery.h"  // PerformGracefulShutdown
 #include "runtime/lifecycle/return_to_lobby.h"
+#include "runtime/lifecycle/return_to_lobby_queue.h"
+#include "runtime/server/ended_session_watchdog.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
+#include "runtime/server/game_type_table.h"
 #include "runtime/server/lobby_settings_relay.h"
 #include "runtime/server/protobuf_transport.h"
 #include "runtime/server/registration_envelope.h"
@@ -38,6 +44,7 @@
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat / NevrCfgGetFlatCsv (N133 S4b: config.yaml reads)
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/patch/server_bots.h"
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/hook/patching.h"
 #include "core/nevr_curl.h"
@@ -49,6 +56,27 @@
 #include "core/logging.h"
 
 using namespace nevr_game_server;
+
+namespace {
+
+/// Stores the session's game type for the public Arena round default (#982) and says so, with the type it replaces and
+/// how many round_time reads found no type since the last session, so one server run shows the order of the session
+/// messages and the game's reads. A public Arena session whose type arrived after such a read is a Warning: those
+/// reads kept the game's own round length.
+void StoreSessionGameType(const std::string& gameType, const char* source, const std::string& sessionId) {
+  const std::optional<std::string> previous = nevr_arena_round_time::SetSessionGameType(gameType);
+  const std::uint32_t readsWithoutType = nevr_arena_round_time::TakeReadsWithoutType();
+  const bool missed = readsWithoutType > 0 && nevr_arena_round_time::DecideRoundTimeDefault(gameType).applied;
+  Log(missed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] session game type stored game_type=%s source=%s session=%s previous=%s "
+      "round_time_reads_without_type=%u%s",
+      gameType.c_str(), source, sessionId.c_str(), previous ? previous->c_str() : "none", readsWithoutType,
+      missed ? " (the game read round_time before this type was known; those reads kept the game's own value)" : "");
+  // #1785: the step follows the type (Combat's physics is tuned for 30 a second, not the Arena rate).
+  ApplySessionTimestep(gameType, sessionId);
+}
+
+}  // namespace
 
 // --- TCP Broadcaster Callbacks ---
 
@@ -130,12 +158,14 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
             "[NEVR.GAMESERVER] Failed to start session (state=%d, expected Registered=%d)",
             static_cast<int>(self->GetContext().GetState()), static_cast<int>(ServerState::Registered));
       }
+      // A new session on this server: the exit watchdog of the session that ended before it (#1756) must not fire.
+      self->CancelEndedSessionWatchdog();
 
       // The game type is the engine's symbol from the settings JSON; the lobby type is only the fallback (#996).
       // It is stored for every session, telemetry or not: the public Arena round default reads it (#982).
       const auto gameType = nevr_telemetry_header::GameTypeForSession(sessionCreate.settings_json(),
                                                                       sessionCreate.lobby_type() == 1);
-      nevr_arena_round_time::SetSessionGameType(gameType.gameType);
+      StoreSessionGameType(gameType.gameType, "session_create", sessionCreate.lobby_session_id());
 
       // Start telemetry streaming for this session
       if (g_telemetryEnabled) {
@@ -758,6 +788,41 @@ static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT6
   }
 }
 
+// How long after ServerDB's CODE_ENDED the process may stay up before it is ended (#1756). The clean path takes
+// milliseconds (the game's return to lobby, then the state machine's exit); this is far above it, and the configured
+// empty-server hold (network.empty_server_ttl_seconds) is added because that hold deliberately keeps the process up.
+static constexpr std::chrono::milliseconds kEndedSessionExitGrace{15000};
+
+void GameServerLib::ArmEndedSessionWatchdog(const std::string& sessionId) {
+  const auto delay = kEndedSessionExitGrace + std::chrono::milliseconds(nevr_return_to_lobby::HoldTtlMs());
+  const bool armed = m_endedSessionWatchdog.Arm(delay, sessionId, [](const std::string& id) {
+    // Game memory is read here only to say why the game did not leave. This is not the game thread and the game may
+    // be in any state, so every read goes through ReadProcessMemory on this process: a bad pointer reads as
+    // "unknown" and cannot fault in front of the exit below.
+    const auto read = [](const void* from, void* to, size_t size) {
+      SIZE_T got = 0;
+      return ReadProcessMemory(GetCurrentProcess(), from, to, size, &got) != FALSE && got == size;
+    };
+    const void* context = g_pGame;
+    const void* netGame = nullptr;
+    if (context == nullptr || !read(static_cast<const unsigned char*>(context) + nevr_patch_addresses::CONTEXT_NETGAME_OFFSET,
+                                    &netGame, sizeof(netGame))) {
+      netGame = nullptr;
+    }
+    const uint64_t deferCount = nevr_return_to_lobby_queue::DeferCount(netGame, read);
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] service-ended session's process is still running after the exit grace session_id=%s "
+        "defer_count=%lld — the game did not leave the session, ending the process so the slot is released",
+        id.c_str(), deferCount == UINT64_MAX ? -1LL : static_cast<long long>(deferCount));
+    PerformGracefulShutdown(0);
+  });
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] session ended by ServerDB (receive thread) session_id=%s exit_watchdog=%s delay_ms=%lld",
+      sessionId.c_str(), armed ? "armed" : "already_armed_or_fired", static_cast<long long>(delay.count()));
+}
+
+void GameServerLib::CancelEndedSessionWatchdog() { m_endedSessionWatchdog.Cancel(); }
+
 void GameServerLib::RegisterTcpCallbacks() {
   auto& cb = m_context->GetCallbackRegistry();
 
@@ -777,6 +842,15 @@ void GameServerLib::RegisterTcpCallbacks() {
   // It must be: two branches below hand it to CBroadcaster::ReceiveLocalEvent
   // (echovr.exe 0x140F87AA0), which passes the msg pointer on, as mutable, to every
   // listener registered for the symbol (issue #43).
+  // #1756: the service ending the session is what makes this server leave. The game does that itself when its
+  // return to lobby runs; this makes sure the process leaves when it does not. The observer runs on the WebSocket
+  // receive thread, so it sees CODE_ENDED even when the game thread has stopped calling Update().
+  m_wsClient->SetReceiveObserver([this](EchoVR::SymbolId msgId, VOID* data, UINT64 size) {
+    std::string endedSession;
+    if (!nevr_game_server::ParseServiceEndedSession(msgId, data, static_cast<size_t>(size), &endedSession)) return;
+    ArmEndedSessionWatchdog(endedSession);
+  });
+
   m_wsClient->SetMessageHandler([this](EchoVR::SymbolId msgId, VOID* data, UINT64 size) {
     if (msgId == SYM_PROTOBUF_MSG) {
       OnTcpMsgProtobuf(this, nullptr, {}, data, nullptr, size);
@@ -796,6 +870,14 @@ void GameServerLib::RegisterTcpCallbacks() {
       // message does. Once we move to nevr-server-rs with a proper protobuf protocol,
       // this passthrough goes away — the protobuf should carry everything.
       auto* broadcaster = GetContext().GetBroadcaster();
+      // #982: this frame is what the game starts the session from, so its game type is stored before the game sees
+      // it. The protobuf session create normally arrives first and stores the same type; a service that sends the
+      // frame alone, or in the other order, no longer leaves the game reading the previous session's type or none.
+      if (const auto frameType =
+              nevr_game_type_table::GameTypeOfSessionStart(static_cast<const uint8_t*>(data), size)) {
+        StoreSessionGameType(*frameType, "legacy_session_start", nevr_server_bots::SessionIdOf(
+                                                                      static_cast<const uint8_t*>(data), size));
+      }
       // #1423: a session start with no broadcaster is not forwarded, so it must not keep the last one's bots flag.
       nevr_server_bots::ForgetSession();
       if (broadcaster) {

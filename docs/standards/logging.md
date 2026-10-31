@@ -135,7 +135,7 @@ for row.
 | `[NEVR.UI]`           | The UI text writer (`patch/ui_text.h`, `patch/ui_text_writer.h`, #896): `text writer ready`/`off` with the three pins, one `text written` or `text dropped` line per request with `actor`, `element`, `bytes` and `attempts`, and `text first write` with the writing thread and the game-loop thread. A text is never logged, only its size |
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
 | `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU and the rating score the auto-selector reads (`gpu_score`), headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines, a one-time `settings_trace` line, and one `gpu_score kept|filled|unrated` line a run, which says the score the selector read and, when unrated, why (`patch/render_config.h`, `patch/render_config_hook.h`, `patch/gpu_score.h`, ADR 0022, #1419) |
-| `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump. The value of the record's `tag` field; the host writes no `Log()` line |
+| `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump, crash report send (`event` `crash_send`, #1689), and the console notice that follows a `game_stop` (`event` `console_notice`, #1533: `reason`, and `written`, whether a console took the plain line). The value of the record's `tag` field; the host writes no `Log()` line |
 | `[NEVR.STOP]`         | The one line the `BugSplat64.dll` host writes to standard error when it stops the game or leaves it running without `nevr-runtime.dll` (`runtime/host/stop_line.h`, #1252), with the same facts in the host log. The value of the line's `tag` field; fields and exit codes in "The `NEVR.STOP` line" below |
 | `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |
 | `[server_timing]`     | Server tick-rate / timing patches             |
@@ -607,6 +607,9 @@ collect, and does not open its own log file. `sdk/include/nevr/plugin_logger.h` 
 call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `PluginLogError`,
 `PluginLogDebug` or `PluginLogFields`).
 
+- **Before the bind.** A line logged before `PluginLogBind(ctx)` is held in memory and written through the host when
+  the bind succeeds, in the order it was logged (`plugin_logger.h`). Only a bind that finds no host log writes the held
+  lines to stderr.
 - **Tag and identity.** The host writes `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...`. `<id>`
   is the host's name for the plugin (the `name` of its `config.yaml` entry), not text the plugin
   chooses, so one plugin cannot write as another and an operator can filter on `plugin=`.
@@ -633,9 +636,9 @@ call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `Pl
 
 **Where:** `src/runtime/ext/plugin_loader.cpp` (`HostPluginLog`), `src/runtime/ext/plugin_log.h`.
 
-### Rule 16: A client records the lobby requests it sends and the answers it gets
+### Rule 16: The bridge records the lobby requests the client sends and the answers it gets
 
-A client writes one Info record for each lobby message that decides where the player ends up (the PC bridge writes
+The bridge writes one Info record for each lobby message that decides where the player ends up, on a client or a server (the PC bridge writes
 all four lines; the Quest router writes the two session lines), so a tester's log answers "how many join attempts did this client make, and what did each get". All four lines carry
 the tag `[NEVR.WS]` and the connection index (Rule 9):
 
@@ -665,11 +668,9 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
   the NUL, at most the field's 64, and `0` when the message is empty or absent.
 - **A frame the decode cannot read** is a Warning, `lobby <find request|join request|session success|session
   failure> could not be read conn=<n> payload_bytes=<n>`. Nothing is read past the frame's end.
-- **A client only, until `LogFrameMessages` moves to Debug.** KNOWN-WRONG #1307: On a dedicated server `LogFrameMessages` in
-  `src/runtime/compat/ws_bridge.cpp` logs every message of every frame at Info, and these records are not written
-  there. That Info is on a per-connection path, which "You SHALL NOT" forbids, and the reason its comment gives (a
-  server's message traffic is sparse) is stated without a measurement. The hot-path rule governs: ADR 0027's migration moves
-  `LogFrameMessages` to Debug on a server as on a client, and these records are then written on a server too.
+- **Both run modes.** The records are written on a dedicated server as on a client: the same frames reach
+  `ObserveSocialFrames` in `src/runtime/compat/ws_bridge.cpp` in either mode, and the per-message lines of
+  `LogFrameMessages` are Debug in both (Rule 13).
 - **Rate.** The bridge cannot bound how often the game sends a request: its party-follow loop runs from the
   game's own update. Each kind (find, join, success, failure) writes at most 10 records per 10 s window and
   counts the rest. The next lobby frame of any kind after the window ends writes
@@ -727,7 +728,7 @@ structured call (ADR 0027) writes as its own key.
 | Message forward          | DEBUG | Rate-limited     | Summary every N seconds or N messages        |
 | Per-frame diagnostic     | DEBUG | Off in prod      | Gated by verbosity flag                     |
 | Login injected           | INFO  | Once per conn    | Log XPID + conn + size                      |
-| Lobby find/join request, session success/failure (client) | INFO | 10 per kind per 10 s, then counted | Rule 16; the count is the suppressed line |
+| Lobby find/join request, session success/failure (client and server) | INFO | 10 per kind per 10 s, then counted | Rule 16; the count is the suppressed line |
 | Registration request     | INFO  | Once             | Log message type + size                     |
 | Registration response    | INFO  | Once             | Log server_id + status                      |
 | Hook failure             | WARN  | Once per failure | Log VA + expected + actual                  |
