@@ -87,7 +87,7 @@ inline std::optional<std::int64_t> ParseHttpDate(std::string_view s) {
   static constexpr std::array<std::string_view, 12> kMonths = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                                                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
   if (s.size() != 29 || s[3] != ',' || s[4] != ' ' || s[7] != ' ' || s[11] != ' ' || s[16] != ' ' ||
-      s[19] != ':' || s[22] != ':' || s.substr(25) != "GMT") {
+      s[19] != ':' || s[22] != ':' || s[25] != ' ' || s.substr(26) != "GMT") {
     return std::nullopt;
   }
   const auto day = detail::Digits(s, 5, 2);
