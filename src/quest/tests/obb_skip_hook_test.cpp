@@ -366,6 +366,32 @@ void TheEngineIsAnsweredTheMediaRootForAnUnmarkedMediaDirectoryAndForNoRoot() {
   }
 }
 
+// ---- Install() itself (#932): the path that sets the hook live, driven with the slot installers faked ----
+
+int g_installPathCalls = 0;
+int g_installMountCalls = 0;
+int g_installDataRootCalls = 0;
+sentinel::GotStatus g_pathStatus = sentinel::GotStatus::kOk;
+sentinel::GotStatus g_mountStatus = sentinel::GotStatus::kOk;
+sentinel::GotStatus g_dataRootStatus = sentinel::GotStatus::kOk;
+sentinel::GotStatus FakeInstallPath() noexcept {
+  ++g_installPathCalls;
+  return g_pathStatus;
+}
+sentinel::GotStatus FakeInstallMount() noexcept {
+  ++g_installMountCalls;
+  return g_mountStatus;
+}
+sentinel::GotStatus FakeInstallDataRoot() noexcept {
+  ++g_installDataRootCalls;
+  return g_dataRootStatus;
+}
+obb::InstallEnv FakeEnv() {
+  g_installPathCalls = g_installMountCalls = g_installDataRootCalls = 0;
+  g_pathStatus = g_mountStatus = g_dataRootStatus = sentinel::GotStatus::kOk;
+  return {&FakeExists, &FakeExists, &FakeInstallPath, &FakeInstallMount, &FakeInstallDataRoot};
+}
+
 // ---- the answer is one value whatever the file's own body returns (C1): once ResolveRoot has run the hook never calls it ----
 
 struct AnswerCase {
@@ -663,32 +689,6 @@ void TheManifestIsLookedUpWithTheFileCheckAndTheDirectoriesWithTheDirectoryCheck
   sentinel::SetLogSink(previous);
   QCHECK(SomeLineContains("\"engine_redirect\":\"media_default\""));  // a directory alone does not make it complete
   QCHECK(obb::DataRootRedirect() != nullptr && std::strcmp(obb::DataRootRedirect(), kMediaDir) == 0);
-}
-
-// ---- Install() itself (#932): the path that sets the hook live, driven with the slot installers faked ----
-
-int g_installPathCalls = 0;
-int g_installMountCalls = 0;
-int g_installDataRootCalls = 0;
-sentinel::GotStatus g_pathStatus = sentinel::GotStatus::kOk;
-sentinel::GotStatus g_mountStatus = sentinel::GotStatus::kOk;
-sentinel::GotStatus g_dataRootStatus = sentinel::GotStatus::kOk;
-sentinel::GotStatus FakeInstallPath() noexcept {
-  ++g_installPathCalls;
-  return g_pathStatus;
-}
-sentinel::GotStatus FakeInstallMount() noexcept {
-  ++g_installMountCalls;
-  return g_mountStatus;
-}
-sentinel::GotStatus FakeInstallDataRoot() noexcept {
-  ++g_installDataRootCalls;
-  return g_dataRootStatus;
-}
-obb::InstallEnv FakeEnv() {
-  g_installPathCalls = g_installMountCalls = g_installDataRootCalls = 0;
-  g_pathStatus = g_mountStatus = g_dataRootStatus = sentinel::GotStatus::kOk;
-  return {&FakeExists, &FakeExists, &FakeInstallPath, &FakeInstallMount, &FakeInstallDataRoot};
 }
 
 // Not ArmForTest: the answer must come from what InstallWith itself armed and marked.
