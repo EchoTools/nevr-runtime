@@ -41,6 +41,7 @@ MAY_NAME_ALIASES = {
     "src/core/cli_flags.h",
     "src/runtime/lifecycle/cli.cpp",
     "src/runtime/hook/export_trace_policy.h",
+    "src/runtime/tests/test_cli_check.cpp",
     "src/runtime/tests/test_cmdline_strip.cpp",
     "src/runtime/tests/test_export_trace.cpp",
     "tools/tests/test_cli_flag_names.py",
