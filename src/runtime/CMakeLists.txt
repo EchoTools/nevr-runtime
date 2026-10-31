@@ -105,6 +105,7 @@ set(PATCHES_SOURCES
     "frame/window_watch.cpp"
     "patch/binary_bug_fixes.cpp"
     "patch/pnsrad_enabler.cpp"
+    "patch/provider_name_redirect.cpp"
     "patch/mic_provider.cpp"
     "patch/party_invite_gate.cpp"
     "patch/invite_choice_hook.cpp"
@@ -263,6 +264,7 @@ set(PATCHES_HEADERS
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
+    "patch/provider_name_redirect.h"
     "patch/pnsrad_load_queue.h"
     "patch/mic_provider.h"
     "patch/party_invite_gate.h"
@@ -1828,6 +1830,9 @@ if(BUILD_TESTING)
     add_executable(test_behavioral
       tests/test_behavioral.cpp
       tests/test_resource_override.cpp
+      # the provider-name redirect's detour (CNSProvider::LoadByName), driven through MinHook on a stand-in.
+      tests/test_provider_name_redirect.cpp
+      patch/provider_name_redirect.cpp
       tests/test_evrp_package.cpp
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
@@ -1893,12 +1898,14 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       tests/test_behavioral.cpp
       tests/test_resource_override.cpp
+      tests/test_provider_name_redirect.cpp
       tests/test_evrp_package.cpp
       patch/evrp_package.cpp
       patch/asset_cache.cpp
       patch/resource_override.cpp
       patch/netgun_bullets.cpp
       patch/xpid_patch.cpp
+      patch/provider_name_redirect.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
       patch/asset_registry.cpp

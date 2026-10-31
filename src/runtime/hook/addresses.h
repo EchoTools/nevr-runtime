@@ -671,6 +671,20 @@ constexpr uintptr_t XPID_PLATFORM_FALLBACK_PREFIX = 0x16D0F9C;
 constexpr size_t XPID_PLATFORM_FALLBACK_PREFIX_SIZE = 4;
 
 // ============================================================================
+// Net service provider loader (patch/provider_name_redirect.cpp)
+// ============================================================================
+
+/// CNSProvider::LoadByName (ReVault FUN_140606690, 565 bytes): loads the platform module named by its second argument
+/// into a provider slot. CR15Game::CreateNetServiceProviders (0x140109810) calls it three times, with "pnsovr",
+/// "pnsdemo" and "pnsrad". The runtime's hook hands the original "pnsrad" for the first two. Win64, four pointer
+/// arguments, returns 0 on success. Prologue (24 bytes, none position dependent): mov [rsp+10h],rbx;
+/// mov [rsp+18h],rbp; mov [rsp+20h],rsi; push r14; sub rsp,430h.
+constexpr uintptr_t CNSPROVIDER_LOAD_BY_NAME = 0x606690;
+constexpr unsigned char CNSPROVIDER_LOAD_BY_NAME_PROLOGUE[24] = {
+    0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89,
+    0x74, 0x24, 0x20, 0x41, 0x56, 0x48, 0x81, 0xEC, 0x30, 0x04, 0x00, 0x00};
+
+// ============================================================================
 // Asset CDN / Loadout Hooks
 // ============================================================================
 
