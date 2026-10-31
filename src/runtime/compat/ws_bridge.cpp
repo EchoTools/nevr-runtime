@@ -732,10 +732,14 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
         }
       }
       if (nevr_social_roster::Global().Contains(replyFor)) {
-        Log(EchoVR::LogLevel::Info,
-            decoded ? "[NEVR.SOCIAL] friend name resolved account=%llu name_bytes=%zu"
-                    : "[NEVR.SOCIAL] friend profile reply could not be read account=%llu reply_bytes=%zu",
-            static_cast<unsigned long long>(replyFor), decoded ? displayName.size() : static_cast<size_t>(len));
+        if (decoded) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend name resolved account=%llu name_bytes=%zu",
+              static_cast<unsigned long long>(replyFor), displayName.size());
+        } else {
+          Log(EchoVR::LogLevel::Info,
+              "[NEVR.SOCIAL] friend profile reply could not be read account=%llu reply_bytes=%zu",
+              static_cast<unsigned long long>(replyFor), static_cast<size_t>(len));
+        }
       }
     }
     // Profile requests and replies, both ways, with the EvrId they carry (platform u64, account u64):
