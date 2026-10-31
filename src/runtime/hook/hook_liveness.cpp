@@ -34,6 +34,11 @@ const Entry kEntries[] = {
     {"ovr_GetPerfStats", "PCVR session only", false},
     // The game creates this thread in CncaGame init (0x1404f5e50), gated on a game flag bit; a run where that bit is clear reads 0.
     {"CDeadlockMonitor::Main", "engine init (thread per process, mode-specific)", false},
+    // #1774: server mode only. The loading-screen script runs these nodes; a server whose match never reaches a
+    // loading screen leaves them at entries=0, which is the reading the `entered` field reports.
+    {"CR15PickLoadingTipNode::Enter", "server mode, loading screen", false},
+    {"CR15SelectLoadingTipByIndexNode::Enter", "server mode, loading screen", false},
+    {"CR15SelectLoadingTipNode::Enter", "server mode, loading screen", false},
 };
 
 // kEntries is sized by its INITIALIZER, not by kCount. That is load-bearing: if

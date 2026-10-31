@@ -4,7 +4,9 @@ The fixture APK is built here: a manifest whose UTF-16 string pool holds the sou
 holding it 5 and 2 times in ASCII, an entry that holds the target string (as the real reference APK's classes.dex does)
 and entries that must not change. The real-file case runs when NEVR_REFERENCE_APK names the reference APK
 (`Echo_Combat_port_4987566.apk`); its libr15.so must come out with the sha256 that is kLibR15ReferenceSha256[0] in
-src/quest/patch/libr15_patch_table.h.
+src/quest/patch/libr15_patch_table.h. The launcher label cases build a manifest whose `<application>` label is one raw string
+(`axml_fixtures.build_label_manifest`) and check that `--label` sets it after the rename, in a renamed and an already-renamed
+input, and changes no other entry; the real-file case does the same on the reference APK.
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -22,9 +25,12 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tools" / "tests"))
 import axml_fixtures as fx  # noqa: E402
+import quest_apk_label as ql  # noqa: E402
 import quest_apk_rename_package as rp  # noqa: E402
 
 TOOL = REPO / "tools" / "quest_apk_rename_package.py"
+JUSTFILE = REPO / "justfile"
+REFERENCE_LABEL, PROJECT_LABEL = "Echo Combat (port)", "Echo VR"
 OLD, NEW = rp.DEFAULT_FROM, rp.DEFAULT_TO
 LIBR15, ASSETPATCH = "lib/arm64-v8a/libr15.so", "lib/arm64-v8a/libassetpatch.so"
 REAL_LIBR15_SHA_PREFIX = "936aa6a3"  # kLibR15ReferenceSha256[0], src/quest/patch/libr15_patch_table.h
@@ -292,6 +298,152 @@ class CliTest(FixtureTest):
         self.assertEqual(read_apk(self.out), read_apk(explicit))
 
 
+class LabelTest(FixtureTest):
+    """`label=` sets the manifest's launcher label after the package rename, and nothing else moves."""
+
+    def make_labelled(self, **kwargs) -> list:
+        items = entries(manifest=fx.build_label_manifest(OLD, REFERENCE_LABEL, **kwargs))
+        write_apk(self.src, items)
+        return items
+
+    def test_the_fixture_manifest_reads_as_the_reference_build_does(self):
+        manifest = fx.build_label_manifest(OLD, REFERENCE_LABEL)
+        self.assertEqual(ql.label_of(manifest), REFERENCE_LABEL)
+        self.assertEqual(manifest.count(wide(OLD)), 1)
+
+    def test_without_a_label_the_manifest_label_and_the_record_are_as_they_were(self):
+        self.make_labelled()
+        record = rp.rename_apk(self.src, self.out)
+        self.assertEqual(ql.label_of(read_apk(self.out)["AndroidManifest.xml"][0]), REFERENCE_LABEL)
+        self.assertNotIn("label_from", record)
+        self.assertNotIn("label_to", record)
+
+    def test_a_renamed_input_gets_the_package_and_the_label_and_no_other_entry_changes(self):
+        items = self.make_labelled()
+        plain = self.dir / "plain.apk"
+        rp.rename_apk(self.src, plain)
+        record = rp.rename_apk(self.src, self.out, label=PROJECT_LABEL)
+        self.assertEqual(record["event"], "package_renamed")
+        self.assertEqual((record["label_from"], record["label_to"]), (REFERENCE_LABEL, PROJECT_LABEL))
+        after, without = read_apk(self.out), read_apk(plain)
+        manifest, source = after["AndroidManifest.xml"][0], dict((n, d) for n, d, _ in items)["AndroidManifest.xml"]
+        self.assertEqual(ql.label_of(manifest), PROJECT_LABEL)
+        self.assertIn(NEW, rp._pool_strings(manifest))
+        self.assertNotIn(OLD, rp._pool_strings(manifest))
+        self.assertEqual(len(manifest), len(source))
+        self.assertEqual(manifest, ql.set_label(without["AndroidManifest.xml"][0], PROJECT_LABEL))
+        self.assertEqual(list(after), list(without), "entry order")
+        for name in without:
+            if name != "AndroidManifest.xml":
+                self.assertEqual(after[name], without[name], f"{name}: the label changed another entry")
+        self.assertEqual(set(record["changed"]), {"AndroidManifest.xml", LIBR15, ASSETPATCH})
+        self.assertEqual(record["changed"]["AndroidManifest.xml"]["sha256_in"], sha(source))
+        self.assertEqual(record["changed"]["AndroidManifest.xml"]["sha256_out"], sha(manifest))
+        self.assertEqual(record["sha256_out"], sha(self.out.read_bytes()))
+
+    def test_an_already_renamed_input_still_gets_the_label(self):
+        self.make_labelled()
+        renamed = self.dir / "renamed.apk"
+        rp.rename_apk(self.src, renamed)
+        record = rp.rename_apk(renamed, self.out, label=PROJECT_LABEL)
+        self.assertEqual(record["event"], "package_already_renamed")
+        self.assertEqual((record["label_from"], record["label_to"]), (REFERENCE_LABEL, PROJECT_LABEL))
+        before, after = read_apk(renamed), read_apk(self.out)
+        manifest = after["AndroidManifest.xml"][0]
+        self.assertEqual(ql.label_of(manifest), PROJECT_LABEL)
+        self.assertIn(NEW, rp._pool_strings(manifest))
+        self.assertEqual(manifest, ql.set_label(before["AndroidManifest.xml"][0], PROJECT_LABEL))
+        self.assertEqual(list(after), list(before), "entry order")
+        for name in before:
+            if name != "AndroidManifest.xml":
+                self.assertEqual(after[name], before[name], f"{name}: the label changed another entry")
+        self.assertEqual(set(record["changed"]), {"AndroidManifest.xml"})
+        self.assertEqual(record["changed"]["AndroidManifest.xml"]["sha256_in"], sha(before["AndroidManifest.xml"][0]))
+        self.assertEqual(record["changed"]["AndroidManifest.xml"]["sha256_out"], sha(manifest))
+
+    def test_a_second_run_with_the_same_label_writes_the_same_entries(self):
+        self.make_labelled()
+        rp.rename_apk(self.src, self.out, label=PROJECT_LABEL)
+        again = self.dir / "again.apk"
+        record = rp.rename_apk(self.out, again, label=PROJECT_LABEL)
+        self.assertEqual(record["event"], "package_already_renamed")
+        self.assertEqual((record["label_from"], record["label_to"]), (PROJECT_LABEL, PROJECT_LABEL))
+        self.assertEqual(record["changed"], {})
+        self.assertEqual(read_apk(self.out), read_apk(again))
+
+    def test_a_label_longer_than_the_old_one_is_a_refusal_and_writes_nothing(self):
+        self.make_labelled()
+        message = self.refused(label=REFERENCE_LABEL + " and more")
+        self.assertIn("AndroidManifest.xml", message)
+        self.assertIn("only edits in place", message)
+
+    def test_a_label_longer_than_the_old_one_on_an_already_renamed_input_writes_nothing(self):
+        self.make_labelled()
+        renamed = self.dir / "renamed.apk"
+        rp.rename_apk(self.src, renamed)
+        self.src = renamed
+        self.assertIn("only edits in place", self.refused(label=REFERENCE_LABEL + " and more"))
+
+    def test_an_empty_or_non_ascii_label_is_a_refusal_and_writes_nothing(self):
+        self.make_labelled()
+        for label in ("", "Echo V\u00ff"):
+            with self.subTest(label=label):
+                self.assertIn("non-empty ASCII", self.refused(label=label))
+
+    def test_a_manifest_without_an_application_label_is_a_refusal_and_writes_nothing(self):
+        self.make()  # the fixture manifest has no <application>
+        self.assertIn("android:label", self.refused(label=PROJECT_LABEL))
+
+    def test_a_label_referenced_by_another_attribute_is_a_refusal_and_writes_nothing(self):
+        self.make_labelled(share_label=True)
+        self.assertIn("referenced by", self.refused(label=PROJECT_LABEL))
+
+
+class LabelCliTest(FixtureTest):
+    def run_tool(self, *args):
+        return subprocess.run([sys.executable, "-I", str(TOOL), *map(str, args)], capture_output=True, text=True)
+
+    def test_label_flag_sets_the_label_and_the_record_names_both(self):
+        write_apk(self.src, entries(manifest=fx.build_label_manifest(OLD, REFERENCE_LABEL)))
+        done = self.run_tool("rename", "--apk", self.src, "--out", self.out, "--label", PROJECT_LABEL)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        record = json.loads(done.stdout)
+        self.assertEqual((record["event"], record["label_from"], record["label_to"]), ("package_renamed", REFERENCE_LABEL, PROJECT_LABEL))
+        self.assertEqual(ql.label_of(read_apk(self.out)["AndroidManifest.xml"][0]), PROJECT_LABEL)
+
+    def test_no_label_flag_leaves_the_label(self):
+        write_apk(self.src, entries(manifest=fx.build_label_manifest(OLD, REFERENCE_LABEL)))
+        done = self.run_tool("rename", "--apk", self.src, "--out", self.out)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn("label_to", json.loads(done.stdout))
+        self.assertEqual(ql.label_of(read_apk(self.out)["AndroidManifest.xml"][0]), REFERENCE_LABEL)
+
+    def test_a_refused_label_is_one_json_line_on_stderr_and_exit_1(self):
+        write_apk(self.src, entries(manifest=fx.build_label_manifest(OLD, REFERENCE_LABEL)))
+        done = self.run_tool("rename", "--apk", self.src, "--out", self.out, "--label", REFERENCE_LABEL + " and more")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(done.stdout, "")
+        record = json.loads(done.stderr)
+        self.assertEqual(record["event"], "package_rename_refused")
+        self.assertIn("only edits in place", record["reason"])
+        self.assertFalse(self.out.exists())
+        self.assertFalse(self.out.with_name(self.out.name + ".part").exists())
+
+
+class JustfileRecipeTest(unittest.TestCase):
+    def recipe(self) -> tuple:
+        text = JUSTFILE.read_text(encoding="utf-8")
+        found = re.search(r"^(quest-reference-base[^\n]*:)\n((?:[ \t]+[^\n]*\n)+)", text, re.MULTILINE)
+        self.assertIsNotNone(found, "the justfile has no quest-reference-base recipe")
+        return found.group(1), found.group(2)
+
+    def test_quest_reference_base_passes_the_label_to_the_rename_tool(self):
+        header, body = self.recipe()
+        self.assertIn('label="Echo VR"', header)
+        self.assertIn("quest_apk_rename_package.py rename", body)
+        self.assertIn('--label "{{ label }}"', body)
+
+
 @unittest.skipUnless(REAL_APK and pathlib.Path(REAL_APK).is_file(), "NEVR_REFERENCE_APK does not name the reference APK")
 class RealReferenceApkTest(unittest.TestCase):
     def test_real_apk_renames_with_the_lane_counts_and_the_pinned_libr15_sha(self):
@@ -323,6 +475,26 @@ class RealReferenceApkTest(unittest.TestCase):
             again = pathlib.Path(tmp) / "again.apk"
             second = rp.rename_apk(out, again)
             self.assertEqual(second["event"], "package_already_renamed")
+
+    def test_real_apk_label_reads_echo_vr_and_nothing_else_moves(self):
+        src = pathlib.Path(REAL_APK)
+        with tempfile.TemporaryDirectory() as tmp:
+            plain, labelled = pathlib.Path(tmp) / "plain.apk", pathlib.Path(tmp) / "labelled.apk"
+            rp.rename_apk(src, plain)
+            record = rp.rename_apk(src, labelled, label=PROJECT_LABEL)
+            print("real-file label record:", json.dumps(record, sort_keys=True))
+            self.assertEqual((record["label_from"], record["label_to"]), (REFERENCE_LABEL, PROJECT_LABEL))
+            with zipfile.ZipFile(plain) as zplain, zipfile.ZipFile(labelled) as zlabelled:
+                self.assertEqual(zlabelled.testzip(), None)
+                self.assertEqual([i.filename for i in zlabelled.infolist()], [i.filename for i in zplain.infolist()])
+                manifest = zlabelled.read(rp.MANIFEST)
+                self.assertEqual(ql.label_of(manifest), PROJECT_LABEL)
+                self.assertEqual(manifest, ql.set_label(zplain.read(rp.MANIFEST), PROJECT_LABEL))
+                self.assertIn(NEW, rp._pool_strings(manifest))
+                self.assertNotIn(OLD, rp._pool_strings(manifest))
+                for info in zplain.infolist():
+                    if info.filename != rp.MANIFEST:
+                        self.assertEqual(sha(zlabelled.read(info.filename)), sha(zplain.read(info)), info.filename)
 
 
 if __name__ == "__main__":

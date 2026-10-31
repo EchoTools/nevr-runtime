@@ -138,7 +138,7 @@ Merged from the social test plan: TP#2 to 5, 9 to 19. Party features need two re
 | [ ] | M06 | The internet check is answered "connected" in headless runs | PC | Log-only: game server run | `[NEVR.HEADLESS] SYSNET check hooked — will always report internet-connected` (src/runtime/patch/mode_patches.cpp) |
 | [ ] | M07 | No-network state does not strand the boot (NoNetwork becomes LoadingRoot) | PC | Log-only: start with the network down | `[NEVR.PATCH] Suppressed NoNetwork transition — redirecting to LoadingRoot to continue boot.` (src/runtime/lifecycle/state_machine.cpp) |
 | [ ] | M08 | The early-quit lockout countdown shows when the service sends a penalty | PC | Quit a match early on a flagged account; the lockout countdown shows when queueing | `[NEVR.EARLYQUIT] penalty set: stamp=...` (src/runtime/patch/early_quit_lockout.cpp)<br>`[NEVR.EARLYQUIT] lockoutcountdownactive=%d (lockoutcountdownsec=%lld)` (src/runtime/patch/early_quit_lockout.cpp) |
-| [ ] | M09 | The early-quit hooks installed (penalty event, expression, feature-flag mask) | PC | Log-only: read the boot log | `[NEVR.EARLYQUIT] feature-flag mask 0xdd -> 0xff va=0x%llx` (src/runtime/patch/early_quit_lockout.cpp)<br>`[NEVR.EARLYQUIT] %s hook installed va=0x%llx` (src/runtime/patch/early_quit_lockout.cpp) |
+| [ ] | M09 | The early-quit hooks installed (penalty event, expression, feature-flag mask) | PC | Log-only: read the boot log | `[NEVR.EARLYQUIT] hooked name=EarlyQuitFeatureFlagsCB va=0x1401618B0` (src/runtime/patch/early_quit_lockout.cpp)<br>`[NEVR.EARLYQUIT] %s hook installed va=0x%llx` (src/runtime/patch/early_quit_lockout.cpp) |
 
 ## In-match
 

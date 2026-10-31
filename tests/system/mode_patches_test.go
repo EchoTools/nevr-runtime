@@ -63,7 +63,6 @@ func TestModePatchesServerAndOfflinePrologues(t *testing.T) {
 		{"server flags", 0x1580C3, []byte{0x48, 0x8B, 0x08}},
 		{"netserver logging", 0xFFA58, []byte{0x48, 0x0F, 0x45, 0xD8}},
 		{"logging subject", 0xFFB0E, []byte{0x74, 0x0E}},
-		{"allow incoming", 0xF7F904, []byte{0xE8, 0x87, 0xF0, 0x66, 0xFF}},
 		{"offline multiplayer", 0xFDE0E, []byte{0xE8, 0x5D, 0xFC, 0xFF, 0xFF}},
 		{"offline incidents", 0x17F0B1, []byte{0x74, 0x0A}},
 		{"offline title", 0x17F77B, []byte{0x75, 0x12}},
@@ -85,7 +84,6 @@ func TestModePatchesOptionalSubsystemPrologues(t *testing.T) {
 		want []byte
 	}{
 		{"OVR branch", 0x1580E5, []byte{0x0F, 0x85, 0xC7, 0x00, 0x00, 0x00}},
-		{"no OVR spectator", 0x11690D, []byte{0x75, 0x35}},
 		{"deadlock monitor", 0x1D3850, []byte{0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x83, 0x79, 0x18, 0x00, 0x48, 0x8B, 0xD9, 0x0F, 0x84, 0x7D, 0x00, 0x00, 0x00}},
 		{"loading tip pick", 0xBD9670, []byte{0x48, 0x89, 0x5C, 0x24, 0x10}},
 		{"loading tip select", 0xBE6D10, []byte{0x48, 0x89, 0x54, 0x24, 0x10}},
@@ -157,7 +155,6 @@ func TestModePatchesTargetsDoNotOverlap(t *testing.T) {
 		{"server flags", 0x1580C3, 40},
 		{"netserver logging", 0xFFA58, 4},
 		{"logging subject", 0xFFB0E, 2},
-		{"allow incoming", 0xF7F904, 5},
 		{"offline multiplayer", 0xFDE0E, 5},
 		{"offline incidents", 0x17F0B1, 2},
 		{"offline title", 0x17F77B, 2},
@@ -166,7 +163,6 @@ func TestModePatchesTargetsDoNotOverlap(t *testing.T) {
 		{"offline logon", 0x1AC83E, 6},
 		{"offline tutorial", 0xA7C685, 5},
 		{"OVR branch", 0x1580E5, 6},
-		{"no OVR spectator", 0x11690D, 2},
 		{"loading tip pick", 0xBD9670, 1},
 		{"loading tip select", 0xBE6D10, 1},
 		{"loading tip select two", 0xBE7C90, 1},

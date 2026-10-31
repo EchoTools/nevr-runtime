@@ -18,6 +18,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/asset_cdn.cpp",
     "patch/asset_registry.cpp",
     "patch/binary_bug_fixes.cpp",
+    "patch/broadcaster_allow_incoming.cpp",
     "patch/broadcaster_guard.cpp",
     "patch/coop_ai_trace.cpp",
     "patch/credits_text.cpp",
@@ -32,6 +33,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/invite_service.cpp",
     "patch/invite_transport_curl.cpp",
     "patch/invite_wizard_hook.cpp",
+    "patch/loading_tips.cpp",
     "patch/lobby_full_backoff.cpp",
     "patch/menu_cards.cpp",
     "patch/menu_version_label.cpp",
@@ -39,6 +41,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/mode_patches.cpp",
     "patch/netgun_bullets.cpp",
     "patch/netgun_bullet_ids.cpp",
+    "patch/noovr_arglookup.cpp",
     "patch/plugin_assets.cpp",
     "patch/pnsrad_enabler.cpp",
     "patch/render_config.cpp",
@@ -98,7 +101,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("patch-source-inventory: OK count=40", result.stdout)
+        self.assertIn("patch-source-inventory: OK count=43", result.stdout)
 
     def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
         scenarios = (
