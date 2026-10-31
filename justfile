@@ -568,6 +568,11 @@ release-quest-apk tag store_apk=env("NEVR_STORE_APK"): (_release-quest-apk "rele
 # only this variant takes them, never the release APK.
 release-quest-variant-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pack_meta="": (_release-quest-apk "release-quest-variant-apk" tag store_apk plugins "q15t" pack pack_meta)
 
+# The combat APK of a release: the same repack as release-quest-apk, from the same loader asset, with the plugin libraries
+# `plugins` names (colon-separated). It is written to build/quest-release/<tag>/combat/ under the release's own name,
+# nevr-runtime-<tag>-quest.apk, with its .sha256 beside. It uploads nothing and never tags. `pack` and `pack_meta` as for the variant.
+release-quest-combat-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pack_meta="": (_release-quest-apk "release-quest-combat-apk" tag store_apk plugins "combat" pack pack_meta)
+
 # The body of release-quest-apk and release-quest-variant-apk. `label` is the public recipe's name, which every message of the
 # run carries. `plugin` and `variant` are both empty (the release APK, which never carries a plugin) or both set (the variant
 # APK, written under build/quest-release/<tag>/variant). `pack` and `pack_meta` are empty (every release APK) or, for the variant, a game-data pack
@@ -590,7 +595,10 @@ _release-quest-apk label tag store_apk plugin variant pack pack_meta:
     ver="${tag#v}"
     out="build/quest-release/$tag"
     name="nevr-runtime-$tag-quest.apk"
-    if [ -n "$variant" ]; then
+    # `combat` is the release name in its own directory; any other variant gets its own name (release-quest-variant-apk).
+    if [ "$variant" = combat ]; then
+        out="$out/combat"
+    elif [ -n "$variant" ]; then
         out="$out/variant"
         name="nevr-runtime-$tag-$variant-quest.apk"
     fi
@@ -608,7 +616,7 @@ _release-quest-apk label tag store_apk plugin variant pack pack_meta:
     cp -f "$out/repack/r15_nevr-sentinel_signed.apk" "$out/$name"
     (cd "$out" && sha256sum "$name" > "$name.sha256")
     cat "$out/$name.sha256"
-    if [ -n "$variant" ]; then
+    if [ -n "$variant" ] && [ "$variant" != combat ]; then
         echo "$label: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset and not in the manifest: tools/publish_quest_apk.py --variant $variant puts it on the release host." >&2
     else
         echo "$label: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
