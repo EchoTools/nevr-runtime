@@ -53,10 +53,13 @@ class EndedSessionWatchdog {
     std::lock_guard<std::mutex> lock(mutex_);
     if (armed_ || fired_) return false;
     armed_ = true;
-    thread_ = std::thread([this, delay, id = std::move(sessionId), fn = std::move(onExpire)]() {
+    const uint64_t generation = ++generation_;
+    thread_ = std::thread([this, generation, delay, id = std::move(sessionId), fn = std::move(onExpire)]() {
       std::unique_lock<std::mutex> wait(mutex_);
-      const bool cancelled = cv_.wait_for(wait, delay, [this] { return !armed_; });
-      if (cancelled) return;
+      // A Cancel() followed by a new Arm() leaves armed_ true again; the generation tells this countdown it was
+      // the one cancelled.
+      const bool cancelled = cv_.wait_for(wait, delay, [this, generation] { return !armed_ || generation_ != generation; });
+      if (cancelled || !armed_ || generation_ != generation) return;
       armed_ = false;
       fired_ = true;
       wait.unlock();
@@ -67,12 +70,20 @@ class EndedSessionWatchdog {
 
   /// Stops a running countdown. Safe from any thread, and from inside `onExpire`.
   void Cancel() {
+    std::thread stopped;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       armed_ = false;
+      ++generation_;
+      stopped = std::move(thread_);
     }
     cv_.notify_all();
-    if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) thread_.join();
+    if (!stopped.joinable()) return;
+    if (stopped.get_id() == std::this_thread::get_id()) {
+      stopped.detach();  // called from inside onExpire: this thread cannot join itself
+    } else {
+      stopped.join();
+    }
   }
 
   bool Armed() const {
@@ -90,6 +101,7 @@ class EndedSessionWatchdog {
   std::condition_variable cv_;
   bool armed_ = false;
   bool fired_ = false;
+  uint64_t generation_ = 0;
   std::thread thread_;
 };
 

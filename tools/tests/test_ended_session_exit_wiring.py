@@ -29,14 +29,16 @@ class EndedSessionExitWiring(unittest.TestCase):
         self.assertIn("SetReceiveObserver", body)
         observer = body[body.index("SetReceiveObserver"):]
         observer = observer[: observer.index("SetMessageHandler")]
-        self.assertIn("ParseServiceEndedSession(", observer)
-        self.assertIn("ArmEndedSessionWatchdog(", observer)
+        self.assertIn("if (!nevr_game_server::ParseServiceEndedSession(", observer)
+        self.assertLess(observer.index("ParseServiceEndedSession("), observer.index("return;"))
+        self.assertLess(observer.index("return;"), observer.index("ArmEndedSessionWatchdog("))
 
     def test_the_expiry_ends_the_process_with_a_warning(self):
         body = extract_braced_function(callbacks(), "void GameServerLib::ArmEndedSessionWatchdog(const std::string& sessionId)")
         self.assertIn("m_endedSessionWatchdog.Arm(", body)
-        self.assertLess(body.index("LogLevel::Warning"), body.index("PerformGracefulShutdown(0)"))
-        self.assertIn("session_id=%s", body)
+        warning = body[body.index("LogLevel::Warning"):body.index("PerformGracefulShutdown(0)")]
+        self.assertIn("session_id=%s", warning)
+        self.assertIn("running_scripts=", warning)
 
     def test_the_delay_adds_the_empty_server_hold_to_the_grace(self):
         body = extract_braced_function(callbacks(), "void GameServerLib::ArmEndedSessionWatchdog(const std::string& sessionId)")
