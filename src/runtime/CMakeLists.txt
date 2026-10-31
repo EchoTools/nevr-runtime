@@ -1344,6 +1344,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_crash_send PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_crash_send DISCOVERY_MODE PRE_TEST)
 
+    # Player log upload (core/log_send.h, #1788, ADR 0030): the tail of the session logs goes to nevr-api when the player taps
+    # "Send log", and the service answers with a short code. Header only; the files are real files in a scratch folder and the
+    # answers come from a fake POST.
+    add_executable(test_log_send tests/test_log_send.cpp)
+    set_source_files_properties(tests/test_log_send.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_log_send PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(test_log_send PRIVATE -Werror)
+    target_link_libraries(test_log_send PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_log_send DISCOVERY_MODE PRE_TEST)
+
     # The host's POST (host/crash_send_winhttp.cpp): WinHTTP loaded by name, against a loopback server. nevr_host_core
     # holds the production unit, built with the host's own flags.
     add_executable(test_host_crash_send tests/test_host_crash_send.cpp)
