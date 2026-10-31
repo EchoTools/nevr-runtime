@@ -34,6 +34,7 @@ enum Id : int {
   kBroadcasterListen,
   kBroadcasterReceiveLocal,
   kOvrGetPerfStats,
+  kDeadlockMonitorMain,
   kCount
 };
 

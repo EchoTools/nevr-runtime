@@ -415,11 +415,6 @@ constexpr uintptr_t BUGSPLAT_CRASH_HANDLER = 0x0DBBC0;
 constexpr uintptr_t NOOVR_SPECTATOR = 0x11690D;
 constexpr size_t NOOVR_SPECTATOR_SIZE = 2;
 
-/// ReVault VA 0x1401d3850: Deadlock monitor thread — loops Sleep(1000), logs "Deadlock detected!"
-/// Patch at +0x31 disables the panic condition check
-constexpr uintptr_t DEADLOCK_MONITOR = 0x1D3881;
-constexpr size_t DEADLOCK_MONITOR_SIZE = 2;
-
 // ============================================================================
 // Oculus Platform SDK Optimization (PatchBlockOculusSDK)
 // ============================================================================

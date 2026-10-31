@@ -119,6 +119,8 @@ set(PATCHES_SOURCES
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
+    # The game's deadlock monitor thread (CDeadlockMonitor::Main): whole-function hook, stall check removed (pure loop in deadlock_monitor_loop.h).
+    "patch/deadlock_monitor.cpp"
     "patch/menu_version_label.cpp"
     # #906, ADR 0017 D4: the main-menu cards (pure logic in menu_page.h and menu_cards.h).
     "patch/menu_cards.cpp"
@@ -1585,6 +1587,12 @@ if(BUILD_TESTING)
     target_include_directories(test_lobby_full_backoff PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_lobby_full_backoff PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_lobby_full_backoff DISCOVERY_MODE PRE_TEST)
+
+    # test_deadlock_monitor.cpp: the monitor thread loop (patch/deadlock_monitor_loop.h), the one the hook runs.
+    add_executable(test_deadlock_monitor tests/test_deadlock_monitor.cpp)
+    target_include_directories(test_deadlock_monitor PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_deadlock_monitor PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_deadlock_monitor DISCOVERY_MODE PRE_TEST)
 
     # test_party_follow_dedup.cpp (#1413): the lobby join state (compat/lobby_join_state.h) and the follow decision
     # (patch/party_follow_dedup_rules.h). Both header-only, pure.

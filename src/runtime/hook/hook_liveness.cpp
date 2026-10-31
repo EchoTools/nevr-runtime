@@ -32,6 +32,8 @@ const Entry kEntries[] = {
     // so entries=0 there is the expected reading, not dead wiring. Not guaranteedAbsentOnServer: that
     // row's notice is one shared bool (see g_serverAbsenceNoticeLogged), and a second row would be swallowed.
     {"ovr_GetPerfStats", "PCVR session only", false},
+    // The game creates this thread in CncaGame init (0x1404f5e50), gated on a game flag bit; a run where that bit is clear reads 0.
+    {"CDeadlockMonitor::Main", "engine init (thread per process, mode-specific)", false},
 };
 
 // kEntries is sized by its INITIALIZER, not by kCount. That is load-bearing: if

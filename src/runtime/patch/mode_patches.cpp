@@ -731,25 +731,7 @@ VOID PatchNoOvrRequiresSpectatorStream() {
   ApplyPatch(NOOVR_SPECTATOR, noOvrPatch, sizeof(noOvrPatch));
 }
 
-// ============================================================================
-// PatchDeadlockMonitor — disable deadlock detection for debugging
-// ============================================================================
-
-/// <summary>
-/// Patches the dead lock monitor, which monitors threads to ensure they have not stopped processing. If one does, it
-/// triggers a fatal error. This patch is provided to ensure breakpoints set during testing do not trigger the deadlock
-/// monitor, thereby killing the process.
-/// </summary>
-/// <returns>None</returns>
-VOID PatchDeadlockMonitor() {
-  using namespace nevr_patch_addresses;
-
-  // Disable the deadlock monitor's panic condition check
-  // This allows debugging with breakpoints without triggering a timeout
-  const BYTE deadlockPatch[] = {0x90, 0x90};  // 2x NOP (replace JLE instruction)
-  static_assert(sizeof(deadlockPatch) == DEADLOCK_MONITOR_SIZE, "DEADLOCK_MONITOR patch size mismatch");
-  ApplyPatch(DEADLOCK_MONITOR, deadlockPatch, sizeof(deadlockPatch));
-}
+// PatchDeadlockMonitor: patch/deadlock_monitor.cpp
 
 // =============================================================================
 // Oculus Platform SDK Blocking
