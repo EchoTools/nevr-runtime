@@ -1,8 +1,11 @@
 [Unit]
-Description=nevr-runtime Quest release: look for a new release tag every 30 minutes (#1210)
+Description=nevr-runtime Quest release: every minute, start the release run when it has work (#1210, #1771)
 
 [Timer]
-OnCalendar=*:0/30
+# Every minute, so a draft's APK is published within seconds of the release being published. The unit's ExecCondition
+# makes the minute cheap when there is nothing to do: one GitHub call, and the run does not start.
+OnCalendar=*:*:00
+AccuracySec=1s
 Persistent=true
 Unit=nevr-quest-release.service
 
