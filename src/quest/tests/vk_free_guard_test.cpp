@@ -273,8 +273,13 @@ void AnInstallWhoseSlotDoesNotResolveLeavesTheGamesFree() {
   QCHECK(CountLines("\"event\":\"vk_free_guard_install\"") == 1);
   QCHECK(CountLines("\"result\":\"refused\"") == 1);
   QCHECK(CountLinesWithBoth("\"event\":\"vk_free_guard_install\"", "\"status\":\"module_not_loaded\"") == 1);
-  Fill(hole::kGuardFrom);
-  FreeApart(3, 0x7ffff000);  // nothing is armed: the entry is the game's call
+  // The image's array is nearly full, with an entry a free of block 0x1003 would not touch: were the hook left armed on it, the
+  // free would be leaked. Nothing is armed, so the entry is the game's call.
+  const std::uint32_t full = hole::kGuardFrom;
+  std::memcpy(image + layout::kCountVaddr, &full, sizeof(full));
+  const hole::Entry entry = {0x1003, 0x10000, 0x11000, 1, 2};
+  std::memcpy(image + layout::kTableVaddr, &entry, sizeof(entry));
+  FreeApart(3, 0x7ffff000);
   QCHECK(g_gameCalls == 1);
   munmap(image, kImageBytes);
 }
