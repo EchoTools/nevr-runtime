@@ -32,6 +32,11 @@ const Entry kEntries[] = {
     // so entries=0 there is the expected reading, not dead wiring. Not guaranteedAbsentOnServer: that
     // row's notice is one shared bool (see g_serverAbsenceNoticeLogged), and a second row would be swallowed.
     {"ovr_GetPerfStats", "PCVR session only", false},
+    // #1774: server mode only. The loading-screen script runs these nodes; a server whose match never reaches a
+    // loading screen leaves them at entries=0, which is the reading the `entered` field reports.
+    {"CR15PickLoadingTipNode::Enter", "server mode, loading screen", false},
+    {"CR15SelectLoadingTipByIndexNode::Enter", "server mode, loading screen", false},
+    {"CR15SelectLoadingTipNode::Enter", "server mode, loading screen", false},
 };
 
 // kEntries is sized by its INITIALIZER, not by kCount. That is load-bearing: if
