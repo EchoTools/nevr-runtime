@@ -128,6 +128,8 @@ func TestServerBotsSites(t *testing.T) {
 			assertRVABytes(t, exe, site.rva, site.bytes)
 		})
 	}
+}
+
 // #1422: the two checked-patch sites in ServerAssignTeam (patch/server_team_size.h) hold the game's bytes, so a
 // game update that moves the team cap or the team slot rule fails here before a server writes either.
 func TestServerTeamSizeSites(t *testing.T) {
