@@ -213,14 +213,14 @@ quest-reference-base apk out label="Echo VR":
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key, a keystore file named by
 # NEVR_QUEST_KEYSTORE with its passphrase in NEVR_QUEST_KEYSTORE_PASS (tools/quest_keystore.sh): it is copied into a
 # private tmpfs file for the signing command only and is never generated here.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"; version="{{ version }}"
     extra_rows="{{ extra_rows }}"; patcher="{{ patcher }}"; json_include="{{ json_include }}"
     plugin_early="{{ plugin_early }}"; plugin_off="{{ plugin_off }}"
-    pack="{{ pack }}"; pack_meta="{{ pack_meta }}"
+    pack="{{ pack }}"; pack_meta="{{ pack_meta }}"; extra_libs="{{ extra_libs }}"
     work="$root/{{ workdir }}"
     # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
     rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
@@ -378,6 +378,16 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
             ${early_args[@]+"${early_args[@]}"} ${off_args[@]+"${off_args[@]}"}
         stage_libs+=("lib/arm64-v8a/libnevr_plugin_manifest.so")
     fi
+    # 3e. script libraries (lib<hash16>.so, each checked and listed in SHA256SUMS; tools/quest_repack_libs.py stage-libs), staged
+    # as STORED entries beside the plugins. A store library one of them replaces is named in the directory's REPLACE file.
+    combat_libs=()
+    if [ -n "$extra_libs" ]; then
+        [ -d "$extra_libs" ] || { echo "android-repack-apk: script library directory not found: $extra_libs" >&2; exit 1; }
+        python3 -I tools/quest_repack_libs.py stage-libs --libs "$extra_libs" --stage "$work/stage" --store-apk "$apk"
+        for f in "$work/stage/lib/arm64-v8a"/lib????????????????.so; do
+            [ -f "$f" ] && combat_libs+=("lib/arm64-v8a/$(basename "$f")")
+        done
+    fi
     # 4. fresh APK copy, strip the store's v1 signature, inject both libs STORED (-0)
     unsigned="$work/r15-repacked.apk"
     aligned="$work/r15-repacked-aligned.apk"
@@ -389,6 +399,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     cp -f "$apk" "$unsigned"
     zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
     ( cd "$work/stage" && zip -q -0 -X "$unsigned" "${stage_libs[@]}" )
+    if [ "${#combat_libs[@]}" -gt 0 ]; then ( cd "$work/stage" && zip -q -0 -X "$unsigned" "${combat_libs[@]}" ); fi
     ( cd "$work/stage" && zip -q -X "$unsigned" lib/arm64-v8a/libr15.so )
     # The pack's entries go in STORED (-0), like the libraries: the file names were checked plain by stage-pack.
     if [ -n "$pack" ]; then
@@ -595,21 +606,22 @@ release-quest-variant-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pa
 # The combat APK of a release: the same repack as release-quest-apk, from the same loader asset, with the plugin libraries
 # `plugins` names (colon-separated). It is written to build/quest-release/<tag>/combat/ under the release's own name,
 # nevr-runtime-<tag>-quest.apk, with its .sha256 beside. It uploads nothing and never tags. `pack` and `pack_meta` as for the variant.
-release-quest-combat-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pack_meta="": (_release-quest-apk "release-quest-combat-apk" tag store_apk plugins "combat" pack pack_meta)
+release-quest-combat-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pack_meta="" libs="": (_release-quest-apk "release-quest-combat-apk" tag store_apk plugins "combat" pack pack_meta libs)
 
 # The body of release-quest-apk and release-quest-variant-apk. `label` is the public recipe's name, which every message of the
 # run carries. `plugin` and `variant` are both empty (the release APK, which never carries a plugin) or both set (the variant
 # APK, written under build/quest-release/<tag>/variant). `pack` and `pack_meta` are empty (every release APK) or, for the variant, a game-data pack
 # zip and its description file.
-_release-quest-apk label tag store_apk plugin variant pack pack_meta:
+_release-quest-apk label tag store_apk plugin variant pack pack_meta libs="":
     #!/usr/bin/env bash
     set -euo pipefail
-    label="{{ label }}"; tag="{{ tag }}"; plugin="{{ plugin }}"; variant="{{ variant }}"; pack="{{ pack }}"; pack_meta="{{ pack_meta }}"
+    label="{{ label }}"; tag="{{ tag }}"; plugin="{{ plugin }}"; variant="{{ variant }}"; pack="{{ pack }}"; pack_meta="{{ pack_meta }}"; libs="{{ libs }}"
     [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "$label: not a release tag (vX.Y.Z): $tag" >&2; exit 1; }
     [ -z "$variant" ] || [ -n "$plugin" ] || { echo "$label: the variant APK carries plugin libraries, and none is named" >&2; exit 1; }
     [ -n "$variant" ] || [ -z "$plugin" ] || { echo "$label: a release APK carries no plugin library" >&2; exit 1; }
     [ -n "$variant" ] || [ -z "$pack" ] || { echo "$label: a release APK carries no game-data pack" >&2; exit 1; }
     [ -n "$pack" ] || [ -z "$pack_meta" ] || { echo "$label: pack_meta describes a pack, and no pack is given" >&2; exit 1; }
+    [ -z "$libs" ] || [ -n "$variant" ] || { echo "$label: a release APK carries no script library" >&2; exit 1; }
     tools/release_preflight.py --tag "$tag"
     tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}") || { echo "$label: tag $tag is not in this clone" >&2; exit 1; }
     head=$(git rev-parse HEAD)
@@ -634,10 +646,8 @@ _release-quest-apk label tag store_apk plugin variant pack pack_meta:
     # The combat APK runs libq15t_early.so in the early phase, before android_main reads the heap sizes (src/quest/plugins/q15t/README.md).
     early=""
     if [ "$variant" = combat ]; then early="libq15t_early.so"; fi
-    if [ -n "$pack" ]; then
-        just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "$early" "" "$pack" "$pack_meta"
-    elif [ -n "$early" ]; then
-        just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "$early"
+    if [ -n "$pack" ] || [ -n "$early" ] || [ -n "$libs" ]; then
+        just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "$early" "" "$pack" "$pack_meta" "$libs"
     else
         just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver"
     fi

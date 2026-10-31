@@ -1093,5 +1093,106 @@ class RepackPatchesLibr15Test(RepackFixture):
             self.assertNotIn(RUNTIME, out.namelist())
 
 
+
+def aarch64_so(tag: bytes = b"") -> bytes:
+    """The smallest 64-bit little-endian AArch64 ELF header the staging check reads, plus a tag that makes each file distinct."""
+    header = bytearray(64)
+    header[0:4] = b"\x7fELF"
+    header[4] = 2  # ELFCLASS64
+    header[5] = 1  # ELFDATA2LSB
+    struct.pack_into("<H", header, 18, 183)  # EM_AARCH64
+    return bytes(header) + tag
+
+
+class StageLibsTest(unittest.TestCase):
+    """`stage-libs` (M5): the script libraries of a combat build are staged only when each is named, AArch64 and listed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = pathlib.Path(self.tmp.name)
+        self.store = self.root / "store.apk"
+        with zipfile.ZipFile(self.store, "w") as zf:
+            zf.writestr("lib/arm64-v8a/libr15.so", b"stock")
+            zf.writestr("lib/arm64-v8a/libcollide0123.so", b"store")  # not a lib<hash16>.so name; never replaced here
+        self.libs = self.root / "libs"
+        self.libs.mkdir()
+        self.stage = self.root / "stage"
+        self.stage.mkdir()
+        self.names = {"lib0123456789abcdef.so": aarch64_so(b"a"), "lib00000000000000ff.so": aarch64_so(b"b")}
+        for name, data in self.names.items():
+            (self.libs / name).write_bytes(data)
+        self.write_sums()
+
+    def write_sums(self, overrides=None):
+        lines = []
+        for name in sorted(self.names):
+            data = (overrides or {}).get(name, self.names[name])
+            lines.append(f"{SHA(data)}  {name}\n")
+        (self.libs / "SHA256SUMS").write_text("".join(lines))
+
+    def run_stage(self):
+        return libs.stage_libs(self.libs, self.stage, self.store)
+
+    def test_every_listed_library_is_staged_beside_the_plugins_and_no_replacement_is_recorded(self):
+        self.assertEqual(self.run_stage(), [])
+        for name, data in self.names.items():
+            self.assertEqual((self.stage / "lib/arm64-v8a" / name).read_bytes(), data)
+        self.assertEqual((self.stage / libs.STAGED_REPLACE_LIST).read_text(), "")
+        self.assertEqual(libs.replaced_names(self.stage), [])
+
+    def test_an_unlisted_library_is_refused(self):
+        self.write_sums()
+        (self.libs / "SHA256SUMS").write_text(f"{SHA(self.names['lib0123456789abcdef.so'])}  lib0123456789abcdef.so\n")
+        problems = self.run_stage()
+        self.assertTrue(any("lib00000000000000ff.so: not listed in SHA256SUMS" in p for p in problems), problems)
+        self.assertFalse((self.stage / "lib/arm64-v8a").exists())
+
+    def test_a_library_whose_bytes_differ_from_its_listed_digest_is_refused(self):
+        self.write_sums(overrides={"lib0123456789abcdef.so": aarch64_so(b"not what was listed")})
+        problems = self.run_stage()
+        self.assertTrue(any("lib0123456789abcdef.so: its sha-256 differs" in p for p in problems), problems)
+
+    def test_a_listed_name_with_no_file_is_refused(self):
+        (self.libs / "lib00000000000000ff.so").unlink()
+        problems = self.run_stage()
+        self.assertTrue(any("lib00000000000000ff.so: listed in SHA256SUMS and missing" in p for p in problems), problems)
+
+    def test_a_file_that_is_not_aarch64_is_refused(self):
+        x86 = bytearray(aarch64_so(b"c"))
+        struct.pack_into("<H", x86, 18, 62)  # EM_X86_64
+        self.names["lib0123456789abcdef.so"] = bytes(x86)
+        (self.libs / "lib0123456789abcdef.so").write_bytes(bytes(x86))
+        self.write_sums()
+        problems = self.run_stage()
+        self.assertTrue(any("lib0123456789abcdef.so: not a 64-bit AArch64 shared object" in p for p in problems), problems)
+
+    def test_a_stray_name_is_refused(self):
+        for stray in ("libfoo.so", "lib0123456789abcdef.so.bak", "lib0123456789ABCDEF.so"):
+            with self.subTest(name=stray):
+                (self.libs / stray).write_bytes(aarch64_so(b"s"))
+                problems = self.run_stage()
+                self.assertTrue(any(f"{stray}: not named lib<hash16>.so" in p for p in problems), problems)
+                (self.libs / stray).unlink()
+
+    def test_a_name_the_store_holds_is_refused_unless_REPLACE_lists_it(self):
+        name = "lib0123456789abcdef.so"
+        with zipfile.ZipFile(self.store, "a") as zf:
+            zf.writestr(f"lib/arm64-v8a/{name}", b"store copy")
+        problems = self.run_stage()
+        self.assertTrue(any(f"{name}: the store APK holds lib/arm64-v8a/{name}" in p for p in problems), problems)
+        (self.libs / libs.LIBS_REPLACE).write_text(f"{name}\n")
+        self.assertEqual(self.run_stage(), [])
+        self.assertEqual(libs.replaced_names(self.stage), [name])
+
+    def test_REPLACE_names_only_a_staged_library_that_replaces_a_store_library(self):
+        (self.libs / libs.LIBS_REPLACE).write_text("lib0123456789abcdef.so\n")
+        problems = self.run_stage()
+        self.assertTrue(any("lib0123456789abcdef.so: REPLACE lists it" in p for p in problems), problems)
+
+
+SHA = lambda data: hashlib.sha256(data).hexdigest()  # noqa: E731
+
+
 if __name__ == "__main__":
     unittest.main()

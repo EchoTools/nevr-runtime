@@ -103,7 +103,7 @@ STUB_REPACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="
     printf 'signed plugin=[%s] version=%s' "{{ plugin }}" "{{ version }}" > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
 """
 # The same recipe with the parameters the real one has since the bundled pack (docs/adr/0029-quest-bundled-content-pack.md).
-STUB_REPACK_PACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="":
+STUB_REPACK_PACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{ workdir }}"
@@ -111,6 +111,14 @@ STUB_REPACK_PACK = """android-repack-apk apk shim="s" workdir="w" plugin="" vers
     printf 'signed' > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
 """
 PLUGINS = "/priv/libq15t.so:/priv/libq15t_early.so"
+# The repack with the script-library parameter (M5): it records the library directory it was given.
+STUB_REPACK_LIBS = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{ workdir }}"
+    echo "repack apk={{ apk }} plugin={{ plugin }} version={{ version }} pack={{ pack }} pack_meta={{ pack_meta }} libs={{ extra_libs }}" >> "$CALLS"
+    printf 'signed' > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
+"""
 
 
 class RecipesRun(unittest.TestCase):
@@ -317,6 +325,21 @@ class RecipesRun(unittest.TestCase):
         self.assertIn("release-quest-apk: a release APK carries no game-data pack", result.stderr)
         self.assertNotIn("repack ", "\n".join(self.calls_made()))
 
+    def test_the_combat_recipe_passes_the_script_library_directory_to_the_repack(self):
+        texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "release-quest-combat-apk",
+                                           "_release-quest-apk")]
+        (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK_LIBS, encoding="utf-8")
+        result = self.just("release-quest-combat-apk", "v1.2.3", PLUGINS, str(self.store), "", "", "/p/libs")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"repack apk={self.store} plugin={PLUGINS} version=1.2.3 pack= pack_meta= libs=/p/libs",
+                      self.calls_made())
+
+    def test_a_release_apk_or_a_variant_never_takes_script_libraries(self):
+        result = self.just("_release-quest-apk", "release-quest-apk", "v1.2.3", str(self.store), "", "", "", "", "/p/libs")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release-quest-apk: a release APK carries no script library", result.stderr)
+        self.assertNotIn("repack ", "\n".join(self.calls_made()))
+
     def test_a_description_with_no_pack_is_refused_before_the_repack(self):
         self.use_pack_stub()
         result = self.just("release-quest-variant-apk", "v1.2.3", PLUGINS, str(self.store), "", "/p/meta.json")
@@ -342,8 +365,8 @@ class RecipeText(unittest.TestCase):
 
     def test_the_combat_recipe_takes_plugins_and_a_pack_and_runs_the_shared_body_as_combat(self):
         line = recipe("release-quest-combat-apk").splitlines()[0]
-        self.assertIn('release-quest-combat-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pack_meta=""', line)
-        self.assertIn('_release-quest-apk "release-quest-combat-apk" tag store_apk plugins "combat" pack pack_meta',
+        self.assertIn('release-quest-combat-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pack_meta="" libs=""', line)
+        self.assertIn('_release-quest-apk "release-quest-combat-apk" tag store_apk plugins "combat" pack pack_meta libs',
                       recipe("release-quest-combat-apk"))
 
     def test_both_release_recipes_run_the_one_shared_body(self):
