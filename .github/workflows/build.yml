@@ -311,6 +311,16 @@ jobs:
         mkdir -p "$RUNNER_TEMP/ccache"
         tar -xzf "$RUNNER_TEMP/ccache.tgz" --strip-components=1 -C "$RUNNER_TEMP/ccache" ccache-4.14.2-linux-x86_64-musl-static/ccache
         "$RUNNER_TEMP/ccache/ccache" --version | grep -x "ccache version 4.14.2"
+        # The settings reach every later step, because every later step that compiles goes through the launcher the configure
+        # step names (the dist target and, off a tag, Verify). $GITHUB_WORKSPACE, not ${{ github.workspace }} (the host's path in
+        # a container job). tools/ccache.conf is the config local builds use; the size cap is CI's own and no base_dir is set
+        # (the workspace path is fixed). Only PATH is kept out of GITHUB_ENV (it is part of every mingw package ABI).
+        {
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache"
+          echo "CCACHE_CONFIGPATH=$GITHUB_WORKSPACE/tools/ccache.conf"
+          echo "CCACHE_MAXSIZE=500M"
+          echo "CCACHE_COMPILERCHECK=content"
+        } >> "$GITHUB_ENV"
 
     # A cache is restorable only from the run's own ref and the default branch, and a tag cannot read another tag's: the
     # entry a new tag restores was saved on main (a hand-run `gh workflow run build.yml --ref main`); a dispatch on a tag
@@ -336,9 +346,6 @@ jobs:
     - name: Build
       run: |
         set -euo pipefail
-        # $GITHUB_WORKSPACE, not ${{ github.workspace }} (the host's path in a container job). tools/ccache.conf is the
-        # config local builds use; the size cap is CI's own and no base_dir is set (the workspace path is fixed).
-        export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache" CCACHE_CONFIGPATH="$GITHUB_WORKSPACE/tools/ccache.conf" CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content
         "$RUNNER_TEMP/ccache/ccache" --zero-stats
         cmake --build --preset mingw-release
 
@@ -351,10 +358,11 @@ jobs:
         path: .ccache
         key: ccache-mingw-release-v1-${{ steps.vcpkg.outputs.gcc }}-4.14.2-${{ github.sha }}
 
+    # Diagnostics only: a failure here (a renamed ccache key, no DLL because Build failed) must not fail the build.
     - name: ccache statistics
       if: always()
+      continue-on-error: true
       run: |
-        export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache" CCACHE_CONFIGPATH="$GITHUB_WORKSPACE/tools/ccache.conf" CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content
         "$RUNNER_TEMP/ccache/ccache" --show-stats --verbose
         "$RUNNER_TEMP/ccache/ccache" --show-config | grep -E 'cache_dir|max_size|sloppiness|hash_dir|compiler_check|base_dir'
         sha256sum build/mingw-release/bin/BugSplat64.dll build/mingw-release/bin/nevr-runtime.dll

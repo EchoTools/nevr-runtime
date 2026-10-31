@@ -20,7 +20,8 @@ BUILD_STEP = "Build"
 SAVE = "Save the ccache"
 STATS = "ccache statistics"
 ASSERT_VERSION = "Assert the stamped version"
-ORDER = [INSTALL, RESTORE, CONFIGURE, BUILD_STEP, SAVE, STATS, ASSERT_VERSION]
+VERIFY = "Verify"
+ORDER = [INSTALL, RESTORE, CONFIGURE, BUILD_STEP, SAVE, STATS, ASSERT_VERSION, VERIFY]
 
 CCACHE_DIGEST = "d540ba01f160addbd3dd5e18eda9bd34005591b095c09ac8ae9d0a1b655e7ef5"
 
@@ -74,7 +75,22 @@ class CcacheStep(unittest.TestCase):
         self.assertEqual(len(set(positions)), len(positions), "a step name is repeated")
 
     def test_the_save_step_is_skipped_on_a_release_event(self) -> None:
-        self.assertIn("if: github.event_name != 'release'", self.save)
+        self.assertEqual(re.findall(r"(?m)^      if: (.+)$", self.save), ["github.event_name != 'release'"])
+
+    def test_the_save_and_restore_steps_use_the_same_directory(self) -> None:
+        self.assertEqual(re.findall(r"(?m)^        path: (.+)$", self.save), re.findall(r"(?m)^        path: (.+)$", self.restore))
+        self.assertEqual(re.findall(r"(?m)^        path: (.+)$", self.save), [".ccache"])
+
+    def test_the_keys_name_the_toolchain_and_the_commit(self) -> None:
+        key = re.search(r"(?m)^        key: (.+)$", self.save).group(1)
+        self.assertIn("steps.vcpkg.outputs.gcc", key, "a new compiler would reuse the old objects")
+        self.assertIn("github.sha", key)
+        self.assertIn("4.14.2", key, "a new ccache version would reuse the old entry")
+
+    def test_the_statistics_step_runs_after_a_failed_build_and_cannot_fail_the_build(self) -> None:
+        self.assertIn("if: always()", self.stats)
+        self.assertIn("continue-on-error: true", self.stats)
+        self.assertIn("--show-stats", self.stats)
 
     def test_the_save_key_is_the_restore_key_and_the_restore_prefix_is_its_prefix(self) -> None:
         restore_key = re.search(r"^        key: (.+)$", self.restore, re.M)
@@ -87,10 +103,20 @@ class CcacheStep(unittest.TestCase):
         self.assertTrue(restore_key.group(1).startswith(prefix.group(1)),
                         f"restore-keys prefix {prefix.group(1)} is not a prefix of {restore_key.group(1)}")
 
-    def test_the_build_step_points_ccache_at_the_workspace_by_the_github_variable(self) -> None:
-        self.assertIn('CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"', self.build)
-        export = next(line for line in self.build.splitlines() if "export CCACHE_DIR=" in line)
-        self.assertNotIn("github.workspace", export, "the build step names the host's workspace path, not the container's")
+    def test_every_later_step_gets_the_ccache_settings_from_the_job_environment(self) -> None:
+        # The dist target and, off a tag, Verify compile through the same launcher as Build: they need the same settings.
+        for line in ('echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache"',
+                     'echo "CCACHE_CONFIGPATH=$GITHUB_WORKSPACE/tools/ccache.conf"',
+                     'echo "CCACHE_MAXSIZE=500M"',
+                     'echo "CCACHE_COMPILERCHECK=content"'):
+            self.assertIn(line, self.install, line)
+        self.assertIn('>> "$GITHUB_ENV"', self.install)
+        self.assertNotIn("GITHUB_PATH", self.install)
+        for text in (self.build, self.stats):
+            self.assertNotIn("export CCACHE_", text, "a step sets its own ccache settings instead of the job's")
+        keys = re.findall(r"(?m)^\s+echo \"(CCACHE_DIR)=([^\"]+)\"", self.install)
+        self.assertEqual(len(keys), 1)
+        self.assertNotIn("github.workspace", keys[0][1], "CCACHE_DIR names the host's workspace path, not the container's")
 
     def test_the_build_step_zeroes_the_stats_and_keeps_the_build_line(self) -> None:
         self.assertIn("--zero-stats", self.build)
