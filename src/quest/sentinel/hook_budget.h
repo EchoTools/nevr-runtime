@@ -58,6 +58,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"sentinel/texture_menu_hook.cpp", 5, 0},
     {"sentinel/texture_quality_hook.cpp", 2, 0},
     {"sentinel/vk_ext_window.cpp", 2, 0},
+    {"sentinel/vk_free_guard.cpp", 1, 0},
     {"social/menu_version_label.cpp", 1, 0},
     {"social/social_install.cpp", 2, 0},
     {"social/social_invite_gate.cpp", 1, 0},

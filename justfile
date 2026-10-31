@@ -1827,6 +1827,14 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/quit_hook_test" -ldl
     timeout 120 "$out/quit_hook_test"
+    # libr15's array of free GPU ranges has no bound check (#1759): the real handler through the thunk entry against a model of
+    # CGRawInterfaceVK::Free laid out as the game's (512 entries, the count after the last), the pinned words refused when one
+    # differs, and the fill and the leaks in the log.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/vk_free_guard_test.cpp \
+        src/quest/sentinel/vk_free_guard.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/vk_free_guard_test" -ldl
+    timeout 120 "$out/vk_free_guard_test"
     # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
     # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone).
     # The handler includes the build-tree header generated/nevr_build_info.h; a stub stands in for it here.
