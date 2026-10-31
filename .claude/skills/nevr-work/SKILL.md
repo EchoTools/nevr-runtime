@@ -5,7 +5,6 @@ description: Execution harness for any implementation, investigation, build, or 
 
 # /nevr-work — the execution harness for this repository
 
-This is the `logos-work` analogue for nevr-runtime, adapted to C++/MinGW/Wine.
 It executes the repo's `AGENTS.md` (as it is on `origin/main`; it inlines the C++ MinGW
 Addendum) and the global `~/.claude/CLAUDE.md` (maintainers only). The rules live in those documents; this
 skill forces you to walk them in order and produce proof at each gate before passing it.
