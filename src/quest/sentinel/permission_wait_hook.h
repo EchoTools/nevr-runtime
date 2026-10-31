@@ -111,6 +111,8 @@ const char* OriginalKindName(OriginalKind kind) noexcept;  // "unknown" | "calls
 OriginalKind ClassifyOriginalWord(std::uint32_t firstWord) noexcept;
 // Sets the kind the handler acts on. Install sets it from the live function; tests set it.
 void SetOriginalKind(OriginalKind kind) noexcept;
+// The kind the handler acts on now (what install read from the module, or what a test set).
+OriginalKind CurrentOriginalKind() noexcept;
 
 // Arms the handlers and installs the thunks in libr15's RequestPermissions and CheckPermission slots. One line
 // {"event":"permission_wait_install",...} says what was installed and whether CheckPermission was found, and one line
@@ -121,6 +123,12 @@ bool Install() noexcept;
 // The install on any target, with `check` as the permission check (null: resolve the pinned libr15's, as Install does
 // on its own slot). The host test installs it in a fixture library. `checkTarget` is the CheckPermission slot.
 bool InstallAt(const sentinel::GotTarget& target, const sentinel::GotTarget& checkTarget, CheckFn check) noexcept;
+
+// The same install with the module lookup given: the live module is read through `lookup` (the install-time kind, the
+// build ID, the CheckPermission prologue) and the slots are found through it. A test passes a lookup that returns an
+// image it built in memory, to pin the classification without libr15.
+bool InstallAtWith(sentinel::ImageLookup lookup, const sentinel::GotTarget& target, const sentinel::GotTarget& checkTarget,
+                   CheckFn check) noexcept;
 
 // Test support: arms the handler without touching a GOT slot, with `check`, a poll of `pollMs` and a timeout of
 // `timeoutMs`. ResetForTest clears the one-shot, the counts and the predicate and kind set above.

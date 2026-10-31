@@ -81,6 +81,13 @@ engine root is the legacy shared-storage root):
   it is named. When no name is left, nothing is asked. Nothing waits. This keeps the reference build's "no storage prompt"
   and deliberately keeps its microphone prompt, which the patch drops.
 
+Two departures from the reference build's `ret`, both deliberate:
+
+1. The microphone prompt stays. The `ret` also drops `RECORD_AUDIO`; this hook still asks for it when it is named.
+2. The media-root boot request asks no storage permission, so the write grant that `/sdcard/r14logs` would need is not
+   requested at boot. The reference build asks nothing at boot either. The difference is that this is decided per launch
+   by the engine root: a legacy-root launch still asks for storage and waits for the grant.
+
 The first word of the game's own function decides what its fallback does (`ClassifyOriginalWord`, logged once at install as
 `permission_wait_original`). The stock word (`ff0301d1`) is the function that calls Java. The return word (`c0035fd6`) is
 the reference build's `ret`: when the requester cannot make the call and the function is that return, nothing is asked and

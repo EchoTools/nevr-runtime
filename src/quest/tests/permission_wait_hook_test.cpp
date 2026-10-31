@@ -5,16 +5,20 @@
 //
 // Built and run by `just test-quest-hooks`.
 
+#include <elf.h>
 #include <pthread.h>
 #include <time.h>
 
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "got_hook.h"
 #include "hook_log.h"
 #include "permission_wait_hook.h"
 #include "quest/tests/test_check.h"
@@ -82,7 +86,11 @@ void Reset(int denyChecks) {
 // ---- the log and the requester (#947) ---------------------------------------------------------------------------
 
 std::vector<std::string> g_lines;
-void Sink(sentinel::LogLevel, const char* line) { g_lines.emplace_back(line); }
+std::vector<std::string> g_warnings;  // the WARN lines only
+void Sink(sentinel::LogLevel level, const char* line) {
+  g_lines.emplace_back(line);
+  if (level == sentinel::LogLevel::kWarn) g_warnings.emplace_back(line);
+}
 std::vector<std::string> Lines(const char* event) {
   const std::string needle = std::string("\"event\":\"") + event + "\"";
   std::vector<std::string> out;
@@ -534,6 +542,9 @@ void OnStockTheGamesRequestWaits() {
   QCHECK(requests.size() == 1 && Has(requests[0], "\"path\":\"game\""));
 }
 
+// Every combination of the three inputs (the original's kind, whether the requester asked, whether storage is needed),
+// with the storage denied throughout so a wait can only end at its timeout. Each combination's counts are the ones the
+// gate `needed && made` predicts, so removing or inverting the gate fails a row.
 void TheWaitIsBoundedOnEveryInput() {
   const pw::OriginalKind kinds[3] = {pw::OriginalKind::kUnknown, pw::OriginalKind::kCallsJava,
                                      pw::OriginalKind::kReturnsAtOnce};
@@ -542,6 +553,9 @@ void TheWaitIsBoundedOnEveryInput() {
   for (pw::OriginalKind kind : kinds) {
     for (const char* result : results) {
       for (pw::StorageNeededFn needed : neededs) {
+        const bool ours = std::strcmp(result, "requested") == 0;
+        const bool made = ours || kind != pw::OriginalKind::kReturnsAtOnce;  // a request reached Java
+        const bool expectWait = needed == &Needed && made;
         Reset(-1);
         ArrangeC2(result, kind, needed);
         pw::ArmForTest(&ModelCheck, 5, 40);
@@ -549,10 +563,20 @@ void TheWaitIsBoundedOnEveryInput() {
         pw::SetAfterStorage(&AfterStorage);
         const auto start = std::chrono::steady_clock::now();
         RequestEntry()(kBoot, 3);
-        QCHECK(ElapsedMs(start) < 2000);
-        QCHECK(g_afterCalls == 1);
+        const long long ms = ElapsedMs(start);
         const pw::Counts c = pw::CurrentCounts();
-        QCHECK((c.waits == 1 && c.timeouts == 1) || c.waits == 0);
+        QCHECK(g_afterCalls == 1);
+        QCHECK(c.requests == 1 && c.no_request == 0 && c.granted == 0);
+        QCHECK((g_namesSeen != nullptr) == !ours);                    // the game's function runs iff the requester did not ask
+        QCHECK(c.game_requests == (!ours && made ? 1u : 0u));
+        QCHECK(c.waits == (expectWait ? 1u : 0u));
+        QCHECK(c.timeouts == (expectWait ? 1u : 0u));
+        QCHECK(g_afterOutcome == (expectWait ? pw::StorageOutcome::kTimeout : pw::StorageOutcome::kDeniedNotRequested));
+        if (expectWait) {
+          QCHECK(ms >= 35 && ms < 2000);  // it waited to its timeout, and no longer
+        } else {
+          QCHECK(ms < 200);  // nothing waited
+        }
       }
     }
   }
@@ -572,6 +596,164 @@ void OnlyTheBootRequestDecidesWhenNotNeeded() {
   QCHECK(pw::CurrentCounts().waits == 0);
   QCHECK(g_afterCalls == 1);
   QCHECK(g_checkCalls == callsAfterBoot);
+}
+
+// ---- install-time classification of libr15's RequestPermissions, on a synthetic libr15 (#1737 C2) ----------------------
+// InstallAtWith reads the live module through a lookup. The lookup here returns an in-memory image that carries the build
+// ID note and the word at the pinned RequestPermissions address, so the classification and its log line are pinned
+// without libr15. The slots are absent from the image, so the install itself fails by design; what is read is the kind.
+
+constexpr std::size_t kNoteAt = 0x100;
+
+struct SyntheticLibr15 {
+  unsigned char* bytes = nullptr;
+  std::size_t size = 0;
+  Elf64_Phdr phdr[2] = {};
+  sentinel::ElfImage image;
+};
+
+SyntheticLibr15* g_synthetic = nullptr;
+
+bool SyntheticLookup(const char* module, sentinel::ElfImage* out) {
+  if (g_synthetic == nullptr || std::strcmp(module, sentinel::pinned::kLibR15) != 0) return false;
+  *out = g_synthetic->image;
+  return true;
+}
+
+bool NoLibr15(const char*, sentinel::ElfImage*) { return false; }
+
+int HexNibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
+}
+
+// Decodes `hex` (2n lowercase digits) into `out`; false on any other shape.
+bool DecodeHex(const char* hex, unsigned char* out, std::size_t n) {
+  if (std::strlen(hex) != 2 * n) return false;
+  for (std::size_t i = 0; i < n; ++i) {
+    const int hi = HexNibble(hex[2 * i]);
+    const int lo = HexNibble(hex[2 * i + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out[i] = static_cast<unsigned char>((hi << 4) | lo);
+  }
+  return true;
+}
+
+// Builds the image: a PT_LOAD over the whole buffer, a PT_NOTE with the GNU build ID `buildId` (20 bytes of hex), and
+// `wordAtRequest` at the pinned RequestPermissions address.
+void BuildSyntheticLibr15(SyntheticLibr15* s, const char* buildId, std::uint32_t wordAtRequest) {
+  constexpr std::size_t kDescBytes = 20;
+  s->size = static_cast<std::size_t>(sentinel::pinned::kRequestPermissionsVaddr) + 64;
+  s->bytes = static_cast<unsigned char*>(std::calloc(1, s->size));
+  QCHECK(s->bytes != nullptr);
+  if (s->bytes == nullptr) return;
+  unsigned char desc[kDescBytes] = {};
+  QCHECK(DecodeHex(buildId, desc, kDescBytes));
+  const Elf64_Nhdr nh{4, kDescBytes, NT_GNU_BUILD_ID};
+  std::memcpy(s->bytes + kNoteAt, &nh, sizeof(nh));
+  std::memcpy(s->bytes + kNoteAt + sizeof(nh), "GNU", 4);
+  std::memcpy(s->bytes + kNoteAt + sizeof(nh) + 4, desc, kDescBytes);
+  std::memcpy(s->bytes + sentinel::pinned::kRequestPermissionsVaddr, &wordAtRequest, sizeof(wordAtRequest));
+  s->phdr[0].p_type = PT_LOAD;
+  s->phdr[0].p_vaddr = 0;
+  s->phdr[0].p_filesz = s->size;
+  s->phdr[0].p_memsz = s->size;
+  s->phdr[1].p_type = PT_NOTE;
+  s->phdr[1].p_vaddr = kNoteAt;
+  s->phdr[1].p_filesz = sizeof(nh) + 4 + kDescBytes;
+  s->phdr[1].p_memsz = sizeof(nh) + 4 + kDescBytes;
+  s->image.base = reinterpret_cast<std::uintptr_t>(s->bytes);
+  s->image.phdr = s->phdr;
+  s->image.phnum = 2;
+}
+
+sentinel::GotTarget AbsentSlot() {
+  return sentinel::GotTarget{"absent.so", "absent_symbol", sentinel::RelocKind::kJumpSlot, nullptr, std::nullopt, nullptr};
+}
+
+// Installs over a synthetic image (or none) and returns the kind the handler now acts on. `*line` gets the one
+// permission_wait_original line; `warnings` the WARN lines of the install.
+pw::OriginalKind InstallOver(sentinel::ImageLookup lookup, const char* buildId, std::uint32_t word, std::string* line,
+                             std::vector<std::string>* warnings) {
+  SyntheticLibr15 s;
+  if (lookup == &SyntheticLookup) {
+    BuildSyntheticLibr15(&s, buildId, word);
+    g_synthetic = &s;
+  }
+  Reset(0);
+  g_lines.clear();
+  g_warnings.clear();
+  const bool installed = pw::InstallAtWith(lookup, AbsentSlot(), AbsentSlot(), &ModelCheck);
+  g_synthetic = nullptr;
+  QCHECK(!installed);  // the absent slots are not found, so the install is refused; the classification is what is read
+  const std::vector<std::string> lines = Lines("permission_wait_original");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1 && line != nullptr) *line = lines[0];
+  if (warnings != nullptr) {  // only this install's kind lines: the install may log its own WARN lines too
+    warnings->clear();
+    for (const std::string& w : g_warnings) {
+      if (Has(w, "\"event\":\"permission_wait_original\"")) warnings->push_back(w);
+    }
+  }
+  std::free(s.bytes);
+  return pw::CurrentOriginalKind();
+}
+
+// The pinned build ID of the patched libr15 (the one the live check compares against).
+const char* PinnedId() { return sentinel::pinned::LibR15PatchedBuildId(); }
+const char* OtherId() { return "0000000000000000000000000000000000000000"; }
+
+void InstallClassifiesTheStockOriginalAsCallingJava() {
+  std::string line;
+  std::vector<std::string> warnings;
+  const pw::OriginalKind kind = InstallOver(&SyntheticLookup, PinnedId(), sentinel::pinned::kRequestPermissionsStockWord, &line, &warnings);
+  QCHECK(kind == pw::OriginalKind::kCallsJava);
+  QCHECK(Has(line, "\"kind\":\"calls_java\"") && Has(line, "\"reason\":\"resolved\""));
+  QCHECK(warnings.empty());  // the stock build is the expected one: INFO, not WARN
+}
+
+void InstallClassifiesTheReferenceOriginalAsReturningAtOnce() {
+  std::string line;
+  std::vector<std::string> warnings;
+  const pw::OriginalKind kind = InstallOver(&SyntheticLookup, PinnedId(), sentinel::pinned::kRequestPermissionsReturnWord, &line, &warnings);
+  QCHECK(kind == pw::OriginalKind::kReturnsAtOnce);
+  QCHECK(Has(line, "\"kind\":\"returns_at_once\"") && Has(line, "\"reason\":\"resolved\""));
+  QCHECK(Has(line, "\"effect\":"));  // Category G: the line says what the kind does
+  QCHECK(warnings.empty());
+}
+
+void InstallClassifiesAnyOtherWordAsUnknownWithAWarning() {
+  std::string line;
+  std::vector<std::string> warnings;
+  const pw::OriginalKind kind = InstallOver(&SyntheticLookup, PinnedId(), 0xd10103feu, &line, &warnings);
+  QCHECK(kind == pw::OriginalKind::kUnknown);
+  QCHECK(Has(line, "\"kind\":\"unknown\"") && Has(line, "\"reason\":\"prologue_mismatch\""));
+  QCHECK(warnings.size() == 1);  // the unknown kind is a WARN, with the address and both expected words and the actual one
+  if (warnings.size() == 1) {
+    QCHECK(Has(warnings[0], "\"va\":\"0x0000000000f873ec\""));
+    QCHECK(Has(warnings[0], "\"expected_calls_java\":\"0x00000000d10103ff\""));
+    QCHECK(Has(warnings[0], "\"expected_returns_at_once\":\"0x00000000d65f03c0\""));
+    QCHECK(Has(warnings[0], "\"actual\":\"0x00000000d10103fe\""));
+  }
+}
+
+void AWrongBuildIdIsNotTrustedEvenWithAPinnedWord() {
+  std::string line;
+  std::vector<std::string> warnings;
+  const pw::OriginalKind kind = InstallOver(&SyntheticLookup, OtherId(), sentinel::pinned::kRequestPermissionsStockWord, &line, &warnings);
+  QCHECK(kind == pw::OriginalKind::kUnknown);
+  QCHECK(Has(line, "\"reason\":\"build_id_mismatch\""));
+  QCHECK(warnings.size() == 1);
+}
+
+void AModuleThatIsNotLoadedIsUnknown() {
+  std::string line;
+  std::vector<std::string> warnings;
+  const pw::OriginalKind kind = InstallOver(&NoLibr15, nullptr, 0, &line, &warnings);
+  QCHECK(kind == pw::OriginalKind::kUnknown);
+  QCHECK(Has(line, "\"reason\":\"module_not_loaded\""));
+  QCHECK(warnings.size() == 1);
 }
 
 }  // namespace
@@ -696,6 +878,11 @@ int main() {
   OnStockTheGamesRequestWaits();
   TheWaitIsBoundedOnEveryInput();
   OnlyTheBootRequestDecidesWhenNotNeeded();
+  InstallClassifiesTheStockOriginalAsCallingJava();
+  InstallClassifiesTheReferenceOriginalAsReturningAtOnce();
+  InstallClassifiesAnyOtherWordAsUnknownWithAWarning();
+  AWrongBuildIdIsNotTrustedEvenWithAPinnedWord();
+  AModuleThatIsNotLoadedIsUnknown();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "permission_wait_hook_test: %d check(s) failed\n", quest_test::Failures());

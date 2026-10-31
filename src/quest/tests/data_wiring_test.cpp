@@ -815,19 +815,39 @@ void WithoutTheDataRootHookTheMediaRootIsNotTheEngineRoot() {
 
 // The predicate the permission-wait hook asks before it requests the storage permissions (#1737 C2): storage is needed
 // exactly when the engine reads the legacy (shared storage) root.
+// The rule (docs/adr/0007, 0013, #1775): the engine's root is the media root unless the legacy root alone holds the data.
+// So storage is needed exactly when the legacy root is the engine's root, which is when the legacy root alone holds the
+// data and the data-root hook answers it, or when the hook is not armed and the engine reads its own default.
 void StorageNeededFollowsTheEngineRoot() {
   {
-    Rig rig;  // the media root holds the data and the data-root hook is armed: the engine reads media, no storage needed
+    Rig rig;  // nothing holds data: the engine root is the media root (C1), so no storage is needed, even on a fresh install
+    obb::ResolveRoot(&FakeExists);
+    obb::ArmForTest();
+    QCHECK(!dw::StorageNeeded());
+    QCHECK(Has(LineOf("data_root"), "\"result\":\"not_found\"") && Has(LineOf("data_root"), "\"engine_answer\":\"" + Media() + "\""));
+  }
+  {
+    Rig rig;  // only the legacy root holds the data: the engine root is the legacy root, so storage is needed
+    DataIn(Legacy());
+    obb::ResolveRoot(&FakeExists);
+    obb::ArmForTest();
+    QCHECK(dw::StorageNeeded());
+  }
+  {
+    Rig rig;  // the media root holds the complete data and the legacy root does not: the media root, no storage needed
     NoObbFileAndTheMediaRootHoldsTheData();
     QCHECK(!dw::StorageNeeded());
   }
   {
-    Rig rig;  // the legacy root is the engine's root
+    Rig rig;  // both roots hold the complete data: the media root wins (#866), no storage needed
+    DataIn(Media());
     DataIn(Legacy());
-    QCHECK(dw::StorageNeeded());
+    obb::ResolveRoot(&FakeExists);
+    obb::ArmForTest();
+    QCHECK(!dw::StorageNeeded());
   }
   {
-    Rig rig;  // the data-root hook was never armed: the engine reads the legacy root, whatever is in media
+    Rig rig;  // the data-root hook was never armed: the engine reads its own default, the legacy root, whatever is in media
     DataIn(Media());
     obb::ResolveRoot(&FakeExists);
     QCHECK(dw::StorageNeeded());

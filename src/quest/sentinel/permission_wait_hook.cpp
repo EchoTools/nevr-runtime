@@ -199,7 +199,10 @@ void RequestHandler(RequestThunk::Fn original, const char* const* names, std::ui
     } else {
       sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "permission_request",
                           {{"result", result}, {"path", path}, {"permissions", static_cast<long long>(count)},
-                           {"asked", static_cast<long long>(askCount)}, {"storage_needed", needed ? "yes" : "no"}});
+                           {"asked", static_cast<long long>(askCount)}, {"storage_needed", needed ? "yes" : "no"},
+                           {"effect", std::strcmp(path, "none") == 0 ? "no permission to ask: no request is made"
+                                      : ok ? "the request was made"
+                                           : "the request did not reach Java: the requester could not ask and the game's own request on this build returns at once"}});
     }
   }
   if (g_spent.exchange(true, std::memory_order_acq_rel)) return;  // only the boot request waits
@@ -245,9 +248,9 @@ bool Equal(const char* a, const char* b) noexcept { return std::strcmp(a, b) == 
 
 // The libr15 base when the module is loaded and its build ID is the pinned patched build's; null otherwise, with `*reason`
 // naming why.
-const unsigned char* LivePinnedBase(const char** reason) noexcept {
+const unsigned char* LivePinnedBase(sentinel::ImageLookup lookup, const char** reason) noexcept {
   sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
+  if (!lookup(sentinel::pinned::kLibR15, &image)) {
     *reason = "module_not_loaded";
     return nullptr;
   }
@@ -265,8 +268,8 @@ const unsigned char* LivePinnedBase(const char** reason) noexcept {
 
 // Proves libr15's CheckPermission is the pinned build's (build ID, then its first four instructions) and returns it.
 // `*reason` names the outcome.
-CheckFn ResolveCheck(const char** reason) noexcept {
-  const unsigned char* base = LivePinnedBase(reason);
+CheckFn ResolveCheck(sentinel::ImageLookup lookup, const char** reason) noexcept {
+  const unsigned char* base = LivePinnedBase(lookup, reason);
   if (base == nullptr) return nullptr;
   const unsigned char* fn = base + sentinel::pinned::kCheckPermissionVaddr;
   if (std::memcmp(fn, sentinel::pinned::kCheckPermissionCode, sizeof(sentinel::pinned::kCheckPermissionCode)) != 0) {
@@ -282,8 +285,8 @@ CheckFn ResolveCheck(const char** reason) noexcept {
 
 // Reads the first word of libr15's RequestPermissions from the live module and classifies it. `*word` is 0 when the module
 // was not checked. `*reason` names the outcome.
-OriginalKind ResolveOriginal(const char** reason, std::uint32_t* word) noexcept {
-  const unsigned char* base = LivePinnedBase(reason);
+OriginalKind ResolveOriginal(sentinel::ImageLookup lookup, const char** reason, std::uint32_t* word) noexcept {
+  const unsigned char* base = LivePinnedBase(lookup, reason);
   if (base == nullptr) return OriginalKind::kUnknown;
   std::memcpy(word, base + sentinel::pinned::kRequestPermissionsVaddr, sizeof(*word));
   const OriginalKind kind = ClassifyOriginalWord(*word);
@@ -328,9 +331,12 @@ OriginalKind ClassifyOriginalWord(std::uint32_t firstWord) noexcept {
 
 void SetOriginalKind(OriginalKind kind) noexcept { g_original.store(kind, std::memory_order_release); }
 
-bool InstallAt(const sentinel::GotTarget& target, const sentinel::GotTarget& checkTarget, CheckFn check) noexcept {
+OriginalKind CurrentOriginalKind() noexcept { return g_original.load(std::memory_order_acquire); }
+
+bool InstallAtWith(sentinel::ImageLookup lookup, const sentinel::GotTarget& target, const sentinel::GotTarget& checkTarget,
+                   CheckFn check) noexcept {
   const char* reason = "injected";
-  if (check == nullptr) check = ResolveCheck(&reason);
+  if (check == nullptr) check = ResolveCheck(lookup, &reason);
   g_check.store(check, std::memory_order_release);
   g_spent.store(false, std::memory_order_relaxed);
   g_micSeen.store(false, std::memory_order_relaxed);
@@ -340,16 +346,22 @@ bool InstallAt(const sentinel::GotTarget& target, const sentinel::GotTarget& che
   // The kind of libr15's own RequestPermissions, read from the live module before the thunk is installed.
   const char* origReason = "injected";
   std::uint32_t word = 0;
-  const OriginalKind kind = ResolveOriginal(&origReason, &word);
+  const OriginalKind kind = ResolveOriginal(lookup, &origReason, &word);
   g_original.store(kind, std::memory_order_release);
-  if (kind != OriginalKind::kUnknown) {
+  if (kind == OriginalKind::kCallsJava) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "permission_wait_original",
-                        {{"kind", OriginalKindName(kind)}, {"reason", origReason}});
+                        {{"kind", OriginalKindName(kind)}, {"reason", origReason},
+                         {"effect", "the game's own request runs when the requester cannot make it"}});
+  } else if (kind == OriginalKind::kReturnsAtOnce) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "permission_wait_original",
+                        {{"kind", OriginalKindName(kind)}, {"reason", origReason},
+                         {"effect", "the game's own request returns at once, so the requester is the only request and the wait covers it"}});
   } else {
     char va[19], expectedCalls[19], expectedReturn[19], actual[19];
     sentinel::LogFields(sentinel::LogLevel::kWarn, "permission_wait_original",
                         {{"kind", "unknown"},
                          {"reason", origReason},
+                         {"effect", "the first instruction is neither pinned build's: the game's own request is not trusted to be the one the wait expects"},
                          {"va", sentinel::HexString(va, sentinel::pinned::kRequestPermissionsVaddr)},
                          {"expected_calls_java", sentinel::HexString(expectedCalls, sentinel::pinned::kRequestPermissionsStockWord)},
                          {"expected_returns_at_once", sentinel::HexString(expectedReturn, sentinel::pinned::kRequestPermissionsReturnWord)},
@@ -357,7 +369,7 @@ bool InstallAt(const sentinel::GotTarget& target, const sentinel::GotTarget& che
   }
   RequestThunk::Arm(kRequestHook);
   CheckThunk::Arm(kCheckHook);
-  const sentinel::GotStatus status = sentinel::InstallThunk<RequestThunk>(g_hook, target);
+  const sentinel::GotStatus status = sentinel::InstallThunk<RequestThunk>(g_hook, target, lookup);
   const bool ok = status == sentinel::GotStatus::kOk;
   sentinel::LogFields(ok ? (check != nullptr ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn)
                          : sentinel::LogLevel::kError,
@@ -366,12 +378,16 @@ bool InstallAt(const sentinel::GotTarget& target, const sentinel::GotTarget& che
                        {"status", sentinel::GotStatusName(status)},
                        {"check_permission", reason}});
   // The CheckPermission slot: without it a headset that holds the microphone permission is never reached.
-  const sentinel::GotStatus checkStatus = sentinel::InstallThunk<CheckThunk>(g_checkHook, checkTarget);
+  const sentinel::GotStatus checkStatus = sentinel::InstallThunk<CheckThunk>(g_checkHook, checkTarget, lookup);
   const bool checkOk = checkStatus == sentinel::GotStatus::kOk;
   sentinel::LogFields(checkOk ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "permission_wait_check_install",
                       {{"result", checkOk ? "installed" : "failed"},
                        {"status", sentinel::GotStatusName(checkStatus)}});
   return ok && checkOk;
+}
+
+bool InstallAt(const sentinel::GotTarget& target, const sentinel::GotTarget& checkTarget, CheckFn check) noexcept {
+  return InstallAtWith(sentinel::FindLoadedImage, target, checkTarget, check);
 }
 
 bool Install() noexcept {
