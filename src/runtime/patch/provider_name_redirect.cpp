@@ -1,5 +1,6 @@
 #include "runtime/patch/provider_name_redirect.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <cstring>
