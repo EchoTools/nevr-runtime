@@ -794,18 +794,29 @@ static constexpr std::chrono::milliseconds kEndedSessionExitGrace{15000};
 void GameServerLib::ArmEndedSessionWatchdog(const std::string& sessionId) {
   const auto delay = kEndedSessionExitGrace + std::chrono::milliseconds(nevr_return_to_lobby::HoldTtlMs());
   const bool armed = m_endedSessionWatchdog.Arm(delay, sessionId, [](const std::string& id) {
-    // g_pGame is read on this thread only to say why the game did not leave; a stale or null pointer reads as "unknown".
-    const void* netGame = g_pGame ? nevr_return_to_lobby_queue::NetGameFromContext(g_pGame) : nullptr;
-    const uint64_t deferCount = nevr_return_to_lobby_queue::DeferCount(netGame);
+    // Game memory is read here only to say why the game did not leave. This is not the game thread and the game may
+    // be in any state, so every read goes through ReadProcessMemory on this process: a bad pointer reads as
+    // "unknown" and cannot fault in front of the exit below.
+    const auto read = [](const void* from, void* to, size_t size) {
+      SIZE_T got = 0;
+      return ReadProcessMemory(GetCurrentProcess(), from, to, size, &got) != FALSE && got == size;
+    };
+    const void* context = g_pGame;
+    const void* netGame = nullptr;
+    if (context == nullptr || !read(static_cast<const unsigned char*>(context) + nevr_patch_addresses::CONTEXT_NETGAME_OFFSET,
+                                    &netGame, sizeof(netGame))) {
+      netGame = nullptr;
+    }
+    const uint64_t deferCount = nevr_return_to_lobby_queue::DeferCount(netGame, read);
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] service-ended session still running after the exit grace session_id=%s "
-        "defer_count=%lld — the game never left the session, ending the process so the slot is released",
+        "[NEVR.GAMESERVER] service-ended session's process is still running after the exit grace session_id=%s "
+        "defer_count=%lld — the game did not leave the session, ending the process so the slot is released",
         id.c_str(), deferCount == UINT64_MAX ? -1LL : static_cast<long long>(deferCount));
     PerformGracefulShutdown(0);
   });
   Log(EchoVR::LogLevel::Info,
       "[NEVR.GAMESERVER] session ended by ServerDB (receive thread) session_id=%s exit_watchdog=%s delay_ms=%lld",
-      sessionId.c_str(), armed ? "armed" : "already_armed", static_cast<long long>(delay.count()));
+      sessionId.c_str(), armed ? "armed" : "already_armed_or_fired", static_cast<long long>(delay.count()));
 }
 
 void GameServerLib::CancelEndedSessionWatchdog() { m_endedSessionWatchdog.Cancel(); }

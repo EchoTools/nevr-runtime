@@ -2,9 +2,8 @@
 
 // #1756: a dedicated server whose session the service ended has to leave. The normal exit is the game's own:
 // ServerDB's CODE_ENDED makes the runtime ask the game to return to lobby, the game leaves the session, the state
-// machine sees InGame -> Lobby and exits the process (lifecycle/state_machine.cpp). Four Combat matches on 6.12.0
-// ended on the service, got CODE_ENDED, and their server never left. Nothing on the runtime side checked that the
-// return happened, so the process stayed up and kept its slot.
+// machine sees InGame -> Lobby and exits the process (lifecycle/state_machine.cpp). If the game does not return,
+// nothing else ends the process and it keeps its slot.
 //
 // This is the check. The ServerDB receive thread arms it the moment a CODE_ENDED frame arrives, before the frame
 // is queued for the game thread (a game thread that has stopped calling Update() would never get to it). If the
@@ -18,6 +17,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <thread>
 
 #include "gameservice/v1/gameservice.pb.h"
@@ -52,19 +52,26 @@ class EndedSessionWatchdog {
   bool Arm(std::chrono::milliseconds delay, std::string sessionId, ExpireFn onExpire) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (armed_ || fired_) return false;
+    const uint64_t generation = generation_ + 1;
+    try {
+      thread_ = std::thread([this, generation, delay, id = std::move(sessionId), fn = std::move(onExpire)]() {
+        // Blocks until Arm() has released the lock, so armed_ and generation_ are set when this first looks.
+        std::unique_lock<std::mutex> wait(mutex_);
+        // A Cancel() followed by a new Arm() leaves armed_ true again; the generation tells this countdown it
+        // was the one cancelled.
+        const bool cancelled =
+            cv_.wait_for(wait, delay, [this, generation] { return !armed_ || generation_ != generation; });
+        if (cancelled || !armed_ || generation_ != generation) return;
+        armed_ = false;
+        fired_ = true;
+        wait.unlock();
+        if (fn) fn(id);
+      });
+    } catch (const std::system_error&) {
+      return false;  // no thread could be made: stay disarmed so a later CODE_ENDED can try again
+    }
     armed_ = true;
-    const uint64_t generation = ++generation_;
-    thread_ = std::thread([this, generation, delay, id = std::move(sessionId), fn = std::move(onExpire)]() {
-      std::unique_lock<std::mutex> wait(mutex_);
-      // A Cancel() followed by a new Arm() leaves armed_ true again; the generation tells this countdown it was
-      // the one cancelled.
-      const bool cancelled = cv_.wait_for(wait, delay, [this, generation] { return !armed_ || generation_ != generation; });
-      if (cancelled || !armed_ || generation_ != generation) return;
-      armed_ = false;
-      fired_ = true;
-      wait.unlock();
-      if (fn) fn(id);
-    });
+    generation_ = generation;
     return true;
   }
 

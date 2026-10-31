@@ -39,6 +39,9 @@ class EndedSessionExitWiring(unittest.TestCase):
         warning = body[body.index("LogLevel::Warning"):body.index("PerformGracefulShutdown(0)")]
         self.assertIn("session_id=%s", warning)
         self.assertIn("defer_count=", warning)
+        # Off the game thread, so the game's memory is read through a reader that cannot fault.
+        self.assertIn("ReadProcessMemory(GetCurrentProcess()", body)
+        self.assertLess(body.index("ReadProcessMemory("), body.index("PerformGracefulShutdown(0)"))
 
     def test_the_delay_adds_the_empty_server_hold_to_the_grace(self):
         body = extract_braced_function(callbacks(), "void GameServerLib::ArmEndedSessionWatchdog(const std::string& sessionId)")

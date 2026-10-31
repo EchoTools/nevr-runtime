@@ -116,6 +116,25 @@ TEST(ReturnToLobbyQueue, DeferCountReadsTheCountTheGameDefersOn) {
   EXPECT_EQ(nevr_patch_addresses::GAME_DEFER_COUNT_OFFSET, 0x1F10U);
 }
 
+TEST(ReturnToLobbyQueue, DeferCountIsUnknownWhenAReadFails) {
+  struct BigGame {
+    unsigned char bytes[0x2000] = {};
+  } game;
+  FakeNetGame netGame;
+  netGame.SetGame(&game);
+  int reads = 0;
+  // The first read (the game object) works, the second (the count) fails: a stale game object.
+  const auto failSecond = [&reads](const void* from, void* to, size_t size) {
+    if (++reads == 2) return false;
+    std::memcpy(to, from, size);
+    return true;
+  };
+  EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(&netGame, failSecond), UINT64_MAX);
+  EXPECT_EQ(reads, 2);
+  EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(&netGame, [](const void*, void*, size_t) { return false; }),
+            UINT64_MAX);
+}
+
 TEST(ReturnToLobbyQueue, DeferCountIsUnknownWithoutAGameObject) {
   FakeNetGame netGame;
   EXPECT_EQ(nevr_return_to_lobby_queue::DeferCount(&netGame), UINT64_MAX);
