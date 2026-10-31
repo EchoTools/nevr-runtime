@@ -346,31 +346,6 @@ VOID PatchBypassOvrPlatform() {
 }
 
 // ============================================================================
-// PatchDisableLoadingTips — RET the loading tip functions
-// ============================================================================
-
-/// <summary>
-/// Patches the loading tips system to immediately return, avoiding unnecessary log spam and processing.
-/// The loading tips system requires resources that may not be properly configured in server mode.
-/// </summary>
-/// <returns>None</returns>
-VOID PatchDisableLoadingTips() {
-  using namespace nevr_patch_addresses;
-
-  // Patch R15PickLoadingTipNode to immediately return (RET = 0xC3)
-  // All three loading tip functions use the same single-byte RET patch
-  const BYTE retPatch[] = {0xC3};
-  static_assert(sizeof(retPatch) == LOADING_TIP_PICK_SIZE, "LOADING_TIP_PICK patch size mismatch");
-  static_assert(sizeof(retPatch) == LOADING_TIP_SELECT_SIZE, "LOADING_TIP_SELECT patch size mismatch");
-  static_assert(sizeof(retPatch) == LOADING_TIP_SELECT_2_SIZE, "LOADING_TIP_SELECT_2 patch size mismatch");
-  ApplyPatch(LOADING_TIP_PICK, retPatch, sizeof(retPatch));
-  ApplyPatch(LOADING_TIP_SELECT, retPatch, sizeof(retPatch));
-  ApplyPatch(LOADING_TIP_SELECT_2, retPatch, sizeof(retPatch));
-
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Disabled loading tips system for server mode");
-}
-
-// ============================================================================
 // InitializeGlobalGameSpace hook — skip client-only setup in server mode
 // ============================================================================
 

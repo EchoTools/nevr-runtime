@@ -453,26 +453,19 @@ constexpr uintptr_t WWISE_INIT = 0x209920;         // Wwise initialization
 constexpr uintptr_t WWISE_RENDERAUDIO = 0xFA5610;  // Audio rendering loop
 
 // ============================================================================
-// Loading Tips Patches (PatchDisableLoadingTips)
+// Loading Tips (src/runtime/patch/loading_tips.cpp, server only)
 // ============================================================================
+// The `Enter` function of each loading-tip script node. Each is hooked to return at once on a server; the
+// evidence for the identities is in loading_tips.cpp.
 
-/// Address: R15PickLoadingTipNode (0x140bd9670)
-/// Entry point for picking a random loading tip during loading screens
-/// Patched to immediately return in server mode to avoid unnecessary processing
-constexpr uintptr_t LOADING_TIP_PICK = 0xBD9670;
-constexpr size_t LOADING_TIP_PICK_SIZE = 1;
+/// Address: CR15PickLoadingTipNode::Enter (0x140bd9670)
+constexpr uintptr_t LOADING_TIP_PICK_ENTER = 0xBD9670;
 
-/// Address: R15SelectLoadingTipNode (0x140be6d10)
-/// Core logic for selecting a loading tip
-/// Patched to immediately return in server mode
-constexpr uintptr_t LOADING_TIP_SELECT = 0xBE6D10;
-constexpr size_t LOADING_TIP_SELECT_SIZE = 1;
+/// Address: CR15SelectLoadingTipByIndexNode::Enter (0x140be6d10)
+constexpr uintptr_t LOADING_TIP_SELECT_BY_INDEX_ENTER = 0xBE6D10;
 
-/// Address: R15SelectLoadingTipNode_2 (0x140be7c90)
-/// Secondary implementation of tip selection logic
-/// Patched to immediately return in server mode
-constexpr uintptr_t LOADING_TIP_SELECT_2 = 0xBE7C90;
-constexpr size_t LOADING_TIP_SELECT_2_SIZE = 1;
+/// Address: CR15SelectLoadingTipNode::Enter (0x140be7c90)
+constexpr uintptr_t LOADING_TIP_SELECT_ENTER = 0xBE7C90;
 
 // ============================================================================
 // Frame Pacing / Timing (CPrecisionSleep::BusyWait)
