@@ -454,11 +454,13 @@ void ValidateHostRecords(const Expectation& expect) {
     }
     return;
   }
-  // A hooked run whose runtime did not load stops the game: one more record, the game_stop, however many calls arrived.
+  // A hooked run whose runtime did not load stops the game: two more records, the game_stop and then the
+  // console_notice that says whether a console took the plain line (#1533), however many calls arrived.
   const bool stops = !expect.dispatched;
   Require(CountRecords(records, "versions", "") == 1, "a hooked run did not record exactly one versions record");
-  Require(records.size() == (stops ? 7u : 6u),
-          "a hooked run recorded something other than its six decisions (and the stop, when it stopped)");
+  Require(records.size() == (stops ? 8u : 6u),
+          "a hooked run recorded something other than its six decisions (and the stop and its console notice, "
+          "when it stopped)");
   if (expect.no_install_event) {
     // The load did not wait for the install, so the install record can land after the load's: all of them
     // must still be there (the load flushes the journal again), in whatever order the race gave.
@@ -504,6 +506,9 @@ void ValidateHostRecords(const Expectation& expect) {
     Require(records[6].value("event", "") == "game_stop" && records[6].value("reason", "") == expect.load_record &&
                 records[6].value("exit_code", 0) == 78,
             "the game_stop record does not follow the load and name its cause and exit code 78");
+    Require(records[7].value("event", "") == "console_notice" && records[7].value("reason", "") == expect.load_record &&
+                records[7].contains("written") && records[7].at("written").is_boolean(),
+            "the console_notice record does not follow the game_stop and name its cause and whether a console took the line");
   }
 }
 
