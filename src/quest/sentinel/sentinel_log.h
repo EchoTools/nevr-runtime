@@ -28,6 +28,13 @@ struct LogDirCandidate {
   const char* trusted;
 };
 
+// mkdir -p of `c.dir` below `c.trusted`, one folder at a time: each must be a directory by lstat, so a link below the
+// trusted part is refused (errno ENOTDIR), never followed. A `dir` not under `trusted` (up to a '/'), or longer than
+// 400 bytes, is refused with EINVAL. True when every folder below the trusted part is there; whether the process may
+// write into it is the caller's to find out (the log opens its file, the crash folder checks access). On false errno
+// says why. Also the chooser of the crash folder (crash_dir.h).
+bool EnsureDirBelow(const LogDirCandidate& c);
+
 // The folder the on-disk log and its rotated files are in, for everything that reads them (the log
 // upload). It is chosen once, on the first open that works: the first candidate whose folder can be
 // made and whose log file can be opened. Candidates, in order: with NEVR_QUEST_FILES_DIR defined at

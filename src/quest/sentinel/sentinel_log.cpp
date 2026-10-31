@@ -148,35 +148,6 @@ const LogDirCandidate* Candidates(std::size_t* count) {
   return kBuiltInCandidates;
 }
 
-// mkdir -p of `c.dir` below `c.trusted`, one folder at a time: each must be a directory by lstat, so a
-// link planted below the trusted part is refused rather than followed. True when every folder below the
-// trusted part is there; whether the process may write into it is the log file's open. On false errno says why.
-bool EnsureDirBelow(const LogDirCandidate& c) {
-  const std::size_t base = std::strlen(c.trusted);
-  const std::size_t len = std::strlen(c.dir);
-  if (len > kMaxDirBytes || std::strncmp(c.dir, c.trusted, base) != 0 ||
-      (len > base && c.dir[base] != '/')) {
-    errno = EINVAL;
-    return false;
-  }
-  const std::string dir(c.dir, len);
-  std::size_t pos = base;
-  while (pos < len) {
-    std::size_t next = dir.find('/', pos + 1);
-    if (next == std::string::npos) next = len;
-    const std::string part = dir.substr(0, next);
-    if (::mkdir(part.c_str(), 0755) != 0 && errno != EEXIST) return false;
-    struct stat st {};
-    if (::lstat(part.c_str(), &st) != 0) return false;
-    if (!S_ISDIR(st.st_mode)) {
-      errno = ENOTDIR;
-      return false;
-    }
-    pos = next;
-  }
-  return true;  // the log file's own open, next, is the check that the folder takes a write
-}
-
 // True while a failed rename is inside its retry window.
 bool RotationBlocked() {
   if (!g_rotateFailed) return false;
@@ -351,6 +322,35 @@ bool AppendRecord(nevr_quest::LogLevel level, const std::string& message) {
 }
 
 }  // namespace
+
+// mkdir -p of `c.dir` below `c.trusted`, one folder at a time: each must be a directory by lstat, so a
+// link planted below the trusted part is refused rather than followed. True when every folder below the
+// trusted part is there; whether the process may write into it is the log file's open. On false errno says why.
+bool EnsureDirBelow(const LogDirCandidate& c) {
+  const std::size_t base = std::strlen(c.trusted);
+  const std::size_t len = std::strlen(c.dir);
+  if (len > kMaxDirBytes || std::strncmp(c.dir, c.trusted, base) != 0 ||
+      (len > base && c.dir[base] != '/')) {
+    errno = EINVAL;
+    return false;
+  }
+  const std::string dir(c.dir, len);
+  std::size_t pos = base;
+  while (pos < len) {
+    std::size_t next = dir.find('/', pos + 1);
+    if (next == std::string::npos) next = len;
+    const std::string part = dir.substr(0, next);
+    if (::mkdir(part.c_str(), 0755) != 0 && errno != EEXIST) return false;
+    struct stat st {};
+    if (::lstat(part.c_str(), &st) != 0) return false;
+    if (!S_ISDIR(st.st_mode)) {
+      errno = ENOTDIR;
+      return false;
+    }
+    pos = next;
+  }
+  return true;  // the log file's own open, next, is the check that the folder takes a write
+}
 
 const char* FilesDir() { return NEVR_QUEST_FILES_DIR; }
 

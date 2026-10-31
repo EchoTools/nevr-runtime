@@ -7,6 +7,7 @@
 // Compile with -DNEVR_QUEST_FILES_DIR="<dir>" (a scratch directory this test creates and removes).
 #include "activation.h"
 #include "sentinel_log.h"
+#include "quest/sentinel/crash_dir.h"
 #include "quest/sentinel/data_root.h"
 
 #include <nlohmann/json.hpp>
@@ -1050,6 +1051,130 @@ void EveryChoiceOfTheFolderIsReportedAndWritten() {
   RemoveTree(Dir() + "/rc");
 }
 
+// ---- the crash folder (#1797): crash_dir.h, the one chooser behind the writer and the sender ----
+
+std::vector<std::string> UnusableLines() {
+  std::vector<std::string> lines;
+  for (const Line& l : Captured()) {
+    if (l.text.find("crash dir candidate unusable") != std::string::npos) lines.push_back(l.text);
+  }
+  return lines;
+}
+
+void TheShippedCrashFoldersAreMediaFirst() {
+  const sentinel::LogDirCandidate* c = sentinel::crash_dir::kShipped;
+  const std::size_t n = std::size(sentinel::crash_dir::kShipped);
+  CHECK(n == 4);
+  if (n != 4) return;
+  CHECK(std::string(c[0].name) == "android_media" &&
+        std::string(c[0].dir) == std::string(nevr_quest::data_root::kMediaRoot) + "/nevr-crashes");
+  CHECK(std::string(c[0].trusted) == "/sdcard/Android/media/com.readyatdawn.r15");
+  CHECK(std::string(c[1].name) == "android_data" &&
+        std::string(c[1].dir) == "/sdcard/Android/data/com.readyatdawn.r15/files/nevr-crashes");
+  CHECK(std::string(c[1].trusted) == "/sdcard/Android/data");
+  CHECK(std::string(c[2].name) == "app_internal" && std::string(c[2].dir) == "/data/data/com.readyatdawn.r15/files/nevr-crashes");
+  CHECK(std::string(c[2].trusted) == "/data/data/com.readyatdawn.r15");
+  CHECK(std::string(c[3].name) == "local_tmp" && std::string(c[3].dir) == "/data/local/tmp/nevr-crashes");
+  CHECK(std::string(c[3].trusted) == "/data/local/tmp");
+  for (std::size_t i = 0; i < n; ++i) {  // every folder is below its trusted part
+    const std::string dir = c[i].dir;
+    const std::string trusted = c[i].trusted;
+    CHECK(dir.compare(0, trusted.size() + 1, trusted + "/") == 0);
+  }
+}
+
+void TheCrashFolderIsMadeBelowTheTrustedPart() {
+  RemoveTree(Dir() + "/cr");
+  Captured().clear();
+  Cands c;
+  c.Add("media", Dir() + "/cr/a/b/nevr-crashes", Dir());  // cr, a and b do not exist
+  c.Add("data", Dir() + "/cr/other/nevr-crashes", Dir());
+  c.Install();
+  const std::string chosen = sentinel::crash_dir::ChooseFrom(c.list.data(), c.list.size());
+  CHECK(chosen == Dir() + "/cr/a/b/nevr-crashes");
+  CHECK(IsDir(Dir() + "/cr/a/b/nevr-crashes"));
+  CHECK(!IsDir(Dir() + "/cr/other"));  // the first usable candidate wins; the rest are not made
+  CHECK(UnusableLines().empty());
+  sentinel::SetLogDirCandidatesForTest(nullptr, 0);
+  RemoveTree(Dir() + "/cr");
+}
+
+void ACrashFolderThatCannotBeUsedFallsThroughAndIsNamed() {
+  RemoveTree(Dir() + "/cf");
+  CHECK(::mkdir((Dir() + "/cf").c_str(), 0755) == 0);
+  WriteFile(Dir() + "/cf/blocker", "a file");
+  Captured().clear();
+  Cands c;
+  c.Add("media", Dir() + "/cf/blocker/nevr-crashes", Dir() + "/cf");       // a file in the way: ENOTDIR
+  c.Add("data", Dir() + "/cf/data/files/nevr-crashes", Dir() + "/cf");
+  c.Install();
+  const std::string chosen = sentinel::crash_dir::ChooseFrom(c.list.data(), c.list.size());
+  CHECK(chosen == Dir() + "/cf/data/files/nevr-crashes");
+  const std::vector<std::string> unusable = UnusableLines();
+  CHECK(unusable.size() == 1);
+  if (unusable.size() == 1) {
+    // The line names the candidate, its folder and the errno.
+    CHECK(unusable[0].find("candidate=media") != std::string::npos);
+    CHECK(unusable[0].find("dir=" + Dir() + "/cf/blocker/nevr-crashes") != std::string::npos);
+    CHECK(unusable[0].find("errno=" + std::to_string(ENOTDIR) + " (" + std::strerror(ENOTDIR) + ")") != std::string::npos);
+  }
+  CHECK(Captured().front().prio == 5);  // ANDROID_LOG_WARN
+
+  // A folder that exists but cannot be written into (root writes anywhere, so this part needs another user).
+  if (::geteuid() != 0) {
+    CHECK(::mkdir((Dir() + "/cf/ro").c_str(), 0700) == 0);
+    CHECK(::mkdir((Dir() + "/cf/ro/nevr-crashes").c_str(), 0500) == 0);
+    Captured().clear();
+    Cands r;
+    r.Add("media", Dir() + "/cf/ro/nevr-crashes", Dir() + "/cf");
+    r.Add("data", Dir() + "/cf/rw/nevr-crashes", Dir() + "/cf");
+    r.Install();
+    CHECK(sentinel::crash_dir::ChooseFrom(r.list.data(), r.list.size()) == Dir() + "/cf/rw/nevr-crashes");
+    const std::vector<std::string> ro = UnusableLines();
+    CHECK(ro.size() == 1 && ro[0].find("errno=" + std::to_string(EACCES)) != std::string::npos);
+  }
+
+  // Nothing usable: "" (the caller falls back to "."), every candidate named.
+  Captured().clear();
+  Cands none;
+  none.Add("media", Dir() + "/cf/blocker/a", Dir() + "/cf");
+  none.Add("data", Dir() + "/cf/blocker/b", Dir() + "/cf");
+  none.Install();
+  CHECK(sentinel::crash_dir::ChooseFrom(none.list.data(), none.list.size()).empty());
+  CHECK(UnusableLines().size() == 2);
+  sentinel::SetLogDirCandidatesForTest(nullptr, 0);
+  RemoveTree(Dir() + "/cf");
+}
+
+void TheBuildsOwnCrashFolderIsTriedFirstAndNeverCreated() {
+  RemoveTree(Dir() + "/ov");
+  CHECK(::mkdir((Dir() + "/ov").c_str(), 0755) == 0);
+  CHECK(sentinel::crash_dir::Choose((Dir() + "/ov").c_str()) == Dir() + "/ov");  // exists and writable: wins over every shipped folder
+  // A build folder that is missing is not made: the choice moves on to the shipped list. On a host none of those can be made.
+  Captured().clear();
+  CHECK(sentinel::crash_dir::Choose((Dir() + "/ov/missing/deeper").c_str()) != Dir() + "/ov/missing/deeper");
+  CHECK(!IsDir(Dir() + "/ov/missing"));
+  CHECK(UnusableLines().size() >= 1 && UnusableLines()[0].find("candidate=override") != std::string::npos);
+  // The build's folder missing: the list that follows is used, and the override is named as the one that failed.
+  RemoveTree(Dir() + "/ov");
+  CHECK(::mkdir((Dir() + "/ov").c_str(), 0755) == 0);
+  Cands list;
+  list.Add("media", Dir() + "/ov/list/nevr-crashes", Dir() + "/ov");
+  list.Install();
+  Captured().clear();
+  CHECK(sentinel::crash_dir::Choose((Dir() + "/ov/nope/deeper").c_str(), list.list.data(), list.list.size()) ==
+        Dir() + "/ov/list/nevr-crashes");
+  CHECK(UnusableLines().size() == 1 && UnusableLines()[0].find("candidate=override") != std::string::npos);
+  // A usable build folder wins over a usable list; an empty one is no override at all, and says nothing.
+  CHECK(sentinel::crash_dir::Choose(Dir().c_str(), list.list.data(), list.list.size()) == Dir());
+  Captured().clear();
+  CHECK(sentinel::crash_dir::Choose("", list.list.data(), list.list.size()) == Dir() + "/ov/list/nevr-crashes");
+  CHECK(UnusableLines().empty());
+  CHECK(sentinel::crash_dir::Choose(nullptr, list.list.data(), list.list.size()) == Dir() + "/ov/list/nevr-crashes");
+  sentinel::SetLogDirCandidatesForTest(nullptr, 0);
+  RemoveTree(Dir() + "/ov");
+}
+
 void TheBuiltInListIsTheOverrideAloneInATestBuild() {
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
   CHECK(sentinel::LogDir() == Dir());
@@ -1100,6 +1225,10 @@ int main() {
   UnopenablePathsAreRetriedAfterTheWindow();
   TheBuiltInListIsTheOverrideAloneInATestBuild();
   TheShippedCandidatesAreMediaThenData();
+  TheShippedCrashFoldersAreMediaFirst();
+  TheCrashFolderIsMadeBelowTheTrustedPart();
+  ACrashFolderThatCannotBeUsedFallsThroughAndIsNamed();
+  TheBuildsOwnCrashFolderIsTriedFirstAndNeverCreated();
   TheFolderLineSurvivesAFailedWriteAndTheBound();
   EveryChoiceOfTheFolderIsReportedAndWritten();
   TheLogFolderChainIsCreatedAndReportedOnce();
