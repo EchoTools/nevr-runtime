@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <array>

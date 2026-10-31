@@ -1,5 +1,6 @@
 #include "runtime/patch/loading_tips.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <cstddef>
@@ -25,11 +26,11 @@ constexpr std::size_t kSiteCount = 3;
 //   - 0x140be6d10: CR15SelectLoadingTipByIndexNode::Enter. Sets a tip by the 32-bit index in data[9] (LoadingTipSet).
 //   - 0x140be7c90: CR15SelectLoadingTipNode::Enter. Selects a tip (LoadingTipSelect) and writes SetInteger too.
 const Site kStockSites[kSiteCount] = {
-    {"CR15PickLoadingTipNode::Enter", LOADING_TIP_PICK_ENTER,
+    {"CR15PickLoadingTipNode::Enter", nevr_patch_addresses::LOADING_TIP_PICK_ENTER,
      {0x48, 0x89, 0x5C, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
-    {"CR15SelectLoadingTipByIndexNode::Enter", LOADING_TIP_SELECT_BY_INDEX_ENTER,
+    {"CR15SelectLoadingTipByIndexNode::Enter", nevr_patch_addresses::LOADING_TIP_SELECT_BY_INDEX_ENTER,
      {0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41}},
-    {"CR15SelectLoadingTipNode::Enter", LOADING_TIP_SELECT_ENTER,
+    {"CR15SelectLoadingTipNode::Enter", nevr_patch_addresses::LOADING_TIP_SELECT_ENTER,
      {0x48, 0x89, 0x5C, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
 };
 
