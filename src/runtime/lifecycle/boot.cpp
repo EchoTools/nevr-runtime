@@ -580,8 +580,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       // (:75) the NEVR_MODULE_HOST_IS_NOOVR flag the modules read, which is the
       // behaviour -noovr exists to produce (the login platform code does not depend on it:
       // SelectPlatformCode follows the game's own No VR flag, bit 20, which -noovr does not set). The game's own
-      // -noovr-requires--spectatorstream assert is bypassed by
-      // PatchNoOvrRequiresSpectatorStream, inert unless the token is present.
+      // -noovr-requires--spectatorstream assert is bypassed by the argument-lookup hook
+      // (patch/noovr_arglookup.cpp), inert unless the token is present.
       g_noOvr = TRUE;
     }
   }

@@ -413,7 +413,7 @@ constexpr uintptr_t BUGSPLAT_CRASH_HANDLER = 0x0DBBC0;
 
 /// -noovr requires -spectatorstream (cr15game.cpp:0x631 assert). patch/noovr_arglookup.cpp answers the game's
 /// "spectatorstream" argument lookup as found at the -noovr call site only; these pins are what it validates first.
-/// CMainArgs::FindArgIndexBySymbol(args, symbol) returns the table index of a symbol, or -1. Prologue: MOV R8,[RCX+0xa0].
+/// CMainArgs::FindArgIndexBySymbol(args, symbol) returns the value stored for a symbol in the argument table (zero-extended 32-bit), or -1 when the symbol is absent. Prologue: MOV R8,[RCX+0xa0].
 constexpr uintptr_t CMAINARGS_FIND_ARG_INDEX_BY_SYMBOL = 0x1400D56A0;
 constexpr unsigned char CMAINARGS_FIND_ARG_INDEX_BY_SYMBOL_PROLOGUE[12] = {0x4C, 0x8B, 0x81, 0xA0, 0x00, 0x00,
                                                                            0x00, 0x4D, 0x85, 0xC0, 0x74, 0x3C};
