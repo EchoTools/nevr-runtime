@@ -1041,7 +1041,7 @@ inline constexpr PinnedFunction kVrDisplayLost = {"_ZN10NRadEngine3CVR11DisplayL
 inline constexpr PinnedFunction kLocalAppDataDirectory = {
     "_ZN10NRadEngine8CSysInfo24GetLocalAppDataDirectoryERNS_13CFixedStringTILy512EEE", 0xf86d88,
     {0xf81d0ff6, 0xa90153f5, 0xa9027bf3, 0xaa0003f3}, 4};
-// The reference build's eye-size route (#1737 C4, refresh_eye_size.h): CVR::CustomViewportScale (six words; it returns the two
+// The reference build's eye-size route (#1737 C4, refresh_eye_size.h): CGRenderConfig::CustomViewportScale (six words; it returns the two
 // floats of the viewport scale in s0 and s1), the vrapi PLT stub that RefreshRTSize calls ids 5 and 6 through, and the eye
 // globals RefreshRTSize reads and writes. Identical in the stock and the reference file.
 struct PinnedCode {
@@ -1050,7 +1050,7 @@ struct PinnedCode {
   std::uint32_t code[6];
   std::size_t words;
 };
-inline constexpr PinnedCode kCustomViewportScale = {"CVR::CustomViewportScale", 0x188d0f4ULL,
+inline constexpr PinnedCode kCustomViewportScale = {"CGRenderConfig::CustomViewportScale", 0x188d0f4ULL,
                                                     {0xf000f868, 0x9101a108, 0x8b000d08, 0xbd411100, 0xbd411501, 0xd65f03c0},
                                                     6};
 inline constexpr PinnedCode kVrapiPltStub = {"vrapi_GetSystemPropertyInt PLT stub", 0xf46080ULL,

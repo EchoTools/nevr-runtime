@@ -23,7 +23,7 @@
 namespace nevr_quest::texture_quality {
 
 // What the live libr15's RefreshRTSize body is. kStock: the game's own route (the vrapi slot answers ids 5 and 6). kReference:
-// the cave route (the eye-size hook must take RefreshRTSize to answer ids 5 and 6). kUnknown: neither, nothing installs.
+// the cave route (the eye-size hook must take RefreshRTSize to answer ids 5 and 6). kUnknown: neither; the route is refused and the vrapi hook still installs.
 enum class EyeInput { kStock, kReference, kUnknown };
 
 inline const char* InputName(EyeInput input) noexcept {

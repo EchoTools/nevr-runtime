@@ -18,7 +18,7 @@
  *      its two vrapi calls go to a cave that never reaches the runtime). The handler reconstructs the stock body: it asks the
  *      runtime for ids 5 and 6 through the vrapi PLT stub, so route 1 answers them, and stores the pair as the game does. It never
  *      calls the original on the normal path (the original would run the cave). On the stock body no hook is installed and nothing
- *      here runs; on an unrecognised body nothing installs at all.
+ *      here runs; on an unrecognised body (or a route the live bytes refuse) only the route is refused, and the vrapi hook still installs.
  *
  * The applied level. It is the level the swap chain and the render targets are built for. It starts as the configuration's
  * graphics.texture_quality (quest_config.h; `stock` when absent or wrong, texture_quality.h kDefaultLevel, kFallbackLevel),
@@ -38,8 +38,9 @@
  *    "quality":"high","source":"config|default","w":0,"h":0,"sizes":"per_headset",...}
  * (`level` is the log severity; the setting is `quality`.) `w` and `h` are 0 on an installed hook: the size depends on
  * the headset, which the first query names, so the swap-chain line is the record of the size served. `refused` is a GotHook
- * refusal (the status rides in `status`), an unrecognised RefreshRTSize body (its own line, texture_quality_route, names the
- * address and the bytes) or a second level; `skipped` is the counters refused. Counters (hook_report.h), registered by
+ * refusal (the status rides in `status`) or a second level. The `route` field says what the RefreshRTSize route did: installed,
+ * refused (an unrecognised RefreshRTSize body, or pins or a slot the route cannot take: its own error line, texture_quality_route,
+ * names the address and the bytes, and the vrapi hook still installs), not_needed (stock) or not_attempted; `skipped` is the counters refused. Counters (hook_report.h), registered by
  * RegisterCounters(); the first two are values, not counts, and carry the runtime's own answers (what the game would have got at
  * `stock`), which is the headset's native size:
  *   gfx_native_eye_width, gfx_native_eye_height   the runtime's last answer to id 5 and id 6
@@ -85,6 +86,18 @@ bool InstallIfCounted(Level level, bool fromConfig, bool countersRegistered) noe
 // success path (the latch, the sizes, the log line) runs on a host that has no libr15.
 using InstallFn = sentinel::GotStatus (*)() noexcept;
 bool InstallVia(Level level, bool fromConfig, InstallFn install) noexcept;
+
+// The GOT steps of the RefreshRTSize route and the vrapi slot (test support: a host test replaces each with a stand-in).
+// `refreshRollback` takes the RefreshRTSize slot back when the vrapi step refuses after the route was installed.
+struct InstallSteps {
+  sentinel::GotStatus (*refresh)() noexcept;
+  sentinel::GotStatus (*refreshRollback)() noexcept;
+  sentinel::GotStatus (*vrapi)() noexcept;
+};
+// Installs over the library image at `base` the way RealInstall does, with `steps` in place of the GOT calls: classifies the
+// RefreshRTSize body, installs the route on the reference body only, then the vrapi slot. An unrecognised body or a refused route
+// refuses the route alone (its own error line) and the vrapi slot still installs. Returns the vrapi step's status.
+sentinel::GotStatus InstallLibraryVia(unsigned char* base, const InstallSteps& steps) noexcept;
 
 // Test support: latch and arm without touching a GOT slot. Returns what the latch did (false: another level was
 // already latched and stays). ResetForTest forgets the latch, the request, the resolver, the sizes, the counters, the route and

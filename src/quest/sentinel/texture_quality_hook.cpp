@@ -177,11 +177,85 @@ std::uint64_t BodyAddress(int index) noexcept {
   return kRefreshVaddr + 4 * static_cast<std::uint64_t>(index);
 }
 
-// The route's install, on the reference input only: classifies the live body, proves the two pinned functions and takes
-// RefreshRTSize's slot, then the vrapi slot (rolled back with RefreshRTSize's when that one refuses). On the stock body it installs
-// nothing here. On an unrecognised body it installs nothing and says why.
-sentinel::GotStatus InstallRoute(sentinel::ElfImage& image) noexcept {
-  unsigned char* const base = reinterpret_cast<unsigned char*>(image.base);
+// What the RefreshRTSize route did in this process, for the install line: not attempted, installed, refused (its own hook is not
+// in place and the vrapi hook still is) or not needed (the stock body, which the vrapi hook answers alone).
+enum class RouteState : int { kNotAttempted = 0, kInstalled = 1, kRefused = 2, kNotNeeded = 3 };
+std::atomic<int> g_route{static_cast<int>(RouteState::kNotAttempted)};
+
+const char* RouteStateName(RouteState state) noexcept {
+  switch (state) {
+    case RouteState::kNotAttempted: return "not_attempted";
+    case RouteState::kInstalled: return "installed";
+    case RouteState::kRefused: return "refused";
+    case RouteState::kNotNeeded: return "not_needed";
+  }
+  return "not_attempted";
+}
+
+// The route's pieces that are only the game's own: the pinned functions and globals must be the bytes the route was written for.
+// Returns false, after its own error line, when one is not.
+bool PinsHold(unsigned char* base) noexcept {
+  const sentinel::pinned::PinnedCode* const pins[] = {&sentinel::pinned::kCustomViewportScale, &sentinel::pinned::kVrapiPltStub};
+  for (const sentinel::pinned::PinnedCode* pin : pins) {
+    if (WordsAt(base + pin->vaddr, pin->code, pin->words)) continue;
+    char va[19];
+    char expected[19];
+    char actual[19];
+    std::uint32_t firstWord = 0;
+    std::memcpy(&firstWord, base + pin->vaddr, sizeof(firstWord));
+    sentinel::LogFields(sentinel::LogLevel::kError, "texture_quality_route",
+                        {{"result", "refused"}, {"input", "reference"}, {"why", "pin_mismatch"}, {"pin", pin->name},
+                         {"va", sentinel::HexString(va, pin->vaddr)},
+                         {"expected", sentinel::HexString(expected, pin->code[0])},
+                         {"actual", sentinel::HexString(actual, firstWord)},
+                         {"consequence", "the eye size is the game's own; no level applies"}});
+    return false;
+  }
+  return true;
+}
+
+// The reference route: the pins, the globals it reads and writes, then RefreshRTSize's slot. Refusing it leaves the vrapi slot to
+// the caller; the RefreshRTSize slot is never left changed without its handler live.
+bool InstallRouteHook(unsigned char* base, const InstallSteps& steps) noexcept {
+  if (!PinsHold(base)) {
+    g_route.store(static_cast<int>(RouteState::kRefused), std::memory_order_release);
+    return false;
+  }
+  g_storedPair.store(reinterpret_cast<std::uint64_t*>(base + sentinel::pinned::eye_layout::kStoredPairVaddr),
+                     std::memory_order_release);
+  g_overridePair.store(reinterpret_cast<const std::uint64_t*>(base + sentinel::pinned::eye_layout::kOverridePairVaddr),
+                       std::memory_order_release);
+  g_java.store(reinterpret_cast<const OvrJavaOpaque*>(base + sentinel::pinned::eye_layout::kOvrJavaVaddr),
+               std::memory_order_release);
+  g_scale.store(FunctionAt<ViewportScaleFn>(base + sentinel::pinned::kCustomViewportScale.vaddr), std::memory_order_release);
+  g_property.store(FunctionAt<PropertyFn>(base + sentinel::pinned::kVrapiPltStub.vaddr), std::memory_order_release);
+
+  // The thunk is armed before the slot changes, so its first call already has a handler.
+  RefreshThunk::Arm(kRefreshHook);
+  const sentinel::GotStatus refresh = steps.refresh();
+  if (refresh != sentinel::GotStatus::kOk) {
+    RefreshThunk::Disarm();
+    g_route.store(static_cast<int>(RouteState::kRefused), std::memory_order_release);
+    sentinel::LogFields(sentinel::LogLevel::kError, "texture_quality_route",
+                        {{"result", "refused"}, {"input", "reference"}, {"why", "refresh_slot_refused"},
+                         {"slot", sentinel::pinned::kRefreshRTSizeSymbol}, {"status", sentinel::GotStatusName(refresh)},
+                         {"consequence", "the eye size is the game's own; no level applies"}});
+    return false;
+  }
+  g_refreshLive.store(true, std::memory_order_release);
+  g_route.store(static_cast<int>(RouteState::kInstalled), std::memory_order_release);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_route",
+                      {{"result", "installed"}, {"input", "reference"},
+                       {"slot", sentinel::pinned::kRefreshRTSizeSymbol},
+                       {"consequence", "ids 5 and 6 are decided here on both inputs; the reference build's own eye-size code does not run"}});
+  return true;
+}
+
+// Classifies the live RefreshRTSize body and installs what it calls for, then the vrapi slot. An unrecognised body, or a route that
+// cannot be installed, refuses the route alone: it logs its own error with the address and the bytes, and the vrapi hook still
+// installs, so ids 5 and 6 are answered by the runtime's own size on that build. A vrapi refusal rolls the route back and refuses
+// the whole install.
+sentinel::GotStatus InstallLibrary(unsigned char* base, const InstallSteps& steps) noexcept {
   std::uint32_t body[kRefreshBodyWords] = {};
   std::uint32_t caveWord0 = 0;
   std::memcpy(body, base + kRefreshVaddr, sizeof(body));
@@ -198,75 +272,49 @@ sentinel::GotStatus InstallRoute(sentinel::ElfImage& image) noexcept {
                          {"expected", sentinel::HexString(expected, c.expected)},
                          {"actual", sentinel::HexString(actual, c.actual)},
                          {"consequence", "the eye size is the game's own; no level applies"}});
-    return sentinel::GotStatus::kOriginalMismatch;
-  }
-  if (c.input == EyeInput::kStock) {
+    g_route.store(static_cast<int>(RouteState::kRefused), std::memory_order_release);
+  } else if (c.input == EyeInput::kStock) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_route",
                         {{"result", "vrapi_only"}, {"input", "stock"}, {"slot", sentinel::pinned::kGetSystemPropertyIntSymbol},
                          {"consequence", "CVR::RefreshRTSize is the game's own; the vrapi hook answers ids 5 and 6"}});
-    return sentinel::GotStatus::kOk;
+    g_route.store(static_cast<int>(RouteState::kNotNeeded), std::memory_order_release);
+  } else {
+    InstallRouteHook(base, steps);  // refused on its own: the vrapi hook is installed below either way
   }
 
-  // The reference input: the pinned functions and globals must be the ones the route calls.
-  const sentinel::pinned::PinnedCode& scale = sentinel::pinned::kCustomViewportScale;
-  const sentinel::pinned::PinnedCode& stub = sentinel::pinned::kVrapiPltStub;
-  for (const sentinel::pinned::PinnedCode* pin : {&scale, &stub}) {
-    if (WordsAt(base + pin->vaddr, pin->code, pin->words)) continue;
-    char va[19];
-    char expected[19];
-    char actual[19];
-    std::uint32_t firstWord = 0;
-    std::memcpy(&firstWord, base + pin->vaddr, sizeof(firstWord));
-    sentinel::LogFields(sentinel::LogLevel::kError, "texture_quality_route",
-                        {{"result", "refused"}, {"input", "reference"}, {"why", "pin_mismatch"}, {"pin", pin->name},
-                         {"va", sentinel::HexString(va, pin->vaddr)},
-                         {"expected", sentinel::HexString(expected, pin->code[0])},
-                         {"actual", sentinel::HexString(actual, firstWord)},
-                         {"consequence", "the eye size is the game's own; no level applies"}});
-    return sentinel::GotStatus::kOriginalMismatch;
-  }
-  g_storedPair.store(reinterpret_cast<std::uint64_t*>(base + sentinel::pinned::eye_layout::kStoredPairVaddr),
-                     std::memory_order_release);
-  g_overridePair.store(reinterpret_cast<const std::uint64_t*>(base + sentinel::pinned::eye_layout::kOverridePairVaddr),
-                       std::memory_order_release);
-  g_java.store(reinterpret_cast<const OvrJavaOpaque*>(base + sentinel::pinned::eye_layout::kOvrJavaVaddr),
-               std::memory_order_release);
-  g_scale.store(FunctionAt<ViewportScaleFn>(base + scale.vaddr), std::memory_order_release);
-  g_property.store(FunctionAt<PropertyFn>(base + stub.vaddr), std::memory_order_release);
-
-  // The thunk is armed before the slot changes, so its first call already has a handler.
-  RefreshThunk::Arm(kRefreshHook);
-  const sentinel::GotStatus refresh = sentinel::InstallThunk<RefreshThunk>(g_refreshHook, sentinel::pinned::LibR15RefreshRTSize());
-  if (refresh != sentinel::GotStatus::kOk) {
-    RefreshThunk::Disarm();
-    return refresh;
-  }
-  const sentinel::GotStatus vrapi = sentinel::InstallThunk<SystemPropertyIntThunk>(g_hook, sentinel::pinned::LibR15GetSystemPropertyInt());
+  const sentinel::GotStatus vrapi = steps.vrapi();
   if (vrapi != sentinel::GotStatus::kOk) {
-    const sentinel::GotStatus rolledBack = g_refreshHook.Remove();
-    RefreshThunk::Disarm();
+    const bool routed = g_route.load(std::memory_order_acquire) == static_cast<int>(RouteState::kInstalled);
+    sentinel::GotStatus rolledBack = sentinel::GotStatus::kOk;
+    if (routed) {
+      rolledBack = steps.refreshRollback();
+      RefreshThunk::Disarm();
+      g_refreshLive.store(false, std::memory_order_release);
+      g_route.store(static_cast<int>(RouteState::kRefused), std::memory_order_release);
+    }
     sentinel::LogFields(sentinel::LogLevel::kError, "texture_quality_route",
-                        {{"result", "refused"}, {"input", "reference"}, {"why", "vrapi_slot_refused"},
-                         {"status", sentinel::GotStatusName(vrapi)}, {"rollback", sentinel::GotStatusName(rolledBack)},
+                        {{"result", "refused"}, {"input", InputName(c.input)}, {"why", "vrapi_slot_refused"},
+                         {"status", sentinel::GotStatusName(vrapi)},
+                         {"rollback", routed ? sentinel::GotStatusName(rolledBack) : "not_needed"},
                          {"consequence", "the eye size is the game's own; no level applies"}});
     return vrapi;
   }
-  g_refreshLive.store(true, std::memory_order_release);
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_route",
-                      {{"result", "installed"}, {"input", "reference"},
-                       {"slot", sentinel::pinned::kRefreshRTSizeSymbol},
-                       {"consequence", "ids 5 and 6 are decided here on both inputs; the reference build's own eye-size code does not run"}});
-  return vrapi;
+  return sentinel::GotStatus::kOk;
 }
+
+sentinel::GotStatus RealRefresh() noexcept {
+  return sentinel::InstallThunk<RefreshThunk>(g_refreshHook, sentinel::pinned::LibR15RefreshRTSize());
+}
+sentinel::GotStatus RealRefreshRollback() noexcept { return g_refreshHook.Remove(); }
+sentinel::GotStatus RealVrapi() noexcept {
+  return sentinel::InstallThunk<SystemPropertyIntThunk>(g_hook, sentinel::pinned::LibR15GetSystemPropertyInt());
+}
+const InstallSteps kRealSteps = {&RealRefresh, &RealRefreshRollback, &RealVrapi};
 
 sentinel::GotStatus RealInstall() noexcept {
   sentinel::ElfImage image;
   if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return sentinel::GotStatus::kModuleNotLoaded;
-  // Stock: the vrapi slot alone, as before. Reference: the route, then the vrapi slot. Unknown: nothing.
-  const sentinel::GotStatus route = InstallRoute(image);
-  if (route != sentinel::GotStatus::kOk) return route;
-  if (g_input.load(std::memory_order_acquire) == static_cast<int>(EyeInput::kReference)) return sentinel::GotStatus::kOk;
-  return sentinel::InstallThunk<SystemPropertyIntThunk>(g_hook, sentinel::pinned::LibR15GetSystemPropertyInt());
+  return InstallLibrary(reinterpret_cast<unsigned char*>(image.base), kRealSteps);
 }
 
 }  // namespace
@@ -315,20 +363,25 @@ bool InstallVia(Level level, bool fromConfig, InstallFn install) noexcept {
   }
   // The vrapi slot is this hook's: the hardware dump records the answers through the observer, not a second hook.
   sentinel::MarkSysPropIntSlotOwned(true);
-  const bool reference = g_input.load(std::memory_order_acquire) == static_cast<int>(EyeInput::kReference);
+  const bool routed = g_route.load(std::memory_order_acquire) == static_cast<int>(RouteState::kInstalled);
   // The sizes depend on the headset, which only the first query names; the swap-chain line shows the size served.
   sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality",
                       {{"result", "installed"}, {"quality", quality}, {"source", source}, {"w", 0}, {"h", 0},
                        {"sizes", "per_headset"}, {"slot", sentinel::pinned::kGetSystemPropertyIntSymbol},
                        {"input", InputName(static_cast<EyeInput>(g_input.load(std::memory_order_acquire)))},
                        {"refresh", g_refreshLive.load(std::memory_order_acquire) ? "installed" : "not_installed"},
+                       {"route", RouteStateName(static_cast<RouteState>(g_route.load(std::memory_order_acquire)))},
                        {"status", sentinel::GotStatusName(status)},
-                       {"consequence", reference ? "ids 5 and 6 are decided here on both inputs; the reference build's own eye-size code does not run"
+                       {"consequence", routed ? "ids 5 and 6 are decided here on both inputs; the reference build's own eye-size code does not run"
                                                  : "ids 5 and 6 are decided by the vrapi hook; the game's RefreshRTSize is unchanged"}});
   return true;
 }
 
 bool Install(Level level, bool fromConfig) noexcept { return InstallVia(level, fromConfig, &RealInstall); }
+
+sentinel::GotStatus InstallLibraryVia(unsigned char* base, const InstallSteps& steps) noexcept {
+  return InstallLibrary(base, steps);
+}
 
 bool InstallIfCounted(Level level, bool fromConfig, bool countersRegistered) noexcept {
   if (!countersRegistered) {
@@ -357,6 +410,7 @@ void ResetForTest() noexcept {
   g_served.store(0, std::memory_order_relaxed);
   g_sizeQueries.store(0, std::memory_order_relaxed);
   g_input.store(static_cast<int>(EyeInput::kUnknown), std::memory_order_release);
+  g_route.store(static_cast<int>(RouteState::kNotAttempted), std::memory_order_release);
   g_refreshLive.store(false, std::memory_order_release);
   g_storedPair.store(nullptr, std::memory_order_release);
   g_overridePair.store(nullptr, std::memory_order_release);

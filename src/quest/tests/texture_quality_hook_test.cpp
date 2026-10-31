@@ -718,6 +718,154 @@ void TheInstallLineNamesTheInputAndTheRouteState() {
   QCHECK(Field(line, "status") != "<absent>");
 }
 
+// ---- the install's route classification over a library image (#1737 C4) ----------------------------------------------------
+// A stand-in libr15 image: the RefreshRTSize body, the cave's first word, and the two pinned code runs, at their pinned addresses.
+// The GOT steps are stand-ins that count calls and return what the test sets; the install line is read through InstallVia.
+
+constexpr std::size_t kImageBytes = static_cast<std::size_t>(tq::kReferenceCaveVaddr) + 16;
+std::vector<unsigned char> g_image;
+int g_refreshCalls = 0;
+int g_rollbackCalls = 0;
+int g_vrapiCalls = 0;
+sentinel::GotStatus g_refreshStatus = sentinel::GotStatus::kOk;
+sentinel::GotStatus g_rollbackStatus = sentinel::GotStatus::kOk;
+sentinel::GotStatus g_vrapiStatus = sentinel::GotStatus::kOk;
+
+sentinel::GotStatus StandInRefresh() noexcept {
+  ++g_refreshCalls;
+  return g_refreshStatus;
+}
+sentinel::GotStatus StandInRollback() noexcept {
+  ++g_rollbackCalls;
+  return g_rollbackStatus;
+}
+sentinel::GotStatus StandInVrapi() noexcept {
+  ++g_vrapiCalls;
+  return g_vrapiStatus;
+}
+const tq::InstallSteps kStandIns = {&StandInRefresh, &StandInRollback, &StandInVrapi};
+
+// The GOT step InstallVia runs: the whole route-and-vrapi install over the stand-in image.
+sentinel::GotStatus InstallOverImage() noexcept { return tq::InstallLibraryVia(g_image.data(), kStandIns); }
+
+// Lays out an image: the RefreshRTSize body words, the cave's first word, and the pinned code runs as libr15 has them.
+void LayOutImage(const std::uint32_t* body, std::uint32_t caveWord0) {
+  g_image.assign(kImageBytes, 0);
+  std::memcpy(g_image.data() + tq::kRefreshVaddr, body, tq::kRefreshBodyWords * sizeof(std::uint32_t));
+  std::memcpy(g_image.data() + tq::kReferenceCaveVaddr, &caveWord0, sizeof(caveWord0));
+  const sentinel::pinned::PinnedCode* const pins[] = {&sentinel::pinned::kCustomViewportScale, &sentinel::pinned::kVrapiPltStub};
+  for (const sentinel::pinned::PinnedCode* pin : pins) {
+    std::memcpy(g_image.data() + pin->vaddr, pin->code, pin->words * sizeof(std::uint32_t));
+  }
+}
+
+// The body words of the stock library, and of the reference library (both sites are the bl to the cave).
+void StockBody(std::uint32_t* body) { std::memcpy(body, tq::kStockBody, sizeof(tq::kStockBody)); }
+void ReferenceBody(std::uint32_t* body) {
+  StockBody(body);
+  body[tq::kSiteWordIdx[0]] = tq::BlWordTo(tq::kRefreshVaddr + 4 * tq::kSiteWordIdx[0], tq::kReferenceCaveVaddr);
+  body[tq::kSiteWordIdx[1]] = tq::BlWordTo(tq::kRefreshVaddr + 4 * tq::kSiteWordIdx[1], tq::kReferenceCaveVaddr);
+}
+
+void ResetImageCounts() {
+  g_refreshCalls = g_rollbackCalls = g_vrapiCalls = 0;
+  g_refreshStatus = g_rollbackStatus = g_vrapiStatus = sentinel::GotStatus::kOk;
+}
+
+void StockWordsInstallNoRouteHook() {
+  Reset();
+  ResetImageCounts();
+  std::uint32_t body[tq::kRefreshBodyWords];
+  StockBody(body);
+  LayOutImage(body, 0);
+  Capture log;
+  QCHECK(tq::InstallVia(tq::Level::kHigh, false, &InstallOverImage));
+  QCHECK(g_refreshCalls == 0 && g_rollbackCalls == 0);  // no route hook on the stock body
+  QCHECK(g_vrapiCalls == 1);
+  const std::string line = TheLine();
+  QCHECK(Field(line, "input") == "stock");
+  QCHECK(Field(line, "route") == "not_needed");
+  QCHECK(Field(line, "refresh") == "not_installed");
+  QCHECK(Field(line, "result") == "installed");
+  QCHECK(tq::InputKind() == tq::EyeInput::kStock);
+  QCHECK(tq::HookedRefresh() == nullptr);
+  QCHECK(Entry()(kJava, 5) == 3072);  // the vrapi hook answers High, as on every input
+}
+
+void ReferenceWordsInstallTheRouteAndTheVrapiHook() {
+  Reset();
+  ResetImageCounts();
+  std::uint32_t body[tq::kRefreshBodyWords];
+  ReferenceBody(body);
+  LayOutImage(body, tq::kReferenceCaveWord0);
+  Capture log;
+  QCHECK(tq::InstallVia(tq::Level::kHigh, false, &InstallOverImage));
+  QCHECK(g_refreshCalls == 1 && g_vrapiCalls == 1 && g_rollbackCalls == 0);
+  const std::string line = TheLine();
+  QCHECK(Field(line, "input") == "reference");
+  QCHECK(Field(line, "route") == "installed");
+  QCHECK(Field(line, "refresh") == "installed");
+  QCHECK(Field(line, "result") == "installed");
+  QCHECK(tq::HookedRefresh() != nullptr);
+  QCHECK(Entry()(kJava, 5) == 3072);
+}
+
+void AlteredWordRefusesTheRouteAndKeepsTheVrapiHook() {
+  Reset();
+  ResetImageCounts();
+  std::uint32_t body[tq::kRefreshBodyWords];
+  StockBody(body);
+  body[5] ^= 1;  // a word that is neither build's
+  LayOutImage(body, 0);
+  Capture log;
+  QCHECK(tq::InstallVia(tq::Level::kHigh, false, &InstallOverImage));  // the install is not refused
+  QCHECK(g_refreshCalls == 0 && g_vrapiCalls == 1);
+  const std::string line = TheLine();
+  QCHECK(Field(line, "result") == "installed");
+  QCHECK(Field(line, "input") == "unknown");
+  QCHECK(Field(line, "route") == "refused");
+  QCHECK(Field(line, "refresh") == "not_installed");
+  QCHECK(tq::HookedRefresh() == nullptr);
+  QCHECK(tq::IsLatched() && tq::LatchedLevel() == tq::Level::kHigh);
+  QCHECK(Entry()(kJava, 5) == 3072);  // the vrapi hook still answers
+  // The route's own error line names the address and the bytes, and it is the only error.
+  QCHECK(CountLines("\"event\":\"texture_quality_route\"") == 1);
+  QCHECK(CountLines("\"why\":\"refresh_body_unrecognized\"") == 1);
+  QCHECK(CountLines("\"level\":\"error\"") == 1);
+  char word5[19];
+  QCHECK(CountLines((std::string("\"va\":\"") + sentinel::HexString(word5, tq::kRefreshVaddr + 4 * 5) + "\"").c_str()) == 1);
+}
+
+void MismatchedPinRefusesTheRouteAndKeepsTheVrapiHook() {
+  Reset();
+  ResetImageCounts();
+  std::uint32_t body[tq::kRefreshBodyWords];
+  ReferenceBody(body);
+  LayOutImage(body, tq::kReferenceCaveWord0);
+  g_image[sentinel::pinned::kVrapiPltStub.vaddr] ^= 1;  // the PLT stub is not the one the route was written for
+  Capture log;
+  QCHECK(tq::InstallVia(tq::Level::kHigh, false, &InstallOverImage));
+  QCHECK(g_refreshCalls == 0 && g_vrapiCalls == 1);
+  QCHECK(Field(TheLine(), "route") == "refused");
+  QCHECK(CountLines("\"why\":\"pin_mismatch\"") == 1);
+  QCHECK(tq::HookedRefresh() == nullptr);
+}
+
+void AVrapiRefusalAfterTheRouteRollsItBack() {
+  Reset();
+  ResetImageCounts();
+  std::uint32_t body[tq::kRefreshBodyWords];
+  ReferenceBody(body);
+  LayOutImage(body, tq::kReferenceCaveWord0);
+  g_vrapiStatus = sentinel::GotStatus::kBuildIdMismatch;
+  Capture log;
+  QCHECK(!tq::InstallVia(tq::Level::kHigh, false, &InstallOverImage));
+  QCHECK(g_refreshCalls == 1 && g_rollbackCalls == 1);
+  QCHECK(tq::HookedRefresh() == nullptr);
+  QCHECK(Field(TheLine(), "result") == "refused");
+  QCHECK(CountLines("\"why\":\"vrapi_slot_refused\"") == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -746,6 +894,11 @@ int main() {
   RefreshWithUnresolvedPinsCallsTheOriginalOnce();
   HookedRefreshIsNullUntilArmed();
   TheInstallLineNamesTheInputAndTheRouteState();
+  StockWordsInstallNoRouteHook();
+  ReferenceWordsInstallTheRouteAndTheVrapiHook();
+  AlteredWordRefusesTheRouteAndKeepsTheVrapiHook();
+  MismatchedPinRefusesTheRouteAndKeepsTheVrapiHook();
+  AVrapiRefusalAfterTheRouteRollsItBack();
   AnInstalledLevelLogsOneLineWithTheLevelTheSourceAndTheSize();
   StockInstallsTheHookAndAnswersTheRuntimesOwnSize();
   ARefusedSlotLeavesNoOverrideAndIsLoud();
