@@ -553,6 +553,17 @@ build-quest-combat-libs libsrc=env("NEVR_COMBAT_LIBSRC", "") store_apk=env("NEVR
     python3 -I tools/build_quest_combat_libs.py --libsrc "{{ libsrc }}" --store-apk "{{ store_apk }}" --out build/quest-combat-libs \
         --ndk-clang "$llvm/aarch64-linux-android21-clang++" --llvm-bin "$llvm" --check-script tools/check_quest_static_init.sh
 
+# The combat content pack (docs/adr/0029-quest-bundled-content-pack.md): the manifest and the one package the pack adds, taken
+# from the game-data zip NEVR_GAME_DATA_ZIP names, whose sha-256 must be NEVR_GAME_DATA_SHA256 (the digest the signed manifest
+# lists for it). Both values have no default. Writes build/quest-combat-pack/pack.zip and pack_meta.json.
+quest-combat-pack:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -n "${NEVR_GAME_DATA_ZIP:-}" ] || { echo "quest-combat-pack: NEVR_GAME_DATA_ZIP names no game-data zip" >&2; exit 1; }
+    [ -n "${NEVR_GAME_DATA_SHA256:-}" ] || { echo "quest-combat-pack: NEVR_GAME_DATA_SHA256 is not set" >&2; exit 1; }
+    python3 -I tools/quest_pack_from_game_data.py --game-data-zip "$NEVR_GAME_DATA_ZIP" --expected-sha256 "$NEVR_GAME_DATA_SHA256" \
+        --out build/quest-combat-pack
+
 # One unattended autopilot run on the attached Quest (tools/quest_autopilot_run.py --help): pushes the route, starts the
 # game with the proximity sensor overridden, waits for route_end, and records the run under the work root.
 quest-autopilot-run route *args:
