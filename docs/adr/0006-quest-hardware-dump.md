@@ -37,7 +37,7 @@ The handlers are in `diag/hwdump_handlers.cpp`, built `-fno-exceptions` and pers
 
 All slots are JUMP_SLOTs in the pinned libr15 build `b243509c…`. libr15 is `BIND_NOW`.
 
-The `vrapi_GetSystemPropertyInt` slot is shared: when the texture-quality hook owns it (ADR 0015), the dump installs nothing there and records the runtime's own answers through the observer in `src/quest/sentinel/sysprop_int_share.h`; its hook state for that slot is `shared`.
+The `vrapi_GetSystemPropertyInt` slot is shared: when the texture-quality hook owns it (ADR 0015), the dump installs nothing there and records the runtime's own answers through the observer in `src/quest/sentinel/sysprop_int_share.h`; its hook state for that slot is `shared`. On the reference libr15 input the texture-quality hook also owns the `CVR::RefreshRTSize` slot (ADR 0015, "Reference build input"); the dump does not touch that slot.
 
 The prototypes are the register use at every one of the 48 `bl`/`b` call sites of these imports in libr15:
 

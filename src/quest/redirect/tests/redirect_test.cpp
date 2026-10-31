@@ -746,6 +746,158 @@ void CacheFullAndStaleBridgeBehaviour() {
   g_bridge = {false, 0};
 }
 
+// ---- the login_host fallback (#1737 C7) -------------------------------------
+
+BuildIdentity TestIdentity() { return {"nevr_quest", "dev", "1.2.3", "abcdef0"}; }
+
+bool AnyLineContainsBoth(const char* a, const char* b) {
+  for (const std::string& l : Lines()) {
+    if (l.find(a) != std::string::npos && l.find(b) != std::string::npos) return true;
+  }
+  return false;
+}
+
+// The stock default with the identity set: composed once, pooled, and the second read is a cache hit that
+// allocates nothing.
+void LoginFallbackComposesTheStockDefaultOnce() {
+  Scenario s(Config(kRedirectOn));
+  s.redirector->SetBuildIdentity(TestIdentity());
+  const char* const first = s.redirector->ApplyFallback("login_host", kDefaultLogin);
+  const std::string expected = std::string(kDefaultLogin) + "?nevr_quest-dev-1.2.3-abcdef0";
+  QCHECK(std::strcmp(first, expected.c_str()) == 0);
+  QCHECK(first != kDefaultLogin);
+  QCHECK(GlobalCounters().loginFallbackVersioned.load() == 1);
+  g_allocations.store(0);
+  g_countAllocations.store(true);
+  const char* const second = s.redirector->ApplyFallback("login_host", kDefaultLogin);
+  g_countAllocations.store(false);
+  QCHECK(second == first);
+  QCHECK(g_allocations.load() == 0);
+  QCHECK(GlobalCounters().loginFallbackVersioned.load() == 1);
+  QCHECK(Lines().empty());  // a hooked call never logs
+}
+
+// A fallback that already carries a query (the reference's own URL) stays as written and is counted as kept.
+void LoginFallbackKeepsAFallbackThatHasAQuery() {
+  Scenario s(Config(kRedirectOn));
+  s.redirector->SetBuildIdentity(TestIdentity());
+  const char* const patched = "ws://fallback.example:777/login?evr_standalone-testBuildComment-v4.20.69-run";
+  QCHECK(s.redirector->ApplyFallback("login_host", patched) == patched);
+  QCHECK(GlobalCounters().loginFallbackKept.load() == 1);
+  QCHECK(GlobalCounters().loginFallbackVersioned.load() == 0);
+  QCHECK(Lines().empty());
+}
+
+// The rule is keyed on login_host alone, and on a ws:// or wss:// fallback alone.
+void LoginFallbackOnlyForTheLoginHostKey() {
+  Scenario s(Config(kRedirectOn));
+  s.redirector->SetBuildIdentity(TestIdentity());
+  QCHECK(s.redirector->ApplyFallback("loginservice_host", kDefaultLogin) == kDefaultLogin);
+  QCHECK(s.redirector->ApplyFallback("config_host", kDefaultConfig) == kDefaultConfig);
+  QCHECK(s.redirector->ApplyFallback(nullptr, kDefaultLogin) == kDefaultLogin);
+  const char* const plain = "https://login.example/rad15_live";
+  QCHECK(s.redirector->ApplyFallback("login_host", plain) == plain);
+  QCHECK(s.redirector->ApplyFallback("login_host", nullptr) == nullptr);
+  QCHECK(GlobalCounters().loginFallbackVersioned.load() == 0);
+  QCHECK(GlobalCounters().loginFallbackKept.load() == 0);
+  QCHECK(Lines().empty());
+}
+
+// A pool refusal returns the caller's fallback and counts only loginFallbackFailed.
+void LoginFallbackPoolRefusalKeepsTheOriginal() {
+  Scenario s(Config(kRedirectOn), &InternRefuse);
+  s.redirector->SetBuildIdentity(TestIdentity());
+  QCHECK(s.redirector->ApplyFallback("login_host", kDefaultLogin) == kDefaultLogin);
+  QCHECK(GlobalCounters().loginFallbackFailed.load() == 1);
+  QCHECK(GlobalCounters().loginFallbackVersioned.load() == 0);
+  QCHECK(s.redirector->counters().failures == 0);
+  QCHECK(GlobalCounters().poolRefused.load() == 0);
+  QCHECK(Lines().empty());
+}
+
+// An exception from the pool is the same fallback, counted the same way.
+void LoginFallbackPoolThrowKeepsTheOriginal() {
+  Scenario s(Config(kRedirectOn), &InternThrow);
+  s.redirector->SetBuildIdentity(TestIdentity());
+  QCHECK(s.redirector->ApplyFallback("login_host", kDefaultLogin) == kDefaultLogin);
+  QCHECK(GlobalCounters().loginFallbackFailed.load() == 1);
+  QCHECK(s.redirector->counters().failures == 0);
+  QCHECK(GlobalCounters().exceptions.load() == 0);
+  QCHECK(Lines().empty());
+}
+
+// The composed string is the pool's own copy: the pointer is the one the pool returns for the same text.
+void LoginFallbackPointerIsThePoolsPointer() {
+  Scenario s(Config(kRedirectOn));
+  s.redirector->SetBuildIdentity(TestIdentity());
+  const char* const first = s.redirector->ApplyFallback("login_host", kDefaultLogin);
+  const char* const again = s.redirector->ApplyFallback("login_host", kDefaultLogin);
+  QCHECK(first == again);
+  const nevr::lifecycle::InternResult pooled = Pool().Intern(Compose(kDefaultLogin, TestIdentity()));
+  QCHECK(pooled.status == nevr::lifecycle::InternStatus::kSuccess);
+  QCHECK(pooled.pointer == first);
+}
+
+// No identity: the rule is off and the stock fallback is the one the game passed.
+void LoginFallbackIsOffWithoutAnIdentity() {
+  Scenario s(Config(kRedirectOn));
+  QCHECK(s.redirector->ApplyFallback("login_host", kDefaultLogin) == kDefaultLogin);
+  QCHECK(GlobalCounters().loginFallbackVersioned.load() == 0);
+  QCHECK(GlobalCounters().loginFallbackKept.load() == 0);
+  QCHECK(Lines().empty());
+}
+
+// A redirect that is not effective: the rule is off even with an identity.
+void LoginFallbackIsOffWhenTheRedirectIsInactive() {
+  Scenario s(WithRedirectOff(Config(kRedirectOn)));
+  QCHECK(!s.redirector->active());
+  s.redirector->SetBuildIdentity(TestIdentity());
+  QCHECK(s.redirector->ApplyFallback("login_host", kDefaultLogin) == kDefaultLogin);
+  QCHECK(GlobalCounters().loginFallbackVersioned.load() == 0);
+  QCHECK(Lines().empty());
+}
+
+// The install's prewarm line says whether the rule is armed; neither state logs the query or a URL.
+void PrewarmLineCarriesTheLoginFallbackState() {
+  RemoveRedirectHooks();
+  ResetThunks();
+  Lines().clear();
+  SetLoginIdentity(TestIdentity());
+  const InstallReport armed = InstallRedirectHooks(Config(kRedirectOn), &InternReal, nullptr);
+  QCHECK(armed.featureEnabled);
+  QCHECK(AnyLineContainsBoth("\"status\":\"prewarmed\"", "\"login_fallback\":\"armed\""));
+  QCHECK(!AnyLineContains("nevr_quest-dev"));
+  RemoveRedirectHooks();
+
+  SetLoginIdentity(BuildIdentity{});
+  Lines().clear();
+  const InstallReport bare = InstallRedirectHooks(Config(kRedirectOn), &InternReal, nullptr);
+  QCHECK(bare.featureEnabled);
+  QCHECK(AnyLineContainsBoth("\"status\":\"prewarmed\"", "\"login_fallback\":\"no_identity\""));
+  RemoveRedirectHooks();
+  ResetThunks();
+}
+
+// The cache holds kMaxFallbackEntries (4) composed fallbacks; a fifth distinct one is composed again each time
+// it is read, and the result is still the composed string.
+void LoginFallbackCacheHoldsFourAndComposesAFifthAgain() {
+  Scenario s(Config(kRedirectOn));
+  s.redirector->SetBuildIdentity(TestIdentity());
+  const BuildIdentity id = TestIdentity();
+  std::vector<std::string> fallbacks;
+  for (int i = 0; i < 5; ++i) fallbacks.push_back("wss://f" + std::to_string(i) + ".example/login");
+  for (const std::string& fb : fallbacks) {
+    const char* const got = s.redirector->ApplyFallback("login_host", fb.c_str());
+    QCHECK(std::strcmp(got, Compose(fb, id).c_str()) == 0);
+  }
+  QCHECK(GlobalCounters().loginFallbackVersioned.load() == 5);
+  for (std::size_t i = 0; i < kMaxFallbackEntries; ++i) (void)s.redirector->ApplyFallback("login_host", fallbacks[i].c_str());
+  QCHECK(GlobalCounters().loginFallbackVersioned.load() == 5);  // the four cached entries are hits
+  const char* const fifth = s.redirector->ApplyFallback("login_host", fallbacks[4].c_str());
+  QCHECK(std::strcmp(fifth, Compose(fallbacks[4], id).c_str()) == 0);
+  QCHECK(GlobalCounters().loginFallbackVersioned.load() == 6);  // the fifth is composed again
+}
+
 // ---- layer 3: concurrency ---------------------------------------------------
 
 void ConcurrentCallsAgree() {
@@ -1011,6 +1163,16 @@ int main(int argc, char** argv) {
   UrlDecisionsHaveTheirOwnCounters();
   EveryConnectIsCountedByClassForTheStatusRedirectCheck();
   CacheFullAndStaleBridgeBehaviour();
+  LoginFallbackComposesTheStockDefaultOnce();
+  LoginFallbackKeepsAFallbackThatHasAQuery();
+  LoginFallbackOnlyForTheLoginHostKey();
+  LoginFallbackPoolRefusalKeepsTheOriginal();
+  LoginFallbackPoolThrowKeepsTheOriginal();
+  LoginFallbackPointerIsThePoolsPointer();
+  LoginFallbackIsOffWithoutAnIdentity();
+  LoginFallbackIsOffWhenTheRedirectIsInactive();
+  PrewarmLineCarriesTheLoginFallbackState();
+  LoginFallbackCacheHoldsFourAndComposesAFifthAgain();
   ConcurrentCallsAgree();
   PinnedTargetsMatchTheMeasuredBinaries();
   ProductionEntryPassesTheBridgeProbe();

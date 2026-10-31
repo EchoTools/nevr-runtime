@@ -51,13 +51,14 @@ class ReleaseWorkflowInstallerSymbolsTest(unittest.TestCase):
 
     def test_the_installer_is_split_stripped_and_linked_into_the_dist_symbols_before_they_are_verified_and_uploaded(self):
         order, steps = self.steps()
-        build = "Build the core installer for Windows"
-        for earlier, later in (("Create distribution packages (unsigned)", build),
-                               (build, "Verify the symbol files match the stripped binaries"),
-                               (build, "Upload the symbol files"),
-                               (build, "Gate and assemble the release tree")):
+        split = "Split, strip and link the core installer's symbols"
+        for earlier, later in (("Create distribution packages (unsigned)", split),
+                               ("Download the core installer", split),
+                               (split, "Verify the symbol files match the stripped binaries"),
+                               (split, "Upload the symbol files"),
+                               (split, "Gate and assemble the release tree")):
             self.assertLess(order.index(earlier), order.index(later), f"{earlier!r} runs before {later!r}")
-        body = steps[build]
+        body = steps[split]
         dbg = '"dist/symbols/$name/install-nevr-runtime.exe.dbg"'
         keep = body.index(f'--only-keep-debug "$exe" {dbg}')
         strip = body.index('x86_64-w64-mingw32-strip --strip-all "$exe"')
