@@ -254,7 +254,7 @@ TEST(EvrCodecPolicy, BridgeLoginsAsOvrOrg) {
 // because both were OVR-ORG-<account>.
 TEST(EvrCodecPolicy, NoVrClientLogsInAsDmoAndIsADifferentIdentityFromTheSameAccountsVrClient) {
   static_assert(nevr_evr_codec::kNoVrLoginPlatform == 7, "DMO in the game's and Nakama's numbering");
-  const uint64_t account = 695081603180789771ULL;
+  const uint64_t account = 700000000000000042ULL;
   const uint64_t vr = nevr_evr_codec::SelectPlatformCode(false, false);
   const uint64_t noVr = nevr_evr_codec::SelectPlatformCode(false, true);
   EXPECT_EQ(vr, 4u) << "a VR client does not change";
@@ -263,8 +263,8 @@ TEST(EvrCodecPolicy, NoVrClientLogsInAsDmoAndIsADifferentIdentityFromTheSameAcco
 
   const std::string vrXpid = std::string(nevr_evr_codec::PlatformPrefix(vr)) + "-" + std::to_string(account);
   const std::string noVrXpid = std::string(nevr_evr_codec::PlatformPrefix(noVr)) + "-" + std::to_string(account);
-  EXPECT_EQ(vrXpid, "OVR-ORG-695081603180789771");
-  EXPECT_EQ(noVrXpid, "DMO-695081603180789771");
+  EXPECT_EQ(vrXpid, "OVR-ORG-700000000000000042");
+  EXPECT_EQ(noVrXpid, "DMO-700000000000000042");
   EXPECT_NE(noVrXpid, vrXpid) << "the NoVR id must differ from the VR id for the same account number";
 
   // The login frame carries the platform, and the same account number.

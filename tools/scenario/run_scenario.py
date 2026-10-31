@@ -295,11 +295,16 @@ def state_matches(state: dict, step: dict) -> tuple[bool, str]:
     raise StepFailed(f"state_until has no known check: {sorted(spec)}")
 
 
-# The client needs this much free GPU memory to reach the lobby. Measured on this host (8 GiB card):
-# runs started with up to ~4 GiB already in use passed; runs started with 5.6-5.9 GiB in use died on
-# "DirectX error: E_OUTOFMEMORY" before the lobby (2026-10-01, another session's GPU jobs).
+# Tuning value: free GPU memory the client needs to reach the lobby. Observed (2026-10-01): runs started with up
+# to ~4 GiB already in use passed; runs started with 5.6-5.9 GiB in use died on "DirectX error: E_OUTOFMEMORY"
+# before the lobby, with other processes holding the GPU.
 GPU_FREE_NEEDED_MIB = 4096
 GPU_POLL_SECONDS = 10
+
+
+def nested_display() -> str:
+    """The nested X display the client runs on: NEVR_NESTED_DISPLAY, default :101 (the convention in AGENTS.md)."""
+    return os.environ.get("NEVR_NESTED_DISPLAY", ":101")
 
 
 def gpu_free_mib() -> tuple[int | None, str]:
@@ -411,19 +416,19 @@ class Run:
         # The socket file appears before the server accepts clients; Wine then fails with "no driver
         # could be loaded" (measured 2026-10-01, run 20261001T142307-invite). Ready = a client connects.
         env = {k: v for k, v in os.environ.items() if k != "WAYLAND_DISPLAY"}
-        env["DISPLAY"] = ":101"
+        env["DISPLAY"] = nested_display()
         return subprocess.run(["xdpyinfo"], env=env, capture_output=True).returncode == 0
 
     def ensure_xephyr(self):
         if not self.display_ready():
-            if subprocess.run(["pgrep", "-f", "Xephyr :101"], capture_output=True).returncode != 0:
-                self.xephyr = subprocess.Popen(["Xephyr", ":101", "-screen", "1920x1080"],
+            if subprocess.run(["pgrep", "-f", f"Xephyr {nested_display()}"], capture_output=True).returncode != 0:
+                self.xephyr = subprocess.Popen(["Xephyr", nested_display(), "-screen", "1920x1080"],
                                                stdout=(self.out / "xephyr.log").open("w"),
                                                stderr=subprocess.STDOUT, start_new_session=True)
             deadline = time.monotonic() + 20
             while not self.display_ready():
                 if time.monotonic() > deadline or (self.xephyr is not None and self.xephyr.poll() is not None):
-                    raise StepFailed(f"display :101 never accepted a client; see {self.out / 'xephyr.log'}")
+                    raise StepFailed(f"display {nested_display()} never accepted a client; see {self.out / 'xephyr.log'}")
                 time.sleep(0.5)
 
     def host_stopped(self):

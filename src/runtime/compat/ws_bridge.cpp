@@ -1286,7 +1286,7 @@ static LoginIdentity ReadLoginIdentity(bool verbose) {
   // measured: "login injected xpid=DSC-NOVR-0". The module had this and
   // this copy did not, which is the divergence N92 is about.
   //
-  // N20 (owner decision, 2026-07-27): the fallback applies in CLIENT mode
+  // N20: the fallback applies in CLIENT mode
   // too, not only when g_isServer. JWT first, config second, regardless of
   // mode.
   if (discordId == 0) {
@@ -2084,7 +2084,7 @@ void InstallWebSocketBridge() {
   if (!netInit) { ix::initNetSystem(); netInit = true; }
 
   // Bind to a high-range ephemeral port with retry.
-  // Port 6821 is permanently poisoned on this host (see N37/N39).
+  // Port 6821 is permanently unusable on at least one machine this project runs on (see N37/N39).
   constexpr int kMaxBindAttempts = 10;
   std::random_device rd;
   std::mt19937 gen(rd());
@@ -2570,7 +2570,7 @@ void InstallWebSocketBridge() {
   // (PatchMatchmakingHost, pnsrad_enabler.cpp) to point at whatever port we
   // bind here — GetMatchmakerBridgePort() is how that patch learns the port.
   //
-  // 2026-09-13 (Andrew): was a hardcoded port 42148. Static ports collide
+  // 2026-09-13: was a hardcoded port 42148. Static ports collide
   // with a still-releasing socket from a just-killed prior instance (the
   // OS hasn't finished TIME_WAIT teardown yet) — hit this live. Same
   // random-ephemeral-with-retry pattern as the main bridge port above,

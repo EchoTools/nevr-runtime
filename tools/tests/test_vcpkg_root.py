@@ -74,6 +74,14 @@ class VcpkgRootTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("not a vcpkg checkout", r.stderr)
 
+    def test_an_unset_vcpkg_root_fails_naming_it(self):
+        a = self.checkout("a")
+        env = {k: v for k, v in os.environ.items() if k not in ("VCPKG_ROOT", "NEVR_VCPKG_SOURCE")}
+        r = subprocess.run([str(a / "tools/vcpkg_root.sh")], env=env, capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("VCPKG_ROOT is not set", r.stderr)
+        self.assertFalse((a / "build/vcpkg-root").exists())
+
     def run_named(self, checkout, *args):
         env = dict(os.environ, NEVR_VCPKG_SOURCE=str(self.source))
         return subprocess.run([str(checkout / "tools/vcpkg_root.sh"), *args], env=env, capture_output=True, text=True)

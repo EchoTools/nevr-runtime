@@ -27,7 +27,7 @@ LOCK_REASON = "the fixed build checkout (#1736): builds run here only while it i
 README = """# build-checkout
 
 What: the one fixed, clean checkout the cached builds run in (`tools/build_checkout.py`, issue #1736).
-Whose: the merge foreman's builds; nobody edits it. Work happens in a worktree, never here.
+Whose: the cached builds (`just build-checkout`); nobody edits it. Work happens in a worktree, never here.
 Removed: when the project stops building from a fixed path; `git worktree remove` it from the main checkout, by exact path.
 
 `nevr-runtime/` is a detached worktree of the main checkout. `just build-checkout <rev>` moves it to a commit and refuses when

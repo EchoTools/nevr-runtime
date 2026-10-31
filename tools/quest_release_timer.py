@@ -79,7 +79,7 @@ a failure, and that log is the record of each run. A failed step exits 1 and nam
 (with the last failed step and its part) before the run exits 0. `--tag vX.Y.Z --reset-failures` records `failures_reset` for that tag and does
 nothing else; only the failures after the newest one count toward the three. The R2 credential goes only to publish_apk and
 variant_publish, and the GitHub token only to publish_apk and the dispatch: every other command gets an environment without them. The environment is
-the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) and RELEASE_PUBLIC_BASE; a missing one
+the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY), NEVR_RCLONE_REMOTE and RELEASE_PUBLIC_BASE; a missing one
 is a refusal that names it. No value is printed or logged: every value read from the environment, and the GitHub token, is
 replaced by <redacted> in anything written.
 """
@@ -110,8 +110,8 @@ from quest_release_loader import asset_name as loader_asset_name  # noqa: E402 -
 
 # QUEST_RELEASE_SIGNER_REPO is the path of a local clone of the release-signer repository (build_signer builds from its main).
 REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE",
-                "QUEST_RELEASE_SIGNER_REPO")
-SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
+                "NEVR_RCLONE_REMOTE", "QUEST_RELEASE_SIGNER_REPO")
+SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "NEVR_RCLONE_REMOTE")
 # The optional variant: where the private libraries are and the file of their pins. They are redacted like a secret and
 # never given to a command; the timer reads them itself.
 VARIANT_ENV = ("NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS")

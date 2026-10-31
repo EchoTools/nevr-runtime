@@ -442,7 +442,7 @@ static CBroadcasterReceiveLocalEventFunc* OriginalCBroadcasterReceiveLocalEvent 
 
 // N83 (2026-07-26): re-implemented as the null-guard it was always described as.
 //
-// ORIGIN, corrected: 7beccee (2026-03-24, Andrew Bates) added this and stated its
+// ORIGIN, corrected: 7beccee (2026-03-24) added this and stated its
 // purpose in the commit message — "Entity property dispatch null-guard
 // (fcn.140f87aa0) to prevent AV in server mode from uninitialized client-side
 // state". An earlier pass here claimed there was no recorded justification; that

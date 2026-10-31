@@ -449,11 +449,11 @@ const unsigned char kBobFrame[] = {0x28, 0xb5, 0x2f, 0xfd, 0x04, 0x58, 0xd9, 0x0
 TEST(SocialNames, ADisplayNameIsReadFromAProfileReply) {
   ASSERT_NE(nevr_social_names::DecoderSlot().load(), nullptr) << "social_names.cpp registers the decoder";
   const std::string reply =
-      ProfileReply(695081603180789771ULL, std::string(reinterpret_cast<const char*>(kBobFrame), sizeof(kBobFrame)));
+      ProfileReply(700000000000000042ULL, std::string(reinterpret_cast<const char*>(kBobFrame), sizeof(kBobFrame)));
   std::uint64_t id = 0;
   std::string name;
   ASSERT_TRUE(nevr_social_names::DecodeProfile(reinterpret_cast<const std::uint8_t*>(reply.data()), reply.size(), &id, &name));
-  EXPECT_EQ(id, 695081603180789771ULL);
+  EXPECT_EQ(id, 700000000000000042ULL);
   EXPECT_EQ(name, "Bob");
 
   // A truncated frame, a frame that is not zstd, and a reply too short to hold the header all fail.
@@ -516,8 +516,8 @@ TEST(SocialRoster, ARefreshKeepsANameTheRosterAlreadyHas) {
 TEST(SocialParty, HashesMatchTheReferenceVectors) {
   const auto sha = nevr_social_party::Sha1("abc");
   EXPECT_EQ(Hex(sha.data(), sha.size()), "a9993e364706816aba3e25717850c26c9cd0d89d");
-  const auto a = nevr_social_party::UuidV5Nil("OVR-ORG-695081603180789771");
-  EXPECT_EQ(Hex(a.data(), a.size()), "819eb318e3865430b167151aae327cbb");
+  const auto a = nevr_social_party::UuidV5Nil("OVR-ORG-700000000000000042");
+  EXPECT_EQ(Hex(a.data(), a.size()), "3c0d9c5ee35d541d8e817a0b980fd001");
   const auto b = nevr_social_party::MemberUuid(1);
   EXPECT_EQ(Hex(b.data(), b.size()), "9b22f96a232a5571b27ff9e0f3824921");
 }
@@ -2089,40 +2089,40 @@ TEST(SocialFacade, IncomingFriendRequestIsListedFirstInRecentlyMet) {
   constexpr std::uint64_t kAcceptSuccess = 0x1bbda7fa06af4627ULL;
   constexpr std::uint64_t kStatusNotify = 0x26a19dc4d2d5579dULL;
 
-  const std::vector<std::uint8_t> request = frame(695081603180789771ULL);
+  const std::vector<std::uint8_t> request = frame(700000000000000042ULL);
   nevr_social_roster::RequestEvent event = ApplyFriendMessage(list, kInviteNotify, request.data(), request.size());
   EXPECT_EQ(event.change, RequestChange::kAdded);
-  EXPECT_EQ(event.account, 695081603180789771ULL);
+  EXPECT_EQ(event.account, 700000000000000042ULL);
   EXPECT_EQ(event.pending, 1U);
   EXPECT_EQ(list.Count(), 1U);
   EXPECT_EQ(list.Online(), 1U);
   std::uint64_t id = 0;
   ASSERT_TRUE(list.IdAt(0, &id));
-  EXPECT_EQ(id, 695081603180789771ULL);
-  EXPECT_STREQ(list.NameAt(0), "695081603180789771");  // the id until the profile names it
+  EXPECT_EQ(id, 700000000000000042ULL);
+  EXPECT_STREQ(list.NameAt(0), "700000000000000042");  // the id until the profile names it
   EXPECT_STREQ(list.TextAt(0), "Sent you a friend request");
 
   // The same notify again is not a second request; the name sticks once known.
   event = ApplyFriendMessage(list, kInviteNotify, request.data(), request.size());
   EXPECT_EQ(event.change, RequestChange::kNone);
   EXPECT_EQ(list.Count(), 1U);
-  EXPECT_TRUE(list.SetRequestName(695081603180789771ULL, "sprockee"));
-  EXPECT_FALSE(list.SetRequestName(695081603180789771ULL, "sprockee"));  // unchanged
+  EXPECT_TRUE(list.SetRequestName(700000000000000042ULL, "fixture"));
+  EXPECT_FALSE(list.SetRequestName(700000000000000042ULL, "fixture"));  // unchanged
   EXPECT_FALSE(list.SetRequestName(1, "someone else"));                  // not pending
-  EXPECT_STREQ(list.NameAt(0), "sprockee");
+  EXPECT_STREQ(list.NameAt(0), "fixture");
 
   // The server's list keeps the request first and lists that account once.
   nevr_social_roster::Entry other;
   other.id = 900000000000000101ULL;
   other.name = "Peer";
   nevr_social_roster::Entry same;
-  same.id = 695081603180789771ULL;
-  same.name = "sprockee (server)";
+  same.id = 700000000000000042ULL;
+  same.name = "fixture (server)";
   list.SetList({other, same});
   EXPECT_EQ(list.Count(), 2U);
   ASSERT_TRUE(list.IdAt(0, &id));
-  EXPECT_EQ(id, 695081603180789771ULL);
-  EXPECT_STREQ(list.NameAt(0), "sprockee");
+  EXPECT_EQ(id, 700000000000000042ULL);
+  EXPECT_STREQ(list.NameAt(0), "fixture");
   EXPECT_STREQ(list.TextAt(0), "Sent you a friend request");
   ASSERT_TRUE(list.IdAt(1, &id));
   EXPECT_EQ(id, 900000000000000101ULL);
@@ -2143,7 +2143,7 @@ TEST(SocialFacade, IncomingFriendRequestIsListedFirstInRecentlyMet) {
   EXPECT_EQ(list.Count(), 2U);
   ASSERT_TRUE(list.IdAt(0, &id));
   EXPECT_EQ(id, 900000000000000101ULL);
-  EXPECT_STREQ(list.NameAt(1), "sprockee (server)");
+  EXPECT_STREQ(list.NameAt(1), "fixture (server)");
 }
 
 // Every message that ends a request ends exactly that one, and names itself.

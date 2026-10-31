@@ -18,7 +18,7 @@ sys.path.insert(0, str(TOOLS / "scenario"))
 import host_stop_cause  # noqa: E402
 import run_scenario  # noqa: E402
 
-RUNTIME = "Z:\\home\\andrew\\src\\nevr-runtime\\echovr\\bin\\win10\\nevr-runtime.dll"
+RUNTIME = "Z:\\work\\nevr-runtime\\echovr\\bin\\win10\\nevr-runtime.dll"
 
 
 def iso(epoch: float) -> str:

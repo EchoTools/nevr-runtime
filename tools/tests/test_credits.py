@@ -354,8 +354,8 @@ class SharedFile(unittest.TestCase):
 
         self.assertEqual(problems("named by the project owner, 10-19"), [])
         self.assertEqual(problems("named by the project owner"), [])
-        self.assertTrue(problems("sprockee said so"))
-        self.assertTrue(problems("named by the project owner in chat, 10-19"))
+        self.assertTrue(problems("a person said so"))
+        self.assertTrue(problems("named by the project owner in a message, 10-19"))
 
     def test_validate_refuses_a_bad_file(self):
         def problems(mutate):

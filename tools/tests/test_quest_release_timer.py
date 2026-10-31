@@ -41,6 +41,7 @@ SECRETS = {
     "R2_BUCKET": "sentinel-bucket",
     "R2_ACCESS_KEY_ID": "sentinel-access-key-id",
     "R2_SECRET_ACCESS_KEY": "sentinel-secret-access-key",
+    "NEVR_RCLONE_REMOTE": "sentinel_remote",
 }
 TOKEN = "sentinel-gh-token"
 STEPS = ["checkout", "tags", "token", "list", "build_signer", "check_listed", "worktree", "build_slot", "configure", "build_apk",

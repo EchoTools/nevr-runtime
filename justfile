@@ -618,7 +618,7 @@ _release-quest-apk label tag store_apk plugin variant pack pack_meta:
 # back from the public host and compare size and sha256 (tools/publish_quest_apk.py; #1098). Run it from the clone that
 # built the APK. The bucket, the public host, the release-signer executable and a GitHub read token come from the
 # environment only (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, RELEASE_PUBLIC_BASE, RELEASE_SIGNER_DIR,
-# RELEASE_SIGNER_BIN, GH_TOKEN); a missing one is a refusal that names it. Nothing is overwritten.
+# RELEASE_SIGNER_BIN, GH_TOKEN, NEVR_RCLONE_REMOTE, the name of the rclone remote for the bucket); a missing one is a refusal that names it. Nothing is overwritten.
 publish-quest-apk tag:
     python3 tools/publish_quest_apk.py "{{ tag }}"
 
@@ -2519,7 +2519,7 @@ test-scripting:
 # the hardened C++ GTest suite under Wine. Fail-close: exits nonzero on any failure.
 # Success derives from the real compiler/linker + test artifacts, not a proxy
 # [day-one-kit §5]. EXCLUDES the Go integration suites — the evr-test-harness
-# dependency is excised [RULINGS.md 2026-07-20 "Test harness excised"].
+# dependency is excised (no extern/evr-test-harness in the tree).
 verify:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2918,7 +2918,7 @@ verify:
     # src/runtime/lifecycle/cli.cpp is excluded deliberately, not by oversight: its 14
     # "[NEVR] " strings are all AddArgHelpString descriptions, where the marker
     # distinguishes NEVR-added flags from the game's own in `--help` output. That is
-    # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
+    # a usage contract, not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
     # --- N115: the login system_info block must be MEASURED, not invented --------
@@ -3776,7 +3776,7 @@ verify:
         echo "verify: FAIL — #41 a URL-credential site no longer calls the ServerDbUri encoder." >&2
         exit 1
     fi
-    # N20 (owner decision, 2026-07-27): the nevr_discord_id config fallback applies
+    # N20: the nevr_discord_id config fallback applies
     # in CLIENT mode too, not only server mode. Two assertions, because either one
     # alone is satisfiable by the bug — the first fires if the fallback is deleted,
     # the second if it is re-gated on server mode. Both failures are silent in
@@ -3798,7 +3798,7 @@ verify:
     sensor_stage1 "N20 fallback not server-gated" "src/runtime/compat/ws_bridge.cpp" "$N20B_RC"
     if [ "$N20B_RC" -eq 0 ]; then
         echo "verify: FAIL — N20 the config discord-id fallback is gated on g_isServer;" >&2
-        echo "the owner decision (2026-07-27) is that it applies in CLIENT mode too." >&2
+        echo "the fallback applies in CLIENT mode too, not only on a server." >&2
         exit 1
     fi
     # N86-class: HookLiveness reports "entered=NO" for a hook that never runs.
@@ -4083,7 +4083,7 @@ verify:
     fi
     # And boot.cpp shall not tell the operator to remove a flag that is native
     # to the game: acting on that message by removing -headless opens a
-    # window on the owner's screen.
+    # window on the desktop of the machine the game runs on.
     N99_BOOT_RC=0; N99_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/boot.cpp) || N99_BOOT_RC=$?
     sensor_stage1 "N99 boot flag advice" "src/runtime/lifecycle/boot.cpp" "$N99_BOOT_RC"
     sensor_nonempty "N99 boot flag advice" "non-comment lines of src/runtime/lifecycle/boot.cpp" "$N99_BOOT"
@@ -4409,16 +4409,17 @@ verify-sign file:
 
 # --- Internal ---
 
-# Fail unless the local ~/.vcpkg is on the revision CI builds (.vcpkg-commit). Bumping that file is a
+# Fail unless the vcpkg checkout at $VCPKG_ROOT is on the revision CI builds (.vcpkg-commit). Bumping that file is a
 # deliberate dependency upgrade: the vcpkg ports, and so the library versions, change with it.
 vcpkg-pin-check:
     #!/usr/bin/env bash
     set -euo pipefail
     want=$(tr -d '[:space:]' < "{{ justfile_directory() }}/.vcpkg-commit")
-    have=$(git -C "$HOME/.vcpkg" rev-parse HEAD)
+    vcpkg_root="${VCPKG_ROOT:?vcpkg-pin-check: VCPKG_ROOT is not set; point it at a vcpkg checkout (https://github.com/microsoft/vcpkg)}"
+    have=$(git -C "$vcpkg_root" rev-parse HEAD)
     if [ "$have" != "$want" ]; then
-        echo "vcpkg-pin-check: FAIL — ~/.vcpkg is at $have, CI builds $want (.vcpkg-commit)." >&2
-        echo "Fix: git -C ~/.vcpkg checkout --detach $want   (or bump .vcpkg-commit on purpose, in its own PR)." >&2
+        echo "vcpkg-pin-check: FAIL — $vcpkg_root is at $have, CI builds $want (.vcpkg-commit)." >&2
+        echo "Fix: git -C \"$vcpkg_root\" checkout --detach $want   (or bump .vcpkg-commit on purpose, in its own PR)." >&2
         exit 1
     fi
     # The pinned ixwebsocket port links -lCrypt32; the MinGW package ships libcrypt32.a only and ld on

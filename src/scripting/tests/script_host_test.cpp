@@ -328,7 +328,7 @@ TEST(reload_whose_top_level_fails_leaves_the_script_inert) {
   CHECK_EQ(env.vm.unquiesced_unloads, 0);
 }
 
-// Spritz, on #458: reloading re-enables a breached script in dev builds only
+// #458: reloading re-enables a breached script in dev builds only
 // (reloading means the author changed it); in a normal build a breached script
 // stays off until the game restarts.
 TEST(breached_script_comes_back_on_reload_only_in_dev_builds) {

@@ -7,7 +7,7 @@
 //
 // The four LoadLibrary hooks (nevr_dll_load_hook::Install) run every load filter, post-load observer and
 // DLL-load callback the runtime registers; loads through an unhooked variant run none of them. They are
-// REQUIRED (Spritz's ruling, #632): a partial install fails the boot like any required boot hook, so a
+// REQUIRED (#632): a partial install fails the boot like any required boot hook, so a
 // server refuses to start (boot.cpp's g_bootHookFailed check) and a client's last boot line says ok=false.
 
 namespace nevr_boot_hook_policy {

@@ -79,7 +79,7 @@ static constexpr uint8_t   PNSRAD_STATE_JE_EXPECTED[] = {0x0F, 0x84, 0x78, 0x01,
 static constexpr uintptr_t PNSRAD_LOGIN_IDENTITY_CHECK = 0x8ef25;
 static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0x00, 0x00, 0x00};
 
-// 2026-09-13 (Andrew): pnsradmatchmaking.dll's CNSRadMatchmaking::
+// 2026-09-13: pnsradmatchmaking.dll's CNSRadMatchmaking::
 // initialize_matchmakers reads "matchmaker_host" (default: the readyatdawn.com
 // literal below) then "matchingservice_host" (defaults to whatever the first
 // lookup returned) via its own statically-linked CJson::TString — a config
@@ -124,7 +124,7 @@ static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = nevr_matchmaker_host_pat
 static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = nevr_matchmaker_host_patch::kHostSlotSize;
 static constexpr const char* PNSRADMATCHMAKING_HOST_EXPECTED = nevr_matchmaker_host_patch::kHostExpected;
 
-// 2026-09-13 (Andrew's disassembly audit): CNSRADParty (and, per the same audit,
+// 2026-09-13 (disassembly audit): CNSRADParty (and, per the same audit,
 // CNSRADFriends/CNSRADUsers/CNSRADActivities) register every inbound SNS
 // listener via CTcpBroadcaster::Listen using a broadcaster HANDLE stored in
 // the object itself — *(this+0x2b0) for CNSRADParty. If that handle is null

@@ -148,7 +148,7 @@ TEST_F(CredentialCacheCheck, ReusedCredentialsPass) {
   EXPECT_EQ(r[0]["observed"], "cache reused no_sign_in_needed");
 }
 
-// L2: "no cache" and "a cache that could not be used" are different things to sprockee reading the result.
+// L2: "no cache" and "a cache that could not be used" are different things to the operator reading the result.
 TEST_F(CredentialCacheCheck, ASignInWithNoCacheSaysSo) {
   nevr_credential_stats::NoteSignInRequired(SignInReason::kNoCache);
   const auto r = Results();

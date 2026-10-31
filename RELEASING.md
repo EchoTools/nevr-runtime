@@ -266,7 +266,7 @@ just publish-quest-apk vX.Y.Z   # puts the APK and its .sha256 on R2, then fetch
 
 The recipe takes the bucket, the public host, the release-signer executable and checkout and a GitHub read token from the
 environment and nothing else: `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
-`RELEASE_PUBLIC_BASE`, `RELEASE_SIGNER_BIN`, `RELEASE_SIGNER_DIR` and `GH_TOKEN`. A missing one is a refusal that names
+`RELEASE_PUBLIC_BASE`, `RELEASE_SIGNER_BIN`, `RELEASE_SIGNER_DIR`, `GH_TOKEN` and `NEVR_RCLONE_REMOTE` (the rclone remote that names the bucket). A missing one is a refusal that names
 it. The APK goes up through the signer's `put-quest-apk`, run from `RELEASE_SIGNER_DIR` (the signer reads `config/` from
 its working directory), which checks that the release is published, that the APK was built from the tag's commit and
 that it carries the pinned signer certificate, and writes the object only if absent; the sidecar goes up with

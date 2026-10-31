@@ -1,7 +1,6 @@
 # platform_compat — Schannel TLS modernisation, CreateDirectory fixes,
 # MSXML6 CoCreateInstance pass-through hook. Linked statically into
-# BugSplat64.dll (2026-08-02: folded from separate DLL per owner decision
-# — separate deployable DLLs are a failure mode when they must always ship
+# BugSplat64.dll (2026-08-02: folded from separate DLL: separate deployable DLLs are a failure mode when they must always ship
 # together).
 
 add_library(nevr_platform_compat STATIC

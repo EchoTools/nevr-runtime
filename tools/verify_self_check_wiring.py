@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail `just verify` when the self-checks stop being unconditional or the runtime adds a debug query (#451).
 
-Decided (Spritz, 2026-10-11): self-checks are on in every build, so nothing in a build may behave differently
+Self-checks are on in every build since 2026-10-11, so nothing in a build may behave differently
 because of how it was stamped, and the runtime never adds `debug=true` to a connection by build type: whether a
 player sends the FULL remote logs is the game service's decision (profile.EnableAllRemoteLogs,
 serviceSettings.EnableSessionDebug). This gate keeps both true:

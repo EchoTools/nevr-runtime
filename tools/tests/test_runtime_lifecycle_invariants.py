@@ -331,7 +331,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
     def test_dll_load_hooks_installed_line_is_gated_on_the_install_outcome(self):
         # #632 (N127's shape): Install() returns how many LoadLibrary variants it hooked. The boot line
         # says "installed" only for all of them; a partial install prints a line that names the count, and
-        # (Spritz's ruling: the hooks are required) fails the boot with the count as its cause.
+        # (#632: the hooks are required) fails the boot with the count as its cause.
         # InitializeAfterGameImageGuard cannot run in a GTest, so this pins the source; the verdict itself
         # is tested in test_dll_load_hook.cpp (DllLoadHookBootVerdict).
         source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())

@@ -12,7 +12,7 @@ two hours. The owner's own messages that night show where the time went:
 | --- | --- | --- |
 | Read the UI aloud (~15 times: "no oculus friends", "Invite to start party!", blank friend page, missing names, no "+") | The runtime did not log what the game decided; pnsrad's native log is off | No. Observability gap, since closed by the facade slot trace and the session-event trace |
 | Found the invite blocker himself (`npe\|firstmatch\|completed`) | The game's invite-error event was not logged | No. Same gap, closed by `src/runtime/patch/party_invite_gate.cpp` |
-| Clicked through the menus on the main display | Hand/mouse input does not reach menu buttons under Xephyr :101 | No. Missing harness |
+| Clicked through the menus on the main display | Hand/mouse input does not reach menu buttons under the nested Xephyr display | No. Missing harness |
 | Installed each build on a second client and stayed online as the invite target | An invite was assumed to need a second online account | No. See below |
 | Said when to restart the game | The game does not exit cleanly under Wine (#53) | No. Missing harness |
 | Changed production account state (lockout, password) | Production account records | Partly: the cause was readable from Nakama's log |

@@ -18,14 +18,14 @@ purpose: a misconfigured VM must never read as a runtime regression.
 
 - A libvirt Windows guest with **WinRM (5985)** and **SMB (445)** reachable, and a
   local admin login supplied through `WINVM_USER` / `WINVM_PASS` (never commit them).
-  `WINVM_HOST` sets the guest IP; otherwise `WINVM_DOMAIN` (default `win11-dev`) is
+  `WINVM_HOST` sets the guest IP; otherwise `WINVM_DOMAIN` (required: the libvirt domain of the guest) is
   looked up with `virsh`.
 - An **active interactive console session** on the guest. The game needs a desktop,
   which a WinRM process does not have, so it is started as an interactive scheduled
   task. Log in once at the console and leave it.
 - The game installed at `C:\echovr` with its data under
   `_data\<version>\rad15\win10\packages`.
-- On this host: `pywinrm`, `smbclient`, and `x86_64-w64-mingw32-gcc`.
+- On the machine that runs the test: `pywinrm`, `smbclient`, and `x86_64-w64-mingw32-gcc`.
 - Optional, for `--dump-on-fail` analysis: `pip install minidump`.
 
 ## The rig

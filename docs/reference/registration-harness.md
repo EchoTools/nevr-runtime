@@ -24,4 +24,4 @@ The fake is an `ix::WebSocketServer` on a random loopback port. Nothing leaves t
 - Nakama's own registration handling (`regions=` / guild checks, `gg.IsServerHost`).
 - The matchmaker path. Its routing over the shared login session (conn 2) is covered by the `TestHook_N61_*`
   tests in `src/runtime/tests/test_behavioral.cpp`; a matchmaker request through a real client needs a
-  display (the nested `Xephyr :101`) and the owner's go for a client run.
+  display (the nested Xephyr display, `:101` by default) and the owner's go for a client run.

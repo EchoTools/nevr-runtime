@@ -151,13 +151,14 @@ class VcpkgPinTest(unittest.TestCase):
         self.assertIn("libCrypt32.a", recipe)
         self.assertIn("exit 1", recipe)
 
-    @unittest.skipUnless(shutil.which("just") and (pathlib.Path.home() / ".vcpkg/.git").exists(),
-                         "needs just and a vcpkg checkout at ~/.vcpkg")
+    @unittest.skipUnless(shutil.which("just") and os.environ.get("VCPKG_ROOT")
+                         and pathlib.Path(os.environ.get("VCPKG_ROOT", ""), ".git").exists(),
+                         "needs just and a vcpkg checkout at $VCPKG_ROOT")
     def test_the_pin_check_fails_when_the_symlink_is_missing_and_passes_when_present(self):
-        head = subprocess.run(["git", "-C", str(pathlib.Path.home() / ".vcpkg"), "rev-parse", "HEAD"],
+        head = subprocess.run(["git", "-C", os.environ["VCPKG_ROOT"], "rev-parse", "HEAD"],
                               capture_output=True, text=True, check=True).stdout.strip()
         if head != (REPO / ".vcpkg-commit").read_text().strip():
-            self.skipTest("~/.vcpkg is not on the pinned revision")
+            self.skipTest("$VCPKG_ROOT is not on the pinned revision")
         with tempfile.TemporaryDirectory() as lib:
             env = dict(os.environ, NEVR_MINGW_LIB=lib)
             missing = subprocess.run(["just", "vcpkg-pin-check"], cwd=REPO, env=env, capture_output=True, text=True)

@@ -366,8 +366,8 @@ def default_out_dir() -> pathlib.Path:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--scenario", choices=["boot", "gai", "all"], default="all")
-    ap.add_argument("--domain", default=os.environ.get("WINVM_DOMAIN", "win11-dev"),
-                    help="libvirt domain, used to find the IP when WINVM_HOST is unset")
+    ap.add_argument("--domain", default=os.environ.get("WINVM_DOMAIN"),
+                    help="libvirt domain, used to find the IP when WINVM_HOST is unset (default: $WINVM_DOMAIN, required then)")
     ap.add_argument("--dll", type=pathlib.Path, default=REPO / "build/mingw-release/bin/BugSplat64.dll")
     ap.add_argument("--game-args", default="-noovr -server -headless -no-console",
                     help="note: the legacy dbgcore.dll rejects its no-console flag unless -headless is also given")
@@ -395,7 +395,11 @@ def main(argv: list[str] | None = None) -> int:
             raise EnvError("set WINVM_USER and WINVM_PASS (never commit them)")
         if args.scenario in ("boot", "all") and not args.dll.exists():
             raise EnvError(f"{args.dll} not found; run `just build` first")
-        host = os.environ.get("WINVM_HOST") or resolve_host(args.domain)
+        host = os.environ.get("WINVM_HOST")
+        if not host:
+            if not args.domain:
+                raise EnvError("set WINVM_DOMAIN to the libvirt domain of the guest (or WINVM_HOST to its IP)")
+            host = resolve_host(args.domain)
         print(f"guest {host} as {user}; artifacts in {out}")
         guest = Guest(host, user, password)
         preflight(guest)

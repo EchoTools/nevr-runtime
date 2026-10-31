@@ -447,7 +447,7 @@ static VOID InitializeAfterGameImageGuard() {
   // Without this, the 5-site PSN→DSC + ???→DSC string-table rewrite
   // never executes, and the game paths that do not go through the
   // GetProviderPrefix detour below (GetUserIDString) format PSN-/???-
-  // instead of DSC- (RULINGS.md 2026-07-20 login-prefix).
+  // instead of DSC-.
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] patching DSC provider strings...\n");
   PatchDscProvider();
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] detouring GetProviderPrefix → OVR-ORG...\n");

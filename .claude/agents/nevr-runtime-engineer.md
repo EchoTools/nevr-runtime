@@ -84,10 +84,10 @@ verification conventions", "Working practices for every agent").
 # PRIMER
 
 Re-measured against `origin/main` ee121861b41bc78e69dc067443be5d8b619f7797 on 2026-10-17
-(earlier passes: 2026-07-30, 07-28, 07-20; each pass's stale lines are corrected, not preserved). Every line below is a
+(a stale line is corrected when it is re-measured, not preserved). Every line below is a
 snapshot that WILL drift. Read the next section before you rely on any of it.
 
-**2026-07-30 pass — two whole-tree renames landed since the last one.** Every
+**Whole-tree renames.** Every
 `src/gamepatches/*` and `src/common/*` path in this primer was dead; a dispatched
 agent hit 14 of them in one task. Both are corrected throughout:
 
@@ -129,7 +129,7 @@ stale snapshot.
   target in `src/runtime/CMakeLists.txt` (`OUTPUT_NAME "BugSplat64"`, `OUTPUT_NAME "nevr-runtime"`).
   **This is the hijack mechanism**: of `echovr.exe`'s 17 imports, exactly two are
   non-system — `BugSplat64.dll` and `amd_ags_x64.dll` (measured earlier via
-  `objdump -p`; not re-measured this pass). The game statically imports it, so it
+  `objdump -p`; not re-measured). The game statically imports it, so it
   loads at process startup before WinMain.
 - **`platform_compat` and `token_auth` are NOT separate DLLs.** They are STATIC
   libraries (`add_library(nevr_platform_compat STATIC` in
@@ -214,9 +214,7 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
 
 ## The fatal-error path — legacy BUG N4 is **FIXED**
 
-**N4 is FIXED — commit `52d2c73`. Do NOT report it as an open bug.** The old
-primer described it as live and called it "the single most important thing";
-that framing was correct for 2026-07-20 and is wrong now. The surrounding
+**N4 is FIXED — commit `52d2c73`. Do NOT report it as an open bug.** Earlier notes called it live and the most important open item; that framing is wrong now. The surrounding
 mechanism is unchanged, still explains "the server just hangs" reports from
 BEFORE that commit, and still constrains any new fatal path you write.
 
@@ -230,8 +228,7 @@ BEFORE that commit, and still constrains any new fatal path you write.
   `ForceFatalExit` (same file), which sets `g_forceExitInProgress` then
   `TerminateProcess`. `ServerFatal(format, ...)` (same file) is the mode-gated
   fail-loud path the server code uses (N102, N120).
-- The registered-callback shape is exactly the fix the previous primer predicted
-  would be needed, and the **linkage trap that forced it is still real**:
+- The registered-callback shape is the fix that was needed, and the **linkage trap that forced it is still real**:
   `g_isServer` is declared in `src/runtime/lifecycle/cli.h` (`extern BOOL g_isServer;`),
   NOT in `src/core/globals.h`, and `logging.cpp` compiles into `libnevr_core.a`, which
   cannot see it. A naive
@@ -316,7 +313,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   ephemeral range `[49152, 65535]` with up to 10 bind attempts (`kMaxBindAttempts` in
   `src/runtime/compat/ws_bridge.cpp`; N37/N39; the matchmaker listener repeats the pattern
   with `kMaxMatchBindAttempts`). The only `6821` left in the tree is a comment recording that
-  this port is **permanently poisoned on this host** (maintainers only). Never hardcode it, and never expect
+  this port is **permanently unusable on at least one machine this project runs on** (maintainers only). Never hardcode it, and never expect
   a fixed port when reading logs. That port is the bridge's own in-process listener, not an
   external service.
 - Config comes from files and flags. **Never** introduce environment variables
@@ -324,9 +321,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 
 ## Running the server (Linux / Wine)
 
-- **Never run against the owner's install.** On the owner's machine the main checkout's
-  `echovr/` → `extras/ready-at-dawn-echo-arena` → the owner's game library outside the repo
-  (two hops) is the owner's real game library. AGENTS.md "The game install": no agent runs a
+- **Never run against a real install.** The install is a game library, not a run target. AGENTS.md "The game install": no agent runs a
   deploy script or writes into it. Every run uses its own throwaway copy of the
   pristine copy, made with `cp -a --reflink=auto`, deleted when the run ends, with the
   safety steps and link check AGENTS.md lists; point the scripts at it with
@@ -346,10 +341,8 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   (default `~/src/nevr-runtime-work/`, maintainers only), sends CTRL+C, restores what it deployed, and
   `./tests/smoke/score-log.sh <log>` scores the log. `-headless` is a native token, so
   passing it logs an Info line and nothing more.
-- `echovr/_local/launch-nevr-server.sh` exists in the owner's install (it is not in the
-  repo). It runs `unset DISPLAY`, then `wine ./echovr.exe -server -no-console 2>&1 | tee
-  <log>` with absolute paths into the owner's `echovr/` and no deploy. That is the true
-  headless shape, but it points at the owner's install: reproduce the shape on a copy, do
+- A maintainer install may carry a `_local/launch-nevr-server.sh` (not in the repo). It runs `unset DISPLAY`, then `wine ./echovr.exe -server -no-console 2>&1 | tee
+  <log>` against that install with no deploy. That is the true headless shape: reproduce the shape on a copy, do
   not run it (maintainers only).
 - **Timing:** ~20s splash delay, up to 30s to connect. Do NOT judge a run
   before ~45s.
@@ -368,7 +361,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 
 ## Deploy — ownership manifest
 
-Hash-verified against a reference tarball (earlier pass; not re-hashed this pass).
+Hash-verified against a reference tarball (not re-hashed).
 `echovr/bin/win10/` of the owner's install is a real game install and **no agent writes
 into it** (AGENTS.md "The game install"); the table below says which files are ours
 inside a throwaway COPY (maintainers only: the owner's install).
@@ -390,9 +383,9 @@ inside a throwaway COPY (maintainers only: the owner's install).
 
 ## Former blocker — DXGI stub rejection is **RESOLVED** (do not chase it)
 
-The 2026-07-20 primer listed a headless DXGI `E_NOINTERFACE` (`0x80004002`)
-blocker in which the game "never reaches networking." **That is no longer the
-state.** Measured 2026-07-28 against the very log that entry cited,
+A headless DXGI `E_NOINTERFACE` (`0x80004002`)
+blocker was listed, in which the game "never reaches networking." **That is no longer the
+state.** Measured 2026-07-28 against the log that recorded it,
 `echovr/_local/nevr-server-run.log` (maintainers only):
 
 - `grep -cE '0x80004002|E_NOINTERFACE|Unknown error while loading'` → **0**
@@ -402,23 +395,17 @@ The same result is reproducible on demand, on a throwaway copy of the install
 (`NEVR_GAME_ROOT=<copy> ./verify-server.sh <name> default 90`, then
 `./tests/smoke/score-log.sh <log>`): the headless dedicated server reaches
 `[NEVR.WS] LOGIN SUCCESS` then `[NSLOBBY] registration successful`, one bridge,
-one login injection, zero crash dumps, and CTRL+C shuts down gracefully. (A
-release-prep handoff primer under docs/primers/ was cited here until 2026-07-30;
-`git log --all` shows no such file was ever committed to this repository, so
-following that pointer got you nothing. Deliberately un-backticked: there is no
-sha to cite because it never existed. Use the smoke suite, which is real and
-runs today.) Do not open an investigation into the
+one login injection, zero crash dumps, and CTRL+C shuts down gracefully. (Use the smoke suite; it runs today.) Do not open an investigation into the
 DXGI stub without first re-measuring — the log is from 2026-07-23 and the
 blocker is gone from it.
 
 Still worth carrying forward: that log historically showed
-`[wave0] FAILED to hook HandleDXError ... at 0x140551070` on one pass and a
+`[wave0] FAILED to hook HandleDXError ... at 0x140551070` on one run and a
 successful hook on another. **Treat hook installation as something to verify
 per-run, not assume.**
 
 For the genuinely open items, read the GitHub issues directly (there is no `BUGS.md`
-or other N-ledger on main). The handoff primer previously named here never existed in
-git. Trust the issues rather than trusting this section to stay current.
+or other N-ledger on main). Trust the issues rather than trusting this section to stay current.
 
 ## Tooling
 
@@ -462,9 +449,7 @@ git. Trust the issues rather than trusting this section to stay current.
   `REAP_LEDGER` names (maintainers only).
 - **Maintainers only.** Push branches by explicit refspec only. Never `git push --mirror`, and never push a raw SHA from a maintainer clone. Before any push, run the push-time check in the maintainers' private notes. Never push, merge or rebase from local `main` without the owner's per-instance instruction.
 - `.claude/` is gitignored except the files `.gitignore` negates: the merge-cleanup skill, the nevr-work skill and this primer. Track nothing else under it without the owner's word. Maintainer-private material never goes in this repo.
-- `extern/evr-test-harness` is **EXCISED** (commits 1c7aea0 + 93ce548; the
-  RULINGS.md that recorded it is not in the tree: `git ls-tree origin/main RULINGS.md`
-  returns nothing). The symlink, the `replace`
+- `extern/evr-test-harness` is **EXCISED** (commits 1c7aea0 + 93ce548). The symlink, the `replace`
   directives, the harness `require`, and the harness-importing integration suites
   (e2e, multiplayer, ping_latency, plugin, simple, telemetry in tests/system;
   superhyperturbo in tests/plugins) are gone. The ground-truth suites remain and
@@ -482,7 +467,7 @@ git. Trust the issues rather than trusting this section to stay current.
 # PRIMER DRIFT — MANDATORY
 
 The primer above is a snapshot re-measured on 2026-10-17 against origin/main ee121861. It **will** be wrong.
-The 2026-07-20 pass drifted on ~20 separate claims in eight days — including one
+A previous pass drifted on about 20 separate claims in eight days — including one
 FIXED bug (N4) still described as live, one resolved blocker (DXGI) still
 described as current, and a nonexistent working branch. That is the realistic drift rate here.
 Line numbers in particular are the first thing to rot: verify, do not trust.

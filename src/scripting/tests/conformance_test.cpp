@@ -258,7 +258,7 @@ TEST(t3_script_number_too_large_for_an_exact_integer_is_refused) {
   if (out == 7) CHECK(h.Find("callback_failed", "mod_a") != nullptr);
 }
 
-// Spritz's decision on #458: no NaN or infinity reaches a FLOAT game field or
+// Decision on #458: no NaN or infinity reaches a FLOAT game field or
 // key; the script gets an error naming its line.
 TEST(t3_non_finite_numbers_are_refused_with_the_script_line) {
   Host h;
@@ -453,7 +453,7 @@ TEST(t6_functions_reachable_on_the_stack_are_harmless) {
   CHECK(true);  // reaching here is the test: the host process survived
 }
 
-// Spritz's surface decision on #458: no debug library, os only clock/time/date.
+// Surface decision on #458: no debug library, os only clock/time/date.
 // Every global a script can see must be on this list (script_vm.h "Sandbox").
 TEST(t6_globals_are_only_the_contract_surface) {
   Host h;
@@ -660,7 +660,7 @@ int Bench() {
     Report(h, "M3", "state_after_sample", static_cast<double>(h.vm->MemoryBytes(a)), "bytes");
   }
   {
-    // What each script costs once many are loaded (Spritz: the shared-state variant is required past
+    // What each script costs once many are loaded (the shared-state variant is required past
     // about 20 scripts): total VM memory with 20 sample scripts loaded, and per script.
     Host h;
     for (int i = 0; i < 20; ++i) h.Load("sample" + std::to_string(i) + ".lua", kSample);

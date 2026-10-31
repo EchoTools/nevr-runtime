@@ -310,4 +310,4 @@ TEST(WaveIFixes, N65_GateCount_DerivedFromProductionTable) {
 // N13 (wrapper): shell script change — WINEDEBUG=-all + drop pipeline.
 // UNTESTABLE in C++ unit suite: this is a bash script change.
 // Verified by: PGID proof (ps output shows echovr PGID == foreground PGID) +
-// MANUAL-TEST-REQUIRED (Andrew's real terminal CTRL+C).
+// MANUAL-TEST-REQUIRED (CTRL+C in a real terminal).

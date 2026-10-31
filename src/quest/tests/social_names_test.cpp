@@ -65,11 +65,11 @@ void TestExplicitRegistrationDecodesARealProfile() {
   nevr_social_names::RegisterDefaultDecoder();
   QCHECK(nevr_social_names::DecoderSlot().load() != nullptr);
   nevr_social_names::RegisterDefaultDecoder();  // twice is the same decoder
-  const std::string reply = ProfileReply(695081603180789771ULL, Bob());
+  const std::string reply = ProfileReply(700000000000000042ULL, Bob());
   std::uint64_t id = 0;
   std::string name;
   QCHECK(nevr_social_names::DecodeProfile(reinterpret_cast<const std::uint8_t*>(reply.data()), reply.size(), &id, &name));
-  QCHECK(id == 695081603180789771ULL);
+  QCHECK(id == 700000000000000042ULL);
   QCHECK(name == "Bob");
   const std::string cut = ProfileReply(1, Bob().substr(0, 12));
   QCHECK(!nevr_social_names::DecodeProfile(reinterpret_cast<const std::uint8_t*>(cut.data()), cut.size(), &id, &name));

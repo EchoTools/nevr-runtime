@@ -44,9 +44,8 @@ ALLOWED_ABSENT = {
     # docs/standards/verification.md exists to prevent. Two independent agents hit
     # it in fresh worktrees on 2026-07-27.
     "extern/protobuf",
-    # EXCISED by board ruling (RULINGS.md 2026-07-20 "Test harness excised"). The
-    # engineer primer names it precisely to say it is gone and must not be
-    # re-added; the real harness lives outside the repo and is not wired in.
+    # EXCISED: the engineer primer names this path to record that it is gone and must not be re-added;
+    # the real harness lives outside the repo and is not wired in.
     "extern/evr-test-harness",
     # Pre-rename layer/directory names. The engineer primer cites these to record
     # WHAT MOVED WHERE (`src/common/` is now core/abi; `src/gamepatches/` is now

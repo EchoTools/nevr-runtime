@@ -1174,7 +1174,7 @@ class PluginLoadRun {
   // S6): a plugin declaring a version ABOVE the host WARNS and loads anyway —
   // NOT a fatal, and NOT gated on `required`. The module loader fatals on an
   // unsupported version; the plugin loader deliberately does not, and this
-  // asymmetry is a flagged owner decision (see the N134 ledger entry). `required`
+  // asymmetry is deliberate (see N134). `required`
   // governs load/init FAILURE, not version skew.
   auto apiVersionFn = reinterpret_cast<NvrPluginGetApiVersion_fn>(GetProcAddress(hPlugin, "NvrPluginGetApiVersion"));
   uint32_t apiVersion = apiVersionFn ? apiVersionFn() : 1;

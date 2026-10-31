@@ -492,7 +492,7 @@ int CallSet(lua_State* L) {
       // number, or one past ±2^53, for an INT field (host_registry.cpp CoerceTo).
       v.type = NEVR_VALUE_FLOAT;
       v.as.f = lua_tonumber(L, 3);
-      // No NaN or infinity into a game field (Spritz, on #458).
+      // No NaN or infinity into a game field (#458).
       if (!std::isfinite(v.as.f)) {
         luaL_error(L, "NEVR_ERR_INVALID_ARG: h:set('%s') on hook '%s': the value is not a finite number", field,
                    s->api->call_hook_name(call));
@@ -573,7 +573,7 @@ int SetupThunk(lua_State* L) {
   OpenLib(L, LUA_STRLIBNAME, luaopen_string);
   OpenLib(L, LUA_MATHLIBNAME, luaopen_math);
   OpenLib(L, LUA_UTF8LIBNAME, luaopen_utf8);
-  // No debug library (Spritz, on #458): introspection reached host internals,
+  // No debug library (#458): introspection reached host internals,
   // and errors already carry chunk:line. os keeps clock, date and time only.
   lua_getglobal(L, LUA_OSLIBNAME);
   lua_pushnil(L);

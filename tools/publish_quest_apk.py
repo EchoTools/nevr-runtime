@@ -11,7 +11,8 @@ file that is there is the local one. `--extra-out FILE` keeps the manifest claim
 (the `extra_artifacts` input of the manifest publish) in FILE, which must not exist; it is written only after the upload.
 
 Everything that is a host, a URL or a credential comes from the environment and nothing here holds a value:
-R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY (the bucket), RELEASE_PUBLIC_BASE (where the files are
+R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY (the bucket), NEVR_RCLONE_REMOTE (the rclone remote
+that names the bucket), RELEASE_PUBLIC_BASE (where the files are
 served, e.g. the release host), RELEASE_SIGNER_BIN (the release-signer executable), RELEASE_SIGNER_DIR (the release-signer
 checkout, whose config/manifest.yml and config/sources.yml the signer reads from its working directory) and GH_TOKEN (a
 read token the signer uses to see the release). A missing or empty one is a refusal that names it. No value is printed or
@@ -53,9 +54,13 @@ REQUIRED_ENV = (
     "RELEASE_SIGNER_BIN",
     "RELEASE_SIGNER_DIR",
     "GH_TOKEN",
+    "NEVR_RCLONE_REMOTE",
 )
 # A variant goes up without the signer, so it needs neither the signer nor the token that lets the signer see the release.
-VARIANT_REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE")
+VARIANT_REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE",
+                        "NEVR_RCLONE_REMOTE")
+# The rclone remote's name: letters, digits and underscores, so rclone's RCLONE_CONFIG_<NAME>_* variables can name it.
+RCLONE_REMOTE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 VARIANT_NAME = re.compile(r"[a-z0-9]+")
 SIGNER_CONFIG = ("config/manifest.yml", "config/sources.yml")
 TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
@@ -226,16 +231,19 @@ def keep_extra(source: pathlib.Path, target: pathlib.Path) -> None:
 
 
 def put_object(source: pathlib.Path, key: str, env: dict[str, str], what: str) -> None:
-    """`rclone copyto --ignore-existing` of one file to the bucket: a name that is already there is never replaced."""
+    """`rclone copyto --ignore-existing` of one file to the bucket: a name that is already there is never replaced.
+    The remote is NEVR_RCLONE_REMOTE, configured through rclone's environment variables under that name."""
+    remote = env["NEVR_RCLONE_REMOTE"]
+    stem = f"RCLONE_CONFIG_{remote.upper()}_"
     rclone_env = {
         **env,
-        "RCLONE_CONFIG_R2_TYPE": "s3",
-        "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
-        "RCLONE_CONFIG_R2_ENDPOINT": env["R2_ENDPOINT"],
-        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": env["R2_ACCESS_KEY_ID"],
-        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": env["R2_SECRET_ACCESS_KEY"],
+        f"{stem}TYPE": "s3",
+        f"{stem}PROVIDER": "Cloudflare",
+        f"{stem}ENDPOINT": env["R2_ENDPOINT"],
+        f"{stem}ACCESS_KEY_ID": env["R2_ACCESS_KEY_ID"],
+        f"{stem}SECRET_ACCESS_KEY": env["R2_SECRET_ACCESS_KEY"],
     }
-    run_step(["rclone", "copyto", "--ignore-existing", "--s3-no-check-bucket", str(source), f"R2:{env['R2_BUCKET']}/{key}"],
+    run_step(["rclone", "copyto", "--ignore-existing", "--s3-no-check-bucket", str(source), f"{remote}:{env['R2_BUCKET']}/{key}"],
              rclone_env, what)
 
 
@@ -249,6 +257,8 @@ def publish(args: argparse.Namespace, env: dict[str, str], log: Log) -> None:
     if refused:
         log.event("refused", missing=refused)
         raise Failure(f"refused: set {', '.join(refused)}")
+    if not RCLONE_REMOTE.fullmatch(env["NEVR_RCLONE_REMOTE"]):
+        raise Failure("refused: NEVR_RCLONE_REMOTE must be letters, digits and underscores, starting with a letter")
     if not TAG.fullmatch(args.tag):
         raise Failure(f"{args.tag} is not a release tag (vX.Y.Z)")
     base = public_base(env)

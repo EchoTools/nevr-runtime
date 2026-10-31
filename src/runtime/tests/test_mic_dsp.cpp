@@ -328,7 +328,7 @@ TEST(MicOverflowLogGate, AReaderThatReadSomethingIsSlowAndOneThatReadNothingIsSt
   EXPECT_TRUE(stalled.readerStalled);
 }
 
-// Spritz's review of #682: a game that read cleanly for a minute and then stalled must be reported as
+// #682: a game that read cleanly for a minute and then stalled must be reported as
 // stalled by the FIRST line. The gate is polled on every capture packet; while nothing is waiting to be
 // reported the window slides forward, so the healthy minute is not counted in the line that follows.
 TEST(MicOverflowLogGate, CleanReadsThenAStallAreReportedAsStalledByTheFirstLine) {

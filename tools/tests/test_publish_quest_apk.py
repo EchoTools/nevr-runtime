@@ -27,10 +27,11 @@ SECRETS = {
     "R2_BUCKET": "sentinel-bucket",
     "R2_ACCESS_KEY_ID": "sentinel-access-key-id",
     "R2_SECRET_ACCESS_KEY": "sentinel-secret-access-key",
+    "NEVR_RCLONE_REMOTE": "sentinel_remote",
     "GH_TOKEN": "sentinel-gh-token",
 }
 REQUIRED = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE",
-            "RELEASE_SIGNER_BIN", "RELEASE_SIGNER_DIR", "GH_TOKEN")
+            "RELEASE_SIGNER_BIN", "RELEASE_SIGNER_DIR", "GH_TOKEN", "NEVR_RCLONE_REMOTE")
 
 # Records its arguments and whether the R2 credentials reached it, then exits with $FAKE_SIGNER_EXIT.
 FAKE_SIGNER = """#!{python}
@@ -46,7 +47,7 @@ FAKE_RCLONE = """#!{python}
 import json, os, shutil, sys
 args = sys.argv[1:]
 open(os.environ["FAKE_CALLS"], "a").write(json.dumps({{"who": "rclone", "argv": args,
-    "config": {{k: v for k, v in os.environ.items() if k.startswith("RCLONE_CONFIG_R2_")}}}}) + "\\n")
+    "config": {{k: v for k, v in os.environ.items() if k.startswith("RCLONE_CONFIG_SENTINEL_REMOTE_")}}}}) + "\\n")
 if int(os.environ.get("FAKE_RCLONE_EXIT", "0")):
     sys.exit(int(os.environ["FAKE_RCLONE_EXIT"]))
 src, dest = [a for a in args if not a.startswith("-")][-2:]
@@ -171,6 +172,16 @@ class PublishQuestApk(PublishFixture):
         self.assertIn("R2_ENDPOINT", result.stderr)
         self.assertIn("GH_TOKEN", result.stderr)
 
+    def test_the_rclone_remote_is_required_and_must_be_a_name(self) -> None:
+        result = self.run_tool(TAG, drop=("NEVR_RCLONE_REMOTE",))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("NEVR_RCLONE_REMOTE", result.stderr)
+        self.assertEqual(self.recorded(), [])
+        result = self.run_tool(TAG, NEVR_RCLONE_REMOTE="2 bad remote")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("NEVR_RCLONE_REMOTE must be letters", result.stderr)
+        self.assertEqual(self.recorded(), [])
+
     def test_a_tag_that_is_not_a_release_tag_is_refused(self) -> None:
         for bad in ("v1.2", "1.2.3", "v1.2.3-dev.4", "main", "v1.2.3\n"):
             with self.subTest(tag=bad):
@@ -226,9 +237,9 @@ class PublishQuestApk(PublishFixture):
         self.assertEqual(rclone["who"], "rclone")
         self.assertEqual(rclone["argv"][0], "copyto")
         self.assertIn("--ignore-existing", rclone["argv"])
-        self.assertEqual(rclone["argv"][-1], f"R2:{SECRETS['R2_BUCKET']}/nevr-runtime/{TAG}/{APK_NAME}.sha256")
-        self.assertEqual(rclone["config"]["RCLONE_CONFIG_R2_TYPE"], "s3")
-        self.assertEqual(rclone["config"]["RCLONE_CONFIG_R2_ENDPOINT"], SECRETS["R2_ENDPOINT"])
+        self.assertEqual(rclone["argv"][-1], f"{SECRETS['NEVR_RCLONE_REMOTE']}:{SECRETS['R2_BUCKET']}/nevr-runtime/{TAG}/{APK_NAME}.sha256")
+        self.assertEqual(rclone["config"]["RCLONE_CONFIG_SENTINEL_REMOTE_TYPE"], "s3")
+        self.assertEqual(rclone["config"]["RCLONE_CONFIG_SENTINEL_REMOTE_ENDPOINT"], SECRETS["R2_ENDPOINT"])
 
     def test_it_succeeds_only_after_both_files_are_fetched_back_equal(self) -> None:
         self.serve_apk()
@@ -363,10 +374,10 @@ class PublishVariantApk(PublishFixture):
         for call in calls:
             self.assertEqual(call["argv"][0], "copyto")
             self.assertIn("--ignore-existing", call["argv"])
-            self.assertEqual(call["config"]["RCLONE_CONFIG_R2_TYPE"], "s3")
+            self.assertEqual(call["config"]["RCLONE_CONFIG_SENTINEL_REMOTE_TYPE"], "s3")
         self.assertEqual(apk_up["argv"][-2], str(self.vbuild / VARIANT_NAME))
-        self.assertEqual(apk_up["argv"][-1], f"R2:{SECRETS['R2_BUCKET']}/nevr-runtime/{TAG}/{VARIANT_NAME}")
-        self.assertEqual(sidecar_up["argv"][-1], f"R2:{SECRETS['R2_BUCKET']}/nevr-runtime/{TAG}/{VARIANT_NAME}.sha256")
+        self.assertEqual(apk_up["argv"][-1], f"{SECRETS['NEVR_RCLONE_REMOTE']}:{SECRETS['R2_BUCKET']}/nevr-runtime/{TAG}/{VARIANT_NAME}")
+        self.assertEqual(sidecar_up["argv"][-1], f"{SECRETS['NEVR_RCLONE_REMOTE']}:{SECRETS['R2_BUCKET']}/nevr-runtime/{TAG}/{VARIANT_NAME}.sha256")
         self.assertEqual((self.served / "nevr-runtime" / TAG / VARIANT_NAME).read_bytes(), VARIANT_BYTES)
         self.assertIn(f"{VARIANT_NAME} {self.vsum} {len(VARIANT_BYTES)}", result.stdout)
 
@@ -393,7 +404,7 @@ class PublishVariantApk(PublishFixture):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_a_missing_r2_or_host_variable_is_a_refusal_that_names_it(self) -> None:
-        for name in ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE"):
+        for name in ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE", "NEVR_RCLONE_REMOTE"):
             with self.subTest(missing=name):
                 if self.calls.exists():
                     self.calls.unlink()

@@ -668,7 +668,7 @@ TEST_F(DllLoadHookInstall, InstallReturnsZeroWhenEveryCreateFails) {
   EXPECT_EQ(nevr_dll_load_hook::Install(), 0);
 }
 
-// #632, ruled by Spritz: the four LoadLibrary hooks are REQUIRED. A partial install fails the boot (a server then
+// #632: the four LoadLibrary hooks are REQUIRED. A partial install fails the boot (a server then
 // refuses to start, a client's last boot line says ok=false) and records the count as its cause. The verdict is
 // a pure function so it runs here; InitializeAfterGameImageGuard cannot run in a GTest, so
 // tools/tests/test_runtime_lifecycle_invariants.py pins that initialize.cpp acts on it.
