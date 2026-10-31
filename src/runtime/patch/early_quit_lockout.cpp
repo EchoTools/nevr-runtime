@@ -86,14 +86,22 @@ void SetPenaltyHook(void* netGame, std::int64_t stamp, std::int64_t expiry, std:
     return;
   }
   auto* bytes = static_cast<std::uint8_t*>(netGame);
+  const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));  // the clock fcn 0x1400de820 returns
+  const Intake intake = ReadIntake(stamp, expiry, now);
   std::int64_t storedBefore = 0;
   std::memcpy(&storedBefore, bytes + kPenaltyTsOffset, sizeof(storedBefore));
+  const std::int64_t storedOriginal = storedBefore;
+  if (intake.legacy) {
+    // The setter's gate would drop a legacy clear or a shorter legacy lockout: open it for this update.
+    const std::int64_t open = -1;
+    std::memcpy(bytes + kPenaltyTsOffset, &open, sizeof(open));
+    storedBefore = -1;
+  }
   g_originalSetPenalty(netGame, stamp, expiry, numEarlyQuits, numSteadyMatches, numSteadyEarlyQuits, penaltyLevel,
                        steadyPlayerLevel);
   std::int64_t storedAfter = 0;
   std::memcpy(&storedAfter, bytes + kPenaltyTsOffset, sizeof(storedAfter));
-  const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));  // the clock fcn 0x1400de820 returns
-  const Countdown countdown = AfterSetPenalty(storedBefore, storedAfter, stamp, expiry, now);
+  const Countdown countdown = AfterSetPenalty(storedBefore, storedAfter, stamp, intake.expiry, now);
   if (countdown.applied) {
     std::memcpy(bytes + kExpiryOffset, &countdown.expiry, sizeof(countdown.expiry));
     std::uint64_t* flags = nullptr;
@@ -102,10 +110,11 @@ void SetPenaltyHook(void* netGame, std::int64_t stamp, std::int64_t expiry, std:
   }
   Log(EchoVR::LogLevel::Info,
       "[NEVR.EARLYQUIT] penalty set: stamp=%lld stored_before=%lld stored_after=%lld expiry=%lld now=%lld level=%u "
-      "early_quits=%d applied=%d -> lockout expiry=%lld active=%d",
-      static_cast<long long>(stamp), static_cast<long long>(storedBefore), static_cast<long long>(storedAfter),
+      "early_quits=%d legacy=%d applied=%d -> lockout expiry=%lld active=%d",
+      static_cast<long long>(stamp), static_cast<long long>(storedOriginal), static_cast<long long>(storedAfter),
       static_cast<long long>(expiry), static_cast<long long>(now), static_cast<unsigned>(penaltyLevel), numEarlyQuits,
-      countdown.applied ? 1 : 0, static_cast<long long>(countdown.expiry), countdown.active ? 1 : 0);
+      intake.legacy ? 1 : 0, countdown.applied ? 1 : 0, static_cast<long long>(countdown.expiry),
+      countdown.active ? 1 : 0);
   if (countdown.applied) Dispatch(netGame, kPenaltyUpdateEvent);
 }
 
