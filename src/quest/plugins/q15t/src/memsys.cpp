@@ -11,7 +11,7 @@ namespace q15t {
 namespace {
 
 constexpr std::uint32_t kCapStock = 0x200, kCapNew = 0x400;
-// CSimplePool<SGRenderTargetLayout> layout, read from Alloc's body (ReVault 0x1a01b5c..0x1a01c80):
+// CSimplePool<SGRenderTargetLayout> layout, read from Alloc's body (disassembly 0x1a01b5c..0x1a01c80):
 //   +0x28 free-stack pointer (str x0,[x19,#0x28] at 0x1a01c4c), +0x30 free count (zeroed by stp q0,q0,[x22] at 0x1a01c24,
 //   x22 = pool+0x20), +0x38 free-stack capacity in entries (str x21,[x19,#0x38] at 0x1a01c30), +0x84 capacity (str w21,
 //   [x19,#0x84] at 0x1a01bbc).
@@ -19,7 +19,7 @@ constexpr std::uintptr_t kOffStack = 0x28, kOffCount = 0x30, kOffStackCap = 0x38
 
 constexpr MemsysPins kDefaultPins = {0x36e9b48, 0x1901b5c, 0x18818cc, 0x36de5c0, 0xf7e8e8, 0xf784e8, 0x371d020};
 
-// the source build's memsys:65-77, each word re-read from ReVault (all 21 match; docs/quest/q15t/modules/memsys.md). `row` is the row refused when
+// the source build's memsys:65-77, each word re-read from the disassembly (all 21 match; docs/quest/q15t/modules/memsys.md). `row` is the row refused when
 // the word differs.
 constexpr MemsysWord kWords[] = {
     {0x18818b8, 0x52804001, 37},  // InitCommon: mov w1,#0x200

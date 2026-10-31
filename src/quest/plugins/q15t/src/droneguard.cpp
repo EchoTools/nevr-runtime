@@ -12,7 +12,7 @@
 namespace q15t {
 namespace {
 
-// CR15NetFollowPlayerCS layout (the source build's droneguard:46-60; ReVault 0x21497bc ldr x20,[x19,#0x140]; 0x21497cc ldr w1,[x19,#0x190];
+// CR15NetFollowPlayerCS layout (the source build's droneguard:46-60; disassembly 0x21497bc ldr x20,[x19,#0x140]; 0x21497cc ldr w1,[x19,#0x190];
 // 0x214980c ldrh w8,[x19,#0x190]): the followed system, the player handle at +0x148 and its cached system / index / flags.
 constexpr std::uintptr_t kTarget = 0x140, kHandle = 0x148, kHandleFlags = 0x16c, kHandleSys = 0x188, kHandleIdx = 0x190;
 constexpr std::size_t kSpan = kHandleIdx + 4 - kTarget;  // one read covers every field above

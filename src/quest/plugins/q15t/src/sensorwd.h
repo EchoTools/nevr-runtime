@@ -19,7 +19,7 @@
 
 namespace q15t {
 
-// ELF vaddrs of the pinned build (b243509c08ce677aeb95fa348016949b3fc45230, ReVault binary 576; ReVault VA = ELF + 0x100000).
+// ELF vaddrs of the pinned build (b243509c08ce677aeb95fa348016949b3fc45230, disassembly VA = ELF + 0x100000).
 struct SensorWdAddrs {
   std::uintptr_t en_slot;     // CModelCS vtable word: OnComponentEnabled   (R_AARCH64_ABS64, RELRO)
   std::uintptr_t en_fn;       // CModelCS::OnComponentEnabled

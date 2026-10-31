@@ -6,13 +6,13 @@ symbols); every `+0x6xxxx` offset below is from it. **flags** is the u64 that `*
 
 ## Sources and grades
 
-Everything here comes from live ReVault reads, project `echovr` (1,041 binaries):
+Everything here comes from live disassembly reads, project `echovr` (1,041 binaries):
 
-| Binary | ReVault id | sha256 | Notes |
+| Binary | disassembly id | sha256 | Notes |
 | --- | --- | --- | --- |
-| `libr15.so` (Quest) | 576 | `8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20` | C++ symbols. ReVault VAs are the ELF vaddr **+ 0x100000**; both are given, as `ReVault / real` |
-| `echovr.exe` (PC) | 1 | `b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043` | base `0x140000000`, no symbols; names are ReVault's, matched to the Quest twin |
-| Quest script libraries `lib<16hex>.so` | | | symbols; VAs as ReVault gives them |
+| `libr15.so` (Quest) | 576 | `8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20` | C++ symbols. disassembly addresses are the ELF vaddr **+ 0x100000**; both are given, as `disassembly / real` |
+| `echovr.exe` (PC) | 1 | `b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043` | base `0x140000000`, no symbols; names are the disassembly's, matched to the Quest twin |
+| Quest script libraries `lib<16hex>.so` | | | symbols; VAs as the disassembly gives them |
 | PC script libraries `<16hex>.dll` | | | same script id as the Quest twin; used for strings and event tables |
 
 Script libraries are named by their 16-hex id. The ids used here: `17d77f27d465760b` (matchmaking: the LOCKOUT
@@ -23,7 +23,7 @@ bar's trigger), `f70460f9a7d466ab` (the bar itself), `18000621255c6ea5` (tablet 
 tooltip), `346ee5436c2e559e`, `b844180d600ad977`, `cbab485b9f607fd2`, `991bbec05cde117f`, `beaac7bfb1ce12bd`,
 `c18bafab7b6faa62`, `6c96d7f9423b0ed3`, `3ded824fccc2bf6d`.
 
-Searches marked "project-wide" covered all 1,041 binaries (ReVault's own scope line). The others name the one
+Searches marked "project-wide" covered all 1,041 binaries (the disassembly's own scope line). The others name the one
 binary they covered.
 
 Each claim carries a grade:
@@ -181,7 +181,7 @@ platform: Quest's inlined copy writes -1 to `+0x64828`, as the setter does. **H*
 
 No other writer was found. On PC, a scan of `.text` for the displacement bytes `28 48 06 00` finds exactly 4 sites:
 `0x140146c5b` and `0x1401ae375` (the two writes above), `0x1401bc5ed` and `0x140d9622f` (the two reads below).
-ReVault's instruction search for `0x64828` gives the same 4. On Quest, the decompiled-text search `0x64828) = `
+The disassembly's instruction search for `0x64828` gives the same 4. On Quest, the decompiled-text search `0x64828) = `
 gives 4 hits, all `= 0xffffffffffffffff`; Quest stores the pair with `stp x1,x14,[x11]` at `+0x64820`, which an
 instruction search for `0x64828` cannot see. **M** (absence by search).
 **In the stock game the expiry is always -1, so no message can start a countdown.**
@@ -194,7 +194,7 @@ Two readers:
   flags bit 14 is set and on one value of Update's argument (Quest `tbnz w8,#0xe,0x1394c8c` at `0x1394c40`, `cmp
   x20,#1` at `0x1394c44` and `0x1394c9c`; PC `SHR RAX,0xe; TEST AL,1` at `0x1401bbfa0`, `TEST RSI,RSI` / `CMP RSI,1`
   from `0x1401bc011`). **M**; what bit 14 and the argument mean was not read. The PC name is **M**, from the
-  shape: ReVault also gives `CR15NetGame::Update` to `0x1401bf610`.
+  shape: the disassembly also gives `CR15NetGame::Update` to `0x1401bf610`.
 - **`CR15NetEarlyQuitPenaltyExpression::operator()`** (Quest `0x2421ba0 / 0x2321ba0`, PC `0x140d96190`),
   section 4. Its `lockoutcountdownsec` is `+0x64828 − now` when `+0x64828` is not -1 and later than now,
   otherwise 0 (PC `0x140d96308`: `CMP RBP,-1; JZ; CMP RBP,RAX; JLE; MOV RDI,RBP; SUB RDI,RAX`). **H**
@@ -209,7 +209,7 @@ thunks `0xfd18e0` and `0xff2ab0` (`0x1084d80 / 0xf84d80` and `0x1084d28 / 0xf84d
 Flags bit 45 ("countdown running") and bit 46 (`showearlyquitwarning`) have **no setter** in either binary.
 Searched: Quest instruction search for the masks and constants `#0x200000000000|#0x400000000000|#0x600000000000|
 #-0x200000000001|...` (82 results, the early-quit ones are the five AND sites above), bit-field ops on `#0x2d`/`#0x2e`
-(10 results, none on flags). On PC, ReVault's instruction search covers only code with a function record, and it
+(10 results, none on flags). On PC, the disassembly's instruction search covers only code with a function record, and it
 misses `0x1401618b0` and `0x1401ae430`. So the 64-bit mask immediates were also scanned in the bytes of `.text`:
 the AND masks occur only at `0x1401ae3dc`, `0x1401ae3e9`, `0x1401ae439` and `0x1401bc604`. The OR-style constants
 occur at `0x140688bcf` (a particle-graph table), `0x1413bbd94` (a TEST), `0x1416514bb` / `0x1416514ca` (the mask

@@ -78,11 +78,11 @@ a word that points at real executable code). If a second wrapper on this slot is
 
 - Slot: `R0_readelf_r.txt:118641`: `00000000036d76e8  0001724500000402 R_AARCH64_JUMP_SLOT    0000000002549264 _ZN10NRadEngine12CWwiseEngine14PostSoundEventENS_12CSoundSymbolEjNS_7CFlagsTIjLy1EEEPFviPvES4_jRj + 0`.
   Source the source build's music:51-52: `kGotPostSoundEvent = 0x36d76e8`, `kFnPostSoundEvent = 0x2549264`.
-- ReVault (read-only query, binary 576): `functions`: `2649264 | PostSoundEvent | 564` (ELF 0x2549264 = VA - 0x100000).
+- Disassembly (read-only query): `functions`: `2649264 | PostSoundEvent | 564` (ELF 0x2549264 = VA - 0x100000).
 - Bank ids: copied as literals from the source `:54-58` (2 Play `0x2f22c384 0xb1b06cfb`, 2 Stop `0xde586538 0x2acba759`, 20 SetState
   `0x045d3c23 ... 0xffae8834`); a script compared the 24 values in `src/quest/plugins/q15t/src/music.h` with those source lines: equal (24 = 24, same order).
   The test restates them independently.
-- Argument layout, instructions of `PostSoundEvent` as read from ReVault (VA, word):
+- Argument layout, instructions of `PostSoundEvent` as read from the disassembly (VA, word):
 ```
 2649264 ff8301d1 sub sp, sp, #0x60            2649298 f70305aa mov x23, x5   (cookie)
 2649268 fb6b01a9 stp x27, x26, [sp, #0x10]    264929c f80304aa mov x24, x4   (callback)
@@ -106,7 +106,7 @@ a word that points at real executable code). If a second wrapper on this slot is
   result of the first engine call (`str w0,[x22]`, written unconditionally, so x7 must be valid: the extra Stops pass a stack word).
   The extra Stops therefore pass `(self, stop, object, &flags(=0), 0, 0, 0, &id)`, as the source does (`:83-88`).
   The 29 words 0x2649264..0x26492d4 above are the pins (`kMusicWordPins`, ELF = VA - 0x100000). A query built from the header's table
-  returned `MATCH | 29 | 0 | 0` (29 pins, 0 not shown, 0 mismatched) against binary 576.
+  returned `MATCH | 29 | 0 | 0` (29 pins, 0 not shown, 0 mismatched) against the disassembly.
 - With seek 0 and a non-zero playing id the function returns `w22 = 0` (`2649440 mov w22, wzr` as the `cbz w19` target, then
   `2649444 mov w0, w22 ... 2649460 ret`); the other paths (id 0 at `0x2649348`, the seek call) I listed but did not analyse
   (unverified). The module treats the result as opaque and passes it through.

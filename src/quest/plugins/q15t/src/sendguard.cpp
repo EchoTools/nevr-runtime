@@ -11,9 +11,9 @@
 namespace q15t {
 namespace {
 
-// ELF vaddrs of the pinned build (ReVault VA = ELF + 0x100000).
+// ELF vaddrs of the pinned build (disassembly VA = ELF + 0x100000).
 //
-// The stock function, ReVault libr15 0x2825a80 (NRadEngine::CSendEventNode::Enter, 476 bytes; raw decompilation and disassembly
+// The stock function, disassembly libr15 0x2825a80 (NRadEngine::CSendEventNode::Enter, 476 bytes; raw decompilation and disassembly
 // read this session). Reconstructed as C++ (x0 = the node's execution context, x1 = the node data):
 //   void Enter(Ctx* ctx, SSendEventNodeData* d) {
 //     space = ctx->frame->owner->spaceHolder->space;                    // 0x2825a90..0x2825ab0: ldr x8,[x0]; [x8]; [+0x30]; [..]; ldr x19,[x9,#0x80]
@@ -50,7 +50,7 @@ constexpr WordPin kPins[] = {
 };
 constexpr std::size_t kPinCount = sizeof kPins / sizeof kPins[0];
 
-// The data words that hold Enter's address (ReVault xrefs to 0x2825a80: [data] 0x366a6b0 and 0x37f7928, the second the PLT stub's
+// The data words that hold Enter's address (disassembly xrefs to 0x2825a80: [data] 0x366a6b0 and 0x37f7928, the second the PLT stub's
 // GOT slot), as ELF vaddrs. Each is swapped on its own, checked against base + kEnter, so a slot that holds something else is refused.
 // The third xref, 0x33e7924, is 4-aligned and cannot hold a pointer word; it is not swapped.
 constexpr int kSlotCount = 2;

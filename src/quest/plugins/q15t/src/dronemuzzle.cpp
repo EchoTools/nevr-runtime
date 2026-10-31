@@ -19,7 +19,7 @@
 namespace q15t {
 
 // ELF vaddrs of the pinned build. Slots: readelf -rW (JUMP_SLOT 0x36cfa18 -> fn 0x180a384; 0x36f3cf8 -> fn 0x210c9c4). The two return
-// addresses are the instructions after FireBulletLocal's `bl` to each PLT stub (ReVault 0x220c228 bl 0xff0660 / 0x220c2a0 bl 0x1038c20).
+// addresses are the instructions after FireBulletLocal's `bl` to each PLT stub (disassembly 0x220c228 bl 0xff0660 / 0x220c2a0 bl 0x1038c20).
 const DroneMuzzleSlots kDroneMuzzlePinned = {0x36cfa18, 0x180a384, 0x210c22c, 0x36f3cf8, 0x210c9c4, 0x210c2a4};
 
 namespace {

@@ -1,4 +1,4 @@
-// sendguard: NRadEngine::CSendEventNode::Enter (ReVault libr15 0x2825a80) sends a script event to the game space its node names,
+// sendguard: NRadEngine::CSendEventNode::Enter (disassembly libr15 0x2825a80) sends a script event to the game space its node names,
 // and does not check that the game space exists. When the named level is not loaded (a Quest without the combat content pack, once
 // the menu gate lets the menu take the non-Quest branch) the lookup returns null and the stock function reads [null + 0x58] and
 // faults. The module wraps Enter and drops the send, with one log line, when the lookup comes back null; every other send runs the

@@ -6,9 +6,9 @@ the only run).
 
 ## What the stock code does
 
-ReVault, libr15 (ELF vaddr = ReVault VA - 0x100000), build b243509c08ce677aeb95fa348016949b3fc45230:
+Disassembly, libr15 (ELF vaddr = disassembly VA - 0x100000), build b243509c08ce677aeb95fa348016949b3fc45230:
 
-- `NRadEngine::CSendEventNode::Enter`, ReVault `0x2825a80`, 476 bytes (raw decompilation and disassembly read in ReVault this
+- `NRadEngine::CSendEventNode::Enter`, disassembly `0x2825a80`, 476 bytes (raw decompilation and disassembly read in the disassembly this
   session). `x0` is the node's execution context, `x1` the node data (`data[0]` the level key, `data[1]` the event, `data[2]` the actor).
 - `0x2825a90..0x2825ab0` reads the current game space (`ldr x19,[x9,#0x80]`). When `data[0] != -1` (`cmn x1,#1` at `0x2825aa4`),
   `0x2825abc` replaces it with `CncaGameSpace::GameSpaceMT(space, data[0])` (the stub at `0xff5650`).
@@ -18,7 +18,7 @@ ReVault, libr15 (ELF vaddr = ReVault VA - 0x100000), build b243509c08ce677aeb95f
   headset with the menu gate on: `libr15 ... CSendEventNode::Enter, offset 0x2725b78 (ELF), x19=0`.
 - The engine's other callers of `GameSpaceMT` test the result for zero (`PlayAnimation` `0x146c5c4` and `0x1470004`,
   `CanPlayAnimation` `0x146e2b4`, `UpdateBindings` `0x1490b6c`). `Enter` does not.
-- Two data words hold the address of `Enter` (ReVault xrefs to `0x2825a80`, `[data]`): `0x366a6b0` and `0x37f7928` (the GOT slot of the
+- Two data words hold the address of `Enter` (disassembly xrefs to `0x2825a80`, `[data]`): `0x366a6b0` and `0x37f7928` (the GOT slot of the
   stub at `0x1040480`); ELF `0x356a6b0` and `0x36f7928`. A third, `0x33e7924`, is 4-aligned and is not swapped. Which words the node
   dispatch reads is not shown; both are swapped.
 

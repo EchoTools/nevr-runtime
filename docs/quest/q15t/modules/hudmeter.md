@@ -10,11 +10,11 @@ recipe turns it on. API: `InstallResult InstallHudmeter(std::uintptr_t base)`; n
 ## Row covered
 
 R57: `NRadEngine::CSetCanvasElementAttributesNode::Enter(SSetCanvasElementAttributesNodeData const&)`, JUMP_SLOT ELF 0x36c6ce8,
-real function ELF 0x2726eac = ReVault 0x2826eac (size 1600). (a source-build note, not in this tree):
+real function ELF 0x2726eac = disassembly 0x2826eac (size 1600). (a source-build note, not in this tree):
 `| R57 | D6 CSetCanvasElementAttributesNode::Enter -> 0x2826eac (1600) | node Enter | JUMP_SLOT 0x36c6ce8 | 1 | n/a | GOT |`.
-Source constants `kGot = 0x36c6ce8, kFn = 0x2726eac` (the source build's hudmeter:76). ReVault entry words at 0x2826eac, read this
+Source constants `kGot = 0x36c6ce8, kFn = 0x2726eac` (the source build's hudmeter:76). disassembly entry words at 0x2826eac, read this
 session: `fc6bbba9 f96301a9 f75b02a9 f55303a9` (`stp x28,x27,[sp,#-0x50]!` ...), equal to the first four of the source's 11 pinned
-words (the source build's hudmeter:83: `{0x2726eac, 0xa9bb6bfc}, {0x2726eb0, 0xa90163f9}, ...`). All 11 source words match ReVault.
+words (the source build's hudmeter:83: `{0x2726eac, 0xa9bb6bfc}, {0x2726eb0, 0xa90163f9}, ...`). All 11 source words match disassembly.
 The `readelf` relocation `JUMP_SLOT 0x36c6ce8 -> 0x2726eac` is in `R0_readelf_r.txt`.
 
 ## What it fixes

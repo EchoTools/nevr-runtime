@@ -10,7 +10,7 @@
 //   R24 CncaGameSpace::StaticRaycast(this, CRay*, SBVHHit*, CncaGameSpaceMT**)   the callers' gate (marks allowed casts)
 //   R25 CR15TouchInteractQuery::RayQueryStatic(...)         returns false (a miss), as the stock Quest does
 // R20-R23 are installed all together or not at all, and R24 with them unless the gate is switched off. Details, evidence
-// (ReVault addresses and quoted words), behaviour, prediction and the deviations from the source: docs/quest/q15t/modules/bvh.md.
+// (disassembly addresses and quoted words), behaviour, prediction and the deviations from the source: docs/quest/q15t/modules/bvh.md.
 #pragma once
 
 #include <cstdint>
@@ -30,7 +30,7 @@ struct BvhPins {
   int n_allowed;
 };
 
-// ELF vaddrs of the pinned build (readelf -rW, a source-build note not in this tree; ReVault binary 576 = ELF + 0x100000).
+// ELF vaddrs of the pinned build (readelf -rW, a source-build note not in this tree; disassembly VA = ELF + 0x100000).
 inline constexpr BvhPins kBvhPinned = {
     {0x36ec548, 0x1a45a88},                                  // R20
     {0x36eb648, 0x1a45a8c},                                  // R21

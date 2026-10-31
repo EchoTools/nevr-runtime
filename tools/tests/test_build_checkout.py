@@ -213,7 +213,8 @@ class JustfileWiringTest(unittest.TestCase):
 
     def test_the_guard_runs_before_every_configure_that_can_use_the_cache(self):
         self.assertRegex(JUSTFILE, r"(?m)^_build-guard:\n    @python3 -I tools/build_checkout\.py guard$")
-        for header in (r"^configure: _build-guard ", r"^configure-android: _build-guard$", r"^_quest-apk store_apk: _build-guard$"):
+        for header in (r"^configure: _build-guard ", r"^configure-android: _build-guard( _require-ndk)?$",
+                       r"^_quest-apk store_apk: _build-guard( _require-ndk)?$"):
             self.assertRegex(JUSTFILE, "(?m)" + header)
 
     def test_ccache_reads_one_config_that_lives_in_the_cache_directory(self):

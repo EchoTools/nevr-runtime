@@ -143,7 +143,7 @@ constexpr const char kRootSha256[] = "5367f20c7ade0e2bca790915056d086b720c33c1fa
 
 // The signing profile's EKU, read from a real signed file: the v5.4.3 BugSplat64.dll, sha256
 // a97767e62721503d4e249b016b734c42619a5aaa209ecdcd7a25a434f6d2a629, whose leaf carries this EKU
-// (findings: /home/andrew/metis/gopher-spritz/findings/2026-10-21-signed-v543-signer-facts.md).
+// (read from the signed file on 2026-10-21).
 // test_plugin_trust verifies that file against these pins (RealSigned.*).
 constexpr const char kProfileEku[] = "1.3.6.1.4.1.311.97.918669346.25014483.651891390.88972997";
 constexpr bool kPinsConfirmed = true;

@@ -30,9 +30,8 @@ exists to replace).
 
 ### 1.1 Binaries
 
-APK: `r15_goldmaster_store.apk` (tethys `/srv/sprock_io/htdocs/e/echovr-prefarewell/`).
-Libs extracted to
-`/mnt/games/evr/-src-evr-reconstruction/cache/quest_triage/apk_contents/lib/arm64-v8a/`.
+APK: `r15_goldmaster_store.apk` (a test host; the path is not recorded here).
+Libs extracted to a local scratch directory, `lib/arm64-v8a/`.
 
 ```
 $ readelf -h libr15.so | grep -E 'Class|Machine|Type'
@@ -47,7 +46,7 @@ $ readelf -d libovrplatformloader.so | grep -i soname
   0x0e (SONAME)  Library soname: [libovrplatformloader.so]
 ```
 
-`libr15.so` (ReVault binary id 576) is AArch64. `libovrplatformloader.so` is AArch64,
+`libr15.so` (the disassembly binary id 576) is AArch64. `libovrplatformloader.so` is AArch64,
 soname `libovrplatformloader.so`, 831 KB.
 
 ### 1.2 The load chain — why a `libovrplatformloader.so` constructor runs "very early"
@@ -227,7 +226,7 @@ A `just` recipe (`android-repack-libovr`, added with the build wiring) scripts t
 
 ## 4. Toolchain choice — NDK r26d (26.3.11579264)
 
-Already present at `/home/andrew/src/android-ndk-r26d` (clang 17.0.2), so no download.
+Already present in the local Android NDK r26d install (clang 17.0.2), so no download.
 
 **Why r26d over the r21b named as the compat floor:**
 

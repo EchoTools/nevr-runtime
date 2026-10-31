@@ -254,7 +254,7 @@ __attribute__((noinline)) bool OccludedWrapper(const void* self, const float* a,
   return got;
 }
 
-// ---- R25: CR15TouchInteractQuery::RayQueryStatic as on the stock Quest: a miss, nothing written (ReVault 0x21cf458: cbz w0 -> epilogue) ----
+// ---- R25: CR15TouchInteractQuery::RayQueryStatic as on the stock Quest: a miss, nothing written (disassembly 0x21cf458: cbz w0 -> epilogue) ----
 __attribute__((noinline)) bool TouchWrapper(const void*, const void*, void*, float*) {
   g_touch.fetch_add(1, std::memory_order_relaxed);
   return false;

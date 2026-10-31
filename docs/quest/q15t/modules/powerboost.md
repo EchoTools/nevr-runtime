@@ -25,11 +25,11 @@ stage 3 (without one stage 3 is refused). `fns == nullptr` resolves `DamageFromC
 
 ## Rows, mechanism, evidence
 
-ELF vaddr = ReVault VA - 0x100000. All addresses below read in ReVault this session (functions / instructions) and in
+ELF vaddr = disassembly VA - 0x100000. All addresses below read in the disassembly this session (functions / instructions) and in
 a source-build note, not in this tree (the relocation table of the pinned `libr15.so`, build id
 `b243509c08ce677aeb95fa348016949b3fc45230`).
 
-| row | what | slot (ELF) | real fn (ReVault, size) | mechanism |
+| row | what | slot (ELF) | real fn (disassembly, size) | mechanism |
 |---|---|---|---|---|
 | R51 | `CR15NetDamageableHealNode::Enter` | JUMP_SLOT 0x36e3868 -> 0x23207b0 | 0x24207b0, 372 | data-page GOT swap, wrapper `NodeWrap` |
 | R52 | `CR15NetDamageableCS::Heal` | JUMP_SLOT 0x36f7820 and GLOB_DAT 0x3725b80 -> 0x2137e74 | 0x2237e74, 688 | two GOT swaps: `HealWrap` (JUMP_SLOT), `QueuedHealWrap` (GLOB_DAT) |
@@ -40,8 +40,8 @@ a source-build note, not in this tree (the relocation table of the pinned `libr1
 
 `readelf` slot lines (R0_readelf_r.txt): JUMP_SLOT 0x36e3868 -> 0x23207b0; JUMP_SLOT 0x36f7820 and GLOB_DAT 0x3725b80 ->
 0x2137e74; JUMP_SLOT 0x36d7d08 -> 0x2158954; JUMP_SLOT 0x36e5778 and GLOB_DAT 0x3719f60 -> 0x213e80c; JUMP_SLOT 0x36ca098
--> 0x19a27ac; also JUMP_SLOT 0x36f6110 -> 0x1677d34 (`CPhysicsCS::PrimaryBody`, 0x1777d34 in ReVault, size 112). Entry words
-read in ReVault (little-endian as stored): Enter `ff0303d1 e84b00fd f5530aa9 f37b0ba9`; Heal `ffc301d1 e81300fd f96303a9
+-> 0x19a27ac; also JUMP_SLOT 0x36f6110 -> 0x1677d34 (`CPhysicsCS::PrimaryBody`, 0x1777d34 in the disassembly, size 112). Entry words
+read in the disassembly (little-endian as stored): Enter `ff0303d1 e84b00fd f5530aa9 f37b0ba9`; Heal `ffc301d1 e81300fd f96303a9
 f75b04a9`; SetTargetInsideBubble `ff4303d1 fa4300f9 f96309a9 f75b0aa9`; DamageFromClient `ff8301d1 e81300fd f75b03a9
 f55304a9`; ResolveBody `080840b9 1f050031 c0020054 49ee00d0`. The install is data-page only: the slot word must hold
 `base + expected_vaddr` or the swap is refused (`InstallImportHook`), so no code word is read or written, and no code-word pin
@@ -49,7 +49,7 @@ check is made (the source pins entry words; the GOT-word check replaces it, see 
 
 ### R1's unreconciled GLOB_DAT reader: resolved
 
-The row note listed `GLOB_DAT 0x3725b80` with a reader at 0x2420918. In ReVault the reader is **0x2420904** (ELF 0x2320904),
+The row note listed `GLOB_DAT 0x3725b80` with a reader at 0x2420918. In the disassembly the reader is **0x2420904** (ELF 0x2320904),
 inside `HealNode::Enter` (0x24207b0, size 372):
 ```
 2420900 adrp x8, 0x3825000
@@ -59,7 +59,7 @@ inside `HealNode::Enter` (0x24207b0, size 372):
 (`kGotHealData = 0x3725b80`, the source build's powerboost:80) is right. The other GLOB_DAT, 0x3719f60 (DamageFromClient), is read at
 0x24201ec inside another Enter (0x24200b4, size 348); this module calls DamageFromClient directly and never swaps that word.
 
-### What `HealNode::Enter` does (ReVault, 0x24207b0)
+### What `HealNode::Enter` does (disassembly, 0x24207b0)
 
 `ldr x8,[x20,#0x80]` (0x2420888), `ldr s8,[x19,#0x20]` (amount, 0x2420890), `ldr w19,[x19,#0x24]` (user, 0x2420894),
 `ldr w9,[x8,#0x368]` (the direct flag, 0x2420898). Direct path (0x24208a0..0x24208b0): x0 = cs, x1 = handle, v0 = amount, x2 =
@@ -67,7 +67,7 @@ user, `bl 0x1040270` = Heal's PLT stub (`adrp 0x37f7000; ldr [x16,#0x820]`, i.e.
 Queued path: stores handle (+0x18), amount (+0x1c), user (+0x20) into a functor (0x242090c / 0x2420910 / 0x242091c) whose
 function word is the one loaded from GLOB_DAT 0x3725b80.
 
-### The cone call (R55 + R56), ReVault `UpdateActiveHealBubble` (0x22572cc)
+### The cone call (R55 + R56), disassembly `UpdateActiveHealBubble` (0x22572cc)
 
 ```
 2257998 bl 0x00fe5360          ; word 7236b697 (bytes) = 0x97b63672 = the source's `want` from ELF 0xee5360
@@ -137,7 +137,7 @@ RELRO; real `mprotect`, real `/proc/self/maps`), the NDK r26d clang++ arm64 buil
 thunk under `qemu-aarch64` (freestanding static binary): the ordinary call (x0 / x1 / x2 / x30 / x19 / x20 / x24 / x25 intact, real
 function returns to the caller), the armed call (target, sp, x24 delivered, result returned, real not called), and the exact compare
 (a return address one instruction off is an ordinary call). Not shown: the thunk running inside the game on a headset; the byte
-layout of the game's body / record structures (below); DamageFromClient's behaviour; the real ReVault code words of the
+layout of the game's body / record structures (below); DamageFromClient's behaviour; the real disassembly code words of the
 installed library (not read at run time by this module; every address is a GOT word check).
 
 ## Prediction (written before any headset run)
@@ -180,8 +180,8 @@ verdict LINK / no at most twice a second; `link marker sent to the server` lines
    `recvfrom` wrapper on the game's own socket (the source build's ec:170-195, the module net ticks registered at `:117`, `:649`), not from
    the game tick. Whether `DamageFromClient` is safe to call from the game tick is unverified; stage 3 is refused until the main
    seat wires a net tick. Stage 2's sends come from the deferred-queue drain (QueuedHealWrap), as in the source.
-2. The damageable system's key `0xc9dc08cfc2f5920f` is a source constant (the source build's flowdiag:91, `:93`); not verified in ReVault.
-   Its vptr symbol is `PTR_~CR15NetDamageableCS_03793ea0` (ReVault 0x3793ea0, ELF 0x3693ea0), which is verified.
+2. The damageable system's key `0xc9dc08cfc2f5920f` is a source constant (the source build's flowdiag:91, `:93`); not verified in the disassembly.
+   Its vptr symbol is `PTR_~CR15NetDamageableCS_03793ea0` (disassembly 0x3793ea0, ELF 0x3693ea0), which is verified.
 3. The body layout offsets (+0x8f8 position, +0xbd0 quaternion), the bubble record offsets (+0, +8, +0x38) beyond the
    instructions quoted above, and the stand-in's size and semantics are from the source, not independently decoded.
 4. The qemu run proves the thunk's register contract on arm64, not its behaviour inside the game.

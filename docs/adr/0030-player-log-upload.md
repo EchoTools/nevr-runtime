@@ -87,7 +87,7 @@ service, and shows a short code. The player posts the code in Discord and a main
 
 - **Quest.** Repurpose a second stock settings row the way Texture Resolution repurposes `graphics|msaa`: a
   two-value `STRING ARRAY`, where moving the index to the second value is the tap, and the code is shown by writing it
-  into the row's label. Which stock row is free is an open question for ReVault (all binaries, N of N), not decided here.
+  into the row's label. Which stock row is free is an open question for the disassembly (all binaries, N of N), not decided here.
 - **PC.** Open: an inserted menu card (#906) or a row; the same RE question.
 
 ### Open decisions for the owner

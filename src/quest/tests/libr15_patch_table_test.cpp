@@ -48,9 +48,9 @@ TEST(NoPublicRowIdStartsWithTheExtraRowPrefix) {
   }
 }
 
-TEST(TheVaddrIsTheReVaultAddressMinusTheBiasInCode) {
-  // The ReVault addresses of ADR section 1, and the pinned vaddrs they give (the stock words were read at these).
-  struct Expect { const char* id; std::uint64_t revault; std::uint64_t vaddr; };
+TEST(TheVaddrIsTheDisassemblyAddressMinusTheBiasInCode) {
+  // The disassembly addresses of ADR section 1, and the pinned vaddrs they give (the stock words were read at these).
+  struct Expect { const char* id; std::uint64_t disasm; std::uint64_t vaddr; };
   const Expect expects[] = {
       {"lobby_full.join", 0x1340ba8, 0x1240ba8},          {"lobby_full.failure", 0x1340cc8, 0x1240cc8},
       {"lobby_full.success", 0x134024c, 0x124024c},       {"ui_texture.attach", 0x19e75c4, 0x18e75c4},
@@ -60,7 +60,7 @@ TEST(TheVaddrIsTheReVaultAddressMinusTheBiasInCode) {
     const Row* row = Find(e.id);
     CHECK(row != nullptr);
     if (row == nullptr) continue;
-    CHECK_EQ(row->sites[0].revaultVa, e.revault);
+    CHECK_EQ(row->sites[0].disasmVa, e.disasm);
     CHECK_EQ(row->sites[0].Vaddr(), e.vaddr);
     CHECK(row->kind == RowKind::kInlineHook);
     CHECK_EQ(row->sites[0].wordCount, static_cast<std::uint8_t>(3));
@@ -72,10 +72,10 @@ TEST(TheVaddrIsTheReVaultAddressMinusTheBiasInCode) {
   CHECK(credits->kind == RowKind::kCreditsPair);
   CHECK_EQ(credits->siteCount, static_cast<std::uint8_t>(4));
   for (std::size_t i = 0; i < 4; ++i) {
-    CHECK_EQ(credits->sites[i].revaultVa, pairs[i]);
-    CHECK_EQ(credits->sites[i].Vaddr(), pairs[i] - kRevaultBias);
+    CHECK_EQ(credits->sites[i].disasmVa, pairs[i]);
+    CHECK_EQ(credits->sites[i].Vaddr(), pairs[i] - kDisasmBias);
   }
-  CHECK_EQ(kRevaultBias, static_cast<std::uint64_t>(0x100000));
+  CHECK_EQ(kDisasmBias, static_cast<std::uint64_t>(0x100000));
 }
 
 TEST(TheSlotAreaIsSectionFourOfTheAdr) {
@@ -202,7 +202,7 @@ TEST(AnyChangeToAFactTheFileDependsOnMovesTheId) {
   changed[2].sites[0].words[1] ^= 0x10;  // a stock word
   CHECK(DeriveBuildId(stock, CanonicalTable(changed, kRowCount, {}, kSlotAreaVaddr)) != baseId);
   for (std::size_t i = 0; i < kRowCount; ++i) changed[i] = kRows[i];
-  changed[4].sites[0].revaultVa += 4;  // a site address
+  changed[4].sites[0].disasmVa += 4;  // a site address
   CHECK(DeriveBuildId(stock, CanonicalTable(changed, kRowCount, {}, kSlotAreaVaddr)) != baseId);
   for (std::size_t i = 0; i < kRowCount; ++i) changed[i] = kRows[i];
   changed[1].slot = 5;  // a slot
@@ -241,14 +241,14 @@ TEST(ExtraRowsChangeTheIdAndTheirOrderDoesNot) {
   c.edits[0].offset = 8;
   CHECK(PatchedBuildId({c}) != one);
   c = a;
-  c.revaultVa += 4;
+  c.disasmVa += 4;
   CHECK(PatchedBuildId({c}) != one);
   c = a;
   c.id = "x.c";
   CHECK(PatchedBuildId({c}) != one);
   // The widths of the fixed fields: a difference only in the high bytes still counts.
   c = a;
-  c.revaultVa += std::uint64_t{1} << 40;
+  c.disasmVa += std::uint64_t{1} << 40;
   CHECK(PatchedBuildId({c}) != one);
   c = a;
   c.edits[0].offset = 4 + 256;
@@ -267,11 +267,11 @@ TEST(ExtraRowsChangeTheIdAndTheirOrderDoesNot) {
 
 // The patched ID of a table with extra rows, pinned as a literal. The value was computed outside this code (a script
 // that applies the serialisation below to the public table's canonical text and hashes it with SHA-256), so it checks
-// the serialisation itself and not just that it is deterministic. The extra rows are sorted by (revault_va, id) and
+// the serialisation itself and not just that it is deterministic. The extra rows are sorted by (disasm_va, id) and
 // written after the public table as:
 //   "extra|" + hex(row count) + "\n"          the count as 0x%llx, as in the public part
 //   then, per row, binary and without separators:
-//     u8 id length, the id bytes, u64 little-endian revault_va, u8 word count,
+//     u8 id length, the id bytes, u64 little-endian disasm_va, u8 word count,
 //     and per word: u16 little-endian offset, the 4 new_bytes, the 4 stock_bytes (each in memory order).
 // The ID is the first 20 bytes of SHA-256("NEVR-LIBR15-PATCH-1" + the 20 stock ID bytes + the table text).
 // Three rows: two share an address (the id breaks the tie, and one offset needs both bytes of its u16), one is later in

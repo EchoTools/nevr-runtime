@@ -14,7 +14,7 @@ timing to the display rate, then 90 Hz is plugin behaviour. Otherwise it is an A
 
 ## Evidence
 
-The source build checkout. ReVault binary 576 (libr15, build id b243509c…, VA = ELF + 0x100000).
+The source build checkout. the disassembly (libr15, build id b243509c…, VA = ELF + 0x100000).
 
 1. **The stated reason is performance.** `the source build's hz:1-3`: the game asks for 120 Hz; "The lobby (App
    2-4 ms) holds 118-120, a match (App 6-12 ms) misses the 8.3 ms budget and sits at 75-110". `:14-16`: `hzmatch90.on`
@@ -31,7 +31,7 @@ The source build checkout. ReVault binary 576 (libr15, build id b243509c…, VA 
    game logic frame-locked at 90 Hz?"): R ≈ 1.00 means the game clock runs at wall speed; 1.25 at 90 Hz would mean a fixed
    1/72 step per frame. Result, the source build's tools: "RESULT 2026-10-16 … 90 Hz … RE47_CLK game / wall =
    1.000, mean dt 11.16 ms = 1/90". The game clock is not frame-locked.
-4. **The engine's game clock is variable-step and follows the display.** ReVault `CR15Game::UpdateClock` (VA 0x12fd724,
+4. **The engine's game clock is variable-step and follows the display.** disassembly `CR15Game::UpdateClock` (VA 0x12fd724,
    248 bytes): in VR it sets the clock's raw delta `[clock+0x90] = CVR::DeltaTime() * 1e6` every frame. `CVR::UpdateTracking`
    (VA 0x1b71b60): `DeltaTime = now_predicted_display_time - previous`, floored at a minimum (`DAT_038a3438`); the first frame
    uses `1 / <system property 4>` (the display rate). `AGE_X2_READ.txt:27-31` reads the same chain from the binary

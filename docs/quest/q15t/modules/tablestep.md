@@ -5,17 +5,17 @@ Option: `Q15T_TABLESTEP` (on by default in `CMakeLists.txt`). Off file: `tablest
 
 ## What the stock code does
 
-ReVault, libr15 (ELF vaddr = ReVault VA - 0x100000), build b243509c08ce677aeb95fa348016949b3fc45230:
+Disassembly, libr15 (ELF vaddr = disassembly VA - 0x100000), build b243509c08ce677aeb95fa348016949b3fc45230:
 
-- `NRadEngine::CFactory<NRadEngine::CGShaderSetResource>::CreateInstance`, ReVault `0x1a0707c`, 292 bytes (raw decompilation
-  and disassembly read in ReVault this session). It allocates a 0xb0-byte object, fills its presence and resource words, runs
+- `NRadEngine::CFactory<NRadEngine::CGShaderSetResource>::CreateInstance`, disassembly `0x1a0707c`, 292 bytes (raw decompilation
+  and disassembly read in the disassembly this session). It allocates a 0xb0-byte object, fills its presence and resource words, runs
   the `CMemBlock` constructor on the CTableXT at object `+0x78`, and then writes the table's growth step.
 - The growth step is `mov w8,#0x20` at `0x1a07130` (word `0x52800408`), stored by `str x8,[x19,#0x98]` at `0x1a07138`. The
   table's step is at its `+0x20`, so the object's `+0x98`; the layout matches the `DrawTable` of `custctx.cpp`.
 - One data word holds the address of `CreateInstance`: ELF vaddr `0x365ddd0`, the `CFactory<CGShaderSetResource>` vtable word. In the
   pinned `libr15.so` it is the only dynamic relocation whose target is `0x190707c` (`readelf -r -W libr15.so`: `R_AARCH64_ABS64` at
   `0x365ddd0`, symbol `_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE14CreateInstanceEPNS_13CPresenceInitE`); the words at
-  `0x3287f9c` and `0x33fb0f8`, which earlier ReVault data xrefs listed, have no relocation and `0x3287f9c` is not 8-aligned, so they
+  `0x3287f9c` and `0x33fb0f8`, which earlier the disassembly data xrefs listed, have no relocation and `0x3287f9c` is not 8-aligned, so they
   are not slots. Whether every caller of the function goes through this word is not shown.
 
 ## What the module does

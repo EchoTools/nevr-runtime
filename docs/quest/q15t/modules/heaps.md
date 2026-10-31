@@ -27,7 +27,7 @@ Shown (file:line, nevr-runtime-work/plugin-repack, read-only):
 - Which entries are early: only those marked `early: true` (`src/runtime/ext/plugin_loader.h:9`; `plugin_load_plan.h:38,
   52-53`: the normal pass takes `!early`, and the early ones only when no early pass ran). The example config has no `early`
   key, so q15t loads in the normal pass today.
-- Where the sizes are read, ReVault binary 576 (`functions`: `10784c4 | android_main | 1176`): the first call of android_main is
+- Where the sizes are read, the disassembly (`functions`: `10784c4 | android_main | 1176`): the first call of android_main is
   `10784e4 bl 0x0100ddb0` (the CSysJava::Init PLT stub), and the four reads sit at `1078524 ldr x1,[x8]` (R07), `1078590 ldr x1,[x8]`
   (R06), `1078614 ldr x1,[x8]` (R08), each followed by `bl 0x0100e890` (the allocator constructor: `1078578`, `10785a4`, ...).
   Between the function start and the first read there are seven `bl` (`10784e4 .. 107850c`), all PLT thunks. R09 is read in
@@ -37,7 +37,7 @@ Shown (file:line, nevr-runtime-work/plugin-repack, read-only):
 
 Not shown (labelled unverified):
 - That no game `dlopen` happens in those seven calls. A normal-phase init is "after the first `dlopen`"; the heap reads are a few
-  dozen instructions into android_main. I did not trace the seven callees (the ReVault call graph does not reach
+  dozen instructions into android_main. I did not trace the seven callees (the disassembly call graph does not reach
   `CSysModule::Load` even from android_main, so it cannot answer this). It is very likely a normal-phase init is after the reads;
   the R38 witness in `memsys` records the fact on a headset (see `docs/quest/q15t/modules/memsys.md`).
 - ADR 0019 **P10**: whether a `dlopen` from the sentinel constructor completes, and whether libr15's relocations are applied
@@ -68,7 +68,7 @@ Each reader is `ldr x8,[x8,#<got>]` (the GLOB_DAT word) then `ldr x1,[x8]` (or `
 reader word at the pinned address must be the stock load, and the `.rodata` value must be the stock size; any mismatch refuses
 that row only (WARNING), the other rows go on.
 
-| Row | Symbol | GLOB_DAT slot (ELF) | `readelf -rW` line (R0_readelf_r.txt) | `.rodata` word | reader (ReVault VA, word) | stock | set to |
+| Row | Symbol | GLOB_DAT slot (ELF) | `readelf -rW` line (R0_readelf_r.txt) | `.rodata` word | reader (disassembly VA, word) | stock | set to |
 |---|---|---|---|---|---|---|---|
 | R06 | `_ZN10NRadEngine22kResourceMemoryAndroidE` | 0x370b720 | 89726 | 0x2b9caa0 | `1078590` `010140f9` ldr x1,[x8]; slot via `ldr x8,[x8,#0x720]` at `1078580` | 206 MiB | 320 MiB |
 | R07 | `_ZN10NRadEngine20kSystemMemoryAndroidE` | 0x371d020 | 98594 | 0x2b9ca90 | `1078524` `010140f9` (slot via `1078514 ldr x8,[x8,#0x20]`) | 400 MiB | 640 MiB, 512 MiB when `ro.product.device` is `hollywood` |
@@ -77,8 +77,8 @@ that row only (WARNING), the other rows go on.
 
 Slot lines quoted verbatim from a source-build note (not in this tree), e.g. line 89726:
 `000000000370b720  0000c85300000401 R_AARCH64_GLOB_DAT     0000000002b9caa0 _ZN10NRadEngine22kResourceMemoryAndroidE + 0`.
-ReVault VA = ELF vaddr + 0x100000 (the module's `reader` and `ro` columns are ELF: 0xf78590, 0xf78524, 0xf78614, 0x11ffdec).
-The reader words and instruction text above were read from ReVault binary 576 `instructions` this session.
+Disassembly VA = ELF vaddr + 0x100000 (the module's `reader` and `ro` columns are ELF: 0xf78590, 0xf78524, 0xf78614, 0x11ffdec).
+The reader words and instruction text above were read from the disassembly `instructions` this session.
 
 Target values and where each comes from (all from the source build):
 - R06 320 MiB: `the source build's tools,163-170` (default `--mib 320`, accepted range 207..1024, measured peaks gauss 265.5 MB,
@@ -96,14 +96,14 @@ phase. Do not rely on it.
 
 ## 3. B3: the "4 table step words" are CODE, so they are word-patch rows, not built here
 
-Decision (from ReVault, binary 576, `instructions`, read this session): each is a `mov wN,#0x20` immediate inside a function body
+Decision (from the disassembly, `instructions`, read this session): each is a `mov wN,#0x20` immediate inside a function body
 (the CTableXT growth step, 32 -> 1; `res_heap_patch.py:14-22`), i.e. an instruction word on an executable page. A plugin never
 writes a code page (MODULE_CONTRACT), and these cannot be reached through a data slot. They stay with the main seat / word-patch
 row list. They are only wanted together with R06 (`--resource-table-step-1` beside `--resource-heap-mib=320`,
 `the source build's on-list`).
 
 ```
-ReVault VA  ELF vaddr  bytes (LE)  stock word   instruction   replacement          function (ReVault)
+Disassembly VA  ELF vaddr  bytes (LE)  stock word   instruction   replacement          function (disassembly)
 1a07130     1907130    08048052    0x52800408   mov w8,#0x20  0x52800028 mov w8,#1  CreateInstance  1a0707c size 292 (CFactory<CGShaderSetResource>)
 1a07000     1907000    08048052    0x52800408   mov w8,#0x20  0x52800028 mov w8,#1  ConstructInstance 1a06f4c size 304 (CFactory<CGShaderSetResource>)
 1a07958     1907958    14048052    0x52800414   mov w20,#0x20 0x52800034 mov w20,#1 CGInstancedModelResource 1a078dc size 376

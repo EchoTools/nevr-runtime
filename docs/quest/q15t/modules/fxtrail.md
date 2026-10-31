@@ -12,11 +12,11 @@ source's other switch (`setprop debug.<app>.fxtrail 0`) is dropped (build option
 ## Row covered
 
 R29: `NRadEngine::CParticleEffectCS::EffectTime(SCompactPoolHandle) const`, JUMP_SLOT ELF 0x36e7b98, real function ELF 0x16647e4 =
-ReVault 0x17647e4 (size 56). Read this session:
+disassembly 0x17647e4 (size 56). Read this session:
 - `R0_readelf_r.txt:126983`: `00000000036e7b98  0000755300000402 R_AARCH64_JUMP_SLOT    00000000016647e4 _ZNK10NRadEngine17CParticleEffectCS10EffectTimeENS_18SCompactPoolHandleE + 0`
-- ReVault `functions`, binary 576: `16647e4 | EffectTime | 56` (ELF = VA - 0x100000).
+- Disassembly `functions`: `16647e4 | EffectTime | 56` (ELF = VA - 0x100000).
 - `R1_functions.md:42`: `| R29 | B5 EffectTime -> 0x17647e4 (56) | returns particle table field +0x340 | JUMP_SLOT 0x36e7b98 | 1 | n/a | GOT |`.
-- ReVault instructions of the function (ELF address, word, text):
+- Disassembly instructions of the function (ELF address, word, text):
 ```
 16647e4 086440f9 ldr x8, [x0, #0xc8]
 16647e8 293c4092 and x9, x1, #0xffff
@@ -68,7 +68,7 @@ build that still carries these words is not refused (the source build accepted t
 binary, which silently removed its crash guards). A pin that fails refuses the module (nothing swapped, reason `word_pin_mismatch`)
 with one ERROR line naming it: `<module> refused: code word pin mismatch, ...  pin=0x<ELF vaddr> found=0x<word read, or unreadable>
 expected=0x<word pinned>`. A slot-target refusal logs ERROR with `pin=<slot ELF vaddr> found=<word at the slot> expected=<base +
-real vaddr>`. Pin addresses in this note are ELF vaddrs (ReVault VA = ELF + 0x100000). All 11 pins read in ReVault (binary 576)
+real vaddr>`. Pin addresses in this note are ELF vaddrs (disassembly VA = ELF + 0x100000). All 11 pins read in the disassembly
 equal the table in `src/quest/plugins/q15t/src/fxtrail.h` (verified by a query that builds its VALUES from the header tables: `MATCH | 88` over the five
 modules' tables, no NOT_SHOWN, no MISMATCH). Host test: every pin flipped in turn is refused and named, an unreadable text is refused and
 named, the table's fingerprint is pinned, the installer refuses on a changed word (`src/quest/tests/q15t/pin_check.h`).

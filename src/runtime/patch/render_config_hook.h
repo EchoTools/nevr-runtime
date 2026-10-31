@@ -15,7 +15,7 @@
 // state and never logs, throws or waits on the game's path. The selector detour is an observer too, with one write: when
 // the game's GPU score is zero it fills the score the selector reads before the original runs (#1419, patch/gpu_score.h),
 // and it logs that decision once a run. Frequency: ApplyRuntimeGfxSettings has two callers in the whole image (the boot
-// code and the menu/JSON settings translator, ReVault callers of 0x140c31870), so it runs at boot and when a setting
+// code and the menu/JSON settings translator; the callers of 0x140c31870 in the disassembly), so it runs at boot and when a setting
 // changes; the selector has one caller, at boot. Neither is per frame.
 //
 // The check itself is Poll(), called from nevr_frame::DispatchPerFrameWork (N86): no thread and no Tick* call site.

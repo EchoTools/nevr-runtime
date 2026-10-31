@@ -7,7 +7,7 @@
 #
 # Columns (tab-separated):
 #   source      the patch repo's file:line for the row
-#   their_va    their address (ReVault's: the pinned vaddr + 0x100000)
+#   their_va    their address (the disassembly's: the pinned vaddr + 0x100000)
 #   vaddr       ours, the link-time address in the pinned library (their_va - 0x100000)
 #   stock       the instruction word the pinned library holds there
 #   function    the exported function that holds it (or <import>@plt for a PLT stub)

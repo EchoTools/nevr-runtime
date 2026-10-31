@@ -15,12 +15,12 @@
 namespace q15t {
 namespace {
 
-// ELF vaddrs of the pinned build (libr15 b243509c, ReVault binary 576 VA = ELF vaddr + 0x100000). Source constants:
-// <source build>/the source build's gunconnect:91-92. ReVault: Connect 0x2253438 (size 484), UserActor
+// ELF vaddrs of the pinned build (libr15 b243509c, disassembly VA = ELF vaddr + 0x100000). Source constants:
+// <source build>/the source build's gunconnect:91-92. disassembly: Connect 0x2253438 (size 484), UserActor
 // 0x1351654 (56), HasTag 0x1823760 (148), symbol kActorTagCombat 0x38af288; gun CS vtable 0x3696040 + 0x10 (readelf GLOB_DAT).
 constexpr std::uintptr_t kFnConnect = 0x2153438, kFnHasTag = 0x1723760, kFnUserActor = 0x1251654, kTagCombat = 0x37af288;
 constexpr std::uintptr_t kGunCsVptr = 0x3696050;
-constexpr std::uint64_t kGunCsKey = 0x7a804a0a9b2f5386ull;  // source constant, not re-read in ReVault (see docs/quest/q15t/modules/gunconnect.md)
+constexpr std::uint64_t kGunCsKey = 0x7a804a0a9b2f5386ull;  // source constant, not re-read in the disassembly (see docs/quest/q15t/modules/gunconnect.md)
 constexpr int kMaxGuns = 4096, kMaxCs = 8;
 constexpr double kFixEveryS = 0.25, kIdleEveryS = 1.0, kHoldS = 2.0, kRetryS = 1.0;
 constexpr int kMaxTries = 10;
@@ -137,7 +137,7 @@ FixState& StateFor(std::uintptr_t cs) {
 Local ReadLocal(std::uintptr_t game) {
   Local L;
   bool ok = true;
-  L.net = Rd<std::uintptr_t>(game + 0x8510, &ok);  // CR15Game::NetGameMT: mov w8,#0x8510; ldr x0,[x0,x8] (ReVault 0x13027d4)
+  L.net = Rd<std::uintptr_t>(game + 0x8510, &ok);  // CR15Game::NetGameMT: mov w8,#0x8510; ldr x0,[x0,x8] (disassembly 0x13027d4)
   if (!ok || L.net == 0) {
     L.why = "no netgame";
     return L;
@@ -159,7 +159,7 @@ Local ReadLocal(std::uintptr_t game) {
     L.why = "member slot unused";
     return L;
   }
-  const auto members = Rd<std::uint16_t>(L.net + 0xe2, &ok);  // UserActor indexes net + midx*0x250 unchecked (ReVault 0x1351660-0x1351668)
+  const auto members = Rd<std::uint16_t>(L.net + 0xe2, &ok);  // UserActor indexes net + midx*0x250 unchecked (disassembly 0x1351660-0x1351668)
   if (!ok || L.midx >= members) {
     L.why = "member index out of range";
     return L;
@@ -177,7 +177,7 @@ bool HasCombatTag(std::uintptr_t game, const GunGuid& guid) {
   return g_f.has_tag(reinterpret_cast<void*>(game), &guid, tag);
 }
 
-// The gun CS's guns owned by member slot `slot` (Connect's own match: ReVault 0x22534c4-0x22534ec) and how many are not connected.
+// The gun CS's guns owned by member slot `slot` (Connect's own match: disassembly 0x22534c4-0x22534ec) and how many are not connected.
 GunCounts CountGuns(std::uintptr_t cs, std::uint32_t slot) {
   GunCounts c;
   bool ok = true;

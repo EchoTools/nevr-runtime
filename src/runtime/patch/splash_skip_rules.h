@@ -2,7 +2,7 @@
 // When a button press skips the splash screen, apart from the hook that applies it (splash_skip.cpp) so the decisions
 // are unit-tested without the game.
 //
-// Evidence (ReVault, echovr project; PC VAs are echovr.exe):
+// Evidence (disassembly of the game binaries; PC VAs are echovr.exe):
 //   - The splash page's script (75041e1b64042faa.dll, symbol ui_mnu_splash_screen) starts its continue chain on the UI
 //     event continue_clicked (CSymbol64 0x801dec62515b8c8a); it ends in a SENDEVENTGLOBAL of splash_screen_continue,
 //     which f86bfd7f395c027c.dll (ui_mnu_main_page_splash_screen) turns into "accept the splash version, enable

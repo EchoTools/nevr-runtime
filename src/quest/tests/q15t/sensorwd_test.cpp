@@ -300,8 +300,8 @@ static void TestConstants() {
   CHECK(p.en_slot == kEnSlot && p.en_fn == kEnFn && p.dis_slot == kDisSlot && p.dis_fn == kDisFn && p.event_slot == kEvSlot &&
             p.event_fn == kEvFn,
         "pinned addresses changed");
-  // ReVault VA = ELF + 0x100000 (the functions as ReVault names them: 16b127c / 16b12a8 / 190735c)
-  CHECK(p.en_fn + 0x100000 == 0x16b127c && p.dis_fn + 0x100000 == 0x16b12a8 && p.event_fn + 0x100000 == 0x190735c, "ReVault VAs");
+  // disassembly VA = ELF + 0x100000 (the functions as the disassembly names them: 16b127c / 16b12a8 / 190735c)
+  CHECK(p.en_fn + 0x100000 == 0x16b127c && p.dis_fn + 0x100000 == 0x16b12a8 && p.event_fn + 0x100000 == 0x190735c, "disassembly VAs");
   CHECK(p.dis_slot == p.en_slot + 8, "the two vtable words are adjacent");
   // every pin lies inside one of the three functions it was read from
   for (size_t i = 0; i < q15t::kSensorWdWordPinCount; ++i) {

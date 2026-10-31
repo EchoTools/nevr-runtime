@@ -290,7 +290,7 @@ class RecipeText(unittest.TestCase):
 
     def test_the_variant_recipe_takes_the_store_apk_the_release_recipe_takes(self):
         def default(name):
-            return re.search(r'store_apk="([^"]+)"', recipe(name).splitlines()[0]).group(1)
+            return re.search(r'store_apk=(env\("[^"]+"\)|"[^"]+")', recipe(name).splitlines()[0]).group(1)
 
         self.assertEqual(default("release-quest-variant-apk"), default("release-quest-apk"))
 

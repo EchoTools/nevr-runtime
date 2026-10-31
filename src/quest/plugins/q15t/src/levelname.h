@@ -1,6 +1,6 @@
 // Module `levelname` (row R04, the source build's "G7"): CR15Game::LoadLevelName keeps the plain name for global_mp.
 //
-// Stock (ELF vaddr 0x1202ecc, ReVault 0x1302ecc, 44 bytes): when bit 31 of [this+0x7ad8] is set (Quest "lowspec") the
+// Stock (ELF vaddr 0x1202ecc, disassembly 0x1302ecc, 44 bytes): when bit 31 of [this+0x7ad8] is set (Quest "lowspec") the
 // level name gets "_lowspec" appended, so global_mp (CSymbol64 0x3F9915D3001DC28E) loads as RAD's cut Quest level. The
 // wrapper returns the plain name for global_mp when that bit is set (so the full-size global_mp in the pack loads) and
 // leaves every other level to the real function.

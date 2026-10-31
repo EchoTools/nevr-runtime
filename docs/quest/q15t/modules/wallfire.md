@@ -1,6 +1,6 @@
 # Module `wallfire`: no shot through a wall (rows R26-R28)
 
-Pinned build: libr15 build id b243509c08ce677aeb95fa348016949b3fc45230 (ReVault binary 576; ReVault VA = ELF vaddr + 0x100000).
+Pinned build: libr15 build id b243509c08ce677aeb95fa348016949b3fc45230 (disassembly VA = ELF vaddr + 0x100000).
 Source: `<source build>/the source build's wallfire` (read-only, never edited, never pushed).
 Code: `src/quest/plugins/q15t/src/wallfire.h`, `src/quest/plugins/q15t/src/wallfire.cpp`. Test: `src/quest/tests/q15t/wallfire_test.cpp` (the real bvh module on a fake slot page, a synthetic room mesh).
 **Depends on `bvh`** (`BvhTreeInstalled()`): without the static BVH answering `CBVHTree::Occluded` the segment query is never blocked, so
@@ -10,9 +10,9 @@ wallfire refuses to install (`bvh_not_installed`, WARNING).
 
 | Row | What | Address | Stock | Action |
 |---|---|---|---|---|
-| R26 | `CncaGameSpace::QueryCollision(this, SPhQueryCollisionRequest&, CPhId)` | JUMP_SLOT ELF 0x36e0c38 (ReVault 0x37e0c38); function ELF 0x1806784 / ReVault 0x1906784 | 104-byte function (physics bodies only) | slot swap to `QueryWrapper` |
-| R27 | `CR15NetGunCS::FireGunLocal`, the return site after `bl QueryCollision@plt` | ELF 0x215566c / ReVault 0x225566c, word `0x3941b3e8` (`ldrb w8, [sp, #0x6c]`) | not written | **read only**: the word is checked at install, and the wrapper acts only when it returns to this address |
-| R28 | `CncaGameSpace::StaticRaycastOccluded(this, C3Vector*, C3Vector*)` | JUMP_SLOT ELF 0x36ce380; function ELF 0x18066f4 / ReVault 0x19066f4 | 16-byte virtual thunk | **called**, not swapped: the slot is checked to hold base + 0x18066f4 and the function is called directly |
+| R26 | `CncaGameSpace::QueryCollision(this, SPhQueryCollisionRequest&, CPhId)` | JUMP_SLOT ELF 0x36e0c38 (disassembly 0x37e0c38); function ELF 0x1806784 / disassembly 0x1906784 | 104-byte function (physics bodies only) | slot swap to `QueryWrapper` |
+| R27 | `CR15NetGunCS::FireGunLocal`, the return site after `bl QueryCollision@plt` | ELF 0x215566c / disassembly 0x225566c, word `0x3941b3e8` (`ldrb w8, [sp, #0x6c]`) | not written | **read only**: the word is checked at install, and the wrapper acts only when it returns to this address |
+| R28 | `CncaGameSpace::StaticRaycastOccluded(this, C3Vector*, C3Vector*)` | JUMP_SLOT ELF 0x36ce380; function ELF 0x18066f4 / disassembly 0x19066f4 | 16-byte virtual thunk | **called**, not swapped: the slot is checked to hold base + 0x18066f4 and the function is called directly |
 
 `readelf -rW` (a source-build note, not in this tree):
 
@@ -38,14 +38,14 @@ CBVHTree, compiled out on Android and served by `bvh`), so a hand or muzzle thro
    blocked -> returns 1, so `FireGunLocal` returns without firing; clear -> the stock answer.
 Every other caller of `QueryCollision` gets the stock value untouched. Bots fire through the same code (PC-equal).
 
-R28's call chain (ReVault 576):
+R28's call chain (the disassembly):
 
     19066f4 ldr x0, [x0, #0x8]      000440f9     x0 = *(gs + 8) = CncaGame
     19066f8 ldr x8, [x0]            080040f9     the CncaGame's vtable pointer
     19066fc ldr x3, [x8, #0x278]    033d41f9     virtual +0x278
     1906700 br  x3                  60001fd6
 
-`readelf` shows the vtable slot holding `CncaGame::StaticRaycastOccluded` (ELF 0x17f2614 = ReVault 0x18f2614; the function list names it
+`readelf` shows the vtable slot holding `CncaGame::StaticRaycastOccluded` (ELF 0x17f2614 = disassembly 0x18f2614; the function list names it
 `NRadEngine::CncaGame::StaticRaycastOccluded`, size 464):
 
     :28821: 000000000362efa8 R_AARCH64_ABS64 00000000017f2614 _ZNK10NRadEngine8CncaGame21StaticRaycastOccludedERKNS_8C3VectorES3_ + 0
@@ -73,12 +73,12 @@ Logs: `wallfire on: ...` (INFO), `wallfire refused: nothing changed` / `wallfire
 
 ## 3. Evidence
 
-- **R27 word**: ReVault 576, `225566c ldrb w8, [sp, #0x6c]  e8b34139` (bytes `e8 b3 41 39` = word `0x3941b3e8`). The call before it:
+- **R27 word**: the disassembly, `225566c ldrb w8, [sp, #0x6c]  e8b34139` (bytes `e8 b3 41 39` = word `0x3941b3e8`). The call before it:
   `225565c ldr x0, [x19, #0x80]` (gs = the gun component's +0x80), `2255660 add x1, sp, #0x30` (req = sp + 0x30),
   `2255664 mov w2, #0xffffffff`, `2255668 bl 0x01012aa0`; after it `2255670 mov w28, w0` and `225568c cbnz w28, 0x022556b8` (a non-zero result
   jumps to the function's epilogue: no shot). The PLT stub `0x1012aa0: adrp x16,0x37e0000; ldr x17,[x16,#0xc38]; add x16,x16,#0xc38; br x17` is slot 0x37e0c38
   = ELF 0x36e0c38, the readelf line.
-- **Request layout (the segment is the first 24 bytes)**: the stores that fill it, ReVault 576:
+- **Request layout (the segment is the first 24 bytes)**: the stores that fill it, the disassembly:
   `225563c str x10, [sp, #0x30]` (floats 0, 1), `2255648 str w11, [sp, #0x38]` (float 2), `225564c stur x9, [sp, #0x3c]` (floats 3, 4),
   `2255650 str w10, [sp, #0x44]` (float 5): six consecutive floats at sp + 0x30 .. 0x47, which is `req[0..5]`. That they are "player position" and
   "muzzle position" is the source's statement (the source build's wallfire:2-4: `ComputeMuzzleXF`), not re-derived; either way the query is
@@ -118,6 +118,6 @@ Falsifiers:
   to the pinned function by address (the source resolves the same address with `dlsym` and checks it equals `base + 0x18066f4`).
 - **The tree must exist**: `bvh`'s R23 wrapper answers only for a CBVHTree it built at Initialize. If a level's tree was initialised before the plugin
   installed (not the case when the plugin loads at start), `Occluded` takes the stock miss and wallfire never blocks that level.
-- Open: `CncaGame::StaticRaycastOccluded` transforms the two points (fused multiply-add sequence `0x18f2740..0x18f2754`, ReVault 576) before
+- Open: `CncaGame::StaticRaycastOccluded` transforms the two points (fused multiply-add sequence `0x18f2740..0x18f2754`, the disassembly) before
   it calls `CBVHTree::Occluded`; I did not decode that transform. The PC runs the same function, so I expect the same segment in level
   space, and a headset run (the falsifier "shots refused in the open" / "fire through a wall") decides.

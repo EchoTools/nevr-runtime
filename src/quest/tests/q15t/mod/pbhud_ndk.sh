@@ -3,7 +3,11 @@
 # the plugin's own warning flags) and fail unless the object has no static initializer section. Fails loudly when the NDK is
 # missing (set Q15T_SKIP_NDK=1 to skip it explicitly; the skip is printed).
 pbhud_ndk_check() {
-  local ndk="${Q15T_NDK:-$HOME/src/android-ndk-r26d}"
+  local ndk="${Q15T_NDK:-}"
+  if [ -z "$ndk" ]; then
+    if [ "${Q15T_SKIP_NDK:-0}" = 1 ]; then echo "SKIPPED (Q15T_SKIP_NDK=1): Q15T_NDK is not set, arm64 build not checked"; return 0; fi
+    echo "FAIL: Q15T_NDK is not set (point it at an Android NDK r26d install, or set Q15T_SKIP_NDK=1 to skip explicitly)"; return 1
+  fi
   local cxx; cxx="$(ls "$ndk"/toolchains/llvm/prebuilt/*/bin/aarch64-linux-android26-clang++ 2>/dev/null | { read -r l; echo "$l"; })"
   if [ -z "$cxx" ]; then
     if [ "${Q15T_SKIP_NDK:-0}" = 1 ]; then echo "SKIPPED (Q15T_SKIP_NDK=1): no NDK at $ndk, arm64 build not checked"; return 0; fi

@@ -1,4 +1,4 @@
-// tablestep (issue #1552): the shader-set resource table's growth step. CFactory<CGShaderSetResource>::CreateInstance (ReVault
+// tablestep (issue #1552): the shader-set resource table's growth step. CFactory<CGShaderSetResource>::CreateInstance (disassembly
 // libr15 0x1a0707c) gives the CTableXT it builds a growth step of 32, so a small table rounds up to 32 entries instead of
 // doubling. The module sets the step of each object the stock function returns from 32 to 1 (the value the shipped variant's
 // word row would have written). See tablestep.cpp for the reconstruction and the slot that reaches the function.

@@ -30,7 +30,7 @@ So an OVR-era behaviour that pnsrad does not provide at all, because it has no e
 call-based voice path (`VoipCall`, `VoipAnswer`, `VoipHangUp`, `VoipMute`, `VoipUnmute`, `VoipRead`,
 `VoipAvailable`, `VoipPushToTalkKey`), rich presence, the OVR social object, entitlement and IAP checks,
 crash-report user name and the modal-UI query. Whether the game ever looks those up on the RAD provider is
-not shown by the table; it needs the call sites (ReVault `CPlatformService::GetMethodProc` callers).
+not shown by the table; it needs the call sites (the disassembly `CPlatformService::GetMethodProc` callers).
 
 ## Bodies that are shared (identical-code folding or one stub)
 

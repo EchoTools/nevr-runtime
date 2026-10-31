@@ -22,7 +22,7 @@
 
 namespace q15t {
 
-// One row's pins, ELF vaddrs of the pinned build (readelf -rW; ReVault VA = ELF vaddr + 0x100000).
+// One row's pins, ELF vaddrs of the pinned build (readelf -rW; disassembly VA = ELF vaddr + 0x100000).
 struct HeapRowPin {
   const char* id;           // "R06"
   const char* symbol;       // the symbol the GLOB_DAT relocation names

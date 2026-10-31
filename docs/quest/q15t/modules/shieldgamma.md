@@ -12,10 +12,10 @@ INFO line). No tick.
 ## Row covered
 
 R58: `NRadEngine::CSetMaterialPropertyNode::Update(SSetMaterialPropertyNodeData const&)`, JUMP_SLOT ELF 0x36d2020, real function ELF
-0x272d55c = ReVault 0x282d55c (size 760). `R1_functions.md:71`: `| R58 | D7 CSetMaterialPropertyNode::Update -> 0x282d55c (760) | node Update | JUMP_SLOT 0x36d2020 | 1 | n/a | GOT |`.
-Source constants `kGot = 0x36d2020, kFn = 0x272d55c` (the source build's shieldgamma:57). ReVault entry words at 0x282d55c, read this
+0x272d55c = disassembly 0x282d55c (size 760). `R1_functions.md:71`: `| R58 | D7 CSetMaterialPropertyNode::Update -> 0x282d55c (760) | node Update | JUMP_SLOT 0x36d2020 | 1 | n/a | GOT |`.
+Source constants `kGot = 0x36d2020, kFn = 0x272d55c` (the source build's shieldgamma:57). disassembly entry words at 0x282d55c, read this
 session: `fc0f1cf8 f75b01a9 f55302a9 f37b03a9`, equal to the first four of the source's 12 pinned words (`:68`: `{0x272d55c,
-0xf81c0ffc}, {0x272d560, 0xa9015bf7}, ...`); all 12 match ReVault. `readelf`: `JUMP_SLOT 0x36d2020 -> 0x272d55c`
+0xf81c0ffc}, {0x272d560, 0xa9015bf7}, ...`); all 12 match disassembly. `readelf`: `JUMP_SLOT 0x36d2020 -> 0x272d55c`
 (`R0_readelf_r.txt`). The brief's "chains on cvbind": it only accepts cvbind's wrapper as the next hop; see hudmeter.md (not needed).
 
 ## What it does

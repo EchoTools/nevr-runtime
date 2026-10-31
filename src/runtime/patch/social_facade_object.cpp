@@ -126,8 +126,8 @@ std::uint32_t JoinPolicy(void* self) {
 // Party. The game's script nodes poll these slots and a few object fields every frame and react to
 // 15 callbacks the game handed over in Initialize (echovr.exe 0x140173820). The state lives in
 // nevr_social_party::Global(); Update mirrors it into the object and turns each change into the matching
-// callback on the game's own thread. Slot meanings are pnsovr's CNSOVRSocial (see the ReVault
-// comments on its vtable at pnsovr.dll 0x1801FC2E0).
+// callback on the game's own thread. Slot meanings are pnsovr's CNSOVRSocial (see its vtable at
+// pnsovr.dll 0x1801FC2E0).
 // ---------------------------------------------------------------------------------------------
 constexpr std::size_t kCallbackStride = 0x20;  // context(8) + inline buffer(16) + function(8)
 enum Callback : std::size_t {

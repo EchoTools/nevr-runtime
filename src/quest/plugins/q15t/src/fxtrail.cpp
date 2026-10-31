@@ -13,7 +13,7 @@
 namespace q15t {
 namespace {
 
-// CParticleEffectCS layout as EffectTime reads it (ReVault 0x16647e4..: ldr x8,[x0,#0xc8]; ldrh w8,[x8,(h&0xffff)<<2];
+// CParticleEffectCS layout as EffectTime reads it (disassembly 0x16647e4..: ldr x8,[x0,#0xc8]; ldrh w8,[x8,(h&0xffff)<<2];
 // ldr x9,[x0,#0xf8]; madd x8,x8,0x18,x9; ldr x8,[x8,#0x10]; cbz). Source: the source build's fxtrail:48.
 constexpr std::uintptr_t kCsIndex = 0xc8, kCsData = 0xf8, kDataStride = 0x18, kDataInst = 0x10;
 constexpr const char kSymbol[] = "_ZNK10NRadEngine17CParticleEffectCS10EffectTimeENS_18SCompactPoolHandleE";

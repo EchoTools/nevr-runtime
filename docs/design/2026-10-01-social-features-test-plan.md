@@ -261,7 +261,7 @@ measure" scenario gets the same treatment: find the node, trace it, calibrate on
 
 ## The other 18 UserProviderID callers
 
-`UserProviderID` returns OVR (code 4, not RAD's 0), so every caller sees code 4. The table is from a ReVault read (decompile and caller lists; the call graph covers
+`UserProviderID` returns OVR (code 4, not RAD's 0), so every caller sees code 4. The table is from a read of the disassembly (decompile and caller lists; the call graph covers
 54816 of 55267 functions). Rows marked *raw* were checked against the instructions. The 0x647c8
 object is the social object, from NetGame+0x647c8.
 

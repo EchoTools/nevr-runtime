@@ -3,7 +3,8 @@ store APK survives signing.
 
 Two layers. The unit tests call tools/quest_repack_libs.py on small zip files made here. The end-to-end tests run
 `just android-repack-apk` for real (the fixture of test_quest_repack_version.py: a fixture APK, a compiled shim, a
-fixture key through the real tools/quest_keystore.sh with a fake `pass`) with an AArch64 plugin made by clang, and read the
+fixture key through the real tools/quest_keystore.sh, named by NEVR_QUEST_KEYSTORE and NEVR_QUEST_KEYSTORE_PASS) with an
+AArch64 plugin made by clang, and read the
 SIGNED APK back with the standard zip reader.
 """
 from __future__ import annotations

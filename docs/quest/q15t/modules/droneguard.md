@@ -13,11 +13,11 @@ ALTERS_GAMEPLAY when it is on.
 
 ## Row covered
 
-R35: `CR15NetFollowPlayerCS::Follow(SCompactPoolHandle)`, JUMP_SLOT ELF 0x36f1218, real function ELF 0x2149764 = ReVault 0x2249764
+R35: `CR15NetFollowPlayerCS::Follow(SCompactPoolHandle)`, JUMP_SLOT ELF 0x36f1218, real function ELF 0x2149764 = disassembly 0x2249764
 (size 908). Read this session:
 - `R0_readelf_r.txt:131799`: `00000000036f1218  0000475100000402 R_AARCH64_JUMP_SLOT    0000000002149764 _ZN10NRadEngine8NRadGame21CR15NetFollowPlayerCS6FollowENS_18SCompactPoolHandleE + 0`
-- ReVault `functions`: `2149764 | Follow | 908`; `R1_functions.md:48` (1 caller, `Update` through the PLT stub).
-- Words (all 7 of the source's droneguard words equal ReVault):
+- Disassembly `functions`: `2149764 | Follow | 908`; `R1_functions.md:48` (1 caller, `Update` through the PLT stub).
+- Words (all 7 of the source's droneguard words equal disassembly):
 ```
 2149744 97b7a7c7 bl <PLT Follow>               the one call (Update)
 21497bc f940a274 ldr x20, [x19, #0x140]        the followed system, no null test
@@ -27,7 +27,7 @@ R35: `CR15NetFollowPlayerCS::Follow(SCompactPoolHandle)`, JUMP_SLOT ELF 0x36f121
 1cdb3e0 7941e008 ldrh w8, [x0, #0xf0]          IsComponentValid (stage 1)
 1cdb3f8 6b41413f cmp w9, w1, LSR #0x10
 ```
-- ReVault `functions`: `1210848 | RefreshCache | 568`, `1cdb3e0 | IsComponentValid | 68`.
+- Disassembly `functions`: `1210848 | RefreshCache | 568`, `1cdb3e0 | IsComponentValid | 68`.
 Source: constants `the source build's droneguard:42-48, 66-80`, `IdxSkip :86-99`, `StateLine :108-124`, `FollowHook :126-146`.
 
 ## What it does
@@ -58,8 +58,8 @@ word is read with SafeRead at `base + ELF vaddr` before any slot is touched) and
 build that still carries these words is not refused. A pin that fails refuses the module (nothing swapped, reason `word_pin_mismatch`)
 with one ERROR line naming it: `<module> refused: code word pin mismatch, ... pin=0x<ELF vaddr> found=0x<word read, or unreadable>
 expected=0x<word pinned>`. A slot-target refusal logs ERROR with `pin=<slot ELF vaddr> found=<word at the slot> expected=<base + real
-vaddr>`. Pin addresses in this note are ELF vaddrs (ReVault VA = ELF + 0x100000). Stage 0 has 4 pins (`the source build's droneguard:43-44, 57-58`: the `ldr x20,[x19,#0x140]`, the Update call site, the two index loads); stage 1 has 3 more of its own (`:76-77`: RefreshCache call site, IsComponentValid first words), checked by `ResolveDroneGuardFns` before the dlsym: a stage-1 pin mismatch is one ERROR line ("null half only") and the null half still installs.
-All pins read in ReVault (binary 576) equal the tables in `src/quest/plugins/q15t/src/droneguard.h` (one query whose VALUES are built from the header tables:
+vaddr>`. Pin addresses in this note are ELF vaddrs (disassembly VA = ELF + 0x100000). Stage 0 has 4 pins (`the source build's droneguard:43-44, 57-58`: the `ldr x20,[x19,#0x140]`, the Update call site, the two index loads); stage 1 has 3 more of its own (`:76-77`: RefreshCache call site, IsComponentValid first words), checked by `ResolveDroneGuardFns` before the dlsym: a stage-1 pin mismatch is one ERROR line ("null half only") and the null half still installs.
+All pins read in the disassembly equal the tables in `src/quest/plugins/q15t/src/droneguard.h` (one query whose VALUES are built from the header tables:
 `MATCH | 88` over the five modules' tables, no NOT_SHOWN, no MISMATCH). Host test: every pin flipped in turn is refused and named, an
 unreadable text is refused and named, the table's fingerprint is pinned, the installer refuses on a changed word (`src/quest/tests/q15t/pin_check.h`).
 

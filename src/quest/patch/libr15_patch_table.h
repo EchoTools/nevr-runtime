@@ -3,11 +3,11 @@
 // Attach reads the same table to build each row's trampoline and to check the live words; the host tests read it to
 // check every row against the real file. There is no second copy of an address or a word.
 //
-// Each site is typed ONCE, as its ReVault address (the address `revault_disassemble` prints for libr15.so). The
-// pinned link-time vaddr is derived: `revaultVa - kRevaultBias`. That subtraction was done by hand and went wrong
+// Each site is typed ONCE, as its disassembly address (the address a disassembler shows for libr15.so). The
+// pinned link-time vaddr is derived: `disasmVa - kDisasmBias`. That subtraction was done by hand and went wrong
 // twice (#1125 and #1128 each met a headset with the wrong function); here it is code. The stock words are the words
-// the pinned libr15 holds at the site, read from the file at (revaultVa - kRevaultBias) and cross-checked against
-// ReVault; the patcher refuses a stock file whose words differ, naming the row.
+// the pinned libr15 holds at the site, read from the file at (disasmVa - kDisasmBias) and cross-checked against
+// the disassembly; the patcher refuses a stock file whose words differ, naming the row.
 //
 // The table itself is constexpr data (no allocation, no I/O); only the extra-row type holds a std::string and a
 // std::vector, because those rows are read from a file at build time.
@@ -21,8 +21,8 @@
 
 namespace nevr_quest::patch {
 
-/// ReVault's libr15.so addresses are the pinned link-time vaddrs plus this bias.
-inline constexpr std::uint64_t kRevaultBias = 0x100000;
+/// The image base the disassembler loads libr15.so at: its addresses are the pinned link-time vaddrs plus this bias.
+inline constexpr std::uint64_t kDisasmBias = 0x100000;
 
 /// The libr15 the table is written against: GNU build ID and SHA-256 of the file in the store APK (the digest is the
 /// one `just test-quest-hooks-pinned` already pins, and was re-measured with `sha256sum` on the file extracted from
@@ -63,17 +63,17 @@ enum class RowKind : std::uint8_t {
 inline constexpr std::size_t kMaxSiteWords = 3;
 inline constexpr std::size_t kMaxSitesPerRow = 4;
 
-/// One contiguous run of stock words: the first `wordCount` words at `revaultVa`.
+/// One contiguous run of stock words: the first `wordCount` words at `disasmVa`.
 struct Site {
-  std::uint64_t revaultVa;
+  std::uint64_t disasmVa;
   std::uint8_t wordCount;
   std::uint32_t words[kMaxSiteWords];
-  constexpr std::uint64_t Vaddr() const { return revaultVa - kRevaultBias; }
+  constexpr std::uint64_t Vaddr() const { return disasmVa - kDisasmBias; }
 };
 
 struct Row {
   const char* id;            // `lobby_full.join`
-  const char* gameFunction;  // ReVault's name for the function
+  const char* gameFunction;  // the function's name in the disassembly
   RowKind kind;
   const char* handler;       // the sentinel's handler, or the installer for the credits row
   std::uint8_t slot;         // index of the row's 8-byte slot
@@ -116,7 +116,7 @@ constexpr bool TableIsWellFormed() {
     if (row.kind == RowKind::kInlineHook && (row.siteCount != 1 || row.sites[0].wordCount != 3)) return false;
     if (row.kind == RowKind::kCreditsPair && row.siteCount != 4) return false;
     for (std::size_t s = 0; s < row.siteCount; ++s) {
-      if (row.sites[s].revaultVa < kRevaultBias || (row.sites[s].revaultVa & 3) != 0) return false;
+      if (row.sites[s].disasmVa < kDisasmBias || (row.sites[s].disasmVa & 3) != 0) return false;
       if (row.sites[s].wordCount == 0 || row.sites[s].wordCount > kMaxSiteWords) return false;
     }
   }
@@ -156,7 +156,7 @@ struct WordEdit {
 /// public table has none, and the repo holds no address or word of one.
 struct WordPatchRow {
   std::string id;
-  std::uint64_t revaultVa = 0;
+  std::uint64_t disasmVa = 0;
   std::vector<WordEdit> edits;
 };
 

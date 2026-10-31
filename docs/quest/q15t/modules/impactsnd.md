@@ -2,8 +2,8 @@
 
 Port of the source build's `the source build's impactsnd` (v1 to v6) to a plugin module. Files: `src/impactsnd.{h,cpp}`,
 `src/quest/tests/q15t/impactsnd_test.cpp`, `src/quest/tests/q15t/mod/impactsnd.sh`, `src/quest/tests/q15t/mutants.d/impactsnd.sh`. Pinned build: libr15 build id
-`b243509c08ce677aeb95fa348016949b3fc45230` (ReVault binary 576). ELF vaddr = ReVault VA - 0x100000. Source citations are
-`the source build's impactsnd:<line>`; ReVault citations are quoted from read-only queries (scratch SQL, a source-build note not in this tree,
+`b243509c08ce677aeb95fa348016949b3fc45230` (the disassembly). ELF vaddr = disassembly VA - 0x100000. Source citations are
+`the source build's impactsnd:<line>`; disassembly citations are quoted from read-only queries (scratch SQL, a source-build note not in this tree,
 run with the contract's recipe).
 
 ## The problem
@@ -17,7 +17,7 @@ u32 id, pad}`, looked up by binary search on the key. Two things are wrong on th
 2. Every row's id is the stock `1` instead of the Wwise event id: `CSoundSymbol::CalculateSymbolValue` returns 1 for every name
    on the Quest (`:38-43`, RE-28). The fix is a data write to each row (built here).
 
-The hit code (`HandleBulletCollision`, ReVault `0x2220550`, size 2264) does two lookups. Quoted from the ReVault raw
+The hit code (`HandleBulletCollision`, disassembly `0x2220550`, size 2264) does two lookups. Quoted from the disassembly raw
 decompilation (`functions.va = 0x2220550`, scratch `hbc_decomp.txt` lines 123-195): the first looks up
 `gunSym ^ <subkey read from the target's damageable record>` (lines 123-157, plays `*kSoundSettings + idx*0x10 + 8` through
 `PlayCollisionSound`); the second looks up `D ^ gunSym`, D = `DAT_038af8d0` (lines 162-189), and on a miss calls
@@ -29,7 +29,7 @@ read as `*(byte *)(kSoundSettings + 7) & 1` = map+0x38 bit 0, the Sort call foll
 
 ## Rows
 
-| Row | What | ELF vaddr | ReVault VA | Built |
+| Row | What | ELF vaddr | disassembly VA | Built |
 |---|---|---|---|---|
 | R12 | `kSoundSettings` (.bss, `_ZN10NRadEngine8NRadGame15CR15NetBulletCS14kSoundSettingsE`, OBJECT 8) and its GLOB_DAT slot | `0x37af6a0`; slot `0x370fa70` | `0x38af6a0`; `0x380fa70` | yes (read; GLOB_DAT word cross-checked) |
 | R13 | `D`, the "default" symbol word the hit code reads (.bss) | `0x37af8d0` | `0x38af8d0` | yes (write only when it reads 0) |
@@ -62,7 +62,7 @@ relocation): the slot swap needs the one-page mprotect that `got_swap.cpp` does 
 
 ### The Shutdown slot (R17), proven
 
-From finding 7 of a source-build report (not in this tree): ReVault slot `0x37933e8` -> `0x22226f0`. Checked against the store libr15:
+From finding 7 of a source-build report (not in this tree): the disassembly slot `0x37933e8` -> `0x22226f0`. Checked against the store libr15:
 
 ```
 $ readelf -rW libr15.so | grep -E "^00000000036933e8|^00000000036933e0|^00000000036933f0"
@@ -78,11 +78,11 @@ $ readelf -sW libr15.so | grep " 00000000021226f0 "
 The slot is a vtable word: an `R_AARCH64_ABS64` relocation to `Shutdown` between two `CComponentSystem` virtuals, so after
 relocation it holds `base + 0x21226f0`. It lies in `.data.rel.ro` (`0x35fac50` to `0x36bf210`), inside RELRO (ends `0x372c000`):
 read-only at run time, swapped with the same one-page mprotect and restore as a GOT slot (`got_swap.cpp`, which also refuses a
-page that is executable). ReVault: `22226f0 | Shutdown | 348`; xrefs to the function: `33c37c4 data`, `35df8b8 data`, `37933e8 data`
-and no call or branch xref, so the vtable word is the only dispatch path ReVault sees (the call graph is measured, not
+page that is executable). disassembly: `22226f0 | Shutdown | 348`; xrefs to the function: `33c37c4 data`, `35df8b8 data`, `37933e8 data`
+and no call or branch xref, so the vtable word is the only dispatch path the disassembly sees (the call graph is measured, not
 exhaustive; the other two `data` xrefs parallel LoadSoundSettings' `33c37a4` / `35df808` at the same distance pattern, look like
-table entries, and I did not read them: unverified). ReVault xrefs to the slot word itself: 0 rows (a relocated word has none);
-the `symbols` row is `DAT_37933e8`. Instruction words read (`instructions`, binary 576):
+table entries, and I did not read them: unverified). the disassembly xrefs to the slot word itself: 0 rows (a relocated word has none);
+the `symbols` row is `DAT_37933e8`. Instruction words read (`instructions`):
 
 ```
 22226f0 str x24,[sp,#-0x40]! ... 2222700 mov x19, x0 (this, read first; no other argument is read)
@@ -99,9 +99,9 @@ the freed map, and `0x22227bc` / `0x22227d8` run on the map before it (callee un
 freed memory. I read the instructions, not what `0x0100e200` and `0x00fd3590` do: the free is the vtable call at `0x22227ec`
 (`[x21]->0x38`) by the report's account and the instruction shape, unverified beyond that.
 
-## ReVault reads (quoted)
+## Disassembly reads (quoted)
 
-`instructions` rows, binary 576, bytes shown little-endian as stored:
+`instructions` rows, bytes shown little-endian as stored:
 
 ```
 R15  22208b4 | ldr  | x1, [x22, #0x30]   | c11a40f9   = 0xf9401ac1   (source kCodeCount)
@@ -126,7 +126,7 @@ R14  functions: 2221d04 | LoadSoundSettings | 808
 One call site (`Initialize`, through the stub and the slot): the source's "1 caller". The two `data` xrefs `0x33c37a4`
 and `0x35df808` are not GOT slots; I did not read what they are (probably unwind or constant tables): unverified, which is
 one reason the tick stays as a safety net. The source calls the entry `Initialize 0x2121844`; that is the call site inside the
-function (`Initialize` is `0x222160c` in ReVault, ELF `0x212160c`), not its entry. The table pointer is stored
+function (`Initialize` is `0x222160c` in the disassembly, ELF `0x212160c`), not its entry. The table pointer is stored
 (`str x19,[x8]` at `0x2221840`, through the GLOB_DAT slot `0x380fa70`) BEFORE the loader is called, so a table exists, empty or
 half-built, while the loader runs: the wrapper therefore acts only after the loader returns.
 
@@ -136,7 +136,7 @@ R13  xrefs to D (VA 0x38af8d0): 10712fc | write   ;   22208c8 | read
      10712e4 add x10, x29, #0x174 ; 10712fc str x8, [x10]     => x29 + 0x174 = 0x38af75c + 0x174 = 0x38af8d0
 ```
 
-So ReVault shows a store to D in the library's own static initialiser (`_INIT_355`), contrary to the source's v1 comment ("D
+So the disassembly shows a store to D in the library's own static initialiser (`_INIT_355`), contrary to the source's v1 comment ("D
 is .bss with no visible store, so it reads 0", `:6-8`). That comment was superseded by the source's own device read (v2,
 `:19-20`: "the device read of v1 showed D already set"). The constant itself occurs in `.rodata` of the store libr15
 (`grep` of the bytes `9e5b615f998ad32f`: 2 hits, file offsets 45744392 and 45744600); I did not trace which load feeds the
@@ -247,7 +247,7 @@ and appends the same fields to the same table; the difference is the scratch. Th
 `sp+0x10/0x18`, the bytes of the path string it passes to the next `CJson::Next`, so only the first member of each gun was
 kept. The rebuilt loader keeps the path in its own 512-byte buffer and the key and id in locals, so every member is appended.
 
-- Stock steps reproduced (ReVault `0x2221d04` decompile and disassembly): memset the 512-byte buffer and format
+- Stock steps reproduced (disassembly `0x2221d04` decompile and disassembly): memset the 512-byte buffer and format
   `%s|%s`; construct the CJson (`0xfd7760`, 16 bytes of frame); `LoadFromProjectSourceDb` (`0x1000140`); for each
   `bullet_impact` node the gun name (`NameAt`, `0x1017d40`), its `bullet_impact|<gun>` members (`Next`, `0x1028490`, third
   argument the previous node), key = CSymbol64(member) ^ CSymbol64(gun); then the `bullet_whizzby` nodes into the table at
@@ -256,11 +256,11 @@ kept. The rebuilt loader keeps the path in its own 512-byte buffer and the key a
 - Changed: the id is `WwiseEventId` (FNV-1 32 of the lowercase event name), not `CSoundSymbol::CalculateSymbolValue`, which
   returns `1` on the Quest for every name (RE-28, the module's `kStockId`). The CSymbol64 keys are the SDK's `CSymbol64Hash`,
   which the module's keys were already checked against.
-- Calls: each target is the stock loader's direct-call stub (ELF = ReVault VA - 0x100000), the same stub the stock `bl` jumps
-  through. Each stub's first word is pinned in `kRebuildCallees` and read from ReVault (`adrp x16`), and the rebuild is enabled
+- Calls: each target is the stock loader's direct-call stub (ELF = disassembly VA - 0x100000), the same stub the stock `bl` jumps
+  through. Each stub's first word is pinned in `kRebuildCallees` and read from the disassembly (`adrp x16`), and the rebuild is enabled
   only when all seven match and the Shutdown wrapper is in (`impactsnd LoadSoundSettings rebuild`, `mode=`). The nowrite build keeps
   the stock loader.
-- Signatures, from ReVault (libr15 binary 576): `CJson::Next(char const*, void*) const` (0x10a0c30), `CJson::NameAt(void*) const`
+- Signatures, from the disassembly (libr15): `CJson::Next(char const*, void*) const` (0x10a0c30), `CJson::NameAt(void*) const`
   (0x10a0cdc), `CJson::TString(void*, char*) const` with the fallback as a third register (the stock call passes `""`'s address
   as x2, `0x2221e94` / `0x2221fa0`; the thunk at 0x10a58f4 shows two declared parameters after `this`), `CMemBlock::Resize(ulonglong,
   uint)` (0x103e400; the stock also passes `1` in w2, passed here as `keep` and ignored by the declared signature).
@@ -282,7 +282,7 @@ This module is correct in that state: the 5 rows are rewritten to the Wwise ids,
 word_patch=absent`. What does not happen:
 
 1. 10 of the 15 rows never exist: the `barrier` row and the `default` row of each of the 5 guns.
-2. The hit code's second lookup (`D ^ gunSym`, ReVault `0x22208b0..0x2220960`) misses on every hit, so
+2. The hit code's second lookup (`D ^ gunSym`, disassembly `0x22208b0..0x2220960`) misses on every hit, so
    `Cannot find default impact sound for bullet type ...` keeps logging on every hit for every gun, and no default (`geo`)
    impact sound plays on world or non-player hits.
 3. The first lookup for a `barrier` target misses (no row): no shield-impact sound.
@@ -294,12 +294,12 @@ word_patch=absent`. What does not happen:
 
 ## R16 word-patch spec for the main seat
 
-Five 32-bit words, all in one 4 KiB page (ReVault page `0x2221000`, ELF `0x2121000`), no control flow changes. Stock words
-read from ReVault (above) and verified against the source; replacement words exactly as the source's `kPatch` (`:90-96`), and
+Five 32-bit words, all in one 4 KiB page (disassembly page `0x2221000`, ELF `0x2121000`), no control flow changes. Stock words
+read from the disassembly (above) and verified against the source; replacement words exactly as the source's `kPatch` (`:90-96`), and
 disassembled here with the NDK's clang and `llvm-objdump` (a scratch listing, not in this tree) to confirm the
 instruction each encodes:
 
-| ReVault VA | ELF vaddr | stock word | stock insn | replacement word | replacement insn |
+| Disassembly VA | ELF vaddr | stock word | stock insn | replacement word | replacement insn |
 |---|---|---|---|---|---|
 | `0x2221da8` | `0x2121da8` | `0x91003116` | `add x22, x8, #0xc` (x8 = sp+0x10) | `0x910033f6` | `add x22, sp, #0xc` (the pad fill) |
 | `0x2221e2c` | `0x2121e2c` | `0xb9401bea` | `ldr w10, [sp, #0x18]` | `0xb9400bea` | `ldr w10, [sp, #8]` (the id into the table) |
@@ -319,9 +319,9 @@ guard belongs on the word-patch row. After the patch, the module's own lines rea
 
 ## Prediction (written before any headset run)
 
-P1. `impactsnd on ... was=<non-zero> now=<same> action=left alone (not 0)`. Basis: ReVault shows `_INIT_355` storing D
+P1. `impactsnd on ... was=<non-zero> now=<same> action=left alone (not 0)`. Basis: the disassembly shows `_INIT_355` storing D
 (`0x10712fc`) and the source's device read found D set. Falsifier: `was=0 action=wrote` (D is not set at plugin init; then the
-write is the fix and the ReVault reading is incomplete), or `was` non-zero and not `2fd38a995f615b9e` (the hit code would look
+write is the fix and the disassembly reading is incomplete), or `was` non-zero and not `2fd38a995f615b9e` (the hit code would look
 up another key; the module leaves it alone by rule, and the lookup stays wrong: the line is the evidence).
 
 P2. `impactsnd load wrapper ... status=ok mode=after-load pass + tick`. Falsifier: any other status (for the Shutdown wrapper too: `impactsnd shutdown wrapper status=ok row_writes=enabled`; anything

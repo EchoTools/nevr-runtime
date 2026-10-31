@@ -22,7 +22,7 @@ struct AiBotsFns {
 };
 
 // `lookup`: dlsym on the loaded game library (nullptr: fixed address only). A name that resolves elsewhere, or a first
-// word that is not `sub sp, sp, #0x30` (0xd100c3ff; ReVault 0x133c2bc: ffc300d1), is a refusal (false, `why` set).
+// word that is not `sub sp, sp, #0x30` (0xd100c3ff; disassembly 0x133c2bc: ffc300d1), is a refusal (false, `why` set).
 bool ResolveAiBotsFns(std::uintptr_t base, void* (*lookup)(const char* symbol), AiBotsFns* out, const char** why);
 
 // An all-null `fns` means "resolve from the loaded libr15 on the first tick".

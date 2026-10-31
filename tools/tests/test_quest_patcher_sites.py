@@ -72,7 +72,7 @@ class TableTest(unittest.TestCase):
         both = HOOKED + ", src/quest/login/login_prerequisites.h:Missing"
         self.assertEqual(len(self.failures(row(covered=both))), 1)
 
-    def test_the_vaddr_must_be_their_address_less_the_revault_offset(self):
+    def test_the_vaddr_must_be_their_address_less_the_disasm_offset(self):
         bad = row().split("\t")
         bad[1] = "0x2ece80"
         self.assertIn("is not their_va", self.failures("\t".join(bad))[0])

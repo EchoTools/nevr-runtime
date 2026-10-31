@@ -1,12 +1,10 @@
 """The release train guard (#1409): the decision rules, the window boundary, the CLI end to end against fake gh and fake
-next_release_version.py on PATH, the --gh and --log-file options, and the systemd user units that run the guard
-(tools/systemd/nevr-train-guard*.{service,timer}). No test reaches GitHub: every gh is a fake."""
+next_release_version.py on PATH, and the --gh and --log-file options. No test reaches GitHub: every gh is a fake."""
 
 import datetime as dt
 import json
 import os
 import pathlib
-import re
 import subprocess
 import sys
 import tempfile
@@ -18,11 +16,6 @@ sys.path.insert(0, str(ROOT / "tools"))
 import release_train_guard as guard  # noqa: E402
 
 GUARD = ROOT / "tools" / "release_train_guard.py"
-UNITS = ROOT / "tools" / "systemd"
-JUSTFILE = ROOT / "justfile"
-SERVICE = "nevr-train-guard.service"
-FAILED = "nevr-train-guard-failed.service"
-TIMER = "nevr-train-guard.timer"
 # Built from parts so that this file does not itself name the removed workflow when the grep test searches the tree.
 REMOVED_WORKFLOW = ".github/workflows/release-train" + "-guard.yml"
 
@@ -221,8 +214,8 @@ class Decide(unittest.TestCase):
 
 
 class Defaults(unittest.TestCase):
-    def test_the_gh_binary_is_GH_BIN_else_the_publisher_gh(self) -> None:
-        self.assertEqual(guard.gh_binary({}), "gh-spritz")
+    def test_the_gh_binary_is_GH_BIN_else_gh(self) -> None:
+        self.assertEqual(guard.gh_binary({}), "gh")
         self.assertEqual(guard.gh_binary({"GH_BIN": "/opt/gh"}), "/opt/gh")
 
     def test_the_log_is_under_xdg_state_home_else_under_local_state(self) -> None:
@@ -581,70 +574,8 @@ class Cli(unittest.TestCase):
         self.assertNotIn('"event": "dispatched"', result.stdout)
 
 
-class Units(unittest.TestCase):
-    """The three user units that run the guard. They mirror tools/systemd/nevr-quest-release*: the same dedicated
-    checkout, the same PATH, and a failure couriers the release lead, never a bonk."""
-
-    def unit(self, name: str) -> str:
-        return (UNITS / name).read_text(encoding="utf-8")
-
-    def test_the_three_units_exist(self) -> None:
-        for name in (SERVICE, FAILED, TIMER):
-            with self.subTest(unit=name):
-                self.assertTrue((UNITS / name).is_file())
-
-    def test_the_timer_runs_hourly_at_seven_past_and_catches_up(self) -> None:
-        text = self.unit(TIMER)
-        self.assertRegex(text, r"(?m)^OnCalendar=\*:07:00$")
-        self.assertRegex(text, r"(?m)^Persistent=true$")
-        self.assertRegex(text, r"(?m)^AccuracySec=1min$")
-        self.assertRegex(text, rf"(?m)^Unit={re.escape(SERVICE)}$")
-        self.assertRegex(text, r"(?m)^WantedBy=timers\.target$")
-
-    def test_the_service_is_a_oneshot_with_a_failure_hook_and_a_timeout(self) -> None:
-        text = self.unit(SERVICE)
-        self.assertRegex(text, r"(?m)^Type=oneshot$")
-        self.assertRegex(text, rf"(?m)^OnFailure={re.escape(FAILED)}$")
-        self.assertRegex(text, r"(?m)^TimeoutStartSec=10min$")
-        self.assertRegex(text, r"(?m)^Environment=PATH=%h/\.local/bin:/usr/local/bin:/usr/bin$")
-        self.assertNotIn("GNUPGHOME", text)
-
-    def test_the_service_fetches_then_switches_the_dedicated_checkout_to_origin_main(self) -> None:
-        text = self.unit(SERVICE)
-        checkout = "%h/src/nevr-runtime-work/release-timer/checkout"
-        self.assertRegex(text, rf"(?m)^WorkingDirectory={re.escape(checkout)}$")
-        self.assertRegex(text, rf"(?m)^ExecStartPre=/usr/bin/git -C {re.escape(checkout)} fetch --quiet --tags origin main$")
-        self.assertRegex(text, rf"(?m)^ExecStartPre=/usr/bin/git -C {re.escape(checkout)} switch --quiet --detach origin/main$")
-
-    def test_the_service_runs_the_guard_from_the_checkout_against_the_repository(self) -> None:
-        text = self.unit(SERVICE)
-        self.assertRegex(
-            text,
-            r"(?m)^ExecStart=/usr/bin/python3 -I %h/src/nevr-runtime-work/release-timer/checkout/tools/"
-            r"release_train_guard\.py --repo EchoTools/nevr-runtime$",
-        )
-
-    def test_the_failed_unit_couriers_spritz_the_log_path_and_never_bonks(self) -> None:
-        text = self.unit(FAILED)
-        self.assertRegex(
-            text,
-            r"(?m)^ExecStart=%h/\.local/bin/courier send --to spritz --from release-train-guard "
-            r"--msg \"release train guard failed: see %h/\.local/state/nevr-runtime/release-train-guard\.jsonl\"$",
-        )
-        self.assertNotRegex(text.lower(), r"bonk")
-
-    def test_the_install_recipe_links_the_three_units_and_enables_the_timer(self) -> None:
-        justfile = JUSTFILE.read_text(encoding="utf-8")
-        match = re.search(r"(?m)^install-train-guard-timer:\n((?:[ \t]+.*\n|\n)*)", justfile)
-        self.assertIsNotNone(match, "no install-train-guard-timer recipe in the justfile")
-        recipe = match.group(1)
-        for name in (SERVICE, FAILED, TIMER):
-            with self.subTest(unit=name):
-                self.assertIn(name, recipe)
-        self.assertIn("systemctl --user link", recipe)
-        self.assertIn("systemctl --user daemon-reload", recipe)
-        self.assertIn(f"systemctl --user enable --now {TIMER}", recipe)
-        self.assertIn("tools/systemd/", recipe)
+class RemovedWorkflow(unittest.TestCase):
+    """The scheduled workflow the guard replaces stays gone."""
 
     def test_the_workflow_file_the_guard_replaces_is_gone(self) -> None:
         self.assertFalse((ROOT / REMOVED_WORKFLOW).exists())

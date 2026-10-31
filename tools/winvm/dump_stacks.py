@@ -5,7 +5,7 @@
 
 Produced by `systest.py --dump-on-fail` (comsvcs.dll MiniDump, full memory).
 Prints, per thread, the RIP and the return-address-looking values on the stack,
-with an echovr.exe VA (image base 0x140000000) ready to paste into ReVault.
+with an echovr.exe VA (image base 0x140000000) ready to paste into the disassembly.
 
 Read the output with care: there is no unwind info here, so the walk is a scan
 for values that point into a module right after a CALL instruction. The TOP few

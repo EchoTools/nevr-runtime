@@ -6,7 +6,7 @@
     {
       "id": "x.example_guard",
       "kind": "word_patch",
-      "revault_va": "0x1500010",
+      "disasm_va": "0x1500010",
       "words": [
         { "offset": 0, "stock_bytes": "e0031faa", "new_bytes": "1f2003d5" },
         { "offset": 8, "stock_bytes": "00010054", "new_bytes": "1f2003d5" }

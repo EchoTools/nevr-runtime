@@ -1,5 +1,5 @@
 """tools/scenario/smoke.sh brings its own worktree to origin/main before it does anything else, and
-fails loudly (record plus alarm) when it cannot, so the timer never runs a dev branch (#792)."""
+fails loudly (record plus a non-zero exit) when it cannot, so a scheduled run never uses a dev branch (#792)."""
 import json
 import os
 import pathlib
@@ -60,11 +60,6 @@ class SmokeSyncTest(unittest.TestCase):
         subprocess.run(["git", "clone", "-q", "-b", "main", str(self.origin), str(self.tree)], check=True, capture_output=True)
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
-        self.alarms = self.tmp / "alarms.log"
-        for tool in ("bonk", "courier"):
-            fake = self.bin / tool
-            fake.write_text(f'#!/bin/sh\necho "{tool} $*" >> "{self.alarms}"\n')
-            fake.chmod(0o755)
         self.status = self.tmp / "status"
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", NEVR_SMOKE_STATUS_DIR=str(self.status),
                         NEVR_SMOKE_BRANCH="main")
@@ -88,16 +83,12 @@ class SmokeSyncTest(unittest.TestCase):
         self.assertIn(fragment, result.stderr)
         self.assertEqual(self.record()["verdict"], "FAIL")
         self.assertIn(fragment, self.record()["reason"])
-        alarms = self.alarms.read_text()
-        self.assertIn("bonk --from scenario-smoke NEVR scenario smoke FAILED", alarms)
-        self.assertIn("courier send --to spritz --from scenario-smoke", alarms)
 
     def test_a_tree_behind_origin_is_fast_forwarded(self):
         tip = self.push_commit()
         result = self.run_smoke("--sync-only")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(git(self.tree, "rev-parse", "HEAD"), tip)
-        self.assertFalse(self.alarms.exists())
 
     def test_the_run_continues_from_the_updated_file_not_the_old_one(self):
         # The pushed smoke.sh stops right before the lock wait with a marker; the old file in the
@@ -216,15 +207,6 @@ class SmokeSyncTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn(f"game-run lock {root}/launch-client.lock still busy", result.stderr)
 
-    def test_a_dry_run_alarm_records_the_failure_and_fires_nothing(self):
-        (self.tree / "marker.txt").write_text("local edit\n")
-        result = self.run_smoke("--sync-only", "--dry-run-alarm")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("[dry-run] alarm would fire", result.stderr)
-        self.assertFalse(self.alarms.exists())
-        self.assertEqual(self.record()["verdict"], "FAIL")
-
-
     def run_the_smoke(self, seconds, passed):
         self.env.update(FAKE_IN_GAME_SECONDS=str(seconds), FAKE_PASSED="1" if passed else "0",
                         NEVR_LAUNCH_LOCK=str(self.tmp / "no-such-lock"))
@@ -237,44 +219,25 @@ class SmokeSyncTest(unittest.TestCase):
         self.assertEqual((record["verdict"], record["slow"], record["in_game_seconds"]), ("PASS", False, 250.0))
         self.assertEqual(record["loadavg_start"], "1.00 2.00 3.00")
         self.assertEqual(record["states"][0]["to"], "loading global")
-        self.assertFalse(self.alarms.exists())
 
     def test_exactly_300_s_is_not_slow(self):
         result = self.run_the_smoke(300.0, True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.record()["slow"])
 
-    def test_a_pass_over_300_s_is_still_a_pass_flagged_slow_and_raises_no_alarm(self):
+    def test_a_pass_over_300_s_is_still_a_pass_flagged_slow(self):
         result = self.run_the_smoke(400.0, True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.record()["verdict"], self.record()["slow"]), ("PASS", True))
         self.assertIn("SLOW: in game after 400.0 s", (self.status / "last.txt").read_text())
-        self.assertFalse(self.alarms.exists())
 
-    def test_a_failed_run_alarms_and_keeps_the_timings(self):
+    def test_a_failed_run_fails_and_keeps_the_timings(self):
         result = self.run_the_smoke(600.0, False)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         record = self.record()
         self.assertEqual((record["verdict"], record["exit"]), ("FAIL", 1))
         self.assertIn("client reached in game", record["reason"])
         self.assertEqual(record["loadavg_start"], "1.00 2.00 3.00")
-        self.assertIn("bonk --from scenario-smoke NEVR scenario smoke FAILED", self.alarms.read_text())
-
-
-class SmokeUnitTest(unittest.TestCase):
-    """The unit runs smoke.sh from the worktree that tracks origin/main, inside the build slice."""
-    unit = (REPO / "tools/scenario/systemd/nevr-scenario-smoke.service").read_text()
-
-    def test_it_runs_from_the_dedicated_main_tracking_worktree(self):
-        wt = "/home/andrew/src/nevr-runtime/.claude/worktrees/nevr-scenario-smoke"
-        self.assertIn(f"WorkingDirectory={wt}\n", self.unit)
-        self.assertIn(f"ExecStart={wt}/tools/scenario/smoke.sh\n", self.unit)
-        self.assertNotIn("spritz-scenario-smoke", self.unit)
-
-    def test_it_builds_inside_the_shared_build_slice_and_off_the_wayland_display(self):
-        self.assertIn("Slice=nevr-builds.slice\n", self.unit)
-        self.assertIn("MemoryMax=8G\n", self.unit)
-        self.assertIn("UnsetEnvironment=WAYLAND_DISPLAY\n", self.unit)
 
 
 if __name__ == "__main__":

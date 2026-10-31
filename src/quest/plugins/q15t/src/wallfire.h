@@ -28,7 +28,7 @@ struct WallfirePins {
   std::uintptr_t game_occluded;   // CncaGame::StaticRaycastOccluded: what CncaGame's vtable +0x278 holds
 };
 
-// ELF vaddrs of the pinned build (ReVault binary 576 = ELF + 0x100000).
+// ELF vaddrs of the pinned build (disassembly VA = ELF + 0x100000).
 inline constexpr WallfirePins kWallfirePinned = {0x36e0c38, 0x1806784, 0x215566c, 0x3941b3e8, 0x36ce380, 0x18066f4, 0x17f2614};
 
 // Game structures read at a shot (docs/quest/q15t/modules/wallfire.md section 3).

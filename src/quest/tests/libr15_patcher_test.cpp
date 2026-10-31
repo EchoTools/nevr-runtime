@@ -50,7 +50,7 @@ constexpr std::uint64_t kJoinVa = 0x1400200;
 constexpr std::uint64_t kFailVa = 0x1400300;
 constexpr std::uint64_t kAdrp0 = 0x1400400, kAdd0 = 0x1400408, kAdrp1 = 0x1400500, kAdd1 = 0x1400504;
 constexpr std::uint64_t kBlob = 0x13ff800;  // read-only, on another page than the slot area (so the ADRPs change)
-constexpr std::uint64_t kGuardA = 0x1400010, kGuardB = 0x1400018;  // the fixture's two words (revault_va 0x1500010)
+constexpr std::uint64_t kGuardA = 0x1400010, kGuardB = 0x1400018;  // the fixture's two words (disasm_va 0x1500010)
 constexpr std::uint64_t kSlotArea = 0x1403600;                     // roundup(0x14035f8, 64)
 
 std::uint32_t AddImm(unsigned rd, unsigned rn, unsigned imm12) { return 0x91000000u | (imm12 << 10) | (rn << 5) | rd; }
@@ -78,7 +78,7 @@ struct World {
     rows.push_back(Inline("s.fail", kFailVa, 1));
     Row credits{"s.credits", "Credits", RowKind::kCreditsPair, "install", 2, 4, {}};
     const std::uint64_t at[4] = {kAdrp0, kAdd0, kAdrp1, kAdd1};
-    for (int i = 0; i < 4; ++i) credits.sites[i] = {at[i] + kRevaultBias, 1, {elf.WordAt(at[i])}};
+    for (int i = 0; i < 4; ++i) credits.sites[i] = {at[i] + kDisasmBias, 1, {elf.WordAt(at[i])}};
     rows.push_back(credits);
     spec.rows = rows.data();
     spec.rowCount = rows.size();
@@ -94,7 +94,7 @@ struct World {
 
   Row Inline(const char* id, std::uint64_t vaddr, std::uint8_t slot) const {
     Row r{id, id, RowKind::kInlineHook, "handler", slot, 1, {}};
-    r.sites[0] = {vaddr + kRevaultBias, 3, {elf.WordAt(vaddr), elf.WordAt(vaddr + 4), elf.WordAt(vaddr + 8)}};
+    r.sites[0] = {vaddr + kDisasmBias, 3, {elf.WordAt(vaddr), elf.WordAt(vaddr + 4), elf.WordAt(vaddr + 8)}};
     return r;
   }
 
@@ -221,7 +221,7 @@ TEST(TheOutputDiffersFromTheInputOnlyInTheNamedRanges) {
   for (const Json& e : r.events) {
     if (e["event"] != "libr15_patch_site") continue;
     ++sites;
-    CHECK(e.contains("id") && e.contains("revault_va") && e.contains("vaddr") && e.contains("stock") && e.contains("stub") && e.contains("slot"));
+    CHECK(e.contains("id") && e.contains("disasm_va") && e.contains("vaddr") && e.contains("stock") && e.contains("stub") && e.contains("slot"));
   }
   CHECK_EQ(sites, static_cast<std::size_t>(6));
   CHECK(r.summary["status"] == "patched");
@@ -289,7 +289,7 @@ TEST(TheReportStatesTheFactsTheFileAndTheTableDetermine) {
     CHECK(EncodeSlotStub(site.vaddr, kSlotArea + 8 * site.slot, &stub));
     CHECK((*e)["id"] == site.id);
     CHECK((*e)["kind"] == "inline_hook");
-    CHECK((*e)["revault_va"] == HexOf(site.vaddr + kRevaultBias));
+    CHECK((*e)["disasm_va"] == HexOf(site.vaddr + kDisasmBias));
     CHECK((*e)["file_offset"] == HexOf(SynthElf::FileOffsetOfText(site.vaddr)));
     CHECK((*e)["slot"] == site.slot);
     CHECK((*e)["slot_vaddr"] == HexOf(kSlotArea + 8 * site.slot));
@@ -308,7 +308,7 @@ TEST(TheReportStatesTheFactsTheFileAndTheTableDetermine) {
     if (e == nullptr) continue;
     CHECK((*e)["id"] == "s.credits");
     CHECK((*e)["kind"] == "credits_pair");  // the ADD word's event as well as the ADRP word's
-    CHECK((*e)["revault_va"] == HexOf(va + kRevaultBias));
+    CHECK((*e)["disasm_va"] == HexOf(va + kDisasmBias));
     CHECK((*e)["file_offset"] == HexOf(SynthElf::FileOffsetOfText(va)));
     CHECK((*e)["slot"] == 2);
     CHECK((*e)["slot_vaddr"] == HexOf(kSlotArea + 16));
@@ -351,7 +351,7 @@ TEST(TheReportStatesTheWordsOfAnExtraRowWithTheirWidthsAndAddresses) {
   w.rows[0] = w.Inline("s.join", kJoinVa, 0);
   WordPatchRow row;
   row.id = "x.zeros";
-  row.revaultVa = kGuardA + kRevaultBias;
+  row.disasmVa = kGuardA + kDisasmBias;
   row.edits.push_back({0, {0x1f, 0x00, 0x00, 0x00}, {0x01, 0x00, 0x00, 0x00}});
   const PatchResult r = w.Patch({row});
   CHECK(r.ok);
@@ -369,7 +369,7 @@ TEST(TheReportStatesTheWordsOfAnExtraRowWithTheirWidthsAndAddresses) {
     CHECK(!e.contains("kind"));  // a word patch has its own event, which has no kind
     CHECK(e["id"] == "x.zeros");
     CHECK(e["offset"] == 0);
-    CHECK(e["revault_va"] == HexOf(kGuardA + kRevaultBias));
+    CHECK(e["disasm_va"] == HexOf(kGuardA + kDisasmBias));
     CHECK(e["vaddr"] == HexOf(kGuardA));
     CHECK(e["file_offset"] == HexOf(SynthElf::FileOffsetOfText(kGuardA)));
     CHECK(e["stock_bytes"] == "1f000000");
@@ -438,13 +438,13 @@ TEST(AnAlreadyPatchedInputIsRefusedAsSuch) {
 
 TEST(ASiteOutsideTheTextIsRefusedWithTheRowId) {
   World inData;
-  inData.rows[1].sites[0].revaultVa = kDataVaddr + 0x40 + kRevaultBias;  // .data: not executable
+  inData.rows[1].sites[0].disasmVa = kDataVaddr + 0x40 + kDisasmBias;  // .data: not executable
   ExpectRefusal(inData.Patch(), "site_outside_text", "s.fail", "site in data");
   World unmapped;
-  unmapped.rows[0].sites[0].revaultVa = 0x9000000 + kRevaultBias;
+  unmapped.rows[0].sites[0].disasmVa = 0x9000000 + kDisasmBias;
   ExpectRefusal(unmapped.Patch(), "site_outside_text", "s.join", "site unmapped");
   World straddle;  // the last word of the text and the next two are not
-  straddle.rows[0].sites[0].revaultVa = (kTextEnd - 4) + kRevaultBias;
+  straddle.rows[0].sites[0].disasmVa = (kTextEnd - 4) + kDisasmBias;
   ExpectRefusal(straddle.Patch(), "site_outside_text", "s.join", "site straddles the end");
 }
 
@@ -503,7 +503,7 @@ TEST(RowsThatShareBytesAreRefusedNamingTheSecondRow) {
 
 TEST(AnAddressBelowTheBiasIsRefusedAsSuchNotAsAnUnmappedOne) {
   World w;
-  w.rows[0].sites[0].revaultVa = 0x1000;
+  w.rows[0].sites[0].disasmVa = 0x1000;
   const PatchResult r = w.Patch();
   ExpectRefusal(r, "site_outside_text", "s.join", "site below the bias");
   CHECK(r.refusal.detail.find("below the bias") != std::string::npos);
@@ -581,15 +581,15 @@ TEST(ATableOrAFileTheCodeCannotWriteIsRefusedNotGuessedAt) {
   World w;
   WordPatchRow edit;
   edit.id = "x.direct";
-  edit.revaultVa = kGuardA + kRevaultBias;
+  edit.disasmVa = kGuardA + kDisasmBias;
   edit.edits.push_back({2, {0xe0, 0x03, 0x1f, 0xaa}, {0x1f, 0x20, 0x03, 0xd5}});
   ExpectRefusal(w.Patch({edit}), "word_offset", "x.direct", "offset not a multiple of 4");
   edit.edits[0].offset = 0;
-  edit.revaultVa = 0x1000;
+  edit.disasmVa = 0x1000;
   const PatchResult below = w.Patch({edit});
   ExpectRefusal(below, "word_outside_text", "x.direct", "address below the bias");
   CHECK(below.refusal.detail.find("below the bias") != std::string::npos);
-  edit.revaultVa = kGuardA + kRevaultBias;
+  edit.disasmVa = kGuardA + kDisasmBias;
   CHECK(w.Patch({edit}).ok);
 }
 
@@ -842,7 +842,7 @@ TEST(TheEdgesOfAnExecutableSegmentAreInsideItAndTheBytesNextToThemAreNot) {
   auto edit = [&](std::uint64_t va) {
     WordPatchRow row;
     row.id = "x.edge";
-    row.revaultVa = va + kRevaultBias;
+    row.disasmVa = va + kDisasmBias;
     WordBytes stock{};
     const std::uint32_t word = w.elf.WordAt(va);
     std::memcpy(stock.data(), &word, 4);
@@ -855,14 +855,14 @@ TEST(TheEdgesOfAnExecutableSegmentAreInsideItAndTheBytesNextToThemAreNot) {
   CHECK(w.Patch({edit(kExecLoadB.vaddr)}).ok);
   // One word before the first segment and one past its end are in no segment.
   WordPatchRow before = edit(kExecLoadA.vaddr);
-  before.revaultVa -= 4;
+  before.disasmVa -= 4;
   const PatchResult beforeResult = w.Patch({before});
   ExpectRefusal(beforeResult, "word_outside_text", "x.edge", "the word before a segment");
   WordPatchRow past = edit(kExecLoadA.vaddr);
-  past.revaultVa += kExecLoadA.filesz;
+  past.disasmVa += kExecLoadA.filesz;
   ExpectRefusal(w.Patch({past}), "word_outside_text", "x.edge", "the word past a segment");
   WordPatchRow pastB = edit(kExecLoadB.vaddr);
-  pastB.revaultVa += 4;
+  pastB.disasmVa += 4;
   ExpectRefusal(w.Patch({pastB}), "word_outside_text", "x.edge", "the word past a one-word segment");
   // An inline site is three words: it fits in the 0x100-byte segment at its start and at its end, not one word later.
   for (const std::uint64_t va : {kExecLoadA.vaddr, kExecLoadA.vaddr + kExecLoadA.filesz - 12}) {
@@ -877,7 +877,7 @@ TEST(TheEdgesOfAnExecutableSegmentAreInsideItAndTheBytesNextToThemAreNot) {
   {  // the third word is past the segment, so its stock word is not in the file: the row is written by hand
     const std::uint64_t va = kExecLoadA.vaddr + kExecLoadA.filesz - 8;
     Row far{"s.far", "s.far", RowKind::kInlineHook, "handler", 3, 1, {}};
-    far.sites[0] = {va + kRevaultBias, 3, {tooLate.elf.WordAt(va), tooLate.elf.WordAt(va + 4), 0}};
+    far.sites[0] = {va + kDisasmBias, 3, {tooLate.elf.WordAt(va), tooLate.elf.WordAt(va + 4), 0}};
     tooLate.rows.push_back(far);
   }
   tooLate.Rebind();
@@ -987,13 +987,13 @@ TEST(AGnuRelroThatEndsExactlyAtTheSlotAreaLeavesItFree) {
 
 TEST(AnAddressExactlyAtTheBiasIsInNoSegmentRatherThanBelowTheBias) {
   World w;
-  w.rows[0].sites[0].revaultVa = kRevaultBias;
+  w.rows[0].sites[0].disasmVa = kDisasmBias;
   PatchResult r = w.Patch();
   ExpectRefusal(r, "site_outside_text", "s.join", "site at the bias");
   CHECK(r.refusal.detail.find("not in an executable segment") != std::string::npos);
   WordPatchRow edit;
   edit.id = "x.at_bias";
-  edit.revaultVa = kRevaultBias;
+  edit.disasmVa = kDisasmBias;
   edit.edits.push_back({0, {0, 0, 0, 0}, {0x1f, 0x20, 0x03, 0xd5}});
   World v;
   r = v.Patch({edit});
@@ -1039,7 +1039,7 @@ TEST(WordsOfTwoRowsAtTheSameAddressAreOrderedByIdAndRowsByAddress) {
   auto row = [&](const char* id, std::uint64_t va, std::uint32_t offset) {
     WordPatchRow r;
     r.id = id;
-    r.revaultVa = va + kRevaultBias;
+    r.disasmVa = va + kDisasmBias;
     r.edits.push_back({offset, bytesAt(va + offset), nop});
     return r;
   };
@@ -1067,7 +1067,7 @@ TEST(WordsThatShareOneByteCollideWhetherOrNotTheyAreAligned) {
   auto row = [&](const char* id, std::uint64_t byteOffset) {
     WordPatchRow r;
     r.id = id;
-    r.revaultVa = kGuardA + byteOffset + kRevaultBias;
+    r.disasmVa = kGuardA + byteOffset + kDisasmBias;
     WordBytes stock{};
     std::memcpy(stock.data(), w.elf.bytes.data() + base + byteOffset, 4);
     r.edits.push_back({0, stock, {0x1f, 0x20, 0x03, 0xd5}});
@@ -1085,7 +1085,7 @@ TEST(AWordNextToAClaimedRangeOnEitherSideIsNotAnOverlap) {
   auto edit = [&](std::uint64_t va) {
     WordPatchRow r;
     r.id = "x.next";
-    r.revaultVa = va + kRevaultBias;
+    r.disasmVa = va + kDisasmBias;
     WordBytes stock{};
     const std::uint32_t v = w.elf.WordAt(va);
     std::memcpy(stock.data(), &v, 4);
@@ -1118,7 +1118,7 @@ std::uint64_t VaOfFileOffset(std::uint64_t fileOffset) {
 WordPatchRow WordRowAtFileOffset(const World& w, const std::string& id, std::uint64_t fileOffset) {
   WordPatchRow r;
   r.id = id;
-  r.revaultVa = VaOfFileOffset(fileOffset) + kRevaultBias;
+  r.disasmVa = VaOfFileOffset(fileOffset) + kDisasmBias;
   WordEdit e;
   std::memcpy(e.stock.data(), w.elf.bytes.data() + fileOffset, 4);
   e.word = e.stock;
@@ -1218,7 +1218,7 @@ TEST(TheFixtureLoadsAndItsWordsAreBytesInMemoryOrder) {
   CHECK_EQ(rows.size(), static_cast<std::size_t>(1));
   if (rows.size() != 1) return;
   CHECK_EQ(rows[0].id, std::string("x.example_guard"));
-  CHECK_EQ(rows[0].revaultVa, static_cast<std::uint64_t>(0x1500010));
+  CHECK_EQ(rows[0].disasmVa, static_cast<std::uint64_t>(0x1500010));
   CHECK_EQ(rows[0].edits.size(), static_cast<std::size_t>(2));
   CHECK_EQ(rows[0].edits[1].offset, 8u);
   // "1f2003d5" is the NOP 0xd503201f; "e0031faa" is `mov x0, xzr`, 0xaa1f03e0.
@@ -1298,14 +1298,14 @@ TEST(TheBuildIdDoesNotDependOnKeyOrderSpacingOrRowOrder) {
   // Two rows, written two ways: different key order, spacing and row order.
   const std::string secondStockHex = [&] { char b[16]; const std::uint32_t v = w.elf.WordAt(0x1400020); std::snprintf(b, sizeof b, "%02x%02x%02x%02x", v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, v >> 24); return std::string(b); }();
   const std::string first = R"({"format":"nevr-libr15-extra-rows","version":1,"stock_build_id":"b243509c08ce677aeb95fa348016949b3fc45230","rows":[
-    {"id":"x.a","kind":"word_patch","revault_va":"0x1500010","words":[{"offset":0,"stock_bytes":"e0031faa","new_bytes":"1f2003d5"}]},
-    {"id":"x.b","kind":"word_patch","revault_va":"0x1500020","words":[{"offset":0,"stock_bytes":")" + secondStockHex + R"(","new_bytes":"1f2003d5"}]}]})";
+    {"id":"x.a","kind":"word_patch","disasm_va":"0x1500010","words":[{"offset":0,"stock_bytes":"e0031faa","new_bytes":"1f2003d5"}]},
+    {"id":"x.b","kind":"word_patch","disasm_va":"0x1500020","words":[{"offset":0,"stock_bytes":")" + secondStockHex + R"(","new_bytes":"1f2003d5"}]}]})";
   const std::string second = R"({
       "rows" : [
          { "words" : [ { "new_bytes" : "1f2003d5", "stock_bytes" : ")" + secondStockHex + R"(", "offset" : 0 } ],
-           "revault_va" : "0x1500020", "kind" : "word_patch", "id" : "x.b" },
+           "disasm_va" : "0x1500020", "kind" : "word_patch", "id" : "x.b" },
          { "words" : [ { "new_bytes" : "1f2003d5", "offset" : 0, "stock_bytes" : "e0031faa" } ],
-           "revault_va" : "0x1500010", "id" : "x.a", "kind" : "word_patch" } ],
+           "disasm_va" : "0x1500010", "id" : "x.a", "kind" : "word_patch" } ],
       "stock_build_id" : "b243509c08ce677aeb95fa348016949b3fc45230", "version" : 1, "format" : "nevr-libr15-extra-rows" })";
   std::vector<WordPatchRow> a, b;
   Refusal refusal;
@@ -1368,13 +1368,13 @@ TEST(EachRuleOfTheExtraRowsFormatIsRefusedInItsOwnCase) {
       {"id with a space", "\"x.example_guard\"", "\"x.a b\"", "extra_rows_id", "x.a b"},
       {"kind", "\"kind\": \"word_patch\"", "\"kind\": \"kWordPatch\"", "extra_rows_kind", "x.example_guard"},
       {"kind inline hook", "\"kind\": \"word_patch\"", "\"kind\": \"inline_hook\"", "extra_rows_kind", "x.example_guard"},
-      {"revault_va not a multiple of 4", "\"0x1500010\"", "\"0x1500012\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va upper case", "\"0x1500010\"", "\"0x1500A10\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va without 0x", "\"0x1500010\"", "\"1500010\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va with a capital X", "\"0x1500010\"", "\"0X1500010\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va with another prefix", "\"0x1500010\"", "\"zz1500010\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va leading zero", "\"0x1500010\"", "\"0x01500010\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va is a number", "\"0x1500010\"", "22020112", "extra_rows_revault_va", "x.example_guard"},
+      {"disasm_va not a multiple of 4", "\"0x1500010\"", "\"0x1500012\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va upper case", "\"0x1500010\"", "\"0x1500A10\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va without 0x", "\"0x1500010\"", "\"1500010\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va with a capital X", "\"0x1500010\"", "\"0X1500010\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va with another prefix", "\"0x1500010\"", "\"zz1500010\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va leading zero", "\"0x1500010\"", "\"0x01500010\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va is a number", "\"0x1500010\"", "22020112", "extra_rows_disasm_va", "x.example_guard"},
       {"offset not a multiple of 4", "\"offset\": 8", "\"offset\": 6", "extra_rows_offset", "x.example_guard"},
       {"offsets out of order", "\"offset\": 0, \"stock_bytes\": \"e0031faa\"", "\"offset\": 12, \"stock_bytes\": \"e0031faa\"", "extra_rows_offset", "x.example_guard"},
       {"offsets repeat", "\"offset\": 8", "\"offset\": 0", "extra_rows_offset", "x.example_guard"},
@@ -1394,15 +1394,15 @@ TEST(EachRuleOfTheExtraRowsFormatIsRefusedInItsOwnCase) {
       {"a word below the bias", "\"0x1500010\"", "\"0x10\"", "word_outside_text", "x.example_guard"},
       {"a word in data", "\"0x1500010\"", "\"0x1503040\"", "word_outside_text", "x.example_guard"},
       {"a word past the text", "\"0x1500010\"", "\"0x1502000\"", "word_outside_text", "x.example_guard"},
-      // revault_va: the prefix alone and one digit too many reach std::stoull unless refused first; "0x0" is a valid
+      // disasm_va: the prefix alone and one digit too many reach std::stoull unless refused first; "0x0" is a valid
       // spelling (the patcher refuses the address, below the bias); the top of the range keeps room for an offset.
-      {"revault_va is only the prefix", "\"0x1500010\"", "\"0x\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va has 17 digits", "\"0x1500010\"", "\"0x10000000000000000\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va with another first character", "\"0x1500010\"", "\"1x1500010\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va 0x0 parses", "\"0x1500010\"", "\"0x0\"", "word_outside_text", "x.example_guard"},
-      {"revault_va 0xffffffffffffff00", "\"0x1500010\"", "\"0xffffffffffffff00\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va 0xfffffffffffff000", "\"0x1500010\"", "\"0xfffffffffffff000\"", "extra_rows_revault_va", "x.example_guard"},
-      {"revault_va 0xffffffffffffeffc is the highest accepted", "\"0x1500010\"", "\"0xffffffffffffeffc\"", "word_outside_text", "x.example_guard"},
+      {"disasm_va is only the prefix", "\"0x1500010\"", "\"0x\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va has 17 digits", "\"0x1500010\"", "\"0x10000000000000000\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va with another first character", "\"0x1500010\"", "\"1x1500010\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va 0x0 parses", "\"0x1500010\"", "\"0x0\"", "word_outside_text", "x.example_guard"},
+      {"disasm_va 0xffffffffffffff00", "\"0x1500010\"", "\"0xffffffffffffff00\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va 0xfffffffffffff000", "\"0x1500010\"", "\"0xfffffffffffff000\"", "extra_rows_disasm_va", "x.example_guard"},
+      {"disasm_va 0xffffffffffffeffc is the highest accepted", "\"0x1500010\"", "\"0xffffffffffffeffc\"", "word_outside_text", "x.example_guard"},
       {"stock build id a number", "\"b243509c08ce677aeb95fa348016949b3fc45230\"", "5", "extra_rows_stock_build_id", ""},
       {"id a number", "\"x.example_guard\"", "5", "extra_rows_id", ""},
       {"kind a number", "\"word_patch\"", "5", "extra_rows_kind", "x.example_guard"},
@@ -1410,7 +1410,7 @@ TEST(EachRuleOfTheExtraRowsFormatIsRefusedInItsOwnCase) {
       {"first offset negative", "\"offset\": 0, \"stock_bytes\": \"e0031faa\"", "\"offset\": -4, \"stock_bytes\": \"e0031faa\"", "extra_rows_offset", "x.example_guard"},
       {"offset 4092 is the last allowed", "\"offset\": 8", "\"offset\": 4092", "word_stock_mismatch", "x.example_guard"},
       {"id with the characters at both ends of the alphabet", "\"x.example_guard\"", "\"x.0z\"", "(accepted)", ""},
-      {"empty rows", "\"revault_va\": \"0x1500010\",", "\"revault_va\": \"0x1500010\",", "", ""},  // replaced below
+      {"empty rows", "\"disasm_va\": \"0x1500010\",", "\"disasm_va\": \"0x1500010\",", "", ""},  // replaced below
   };
   for (const RuleCase& c : cases) {
     World w;
@@ -1458,7 +1458,7 @@ TEST(TheRulesThatNeedMoreThanOneRowOrManyWords) {
   auto row = [&](const std::string& id, const std::string& va, unsigned words) {
     std::string w;
     for (unsigned i = 0; i < words; ++i) w += (i ? "," : "") + word(4 * i);
-    return "{\"id\":\"" + id + "\",\"kind\":\"word_patch\",\"revault_va\":\"" + va + "\",\"words\":[" + w + "]}";
+    return "{\"id\":\"" + id + "\",\"kind\":\"word_patch\",\"disasm_va\":\"" + va + "\",\"words\":[" + w + "]}";
   };
   World w;
   std::vector<WordPatchRow> rows;
@@ -1494,7 +1494,7 @@ TEST(TheRulesThatNeedMoreThanOneRowOrManyWords) {
   CHECK_EQ(refusal.code, std::string("extra_rows_json"));
   // A key repeated in a row AFTER the row held nested objects (the words): the scope of the repeat check is the
   // object being read, not the first one.
-  const std::string repeated = head + "[{\"id\":\"x.a\",\"kind\":\"word_patch\",\"revault_va\":\"0x1500100\",\"words\":[" + word(0) + "],\"kind\":\"word_patch\"}]}";
+  const std::string repeated = head + "[{\"id\":\"x.a\",\"kind\":\"word_patch\",\"disasm_va\":\"0x1500100\",\"words\":[" + word(0) + "],\"kind\":\"word_patch\"}]}";
   CHECK(!Parse(repeated, w, &rows, &refusal));
   CHECK_EQ(refusal.code, std::string("extra_rows_duplicate_key"));
   // The same key in two different rows is fine.
@@ -1516,7 +1516,7 @@ TEST(TheRulesThatNeedMoreThanOneRowOrManyWords) {
   CHECK_EQ(refusal.code, std::string("extra_rows_missing_field"));
   CHECK(!Parse(head + "\"x\"}", w, &rows, &refusal));
   CHECK_EQ(refusal.code, std::string("extra_rows_missing_field"));
-  const std::string rowHead = head + "[{\"id\":\"x.a\",\"kind\":\"word_patch\",\"revault_va\":\"0x1500100\",\"words\":";
+  const std::string rowHead = head + "[{\"id\":\"x.a\",\"kind\":\"word_patch\",\"disasm_va\":\"0x1500100\",\"words\":";
   CHECK(!Parse(rowHead + "{\"k\":" + word(0) + "}}]}", w, &rows, &refusal));
   CHECK_EQ(refusal.code, std::string("extra_rows_words"));
   CHECK_EQ(refusal.id, std::string("x.a"));
@@ -1544,7 +1544,7 @@ TEST(AWordInBytesAnotherRowWritesIsRefusedNamingTheSecondRow) {
   const std::string head = R"({"format":"nevr-libr15-extra-rows","version":1,"stock_build_id":"b243509c08ce677aeb95fa348016949b3fc45230","rows":[)";
   std::vector<WordPatchRow> rows;
   Refusal refusal;
-  const std::string overPublic = head + R"({"id":"x.over_public","kind":"word_patch","revault_va":"0x1500200","words":[{"offset":4,"stock_bytes":")" + bytesAt(kJoinVa + 4) +
+  const std::string overPublic = head + R"({"id":"x.over_public","kind":"word_patch","disasm_va":"0x1500200","words":[{"offset":4,"stock_bytes":")" + bytesAt(kJoinVa + 4) +
                                  R"(","new_bytes":"1f2003d5"}]}]})";
   CHECK(Parse(overPublic, w, &rows, &refusal));
   PatchResult r = w.Patch(rows);
@@ -1554,23 +1554,23 @@ TEST(AWordInBytesAnotherRowWritesIsRefusedNamingTheSecondRow) {
   CHECK(r.refusal.detail.find("s.join") != std::string::npos);
   CHECK(r.refusal.detail.rfind("offset 4: ", 0) == 0);  // the detail names the word's offset in the row first
   // The credits pair's ADD word.
-  const std::string overCredits = head + R"({"id":"x.over_credits","kind":"word_patch","revault_va":"0x1500408","words":[{"offset":0,"stock_bytes":")" + bytesAt(kAdd0) +
+  const std::string overCredits = head + R"({"id":"x.over_credits","kind":"word_patch","disasm_va":"0x1500408","words":[{"offset":0,"stock_bytes":")" + bytesAt(kAdd0) +
                                   R"(","new_bytes":"1f2003d5"}]}]})";
   CHECK(Parse(overCredits, w, &rows, &refusal));
   r = w.Patch(rows);
   CHECK_EQ(r.refusal.code, std::string("word_overlap"));
   CHECK(r.refusal.detail.find("s.credits") != std::string::npos);
   // Another extra row: x.second starts on the fixture's second word.
-  const std::string overExtra = head + R"({"id":"x.first","kind":"word_patch","revault_va":"0x1500010","words":[{"offset":0,"stock_bytes":"e0031faa","new_bytes":"1f2003d5"},{"offset":8,"stock_bytes":"00010054","new_bytes":"1f2003d5"}]},)" +
-                                R"({"id":"x.second","kind":"word_patch","revault_va":"0x1500018","words":[{"offset":0,"stock_bytes":"00010054","new_bytes":"1f2003d5"}]}]})";
+  const std::string overExtra = head + R"({"id":"x.first","kind":"word_patch","disasm_va":"0x1500010","words":[{"offset":0,"stock_bytes":"e0031faa","new_bytes":"1f2003d5"},{"offset":8,"stock_bytes":"00010054","new_bytes":"1f2003d5"}]},)" +
+                                R"({"id":"x.second","kind":"word_patch","disasm_va":"0x1500018","words":[{"offset":0,"stock_bytes":"00010054","new_bytes":"1f2003d5"}]}]})";
   CHECK(Parse(overExtra, w, &rows, &refusal));
   r = w.Patch(rows);
   CHECK_EQ(r.refusal.code, std::string("word_overlap"));
   CHECK_EQ(r.refusal.id, std::string("x.second"));
   CHECK(r.refusal.detail.find("x.first") != std::string::npos);
   // Neighbouring words that do not share a byte are fine.
-  const std::string apart = head + R"({"id":"x.first","kind":"word_patch","revault_va":"0x1500010","words":[{"offset":0,"stock_bytes":"e0031faa","new_bytes":"1f2003d5"}]},)" +
-                            R"({"id":"x.next","kind":"word_patch","revault_va":"0x1500014","words":[{"offset":0,"stock_bytes":")" + bytesAt(0x1400014) + R"(","new_bytes":"1f2003d5"}]}]})";
+  const std::string apart = head + R"({"id":"x.first","kind":"word_patch","disasm_va":"0x1500010","words":[{"offset":0,"stock_bytes":"e0031faa","new_bytes":"1f2003d5"}]},)" +
+                            R"({"id":"x.next","kind":"word_patch","disasm_va":"0x1500014","words":[{"offset":0,"stock_bytes":")" + bytesAt(0x1400014) + R"(","new_bytes":"1f2003d5"}]}]})";
   CHECK(Parse(apart, w, &rows, &refusal));
   CHECK(w.Patch(rows).ok);
 }
@@ -2341,8 +2341,8 @@ TEST(NoExtraRowsFileCanMakeTheCommandLineThrow) {
     const char* reason;
   };
   const Case cases[] = {
-      {"revault_va is only the prefix", "\"0x1500010\"", "\"0x\"", "extra_rows_revault_va"},
-      {"revault_va has 17 digits", "\"0x1500010\"", "\"0x10000000000000000\"", "extra_rows_revault_va"},
+      {"disasm_va is only the prefix", "\"0x1500010\"", "\"0x\"", "extra_rows_disasm_va"},
+      {"disasm_va has 17 digits", "\"0x1500010\"", "\"0x10000000000000000\"", "extra_rows_disasm_va"},
       {"stock_build_id is a number", "\"b243509c08ce677aeb95fa348016949b3fc45230\"", "5", "extra_rows_stock_build_id"},
       {"id is a number", "\"x.example_guard\"", "5", "extra_rows_id"},
       {"kind is a number", "\"word_patch\"", "5", "extra_rows_kind"},

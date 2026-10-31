@@ -230,7 +230,7 @@ int main() {
   const std::string dir = tmpl;
   q15t::SetCustCtxDirForTest(dir.c_str());
 
-  // the pinned addresses (R0_readelf_r.txt lines 114546, 107763, 129938; ReVault VA - 0x100000; RegisterRTLayout 0x18829c4)
+  // the pinned addresses (R0_readelf_r.txt lines 114546, 107763, 129938; disassembly VA - 0x100000; RegisterRTLayout 0x18829c4)
   {
     const q15t::CustCtxAddrs& p = q15t::kCustCtxPinned;
     CHECK(p.got_load == 0x36cf6f0 && p.fn_load == 0x1247d90 && p.got_destroy == 0x36c22f8 && p.fn_destroy == 0x12492fc &&

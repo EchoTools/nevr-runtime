@@ -1,7 +1,7 @@
 # Mic provider: fixing one-way voice under nEVR (GH #15)
 
 2026-09-21, Claude + Andrew. Design and investigation record, written so an
-interruption only costs a `git log`/ReVault read, not a re-derivation.
+interruption only costs a `git log`/a disassembly read, not a re-derivation.
 
 Status: built. `src/runtime/patch/mic_provider.{h,cpp}` is installed through the
 `CSysDLL_GetSymbol` hook in `src/runtime/lifecycle/initialize.cpp`, with unit tests in
@@ -90,7 +90,7 @@ matching constants) — same shape, different numbers. The Android structure
 is the model to follow; the PC constants are what to report.
 
 **Caveat on this reference** (Andrew, 2026-09-21): the Quest/Android side of
-this ReVault project may have address/symbol glitches — confirmed one
+this disassembly project may have address/symbol glitches — confirmed one
 concretely: `libpnsovr.so`'s symbol table does not line up with
 `libpnsrad.so`'s (`libpnsovr.so 0x3066c8` resolves to an unrelated OpenSSL
 function, not a mic export). Treat the `libpnsrad.so` struct layout as a
@@ -100,7 +100,7 @@ independent confirmation on the PC side.
 ## `pnsovr.dll` — read for contract only, not to be reactivated
 
 `pnsovr.dll`'s `Mic*`/`Voip*` are thin wrappers over `LibOVRPlatform64_1.dll`
-(imported `ovr_*` symbols — that DLL is not yet in ReVault, Andrew is adding
+(imported `ovr_*` symbols — that DLL is not yet in the disassembly, Andrew is adding
 it). Read for two reasons only:
 
 - **`MicRead`'s contract** (`ovr_Microphone_GetPCM`, passthrough).
@@ -147,7 +147,7 @@ WASAPI capture:
    The same trap applies to `0x1400eaef0`, the game's one symbol-resolution
    function, used both for module DLL loading and for provider dispatch (the
    function `NRadEngine::CPlatformService::MicRead` calls to resolve
-   `"MicRead"` on a provider handle, per the ReVault trace above). MinHook
+   `"MicRead"` on a provider handle, per the disassembly trace above). MinHook
    allows one detour per target, so `CSysDLL_GetSymbolHook`
    (`src/runtime/lifecycle/initialize.cpp`) is the only detour on it and also
    carries the server-only RadPluginShutdown guard. The mic provider needs the
@@ -224,15 +224,15 @@ it, not a complication.
 
 - `CaptureVoiceIntoSlotBuffer`'s purpose (spectator/replay/analytics?) —
   worth answering eventually, not before shipping the capture fix.
-- The ReVault reconstruction carried **four different class names**
+- The disassembly reconstruction carried **four different class names**
   (`CNSProvider`, `CPlatformService`, `CPlatformServiceProvider`,
   `CPlatformCS`) for the same function across different scratch files.
-  Corrected in ReVault to the earliest-established, most-cited name
+  Corrected in the disassembly to the earliest-established, most-cited name
   (`CPlatformService`, per `NRadEngine/Game/CPlatformService.cpp` in
   `echovr-reconstruction`); the inconsistency itself was not otherwise
   resolved and may recur elsewhere in that tree.
 
-## ReVault state (as of this doc)
+## Disassembly state (as of this doc)
 
 Renames/comments/tags written back 2026-09-21, all in project `echovr`:
 

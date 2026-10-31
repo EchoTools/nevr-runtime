@@ -325,7 +325,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 ## Running the server (Linux / Wine)
 
 - **Never run against the owner's install.** On the owner's machine the main checkout's
-  `echovr/` → `extras/ready-at-dawn-echo-arena` → `/mnt/games/CustomLibrary/ready-at-dawn-echo-arena`
+  `echovr/` → `extras/ready-at-dawn-echo-arena` → the owner's game library outside the repo
   (two hops) is the owner's real game library. AGENTS.md "The game install": no agent runs a
   deploy script or writes into it. Every run uses its own throwaway copy of the
   pristine copy, made with `cp -a --reflink=auto`, deleted when the run ends, with the
@@ -422,33 +422,32 @@ git. Trust the issues rather than trusting this section to stay current.
 
 ## Tooling
 
-- **ReVault is the intended source of truth for binary analysis** (maintainers only;
-  AGENTS.md "ReVault"). Search the WHOLE project — `revault_binaries(project)`, then
+- **The disassembly is the intended source of truth for binary analysis** (maintainers only;
+  AGENTS.md "Reverse engineering"). Search the WHOLE project — `disasm_binaries(project)`, then
   every binary in the list (about 567 script DLLs plus the exe, `pnsrad*`, `pnsovr` and the
   Quest libraries) — and report `searched N of N binaries in project <name>: hits in
   <binaries>`. A one-binary negative is not a finding. Use it before
-  Ghidra, before guessing: `revault fn show <0xVA> --binary echovr.exe|pnsrad.dll`,
-  `revault fn callers/callees`, `revault search code`, `revault xref to`.
-  If ReVault does not have an address, **say so — do not guess.**
-- **ReVault was measurably UNAVAILABLE on 2026-07-28 — budget for that** (maintainers only). Both
+  Ghidra, before guessing: the function at `<0xVA>` in `echovr.exe` or `pnsrad.dll` (its
+  disassembly and decompilation), its callers and callees, a code search, and the cross-references to an address.
+  If the disassembly does not have an address, **say so — do not guess.**
+- **The disassembly was measurably UNAVAILABLE on 2026-07-28 — budget for that** (maintainers only). Both
   paths failed and the MCP server is NOT a working fallback for the CLI's
   `DATABASE_URL` requirement:
   - CLI → `Error: DATABASE_URL is required (set via --database-url or
     DATABASE_URL env var)`
-  - MCP → `Cannot read binary content; run 'revault store status' on the server
+  - MCP → `Cannot read binary content; run 'store status' on the server
     to check managed store health`
-  - There is no `disasm` subcommand (`revault disasm` → `unrecognized
+  - There is no `disasm` subcommand (`<tool> disasm` → `unrecognized
     subcommand`; nearest match is `diagnose`).
 
-  In that state ReVault cannot answer a raw-byte question at all. **Working
+  In that state the disassembly cannot answer a raw-byte question at all. **Working
   alternative, actually used:** parse the PE section table of
   `echovr/bin/win10/echovr.exe` directly to convert RVA → file offset, then read
-  the bytes from the file. Re-test ReVault before relying on it; do not assume
+  the bytes from the file. Re-test the disassembly before relying on it; do not assume
   either path works because the primer lists it.
 - `echovr.exe` ImageBase is `0x140000000`.
-- Also search before building: `~/src/echovr-reconstruction`, `~/src/nakama`, and git
-  history (`~/src/evr-reconstruction` and `~/src/evrFileTools` do not exist on this
-  machine: `ls` fails). The answer usually already exists (maintainers only).
+- Also search before building: the public `echovr-reconstruction` and `nakama` repositories
+  (when you have them) and git history. The answer usually already exists (maintainers only).
 
 ## Repo and git hazards
 
@@ -459,8 +458,8 @@ git. Trust the issues rather than trusting this section to stay current.
   branch and origin branch in the same turn the PR merges or closes. Update with
   `git fetch` + `git merge origin/main`, never `git pull`; no rebase, amend or force-push
   on a pushed branch. Scratch lives under `~/src/nevr-runtime-work/<agent>/` (maintainers only); keep a
-  ledger row for every worktree, branch and scratch file you create in
-  `~/.local/share/repo-hygiene/nevr-runtime-ledger.md` (maintainers only).
+  ledger row for every worktree, branch and scratch file you create in the ledger file
+  `REAP_LEDGER` names (maintainers only).
 - **Maintainers only.** Push branches by explicit refspec only. Never `git push --mirror`, and never push a raw SHA from a maintainer clone. Before any push, run the push-time check in the maintainers' private notes. Never push, merge or rebase from local `main` without the owner's per-instance instruction.
 - `.claude/` is gitignored except the files `.gitignore` negates: the merge-cleanup skill, the nevr-work skill and this primer. Track nothing else under it without the owner's word. Maintainer-private material never goes in this repo.
 - `extern/evr-test-harness` is **EXCISED** (commits 1c7aea0 + 93ce548; the
@@ -470,7 +469,7 @@ git. Trust the issues rather than trusting this section to stay current.
   (e2e, multiplayer, ping_latency, plugin, simple, telemetry in tests/system;
   superhyperturbo in tests/plugins) are gone. The ground-truth suites remain and
   both Go modules `go vet ./...` clean. The Go suites are separate recipes, not part of
-  `just verify`; the real harness lives at `~/src/evr-test-harness` but is not wired in (maintainers only).
+  `just verify`; the real harness is kept outside this repo and is not wired in (maintainers only).
 - `extern/protobuf` is **not a submodule and no longer a gitlink either**. The
   stale `160000` gitlink was removed from the index by `8cf0b6c` (it blocked
   `git add`/`commit` in a worktree). It is now an ordinary untracked directory,
@@ -567,7 +566,7 @@ adds: read the failing program's own logs first):
 
 ## You MUST
 
-1. Search before you build. ReVault, the reconstruction repos, and git history
+1. Search before you build. The disassembly, the reconstruction repos, and git history
    first. Dispatch subagents in parallel for independent searches rather than
    grinding sequentially [AGENTS.md "Continuity"].
 2. Plan before non-trivial code, with at least two self-review passes and a
@@ -580,7 +579,7 @@ adds: read the failing program's own logs first):
 5. Use `Log(EchoVR::LogLevel::Info, ...)` from `src/core/logging.h` for logging.
    Note that `FatalError()` does not reliably terminate — see the primer.
 6. Leave the tree better than you found it. Rename the `unknown_0x*` you
-   identified in ReVault. Commit the finding. Instrumentation added during an
+   identified in the disassembly. Commit the finding. Instrumentation added during an
    investigation stays.
 7. Resolve, inside the dispatched scope, every question a measurement or a
    document can answer — run the command, read the file, state the answer.

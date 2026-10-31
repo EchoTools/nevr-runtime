@@ -176,7 +176,7 @@ TEST(EveryRowsStockWordsAreWhatTheStockFileHoldsAtThatAddress) {
     for (std::size_t s = 0; s < kRows[r].siteCount; ++s) {
       const Site& site = kRows[r].sites[s];
       for (std::size_t w = 0; w < site.wordCount; ++w) {
-        const std::uint64_t vaddr = site.revaultVa - kRevaultBias + 4 * w;
+        const std::uint64_t vaddr = site.disasmVa - kDisasmBias + 4 * w;
         if (stock.Word(vaddr) != site.words[w]) {
           std::fprintf(stderr, "  %s site %zu word %zu at %s: file %08x, table %08x\n", kRows[r].id, s, w, Hex(vaddr).c_str(),
                        stock.Word(vaddr), site.words[w]);

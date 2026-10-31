@@ -73,7 +73,7 @@ inline Check CheckRequest(const Request& request) {
 
 // ---- finding the actor ----
 
-// The gamespace's actor table (ReVault echovr.exe 0x14050fb60 and the modkit author's findings, confirmed by a live run
+// The gamespace's actor table (echovr.exe 0x14050fb60 and the modkit author's findings, confirmed by a live run
 // in the PR that introduced patch/invite_choices.h): gs+0x370 -> table; table+0x80 -> an array of 8-byte actor names;
 // table+0xa8 -> how many.
 inline constexpr size_t kSpaceActorTableOffset = 0x370;

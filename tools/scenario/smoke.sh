@@ -8,15 +8,14 @@
 #   2. the mingw-scenario control endpoint logs its port (the fire/inject path is live)
 #   3. one fire -> expect_log slot=NN round-trip (a fire actually drives the game)
 #
-# Run by a user systemd timer (tools/scenario/systemd/); see the unit files. On a genuine failure it
-# bonks Andrew, couriers spritz and leaves a non-zero record in $STATUS_DIR. It never fails silently.
+# On a genuine failure it prints the reason on standard error, exits non-zero and leaves a non-zero
+# record in $STATUS_DIR. It never fails silently.
 #
-# The timer runs it from a worktree dedicated to it (the unit's WorkingDirectory), and the first thing
-# it does is fast-forward that worktree to origin/main and re-exec itself from the updated file, so the
-# timer never runs a dev branch or a stale checkout. A tree it cannot bring to exactly origin/main on
-# its own branch (dirty, diverged, ahead, detached, another branch, no route to origin within the
-# fetch timeout) fails loudly with the alarm; the smoke never runs on stale code.
-# The one-time setup of that worktree is in tools/scenario/systemd/README.md.
+# A scheduler runs it from a worktree dedicated to it (the current directory's checkout), and the first
+# thing it does is fast-forward that worktree to origin/main and re-exec itself from the updated file,
+# so a scheduled run never uses a dev branch or a stale checkout. A tree it cannot bring to exactly
+# origin/main on its own branch (dirty, diverged, ahead, detached, another branch, no route to origin
+# within the fetch timeout) fails loudly; the smoke never runs on stale code.
 #
 # The record ($STATUS_DIR/last.json and the run's result.json) carries the load average at the run's
 # start and the timestamp of every NetGame state change; the in-game wait is 600 s (smoke.yaml). A pass
@@ -24,9 +23,9 @@
 #
 # Exit codes: 0 = the three checks passed, 1 = the client ran and a check FAILED (loud), 2 = the run
 # could not start (the game-run lock was busy: another launch/verify run in progress) -- SKIPPED, not
-# a failure. A busy lock is contention, not a harness break, so it never fires the alarm.
+# a failure. A busy lock is contention, not a harness break, so it is recorded as SKIP.
 #
-#   smoke.sh [--no-sync] [--sync-only] [--no-build] [--dry-run-alarm] [--alarm-dry-run REASON]
+#   smoke.sh [--no-sync] [--sync-only] [--no-build]
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -38,7 +37,6 @@ DLL="$REPO/build/mingw-scenario/bin/BugSplat64.dll"
 source "$REPO/tools/lib/work_root.sh"
 STATUS_DIR="${NEVR_SMOKE_STATUS_DIR:-$NEVR_WORK_ROOT/scenario-smoke}"
 RUN_DIR="$STATUS_DIR/run"
-ALARM_FROM="scenario-smoke"
 GAME_RUN_LOCK="${NEVR_LAUNCH_LOCK:-$NEVR_WORK_ROOT/launch-client.lock}"
 SLOW_SECONDS=300
 # The branch this worktree exists to track origin/main on; any other state is a dev tree.
@@ -49,44 +47,16 @@ SYNC=1
 SYNC_ONLY=0
 SYNCED=0
 BUILD=1
-DRY_RUN_ALARM=0
-ALARM_DRY_RUN_REASON=""
-USAGE="smoke.sh [--no-sync] [--sync-only] [--no-build] [--dry-run-alarm] [--alarm-dry-run REASON]"
+USAGE="smoke.sh [--no-sync] [--sync-only] [--no-build]"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-sync) SYNC=0; shift ;;
     --sync-only) SYNC_ONLY=1; shift ;;
     --synced) SYNCED=1; shift ;;
     --no-build) BUILD=0; shift ;;
-    --dry-run-alarm) DRY_RUN_ALARM=1; shift ;;
-    --alarm-dry-run) ALARM_DRY_RUN_REASON="${2:?--alarm-dry-run needs a reason string}"; shift 2 ;;
     *) echo "unknown argument: $1 (usage: $USAGE)" >&2; exit 2 ;;
   esac
 done
-
-# The alarm: bonk Andrew (persistent desktop notification; best-effort on a headless timer) and
-# courier spritz (file mailbox; delivered). A failed alarm is reported, never swallowed: the smoke
-# already failed, and its non-zero record is the source of truth.
-alarm() {
-  local reason="$1"
-  if ! bonk --from "$ALARM_FROM" "NEVR scenario smoke FAILED: $reason" 2>&1; then
-    echo "ALARM: bonk Andrew failed (rc=$?); the failure is still recorded in $STATUS_DIR/last.txt" >&2
-  fi
-  if ! courier send --to spritz --from "$ALARM_FROM" --msg "NEVR scenario smoke FAILED: $reason" 2>&1; then
-    echo "ALARM: courier to spritz failed (rc=$?); the failure is still recorded in $STATUS_DIR/last.txt" >&2
-  fi
-}
-
-# --alarm-dry-run prints the exact alarm commands the failure path would run, and fires nothing. It
-# proves the alarm wiring (bonk Andrew + courier spritz) without a game run.
-if [[ -n "$ALARM_DRY_RUN_REASON" ]]; then
-  echo "=== alarm dry-run (fires nothing) ==="
-  echo "would bonk:    bonk --from $ALARM_FROM \"NEVR scenario smoke FAILED: $ALARM_DRY_RUN_REASON\""
-  echo "would courier: courier send --to spritz --from $ALARM_FROM --msg \"NEVR scenario smoke FAILED: $ALARM_DRY_RUN_REASON\""
-  echo "bonk resolves to: $(command -v bonk)"
-  echo "courier resolves to: $(command -v courier)"
-  exit 0
-fi
 
 work_dir "$STATUS_DIR" "The daily scenario smoke (tools/scenario/smoke.sh): the last verdict, last.json and last.txt, and the run's own files." \
   "kept: each run overwrites the record and the files of the run directory."
@@ -108,11 +78,6 @@ PY
 sync_failed() {
   echo "=== SMOKE FAIL: $1 ===" >&2
   write_record FAIL 1 "$1"
-  if [[ $DRY_RUN_ALARM -eq 1 ]]; then
-    echo "[dry-run] alarm would fire: bonk Andrew + courier spritz: NEVR scenario smoke FAILED: $1" >&2
-  else
-    alarm "$1"
-  fi
   exit 1
 }
 if [[ $SYNC -eq 1 && $SYNCED -eq 0 ]]; then
@@ -133,7 +98,7 @@ fi
 [[ $SYNC_ONLY -eq 1 ]] && exit 0
 
 # A busy game-run lock is contention with another launch/verify run, not a harness break: wait for it
-# (bounded), and skip rather than fire the alarm if it never frees.
+# (bounded), and skip rather than fail if it never frees.
 wait_for_lock() {
   local waited=0
   while fuser -s "$GAME_RUN_LOCK" 2>/dev/null; do
@@ -158,7 +123,7 @@ if [[ $BUILD -eq 1 ]]; then
   echo "=== smoke: building the scenario DLL (just preset=mingw-scenario build) ==="
   # `just build` fails on a failed build, so a broken build never runs the smoke on a stale DLL.
   (cd "$REPO" && just worktree-setup && just preset=mingw-scenario build) \
-    || { write_record FAIL 1 "the scenario build failed"; alarm "the scenario build failed"; exit 1; }
+    || { write_record FAIL 1 "the scenario build failed"; echo "=== SMOKE FAIL: the scenario build failed ===" >&2; exit 1; }
 fi
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist after build" >&2; exit 2; }
 [[ -f "$(dirname "$DLL")/nevr-runtime.dll" ]] || { echo "ERROR: $(dirname "$DLL")/nevr-runtime.dll does not exist after build" >&2; exit 2; }
@@ -225,10 +190,4 @@ fi
 
 reason="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("reason",""))' "$STATUS_DIR/last.json")"
 echo "=== SMOKE FAIL: ${reason:-unknown} (exit $rc) ===" >&2
-
-if [[ $DRY_RUN_ALARM -eq 1 ]]; then
-  echo "[dry-run] alarm would fire: bonk Andrew + courier spritz: NEVR scenario smoke FAILED: $reason" >&2
-  exit 1
-fi
-alarm "$reason"
 exit 1

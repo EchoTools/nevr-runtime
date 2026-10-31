@@ -132,7 +132,7 @@ int main() {
   ctx.log = &FakeLog;
   q15t::SetLogContext(&ctx);
 
-  // the pinned addresses (R0_readelf_r.txt line 131799; ReVault 0x2249764 - 0x100000; RefreshCache / IsComponentValid from the source)
+  // the pinned addresses (R0_readelf_r.txt line 131799; disassembly 0x2249764 - 0x100000; RefreshCache / IsComponentValid from the source)
   CHECK(q15t::kDroneGuardSlot == 0x36f1218 && q15t::kDroneGuardReal == 0x2149764 && q15t::kDroneRefreshCache == 0x1210848 &&
             q15t::kDroneIsValid == 0x1cdb3e0,
         "pinned addresses changed");

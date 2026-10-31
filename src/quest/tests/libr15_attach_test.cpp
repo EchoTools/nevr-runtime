@@ -449,7 +449,7 @@ TEST(AWordPatchRowWhoseLiveWordDiffersIsRefusedAndNamesTheRow) {
 
 TEST(AWordPatchRowOutsideEveryLoadIsRefused) {
   std::vector<patch::WordPatchRow> rows = FixtureRows();
-  rows[0].revaultVa = 0x7f000010;  // not in the image
+  rows[0].disasmVa = 0x7f000010;  // not in the image
   // The ID of a build with these rows differs from the file's, so build the file with the same rows.
   const patch::PatchSpec spec = Spec();
   // The patcher refuses a word outside the text, so the file cannot be made; Attach must refuse the same row on a

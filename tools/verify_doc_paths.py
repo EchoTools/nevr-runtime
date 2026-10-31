@@ -94,7 +94,7 @@ BARE_ALLOWED = {
     "builtin_log_filter.cpp",
     # Files owned by other projects / toolchains, correctly named and not ours.
     "android.toolchain.cmake",          # Android NDK
-    "CPP-MINGW-ADDENDUM-GENERIC.md",    # ~/src/metis-core, a mandatory pre-read
+    "CPP-MINGW-ADDENDUM-GENERIC.md",    # a mandatory pre-read, kept outside this repo
     "CNSRADFriends_protocol.h",         # echovr-reconstruction
     "pnsrad.def",                       # echovr-reconstruction
     "dxvk-interop.h",                   # DXVK, referenced as a porting option

@@ -22,7 +22,7 @@ constexpr int kRows = 4;
 constexpr int kSystemRow = 1;
 
 // ELF vaddrs. GLOB_DAT slot -> symbol value: a source-build readelf note (not in this tree), lines 89726 (R06), 98594 (R07), 92082 (R08), 94611 (R09).
-// Reader: the ReVault VA of the load is ELF + 0x100000 (android_main 0x1078590 / 0x1078524 / 0x1078614, GameSpaceAllocatorSize
+// Reader: the disassembly VA of the load is ELF + 0x100000 (android_main 0x1078590 / 0x1078524 / 0x1078614, GameSpaceAllocatorSize
 // 0x12ffdec).
 constexpr HeapRowPin kPins[kRows] = {
     {"R06", "_ZN10NRadEngine22kResourceMemoryAndroidE", 0x370b720, 0x2b9caa0, 0xf78590, kLdrX1FromX8, 206 * kMiB, 320 * kMiB},

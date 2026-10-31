@@ -292,7 +292,7 @@ int main(int argc, char** argv) {
   CheckTarget(mm, pinned::MatchmakingTString(), "libpnsradmatchmaking CJson::TString JUMP_SLOT");
 
   // The login-failed page's title (#1137): the script library has no build ID, so the slot is pinned by module, symbol
-  // and address, the symbol is defined in the library itself (string_t::string_t(char const*), ReVault 0x10df98 = link
+  // and address, the symbol is defined in the library itself (string_t::string_t(char const*), disassembly 0x10df98 = link
   // address 0xdf98), and the literal the hook replaces is in the file.
   CheckTarget(script, pinned::LoginScriptStringCtor(), "lib7f2363b8976491aa string_t::string_t(char const*) JUMP_SLOT");
   if (DynamicSymbolValue(script, pinned::kStringTCtorSymbol) != 0xdf98ULL) {
@@ -406,7 +406,7 @@ int main(int argc, char** argv) {
 
   // CR15NetGame::BeginLogIn, which the login prompt hook calls once the device code is accepted (#672; not a hook
   // target): its symbol is defined at the pinned address and its first four instructions are the ones the install
-  // proves before using it. (ReVault lists libr15 at these addresses plus 0x100000: the first headset run of the
+  // proves before using it. (disassembly lists libr15 at these addresses plus 0x100000: the first headset run of the
   // restart found the pin 0x100000 too high, `prologue_mismatch`.)
   if (DynamicSymbolValue(r15, pinned::kBeginLogInSymbol) != pinned::kBeginLogInVaddr) {
     std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kBeginLogInSymbol,
@@ -441,8 +441,8 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
-  // The main-menu join (#966 S4): the two functions it calls, at their pinned addresses, with the prologue words ReVault reads
-  // (0x1301be4 BeginMultiplayer, 0x13005fc EnableTransitionMenu; ReVault = pinned + 0x100000). The join checks the same words.
+  // The main-menu join (#966 S4): the two functions it calls, at their pinned addresses, with the prologue words the disassembly reads
+  // (0x1301be4 BeginMultiplayer, 0x13005fc EnableTransitionMenu; disassembly = pinned + 0x100000). The join checks the same words.
   if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kBeginMultiplayerVaddr, pinned::kBeginMultiplayerCode,
                   sizeof(pinned::kBeginMultiplayerCode)) != 0) {
     std::fprintf(stderr, "libr15 CR15Game::BeginMultiplayer: first instructions differ from the pinned ones\n");

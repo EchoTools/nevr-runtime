@@ -10,20 +10,20 @@ reason `off_file`, one INFO line. The `setprop` switch is dropped.
 
 ## Rows covered
 
-| row | function | slot (ELF) | real fn (ELF = ReVault - 0x100000) |
+| row | function | slot (ELF) | real fn (ELF = disassembly - 0x100000) |
 |---|---|---|---|
-| R31 | `CR15NetCustomizationRenderer::LoadMeshData` | 0x36cf6f0 | 0x1247d90 (ReVault 0x1347d90, size 2284) |
+| R31 | `CR15NetCustomizationRenderer::LoadMeshData` | 0x36cf6f0 | 0x1247d90 (disassembly 0x1347d90, size 2284) |
 | R32 | `CR15NetCustomizationRenderer::DestroyContext` | 0x36c22f8 | 0x12492fc (0x13492fc, 72) |
 | R33 | `CTableXT<SR15NetCustomDrawData>::Grow` | 0x36ed7f0 | 0x124893c (0x134893c, 408) |
 | (helper) | `CMemBlock::Resize(u64,u32)` | called directly | 0x11dc30c (0x12dc30c, 216; R34 is its JUMP_SLOT 0x36f68e8, not hooked) |
 
 Read this session: `R0_readelf_r.txt:114546` (`00000000036cf6f0 ... R_AARCH64_JUMP_SLOT 0000000001247d90 _ZN10NRadEngine8NRadGame28CR15NetCustomizationRenderer12LoadMeshData...`),
 `:107763` (`00000000036c22f8 ... 00000000012492fc ...DestroyContext...`), `:129938` (`00000000036ed7f0 ... 000000000124893c _ZN10NRadEngine8CTableXTINS_8NRadGame21SR15NetCustomDrawDataEE4GrowEv`).
-ReVault `functions`: `1247d90 | LoadMeshData | 2284`, `12492fc | DestroyContext | 72`, `124893c | Grow | 408`, `11dc30c | Resize | 216`.
-All 34 of the source's custctx code words (the source build's custctx:73-95) read in ReVault equal the source (34/34 MATCH), including the PLT
+Disassembly `functions`: `1247d90 | LoadMeshData | 2284`, `12492fc | DestroyContext | 72`, `124893c | Grow | 408`, `11dc30c | Resize | 216`.
+All 34 of the source's custctx code words (the source build's custctx:73-95) read in the disassembly equal the source (34/34 MATCH), including the PLT
 stubs `ef0010 f0013ef0 / ef0014 f9437a11` (LoadMeshData, ldr x17,[x16,#0x6f0]) and `ed5820 b0013f70 / ed5824 f9417e11` (DestroyContext,
 `ldr x17,[x16,#0x2f8]`), `1249644 97f29a73 bl <PLT LoadMeshData>` (CreateContext's single call), `124965c 97f23071 bl <PLT DestroyContext>`.
-Grow read in ReVault (the part the wrapper replicates):
+Grow read in the disassembly (the part the wrapper replicates):
 ```
 1248948 09a042a9 ldp x9, x8, [x0, #0x28]     x9 = capacity, x8 = count
 1248950 1f0109eb cmp x8, x9 ; 1248954 b.cc room
@@ -76,12 +76,12 @@ build that still carries these words is not refused (the source build accepted t
 binary, which silently removed its crash guards). A pin that fails refuses the module (nothing swapped, reason `word_pin_mismatch`)
 with one ERROR line naming it: `<module> refused: code word pin mismatch, ...  pin=0x<ELF vaddr> found=0x<word read, or unreadable>
 expected=0x<word pinned>`. A slot-target refusal logs ERROR with `pin=<slot ELF vaddr> found=<word at the slot> expected=<base +
-real vaddr>`. Pin addresses in this note are ELF vaddrs (ReVault VA = ELF + 0x100000). All 34 pins read in ReVault (binary 576)
+real vaddr>`. Pin addresses in this note are ELF vaddrs (disassembly VA = ELF + 0x100000). All 34 pins read in the disassembly
 equal the table in `src/quest/plugins/q15t/src/custctx.h` (verified by a query that builds its VALUES from the header tables: `MATCH | 88` over the five
 modules' tables, no NOT_SHOWN, no MISMATCH). Host test: every pin flipped in turn is refused and named, an unreadable text is refused and
 named, the table's fingerprint is pinned, the installer refuses on a changed word (`src/quest/tests/q15t/pin_check.h`).
 
-The 34 pins are the source's `kWords` (the source build's custctx:78-95, the same 34 words and the three JUMP_SLOT targets that the revault-verified
+The 34 pins are the source's `kWords` (the source build's custctx:78-95, the same 34 words and the three JUMP_SLOT targets that the disassembly-verified
 review found matching).
 
 ## Differences from the source build

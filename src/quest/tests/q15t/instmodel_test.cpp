@@ -1,5 +1,5 @@
 // instmodel: the replacement constructor sets the eight CTableXT growth steps to 1 after the stock constructor, and only where the stock
-// value (0x20) is still there. The stock constructor is a fake here that writes what ReVault 0x1a078dc writes (the 0x20 steps, zeroed
+// value (0x20) is still there. The stock constructor is a fake here that writes what disassembly 0x1a078dc writes (the 0x20 steps, zeroed
 // capacities and counts); the install path (the GOT word swap and the word pins) runs on a game copy, not here.
 #include <cstdio>
 #include <cstring>

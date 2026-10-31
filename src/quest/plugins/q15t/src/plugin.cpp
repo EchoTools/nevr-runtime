@@ -54,7 +54,7 @@
 #define Q15T_SLOT_SETDISPLAYREFRESHRATE 0x36ec5f0ULL
 #endif
 // Gameplay gates (off in the perf arms): the party-permissions expression and the bot-body chooser stop treating the
-// Quest headset as a reason to refuse combat / pick the arena bot. ELF vaddrs of the pinned build (readelf -rW, ReVault).
+// Quest headset as a reason to refuse combat / pick the arena bot. ELF vaddrs of the pinned build (readelf -rW, disassembly).
 #ifndef Q15T_GATE_PERM
 #define Q15T_GATE_PERM 0
 #endif
@@ -74,7 +74,7 @@
 #define Q15T_PERM_FN_HI 0x232c854ULL
 #endif
 // The menu gate (default ON in the player build): CVR::HeadsetType's answer to the headset-type expression's Bind (ELF 0x202ba74..0x202bac8,
-// ReVault 0x212ba74, 84 bytes) is the PC build's Link kind (4), so the Bind sets the link flag and not the Quest flag and no menu script is told it runs on a Quest headset (R1_functions.md:90).
+// disassembly 0x212ba74, 84 bytes) is the PC build's Link kind (4), so the Bind sets the link flag and not the Quest flag and no menu script is told it runs on a Quest headset (R1_functions.md:90).
 #ifndef Q15T_GATE_LINK
 #define Q15T_GATE_LINK 0
 #endif

@@ -43,7 +43,7 @@ for `libr15.so` (`untrusted_app_29`). The denial is the current Horizon policy o
 OS is affected. A design that writes a code page at run time depends on that policy; a design that never writes one does not.
 
 Two of the addresses the writers use were wrong when they met a headset (`kSetTextVaddr`, #1125; `kWidgetUpdateVaddr`, #1128):
-each is a ReVault address with 0x100000 subtracted by hand. A refused hook shows up on a headset, not at build time.
+each is a disassembly address with 0x100000 subtracted by hand. A refused hook shows up on a headset, not at build time.
 
 ## Decision
 
@@ -54,18 +54,18 @@ writes only data. One path for every headset, no flag.
 
 A new header, libr15_patch_table.h, in a new directory under src/quest, is the only place a patch site is written down. A row holds:
 
-- `id` (`lobby_full.join`), the game function's ReVault name, and the **ReVault address**, the only address typed by hand. The
-  pinned vaddr is derived (`revaultVa - kRevaultBias`, `kRevaultBias = 0x100000`), so the subtraction that went wrong twice is
+- `id` (`lobby_full.join`), the game function's name in the disassembly, and the **disassembly address**, the only address typed by hand. The
+  pinned vaddr is derived (`disasmVa - kDisasmBias`, `kDisasmBias = 0x100000`), so the subtraction that went wrong twice is
   code, not a comment;
 - the **stock words** at the site (3 words for an inline hook; for the credits pairs the ADRP and ADD words), copied from
-  ReVault with `revault_disassemble <revaultVa>`;
+  the disassembly at `<disasmVa>`;
 - the kind (`kInlineHook`, `kCreditsPair` or `kWordPatch`, section 11) and the handler's name.
 
 The sentinel's hook files (`lobby_full_hooks.cpp`, `ui_texture_mips.cpp`, `splash_skip_hook.cpp`) keep
 their handlers and lose their per-file `kXxxVaddr` and prologue constants; they name a table row. The six rows are:
-`lobby_full.join` (ReVault 0x1340ba8), `lobby_full.failure` (0x1340cc8), `lobby_full.success` (0x134024c), `ui_texture.attach`
+`lobby_full.join` (disassembly 0x1340ba8), `lobby_full.failure` (0x1340cc8), `lobby_full.success` (0x134024c), `ui_texture.attach`
 (0x19e75c4), `splash_skip.widget_update` (0x209a7a0; #1128's correct address), and
-`credits.pairs` (ReVault 0x1ea1284/0x1ea1290 and 0x1ea1d84/0x1ea1d88, the two pairs of #970).
+`credits.pairs` (disassembly 0x1ea1284/0x1ea1290 and 0x1ea1d84/0x1ea1d88, the two pairs of #970).
 
 ### 2. The patcher: a host tool that reads the stock file and refuses on any doubt
 
@@ -75,10 +75,10 @@ table header and `arm64_reloc.h`, so there is no second encoding of anything). `
 
 1. refuses unless the stock file's GNU build ID is `kLibR15StockBuildId` (the current `kLibR15BuildId`) and its sha-256 is the
    pinned one;
-2. for each row, refuses unless the words at `vaddr` are the row's stock words. A wrong ReVault address, or a typo in a word, is
+2. for each row, refuses unless the words at `vaddr` are the row's stock words. A wrong disassembly address, or a typo in a word, is
    a build failure with the row's `id`, not a refused hook on a headset;
 3. writes the stubs (below), the slot area (below), the credits pairs, and the new build ID (below). Every byte that differs from
-   the stock file is accounted for in the report: `{"event":"libr15_patch_site","id":...,"revault_va":...,"vaddr":...,
+   the stock file is accounted for in the report: `{"event":"libr15_patch_site","id":...,"disasm_va":...,"vaddr":...,
    "stock":[...],"stub":[...],"slot":...}` per row, then a summary with the stock and patched sha-256. The output is a pure
    function of the stock file and the table: the same inputs give the same bytes. The report's vocabulary is fixed: the `kind` of
    a `libr15_patch_site` event is `inline_hook` or `credits_pair` (a word patch has its own `libr15_patch_word` event, which has no
@@ -182,11 +182,11 @@ generated constant can drift from the patcher's. `kLibR15BuildId` splits: `kLibR
 integration, the hardware dump). The tombstone and the sentinel log then say which libr15 ran.
 
 **The canonical serialisation is these bytes.** Its public part is text, every number written as `0x` and lowercase hex without
-leading zeros: the line `layout|bias=<kRevaultBias>|slot_area=<slot area>|slot_bytes=<slot size>` and a newline, then one line
+leading zeros: the line `layout|bias=<kDisasmBias>|slot_area=<slot area>|slot_bytes=<slot size>` and a newline, then one line
 per table row, in table order, `row|<id>|<kind>|slot=<n>` where `<kind>` is `inline`, `credits` or `word`, followed for each site by
-`|<revault_va>:<word>,<word>,...` (the stock words, in order, each written as a number) and a newline. A build with extra rows
+`|<disasm_va>:<word>,<word>,...` (the stock words, in order, each written as a number) and a newline. A build with extra rows
 (section 11) continues with the line `extra|<count>` and a newline and then, with no separator, one binary record per extra
-row, the rows sorted by `revault_va` and then by `id` in byte order: the id length (1 byte), the id, `revault_va` (8 bytes,
+row, the rows sorted by `disasm_va` and then by `id` in byte order: the id length (1 byte), the id, `disasm_va` (8 bytes,
 little-endian), the word count (1 byte), and for each word `offset` (2 bytes, little-endian), then `new_bytes` (4 bytes), then
 `stock_bytes` (4 bytes), the word bytes in memory order as in the file. A build without extra rows has no `extra` line, so its ID
 is the public one. The byte widths are fixed here so that every program that derives the ID (the patcher, the sentinel's
@@ -232,7 +232,7 @@ once, then per row `{"event":"inline_hook","status":"ok","id":...,"target":...,"
 ### 11. Word patches, and rows that are not in the public table
 
 `kWordPatch` is a row that replaces words inside a function and nowhere else. It has no slot, no trampoline, no handler and no
-relocator window, and the sentinel installs nothing for it. A row is an `id`, a ReVault address and a list of
+relocator window, and the sentinel installs nothing for it. A row is an `id`, a disassembly address and a list of
 `{offset, stock word, replacement word}`; each offset is a multiple of 4 from the address, and each replacement is one
 32-bit word that takes the place of the stock word at the same address. The patcher:
 
@@ -274,7 +274,7 @@ uses invented values.
     {
       "id": "x.example_guard",
       "kind": "word_patch",
-      "revault_va": "0x1500010",
+      "disasm_va": "0x1500010",
       "words": [
         { "offset": 0, "stock_bytes": "e0031faa", "new_bytes": "1f2003d5" },
         { "offset": 8, "stock_bytes": "00010054", "new_bytes": "1f2003d5" }
@@ -289,23 +289,23 @@ uses invented values.
   read.
 - A **row is identified by `id`**: `x.` followed by 1 to 62 characters of `[a-z0-9_.]`, unique in the file and never equal to a
   public row's id (public ids do not start with `x.`). Every refusal, report line and log line names the row by `id`.
-- `kind` is exactly `word_patch` (the only kind a file may carry). `revault_va` is the ReVault address of the first word the row
+- `kind` is exactly `word_patch` (the only kind a file may carry). `disasm_va` is the disassembly address of the first word the row
   may touch, as `0x` followed by lowercase hex without leading zeros; the patcher derives the file address with
-  `kRevaultBias` (section 1) and the typed value is the only address in the file. It is a multiple of 4.
+  `kDisasmBias` (section 1) and the typed value is the only address in the file. It is a multiple of 4.
 - `words` holds 1 to 64 entries in strictly increasing `offset` order. `offset` is a JSON integer, a multiple of 4, 0 to 4092, the
-  distance in bytes from `revault_va`. A file holds at most 256 words in all.
+  distance in bytes from `disasm_va`. A file holds at most 256 words in all.
 - **A word is written as bytes in memory order**: `stock_bytes` and `new_bytes` are each exactly 8 lowercase hex digits, the four
   bytes in the order they stand in the file and in `xxd` or `objdump -s` output, without a prefix. They are not the little-endian
   value of the instruction: the A64 instruction `0xd503201f` (NOP) is `1f2003d5`. The patcher's report prints both forms
   (`stock_bytes` and `stock_word`) for every word, so a reader can compare against a disassembler.
-- A row is refused when any `stock_bytes` differs from the stock file at `revault_va + offset - kRevaultBias` (the message names
+- A row is refused when any `stock_bytes` differs from the stock file at `disasm_va + offset - kDisasmBias` (the message names
   the `id` and the `offset`), when a word lies outside the text segment, when it lies in a byte a public row or another extra row
   also writes, when it lies in the ELF header, the program header table, the section header table or the build-ID note, or in a
   byte the patcher writes itself (the `p_memsz` of the grown segment, the `sh_size` of the section that ends it; the build ID is
   in the note) (the refusal is `protected_region`, naming the `id` and the region), or when `new_bytes` equals `stock_bytes`. A
   public row's site is held to the same rule.
 - Build identity: the extra rows are part of the canonical serialisation of section 7, which defines the bytes (the `extra` line,
-  then one binary record per row, rows sorted by `revault_va` and then by `id`), so the build ID does not depend on the file's
+  then one binary record per row, rows sorted by `disasm_va` and then by `id`), so the build ID does not depend on the file's
   key order, spacing or the order of its rows. `extra_rows_sha256` in the report is the digest of the file's bytes as given.
 - Public prose and the file: the file is supplied at build time by whoever builds the variant. It is not committed, and the
   tests use only invented addresses, in a fixture file beside the patcher tests that is the example above made into a file
@@ -379,7 +379,7 @@ Each is run once with the line it covers changed and must fail (the mutant disci
    and an offset that is not a multiple of 4 are each refused with the row's `id`; the output differs from the input in the
    named words and nowhere else; a file of extra rows changes the build ID and the same file twice gives the same bytes; a
    row of any kind but `kWordPatch` in the file is refused; each rule of the extra-rows format is refused in its own case (wrong
-   `format`, `version` or `stock_build_id`; an unknown field; a duplicate key; a bad, duplicate or public `id`; a `revault_va`
+   `format`, `version` or `stock_build_id`; an unknown field; a duplicate key; a bad, duplicate or public `id`; a `disasm_va`
    or `offset` not a multiple of 4; offsets out of order; 65 words in a row; a word written as a little-endian value instead of
    bytes; a stock mismatch; a word outside the text, overlapping a public row or another extra row, in the ELF header, either
    header table, the build-ID note or a byte the patcher writes itself, or unchanged); the fixture

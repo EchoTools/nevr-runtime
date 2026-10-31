@@ -1,7 +1,7 @@
 # How the client leaves the process when its window goes away
 
 After the window is closed, a Wine client sometimes stays alive (issues #53 and #341). This pins the paths that
-exist and which of them the measurements cover: static (ReVault `echovr.exe`, runtime source) plus the
+exist and which of them the measurements cover: static (the disassembly `echovr.exe`, runtime source) plus the
 outcomes recorded on those issues.
 
 ## The runtime's part
@@ -22,7 +22,7 @@ The window procedure with the keyboard/IME handling is `FUN_1400eaa10` (`0x1400e
 (`2`) it looks the window up in the game's window table (`DAT_14209faa0`) and ORs `0x10` into that
 window's flag word; the same table receives `0x1`, `0x2`, `0x8` for other messages. Nothing in this
 procedure posts a quit message (`PostQuitMessage` has no call site in `echovr.exe` per
-`revault search code`), so the game loop must observe the `0x10` flag to end. The consumer of that flag is not
+a code search of the disassembly), so the game loop must observe the `0x10` flag to end. The consumer of that flag is not
 traced.
 
 ## Measured outcomes (issues #53 and #341; Wine under a nested Xephyr)

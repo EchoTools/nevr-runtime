@@ -15,7 +15,7 @@
 
 namespace q15t {
 
-// ELF vaddrs of the pinned build (R0_readelf_r.txt, ReVault binary 576; see docs/quest/q15t/modules/fxtrail.md).
+// ELF vaddrs of the pinned build (R0_readelf_r.txt, see docs/quest/q15t/modules/fxtrail.md).
 inline constexpr std::uintptr_t kFxTrailSlot = 0x36e7b98;
 inline constexpr std::uintptr_t kFxTrailReal = 0x16647e4;
 

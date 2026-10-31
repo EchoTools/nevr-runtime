@@ -5,11 +5,11 @@ Not yet observed on a Quest 3: the "Prediction" section is what the first headse
 
 ## Context
 
-libr15 checks the device extensions it needs before it creates the Vulkan device. It calls `vkEnumerateDeviceExtensionProperties` for the count, clamps that count to 128 entries (ReVault `0x19ddaa4`-`0x19ddab0`; records are `VkExtensionProperties`, stride 0x104), calls again with the clamped count, and compares only the entries the driver returned. `VK_KHR_swapchain` is the first name checked. A driver that has more than 128 device extensions answers the second call with `VK_INCOMPLETE` and its first 128; a required name past index 127 is not seen, the game logs "Required extension VK_KHR_swapchain does not exist", and it goes on to create a device without the extension.
+libr15 checks the device extensions it needs before it creates the Vulkan device. It calls `vkEnumerateDeviceExtensionProperties` for the count, clamps that count to 128 entries (the disassembly `0x19ddaa4`-`0x19ddab0`; records are `VkExtensionProperties`, stride 0x104), calls again with the clamped count, and compares only the entries the driver returned. `VK_KHR_swapchain` is the first name checked. A driver that has more than 128 device extensions answers the second call with `VK_INCOMPLETE` and its first 128; a required name past index 127 is not seen, the game logs "Required extension VK_KHR_swapchain does not exist", and it goes on to create a device without the extension.
 
 Measured on a Quest 3 (Adreno 740): the driver reports 137 device extensions and `VK_KHR_swapchain` is at index 134. The game's call returns count 128, result 5, and the name is not among the 128. The Quest 2 driver's list is shorter than 128 and is not affected.
 
-libr15 imports no `vk*` function. It gets `vkGetInstanceProcAddr` from `CSysModule::FindMethod` (ReVault `0x19dcaa4`, `JUMP_SLOT 0x36db9f8`) and every other Vulkan function through it. It passes no layers (`enabledLayerCount` is 0 for the instance and the device). The VrApi device list (`vrapi_GetDeviceExtensionsVulkan`, `JUMP_SLOT 0x36dd440`) is read after the enumeration and its names are added to the required set.
+libr15 imports no `vk*` function. It gets `vkGetInstanceProcAddr` from `CSysModule::FindMethod` (the disassembly `0x19dcaa4`, `JUMP_SLOT 0x36db9f8`) and every other Vulkan function through it. It passes no layers (`enabledLayerCount` is 0 for the instance and the device). The VrApi device list (`vrapi_GetDeviceExtensionsVulkan`, `JUMP_SLOT 0x36dd440`) is read after the enumeration and its names are added to the required set.
 
 ## Decision
 
@@ -27,4 +27,4 @@ What would prove it wrong: the "does not exist" line for any name after a `reord
 
 ## Not claimed
 
-That the Quest 3 then renders: the extension check is one of the steps between the library load and the first frame. Whether a log callback of the game ends the process on the error-level line is not examined: `NWriteLog::WriteLogV` (ReVault `0x1088720`) itself only picks the `[ERROR] ` prefix and the Android log priority for level 8; the registered callbacks (`CLoggingData::ExecuteAllCallbacks`) are not read.
+That the Quest 3 then renders: the extension check is one of the steps between the library load and the first frame. Whether a log callback of the game ends the process on the error-level line is not examined: `NWriteLog::WriteLogV` (the disassembly `0x1088720`) itself only picks the `[ERROR] ` prefix and the Android log priority for level 8; the registered callbacks (`CLoggingData::ExecuteAllCallbacks`) are not read.

@@ -43,7 +43,7 @@ static constexpr uint64_t VA_VOIP_ROUTER = 0x140132dc0;
 // Source: GameStateAPI.h in echovr-reconstruction
 static constexpr uint64_t VA_HTTP_EXPORT_GAME_STATE = 0x140155c80;
 
-// CMatSym::Hash (ReVault): seed 0x8040201008040201 and MATSYM_CHAR_TABLE. It is not CSymbol64, a
+// CMatSym::Hash (from the disassembly): seed 0x8040201008040201 and MATSYM_CHAR_TABLE. It is not CSymbol64, a
 // CRC-64 seeded with all ones (sdk/include/nevr/symbol_hash.h).
 static constexpr uint64_t VA_CMATSYM_HASH = 0x140107F80;
 
@@ -88,7 +88,7 @@ static constexpr uint64_t VA_PRECISION_SLEEP_WAIT = 0x1401CE0B0;
 
 static constexpr uint64_t VA_PRECISION_SLEEP_BUSYWAIT = 0x1401CE4C0;
 
-// The KERNEL32!Sleep import thunk (ReVault). The SwitchToThread import thunks are 0x141512A7C and
+// The KERNEL32!Sleep import thunk. The SwitchToThread import thunks are 0x141512A7C and
 // 0x141501918.
 static constexpr uint64_t VA_SLEEP_THUNK = 0x1401CE4B0;
 
@@ -127,7 +127,7 @@ static constexpr uint64_t VA_CLOG_PRINTF_IMPL = 0x1400ebe70;
 //                    void* buf2, uint64_t size2)
 static constexpr uint64_t VA_RESOURCE_INIT_FROM_BUFFERS = 0x140fa2510;
 
-// Source: ReVault analysis of CArchiveLoader
+// Source: disassembly analysis of CArchiveLoader
 // CArchiveLoader::LoadResource — loads a resource by CSymbol64 name hash from
 // the _data archive system. Tries cache, then archive table, then async load.
 //   int32_t __fastcall (CArchiveLoader* self, uint64_t name_hash,
@@ -271,7 +271,7 @@ static constexpr uint64_t VA_AFK_PATCH = 0x1401BC1E2;
 
 // --- Social Plugin DLL Selection ---
 
-// Source: revault string search "pnsovr"/"pnsdemo", commit e1803da
+// Source: string search for "pnsovr"/"pnsdemo", commit e1803da
 // String data for social platform DLL selection at ~0x140109xxx.
 // The game passes these to CNSProvider::LoadByName (fcn.140606690), the provider loader.
 // The runtime hooks that loader and hands it "pnsrad" for both names (runtime/patch/provider_name_redirect.h),
@@ -286,28 +286,28 @@ static constexpr uint64_t VA_OVR_PLATFORM_BRANCH = 0x1401580e5;
 
 // --- Animation Debugging ---
 
-// Source: ReVault -- CCharacterAnimationCS::InitRootEvaluator (listed as vfunction14).
+// Source: the disassembly -- CCharacterAnimationCS::InitRootEvaluator (listed as vfunction14).
 // Quest RTTI at 0x14950a8 confirms the name. Calls RootEvaluator internally;
 // fires DATA:ERROR "no root animation evaluator" if the result is NULL.
 static constexpr uint64_t VA_INIT_ROOT_EVALUATOR = 0x140340280;
 
-// Source: ReVault -- GetPlayerPhysicsBodySymbol.
+// Source: the disassembly -- GetPlayerPhysicsBodySymbol.
 // Two-tier physics body lookup (direct ID then CAttachment::GetTree fallback).
 // Called by InitRootEvaluator to resolve the compact pool handle.
 static constexpr uint64_t VA_GET_PLAYER_PHYSICS_BODY = 0x140363680;
 
-// Source: ReVault -- CResourceID::GetName (CSymbol64 -> const char*).
+// Source: the disassembly -- CResourceID::GetName (CSymbol64 -> const char*).
 // Resolves a symbol64 hash to a human-readable resource name string.
 static constexpr uint64_t VA_CRESOURCEID_GET_NAME = 0x1400d0a40;
 
-// Source: ReVault -- CAnimTree::Create (Quest: 0x26506b8, confirmed name).
+// Source: the disassembly -- CAnimTree::Create (Quest: 0x26506b8, confirmed name).
 // Factory that loads an AnimSet resource, binary-searches for a tree name,
 // and unpacks it into a CRootEvaluator. Fires "Unable to find animation tree"
 // if the tree name doesn't exist in the AnimSet.
 // Only 3 callers: PlayAnimation x2, fcn.140631e60 (scene setup).
 static constexpr uint64_t VA_ANIM_TREE_CREATE = 0x140fb4640;
 
-// Source: ReVault -- CAnimationCRI init function.
+// Source: the disassembly -- CAnimationCRI init function.
 // Creates a CAnimationCRI (CResourceInstanceT<CAnimationCR>), calls
 // CResourceInstance::LoadAndInit with the .anim resource hash, then binds
 // the skeleton. Returns non-zero if load or bind fails.

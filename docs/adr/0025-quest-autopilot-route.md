@@ -18,7 +18,7 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
 `src/quest/sentinel/pinned_targets.h`, `kLibR15StockBuildId`):
 
 - **The game reads controller input through one import.** `readelf -rW` lists `vrapi_GetCurrentInputState` as
-  `R_AARCH64_JUMP_SLOT` at 0x36ec0f0. Its PLT stub (0xf29410) has one caller (`revault_callers 0x1029410`, ReVault VA =
+  `R_AARCH64_JUMP_SLOT` at 0x36ec0f0. Its PLT stub (0xf29410) has one caller (`disasm_callers 0x1029410`, disassembly address =
   pinned VA + 0x100000), in `NRadEngine::CVR::PollTracking(unsigned int)` (0x1a7142c). Per frame, that function
   enumerates the input devices (`vrapi_EnumerateInputDevices`, call at 0x1a71840) and keeps those of type 4 (`cmp w8, #0x4`
   at 0x1a718e4, `ovrControllerType_TrackedRemote`). It reads each device's capabilities (`vrapi_GetInputDeviceCapabilities`,

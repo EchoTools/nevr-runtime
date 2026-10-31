@@ -2,7 +2,7 @@
 # post-checkout: give a new LINKED worktree the gitignored files `.worktreeinclude` lists (#667).
 #
 # A worktree does not carry gitignored files, so an agent started in one would run without
-# `.mcp.json` (no ReVault) and without `.claude/settings.local.json`. Claude Code's own worktrees are
+# `.mcp.json` (the MCP server config) and without `.claude/settings.local.json`. Claude Code's own worktrees are
 # covered by the tracked `.worktreeinclude` itself; this hook is the plain `git worktree add` path.
 #
 # It acts only in a linked worktree (git dir differs from the common dir) on a branch checkout

@@ -31,9 +31,9 @@ its own `libpnsrad.so`, already shipped and already loaded on every run, which i
 `libpnsovr.so` and Meta's `libovrplatformloader_orig.so` leave the APK (see "Migration").
 
 All addresses below are ELF vaddrs in the pinned store build (`libr15.so` build ID
-`b243509c08ce677aeb95fa348016949b3fc45230`; ReVault shows libr15 0x100000 higher). They were read with `readelf -rW`,
+`b243509c08ce677aeb95fa348016949b3fc45230`; the disassembly shows libr15 0x100000 higher). They were read with `readelf -rW`,
 `nm -D` and `aarch64-linux-gnu-objdump -d` on the pinned libraries, and PC addresses from the installed `pnsrad.dll`
-(sha256 `2410095d...`, the copy ReVault indexes).
+(sha256 `2410095d...`, the copy the disassembly indexes).
 
 ## 1. How libr15 loads the provider, and the hook that stops pnsovr loading
 

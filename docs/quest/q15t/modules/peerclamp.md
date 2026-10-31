@@ -10,10 +10,10 @@ flags should include ALTERS_GAMEPLAY when it is on.
 
 ## Row covered
 
-R36: `SBroadcasterData::CleanupPeers()`, JUMP_SLOT ELF 0x36efad8, real function ELF 0x24ef9b0 = ReVault 0x25ef9b0 (size 1260). Read:
+R36: `SBroadcasterData::CleanupPeers()`, JUMP_SLOT ELF 0x36efad8, real function ELF 0x24ef9b0 = disassembly 0x25ef9b0 (size 1260). Read:
 - `R0_readelf_r.txt:131055`: `00000000036efad8  00018d3f00000402 R_AARCH64_JUMP_SLOT    00000000024ef9b0 _ZN10NRadEngine16SBroadcasterData12CleanupPeersEv + 0`
-- ReVault `functions`: `24ef9b0 | CleanupPeers | 1260`; `R1_functions.md:49` (1 caller; stamps 0x25efa74/94/e4 3/3 MATCH).
-- All 26 of the source's pinned words equal ReVault; the ones the wrapper depends on:
+- Disassembly `functions`: `24ef9b0 | CleanupPeers | 1260`; `R1_functions.md:49` (1 caller; stamps 0x25efa74/94/e4 3/3 MATCH).
+- All 26 of the source's pinned words equal disassembly; the ones the wrapper depends on:
 ```
 24ef9d8 b945541b ldr w27, [x0, #0x554]         head index
 24efa68 b9456268 ldr w8, [x19, #0x560]         entries per chunk
@@ -56,8 +56,8 @@ word is read with SafeRead at `base + ELF vaddr` before any slot is touched) and
 build that still carries these words is not refused. A pin that fails refuses the module (nothing swapped, reason `word_pin_mismatch`)
 with one ERROR line naming it: `<module> refused: code word pin mismatch, ... pin=0x<ELF vaddr> found=0x<word read, or unreadable>
 expected=0x<word pinned>`. A slot-target refusal logs ERROR with `pin=<slot ELF vaddr> found=<word at the slot> expected=<base + real
-vaddr>`. Pin addresses in this note are ELF vaddrs (ReVault VA = ELF + 0x100000). The 26 pins are the source's `kWords` (the source build's peerclamp:50-62).
-All pins read in ReVault (binary 576) equal the tables in `src/quest/plugins/q15t/src/peerclamp.h` (one query whose VALUES are built from the header tables:
+vaddr>`. Pin addresses in this note are ELF vaddrs (disassembly VA = ELF + 0x100000). The 26 pins are the source's `kWords` (the source build's peerclamp:50-62).
+All pins read in the disassembly equal the tables in `src/quest/plugins/q15t/src/peerclamp.h` (one query whose VALUES are built from the header tables:
 `MATCH | 88` over the five modules' tables, no NOT_SHOWN, no MISMATCH). Host test: every pin flipped in turn is refused and named, an
 unreadable text is refused and named, the table's fingerprint is pinned, the installer refuses on a changed word (`src/quest/tests/q15t/pin_check.h`).
 

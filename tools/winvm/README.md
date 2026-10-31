@@ -104,6 +104,6 @@ falsify it against the VM: a check that has never been seen failing proves nothi
 ## When a run is stuck
 
 `--dump-on-fail` fetches a full minidump; `tools/winvm/dump_stacks.py <dump>` resolves
-thread stacks to module offsets (an echovr.exe VA per frame, ready for ReVault). Trust
+thread stacks to module offsets (an echovr.exe VA per frame, ready for the disassembly). Trust
 only the top few frames: there is no unwind info, and deeper "return addresses" are
 often stale stack data.

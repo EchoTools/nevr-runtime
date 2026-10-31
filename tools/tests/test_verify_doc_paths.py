@@ -32,7 +32,7 @@ class VerifyDocPathsTest(unittest.TestCase):
         self.assertEqual(bad, [])
 
     def test_other_repository_reference_is_not_checked_here(self):
-        text = "// (echovr-reconstruction docs/earlyquit_field_analysis.md, from ReVault)\n"
+        text = "// (echovr-reconstruction docs/earlyquit_field_analysis.md, from the disassembly)\n"
         self.assertEqual(list(verify_doc_paths.source_doc_refs(text)), [])
         # The marker only exempts what follows it on the same line.
         self.assertEqual(list(verify_doc_paths.source_doc_refs("// docs/a.md and echovr-reconstruction\n")),

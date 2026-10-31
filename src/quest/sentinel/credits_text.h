@@ -24,7 +24,7 @@
 
 namespace nevr_quest::credits_text {
 
-/// The blob the two loads start from, pinned vaddr (ReVault 0x32a3de1). Attach stores base + this in the slot.
+/// The blob the two loads start from, pinned vaddr (disassembly 0x32a3de1). Attach stores base + this in the slot.
 inline constexpr std::uint64_t kBlobVaddr = 0x31a3de1;
 
 /// What Install runs against; every field is the production value when left at its default. A host test replaces them.

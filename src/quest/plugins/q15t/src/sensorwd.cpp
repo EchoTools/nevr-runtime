@@ -28,7 +28,7 @@ constexpr std::int64_t kSweepMs = 5000;   // the tick re-reads every tracked sph
 constexpr unsigned kLogLines = 64;        // tick / sweep action lines per process
 constexpr unsigned kNoteLines = 12;       // table-full / ping-lost chatter lines per process
 constexpr unsigned kThreadLines = 24;     // thread-identity lines per process
-// CModelCS entry lookup, as OnComponentEnabled / OnComponentDisabled do it (ReVault 0x16b127c..) and the source reads it
+// CModelCS entry lookup, as OnComponentEnabled / OnComponentDisabled do it (disassembly 0x16b127c..) and the source reads it
 constexpr std::uintptr_t kCsIndex = 0xd0;      // [cs+0xd0] -> u16 table; entry index = u16 at 4 * (h & 0xffff)
 constexpr std::uintptr_t kCsEntries = 0x100;   // [cs+0x100] -> entry array, 16 bytes each
 constexpr std::uintptr_t kEntModel = 8;        // entry+8: the CModel pointer (entry+4 is the visible flag the stock functions pass on)

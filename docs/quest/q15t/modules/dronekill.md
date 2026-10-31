@@ -31,16 +31,16 @@ Test seams: `SetDroneKillCallsForTest`, `SetDroneKillClockForTest`, `SetDroneKil
 ## Rows covered, mechanism per row
 
 All four are `InstallImportHook(symbol, base, slot_vaddr, wrapper, &real, expected_vaddr)`: the slot must hold exactly `base + the real
-function's ELF vaddr` or nothing is swapped. ELF vaddr = ReVault VA - 0x100000.
+function's ELF vaddr` or nothing is swapped. ELF vaddr = disassembly VA - 0x100000.
 
-| Row | Function | JUMP_SLOT (ELF) | real fn (ELF) = ReVault VA, size | wrapper |
+| Row | Function | JUMP_SLOT (ELF) | real fn (ELF) = disassembly VA, size | wrapper |
 |---|---|---|---|---|
 | R45 | `CEnableComponentNode::Enter` | 0x36cacf8 | 0x263b700 = 0x273b700, 424 | `EnterWrap` |
 | R47 | `CR15NetAutoTargetCS::AttackTarget` | 0x36e6610 | 0x210b8c4 = 0x220b8c4, 1116 | `AttackWrap` (chase) |
 | R48 | `CR15NetAutoTargetCS::FireBulletLocal` | 0x36c37a8 | 0x210bff8 = 0x220bff8, 1200 | `FireWrap` (lock-on, shot accessor) |
 | (none) | `SComponentNodeUtils::Actor` | 0x36e2080 | 0x2059714 = 0x2159714, 544 | `ActorWrap` (pass-through; capture only while a drone Enter runs) |
 
-The comparator slot (JUMP_SLOT 0x36f91f0 -> 0x1524cb4 = ReVault 0x1624cb4 `operator()`, 488 bytes) is only **read**: if it does not hold its
+The comparator slot (JUMP_SLOT 0x36f91f0 -> 0x1524cb4 = disassembly 0x1624cb4 `operator()`, 488 bytes) is only **read**: if it does not hold its
 function, Component() look-ups are off (one WARNING), every other part still installs. The Actor slot is not a numbered row in
 `R1_functions.md` (it lists R45, R47, R48 at lines 58-61; unverified whether Actor appears under another id); its slot is in
 `R0_readelf_r.txt:124068`, the comparator's at `:135890`.
@@ -86,9 +86,9 @@ Source build (read-only): the source build's dronekill:8 (Enter layout), `:24` (
 verbatim except: namespace `q15t::dk`; the 'K' ring removed; `Comp` members carry initializers so every table is constant-initialised);
 host test `native/the source build/tests/the source build's dronekill_test` (ported); the 'K' handler the source build's ec:185-215.
 
-ReVault (binary 576, read this session in a read-only transaction: `functions`, `call_edges`, `instructions`, `xrefs` tables):
+Disassembly (read this session in a read-only transaction: `functions`, `call_edges`, `instructions`, `xrefs` tables):
 ```
-== functions at the pinned VAs (binary 576) ==
+== functions at the pinned VAs ==
 Actor | 2159714 | Actor | 544
 BinarySearch cmp lambda | 1624cb4 | operator() | 488
 CPhTarget::ResolveBody | 1aa27ac | ResolveBody | 104
@@ -107,9 +107,9 @@ ref Enable TouchInteractCS | 1e1f17c | EnableComponent | 188
 ```
 The JUMP_SLOT of `FindComponentSystemMT` is the **non-const** one (0x1904958, 184 bytes); the module needs the const one (0x1904a10), so it
 is looked up by name (`dlsym`) and required at `base + 0x1804a10`; the other five exports are checked the same way (`kFnSpecs` in
-`dronekill.cpp`, vaddrs = ReVault - 0x100000).
+`dronekill.cpp`, vaddrs = disassembly - 0x100000).
 
-Shape tables compared with ReVault (a one-off script comparing the words ReVault returned with the tables in `src/quest/plugins/q15t/src/dronekill_core.h`; quoted output):
+Shape tables compared with the disassembly (a one-off script comparing the words the disassembly returned with the tables in `src/quest/plugins/q15t/src/dronekill_core.h`; quoted output):
 ```
 7 54 48 47
 Enable ref matches kEn: True exact= True        (CAbilityCS EnableComponent 14e8cdc, 47 words; first word f60f1df8 = 0xf81d0ff6, last c0035fd6)
@@ -119,16 +119,16 @@ Disable ref matches kDis: True exact= True      (NetDamageableCS DisableComponen
 1043618 add x16, x16, #0x1f0 10c20791
 104361c br x17 20021fd6
 cmp insns 122
-thunks 270 exact kThunk 270                     (every 28-byte "Component" function in binary 576)
+thunks 270 exact kThunk 270                     (every 28-byte "Component" function in libr15)
 bodies 270 BodyOk 270 bad []                    (every 216-byte "Component" function; bl must reach 0x1043610)
 ```
-(Words as printed by ReVault: the Enable body has `022d40f9` = `ldr x2,[x8,#0x58]` (OnComponentEnabled) then `40001fd6` = `br x2` (the tail call), and ends `f37b42a9 f55341a9 f60743f8 c0035fd6` (ret); the Disable body has `023140f9` = `ldr x2,[x8,#0x60]` then `f75bc3a8`, `40001fd6` = `br x2` as its last word; both equal the tables `kEn` / `kDis` word for word.) The R1_functions.md rows: `R45 ... JUMP_SLOT 0x36cacf8`, `R47 ... 0x36e6610`,
-`R48 ... 0x36c37a8` (a source-build note, not in this tree). Callees of the three functions read in ReVault `call_edges`:
+(Words as printed by the disassembly: the Enable body has `022d40f9` = `ldr x2,[x8,#0x58]` (OnComponentEnabled) then `40001fd6` = `br x2` (the tail call), and ends `f37b42a9 f55341a9 f60743f8 c0035fd6` (ret); the Disable body has `023140f9` = `ldr x2,[x8,#0x60]` then `f75bc3a8`, `40001fd6` = `br x2` as its last word; both equal the tables `kEn` / `kDis` word for word.) The R1_functions.md rows: `R45 ... JUMP_SLOT 0x36cacf8`, `R47 ... 0x36e6610`,
+`R48 ... 0x36c37a8` (a source-build note, not in this tree). Callees of the three functions read in the disassembly `call_edges`:
 FireBulletLocal calls `0220c9c4` (FireBullet) and `0190a384` (WorldTeleport); AttackTarget calls `0220bff8` (FireBulletLocal) and
 `017f6ef0` (ComputeLocalToWorldTransfQ), `01777d70`, `01aa27ac` (ResolveBody); Enter calls `02159714` (Actor) and `01904958`
 (FindComponentSystemMT, non-const).
 
-**Unverified in ReVault (copied from the source build, labelled so):** the struct offsets of the auto-target system (`kAtIdx` 0xc8 ... ),
+**Unverified in the disassembly (copied from the source build, labelled so):** the struct offsets of the auto-target system (`kAtIdx` 0xc8 ... ),
 the damageable system (`kDm*`), the physics system (`kPh*`), `CPhBody` position at +0x8f8, `kNetPhysicsPhys` 0x170, and the symbol hashes
 (`kDroneActor`, `kDamageable`, `kR14Touch`, `kNcaModel`, `kGun`, `kSatellite`, `kPort`, `kNetPhysics`). They are the source build's
 values; the host test pins them as literals (`TestPinnedConstants`) so a change is loud, but I did not re-derive them.
@@ -169,7 +169,7 @@ With `Q15T_DRONEKILL=1` (all five words) in an EC drone match on the pinned buil
 
 - `dronekill hook install ... status=unexpected_original` or `dronekill: OFF, nothing changed`: a slot does not hold its pinned function on
   this build (nothing was swapped).
-- `dronekill: a function is missing or not at its pinned address`: an export is elsewhere than the ReVault read says; nothing is swapped and
+- `dronekill: a function is missing or not at its pinned address`: an export is elsewhere than the disassembly read says; nothing is swapped and
   nothing is called.
 - `dronekill: the comparator slot does not hold its function`: Component() look-ups are off; all tracking lines say `not looked up`.
 - `enter note ... not looked up (its Component() is not the read shape)` for most systems: the shape tables do not match this build.

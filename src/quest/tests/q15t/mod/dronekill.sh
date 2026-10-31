@@ -7,12 +7,15 @@ g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I"$here/s
 # arm64: the module compiles with the plugin's own flags and leaves no static constructor (the repack refuses a plugin with one).
 # Q15T_SKIP_NDK=1 is the only way to skip; a missing toolchain without it fails.
 ndk_bin=""
-for d in "${ANDROID_NDK_HOME:-$HOME/src/android-ndk-r26d}"/toolchains/llvm/prebuilt/*/bin; do
-  if [ -x "$d/aarch64-linux-android26-clang++" ]; then ndk_bin="$d"; fi
-done
+if [ -n "${ANDROID_NDK_HOME:-}" ]; then
+  for d in "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin; do
+    if [ -x "$d/aarch64-linux-android26-clang++" ]; then ndk_bin="$d"; fi
+  done
+fi
 if [ "${Q15T_SKIP_NDK:-0}" = 1 ]; then
   echo "dronekill: Q15T_SKIP_NDK=1: the arm64 compile and the static-init check were NOT run"
 else
+  [ -n "${ANDROID_NDK_HOME:-}" ] || { echo "dronekill: ANDROID_NDK_HOME is not set (point it at an Android NDK r26d install, or set Q15T_SKIP_NDK=1 to skip the arm64 check)"; exit 1; }
   [ -n "$ndk_bin" ] || { echo "dronekill: NDK r26d clang not found (set ANDROID_NDK_HOME, or Q15T_SKIP_NDK=1 to skip the arm64 check)"; exit 1; }
   mkdir -p "$out/ndk"
   "$ndk_bin/aarch64-linux-android26-clang++" -std=c++17 -fno-exceptions -fno-rtti -fvisibility=hidden -Wall -Wextra -Werror -O2 \

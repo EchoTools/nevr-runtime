@@ -97,7 +97,7 @@ its nodes (at most 160 quads x 4 vertices x 44 bytes a node, 24 nodes in all) an
 
 ## Engine facts the module rests on
 
-Read in the pinned library (GNU build id `b243509c08ce677aeb95fa348016949b3fc45230`, ELF vaddrs; ReVault binary `libr15.so`, VA = ELF +
+Read in the pinned library (GNU build id `b243509c08ce677aeb95fa348016949b3fc45230`, ELF vaddrs; the disassembly of `libr15.so`, VA = ELF +
 `0x100000`):
 
 - `CComponentSystem::CComponentSystem` (ELF `0x135e46c`): `[cs+0x80]` = the game space; `[cs+0x30]` = `[gamespace+0]`, a `CAllocator*`

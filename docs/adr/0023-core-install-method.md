@@ -325,7 +325,7 @@ is a later addition and not part of this ABI.
 `Marshal.PtrToStringUTF8`; the calls run on a worker thread, never the Unity main thread. The step the app must do itself
 is the package install: it asks Android for the file's package, versionCode and signer (`PackageManager`), reports them as
 `observed_json`, and hands the verified APK to the package installer. Crafter's `NevrManifest*` classes and
-`NevrQuestRelease` are replaced by these calls; his `Tests~/NevrManifest.Tests` fixtures become the core's test vectors.
+`NevrQuestRelease` are replaced by these calls; his test fixtures in its `Tests~` folder become the core's test vectors.
 IL2CPP on a headset is untested (his README says the same of his own C#), and so is this binding: it is not built here
 (no Android target in this toolchain).
 

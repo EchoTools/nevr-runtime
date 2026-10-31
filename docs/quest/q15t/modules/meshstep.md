@@ -3,7 +3,7 @@
 Files: `src/quest/plugins/q15t/src/meshstep.{h,cpp}`, `src/quest/tests/q15t/meshstep_test.cpp`, `src/quest/tests/q15t/mod/meshstep.sh`.
 CMake option `Q15T_MESHSTEP`, default ON. Kill file `meshstep.off` in the plugin data directory.
 
-## What the stock code does (pinned build b243509c, ReVault `libr15.so`, ELF vaddr = ReVault VA - 0x100000)
+## What the stock code does (pinned build b243509c, disassembly `libr15.so`, ELF vaddr = disassembly VA - 0x100000)
 
 - `NRadEngine::CGMeshListResource::CGMeshListResource(CPresenceInit const&)` is ELF 0x18677cc (size 516).
 - Its eleven `CTableXT` members are `CMemBlock`s at block offsets 0x2b0, 0x2e8, 0x320, 0x358, 0x390, 0x3c8, 0x400, 0x438, 0x470,
@@ -11,8 +11,8 @@ CMake option `Q15T_MESHSTEP`, default ON. Kill file `meshstep.off` in the plugin
 - One `mov w20,#0x20` (ELF 0x186784c, word 0x52800414) is the source of all eleven stores: `str x20` at 0x2d0, 0x308, ..., 0x500.
 - The only caller is the GOT thunk at ELF 0x1bcc0 (`adrp x16,0x37e5000; ldr x17,[x16,#0x548]; br x17`): it loads the constructor
   address from the data-page word at ELF 0x36e5548 and branches to it. Two other data words hold the constructor's address
-  (ReVault 0x3383ebc, 0x34ebd70); no code reads them (`revault_xrefs` to them is empty), so only 0x36e5548 is swapped.
-- Callers of the thunk: `ConstructInstance` (ReVault 0x1a05b2c) and `CreateInstance` (0x1a05c00).
+  (disassembly 0x3383ebc, 0x34ebd70); no code reads them (the disassembly has no cross-references to them), so only 0x36e5548 is swapped.
+- Callers of the thunk: `ConstructInstance` (disassembly 0x1a05b2c) and `CreateInstance` (0x1a05c00).
 
 ## What the module changes
 

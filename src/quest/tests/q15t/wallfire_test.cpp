@@ -217,7 +217,7 @@ int main() {
   q15t::SetBvhDirForTest(g_dir.c_str());
   q15t::SetWallfireDirForTest(g_dir.c_str());
 
-  // ---------------------------------------------------------------- the pinned constants (readelf -rW and ReVault: docs/quest/q15t/modules/wallfire.md section 1)
+  // ---------------------------------------------------------------- the pinned constants (readelf -rW and the disassembly: docs/quest/q15t/modules/wallfire.md section 1)
   {
     const q15t::WallfirePins& p = q15t::kWallfirePinned;
     CHECK(p.query_slot == 0x36e0c38 && p.query_fn == 0x1806784, "R26 pin");

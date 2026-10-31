@@ -152,7 +152,7 @@ int main() {
   const std::string dir = tmpl;
   q15t::SetVoipDropDirForTest(dir.c_str());
 
-  // the pinned addresses (R0_readelf_r.txt line 109636; ReVault 0x22c3238 - 0x100000)
+  // the pinned addresses (R0_readelf_r.txt line 109636; disassembly 0x22c3238 - 0x100000)
   CHECK(q15t::kVoipDropSlot == 0x36c5d80 && q15t::kVoipDropReal == 0x21c3238, "pinned addresses changed");
 
   const Fn hook = Install();

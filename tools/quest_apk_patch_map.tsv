@@ -5,7 +5,7 @@
 #
 # Columns (tab-separated):
 #   source   the patch repo's tracked file the change is in
-#   site     a YAML patch's address (ReVault's VA: the pinned vaddr + 0x100000), or an address a script writes; `feature` for a
+#   site     a YAML patch's address (the binary's VA: the pinned vaddr + 0x100000), or an address a script writes; `feature` for a
 #            disabled YAML feature; `file` for a file whose sites are rows of tools/quest_patcher_sites.tsv;
 #            `@<text>` for a change inside a script (the text is in the file); `-` for the whole file
 #   feature  the YAML feature name, exactly; otherwise a short label
@@ -109,7 +109,7 @@ native/texres/build.sh	-	Live Texture Resolution	builds libtexres.so with the ND
 pack_and_sign_apk.sh	@function stage_assetpatch	Asset Override Loader	adds lib/arm64-v8a/libassetpatch.so, built from a separate repo	open	#871	The general asset override is #871
 pack_and_sign_apk.sh	@function patch_json	Texture Resolution menu	runs tools/patch_menu_json.py on the decoded assets	done	src/quest/sentinel/texture_menu.cpp:RewriteMenuSettings,src/quest/sentinel/texture_menu_hook.cpp:HandleDecodeFile,#1186	Ours edits no asset of the APK: the two documents are rewritten in memory as the game reads them (see the patch_menu_json.py rows)
 pack_and_sign_apk.sh	@function decompile_apk	repack	apktool decode and rebuild of the stock APK (manifest, permissions and resources unchanged)	not_needed	tools/quest_apk_version.py:patch_manifest	The patch repo changes nothing in the manifest. Ours does not decode the APK; it replaces two lib entries and sets only the versionCode, so an installer's build can be upgraded (quest_apk_version.py)
-pack_and_sign_apk.sh	@function sign_apk	repack	signs with uber-apk-signer's debug key	done	justfile:android-repack-apk,tools/quest_keystore.sh:pass	Ours signs with the project's persistent key from pass (just import-quest-keystore)
+pack_and_sign_apk.sh	@function sign_apk	repack	signs with uber-apk-signer's debug key	done	justfile:android-repack-apk,tools/quest_keystore.sh:cmd_with	Ours signs with the project's persistent key: the keystore file NEVR_QUEST_KEYSTORE names, copied to a private file for the signing command (tools/quest_keystore.sh with)
 pack_and_sign_apk.sh	@function download_requirements	repack	fetches apktool and uber-apk-signer	not_needed	-	Tools of their pipeline; ours uses the SDK's zipalign and apksigner
 .github/workflows/patch.yml	-	pipeline	their CI: patch.py, then pack_and_sign_apk.sh	done	justfile:android-repack-apk	Ours: just package-dev or the release build (RELEASING.md) repacks the store APK with the sentinel
 binary/source/libr15.so	-	stock input	the stock libr15.so they patch	not_needed	src/quest/sentinel/pinned_targets.h:kLibR15StockBuildId	The stock input. --repo checks its build ID is our pinned one, so the addresses above are about the build we hook

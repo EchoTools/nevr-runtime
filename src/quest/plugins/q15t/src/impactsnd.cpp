@@ -24,27 +24,27 @@
 namespace q15t {
 namespace {
 
-// ELF vaddrs of the pinned build (b243509c08ce677aeb95fa348016949b3fc45230); ReVault VA = ELF + 0x100000.
+// ELF vaddrs of the pinned build (b243509c08ce677aeb95fa348016949b3fc45230); disassembly VA = ELF + 0x100000.
 constexpr std::uintptr_t kDefaultSymVa = 0x37af8d0;      // R13 D, .bss (the source build's impactsnd:74)
 constexpr std::uintptr_t kSoundSettingsVa = 0x37af6a0;   // R12 kSoundSettings, .bss (the source build's impactsnd:75)
 constexpr std::uintptr_t kSoundSettingsGotVa = 0x370fa70;  // R12 GLOB_DAT slot of kSoundSettings (readelf -rW)
 constexpr std::uintptr_t kLoadSlotVa = 0x36fa3c0;        // R14 JUMP_SLOT of LoadSoundSettings (readelf -rW)
 constexpr std::uintptr_t kLoadFnVa = 0x2121d04;          // R14 LoadSoundSettings (the source build's impactsnd:86)
 constexpr std::uintptr_t kShutdownSlotVa = 0x36933e8;    // R17 CR15NetBulletCS::Shutdown vtable word, R_AARCH64_ABS64, RELRO (readelf -rW)
-constexpr std::uintptr_t kShutdownFnVa = 0x21226f0;      // R17 CR15NetBulletCS::Shutdown (readelf -sW, ReVault 0x22226f0)
+constexpr std::uintptr_t kShutdownFnVa = 0x21226f0;      // R17 CR15NetBulletCS::Shutdown (readelf -sW, disassembly 0x22226f0)
 constexpr std::uint64_t kDefaultSym = kImpactDefaultSymbol;
 constexpr std::uintptr_t kMapCount = 0x30;               // map+0x30 = row count (the source build's impactsnd:77)
 constexpr std::uintptr_t kMapFlags = 0x38;               // bit 0 = sort pending (the source build's impactsnd:100)
 constexpr std::uintptr_t kWhizzbyOff = 0x40;             // the second table (bullet_whizzby) sits 0x40 into kSoundSettings
 
-// ---- R16, rebuilt: LoadSoundSettings in C++ (ReVault 0x2221d04, 808 bytes; the stock body is not copied, its steps are).
+// ---- R16, rebuilt: LoadSoundSettings in C++ (disassembly 0x2221d04, 808 bytes; the stock body is not copied, its steps are).
 // The stock loader's row scratch {key, id} sits at sp+0x10 / sp+0x18, the same bytes as the path string it hands to the next
 // CJson::Next (MakeTStrPrintF "bullet_impact|<gun>"), so after the first row the path reads a key, and each gun keeps one row.
 // The rebuilt loader keeps the path and the row in separate storage, so every member of every gun is appended.
 //
-// The calls go to the stock loader's own direct-call targets (ELF = ReVault VA - 0x100000). Each is a GOT stub that jumps on
-// to the function, the same as the stock `bl`. The first word of each stub is pinned (read from ReVault, the stub's
-// `adrp x16`), and the rebuild runs only when every one matches. Signatures: ReVault decompiles of CJson::Next(char const*,
+// The calls go to the stock loader's own direct-call targets (ELF = disassembly VA - 0x100000). Each is a GOT stub that jumps on
+// to the function, the same as the stock `bl`. The first word of each stub is pinned (read from the disassembly, the stub's
+// `adrp x16`), and the rebuild runs only when every one matches. Signatures: the disassembly decompiles of CJson::Next(char const*,
 // void*) const, CJson::NameAt(void*) const, CJson::TString(void*, char*) const (called with a third argument, the fallback),
 // CMemBlock::Resize(ulonglong, uint) and the stock call sites (x0 = this, the arguments in x1, x2) in 0x2221d04..0x2222028.
 // CSymbol64 is the SDK's CSymbol64Hash (the module's kIds keys, checked against it by the tests); CSoundSymbol is replaced
@@ -499,7 +499,7 @@ RebuildResult RebuildUnderLock() {
 }
 
 // The wrapper on LoadSoundSettings (R14): the loader takes no argument (it reads none before its first clobber of x0,
-// ReVault 0x2221d1c..0x2221d20) and returns w0 = w19 (0x2222008), the caller's next call may see it in x0, so the whole
+// disassembly 0x2221d1c..0x2221d20) and returns w0 = w19 (0x2222008), the caller's next call may see it in x0, so the whole
 // return value is passed through. With the rebuild on (g_rebuild) the rebuilt loader runs in place of the stock one; otherwise
 // the stock loader runs and the after-load pass reads what it built.
 std::uint64_t LoadWrapper() {
@@ -526,7 +526,7 @@ std::uint64_t LoadWrapper() {
 
 // The wrapper on CR15NetBulletCS::Shutdown (R17), a virtual method: x0 = this, read first (`mov x19, x0` at 0x2222700), and the
 // method ends in a tail call (`b 0x010190d0` at 0x2222848) so x0 is its return. The real Shutdown frees kSoundSettings and
-// clears the global when the last system leaves (ReVault 0x22227ec blr the allocator's free, 0x22227f8 `str xzr, [x24]`): it
+// clears the global when the last system leaves (disassembly 0x22227ec blr the allocator's free, 0x22227f8 `str xzr, [x24]`): it
 // runs with the table lock held, so no row write is in flight while it does, and none starts until it has returned. A nested
 // call on the same thread does not take the lock again.
 std::uint64_t ShutdownWrapper(std::uint64_t self) {

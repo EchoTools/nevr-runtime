@@ -1,7 +1,7 @@
 // Module `boosterpool` (the companion of `levelname`, word row `booster_pool.plain_name`): CR15NetBoosterCS::AllocateExclusive
 // keeps the plain pooled-actor name when the lowspec bit is set.
 //
-// Stock (ELF 0x2110dd4, ReVault 0x2210dd4; the word pin is at ReVault 0x2210f40): when bit 31 of [[this+0x80]+8]+0x7ad8 is set, AllocateExclusive
+// Stock (ELF 0x2110dd4, disassembly 0x2210dd4; the word pin is at disassembly 0x2210f40): when bit 31 of [[this+0x80]+8]+0x7ad8 is set, AllocateExclusive
 // computes `CSymbol64::Append(DAT_038af868, "_lowspec", 1, 1)` and asks `CncaGameSpace::AllocatePooledActor(CSymbol64)` for that
 // name. With the full-size global_mp only the plain actor exists, so the allocation finds nothing and the booster's
 // BodyTypeExclusionFlags reads a null component (docs/quest/q15t/modules/levelname.md). The patch table does it as one code

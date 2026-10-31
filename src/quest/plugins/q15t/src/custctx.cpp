@@ -17,11 +17,11 @@
 namespace q15t {
 namespace {
 
-constexpr std::uint64_t kDrawSize = 0x9718;  // sizeof(SR15NetCustomDrawData): Grow's `mov w9,#0x9718; mul x1,(add+capacity),x9` (ReVault 0x1248970)
+constexpr std::uint64_t kDrawSize = 0x9718;  // sizeof(SR15NetCustomDrawData): Grow's `mov w9,#0x9718; mul x1,(add+capacity),x9` (disassembly 0x1248970)
 constexpr unsigned kMax = 256, kDropLines = 16, kTotalEvery = 50, kTotalLines = 16, kSpares = 4;
 constexpr unsigned kRtEvery = 32, kRtLines = 32;
 constexpr std::uint64_t kRtMargin = 64;  // free layout slots a load needs left over (one per new mesh entry)
-constexpr std::uintptr_t kRtCap = 0x84, kRtFree = 0x30;  // the pool: capacity (u32), free count (u64); ReVault 0x18829c8/0x18829cc
+constexpr std::uintptr_t kRtCap = 0x84, kRtFree = 0x30;  // the pool: capacity (u32), free count (u64); disassembly 0x18829c8/0x18829cc
 
 constexpr const char kLoadSym[] =
     "_ZN10NRadEngine8NRadGame28CR15NetCustomizationRenderer12LoadMeshDataERNS0_27SR15NetCustomizationContextERNS_16CComponentHandleINS_8CModelCSEEE";
@@ -30,7 +30,7 @@ constexpr const char kDestroySym[] =
 constexpr const char kGrowSym[] = "_ZN10NRadEngine8CTableXTINS_8NRadGame21SR15NetCustomDrawDataEE4GrowEv";
 constexpr const char kResizeSym[] = "_ZN10NRadEngine9CMemBlock6ResizeEyj";
 
-struct DrawTable {          // CTableXT<SR15NetCustomDrawData> as Grow reads it (CMemBlock first); ReVault 0x1248948 ldp x9,x8,[x0,#0x28]; 0x1248958 ldr x8,[x19,#0x20]
+struct DrawTable {          // CTableXT<SR15NetCustomDrawData> as Grow reads it (CMemBlock first); disassembly 0x1248948 ldp x9,x8,[x0,#0x28]; 0x1248958 ldr x8,[x19,#0x20]
   std::uint8_t* data;       // +0x00
   std::uint64_t size;       // +0x08
   void* allocator;          // +0x10
@@ -257,7 +257,7 @@ __attribute__((noinline)) void* GrowWrapper(DrawTable* t) {
   DrawTable was;
   if (!SafeRead(reinterpret_cast<std::uintptr_t>(t), &was, sizeof was)) return real(t);  // doubt: the real function decides
   if (was.count >= was.capacity) {
-    const std::uint64_t add = was.step < was.capacity ? was.capacity : was.step;  // as Grow picks it (ReVault 0x1248964/68)
+    const std::uint64_t add = was.step < was.capacity ? was.capacity : was.step;  // as Grow picks it (disassembly 0x1248964/68)
     const std::uint64_t wanted = (was.capacity + add) * kDrawSize;
     if (add == 0) return Spare(t, was, add, wanted, "step and capacity 0");
     g_f.resize(t, wanted, 1);

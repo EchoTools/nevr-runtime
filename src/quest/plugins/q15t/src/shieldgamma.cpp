@@ -11,7 +11,7 @@
 namespace q15t {
 namespace {
 
-// ELF vaddrs of the pinned build (ReVault VA = ELF + 0x100000)
+// ELF vaddrs of the pinned build (disassembly VA = ELF + 0x100000)
 constexpr std::uintptr_t kSlot = 0x36d2020, kFn = 0x272d55c;  // R58: JUMP_SLOT / CSetMaterialPropertyNode::Update
 constexpr char kSym[] = "_ZN10NRadEngine24CSetMaterialPropertyNode6UpdateERKNS_28SSetMaterialPropertyNodeDataE";
 constexpr std::uint64_t kMat = 0xdbde1b05fa8f6200ull;      // the spawn-shield / barrier material

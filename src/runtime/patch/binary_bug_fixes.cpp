@@ -83,11 +83,11 @@ static bool     s_busywait_patched       = false;
 
 /* Expected prologue at VA_HTTP_LISTENER_BRINGUP: MOV [RSP+8],RBX (relocatable,
  * clean 5-byte hook boundary). Validated before hooking to guard against the
- * loaded binary diverging from the ReVault-indexed echovr.exe. */
+ * loaded binary diverging from the echovr.exe that was disassembled. */
 static constexpr uint8_t HTTP_LISTENER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
 
 /* Expected prologue at VA_NETGAME_HOST_CHECK (0x140157FB0): MOV [RSP+0x10],RDX
- * ReVault-verified via revault_disassemble: 0x140157fb0: 48 89 54 24 10. */
+ * Verified in the disassembly: 0x140157fb0: 48 89 54 24 10. */
 static constexpr uint8_t NETGAME_HOST_CHECK_PROLOGUE[5] = {0x48, 0x89, 0x54, 0x24, 0x10};
 
 /* Expected prologues of the two hooks that had none (read from echovr.exe at the VA):
@@ -97,12 +97,12 @@ static constexpr uint8_t PRECISION_SLEEP_WAIT_PROLOGUE[8] = {0x40, 0x57, 0x48, 0
 static constexpr uint8_t SPINWAIT_WAIT_FOR_VALUE_PROLOGUE[8] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74};
 
 /* Expected prologue at VA_GET_TIME_MICROSECONDS (0x1400D00C0): SUB RSP,0x28
- * Same prologue at VA_GET_TIME_MILLISECONDS (0x1400D0110). Both ReVault-verified. */
+ * Same prologue at VA_GET_TIME_MILLISECONDS (0x1400D0110). Both verified in the disassembly. */
 static constexpr uint8_t GET_TIME_MICROSECONDS_PROLOGUE[4] = {0x48, 0x83, 0xEC, 0x28};
 static constexpr uint8_t GET_TIME_MILLISECONDS_PROLOGUE[4] = {0x48, 0x83, 0xEC, 0x28};
 
 /* Expected prologue at VA_END_MULTIPLAYER (0x140162450): MOV [RSP+0x10],RBX
- * ReVault-verified: 0x140162450: 48 89 5c 24 10. */
+ * Verified in the disassembly: 0x140162450: 48 89 5c 24 10. */
 static constexpr uint8_t END_MULTIPLAYER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x10};
 
 /* CSpinWait::WaitForValue global spin limit offset (from ImageBase) */
@@ -212,7 +212,7 @@ static uint64_t __fastcall GetTimeMicrosecondsHook() {
 /* --------------------------------------------------------------------
  * Hook 0b — CTimer_GetMilliSeconds overflow-safe replacement (BUG #2, High)
  *
- * Original fcn.1400d0110 (ReVault-verified): computes microseconds first
+ * Original fcn.1400d0110 (verified in the disassembly): computes microseconds first
  *   (perfCount * 1000000) / perfFreq, then divides by 1000. The x10^6
  *   intermediate overflows INT64_MAX after ~10.68 days at 10MHz QPC
  *   (~4.3 days at 25MHz) — same overflow as BUG #1.
@@ -495,7 +495,7 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
  * CR15NetGame::Update (0x1401bf9ad, 0x1401bfb7d, 0x1401bfd09).  This hook logs
  * the flags byte at entry, so a live -server run shows whether bit1 is set;
  * static analysis could not find the setter (indirect dispatch, and
- * revault_search_code returns reconstruction-node noise for generic offset
+ * a code search returns reconstruction-node noise for generic offset
  * patterns).  A -server run reaches this function once multiplayer begins, which
  * the state machine starts after the login (state_machine.cpp).
  *
@@ -673,7 +673,7 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
 
     // BUG #13 fix: patch CPrecisionSleep::BusyWait to RET (0xC3)
     // Eliminates the tight QPC + Sleep(0) spin loop that starves the HT sibling.
-    // NOT SwitchToThread — ReVault measured the call at 0x1401CE510 as Sleep, and
+    // NOT SwitchToThread — the disassembly shows the call at 0x1401CE510 as Sleep, and
     // SwitchToThread's IAT slot (0x1416C37F0) has only two xrefs in the whole
     // binary, both CRT/ConcRT, none in this function.
     // The WaitableTimer phase in Wait handles the bulk of the sleep;

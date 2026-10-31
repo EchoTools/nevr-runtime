@@ -31,10 +31,10 @@ and `AddGameTick(DroneMuzzleTick)` before `InstallGameTick` as well. No CMake ed
 
 ## Rows covered, mechanism per row
 
-| Row | Function | JUMP_SLOT (ELF) | real fn (ELF) = ReVault VA, size | acts on the call that returns to |
+| Row | Function | JUMP_SLOT (ELF) | real fn (ELF) = disassembly VA, size | acts on the call that returns to |
 |---|---|---|---|---|
-| R49 | `CncaGameSpace::WorldTeleport` | 0x36cfa18 (+ GLOB_DAT 0x370bcc0 not swapped) | 0x180a384 = 0x190a384, 236 | ELF 0x210c22c = ReVault 0x220c22c |
-| R50 | `CR15NetBulletCS::FireBullet` | 0x36f3cf8 | 0x210c9c4 = 0x220c9c4, 976 | ELF 0x210c2a4 = ReVault 0x220c2a4 |
+| R49 | `CncaGameSpace::WorldTeleport` | 0x36cfa18 (+ GLOB_DAT 0x370bcc0 not swapped) | 0x180a384 = 0x190a384, 236 | ELF 0x210c22c = disassembly 0x220c22c |
+| R50 | `CR15NetBulletCS::FireBullet` | 0x36f3cf8 | 0x210c9c4 = 0x220c9c4, 976 | ELF 0x210c2a4 = disassembly 0x220c2a4 |
 
 Both are called from `CR15NetAutoTargetCS::FireBulletLocal` (dronekill R48) among others (WorldTeleport has 25 callers, FireBullet 2), so the
 wrapper must leave every other caller completely untouched: it needs the caller's registers and a check of the return address. That is the
@@ -42,7 +42,7 @@ thunk:
 
 ```
 bti c
-x16 = ldar [q15t_dm_*_ret]        ; the ReVault-read return address inside FireBulletLocal, published before the slot store
+x16 = ldar [q15t_dm_*_ret]        ; the disassembly-read return address inside FireBulletLocal, published before the slot store
 cmp x30, x16 ; b.eq 1f
 x16 = ldar [q15t_dm_*_next] ; br x16   ; every other caller: x0..x7, s0, x30, sp exactly as the caller left them (only x16 is used)
 1: stp x29, x30, [sp, #-16]! ; mov x29, sp ; bl q15t_dm_teleport / q15t_dm_fire ; ldp x29, x30, [sp], #16 ; ret
@@ -79,7 +79,7 @@ reference (`MuzzleMove` / `FrameDt` over 200000 and 100000 random cases, bit-exa
 | R49 | D3 WorldTeleport -> 0x190a384 (236) | CncaGameSpace::WorldTeleport | JUMP_SLOT 0x36cfa18 + GLOB_DAT 0x370bcc0 | 25 | ret 0x220c22c MATCH | GOT |
 | R50 | D3 FireBullet -> 0x220c9c4 (976) | CR15NetBulletCS::FireBullet | JUMP_SLOT 0x36f3cf8 | 2 | ret 0x220c2a4 MATCH | GOT |
 ```
-ReVault (binary 576, read this session, read-only: `functions`, `instructions`, `xrefs` tables):
+Disassembly (read this session, read-only: `functions`, `instructions`, `xrefs` tables):
 ```
 R49 WorldTeleport | 190a384 | WorldTeleport | 236
 R50 FireBullet | 220c9c4 | FireBullet | 976
@@ -95,7 +95,7 @@ ff0660 | adrp | x16, 0x37cf000 | f03e01f0        ldr x17, [x16, #0xa18]  -> slot
 190a384 | call | 1      190a384 | data | 27      220c9c4 | call | 1      220c9c4 | data | 3
 37cfa18 | read | 1      37f3cf8 | read | 1       380bcc0 | read | 15
 ```
-So the return addresses (ELF = ReVault - 0x100000) 0x210c22c and 0x210c2a4 are the instructions after FireBulletLocal's two `bl`s (0x220c228
+So the return addresses (ELF = disassembly - 0x100000) 0x210c22c and 0x210c2a4 are the instructions after FireBulletLocal's two `bl`s (0x220c228
 and 0x220c2a0), each going through the PLT stub of the row's JUMP_SLOT. The 15 GLOB_DAT reads of 0x380bcc0 (ELF 0x370bcc0) are **not** swapped
 (the source does not either): a caller that reads the function address from the GOT entry and calls it bypasses the wrapper (those callers are
 not FireBulletLocal's, which goes through the PLT).
@@ -108,7 +108,7 @@ not FireBulletLocal's, which goes through the PLT).
 `src/quest/tests/q15t/mod/dronemuzzle.sh` also cross-compiles the module with the NDK r26d clang (`-fno-exceptions -fno-rtti -fvisibility=hidden -Wall -Wextra
 -Werror -O2`), checks that the object has no `.init_array` (the repack refuses a static constructor), and **compares the plugin's two assembled
 thunks with the source build's**: the source's two thunk functions (the source build's dronemuzzle:145 and `:164`, extracted by name) is assembled with the same compiler and the
-disassembly of both (instruction words and relocation targets, with the source build's symbol prefix renamed `q15t_dm_`) must be identical. Output:
+Disassembly of both (instruction words and relocation targets, with the source build's symbol prefix renamed `q15t_dm_`) must be identical. Output:
 ```
 dronemuzzle: arm64 compile ok, no .init_array
 dronemuzzle: arm64 thunks identical to the source build's (42 lines of instruction words and relocations)
@@ -151,7 +151,7 @@ With `Q15T_DRONEKILL=1` and `Q15T_DRONEMUZZLE=1` in an EC drone match on the pin
 - **Not built:** the 15 GLOB_DAT reads of WorldTeleport's address (as in the source); file/property switches; the source's per-thread
   bookkeeping outside the shot accessor.
 - **Unverified:** the return value widths: both thunks return `x0` as `uint64_t` (WorldTeleport's and FireBullet's return types were not
-  read in ReVault; FireBulletLocal ignores them as far as the source's use is concerned, the source build's dronemuzzle:145-182, unread beyond that); the bullet record
+  read in the disassembly; FireBulletLocal ignores them as far as the source's use is concerned, the source build's dronemuzzle:145-182, unread beyond that); the bullet record
   offsets (+0x11c, +0x128, +0x134, stride 0x298, `bcs+0xc8/0xf8`) are the source's (copied, not re-derived); `CTransfQ` by invisible
   reference in x2 (AAPCS64 for a 32-byte composite; the source relies on the same).
 - **Untestable on the host (documented, not mutated):** the order "publish the return and next words, then swap the slot" (a concurrency property:

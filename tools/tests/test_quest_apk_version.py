@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -33,7 +34,8 @@ import quest_apk_version as qv  # noqa: E402
 import work_root  # noqa: E402
 
 TOOL = REPO / "tools" / "quest_apk_version.py"
-STORE_APK = pathlib.Path("/mnt/games/cache/r15_goldmaster_store.apk")
+# The store APK is named by NEVR_STORE_APK (no default); the one test that reads it says so when it is unset.
+STORE_APK_ENV = os.environ.get("NEVR_STORE_APK", "")
 INSTALLER = 4987570
 
 
@@ -308,11 +310,14 @@ class ParseTest(unittest.TestCase):
                     qv.parse_manifest(data)
 
     def test_the_real_store_manifest_parses_and_agrees_with_aapt2(self):
-        if not STORE_APK.exists() or shutil.which("aapt2") is None:
-            self.skipTest("the store APK or aapt2 is not on this machine")
-        badging = subprocess.run(["aapt2", "dump", "badging", str(STORE_APK)], check=True, capture_output=True, text=True).stdout
+        if not STORE_APK_ENV:
+            self.skipTest("NEVR_STORE_APK is not set: name the store APK to run this check")
+        store_apk = pathlib.Path(STORE_APK_ENV)
+        if not store_apk.exists() or shutil.which("aapt2") is None:
+            self.skipTest(f"the store APK at NEVR_STORE_APK={STORE_APK_ENV} or aapt2 is not on this machine")
+        badging = subprocess.run(["aapt2", "dump", "badging", str(store_apk)], check=True, capture_output=True, text=True).stdout
         expected = int(badging.split("versionCode='")[1].split("'")[0])
-        self.assertEqual(qv.version_code_of_apk(STORE_APK), expected)
+        self.assertEqual(qv.version_code_of_apk(store_apk), expected)
 
 
 class PatchTest(unittest.TestCase):

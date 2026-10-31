@@ -14,7 +14,7 @@ namespace q15t {
 namespace {
 
 // CR15NetVoipReceiverCS layout (the source build's voipdrop:51): the voice hash table at +0x168; its free head (table+0x50), page size
-// (table+0x64) and allocator block (table+0x18). ReVault: AllocPage 0x23164d8 add x22,x0,#0x18; 0x2316504 ldr w1,[x19,#0x64];
+// (table+0x64) and allocator block (table+0x18). disassembly: AllocPage 0x23164d8 add x22,x0,#0x18; 0x2316504 ldr w1,[x19,#0x64];
 // 0x2316508 ldr x8,[x8,#0x10] (alloc); 0x23165a8 str w9,[x19,#0x50] (free head); ReceiveVoip 0x21c3698 add x0,x21,#0x168.
 constexpr std::uintptr_t kTable = 0x168, kFreeHead = kTable + 0x50, kPageBytes = kTable + 0x64, kPageBlock = kTable + 0x18;
 constexpr std::uintptr_t kVtAlloc = 0x10, kVtFree = 0x38;  // CAllocator vtable: the request AllocPage makes, and DestroyContext's free

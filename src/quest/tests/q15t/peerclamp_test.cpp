@@ -146,7 +146,7 @@ int main() {
   q15t::SetLogContext(&ctx);
   std::memset(g_invalid_key, 0xee, sizeof g_invalid_key);
 
-  // the pinned addresses (R0_readelf_r.txt line 131055; ReVault 0x25ef9b0 - 0x100000; kInvalid GOT word from the source, ReVault 0x24efa14/18)
+  // the pinned addresses (R0_readelf_r.txt line 131055; disassembly 0x25ef9b0 - 0x100000; kInvalid GOT word from the source, disassembly 0x24efa14/18)
   CHECK(q15t::kPeerClampSlot == 0x36efad8 && q15t::kPeerClampReal == 0x24ef9b0 && q15t::kPeerClampInvalid == 0x371d538, "pinned addresses changed");
 
   Fn hook = Install();

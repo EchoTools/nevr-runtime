@@ -1,6 +1,6 @@
 /* #966 / ADR 0017 D4: the Quest twin of the PC main-menu cards (src/runtime/patch/menu_cards.h), the pure half.
  *
- * What the game does (pinned libr15, ReVault names; every offset below is read from the library's own code, see
+ * What the game does (pinned libr15, the disassembly names; every offset below is read from the library's own code, see
  * pinned_targets.h): when the streaming reader has the bytes of a resource it calls
  * CResourceManager::AsyncResourceIOCallback(data*). `data` is the request context's callback block:
  *

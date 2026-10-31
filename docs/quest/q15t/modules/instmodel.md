@@ -3,7 +3,7 @@
 Source: `src/quest/plugins/q15t/src/instmodel.{h,cpp}`. Option `Q15T_INSTMODEL` (ON in the source build). Kill file `instmodel.off`
 in the q15t data directory. Issue #1554.
 
-## What the stock code does (libr15, pinned build b243509c; ReVault `echovr`, binary `libr15.so`, VA = ELF + 0x100000)
+## What the stock code does (libr15, pinned build b243509c; disassembly `echovr`, binary `libr15.so`, VA = ELF + 0x100000)
 
 - The constructor `NRadEngine::CGInstancedModelResource::CGInstancedModelResource(CPresenceInit const&)` is at VA 0x1a078dc
   (ELF 0x19078dc), 376 bytes. Its first instruction is `str x20,[sp,#-0x20]!` (word 0xf81e0ff4).
@@ -15,7 +15,7 @@ in the q15t data directory. Issue #1554.
   (zeroed by the constructor) at +0x28. The same layout is `DrawTable` in `src/quest/plugins/q15t/src/custctx.cpp`.
 - Callers: the constructor is reached only through a PLT stub at VA 0xfdcb00 (`adrp x16,0x37c5000; ldr x17,[x16,#0xc68]; add x16,x16,#0xc68;
   br x17`), so the GOT word is VA 0x37c5c68 (ELF 0x36c5c68). The stub's callers are `ConstructInstance` (0x1a076dc), `CreateInstance`
-  (0x1a077b0) and `FUN_0190772c` (0x1a0772c). ReVault's data xrefs to 0x1a078dc at 0x338803c, 0x34fb2f0 and 0x37c5c68 are not
+  (0x1a077b0) and `FUN_0190772c` (0x1a0772c). the disassembly's data xrefs to 0x1a078dc at 0x338803c, 0x34fb2f0 and 0x37c5c68 are not
   code pointers (0x338803c reads as a two-word record, not an address), so only the GOT word is swapped.
 
 ## What changes

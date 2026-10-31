@@ -205,7 +205,7 @@ game's own frames. Nothing of this is built until the measurement says it is nee
 2. Block the `android_main` thread at the pre-game point for 120 s, then 10 minutes, then continue. Falsifier: the process is
    killed, or the "not responding" dialog ends the game; then the fetch must not run on that thread, and the game must be held
    some other way.
-3. Resolve the version folder and manifest id from `libr15.so` (build ID `b243509c08ce677aeb95fa348016949b3fc45230`) with ReVault
+3. Resolve the version folder and manifest id from `libr15.so` (build ID `b243509c08ce677aeb95fa348016949b3fc45230`) with the disassembly
    (searched across the project's binaries, `searched N of N`). Falsifier: they are derived from data the sentinel cannot read
    before the game runs.
 4. Falsifier for the cause above: the `adb shell ls` of `/sdcard/readyatdawn` and `/sdcard/Android/media/com.readyatdawn.r15/files` on an affected headset.

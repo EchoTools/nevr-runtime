@@ -18,7 +18,7 @@
 namespace q15t {
 namespace {
 
-// Source constants: <source build>/the source build's aibots:42-52. ReVault binary 576 (VA = ELF + 0x100000):
+// Source constants: <source build>/the source build's aibots:42-52. the disassembly (VA = ELF + 0x100000):
 // NetGameMT 0x13027d4 `mov w8,#0x8510; ldr x0,[x0,x8]`; Scenarios() 0x138fd0c `ldr x0,[x0,#0x2ab0]`; ConnectBot 0x133bf78
 // `ldr w8,[x19,#0x500]; add; str` (a u32, 0x50-byte rows); EnableScenario 0x133c2bc reads/writes scenarios+0x560 and flags
 // [[[scenarios+0x558]+0x2da0]]; UpdateGameExpressionData 0x13809f0 stores (state == 9) at net+0x6340c+8 and a byte at +0xf.

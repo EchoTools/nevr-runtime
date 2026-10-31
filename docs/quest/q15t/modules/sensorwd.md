@@ -1,9 +1,9 @@
 # Module `sensorwd` (T-07, the `sensorwd.on` half)
 
 Files: `src/sensorwd.{h,cpp}`, `src/quest/tests/q15t/sensorwd_test.cpp`, `src/quest/tests/q15t/mod/sensorwd.sh`, `src/quest/tests/q15t/mutants.d/sensorwd.sh`.
-Pinned build: libr15 build id `b243509c08ce677aeb95fa348016949b3fc45230` (ReVault binary 576). ELF vaddr = ReVault VA - 0x100000.
+Pinned build: libr15 build id `b243509c08ce677aeb95fa348016949b3fc45230` (the disassembly). ELF vaddr = disassembly VA - 0x100000.
 Source citations are in "the source build" (`the source build's fx`, generator the source build's tools);
-ReVault citations are quoted from read-only queries (scratch queries, a source-build note not in this tree, run with the
+Disassembly citations are quoted from read-only queries (scratch queries, a source-build note not in this tree, run with the
 contract's recipe).
 
 ## For the main seat: wiring
@@ -49,11 +49,11 @@ data pages only, RELRO restored, no `PROT_EXEC`, no code write).
 
 (The source repoints the two vtable words only: `kSnsEnSlot/kSnsEnFn/kSnsDisSlot/kSnsDisFn`, the source build's fx:5590; its event hook is found by name through
 `JumpSlot`, the source build's fx:5884-5900, `5782`. Here the event slot is the pinned one above, from `readelf -rW`.) The two vtable words sit in the
-class's vtable `_ZTVN10NRadEngine8CModelCSE` (`R0_readelf_r.txt:99007`, GLOB_DAT to `0x3649560`); ReVault's `functions` table, binary 576:
+class's vtable `_ZTVN10NRadEngine8CModelCSE` (`R0_readelf_r.txt:99007`, GLOB_DAT to `0x3649560`); the disassembly's `functions` table:
 `16b127c | OnComponentEnabled | 44 | NRadEngine::CModelCS`, `16b12a8 | OnComponentDisabled | 44 | NRadEngine::CModelCS`,
 `190735c | SendComponentEventGlobal | 48 | NRadEngine::CncaGameSpace` (ELF = VA - 0x100000).
 
-ReVault instructions of the two stock functions (ELF address, bytes as stored, text), the lookup the module repeats:
+Disassembly instructions of the two stock functions (ELF address, bytes as stored, text), the lookup the module repeats:
 ```
 15b127c 086840f9 ldr x8, [x0, #0xd0]            15b12a8 086840f9 ldr x8, [x0, #0xd0]
 15b1280 293c4092 and x9, x1, #0xffff            15b12ac 293c4092 and x9, x1, #0xffff
@@ -83,7 +83,7 @@ a symbol, an 8-byte actor and a second symbol; the module keys on the pair `(a, 
 ## Calling convention: plain C++, no naked thunk
 
 The three wrappers take `x0..x7` as eight integers and call the stock function with the same eight values and return its `x0`. That is the whole
-convention for these functions: the ReVault bodies above take integers only (`this` + an 8-byte handle; `this` + symbol + two actor words + `w4`), use
+convention for these functions: the disassembly bodies above take integers only (`this` + an 8-byte handle; `this` + symbol + two actor words + `w4`), use
 no stack argument, no float register and no `x8` result pointer, and Enable/Disable end in a tail call. This is the source's own form
 (the source build's fx:5660-5669, "every hook reads with SafeRead and calls the original with x0..x7 unchanged"), so powerboost's naked thunk is not needed. Test:
 `TestPassThrough` calls each wrapper through the swapped word with distinct values in `x2..x7` and checks the stock function received them unchanged
@@ -132,17 +132,17 @@ a source-build script docstring).
 | stuck after | 6000 ms (FinishedPing comes at 4.0 s) | the source build's fx:5593 |
 | pairing window | 250 ms | the source build's fx:5592 |
 | slots | 32 | the source build's fx:5594 |
-| entry layout | `[cs+0xd0]`, `4*(h&0xffff)`, `[cs+0x100]`, `16*idx`, `+8` model, `+4` visible, `[model+0xcc8]` name | the source build's fx:5586-5587, `5610-5620`; ReVault for all but `+0xcc8` (above) |
+| entry layout | `[cs+0xd0]`, `4*(h&0xffff)`, `[cs+0x100]`, `16*idx`, `+8` model, `+4` visible, `[model+0xcc8]` name | the source build's fx:5586-5587, `5610-5620`; disassembly for all but `+0xcc8` (above) |
 | watchdog logic | forced / back-on / off | the source build's fx:5672-5710 |
 | default | ON | `sensorwd.on` in the shipped on-list (the source build's on-list) |
 
-## Code-word pins (34, all read in ReVault)
+## Code-word pins (34, all read in the disassembly)
 
 `kSensorWdWordPins` in `src/quest/plugins/q15t/src/sensorwd.h`: 11 words of `OnComponentEnabled` (`0x15b127c..0x15b12a4`), 11 of `OnComponentDisabled`
 (`0x15b12a8..0x15b12d0`), the first 12 of `SendComponentEventGlobal` (`0x180735c..0x1807388`). The source pins none; these are an addition, the code the
 wrappers' reads and argument handling were derived from. Checked with `CheckWordPins` (SafeRead at `base + vaddr`) before any word is swapped. A
 pin that fails refuses the module with one ERROR line `sensorwd refused: code word pin mismatch, nothing changed pin=0x<ELF vaddr> found=0x<word or
-unreadable> expected=0x<word>`. Verification against ReVault: a query whose VALUES are generated from the header table (a source-build scratch query, not in this tree):
+unreadable> expected=0x<word>`. Verification against the disassembly: a query whose VALUES are generated from the header table (a source-build scratch query, not in this tree):
 
 ```
 verdict | count

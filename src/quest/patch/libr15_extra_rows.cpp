@@ -149,7 +149,7 @@ bool ParseExtraRows(const std::string& fileBytes, const PatchSpec& spec, std::ve
     }
     std::string id;
     if (row.contains("id") && row["id"].is_string()) id = row["id"].get<std::string>();
-    if (!CheckKeys(row, {"id", "kind", "revault_va", "words"}, "row", id, refusal)) return false;
+    if (!CheckKeys(row, {"id", "kind", "disasm_va", "words"}, "row", id, refusal)) return false;
     if (!ValidExtraId(id)) {
       *refusal = Refuse("extra_rows_id", id, "the id must be x. followed by 1 to 62 of [a-z0-9_.]: \"" + id + "\"");
       return false;
@@ -166,9 +166,9 @@ bool ParseExtraRows(const std::string& fileBytes, const PatchSpec& spec, std::ve
     }
     WordPatchRow out;
     out.id = id;
-    if (!row["revault_va"].is_string() || !ParseHexAddress(row["revault_va"].get<std::string>(), &out.revaultVa) ||
-        (out.revaultVa & 3) != 0 || out.revaultVa > ~std::uint64_t{0} - kMaxWordOffset - 4) {
-      *refusal = Refuse("extra_rows_revault_va", id, "revault_va must be 0x lowercase hex without leading zeros, a multiple of 4");
+    if (!row["disasm_va"].is_string() || !ParseHexAddress(row["disasm_va"].get<std::string>(), &out.disasmVa) ||
+        (out.disasmVa & 3) != 0 || out.disasmVa > ~std::uint64_t{0} - kMaxWordOffset - 4) {
+      *refusal = Refuse("extra_rows_disasm_va", id, "disasm_va must be 0x lowercase hex without leading zeros, a multiple of 4");
       return false;
     }
     const Json& words = row["words"];

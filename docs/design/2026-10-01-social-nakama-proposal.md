@@ -11,7 +11,7 @@ modifying an evr message", and "stay away from matchmaking, because i've already
 (in-game party vs Nakama's matchmaking group) is out, and so is the part of #19 that carries a leader's lobby
 for followers.
 
-Paths: Nakama is `~/src/nakama/server/` (cited as `server/...`), the runtime is this repo. Anything not read in
+Paths: Nakama is the nakama repository, its `server/` directory (cited as `server/...`); the runtime is this repo. Anything not read in
 code is marked **UNVERIFIED**.
 
 ## 1. The presence publish (#18, #21)

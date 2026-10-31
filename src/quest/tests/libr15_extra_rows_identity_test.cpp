@@ -62,7 +62,7 @@ TEST(TheRowsAreTheParsersRowsForTheFile) {
   if (got.size() != 1 || want.size() != 1) return;
   CHECK_EQ(got[0].id, want[0].id);
   CHECK_EQ(got[0].id, std::string("x.example_guard"));
-  CHECK_EQ(got[0].revaultVa, want[0].revaultVa);
+  CHECK_EQ(got[0].disasmVa, want[0].disasmVa);
   CHECK_EQ(got[0].edits.size(), want[0].edits.size());
   for (std::size_t i = 0; i < got[0].edits.size() && i < want[0].edits.size(); ++i) {
     CHECK_EQ(got[0].edits[i].offset, want[0].edits[i].offset);

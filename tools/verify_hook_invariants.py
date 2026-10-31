@@ -514,20 +514,20 @@ def check_identity(failures, warnings):
                 f"IDENTITY: 0x{va:X} ({e['name']}) prologue changed — "
                 f"expected {want.hex()} got {got.hex()}. Either the game binary "
                 f"changed or this address never was {e['name']}. Re-derive from "
-                f"ReVault before touching the hook.")
+                f"the disassembly before touching the hook.")
 
 
 def write_manifest():
-    """Pin current bytes for every address we hook. Names come from ReVault."""
+    """Pin current bytes for every address we hook. Names come from the disassembly."""
     if not GAME_BINARY.exists():
         print(f"cannot write manifest: {GAME_BINARY} not found", file=sys.stderr)
         return 1
     data = GAME_BINARY.read_bytes()
     sections = pe_sections(data)
 
-    # ReVault-verified identities. Where a local constant name disagrees with
-    # ReVault, ReVault wins and the disagreement is recorded in `note`.
-    revault_names = {
+    # the disassembly-verified identities. Where a local constant name disagrees with
+    # the disassembly, the disassembly wins and the disagreement is recorded in `note`.
+    disasm_names = {
         0x140F80ED0: ("BroadcasterListen (CBroadcaster::Listen)", ""),
         0x140F87AA0: ("CBroadcaster::ReceiveLocalEvent", ""),
     }
@@ -542,7 +542,7 @@ def write_manifest():
         raw = read_at_va(data, sections, va, 8)
         if raw is None:
             continue
-        name, note = revault_names.get(va, (targets[va], ""))
+        name, note = disasm_names.get(va, (targets[va], ""))
         entry = {"va": f"0x{va:X}", "name": name, "prologue": raw.hex()}
         if note:
             entry["note"] = note
@@ -552,7 +552,7 @@ def write_manifest():
         {"_comment": "Pinned by tools/verify_hook_invariants.py --write-manifest. "
                      "prologue = first 8 bytes at va in echovr/bin/win10/echovr.exe. "
                      "A mismatch means the binary changed OR the address was never "
-                     "what its constant claims. Re-derive from ReVault, do not re-pin.",
+                     "what its constant claims. Re-derive from the disassembly, do not re-pin.",
          "image_base": f"0x{IMAGE_BASE:X}",
          "addresses": entries}, indent=2) + "\n")
     print(f"wrote {MANIFEST.relative_to(REPO)} ({len(entries)} addresses)")

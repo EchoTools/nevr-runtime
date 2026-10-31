@@ -9,7 +9,7 @@
 // (src/runtime/tests/test_render_config.cpp). The process half (the two observer hooks, the production memory reader,
 // the DXGI and LibOVR queries, the log call) is render_config_hook.cpp.
 //
-// Every address is a ReVault VA in echovr.exe (image base 0x140000000); the value read at run time is
+// Every address is a VA in echovr.exe (image base 0x140000000); the value read at run time is
 // `base + (VA - kImageBase)`. The ones marked "read back" were read back from the disassembly while writing this file.
 
 #include <cstddef>
@@ -24,7 +24,7 @@ namespace nevr_render_config {
 
 inline constexpr std::uint64_t kImageBase = 0x140000000ULL;
 
-// ---- What the game holds (STATIC: read from echovr.exe through ReVault) ----
+// ---- What the game holds (STATIC: read from the echovr.exe disassembly) ----
 
 /// 128-byte NUL-terminated GPU name; getter fcn.1400df2d0 trims it in place (read back: LEA RBX,[0x14209cf70]).
 inline constexpr std::uint64_t kGpuNameVa = 0x14209cf70ULL;

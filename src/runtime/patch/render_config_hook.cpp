@@ -27,7 +27,7 @@ using nevr_render_config::Externals;
 using nevr_render_config::MemoryReader;
 using nevr_render_config::SettingsObserver;
 
-// ApplyRuntimeGfxSettings @ 0x140c31870 (ReVault echovr.exe, read back): the first 27 bytes, up to and including
+// ApplyRuntimeGfxSettings @ 0x140c31870 (echovr.exe, read back): the first 27 bytes, up to and including
 // `SUB RSP,0x60`. Nothing in them is position dependent.
 constexpr std::array<std::uint8_t, 27> kApplyPrologue = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24,
                                                           0x18, 0x48, 0x89, 0x7c, 0x24, 0x20, 0x55, 0x41, 0x56,

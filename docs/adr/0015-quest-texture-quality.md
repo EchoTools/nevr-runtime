@@ -34,7 +34,7 @@ The configuration's level is latched by the first install in the process (a seco
 
 ### The control and the live apply (#1012, #1186)
 
-The design is marshmallow-mia's (EchoTools/echoApkPatch, graphics v9 and v10: the "Texture Resolution" control and the level that applies while the game runs). Only facts about the game were taken from it; every function was read in ReVault (the Quest libr15) and is hooked through a GOT slot libr15 calls it by, so no code byte is written (ADR 0021). `texture_menu_hook.h` lists the five hooks, their slots and the evidence; `pinned_targets.h` holds the pins.
+The design is marshmallow-mia's (EchoTools/echoApkPatch, graphics v9 and v10: the "Texture Resolution" control and the level that applies while the game runs). Only facts about the game were taken from it; every function was read in the disassembly (the Quest libr15) and is hooked through a GOT slot libr15 calls it by, so no code byte is written (ADR 0021). `texture_menu_hook.h` lists the five hooks, their slots and the evidence; `pinned_targets.h` holds the pins.
 
 What a player meets:
 

@@ -24,7 +24,7 @@ tip, and append a removal row to the ledger.
 Every decision and action is appended as one JSON line to the log (REAP_LOG, default
 $XDG_STATE_HOME/nevr-runtime/reap-merged.jsonl). A record that cannot be written aborts the run.
 
-Environment: REAP_LEDGER (default ~/.local/share/repo-hygiene/nevr-runtime-ledger.md), REAP_LOG,
+Environment: REAP_LEDGER (required: the ledger file, a markdown table of the artifacts this checkout's agents made), REAP_LOG,
 REAP_BASE (default origin/main), REAP_GH (default gh).
 """
 import argparse
@@ -290,7 +290,9 @@ def main():
     wt_dir = os.path.join(root, ".claude", "worktrees")
     base = os.environ.get("REAP_BASE", "origin/main")
     gh = os.environ.get("REAP_GH", "gh")
-    ledger = os.environ.get("REAP_LEDGER", os.path.expanduser("~/.local/share/repo-hygiene/nevr-runtime-ledger.md"))
+    ledger = os.environ.get("REAP_LEDGER", "")
+    if not ledger:
+        sys.exit("reap-merged: REAP_LEDGER is not set; name the ledger file (a markdown table) to run")
     state = os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
     log = Log(os.environ.get("REAP_LOG", os.path.join(state, "nevr-runtime", "reap-merged.jsonl")))
     try:

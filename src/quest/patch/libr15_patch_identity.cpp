@@ -54,12 +54,12 @@ std::string BuildIdHex(const BuildIdBytes& id) {
 
 std::string CanonicalTable(const Row* rows, std::size_t rowCount, const std::vector<WordPatchRow>& extra,
                            std::uint64_t slotArea) {
-  std::string s = "layout|bias=" + Hex(kRevaultBias) + "|slot_area=" + Hex(slotArea) + "|slot_bytes=" + Hex(kSlotBytes) + "\n";
+  std::string s = "layout|bias=" + Hex(kDisasmBias) + "|slot_area=" + Hex(slotArea) + "|slot_bytes=" + Hex(kSlotBytes) + "\n";
   for (std::size_t i = 0; i < rowCount; ++i) {
     const Row& row = rows[i];
     s += std::string("row|") + row.id + "|" + KindName(row.kind) + "|slot=" + Hex(row.slot);
     for (std::size_t site = 0; site < row.siteCount; ++site) {
-      s += "|" + Hex(row.sites[site].revaultVa) + ":";
+      s += "|" + Hex(row.sites[site].disasmVa) + ":";
       for (std::size_t w = 0; w < row.sites[site].wordCount; ++w) {
         if (w != 0) s += ",";
         s += Hex(row.sites[site].words[w]);
@@ -71,7 +71,7 @@ std::string CanonicalTable(const Row* rows, std::size_t rowCount, const std::vec
   std::vector<const WordPatchRow*> sorted;
   for (const WordPatchRow& r : extra) sorted.push_back(&r);
   std::sort(sorted.begin(), sorted.end(), [](const WordPatchRow* a, const WordPatchRow* b) {
-    if (a->revaultVa != b->revaultVa) return a->revaultVa < b->revaultVa;
+    if (a->disasmVa != b->disasmVa) return a->disasmVa < b->disasmVa;
     return a->id < b->id;
   });
   s += "extra|" + Hex(sorted.size()) + "\n";
@@ -81,7 +81,7 @@ std::string CanonicalTable(const Row* rows, std::size_t rowCount, const std::vec
   for (const WordPatchRow* r : sorted) {
     put(r->id.size(), 1);
     s += r->id;
-    put(r->revaultVa, 8);
+    put(r->disasmVa, 8);
     put(r->edits.size(), 1);
     for (const WordEdit& e : r->edits) {
       put(e.offset, 2);

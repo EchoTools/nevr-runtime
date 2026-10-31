@@ -351,7 +351,7 @@ bool HookSelectionByName(int i) {
   return true;
 }
 
-// libr15: the pinned slot, content-checked (the body is the 25 words ReVault shows; WriteLogV's own slot holds WriteLogV).
+// libr15: the pinned slot, content-checked (the body is the 25 words the disassembly shows; WriteLogV's own slot holds WriteLogV).
 InstallResult InstallSelectionPinned(std::uintptr_t base) {
   InstallResult r;
   bool ok = true;

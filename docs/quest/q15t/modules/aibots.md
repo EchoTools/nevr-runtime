@@ -10,10 +10,10 @@ R40 `CR15NetAIScenarios::EnableScenario`, JUMP_SLOT 0x36ce118: called, not hooke
 
 ## Address evidence
 - `R0_readelf_r.txt`: `00000000036ce118 ... R_AARCH64_JUMP_SLOT 000000000123c2bc _ZN10NRadEngine8NRadGame18CR15NetAIScenarios14EnableScenarioENS1_14EScenarioStateE`;
-  `R1_functions.md` R40: "C6 EnableScenario -> 0x133c2bc (136) ... first word ffc300d1 MATCH". The source header says "libr15 0x123c2bc" (ELF vaddr), ReVault 0x133c2bc = 0x123c2bc + 0x100000.
-- ReVault `FN | 133c2bc | EnableScenario | 136`; first instruction `sub sp, sp, #0x30` = bytes `ffc300d1` = word 0xd100c3ff = the source's `kEnableFirstWord` (the source build's aibots:43).
+  `R1_functions.md` R40: "C6 EnableScenario -> 0x133c2bc (136) ... first word ffc300d1 MATCH". The source header says "libr15 0x123c2bc" (ELF vaddr), disassembly 0x133c2bc = 0x123c2bc + 0x100000.
+- Disassembly `FN | 133c2bc | EnableScenario | 136`; first instruction `sub sp, sp, #0x30` = bytes `ffc300d1` = word 0xd100c3ff = the source's `kEnableFirstWord` (the source build's aibots:43).
 - `ResolveAiBotsFns`: `dlsym` of the exported name must equal `base + 0x123c2bc` (else refusal), and the first word at that address must be 0xd100c3ff (the source's own check). Fixed address when the name does not resolve.
-Layout read from ReVault (binary 576): `NetGameMT` 0x13027d4 `mov w8,#0x8510; ldr x0,[x0,x8]`; `Scenarios()` 0x138fd0c `ldr x0,[x0,#0x2ab0]`; `ConnectBot` 0x133bf78
+Layout read from the disassembly: `NetGameMT` 0x13027d4 `mov w8,#0x8510; ldr x0,[x0,x8]`; `Scenarios()` 0x138fd0c `ldr x0,[x0,#0x2ab0]`; `ConnectBot` 0x133bf78
 `ldr w8,[x19,#0x500]; add w9,w8,#1; str w9,[x19,#0x500]; mov w9,#0x50; madd x0,x8,x9,x19` (the agent count is a **u32** at scenarios+0x500, rows of 0x50; the source read a u16: same value
 for any count < 65536); `EnableScenario` reads `ldr x8,[x19,#0x560]` (current scenario) and stores `str w21,[x19,#0x568]`, and its host test is
 `ldr x20,[x0,#0x558]; ldr x8,[x20,#0x2da0]; ldr x8,[x8]; tbnz w8,#1; ... and x8,x8,#0x44; cmp x8,#0x40; b.eq` (host path when flags & 2, or (flags & 0x44) == 0x40; otherwise it

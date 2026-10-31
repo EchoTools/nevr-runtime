@@ -1,6 +1,6 @@
 # Module `bvh`: a real static raycast tree for CBVHTree (rows R20-R25)
 
-Pinned build: libr15 build id b243509c08ce677aeb95fa348016949b3fc45230 (ReVault binary 576; ReVault VA = ELF vaddr + 0x100000).
+Pinned build: libr15 build id b243509c08ce677aeb95fa348016949b3fc45230 (disassembly VA = ELF vaddr + 0x100000).
 Source: `<source build>/the source build's bvh` and the source build's bvh_core (read-only, never edited, never pushed).
 Code: `src/quest/plugins/q15t/src/bvh_core.h` (pure traversal and header parse), `src/quest/plugins/q15t/src/bvh.h`, `src/quest/plugins/q15t/src/bvh.cpp` (GOT wrappers). Tests: `src/quest/tests/q15t/bvh_core_test.cpp`
 (synthetic meshes), `src/quest/tests/q15t/bvh_test.cpp` (the real installer on fake slot pages), `src/quest/tests/q15t/bvh_build.h` (test-only tree builder).
@@ -8,7 +8,7 @@ Depends on nothing. `wallfire` depends on this module.
 
 ## 1. Rows
 
-| Row | What | JUMP_SLOT (ELF) | Stock function (ELF / ReVault) | Replaced by |
+| Row | What | JUMP_SLOT (ELF) | Stock function (ELF / disassembly) | Replaced by |
 |---|---|---|---|---|
 | R20 | `CBVHTree::Initialize(this, SBVHTreeData*)` | 0x36ec548 | 0x1a45a88 / 0x1b45a88, a bare `ret` (`c0035fd6`) | `InitializeWrapper`: stock, then parse and keep a `Tree*` in the 8-byte CBVHTree |
 | R21 | `CBVHTree::Shutdown(this)` | 0x36eb648 | 0x1a45a8c / 0x1b45a8c, a bare `ret` | `ShutdownWrapper`: stock, then clear the word |
@@ -32,7 +32,7 @@ executable page is refused). No code word is written, so nothing needs `execmod`
 ## 2. What the source does, and the mechanism here
 
 The Quest build of libr15 has CBVHTree compiled out (R20/R21 are a bare `ret`, R22/R23 log "NotImplemented_(Embree)" once and
-return 0; ReVault 576, quoted in section 3), so every static raycast misses and every line of sight is clear. The levels still ship
+return 0; the disassembly, quoted in section 3), so every static raycast misses and every line of sight is clear. The levels still ship
 their CBVHResource, so the source (the source build's bvh:1-12) implements the tree on that data: it swaps the four CBVHTree slots, parses
 the resource's `SBVHTreeData` at Initialize and keeps a pointer in the 8-byte CBVHTree object (the source build's bvh:12-15).
 
@@ -58,7 +58,7 @@ Per row:
 - **R24** `GateWrapper`: see section 4.
 - **R25** `TouchWrapper`: returns false and writes nothing, as the stock Quest's stub tree makes `RayQueryStatic` behave (hit flag is
   Intersect's return; the source build's bvh:26-37). Without it a hand's touch ray (origin + dir x length, no `t <= 1` check by its reader)
-  would hit a surface metres past the hand and the grab would pin the hand there. ReVault shows `RayQueryStatic` itself calls the
+  would hit a surface metres past the hand and the grab would pin the hand there. the disassembly shows `RayQueryStatic` itself calls the
   R24 stub (`0x21cf454 bl 0x00fd1740`, then `cbz w0, 0x021cf5c0`), so with the gate on its cast is already a miss (its return site
   is not in the allowed list); R25 matters when the gate is off.
 
@@ -76,15 +76,15 @@ the source's `debug.<app>.bvhgate 0`), `bvhtouch.keep` (R25 not swapped). Read a
 
 ## 3. Evidence: the structures read, each offset quoted and checked
 
-Source file:line is the source build's; ReVault is binary 576 (the Quest libr15) unless it says binary 1 (echovr.exe, where the
+Source file:line is the source build's; disassembly is of the Quest libr15 unless it says PC (echovr.exe, where the
 engine's Embree traversal still exists and shows the layout). "Unverified" means not used by the code.
 
 **SBVHTreeData (0x50 bytes)**: triangles `CMemBlock {ptr +0x00, size +0x08}`, nodes `CMemBlock {ptr +0x20, size +0x28}`, u32 root
 reference `+0x40`.
 - Source: the source build's bvh_core:6; root `+0x40` is *not* in the source (it assumes node 0, the source build's bvh_core:14; deviation 1 below).
-- ReVault 576, `NRadEngine::SBVHTreeData::Reset` (VA 0x1b54428, size 48): `str x30...; mov x1, xzr; mov w2, wzr; mov x19, x0; bl 0x0103e400` (CMemBlock reset at +0), `add x0, x19, #0x20 ... bl 0x0103e400`
+- the disassembly, `NRadEngine::SBVHTreeData::Reset` (VA 0x1b54428, size 48): `str x30...; mov x1, xzr; mov w2, wzr; mov x19, x0; bl 0x0103e400` (CMemBlock reset at +0), `add x0, x19, #0x20 ... bl 0x0103e400`
   (CMemBlock reset at +0x20), `0x1b5444c str wzr, [x19, #0x40]` (u32 at +0x40). Two CMemBlocks at +0 and +0x20 and a u32 at +0x40: confirmed.
-- ReVault binary 1 (PC), the tree setup `FUN_14070f6e0(param_1, param_2)`: `uVar1 = *(undefined4 *)(param_2 + 0x40)`;
+- the PC disassembly, the tree setup `FUN_14070f6e0(param_1, param_2)`: `uVar1 = *(undefined4 *)(param_2 + 0x40)`;
   `FUN_1400da1c0(param_2 + 0x20)` / `FUN_1400d5d30(param_2 + 0x20)` and the same on `param_2` (block pointer and size getters of the
   two CMemBlocks), the u32 stored to the traverser at `lVar2 + 0x20`. Root reference at +0x40: confirmed.
 - CMemBlock `{ptr +0, size +8}`: the traversal reads the block pointer as the first qword (`*(longlong *)(... + 0x30)` of the
@@ -99,7 +99,7 @@ reference `+0x40`.
 
 **Triangle4 (0xe0 bytes)** `v0, e1, e2, Ng` as `x[4] y[4] z[4]` (48 floats), then `id0[4]`, `id1[4]`; an empty lane has `id0 = -1`.
 - Source: the source build's bvh_core:9 and `static_assert(sizeof(Tri4) == 0xe0)` `:32`.
-- ReVault binary 1, Embree traversal `FUN_14135f9a0` (decompilation): the stride `lVar6 = uVar7 * 0xe0;` and `lVar6 = lVar6 + 0xe0;` per
+- the PC disassembly, Embree traversal `FUN_14135f9a0` (decompilation): the stride `lVar6 = uVar7 * 0xe0;` and `lVar6 = lVar6 + 0xe0;` per
   record; v0 read as `pfVar11[0..11]` (`fVar42 = *pfVar11 - fVar46; ... pfVar11[0xb] - fVar24`), e2 as `pfVar11[0x18..0x23]`,
   Ng as `pfVar11[0x24..0x2f]` (`pfVar11[0x28] * fVar13 + fVar41 * pfVar11[0x24] + pfVar11[0x2c] * fVar12`). That leaves
   `[0x0c..0x17]` for e1 and `[0x30..0x37]` (8 words) for the two id arrays: 0xe0 = 4 x 48 + 8 x 4 bytes. Confirmed for the stride and for
@@ -110,7 +110,7 @@ reference `+0x40`.
 **Node (0x40 bytes)**: `x[4] y[4] z[4] = {left.lo, right.lo, left.hi, right.hi}`, `child[2]`, `pad[2]`; `child >= 0`: inner node at
 byte offset `child * 8` (index `child >> 3`); `child < 0`: leaf, first record `(child & 0x7fffffff) >> 5`, count `child & 31`.
 - Source: the source build's bvh_core:12-14, `:31`, leaf decode `:142`.
-- ReVault binary 1 `FUN_14135f9a0`: `while ((int)uVar10 < 0) { uVar7 = (ulonglong)(longlong)(int)(uVar10 ^ 0x80000000) >> 5;
+- the PC disassembly `FUN_14135f9a0`: `while ((int)uVar10 < 0) { uVar7 = (ulonglong)(longlong)(int)(uVar10 ^ 0x80000000) >> 5;
   uVar1 = ((uVar10 ^ 0x80000000) & 0x1f) + uVar7;`: the sign bit marks a leaf, `>> 5` is the first record, `& 0x1f` the count. Confirmed.
   The 0x40 node size, the lane order of the bounds and the `child * 8` byte offset are the source's and the Embree 1.0 BVH2 layout;
   the sizes are enforced by `Parse` (multiples of 0x40) and a wrong stride would mis-read every tree, which the first-hit line shows.
@@ -119,14 +119,14 @@ byte offset `child * 8` (index `child >> 3`); `child < 0`: leaf, first record `(
 **CBVHTree = 8 bytes**: the source build's bvh:12; the object at CStaticRaycastCS+0x148 is the first (only) member of the engine's own
 struct and the PC tree is a pointer to a traverser (`FUN_14070f6e0`: `*(undefined8 **)*param_1 = puVar8;`, `*param_1` is that pointer).
 
-**Stock stubs (R20-R23), ReVault 576**:
+**Stock stubs (R20-R23), the disassembly**:
 
     1b45a88 ret                        c0035fd6        (Initialize, size 4)
     1b45a8c ret                        c0035fd6        (Shutdown, size 4)
     1b45ae4 str x30,[sp,#-0x10]!  ... adrp x8,0x389d000 ; ldrb w9,[x8,#0xa8c] ; tbnz w9,#0,0x01b45b2c ; ... mov w5,#0x87 ... bl 0x0104b960 ... mov w0,wzr ; ret
     1b45b38 ... ldrb w9,[x8,#0xa90] ... mov w5,#0xb9 ... bl 0x0104b960 ... mov w0,wzr ; ret
 
-**CncaGameSpace::StaticRaycast thunk (R24), ReVault 576**:
+**CncaGameSpace::StaticRaycast thunk (R24), the disassembly**:
 
     19066e4 ldr x0,[x0,#8]    000440f9
     19066e8 ldr x8,[x0]       080040f9
@@ -138,19 +138,19 @@ br x17`: slot 0x37c0288 = ELF 0x36c0288, matching the readelf line. The stub end
 is the caller's (this is what the gate relies on). The same was read for R23 (`0x1021a90 ... ldr x17,[x16,#0x430]` = slot 0x37e8430) and for
 wallfire's R26 (`0x1012aa0`). The slot-to-stub link of R20, R21, R22 and R25 was not read (readelf only).
 
-**The three allowed call sites** (the source build's bvh:103-105): return addresses ELF 0x12b2b4c, 0x12b2bc4, 0x12c0a54 (ReVault 0x13b2b4c, 0x13b2bc4,
-0x13c0a54). ReVault 576 at the instruction before each:
+**The three allowed call sites** (the source build's bvh:103-105): return addresses ELF 0x12b2b4c, 0x12b2bc4, 0x12c0a54 (disassembly 0x13b2b4c, 0x13b2bc4,
+0x13c0a54). the disassembly at the instruction before each:
 
     13b2b48 bl 0x00fd1740   fe7af097   in DualStaticRaycast@13b2b28
     13b2bc0 bl 0x00fd1740   e07af097   in DualStaticRaycast@13b2b28
     13c0a50 bl 0x00fd1740   3c43f097   in Update@13c096c
 
 all three are `bl` to the R24 PLT stub, in `CR15NetRaycastUtils::DualStaticRaycast` (twice) and `SR15PatrolSM::Update` as the source names them.
-The names come from ReVault's function table; the source's comments for why these three (bullets, AI patrol) are its own analysis
+The names come from the disassembly's function table; the source's comments for why these three (bullets, AI patrol) are its own analysis
 (the source build's bvh:38-57), not re-derived here.
 
 **SBVHHit (0x44 bytes)**: `id0 +0`, `id1 +4`, `u +8`, `v +0xc`, `t +0x10`, unit normal `+0x38`; `+0x14..+0x37` left as the caller set it.
-Source the source build's bvh:19-22, `:178-179`. **Not independently verified in ReVault** (the readers of `+0x38` named in the source were
+Source the source build's bvh:19-22, `:178-179`. **Not independently verified in the disassembly** (the readers of `+0x38` named in the source were
 not decompiled here); the writes are limited to these fields, and a wrong offset shows as a wrong normal, not a crash
 (all inside the 0x44 bytes the callers zero).
 
@@ -222,9 +222,9 @@ Falsifiers (any one means the module or my reading is wrong, and the module shou
 - **Unverified** (not used to make a decision): CMemBlock pointer/size order, Triangle4 e1 and id array positions, Node bound lane order and `child * 8`
   (all fail safe through `Parse` and the traversal's bounds checks), the SBVHHit offsets beyond `+0x38` normal and `+0x10` t, the reasons for the
   three allowed sites (source analysis).
-- **R1 note correction**: a source-build note (not in this tree) says a `0xffd440` this-adjust thunk is a StaticRaycast thunk; ReVault
+- **R1 note correction**: a source-build note (not in this tree) says a `0xffd440` this-adjust thunk is a StaticRaycast thunk; disassembly
   shows 0xffd440 is a PLT stub (`adrp x16, 0x37d6000; ldr x17,[x16,#0x108]`), not a StaticRaycast thunk. No code depends on it.
-- PC vs source differences: the PC's traverser is Embree's own packet code with SIMD (ReVault binary 1 `FUN_14135f9a0`); this module is the scalar port of
+- PC vs source differences: the PC's traverser is Embree's own packet code with SIMD (the PC disassembly `FUN_14135f9a0`); this module is the scalar port of
   the source's version. Hit order among coplanar triangles at the same `t` may differ from the PC (the first found wins here).
 - A tree built before the plugin installs (an Initialize that ran earlier) has no table entry; the install is at plugin init, before any level loads.
 

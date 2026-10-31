@@ -2,7 +2,7 @@
 // Which textures the UI keeps at their top mip, and when a texture still needs forcing. The decisions are apart
 // from the hook that applies them (ui_texture_mips.cpp) so they are unit-tested without the game.
 //
-// Evidence (ReVault, echovr project; PC VAs are echovr.exe, Quest VAs are libr15.so pinned vaddr + 0x100000):
+// Evidence (disassembly of the game binaries; PC VAs are echovr.exe, Quest VAs are libr15.so pinned vaddr + 0x100000):
 //   - CGTextureResource::Attach (0x1405491c0) creates the device texture at its base level when texture streaming is
 //     on (DAT_1420a8ab8 != 0), and calls ForceLoadAllMips (0x14056c420) only when streaming is off.
 //   - Streaming raises a texture's level only for textures registered in a streaming system (CalcObject/CalcLevel

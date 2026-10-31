@@ -1,12 +1,12 @@
 /* The controller-input seam (#1202, docs/adr/0025-quest-autopilot-route.md): the pure half; input_seam_hook.h is the hook.
  * No thunk and no Android header here, so the host test drives every rule directly (src/quest/tests/input_seam_test.cpp).
  *
- * What the game does (pinned libr15, build b243509c...; pinned VAs, ReVault lists them 0x100000 higher): once per frame
+ * What the game does (pinned libr15, build b243509c...; pinned VAs, the disassembly lists them 0x100000 higher): once per frame
  * NRadEngine::CVR::PollTracking (0x1a7142c) enumerates the input devices, keeps type 4 (`cmp w8, #0x4` at 0x1a718e4,
  * ovrControllerType_TrackedRemote), reads each one's capabilities (vrapi_GetInputDeviceCapabilities, call at 0x1a718fc),
  * takes the hand from the left-hand bit (0x1a71914: left 0, else 1) and calls
  * vrapi_GetCurrentInputState(ovr, deviceId, cvr + 0x300 + hand * 0x48) (call at 0x1a71928). That call is the only
- * caller of the import's PLT stub (`revault_callers 0x1029410`).
+ * caller of the import's PLT stub (callers of 0x1029410 in the disassembly).
  *
  * The layouts are the public Oculus Mobile SDK header VrApi_Input.h (API 1.1.15 and later). Two measurements on the
  * binary agree with it: the game's per-hand stride 0x48 is sizeof(ovrInputStateTrackedRemote), and its capabilities

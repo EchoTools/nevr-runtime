@@ -203,7 +203,7 @@ static void BuildImage(unsigned bad = 0) {
   *W(kEcSlotUnloadEquip) = g_base + kEcFnUnloadEquip + ((bad & 32) ? 4 : 0);
   uint32_t* body = reinterpret_cast<uint32_t*>(W(kEcFnWriteLog));
   for (int i = 0; i < 25; ++i) body[i] = kWriteLogBody[i];
-  body[21] = 0x97fd7a47;  // the real bl word (ReVault 1088c74: 477afd97 little-endian): any target
+  body[21] = 0x97fd7a47;  // the real bl word (disassembly 1088c74: 477afd97 little-endian): any target
   if (bad & 4) body[7] ^= 1;
   BuildList(7, true);
   *W(kEcTacModList) = reinterpret_cast<uintptr_t>(&g_list);
@@ -408,7 +408,7 @@ static void CoreTests() {
   *reinterpret_cast<uint32_t*>(pg + kOcUse) = 1;
   CHECK(WatchUses(s4, pg, seen4, 12, 1, 1002, uses) == 1 && uses[0].type == 'T', "uncarried types are seen but not sent");
 
-  // the WriteLog body words: ReVault 576 0x1088c20..0x1088c80, little-endian bytes as read (docs/quest/q15t/modules/ec.md section 3)
+  // the WriteLog body words: the disassembly 0x1088c20..0x1088c80, little-endian bytes as read (docs/quest/q15t/modules/ec.md section 3)
   static const char* const rv[25] = {"ff0304d1", "e8048092", "e9030091", "ea230291", "08f0dff2", "eb030491", "29010291", "4aa10091", "e8fb0ea9",
                                       "eaa70da9", "eb6b00f9", "e00700ad", "e18346ad", "e39308a9", "e3c30291", "e59b09a9", "e75700f9", "e20f01ad",
                                       "e41702ad", "e61f03ad", "e18305ad", "477afd97", "fe7b40f9", "ff030491", "c0035fd6"};
@@ -418,7 +418,7 @@ static void CoreTests() {
     for (int b = 0; b < 4; ++b) v32 |= static_cast<uint32_t>(std::strtoul(std::string(rv[i]).substr(b * 2, 2).c_str(), nullptr, 16)) << (8 * b);
     w[i] = v32;
   }
-  CHECK(IsWriteLogWords(w), "the words ReVault shows are not the body this port checks");
+  CHECK(IsWriteLogWords(w), "the words the disassembly shows are not the body this port checks");
   for (int i = 0; i < 25; ++i) {
     uint32_t keep = w[i];
     w[i] ^= 0x100;

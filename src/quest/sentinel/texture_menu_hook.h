@@ -1,7 +1,7 @@
 /* The Texture Resolution control in the game's settings menu, and the level changing while the game runs (#1012, ADR 0015).
  *
  * The design of the control and of the live change is marshmallow-mia's (EchoTools/echoApkPatch, graphics v9 and v10); only facts
- * were taken from it. Every function below was read in ReVault (the Quest libr15) and is hooked through a GOT slot libr15 calls
+ * were taken from it. Every function below was read in the disassembly (the Quest libr15) and is hooked through a GOT slot libr15 calls
  * it by: no code byte is written (docs/adr/0021), none of the patch repository's caves or addresses is used.
  *
  * Five GOT hooks (pinned_targets.h has the slots, addresses and the evidence for each):

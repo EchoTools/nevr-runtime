@@ -11,14 +11,14 @@
 namespace q15t {
 namespace {
 
-// ELF vaddrs of the pinned build (ReVault VA = ELF + 0x100000); see the header for how each was read.
-constexpr std::uintptr_t kSlot = 0x365ddc8;  // vtable slot 1 of CFactory<CGShaderSetResource> (ReVault 0x375ddc8)
-constexpr std::uintptr_t kFn = 0x1906f4c;    // CFactory<CGShaderSetResource>::ConstructInstance (ReVault 0x1a06f4c)
+// ELF vaddrs of the pinned build (disassembly VA = ELF + 0x100000); see the header for how each was read.
+constexpr std::uintptr_t kSlot = 0x365ddc8;  // vtable slot 1 of CFactory<CGShaderSetResource> (disassembly 0x375ddc8)
+constexpr std::uintptr_t kFn = 0x1906f4c;    // CFactory<CGShaderSetResource>::ConstructInstance (disassembly 0x1a06f4c)
 constexpr char kSym[] = "_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE17ConstructInstanceEPvPNS_13CPresenceInitE";
 
 // CTableXT as the object holds it: the table starts at +0x78 and its growth step is at +0x20 of the table (+0x98 of the object).
 constexpr std::uintptr_t kStepOff = 0x98;
-constexpr std::uint64_t kStockStep = 0x20;  // the value ConstructInstance stores (ReVault 0x1a07000 mov w8,#0x20; str x8,[x19,#0x98])
+constexpr std::uint64_t kStockStep = 0x20;  // the value ConstructInstance stores (disassembly 0x1a07000 mov w8,#0x20; str x8,[x19,#0x98])
 constexpr std::uint64_t kStep = 1;          // the value this module writes
 
 using ConstructFn = void* (*)(void* self, void* obj, const void* init);

@@ -22,7 +22,7 @@ extern const int kSymCacheCount;
 namespace nevr_ui_texture_mips {
 namespace {
 
-// CGTextureResource::Attach (vtable slot 7; Quest 0x19e75c4 in ReVault): (this, stream*) -> 0 on success.
+// CGTextureResource::Attach (vtable slot 7; Quest 0x19e75c4 in the disassembly): (this, stream*) -> 0 on success.
 // MOV [RSP+0x10],RDX; MOV [RSP+8],RCX; PUSH RBP; PUSH RBX; PUSH RSI; PUSH RDI; PUSH R14; LEA RBP,[RSP-0x40];
 // SUB RSP,0x140; CMP QWORD [RCX+0x78],0.
 constexpr std::uint64_t kAttachVA = 0x1405491C0;

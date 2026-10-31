@@ -374,7 +374,7 @@ static uint64_t Fnv(const uint32_t* w, size_t n) {
 
 // The facts the module's behaviour hangs on, as literals: the other tests refer to these constants by name, so a changed value
 // would carry the tests with it. The tables and offsets are the source build's (the source build's dronekill_core); the shape tables were
-// compared with ReVault (docs/quest/q15t/modules/dronekill.md); the hashes are of the tables as read there.
+// compared with the disassembly (docs/quest/q15t/modules/dronekill.md); the hashes are of the tables as read there.
 static void TestPinnedConstants() {
   using namespace q15t::dk;
   CHECK(Fnv(kThunk, kThunkWords) == 0xa11a9be513e9cbecull, "kThunk changed");

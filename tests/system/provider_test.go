@@ -29,7 +29,7 @@ func rvaToFile(t *testing.T, f *pe.File, rva uint32) uint32 {
 // TestProviderStringTable_OvrOrg verifies the game binary's provider string
 // table entries match the expected numbering.
 //
-// Auditable citations (ReVault revault_read_memory, 2026-08-04):
+// Auditable citations (memory read of echovr.exe, 2026-08-04):
 //
 //	echovr.exe + 0x16D7130: "BOT\0STM\0PSN\0XBX\0OVR-ORG\0OVR\0DMO\0"
 //	Offset 0x16D713c (game provider 3): "XBX\0"  (4 bytes)

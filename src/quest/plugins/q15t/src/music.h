@@ -1,7 +1,7 @@
 // music (source build T-48, the source build's music; default ON, option Q15T_MUSIC): one combat music instance at a time, and a log line
 // for every music-bank post.
 //
-// Wraps libr15's JUMP_SLOT for CWwiseEngine::PostSoundEvent (ELF 0x36d76e8 -> the function at ELF 0x2549264, ReVault 0x2649264).
+// Wraps libr15's JUMP_SLOT for CWwiseEngine::PostSoundEvent (ELF 0x36d76e8 -> the function at ELF 0x2549264, disassembly 0x2649264).
 // Before one of the 2 combat-music Play events the wrapper posts BOTH music Stop events on the same game object (and on the
 // previous music Play's object when that differs) through the real PostSoundEvent, then lets the Play through unchanged. It logs
 // every post of a music-bank event (24 ids). MusicTick (game thread, 0.5 s) posts the two Stops once when no combat map is loaded
@@ -15,11 +15,11 @@
 
 namespace q15t {
 
-// ELF vaddrs of the pinned build (R0_readelf_r.txt line 118641, ReVault binary 576; see docs/quest/q15t/modules/music.md).
+// ELF vaddrs of the pinned build (R0_readelf_r.txt line 118641, see docs/quest/q15t/modules/music.md).
 inline constexpr std::uintptr_t kMusicSlot = 0x36d76e8;
 inline constexpr std::uintptr_t kMusicReal = 0x2549264;
 
-// The first 29 words of PostSoundEvent (ReVault 0x2649264..0x26492d4 - 0x100000): the prologue and everything up to the seek test
+// The first 29 words of PostSoundEvent (disassembly 0x2649264..0x26492d4 - 0x100000): the prologue and everything up to the seek test
 // that fixes the argument layout the extra Stop posts use (x0 self, x1 event, w2 object, x3 &flags, x4 callback, x5 cookie,
 // w6 seek ms, x7 &playing id). Read before the slot is swapped. The source build pins no code word; these are an addition.
 // No MD5 or other file-hash gate.

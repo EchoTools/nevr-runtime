@@ -24,17 +24,17 @@
 
 namespace q15t {
 
-// ELF vaddrs of the pinned build (readelf -rW, a source-build note not in this tree; ReVault VA = ELF vaddr + 0x100000).
+// ELF vaddrs of the pinned build (readelf -rW, a source-build note not in this tree; disassembly VA = ELF vaddr + 0x100000).
 constexpr std::uintptr_t kEcSlotRecvfrom = 0x36d3e88;        // R43 libc recvfrom JUMP_SLOT
 constexpr std::uintptr_t kEcSlotSendto = 0x36db3d0;          // R44 libc sendto JUMP_SLOT
 constexpr std::uintptr_t kEcSlotWriteLog = 0x36fd398;        // R41 NWriteLog::WriteLog(ELogLevel, ull, char const*, ...) JUMP_SLOT
-constexpr std::uintptr_t kEcFnWriteLog = 0xf88c20;           // its symbol value in libr15 (ReVault 0x1088c20)
+constexpr std::uintptr_t kEcFnWriteLog = 0xf88c20;           // its symbol value in libr15 (disassembly 0x1088c20)
 constexpr std::uintptr_t kEcSlotWriteLogV = 0x36cb1b0;       // WriteLogV's JUMP_SLOT (the 25-word body's `bl` goes through it)
-constexpr std::uintptr_t kEcFnWriteLogV = 0xf88720;          // WriteLogV (ReVault 0x1088720)
+constexpr std::uintptr_t kEcFnWriteLogV = 0xf88720;          // WriteLogV (disassembly 0x1088720)
 constexpr std::uintptr_t kEcSlotReloadEquip = 0x36ea1b0;     // NR15::ReloadEquipmentConfig JUMP_SLOT
-constexpr std::uintptr_t kEcFnReloadEquip = 0x20feda8;       // (ReVault 0x21feda8)
+constexpr std::uintptr_t kEcFnReloadEquip = 0x20feda8;       // (disassembly 0x21feda8)
 constexpr std::uintptr_t kEcSlotUnloadEquip = 0x36f1878;     // NR15::UnloadEquipmentConfig JUMP_SLOT
-constexpr std::uintptr_t kEcFnUnloadEquip = 0x20ff7b4;       // (ReVault 0x21ff7b4)
+constexpr std::uintptr_t kEcFnUnloadEquip = 0x20ff7b4;       // (disassembly 0x21ff7b4)
 constexpr std::uintptr_t kEcTacModList = 0x37af5f8;          // R42 .bss word: pointer to the tac-mod list { alloc, entries, count, cap }
 
 enum class EcPageState {

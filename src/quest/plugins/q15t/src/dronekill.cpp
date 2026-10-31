@@ -22,12 +22,12 @@
 namespace q15t {
 
 const DroneKillSlots kDroneKillPinned = {
-    /*actor*/ 0x36e2080, 0x2059714,   // ReVault 0x2159714 "Actor" size 544
-    /*enter*/ 0x36cacf8, 0x263b700,   // R45; ReVault 0x273b700 "Enter" size 424
-    /*fire*/ 0x36c37a8, 0x210bff8,    // R48; ReVault 0x220bff8 "FireBulletLocal" size 1200
-    /*attack*/ 0x36e6610, 0x210b8c4,  // R47; ReVault 0x220b8c4 "AttackTarget" size 1116
-    /*cmp*/ 0x36f91f0, 0x1524cb4,     // comparator JUMP_SLOT -> ReVault 0x1624cb4 "operator()" size 488
-    /*plt*/ 0xf43610};                // the comparator's PLT stub (ReVault 0x1043610: adrp x16 0x37f9000 / ldr x17,[x16,#0x1f0])
+    /*actor*/ 0x36e2080, 0x2059714,   // disassembly 0x2159714 "Actor" size 544
+    /*enter*/ 0x36cacf8, 0x263b700,   // R45; disassembly 0x273b700 "Enter" size 424
+    /*fire*/ 0x36c37a8, 0x210bff8,    // R48; disassembly 0x220bff8 "FireBulletLocal" size 1200
+    /*attack*/ 0x36e6610, 0x210b8c4,  // R47; disassembly 0x220b8c4 "AttackTarget" size 1116
+    /*cmp*/ 0x36f91f0, 0x1524cb4,     // comparator JUMP_SLOT -> disassembly 0x1624cb4 "operator()" size 488
+    /*plt*/ 0xf43610};                // the comparator's PLT stub (disassembly 0x1043610: adrp x16 0x37f9000 / ldr x17,[x16,#0x1f0])
 
 namespace {
 
@@ -700,12 +700,12 @@ struct FnSpec {
   std::uintptr_t vaddr;
 };
 constexpr FnSpec kFnSpecs[6] = {
-    {"_ZNK10NRadEngine13CncaGameSpace21FindComponentSystemMTENS_9CSymbol64E", 0x1804a10},  // ReVault 0x1904a10, size 92 (the const one)
-    {"_ZNK10NRadEngine12CTransformCS26ComputeLocalToWorldTransfQENS_18SCompactPoolHandleE", 0x16f6ef0},  // ReVault 0x17f6ef0, size 144
-    {"_ZNK10NRadEngine10CPhysicsCS11PrimaryBodyENS_18SCompactPoolHandleE", 0x1677d34},                    // ReVault 0x1777d34, size 112
-    {"_ZNK10NRadEngine9CPhTarget11ResolveBodyEv", 0x19a27ac},                                            // ReVault 0x1aa27ac, size 104
-    {"_ZN10NRadEngine10CPhysicsCS16SetWorldVelocityENS_18SCompactPoolHandleENS_8C3VectorE", 0x167bec0},   // ReVault 0x177bec0, size 244
-    {"_ZNK10NRadEngine8NRadGame16CR15NetPhysicsCS19IsLocallyControlledENS_18SCompactPoolHandleE", 0x2175630},  // ReVault 0x2275630, size 280
+    {"_ZNK10NRadEngine13CncaGameSpace21FindComponentSystemMTENS_9CSymbol64E", 0x1804a10},  // disassembly 0x1904a10, size 92 (the const one)
+    {"_ZNK10NRadEngine12CTransformCS26ComputeLocalToWorldTransfQENS_18SCompactPoolHandleE", 0x16f6ef0},  // disassembly 0x17f6ef0, size 144
+    {"_ZNK10NRadEngine10CPhysicsCS11PrimaryBodyENS_18SCompactPoolHandleE", 0x1677d34},                    // disassembly 0x1777d34, size 112
+    {"_ZNK10NRadEngine9CPhTarget11ResolveBodyEv", 0x19a27ac},                                            // disassembly 0x1aa27ac, size 104
+    {"_ZN10NRadEngine10CPhysicsCS16SetWorldVelocityENS_18SCompactPoolHandleENS_8C3VectorE", 0x167bec0},   // disassembly 0x177bec0, size 244
+    {"_ZNK10NRadEngine8NRadGame16CR15NetPhysicsCS19IsLocallyControlledENS_18SCompactPoolHandleE", 0x2175630},  // disassembly 0x2275630, size 280
 };
 
 void LogSwap(const char* hook, const InstallResult& r) {

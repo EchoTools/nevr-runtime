@@ -7,7 +7,7 @@ the general path.
 Scope and evidence:
 
 - **Binary.** echovr.exe, sha256 `b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043` (the copy
-  in ReVault project `echovr` and the copy under `echovr/bin/win10/`). Every `0x14…` address below is a VA in
+  in the disassembly project `echovr` and the copy under `echovr/bin/win10/`). Every `0x14…` address below is a VA in
   that file.
 - **Names.** Class and method names come from libr15.so, the Quest build of the same engine, whose Ghidra
   output carries demangled symbols (`NRadEngine::CResourceManager::AddPackage(NRadEngine::CSymbol64, char
@@ -15,7 +15,7 @@ Scope and evidence:
   string, a shared constant, or structure; the match basis is given where it is not a shared string. libr15.so
   thunk names are skewed by `0x100000` (`thunk_FUN_026439f0` is `FillResourceFileRequest` at `0x25439f0`), so
   its caller and callee lists are not used as evidence.
-- **Coverage.** ReVault project `echovr` holds 1042 binaries: 572 PE (echovr.exe, pnsrad.dll, pnsovr.dll,
+- **Coverage.** The disassembly project `echovr` holds 1042 binaries: 572 PE (echovr.exe, pnsrad.dll, pnsovr.dll,
   pnsdemo.dll, pnsradmatchmaking.dll and 567 script DLLs) and 470 ELF (libr15.so, libpnsrad.so,
   libpnsradmatchmaking.so, libpnsovr.so, test-foo.so and 465 script `.so` files). All 1042 were searched
   for the strings `resource`, `manifest`, `package`, `level`, `archive` and their own module name.
@@ -27,7 +27,7 @@ Scope and evidence:
     %u"` in `0x58f590`) and `CFileTypes` symbols, reached only through data references. None of them
     contains the resource manager, package manifest or archive loader (no `"Cannot find resource"`,
     `cpackagemanifest`, `carchiveloader` strings in libpnsrad.so).
-  - No script DLL or script `.so` contains `resource`, `manifest` or `package`. ReVault records no imports
+  - No script DLL or script `.so` contains `resource`, `manifest` or `package`. The disassembly records no imports
     for the PE script DLLs, and each script `.so` imports four or five C runtime functions. Script DLLs
     are themselves assets (see "Script DLLs").
 - **Data.** Format claims were checked against the shipped files in
@@ -133,7 +133,7 @@ Wwise files through `0x140fa5420`, save files through `0x1406363e0`), which no a
 
 All of this runs synchronously inside `CEngine::Init` (`0x14154a950`), before the first level:
 
-1. `InitGlobals` (`0x141548da0`, ReVault name `NRadPhysics::InitGlobals`):
+1. `InitGlobals` (`0x141548da0`, the disassembly name `NRadPhysics::InitGlobals`):
    - creates the factory manager `DAT_1420a2ad8` and the settings store `DAT_14209fe18`;
    - constructs the resource manager `DAT_1420a2ab8` (`0x140fa04b0`) and initializes it (`0x140fa2490`:
      16000-entry loaded table, a `0x168`-byte `CPackageManifest` at `+8`, platform `"win10"` at manifest `+0x160`;

@@ -10,7 +10,7 @@
 namespace q15t {
 namespace {
 
-// SBroadcasterData and one peer entry, as CleanupPeers reads them (the source build's peerclamp:55-57; ReVault 0x24ef9d8 ldr w27,[x0,#0x554];
+// SBroadcasterData and one peer entry, as CleanupPeers reads them (the source build's peerclamp:55-57; disassembly 0x24ef9d8 ldr w27,[x0,#0x554];
 // 0x24efa68 ldr w8,[x19,#0x560]; 0x24efa6c ldr x9,[x19,#0x518]; 0x24efa74 ldr x24,[x19,#0x478]; 0x24efa90 ldr w27,[x8,#8];
 // 0x24efa94 ldr x25,[x8,#0x228]; 0x24efa98 add x22,x8,#0x18; 0x24efa30 mov w28,#0x948; 0x24efa84 mov w2,#0x80).
 constexpr std::uintptr_t kHead = 0x554, kPerChunk = 0x560, kChunks = 0x518, kNow = 0x478, kSent = 0x470;

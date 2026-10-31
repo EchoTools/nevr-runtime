@@ -16,7 +16,7 @@
 namespace nevr_ui_text {
 namespace {
 
-// All three are echovr.exe (ReVault, reconstructed in the PR that introduced this file).
+// All three are echovr.exe (reconstructed in the PR that introduced this file).
 //
 // The game object: CR15Game is a singleton whose pointer is stored once, by CR15Game::CreateNetServiceProviders
 // (0x140109843), at 0x1420a0478.

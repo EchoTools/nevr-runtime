@@ -57,8 +57,8 @@ inline constexpr std::uintptr_t kRouteLobbyOffset = 0x8530;
 /// The game's invalid lobby id (echovr.exe 0x142100b20): 16 zero bytes.
 inline constexpr std::array<std::uint8_t, 16> kInvalidLobby = {};
 /// The offsets one build stages and reads. kPcLayout is echovr.exe's (the constants above); kQuestLayout is libr15's
-/// CR15Game (docs/adr/0017, #966 S4): every field is 8 lower, and the route compare is on the second lobby word (ReVault
-/// libr15 0x1301d88 BeginMultiplayer: byte +0x8518 & 0xf, qword +0x8520 gate, SUuid +0x8528 vs kInvalid; staged SUuid +0x8538,
+/// CR15Game (docs/adr/0017, #966 S4): every field is 8 lower, and the route compare is on the second lobby word (libr15
+/// 0x1301d88 BeginMultiplayer: byte +0x8518 & 0xf, qword +0x8520 gate, SUuid +0x8528 vs kInvalid; staged SUuid +0x8538,
 /// team u16 +0x8558).
 struct Layout {
   std::uintptr_t staged_lobby;

@@ -3,7 +3,7 @@
 Vocabulary: the **game client** is `echovr.exe` on a player's machine (PC) or `libr15.so` (Quest); the
 **game server** is the dedicated `echovr` game server; the **game service** is nakama.
 
-Every claim cites a source. `echovr.exe`/`libr15.so` addresses are from ReVault (project `echovr`, Ghidra
+Every claim cites a source. `echovr.exe`/`libr15.so` addresses are from the disassembly (project `echovr`, Ghidra
 raw decompilation); nakama paths are at `EchoTools/nakama` `origin/main`. A claim without a citation is
 labelled *unverified*. Libr15 thunk names in Ghidra carry a +0x100000 skew against the real VA; the VAs
 below are the real ones.
@@ -97,7 +97,7 @@ A fourth buffer (`+0x181b0`) takes the JSON records: every `CR15NetJsonLog` obje
 ### 2.3 What writes records (JSON producers)
 
 `CR15NetJsonLog` records are objects with `"message"`, optionally `"message_type"`, and
-`"[session][uuid]"`. Producers read in ReVault:
+`"[session][uuid]"`. Producers read in the disassembly:
 
 | Producer | VA | `message` / `message_type` |
 | --- | --- | --- |
@@ -105,7 +105,7 @@ A fourth buffer (`+0x181b0`) takes the JSON records: every `CR15NetJsonLog` obje
 | `LogSocialAnalytic` | `0x14017fda0` | `Mute User`, `Ghost User`, `Ghost All`, `Mute All`, `Personal Bubble` |
 | Load stats | `0x140f39b90` | `Load Stats` / `LOAD_STATS`, keys incl. `[client_load_time]` |
 | `UpdateConnectionStatLogging` | `0x1401bfdc0` | per connected slot, every `remote_log_connection_stats\|delay` s (default 60.0) when `remote_log_connection_stats\|enabled` |
-| others (names as ReVault gives them) | | FindSocial, GrantMissingUnlocks, RoundOverCB, OnScoreCB, SetErrorMessage, UserDisconnect, VoipDecoded, `FUN_1401933e0`, `FUN_14019f510` |
+| others (names as the disassembly gives them) | | FindSocial, GrantMissingUnlocks, RoundOverCB, OnScoreCB, SetErrorMessage, UserDisconnect, VoipDecoded, `FUN_1401933e0`, `FUN_14019f510` |
 
 ### 2.4 Flushing and the wire layout
 
@@ -204,7 +204,7 @@ Senders for a runtime-built message on the login connection: PC `SendFrameToServ
 
 ## 5. Whole-project search
 
-Project `echovr` in ReVault holds 1042 binaries: `echovr.exe`, the 9 named ones, and ~1030 script DLLs
+Project `echovr` in the disassembly holds 1042 binaries: `echovr.exe`, the 9 named ones, and ~1030 script DLLs
 and their Quest `.so` twins (hash names, `lib<hash>.so`). Terms: `remotelog`, `remote_log`, `remote log`
 (case-insensitive string search, limit 40) and the code regex `RemoteLog|remote_log|SRemoteLogs` (limit
 20), run one binary at a time, with a positive control (`remotelog` on `echovr.exe` returns

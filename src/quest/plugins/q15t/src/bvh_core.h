@@ -2,8 +2,8 @@
 // no game memory is read here, no Android, no allocation. (Port of the source build's bvh_core; the differences are
 // listed in docs/quest/q15t/modules/bvh.md section 6.)
 //
-// Format: Embree 1.0 BVH2<Triangle4> as the game ships it. Every offset below is checked against ReVault: libr15 binary 576
-// (CMemBlock / SBVHTreeData / CStaticRaycastCS) and echovr.exe binary 1 (the Embree traversal FUN_14135f9a0 and the tree
+// Format: Embree 1.0 BVH2<Triangle4> as the game ships it. Every offset below is checked against the disassembly: libr15
+// (CMemBlock / SBVHTreeData / CStaticRaycastCS) and echovr.exe (the Embree traversal FUN_14135f9a0 and the tree
 // setup FUN_14070f6e0); see docs/quest/q15t/modules/bvh.md section 3.
 //   SBVHTreeData (0x50 bytes): CMemBlock triangles {ptr +0x00, size +0x08}, CMemBlock nodes {ptr +0x20, size +0x28},
 //     u32 root reference +0x40. Sizes are in bytes.

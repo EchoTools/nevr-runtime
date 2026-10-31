@@ -11,7 +11,7 @@
 //
 // The page owners, the card ids and the actor-table offsets are the echovr-modkit author's findings (rad-links, MIT,
 // by Dualgame), found by use on the final PC build; the event layout is read from CncaGameSpace::SendComponentEvent
-// (ReVault echovr.exe 0x14050fb60). None of the ids is confirmed by a live click until the run recorded in the PR
+// (echovr.exe 0x14050fb60). None of the ids is confirmed by a live click until the run recorded in the PR
 // that introduced this file; the code is ours.
 
 #include <cstddef>
@@ -99,7 +99,7 @@ struct Event {
   uint64_t component = 0;
 };
 
-// SComponentEvent (ReVault echovr.exe 0x14050fb60 and its twin 0x14050fed0): word 0 the event symbol, word 2 the sender
+// SComponentEvent (echovr.exe 0x14050fb60 and its twin 0x14050fed0): word 0 the event symbol, word 2 the sender
 // identity (its low 16 bits index the game space's actor table; 0xffff is none), word 3 the component id.
 inline constexpr size_t kEventSymbolOffset = 0x00;
 inline constexpr size_t kEventSenderOffset = 0x10;

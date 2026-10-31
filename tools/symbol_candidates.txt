@@ -65,7 +65,7 @@
 # Candidate strings for forward hashing (CSymbol64 + SNS pipeline)
 # ============================================================================
 
-# --- Level names (from ReVault) ---
+# --- Level names (from the disassembly) ---
 mpl_lobby_b_arena
 mpl_arena_a
 mpl_tutorial_arena
@@ -87,7 +87,7 @@ echo_arena_npe
 frontend
 loading_screen
 
-# --- Resource / asset types (from ReVault) ---
+# --- Resource / asset types (from the disassembly) ---
 rwd_tint_0000
 rwd_tint_0001
 rwd_tint_0019
@@ -115,7 +115,7 @@ event_mpl_interface_joiningparty
 pty_mpl_combat_pebbles
 loading_tips
 
-# --- Delegate / event names (from ReVault, used by FireEvent functions) ---
+# --- Delegate / event names (from the disassembly, used by FireEvent functions) ---
 delegate_ongamesettingschanged
 delegate_OnNetTouchOwnershipTransfer
 delegate_OnFlagBaseScore

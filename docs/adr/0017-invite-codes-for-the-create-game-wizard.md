@@ -10,10 +10,10 @@ The final game builds contain a wizard, "deep linking" in the game's own metric 
 main-menu cards CREATE GAME and JOIN VIA CODE, then the `mnu_master` pages 34 to 41 (a code entry page, a link
 page, experience, arena mode, combat mode, map, settings, share). Its research is the work of Dualgame's
 `echovr-modkit` (`rad-links`, MIT) and, for a service, of Dualgame's `EchoRelay` fork. No code from either is
-copied by this record; the ids and behaviours below are facts, each re-checked in ReVault (grades as in
+copied by this record; the ids and behaviours below are facts, each re-checked in the disassembly (grades as in
 `docs/standards/verification.md`: VERIFIED, STATIC, UNVERIFIED).
 
-What the game does, measured in ReVault over all 1,041 binaries of project `echovr`:
+What the game does, measured in the disassembly over all 1,041 binaries of project `echovr`:
 
 - **It sends nothing a service can answer.** A page script logs one click metric per button: panel type
   `deep_linking` (`0x75705bbdb2a10bd7`, `CSymbol64("deep_linking")`), an event name (`create_invite`,
@@ -227,14 +227,14 @@ Consequences for the package:
 ### 3. Platforms
 
 The service contract is platform-neutral. PC is built first (the PC addresses and prologues above). Quest has the
-same scripts and the same `Join` body (`libr15.so`, ReVault virtual address `0x13462a8`) and gets its own hook in
+same scripts and the same `Join` body (`libr15.so`, the disassembly virtual address `0x13462a8`) and gets its own hook in
 `src/quest`, through that project's own mechanism, against the same RPCs.
 
 The wizard's texts are written by one writer on both binaries (`patch/ui_text.h`: the queue, the actor lookup, the write, the
 log lines). Only the address table and the memory it reads differ. On the Quest (`quest/invite/ui_text_quest.cpp`) the game
 object is the frame hook's netgame +8; `CncaGame::GameSpace(index)` (libr15 `0x17e17fc`; the PC's `GetGameSpace`, the same
 function with the array at `+0x1f48` and the count at `+0x1f78`), `CLocalComponentHandle<CCanvasUICS>::Find` (`0x1cbb408`) and
-`CCanvasUICS::SetText` (`0x139111c`) are each pinned by their prologue words (`sentinel/pinned_targets.h`; ReVault lists each
+`CCanvasUICS::SetText` (`0x139111c`) are each pinned by their prologue words (`sentinel/pinned_targets.h`; the disassembly lists each
 `0x100000` higher). The Quest's actor table differs from the PC's: `[gs+0x370]` is a name-sorted array of 16-byte entries (a
 signed 64-bit name, the actor index as a u16 at `+8`, the count at `table+0x30`), read as `CncaGameSpace::LocalActor` reads it
 (`nevr_ui_text::FindActorInSortedMap`). The answers reach it through `nevr_invite_match::TakeShareText`, filed by the same take
@@ -304,12 +304,12 @@ this feature carries that requirement.
 
 ## Quest observer on MetricLog (#966)
 
-The Quest half of the wizard observer hooks the game's `NRadEngine::NRadGame::NR15Logger::MetricLog(char const*, unsigned long long)` in `libr15.so` through a GOT slot. Addresses are ReVault virtual addresses unless marked pinned. A pinned address is the ReVault address minus `0x100000`, the libr15 offset: `0x130cc50` is pinned `0x120cc50`. The pins are in `src/quest/sentinel/pinned_targets.h`.
+The Quest half of the wizard observer hooks the game's `NRadEngine::NRadGame::NR15Logger::MetricLog(char const*, unsigned long long)` in `libr15.so` through a GOT slot. Addresses are the disassembly virtual addresses unless marked pinned. A pinned address is the disassembly address minus `0x100000`, the libr15 offset: `0x130cc50` is pinned `0x120cc50`. The pins are in `src/quest/sentinel/pinned_targets.h`.
 
 Measured:
 
-- `revault_search_code` for `MetricLog`, scope `searched all 1,041 binaries in project echovr`: 3 hits, all in `libr15.so`: `MetricLog` at `0x130cc50`, its thunk at `0x10057c0`, and `CR15NetJsonLog::WriteLog` at `0x136a304`, the only decompiled caller.
-- `revault_search_code` for `deep_linking`, same scope: 5 hits. `echovr.exe` `GetMetricsPanelName` (`0x140f4b4c0`) maps the panel hash `0x75705bbdb2a10bd7` to the name, and `libr15.so` `Enter` (`0x2428098`, `0x24288a4`) compares the same hash.
+- `disasm_search_code` for `MetricLog`, scope `searched all 1,041 binaries in project echovr`: 3 hits, all in `libr15.so`: `MetricLog` at `0x130cc50`, its thunk at `0x10057c0`, and `CR15NetJsonLog::WriteLog` at `0x136a304`, the only decompiled caller.
+- `disasm_search_code` for `deep_linking`, same scope: 5 hits. `echovr.exe` `GetMetricsPanelName` (`0x140f4b4c0`) maps the panel hash `0x75705bbdb2a10bd7` to the name, and `libr15.so` `Enter` (`0x2428098`, `0x24288a4`) compares the same hash.
 - Call sites in the store `libr15.so` (`aarch64-linux-gnu-objdump -d`): one `bl` to the MetricLog PLT stub `0xf057c0`, at pinned `0x126a4cc`, inside `WriteLog` (entered at pinned `0x126a304`). No `b` to the stub.
 - Relocation (`readelf -rW`): one `R_AARCH64_JUMP_SLOT` names the symbol, at pinned slot `0x36da2c8`, with addend `0x120cc50`. `readelf -sW --dyn-syms` gives the symbol's value as `0x120cc50` (FUNC, GLOBAL, DEFAULT).
 - Prologue: the first four instruction words at pinned `0x120cc50` are `a9bc63f9 a9015bf7 a90253f5 a9037bf3`, the `stp` pairs that save the callee-saved registers. The observer compares these 16 bytes before it writes anything.
@@ -358,10 +358,10 @@ Prediction, written before any Quest run: with remote logging on, a click on CRE
 
 The Quest's JOIN VIA CODE ends in the same staged join the PC uses (`src/runtime/patch/invite_join.h`), with libr15's offsets. The glue is `src/quest/invite/join_game_quest.cpp`; the host test is `src/quest/tests/invite_join_quest_test.cpp` (`just test-quest-hooks`).
 
-Measured in ReVault (project `echovr`, binary `libr15.so`; ReVault = pinned + `0x100000`):
+Measured in the disassembly (project `echovr`, binary `libr15.so`; the disassembly = pinned + `0x100000`):
 
 - `CR15Game::BeginMultiplayer(SR15NetMatchSettings const&)` at `0x1301d88`, decompiled. It reads the netgame at `this+0x8510`, the route byte at `+0x8518` (`& 0xf`), the gate qword at `+0x8520`, the lobby `SUuid` at `+0x8528` (against the invalid id), the staged `SUuid` at `+0x8538` and the team `u16` at `+0x8558`. Its listing has no `#0x8560` operand, so the gametype word is neither read nor written. Its exit stores the route to `+0x8518`, zeroes `+0x8520` and sets `+0x8528`, `+0x8538` and `+0x8558` back to the invalid id and `0xffff`. Comment `grade A, S0 2026-10-29`.
-- `CR15Game::BeginMultiplayer()` at `0x1301be4`: 52 bytes, its first 16 bytes `ff 83 01 d1 ff fb 04 a9 68 00 c0 d2 09 00 80 92` (`revault_read_memory`), calling the settings body through `thunk 0xfdc040`. Pinned `0x1201be4`.
+- `CR15Game::BeginMultiplayer()` at `0x1301be4`: 52 bytes, its first 16 bytes `ff 83 01 d1 ff fb 04 a9 68 00 c0 d2 09 00 80 92` (`disasm_read_memory`), calling the settings body through `thunk 0xfdc040`. Pinned `0x1201be4`.
 - `CR15Game::EnableTransitionMenu()` at `0x13005fc` (the plan's "mp_transition"): its first 16 bytes `ff 03 01 d1 f3 7b 03 a9 13 78 7d f9 d3 01 00 b4`. It sends one component event to the menu gamespace at `+0x7af0`. Pinned `0x12005fc`.
 
 The join's pins are in `src/quest/sentinel/pinned_targets.h` (`kBeginMultiplayerVaddr`, `kEnableTransitionMenuVaddr`) and are checked against the store file in `got_pinned_test.cpp`.
@@ -384,7 +384,7 @@ Not shown:
 - The Quest's `+0x8520` gate semantics beyond the decompile comment. The 281-instruction listing was not re-read in this slice.
 - The route check's invalid-id value on Quest: it is the PC's sixteen zero bytes, not separately verified in libr15.
 - Any run against the production service (U4, the invite RPC with the Quest token).
-- Whether the menu event before the begin is what the game does. Not measured on Quest; the headset run is owed. The reviewed ReVault reading (not re-measured here) found `EnableTransitionMenu` called by `JoinLobby` (libr15 `0x139682c`) after `Join`, by `SwitchTo` (`0x135b8b4`) right after `FindLobby`, and not by the two `BeginMultiplayer` callers, so the Quest order has no ReVault support yet.
+- Whether the menu event before the begin is what the game does. Not measured on Quest; the headset run is owed. The reviewed the disassembly reading (not re-measured here) found `EnableTransitionMenu` called by `JoinLobby` (libr15 `0x139682c`) after `Join`, by `SwitchTo` (`0x135b8b4`) right after `FindLobby`, and not by the two `BeginMultiplayer` callers, so the Quest order has no the disassembly support yet.
 
 ## Relation to other records
 

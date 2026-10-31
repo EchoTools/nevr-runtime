@@ -187,7 +187,7 @@ int main() {
   ctx.log = &FakeLog;
   q15t::SetLogContext(&ctx);
 
-  // 0. the pins are the readelf / ReVault pins (independent copy: the source build's memsys and its readelf note, not in this tree)
+  // 0. the pins are the readelf / disassembly pins (independent copy: the source build's memsys and its readelf note, not in this tree)
   const q15t::MemsysPins d = q15t::DefaultMemsysPins();
   CHECK(d.got_alloc == 0x36e9b48 && d.fn_alloc == 0x1901b5c && d.site_ret == 0x18818cc, "R37 pins");
   CHECK(d.got_init == 0x36de5c0 && d.fn_init == 0xf7e8e8 && d.init_ret == 0xf784e8 && d.got_sys == 0x371d020, "R38 pins");

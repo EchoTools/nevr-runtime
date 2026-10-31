@@ -17,8 +17,8 @@ export CMAKE_CXX_COMPILER_LAUNCHER := env("NEVR_CCACHE", `command -v ccache 2>/d
 # One config for every build, kept in the cache directory (tools/ccache_config.sh copies tools/ccache.conf there): a path inside a
 # worktree dies with the worktree, and a process that still carries it falls back to ccache's 5 GiB default (#1736).
 export CCACHE_BASEDIR := `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`
-export CCACHE_DIR := if path_exists("/mnt/games/cache/ccache") == "true" { "/mnt/games/cache/ccache" } else { env("HOME") / ".cache/ccache" }
-export CCACHE_CONFIGPATH := `tools/ccache_config.sh "$(if [ -d /mnt/games/cache/ccache ]; then echo /mnt/games/cache/ccache; else echo "$HOME/.cache/ccache"; fi)" 2>/dev/null || echo "$PWD/tools/ccache.conf"`
+export CCACHE_DIR := env("CCACHE_DIR", env("HOME") / ".cache/ccache")
+export CCACHE_CONFIGPATH := `tools/ccache_config.sh "${CCACHE_DIR:-$HOME/.cache/ccache}" 2>/dev/null || echo "$PWD/tools/ccache.conf"`
 
 # Show available recipes (default)
 default:
@@ -67,43 +67,6 @@ install-hooks:
 # Remove the worktrees under .claude/worktrees whose work has landed. Dry run unless `--apply` (tools/reap_merged.py)
 reap-merged *args:
     python3 -I tools/reap_merged.py {{ args }}
-
-# Make the Quest release timer's own checkout (a detached worktree at origin/main under the work root), link its units from there into the user systemd and arm the timer (RELEASING.md, "The Quest half of the train"; #1210). The unit moves that checkout to the fetched origin/main before every run
-install-quest-release-timer:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    CHECKOUT="$HOME/src/nevr-runtime-work/release-timer/checkout"
-    test -f "$HOME/.config/metis/r2-evr-echo-taxi.env" || { echo "install-quest-release-timer: refused: ~/.config/metis/r2-evr-echo-taxi.env is missing" >&2; exit 1; }
-    git -C "{{ justfile_directory() }}" fetch --quiet origin main
-    if [ ! -e "$CHECKOUT/.git" ]; then
-        mkdir -p "$(dirname "$CHECKOUT")"
-        git -C "{{ justfile_directory() }}" worktree add --detach "$CHECKOUT" origin/main
-    fi
-    for unit in nevr-quest-release.service nevr-quest-release-failed.service nevr-quest-release.timer; do
-        test -f "$CHECKOUT/tools/systemd/$unit" || { echo "install-quest-release-timer: refused: $CHECKOUT has no tools/systemd/$unit (origin/main does not carry the units yet)" >&2; exit 1; }
-        systemctl --user link "$CHECKOUT/tools/systemd/$unit"
-    done
-    systemctl --user daemon-reload
-    systemctl --user enable --now nevr-quest-release.timer
-    systemctl --user list-timers nevr-quest-release.timer --no-pager
-
-# Arm the release train guard as a user timer (hourly at :07) from the same dedicated checkout as the Quest timer; the units are linked from origin/main, and the guard runs there (RELEASING.md, "When to release"; #1409)
-install-train-guard-timer:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    CHECKOUT="$HOME/src/nevr-runtime-work/release-timer/checkout"
-    git -C "{{ justfile_directory() }}" fetch --quiet origin main
-    if [ ! -e "$CHECKOUT/.git" ]; then
-        mkdir -p "$(dirname "$CHECKOUT")"
-        git -C "{{ justfile_directory() }}" worktree add --detach "$CHECKOUT" origin/main
-    fi
-    for unit in nevr-train-guard.service nevr-train-guard-failed.service nevr-train-guard.timer; do
-        test -f "$CHECKOUT/tools/systemd/$unit" || { echo "install-train-guard-timer: refused: $CHECKOUT has no tools/systemd/$unit (origin/main does not carry the units yet)" >&2; exit 1; }
-        systemctl --user link "$CHECKOUT/tools/systemd/$unit"
-    done
-    systemctl --user daemon-reload
-    systemctl --user enable --now nevr-train-guard.timer
-    systemctl --user list-timers nevr-train-guard.timer --no-pager
 
 # Remove one linked worktree: every proof first, then `git worktree remove` without --force and without `git submodule deinit` (tools/remove_worktree.py; --dry-run proves and changes nothing)
 remove-worktree *args:
@@ -159,28 +122,30 @@ clean:
 
 # --- Android / Quest (arm64-v8a) ---
 # Self-contained NDK sub-project at src/quest (root CMake is MinGW-only).
-# NDK: r26d by default; override with ANDROID_NDK_HOME.
+# NDK: r26d; ANDROID_NDK_HOME must name its directory (no default: a recipe that needs it stops at _require-ndk).
 # The Quest configure lines keep the ccache launcher only in the fixed, clean build checkout (tools/build_checkout.py, #1736): there
 # the directory is the same on every build, so a cached object is the one a fresh compile would write. Anywhere else the launcher is
 # cleared, so no worktree's directory is put into another's .so.
 
-ndk := env("ANDROID_NDK_HOME", "/home/andrew/src/android-ndk-r26d")
+# Stop with the fix when ANDROID_NDK_HOME is not set (it is read at run time, so recipes that do not need the NDK never ask for it)
+_require-ndk:
+    @[ -n "${ANDROID_NDK_HOME:-}" ] || { echo "ANDROID_NDK_HOME is not set: set it to the Android NDK r26d directory (the one that holds toolchains/llvm)" >&2; exit 1; }
 
 # Configure the Android arm64-v8a build (NDK r26d, API 26, static libc++)
-configure-android: _build-guard
+configure-android: _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
     launcher=$(python3 -I tools/build_checkout.py quest-launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")
-    cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
+    cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" cmake --preset android-arm64
 
 # Build the Android arm64-v8a crash-reporter .so
 # Job count: CMAKE_BUILD_PARALLEL_LEVEL, else 4 (a bare -j would use every core and override the variable).
 build-android: configure-android
-    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    cmake --build build/android-arm64 -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
 
 # Build with full compiler output
 verbose-build-android: configure-android
-    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -v
+    cmake --build build/android-arm64 -v
 
 # Fail when the Quest sentinel gains a load-time initializer beyond its one ELF constructor
 check-android-static-init: build-android
@@ -190,7 +155,7 @@ check-android-static-init: build-android
     # archives it links), not what `find` sees: tools/quest_link_objects.py. A failure there stops
     # the recipe (the assignment is the command), so an empty list can never pass the check.
     objects=$(python3 tools/quest_link_objects.py build/android-arm64 sentinel/libovrplatformloader.so)
-    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $objects
+    tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $objects
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: check-android-static-init
@@ -199,7 +164,7 @@ test-android: check-android-static-init
     # CSymbol64Hash sign-extends a byte >= 0x80 under the NDK's AArch64 clang, where plain char is unsigned (#657).
     # The vectors are static_asserts, so compiling the file is the check; the NDK's static bionic binary does not
     # start under qemu-user (TLS segment alignment), so nothing is run here.
-    "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -fsyntax-only src/quest/tests/symbol_hash_test.cpp
+    "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -fsyntax-only src/quest/tests/symbol_hash_test.cpp
     cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
@@ -210,7 +175,8 @@ test-crash-ingest-contract:
 # Repack: rename the real libovrplatformloader.so -> _orig.so (fixes soname).
 # Operates on a COPY under build/; never mutates the source-of-truth extract.
 # On-device install (repack APK + sideload) is out of scope here — no prod deploy.
-android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_triage/apk_contents/lib/arm64-v8a/libovrplatformloader.so":
+# `src` is the extracted store APK's lib/arm64-v8a/libovrplatformloader.so.
+android-repack-libovr src:
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/android-arm64/repacked"
@@ -231,7 +197,7 @@ quest-reference-base apk out label="Echo VR":
     python3 -I tools/quest_apk_rename_package.py rename --apk "{{ apk }}" --out "{{ out }}" --label "{{ label }}"
 
 # Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
-# forwarding to the renamed original. Produces a zipaligned APK, signed with the Quest key in pass, and
+# forwarding to the renamed original. Produces a zipaligned APK, signed with the Quest key (tools/quest_keystore.sh), and
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
 # It also sets the manifest's versionCode (tools/quest_apk_version.py): the store APK's 4987566 is below the
 # 4987570 build the community installer puts on a headset, which Android refuses to update (a downgrade). The
@@ -244,9 +210,9 @@ quest-reference-base apk out label="Echo VR":
 # the sentinel places over the stock data at the first run after its data step; `pack_meta` is the file that describes it (its id, version, the stock
 # manifest digests it replaces and the zip's prefix; tools/quest_repack_libs.py stage-pack --help). Both are empty for every release and package-dev APK,
 # and then the recipe does nothing of it: the APK is the one the recipe made before the parameters existed.
-# `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
-# pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
-# and is never generated here. Store it once with: just import-quest-keystore <keystore>.
+# `apk` is required (the store APK path). The signing key is the one persistent Quest key, a keystore file named by
+# NEVR_QUEST_KEYSTORE with its passphrase in NEVR_QUEST_KEYSTORE_PASS (tools/quest_keystore.sh): it is copied into a
+# private tmpfs file for the signing command only and is never generated here.
 android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -258,7 +224,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     work="$root/{{ workdir }}"
     # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
     rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
-    for t in unzip patchelf zip zipalign apksigner aapt2 readelf nm keytool pass python3; do
+    for t in unzip patchelf zip zipalign apksigner aapt2 readelf nm keytool python3; do
         command -v "$t" >/dev/null || { echo "MISSING required tool: $t" >&2; exit 1; }
     done
     [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
@@ -306,8 +272,10 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     plugins=()
     if [ -n "$plugin" ]; then
         IFS=: read -r -a plugins <<<"$plugin"
-        llvm_bin="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        [ -x "$llvm_bin/llvm-nm" ] || llvm_bin="$(dirname "$(command -v llvm-nm || true)")"
+        # The plugin libraries are read with the NDK's llvm-nm when ANDROID_NDK_HOME names one, else with the llvm-nm on PATH.
+        llvm_bin=""
+        [ -z "${ANDROID_NDK_HOME:-}" ] || llvm_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        if [ -z "$llvm_bin" ] || [ ! -x "$llvm_bin/llvm-nm" ]; then llvm_bin="$(dirname "$(command -v llvm-nm || true)")"; fi
         seen_names=" "
         for p in "${plugins[@]}"; do
             [ -f "$p" ] || { echo "plugin not found: $p" >&2; exit 1; }
@@ -461,14 +429,6 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"
 
-# Store the Quest APK signing key (once) and its passphrase in pass, so every repack signs with the
-# same key and the headset accepts it as an update. Reads the passphrase from NEVR_QUEST_KS_IMPORT_PASS
-# (never an argument) and refuses to replace a key that is already stored.
-import-quest-keystore file:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tools/quest_keystore.sh import "{{ file }}"
-
 # Print the Quest APK signer's SHA-256 (lowercase hex, no colons): compare it with the app's signer
 # on the headset before installing, a different one forces an uninstall.
 quest-keystore-fingerprint:
@@ -493,14 +453,14 @@ release-preflight base="main":
 # Both builds embed config/public-defaults.env (git-ignored: copy it from the main checkout or from the
 # .example) and need no config file to log in; the gate (tools/package_release.py) refuses the package
 # otherwise, and refuses a binary whose identity literal is not this commit's development version.
-# The Quest APK is signed with the one persistent key stored in pass (tools/quest_keystore.sh),
-# imported once with `just import-quest-keystore <keystore>`; a new key is never generated, because
-# a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK.
+# The Quest APK is signed with the one persistent key named by NEVR_QUEST_KEYSTORE and NEVR_QUEST_KEYSTORE_PASS
+# (tools/quest_keystore.sh); a new key is never generated, because a different key forces an uninstall on the
+# headset. `store_apk` is the unmodified store APK; its default is $NEVR_STORE_APK, and the recipe stops when neither is given.
 # Neither build needs a config file: the Quest redirects, bridges, logs in and runs the social facade from the
 # embedded endpoints and keys alone (config.yaml only overrides).
 # The Quest APK is a repack of the store game: it is for testers and is published outside GitHub, never attached to a release.
 # This never tags, uploads or publishes.
-package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
+package-dev store_apk=env("NEVR_STORE_APK"):
     #!/usr/bin/env bash
     set -euo pipefail
     # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
@@ -539,14 +499,14 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
 
 # The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the store
 # APK. Private: package-dev only (a release packages CI's loader, release-quest-apk).
-_quest-apk store_apk: _build-guard
+_quest-apk store_apk: _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
     launcher=$(python3 -I tools/build_checkout.py quest-launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")
-    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
-    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" cmake --preset android-arm64-dev)
+    cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
-    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
+    tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
     just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
 
 # The development APK for an autopilot run on a Quest (#1202, docs/adr/0025-quest-autopilot-route.md): the local
@@ -554,7 +514,7 @@ _quest-apk store_apk: _build-guard
 # repacked from the store APK. The plugin is packaged and off by default (plugin_off); a config.yaml entry that names
 # nevr_autopilot turns it on. Writes build/android-arm64/repack/r15_nevr-sentinel_signed.apk, the path test-quest-hooks-pinned
 # reads. No release or package-dev APK carries the plugin.
-quest-autopilot-apk store_apk="/mnt/games/cache/r15_goldmaster_store.apk": build-android
+quest-autopilot-apk store_apk=env("NEVR_STORE_APK"): build-android
     just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so "" "" "" "" "" libnevr_autopilot.so
 
 # The q15t plugin libraries (#1546, src/quest/plugins/q15t/README.md): libq15t.so and libq15t_early.so, built with the android-arm64
@@ -564,7 +524,7 @@ quest-autopilot-apk store_apk="/mnt/games/cache/r15_goldmaster_store.apk": build
 build-quest-q15t: configure-android
     #!/usr/bin/env bash
     set -euo pipefail
-    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 --target nevr_q15t nevr_q15t_early -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    cmake --build build/android-arm64 --target nevr_q15t nevr_q15t_early -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     built=build/android-arm64/integration/q15t
     out=build/quest-q15t
     mkdir -p "$out"
@@ -573,7 +533,7 @@ build-quest-q15t: configure-android
     for lib in libq15t.so libq15t_early.so; do
         [ -f "$built/$lib" ] || { echo "build-quest-q15t: $built/$lib was not built" >&2; exit 1; }
         cp "$built/$lib" "$out/$lib"
-        tools/check_quest_static_init.sh --plugin "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" "$out/$lib"
+        tools/check_quest_static_init.sh --plugin "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" "$out/$lib"
         grep -qaF "$id" "$out/$lib" || { echo "build-quest-q15t: $lib does not name libr15 build id $id" >&2; exit 1; }
     done
     grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 hz_level=1 build_id=$id" "$out/libq15t.so" \
@@ -596,7 +556,7 @@ quest-autopilot-run route *args:
 # the tag at that commit); the release (a draft is enough) must carry the asset. Writes
 # build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads nothing and never tags. The APK is
 # published outside GitHub (RELEASING.md, "Quest APKs never go on GitHub").
-release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk": (_release-quest-apk "release-quest-apk" tag store_apk "" "" "" "")
+release-quest-apk tag store_apk=env("NEVR_STORE_APK"): (_release-quest-apk "release-quest-apk" tag store_apk "" "" "" "")
 
 # The unlisted variant APK of a release (tools/quest_release_timer.py builds it in the same run as the release APK): the same
 # repack of the store game with the same release loader asset, plus the plugin libraries `plugins` names (one path, or several
@@ -606,7 +566,7 @@ release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk": (_r
 # never listed in the manifest: tools/publish_quest_apk.py --variant puts it on the release host. It uploads nothing and never tags.
 # `pack` and `pack_meta` (both empty, or both a file) carry a game-data pack as APK assets (android-repack-apk, docs/adr/0029-quest-bundled-content-pack.md);
 # only this variant takes them, never the release APK.
-release-quest-variant-apk tag plugins store_apk="/mnt/games/cache/r15_goldmaster_store.apk" pack="" pack_meta="": (_release-quest-apk "release-quest-variant-apk" tag store_apk plugins "q15t" pack pack_meta)
+release-quest-variant-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pack_meta="": (_release-quest-apk "release-quest-variant-apk" tag store_apk plugins "q15t" pack pack_meta)
 
 # The body of release-quest-apk and release-quest-variant-apk. `label` is the public recipe's name, which every message of the
 # run carries. `plugin` and `variant` are both empty (the release APK, which never carries a plugin) or both set (the variant
@@ -1082,7 +1042,7 @@ test-auth-unit:
         run_test "$bin"
     done
     # test_broadcaster_bridge / test_broadcaster_guards live in
-    # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin, which
+    # the nevr-runtime-plugins repository with the broadcaster-bridge plugin, which
     # holds and tests the N72/N73 guards.
     # #1228: every binary above has run; name each failure and fail the recipe once, at the end.
     if [[ "${#test_failures[@]}" -gt 0 ]]; then
@@ -1934,8 +1894,8 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     timeout 120 "$out/input_seam_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
     # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
-    jni="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
-    [ -f "$jni" ] || { echo "test-quest-hooks: FAIL: $jni not found (the toast test needs the NDK's jni.h)" >&2; exit 1; }
+    jni="${ANDROID_NDK_HOME:?test-quest-hooks: ANDROID_NDK_HOME is not set (the toast test needs jni.h from the NDK)}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
+    [ -f "$jni" ] || { echo "test-quest-hooks: FAIL: $jni not found (the toast test needs jni.h from the NDK)" >&2; exit 1; }
     mkdir -p "$out/jni"
     cp "$jni" "$out/jni/jni.h"
     "${cxx[@]}" -isystem "$out/jni" -fno-exceptions -pthread src/quest/tests/toast_presenter_test.cpp \
@@ -2014,7 +1974,7 @@ test-quest-redirect: _vcpkg-quest-host
 # src/quest/tests/got_pinned_test.cpp. Fail-close, including when the APK is absent:
 # it is a 58 MB artifact that is not in the repository, so this is not part of
 # `just verify`.
-test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
+test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk=env("NEVR_STORE_APK"):
     #!/usr/bin/env bash
     set -euo pipefail
     apk="{{ apk }}"; store_apk="{{ store_apk }}"
@@ -2213,7 +2173,7 @@ test-quest-social:
 # the recorded vtable (src/quest/tests/fixtures/cnsovrsocial_vtable.txt) is what the library holds.
 # Fail-close, including when the APK is absent (58 MB, not in the repository), so it is not part of
 # `just verify`.
-test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
+test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk=env("NEVR_STORE_APK"):
     #!/usr/bin/env bash
     set -euo pipefail
     apk="{{ apk }}"; store_apk="{{ store_apk }}"
@@ -2450,7 +2410,7 @@ test-quest-autopilot:
 # store APK, checks its SHA-256 and resolves LibR15Dlopen() the way the loader would lay the image out.
 # Fail-close, including when the APK is absent (58 MB, not in the repository), so it is not part of
 # `just verify`.
-test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
+test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk=env("NEVR_STORE_APK"):
     #!/usr/bin/env bash
     set -euo pipefail
     apk="{{ apk }}"; store_apk="{{ store_apk }}"
@@ -2818,7 +2778,7 @@ verify:
         exit 1
     fi
     # N72/N73: the broadcaster ingress guards live with the plugin in
-    # ~/src/nevr-runtime-plugins (this repo is PUBLIC and the
+    # the nevr-runtime-plugins repository (this repo is PUBLIC and the
     # plugin is a broadcaster injection tool), and their sensors live there too —
     # asserting on a path that does not exist here would fail-closed forever,
     # and asserting nothing would silently drop the guarantee.
@@ -4414,11 +4374,11 @@ generate-combat-overrides build_dir:
 
 # --- Code Signing ---
 
-# Generate the CA hierarchy (root → intermediate → code-signing)
+# Generate the CA hierarchy (root → intermediate → code-signing); the root CA key is written to NEVR_ROOT_CA_KEY
 generate-certs:
     ./certs/generate-ca.sh
 
-# Renew intermediate + code-signing certs (root CA stays in pass)
+# Renew intermediate + code-signing certs (the root CA key is read from NEVR_ROOT_CA_KEY)
 renew-certs:
     ./certs/generate-ca.sh --renew
 

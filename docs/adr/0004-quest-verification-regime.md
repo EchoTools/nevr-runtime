@@ -40,7 +40,7 @@ addresses.
 Record the exact PCVR executable and the Quest APK plus `libr15.so`, `libpnsrad.so`,
 `libpnsradmatchmaking.so` and loader or shim identities: SHA-256, ELF build ID, architecture,
 SONAME, load-bias model, dependencies, imports and relocations. Compare each ELF hash with
-ReVault before interpreting an address. Commit only reviewed, non-secret fixtures under
+the disassembly before interpreting an address. Commit only reviewed, non-secret fixtures under
 `tests/quest/fixtures/<build-id>/`; generated evidence and scratch go under
 the work root (`NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work`). A hash or build-ID mismatch fails the fixture test before any
 callback assertion.
@@ -53,8 +53,8 @@ platform adapters and narrow ABI or hook-backend code may differ.
 
 A boundary record has: the PCVR symbol, address, detour, source file, declaration and
 original-call path; the corresponding Quest call chain with owning ELF, VA, RVA, file offset and
-load bias; ReVault function details, decompilation tier, xrefs, direct and indirect callers and
-callees, disassembly and bytes (cross-checked, because ReVault's call graph is partial); the
+load bias; the disassembly function details, decompilation tier, xrefs, direct and indirect callers and
+callees, disassembly and bytes (cross-checked, because the disassembly's call graph is partial); the
 AArch64 argument registers or stack layout, return register, hidden `this` or sret arguments,
 object layout, pointer ownership and mutability, thread and timing, lifetime, frequency and
 failure behavior; and the candidate mechanism (imported relocation, vtable callback or internal
@@ -168,7 +168,7 @@ local Nakama or a headset.
 
 ## Pass conditions and stop points
 
-1. Binary identity is pinned: every ReVault observation ties to the exact file hash and build
+1. Binary identity is pinned: every disassembly observation ties to the exact file hash and build
    ID, with explicit address conversions.
 2. A hook site is justified: the PCVR boundary and its Quest counterpart are mapped with
    evidence. A candidate name alone does not pass; with no corresponding callback or safe

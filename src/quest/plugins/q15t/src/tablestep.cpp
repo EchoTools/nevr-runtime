@@ -11,9 +11,9 @@
 namespace q15t {
 namespace {
 
-// ELF vaddrs of the pinned build (ReVault VA = ELF + 0x100000).
+// ELF vaddrs of the pinned build (disassembly VA = ELF + 0x100000).
 //
-// The stock function, ReVault libr15 0x1a0707c (CFactory<CGShaderSetResource>::CreateInstance, 292 bytes, raw decompilation and
+// The stock function, disassembly libr15 0x1a0707c (CFactory<CGShaderSetResource>::CreateInstance, 292 bytes, raw decompilation and
 // disassembly read this session). Reconstructed as C++:
 //   void* CreateInstance(void* unused, CPresenceInit* init) {   // x0 only passes through to Current(); x1 is init
 //     obj = CMemoryContext::Current()->alloc(0xb0);              // 0x1a07088..0x1a07098

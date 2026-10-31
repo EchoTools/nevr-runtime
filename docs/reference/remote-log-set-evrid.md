@@ -1,7 +1,7 @@
 # Where the client builds the `EvrId` in `SNSRemoteLogSetv3`
 
 Nakama logs `*evr.RemoteLogSet{..., evr_id=UNK-1, ...}` for a client session (#160). This traces
-the send path in `echovr.exe` (ReVault) to the call that fills the id, and to the runtime code that
+the send path in `echovr.exe` (disassembly) to the call that fills the id, and to the runtime code that
 writes the fields it reads. Static only; the values of those fields in a run are not in this
 document.
 

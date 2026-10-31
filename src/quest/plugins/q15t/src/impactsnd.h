@@ -3,7 +3,7 @@
 // kSoundSettings, rows {u64 key = sym(subkey) ^ sym(gun), u32 id}) is built wrong on the Quest in two ways, and this module
 // repairs the one that data writes can reach:
 //   (a) the "default" symbol word D the hit code XORs into the gun symbol (R13): written with CSymbol64("default") only
-//       when it reads 0 (ReVault shows the library's own static init stores it, so on the pinned build this is a no-op);
+//       when it reads 0 (disassembly shows the library's own static init stores it, so on the pinned build this is a no-op);
 //   (b) every row's id is the stock 1 instead of the Wwise event id (FNV-1 32 of the lowercase event name): rewritten
 //       in place, data writes to the 16-byte rows only (keys and order are never touched). Runs on the game tick
 //       (ImpactSndTick) for every sorted / unsorted table instance of the process, and once more straight after each load

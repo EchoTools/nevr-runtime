@@ -7,11 +7,11 @@
 /// These are relative offsets from the game's base address.
 /// Source: Reverse-engineered from echovr.exe
 /// Validated against: echovr-reconstruction (struct/function names, offsets)
-///                    ReVault (Windows PE virtual addresses, decompilation)
+///                    the disassembly (Windows PE virtual addresses, decompilation)
 ///
 /// CALLER-COUNT CONVENTION (N32): Numeric caller counts in this file are
-/// ReVault snapshots stamped with date and the exact revault command to
-/// refresh them. They are NOT authoritative — ReVault re-analysis discovers
+/// disassembly snapshots stamped with the date and the exact query to
+/// refresh them. They are NOT authoritative — a fresh analysis discovers
 /// new callers. Before relying on a count for blast-radius analysis, run
 /// the Keep-current command listed in the comment. Counts without a
 /// Keep-current command are stale and should not be trusted.
@@ -48,7 +48,7 @@ constexpr size_t NETSERVER_LOGGING_SIZE = 4;
 constexpr uintptr_t LOGGING_SUBJECT = 0xFFB0E;
 constexpr size_t LOGGING_SUBJECT_SIZE = 2;
 
-/// Address: CBroadcaster::Initialize (0x140F7FE50, 900 bytes; ReVault "Initialize", tag broadcaster)
+/// Address: CBroadcaster::Initialize (0x140F7FE50, 900 bytes; disassembly name "Initialize", tag broadcaster)
 /// Its one caller is FUN_140F7F8B0 (CBroadcaster::InitializeFromJson, call site 0x140F7FE30), which builds the
 /// netconfig mask from the JSON ("|allow_incoming" at 0x141CD0480 is bit 0). The mask is the fourth parameter (R9).
 /// _local/config.json does not feed this function.
@@ -102,13 +102,13 @@ constexpr size_t OFFLINE_TUTORIAL_SIZE = 5;
 // Headless Mode Patches (PatchEnableHeadless)
 // ============================================================================
 
-/// ReVault VA 0x1400ff4b0: Game initialization / logging setup (252+ lines)
+/// VA 0x1400ff4b0: Game initialization / logging setup (252+ lines)
 /// Quest name: CGRenderer::Initialize @ Quest:0x188e278
 /// Patch at +0xD1 skips renderer initialization
 constexpr uintptr_t HEADLESS_RENDERER = 0xFF581;
 constexpr size_t HEADLESS_RENDERER_SIZE = 2;
 
-/// ReVault VA 0x14062c940: CLevel::Load (d:\projects\rad\dev\src\engine\libs\nodes\clevel.cpp, 447 bytes)
+/// VA 0x14062c940: CLevel::Load (d:\projects\rad\dev\src\engine\libs\nodes\clevel.cpp, 447 bytes)
 /// Patch at +0x151 skips effects resource loading
 constexpr uintptr_t HEADLESS_EFFECTS = 0x62CA91;
 constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
@@ -143,7 +143,7 @@ constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 /// build has a regression, re-read the shipped bytes first. That is exactly the
 /// conclusion the evidence invites and it is wrong.
 
-/// ReVault VA 0x140109209: CALL to FUN_140c31870 (ApplyGraphicsSettings) inside FUN_1401090c0
+/// VA 0x140109209: CALL to FUN_140c31870 (ApplyGraphicsSettings) inside FUN_1401090c0
 /// FUN_140c31870 calls ~66 CGRenderer methods (MSAA, TAA, resolution scale, etc.)
 /// that assume a live renderer. Crashes on headless with no GPU.
 /// Patch: NOP the 5-byte CALL instruction
@@ -151,7 +151,7 @@ constexpr uintptr_t HEADLESS_APPLY_GRAPHICS = 0x109209;
 constexpr size_t HEADLESS_APPLY_GRAPHICS_SIZE = 5;
 
 /// Address: DirectInput8Create call in CSceneRenderPipeline input init (0x141055DBB)
-/// Source: ReVault — fcn.141055d90 calls DirectInput8Create via delay-load thunk.
+/// Source: the disassembly — fcn.141055d90 calls DirectInput8Create via delay-load thunk.
 ///   CSceneRenderPipeline::Create → fcn.141056090 → fcn.141055d90 → DirectInput8Create
 /// The call spawns a DInput Enumeration Thread that polls HID devices indefinitely.
 /// Patch: NOP the 5-byte CALL instruction to prevent DirectInput initialization.
@@ -265,7 +265,7 @@ static_assert(HEADLESS_GATE_COUNT == 5,
     "mode_patches.cpp iterates this table mechanically");
 
 /// Address: CEngineConfig::operator= (0x141547360, FUN_141547360)
-/// Called from CRenderPipeline::InitStages — single caller (ReVault-verified)
+/// Called from CRenderPipeline::InitStages — single caller (verified in the disassembly)
 /// to copy the source engine config struct into CEngine+0x2cf98. Copies ~0x98
 /// bytes via MOVUPS/MOV/MOVSD, including the 32-bit graphics-enable word at
 /// offset 0x54 into the copy (== CEngine+0x2cfec). Hooked in server mode to
@@ -307,7 +307,7 @@ constexpr uintptr_t INIT_GLOBAL_GAMESPACE = 0x110ab0;
 /// Called from WinMain. An MSVC SEH frame around the game's main function.
 ///
 /// It does not "call the BugSplat crash handler if it returns", and no return
-/// value is tested. The bytes (ReVault):
+/// value is tested. The bytes (disassembly):
 ///
 ///   SUB  RSP,0x38
 ///   MOV  qword [RSP+0x20],0
@@ -342,7 +342,7 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 /// safe to skip on a headless server" — that is the exact inference that severed
 /// the ServerDB→game message path. See N83 (self-collision — two code paths detour the same address).
 ///
-/// Verified by disassembly (revault_disassemble, echovr.exe):
+/// Verified by disassembly (echovr.exe):
 ///   0xF80ED0 is CBroadcaster::Listen — message-listener REGISTRATION.
 ///            Returns a uint16 listener id; 0xFFFF is its failure sentinel
 ///            (MOV ESI,0xffff @0x140f80f24; MOVZX EAX,SI @0x140f81046).
@@ -356,7 +356,7 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 /// the identity was invented, and every later reader inherited it.
 ///
 /// Corrections to the original annotations:
-///   - "Called from 109+ sites"  -> ReVault reports 17 callers.
+///   - "Called from 109+ sites"  -> the disassembly shows 17 callers.
 ///   - "entity property dispatch" -> it is the broadcaster listener dispatch.
 ///   - the +0x448 flags check     -> real, but only in the TRACE block, which is
 ///     skipped when bit 0x800 is clear. It does not describe the dispatch half
@@ -376,7 +376,7 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 constexpr uintptr_t BROADCASTER_LISTEN = 0xF80ED0;               // CBroadcaster::Listen
 constexpr uintptr_t BROADCASTER_RECEIVE_LOCAL_EVENT = 0xF87AA0;  // CBroadcaster::ReceiveLocalEvent
 
-/// Address: CrashExceptionFilter (0x1401cef00, 49 instructions) — ReVault-verified.
+/// Address: CrashExceptionFilter (0x1401cef00, 49 instructions) — verified in the disassembly.
 /// The game's crash entry point. Registered as an unhandled-exception filter (no
 /// static callers), and the ONLY path to HandleCrashDump -> WriteCrashSystemInfo,
 /// which prints "=== System Info ===". If that banner appears in a server log, the
@@ -387,7 +387,7 @@ constexpr uintptr_t BROADCASTER_RECEIVE_LOCAL_EVENT = 0xF87AA0;  // CBroadcaster
 constexpr uintptr_t CRASH_EXCEPTION_FILTER = 0x1CEF00;
 constexpr unsigned char CRASH_EXCEPTION_FILTER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
 
-/// Address: the game's console-ctrl-handler installer (fcn.1400dcbb0, 15 instructions) — ReVault-verified.
+/// Address: the game's console-ctrl-handler installer (fcn.1400dcbb0, 15 instructions) — verified in the disassembly.
 /// Sole caller: CR15Game::InitRenderWindowFromEngineFlags (0x1404f5870). Stores RCX to a global, then
 /// calls SetConsoleCtrlHandler(0x1400db960, TRUE). It runs AFTER our boot-time re-arm, so without a
 /// second re-arm the game's handler sits in front of ours and a CTRL+C never reaches us (#102).
@@ -472,7 +472,7 @@ constexpr uintptr_t LOADING_TIP_SELECT_ENTER = 0xBE7C90;
 /// Address: CPrecisionSleep::BusyWait (0x1401ce4c0, 112 bytes)
 /// Tight QPC + Sleep(0) loop for sub-ms frame timing precision.
 ///
-/// NOT SwitchToThread: ReVault measured the call at 0x1401CE510 as Sleep, and
+/// NOT SwitchToThread: the disassembly shows the call at 0x1401CE510 as Sleep, and
 /// SwitchToThread's IAT slot (0x1416C37F0) has exactly two xrefs in the binary,
 /// both CRT/ConcRT and neither in this function.
 ///
@@ -559,8 +559,8 @@ constexpr uintptr_t GAME_DEFER_COUNT_OFFSET = 0x1F10;
 
 /// Address: CJson_GetFloat (0x1405fca60, 22 bytes)
 /// Thunk that calls CJson::Real and casts to float.
-/// ReVault snapshot (2025-01): 45 direct callers, 623 callers via inspector ReadFloat.
-/// Keep-current: revault fn callers 0x1405fca60 --binary echovr.exe
+/// Disassembly snapshot (2025-01): 45 direct callers, 623 callers via inspector ReadFloat.
+/// Keep-current: callers of 0x1405fca60 in echovr.exe (disassembly)
 /// Hooked to override arena rule config values (celebration time, round time).
 constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 
@@ -573,7 +573,7 @@ constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 /// GetProviderPrefix detour, which returns OVR-ORG) format/parse Discord-based XPIDs.
 /// All three are in .rdata — ProcessMemcpy handles VirtualProtect.
 ///
-/// Source: ReVault search_strings + read_memory on echovr.exe
+/// Source: a string search and a memory read on echovr.exe
 /// Region 0x1416D0ED0: "OlPrEfIx" struct array — short platform names
 /// Region 0x1416D0F5C: Dash-suffixed prefix table (SNSUserID StartsWith targets)
 /// Region 0x1416D7130: Compact name table feeding "%s-%llu" format string
@@ -636,7 +636,7 @@ constexpr size_t XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE = 4;
 
 /// CNSUser::GetProviderPrefix (fcn.14060d640) — one of two xpid choke-points.
 /// Reads user+0x90 & 0xf, returns a pointer to the corresponding string-table
-/// entry via a switch.  ReVault lists 17 distinct callers (31 call edges),
+/// entry via a switch.  The disassembly lists 17 distinct callers (31 call edges),
 /// including CNSIUsers::CreateUser, SaveLocalData, the three Send() functions
 /// (0x14060e380, 0x140613900, 0x140618480) and Inspect<CBindingsOffsetOfInspector
 /// <float>>.  Detour this to return the OVR-ORG entry (or the DMO entry, for the
@@ -645,7 +645,7 @@ constexpr size_t XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE = 4;
 /// without any string-table patching.
 constexpr uintptr_t GET_PROVIDER_PREFIX = 0x60D640;
 
-/// The other xpid choke-point, not hooked: echovr.exe VA 0x1401ba630 (ReVault name
+/// The other xpid choke-point, not hooked: echovr.exe VA 0x1401ba630 (disassembly name
 /// GetUserIDString).  22 distinct callers (40 call edges), entirely separate from
 /// GetProviderPrefix's: AddBotUser, AddPlayerUser, AddRemoteUser,
 /// SendProfileUpdate, RoundOverCB, LogSocialAnalytic, ProcessPostMatchBattlePassXp,
@@ -674,7 +674,7 @@ constexpr size_t XPID_PLATFORM_FALLBACK_PREFIX_SIZE = 4;
 // Net service provider loader (patch/provider_name_redirect.cpp)
 // ============================================================================
 
-/// CNSProvider::LoadByName (ReVault FUN_140606690, 565 bytes): loads the platform module named by its second argument
+/// CNSProvider::LoadByName (FUN_140606690, 565 bytes): loads the platform module named by its second argument
 /// into a provider slot. CR15Game::CreateNetServiceProviders (0x140109810) calls it three times, with "pnsovr",
 /// "pnsdemo" and "pnsrad". The runtime's hook hands the original "pnsrad" for the first two. Win64, four pointer
 /// arguments, returns 0 on success. Prologue (24 bytes, none position dependent): mov [rsp+10h],rbx;
@@ -701,7 +701,7 @@ constexpr uintptr_t LOADOUT_RESOLVE_DATA_FROM_ID = 0x004F37A0;
 // Global Data Addresses
 // ============================================================================
 
-/// The clock global: a pointer to the CClock the game runs on, at echovr.exe 0x1420a00e8 (ReVault).
+/// The clock global: a pointer to the CClock the game runs on, at echovr.exe 0x1420a00e8.
 /// Its step is the 64-bit field at +0x90 (microseconds) and its mode word is at +0x50 (bits 0x8 fixed,
 /// 0x10 paced). CClock::CClock stores the default 33333 at 0x1400cd964; SetUseFixedTimeStep (0x1405114d0)
 /// stores 33333 again at 0x140511506 when called with 1. TWO writers of the global exist:
@@ -719,15 +719,15 @@ constexpr uintptr_t FIXED_TIMESTEP_OFFSET = 0x90;
 
 /// Address: GetTimeMicroseconds (0x1400d00c0, 68 bytes)
 /// QPC-to-microseconds conversion.
-/// ReVault snapshot (2025-01): 12 callers (physics, network, rendering).
-/// Keep-current: revault fn callers 0x1400d00c0 --binary echovr.exe
+/// Disassembly snapshot (2025-01): 12 callers (physics, network, rendering).
+/// Keep-current: callers of 0x1400d00c0 in echovr.exe (disassembly)
 /// Signature: uint64_t __fastcall() — no parameters, returns microseconds since boot.
 constexpr uintptr_t GET_TIME_MICROSECONDS = 0xD00C0;
 
 /// Address: CTimer_GetMilliSeconds (0x1400d0110, 95 bytes)
 /// QPC-to-milliseconds conversion.
-/// ReVault snapshot (2025-01): 11 callers including CleanupPeers.
-/// Keep-current: revault fn callers 0x1400d0110 --binary echovr.exe
+/// Disassembly snapshot (2025-01): 11 callers including CleanupPeers.
+/// Keep-current: callers of 0x1400d0110 in echovr.exe (disassembly)
 /// Signature: uint64_t __fastcall() — no parameters, returns milliseconds since boot.
 constexpr uintptr_t GET_TIME_MILLISECONDS = 0xD0110;
 
@@ -755,7 +755,7 @@ constexpr uintptr_t GET_TIME_OVERRIDE_VALUE = 0x209CB00;
 /// GetTimeMicroseconds call whose return address is this one is one iteration of the game's main loop.
 /// Not a function: a return address, compared with __builtin_return_address(0) in the GetTimeMicroseconds
 /// hook. The bytes before it (E8 74 43 BC FF) are checked at boot (frame_stats.h, LoopHeadCallMatches).
-/// ReVault: revault_disassemble 0x14050bd00 --binary echovr.exe.
+/// Disassembly of echovr.exe at 0x14050bd00.
 constexpr uintptr_t FRAME_LOOP_HEAD_RETURN = 0x50BD4C;
 
 /// Address: the game's ovr_GetPerfStats wrapper (0x1413662e0, 21 bytes), the only route to the compositor's
@@ -763,7 +763,7 @@ constexpr uintptr_t FRAME_LOOP_HEAD_RETURN = 0x50BD4C;
 /// The global holds the LibOVR export (or null: the wrapper then returns 0xfffffc14, -1004).
 /// One caller (0x14072b0a7, in the function at 0x14072af60). Signature: int32_t __fastcall(ovrSession session,
 /// ovrPerfStats* out); a result below 0 is a failure (OVR_SUCCESS(r) is r >= 0).
-/// Keep-current: revault fn callers 0x1413662e0 --binary echovr.exe
+/// Keep-current: callers of 0x1413662e0 in echovr.exe (disassembly)
 constexpr uintptr_t OVR_GET_PERF_STATS = 0x13662E0;
 
 // ============================================================================
@@ -795,16 +795,16 @@ constexpr size_t SERVER_ASSIGN_TEAM_SLOT_SIZE = 26;
 // ============================================================================
 
 /// Address: CleanupPeers (0x140F76500, 1939 bytes)
-/// ReVault snapshot (2025-01): 1 caller.
-/// Keep-current: revault fn callers 0x140F76500 --binary echovr.exe
+/// Disassembly snapshot (2025-01): 1 caller.
+/// Keep-current: callers of 0x140F76500 in echovr.exe (disassembly)
 /// Network peer timeout check. BUG #2: unsigned subtraction of overflowed
 /// timestamp wraps to massive value, disconnecting all peers.
 /// Fixed by GetTimeMilliseconds overflow-safe replacement (N22).
 constexpr uintptr_t CLEANUP_PEERS = 0xF76500;
 
 /// Address: CSpinWait::WaitForValue (0x141500ED8, 115 bytes)
-/// ReVault snapshot (2025-01): 3 callers.
-/// Keep-current: revault fn callers 0x141500ED8 --binary echovr.exe
+/// Disassembly snapshot (2025-01): 3 callers.
+/// Keep-current: callers of 0x141500ED8 in echovr.exe (disassembly)
 /// BUG #14: Inverted backoff — starts Sleep(1), degrades to Sleep(0).
 /// Maximum CPU consumption at peak contention.
 constexpr uintptr_t SPINWAIT_WAIT_FOR_VALUE = 0x1500ED8;

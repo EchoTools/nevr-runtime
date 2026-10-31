@@ -590,7 +590,7 @@ def _filter_sublevel_to_combat(build_mf: Path, sublevel_name: str,
     # that has zero bodies. Deleting the file entirely causes the sublevel
     # to silently unload ("Cannot find resource").
     #
-    # Revault-verified call chain:
+    # the disassembly-verified call chain:
     #   CLevelResource::LoadLevel -> CPhysicsResourceInstance::Activate (0x141050CB0)
     #     -> SetupBodies (0x1410517C0) -> CPhZone::CreateBody (0x14068D9E0)
     #   SetupBodies reads body count from resource data. Zero bodies = no collision.

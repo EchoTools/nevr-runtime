@@ -40,7 +40,7 @@
 namespace nevr_scenario_control {
 namespace {
 
-// The friend row's invite button, measured in ReVault (echovr.exe):
+// The friend row's invite button, measured in the disassembly (echovr.exe):
 //   script node 0x140dddf60 turns the row's user id string into a 16-byte xpid with SNSUserID
 //   (0x1400f6c10) and posts FUN_14018aa90(netGame, &xpid) on the NetGame's deferred method queue
 //   (0x140f4b690 with queue = netGame + 0x2b20). 0x14018aa90 runs the invite pre-checks and calls
@@ -163,7 +163,7 @@ std::string FireRespondInvite(std::uint32_t index, bool accept) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Script-node entry points beyond the three above, each measured in ReVault (echovr.exe) and done the
+// Script-node entry points beyond the three above, each measured in the disassembly (echovr.exe) and done the
 // way the node's run function does it: post its handler on the NetGame deferred queue, or call it
 // where the node calls it directly (those nodes call directly whenever they run on the game thread
 // with the queue's direct flag set, so a call here from the game thread is the same path).
@@ -238,7 +238,7 @@ constexpr std::array<std::uint8_t, 16> kRefreshFriendsPrologue = {0x48, 0x8B, 0x
 // R15NetRefreshRecentlyMetUsersNode (0x140ddfcc0) posts 0x14019b870 (no argument) -> slot 57.
 // CR15NetGame::FindIfPartyHost (echovr.exe 0x14016afc0): what R15NetFindMatchNode (0x140ddb740) posts
 // for Find Arena. It runs Find (0x140168500) only when there is no social object or IsHost (slot 24)
-// is nonzero; a non-host party member's find is dropped. Takes a 0x48-byte request (ReVault decode,
+// is nonzero; a non-host party member's find is dropped. Takes a 0x48-byte request (disassembly decode,
 // 2026-10-02): +0x00 u8 type (0 public), +0x04 u32 (the node's default 3), +0x08 gametype symbol,
 // +0x10 level symbol (-1: the node's default), +0x18 group (-1), +0x20 u16[16] slots, +0x40 count.
 constexpr std::uint64_t kFindIfPartyHostVA = 0x14016AFC0;
@@ -265,7 +265,7 @@ constexpr std::uint64_t kSelfMutedBit = 1ULL << 38;
 
 void* Base() { return EchoVR::g_GameBaseAddress; }
 
-// Early quit lockout (echovr-reconstruction docs/earlyquit_field_analysis.md, 67008866, from ReVault: Quest
+// Early quit lockout (echovr-reconstruction docs/earlyquit_field_analysis.md, 67008866, from the disassembly: Quest
 // libr15.so and echovr.exe). CR15NetEarlyQuitPenaltyExpression (0x140d96190) gives the scripts
 // lockoutexpiretimestamp = netGame+0x64828 and lockoutcountdownsec = that minus now; every setter writes -1
 // there, so no message from the game service starts a countdown. Its lockoutcountdownactive output is the

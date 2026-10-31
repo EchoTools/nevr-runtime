@@ -1,7 +1,7 @@
 // Drone kill / lock-on / gun / chase / shot (rows R45, R47, R48 + the Actor slot Enter's capture needs), ported from the source
 // build's the source build's dronekill. GOT word swaps on data pages and calls into libr15 only; no code page is written.
 //
-// What it hooks (pinned build, ELF vaddrs; docs/quest/q15t/modules/dronekill.md has the ReVault reads):
+// What it hooks (pinned build, ELF vaddrs; docs/quest/q15t/modules/dronekill.md has the disassembly reads):
 //   CEnableComponentNode::Enter          JUMP_SLOT 0x36cacf8 (fn 0x263b700)  R45  the drone's enable/disable nodes
 //   SComponentNodeUtils::Actor           JUMP_SLOT 0x36e2080 (fn 0x2059714)  (not a numbered row: Enter's capture of the drone's game space)
 //   CR15NetAutoTargetCS::FireBulletLocal JUMP_SLOT 0x36c37a8 (fn 0x210bff8)  R48  lock-on and the shot's velocity
@@ -48,7 +48,7 @@ struct DroneKillFns {
   std::uint32_t (*local)(const void* net_physics, std::uint32_t handle) = nullptr;
 };
 
-// ELF vaddrs of the pinned build (readelf -rW of the pinned libr15; ReVault VA = ELF + 0x100000).
+// ELF vaddrs of the pinned build (readelf -rW of the pinned libr15; disassembly VA = ELF + 0x100000).
 struct DroneKillSlots {
   std::uintptr_t actor_slot, actor_fn;
   std::uintptr_t enter_slot, enter_fn;

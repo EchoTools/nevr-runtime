@@ -1,4 +1,4 @@
-"""`tools/quest_release_timer.py` (#1210): the Quest half of a release, run by a user timer on the publisher's machine.
+"""`tools/quest_release_timer.py` (#1210): the Quest half of a release, run on a schedule or by hand by the maintainer who holds the Quest signing key.
 For the newest published tag that is not done it builds the release signer, makes a clean worktree at the tag, builds and
 publishes the Quest APK, dispatches the beta manifest publish live, requires every job that publishes to have run, and
 requires `verify-manifest --live` to list the tag. The commands are fakes that record what they were called with; the
@@ -44,7 +44,7 @@ SECRETS = {
 }
 TOKEN = "sentinel-gh-token"
 STEPS = ["checkout", "tags", "token", "list", "build_signer", "check_listed", "worktree", "build_slot", "configure", "build_apk",
-         "publish_apk", "dispatch", "watch", "check_jobs", "verify_live", "notify", "cleanup"]
+         "publish_apk", "dispatch", "watch", "check_jobs", "verify_live", "cleanup"]
 CARRIED = {"name": "echovr-data-fc2eedeacc50.zip", "kind": "game-data", "platform": "android-arm64", "size": 937395400}
 PC_DATA = {"name": "echovr-data-win10-0123456789ab.zip", "kind": "game-data", "platform": "windows-x86_64", "size": 5120}
 HEAD = "c0ffee" + "0" * 34
@@ -98,7 +98,7 @@ class Fake:
             (f"{repo} fetch --quiet origin main", "checkout.fetch"), (f"{repo} status --porcelain", "checkout.status"),
             (f"{repo} for-each-ref refs/tags", "tags.local"), (f"{repo} ls-remote --tags origin", "tags.remote"),
             (f"{repo} rev-parse HEAD", "checkout.head"), (f"{repo} rev-parse origin/main", "checkout.main"),
-            ("curl", "manifest"), ("bonk", "bonk"), ("courier send", "courier"),
+            ("curl", "manifest"),
             ("auth token", "token"), ("release list", "list"), (" fetch origin main", "build_signer.fetch"),
             ("rev-parse origin/main", "build_signer.rev"), (" archive ", "build_signer.archive"), ("tar -xf", "build_signer.tar"),
             ("go build", "build_signer.go"), ("verify-manifest", "verify"), (" fetch origin tag ", "worktree.fetch"),
@@ -202,16 +202,6 @@ class Fake:
         return [c["step"] for c in self.calls]
 
 
-def bonk_calls(fake: Fake) -> list[list[str]]:
-    """Every command whose program is `bonk`, whatever step it was mapped to: the owner is never bonked (#1410)."""
-    return [c["argv"] for c in fake.calls if c["argv"][0] == "bonk"]
-
-
-def couriers(fake: Fake, to: str) -> list[list[str]]:
-    """The `courier send --to <to>` commands the run made, in order."""
-    return [c["argv"] for c in fake.calls if c["step"] == "courier" and c["argv"][:4] == ["courier", "send", "--to", to]]
-
-
 class TimerCase(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -232,6 +222,10 @@ class TimerCase(unittest.TestCase):
 
     def names(self) -> list[str]:
         return [e["event"] for e in self.events()]
+
+    def skipped(self) -> dict:
+        """The newest `skipped_after_failures` record of the log."""
+        return [e for e in self.events() if e["event"] == "skipped_after_failures"][-1]
 
     def write_log(self, *records: dict) -> None:
         self.log.parent.mkdir(parents=True, exist_ok=True)
@@ -349,9 +343,7 @@ class ConfigureBeforeTheBuild(TimerCase):
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("skipped_after_failures", self.names())
-        self.assertEqual(bonk_calls(fake), [])
-        [spritz] = couriers(fake, "spritz")
-        self.assertIn("configure", spritz[-1])
+        self.assertEqual((self.skipped()["last_step"], self.skipped()["last_part"]), ("configure", "main"))
         self.assertNotIn("build_apk", fake.steps())
 
     def test_a_failing_configure_stops_before_the_build_and_names_itself(self) -> None:
@@ -487,7 +479,7 @@ class SkipsWhatIsDone(TimerCase):
         self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk"} for _ in range(3)))
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual([s for s in fake.steps() if s not in ("bonk", "courier")][6:], ["token", "list"])
+        self.assertEqual(fake.steps()[6:], ["token", "list"])
         self.assertIn("skipped_after_failures", self.names())
 
     def test_two_failures_are_retried(self) -> None:
@@ -502,29 +494,6 @@ class SkipsWhatIsDone(TimerCase):
         build = next(c for c in fake.calls if c["step"] == "build_apk")
         self.assertEqual(build["argv"][-1], "v5.16.1")
         self.assertNotIn("list", fake.steps())
-
-
-class NotifiesOnFailure(TimerCase):
-    def test_the_failure_notice_names_the_tag_and_the_step_and_holds_no_secret(self) -> None:
-        self.write_log({"event": "failed", "tag": TAG, "step": "publish_apk", "error": "publish failed with exit 1"})
-        sent: list[list[str]] = []
-
-        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
-            sent.append(argv)
-            return completed(argv)
-
-        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append), 0)
-        self.assertEqual(sent[0][:6], ["courier", "send", "--to", "spritz", "--from", "quest-release-timer"])
-        body = sent[0][-1]
-        self.assertIn(TAG, body)
-        self.assertIn("publish_apk", body)
-        for secret in [*SECRETS.values(), TOKEN]:
-            self.assertNotIn(secret, " ".join(sent[0]))
-
-    def test_a_notice_that_cannot_be_sent_is_a_failure(self) -> None:
-        self.write_log({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"})
-        broken = lambda argv, cwd=None, env=None: completed(argv, 1, "", "no courier")  # noqa: E731
-        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=broken, sleep=self.sleeps.append), 1)
 
 
 class CredentialsPerStep(TimerCase):
@@ -593,7 +562,6 @@ class GameDataSurvives(TimerCase):
         self.assertEqual(failed["step"], "verify_live")
         self.assertIn(CARRIED["name"], failed["error"])
         self.assertNotIn("done", self.names())
-        self.assertNotIn("bonk", fake.steps())
 
     def test_a_carried_zip_with_another_size_is_a_failure(self) -> None:
         fake = Fake(self.root)
@@ -699,86 +667,15 @@ class GameDataSurvives(TimerCase):
         self.assertIn("https://release.invalid/nevr-runtime/manifest.json", argv)
 
 
-class NotifiesOnPublish(TimerCase):
-    def test_a_live_publish_couriers_teth_and_spritz_before_it_is_done_and_never_bonks(self) -> None:
-        fake = Fake(self.root)
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual(bonk_calls(fake), [], "the owner is never bonked for a publish (#1410)")
-        steps = fake.steps()
-        self.assertLess(max(i for i, s in enumerate(steps) if s == "verify"), steps.index("courier"))
-        [teth] = couriers(fake, "teth")
-        [spritz] = couriers(fake, "spritz")
-        self.assertEqual(teth[:6], ["courier", "send", "--to", "teth", "--from", "quest-release-timer"])
-        self.assertEqual(spritz[:6], ["courier", "send", "--to", "spritz", "--from", "quest-release-timer"])
-        self.assertIn(TAG, teth[-1])
-        self.assertIn(TAG, spritz[-1])
-        self.assertEqual(spritz[-1], teth[-1], "Spritz gets the same text Teth does")
-        self.assertTrue(spritz[-1].endswith(f". Log: {self.log}"))
-        for secret in [*SECRETS.values(), TOKEN]:
-            self.assertNotIn(secret, " ".join(teth + spritz))
-        self.assertEqual(self.names()[-1], "done")
-
-    def test_a_notice_that_fails_is_a_failure_and_the_tag_is_not_done(self) -> None:
-        fake = Fake(self.root, fail="courier")
-        self.assertEqual(self.run_timer(fake), 1)
-        self.assertEqual(next(e for e in self.events() if e["event"] == "failed")["step"], "notify")
-        self.assertNotIn("done", self.names())
-        self.assertEqual(bonk_calls(fake), [])
-
-    def test_a_live_tag_whose_notice_was_never_sent_is_noticed_on_the_next_run(self) -> None:
-        self.write_log({"event": "step_ok", "tag": TAG, "step": "verify_live"})
-        fake = Fake(self.root)
-        fake.beta = TAG[1:]
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual(bonk_calls(fake), [])
-        self.assertEqual(len(couriers(fake, "teth")), 1)
-        self.assertEqual(len(couriers(fake, "spritz")), 1)
-        self.assertNotIn("worktree.add", fake.steps())
-        self.assertEqual(self.names()[-1], "done")
-
-    def test_a_tag_that_was_noticed_is_not_noticed_again(self) -> None:
-        self.write_log({"event": "step_ok", "tag": TAG, "step": "verify_live"},
-                       {"event": "step_ok", "tag": TAG, "step": "notify"})
-        fake = Fake(self.root)
-        fake.beta = TAG[1:]
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertNotIn("bonk", fake.steps())
-
-    def test_a_tag_the_timer_never_published_is_not_noticed(self) -> None:
-        fake = Fake(self.root)
-        fake.beta = TAG[1:]
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertNotIn("bonk", fake.steps())
-
-
 class FinalFailureIsNotSilent(TimerCase):
-    def test_the_third_failure_skip_couriers_spritz_once_and_never_bonks_before_it_exits_0(self) -> None:
+    def test_the_third_failure_is_logged_with_its_step_and_part_and_exits_0(self) -> None:
         self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(3)))
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
-        self.assertIn("skipped_after_failures", self.names())
-        self.assertEqual(bonk_calls(fake), [], "the third failure is couriered to Spritz, never bonked (#1410)")
-        [courier] = couriers(fake, "spritz")
-        self.assertEqual(courier[:6], ["courier", "send", "--to", "spritz", "--from", "quest-release-timer"])
-        self.assertIn(TAG, courier[-1])
-        self.assertIn("build_apk", courier[-1])
-        self.assertEqual(couriers(fake, "teth"), [])
-        self.assertLess(self.names().index("skip_notified"), self.names().index("skipped_after_failures"))
-
-    def test_the_skip_is_announced_once_not_every_run(self) -> None:
-        self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(3)),
-                       {"event": "skip_notified", "tag": TAG})
-        fake = Fake(self.root)
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertNotIn("bonk", fake.steps())
-        self.assertNotIn("courier", fake.steps())
-
-    def test_a_skip_whose_notice_cannot_be_sent_exits_1(self) -> None:
-        self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(3)))
-        fake = Fake(self.root, fail="courier")
-        self.assertEqual(self.run_timer(fake), 1)
-        self.assertNotIn("skip_notified", self.names())
-
+        self.assertEqual(self.names()[-1], "skipped_after_failures")
+        skipped = self.skipped()
+        self.assertEqual((skipped["failures"], skipped["last_step"], skipped["last_part"]), (3, "build_apk", "main"))
+        self.assertNotIn("build_apk", fake.steps())
 
 class RefusalIsNotAFailure(TimerCase):
     """A checkout precondition (dirty, or not at origin/main) is a refusal: logged, exit 1, never one of the three failures."""
@@ -787,8 +684,6 @@ class RefusalIsNotAFailure(TimerCase):
         for _ in range(3):
             fake = make_fake()
             self.assertEqual(self.run_timer(fake), 1)
-            self.assertNotIn("bonk", fake.steps())
-            self.assertNotIn("courier", fake.steps())
         refused = [e for e in self.events() if e["event"] == "refused"]
         self.assertEqual(len(refused), 3)
         self.assertEqual({e["step"] for e in refused}, {"checkout"})
@@ -800,11 +695,7 @@ class RefusalIsNotAFailure(TimerCase):
         self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("token", fake.steps())
         self.assertNotIn("skipped_after_failures", self.names())
-        self.assertNotIn("skip_notified", self.names())
         self.assertEqual(self.names()[-1], "done")
-        for call in fake.calls:
-            if call["step"] in ("bonk", "courier"):
-                self.assertNotIn("gave up", " ".join(call["argv"]), "the skip notice was sent")
 
     def test_three_dirty_checkouts_leave_refusals_and_the_clean_fourth_run_proceeds(self) -> None:
         def dirty() -> Fake:
@@ -832,10 +723,7 @@ class RefusalIsNotAFailure(TimerCase):
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("skipped_after_failures", self.names())
-        self.assertEqual(bonk_calls(fake), [])
-        [spritz] = couriers(fake, "spritz")
-        self.assertIn("gave up", spritz[-1])
-        self.assertIn("build_apk", spritz[-1])
+        self.assertEqual(self.skipped()["last_step"], "build_apk")
 
     def test_refusals_between_real_failures_do_not_hide_the_third_failure(self) -> None:
         self.write_log({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"},
@@ -913,7 +801,7 @@ class FailureKeepsBothStreams(TimerCase):
                 self.assertEqual(text, "curl exited 22: stderr: curl: (22) 404")
 
     def test_a_gh_failure_records_stderr_and_never_the_remote_body(self) -> None:
-        for program in ("gh", "gh-spritz", "/home/x/.local/bin/gh-spritz", self.env["GH_BIN"]):
+        for program in ("gh", "/opt/bin/gh", self.env["GH_BIN"]):
             with self.subTest(program=program):
                 text = self.fail_with([program, "run", "view", "1"], 1, "REMOTE BODY", "HTTP 502")
                 self.assertEqual(text, f"{pathlib.Path(program).name} exited 1: stderr: HTTP 502")
@@ -1052,7 +940,7 @@ class TagsStep(TimerCase):
         self.assertIn(f"rollback: git update-ref refs/tags/v9.9.9 {shlex.quote('dead;touch$IFS/x')}", error)
         self.assertNotIn("v9.9.9 dead;touch", error)
 
-    def test_the_head_of_the_message_survives_the_couriers_300_character_cut(self) -> None:
+    def test_the_head_of_the_message_survives_a_300_character_cut(self) -> None:
         fake = Fake(self.root)
         for n in range(4):
             fake.local_tags[f"v8.0.{n}"] = (f"{n + 1:x}" * 40, None)
@@ -1134,12 +1022,9 @@ class TagsStep(TimerCase):
         self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("token", fake.steps())
         self.assertNotIn("skipped_after_failures", self.names())
-        for call in fake.calls:
-            if call["step"] == "courier":
-                self.assertNotIn("gave up", " ".join(call["argv"]), "the skip notice was sent")
         self.assertEqual(self.names()[-1], "done")
 
-    def test_a_refusal_runs_nothing_after_the_tag_check_and_couriers_no_one_itself(self) -> None:
+    def test_a_refusal_runs_nothing_after_the_tag_check(self) -> None:
         fake = Fake(self.root)
         fake.local_tags["v9.9.9"] = (self.OFFENDER, None)
         self.refused(fake)
@@ -1293,178 +1178,9 @@ class TagsAgreeWithThePreflight(TimerCase):
         self.assertFalse(marker.exists(), "a printed command ran the tag name as a command")
 
 
-class NotifiesOnRefusal(TimerCase):
-    def notify(self) -> list[list[str]]:
-        sent: list[list[str]] = []
-
-        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
-            sent.append(argv)
-            return completed(argv)
-
-        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append), 0)
-        return sent
-
-    def test_the_notice_after_a_refusal_couriers_the_refusal(self) -> None:
-        self.write_log({"event": "failed", "tag": TAG, "step": "build_apk", "error": "old build failure"},
-                       {"event": "refused", "tag": "", "step": "checkout",
-                        "error": "the checkout the timer runs from is not clean: ' M x'"})
-        body = self.notify()[0][-1]
-        self.assertIn("checkout", body)
-        self.assertIn("not clean", body)
-        self.assertNotIn("old build failure", body)
-
-    def test_a_failure_after_a_refusal_is_the_one_couriered(self) -> None:
-        self.write_log({"event": "refused", "tag": "", "step": "checkout", "error": "not clean"},
-                       {"event": "failed", "tag": TAG, "step": "build_apk", "error": "build broke"})
-        body = self.notify()[0][-1]
-        self.assertIn("build_apk", body)
-        self.assertIn("build broke", body)
-        self.assertNotIn("not clean", body)
-
-    def test_a_missing_credential_refusal_names_what_is_missing_and_a_tag_not_chosen_yet(self) -> None:
-        self.write_log({"event": "refused", "tag": "", "missing": ["R2_BUCKET", "RELEASE_PUBLIC_BASE"]})
-        body = self.notify()[0][-1]
-        self.assertIn("R2_BUCKET, RELEASE_PUBLIC_BASE", body)
-        self.assertIn("not chosen yet", body)
-        self.assertNotIn("no failed event recorded", body)
-
-
-class FailureNoticeIsNotRepeated(TimerCase):
-    """The unit couriers the last failure after every failed run. A standing refusal is the same text on every run, so
-    the same step and error is couriered at most once in six hours (`failure_notified`, then `failure_notice_suppressed`)."""
-
-    ERROR = "local tags origin lacks or has elsewhere: v9.9.9 (999999999999) [1 of 3]"
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.sent: list[list[str]] = []
-
-    def notify(self) -> int:
-        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
-            self.sent.append(argv)
-            return completed(argv)
-
-        return timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append)
-
-    def refusal(self, error: str = ERROR, step: str = "tags") -> dict:
-        return {"event": "refused", "tag": "", "step": step, "error": error}
-
-    def append(self, *records: dict) -> None:
-        with self.log.open("a", encoding="utf-8") as handle:
-            handle.writelines(json.dumps(r) + "\n" for r in records)
-
-    @staticmethod
-    def digest(error: str) -> str:
-        return hashlib.sha256(error.encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def hours_ago(hours: float) -> str:
-        return (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
-
-    def notified(self, error: str = ERROR, step: str = "tags", hours: float = 1) -> dict:
-        return {"event": "failure_notified", "ts": self.hours_ago(hours), "tag": "", "step": step, "error_sha256": self.digest(error)}
-
-    def test_the_first_notice_is_sent_and_recorded_with_the_step_and_the_hash_of_the_error(self) -> None:
-        self.write_log(self.refusal())
-        self.assertEqual(self.notify(), 0)
-        self.assertEqual(len(self.sent), 1)
-        [record] = [e for e in self.events() if e["event"] == "failure_notified"]
-        self.assertEqual((record["step"], record["error_sha256"]), ("tags", self.digest(self.ERROR)))
-
-    def test_the_same_error_twice_in_a_row_sends_one_courier_and_logs_the_suppression(self) -> None:
-        self.write_log(self.refusal())
-        self.assertEqual(self.notify(), 0)
-        self.append(self.refusal())  # the next run refuses the same way
-        self.assertEqual(self.notify(), 0)
-        self.assertEqual(len(self.sent), 1)
-        self.assertEqual(self.names().count("failure_notified"), 1)
-        [suppressed] = [e for e in self.events() if e["event"] == "failure_notice_suppressed"]
-        self.assertEqual((suppressed["step"], suppressed["error_sha256"]), ("tags", self.digest(self.ERROR)))
-
-    def test_a_different_error_is_sent_again(self) -> None:
-        self.write_log(self.refusal())
-        self.assertEqual(self.notify(), 0)
-        self.append(self.refusal("local tags origin lacks or has elsewhere: v9.9.8 (888888888888) [1 of 3]"))
-        self.assertEqual(self.notify(), 0)
-        self.assertEqual(len(self.sent), 2)
-        self.assertNotIn("failure_notice_suppressed", self.names())
-
-    def test_the_same_error_on_another_step_is_sent_again(self) -> None:
-        self.write_log(self.refusal(), self.notified(step="checkout"))
-        self.assertEqual(self.notify(), 0)
-        self.assertEqual(len(self.sent), 1)
-
-    def test_the_same_error_after_six_hours_is_sent_again(self) -> None:
-        self.write_log(self.refusal(), self.notified(hours=6.5))
-        self.assertEqual(self.notify(), 0)
-        self.assertEqual(len(self.sent), 1)
-        self.assertEqual(self.names().count("failure_notified"), 2)
-
-    def test_the_same_error_just_under_six_hours_is_suppressed(self) -> None:
-        self.write_log(self.refusal(), self.notified(hours=5.9))
-        self.assertEqual(self.notify(), 0)
-        self.assertEqual(self.sent, [])
-        self.assertIn("failure_notice_suppressed", self.names())
-
-    def test_only_the_newest_notice_counts(self) -> None:
-        self.write_log(self.refusal(), self.notified(hours=1), self.notified("another error", hours=0.5))
-        self.assertEqual(self.notify(), 0)
-        self.assertEqual(len(self.sent), 1, "the newest notice was for another error")
-
-    def test_a_notice_dated_in_the_future_or_unreadable_does_not_suppress(self) -> None:
-        for ts in (self.hours_ago(-3), "not a time", None, (datetime.datetime.now() - datetime.timedelta(hours=1)).isoformat()):
-            with self.subTest(ts=ts):
-                self.write_log(self.refusal(), {**self.notified(hours=1), "ts": ts})
-                self.sent.clear()
-                self.assertEqual(self.notify(), 0)
-                self.assertEqual(len(self.sent), 1)
-
-    def test_a_failed_run_is_deduplicated_like_a_refusal(self) -> None:
-        failed = {"event": "failed", "tag": TAG, "step": "build_apk", "error": "build broke"}
-        self.write_log(failed, self.notified("build broke", "build_apk", hours=1))
-        self.assertEqual(self.notify(), 0)
-        self.assertEqual(self.sent, [])
-        self.assertIn("failure_notice_suppressed", self.names())
-
-    def test_a_credential_refusal_is_deduplicated_by_what_it_names(self) -> None:
-        missing = {"event": "refused", "tag": "", "missing": ["R2_BUCKET"]}
-        self.write_log(missing)
-        self.assertEqual(self.notify(), 0)
-        self.append(missing)
-        self.assertEqual(self.notify(), 0)
-        self.assertEqual(len(self.sent), 1)
-        self.append({"event": "refused", "tag": "", "missing": ["R2_BUCKET", "RELEASE_PUBLIC_BASE"]})
-        self.assertEqual(self.notify(), 0)
-        self.assertEqual(len(self.sent), 2)
-
-    def test_a_notice_that_could_not_be_sent_is_not_recorded_as_sent(self) -> None:
-        self.write_log(self.refusal())
-        broken = lambda argv, cwd=None, env=None: completed(argv, 1, "", "no courier")  # noqa: E731
-        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=broken, sleep=self.sleeps.append), 1)
-        self.assertNotIn("failure_notified", self.names())
-
-    def unwritable_log(self) -> None:
-        """The log refuses every record. A read-only file does not do it: CI runs as root, which writes through the mode."""
-        refuse = mock.patch.object(timer.Log, "event", side_effect=timer.Failure("cannot write the log: Permission denied"))
-        refuse.start()
-        self.addCleanup(refuse.stop)
-
-    def test_a_log_that_cannot_record_the_notice_is_loud(self) -> None:
-        self.write_log(self.refusal())
-        self.unwritable_log()
-        self.assertEqual(self.notify(), 1)
-        self.assertEqual(len(self.sent), 1, "the courier went before the record failed")
-
-    def test_a_log_that_cannot_record_the_suppression_is_loud(self) -> None:
-        self.write_log(self.refusal(), self.notified())
-        self.unwritable_log()
-        self.assertEqual(self.notify(), 1)
-        self.assertEqual(self.sent, [])
-
-
 class LogLinesThatAreNotEvents(TimerCase):
     """A line of the log that is valid JSON but not an object (a stray write, a hand edit) is not an event: every reader of the
-    log skips it, so it cannot crash a run or the failure notice."""
+    log skips it, so it cannot crash a run."""
 
     JUNK = ["[1, 2]", '"x"', "3", "null", "true", "{"]
 
@@ -1480,31 +1196,11 @@ class LogLinesThatAreNotEvents(TimerCase):
         self.log.parent.mkdir(parents=True, exist_ok=True)
         self.log.write_text("\n".join(lines) + "\n")
 
-    def test_the_failure_notice_uses_the_real_events_and_does_not_crash(self) -> None:
-        self.write_mixed({"event": "failed", "tag": TAG, "step": "publish_apk", "error": "publish failed with exit 1"})
-        sent: list[list[str]] = []
-
-        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
-            sent.append(argv)
-            return completed(argv)
-
-        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append), 0)
-        self.assertIn("publish_apk", sent[0][-1])
-        self.assertIn("publish failed with exit 1", sent[0][-1])
-        self.assertEqual(self.logged()[-1], "failure_notified")
-
     def test_a_run_reads_its_history_around_the_junk(self) -> None:
         self.write_mixed({"event": "done", "tag": TAG})
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("nothing_to_do", self.logged())
-
-    def test_a_notice_owed_is_found_around_the_junk(self) -> None:
-        self.write_mixed({"event": "step_ok", "tag": TAG, "step": "verify_live"})
-        fake = Fake(self.root)
-        fake.beta = TAG[1:]
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual(len(couriers(fake, "teth")), 1)
 
     def test_read_events_returns_only_objects(self) -> None:
         self.write_mixed({"event": "x"})
@@ -1569,7 +1265,7 @@ LIBRARIES = ("libq15t.so", "libq15t_early.so")
 VDIR_MARK = "VARIANTDIRMARK-6f1c2a"
 PINS_MARK = "PINSFILEMARK-9d4e7b"
 MAIN_STEPS = ["checkout", "tags", "token", "list", "build_signer", "check_listed", "worktree", "build_slot", "configure",
-              "build_apk", "publish_apk", "dispatch", "watch", "check_jobs", "verify_live", "notify"]
+              "build_apk", "publish_apk", "dispatch", "watch", "check_jobs", "verify_live"]
 
 
 def library_bytes(name: str) -> bytes:
@@ -1747,7 +1443,6 @@ class VariantAfterTheMainRelease(VariantCase):
         self.assertEqual(self.names()[-1], "done")
         self.assertNotIn("variant_not_configured", self.names())
         steps = fake.steps()
-        self.assertLess(steps.index("courier"), steps.index("variant_build"), "the main release is announced first")
         self.assertLess(max(i for i, s in enumerate(steps) if s == "verify"), steps.index("variant_build"))
         self.assertLess(steps.index("variant_build"), steps.index("variant_publish"))
         self.assertLess(steps.index("variant_publish"), steps.index("cleanup.worktree"))
@@ -1857,8 +1552,6 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
         self.assertEqual(fake.live_beta(), TAG[1:])
         for once in ("dispatch", "watch", "publish_apk", "build_apk"):
             self.assertEqual(fake.steps().count(once), 1, once)
-        self.assertEqual(len(couriers(fake, "teth")), 1)
-        self.assertEqual(len(couriers(fake, "spritz")), 1)
         self.assertIn("cleanup.worktree", fake.steps(), "the worktree is still removed")
         self.assertFalse(self.scratch.exists())
 
@@ -1886,19 +1579,6 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
         self.assertNotIn("done", self.names())
         self.assert_release_stands(fake)
 
-    def test_the_variant_failure_is_the_one_the_failure_notice_couriers(self) -> None:
-        fake = Fake(self.root, fail="variant_build")
-        self.assertEqual(self.run_timer(fake), 1)
-        sent: list[list[str]] = []
-
-        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
-            sent.append(argv)
-            return completed(argv)
-
-        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append), 0)
-        self.assertIn("variant_build", sent[0][-1])
-        self.assertIn(TAG, sent[0][-1])
-
     def test_the_next_run_builds_only_the_variant_and_then_the_tag_is_done(self) -> None:
         self.assertEqual(self.run_timer(Fake(self.root, fail="variant_build")), 1)
         self.assertNotIn("done", self.names())
@@ -1907,7 +1587,7 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
         self.assertEqual(self.run_timer(fake), 0)
         self.assertEqual(self.names()[-1], "done")
         self.assertEqual(self.host.requests, [("GET", f"/nevr-runtime/{TAG}/{VARIANT_APK}")])
-        for never in ("build_apk", "publish_apk", "dispatch", "watch", "check_jobs", "courier"):
+        for never in ("build_apk", "publish_apk", "dispatch", "watch", "check_jobs"):
             self.assertNotIn(never, fake.steps())
         self.assertEqual(fake.steps().count("variant_build"), 1)
         self.assertEqual(fake.steps().count("variant_publish"), 1)
@@ -1921,21 +1601,14 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("skipped_after_failures", self.names())
-        [spritz] = couriers(fake, "spritz")
-        self.assertIn("variant", spritz[-1])
-        self.assertIn("variant_build", spritz[-1])
-        self.assertIn("main release is complete", spritz[-1])
-        self.assertIn(f"gave up on the variant APK of {TAG}", spritz[-1])
-        self.assertNotIn("(main release)", spritz[-1])
+        self.assertEqual((self.skipped()["last_step"], self.skipped()["last_part"]), ("variant_build", "variant"))
         self.assertNotIn("variant_build", fake.steps())
 
     def test_a_main_skip_names_the_main_release(self) -> None:
         self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(3)))
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
-        [spritz] = couriers(fake, "spritz")
-        self.assertIn("main release", spritz[-1])
-        self.assertNotIn("variant", spritz[-1])
+        self.assertEqual(self.skipped()["last_part"], "main")
 
     def test_main_failures_and_a_variant_failure_share_the_three_tries(self) -> None:
         self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(2)))
@@ -2122,7 +1795,7 @@ class VariantOfAListedRelease(VariantCase):
         self.assertEqual(self.host.agents, [timer.USER_AGENT], "the release host answers 403 to the default agent")
         [asked] = [e for e in self.events() if e["event"] == "step_ok" and e["step"] == "variant_exists"]
         self.assertEqual((asked["listed"], asked["apk"]), (False, VARIANT_APK))
-        for never in ("dispatch", "watch", "check_jobs", "publish_apk", "build_apk", "courier"):
+        for never in ("dispatch", "watch", "check_jobs", "publish_apk", "build_apk"):
             self.assertNotIn(never, fake.steps())
         self.assertEqual(fake.steps().count("worktree.add"), 1)
         self.assertEqual(fake.steps().count("cleanup.worktree"), 1)
@@ -2193,14 +1866,6 @@ class VariantOfAListedRelease(VariantCase):
         self.assertEqual(self.run_timer(fake, env=env), 1)
         self.assertEqual(self.failed()[0]["step"], "variant_exists")
         self.assertNotIn("worktree.add", fake.steps())
-
-    def test_a_listed_release_whose_notice_is_owed_is_noticed_before_the_variant(self) -> None:
-        self.write_log({"event": "step_ok", "tag": TAG, "step": "verify_live"})
-        fake = self.listed()
-        self.assertEqual(self.run_timer(fake), 0)
-        steps = fake.steps()
-        self.assertEqual(len(couriers(fake, "teth")), 1)
-        self.assertLess(steps.index("courier"), steps.index("variant_build"))
 
     def test_a_failing_variant_build_of_a_listed_release_is_a_counted_failure_and_cleans_up(self) -> None:
         fake = self.listed()
@@ -2319,13 +1984,11 @@ class VariantPairCheck(VariantCase):
         self.assertEqual([e["step"] for e in self.failed()], ["variant_exists"] * 3)
         fake = self.listed()
         self.assertEqual(self.run_timer(fake), 0)
-        [spritz] = couriers(fake, "spritz")
-        self.assertIn("variant_exists", spritz[-1])
-        self.assertIn(f"gave up on the variant APK of {TAG}", spritz[-1])
+        self.assertEqual((self.skipped()["last_step"], self.skipped()["last_part"]), ("variant_exists", "variant"))
 
 
 class VariantBuildOutput(VariantCase):
-    """A failing variant step puts no output of the build in the record, stderr, journal or courier text: the plugin check
+    """A failing variant step puts no output of the build in the record, stderr or the journal: the plugin check
     prints the plugin's own symbol names. The full output is in a 0600 file in the timer's work directory."""
 
     LOG_NAME = f"variant-{TAG}-build.log"
@@ -2335,16 +1998,6 @@ class VariantBuildOutput(VariantCase):
 
     def noisy(self, out: str = "OUTMARK-7c1e", err: str = "ERRMARK-3b9d", rc: int = 1):
         return lambda argv: completed(argv, rc, out, err)
-
-    def couriered(self) -> str:
-        sent: list[list[str]] = []
-
-        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
-            sent.append(argv)
-            return completed(argv)
-
-        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append), 0)
-        return " ".join(" ".join(argv) for argv in sent)
 
     def test_the_output_is_in_the_0600_file_and_nowhere_else(self) -> None:
         old = os.umask(0)  # a file opened with the default mode would be 0666 here
@@ -2357,7 +2010,7 @@ class VariantBuildOutput(VariantCase):
         self.assertIn("ERRMARK-3b9d", text)
         self.assertEqual(stat.S_IMODE(self.build_log().stat().st_mode), 0o600)
         self.assertEqual(self.build_log().parent, self.root / "work", "in the work directory, not the private one")
-        for where in (self.log.read_text(), stderr, self.couriered(), json.dumps(fake.calls, default=str)):
+        for where in (self.log.read_text(), stderr, json.dumps(fake.calls, default=str)):
             self.assertNotIn("OUTMARK-7c1e", where)
             self.assertNotIn("ERRMARK-3b9d", where)
 
@@ -2459,7 +2112,7 @@ class VariantBuildOutput(VariantCase):
         [failure] = self.failed()
         self.assertEqual((failure["step"], failure["error"]), ("variant_publish", "python3 exited 4"))
         for marker in ("PUBOUT-1", "PUBERR-2"):
-            self.assertNotIn(marker, self.log.read_text() + stderr + self.couriered())
+            self.assertNotIn(marker, self.log.read_text() + stderr)
 
     def test_the_other_steps_still_carry_their_tails(self) -> None:
         fake = Fake(self.root, overrides={"build_apk": lambda argv: completed(argv, 1, "MAINOUT", "MAINERR")})
@@ -2493,7 +2146,7 @@ class VariantPartOfTheRelease(VariantCase):
         self.assertEqual(self.run_timer(Fake(self.root), env=env), 1)
         self.assertEqual([e["part"] for e in self.events() if e["event"] == "refused"], ["main"])
 
-    def test_a_failure_after_the_notice_is_the_variant(self) -> None:
+    def test_a_failure_after_the_main_release_is_the_variant(self) -> None:
         for step in ("variant_pins", "variant_build", "variant_publish"):
             with self.subTest(step=step):
                 self.log.unlink(missing_ok=True)
@@ -2505,10 +2158,6 @@ class VariantPartOfTheRelease(VariantCase):
                 self.assertEqual(self.run_timer(fake), 1)
                 self.assertEqual([e["part"] for e in self.failed()], ["variant"])
                 (self.vdir / LIBRARIES[0]).write_bytes(library_bytes(LIBRARIES[0]))
-
-    def test_a_failing_notice_is_still_the_main_release(self) -> None:
-        self.assertEqual(self.run_timer(Fake(self.root, fail="courier")), 1)
-        self.assertEqual([(e["step"], e["part"]) for e in self.failed()], [("notify", "main")])
 
     def test_everything_in_the_already_listed_path_is_the_variant(self) -> None:
         for step in ("configure", "worktree", "build_slot", "variant_exists", "variant_pins"):
@@ -2527,48 +2176,34 @@ class VariantPartOfTheRelease(VariantCase):
                 self.assertEqual([(e["step"], e["part"]) for e in self.failed()], [(step, "variant")])
                 (self.vdir / LIBRARIES[0]).write_bytes(library_bytes(LIBRARIES[0]))
 
-    def test_a_failing_notice_owed_in_the_already_listed_path_is_the_main_release(self) -> None:
-        self.write_log({"event": "step_ok", "tag": TAG, "step": "verify_live"})
-        fake = self.listed()
-        fake.fail = "courier"
-        self.assertEqual(self.run_timer(fake), 1)
-        self.assertEqual([(e["step"], e["part"]) for e in self.failed()], [("notify", "main")])
-        self.assertNotIn("main_complete", self.names())
-
-    def test_the_give_up_note_after_a_configure_failure_in_the_already_listed_path_names_the_variant(self) -> None:
+    def test_the_skip_after_a_configure_failure_in_the_already_listed_path_is_the_variant(self) -> None:
         for _ in range(3):
             self.assertEqual(self.run_timer(self.listed_failing("configure")), 1)
         fake = self.listed()
         self.assertEqual(self.run_timer(fake), 0)
-        [spritz] = couriers(fake, "spritz")
-        self.assertIn(f"gave up on the variant APK of {TAG}", spritz[-1])
-        self.assertIn("step configure", spritz[-1])
-        self.assertNotIn("(main release)", spritz[-1])
+        self.assertEqual((self.skipped()["last_step"], self.skipped()["last_part"]), ("configure", "variant"))
 
     def listed_failing(self, step: str) -> Fake:
         fake = self.listed()
         fake.fail = step
         return fake
 
-    def test_the_give_up_note_reads_the_part_of_the_last_failure_and_falls_back_for_old_records(self) -> None:
+    def test_the_skip_reads_the_part_of_the_last_failure_and_falls_back_for_old_records(self) -> None:
         self.write_log(*({"event": "failed", "tag": TAG, "step": "configure", "part": "variant", "error": "x"} for _ in range(3)))
-        fake = self.listed()
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertIn("variant APK", couriers(fake, "spritz")[0][-1])
+        self.assertEqual(self.run_timer(self.listed()), 0)
+        self.assertEqual(self.skipped()["last_part"], "variant")
         self.log.unlink()
         self.write_log(*({"event": "failed", "tag": TAG, "step": "configure", "part": "main", "error": "x"} for _ in range(3)))
-        fake = self.listed()
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertIn("(main release)", couriers(fake, "spritz")[0][-1])
+        self.assertEqual(self.run_timer(self.listed()), 0)
+        self.assertEqual(self.skipped()["last_part"], "main")
         self.log.unlink()
         self.write_log(*({"event": "failed", "tag": TAG, "step": "variant_build", "error": "x"} for _ in range(3)))
-        fake = self.listed()
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertIn("variant APK", couriers(fake, "spritz")[0][-1], "a record from before `part` is read by its step")
-
+        self.assertEqual(self.run_timer(self.listed()), 0)
+        self.assertEqual((self.skipped()["last_step"], self.skipped()["last_part"]), ("variant_build", "variant"),
+                         "a record from before `part` is read by its step")
 
 class MainComplete(VariantCase):
-    """`main_complete` is written once the main release's notice has gone out. A run whose tag has it starts as the variant,
+    """`main_complete` is written once the main release is complete. A run whose tag has it starts as the variant,
     so a failure of build_signer or check_listed on a variant-only retry is the variant's."""
 
     def listed(self) -> Fake:
@@ -2576,18 +2211,12 @@ class MainComplete(VariantCase):
         fake.beta = TAG[1:]
         return fake
 
-    def test_it_is_written_after_the_notice_and_before_any_variant_record(self) -> None:
+    def test_it_is_written_before_any_variant_record(self) -> None:
         self.assertEqual(self.run_timer(Fake(self.root)), 0)
         names = self.names()
         self.assertEqual(names.count("main_complete"), 1)
-        notified = max(i for i, e in enumerate(self.events()) if e["event"] == "step_ok" and e["step"] == "notify")
-        self.assertLess(notified, names.index("main_complete"))
         self.assertLess(names.index("main_complete"), self.events().index(next(
             e for e in self.events() if e["event"] == "step_ok" and e["step"] == "variant_pins")))
-
-    def test_it_is_not_written_when_the_notice_fails(self) -> None:
-        self.assertEqual(self.run_timer(Fake(self.root, fail="courier")), 1)
-        self.assertNotIn("main_complete", self.names())
 
     def test_it_is_written_even_when_the_variant_is_not_configured(self) -> None:
         env = {k: v for k, v in self.env.items() if not k.startswith("NEVR_VARIANT_")}
@@ -2622,7 +2251,7 @@ class MainComplete(VariantCase):
                 self.assertEqual(self.run_timer(fake), 1)
                 self.assertEqual(self.failed()[-1]["part"], "main", step)
 
-    def test_the_give_up_note_after_three_failures_of_a_variant_retry_names_the_variant(self) -> None:
+    def test_the_skip_after_three_failures_of_a_variant_retry_is_the_variant(self) -> None:
         self.assertEqual(self.run_timer(Fake(self.root, fail="variant_build")), 1)
         for _ in range(2):
             fake = self.listed()
@@ -2630,10 +2259,9 @@ class MainComplete(VariantCase):
             self.assertEqual(self.run_timer(fake), 1)
         fake = self.listed()
         self.assertEqual(self.run_timer(fake), 0)
-        [spritz] = couriers(fake, "spritz")
-        self.assertIn(f"gave up on the variant APK of {TAG}", spritz[-1])
+        self.assertEqual((self.skipped()["last_step"], self.skipped()["last_part"]), ("configure", "variant"))
 
-    def test_a_listed_tag_with_no_notice_owed_writes_it_once_and_the_next_run_does_not_repeat_it(self) -> None:
+    def test_a_listed_tag_writes_main_complete_once_and_the_next_run_does_not_repeat_it(self) -> None:
         self.assertEqual(self.run_timer(self.listed()), 0)
         self.assertEqual(self.names().count("main_complete"), 1)
         self.log_without = [e for e in self.events() if e["event"] != "done"]
@@ -2641,15 +2269,7 @@ class MainComplete(VariantCase):
         self.assertEqual(self.run_timer(self.listed()), 0)
         self.assertEqual(self.names().count("main_complete"), 1)
 
-    def test_an_owed_notice_that_goes_out_on_a_listed_tag_is_followed_by_it(self) -> None:
-        self.write_log({"event": "step_ok", "tag": TAG, "step": "verify_live"})
-        fake = self.listed()
-        self.assertEqual(self.run_timer(fake), 0)
-        notified = next(i for i, e in enumerate(self.events()) if e["event"] == "step_ok" and e["step"] == "notify")
-        self.assertLess(notified, self.names().index("main_complete"))
-
-    def test_the_variant_failure_after_the_notice_of_an_owed_listed_tag_is_the_variant(self) -> None:
-        self.write_log({"event": "step_ok", "tag": TAG, "step": "verify_live"})
+    def test_the_variant_failure_of_a_listed_tag_is_the_variant(self) -> None:
         fake = self.listed()
         fake.fail = "configure"
         self.assertEqual(self.run_timer(fake), 1)
@@ -2662,7 +2282,7 @@ class VariantOnlyAfterTheMainRelease(VariantCase):
     main release again."""
 
     MAIN_ONLY = ("build_signer.fetch", "build_signer.go", "verify", "manifest", "build_apk", "publish_apk",
-                 "dispatch", "watch", "check_jobs", "courier")
+                 "dispatch", "watch", "check_jobs")
 
     def moved(self) -> Fake:
         fake = Fake(self.root)
@@ -2741,17 +2361,8 @@ class RunLock(TimerCase):
         self.assertTrue(scratch.exists(), "the live run's scratch is not swept by a run that did not get the lock")
         self.assertNotIn("done", self.names())
 
-    def test_the_notice_and_the_reset_do_not_wait_for_the_lock(self) -> None:
+    def test_the_reset_does_not_wait_for_the_lock(self) -> None:
         self.hold()
-        self.write_log({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"})
-        sent: list[list[str]] = []
-
-        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
-            sent.append(argv)
-            return completed(argv)
-
-        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append), 0)
-        self.assertEqual(len(sent), 1)
         self.assertEqual(self.run_timer(Fake(self.root), "--tag", TAG, "--reset-failures"), 0)
         self.assertIn("failures_reset", self.names())
 
@@ -3035,14 +2646,6 @@ class ResetFailures(TimerCase):
         self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
         self.assertEqual(self.names()[-1], "done", "one failure since the newest reset is retried")
 
-    def test_a_skip_notice_sent_before_the_reset_does_not_silence_the_next_one(self) -> None:
-        self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(3)),
-                       {"event": "skip_notified", "tag": TAG}, {"event": "failures_reset", "tag": TAG},
-                       *({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(3)))
-        fake = Fake(self.root)
-        self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
-        self.assertEqual(len(couriers(fake, "spritz")), 1)
-
     def test_a_reset_of_another_tag_changes_nothing(self) -> None:
         self.fail_three()
         self.assertEqual(self.run_timer(Fake(self.root), "--tag", "v5.16.1", "--reset-failures"), 0)
@@ -3287,7 +2890,7 @@ class VariantRealProcess(TimerCase):
         (self.root / "repo").mkdir()  # the checkout the timer runs from: its commands run with it as the working directory
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for tool in ("git", "gh-fake", "go", "tar", "pgrep", "systemd-run", "just", "rclone", "courier"):
+        for tool in ("git", "gh-fake", "go", "tar", "pgrep", "systemd-run", "just", "rclone"):
             (self.bin / tool).write_text(FAKE_TOOL.replace("PYTHON", sys.executable))
             (self.bin / tool).chmod(0o755)
         self.served = self.root / "served"
@@ -3609,76 +3212,12 @@ class Probe(TimerCase):
         self.assertEqual(self.probe(fake), 0)
 
 
-class UnitsAndRecipe(unittest.TestCase):
-    units = ROOT / "tools" / "systemd"
-
-    def read(self, name: str) -> str:
-        return (self.units / name).read_text(encoding="utf-8")
-
-    def test_the_timer_runs_the_service_often_and_catches_up(self) -> None:
-        text = self.read("nevr-quest-release.timer")
-        self.assertIn("OnCalendar=*:*:00", text)
-        self.assertIn("AccuracySec=1s", text)
-        self.assertIn("Persistent=true", text)
-        self.assertNotIn("*:0/30", text)
-        self.assertIn("Unit=nevr-quest-release.service", text)
-        self.assertIn("WantedBy=timers.target", text)
-
-    def test_the_probe_is_the_condition_and_comes_before_every_other_command(self) -> None:
-        text = self.read("nevr-quest-release.service")
-        self.assertIn("ExecCondition=/usr/bin/python3 -I %h/src/nevr-runtime-work/release-timer/checkout/tools/"
-                      "quest_release_timer.py --probe", text)
-        self.assertLess(text.index("ExecCondition="), text.index("ExecStartPre="))
-
-    def test_the_run_is_the_draft_stage(self) -> None:
-        text = self.read("nevr-quest-release.service")
-        self.assertRegex(text, r"(?m)^ExecStart=/usr/bin/python3 -I \S+quest_release_timer\.py --stage-draft$")
-
-    def test_the_service_runs_from_a_dedicated_checkout_it_moves_to_origin_main_itself(self) -> None:
-        text = self.read("nevr-quest-release.service")
-        checkout = "%h/src/nevr-runtime-work/release-timer/checkout"
-        self.assertIn(f"WorkingDirectory={checkout}", text)
-        self.assertIn(f"ExecStart=/usr/bin/python3 -I {checkout}/tools/quest_release_timer.py", text)
-        self.assertIn(f"ExecStartPre=/usr/bin/git -C {checkout} fetch --quiet origin main", text)
-        self.assertIn(f"ExecStartPre=/usr/bin/git -C {checkout} switch --quiet --detach origin/main", text)
-        self.assertLess(text.index("fetch --quiet"), text.index("switch --quiet"))
-        self.assertLess(text.index("switch --quiet"), text.index("ExecStart=/usr/bin/python3"))
-
-    def test_the_service_runs_the_tool_loads_the_credential_file_and_notifies_on_failure(self) -> None:
-        text = self.read("nevr-quest-release.service")
-        self.assertIn("Type=oneshot", text)
-        self.assertIn("quest_release_timer.py", text)
-        self.assertIn("EnvironmentFile=%h/.config/metis/r2-evr-echo-taxi.env", text)
-        self.assertIn("OnFailure=nevr-quest-release-failed.service", text)
-        self.assertIn("RELEASE_PUBLIC_BASE=", text)
-        self.assertNotRegex(text, r"(?i)(secret|password|token)\s*=\s*\S")
-
-    def test_the_failure_service_runs_the_notifier(self) -> None:
-        text = self.read("nevr-quest-release-failed.service")
-        self.assertIn("quest_release_timer.py --notify-failure", text)
-        self.assertIn("release-timer/checkout/tools/quest_release_timer.py", text)
-
-    def test_the_recipe_links_the_units_from_the_repo_and_arms_the_timer(self) -> None:
-        recipe = (ROOT / "justfile").read_text(encoding="utf-8")
-        start = recipe.index("install-quest-release-timer")
-        body = recipe[start:start + 2600]
-        for want in ("systemctl --user link", "nevr-quest-release.timer", "nevr-quest-release.service",
-                     "nevr-quest-release-failed.service", "daemon-reload", "enable --now nevr-quest-release.timer",
-                     "worktree add --detach", "release-timer/checkout"):
-            self.assertIn(want, body)
-        self.assertIn('link "$CHECKOUT/tools/systemd/$unit"', body, "the units are linked from the dedicated checkout")
-
-    def test_the_service_loads_the_optional_variant_environment_file_and_holds_no_value(self) -> None:
-        text = self.read("nevr-quest-release.service")
-        self.assertIn("EnvironmentFile=-%h/.config/metis/quest-variant.env", text, "the dash makes the file optional")
-        self.assertIn("EnvironmentFile=%h/.config/metis/r2-evr-echo-taxi.env", text, "the credential file stays required")
-        self.assertNotRegex(text, r"NEVR_VARIANT_(DIR|PINS)\s*=")
-
+class ReleasingDoc(unittest.TestCase):
     def test_the_doc_and_the_module_docstring_state_the_variant_steps_the_environment_and_the_failure_rule(self) -> None:
         text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
         section = text.split("## The Quest half of the train", 1)[1].split("\n## ", 1)[0]
         for want in ("variant_pins", "variant_build", "variant_publish", "variant_exists", "variant_listed",
-                     "NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS", "quest-variant.env", "variant_not_configured",
+                     "NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS", "variant_not_configured",
                      "never blocks", "release-quest-variant-apk", "--variant"):
             self.assertIn(want, section)
         for want in ("variant_pins", "variant_build", "variant_publish", "NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS"):
@@ -3708,15 +3247,12 @@ class UnitsAndRecipe(unittest.TestCase):
         text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
         section = text.split("## The Quest half of the train", 1)[1].split("\n## ", 1)[0]
         self.assertIn("newest tag only", section)
-        self.assertIn("dedicated checkout", section)
 
     def test_the_doc_names_the_probe_the_draft_wait_and_the_abandonment(self) -> None:
         text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
         section = text.split("## The Quest half of the train", 1)[1].split("\n## ", 1)[0]
-        for want in ("--probe", "--stage-draft", "draft_abandoned", "await_published", "verify_loader", "recheck_beta",
-                     "every minute"):
+        for want in ("--probe", "--stage-draft", "draft_abandoned", "await_published", "verify_loader", "recheck_beta"):
             self.assertIn(want, section)
-        self.assertNotIn("every 30 minutes", section)
         for want in ("--probe", "--stage-draft", "draft_abandoned"):
             self.assertIn(want, timer.__doc__)
 

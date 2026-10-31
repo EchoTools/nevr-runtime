@@ -26,7 +26,7 @@ constexpr std::array<std::uint8_t, 24> kDispatchPrologue = {0x48, 0x89, 0x5C, 0x
                                                             0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48,
                                                             0x8B, 0xF1, 0x48, 0x8B, 0xDA, 0x48, 0x8B, 0x89};
 
-// The friend row's invite handler and the social call behind it (ReVault echovr.exe, disassembly of
+// The friend row's invite handler and the social call behind it (echovr.exe, disassembly of
 // 0x14018aa90). After the two event-raising checks the handler has three SILENT exits: no social
 // object at netGame+0x647c8; the target's provider nibble differs from the local provider symbol
 // (CSymbol64 of CNSProvider::UserProviderID(netGame+0x10)); bit 0x10 differs. 0x140614320 then skips
@@ -58,7 +58,7 @@ constexpr std::array<std::uint8_t, 16> kRespondNodePrologue = {0x48, 0x89, 0x5C,
 constexpr std::size_t kNodeStateOffset = 0x18;  // 0 = bind, 1 = run (reads input, posts), 2 = wait
 constexpr std::size_t kNodeDataOffset = 0xB0;   // pointer to the node's input block
 
-// R15NetIsFriendExpression's run function (ReVault echovr.exe 0x140d98950): the tablet's SetupFriendButton
+// R15NetIsFriendExpression's run function (echovr.exe 0x140d98950): the tablet's SetupFriendButton
 // graph (a9bf5a844a019d97.dll, node 0xd7ee6bee) branches on its `output` and sets the ADD FRIEND button's
 // enabled and shown flags to the opposite: false (not a friend) enables and shows it, true disables and hides
 // it. The function reads the player's id string through `getter`, builds an SNSUserID, and calls

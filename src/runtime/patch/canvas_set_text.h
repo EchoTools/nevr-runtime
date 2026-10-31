@@ -1,5 +1,5 @@
 #pragma once
-// CCanvasUICS::SetText(handle, CSymbol64 item, const char* text) (Quest 0x149111c in ReVault): (this = CCanvasUICS*,
+// CCanvasUICS::SetText(handle, CSymbol64 item, const char* text) (Quest 0x149111c in the disassembly): (this = CCanvasUICS*,
 // RDX = SCompactPoolHandle (u32), R8 = item symbol, R9 = NUL-terminated text) -> non-zero when the item exists. It
 // returns 0 at once for a null text. Called by every SetText2 script node (0x14126dce0) and by the credits page. The
 // menu version label hooks it (menu_version_label.cpp) and the UI text writer calls it (ui_text.cpp), so the address

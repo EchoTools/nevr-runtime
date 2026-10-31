@@ -17,14 +17,16 @@ fix for a bad release is a new release, which reaches beta through the release t
                    and each must be what the manifest lists for the tag
   plan             printed: beta now, the target, the direction, manifest_version, the target's artifacts with sizes, and
                    whether the train will be paused
-  --dry-run        reads (and only reads) the variable, the timer and the Quest service, and says whether a live run would
+  --dry-run        reads (and only reads) the variable and the Quest release timer's lock, and says whether a live run would
                    be refused; dispatches with dry_run=true, watches, checks the jobs (a dry run records nothing, so the
                    record job is skipped), checks that beta did not move, and downloads the run's signed manifest and
-                   compares it with the live one. It changes nothing else: no variable, no timer.
+                   compares it with the live one. It changes nothing else: no variable.
   --live --yes     pause_variable  RELEASE_TRAIN := false on EchoTools/nevr-runtime (the release train stops cutting), read back
-                   pause_timer     `systemctl --user stop nevr-quest-release.timer` (--keep-train skips both pauses)
-                   check_service   the Quest release service is loaded (a machine without the unit would show `inactive`) and
-                                   `inactive` or `failed` (a oneshot unit that is running is `activating`), else it refuses
+                                   (--keep-train skips it). This tool does not stop whatever schedules
+                                   tools/quest_release_timer.py: stop that scheduler yourself before a live run, or the timer
+                                   can publish a release to beta while the rollback is under way
+                   check_timer     no run of tools/quest_release_timer.py holds its lock (<work>/timer.lock, found as the timer
+                                   finds it: QUEST_RELEASE_WORK_ROOT, else under $XDG_STATE_HOME/nevr-runtime), else it refuses
                    check_signer_runs   no `sign-manifest.yml` run on the signer repository is queued or running
                    recheck         beta has not moved, and the claims still match, while pausing
                    dispatch, watch, check_jobs   the live publish; the jobs that publish all succeeded
@@ -32,10 +34,10 @@ fix for a bad release is a new release, which reaches beta through the release t
                    It never resumes the train: it prints the two resume commands, says the train stays paused until someone
                    runs them, and prints what ships the fix (the train, not this tool) and the false-alarm command.
 
-Inputs, from the environment: GH_BIN (default gh-spritz, as the Quest release timer and the train guard), RELEASE_PUBLIC_BASE
+Inputs, from the environment: GH_BIN (default gh), RELEASE_PUBLIC_BASE
 (required), RELEASE_SIGNER_BIN and RELEASE_SIGNER_DIR (both, or neither: then the signer is built from a snapshot of the
-main of QUEST_RELEASE_SIGNER_REPO, default ~/src/release-signer, the way the Quest release timer builds it, and the snapshot
-is removed when the run ends). No R2 credential is read, and none is passed to a child. Every command has a timeout (600 s,
+main of the clone QUEST_RELEASE_SIGNER_REPO names, required in that case, the way the Quest release timer builds it, and the
+snapshot is removed when the run ends). No R2 credential is read, and none is passed to a child. Every command has a timeout (600 s,
 1800 s for the signer build and the watch, 7200 s for the watch when the target lists PC game data). Every step appends a
 JSON line (ts, run, event, step, tag, direction, outcome, error) to $XDG_STATE_HOME/nevr-runtime/rollback-beta.jsonl; a log
 that cannot be written is a failure. A failed, interrupted or crashed run exits non-zero and names the step; after it began
@@ -48,6 +50,7 @@ value read from the environment for a credential or the host is replaced by <red
 
 import argparse
 import collections
+import fcntl
 import json
 import os
 import pathlib
@@ -61,6 +64,7 @@ import uuid
 from collections.abc import Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import quest_release_timer  # noqa: E402 - where the timer's work folder (and its lock) is found
 from publish_quest_apk import Failure, Log, fetch, public_base  # noqa: E402 - the sibling tool's log, failure and fetch
 
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")  # used with fullmatch: `$` would pass a trailing newline
@@ -73,10 +77,8 @@ RELEASE_SLUG = "EchoTools/nevr-runtime"
 SIGNER_SLUG = "thesprockee/release-signer"
 WORKFLOW = "sign-manifest.yml"
 TRAIN_VARIABLE = "RELEASE_TRAIN"
-TIMER_UNIT = "nevr-quest-release.timer"
-SERVICE_UNIT = "nevr-quest-release.service"
 SIGNER_BINARY = "release-signer"
-DEFAULT_GH = "gh-spritz"  # the publisher's account, as in quest_release_timer.py and release_train_guard.py
+DEFAULT_GH = "gh"  # as in quest_release_timer.py and release_train_guard.py
 # The jobs of .github/workflows/sign-manifest.yml in the release-signer repository. A live run records and uploads; a dry run
 # checks, signs and verifies the upload, and the record job is skipped. A green run with a skipped job that should have run
 # published nothing, so the conclusions are read job by job.
@@ -87,12 +89,11 @@ DEFAULT_TIMEOUT = 600  # seconds, for every command that names no other
 BUILD_TIMEOUT = 1800  # the signer snapshot's go build
 WATCH_TIMEOUT = 1800  # a run takes about six minutes
 WATCH_TIMEOUT_PC_DATA = 7200  # the check job downloads the PC game data (about 5 GB) when the target lists it
-IDLE_SERVICE_STATES = frozenset({"inactive", "failed"})  # a oneshot unit that is running reports `activating`
 GITHUB_KINDS = frozenset({"windows-zip", "quest-library"})  # the artifacts GitHub holds; every other kind is claimed
 IGNORED_ENTRY_FIELDS = ("notes", "published")  # a re-published listed release may differ in these (the signer's sameBytes)
 SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "GH_TOKEN", "GITHUB_TOKEN")
 R2_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
-LOCAL_OUTPUT = frozenset({"systemctl", "git", "tar", "go"})  # programs whose stdout is ours; everything else is remote content
+LOCAL_OUTPUT = frozenset({"git", "tar", "go"})  # programs whose stdout is ours; everything else is remote content
 TAIL = 2000
 
 Runner = Callable[..., subprocess.CompletedProcess]
@@ -154,10 +155,10 @@ class Rollback:
         if base:
             redacted += [base.rstrip("/"), urllib.parse.urlsplit(base).hostname or ""]
         self.secrets = sorted({s for s in redacted if s}, key=len, reverse=True)
-        self.child = {k: v for k, v in env.items() if k not in SECRET_ENV}  # the signer, systemctl and git get no credential
+        self.child = {k: v for k, v in env.items() if k not in SECRET_ENV}  # the signer and git get no credential
         self.gh_env = {k: v for k, v in env.items() if k not in R2_ENV}  # gh keeps its own token and never sees R2
         self.pausing = args.live and not args.keep_train
-        self.paused = {"variable": False, "timer": False}
+        self.paused = {"variable": False}
         self.dispatched: str | None = None
         self.dispatch_unknown = False  # gh may have dispatched a publish and left no run id
         self.outcome = ""  # what a finished run did, for the line a failed cleanup adds to
@@ -207,8 +208,8 @@ class Rollback:
     def make_scratch(self, step: str) -> pathlib.Path:
         """This run's own folder under the work root, made once and removed when the run ends."""
         if self.scratch is None:
-            home = pathlib.Path(os.path.expanduser("~"))
-            root = pathlib.Path(self.env.get("NEVR_WORK_ROOT") or home / "src" / "nevr-runtime-work") / "rollback-beta"
+            state = self.env.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+            root = pathlib.Path(self.env.get("NEVR_WORK_ROOT") or pathlib.Path(state) / "nevr-runtime") / "rollback-beta"
             try:
                 root.mkdir(parents=True, exist_ok=True)
                 readme = root / "README.md"
@@ -228,8 +229,7 @@ class Rollback:
             self.signer_dir = pathlib.Path(self.env["RELEASE_SIGNER_DIR"])
             return
         step = "build_signer"
-        home = pathlib.Path(os.path.expanduser("~"))
-        repo = str(pathlib.Path(self.env.get("QUEST_RELEASE_SIGNER_REPO") or home / "src" / "release-signer"))
+        repo = str(pathlib.Path(self.env["QUEST_RELEASE_SIGNER_REPO"]))  # run() refused a run without it
         scratch = self.make_scratch(step)
         tarball = scratch / "release-signer.tar"
         self.signer_dir = scratch / "snapshot"
@@ -346,7 +346,7 @@ class Rollback:
     def plan(self, live: dict, beta: str, direction: str, override: bool) -> None:
         manifest = live["manifest"]
         if self.args.live and self.pausing:
-            train = f"will be paused first ({TRAIN_VARIABLE}=false, {TIMER_UNIT} stopped)"
+            train = f"will be paused first ({TRAIN_VARIABLE}=false; the Quest release timer is not stopped by this tool)"
         elif self.args.live:
             train = "not touched (--keep-train)"
         else:
@@ -367,12 +367,22 @@ class Rollback:
         except (ValueError, AttributeError, TypeError) as error:
             raise StepFailure(step, f"the variable list is unreadable: {error}") from error
 
-    def service_state(self, step: str) -> tuple[str, str]:
-        """(LoadState, ActiveState) of the Quest release service. `show` of a unit that does not exist prints ActiveState
-        `inactive` and exits 0, so ActiveState alone cannot tell a machine without the unit from an idle one."""
-        load = self.cmd(step, ["systemctl", "--user", "show", "-p", "LoadState", "--value", SERVICE_UNIT]).stdout.strip()
-        active = self.cmd(step, ["systemctl", "--user", "show", "-p", "ActiveState", "--value", SERVICE_UNIT]).stdout.strip()
-        return load, active
+    def timer_lock_held(self) -> bool:
+        """Whether a run of tools/quest_release_timer.py holds its lock (<work>/timer.lock) now. Read-only: a work folder or a
+        lock file that does not exist means no run has ever held it, and none is made."""
+        try:
+            fd = os.open(quest_release_timer.work_root(self.env) / "timer.lock", os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return False
+        except OSError as error:
+            raise StepFailure(self.current or "check_timer", f"cannot open the Quest release timer's lock: {error.strerror}") from error
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        finally:
+            os.close(fd)
+        return False
 
     def active_signer_runs(self, step: str) -> list[str]:
         out = self.gh_cmd(step, ["run", "list", "--workflow", WORKFLOW, "-R", SIGNER_SLUG, "--json", "status,databaseId",
@@ -391,27 +401,13 @@ class Rollback:
         self.paused["variable"] = True
         self.ok(step)
 
-    def pause_timer(self) -> None:
-        step = "pause_timer"
-        self.cmd(step, ["systemctl", "--user", "stop", TIMER_UNIT])
-        active = self.cmd(step, ["systemctl", "--user", "is-active", TIMER_UNIT], ok_codes=(0, 3, 4))
-        if active.returncode == 0:
-            raise StepFailure(step, f"{TIMER_UNIT} is still active after the stop")
-        self.paused["timer"] = True
+    def check_timer(self) -> None:
+        step = "check_timer"
+        self.current = step
+        if self.timer_lock_held():
+            raise StepFailure(step, "a run of tools/quest_release_timer.py holds its lock: a Quest release is in progress and "
+                                    "publishes to beta when it ends. Wait for it to end, then run this again")
         self.ok(step)
-
-    def check_service(self) -> None:
-        step = "check_service"
-        load, state = self.service_state(step)
-        if load != "loaded":
-            raise StepFailure(step, f"{SERVICE_UNIT} is not loaded (LoadState {load or 'unknown'}): this machine does not run the "
-                                    "Quest release timer, so a Quest release in progress could not be seen. Run this on the "
-                                    "publisher's machine")
-        if state not in IDLE_SERVICE_STATES:
-            stopped = " (the timer is stopped, so it will not start another)" if self.paused["timer"] else ""
-            raise StepFailure(step, f"{SERVICE_UNIT} is {state or 'in an unknown state'}: a Quest release is in progress and "
-                                    f"publishes to beta when it ends. Wait for it to end, then run this again{stopped}")
-        self.ok(step, state=state)
 
     def check_signer_runs(self) -> None:
         step = "check_signer_runs"
@@ -424,25 +420,17 @@ class Rollback:
     def dry_preflight(self) -> None:
         """Read-only: what a live run would meet, as plan lines. A value that cannot be read is said, not guessed."""
         refused = []
-        probes = (
-            ("variable", lambda: self.variable_value("preflight"), lambda v: f"{TRAIN_VARIABLE} is {v!r}; a live run sets it to false"),
-            ("timer", lambda: self.cmd("preflight", ["systemctl", "--user", "is-active", TIMER_UNIT], ok_codes=(0, 3, 4)).stdout.strip(),
-             lambda v: f"{TIMER_UNIT} is {v or 'unknown'}; a live run stops it"),
-        )
-        for name, read, text in probes:
-            try:
-                self.say(f"plan: {text(read())}")
-            except StepFailure as failure:
-                self.say(f"plan: the {name} could not be read: {failure}")
         try:
-            load, state = self.service_state("preflight")
-            self.say(f"plan: {SERVICE_UNIT} is {state or 'unknown'} (LoadState {load or 'unknown'})")
-            if load != "loaded":
-                refused.append(f"{SERVICE_UNIT} is not loaded (LoadState {load or 'unknown'})")
-            elif state not in IDLE_SERVICE_STATES:
-                refused.append(f"{SERVICE_UNIT} is {state or 'unknown'}")
+            self.say(f"plan: {TRAIN_VARIABLE} is {self.variable_value('preflight')!r}; a live run sets it to false")
         except StepFailure as failure:
-            self.say(f"plan: the Quest service could not be read: {failure}")
+            self.say(f"plan: the variable could not be read: {failure}")
+        try:
+            held = self.timer_lock_held()
+            self.say(f"plan: a run of the Quest release timer {'holds' if held else 'does not hold'} its lock")
+            if held:
+                refused.append("a Quest release timer run holds its lock")
+        except StepFailure as failure:
+            self.say(f"plan: the Quest release timer's lock could not be read: {failure}")
         try:
             active = self.active_signer_runs("preflight")
             self.say(f"plan: {WORKFLOW} runs in progress on {SIGNER_SLUG}: {', '.join(active) or 'none'}")
@@ -451,7 +439,7 @@ class Rollback:
         except StepFailure as failure:
             self.say(f"plan: the signer runs could not be read: {failure}")
         self.say("plan: a live run would be refused now: " + "; ".join(refused) if refused else
-                 "plan: a live run would not be refused by the Quest service or a running signer workflow")
+                 "plan: a live run would not be refused by the Quest release timer or a running signer workflow")
         self.ok("preflight", refused=refused)
 
     def recheck(self, beta: str, claims: list[dict]) -> dict:
@@ -595,6 +583,9 @@ class Rollback:
         if bool(self.env.get("RELEASE_SIGNER_BIN")) != bool(self.env.get("RELEASE_SIGNER_DIR")):
             missing = "RELEASE_SIGNER_DIR" if self.env.get("RELEASE_SIGNER_BIN") else "RELEASE_SIGNER_BIN"
             raise Refusal("env", f"set {missing} too, or neither (then the signer is built from a snapshot)")
+        if not self.env.get("RELEASE_SIGNER_BIN") and not self.env.get("QUEST_RELEASE_SIGNER_REPO"):
+            raise Refusal("env", "set QUEST_RELEASE_SIGNER_REPO (a clone of the release-signer repository, whose main the "
+                                 "signer is built from), or RELEASE_SIGNER_BIN and RELEASE_SIGNER_DIR")
         if args.live and not args.yes:
             raise Refusal("confirm", "--live moves the beta channel for every installer: pass --yes to confirm")
         self.prepare_signer()
@@ -610,9 +601,8 @@ class Rollback:
             self.dry_preflight()
         if self.pausing:
             self.pause_variable()
-            self.pause_timer()
         if args.live:
-            self.check_service()
+            self.check_timer()
             self.check_signer_runs()
         if self.pausing:
             live = self.recheck(beta, claims)
@@ -658,17 +648,16 @@ class Rollback:
 
     def resume_commands(self) -> str:
         return (f"  {self.gh} variable set {TRAIN_VARIABLE} --body true -R {RELEASE_SLUG}\n"
-                f"  systemctl --user start {TIMER_UNIT}")
+                "  and start again whatever schedules tools/quest_release_timer.py, if you stopped it")
 
     def state_report(self) -> list[str]:
         """What a run that failed after it began to pause or dispatch did and did not do, one fact per line."""
         facts = []
         undone = []
         if self.pausing:
-            facts += [f"{TRAIN_VARIABLE} is false" if self.paused["variable"] else f"{TRAIN_VARIABLE} is NOT false",
-                      "the timer is stopped" if self.paused["timer"] else "the timer is NOT stopped"]
-            undone += [name for name, done in (("pausing the variable", self.paused["variable"]),
-                                               ("stopping the timer", self.paused["timer"])) if not done]
+            facts.append(f"{TRAIN_VARIABLE} is false" if self.paused["variable"] else f"{TRAIN_VARIABLE} is NOT false")
+            if not self.paused["variable"]:
+                undone.append("pausing the variable")
         if self.dispatched:
             kind = "a dry run: it publishes nothing" if not self.args.live else "its outcome is not confirmed"
             facts.append(f"publish run {self.dispatched} was dispatched ({kind})")
@@ -683,7 +672,7 @@ class Rollback:
         lines = ["state: " + "; ".join(facts)]
         if undone:
             lines.append("NOT done: " + ", ".join(undone))
-        if self.paused["variable"] or self.paused["timer"]:
+        if self.paused["variable"]:
             lines.append("the pauses that were made stay; undo them with:\n" + self.resume_commands())
         return lines
 

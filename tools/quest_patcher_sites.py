@@ -19,7 +19,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 TABLE = REPO / "tools" / "quest_patcher_sites.tsv"
-REVAULT_OFFSET = 0x100000
+DISASM_OFFSET = 0x100000
 FIELDS = ("source", "their_va", "vaddr", "stock", "function", "change", "covered_by", "reason")
 
 
@@ -53,8 +53,8 @@ def check_rows(rows: list, root: Path) -> list:
         except ValueError:
             failures.append(f"{where}: their_va, vaddr and stock must be hex")
             continue
-        if ours != theirs - REVAULT_OFFSET:
-            failures.append(f"{where}: vaddr {ours:#x} is not their_va {theirs:#x} - {REVAULT_OFFSET:#x}")
+        if ours != theirs - DISASM_OFFSET:
+            failures.append(f"{where}: vaddr {ours:#x} is not their_va {theirs:#x} - {DISASM_OFFSET:#x}")
         if ours in seen:
             failures.append(f"{where}: vaddr {ours:#x} already at line {seen[ours]}")
         seen[ours] = row["line"]

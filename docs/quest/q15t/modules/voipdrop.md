@@ -11,10 +11,10 @@ itself); seam `InstallVoipDropAt(base, slot, real, fns)`; `VoipDropCount()`. No 
 ## Row covered
 
 R30: `CR15NetVoipReceiverCS::ReceiveVoip(SCompactPoolHandle, SR15NetUserVoipEvent const&, void const*, unsigned)`, JUMP_SLOT ELF
-0x36c5d80, real function ELF 0x21c3238 = ReVault 0x22c3238 (size 1192). Read this session:
+0x36c5d80, real function ELF 0x21c3238 = disassembly 0x22c3238 (size 1192). Read this session:
 - `R0_readelf_r.txt:109636`: `00000000036c5d80  00001da300000402 R_AARCH64_JUMP_SLOT    00000000021c3238 _ZN10NRadEngine8NRadGame21CR15NetVoipReceiverCS11ReceiveVoipENS_18SCompactPoolHandleERKNS0_20SR15NetUserVoipEventEPKvj + 0`
-- ReVault `functions`: `21c3238 | ReceiveVoip | 1192`; `R1_functions.md:43` (1 caller, the PLT stub; reached from UserVoipCB).
-- Layout words (ELF address, word, text; all 10 of the source's ReceiveVoip/AllocPage words matched ReVault):
+- Disassembly `functions`: `21c3238 | ReceiveVoip | 1192`; `R1_functions.md:43` (1 caller, the PLT stub; reached from UserVoipCB).
+- Layout words (ELF address, word, text; all 10 of the source's ReceiveVoip/AllocPage words matched disassembly):
 ```
 21c3238 d10203ff sub sp, sp, #0x80          ReceiveVoip entry
 21c3698 9105a2a0 add x0, x21, #0x168        the voice hash table inside the receiver CS
@@ -23,10 +23,10 @@ R30: `CR15NetVoipReceiverCS::ReceiveVoip(SCompactPoolHandle, SR15NetUserVoipEven
 2316508 f9400908 ldr x8, [x8, #0x10]        allocator vtable +0x10 = the page request
 23165a8 b9005269 str w9, [x19, #0x50]       the free head (table+0x50)
 ```
-  and the whole AllocPage prologue 0x23164d0..0x231650c read in ReVault: `bl <CMemBlock::Allocator>` (x21), `bl <CurrentPtr>` (x20, the
+  and the whole AllocPage prologue 0x23164d0..0x231650c read in the disassembly: `bl <CMemBlock::Allocator>` (x21), `bl <CurrentPtr>` (x20, the
   saved context), `bl <SetCurrent>(x21)`, `bl <Current>`, `ldr x8,[x0]`, `ldr w1,[x19,#0x64]`, `ldr x8,[x8,#0x10]`, `blr x8` and the
   result is not tested before use. DestroyContext uses `ldr x8,[x8,#0x38]` at 0x124943c (vtable +0x38 = the free).
-- Engine exports (ReVault names/sizes): `CMemBlock::Allocator` 0x11dc610 (8), `CMemoryContext::Current` 0x11c8dc4 (24), `CurrentPtr`
+- Engine exports (disassembly names/sizes): `CMemBlock::Allocator` 0x11dc610 (8), `CMemoryContext::Current` 0x11c8dc4 (24), `CurrentPtr`
   0x11cae90 (12), `SetCurrent` 0x11cafac (20).
 Source: constants the source build's voipdrop:42-43, probe `:82-94`, hook `:96-112`.
 
@@ -59,7 +59,7 @@ build that still carries these words is not refused (the source build accepted t
 binary, which silently removed its crash guards). A pin that fails refuses the module (nothing swapped, reason `word_pin_mismatch`)
 with one ERROR line naming it: `<module> refused: code word pin mismatch, ...  pin=0x<ELF vaddr> found=0x<word read, or unreadable>
 expected=0x<word pinned>`. A slot-target refusal logs ERROR with `pin=<slot ELF vaddr> found=<word at the slot> expected=<base +
-real vaddr>`. Pin addresses in this note are ELF vaddrs (ReVault VA = ELF + 0x100000). All 10 pins read in ReVault (binary 576)
+real vaddr>`. Pin addresses in this note are ELF vaddrs (disassembly VA = ELF + 0x100000). All 10 pins read in the disassembly
 equal the table in `src/quest/plugins/q15t/src/voipdrop.h` (verified by a query that builds its VALUES from the header tables: `MATCH | 88` over the five
 modules' tables, no NOT_SHOWN, no MISMATCH). Host test: every pin flipped in turn is refused and named, an unreadable text is refused and
 named, the table's fingerprint is pinned, the installer refuses on a changed word (`src/quest/tests/q15t/pin_check.h`).
@@ -96,6 +96,6 @@ from that peer is dropped for those packets and resumes when memory returns. `pa
 - **Needs a word patch:** none.
 - Not built: the md5 gate (deliberately none), `setprop` switch of the source (see above); UpdateDefragment's own re-insert is not covered
   (source `:19-20`, also not covered there).
-- Unverified: the allocator's vtable layout beyond the two slots read in ReVault (+0x10 alloc at AllocPage 0x2316508, +0x38 at
+- Unverified: the allocator's vtable layout beyond the two slots read in the disassembly (+0x10 alloc at AllocPage 0x2316508, +0x38 at
   DestroyContext 0x124943c, the second being the source's statement that it is the free "DestroyContext uses"); the exact
   signature of the four memory exports (taken from the source).

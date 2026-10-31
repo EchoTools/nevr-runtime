@@ -262,7 +262,7 @@ void EnsureJsonHooksInstalled(void* facadeObject) {
 }
 
 // The CJson functions the party data sync calls (social_facade.h JsonOps), first 16 bytes each from
-// ReVault's disassembly of echovr.exe.
+// the disassembly of echovr.exe.
 constexpr std::uint64_t kJsonLoadVA = 0x1405F0BD0;
 constexpr std::uint64_t kJsonClearVA = 0x1405ECE60;
 constexpr std::uint64_t kJsonSerializeVA = 0x1405F1DC0;

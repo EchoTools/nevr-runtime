@@ -129,7 +129,7 @@ TEST(InviteMetric, TheClicksOwnFieldsAreReadFromTheNestedEventDetail) {
   EXPECT_EQ(notObject.join_code, "");
 }
 
-// The share page's JOIN (#1731): the page script's own strings (`8c3244ce60942e17.dll`, ReVault) name the panel and the event.
+// The share page's JOIN (#1731): the page script's own strings (`8c3244ce60942e17.dll`) name the panel and the event.
 TEST(InviteMetric, TheSharePagesJoinIsRecognisedByItsPanelAndEventAndNothingElseIs) {
   EXPECT_TRUE(nevr_invite::IsShareJoin(
       R"({"panel_type":"deep_linking","panel_name":"create_game_summary","event_name":"join","user_id":"OVR-ORG-1"})"));

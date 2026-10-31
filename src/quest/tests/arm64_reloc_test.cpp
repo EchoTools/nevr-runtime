@@ -900,7 +900,7 @@ TEST(AWindowOfAnyOtherSizeIsRefused) {
 }
 
 TEST(TheQuestSetTextLeadingCbzRelocatesInAThreeWordWindow) {
-  // The stock words of CCanvasUICS::SetText (libr15 ReVault 0x149111c; the menu version label hooks that function
+  // The stock words of CCanvasUICS::SetText (libr15 disassembly 0x149111c; the menu version label hooks that function
   // through its GOT slot, so it is not a patch-table row): cbz x3, #0x48 ; sub sp, sp, #0x20 ; stp x19, x30,
   // [sp, #16]. The CBZ is the case that matters: its target is far outside the window and the trampoline is far
   // from it, so it becomes CBNZ over an absolute jump.

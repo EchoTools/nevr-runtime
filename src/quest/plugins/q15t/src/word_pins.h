@@ -16,7 +16,7 @@
 namespace q15t {
 
 struct WordPin {
-  std::uintptr_t va;   // ELF vaddr in the pinned build (ReVault VA - 0x100000); read at base + va
+  std::uintptr_t va;   // ELF vaddr in the pinned build (disassembly VA - 0x100000); read at base + va
   std::uint32_t want;  // the instruction word
 };
 

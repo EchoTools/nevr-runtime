@@ -1,13 +1,13 @@
 /* Keeps the device extensions libr15 requires inside the window it reads (#868).
  *
  * The fault, measured on a Quest 3 (Adreno 740, driver total 137, VK_KHR_swapchain at index 134): libr15 asks
- * vkEnumerateDeviceExtensionProperties for the count, clamps it to 128 entries (ReVault 0x19ddaa4-0x19ddab0, buffer
+ * vkEnumerateDeviceExtensionProperties for the count, clamps it to 128 entries (disassembly 0x19ddaa4-0x19ddab0, buffer
  * stride 0x104), asks again with that count and reads only what the driver returned. The driver returns VK_INCOMPLETE
  * with the first 128 entries; VK_KHR_swapchain is not among them; the game logs "Required extension VK_KHR_swapchain does
  * not exist" and stops. Nothing is wrong with the headset's Vulkan: the extension is there, past the game's limit.
  *
  * What this does. libr15 imports no vk* function: it gets vkGetInstanceProcAddr through CSysModule::FindMethod
- * (pinned_targets.h, JUMP_SLOT 0x36db9f8, ReVault 0x19dcaa4) and every other Vulkan function through that. The FindMethod
+ * (pinned_targets.h, JUMP_SLOT 0x36db9f8, disassembly 0x19dcaa4) and every other Vulkan function through that. The FindMethod
  * handler returns a wrapper for vkGetInstanceProcAddr, and the wrapper returns a wrapper for
  * vkEnumerateDeviceExtensionProperties; every other name passes through untouched. The enumerate wrapper calls the driver
  * and returns the driver's answer, with one exception: when the call is the game's buffer call (no layer name, a buffer,
@@ -16,7 +16,7 @@
  * the count the game passed and the total the driver reports are unchanged, so the count query still says 137 and the
  * buffer call still says 5; a call the rewrite does not apply to is the driver's, byte for byte.
  *
- * The names that count as required are the ones the game checks (ReVault 0x19ddad0-0x19ddf5c, in the game's order:
+ * The names that count as required are the ones the game checks (disassembly 0x19ddad0-0x19ddf5c, in the game's order:
  * VK_KHR_swapchain, VK_KHR_external_memory, VK_KHR_external_semaphore, [the VrApi list], VK_KHR_maintenance1,
  * VK_KHR_relaxed_block_layout, VK_KHR_multiview, VK_EXT_fragment_density_map) and the VrApi list itself. The game reads
  * that list after the enumeration, so the wrapper reads it first, from the real vrapi_GetDeviceExtensionsVulkan, and only

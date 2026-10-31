@@ -2,7 +2,7 @@
 // last-received stamp that is above the broadcaster's "now" is pulled down to "now" before the stock timeout loop runs.
 //
 // The crash it guards: SBroadcasterData::CleanupPeers computes age = bd[+0x478] ("now", us) - entry[+0x228] (the peer's
-// last-received stamp) as an unsigned 64-bit subtract with no clamp (ReVault 0x24efa74 ldr x24,[x19,#0x478]; 0x24efa94 ldr
+// last-received stamp) as an unsigned 64-bit subtract with no clamp (disassembly 0x24efa74 ldr x24,[x19,#0x478]; 0x24efa94 ldr
 // x25,[x8,#0x228]; 0x24efae4 sub x25,x24,x25). A stamp above "now" reads as ~2^64 us of silence, every timeout branch fires at
 // once and the new game-server peer is destroyed as "communication timeout" 0.25 s after connect (W-1 gun11 launch 7).
 // Wraps libr15's JUMP_SLOT for CleanupPeers (ELF 0x36efad8 -> the function at ELF 0x24ef9b0; its one caller is
@@ -23,7 +23,7 @@ namespace q15t {
 
 inline constexpr std::uintptr_t kPeerClampSlot = 0x36efad8;
 inline constexpr std::uintptr_t kPeerClampReal = 0x24ef9b0;
-inline constexpr std::uintptr_t kPeerClampInvalid = 0x371d538;  // GOT word holding &CSysNet::SAddress::kInvalid (ReVault 0x24efa14/18)
+inline constexpr std::uintptr_t kPeerClampInvalid = 0x371d538;  // GOT word holding &CSysNet::SAddress::kInvalid (disassembly 0x24efa14/18)
 
 // Refused (one ERROR line, nothing swapped) when the kInvalid pointer cannot be read or is null, or the slot does not hold the
 // pinned function.

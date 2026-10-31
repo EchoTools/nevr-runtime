@@ -1,7 +1,7 @@
 // Host test for the login-failed page's title hook (#1137): the real handler (src/quest/sentinel/login_title_hook.cpp)
 // and prompt board (src/quest/auth/prompt_board.cpp), built without exceptions as the sentinel builds them, driven through
 // the thunk's entry with a stand-in for the script library's string_t::string_t(char const*), which copies at most 63
-// characters into a 64-byte buffer exactly as ReVault 0x10df98 does (NRadString::Copy(this, text, 0x40)). No GOT slot is
+// characters into a 64-byte buffer exactly as the disassembly 0x10df98 does (NRadString::Copy(this, text, 0x40)). No GOT slot is
 // touched: got_pinned_test.cpp resolves the pinned slot in the real library, and tests/quest TestHookFramesCarryNoPersonality
 // checks the installed form's frames.
 //

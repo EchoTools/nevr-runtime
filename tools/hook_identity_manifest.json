@@ -1,5 +1,5 @@
 {
-  "_comment": "Pinned by tools/verify_hook_invariants.py --write-manifest. prologue = first 8 bytes at va in echovr/bin/win10/echovr.exe. A mismatch means the binary changed OR the address was never what its constant claims. Re-derive from ReVault, do not re-pin.",
+  "_comment": "Pinned by tools/verify_hook_invariants.py --write-manifest. prologue = first 8 bytes at va in echovr/bin/win10/echovr.exe. A mismatch means the binary changed OR the address was never what its constant claims. Re-derive from the disassembly, do not re-pin.",
   "image_base": "0x140000000",
   "addresses": [
     {

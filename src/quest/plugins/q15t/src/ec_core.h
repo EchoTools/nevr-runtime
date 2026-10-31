@@ -294,7 +294,7 @@ inline std::uintptr_t JumpSlot(std::uintptr_t base, std::uintptr_t dyn, const ch
 }
 
 // NRadEngine::NWriteLog::WriteLog(ELogLevel, unsigned long long, char const*, ...) of the pinned build: 25 instructions that
-// build a va_list and call WriteLogV(level, flags, fmt, va_list), nothing else. ReVault binary 576 0x1088c20..0x1088c80 reads
+// build a va_list and call WriteLogV(level, flags, fmt, va_list), nothing else. the disassembly 0x1088c20..0x1088c80 reads
 // exactly these words (docs/quest/q15t/modules/ec.md section 3); word 21 is the `bl WriteLogV@plt`, any target.
 constexpr std::uint32_t kWriteLogBody[25] = {0xd10403ff, 0x928004e8, 0x910003e9, 0x910223ea, 0xf2dff008, 0x910403eb, 0x91020129,
                                              0x9100a14a, 0xa90efbe8, 0xa90da7ea, 0xf9006beb, 0xad0007e0, 0xad4683e1, 0xa90893e3,

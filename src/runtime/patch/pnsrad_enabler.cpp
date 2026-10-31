@@ -124,18 +124,18 @@ static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = nevr_matchmaker_host_pat
 static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = nevr_matchmaker_host_patch::kHostSlotSize;
 static constexpr const char* PNSRADMATCHMAKING_HOST_EXPECTED = nevr_matchmaker_host_patch::kHostExpected;
 
-// 2026-09-13 (Andrew/ReVault audit): CNSRADParty (and, per the same audit,
+// 2026-09-13 (Andrew's disassembly audit): CNSRADParty (and, per the same audit,
 // CNSRADFriends/CNSRADUsers/CNSRADActivities) register every inbound SNS
 // listener via CTcpBroadcaster::Listen using a broadcaster HANDLE stored in
 // the object itself — *(this+0x2b0) for CNSRADParty. If that handle is null
 // at the moment this runs, every Listen() call it makes (InviteNotifyCB
 // included) silently registers nothing — no error, no log — which would
-// explain an invite with no listener evidence (see ReVault comments on
-// 0x3039c4/libpnsrad.so and 0x180082d20/pnsrad.dll). The diagnostic observes
+// explain an invite with no listener evidence (see 0x3039c4 in libpnsrad.so and
+// 0x180082d20 in pnsrad.dll). The diagnostic observes
 // the handle when registration occurs after its deferred installation.
 //
 // Target: the vslot[8] function that does the Listen() registration loop
-// (pnsrad.dll FUN_180082d20, confirmed via ReVault to read the handle at
+// (pnsrad.dll FUN_180082d20, confirmed in the disassembly to read the handle at
 // param_1[0x56] == *(this+0x2b0) before every Listen call). RVA computed
 // against pnsrad.dll's 0x180000000 image base (same convention used
 // throughout this file for pnsradmatchmaking.dll's RVA above).
@@ -144,7 +144,7 @@ static constexpr uintptr_t PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET = 0x2b0;
 
 // The listener-registration hook does not fire during in-game invite attempts;
 // registration may run before the deferred diagnostic hook is installed.
-// SendInvite is the per-click function (ReVault FUN_180086df0, identified
+// SendInvite is the per-click function (FUN_180086df0, identified
 // against libpnsrad.so) and reads the same broadcaster-handle field.
 static constexpr uintptr_t PNSRAD_PARTY_SEND_INVITE_RVA = 0x86df0;
 

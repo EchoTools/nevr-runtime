@@ -22,7 +22,7 @@ constexpr std::size_t kSiteCount = 3;
 // The three loading-tip script nodes, in the order of kDetours and of the liveness ids. Each row is the node's
 // Enter function, the RVA the repo's addresses.h names, and the first 16 bytes the game holds there.
 //
-// Identities (plan E-tips 1.1): ReVault's raw decompilations of echovr.exe, matched against libr15.so's symbols,
+// Identities (plan E-tips 1.1): the raw decompilations of echovr.exe, matched against libr15.so's symbols,
 // which name them (libr15 Enter at 0x20b08c4, 0x20b7f58, 0x20b836c). Structural matches, not PC symbols.
 //   - 0x140bd9670: CR15PickLoadingTipNode::Enter. Picks a tip through LoadingTipSelect and writes the outputs.
 //   - 0x140be6d10: CR15SelectLoadingTipByIndexNode::Enter. Sets a tip by the 32-bit index in data[9] (LoadingTipSet).

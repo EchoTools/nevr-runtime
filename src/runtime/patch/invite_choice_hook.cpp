@@ -15,7 +15,7 @@
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/patch/invite_wizard.h"
 
-// CncaGameSpace::SendComponentEvent (ReVault echovr.exe 0x14050fb60): RCX = the game space, RDX = the SComponentEvent,
+// CncaGameSpace::SendComponentEvent (echovr.exe 0x14050fb60): RCX = the game space, RDX = the SComponentEvent,
 // R8D = flags. The game's own code reads the event at once (word 0 on entry, word 2 as the sender), so the observer
 // reads those words without asking the page table; everything it reaches from them goes through a checked read.
 // The bytes below are the function up to its first call; none of them is position dependent.

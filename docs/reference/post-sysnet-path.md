@@ -2,7 +2,7 @@
 
 Issue #13 reports a native-Windows client whose log stops after two lines, the second being
 `[SYSNET] Found Internet connection`. This is the ordered list of everything the game runs after
-that line until its next log line, from ReVault (`echovr.exe`). It is static; no hang was observed
+that line until its next log line, from the disassembly (`echovr.exe`). It is static; no hang was observed
 on a running client.
 
 ## Where the line comes from
@@ -16,7 +16,7 @@ and logs the plain line (strings at `0x1416e90e0`, `0x1416e9110`, `0x1416e9140`)
 
 ## The caller, in order
 
-`0x1401f6fa0` has seven distinct callers (ReVault): `0x140157bd0`, `0x140157fb0` (the multiplayer init
+`0x1401f6fa0` has seven distinct callers (disassembly): `0x140157bd0`, `0x140157fb0` (the multiplayer init
 orchestrator named in `src/runtime/patch/mode_patches.cpp`), `0x140172850`, `0x1401728a0`,
 `0x14017c660`, `0x1401ac820` and `0x1401ac9d0`. The logged line does not say which of them ran, so
 #13's log does not identify the caller. This section follows the first-connect step `0x140157bd0`

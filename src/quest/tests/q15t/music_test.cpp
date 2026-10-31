@@ -196,7 +196,7 @@ int main() {
   const std::string dir = tmpl;
   q15t::SetModuleSwitchDirForTest(dir.c_str());
 
-  // the pinned addresses (R0_readelf_r.txt line 118641; ReVault 0x2649264 - 0x100000)
+  // the pinned addresses (R0_readelf_r.txt line 118641; disassembly 0x2649264 - 0x100000)
   CHECK(q15t::kMusicSlot == 0x36d76e8 && q15t::kMusicReal == 0x2549264, "pinned addresses changed");
 
   // ---- 1. install on a fake slot: swapped, one INFO line ----

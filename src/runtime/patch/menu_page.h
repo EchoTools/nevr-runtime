@@ -6,7 +6,7 @@
 // runtime adds the CREATE GAME and JOIN VIA CODE cards to a copy of that buffer, so the player's own data is the
 // only source of the page and nothing derived from it is stored or shipped.
 //
-// Layout, read from the serializers (ReVault echovr.exe: CR15UIPage2CR_ReadPageTable 0x14082eea0,
+// Layout, read from the serializers (echovr.exe: CR15UIPage2CR_ReadPageTable 0x14082eea0,
 // CR15UIPage2CR_ReadElementArray 0x140830620, ReadRowArray16 0x14026fa90, ReadRowArray72 0x140275f00) and credited to
 // the echovr-modkit author's cards_page.py, whose documented byte layout the serializers confirm. Every array is
 // a 56-byte descriptor (count at +0x28 and +0x30) followed, in the order the serializer consumes them, by its

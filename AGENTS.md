@@ -43,8 +43,26 @@ The logging standard below is part of this contract:
   [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) as clarified by
   [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174): normative only in all capitals. The same notice opens each file
   in `docs/standards/`.
-- **The changelog is the git log.** There is no `CHANGELOG` file; release notes are generated per release (git-cliff
-  is planned; no tooling yet).
+- **The changelog is the git log.** There is no `CHANGELOG` file; release notes are written per release
+  (`RELEASING.md`).
+
+## Nothing that only one machine has
+
+The tree MUST NOT reference anything that a fresh clone on another machine does not have. This covers code, scripts,
+tests, recipes, unit files, docs, comments and agent definitions alike:
+
+- **No path outside the checkout.** No absolute or home-relative path to a file or directory that is not made by the
+  repo's own tools: no `/home/<user>/...`, `~/src/<other repo>`, `/mnt/...`, `~/.config/...`, `~/.local/...`, and no
+  path into another person's or seat's directory. Another repository is named by its name (and its public URL where it
+  has one), never by where it is cloned.
+- **No local helper and no private service.** No wrapper or notifier that lives on one machine (a command in
+  `~/.local/bin`, a personal mailbox or alert tool), no private database or tool by name, and no entry in a personal
+  secret store.
+- **A per-machine input is an input.** A path, a key or an account that differs per machine is an environment
+  variable or a parameter with no machine-specific default, and the code fails with a line that names it when it is
+  missing.
+- **Allowed:** the work root (`$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work`), the XDG state directory and the
+  `build/` trees, which the repo's tools create themselves; standard system tools and public package names.
 
 ## Project
 
@@ -57,7 +75,7 @@ nEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connectio
 The rest of this file binds every agent, a contributor's included, except the parts marked **Maintainers only**. This
 section applies to an agent working for an outside contributor, on the contributor's own machine. It adds what such an
 agent needs: what to read, what a PR carries, which rules are live, and the N-rules index. It also says which later sections describe the maintainers' machine, and what to do
-on yours instead. Where a step needs access only the maintainers have (ReVault, the production server's logs, the
+on yours instead. Where a step needs access only the maintainers have (the production server's logs, the
 release pipeline), do what you can without it and ask in your PR or issue. Never guess in its place.
 
 ### Required reading
@@ -83,11 +101,10 @@ each one gives; do the step this way on yours:
 | Maintainers-only part | On your machine |
 | --- | --- |
 | "Commit identity" (author, trailer, signing) | Commit as yourself: the author is the person responsible, under the name and email they use on GitHub. When an agent wrote the change, add one `Co-Authored-By: <agent name> <email>` trailer. Conventional prefix, one logical change per commit, and the same post-commit check. |
-| "Ownership and cleanup": the ledger file | Keep the same ledger in a file of your own: a markdown table (artifact, owner, purpose, remove-when), one row per thing you create, the worktree directory or branch in the first cell and your handle, one word, in the second. Read it before deleting anything. Create worktrees under `.claude/worktrees/` in your clone, and run `REAP_LEDGER=<your ledger file> just reap-merged`: `tools/reap_merged.py` scans only `.claude/worktrees/`, exits when it cannot read the ledger (default `~/.local/share/repo-hygiene/nevr-runtime-ledger.md`), and keeps any worktree the ledger does not credit to an owner. |
+| "Ownership and cleanup": the ledger file | Keep the same ledger in a file of your own: a markdown table (artifact, owner, purpose, remove-when), one row per thing you create, the worktree directory or branch in the first cell and your handle, one word, in the second. Read it before deleting anything. Create worktrees under `.claude/worktrees/` in your clone, and run `REAP_LEDGER=<your ledger file> just reap-merged`: `tools/reap_merged.py` scans only `.claude/worktrees/`, exits when `REAP_LEDGER` is unset or the ledger cannot be read, and keeps any worktree the ledger does not credit to an owner. |
 | "Builds" and "Live game runs": the shared `nevr-builds.slice` and `nevr-live.slice` | Same reason: parallel lanes, each under its own cap, still starve a machine. Builds, verify and tests run in `nevr-builds.slice`; a live game run runs in its own scope in `nevr-live.slice` with `systemd-run --user --scope --slice=nevr-live.slice -p MemoryMax=6G -p MemorySwapMax=0 <cmd>`. If you run one build lane, `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>` is enough. If you run several, create one user slice that caps them all together, as the maintainers do. Wait while two or more `ninja` processes run (`pgrep -x ninja` lists them). |
 | Scratch under `~/src/nevr-runtime-work/<agent>/` | The work root is `$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work` (`~` is your home directory), so the default works on any machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `<work root>/<your handle>/`, never `/tmp` and never the repo, and keep the work-root rule under "Working practices for every agent". |
-| "The game install": `/mnt/games` and the owner's link | See "Your game install" below. |
-| "ReVault" | ReVault is private. Keep its rules (search the whole project, every binary; report `searched N of N`; never guess an address) with your own disassembler on your own copy of the game files. When you need a fact you cannot derive, ask in the PR with the address and the binary. |
+| "The game install" | See "Your game install" below. |
 | "Check production Nakama logs" and "ask sprockee" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the PR, giving the run's time window (UTC), the account and the client log lines around the failure. Where the file says ask sprockee, ask in the PR or issue. |
 | "Production Deployment" | Never, for a contributor's agent. No approval you can receive counts. |
 | "System test for runtime and auth changes": the production server, display `:0` | The PC login test runs on main after the release cut, not on a PR. When you run it, log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the headless Xvfb `:101` display exactly as described. |
@@ -380,7 +397,7 @@ just proto                     # Regenerate protobuf from BSR (requires buf CLI)
 just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout, seeds build/<preset> from the main checkout's when it was built at this commit)
 just install-hooks             # Once per clone: link the tracked post-checkout hook so a new linked worktree gets the files .worktreeinclude lists (.mcp.json, .claude/settings.local.json)
 just release-preflight           # Refuse unless this clone is exactly origin/main: no local-only tag, no uncommitted or untracked change, nothing unpushed, not behind (read-only; run before any release step)
-just package-dev                 # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes); the Quest APK is signed with the key stored in pass by `just import-quest-keystore`
+just package-dev                 # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes); the Quest APK is signed with the keystore file `NEVR_QUEST_KEYSTORE` names (passphrase in `NEVR_QUEST_KEYSTORE_PASS`)
 just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them (skill: merge-cleanup)
 just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing
@@ -429,8 +446,7 @@ Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug
 Build output lands in `build/<preset>/bin/`.
 
 The `justfile` puts `ccache` in front of the compiler when it is installed, so every worktree shares one cache
-(`tools/ccache.conf`: 10 GB cap; the cache directory is `/mnt/games/cache/ccache` when that exists, else
-`~/.cache/ccache`). CMake reads the launcher on a build tree's first configure, so a tree configured before
+(`tools/ccache.conf`: 10 GB cap; the cache directory is `CCACHE_DIR`, else `~/.cache/ccache`). CMake reads the launcher on a build tree's first configure, so a tree configured before
 ccache keeps building without it. `NEVR_CCACHE= just build` configures a tree without it. The Quest build never
 uses it: its objects embed the worktree path.
 
@@ -601,38 +617,24 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
 - **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the frozen `Nvr*` plugin ABI are in `docs/standards/naming.md`; `tools/tests/test_naming.py` enforces the `Nvr` freeze and the project-name spellings.
 
-## ReVault — Reverse Engineering Data Warehouse
+## Reverse engineering
 
-> **Maintainers only.** ReVault is private. Contributors: see "For contributors", "Maintainers only, and what to do instead".
+Binary facts come from the game's own binaries, read in a disassembler. Never guess an address, a layout or a byte.
 
-ReVault is the single source of truth for binary analysis. It indexes every binary of the game with disassembly, decompilation, xrefs, strings, and annotations. **Use it first, before Ghidra, before guessing.**
+**Search the whole game, never one binary.** The game is `echovr.exe`, `pnsrad.dll`, `pnsradmatchmaking.dll`, `pnsovr.dll`, every script DLL in `bin/win10/scripts/` (about 567; most gameplay and UI logic lives there, not in the exe), and the Quest side (`libr15.so`, `libpnsrad*.so`, the Quest script libraries). A search on `echovr.exe` that finds nothing says nothing about the game.
 
-**Search the project, never one binary.** The echovr project is the whole game: `echovr.exe`, `pnsrad.dll`, `pnsradmatchmaking.dll`, `pnsovr.dll`, every script DLL in `bin/win10/scripts/` (about 567; most gameplay and UI logic lives there, not in the exe), and the Quest side (`libr15.so`, `libpnsrad*.so`, the Quest script libraries). A search on `echovr.exe` that finds nothing says nothing about the game.
+1. List every binary of the game.
+2. Search code and strings in **every** binary in the list. Fan it out across parallel subagents, a batch of binaries each; no binary is skipped.
+3. Report it as `searched N of N binaries: hits in <binaries>`. A negative without "N of N" is not a finding.
+4. A hit in a script DLL is the game's own logic: read the function before concluding anything.
 
-1. `revault_projects`, then `revault_binaries(project)` for the full binary list.
-2. Run `revault_search_code` / `revault_search_strings` on **every** binary in the list. Fan it out across parallel subagents, a batch of binaries each; no binary is skipped.
-3. Report it as `searched N of N binaries in project <name>: hits in <binaries>`. A negative without "N of N" is not a finding.
-4. A hit in a script DLL is the game's own logic: read it (`revault_function`) before concluding anything.
-
-Available as an MCP server (`revault` in `.mcp.json`) and CLI. The CLI takes one `--binary` per call, so a search (`fn search`, `search code`) is repeated for every binary in the project; the commands that act on an address (`fn show`, `fn callers`, `fn callees`, `xref to`, `rename`) belong to the one binary the address is in:
-
-```sh
-revault fn show <0xVA> --binary pnsrad.dll    # Decompilation + callers + callees + xrefs
-revault fn callers <0xVA> --binary pnsrad.dll # Who calls this function
-revault fn callees <0xVA> --binary pnsrad.dll # What does this function call
-revault xref to <0xVA> --binary pnsrad.dll    # Cross-references to address
-revault rename <0xVA> <new-name> --binary pnsrad.dll  # Annotate
-revault fn search <pattern> --binary <binary>      # Search function names + source: once per binary in the project
-revault search code <pattern> --binary <binary>    # Search decompiled source: once per binary in the project
-```
-
-When you encounter an unknown function address (`fcn_*`, `DAT_*`, `0x180XXXXXX`), **look it up in revault**. If revault doesn't have it, say so — don't guess.
+An unknown function address (`fcn_*`, `DAT_*`, `0x180XXXXXX`) is looked up in the disassembly before anything is built on it. If you cannot resolve it, say so; don't guess.
 
 ## Continuity
 
 You are not the first agent to work here, and you won't be the last. Act like it.
 
-- **Search before you build.** The answer probably already exists in ReVault, the project's own git history, or the nakama server source. Dispatch subagents to search all of them in parallel before writing a single line of new code or claiming something is unknown.
+- **Search before you build.** The answer probably already exists in the game's disassembly, the project's own git history, or the nakama server source. Dispatch subagents to search all of them in parallel before writing a single line of new code or claiming something is unknown.
 - **The reconstruction is the source of truth.** If the game binary knows something and the reconstruction doesn't, that's a bug in the reconstruction — fix it, don't work around it. Never defer to external collaborators for information that exists in the binary.
 - **Use subagents aggressively.** Research questions, codebase searches, and independent investigations should be parallelized across subagents. You are not the only one working. Stop doing sequential searches when you could dispatch five agents at once.
 - **Leave the codebase better than you found it.** Every finding gets committed. Every mapping gets documented. Every `unknown_0x*` you identify gets renamed. Future agents should never repeat your work.
@@ -667,9 +669,7 @@ your seat name, for example `claude-main` or `codex`.
 
 ### Ownership and cleanup
 
-> **Maintainers only.** The ledger path and the scratch layout describe the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
-
-- **Keep a ledger.** `~/.local/share/repo-hygiene/nevr-runtime-ledger.md` is a markdown table
+- **Keep a ledger.** The file `REAP_LEDGER` names is a markdown table
   (artifact, owner, purpose, remove-when) of every worktree, branch, scratch file, issue, PR and
   push to another agent's branch an agent has made; the owner is your seat name. Add the row in
   the same turn you create the thing. Read the ledger before deleting anything; an item not in it
@@ -689,8 +689,7 @@ your seat name, for example `claude-main` or `codex`.
   under the root carries a `README.md` saying what it is for, whose it is and when it is removed; a tool that makes
   one writes it (`tools/lib/work_root.sh`, `tools/work_root.py`).
 - **Ownership is proven, never inferred.** Remove a worktree, branch or scratch path only when your ledger row
-  (`~/.local/share/repo-hygiene/nevr-runtime-ledger.md`, the ledger above) names it, or `~/.local/bin/whence <path>` (call it by that path: zsh's builtin `whence` shadows the bare name and prints nothing; it prints the sessions that mention the path, the oldest first, which is its
-  birth) shows your own session made it. A name that looks like yours, or a location under your scratch
+  (the ledger above) names it. A name that looks like yours, or a location under your scratch
   directory, is not proof: another seat's live worktree can sit there. Anything you cannot prove is another
   seat's; leave it and ask its owner.
 - **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
@@ -715,7 +714,8 @@ your seat name, for example `claude-main` or `codex`.
 
 - **Every build, verify or test goes in the shared user slice:**
   `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G <cmd>`.
-  The slice (`~/.config/systemd/user/nevr-builds.slice`) caps every nevr build together at 14G.
+  Give the slice one memory cap on your machine (a user unit or drop-in for `nevr-builds.slice`); systemd creates the
+  slice without a cap when none exists.
   A cap per lane is not enough: parallel lanes each under their own cap still starve the machine.
 - **Every live game run gets its own scope in `nevr-live.slice`:** `launch-client.sh`, `launch-server.sh`, `verify-server.sh`, scenario runs and a hand-launched client or server. `systemd-run --user --scope --slice=nevr-live.slice -p MemoryMax=6G -p MemorySwapMax=0 <cmd>`. The slice is transient: it has no unit file, and systemd creates it with the first scope.
 - **A live run never shares the build slice, and memory pressure pauses builds, not runs.** While a live run is active, a build waits for it to exit. A live run is never stopped to make room for a build.
@@ -767,12 +767,11 @@ your seat name, for example `claude-main` or `codex`.
 
 ### The game install
 
-> **Maintainers only.** The paths below (`/mnt/games`, the main checkout's `echovr/` link) are the owner's machine; the rules hold everywhere. Contributors: see "For contributors", "Your game install".
+> The rules hold everywhere. Contributors: see also "For contributors", "Your game install".
 
-- **No agent runs a deploy script or writes into the owner's install.** On the owner's machine
-  the main checkout's `echovr/` is a symlink into `/mnt/games/...`, the owner's install (`echovr` is
-  git-ignored and untracked, so the repo does not guarantee this). `/mnt/games/**` and `echovr/**`
-  in the main checkout are never a deploy target. Each writer below writes into the tree it is
+- **No agent runs a deploy script or writes into the owner's install.** The main checkout's
+  `echovr/` may be a symlink to the owner's install (`echovr` is git-ignored and untracked, so the repo does not
+  guarantee what it is). The install and `echovr/**` in the main checkout are never a deploy target. Each writer below writes into the tree it is
   pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
   to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory. Point
   each at a copy explicitly:
@@ -818,7 +817,7 @@ your seat name, for example `claude-main` or `codex`.
     SRC=$(readlink -f <main checkout>/echovr)
     mkdir -p <copy>/echovr && cp -a --reflink=auto "$SRC"/. <copy>/echovr/
     ```
-    `cp -aL` is wrong: a Wine prefix holds links to `/`, to `/mnt/games` and to the home directory
+    `cp -aL` is wrong: a Wine prefix holds links to `/`, to other drives and to the home directory
     (`.wineprefix/dosdevices/z:`, drive letters, `drive_c/users/*/` folders), and `-L` would copy
     all of it.
   - **Size.** The copy is the whole install including `.wineprefix`. Measure the install read-only
@@ -848,7 +847,7 @@ your seat name, for example `claude-main` or `codex`.
     the copy, so they print with an empty target): 43 lines in all. The scripts start the game with its working
     directory inside the copy. That the runtime never writes through those links is not verified, so a
     run on the copy is isolated from the install, not from the rest of the filesystem. A line that
-    resolves into `/mnt/games` or `$SRC` fails the check: `rm` that link, run the check again, and
+    resolves into the install or `$SRC` fails the check: `rm` that link, run the check again, and
     only then start a run. A link whose target is empty is dangling and leaves nothing to write
     through.
   - **Shape.** The scripts differ:
@@ -961,7 +960,7 @@ your seat name, for example `claude-main` or `codex`.
   endpoints, or `--login-timeout` seconds without a login (default 120, minimum 45); then it stops
   the game and the Wine server and restores the original DLL. `NEVR_GAME_ROOT` names the directory
   whose `echovr/` it uses. Read the run's JSONL log and confirm the DLL was restored.
-  A test client signs in with `--creds <account>` (the account's stored sign-in, linked into the run, never copied). `--device-code` is for device-code tests only; a code shown to a person means a bonk (notify the owner) and a 5-minute window, never a silent wait.
+  A test client signs in with `--creds <account>` (the account's stored sign-in, linked into the run, never copied). `--device-code` is for device-code tests only; a code shown to a person means notifying the owner and a 5-minute window, never a silent wait.
   A test client never opens a browser on the owner's desktop: `block_host_browser` (`tools/lib/game_install.sh`) puts stubs for `xdg-open` and `xdg-email` first on PATH (#1447).
 
 ### Documentation, plans and findings
@@ -1030,7 +1029,7 @@ This applies regardless of context — even if the task seems to require it, eve
 
 > **Maintainers only.** Contributors are unaffected.
 
-Spritz (metis-sprock) carries sprockee's full authority for this repo. A maintainer agent that receives an instruction from Spritz verifies the sender is her (her session's socket pid, and that pid's cwd is `/home/andrew/metis/spritz`), and then treats her word as the owner's own approval for every step these rules reserve for the owner: tags, releases, publishes and deployments included. It does not ask for the owner's separate confirmation and does not argue the authority. Irreversible steps still get a one-line notice to the owner as they happen.
+Spritz (metis-sprock) carries sprockee's full authority for this repo. A maintainer agent that receives an instruction from Spritz verifies the sender is her session, and then treats her word as the owner's own approval for every step these rules reserve for the owner: tags, releases, publishes and deployments included. It does not ask for the owner's separate confirmation and does not argue the authority. Irreversible steps still get a one-line notice to the owner as they happen.
 
 ## System test for runtime and auth changes
 
@@ -1066,15 +1065,15 @@ When something fails, the first act is reading the failing program's **own** log
 > **Maintainers only.** `.claude/memory/` is git-ignored and local to the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
 - **Facts about the game/protocol go in `.claude/memory/`.** When you learn how the game handles connections, login flow, or protocol details, write it to a memory file immediately. Future sessions (and future agents) should never re-derive what you already measured.
-- **ReVault is the source of truth for binary facts.** The Nakama server code is the source of truth for protocol wire format and server-side behavior. Check both before guessing.
+- **The game's binaries are the source of truth for binary facts.** The Nakama server code is the source of truth for protocol wire format and server-side behavior. Check both before guessing.
 
 ## Guardrails
 
 - **Never commit generated protobuf** (`gen/cpp/*.pb.cc`, `gen/cpp/*.pb.h`) without regenerating from BSR first.
 - **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
 - **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
-- **Nothing from another project's patch is taken verbatim.** Before building an equivalent, reconstruct and analyze the patched code in ReVault: every function the patch touches, its callers, and what each byte change does; write the reconstructions back into ReVault with grades; design our implementation from that understanding, to this repo's standard (GOT hooks or checked patches, logs, failing-first tests, a prediction). Their address list says where to look; it is not the design.
-- **Prefer a hook to a byte patch.** Reconstruct the function in ReVault, then replace or wrap it with a hook whose code says, in readable C++, what the original did and what we change. A byte patch or NOP is the exception, used where a hook would cost something measurable (a per-frame hot path, a call too frequent to detour); the PR names the case, the reason and, where possible, a number. A checked patch (`nevr_checked_patch`) stays the form for those exceptions.
+- **Nothing from another project's patch is taken verbatim.** Before building an equivalent, reconstruct and analyze the patched code in the disassembly: every function the patch touches, its callers, and what each byte change does; design our implementation from that understanding, to this repo's standard (GOT hooks or checked patches, logs, failing-first tests, a prediction). Their address list says where to look; it is not the design.
+- **Prefer a hook to a byte patch.** Reconstruct the function from the disassembly, then replace or wrap it with a hook whose code says, in readable C++, what the original did and what we change. A byte patch or NOP is the exception, used where a hook would cost something measurable (a per-frame hot path, a call too frequent to detour); the PR names the case, the reason and, where possible, a number. A checked patch (`nevr_checked_patch`) stays the form for those exceptions.
 
 ## Dependencies
 
@@ -1096,8 +1095,7 @@ When something fails, the first act is reading the failing program's **own** log
   by that sister, with the same two trailers. You **SHALL** verify after each commit:
   `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
 - **GitHub account.** Every `gh` action a maintainer agent takes (issues, PRs, comments, reviews,
-  merges, releases) runs through `gh-spritz`, which acts as the metis-sprock account, never the
-  plain `gh` login.
+  merges, releases) runs as the metis-sprock account.
 - **C++ pre-read.** Before C++ or build work, read the C++ Mingw Addendum below;
   its hard stops bind every build and configuration change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under

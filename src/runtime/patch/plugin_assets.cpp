@@ -1,7 +1,7 @@
 /*
  * plugin_assets.cpp — serve plugin-carried assets to the engine's resource manager.
  *
- * How the engine loads a resource (echovr.exe, ReVault decompilation):
+ * How the engine loads a resource (echovr.exe, decompilation):
  *   LoadResource 0x140fa2820 -> SyncResourceLoad 0x140fa36f0 / 0x140fa1890 -> factory by type 0x140fa1c50 ->
  *   0x140fa3220 (submit). 0x140fa3220 asks the resource object for the key of each buffer through its
  *   vfunc[0x48], records which buffers are outstanding at +0x68, and queues one read per buffer through

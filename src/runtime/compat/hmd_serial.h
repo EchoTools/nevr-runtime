@@ -4,7 +4,7 @@
 // Stock path, CR15NetGame::LogIn (echovr.exe 0x14017ef10): when the game's "No VR" flag (bit 20 of the
 // flags at game+0x7ae0) is set, it sends "N/A" (0x1416dcce8). Otherwise FUN_14072d2a0 copies 0x18
 // bytes into the global at 0x1420c7834 and sends that value; FUN_14072e1d0 returns the same global.
-// ReVault's raw decompilation establishes this game-buffer path, but not the value's upstream hardware
+// The raw decompilation establishes this game-buffer path, but not the value's upstream hardware
 // source. The getter runs as part of login before the game connects to the login service, so the bridge
 // can read the populated value when it builds its login request.
 //

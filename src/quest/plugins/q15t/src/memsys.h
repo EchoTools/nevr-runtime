@@ -1,13 +1,13 @@
 // Module `memsys` (rows R37 R38; docs/quest/q15t/modules/memsys.md): the render-target layout pool, 512 -> 1024 slots, through two
 // JUMP_SLOT wrappers. Port of the source build's memsys M2 and its arm.
 //
-//   R37  CSimplePool<SGRenderTargetLayout>::Alloc   JUMP_SLOT 0x36e9b48, real 0x1901b5c (ReVault 0x1a01b5c)
+//   R37  CSimplePool<SGRenderTargetLayout>::Alloc   JUMP_SLOT 0x36e9b48, real 0x1901b5c (disassembly 0x1a01b5c)
 //        CGRawInterface::InitCommon makes the pool with Alloc(pool, 0x200, allocator) and then fills the free stack inline
 //        with 511..0 and adds 512 to the free count. The wrapper, only for that call site (return address
 //        base + 0x18818cc) and only with capacity 0x200, calls Alloc with 0x400 and pre-pushes 1023..512 (free count 512);
 //        the inline fill then completes 0..1023 and the count reads 1024. Any other call, or any layout it does not
 //        recognise, goes to the real function untouched.
-//   R38  CSysJava::Init                            JUMP_SLOT 0x36de5c0, real 0xf7e8e8 (ReVault 0x107e8e8)
+//   R38  CSysJava::Init                            JUMP_SLOT 0x36de5c0, real 0xf7e8e8 (disassembly 0x107e8e8)
 //        android_main's FIRST call (0x10784e4, before it reads any heap size). In the source build this was the arm: the
 //        wrapper did the swaps on the android_main thread. Here the slot swap of R37 is made at install time (data only,
 //        no timing needed), and this wrapper is the TIMING WITNESS: one line when android_main reaches Init, with the

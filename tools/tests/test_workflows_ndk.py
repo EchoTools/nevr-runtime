@@ -1,7 +1,7 @@
 """Every workflow job that runs a just recipe using the NDK sets the NDK up first, with the one composite action.
 
-`test-quest-hooks` copies the NDK's jni.h (`{{ ndk }}`), and `ndk` defaults to a path on the maintainers' machine, so
-a runner without ANDROID_NDK_HOME fails that suite and with it `just verify`: the v5.5.0 release build stopped at
+`test-quest-hooks` copies the NDK's jni.h (`$ANDROID_NDK_HOME`, with no default), so a runner without ANDROID_NDK_HOME
+fails that suite and with it `just verify`: the v5.5.0 release build stopped at
 "Verify" for this (#837). The NDK is located, downloaded and selected in `.github/actions/setup-ndk` only; a job that
 carries its own copy of those steps can drift from the others, which is the fault this test exists to catch.
 """

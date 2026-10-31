@@ -6,13 +6,12 @@ recipe therefore sets the versionCode at repack time, from the build's own versi
 rule is in tools/quest_apk_version.py).
 
 Nothing here reads the recipe's text. The recipe runs for real, over a fixture APK and a compiled fixture shim,
-signed through the real tools/quest_keystore.sh with a fake `pass` and a fixture key made here (the real key is
-never touched), and the versionCode is read back from the SIGNED APK by aapt2, a reader that is not ours.
+signed through the real tools/quest_keystore.sh with a fixture key made here, named by NEVR_QUEST_KEYSTORE and
+NEVR_QUEST_KEYSTORE_PASS (the real key is never touched), and the versionCode is read back from the SIGNED APK by aapt2, a reader that is not ours.
 The expected numbers are written out here, derived by hand from the rule, not computed by the tool.
 """
 from __future__ import annotations
 
-import base64
 import os
 import pathlib
 import re
@@ -30,13 +29,13 @@ import work_root  # noqa: E402
 import axml_fixtures as fx  # noqa: E402
 import quest_apk_version as qv  # noqa: E402
 from quest_patcher_standin import MARKER, make_standin  # noqa: E402
-from test_quest_keystore import ALIAS, FAKE_PASS, KS_ENTRY, PASSPHRASE, PASS_ENTRY  # noqa: E402
+from test_quest_keystore import ALIAS, PASSPHRASE  # noqa: E402
 
 JUSTFILE = REPO / "justfile"
 INSTALLER_VERSION_CODE = 4987570  # the game build the community installer pins
 STORE_VERSION_CODE = 4987566  # the store APK the recipe repacks
-TOOLS = ("just", "cc", "patchelf", "zip", "unzip", "zipalign", "apksigner", "aapt2", "readelf", "nm", "keytool", "pass")
-MISSING = [t for t in TOOLS if t != "pass" and shutil.which(t) is None]
+TOOLS = ("just", "cc", "patchelf", "zip", "unzip", "zipalign", "apksigner", "aapt2", "readelf", "nm", "keytool")
+MISSING = [t for t in TOOLS if shutil.which(t) is None]
 
 # The recipe stamps only at or above the newest release tag's major (the stamp floor, tools/quest_apk_version.py), so the
 # fixture versions take that major from git rather than pin it: a new major must not stale this file (#1371).
@@ -75,18 +74,13 @@ def xmltree(apk: pathlib.Path) -> str:
 
 @unittest.skipIf(MISSING, f"the recipe needs {', '.join(MISSING)}")
 class RepackFixture(unittest.TestCase):
-    """One scratch directory: fixture key, fake pass, store-like APK, compiled shim, build info."""
+    """One scratch directory: fixture key, store-like APK, compiled shim, build info."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="quest-repack-version-", dir=work_root.test_scratch())
         self.addCleanup(self._tmp.cleanup)
         self.tmp = pathlib.Path(self._tmp.name)
-        bin_dir = self.tmp / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "pass").write_text(FAKE_PASS)
-        (bin_dir / "pass").chmod(0o755)
-        store, run = self.tmp / "store", self.tmp / "run"
-        store.mkdir()
+        run = self.tmp / "run"
         run.mkdir(mode=0o700)
         ks = self.tmp / "fixture.jks"
         subprocess.run(["keytool", "-genkeypair", "-keystore", str(ks), "-alias", ALIAS, "-keyalg", "RSA",
@@ -96,9 +90,7 @@ class RepackFixture(unittest.TestCase):
                                  capture_output=True, text=True, check=True).stdout
         line = next(l for l in listing.splitlines() if "SHA-256" in l or "SHA256" in l)
         self.signer = line.split(":", 1)[1].strip().replace(":", "").lower()
-        (store / KS_ENTRY.replace("/", "__")).write_text(base64.b64encode(ks.read_bytes()).decode() + "\n")
-        (store / PASS_ENTRY.replace("/", "__")).write_text(PASSPHRASE + "\n")
-        self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_PASS_DIR=str(store),
+        self.env = dict(os.environ, NEVR_QUEST_KEYSTORE=str(ks), NEVR_QUEST_KEYSTORE_PASS=PASSPHRASE,
                         XDG_RUNTIME_DIR=str(run))
         # The real libr15 patcher refuses any file but the store's, so the recipe is given a stand-in that appends a marker
         # (docs/adr/0021 section 9: quest_patcher_standin.py); the recipe's `patcher` parameter is for this.

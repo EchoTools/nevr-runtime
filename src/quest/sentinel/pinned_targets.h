@@ -103,11 +103,11 @@ struct MatchmakingTStringTag {};
 using LibR15TStringThunk = CallbackThunk<LibR15TStringTag, CJsonTStringSig>;
 using MatchmakingTStringThunk = CallbackThunk<MatchmakingTStringTag, CJsonTStringSig>;
 
-// string_t::string_t(char const*), defined in the login-failed page's script library itself (ReVault 0x10df98, 44 bytes:
-// NRadString::Copy(this, text, 0x40)), reached only through that library's PLT stub (ReVault 0x104a90), whose one caller
-// is execute_node_cfa11df1 (ReVault 0x10d0e8), the node that builds the literal "LOGIN FAILED" and hands it to
+// string_t::string_t(char const*), defined in the login-failed page's script library itself (disassembly 0x10df98, 44 bytes:
+// NRadString::Copy(this, text, 0x40)), reached only through that library's PLT stub (disassembly 0x104a90), whose one caller
+// is execute_node_cfa11df1 (disassembly 0x10d0e8), the node that builds the literal "LOGIN FAILED" and hands it to
 // EXTERNALFUNCTIONNODE::setparam as the page's title. `self` (x0) is the string_t, a 64-byte inline buffer the
-// constructor fills; `text` (x1) is copied, never kept. The ReVault VA is the file vaddr + 0x100000.
+// constructor fills; `text` (x1) is copied, never kept. The disassembly VA is the file vaddr + 0x100000.
 struct StringTOpaque;
 using StringTCtorSig = void(StringTOpaque* self, const char* text);
 struct LoginScriptStringTag {};
@@ -216,7 +216,7 @@ using RefreshRTSizeSig = void();
 struct LibR15RefreshRTSizeTag {};
 using LibR15RefreshRTSizeThunk = CallbackThunk<LibR15RefreshRTSizeTag, RefreshRTSizeSig>;
 // NRadEngine::CResourceManager::FillResourceFileRequest(CSymbol64 type, CSymbol64 name, unsigned long long,
-// CAllocator*, void*, unsigned long long, SFileRequestData&), defined in libr15 at 0x25439f0 (524 bytes; ReVault lists it
+// CAllocator*, void*, unsigned long long, SFileRequestData&), defined in libr15 at 0x25439f0 (524 bytes; the disassembly lists it
 // at 0x26439f0): the single manifest resolver (#871). It clears the request (ClearFileRequestData, 0x2a9759c), binary-searches
 // the manifest for (type, name) and on a hit fills the request with the package file handle, the chunk and the words
 // that locate the bytes; on a miss it raises "Cannot find resource" and returns the error object. Every reader of a
@@ -239,7 +239,7 @@ inline constexpr const char* kFillResourceFileRequestSymbol =
     "_ZN10NRadEngine16CResourceManager23FillResourceFileRequestENS_9CSymbol64ES1_yPNS_10CAllocatorEPvyRNS_16SFileRequestDataE";
 
 // The libr15 functions the loose-file overlay calls (resource_request_hook.cpp). None is hooked: the overlay resolves each
-// by its symbol and proves the address is the load base plus the pinned vaddr. ReVault shows every vaddr 0x100000 higher.
+// by its symbol and proves the address is the load base plus the pinned vaddr. the disassembly shows every vaddr 0x100000 higher.
 //   ClearFileRequestData(SFileRequestData&) (0x2a9759c): the first call of FillResourceFileRequest; it sets the request's
 //     +0x10 and +0x418 to -1 and clears the rest.
 //   CResourceManager::GetUnpackagedResourcePath(CSymbol64 type, CSymbol64 name, CFixedStringT<512>&) const (0x25441b8): writes
@@ -308,7 +308,7 @@ inline constexpr FillCallSite kFillCallSites[] = {
 };
 
 // NRadEngine::CResourceManager::AsyncResourceIOCallback(SIORequestCallbackData&), defined in libr15 at 0x2543448 (484
-// bytes; ReVault lists it at 0x2643448): what the streaming reader calls when the bytes of a resource are in memory
+// bytes; the disassembly lists it at 0x2643448): what the streaming reader calls when the bytes of a resource are in memory
 // (#966). The game never calls it by name: ResourceLoadInternal loads its address from the data slot GLOB_DAT 0x37195b8
 // (`ldr x4, [x4, #0x5b8]` at 0x254391c and 0x25439ac) and passes it to CStreamingIOProcessor::ReadFileAsync, which keeps
 // it in the request context (+0x4b8) and calls it with the context's callback block (+0x478). The slot is read at each
@@ -388,7 +388,7 @@ inline constexpr std::uint64_t kRequestPermissionsVaddr = 0xf873ec;
 inline constexpr std::uint32_t kRequestPermissionsStockWord = 0xd10103ff;
 inline constexpr std::uint32_t kRequestPermissionsReturnWord = 0xd65f03c0;
 
-// NRadEngine::CVR::ShowSystemUI(), defined in libr15 at 0x1a73990 (exported; ReVault 0x1b73990): `mov w1, #1` and a tail
+// NRadEngine::CVR::ShowSystemUI(), defined in libr15 at 0x1a73990 (exported; disassembly 0x1b73990): `mov w1, #1` and a tail
 // call of vrapi_ShowSystemUI(&java, 1). libr15 calls it through its own PLT (stub 0xf47880, JUMP_SLOT 0x36fb328) from
 // exactly one place, state 0 of CR15VRMenuWidgetCS::UpdateExclusive (bl at 0x1f99ca0), the menu's QUIT; state 1 of that
 // switch calls CR15Game::QuitToMain. No other library in the APK imports it (`readelf -rW` over all 483).
@@ -400,7 +400,7 @@ using ShowSystemUISig = void();
 struct LibR15ShowSystemUITag {};
 using LibR15ShowSystemUIThunk = CallbackThunk<LibR15ShowSystemUITag, ShowSystemUISig>;
 
-// NRadEngine::CSysInfo::OSBuildVersion(unsigned long long&), defined in libr15 at 0xf875c4 (184 bytes, exported; ReVault
+// NRadEngine::CSysInfo::OSBuildVersion(unsigned long long&), defined in libr15 at 0xf875c4 (184 bytes, exported; disassembly
 // 0x10875c4): reads the system property ro.build.version.incremental, and when it is at most 20 characters of decimal
 // digits stores the number through its argument and returns 1; otherwise it returns 0 and stores nothing. The return is
 // w0, 0 or 1. libr15 calls it through its own PLT (stub 0xf505a0, JUMP_SLOT 0x36ff9b8) from exactly one place,
@@ -542,20 +542,20 @@ inline constexpr PageName kPageNames[] = {
 };
 }  // namespace ui_layout
 
-// CR15VRMenuWidgetCS::Update(), the pointer-ray menu widget's per-frame update (ReVault 0x209a7a0), is a row of the
+// CR15VRMenuWidgetCS::Update(), the pointer-ray menu widget's per-frame update (disassembly 0x209a7a0), is a row of the
 // build-time patch table (`splash_skip.widget_update`, quest/patch/libr15_patch_table.h): the engine registers its
 // address (R15RegisterComponentSystemUpdates), so no GOT slot names it, and the splash skip activates the row. The
 // widget fields the hook reads (ctx +0x80, defs +0xb8, dense +0xf8, links +0x100, bounds +0xf2/+0xf4, input +0x138) are
 // the ones the update itself reads (the PC twin's offsets, checked against this decompilation). The table's stock words
 // at the site are checked against the store file by libr15_patcher_pinned_test.
 
-// NRadEngine::CGTextureResource::ForceLoadAllMips (libr15 0x18e674c pinned; ReVault 0x19e674c): the function the UI texture
+// NRadEngine::CGTextureResource::ForceLoadAllMips (libr15 0x18e674c pinned; disassembly 0x19e674c): the function the UI texture
 // hook calls. Its first four words are `sub sp,sp,#0xd0; str x20,[sp,#0xb0]; stp x19,x30,[sp,#0xc0]; ldr x8,[x0,#0x70]`.
 inline constexpr std::uint64_t kForceLoadAllMipsVaddr = 0x18e674c;
 inline constexpr std::uint32_t kForceLoadAllMipsCode[4] = {0xD10343FFu, 0xF9005BF4u, 0xA90C7BF3u, 0xF9403808u};
 
 // NRadEngine::CInputListener::Pressed(state, id), the body behind the thunk at pinned 0x1037be0 (its `br` goes to
-// pinned 0x2539920; ReVault 0x2639920). It reads the button table at state+0x80/+0x50 and returns bit 2 of the entry's
+// pinned 0x2539920; disassembly 0x2639920). It reads the button table at state+0x80/+0x50 and returns bit 2 of the entry's
 // flags at +0x230 (set for one input step when the button became active): the same predicate the PC splash skip
 // reads at 0x140f9b770. The id arrives in x1; the decompilation does not show it. Reached like QuitOnError.
 inline constexpr std::uint64_t kInputPressedVaddr = 0x2539920;
@@ -593,20 +593,20 @@ using QuitOnErrorSig = void(CR15NetGameOpaque* self);
 inline constexpr const char* kBeginLogInSymbol = "_ZN10NRadEngine8NRadGame11CR15NetGame10BeginLogInEv";
 inline constexpr std::uint64_t kBeginLogInVaddr = 0x12917b8;
 inline constexpr std::uint32_t kBeginLogInCode[4] = {0xf81c0ffc, 0xa9015bf7, 0xa90253f5, 0xa9037bf3};
-// The main-menu join (#966 S4, docs/adr/0017). CR15Game::BeginMultiplayer() (libr15 0x1201be4; ReVault 0x1301be4, the 52-byte
+// The main-menu join (#966 S4, docs/adr/0017). CR15Game::BeginMultiplayer() (libr15 0x1201be4; disassembly 0x1301be4, the 52-byte
 // wrapper that calls the settings body through a thunk) takes the game object in x0 and begins the staged match. Its first 16
-// bytes, read from libr15 in ReVault (revault_read_memory 0x1301be4, 16 bytes).
+// bytes, read from libr15 in the disassembly (0x1301be4, 16 bytes).
 inline constexpr std::uint64_t kBeginMultiplayerVaddr = 0x1201be4;
 inline constexpr std::uint32_t kBeginMultiplayerCode[4] = {0xd10183ff, 0xa904fbff, 0xd2c00068, 0x92800009};
-// CR15Game::EnableTransitionMenu (libr15 0x12005fc; ReVault 0x13005fc, the plan's "mp_transition"): sends one component event to
-// the menu gamespace (CR15Game+0x7af0) and runs before BeginMultiplayer. First 16 bytes from ReVault 0x13005fc.
+// CR15Game::EnableTransitionMenu (libr15 0x12005fc; disassembly 0x13005fc, the plan's "mp_transition"): sends one component event to
+// the menu gamespace (CR15Game+0x7af0) and runs before BeginMultiplayer. First 16 bytes from the disassembly 0x13005fc.
 inline constexpr std::uint64_t kEnableTransitionMenuVaddr = 0x12005fc;
 inline constexpr std::uint32_t kEnableTransitionMenuCode[4] = {0xd10103ff, 0xa9037bf3, 0xf97d7813, 0xb40001d3};
 using BeginLogInSig = void(CR15NetGameOpaque* self);
 
 // NRadEngine::CncaGameSpace::SendComponentEvent(CSymbol64 event, SActor actor, CSymbol64 key, uint flag), defined
 // in libr15 at 0x17fb0f8 (`this` = the game space in x0, event in x1, actor in x2, key in x3, flag in w4; no
-// return value; ReVault lists it at 0x18fb0f8, its addresses for this module being 0x100000 above the loaded
+// return value; the disassembly lists it at 0x18fb0f8, its addresses for this module being 0x100000 above the loaded
 // ones). QuitOnError calls it as (space, 0x60ba106e8f93f286, 0xffffffffffff, ~0, 1). The login prompt hook sends
 // evt_btn_clicked (kRetrySelectEvent) with the key of the login-failed page's btn_exit branch (kLoginPageExitKey) and
 // the actor kAllActors. It sends this select alone: BeginLogIn runs only in the hook's fallback, when the select is
@@ -765,11 +765,11 @@ inline GotTarget LibR15UserProviderId() {
 }
 
 // NRadEngine::CCanvasUICS::SetText(SCompactPoolHandle, CSymbol64, char const*), defined in libr15 at 0x139111c (80
-// bytes, exported; ReVault 0x149111c): `canvas` (x0) is the CCanvasUICS component, `handle` (w1) the canvas actor's pool
+// bytes, exported; disassembly 0x149111c): `canvas` (x0) is the CCanvasUICS component, `handle` (w1) the canvas actor's pool
 // handle, `item` (x2) the CSymbol64 of the text item and `text` (x3) the C string, copied into the item and never kept; a
 // null `text` returns 0. The versions page's SetText2 script nodes reach it through libr15's own PLT stub (0xf50440:
 // `adrp x16; ldr x17,[x16,#0x908]; add; br x17`, JUMP_SLOT 0x36ff908) from CSetText2Node::Enter (`bl 0xf50440` at pinned
-// 0x2731654; ReVault 0x2831654). Measured on the pinned file: 40 branches to the stub, none to the function, one
+// 0x2731654; disassembly 0x2831654). Measured on the pinned file: 40 branches to the stub, none to the function, one
 // relocation names it.
 // `readelf -rW`: `R_AARCH64_JUMP_SLOT 0x139111c _ZN10NRadEngine11CCanvasUICS7SetTextENS_18SCompactPoolHandleENS_9CSymbol64EPKc`.
 // The slot is in .got, inside PT_GNU_RELRO, in a RW LOAD (data, never executable): a write needs mprotect(RW) and back to
@@ -783,14 +783,14 @@ inline constexpr std::uint64_t kCanvasSetTextVaddr = 0x139111c;
 // PLT slot, not on the code). The words are the store libr15's; got_pinned_test.cpp compares them with the real file.
 //   NRadEngine::CncaGame::GameSpace(unsigned long long) (.dynsym 0x17e17fc, 36 bytes, no relative operand): x0 = the game
 //   object (a CR15Game, whose `this` it is), x1 = the index; `index < [x0+0x1f78] ? [[x0+0x1f48] + index*16 + 8] : 0`. The PC's
-//   GetGameSpace is the same function at +0x1f50 and +0x1f80. ReVault 0x18e17fc.
+//   GetGameSpace is the same function at +0x1f50 and +0x1f80. disassembly 0x18e17fc.
 inline constexpr std::uint64_t kGameSpaceVaddr = 0x17e17fc;
 inline constexpr std::uint32_t kGameSpaceCode[9] = {0xf94fbc08, 0xeb01011f, 0x540000a9, 0xf94fa408, 0x8b011108,
                                                     0xf9400500, 0xd65f03c0, 0xaa1f03e0, 0xd65f03c0};
 //   NRadEngine::CLocalComponentHandle<NRadEngine::CCanvasUICS>::Find(CncaGameSpaceMT*, SActor, CSymbol64) (.dynsym 0x1cbb408,
 //   344 bytes): x0 = the handle it fills ({CCanvasUICS*, u32 handle}), x1 = the gamespace, x2 = the actor's identity
 //   (0x0000ffffffff0000 | index), x3 = the component symbol (canvasui); it leaves x0's canvas null when there is none. The
-//   words are the first twelve, up to the ADRP at 0x1cbb438. ReVault 0x1dbb408.
+//   words are the first twelve, up to the ADRP at 0x1cbb438. disassembly 0x1dbb408.
 inline constexpr std::uint64_t kCanvasFindVaddr = 0x1cbb408;
 inline constexpr std::uint32_t kCanvasFindCode[12] = {0xd10183ff, 0xf90013f8, 0xa9035bf7, 0xa90453f5, 0xa9057bf3, 0xaa0003f4,
                                                       0xa9008be1, 0xb4000901, 0xaa0103f5, 0xf9424821, 0xaa0303f3, 0xb4000761};
@@ -850,7 +850,7 @@ inline GotTarget LibR15RefreshRTSize() {
 }
 
 // The five VrApi imports the render-configuration log reads (docs/adr/0022-render-config-log.md). Each is an imported JUMP_SLOT
-// (value 0) in the pinned libr15 (`readelf -rW`; ReVault shows every slot 0x100000 higher, `revault_imports`). None of the
+// (value 0) in the pinned libr15 (`readelf -rW`; the disassembly shows every slot 0x100000 higher). None of the
 // handlers changes an argument or a result.
 //   vrapi_SetDisplayRefreshRate(ovrMobile*, float): one call site, CVR::UpdateTracking. JUMP_SLOT 0x36ec5f0.
 //   vrapi_SetClockLevels(ovrMobile*, int cpu, int gpu): UpdateTracking, once per VR-mode entry. JUMP_SLOT 0x36c75f0.
@@ -858,8 +858,8 @@ inline GotTarget LibR15RefreshRTSize() {
 //     CVR::SetEnableDynamicFoveation (property 0x1e). JUMP_SLOT 0x36ffcf0.
 //   vrapi_GetSystemPropertyFloat(const ovrJava*, ovrSystemProperty): property 4 is the refresh rate the runtime reports.
 //     JUMP_SLOT 0x36c06f8.
-//   vrapi_SubmitFrame2(ovrMobile*, const ovrSubmitFrameDescription2*): one call per rendered frame. ReVault slot 0x37e7010
-//     (`revault_imports`), pinned 0x36e7010.
+//   vrapi_SubmitFrame2(ovrMobile*, const ovrSubmitFrameDescription2*): one call per rendered frame. the disassembly slot 0x37e7010
+//     (the disassembly's imports), pinned 0x36e7010.
 struct OvrMobileOpaque;
 struct OvrSubmitFrameDescriptionOpaque;
 using SetDisplayRefreshRateSig = int(OvrMobileOpaque* ovr, float rate);
@@ -897,7 +897,7 @@ inline GotTarget LibR15SubmitFrame2() {
 // VrApi_Input.h: ovrResult vrapi_GetCurrentInputState(ovrMobile* ovr, const ovrDeviceID deviceID,
 // ovrInputStateHeader* inputState). Imported (value 0): JUMP_SLOT 0x36ec0f0 (`readelf -rW` on the pinned image); its PLT
 // stub 0xf29410 (`adrp x16, 0x36ec000; ldr x17, [x16, #0xf0]`) has one caller, CVR::PollTracking at 0x1a71928
-// (`revault_callers 0x1029410`; ReVault VA = pinned VA + 0x100000). The input seam of #1202 (input_seam_hook.h).
+// (callers of 0x1029410 in the disassembly; disassembly VA = pinned VA + 0x100000). The input seam of #1202 (input_seam_hook.h).
 struct OvrMobileOpaque;
 using GetCurrentInputStateSig = int(OvrMobileOpaque* ovr, std::uint32_t device_id, void* input_state);
 struct LibR15GetCurrentInputStateTag {};
@@ -959,18 +959,18 @@ inline GotTarget LibR15LookupDataBindingGlobDat() {
 // ---- the Texture Resolution control and its live apply (#1012, docs/adr/0015) -----------------------------------------------
 //
 // Five functions libr15 defines and calls only through its own PLT (`readelf -rW` on the pinned image: one JUMP_SLOT each;
-// design-1012 found no direct `bl` to any of them), plus six it exports that the live apply calls itself. ReVault shows every
+// design-1012 found no direct `bl` to any of them), plus six it exports that the live apply calls itself. the disassembly shows every
 // address 0x100000 higher.
 //
 //   CJson::DecodeFrom(CFileSp const&, unsigned int)       0xfa8120   JUMP_SLOT 0x36ef630. `self` (x0), the file's path as a C string
 //                         (x1: the CFileSp is a 512-byte path buffer), the strip-comments flag (w2). Reads the file with
 //                         ReadFileIntoString, strips its comments when w2 is set and parses the text with the overload below
-//                         (`bl` at 0x10a82e0 ReVault), x1 the text and x2 its length without the terminator. Returns the parse's int.
+//                         (`bl` at 0x10a82e0 disassembly), x1 the text and x2 its length without the terminator. Returns the parse's int.
 //   CJson::DecodeFrom(char const*, unsigned long long)    0xfa7e8c   JUMP_SLOT 0x36cda80. `self` (x0), the text (x1), its length (x2).
 //                         47 callers, most of them network replies; the control's hook looks at it only inside the file read of the
 //                         two documents (texture_menu_hook.cpp).
 //   NRadGame::ValidateGfxSettings(SR15GfxSettings&)        0x20e98a4  JUMP_SLOT 0x36e9d48. Clamps the settings in place. Its one clamp
-//                         of the msaa field (+0x1c) is `csel w10,w10,w21,lt` at 0x21e9958 ReVault: min(msaa, 2).
+//                         of the msaa field (+0x1c) is `csel w10,w10,w21,lt` at 0x21e9958 disassembly: min(msaa, 2).
 //   NRadGame::ApplyRuntimeGfxSettings(SR15GfxSettings const&, CR15Game&, unsigned)   0x20e8e0c  JUMP_SLOT 0x36d9008. Called from
 //                         CR15Game::InitEngine at boot and from the settings component on every change. The msaa field (+0x1c) is
 //                         read only by a log line that indexes a three-entry name table (kMsaaNames, ELF 0x3690278: three RELATIVE
@@ -1085,13 +1085,13 @@ inline constexpr std::size_t kDisplayHeight = 0x16cbc;
 inline constexpr std::size_t kDisplayMode = 0x16d38;
 }  // namespace engine_layout
 
-// SR15GfxSettings fields (ReVault: ValidateGfxSettings, lane G): the msaa field the control rides on.
+// SR15GfxSettings fields (disassembly: ValidateGfxSettings, lane G): the msaa field the control rides on.
 namespace gfx_layout {
 inline constexpr std::size_t kMsaa = 0x1c;
 }
 
 // NRadEngine::CGRawInterfaceVK::Free(VkDeviceMemory_T*, unsigned long begin, unsigned long, unsigned long end), defined in libr15
-// at 0x1885410 (832 bytes; ReVault lists it at 0x1985410): the engine's free for a range of a VkDeviceMemory block (#1759). It
+// at 0x1885410 (832 bytes; the disassembly lists it at 0x1985410): the engine's free for a range of a VkDeviceMemory block (#1759). It
 // keeps the free ranges in a fixed array in .bss (vk_hole_table.h): it extends the entry next to the freed range, else appends
 // a new entry with no bound check. JUMP_SLOT 0x37008d8 (`readelf -rW` on the pinned image; the callers in libr15 reach it
 // through its PLT stub). x2 is not read by the function. The three crash offsets of #1759 (+0x1885480, +0x1885630, +0x18856c8)
@@ -1118,7 +1118,7 @@ inline constexpr PinnedCode kVkFreeAppendBlock = {"CGRawInterfaceVK::Free append
                                                   {0xa97fa52a, 0x9000f86d, 0x911a21ad, 0x5280050f, 0x1100056c, 0x528a000e}, 6};
 inline constexpr PinnedCode kVkFreeAppendStore = {"CGRawInterfaceVK::Free append stores", 0x1885728ULL,
                                                   {0x9b0f356b, 0xb82e69ac, 0xa9000573, 0xa9012963, 0xf9001169, 0x889ffd1f}, 6};
-// The array this layout names (.bss of the pinned image; ReVault shows each address 0x100000 higher).
+// The array this layout names (.bss of the pinned image; the disassembly shows each address 0x100000 higher).
 namespace vk_hole_layout {
 inline constexpr std::uint64_t kTableVaddr = 0x3791688ULL;  // entry 0
 inline constexpr std::uint64_t kCountVaddr = 0x3796688ULL;  // a 32-bit count, directly after entry 511

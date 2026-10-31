@@ -1,6 +1,6 @@
 # Module `ec` and `ecfx`: EC rules layer (EC network client, EC token page, tac-mod store / hide, NEUTRON wall effects)
 
-Pinned build: libr15 build id b243509c08ce677aeb95fa348016949b3fc45230 (ReVault binary 576). Source: `<source build>/the source build's ec`,
+Pinned build: libr15 build id b243509c08ce677aeb95fa348016949b3fc45230 (the disassembly). Source: `<source build>/the source build's ec`,
 the source build's ec_core, the source build's ecfx, the source build's ecfx_core (read-only, never edited, never pushed).
 
 ## 0. The three questions, answered before any code
@@ -66,9 +66,9 @@ Slots checked against `readelf -rW` (a source-build note, not in this tree):
     :112330: 00000000036cb1b0  00003dd500000402 R_AARCH64_JUMP_SLOT 0000000000f88720 _ZN10NRadEngine9NWriteLog9WriteLogVENS0_9ELogLevelEyPKcSt9__va_list + 0
 
 The source's constants are right (the source build's ec:99 `kGotRecvfrom = 0x36d3e88, kGotSendto = 0x36db3d0`; :102 `kTacModList = 0x37af5f8`).
-Per-slot ReVault evidence is in section 3.
+Per-slot disassembly evidence is in section 3.
 
-Ownership, searched in every nevr-runtime tree under `a nevr-runtime tree` and `~/src/nevr-runtime` (`src/quest`, `modules`,
+Ownership, searched in every nevr-runtime tree (`src/quest`, `modules`,
 `plugins`): `grep -rnIlE "recvfrom|sendto|NWriteLog|36d3e88|36db3d0|36fd398"` returned no file; the plugin-repack tree additionally
 `grep -rnIiE "36d3e88|36db3d0|36fd398|37af5f8|\"recvfrom\"|\"sendto\""` over `src docs tools/*.txt tools/*.json tools/symbols.pin`:
 no hit. The sentinel's pinned libc slot list (`src/quest/sentinel/pinned_targets.h`) holds one libc import, `clock_gettime`
@@ -82,7 +82,7 @@ Residual risks, named:
   executable mapping and accept it as the "original" (chain), which works, but nothing prevents a conflicting future hook. A
   slot ownership registry is nevr-runtime's to provide; I did not touch it.
 - The source also swaps the WriteLog slot of `libpnsovr.so` and `libpnsrad.so` (the source build's ec:123-127, :419-448). The string
-  "[NSUSER] sent profile update: %s" exists in all three libs (ReVault strings: 576 0x327385a, 579 0x684cc5, 578 0x75320a), each with
+  "[NSUSER] sent profile update: %s" exists in all three libs (libr15 0x327385a, the two platform libs 0x684cc5 and 0x75320a), each with
   its own `SaveClientProfileChanges`. Which one runs on a Quest session is not known to me, so the platform libs are covered by
   the same name-lookup path the source uses, guarded by the same 25-word body check.
 
@@ -105,8 +105,8 @@ See sections 1 to 6 below for rows, mechanism, evidence, behaviour, prediction, 
 
 | Row | What | Slot / address (ELF vaddr) | Mechanism | Module |
 |---|---|---|---|---|
-| R41 | `NWriteLog::WriteLog` of libr15 | JUMP_SLOT 0x36fd398 (stock word = libr15 + 0xf88c20, ReVault 0x1088c20) | `InstallImportHook`/`SwapWord` of the data word to `WriteLogWrap<0>`; the wrapper is WriteLog's own 25-word body in C (`va_start`, call WriteLogV through the pinned WriteLogV word, return its result untouched) plus one look at the format string "[NSUSER] sent profile update: %s" | ec |
-| R42 | tac-mod list pointer | .bss word 0x37af5f8 (ReVault 0x38af5f8) | not a hook: read with SafeRead under the rebuild gate; the count field is lowered/restored by compare-and-swap when the server lacks EC | ec |
+| R41 | `NWriteLog::WriteLog` of libr15 | JUMP_SLOT 0x36fd398 (stock word = libr15 + 0xf88c20, disassembly 0x1088c20) | `InstallImportHook`/`SwapWord` of the data word to `WriteLogWrap<0>`; the wrapper is WriteLog's own 25-word body in C (`va_start`, call WriteLogV through the pinned WriteLogV word, return its result untouched) plus one look at the format string "[NSUSER] sent profile update: %s" | ec |
+| R42 | tac-mod list pointer | .bss word 0x37af5f8 (disassembly 0x38af5f8) | not a hook: read with SafeRead under the rebuild gate; the count field is lowered/restored by compare-and-swap when the server lacks EC | ec |
 | R43 | libc `recvfrom` | JUMP_SLOT 0x36d3e88 | data-word swap to `RecvfromWrap`: consumes our 16-byte datagrams, retries the real call; hosts the net tick | ec |
 | R44 | libc `sendto` | JUMP_SLOT 0x36db3d0 | data-word swap to `SendtoWrap`: counts destinations (server pick) | ec |
 | gate | `ReloadEquipmentConfig` / `UnloadEquipmentConfig` | JUMP_SLOT 0x36ea1b0 (fn 0x20feda8) / 0x36f1878 (fn 0x20ff7b4) | data-word swaps to `GearWrap<0/1>` which bump a generation and hold a lock around the real call, so the list pointer is never read mid-rebuild | ec |
@@ -127,7 +127,7 @@ the source build's ec_core (page layout :20-33, token types, tac-mod rules :162-
 deliberate hardenings (everything the game owns goes through `SafeRead`; the list count is written by CAS; datagram length and
 `from` family are checked; one `recvfrom` call never swallows more than 256 datagrams in a row; no namespace-scope constructors).
 
-## 3. ReVault evidence (binary 576 libr15.so, read-only; recipe in docs/MODULE_CONTRACT.md; VA = ELF + 0x100000)
+## 3. disassembly evidence (libr15.so, read-only; recipe in docs/MODULE_CONTRACT.md; VA = ELF + 0x100000)
 
 WriteLog body (R41), `functions`: `1088c20 | 100 | WriteLog`, `1088720 | 1280 | WriteLogV`. Instructions 0x1088c20..0x1088c80 (25 words;
 the row at 0x1088c84 is the next function's `adrp`). Quoted as read:
@@ -150,7 +150,7 @@ the row at 0x1088c84 is the next function's `adrp`). Quoted as read:
 `0xfe7590` is `thunk_FUN_01088720` (size 16), words `303f0190 11da40f9 10c20691 20021fd6` = `adrp x16, 0x37cb000; ldr x17, [x16, #0x1b0];
 add; br x17`: it goes through the slot ELF 0x36cb1b0, which readelf shows as the JUMP_SLOT of WriteLogV (value 0xf88720). That is
 why the wrapper finds WriteLogV by reading that slot (and refuses if it does not hold libr15 + 0xf88720). The `kWriteLogBody`
-constant in src/quest/plugins/q15t/src/ec_core.h is these 25 words; src/quest/tests/q15t/ec_test.cpp feeds the ReVault bytes into `IsWriteLogBody`.
+constant in src/quest/plugins/q15t/src/ec_core.h is these 25 words; src/quest/tests/q15t/ec_test.cpp feeds the disassembly bytes into `IsWriteLogBody`.
 
 Slots through the PLT stubs (`instructions`, `functions`):
 
@@ -158,28 +158,28 @@ Slots through the PLT stubs (`instructions`, `functions`):
     10079d0 thunk_EXT_FUN_038d34e0 (16)  adrp x16,0x36db000 ; ldr x17,[x16,#0x3d0]   -> ELF slot 0x36db3d0 sendto     (R44)
     104b960 thunk_FUN_01088c20     (16)  adrp x16,0x37fd000 ; ldr x17,[x16,#0x398]   -> ELF slot 0x36fd398 WriteLog   (R41)
 
-`xrefs` to the GOT words (ReVault 0x37d3e88 / 0x37db3d0 / 0x37fd398, i.e. ELF + 0x100000): one read each, from `ff8f44`, `10079d4`,
+`xrefs` to the GOT words (disassembly 0x37d3e88 / 0x37db3d0 / 0x37fd398, i.e. ELF + 0x100000): one read each, from `ff8f44`, `10079d4`,
 `104b964`: only the PLT stubs read the slots, so a data swap of the word catches every caller. Callers of the stubs: recvfrom stub `ff8f40`: `1099998 ReceiveFrom`,
 `112dbdc FUN_0102da38`; sendto stub `10079d0`: `10997ec SendTo` and nine calls in the `112e6b8..112ec78` range (unnamed). The
-slots' relocations (`readelf -rW`) are quoted in section 0 (b); `binaries` row 576: `libr15.so`, sha256
-`8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20`, architecture aarch64, base_address 1048576 (the ReVault `binaries`
-table has no build_id column; the build id b243509c... is the contract's pin, not read from ReVault here).
+slots' relocations (`readelf -rW`) are quoted in section 0 (b); the disassembly row for `libr15.so`: sha256
+`8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20`, architecture aarch64, base_address 1048576 (the disassembly `binaries`
+table has no build_id column; the build id b243509c... is the contract's pin, not read from the disassembly here).
 
-The profile-update line: `strings` 576 0x327385a, 579 0x684cc5, 578 0x75320a, each "[NSUSER] sent profile update: %s". In libr15 it
+The profile-update line: the string addresses are libr15 0x327385a and the two platform libs 0x684cc5 and 0x75320a, each "[NSUSER] sent profile update: %s". In libr15 it
 is referenced from `SaveClientProfileChanges` (0x1a331f8) at `1a33480` (`adrp x2, 0x3273000; add x2, x2, #0x85a`), whose call is
 
     1a33470 mov x0, sp ; 1a33474 bl 0x01003b60 ; 1a33478 mov x21, x0 ; 1a3347c adrp x2, 0x3273000 ; 1a33480 add x2, x2, #0x85a
     1a33484 mov w0, #0x2 ; 1a33488 mov x1, xzr ; 1a3348c mov x3, x21 ; 1a33490 bl 0x0104b960   (the WriteLog stub)
 
-so the logged argument is the profile json, level 2, and it goes through the R41 slot. The same string exists in binaries 579 and 578 (the platform libs; which id is pnsovr and which pnsrad I did not resolve) at `SaveClientProfileChanges`
-0x48340c (579) and 0x4cabc8 (578): unverified that those two libs run on a Quest session.
+so the logged argument is the profile json, level 2, and it goes through the R41 slot. The same string exists in the two platform libs (which is pnsovr and which pnsrad I did not resolve) at `SaveClientProfileChanges`
+0x48340c (the first) and 0x4cabc8 (the second): unverified that those two libs run on a Quest session.
 
-Tac-mod list word (R42), ReVault 0x38af5f8: five xrefs: `21fecb0 read LoadEquipmentConfig`, `21fee0c data ReloadEquipmentConfig`,
+Tac-mod list word (R42), disassembly 0x38af5f8: five xrefs: `21fecb0 read LoadEquipmentConfig`, `21fee0c data ReloadEquipmentConfig`,
 `21ff020 read` and `21ff8ec read` (both unnamed), `21ffa74 write` (unnamed). `LoadEquipmentConfig` reads it as `adrp x8, 0x38af000;
 add x8, x8, #0x5e8; ldp x9, x10, [x8]; ldr x8, [x8, #0x10]` (0x38af5e8 + 0x10 = the word). `ReloadEquipmentConfig` (0x21feda8, size 180) and
 `UnloadEquipmentConfig` (0x21ff7b4, size 84) are the two rebuild entries whose JUMP_SLOTs (section 0 (b)) the gate wraps. **Unverified
 here:** the field layout of the list object `{alloc, entries, count, cap}` and the 0x88-byte entry size are the source build's
-(the source build's ec_core), not re-read in ReVault; the code refuses any list whose capacity/count are implausible and re-checks the three
+(the source build's ec_core), not re-read in the disassembly; the code refuses any list whose capacity/count are implausible and re-checks the three
 last entry names (smoke / buff / point) before it writes anything.
 
 ## 4. Behaviour
@@ -211,7 +211,7 @@ On a Quest with this plugin, `ec.on` present, the session on a server that runs 
    `RTLD_NOLOAD | RTLD_GLOBAL` and the scripts decide as on a PC without the EC network client) or `another re33_ec_page is already global` (ERROR).
 2. `ec: server (the game's own connection)` once the game talks, then `ec: answer seen: the server has EC` and the page's
    server-has-EC flag (+0x40) at 1 within a few seconds (`ec: answer lost: no 'A' for 6 s` when it stops). **Falsified by** no server line (the sendto/recvfrom words are not the ones the game uses) or by an
-   `unexpected_original` refusal on a slot (the stock word differs from what ReVault says).
+   `unexpected_original` refusal on a slot (the stock word differs from what the disassembly says).
 3. A tac-mod selection in the menu produces an `ec: sel` line with `result=stored at +e80`. **Falsified by** silence after choosing a mod: then
    the profile-update line is logged by a platform lib whose slot did not install (the log says `ec: sel refused` for it) or by a
    path that does not go through WriteLog.
@@ -233,8 +233,8 @@ Not built / blocked:
 - The wall lib content (`libac4e9374a146d3a4.so` and its entry names): unverified; `ecfx` is tested only against a stand-in lib.
 - The bionic behaviour of `dlopen(RTLD_NOLOAD | RTLD_GLOBAL)` promotion: unverified; the fix that does not depend on it is host-side
   (`RTLD_GLOBAL` for a plugin that asks, or a sentinel export): not mine to edit.
-- Which of the three libs logs the profile-update line on a real Quest, and the pnsovr/pnsrad ELF identity (binary ids 578/579): not
-  resolved; their 25-word WriteLog bodies were not read in ReVault (the platform path is guarded by the body check instead).
+- Which of the three libs logs the profile-update line on a real Quest, and the pnsovr/pnsrad ELF identity: not
+  resolved; their 25-word WriteLog bodies were not read in the disassembly (the platform path is guarded by the body check instead).
 
 For the main seat (no shared file was edited by me): add `src/quest/plugins/q15t/src/ec.cpp src/quest/plugins/q15t/src/ecfx.cpp` to CMakeLists; read the option(s) `Q15T_EC` /
 `Q15T_EC_DEFAULT_WORDS`; call `InstallEc(base)` and then `InstallEcfx(base)` from InitEx after the existing hooks; **InitEx must

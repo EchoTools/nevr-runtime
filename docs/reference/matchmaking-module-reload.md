@@ -2,7 +2,7 @@
 
 The matchmaker host default inside `pnsradmatchmaking.dll` must be rewritten on every load of the
 module, because the game unloads and reloads it during a session and a reload maps a fresh,
-unpatched image. This records both halves from ReVault (`echovr.exe`) and the runtime source.
+unpatched image. This records both halves from the disassembly (`echovr.exe`) and the runtime source.
 
 ## The game side: load and unload
 
@@ -11,7 +11,7 @@ unpatched image. This records both halves from ReVault (`echovr.exe`) and the ru
 | Trigger | `0x140157fb0` (NetGame state function), the lobby step near `0x140159979` | After the SYSNET check (`0x1401f6fa0`), if `0x14060c770(CNSLobby)` is false (the matchmaking interface pointer at `CNSLobby+0x28` is null), it reads the config string `matchmaking_plugin` (`0x1416dc130`, default `pnsradmatchmaking` at `0x1416dc118`) and calls `LoadMatchmakingSupport` |
 | Load | `LoadMatchmakingSupport`, `0x14060b810` | logs `[NSLOBBY] loading matchmaking library '%s'`, `LoadLibrary` (`0x14105aa70`) into `CNSLobby+0x20`, `GetProcAddress("MatchmakingLib")` into `CNSLobby+0x28`, calls the interface initializer; on failure it calls `FreeLibrary` (`0x14105ae30`) and clears `+0x20` |
 | Unload | `~CR15NetLobby`, `0x14014e540` -> `0x140603710` | `LeaveSession`, `CNSLobby::EndSession`, `CNSLobby::Unregister`, release of the interface at `+0x28`, then `FreeLibrary(CNSLobby+0x20)` (matchmaking) and `FreeLibrary(CNSLobby+0x30)` (a second module handle, released after its interface at `+0x38`) |
-| Who destroys the lobby | `0x140150020` and `0x1401500c0` call `~CR15NetLobby`; ReVault's callers to depth 3 are `0x140145b30` and `0x140157fb0` (`BeginMultiplayer` and `0x14015a050`..`0x14015a500` reach `0x140157fb0`) | every lobby teardown is an unload, and the next lobby creation loads the module again |
+| Who destroys the lobby | `0x140150020` and `0x1401500c0` call `~CR15NetLobby`; the disassembly's callers to depth 3 are `0x140145b30` and `0x140157fb0` (`BeginMultiplayer` and `0x14015a050`..`0x14015a500` reach `0x140157fb0`) | every lobby teardown is an unload, and the next lobby creation loads the module again |
 
 So the reload in #18 is a property of the lobby object's lifetime: a new `CR15NetLobby` runs
 `LoadMatchmakingSupport` again, and `FreeLibrary` drops the previous image when its reference count

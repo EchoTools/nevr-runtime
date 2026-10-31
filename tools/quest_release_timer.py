@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""The Quest half of a release, run by a user timer on the publisher's machine (RELEASING.md, "The Quest half of the
-train"; #1210). Usage: quest_release_timer.py [--tag vX.Y.Z | --stage-draft] | --probe | --notify-failure | --tag vX.Y.Z --reset-failures
+"""The Quest half of a release, run on a schedule or by hand by the maintainer who holds the Quest signing key (RELEASING.md,
+"The Quest half of the train"; #1210). Usage: quest_release_timer.py [--tag vX.Y.Z | --stage-draft] | --probe | --tag vX.Y.Z --reset-failures
 
-The store APK, the Quest signing key and the R2 credential never leave this machine, so no workflow builds the Quest APK.
+The store APK, the Quest signing key and the R2 credential stay with the maintainer who runs this, so no workflow builds the Quest APK.
 The train (release-train.yml) publishes the GitHub release; this tool sees the new tag and finishes the release:
 
   checkout         the checkout this runs from is clean and HEAD is the freshly fetched origin/main, or it refuses
@@ -10,7 +10,7 @@ The train (release-train.yml) publishes the GitHub release; this tool sees the n
                    ten tags with their short ids, counting the rest, and printing the quoted remove and restore commands (with
                    the full object id) for each tag it lists
   token, list      the newest published vX.Y.Z (or --tag) that is not done
-  build_signer     the release signer, built from a snapshot of its main
+  build_signer     the release signer, built from a snapshot of the main of the checkout QUEST_RELEASE_SIGNER_REPO names
   check_listed     the live manifest already lists the tag: no release build is made and the run goes on to the variant;
                    else the game data it carries
   worktree         a clean worktree at the tag, set up for a build
@@ -20,29 +20,28 @@ The train (release-train.yml) publishes the GitHub release; this tool sees the n
   dispatch, watch  the beta manifest publish, live, in the release-signer repository
   check_jobs       the jobs that publish all succeeded (a green run with a skipped job is a failure)
   verify_live      `verify-manifest --live` lists the tag on beta, and the manifest it verified lists the carried game data
-  notify           courier Teth to verify the live publish, and Spritz (the owner is never bonked, #1410)
   variant_*        the unlisted variant APK, below
   cleanup          the worktree, the signer snapshot and the variant scratch, by exact path
 
-The draft stage (`--stage-draft`, which the user unit runs). The release is cut as a draft and its APK can be built before
+The draft stage (`--stage-draft`, which a scheduled run passes). The release is cut as a draft and its APK can be built before
 it is published, so this stage takes the newest release that is a draft newer than the newest published one and carries its
 loader asset uploaded (`choose_tag`); otherwise the newest published one, as without the flag. For a draft it does the
 steps up to build_apk, then waits for the publication (`await_published`, a poll every 10 seconds for up to 45 minutes),
 checks the APK's loader against the published asset (`verify_loader`) and that beta has not moved (`recheck_beta`), and
 runs publish_apk, the dispatch and everything after them unchanged. Nothing reaches R2 while the release is a draft. A
 draft that is deleted, is not published within 45 minutes, or fails before it is published is recorded as
-`draft_abandoned` and left to the published path: its failures are not counted, and the run exits 0. `--probe` (the unit's
-ExecCondition) makes one GitHub call and exits 0 when a run has work, 1 when it is idle and 255 on an error; it tests
-whether a run holds the lock, without keeping it, and runs no step.
+`draft_abandoned` and left to the published path: its failures are not counted, and the run exits 0. `--probe` (a
+scheduler's pre-check) makes one GitHub call and exits 0 when a run has work, 1 when it is idle and 255 on an error; it
+tests whether a run holds the lock, without keeping it, and runs no step.
 
 The variant. Every release also gets an unlisted second APK, nevr-runtime-<tag>-q15t-quest.apk, in the same run, built
 from the release's own loader asset plus two plugin libraries from a private build and published beside the main APK. It
-is optional: the unit's optional EnvironmentFile holds NEVR_VARIANT_DIR (the directory with the two libraries) and
+is optional: the environment may hold NEVR_VARIANT_DIR (the directory with the two libraries) and
 NEVR_VARIANT_PINS (a `sha256sum`-format file with one line per library). With both unset a run logs one
 `variant_not_configured` and does nothing else; with exactly one set, or with a pins file that has a missing, extra,
 duplicate or malformed line, or with a library that is missing or whose sha256 differs from its pin, the variant fails
-loudly (a failure, never a skip). The variant steps run after the main release is complete (published, listed, verified
-live and announced) and never before:
+loudly (a failure, never a skip). The variant steps run after the main release is complete (published, listed and verified
+live) and never before:
 
   variant_exists   (a listed tag only) the host's variant pair: 404 for the APK is absent (it is built and published); an
                    APK that is there (200, not HTML) is listed only when its `.sha256` is there too, is the one line
@@ -61,24 +60,23 @@ live and announced) and never before:
 A failure of a variant step carries the step, the program and its exit code, never a tail of the program's output (the
 plugin check prints the plugin's own symbol names); variant_build's failure names the 0600 file.
 
-A failing variant step is recorded as `failed` with its step name, exits 1 (so the existing failure notice fires) and
+A failing variant step is recorded as `failed` with its step name, exits 1 and
 counts toward the same three tries, but the main release is by then complete and nothing of it is undone. `done` is written
 only when the variant is done as well, so the next run (the tag is listed by then) builds only the variant. NEVR_VARIANT_DIR
 and NEVR_VARIANT_PINS are never given to a command and their values are replaced by <redacted> in anything written. Every
-`failed` and `refused` record carries `part`: "main" until the main release is announced (`main_complete` is written then, once,
-and a run whose tag has it starts as "variant"; in the already-listed path it follows the notice if one was owed), "variant"
-after that; the note that the timer gave up on a tag says which part it was. An exception no step expected is recorded as a
+`failed` and `refused` record carries `part`: "main" until the main release is complete (`main_complete` is written then, once,
+and a run whose tag has it starts as "variant"), "variant"
+after that; the record that the timer gave up on a tag says which part it was. An exception no step expected is recorded as a
 `failed` of the step `unexpected` (its class and where, never its text), what the run made is removed, and the run exits 1.
 
 A tag whose history has `main_complete` takes the variant-only path whatever beta lists (`variant_only`: no signer, no
-check_listed, no dispatch, no notice), so a beta that moved never makes the main release run again. A run that does work holds
+check_listed, no dispatch), so a beta that moved never makes the main release run again. A run that does work holds
 a non-blocking lock on <work>/timer.lock; one that finds it held records `busy` and exits 0 having done nothing.
 
 Every step appends a JSON line to $XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl; a log that cannot be written is
-a failure. `--notify-failure` couriers the last failure once per step and error in six hours (`failure_notified`, then
-`failure_notice_suppressed`). A failed step exits 1 and names itself, with the redacted tail of the failing command's stderr and of its stdout (not the stdout of curl, gh or the signer, which is remote content). A refusal
-(`refused`: a dirty or stale checkout, a tag origin does not have) exits 1 and is not counted. A tag that has failed three times is not retried, and says so once (a
-courier to Spritz) before the run exits 0. `--tag vX.Y.Z --reset-failures` records `failures_reset` for that tag and does
+a failure, and that log is the record of each run. A failed step exits 1 and names itself, with the redacted tail of the failing command's stderr and of its stdout (not the stdout of curl, gh or the signer, which is remote content). A refusal
+(`refused`: a dirty or stale checkout, a tag origin does not have) exits 1 and is not counted. A tag that has failed three times is not retried, and says so in a `skipped_after_failures` record
+(with the last failed step and its part) before the run exits 0. `--tag vX.Y.Z --reset-failures` records `failures_reset` for that tag and does
 nothing else; only the failures after the newest one count toward the three. The R2 credential goes only to publish_apk and
 variant_publish, and the GitHub token only to publish_apk and the dispatch: every other command gets an environment without them. The environment is
 the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) and RELEASE_PUBLIC_BASE; a missing one
@@ -110,7 +108,9 @@ from publish_quest_apk import FETCH_TIMEOUT_SECONDS, Failure, Log, NoRedirect, p
 from release_preflight import commit_of, parse_ls_remote  # noqa: E402 - the preflight's reading of tags and its commit rule
 from quest_release_loader import asset_name as loader_asset_name  # noqa: E402 - the loader asset's name, from the loader tool's one source
 
-REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE")
+# QUEST_RELEASE_SIGNER_REPO is the path of a local clone of the release-signer repository (build_signer builds from its main).
+REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE",
+                "QUEST_RELEASE_SIGNER_REPO")
 SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
 # The optional variant: where the private libraries are and the file of their pins. They are redacted like a secret and
 # never given to a command; the timer reads them itself.
@@ -118,7 +118,6 @@ VARIANT_ENV = ("NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS")
 VARIANT = "q15t"
 VARIANT_LIBRARIES = ("libq15t.so", "libq15t_early.so")
 PIN_LINE = re.compile(r"([0-9a-fA-F]{64})  (\S+)")  # `sha256sum` output: the digest, two spaces, the name
-SENDER = "quest-release-timer"
 MANIFEST_PATH = "nevr-runtime/manifest.json"
 USER_AGENT = "nevr-runtime-quest-release-timer"  # the release host answers 403 to the default agent
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")  # always fullmatch: `$` would pass a trailing newline
@@ -128,7 +127,7 @@ RELEASE_LISTING = f"repos/{RELEASE_SLUG}/releases?per_page=10"  # the REST list 
 SIGNER_SLUG = "thesprockee/release-signer"
 PUBLISHING_JOBS = ("Commit the manifest record", "Publish to R2", "A run that published nothing is red")
 MAX_FAILURES = 3
-# The probe's clock (`--probe`, the unit's ExecCondition). A counted failure holds its tag back for RETRY_SPACING, and a
+# The probe's clock (`--probe`, a scheduler's pre-check). A counted failure holds its tag back for RETRY_SPACING, and a
 # run that has not started for HEARTBEAT is asked for even with nothing to do, so the run history shows the timer is alive.
 RETRY_SPACING = datetime.timedelta(minutes=30)
 HEARTBEAT = datetime.timedelta(minutes=30)
@@ -148,8 +147,7 @@ READ_CHUNK = 1 << 20
 SCRATCH_MARKER = ".made-by-quest-release-timer"  # in the variant scratch directory this timer makes, and only in it
 SIGNER_BINARY = "release-signer"  # what build_signer builds; its `verify-manifest --live` prints the live manifest on stdout
 # Programs whose stdout is remote content, never a log field (docs/standards/logging.md, Rule 4).
-REMOTE_OUTPUT_PROGRAMS = frozenset({"curl", "gh", "gh-spritz", SIGNER_BINARY})
-NOTICE_QUIET = datetime.timedelta(hours=6)  # the same failure is couriered at most this often
+REMOTE_OUTPUT_PROGRAMS = frozenset({"curl", "gh", SIGNER_BINARY})
 MAX_TAGS_LISTED = 10
 LOCAL_TAGS_FORMAT = "--format=%(refname:strip=2)\t%(objectname)\t%(*objectname)"  # release_preflight.local_tags' format
 
@@ -176,9 +174,10 @@ class DraftAbandoned(Exception):
 
 
 def work_root(env: dict[str, str]) -> pathlib.Path:
-    """The scratch directory of the timer; the lock the probe tests lives in it."""
-    home = pathlib.Path(os.path.expanduser("~"))
-    return pathlib.Path(env.get("QUEST_RELEASE_WORK_ROOT") or home / "src" / "nevr-runtime-work" / "release-timer")
+    """The scratch directory of the timer (QUEST_RELEASE_WORK_ROOT, else beside the log under $XDG_STATE_HOME); the lock the
+    probe tests lives in it."""
+    state = env.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return pathlib.Path(env.get("QUEST_RELEASE_WORK_ROOT") or pathlib.Path(state) / "nevr-runtime" / "quest-release-timer-work")
 
 
 def subprocess_runner(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
@@ -224,10 +223,9 @@ class Timer:
         self.secrets = [env[name] for name in (*SECRET_ENV, *VARIANT_ENV) if env.get(name)]
         self.r2 = {name: env[name] for name in SECRET_ENV if env.get(name)}
         self.token = ""
-        self.gh = env.get("GH_BIN", "gh-spritz")
-        home = pathlib.Path(os.path.expanduser("~"))
+        self.gh = env.get("GH_BIN", "gh")
         self.repo = pathlib.Path(env.get("QUEST_RELEASE_REPO") or pathlib.Path(__file__).resolve().parents[1])
-        self.signer_repo = pathlib.Path(env.get("QUEST_RELEASE_SIGNER_REPO") or home / "src" / "release-signer")
+        self.signer_repo = pathlib.Path(env["QUEST_RELEASE_SIGNER_REPO"])  # REQUIRED_ENV: main() refuses a run without it
         self.work = work_root(env)
         # What every command gets. The R2 credential and the GitHub token are added by the one or two steps that use them.
         self.child = {k: v for k, v in env.items() if k not in SECRET_ENV and k not in VARIANT_ENV and k != "GH_TOKEN"}
@@ -372,7 +370,7 @@ class Timer:
                 continue
             offenders.append((name, entry[0], why))
         if offenders:
-            # The head is a compact summary that survives the courier's cut of the error; the commands follow it. A tag name
+            # The head is a compact summary that survives a cut of the error; the commands follow it. A tag name
             # is whatever git allows, `;`, `$(...)` and quotes included, so every name and id is shell-quoted.
             shown, rest = offenders[:MAX_TAGS_LISTED], max(0, len(offenders) - MAX_TAGS_LISTED)
             head = ("local tags origin lacks or has elsewhere: "
@@ -382,14 +380,6 @@ class Timer:
                         f"git update-ref {shlex.quote('refs/tags/' + name)} {shlex.quote(obj)}" for name, obj, why in shown]
             raise Refusal(step, " | ".join([head, *commands]))
         self.ok(step, count=len(local))
-
-    def notify_published(self, tag: str) -> None:
-        """A live publish couriers Teth to verify it and Spritz the same text. The owner is never bonked for it (#1410)."""
-        step = "notify"
-        text = f"{tag} is live on the beta manifest (built and published by the Quest release timer); verify it through the installer"
-        self.cmd(step, ["courier", "send", "--to", "teth", "--from", SENDER, "--msg", f"{text}. Log: {self.log.path}"])
-        self.cmd(step, ["courier", "send", "--to", "spritz", "--from", SENDER, "--msg", f"{text}. Log: {self.log.path}"])
-        self.ok(step)
 
     def build_signer(self, signer_dir: pathlib.Path, tarball: pathlib.Path) -> pathlib.Path:
         step = "build_signer"
@@ -422,24 +412,6 @@ class Timer:
         if bad:
             raise StepFailure("check_jobs", "run %s did not publish: %s" % (run_id, "; ".join(bad)))
         self.ok("check_jobs", run=run_id)
-
-    def notify_skip(self, tag: str, last: dict) -> None:
-        """The third failure ends the retries: Spritz hears it once by courier, before the run exits 0 (never a bonk, #1410)."""
-        step = "notify"
-        failing = str(last.get("step", "unknown"))
-        # The failure's own `part`; a record from before the field is read by its step name. A variant giving up leaves the
-        # main release standing.
-        part = str(last.get("part") or ("variant" if failing.startswith("variant_") else "main"))
-        what = f"the variant APK of {tag}" if part == "variant" else f"{tag} (main release)"
-        done = " (the main release is complete)" if part == "variant" else ""
-        text = (f"quest release timer gave up on {what} after {MAX_FAILURES} failures{done}; last: step "
-                f"{failing}: {str(last.get('error', ''))[:200]}")
-        self.cmd(step, ["courier", "send", "--to", "spritz", "--from", SENDER, "--msg", f"{text}. Log: {self.log.path}"])
-
-    def notice_owed(self, tag: str) -> bool:
-        """This timer published the tag and its notice was never sent (the run ended between the two)."""
-        steps = [e.get("step") for e in read_events(self.log.path) if e.get("tag") == tag and e.get("event") == "step_ok"]
-        return "verify_live" in steps and "notify" not in steps
 
     def await_published(self, tag: str) -> None:
         """A draft's APK waits here for the release to be published. Each poll reads the release's `isDraft` with no credential
@@ -514,12 +486,12 @@ class Timer:
         self.work.mkdir(parents=True, exist_ok=True)
         readme = self.work / "README.md"
         if not readme.exists():
-            readme.write_text("Scratch of tools/quest_release_timer.py (the Quest half of a release), owned by the "
-                              "user timer nevr-quest-release. Each run removes what it makes here when it ends, except the output file of a\n"
+            readme.write_text("Scratch of tools/quest_release_timer.py (the Quest half of a release). "
+                              "Each run removes what it makes here when it ends, except the output file of a\n"
                               "failed variant build, which stays until the variant is done.\n",
                               encoding="utf-8")
         if self.main_done:
-            # The main release was published, listed, verified and announced by an earlier run: only the variant is left, and it
+            # The main release was published, listed and verified by an earlier run: only the variant is left, and it
             # does not depend on what beta lists now (a rollback, a hand publish and a hand `--tag` of an older release move beta).
             self.log.event("variant_only", reason="the main release is complete; beta is not consulted")
             self.finish_variant(tag, worktree, made, None)
@@ -530,8 +502,6 @@ class Timer:
         if beta == version:
             self.log.event("already_listed", beta=version)
             self.ok("check_listed", listed=True)
-            if self.notice_owed(tag):
-                self.notify_published(tag)  # the main release's own notice: a failure of it is the main release's
             self.mark_main_complete(tag)
             self.finish_variant(tag, worktree, made, None)
             return
@@ -585,12 +555,11 @@ class Timer:
             raise StepFailure("verify_live", f"the carried game data {carried['name']} ({carried['size']} bytes) is "
                                              f"{'missing from' if survived is None else 'changed in'} the {version} release: {survived}")
         self.ok("verify_live", beta=listed, game_data=carried["name"])
-        self.notify_published(tag)
         self.mark_main_complete(tag)
         self.finish_variant(tag, worktree, made, build_env)
 
     def mark_main_complete(self, tag: str) -> None:
-        """The main release is published, listed, verified and announced: from here a failure is the variant's, and a later run
+        """The main release is published, listed and verified live: from here a failure is the variant's, and a later run
         starts as the variant. Written once per tag."""
         if not any(e.get("tag") == tag and e.get("event") == "main_complete" for e in read_events(self.log.path)):
             self.log.event("main_complete")
@@ -879,72 +848,23 @@ class Timer:
         self.ok("cleanup")
 
 
-def recent_notice(events: list[dict], step: str, digest: str, now: datetime.datetime) -> bool:
-    """The newest `failure_notified` is for this step and error and under NOTICE_QUIET old. A time that cannot be read, or that
-    lies in the future, does not suppress: a notice is then sent again."""
-    notified = [e for e in events if e.get("event") == "failure_notified"]
-    if not notified or (notified[-1].get("step"), notified[-1].get("error_sha256")) != (step, digest):
-        return False
-    try:
-        sent = datetime.datetime.fromisoformat(notified[-1]["ts"])
-    except (KeyError, TypeError, ValueError):
-        return False
-    if sent.tzinfo is None:
-        return False
-    return datetime.timedelta(0) <= now - sent < NOTICE_QUIET
-
-
-def notify_failure(env: dict[str, str], runner: Runner, log_path: pathlib.Path) -> int:
-    """Courier the last failed or refused event to Spritz, unless the same step and error was couriered under NOTICE_QUIET ago
-    (a standing refusal repeats on every run of the timer). The courier is recorded as `failure_notified` and a skipped one as
-    `failure_notice_suppressed`; a log that cannot take the record is a failure, never silence."""
-    events = read_events(log_path)
-    recorded = [e for e in events if e.get("event") in ("failed", "refused")]
-    last = recorded[-1] if recorded else {}
-    what = last.get("error") or ("missing credentials: " + ", ".join(last["missing"]) if last.get("missing") else "no failed event recorded")
-    step = last.get("step", "start")
-    digest = hashlib.sha256(str(what).encode("utf-8")).hexdigest()
-    suppress = recent_notice(events, step, digest, datetime.datetime.now(datetime.timezone.utc))
-    if not suppress:
-        body = "quest-release-timer failed: tag %s at step %s: %s (log: %s)" % (
-            last.get("tag") or "not chosen yet", step, str(what)[:300], log_path)
-        result = runner(["courier", "send", "--to", "spritz", "--from", "quest-release-timer", "--msg", body], cwd=None, env=env)
-        if result.returncode != 0:
-            sys.stderr.write("quest-release-timer: the failure notice could not be sent\n")
-            return 1
-    log = None
-    try:
-        log = Log(log_path, last.get("tag") or "")
-        log.event("failure_notice_suppressed" if suppress else "failure_notified", step=step, error_sha256=digest)
-    except Failure as failure:
-        sys.stderr.write(f"quest-release-timer: {failure}\n")
-        return 1
-    finally:
-        if log is not None:
-            log.close()
-    return 0
-
-
 def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runner,
          sleep: Callable[[float], None] = time.sleep) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tag", help="release this vX.Y.Z instead of the newest published one")
-    parser.add_argument("--notify-failure", action="store_true", help="courier the last recorded failure to spritz")
     parser.add_argument("--reset-failures", action="store_true",
                         help="with --tag: record that the failures of that tag so far no longer count toward the three tries")
     parser.add_argument("--stage-draft", action="store_true",
-                        help="also take a draft release: its APK is built while it waits to be published (the user unit's run)")
+                        help="also take a draft release: its APK is built while it waits to be published (a scheduled run's flag)")
     parser.add_argument("--probe", action="store_true",
-                        help="one GitHub call: exit 0 when a run has work, 1 when idle, 255 on an error (the unit's ExecCondition)")
+                        help="one GitHub call: exit 0 when a run has work, 1 when idle, 255 on an error (a scheduler's pre-check)")
     args = parser.parse_args(argv)
     path = state_log_path(env)
     if args.probe:
-        if args.tag or args.stage_draft or args.notify_failure or args.reset_failures:
+        if args.tag or args.stage_draft or args.reset_failures:
             sys.stderr.write("quest-release-timer: --probe takes no other option\n")
             return 1
         return probe(env, runner, path, datetime.datetime.now(datetime.timezone.utc))
-    if args.notify_failure:
-        return notify_failure(env, runner, path)
     if args.tag and not TAG.fullmatch(args.tag):
         sys.stderr.write(f"quest-release-timer: {args.tag} is not a release tag (vX.Y.Z)\n")
         return 1
@@ -1003,17 +923,17 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
             return 0
         failures = counted_failures(history)
         if len(failures) >= MAX_FAILURES:
-            since_reset = history_since_reset(history)
-            if not any(e.get("event") == "skip_notified" for e in since_reset):
-                timer.notify_skip(tag, failures[-1])
-                log.event("skip_notified")
-            log.event("skipped_after_failures", failures=MAX_FAILURES)
+            last = failures[-1]
+            failing = str(last.get("step", "unknown"))
+            # A record from before `part` is read by its step: a variant step's failure is the variant's.
+            part = str(last.get("part") or ("variant" if failing.startswith("variant_") else "main"))
+            log.event("skipped_after_failures", failures=MAX_FAILURES, last_step=failing, last_part=part)
             return 0
         timer.release(tag)
         log.event("done")
         return 0
     except DraftAbandoned as abandoned:
-        # The draft's worktree and scratch were removed by release(). Exit 0: the unit is not failed and nothing is counted.
+        # The draft's worktree and scratch were removed by release(). Exit 0: nothing is counted.
         sys.stderr.write(f"quest-release-timer: draft abandoned: {abandoned.reason}\n")
         log.event("draft_abandoned", reason=abandoned.reason)
         return 0
@@ -1161,10 +1081,9 @@ def lock_held(work: pathlib.Path) -> bool:
 
 
 def probe(env: dict[str, str], runner: Runner, path: pathlib.Path, now: datetime.datetime) -> int:
-    """`--probe`, the unit's ExecCondition: one GitHub call (no git, no step, no credential), then 0 when a run has work, 1 when
-    it is idle, 255 when the probe itself failed. A failure is recorded as `failed` at step `probe`, which the unit's failure
-    notice reads. A decision is written when it changes and at most every PROBE_RECORD_SPACING, so an idle timer adds no lines."""
-    gh = env.get("GH_BIN", "gh-spritz")
+    """`--probe`, a scheduler's pre-check: one GitHub call (no git, no step, no credential), then 0 when a run has work, 1 when
+    it is idle, 255 when the probe itself failed. A failure is recorded as `failed` at step `probe`. A decision is written when it changes and at most every PROBE_RECORD_SPACING, so an idle timer adds no lines."""
+    gh = env.get("GH_BIN", "gh")
     child = {k: v for k, v in env.items() if k not in SECRET_ENV and k not in VARIANT_ENV and k != "GH_TOKEN"}
     log = None
     try:

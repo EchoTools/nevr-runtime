@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Dispatch the release train when a scheduled run was dropped (#1409).
 
-release-train.yml runs every three hours (cron "17 */3 * * *"), and GitHub has dropped a scheduled slot. This guard runs
-hourly as a systemd user timer on the publisher's machine (tools/systemd/nevr-train-guard.timer, at :07), not as a GitHub
+release-train.yml runs every three hours (cron "17 */3 * * *"), and GitHub has dropped a scheduled slot. This guard is meant
+to run hourly from a scheduler (cron, a systemd timer) on a maintainer's machine, not as a GitHub
 schedule: GitHub drops scheduled runs, and a job's token cannot read repository variables. It decides from the train's
 run list and the newest published release (tools/release_window.py) whether the train is due:
 
@@ -30,7 +30,7 @@ train run, information only) and last_release, last_published, age_minutes (of t
 Every decision is one JSON line on stdout and is appended to the log file (--log-file, default
 $XDG_STATE_HOME/nevr-runtime/release-train-guard.jsonl, else ~/.local/state/nevr-runtime/...). It is also appended to
 $GITHUB_STEP_SUMMARY when that variable is set. A dispatch is `<gh> workflow run release-train.yml --ref main`, followed by
-a {"event": "dispatched"} line. <gh> is --gh, else $GH_BIN, else gh-spritz. A log that cannot be written before the run
+a {"event": "dispatched"} line. <gh> is --gh, else $GH_BIN, else gh. A log that cannot be written before the run
 starts fails the run before any gh call; any failed gh or tool call exits non-zero and names the call. Standard library
 only; the fakes in tools/tests/test_release_train_guard.py drive main() end to end.
 """
@@ -44,7 +44,7 @@ import pathlib
 import subprocess
 import sys
 
-# `python3 -I` (the systemd unit's ExecStart) puts neither this folder nor the cwd on sys.path.
+# `python3 -I` puts neither this folder nor the cwd on sys.path.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import release_window  # noqa: E402
 
@@ -53,7 +53,7 @@ WINDOW_MINUTES = release_window.WINDOW_MINUTES
 ACTIVE = frozenset({"queued", "in_progress", "waiting", "pending"})
 FAILED = frozenset({"failure", "cancelled", "timed_out"})
 TOOL = "release_train_guard"
-DEFAULT_GH = "gh-spritz"
+DEFAULT_GH = "gh"
 LOG_NAME = "release-train-guard.jsonl"
 VERSION_TOOL = pathlib.Path(__file__).resolve().with_name("next_release_version.py")
 
@@ -100,7 +100,7 @@ def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool
 
 
 def gh_binary(env: dict[str, str]) -> str:
-    """The gh the guard calls when --gh is not given: $GH_BIN, else the publisher's gh-spritz (as the Quest timer)."""
+    """The gh the guard calls when --gh is not given: $GH_BIN, else gh (as the Quest timer)."""
     return env.get("GH_BIN") or DEFAULT_GH
 
 
@@ -222,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="print the decision and do not dispatch")
     parser.add_argument("--version-tool", type=pathlib.Path, default=VERSION_TOOL,
                         help="next_release_version.py (default: the one beside this file)")
-    parser.add_argument("--gh", default=None, help="the gh binary (default: $GH_BIN, else gh-spritz)")
+    parser.add_argument("--gh", default=None, help="the gh binary (default: $GH_BIN, else gh)")
     parser.add_argument("--log-file", type=pathlib.Path, default=None,
                         help="the JSONL decision log (default: $XDG_STATE_HOME/nevr-runtime/release-train-guard.jsonl)")
     args = parser.parse_args(argv)

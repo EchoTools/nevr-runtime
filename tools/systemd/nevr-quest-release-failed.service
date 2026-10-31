@@ -1,8 +1,0 @@
-[Unit]
-Description=nevr-runtime Quest release: tell the release owner the timer's run failed (#1210)
-
-[Service]
-Type=oneshot
-WorkingDirectory=%h/src/nevr-runtime-work/release-timer/checkout
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
-ExecStart=/usr/bin/python3 -I %h/src/nevr-runtime-work/release-timer/checkout/tools/quest_release_timer.py --notify-failure

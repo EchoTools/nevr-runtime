@@ -2,7 +2,7 @@
 // What the menu's version text becomes, apart from the hook that applies it (menu_version_label.cpp) so it is
 // unit-tested without the game.
 //
-// Evidence (ReVault, echovr project; PC VAs are echovr.exe):
+// Evidence (disassembly of the game binaries; PC VAs are echovr.exe):
 //   - The stock menu already has a versions page: script DLL f0c9097e9973b51b.dll (symbol ui_mnu_versions) sets three
 //     text items on the CanvasUI component of actor mnu_versions (0xf4db20fee634bd0f) each time its page element is
 //     enabled, and sets them to "" when it is disabled: publisher_lock, lobby_version, rad_version. The text comes

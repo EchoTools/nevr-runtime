@@ -2,8 +2,8 @@
 
 `NvrGameContext.level_symbol` and `level_name` (plugin API v8, `sdk/include/nevr/plugin_interface.h`) carry the level the
 game holds as its main level. This pins where the loader reads it, what proves that field, what a client run showed, and
-what the evidence does not cover. Evidence is ReVault (project `echovr`, `echovr.exe` and `libr15.so`; Quest VAs are
-ReVault's, pinned vaddr + `0x100000`) and client runs of a build with a test plugin.
+what the evidence does not cover. Evidence is the disassembly (project `echovr`, `echovr.exe` and `libr15.so`; Quest VAs are
+the disassembly's, pinned vaddr + `0x100000`) and client runs of a build with a test plugin.
 
 ## The field
 

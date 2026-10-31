@@ -4,7 +4,7 @@
 // table, the F5 gun table and the F7 chase table. Nothing here calls the game or reads game memory. Verbatim from the source
 // build except: the namespace (q15t::dk) and the 'K' ring (the source's recvfrom thread pushes into it; here DroneKillOnKilled
 // does the table work itself, see dronekill.cpp) and Comp's members, which carry initializers so that the tables are constant-initialised
-// (the repack refuses a plugin with a static constructor). The shape tables were compared with ReVault (docs/quest/q15t/modules/dronekill.md).
+// (the repack refuses a plugin with a static constructor). The shape tables were compared with the disassembly (docs/quest/q15t/modules/dronekill.md).
 #pragma once
 #include <math.h>
 #include <stdint.h>

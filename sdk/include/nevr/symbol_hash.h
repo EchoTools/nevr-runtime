@@ -2,7 +2,7 @@
 
 // CSymbol64 hash — RAD engine symbol hashing (CRC64 variant).
 //
-// Verified against the game binary: echovr.exe 0x1400ce120 (ReVault name
+// Verified against the game binary: echovr.exe 0x1400ce120 (disassembly name
 // CSymbol64::Lookup) and libr15.so 0x11cc580 (CalculateSymbolValue).  The same
 // algorithm exists in the Go service as server/evr/core_hash.go in nakama,
 // which sign-extends a byte >= 0x80 as the game does (nakama#711).

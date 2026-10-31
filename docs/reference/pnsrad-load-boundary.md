@@ -3,7 +3,7 @@
 The runtime rewrites code and data in `pnsrad.dll` (four login and provider patches) and `pnsradmatchmaking.dll`
 (the matchmaker host default) when each loads. The loader's DLL notification sees every load, but it runs under the
 loader lock, where calling into another module (`VirtualProtect`, `WriteProcessMemory`, the game's logger) is
-unsafe. This records the boundary the patches use instead, from ReVault (`echovr.exe`, `pnsradmatchmaking.dll`)
+unsafe. This records the boundary the patches use instead, from the disassembly (`echovr.exe`, `pnsradmatchmaking.dll`)
 and the runtime source.
 
 ## The game side: how both modules load
@@ -48,7 +48,7 @@ What a client run's log shows on success: `[NEVR.PATCH] pnsrad module patches: 4
 
 - That neither module's `DllMain` or static initializers run a patched site. The loader's LOADED notification is
   delivered before `DllMain`; the patches land after it. In
-  `pnsrad.dll` the four sites have no direct callers in ReVault: `LoginIdResponseCB` (`0x18008f140`) and
+  `pnsrad.dll` the four sites have no direct callers in the disassembly: `LoginIdResponseCB` (`0x18008f140`) and
   `LogInSuccessCB` (`0x18008eea0`) are referenced only as data, at `0x18008e785` and `0x18008cf3e` (callback
   registration); `CNSRADUser`'s login check (`0x180085b40`) is a virtual function and `UserProviderID` (`0x180088d70`)
   an export, with no xrefs. The paths from the module's entry point to those registration sites were not traced.

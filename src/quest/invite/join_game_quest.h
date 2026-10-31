@@ -3,9 +3,9 @@
 // names. It is the PC join (src/runtime/patch/invite_join.h, Joiner) run against libr15's CR15Game through a GameAccess seam:
 //   - the netgame state is read at netgame+0 (game_layout::kStateOffset); the game object is netgame+8 (kGameOffset);
 //   - the staged lobby id (16 bytes, Windows GUID layout) goes at game+0x8538 and the team word 0xFFFF at game+0x8558
-//     (kQuestLayout; ReVault libr15 0x1301d88 BeginMultiplayer reads both);
+//     (kQuestLayout; disassembly libr15 0x1301d88 BeginMultiplayer reads both);
 //   - the route fields are read first (flags +0x8518, gate +0x8520, lobby +0x8528 vs the invalid id), and nothing is staged when
-//     the game's own begin would go elsewhere (other_route). The gametype word +0x8560 is never read or written (ReVault: no
+//     the game's own begin would go elsewhere (other_route). The gametype word +0x8560 is never read or written (disassembly: no
 //     #0x8560 operand in the 281-instruction listing of 0x1301d88);
 //   - the begin is EnableTransitionMenu(game) (libr15 0x12005fc, the menu event) then BeginMultiplayer(game) (0x1201be4), both on
 //     the game thread, through the frame dispatcher (frame_dispatch.h).

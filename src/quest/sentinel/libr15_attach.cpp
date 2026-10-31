@@ -233,8 +233,8 @@ bool CheckWordRow(const ElfImage& image, const patch::WordPatchRow& row, RowFail
     f->word = static_cast<int>(i);
     f->expected = patch::WordValue(edit.word);
     f->hasWords = true;
-    if (row.revaultVa < patch::kRevaultBias) return false;
-    const std::uint64_t va = row.revaultVa - patch::kRevaultBias + edit.offset;
+    if (row.disasmVa < patch::kDisasmBias) return false;
+    const std::uint64_t va = row.disasmVa - patch::kDisasmBias + edit.offset;
     if (!InFileBackedLoad(image, va, 4)) return false;
     f->live = LoadWord(image.base + va);
     if (f->live != f->expected) return false;

@@ -39,15 +39,15 @@ namespace {
 
 using namespace pbcore;
 
-// ELF vaddrs of the pinned build (libr15 build id b243509c08ce677aeb95fa348016949b3fc45230); ReVault VA = ELF + 0x100000.
+// ELF vaddrs of the pinned build (libr15 build id b243509c08ce677aeb95fa348016949b3fc45230); disassembly VA = ELF + 0x100000.
 constexpr std::uintptr_t kSlotNode = 0x36e3868, kFnNode = 0x23207b0;   // R51 CR15NetDamageableHealNode::Enter
 constexpr std::uintptr_t kSlotHeal = 0x36f7820, kGotHeal = 0x3725b80, kFnHeal = 0x2137e74;  // R52 CR15NetDamageableCS::Heal
 constexpr std::uintptr_t kSlotLink = 0x36d7d08, kFnLink = 0x2158954;   // R53 CR15NetHealBubbleCS::SetTargetInsideBubble
 constexpr std::uintptr_t kSlotSend = 0x36e5778, kFnSend = 0x213e80c;   // R54 CR15NetDamageableCS::DamageFromClient (called, not hooked)
 constexpr std::uintptr_t kSlotResolve = 0x36ca098, kFnResolve = 0x19a27ac;  // R55 CPhTarget::ResolveBody
 constexpr std::uintptr_t kFnPrimary = 0x1677d34;                       // CPhysicsCS::PrimaryBody (JUMP_SLOT 0x36f6110)
-constexpr std::uintptr_t kConeCall = 0x2157998, kConeRet = 0x215799c;  // R56: `bl` to ResolveBody's stub (ReVault 0xfe5360) / its return
-constexpr std::uint32_t kConeCallWord = 0x97b63672u;                   // bl 0xfe5360 at ReVault 0x2257998 (bytes 7236b697)
+constexpr std::uintptr_t kConeCall = 0x2157998, kConeRet = 0x215799c;  // R56: `bl` to ResolveBody's stub (disassembly 0xfe5360) / its return
+constexpr std::uint32_t kConeCallWord = 0x97b63672u;                   // bl 0xfe5360 at disassembly 0x2257998 (bytes 7236b697)
 constexpr std::uint64_t kDamageableKey = 0xc9dc08cfc2f5920full;        // CR15NetDamageableCS key (source the source build's flowdiag:91)
 constexpr std::uintptr_t kDamageableVptr = 0x3693ea0;                  // its vptr value (source the source build's flowdiag:93)
 
@@ -219,7 +219,7 @@ void HealWrap(void* cs, std::uint64_t handle, float amount, std::uint64_t user) 
   if (amount >= kMarkerMin) MarkerLine(amount, "heal", static_cast<long long>(handle & 0xffff), static_cast<std::uint32_t>(user));
 }
 
-// Stage 2: the node's QUEUED heal (its SFunctor3 took Heal's GLOB_DAT word, ELF 0x3725b80; ReVault 0x2420904 `ldr x8, [x8, #0xb80]`),
+// Stage 2: the node's QUEUED heal (its SFunctor3 took Heal's GLOB_DAT word, ELF 0x3725b80; disassembly 0x2420904 `ldr x8, [x8, #0xb80]`),
 // run by the deferred queue's drain on the game thread. A marker is swallowed; kind 1 is sent here; a held forward younger than kHoldMs too.
 void QueuedHealWrap(void* cs, std::uint64_t handle, float amount, std::uint64_t user) {
   const auto real = reinterpret_cast<HealFn>(g_healq.load(std::memory_order_acquire));

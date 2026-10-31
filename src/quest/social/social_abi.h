@@ -5,7 +5,7 @@
 // Artifact: store APK v4987566 (libr15 build id b243509c..., libpnsovr build id ca47bb8d...).
 // Every number below was read from those ELF files with readelf / llvm-objdump; the evidence is
 // recorded in docs/adr/0003-quest-networking-port.md ("Social provider"). Link-time addresses
-// are ELF vaddrs. ReVault's decompilation shows pointer immediates into libpnsovr data (and
+// are ELF vaddrs. the disassembly's decompilation shows pointer immediates into libpnsovr data (and
 // FUN_ names) 0x100000 higher than the ELF; this file uses the ELF values.
 #pragma once
 

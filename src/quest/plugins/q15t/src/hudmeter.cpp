@@ -10,7 +10,7 @@
 namespace q15t {
 namespace {
 
-// ELF vaddrs of the pinned build (ReVault VA = ELF + 0x100000)
+// ELF vaddrs of the pinned build (disassembly VA = ELF + 0x100000)
 constexpr std::uintptr_t kSlot = 0x36c6ce8, kFn = 0x2726eac;  // R57: JUMP_SLOT / CSetCanvasElementAttributesNode::Enter
 constexpr char kSym[] = "_ZN10NRadEngine31CSetCanvasElementAttributesNode5EnterERKNS_35SSetCanvasElementAttributesNodeDataE";
 constexpr std::uint64_t kComp = 0xe55af932c88ec864ull;  // the lobby helmet's canvas component

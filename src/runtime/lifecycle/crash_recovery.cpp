@@ -568,7 +568,7 @@ void EnsureStackReserve() {
 // one linear scan on a path that is already crashing, and adds no runtime hook.
 /// Write a full crash dump: exception info, registers, stack trace with RVAs.
 /// All addresses are emitted as RVAs relative to the game base so they match
-/// revault / Ghidra / IDA directly.
+/// a disassembler (Ghidra, IDA) directly.
 ///
 /// N70: crash-safe by construction. Every call below is a raw syscall
 /// (WriteFile / GetStdHandle / VirtualQuery) or a stack-only operation. No Log(),
@@ -856,7 +856,7 @@ void InstallCrashRecoveryHooks() {
 //
 // The game prints "=== System Info ===" only from WriteCrashSystemInfo, reachable
 // only from HandleCrashDump, reachable only from CrashExceptionFilter
-// (ReVault-verified call chain). So that banner in a server log means the game
+// (call chain verified in the disassembly). So that banner in a server log means the game
 // entered its crash path — but it says nothing about WHY, and a WINEDEBUG=+seh
 // trace of a failing run showed NO access violation and no unhandled exception.
 //
@@ -874,7 +874,7 @@ static INT64 CrashExceptionFilterHook(void* a1, void* a2, void** ppExRecords) {
 }
 
 // HandleCrashDump — the function that actually prints "=== System Info ===" (via
-// WriteCrashSystemInfo). ReVault reports its only static caller is
+// WriteCrashSystemInfo). the disassembly shows its only static caller is
 // CrashExceptionFilter, but a probe on that filter did NOT fire while the banner
 // still appeared, which means HandleCrashDump is reached indirectly. Hook it
 // directly and report the return address so the real caller is named rather than

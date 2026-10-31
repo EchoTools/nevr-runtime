@@ -75,7 +75,7 @@ static VOID ForceHeadlessSkip(uintptr_t offset, BYTE expectedOpcode, const char*
 /// bit 0x1. In server mode the source config has bit 0x1 SET; clearing it
 /// AFTER the copy makes the ENTIRE render subsystem take the game's native
 /// device-free path uniformly — covering render-worker threads that per-gate
-/// branch-force byte patches cannot reach. Single caller (ReVault-verified:
+/// branch-force byte patches cannot reach. Single caller (verified in the disassembly:
 /// CRenderPipeline::InitStages), so hooking here is safe and targeted.
 typedef VOID CEngineConfigCopyFunc(PVOID dst, PVOID src);
 static CEngineConfigCopyFunc* OriginalCEngineConfigCopy = nullptr;
@@ -507,7 +507,7 @@ static VOID CBroadcasterReceiveLocalEventHook(INT64 arg1, INT64 arg2, INT64 arg3
   // This is not entity property dispatch. 0xF87AA0 is
   // CBroadcaster::ReceiveLocalEvent — the broadcaster's LISTENER DISPATCHER. The
   // early return below therefore does not skip rendering work; it skips message
-  // delivery. ReVault's caller list is FinalizeEntrant, InitEntrantSlots,
+  // delivery. The caller list is FinalizeEntrant, InitEntrantSlots,
   // CommitPlaceholder, CreateAndJoinOfflineSession — entrant and session
   // lifecycle, not rendering. The stated justification was falsified by its own
   // callers; nobody re-checked because the constant was named ENGINE_ENTITY_*.

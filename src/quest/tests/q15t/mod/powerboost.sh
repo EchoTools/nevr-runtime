@@ -5,8 +5,9 @@ g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I"$here/s
 # the arm64 build and the naked thunk (the only asm of the plugin; this x86 host cannot run it natively)
 . "$tests/mod/pbhud_ndk.sh"
 pbhud_ndk_check powerboost || return 1 2>/dev/null || exit 1
-_ndk="${Q15T_NDK:-$HOME/src/android-ndk-r26d}"
-_cxx="$(ls "$_ndk"/toolchains/llvm/prebuilt/*/bin/aarch64-linux-android26-clang++ 2>/dev/null | { read -r l; echo "$l"; })"
+_ndk="${Q15T_NDK:-}"
+_cxx=""
+[ -z "$_ndk" ] || _cxx="$(ls "$_ndk"/toolchains/llvm/prebuilt/*/bin/aarch64-linux-android26-clang++ 2>/dev/null | { read -r l; echo "$l"; })"
 if [ -n "$_cxx" ]; then
   _objdump="$(dirname "$_cxx")/llvm-objdump"
   # the thunk as compiled into the plugin: exactly these instructions, in this order (no other register, no other branch)

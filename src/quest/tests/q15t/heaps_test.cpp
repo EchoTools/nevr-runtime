@@ -55,7 +55,7 @@ struct Expect {
   uint32_t reader_word;
   uint64_t stock, target;
 };
-// R06 R07 R08 R09: GLOB_DAT slot -> rodata symbol value (readelf), reader = ReVault VA - 0x100000
+// R06 R07 R08 R09: GLOB_DAT slot -> rodata symbol value (readelf), reader = disassembly VA - 0x100000
 static const Expect kExpect[4] = {
     {"R06", 0x370b720, 0x2b9caa0, 0xf78590, 0xf9400101, 206 * kMiB, 320 * kMiB},
     {"R07", 0x371d020, 0x2b9ca90, 0xf78524, 0xf9400101, 400 * kMiB, 640 * kMiB},

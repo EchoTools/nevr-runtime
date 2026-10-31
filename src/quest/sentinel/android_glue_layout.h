@@ -4,7 +4,7 @@
  *
  * Where the numbers come from. The glue headers (android_native_app_glue.h, android/native_activity.h in NDK r26d) give
  * the layout; android_glue_layout_check.cpp asserts every constant here against them with offsetof, so a header that
- * disagrees fails the Android build. The game's own android_main (libr15.so build b243509c..., ReVault VA = pinned
+ * disagrees fails the Android build. The game's own android_main (libr15.so build b243509c..., disassembly VA = pinned
  * vaddr + 0x100000) reads the same offsets: 0x10784e0 keeps `app` in x20; 0x10787a4 `ldr w8,[x20,#0x64]` is
  * destroyRequested; 0x10787ac `ldr x0,[x20,#0x18]` and 0x1078820 `ldr x8,[x20,#0x18]` load `activity`; 0x1078824 `ldr x0,[x8,#0x8]` is
  * `activity->vm`, and 0x1078830 calls slot 0x28 of the JavaVM function table, which jni.h names DetachCurrentThread.

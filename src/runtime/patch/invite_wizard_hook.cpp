@@ -24,7 +24,7 @@ extern const int kSymCacheCount;
 }  // namespace evr
 
 // The wizard's click metric leaves the game through the remote-log submit (ADR 0017, "Runtime hook"). Its only caller is
-// CR15NetJsonLog::vslot[1] (ReVault echovr.exe 0x1401ccf40), which passes the serialised JSON line and its length to the
+// CR15NetJsonLog::vslot[1] (echovr.exe 0x1401ccf40), which passes the serialised JSON line and its length to the
 // submit (0x140113960). Register layout, from that caller's decompilation: RCX = line bytes, RDX = length (UNVERIFIED
 // until a live capture). The bytes are read only when they are committed, readable memory; a wrong layout is refused, not
 // dereferenced.

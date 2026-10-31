@@ -2,7 +2,7 @@
 
 Issue #119: the smite handler in `src/runtime/server/gameserver_callbacks.cpp` (`Envelope::kLobbySmiteEntrant`)
 turns the server's `entrant_id` UUID into the entrant slot index the game's smite event carries. This
-records what the game itself does with the id, from ReVault (`echovr.exe`), and how the runtime resolves it.
+records what the game itself does with the id, from the disassembly (`echovr.exe`), and how the runtime resolves it.
 
 ## What the runtime does
 
@@ -54,7 +54,7 @@ index = slot.
 
 `RemoveEntrant` (`0x140610700`) resets the slot in place: the peer UUID goes back to the sentinel, the
 join state to 0 and the timeout to 60.0. The array is not compacted, so a slot index stays valid for the
-life of the session and a departed slot is recognised by join state 0 (ReVault comment on `0x140610700`).
+life of the session and a departed slot is recognised by join state 0 (the disassembly comment on `0x140610700`).
 
 ## Not proven
 

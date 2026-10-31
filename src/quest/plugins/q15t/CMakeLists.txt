@@ -51,7 +51,7 @@ option(Q15T_SENSORWD "sensorwd (T-07): a scanner sphere still enabled 6 s after 
 # shaderstep (issue #1553): the CGShaderSetResource table growth step is 1, set when the factory constructs the object. Off: shaderstep.off.
 option(Q15T_SHADERSTEP "shaderstep (#1553): CGShaderSetResource table growth step 32 -> 1 in the factory constructor (vtable wrapper, no code write)" ON)
 option(Q15T_LEVELNAME "levelname (R04, G7) with boosterpool: global_mp keeps its plain name, so the full-size global_mp in the pack loads. Source combat build: on. Kill file levelname.off" ON)
-option(Q15T_INSTMODEL "instmodel (ReVault 0x1a078dc): CGInstancedModelResource's constructor with the growth step of its CTableXT members at 1, not 32 (the word row this replaces: a code write). Source: default ON; no tick" ON)
+option(Q15T_INSTMODEL "instmodel (disassembly 0x1a078dc): CGInstancedModelResource's constructor with the growth step of its CTableXT members at 1, not 32 (the word row this replaces: a code write). Source: default ON; no tick" ON)
 # pfx (issue #1631): the particle-effect renderer's gate, read by every pfx* module. Kill file pfx.off in the data directory. The working build has
 # the renderer on, so ON here; the source build's On() is off unless pfx.on exists (the renderer itself is not ported yet: docs/quest/q15t/modules/pfx.md).
 option(Q15T_PFX "pfx (#1631): the particle-effect renderer's gate, the switch every pfx* module reads. Working build: on. Kill file pfx.off" ON)
@@ -59,11 +59,11 @@ option(Q15T_PFX "pfx (#1631): the particle-effect renderer's gate, the switch ev
 set(Q15T_SHIELDGAMMA 2 CACHE STRING "shieldgamma (R58) bitmask: 1 gamma, 2 tube mirror, 0 not built. Source default: mirror on, gamma off")
 set_property(CACHE Q15T_SHIELDGAMMA PROPERTY STRINGS 0 1 2 3)
 option(Q15T_IMPACTSND_NOWRITE "impactsnd: read and log only, no row is written" OFF)
-# tablestep (issue #1552): the shader-set resource table's growth step 32 -> 1 (CFactory<CGShaderSetResource>::CreateInstance, ReVault
+# tablestep (issue #1552): the shader-set resource table's growth step 32 -> 1 (CFactory<CGShaderSetResource>::CreateInstance, disassembly
 # libr15 0x1a0707c, a wrapper on its three data slots). Source: the shipped variant's word row (extra_rows: 0) is not in the APK, so
 # this is the plugin's own. Off file: tablestep.off in the plugin data directory.
 option(Q15T_TABLESTEP "tablestep (#1552): shader-set table growth step 32 -> 1 by a wrapper on CreateInstance's data slots. Source: ON" ON)
-# sendguard: CSendEventNode::Enter (ReVault libr15 0x2825a80) faults on a send to a game space that is not loaded (the menu gate lets the menu
+# sendguard: CSendEventNode::Enter (disassembly libr15 0x2825a80) faults on a send to a game space that is not loaded (the menu gate lets the menu
 # reach such a send on a Quest without the combat content pack). A wrapper on its data slots drops that send with a log line. Off file: sendguard.off.
 option(Q15T_SENDGUARD "sendguard: a script send to a game space that is not loaded is dropped, not faulted, by a wrapper on CSendEventNode::Enter's data slots" ON)
 # decals (issue #1619): the combat levels' static decals, which the Quest renderer cannot draw, as quads in dynamic-mesh nodes from the

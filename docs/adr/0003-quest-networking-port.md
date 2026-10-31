@@ -259,15 +259,15 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   `_error_resend_unavailable`, `_login_restarted`, `_login_restart_unavailable` and `_select_sent`;
   installing logs one `login_prompt_install` line (or `skipped` when the counters were refused).
 - The title over the text. The login-failed page is titled `LOGIN FAILED` by a literal in the page's script library
-  (`lib7f2363b8976491aa.so`, no build ID, no SONAME): one script node (`execute_node_cfa11df1`, ReVault `0x10d0e8`)
+  (`lib7f2363b8976491aa.so`, no build ID, no SONAME): one script node (`execute_node_cfa11df1`, the disassembly `0x10d0e8`)
   builds `string_t("LOGIN FAILED")` and passes it to `EXTERNALFUNCTIONNODE::setparam`. The prompt board carries a title
   with the text (`prompt_board::Publish(..., title)`): `SIGN IN` with the code, `SIGNED IN` with the notice, none with the
   timed-out and no-code texts (`prompt_presenters.h`, `kSignInTitle`, `kSignedInTitle`). A GOT hook
   (`sentinel/login_title_hook.h`) on that library's `string_t::string_t(char const*)` slot (JUMP_SLOT `0x12dd0`, BIND_NOW;
-  the constructor is defined in the library, ReVault `0x10df98`, and copies at most 63 characters into the string's own
+  the constructor is defined in the library, the disassembly `0x10df98`, and copies at most 63 characters into the string's own
   64-byte buffer) hands the original the board's title in place of exactly the literal `LOGIN FAILED`, and the
   game's own text in every other case, so a failure with no title on the board keeps the game's title. The slot's one
-  caller is that node (`revault_callers` on `0x10df98` and the PLT stub `0x104a90`: one edge), so the thunk runs once each
+  caller is that node (`disasm_callers` on `0x10df98` and the PLT stub `0x104a90`: one edge), so the thunk runs once each
   time the page's title is built; the alternative seam, `setparam`, is a GLOB_DAT function-pointer variable
   (`0x12ea0`) that every script node in the library calls through and takes a `string_t` whose layout we would write. The
   library loads after the sentinel's constructor, so the install is a post-load action (`PostLoadActions::loginTitle`),
@@ -392,7 +392,7 @@ are never unloaded. Log lines go to logcat, which does not meet the durable-log 
 `AGENTS.md`; the planned sink is the sentinel's disk log.
 
 Whether the declared hook targets can throw, from the pinned ELFs: `CJson::TString`
-(`libr15.so` `0xfa2e7c`, `libpnsradmatchmaking.so` `0x209484`): ReVault's callee graph (partial:
+(`libr15.so` `0xfa2e7c`, `libpnsradmatchmaking.so` `0x209484`): the disassembly's callee graph (partial:
 146967 of 178574 functions) lists no throw or allocation entry, and a direct-call scan of the ELF
 (22 functions to depth 7, no indirect call in the set) finds no PLT call to `__cxa_throw`,
 `__cxa_allocate_exception`, `__cxa_rethrow`, `operator new`/`delete`, `malloc`/`calloc`/`realloc`
@@ -669,7 +669,7 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    `LoopbackUri()` by this rule and must reach the listener.
 
    **How the game carries the token (measured, not assumed).** The game's WebSocket client,
-   `NRadEngine::CWebSocketCodec::SendHandshakeRequest` (ReVault `libr15.so` `0x2ad8928`, ghidra
+   `NRadEngine::CWebSocketCodec::SendHandshakeRequest` (the disassembly `libr15.so` `0x2ad8928`, ghidra
    raw decompilation), formats the request as
    `GET %s HTTP/1.1\r\nHost: %s%s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n`,
    with the target built as `"%s%s%s%s"` from `"/"` (only when the URI's path is empty), the URI's
@@ -680,10 +680,10 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    caller assembles the URI it hands the codec from the config value (whether a service path is
    appended to the config string before `CUriContainer::Parse`); the callers
    (`CNSRadService`, `CR15NetGame`) were not traced. If the game replaced both path and query,
-   neither form could carry the token and a per-role port would be the alternative. ReVault's
+   neither form could carry the token and a per-role port would be the alternative. The disassembly's
    `libr15.so` bytes match the shipped build (sha256 `8dd9a961...1d8b20`) at `0xf991a4` and
    `0x1939250`; the rest of it was not compared, and the addresses in the
-   "Config-string seam" table did not resolve in ReVault under that spelling.
+   "Config-string seam" table did not resolve in the disassembly under that spelling.
 
    **Residual risk.** A process running as the same Android uid as the game can read the token
    from the game's memory or from the redirect value, and can then connect. Processes of other
@@ -767,7 +767,7 @@ Pinned artifact: `build/android-arm64/repack/r15_nevr-sentinel_signed.apk`, pack
 | `libpnsrad.so` | `d9995c877a6623d8e48879f80c5749f313a0eba8a00b35a936c0df60e6d23aa8` | `c58fb82e42d9ed6564744cfa10f05af74aedd0ee` |
 | `libpnsovr.so` | `26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79` | `ca47bb8d03e6f43c1825133bbb9c15f174705c51` |
 
-These match the ReVault records. They identify a local repack, not an installed headset build.
+These match the disassembly records. They identify a local repack, not an installed headset build.
 
 Argument registers at the call sites: CJson object in `x0`, key in `x1`, fallback in `x2`, a
 zero flag in `w3`. A missing key returns the fallback unchanged in `x0`; a found key returns the
@@ -827,7 +827,7 @@ many from per-frame script readers (for example `0x23270ac`); a by-value rule wo
 and run the policy for any `ws://` or `https://` string any of them reads. The key rule is exhaustive
 for the host keys by the string search above. Whether the NEVR config response carries
 `match_type_specific_matchmakers` or these keys is not verified: no reference exists in
-`~/src/nakama`, and the reconstruction note `match_join_flow.md` says the game may take a
+the nakama repository, and the reconstruction note `match_join_flow.md` says the game may take a
 match-type-specific URL from that config key.
 
 Four libraries define `CJson::TString(char const*, char const*, unsigned int)`: `libr15.so` and
@@ -905,7 +905,7 @@ fallback of the `BeginLogIn` read (`wss://login.readyatdawn.com/rad/rad15_live`)
 build tuple is appended at run time by the TString handler (`HandleTString` in `src/quest/redirect/tstring_thunks.cpp`
 asks the fallback decision, which composes the tuple with `Compose` in `src/quest/redirect/login_fallback.h`). The `libr15.so` string locations `0x2baeca2` and `0x2baecf7`
 are unverified and must not be patched from this record.
-ReVault's `source: imported` on a decompilation describes how it entered the warehouse; only the
+The disassembly's `source: imported` on a decompilation describes how it entered the warehouse; only the
 ELF's own symbol and relocation tables establish a GOT hook.
 
 `libr15.so` and `libpnsrad.so` do not list `libpnsradmatchmaking.so` in `DT_NEEDED`.
@@ -1337,7 +1337,7 @@ dependency system.
 ## Binary and hook discovery gate
 
 Pin fixtures to the artifact above; a different artifact needs a new identity check. For every
-interception, collect ReVault decompilation, callers, callees and xrefs, then independently
+interception, collect the disassembly decompilation, callers, callees and xrefs, then independently
 check `readelf -r/-Ws`, section mapping, bytes or disassembly and load bias. Record the calling
 convention, argument ownership, lifetime, call frequency and failure return.
 
@@ -1360,8 +1360,8 @@ leaves no partial patch. Hook frequency is measured before any blocking call is 
 
 The Quest game has two social providers and uses one of them for friends, parties and rooms.
 Everything below was read from the pinned store build (`libr15.so` build id `b243509c...`,
-`libpnsovr.so` `ca47bb8d...`, `libpnsrad.so` `c58fb82e...`) with `readelf`, `llvm-objdump` and ReVault.
-Addresses are ELF vaddrs. ReVault's decompilation prints pointer immediates into `libpnsovr.so` data and
+`libpnsovr.so` `ca47bb8d...`, `libpnsrad.so` `c58fb82e...`) with `readelf`, `llvm-objdump` and the disassembly.
+Addresses are ELF vaddrs. The disassembly's decompilation prints pointer immediates into `libpnsovr.so` data and
 `FUN_` names 0x100000 higher than the ELF (the vtable it shows as `0x7a1240` is the ELF's `0x6a1240`);
 the ELF values are used here.
 

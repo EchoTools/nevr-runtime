@@ -1,8 +1,0 @@
-[Unit]
-Description=nevr-runtime release train guard: tell the release lead that the guard's run failed (#1409)
-
-[Service]
-Type=oneshot
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
-# Couriers the release lead one line. A failed guard run is a courier message, not an alert to the owner.
-ExecStart=%h/.local/bin/courier send --to spritz --from release-train-guard --msg "release train guard failed: see %h/.local/state/nevr-runtime/release-train-guard.jsonl"

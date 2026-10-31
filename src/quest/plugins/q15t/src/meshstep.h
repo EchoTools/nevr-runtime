@@ -20,7 +20,7 @@
 
 namespace q15t {
 
-// ELF vaddrs in the pinned build (ReVault VA - 0x100000).
+// ELF vaddrs in the pinned build (disassembly VA - 0x100000).
 struct MeshStepAddrs {
   std::uintptr_t ctor;             // CGMeshListResource::CGMeshListResource(CPresenceInit const&)
   std::uintptr_t got_slot;         // the GOT word thunk_FUN_019677cc calls through

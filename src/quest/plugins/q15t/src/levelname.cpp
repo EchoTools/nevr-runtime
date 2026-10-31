@@ -11,8 +11,8 @@ namespace q15t {
 namespace {
 
 constexpr std::uint64_t kGlobalMp = 0x3F9915D3001DC28Eull;  // the source build's patch table GLOBAL_MP
-constexpr std::uintptr_t kFnVaddr = 0x1202ecc;              // CR15Game::LoadLevelName (ReVault 0x1302ecc)
-constexpr std::uintptr_t kPlainVaddr = 0xf133d0;            // PLT stub -> CncaGame::LoadLevelName (ReVault 0x10133d0)
+constexpr std::uintptr_t kFnVaddr = 0x1202ecc;              // CR15Game::LoadLevelName (disassembly 0x1302ecc)
+constexpr std::uintptr_t kPlainVaddr = 0xf133d0;            // PLT stub -> CncaGame::LoadLevelName (disassembly 0x10133d0)
 constexpr std::uintptr_t kFlagOffset = 0x7ad8;              // CR15Game+0x7ad8: bit 31 = lowspec
 constexpr std::uint32_t kLowspecMask = 0x80000000u;
 // Vtable words holding the function (R_AARCH64_ABS64 in .data.rel.ro): CR15Game, CR15NetDedicatedServer, CR15NetLanServer,

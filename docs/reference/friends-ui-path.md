@@ -1,7 +1,7 @@
 # Friends and party UI: what runs `R15NetRefreshFriendsNode`
 
 How the friends refresh is wired in `echovr.exe` and the script modules, so a windowed-client
-run can be pointed at the UI that triggers it. Everything below is static (ReVault and the
+run can be pointed at the UI that triggers it. Everything below is static (the disassembly and the
 shipped script DLLs); nothing here was observed on a running client except where marked.
 
 ## The node
@@ -10,8 +10,8 @@ shipped script DLLs); nothing here was observed on a running client except where
 | --- | --- | --- |
 | Node class name | `R15NetRefreshFriendsNode` | string at `0x141cc7f78` (echovr.exe); the bytes before it, from `0x141cc7f68`, are the hash qword in the next row |
 | Node type hash (CSymbol64) | `0x4f0a3c282e9f3b43` | the qword at `0x141cc7f68`; recomputed from the name with `sdk/include/nevr/symbol_hash.h` |
-| Update function | `0x140ddf9a0` (409 bytes) | ReVault `fn show 0x140ddf9a0` |
-| Registered by | `0x140f4c480` (the node-type registration table): `0x140f505f1` loads `0x140ddf9a0` as the node's function and calls `0x1412ec220` | ReVault xrefs to `0x140ddf9a0`: `0x140f505f1`, plus data at `0x141f92f44`, `0x141f92f54`, `0x142180f60` |
+| Update function | `0x140ddf9a0` (409 bytes) | the disassembly, function record `0x140ddf9a0` |
+| Registered by | `0x140f4c480` (the node-type registration table): `0x140f505f1` loads `0x140ddf9a0` as the node's function and calls `0x1412ec220` | the disassembly xrefs to `0x140ddf9a0`: `0x140f505f1`, plus data at `0x141f92f44`, `0x141f92f54`, `0x142180f60` |
 | Direct callers | none | the only call-graph edge into `0x140ddf9a0` is the registration table; so the node runs from the script interpreter, not from C++ (inferred from the call graph; the graph misses 451 of 55267 functions) |
 
 What the update function does (decompiled, `0x140ddf9a0`): it is a three-state coroutine node.
@@ -45,8 +45,8 @@ The hashes of the trigger names, computed with the repo's CSymbol64 code
 | `delegate_onpage2enabled` | `0xd64f3478683e4a9c` |
 
 `0x561287f0028ef7b1` occurs only in `e9b0db765f1eb096.dll` (two places, `0xb41c` and `0x155c2`).
-No other file under `echovr/bin/win10` posts it, and neither `revault search code` nor
-`revault search instructions` finds it in `echovr.exe`.
+No other file under `echovr/bin/win10` posts it, and neither a code search nor
+an instruction search of the disassembly finds it in `echovr.exe`.
 
 ## What this says about the UI
 
@@ -62,20 +62,20 @@ No other file under `echovr/bin/win10` posts it, and neither `revault search cod
 
 ## The Quest main-menu friends button
 
-Searched with `revault_search_strings` over the whole `echovr` project (searched all 1,041 binaries).
+Searched with `disasm_search_strings` over the whole `echovr` project (searched all 1,041 binaries).
 
 | Fact | Value | Source |
 | --- | --- | --- |
-| Menu friends-button state flags | `friends_list_button_enabled` at `0x180089730`, `friends_list_button_tint` at `0x18008a030` in `156208a7bf6bcfec.dll`; the same names in `lib156208a7bf6bcfec.so` at `0x22317b` and `0x223992` | revault string table |
-| Platform (Meta) friends panel strings | `You have no Oculus Friends.` at `0x18003eb18`, `waiting_for_friends` at `0x18003f5b8` in `30b4ca0fb0a1ee02.dll` | revault string table |
-| Meta friends request | `ovr_User_GetLoggedInUserFriends` at `0x1801fccc8` in `pnsovr.dll` (the PC platform module; the Quest build does not load `pnsovr`, `docs/adr/0026-quest-without-pnsovr.md`) | revault string table |
+| Menu friends-button state flags | `friends_list_button_enabled` at `0x180089730`, `friends_list_button_tint` at `0x18008a030` in `156208a7bf6bcfec.dll`; the same names in `lib156208a7bf6bcfec.so` at `0x22317b` and `0x223992` | disassembly string table |
+| Platform (Meta) friends panel strings | `You have no Oculus Friends.` at `0x18003eb18`, `waiting_for_friends` at `0x18003f5b8` in `30b4ca0fb0a1ee02.dll` | disassembly string table |
+| Meta friends request | `ovr_User_GetLoggedInUserFriends` at `0x1801fccc8` in `pnsovr.dll` (the PC platform module; the Quest build does not load `pnsovr`, `docs/adr/0026-quest-without-pnsovr.md`) | disassembly string table |
 | Echo friends switch on the FRIENDS LIST press | slot 46 (`RefreshFriends`) posts `evt_debug_arm_computer_friends`, which switches the tablet to its Friends tab | `src/quest/social/social_facade.cpp` (`UiEventBegin`, the `kRefreshFriends` branch); `src/quest/sentinel/quest_config.h` (`uiEventProbe`, on by default) |
 
 Not established by this tree: which call the menu button makes on Quest. The string `FRIENDS` in
-`30b4ca0fb0a1ee02.dll` has one data xref (`0x18001b9a6` to `0x18003ebe8`); `revault_function` names the
+`30b4ca0fb0a1ee02.dll` has one data xref (`0x18001b9a6` to `0x18003ebe8`); `disasm_function` names the
 containing function `execute_single_node` (`0x18000d670`), a node dispatcher, so the xref is a node
 data reference, not the button's call. `lib156208a7bf6bcfec.so` has no xref to its `friends_list_button_*`
-strings in the revault database.
+strings in the disassembly database.
 
 Headset test to choose between routing and hiding (three steps):
 

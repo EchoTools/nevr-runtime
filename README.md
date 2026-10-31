@@ -408,4 +408,3 @@ Submodules in `extern/`: `minhook`, `breakpad`, `lss`.
 | **nevr-runtime** (this repo) | Runtime patches for `echovr.exe` |
 | **nevr-runtime-plugins** | Gameplay and tooling plugins |
 | **nakama** | The community game service (echovrce) |
-| **revault** | Reverse-engineering data warehouse for the game binaries |

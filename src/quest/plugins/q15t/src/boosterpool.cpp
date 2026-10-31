@@ -12,11 +12,11 @@
 namespace q15t {
 namespace {
 
-// ELF vaddrs of the pinned build (ReVault VA = ELF + 0x100000, as levelname.cpp; the GOT slot is from ReVault's adrp target)
-constexpr std::uintptr_t kSlot = 0x36cd1f8;       // GOT word (JUMP_SLOT) of the PLT stub at ReVault 0xfeb620 (AllocateExclusive calls it)
-constexpr std::uintptr_t kFn = 0x18037c4;         // CncaGameSpace::AllocatePooledActor(CSymbol64) (ReVault 0x19037c4)
-constexpr std::uintptr_t kAppend = 0xf31ea0;      // CSymbol64::Append (ReVault 0x1031ea0, a PLT stub)
-constexpr std::uintptr_t kPlainName = 0x37af868;  // DAT_038af868: the booster pool actor's plain CSymbol64 (ReVault 0x38af868)
+// ELF vaddrs of the pinned build (disassembly VA = ELF + 0x100000, as levelname.cpp; the GOT slot is from the disassembly's adrp target)
+constexpr std::uintptr_t kSlot = 0x36cd1f8;       // GOT word (JUMP_SLOT) of the PLT stub at disassembly 0xfeb620 (AllocateExclusive calls it)
+constexpr std::uintptr_t kFn = 0x18037c4;         // CncaGameSpace::AllocatePooledActor(CSymbol64) (disassembly 0x19037c4)
+constexpr std::uintptr_t kAppend = 0xf31ea0;      // CSymbol64::Append (disassembly 0x1031ea0, a PLT stub)
+constexpr std::uintptr_t kPlainName = 0x37af868;  // DAT_038af868: the booster pool actor's plain CSymbol64 (disassembly 0x38af868)
 constexpr char kSym[] = "_ZN10NRadEngine13CncaGameSpace19AllocatePooledActorENS_9CSymbol64E";
 constexpr char kSuffix[] = "_lowspec";
 constexpr std::uint64_t kKeptLogFirst = 16;

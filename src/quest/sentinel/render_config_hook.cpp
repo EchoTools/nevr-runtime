@@ -39,7 +39,7 @@ constexpr int kFoveationLevelProperty = 0xf;
 constexpr int kDynamicFoveationProperty = 0x1e;
 constexpr int kRefreshRateSystemProperty = 4;
 
-// Pinned link-time addresses of the libr15 globals (ReVault shows each 0x100000 higher). Read after the build id is proved.
+// Pinned link-time addresses of the libr15 globals (disassembly shows each 0x100000 higher). Read after the build id is proved.
 constexpr std::uint64_t kEyeSizeVaddr = 0x37a33e0;      // CVR::RefreshRTSize's result: {int32 w, int32 h}
 constexpr std::uint64_t kOverrideSizeVaddr = 0x37a33e8;  // CVR::SetRTSizeOverride's pair; non-zero: the query is skipped
 constexpr std::uint64_t kMsaaModeVaddr = 0x379c080;     // CGRenderConfig::MSAAMode()

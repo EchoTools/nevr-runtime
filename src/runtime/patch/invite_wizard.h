@@ -138,7 +138,7 @@ inline std::string MetricShape(std::string_view line) {
   return out;
 }
 
-// The share page's JOIN button (#1731). Its page script (`8c3244ce60942e17.dll`, ReVault) sends one deep_linking click metric and
+// The share page's JOIN button (#1731). Its page script (`8c3244ce60942e17.dll`) sends one deep_linking click metric and
 // nothing else: panel `create_game_summary`, event `join` (the script's strings at 0x180008438 and 0x180008470). The game has no
 // function that joins on it, so a client that reads the click starts the join of the match it just created.
 inline bool IsShareJoin(std::string_view line) {

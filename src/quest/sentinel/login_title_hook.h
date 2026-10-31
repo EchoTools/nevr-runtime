@@ -2,14 +2,14 @@
  *
  * What the game does: the login-failed page is the one the sign-in code is shown on (login_prompt_hook.h), and the page
  * is titled LOGIN FAILED whatever the reason. The title is not part of the error block our prompt writes. It is a literal
- * in the page's script library (lib7f2363b8976491aa.so): one script node, execute_node_cfa11df1 (ReVault 0x10d0e8), builds
+ * in the page's script library (lib7f2363b8976491aa.so): one script node, execute_node_cfa11df1 (disassembly 0x10d0e8), builds
  * `string_t("LOGIN FAILED")` and passes it to EXTERNALFUNCTIONNODE::setparam as the page's title parameter. On a Quest that
  * is not signed in yet, this reads as "the game is broken" on the first screen a new player sees.
  *
- * The seam. `string_t::string_t(char const*)` is defined in that library (ReVault 0x10df98: NRadString::Copy(this, text,
+ * The seam. `string_t::string_t(char const*)` is defined in that library (disassembly 0x10df98: NRadString::Copy(this, text,
  * 0x40), so it copies at most 63 characters into the string_t's own 64-byte buffer and keeps no pointer) and is reached
  * through the library's own JUMP_SLOT (pinned_targets.h, LoginScriptStringCtor). The node is the slot's only caller
- * (`revault_callers` 0x10df98 and 0x104a90: one edge), so the thunk runs once each time that page's title is built, and
+ * (callers of 0x10df98 and 0x104a90 in the disassembly: one edge), so the thunk runs once each time that page's title is built, and
  * never for any other string in the game. The alternative seam, the title parameter's `setparam` call, goes through a
  * GLOB_DAT function-pointer variable (0x12ea0) that every script node in the library calls through, and it hands over a
  * string_t whose layout we would have to write; here the argument is a `char const*` and the game builds the string.

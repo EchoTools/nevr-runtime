@@ -10,7 +10,7 @@ Tester crashes it answers: F (System arena dry) and E (the 512-slot layout pool)
 
 ## Rows
 
-| Row | Function | Slot (ELF) | readelf line | Real function (ELF / ReVault) |
+| Row | Function | Slot (ELF) | readelf line | Real function (ELF / disassembly) |
 |---|---|---|---|---|
 | R37 | `CSimplePool<SGRenderTargetLayout,uint>::Alloc` | JUMP_SLOT 0x36e9b48 | 127997 | 0x1901b5c / `1a01b5c` |
 | R38 | `CSysJava::Init(android_app*)` | JUMP_SLOT 0x36de5c0 | 122188 | 0xf7e8e8 / `107e8e8` |
@@ -22,7 +22,7 @@ and `00000000036de5c0  0000e13400000402 R_AARCH64_JUMP_SLOT    0000000000f7e8e8 
 
 ## What R37 does (port of the layout-pool part of the source build's memsys)
 
-`CGRawInterface::InitCommon` makes the pool with `Alloc(pool, 0x200, allocator)` (ReVault `19818b8 mov w1,#0x200`; `19818c8 bl 0x010248c0`,
+`CGRawInterface::InitCommon` makes the pool with `Alloc(pool, 0x200, allocator)` (disassembly `19818b8 mov w1,#0x200`; `19818c8 bl 0x010248c0`,
 the PLT stub whose `adrp x16,0x37e9000; ldr x17,[x16,#0xb48]` reads this very slot; return address `19818cc`). `Alloc` sizes the slots,
 the free stack (`+0x28`, capacity in `+0x38`, `str x21,[x19,#0x38]` at `1a01c30`; `str x0,[x19,#0x28]` at `1a01c4c`), the capacity (`+0x84`)
 and leaves the free count (`+0x30`) 0 (`1a01c24 stp q0,q0,[x22]`, x22 = pool + 0x20). InitCommon then pushes indices 511..0 at
@@ -49,7 +49,7 @@ effect is absent and nothing breaks (the witness and counters tell). With `early
 
 ## What R38 does: a timing witness, nothing else
 
-android_main's first call is CSysJava::Init (ReVault `10784e4 bl 0x0100ddb0`; stub `100ddb0 adrp x16,0x37de000`, `100ddb4 ldr x17,[x16,#0x5c0]`;
+android_main's first call is CSysJava::Init (disassembly `10784e4 bl 0x0100ddb0`; stub `100ddb0 adrp x16,0x37de000`, `100ddb4 ldr x17,[x16,#0x5c0]`;
 return address `10784e8`). That precedes every heap-size read in android_main (`1078524`, `1078590`, `1078614`), so a wrapper on this slot that
 is called from the site is proof the plugin was installed before android_main reached the reads. The first such call logs once:
 
@@ -60,17 +60,17 @@ android_main passed Init**: `heaps` R06-R08 then cannot have taken effect (see `
 (`plugin_armed_before_android_main` is a constant 1 by construction: the line can only be written by a call that came through the
 plugin's own wrapper, installed beforehand.)
 
-## Pinned code words (all 21 re-read from ReVault)
+## Pinned code words (all 21 re-read from the disassembly)
 
 Each word the wrapper's reasoning relies on is checked at install (`WordsMatch`); a mismatch refuses that row only, with a WARNING
 naming the vaddr, the word found and the word wanted, and an ERROR `memsys hook install ... status=unexpected_original`. Source:
-the source build's memsys:65-77. Verbatim from ReVault 576 (`instructions`, little-endian bytes compared with the table, all `t`):
+the source build's memsys:65-77. Verbatim from the disassembly (`instructions`, little-endian bytes compared with the table, all `t`):
 `100ddb0 adrp x16,0x37de000`, `100ddb4 ldr x17,[x16,#0x5c0]`, `10248c0 adrp x16,0x37e9000`, `10248c4 ldr x17,[x16,#0xb48]`,
 `10784e4 bl 0x0100ddb0`, `10784e8 bl 0x00fe5b00`, `1078510 adrp x8,0x381d000`, `1078514 ldr x8,[x8,#0x20]`, `1078524 ldr x1,[x8]`,
 `19818b8 mov w1,#0x200`, `19818c8 bl 0x010248c0`, `19818cc ldp x10,x11,[x19,#0x28]`, `19818d8 mov w12,#0x1fb`,
 `19818e0 movi v0.4S,#0x1,MSL #8`, `19818e8 add x9,x11,#0x200`, `1981904 cmp x8,#0x800`, `1981914 str x9,[x19,#0x30]`,
 `1a01b5c sub sp,sp,#0x50`, `1a01c24 stp q0,q0,[x22]`, `1a01c30 str x21,[x19,#0x38]`, `1a01c4c str x0,[x19,#0x28]`
-(21 rows, `match = t` for every one). The ELF vaddr in `src/quest/plugins/q15t/src/memsys.cpp` is the ReVault VA minus 0x100000.
+(21 rows, `match = t` for every one). The ELF vaddr in `src/quest/plugins/q15t/src/memsys.cpp` is the disassembly VA minus 0x100000.
 
 ## Logging (AGENTS.md)
 
@@ -101,4 +101,4 @@ layouts (count not 0, no stack, capacity read back wrong, stack capacity short, 
 refusals per row, `memsys.off`, and base 0. 30 mutants in `src/quest/tests/q15t/mutants.d/memsys.sh`, one per rule; each is killed (numbers in the
 report). The "no stack pointer" rule has no mutant of its own: its check is also covered by the readability check (equivalent).
 A test cannot make a call return into libr15: the return-address gate is exercised through two test functions whose return addresses the
-test passes in through `SetMemsysSitesForTest`; that the real site's address is `base + 0x18818cc` is the pin test and the ReVault read above.
+test passes in through `SetMemsysSitesForTest`; that the real site's address is `base + 0x18818cc` is the pin test and the disassembly read above.

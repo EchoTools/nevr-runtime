@@ -20,13 +20,13 @@ extern const int kSymCacheCount;
 namespace nevr_quest::ui_texture_mips {
 namespace {
 
-// NRadEngine::CGTextureResource::Attach (libr15 0x18e75c4 pinned; ReVault 0x19e75c4 = pinned + 0x100000): this (x0),
+// NRadEngine::CGTextureResource::Attach (libr15 0x18e75c4 pinned; disassembly 0x19e75c4 = pinned + 0x100000): this (x0),
 // stream (x1); returns 0 on success (w0). Reached through the resource's vtable, so there is no GOT slot: it is the row
 // `ui_texture.attach` of the build-time patch table (quest/patch/libr15_patch_table.h; docs/adr/0021), whose address and
 // stock words the patcher checks against the store file. The hook is one atomic store into the row's slot.
 constexpr const char* kAttachRow = "ui_texture.attach";
 
-// NRadEngine::CGTextureResource::ForceLoadAllMips (libr15 0x18e674c pinned; ReVault 0x19e674c): this (x0), returns 0 on
+// NRadEngine::CGTextureResource::ForceLoadAllMips (libr15 0x18e674c pinned; disassembly 0x19e674c): this (x0), returns 0 on
 // success. It returns at once when the resident level (this+0xe0) already equals the mip count (info+0xcc) or the
 // texture owns its full data stream (info+0xc0 != 0). It is called directly, not hooked.
 //   sub sp,sp,#0xd0; str x20,[sp,#0xb0]; stp x19,x30,[sp,#0xc0]; ldr x8,[x0,#0x70].

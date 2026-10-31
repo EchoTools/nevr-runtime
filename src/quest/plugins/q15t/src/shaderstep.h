@@ -1,13 +1,13 @@
 // shaderstep (issue #1553): the CTableXT growth step of the CGShaderSetResource table is 1, not 32.
 //
-// The factory's ConstructInstance (ReVault libr15 0x1a06f4c, ELF 0x1906f4c, 304 bytes) builds a shader-set resource in
-// place and stores the table's growth step at object+0x98 (ReVault 0x1a07000: `mov w8,#0x20`, `str x8,[x19,#0x98]`).
+// The factory's ConstructInstance (disassembly libr15 0x1a06f4c, ELF 0x1906f4c, 304 bytes) builds a shader-set resource in
+// place and stores the table's growth step at object+0x98 (disassembly 0x1a07000: `mov w8,#0x20`, `str x8,[x19,#0x98]`).
 // The table is the CTableXT at object+0x78: its CMemBlock is first, the step at +0x20, the capacity at +0x28 (the same
 // layout custctx's DrawTable reads). This module wraps the factory's virtual ConstructInstance: it calls the game's
 // own constructor unchanged and then writes 1 to the step of the object it built, after reading that the game wrote 0x20.
 //
-// The wrapped slot is vtable slot 1 of the factory's vtable, which the factory's destructor (ReVault 0x1a06ef0) points
-// at: the address point is _ZTV+0x10 (ReVault 0x375ddc0), so the slot is ReVault 0x375ddc8 (ELF 0x365ddc8). A data-page
+// The wrapped slot is vtable slot 1 of the factory's vtable, which the factory's destructor (disassembly 0x1a06ef0) points
+// at: the address point is _ZTV+0x10 (disassembly 0x375ddc0), so the slot is disassembly 0x375ddc8 (ELF 0x365ddc8). A data-page
 // swap through got_swap.h, the same mechanism as the JUMP_SLOT wrappers; no code word is written.
 //
 // Off switch: `shaderstep.off` in the plugin data directory (module_switch.h). Details: docs/quest/q15t/modules/shaderstep.md.

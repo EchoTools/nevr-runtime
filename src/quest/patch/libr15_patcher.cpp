@@ -527,7 +527,7 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
     for (std::size_t s = 0; s < row.siteCount; ++s) {
       const Site& site = row.sites[s];
       Refusal rf;
-      if (site.revaultVa < kRevaultBias) return Failed(Refuse("site_outside_text", id, "the ReVault address " + Hex(site.revaultVa) + " is below the bias"), stockSha);
+      if (site.disasmVa < kDisasmBias) return Failed(Refuse("site_outside_text", id, "the disassembly address " + Hex(site.disasmVa) + " is below the bias"), stockSha);
       std::uint64_t off = 0;
       if (!TextOffset(elf, site.Vaddr(), 4ull * site.wordCount, &off)) {
         return Failed(Refuse("site_outside_text", id, "site " + std::to_string(s) + " at " + Hex(site.Vaddr()) + " is not in an executable segment"), stockSha);
@@ -603,11 +603,11 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
     }
   }
 
-  // Word patches (extra rows), in revault_va order so the report does not depend on the file's row order.
+  // Word patches (extra rows), in disasm_va order so the report does not depend on the file's row order.
   std::vector<const WordPatchRow*> orderedExtra;
   for (const WordPatchRow& r : extra) orderedExtra.push_back(&r);
   std::sort(orderedExtra.begin(), orderedExtra.end(), [](const WordPatchRow* a, const WordPatchRow* b) {
-    return a->revaultVa != b->revaultVa ? a->revaultVa < b->revaultVa : a->id < b->id;
+    return a->disasmVa != b->disasmVa ? a->disasmVa < b->disasmVa : a->id < b->id;
   });
   struct WordPlan {
     const WordPatchRow* row;
@@ -617,12 +617,12 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
   };
   std::vector<WordPlan> wordPlans;
   for (const WordPatchRow* row : orderedExtra) {
-    if (row->revaultVa < kRevaultBias) return Failed(Refuse("word_outside_text", row->id, "the ReVault address " + Hex(row->revaultVa) + " is below the bias"), stockSha);
+    if (row->disasmVa < kDisasmBias) return Failed(Refuse("word_outside_text", row->id, "the disassembly address " + Hex(row->disasmVa) + " is below the bias"), stockSha);
     for (const WordEdit& e : row->edits) {
       if ((e.offset & 3) != 0) {
         return Failed(Refuse("word_offset", row->id, "offset " + std::to_string(e.offset) + " is not a multiple of 4"), stockSha);
       }
-      const std::uint64_t va = row->revaultVa - kRevaultBias + e.offset;
+      const std::uint64_t va = row->disasmVa - kDisasmBias + e.offset;
       std::uint64_t off = 0;
       if (!TextOffset(elf, va, 4, &off)) {
         return Failed(Refuse("word_outside_text", row->id, "offset " + std::to_string(e.offset) + " at " + Hex(va) + " is not in an executable segment"), stockSha);
@@ -658,7 +658,7 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
     Json stubWords = Json::array();
     for (const std::uint32_t w : p.stock) stockWords.push_back(Hex8(w));
     for (const std::uint32_t w : p.patched) stubWords.push_back(Hex8(w));
-    eventList.push_back({{"event", "libr15_patch_site"}, {"id", p.id}, {"kind", p.kind}, {"revault_va", Hex(p.vaddr + kRevaultBias)},
+    eventList.push_back({{"event", "libr15_patch_site"}, {"id", p.id}, {"kind", p.kind}, {"disasm_va", Hex(p.vaddr + kDisasmBias)},
                          {"vaddr", Hex(p.vaddr)}, {"file_offset", Hex(p.fileOffset)}, {"stock", stockWords}, {"stub", stubWords},
                          {"slot", p.slot}, {"slot_vaddr", Hex(slotArea + kSlotBytes * p.slot)}});
   }
@@ -666,7 +666,7 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
     std::memcpy(out.data() + wp.fileOffset, wp.edit->word.data(), 4);
     changes.push_back({wp.fileOffset, 4, wp.row->id + ":word"});
     eventList.push_back({{"event", "libr15_patch_word"}, {"id", wp.row->id}, {"offset", wp.edit->offset},
-                         {"revault_va", Hex(wp.vaddr + kRevaultBias)}, {"vaddr", Hex(wp.vaddr)}, {"file_offset", Hex(wp.fileOffset)},
+                         {"disasm_va", Hex(wp.vaddr + kDisasmBias)}, {"vaddr", Hex(wp.vaddr)}, {"file_offset", Hex(wp.fileOffset)},
                          {"stock_bytes", BytesHex(wp.edit->stock)}, {"stock_word", Hex8(WordValue(wp.edit->stock))},
                          {"new_bytes", BytesHex(wp.edit->word)}, {"new_word", Hex8(WordValue(wp.edit->word))}});
   }

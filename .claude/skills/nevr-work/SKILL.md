@@ -52,9 +52,9 @@ Proof: your plan names the area from the table above, the issue, the N-rules in 
 
 ### 2. Measure before you assert
 
-`AGENTS.md` "ReVault" (search the whole project, `searched N of N`), "Continuity", and "Analysis: read what the program
+`AGENTS.md` "Reverse engineering" (search the whole project, `searched N of N`), "Continuity", and "Analysis: read what the program
 wrote". Build facts come from the CMake, the recipe and the process's own config and log, not from a document. Binary
-facts come from ReVault or the file itself (`readelf`, `nm`, `objdump`).
+facts come from the disassembly or the file itself (`readelf`, `nm`, `objdump`).
 
 Proof: each address, offset, flag or behavior claim carries its source, or is written `[UNVERIFIED]`.
 

@@ -105,7 +105,7 @@ int main() {
   const std::string dir = tmpl;
   q15t::SetFxTrailDirForTest(dir.c_str());
 
-  // the pinned addresses (R0_readelf_r.txt line 126983; ReVault 0x17647e4 - 0x100000)
+  // the pinned addresses (R0_readelf_r.txt line 126983; disassembly 0x17647e4 - 0x100000)
   CHECK(q15t::kFxTrailSlot == 0x36e7b98 && q15t::kFxTrailReal == 0x16647e4, "pinned addresses changed");
 
   Slot s = MakePage(reinterpret_cast<uintptr_t>(&RealEffectTime));

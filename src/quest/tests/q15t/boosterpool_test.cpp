@@ -43,7 +43,7 @@ static bool HasLine(const char* needle, int level = -1) {
   return false;
 }
 
-// the pinned build's ELF vaddrs (boosterpool.cpp; ReVault VA = ELF + 0x100000)
+// the pinned build's ELF vaddrs (boosterpool.cpp; disassembly VA = ELF + 0x100000)
 static const uintptr_t kSlot = 0x36cd1f8;       // GOT word of the AllocatePooledActor import
 static const uintptr_t kFn = 0x18037c4;         // the real function
 static const uintptr_t kAppend = 0xf31ea0;      // CSymbol64::Append (a PLT stub)
