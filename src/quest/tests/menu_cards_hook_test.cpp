@@ -16,6 +16,7 @@
 #include <thread>
 #include <vector>
 
+#include "friends_panel_swap.h"
 #include "hook_log.h"
 #include "menu_cards_hook.h"
 #include "menu_cards_swap.h"
@@ -25,6 +26,9 @@
 #include "runtime/patch/menu_cards.h"
 #include "runtime/patch/menu_page.h"
 #include "runtime/patch/netgun_bullets.h"
+#include "runtime/patch/friends_canvas.h"
+#include "runtime/patch/friends_level.h"
+#include "runtime/patch/ui_canvas.h"
 
 namespace {
 
@@ -630,6 +634,78 @@ void OnlyTheNetgunClassUnderAFiveLevelNameIsOffered() {
   }
 }
 
+// ---- the FRIENDS panel (#1535) ---------------------------------------------------------------------
+
+namespace fc = nevr_friends_canvas;
+namespace uc = nevr_ui_canvas;
+constexpr std::uint64_t kCanvasClass = nevr_quest::friends_panel::kCanvasType;
+
+// A delivered SEASON INFO canvas as far as the panel takes from it: the button and picture behaviours.
+std::vector<unsigned char> SeasonCanvas() {
+  uc::Canvas c;
+  c.behaviours.push_back(uc::MakeBehaviour(fc::kButtonStates, 0x0E7F320C56265C6CULL, 0, std::vector<std::uint8_t>(304, 7)));
+  c.behaviours.push_back(uc::MakeBehaviour(fc::kPointerInteract, fc::kPointerInteract, 0, uc::Words({fc::kPointerInteract, 0})));
+  c.behaviours.push_back(uc::MakeBehaviour(fc::kDynLoadTexture, fc::kDynLoadTexture, 0, uc::Words({fc::kDynLoadTexture, 0xBEEF})));
+  return uc::Encode(c);
+}
+
+void ThePanelCanvasIsServedBuiltFromTheDeliveredOne() {
+  Reset("");
+  std::vector<unsigned char> season = SeasonCanvas();
+  const std::vector<unsigned char> stock = season;
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 0, season.data(), season.size(), &g_alloc, 0x10, kCanvasClass, fc::kSeasonCanvas);
+  QCHECK(Call(block) == kCallbackResult);
+  QCHECK(g_seen.buffer != season.data() && g_allocCalls == 1 && g_freeCalls == 0);
+  uc::Canvas served;
+  QCHECK(uc::Decode(g_seen.bytes.data(), g_seen.bytes.size(), &served, nullptr));
+  QCHECK(served.Find(EchoVR::CSymbol64Hash("friend4_name")) >= 0 && served.Find(EchoVR::CSymbol64Hash("play_btn")) >= 0);
+  QCHECK(season == stock);  // the game's own buffer is not written
+  const std::vector<std::string> lines = Lines("friends_panel_swap");
+  QCHECK(lines.size() == 1);
+  if (!lines.empty()) QCHECK(Field(lines[0], "resource") == "\"panel_canvas\"");
+}
+
+void APanelTableThatIsNotStockIsLeftAndSaysWhy() {
+  Reset("");
+  std::vector<unsigned char> junk(120, 0x11);
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 0, junk.data(), junk.size(), &g_alloc, 0x10, nevr_friends_level::kPointerMeshType,
+       nevr_friends_level::kQuestLevel);
+  QCHECK(Call(block) == kCallbackResult);
+  QCHECK(g_seen.buffer == junk.data() && g_allocCalls == 0);
+  const std::vector<std::string> lines = Lines("friends_panel_skip");
+  QCHECK(lines.size() == 1);
+  if (!lines.empty()) QCHECK(Field(lines[0], "resource") == "\"pointer_meshes\"");
+}
+
+void OnlyThePanelsClassesAndNamesAreOffered() {
+  std::vector<unsigned char> season = SeasonCanvas();
+  struct Case {
+    const char* what;
+    std::uint64_t cls, name;
+  };
+  const Case cases[] = {
+      {"a canvas of another name", kCanvasClass, fc::kSeasonCanvas ^ 1},
+      {"the season canvas's name under another class", kCanvasClass ^ 1, fc::kSeasonCanvas},
+      {"a panel table under the PC level's name", nevr_friends_level::kScriptType, nevr_friends_level::kLevel},
+  };
+  for (const Case& c : cases) {
+    Reset("");
+    Block block;
+    Resource res;
+    Fill(block, res, 4, 0, season.data(), season.size(), &g_alloc, 0x10, c.cls, c.name);
+    QCHECK(Call(block) == kCallbackResult);
+    if (g_seen.buffer != season.data() || g_allocCalls != 0 || !Lines("friends_panel_swap").empty() ||
+        !Lines("friends_panel_skip").empty()) {
+      std::fprintf(stderr, "case '%s' was offered\n", c.what);
+      QCHECK(false);
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -656,6 +732,9 @@ int main() {
   TheQuestPinIsTheDigestTheHeadsetLogged();
   ANetgunResourceOfAFiveLevelIsLeftAloneWhenItsBytesAreNotPinned();
   OnlyTheNetgunClassUnderAFiveLevelNameIsOffered();
+  ThePanelCanvasIsServedBuiltFromTheDeliveredOne();
+  APanelTableThatIsNotStockIsLeftAndSaysWhy();
+  OnlyThePanelsClassesAndNamesAreOffered();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "menu_cards_hook_test: %d check(s) failed\n", quest_test::Failures());

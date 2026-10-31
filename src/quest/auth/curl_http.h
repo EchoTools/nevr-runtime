@@ -39,12 +39,16 @@ class CurlHttpClient : public nevr::auth::HttpClient {
   nevr::auth::HttpResponse PostJsonWithHeaders(const std::string& url, const std::string& body,
                                                const std::vector<std::string>& headers, long connect_timeout_s,
                                                long timeout_s);
+  // Any method (GET, POST, DELETE) with the same trust, redirects, response cap and timeouts; a GET sends no body, a
+  // DELETE sends `body` (empty for the friends API). The FRIENDS panel's service and avatar requests (#1535).
+  nevr::auth::HttpResponse Request(const char* method, const std::string& url, const std::string& body,
+                                   const std::vector<std::string>& headers, long connect_timeout_s, long timeout_s);
   void Interrupt() override;
 
  private:
-  // The one POST both entry points use.
-  nevr::auth::HttpResponse Perform(const std::string& url, const std::string& body, const std::vector<std::string>& headers,
-                                   long connect_timeout_s, long timeout_s);
+  // The one request every entry point uses.
+  nevr::auth::HttpResponse Perform(const char* method, const std::string& url, const std::string& body,
+                                   const std::vector<std::string>& headers, long connect_timeout_s, long timeout_s);
   // The bundle, loading it if none has loaded yet. Loading (file I/O, logging) happens
   // outside bundle_mutex_; the shared_ptr keeps a bundle alive across a concurrent reload.
   std::shared_ptr<const CaBundle> Bundle();

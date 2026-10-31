@@ -10,6 +10,7 @@
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
+#include "friends_panel_swap.h"
 #include "menu_cards_swap.h"
 #include "netgun_bullets_swap.h"
 #include "outside_game_call.h"
@@ -30,6 +31,7 @@ std::atomic<const char*> g_pin{nevr_menu_cards::kQuestStockPageSha256};
 std::atomic<unsigned long long> g_deliveries{0};
 std::atomic<unsigned long long> g_pages{0};
 std::atomic<unsigned long long> g_swapped{0};
+std::atomic<PictureServer> g_pictureServer{nullptr};
 
 // Two bounded diagnostics over finished primary buffers. A key is claimed by fetch_add; two threads racing on the same new
 // key can each log it once, which only costs a line.
@@ -178,16 +180,54 @@ void OfferNetgun(unsigned char* data, const Delivery& d, nevr_netgun_bullets::Re
                        {"rows_before", r.entriesBefore}, {"rows_after", r.entriesAfter}});
 }
 
+// The FRIENDS panel's resources (#1535, the Quest twin of the PC transforms): built from the delivered bytes by the
+// shared builders, before any game code runs (it allocates; outside_game_call.h). False, with the reason, when refused.
+NEVR_OUTSIDE_GAME_CALL bool PrepareFriends(friends_panel::Kind kind, const unsigned char* data, std::size_t size,
+                                           std::vector<std::uint8_t>* out, std::string* why) noexcept {
+  return friends_panel::Build(kind, data, size, out, why);
+}
+
+// Serves the panel's resource in place of the delivered one. As for the net-gun resources nothing is cached: SwapIn copies
+// the served bytes into a buffer from the game's own allocator, and the game's original buffer is not freed here.
+void OfferFriends(unsigned char* data, const Delivery& d, friends_panel::Kind kind) noexcept {
+  std::vector<std::uint8_t> built;
+  std::string why;
+  if (!PrepareFriends(kind, d.buffer, static_cast<std::size_t>(d.size), &built, &why)) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "friends_panel_skip",
+                        {{"resource", friends_panel::KindName(kind)}, {"bytes", d.size}, {"reason", why.c_str()}});
+    return;
+  }
+  const Swap swap = SwapIn(data, built.data(), built.size(), ReleaseAllocator());
+  if (swap != Swap::Swapped) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "friends_panel_skip",
+                        {{"resource", friends_panel::KindName(kind)}, {"bytes", d.size}, {"reason", SwapName(swap)}});
+    return;
+  }
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "friends_panel_swap",
+                      {{"resource", friends_panel::KindName(kind)}, {"bytes_before", d.size}, {"bytes_after", built.size()}});
+}
+
 // Runs before the game's callback, on whichever thread finished the read. Never throws (the unit has no exceptions).
 void Offer(unsigned char* data) noexcept {
   g_deliveries.fetch_add(1, std::memory_order_relaxed);
   if (data == nullptr) return;
   const Delivery d = Inspect(data);
+  // A FRIENDS panel picture is copied over its slot's payload, whichever buffer carries it (#1535).
+  const PictureServer pictures = g_pictureServer.load(std::memory_order_acquire);
+  if (pictures != nullptr && d.status == block::kStatusDone && d.buffer != nullptr && d.size != 0 &&
+      pictures(d.nameSymbol, d.buffer, d.size)) {
+    return;
+  }
   if (!IsFinishedPrimary(d)) return;
   NoteResource(d);
   nevr_netgun_bullets::Resource netgun = nevr_netgun_bullets::Resource::Particles;
   if (netgun_bullets::IsNetgunDelivery(d, &netgun)) {
     OfferNetgun(data, d, netgun);
+    return;
+  }
+  const friends_panel::Kind friends = friends_panel::Classify(d);
+  if (friends != friends_panel::Kind::kNone) {
+    OfferFriends(data, d, friends);
     return;
   }
   // The page is the CR15UIPage2CR resource under mnu_master_lowspec. The name is also the main-menu level's, so about sixty
@@ -225,6 +265,8 @@ NEVR_HOOK_RECORD(kHook, Thunk, &Handler);
 
 }  // namespace
 
+void SetPictureServer(PictureServer server) noexcept { g_pictureServer.store(server, std::memory_order_release); }
+
 bool Install() noexcept {
   sentinel::ElfImage image;
   const bool found = sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image);
@@ -251,6 +293,7 @@ void ArmForTest(const char* pinHex, void* const* contextSlot) noexcept {
 }
 
 void ResetForTest() noexcept {
+  g_pictureServer.store(nullptr, std::memory_order_release);
   g_deliveries.store(0, std::memory_order_relaxed);
   g_pages.store(0, std::memory_order_relaxed);
   g_swapped.store(0, std::memory_order_relaxed);

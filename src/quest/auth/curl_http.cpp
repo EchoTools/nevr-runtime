@@ -2,6 +2,7 @@
 
 #include <curl/curl.h>
 
+#include <cstring>
 #include <new>
 
 namespace nevr::quest_auth {
@@ -67,16 +68,22 @@ std::shared_ptr<const CaBundle> CurlHttpClient::Bundle() {
 }
 
 nevr::auth::HttpResponse CurlHttpClient::PostJson(const std::string& url, const std::string& body) {
-  return Perform(url, body, {}, timeout_seconds_, timeout_seconds_);
+  return Perform("POST", url, body, {}, timeout_seconds_, timeout_seconds_);
 }
 
 nevr::auth::HttpResponse CurlHttpClient::PostJsonWithHeaders(const std::string& url, const std::string& body,
                                                              const std::vector<std::string>& headers, long connect_timeout_s,
                                                              long timeout_s) {
-  return Perform(url, body, headers, connect_timeout_s, timeout_s);
+  return Perform("POST", url, body, headers, connect_timeout_s, timeout_s);
 }
 
-nevr::auth::HttpResponse CurlHttpClient::Perform(const std::string& url, const std::string& body,
+nevr::auth::HttpResponse CurlHttpClient::Request(const char* method, const std::string& url, const std::string& body,
+                                                 const std::vector<std::string>& headers, long connect_timeout_s,
+                                                 long timeout_s) {
+  return Perform(method, url, body, headers, connect_timeout_s, timeout_s);
+}
+
+nevr::auth::HttpResponse CurlHttpClient::Perform(const char* method, const std::string& url, const std::string& body,
                                                  const std::vector<std::string>& headers, long connect_timeout_s,
                                                  long timeout_s) {
   nevr::auth::HttpResponse out;
@@ -121,8 +128,13 @@ nevr::auth::HttpResponse CurlHttpClient::Perform(const std::string& url, const s
 
   set(CURLOPT_URL, url.c_str());
   set(CURLOPT_HTTPHEADER, easy.headers);
-  set(CURLOPT_POSTFIELDS, body.c_str());
-  set(CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+  if (std::strcmp(method, "GET") == 0) {
+    set(CURLOPT_HTTPGET, 1L);
+  } else {
+    if (std::strcmp(method, "POST") != 0) set(CURLOPT_CUSTOMREQUEST, method);  // DELETE: the body is empty
+    set(CURLOPT_POSTFIELDS, body.c_str());
+    set(CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+  }
   set(CURLOPT_WRITEFUNCTION, WriteBody);
   set(CURLOPT_WRITEDATA, &sink);
   set(CURLOPT_TIMEOUT, timeout_s);

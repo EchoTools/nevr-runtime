@@ -19,6 +19,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -119,13 +120,24 @@ inline const char* OutcomeName(Outcome o) {
   return "unknown";
 }
 
+/// Whether a platform looks a canvas up by the actor's name (the Quest's CComponentHandle<CCanvasUICS>::Find, which finds
+/// the actor in the gamespace or the ones below it): `bool FindCanvasByName(uintptr_t gs, uint64_t actor, uintptr_t* cs,
+/// uint32_t* handle)`, true when the actor has a canvas.
+template <typename P, typename = void>
+struct FindsCanvasByName : std::false_type {};
+template <typename P>
+struct FindsCanvasByName<P, std::void_t<decltype(std::declval<P&>().FindCanvasByName(
+                                uintptr_t{}, uint64_t{}, static_cast<uintptr_t*>(nullptr), static_cast<uint32_t*>(nullptr)))>>
+    : std::true_type {};
+
 /// Writes `request` through the platform `p`, which provides:
 ///   uintptr_t Game();                                          the game object, 0 before there is one
 ///   uintptr_t GameSpace(uintptr_t game, uint64_t index);       the index-th gamespace, 0 past the last
 ///   bool Read(uintptr_t address, void* out, size_t length);    a read that can refuse
 ///   bool FindCanvas(uintptr_t gs, uint64_t ident, uintptr_t* cs, uint32_t* handle);   the actor's canvas component
 ///   bool SetText(uintptr_t cs, uint32_t handle, uint64_t element, const char* text);  true when the element exists
-/// Game thread only: the canvas component is the UI's own state.
+/// or, in place of Read and FindCanvas, FindCanvasByName (above). Game thread only: the canvas component is the UI's own
+/// state.
 template <typename Platform>
 inline Outcome Apply(Platform& p, const Request& request) {
   if (CheckRequest(request) != Check::Ok) return Outcome::Refused;
@@ -134,13 +146,21 @@ inline Outcome Apply(Platform& p, const Request& request) {
   for (size_t i = 0; i < kMaxGameSpaces; ++i) {
     const uintptr_t gs = p.GameSpace(game, i);
     if (gs == 0) break;
-    uint64_t index = 0;
-    if (!FindActorIndex(p, gs, request.target.actor, &index)) continue;
-    uintptr_t cs = 0;
-    uint32_t handle = 0;
-    if (!p.FindCanvas(gs, kActorIdentBase | index, &cs, &handle) || cs == 0) return Outcome::NoCanvas;
-    return p.SetText(cs, handle, request.target.element, request.text.c_str()) ? Outcome::Written
-                                                                              : Outcome::NotWritten;
+    if constexpr (FindsCanvasByName<Platform>::value) {
+      uintptr_t cs = 0;
+      uint32_t handle = 0;
+      if (!p.FindCanvasByName(gs, request.target.actor, &cs, &handle) || cs == 0) continue;
+      return p.SetText(cs, handle, request.target.element, request.text.c_str()) ? Outcome::Written
+                                                                                : Outcome::NotWritten;
+    } else {
+      uint64_t index = 0;
+      if (!FindActorIndex(p, gs, request.target.actor, &index)) continue;
+      uintptr_t cs = 0;
+      uint32_t handle = 0;
+      if (!p.FindCanvas(gs, kActorIdentBase | index, &cs, &handle) || cs == 0) return Outcome::NoCanvas;
+      return p.SetText(cs, handle, request.target.element, request.text.c_str()) ? Outcome::Written
+                                                                                : Outcome::NotWritten;
+    }
   }
   return Outcome::NoActor;
 }

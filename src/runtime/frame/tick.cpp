@@ -44,6 +44,8 @@
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/patch/invite_answer_apply.h"
+#include "runtime/patch/menu_friends_avatars.h"
+#include "runtime/patch/menu_friends_pack.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
 #include "runtime/patch/ui_text_writer.h"
@@ -169,6 +171,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
         const unsigned long loop = GameLoopThreadId();
         // #1278: the invite answers become texts first, so the writer below can write them in the same frame.
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_invite_apply::OnFrame();
+        // #1535: the FRIENDS panel posts its texts and applies its pictures before the writer below runs.
+        if (loop != 0 && loop == GetCurrentThreadId()) nevr_menu_friends_pack::OnFrame();
+        if (loop != 0 && loop == GetCurrentThreadId()) nevr_menu_friends_avatars::OnFrame();
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_ui_text::OnFrame();
     }
 

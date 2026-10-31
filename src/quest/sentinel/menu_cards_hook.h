@@ -45,6 +45,13 @@ inline constexpr unsigned long long kBandMax = 140000;
 // libr15 load base. True only when the slot holds the thunk.
 bool Install() noexcept;
 
+// The FRIENDS panel's pictures (#1535, src/quest/friends): a finished read of any buffer of `name`, `size` bytes, goes to
+// the server first; it returns true when it wrote its picture over the game's bytes (same size, in place), and the
+// delivery then goes on to the game untouched otherwise. nullptr (the default) serves nothing. Set once, before the game
+// reads a picture.
+using PictureServer = bool (*)(std::uint64_t name, unsigned char* buffer, std::uint64_t size) noexcept;
+void SetPictureServer(PictureServer server) noexcept;
+
 // Test support: arms the handler without touching a GOT slot, with the pin the test chooses ("" = unset) and the address
 // of the 8-byte slot that holds the memory context pointer (nullptr = the game has no context).
 void ArmForTest(const char* pinHex, void* const* contextSlot) noexcept;

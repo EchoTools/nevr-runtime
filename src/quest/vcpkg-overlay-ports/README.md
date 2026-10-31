@@ -9,3 +9,8 @@ makes `TokenNames` a `constexpr const char* const` array; its only use is `opera
 
 The overlay is read through `src/quest/vcpkg-configuration.json`, so only the Quest build uses it. When the pinned
 vcpkg moves yaml-cpp, re-copy the port files and re-run `just check-android-static-init`.
+
+`astc-encoder/` is Arm's ASTC encoder 5.2.0 (Apache-2.0), the core library only: its own CMake installs the command-line
+tools and the shared library, never the static core, so the portfile builds the static core (NEON on arm64) and installs
+it and the astcenc header with a small CMake config (`unofficial-astcenc::astcenc`). The Quest friends panel (#1535) encodes
+friends' pictures with it: the Quest stores its textures as ASTC 8x8, with no uncompressed format among its textures.

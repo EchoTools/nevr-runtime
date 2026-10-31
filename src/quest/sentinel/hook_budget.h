@@ -35,6 +35,7 @@ inline constexpr std::size_t kGrowthHeadroom = 32;
 
 inline constexpr HookBudgetRow kHookBudget[] = {
     {"diag/hwdump_install.cpp", 18, 0},
+    {"friends/friends_hooks_quest.cpp", 3, 0},
     {"integration/dlopen_hook.cpp", 1, 0},
     {"invite/wizard_metric_hook.cpp", 1, 0},
     {"login/login_hook.cpp", 1, 1},

@@ -1,0 +1,13 @@
+{
+  "name": "astc-encoder",
+  "version": "5.2.0",
+  "description": "Arm's ASTC texture encoder, the core library only (static, NEON on arm64): the Quest friends panel encodes friends' pictures with it.",
+  "homepage": "https://github.com/ARM-software/astc-encoder",
+  "license": "Apache-2.0",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    }
+  ]
+}

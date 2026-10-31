@@ -1,4 +1,5 @@
 #include "runtime/patch/invite_choice_hook.h"
+#include "runtime/patch/menu_friends_pack.h"
 
 #include <windows.h>
 
@@ -66,6 +67,8 @@ void Observe(std::uint64_t space, std::uint64_t eventAddress) {
 }
 
 std::uint64_t SendComponentEventHook(std::uint64_t space, std::uint64_t event, std::uint64_t flags) {
+  // #1535: the FRIENDS panel sees every event before the game, and may rewrite one it owns (a row click opens the profile).
+  nevr_menu_friends_pack::OnComponentEvent(space, event);
   if (event != 0) {
     try {
       Observe(space, event);

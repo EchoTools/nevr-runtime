@@ -36,6 +36,7 @@
 #include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
+#include "quest/friends/friends_quest.h"
 #include "quest/invite/invite_run.h"
 #include "quest/login/login_hook.h"
 #include "quest/net/curl_ws_connector.h"
@@ -262,6 +263,8 @@ void StartInviteService(const nevr_quest::ResolvedConfig& cfg) {
   inputs.token = &InviteToken;
   inputs.log = &InviteLog;
   nevr_quest_invite::Start(std::move(inputs));
+  // The FRIENDS panel's requests (friend list, profiles, unfriend, avatars) go to the same service with the same token.
+  nevr_quest_friends::SetService({cfg.httpUri.text, &InviteToken});
 }
 
 // --- post-load actions ---------------------------------------------------------------------------
@@ -601,6 +604,9 @@ class ProductionSteps final : public Steps {
   bool InstallMenuCards() override {
     const bool ok = nevr_quest::integration::InstallMenuCardsHook();
     detail_ = ok ? "ok" : "got_hook_refused";
+    // The FRIENDS panel (#1535): its canvases and tables come through the hook just installed; the rest of it (pictures
+    // set, events, texts, pictures) installs here and logs its own outcome.
+    if (ok) nevr_quest_friends::InstallFriendsPanel();
     return ok;
   }
 

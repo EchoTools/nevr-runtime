@@ -12,6 +12,7 @@
       ]
     },
     "yaml-cpp",
+    "astc-encoder",
     "zstd",
     "zlib"
   ]

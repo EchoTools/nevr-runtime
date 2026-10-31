@@ -15,6 +15,8 @@
 #include "runtime/scenario/scenario_control.h"
 #endif
 #include "runtime/patch/xpid_patch.h"
+#include "runtime/patch/menu_friends_pack.h"
+#include "runtime/patch/menu_friends_avatars.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/credits_block.h"
@@ -359,6 +361,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   ArmServiceRedirects();
   SetResourceOverrideFatalLineSink(&WriteCrashRecordLine);
   InstallResourceOverride();
+  // #1535: the FRIENDS panel (its pictures set, the menu transforms, AddPackage) and its avatars.
+  nevr_menu_friends_pack::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
+  nevr_menu_friends_avatars::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // Early-detect -server before auth — full CLI parse happens below.
   // The token_auth MODULE needs to know server mode: a server with auth.password skips the device-code flow, one

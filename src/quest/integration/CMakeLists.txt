@@ -41,6 +41,23 @@ target_link_libraries(nevr_quest_plugin PUBLIC nevr::plugin_sdk nevr_quest_confi
 # Hidden visibility: linked into the sentinel, nothing here may become an export (tests/quest TestExportAllowlist).
 target_compile_options(nevr_quest_plugin PRIVATE -Wall -Wextra -Werror -fvisibility=hidden -fvisibility-inlines-hidden)
 
+# #1535, #1599: the FRIENDS panel on the Quest: the panel logic the PC runs (src/runtime/patch/menu_friends_*.cpp) over the
+# Quest's platform (src/quest/friends). The hooks unit holds callback thunks, so it is built without exceptions; the rest
+# contains its own failures.
+find_package(unofficial-astcenc CONFIG REQUIRED)
+add_library(nevr_quest_friends STATIC
+  ../friends/friends_platform_quest.cpp
+  ../friends/friends_hooks_quest.cpp
+  ../../runtime/patch/menu_friends_pack.cpp
+  ../../runtime/patch/menu_friends_profile.cpp
+  ../../runtime/patch/menu_friends_avatars.cpp)
+set_source_files_properties(../friends/friends_hooks_quest.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+target_include_directories(nevr_quest_friends PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+target_include_directories(nevr_quest_friends PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
+target_link_libraries(nevr_quest_friends PUBLIC nevr_quest_got_hook nevr_quest_token_auth nevr_quest_social nevr::plugin_sdk
+  PRIVATE unofficial-astcenc::astcenc zstd::libzstd ZLIB::ZLIB nlohmann_json::nlohmann_json)
+target_compile_options(nevr_quest_friends PRIVATE -Wall -Wextra -Werror -fvisibility=hidden -fvisibility-inlines-hidden)
+
 add_library(nevr_quest_integration STATIC
   ctor_sequence.cpp
   libr15_attach_step.cpp
@@ -68,6 +85,7 @@ target_link_libraries(nevr_quest_integration PUBLIC
   nevr_quest_token_auth
   nevr_quest_hwdump
   nevr_quest_invite
+  nevr_quest_friends
   nlohmann_json::nlohmann_json)
 # Hidden visibility: linked into the sentinel, nothing here may become an export
 # (tests/quest TestExportAllowlist).
