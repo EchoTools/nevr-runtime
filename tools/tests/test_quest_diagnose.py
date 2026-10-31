@@ -33,7 +33,7 @@ ZIP_FILES = {
     "verdict.txt", "device.txt", "package.txt", "installer_version.txt", "launch.txt", "logcat.txt",
     "logcat_before_launch.txt", "listings/readyatdawn.txt", "listings/readyatdawn_data.txt", "listings/media.txt",
     "listings/media_files.txt", "listings/media_files_data.txt", "listings/media_asset_patches.txt",
-    "listings/android_data_files.txt", "sentinel/nevr-sentinel.log", "sentinel/pull_results.txt",
+    "listings/android_data_files.txt", "sentinel/nevr-sentinel.log", "sentinel/nevr-sentinel.session-1.log", "sentinel/pull_results.txt",
     "sentinel/nevr-crashes/crash-1.txt", "sentinel/nevr-crashes/crash-1.dmp",
 }
 
@@ -52,7 +52,12 @@ printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
 has_dir() { [[ ":$FAKE_DIRS:" == *":$1:"* ]]; }
 case "$*" in
   "pull "*)
+    if [[ -n "${FAKE_NO_MEDIA_LOGS:-}" && "$2" == */Android/media/* ]]; then echo "adb: error: failed to stat remote object '$2': No such file or directory"; exit 1; fi
     case "$2" in
+      */nevr-sentinel.session-*.log)
+        mkdir -p "$(dirname "$3")"
+        printf '{"event":"sentinel_ctor","account":"%s","session":"previous"}\n' "$FAKE_EMAIL" > "$3"
+        echo "1 file pulled"; exit 0 ;;
       */nevr-sentinel.log)
         if [[ -n "${FAKE_NO_SENTINEL_LOG:-}" ]]; then echo "adb: error: failed to stat remote object '$2': No such file or directory"; exit 1; fi
         mkdir -p "$(dirname "$3")"
@@ -65,6 +70,7 @@ case "$*" in
         echo "2 files pulled"; exit 0 ;;
       *) echo "unexpected pull $2" >&2; exit 1 ;;
     esac ;;
+  "shell ls "[!-]*) printf 'nevr-sentinel.log\nnevr-sentinel.session-1.log\nnevr-crashes\nconfig.yaml\n' ;;
   "shell getprop ro.serialno") echo "$FAKE_HWSERIAL" ;;
   "shell getprop ro.product.model") echo "Quest 2" ;;
   "shell getprop ro.build.display.id") echo "SQ3A.220605.009.A1.TEST" ;;
@@ -282,7 +288,24 @@ class DiagnoseCases:
         data, _ = self.members()
         self.assertFalse([n for n in data if "device_login" in n], sorted(data))
         pulls = [c for c in self.calls() if c.startswith("pull ")]
-        self.assertEqual(sorted(p.split()[1] for p in pulls), [f"{FILES}/nevr-crashes", f"{FILES}/nevr-sentinel.log"])
+        # The runtime's folder under Android/media is read first; the Android/data folder is not touched when it answers.
+        self.assertEqual(sorted(p.split()[1] for p in pulls),
+                         [f"{MEDIA}/files/nevr-crashes", f"{MEDIA}/files/nevr-sentinel.log",
+                          f"{MEDIA}/files/nevr-sentinel.session-1.log"])
+        data, _ = self.members()
+        self.assertIn("sentinel/nevr-sentinel.session-1.log", data)
+        self.assertIn(b"<email>", data["sentinel/nevr-sentinel.session-1.log"])
+
+    def test_the_android_data_folder_is_the_fallback_for_the_log_and_the_crashes(self):
+        result = self.run_script(FAKE_NO_MEDIA_LOGS="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        pulls = [c.split()[1] for c in self.calls() if c.startswith("pull ")]
+        self.assertEqual(pulls[:2], [f"{MEDIA}/files/nevr-sentinel.log", f"{FILES}/nevr-sentinel.log"])
+        self.assertIn(f"{FILES}/nevr-crashes", pulls)
+        self.assertIn(f"{FILES}/nevr-sentinel.session-1.log", pulls)
+        data, _ = self.members()
+        self.assertIn("sentinel/nevr-sentinel.log", data)
+        self.assertIn("sentinel/nevr-crashes/crash-1.txt", data)
 
     def test_the_launch_is_one_clean_launch_in_order(self):
         result = self.run_script()

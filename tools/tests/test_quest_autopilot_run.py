@@ -25,6 +25,7 @@ import work_root  # noqa: E402
 RUNNER = REPO / "tools/quest_autopilot_run.py"
 SERIAL = "1WMHH8XQ4R0123"
 FILES = "/sdcard/Android/data/com.readyatdawn.r15/files"
+MEDIA_FILES = "/sdcard/Android/media/com.readyatdawn.r15/files"
 ROUTE = f"{FILES}/autopilot/route.txt"
 START = f"{FILES}/autopilot/start"
 
@@ -158,7 +159,8 @@ class RunnerTest(unittest.TestCase):
                  "shell am force-stop com.readyatdawn.r15",
                  "shell am broadcast -a com.oculus.vrpowermanager.automation_disable"]
         self.assertEqual(calls[:len(order)], order)
-        self.assertEqual(calls[len(order)].split()[:2], ["pull", f"{FILES}/nevr-sentinel.log"])
+        self.assertEqual(calls[len(order)].split()[:2], ["pull", f"{MEDIA_FILES}/nevr-sentinel.log"])
+        self.assertEqual(len([c for c in calls if c.startswith("pull ")]), 1)  # the media folder answered
         self.assertEqual(self.pushed.read_text(), self.route.read_text())
         self.assertTrue(self.logcat_is_gone())
         records = self.records()
@@ -193,6 +195,14 @@ class RunnerTest(unittest.TestCase):
         run_dir = pathlib.Path(start["out"])
         self.assertIn("route_end", (run_dir / "logcat.txt").read_text())
         self.assertTrue((run_dir / "nevr-sentinel.log").exists())
+
+    def test_the_android_data_folder_is_the_fallback_for_the_sentinel_log(self):
+        p = self.go(LOAD + LOADED + SEAM + REGISTERED + START_LINE + STEPS + end_line(),
+                    env={"FAKE_FAIL": f"pull {MEDIA_FILES}"})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        pulls = [c.split()[1] for c in self.calls() if c.startswith("pull ")]
+        self.assertEqual(pulls, [f"{MEDIA_FILES}/nevr-sentinel.log", f"{FILES}/nevr-sentinel.log"])
+        self.assertTrue((pathlib.Path(self.last("run_start")["out"]) / "nevr-sentinel.log").exists())
 
     def test_a_burst_is_read_without_waiting_for_more_output(self):
         # The whole stream arrives at once and logcat then stays open and quiet; the run still ends at route_end.

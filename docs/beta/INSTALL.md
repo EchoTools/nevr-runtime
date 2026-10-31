@@ -80,7 +80,7 @@ files. Attach them by dragging them into the form:
 the picture setup changes: your graphics card and driver, the headset and its refresh rate, the render resolution and scale, and the game's
 graphics settings with what set them. A report about stutter, a low frame rate or a blurry picture is read against that line, so attach the log
 even when the problem does not look like a crash. On a Quest headset the same line is in `nevr-sentinel.log`, in the game's folder on the
-headset (`/sdcard/Android/data/com.readyatdawn.r15/files/`).
+headset (`/sdcard/Android/media/com.readyatdawn.r15/files/`; the Android/data files folder on a headset where that one is not writable). The log of the previous session is kept beside it as `nevr-sentinel.session-<number>.log`.
 
 **What these files contain:** your Discord account id, and file paths, which can include your Windows user
 name. They do not contain your saved sign-in or its tokens. A

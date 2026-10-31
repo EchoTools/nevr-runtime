@@ -282,8 +282,8 @@ after a crash, until the next start). No client log line carries it (the sentine
 and, because of the hook order above, the game's own); the server logs it at Info when it is
 verified (`evr_device_auth.go`, `DeviceAuthVerifyRpc`). A crash while a code is live can put it in
 a minidump: the sentinel's Breakpad handler writes dumps to the first writable of
-`/sdcard/Android/data/com.readyatdawn.r15/files/nevr-crashes`, the app-internal `files`
-directory and `/data/local/tmp` (`sentinel/sentinel.cpp`), and a dump holds process memory: the
+`/sdcard/Android/media/com.readyatdawn.r15/files/nevr-crashes`, `/sdcard/Android/data/com.readyatdawn.r15/files/nevr-crashes`, the app-internal `files`
+directory and `/data/local/tmp` (`sentinel/crash_dir.h`), and a dump holds process memory: the
 game's error block while it shows the code, library buffers (libcurl's request and response) and
 anything else. The client overwrites these copies when it is done with them: the board (on
 withdraw and on each publish), the hooks' stack copies and their record of the block, the flow's
