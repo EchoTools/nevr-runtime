@@ -34,10 +34,10 @@ def built_targets(code):
 
 def run_binaries(code):
     names = set(re.findall(r'bin="[^"]*/bin/(?:[A-Za-z0-9_-]+/)?(test_[A-Za-z0-9_]+)\.exe"', code))
-    for loop in re.findall(r"for test_name in ([^;]+); do", code):
-        names.update(loop.split())
+    for loop in re.findall(r"for (?:test_name|name) in ([^;]+); do", code):
+        names.update(word for word in loop.split() if word.startswith("test_"))
     for loop in re.findall(r"for bin in ([^;]+); do", code):
-        names.update(re.findall(r"/bin/(test_[A-Za-z0-9_]+)\.exe", loop))
+        names.update(re.findall(r"/bin/(?:[A-Za-z0-9_-]+/)?(test_[A-Za-z0-9_]+)\.exe", loop))
     return names
 
 
