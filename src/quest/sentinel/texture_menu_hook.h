@@ -18,7 +18,8 @@
  *                                              reads `graphics|msaa` (SR15GfxSettings+0x1c) and asks for that level.
  *   CEngine::CheckForResize()                  once per rendered frame, on the render thread. The handler runs the original and
  *                                              then, when a level other than the applied one was asked for, the engine's own
- *                                              rebuild: CVR::RefreshRTSize (the existing eye-size hook answers it with the new level)
+ *                                              rebuild: CVR::RefreshRTSize (the eye-size route answers it with the new level: the
+ *                                              reference input's RefreshRTSize hook when installed, else the game's own function)
  *                                              and CEngine::Resize, which recreates the swap chain, the render targets and the pass
  *                                              framebuffers.
  *
@@ -32,8 +33,10 @@
  * and read back at the next launch, before the swap chain is made (ResolveStart reads it, because the game delivers its settings
  * after that). The game's own saved slot (`msaa` in settings_mp_v2_quest.json) is not read: a settings file that never held the
  * setting reads 0, which is Very Low, and cannot say whether the player chose. A player who never chose starts at the default: the
- * configuration's graphics.texture_quality, Low for `stock`. The game's first delivery of its settings is changed to the marker's
- * level, or to that default when there is no marker, so the menu shows it. A marker always wins over the configuration.
+ * configuration's graphics.texture_quality, Low for `stock`; on the reference libr15 with a `stock` configuration it is the reference
+ * build's own start rule (its settings file's `msaa` index, default High), queued once as the marker. The game's first delivery of its
+ * settings is changed to the marker's level, or to that default when there is no marker, so the menu shows it. A marker always wins
+ * over the configuration.
  *
  * What the apply refuses, and why. It waits for the engine's ready flag and for the VR layer to be initialised and not
  * display-lost (CheckForResize itself and ApplyRuntimeGfxSettings test the same). It refuses for good when the engine's resize

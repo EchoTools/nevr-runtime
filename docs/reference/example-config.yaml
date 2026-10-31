@@ -469,8 +469,10 @@ telemetry:
 arena:
   # Round time in seconds. Overrides the game's "round_time" config value.
   # Absent: game default (typically 180.0), except on a server, where a public Arena
-  # session uses 480.0 (8:00). Other game types, private Arena and reads before any
-  # session keep the game default (#982).
+  # session uses 480.0 (8:00). The session's game type is stored from the session
+  # create and from the session start frame the game starts from, so the order the
+  # service sends them in does not matter. Other game types, private Arena and reads
+  # before any session keep the game default (#982).
   # Not a secret.
   # round_time: 300.0
 

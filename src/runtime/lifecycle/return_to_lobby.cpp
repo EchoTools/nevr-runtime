@@ -98,6 +98,11 @@ bool Configure(uint64_t ttlSeconds) {
   return armed;
 }
 
+uint64_t HoldTtlMs() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_policy.TtlMs();
+}
+
 void Request(PVOID pGame) {
   nevr_return_to_lobby_hold::RequestVerdict verdict;
   uint64_t ttlMs = 0;
