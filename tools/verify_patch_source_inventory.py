@@ -62,7 +62,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 40
+EXPECTED_PATCH_SOURCE_COUNT = 41
 
 
 class InventoryError(Exception):
