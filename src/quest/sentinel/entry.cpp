@@ -163,6 +163,7 @@ bool InstallPermissionWaitHook() noexcept {
     // says whether it went in; a refused install leaves the game's QUIT as it is.
     nevr_quest::quit::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
+    nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();
 }
 
