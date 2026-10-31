@@ -44,6 +44,24 @@ def tree_digest(root, skip=None):
     return h.hexdigest()
 
 
+REGEN_SCRIPT = """\
+import os, pathlib, re, subprocess, sys
+build_ninja, checkout = pathlib.Path(sys.argv[1]), sys.argv[2]
+env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+head = subprocess.run(["git", "-C", checkout, "rev-parse", "HEAD"], check=True, capture_output=True, text=True, env=env).stdout.strip()
+text = re.sub(r'(NEVR_GIT_COMMIT_FULL=..)[0-9a-f]{40}', lambda m: m.group(1) + head, build_ninja.read_text())
+build_ninja.write_text(text)
+"""
+
+
+def regenerate(build_dir):
+    """Run the configure step alone: the generator edge that rebuilds build.ninja, which reads the checkout's commit again
+    (what CMake does when build.ninja is older than a CMakeLists.txt). Returns what `ninja -n` printed before it ran."""
+    planned = subprocess.run(["ninja", "-C", str(build_dir), "-n"], check=True, capture_output=True, text=True).stdout
+    subprocess.run(["ninja", "-C", str(build_dir), "build.ninja"], check=True, capture_output=True)
+    return planned
+
+
 def pending_steps(build_dir):
     """The edges `ninja -n` would run, as the output names of its [n/m] lines."""
     out = subprocess.run(["ninja", "-C", str(build_dir), "-n"], check=True, capture_output=True, text=True).stdout
@@ -67,6 +85,8 @@ class SeedFixture(unittest.TestCase):
         (self.main / "src/a.c").write_text('#include "h.h"\nint a(void) { return VAL; }\n')
         (self.main / "src/c.c").write_text('#include "h.h"\nint c(void) { return VAL + 1; }\n')
         (self.main / "src/b.c").write_text("int a(void);\nint c(void);\nint main(void) { return a() - c() + 1; }\n")
+        (self.main / "CMakeLists.txt").write_text("project(fixture)\n")
+        (self.main / "regen.py").write_text(REGEN_SCRIPT)
         git(self.main, "init", "-q", "-b", "main")
         git(self.main, "add", "-A")
         git(self.main, "commit", "-q", "--no-gpg-sign", "-m", "init")
@@ -80,8 +100,11 @@ class SeedFixture(unittest.TestCase):
         commit = ""
         if self.COMMIT_DEFINE:
             commit = f' -DNEVR_GIT_COMMIT_FULL=\\"{git(self.main, "rev-parse", "HEAD").stdout.strip()}\\"'
-        # An output spelled as an absolute path, as CMake does for some custom commands.
+        # An output spelled as an absolute path, as CMake does for some custom commands. build.ninja has the generator
+        # edge CMake gives it: it is rebuilt when it is older than CMakeLists.txt, and the rebuild reads the commit again.
         (self.build / "build.ninja").write_text(
+            "rule regen\n  command = python3 " + f"{self.main}/regen.py build.ninja {self.main}\n  generator = 1\n"
+            f"build build.ninja: regen {self.main}/CMakeLists.txt\n"
             f"rule cc\n  command = cc -MD -MF $out.d -I{self.main}/inc{define} -c $in -o $out\n"
             "  depfile = $out.d\n  deps = gcc\n"
             f"rule cc_identity\n  command = cc -MD -MF $out.d -I{self.main}/inc{define}{commit} -c $in -o $out\n"
@@ -234,6 +257,8 @@ class CommitGuard(SeedFixture):
         self.assertEqual(result.status, "seeded", result)
         self.assertTrue(result.counts["configure_rerun"], result)
         self.assertEqual((self.wt_build() / "build.ninja").stat().st_mtime_ns, 0)
+        # The epoch mtime makes the configure the first thing the build does, and the configure reads the new commit.
+        self.assertIn("regen.py", regenerate(self.wt_build()))
         # b.o reads the commit; a.o's source differs from main's; app links both. c.o reads neither and is kept.
         self.assertEqual(pending_steps(self.wt_build())[0], sorted(["a.o", "app", "b.o"]))
 
