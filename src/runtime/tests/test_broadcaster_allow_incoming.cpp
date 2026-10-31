@@ -62,7 +62,7 @@ StandInCall g_call;
 constexpr std::uint64_t kStandInReturn = 0x0123456789ABCDEFull;
 
 // Stands in for CBroadcaster::Initialize: same 15 parameters, all recorded, a fixed return value.
-[[gnu::noinline]] std::uint64_t StandInInitialize(std::int64_t* self, std::uint64_t nameHash, std::int16_t port,
+[[gnu::noinline, gnu::noipa]] std::uint64_t StandInInitialize(std::int64_t* self, std::uint64_t nameHash, std::int16_t port,
                                                   std::uint32_t* mask, std::uint64_t p5, std::uint64_t p6,
                                                   std::uint64_t p7, std::uint64_t p8, std::uint64_t p9,
                                                   std::uint64_t p10, std::uint64_t p11, std::uint64_t p12,
@@ -97,7 +97,8 @@ TEST(BroadcasterAllowIncomingHook, TheDetourForcesBitZeroAndForwardsEveryParamet
       << "MinHook refused the stand-in: " << Hooking::LastAttachError();
 
   // Call through the stand-in's own address, which the hook now redirects to the detour.
-  BroadcasterInitializeFn target = reinterpret_cast<BroadcasterInitializeFn>(reinterpret_cast<void*>(&StandInInitialize));
+  BroadcasterInitializeFn volatile target =
+      reinterpret_cast<BroadcasterInitializeFn>(reinterpret_cast<void*>(&StandInInitialize));
   std::int64_t self = 0;
   std::uint32_t mask = 0x0806u;  // bits 1, 2 and 11 set, bit 0 (allow_incoming) clear, as the netconfig gives it
   const std::uint64_t ret = target(&self, 0xABCDu, static_cast<std::int16_t>(6719), &mask, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008,
