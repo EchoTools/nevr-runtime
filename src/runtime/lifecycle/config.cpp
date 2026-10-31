@@ -195,8 +195,8 @@ void ApplySessionTimestep(const std::string& gameType, const std::string& sessio
         nevr_server_timestep::ApplyStep(g_isServer != FALSE, rate.hz, stepField);
     if (w.outcome == StepOutcome::kNotServer) return;
     const bool failed = nevr_server_timestep::StepFailed(w.outcome);
-    const bool changed = w.outcome == StepOutcome::kSet && w.was != w.stepUs;
-    Log(failed ? EchoVR::LogLevel::Warning : (changed ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Debug),
+    // N122: a mode decision logs its outcome at Info even when the step was already that value.
+    Log(failed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
         "[NEVR.PATCH] session tick rate game_type=%s session=%s rate_hz=%u source=%s step_us=%u was_us=%llu "
         "outcome=%s%s",
         gameType.c_str(), sessionId.c_str(), static_cast<unsigned>(rate.hz),
