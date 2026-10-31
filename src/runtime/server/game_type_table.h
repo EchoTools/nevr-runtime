@@ -6,7 +6,10 @@
 // (LobbySessionSettings.Mode in its server/evr/gameserver_session_start.go), never a string. The telemetry header
 // (server/telemetry_game_type.cpp) and the bot rewrite (patch/server_bots.h) read it through this one table.
 
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <optional>
 #include <string>
 
 #include <nlohmann/json.hpp>
@@ -59,6 +62,28 @@ inline SessionGameType ReadGameType(const nlohmann::ordered_json& settings) {
     }
   }
   return out;
+}
+
+/// The fixed part of the service's GameServerSessionStart frame before its settings string: two GUIDs, player limit,
+/// entrant count, lobby type and a pad (patch/server_bots.h describes the layout). The settings JSON follows, ending
+/// in a NUL, and the entrants after it.
+inline constexpr size_t kSessionStartHeaderSize = 36;
+
+/// The game type a GameServerSessionStart frame carries in its settings, by name, or nullopt when the frame is too
+/// short, has no NUL-ended settings string, the settings are not a JSON object, or `gametype` is absent or not one
+/// of kGameTypes. It is the game type of the frame the runtime forwards to the game as the session's start, so the
+/// session's type can be stored from the same bytes the game starts from.
+inline std::optional<std::string> GameTypeOfSessionStart(const uint8_t* frame, size_t size) {
+  if (frame == nullptr || size <= kSessionStartHeaderSize) return std::nullopt;
+  const uint8_t* settings = frame + kSessionStartHeaderSize;
+  const void* nul = std::memchr(settings, 0, size - kSessionStartHeaderSize);
+  if (nul == nullptr) return std::nullopt;
+  const size_t settingsBytes = static_cast<size_t>(static_cast<const uint8_t*>(nul) - settings);
+  const nlohmann::ordered_json doc = nlohmann::ordered_json::parse(settings, settings + settingsBytes, nullptr, false);
+  if (!doc.is_object()) return std::nullopt;
+  const SessionGameType type = ReadGameType(doc);
+  if (type.name == "none" || type.name == "unknown") return std::nullopt;
+  return type.name;
 }
 
 }  // namespace nevr_game_type_table
