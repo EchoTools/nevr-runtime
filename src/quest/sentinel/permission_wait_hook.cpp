@@ -202,7 +202,9 @@ void RequestHandler(RequestThunk::Fn original, const char* const* names, std::ui
                            {"asked", static_cast<long long>(askCount)}, {"storage_needed", needed ? "yes" : "no"},
                            {"effect", std::strcmp(path, "none") == 0 ? "no permission to ask: no request is made"
                                       : ok ? "the request was made"
-                                           : "the request did not reach Java: the requester could not ask and the game's own request on this build returns at once"}});
+                                      : std::strcmp(path, "game") == 0
+                                          ? "the requester could not ask, so the game's own request ran instead and reached Java"
+                                          : "the request did not reach Java: the requester could not ask and the game's own request on this build returns at once"}});
     }
   }
   if (g_spent.exchange(true, std::memory_order_acq_rel)) return;  // only the boot request waits
