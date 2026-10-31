@@ -102,7 +102,7 @@ ldr  x16, [x16, #<slot offset in its page, scaled by 8>]
 br   x16
 ```
 
-For `lobby_full.join` (vaddr 0x1240ba8, slot 0): `0xd0012c90`, `0xf942a210`, `0xd61f0200`. `x16` (IP0) is the register the 16-byte
+For `lobby_full.join` (vaddr 0x1240ba8, slot 0): `0xd0012c90`, `0xf9432210`, `0xd61f0200`. `x16` (IP0) is the register the 16-byte
 patch already uses; the AAPCS64 lets a call site treat it as clobbered. The stub is position independent: `ADRP` and the `LDR`
 use only the site's own address and the slot's page, so a load bias changes nothing. The window shrinks from 16 to 12 bytes:
 no caller may branch to site+4..site+11 (the same obligation as today, over fewer bytes). `arm64_reloc.h`'s window constant
@@ -111,10 +111,19 @@ no caller may branch to site+4..site+11 (the same obligation as today, over fewe
 ### 4. Slots: the tail of `.bss`, one 8-byte slot per row, filled at run time
 
 libr15's writable `PT_LOAD` (vaddr 0x35f9eb0, `p_memsz` 0x1d8688 in the pinned file) ends at 0x37d2538, inside a page the
-linker already maps; nothing follows it. The patcher raises that segment's `p_memsz` (and `.bss`'s `sh_size`) so it ends at
-`roundup(0x37d2538, 64) + 8 * rows = 0x37d2570` (`p_memsz` 0x1d86c0; `p_filesz` and every file offset unchanged). The slot area is
+linker already maps (the page ends at 0x37d3000); nothing follows it. Other patches of this libr15 keep their own state words in
+the same slack right after the image end (the reference build's two at 0x37d2540 and 0x37d2560, the community patcher's latches
+at 0x37d2540, 0x37d2560 and 0x37d2570), so the patcher leaves `kSlotAreaGap` (0x100) bytes free and puts the slot area at
+`roundup(0x37d2538 + 0x100, 64) = 0x37d2640`. It raises that segment's `p_memsz` (and `.bss`'s `sh_size`) so it ends at
+`0x37d2640 + 8 * rows = 0x37d2670` (`p_memsz` 0x1d87c0; `p_filesz` and every file offset unchanged). The slot area is
 zero-initialised memory outside `GNU_RELRO` (which ends at 0x372c000), so a store to a slot needs no `mprotect` at all. Slot *i*
-is at `0x37d2540 + 8 * i`. A row's stub names its own slot; the credits pairs share one slot.
+is at `0x37d2640 + 8 * i`. A row's stub names its own slot; the credits pairs share one slot.
+
+**The input's own references.** The patcher refuses an input whose own code reaches the slot area (`slot_area_referenced`,
+naming the site and the address). It reads every executable `PT_LOAD` as A64 words, follows each `ADRP` near the slot area
+through the next 32 words (`ADD` immediate, `MOV`, and the base of load/store, `LDUR`/`STUR` and `LDP`/`STP`) and checks `ADR`
+on its own; an address within 16 bytes of the area's bytes is a reference. It reads code only. On the pinned stock file and both
+accepted reference files it finds none.
 
 **How a slot is found at run time.** There is no directory to read. For each row the sentinel computes `slot = base +
 row.slotVaddr` from the table and checks it three ways before it stores anything: (a) the three words live at the site are
@@ -340,7 +349,8 @@ Each is run once with the line it covers changed and must fail (the mutant disci
 2. **Patcher on a synthetic stock ELF** built in the test (two `PT_LOAD`, a note, `.bss`): the output differs from the input only
    in the stub words, the build-ID descriptor, `p_memsz` and `.bss`'s `sh_size` (a byte-diff test that lists every differing
    range); the output is identical across two runs; a wrong stock word, a wrong build ID, an already-patched input, a site
-   outside the text, and a growth that would overlap the next segment are each refused with the row's `id`.
+   outside the text, and a growth that would overlap the next segment are each refused with the row's `id`, and an input whose
+   own code forms an address in the slot area (each form the scan reads, and the window and width limits) is refused with the site.
 3. **Relocator, 3-word window**, on each row's real stock words, with the existing A64 interpreter (original window against the
    relocated trampoline far away); the leading `CBZ` of `CCanvasUICS::SetText` is the case that matters (`TheQuestSetTextPrologueRelocates`,
    which stays a relocator case though the label no longer needs the relocator).

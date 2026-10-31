@@ -16,7 +16,7 @@ namespace {
 using namespace nevr_quest::patch;
 
 constexpr std::uint64_t kJoinSite = 0x1240ba8;  // lobby_full.join, pinned vaddr
-constexpr std::uint64_t kSlotZero = 0x37d2540;  // slot 0 of the patched libr15
+constexpr std::uint64_t kSlotZero = 0x37d2540;  // the slot of the vector above: a codec vector, not the table's slot 0
 
 TEST(TheJoinStubIsTheAdrsReferenceVector) {
   Stub stub{};

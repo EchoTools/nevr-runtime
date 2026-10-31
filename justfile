@@ -2058,8 +2058,11 @@ test-quest-patcher json_include="": (quest-patcher json_include)
 # `signed_libr15` (docs/adr/0021 test 5): the lib/arm64-v8a/libr15.so extracted from the SIGNED APK of a repack; with it
 # SignedApkLibr15IsThePatchersOutput requires that file to equal the tool's output for the stock file byte for byte and to
 # carry the patched build ID. Without it that test is not run and the run says so by name.
+# `reference_libr15s` (#1737, row C8): the reference build's own patched libr15.so files, space-separated; with them
+# ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots patches each and requires its state words to stay clear of the
+# slot area. Without them that test is not run and the run says so by name.
 # Fail-close, including when the file is absent.
-test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patcher json_include)
+test-quest-patcher-pinned libr15 json_include="" signed_libr15="" reference_libr15s="": (quest-patcher json_include)
     #!/usr/bin/env bash
     set -euo pipefail
     libr15="{{ libr15 }}"; signed_libr15="{{ signed_libr15 }}"
@@ -2067,6 +2070,11 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patche
     [ -z "$signed_libr15" ] || [ -f "$signed_libr15" ] || { echo "test-quest-patcher-pinned: signed libr15.so not found: $signed_libr15" >&2; exit 1; }
     signed_arg=()
     if [ -n "$signed_libr15" ]; then signed_arg=("--signed-libr15=$signed_libr15"); fi
+    ref_arg=()
+    for f in {{ reference_libr15s }}; do
+        [ -f "$f" ] || { echo "test-quest-patcher-pinned: reference libr15.so not found: $f" >&2; exit 1; }
+        ref_arg+=("--reference-libr15=$f")
+    done
     out="build/quest-patcher"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $libr15" | sha256sum -c -
     scratch="$out/pinned-scratch"
@@ -2075,10 +2083,13 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patche
     g++ -std=c++17 -O1 -Wall -Wextra -Werror -Isrc -Isdk/include -pthread \
         src/quest/tests/libr15_patcher_pinned_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
         -o "$out/libr15_patcher_pinned_test"
-    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} | tee "$scratch/run.log"
+    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} ${ref_arg[@]+"${ref_arg[@]}"} | tee "$scratch/run.log"
     # With a signed file the test must have run and passed: a run that dropped it (SKIP) is not a pass of test 5.
     if [ -n "$signed_libr15" ]; then
         grep -qx 'PASS SignedApkLibr15IsThePatchersOutput' "$scratch/run.log" || { echo "test-quest-patcher-pinned: SignedApkLibr15IsThePatchersOutput did not run and pass" >&2; exit 1; }
+    fi
+    if [ -n "{{ reference_libr15s }}" ]; then
+        grep -qx 'PASS ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots' "$scratch/run.log" || { echo "test-quest-patcher-pinned: the reference-file test did not run and pass" >&2; exit 1; }
     fi
     echo "test-quest-patcher-pinned: the tool's output on the pinned libr15 is as the table says"
 
