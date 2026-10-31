@@ -1,5 +1,5 @@
 """A binary AndroidManifest.xml (Android's compiled XML, "AXML") built by hand, for the tests of
-tools/quest_apk_version.py.
+tools/quest_apk_version.py, tools/quest_apk_label.py and tools/quest_apk_rename_package.py.
 
 The layout is the one aapt2 writes (frameworks/base/libs/androidfw/include/androidfw/ResourceTypes.h):
 an XML document chunk holding a string pool, a resource map (one resource id per leading string: the id is
@@ -17,6 +17,7 @@ RES_VERSION_CODE = 0x0101021B
 RES_VERSION_NAME = 0x0101021C
 RES_VERSION_CODE_MAJOR = 0x01010576
 RES_MIN_SDK = 0x0101020C
+RES_LABEL = 0x01010001
 TYPE_STRING = 0x03
 TYPE_INT_DEC = 0x10
 TYPE_INT_HEX = 0x11
@@ -118,5 +119,30 @@ def build_manifest(version_code: int = 4987566, *, utf8: bool = True, version_na
         + _end_element(NO_INDEX, idx[root])
         + _end_ns(idx["android"], idx[ANDROID_NS])
         + trailing
+    )
+    return struct.pack("<HHI", 0x0003, 8, 8 + len(body)) + body
+
+
+def build_label_manifest(package: str, label: str, *, label_id: int = RES_LABEL, share_label: bool = False) -> bytes:
+    """A manifest with a UTF-16 string pool holding `package` once and `label` once:
+    <manifest package><application android:label="LABEL"/></manifest>, the label a raw string attribute that no other
+    attribute references (the shape tools/quest_apk_label.py edits in place). `label_id` is the resource id the map
+    gives the label attribute's name; `share_label` adds a second string attribute on <manifest> that references the same
+    pool string, so editing the label would rename that too. Both are for the refusal tests."""
+    strings = ["label", "android", ANDROID_NS, "manifest", "package", package, "application", label]
+    idx = {s: i for i, s in enumerate(strings)}
+    root_attrs = [_attr(NO_INDEX, idx["package"], idx[package], TYPE_STRING, idx[package])]
+    if share_label:
+        root_attrs.append(_attr(NO_INDEX, idx["label"], idx[label], TYPE_STRING, idx[label]))
+    app_attrs = [_attr(idx[ANDROID_NS], idx["label"], idx[label], TYPE_STRING, idx[label])]
+    body = (
+        string_pool(strings, False)
+        + resource_map([label_id])
+        + _start_ns(idx["android"], idx[ANDROID_NS])
+        + _start_element(NO_INDEX, idx["manifest"], root_attrs)
+        + _start_element(NO_INDEX, idx["application"], app_attrs)
+        + _end_element(NO_INDEX, idx["application"])
+        + _end_element(NO_INDEX, idx["manifest"])
+        + _end_ns(idx["android"], idx[ANDROID_NS])
     )
     return struct.pack("<HHI", 0x0003, 8, 8 + len(body)) + body
