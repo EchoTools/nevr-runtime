@@ -723,6 +723,15 @@ nlohmann::json ExpectStopLine(const std::wstring& stderr_file, const std::wstrin
 // What a client would have been shown, as the shim wrote it; empty when the child was shown nothing.
 std::string StopNoticeOf(const std::wstring& local) { return ReadAll((local + L"\\stop-notice.txt").c_str()); }
 
+// The notice decision a stopped run recorded: the `notice` field of its game_stop record (the console_notice record
+// that follows it carries no such field, #1533).
+std::string RecordedNotice(const std::vector<nlohmann::json>& records) {
+  for (auto it = records.rbegin(); it != records.rend(); ++it) {
+    if (it->value("event", "") == "game_stop") return it->value("notice", "");
+  }
+  return "";
+}
+
 void ExpectNoStopLine(const std::wstring& stderr_file, const char* label) {
   if (!StopLines(stderr_file).empty()) {
     std::fprintf(stderr, "scenario %s wrote a NEVR.STOP line though the runtime loaded\n", label);
@@ -927,7 +936,7 @@ int RunSuite() {
     ExpectHookedRecords(ReadHostRecords(dir), "runtime_absent", true);
     ExpectStopLine(stderr_file, dir, root, {true, 78, "runtime_absent", "nevr-runtime.dll is missing; path=", "game_stop"},
                    "missing-real-stop");
-    Require(!StopNoticeOf(dir).empty() && ReadHostRecords(dir).back().value("notice", "") == "shown",
+    Require(!StopNoticeOf(dir).empty() && RecordedNotice(ReadHostRecords(dir)) == "shown",
             "a client was not shown the notice before the host ended the game");
     std::printf("rendezvous test: [missing-real-stop] the host ended the game with exit code 78 and wrote one NEVR.STOP line\n");
   }
@@ -946,7 +955,7 @@ int RunSuite() {
     ExpectHookedRecords(records, "runtime_absent", true);
     ExpectStopLine(stderr_file, dir, root, {true, 78, "runtime_absent", "nevr-runtime.dll is missing; path=", "game_stop"},
                    "missing-real-stop-server");
-    Require(StopNoticeOf(dir).empty() && records.back().value("notice", "") == "suppressed_server_or_headless",
+    Require(StopNoticeOf(dir).empty() && RecordedNotice(records) == "suppressed_server_or_headless",
             "a -server run was shown a notice");
     std::printf("rendezvous test: [missing-real-stop-server] exit code 78, one NEVR.STOP line, no dialog\n");
   }
