@@ -32,9 +32,9 @@ The build defaults are the shipped behaviour; none of them depends on a config o
 - `ec` is on with the words `types=VPTO equip hide` (`Q15T_EC_DEFAULT_WORDS`), and `ecfx` is on (`Q15T_ECFX_DEFAULT_ON`),
   with no switch file. A switch file in the plugin data directory still overrides the words.
 - Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).
-- The menu gate (`Q15T_GATE_LINK`) answers "no kind of headset" only to the 20 script libraries of the combat menu entries
-  (`Q15T_LINK_GATE_LIBS`); the other 27 libraries that bind the headset-type expression, the lobby script among them, get the real
-  answer. Each library's first bind logs `headset bind lib=<file> answered=<real|not-a-Quest>`. A `gate_libs.txt` in the plugin data
+- The menu gate (`Q15T_GATE_LINK`) answers "no kind of headset" only to the 21 script libraries of the combat entries
+  (`Q15T_LINK_GATE_LIBS`): the 20 of the combat menu and the lobby script (`libf808c072bb49da47.so`, which loads the lobby's combat
+  wing); the other 26 libraries that bind the headset-type expression get the real answer. Each library's first bind logs `headset bind lib=<file> answered=<real|not-a-Quest>`. A `gate_libs.txt` in the plugin data
   directory (first line: `all`, `none`, or comma/space separated library file names) replaces the list.
 - The clock hook logs the levels the game asks for and forwards them unchanged. `args: {clock: raise}` in a `plugins:` entry of
   `config.yaml` raises the CPU and GPU levels to at least 4 (`src/quest/plugins/q15t/src/plugin_args.cpp` reads the flat JSON of string values).
