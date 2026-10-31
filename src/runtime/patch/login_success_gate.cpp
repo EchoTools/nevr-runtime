@@ -1,5 +1,6 @@
 #include "runtime/patch/login_success_gate.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <array>

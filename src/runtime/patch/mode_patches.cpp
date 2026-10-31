@@ -672,8 +672,8 @@ VOID PatchEnableOffline() {
   static_assert(sizeof(titlePatch) == OFFLINE_TITLE_SIZE, "OFFLINE_TITLE patch size mismatch");
   apply("title", OFFLINE_TITLE, titlePatch, sizeof(titlePatch));
 
-  // Force transaction service to load (the second conditional jump to NOP; the first, at 0x17F817, is
-  // the LogInSuccess detour in patch/login_success_gate.cpp, installed by boot.cpp)
+  // Force transaction service to load (the second conditional jump to NOP; the first branch, at 0x17F817, is not
+  // patched: the LogInSuccess detour in patch/login_success_gate.cpp, installed by boot.cpp, forces the bit it tests)
   const BYTE nopConditionalJump[] = {0x90, 0x90};  // 2x NOP
   static_assert(sizeof(nopConditionalJump) == OFFLINE_TRANSACTION_SIZE, "OFFLINE_TRANSACTION patch size mismatch");
   apply("transaction_2", OFFLINE_TRANSACTION_2, nopConditionalJump, sizeof(nopConditionalJump));
