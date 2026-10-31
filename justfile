@@ -540,6 +540,19 @@ build-quest-q15t: configure-android
         || { echo "build-quest-q15t: libq15t.so does not carry the shipped defaults (q15t-config marker)" >&2; exit 1; }
     (cd "$out" && sha256sum libq15t.so libq15t_early.so)
 
+# The combat script libraries: each library in the libsrc directory NEVR_COMBAT_LIBSRC names (no default; no line of it is
+# copied into this repository) is compiled with the NDK clang and checked with the plugin static-init check. Writes
+# build/quest-combat-libs/: lib<hash16>.so per library and SHA256SUMS. The rows that link libr15 take the stock file from the store APK.
+build-quest-combat-libs libsrc=env("NEVR_COMBAT_LIBSRC", "") store_apk=env("NEVR_STORE_APK", ""):
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -n "{{ libsrc }}" ] || { echo "build-quest-combat-libs: NEVR_COMBAT_LIBSRC names no libsrc directory" >&2; exit 1; }
+    [ -n "{{ store_apk }}" ] || { echo "build-quest-combat-libs: NEVR_STORE_APK names no store APK" >&2; exit 1; }
+    [ -n "${ANDROID_NDK_HOME:-}" ] || { echo "build-quest-combat-libs: ANDROID_NDK_HOME is not set" >&2; exit 1; }
+    llvm="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+    python3 -I tools/build_quest_combat_libs.py --libsrc "{{ libsrc }}" --store-apk "{{ store_apk }}" --out build/quest-combat-libs \
+        --ndk-clang "$llvm/aarch64-linux-android21-clang++" --llvm-bin "$llvm" --check-script tools/check_quest_static_init.sh
+
 # One unattended autopilot run on the attached Quest (tools/quest_autopilot_run.py --help): pushes the route, starts the
 # game with the proximity sensor overridden, waits for route_end, and records the run under the work root.
 quest-autopilot-run route *args:
