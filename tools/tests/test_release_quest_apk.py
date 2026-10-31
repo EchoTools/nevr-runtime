@@ -247,17 +247,36 @@ class RecipesRun(unittest.TestCase):
         self.assertNotIn("repack ", "\n".join(self.calls_made()))
 
     def test_the_combat_recipe_writes_the_release_name_under_the_combat_directory(self):
+        self.use_pack_stub()
         result = self.just("release-quest-combat-apk", "v1.2.3", PLUGINS, str(self.store))
         self.assertEqual(result.returncode, 0, result.stderr)
         out = self.dir / "build" / "quest-release" / "v1.2.3" / "combat"
         name = "nevr-runtime-v1.2.3-quest.apk"
         apk = (out / name).read_bytes()
-        self.assertEqual(apk, f"signed plugin=[{PLUGINS}] version=1.2.3".encode(), "the combat APK carries its plugins")
+        self.assertEqual(apk, b"signed", "the stand-in repack's output, copied under the release name")
         self.assertEqual((out / f"{name}.sha256").read_text(), f"{SHA(apk)}  {name}\n", "sha256sum format, of the release name")
         self.assertEqual(result.stdout, f"{SHA(apk)}  {name}\n")
         self.assertEqual(sorted(p.name for p in out.iterdir()), sorted([name, f"{name}.sha256", "loader", "repack"]))
         self.assertFalse((self.dir / "build" / "quest-release" / "v1.2.3" / "variant").exists())
         self.assertFalse((self.dir / "build" / "quest-release" / "v1.2.3" / name).exists())
+
+    def test_the_combat_recipe_names_libq15t_early_as_the_early_plugin_and_nothing_else_does(self):
+        self.use_pack_stub()
+        self.assertEqual(self.just("release-quest-combat-apk", "v1.2.3", PLUGINS, str(self.store)).returncode, 0)
+        self.assertEqual(self.variant().returncode, 0)
+        self.assertEqual(self.release().returncode, 0)
+        repack = [c for c in self.calls_made() if c.startswith("repack ")]
+        self.assertEqual(repack[0], f"repack apk={self.store} plugin={PLUGINS} version=1.2.3 "
+                         "others=[|||libq15t_early.so|] pack= pack_meta=")
+        self.assertEqual(repack[1], f"repack apk={self.store} plugin={PLUGINS} version=1.2.3 others=[||||] pack= pack_meta=")
+        self.assertEqual(repack[2], f"repack apk={self.store} plugin= version=1.2.3 others=[||||] pack= pack_meta=")
+
+    def test_the_combat_recipe_with_a_pack_passes_the_early_plugin_with_the_pack(self):
+        self.use_pack_stub()
+        result = self.just("release-quest-combat-apk", "v1.2.3", PLUGINS, str(self.store), "/p/pack.zip", "/p/meta.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"repack apk={self.store} plugin={PLUGINS} version=1.2.3 others=[|||libq15t_early.so|] "
+                      "pack=/p/pack.zip pack_meta=/p/meta.json", self.calls_made())
 
     def test_the_combat_recipe_refuses_a_non_release_tag_and_a_missing_plugin_in_its_own_name(self):
         for tag, plugins, want in (
