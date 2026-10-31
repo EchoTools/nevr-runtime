@@ -222,6 +222,12 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
     echo "Renamed original -> $out/libovrplatformloader_orig.so (soname patched)"
     readelf -d "$out/libovrplatformloader_orig.so" | grep -i soname
 
+# The base of a reference-build APK (#1737): copies the reference APK `apk` to `out` with its package renamed from com.readyatdawn.afk
+# to com.readyatdawn.r15 (the manifest's UTF-16 string, 5 strings in libr15.so, 2 in libassetpatch.so; counts asserted, META-INF dropped),
+# then `just android-repack-apk <out>` repacks it. tools/quest_apk_rename_package.py says what it refuses; it logs one JSON line.
+quest-reference-base apk out:
+    python3 -I tools/quest_apk_rename_package.py rename --apk "{{ apk }}" --out "{{ out }}"
+
 # Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
 # forwarding to the renamed original. Produces a zipaligned APK, signed with the Quest key in pass, and
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
