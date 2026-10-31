@@ -72,10 +72,16 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("cannot start a user scope", body)
         self.assertIn("timed out after 900s", body)
         self.assertIn('if [[ ! -f "$bin" ]]; then', recipe)
-        self._run_test_scenarios(body)
+        self._run_test_scenarios(body, recipe)
 
-    def _run_test_scenarios(self, body):
-        """Run the real run_test body against stub wine, timeout and systemd-run programs."""
+    def _run_test_scenarios(self, body, recipe):
+        """Run the real run_test body and the recipe's closing summary against stub wine, timeout and systemd-run programs.
+
+        run_test records a failing binary and returns, so the loop goes on (#1228); the summary after the
+        last binary is what fails the gate, naming each failure and exiting 1.
+        """
+        summary = re.search(r'^    if \[\[ "\$\{#test_failures\[@\]\}" -gt 0 \]\]; then\n.*?^    fi\n', recipe, re.S | re.M)
+        self.assertIsNotNone(summary, "test-auth-unit no longer ends with the failure summary (#1228)")
         bash = shutil.which("bash")
         true_bin = shutil.which("true")
         with tempfile.TemporaryDirectory(dir="/var/tmp") as tmp:
@@ -117,14 +123,16 @@ class ReleaseContractTest(unittest.TestCase):
                 stub_wine(wine_status)
                 stub_systemd_run(mode)
                 env = dict(os.environ, PATH=str(tmpdir))
-                result = subprocess.run([bash, "-c", body + '\nrun_test x.exe; echo reached'],
+                result = subprocess.run([bash, "-c", "test_failures=()\n" + body + '\nrun_test x.exe\n' + summary.group(0) + 'echo reached'],
                                         env=env, capture_output=True, text=True)
                 read = lambda name: (tmpdir / name).read_text()
                 return result, read("wine_ran.txt"), read("timeout_args.txt"), read("systemd_run_args.txt")
 
-            # A working systemd-run: capped, bounded by timeout, and the wine status is the result.
+            # A working systemd-run: capped, bounded by timeout, and a failing binary fails the gate at the summary.
             failing, ran, targs, sargs = run(7, "works")
-            self.assertEqual(failing.returncode, 7, failing.stderr)
+            self.assertEqual(failing.returncode, 1, failing.stderr)
+            self.assertIn("test-auth-unit: FAIL \u2014 x.exe exited 7", failing.stderr)
+            self.assertIn("1 test binary(ies) failed: x.exe (exit 7)", failing.stderr)
             self.assertNotIn("reached", failing.stdout)
             self.assertIn("ran", ran)
             self.assertIn("MemoryMax=4G", sargs)
@@ -135,18 +143,19 @@ class ReleaseContractTest(unittest.TestCase):
             self.assertIn("reached", passing.stdout)
             self.assertIn("ran", ran)
             killed, _, _, _ = run(137, "works")
-            self.assertEqual(killed.returncode, 137, killed.stderr)
+            self.assertEqual(killed.returncode, 1, killed.stderr)
             self.assertIn("memory cap exceeded (MemoryMax=4G)", killed.stderr)
             timed_out, _, _, _ = run(124, "works")
-            self.assertEqual(timed_out.returncode, 124, timed_out.stderr)
+            self.assertEqual(timed_out.returncode, 1, timed_out.stderr)
             self.assertIn("timed out after 900s", timed_out.stderr)
 
             # systemd-run missing, or present but unable to start a user scope: the test still runs, bounded by
-            # timeout, the fallback says so, and the result is the wine status, not the scope failure.
+            # timeout, the fallback says so, and the result is the wine status (a failure fails the gate at the
+            # summary), not the scope failure.
             for mode in ("absent", "broken"):
                 for status, message in ((7, None), (0, None), (124, "timed out after 900s")):
                     result, ran, targs, _ = run(status, mode)
-                    self.assertEqual(result.returncode, status, f"{mode}/{status}: {result.stderr}")
+                    self.assertEqual(result.returncode, 0 if status == 0 else 1, f"{mode}/{status}: {result.stderr}")
                     self.assertIn("ran", ran, f"{mode}/{status}: wine never ran")
                     self.assertIn("-k 10 900 wine x.exe", targs, f"{mode}/{status}: no time limit")
                     self.assertIn("cannot start a user scope", result.stderr)
