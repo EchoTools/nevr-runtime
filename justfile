@@ -1811,6 +1811,10 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/texture_quality_hook_test" -ldl
     timeout 120 "$out/texture_quality_hook_test"
+    # The reference libr15's eye-size route, pure half (#1737 C4): the RefreshRTSize body classifier, the reference start index's
+    # parse, the index-to-level map and the float truncation. No game, no hook.
+    "${cxx[@]}" -fno-exceptions src/quest/tests/refresh_eye_size_test.cpp -o "$out/refresh_eye_size_test"
+    timeout 120 "$out/refresh_eye_size_test"
     # The Texture Resolution control (#1012), pure half: the two settings documents rewritten in memory, the saved value read back,
     # the level <-> menu index mapping. Built with exceptions, like quest_config.cpp; no game header.
     "${cxx[@]}" -isystem "$out/attach_json_inc" src/quest/tests/texture_menu_test.cpp src/quest/sentinel/texture_menu.cpp \
