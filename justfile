@@ -1705,6 +1705,13 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/login_title_hook_test" -ldl
     timeout 120 "$out/login_title_hook_test"
+    # The login_host fallback (#1737 C7): the pure rules and the TString handler's fallback step, driven through the
+    # thunk entry with fakes, built as the sentinel builds the thunk unit (no exceptions).
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_fallback_test.cpp \
+        src/quest/redirect/tstring_thunks.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/login_fallback_test" -ldl
+    timeout 60 "$out/login_fallback_test"
     # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
     # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -c \
