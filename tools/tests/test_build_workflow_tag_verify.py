@@ -38,6 +38,18 @@ class TagBuildsSkipVerify(unittest.TestCase):
         self.assertEqual(step.count("if: "), 1, step)
         self.assertLess(step.index("if: github.ref_type"), step.index("run: just verify"))
 
+    def test_ndk_step_has_the_condition_of_verify(self) -> None:
+        # Verify is the only step of the build job that needs the NDK, so the step that sets it up carries Verify's
+        # condition, and sits between the build and Verify (#1770). The quest job has its own NDK step, later in the file.
+        match = re.search(r"^    - name: Set up the Android NDK\n(.*?)^      uses: \./\.github/actions/setup-ndk\n",
+                          self.text, re.S | re.M)
+        self.assertIsNotNone(match, "build.yml has no `Set up the Android NDK` step in the build job")
+        self.assertIn("if: github.ref_type != 'tag'", match.group(0))
+        build = self.text.index("\n    - name: Build\n")
+        verify = self.text.index("\n    - name: Verify\n")
+        self.assertLess(build, match.start())
+        self.assertLess(match.start(), verify)
+
 
 if __name__ == "__main__":
     unittest.main()
