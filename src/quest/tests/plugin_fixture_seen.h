@@ -14,7 +14,7 @@ struct FxSeen {
   const void* net_game;
   std::uint32_t game_state;
   std::uint64_t level_symbol;
-  const void* level_name;
+  const char* level_name;
   std::int32_t plugin_count_at_init;
   char first_plugin_name[32];
   char plugin_id[64];

@@ -3,10 +3,12 @@
 # release or package-dev APK; the variant recipe packages them (src/quest/plugins/q15t/README.md). Paths are relative to this file.
 set(Q15T_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
-# The 20 script libraries whose headset-type expression decides a combat menu entry on a Quest (the combat buttons, FIND COMBAT,
-# the combat mode card, the level select pages, the "combat allowed" prefab): the menu gate answers only these. Every other
-# script that binds the expression (47 libraries in all, the lobby script among them) gets the real answer. Comma separated file names.
-set(Q15T_LINK_GATE_LIBS "lib555db38933fef859.so,lib1da85b18cbad6297.so,lib4e984de06cafe2ab.so,lib2d5ebd0e1895f269.so,libcab86dd5921bafc7.so,lib5e311be23be97835.so,libbad7ce9b6c6df2cb.so,libf36316e246f2ca21.so,lib8325751e75df5860.so,lib18000621255c6ea5.so,lib1f28bd4fa7d724fb.so,lib3ded824fccc2bf6d.so,lib5ddc3dcdad4a3ed5.so,lib8515ab072bc095a8.so,libb56c58de2b68fc61.so,libb7882b9d804f86c1.so,libb8bd659eb6ed3927.so,libbc170a382fda5499.so,libd280bb8333ad45ed.so,libfb4ad3853db57943.so" CACHE STRING "Menu gate: the script libraries (file names, comma separated; 'all'; 'none') whose headset-type expression is told no kind of headset. A gate_libs.txt in the plugin data directory overrides it")
+# The 21 script libraries whose headset-type expression decides a combat entry on a Quest: the 20 of the combat menu (the combat
+# buttons, FIND COMBAT, the combat mode card, the level select pages, the "combat allowed" prefab) and the lobby script
+# (libf808c072bb49da47.so), whose two LoadLevel branch nodes read the expression's quest output to pick the lobby wing that is
+# loaded (a Quest gets the arena wing only; the Link answer takes the combat wing's pin). The menu gate answers only these. Every
+# other script that binds the expression (47 libraries in all) gets the real answer. Comma separated file names.
+set(Q15T_LINK_GATE_LIBS "lib555db38933fef859.so,lib1da85b18cbad6297.so,lib4e984de06cafe2ab.so,lib2d5ebd0e1895f269.so,libcab86dd5921bafc7.so,lib5e311be23be97835.so,libbad7ce9b6c6df2cb.so,libf36316e246f2ca21.so,lib8325751e75df5860.so,lib18000621255c6ea5.so,lib1f28bd4fa7d724fb.so,lib3ded824fccc2bf6d.so,lib5ddc3dcdad4a3ed5.so,lib8515ab072bc095a8.so,libb56c58de2b68fc61.so,libb7882b9d804f86c1.so,libb8bd659eb6ed3927.so,libbc170a382fda5499.so,libd280bb8333ad45ed.so,libfb4ad3853db57943.so,libf808c072bb49da47.so" CACHE STRING "Menu gate: the script libraries (file names, comma separated; 'all'; 'none') whose headset-type expression is told no kind of headset. A gate_libs.txt in the plugin data directory overrides it")
 option(Q15T_GATE_PERM "Gameplay (G1): the party-permissions expression stops refusing combat to a Quest headset. Source combat build: on. Kill file gate_perm.off" ON)
 option(Q15T_GATE_LINK "Menu gate: the headset-type expression is told a Link headset (the PC build's kind 4, not the Quest kind), so the menu scripts stop locking combat cards to a Quest (a caller-range answer, no code write)" ON)
 option(Q15T_GATE_BOTS "Gameplay (G6): the bot-body chooser stops picking the arena bot for a Quest headset. Installed only with levelname (the combat bot body is in the full global_mp). Source combat build: on. Kill file gate_bots.off" ON)

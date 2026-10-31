@@ -299,12 +299,21 @@ needs no edit. The APK's SHA-256 is the `.sha256` file beside it on the host (`d
 ## The Quest half of the train
 
 The Quest APK is built from the store game and signed with a key in `pass`, and the R2 credential is the publisher's, so no
-workflow can build or upload it and there is no self-hosted runner. The train publishes the GitHub release; a systemd user
-timer on the publisher's machine (`tools/systemd/nevr-quest-release.timer`, every 30 minutes, `Persistent=true` so a
-missed run is made up) runs `tools/quest_release_timer.py`, which finishes the release with no step by hand.
+workflow can build or upload it. The train publishes the GitHub release; a systemd user timer on the publisher's machine
+(`tools/systemd/nevr-quest-release.timer`, every minute, `Persistent=true` so a missed run is made up) runs
+`tools/quest_release_timer.py --probe` first. The probe makes one GitHub call and starts the run only when there is work: a
+draft with its loader asset uploaded, a published tag that is not done with fewer than three counted failures and none in the
+last 30 minutes, or no run started in the last 30 minutes. A run for a draft builds the APK while the signer runs
+(`build_apk`), polls the release every 10 seconds for up to 45 minutes (`await_published`), and on publication checks the
+APK's loader against the published asset (`verify_loader`) and that beta has not moved (`recheck_beta`), then runs
+`publish_apk` and the unchanged beta dispatch. Nothing is uploaded to R2 while the release is a draft, because the signer's
+`put-quest-apk` accepts only a published release. A draft that is deleted, or not published in 45 minutes, is recorded as
+`draft_abandoned` and left to the published path; its failures before its publication are not counted. The unit runs
+`tools/quest_release_timer.py --stage-draft`, which takes a qualifying draft or else the newest published tag.
 
-The timer takes the **newest published tag only**: a release that is not the newest when the timer first sees it is never
-built, because a later tag supersedes it. That is intended. A tag is built by hand (`--tag vX.Y.Z`) when it must be.
+The timer takes the **newest tag only**: the newest draft that qualifies (above), or else the newest published tag. A
+release that is not the newest when the timer first sees it is never built, because a later tag supersedes it. That is
+intended. A tag is built by hand (`--tag vX.Y.Z`) when it must be.
 
 It runs from its own **dedicated checkout** (`~/src/nevr-runtime-work/release-timer/checkout`, a detached worktree that
 `just install-quest-release-timer` makes). The unit fetches and moves that checkout to `origin/main` before every run,
@@ -314,7 +323,7 @@ points at another commit there (the rule of `tools/release_preflight.py`, which 
 refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted remove and restore commands,
 with the full object id, for each tag it lists.
 
-1. Lists the newest published `vX.Y.Z` release. A tag that has a `done` record in the log is left alone. A tag that has
+1. Takes the newest tag (above). A tag that has a `done` record in the log is left alone. A tag that has
    failed three times is not retried; the third failure couriers Spritz once, before the run exits 0. Nothing bonks the owner.
    `python3 tools/quest_release_timer.py --tag vX.Y.Z --reset-failures` (the tag is required) records `failures_reset` for that
    tag and does nothing else; only the failures after the newest reset count toward the three, and a skip note sent before it
