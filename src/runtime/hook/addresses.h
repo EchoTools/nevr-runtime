@@ -87,8 +87,8 @@ constexpr size_t OFFLINE_INCIDENTS_SIZE = 2;
 constexpr uintptr_t OFFLINE_TITLE = 0x17F77B;
 constexpr size_t OFFLINE_TITLE_SIZE = 2;
 
-/// Forces transaction service to load in offline mode (first patch)
-constexpr uintptr_t OFFLINE_TRANSACTION_1 = 0x17F817;
+/// Size of the offline transaction NOP (the second patch). The first, at 0x17F817, is the LogInSuccess detour
+/// (patch/login_success_gate.cpp).
 constexpr size_t OFFLINE_TRANSACTION_SIZE = 2;
 
 /// Forces transaction service to load in offline mode (second patch)

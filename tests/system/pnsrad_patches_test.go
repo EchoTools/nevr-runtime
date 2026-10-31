@@ -79,10 +79,10 @@ func TestPnsradPatches_EchoVRBinaryTargets(t *testing.T) {
 			desc:     "PlatformModuleDecisionAndInitialize OVR conditional jump",
 		},
 		{
-			name:     "LogInSuccess bit 9 capability check",
-			rva:      0x17f817,
-			expected: []byte{0x74, 0x1E}, // JE +0x1e
-			desc:     "CR15NetGame::LogInSuccess platform capability guard",
+			name:     "LogInSuccess prologue (login_success_gate hook target)",
+			rva:      0x17f630,
+			expected: []byte{0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20},
+			desc:     "CR15NetGame::LogInSuccess entry, validated before the bit 9 detour is attached",
 		},
 	}
 

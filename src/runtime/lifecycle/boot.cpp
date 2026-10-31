@@ -30,6 +30,7 @@
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
+#include "runtime/patch/login_success_gate.h"
 #include "runtime/frame/frame_stats.h"
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/server_team_size_install.h"
@@ -685,6 +686,16 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   if (g_isServer || g_isHeadless || g_isWindowed) {
     PatchBypassOvrPlatform();
     PatchBlockOculusSDK();
+  }
+
+  // LogInSuccess bit 9 gate, one detour for the offline, server, headless and windowed modes (it replaced two byte
+  // patches on the same branch). A server that cannot have it stops, as it does for any other required hook.
+  if (g_isOffline || g_isServer || g_isHeadless || g_isWindowed) {
+    const char* requestedBy = g_isServer ? "server" : (g_isHeadless ? "headless" : (g_isWindowed ? "windowed" : "offline"));
+    if (!nevr_login_success_gate::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), requestedBy) &&
+        g_isServer) {
+      ServerFatal("LogInSuccess hook not installed: the server would log in without the social community values write");
+    }
   }
 
   // Apply patches to force the game to load as a server.

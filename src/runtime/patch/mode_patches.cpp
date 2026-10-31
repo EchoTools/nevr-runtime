@@ -320,27 +320,7 @@ VOID PatchBypassOvrPlatform() {
 
   ApplyPatch(OVR_BRANCH_OFFSET, nopPatch, sizeof(nopPatch));
 
-  // CR15NetGame::LogInSuccess checks a platform capability flag before calling the
-  // login state update (fcn.1406157c0). The code loads flags from game+0x2DA0, shifts
-  // right 9, then tests bit 0 — effectively testing bit 9 of the original value.
-  // pnsovr sets this bit; pnsrad does not. NOP the JE so the state update always runs.
-  //   14017f810:  shr rcx, 0x9     ; shift platform flags right 9
-  //   14017f814:  test cl, 0x1     ; test bit 0 of shifted value (= original bit 9)
-  //   14017f817:  je   +0x1e       ; skip login state update
-  // NOTE: Same address as OFFLINE_TRANSACTION_1 — both patches NOP the same JE for
-  // different reasons. The NOP is idempotent.
-  {
-    constexpr uintptr_t LOGIN_CAP_CHECK = nevr_patch_addresses::OFFLINE_TRANSACTION_1;
-    auto* site = (const BYTE*)(EchoVR::g_GameBaseAddress + LOGIN_CAP_CHECK);
-    if (site[0] == 0x74 && site[1] == 0x1E) {
-      const BYTE nop2[] = {0x90, 0x90};
-      ApplyPatch(LOGIN_CAP_CHECK, nop2, sizeof(nop2));
-    } else if (site[0] != 0x90) {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] unexpected bytes at LogInSuccess cap check +0x%x: got=%02x%02x want=%02x%02x — NOT patched",
-          (unsigned)LOGIN_CAP_CHECK, site[0], site[1], 0x74, 0x1E);
-    }
-  }
+  // The LogInSuccess bit 9 gate is a detour, installed by boot.cpp (patch/login_success_gate.cpp).
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] OVR platform branch bypassed - allowing normal initialization");
 }
@@ -692,11 +672,10 @@ VOID PatchEnableOffline() {
   static_assert(sizeof(titlePatch) == OFFLINE_TITLE_SIZE, "OFFLINE_TITLE patch size mismatch");
   apply("title", OFFLINE_TITLE, titlePatch, sizeof(titlePatch));
 
-  // Force transaction service to load (two conditional jumps to NOP)
-  // Both patches use the same 2-byte NOP pattern and share the same SIZE constant
+  // Force transaction service to load (the second conditional jump to NOP; the first, at 0x17F817, is
+  // the LogInSuccess detour in patch/login_success_gate.cpp, installed by boot.cpp)
   const BYTE nopConditionalJump[] = {0x90, 0x90};  // 2x NOP
   static_assert(sizeof(nopConditionalJump) == OFFLINE_TRANSACTION_SIZE, "OFFLINE_TRANSACTION patch size mismatch");
-  apply("transaction_1", OFFLINE_TRANSACTION_1, nopConditionalJump, sizeof(nopConditionalJump));
   apply("transaction_2", OFFLINE_TRANSACTION_2, nopConditionalJump, sizeof(nopConditionalJump));
 
   // Skip failed logon service code

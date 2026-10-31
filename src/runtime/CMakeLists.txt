@@ -57,6 +57,7 @@ set(PATCHES_SOURCES
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
     "patch/coop_ai_trace.cpp"
+    "patch/login_success_gate.cpp"
     "lifecycle/crash_recovery.cpp"
     "lifecycle/return_to_lobby.cpp"
     "lifecycle/crash_dump_format.cpp"
@@ -188,6 +189,8 @@ set(PATCHES_HEADERS
     "patch/mode_patches.h"
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
+    "patch/login_success_gate.h"
+    "patch/login_success_gate_rules.h"
     "patch/arena_public_clock.h"
     "patch/arena_public_clock_rules.h"
     "patch/render_config.h"
@@ -1077,6 +1080,16 @@ if(BUILD_TESTING)
         $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
     endif()
     gtest_discover_tests(test_session_unregister DISCOVERY_MODE PRE_TEST)
+
+    # LogInSuccess bit 9 gate: the pure decision, and the hook under MinHook on a stand-in with the function's signature.
+    add_executable(test_login_success_gate tests/test_login_success_gate.cpp patch/login_success_gate.cpp
+      hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_login_success_gate.cpp patch/login_success_gate.cpp
+      hook/hook_guard.cpp log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_login_success_gate PRIVATE NEVR_USE_MINHOOK)
+    target_include_directories(test_login_success_gate PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_login_success_gate PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_login_success_gate DISCOVERY_MODE PRE_TEST)
 
     # co-op AI diagnostic (issue #63): the pure decisions behind patch/coop_ai_trace.cpp.
     add_executable(test_coop_ai_trace tests/test_coop_ai_trace.cpp)

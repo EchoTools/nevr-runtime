@@ -43,7 +43,7 @@ class VerifyModePatchGroundTruth(unittest.TestCase):
         # PatchEnableOffline writes through `apply("site", OFFSET, ...)`, a lambda over ApplyPatch (#728); the
         # verifier reads each call site's RVA, and skips only the lambda's own ApplyPatch(offset, ...).
         rewrites, covered = self.run_verifier()
-        offline = {0xFDE0E, 0x17F0B1, 0x17F77B, 0x17F817, 0x17F823, 0x1AC83E, 0xA7C685}
+        offline = {0xFDE0E, 0x17F0B1, 0x17F77B, 0x17F823, 0x1AC83E, 0xA7C685}
         self.assertLessEqual(offline, rewrites)
         self.assertLessEqual(offline, covered)
 

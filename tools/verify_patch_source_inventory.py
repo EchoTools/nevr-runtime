@@ -39,6 +39,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/invite_transport_curl.cpp",
     "patch/invite_wizard_hook.cpp",
     "patch/lobby_full_backoff.cpp",
+    "patch/login_success_gate.cpp",
     "patch/menu_cards.cpp",
     "patch/menu_version_label.cpp",
     "patch/mic_provider.cpp",
@@ -60,7 +61,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 39
+EXPECTED_PATCH_SOURCE_COUNT = 40
 
 
 class InventoryError(Exception):

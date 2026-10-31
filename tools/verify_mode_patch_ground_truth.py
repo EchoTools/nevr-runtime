@@ -94,7 +94,7 @@ def add_aliases(text: str, constants: dict[str, int]) -> None:
         r"(?:nevr_patch_addresses::)?(\w+)\s*;",
         text,
     )
-    # Local aliases such as LOGIN_CAP_CHECK deliberately name an existing
+    # Local aliases deliberately name an existing
     # patch target. Resolve them after the numeric entries have been collected.
     # Repeating supports a short chain without pretending an unknown expression
     # is safe.
