@@ -125,7 +125,7 @@ class RecipesRun(unittest.TestCase):
         self.calls = pathlib.Path(self.tmp.name) / "calls.log"
         self.store = pathlib.Path(self.tmp.name) / "store.apk"
         self.store.write_bytes(b"store")
-        texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "_release-quest-apk")]
+        texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "release-quest-combat-apk", "_release-quest-apk")]
         (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK, encoding="utf-8")
         for name, text in (("release_preflight.py", STUB_PREFLIGHT), ("quest_release_loader.py", STUB_LOADER),
                            ("package_release.py", STUB_PACKAGE)):
@@ -246,10 +246,33 @@ class RecipesRun(unittest.TestCase):
         self.assertIn("release-quest-apk: a release APK carries no plugin library", result.stderr)
         self.assertNotIn("repack ", "\n".join(self.calls_made()))
 
+    def test_the_combat_recipe_writes_the_release_name_under_the_combat_directory(self):
+        result = self.just("release-quest-combat-apk", "v1.2.3", PLUGINS, str(self.store))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = self.dir / "build" / "quest-release" / "v1.2.3" / "combat"
+        name = "nevr-runtime-v1.2.3-quest.apk"
+        apk = (out / name).read_bytes()
+        self.assertEqual(apk, f"signed plugin=[{PLUGINS}] version=1.2.3".encode(), "the combat APK carries its plugins")
+        self.assertEqual((out / f"{name}.sha256").read_text(), f"{SHA(apk)}  {name}\n", "sha256sum format, of the release name")
+        self.assertEqual(result.stdout, f"{SHA(apk)}  {name}\n")
+        self.assertEqual(sorted(p.name for p in out.iterdir()), sorted([name, f"{name}.sha256", "loader", "repack"]))
+        self.assertFalse((self.dir / "build" / "quest-release" / "v1.2.3" / "variant").exists())
+        self.assertFalse((self.dir / "build" / "quest-release" / "v1.2.3" / name).exists())
+
+    def test_the_combat_recipe_refuses_a_non_release_tag_and_a_missing_plugin_in_its_own_name(self):
+        for tag, plugins, want in (
+                ("v1.2", PLUGINS, "release-quest-combat-apk: not a release tag (vX.Y.Z): v1.2"),
+                ("v1.2.3", "", "release-quest-combat-apk: the variant APK carries plugin libraries, and none is named")):
+            with self.subTest(tag=tag, plugins=plugins):
+                result = self.just("release-quest-combat-apk", tag, plugins, str(self.store))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(want, result.stderr)
+                self.assertNotIn("repack ", "\n".join(self.calls_made()))
+
     # ---- the bundled game-data pack (docs/adr/0029-quest-bundled-content-pack.md) ----
 
     def use_pack_stub(self):
-        texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "_release-quest-apk")]
+        texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "release-quest-combat-apk", "_release-quest-apk")]
         (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK_PACK, encoding="utf-8")
 
     def test_the_variant_recipe_passes_the_pack_and_its_description_to_the_repack(self):
@@ -297,6 +320,12 @@ class RecipeText(unittest.TestCase):
     def test_only_the_variant_recipe_takes_a_pack(self):
         self.assertIn('pack="" pack_meta=""', recipe("release-quest-variant-apk").splitlines()[0])
         self.assertNotIn("pack", recipe("release-quest-apk").splitlines()[0])
+
+    def test_the_combat_recipe_takes_plugins_and_a_pack_and_runs_the_shared_body_as_combat(self):
+        line = recipe("release-quest-combat-apk").splitlines()[0]
+        self.assertIn('release-quest-combat-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pack_meta=""', line)
+        self.assertIn('_release-quest-apk "release-quest-combat-apk" tag store_apk plugins "combat" pack pack_meta',
+                      recipe("release-quest-combat-apk"))
 
     def test_both_release_recipes_run_the_one_shared_body(self):
         self.assertIn('_release-quest-apk "release-quest-apk" tag store_apk "" ""', recipe("release-quest-apk"))
