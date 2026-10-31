@@ -141,10 +141,11 @@ class PinDataTest(unittest.TestCase):
         self.assertEqual(twice, once)
         self.assertEqual(report["changed_bytes"], 0)
 
-    def test_a_pin_to_another_libr15_replaces_the_earlier_pin(self):
+    def test_a_file_pinned_to_another_libr15_is_refused_naming_both_entries(self):
         once, _ = pin.pin_data(make_runtime(), NEW)
-        again, _ = pin.pin_data(once, OTHER)
-        self.assertEqual(again, make_runtime(OTHER))
+        with self.assertRaises(pin.WrongEntry) as caught:
+            pin.pin_data(once, OTHER)
+        self.assertEqual((caught.exception.expected, caught.exception.found), (OLD, NEW))
 
     def test_a_decoy_run_in_a_data_segment_is_not_a_site(self):
         before = make_runtime(decoy=True)
@@ -205,10 +206,38 @@ class PinDataTest(unittest.TestCase):
         with self.assertRaisesRegex(pin.PinError, "the table has 3 entries"):
             pin.pin_data(make_runtime(), NEW, 3)
 
-    def test_the_replace_index_picks_the_entry(self):
-        result, report = pin.pin_data(make_runtime(), NEW, 1)
+    def test_the_replace_index_and_the_expected_md5_pick_the_entry(self):
+        result, report = pin.pin_data(make_runtime(), NEW, 1, SECOND)
         self.assertEqual(report["old_md5"], SECOND)
         self.assertEqual(result, make_runtime(OLD, others=(NEW, THIRD)))
+
+    def test_a_damaged_first_entry_is_refused_and_does_not_retarget_the_index(self):
+        damaged = make_runtime().replace(OLD.encode(), b"x" * 32, 1)  # the first ASCII copy: the list now opens with SECOND
+        self.assertEqual(pin.table(damaged)[0], SECOND.encode())
+        self.assertTrue(pin.carries_table(damaged))
+        with self.assertRaises(pin.WrongEntry) as caught:
+            pin.pin_data(damaged, NEW)
+        self.assertEqual((caught.exception.index, caught.exception.expected, caught.exception.found), (0, OLD, SECOND))
+        self.assertIn(OLD, str(caught.exception))
+        self.assertIn(SECOND, str(caught.exception))
+
+    def test_a_wrong_expected_md5_is_refused(self):
+        with self.assertRaises(pin.WrongEntry) as caught:
+            pin.pin_data(make_runtime(), NEW, 0, SECOND)
+        self.assertEqual((caught.exception.expected, caught.exception.found), (SECOND, OLD))
+
+    def test_an_expected_md5_that_is_not_32_lowercase_hex_is_refused(self):
+        with self.assertRaises(pin.PinError):
+            pin.pin_data(make_runtime(), NEW, 0, "4911ef7f")
+
+    def test_the_expected_entry_must_have_its_immediate_sites_too(self):
+        # the ASCII table says OLD is at index 0 and it has 12 copies; one of its sites is gone, so the pin must not go on
+        runtime = make_runtime()
+        site = b"".join(struct.pack("<I", w) for w in site_words(OLD))
+        damaged = runtime.replace(site, b"".join(struct.pack("<I", NOP) for _ in site_words(OLD)), 1)
+        self.assertNotEqual(damaged, runtime)
+        with self.assertRaisesRegex(pin.PinError, "has 44 immediate runs"):
+            pin.pin_data(damaged, NEW)
 
     def test_an_md5_that_is_not_32_lowercase_hex_is_refused(self):
         for bad in ("", "3E89307B9EDDCA58AA4573953A4477B9", NEW[:-1], NEW + "0", "g" * 32):
@@ -265,6 +294,33 @@ class PinCommandTest(unittest.TestCase):
         self.assertEqual((record["tag"], record["event"]), ("NEVR.QUEST.RUNTIME_PIN", "runtime_pin_refused"))
         self.assertIn("44 immediate runs", record["reason"])
         self.assertFalse(out.exists())
+
+    def test_a_damaged_first_entry_exits_one_naming_the_expected_and_the_found_md5(self):
+        self.libvrapi.write_bytes(make_runtime().replace(OLD.encode(), b"x" * 32, 1))
+        out = self.tmp / "pinned.so"
+        result = self.run_tool("pin", "--libvrapi", str(self.libvrapi), "--libr15", str(self.libr15), "--out", str(out))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        record = json.loads(result.stderr)
+        self.assertEqual(record["event"], "runtime_pin_refused")
+        self.assertEqual((record["expected_old_md5"], record["found_md5"], record["replace_index"]), (OLD, SECOND, 0))
+        self.assertFalse(out.exists())
+
+    def test_a_wrong_expect_old_md5_exits_one(self):
+        out = self.tmp / "pinned.so"
+        result = self.run_tool("pin", "--libvrapi", str(self.libvrapi), "--libr15", str(self.libr15), "--out", str(out),
+                               "--expect-old-md5", THIRD)
+        self.assertEqual(result.returncode, 1)
+        record = json.loads(result.stderr)
+        self.assertEqual((record["expected_old_md5"], record["found_md5"]), (THIRD, OLD))
+        self.assertFalse(out.exists())
+
+    def test_expect_old_md5_and_replace_index_together_pin_another_entry(self):
+        out = self.tmp / "pinned.so"
+        result = self.run_tool("pin", "--libvrapi", str(self.libvrapi), "--libr15", str(self.libr15), "--out", str(out),
+                               "--replace-index", "2", "--expect-old-md5", THIRD)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(out.read_bytes(), make_runtime(OLD, others=(SECOND, NEW)))
 
     def test_an_out_that_is_the_input_is_refused(self):
         result = self.run_tool("pin", "--libvrapi", str(self.libvrapi), "--libr15", str(self.libr15), "--out", str(self.libvrapi))

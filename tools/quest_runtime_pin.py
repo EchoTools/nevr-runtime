@@ -14,10 +14,13 @@ WHAT THE LIST IS IN THE BINARY. The compare is not a string compare against a te
 copies (they feed the `%.8s` of each module's OFF line) and twelve sites of sixteen immediate words, one site per
 module. Replacing the ASCII copies alone changes nothing the gate reads. The tool replaces both forms of one entry,
 the entry at `--replace-index` of the table (the first list of consecutive 32-hex texts in the file; index 0
-is the stock libr15's md5, which no build of this project carries), and keeps the other entries, so a libr15 that is the
+holds `--expect-old-md5`, default `STOCK_ENTRY_MD5`, the md5 the reference runtime's list opens with and no build of
+this project carries). The position alone never picks the entry: the tool refuses, naming the md5 it expected and the
+one it found, unless the entry at the index is that md5 (or the md5 being pinned, a file already pinned) and that md5
+has its twelve ASCII copies and its twelve immediate sites. The other entries stay, so a libr15 that is the
 reference's own is still accepted.
 
-    quest_runtime_pin.py pin --libvrapi IN --libr15 FINAL_LIBR15 --out OUT [--replace-index 0]
+    quest_runtime_pin.py pin --libvrapi IN --libr15 FINAL_LIBR15 --out OUT [--replace-index 0] [--expect-old-md5 MD5]
     quest_runtime_pin.py detect --libvrapi IN
 
 `pin` hashes FINAL_LIBR15 itself (the file the APK will carry), finds the twelve ASCII copies and the twelve sites (48
@@ -51,6 +54,8 @@ SITE_SPAN = 0x400       # the four runs of one site lie within this many bytes
 EM_AARCH64 = 0xB7
 PT_LOAD = 1
 PF_X = 1
+# The md5 of the stock libr15 that the reference runtime's list opens with (index 0): the entry the pin replaces.
+STOCK_ENTRY_MD5 = "4911ef7f1248580ee2978590d581dbfd"
 _HEX32 = re.compile(rb"(?<![0-9a-f])[0-9a-f]{32}(?=\0)")
 _MD5_TEXT = re.compile(r"^[0-9a-f]{32}$")
 _IMM_MASK = 0xFFFF << 5
@@ -59,6 +64,15 @@ _CHUNK = 1 << 20
 
 class PinError(Exception):
     pass
+
+
+class WrongEntry(PinError):
+    """The entry at the replace index is neither the expected md5 nor the md5 already pinned."""
+
+    def __init__(self, index: int, expected: str, found: str):
+        super().__init__(f"the entry at index {index} of the list is {found}, expected {expected}: refusing to pin "
+                         "another entry (a damaged list would otherwise retarget the index)")
+        self.index, self.expected, self.found = index, expected, found
 
 
 def md5_of_file(path: Path) -> str:
@@ -211,11 +225,13 @@ def check_md5(value: str) -> bytes:
     return value.encode("ascii")
 
 
-def pin_data(data: bytes, new_md5: str, replace_index: int = 0) -> tuple[bytes, dict]:
+def pin_data(data: bytes, new_md5: str, replace_index: int = 0, expect_old_md5: str = STOCK_ENTRY_MD5) -> tuple[bytes, dict]:
     """`data` with the table entry at `replace_index` replaced by `new_md5` in both forms; (result, report).
 
-    PinError unless every rule in the module docstring holds."""
-    new = check_md5(new_md5)
+    The entry at `replace_index` must be `expect_old_md5` (or `new_md5` itself, a file already pinned), found in the ASCII
+    table and with its twelve copies and twelve sites; else WrongEntry or PinError. PinError unless every rule in the
+    module docstring holds."""
+    new, expected = check_md5(new_md5), check_md5(expect_old_md5)
     if not carries_table(data):
         raise PinError("the file holds no checksum table (no 32-hex text with exactly "
                        f"{SITES} copies): it is not the reference runtime")
@@ -223,6 +239,8 @@ def pin_data(data: bytes, new_md5: str, replace_index: int = 0) -> tuple[bytes, 
     if not 0 <= replace_index < len(entries):
         raise PinError(f"--replace-index {replace_index}: the table has {len(entries)} entries")
     old = entries[replace_index]
+    if old not in (expected, new):
+        raise WrongEntry(replace_index, expect_old_md5, old.decode())
     old_copies = ascii_copies(data, old)
     if len(old_copies) != SITES:
         raise PinError(f"{old.decode()} has {len(old_copies)} ASCII copies, not {SITES}")
@@ -304,6 +322,7 @@ def main(argv=None) -> int:
     pin.add_argument("--libr15", type=Path, required=True)
     pin.add_argument("--out", type=Path, required=True)
     pin.add_argument("--replace-index", type=int, default=0)
+    pin.add_argument("--expect-old-md5", default=STOCK_ENTRY_MD5)
     detect = sub.add_parser("detect")
     detect.add_argument("--libvrapi", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -318,11 +337,15 @@ def main(argv=None) -> int:
         if args.out.resolve() == args.libvrapi.resolve():
             raise PinError("--out is the input file: the pin writes a new file")
         md5 = md5_of_file(args.libr15)
-        result, report = pin_data(data, md5, args.replace_index)
+        result, report = pin_data(data, md5, args.replace_index, args.expect_old_md5)
         args.out.write_bytes(result)
         log("runtime_pinned" if result != data else "runtime_pin_unchanged", sys.stdout, libr15_md5=md5,
             libvrapi_sha256_in=sha256_hex(data), libvrapi_sha256_out=sha256_hex(result), out=args.out.name, **report)
         return 0
+    except WrongEntry as error:
+        log("runtime_pin_refused", sys.stderr, reason=str(error), replace_index=error.index,
+            expected_old_md5=error.expected, found_md5=error.found)
+        return 1
     except (OSError, PinError) as error:
         log("runtime_pin_refused", sys.stderr, reason=str(error))
         return 1

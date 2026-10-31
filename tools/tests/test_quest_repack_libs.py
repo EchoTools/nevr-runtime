@@ -27,7 +27,8 @@ import quest_repack_libs as libs  # noqa: E402
 import work_root  # noqa: E402
 from quest_patcher_standin import MARKER, make_standin, recorded_argv, recorded_runs  # noqa: E402
 from test_quest_repack_version import DEV_VERSION, JUSTFILE, MISSING, RepackFixture  # noqa: E402
-from test_quest_runtime_pin import make_elf, make_runtime  # noqa: E402
+from test_quest_runtime_pin import OLD as RUNTIME_STOCK_MD5, SECOND as RUNTIME_SECOND_MD5, make_elf, make_runtime  # noqa: E402
+import quest_runtime_pin as qrp  # noqa: E402
 
 LIBR15 = b"\x7fELF the game\0" * 50  # what RepackFixture.make_inputs puts under lib/arm64-v8a/libr15.so
 PATCHED_LIBR15 = LIBR15 + MARKER  # what the stand-in patcher (quest_patcher_standin.py) makes of it
@@ -590,6 +591,19 @@ class VerifySignedTest(unittest.TestCase):
         problem = self.only_problem()
         self.assertIn("cannot be pinned to the signed libr15.so", problem)
         self.assertIn("44 immediate runs", problem)
+
+    def test_a_source_runtime_whose_first_entry_is_damaged_is_refused_not_pinned_elsewhere(self):
+        self.use_runtime()
+        self.store[RUNTIME] = make_runtime().replace(RUNTIME_STOCK_MD5.encode(), b"x" * 32, 1)
+        problem = self.only_problem()
+        self.assertIn("cannot be pinned to the signed libr15.so", problem)
+        self.assertIn(f"is {RUNTIME_SECOND_MD5}, expected {RUNTIME_STOCK_MD5}", problem)
+
+    def test_a_runtime_with_another_entry_replaced_is_refused(self):
+        md5 = hashlib.md5(self.staged["libr15.so"]).hexdigest()
+        wrong, _ = qrp.pin_data(make_runtime(), md5, 1, RUNTIME_SECOND_MD5)  # the pin's own tool, aimed at index 1
+        self.use_runtime(wrong)
+        self.assertIn("not hold the source APK's runtime pinned to the signed libr15.so", self.only_problem())
 
     def test_a_libvrapi_with_no_checksum_list_is_held_to_the_store_bytes(self):
         self.store[RUNTIME] = STORE_VRAPI
