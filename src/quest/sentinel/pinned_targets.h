@@ -156,7 +156,8 @@ using LibR15SetDelimitedErrorMessageThunk =
 // 0x37623e0 and the path buffer at 0x37623f0, copies the result into gOBBPath (0x3762470), logs
 // "OBB mounted at '%s'" and sets the flag byte. A NULL path zero-fills gOBBPath and logs the same line.
 // GetDataRootDir (0xf87250) returns gOBBPath when its first byte is non-zero, else
-// "/storage/emulated/0/readyatdawn" (0x2b2f5c3).
+// "/storage/emulated/0/readyatdawn" (0x2b2f5c3). The reference build's body is `return <media literal>` (three words and a
+// `ret`), so it never reads gOBBPath; the data-root hook answers the root ResolveRoot chose whatever the body returns.
 struct AStorageManagerOpaque;
 using ObbCallbackFn = void (*)(const char* filename, std::int32_t state, void* data);
 using MountObbSig = void(AStorageManagerOpaque* manager, const char* filename, const char* key, ObbCallbackFn callback,
@@ -231,20 +232,58 @@ using LibR15FillResourceFileRequestThunk =
 inline constexpr const char* kFillResourceFileRequestSymbol =
     "_ZN10NRadEngine16CResourceManager23FillResourceFileRequestENS_9CSymbol64ES1_yPNS_10CAllocatorEPvyRNS_16SFileRequestDataE";
 
-// SFileRequestData (0x470 bytes), the fields the log-only hook reads after a hit (ClearFileRequestData, 0x2a9759c, sets
-// +0x10 and +0x418 to -1; the hit overwrites both). Measured on the pinned libr15 from the function's own stores
-// (0x2543a2c-0x2543bf8).
+// The libr15 functions the loose-file overlay calls (resource_request_hook.cpp). None is hooked: the overlay resolves each
+// by its symbol and proves the address is the load base plus the pinned vaddr. ReVault shows every vaddr 0x100000 higher.
+//   ClearFileRequestData(SFileRequestData&) (0x2a9759c): the first call of FillResourceFileRequest; it sets the request's
+//     +0x10 and +0x418 to -1 and clears the rest.
+//   CResourceManager::GetUnpackagedResourcePath(CSymbol64 type, CSymbol64 name, CFixedStringT<512>&) const (0x25441b8): writes
+//     the loose file's path into the request's +0x18 buffer; returns 0 on success.
+//   CSysFile::Open(char const*, unsigned int flags, long& handle) (0xf85538, static): flags 1 is O_RDONLY; returns 0 on success.
+//   CSysFile::Size(long handle, unsigned long long* size) (0xf859fc, static): returns 0 on success.
+inline constexpr const char* kClearFileRequestDataSymbol =
+    "_ZN10NRadEngine20ClearFileRequestDataERNS_16SFileRequestDataE";
+inline constexpr std::uint64_t kClearFileRequestDataVaddr = 0x2a9759c;
+inline constexpr const char* kGetUnpackagedResourcePathSymbol =
+    "_ZNK10NRadEngine16CResourceManager25GetUnpackagedResourcePathENS_9CSymbol64ES1_RNS_13CFixedStringTILy512EEE";
+inline constexpr std::uint64_t kGetUnpackagedResourcePathVaddr = 0x25441b8;
+inline constexpr const char* kCSysFileOpenSymbol = "_ZN10NRadEngine8CSysFile4OpenEPKcjPl";
+inline constexpr std::uint64_t kCSysFileOpenVaddr = 0xf85538;
+inline constexpr const char* kCSysFileSizeSymbol = "_ZN10NRadEngine8CSysFile4SizeElPy";
+inline constexpr std::uint64_t kCSysFileSizeVaddr = 0xf859fc;
+
+// SFileRequestData (0x470 bytes). The log reads the fields after a hit (ClearFileRequestData, 0x2a9759c, sets +0x10 and +0x418
+// to -1; the hit overwrites both). Measured on the pinned libr15 from the function's own stores (0x2543a2c-0x2543bf8). The loose
+// file overlay writes the fields from kOwner to kValid on a miss (resource_request_hook.cpp, ServeLoose).
 namespace resource_request_layout {
 inline constexpr std::size_t kRequestBytes = 0x470;
+inline constexpr std::size_t kOwner = 0x0;               // u64: the owner (the CResource* for a base load), stored by the stock fill
+inline constexpr std::size_t kIndex = 0x8;               // u64: the buffer or mip index, stored by the stock fill
 inline constexpr std::size_t kPackageHandle = 0x10;      // i64: the package file handle, -1 when none
+inline constexpr std::size_t kLoosePath = 0x18;          // char[512]: the loose file's path (GetUnpackagedResourcePath)
 inline constexpr std::size_t kChunkIndex = 0x418;        // i64: the manifest record's chunk index, -1 when none
 inline constexpr std::size_t kChunkFileOffset = 0x420;   // u64: the chunk's offset in the package file
 inline constexpr std::size_t kChunkCompressed = 0x428;   // u64: the chunk's compressed size
 inline constexpr std::size_t kChunkDecompressed = 0x430; // u64: the chunk's decompressed size
 inline constexpr std::size_t kOffsetInChunk = 0x438;     // u64: the resource's offset inside the chunk
 inline constexpr std::size_t kSize = 0x440;              // u64: the resource's size
+inline constexpr std::size_t kUncompressedSize = 0x448;  // u64: the resource's size as the stock hit path stores it
 inline constexpr std::size_t kAlignment = 0x450;         // u64: the record's alignment
+inline constexpr std::size_t kMemSpace = 0x460;          // u64: the allocator the request was made with
+inline constexpr std::size_t kValid = 0x468;             // u32: 1 on a hit
 }  // namespace resource_request_layout
+
+// The manifest CResourceManager::FillResourceFileRequest searches (0x2543a30-0x2543a90). The manager's pointer at +8 is the
+// manifest; the manifest holds the record array at +0 and the record count at +0x30. A record is 32 bytes: the type (i64, the
+// first key compared), the name (i64, compared when the types are equal), then the chunk and offsets. The search compares
+// both keys as signed 64-bit values and the count as unsigned (resource_request_hook.cpp, ManifestMisses).
+namespace resource_manifest_layout {
+inline constexpr std::size_t kManagerManifest = 0x8;
+inline constexpr std::size_t kManifestRecords = 0x0;
+inline constexpr std::size_t kManifestCount = 0x30;
+inline constexpr std::size_t kRecordShift = 5;  // 32-byte records
+inline constexpr std::size_t kRecordType = 0x0;
+inline constexpr std::size_t kRecordName = 0x8;
+}  // namespace resource_manifest_layout
 
 // The six call sites of the stub in libr15 (ELF scan of bl to 0xf30730; pinned vaddrs, the address of the bl). The game
 // return address a handler sees is the bl plus 4. got_pinned_test.cpp checks each is a bl to the stub in the real library.

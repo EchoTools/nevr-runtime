@@ -56,7 +56,9 @@ class InstallChoosesTheRootFirst(unittest.TestCase):
             source, "void ResolveRoot(data_root::ExistsFn dirExists, data_root::ExistsFn fileExists) noexcept {"
         )
         self.assertIn("HoldsManifest(r.root, fileExists)", body)
-        self.assertRegex(body, r"g_dataRootRedirect\.store\(mediaComplete \? r\.root : nullptr")
+        self.assertRegex(body, r"g_dataRootRedirect\.store\(answer")
+        # C1: the answer is the legacy root only when it alone holds the data, the media root otherwise (any body).
+        self.assertIn("legacyHoldsData ? data_root::kLegacyRoot : data_root::kMediaRoot", body)
         helper = extract_braced_function(source, "bool HoldsManifest(")
         self.assertIn("data::kManifestPath", helper)
 

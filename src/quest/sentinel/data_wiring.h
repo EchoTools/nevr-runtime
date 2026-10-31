@@ -8,8 +8,8 @@
  * The one root that counts is the root the engine reads this launch. With an OBB file the OBB skip ran before this
  * (CSysFile::Init mounts in android_main, ahead of the game's Initialize) and the game recorded the root it served
  * (obb_skip::CurrentRoot); without one CSysFile::Init returned at "OBB not found" and the skip never ran. Then
- * CSysInfo::GetDataRootDir decides: our hook on it answers the media root when ResolveRoot found the game's manifest
- * (data::kManifestPath) there and the hook took (obb_skip::DataRootRedirect, #866), and the function answers the legacy root otherwise.
+ * CSysInfo::GetDataRootDir decides: our hook on it answers the root ResolveRoot chose (obb_skip::DataRootRedirect, #866), the
+ * media root unless the legacy root alone holds the game's data.
  * `data_step_start` logs the root and where it came from (`engine_root_source`: obb_skip, data_root_hook or
  * engine_default). So:
  *   - Storage not granted and the engine reads the legacy root (shared storage): nothing is looked at, fetched or
