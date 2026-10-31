@@ -768,4 +768,87 @@ TEST(NevrConfig, KnownPathsCoverEveryKeyTheQuestReads) {
   }
 }
 
+// #1857 — the reader facts an in-game plugin manager relies on. A manager lists every configured entry, in file order,
+// with its enabled flag, so the reader must keep a disabled entry in place and must not drop or reorder entries.
+TEST(NevrConfigPlugins, DisabledEntryKeepsItsPlaceAndFlags) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "plugins:\n"
+      "  - name: first\n"
+      "  - name: second\n"
+      "    enabled: false\n"
+      "    required: true\n"
+      "    early: true\n"
+      "    target: server\n"
+      "  - name: third\n");
+  const std::vector<nevr::PluginSpec>& plugins = cfg.Plugins();
+  ASSERT_EQ(plugins.size(), 3u);
+  EXPECT_EQ(plugins[0].name, "first");
+  EXPECT_EQ(plugins[1].name, "second");
+  EXPECT_EQ(plugins[2].name, "third");
+  EXPECT_TRUE(plugins[0].enabled);
+  EXPECT_FALSE(plugins[1].enabled);
+  EXPECT_TRUE(plugins[1].required);
+  EXPECT_TRUE(plugins[1].early);
+  EXPECT_EQ(plugins[1].target, "server");
+  EXPECT_TRUE(plugins[2].enabled);
+}
+
+// File order is the order of the list, not an alphabetical one, and a repeated name is kept as written (two entries).
+TEST(NevrConfigPlugins, ListOrderIsFileOrderAndRepeatedNamesAreKept) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "plugins:\n  - name: zeta\n  - name: alpha\n  - name: zeta\n    file: other.dll\n");
+  const std::vector<nevr::PluginSpec>& plugins = cfg.Plugins();
+  ASSERT_EQ(plugins.size(), 3u);
+  EXPECT_EQ(plugins[0].name, "zeta");
+  EXPECT_EQ(plugins[1].name, "alpha");
+  EXPECT_EQ(plugins[2].name, "zeta");
+  EXPECT_EQ(plugins[0].file, "zeta.dll");
+  EXPECT_EQ(plugins[2].file, "other.dll");
+}
+
+// An `enabled` (or `required`, `early`) value that is not a recognised boolean falls back to the field's default, so a typo
+// reads as enabled. A manager that shows state must show what the loader will do, which is this.
+TEST(NevrConfigPlugins, UnrecognisedBooleanFallsBackToTheDefault) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "plugins:\n  - name: typo\n    enabled: maybe\n    required: maybe\n    early: maybe\n");
+  ASSERT_EQ(cfg.Plugins().size(), 1u);
+  EXPECT_TRUE(cfg.Plugins()[0].enabled);
+  EXPECT_FALSE(cfg.Plugins()[0].required);
+  EXPECT_FALSE(cfg.Plugins()[0].early);
+}
+
+// `args` is kept per entry (a key shared by two entries stays separate), and a value that is not a mapping is ignored.
+TEST(NevrConfigPlugins, ArgsStayWithTheirEntryAndANonMappingIsIgnored) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "plugins:\n"
+      "  - name: a\n"
+      "    args: {level: 1}\n"
+      "  - name: b\n"
+      "    args: {level: 2}\n"
+      "  - name: c\n"
+      "    args: 3\n");
+  const std::vector<nevr::PluginSpec>& plugins = cfg.Plugins();
+  ASSERT_EQ(plugins.size(), 3u);
+  EXPECT_EQ(plugins[0].args.at("level"), "1");
+  EXPECT_EQ(plugins[1].args.at("level"), "2");
+  EXPECT_TRUE(plugins[2].args.empty());
+}
+
+// Malformed plugin entries are refused with the stable token, whole-file: the reader never returns a half list.
+TEST(NevrConfigPlugins, MalformedEntriesAreRefused) {
+  const auto reasonOf = [](const std::string& yaml) {
+    try {
+      nevr::NevrConfig::LoadFromString(yaml);
+    } catch (const nevr::NevrConfigError& e) {
+      return std::string(nevr::ReasonToken(e.Kind()));
+    }
+    return std::string("no error");
+  };
+  EXPECT_EQ(reasonOf("plugins:\n  - name: \"\"\n"), "bad_plugins");                   // empty name
+  EXPECT_EQ(reasonOf("plugins:\n  - name: [a, b]\n"), "bad_plugins");                 // name is not a scalar
+  EXPECT_EQ(reasonOf("plugins:\n  - name: ok\n  - 3\n"), "bad_plugins");              // a later entry is bad
+  EXPECT_EQ(reasonOf("plugins: {name: ok}\n"), "bad_plugins");                        // a mapping, not a list
+  EXPECT_EQ(reasonOf("plugins:\n  - name: ok\n"), "no error");
+}
+
 }  // namespace
