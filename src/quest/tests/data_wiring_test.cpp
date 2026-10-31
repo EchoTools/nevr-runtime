@@ -776,7 +776,12 @@ void CompleteMediaDataIsTheEnginesRootEvenWhenLegacyDataIsCompleteToo() {
   QCHECK(Has(start, "\"engine_root\":\"" + Media() + "\"") && Has(start, "\"engine_root_source\":\"data_root_hook\""));
 }
 
-// Neither root complete: the engine is answered the media root (C1 default), so the data step reads that root.
+// Neither root holds complete data (a `_data` without the manifest in each). The engine is answered the media root:
+// docs/adr/0007 and 0013, "the media root unless the legacy root alone holds the data". The storage gate in AfterStorage
+// fires only when the engine root is the legacy root, so it does not apply here, even without the grant. The data step
+// then reads the media root: its `_data` is not this version's (no manifest), so Decide replaces it (kReplace), which is a
+// fetch that keeps the old tree aside. The rig's fetch writes to its scratch root (fetch_root_override), where no `_data`
+// exists, so nothing is set aside and the fetch completes. The process continues: no end, no exit reason.
 void NeitherRootCompleteIsTheEnginesMediaRoot() {
   Rig rig;
   StaleDataIn(Media());
@@ -786,7 +791,15 @@ void NeitherRootCompleteIsTheEnginesMediaRoot() {
   rig.BootRequest(&DeniedCheck);
   const std::string start = LineOf("data_step_start");
   QCHECK(Has(start, "\"engine_root\":\"" + Media() + "\"") && Has(start, "\"engine_root_source\":\"data_root_hook\""));
-  QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
+  QCHECK(Has(LineOf("data_check"), "\"action\":\"replace\"") && Has(LineOf("data_check"), "\"root\":\"" + Media() + "\""));
+  bool replacing = false;
+  for (const std::string& l : g_lines) {
+    if (Has(l, "\"event\":\"data_fetch\"") && Has(l, "\"replacing\":\"true\"")) replacing = true;
+  }
+  QCHECK(replacing);
+  QCHECK(rig.net.calls == 1);  // one download of the zip, as the other fetch cases show
+  QCHECK(Has(LineOf("data_step"), "\"outcome\":\"fetched\"") && Has(LineOf("data_step"), "\"root\":\"" + Media() + "\""));
+  QCHECK(g_ends == 0 && g_exit_reason.empty());
 }
 
 // The hook is what makes the engine read the media root. When it did not install (a refused GOT slot), the engine still

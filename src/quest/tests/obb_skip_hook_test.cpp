@@ -310,7 +310,9 @@ void ASkippedMountServesTheResolvedRootAndTheGameReadsFromIt() {
   QCHECK(SomeLineContains("\"level\":\"info\""));  // a root found is an operator line, not a warning (#757)
 }
 
-void WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths() {
+// No root holds the data: the engine is still answered the media root (ADR 0007, 0013), and the one error line names both
+// tried roots.
+void WithNoRootTheEngineIsAnsweredTheMediaRootAndOneErrorLineNamesBothPaths() {
   Reset();
   g_lines.clear();
   sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
@@ -489,7 +491,10 @@ void TheSkippedMountAndTheEngineAgreeInEveryState() {
   }
 }
 
-// The reference build returns at CSysFile::Init's first word, so no OBB mount is ever requested: the mount hooks stay idle.
+// The reference build returns at CSysFile::Init's first word, so the game never requests an OBB mount. Here the engine's
+// question is the only call: it must be answered with the table's root, the file's body must not run, and neither the
+// mount nor the path hook may be reached (their counters and the platform's functions stay at zero). Read after the
+// question, so a question that reached either hook is seen.
 void TheReferenceBodyNeverMountsAndTheMountHookStaysIdle() {
   const std::set<std::string> states[] = {{kMediaData, kMediaManifest}, {kLegacyData, kLegacyManifest}};
   const char* answers[] = {kMediaDir, kLegacyDir};
@@ -499,10 +504,11 @@ void TheReferenceBodyNeverMountsAndTheMountHookStaysIdle() {
     g_existing = states[i];
     obb::ResolveRoot(&FakeExists);
     obb::ArmForTest();
-    const obb::Counts counts = obb::CurrentCounts();
-    QCHECK(counts.mountSkipped == 0 && counts.pathServed == 0);
     QCHECK(std::strcmp(DataRootEntry()(), answers[i]) == 0);
-    QCHECK(g_realDataRootCalls == 0);
+    QCHECK(obb::DataRootRedirect() != nullptr && std::strcmp(obb::DataRootRedirect(), answers[i]) == 0);
+    const obb::Counts counts = obb::CurrentCounts();
+    QCHECK(counts.mountSkipped == 0 && counts.pathServed == 0 && counts.dataRootServed == 1);
+    QCHECK(g_realDataRootCalls == 0 && g_realMountCalls == 0 && g_realPathCalls == 0 && g_game.callbackCalls == 0);
   }
 }
 
@@ -705,7 +711,7 @@ void InstallWithEveryHookTakingTurnsTheRedirectOnAndAnswersTheEngine() {
   QCHECK(std::strcmp(DataRootEntry()(), kMediaDir) == 0);  // the handler InstallWith armed
   QCHECK(g_realDataRootCalls == 0);
   QCHECK(SomeLineContains("\"result\":\"installed\"") && SomeLineContains("\"data_root\":\"ok\""));
-  QCHECK(SomeLineContains("\"engine_redirect\":\"/sdcard/Android/media/com.readyatdawn.r15/files\""));
+  QCHECK(SomeLineContains("\"engine_answer\":\"/sdcard/Android/media/com.readyatdawn.r15/files\""));
 }
 
 void InstallWithARefusedDataRootSlotIsNotLiveAndTheInstallFails() {
@@ -721,7 +727,7 @@ void InstallWithARefusedDataRootSlotIsNotLiveAndTheInstallFails() {
   QCHECK(SomeLineContains("\"result\":\"data_root_failed\"") && SomeLineContains("\"data_root\":\"module_not_loaded\""));
   QCHECK(SomeLineContains("\"level\":\"error\""));
   // The resolver said media_complete; the install did not take, so the line must not.
-  QCHECK(SomeLineContains("\"engine_redirect\":\"hook_not_live\""));
+  QCHECK(SomeLineContains("\"engine_answer\":\"hook_not_live\""));
 }
 
 void InstallWithARefusedPathSlotStillInstallsTheDataRootHookAndSkipsTheMount() {
@@ -754,7 +760,7 @@ void TheFourCasesReadTheRootThatHoldsTheDataAndSayWhy() {
     std::set<std::string> existing;
     const char* root;
     const char* source;
-    const char* engineRedirect;
+    const char* engineReason;  // the data_root line's engine_redirect: why the answer is what it is
   };
   const Case cases[] = {
       {{kLegacyData, kLegacyManifest}, kLegacyDir, "legacy", "no"},
@@ -771,7 +777,7 @@ void TheFourCasesReadTheRootThatHoldsTheDataAndSayWhy() {
     sentinel::SetLogSink(previous);
     QCHECK(std::strcmp(obb::CurrentRoot(), c.root) == 0);  // what a skipped mount serves
     QCHECK(SomeLineContains(("\"source\":\"" + std::string(c.source) + "\"").c_str()));
-    QCHECK(SomeLineContains(("\"engine_redirect\":\"" + std::string(c.engineRedirect) + "\"").c_str()));
+    QCHECK(SomeLineContains(("\"engine_redirect\":\"" + std::string(c.engineReason) + "\"").c_str()));
     QCHECK(SomeLineContains(("\"engine_answer\":\"" + std::string(c.root) + "\"").c_str()));
     obb::ArmForTest();
     QCHECK(std::strcmp(DataRootEntry()(), c.root) == 0);  // what the engine's own question is answered with
@@ -844,7 +850,7 @@ int main() {
   TheMediaDirectoryBeatsALegacyRootThatAlsoHoldsNoData();
   NeitherRootHoldingTheDataIsFoundFalseWithTheGamesOwnFallback();
   ASkippedMountServesTheResolvedRootAndTheGameReadsFromIt();
-  WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths();
+  WithNoRootTheEngineIsAnsweredTheMediaRootAndOneErrorLineNamesBothPaths();
   TheRealFilesystemCheckSaysDirectoryOnlyForADirectory();
   NoObbFileTheEngineAsksForTheDataRootAndIsToldTheMediaRootThatHoldsTheData();
   TheEngineIsAnsweredTheLegacyRootWhenOnlyItHoldsTheData();

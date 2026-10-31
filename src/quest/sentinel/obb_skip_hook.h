@@ -31,7 +31,7 @@
  *   obb_mount_skipped              the mount request was answered with "mounted"
  *   obb_path_served                the fallback data root was returned for a path request
  *   obb_mount_thunk_faults / obb_path_thunk_faults   a thunk had no original
- *   data_root_served               the engine's data-root question was answered with the root ResolveRoot chose
+ *   data_root_served               the engine's data-root question was answered by the hook (every answer it gives)
  *   data_root_thunk_faults         the data-root thunk had no original
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.

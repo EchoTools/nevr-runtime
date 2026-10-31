@@ -243,16 +243,16 @@ bool InstallWith(const InstallEnv& env) noexcept {
   const char* result = "installed";
   if (!ok) result = path == sentinel::GotStatus::kOk && mount == sentinel::GotStatus::kOk ? "data_root_failed"
                     : path == sentinel::GotStatus::kOk ? "path_only" : "failed";
-  // What the engine's data-root question is answered with, after the install: the data_root line before this one says
-  // what was resolved, this one says whether the redirect is in effect (#965). A refused slot means it is not.
-  const char* engineRedirect = dataRoot != sentinel::GotStatus::kOk ? "hook_not_live"
-                               : DataRootRedirect() != nullptr      ? DataRootRedirect()
-                                                                    : "none";
+  // The root the engine's data-root question is answered with, after the install: the data_root line before this one says
+  // what was resolved and why. A refused slot answers nothing, so the value is "hook_not_live" (#965).
+  const char* engineAnswer = dataRoot != sentinel::GotStatus::kOk ? "hook_not_live"
+                             : DataRootRedirect() != nullptr      ? DataRootRedirect()
+                                                                  : "none";
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "obb_skip_install",
                       {{"result", result},
                        {"path", sentinel::GotStatusName(path)},
                        {"mount", sentinel::GotStatusName(mount)},
-                       {"engine_redirect", engineRedirect},
+                       {"engine_answer", engineAnswer},
                        {"data_root", sentinel::GotStatusName(dataRoot)}});
   return ok;
 }
