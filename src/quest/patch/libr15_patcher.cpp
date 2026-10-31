@@ -240,6 +240,19 @@ const Region* ProtectedRegionAt(const std::vector<Region>& regions, std::uint64_
 // from it (ADD immediate, MOV, and the base register of load/store, LDUR/STUR and LDP/STP), and reports the first address that
 // lies within kReferenceAccessBytes of the zone. ADR is checked on its own. It looks at code only: a pointer held in data is not
 // found (none exists in the three accepted inputs).
+//
+// Limits: the scan does NOT detect these forms. Each is a way the input can still reach the slot area after this check passes.
+//   - the second register of an LDP/STP of Q registers: the scan checks the base and the first 16 bytes at the pair's address,
+//     so a pair whose second register lands at address + 16 inside the zone is not reported;
+//   - register-offset loads and stores (LDR Xt, [Xn, Xm {, LSL}]), whose address depends on Xm, which the scan does not evaluate;
+//   - index arithmetic after a register-form ADD (ADD Xd, Xn, Xm), which the scan does not evaluate: Xd keeps the value it had
+//     before the ADD, so a later access through Xd is judged on that stale value;
+//   - absolute addresses built by MOVZ/MOVK (or MOVN), which the scan does not decode;
+//   - any reference that sits more than kReferenceWindowWords (32) words after the ADRP that starts it, or in code the scan does not
+//     reach through a branch (B, BR and RET end the window; BL does not).
+// The known reference words stay clear of the slot area because of the gap (kSlotAreaGap), not because of this scan: the scan is
+// a guard for other inputs, and the pinned test (ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots) checks the
+// reference build's own words with the gap in place.
 struct SlotAreaReference {
   std::uint64_t site = 0;
   std::uint64_t target = 0;

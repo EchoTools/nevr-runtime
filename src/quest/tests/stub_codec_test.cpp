@@ -1,6 +1,8 @@
 // Host test for the build-time stub codec (src/quest/patch/stub_codec.h), ADR 0021 test 1.
 //
-// The reference encodings below were not produced by the codec: the join stub is the ADR's example, and each
+// The reference encodings below were not produced by the codec. The first vector is the join stub's shape for the slot
+// 0x37d2540, the area's start before #1737 row C8 moved it; the patched join stub now loads slot 0x37d2640 (word
+// 0xf9432210, libr15_patch_table_test.cpp, ADR 0021 section 4). This test keeps the old vector as a codec input. Each
 // vector here was disassembled with `aarch64-linux-gnu-objdump -D -b binary -m aarch64` (binutils), which read
 //   d0012c90  adrp x16, 0x37d2000      f942a210  ldr x16, [x16, #1344]      d61f0200  br x16     (site 0x1240ba8)
 //   f0fffff0  adrp x16, 0x1ff000       f9400610  ldr x16, [x16, #8]         d61f0200  br x16     (site 0x200000)
@@ -16,7 +18,7 @@ namespace {
 using namespace nevr_quest::patch;
 
 constexpr std::uint64_t kJoinSite = 0x1240ba8;  // lobby_full.join, pinned vaddr
-constexpr std::uint64_t kSlotZero = 0x37d2540;  // the slot of the vector above: a codec vector, not the table's slot 0
+constexpr std::uint64_t kSlotZero = 0x37d2540;  // the slot of the vector above: a codec input, not the table's slot 0 (that is 0x37d2640 since row C8)
 
 TEST(TheJoinStubIsTheAdrsReferenceVector) {
   Stub stub{};
@@ -130,7 +132,9 @@ TEST(DecodeRefusesEveryWordThatIsNotTheStub) {
 
 TEST(TheCreditsPairsLoadFromTheirSlotLikeBinutilsReadsThem) {
   // Disassembled with aarch64-linux-gnu-objdump -D -b binary -m aarch64: the first pair (adrp x8 at 0x1da1284) and the
-  // second (adrp x12 at 0x1da1d84) both name the page 0x37d2000 and the slot 0x37d2568 (offset 1384) of the patched libr15.
+  // second (adrp x12 at 0x1da1d84) both name the page 0x37d2000 and the codec input slot 0x37d2568 (offset 1384). That slot is
+  // an arbitrary 8-byte-aligned input to the encoder, not a table slot and not a word of the patched libr15: the table's
+  // slots are 0x37d2640..0x37d2668 since row C8.
   //   b000d188 adrp x8, 0x37d2000   f942b508 ldr x8, [x8, #1384]
   //   b000d18c adrp x12, 0x37d2000  f942b58c ldr x12, [x12, #1384]
   SlotLoadPair a{};

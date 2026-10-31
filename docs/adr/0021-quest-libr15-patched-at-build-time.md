@@ -125,6 +125,14 @@ through the next 32 words (`ADD` immediate, `MOV`, and the base of load/store, `
 on its own; an address within 16 bytes of the area's bytes is a reference. It reads code only. On the pinned stock file and both
 accepted reference files it finds none.
 
+**What the scan does not detect.** The scan is a guard for other inputs, not the proof that the known reference words are clear.
+It does not detect: the second register of an `LDP`/`STP` of Q registers (its access at address + 16, where only the first 16
+bytes are checked); register-offset loads and stores (`LDR Xt, [Xn, Xm]`), whose address depends on `Xm`; index arithmetic
+after a register-form `ADD` (the destination keeps its earlier tracked value); absolute addresses built by `MOVZ`/`MOVK`/`MOVN`;
+and any use more than 32 words after the `ADRP` that starts it, or past a `B`, `BR` or `RET` (a `BL` does not end the window).
+The known reference words (0x37d2540, 0x37d2560) stay clear of the slot area because of `kSlotAreaGap`, independent of the scan.
+The pinned test `ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots` checks those words with the gap in place.
+
 **How a slot is found at run time.** There is no directory to read. For each row the sentinel computes `slot = base +
 row.slotVaddr` from the table and checks it three ways before it stores anything: (a) the three words live at the site are
 exactly the stub the table implies (so a stock site, or a stub from another table, is refused); (b) decoding the live `ADRP` and
