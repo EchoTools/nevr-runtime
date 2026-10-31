@@ -150,11 +150,12 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 17 (#239, #672, #1391, login_prompt_hook.h kCounterCount), login title 5 (#1137, login_title_hook.h kCounterCount;
 // registered with the login prompt's, through the same step), OBB-mount
 // skip 6 (#319, #866: the mount, the path and the data-root question, obb_skip_hook.h kCounterCount), texture quality 4 (#943,
-// texture_quality_hook.h kCounterCount) and the Texture Resolution control 13 (#1012, texture_menu_hook.h kCounterCount; registered by the same step), clock levels 2 (#928, clock_levels_hook.h kCounterCount; no slot of its own), resource request log 2 (#871, resource_request_hook.h kCounterCount; development
-// builds only, so a release build registers 2 fewer). 91 on main before #943, 95 with it, which filled the 96 the table held
+// texture_quality_hook.h kCounterCount) and the Texture Resolution control 13 (#1012, texture_menu_hook.h kCounterCount; registered by the same step), clock levels 2 (#928, clock_levels_hook.h kCounterCount; no slot of its own), resource request hook 4 (#871, #1737 C5,
+// resource_request_hook.h kCounterCount: the calls, the faults, and the overlay's served and failed; registered in every build).
+// 91 on main before #943, 95 with it, which filled the 96 the table held
 // then; the table holds 128 since #1137. The resource request term stays last: tools/tests/test_quest_resource_request_wiring.py
 // reads it there.
-constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 24 + 26 + 17 + 5 + 6 + 4 + 13 + 2 + 2;
+constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 24 + 26 + 17 + 5 + 6 + 4 + 13 + 2 + 4;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
@@ -180,7 +181,7 @@ struct RealCounterSteps final : Steps {
     return nevr_quest::login_prompt::RegisterCounters() && nevr_quest::login_title::RegisterCounters();
   }
   bool RegisterObbSkipCounters() override { return nevr_quest::obb_skip::RegisterCounters(); }
-  bool ResourceRequestLogWanted() override { return true; }  // the budget is the development build's, the larger one
+  bool ResourceRequestLogWanted() override { return true; }  // the log lines are the development build's; the counters are the same
   bool RegisterResourceRequestCounters() override { return nevr_quest::resource_request::RegisterCounters(); }
   bool RegisterTextureQualityCounters() override {
     const bool quality = nevr_quest::texture_quality::RegisterCounters();
@@ -199,7 +200,7 @@ struct RealCounterSteps final : Steps {
   bool InstallPermissionWait() override { return true; }
   bool InstallVkExtWindow() override { return true; }
   bool InstallOsBuildGate() override { return true; }
-  bool InstallResourceRequestLog(bool counted) override { return counted; }
+  bool InstallResourceRequestLog(bool counted, bool) override { return counted; }
   bool InstallTextureQuality(const nevr_quest::TextureChoice&, bool counted) override { return counted; }
   bool InstallRenderConfig(const nevr_quest::TextureChoice&) override { return true; }
   bool InstallCreditsText() override { return true; }

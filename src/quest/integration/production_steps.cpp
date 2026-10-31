@@ -577,8 +577,8 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
-  bool InstallResourceRequestLog(bool countersRegistered) override {
-    const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered);
+  bool InstallResourceRequestLog(bool countersRegistered, bool logLines) override {
+    const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered, logLines);
     detail_ = ok ? "ok" : "got_hook_refused";
     return ok;
   }
