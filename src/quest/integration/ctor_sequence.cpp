@@ -179,7 +179,7 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     const bool obbCounters =
         r.Run(StepId::kRegisterObbSkipCounters, [&] { return steps.RegisterObbSkipCounters(); });
     // The resource request hook (#871, #1737 C5) runs on every build and registers its counters on every launch. Whether
-    // its log lines are written is the development question: a release build's lines are off, the hook is not.
+    // every request is logged is the development question: a release build logs the failed requests only, the hook runs.
     bool resourceWanted = false;
     try {
       resourceWanted = steps.ResourceRequestLogWanted();

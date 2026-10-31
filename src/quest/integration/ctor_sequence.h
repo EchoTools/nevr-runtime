@@ -60,8 +60,9 @@
 //                                    constructor.
 //      InstallResourceRequestLog     the resource request hook (#871, #1737 C5): one libr15 slot
 //                                    (CResourceManager::FillResourceFileRequest), on every launch, right after the OS
-//                                    build floor hook. It records the requests in a development build only
-//                                    (Steps::ResourceRequestLogWanted decides the `logLines` argument) and serves a loose
+//                                    build floor hook. It records every request in a development build only
+//                                    (Steps::ResourceRequestLogWanted decides the `logLines` argument; a release build
+//                                    records the failed requests alone, rate limited, #1797) and serves a loose
 //                                    file on a manifest miss in every build. Its counters are registered with the others
 //                                    (step 3), on every launch.
 //      InstallTextureQuality         the eye-buffer size libr15 creates its swap chain with (#943): one libr15 slot
@@ -234,8 +235,9 @@ class Steps {
   virtual bool RegisterLoginPromptCounters() = 0;
   // The OBB-mount skip's counters (#319), registered on every launch.
   virtual bool RegisterObbSkipCounters() = 0;
-  // Whether the resource request hook (#871) writes its log lines: a development build (nevr_build::kIsDev). The hook is
-  // installed in every build; this answers only for its lines (the `logLines` argument of InstallResourceRequestLog).
+  // Whether the resource request hook (#871) writes a line for every request: a development build (nevr_build::kIsDev). The
+  // hook is installed in every build and a release build still writes its failed requests (#1797); this answers only for
+  // the per-request lines (the `logLines` argument of InstallResourceRequestLog).
   virtual bool ResourceRequestLogWanted() = 0;
   // The resource request hook's counters (#871, #1737 C5), registered on every launch.
   virtual bool RegisterResourceRequestCounters() = 0;

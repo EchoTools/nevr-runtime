@@ -1,6 +1,6 @@
 # ADR 0018: a log of every resource request the Quest game makes
 
-Status: accepted, implemented (`src/quest/sentinel/resource_request_hook.{h,cpp}`, #871; the loose-file overlay, #1737 C5). Installed in every build; the request log lines are development builds only (`nevr_build::kIsDev`). On a manifest hit the hook only reads: the game's call, its arguments, its result and the request it fills are the game's, byte for byte. On a manifest miss it may serve a loose file (see the amendment below).
+Status: accepted, implemented (`src/quest/sentinel/resource_request_hook.{h,cpp}`, #871; the loose-file overlay, #1737 C5). Installed in every build; the per-request log lines are development builds only (`nevr_build::kIsDev`), and a release build writes the failed requests alone, rate limited (the amendment on release failures below). On a manifest hit the hook only reads: the game's call, its arguments, its result and the request it fills are the game's, byte for byte. On a manifest miss it may serve a loose file (see the amendment below).
 Not yet observed on a headset: the "Prediction" section is what the first run must show.
 
 ## Context
@@ -37,6 +37,14 @@ What would prove it wrong: no `resource_request` line before the main menu (the 
 ## Not claimed
 
 That a request can be rewritten at this seam on a manifest hit: the hook reads it and never writes it there. What `x3` carries (the body does not use it). The thread identity of any caller (the log decides). The hook on other builds of libr15: the slot and the six call sites are pinned to build id `b243509c08ce677aeb95fa348016949b3fc45230` and checked against the real library by `just test-quest-hooks-pinned`.
+
+## Amendment (#1797): failed requests in a release build
+
+A release build writes one `resource_request_miss` line for a call that returned nonzero, the same line a development build writes (key, return value, call site, thread id; a symbol hash, never a name string, and nothing of the request), so a lobby that half-loaded leaves its failed loads in the sentinel log. It writes nothing for a request that succeeded. The hook was already in the path and already holds the result, so the added work per request is one comparison of the result against zero; a failure additionally costs one key-table probe and one compare-and-swap, with atomics only (no lock and no destructor in the game's frame, as for the rest of the handler).
+
+Bounds, which leave the game's call untouched. A failing key is written at its 1st, 2nd, 4th, 8th ... repeat (the `seen` field), the schedule of the development lines, so one missing resource asked for in a loop does not use the window. At most `kFailureLinesPerWindow` (10) lines are written in a `kFailureWindowMs` (10000 ms, `CLOCK_MONOTONIC`) window; windows are the clock divided by the window length. The first failure of a later window writes one `resource_request_miss_suppressed` line with `count` (the failures the earlier windows dropped), `window_ms` and `limit` before its own line, the shape of `docs/standards/logging.md` Rule 16; a window that dropped none writes no such line, and a count not yet said when the process ends is not written. A key that found no slot in the key table is announced by `resource_request_table_full`, once, and its failures take their places in the window like any other. A development build is unchanged: it writes every failure under the `resource_request_cap` line cap, with no window.
+
+Not verified on a headset: that a half-loaded lobby produces failed requests through this function (the hook sees the manifest search's result, not a failure that happens after the request is filled, for example in the read itself).
 
 ## Amendment (#1737 C5): the loose-file overlay
 

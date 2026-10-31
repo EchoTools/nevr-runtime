@@ -9,6 +9,7 @@
 // Built and run by `just test-quest-hooks`.
 
 #include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -920,6 +921,232 @@ void AServedRequestReturnsZeroAndTheGameIsNotCalled() {
   QCHECK(g_fill.calls == 0);
 }
 
+// ---- a release build: failures only, rate limited (#1797 4a) -------------------------------------------------------------
+
+std::atomic<std::uint64_t> g_nowMs{0};
+std::uint64_t FakeNow() noexcept { return g_nowMs.load(std::memory_order_relaxed); }
+constexpr std::uint64_t kT0 = 20000;  // a multiple of kFailureWindowMs: the window [kT0, kT0 + 10000)
+
+// The hook armed as a release build arms it (logRequests off), with the failure window's clock under the test's hand.
+void ReleaseReset(bool overlay = false) {
+  Reset(1, overlay);
+  rr::ArmForTest(1, false);
+  g_nowMs = kT0;
+  rr::SetClockForTest(&FakeNow);
+}
+
+// A miss of a distinct name: one key per call, so the per-key schedule never drops one.
+std::uint64_t MissOf(std::uint64_t n) { return 0x1000000 + n; }
+
+// (R1) A failed request is one miss line in a release build, with the key, the return value and the call site; the request
+// is not read, and the game gets its own result back.
+void AReleaseBuildLogsAFailedRequest() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kBaseType, kMissName, 3, request) == kMissReturn);
+  QCHECK(g_fill.calls == 1);
+  QCHECK(Lines("resource_request").empty());
+  const std::vector<std::string> lines = Lines("resource_request_miss");
+  QCHECK(lines.size() == 1);
+  if (lines.empty()) return;
+  QCHECK(lines[0].find("\"level\":\"warn\"") != std::string::npos);
+  QCHECK(Field(lines[0], "type") == "\"0x4a4c32c49300b8a0\"");
+  QCHECK(Field(lines[0], "name") == "\"0x0000000000000066\"");
+  QCHECK(Field(lines[0], "index") == "3");
+  QCHECK(Field(lines[0], "ret") == "\"0x0000dead0000beef\"");
+  QCHECK(Field(lines[0], "seen") == "1");
+  QCHECK(Field(lines[0], "tid") == std::to_string(MyTid()));
+  QCHECK(Field(lines[0], "handle") == "<absent>");
+  QCHECK(Field(lines[0], "owner") == "<absent>");
+}
+
+// (R2) A request that succeeds writes nothing in a release build, and the game's call is as it was.
+void AReleaseBuildLogsNoSuccess() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kBaseType, 0x11, 0, request) == 0);
+  QCHECK(Call(kMipType, 0xabcdef0123456789ULL, 7, request) == 0);
+  QCHECK(g_fill.calls == 2);
+  QCHECK(g_lines.empty());
+  QCHECK(rr::CurrentTotals().lines == 0);
+}
+
+// (R3) A failure with no request is logged without reading it.
+void AReleaseFailureWithoutARequestIsLogged() {
+  ReleaseReset();
+  QCHECK(Call(kBaseType, kMissName, 0, nullptr) == kMissReturn);
+  QCHECK(Lines("resource_request_miss").size() == 1);
+}
+
+// (R4) The same failing key follows the per-key schedule (1, 2, 4, 8 ...): a loop that asks for one missing resource
+// thousands of times writes a few lines, not one window's worth.
+void ARepeatedReleaseFailureIsLoggedAtEachPowerOfTwo() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  for (int i = 0; i < 9; ++i) Call(kBaseType, kMissName, 0, request);
+  const std::vector<std::string> lines = Lines("resource_request_miss");
+  QCHECK(lines.size() == 4);  // the 1st, 2nd, 4th and 8th
+  if (lines.size() == 4) {
+    QCHECK(Field(lines[0], "seen") == "1");
+    QCHECK(Field(lines[1], "seen") == "2");
+    QCHECK(Field(lines[2], "seen") == "4");
+    QCHECK(Field(lines[3], "seen") == "8");
+  }
+  QCHECK(Lines("resource_request_miss_suppressed").empty());
+}
+
+// (R5) At most kFailureLinesPerWindow lines in one window, whatever the keys, and the game still gets every result.
+void AReleaseWindowWritesAtMostTheLimit() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  for (std::uint64_t n = 0; n < rr::kFailureLinesPerWindow + 5; ++n) {
+    QCHECK(Call(kBaseType, MissOf(n), 0, request) == kMissReturn);
+  }
+  QCHECK(g_fill.calls == static_cast<int>(rr::kFailureLinesPerWindow + 5));
+  QCHECK(Lines("resource_request_miss").size() == rr::kFailureLinesPerWindow);
+  QCHECK(Lines("resource_request_miss_suppressed").empty());  // said at the next window, not inside this one
+}
+
+// (R6) The last millisecond of the window is still the window; the first of the next is a new one. The failure that opens it
+// writes the count of the lines the old one dropped, before its own line.
+void ANewWindowStartsWithTheCountOfWhatTheLastDropped() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  for (std::uint64_t n = 0; n < rr::kFailureLinesPerWindow + 5; ++n) Call(kBaseType, MissOf(n), 0, request);
+  g_nowMs = kT0 + rr::kFailureWindowMs - 1;
+  Call(kBaseType, MissOf(100), 0, request);
+  QCHECK(Lines("resource_request_miss").size() == rr::kFailureLinesPerWindow);
+  QCHECK(Lines("resource_request_miss_suppressed").empty());
+  g_nowMs = kT0 + rr::kFailureWindowMs;
+  Call(kBaseType, MissOf(101), 0, request);
+  const std::vector<std::string> summary = Lines("resource_request_miss_suppressed");
+  QCHECK(summary.size() == 1);
+  if (!summary.empty()) {
+    QCHECK(summary[0].find("\"level\":\"warn\"") != std::string::npos);
+    QCHECK(Field(summary[0], "count") == "6");  // 5 over the limit, plus the one at the last millisecond
+    QCHECK(Field(summary[0], "window_ms") == std::to_string(rr::kFailureWindowMs));
+    QCHECK(Field(summary[0], "limit") == std::to_string(rr::kFailureLinesPerWindow));
+  }
+  QCHECK(Lines("resource_request_miss").size() == rr::kFailureLinesPerWindow + 1);
+  // The summary precedes the new window's first line.
+  std::size_t summaryAt = g_lines.size(), lastMissAt = g_lines.size();
+  for (std::size_t i = 0; i < g_lines.size(); ++i) {
+    if (g_lines[i].find("\"event\":\"resource_request_miss_suppressed\"") != std::string::npos) summaryAt = i;
+    if (g_lines[i].find("\"event\":\"resource_request_miss\"") != std::string::npos) lastMissAt = i;
+  }
+  QCHECK(summaryAt + 1 == lastMissAt);
+  // Said once: the next window's first failure has nothing new to say.
+  g_nowMs = kT0 + 2 * rr::kFailureWindowMs;
+  Call(kBaseType, MissOf(102), 0, request);
+  QCHECK(Lines("resource_request_miss_suppressed").size() == 1);
+}
+
+// (R7) A quiet window writes no summary, and counts restart: the next window may write the limit again.
+void AQuietWindowWritesNoSummaryAndTheLimitRestarts() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  for (std::uint64_t n = 0; n < rr::kFailureLinesPerWindow; ++n) Call(kBaseType, MissOf(n), 0, request);
+  g_nowMs = kT0 + 3 * rr::kFailureWindowMs;
+  for (std::uint64_t n = 0; n < rr::kFailureLinesPerWindow; ++n) Call(kBaseType, MissOf(1000 + n), 0, request);
+  QCHECK(Lines("resource_request_miss").size() == 2 * rr::kFailureLinesPerWindow);
+  QCHECK(Lines("resource_request_miss_suppressed").empty());
+}
+
+// (R8) Threads racing for one window: exactly the limit is written and every other failure is counted, none lost.
+void ConcurrentReleaseFailuresWriteExactlyTheLimitAndCountTheRest() {
+  ReleaseReset();
+  constexpr int kThreads = 8, kPerThread = 100;
+  std::vector<std::thread> threads;
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([t] {
+      unsigned char request[layout::kRequestBytes] = {};
+      for (int i = 0; i < kPerThread; ++i) {
+        Call(kBaseType, MissOf(static_cast<std::uint64_t>(t * kPerThread + i)), 0, request);
+      }
+    });
+  }
+  for (std::thread& th : threads) th.join();
+  QCHECK(g_threadedCalls == kThreads * kPerThread);
+  QCHECK(Lines("resource_request_miss").size() == rr::kFailureLinesPerWindow);
+  g_nowMs = kT0 + rr::kFailureWindowMs;
+  unsigned char request[layout::kRequestBytes] = {};
+  Call(kBaseType, MissOf(5000), 0, request);
+  const std::vector<std::string> summary = Lines("resource_request_miss_suppressed");
+  QCHECK(summary.size() == 1);
+  if (!summary.empty()) QCHECK(Field(summary[0], "count") == std::to_string(kThreads * kPerThread - rr::kFailureLinesPerWindow));
+}
+
+// (R9) A served overlay request is not a failure; an overlay stage that fails falls to the game, whose error is the one miss.
+void AReleaseOverlayServeIsNotAFailureAndAFailedStageIsOne() {
+  ReleaseReset(true);
+  unsigned char request[layout::kRequestBytes] = {};
+  QCHECK(Call(kBaseType, kMissName, 0, request) == 0);  // served from a loose file
+  QCHECK(g_lines.empty());
+  g_ov.openRet = 2;  // the loose file cannot be opened: the game's own error follows
+  QCHECK(Call(kBaseType, 0x67, 0, request) == kMissReturn);
+  QCHECK(Lines("resource_request_miss").size() == 1);
+  QCHECK(Lines("resource_overlay_failed").empty());  // the overlay's own lines stay development-only
+}
+
+// (R10) The key table full does not hide a failure: a failure whose key found no slot is still written, inside the limit.
+void AFullKeyTableDoesNotHideAReleaseFailure() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  unsigned long long calls = 0;
+  // Every call opens a new window, so the limit never drops one and each distinct failure writes its line.
+  while (calls < 30000 && Lines("resource_request_table_full").empty()) {
+    g_nowMs += rr::kFailureWindowMs;
+    Call(kBaseType, MissOf(calls), 0, request);
+    ++calls;
+  }
+  QCHECK(Lines("resource_request_table_full").size() == 1);
+  QCHECK(calls > rr::kProbeLimit && calls < rr::kKeySlots);
+  for (int i = 0; i < 100; ++i) {
+    g_nowMs += rr::kFailureWindowMs;
+    Call(kBaseType, MissOf(calls), 0, request);
+    ++calls;
+  }
+  QCHECK(Lines("resource_request_miss").size() == calls);
+  QCHECK(Lines("resource_request_table_full").size() == 1);
+}
+
+// (R11) A development build is as it was: every failure is written (no window), and no summary line is ever written.
+void ADevelopmentBuildHasNoFailureWindow() {
+  Reset(1);
+  g_nowMs = kT0;
+  rr::SetClockForTest(&FakeNow);
+  unsigned char request[layout::kRequestBytes] = {};
+  for (std::uint64_t n = 0; n < 3 * rr::kFailureLinesPerWindow; ++n) Call(kBaseType, MissOf(n), 0, request);
+  QCHECK(Lines("resource_request_miss").size() == 3 * rr::kFailureLinesPerWindow);
+  QCHECK(Lines("resource_request_miss_suppressed").empty());
+}
+
+// (R13) A thread that read the clock just before another one opened the next window belongs to that window: it neither
+// reopens the old one nor takes an extra place.
+void AnEarlierClockReadDoesNotReopenAnOlderWindow() {
+  ReleaseReset();
+  unsigned char request[layout::kRequestBytes] = {};
+  g_nowMs = kT0 + rr::kFailureWindowMs;
+  for (std::uint64_t n = 0; n < rr::kFailureLinesPerWindow; ++n) Call(kBaseType, MissOf(n), 0, request);
+  g_nowMs = kT0;  // a straggler read the clock before the window turned
+  Call(kBaseType, MissOf(500), 0, request);
+  QCHECK(Lines("resource_request_miss").size() == rr::kFailureLinesPerWindow);
+  QCHECK(Lines("resource_request_miss_suppressed").empty());
+}
+
+// (R12) With no injected clock the window reads CLOCK_MONOTONIC in milliseconds.
+void TheProductionClockIsMonotonicMilliseconds() {
+  rr::ResetForTest();
+  timespec before{}, after{};
+  clock_gettime(CLOCK_MONOTONIC, &before);
+  const std::uint64_t got = rr::WindowClockMsForTest();
+  clock_gettime(CLOCK_MONOTONIC, &after);
+  const auto ms = [](const timespec& t) {
+    return static_cast<std::uint64_t>(t.tv_sec) * 1000u + static_cast<std::uint64_t>(t.tv_nsec) / 1000000u;
+  };
+  QCHECK(got >= ms(before) && got <= ms(after));
+}
+
 }  // namespace
 
 int main() {
@@ -953,6 +1180,19 @@ int main() {
   TheGameFunctionsResolveOnlyAtTheirPinnedAddresses();
   ConcurrentHitsAndServedMissesAddUp();
   AServedRequestReturnsZeroAndTheGameIsNotCalled();
+  AReleaseBuildLogsAFailedRequest();
+  AReleaseBuildLogsNoSuccess();
+  AReleaseFailureWithoutARequestIsLogged();
+  ARepeatedReleaseFailureIsLoggedAtEachPowerOfTwo();
+  AReleaseWindowWritesAtMostTheLimit();
+  ANewWindowStartsWithTheCountOfWhatTheLastDropped();
+  AQuietWindowWritesNoSummaryAndTheLimitRestarts();
+  ConcurrentReleaseFailuresWriteExactlyTheLimitAndCountTheRest();
+  AReleaseOverlayServeIsNotAFailureAndAFailedStageIsOne();
+  AFullKeyTableDoesNotHideAReleaseFailure();
+  ADevelopmentBuildHasNoFailureWindow();
+  AnEarlierClockReadDoesNotReopenAnOlderWindow();
+  TheProductionClockIsMonotonicMilliseconds();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "resource_request_hook_test: %d check(s) failed\n", quest_test::Failures());

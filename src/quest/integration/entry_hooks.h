@@ -70,9 +70,9 @@ bool InstallOsBuildGateHook() noexcept;  // true when the OSBuildVersion slot ho
 
 // The #871 resource request hook (sentinel/resource_request_hook.h; #1737 C5 adds the loose-file overlay), through this seam
 // for the same reason: it records every FillResourceFileRequest call and serves a loose file on a manifest miss. Installed
-// in every build; its log lines are development builds only (the sequence asks nevr_build::kIsDev through
+// in every build; its per-request log lines are development builds only, a release build logs failed requests (the sequence asks nevr_build::kIsDev through
 // ResourceRequestLogEnabled, defined in entry.cpp, which includes the generated nevr_build_info.h).
-bool ResourceRequestLogEnabled() noexcept;          // nevr_build::kIsDev: whether the hook writes its log lines
+bool ResourceRequestLogEnabled() noexcept;          // nevr_build::kIsDev: whether the hook writes a line per request
 bool RegisterResourceRequestCounters() noexcept;    // 4 counters
 // resource_request::InstallCounted(countersRegistered, logLines): true when the slot holds the thunk.
 bool InstallResourceRequestLogHook(bool countersRegistered, bool logLines) noexcept;
