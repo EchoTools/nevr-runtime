@@ -229,8 +229,8 @@ void RunPack(const std::string& engineRoot) noexcept {
 
 // The one root the engine reads this launch, and why. With an OBB file the game's OBB callback records what the OBB skip
 // served (obb_skip::CurrentRoot, after a skipped mount); without one CSysFile::Init returns before the mount and the
-// engine asks GetDataRootDir, which our hook answers with the media root when that holds the data and the hook took
-// (obb_skip::DataRootRedirect, #866) and which otherwise answers the legacy root (docs/adr/0007, 0013).
+// engine asks GetDataRootDir, which our hook answers with the root ResolveRoot chose (obb_skip::DataRootRedirect, #866): the
+// media root, unless the legacy root alone holds the data (docs/adr/0007, 0013).
 struct EngineRootChoice {
   std::string root;
   const char* source;
