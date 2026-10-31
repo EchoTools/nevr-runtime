@@ -200,6 +200,7 @@ TEST_F(LoadingTips, ADetourDoesNotCallTheOriginal) {
   ASSERT_EQ(InstallSites(reinterpret_cast<std::uintptr_t>(img.page), img.sites.data(), 1), 1u);
   CallSite(img, 0);
   CallSite(img, 0);
+  CallSite(img, 1);  // the unhooked site runs its stock body
   EXPECT_EQ(img.Counter(0), 0u) << "the trampoline (the stock body) was called";
   EXPECT_EQ(img.Counter(1), 1u) << "an unhooked site was not left alone";
 }
