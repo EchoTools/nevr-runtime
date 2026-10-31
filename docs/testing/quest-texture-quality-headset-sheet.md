@@ -15,7 +15,7 @@ Two commands used in every step:
 - Start fresh and clear logcat: `adb shell am force-stop com.readyatdawn.r15 && adb logcat -c`
 - Start the game from the headset menu (or `adb shell monkey -p com.readyatdawn.r15 1`), wait until the main menu shows (about a minute), then read: `adb logcat -d | grep -F "Creating OVR swap chain"` and `adb logcat -d | grep -F texture_quality`
 
-Pull the sentinel's own log when logcat has rolled over: `adb pull /sdcard/Android/data/com.readyatdawn.r15/files/nevr-sentinel.log .` and search it for `texture_quality` and `Creating OVR swap chain`. The swap-chain line is the game's own log line; the logcat tag the game writes it under is not known, so search the whole logcat, not one tag. If it is not in logcat, it may be in the game's own log file in the same files folder: `adb shell ls /sdcard/Android/data/com.readyatdawn.r15/files/` and search any `.log` or `.txt` there.
+Pull the sentinel's own log when logcat has rolled over: `adb pull /sdcard/Android/media/com.readyatdawn.r15/files/nevr-sentinel.log .` (on a headset where that file is absent, the same name in `/sdcard/Android/data/com.readyatdawn.r15/files/`) and search it for `texture_quality` and `Creating OVR swap chain`. The swap-chain line is the game's own log line; the logcat tag the game writes it under is not known, so search the whole logcat, not one tag. If it is not in logcat, it may be in the game's own log file in the same files folder: `adb shell ls /sdcard/Android/data/com.readyatdawn.r15/files/` and search any `.log` or `.txt` there.
 
 To set the level: write a `config.yaml` with exactly these two lines (one level word, lower case) and push it:
 

@@ -13,6 +13,7 @@
 
 #include "sentinel.h"
 
+#include "quest/sentinel/crash_dir.h"
 #include "quest/sentinel/crash_report_quest.h"
 
 #include "client/linux/handler/exception_handler.h"
@@ -35,8 +36,11 @@
 #include <ucontext.h>
 #include <unistd.h>
 
-#ifndef NEVR_QUEST_DUMP_DIR
-#define NEVR_QUEST_DUMP_DIR "/sdcard/Android/data/com.readyatdawn.r15/files/nevr-crashes"
+// A build may name the crash folder (tried first, never created); the shipped build does not (crash_dir.h has the list).
+#ifdef NEVR_QUEST_DUMP_DIR
+constexpr const char* kDumpDirOverride = NEVR_QUEST_DUMP_DIR;
+#else
+constexpr const char* kDumpDirOverride = nullptr;
 #endif
 
 #define NEVR_TAG "NEVR-Sentinel"
@@ -54,25 +58,12 @@ std::string& DumpDirStorage() {
     return dir;
 }
 
-// Candidate app-writable directories, most-preferred first. The compile-time
-// default wins if it is writable.
-const char* kCandidates[] = {
-    NEVR_QUEST_DUMP_DIR,
-    "/sdcard/Android/data/com.readyatdawn.r15/files/nevr-crashes",
-    "/data/data/com.readyatdawn.r15/files/nevr-crashes",
-    "/data/local/tmp/nevr-crashes",
-};
-
-bool EnsureWritableDir(const char* path) {
-    // mkdir -p (single level of parents is enough for our candidates).
-    ::mkdir(path, 0755);
-    return ::access(path, W_OK) == 0;
-}
-
+// The first candidate folder that can be made and written (crash_dir.h): the app's Android/media folder, then
+// Android/data, then the app-internal and /data/local/tmp folders. Everything that reads the crash folder asks
+// DumpDir(), which returns this one answer.
 std::string ResolveDumpDir() {
-    for (const char* c : kCandidates) {
-        if (EnsureWritableDir(c)) return c;
-    }
+    const std::string chosen = crash_dir::Choose(kDumpDirOverride);
+    if (!chosen.empty()) return chosen;
     // Last resort: current directory (module dir at load time).
     return ".";
 }
