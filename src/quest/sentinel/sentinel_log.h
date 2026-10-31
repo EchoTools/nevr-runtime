@@ -1,6 +1,7 @@
 // Sentinel logging: every line goes to logcat (tag NEVR-Sentinel) and is appended to the on-disk
-// log `nevr-sentinel.log` in the app's external files directory as one JSON object per line.
-// Callers pass key and feature names only, never configured values.
+// log `nevr-sentinel.log` as one JSON object per line. The log lives in LogDir(), not in FilesDir():
+// the app's Android/data folder may not exist on a headset, and the media folder is the one the
+// player can reach. Callers pass key and feature names only, never configured values.
 #pragma once
 
 #include "quest/sentinel/quest_config.h"
@@ -12,8 +13,32 @@
 
 namespace sentinel {
 
-// The app's external files directory (compile-time default, overridable at build time).
+// The app's external files directory (compile-time default, overridable at build time). The sentinel
+// config (config.yaml) and the hardware dump live here; the log does not (LogDir).
 const char* FilesDir();
+
+// One place the on-disk log may live. `dir` is the folder; `trusted` is a leading part of `dir` (up to a
+// '/' or the whole path) that is never created or checked and may be a link (/sdcard is one on a
+// headset). Every folder of `dir` below `trusted` is created if missing (mkdir -p), and each one must be
+// a real directory: a link below `trusted` is refused, never followed. `name` is the token the Info
+// line carries.
+struct LogDirCandidate {
+  const char* name;
+  const char* dir;
+  const char* trusted;
+};
+
+// The folder the on-disk log and its rotated files are in, for everything that reads them (the log
+// upload). It is chosen once, on the first open that works: the first candidate whose folder can be
+// made and whose log file can be opened. Candidates, in order: with NEVR_QUEST_FILES_DIR defined at
+// build time (the host tests) only that folder, which is never created; otherwise the app's
+// Android/media folder (`nevr_quest::data_root::kMediaRoot`, created below
+// Android/media/com.readyatdawn.r15) then the Android/data files folder (created below Android/data).
+// Before any open has worked it is the first candidate's folder. If the folder vanishes the next open
+// chooses again. Each choice is told in the log (logcat at once, the file when it is open): one Warning per
+// candidate that could not be used, event `sentinel_log_dir_failed` with its `dir`, `errno` and `error` (not
+// repeated while it keeps failing the same way), then one Info, event `sentinel_log_dir`, for the winner.
+std::string LogDir();
 
 // One line of the on-disk log: a single JSON object ending in '\n', no ANSI, valid UTF-8 (invalid bytes in
 // `message` are replaced). A `message` that is itself a JSON object is flattened into the line: its fields stay
@@ -67,5 +92,10 @@ void SetWallClockForTest(NowFn now);
 using RenameFn = int (*)(const char* from, const char* to);
 void SetRenameForTest(RenameFn rename);
 unsigned OpenAttemptsForTest();
+// Replaces the candidate list (null or 0 restores the built-in one) and forgets the chosen folder. The
+// strings must outlive the use.
+void SetLogDirCandidatesForTest(const LogDirCandidate* list, std::size_t count);
+// The list the shipped build uses (the host tests build with only their own folder, so they read it here).
+const LogDirCandidate* ShippedLogDirCandidatesForTest(std::size_t* count);
 
 }  // namespace sentinel

@@ -1,6 +1,7 @@
 #include "sentinel_log.h"
 
 #include "core/crash_report.h"
+#include "quest/sentinel/data_root.h"
 
 #include <android/log.h>
 
@@ -9,13 +10,18 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <iterator>
 
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#ifndef NEVR_QUEST_FILES_DIR
+// A build that names the folder (the host tests) logs there and nowhere else; the shipped build has no
+// definition and gets the two real candidates in LogDir().
+#ifdef NEVR_QUEST_FILES_DIR
+#define NEVR_QUEST_LOG_DIR_OVERRIDE 1
+#else
 #define NEVR_QUEST_FILES_DIR "/sdcard/Android/data/com.readyatdawn.r15/files"
 #endif
 
@@ -40,6 +46,27 @@ bool g_openFailed = false;       // the last open failed; retried after kOpenRet
 long long g_lastOpenFailMs = 0;
 long long g_logBytes = 0;        // size of the open log: its size at open plus what this run wrote
 bool g_rotateFailed = false;     // the last rename failed; retried after kOpenRetryMs
+// The chosen log folder. Fixed buffers, not std::string: a namespace-scope std::string has a dynamic
+// initializer and an atexit destructor, and the ELF constructor logs before either could be set up.
+constexpr std::size_t kMaxDirBytes = 400;
+char g_logDir[kMaxDirBytes + 1] = "";
+bool g_dirResolved = false;
+// Lines about choosing the folder wait here for the disk: they are made while the open is in progress (g_mutex
+// held), and the file they belong in is not open until it has succeeded. Logcat has them at once.
+struct PendingLine {
+  nevr_quest::LogLevel level;
+  char text[768];
+};
+constexpr std::size_t kMaxPending = 6;
+PendingLine g_pending[kMaxPending] = {};
+std::size_t g_pendingHead = 0;   // the next line to write
+std::size_t g_pendingCount = 0;  // lines queued since the queue last emptied
+// The errno last reported for each candidate, so a candidate that keeps failing the same way is reported once
+// and not at every retry; a different errno is reported again.
+constexpr std::size_t kMaxCandidates = 8;
+int g_reportedErrno[kMaxCandidates] = {};
+const LogDirCandidate* g_candidates = nullptr;  // null: the built-in list
+std::size_t g_candidateCount = 0;
 bool g_rotationFailureReported = false;
 long long g_lastRotateFailMs = 0;
 unsigned g_openAttempts = 0;
@@ -98,6 +125,58 @@ long long MonotonicMs() {
   return static_cast<long long>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000L;
 }
 
+// Android/media/<package> is made by the platform for the app and holds the game's data, so only the
+// folders below it are created; Android/data is created from its top.
+constexpr LogDirCandidate kShippedCandidates[] = {
+    {"android_media", nevr_quest::data_root::kMediaRoot, "/sdcard/Android/media/com.readyatdawn.r15"},
+    {"android_data", "/sdcard/Android/data/com.readyatdawn.r15/files", "/sdcard/Android/data"},
+};
+#ifdef NEVR_QUEST_LOG_DIR_OVERRIDE
+constexpr LogDirCandidate kBuiltInCandidates[] = {
+    {"override", NEVR_QUEST_FILES_DIR, NEVR_QUEST_FILES_DIR},
+};
+#else
+constexpr const LogDirCandidate (&kBuiltInCandidates)[2] = kShippedCandidates;
+#endif
+
+const LogDirCandidate* Candidates(std::size_t* count) {
+  if (g_candidates != nullptr) {
+    *count = g_candidateCount;
+    return g_candidates;
+  }
+  *count = std::size(kBuiltInCandidates);
+  return kBuiltInCandidates;
+}
+
+// mkdir -p of `c.dir` below `c.trusted`, one folder at a time: each must be a directory by lstat, so a
+// link planted below the trusted part is refused rather than followed. True when every folder below the
+// trusted part is there; whether the process may write into it is the log file's open. On false errno says why.
+bool EnsureDirBelow(const LogDirCandidate& c) {
+  const std::size_t base = std::strlen(c.trusted);
+  const std::size_t len = std::strlen(c.dir);
+  if (len > kMaxDirBytes || std::strncmp(c.dir, c.trusted, base) != 0 ||
+      (len > base && c.dir[base] != '/')) {
+    errno = EINVAL;
+    return false;
+  }
+  const std::string dir(c.dir, len);
+  std::size_t pos = base;
+  while (pos < len) {
+    std::size_t next = dir.find('/', pos + 1);
+    if (next == std::string::npos) next = len;
+    const std::string part = dir.substr(0, next);
+    if (::mkdir(part.c_str(), 0755) != 0 && errno != EEXIST) return false;
+    struct stat st {};
+    if (::lstat(part.c_str(), &st) != 0) return false;
+    if (!S_ISDIR(st.st_mode)) {
+      errno = ENOTDIR;
+      return false;
+    }
+    pos = next;
+  }
+  return true;  // the log file's own open, next, is the check that the folder takes a write
+}
+
 // True while a failed rename is inside its retry window.
 bool RotationBlocked() {
   if (!g_rotateFailed) return false;
@@ -118,11 +197,11 @@ void RotationFailed(const char* what, int err) {
 // Renames a log that has reached the size bound to a name that does not exist yet; nothing is
 // ever deleted or replaced. Best effort: on failure the log keeps growing, the failure is
 // logged once, and the next attempt is a retry interval later.
-void RotateIfLarge(const std::string& path) {
+void RotateIfLarge(const std::string& dir, const std::string& path) {
   struct stat st {};
   if (::lstat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < kMaxDiskLogBytes) return;
   if (RotationBlocked()) return;
-  const std::string base = std::string(FilesDir()) + "/nevr-sentinel." + std::to_string(NowMs());
+  const std::string base = dir + "/nevr-sentinel." + std::to_string(NowMs());
   for (int n = 0; n < 1000; ++n) {
     const std::string rotated = base + (n == 0 ? "" : "." + std::to_string(n)) + ".log";
     struct stat taken {};
@@ -144,15 +223,81 @@ void FailOpen(int err, const char* what) {
   ReportDiskFailure(what, err, &g_openFailureReported);
 }
 
-// g_mutex held. The open is non-blocking, never follows a symlink, and the target must be a
-// regular file: a FIFO or device at the log path must not stall the ELF constructor.
+// Rotates a log at the size bound, then opens `dir`/nevr-sentinel.log. The open is non-blocking and
+// never follows a symlink.
+int OpenLogFile(const std::string& dir) {
+  const std::string path = dir + "/nevr-sentinel.log";
+  RotateIfLarge(dir, path);
+  return ::open(path.c_str(), O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW, 0644);
+}
+
+// One line about choosing the folder: logcat now, the disk when the log is open (the pending queue). Every
+// line names the candidate and its folder; a failure adds the errno and its text.
+void ReportChoice(nevr_quest::LogLevel level, const char* event, const char* name, const std::string& dir,
+                  int err, const char* msg) {
+  nlohmann::json line = nlohmann::json::object();
+  line["event"] = event;
+  line["candidate"] = name;
+  line["dir"] = dir;
+  if (err != 0) {
+    line["errno"] = err;
+    line["error"] = std::strerror(err);
+  }
+  line["msg"] = msg;
+  const std::string text = line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+  __android_log_write(Priority(level), NEVR_TAG, text.c_str());
+  if (g_pendingHead == g_pendingCount) g_pendingHead = g_pendingCount = 0;
+  if (g_pendingCount < kMaxPending && text.size() < sizeof(g_pending[0].text)) {
+    g_pending[g_pendingCount].level = level;
+    std::memcpy(g_pending[g_pendingCount].text, text.c_str(), text.size() + 1);
+    ++g_pendingCount;
+  }
+}
+
+// g_mutex held. Opens the log in the chosen folder; with none chosen yet, takes the first candidate whose
+// folder can be made and whose log file opens, and remembers it.
+int OpenInChosenDir(int* err) {
+  if (g_dirResolved) {
+    const int fd = OpenLogFile(g_logDir);
+    if (fd < 0) {
+      *err = errno;
+      // The folder itself vanished (the user cleared the app's files): choose again at the next try.
+      if (*err == ENOENT || *err == ENOTDIR) g_dirResolved = false;
+    }
+    return fd;
+  }
+  std::size_t count = 0;
+  const LogDirCandidate* list = Candidates(&count);
+  for (std::size_t i = 0; i < count; ++i) {
+    if (EnsureDirBelow(list[i])) {
+      const int fd = OpenLogFile(list[i].dir);
+      if (fd >= 0) {
+        std::strncpy(g_logDir, list[i].dir, kMaxDirBytes);
+        g_dirResolved = true;
+        for (int& reported : g_reportedErrno) reported = 0;  // a later failure of any candidate is news again
+        ReportChoice(nevr_quest::LogLevel::kInfo, "sentinel_log_dir", list[i].name, list[i].dir, 0,
+                     "nevr-sentinel.log and its rotated files are written in this folder");
+        return fd;
+      }
+    }
+    *err = errno;
+    if (i < kMaxCandidates && g_reportedErrno[i] != *err) {
+      g_reportedErrno[i] = *err;
+      ReportChoice(nevr_quest::LogLevel::kWarn, "sentinel_log_dir_failed", list[i].name, list[i].dir, *err,
+                   "this folder cannot hold nevr-sentinel.log; the next candidate is tried");
+    }
+  }
+  return -1;
+}
+
+// g_mutex held. The target must be a regular file: a FIFO or device at the log path must not stall the
+// ELF constructor.
 bool OpenDiskLog() {
   ++g_openAttempts;
-  const std::string path = std::string(FilesDir()) + "/nevr-sentinel.log";
-  RotateIfLarge(path);
-  const int fd = ::open(path.c_str(), O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW, 0644);
+  int openErr = 0;
+  const int fd = OpenInChosenDir(&openErr);
   if (fd < 0) {
-    FailOpen(errno, "open failed");
+    FailOpen(openErr, "open failed");
     return false;
   }
   struct stat st {};
@@ -187,9 +332,53 @@ bool OpenDiskLog() {
   return true;
 }
 
+// g_mutex held, g_fd open. One record to the file; at the size bound closes it so the next record opens,
+// rotates and starts a fresh file. While a failed rotation is inside its retry window the file stays
+// open: reopening every record would only fail again.
+bool AppendRecord(nevr_quest::LogLevel level, const std::string& message) {
+  const std::string line = FormatDiskLogLine(level, NowMs(), message);
+  int err = 0;
+  if (!WriteRecord(g_fd, line, &g_tornLine, &err, ::write)) {
+    ReportDiskFailure("write failed", err, &g_writeFailureReported);
+    return false;
+  }
+  g_logBytes += static_cast<long long>(line.size());
+  if (g_logBytes >= kMaxDiskLogBytes && !RotationBlocked()) {
+    ::close(g_fd);
+    g_fd = -1;
+  }
+  return true;
+}
+
 }  // namespace
 
 const char* FilesDir() { return NEVR_QUEST_FILES_DIR; }
+
+std::string LogDir() {
+  Lock lock;
+  if (g_dirResolved) return g_logDir;
+  std::size_t count = 0;
+  const LogDirCandidate* list = Candidates(&count);
+  return count > 0 ? list[0].dir : "";
+}
+
+const LogDirCandidate* ShippedLogDirCandidatesForTest(std::size_t* count) {
+  *count = std::size(kShippedCandidates);
+  return kShippedCandidates;
+}
+
+void SetLogDirCandidatesForTest(const LogDirCandidate* list, std::size_t count) {
+  Lock lock;
+  g_candidates = (list != nullptr && count > 0) ? list : nullptr;
+  g_candidateCount = g_candidates != nullptr ? count : 0;
+  if (g_fd >= 0) ::close(g_fd);
+  g_fd = -1;
+  g_dirResolved = false;
+  g_pendingHead = g_pendingCount = 0;
+  for (int& reported : g_reportedErrno) reported = 0;
+  g_openFailed = false;
+  g_diskDisabled = false;
+}
 
 void SetClockForTest(NowFn now) { g_now = now; }
 void SetWallClockForTest(NowFn now) { g_wallNow = now; }
@@ -285,19 +474,14 @@ void Emit(nevr_quest::LogLevel level, const std::string& message) {
     }
     if (!OpenDiskLog()) return;
   }
-  const std::string line = FormatDiskLogLine(level, NowMs(), message);
-  int err = 0;
-  if (!WriteRecord(g_fd, line, &g_tornLine, &err, ::write)) {
-    ReportDiskFailure("write failed", err, &g_writeFailureReported);
-    return;
+  // The lines about choosing the folder go first, in order; one that fails to write stays queued for the next record.
+  while (g_pendingHead < g_pendingCount) {
+    if (g_fd < 0 && !OpenDiskLog()) return;  // a line filled the log to its bound and closed it
+    if (!AppendRecord(g_pending[g_pendingHead].level, g_pending[g_pendingHead].text)) return;
+    ++g_pendingHead;
   }
-  g_logBytes += static_cast<long long>(line.size());
-  if (g_logBytes >= kMaxDiskLogBytes && !RotationBlocked()) {
-    // Close so the next record opens, rotates and starts a fresh file. While a failed rotation is
-    // inside its retry window the file stays open: reopening every record would only fail again.
-    ::close(g_fd);
-    g_fd = -1;
-  }
+  if (g_fd < 0 && !OpenDiskLog()) return;
+  AppendRecord(level, message);
 }
 
 }  // namespace sentinel
