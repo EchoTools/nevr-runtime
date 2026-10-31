@@ -126,6 +126,7 @@ jobs:
   # links the exe once the dist target has named the package.
   installer:
     needs: guard
+    timeout-minutes: 20
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.guard.outputs.built != 'true' && (github.event_name == 'release' || github.ref_type == 'tag') }}
     runs-on: ubuntu-latest
     permissions:
@@ -446,11 +447,12 @@ jobs:
         set -euo pipefail
         deadline=$((SECONDS + 900))        # out: 900 s, then fail loudly
         while :; do
-          c=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+          # A poll that fails (an API error, a rate limit, a body without `jobs`) is "unreadable" and tried again until the deadline.
+          c=$(curl -fsS --retry 3 --retry-all-errors -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-            | python3 -c 'import json,sys; j=[x for x in json.load(sys.stdin)["jobs"] if x["name"]=="installer"]; print((j[0]["conclusion"] or "running") if j else "absent")')
+            | python3 -c 'import json,sys; j=[x for x in json.load(sys.stdin)["jobs"] if x["name"]=="installer"]; print((j[0]["conclusion"] or "running") if j else "absent")') || c=unreadable
           echo "installer job: $c"
-          case "$c" in success) break;; running|absent) ;; *) echo "installer job ended: $c" >&2; exit 1;; esac
+          case "$c" in success) break;; running|absent|unreadable) ;; *) echo "installer job ended: $c" >&2; exit 1;; esac
           [ "$SECONDS" -lt "$deadline" ] || { echo "installer job still $c after 900 s" >&2; exit 1; }
           sleep 10
         done

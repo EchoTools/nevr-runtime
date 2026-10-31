@@ -78,6 +78,25 @@ class InstallerJobAndWait(unittest.TestCase):
         split = self.build.index("- name: Split, strip and link the core installer's symbols\n")
         self.assertLess(dist, split)
 
+    def test_a_failed_poll_is_tried_again_and_only_success_ends_the_wait(self) -> None:
+        body = step(self.text, "Wait for the core installer job")
+        self.assertIn("--retry 3 --retry-all-errors", body)
+        self.assertIn("|| c=unreadable", body)
+        self.assertIn("running|absent|unreadable) ;;", body)
+        self.assertRegex(body, r'case "\$c" in success\) break;;')
+        self.assertIn('x["name"]=="installer"', body)
+        self.assertIn("deadline=$((SECONDS + 900))", body)
+
+    def test_the_steps_that_use_the_installer_run_only_on_a_version_run(self) -> None:
+        for name in ("Wait for the core installer job", "Download the core installer",
+                     "Split, strip and link the core installer's symbols"):
+            self.assertIn("if: steps.release.outputs.version != ''", step(self.text, name), name)
+
+    def test_the_installer_job_has_a_timeout_and_its_own_name_is_the_key(self) -> None:
+        installer = job(self.text, "installer")
+        self.assertRegex(installer, r"(?m)^    timeout-minutes: \d+$")
+        self.assertNotRegex(installer, r"(?m)^    name:", "the poll matches the job's name, which is its key only without name:")
+
 
 if __name__ == "__main__":
     unittest.main()
