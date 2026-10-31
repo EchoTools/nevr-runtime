@@ -360,6 +360,7 @@ using LibR15AndroidMainThunk = CallbackThunk<LibR15AndroidMainTag, AndroidMainSi
 // permission-wait hook makes the request itself instead. It keeps no state and does not wait for the answer; the boot
 // call in CR15Game::Initialize is followed at once by CncaGame::Initialize, whose package-manifest read needs the
 // storage permissions (#640). The three names it gets there are RECORD_AUDIO, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE.
+// The reference build holds `ret` at its first word; the permission-wait hook classifies that word (ClassifyOriginalWord).
 using RequestPermissionsSig = void(const char* const* names, std::uint64_t count);
 struct LibR15RequestPermissionsTag {};
 using LibR15RequestPermissionsThunk = CallbackThunk<LibR15RequestPermissionsTag, RequestPermissionsSig>;
@@ -382,6 +383,10 @@ struct LibR15CheckPermissionTag {};
 using LibR15CheckPermissionThunk = CallbackThunk<LibR15CheckPermissionTag, CheckPermissionSig>;
 inline constexpr const char* kRequestPermissionsSymbol =
     "_ZN10NRadEngine8CSysInfo18RequestPermissionsENS_10CArrayViewIPKcLy0EEE";
+inline constexpr std::uint64_t kRequestPermissionsVaddr = 0xf873ec;
+// First instruction. Store file: sub sp,sp,#0x40 (bytes ff0301d1). Reference build's byte patch: ret (bytes c0035fd6).
+inline constexpr std::uint32_t kRequestPermissionsStockWord = 0xd10103ff;
+inline constexpr std::uint32_t kRequestPermissionsReturnWord = 0xd65f03c0;
 
 // NRadEngine::CVR::ShowSystemUI(), defined in libr15 at 0x1a73990 (exported; ReVault 0x1b73990): `mov w1, #1` and a tail
 // call of vrapi_ShowSystemUI(&java, 1). libr15 calls it through its own PLT (stub 0xf47880, JUMP_SLOT 0x36fb328) from

@@ -1,4 +1,4 @@
-/* The game waits for the storage permission it just asked for (#640).
+/* The game's storage permission request, made once and awaited only when the engine reads shared storage (#640, #947, #1737).
  *
  * On the first launch of a fresh install the game asks for RECORD_AUDIO, READ_EXTERNAL_STORAGE and
  * WRITE_EXTERNAL_STORAGE and does not wait for the answer: CR15Game::Initialize calls CSysInfo::RequestPermissions
@@ -7,16 +7,24 @@
  * not started yet; the game reports an initialisation error and finishes its own activity (pinned_targets.h,
  * LibR15RequestPermissions, has the call chain and the addresses).
  *
- * One GOT hook on libr15's RequestPermissions slot. The handler makes the request ("The request itself", below); on
- * the FIRST call only, which is the boot request (the later callers are script nodes that must not block), it then
- * waits, on the same thread, for the storage permissions in the request to be granted:
+ * One GOT hook on libr15's RequestPermissions slot. The handler decides what to ask and makes the request, then on the
+ * FIRST call only (the boot request; later callers are script nodes that must not block) it awaits the storage grant
+ * when the storage permissions were asked and the request reached Java:
  *   - it checks each requested name that ends in "_EXTERNAL_STORAGE" with the game's own CSysInfo::CheckPermission
  *     (libr15 base + kCheckPermissionVaddr, used only after the module's build ID and the function's first four
  *     instructions match the pinned build);
  *   - while one is denied it sleeps kPollMs and checks again, for at most kTimeoutMs; on timeout it returns and the
- *     game goes on exactly as it does without the hook.
+ *     game goes on.
  * The wait does not pump the looper. Whether that matters to the grant dialog is what a headset run shows
  * (docs/adr/0009-quest-permission-wait.md has the prediction).
+ *
+ * Whether the storage permissions are asked at all is the engine's choice of root (StorageNeededFn; production:
+ * data_wiring::StorageNeeded, true when the engine reads the legacy shared-storage root):
+ *   - storage needed: every name is asked, and the boot request waits for the grant (the behavior above);
+ *   - storage not needed (the engine reads the app-owned media root, which needs no permission): the storage names
+ *     are dropped from the request, the microphone (RECORD_AUDIO) is still asked when it is named, and nothing waits.
+ *     When no name is left the request is not made at all. This is the behavior of the reference build's byte patch
+ *     (which turns RequestPermissions into `ret`), except that it keeps the microphone prompt.
  *
  * The request is not always made. CR15Game::Initialize calls RequestPermissions only when its RECORD_AUDIO check
  * (CSysInfo::CheckPermission, the first call in the process) answers "denied"; a headset that already holds the
@@ -32,13 +40,19 @@
  * call carries the array and nothing in the int's register (permission_request.h has the instructions), so the code is
  * whatever that register holds, and a negative one aborts the process. The handler does not call it: it makes the
  * same request through the requester (SetRequester; production: permission_request::Request on the game's activity)
- * with kRequestCode, and calls the game's function only when the requester could not make the call (the result says why).
- * One line per request, for the first kMaxLoggedRequests: {"event":"permission_request","result":...,"path":"ours"|
- * "game","permissions":N[,"request_code":kRequestCode]}.
+ * with kRequestCode, and calls the game's function only when the requester could not make the call (the result says
+ * why). The game's function is then asked only when it is not the reference build's `ret` (OriginalKind): on the
+ * reference build nothing is asked and nothing is waited on. The original's kind is read once at install from its
+ * first instruction (ClassifyOriginalWord).
  *
- * Lines (sentinel log, no counters): {"event":"permission_wait_install",...} at install and
- * {"event":"permission_wait","state":"already_granted"|"waiting"|"granted"|"timeout"|"check_unavailable"|
- * "no_storage_permission",...}. They are written after the original returned, never inside the game's call.
+ * Lines (sentinel log, no counters):
+ *   {"event":"permission_wait_original",...} at install: kind calls_java or returns_at_once, or unknown with a WARN;
+ *   {"event":"permission_request",...} for the first kMaxLoggedRequests: result, path ("ours", "game", "game_noop",
+ *     "none"), permissions (the game's count), asked, storage_needed, and request_code when ours;
+ *   {"event":"permission_wait",...} with the states of the wait ("waiting", "granted", "timeout", ...) and, for the
+ *     boot request when no wait applies, state "not_requested" with reason storage_not_needed, nothing_to_ask or
+ *     original_no_op.
+ * They are written after the original returned, never inside the game's call.
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */
@@ -86,6 +100,20 @@ inline bool StorageGranted(StorageOutcome outcome) noexcept {
 using AfterStorageFn = void (*)(StorageOutcome outcome) noexcept;
 void SetAfterStorage(AfterStorageFn fn) noexcept;
 
+// Whether the engine reads shared storage, so the storage permissions are needed. Null (default): needed.
+using StorageNeededFn = bool (*)() noexcept;
+void SetStorageNeeded(StorageNeededFn fn) noexcept;
+
+// What libr15's own RequestPermissions does: stock calls Java, the reference build's patched copy returns at once.
+enum class OriginalKind { kUnknown, kCallsJava, kReturnsAtOnce };
+const char* OriginalKindName(OriginalKind kind) noexcept;  // "unknown" | "calls_java" | "returns_at_once"
+// The kind of a function whose first instruction word is `firstWord`: the pinned stock word, the pinned return word, else unknown.
+OriginalKind ClassifyOriginalWord(std::uint32_t firstWord) noexcept;
+// Sets the kind the handler acts on. Install sets it from the live function; tests set it.
+void SetOriginalKind(OriginalKind kind) noexcept;
+// The kind the handler acts on now (what install read from the module, or what a test set).
+OriginalKind CurrentOriginalKind() noexcept;
+
 // Arms the handlers and installs the thunks in libr15's RequestPermissions and CheckPermission slots. One line
 // {"event":"permission_wait_install",...} says what was installed and whether CheckPermission was found, and one line
 // {"event":"permission_wait_check_install",...} says whether the CheckPermission slot holds its thunk. True when both
@@ -96,13 +124,19 @@ bool Install() noexcept;
 // on its own slot). The host test installs it in a fixture library. `checkTarget` is the CheckPermission slot.
 bool InstallAt(const sentinel::GotTarget& target, const sentinel::GotTarget& checkTarget, CheckFn check) noexcept;
 
+// The same install with the module lookup given: the live module is read through `lookup` (the install-time kind, the
+// build ID, the CheckPermission prologue) and the slots are found through it. A test passes a lookup that returns an
+// image it built in memory, to pin the classification without libr15.
+bool InstallAtWith(sentinel::ImageLookup lookup, const sentinel::GotTarget& target, const sentinel::GotTarget& checkTarget,
+                   CheckFn check) noexcept;
+
 // Test support: arms the handler without touching a GOT slot, with `check`, a poll of `pollMs` and a timeout of
-// `timeoutMs`. ResetForTest clears the one-shot and the counts.
+// `timeoutMs`. ResetForTest clears the one-shot, the counts and the predicate and kind set above.
 void ArmForTest(CheckFn check, unsigned pollMs, unsigned timeoutMs) noexcept;
 void ResetForTest() noexcept;
 
 struct Counts {
-  unsigned long long requests, waits, granted, timeouts, game_requests;  // game_requests: made by the game's function
+  unsigned long long requests, waits, granted, timeouts, game_requests, no_request;  // game_requests: made by the game's function; no_request: nothing to ask
 };
 Counts CurrentCounts() noexcept;
 

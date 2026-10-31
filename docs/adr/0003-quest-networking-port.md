@@ -902,8 +902,8 @@ state, a further distinct value is not remembered and each read of it runs the p
 The relocation resolves the PLT stub `0xf28e40` to the defined `CJson::TString` at `0xfa2e7c`,
 not to the unrelated function at `0x10a2e7c`. The `libr15.so` string at `0x2bae9b8` is the `login_host`
 fallback of the `BeginLogIn` read (`wss://login.readyatdawn.com/rad/rad15_live`). It is not patched: the
-build tuple is appended at run time by the TString handler (`src/quest/redirect/tstring_thunks.cpp:HandleTString`,
-`src/quest/redirect/login_fallback.h:Compose`). The `libr15.so` string locations `0x2baeca2` and `0x2baecf7`
+build tuple is appended at run time by the TString handler (`HandleTString` in `src/quest/redirect/tstring_thunks.cpp`
+asks the fallback decision, which composes the tuple with `Compose` in `src/quest/redirect/login_fallback.h`). The `libr15.so` string locations `0x2baeca2` and `0x2baecf7`
 are unverified and must not be patched from this record.
 ReVault's `source: imported` on a decompilation describes how it entered the warehouse; only the
 ELF's own symbol and relocation tables establish a GOT hook.

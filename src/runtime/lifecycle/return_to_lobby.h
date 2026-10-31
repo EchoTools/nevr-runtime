@@ -31,6 +31,10 @@ bool ScheduleNow(PVOID pGame, const char* caller);
 /// Schedules the return to lobby now or holds it, per the policy.
 void Request(PVOID pGame);
 
+/// The configured empty-server hold in milliseconds; 0 when the hold is off. A session the service ended may
+/// legitimately outlive its end by this long (#1756's exit watchdog adds it to its grace).
+uint64_t HoldTtlMs();
+
 /// Once per game-thread update: releases or cancels a hold.
 void Poll();
 

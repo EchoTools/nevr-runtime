@@ -241,6 +241,8 @@ EngineRootChoice EngineRoot() {
   return {data_root::kLegacyRoot, "engine_default"};
 }
 
+bool StorageNeeded() noexcept { return EngineRoot().root == data_root::kLegacyRoot; }
+
 void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   const EngineRootChoice choice = EngineRoot();
   const std::string& engineRoot = choice.root;
@@ -285,6 +287,7 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   config.fetch.sleep_ms = [](unsigned ms) { Sleep(ms); };
   config.fetch.on_event = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kInfo, e); };
   config.on_step = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kInfo, e); };
+  config.on_step_warn = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kWarn, e); };
   std::string lastMessage;
   config.present = [&lastMessage](const std::string& message) {
     lastMessage = message;

@@ -57,6 +57,7 @@ set(PATCHES_SOURCES
     "lifecycle/config_yaml_source.cpp"
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
+    "patch/loading_tips.cpp"
     "patch/coop_ai_trace.cpp"
     "lifecycle/crash_recovery.cpp"
     "lifecycle/return_to_lobby.cpp"
@@ -104,6 +105,7 @@ set(PATCHES_SOURCES
     "frame/window_watch.cpp"
     "patch/binary_bug_fixes.cpp"
     "patch/pnsrad_enabler.cpp"
+    "patch/provider_name_redirect.cpp"
     "patch/mic_provider.cpp"
     "patch/party_invite_gate.cpp"
     "patch/invite_choice_hook.cpp"
@@ -119,7 +121,12 @@ set(PATCHES_SOURCES
     "patch/gpu_score.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
+    # #1774 P13: the dedicated lobby's allow_incoming bit, forced by a hook on CBroadcaster::Initialize (pure rule in server/broadcaster_config.h).
+    "patch/broadcaster_allow_incoming.cpp"
     "patch/lobby_full_backoff.cpp"
+    # The game's deadlock monitor thread (CDeadlockMonitor::Main): whole-function hook, stall check removed (pure loop in deadlock_monitor_loop.h).
+    "patch/deadlock_monitor.cpp"
+    "patch/noovr_arglookup.cpp"
     "patch/menu_version_label.cpp"
     # #906, ADR 0017 D4: the main-menu cards (pure logic in menu_page.h and menu_cards.h).
     "patch/menu_cards.cpp"
@@ -187,10 +194,12 @@ set(PATCHES_HEADERS
     "lifecycle/service_config.h"
     "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
+    "patch/loading_tips.h"
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
     "patch/arena_public_clock.h"
     "patch/arena_public_clock_rules.h"
+    "patch/broadcaster_allow_incoming.h"
     "patch/render_config.h"
     "patch/render_config_hook.h"
     "patch/gpu_score.h"
@@ -255,6 +264,7 @@ set(PATCHES_HEADERS
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
+    "patch/provider_name_redirect.h"
     "patch/pnsrad_load_queue.h"
     "patch/mic_provider.h"
     "patch/party_invite_gate.h"
@@ -1020,6 +1030,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_arena_public_clock_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_arena_public_clock_hook DISCOVERY_MODE PRE_TEST)
 
+    # #1774 P13: the allow_incoming detour on CBroadcaster::Initialize, under MinHook on a 15-parameter stand-in.
+    add_executable(test_broadcaster_allow_incoming tests/test_broadcaster_allow_incoming.cpp
+      patch/broadcaster_allow_incoming.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_broadcaster_allow_incoming.cpp patch/broadcaster_allow_incoming.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_broadcaster_allow_incoming PRIVATE NEVR_USE_MINHOOK)
+    target_include_directories(test_broadcaster_allow_incoming PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_broadcaster_allow_incoming PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_broadcaster_allow_incoming DISCOVERY_MODE PRE_TEST)
+
     # #1139: the render_config model against a fake game image (patch/render_config.h; no Windows call).
     add_executable(test_render_config tests/test_render_config.cpp patch/render_config.cpp)
     set_source_files_properties(tests/test_render_config.cpp patch/render_config.cpp
@@ -1548,6 +1568,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_symbol_hash PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_symbol_hash DISCOVERY_MODE PRE_TEST)
 
+    # P27 (#1774): the -noovr argument-lookup waiver decision (patch/cmdline_waiver.h; no Windows call).
+    add_executable(test_cmdline_waiver tests/test_cmdline_waiver.cpp)
+    set_source_files_properties(tests/test_cmdline_waiver.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_cmdline_waiver PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_cmdline_waiver PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_cmdline_waiver DISCOVERY_MODE PRE_TEST)
+
     # The per-login legacy session (compat/legacy_session.cpp) on top of the translator; same platform-neutral
     # rules, so it also builds and runs on its own.
     add_executable(test_legacy_session
@@ -1594,11 +1621,27 @@ if(BUILD_TESTING)
     target_link_libraries(test_early_quit_lockout PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_early_quit_lockout DISCOVERY_MODE PRE_TEST)
 
+    # #1774 (P46): the SNSEarlyQuitFeatureFlags callback, replaced whole under MinHook against a fake game image.
+    add_executable(test_early_quit_feature_flags tests/test_early_quit_feature_flags.cpp patch/early_quit_lockout.cpp
+      hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_early_quit_feature_flags.cpp patch/early_quit_lockout.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_early_quit_feature_flags PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_early_quit_feature_flags PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_early_quit_feature_flags PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_early_quit_feature_flags DISCOVERY_MODE PRE_TEST)
+
     # test_lobby_full_backoff.cpp (#1011, header-only patch/lobby_full_backoff_rules.h): the lobby-full retry policy.
     add_executable(test_lobby_full_backoff tests/test_lobby_full_backoff.cpp)
     target_include_directories(test_lobby_full_backoff PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_lobby_full_backoff PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_lobby_full_backoff DISCOVERY_MODE PRE_TEST)
+
+    # test_deadlock_monitor.cpp: the monitor thread loop (patch/deadlock_monitor_loop.h), the one the hook runs.
+    add_executable(test_deadlock_monitor tests/test_deadlock_monitor.cpp)
+    target_include_directories(test_deadlock_monitor PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_deadlock_monitor PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_deadlock_monitor DISCOVERY_MODE PRE_TEST)
 
     # test_party_follow_dedup.cpp (#1413): the lobby join state (compat/lobby_join_state.h) and the follow decision
     # (patch/party_follow_dedup_rules.h). Both header-only, pure.
@@ -1673,6 +1716,16 @@ if(BUILD_TESTING)
     target_include_directories(test_hooking PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_hooking PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
+
+    # #1774: the loading-tip node hooks, installed into a hand-assembled image under real MinHook (no game binary).
+    add_executable(test_loading_tips tests/test_loading_tips.cpp patch/loading_tips.cpp hook/hook_guard.cpp
+      hook/hook_liveness.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_loading_tips.cpp patch/loading_tips.cpp hook/hook_guard.cpp
+      hook/hook_liveness.cpp log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_loading_tips PRIVATE NEVR_USE_MINHOOK)
+    target_include_directories(test_loading_tips PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_loading_tips PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_loading_tips DISCOVERY_MODE PRE_TEST)
 
     # DllLoadHook load-filter test (#361): the real LoadLibrary hooks under MinHook.
     add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
@@ -1777,6 +1830,9 @@ if(BUILD_TESTING)
     add_executable(test_behavioral
       tests/test_behavioral.cpp
       tests/test_resource_override.cpp
+      # the provider-name redirect's detour (CNSProvider::LoadByName), driven through MinHook on a stand-in.
+      tests/test_provider_name_redirect.cpp
+      patch/provider_name_redirect.cpp
       tests/test_evrp_package.cpp
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
@@ -1842,12 +1898,14 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       tests/test_behavioral.cpp
       tests/test_resource_override.cpp
+      tests/test_provider_name_redirect.cpp
       tests/test_evrp_package.cpp
       patch/evrp_package.cpp
       patch/asset_cache.cpp
       patch/resource_override.cpp
       patch/netgun_bullets.cpp
       patch/xpid_patch.cpp
+      patch/provider_name_redirect.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
       patch/asset_registry.cpp

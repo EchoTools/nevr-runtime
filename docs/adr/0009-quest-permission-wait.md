@@ -66,6 +66,50 @@ Install line at start: `{"event":"permission_wait_install","result":"installed"}
 **Server change needed:** none.
 **Not established:** that the grant is visible to `checkSelfPermission` while the app thread is blocked; whether the glue's onPause waits on this thread; whether `FileExists` fails for the permission rather than for another reason; the case where RECORD_AUDIO is granted and storage is not (no request is made at all; handled by the `CheckPermission` hook, ADR 0013). A headset run on a fresh install (uninstall, install, first launch) decides it.
 
+## Reference build (#1737 C2)
+
+The community patch for the reference build (EchoTools/echoApkPatch, `configs/libr15.so.yaml`) replaces the first word of
+`CSysInfo::RequestPermissions` at `0xf873ec` with `ret` (`ff0301d1` becomes `c0035fd6`). Its stated reason: the request
+carries no request code and aborts the process, and game data needs no storage permission once the Datadir points at the
+app-owned media root. That behavior is the storage half of this decision; the request itself is ours (above).
+
+Decision: one hook covers both cases, and the engine's root chooses between them (`data_wiring::StorageNeeded`, true when the
+engine root is the legacy shared-storage root):
+
+- Storage needed: every name is asked with our code, and the boot request waits for the storage grant (as above).
+- Storage not needed: the storage names are dropped from the request. The microphone (`RECORD_AUDIO`) is still asked when
+  it is named. When no name is left, nothing is asked. Nothing waits. This keeps the reference build's "no storage prompt"
+  and deliberately keeps its microphone prompt, which the patch drops.
+
+Two departures from the reference build's `ret`, both deliberate:
+
+1. The microphone prompt stays. The `ret` also drops `RECORD_AUDIO`; this hook still asks for it when it is named.
+2. The media-root boot request asks no storage permission, so the write grant that `/sdcard/r14logs` would need is not
+   requested at boot. The reference build asks nothing at boot either. The difference is that this is decided per launch
+   by the engine root: a legacy-root launch still asks for storage and waits for the grant.
+
+The first word of the game's own function decides what its fallback does (`ClassifyOriginalWord`, logged once at install as
+`permission_wait_original`). The stock word (`ff0301d1`) is the function that calls Java. The return word (`c0035fd6`) is
+the reference build's `ret`: when the requester cannot make the call and the function is that return, nothing is asked and
+nothing is waited on. An unknown word is treated as stock, with a WARN that carries the address and both expected words.
+
+| Case | Stock (first word `ff0301d1`) | Reference build (first word `c0035fd6`) |
+| --- | --- | --- |
+| Storage needed, requester makes the call | Our request with all names, then the wait (30 s cap) | Same |
+| Storage needed, requester cannot make the call | The game's request, then the wait | The original is a return: no request, no wait; `path` `game_noop` |
+| Storage not needed (media root) | Storage names dropped; the microphone is asked if named; no wait | Same |
+| Storage not needed, nothing left to ask | No request; `path` `none`; one probe of the storage | Same |
+
+The probe in the last two rows is the boot request's only check of the grant. It logs `permission_wait` with
+`state` `not_requested` and `reason` `storage_not_needed`, `nothing_to_ask` or `original_no_op`.
+
+Headset expectations for the first fresh-install run, not yet observed:
+
+- `permission_wait_original` with `kind` `calls_java` on stock and `returns_at_once` on the reference build.
+- `permission_request` with `path` `ours` on both, and `storage_needed` `no` on a media-root launch.
+- No `permission_wait` `waiting` line on a media-root launch, and no 30 s stall.
+- On a legacy-root launch without the grant: the `waiting` line and the grant as in the prediction above.
+
 ## Not claimed
 
 That the wait makes the first launch work on a headset: the closing question of the prediction (whether the grant is visible to the
