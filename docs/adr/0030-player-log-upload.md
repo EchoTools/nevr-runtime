@@ -55,6 +55,14 @@ service, and shows a short code. The player posts the code in Discord and a main
   request log, not in the document.
 - **Request log.** One structured line per request at the handler: route, code, status, bytes, latency, install id.
 
+- **Pasting the code elsewhere.** The player pastes the code into Discord and into the community bug-report form's
+  log field, which feeds the maintainers' board. The code is therefore one token of plain ASCII with no whitespace, and
+  it survives being typed, copied and re-cased: `GET /v3/player-logs/{code}` upper-cases the code and accepts it with or
+  without the `LOG-` prefix. The in-game display shows the code as text the player can select or read aloud, never an
+  image. A link form (the service front end's page for the code, behind the operator login) MAY be shown beside it; the
+  link is a convenience for an operator who is already signed in and is not required to look a log up. The form and the
+  board are the community's accounts: nothing in the runtime or the service calls them or knows their identifiers.
+
 ### Client (shared, `src/core/log_send.h`; written once for both binaries, #1598)
 
 - Modelled on `crash_send.h`: a pure core (collect, bound, build the body with `nlohmann::json`, parse the answer) and
@@ -94,7 +102,7 @@ service, and shows a short code. The player posts the code in Discord and a main
 - Core (GTest under Wine, and the Quest host test): the body parses as JSON, only the fixed files are read, a file
   larger than the cap is cut to its tail with `truncated`, a body over 1 MiB drops the previous file, the answer parser
   rejects a malformed code, and a fake `post` shows nothing is sent without the tap call.
-- Service (Go): `POST` then `GET` round trip through a fake store, collision redraw, unknown field is a 400, body over
+- Service (Go): `POST` then `GET` round trip through a fake store, collision redraw, a lookup by lower-case code or by code without `LOG-` finds the same record, unknown field is a 400, body over
   1 MiB is a 413, `GET` without an operator is refused.
 - A test that starts the real binary and makes one call, asserting the `NEVR.LOGSEND` record exists
   (`AGENTS.md`, logging item 6).
