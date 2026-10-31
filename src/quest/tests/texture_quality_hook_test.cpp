@@ -604,6 +604,120 @@ void ARefusedCounterIsOneLoudLine() {
   sentinel::StopReporter();
 }
 
+// ---- the eye-size route (#1737 C4): RefreshRTSize answers through the applied level on both inputs ------------------------
+
+std::uint64_t g_stored = 0;
+const std::uint64_t g_zero = 0;
+float g_scaleX = 1.0F;
+int g_propCalls = 0;
+int g_origRefresh = 0;
+
+tq::EyeVector Scale(unsigned long long) noexcept { return tq::EyeVector{g_scaleX, 7.0F}; }
+int Property(const OvrJavaOpaque* java, int id) noexcept {
+  ++g_propCalls;
+  return Entry()(java, id);
+}
+void FakeRefreshOriginal() { ++g_origRefresh; }
+
+int Lo(std::uint64_t v) { return static_cast<int>(static_cast<std::int32_t>(v & 0xffffffffU)); }
+int Hi(std::uint64_t v) { return static_cast<int>(static_cast<std::int32_t>(v >> 32)); }
+
+// Resets everything and arms the route over the given pieces. A null `stored` leaves the pins unresolved.
+void ArmRoute(tq::Level level, tq::EyeInput input, std::uint64_t* stored, const std::uint64_t* overridePair) {
+  Reset();
+  g_origRefresh = 0;
+  g_propCalls = 0;
+  g_scaleX = 1.0F;
+  g_stored = 0;
+  *tq::RefreshThunk::OriginalOut() = reinterpret_cast<void*>(&FakeRefreshOriginal);
+  QCHECK(tq::ArmForTest(level));
+  tq::SetInputForTest(input);
+  tq::SetGameForTest(tq::EyeGame{stored, overridePair, kJava, &Scale, &Property});
+  tq::ArmRefreshForTest();
+}
+
+void RefreshAnswersTheLevelsSizeOnBothHeadsets() {
+  for (const bool quest3 : {true, false}) {
+    for (const Row& r : kRows) {
+      ArmRoute(r.level, tq::EyeInput::kReference, &g_stored, &g_zero);
+      SetStock(quest3 ? kQ3StockW : kQ2StockW, quest3 ? kQ3StockH : kQ2StockH);
+      QCHECK(tq::HookedRefresh() != nullptr);
+      tq::HookedRefresh()();
+      QCHECK(Lo(g_stored) == (quest3 ? r.q3Width : r.q2Width));
+      QCHECK(Hi(g_stored) == (quest3 ? r.q3Height : r.q2Height));
+      QCHECK(g_propCalls == 2);  // ids 5 and 6, through the vrapi slot, which answers the level
+      QCHECK(g_origRefresh == 0);  // the reference body's cave is never run
+      QCHECK(tq::CurrentCounts().served == 2);
+      QCHECK(tq::LastDecision().source == tq::DecisionSource::kLevel);
+    }
+  }
+}
+
+void RefreshStockStoresTheRuntimesNativeSize() {
+  ArmRoute(tq::Level::kStock, tq::EyeInput::kReference, &g_stored, &g_zero);
+  SetStock(kQ2StockW, kQ2StockH);
+  tq::HookedRefresh()();
+  QCHECK(Lo(g_stored) == kQ2StockW && Hi(g_stored) == kQ2StockH);
+  QCHECK(tq::CurrentCounts().served == 0);
+  QCHECK(tq::LastDecision().source == tq::DecisionSource::kNative);
+  QCHECK(g_origRefresh == 0);
+}
+
+void RefreshTruncatesTheScaledSizeAsTheGameDoes() {
+  ArmRoute(tq::Level::kLow, tq::EyeInput::kReference, &g_stored, &g_zero);
+  SetStock(kQ3StockW, kQ3StockH);
+  g_scaleX = 1.0003F;  // 1680 * 1.0003 = 1680.504 and 1760 * 1.0003 = 1760.528: both truncate down
+  tq::HookedRefresh()();
+  QCHECK(Lo(g_stored) == 1680 && Hi(g_stored) == 1760);
+}
+
+void RefreshOverrideIsScaledAndNeverQueried() {
+  const std::uint64_t overridePair = 1000ULL | (2000ULL << 32);
+  ArmRoute(tq::Level::kHigh, tq::EyeInput::kReference, &g_stored, &overridePair);
+  g_scaleX = 2.0F;
+  tq::HookedRefresh()();
+  QCHECK(Lo(g_stored) == 2000 && Hi(g_stored) == 4000);
+  QCHECK(g_propCalls == 0);
+  QCHECK(tq::LastDecision().source == tq::DecisionSource::kGameOverride);
+  QCHECK(tq::CurrentCounts().served == 0);
+  QCHECK(g_origRefresh == 0);
+}
+
+void RefreshAsksTheStartResolverOnce() {
+  ArmRoute(tq::Level::kLow, tq::EyeInput::kReference, &g_stored, &g_zero);
+  g_resolverCalls = 0;
+  g_resolverAnswer = tq::kLevelUnset;
+  tq::SetStartResolver(&Resolver);
+  tq::HookedRefresh()();
+  tq::HookedRefresh()();
+  QCHECK(g_resolverCalls == 1);
+}
+
+void RefreshWithUnresolvedPinsCallsTheOriginalOnce() {
+  ArmRoute(tq::Level::kHigh, tq::EyeInput::kReference, nullptr, &g_zero);
+  tq::HookedRefresh()();
+  QCHECK(g_origRefresh == 1);
+  QCHECK(g_propCalls == 0);
+}
+
+void HookedRefreshIsNullUntilArmed() {
+  Reset();
+  QCHECK(tq::HookedRefresh() == nullptr);
+  tq::ArmRefreshForTest();
+  QCHECK(tq::HookedRefresh() != nullptr);
+}
+
+void TheInstallLineNamesTheInputAndTheRouteState() {
+  Reset();
+  tq::SetInputForTest(tq::EyeInput::kReference);
+  Capture log;
+  QCHECK(tq::InstallVia(tq::Level::kHigh, false, &GotAccepts));
+  const std::string line = TheLine();
+  QCHECK(Field(line, "input") == "reference");
+  QCHECK(Field(line, "refresh") == "not_installed");  // InstallVia does not arm the RefreshRTSize slot
+  QCHECK(Field(line, "status") != "<absent>");
+}
+
 }  // namespace
 
 int main() {
@@ -624,6 +738,14 @@ int main() {
   ARequestChangesNothingAndACommitChangesTheNextAnswer();
   OnlyTheTwoEyeSizeIdsAreCounted();
   TheStartResolverIsAskedOnceByTheFirstQuery();
+  RefreshAnswersTheLevelsSizeOnBothHeadsets();
+  RefreshStockStoresTheRuntimesNativeSize();
+  RefreshTruncatesTheScaledSizeAsTheGameDoes();
+  RefreshOverrideIsScaledAndNeverQueried();
+  RefreshAsksTheStartResolverOnce();
+  RefreshWithUnresolvedPinsCallsTheOriginalOnce();
+  HookedRefreshIsNullUntilArmed();
+  TheInstallLineNamesTheInputAndTheRouteState();
   AnInstalledLevelLogsOneLineWithTheLevelTheSourceAndTheSize();
   StockInstallsTheHookAndAnswersTheRuntimesOwnSize();
   ARefusedSlotLeavesNoOverrideAndIsLoud();

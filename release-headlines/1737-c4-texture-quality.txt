@@ -1,0 +1,1 @@
+Texture Resolution now sets the eye-buffer size on builds that use the reference Quest library, so the chosen level shows on those headsets too.

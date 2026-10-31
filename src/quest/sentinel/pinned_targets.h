@@ -208,6 +208,12 @@ struct OvrJavaOpaque;
 using GetSystemPropertyIntSig = int(const OvrJavaOpaque* java, int property);
 struct LibR15GetSystemPropertyIntTag {};
 using LibR15GetSystemPropertyIntThunk = CallbackThunk<LibR15GetSystemPropertyIntTag, GetSystemPropertyIntSig>;
+// NRadEngine::CVR::RefreshRTSize() (libr15 0x1a709a0, no argument, no result), the function that makes the eye-size query. The
+// reference build's eye size is decided on this function's JUMP_SLOT (0x36dbd10, texture_quality_hook.h, #1737 C4).
+inline constexpr const char* kRefreshRTSizeSymbol = "_ZN10NRadEngine3CVR13RefreshRTSizeEv";
+using RefreshRTSizeSig = void();
+struct LibR15RefreshRTSizeTag {};
+using LibR15RefreshRTSizeThunk = CallbackThunk<LibR15RefreshRTSizeTag, RefreshRTSizeSig>;
 // NRadEngine::CResourceManager::FillResourceFileRequest(CSymbol64 type, CSymbol64 name, unsigned long long,
 // CAllocator*, void*, unsigned long long, SFileRequestData&), defined in libr15 at 0x25439f0 (524 bytes; ReVault lists it
 // at 0x26439f0): the single manifest resolver (#871). It clears the request (ClearFileRequestData, 0x2a9759c), binary-searches
@@ -793,6 +799,12 @@ inline GotTarget LibR15GetSystemPropertyInt() {
   return {kLibR15, kGetSystemPropertyIntSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36fa728ULL};
 }
 
+// libr15.so's slot for CVR::RefreshRTSize, defined in libr15 itself (JUMP_SLOT 0x36dbd10, `readelf -rW` on the pinned image; the
+// seven PLT callers of its stub reach it through this slot, the live apply calls it at the vaddr below).
+inline GotTarget LibR15RefreshRTSize() {
+  return {kLibR15, kRefreshRTSizeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36dbd10ULL};
+}
+
 // The five VrApi imports the render-configuration log reads (docs/adr/0022-render-config-log.md). Each is an imported JUMP_SLOT
 // (value 0) in the pinned libr15 (`readelf -rW`; ReVault shows every slot 0x100000 higher, `revault_imports`). None of the
 // handlers changes an argument or a result.
@@ -991,6 +1003,27 @@ inline constexpr PinnedFunction kVrDisplayLost = {"_ZN10NRadEngine3CVR11DisplayL
 inline constexpr PinnedFunction kLocalAppDataDirectory = {
     "_ZN10NRadEngine8CSysInfo24GetLocalAppDataDirectoryERNS_13CFixedStringTILy512EEE", 0xf86d88,
     {0xf81d0ff6, 0xa90153f5, 0xa9027bf3, 0xaa0003f3}, 4};
+// The reference build's eye-size route (#1737 C4, refresh_eye_size.h): CVR::CustomViewportScale (six words; it returns the two
+// floats of the viewport scale in s0 and s1), the vrapi PLT stub that RefreshRTSize calls ids 5 and 6 through, and the eye
+// globals RefreshRTSize reads and writes. Identical in the stock and the reference file.
+struct PinnedCode {
+  const char* name;
+  std::uint64_t vaddr;
+  std::uint32_t code[6];
+  std::size_t words;
+};
+inline constexpr PinnedCode kCustomViewportScale = {"CVR::CustomViewportScale", 0x188d0f4ULL,
+                                                    {0xf000f868, 0x9101a108, 0x8b000d08, 0xbd411100, 0xbd411501, 0xd65f03c0},
+                                                    6};
+inline constexpr PinnedCode kVrapiPltStub = {"vrapi_GetSystemPropertyInt PLT stub", 0xf46080ULL,
+                                             {0x90013db0, 0xf9439611, 0x911ca210, 0xd61f0220, 0, 0},
+                                             4};
+namespace eye_layout {
+inline constexpr std::uint64_t kStoredPairVaddr = 0x37a33e0ULL;    // {int32 w, int32 h}: RefreshRTSize's result (fcvtzs)
+inline constexpr std::uint64_t kOverridePairVaddr = 0x37a33e8ULL;  // {int32 w, int32 h}: SetRTSizeOverride's; non-zero skips the query
+inline constexpr std::uint64_t kOvrJavaVaddr = 0x37a3550ULL;       // the ovrJava object the game passes to vrapi
+}  // namespace eye_layout
+
 using RefreshRTSizeFn = void (*)();
 using EngineResizeFn = int (*)(void* engine, std::uint32_t width, std::uint32_t height, std::int32_t mode);
 using VrFlagFn = int (*)();
