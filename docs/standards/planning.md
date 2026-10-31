@@ -30,7 +30,7 @@ Milestones are ordered by when they ship, not by version number. There are three
 A release's version is not chosen ahead of time. It is computed when the release is tagged, from the
 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) on `main` since the last release tag:
 
-- a breaking change (`!` before the colon, or a `BREAKING CHANGE:` or `BREAKING-CHANGE:` footer) bumps the major: `v5.5.1` to `v6.0.0`;
+- a breaking change of type `feat`, `fix` or `perf` (`!` before the colon, or a `BREAKING CHANGE:` or `BREAKING-CHANGE:` footer) bumps the major: `v5.5.1` to `v6.0.0`. On any other type a breaking marker bumps nothing, the same as that type without it (semver 2.0.0 section 1: the version describes the public API a release ships);
 - otherwise any `feat` bumps the minor: `v5.5.1` to `v5.6.0`;
 - otherwise any `fix` or `perf` bumps the patch: `v5.5.1` to `v5.5.2`;
 - any other type bumps nothing, and with nothing bumped there is nothing to release.

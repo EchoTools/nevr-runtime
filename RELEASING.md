@@ -13,8 +13,8 @@ branch and the worktree the same turn. A publish outside the train, and anything
 ## Names
 
 - **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is
-  computed, not chosen: `python3 tools/next_release_version.py` prints it from the feat, fix, perf and breaking commits
-  since the newest `vX.Y.Z` tag reachable from `origin/main` (`docs/standards/planning.md`, "Release versions"). Every
+  computed, not chosen: `python3 tools/next_release_version.py` prints it from the feat, fix and perf commits (a breaking
+  change counts only on those types) since the newest `vX.Y.Z` tag reachable from `origin/main` (`docs/standards/planning.md`, "Release versions"). Every
   other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from; it is never released.
 - **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), on `origin/main`.
 - **GitHub release title:** the tag, `vX.Y.Z`, and nothing else.
@@ -52,7 +52,7 @@ fetches the files back only after it has put them there.
 ## When to release
 
 A release is a train, not an event. The train (`release-train.yml`) runs every three hours and cuts a pre-release when `main` has a
-commit that `tools/next_release_version.py` counts (feat, fix, perf or a breaking change) since the newest tag.
+commit that `tools/next_release_version.py` counts (feat, fix or perf, breaking or not) since the newest tag.
 
 The train and its guard share one rule, `tools/release_window.py`: no release is cut or dispatched within 195 minutes of the newest
 published release (the newest by `publishedAt` of the non-draft releases whose tag is exactly `vX.Y.Z`). A scheduled run checks it
