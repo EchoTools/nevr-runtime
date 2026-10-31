@@ -144,8 +144,9 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // registration step calls the package's real registration function, in the sequence's order, before its
 // single StartReporter. Every registration must be accepted (a refused one would leave its hook out), and
 // the table must have exactly the counters below in it. The clock hook's two are registered under its real
-// names here because entry.cpp (jni.h, breakpad) cannot be built on the host. Clock 2, redirect 14 (#408: the
-// CSysHttp::CreateConnection thunk's calls and faults, and the URL decisions' two),
+// names here because entry.cpp (jni.h, breakpad) cannot be built on the host. Clock 2, redirect 17 (#408: the
+// CSysHttp::CreateConnection thunk's calls and faults, and the URL decisions' two; #1737: the login_host fallback's three,
+// redirect_login_fallback_versioned, _kept and _failed in hook_adapter.cpp),
 // dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 24 (#944: ovr_GetLoggedInUserID's calls and stand-ins; #411 adds the refused social org-id requests, the local entitlement answer and the local message pump's four: pops, deliveries, deferrals, SDK ids in the local range; #338:
 // one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 17 (#239, #672, #1391, login_prompt_hook.h kCounterCount), login title 5 (#1137, login_title_hook.h kCounterCount;
 // registered with the login prompt's, through the same step), OBB-mount
@@ -155,7 +156,7 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // 91 on main before #943, 95 with it, which filled the 96 the table held
 // then; the table holds 128 since #1137. The resource request term stays last: tools/tests/test_quest_resource_request_wiring.py
 // reads it there.
-constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 24 + 26 + 17 + 5 + 6 + 4 + 13 + 2 + 4;
+constexpr int kSentinelCounters = 2 + 17 + 1 + 2 + 24 + 26 + 17 + 5 + 6 + 4 + 13 + 2 + 4;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
