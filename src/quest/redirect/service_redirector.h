@@ -42,6 +42,15 @@
 // Residual. Apply catches std::exception (which covers bad_alloc and system_error) around the
 // policy, the lock and the pool. It does not catch(...) (repo rule), so an exception of another
 // type would reach Apply's noexcept boundary and terminate; nothing it calls throws one.
+//
+// login_host fallback. ApplyFallback is the other decision, for the fallback the game passes to
+// CJson::TString("login_host", fallback). When a build identity is set (SetBuildIdentity) it appends
+// the identity's query to a ws:// fallback that has none (login_fallback.h, Compose), so the login
+// socket carries the build tuple on the stock input as on a patched one. The composed string is
+// interned in the same pool and cached in a small table of its own; the redirect (Apply) then runs
+// on whatever the original returns. Its counters are loginFallbackVersioned, loginFallbackKept and
+// loginFallbackFailed. The query is dropped when the redirect is effective, which is the case
+// Apply documents above.
 #pragma once
 
 #include <array>
@@ -49,8 +58,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <string_view>
 
+#include "quest/redirect/login_fallback.h"
 #include "quest/sentinel/quest_config.h"
 #include "runtime/lifecycle/stable_string_pool.h"
 
@@ -58,6 +69,7 @@ namespace nevr_quest::redirect {
 
 inline constexpr std::size_t kMaxCachedValues = 16;
 inline constexpr std::size_t kMaxValueBytes = 512;
+inline constexpr std::size_t kMaxFallbackEntries = 4;
 
 // The keys the pinned libr15.so / libpnsradmatchmaking.so read for service endpoints
 // (docs/adr/0003; each is the first argument of a CJson::TString call whose fallback is the
@@ -115,6 +127,10 @@ struct RedirectCounters {
   // per CSysHttp::CreateConnection URL that is an API or graph base. #408
   std::atomic<std::uint64_t> urlRedirected{0};    // the connect was sent to the configured HTTP service
   std::atomic<std::uint64_t> urlPassThrough{0};   // the original URL was kept (no target, feature off, doubt)
+  // ApplyFallback's decisions for the login_host fallback (login_fallback.h).
+  std::atomic<std::uint64_t> loginFallbackVersioned{0};  // a ws:// fallback got the build identity's query
+  std::atomic<std::uint64_t> loginFallbackKept{0};       // a ws:// fallback already had a query: passed through
+  std::atomic<std::uint64_t> loginFallbackFailed{0};     // fault: the composed string was not interned
 };
 RedirectCounters& GlobalCounters() noexcept;
 void ResetCountersForTest() noexcept;
@@ -147,8 +163,18 @@ class ServiceRedirector {
   // (the shared policy only rewrites readyatdawn.com hosts). Same failure behaviour: any doubt returns `url`.
   const char* ApplyUrl(const char* url) noexcept;
 
-  // Runs the policy for the built-in defaults so the first game reads are cache hits.
+  // Runs the policy for the built-in defaults so the first game reads are cache hits, and the
+  // login_host fallback rule for the stock default.
   void Prewarm() noexcept;
+
+  // Sets the identity the login_host fallback rule appends. Call before Prewarm and before the hooks
+  // run; the rule is off while the identity is not valid (version empty).
+  void SetBuildIdentity(const BuildIdentity& identity) noexcept;
+
+  // Decides for one CJson::TString fallback (login_host only; any other key returns `fallback`).
+  // Returns `fallback` itself, or a stable pool pointer holding fallback + the identity's query.
+  // Never throws. Safe to call from any thread.
+  const char* ApplyFallback(const char* key, const char* fallback) noexcept;
 
   Counters counters() const noexcept;
 
@@ -163,6 +189,12 @@ class ServiceRedirector {
     std::array<char, kMaxValueBytes> original{};
   };
 
+  // One composed login_host fallback: the original fallback and the pool pointer of its composition.
+  struct FallbackEntry {
+    std::string original;
+    const char* interned = nullptr;  // null: the slot is free
+  };
+
   const char* Resolve(const char* result, std::size_t length, BridgeState bridge, Outcome* outcome,
                       bool graphRule);
   // The part of Apply after the key rule; `graphRule` is set by ApplyUrl only.
@@ -175,7 +207,8 @@ class ServiceRedirector {
 
   std::mutex mutex_;
   std::array<Entry, kMaxCachedValues> cache_{};
-
+  BuildIdentity identity_;  // written once, before the hooks run; ApplyFallback reads it without the lock
+  std::array<FallbackEntry, kMaxFallbackEntries> fallbackCache_{};
 };
 
 }  // namespace nevr_quest::redirect

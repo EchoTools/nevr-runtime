@@ -43,6 +43,7 @@
 #include "pinned_targets.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/entry_hooks.h"
+#include "quest/redirect/hook_adapter.h"
 
 #include <jni.h>
 
@@ -267,6 +268,9 @@ static void nevr_sentinel_ctor() {
     // report the next start sends. Arm is idempotent: the sequence's first step calls it again after setting the log sink.
     sentinel::Arm();
     nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);
+    // The login_host fallback carries this build's tuple (login_fallback.h): set before the sequence installs the redirect.
+    nevr_quest::redirect::SetLoginIdentity(
+        {"nevr_quest", nevr_build::kIsDev ? "dev" : "release", nevr_build::kVersion, nevr_build::kCommit});
     // #829: the thread that loads the library takes the UI looper for the floor message's presenter (it logs what it found).
     nevr_quest::toast::CaptureUiLooper();
     // Everything the constructor does is one sequence (integration/ctor_sequence.h): crash reporter,

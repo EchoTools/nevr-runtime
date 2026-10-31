@@ -39,6 +39,12 @@ void SetApply(ApplyFn apply) noexcept;  // nullptr: handlers pass the original r
 using ApplyUrlFn = const char* (*)(const char* url) noexcept;
 void SetApplyUrl(ApplyUrlFn apply) noexcept;  // nullptr: the original URL is passed through
 
+// The fallback decision for CJson::TString: runs before the original, receives the key and the fallback
+// the caller passed, and answers with the fallback itself or a stable pointer that outlives the call.
+// Same constraints as ApplyFn (noexcept, no game code, reached through a pointer).
+using ApplyFallbackFn = const char* (*)(const char* key, const char* fallback) noexcept;
+void SetApplyFallback(ApplyFallbackFn apply) noexcept;  // nullptr: the caller's fallback is passed through
+
 // The thunk for one slot. All noexcept; defined in tstring_thunks.cpp (built -fno-exceptions).
 sentinel::GotStatus InstallThunk(Slot slot, sentinel::GotHook& hook, const sentinel::GotTarget& target,
                                  sentinel::ImageLookup lookup) noexcept;

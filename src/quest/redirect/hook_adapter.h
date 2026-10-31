@@ -57,6 +57,11 @@ struct InstallReport {
 // Call before sentinel::StartReporter. False if a counter was refused.
 bool RegisterRedirectCounters() noexcept;
 
+// The build identity the login_host fallback rule appends (login_fallback.h). Call before
+// InstallRedirectHooks. Empty by default: the rule is off, and the prewarmed redirect_install line
+// says login_fallback=no_identity.
+void SetLoginIdentity(const BuildIdentity& identity) noexcept;
+
 // Production entry: pinned targets and the loaded-image lookup, with the caller's string pool and
 // bridge probe. `intern` null means the process-wide pool (InternStableCStr); `bridge` null means no
 // probe, so every redirect uses the configured target. Both are fixed by the first call that enables
