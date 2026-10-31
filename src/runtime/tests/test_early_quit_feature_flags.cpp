@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <MinHook.h>
@@ -213,3 +214,5 @@ TEST_F(EarlyQuitFeatureFlagsHook, AnUnreadableEventWordIsSaidAndNothingIsDispatc
   EXPECT_TRUE(g_dispatched.empty());
   EXPECT_EQ(CountContaining("event word unreadable va=0x1416DCD78"), 1);
 }
+
+}  // namespace

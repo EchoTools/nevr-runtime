@@ -1,5 +1,6 @@
 #include "runtime/patch/early_quit_lockout.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <array>
