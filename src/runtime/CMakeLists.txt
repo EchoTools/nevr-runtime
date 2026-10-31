@@ -118,6 +118,8 @@ set(PATCHES_SOURCES
     "patch/gpu_score.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
+    # #1774 P13: the dedicated lobby's allow_incoming bit, forced by a hook on CBroadcaster::Initialize (pure rule in server/broadcaster_config.h).
+    "patch/broadcaster_allow_incoming.cpp"
     "patch/lobby_full_backoff.cpp"
     "patch/menu_version_label.cpp"
     # #906, ADR 0017 D4: the main-menu cards (pure logic in menu_page.h and menu_cards.h).
@@ -190,6 +192,7 @@ set(PATCHES_HEADERS
     "patch/coop_ai_trace_rules.h"
     "patch/arena_public_clock.h"
     "patch/arena_public_clock_rules.h"
+    "patch/broadcaster_allow_incoming.h"
     "patch/render_config.h"
     "patch/render_config_hook.h"
     "patch/gpu_score.h"
@@ -1005,6 +1008,16 @@ if(BUILD_TESTING)
     target_include_directories(test_arena_public_clock_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_arena_public_clock_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_arena_public_clock_hook DISCOVERY_MODE PRE_TEST)
+
+    # #1774 P13: the allow_incoming detour on CBroadcaster::Initialize, under MinHook on a 15-parameter stand-in.
+    add_executable(test_broadcaster_allow_incoming tests/test_broadcaster_allow_incoming.cpp
+      patch/broadcaster_allow_incoming.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_broadcaster_allow_incoming.cpp patch/broadcaster_allow_incoming.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_broadcaster_allow_incoming PRIVATE NEVR_USE_MINHOOK)
+    target_include_directories(test_broadcaster_allow_incoming PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_broadcaster_allow_incoming PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_broadcaster_allow_incoming DISCOVERY_MODE PRE_TEST)
 
     # #1139: the render_config model against a fake game image (patch/render_config.h; no Windows call).
     add_executable(test_render_config tests/test_render_config.cpp patch/render_config.cpp)

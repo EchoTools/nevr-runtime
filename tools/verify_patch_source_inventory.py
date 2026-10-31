@@ -25,6 +25,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/asset_cdn.cpp",
     "patch/asset_registry.cpp",
     "patch/binary_bug_fixes.cpp",
+    "patch/broadcaster_allow_incoming.cpp",
     "patch/broadcaster_guard.cpp",
     "patch/coop_ai_trace.cpp",
     "patch/credits_text.cpp",
@@ -60,7 +61,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 39
+EXPECTED_PATCH_SOURCE_COUNT = 40
 
 
 class InventoryError(Exception):
