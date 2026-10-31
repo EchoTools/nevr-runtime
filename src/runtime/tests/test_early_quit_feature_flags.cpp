@@ -55,13 +55,20 @@ constexpr std::array<std::uint8_t, 35> kRealCallback = {
 constexpr std::array<std::uint8_t, 16> kDispatchPrologue = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74,
                                                             0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48};
 
-std::array<std::uint8_t, 27> MakeDispatchStub(std::uintptr_t target) {
-  std::array<std::uint8_t, 27> stub{};
+std::array<std::uint8_t, 32> MakeDispatchStub(std::uintptr_t target) {
+  std::array<std::uint8_t, 32> stub{};
   std::memcpy(stub.data(), kDispatchPrologue.data(), kDispatchPrologue.size());
   stub[16] = 0xB8;  // movabs rax, imm64 (completes the REX.W prefix at stub[15])
   std::memcpy(stub.data() + 17, &target, sizeof(target));
-  stub[25] = 0xFF;  // jmp rax
-  stub[26] = 0xE0;
+  // The prologue above pushed rdi and took 0x30 bytes of stack; undo both before jumping to the recorder, which
+  // returns to the callee's caller (the stub is a stand-in with no epilogue of its own).
+  stub[25] = 0x48;  // add rsp, 0x30
+  stub[26] = 0x83;
+  stub[27] = 0xC4;
+  stub[28] = 0x30;
+  stub[29] = 0x5F;  // pop rdi
+  stub[30] = 0xFF;  // jmp rax
+  stub[31] = 0xE0;
   return stub;
 }
 
@@ -106,7 +113,7 @@ class EarlyQuitFeatureFlagsHook : public ::testing::Test {
     ASSERT_NE(image_, nullptr) << "VirtualAlloc error=" << GetLastError();
 
     Put(kCallbackVa, kRealCallback.data(), kRealCallback.size());
-    const std::array<std::uint8_t, 27> stub = MakeDispatchStub(reinterpret_cast<std::uintptr_t>(&RecordDispatch));
+    const std::array<std::uint8_t, 32> stub = MakeDispatchStub(reinterpret_cast<std::uintptr_t>(&RecordDispatch));
     Put(kDispatchVa, stub.data(), stub.size());
     PutValue<std::uint64_t>(kEventVa, kStockEvent);
     net_.assign(kNetGameBytes, 0);
