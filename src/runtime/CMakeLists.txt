@@ -141,6 +141,7 @@ set(PATCHES_SOURCES
     "patch/asset_cdn.cpp"
     "patch/evrp_package.cpp"
     "patch/headless_graphics.cpp"
+    "patch/headless_gfx_settings.cpp"
     "hook/symbol_corpus.cpp"
     "server/gameserver.cpp"
     "server/gameserver_callbacks.cpp"
@@ -271,6 +272,7 @@ set(PATCHES_HEADERS
     "hook/export_trace_thunk.h"
     "hook/export_tracer.h"
     "patch/headless_graphics.h"
+    "patch/headless_gfx_settings.h"
     "hook/symbol_corpus.h"
     "server/gameserver.h"
     "server/gameserver_internal.h"
@@ -1032,6 +1034,19 @@ if(BUILD_TESTING)
     target_include_directories(test_render_config_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_render_config_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_render_config_hook DISCOVERY_MODE PRE_TEST)
+
+    # #1774 P3: the headless detour of ApplyRuntimeGfxSettings, and render_config's Install on a headless run, under
+    # MinHook against a fake image with the real prologues.
+    add_executable(test_headless_gfx_settings tests/test_headless_gfx_settings.cpp patch/headless_gfx_settings.cpp
+      patch/render_config.cpp patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp hook/hook_liveness.cpp)
+    set_source_files_properties(tests/test_headless_gfx_settings.cpp patch/headless_gfx_settings.cpp
+      patch/render_config.cpp patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp hook/hook_liveness.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_headless_gfx_settings PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS
+      NEVR_RENDER_CONFIG_TESTING NEVR_HEADLESS_GFX_TESTING)
+    target_include_directories(test_headless_gfx_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_headless_gfx_settings PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_headless_gfx_settings DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp

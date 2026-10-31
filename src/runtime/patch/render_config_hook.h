@@ -22,10 +22,11 @@
 namespace nevr_render_config_hook {
 
 /// Installs the two observers on a client and starts the check. On a server it installs nothing and logs
-/// `[NEVR.RENDER] render_config skipped reason=server_mode` once. If either prologue does not validate it installs
-/// neither, logs a Warning naming the cause, and the line reports the settings fields as unavailable. Returns true when
-/// both observers are installed.
-bool Install(std::uintptr_t gameBase, bool isServer);
+/// `[NEVR.RENDER] render_config skipped reason=server_mode` once. On a headless run (`headless`) the Apply observer is
+/// not installed, because nevr_headless_gfx_settings owns ApplyRuntimeGfxSettings there; the selector observer is. If
+/// either prologue does not validate it installs neither, logs a Warning naming the cause, and the line reports the
+/// settings fields as unavailable. Returns true when every observer this run installs is installed.
+bool Install(std::uintptr_t gameBase, bool isServer, bool headless);
 
 /// The per-frame call. `nowUs` is the dispatcher's microsecond clock. A no-op until Install ran on a client; then at most
 /// one evaluation a second, and a log line only at the first frame and when the configuration changed.

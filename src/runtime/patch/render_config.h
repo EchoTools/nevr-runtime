@@ -12,6 +12,7 @@
 // Every address is a ReVault VA in echovr.exe (image base 0x140000000); the value read at run time is
 // `base + (VA - kImageBase)`. The ones marked "read back" were read back from the disassembly while writing this file.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -62,6 +63,11 @@ inline constexpr std::uint64_t kResolutionScaleVa = 0x1420afac0ULL;
 
 /// ApplyRuntimeGfxSettings(SR15GfxSettings*, CR15Game*, int logFlag) (read back).
 inline constexpr std::uint64_t kApplyVa = 0x140c31870ULL;
+/// The first 27 bytes of ApplyRuntimeGfxSettings, up to and including `SUB RSP,0x60`. Nothing in them is position dependent.
+/// The render_config observer and the headless replacement both validate the game's bytes against these.
+inline constexpr std::array<std::uint8_t, 27> kApplyPrologue = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24,
+                                                                0x18, 0x48, 0x89, 0x7c, 0x24, 0x20, 0x55, 0x41, 0x56,
+                                                                0x41, 0x57, 0x48, 0x8b, 0xec, 0x48, 0x83, 0xec, 0x60};
 /// The GPU-based auto-selector fcn.140c31e00(SR15GfxSettings*, CR15Game*) (read back).
 inline constexpr std::uint64_t kSelectorVa = 0x140c31e00ULL;
 /// The return address of the boot call to ApplyRuntimeGfxSettings: FUN_1401090c0 `CALL` at 0x140109209 (read back).

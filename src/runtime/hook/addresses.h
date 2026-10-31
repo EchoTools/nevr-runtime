@@ -147,12 +147,8 @@ constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 /// build has a regression, re-read the shipped bytes first. That is exactly the
 /// conclusion the evidence invites and it is wrong.
 
-/// ReVault VA 0x140109209: CALL to FUN_140c31870 (ApplyGraphicsSettings) inside FUN_1401090c0
-/// FUN_140c31870 calls ~66 CGRenderer methods (MSAA, TAA, resolution scale, etc.)
-/// that assume a live renderer. Crashes on headless with no GPU.
-/// Patch: NOP the 5-byte CALL instruction
-constexpr uintptr_t HEADLESS_APPLY_GRAPHICS = 0x109209;
-constexpr size_t HEADLESS_APPLY_GRAPHICS_SIZE = 5;
+/// ReVault VA 0x140c31870 (ApplyRuntimeGfxSettings) is detoured on headless runs, not patched at its call
+/// site (patch/headless_gfx_settings.h).
 
 /// Address: DirectInput8Create call in CSceneRenderPipeline input init (0x141055DBB)
 /// Source: ReVault — fcn.141055d90 calls DirectInput8Create via delay-load thunk.

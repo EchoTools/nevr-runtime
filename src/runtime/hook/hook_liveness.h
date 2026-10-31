@@ -34,6 +34,7 @@ enum Id : int {
   kBroadcasterListen,
   kBroadcasterReceiveLocal,
   kOvrGetPerfStats,
+  kApplyGfxSettings,
   kCount
 };
 
@@ -43,6 +44,9 @@ void Mark(Id id);
 /// Emit one line per hook: name, entries, and whether it was ever entered.
 /// Call from a site known to run (see N86 — do not pick one on faith).
 void Report(const char* context);
+
+/// Entries recorded for one hook so far.
+long Entries(Id id);
 
 /// Number of hooks with zero entries. A nonzero result is not automatically a
 /// bug — some hooks are mode-specific — but every one is a claim needing proof.

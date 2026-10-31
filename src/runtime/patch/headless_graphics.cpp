@@ -18,8 +18,8 @@
  *
  * The stub factory returns DXGI_ERROR_NOT_FOUND on EnumAdapters(0) so the
  * game sees "no adapters" and skips the GPU init path.  The existing
- * PatchEnableHeadless() already NOPs the renderer init and ApplyGraphicsSettings
- * calls, so the game never gets far enough to need a real device.
+ * PatchEnableHeadless() already gates the renderer init and detours ApplyRuntimeGfxSettings
+ * (patch/headless_gfx_settings.h), so the game never gets far enough to need a real device.
  *
  * D3D11CreateDevice is also hooked: if somehow reached in headless mode, it
  * returns a null device + context with E_FAIL, which the HandleDXError hook

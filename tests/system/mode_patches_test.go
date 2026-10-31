@@ -90,7 +90,6 @@ func TestModePatchesOptionalSubsystemPrologues(t *testing.T) {
 		{"loading tip pick", 0xBD9670, []byte{0x48, 0x89, 0x5C, 0x24, 0x10}},
 		{"loading tip select", 0xBE6D10, []byte{0x48, 0x89, 0x54, 0x24, 0x10}},
 		{"loading tip select two", 0xBE7C90, []byte{0x48, 0x89, 0x5C, 0x24, 0x10}},
-		{"apply graphics", 0x109209, []byte{0xE8, 0x62, 0x86, 0xB2, 0x00}},
 		{"direct input", 0x1055DBB, []byte{0xE8, 0xA6, 0xF8, 0x48, 0x00}},
 		{"effects load", 0x62CA91, []byte{0x75, 0x41}},
 		{"renderer", 0xFF581, []byte{0xA8, 0x01}},
@@ -171,7 +170,6 @@ func TestModePatchesTargetsDoNotOverlap(t *testing.T) {
 		{"loading tip pick", 0xBD9670, 1},
 		{"loading tip select", 0xBE6D10, 1},
 		{"loading tip select two", 0xBE7C90, 1},
-		{"apply graphics", 0x109209, 5},
 		{"direct input", 0x1055DBB, 5},
 		{"effects load", 0x62CA91, 2},
 		{"renderer", 0xFF581, 2},
@@ -203,4 +201,13 @@ func TestModePatchesTargetsDoNotOverlap(t *testing.T) {
 			}
 		}
 	}
+}
+
+// #1774: the headless detour of ApplyRuntimeGfxSettings (patch/headless_gfx_settings.h) goes in on this prologue, which must
+// match the game's first. It is a detour, not a byte write, so it stays out of the byte-write table above: the ground-truth
+// verifier (tools/verify_mode_patch_ground_truth.py) reads that table as the byte-write targets.
+func TestHeadlessApplyGraphicsPrologue(t *testing.T) {
+	exe := getGameBinary(t, "echovr.exe")
+	assertRVABytes(t, exe, 0xC31870, []byte{0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20,
+		0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8B, 0xEC, 0x48, 0x83, 0xEC, 0x60})
 }

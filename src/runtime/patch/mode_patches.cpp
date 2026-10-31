@@ -21,6 +21,7 @@
 #include "runtime/hook/process_memory.h"
 #include "runtime/patch/broadcaster_pointer_guard.h"
 #include "runtime/patch/checked_patch.h"
+#include "runtime/patch/headless_gfx_settings.h"
 
 // ============================================================================
 // Headless graphics-gate skip helper
@@ -172,10 +173,9 @@ VOID PatchEnableHeadless(PVOID pGame) {
   static_assert(sizeof(effectsPatch) == HEADLESS_EFFECTS_SIZE, "HEADLESS_EFFECTS patch size mismatch");
   ApplyPatch(HEADLESS_EFFECTS, effectsPatch, sizeof(effectsPatch));
 
-  // Skip ApplyGraphicsSettings call — it calls ~66 CGRenderer methods that crash without a renderer
-  const BYTE graphicsNop[] = {0x90, 0x90, 0x90, 0x90, 0x90};  // 5x NOP over CALL instruction
-  static_assert(sizeof(graphicsNop) == HEADLESS_APPLY_GRAPHICS_SIZE, "HEADLESS_APPLY_GRAPHICS patch size mismatch");
-  ApplyPatch(HEADLESS_APPLY_GRAPHICS, graphicsNop, sizeof(graphicsNop));
+  // ApplyRuntimeGfxSettings calls ~66 CGRenderer methods that crash without a renderer. Its prologue is validated and
+  // detoured here; both game callers get 0 back (patch/headless_gfx_settings.h).
+  nevr_headless_gfx_settings::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // Kill DirectInput8Create call — prevents HID enumeration thread from spinning
   const BYTE dinputNop[] = {0x90, 0x90, 0x90, 0x90, 0x90};

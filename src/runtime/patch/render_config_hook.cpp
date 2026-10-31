@@ -27,11 +27,6 @@ using nevr_render_config::Externals;
 using nevr_render_config::MemoryReader;
 using nevr_render_config::SettingsObserver;
 
-// ApplyRuntimeGfxSettings @ 0x140c31870 (ReVault echovr.exe, read back): the first 27 bytes, up to and including
-// `SUB RSP,0x60`. Nothing in them is position dependent.
-constexpr std::array<std::uint8_t, 27> kApplyPrologue = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24,
-                                                          0x18, 0x48, 0x89, 0x7c, 0x24, 0x20, 0x55, 0x41, 0x56,
-                                                          0x41, 0x57, 0x48, 0x8b, 0xec, 0x48, 0x83, 0xec, 0x60};
 // The GPU auto-selector @ 0x140c31e00 (read back): the first 26 bytes, up to and including `MOV RBX,RCX`.
 constexpr std::array<std::uint8_t, 26> kSelectorPrologue = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24,
                                                              0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83,
@@ -318,7 +313,7 @@ bool PrologueMatches(const char* name, std::uint64_t va, void* target, const std
 
 }  // namespace
 
-bool Install(std::uintptr_t gameBase, bool isServer) {
+bool Install(std::uintptr_t gameBase, bool isServer, bool headless) {
   if (isServer) {
     if (!g_serverSkipLogged.exchange(true)) {
       Log(EchoVR::LogLevel::Info, "[NEVR.RENDER] render_config skipped reason=server_mode (a server renders nothing)");
@@ -338,22 +333,28 @@ bool Install(std::uintptr_t gameBase, bool isServer) {
   // The check works with or without the hooks: without them the settings fields read unavailable.
   g_active.store(true, std::memory_order_release);
 
-  void* const apply = nevr::ResolveVA_Checked(gameBase, nevr_render_config::kApplyVa);
+  // A headless run: ApplyRuntimeGfxSettings is replaced by nevr_headless_gfx_settings (its own hook at the same address,
+  // installed from PatchEnableHeadless), so this observer does not detour it. Its prologue is not checked here either.
+  void* const apply = headless ? nullptr : nevr::ResolveVA_Checked(gameBase, nevr_render_config::kApplyVa);
   void* const selector = nevr::ResolveVA_Checked(gameBase, nevr_render_config::kSelectorVa);
-  const bool applyOk = PrologueMatches("ApplyRuntimeGfxSettings", nevr_render_config::kApplyVa, apply,
-                                       kApplyPrologue.data(), kApplyPrologue.size());
+  const bool applyOk = headless || PrologueMatches("ApplyRuntimeGfxSettings", nevr_render_config::kApplyVa, apply,
+                                                   nevr_render_config::kApplyPrologue.data(),
+                                                   nevr_render_config::kApplyPrologue.size());
   const bool selectorOk = PrologueMatches("GfxSettingsAutoSelect", nevr_render_config::kSelectorVa, selector,
                                           kSelectorPrologue.data(), kSelectorPrologue.size());
   if (!applyOk || !selectorOk) return false;
 
-  g_originalApply = reinterpret_cast<ApplyFn>(apply);
   g_originalSelector = reinterpret_cast<SelectorFn>(selector);
-  const BOOL applyHooked = PatchDetour(&g_originalApply, reinterpret_cast<PVOID>(&ApplyHook), "ApplyRuntimeGfxSettings");
   const BOOL selectorHooked =
       PatchDetour(&g_originalSelector, reinterpret_cast<PVOID>(&SelectorHook), "GfxSettingsAutoSelect");
+  BOOL applyHooked = TRUE;
+  if (!headless) {
+    g_originalApply = reinterpret_cast<ApplyFn>(apply);
+    applyHooked = PatchDetour(&g_originalApply, reinterpret_cast<PVOID>(&ApplyHook), "ApplyRuntimeGfxSettings");
+  }
   Log(applyHooked && selectorHooked ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.RENDER] render_config hooks apply=%s selector=%s (settings source and values on the render_config line)",
-      applyHooked ? "installed" : "failed", selectorHooked ? "installed" : "failed");
+      headless ? "skipped_headless" : (applyHooked ? "installed" : "failed"), selectorHooked ? "installed" : "failed");
   return applyHooked && selectorHooked;
 }
 

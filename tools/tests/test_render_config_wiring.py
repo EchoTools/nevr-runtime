@@ -20,13 +20,19 @@ LOGGING_DOC = ROOT / "docs/standards/logging.md"
 FILTER = ROOT / "src/runtime/log/builtin_filter.cpp"
 
 POLL_CALL = "nevr_render_config_hook::Poll(nowUs);"
-INSTALL_CALL = "nevr_render_config_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), g_isServer != FALSE);"
+INSTALL_CALL = ("nevr_render_config_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), "
+                "g_isServer != FALSE, g_isHeadless != FALSE);")
 SERVER_LOG = "[NEVR.RENDER] render_config skipped reason=server_mode"
 
 
 def strip_comments(text: str) -> str:
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     return re.sub(r"//[^\n]*", "", text)
+
+
+def normalize(text: str) -> str:
+    """Comments stripped and every run of whitespace made one space, so a call wrapped at the 120-column limit reads as one."""
+    return re.sub(r"\s+", " ", strip_comments(text))
 
 
 def function_body(code: str, signature: str) -> str | None:
@@ -63,7 +69,7 @@ def poll_call_problems(tick: str) -> list[str]:
 
 def install_call_problems(boot: str) -> list[str]:
     """Install is called once from boot.cpp with the server flag; the gate and the skip log live in Install."""
-    code = strip_comments(boot)
+    code = normalize(boot)
     if code.count(INSTALL_CALL) != 1:
         return [f"expected exactly one `{INSTALL_CALL}` in boot.cpp, found {code.count(INSTALL_CALL)}"]
     return []
@@ -195,10 +201,13 @@ class RenderConfigWiring(unittest.TestCase):
 
     def test_the_install_call_check_fails_when_the_flag_is_dropped_or_the_call_doubled(self):
         boot = BOOT.read_text(encoding="utf-8")
-        self.assertTrue(install_call_problems(boot.replace("g_isServer != FALSE);", "false);", 1)))
-        self.assertTrue(install_call_problems(boot.replace(INSTALL_CALL, "")))
+        flag_mutant = boot.replace("(nullptr)), g_isServer != FALSE,\n", "(nullptr)), false,\n", 1)
+        self.assertNotEqual(flag_mutant, boot, "the anchor did not match the Install call, so the mutant was never made")
+        self.assertTrue(install_call_problems(flag_mutant))
+        self.assertTrue(install_call_problems(boot.replace("g_isHeadless != FALSE);", "false);", 1)))
+        self.assertTrue(install_call_problems(normalize(boot).replace(INSTALL_CALL, "")))
         self.assertTrue(install_call_problems(boot + "\n" + INSTALL_CALL + "\n"))
-        self.assertTrue(install_call_problems(boot.replace(INSTALL_CALL, "// " + INSTALL_CALL)))
+        self.assertTrue(install_call_problems(normalize(boot).replace(INSTALL_CALL, "// " + INSTALL_CALL)))
 
     def test_install_returns_on_a_server_before_any_hook_work_and_logs_the_skip(self):
         self.assertEqual(install_gate_problems(HOOK.read_text(encoding="utf-8")), [])
@@ -207,8 +216,9 @@ class RenderConfigWiring(unittest.TestCase):
         hook = HOOK.read_text(encoding="utf-8")
         self.assertTrue(install_gate_problems(hook.replace("if (isServer) {", "if (false) {", 1)))
         self.assertTrue(install_gate_problems(hook.replace(SERVER_LOG, "[NEVR.RENDER] something else")))
-        moved = hook.replace("bool Install(std::uintptr_t gameBase, bool isServer) {",
-                             "bool Install(std::uintptr_t gameBase, bool isServer) {\n  nevr::ResolveVA_Checked(gameBase, 0x140000000ULL);", 1)
+        moved = hook.replace("bool Install(std::uintptr_t gameBase, bool isServer, bool headless) {",
+                             "bool Install(std::uintptr_t gameBase, bool isServer, bool headless) {\n  nevr::ResolveVA_Checked(gameBase, 0x140000000ULL);", 1)
+        self.assertNotEqual(moved, hook, "the anchor did not match, so the mutant was never made")
         self.assertTrue(install_gate_problems(moved))
 
     def test_both_hooks_are_named_prologue_validated_and_installed_with_patchdetour(self):
@@ -217,15 +227,14 @@ class RenderConfigWiring(unittest.TestCase):
     def test_the_hook_check_fails_without_each_piece(self):
         hook = HOOK.read_text(encoding="utf-8")
         removals = (
-            '"ApplyRuntimeGfxSettings");\n  const BOOL selectorHooked',
+            '"ApplyRuntimeGfxSettings");\n  }',
             'PrologueMatches("GfxSettingsAutoSelect"',
             "nevr::ValidatePrologue(",
             "if (!applyOk || !selectorOk) return false;",
         )
         for needle in removals:
             self.assertIn(needle, hook, needle)
-        self.assertTrue(hook_problems(hook.replace('"ApplyRuntimeGfxSettings");\n  const BOOL selectorHooked',
-                                                  '"x");\n  const BOOL selectorHooked', 1)))
+        self.assertTrue(hook_problems(hook.replace('"ApplyRuntimeGfxSettings");\n  }', '"x");\n  }', 1)))
         self.assertTrue(hook_problems(hook.replace('PrologueMatches("GfxSettingsAutoSelect"', 'Other("GfxSettingsAutoSelect"', 1)))
         self.assertTrue(hook_problems(hook.replace("nevr::ValidatePrologue(", "Other(", 1)))
         self.assertTrue(hook_problems(hook.replace("if (!applyOk || !selectorOk) return false;", "", 1)))

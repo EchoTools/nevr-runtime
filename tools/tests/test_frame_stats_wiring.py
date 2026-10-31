@@ -158,10 +158,11 @@ class RuntimeSideTest(unittest.TestCase):
 class LivenessRowTest(unittest.TestCase):
     def test_the_perf_stats_row_says_it_is_expected_only_in_a_pcvr_session(self):
         header = read("src/runtime/hook/hook_liveness.h")
-        self.assertRegex(header, r"kBroadcasterReceiveLocal,\s*kOvrGetPerfStats,\s*kCount")
+        self.assertRegex(header, r"kBroadcasterReceiveLocal,\s*kOvrGetPerfStats,\s*kApplyGfxSettings,\s*kCount")
         cpp = strip_comments(read("src/runtime/hook/hook_liveness.cpp"))
         self.assertIn('{"ovr_GetPerfStats", "PCVR session only", false},', cpp)
-        self.assertEqual(cpp.count(", true}"), 1, "a second guaranteedAbsentOnServer row would be swallowed")
+        guaranteed_absent = re.findall(r'\{"[^"]*", "[^"]*", true[},]', cpp)  # the third field is guaranteedAbsentOnServer
+        self.assertEqual(len(guaranteed_absent), 1, "a second guaranteedAbsentOnServer row would be swallowed")
 
     def test_the_hook_marks_its_liveness_id(self):
         self.assertIn("Mark(nevr_hook_liveness::kOvrGetPerfStats)", strip_comments(read("src/runtime/frame/frame_stats.cpp")))

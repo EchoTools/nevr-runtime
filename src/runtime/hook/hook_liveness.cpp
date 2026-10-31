@@ -3,6 +3,7 @@
 #include <winsock2.h>
 #include <windows.h>
 
+#include "core/globals.h"  // g_isHeadless
 #include "core/logging.h"
 #include "runtime/lifecycle/cli.h"  // g_isServer
 
@@ -16,6 +17,9 @@ struct Entry {
   // it every periodic report for the life of a server process is testing an
   // invariant, not a live condition — see kPrecisionSleepWait's row below.
   bool guaranteedAbsentOnServer;
+  // True for a hook installed only on headless runs (nevr_headless_gfx_settings). On any other run it is not
+  // tracked and never reported, so a client does not log a never-entered Warning for a hook it never installs.
+  bool headlessOnly = false;
 };
 
 // Order MUST match nevr_hook_liveness::Id.
@@ -32,6 +36,8 @@ const Entry kEntries[] = {
     // so entries=0 there is the expected reading, not dead wiring. Not guaranteedAbsentOnServer: that
     // row's notice is one shared bool (see g_serverAbsenceNoticeLogged), and a second row would be swallowed.
     {"ovr_GetPerfStats", "PCVR session only", false},
+    // Installed on a headless run only, by PatchEnableHeadless; it replaces the game's graphics-settings apply there.
+    {"ApplyRuntimeGfxSettings", "headless runs only", false, true},
 };
 
 // kEntries is sized by its INITIALIZER, not by kCount. That is load-bearing: if
@@ -69,6 +75,11 @@ void Mark(Id id) {
   InterlockedIncrement(&g_counts[id]);
 }
 
+long Entries(Id id) {
+  if (id < 0 || id >= kCount) return 0;
+  return g_counts[id];
+}
+
 int NeverEnteredCount() {
   int n = 0;
   for (int i = 0; i < kCount; i++) {
@@ -80,6 +91,7 @@ int NeverEnteredCount() {
 void Report(const char* context) {
   for (int i = 0; i < kCount; i++) {
     if (kEntries[i].name == nullptr) continue;  // belt-and-braces
+    if (kEntries[i].headlessOnly && !g_isHeadless) continue;
 
     // D — kPrecisionSleepWait is structurally guaranteed never entered on a
     // dedicated server (N86; see this file's header comment and tick.cpp's).

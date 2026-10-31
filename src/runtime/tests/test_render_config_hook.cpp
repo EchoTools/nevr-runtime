@@ -37,10 +37,8 @@ constexpr std::size_t kImageBytes = 0x2200000;  // covers the highest game globa
 constexpr std::uint64_t kApplyResult = 0x1234abcdULL;
 constexpr std::uint64_t kSelectorResult = 0x5678ULL;
 
-// The real prologues (render_config_hook.cpp), then an epilogue that restores what the prologue saved.
-constexpr std::array<std::uint8_t, 27> kApplyPrologue = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24,
-                                                          0x18, 0x48, 0x89, 0x7c, 0x24, 0x20, 0x55, 0x41, 0x56,
-                                                          0x41, 0x57, 0x48, 0x8b, 0xec, 0x48, 0x83, 0xec, 0x60};
+// The real prologues (kApplyPrologue from render_config.h, the selector's from render_config_hook.cpp), then an epilogue
+// that restores what the prologue saved.
 constexpr std::array<std::uint8_t, 26> kSelectorPrologue = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24,
                                                              0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83,
                                                              0xec, 0x20, 0x48, 0x8b, 0xea, 0x48, 0x8b, 0xd9};
@@ -213,8 +211,8 @@ class RenderConfigHook : public ::testing::Test {
 // ---- (g) server mode installs nothing ----
 
 TEST_F(RenderConfigHook, ServerModeInstallsNothingAndSaysSoOnce) {
-  EXPECT_FALSE(hook::Install(base_, /*isServer=*/true));
-  EXPECT_FALSE(hook::Install(base_, /*isServer=*/true));
+  EXPECT_FALSE(hook::Install(base_, /*isServer=*/true, /*headless=*/false));
+  EXPECT_FALSE(hook::Install(base_, /*isServer=*/true, /*headless=*/false));
   EXPECT_FALSE(hook::ActiveForTest());
   EXPECT_EQ(At(kApplyVa)[0], kApplyPrologue[0]) << "a server run wrote a hook";
   EXPECT_EQ(At(kSelectorVa)[0], kSelectorPrologue[0]);
@@ -232,18 +230,18 @@ TEST_F(RenderConfigHook, PollBeforeInstallWritesNothing) {
 // ---- Install ----
 
 TEST_F(RenderConfigHook, AClientInstallsBothObserversAndSaysSo) {
-  ASSERT_TRUE(hook::Install(base_, /*isServer=*/false));
+  ASSERT_TRUE(hook::Install(base_, /*isServer=*/false, /*headless=*/false));
   EXPECT_TRUE(hook::ActiveForTest());
   EXPECT_EQ(At(kApplyVa)[0], 0xE9) << "apply not detoured";
   EXPECT_EQ(At(kSelectorVa)[0], 0xE9) << "selector not detoured";
   EXPECT_EQ(CountContaining("[NEVR.RENDER] render_config hooks apply=installed selector=installed"), 1);
-  EXPECT_TRUE(hook::Install(base_, false)) << "a second Install is a no-op that still reports installed";
+  EXPECT_TRUE(hook::Install(base_, false, false)) << "a second Install is a no-op that still reports installed";
   EXPECT_EQ(CountContaining("render_config hooks"), 1);
 }
 
 TEST_F(RenderConfigHook, AMismatchedPrologueInstallsNeitherHookAndNamesTheCause) {
   At(kSelectorVa)[3] ^= 0xFF;  // one byte of the selector's prologue differs
-  EXPECT_FALSE(hook::Install(base_, /*isServer=*/false));
+  EXPECT_FALSE(hook::Install(base_, /*isServer=*/false, /*headless=*/false));
   EXPECT_EQ(At(kApplyVa)[0], kApplyPrologue[0]) << "the apply hook went in although the selector did not validate";
   EXPECT_EQ(At(kSelectorVa)[0], kSelectorPrologue[0]);
   const std::string warning = LineContaining("reason=prologue_mismatch");
@@ -266,19 +264,19 @@ TEST_F(RenderConfigHook, AMismatchedPrologueInstallsNeitherHookAndNamesTheCause)
 // ---- (f) the hooks pass the original's result through, and record the boot caller only for the boot return address ----
 
 TEST_F(RenderConfigHook, TheApplyHookReturnsTheOriginalsResultUnchanged) {
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   EXPECT_EQ(CallApplyFromMenu(ApplyEntry(), settings_.data()), kApplyResult);
   EXPECT_EQ(CallApplyFromBoot(ApplyEntry(), settings_.data()), kApplyResult);
   EXPECT_EQ(hook::ObservedForTest().applyCalls, 2U);
 }
 
 TEST_F(RenderConfigHook, TheSelectorHookReturnsTheOriginalsResultUnchanged) {
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   EXPECT_EQ(CallSelector(SelectorEntry(), settings_.data()), kSelectorResult);
 }
 
 TEST_F(RenderConfigHook, OnlyTheBootReturnAddressCountsAsTheBootCall) {
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
 
   // Learn the boot wrapper's return address the way the hook sees it, then declare it the boot return address.
   ASSERT_EQ(CallApplyFromBoot(ApplyEntry(), settings_.data()), kApplyResult);
@@ -297,7 +295,7 @@ TEST_F(RenderConfigHook, OnlyTheBootReturnAddressCountsAsTheBootCall) {
 }
 
 TEST_F(RenderConfigHook, ASelectorRunOnTheSameStructBeforeTheBootCallIsAutoSelected) {
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   ASSERT_EQ(CallApplyFromBoot(ApplyEntry(), settings_.data()), kApplyResult);
   hook::SetBootReturnForTest(hook::LastApplyReturnForTest());
 
@@ -307,7 +305,7 @@ TEST_F(RenderConfigHook, ASelectorRunOnTheSameStructBeforeTheBootCallIsAutoSelec
 }
 
 TEST_F(RenderConfigHook, AnApplyCallOnAnUnreadableStructReturnsTheResultAndIsCounted) {
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   EXPECT_EQ(CallApplyFromMenu(ApplyEntry(), nullptr), kApplyResult);
   const auto seen = hook::ObservedForTest();
   EXPECT_EQ(seen.applyCalls, 1U);
@@ -315,10 +313,20 @@ TEST_F(RenderConfigHook, AnApplyCallOnAnUnreadableStructReturnsTheResultAndIsCou
   EXPECT_FALSE(seen.seen);
 }
 
+// ---- (#1774) a headless run: the apply is the headless detour's; the selector stays ----
+
+TEST_F(RenderConfigHook, AHeadlessInstallSkipsOnlyTheApplyDetour) {
+  EXPECT_TRUE(hook::Install(base_, /*isServer=*/false, /*headless=*/true));
+  EXPECT_EQ(At(kApplyVa)[0], kApplyPrologue[0]) << "the apply was detoured on a headless run";
+  EXPECT_EQ(At(kSelectorVa)[0], 0xE9) << "the selector was not detoured on a headless run";
+  EXPECT_EQ(CountContaining("[NEVR.RENDER] render_config hooks apply=skipped_headless selector=installed"), 1);
+  EXPECT_EQ(CountContaining("apply=installed"), 0);
+}
+
 // ---- The line through Poll and the log ----
 
 TEST_F(RenderConfigHook, TheFirstFrameLineIsLoggedOnceAtInfoWithTheImagesValues) {
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   ASSERT_EQ(CallApplyFromBoot(ApplyEntry(), settings_.data()), kApplyResult);
   hook::SetBootReturnForTest(hook::LastApplyReturnForTest());
   ASSERT_EQ(CallSelector(SelectorEntry(), settings_.data()), kSelectorResult);
@@ -349,7 +357,7 @@ TEST_F(RenderConfigHook, TheFirstFrameLineIsLoggedOnceAtInfoWithTheImagesValues)
 }
 
 TEST_F(RenderConfigHook, AMsaaChangeThroughTheApplyHookAndANewRefreshRateAreOneChangeLine) {
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   ASSERT_EQ(CallApplyFromBoot(ApplyEntry(), settings_.data()), kApplyResult);
   hook::SetBootReturnForTest(hook::LastApplyReturnForTest());
   ASSERT_EQ(CallSelector(SelectorEntry(), settings_.data()), kSelectorResult);
@@ -379,7 +387,7 @@ TEST_F(RenderConfigHook, AMsaaChangeThroughTheApplyHookAndANewRefreshRateAreOneC
 }
 
 TEST_F(RenderConfigHook, TheTraceNamesTheLastApplyReturnAndTheBootReturnAsTwoAddresses) {
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   ASSERT_EQ(CallApplyFromBoot(ApplyEntry(), settings_.data()), kApplyResult);
   const std::uintptr_t bootReturn = hook::LastApplyReturnForTest();
   hook::SetBootReturnForTest(bootReturn);
@@ -397,7 +405,7 @@ TEST_F(RenderConfigHook, TheTraceNamesTheLastApplyReturnAndTheBootReturnAsTwoAdd
 
 TEST_F(RenderConfigHook, WithNoRenderTargetTheFirstLineComesAfterFiveSecondsWithTheTargetUnavailable) {
   PutValue<std::uint64_t>(kRenderTargetVa, 0);
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   hook::Poll(1'000'000);
   hook::Poll(5'000'000);
   EXPECT_EQ(CountContaining("reason=first_frame"), 0);
@@ -408,7 +416,7 @@ TEST_F(RenderConfigHook, WithNoRenderTargetTheFirstLineComesAfterFiveSecondsWith
 
 TEST_F(RenderConfigHook, TheProductionQueriesAnswerInsteadOfFailingTheLine) {
   hook::ResetForTest();  // puts the production DXGI and LibOVR queries back in place of SetUp's stand-ins
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   hook::Poll(1'000'000);
   const std::string line = LineContaining("reason=first_frame");
   ASSERT_FALSE(line.empty()) << "the first-frame line was not written";
@@ -439,7 +447,7 @@ TEST_F(RenderConfigHook, AZeroNvidiaScoreIsFilledBeforeTheSelectorRunsAndLoggedO
   PutValue<double>(kGpuScoreVa, 0.0);
   g_queryCalls = 0;
   hook::SetNvidiaQueryForTest(&FakeNvidiaQuery);
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   ASSERT_EQ(CallSelector(SelectorEntry(), settings_.data()), kSelectorResult);
   EXPECT_EQ(g_queryCalls, 1);
   double score = 0.0;
@@ -453,7 +461,7 @@ TEST_F(RenderConfigHook, ANonZeroGameScoreIsKeptAndTheQueryIsNotAsked) {
   PutValue<double>(kGpuScoreVa, 6.0);
   g_queryCalls = 0;
   hook::SetNvidiaQueryForTest(&FakeNvidiaQuery);
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   ASSERT_EQ(CallSelector(SelectorEntry(), settings_.data()), kSelectorResult);
   EXPECT_EQ(g_queryCalls, 0);
   double score = 0.0;
@@ -466,7 +474,7 @@ TEST_F(RenderConfigHook, AZeroScoreWithNoNvapiStaysZeroAndSaysWhy) {
   PutValue<double>(kGpuScoreVa, 0.0);
   g_queryCalls = 0;
   hook::SetNvidiaQueryForTest(&FakeNvidiaAbsent);
-  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_TRUE(hook::Install(base_, false, false));
   ASSERT_EQ(CallSelector(SelectorEntry(), settings_.data()), kSelectorResult);
   EXPECT_EQ(g_queryCalls, 1);
   double score = 1.0;
