@@ -61,9 +61,43 @@ class ReleaseVersionTest(unittest.TestCase):
         self.commit("feat(cli)!: drop the old flag names (#4)")
         self.assertVersion("v6.0.0")
 
-    def test_a_breaking_change_footer_bumps_the_major(self):
-        self.commit("refactor(host): split the host\n\nBREAKING CHANGE: the runtime is nevr-runtime.dll")
+    def test_a_bang_on_an_unscoped_feat_bumps_the_major(self):
+        self.commit("feat!: drop the old flag names (#4)")
         self.assertVersion("v6.0.0")
+
+    def test_a_breaking_change_footer_bumps_the_major(self):
+        self.commit("feat(host): split the host\n\nBREAKING CHANGE: the runtime is nevr-runtime.dll")
+        self.assertVersion("v6.0.0")
+
+    def test_a_fix_with_a_breaking_change_footer_bumps_the_major(self):
+        self.commit("fix(host): split the host\n\nBREAKING CHANGE: the runtime is nevr-runtime.dll")
+        self.assertVersion("v6.0.0")
+
+    def test_a_bang_on_a_chore_bumps_nothing(self):
+        self.commit("chore!: reference nothing that only one machine has (#4)")
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.stdout, "")
+        self.assertIn('"event": "nothing_to_release"', result.stderr)
+
+    def test_a_breaking_change_footer_on_a_chore_bumps_nothing(self):
+        self.commit("chore: drop a file\n\nBREAKING CHANGE: the file is gone")
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('"event": "nothing_to_release"', result.stderr)
+
+    def test_a_bang_on_a_scoped_docs_bumps_nothing(self):
+        self.commit("docs(scope)!: rewrite the release section (#4)")
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('"event": "nothing_to_release"', result.stderr)
+
+    def test_a_breaking_footer_on_a_refactor_bumps_nothing_and_a_later_feat_bumps_the_minor(self):
+        self.commit("refactor(host): split the host\n\nBREAKING CHANGE: the runtime is nevr-runtime.dll")
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.commit("feat: a later feature (#5)")
+        self.assertVersion("v5.6.0")
 
     def test_breaking_change_text_inside_a_body_line_is_not_a_footer(self):
         self.commit("fix(docs): say what a BREAKING CHANGE: footer is\n\nWe explain BREAKING CHANGE: here.")
@@ -106,7 +140,7 @@ class ReleaseVersionTest(unittest.TestCase):
                                        "next": "v5.5.2"})
 
     def test_a_hyphenated_breaking_change_footer_bumps_the_major(self):
-        self.commit("refactor(host): split the host\n\nBREAKING-CHANGE: the runtime is nevr-runtime.dll")
+        self.commit("feat(host): split the host\n\nBREAKING-CHANGE: the runtime is nevr-runtime.dll")
         self.assertVersion("v6.0.0")
 
     def test_sub_commit_subjects_in_a_squash_body_give_no_type(self):

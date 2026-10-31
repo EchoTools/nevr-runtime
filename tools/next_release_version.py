@@ -5,10 +5,12 @@ The rule (docs/standards/planning.md, "Release versions"): the base is the newes
 (a pre-release tag such as `v5.7.0-rc.1` is not a release tag; the highest version wins, so a scratch dry-run tag
 `v0.0.<issue>` is never the base). Every commit reachable from REV and not from the base is counted, the commits of a
 merged branch included. A breaking change (a `!` before the colon on the first line, or a line after it starting
-`BREAKING CHANGE:` or `BREAKING-CHANGE:`) bumps the major; otherwise a `feat` bumps the minor; otherwise a `fix` or
-`perf` bumps the patch. Only a commit's first line gives its type and its `!`, matched case-insensitively (Conventional
-Commits 1.0.0, item 15): the sub-commit subjects GitHub lists in a squash commit's body count for nothing, its
-breaking-change footers count. Any other type bumps nothing. Standard library only.
+`BREAKING CHANGE:` or `BREAKING-CHANGE:`) bumps the major when its type is `feat`, `fix` or `perf`; on any other type
+it bumps nothing, the same as that type without the marker. Basis: semver 2.0.0 section 1, which ties the version to the
+public API a release ships. Otherwise a `feat` bumps the minor; otherwise a `fix` or `perf` bumps the patch. Only a
+commit's first line gives its type and its `!`, matched case-insensitively (Conventional Commits 1.0.0, item 15): the
+sub-commit subjects GitHub lists in a squash commit's body count for nothing, its breaking-change footers count. Any
+other type bumps nothing. Standard library only.
 
     next_release_version.py [--repo DIR] [--rev REV]
 
@@ -65,14 +67,16 @@ def bump_of(message: str) -> int:
     match = HEADER.match(lines[0]) if lines else None
     if match is None:
         return NONE
+    kind = match.group("type").lower()
+    if kind not in ("feat", "fix", "perf"):
+        # semver 2.0.0 section 1: the version describes the public API a release ships. A marker on any other
+        # type bumps nothing, the same as that type without the marker.
+        return NONE
     if match.group("bang") or any(FOOTER.match(line) for line in lines[1:]):
         return MAJOR
-    kind = match.group("type").lower()
     if kind == "feat":
         return MINOR
-    if kind in ("fix", "perf"):
-        return PATCH
-    return NONE
+    return PATCH
 
 
 def next_version(version: tuple[int, int, int], bump: int) -> tuple[int, int, int]:
