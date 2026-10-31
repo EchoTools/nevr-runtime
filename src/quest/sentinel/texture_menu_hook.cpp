@@ -46,8 +46,8 @@ std::atomic<PropertyReader> g_property{nullptr};
 
 // The index the control starts on when the player has not chosen: the configuration's level (`stock` shows as Low).
 std::atomic<int> g_defaultIndex{tq::kDefaultMenuIndex};
-// What the start resolver found: 0 not asked, 1 the player's marker file, 2 the configuration.
-enum StartSource : int { kStartNotAsked = 0, kStartPlayerMarker = 1, kStartConfig = 2 };
+// What the start resolver found: 0 not asked, 1 the player's marker file, 2 the configuration, 3 the reference input's rule.
+enum StartSource : int { kStartNotAsked = 0, kStartPlayerMarker = 1, kStartConfig = 2, kStartReferenceRule = 3 };
 std::atomic<int> g_startSource{kStartNotAsked};
 std::atomic<int> g_startLevel{kUnset};
 std::atomic<bool> g_playerSaved{false};
@@ -228,27 +228,63 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
 // that never held the setting reads 0, which is Very Low, and cannot tell "chose Very Low" from "never chose". Returns the Level to
 // start at, or kUnset (no marker, nothing readable): the configuration's level then stands. It runs inside the game's call: no
 // logging, no exceptions.
+// The reference input's start rule (#1737 C4). The reference libr15 starts at the level its own settings file names: the `msaa`
+// index V there (his cave's rule, read by tq::ReferenceIndexFromSettings), at level kLow + V. It applies only on the reference input,
+// after the player's marker has been looked for and found nothing, and only when the configuration is `stock`. The level is queued
+// once as the player's marker, so the next launch reads it from there and this file is not read again. `directory` is the settings
+// directory (nullptr: none, which reads as a missing file). It runs inside the game's call: no logging.
+char g_referenceText[tq::kReferenceReadCap + 1];
+std::atomic<int> g_referenceIndex{kUnset};
+std::atomic<const char*> g_referenceFile{"none"};
+
+int ResolveReference(const char* directory) noexcept {
+  if (tq::InputKind() != tq::EyeInput::kReference || tq::LatchedLevel() != Level::kStock) return kUnset;
+  int index = tq::kReferenceDefaultIndex;
+  const char* state = "missing";
+  if (directory != nullptr) {
+    char path[600];  // %.512s plus the suffix: the directory is at most 512 characters, as the marker path's is
+    std::snprintf(path, sizeof(path), "%.512s/RAD/LoneEcho/settings_mp_v2_quest.json", directory);
+    std::FILE* const file = std::fopen(path, "r");
+    if (file != nullptr) {
+      const std::size_t size = std::fread(g_referenceText, 1, tq::kReferenceReadCap, file);
+      std::fclose(file);
+      bool sawKey = false;
+      index = tq::ReferenceIndexFromSettings(g_referenceText, size, &sawKey);
+      state = sawKey ? "read" : "no_key";
+    }
+  }
+  const Level level = tq::LevelForReferenceIndex(index);
+  g_referenceIndex.store(index, std::memory_order_release);
+  g_referenceFile.store(state, std::memory_order_release);
+  g_playerSaved.store(true, std::memory_order_release);
+  g_startSource.store(kStartReferenceRule, std::memory_order_release);
+  g_startLevel.store(static_cast<int>(level), std::memory_order_release);
+  g_appliedLevel.store(static_cast<std::uint64_t>(level), std::memory_order_relaxed);
+  g_pendingMarker.store(tq::MenuIndexForLevel(level), std::memory_order_release);
+  return static_cast<int>(level);
+}
+
 int ResolveStart() noexcept {
   g_startSource.store(kStartConfig, std::memory_order_release);
   const pin::LocalAppDataDirectoryFn directory = g_localAppData.load(std::memory_order_acquire);
-  if (directory == nullptr) return kUnset;
+  if (directory == nullptr) return ResolveReference(nullptr);
   alignas(8) char fixedString[1024];  // a CFixedStringT<512>: its characters come first
   std::memset(fixedString, 0, sizeof(fixedString));
   directory(fixedString);
   fixedString[512] = '\0';
-  if (fixedString[0] == '\0') return kUnset;
+  if (fixedString[0] == '\0') return ResolveReference(nullptr);
   // fixedString holds at most 512 characters (its last byte is the NUL above), so the precision bounds the directory and
   // the suffix fits: a longer directory cannot truncate the path silently.
   static_assert(512 + sizeof("/RAD/LoneEcho/") + sizeof(texture_menu::kMarkerFile) <= sizeof(g_markerPath), "marker path buffer fits the directory");
   std::snprintf(g_markerPath, sizeof(g_markerPath), "%.512s/RAD/LoneEcho/%s", fixedString, texture_menu::kMarkerFile);
   g_markerPathReady.store(true, std::memory_order_release);
   std::FILE* const file = std::fopen(g_markerPath, "r");
-  if (file == nullptr) return kUnset;
+  if (file == nullptr) return ResolveReference(fixedString);
   char buffer[256];  // the marker is {"menu_index":N}
   const std::size_t size = std::fread(buffer, 1, sizeof(buffer), file);
   std::fclose(file);
   const int index = texture_menu::MarkedMenuIndex(buffer, size);
-  if (index < 0) return kUnset;
+  if (index < 0) return ResolveReference(fixedString);
   g_playerSaved.store(true, std::memory_order_release);
   g_startSource.store(kStartPlayerMarker, std::memory_order_release);
   const Level level = tq::LevelForMenuIndex(index);
@@ -367,7 +403,10 @@ void ApplyPending(void* engine) noexcept {
     }
   }
 
-  const pin::RefreshRTSizeFn refresh = g_refreshRtSize.load(std::memory_order_acquire);
+  // The eye size is asked through the eye-size route when it is in place (the reference input's RefreshRTSize hook), else through
+  // the game's own function. The route is looked up here, not at install, so either install order gives the same answer.
+  const pin::RefreshRTSizeFn routed = tq::HookedRefresh();
+  const pin::RefreshRTSizeFn refresh = routed != nullptr ? routed : g_refreshRtSize.load(std::memory_order_acquire);
   const pin::VrFlagFn initialized = g_vrInitialized.load(std::memory_order_acquire);
   const pin::VrFlagFn graphicsInitialized = g_vrGraphicsInitialized.load(std::memory_order_acquire);
   const pin::VrFlagFn displayLost = g_vrDisplayLost.load(std::memory_order_acquire);
@@ -449,6 +488,10 @@ struct Logged {
   bool json[kDocuments] = {false, false, false};
   unsigned long long refused = 0;
   unsigned long long failed = 0;
+  // The last eye-size decision written (texture_quality_eye): its source, width and height.
+  int eyeSource = -1;
+  int eyeW = -1;
+  int eyeH = -1;
 };
 Logged g_logged;
 std::atomic<int> g_propertyLast{kUnset};
@@ -528,10 +571,22 @@ int PollLocked() noexcept {
   if (!g_logged.start && source != kStartNotAsked) {
     g_logged.start = true;
     const int start = g_startLevel.load(std::memory_order_acquire);
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_start",
-                        {{"source", source == kStartPlayerMarker ? "player_marker" : "config"},
-                         {"quality", tq::LevelName(start == kUnset ? tq::LatchedLevel() : static_cast<Level>(start))},
-                         {"menu_index", tq::MenuIndexForLevel(start == kUnset ? tq::LatchedLevel() : static_cast<Level>(start))}});
+    const Level startLevel = start == kUnset ? tq::LatchedLevel() : static_cast<Level>(start);
+    const char* const sourceName = source == kStartPlayerMarker ? "player_marker"
+                                   : source == kStartReferenceRule ? "reference_rule"
+                                                                   : "config";
+    const int referenceIndex = g_referenceIndex.load(std::memory_order_acquire);
+    const sentinel::LogField fields[] = {
+        {"source", sourceName},
+        {"input", tq::InputName(tq::InputKind())},
+        {"quality", tq::LevelName(startLevel)},
+        {"menu_index", tq::MenuIndexForLevel(startLevel)},
+        {"reference_index", referenceIndex < 0 ? 0 : referenceIndex},
+        {"reference_file", g_referenceFile.load(std::memory_order_acquire)},
+        {"consequence", "the level is saved as the player's choice so the next launch reads it from there"}};
+    // The reference fields ride on the reference rule's line only (the first four fields are the same on every source).
+    sentinel::LogFieldList(sentinel::LogLevel::kInfo, "texture_quality_start", fields,
+                           source == kStartReferenceRule ? 7U : 4U);
     ++lines;
   }
   for (int document = kMenuSettings; document < kDocuments; ++document) {
@@ -555,6 +610,24 @@ int PollLocked() noexcept {
                         {{"source", tq::LastRequestSource() == tq::RequestSource::kProperty ? "property" : "menu"},
                          {"from", tq::LevelName(static_cast<Level>(from))},
                          {"to", tq::LevelName(static_cast<Level>(requested))}});
+    ++lines;
+  }
+  // The eye size the last RefreshRTSize stored, when it differs from the one written before (the actual size, per the route).
+  const tq::Decision decision = tq::LastDecision();
+  if (decision.source != tq::DecisionSource::kNone &&
+      (static_cast<int>(decision.source) != g_logged.eyeSource || decision.w != g_logged.eyeW || decision.h != g_logged.eyeH)) {
+    g_logged.eyeSource = static_cast<int>(decision.source);
+    g_logged.eyeW = decision.w;
+    g_logged.eyeH = decision.h;
+    const tq::Counts counts = tq::CurrentCounts();
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_eye",
+                        {{"input", tq::InputName(tq::InputKind())},
+                         {"quality", tq::LevelName(tq::LatchedLevel())},
+                         {"native_w", counts.nativeWidth},
+                         {"native_h", counts.nativeHeight},
+                         {"w", decision.w},
+                         {"h", decision.h},
+                         {"source", tq::DecisionSourceName(decision.source)}});
     ++lines;
   }
   const int applied = tq::IsLatched() ? static_cast<int>(tq::LatchedLevel()) : kUnset;
@@ -805,6 +878,8 @@ void ArmForTest(const Game& game, tq::Level configLevel, bool /*fromConfig*/, Pr
 }
 
 void ResetForTest() noexcept {
+  g_referenceIndex.store(kUnset);
+  g_referenceFile.store("none");
   g_refreshRtSize.store(nullptr);
   g_vrInitialized.store(nullptr);
   g_vrGraphicsInitialized.store(nullptr);

@@ -80,12 +80,31 @@ TEST(TheVaddrIsTheReVaultAddressMinusTheBiasInCode) {
 
 TEST(TheSlotAreaIsSectionFourOfTheAdr) {
   CHECK_EQ(kStockImageEnd, static_cast<std::uint64_t>(0x37d2538));
-  CHECK_EQ(kSlotAreaVaddr, static_cast<std::uint64_t>(0x37d2540));
-  CHECK_EQ(kSlotAreaVaddr + kSlotBytes * kRowCount, static_cast<std::uint64_t>(0x37d2570));
-  CHECK_EQ(kRows[0].SlotVaddr(), static_cast<std::uint64_t>(0x37d2540));
-  CHECK_EQ(kRows[5].SlotVaddr(), static_cast<std::uint64_t>(0x37d2568));
+  CHECK_EQ(kSlotAreaGap, static_cast<std::uint64_t>(0x100));
+  CHECK_EQ(kSlotAreaVaddr, static_cast<std::uint64_t>(0x37d2640));
+  CHECK_EQ(kSlotAreaVaddr + kSlotBytes * kRowCount, static_cast<std::uint64_t>(0x37d2670));
+  CHECK_EQ(kRows[0].SlotVaddr(), static_cast<std::uint64_t>(0x37d2640));
+  CHECK_EQ(kRows[5].SlotVaddr(), static_cast<std::uint64_t>(0x37d2668));
+  CHECK_EQ(SlotAreaFor(0x37d2538, 0), static_cast<std::uint64_t>(0x37d2540));  // no gap: the next 64-byte boundary
+  CHECK_EQ(SlotAreaFor(0x37d2538, 0x100), static_cast<std::uint64_t>(0x37d2640));
+  CHECK_EQ(SlotAreaFor(0x37d2540, 0), static_cast<std::uint64_t>(0x37d2540));  // an end already on the boundary stays
   CHECK_EQ(RoundUp(0x37d2538, 64), static_cast<std::uint64_t>(0x37d2540));
   CHECK_EQ(RoundUp(0x37d2540, 64), static_cast<std::uint64_t>(0x37d2540));
+}
+
+// The words other builds of this libr15 keep in the page slack after the image end: [vaddr, vaddr + bytes). The first two are
+// measured in the reference build's own code (word A read and written at ADRP+ADD+LDR/STR pairs, word B likewise); the next
+// three are the community patcher's latch and the two words a test APK moved them to.
+TEST(TheSlotAreaIsClearOfEveryWordOtherBuildsKeepInThePageSlack) {
+  struct Word { std::uint64_t vaddr, bytes; };
+  const Word words[] = {{0x37d2540, 4}, {0x37d2560, 8}, {0x37d2570, 8}, {0x37d2580, 8}, {0x37d25a0, 8}};
+  for (const Word& w : words) {
+    CHECK(w.vaddr >= kStockImageEnd);
+    CHECK(w.vaddr + w.bytes <= kSlotAreaVaddr);  // wholly below the first slot
+  }
+  CHECK(kSlotAreaVaddr - (0x37d25a0 + 8) >= 64);  // a margin of at least one 64-byte line past the highest known word
+  CHECK_EQ(kSlotAreaVaddr % kSlotAlignment, static_cast<std::uint64_t>(0));
+  CHECK(kSlotAreaVaddr + kSlotBytes * kRowCount <= RoundUp(kStockImageEnd, 4096));  // inside the page the linker maps
 }
 
 TEST(TheJoinRowEncodesToTheAdrsReferenceStub) {
@@ -93,7 +112,7 @@ TEST(TheJoinRowEncodesToTheAdrsReferenceStub) {
   Stub stub{};
   CHECK(EncodeSlotStub(join.sites[0].Vaddr(), join.SlotVaddr(), &stub));
   CHECK_EQ(stub.words[0], 0xd0012c90u);
-  CHECK_EQ(stub.words[1], 0xf942a210u);
+  CHECK_EQ(stub.words[1], 0xf9432210u);
   CHECK_EQ(stub.words[2], 0xd61f0200u);
 }
 
@@ -162,7 +181,7 @@ TEST(ThePatchedIdIsAPureFunctionOfTheTableAndTheStockId) {
 TEST(ThePublicIdIsPinnedSoATableChangeIsAConsciousOne) {
   // Any change to a public row, a stock word, a slot or the layout moves this value. Update it in the commit that
   // changes the table, with the reason.
-  CHECK_EQ(PatchedBuildId(), std::string("3fd691e7044032cf8392e8526b8702bc13bcfd78"));
+  CHECK_EQ(PatchedBuildId(), std::string("fe49d0fe5a0555e3d718bc4271d8602dde81a30e"));
 }
 
 TEST(AnyChangeToAFactTheFileDependsOnMovesTheId) {
@@ -261,13 +280,13 @@ TEST(TheIdOfThreeInventedExtraRowsIsPinnedToTheByte) {
   const WordPatchRow late{"x.late", 0x1500040, {Edit(0, {0x11, 0x22, 0x33, 0x44}, {0x55, 0x66, 0x77, 0x88}), Edit(8, {0x99, 0xaa, 0xbb, 0xcc}, {0xdd, 0xee, 0xff, 0x00})}};
   const WordPatchRow tieB{"x.tie_b", 0x1500020, {Edit(4, {0x0a, 0x0b, 0x0c, 0x0d}, {0x01, 0x02, 0x03, 0x04})}};
   const WordPatchRow tieA{"x.tie_a", 0x1500020, {Edit(0x104, {0x0f, 0x0e, 0x0d, 0x0c}, {0x04, 0x03, 0x02, 0x01})}};
-  const std::string pinned = "791046e9c54db7ea54e9dc022d5c81956c616d6b";
+  const std::string pinned = "52399370d512b4a300f50f6a1e152eeacc140110";
   CHECK_EQ(PatchedBuildId({late, tieB, tieA}), pinned);
   CHECK_EQ(PatchedBuildId({tieA, late, tieB}), pinned);
   CHECK_EQ(PatchedBuildId({tieB, tieA, late}), pinned);
   // Each part of the pinned value, so a change to one serialisation rule is seen in its own value.
-  CHECK_EQ(PatchedBuildId({late}), std::string("95097c5580ae826115669fc3f989a7dc76de7a4f"));
-  CHECK_EQ(PatchedBuildId({tieB, tieA}), std::string("9d74799f4d2e51cc7a3875095b51ba7c398d0d3e"));
+  CHECK_EQ(PatchedBuildId({late}), std::string("031eff10c53855e859be7b0f1c71845e1517ace8"));
+  CHECK_EQ(PatchedBuildId({tieB, tieA}), std::string("8b205b21e7841a8ae201e99fbd65355e12959c34"));
 }
 
 }  // namespace

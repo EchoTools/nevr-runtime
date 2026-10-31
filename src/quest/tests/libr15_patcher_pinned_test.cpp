@@ -3,11 +3,14 @@
 // as a process. Every fact below is read back from the files, with readelf and a small independent ELF reader, not
 // from the patcher's own code.
 //
-// Run: libr15_patcher_pinned_test <quest_patch_libr15> <stock libr15.so> <scratch dir> [--signed-libr15=<file>] [name-filter]
+// Run: libr15_patcher_pinned_test <quest_patch_libr15> <stock libr15.so> <scratch dir> [--signed-libr15=<file>]
+//        [--reference-libr15=<file>]... [name-filter]
 // The recipe removes the scratch dir's files afterwards; the patched copies are written there.
 // --signed-libr15=<file> is the lib/arm64-v8a/libr15.so taken out of the signed APK of a repack (ADR 0021 test 5): with it
 // SignedApkLibr15IsThePatchersOutput runs; without it that test is dropped from the run and the run prints a SKIP line
 // naming it (it is never left out silently).
+// --reference-libr15=<file> is a reference build's own patched libr15.so (one per flag): with one or more,
+// ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots runs; without, it is dropped and a SKIP line names it.
 #include <elf.h>
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -32,8 +35,11 @@ namespace {
 using namespace nevr_quest::patch;
 
 std::string g_tool, g_stock, g_scratch, g_signed;
+std::vector<std::string> g_refs;
 constexpr const char* kSignedFlag = "--signed-libr15=";
 constexpr const char* kSignedTest = "SignedApkLibr15IsThePatchersOutput";
+constexpr const char* kRefFlag = "--reference-libr15=";
+constexpr const char* kRefTest = "ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots";
 
 std::vector<std::uint8_t> ReadAll(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
@@ -367,7 +373,7 @@ TEST(TheSegmentsAndSectionsAreSaneAndTheEndSymbolsUnchanged) {
   CHECK_EQ(patched.ph[wl].p_vaddr + patched.ph[wl].p_memsz, kSlotAreaVaddr + kSlotBytes * kRowCount);
   CHECK_EQ(patched.ph[wl].p_filesz, stock.ph[wl].p_filesz);
   CHECK_EQ(patched.ph[wl].p_offset, stock.ph[wl].p_offset);
-  CHECK_EQ(patched.ph[wl].p_memsz, static_cast<std::uint64_t>(0x1d86c0));  // ADR 0021 section 4
+  CHECK_EQ(patched.ph[wl].p_memsz, static_cast<std::uint64_t>(0x1d87c0));  // ADR 0021 section 4
   // Sections: every one unchanged except the NOBITS one that ended the segment, which ends at the new end.
   std::size_t grown = 0;
   for (std::size_t i = 0; i < stock.sh.size(); ++i) {
@@ -379,7 +385,7 @@ TEST(TheSegmentsAndSectionsAreSaneAndTheEndSymbolsUnchanged) {
   }
   CHECK_EQ(grown, static_cast<std::size_t>(1));
   // readelf agrees with the headers it printed.
-  CHECK(patchedLoad.find(Hex(0x1d86c0).substr(0)) != std::string::npos);
+  CHECK(patchedLoad.find(Hex(0x1d87c0).substr(0)) != std::string::npos);
   CHECK(stockLoad.find("0x1d8688") != std::string::npos);
   CHECK(!stockSec.empty() && !patchedSec.empty());
   // The six end symbols have the same values and sizes in both files.
@@ -409,26 +415,78 @@ TEST(SignedApkLibr15IsThePatchersOutput) {
   CHECK(Readelf("-n", g_signed, "signed_note").find("Build ID: " + PatchedBuildId()) != std::string::npos);
 }
 
+// The reference build's libr15 files keep two state words in the page slack (word A, 4 bytes at 0x37d2540, and word B, 8 bytes
+// at 0x37d2560; eight sites form them, below). The tool must patch each and leave its code and those words clear of the slots.
+TEST(ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots) {
+  struct Word { std::uint64_t vaddr, bytes; };
+  const Word words[] = {{0x37d2540, 4}, {0x37d2560, 8}};
+  const std::uint64_t sites[] = {0x1a848ac, 0x1a848b0, 0x1a84988, 0x1a84990, 0x1a84a18, 0x1a84a1c, 0x1a84a94, 0x1a84a98};
+  for (std::size_t n = 0; n < g_refs.size(); ++n) {
+    const std::string tag = "ref" + std::to_string(n);
+    const std::vector<std::uint8_t> in = ReadAll(g_refs[n]);
+    const std::string sha = nevr_quest::data::Sha256Hex(in.data(), in.size());
+    bool listed = false;
+    for (const char* known : kLibR15ReferenceSha256) listed = listed || sha == known;
+    CHECK(listed);  // the file is one the table names
+    const std::string out = g_scratch + "/" + tag + ".so", report = g_scratch + "/" + tag + ".json";
+    const std::string so = g_scratch + "/" + tag + ".stdout", se = g_scratch + "/" + tag + ".stderr";
+    std::remove(out.c_str());
+    CHECK_EQ(Run({g_tool, "--stock", g_refs[n], "--out", out, "--report", report}, so, se), 0);
+    CHECK(ReadText(se).empty());
+    Image before, after;
+    if (!before.Load(g_refs[n]) || !after.Load(out)) {
+      CHECK(false);
+      return;
+    }
+    for (const std::uint64_t s : sites) CHECK_EQ(before.Word(s), after.Word(s));  // the reference's own code is untouched
+    const std::size_t wl = after.WritableLoad();
+    CHECK(wl < after.ph.size());
+    if (wl >= after.ph.size()) return;
+    const Elf64_Phdr& seg = after.ph[wl];
+    CHECK_EQ(seg.p_vaddr + seg.p_memsz, kSlotAreaVaddr + kSlotBytes * kRowCount);
+    for (const Word& w : words) {
+      CHECK(w.vaddr + w.bytes <= kSlotAreaVaddr);                        // below the first slot
+      CHECK(w.vaddr >= seg.p_vaddr + seg.p_filesz);                      // in the bss part
+      CHECK(w.vaddr + w.bytes <= seg.p_vaddr + seg.p_memsz);             // inside the grown segment
+    }
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc < 4) {
     std::fprintf(stderr,
-                 "usage: libr15_patcher_pinned_test <quest_patch_libr15> <stock libr15.so> <scratch dir> [--signed-libr15=<file>] [name-filter]\n");
+                 "usage: libr15_patcher_pinned_test <quest_patch_libr15> <stock libr15.so> <scratch dir> [--signed-libr15=<file>] "
+                 "[--reference-libr15=<file>]... [name-filter]\n");
     return 2;
   }
   g_tool = argv[1];
   g_stock = argv[2];
   g_scratch = argv[3];
-  // The arguments after the scratch dir: the optional --signed-libr15=<file>, then the optional name filter. RunAll reads
-  // its filter from its argv[1], so argv[3] stays as its program name and the flag is taken out.
+  // The arguments after the scratch dir: the optional --signed-libr15=<file> and --reference-libr15=<file> flags, then the
+  // optional name filter. RunAll reads its filter from its argv[1], so argv[3] stays as its program name and the flags are taken out.
   std::vector<char*> rest = {argv[3]};
   for (int i = 4; i < argc; ++i) {
     if (std::strncmp(argv[i], kSignedFlag, std::strlen(kSignedFlag)) == 0) {
       g_signed = argv[i] + std::strlen(kSignedFlag);
+    } else if (std::strncmp(argv[i], kRefFlag, std::strlen(kRefFlag)) == 0) {
+      g_refs.push_back(argv[i] + std::strlen(kRefFlag));
     } else {
       rest.push_back(argv[i]);
     }
+  }
+  if (g_refs.empty()) {
+    // The test needs the reference build's files; without them it is dropped from the registry, and the run names it.
+    auto& registry = mini_test::Registry();
+    for (auto it = registry.begin(); it != registry.end(); ++it) {
+      if (std::strcmp(it->name, kRefTest) == 0) {
+        registry.erase(it);
+        break;
+      }
+    }
+    std::printf("SKIP %s (no %s<file> given: the reference build's libr15 files were not patched)\n", kRefTest, kRefFlag);
+    std::fflush(stdout);
   }
   if (g_signed.empty()) {
     // The test needs a file; without one it is dropped from the registry, and the run names it.

@@ -121,8 +121,14 @@ class WorkflowStructureTest(unittest.TestCase):
     def test_the_job_graph_is_drafts_guard_build_quest_seal_repack_publish(self):
         jobs = load()[0]["jobs"]
         # `drafts` lists the tag's releases for a dispatch on a tag (write token, no checkout); guard reads it
-        self.assertEqual(list(jobs), ["drafts", "guard", "build", "quest", "seal", "repack", "publish"])
+        self.assertEqual(list(jobs), ["drafts", "guard", "installer", "build", "quest", "seal", "repack", "publish"])
         self.assertEqual(jobs["guard"]["needs"], "drafts")
+        # the core installer is its own job off the guard, built for a release event or a dispatch on a tag, and build
+        # waits for its artifact in a step rather than through `needs` (#1770)
+        self.assertEqual(jobs["installer"]["needs"], "guard")
+        self.assertIn("!cancelled()", jobs["installer"]["if"])
+        self.assertIn("needs.guard.outputs.built != 'true'", jobs["installer"]["if"])
+        self.assertIn("github.event_name == 'release' || github.ref_type == 'tag'", jobs["installer"]["if"])
         self.assertEqual(jobs["build"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["build"]["if"])
         self.assertEqual(jobs["seal"]["needs"], "build")

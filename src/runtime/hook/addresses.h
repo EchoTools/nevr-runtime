@@ -563,6 +563,12 @@ constexpr uintptr_t NETGAME_GAME_OFFSET = 8;
 /// its first argument (NetGameScheduleReturnToLobby queues its callback on the same one).
 constexpr uintptr_t GAME_CALL_QUEUE_OFFSET = 8;
 
+/// Offset within the game object of a count of entries in the array at +0x1EE0 (the array CActorSpace::FindActor walks by
+/// id; what the entries are is not established). The game's queued
+/// return-to-lobby callback (echovr.exe 0x1401a4ad0) tests it first: while it is non-zero the callback only sets a pending
+/// flag (bit 42 of the lobby flags) and returns, and CR15NetGame::Update (0x1401bbdb0) asks again when it is 0.
+constexpr uintptr_t GAME_DEFER_COUNT_OFFSET = 0x1F10;
+
 // ============================================================================
 // Arena Rules Override (CJson_GetFloat hook)
 // ============================================================================
