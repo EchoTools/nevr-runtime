@@ -32,6 +32,10 @@ add_library(nevr_r15_reconstruction STATIC
     r15/return_to_lobby.cpp
     r15/send_event_node_enter.cpp
     r15/session_api_execute.cpp
+    r15/cbvhtree_initialize.cpp
+    r15/cbvhtree_shutdown.cpp
+    r15/cbvhtree_intersect.cpp
+    r15/cbvhtree_occluded.cpp
     r15/cr15_net_heal_bubble_cs_set_target_inside_bubble.cpp
     r15/cr15_net_damageable_cs_damage_from_client.cpp
     r15/c_physics_cs_primary_body.cpp
