@@ -2,6 +2,9 @@
 // ReVault raw parent 100208538, reconstruction node 100600608; grade H.
 #include <cstdint>
 
+// @0x10a2258 — NRadEngine::CJson::~CJson
+/* @confidence: H */
+
 namespace NRadEngine {
 
 class CJson {
