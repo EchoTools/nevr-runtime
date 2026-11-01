@@ -141,6 +141,9 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cr15_net_heal_bubble_cs_set_target_inside_bubble.cpp
     r15/cr15_net_damageable_cs_damage_from_client.cpp
     r15/c_physics_cs_primary_body.cpp
+    r15/begin_multiplayer.cpp
+    r15/cr15_net_follow_player_cs_follow.cpp
+    r15/cr15_net_voip_receiver_cs_receive_voip.cpp
     r15/c_ph_target_resolve_body.cpp
     r15/c_ph_target_validate_tag.cpp
     r15/cr15_net_damageable_heal_node_enter.cpp
