@@ -27,9 +27,9 @@ static_assert(sizeof(SR15NetMatchSettings) == 0x50);
 
 class CR15NetGame {
 public:
-    std::int32_t BeginMultiplayer(const SR15NetMatchSettings& settings);
-    std::int32_t BeginMultiplayerWithLobbyGroup(const SUuid& group,
-                                                std::uint16_t mode);
+    std::uint64_t BeginMultiplayer(const SR15NetMatchSettings& settings);
+    void BeginMultiplayerWithLobbyGroup(const SUuid& group,
+                                        std::uint16_t mode);
 };
 
 namespace {
@@ -66,7 +66,7 @@ void CallVirtualWithId(void* object, std::size_t byte_offset,
 
 }  // namespace
 
-std::int32_t CR15NetGame::BeginMultiplayerWithLobbyGroup(
+void CR15NetGame::BeginMultiplayerWithLobbyGroup(
     const SUuid& group, std::uint16_t mode) {
     auto* const self = reinterpret_cast<std::byte*>(this);
     std::memcpy(self + 0x60, &group, sizeof(group));
@@ -109,7 +109,7 @@ std::int32_t CR15NetGame::BeginMultiplayerWithLobbyGroup(
     Store(settings->raw, 0x10, game_data);
     Store(settings->raw, 0x18, unset);
     Store(settings->raw, 0x40, no_flags);
-    return BeginMultiplayer(*settings);
+    BeginMultiplayer(*settings);
 }
 
 }  // namespace NRadGame
