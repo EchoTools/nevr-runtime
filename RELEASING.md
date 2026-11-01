@@ -17,18 +17,29 @@ finding fixed. It deletes the branch and the worktree the same turn.
 | # | Step | What happens | Recipe |
 |---|---|---|---|
 | 0 | Preflight | This clone is exactly `origin/main`: no local-only tag, nothing unpushed, no uncommitted change. | `just release-preflight` (exists) |
-| 1 | Stage | One build action makes every binary for one commit (the Windows zip, the Quest loader, the Quest APK, and the combat APK when there is one) into a staging directory. Nothing is public. | (no recipe yet) |
+| 1 | Stage | One build action makes every binary for one commit (the Windows zip, the Quest loader, the Quest APK, and the combat APK when there is one) into a staging directory. Nothing is public. The Quest APK is repacked from the locally built loader, not from a loader downloaded from a published release, so it can be staged before the publish. No recipe does this yet: `just release-quest-apk` downloads the loader from the release asset. | (no recipe yet) |
 | 2 | Coming | A webhook message "vX.Y.Z coming" with the contents. The webhook URL is the input `NEVR_RELEASE_WEBHOOK`, an environment variable the recipe reads. It is never a path into a machine's files or `.env`. Prior art, by name only: the echovrce-ops nakama-release runbook, whose webhooks are a hard gate before deploy. | (no recipe yet) |
-| 3 | Checks | On the staged set: signing, hashes, the manifest entry, and a headset pass for a beta. | (no recipe yet) |
+| 3 | Checks | On the staged set, only: signing, hashes, and the manifest entry. No device or gameplay test runs before the publish: release tests run after the release is cut, signed and published, on the distributed bytes. | (no recipe yet) |
 | 3f | Failure branch | A check fails: delete the staging directory, and send a short "not this time" on the same webhook. | (no recipe yet) |
 | 4 | Publish | On the owner's go: `gh release create vX.Y.Z <files…>` creates the tag, the release and all its assets in one step. No drafts and no "assets later". | (no recipe yet) |
 | 5 | Manifest | The signed manifest lists the release. | (no recipe yet) |
 | 6 | Quest APK | After the release is published: the APK goes to the release host. | `just publish-quest-apk vX.Y.Z` (exists) |
-| 7 | Announce and watch | The announcement goes out, reports are watched, and every transition is logged. | (no recipe yet) |
-| 7w | Withdraw | If the release goes bad: withdraw it and clean up. | (no recipe yet; by hand: `gh release delete vX.Y.Z --yes`) |
+| 7 | Test the release | Install from the published release through the normal install path (the path a player takes), then run the checks below on the installed bytes. | (no recipe yet) |
+| 8 | Announce and watch | The announcement goes out, reports are watched, and every transition is logged. | (no recipe yet) |
+| 8w | Withdraw | If the release goes bad: withdraw it and clean up. A failure found by step 7 goes to a patch release, not a re-cut of this one. | (no recipe yet; by hand: `gh release delete vX.Y.Z --yes`) |
 
 Steps 1 to 3 touch nothing public. Step 4 is the only point at which a tag or a release is created, and it is never run
 before the staged set has passed step 3.
+
+**Test the release (step 7), for a combat release:**
+
+- Windows: enter the combat area and confirm it looks right; open the combat terminal, pick a new weapon (one past the last
+  four), and confirm its particle effects show.
+- Quest: enter the combat area and confirm it looks right; open the terminal, pick a new weapon, fire it, and confirm it looks
+  right.
+- Other system tests as the owner lists them.
+
+A failure found here goes to a patch release (the next version through the same flow). The published release is not edited.
 
 The recipes for steps 1, 2, 3, 3f, 4, 5, 7 and 7w do not exist yet. Until they do, the release is run by hand, one step at a
 time, under the owner's go.
