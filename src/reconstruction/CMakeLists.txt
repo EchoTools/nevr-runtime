@@ -3,6 +3,13 @@
 #   r15/session_player_writer.cpp        fragment of a larger body
 #   r15/cr15_game_ctor.cpp               constructor reconstruction is partial
 add_library(nevr_r15_reconstruction STATIC
+    r15/c_memory_compare.cpp
+    r15/c_timer_delta_microseconds.cpp
+    r15/c_timer_delta_seconds_f.cpp
+    r15/c_timer_milliseconds.cpp
+    r15/cleanup_peers.cpp
+    r15/destroy_peer.cpp
+    r15/destroy_peer_record.cpp
     r15/find_match.cpp
     r15/party_count.cpp
     r15/cg_raw_interface_vk_free.cpp
