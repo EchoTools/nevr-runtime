@@ -23,7 +23,7 @@ static_assert(sizeof(SR15NetMatchSettings) == 0x50);
 
 class CR15NetGame {
 public:
-    void BeginMultiplayer(const SR15NetMatchSettings& settings);
+    std::uint64_t BeginMultiplayer(const SR15NetMatchSettings& settings);
     void BeginMultiplayerWithRegion(std::uint64_t symbol,
                                     std::uint16_t mode);
 };
