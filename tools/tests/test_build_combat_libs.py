@@ -86,7 +86,8 @@ class BuildCombatLibs(unittest.TestCase):
     def test_each_row_is_compiled_with_the_flags_its_link_row_names(self):
         result = self.run_tool()
         self.assertEqual(result.returncode, 0, result.stderr)
-        inc = f"-I{self.libsrc / 'include'}"
+        # The q15t source root is the libsrc directory's parent; its tools/scripts holds regen_rt.h (BUILD.md step 4).
+        inc = f"-I{pathlib.Path(self.tmp.name).resolve() / 'tools' / 'scripts'}"
         stock = f"-L{self.out / 'stock'}"
         clang = [c for c in self.calls_made() if c.startswith("clang ")]
         self.assertEqual(clang[0], " ".join([
