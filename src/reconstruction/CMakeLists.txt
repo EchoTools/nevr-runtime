@@ -32,5 +32,9 @@ add_library(nevr_r15_reconstruction STATIC
     r15/return_to_lobby.cpp
     r15/send_event_node_enter.cpp
     r15/session_api_execute.cpp
+    r15/cbvhtree_initialize.cpp
+    r15/cbvhtree_shutdown.cpp
+    r15/cbvhtree_intersect.cpp
+    r15/cbvhtree_occluded.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
