@@ -71,5 +71,11 @@ void* AllocateAudioCommandStorage(std::uint64_t context,
                                   std::uint32_t command_size);
 std::int32_t DecrementAtomicReference(std::int32_t* reference_count);
 void DecrementAudioCommandActivity(std::uint64_t context);
+std::uint32_t AudioCommandQueueCapacity(const void* queue);
+std::uint64_t AudioCommandQueueSize(const std::uint64_t* queue);
+std::uint64_t AudioCommandQueueHead(const std::uint64_t* queue);
+bool AudioCommandQueueHasFourBytes(const std::uint64_t* queue);
+void AdvanceAudioCommandQueueHead(std::uint64_t* queue,
+                                 std::int32_t byte_count);
 
 }  // namespace NRadEngine::AudioPost

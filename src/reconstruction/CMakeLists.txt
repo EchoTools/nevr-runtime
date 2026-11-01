@@ -52,5 +52,10 @@ add_library(nevr_r15_reconstruction STATIC
     r15/end_wwise_symbol_lookup.cpp
     r15/decrement_atomic_reference.cpp
     r15/decrement_audio_command_activity.cpp
+    r15/audio_command_queue_capacity.cpp
+    r15/audio_command_queue_size.cpp
+    r15/audio_command_queue_head.cpp
+    r15/audio_command_queue_has_four_bytes.cpp
+    r15/advance_audio_command_queue_head.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
