@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "cr15_net_game.hpp"
+
 namespace NRadEngine::NRadGame {
 
 struct SUuid {
@@ -89,11 +91,6 @@ static_assert(offsetof(CR15NetGamePrefix, mode_flags) == 0x2da0);
 static_assert(offsetof(CR15NetGamePrefix, unknown_2da8) == 0x2da8);
 static_assert(offsetof(CR15NetGamePrefix, match_service) == 0x647c8);
 static_assert(sizeof(CR15NetGamePrefix) == 0x647d0);
-
-struct CR15NetGame {
-    std::uint64_t PartyCount(std::uint16_t index) const;
-    void FindMatch(SR15NetMatchSettings* settings);
-};
 
 // The original path executes count-dependent decrement loops after filling the
 // remaining 16-bit entries. They have no memory effects; signal fences keep
