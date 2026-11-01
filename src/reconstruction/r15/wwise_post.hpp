@@ -46,8 +46,8 @@ std::uint64_t TranslateWwiseResult(const char* label, std::uint32_t result,
 void OutputError(std::uint64_t error, int flags);
 
 std::uint64_t CreateCallbackSource(std::int32_t kind, std::uint64_t user);
-std::uint64_t CallbackInfoHasNoFlags(const std::byte* storage, int flags);
-void ReleaseCallbackInfo(std::byte* storage);
+bool CallbackInfoEqualsValue(const std::byte* storage, std::uintptr_t value);
+void* CallbackInfoSource(const std::byte* storage);
 void ReleaseCallbackSource(std::uint64_t source);
 
 std::uint32_t WwiseSeekCommandSize();
@@ -64,7 +64,7 @@ std::uint32_t LockAudioMutex(void* mutex);
 std::uint32_t UnlockAudioMutex(void* mutex);
 void BeginWwiseSymbolLookup(std::byte* scope, std::uintptr_t mutex);
 void* LookupWwiseSymbol(std::uintptr_t table, std::uint32_t event);
-void AcquireWwiseSymbolReference(void* symbol);
+std::int32_t AcquireWwiseSymbolReference(void* symbol);
 void EndWwiseSymbolLookup(std::byte* scope);
 void* AllocateAudioCommandStorage(std::uint64_t context,
                                   std::uint16_t command_kind,

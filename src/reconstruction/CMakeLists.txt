@@ -57,5 +57,8 @@ add_library(nevr_r15_reconstruction STATIC
     r15/audio_command_queue_head.cpp
     r15/audio_command_queue_has_four_bytes.cpp
     r15/advance_audio_command_queue_head.cpp
+    r15/callback_info_equals_value.cpp
+    r15/callback_info_source.cpp
+    r15/acquire_wwise_symbol_reference.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)

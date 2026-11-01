@@ -19,14 +19,14 @@ std::uint64_t PostWwiseEvent(std::uint32_t event, std::uint64_t game_object,
     callback_source = CreateCallbackSource(callback_kind, callback_user);
     InitializeCallbackArgument(
         callback_info.data(), reinterpret_cast<const void*>(callback_source));
-    const auto status = CallbackInfoHasNoFlags(callback_info.data(), 0);
+    const auto is_empty = CallbackInfoEqualsValue(callback_info.data(), 0);
     std::uint64_t result = 0;
-    if ((status & 1U) == 0) {
+    if (!is_empty) {
         result = PostWwiseEventCommand(event, game_object, flags, callback, cookie,
                                        callback_info.data(), playing_id);
         if (static_cast<std::int32_t>(result) == 0) {
-            ReleaseCallbackInfo(callback_info.data());
-            ReleaseCallbackSource(callback_source);
+            auto* stored_source = CallbackInfoSource(callback_info.data());
+            ReleaseCallbackSource(reinterpret_cast<std::uintptr_t>(stored_source));
             result = 0;
         }
     }
