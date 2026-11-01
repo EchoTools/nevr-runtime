@@ -2,18 +2,14 @@
 // ReVault binary 576; reconstruction node 100600214.
 // The opaque storage size documents the highest field offset observed here;
 // the object is the original engine instance and is not instantiated here.
-#include <cstddef>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+
+#include "ce_engine.hpp"
 
 namespace NRadEngine {
-
-struct CQuad {
-    float left;
-    float top;
-    float right;
-    float bottom;
-};
 
 namespace CVR {
 bool Initialized();
@@ -31,20 +27,6 @@ void WindowExtents(int* window, CQuad* extents);
 void MinimizeWindow(int* window);
 }  // namespace CSysWindow
 
-struct CCanvasDisplay {
-    bool NeedsResize(std::uint32_t width, std::uint32_t height,
-                     std::uint32_t mode);
-};
-
-class CEngine {
-public:
-    std::uint32_t CheckForResize();
-
-private:
-    // Highest accessed byte is 0x16ed4; this preserves opaque object extent.
-    std::byte opaque_[0x16ed8];
-};
-
 namespace {
 
 template <typename T>
@@ -59,6 +41,18 @@ template <typename T>
 void Store(CEngine* self, std::size_t offset, T value) {
     std::memcpy(reinterpret_cast<std::byte*>(self) + offset, &value,
                 sizeof(value));
+}
+
+std::uint32_t ConvertUnsigned(float value) {
+    // Match AArch64 FCVTZU: truncate, with NaN/negative mapped to zero and
+    // positive overflow saturated at UINT32_MAX.
+    if (std::isnan(value) || value <= 0.0F) {
+        return 0;
+    }
+    if (value >= 4294967296.0F) {
+        return std::numeric_limits<std::uint32_t>::max();
+    }
+    return static_cast<std::uint32_t>(value);
 }
 
 constexpr std::size_t kWindowOffset = 0x16d58;
@@ -108,9 +102,8 @@ std::uint32_t CEngine::CheckForResize() {
             }
         }
 
-        // AArch64 FCVTZU truncates these positive window dimensions to uint32.
-        const auto width = static_cast<std::uint32_t>(extents.right - extents.left);
-        const auto height = static_cast<std::uint32_t>(extents.bottom - extents.top);
+        const auto width = ConvertUnsigned(extents.right - extents.left);
+        const auto height = ConvertUnsigned(extents.bottom - extents.top);
         auto* canvas = reinterpret_cast<CCanvasDisplay*>(
             reinterpret_cast<std::byte*>(this) + sizeof(void*));
         if (!is_virtual && width != 0 && height != 0 &&

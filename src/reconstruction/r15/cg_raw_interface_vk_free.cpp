@@ -6,18 +6,10 @@
 #include <cstdint>
 #include <cstring>
 
+#include "cg_raw_interface_vk.hpp"
+#include "cmemory_context.hpp"
+
 namespace NRadEngine {
-
-struct CMemoryContext {
-    static void* context;
-};
-
-namespace NWriteLog {
-void WriteLog(int severity, void* context, const char* message, ...);
-}
-
-struct VkDeviceMemory_T;
-using VkDeviceMemory = VkDeviceMemory_T*;
 
 struct FreeRangeEntry {
     std::uintptr_t memory;
@@ -254,12 +246,6 @@ void release_device_memory(VkDeviceMemory memory) {
 }
 
 }  // namespace
-
-class CGRawInterfaceVK {
-public:
-    static void Free(VkDeviceMemory memory, unsigned long begin,
-                     unsigned long size, unsigned long end);
-};
 
 void CGRawInterfaceVK::Free(VkDeviceMemory memory, unsigned long begin,
                             unsigned long size, unsigned long end) {

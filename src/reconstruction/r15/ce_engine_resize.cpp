@@ -1,38 +1,12 @@
 // @0x2bc093c — NRadEngine::CEngine::Resize(unsigned int, unsigned int, EWindowMode)
 // ReVault binary 576; reconstruction node 100600216 (raw parent).
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
+#include "ce_engine.hpp"
+#include "cmemory_context.hpp"
+
 namespace NRadEngine {
-
-struct CAllocator {};
-
-namespace CMemoryContext {
-extern void** context;
-CAllocator* CurrentPtr();
-void SetCurrent(CAllocator* allocator);
-}  // namespace CMemoryContext
-
-namespace NWriteLog {
-void WriteLog(int severity, int category, const char* message);
-}  // namespace NWriteLog
-
-using BreakpointHandler = void (*)();
-BreakpointHandler SoftwareBreakpoint(int kind, std::uintptr_t address);
-
-struct CCanvasDisplay {
-    int Resize(std::uint32_t* width, std::uint32_t* height,
-               std::uint32_t mode);
-};
-
-class CEngine {
-public:
-    int Resize(std::uint32_t width, std::uint32_t height, std::uint32_t mode);
-
-private:
-    std::byte opaque_[0x16ed8];
-};
 
 namespace {
 
@@ -66,8 +40,8 @@ int CEngine::Resize(std::uint32_t width, std::uint32_t height,
         breakpoint();
     }
 
-    auto* const default_allocator =
-        static_cast<CAllocator*>(*CMemoryContext::context);
+    auto* const default_allocator = static_cast<CAllocator*>(
+        Load<void*>(CMemoryContext::context, 0));
     auto* const previous_allocator = CMemoryContext::CurrentPtr();
     CMemoryContext::SetCurrent(default_allocator);
 
