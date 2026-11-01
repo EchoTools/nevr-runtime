@@ -8,6 +8,16 @@ namespace NRadEngine::AudioPost {
 
 using SoundEventCallback = void (*)(int, void*);
 
+struct SoundKey {
+    std::uint32_t playing_id;
+    std::uint32_t padding;
+    std::uint64_t sound;
+};
+static_assert(sizeof(SoundKey) == 0x10);
+static_assert(offsetof(SoundKey, playing_id) == 0x00);
+static_assert(offsetof(SoundKey, padding) == 0x04);
+static_assert(offsetof(SoundKey, sound) == 0x08);
+
 extern std::uint64_t DAT_03864210;
 extern const std::int32_t DAT_03859620;
 extern std::uintptr_t DAT_038cec70;
@@ -15,6 +25,9 @@ extern std::uint64_t DAT_038cec78;
 extern std::int32_t DAT_038cee60;
 extern std::uint64_t DAT_038cecc0;
 extern std::byte DAT_038ced68;
+extern std::uintptr_t g_audio_disabled_flag;
+extern std::uintptr_t g_wwise_engine;
+extern SoundEventCallback g_sound_event_callback;
 
 int PostSoundEvent(void* self, std::uint32_t event, std::uint32_t game_object,
                    const std::uint32_t* flags, SoundEventCallback callback,
@@ -23,6 +36,8 @@ std::int32_t Play2DSound(std::uint64_t player, std::uint64_t event,
                          float volume);
 std::int32_t Play3DSound(std::uint64_t player, std::uint64_t event,
                          std::uint32_t emitter, float volume);
+void InsertSoundKey(void* table, std::uint64_t index, std::uint64_t count,
+                    const SoundKey* value);
 std::uint64_t PostWwiseEvent(std::uint32_t event, std::uint64_t game_object,
                              std::uint32_t flags, SoundEventCallback callback,
                              void* cookie, std::int32_t callback_kind,
@@ -49,7 +64,7 @@ int CreateAndAddError(const char* file, std::uint32_t line, std::uint64_t id,
                       const char* format, ...);
 std::uint64_t TranslateWwiseResult(const char* label, std::uint32_t result,
                                    const char* file, std::uint32_t line);
-void OutputError(std::uint64_t error, int flags);
+int OutputError(std::uint64_t error, int flags);
 
 std::uint64_t CreateCallbackSource(std::int32_t kind, std::uint64_t user);
 bool CallbackInfoEqualsValue(const std::byte* storage, std::uintptr_t value);
