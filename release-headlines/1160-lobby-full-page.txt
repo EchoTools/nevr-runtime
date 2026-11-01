@@ -1,0 +1,1 @@
+On Quest, a join refused because the lobby is full shows a 'lobby full' message on the error page, and the game waits a minute before it asks that lobby again.
