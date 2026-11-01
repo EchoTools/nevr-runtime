@@ -60,29 +60,6 @@ an instruction search of the disassembly finds it in `echovr.exe`.
   the install cannot read. The tab or button that posts `evt_refresh_friends` is therefore not
   named by this trace.
 
-## The Quest main-menu friends button
-
-Searched with `disasm_search_strings` over the whole `echovr` project (searched all 1,041 binaries).
-
-| Fact | Value | Source |
-| --- | --- | --- |
-| Menu friends-button state flags | `friends_list_button_enabled` at `0x180089730`, `friends_list_button_tint` at `0x18008a030` in `156208a7bf6bcfec.dll`; the same names in `lib156208a7bf6bcfec.so` at `0x22317b` and `0x223992` | disassembly string table |
-| Platform (Meta) friends panel strings | `You have no Oculus Friends.` at `0x18003eb18`, `waiting_for_friends` at `0x18003f5b8` in `30b4ca0fb0a1ee02.dll` | disassembly string table |
-| Meta friends request | `ovr_User_GetLoggedInUserFriends` at `0x1801fccc8` in `pnsovr.dll` (the PC platform module; the Quest build does not load `pnsovr`, `docs/adr/0026-quest-without-pnsovr.md`) | disassembly string table |
-| Echo friends switch on the FRIENDS LIST press | slot 46 (`RefreshFriends`) posts `evt_debug_arm_computer_friends`, which switches the tablet to its Friends tab | `src/quest/social/social_facade.cpp` (`UiEventBegin`, the `kRefreshFriends` branch); `src/quest/sentinel/quest_config.h` (`uiEventProbe`, on by default) |
-
-Not established by this tree: which call the menu button makes on Quest. The string `FRIENDS` in
-`30b4ca0fb0a1ee02.dll` has one data xref (`0x18001b9a6` to `0x18003ebe8`); `disasm_function` names the
-containing function `execute_single_node` (`0x18000d670`), a node dispatcher, so the xref is a node
-data reference, not the button's call. `lib156208a7bf6bcfec.so` has no xref to its `friends_list_button_*`
-strings in the disassembly database.
-
-Headset test to choose between routing and hiding (three steps):
-
-1. Launch the Quest build, open the main menu, press FRIENDS LIST once.
-2. Read the run's log for `"slot":46` (the facade's `TRACED(46, ...)` line) and for `social_ui_event` with `evt_debug_arm_computer_friends`.
-3. Slot 46 traced and the Meta panel still opens: the Meta open is outside the facade; hide the button with `friends_list_button_enabled`. No slot 46 trace: the button does not use the facade's slot; find its call before changing anything.
-
 ## Not proven
 
 - Which tablet tab/button posts `evt_refresh_friends`. Static candidates: opening the friends tab

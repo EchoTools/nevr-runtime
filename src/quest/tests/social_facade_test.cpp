@@ -634,9 +634,9 @@ void TestInviteMembersPostsTheFriendsEvent() {
   SetGameEvents(GameEvents{});
 }
 
-// #391: the main-menu FRIENDS LIST press calls RefreshFriends (slot 46). With the probe on it posts the same
-// arm-computer event as Invite Members, after the facade's own refresh; with the probe off it posts nothing.
-void TestFriendsListPressPostsTheFriendsEvent() {
+// The main-menu FRIENDS LIST press is not wired (#391): RefreshFriends (slot 46) is only the facade's refresh, so with
+// the probe on it posts nothing and writes no probe line. Restoring the press wiring makes this fail.
+void TestFriendsListPressPostsNothing() {
   World w;
   static int netGameMarker = 0;
   std::array<std::uint8_t, kCallbackBytes> callbacks = MakeCallbacks();
@@ -647,19 +647,13 @@ void TestFriendsListPressPostsTheFriendsEvent() {
   g_posted.clear();
   g_lines.clear();
 
-  SlotFn<Void0>(obj, kRefreshFriends)(obj);  // probe off: no post, no probe line
-  QCHECK(g_posted.empty());
-  QCHECK(CountLines("\"event\":\"social_ui_event\"") == 0);
-
   GameEvents events;
   events.send = &RecordPost;
   SetGameEvents(events);
-  g_lines.clear();
 
   SlotFn<Void0>(obj, kRefreshFriends)(obj);  // FRIENDS LIST, probe on
-  QCHECK(g_posted.size() == 1 && g_posted[0].netGame == context && g_posted[0].symbol == kSymEvtArmComputerFriends);
-  QCHECK(CountLines("\"event\":\"social_ui_event\",\"slot\":46,\"name\":\"evt_debug_arm_computer_friends\","
-                    "\"hash\":\"0x976edb4d0c250317\",\"result\":\"posted\"") == 1);
+  QCHECK(g_posted.empty());
+  QCHECK(CountLines("\"event\":\"social_ui_event\"") == 0);
 
   SetGameEvents(GameEvents{});
 }
@@ -1831,7 +1825,7 @@ int main() {
   TestSendingFromSlots();
   TestPartyTabInviteUiSlots();
   TestInviteMembersPostsTheFriendsEvent();
-  TestFriendsListPressPostsTheFriendsEvent();
+  TestFriendsListPressPostsNothing();
   TestLobbyFields();
   TestRecentlyMet();
   TestIncomingFriendRequestIsListedInRecentlyMet();

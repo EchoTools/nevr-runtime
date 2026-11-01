@@ -911,7 +911,7 @@ void BuildVtable(std::array<SlotWord, kSlotCount>* table) {
   t[kOpenPartyUI] = Entry<kOpenPartyUI, &SlotNothingU32>();
   t[kOpenPartyUITarget] = reinterpret_cast<SlotWord>(&internal::SlotPartyUiTargetEntry);
   t[kRefreshingFriends] = Entry<kRefreshingFriends, &SlotZero32>();
-  t[kRefreshFriends] = reinterpret_cast<SlotWord>(&internal::SlotRefreshFriendsEntry);
+  t[kRefreshFriends] = Entry<kRefreshFriends, &SlotRefreshFriends>();
   t[kFriendCount] = Entry<kFriendCount, &SlotFriendCount>();
   t[kOnlineFriendCount] = Entry<kOnlineFriendCount, &SlotOnlineFriendCount>();
   t[kOfflineFriendCount] = Entry<kOfflineFriendCount, &SlotOfflineFriendCount>();
@@ -1380,11 +1380,6 @@ void UiEventBegin(void* self, std::uint32_t slot, std::uint64_t target, UiEventJ
     const auto send = g_sendComponentEvent.load(std::memory_order_acquire);
     if (slot == kOpenNewSendInviteUI) {
       SlotInviteUINoTarget(self, 0);
-      post = true;
-    } else if (slot == kRefreshFriends) {
-      // The main-menu FRIENDS LIST press (#391): its refresh is the facade's own (SlotRefreshFriends), and the probe
-      // then asks the tablet for its Friends tab, as the Invite Members press does.
-      SlotRefreshFriends(self);
       post = true;
     } else if (slot == kOpenPartyUITarget) {
       SlotPartyUITarget(self, 0, target);
