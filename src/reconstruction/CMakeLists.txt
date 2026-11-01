@@ -34,6 +34,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/session_api_execute.cpp
     r15/postsound_event.cpp
     r15/csoundplayer_sound_paused.cpp
+    r15/csoundplayer_sound_stopped.cpp
     r15/play_2d_sound.cpp
     r15/play_3d_sound.cpp
     r15/destroy_sound_no_lock.cpp

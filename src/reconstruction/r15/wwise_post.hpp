@@ -68,6 +68,8 @@ std::uint64_t SetParameter(std::uint32_t symbol, float value,
                            std::uint32_t playing_id);
 bool SoundPaused(const void* player, std::uint32_t expected_state,
                  std::uint32_t entry_key);
+bool SoundStopped(const void* player, std::uint32_t expected_state,
+                  std::uint32_t entry_key);
 std::uint64_t SetSwitch(const void* player, std::uint32_t group,
                         std::uint32_t value, std::uint32_t emitter_id);
 std::uint64_t SetState(void* player, std::uint32_t group,
