@@ -109,6 +109,8 @@ extern const std::int64_t kR15Quest1MSAALevel;
 extern const std::int64_t kR15Quest2MSAALevel;
 } // namespace CVR
 
+} // namespace NRadEngine
+
 namespace NRadEngine::NRadGame::reconstruction_detail {
 using LogStringTable = const char* const[];
 // The binary accesses relocated pointer tables; their string contents are not

@@ -7,6 +7,8 @@
 
 namespace NRadEngine {
 
+void FUN_019ebb48(std::uint32_t milliseconds);
+
 namespace CGS {
 extern std::uint64_t currframe;
 }  // namespace CGS
@@ -39,8 +41,6 @@ extern std::int32_t g_deferred_free_lock;    // DAT_0389b488
 extern std::uint64_t g_resource_frame;       // DAT_03875ff8
 extern std::int32_t g_upload_lock;           // DAT_0389b780
 extern std::uint64_t g_upload_in_flight;     // DAT_0389b400
-
-void FUN_019ebb48(std::uint32_t milliseconds);
 
 void Acquire(std::int32_t* lock) {
     while (__atomic_exchange_n(lock, 1, __ATOMIC_ACQUIRE) != 0) {

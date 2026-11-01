@@ -1,6 +1,7 @@
 // @0x1988c04 — NRadEngine::CGRawInterfaceVK::DeferredDestroy(SGImage&)
 // ReVault binary 576; reconstruction node 100600218.
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 
 #include "cg_raw_interface_vk.hpp"
