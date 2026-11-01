@@ -128,6 +128,13 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cr15_resolve_actor_alias.cpp
     r15/clocal_component_handle_tag_find.cpp
     r15/cbvhtree_initialize.cpp
+    r15/memory_move.cpp
+    r15/memory_fill.cpp
+    r15/cmemory_context_current_ptr.cpp
+    r15/cmemory_context_set_current.cpp
+    r15/cmemory_context_current.cpp
+    r15/cmem_block_ctor.cpp
+    r15/cmem_block_resize.cpp
     r15/cbvhtree_shutdown.cpp
     r15/cbvhtree_intersect.cpp
     r15/cbvhtree_occluded.cpp
