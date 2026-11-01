@@ -27,6 +27,7 @@
 #include "runtime/ext/plugin_load_plan.h"
 #include "runtime/ext/plugin_load_plan_build.h"
 #include "runtime/ext/plugin_manifest.h"
+#include "runtime/ext/plugin_manager_model.h"
 
 namespace {
 
@@ -437,6 +438,160 @@ TEST(PluginManifest, HostileNamesStillProduceValidJson) {
   ASSERT_EQ(parsed.size(), 1u);
   EXPECT_EQ(parsed[0].at("name"), "a \"quoted\" \\ name");
   EXPECT_TRUE(parsed[0].at("file").is_string());
+}
+
+// ---------------------------------------------------------------------------
+// 5. BuildRows — what the plugin manager lists (#1857). One row per entry of the
+//    loader's report, in the report's (config.yaml) order: its state, the reason
+//    a failed entry gives, whether it is required, and the load band the loader
+//    sorts it into once it is loaded.
+// ---------------------------------------------------------------------------
+using nevr_pluginmgr::BuildRows;
+using nevr_pluginmgr::kLoadBandUnknown;
+using nevr_pluginmgr::Row;
+using nevr_pluginmgr::RowState;
+
+PluginManifestEntry LoadedEntry(const char* name, uint32_t caps) {
+  PluginManifestEntry e;
+  e.name = name;
+  e.file = std::string(name) + ".dll";
+  e.loaded = true;
+  e.capabilities = caps;
+  return e;
+}
+
+PluginManifestEntry FailedEntry(const char* name, const char* error) {
+  PluginManifestEntry e;
+  e.name = name;
+  e.file = std::string(name) + ".dll";
+  e.error = error;
+  return e;
+}
+
+PluginManifestEntry DisabledEntry(const char* name) {
+  PluginManifestEntry e;
+  e.name = name;
+  e.file = std::string(name) + ".dll";
+  e.enabled = false;
+  return e;
+}
+
+TEST(PluginManagerRows, NoEntriesGiveNoRows) {
+  EXPECT_TRUE(BuildRows({}).empty());
+}
+
+TEST(PluginManagerRows, RowsKeepTheReportOrderAndEachEntrysNameAndFile) {
+  const std::vector<Row> rows = BuildRows({FailedEntry("zeta", "LoadLibrary failed: error 126"),
+                                           DisabledEntry("alpha"), LoadedEntry("mid", 0)});
+  ASSERT_EQ(rows.size(), 3u);
+  EXPECT_EQ(rows[0].name, "zeta");
+  EXPECT_EQ(rows[0].file, "zeta.dll");
+  EXPECT_EQ(rows[1].name, "alpha");
+  EXPECT_EQ(rows[1].file, "alpha.dll");
+  EXPECT_EQ(rows[2].name, "mid");
+  EXPECT_EQ(rows[2].file, "mid.dll");
+}
+
+TEST(PluginManagerRows, EachKindOfEntryHasItsOwnState) {
+  const std::vector<Row> rows = BuildRows({LoadedEntry("a", 0), DisabledEntry("b"),
+                                           FailedEntry("c", "NvrPluginGetInfo returned NULL name")});
+  ASSERT_EQ(rows.size(), 3u);
+  EXPECT_EQ(rows[0].state, RowState::Loaded);
+  EXPECT_EQ(rows[1].state, RowState::Disabled);
+  EXPECT_EQ(rows[2].state, RowState::Failed);
+}
+
+TEST(PluginManagerRows, AFailedRowCarriesTheReportedReasonAndNoOtherRowDoes) {
+  PluginManifestEntry loaded_with_leftover = LoadedEntry("a", 0);
+  loaded_with_leftover.error = "left over from an earlier attempt";
+  PluginManifestEntry disabled_with_leftover = DisabledEntry("b");
+  disabled_with_leftover.error = "left over from an earlier attempt";
+  const std::vector<Row> rows =
+      BuildRows({loaded_with_leftover, disabled_with_leftover, FailedEntry("c", "LoadLibrary failed: error 126")});
+  ASSERT_EQ(rows.size(), 3u);
+  EXPECT_EQ(rows[0].reason, "");
+  EXPECT_EQ(rows[1].reason, "");
+  EXPECT_EQ(rows[2].reason, "LoadLibrary failed: error 126");
+}
+
+// A disabled entry is a choice, not a failure, whatever the entry's error field holds; a loaded one is loaded.
+TEST(PluginManagerRows, DisabledAndLoadedWinOverALeftoverError) {
+  PluginManifestEntry disabled = DisabledEntry("off");
+  disabled.error = "left over from an earlier attempt";
+  PluginManifestEntry loaded = LoadedEntry("on", 0);
+  loaded.error = "left over from an earlier attempt";
+  const std::vector<Row> rows = BuildRows({disabled, loaded});
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].state, RowState::Disabled);
+  EXPECT_EQ(rows[1].state, RowState::Loaded);
+}
+
+// Enabled, not loaded, no reason recorded: the loader has not got to it (the report is filled as the passes run).
+TEST(PluginManagerRows, AnEnabledEntryWithNoResultYetIsPending) {
+  PluginManifestEntry e;
+  e.name = "later";
+  e.file = "later.dll";
+  const std::vector<Row> rows = BuildRows({e});
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows[0].state, RowState::Pending);
+  EXPECT_EQ(rows[0].reason, "");
+}
+
+TEST(PluginManagerRows, RequiredIsCarriedForEveryState) {
+  PluginManifestEntry loaded = LoadedEntry("a", 0);
+  loaded.required = true;
+  PluginManifestEntry disabled = DisabledEntry("b");
+  disabled.required = true;
+  PluginManifestEntry failed = FailedEntry("c", "LoadLibrary failed: error 126");
+  failed.required = true;
+  PluginManifestEntry pending;
+  pending.name = "d";
+  pending.file = "d.dll";
+  pending.required = true;
+  const std::vector<Row> rows = BuildRows({loaded, disabled, failed, pending, LoadedEntry("e", 0)});
+  ASSERT_EQ(rows.size(), 5u);
+  EXPECT_TRUE(rows[0].required);
+  EXPECT_TRUE(rows[1].required);
+  EXPECT_TRUE(rows[2].required);
+  EXPECT_TRUE(rows[3].required);
+  EXPECT_FALSE(rows[4].required);
+}
+
+// The load band is the loader's own sort key (CapsLoadPriority), taken from the capabilities the plugin declared.
+TEST(PluginManagerRows, ALoadedRowCarriesTheLoadersBandForItsCapabilities) {
+  const std::vector<Row> rows =
+      BuildRows({LoadedEntry("undeclared", NEVR_PLUGIN_CAP_UNDECLARED), LoadedEntry("observer", NEVR_PLUGIN_CAP_OBSERVES_ONLY),
+                 LoadedEntry("rules", NEVR_PLUGIN_CAP_ALTERS_RULES),
+                 LoadedEntry("hooker", NEVR_PLUGIN_CAP_HOOKS_ENGINE | NEVR_PLUGIN_CAP_NETWORK)});
+  ASSERT_EQ(rows.size(), 4u);
+  EXPECT_EQ(rows[0].load_band, 0);
+  EXPECT_EQ(rows[1].load_band, 1);
+  EXPECT_EQ(rows[2].load_band, 4);
+  EXPECT_EQ(rows[3].load_band, 6);
+  EXPECT_EQ(rows[2].load_band, CapsLoadPriority(NEVR_PLUGIN_CAP_ALTERS_RULES));
+}
+
+// The capabilities are known only for a loaded plugin, so any other row has no band, even if the field holds bits.
+TEST(PluginManagerRows, ARowThatIsNotLoadedHasNoBand) {
+  PluginManifestEntry disabled = DisabledEntry("off");
+  disabled.capabilities = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
+  PluginManifestEntry failed = FailedEntry("bad", "LoadLibrary failed: error 126");
+  failed.capabilities = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
+  PluginManifestEntry pending;
+  pending.name = "later";
+  pending.file = "later.dll";
+  pending.capabilities = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
+  const std::vector<Row> rows = BuildRows({disabled, failed, pending});
+  ASSERT_EQ(rows.size(), 3u);
+  EXPECT_EQ(rows[0].load_band, kLoadBandUnknown);
+  EXPECT_EQ(rows[1].load_band, kLoadBandUnknown);
+  EXPECT_EQ(rows[2].load_band, kLoadBandUnknown);
+}
+
+// "No band" must not read as a band the loader uses: the lowest real band is 0 (undeclared), so unknown is below it.
+TEST(PluginManagerRows, TheUnknownBandIsBelowEveryBandTheLoaderUses) {
+  EXPECT_LT(kLoadBandUnknown, CapsLoadPriority(NEVR_PLUGIN_CAP_UNDECLARED));
+  EXPECT_LT(kLoadBandUnknown, CapsLoadPriority(NEVR_PLUGIN_CAP_HOOKS_ENGINE));
 }
 
 }  // namespace
