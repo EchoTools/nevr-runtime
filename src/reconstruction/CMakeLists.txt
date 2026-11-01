@@ -75,5 +75,15 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cjson_navigate_path.cpp
     r15/cjson_navigate_object_path.cpp
     r15/cjson_navigate_array_path.cpp
+    r15/set_full_screen_tint_node_enter.cpp
+    r15/cr15_game_begin_offline_multiplayer.cpp
+    r15/cg_irradiance_volumes_query.cpp
+    r15/compute_parent_to_level.cpp
+    r15/enable_scenario.cpp
+    r15/bot_actor_id.cpp
+    r15/service_connection_failed.cpp
+    r15/update_exclusive.cpp
+    r15/login_failed.cpp
+    r15/create_match.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
