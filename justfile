@@ -390,7 +390,8 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     if [ -n "$extra_libs" ]; then
         [ -d "$extra_libs" ] || { echo "android-repack-apk: script library directory not found: $extra_libs" >&2; exit 1; }
         python3 -I tools/quest_repack_libs.py stage-libs --libs "$extra_libs" --stage "$work/stage" --store-apk "$apk"
-        for f in "$work/stage/lib/arm64-v8a"/lib????????????????.so; do
+        # The plain names, and the redirected names the stage gives the nine stock libraries a combat unit redirects (#1737).
+        for f in "$work/stage/lib/arm64-v8a"/lib????????????????.so "$work/stage/lib/arm64-v8a"/lib????????????????_q15t.so; do
             [ -f "$f" ] && combat_libs+=("lib/arm64-v8a/$(basename "$f")")
         done
     fi
@@ -1951,6 +1952,11 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "${ident[@]}" \
         -o "$out/input_seam_test" -ldl
     timeout 120 "$out/input_seam_test"
+    # The script redirect (#1737): the stock-name rules, the all-or-nothing registry against a real directory, the empty
+    # registry's pass-through and the log lines. Needs no pinned target: hook_log.cpp is its only sentinel dependency.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/script_redirect_test.cpp src/quest/plugin/script_redirect.cpp \
+        src/quest/sentinel/hook_log.cpp -o "$out/script_redirect_test" -ldl
+    timeout 120 "$out/script_redirect_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
     # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
     jni="${ANDROID_NDK_HOME:?test-quest-hooks: ANDROID_NDK_HOME is not set (the toast test needs jni.h from the NDK)}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"

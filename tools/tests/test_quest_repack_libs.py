@@ -1191,6 +1191,70 @@ class StageLibsTest(unittest.TestCase):
         self.assertTrue(any("lib0123456789abcdef.so: REPLACE lists it" in p for p in problems), problems)
 
 
+class StageRedirectedLibsTest(unittest.TestCase):
+    """`stage-libs` (#1737): a redirected stock library is staged under its lib<hash16>_q15t.so name; its stock name never is."""
+
+    HASH = "37f88adb0d8066f7"  # one of the nine libs.COMBAT_REDIRECT_HASHES
+    STOCK = f"lib{HASH}.so"
+    REDIRECTED = f"lib{HASH}_q15t.so"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = pathlib.Path(self.tmp.name)
+        self.store = self.root / "store.apk"
+        self.write_store(with_stock=True)
+        self.libs = self.root / "libs"
+        self.libs.mkdir()
+        self.stage = self.root / "stage"
+        self.stage.mkdir()
+        self.data = aarch64_so(b"combat build")
+        (self.libs / self.STOCK).write_bytes(self.data)
+        self.write_sums()
+
+    def write_store(self, *, with_stock):
+        with zipfile.ZipFile(self.store, "w") as zf:
+            zf.writestr("lib/arm64-v8a/libr15.so", b"stock")
+            if with_stock:
+                zf.writestr(f"lib/arm64-v8a/{self.STOCK}", b"stock script library")
+
+    def write_sums(self):
+        lines = [f"{SHA(p.read_bytes())}  {p.name}\n" for p in sorted(self.libs.iterdir()) if p.is_file() and p.name != "SHA256SUMS"]
+        (self.libs / "SHA256SUMS").write_text("".join(lines))
+
+    def test_the_redirected_library_is_staged_under_its_q15t_name_and_the_stock_name_is_not(self):
+        self.assertEqual(libs.stage_libs(self.libs, self.stage, self.store), [])
+        staged = self.stage / "lib/arm64-v8a"
+        self.assertEqual((staged / self.REDIRECTED).read_bytes(), self.data)
+        self.assertFalse((staged / self.STOCK).exists())
+        self.assertEqual(libs.replaced_names(self.stage), [])
+
+    def test_a_redirected_library_the_store_does_not_hold_is_refused(self):
+        self.write_store(with_stock=False)
+        problems = libs.stage_libs(self.libs, self.stage, self.store)
+        self.assertTrue(any(f"{self.STOCK}: a redirected library, but the store APK holds no" in p for p in problems), problems)
+        self.assertFalse((self.stage / "lib/arm64-v8a").exists())
+
+    def test_a_redirected_library_named_in_REPLACE_is_refused(self):
+        (self.libs / libs.LIBS_REPLACE).write_text(f"{self.STOCK}\n")
+        problems = libs.stage_libs(self.libs, self.stage, self.store)
+        self.assertTrue(any(f"{self.STOCK}: a redirected library never replaces" in p for p in problems), problems)
+        self.assertFalse((self.stage / "lib/arm64-v8a").exists())
+
+    def test_the_redirected_name_in_the_libraries_directory_is_refused(self):
+        (self.libs / self.REDIRECTED).write_bytes(self.data)
+        self.write_sums()
+        problems = libs.stage_libs(self.libs, self.stage, self.store)
+        self.assertTrue(any(f"{self.REDIRECTED}: not named lib<hash16>.so" in p for p in problems), problems)
+
+    def test_the_redirect_mapping_covers_the_nine_and_no_other_name(self):
+        self.assertEqual(len(set(libs.COMBAT_REDIRECT_HASHES)), 9)
+        self.assertTrue(libs.is_redirected(self.STOCK))
+        self.assertEqual(libs.staged_name(self.STOCK), self.REDIRECTED)
+        self.assertFalse(libs.is_redirected("lib0123456789abcdef.so"))
+        self.assertEqual(libs.staged_name("lib0123456789abcdef.so"), "lib0123456789abcdef.so")
+
+
 SHA = lambda data: hashlib.sha256(data).hexdigest()  # noqa: E731
 
 

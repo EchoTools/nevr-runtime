@@ -1,14 +1,18 @@
 // Built with -fno-exceptions (callback_thunk.h refuses otherwise).
 #include "quest/integration/dlopen_hook.h"
 
+#include <dlfcn.h>
+
 #include <atomic>
 #include <cerrno>
 
 #include "callback_thunk.h"
 #include "hook_install.h"
+#include "hook_log.h"
 #include "hook_report.h"
 #include "pinned_targets.h"
 #include "quest/integration/post_load.h"
+#include "quest/plugin/script_redirect.h"
 
 namespace nevr_quest::integration {
 
@@ -22,7 +26,19 @@ sentinel::GotHook g_dlopenHook;
 std::atomic<bool> g_installed{false};
 
 void* HookedDlopen(DlopenThunk::Fn original, const char* name, int flags) noexcept {
-  void* const handle = original(name, flags);
+  // The script redirect (script_redirect.h): a stock script library's name becomes its combat build's name when the
+  // combat unit registered it. Every other name, and every name in a process with no registration, is passed unchanged.
+  char redirected[script_redirect::kNameCapacity];
+  const char* const loadName = script_redirect::RewriteLoadName(name, redirected, sizeof redirected);
+  void* const handle = original(loadName, flags);
+  if (handle == nullptr && loadName != name) {
+    // A redirected load that failed fails loudly: the game gets the loader's null, and the name and dlerror() text say why.
+    const int savedErrno = errno;
+    const char* const reason = dlerror();
+    sentinel::LogFields(sentinel::LogLevel::kError, "script_redirect_failed",
+                        {{"from", name}, {"to", loadName}, {"dlerror", reason != nullptr ? reason : "(none)"}});
+    errno = savedErrno;
+  }
   if (handle != nullptr) {
     // The game may read errno/dlerror after a successful dlopen; leave them as the loader left them.
     const int savedErrno = errno;
@@ -58,6 +74,7 @@ DlopenInstall InstallDlopenHook(sentinel::GotStatus* status) noexcept {
     return DlopenInstall::kFailed;
   }
   g_installed.store(true, std::memory_order_release);
+  script_redirect::LogState();  // registry=0 status=pass-through until a combat unit registers (its own line says armed)
   return DlopenInstall::kOk;
 }
 

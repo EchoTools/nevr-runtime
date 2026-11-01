@@ -751,6 +751,25 @@ LIB_NAME = re.compile(r"^lib[0-9a-f]{16}\.so$")
 LIBS_SUMS = "SHA256SUMS"
 LIBS_REPLACE = "REPLACE"  # in the libraries directory: the store libraries these replace, one name per line
 STAGED_REPLACE_LIST = "lib-replace.txt"  # in the stage directory: read back by verify_signed
+# The nine stock script libraries a combat unit redirects (#1737). Each is given to the APK as lib<hash16>_q15t.so, beside the
+# stock lib<hash16>.so, which is never replaced: verify_signed checks every store library is byte-identical. The builder
+# names them lib<hash16>.so; the redirect name is given here, at staging. src/quest/plugins/q15t/src/script_redirect.h holds
+# the same list (tools/tests/test_q15t_script_redirect.py keeps them equal).
+COMBAT_REDIRECT_HASHES = (
+    "37f88adb0d8066f7", "3c11128c3bd783dd", "4b65d1b009973281", "6a0f689e5b91c666", "80461e04c6d82c21",
+    "812075466da9e147", "954c89b6c61625f6", "a5c64faa725f2334", "ac4cd8e0a786d5c5",
+)
+REDIRECT_SUFFIX = "_q15t"
+
+
+def is_redirected(name: str) -> bool:
+    """True for lib<hash16>.so where hash16 is one of the nine redirected stock libraries."""
+    return LIB_NAME.match(name) is not None and name[3:-3] in COMBAT_REDIRECT_HASHES
+
+
+def staged_name(name: str) -> str:
+    """The name a script library is staged under: lib<hash16>_q15t.so for a redirected library, else its own name."""
+    return f"{name[:-3]}{REDIRECT_SUFFIX}.so" if is_redirected(name) else name
 _EM_AARCH64 = 183
 
 
@@ -815,7 +834,14 @@ def stage_libs(libs_dir: pathlib.Path, stage: pathlib.Path, store_apk: pathlib.P
             problems.append(f"{name}: its sha-256 differs from the one {LIBS_SUMS} lists")
         if not is_aarch64_shared_object(data):
             problems.append(f"{name}: not a 64-bit AArch64 shared object")
-        if f"{ABI_DIR}/{name}" in store_entries and name not in replace:
+        if is_redirected(name):
+            if f"{ABI_DIR}/{name}" not in store_entries:
+                problems.append(f"{name}: a redirected library, but the store APK holds no {ABI_DIR}/{name} for it to redirect")
+            if name in replace:
+                problems.append(f"{name}: a redirected library never replaces the store library: {LIBS_REPLACE} must not list it")
+            if f"{ABI_DIR}/{staged_name(name)}" in store_entries:
+                problems.append(f"{staged_name(name)}: the store APK already holds that name")
+        elif f"{ABI_DIR}/{name}" in store_entries and name not in replace:
             problems.append(f"{name}: the store APK holds {ABI_DIR}/{name}; it is staged only when {LIBS_REPLACE} lists it")
     for name in listed:
         if name not in names:
@@ -828,8 +854,8 @@ def stage_libs(libs_dir: pathlib.Path, stage: pathlib.Path, store_apk: pathlib.P
     target = stage / ABI_DIR
     target.mkdir(parents=True, exist_ok=True)
     for name in names:
-        (target / name).write_bytes((libs_dir / name).read_bytes())
-        print(f"quest_repack_libs: script library {name} sha256 {listed[name]}", flush=True)
+        (target / staged_name(name)).write_bytes((libs_dir / name).read_bytes())
+        print(f"quest_repack_libs: script library {staged_name(name)} sha256 {listed[name]}", flush=True)
     (stage / STAGED_REPLACE_LIST).write_text("".join(f"{n}\n" for n in sorted(replace)), encoding="utf-8")
     return []
 
