@@ -5,6 +5,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cr15_net_game_end_multiplayer.cpp
     r15/cr15_net_game_begin_multiplayer_with_lobby_user.cpp
     r15/cr15_net_game_begin_multiplayer_with_lobby_group.cpp
+    r15/cr15_net_game_begin_multiplayer_with_lobby_id.cpp
     r15/c_memory_compare.cpp
     r15/c_timer_delta_microseconds.cpp
     r15/c_timer_delta_seconds_f.cpp
