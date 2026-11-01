@@ -150,6 +150,16 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cr15_net_damageable_cs_heal.cpp
     r15/static_raycast_occluded.cpp
     r15/world_teleport.cpp
+    r15/make_t_str_printf_512.cpp
+    r15/cjson_is_array.cpp
+    r15/cjson_count.cpp
+    r15/cjson_t_string.cpp
+    r15/cjson_int.cpp
+    r15/c_table_xt_sr15_net_ban_reason_expression_data_reset.cpp
+    r15/set_delimited_error_message.cpp
+    r15/cjson_navigate_path.cpp
+    r15/cjson_navigate_object_path.cpp
+    r15/cjson_navigate_array_path.cpp
     r15/local_teleport.cpp
     r15/query_collision.cpp
     r15/resolve_zone.cpp
