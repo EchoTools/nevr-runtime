@@ -693,14 +693,14 @@ bool IsMember(const nevr_social_party::View& view, std::uint64_t id) {
   return false;
 }
 
-// A friend is invitable only while the local party is joinable, the friend is not already a member and
-// is reachable (online here). It is not a function of the friend alone.
+// CNSISocial::FriendIsInvitable (libr15 0x1a35ba0), the same rule as the PC facade: the friend is online
+// and not already a member. It needs no party: SendInvite creates one when none exists.
 std::uint32_t SlotFriendIsInvitable(void* self, std::uint32_t index) {
   Impl& impl = *OwnerOf(self);
   std::uint64_t id = 0;
   if (!Friends(impl).IdAt(index, &id) || !Friends(impl).OnlineAt(index)) return 0;
   const auto view = CurrentView(impl);
-  return PartyJoinable(impl, *view) && !IsMember(*view, id) ? 1U : 0U;
+  return !IsMember(*view, id) ? 1U : 0U;
 }
 
 // OpenSendInviteUI / OpenNewSendInviteUI(LocalUserID): the party tab's "Invite Members" (#318). pnsovr opened

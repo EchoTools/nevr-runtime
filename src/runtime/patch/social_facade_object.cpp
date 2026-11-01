@@ -751,10 +751,9 @@ std::uint32_t FriendStatus(void*, std::uint32_t index) {
   return result;
 }
 
-// pnsovr (0x180084f80): a friend is invitable only while the local party is joinable, the friend is
-// not already a member, and the platform lists them as invitable (Oculus's invitable-users map, which
-// holds the people it can reach; here that is the friends who are online). It is not a function of
-// the friend alone: with no party, or a full or locked one, no row shows the "+" button.
+// FriendIsInvitable (slot 53) follows CNSISocial::FriendIsInvitable (libr15 0x1a35ba0): the friend is
+// online (status 2) and not already a member. It needs no party: SendInvite creates one when none exists
+// (social_party.h, SendInvite), so the "+" shows with no party too.
 // Slots 52/54/55 (pnsovr 0x1800850e0, 0x180085030, 0x180085060): the friend's presence text, whether
 // their party can be joined, and its id, from the server's SNSFriendPresenceNotify.
 const char* FriendStatusString(void*, std::uint32_t index) { return nevr_social_roster::Global().StatusTextAt(index); }
@@ -765,7 +764,6 @@ std::uint32_t FriendIsInvitable(void*, std::uint32_t index) {
   std::uint64_t id = 0;
   if (!nevr_social_roster::Global().IdAt(index, &id) || !nevr_social_roster::Global().OnlineAt(index)) return 0;
   const auto view = CurrentView();
-  if (!PartyJoinable(*view)) return 0;
   for (const nevr_social_party::Member& member : view->members)
     if (member.id == id) return 0;
   return 1;

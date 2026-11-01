@@ -335,8 +335,8 @@ TEST(SocialFacade, FriendSlotsAnswerFromTheRoster) {
   EXPECT_STREQ(reinterpret_cast<NameFn>(vtable[50])(object, 0), "42");
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[51])(object, 0), 2u);  // online
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[51])(object, 1), 0u);  // offline
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 0u) << "no party: nobody is invitable";
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u);
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u) << "no party: the online friend is invitable";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u) << "the offline friend is not";
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[54])(object, 0), 0u);  // nobody is joinable yet
   nevr_social_roster::Global().Clear();
 }
@@ -749,7 +749,8 @@ TEST(SocialParty, ResetLeavesTheServerPartyWithoutTellingTheGame) {
   for (const auto& event : events) EXPECT_NE(event.kind, nevr_social_party::EventKind::kLeft) << "Reset fires no Left callback";
 }
 
-TEST(SocialFacade, AFriendRowIsInvitableOnlyWhileThePartyIsJoinableAndTheFriendIsNotInIt) {
+// CNSISocial::FriendIsInvitable (libr15 0x1a35ba0): online and not a member, with or without a party.
+TEST(SocialFacade, AFriendRowIsInvitableWhileOnlineAndNotAMemberWithOrWithoutAParty) {
   using CountFn = std::uint32_t (*)(void*);
   using IndexFn = std::uint32_t (*)(void*, std::uint32_t);
   using UpdateFn = void (*)(void*, const void*);
@@ -765,13 +766,14 @@ TEST(SocialFacade, AFriendRowIsInvitableOnlyWhileThePartyIsJoinableAndTheFriendI
   const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
 
   publish();
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 0u) << "no party: no row shows the plus";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u) << "no party: an online friend is invitable (SendInvite creates the party)";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u) << "an offline friend, no party";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 9), 0u) << "past the list";
 
   FeedParty(nevr_social_party::Global(), "PartyCreateSuccess", U64s({7, 77}));
   publish();
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u) << "an online friend, joinable party";
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u) << "an offline friend";
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 9), 0u) << "past the list";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u) << "an online friend, party exists";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u) << "an offline friend, party exists";
 
   FeedParty(nevr_social_party::Global(), "PartyJoinNotify", U64s({7, 300}));
   publish();

@@ -529,7 +529,7 @@ void TestFriendInvitable() {
   Feed(w, kSymFriendStatusNotify, Le(0, 8) + Le(2002, 8) + Le(0, 1) + Le(0, 7));
   Feed(w, kSymFriendStatusNotify, Le(0, 8) + Le(3003, 8) + Le(0, 1) + Le(0, 7));
   void* obj = w.Obj();
-  QCHECK(SlotFn<U32_U32>(obj, kFriendIsInvitable)(obj, 0) == 0);  // no party yet: nobody is invitable
+  QCHECK(SlotFn<U32_U32>(obj, kFriendIsInvitable)(obj, 0) == 1);  // no party yet: an online friend is invitable
   CreateParty(w, 777);
   QCHECK(SlotFn<U32_U32>(obj, kFriendIsInvitable)(obj, 0) == 1);
   QCHECK(SlotFn<U32_U32>(obj, kFriendIsInvitable)(obj, 1) == 1);
