@@ -20,7 +20,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ccache refuses a compile that carries CMake's C++20 module-scan flags (-fmodules-ts, -fmodule-mapper, -fdeps-*): it counts it
-# uncacheable. No source here is a module, so a build that goes through a ccache launcher (the fixed build checkout, #1736) skips the
+# uncacheable. No source here is a module, so a build that goes through a ccache launcher (every checkout, #1736) skips the
 # scan, as the root CMakeLists.txt does; a build without a launcher is unchanged.
 if(CMAKE_CXX_COMPILER_LAUNCHER MATCHES "ccache")
   set(CMAKE_CXX_SCAN_FOR_MODULES OFF)

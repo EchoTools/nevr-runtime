@@ -123,9 +123,9 @@ clean:
 # --- Android / Quest (arm64-v8a) ---
 # Self-contained NDK sub-project at src/quest (root CMake is MinGW-only).
 # NDK: r26d; ANDROID_NDK_HOME must name its directory (no default: a recipe that needs it stops at _require-ndk).
-# The Quest configure lines keep the ccache launcher only in the fixed, clean build checkout (tools/build_checkout.py, #1736): there
-# the directory is the same on every build, so a cached object is the one a fresh compile would write. Anywhere else the launcher is
-# cleared, so no worktree's directory is put into another's .so.
+# The Quest configure lines pass the ccache launcher in every checkout. src/quest/CMakeLists.txt maps the repository root to "."
+# and the build tree to "build" (-ffile-prefix-map, #658), so no object carries a checkout's directory and a cached object is the one
+# a fresh compile would write from any worktree.
 
 # Stop with the fix when ANDROID_NDK_HOME is not set (it is read at run time, so recipes that do not need the NDK never ask for it)
 _require-ndk:
@@ -135,7 +135,7 @@ _require-ndk:
 configure-android: _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
-    launcher=$(python3 -I tools/build_checkout.py quest-launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")
+    launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"
     cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" cmake --preset android-arm64
 
 # Build the Android arm64-v8a crash-reporter .so
@@ -513,7 +513,7 @@ package-dev store_apk=env("NEVR_STORE_APK"):
 _quest-apk store_apk: _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
-    launcher=$(python3 -I tools/build_checkout.py quest-launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")
+    launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"
     (cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" cmake --preset android-arm64-dev)
     cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)

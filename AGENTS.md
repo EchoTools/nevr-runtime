@@ -447,8 +447,9 @@ Build output lands in `build/<preset>/bin/`.
 
 The `justfile` puts `ccache` in front of the compiler when it is installed, so every worktree shares one cache
 (`tools/ccache.conf`: 10 GB cap; the cache directory is `CCACHE_DIR`, else `~/.cache/ccache`). CMake reads the launcher on a build tree's first configure, so a tree configured before
-ccache keeps building without it. `NEVR_CCACHE= just build` configures a tree without it. The Quest build never
-uses it: its objects embed the worktree path.
+ccache keeps building without it. `NEVR_CCACHE= just build` configures a tree without it. The Quest build uses it
+too: `src/quest/CMakeLists.txt` maps the repository root and the build tree out of every object (`-ffile-prefix-map`), so
+its objects carry no checkout path and are shared across worktrees.
 
 ## Testing
 
@@ -724,8 +725,8 @@ your seat name, for example `claude-main` or `codex`.
 - **At most three heavy builds at once per seat,** so the usage window and memory both hold.
 - **Cached builds come from one fixed, clean checkout.** The merge foreman builds in `<work root>/build-checkout/nevr-runtime`
   (`$NEVR_BUILD_CHECKOUT`), moved to the commit with `just build-checkout <rev>`, and a build there refuses unless
-  `git status --porcelain` is empty (`tools/build_checkout.py guard`). The path never changes, so the Quest build keeps the
-  ccache launcher only there; in any other tree its debug info would carry that tree's path, and the launcher is off. Nobody edits
+  `git status --porcelain` is empty (`tools/build_checkout.py guard`). The path never changes. The Quest build uses the
+  launcher here as in every other checkout (see "Builds"). Nobody edits
   that checkout. One config (`tools/ccache.conf`, copied into the cache directory) is read by every build; `just ccache-stats` shows
   the cache as the builds see it, where a bare `ccache -s` shows ccache's 5 GiB default (#1736).
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
