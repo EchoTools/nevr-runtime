@@ -77,6 +77,12 @@ remove-worktree *args:
 _build-guard:
     @python3 -I tools/build_checkout.py guard
 
+# Heavy-recipe gate (tools/heavy_guard.py): each heavy recipe names it as its first dependency. It refuses a Claude Code
+# session unless the command carries the opt-in, and holds one host-wide lock per heavy run, so two never run at once.
+[positional-arguments]
+_heavy-guard label *args:
+    @python3 -I "{{ justfile_directory() }}/tools/heavy_guard.py" "$@"
+
 # Check REV out in the fixed build checkout (creating it the first time) and print where it is; refuses when it is not clean.
 # Build there with `cd $(just build-checkout-path) && just build-android`.
 build-checkout rev="origin/main":
@@ -91,7 +97,7 @@ ccache-stats:
     ccache -s
 
 # Build all components
-build: configure
+build *args: (_heavy-guard "build" args) configure
     @cmake --build --preset {{ preset }}
 
 # Build only the echovr_server.exe launcher
@@ -99,15 +105,15 @@ launcher: configure
     cmake --build --preset {{ preset }} --target echovr_server
 
 # Build with full compiler output
-verbose-build: configure
+verbose-build *args: (_heavy-guard "verbose-build" args) configure
     cmake --build --preset {{ preset }}
 
 # Create the stripped server distribution package (nevr-runtime-v<ver>-windows-server) and its symbol files in dist/symbols/
-dist: build
+dist *args: (_heavy-guard "dist" args) build
     @cmake --build --preset {{ preset }} --target dist
 
 # Create distribution with full output
-verbose-dist: build
+verbose-dist *args: (_heavy-guard "verbose-dist" args) build
     cmake --build --preset {{ preset }} --target dist
 
 # Regenerate C++ protobuf from BSR at proto_pin (buf.build/echotools/nevr-api) and stamp gen/ (tools/proto_stamp.py).
@@ -123,9 +129,9 @@ clean:
 # --- Android / Quest (arm64-v8a) ---
 # Self-contained NDK sub-project at src/quest (root CMake is MinGW-only).
 # NDK: r26d; ANDROID_NDK_HOME must name its directory (no default: a recipe that needs it stops at _require-ndk).
-# The Quest configure lines keep the ccache launcher only in the fixed, clean build checkout (tools/build_checkout.py, #1736): there
-# the directory is the same on every build, so a cached object is the one a fresh compile would write. Anywhere else the launcher is
-# cleared, so no worktree's directory is put into another's .so.
+# The Quest configure lines pass the ccache launcher in every checkout. src/quest/CMakeLists.txt maps the repository root to "."
+# and the build tree to "build" (-ffile-prefix-map, #658), so no object carries a checkout's directory and a cached object is the one
+# a fresh compile would write from any worktree.
 
 # Stop with the fix when ANDROID_NDK_HOME is not set (it is read at run time, so recipes that do not need the NDK never ask for it)
 _require-ndk:
@@ -135,16 +141,16 @@ _require-ndk:
 configure-android: _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
-    launcher=$(python3 -I tools/build_checkout.py quest-launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")
+    launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"
     cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" cmake --preset android-arm64
 
 # Build the Android arm64-v8a crash-reporter .so
 # Job count: CMAKE_BUILD_PARALLEL_LEVEL, else 4 (a bare -j would use every core and override the variable).
-build-android: configure-android
+build-android *args: (_heavy-guard "build-android" args) configure-android
     cmake --build build/android-arm64 -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
 
 # Build with full compiler output
-verbose-build-android: configure-android
+verbose-build-android *args: (_heavy-guard "verbose-build-android" args) configure-android
     cmake --build build/android-arm64 -v
 
 # Fail when the Quest sentinel gains a load-time initializer beyond its one ELF constructor
@@ -158,7 +164,7 @@ check-android-static-init: build-android
     tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $objects
 
 # Run the Quest .so ground-truth (ELF-shape) tests
-test-android: check-android-static-init
+test-android *args: (_heavy-guard "test-android" args) check-android-static-init
     # The sentinel embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
     # CSymbol64Hash sign-extends a byte >= 0x80 under the NDK's AArch64 clang, where plain char is unsigned (#657).
@@ -471,7 +477,7 @@ release-preflight base="main":
 # embedded endpoints and keys alone (config.yaml only overrides).
 # The Quest APK is a repack of the store game: it is for testers and is published outside GitHub, never attached to a release.
 # This never tags, uploads or publishes.
-package-dev store_apk=env("NEVR_STORE_APK"):
+package-dev store_apk=env("NEVR_STORE_APK") *args: (_heavy-guard "package-dev" args)
     #!/usr/bin/env bash
     set -euo pipefail
     # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
@@ -510,10 +516,10 @@ package-dev store_apk=env("NEVR_STORE_APK"):
 
 # The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the store
 # APK. Private: package-dev only (a release packages CI's loader, release-quest-apk).
-_quest-apk store_apk: _build-guard _require-ndk
+_quest-apk store_apk *args: (_heavy-guard "_quest-apk" args) _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
-    launcher=$(python3 -I tools/build_checkout.py quest-launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")
+    launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"
     (cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" cmake --preset android-arm64-dev)
     cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
@@ -706,7 +712,7 @@ test-installer *ARGS:
     cargo test --locked --manifest-path installer/Cargo.toml {{ ARGS }}
 
 # Run all system tests
-test-system:
+test-system *args: (_heavy-guard "test-system" args)
     cd tests/system && go test -v ./...
 
 # Run quick system tests only
@@ -718,7 +724,7 @@ test-system-dll:
     cd tests/system && go test -v -short -run ".*DLL.*" ./...
 
 # Run system tests with verbose output, no cache
-test-system-verbose:
+test-system-verbose *args: (_heavy-guard "test-system-verbose" args)
     cd tests/system && go test -v -count=1 ./...
 
 # Run the built runtime on a native Windows VM (libvirt) and judge the boot.
@@ -731,11 +737,14 @@ test-winvm *ARGS:
 # One social scenario, end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md):
 # builds the mingw-scenario DLL (test-only control endpoint), launches the client the
 # launch-client.sh way, runs tools/scenario/scenarios/NAME.yaml and prints a PASS/FAIL table.
-scenario NAME *ARGS:
+[positional-arguments]
+scenario NAME *ARGS: (_heavy-guard "scenario" NAME ARGS)
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/{{NAME}}.yaml" {{ARGS}}
+    raw="$(python3 -I tools/heavy_guard.py strip-optin "$@")"
+    words=(); mapfile -t words <<<"$raw"
+    python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/${words[0]}.yaml" "${words[@]:1}"
 
 # The scheduled smoke: one client boot proving the three things every scenario assumes (in game,
 # control endpoint listening, a fire drives the game), with a non-zero record and an alarm on
@@ -744,18 +753,21 @@ smoke *ARGS:
     tools/scenario/smoke.sh {{ARGS}}
 
 # ARGS pass to run_all.py: --config <dir>/config.json runs the suite with that directory's config.yaml.
-scenario-all *ARGS:
+[positional-arguments]
+scenario-all *ARGS: (_heavy-guard "scenario-all" ARGS)
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    python3 tools/scenario/run_all.py {{ARGS}}
+    raw="$(python3 -I tools/heavy_guard.py strip-optin "$@")"
+    args=(); if [ -n "$raw" ]; then mapfile -t args <<<"$raw"; fi
+    python3 tools/scenario/run_all.py "${args[@]}"
 
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:
     cd tests/plugins && go test -v -run "TestGroundTruth" ./...
 
 # Run all plugin tests (needs game binary + MCP harness)
-test-plugins:
+test-plugins *args: (_heavy-guard "test-plugins" args)
     cd tests/plugins && go test -v -timeout 10m ./...
 
 # Run plugin tests in short mode (skips integration, runs ground truth only)
@@ -763,7 +775,7 @@ test-plugins-short:
     cd tests/plugins && go test -v -short ./...
 
 # Run plugin tests with verbose output, no cache
-test-plugins-verbose:
+test-plugins-verbose *args: (_heavy-guard "test-plugins-verbose" args)
     cd tests/plugins && go test -v -count=1 -timeout 10m ./...
 
 # Run auth ground truth tests (no game binary, no network)
@@ -774,7 +786,7 @@ test-auth-groundtruth:
 # the GTest binary cannot be built or found, or if any test fails. Builds the test
 # target with -DBUILD_TESTING=ON (the default presets do not enable it). Add new
 # GTest executables here as they land.
-test-auth-unit:
+test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
@@ -1102,7 +1114,7 @@ test-auth-integration:
     cd tests/system && go test -v -run "TestAuth" ./...
 
 # Run all auth tests
-test-auth: test-auth-groundtruth test-auth-unit
+test-auth *args: (_heavy-guard "test-auth" args) test-auth-groundtruth test-auth-unit
 
 # yaml-cpp, zlib and nlohmann-json for the Quest host tests and the libr15 patcher: installed from the tools/quest-host-deps manifest for the x64-linux triplet into
 # build/quest-host-vcpkg (never a system package). Its vcpkg root is build/vcpkg-root-quest-host, not _vcpkg-mingw's
@@ -2567,7 +2579,7 @@ test-scripting:
 # Success derives from the real compiler/linker + test artifacts, not a proxy
 # [day-one-kit §5]. EXCLUDES the Go integration suites — the evr-test-harness
 # dependency is excised (no extern/evr-test-harness in the tree).
-verify:
+verify *args: (_heavy-guard "verify" args)
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
