@@ -1,6 +1,6 @@
 // CR15NetAutoTargetCS::FireBulletLocal
 // Quest libr15.so VA 0x220bff8; ReVault binary 576.
-// ReVault raw parent 100302367, reconstruction node 100600469; grade M: callees and branch structure from the asm; vtable slots 0x1e0 and 0x1e8 unresolved.
+// ReVault raw parent 100302367, reconstruction node 100600469; grade M: callees and branch structure from the asm; vtable slots 0x1e0 and 0x1e8 unresolved; the Broadcast flags word (x5, loaded through loader-filled slot 0x3813e10) is the decompiler's fold 0xffffffffffffffff, not byte-checked.
 // @0x220bff8 — NRadEngine::NRadGame::CR15NetAutoTargetCS::FireBulletLocal
 /* @confidence: M */
 
@@ -159,7 +159,9 @@ void CR15NetGame_Broadcast_SR15NetAutoTargetFireBullet(
 constexpr std::uint64_t kBulletSystemKey = 0x48037cde0e07c1b2ULL;
 // u64 at VA 0x32cefe8: the component event sent after the two slot-0x1e0 calls.
 constexpr std::uint64_t kFireBulletEvent = 0x41552625c376e30eULL;
-// The Broadcast flags argument is 0xffffffffffffffff; the decompiler folds GOT slot 0x3813e10 to that value.
+// The Broadcast flags argument (x5) is loaded at 0x220c464-0x220c478 as *(*(u64*)0x3813e10): the slot is zero in the file and
+// filled by the loader, so the pointed-to word is not readable from the file. 0xffffffffffffffff is the decompiler's fold of
+// that load, not a byte-checked value.
 
 class CR15NetAutoTargetCS {
 public:
