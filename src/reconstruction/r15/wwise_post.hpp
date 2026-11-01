@@ -73,6 +73,9 @@ bool SoundStopped(const void* player, std::uint32_t expected_state,
 void PlayOneOff(void* player, const char* emitter_name,
                 std::uint32_t sound_symbol, const void* transform,
                 std::uint32_t post_symbol, float volume);
+std::uint64_t Trigger(std::uint32_t trigger, std::uint32_t object_id);
+std::uint64_t QueueWwiseTrigger(std::uint32_t trigger,
+                                std::uint32_t object_id);
 std::uint64_t SetSwitch(const void* player, std::uint32_t group,
                         std::uint32_t value, std::uint32_t emitter_id);
 std::uint64_t SetState(void* player, std::uint32_t group,
