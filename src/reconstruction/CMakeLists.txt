@@ -52,6 +52,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/queue_wwise_switch_command.cpp
     r15/build_wwise_state_command.cpp
     r15/queue_wwise_state_command.cpp
+    r15/queue_wwise_trigger.cpp
     r15/insert_sound_switch_key.cpp
     r15/queue_wwise_reset_command.cpp
     r15/build_wwise_value_command.cpp
