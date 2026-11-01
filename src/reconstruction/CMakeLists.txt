@@ -1,7 +1,6 @@
 # Not listed, by README.md's rule (a source joins only once its whole function body is reconstructed):
 #   r15/engine_resources_initialize.cpp  partial evidence note, no function body
 #   r15/session_player_writer.cpp        fragment of a larger body
-#   r15/cr15_game_ctor.cpp               constructor reconstruction is partial
 add_library(nevr_r15_reconstruction STATIC
     r15/c_memory_compare.cpp
     r15/c_timer_delta_microseconds.cpp
@@ -65,5 +64,11 @@ add_library(nevr_r15_reconstruction STATIC
     r15/connect.cpp
     r15/connect_gun.cpp
     r15/invoke_method.cpp
+    r15/cr15_game_ctor.cpp
+    r15/cg_mesh_list_resource.cpp
+    r15/cfactory_cgshader_set_resource_construct_instance.cpp
+    r15/party_permissions.cpp
+    r15/cfactory_cgshader_set_resource_create_instance.cpp
+    r15/cg_instanced_model_resource.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
