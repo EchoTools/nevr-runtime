@@ -7,6 +7,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/c_timer_delta_seconds_f.cpp
     r15/c_timer_milliseconds.cpp
     r15/csys_time_get_tick.cpp
+    r15/csys_time_get_ticks_per_second.cpp
     r15/cleanup_peers.cpp
     r15/destroy_peer.cpp
     r15/destroy_peer_record.cpp
