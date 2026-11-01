@@ -38,5 +38,12 @@ add_library(nevr_r15_reconstruction STATIC
     r15/ctransfqs_append.cpp
     r15/cr15_echo_unit_base_transform.cpp
     r15/cr15_player_nav_final_transform.cpp
+    r15/cnca_game_loaded_space.cpp
+    r15/cnca_game_space.cpp
+    r15/cnca_game_space_wrapper.cpp
+    r15/cactor_alias_cs_resolve.cpp
+    r15/cr15_game_space_mt.cpp
+    r15/cr15_resolve_actor_alias.cpp
+    r15/clocal_component_handle_tag_find.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)

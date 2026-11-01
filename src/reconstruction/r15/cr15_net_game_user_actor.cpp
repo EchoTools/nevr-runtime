@@ -6,15 +6,9 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "cnca_game.hpp"
+
 namespace q15t::r15::reconstruction {
-
-struct SActorGuid {
-    std::uint64_t words[2];
-};
-
-struct CncaGame {
-    static void ResolveActorAlias(CncaGame* game, SActorGuid* actor);
-};
 
 struct CR15NetGame {
     CncaGame* game;
@@ -26,7 +20,7 @@ SActorGuid CR15NetGame::UserActor(std::uint16_t member_index) const {
     auto* const game = *reinterpret_cast<CncaGame* const*>(self + 0x8);
     SActorGuid actor = *reinterpret_cast<const SActorGuid*>(
         self + static_cast<std::size_t>(member_index) * 0x250 + 0x180);
-    CncaGame::ResolveActorAlias(game, &actor);
+    ResolveActorAlias(game, &actor);
     return actor;
 }
 
