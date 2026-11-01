@@ -36,6 +36,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/csoundplayer_sound_paused.cpp
     r15/csoundplayer_sound_stopped.cpp
     r15/csoundplayer_set_aux_send_values.cpp
+    r15/queue_wwise_aux_send_values.cpp
     r15/csoundplayer_play_one_off.cpp
     r15/csoundplayer_trigger.cpp
     r15/play_2d_sound.cpp

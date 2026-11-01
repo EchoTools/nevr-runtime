@@ -81,6 +81,7 @@ std::uint64_t QueueWwiseTrigger(std::uint32_t trigger,
 std::uint64_t QueueWwiseAuxSendValues(std::uint32_t object_id,
                                      const void* entries,
                                      std::uint32_t count);
+std::uint64_t WwiseAuxSendCommandBaseSize();
 std::uint64_t SetSwitch(const void* player, std::uint32_t group,
                         std::uint32_t value, std::uint32_t emitter_id);
 std::uint64_t SetState(void* player, std::uint32_t group,
