@@ -16,7 +16,7 @@ std::uint32_t PostWwiseEventCommand(std::uint32_t event, std::uint64_t game_obje
     std::array<std::byte, 8> command_scope{};
     BeginAudioCommandScope(command_scope.data(), 1, WwisePostCommandSize());
     auto* command = GetAudioCommandScope(command_scope.data());
-    AddAudioCommandReference(command + 0x28, symbol);
+    StoreAudioCommandReference(command + 0x28, symbol);
     command = GetAudioCommandScope(command_scope.data());
     *reinterpret_cast<std::uint32_t*>(command + 0x30) = event;
 

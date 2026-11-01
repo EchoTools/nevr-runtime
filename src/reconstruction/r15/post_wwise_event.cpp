@@ -17,7 +17,8 @@ std::uint64_t PostWwiseEvent(std::uint32_t event, std::uint64_t game_object,
     std::array<std::byte, 8> callback_info{};
     std::uint64_t callback_source = 0;
     callback_source = CreateCallbackSource(callback_kind, callback_user);
-    InitializeCallbackInfo(callback_info.data(), callback_source);
+    InitializeCallbackArgument(
+        callback_info.data(), reinterpret_cast<const void*>(callback_source));
     const auto status = CallbackInfoHasNoFlags(callback_info.data(), 0);
     std::uint64_t result = 0;
     if ((status & 1U) == 0) {

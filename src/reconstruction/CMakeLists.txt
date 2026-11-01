@@ -46,5 +46,11 @@ add_library(nevr_r15_reconstruction STATIC
     r15/wwise_post_command_size.cpp
     r15/initialize_callback_argument.cpp
     r15/load_audio_command_word_at_offset10.cpp
+    r15/lock_audio_mutex.cpp
+    r15/unlock_audio_mutex.cpp
+    r15/begin_wwise_symbol_lookup.cpp
+    r15/end_wwise_symbol_lookup.cpp
+    r15/decrement_atomic_reference.cpp
+    r15/decrement_audio_command_activity.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)

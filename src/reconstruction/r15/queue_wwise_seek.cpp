@@ -16,7 +16,7 @@ std::uint32_t QueueWwiseSeek(std::uint32_t event, std::uint64_t game_object,
     const auto command_size = WwiseSeekCommandSize();
     BeginAudioCommandScope(command_scope.data(), 0x27, command_size);
     auto* command = GetAudioCommandScope(command_scope.data());
-    AddAudioCommandReference(command + 0x0c, symbol);
+    StoreAudioCommandReference(command + 0x0c, symbol);
     command = GetAudioCommandScope(command_scope.data());
     *reinterpret_cast<std::uint32_t*>(command + 0x14) = event;
     command = GetAudioCommandScope(command_scope.data());

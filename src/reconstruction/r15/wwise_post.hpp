@@ -29,7 +29,7 @@ std::uint32_t PostWwiseEventCommand(std::uint32_t event, std::uint64_t game_obje
                                     void* cookie, const void* callback_info,
                                     std::uint32_t playing_id);
 void* FindWwiseEventSymbol(std::uintptr_t registry, std::uint32_t event);
-void BeginAudioCommandScope(void* scope, std::uint32_t command_kind,
+void BeginAudioCommandScope(void* scope, std::uint16_t command_kind,
                             std::uint32_t command_size);
 std::byte* GetAudioCommandScope(const void* scope);
 void CommitAudioCommandScope(void* scope);
@@ -46,14 +46,13 @@ std::uint64_t TranslateWwiseResult(const char* label, std::uint32_t result,
 void OutputError(std::uint64_t error, int flags);
 
 std::uint64_t CreateCallbackSource(std::int32_t kind, std::uint64_t user);
-void InitializeCallbackInfo(std::byte* storage, std::uint64_t source);
 std::uint64_t CallbackInfoHasNoFlags(const std::byte* storage, int flags);
 void ReleaseCallbackInfo(std::byte* storage);
 void ReleaseCallbackSource(std::uint64_t source);
 
 std::uint32_t WwiseSeekCommandSize();
 std::uint32_t WwisePostCommandSize();
-void* AddAudioCommandReference(std::byte* field, void* object);
+void* StoreAudioCommandReference(std::byte* field, void* object);
 const void* InitializeCallbackArgument(std::byte* field, const void* argument);
 std::int32_t NextWwiseCommandId(std::int32_t* state);
 std::uint32_t LoadAudioCommandWordAtOffset10(const void* object);
@@ -61,13 +60,16 @@ void* LoadAudioCommandPointer(void* const* source);
 int SubmitWwisePostCommand(std::uint64_t context, std::byte* command,
                            SoundEventCallback callback, void* cookie,
                            std::uint32_t flags, std::uint32_t thread_token);
-int BeginWwiseSymbolLookup(std::byte* scope, std::uintptr_t registry);
+std::uint32_t LockAudioMutex(void* mutex);
+std::uint32_t UnlockAudioMutex(void* mutex);
+void BeginWwiseSymbolLookup(std::byte* scope, std::uintptr_t mutex);
 void* LookupWwiseSymbol(std::uintptr_t table, std::uint32_t event);
 void AcquireWwiseSymbolReference(void* symbol);
 void EndWwiseSymbolLookup(std::byte* scope);
 void* AllocateAudioCommandStorage(std::uint64_t context,
-                                  std::uint32_t command_kind,
+                                  std::uint16_t command_kind,
                                   std::uint32_t command_size);
-void SubmitAudioCommandStorage(std::uint64_t context);
+std::int32_t DecrementAtomicReference(std::int32_t* reference_count);
+void DecrementAudioCommandActivity(std::uint64_t context);
 
 }  // namespace NRadEngine::AudioPost
