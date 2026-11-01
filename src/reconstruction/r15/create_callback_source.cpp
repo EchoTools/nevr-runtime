@@ -33,13 +33,13 @@ std::uint64_t CreateCallbackSource(std::int32_t count, std::uint64_t records) {
             const auto* text = reinterpret_cast<const char*>(input_record[1]);
             const auto text_size = std::strlen(text) + 1U;
             auto* copied_text = static_cast<char*>(std::malloc(text_size));
+            output_record[1] = reinterpret_cast<std::uintptr_t>(copied_text);
             if (copied_text == nullptr) {
                 *reinterpret_cast<std::uint32_t*>(source + 4) = i;
                 ReleaseCallbackSource(reinterpret_cast<std::uintptr_t>(source));
                 return 0;
             }
             std::memcpy(copied_text, text, text_size);
-            output_record[1] = reinterpret_cast<std::uintptr_t>(copied_text);
         }
     }
     return reinterpret_cast<std::uintptr_t>(source);
