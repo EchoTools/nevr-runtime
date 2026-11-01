@@ -52,7 +52,6 @@
 #include "runtime/patch/resource_buffer_key.h"
 
 /* Embedded assets */
-#include "runtime/patch/splash_texture.h"
 #include "runtime/lifecycle/cli.h"
 
 namespace {
@@ -97,14 +96,6 @@ static unsigned long long g_deregister_timeouts = 0;
  * written into a callback block is freed by the game through the allocator at context + 0x10, so only memory from that
  * allocator may be written there (#1146, game_buffer.h). */
 static std::atomic<void* const*> g_memory_context_slot{nullptr};
-
-/* ── Known asset hashes ───────────────────────────────────────────── */
-
-/* Make(CGTextureResource, "Win10GPU"): a texture's payload, buffer 1. The splash is ui_menu_frontend's payload. */
-constexpr uint64_t TYPE_DDS_TEXTURE     = 0xbeac1969cb7b8861ULL;
-constexpr uint64_t NAME_SPLASH_TEXTURE  = 0x1f72c5e0fc9fc8c0ULL;
-static_assert(TYPE_DDS_TEXTURE == nevr_resource_key::OnDiskType(nevr_resource_key::kTextureResourceType, 1),
-              "the splash is keyed for a texture's buffer 1");
 
 /* ── Hook ─────────────────────────────────────────────────────────── */
 
@@ -422,16 +413,6 @@ static bool RegisterOwnedCopy(uint64_t type_hash, uint64_t name_hash, const uint
     return true;
 }
 
-static bool HasOverrideFor(uint64_t type_hash, uint64_t name_hash) {
-    std::lock_guard<std::mutex> lock(g_overrides_mutex);
-    if (!g_overrides) return false;
-    for (const auto& ovr : *g_overrides) {
-        /* Only an entry for the same buffer covers it (resource_buffer_key.h): one keyed by 0 names buffer 0. */
-        if (ovr->name_hash == name_hash && ovr->type_hash == type_hash) return true;
-    }
-    return false;
-}
-
 /* ── Lazy hook installation ───────────────────────────────────────── */
 
 static void EnsureHookInstalled() {
@@ -439,8 +420,8 @@ static void EnsureHookInstalled() {
     // Memoizes SUCCESS (g_orig) only — without this latch, a persistent
     // failure (bad hook target) re-attempts and re-logs an identical Warning
     // on every RegisterResourceOverride call for the rest of the process
-    // (once for the built-in splash texture, once per _overrides/ file,
-    // again at the end of InstallResourceOverride, and again for every
+    // (once per _overrides/ file, again at the end of
+    // InstallResourceOverride, and again for every
     // plugin that later calls the exported NEVR_RegisterResourceOverride).
     static bool s_hookAttemptFailed = false;
     {
@@ -634,19 +615,6 @@ bool ParseOverrideFileName(const char* file_name, uint64_t* type_hash, uint64_t*
     return true;
 }
 
-/* The EchoVRCE splash texture, unless the cache already supplies that resource. */
-static void RegisterBuiltInSplash() {
-    if (HasOverrideFor(TYPE_DDS_TEXTURE, NAME_SPLASH_TEXTURE)) {
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.RESOURCE] built-in splash_texture not registered reason=a cached override covers it");
-        return;
-    }
-    RegisterResourceOverride(
-        TYPE_DDS_TEXTURE, NAME_SPLASH_TEXTURE,
-        kSplashDDS, kSplashDDS_len,
-        "splash_texture");
-}
-
 size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir) {
     return RegisterCachedResourceOverrides(cache_dir, nevr_asset_cache::kDefaultCapBytes);
 }
@@ -728,18 +696,8 @@ size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_by
     return loaded;
 }
 
-/* Overrides from the asset cache come first: a cached override for a resource the built-in also covers (the
- * splash) wins, and the built-in is then not registered at all, so shutdown does not warn that it was never
- * applied. */
 static void RegisterInitialOverrides(const wchar_t* cache_dir) {
     RegisterCachedResourceOverrides(cache_dir);
-    /* The splash is drawn by the client's main menu only; a dedicated server has no menu, so it registers nothing. */
-    if (!g_isServer) {
-        RegisterBuiltInSplash();
-    } else {
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.RESOURCE] built-in splash skipped on a dedicated server (no menu is drawn)");
-    }
 }
 
 void InstallResourceOverride() {

@@ -226,7 +226,6 @@ set(PATCHES_HEADERS
     "patch/asset_cache.h"
     "patch/asset_registry.h"
     "patch/plugin_assets.h"
-    "patch/splash_texture.h"
     "lifecycle/state_machine.h"
     "ext/plugin_loader.h"
     "ext/plugin_load_plan.h"

@@ -34,7 +34,7 @@ struct ResourceOverrideShutdownReport {
 ResourceOverrideShutdownReport ShutdownResourceOverride();
 
 /// Install the resource override hook on AsyncResourceIOCallback.
-/// Registers built-in overrides (splash texture) and scans _overrides/
+/// Registers the cached overrides and scans _overrides/
 /// directory for additional file-based overrides.
 void InstallResourceOverride();
 
