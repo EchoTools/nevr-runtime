@@ -78,13 +78,15 @@ std::int32_t CR15NetGame::BeginMultiplayerWithLobbyGroup(
             this, spectator_flag_offset);
         Store(this, spectator_flag_offset,
               static_cast<std::uint8_t>(old_flags | 2U));
-        void* const listener = reinterpret_cast<void*>(
+        void* const first_listener = reinterpret_cast<void*>(
             Load<std::uintptr_t>(this, 0x647c8));
-        if (old_flags == 0 && listener != nullptr) {
-            CallVirtualNoArgs(listener, 0x68);
+        if (old_flags == 0 && first_listener != nullptr) {
+            CallVirtualNoArgs(first_listener, 0x68);
             auto* const local_user = reinterpret_cast<CNSUser*>(
                 Load<std::uintptr_t>(this, 0x28d0));
             if (local_user != nullptr) {
+                void* const listener = reinterpret_cast<void*>(
+                    Load<std::uintptr_t>(this, 0x647c8));
                 CallVirtualWithId(
                     listener, 0x78,
                     static_cast<std::uint32_t>(local_user->LocalID()));
