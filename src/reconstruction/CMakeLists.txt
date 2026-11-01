@@ -32,6 +32,89 @@ add_library(nevr_r15_reconstruction STATIC
     r15/return_to_lobby.cpp
     r15/send_event_node_enter.cpp
     r15/session_api_execute.cpp
+    r15/postsound_event.cpp
+    r15/csoundplayer_sound_paused.cpp
+    r15/csoundplayer_sound_stopped.cpp
+    r15/csoundplayer_set_aux_send_values.cpp
+    r15/queue_wwise_aux_send_values.cpp
+    r15/wwise_aux_send_command_base_size.cpp
+    r15/csoundplayer_play_one_off.cpp
+    r15/csoundplayer_trigger.cpp
+    r15/play_2d_sound.cpp
+    r15/play_3d_sound.cpp
+    r15/destroy_sound_no_lock.cpp
+    r15/insert_sound_key.cpp
+    r15/post_wwise_event.cpp
+    r15/queue_wwise_seek.cpp
+    r15/post_wwise_event_command.cpp
+    r15/find_wwise_event_symbol.cpp
+    r15/begin_audio_command_scope.cpp
+    r15/get_audio_command_scope.cpp
+    r15/commit_audio_command_scope.cpp
+    r15/queue_wwise_value_command.cpp
+    r15/queue_wwise_switch_command.cpp
+    r15/build_wwise_state_command.cpp
+    r15/queue_wwise_state_command.cpp
+    r15/queue_wwise_trigger.cpp
+    r15/insert_sound_switch_key.cpp
+    r15/queue_wwise_reset_command.cpp
+    r15/build_wwise_value_command.cpp
+    r15/csoundplayer_set_parameter.cpp
+    r15/csoundplayer_set_parameter_2d.cpp
+    r15/csoundplayer_set_switch.cpp
+    r15/csoundplayer_get_switch.cpp
+    r15/csoundplayer_get_state.cpp
+    r15/csoundplayer_set_state.cpp
+    r15/csoundplayer_reset_parameter.cpp
+    r15/csoundplayer_reset_parameter_2d.cpp
+    r15/csoundplayer_register_parameter_request.cpp
+    r15/csoundplayer_unregister_parameter_request.cpp
+    r15/csoundplayer_retrieve_parameter.cpp
+    r15/add_audio_command_reference.cpp
+    r15/next_wwise_command_id.cpp
+    r15/load_audio_command_pointer.cpp
+    r15/wwise_post_command_size.cpp
+    r15/initialize_callback_argument.cpp
+    r15/load_audio_command_word_at_offset10.cpp
+    r15/lock_audio_mutex.cpp
+    r15/unlock_audio_mutex.cpp
+    r15/begin_wwise_symbol_lookup.cpp
+    r15/end_wwise_symbol_lookup.cpp
+    r15/decrement_atomic_reference.cpp
+    r15/decrement_audio_command_activity.cpp
+    r15/audio_command_queue_capacity.cpp
+    r15/audio_command_queue_size.cpp
+    r15/audio_command_queue_head.cpp
+    r15/audio_command_queue_has_four_bytes.cpp
+    r15/advance_audio_command_queue_head.cpp
+    r15/callback_info_equals_value.cpp
+    r15/callback_info_source.cpp
+    r15/acquire_wwise_symbol_reference.cpp
+    r15/wwise_seek_command_size.cpp
+    r15/lookup_wwise_symbol.cpp
+    r15/wwise_symbol_bucket_count.cpp
+    r15/wwise_symbol_bucket_count_thunk.cpp
+    r15/wwise_symbol_hash_input.cpp
+    r15/find_wwise_symbol_bucket_entry.cpp
+    r15/create_callback_source.cpp
+    r15/release_callback_source.cpp
+    r15/allocate_audio_command_region.cpp
+    r15/allocate_audio_ring_block.cpp
+    r15/reserve_audio_ring_cursor.cpp
+    r15/allocate_audio_command_storage.cpp
+    r15/sleep_audio_command_wait.cpp
+    r15/audio_command_memory_barrier.cpp
+    r15/wait_for_audio_command_activity.cpp
+    r15/begin_wwise_placement_context.cpp
+    r15/wwise_placement_storage.cpp
+    r15/initialize_wwise_callback_metadata.cpp
+    r15/submit_wwise_post_command.cpp
+    r15/initialize_audio_post_command_node.cpp
+    r15/ensure_wwise_post_queue_capacity.cpp
+    r15/insert_wwise_post_node.cpp
+    r15/wwise_allocator_pool_id.cpp
+    r15/resize_wwise_post_queue_buckets.cpp
+    r15/grow_wwise_post_queue.cpp
     r15/cr15_net_game_user_actor.cpp
     r15/ctag_cs_has_tag.cpp
     r15/cr15_player_nav_is_component_valid.cpp
@@ -58,13 +141,6 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cr15_net_damageable_cs_heal.cpp
     r15/static_raycast_occluded.cpp
     r15/world_teleport.cpp
-    r15/local_teleport.cpp
-    r15/query_collision.cpp
-    r15/resolve_zone.cpp
-    r15/query_collision_particle.cpp
-    r15/connect.cpp
-    r15/connect_gun.cpp
-    r15/invoke_method.cpp
     r15/make_t_str_printf_512.cpp
     r15/cjson_is_array.cpp
     r15/cjson_count.cpp
@@ -75,6 +151,22 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cjson_navigate_path.cpp
     r15/cjson_navigate_object_path.cpp
     r15/cjson_navigate_array_path.cpp
+    r15/local_teleport.cpp
+    r15/query_collision.cpp
+    r15/resolve_zone.cpp
+    r15/query_collision_particle.cpp
+    r15/connect.cpp
+    r15/connect_gun.cpp
+    r15/invoke_method.cpp
+    r15/create_start_gamespaces.cpp
+    r15/login_success.cpp
+    r15/allocate_exclusive.cpp
+    r15/set_material_property_node_update.cpp
+    r15/fire_bullet_local.cpp
+    r15/effect_time.cpp
+    r15/levelname.cpp
+    r15/fill_resource_file_request.cpp
+    r15/patrol_update.cpp
     r15/set_full_screen_tint_node_enter.cpp
     r15/cr15_game_begin_offline_multiplayer.cpp
     r15/cg_irradiance_volumes_query.cpp
