@@ -1,3 +1,5 @@
+// Quest libr15.so VA 0x2a48e90; ReVault binary 576.
+// ReVault raw parent 100335313, reconstruction node 100600388; grade M.
 #include "wwise_post.hpp"
 
 #include <cstdint>

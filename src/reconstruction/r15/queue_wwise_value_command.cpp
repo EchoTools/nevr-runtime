@@ -1,3 +1,5 @@
+// Quest libr15.so VA 0x2a49d50; ReVault binary 576.
+// ReVault raw parent 100335353, reconstruction node 100600504; grade M.
 #include "wwise_post.hpp"
 
 namespace NRadEngine::AudioPost {

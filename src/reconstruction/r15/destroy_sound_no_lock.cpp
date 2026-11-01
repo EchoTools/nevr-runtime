@@ -1,3 +1,5 @@
+// Quest libr15.so VA 0x1447ae0; ReVault binary 576.
+// ReVault raw parent 100227711, reconstruction node 100600443; grade M.
 // @0x1447ae0 — NRadEngine::CSoundPlayer::DestroySoundNoLock
 /* @confidence: M */
 #include <algorithm>
