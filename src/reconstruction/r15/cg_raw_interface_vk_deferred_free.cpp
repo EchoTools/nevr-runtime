@@ -17,8 +17,6 @@ namespace CMemBlock {
 void Resize(std::uint64_t object, std::size_t bytes);
 }  // namespace CMemBlock
 
-namespace {
-
 struct DeferredEntry {
     std::uint64_t frame;
     SGAllocatedBase allocation;
@@ -36,11 +34,16 @@ static_assert(offsetof(DeferredQueue, minimum_growth) == 0x20);
 static_assert(offsetof(DeferredQueue, capacity) == 0x28);
 static_assert(offsetof(DeferredQueue, count) == 0x30);
 
+// Game globals, defined by the binary. They keep external linkage: declared in the
+// anonymous namespace they are used but never defined in this translation unit
+// (clang: -Wundefined-internal).
 extern DeferredQueue g_deferred_free_queue;  // DAT_0389b2d8
 extern std::int32_t g_deferred_free_lock;    // DAT_0389b488
 extern std::uint64_t g_resource_frame;       // DAT_03875ff8
 extern std::int32_t g_upload_lock;           // DAT_0389b780
 extern std::uint64_t g_upload_in_flight;     // DAT_0389b400
+
+namespace {
 
 void Acquire(std::int32_t* lock) {
     while (__atomic_exchange_n(lock, 1, __ATOMIC_ACQUIRE) != 0) {

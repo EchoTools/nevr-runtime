@@ -5,6 +5,7 @@
 // tier: reconstructed; grade: L, assessed by revault-codex
 // Partial evidence reconstruction only: default 3D texture upload source selection.
 // The rest of Initialize remains represented by raw parent 100257298.
+/* @confidence: L — partial evidence note, not a function body; not in the nevr_r15_reconstruction target. */
 #include <cstddef>
 #include <cstdint>
 

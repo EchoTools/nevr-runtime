@@ -53,7 +53,8 @@ void NetworkRespawn(void* self, const void* message, NetworkRespawnOps& ops) {
     auto* row_indices = *reinterpret_cast<std::byte**>(component + 0xd0);
     const auto row_index = *reinterpret_cast<std::uint16_t*>(row_indices + (handle & 0xffff) * 4);
     auto* row = rows + static_cast<std::size_t>(row_index) * 0xb8;
-    auto* state = row + 2;
+    // The state byte is a bit field: std::byte has no bitwise operators with int.
+    auto* state = reinterpret_cast<std::uint8_t*>(row + 2);
     *reinterpret_cast<std::uint64_t*>(row + 0xa0) = 0;
     *reinterpret_cast<std::uint32_t*>(row + 0xa8) &= ~1u;
     if (((*state >> 2) & 1) == 0)
