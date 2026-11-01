@@ -75,5 +75,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/sleep_audio_command_wait.cpp
     r15/audio_command_memory_barrier.cpp
     r15/wait_for_audio_command_activity.cpp
+    r15/begin_wwise_placement_context.cpp
+    r15/wwise_placement_storage.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
