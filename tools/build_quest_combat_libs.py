@@ -9,8 +9,9 @@ DIR holds LIBS.json and one directory per library, <hash16>/ with <hash16>.cpp a
 row has "link" with the booleans "asm" (add the donor object), "libr15" (link the stock libr15.so) and "ldl" (add -ldl).
 Nothing from DIR is copied into the repository, and no library is built unless DIR names it.
 
-Each library is compiled with the NDK clang the recipe names:
-  <ndk-clang> -shared -fPIC -O2 -nostdlib++ -I<DIR>/include -Wl,--gc-sections -Wl,--allow-shlib-undefined <hash16>.cpp
+Each library is compiled with the NDK clang the recipe names. ROOT is the parent of DIR (the q15t source root); the
+generated sources include regen_rt.h from its tools/scripts:
+  <ndk-clang> -shared -fPIC -O2 -nostdlib++ -I<ROOT>/tools/scripts -Wl,--gc-sections -Wl,--allow-shlib-undefined <hash16>.cpp
               [<hash16>.donor.s] [-L<out>/stock -l:libr15.so] [-ldl] -o <out>/work/<hash16>/lib<hash16>.so
 The stock libr15.so is taken from the store APK. Each output then runs `<check-script> --plugin <llvm-bin> <file>`
 (tools/check_quest_static_init.sh) and is written to <out>/lib<hash16>.so with its sha256 in <out>/SHA256SUMS.
@@ -85,7 +86,10 @@ def compile_one(args, name, digits, cpp, link, libsrc, stock, out):
     work = out / "work" / digits
     work.mkdir(parents=True, exist_ok=True)
     so = work / name
-    cmd = [args.ndk_clang, "-shared", "-fPIC", "-O2", "-nostdlib++", f"-I{libsrc / 'include'}",
+    # ROOT is the q15t source root, the parent of the libsrc directory: the generated sources include regen_rt.h from
+    # tools/scripts there (q15t-upstream tools/src/build_libs.py, INC = ROOT / "tools" / "scripts").
+    scripts = libsrc.resolve().parent / "tools" / "scripts"
+    cmd = [args.ndk_clang, "-shared", "-fPIC", "-O2", "-nostdlib++", f"-I{scripts}",
            "-Wl,--gc-sections", "-Wl,--allow-shlib-undefined", str(cpp)]
     donor = libsrc / digits / f"{digits}.donor.s"
     if link["asm"]:
