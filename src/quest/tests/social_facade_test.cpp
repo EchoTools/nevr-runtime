@@ -771,6 +771,62 @@ void TestRecentlyMetInvitableWithoutAParty() {
   QCHECK(SlotFn<U32_U32>(obj, kRecentlyMetUserIsInvitable)(obj, 0) == 0);  // now a member
 }
 
+// The "+" on an online friend row and on a recently-met row follows PartyJoinable once a party exists: hidden for a
+// full party, a joining one, or one locked for a non-host. With no party it shows (SendInvite creates the party).
+void TestPlusIsHiddenOnlyWhileAPartyIsNotJoinable() {
+  World w;
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  Feed(w, kSymFriendListResponse, Le(0, 8) + Le(0, 4) + Le(0, 4) + Le(2, 4) + Le(0, 4) + Le(0, 4) + Le(0, 4));
+  Feed(w, kSymFriendStatusNotify, Le(0, 8) + Le(2002, 8) + Le(0, 1) + Le(0, 7));
+  Feed(w, kSymFriendStatusNotify, Le(0, 8) + Le(3003, 8) + Le(0, 1) + Le(0, 7));
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(3003, 8));  // a recently-met person, listed first, online
+  void* obj = w.Obj();
+  const auto friendPlus = [&] { return SlotFn<U32_U32>(obj, kFriendIsInvitable)(obj, 0); };
+  const auto recentPlus = [&] { return SlotFn<U32_U32>(obj, kRecentlyMetUserIsInvitable)(obj, 0); };
+  const auto hostParty = [&](std::uint64_t partyId) {
+    w.party.ResetParty();
+    CreateParty(w, partyId);
+  };
+
+  QCHECK(friendPlus() == 1);  // no party
+  QCHECK(recentPlus() == 1);
+
+  hostParty(777);
+  QCHECK(friendPlus() == 1);  // our own joinable party
+  QCHECK(recentPlus() == 1);
+
+  for (std::uint64_t id = 401; id <= 403; ++id) FeedParty(w, "PartyJoinNotify", 777, id);
+  Update(w, 0);
+  QCHECK(w.party.Snapshot().members.size() == 4);  // kPartyMaxMembers
+  QCHECK(friendPlus() == 0);  // a full party
+  QCHECK(recentPlus() == 0);
+
+  hostParty(778);
+  FeedParty(w, "PartyInviteNotify", 9, 203);
+  Update(w, 0);
+  QCHECK(w.party.BeginJoin(9));
+  w.party.Join(9);
+  Update(w, 0);
+  QCHECK(w.party.Snapshot().joining);
+  QCHECK(friendPlus() == 0);  // joining another party
+  QCHECK(recentPlus() == 0);
+
+  hostParty(779);
+  FeedParty(w, "PartyPassNotify", 779, 500);  // the owner is now 500, not us
+  Update(w, 0);
+  QCHECK(friendPlus() == 1);  // a guest of an unlocked party
+  QCHECK(recentPlus() == 1);
+  FeedParty(w, "PartyLockNotify", 779, 0);
+  Update(w, 0);
+  QCHECK(friendPlus() == 0);  // locked for a guest
+  QCHECK(recentPlus() == 0);
+  FeedParty(w, "PartyUnlockNotify", 779, 0);
+  Update(w, 0);
+  QCHECK(friendPlus() == 1);  // unlocked again
+  QCHECK(recentPlus() == 1);
+}
+
 void TestIncomingFriendRequestIsListedInRecentlyMet() {
   World w;
   w.party.SetSelf(kSelf, "alice");
@@ -1843,6 +1899,7 @@ int main() {
   TestInvitesAndJoin();
   TestFriendInvitable();
   TestRecentlyMetInvitableWithoutAParty();
+  TestPlusIsHiddenOnlyWhileAPartyIsNotJoinable();
   TestSendingFromSlots();
   TestPartyTabInviteUiSlots();
   TestInviteMembersPostsTheFriendsEvent();
