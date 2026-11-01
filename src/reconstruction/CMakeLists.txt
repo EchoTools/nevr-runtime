@@ -3,6 +3,13 @@
 #   r15/session_player_writer.cpp        fragment of a larger body
 #   r15/cr15_game_ctor.cpp               constructor reconstruction is partial
 add_library(nevr_r15_reconstruction STATIC
+    r15/c_memory_compare.cpp
+    r15/c_timer_delta_microseconds.cpp
+    r15/c_timer_delta_seconds_f.cpp
+    r15/c_timer_milliseconds.cpp
+    r15/cleanup_peers.cpp
+    r15/destroy_peer.cpp
+    r15/destroy_peer_record.cpp
     r15/find_match.cpp
     r15/party_count.cpp
     r15/cg_raw_interface_vk_free.cpp
@@ -32,5 +39,14 @@ add_library(nevr_r15_reconstruction STATIC
     r15/c_ph_target_validate_tag.cpp
     r15/cr15_net_damageable_heal_node_enter.cpp
     r15/cr15_net_damageable_cs_heal.cpp
+    r15/static_raycast_occluded.cpp
+    r15/world_teleport.cpp
+    r15/local_teleport.cpp
+    r15/query_collision.cpp
+    r15/resolve_zone.cpp
+    r15/query_collision_particle.cpp
+    r15/connect.cpp
+    r15/connect_gun.cpp
+    r15/invoke_method.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
