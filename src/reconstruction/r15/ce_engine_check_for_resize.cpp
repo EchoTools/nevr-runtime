@@ -1,4 +1,5 @@
 // @0x2bc0f9c — NRadEngine::CEngine::CheckForResize()
+/* @confidence: M */
 // ReVault binary 576; reconstruction node 100600214.
 // The opaque storage size documents the highest field offset observed here;
 // the object is the original engine instance and is not instantiated here.
