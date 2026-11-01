@@ -13,6 +13,7 @@ extern std::uintptr_t DAT_038cec70;
 extern std::uint64_t DAT_038cec78;
 extern std::int32_t DAT_038cee60;
 extern std::uint64_t DAT_038cecc0;
+extern std::byte DAT_038ced68;
 
 int PostSoundEvent(void* self, std::uint32_t event, std::uint32_t game_object,
                    const std::uint32_t* flags, SoundEventCallback callback,
@@ -78,6 +79,12 @@ std::byte* AllocateAudioCommandRegion(std::uint64_t context,
                                       std::uint32_t* requested_size);
 std::byte* AllocateAudioRingBlock(std::uint64_t context,
                                   std::uint32_t* requested_size);
+void SleepAudioCommandWait(std::uint32_t milliseconds);
+void AudioCommandMemoryBarrier();
+void WaitForAudioCommandActivity(std::uint64_t context);
+std::uint64_t ProcessAudioCommandQueue(std::uint64_t context,
+                                       std::uint64_t mode,
+                                       std::uint8_t* process_flags);
 bool ReserveAudioRingCursor(std::uintptr_t* cursor, std::uintptr_t expected,
                             std::uintptr_t next);
 std::int32_t DecrementAtomicReference(std::int32_t* reference_count);

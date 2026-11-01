@@ -72,5 +72,8 @@ add_library(nevr_r15_reconstruction STATIC
     r15/allocate_audio_ring_block.cpp
     r15/reserve_audio_ring_cursor.cpp
     r15/allocate_audio_command_storage.cpp
+    r15/sleep_audio_command_wait.cpp
+    r15/audio_command_memory_barrier.cpp
+    r15/wait_for_audio_command_activity.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
