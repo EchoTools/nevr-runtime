@@ -224,6 +224,7 @@ add_subdirectory(src/nevr_api)
 add_subdirectory(src/runtime)
 add_subdirectory(src/modules/platform-compat)
 add_subdirectory(src/modules/token-auth)
+add_subdirectory(src/reconstruction)
 # There is no replacement pnsrad.dll target: ws_bridge pokes the game's ORIGINAL
 # pnsrad.dll at fixed offsets (+0x88 account_id, +0x90 login state, +0x9c flags),
 # and those layouts are documented there. The pure-RE copy of pnsrad lives in

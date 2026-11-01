@@ -1,7 +1,7 @@
 // Game function: NRadEngine::NRadGame::CR15Game::LoadLevelName
 // Quest libr15.so (ReVault binary 576) RVA: 0x1202ecc (ReVault VA 0x1302ecc)
 // PC echovr.exe RVA: not located; only a Quest annotation exists in get @ 0x1407138a0
-// ReVault node: 100600144; grade: reconstructed (H)
+// ReVault node: 100600144; tier: reconstructed; grade: H, assessed by revault-codex.
 #include <cstddef>
 #include <cstdint>
 #include <cstring>

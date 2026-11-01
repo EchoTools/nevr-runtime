@@ -1,7 +1,7 @@
 // CR15NetGame::ServiceConnectionFailedCB(STcpMsg<STcpConnectionFailedEvent> const&)
 // Quest libr15.so: VA 0x135ec04 (RVA 0x125ec04), binary 576.
 // PC echovr.exe: no matching function located in the project-wide search.
-// ReVault node 100223546 (raw); reconstructed grade M; object fields/helpers opaque.
+// ReVault raw parent 100223546; reconstruction node 100600149; tier: reconstructed; grade: M, assessed by revault-codex.
 #include <cstddef>
 #include <cstdint>
 namespace q15t::r15::reconstruction {

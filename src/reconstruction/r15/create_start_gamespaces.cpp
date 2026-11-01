@@ -1,7 +1,7 @@
 // CR15Game::CreateStartGameSpaces()
 // Quest libr15.so: VA 0x12f59e8 (RVA 0x11f59e8), binary 576.
 // PC echovr.exe: no matching function located in the project-wide search.
-// ReVault raw parent 100221261; reconstruction node 100600152; grade M (assessment).
+// ReVault raw parent 100221261; reconstruction node 100600152; tier: reconstructed; grade: M, assessed by revault-codex.
 // Partial transcription: exact SLevelLoad layout/virtual argument plumbing remains unresolved.
 #include <cstddef>
 #include <cstdint>

@@ -12,6 +12,11 @@
 #include <algorithm>
 
 namespace NRadEngine::NRadGame {
+class CR15NetDamageableCS {
+public:
+    void LocalDamageCB(const void *callbackContext);
+};
+
 struct DamageOps {
     static void WriteLog(int level, const char *text);
     static std::uint64_t GlobalClockMicroseconds();

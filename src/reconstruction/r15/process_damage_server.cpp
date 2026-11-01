@@ -43,7 +43,8 @@ void ProcessDamageServer(void* self, std::uint32_t handle, float damage,
     auto* row_index = *reinterpret_cast<std::byte**>(component + 0xd0);
     const auto row_number = *reinterpret_cast<std::uint16_t*>(row_index + (handle & 0xffff) * 4);
     auto* row = rows + static_cast<std::size_t>(row_number) * 0xb8;
-    auto* state = row + 2;
+    // The state byte is a bit field: std::byte has no bitwise operators with int.
+    auto* state = reinterpret_cast<std::uint8_t*>(row + 2);
     if ((*state & 4) != 0) return;
 
     auto* net_game = *reinterpret_cast<void**>(component + 0xb8);
@@ -65,7 +66,6 @@ void ProcessDamageServer(void* self, std::uint32_t handle, float damage,
     if (*reinterpret_cast<std::int16_t*>(row + 0x14) == -1 &&
         victim_user != UINT32_MAX) {
         const float old_health = *health;
-        const float old_shield = *shield;
         float health_damage = 0.0f;
         if (old_health <= 0.0f) {
             remaining_damage = 0.0f;

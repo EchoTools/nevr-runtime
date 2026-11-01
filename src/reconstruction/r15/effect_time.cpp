@@ -1,7 +1,7 @@
 // Game function: NRadEngine::CParticleEffectCS::EffectTime
 // Quest libr15.so (ReVault binary 576) RVA: 0x16647e4 (ReVault VA 0x17647e4)
 // PC echovr.exe RVA: not located in the project-wide ReVault search
-// ReVault node: 100600146; grade: reconstructed (H)
+// ReVault node: 100600146; tier: reconstructed; grade: H, assessed by revault-codex.
 #include <cstddef>
 #include <cstdint>
 #include <cstring>

@@ -1,7 +1,7 @@
 // CR15VRMenuWidgetCS::UpdateExclusive()
 // Quest libr15.so: VA 0x2099c68 (RVA 0x1f99c68), binary 576.
 // PC echovr.exe: no matching function located in the project-wide search.
-// ReVault raw parent 100297616; reconstruction node 100600151; grade H (assessment).
+// ReVault raw parent 100297616; reconstruction node 100600151; tier: reconstructed; grade: H, assessed by revault-codex.
 #include <cstddef>
 #include <cstdint>
 namespace q15t::r15::reconstruction {

@@ -1,7 +1,7 @@
 // CR15NetGame::LogInFailedCB
 // Quest libr15.so: VA 0x135f298 (RVA 0x125f298), binary 576.
 // PC echovr.exe: no matching function located in the project-wide search.
-// ReVault raw parent 100223552; reconstruction node 100600148; grade M (assessment).
+// ReVault raw parent 100223552; reconstruction node 100600148; tier: reconstructed; grade: M, assessed by revault-codex.
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>

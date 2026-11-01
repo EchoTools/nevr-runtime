@@ -1,7 +1,7 @@
 // CR15NetGame::LogInSuccess()
 // Quest libr15.so: VA 0x136cb20 (RVA 0x126cb20), binary 576.
 // PC echovr.exe: VA 0x14017f630 (RVA 0x17f630), stale prior reconstruction is present; raw PC source also sends the same social symbol.
-// ReVault raw parent 100223778; reconstruction node 100600150; grade M (assessment; raw layouts/keys remain partly unresolved).
+// ReVault raw parent 100223778; reconstruction node 100600150; tier: reconstructed; grade: M, assessed by revault-codex.
 #include <cstddef>
 #include <cstdint>
 namespace q15t::r15::reconstruction {

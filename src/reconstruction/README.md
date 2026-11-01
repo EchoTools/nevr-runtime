@@ -1,10 +1,11 @@
 # Game function reconstructions
 
-These files are reference-only C++ reconstructions of game functions from ReVault evidence.
-Each function lives once under its game module, shared across PC echovr.exe and Quest libr15.so.
-Each header names both binary RVAs, its ReVault binary and node, and the reconstruction grade.
-Files under this directory are not added to any CMake target.
-A hook change can include one of these functions when it needs the stock behavior.
-Keep hook installation and platform address tables in their existing runtime homes.
-Reconstruct each stock function from evidence before relying on its source.
-Reference reconstructions are not linked, tested, or executed by this repository.
+Full Quest function bodies recorded in ReVault compile into the
+`nevr_r15_reconstruction` static library. The library is not linked into the
+runtime; it is available to downstream reconstruction consumers. Add a source
+to `CMakeLists.txt` only after its complete function body has been reconstructed
+in ReVault. Partial reference transcriptions remain outside the target.
+
+Each compiled function records its Quest VA, ReVault binary and node, and
+confidence. A PCVR address is included only when independently established.
+Hook installation and platform address tables stay in their runtime homes.
