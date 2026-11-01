@@ -65,5 +65,15 @@ add_library(nevr_r15_reconstruction STATIC
     r15/connect.cpp
     r15/connect_gun.cpp
     r15/invoke_method.cpp
+    r15/make_t_str_printf_512.cpp
+    r15/cjson_is_array.cpp
+    r15/cjson_count.cpp
+    r15/cjson_t_string.cpp
+    r15/cjson_int.cpp
+    r15/c_table_xt_sr15_net_ban_reason_expression_data_reset.cpp
+    r15/set_delimited_error_message.cpp
+    r15/cjson_navigate_path.cpp
+    r15/cjson_navigate_object_path.cpp
+    r15/cjson_navigate_array_path.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
