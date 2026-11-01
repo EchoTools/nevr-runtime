@@ -164,6 +164,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/query_collision.cpp
     r15/resolve_zone.cpp
     r15/csys_string_length.cpp
+    r15/csysnet_has_internet.cpp
     r15/csys_thread_get_tls.cpp
     r15/cfixedstringt_sprintf.cpp
     r15/cmemory_copy.cpp
