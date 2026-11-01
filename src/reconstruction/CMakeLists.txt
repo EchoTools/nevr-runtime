@@ -10,5 +10,9 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cg_raw_interface_vk_deferred_free.cpp
     r15/nrad_game_apply_runtime_gfx_settings.cpp
     r15/cgrenderconfig_set_manual_resolution_scale.cpp
+    r15/cgrenderconfig_set_enable_auto_resolution.cpp
+    r15/cgrenderconfig_set_auto_resolution_frame_rate.cpp
+    r15/cgrenderconfig_set_auto_resolution_min_scale.cpp
+    r15/cgrenderconfig_set_auto_resolution_max_scale.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
