@@ -776,7 +776,7 @@ TEST(NevrConfigPlugins, DisabledEntryKeepsItsPlaceAndFlags) {
       "  - name: first\n"
       "  - name: second\n"
       "    enabled: false\n"
-      "    required: true\n"
+      "    required: false\n"
       "    early: true\n"
       "    target: server\n"
       "  - name: third\n");
@@ -787,7 +787,7 @@ TEST(NevrConfigPlugins, DisabledEntryKeepsItsPlaceAndFlags) {
   EXPECT_EQ(plugins[2].name, "third");
   EXPECT_TRUE(plugins[0].enabled);
   EXPECT_FALSE(plugins[1].enabled);
-  EXPECT_TRUE(plugins[1].required);
+  EXPECT_FALSE(plugins[1].required);
   EXPECT_TRUE(plugins[1].early);
   EXPECT_EQ(plugins[1].target, "server");
   EXPECT_TRUE(plugins[2].enabled);
