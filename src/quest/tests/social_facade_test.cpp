@@ -757,6 +757,20 @@ constexpr std::uint64_t kSymWithdrawnNotify = 0x191aa30801ec6d03ULL;
 constexpr std::uint64_t kSymInviteSuccess = 0x7f0c6a3ac83c6f77ULL;
 constexpr std::uint64_t kSymInviteFailure = 0x7f197e30c72c6e61ULL;
 
+// libr15 CNSISocial::RecentlyMetUserIsInvitable (0x1a35d10): online and not a member, with no party.
+void TestRecentlyMetInvitableWithoutAParty() {
+  World w;
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(3003, 8));  // an incoming request: online, listed first
+  void* obj = w.Obj();
+  QCHECK(SlotFn<U32_U32>(obj, kRecentlyMetUserIsInvitable)(obj, 0) == 1);  // no party yet: an online person is invitable
+  CreateParty(w, 777);
+  FeedParty(w, "PartyJoinNotify", 777, 3003);
+  Update(w, 0);
+  QCHECK(SlotFn<U32_U32>(obj, kRecentlyMetUserIsInvitable)(obj, 0) == 0);  // now a member
+}
+
 void TestIncomingFriendRequestIsListedInRecentlyMet() {
   World w;
   w.party.SetSelf(kSelf, "alice");
@@ -1828,6 +1842,7 @@ int main() {
   TestMembersJoinAndLeave();
   TestInvitesAndJoin();
   TestFriendInvitable();
+  TestRecentlyMetInvitableWithoutAParty();
   TestSendingFromSlots();
   TestPartyTabInviteUiSlots();
   TestInviteMembersPostsTheFriendsEvent();

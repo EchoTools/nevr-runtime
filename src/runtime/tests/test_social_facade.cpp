@@ -2070,6 +2070,33 @@ TEST(SocialFacadeRecentlyMet, SlotsAnswerFromTheServersList) {
   nevr_social_party::SetSender(nullptr);
 }
 
+// Recently met (libr15 CNSISocial::RecentlyMetUserIsInvitable, 0x1a35d10): an online person who is not a member is
+// invitable with no party, because SendInvite creates one; an offline person and a member are not.
+TEST(SocialFacadeRecentlyMet, AnOnlinePersonIsInvitableWithoutAParty) {
+  using IndexFn = std::uint32_t (*)(void*, std::uint32_t);
+  using UpdateFn = void (*)(void*, const void*);
+  void* object = nevr_social_facade::Object();
+  const Slot* vtable = Vtable(object);
+  nevr_social_party::Global().SetSelf(100, "Me");
+  nevr_social_party::Global().ResetParty();
+  nevr_social_roster::RecentlyMet().SetList(TwoPeople());
+  std::uint8_t flags = 0;
+  const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
+
+  publish();
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[65])(object, 0), 1U) << "no party: an online person is invitable";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[65])(object, 1), 0U) << "an offline person";
+
+  ASSERT_TRUE(FeedParty(nevr_social_party::Global(), "PartyCreateSuccess", U64s({7, 100})));
+  ASSERT_TRUE(FeedParty(nevr_social_party::Global(), "PartyJoinNotify", U64s({7, 900000000000000101ULL})));
+  publish();
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[65])(object, 0), 0U) << "already a member";
+
+  nevr_social_roster::RecentlyMet().SetList({});
+  nevr_social_party::Global().ResetParty();
+  nevr_social_party::Global().DrainEvents();
+}
+
 // #405: an incoming friend request is listed first in the recently-met list, as the facade's recent slots
 // answer it (the game has no incoming-request prompt), survives the server's list, and ends with the accept.
 TEST(SocialFacade, IncomingFriendRequestIsListedFirstInRecentlyMet) {

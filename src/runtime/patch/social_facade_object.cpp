@@ -830,13 +830,12 @@ std::uint32_t RecentlyMetUserStatus(void*, std::uint32_t index) {
 const char* RecentlyMetUserStatusString(void*, std::int32_t index) {
   return index < 0 ? "" : nevr_social_roster::RecentlyMet().TextAt(static_cast<std::uint32_t>(index));
 }
-// pnsovr 0x180090aa0: only while the local party is joinable (slot 22), someone it can reach (online
-// here, as for friends) who is not already a member.
+// Recently met: the same rule as FriendIsInvitable (slot 65; libr15 CNSISocial::RecentlyMetUserIsInvitable
+// 0x1a35d10 reads status 2 and the member loop the same way): online and not a member. No party is needed.
 std::uint32_t RecentlyMetUserIsInvitable(void*, std::uint32_t index) {
   std::uint64_t id = 0;
   if (!nevr_social_roster::RecentlyMet().IdAt(index, &id) || !nevr_social_roster::RecentlyMet().OnlineAt(index)) return 0;
   const auto view = CurrentView();
-  if (!PartyJoinable(*view)) return 0;
   for (const nevr_social_party::Member& member : view->members)
     if (member.id == id) return 0;
   return 1;

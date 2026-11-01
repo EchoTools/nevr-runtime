@@ -776,12 +776,14 @@ const char* SlotRecentName(void* self, std::uint32_t index) { return Recent(*Own
 std::uint32_t SlotRecentStatus(void* self, std::uint32_t index) { return Recent(*OwnerOf(self)).OnlineAt(index) ? 2U : 0U; }
 const char* SlotRecentStatusString(void* self, std::uint32_t index) { return Recent(*OwnerOf(self)).TextAt(index); }
 
+// Recently met: the same rule as SlotFriendIsInvitable (libr15 CNSISocial::RecentlyMetUserIsInvitable,
+// 0x1a35d10): online and not a member. No party is needed.
 std::uint32_t SlotRecentIsInvitable(void* self, std::uint32_t index) {
   Impl& impl = *OwnerOf(self);
   std::uint64_t id = 0;
   if (!Recent(impl).IdAt(index, &id) || !Recent(impl).OnlineAt(index)) return 0;
   const auto view = CurrentView(impl);
-  return PartyJoinable(impl, *view) && !IsMember(*view, id) ? 1U : 0U;
+  return !IsMember(*view, id) ? 1U : 0U;
 }
 
 std::uint64_t SlotRecentPartyId(void* self, std::uint32_t index) { return Recent(*OwnerOf(self)).PartyIdAt(index); }
