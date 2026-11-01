@@ -1,5 +1,6 @@
 // @0x1985410 — NRadEngine::CGRawInterfaceVK::Free(VkDeviceMemory_T*, unsigned long, unsigned long, unsigned long)
 /* @confidence: M */
+// ReVault binary 576; reconstruction node 100600207.
 
 #include <cstddef>
 #include <cstdint>
