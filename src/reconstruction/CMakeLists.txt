@@ -25,5 +25,12 @@ add_library(nevr_r15_reconstruction STATIC
     r15/return_to_lobby.cpp
     r15/send_event_node_enter.cpp
     r15/session_api_execute.cpp
+    r15/cr15_net_heal_bubble_cs_set_target_inside_bubble.cpp
+    r15/cr15_net_damageable_cs_damage_from_client.cpp
+    r15/c_physics_cs_primary_body.cpp
+    r15/c_ph_target_resolve_body.cpp
+    r15/c_ph_target_validate_tag.cpp
+    r15/cr15_net_damageable_heal_node_enter.cpp
+    r15/cr15_net_damageable_cs_heal.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
