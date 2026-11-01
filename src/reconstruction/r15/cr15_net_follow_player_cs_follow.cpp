@@ -1,6 +1,6 @@
 // CR15NetFollowPlayerCS::Follow
 // Quest libr15.so VA 0x2249764; ReVault binary 576.
-// ReVault raw parent 100302998, reconstruction node 100600506; grade M: every branch of the 227-instruction body (908 bytes, ret at the stored end) is translated; callees from Ghidra names and batch-5 siblings; loader slots and functor layouts inferred from offsets.
+// ReVault raw parent 100302998, reconstruction node 100600506; grade M: every branch of the 227-instruction body (908 bytes, ret at the stored end) is translated; callees from Ghidra names and batch-5 siblings; functor layouts checked against the stores; loader-filled slots (0x3815030, 0x380faa0, 0x3826eb0, 0x381e148, 0x382a608) are bound to their names, not byte-checked; the fmadd and fmaxnm sites are pinned to instruction addresses.
 // @0x2249764 — CR15NetFollowPlayerCS::Follow
 /* @confidence: M */
 
@@ -113,6 +113,9 @@ void SetWorldVelocityOrQueue(void* physics, std::uint32_t handle, const C3Vector
   }
   char* const functor = CDeferredMethodQueue_QueueFunctor_CPhysicsCS_C3Vector(scene + 0x170, kInvokePhysicsC3Vec);
   Write(functor, 0x00, physics);
+  // +0x08 is loaded from loader slot 0x381e148 (zero in the file; adrp at 0x22499ec, 0x2249a7c, 0x2249aac). The C++
+  // stores &CPhysicsCS_SetWorldVelocity, the Ghidra name of the function that slot is expected to hold; the binding
+  // is not byte-checked.
   Write(functor, 0x08, &CPhysicsCS_SetWorldVelocity);
   Write<std::uint64_t>(functor, 0x10, 0);
   Write(functor, 0x18, handle);
@@ -131,6 +134,9 @@ void SetLocalRotationOrQueue(void* transform, std::uint32_t handle, const CQuate
   }
   char* const functor = CDeferredMethodQueue_QueueFunctor_CTransformCS_CQuaternion(scene + 0x170, kInvokeTransformCQuat);
   Write(functor, 0x00, transform);
+  // +0x08 is loaded from loader slot 0x382a608 (zero in the file; adrp at 0x2249a14). The C++ stores
+  // &CTransformCS_SetLocalRotation, the Ghidra name of the function that slot is expected to hold; the binding is
+  // not byte-checked.
   Write(functor, 0x08, &CTransformCS_SetLocalRotation);
   Write<std::uint64_t>(functor, 0x10, 0);
   Write(functor, 0x18, handle);
@@ -161,7 +167,11 @@ void CR15NetFollowPlayerCS_Follow(void* self, std::uint64_t handle) {
   const float dx = player.value[4] - component.value[4];
   const float dy = player.value[5] - component.value[5];
   const float dz = player.value[6] - component.value[6];
-  const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+  // 0x22497f4 fmul (dx*dx); fmadd at 0x22497fc and 0x2249800 fuse the dy and dz terms (one rounding each).
+  float dist_sq = dx * dx;
+  dist_sq = std::fma(dy, dy, dist_sq);
+  dist_sq = std::fma(dz, dz, dist_sq);
+  const float dist = std::sqrt(dist_sq);
 
   // The player's physics velocity, read after the second refresh.
   CComponentHandle_RefreshCache(cs + 0x148);
@@ -187,9 +197,11 @@ void CR15NetFollowPlayerCS_Follow(void* self, std::uint64_t handle) {
         const float uz = inv * dz;
         const float uxx = ux * ux;
         const float uzy = uz * uy;
-        const float uzz = uz * uz + uxx;
+        // 0x22498c4 fmadd: uz*uz + uxx, one rounding.
+        const float uzz = std::fma(uz, uz, uxx);
         const float b = ux * (-uy);
-        const float len = std::sqrt(b * b + uzy * uzy + uzz * uzz);
+        // 0x22498d0 fmul (b*b); fmadd at 0x22498d4 and 0x22498d8 fuse uzy*uzy and uzz*uzz (one rounding each).
+        const float len = std::sqrt(std::fma(uzz, uzz, std::fma(uzy, uzy, b * b)));
         const float r = 1.0f / len;
         const C33Matrix matrix{{-uz, 0.0f, ux, r * b, r * uzz, -(uzy * r), -ux, -uy, -uz}};
         CQuaternion rotation = kIdentityQuat;
@@ -211,8 +223,12 @@ void CR15NetFollowPlayerCS_Follow(void* self, std::uint64_t handle) {
 
   // Speed path: the player-relative direction scaled by max(|velocity|, 1) / dist. The velocity is the three
   // floats Velocity returned (s0, s1, s2).
-  const float speed =
-      std::fmax(std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z), 1.0f);
+  // 0x224998c fmul (vx*vx); fmadd at 0x2249990 and 0x2249994 fuse the vy and vz terms (one rounding each).
+  float speed_sq = velocity.x * velocity.x;
+  speed_sq = std::fma(velocity.y, velocity.y, speed_sq);
+  speed_sq = std::fma(velocity.z, velocity.z, speed_sq);
+  // 0x22499ac fmaxnm (s0, s0, s3 = 1.0f). std::fmax matches it: a quiet NaN operand is ignored.
+  const float speed = std::fmax(std::sqrt(speed_sq), 1.0f);
   const float scale = speed / dist;
   SetWorldVelocityOrQueue(Read<void*>(cs, 0x138), Read<std::uint32_t>(entry, 0xc),
                           C3Vector{scale * dx, scale * dy, scale * dz});

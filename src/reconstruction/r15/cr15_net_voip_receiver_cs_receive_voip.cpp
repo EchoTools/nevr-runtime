@@ -1,6 +1,6 @@
 // NRadEngine::NRadGame::CR15NetVoipReceiverCS::ReceiveVoip
 // Quest libr15.so VA 0x22c3238; ReVault binary 576.
-// ReVault raw parent 100305057, reconstruction node 100600513; grade M: every branch traced against the disassembly; three data globals and the hash-table out-pointers are named by role, not symbol.
+// ReVault raw parent 100305057, reconstruction node 100600513; grade M: every branch traced against the disassembly; the registry reaches Ready as the full 64-bit x0 (0x22c32d0, 0x22c3380), how Ready reads that value is not checked here; three data globals and the hash-table out-pointers are named by role, not symbol.
 // @0x22c3238 — NRadEngine::NRadGame::CR15NetVoipReceiverCS::ReceiveVoip
 /* @confidence: M */
 #include <cstddef>
@@ -37,8 +37,9 @@ class CncaGameSpace {
 class CAudioInputCallbackRegistry {
   public:
     // NRadEngine::CAudioInputCallbackRegistry::Ready(unsigned int); ReVault 0x1443ab8 (thunk 0xfedce0). Ghidra shows
-    // one argument; the caller also sets w1 from the record, so the second register is declared.
-    static std::int32_t Ready(std::uint32_t registry, std::int32_t slot);
+    // one argument of type unsigned int; the caller passes the full 64-bit x0 (0x22c32d0, 0x22c3380), so the
+    // parameter is declared 64-bit here. The caller also sets w1 from the record, so the second register is declared.
+    static std::int32_t Ready(std::uint64_t registry, std::int32_t slot);
 };
 
 class CHashTableU32ByU64 {
@@ -137,7 +138,7 @@ void CR15NetVoipReceiverCS::ReceiveVoip(SCompactPoolHandle handle, const SR15Net
                                         std::uint32_t bytes) {
     const void* const event_bytes = &event;
 
-    // 0x22c3258..0x22c3260: the registry value must be set; Ready takes its low 32 bits.
+    // 0x22c3258..0x22c3260: the registry value must be set; the full 64 bits go to Ready in x0 (0x22c32d0, 0x22c3380).
     const std::uint64_t registry = g_audio_input_registry;
     if (registry == 0) {
         return;
@@ -153,8 +154,7 @@ void CR15NetVoipReceiverCS::ReceiveVoip(SCompactPoolHandle handle, const SR15Net
 
     // 0x22c3298..0x22c32d8 (record+0x2c set) and 0x22c3374..0x22c3388 (clear): Ready(registry, record+0x28).
     if (LoadAt<std::int32_t>(rec, 0x2c) == 0) {
-        if (NRadEngine::CAudioInputCallbackRegistry::Ready(static_cast<std::uint32_t>(registry),
-                                                           LoadAt<std::int32_t>(rec, 0x28)) == 0) {
+        if (NRadEngine::CAudioInputCallbackRegistry::Ready(registry, LoadAt<std::int32_t>(rec, 0x28)) == 0) {
             return;
         }
     } else {
@@ -165,7 +165,7 @@ void CR15NetVoipReceiverCS::ReceiveVoip(SCompactPoolHandle handle, const SR15Net
         if (slot == -1) {
             return;
         }
-        if (NRadEngine::CAudioInputCallbackRegistry::Ready(static_cast<std::uint32_t>(registry), slot) == 0) {
+        if (NRadEngine::CAudioInputCallbackRegistry::Ready(registry, slot) == 0) {
             return;
         }
     }
