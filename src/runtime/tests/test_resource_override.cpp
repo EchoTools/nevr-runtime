@@ -547,7 +547,6 @@ TEST_F(CachedOverrides, ACachedSplashReplacesTheBuiltInOneAndTheBuiltInIsNotLeft
   const std::vector<std::uint8_t> image = Image(500, 9);
   Cache(image, kSplashType, kSplashName, "cache_splash");
   TestHook_RegisterInitialOverrides(dir_.c_str());
-  EXPECT_TRUE(TestLogContains("built-in splash_texture not registered reason=a cached override covers it"));
   EXPECT_FALSE(TestLogContains("Registered embedded override: splash_texture"));
   char original[4] = {};
   GameFinishesReading(kSplashType, kSplashName, original, sizeof(original));
@@ -558,17 +557,10 @@ TEST_F(CachedOverrides, ACachedSplashReplacesTheBuiltInOneAndTheBuiltInIsNotLeft
   EXPECT_EQ(report.never_applied, 0u);
 }
 
-TEST_F(CachedOverrides, ACachedOverrideOfAnotherTypeDoesNotSuppressTheBuiltInSplash) {
-  Cache(Image(90, 3), kSplashType + 1, kSplashName, "other_type");
+TEST_F(CachedOverrides, WithNothingCachedNoEmbeddedSplashIsRegistered) {
   TestHook_RegisterInitialOverrides(dir_.c_str());
-  EXPECT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
-  EXPECT_FALSE(TestLogContains("not registered reason"));
-}
-
-TEST_F(CachedOverrides, WithNothingCachedTheBuiltInSplashIsRegistered) {
-  TestHook_RegisterInitialOverrides(dir_.c_str());
-  EXPECT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
-  EXPECT_FALSE(TestLogContains("not registered reason"));
+  EXPECT_FALSE(TestLogContains("Registered embedded override: splash_texture"));
+  EXPECT_FALSE(TestLogContains("built-in"));
 }
 
 TEST_F(CachedOverrides, TheCacheSizeIsLoggedEveryRunAndAnOverCapStateIsAWarning) {
@@ -1207,56 +1199,6 @@ TEST_F(TexturePayloads, ACachedPayloadIsWrittenOverBufferOne) {
   EXPECT_EQ(g_seenSize, image.size());
   EXPECT_EQ(std::memcmp(gameBuffer.data(), image.data(), image.size()), 0);
   EXPECT_TRUE(TestLogContains("override applied label=cache_poster buffer=1 "));
-}
-
-// The built-in splash has always been registered under Make(CGTextureResource, "Win10GPU") with a payload of
-// ui_menu_frontend's buffer-1 size (#1130); matched against the logical type it never applied.
-TEST_F(TexturePayloads, TheBuiltInSplashIsWrittenOverTheMenuTexturesPayload) {
-  TestHook_RegisterInitialOverrides(dir_.c_str());
-  ASSERT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
-  std::uint8_t descriptor[256] = {};
-  GameFinishesBuffer(kTextureType, kSplashName, 0, descriptor, sizeof(descriptor));
-  EXPECT_EQ(g_seenBuffer, descriptor);
-  EXPECT_EQ(g_seenSize, sizeof(descriptor));
-  std::vector<std::uint8_t> gameBuffer(1050548, 0);
-  GameFinishesBuffer(kTextureType, kSplashName, 1, gameBuffer.data(), gameBuffer.size());
-  EXPECT_EQ(g_seenBuffer, gameBuffer.data());
-  EXPECT_EQ(g_seenSize, 1050548u);
-  EXPECT_EQ(std::memcmp(gameBuffer.data(), "DDS ", 4), 0);
-  EXPECT_TRUE(TestLogContains("override applied label=splash_texture buffer=1 "));
-  EXPECT_TRUE(TestLogContains("orig_bytes=1050548 new_bytes=1050548 copy=in_place"));
-}
-
-// A dedicated server has no menu: with g_isServer set, the built-in splash is not registered and the game's buffer is kept.
-TEST_F(TexturePayloads, AServerRegistersNoBuiltInSplashAndKeepsTheGamesMenuPayload) {
-  g_isServer = TRUE;
-  TestHook_RegisterInitialOverrides(dir_.c_str());
-  EXPECT_TRUE(TestLogContains("built-in splash skipped on a dedicated server (no menu is drawn)"));
-  EXPECT_FALSE(TestLogContains("Registered embedded override: splash_texture"));
-  std::vector<std::uint8_t> gameBuffer(1050548, 0x5A);
-  GameFinishesBuffer(kTextureType, kSplashName, 1, gameBuffer.data(), gameBuffer.size());
-  EXPECT_EQ(g_seenBuffer, gameBuffer.data());
-  EXPECT_EQ(g_seenSize, 1050548u);
-  EXPECT_FALSE(TestLogContains("override applied label=splash_texture"));
-}
-
-// The client counterpart: with g_isServer clear, the same call registers the splash and writes it over buffer one.
-TEST_F(TexturePayloads, AClientRegistersTheBuiltInSplashAndWritesItOverBufferOne) {
-  g_isServer = FALSE;
-  TestHook_RegisterInitialOverrides(dir_.c_str());
-  EXPECT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
-  EXPECT_FALSE(TestLogContains("built-in splash skipped"));
-  std::vector<std::uint8_t> gameBuffer(1050548, 0);
-  GameFinishesBuffer(kTextureType, kSplashName, 1, gameBuffer.data(), gameBuffer.size());
-  EXPECT_TRUE(TestLogContains("override applied label=splash_texture buffer=1 "));
-}
-
-// A cached entry covers the built-in splash only when it names the same buffer: one keyed by 0 names buffer 0.
-TEST_F(TexturePayloads, ACachedEntryForAnotherBufferDoesNotSuppressTheBuiltInSplash) {
-  Cache(Image(90, 3), 0, kSplashName, "any_type");
-  TestHook_RegisterInitialOverrides(dir_.c_str());
-  EXPECT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
-  EXPECT_FALSE(TestLogContains("not registered reason"));
 }
 
 // A texture's descriptor and payload are two entries (resource_buffer_key.h): a Warning says when they end up unpaired.
