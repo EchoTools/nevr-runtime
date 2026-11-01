@@ -32,5 +32,11 @@ add_library(nevr_r15_reconstruction STATIC
     r15/return_to_lobby.cpp
     r15/send_event_node_enter.cpp
     r15/session_api_execute.cpp
+    r15/cr15_net_game_user_actor.cpp
+    r15/ctag_cs_has_tag.cpp
+    r15/cr15_player_nav_is_component_valid.cpp
+    r15/ctransfqs_append.cpp
+    r15/cr15_echo_unit_base_transform.cpp
+    r15/cr15_player_nav_final_transform.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
