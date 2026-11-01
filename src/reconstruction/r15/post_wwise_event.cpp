@@ -1,0 +1,35 @@
+#include "wwise_post.hpp"
+
+namespace NRadEngine::AudioPost {
+
+// @0x2a4b500 — PostWwiseEvent
+/* @confidence: M — preserves both raw branches; callback wrapper types remain inferred. */
+std::uint64_t PostWwiseEvent(std::uint32_t event, std::uint64_t game_object,
+                             std::uint32_t flags, SoundEventCallback callback,
+                             void* cookie, std::int32_t callback_kind,
+                             std::uint64_t callback_user,
+                             std::uint32_t playing_id) {
+    if (callback_kind == 0) {
+        return PostWwiseEventCommand(event, game_object, flags, callback, cookie,
+                                     nullptr, playing_id);
+    }
+
+    std::array<std::byte, 8> callback_info{};
+    std::uint64_t callback_source = 0;
+    callback_source = CreateCallbackSource(callback_kind, callback_user);
+    InitializeCallbackInfo(callback_info.data(), callback_source);
+    const auto status = CallbackInfoHasNoFlags(callback_info.data(), 0);
+    std::uint64_t result = 0;
+    if ((status & 1U) == 0) {
+        result = PostWwiseEventCommand(event, game_object, flags, callback, cookie,
+                                       callback_info.data(), playing_id);
+        if (static_cast<std::int32_t>(result) == 0) {
+            ReleaseCallbackInfo(callback_info.data());
+            ReleaseCallbackSource(callback_source);
+            result = 0;
+        }
+    }
+    return result;
+}
+
+}  // namespace NRadEngine::AudioPost

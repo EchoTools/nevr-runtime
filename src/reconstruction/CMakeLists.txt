@@ -32,5 +32,13 @@ add_library(nevr_r15_reconstruction STATIC
     r15/return_to_lobby.cpp
     r15/send_event_node_enter.cpp
     r15/session_api_execute.cpp
+    r15/postsound_event.cpp
+    r15/post_wwise_event.cpp
+    r15/queue_wwise_seek.cpp
+    r15/post_wwise_event_command.cpp
+    r15/find_wwise_event_symbol.cpp
+    r15/begin_audio_command_scope.cpp
+    r15/get_audio_command_scope.cpp
+    r15/commit_audio_command_scope.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
