@@ -82,5 +82,6 @@ add_library(nevr_r15_reconstruction STATIC
     r15/initialize_audio_post_command_node.cpp
     r15/ensure_wwise_post_queue_capacity.cpp
     r15/insert_wwise_post_node.cpp
+    r15/wwise_allocator_pool_id.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)

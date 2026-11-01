@@ -9,7 +9,7 @@ namespace NRadEngine::AudioPost {
 using SoundEventCallback = void (*)(int, void*);
 
 extern std::uint64_t DAT_03864210;
-extern std::int32_t DAT_03859620;
+extern const std::int32_t DAT_03859620;
 extern std::uintptr_t DAT_038cec70;
 extern std::uint64_t DAT_038cec78;
 extern std::int32_t DAT_038cee60;
