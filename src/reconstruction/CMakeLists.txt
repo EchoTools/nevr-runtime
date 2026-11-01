@@ -32,5 +32,14 @@ add_library(nevr_r15_reconstruction STATIC
     r15/return_to_lobby.cpp
     r15/send_event_node_enter.cpp
     r15/session_api_execute.cpp
+    r15/static_raycast_occluded.cpp
+    r15/world_teleport.cpp
+    r15/local_teleport.cpp
+    r15/query_collision.cpp
+    r15/resolve_zone.cpp
+    r15/query_collision_particle.cpp
+    r15/connect.cpp
+    r15/connect_gun.cpp
+    r15/invoke_method.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
