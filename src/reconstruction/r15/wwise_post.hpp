@@ -9,6 +9,7 @@ namespace NRadEngine::AudioPost {
 using SoundEventCallback = void (*)(int, void*);
 
 extern std::uint64_t DAT_03864210;
+extern std::int32_t DAT_03859620;
 extern std::uintptr_t DAT_038cec70;
 extern std::uint64_t DAT_038cec78;
 extern std::int32_t DAT_038cee60;
@@ -63,6 +64,9 @@ void* WwisePlacementStorage(std::size_t size, void* storage);
 void InitializeWwiseCallbackMetadata(std::byte* destination,
                                     std::uint32_t callback_count,
                                     const std::byte* source);
+std::byte* AllocateWwisePoolBlock(std::int32_t pool, std::size_t size);
+void InitializeAudioPostCommandNode(std::byte* node);
+void InsertWwisePostNode(std::uint64_t context, std::byte* node);
 int SubmitWwisePostCommand(std::uint64_t context, std::byte* command,
                            SoundEventCallback callback, void* cookie,
                            std::uint32_t flags, std::uint32_t thread_token);
