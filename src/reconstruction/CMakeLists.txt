@@ -134,6 +134,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cmemory_context_set_current.cpp
     r15/cmemory_context_current.cpp
     r15/cmem_block_ctor.cpp
+    r15/chttp_listener_request_body.cpp
     r15/cmem_block_resize.cpp
     r15/cbvhtree_shutdown.cpp
     r15/cbvhtree_intersect.cpp
