@@ -18,6 +18,23 @@ static_assert(offsetof(SoundKey, playing_id) == 0x00);
 static_assert(offsetof(SoundKey, padding) == 0x04);
 static_assert(offsetof(SoundKey, sound) == 0x08);
 
+struct AudioParameterRequestSlot {
+    std::uint64_t symbol;
+    std::uint64_t object_id;
+    std::uint32_t status;
+    std::uint32_t pool_index;
+    std::uint32_t request_kind;
+    std::uint32_t reserved;
+};
+static_assert(sizeof(AudioParameterRequestSlot) == 0x20);
+static_assert(offsetof(AudioParameterRequestSlot, pool_index) == 0x14);
+
+struct AudioParameterRequestMapEntry {
+    std::uint32_t request_slot;
+    std::uint32_t value;
+};
+static_assert(sizeof(AudioParameterRequestMapEntry) == 0x08);
+
 extern std::uint64_t DAT_03864210;
 extern const std::int32_t DAT_03859620;
 extern std::uintptr_t DAT_038cec70;
@@ -28,6 +45,10 @@ extern std::byte DAT_038ced68;
 extern std::uintptr_t g_audio_disabled_flag;
 extern std::uintptr_t g_wwise_engine;
 extern SoundEventCallback g_sound_event_callback;
+extern std::uint32_t DAT_0386ee28;
+extern AudioParameterRequestSlot DAT_0386eed0[32];
+extern AudioParameterRequestMapEntry DAT_03852374[32];
+extern std::byte DAT_0386eeb0;
 
 int PostSoundEvent(void* self, std::uint32_t event, std::uint32_t game_object,
                    const std::uint32_t* flags, SoundEventCallback callback,
@@ -36,6 +57,21 @@ std::int32_t Play2DSound(std::uint64_t player, std::uint64_t event,
                          float volume);
 std::int32_t Play3DSound(std::uint64_t player, std::uint64_t event,
                          std::uint32_t emitter, float volume);
+std::uint64_t SetParameter(std::uint32_t symbol, float value,
+                           std::uint32_t playing_id);
+std::uint64_t SetParameter2D(const void* player, std::uint32_t symbol,
+                             float value);
+std::uint64_t ResetParameter(std::uint32_t symbol, float value,
+                             std::uint32_t object_id);
+std::uint64_t RegisterParameterRequest(std::uint32_t symbol,
+                                       std::uint32_t object_id);
+std::uint64_t ResetParameter2D(const void* player, std::uint32_t symbol,
+                               float value);
+std::uint64_t QueueWwiseResetCommand(std::uint32_t symbol,
+                                     std::uint64_t object_id,
+                                     std::uint32_t scaled_value,
+                                     std::uint32_t command_kind,
+                                     std::uint32_t flags);
 void InsertSoundKey(void* table, std::uint64_t index, std::uint64_t count,
                     const SoundKey* value);
 std::uint64_t PostWwiseEvent(std::uint32_t event, std::uint64_t game_object,
@@ -45,6 +81,17 @@ std::uint64_t PostWwiseEvent(std::uint32_t event, std::uint64_t game_object,
 std::uint32_t QueueWwiseSeek(std::uint32_t event, std::uint64_t game_object,
                              std::uint32_t seek_ms, std::uint16_t flags,
                              std::uint32_t playing_id);
+std::uint64_t QueueWwiseValueCommand(std::uint64_t symbol,
+                                     std::uint64_t game_object, float value,
+                                     std::uint32_t scaled_value,
+                                     std::uint32_t command_kind,
+                                     std::uint32_t flags);
+std::uint64_t BuildWwiseValueCommand(std::uint32_t command_id,
+                                     std::uint64_t game_object, float value,
+                                     std::uint32_t reserved,
+                                     std::uint32_t scaled_value,
+                                     std::uint32_t command_kind,
+                                     std::uint32_t flags);
 std::uint32_t PostWwiseEventCommand(std::uint32_t event, std::uint64_t game_object,
                                     std::uint32_t flags, SoundEventCallback callback,
                                     void* cookie, const void* callback_info,
@@ -65,6 +112,9 @@ int CreateAndAddError(const char* file, std::uint32_t line, std::uint64_t id,
 std::uint64_t TranslateWwiseResult(const char* label, std::uint32_t result,
                                    const char* file, std::uint32_t line);
 int OutputError(std::uint64_t error, int flags);
+void CLockReadWriteWriteLock(void* lock);
+void CLockReadWriteWriteUnlock(void* lock);
+void NWriteLogWriteLog(int severity, void* context, const char* format, ...);
 
 std::uint64_t CreateCallbackSource(std::int32_t kind, std::uint64_t user);
 bool CallbackInfoEqualsValue(const std::byte* storage, std::uintptr_t value);
