@@ -419,6 +419,15 @@ void ClearPartyJson(void* self) {
   g_partyDataLoaded.reset();
 }
 
+/// A failed create drops the invites the "+" queued for it (social_party.h, PartyCreateFailure). Named here so the
+/// log shows who was not sent one; the invite has to be made again once a party exists.
+void LogInvitesDropped(const nevr_social_party::Event& event) {
+  std::string targets;
+  for (const std::uint64_t id : event.ids) targets += (targets.empty() ? "" : ",") + std::to_string(id);
+  Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] party create failed: %u invite(s) dropped, not sent, invite again targets=%s",
+      event.index, targets.c_str());
+}
+
 void DispatchEvent(void* self, const nevr_social_party::Event& event) {
   using Kind = nevr_social_party::EventKind;
   switch (event.kind) {
@@ -434,6 +443,7 @@ void DispatchEvent(void* self, const nevr_social_party::Event& event) {
     case Kind::kMemberLeft: CallIdName(self, kCbMemberLeft, event.id, event.name.c_str()); break;
     case Kind::kInviteReceived: CallU32(self, kCbInviteReceived, 0); break;
     case Kind::kInviteFailed: break;  // no game callback is driven from here
+    case Kind::kInvitesDropped: LogInvitesDropped(event); break;
   }
 }
 
@@ -751,10 +761,10 @@ std::uint32_t FriendStatus(void*, std::uint32_t index) {
   return result;
 }
 
-// pnsovr (0x180084f80): a friend is invitable only while the local party is joinable, the friend is
-// not already a member, and the platform lists them as invitable (Oculus's invitable-users map, which
-// holds the people it can reach; here that is the friends who are online). It is not a function of
-// the friend alone: with no party, or a full or locked one, no row shows the "+" button.
+// FriendIsInvitable (slot 53) follows CNSISocial::FriendIsInvitable (libr15 0x1a35ba0): the friend is
+// online (status 2) and not already a member. It needs no party: SendInvite creates one when none exists
+// (social_party.h, SendInvite), so the "+" shows with no party too. Once a party exists, PartyJoinable's
+// rule applies: a full, joining or locked (for a non-host) party shows no "+".
 // Slots 52/54/55 (pnsovr 0x1800850e0, 0x180085030, 0x180085060): the friend's presence text, whether
 // their party can be joined, and its id, from the server's SNSFriendPresenceNotify.
 const char* FriendStatusString(void*, std::uint32_t index) { return nevr_social_roster::Global().StatusTextAt(index); }
@@ -765,7 +775,7 @@ std::uint32_t FriendIsInvitable(void*, std::uint32_t index) {
   std::uint64_t id = 0;
   if (!nevr_social_roster::Global().IdAt(index, &id) || !nevr_social_roster::Global().OnlineAt(index)) return 0;
   const auto view = CurrentView();
-  if (!PartyJoinable(*view)) return 0;
+  if (view->partyId != 0 && !PartyJoinable(*view)) return 0;
   for (const nevr_social_party::Member& member : view->members)
     if (member.id == id) return 0;
   return 1;
@@ -832,13 +842,14 @@ std::uint32_t RecentlyMetUserStatus(void*, std::uint32_t index) {
 const char* RecentlyMetUserStatusString(void*, std::int32_t index) {
   return index < 0 ? "" : nevr_social_roster::RecentlyMet().TextAt(static_cast<std::uint32_t>(index));
 }
-// pnsovr 0x180090aa0: only while the local party is joinable (slot 22), someone it can reach (online
-// here, as for friends) who is not already a member.
+// Recently met: the same rule as FriendIsInvitable (slot 65; libr15 CNSISocial::RecentlyMetUserIsInvitable
+// 0x1a35d10 reads status 2 and the member loop the same way): online and not a member. No party is needed;
+// once a party exists, PartyJoinable's rule applies as for a friend row.
 std::uint32_t RecentlyMetUserIsInvitable(void*, std::uint32_t index) {
   std::uint64_t id = 0;
   if (!nevr_social_roster::RecentlyMet().IdAt(index, &id) || !nevr_social_roster::RecentlyMet().OnlineAt(index)) return 0;
   const auto view = CurrentView();
-  if (!PartyJoinable(*view)) return 0;
+  if (view->partyId != 0 && !PartyJoinable(*view)) return 0;
   for (const nevr_social_party::Member& member : view->members)
     if (member.id == id) return 0;
   return 1;
