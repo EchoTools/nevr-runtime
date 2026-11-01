@@ -19,6 +19,10 @@ extern std::byte DAT_038ced68;
 int PostSoundEvent(void* self, std::uint32_t event, std::uint32_t game_object,
                    const std::uint32_t* flags, SoundEventCallback callback,
                    void* cookie, std::uint32_t seek_ms, std::int32_t* playing_id);
+std::int32_t Play2DSound(std::uint64_t player, std::uint64_t event,
+                         float volume);
+std::int32_t Play3DSound(std::uint64_t player, std::uint64_t event,
+                         std::uint32_t emitter, float volume);
 std::uint64_t PostWwiseEvent(std::uint32_t event, std::uint64_t game_object,
                              std::uint32_t flags, SoundEventCallback callback,
                              void* cookie, std::int32_t callback_kind,

@@ -33,6 +33,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/send_event_node_enter.cpp
     r15/session_api_execute.cpp
     r15/postsound_event.cpp
+    r15/play_2d_sound.cpp
     r15/post_wwise_event.cpp
     r15/queue_wwise_seek.cpp
     r15/post_wwise_event_command.cpp
