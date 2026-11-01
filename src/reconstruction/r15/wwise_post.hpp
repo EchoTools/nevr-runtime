@@ -24,7 +24,7 @@ struct AudioParameterRequestSlot {
     std::uint32_t status;
     std::uint32_t pool_index;
     std::uint32_t request_kind;
-    std::uint32_t reserved;
+    std::uint32_t output_value;
 };
 static_assert(sizeof(AudioParameterRequestSlot) == 0x20);
 static_assert(offsetof(AudioParameterRequestSlot, pool_index) == 0x14);
@@ -65,6 +65,9 @@ std::uint64_t ResetParameter(std::uint32_t symbol, float value,
                              std::uint32_t object_id);
 std::uint64_t RegisterParameterRequest(std::uint32_t symbol,
                                        std::uint32_t object_id);
+std::uint32_t RetrieveParameter(std::uint64_t handle,
+                                std::uint32_t* output_value);
+void UnregisterParameterRequest(std::uint64_t handle);
 std::uint64_t ResetParameter2D(const void* player, std::uint32_t symbol,
                                float value);
 std::uint64_t QueueWwiseResetCommand(std::uint32_t symbol,
@@ -114,6 +117,8 @@ std::uint64_t TranslateWwiseResult(const char* label, std::uint32_t result,
 int OutputError(std::uint64_t error, int flags);
 void CLockReadWriteWriteLock(void* lock);
 void CLockReadWriteWriteUnlock(void* lock);
+void CLockReadWriteReadLock(void* lock);
+void CLockReadWriteReadUnlock(void* lock);
 void NWriteLogWriteLog(int severity, void* context, const char* format, ...);
 
 std::uint64_t CreateCallbackSource(std::int32_t kind, std::uint64_t user);

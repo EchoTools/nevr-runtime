@@ -43,7 +43,7 @@ std::uint64_t RegisterParameterRequest(std::uint32_t symbol,
     slot.object_id = extended_object_id;
     slot.status = 0;
     slot.request_kind = object_id == 0xffffffffU ? 1U : 2U;
-    slot.reserved = 0;
+    slot.output_value = 0;
 
     const auto pool_index = slot.pool_index;
     auto& mapping = DAT_03852374[pool_index];
