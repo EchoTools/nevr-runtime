@@ -158,6 +158,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cjson_set_boolean.cpp
     r15/cjson_set_string.cpp
     r15/cjson_boolean.cpp
+    r15/cjson_set_int.cpp
     r15/c_table_xt_sr15_net_ban_reason_expression_data_reset.cpp
     r15/set_delimited_error_message.cpp
     r15/cjson_navigate_path.cpp
