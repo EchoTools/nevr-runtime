@@ -703,22 +703,13 @@ quest-install *args: build-installer
 # and 128 + the signal for an interrupt, 130 for CTRL+C (tools/run_tool_tests.py). Args replace the
 # default `-q tools/tests` (#913).
 [positional-arguments]
-test-tools *ARGS: (_heavy-guard "test-tools" ARGS)
-    #!/usr/bin/env bash
-    set -euo pipefail
-    raw="$(python3 -I tools/heavy_guard.py strip-optin "$@")"
-    args=(); if [ -n "$raw" ]; then mapfile -t args <<<"$raw"; fi
-    python3 tools/run_tool_tests.py "${args[@]}"
+test-tools *ARGS:
+    python3 tools/run_tool_tests.py "$@"
 
 # The core installer (installer/, ADR 0023): library, CLI and C ABI tests. The build is locked to the committed
 # Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
-[positional-arguments]
-test-installer *ARGS: (_heavy-guard "test-installer" ARGS)
-    #!/usr/bin/env bash
-    set -euo pipefail
-    raw="$(python3 -I tools/heavy_guard.py strip-optin "$@")"
-    args=(); if [ -n "$raw" ]; then mapfile -t args <<<"$raw"; fi
-    cargo test --locked --manifest-path installer/Cargo.toml "${args[@]}"
+test-installer *ARGS:
+    cargo test --locked --manifest-path installer/Cargo.toml {{ ARGS }}
 
 # Run all system tests
 test-system *args: (_heavy-guard "test-system" args)

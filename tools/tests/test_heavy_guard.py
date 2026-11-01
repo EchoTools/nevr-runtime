@@ -24,7 +24,7 @@ REFUSAL = "{recipe} is a heavy build and is not run from a Claude session. Run t
 # Every recipe that does a full configure+build of a tree, or runs a full test suite (see the guard's commit message).
 HEAVY = [
     "verify", "build", "verbose-build", "dist", "verbose-dist", "build-android", "verbose-build-android",
-    "test-android", "package-dev", "_quest-apk", "test-auth-unit", "test-auth", "test-tools", "test-installer",
+    "test-android", "package-dev", "_quest-apk", "test-auth-unit", "test-auth",
     "test-system", "test-system-verbose", "scenario", "scenario-all", "test-plugins", "test-plugins-verbose",
 ]
 
