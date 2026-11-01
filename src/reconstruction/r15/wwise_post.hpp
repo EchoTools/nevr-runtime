@@ -70,6 +70,7 @@ std::uint64_t SetSwitch(const void* player, std::uint32_t group,
                         std::uint32_t value, std::uint32_t emitter_id);
 std::uint64_t SetState(void* player, std::uint32_t group,
                        std::uint32_t state);
+std::uint32_t GetState(std::uint32_t group);
 std::uint32_t GetSwitch(const void* player, std::uint32_t group,
                         std::uint32_t emitter_id);
 std::uint64_t SetParameter2D(const void* player, std::uint32_t symbol,
@@ -141,6 +142,7 @@ std::uint64_t TranslateWwiseResult(const char* label, std::uint32_t result,
 int OutputError(std::uint64_t error, int flags);
 std::uint64_t SoundSymbolError(std::uint32_t symbol, const char* action,
                                const char* symbol_kind);
+std::int32_t QueryWwiseState(std::uint32_t group, std::uint32_t* state);
 void CLockReadWriteWriteLock(void* lock);
 void CLockReadWriteWriteUnlock(void* lock);
 void CLockReadWriteReadLock(void* lock);

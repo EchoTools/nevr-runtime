@@ -55,6 +55,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/csoundplayer_set_parameter_2d.cpp
     r15/csoundplayer_set_switch.cpp
     r15/csoundplayer_get_switch.cpp
+    r15/csoundplayer_get_state.cpp
     r15/csoundplayer_set_state.cpp
     r15/csoundplayer_reset_parameter.cpp
     r15/csoundplayer_reset_parameter_2d.cpp
