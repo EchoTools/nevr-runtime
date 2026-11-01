@@ -45,10 +45,17 @@ add_library(nevr_r15_reconstruction STATIC
     r15/get_audio_command_scope.cpp
     r15/commit_audio_command_scope.cpp
     r15/queue_wwise_value_command.cpp
+    r15/queue_wwise_switch_command.cpp
+    r15/build_wwise_state_command.cpp
+    r15/queue_wwise_state_command.cpp
+    r15/insert_sound_switch_key.cpp
     r15/queue_wwise_reset_command.cpp
     r15/build_wwise_value_command.cpp
     r15/csoundplayer_set_parameter.cpp
     r15/csoundplayer_set_parameter_2d.cpp
+    r15/csoundplayer_set_switch.cpp
+    r15/csoundplayer_get_switch.cpp
+    r15/csoundplayer_set_state.cpp
     r15/csoundplayer_reset_parameter.cpp
     r15/csoundplayer_reset_parameter_2d.cpp
     r15/csoundplayer_register_parameter_request.cpp

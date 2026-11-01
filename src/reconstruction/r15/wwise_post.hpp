@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -35,6 +36,12 @@ struct AudioParameterRequestMapEntry {
 };
 static_assert(sizeof(AudioParameterRequestMapEntry) == 0x08);
 
+struct SoundSwitchKey {
+    std::uint32_t group;
+    std::uint32_t value;
+};
+static_assert(sizeof(SoundSwitchKey) == 0x08);
+
 extern std::uint64_t DAT_03864210;
 extern const std::int32_t DAT_03859620;
 extern std::uintptr_t DAT_038cec70;
@@ -59,6 +66,12 @@ std::int32_t Play3DSound(std::uint64_t player, std::uint64_t event,
                          std::uint32_t emitter, float volume);
 std::uint64_t SetParameter(std::uint32_t symbol, float value,
                            std::uint32_t playing_id);
+std::uint64_t SetSwitch(const void* player, std::uint32_t group,
+                        std::uint32_t value, std::uint32_t emitter_id);
+std::uint64_t SetState(void* player, std::uint32_t group,
+                       std::uint32_t state);
+std::uint32_t GetSwitch(const void* player, std::uint32_t group,
+                        std::uint32_t emitter_id);
 std::uint64_t SetParameter2D(const void* player, std::uint32_t symbol,
                              float value);
 std::uint64_t ResetParameter(std::uint32_t symbol, float value,
@@ -75,6 +88,17 @@ std::uint64_t QueueWwiseResetCommand(std::uint32_t symbol,
                                      std::uint32_t scaled_value,
                                      std::uint32_t command_kind,
                                      std::uint32_t flags);
+std::uint64_t QueueWwiseSwitchCommand(std::uint32_t group,
+                                      std::uint32_t value,
+                                      std::uint32_t emitter_id);
+std::uint64_t BuildWwiseStateCommand(std::uint32_t group,
+                                     std::uint32_t state,
+                                     std::uint16_t flags_a,
+                                     std::uint16_t flags_b);
+std::uint64_t QueueWwiseStateCommand(std::uint32_t group,
+                                     std::uint32_t state);
+void InsertSoundSwitchKey(void* table, std::uint64_t index,
+                          const SoundSwitchKey* key, std::uint64_t count);
 void InsertSoundKey(void* table, std::uint64_t index, std::uint64_t count,
                     const SoundKey* value);
 std::uint64_t PostWwiseEvent(std::uint32_t event, std::uint64_t game_object,
@@ -115,6 +139,8 @@ int CreateAndAddError(const char* file, std::uint32_t line, std::uint64_t id,
 std::uint64_t TranslateWwiseResult(const char* label, std::uint32_t result,
                                    const char* file, std::uint32_t line);
 int OutputError(std::uint64_t error, int flags);
+std::uint64_t SoundSymbolError(std::uint32_t symbol, const char* action,
+                               const char* symbol_kind);
 void CLockReadWriteWriteLock(void* lock);
 void CLockReadWriteWriteUnlock(void* lock);
 void CLockReadWriteReadLock(void* lock);
