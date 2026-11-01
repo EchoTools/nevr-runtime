@@ -60,6 +60,9 @@ std::uint32_t LoadAudioCommandWordAtOffset10(const void* object);
 void* LoadAudioCommandPointer(void* const* source);
 void BeginWwisePlacementContext(void* context);
 void* WwisePlacementStorage(std::size_t size, void* storage);
+void InitializeWwiseCallbackMetadata(std::byte* destination,
+                                    std::uint32_t callback_count,
+                                    const std::byte* source);
 int SubmitWwisePostCommand(std::uint64_t context, std::byte* command,
                            SoundEventCallback callback, void* cookie,
                            std::uint32_t flags, std::uint32_t thread_token);

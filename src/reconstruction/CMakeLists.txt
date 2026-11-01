@@ -77,5 +77,6 @@ add_library(nevr_r15_reconstruction STATIC
     r15/wait_for_audio_command_activity.cpp
     r15/begin_wwise_placement_context.cpp
     r15/wwise_placement_storage.cpp
+    r15/initialize_wwise_callback_metadata.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
