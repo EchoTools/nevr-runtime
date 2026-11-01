@@ -95,6 +95,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/wwise_symbol_bucket_count_thunk.cpp
     r15/wwise_symbol_hash_input.cpp
     r15/find_wwise_symbol_bucket_entry.cpp
+    r15/csys_string_compare.cpp
     r15/create_callback_source.cpp
     r15/release_callback_source.cpp
     r15/allocate_audio_command_region.cpp
