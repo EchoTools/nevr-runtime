@@ -36,5 +36,21 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cbvhtree_shutdown.cpp
     r15/cbvhtree_intersect.cpp
     r15/cbvhtree_occluded.cpp
+    r15/cr15_net_heal_bubble_cs_set_target_inside_bubble.cpp
+    r15/cr15_net_damageable_cs_damage_from_client.cpp
+    r15/c_physics_cs_primary_body.cpp
+    r15/c_ph_target_resolve_body.cpp
+    r15/c_ph_target_validate_tag.cpp
+    r15/cr15_net_damageable_heal_node_enter.cpp
+    r15/cr15_net_damageable_cs_heal.cpp
+    r15/static_raycast_occluded.cpp
+    r15/world_teleport.cpp
+    r15/local_teleport.cpp
+    r15/query_collision.cpp
+    r15/resolve_zone.cpp
+    r15/query_collision_particle.cpp
+    r15/connect.cpp
+    r15/connect_gun.cpp
+    r15/invoke_method.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
