@@ -58,8 +58,8 @@ bool HasInternet() {
         return CJavaObject(activity.CallObjectMethod(
             get_system_service, get_system_service_signature, &name));
     }();
-    CJavaObject network_info = service.CallObjectMethod(
-        get_active_network_info, get_active_network_info_signature);
+    CJavaObject network_info(service.CallObjectMethod(
+        get_active_network_info, get_active_network_info_signature));
 
     std::uintptr_t network_object = 0;
     std::memcpy(&network_object, network_info.raw + 8,
