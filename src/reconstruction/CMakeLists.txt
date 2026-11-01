@@ -65,5 +65,14 @@ add_library(nevr_r15_reconstruction STATIC
     r15/connect.cpp
     r15/connect_gun.cpp
     r15/invoke_method.cpp
+    r15/create_start_gamespaces.cpp
+    r15/login_success.cpp
+    r15/allocate_exclusive.cpp
+    r15/set_material_property_node_update.cpp
+    r15/fire_bullet_local.cpp
+    r15/effect_time.cpp
+    r15/levelname.cpp
+    r15/fill_resource_file_request.cpp
+    r15/patrol_update.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
