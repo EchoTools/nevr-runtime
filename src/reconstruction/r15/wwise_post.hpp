@@ -70,6 +70,9 @@ bool SoundPaused(const void* player, std::uint32_t expected_state,
                  std::uint32_t entry_key);
 bool SoundStopped(const void* player, std::uint32_t expected_state,
                   std::uint32_t entry_key);
+void PlayOneOff(void* player, const char* emitter_name,
+                std::uint32_t sound_symbol, const void* transform,
+                std::uint32_t post_symbol, float volume);
 std::uint64_t SetSwitch(const void* player, std::uint32_t group,
                         std::uint32_t value, std::uint32_t emitter_id);
 std::uint64_t SetState(void* player, std::uint32_t group,
