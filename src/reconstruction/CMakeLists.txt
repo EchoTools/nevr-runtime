@@ -101,6 +101,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/csys_string_vsnprintf.cpp
     r15/cfixed_string_t_512_sprintf.cpp
     r15/clock_read_write_read_lock.cpp
+    r15/clock_read_write_write_lock.cpp
     r15/create_callback_source.cpp
     r15/release_callback_source.cpp
     r15/allocate_audio_command_region.cpp
