@@ -169,6 +169,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cfixedstringt_sprintf.cpp
     r15/cmemory_copy.cpp
     r15/cjson_constructor.cpp
+    r15/cjson_destructor.cpp
     r15/cr15_game_net_game_mt.cpp
     r15/cnca_game_space_get_st.cpp
     r15/csys_thread_set_tls.cpp
