@@ -11,7 +11,7 @@ using SoundEventCallback = void (*)(int, void*);
 extern std::uint64_t DAT_03864210;
 extern std::uintptr_t DAT_038cec70;
 extern std::uint64_t DAT_038cec78;
-extern std::uint64_t DAT_038cee60;
+extern std::int32_t DAT_038cee60;
 extern std::uint64_t DAT_038cecc0;
 
 int PostSoundEvent(void* self, std::uint32_t event, std::uint32_t game_object,
@@ -53,11 +53,11 @@ void ReleaseCallbackSource(std::uint64_t source);
 
 std::uint32_t WwiseSeekCommandSize();
 std::uint32_t WwisePostCommandSize();
-void AddAudioCommandReference(std::byte* field, void* object);
-void InitializeCallbackArgument(std::byte* field, const void* argument);
-std::uint32_t NextWwiseCommandId(std::uint64_t* state);
-void AcquireWwiseCommandReference(std::byte* field);
-std::uint32_t CurrentWwiseThreadToken();
+void* AddAudioCommandReference(std::byte* field, void* object);
+const void* InitializeCallbackArgument(std::byte* field, const void* argument);
+std::int32_t NextWwiseCommandId(std::int32_t* state);
+std::uint32_t LoadAudioCommandWordAtOffset10(const void* object);
+void* LoadAudioCommandPointer(void* const* source);
 int SubmitWwisePostCommand(std::uint64_t context, std::byte* command,
                            SoundEventCallback callback, void* cookie,
                            std::uint32_t flags, std::uint32_t thread_token);

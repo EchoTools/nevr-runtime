@@ -40,5 +40,11 @@ add_library(nevr_r15_reconstruction STATIC
     r15/begin_audio_command_scope.cpp
     r15/get_audio_command_scope.cpp
     r15/commit_audio_command_scope.cpp
+    r15/add_audio_command_reference.cpp
+    r15/next_wwise_command_id.cpp
+    r15/load_audio_command_pointer.cpp
+    r15/wwise_post_command_size.cpp
+    r15/initialize_callback_argument.cpp
+    r15/load_audio_command_word_at_offset10.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)

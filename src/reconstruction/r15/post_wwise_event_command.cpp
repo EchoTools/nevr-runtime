@@ -44,10 +44,13 @@ std::uint32_t PostWwiseEventCommand(std::uint32_t event, std::uint64_t game_obje
     *reinterpret_cast<std::uint64_t*>(command + 0x04) = game_object;
     command = GetAudioCommandScope(command_scope.data());
     auto* reference = command + 0x28;
-    AcquireWwiseCommandReference(reference);
+    auto* symbol_reference = LoadAudioCommandPointer(
+        reinterpret_cast<void* const*>(reference));
+    const auto thread_token =
+        LoadAudioCommandWordAtOffset10(symbol_reference);
     const auto result = SubmitWwisePostCommand(
         DAT_038cecc0, command + 0x04, callback, cookie, flags,
-        CurrentWwiseThreadToken());
+        thread_token);
     if (result == 1) {
         command = GetAudioCommandScope(command_scope.data());
         const auto submitted_id =
