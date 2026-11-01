@@ -65,5 +65,13 @@ add_library(nevr_r15_reconstruction STATIC
     r15/connect.cpp
     r15/connect_gun.cpp
     r15/invoke_method.cpp
+    r15/memory_move.cpp
+    r15/memory_fill.cpp
+    r15/sys_string_length.cpp
+    r15/cmemory_context_current_ptr.cpp
+    r15/cmemory_context_set_current.cpp
+    r15/cmemory_context_current.cpp
+    r15/cmem_block_ctor.cpp
+    r15/cmem_block_resize.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
