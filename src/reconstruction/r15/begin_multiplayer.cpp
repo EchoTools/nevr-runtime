@@ -1,7 +1,7 @@
 // CR15Game::BeginMultiplayer(SR15NetMatchSettings const&)
 // Quest libr15.so: function VA 0x1301d88 / ELF RVA 0x1201d88; entry thunk RVA 0x1201be4; binary 576.
 // PC echovr.exe: no matching function located in project-wide search (1,041 binaries).
-// ReVault raw parent 100221541; reconstruction node 100600147; grade M.
+// ReVault raw parent 100221541; reconstruction node 100600147; tier: reconstructed; grade: M, assessed by revault-codex.
 // This is a behavioral transcription: engine constructors, globals and object layouts remain opaque.
 void BeginMultiplayer(Game& g, MatchSettings const& settings) {
     WriteLog(2, "Beginning multiplayer");
