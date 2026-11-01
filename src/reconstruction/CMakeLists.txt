@@ -6,6 +6,8 @@ add_library(nevr_r15_reconstruction STATIC
     r15/c_timer_delta_microseconds.cpp
     r15/c_timer_delta_seconds_f.cpp
     r15/c_timer_milliseconds.cpp
+    r15/csys_time_get_tick.cpp
+    r15/csys_time_get_ticks_per_second.cpp
     r15/cleanup_peers.cpp
     r15/destroy_peer.cpp
     r15/destroy_peer_record.cpp
@@ -95,6 +97,13 @@ add_library(nevr_r15_reconstruction STATIC
     r15/wwise_symbol_bucket_count_thunk.cpp
     r15/wwise_symbol_hash_input.cpp
     r15/find_wwise_symbol_bucket_entry.cpp
+    r15/csys_string_compare.cpp
+    r15/csys_string_vsnprintf.cpp
+    r15/cfixed_string_t_512_sprintf.cpp
+    r15/clock_read_write_read_lock.cpp
+    r15/clock_read_write_write_lock.cpp
+    r15/clock_read_write_read_unlock.cpp
+    r15/clock_read_write_write_unlock.cpp
     r15/create_callback_source.cpp
     r15/release_callback_source.cpp
     r15/allocate_audio_command_region.cpp
@@ -169,6 +178,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/resolve_zone.cpp
     r15/csys_string_length.cpp
     r15/csysnet_has_internet.cpp
+    r15/csys_string_length_bounded.cpp
     r15/csys_thread_get_tls.cpp
     r15/cfixedstringt_sprintf.cpp
     r15/cmemory_copy.cpp
