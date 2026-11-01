@@ -16,6 +16,7 @@
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/log/boot_log_tee.h"
+#include "runtime/patch/follow_record_rules.h"
 #include "runtime/patch/lobby_failure_message_rules.h"
 #include "runtime/patch/lobby_full_backoff_rules.h"
 #include "runtime/patch/party_follow_dedup_rules.h"
@@ -43,6 +44,14 @@ constexpr std::array<std::uint8_t, 5> kGetPartyLobbyIdPrologue = {0x48, 0x89, 0x
 using GetPartyLobbyIdFn = void* (*)(void* party, void* out);
 constexpr std::size_t kNetGamePartyOffset = 0x647C8;
 
+// CR15NetGame::CanFollowParty(this) 0x1401a74c0: PUSH RBX; SUB RSP,0x20; MOV RBX,RCX. It returns 1 when following the
+// party is allowed now. FollowParty (0x14016bc20) queues JoinPartyLobby only when it returns nonzero; JoinPartyLobby
+// calls it too. The game state is the int at this+0; the lobby status is at [[this+0x40]+0x448], read in states 5 and 9.
+constexpr std::uint64_t kCanFollowPartyVA = 0x1401A74C0;
+constexpr std::array<std::uint8_t, 9> kCanFollowPartyPrologue = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
+using CanFollowPartyFn = int (*)(void* netGame);
+constexpr std::size_t kNetGameLobbyClientOffset = 0x40;
+
 constexpr std::size_t kLobbyStatusOffset = 0x448;  // the callback's own gate: status - 4 < 3 (unsigned)
 constexpr std::size_t kLobbyGameOffset = 0x8;      // *(lobbyClient + 8) is the CR15NetGame the error block lives in
 constexpr std::size_t kMsgPayloadOffset = 0x10;
@@ -53,6 +62,7 @@ std::uintptr_t g_gameBase = 0;
 JoinPartyLobbyFn g_originalJoinPartyLobby = nullptr;
 FailureCbFn g_originalFailureCb = nullptr;
 GetPartyLobbyIdFn g_getPartyLobbyId = nullptr;  // null when its prologue does not match: the dedup is then off
+CanFollowPartyFn g_originalCanFollowParty = nullptr;
 
 // The game's network callbacks and its frame loop may run on different threads.
 std::mutex g_mutex;
@@ -63,18 +73,33 @@ Policy g_policy;
 std::mutex g_skipLogMutex;
 nevr_party_follow_dedup::SkipLogState g_skipLog;
 
-// True when the follow was skipped: the leader's lobby is the one this client is in or is joining, and that answer is
-// younger than the window (#1413). FollowParty queues JoinPartyLobby on every CR15NetGame::Update, so a skip repeats each
-// tick for up to the window. The Info line is written once per run of identical skips; the repeats are counted and carried
-// on the next Info line as repeats=<n> (party_follow_dedup_rules.h, NoteSkip).
-bool TrySkipDuplicateFollow(void* netGame) {
+// The proceed record's run state; the hooks take it under g_recordMutex. A skip or a hold ends the run (EndProceedRun).
+std::mutex g_recordMutex;
+nevr_follow_record::ProceedLogState g_proceedLog;
+nevr_follow_record::DecisionState g_decision;
+
+void EndProceedRun() {
+  std::lock_guard<std::mutex> lock(g_recordMutex);
+  nevr_follow_record::NoteNoProceed(g_proceedLog);
+}
+
+// The leader's lobby, read from the party object the game holds: false when the dedup cannot read it (its prologue did
+// not match, or there is no party), and then the follow is neither skipped nor named by lobby.
+bool ReadLeaderLobby(void* netGame, nevr_party_follow_dedup::Guid& leader) {
   if (g_getPartyLobbyId == nullptr || netGame == nullptr) return false;
   std::uint8_t* game = static_cast<std::uint8_t*>(netGame);
   void* party = nullptr;
   std::memcpy(&party, game + kNetGamePartyOffset, sizeof(party));
   if (party == nullptr) return false;
-  nevr_party_follow_dedup::Guid leader{};
   g_getPartyLobbyId(party, leader.data());
+  return true;
+}
+
+// True when the follow was skipped: the leader's lobby is the one this client is in or is joining, and that answer is
+// younger than the window (#1413). FollowParty queues JoinPartyLobby on every CR15NetGame::Update, so a skip repeats each
+// tick for up to the window. The Info line is written once per run of identical skips; the repeats are counted and carried
+// on the next Info line as repeats=<n> (party_follow_dedup_rules.h, NoteSkip).
+bool TrySkipDuplicateFollow(const nevr_party_follow_dedup::Guid& leader) {
   nevr_lobby_join_state::Stamp current{};
   nevr_lobby_join_state::Stamp joining{};
   ::LobbyJoinSnapshot(&current, &joining);
@@ -103,7 +128,12 @@ bool TrySkipDuplicateFollow(void* netGame) {
 }
 
 void JoinPartyLobbyHook(void* netGame) {
-  if (TrySkipDuplicateFollow(netGame)) return;
+  nevr_party_follow_dedup::Guid leader{};
+  const bool haveLeader = ReadLeaderLobby(netGame, leader);
+  if (haveLeader && TrySkipDuplicateFollow(leader)) {
+    EndProceedRun();
+    return;
+  }
   const auto now = static_cast<std::uint64_t>(GetTickCount64());
   bool maySend = false;
   {
@@ -111,10 +141,61 @@ void JoinPartyLobbyHook(void* netGame) {
     maySend = g_policy.MaySend(now);
   }
   if (!maySend) {
+    EndProceedRun();
     Log(EchoVR::LogLevel::Debug, "[NEVR.LOBBY] full lobby: join held, the lobby refused the last one");
     return;
   }
+  // The follow goes on to the game's JoinPartyLobby, which may still refuse it through CanFollowParty (its own check).
+  nevr_follow_record::ProceedLogDecision logDecision{};
+  {
+    std::lock_guard<std::mutex> lock(g_recordMutex);
+    logDecision = nevr_follow_record::NoteProceed(g_proceedLog, haveLeader ? leader : nevr_party_follow_dedup::Guid{});
+  }
+  if (logDecision.writeInfo) {
+    const nevr_social_party::View view = nevr_social_party::Global().Snapshot();
+    Log(EchoVR::LogLevel::Info, "[NEVR.WS] party follow proceeds lobby=%s party_id=%llu party_size=%zu repeats=%llu",
+        haveLeader ? nevr_follow_record::LobbyPrefix(leader).c_str() : "unknown",
+        static_cast<unsigned long long>(view.partyId), view.members.size(),
+        static_cast<unsigned long long>(logDecision.repeats));
+  }
   g_originalJoinPartyLobby(netGame);
+}
+
+// The game's follow decision (CanFollowParty). Its answer is logged when it, the game state or the lobby status
+// changes, so a run of identical answers is one record. The game state and lobby status are read before the original
+// runs, the same values it reads.
+int CanFollowPartyHook(void* netGame) {
+  int gameState = -1;
+  int lobbyStatus = -1;
+  if (netGame != nullptr) {
+    std::uint8_t* game = static_cast<std::uint8_t*>(netGame);
+    std::memcpy(&gameState, game, sizeof(gameState));
+    if (gameState == 5 || gameState == 9) {
+      void* lobbyClient = nullptr;
+      std::memcpy(&lobbyClient, game + kNetGameLobbyClientOffset, sizeof(lobbyClient));
+      if (lobbyClient != nullptr)
+        std::memcpy(&lobbyStatus, static_cast<std::uint8_t*>(lobbyClient) + kLobbyStatusOffset, sizeof(lobbyStatus));
+    }
+  }
+  const int answer = g_originalCanFollowParty(netGame);
+  bool changed = false;
+  {
+    std::lock_guard<std::mutex> lock(g_recordMutex);
+    changed = nevr_follow_record::NoteDecision(g_decision, answer != 0, gameState, lobbyStatus);
+  }
+  if (changed) {
+    const nevr_social_party::View view = nevr_social_party::Global().Snapshot();
+    char lobbyStatusText[16];
+    if (lobbyStatus < 0)
+      std::snprintf(lobbyStatusText, sizeof(lobbyStatusText), "unread");
+    else
+      std::snprintf(lobbyStatusText, sizeof(lobbyStatusText), "%d", lobbyStatus);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.WS] party follow decision will_follow=%s game_state=%d lobby_status=%s party_id=%llu party_size=%zu",
+        answer != 0 ? "yes" : "no", gameState, lobbyStatusText, static_cast<unsigned long long>(view.partyId),
+        view.members.size());
+  }
+  return answer;
 }
 
 void FailureCbHook(void* lobbyClient, void* msg) {
@@ -199,6 +280,8 @@ void Install(std::uintptr_t gameBase) {
   }
   HookChecked(kJoinPartyLobbyVA, kJoinPartyLobbyPrologue, g_originalJoinPartyLobby,
               reinterpret_cast<PVOID>(&JoinPartyLobbyHook), "JoinPartyLobby");
+  HookChecked(kCanFollowPartyVA, kCanFollowPartyPrologue, g_originalCanFollowParty,
+              reinterpret_cast<PVOID>(&CanFollowPartyHook), "CanFollowParty");
   HookChecked(kFailureCbVA, kFailureCbPrologue, g_originalFailureCb, reinterpret_cast<PVOID>(&FailureCbHook),
               "LobbySessionFailureCB");
 }

@@ -258,6 +258,7 @@ set(PATCHES_HEADERS
     "compat/lobby_frame.h"
     "compat/lobby_join_state.h"
     "patch/party_follow_dedup_rules.h"
+    "patch/follow_record_rules.h"
     "patch/xpid_patch.h"
     "frame/frame_stats.h"
     "frame/tick.h"
@@ -1658,6 +1659,13 @@ if(BUILD_TESTING)
     target_include_directories(test_party_follow_dedup PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_party_follow_dedup PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_party_follow_dedup DISCOVERY_MODE PRE_TEST)
+
+    # test_follow_record.cpp (#1413): the party-follow proceed run and the follow-decision tracker that the JoinPartyLobby
+    # and CanFollowParty hooks write from (patch/follow_record_rules.h). Header-only, pure.
+    add_executable(test_follow_record tests/test_follow_record.cpp)
+    target_include_directories(test_follow_record PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_follow_record PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_follow_record DISCOVERY_MODE PRE_TEST)
 
     # test_lobby_failure_message.cpp (#1443, header-only patch/lobby_failure_message_rules.h): the service message on the
     # error page for the lobby failure codes the game shows as a literal.
