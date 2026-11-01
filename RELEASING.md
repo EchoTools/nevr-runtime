@@ -24,7 +24,7 @@ finding fixed. It deletes the branch and the worktree the same turn.
 | 4 | Publish | On the owner's go: `gh release create vX.Y.Z <files…>` creates the tag, the release and all its assets in one step. No drafts and no "assets later". | (no recipe yet) |
 | 5 | Manifest | The signed manifest lists the release. | (no recipe yet) |
 | 6 | Quest APK | After the release is published: the APK goes to the release host. | `just publish-quest-apk vX.Y.Z` (exists) |
-| 7 | Test the release | Install from the published release through the normal install path (the path a player takes), then run the checks below on the installed bytes. | (no recipe yet) |
+| 7 | Test the release | Starts by proving the bytes: download exactly the files the published, signed manifest names, check each file's sha256 against the manifest, and refuse to test on a mismatch. Then install from the published release through the normal install path (the path a player takes) and run the checks below on the installed bytes. Tests run only after the signed pre-release is posted. | (no recipe yet) |
 | 8 | Announce and watch | The announcement goes out, reports are watched, and every transition is logged. | (no recipe yet) |
 | 8w | Withdraw | If the release goes bad: withdraw it and clean up. A failure found by step 7 goes to a patch release, not a re-cut of this one. | (no recipe yet; by hand: `gh release delete vX.Y.Z --yes`) |
 
@@ -39,7 +39,8 @@ before the staged set has passed step 3.
   right.
 - Other system tests as the owner lists them.
 
-A failure found here goes to a patch release (the next version through the same flow). The published release is not edited.
+A run whose hashes do not match the manifest is not a release test. A failure found here goes to a patch release (the next
+version through the same flow). The published release is not edited.
 
 The recipes for steps 1, 2, 3, 3f, 4, 5, 7 and 7w do not exist yet. Until they do, the release is run by hand, one step at a
 time, under the owner's go.
