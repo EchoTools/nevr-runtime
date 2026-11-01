@@ -2,9 +2,11 @@
 #include "quest/plugin/script_redirect.h"
 
 #include <dlfcn.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 
@@ -25,6 +27,12 @@ std::uint64_t g_hashes[kMaxEntries] = {};
 const char* FinalComponent(const char* name) noexcept {
   const char* const slash = std::strrchr(name, '/');
   return slash != nullptr ? slash + 1 : name;
+}
+
+// True when `path` names a regular file. A directory or a link to one with the library's name is not a library.
+bool IsRegularFile(const char* path) noexcept {
+  struct stat st {};
+  return ::stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
 NevrScriptRedirectResult Refuse(NevrScriptRedirectResult result, const char* who, const char* reason) noexcept {
@@ -82,17 +90,36 @@ bool ParseScriptName(const char* name, std::uint64_t* hash) noexcept {
 }
 
 const char* RewriteLoadName(const char* name, char* buf, std::size_t cap) noexcept {
-  const std::uint32_t count = g_count.load(std::memory_order_acquire);
-  if (name == nullptr || count == 0) return name;
+  if (name == nullptr) return name;
   std::uint64_t hash = 0;
-  if (!ParseScriptName(name, &hash)) return name;
+  if (!ParseScriptName(name, &hash)) return name;  // not a script library: no line, the name passes unchanged
+  const std::uint32_t count = g_count.load(std::memory_order_acquire);
   bool registered = false;
   for (std::uint32_t i = 0; i < count && !registered; ++i) registered = g_hashes[i] == hash;
-  if (!registered || !RedirectName(hash, buf, cap)) return name;
+  const bool redirect = registered && RedirectName(hash, buf, cap);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "script_load",
+                      {{"name", name}, {"registry_set", count != 0 ? "true" : "false"},
+                       {"redirected", redirect ? "true" : "false"}});
+  if (!redirect) return name;
   char hex[19];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "script_redirected",
                       {{"from", name}, {"to", buf}, {"hash", sentinel::HexString(hex, hash)}});
   return buf;
+}
+
+void* OpenRedirected(void* (*loader)(const char* name, int flags), const char* name, int flags, char* buf,
+                     std::size_t cap) noexcept {
+  const char* const loadName = RewriteLoadName(name, buf, cap);
+  void* const handle = loader(loadName, flags);
+  if (handle == nullptr && loadName != name) {
+    // A redirected load that failed fails loudly: the game gets the loader's null, and the names and dlerror() say why.
+    const int savedErrno = errno;
+    const char* const reason = dlerror();
+    sentinel::LogFields(sentinel::LogLevel::kError, "script_redirect_failed",
+                        {{"from", name}, {"to", loadName}, {"dlerror", reason != nullptr ? reason : "(none)"}});
+    errno = savedErrno;
+  }
+  return handle;
 }
 
 NevrScriptRedirectResult RegisterIn(const char* libraryDir, const char* pluginId, const std::uint64_t* hashes,
@@ -120,7 +147,7 @@ NevrScriptRedirectResult RegisterIn(const char* libraryDir, const char* pluginId
   for (std::uint32_t i = 0; i < count; ++i) {
     if (!RedirectName(hashes[i], name, sizeof name)) continue;  // cannot happen: the buffer holds the name
     std::snprintf(path, sizeof path, "%s/%s", libraryDir, name);
-    if (::access(path, F_OK) == 0) continue;
+    if (IsRegularFile(path)) continue;
     ++missingCount;
     const std::size_t length = std::strlen(name);
     if (missingLength + length + 2 <= sizeof missing) {
@@ -148,22 +175,38 @@ NevrScriptRedirectResult RegisterIn(const char* libraryDir, const char* pluginId
   return NEVR_SCRIPT_REDIRECT_OK;
 }
 
+const char* LibraryDirectoryOf(const char* path, char* dir, std::size_t cap) noexcept {
+  if (path == nullptr || dir == nullptr || cap == 0) return "library_path_missing";
+  // A library the loader maps out of the APK (a store APK that does not extract native libraries) is named
+  // base.apk!/lib/<abi>/<file>: that directory is not on disk, so the names in it cannot be checked as files.
+  if (std::strstr(path, ".apk!/") != nullptr) {
+    return "library_inside_apk: the native library is mapped from the APK, not extracted to disk";
+  }
+  const char* const slash = std::strrchr(path, '/');
+  if (slash == nullptr || static_cast<std::size_t>(slash - path) + 1 > cap) return "library_path_has_no_directory";
+  const std::size_t dirLength = static_cast<std::size_t>(slash - path);
+  std::memcpy(dir, path, dirLength);
+  dir[dirLength] = '\0';
+  return nullptr;
+}
+
+NevrScriptRedirectResult RegisterFromLibraryPath(const char* pluginId, const char* libraryPath,
+                                                const std::uint64_t* hashes, std::uint32_t count) noexcept {
+  const char* const who = pluginId != nullptr ? pluginId : "(null)";
+  char dir[512];
+  if (const char* const reason = LibraryDirectoryOf(libraryPath, dir, sizeof dir)) {
+    return Refuse(NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR, who, reason);
+  }
+  return RegisterIn(dir, pluginId, hashes, count);
+}
+
 NevrScriptRedirectResult Register(const char* pluginId, const std::uint64_t* hashes, std::uint32_t count) noexcept {
   const char* const who = pluginId != nullptr ? pluginId : "(null)";
   Dl_info info{};
   if (dladdr(reinterpret_cast<const void*>(&Register), &info) == 0 || info.dli_fname == nullptr) {
     return Refuse(NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR, who, "dladdr_failed");
   }
-  char dir[512];
-  const std::size_t length = std::strlen(info.dli_fname);
-  const char* const slash = std::strrchr(info.dli_fname, '/');
-  if (slash == nullptr || static_cast<std::size_t>(slash - info.dli_fname) + 1 > sizeof dir || length == 0) {
-    return Refuse(NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR, who, "library_path_has_no_directory");
-  }
-  const std::size_t dirLength = static_cast<std::size_t>(slash - info.dli_fname);
-  std::memcpy(dir, info.dli_fname, dirLength);
-  dir[dirLength] = '\0';
-  return RegisterIn(dir, pluginId, hashes, count);
+  return RegisterFromLibraryPath(pluginId, info.dli_fname, hashes, count);
 }
 
 void LogState() noexcept {

@@ -27,18 +27,9 @@ std::atomic<bool> g_installed{false};
 
 void* HookedDlopen(DlopenThunk::Fn original, const char* name, int flags) noexcept {
   // The script redirect (script_redirect.h): a stock script library's name becomes its combat build's name when the
-  // combat unit registered it. Every other name, and every name in a process with no registration, is passed unchanged.
+  // combat unit registered it, and a failed redirected open is logged there. Every other name passes unchanged.
   char redirected[script_redirect::kNameCapacity];
-  const char* const loadName = script_redirect::RewriteLoadName(name, redirected, sizeof redirected);
-  void* const handle = original(loadName, flags);
-  if (handle == nullptr && loadName != name) {
-    // A redirected load that failed fails loudly: the game gets the loader's null, and the name and dlerror() text say why.
-    const int savedErrno = errno;
-    const char* const reason = dlerror();
-    sentinel::LogFields(sentinel::LogLevel::kError, "script_redirect_failed",
-                        {{"from", name}, {"to", loadName}, {"dlerror", reason != nullptr ? reason : "(none)"}});
-    errno = savedErrno;
-  }
+  void* const handle = script_redirect::OpenRedirected(original, name, flags, redirected, sizeof redirected);
   if (handle != nullptr) {
     // The game may read errno/dlerror after a successful dlopen; leave them as the loader left them.
     const int savedErrno = errno;
