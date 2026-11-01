@@ -64,6 +64,11 @@ std::uint32_t LockAudioMutex(void* mutex);
 std::uint32_t UnlockAudioMutex(void* mutex);
 void BeginWwiseSymbolLookup(std::byte* scope, std::uintptr_t mutex);
 void* LookupWwiseSymbol(std::uintptr_t table, std::uint32_t event);
+std::uint32_t WwiseSymbolBucketCount(const void* table);
+std::uint32_t WwiseSymbolBucketCountThunk(const void* table);
+std::uint32_t WwiseSymbolHashInput(std::uint32_t event);
+void* FindWwiseSymbolBucketEntry(const void* table, std::uint32_t event,
+                                 std::uint32_t bucket_index);
 std::int32_t AcquireWwiseSymbolReference(void* symbol);
 void EndWwiseSymbolLookup(std::byte* scope);
 void* AllocateAudioCommandStorage(std::uint64_t context,

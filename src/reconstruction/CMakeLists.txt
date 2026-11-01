@@ -61,5 +61,10 @@ add_library(nevr_r15_reconstruction STATIC
     r15/callback_info_source.cpp
     r15/acquire_wwise_symbol_reference.cpp
     r15/wwise_seek_command_size.cpp
+    r15/lookup_wwise_symbol.cpp
+    r15/wwise_symbol_bucket_count.cpp
+    r15/wwise_symbol_bucket_count_thunk.cpp
+    r15/wwise_symbol_hash_input.cpp
+    r15/find_wwise_symbol_bucket_entry.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
