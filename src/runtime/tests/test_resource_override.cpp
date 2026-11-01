@@ -543,7 +543,7 @@ TEST_F(CachedOverrides, NoCacheDirectoryNoIndexAndABrokenIndexEachSayWhy) {
   EXPECT_TRUE(TestLogContains("cache index unusable"));
 }
 
-TEST_F(CachedOverrides, ACachedSplashReplacesTheBuiltInOneAndTheBuiltInIsNotLeftUnapplied) {
+TEST_F(CachedOverrides, ACachedSplashIsServedAndNothingEmbeddedIsRegistered) {
   const std::vector<std::uint8_t> image = Image(500, 9);
   Cache(image, kSplashType, kSplashName, "cache_splash");
   TestHook_RegisterInitialOverrides(dir_.c_str());
