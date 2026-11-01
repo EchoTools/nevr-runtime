@@ -9,5 +9,6 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cg_raw_interface_vk_deferred_destroy.cpp
     r15/cg_raw_interface_vk_deferred_free.cpp
     r15/nrad_game_apply_runtime_gfx_settings.cpp
+    r15/cgrenderconfig_set_manual_resolution_scale.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
