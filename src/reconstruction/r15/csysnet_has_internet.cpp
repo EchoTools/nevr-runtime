@@ -4,6 +4,9 @@
 #include <cstdint>
 #include <cstring>
 
+// @0x10989fc — NRadEngine::CSysNet::HasInternet
+/* @confidence: H */
+
 struct _jobject;
 using jobject = _jobject*;
 
