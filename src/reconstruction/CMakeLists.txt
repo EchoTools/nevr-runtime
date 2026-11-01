@@ -65,5 +65,8 @@ add_library(nevr_r15_reconstruction STATIC
     r15/connect.cpp
     r15/connect_gun.cpp
     r15/invoke_method.cpp
+    r15/begin_multiplayer.cpp
+    r15/cr15_net_follow_player_cs_follow.cpp
+    r15/cr15_net_voip_receiver_cs_receive_voip.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)
