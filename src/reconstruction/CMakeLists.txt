@@ -68,5 +68,9 @@ add_library(nevr_r15_reconstruction STATIC
     r15/find_wwise_symbol_bucket_entry.cpp
     r15/create_callback_source.cpp
     r15/release_callback_source.cpp
+    r15/allocate_audio_command_region.cpp
+    r15/allocate_audio_ring_block.cpp
+    r15/reserve_audio_ring_cursor.cpp
+    r15/allocate_audio_command_storage.cpp
 )
 target_compile_features(nevr_r15_reconstruction PUBLIC cxx_std_17)

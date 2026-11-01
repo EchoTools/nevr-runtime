@@ -71,9 +71,15 @@ void* FindWwiseSymbolBucketEntry(const void* table, std::uint32_t event,
                                  std::uint32_t bucket_index);
 std::int32_t AcquireWwiseSymbolReference(void* symbol);
 void EndWwiseSymbolLookup(std::byte* scope);
-void* AllocateAudioCommandStorage(std::uint64_t context,
-                                  std::uint16_t command_kind,
-                                  std::uint32_t command_size);
+std::byte* AllocateAudioCommandStorage(std::uint64_t context,
+                                       std::uint16_t command_kind,
+                                       std::uint32_t command_size);
+std::byte* AllocateAudioCommandRegion(std::uint64_t context,
+                                      std::uint32_t* requested_size);
+std::byte* AllocateAudioRingBlock(std::uint64_t context,
+                                  std::uint32_t* requested_size);
+bool ReserveAudioRingCursor(std::uintptr_t* cursor, std::uintptr_t expected,
+                            std::uintptr_t next);
 std::int32_t DecrementAtomicReference(std::int32_t* reference_count);
 void DecrementAudioCommandActivity(std::uint64_t context);
 std::uint32_t AudioCommandQueueCapacity(const void* queue);
