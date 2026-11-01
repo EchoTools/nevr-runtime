@@ -66,7 +66,9 @@ void InitializeWwiseCallbackMetadata(std::byte* destination,
                                     const std::byte* source);
 std::byte* AllocateWwisePoolBlock(std::int32_t pool, std::size_t size);
 void InitializeAudioPostCommandNode(std::byte* node);
-void InsertWwisePostNode(std::uint64_t context, std::byte* node);
+void GrowWwisePostQueue(std::byte* queue, std::uint32_t bucket_count);
+bool EnsureWwisePostQueueCapacity(std::byte* queue);
+bool InsertWwisePostNode(std::uint64_t context, std::byte* node);
 int SubmitWwisePostCommand(std::uint64_t context, std::byte* command,
                            SoundEventCallback callback, void* cookie,
                            std::uint32_t flags, std::uint32_t thread_token);
