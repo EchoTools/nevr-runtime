@@ -210,6 +210,11 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cnca_game_space_get_st.cpp
     r15/csys_thread_set_tls.cpp
     r15/csymbol64_append.cpp
+    r15/c_blackboard_cs_copy_component_data.cpp
+    r15/c_deferred_method_queue_queue_functor_social_interact.cpp
+    r15/c_sound_player_send_global_event.cpp
+    r15/c_sound_player_set_switch2d.cpp
+    r15/fun_0294f380.cpp
     r15/query_collision_particle.cpp
     r15/cquaternion_from_rotation_matrix.cpp
     r15/cnca_game_space_send_component_event_global.cpp
@@ -232,6 +237,9 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cr15_net_game_server.cpp
     r15/cr15_net_game_user_name.cpp
     r15/connect_gun.cpp
+    r15/cr15_net_game_user_id_from_net_id.cpp
+    r15/ctransform_cs_compute_local_to_level_transf_q.cpp
+    r15/ctransform_cs_compute_parent_to_world_transf_q.cpp
     r15/cr15_game_ctor.cpp
     r15/cg_mesh_list_resource.cpp
     r15/cfactory_cgshader_set_resource_construct_instance.cpp

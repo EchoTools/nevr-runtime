@@ -374,7 +374,7 @@ std::int32_t Register(const char* id, NevrQuestInputFilterFn filter, void* user)
   g_user = user;
   return NEVR_QUEST_FILTER_OK;
 }
-const NevrQuestHostApi kApi{sizeof(NevrQuestHostApi), &Register};
+const NevrQuestHostApi kApi{sizeof(NevrQuestHostApi), &Register, nullptr};
 
 NvrGameContext Context(const NevrQuestHostApi* api) {
   NvrGameContext ctx{};
@@ -519,8 +519,8 @@ void InitRefusesWhatItCannotRun() {
   big += "\nstep 1\n";
   const std::string tooBig = WriteRoute("big.txt", big);
   const ap::plugin::Os& os = ap::plugin::RealOs();
-  const NevrQuestHostApi small{sizeof(std::uint32_t), &Register};
-  const NevrQuestHostApi noFn{sizeof(NevrQuestHostApi), nullptr};
+  const NevrQuestHostApi small{sizeof(std::uint32_t), &Register, nullptr};
+  const NevrQuestHostApi noFn{sizeof(NevrQuestHostApi), nullptr, nullptr};
   Refused("not json", &kApi, os, "route_refused", "reason", "the plugin's args are not a JSON object");
   Refused("[1]", &kApi, os, "route_refused", "reason", "the plugin's args are not a JSON object");
   Refused("{}", &kApi, os, "route_refused", "reason", "args.route is not a path");
