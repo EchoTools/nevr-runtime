@@ -619,9 +619,7 @@ class LaunchClientTest(unittest.TestCase):
         env = dict(self.env, FAKE_WINE_ARGS=str(args_file))
         out = self.tmp / "scenario-out"
         out.mkdir()
-        old_env = {k: os.environ.get(k) for k in ("NEVR_GAME_ROOT", "NEVR_LAUNCH_LOCK",
-                                                  "NEVR_RUN_SCRATCH_ROOT", "PATH", "FAKE_WINE_ARGS",
-                                                  "NEVR_EVIDENCE_DELAY", "FAKE_EXPECT_DLL", "NEVR_WORK_ROOT")}
+        saved_env = dict(os.environ)
         os.environ.update(env)
         try:
             run = run_scenario.Run({"name": "launch-args"}, self.dll, out, creds=ACCOUNT)
@@ -630,11 +628,10 @@ class LaunchClientTest(unittest.TestCase):
             finally:
                 run.teardown()
         finally:
-            for k, v in old_env.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+            # Restore the whole environment: env copies every key of self.env, so a fixed list of keys leaks the rest
+            # into later tests (#1932: FAKE_EXPECT_RUNTIME reached the verify-server test and made its fake game exit 9).
+            os.environ.clear()
+            os.environ.update(saved_env)
             # wineprefix() caches: leave the next test the prefix it resolves for itself.
             run_scenario.wineprefix.cache_clear()
         self.assertEqual(args_file.read_text().strip(), "./echovr.exe -windowed -mp")
@@ -652,9 +649,7 @@ class LaunchClientTest(unittest.TestCase):
         env = dict(self.env, FAKE_WINE_ARGS=str(args_file))
         out = self.tmp / "scenario-out"
         out.mkdir()
-        old_env = {k: os.environ.get(k) for k in ("NEVR_GAME_ROOT", "NEVR_LAUNCH_LOCK",
-                                                  "NEVR_RUN_SCRATCH_ROOT", "PATH", "FAKE_WINE_ARGS",
-                                                  "NEVR_EVIDENCE_DELAY", "FAKE_EXPECT_DLL", "NEVR_WORK_ROOT")}
+        saved_env = dict(os.environ)
         os.environ.update(env)
         try:
             run = run_scenario.Run({"name": "launch-config"}, self.dll, out, config, creds=ACCOUNT)
@@ -663,11 +658,9 @@ class LaunchClientTest(unittest.TestCase):
             finally:
                 run.teardown()
         finally:
-            for k, v in old_env.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+            # Restore the whole environment, not a fixed list of keys (#1932): see the launch-args test above.
+            os.environ.clear()
+            os.environ.update(saved_env)
             run_scenario.wineprefix.cache_clear()
         expected = "./echovr.exe -windowed -mp -config Z:" + str(config).replace("/", "\\")
         self.assertEqual(args_file.read_text().strip(), expected)
