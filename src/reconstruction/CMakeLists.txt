@@ -143,6 +143,10 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cmemory_context_set_current.cpp
     r15/cmemory_context_current.cpp
     r15/cmem_block_ctor.cpp
+    r15/chttp_listener_request_body.cpp
+    r15/chttp_listener_request_reply_with_json.cpp
+    r15/csysnet_saddress_ipv4.cpp
+    r15/csysnet_tipv4_string.cpp
     r15/cmem_block_resize.cpp
     r15/cbvhtree_shutdown.cpp
     r15/cbvhtree_intersect.cpp
@@ -173,6 +177,8 @@ add_library(nevr_r15_reconstruction STATIC
     r15/query_collision.cpp
     r15/resolve_zone.cpp
     r15/csys_string_length.cpp
+    r15/cenvironment_get_global.cpp
+    r15/cenvironment_get_tls_handle.cpp
     r15/csys_string_length_bounded.cpp
     r15/csys_thread_get_tls.cpp
     r15/cfixedstringt_sprintf.cpp
