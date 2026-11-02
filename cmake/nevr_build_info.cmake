@@ -6,7 +6,7 @@
 include("${CMAKE_CURRENT_LIST_DIR}/set_project_version_from_git.cmake")
 
 function(nevr_generate_build_info root)
-  set_project_version_from_git()
+  set_project_version_from_git("${root}")
   set(NEVR_BUILD_VERSION "${PROJECT_VERSION}")
   set(NEVR_BUILD_COMMIT "${GIT_COMMIT_HASH}")
   # A development build: the only kind that downloads game data and carries the maintainers' headset probe (#758).

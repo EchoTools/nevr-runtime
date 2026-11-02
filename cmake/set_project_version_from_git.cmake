@@ -10,8 +10,15 @@
 #   PROJECT_VERSION_TWEAK  "0": the Windows file version (cmake/nevr_version_info.cmake) is X.Y.Z.0
 # and makes VERSION a configure dependency, so a version bump re-runs the configure.
 
+# The optional argument is the repository root that holds VERSION. A sub-project whose own source directory is not the
+# root (the Quest sub-project at src/quest) passes it; without one the root is CMAKE_SOURCE_DIR (#1935).
 function(set_project_version_from_git)
-  set(_version_file "${CMAKE_SOURCE_DIR}/VERSION")
+  if(ARGC GREATER 0)
+    set(_version_root "${ARGV0}")
+  else()
+    set(_version_root "${CMAKE_SOURCE_DIR}")
+  endif()
+  set(_version_file "${_version_root}/VERSION")
   if(NOT EXISTS "${_version_file}")
     message(FATAL_ERROR "set_project_version_from_git: ${_version_file} is missing: the committed version, exactly X.Y.Z")
   endif()
