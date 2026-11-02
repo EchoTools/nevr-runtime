@@ -215,6 +215,15 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cr15_net_game_log_in_offline.cpp
     r15/cerr_msg_create_and_add_error.cpp
     r15/connect.cpp
+    r15/sort_512_csimplekey_ctable_ccomponentsystem_csymbol64.cpp
+    r15/ctransfqs_combine.cpp
+    r15/cmodel_swapper_cs_register_pre_model_swap_callback.cpp
+    r15/cmodel_swapper_cs_register_success_model_swap_callback.cpp
+    r15/c_physics_cs_local_velocity.cpp
+    r15/c_stack_allocator_direct_free.cpp
+    r15/cmem_block_destructor.cpp
+    r15/cr15_net_game_server.cpp
+    r15/cr15_net_game_user_name.cpp
     r15/connect_gun.cpp
     r15/cr15_game_ctor.cpp
     r15/cg_mesh_list_resource.cpp
