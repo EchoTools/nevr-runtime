@@ -118,11 +118,11 @@ BRAND_PROSE_SPELLINGS = {
 # calls (`CSysWindow::IsVirtual`). docs/standards/naming.md: names that belong to the game keep their own spelling.
 GAME_NAMESPACES = frozenset({
     "CBroadcaster", "CGRenderConfig", "CGS", "CHashTable", "CMatSym", "CMemBlock", "CMemory", "CMemoryContext",
-    "CSoundEmitter", "CSoundPlayer", "CSysNet::SAddress", "CSysTime", "CSysWindow", "CTimer", "CVR", "NR15RestAPI",
-    "NRadEngine::CGRenderConfig", "NRadEngine::CMemBlock", "NRadEngine::CMemory", "NRadEngine::CSoundEmitter",
-    "NRadEngine::CSoundPlayer", "NRadEngine::CSysNet", "NRadEngine::CSysTime", "NRadEngine::NRadGame",
-    "NRadEngine::NRadGame::NR15RestAPI", "NRadGame", "NWriteLog", "SBlackboardCD", "SBroadcasterData",
-    "SComponentNodeUtils",
+    "CSoundEmitter", "CSoundPlayer", "CSysNet", "CSysNet::SAddress", "CSysTime", "CSysWindow", "CTimer", "CVR",
+    "NR15RestAPI", "NRadEngine::CGRenderConfig", "NRadEngine::CMemBlock", "NRadEngine::CMemory",
+    "NRadEngine::CSoundEmitter", "NRadEngine::CSoundPlayer", "NRadEngine::CSysNet", "NRadEngine::CSysTime",
+    "NRadEngine::NRadGame", "NRadEngine::NRadGame::NR15RestAPI", "NRadEngine::SComponentNodeUtils", "NRadGame",
+    "NWriteLog", "SBlackboardCD", "SBroadcasterData", "SComponentNodeUtils",
 })
 # The last component of a namespace is `nevr` or `nevr_<area>`; a game namespace may be the prefix before it, as in
 # `NRadEngine::nevr_reconstruction`.
