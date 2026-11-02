@@ -174,6 +174,11 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cjson_navigate_object_path.cpp
     r15/cjson_navigate_array_path.cpp
     r15/local_teleport.cpp
+    r15/csysnet_send_to.cpp
+    r15/cr15_net_customization_renderer_destroy_context.cpp
+    r15/cr15_net_customization_renderer_load_mesh_data.cpp
+    r15/android_main.cpp
+    r15/cg_engine_resources_initialize.cpp
     r15/query_collision.cpp
     r15/resolve_zone.cpp
     r15/csys_string_length.cpp
