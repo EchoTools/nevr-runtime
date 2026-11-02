@@ -176,8 +176,9 @@ bool CR15NetGame::PartyLobbyUnjoinable() const {
     }
 
     // 0x13594e4-0x13594f4: DAT_0386d3f0 is built once under the guard DAT_0386d300 (bit 0 clear means not yet built).
-    std::uint8_t guard_byte = 0;
-    std::memcpy(&guard_byte, DAT_0386d300, sizeof guard_byte);
+    // The guard byte is read with a load-acquire (ldarb at 0x13594ec).
+    const std::uint8_t guard_byte =
+        __atomic_load_n(reinterpret_cast<const std::uint8_t*>(DAT_0386d300), __ATOMIC_ACQUIRE);
     if ((guard_byte & 1u) == 0 && __cxa_guard_acquire(DAT_0386d300) != 0) {
         ::new (static_cast<void*>(&DAT_0386d3f0)) CJson();  // CJson::CJson, thunk 0xfd7760
         __cxa_atexit(DestroyCJson, static_cast<void*>(&DAT_0386d3f0), static_cast<void*>(&PTR_LOOP_036fac50));

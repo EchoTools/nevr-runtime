@@ -23,7 +23,10 @@ extern const std::uint64_t* const DAT_038196d8;
 extern std::uint32_t DAT_038611b8;
 
 // Symbol words in rodata (8-byte CSymbol64 hashes), compared with the lobby's match-type symbol at +0x6a0.
-// Each comment gives the stored value and the text stored right after it in the image.
+// In the image each word is followed by a pad of 1 to 8 bytes that is a suffix of "OlPrEfIx" (seen: "x",
+// "fIx", "EfIx", "rEfIx", "PrEfIx", "lPrEfIx", "OlPrEfIx"), and then by the NUL-terminated text; the text is
+// followed by a pad that is a prefix of "RaDsSyM" (seen: "Ra", "RaD", "RaDs", "RaDsS", "RaDsSyM") before the
+// next word. Each comment below gives the stored value and that text (the pad bytes are not part of it).
 extern const std::uint64_t DAT_02cac900;  // 0xea8d9b0bbdaa1c6a, "echo_arena_first_match"
 extern const std::uint64_t DAT_02cac920;  // 0x47c693e5ebaddea6, "echo_combat_first_match"
 extern const std::uint64_t DAT_02ca0950;  // 0xcb60a4de7e1caf73, "echo_arena"

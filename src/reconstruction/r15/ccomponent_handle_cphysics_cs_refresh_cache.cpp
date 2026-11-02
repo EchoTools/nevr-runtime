@@ -1,6 +1,6 @@
 // NRadEngine::CComponentHandle<NRadEngine::CPhysicsCS>::RefreshCache
 // Quest libr15.so VA 0x13367cc; ReVault binary 576.
-// ReVault raw parent 100222770, reconstruction node 100600724; grade M: all 142 instructions (0x13367cc-0x1336a00) read and mapped; no placeholders; every callee has a ReVault name: RefreshActorAndComponentHandle, CncaGame::CurrentActorGUID(SActorGUID*), CncaGame::GameSpace, NRadEngine::ResolveActorAlias, Sort<512ull>, vslot 0x1b8 Component, vslot 0x1d0 IsComponentValid; the two Sort closures are empty stand-ins, x21's high half is not recovered, the asm re-stores the call's x0:x1 into the GUID after CurrentActorGUID (0x133689c stp) which the void signature does not express, and the LL/SC lock is a compare-exchange; syntax-checked.
+// ReVault raw parent 100222770, reconstruction node 100600724; grade M: all 142 instructions (0x13367cc-0x1336a00) read and mapped; no placeholders; every callee has a ReVault name: RefreshActorAndComponentHandle, CncaGame::CurrentActorGUID(SActorGUID*), CncaGame::GameSpace, NRadEngine::ResolveActorAlias, Sort<512ull>, vslot 0x1b8 Component, vslot 0x1d0 IsComponentValid; the two Sort closures are empty stand-ins (the asm passes sp+0x20/sp+0x28 and never stores them), x21's high half is caller state and is not recovered, and the LL/SC lock is a compare-exchange; CurrentActorGUID returns the 16-byte GUID in x0:x1, which is stored over the GUID (0x133689c stp) and whose x0 goes to GameSpace; syntax-checked.
 // @0x13367cc — NRadEngine::CComponentHandle<NRadEngine::CPhysicsCS>::RefreshCache
 /* @confidence: M */
 
@@ -48,7 +48,7 @@ struct CSimpleKeySwap {};
 
 }  // namespace NRadEngine
 
-// The 16-byte actor GUID that CncaGame::CurrentActorGUID fills through its pointer argument. ReVault shows the type
+// The 16-byte actor GUID that CncaGame::CurrentActorGUID returns by value (x0:x1). ReVault shows the type
 // without a namespace, so it is declared at global scope: symbol is passed to GameSpace, actor to ResolveActorAlias.
 struct SActorGUID {
     NRadEngine::CSymbol64 symbol;  // +0x00
@@ -64,8 +64,9 @@ bool ResolveActorAlias(CncaGameSpace** game_space, SActor* actor);
 class CncaGame {
 public:
     // NRadEngine::CncaGame::CurrentActorGUID(SActorGUID*): thunk 0xfea210. The game is passed in x0 and the address of the
-    // 16-byte GUID (sp+0x10) in x1; ReVault gives it a void result.
-    void CurrentActorGUID(SActorGUID* guid);
+    // 16-byte GUID (sp+0x10) in x1; the 16-byte GUID comes back by value in x0:x1 ({symbol, actor}), and the caller stores
+    // it over the GUID (0x133689c stp). ReVault shows a void result, which does not express the returned pair.
+    SActorGUID CurrentActorGUID(SActorGUID* guid);
     // NRadEngine::CncaGame::GameSpace(CSymbol64) const: thunk 0x1031ef0; the signature begin_multiplayer.cpp declares.
     CncaGameSpace* GameSpace(CSymbol64 symbol) const;
 };
@@ -185,8 +186,8 @@ void NRadEngine::CComponentHandle<NRadEngine::CPhysicsCS>::RefreshCache() const 
     guid.symbol = NRadEngine::CSymbol64{Load<std::uint64_t>(base, 0x08)};
     guid.actor = NRadEngine::SActor{Load<std::uint64_t>(base, 0x18)};
     if ((Load<std::uint8_t>(base, 0x24) & 1U) != 0) {
-        // 0x133688c-0x133689c: x1 = &guid; the asm then stores the call's x0:x1 over guid, which the void signature does not express.
-        Load<NRadEngine::CncaGame*>(base, 0x00)->CurrentActorGUID(&guid);
+        // 0x133688c-0x133689c: x1 = &guid; the returned x0:x1 is stored over guid (stp), and its x0 is GameSpace's symbol.
+        guid = Load<NRadEngine::CncaGame*>(base, 0x00)->CurrentActorGUID(&guid);
     }
     // 0x13368a0-0x13368b0: the game space for the symbol; none goes to LAB_013369d0.
     space = Load<NRadEngine::CncaGame*>(base, 0x00)->GameSpace(guid.symbol);

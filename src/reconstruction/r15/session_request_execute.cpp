@@ -171,7 +171,10 @@ class CComponentSystem {
 template <typename TComponent>
 class CComponentHandle {
  public:
-  // The listing writes this default state before every Find.
+  // The UI settings handle (listing 0x13b7cb8..0x13b7cec, base sp+0x2a0) stores +0x00 (zero), +0x08, +0x10, +0x16..+0x1d,
+  // +0x28, +0x30 and +0x38 (all ones), +0x1e..+0x1f (zero), +0x20 and +0x48 (0xffff, 8 bytes each). It never stores
+  // +0x40..+0x47 (the cached component pointer, read at sp+0x2e0 after RefreshCache); the C++ raw{} zero-initialises
+  // the whole object first, so that slot and the zero stores are covered there.
   CComponentHandle() : raw{} {
     const std::uint64_t none = ~std::uint64_t{0};
     const std::uint64_t wide = 0xffff;

@@ -169,7 +169,10 @@ public:
 
 class CGRenderConfig {
 public:
-    // @ thunks 0xfd6fa0, 0x10445a0, 0xff9640. Ghidra shows SetForcedUIResolution(void); the call passes x0.
+    // Each is a four-instruction adrp/ldr/add/br thunk; the names are inferred from the call sites in BeginMultiplayer:
+    // SetEnableAutoExposure = thunk 0xfd6fa0 (called at 0x138963c with w0 = 0); ForcedUIResolution = thunk 0x10445a0
+    // (called at 0x1389640 with no argument; its x0 result is stored at +0x6484c); SetForcedUIResolution = thunk 0xff9640
+    // (called at 0x1389658 with x0 = 0x36000000600). Ghidra shows SetForcedUIResolution(void); the call passes x0.
     static void SetEnableAutoExposure(std::uint32_t enable);
     static std::uint64_t ForcedUIResolution();
     static void SetForcedUIResolution(std::uint64_t resolution);
@@ -463,7 +466,8 @@ std::int32_t CR15NetGame::BeginMultiplayer(const SR15NetMatchSettings& settings)
         Store<std::uint64_t>(entry, 8, last_free);
     }
 
-    // Records a listener handle: handles[count++] = handle (0x1389858-0x1389870 and the same eight instructions per Listen).
+    // Records a listener handle: handles[count++] = handle. 0x1389858-0x1389870 is seven instructions: the lock release
+    // (stlr, 0x1389858) and the six that store the handle (0x138985c-0x1389870); the same seven follow each Listen.
     auto record_handle = [self](std::uint16_t handle) {
         const std::uint32_t index = Load<std::uint32_t>(self, kListenCountOffset);
         Store<std::uint32_t>(self, kListenCountOffset, index + 1);

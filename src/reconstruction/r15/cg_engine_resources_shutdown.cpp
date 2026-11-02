@@ -292,8 +292,8 @@ int CGEngineResources::Shutdown() {
     }
 
     // ---- 0x1940a40-0x1940d98: the default textures ----
-    ReleaseImage(self, 0x13a8, 2);  // 2D texture, black texel: Destroy @0x1940a54, Fill @0x1940a90 @0x1940ad4
-    ReleaseImage(self, 0x1400, 2);  // 2D texture, white texel: Destroy @0x1940b04, Fill @0x1940b40 @0x1940b8c
+    ReleaseImage(self, 0x13a8, 2);  // image record at 0x13a8, rewritten as an all-zero record: Destroy @0x1940a54, Fill @0x1940a90 @0x1940ad4
+    ReleaseImage(self, 0x1400, 2);  // image record at 0x1400, rewritten as an all-zero record: Destroy @0x1940b04, Fill @0x1940b40 @0x1940b8c
     ReleaseImage(self, 0x1458, 2);  // "Default 3D Texture": Destroy @0x1940bc4, Fill @0x1940c00 @0x1940c44
     ReleaseImage(self, 0x14b0, 2);  // "Default 3D Shadow Texture": Destroy @0x1940c74, Fill @0x1940cb0 @0x1940cfc
     ReleaseImage(self, 0x1508, 1);  // ambient cube texture: Destroy @0x1940d34, Fill @0x1940d70

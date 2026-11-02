@@ -426,7 +426,7 @@ void CR15NetClientLobby::Create() {
         const auto lobby_type = static_cast<ENSLobbyType>(static_cast<std::uint8_t>(lobby->lobby_type));
 
         if (symbol_6b0 != ~std::uint64_t{0}) {
-            // 0x1342d8c-0x1342dc0: cmn x26, #1 not equal; the overload with the leading CSymbol64.
+            // 0x1342cfc: cmn x26, #1 not equal (b.eq 0x1342d28 is the -1 case); 0x1342d08-0x1342dc0 is the overload with the leading CSymbol64.
             net_lobby->RequestCreateSession(CSymbol64{symbol_6b0}, request_id, publisher_lock,
                                             CSymbol64{request_gametype}, CSymbol64{level_bits}, provider, login,
                                             users_view, match_ids_view, lobby_type, 1U, settings, group);
