@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a56040 — AdvanceAudioCommandQueueHead
 /* @confidence: H — aligns the byte count to four and wraps at the queue boundary. */
@@ -19,4 +19,4 @@ void AdvanceAudioCommandQueueHead(std::uint64_t* queue,
     queue[0] = next;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

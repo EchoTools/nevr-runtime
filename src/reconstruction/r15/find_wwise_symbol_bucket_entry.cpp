@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a51e00 — FindWwiseSymbolBucketEntry
 /* @confidence: H — follows bucket head and next pointers until the event id matches. */
@@ -20,4 +20,4 @@ void* FindWwiseSymbolBucketEntry(const void* table, std::uint32_t event,
     return entry;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

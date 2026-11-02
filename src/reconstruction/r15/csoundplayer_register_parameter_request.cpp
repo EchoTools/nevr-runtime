@@ -2,7 +2,7 @@
 // ReVault raw parent 100227805, reconstruction node 100600512; grade M.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x144c440 — CSoundPlayer::RegisterParameterRequest
 /* @confidence: M — the 32-slot search/allocation, mapping-table update, sentinel kind and packed result match the raw body; global layouts are inferred from offsets. */
@@ -57,4 +57,4 @@ std::uint64_t RegisterParameterRequest(std::uint32_t symbol,
     return (static_cast<std::uint64_t>(mapping_value) << 32) | pool_index;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

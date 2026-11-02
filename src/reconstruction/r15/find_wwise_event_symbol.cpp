@@ -2,7 +2,7 @@
 // ReVault raw parent 100335423, reconstruction node 100600354; grade M.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4b910 — FindWwiseEventSymbol
 /* @confidence: M — preserves the locked lookup and reference acquisition. */
@@ -17,4 +17,4 @@ void* FindWwiseEventSymbol(std::uintptr_t registry, std::uint32_t event) {
     return symbol;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

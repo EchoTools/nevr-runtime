@@ -20,7 +20,7 @@ namespace NRadEngine::CMemBlock {
 void Resize(void* block, std::uint64_t bytes);
 }
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 namespace {
 
 void LockPlayerAudioMutex(void* mutex) {
@@ -182,4 +182,4 @@ void PlayOneOff(void* player, const char* emitter_name,
     UnlockPlayerAudioMutex(queue_lock);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

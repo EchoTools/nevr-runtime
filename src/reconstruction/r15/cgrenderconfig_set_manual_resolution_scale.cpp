@@ -6,13 +6,13 @@
 #include <cmath>
 
 namespace NRadEngine::CGRenderConfig {
-namespace reconstruction_detail {
+namespace nevr_reconstruction {
 extern float g_manualResolutionScale; // DAT_0389c1f0; ELF VA 0x379c1f0 at base 0x100000
 }
 
 void SetManualResolutionScale(float scale) {
     scale = std::fmax(scale, 0.01F); // fmaxnm with the 0.01f immediate
-    reconstruction_detail::g_manualResolutionScale =
+    nevr_reconstruction::g_manualResolutionScale =
         std::fmin(scale, 1.0F);      // fminnm; stored at ELF VA 0x379c1f0
 }
 

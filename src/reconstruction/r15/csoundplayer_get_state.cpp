@@ -2,7 +2,7 @@
 // ReVault raw parent 100227795, reconstruction node 100600536; grade M.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x144c084 — CSoundPlayer::GetState
 /* @confidence: M — disabled-audio behavior, output initialization, result translation, conditional symbol error, and return value match the complete body; state-query semantics remain at the named Wwise helper boundary. */
@@ -28,4 +28,4 @@ std::uint32_t GetState(std::uint32_t group) {
     return state;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

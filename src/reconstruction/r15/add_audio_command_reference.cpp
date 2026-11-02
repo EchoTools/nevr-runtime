@@ -4,7 +4,7 @@
 
 #include <cstddef>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4b960 — StoreAudioCommandReference
 /* @confidence: H — stores the supplied pointer through the destination and returns it. */
@@ -13,4 +13,4 @@ void* StoreAudioCommandReference(std::byte* destination, void* reference) {
     return reference;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction
