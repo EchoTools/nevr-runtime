@@ -1,3 +1,6 @@
+// NRadEngine::CGRenderConfig::SetAutoResolutionMaxScale(float)
+// Quest libr15.so VA 0x198d320; ReVault binary 576.
+// ReVault raw parent 100258552, reconstruction node 100600232; grade H: all nine instructions establish fmaxnm(value, 0.01f), fminnm(value, 1.0f) and the store.
 // @0x198d320 — NRadEngine::CGRenderConfig::SetAutoResolutionMaxScale(float)
 /* @confidence: H — all nine instructions establish fmaxnm(value, 0.01f), fminnm(value, 1.0f), and the store. */
 #include <cmath>

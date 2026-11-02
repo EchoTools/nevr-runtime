@@ -1,3 +1,6 @@
+// NRadEngine::CTimer::MilliSeconds
+// Quest libr15.so VA 0x12ccf34; ReVault binary 576.
+// ReVault raw parent 100219761, reconstruction node 100600269; grade M: arithmetic and global cache follow Quest raw, and the source clock methods are named in the raw body.
 // @0x12ccf34 — NRadEngine::CTimer::MilliSeconds
 /* @confidence: M — arithmetic and global cache follow Quest raw; source clock methods are named in the raw body. */
 #include <cstdint>
