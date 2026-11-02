@@ -180,6 +180,16 @@ add_library(nevr_r15_reconstruction STATIC
     r15/android_main.cpp
     r15/cg_engine_resources_initialize.cpp
     r15/query_collision.cpp
+    r15/c_task_kernel_execute_task.cpp
+    r15/cr15_net_game_apply_item_from_loadout.cpp
+    r15/cmem_block_dtor.cpp
+    r15/cmem_block_constructor.cpp
+    r15/cnca_game_space_send_component_event.cpp
+    r15/cnca_game_space_send_component_event_global_2arg.cpp
+    r15/clocal_component_handle_cr15_net_customization_cs_find.cpp
+    r15/sort_512_csimplekey_ccomponentsystem_csymbol64.cpp
+    r15/model_cs_set_material_property.cpp
+    r15/deferred_method_queue_queue_functor.cpp
     r15/resolve_zone.cpp
     r15/csys_string_length.cpp
     r15/cenvironment_get_global.cpp
