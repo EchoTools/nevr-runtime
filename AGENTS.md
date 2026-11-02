@@ -405,6 +405,41 @@ just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing
 ```
 
+### Quest APK
+
+Run these from your own shell. `tools/heavy_guard.py` refuses them inside a Claude Code session.
+
+Set these in the shell, never as arguments (a passphrase on the command line shows in `ps`):
+
+```sh
+export ANDROID_NDK_HOME=<NDK r26d directory>          # the one that holds toolchains/llvm
+export VCPKG_ROOT=<vcpkg checkout>
+export NEVR_STORE_APK=<unmodified store APK>
+export NEVR_QUEST_KEYSTORE=<the persistent keystore file>
+export NEVR_QUEST_KEYSTORE_PASS=<its store passphrase>
+```
+
+The build also needs `config/public-defaults.env` (`just worktree-setup` copies it from the main checkout; or copy `config/public-defaults.env.example`) and an nlohmann/json include tree, which `just preset=mingw-dev _vcpkg-mingw` installs. The repack needs `unzip patchelf zip zipalign apksigner aapt2 readelf nm keytool python3` on PATH.
+
+Tester APK of the working tree (the sentinel is a development build; no Windows build):
+
+```sh
+systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G env VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 just build-android
+systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G env VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 just android-repack-apk "$NEVR_STORE_APK"
+just quest-keystore-fingerprint       # compare with the signer of the app on the headset before installing
+just quest-install build/android-arm64/repack/r15_nevr-sentinel_signed.apk
+```
+
+The signed APK is `build/android-arm64/repack/r15_nevr-sentinel_signed.apk`. `just quest-install` takes its path as argument.
+
+Local package, Windows zip and Quest APK together (the tree must be clean and at `origin/main`, `just release-preflight`):
+
+```sh
+systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G env VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 just package-dev
+```
+
+Output: `build/package-dev/<sha7>/`, and the APK at `build/android-dev/repack/r15_nevr-sentinel_signed.apk`.
+
 Every release follows RELEASING.md.
 
 Releases are built by CI from a tag, never locally, and always from a draft (a draft fires no workflow, so the build is started by
