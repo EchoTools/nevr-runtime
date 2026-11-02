@@ -21,7 +21,7 @@ finding fixed. It deletes the branch and the worktree the same turn.
 | 2 | Coming | A webhook message "vX.Y.Z coming" with the contents. The webhook URL is the input `NEVR_RELEASE_WEBHOOK`, an environment variable the recipe reads. It is never a path into a machine's files or `.env`. Prior art, by name only: the echovrce-ops nakama-release runbook, whose webhooks are a hard gate before deploy. | (no recipe yet) |
 | 3 | Checks | On the staged set, only: signing, hashes, and the manifest entry. No device or gameplay test runs before the publish: release tests run after the release is cut, signed and published, on the distributed bytes. | (no recipe yet) |
 | 3f | Failure branch | A check fails: delete the staging directory, and send a short "not this time" on the same webhook. | (no recipe yet) |
-| 4 | Publish | On the owner's go: `gh release create vX.Y.Z <files…>` creates the tag, the release and all its assets in one step. No drafts and no "assets later". | (no recipe yet) |
+| 4 | Publish | On the owner's go: `gh release create vX.Y.Z --prerelease <files…>` creates the tag, the release and all its assets in one step. A release is published as a pre-release and is never left as a draft; there is no "assets later". Promoting it to stable is a separate act ("Names"). | (no recipe yet) |
 | 5 | Manifest | The signed manifest lists the release. | (no recipe yet) |
 | 6 | Quest APK | After the release is published: the APK goes to the release host. | `just publish-quest-apk vX.Y.Z` (exists) |
 | 7 | Test the release | Starts by proving the bytes: download exactly the files the published, signed manifest names, check each file's sha256 against the manifest, and refuse to test on a mismatch. Then install from the published release through the normal install path (the path a player takes) and run the checks below on the installed bytes. Tests run only after the signed pre-release is posted. | (no recipe yet) |
@@ -30,6 +30,10 @@ finding fixed. It deletes the branch and the worktree the same turn.
 
 Steps 1 to 3 touch nothing public. Step 4 is the only point at which a tag or a release is created, and it is never run
 before the staged set has passed step 3.
+
+KNOWN-WRONG #1865: the signer ("Sign", below) replaces the assets of a GitHub draft and nothing else, so a release signed after
+it exists has to be a draft first. The rule above is the end state: a draft is published as a pre-release or deleted in the same
+run, and none is left standing.
 
 **Test the release (step 7), for a combat release:**
 
