@@ -2,12 +2,15 @@
 import fcntl
 import os
 import pathlib
-import re
+import sys
 import time
 import shutil
 import subprocess
 import tempfile
 import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/verify-parallel.sh"
@@ -188,10 +191,9 @@ class PreRunBeforeFanOutTest(unittest.TestCase):
                        "test-quest-redirect", "test-quest-integration")
 
     def verify_recipe(self):
-        justfile = (REPO / "justfile").read_text()
-        match = re.search(r"^verify:\n((?:[ \t]+.*\n|\n)*)", justfile, re.M)
-        self.assertIsNotNone(match, "justfile no longer has a verify recipe")
-        return match.group(1)
+        body = just_recipe.body(just_recipe.read_justfile(), "verify")
+        self.assertIsNotNone(body, "justfile no longer has a verify recipe")
+        return body
 
     def test_the_quest_host_install_runs_before_the_parallel_block(self):
         body = self.verify_recipe()
