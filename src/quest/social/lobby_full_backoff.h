@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <map>
 
+#include "runtime/patch/lobby_full_backoff_rules.h"
+
 // Spacing for a lobby join the server refused with "lobby full" (#1001, the Quest twin of #889).
 //
 // The game re-issues a lobby join from its own state machine on every tick after a refusal. On the pinned
@@ -24,10 +26,11 @@ using LobbyKey = std::array<std::uint8_t, 16>;
 
 class FullLobbyBackoff {
  public:
-  static constexpr std::uint64_t kFirstWaitMs = 1000;
-  static constexpr std::uint64_t kMaxWaitMs = 30000;
-  static constexpr std::uint32_t kGiveUpAfter = 7;
-  static constexpr std::uint64_t kCooldownMs = 60000;
+  // The numbers are the PC policy's (runtime/patch/lobby_full_backoff_rules.h), one definition for both platforms.
+  static constexpr std::uint64_t kFirstWaitMs = nevr_lobby_full_backoff::kBaseDelayMs;
+  static constexpr std::uint64_t kMaxWaitMs = nevr_lobby_full_backoff::kMaxDelayMs;
+  static constexpr std::uint32_t kGiveUpAfter = static_cast<std::uint32_t>(nevr_lobby_full_backoff::kGiveUpAfter);
+  static constexpr std::uint64_t kCooldownMs = nevr_lobby_full_backoff::kGiveUpCooldownMs;
 
   enum class Verdict { kSend, kWait, kGiveUp };
 
