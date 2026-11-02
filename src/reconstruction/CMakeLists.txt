@@ -250,6 +250,16 @@ add_library(nevr_r15_reconstruction STATIC
     r15/patrol_update.cpp
     r15/set_full_screen_tint_node_enter.cpp
     r15/cr15_game_begin_offline_multiplayer.cpp
+    r15/ccomponent_handle_cphysics_cs_refresh_cache.cpp
+    r15/cg_engine_resources_shutdown.cpp
+    r15/cr15_net_client_lobby_create.cpp
+    r15/cr15_net_client_lobby_find.cpp
+    r15/cr15_net_client_lobby_switch_to.cpp
+    r15/cr15_net_game_begin_multiplayer.cpp
+    r15/cr15_net_game_profile_stat_int.cpp
+    r15/cr15_net_game_set_error_message.cpp
+    r15/party_lobby_unjoinable.cpp
+    r15/session_request_execute.cpp
     r15/cg_irradiance_volumes_query.cpp
     r15/compute_parent_to_level.cpp
     r15/enable_scenario.cpp
