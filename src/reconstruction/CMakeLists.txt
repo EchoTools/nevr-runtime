@@ -262,6 +262,16 @@ add_library(nevr_r15_reconstruction STATIC
     r15/translate_wwise_result.cpp
     r15/set_material_property_node_update.cpp
     r15/fire_bullet_local.cpp
+    r15/ccomponent_handle_cr15_net_actor_cs_find_internal.cpp
+    r15/ccomponent_handle_cr15_net_actor_cs_refresh_cache.cpp
+    r15/ccomponent_handle_cr15_net_bullet_cs_find_internal.cpp
+    r15/ccomponent_handle_cr15_net_bullet_cs_refresh_cache.cpp
+    r15/ccomponent_handle_cr15_net_heal_bubble_target_cs_refresh_cache.cpp
+    r15/cr15_net_var_cs_int.cpp
+    r15/cr15_net_var_cs_symbol.cpp
+    r15/scomponent_node_utils_actor.cpp
+    r15/scomponent_node_utils_component_handle_cr15_net_damageable_cs_script_actor_data.cpp
+    r15/scomponent_node_utils_component_handle_cr15_net_id_cs_symbol64.cpp
     r15/effect_time.cpp
     r15/levelname.cpp
     r15/fill_resource_file_request.cpp
