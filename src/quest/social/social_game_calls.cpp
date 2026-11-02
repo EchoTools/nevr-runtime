@@ -254,19 +254,6 @@ void SlotPartyUiTargetEntry(void* self, std::uint32_t user, std::uint64_t target
   UiEventFinish(self, &job);
 }
 
-void SlotRefreshFriendsEntry(void* self) noexcept {
-  if (self == nullptr) return;
-  TraceSlotCall(self, kRefreshFriends);
-  UiEventJob job;
-  job.game = GameEvents{};
-  job.symbol = 0;
-  job.slot = kRefreshFriends;
-  job.result = UiEventResult::kNotRun;
-  UiEventBegin(self, kRefreshFriends, 0, &job);
-  RunUiEvent(self, &job);
-  UiEventFinish(self, &job);
-}
-
 void SlotAcceptInviteEntry(void* self, std::uint32_t index) noexcept {
   if (self == nullptr) return;
   TraceSlotCall(self, kAcceptInvite);
