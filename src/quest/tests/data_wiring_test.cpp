@@ -19,6 +19,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <dlfcn.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <vector>
@@ -36,6 +37,20 @@
 #include "quest/data/sha256.h"
 #include "quest/tests/data_test_support.h"
 #include "quest/tests/test_check.h"
+
+// dladdr, as the data step asks it where the sentinel's own code lives (data_wiring.cpp OwnApkPath). g_dladdrMode 0 is libc's
+// answer; 1 returns 0 and names g_dladdrName, an APK-mapped library, so only the return code refuses it; 2 returns 1 and names
+// no file. This definition takes the place of libc's for the calls this executable makes, and forwards to libc's through
+// RTLD_NEXT in mode 0.
+int g_dladdrMode = 0;
+const char* g_dladdrName = "";
+extern "C" int dladdr(const void* address, Dl_info* info) noexcept {
+  using RealDladdr = int (*)(const void*, Dl_info*);
+  static const RealDladdr real = reinterpret_cast<RealDladdr>(dlsym(RTLD_NEXT, "dladdr"));
+  if (g_dladdrMode == 0) return real(address, info);
+  info->dli_fname = g_dladdrMode == 1 ? g_dladdrName : nullptr;
+  return g_dladdrMode == 1 ? 0 : 1;
+}
 
 namespace {
 
@@ -1085,6 +1100,26 @@ void WithoutAnApkPathThePackStepSaysSoAndTheGameContinues() {
   QCHECK(ReadFile(PackManifestPath(rig)) == kStockManifestBytes);
 }
 
+// OwnApkPath refuses when dladdr cannot name the sentinel's library, in both ways dladdr can fail: a return of 0, and a return
+// with no file name. The rig's APK is the one dladdr would name (mode 1 names it as an APK-mapped library), so without the
+// refusal the step would run on that APK and the reason would not be apk_path_unknown.
+void WhenDladdrFailsThePackStepHasNoApkPath() {
+  for (int mode : {1, 2}) {
+    Rig rig;
+    PackRig(rig);
+    const std::string named = rig.scratch.Path("game.apk") + "!/lib/arm64-v8a/libnevr.so";
+    rig.options.apk_path.clear();  // OwnApkPath decides; dladdr is the fake
+    g_dladdrName = named.c_str();
+    g_dladdrMode = mode;
+    rig.BootRequest();
+    g_dladdrMode = 0;
+    QCHECK(g_ends == 0);
+    QCHECK(Has(LineOf("pack_check"), "\"outcome\":\"none\"") && Has(LineOf("pack_check"), "\"reason\":\"apk_path_unknown\""));
+    QCHECK(ReadFile(PackManifestPath(rig)) == kStockManifestBytes);
+    QCHECK(!Exists(PackPackagePath(rig)));
+  }
+}
+
 void AStockManifestThePackDoesNotNameIsLeftAloneAndTheGameContinues() {
   Rig rig;
   PackRig(rig, true, "A-MANIFEST-OF-ANOTHER-BUILD");
@@ -1350,6 +1385,7 @@ int main() {
   AReleaseBuildPlacesThePackToo();
   AnApkWithNoPackLogsOneLineAndChangesNothing();
   WithoutAnApkPathThePackStepSaysSoAndTheGameContinues();
+  WhenDladdrFailsThePackStepHasNoApkPath();
   AStockManifestThePackDoesNotNameIsLeftAloneAndTheGameContinues();
   ASecondLaunchOverAPlacedPackIsCurrent();
   NoSpaceForThePackShowsTheMessageHoldsItAndEndsTheProcessWithReasonPackFailed();

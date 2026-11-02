@@ -30,6 +30,18 @@
 
 using namespace nevr_quest::plugin;
 
+// dladdr, as PlanPlugins asks it where this library was mapped from (plugin_runtime.cpp OwnDirectory). g_dladdrMode 0 is libc's
+// answer; 1 returns 0 and names /nonexistent/libnevr.so, so only the return code refuses it. This definition takes the place of
+// libc's for the calls this executable makes, and forwards to libc's through RTLD_NEXT in mode 0.
+int g_dladdrMode = 0;
+extern "C" int dladdr(const void* address, Dl_info* info) noexcept {
+  using RealDladdr = int (*)(const void*, Dl_info*);
+  static const RealDladdr real = reinterpret_cast<RealDladdr>(dlsym(RTLD_NEXT, "dladdr"));
+  if (g_dladdrMode == 0) return real(address, info);
+  info->dli_fname = "/nonexistent/libnevr.so";
+  return 0;
+}
+
 namespace {
 
 std::vector<nlohmann::json>& Lines() {
@@ -403,6 +415,22 @@ TEST(ASymlinkWhereTheManifestShouldBeIsUnreadableToo) {
   if (line == nullptr) return;
   CHECK_EQ(line->value("status", ""), std::string("unreadable"));
   CHECK_EQ(line->value("reason", ""), std::string("symlink"));
+}
+
+// OwnDirectory refuses when dladdr returns 0: the library directory is "", so the manifest is read from nowhere and the read says
+// no_library_dir. Mode 1 names a directory with no manifest in it, so without the refusal the read would say absent instead.
+TEST(WhenDladdrFailsTheManifestReadSaysNoLibraryDir) {
+  Scope scope;
+  g_dladdrMode = 1;
+  PlanPlugins({}, false);
+  g_dladdrMode = 0;
+  CHECK_EQ(ManifestLineCount(), 1);
+  const nlohmann::json* line = ManifestLine();
+  CHECK(line != nullptr);
+  if (line == nullptr) return;
+  CHECK_EQ(line->value("status", ""), std::string("unreadable"));
+  CHECK_EQ(line->value("reason", ""), std::string("no_library_dir"));
+  CHECK_EQ(line->value("level", ""), std::string("warn"));
 }
 
 TEST(ManifestIsReadOnceAndPlanningTwiceChangesNothing) {
