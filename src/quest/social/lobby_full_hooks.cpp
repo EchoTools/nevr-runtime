@@ -84,7 +84,14 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
   RefusalReads reads;
   if (lobbyFull) reads = ReadRefusal(self, msg);
   original(self, msg);
-  if (!lobbyFull || !reads.gateOpen) return;
+  if (!lobbyFull) return;
+
+  if (!reads.gateOpen) {
+    // The game returned at once on this refusal (its status is out of range), so it is neither counted nor shown.
+    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
+                        {{"status", "refusal_dropped"}, {"reason", "status_gate_closed"}});
+    return;
+  }
 
   LobbyKey key{};
   bool haveLobby = false;
@@ -97,18 +104,20 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
   }
   pthread_mutex_unlock(&g_mutex);
   char keyText[35];
-  if (haveLobby && d.verdict == Verdict::kWait) {
+  const char* lobbyText = haveLobby ? KeyText(key, keyText) : "unknown";
+  if (!haveLobby) {
+    // No join went through this hook, so there is no lobby to count the refusal against; the page is still shown.
+    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
+                        {{"status", "refusal_uncounted"}, {"reason", "no_join_recorded"}});
+  } else if (d.verdict == Verdict::kWait) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
-                        {{"status", "wait"},
-                         {"refusal", d.refusals},
-                         {"wait_ms", d.waitMs},
-                         {"lobby", KeyText(key, keyText)}});
-  } else if (haveLobby && d.verdict == Verdict::kGiveUp) {
+                        {{"status", "wait"}, {"refusal", d.refusals}, {"wait_ms", d.waitMs}, {"lobby", lobbyText}});
+  } else if (d.verdict == Verdict::kGiveUp) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
                         {{"status", "cooldown"},
                          {"refusals", d.refusals},
                          {"cooldown_ms", d.waitMs},
-                         {"lobby", KeyText(key, keyText)}});
+                         {"lobby", lobbyText}});
   }
 
   // The game shows a fixed page for code 8 and drops the service's message (#1443). Put the message on the error page,
@@ -118,8 +127,15 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
     sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
                         {{"status", "message_shown"},
                          {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
+                         {"lobby", lobbyText},
                          {"message_bytes", static_cast<std::uint64_t>(nevr_lobby_failure_message::MessageBytes(
                                                reads.message, sizeof reads.message))}});
+  } else {
+    // An empty message or no game object: the game's own page stays.
+    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
+                        {{"status", "page_unchanged"},
+                         {"reason", reads.game == nullptr ? "no_game_object" : "empty_message"},
+                         {"lobby", lobbyText}});
   }
 }
 
