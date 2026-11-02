@@ -405,6 +405,10 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     trap '[ "$done_ok" = 1 ] || rm -f "$signed"' EXIT
     cp -f "$apk" "$unsigned"
     zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
+    # zip stores each file's mtime in its entry, and the staged copies carry the time of this run. With SOURCE_DATE_EPOCH set
+    # (the build's commit time, for the determinism proof of #1935) every staged file gets that time, so two builds of one
+    # commit write the same entries. Unset, the entries keep their mtimes, as before.
+    [ -z "${SOURCE_DATE_EPOCH:-}" ] || find "$work/stage" -type f -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
     ( cd "$work/stage" && zip -q -0 -X "$unsigned" "${stage_libs[@]}" )
     if [ "${#combat_libs[@]}" -gt 0 ]; then ( cd "$work/stage" && zip -q -0 -X "$unsigned" "${combat_libs[@]}" ); fi
     ( cd "$work/stage" && zip -q -X "$unsigned" lib/arm64-v8a/libr15.so )
@@ -417,6 +421,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     # and put the manifest back. A 4-byte write: the entry keeps every other byte.
     unzip -o -q "$unsigned" AndroidManifest.xml -d "$work/manifest"
     version_code=$(python3 -I tools/quest_apk_version.py patch-manifest "$work/manifest/AndroidManifest.xml" "${version_source[@]}" --shim "$shim")
+    [ -z "${SOURCE_DATE_EPOCH:-}" ] || touch -h -d "@$SOURCE_DATE_EPOCH" "$work/manifest/AndroidManifest.xml"
     ( cd "$work/manifest" && zip -q -X "$unsigned" AndroidManifest.xml )
     # 5. page-align uncompressed .so, then sign (v2/v3) — align BEFORE sign.
     # The key is a private tmpfs copy for this one command, shredded when it returns; the passphrase
