@@ -9,8 +9,9 @@
 // Spacing for a lobby join the server refused with "lobby full" (#1001, the Quest twin of #889).
 //
 // The game re-issues a lobby join from its own state machine on every tick after a refusal. On the pinned
-// libr15.so build, CR15NetClientLobby::Join is at 0x1240ba8 and its refusal callback,
-// CR15NetClientLobby::LobbySessionFailureCB, is at 0x1240cc8 (link-time addresses, quest/social/lobby_full_hooks.h).
+// libr15.so build, CR15NetClientLobby::Join is at 0x1340ba8 and its refusal callback,
+// CR15NetClientLobby::LobbySessionFailureCB, is at 0x1340cc8 (the patch table's and ReVault's numbering; the pinned ELF
+// vaddr is 0x100000 less, quest/social/lobby_full_layout.h).
 // Nothing in the game waits between attempts.
 //
 // The key is the 16 bytes the join passes on to CNSLobby::RequestJoin (the message's field at +0x18). That the key

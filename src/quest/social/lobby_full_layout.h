@@ -10,9 +10,10 @@
 // Where the lobby-full hooks read the game's objects. Header-only and free of the game, so a host test can hand it a fake
 // lobby client and a fake message and check which bytes it reads (lobby_full_test.cpp).
 //
-// Addresses. libr15.so has two numberings. The patch table and the pinned targets use the ELF vaddr (CR15NetClientLobby::Join
-// 0x1240ba8, LobbySessionFailureCB 0x1240cc8). ReVault shows the same code at vaddr + 0x100000 (0x1340ba8, 0x1340cc8). Every
-// offset below is read from the ReVault decompilation of LobbySessionFailureCB (libr15.so, binary id 576, 0x1340cc8),
+// Addresses. libr15.so has two numberings. The patch table (quest/patch/libr15_patch_table.h) and ReVault use the same one:
+// CR15NetClientLobby::Join 0x1340ba8, LobbySessionFailureCB 0x1340cc8. The pinned ELF vaddr is that minus 0x100000 (0x1240ba8,
+// 0x1240cc8; libr15_patch_table_test.cpp pairs them). This file and the hooks name the table/ReVault address.
+// Every offset below is read from the ReVault decompilation of LobbySessionFailureCB (libr15.so, binary id 576, 0x1340cc8),
 // where `param_1` is the CR15NetClientLobby and `in_x1` is the message:
 //   `if (2 < *(int *)(param_1 + 0x448) - 4U) return;`                         the status gate
 //   `uVar7 = (ulong)*(char *)(*(long *)(in_x1 + 0x10) + 0x18);`               msg + 0x10 is the data, data + 0x18 the code
@@ -23,7 +24,9 @@
 // (`*(lobbyClient + 8)`, runtime/patch/lobby_full_backoff.cpp).
 namespace quest_social::lobby_full {
 
-// Join (pinned 0x1240ba8): `CNSLobby::RequestJoin(param_1 + 0x18, param_2)`; the key is the 16 bytes at msg + 0x18.
+// Join (0x1340ba8) hands its message pointer to `CNSLobby::RequestJoin` unchanged (`mov x1, x20`), so its code does not show
+// where the lobby's key lies in the message. The key is taken as the 16 bytes at msg + 0x18; that this names the lobby is
+// not measured yet (the device run in #1001 logs it).
 constexpr std::size_t kJoinKeyOffset = 0x18;
 constexpr std::size_t kFailureDataOffset = 0x10;  // *(msg + 0x10) is the failure data
 constexpr std::size_t kFailureCodeOffset = 0x18;  // data + 0x18 is the signed failure code
