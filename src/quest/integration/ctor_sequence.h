@@ -324,7 +324,7 @@ class Steps {
 ConstructorReport RunConstructorSequence(Steps& steps) noexcept;
 
 // The begin record of the constructor (#1391): one sentinel_ctor line, action=begin, with the version and the commit of this
-// build. entry.cpp passes nevr_build_stamp::ProjectVersion() and nevr_build_stamp::CommitShort() from its generated build header. Never throws.
+// build. entry.cpp passes nevr_build_stamp::ProjectVersion() and nevr_build_stamp::CommitShort() from the build stamp (core/build_stamp.h). Never throws.
 void LogConstructorBegin(const char* version, const char* commit) noexcept;
 
 }  // namespace nevr_quest::integration

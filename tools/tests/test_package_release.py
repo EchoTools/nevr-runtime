@@ -2,7 +2,7 @@
 
 A release is a version plus GitHub's pre-release flag. The packaging path has NO flag input and no word of
 the zip, its SHA256SUMS, the release notes or SIGNING.txt depends on it: promoting a release changes no byte.
-A local build is a development build (X.Y.(Z+1)-dev.N+sha) and is packaged under a dev name.
+A local build is a development build (X.Y.Z-dev.N+sha) and is packaged under a dev name.
 """
 
 import hashlib
@@ -234,6 +234,19 @@ class LocalDevPackageTest(PackageFixture):
                 self.assertEqual(result.returncode, 1)
                 self.assertIn(f"quest: no embedded {what}: the APK would need a config.yaml to log in", result.stderr)
                 self.assertFalse(self.out.exists())
+
+    def test_a_quest_build_info_of_another_version_is_refused_and_named(self):
+        # The Quest stamp names another version than the DLL: the gate records the mismatch, it does not fail on a missing key.
+        # The APK carries the code of the stamp's version, so the version check (not the code check) is what fails.
+        import quest_apk_version
+        other = "9.9.9-dev.1+0000000"
+        self.info.write_text(build_info(other))
+        self.write_apk(other, version_code=quest_apk_version.version_code_for(other))
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"quest: build info version '9.9.9-dev.1+0000000' is not the DLL's '{self.version}'", result.stderr)
+        self.assertNotIn("KeyError", result.stderr)
+        self.assertFalse(self.out.exists())
 
     def test_the_apk_must_carry_the_versionCode_of_this_build(self):
         # the store APK's own code (the repack was skipped or failed to stamp), and the code of another build
@@ -1129,7 +1142,7 @@ class ReleaseStagesTest(PackageFixture):
                         (version, COMMIT[:7].encode() + b"0", full),  # the same first 7 digits, a different 8th
                         (version, short.upper(), full.upper()),
                         (version, full),  # the full commit alone is not kCommit
-                        (version, short)):  # kCommit alone, without the build record's commit
+                        (version, short)):  # kCommitShort alone, without the build record's commit
             result = self.quest_check(self.quest_library(*strings))
             self.assertEqual(result.returncode, 1, strings)
             self.assertRegex(result.stderr, "no string (of 7 to 39 hex digits that is a prefix of|equal to) the commit")

@@ -49,8 +49,9 @@ import os, pathlib, re, subprocess, sys
 build_ninja, checkout = pathlib.Path(sys.argv[1]), sys.argv[2]
 env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 head = subprocess.run(["git", "-C", checkout, "rev-parse", "HEAD"], check=True, capture_output=True, text=True, env=env).stdout.strip()
-text = re.sub(r'(NEVR_GIT_COMMIT_FULL=..)[0-9a-f]{40}', lambda m: m.group(1) + head, build_ninja.read_text())
-build_ninja.write_text(text)
+stamp = build_ninja.parent / "generated" / "nevr_build_stamp.cpp"
+stamp.write_text(re.sub(r'(kCommitFull\\[\\] = ")[0-9a-f]{40}', lambda m: m.group(1) + head, stamp.read_text()))
+build_ninja.write_text(build_ninja.read_text())  # regenerating rewrites build.ninja, so the regen edge is done
 """
 
 
@@ -71,8 +72,8 @@ def pending_steps(build_dir):
 class SeedFixture(unittest.TestCase):
     PRESET = "p"
     WORKTREE_NAME = "wt"
-    DESCRIBE = None  # -DNEVR_GIT_DESCRIBE="<this>" on the compile commands, when set
-    COMMIT_DEFINE = True  # the compile commands carry -DNEVR_GIT_COMMIT_FULL="<HEAD>", as the root CMakeLists.txt does
+    DESCRIBE = None  # kDescribe of the build stamp unit, when set (the default is a clean describe string)
+    COMMIT_DEFINE = True  # the build stamp unit carries kCommitFull = HEAD, as the build's refresh step writes it
 
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="seed-build-tree-test-"))
@@ -92,26 +93,26 @@ class SeedFixture(unittest.TestCase):
         git(self.main, "commit", "-q", "--no-gpg-sign", "-m", "init")
         self.build = self.main / "build" / self.PRESET
         self.build.mkdir(parents=True)
-        define = ""
-        if self.DESCRIBE:
-            define += f' -DNEVR_GIT_DESCRIBE=\\"{self.DESCRIBE}\\"'
-        # The commit is defined on the one source that reads it (b.o), as the root CMakeLists.txt does for the identity
-        # readers; no other edge carries it, so a commit change rebuilds b.o and what links it.
-        commit = ""
-        if self.COMMIT_DEFINE:
-            commit = f' -DNEVR_GIT_COMMIT_FULL=\\"{git(self.main, "rev-parse", "HEAD").stdout.strip()}\\"'
+        # The build stamp unit (generated/nevr_build_stamp.cpp) carries the identity the seed tool reads: the commit
+        # (kCommitFull) and the describe string (kDescribe). The refresh step rewrites it at every build.
+        stamp_dir = self.build / "generated"
+        stamp_dir.mkdir()
+        head = git(self.main, "rev-parse", "HEAD").stdout.strip()
+        stamp_lines = [f'const char kCommitFull[] = "{head}";'] if self.COMMIT_DEFINE else []
+        stamp_lines.append(f'const char kDescribe[] = "{self.DESCRIBE or "v0.0.0-0-g" + head[:7]}";')
+        (stamp_dir / "nevr_build_stamp.cpp").write_text("\n".join(stamp_lines) + "\n")
         # An output spelled as an absolute path, as CMake does for some custom commands. build.ninja has the generator
         # edge CMake gives it: it is rebuilt when it is older than CMakeLists.txt, and the rebuild reads the commit again.
         (self.build / "build.ninja").write_text(
             "rule regen\n  command = python3 " + f"{self.main}/regen.py build.ninja {self.main}\n  generator = 1\n"
             f"build build.ninja: regen {self.main}/CMakeLists.txt\n"
-            f"rule cc\n  command = cc -MD -MF $out.d -I{self.main}/inc{define} -c $in -o $out\n"
+            f"rule cc\n  command = cc -MD -MF $out.d -I{self.main}/inc -c $in -o $out\n"
             "  depfile = $out.d\n  deps = gcc\n"
-            f"rule cc_identity\n  command = cc -MD -MF $out.d -I{self.main}/inc{define}{commit} -c $in -o $out\n"
+            f"rule cc_identity\n  command = cc -MD -MF $out.d -I{self.main}/inc -c $in -o $out\n"
             "  depfile = $out.d\n  deps = gcc\n"
             "rule link\n  command = cc $in -o $out\n"
             f"build a.o: cc {self.main}/src/a.c\n"
-            f"build b.o: cc_identity {self.main}/src/b.c\n"
+            f"build b.o: cc_identity {self.main}/src/b.c | generated/nevr_build_stamp.cpp\n"
             f"build {self.build}/c.o: cc {self.main}/src/c.c\n"
             f"build app: link a.o b.o {self.build}/c.o\n")
         # A path that has the checkout path as a prefix but is another directory: it must survive a rewrite.

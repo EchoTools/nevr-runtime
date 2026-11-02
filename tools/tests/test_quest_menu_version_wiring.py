@@ -75,7 +75,8 @@ class QuestMenuVersionIsAGotHook(unittest.TestCase):
         text = JUSTFILE.read_text()
         self.assertRegex(
             text,
-            r"src/quest/tests/menu_version_label_test\.cpp\s*\\\n\s*src/quest/social/menu_version_label\.cpp",
+            # the host test also links the build stamp's stub (menu_version_label.cpp includes core/build_stamp.h)
+            r"src/quest/tests/menu_version_label_test\.cpp\s*\\\n\s*\"\$out/menu_version_gen/stamp_stub\.cpp\"\s*src/quest/social/menu_version_label\.cpp",
         )
         self.assertIn('timeout 120 "$out/menu_version_label_test"', text)
 

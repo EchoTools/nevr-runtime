@@ -6289,7 +6289,7 @@ TEST(SystemInfo, IsCachedNotRemeasured) {
 TEST(BuildIdentity, ProjectVersionIsNotFallback) {
     const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // The CMake-built binary always has a real version. The "0.0.0" fallback
-    // only triggers for a manual compiler invocation without -DPROJECT_VERSION.
+    // only triggers for a build that does not link the build stamp (cmake/nevr_build_stamp.cmake).
     EXPECT_NE(id.project_version, "0.0.0");
     EXPECT_FALSE(id.project_version.empty());
 }

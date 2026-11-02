@@ -24,7 +24,7 @@ build/ and moved into place when it is complete:
      than the objects the main checkout built, so a differing file is made newer than every object in the copy and
      rebuilds.
 
-The commit is not a guard. The commit (NEVR_GIT_COMMIT_FULL), the version and the describe string (with `-dirty` when
+The commit is not a guard. The commit (kCommitFull in the build stamp unit, build/<preset>/generated/nevr_build_stamp.cpp), the version and the describe string (with `-dirty` when
 the tree was configured with uncommitted changes) are defined by the build stamp script (cmake/nevr_build_stamp.cmake),
 and CMake runs it at configure time. A copy made from a tree at another commit,
 or configured with uncommitted changes, therefore has its configure re-run on the first build: its build.ninja is
@@ -288,10 +288,10 @@ def align_source_mtimes(main: pathlib.Path, worktree: pathlib.Path) -> tuple[int
     return aligned, touched
 
 
-_COMMIT_DEFINE = re.compile(rb'NEVR_GIT_COMMIT_FULL=\\*"([0-9a-f]{40})')
+_COMMIT_IDENTITY = re.compile(rb'const char kCommitFull\[\] = "([0-9a-f]{40})";')
 
 
-_DESCRIBE_DEFINE = re.compile(rb'NEVR_GIT_DESCRIBE=\\*"([^"\\ ]*)')
+_DESCRIBE_IDENTITY = re.compile(rb'const char kDescribe\[\] = "([^"]*)";')
 
 
 def _git_env() -> dict:
@@ -300,14 +300,16 @@ def _git_env() -> dict:
     return {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")}
 
 
-def built_commits(build_ninja: pathlib.Path) -> set[str]:
-    """The commits the compile commands of a build tree carry (one commit per configure)."""
-    return {m.group(1).decode() for m in _COMMIT_DEFINE.finditer(build_ninja.read_bytes())}
-
-
-def built_modified(build_ninja: pathlib.Path) -> bool:
-    """True when the tree was configured with uncommitted changes (`git describe --dirty` ends in -dirty)."""
-    return any(m.group(1).endswith(b"-dirty") for m in _DESCRIBE_DEFINE.finditer(build_ninja.read_bytes()))
+def built_identity(stamp: pathlib.Path) -> tuple[set[str], bool]:
+    """The commits the build stamp unit (generated/nevr_build_stamp.cpp) carries, and whether its describe string says the
+    tree was built with uncommitted changes (ends in -dirty). A missing unit carries no commit and counts as modified,
+    so its identity is stale."""
+    if not stamp.exists():
+        return set(), True
+    text = stamp.read_bytes()
+    commits = {m.group(1).decode() for m in _COMMIT_IDENTITY.finditer(text)}
+    modified = any(m.group(1).endswith(b"-dirty") for m in _DESCRIBE_IDENTITY.finditer(text))
+    return commits, modified
 
 
 def leftover_main_path(copy: pathlib.Path, spellings: set[str], worktree: pathlib.Path) -> str | None:
@@ -409,7 +411,8 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
         return Result("not-seeded", f"cannot read the HEAD of {worktree}: {head.stderr.strip()}")
     # The identity the tree was configured with. A tree at another commit, or configured dirty, carries another one, so
     # its configure is re-run (see the module docstring); a tree that matches is copied as it is.
-    identity_stale = built_commits(src / "build.ninja") != {head.stdout.strip()} or built_modified(src / "build.ninja")
+    built_commit_set, built_dirty = built_identity(src / "generated" / "nevr_build_stamp.cpp")
+    identity_stale = built_commit_set != {head.stdout.strip()} or built_dirty
     busy = _running_in(src)
     if busy:
         return Result("not-seeded", f"a process is running in {src} (a build or a test): {busy[0]}")

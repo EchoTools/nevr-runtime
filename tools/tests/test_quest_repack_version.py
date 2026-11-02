@@ -229,7 +229,7 @@ class RepackRefusalTest(RepackFixture):
         self.assert_refused(self.repack(), f"major {MAJOR}")
 
     def test_the_version_a_build_without_git_reports_is_refused(self):
-        # cmake/set_project_version_from_git.cmake leaves "1.0.0" when git is absent: a release-looking version
+        # a version of "1.0.0" (the value a build reports without a version to read) is a release-looking version
         # that would give a code far below every published build's
         self.make_inputs("1.0.0")
         self.assert_refused(self.repack(), "1.0.0", f"major {MAJOR}")

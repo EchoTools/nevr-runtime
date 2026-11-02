@@ -14,10 +14,9 @@ Windows host and no binutils.
 value, or a version other than the one the DLL's own NEVR-BUILD literal states (or --version) exits 1. Exit 0
 means every field of both files is exactly what EXPECTED_FILES and the version say.
 
-The 4-part numeric version Windows needs is MAJOR.MINOR.PATCH.DISTANCE of the nearest release tag: a release
-`X.Y.Z` is X.Y.Z.0 and a development build `X.Y.(Z+1)-dev.N+sha` is X.Y.Z.N, so the number sorts like the semver
-string: after the tag it descends from and before the next release. (A development build exactly on a tag, distance
-0, has the tag's number; it differs from the release in its strings.)
+The 4-part numeric version Windows needs is MAJOR.MINOR.PATCH.0: a release `X.Y.Z` and a development build
+`X.Y.Z-dev.N+sha` (X.Y.Z is the committed VERSION) both carry X.Y.Z.0 (#1935). The development number lives in the
+identity literal, not in the file version; the strings differ.
 """
 from __future__ import annotations
 
@@ -50,7 +49,7 @@ EXPECTED_FILES = {
     "echovr_server.exe": {"FileDescription": "nEVR dedicated server launcher", "file_type": VFT_APP},
 }
 
-# A release (X.Y.Z) or a development build (X.Y.(Z+1)-dev.N+sha), as set_project_version_from_git.cmake writes it.
+# A release (X.Y.Z) or a development build (X.Y.Z-dev.N+sha, X.Y.Z from VERSION), as cmake/nevr_build_stamp.cmake writes it.
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-dev\.(0|[1-9][0-9]*)\+[0-9a-f]{7,40})?$")
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
 

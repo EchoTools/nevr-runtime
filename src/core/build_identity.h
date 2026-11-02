@@ -16,8 +16,8 @@
 namespace nevr_build_identity {
 
 struct Info {
-  /// Semver from git tags, e.g. "1.2.3". Set by CMake from
-  /// set_project_version_from_git.cmake.
+  /// The build's version: X.Y.Z for a release, X.Y.Z-dev.N+sha for a development build (X.Y.Z from the committed
+  /// VERSION). Stamped by cmake/nevr_build_stamp.cmake.
   std::string project_version;
 
   /// Short commit hash, e.g. "abc1234". Set by CMake from git rev-parse.

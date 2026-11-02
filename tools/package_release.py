@@ -28,7 +28,7 @@ file depends on that flag, so promoting a release changes no byte: this tool has
       record are separate NUL-bounded strings, so each is matched whole.
   package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --installer-exe ... --installer-compat-exe ... --apk ... --pc-header ...
                      --quest-header ... --quest-build-info ...        (`just package-dev`, a LOCAL build)
-      the full gate for a local development build (its version is X.Y.(Z+1)-dev.N+sha, never a release),
+      the full gate for a local development build (its version is X.Y.Z-dev.N+sha, never a release),
       then the same tree + seal, with the tester Quest APK, its SHA256SUMS and notes. Never attached to a
       release.
 
@@ -292,7 +292,7 @@ def gate(args, work: Path) -> dict:
     version, _ = identity_in(Path(args.runtime_dll).read_bytes(), "windows") if not problems else (None, None)
     if version is not None:
         if info["project_version"] != version:
-            problems.append(f"quest: build info version '{info['kVersion']}' is not the DLL's '{version}'")
+            problems.append(f"quest: build info version '{info['project_version']}' is not the DLL's '{version}'")
         if version.encode() not in sentinel.read_bytes():
             problems.append(f"quest: version {version} is not in the sentinel library")
         if args.commit[:7].encode() not in sentinel.read_bytes():
