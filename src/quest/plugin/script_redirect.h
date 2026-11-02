@@ -100,6 +100,10 @@ const char* ResultName(NevrScriptRedirectResult result) noexcept;
 // second registration finish there and shows the first one then refuses (the claim, not an earlier look, decides).
 void SetBeforeClaimHookForTest(void (*hook)() noexcept) noexcept;
 
+// Tests only. Makes the registration claim look held (true) or free (false), as if another registration were still deciding:
+// a test then shows RegisterIn refuses on the claim itself, before it looks at the registry.
+void SetClaimHeldForTest(bool held) noexcept;
+
 // Clears the registration, the per-load logging switch and the claim hook. Tests only.
 void ResetForTest() noexcept;
 

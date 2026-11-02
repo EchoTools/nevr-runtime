@@ -40,6 +40,7 @@ char LevelLetter(sentinel::LogLevel level) {
     case sentinel::LogLevel::kInfo: return 'I';
     case sentinel::LogLevel::kWarn: return 'W';
     case sentinel::LogLevel::kError: return 'E';
+    case sentinel::LogLevel::kDebug: return 'D';
   }
   return '?';
 }
@@ -445,7 +446,29 @@ void RegistrationClaimsBeforeItLooks() {
   char buf[sr::kNameCapacity];
   QCHECK(sr::RewriteLoadName(kNameC, buf, sizeof buf) == kNameC);  // the first one's third name was never registered
   QCHECK(Has("\"reason\":\"already_registered\"") && Has("\"plugin\":\"first\""));
+  QCHECK(Has("\"reason\":\"already_registered\"") && Has("\"registry\":2"));  // the refusal reports the registry in force
   RemoveDir(g_claimDir, both, 3);
+  sentinel::SetLogSink(nullptr);
+  sr::ResetForTest();
+}
+
+// A claim another registration still holds refuses on the claim itself: the registry is empty here, so only the claim
+// can be the reason.
+void HeldClaimRefuses() {
+  sr::ResetForTest();
+  g_lines.clear();
+  sentinel::SetLogSink(&Capture);
+  const char* const both[] = {"lib37f88adb0d8066f7_q15t.so", "libac4cd8e0a786d5c5_q15t.so"};
+  g_claimDir = MakeDir(both, 2);
+  QCHECK(!g_claimDir.empty());
+  const std::uint64_t pair[] = {kA, kB};
+  sr::SetClaimHeldForTest(true);
+  QCHECK(sr::RegisterIn(g_claimDir.c_str(), "late", pair, 2) == NEVR_SCRIPT_REDIRECT_ALREADY_ARMED);
+  QCHECK(sr::ArmedCount() == 0);
+  QCHECK(Has("\"reason\":\"already_registered\"") && Has("\"plugin\":\"late\""));
+  sr::SetClaimHeldForTest(false);
+  QCHECK(sr::RegisterIn(g_claimDir.c_str(), "late", pair, 2) == NEVR_SCRIPT_REDIRECT_OK);
+  RemoveDir(g_claimDir, both, 2);
   sentinel::SetLogSink(nullptr);
   sr::ResetForTest();
 }
@@ -476,6 +499,7 @@ int main() {
   OpenRedirectedPaths();
   RegisterFromOwnDirectory();
   RegistrationClaimsBeforeItLooks();
+  HeldClaimRefuses();
   StateLine();
   ResultNames();
   if (quest_test::Failures() != 0) {

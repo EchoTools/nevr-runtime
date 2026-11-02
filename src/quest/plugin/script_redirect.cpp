@@ -62,7 +62,7 @@ const char* ReasonDetail(const char* token) noexcept {
 
 NevrScriptRedirectResult Refuse(NevrScriptRedirectResult result, const char* who, const char* reason) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kError, "script_redirect",
-                      {{"op", "register"}, {"result", ResultName(result)}, {"plugin", who}, {"registry", 0},
+                      {{"op", "register"}, {"result", ResultName(result)}, {"plugin", who}, {"registry", ArmedCount()},
                        {"reason", reason}, {"detail", ReasonDetail(reason)}});
   return result;
 }
@@ -294,6 +294,8 @@ void SetLogEveryLoad(bool on) noexcept { g_logEveryLoad.store(on, std::memory_or
 bool LogsEveryLoad() noexcept { return g_logEveryLoad.load(std::memory_order_relaxed); }
 
 void SetBeforeClaimHookForTest(void (*hook)() noexcept) noexcept { g_beforeClaimHook.store(hook, std::memory_order_release); }
+
+void SetClaimHeldForTest(bool held) noexcept { g_busy.store(held); }
 
 void ResetForTest() noexcept {
   g_count.store(0, std::memory_order_release);
