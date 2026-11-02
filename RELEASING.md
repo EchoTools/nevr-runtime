@@ -122,7 +122,9 @@ gh attestation verify <file> -R EchoTools/nevr-runtime
 ```
 
 The attestation covers the unsigned build output CI attested, not a file the signer replaced. For a replaced file the
-evidence is the Authenticode check and the signer's decision record.
+evidence is the Authenticode check and the signer's decision record. So `gh attestation verify` exits non-zero for the signed
+zip (`HTTP 404: Not Found` from the attestations API) and still exits 0 for the Quest library, which the signer does not
+replace; that failure is the signer's work, not a bad release, and the checks on a signed set do not run it.
 
 ## Immutable releases
 
@@ -141,7 +143,7 @@ is turned on; it does not touch earlier ones.
 Only from the staged set that has passed step 3. The tag and the publish cannot be undone.
 
 ```sh
-gh release create vX.Y.Z <staged files…>     # step 4: the tag, the release and all its assets, in one step (no recipe yet)
+gh release create vX.Y.Z --prerelease <staged files…>     # step 4: the tag, the release and all its assets, in one step (no recipe yet)
 ```
 
 Step 4 is the only creation of a tag or a release. The release body is written from the signed files (see "Write the release
@@ -245,6 +247,143 @@ same loader asset plus private plugin libraries that stay outside this repositor
 `tools/publish_quest_apk.py vX.Y.Z --variant q15t`, with no signer call and no manifest entry. The combat APK is built by
 `just release-quest-combat-apk`. Neither is in the manifest through this document's flow.
 
+## The Quest half of the train
+
+`tools/quest_release_timer.py` finishes the Quest half of a release as the workflows cut it today: it takes a draft or a
+published tag, so this section describes the draft path of KNOWN-WRONG #1865 until that lands.
+
+The Quest APK is built from the store game and signed with the Quest signing key, and the R2 credential is the publisher's, so no
+workflow can build or upload it. The train publishes the GitHub release; a scheduler on the publisher's machine runs
+`tools/quest_release_timer.py --probe` first (the repository ships no unit for it). The probe makes one GitHub call and starts the run only when there is work: a
+draft with its loader asset uploaded, a published tag that is not done with fewer than three counted failures and none in the
+last 30 minutes, or no run started in the last 30 minutes. A run for a draft builds the APK while the signer runs
+(`build_apk`), polls the release every 10 seconds for up to 45 minutes (`await_published`), and on publication checks the
+APK's loader against the published asset (`verify_loader`) and that beta has not moved (`recheck_beta`), then runs
+`publish_apk` and the unchanged beta dispatch. Nothing is uploaded to R2 while the release is a draft, because the signer's
+`put-quest-apk` accepts only a published release. A draft that is deleted, or not published in 45 minutes, is recorded as
+`draft_abandoned` and left to the published path; its failures before its publication are not counted. A scheduled run runs
+`tools/quest_release_timer.py --stage-draft`, which takes a qualifying draft or else the newest published tag.
+
+The timer takes the **newest tag only**: the newest draft that qualifies (above), or else the newest published tag. A
+release that is not the newest when the timer first sees it is never built, because a later tag supersedes it. That is
+intended. A tag is built by hand (`--tag vX.Y.Z`) when it must be.
+
+It runs from a clone of the repository that the publisher keeps for it, named by `QUEST_RELEASE_REPO` (default: the clone the script sits in). It fetches `origin/main` itself, and the `checkout` step refuses, as a `refused` record, unless the clone is clean and HEAD is the freshly fetched `origin/main`. The `tags` step then refuses, the same way, while any tag in that clone is not on origin or points at another commit there (the rule of `tools/release_preflight.py`, which `just release-quest-apk` runs later); the refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted remove and restore commands, with the full object id, for each tag it lists.
+
+1. Takes the newest tag (above). A tag that has a `done` record in the log is left alone. A tag that has
+   failed three times is not retried: the run writes `skipped_after_failures`, with the step and the part of the last failure, and exits 0.
+   `python3 tools/quest_release_timer.py --tag vX.Y.Z --reset-failures` (the tag is required) records `failures_reset` for that
+   tag and does nothing else; only the failures after the newest reset count toward the three. Use it after fixing what made a tag fail three times (a stale pin, say), then run the tag again.
+   A dirty or stale checkout, a local tag origin does not have, or a missing credential, is a refusal that is logged and never counts toward the three failures.
+2. Builds the release-signer from a snapshot of its `main` (`QUEST_RELEASE_SIGNER_REPO`, a local clone of the signer repository), and reads `verify-manifest --live`. A tag that beta already
+   lists needs no release build: the run goes on to the variant (below). Otherwise the beta release must list a `game-data` artifact (the zip the new release carries), whose
+   name and size are noted; without one the run fails before it builds.
+3. Makes a clean worktree at the tag and waits while two or more `ninja` processes run. Then, in `nevr-builds.slice` (8G), the
+   `configure` step runs `just configure` (the vcpkg install that the new worktree lacks), and `just release-quest-apk` runs
+   after it.
+4. Runs `tools/publish_quest_apk.py` with `--extra-out`: the APK and its sidecar go to R2 and are fetched back from the
+   public host, and the signer's claim is kept for the manifest.
+5. Dispatches `sign-manifest.yml` in the release-signer repository with `action=publish`, `channel=beta`, that claim as
+   `extra_artifacts` and `dry_run=false` (a live publish with no dry run, on the owner's standing word), and watches it.
+   A run is accepted only when the jobs that publish (`Commit the manifest record`, `Publish to R2`, `A run that
+   published nothing is red`) all concluded `success`; a green run with a skipped one is a failure.
+6. Requires `verify-manifest --live` to list the tag on beta, and requires the manifest the public host serves (held to the
+   sha256 the signer verified) to list, in the new release, the same `game-data` artifact by name and size. A missing or
+   changed entry is a failure, never `done`.
+7. Builds and publishes the variant APK, when it is configured (below).
+8. Removes the worktree, the signer snapshot and the variant scratch by exact path.
+
+Stable stays an owner step (`approve-stable`); the timer only publishes beta. To stop the timer and the train from moving beta forward behind a rollback, see "Emergency: roll beta back". **Credentials go only where they are used:**
+the R2 credential to `publish_apk` and `variant_publish`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
+build included, gets an environment without them. Every step appends a JSON line to
+`$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
+cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (the stdout of `curl`, `gh` and the signer is remote content and is left out), the inputs come from the environment of the run: the R2 credential (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), `RELEASE_PUBLIC_BASE`, and `QUEST_RELEASE_SIGNER_REPO`, a local clone of the release-signer repository (`build_signer` builds from its `main`; there is no default). A missing one is a `refused` record that names it, and the run exits 1. The R2 credential is never written into the log or into a command.
+
+**The variant APK.** Each release also gets an unlisted second APK, `nevr-runtime-vX.Y.Z-q15t-quest.apk` with its `.sha256`,
+published under the same `nevr-runtime/vX.Y.Z/` prefix and never listed in the manifest. It is the same repack as the main APK
+(step 3) from the release's own loader asset, signed with the same key, plus two plugin libraries (`libq15t.so` and `libq15t_early.so`) from a
+private build that stays outside this repository, so the two APKs of one version can always be compared. The timer builds it
+in the same run as the main APK, after the main release is complete (published, listed and verified live):
+
+- `variant_pins` copies each library into a private scratch directory (mode 0700, files 0600), hashes the copy, holds it to
+  its pin and packages the copies, so a file that changes afterwards is not what is built;
+- `variant_build` runs `just release-quest-variant-apk vX.Y.Z <libq15t.so>:<libq15t_early.so>` in the same worktree, after
+  the same configure, in the same slice as the main build (it writes `build/quest-release/vX.Y.Z/variant/`). Its whole output
+  goes to `variant-vX.Y.Z-build.log` in the timer's work directory, a file that is 0600 from the moment it is opened, kept when
+  the step fails and removed when the variant is done;
+- `variant_publish` runs `tools/publish_quest_apk.py vX.Y.Z --variant q15t`: `rclone copyto --ignore-existing` for the APK and
+  its `.sha256`, then the same fetch-back by size and sha256 from the public host. There is no signer call and no manifest
+  claim, an object already on the host is never replaced, and only the R2 credential is in its environment.
+
+It is optional. The run reads, from its environment, `NEVR_VARIANT_DIR` (the directory holding the two libraries) and `NEVR_VARIANT_PINS` (a `sha256sum`-format file
+with exactly one `<64 hex>  <name>` line per library); neither is in this repository. Neither value is logged or given to
+a command, and each is replaced by `<redacted>` in anything written; the records name the two files, their sizes and their
+pinned sha256 only. With both unset the run logs `variant_not_configured` once and does nothing else. Exactly one set, a pins
+file with a missing, extra, duplicate or malformed line, a missing library, or a sha256 that differs from its pin is a failure
+that names the file, never a skip.
+
+A failing variant step never blocks or undoes the main release, which is complete by then. It is recorded as `failed` with the
+step (`variant_pins`, `variant_build`, `variant_publish`, or `variant_exists` and the shared `worktree`, `build_slot` and
+`configure` when the tag was already listed), the run exits 1, and it counts toward the same three
+tries. A failure of a variant step carries the step, the program and its exit code, never a tail of the program's output (the
+plugin check prints the plugin's own symbol names): the output of `variant_build` is in the 0600 file the failure names, and
+the publish tool's own log (`publish-quest-apk.jsonl`) has the reasons of `variant_publish`. Every `failed` and `refused`
+record carries `part`: `main` until the main release is complete (published, listed and verified live), `variant` after it. The timer writes `main_complete` for the tag, once, at that point, and a later run whose tag has it starts as `variant`, so a failure of `build_signer` or `check_listed` on a variant-only retry is the variant's. In the already-listed path `main_complete` is written at once; a tag whose history has no `main_complete` (older records) is `main` until `check_listed` says it is listed, as before. The `skipped_after_failures` record names the step and the part of the last failure, so it says whether the variant or the main release gave up.
+`done` is written only when the variant is done, so the next run finds the tag listed and checks the host for the variant pair
+(`variant_exists`, below). An exception that no step expected (a broken answer from the host is one of the expected ones) is
+recorded as `failed` with the step `unexpected`, naming its class and where it happened and never its text, with `part` as above;
+the worktree and the scratch are removed, the run exits 1, and it counts toward the three tries like any other failure.
+
+The private copies of the libraries are in `variant-vX.Y.Z` in the timer's work directory, which carries the marker file
+`.made-by-quest-release-timer` from the moment the timer makes it. Every run that reaches the release list (or has `--tag`), the
+already-listed path and a failing run included, removes a directory of that name that carries the marker (a killed run's leftovers): the files first, then the marker, then the directory, so
+a sweep that fails part way leaves a directory that is still marked and the next run retries it. It records
+`variant_scratch_removed`; a directory without the marker, or a link, is never removed, and the pins step then fails because it
+cannot make its own.
+
+`variant_exists` GETs the APK, following no redirect. 404 means it is absent: the variant is built and published alone, in a
+worktree of its own that the run removes, with no second manifest publish. An APK that is there (200, not HTML) is listed
+only when its `.sha256` is there too, is the one line `<sha256>  <variant name>`, and states the sha256 of the APK as the host
+serves it (hashed as it streams in); that logs `variant_listed`, builds nothing and finishes the tag. Any other answer for
+either file is a failure.
+
+**One run at a time.** A run that does work takes a non-blocking lock on `timer.lock` in the timer's work directory and holds it
+until it ends. A run that finds it held (a hand `--tag` run while the timer's is working, say) records `busy`, prints one line
+to stderr and exits 0 having done nothing, so it can neither sweep a live run's scratch nor publish twice. `--reset-failures` does no work and takes no lock.
+
+**A completed main release is never run again.** A tag whose history has `main_complete` takes the variant-only path
+whatever beta lists: no signer is built, and `check_listed` and the dispatch are not run; the run records
+`variant_only` and goes straight to the variant pair check. The variant does not depend on beta, so a rollback, a hand
+publish or a hand `--tag` of an older release cannot make the timer publish the main release to beta again. A tag without
+`main_complete` and a beta that lists another release takes the full path, as before.
+
+**A half-published or mismatched pair.** When the APK is there and the sidecar is missing, malformed, names another file or
+states another digest, `variant_exists` fails naming the two files and which check failed, and it rebuilds nothing. It
+says so only when the APK's read was provably complete (its declared `Content-Length` equals the bytes received, and the host
+sent them unencoded) and the sidecar's too; a digest that disagrees with a body that ends with the connection, arrives
+chunked or encoded, or has no declared length is `could not confirm the answer was complete`, without the pointer to this
+repair, and the next run asks again (the request asks for `Accept-Encoding: identity`). The pair is not rebuilt: the
+publisher's upload never replaces an object (`rclone copyto --ignore-existing`), so a rebuild could not repair it, and a
+different APK at that name is not the timer's to overwrite. A body that came in short of its `Content-Length`, a connection
+that broke off or an answer that is not HTTP is not a mismatch: it fails as `the answer broke off` or `no answer`, without the
+pointer to this repair, and the next run asks again. The repair is by hand with the publisher's credential (the R2 credential in the run's environment), outside the timer, and it needs a digest that comes from the build that was published, never from the
+host: **never copy the digest from the error message into the sidecar**, because that would certify whatever is on the host.
+Take the digest from the `local_files` record of the run that built and put up the pair (in `publish-quest-apk.jsonl`; the
+run's other records are `start`, `put_variant_apk`, `put_sidecar`, `fetch` and `published`). It gives the sha256 and size of
+the build that run published, is written before the upload and is local to this machine; the build's own directory is gone,
+because the timer always removes its worktree when a run ends. After confirming that the object on the host has that size,
+replace the sidecar with the single line
+`<that sha256>  nevr-runtime-vX.Y.Z-q15t-quest.apk`, as `sha256sum` writes it. If there is no such record, or the size
+differs, delete BOTH objects from the release prefix instead. Either way, run
+`python3 tools/quest_release_timer.py --tag vX.Y.Z --reset-failures` and let the next run check the pair again (an absent APK
+is built and published as above).
+
+Run one tag by hand, from a clone of the repository, with the environment above set:
+
+```sh
+python3 tools/quest_release_timer.py --tag vX.Y.Z
+```
+
 ## Game-derived packages
 
 A package derived from the game's own files (a content pack, the EchoCombat combat pack included) follows these rules:
@@ -291,8 +430,9 @@ fault in the manifest, a service or a player's own files is not cured by moving 
 **Where, and as whom.** Run it from a clean checkout of nevr-runtime `main`, on the machine that runs the Quest release timer,
 because it reads that timer's lock (`timer.lock`, in the timer's work directory) and refuses while a run holds it. The account
 `GH_BIN` runs as must be able to dispatch workflows on the release-signer repository and to set repository variables on
-`EchoTools/nevr-runtime`. The manifest host's public base is `RELEASE_PUBLIC_BASE`, which the tool requires (the host is named in
-`docs/reference/verifying-a-release.md`, "Quest APKs"). The release signer is `RELEASE_SIGNER_BIN` with `RELEASE_SIGNER_DIR`, or
+`EchoTools/nevr-runtime`. When `GH_BIN` is unset the tool uses `gh`, which must be signed in as that account; export `GH_BIN`
+before you start, since the fourth line below uses it. The manifest host's public base is `RELEASE_PUBLIC_BASE`, which the tool
+requires (the host is named in `docs/reference/verifying-a-release.md`, "Quest APKs"); the tool refuses loudly if it is empty. The release signer is `RELEASE_SIGNER_BIN` with `RELEASE_SIGNER_DIR`, or
 else `QUEST_RELEASE_SIGNER_REPO`, a local clone of the signer repository.
 
 ```sh
