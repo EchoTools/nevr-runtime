@@ -113,6 +113,20 @@ BRAND_PROSE_SPELLINGS = {
     "installer/tests/nevr_root.rs": {"nEVR"},  # the refusal reason the test asserts (#1353)
     "tools/package-release/install.ps1": {"nEVR"},  # the header comment on -Root (#1353)
 }
+# Namespaces the game's own binary uses. src/reconstruction takes each from the binary: it is the qualifier of a
+# function the file cites by its game address (`// @0x... — NRadEngine::CMemory::Compare`), or of a game API the file
+# calls (`CSysWindow::IsVirtual`). docs/standards/naming.md: names that belong to the game keep their own spelling.
+GAME_NAMESPACES = frozenset({
+    "CBroadcaster", "CGRenderConfig", "CGS", "CHashTable", "CMatSym", "CMemBlock", "CMemory", "CMemoryContext",
+    "CSoundEmitter", "CSoundPlayer", "CSysNet::SAddress", "CSysTime", "CSysWindow", "CTimer", "CVR", "NR15RestAPI",
+    "NRadEngine::CGRenderConfig", "NRadEngine::CMemBlock", "NRadEngine::CMemory", "NRadEngine::CSoundEmitter",
+    "NRadEngine::CSoundPlayer", "NRadEngine::CSysNet", "NRadEngine::CSysTime", "NRadEngine::NRadGame",
+    "NRadEngine::NRadGame::NR15RestAPI", "NRadGame", "NWriteLog", "SBroadcasterData", "SComponentNodeUtils",
+})
+# Namespaces that src/reconstruction wrote, not the game's: `NRadEngine::AudioPost` groups functions the file defines
+# under bare names (`// @0x2a490d0 — BeginAudioCommandScope`), and `reconstruction_detail` is a helper namespace. Both break
+# the rule. The rename is in src/reconstruction, which this change does not edit. KNOWN-WRONG #1910
+KNOWN_WRONG_NAMESPACES = frozenset({"NRadEngine::AudioPost", "NRadEngine::NRadGame::reconstruction_detail"})
 
 
 def project_files():
@@ -222,8 +236,9 @@ class NamingTest(unittest.TestCase):
         self.assertEqual(stray, {}, "these namespaces are nevr_<area> now (docs/standards/naming.md)")
 
     def test_every_namespace_is_nevr_or_the_games(self):
-        # The rule is `nevr` or `nevr_<area>` (#131). The two PascalCase namespaces left are named here with
-        # the reason; a new one fails this test, and an entry whose namespace is gone fails it too.
+        # The rule is `nevr` or `nevr_<area>` (#131). The game's own namespaces are GAME_NAMESPACES; the two
+        # PascalCase namespaces left are named here with the reason; a new one fails this test, and an entry whose
+        # namespace is gone fails it too.
         exceptions = {
             # The hooking abstraction every patch calls; the name predates the rule.
             "src/core/hooking.h": {"Hooking"},
@@ -239,6 +254,13 @@ class NamingTest(unittest.TestCase):
                 m = decl.match(line)
                 if m and m.group(1) not in {"EchoVR", "NRadEngine"}:
                     found.setdefault(path, set()).add(m.group(1))
+        declared = set().union(*found.values())
+        self.assertEqual(GAME_NAMESPACES - declared, set(),
+                         "GAME_NAMESPACES names a namespace the tree no longer declares")
+        self.assertEqual(KNOWN_WRONG_NAMESPACES - declared, set(),
+                         "KNOWN_WRONG_NAMESPACES names a namespace the tree no longer declares")
+        found = {path: names - GAME_NAMESPACES - KNOWN_WRONG_NAMESPACES for path, names in found.items()}
+        found = {path: names for path, names in found.items() if names}
         self.assertEqual(found, exceptions, "namespaces are nevr or nevr_<area> (docs/standards/naming.md)")
 
     def test_every_legacy_spelling_is_still_present(self):

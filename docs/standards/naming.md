@@ -89,6 +89,10 @@ separate namespace is an open ABI decision, issue #130.
 - Two PascalCase namespaces: `Hooking` (`src/core/hooking.h`, the hooking abstraction every patch calls; it
   predates the rule) and `EchoVR::Symbols` with its nested `Social` and `Tcp` (`src/abi/symbols.h`, named after
   the game's symbol tables).
+- The game's own namespaces that `src/reconstruction` takes from the binary (`NRadEngine::CMemory`, `NRadGame`,
+  `NWriteLog`, `CVR`, ...) keep the game's spelling; `GAME_NAMESPACES` in `tools/tests/test_naming.py` lists them.
+  Two namespaces the reconstruction wrote (`NRadEngine::AudioPost`, `NRadEngine::NRadGame::reconstruction_detail`)
+  break the rule until they are renamed; the test names them as `KNOWN-WRONG #1910`.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
@@ -97,6 +101,6 @@ no non-canonical spelling of the project name in a file (or token) that does not
 (`LEGACY_SPELLINGS`, which only shrinks, and `BRAND_PROSE_SPELLINGS`, the documents whose prose spells the brand
 `nEVR`), one spelling of the lifecycle namespace (`nevr::lifecycle`), the brand spelling `nEVR` in the
 prose of documents, `NEVR_` project macros, `nevr_` CMake targets (four named exceptions), every namespace
-`nevr` or `nevr_<area>` (the two exceptions above, listed in the test), and the old names of renamed
+`nevr` or `nevr_<area>` (the exceptions above and the game's namespaces, listed in the test), and the old names of renamed
 namespaces (`tools/tests/renamed_namespaces/*.json`). `python3 tools/naming_inventory.py` lists what the tree
 still holds that breaks a rule, by category, with `file:line`. The other rules above are checked in review.
