@@ -225,6 +225,9 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cr15_net_game_server.cpp
     r15/cr15_net_game_user_name.cpp
     r15/connect_gun.cpp
+    r15/cr15_net_game_user_id_from_net_id.cpp
+    r15/ctransform_cs_compute_local_to_level_transf_q.cpp
+    r15/ctransform_cs_compute_parent_to_world_transf_q.cpp
     r15/cr15_game_ctor.cpp
     r15/cg_mesh_list_resource.cpp
     r15/cfactory_cgshader_set_resource_construct_instance.cpp
