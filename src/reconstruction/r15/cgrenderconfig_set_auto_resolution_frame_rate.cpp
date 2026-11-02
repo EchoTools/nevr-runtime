@@ -1,3 +1,6 @@
+// NRadEngine::CGRenderConfig::SetAutoResolutionFrameRate(std::uint32_t)
+// Quest libr15.so VA 0x198d350; ReVault binary 576.
+// ReVault raw parent 100258554, reconstruction node 100600230; grade H: the compare, conditional selection and global store match all five instructions.
 // @0x198d350 — NRadEngine::CGRenderConfig::SetAutoResolutionFrameRate(std::uint32_t)
 /* @confidence: H — compare, conditional selection, and global store match all five instructions. */
 #include <cstdint>

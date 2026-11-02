@@ -1,3 +1,6 @@
+// NRadEngine::NRadGame::ApplyRuntimeGfxSettings(const SR15GfxSettings&, CR15Game&, uint32_t)
+// Quest libr15.so VA 0x21e8e0c; ReVault binary 576.
+// ReVault raw parent 100301810, reconstruction node 100600233; grade M: render-setting calls, LOD branches, UI-refresh gate and log order match the disassembly, and the CMemBlock helpers and relocated enum-string tables retain inferred interfaces.
 // @0x21e8e0c — NRadEngine::NRadGame::ApplyRuntimeGfxSettings(const SR15GfxSettings&, CR15Game&, uint32_t)
 /* @confidence: M — render-setting calls, LOD branches, UI-refresh gate and log order match the disassembly.
    The CMemBlock helpers and relocated enum-string tables retain inferred interfaces. */

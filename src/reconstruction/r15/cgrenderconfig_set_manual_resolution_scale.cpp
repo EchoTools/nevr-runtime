@@ -1,3 +1,6 @@
+// NRadEngine::CGRenderConfig::SetManualResolutionScale(float)
+// Quest libr15.so VA 0x198d290; ReVault binary 576.
+// ReVault raw parent 100258546, reconstruction node 100600228; grade H: all nine instructions establish the clamp order, constants and global store.
 // @0x198d290 — NRadEngine::CGRenderConfig::SetManualResolutionScale(float)
 /* @confidence: H — all nine instructions establish the clamp order, constants and global store. */
 #include <cmath>

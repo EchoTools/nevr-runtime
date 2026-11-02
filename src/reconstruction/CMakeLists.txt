@@ -148,6 +148,13 @@ add_library(nevr_r15_reconstruction STATIC
     r15/csysnet_saddress_ipv4.cpp
     r15/csysnet_tipv4_string.cpp
     r15/cmem_block_resize.cpp
+    r15/cfactory_cgvisibility_resource_create_data.cpp
+    r15/cgrenderconfig_set_display_gamma.cpp
+    r15/cgrenderconfig_set_enable_temporal_aa.cpp
+    r15/cgrenderconfig_set_msaa_mode.cpp
+    r15/cgrenderconfig_set_sharpening_amount.cpp
+    r15/cgrenderconfig_set_temporal_aa_blend_weight.cpp
+    r15/nwrite_log_write_log.cpp
     r15/cbvhtree_shutdown.cpp
     r15/cbvhtree_intersect.cpp
     r15/cbvhtree_occluded.cpp
