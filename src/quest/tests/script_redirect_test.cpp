@@ -21,6 +21,19 @@
 #include "quest/plugin/script_redirect.h"
 #include "quest/tests/test_check.h"
 
+// Register() asks dladdr where its own code lives. The test can make that answer fail: mode 1 returns 0 and names a file,
+// so only the return code refuses it; mode 2 returns 1 and names no file. Mode 0 is the real dladdr. This definition
+// takes the place of libc's for the calls the executable makes, and forwards to libc's through RTLD_NEXT.
+int g_dladdrMode = 0;
+
+extern "C" int dladdr(const void* address, Dl_info* info) noexcept {
+  using RealDladdr = int (*)(const void*, Dl_info*);
+  static const RealDladdr real = reinterpret_cast<RealDladdr>(dlsym(RTLD_NEXT, "dladdr"));
+  if (g_dladdrMode == 0) return real(address, info);
+  info->dli_fname = g_dladdrMode == 1 ? "/nonexistent/libnevr.so" : nullptr;
+  return g_dladdrMode == 1 ? 0 : 1;
+}
+
 namespace {
 
 namespace sr = nevr_quest::script_redirect;
@@ -156,6 +169,9 @@ void LibraryDirectories() {
   QCHECK(noPath != nullptr && std::strcmp(noPath, "library_path_missing") == 0);
   const char* const noBuffer = sr::LibraryDirectoryOf("/a/b/libnevr.so", nullptr, sizeof dir);  // refused, not written
   QCHECK(noBuffer != nullptr && std::strcmp(noBuffer, "library_path_missing") == 0);
+  // A zero-byte buffer has no room for even the NUL: refused as missing, whatever the path.
+  const char* const noRoom = sr::LibraryDirectoryOf("/a/libnevr.so", dir, 0);
+  QCHECK(noRoom != nullptr && std::strcmp(noRoom, "library_path_missing") == 0);
   // The buffer: "/a" and its NUL need three bytes; two is a path too long for it, which is not a path with no directory.
   const char* const tooLong = sr::LibraryDirectoryOf("/a/libnevr.so", dir, 2);
   QCHECK(tooLong != nullptr && std::strcmp(tooLong, "library_path_too_long") == 0);
@@ -420,6 +436,24 @@ void RegisterFromOwnDirectory() {
   sr::ResetForTest();
 }
 
+// Register() refuses when dladdr cannot name the sentinel's library, both ways dladdr can fail: a return of 0, and a return
+// with no file name. Each refusal is dladdr_failed, with no directory armed.
+void DladdrFailureRefuses() {
+  sr::ResetForTest();
+  const std::uint64_t pair[] = {kA, kB};
+  for (int mode : {1, 2}) {
+    g_lines.clear();
+    sentinel::SetLogSink(&Capture);
+    g_dladdrMode = mode;
+    QCHECK(sr::Register("q15t", pair, 2) == NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR);
+    QCHECK(Has("\"reason\":\"dladdr_failed\"") && LevelOf("script_redirect") == 'E');
+    QCHECK(sr::ArmedCount() == 0);
+  }
+  g_dladdrMode = 0;
+  sentinel::SetLogSink(nullptr);
+  sr::ResetForTest();
+}
+
 // The registration claims before it looks: a second registration that finishes while the first is between its argument checks
 // and its claim must make the first refuse, not overwrite it. The hook (SetBeforeClaimHookForTest) is that moment.
 std::string g_claimDir;
@@ -484,6 +518,8 @@ void StateLine() {
 
 void ResultNames() {
   QCHECK(std::strcmp(sr::ResultName(NEVR_SCRIPT_REDIRECT_OK), "ok") == 0);
+  QCHECK(std::strcmp(sr::ResultName(NEVR_SCRIPT_REDIRECT_BAD_ARGUMENT), "bad_argument") == 0);
+  QCHECK(std::strcmp(sr::ResultName(NEVR_SCRIPT_REDIRECT_ALREADY_ARMED), "already_armed") == 0);
   QCHECK(std::strcmp(sr::ResultName(NEVR_SCRIPT_REDIRECT_MISSING_LIBRARY), "missing_library") == 0);
   QCHECK(std::strcmp(sr::ResultName(NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR), "no_library_dir") == 0);
 }
@@ -498,6 +534,7 @@ int main() {
   DirectoryIsNotALibrary();
   OpenRedirectedPaths();
   RegisterFromOwnDirectory();
+  DladdrFailureRefuses();
   RegistrationClaimsBeforeItLooks();
   HeldClaimRefuses();
   StateLine();
