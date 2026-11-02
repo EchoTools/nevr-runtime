@@ -56,16 +56,8 @@
 #include "runtime/compat/social_level.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/lifecycle/stable_string_pool.h"
+#include "core/build_stamp.h"
 
-#ifndef NEVR_QUEST_PROJECT_VERSION
-#define NEVR_QUEST_PROJECT_VERSION "unknown"
-#endif
-#ifndef NEVR_QUEST_GIT_COMMIT
-#define NEVR_QUEST_GIT_COMMIT "unknown"
-#endif
-#ifndef NEVR_QUEST_GIT_DESCRIBE
-#define NEVR_QUEST_GIT_DESCRIBE "unknown"
-#endif
 #ifndef NEVR_QUEST_BUILD_TYPE
 #define NEVR_QUEST_BUILD_TYPE "unknown"
 #endif
@@ -269,9 +261,9 @@ void StartInviteService(const nevr_quest::ResolvedConfig& cfg) {
 
 nevr_quest_login::BuildInfo ThisBuild() {
   nevr_quest_login::BuildInfo build;
-  build.project_version = NEVR_QUEST_PROJECT_VERSION;
-  build.git_commit = NEVR_QUEST_GIT_COMMIT;
-  build.git_describe = NEVR_QUEST_GIT_DESCRIBE;
+  build.project_version = nevr_build_stamp::ProjectVersion();
+  build.git_commit = nevr_build_stamp::CommitFull();
+  build.git_describe = nevr_build_stamp::Describe();
   build.build_type = NEVR_QUEST_BUILD_TYPE;
   return build;
 }
@@ -420,7 +412,7 @@ class ProductionSteps final : public Steps {
     sentinel::Arm();
     // The reports a past crash left go to nevr-api now, from the lowest layer, on a thread of its own (core/crash_send.h):
     // before the config, the bridge, the login or the game exist, and whether or not any of them comes up.
-    nevr_quest::integration::StartCrashSend(sentinel::DumpDir(), NEVR_QUEST_PROJECT_VERSION);
+    nevr_quest::integration::StartCrashSend(sentinel::DumpDir(), nevr_build_stamp::ProjectVersion());
   }
 
   const nevr_quest::ResolvedConfig& ResolveConfig() override {
@@ -649,7 +641,7 @@ class ProductionSteps final : public Steps {
       SelfCheckHooks hooks;
       hooks.sender = &SendSocialFrame;
       hooks.log = &SelfCheckLog;
-      hooks.build = NEVR_QUEST_PROJECT_VERSION;
+      hooks.build = nevr_build_stamp::ProjectVersion();
       ApplySelfCheck(&config.tap, hooks);
       // The process ends when the game's android_main returns (#621): its report goes out first (best effort).
       nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408

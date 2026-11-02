@@ -26,6 +26,10 @@ bool IsDirty() noexcept;
 /// True for a CI build exactly on the tag of VERSION (the stamp is X.Y.Z).
 bool IsRelease() noexcept;
 
+/// True for every build that is not a release (the Quest sentinel's development gates, #758, #1220). Inline here so no
+/// reader of it is a second unit that carries the stamp.
+inline bool IsDevelopment() noexcept { return !IsRelease(); }
+
 /// The Quest versionCode of this build (tools/quest_apk_version.py), or 0 when the build did not compute one.
 int ApkVersionCode() noexcept;
 

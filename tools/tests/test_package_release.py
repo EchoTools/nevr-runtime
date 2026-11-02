@@ -48,8 +48,8 @@ def defaults_header(values):
 
 
 def build_info(version):
-    return (f'inline constexpr const char* kVersion = "{version}";\n'
-            f'inline constexpr const char* kCommit = "{COMMIT[:8]}";\n')
+    return (f'const char kProjectVersion[] = "{version}";\n'
+            f'const char kCommitShort[] = "{COMMIT[:8]}";\n')
 
 
 def identity(version, commit=COMMIT):
@@ -1089,7 +1089,7 @@ class ReleaseStagesTest(PackageFixture):
     # --- the Quest library's version and commit (#831) -----------------------------------------------
 
     def quest_library(self, *strings):
-        """A fake Quest library: NUL-bounded strings, as the compiler lays out kVersion and kCommit."""
+        """A fake Quest library: NUL-bounded strings, as the compiler lays out kProjectVersion and kCommitShort."""
         path = self.out.parent / "libovrplatformloader.so"
         path.write_bytes(b"\x7fELF\0" + b"\0".join(strings) + b"\0")
         return path

@@ -24,7 +24,7 @@ file depends on that flag, so promoting a release changes no byte: this tool has
       CI: assert a DLL's one identity literal agrees with what the workflow computed (run on each of the two)
   package_release.py quest-library --lib libovrplatformloader.so --version X.Y.Z --commit <sha40>
       CI: assert the Quest library carries exactly this version and this commit. It has no identity literal:
-      kVersion and the short kCommit (cmake/nevr_build_info.h.in) and the full commit of the sentinel's build
+      kProjectVersion and kCommitShort (cmake/nevr_build_stamp.cmake writes them) and the full commit of the sentinel's build
       record are separate NUL-bounded strings, so each is matched whole.
   package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --installer-exe ... --installer-compat-exe ... --apk ... --pc-header ...
                      --quest-header ... --quest-build-info ...        (`just package-dev`, a LOCAL build)
@@ -112,13 +112,15 @@ def sha256(path: Path) -> str:
 
 
 def read_build_info(path: Path) -> dict:
+    """The build's one stamp unit (cmake/nevr_build_stamp.cmake writes build/<preset>/generated/nevr_build_stamp.cpp):
+    the project version and the short commit it carries (#1935)."""
     text = path.read_text(encoding="utf-8")
     out = {}
-    for name in ("kVersion", "kCommit"):
-        match = re.search(rf'\b{name}\s*=\s*"([^"]*)";', text)
+    for key, name in (("project_version", "kProjectVersion"), ("commit_short", "kCommitShort")):
+        match = re.search(rf'\b{name}\[\]\s*=\s*"([^"]*)";', text)
         if not match:
             raise GateFailure(f"{path.name}: {name} not found")
-        out[name] = match.group(1)
+        out[key] = match.group(1)
     return out
 
 
@@ -279,7 +281,7 @@ def gate(args, work: Path) -> dict:
         except KeyError:
             raise GateFailure(f"the APK has no {SENTINEL_IN_APK}")
     problems += [f"quest: {p}" for p in defaults_check.check(Path(args.defaults), Path(args.quest_header), [sentinel])]
-    problems += [f"quest: {p}" for p in apk_version_code_problems(Path(args.apk), read_build_info(Path(args.quest_build_info))["kVersion"])]
+    problems += [f"quest: {p}" for p in apk_version_code_problems(Path(args.apk), read_build_info(Path(args.quest_build_info))["project_version"])]
     info = read_build_info(Path(args.quest_build_info))
     # No config.yaml key turns the redirect, the bridge or the login on: they follow from the embedded socket URI
     # and server key. An APK that embeds neither would need a config.yaml to log in.
@@ -289,7 +291,7 @@ def gate(args, work: Path) -> dict:
             problems.append(f"quest: no embedded {what}: the APK would need a config.yaml to log in")
     version, _ = identity_in(Path(args.runtime_dll).read_bytes(), "windows") if not problems else (None, None)
     if version is not None:
-        if info["kVersion"] != version:
+        if info["project_version"] != version:
             problems.append(f"quest: build info version '{info['kVersion']}' is not the DLL's '{version}'")
         if version.encode() not in sentinel.read_bytes():
             problems.append(f"quest: version {version} is not in the sentinel library")
@@ -301,7 +303,7 @@ def gate(args, work: Path) -> dict:
 
 
 def quest_library_problems(blob: bytes, version: str, commit: str) -> list:
-    """The Quest library has no identity literal. It carries kVersion, the short kCommit (cmake/nevr_build_info.h.in)
+    """The Quest library has no identity literal. It carries kProjectVersion, the short kCommitShort (cmake/nevr_build_stamp.cmake)
     and the sentinel's full build-record commit as separate NUL-bounded strings. A bare substring match passes
     `5.5.0-dev.4` for `5.5.0` and any string that contains the version, so each is matched whole: a string equal to
     the version, a string of 7 to 39 hex digits that is a prefix of the commit, and a string equal to the commit.
@@ -577,7 +579,7 @@ def run_all(args) -> list:
         info = gate(args, Path(tmp))
         stage = Path(tmp) / "stage"
         stage.mkdir()
-        tree = write_tree(args, stage, info["kVersion"])
+        tree = write_tree(args, stage, info["project_version"])
         return seal(tree, Path(args.out), apk=Path(args.apk))
 
 

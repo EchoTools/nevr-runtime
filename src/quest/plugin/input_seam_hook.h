@@ -11,7 +11,7 @@
  * The handler never logs, allocates or locks (callback_thunk.h rule 1). The filter runs after the original returned, so no
  * game frame is called from under it; its own rules are the ABI's (plugin_interface.h, NevrQuestInputFilterFn).
  *
- * Who may register: a development build only (the flag the plugin runtime is planned with, nevr_build::kIsDev), and one
+ * Who may register: a development build only (the flag the plugin runtime is planned with, nevr_build_stamp::IsDevelopment()), and one
  * filter per process, never removed. Each registration logs one line:
  *   {"event":"input_seam","result":"installed|refused","reason":"ok|bad_argument|not_dev_build|owned|caps_unresolved|
  *    hook_refused","plugin":"<id>","owned_by":"plugin:<id>","slot":"vrapi_GetCurrentInputState","status":"<GotStatus>"}

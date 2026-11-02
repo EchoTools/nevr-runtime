@@ -1,44 +1,40 @@
-"""The commit and the version reach only the translation units that read them (#930).
+"""The commit and the version enter the build in exactly one translation unit (#930, #1935).
 
-A new commit, or an uncommitted edit (git describe says `-dirty`), changes the build identity. Every compile
-command that carries it is then out of date: when the definitions were global (`add_compile_definitions`) that was
-every compile edge, 375 of 480 steps of the full tree (and every precompiled header), for a change nobody
-reads. The identity is now defined per source file, on the files that read it, so a new commit recompiles those and
+A new commit, or an uncommitted edit (git describe says `-dirty`), changes the build identity. Defined as compile
+definitions, it changed every compile command that carried it: 375 of 480 steps of the full tree, and every
+precompiled header, for a change nobody reads. The identity is now written at build time into ONE generated unit,
+build/<preset>/generated/nevr_build_stamp.cpp (cmake/nevr_build_stamp.cmake), which defines the accessors of
+src/core/build_stamp.h. No compile command carries a version or a commit, so a new commit recompiles that unit and
 relinks.
 
-The tests read the `build.ninja` of the configured tree (like test_build_identity_literal.py, they skip with no tree)
-and the sources it compiles:
+The tests read the `build.ninja` of the configured tree (they skip with no tree) and the sources:
 
-  - a compile edge carries exactly the identity macros its source file names, and no other;
-  - the commit, the short commit and the describe string appear on no edge but those compile edges (no include
-    path, no link line, no generated header can carry them past the check above);
-  - the macros are read only in the .cpp/.c files, so a definition per source file is enough: a header that read one
-    would be compiled into files that were given none (globals.h holds the fallbacks only)."""
+  - no compile command defines a retired identity macro (NEVR_PROJECT_VERSION*, NEVR_GIT_*);
+  - the commit, its short form and the describe string appear on no build edge (no include path, link line or
+    generated header can carry them past this check);
+  - the one generated unit is compiled once, from generated/nevr_build_stamp.cpp;
+  - no source or header names a retired macro outside its comments.
+"""
 from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 BUILD = REPO / "build" / "mingw-release"
 NINJA = BUILD / "build.ninja"
+STAMP_UNIT = BUILD / "generated" / "nevr_build_stamp.cpp"
 
-IDENTITY_MACROS = (
-    "NEVR_PROJECT_VERSION",
-    "NEVR_PROJECT_VERSION_MAJOR",
-    "NEVR_PROJECT_VERSION_MINOR",
-    "NEVR_PROJECT_VERSION_PATCH",
-    "NEVR_PROJECT_VERSION_TWEAK",
-    "NEVR_GIT_COMMIT_HASH",
-    "NEVR_GIT_COMMIT_FULL",
-    "NEVR_GIT_DESCRIBE",
-)
-MACRO = re.compile(r"\b(" + "|".join(IDENTITY_MACROS) + r")\b")
-DEFINED_ON_COMMAND_LINE = re.compile(r"-D(" + "|".join(IDENTITY_MACROS) + r")=")
+RETIRED_MACROS = re.compile(
+    r"\bNEVR_(PROJECT_VERSION(_MAJOR|_MINOR|_PATCH|_TWEAK)?|GIT_COMMIT_HASH|GIT_COMMIT_FULL|GIT_DESCRIBE"
+    r"|QUEST_PROJECT_VERSION|QUEST_GIT_COMMIT|QUEST_GIT_DESCRIBE)\b")
+COMPILE_DEFINED = re.compile(r"-D(NEVR_PROJECT_VERSION|NEVR_GIT_|NEVR_QUEST_PROJECT_VERSION|NEVR_QUEST_GIT_)")
 COMMENTS = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 EDGE = re.compile(r"^build (?P<outputs>[^:]+?): (?P<rule>\S+) (?P<inputs>[^|\n]*)", re.M)
 SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx")
+STAMP_VALUE = re.compile(r'const char (k\w+)\[\] = "([^"\\]*)";')
 
 
 def edges():
@@ -54,132 +50,64 @@ def edges():
 
 
 def named_in(path: pathlib.Path) -> set[str]:
-    """The identity macros a source file names outside its comments."""
+    """The retired identity macros a source file names outside its comments."""
     try:
         text = path.read_text(errors="replace")
     except OSError:
         return set()
-    return set(MACRO.findall(COMMENTS.sub("", text)))
-
-
-def source_path(first_input: str) -> pathlib.Path:
-    p = pathlib.Path(first_input)
-    return p if p.is_absolute() else BUILD / p
+    return set(m.group(0) for m in RETIRED_MACROS.finditer(COMMENTS.sub("", text)))
 
 
 def compile_edges():
     for outputs, rule, first, block in edges():
-        if "COMPILER" in rule and not rule.startswith("RC_") and "RC_COMPILER" not in rule:
+        if "COMPILER" in rule and "RC_COMPILER" not in rule and not rule.startswith("RC_"):
             yield outputs, first, block
 
 
-def is_dist(outputs: str, rule: str) -> bool:
-    """The dist-* utility targets name their archives after the version (nevr-runtime-v<version>-windows-server.zip);
-    they are not part of `all`, so a new commit does not run them."""
-    return rule == "CUSTOM_COMMAND" and "CMakeFiles/dist" in outputs
+def stamp_values() -> dict:
+    return dict(STAMP_VALUE.findall(STAMP_UNIT.read_text(errors="replace")))
 
 
-def is_reader_scan(outputs: str, rule: str, first: str, block: str) -> bool:
-    """CMake's dyndep scan of a source file (`<source>.obj.ddi`, rule CXX_SCAN__*) preprocesses that file with the
-    compile command's definitions, so the scan edge of a reader carries exactly what the reader's own compile edge
-    carries. That is the same reader, not another place the commit reaches; a scan of a file that names no macro, or
-    that carries other macros than its source names, is not allowed."""
-    if not (outputs.endswith(".ddi") and "SCAN" in rule and first.endswith(SOURCE_SUFFIXES)):
-        return False
-    have = defined_on(block)
-    return bool(have) and have == named_in(source_path(first))
-
-
-def defined_on(block: str) -> set[str]:
-    return set(DEFINED_ON_COMMAND_LINE.findall(block))
-
-
-@unittest.skipUnless(NINJA.exists(), "no configured tree in build/mingw-release")
+@unittest.skipUnless(NINJA.exists() and STAMP_UNIT.exists(), "no configured tree with a stamp unit in build/mingw-release")
 class IdentityScope(unittest.TestCase):
-    def test_a_compile_edge_carries_exactly_the_identity_macros_its_source_names(self):
-        wrong = []
-        seen = 0
-        for outputs, first, block in compile_edges():
-            seen += 1
-            want = named_in(source_path(first)) if first.endswith(SOURCE_SUFFIXES) else set()
-            have = defined_on(block)
-            if have != want:
-                wrong.append((outputs, sorted(have - want), sorted(want - have)))
-        self.assertGreater(seen, 100, "the parser found too few compile edges to mean anything")
-        self.assertEqual(wrong[:5], [], f"{len(wrong)} compile edges carry other macros than their source names "
-                                        "(outputs, carried but not named, named but not carried)")
+    def test_no_compile_command_defines_a_retired_identity_macro(self):
+        carrying = [outputs for outputs, _, block in compile_edges() if COMPILE_DEFINED.search(block)]
+        self.assertGreater(len(list(compile_edges())), 100, "the parser found too few compile edges to mean anything")
+        self.assertEqual(carrying[:5], [], f"{len(carrying)} compile edges still define the identity")
 
-    def test_the_known_readers_are_given_what_they_read(self):
-        carried = {}
-        for outputs, first, block in compile_edges():
-            if first.endswith(SOURCE_SUFFIXES) and defined_on(block):
-                carried.setdefault(pathlib.Path(first).name, set()).update(defined_on(block))
-        self.assertEqual(carried.get("build_identity.cpp"),
-                         {"NEVR_PROJECT_VERSION", "NEVR_GIT_COMMIT_HASH", "NEVR_GIT_COMMIT_FULL", "NEVR_GIT_DESCRIBE"})
-        self.assertEqual(carried.get("ws_bridge.cpp"), {"NEVR_PROJECT_VERSION"})
-        self.assertEqual(carried.get("initialize.cpp"), {"NEVR_PROJECT_VERSION"})
-        # The host states the build identity in a literal of its own, equal to the runtime's (#853).
-        self.assertEqual(carried.get("host_identity.cpp"), {"NEVR_PROJECT_VERSION", "NEVR_GIT_COMMIT_FULL"})
-        self.assertEqual(set(carried), {"build_identity.cpp", "ws_bridge.cpp", "initialize.cpp", "host_identity.cpp"},
-                         "another file now reads the identity: give it its definition in its CMakeLists.txt")
+    def test_the_stamp_unit_is_compiled_once_from_the_generated_file(self):
+        units = [outputs for outputs, first, _ in compile_edges() if first.endswith("generated/nevr_build_stamp.cpp")]
+        self.assertEqual(len(units), 1, f"expected one compile edge for the stamp unit, found {units}")
 
-    def test_every_edge_that_defines_a_macro_gives_it_the_same_value_and_the_values_belong_together(self):
-        values: dict[str, set[str]] = {}
-        for _, first, block in compile_edges():
-            for name in IDENTITY_MACROS:
-                for m in re.finditer(rf'-D{name}=\\"([^"\\]+)\\"', block):
-                    values.setdefault(name, set()).add(m.group(1))
-        one = {name: next(iter(v)) for name, v in values.items() if len(v) == 1}
-        self.assertEqual({n: sorted(v) for n, v in values.items() if len(v) != 1}, {}, "one macro, two values")
-        full, short = one["NEVR_GIT_COMMIT_FULL"], one["NEVR_GIT_COMMIT_HASH"]
-        self.assertRegex(full, r"^[0-9a-f]{40}$")
-        self.assertRegex(short, r"^[0-9a-f]{7,39}$", "NEVR_GIT_COMMIT_HASH is the abbreviated commit")
-        self.assertTrue(full.startswith(short), f"the short commit {short} is not the start of {full}")
-        self.assertRegex(one["NEVR_PROJECT_VERSION"], r"^\d+\.\d+\.\d+(-dev\.\d+\+[0-9a-f]{7,40})?$")
-        # `git describe --tags --always --dirty`: a tag, or <tag>-<N>-g<abbreviated commit>, or the abbreviated commit
-        # alone; "-dirty" may follow. Never the full commit and never a version.
-        described = one["NEVR_GIT_DESCRIBE"].removesuffix("-dirty")
-        at = re.search(r"-g([0-9a-f]+)$", described)
-        self.assertTrue(
-            (at and full.startswith(at.group(1))) or re.fullmatch(r"v\d+\.\d+\.\d+", described)
-            or (re.fullmatch(r"[0-9a-f]{7,12}", described) and full.startswith(described)),
-            f"{described!r} is not what git describe --tags --always gives for {full}")
+    def test_the_commit_and_the_describe_string_are_on_no_build_edge(self):
+        values = stamp_values()
+        needles = [values[name] for name in ("kCommitFull", "kCommitShort", "kDescribe") if values.get(name)]
+        self.assertTrue(needles, "the stamp unit carries no commit: nothing to check")
+        stray = [outputs for outputs, _, _, block in ((o, r, f, b) for o, r, f, b in edges())
+                 if any(needle in block for needle in needles)]
+        self.assertEqual(stray[:5], [], f"{len(stray)} build edges carry the commit or its describe string")
 
-    def test_the_commit_and_the_describe_string_are_on_no_edge_but_those_compile_edges(self):
-        values = set()
-        for _, first, block in compile_edges():
-            for name in ("NEVR_GIT_COMMIT_FULL", "NEVR_GIT_COMMIT_HASH", "NEVR_GIT_DESCRIBE"):
-                m = re.search(rf'-D{name}=\\"([^"\\]+)\\"', block)
-                if m:
-                    values.add(m.group(1))
-        self.assertTrue(values, "no edge carries the commit: the tree has no reader at all")
-        stray = [outputs for outputs, rule, first, block in edges()
-                 if any(v in block for v in values)
-                 and not (("COMPILER" in rule) and first.endswith(SOURCE_SUFFIXES) and defined_on(block))
-                 and not is_dist(outputs, rule)
-                 and not is_reader_scan(outputs, rule, first, block)]
-        self.assertEqual(stray[:5], [], f"{len(stray)} edges other than the readers' compile edges carry the commit")
+    def test_the_stamp_unit_is_the_one_writer_of_the_commit(self):
+        values = stamp_values()
+        head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.assertRegex(values["kCommitFull"], r"^[0-9a-f]{40}$")
+        self.assertTrue(values["kCommitFull"].startswith(values["kCommitShort"]))
+        if values["kCommitFull"] != head:
+            self.skipTest(f"the stamp unit is of {values['kCommitFull'][:12]}, HEAD is {head[:12]}: stale, not asserted")
+        self.assertEqual(values["kCommitFull"], head)
 
 
-class HeadersDoNotRead(unittest.TestCase):
-    """A definition per source file reaches the files that name the macro. A header that read one would be
-    compiled into files that got none."""
+class SourcesDoNotNameRetiredMacros(unittest.TestCase):
+    """The version and the commit are read through src/core/build_stamp.h, never through a macro."""
 
-    def test_only_globals_h_names_an_identity_macro_outside_a_comment_and_only_to_default_it(self):
+    def test_no_source_or_header_names_a_retired_identity_macro_outside_a_comment(self):
         offenders = {}
-        for suffix in ("*.h", "*.hpp"):
+        for suffix in ("*.h", "*.hpp", "*.cpp", "*.cc"):
             for path in sorted((REPO / "src").rglob(suffix)) + sorted((REPO / "sdk").rglob(suffix)):
-                rel = path.relative_to(REPO).as_posix()
-                if rel.startswith("src/quest/"):
-                    continue
                 names = named_in(path)
                 if names:
-                    offenders[rel] = sorted(names)
-        self.assertEqual(sorted(offenders), ["src/core/globals.h"], offenders)
-        text = COMMENTS.sub("", (REPO / "src/core/globals.h").read_text())
-        for line in text.splitlines():
-            if MACRO.search(line):
-                self.assertRegex(line, r"^\s*(#ifndef|#define)\s", f"globals.h may only default the macros: {line!r}")
+                    offenders[path.relative_to(REPO).as_posix()] = sorted(names)
+        self.assertEqual(offenders, {}, "these read the identity through a retired macro: use src/core/build_stamp.h")
 
 
 if __name__ == "__main__":

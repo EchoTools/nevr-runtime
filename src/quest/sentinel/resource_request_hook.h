@@ -38,7 +38,7 @@
  *   resource_overlay_served         manifest misses served from a loose file
  *   resource_overlay_failed         manifest misses whose loose file could not be served (the game's error follows)
  *
- * Every build. The constructor sequence installs the hook in every build (ctor_sequence.h); nevr_build::kIsDev decides
+ * Every build. The constructor sequence installs the hook in every build (ctor_sequence.h); nevr_build_stamp::IsDevelopment() decides
  * only whether every request is logged or the failed ones alone. The handler runs its overlay with no frame live across game code that holds
  * a destructor, and it logs after the original has returned, so no logging frame is live while game code runs. It may
  * run on any thread the game uses for resource requests. Built with -fno-exceptions (callback_thunk.h).
@@ -86,7 +86,7 @@ bool RegisterCounters() noexcept;
 // that does not resolve to its pinned address; the overlay is then off and the slot still installs). One line
 // {"event":"resource_request_install",...} says what happened, the libr15 load base the logged call sites are relative to,
 // the overlay ("ready" or the refusing symbol), whether the lines are written and that the counters were registered. True
-// only when the slot holds the thunk. `logRequests` is nevr_build::kIsDev. Same as InstallCounted(true, logRequests): the
+// only when the slot holds the thunk. `logRequests` is nevr_build_stamp::IsDevelopment(). Same as InstallCounted(true, logRequests): the
 // caller has registered the counters (RegisterCounters).
 bool Install(bool logRequests) noexcept;
 

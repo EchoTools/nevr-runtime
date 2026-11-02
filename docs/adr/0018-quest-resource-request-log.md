@@ -1,6 +1,6 @@
 # ADR 0018: a log of every resource request the Quest game makes
 
-Status: accepted, implemented (`src/quest/sentinel/resource_request_hook.{h,cpp}`, #871; the loose-file overlay, #1737 C5). Installed in every build; the per-request log lines are development builds only (`nevr_build::kIsDev`), and a release build writes the failed requests alone, rate limited (the amendment on release failures below). On a manifest hit the hook only reads: the game's call, its arguments, its result and the request it fills are the game's, byte for byte. On a manifest miss it may serve a loose file (see the amendment below).
+Status: accepted, implemented (`src/quest/sentinel/resource_request_hook.{h,cpp}`, #871; the loose-file overlay, #1737 C5). Installed in every build; the per-request log lines are development builds only (`nevr_build_stamp::IsDevelopment()`), and a release build writes the failed requests alone, rate limited (the amendment on release failures below). On a manifest hit the hook only reads: the game's call, its arguments, its result and the request it fills are the game's, byte for byte. On a manifest miss it may serve a loose file (see the amendment below).
 Not yet observed on a headset: the "Prediction" section is what the first run must show.
 
 ## Context
@@ -21,7 +21,7 @@ The handler logs after the original has returned, so no logging frame is live wh
 
 Two counters, `resource_request_calls` and `resource_request_thunk_faults` (the reporter's table holds `kMaxReportCounters`, 128; `integration_hooks_test` sums every hook's counters against it). Everything else is a per-event line, not a counter.
 
-The constructor sequence registers the counters and installs the hook in every build; no step is skipped by build flavour. `nevr_build::kIsDev` decides only whether the request lines are written (`Steps::ResourceRequestLogWanted`, passed to the install as its log flag). If the counters were refused, the install still runs and the install line says counters `refused`. The install runs right after the Vulkan extension window, before token auth.
+The constructor sequence registers the counters and installs the hook in every build; no step is skipped by build flavour. `nevr_build_stamp::IsDevelopment()` decides only whether the request lines are written (`Steps::ResourceRequestLogWanted`, passed to the install as its log flag). If the counters were refused, the install still runs and the install line says counters `refused`. The install runs right after the Vulkan extension window, before token auth.
 
 ## Prediction (written before a headset run)
 
@@ -48,7 +48,7 @@ Not verified on a headset: that a half-loaded lobby produces failed requests thr
 
 ## Amendment (#1737 C5): the loose-file overlay
 
-Installed in every build, not only development builds. The request log lines stay development-only (`nevr_build::kIsDev`); the overlay's counters are registered in every build.
+Installed in every build, not only development builds. The request log lines stay development-only (`nevr_build_stamp::IsDevelopment()`); the overlay's counters are registered in every build.
 
 On a manifest miss (the handler's own binary search of the manifest finds no record for the (type, name) pair, the same search the game runs), the handler serves a loose file in the platform data directory, with the same steps as the reference build's cave (`q15t-upstream/tools/qcp_patches.py`, P9): `GetUnpackagedResourcePath`, then `CSysFile::Open` (flags 1), then `CSysFile::Size`, then the request's owner, index, handle, uncompressed size, memory space and valid word. Only `ServeLoose` writes the request. If any of the three stages fails, the game's function runs as it would have and raises its own "Cannot find resource". A manifest hit never reaches the overlay: the game's call runs first, as before.
 

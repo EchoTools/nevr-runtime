@@ -233,33 +233,35 @@ def read_version_info(path) -> VersionInfo:
 
 
 def numeric_version(version: str) -> tuple:
-    """The 4-part number for a version string: X.Y.Z -> (X, Y, Z, 0); X.Y.(Z+1)-dev.N+sha -> (X, Y, Z, N)."""
+    """The 4-part Windows file version for a version string: (X, Y, Z, 0) for X.Y.Z and for X.Y.Z-dev.N+sha alike.
+    Every build's file version is X.Y.Z.0; the development number lives in the identity literal (#1935)."""
     match = VERSION.match(version)
     if not match:
         raise PeVersionError(f"'{version}' is neither X.Y.Z nor X.Y.Z-dev.N+sha")
-    major, minor, patch = int(match[1]), int(match[2]), int(match[3])
-    if match[4] is None:
-        parts = (major, minor, patch, 0)
-    else:
-        if patch < 1:
-            raise PeVersionError(f"development version '{version}': the patch of X.Y.(Z+1) is at least 1")
-        parts = (major, minor, patch - 1, int(match[4]))
-    if max(parts) > 0xFFFF:
+    parts = (int(match[1]), int(match[2]), int(match[3]), 0)
+    if max(parts) > 0xFFFF or (match[4] is not None and int(match[4]) > 0xFFFF):
         raise PeVersionError(f"version '{version}' has a part above 65535, which a Windows version cannot hold")
     return parts
 
 
 def expected_strings(file_name: str, version: str) -> dict:
+    """The VERSIONINFO strings: the base X.Y.Z of the version, for a release and a development build alike. The
+    development stamp lives in the identity literal (NEVR-BUILD), and the resource is cut from the committed VERSION
+    (cmake/set_project_version_from_git.cmake), so it never carries the -dev part (#1935)."""
     spec = EXPECTED_FILES[file_name]
+    match = VERSION.match(version)
+    if not match:
+        raise PeVersionError(f"'{version}' is neither X.Y.Z nor X.Y.Z-dev.N+sha")
+    base = f"{match[1]}.{match[2]}.{match[3]}"
     return {
         "CompanyName": COMPANY_NAME,
         "FileDescription": spec["FileDescription"],
-        "FileVersion": version,
+        "FileVersion": base,
         "InternalName": file_name,
         "LegalCopyright": LEGAL_COPYRIGHT,
         "OriginalFilename": file_name,
         "ProductName": PRODUCT_NAME,
-        "ProductVersion": version,
+        "ProductVersion": base,
     }
 
 

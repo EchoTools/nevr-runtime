@@ -10,7 +10,7 @@
  */
 
 #include "sentinel.h"
-#include "generated/nevr_build_info.h"
+#include "core/build_stamp.h"
 #include "got_hook.h"
 #include "clock_levels_hook.h"
 #include "hook_install.h"
@@ -156,9 +156,9 @@ bool InstallPermissionWaitHook() noexcept {
     options.show = &nevr_quest::toast::ShowPreferUiThread;  // #829: the UI thread's looper runs the Toast, else the caller's
     options.show_ui = &nevr_quest::toast::ShowOnMainLooper;  // read by the development probe's `ui-toast` kind only (#829)
     options.show_post = &nevr_quest::toast::ShowOnUiThread;  // and `ui-post`
-    options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
-    options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
-    if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
+    options.allow_fetch = nevr_build_stamp::IsDevelopment();  // a release build only looks and tells the player; it never downloads
+    options.probe_enabled = nevr_build_stamp::IsDevelopment();  // the headset probe is for development builds only
+    if (!nevr_build_stamp::IsDevelopment()) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);
     // The main-menu QUIT finishes the activity (#1276), installed on every launch from this step. Its quit_install line
     // says whether it went in; a refused install leaves the game's QUIT as it is.
@@ -204,7 +204,7 @@ bool InstallRenderConfigHook(nevr_quest::texture_quality::Level level, bool from
 
 // The resource request hook (#871, #1737 C5): installed in every build; only its per-request log lines are development builds only; a release build logs failed requests, rate limited
 // (ResourceRequestLogEnabled, the `logLines` argument). A refused install is logged by GotHook and leaves the game's call intact.
-bool ResourceRequestLogEnabled() noexcept { return nevr_build::kIsDev; }
+bool ResourceRequestLogEnabled() noexcept { return nevr_build_stamp::IsDevelopment(); }
 bool RegisterResourceRequestCounters() noexcept { return nevr_quest::resource_request::RegisterCounters(); }
 bool InstallResourceRequestLogHook(bool countersRegistered, bool logLines) noexcept {
     return nevr_quest::resource_request::InstallCounted(countersRegistered, logLines);
@@ -218,7 +218,7 @@ bool ArmClockLevelsHook(bool countersRegistered, bool overrideOn) noexcept {
 }
 // The rad provider in pnsovr's place (#1220): development builds only. A refused install is logged by GotHook and by the
 // hook's own line, and leaves the game's provider in place.
-bool PnsProviderEnabled() noexcept { return nevr_build::kIsDev; }
+bool PnsProviderEnabled() noexcept { return nevr_build_stamp::IsDevelopment(); }
 bool InstallPnsProviderHook() noexcept { return nevr_quest::pns_provider::Install(); }
 
 // The CREATE GAME and JOIN VIA CODE cards (#966): a data-slot hook on the streaming reader's read-finished callback. A
@@ -274,10 +274,10 @@ static void nevr_sentinel_ctor() {
     // The crash handlers first (#1689): a crash anywhere below, the begin record and the UI looper capture included, leaves a
     // report the next start sends. Arm is idempotent: the sequence's first step calls it again after setting the log sink.
     sentinel::Arm();
-    nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);
+    nevr_quest::integration::LogConstructorBegin(nevr_build_stamp::ProjectVersion(), nevr_build_stamp::CommitShort());
     // The login_host fallback carries this build's tuple (login_fallback.h): set before the sequence installs the redirect.
     nevr_quest::redirect::SetLoginIdentity(
-        {"nevr_quest", nevr_build::kIsDev ? "dev" : "release", nevr_build::kVersion, nevr_build::kCommit});
+        {"nevr_quest", nevr_build_stamp::IsDevelopment() ? "dev" : "release", nevr_build_stamp::ProjectVersion(), nevr_build_stamp::CommitShort()});
     // #829: the thread that loads the library takes the UI looper for the floor message's presenter (it logs what it found).
     nevr_quest::toast::CaptureUiLooper();
     // Everything the constructor does is one sequence (integration/ctor_sequence.h): crash reporter,

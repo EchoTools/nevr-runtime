@@ -21,12 +21,19 @@ NINJA = BUILD / "build.ninja"
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
 
 
+STAMP_UNIT = BUILD / "generated" / "nevr_build_stamp.cpp"
+STAMP_VALUE = re.compile(r'const char (k\w+)\[\] = "([^"\\]*)";')
+
+
 def definition(name: str) -> str:
-    """The value the build itself passed to the compiler: -DNAME=\"value\" in build.ninja."""
-    match = re.search(rf'-D{name}=\\"([^"\\]+)\\"', NINJA.read_text(errors="replace"))
-    if not match:
-        raise AssertionError(f"build.ninja has no -D{name}")
-    return match.group(1)
+    """The value the build's one stamp unit carries (src/core/build_stamp.h), written at build time by
+    cmake/nevr_build_stamp.cmake. No compile command carries it (#1935)."""
+    if not STAMP_UNIT.exists():
+        raise AssertionError(f"{STAMP_UNIT} is missing: the build has not written its stamp unit")
+    found = dict(STAMP_VALUE.findall(STAMP_UNIT.read_text(errors="replace")))
+    if name not in found:
+        raise AssertionError(f"{STAMP_UNIT.name} has no {name}")
+    return found[name]
 
 
 @unittest.skipUnless(HOST.exists() and RUNTIME.exists() and NINJA.exists(),
@@ -38,8 +45,8 @@ class BuiltIdentityLiteralTest(unittest.TestCase):
                 found = IDENTITY.findall(dll.read_bytes())
                 self.assertEqual(len(found), 1, f"expected exactly one NEVR-BUILD literal, found {len(found)}")
                 version, commit = found[0][0].decode(), found[0][1].decode()
-                self.assertEqual(version, definition("NEVR_PROJECT_VERSION"))
-                self.assertEqual(commit, definition("NEVR_GIT_COMMIT_FULL"))
+                self.assertEqual(version, definition("kProjectVersion"))
+                self.assertEqual(commit, definition("kCommitFull"))
                 # A branch build is a development version; a release stamp only ever comes from a CI tag build.
                 self.assertRegex(version, r"^\d+\.\d+\.\d+(-dev\.\d+\+[0-9a-f]{7,40})?$")
 
@@ -48,7 +55,7 @@ class BuiltIdentityLiteralTest(unittest.TestCase):
 
     def test_the_commit_is_the_checked_out_commit_when_the_build_is_current(self):
         head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        built = definition("NEVR_GIT_COMMIT_FULL")
+        built = definition("kCommitFull")
         if built != head:
             self.skipTest(f"the build tree is of {built[:12]}, HEAD is {head[:12]}: stale, not asserted")
         for dll in DLLS:

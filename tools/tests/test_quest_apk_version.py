@@ -231,7 +231,7 @@ class FloorTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_a_version_below_the_newest_major_is_refused_and_names_the_tag(self):
-        # "1.0.0" is what a build with no git reports (cmake/set_project_version_from_git.cmake)
+        # "1.0.0" is a version below every release major of this rule: a stale one would be a downgrade
         self.newest_is("v6.0.0", 6)
         for low in ("1.0.0", "0.1.0", "5.20.0", "5.6.1-dev.37+3a35e0b", "5.99.99"):
             with self.subTest(version=low):
@@ -379,17 +379,17 @@ class PatchTest(unittest.TestCase):
 
 class BuildInfoTest(unittest.TestCase):
     def header(self, tmp, version="5.6.1-dev.37+3a35e0b", text=None):
-        path = pathlib.Path(tmp) / "nevr_build_info.h"
-        path.write_text(text if text is not None else f'namespace nevr {{ constexpr const char* kVersion = "{version}"; }}\n')
+        path = pathlib.Path(tmp) / "nevr_build_stamp.cpp"
+        path.write_text(text if text is not None else f'namespace nevr {{ const char kProjectVersion[] = "{version}"; }}\n')
         return path
 
-    def test_reads_kversion(self):
+    def test_reads_kprojectversion(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(qv.read_build_version(self.header(tmp)), "5.6.1-dev.37+3a35e0b")
 
-    def test_refuses_no_kversion_or_two(self):
+    def test_refuses_no_kprojectversion_or_two(self):
         with tempfile.TemporaryDirectory() as tmp:
-            for text in ("", 'kVersion = "5.6.0"; kVersion = "5.6.1";'):
+            for text in ("", 'kProjectVersion[] = "5.6.0"; kProjectVersion[] = "5.6.1";'):
                 with self.assertRaises(qv.VersionError):
                     qv.read_build_version(self.header(tmp, text=text))
             with self.assertRaises(qv.VersionError):
@@ -455,8 +455,8 @@ class CommandLineTest(unittest.TestCase):
             tmp = pathlib.Path(tmp)
             manifest = tmp / "AndroidManifest.xml"
             manifest.write_bytes(fx.build_manifest(4987566))
-            header = tmp / "nevr_build_info.h"
-            header.write_text(f'constexpr const char* kVersion = "{version}";\n')
+            header = tmp / "nevr_build_stamp.cpp"
+            header.write_text(f'const char kProjectVersion[] = "{version}";\n')
             shim = tmp / "shim.so"
             shim.write_bytes(b"\x7fELF\0" + version.encode() + b"\0")
             done = self.run_tool("patch-manifest", str(manifest), "--build-info", str(header), "--shim", str(shim))
@@ -473,8 +473,8 @@ class CommandLineTest(unittest.TestCase):
             original = fx.build_manifest(4987566)
             manifest = tmp / "AndroidManifest.xml"
             manifest.write_bytes(original)
-            header = tmp / "nevr_build_info.h"
-            header.write_text(f'constexpr const char* kVersion = "{major}.6.1-dev.37+3a35e0b";\n')
+            header = tmp / "nevr_build_stamp.cpp"
+            header.write_text(f'const char kProjectVersion[] = "{major}.6.1-dev.37+3a35e0b";\n')
             shim = tmp / "shim.so"
             shim.write_bytes(b"\0" + f"{major}.6.1-dev.36+3a35e0b".encode() + b"\0")
             done = self.run_tool("patch-manifest", str(manifest), "--build-info", str(header), "--shim", str(shim))
@@ -513,7 +513,7 @@ class CommandLineTest(unittest.TestCase):
             self.assertEqual(manifest.read_bytes(), original)
 
     def test_patch_manifest_refuses_a_version_below_the_newest_major_and_writes_nothing(self):
-        # the shim carries the version, so only the floor can refuse: the previous major, and "1.0.0" (a build with no git)
+        # the shim carries the version, so only the floor can refuse: the previous major, and "1.0.0" (below every release major)
         major = current_major()
         for low in (f"{major - 1}.20.0", "1.0.0"):
             with self.subTest(version=low):
@@ -534,8 +534,8 @@ class CommandLineTest(unittest.TestCase):
             tmp = pathlib.Path(tmp)
             manifest = tmp / "AndroidManifest.xml"
             manifest.write_bytes(fx.build_manifest(4987566))
-            header = tmp / "nevr_build_info.h"
-            header.write_text('constexpr const char* kVersion = "5.16.2";\n')
+            header = tmp / "nevr_build_stamp.cpp"
+            header.write_text('const char kProjectVersion[] = "5.16.2";\n')
             shim = tmp / "shim.so"
             shim.write_bytes(b"\0" + b"5.16.2" + b"\0")
             neither = self.run_tool("patch-manifest", str(manifest), "--shim", str(shim))

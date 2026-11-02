@@ -74,7 +74,7 @@ class TheStepOrder(unittest.TestCase):
         header = read("data_wiring.h")
         self.assertRegex(header, r"bool allow_fetch = false;")
         entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
-        self.assertIn("options.allow_fetch = nevr_build::kIsDev;", entry)
+        self.assertIn("options.allow_fetch = nevr_build_stamp::IsDevelopment();", entry)
 
     def test_no_storage_grant_with_the_legacy_root_writes_nothing_and_ends_the_process(self):
         body = self.body()
@@ -120,7 +120,7 @@ class TheStepOrder(unittest.TestCase):
         body = self.body()
         self.assertRegex(body, r"if \(granted && Opts\(\)\.probe_enabled\) RunProbe\(\);")
         entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
-        self.assertIn("options.probe_enabled = nevr_build::kIsDev;", entry)
+        self.assertIn("options.probe_enabled = nevr_build_stamp::IsDevelopment();", entry)
 
     def test_there_is_no_cancel_while_the_step_blocks_android_main(self):
         code = re.sub(r"//[^\n]*", "", read("data_wiring.cpp"))
@@ -152,7 +152,7 @@ class TheStepOrder(unittest.TestCase):
         # Exactly one mention of hold_ms in the body, and it is the guarded assignment: a second assignment (always
         # zero, or a later non-zero value that undoes the guard) or an unguarded one leaves the release build wrong.
         self.assertEqual(len(re.findall(r"\bhold_ms\b", entry)), 1, entry)
-        self.assertEqual(len(re.findall(r"if \(!nevr_build::kIsDev\) options\.hold_ms = 0;", entry)), 1, entry)
+        self.assertEqual(len(re.findall(r"if \(!nevr_build_stamp::IsDevelopment\(\)\) options\.hold_ms = 0;", entry)), 1, entry)
 
     def test_each_kisdev_guarded_option_is_assigned_once_and_before_install(self):
         # allow_fetch and probe_enabled carry the same count-based pin as hold_ms: an extra `options.allow_fetch = true;`
@@ -166,9 +166,9 @@ class TheStepOrder(unittest.TestCase):
         )
         install = entry.index("nevr_quest::data_wiring::Install(options);")
         for name, line in (
-            ("allow_fetch", "options.allow_fetch = nevr_build::kIsDev;"),
-            ("probe_enabled", "options.probe_enabled = nevr_build::kIsDev;"),
-            ("hold_ms", "if (!nevr_build::kIsDev) options.hold_ms = 0;"),
+            ("allow_fetch", "options.allow_fetch = nevr_build_stamp::IsDevelopment();"),
+            ("probe_enabled", "options.probe_enabled = nevr_build_stamp::IsDevelopment();"),
+            ("hold_ms", "if (!nevr_build_stamp::IsDevelopment()) options.hold_ms = 0;"),
         ):
             self.assertEqual(len(re.findall(r"\b%s\b" % name, entry)), 1, (name, entry))
             self.assertEqual(entry.count(line), 1, (name, entry))
@@ -255,7 +255,7 @@ class TheConstructorBeginNamesTheBuild(unittest.TestCase):
     def test_the_constructor_passes_the_generated_build_identity(self):
         text = re.sub(r"//[^\n]*", "", read("entry.cpp"))
         ctor = extract_braced_function(text, "static void nevr_sentinel_ctor() {")
-        self.assertIn("nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);", ctor)
+        self.assertIn("nevr_quest::integration::LogConstructorBegin(nevr_build_stamp::ProjectVersion(), nevr_build_stamp::CommitShort());", ctor)
 
 
 class NoLoadTimeInitializer(unittest.TestCase):

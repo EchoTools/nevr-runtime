@@ -117,9 +117,9 @@ class RepackFixture(unittest.TestCase):
         if header:
             info = self.tmp / "build" / "generated"
             info.mkdir()
-            (info / "nevr_build_info.h").write_text(
-                f'inline constexpr const char* kVersion = "{version}";\n'
-                'inline constexpr const char* kCommit = "3a35e0b9";\n')
+            (info / "nevr_build_stamp.cpp").write_text(
+                f'const char kProjectVersion[] = "{version}";\n'
+                'const char kCommitShort[] = "3a35e0b9";\n')
 
     def repack(self):
         work = self.tmp / "work"
@@ -214,7 +214,7 @@ class RepackRefusalTest(RepackFixture):
 
     def test_no_build_info_beside_the_shim_is_a_refusal_not_a_default(self):
         self.make_inputs(DEV_VERSION, header=False)
-        self.assert_refused(self.repack(), "nevr_build_info.h")
+        self.assert_refused(self.repack(), "nevr_build_stamp.cpp")
 
     def test_a_shim_that_does_not_carry_the_build_version_is_refused(self):
         self.make_inputs(DEV_VERSION, shim_version=f"{MAJOR}.6.1-dev.36+3a35e0b")
@@ -273,8 +273,8 @@ class RepackRefusalTest(RepackFixture):
         first = self.repack()
         self.assertEqual(first.returncode, 0, first.stderr)
         self.assertTrue(self.signed.exists())
-        (self.tmp / "build" / "generated" / "nevr_build_info.h").unlink()
-        self.assert_refused(self.repack(), "nevr_build_info.h")
+        (self.tmp / "build" / "generated" / "nevr_build_stamp.cpp").unlink()
+        self.assert_refused(self.repack(), "nevr_build_stamp.cpp")
 
 
 if __name__ == "__main__":

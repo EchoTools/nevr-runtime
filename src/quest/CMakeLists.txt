@@ -133,9 +133,9 @@ set_source_files_properties(
   "${CMAKE_CURRENT_SOURCE_DIR}/tests/social_install_test.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_social PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
-# menu_version_label.cpp includes generated/nevr_build_info.h, which nevr_generate_build_info writes to the build tree.
+# menu_version_label.cpp includes core/build_stamp.h (the one stamp unit, linked below); the generated/ folder holds nevr_builtin_defaults.h.
 target_include_directories(nevr_quest_social PRIVATE "${CMAKE_BINARY_DIR}")
-target_link_libraries(nevr_quest_social PUBLIC nevr_quest_got_hook nevr::plugin_sdk dl PRIVATE zstd::libzstd nlohmann_json::nlohmann_json)
+target_link_libraries(nevr_quest_social PUBLIC nevr_quest_got_hook nevr::plugin_sdk nevr_build_stamp dl PRIVATE zstd::libzstd nlohmann_json::nlohmann_json)
 target_compile_options(nevr_quest_social PRIVATE -Wall -Wextra -Werror)
 
 foreach(social_test social_facade_test social_install_test social_names_test)
@@ -168,9 +168,11 @@ add_subdirectory(redirect)
 # at run time). Written to the build tree only: ${CMAKE_BINARY_DIR}/generated/nevr_builtin_defaults.h.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_builtin_defaults.cmake")
 nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}/../..")
-# The version (with its commit).
-include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_build_info.cmake")
-nevr_generate_build_info("${CMAKE_CURRENT_SOURCE_DIR}/../..")
+# The version and the commit (#1935): the one generated unit of the build stamp (cmake/nevr_build_stamp.cmake), the same one
+# the PC build uses. Written at build time; the Quest APK versionCode is the one tools/quest_apk_version.py gives it.
+find_package(Git QUIET)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_build_stamp_targets.cmake")
+nevr_build_stamp_targets(REPO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." APK_TOOL "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/quest_apk_version.py")
 
 # ── Token auth (device-code login, refresh, cache) ──────────────────────
 # The platform-neutral core (src/core) is the SAME source the Windows runtime

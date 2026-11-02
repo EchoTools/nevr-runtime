@@ -6,16 +6,8 @@
 # exceptions; everything else keeps them. NEVR_OUTSIDE_GAME_CALL marks the functions the hook handlers call
 # directly that run outside any game call (outside_game_call.h).
 
-execute_process(COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse HEAD
-                OUTPUT_VARIABLE NEVR_QUEST_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-execute_process(COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}" describe --tags --always --dirty
-                OUTPUT_VARIABLE NEVR_QUEST_GIT_DESCRIBE OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-if(NOT NEVR_QUEST_GIT_COMMIT)
-  set(NEVR_QUEST_GIT_COMMIT "unknown")
-endif()
-if(NOT NEVR_QUEST_GIT_DESCRIBE)
-  set(NEVR_QUEST_GIT_DESCRIBE "unknown")
-endif()
+# The version and the commit are not defined here: production_steps.cpp reads them through the build stamp unit
+# (src/core/build_stamp.h, cmake/nevr_build_stamp_targets.cmake), linked to this library below (#1935).
 
 # The Quest plugin loader (docs/adr/0019-quest-plugin-loader.md): the plan, the ELF checks, the loader, its records and the
 # sentinel's binding of it. The PC's plan builder (runtime/ext/plugin_load_plan.cpp) is compiled in so one `plugins:` list
@@ -76,7 +68,8 @@ target_link_libraries(nevr_quest_integration PUBLIC
 target_compile_options(nevr_quest_integration PRIVATE -Wall -Wextra -Werror
   -fvisibility=hidden -fvisibility-inlines-hidden)
 set_source_files_properties(production_steps.cpp PROPERTIES COMPILE_DEFINITIONS
-  "NEVR_QUEST_GIT_COMMIT=\"${NEVR_QUEST_GIT_COMMIT}\";NEVR_QUEST_GIT_DESCRIBE=\"${NEVR_QUEST_GIT_DESCRIBE}\";NEVR_QUEST_PROJECT_VERSION=\"${NEVR_QUEST_GIT_DESCRIBE}\";NEVR_QUEST_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\"")
+  "NEVR_QUEST_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\"")
+target_link_libraries(nevr_quest_integration PUBLIC nevr_build_stamp)
 
 # Android-linkable builds of the host tests (they cannot execute on the build machine); the same
 # sources run on the host in `just test-quest-integration`.

@@ -235,7 +235,7 @@ class Steps {
   virtual bool RegisterLoginPromptCounters() = 0;
   // The OBB-mount skip's counters (#319), registered on every launch.
   virtual bool RegisterObbSkipCounters() = 0;
-  // Whether the resource request hook (#871) writes a line for every request: a development build (nevr_build::kIsDev). The
+  // Whether the resource request hook (#871) writes a line for every request: a development build (nevr_build_stamp::IsDevelopment()). The
   // hook is installed in every build and a release build still writes its failed requests (#1797); this answers only for
   // the per-request lines (the `logLines` argument of InstallResourceRequestLog).
   virtual bool ResourceRequestLogWanted() = 0;
@@ -312,7 +312,7 @@ class Steps {
   // The rad provider in pnsovr's place (#1220): four libr15 slots (CNSProvider::Create, Destroy, ProviderID,
   // UserProviderID), when `diagnostics.pnsrad_provider` is on and the login it needs was installed. No counters.
   virtual bool InstallPnsProvider() = 0;
-  // Whether this build may install the rad provider (#1220): a development build (nevr_build::kIsDev). A release build
+  // Whether this build may install the rad provider (#1220): a development build (nevr_build_stamp::IsDevelopment()). A release build
   // never installs it, whatever the configuration asks, because the login that goes with it is not there yet.
   virtual bool PnsProviderAllowed() = 0;
 
@@ -324,7 +324,7 @@ class Steps {
 ConstructorReport RunConstructorSequence(Steps& steps) noexcept;
 
 // The begin record of the constructor (#1391): one sentinel_ctor line, action=begin, with the version and the commit of this
-// build. entry.cpp passes nevr_build::kVersion and nevr_build::kCommit from its generated build header. Never throws.
+// build. entry.cpp passes nevr_build_stamp::ProjectVersion() and nevr_build_stamp::CommitShort() from its generated build header. Never throws.
 void LogConstructorBegin(const char* version, const char* commit) noexcept;
 
 }  // namespace nevr_quest::integration

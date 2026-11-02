@@ -2,7 +2,7 @@
 
 #include "sentinel_log.h"
 
-#include "generated/nevr_build_info.h"
+#include "core/build_stamp.h"
 #include "generated/nevr_builtin_defaults.h"
 
 #include <cerrno>
@@ -98,7 +98,7 @@ nevr_quest::ResolvedConfig ResolveFromDisk(const std::string& path) {
 
   // Which build this is, so a log names its version and commit (neither is a configured value).
   Emit(nevr_quest::LogLevel::kInfo,
-       std::string("build version=") + nevr_build::kVersion + " commit=" + nevr_build::kCommit);
+       std::string("build version=") + nevr_build_stamp::ProjectVersion() + " commit=" + nevr_build_stamp::CommitShort());
   // A file that was there but could not be read (kError, kNotRegularFile) was reported above; the resolver then
   // sees no file, and says "absent" as well. That is accurate: nothing of it was used.
   nevr_quest::LoadResult result =

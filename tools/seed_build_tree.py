@@ -25,8 +25,8 @@ build/ and moved into place when it is complete:
      rebuilds.
 
 The commit is not a guard. The commit (NEVR_GIT_COMMIT_FULL), the version and the describe string (with `-dirty` when
-the tree was configured with uncommitted changes) are defined on the few files that read them
-(cmake/nevr_build_identity.cmake), and CMake reads them at configure time. A copy made from a tree at another commit,
+the tree was configured with uncommitted changes) are defined by the build stamp script (cmake/nevr_build_stamp.cmake),
+and CMake runs it at configure time. A copy made from a tree at another commit,
 or configured with uncommitted changes, therefore has its configure re-run on the first build: its build.ninja is
 given the epoch as its mtime, older than CMakeLists.txt, so ninja regenerates the build before any compile edge. The
 identity readers, what links them and the differing sources rebuild; the rest of the copy is kept. A tree at the

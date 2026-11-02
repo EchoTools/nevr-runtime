@@ -14,8 +14,8 @@ NUMBERING RULE (the same on every machine, derived from the version string alone
     a release       X.Y.Z                  slot 999
     a development   X.Y.Z-dev.N+<sha>      slot N      (N = commits since the nearest release tag, 0..998)
 
-  The version is the one cmake/set_project_version_from_git.cmake writes into the build (kVersion in
-  nevr_build_info.h). That makes the codes follow semantic-version precedence: a development build of X.Y.Z sits
+  The version is the build stamp's (kProjectVersion in generated/nevr_build_stamp.cpp, written by cmake/nevr_build_stamp.cmake
+  from the committed VERSION file and git; #1935). That makes the codes follow semantic-version precedence: a development build of X.Y.Z sits
   between the release before it and the release X.Y.Z (semver item 11), so a tester moving from a development
   build to its release, or to the next development build, is always an upgrade.
 
@@ -24,7 +24,7 @@ NUMBERING RULE (the same on every machine, derived from the version string alone
   inside Android's int32 (2,147,483,647) and under the 2,100,000,000 that the Play Store documents as its ceiling.
   `field_warnings` (used by tools/release_preflight.py) warns early: development distance N above 900, minor or
   patch above 90. The rule has no floor. A stamp (`patch-manifest`, through stamp_code_for) is refused below the
-  major of the newest release tag git lists (newest_release): a build with no git reports 1.0.0, and a stamp below
+  major of the newest release tag git lists (newest_release): a stamp below
   the newest release's major is a downgrade for a headset on that release. From major 5 up every code is at least
   50,000,000, ten times the installer's 4987570 (5.0.0-dev.0 is the smallest accepted).
 
@@ -46,7 +46,7 @@ bytes and nowhere else.
   quest_apk_version.py code <version>                       print the versionCode the rule gives a version; one JSON line
                                                             on stderr says whether a stamp of it would be refused
   quest_apk_version.py read <apk>                           print the versionCode in an APK's manifest
-  quest_apk_version.py patch-manifest <AndroidManifest.xml> (--build-info <nevr_build_info.h> | --version <v>) --shim <so>
+  quest_apk_version.py patch-manifest <AndroidManifest.xml> (--build-info <nevr_build_stamp.cpp> | --version <v>) --shim <so>
                                                             set the versionCode in an extracted manifest, in place;
                                                             print it. The version is the build info's (or the one
                                                             given, for a loader built elsewhere: a release asset),
@@ -202,7 +202,7 @@ def newest_release(repo: Path = REPO) -> tuple:
 
 def stamp_code_for(version: str, repo: Path = REPO) -> int:
     """The versionCode a stamp writes: version_code_for, refused when the version's major is below the newest release
-    tag's. A build with no git reports 1.0.0 (cmake/set_project_version_from_git.cmake), and a stamp below the newest
+    tag's. A build with no release tag does not stamp at all (cmake/nevr_build_stamp.cmake refuses), and a stamp below the newest
     release's major is a downgrade for a headset on that release: Android refuses a lower versionCode. Each new major
     raises this floor with it."""
     code = version_code_for(version)
@@ -380,19 +380,19 @@ def version_code_of_apk(apk: Path) -> int:
 # ---------------------------------------------------------------------------------------------------------------
 
 def read_build_version(build_info: Path) -> str:
-    """kVersion from the nevr_build_info.h the Quest build generates (cmake/nevr_build_info.h.in)."""
+    """kProjectVersion from the build stamp unit (generated/nevr_build_stamp.cpp, cmake/nevr_build_stamp.cmake)."""
     try:
         text = build_info.read_text(encoding="utf-8")
     except OSError as error:
         raise VersionError(f"cannot read {build_info}: {error.strerror}") from None
-    found = re.findall(r'\bkVersion\s*=\s*"([^"]*)";', text)
+    found = re.findall(r'\bkProjectVersion\[\]\s*=\s*"([^"]*)";', text)
     if len(found) != 1:
-        raise VersionError(f"{build_info}: expected exactly one kVersion, found {len(found)}")
+        raise VersionError(f"{build_info}: expected exactly one kProjectVersion, found {len(found)}")
     return found[0]
 
 
 def shim_carries_version(shim: bytes, version: str) -> bool:
-    """The sentinel stores kVersion as its own NUL-bounded string; a bare substring would pass 5.6.1-dev.3 for
+    """The sentinel stores the version as its own NUL-bounded string; a bare substring would pass 5.6.1-dev.3 for
     5.6.1-dev.37."""
     return b"\x00" + version.encode("ascii") + b"\x00" in shim
 

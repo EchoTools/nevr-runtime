@@ -2,7 +2,7 @@
 function runs first on a hit, and only ServeLoose writes the request.
 
 The host tests (resource_request_hook_test, integration_sequence_test) run the handler and the sequence with fakes. What
-they cannot see is the production wiring (the `Steps` answer is nevr_build::kIsDev, not a constant) and the properties of the
+they cannot see is the production wiring (the `Steps` answer is nevr_build_stamp::IsDevelopment(), not a constant) and the properties of the
 handler's source that no fake can fail: it calls the game before it looks at anything, the overlay is the only code that
 writes the request, and the translation unit is built without exception support like every hook thunk.
 """
@@ -34,7 +34,7 @@ def source_without_serve_loose():
 class TheHookIsInstalledInEveryBuild(unittest.TestCase):
     def test_the_production_answer_is_the_build_flag(self):
         source = (ROOT / "src/quest/sentinel/entry.cpp").read_text()
-        self.assertRegex(strip_comments(source), r"bool\s+ResourceRequestLogEnabled\(\)\s*noexcept\s*\{\s*return\s+nevr_build::kIsDev\s*;\s*\}")
+        self.assertRegex(strip_comments(source), r"bool\s+ResourceRequestLogEnabled\(\)\s*noexcept\s*\{\s*return\s+nevr_build_stamp::IsDevelopment\(\)\s*;\s*\}")
 
     def test_the_production_steps_ask_that_answer(self):
         source = strip_comments((ROOT / "src/quest/integration/production_steps.cpp").read_text())
@@ -49,15 +49,15 @@ class TheHookIsInstalledInEveryBuild(unittest.TestCase):
         self.assertLess(source.index("steps.ResourceRequestLogWanted()"), source.index("steps.RegisterResourceRequestCounters()"))
 
     def test_the_entry_passes_the_build_flag_only_as_the_log_flag(self):
-        # entry.cpp holds kIsDev for other features too (the texture menu and probe options, PnsProviderEnabled), so the
+        # entry.cpp holds IsDevelopment() for other features too (the texture menu and probe options, PnsProviderEnabled), so the
         # count is not the pin. The pin is the path: the install never reads the build flag, it takes its log flag from the
         # argument, and the one read for this hook is ResourceRequestLogEnabled, the answer the production steps ask.
         source = strip_comments((ROOT / "src/quest/sentinel/entry.cpp").read_text())
         install = extract_braced_function(source, "bool InstallResourceRequestLogHook(")
-        self.assertNotIn("kIsDev", install)
+        self.assertNotIn("IsDevelopment", install)
         self.assertIn("InstallCounted(countersRegistered, logLines)", install)
         answer = extract_braced_function(source, "bool ResourceRequestLogEnabled(")
-        self.assertEqual(answer.count("kIsDev"), 1, answer)
+        self.assertEqual(answer.count("IsDevelopment"), 1, answer)
         self.assertRegex(source, r"bool\s+InstallResourceRequestLogHook\(bool countersRegistered,\s*bool logLines\)\s*noexcept\s*\{\s*return\s+nevr_quest::resource_request::InstallCounted\(countersRegistered,\s*logLines\)\s*;")
 
 

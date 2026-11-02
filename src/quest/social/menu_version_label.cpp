@@ -6,7 +6,7 @@
 #include <string>
 
 #include "callback_thunk.h"
-#include "generated/nevr_build_info.h"
+#include "core/build_stamp.h"
 #include "hook_install.h"
 #include "hook_log.h"
 #include "runtime/patch/menu_version_label_rules.h"
@@ -79,7 +79,7 @@ std::string LabelFor(const char* version) {
   return nevr_menu_version_label::FitLabel(std::string("nEVR ") + version);
 }
 
-std::string Label() { return LabelFor(nevr_build::kVersion); }
+std::string Label() { return LabelFor(nevr_build_stamp::ProjectVersion()); }
 
 std::size_t InstallMenuVersionLabelHook() noexcept {
   const std::string fitted = Label();

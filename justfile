@@ -207,7 +207,7 @@ quest-reference-base apk out label="Echo VR":
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
 # It also sets the manifest's versionCode (tools/quest_apk_version.py): the store APK's 4987566 is below the
 # 4987570 build the community installer puts on a headset, which Android refuses to update (a downgrade). The
-# code comes from the build's own version (kVersion in <shim dir>/../generated/nevr_build_info.h), and the signed
+# code comes from the build's own version (kProjectVersion in <shim dir>/../generated/nevr_build_stamp.cpp), and the signed
 # APK's code is read back with aapt2 before the recipe says it is ready.
 # All work under build/android-arm64/repack — never mutates the source APK or shim.
 # `version` (X.Y.Z) names the build's version when the shim was built elsewhere and there is no build info beside it: a release
@@ -326,8 +326,8 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     if [ -n "$version" ]; then
         version_source=(--version "$version")
     else
-        build_info="$(dirname "$(dirname "$shim")")/generated/nevr_build_info.h"
-        [ -f "$build_info" ] || { echo "build info not found (build it: just build-android): $build_info" >&2; exit 1; }
+        build_info="$(dirname "$(dirname "$shim")")/generated/nevr_build_stamp.cpp"
+        [ -f "$build_info" ] || { echo "build stamp not found (build it: just build-android): $build_info" >&2; exit 1; }
         version_source=(--build-info "$build_info")
     fi
     rm -rf "$work/stage" "$work/orig" "$work/manifest" "$work/libr15-patch-report.json"
@@ -518,7 +518,7 @@ package-dev store_apk=env("NEVR_STORE_APK") *args: (_heavy-guard "package-dev" a
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
-        --quest-build-info build/android-dev/generated/nevr_build_info.h
+        --quest-build-info build/android-dev/generated/nevr_build_stamp.cpp
 
 # The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the store
 # APK. Private: package-dev only (a release packages CI's loader, release-quest-apk).
@@ -1879,11 +1879,11 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     timeout 120 "$out/vk_free_guard_test"
     # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
     # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone).
-    # The handler includes the build-tree header generated/nevr_build_info.h; a stub stands in for it here.
-    mkdir -p "$out/menu_version_gen/generated"
-    printf 'namespace nevr_build { inline constexpr const char* kVersion = "5.17.0"; }\n' > "$out/menu_version_gen/generated/nevr_build_info.h"
-    "${cxx[@]}" -I"$out/menu_version_gen" -fno-exceptions -pthread src/quest/tests/menu_version_label_test.cpp \
-        src/quest/social/menu_version_label.cpp \
+    # The handler reads the build's version through core/build_stamp.h; a stub unit stands in for the generated stamp here.
+    mkdir -p "$out/menu_version_gen"
+    printf 'namespace nevr_build_stamp { const char* ProjectVersion() noexcept { return "5.17.0"; } }\n' > "$out/menu_version_gen/stamp_stub.cpp"
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/menu_version_label_test.cpp \
+        "$out/menu_version_gen/stamp_stub.cpp" src/quest/social/menu_version_label.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/menu_version_label_test" -ldl
     timeout 120 "$out/menu_version_label_test"

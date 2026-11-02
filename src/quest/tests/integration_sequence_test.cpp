@@ -65,7 +65,7 @@ struct FakeSteps final : Steps {
   nevr_quest::TextureChoice renderConfigSeen;
   int textureCalls = 0;
   bool dlopenArgsSeen = false;
-  bool devBuild = false;  // nevr_build::kIsDev: the resource request hook's (#871) log lines are for development builds
+  bool devBuild = false;  // nevr_build_stamp::IsDevelopment(): the resource request hook's (#871) log lines are for development builds
   bool resourceLogLines = false;  // the `logLines` the resource request install was handed
   bool devQueryThrows = false;
   int devAsked = 0;

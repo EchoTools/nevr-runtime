@@ -56,7 +56,8 @@ def render_rc(work: Path, *, original: str, version: str, major: int, minor: int
     subprocess.run(
         [CMAKE, f"-DMAJOR={major}", f"-DMINOR={minor}", f"-DPATCH={patch}", f"-DTWEAK={tweak}",
          f"-DFILETYPE={'VFT_DLL' if spec['file_type'] == vi.VFT_DLL else 'VFT_APP'}",
-         f"-DDESCRIPTION={spec['FileDescription']}", f"-DORIGINAL={original}", f"-DVERSION={version}",
+         f"-DDESCRIPTION={spec['FileDescription']}", f"-DORIGINAL={original}",
+         f"-DVERSION={version.split('-', 1)[0].split('+', 1)[0]}",
          f"-DOUT={out}", "-P", str(script)],
         check=True, capture_output=True, text=True)
     return out.read_text(encoding="utf-8")
@@ -94,7 +95,7 @@ class RenderedTemplateTest(unittest.TestCase):
         cls.tmp.cleanup()
 
     def dev_rc(self, name: str, sub: str = "dev") -> str:
-        return render_rc(self.root / sub, original=name, version=DEV_VERSION, major=5, minor=5, patch=1, tweak=3)
+        return render_rc(self.root / sub, original=name, version=DEV_VERSION, major=5, minor=5, patch=2, tweak=0)
 
     def build(self, name: str, rc_text: str | None, sub: str, identity_version: str | None = DEV_VERSION) -> Path:
         return build_pe(self.root / sub, name, rc_text, identity_version=identity_version)
@@ -102,19 +103,19 @@ class RenderedTemplateTest(unittest.TestCase):
     def test_development_dll_reads_back_every_field(self):
         dll = self.build("BugSplat64.dll", self.dev_rc("BugSplat64.dll"), "a")
         info = vi.read_version_info(dll)
-        self.assertEqual(info.file_version, (5, 5, 1, 3))
-        self.assertEqual(info.product_version, (5, 5, 1, 3))
+        self.assertEqual(info.file_version, (5, 5, 2, 0))
+        self.assertEqual(info.product_version, (5, 5, 2, 0))
         self.assertEqual((info.file_os, info.file_type, info.file_subtype), (0x40004, 0x2, 0))
         self.assertEqual(info.translations, [(0x0409, 1200)])
         self.assertEqual(info.tables, {"040904B0": {
             "CompanyName": "Andrew Bates",
             "FileDescription": "nEVR host for Echo VR",
-            "FileVersion": DEV_VERSION,
+            "FileVersion": "5.5.2",
             "InternalName": "BugSplat64.dll",
             "LegalCopyright": "© 2026 Andrew Bates <a@sprock.io>",
             "OriginalFilename": "BugSplat64.dll",
             "ProductName": "nEVR runtime",
-            "ProductVersion": DEV_VERSION,
+            "ProductVersion": "5.5.2",
         }})
         self.assertEqual(vi.problems_for(dll, DEV_VERSION), [])
 
@@ -131,23 +132,23 @@ class RenderedTemplateTest(unittest.TestCase):
         self.assertEqual(strings["FileVersion"], RELEASE_VERSION)
         self.assertEqual(vi.problems_for(exe, RELEASE_VERSION), [])
 
-    def test_the_numeric_version_sorts_like_the_semver_string(self):
+    def test_a_development_build_has_the_file_version_of_its_base_release(self):
         self.assertEqual(vi.numeric_version("5.5.1"), (5, 5, 1, 0))
-        self.assertEqual(vi.numeric_version(DEV_VERSION), (5, 5, 1, 3))
+        self.assertEqual(vi.numeric_version(DEV_VERSION), (5, 5, 2, 0))
+        self.assertEqual(vi.numeric_version(DEV_VERSION), vi.numeric_version("5.5.2"))
         self.assertLess(vi.numeric_version("5.5.1"), vi.numeric_version(DEV_VERSION))
-        self.assertLess(vi.numeric_version(DEV_VERSION), vi.numeric_version("5.5.2"))
 
     def test_a_changed_field_is_named_in_the_problem(self):
         rc = self.dev_rc("BugSplat64.dll", "m")
         mutations = {
             "CompanyName": ('VALUE "CompanyName", "Andrew Bates"', 'VALUE "CompanyName", "Someone Else"'),
             "FileDescription": ('"nEVR host for Echo VR"', '"nEVR runtime"'),
-            "FileVersion": (f'VALUE "FileVersion", "{DEV_VERSION}"', 'VALUE "FileVersion", "5.5.1"'),
+            "FileVersion": ('VALUE "FileVersion", "5.5.2"', 'VALUE "FileVersion", "5.5.1"'),
             "InternalName": ('VALUE "InternalName", "BugSplat64.dll"', 'VALUE "InternalName", "bugsplat64.dll"'),
             "LegalCopyright": ("© 2026 Andrew Bates", "(c) 2026 Andrew Bates"),
             "OriginalFilename": ('VALUE "OriginalFilename", "BugSplat64.dll"', 'VALUE "OriginalFilename", "x.dll"'),
             "ProductName": ('VALUE "ProductName", "nEVR runtime"', 'VALUE "ProductName", "nEVR"'),
-            "ProductVersion": (f'VALUE "ProductVersion", "{DEV_VERSION}"', 'VALUE "ProductVersion", "5.5.1"'),
+            "ProductVersion": ('VALUE "ProductVersion", "5.5.2"', 'VALUE "ProductVersion", "5.5.1"'),
         }
         for field, (old, new) in mutations.items():
             with self.subTest(field=field):
@@ -169,8 +170,8 @@ class RenderedTemplateTest(unittest.TestCase):
     def test_a_wrong_numeric_version_or_fixed_field_is_a_problem(self):
         rc = self.dev_rc("BugSplat64.dll", "n")
         cases = {
-            "FILEVERSION": ("FILEVERSION 5,5,1,3", "FILEVERSION 5,5,1,4"),
-            "PRODUCTVERSION": ("PRODUCTVERSION 5,5,1,3", "PRODUCTVERSION 5,5,2,3"),
+            "FILEVERSION": ("FILEVERSION 5,5,2,0", "FILEVERSION 5,5,2,1"),
+            "PRODUCTVERSION": ("PRODUCTVERSION 5,5,2,0", "PRODUCTVERSION 5,5,3,0"),
             "FILEOS": ("FILEOS VOS_NT_WINDOWS32", "FILEOS VOS__WINDOWS32"),
             "FILETYPE": ("FILETYPE VFT_DLL", "FILETYPE VFT_APP"),
             "FILESUBTYPE": ("FILESUBTYPE VFT2_UNKNOWN", "FILESUBTYPE 1"),
@@ -222,7 +223,7 @@ class RenderedTemplateTest(unittest.TestCase):
         dll = self.build("BugSplat64.dll", self.dev_rc("BugSplat64.dll", "w1"), "w_dll", identity_version="5.5.1")
         exe = self.build("echovr_server.exe", self.dev_rc("echovr_server.exe", "w2"), "w_exe", identity_version=None)
         found = vi.check(dll, exe)
-        self.assertTrue(any("FILEVERSION 5.5.1.3 is not 5.5.1.0" in p for p in found), found)
+        self.assertTrue(any("FILEVERSION 5.5.2.0 is not 5.5.1.0" in p for p in found), found)
 
     def test_check_covers_the_runtime_and_binds_it_to_the_hosts_version(self):
         dll = self.build("BugSplat64.dll", self.dev_rc("BugSplat64.dll", "r1"), "r_dll")
@@ -258,7 +259,7 @@ class RenderedTemplateTest(unittest.TestCase):
         self.assertIn("pe-version-info: FAIL:", bad.stderr)
         shown = subprocess.run([sys.executable, "-I", str(TOOL), "show", str(dll)], capture_output=True, text=True)
         self.assertEqual(shown.returncode, 0)
-        self.assertIn("FILEVERSION     5.5.1.3", shown.stdout)
+        self.assertIn("FILEVERSION     5.5.2.0", shown.stdout)
         self.assertIn("040904B0 LegalCopyright = © 2026 Andrew Bates <a@sprock.io>", shown.stdout)
 
     def test_the_template_text_leaves_the_build_identity_literal_unique(self):
@@ -272,8 +273,8 @@ project(mini LANGUAGES C)
 set(PROJECT_VERSION "{version}")
 set(PROJECT_VERSION_MAJOR 5)
 set(PROJECT_VERSION_MINOR 5)
-set(PROJECT_VERSION_PATCH 1)
-set(PROJECT_VERSION_TWEAK 3)
+set(PROJECT_VERSION_PATCH 2)
+set(PROJECT_VERSION_TWEAK 0)
 enable_language(RC)
 include("${{CMAKE_SOURCE_DIR}}/cmake/nevr_version_info.cmake")
 add_library(runtime SHARED runtime.c)
@@ -297,7 +298,9 @@ class AddVersionInfoFunctionTest(unittest.TestCase):
         (root / "cmake").mkdir(parents=True)
         for name in ("nevr_version_info.cmake", "nevr_version_info.rc.in"):
             shutil.copyfile(REPO / "cmake" / name, root / "cmake" / name)
-        (root / "CMakeLists.txt").write_text(MINI_PROJECT.format(version=version, runtime_args=runtime_args))
+        # PROJECT_VERSION is the committed VERSION's X.Y.Z: the development stamp is not a project version (#1935).
+        base = version.split("-", 1)[0].split("+", 1)[0]
+        (root / "CMakeLists.txt").write_text(MINI_PROJECT.format(version=base, runtime_args=runtime_args))
         (root / "runtime.c").write_text("int __stdcall DllMain(void *h, unsigned long r, void *p) { return 1; }\n")
         (root / "launcher.c").write_text("int main(void) { return 0; }\n")
         return subprocess.run([CMAKE, "-S", str(root), "-B", str(root / "build"), "-G", "Ninja",
@@ -314,7 +317,7 @@ class AddVersionInfoFunctionTest(unittest.TestCase):
             for name in vi.EXPECTED_FILES:
                 with self.subTest(name=name):
                     self.assertEqual(vi.problems_for(root / "build" / name, DEV_VERSION), [])
-            self.assertEqual(vi.read_version_info(root / "build" / "BugSplat64.dll").file_version, (5, 5, 1, 3))
+            self.assertEqual(vi.read_version_info(root / "build" / "BugSplat64.dll").file_version, (5, 5, 2, 0))
 
     def test_a_call_that_would_write_a_wrong_resource_fails_the_configure(self):
         cases = {
@@ -368,11 +371,12 @@ class NumericVersionCmakeTest(unittest.TestCase):
 class VersionTextTest(unittest.TestCase):
     def test_numeric_version_of_release_and_development_strings(self):
         self.assertEqual(vi.numeric_version("5.5.0"), (5, 5, 0, 0))
-        self.assertEqual(vi.numeric_version("5.5.1-dev.0+abcdef0"), (5, 5, 0, 0))
-        self.assertEqual(vi.numeric_version("5.5.2-dev.12+" + COMMIT), (5, 5, 1, 12))
+        self.assertEqual(vi.numeric_version("5.5.1-dev.0+abcdef0"), (5, 5, 1, 0))
+        self.assertEqual(vi.numeric_version("5.5.2-dev.12+" + COMMIT), (5, 5, 2, 0))
+        self.assertEqual(vi.numeric_version("5.5.0-dev.1+abcdef0"), (5, 5, 0, 0))
 
     def test_numeric_version_refuses_what_is_not_a_version(self):
-        for text in ("", "5.5", "5.5.1.0", "v5.5.1", "5.5.1-dev", "5.5.1-dev.3", "5.5.1-dev.3+xyz", "5.05.1", "5.5.0-dev.1+abcdef0",
+        for text in ("", "5.5", "5.5.1.0", "v5.5.1", "5.5.1-dev", "5.5.1-dev.3", "5.5.1-dev.3+xyz", "5.05.1",
                      "70000.0.0", "5.5.2-dev.70000+abcdef0"):
             with self.subTest(text=text):
                 with self.assertRaises(vi.PeVersionError):

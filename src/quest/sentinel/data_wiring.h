@@ -56,7 +56,7 @@
  * `ui-toast`, `ui-post` and `dialog` kinds log one `data_probe` line with the presenter's result, the thread id, whether it was the
  * process's main thread and whether a looper was prepared. It is read and renamed to `nevr-data-probe.done` the first time AfterStorage runs with Storage
  * granted, so a probe acts for one launch. It is for the maintainers' headset runs and exists only in development
- * builds (Options::probe_enabled, set from nevr_build::kIsDev); no config key and no shipped file creates it.
+ * builds (Options::probe_enabled, set from nevr_build_stamp::IsDevelopment()); no config key and no shipped file creates it.
  *
  * Built with -fno-exceptions, like every translation unit the hook path reaches.
  */

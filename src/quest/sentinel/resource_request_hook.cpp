@@ -27,7 +27,7 @@ using sentinel::pinned::CResourceManagerOpaque;
 sentinel::GotHook g_hook;
 // libr15's load base, set by Install: the caller address is logged as a pinned virtual address (address minus base).
 std::atomic<std::uint64_t> g_loadBase{0};
-// Whether the request lines and the overlay's lines are written (nevr_build::kIsDev). The overlay itself is not gated on it.
+// Whether the request lines and the overlay's lines are written (nevr_build_stamp::IsDevelopment()). The overlay itself is not gated on it.
 std::atomic<bool> g_logRequests{false};
 
 // The overlay's game functions. Install stores a pointer to g_resolved once every symbol resolved to its pinned address; a

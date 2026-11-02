@@ -57,8 +57,8 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
    It is a neutral struct, so a plugin never sees the VrApi layout. A general GOT install stays ADR 0019 slice 2. The
    narrower service also keeps ADR 0019's "one owner per slot, no chaining" rule while leaving the input slot open to
    any plugin, one at a time.
-3. **Who may register.** Development builds only: `nevr_build::kIsDev`, false only in a CI build of a release tag
-   (`cmake/nevr_build_info.cmake`). A release build refuses with `not_dev_build`. One filter per process: a second
+3. **Who may register.** Development builds only: `nevr_build_stamp::IsDevelopment()`, false only in a CI build of a release tag
+   (`cmake/nevr_build_stamp.cmake`). A release build refuses with `not_dev_build`. One filter per process: a second
    registration is refused with `owned_by=plugin:<first>`. The hook is installed at the first accepted registration,
    never before, so a run whose config names no such plugin has no hook on the slot.
 4. **The translation is the host's and leaves the game's bytes alone.** The host copies the six fields out of the

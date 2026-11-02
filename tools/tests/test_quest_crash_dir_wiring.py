@@ -42,7 +42,7 @@ class WriterAndSenderShareOneFolder(unittest.TestCase):
     def test_the_sender_is_given_dumpdir_after_arm(self):
         step = extract_braced_function(code("integration/production_steps.cpp"), "void ArmCrashReporter() override {")
         self.assertIn("sentinel::Arm();", step)
-        self.assertIn("StartCrashSend(sentinel::DumpDir(), NEVR_QUEST_PROJECT_VERSION);", step)
+        self.assertIn("StartCrashSend(sentinel::DumpDir(), nevr_build_stamp::ProjectVersion());", step)
         self.assertLess(step.index("sentinel::Arm();"), step.index("StartCrashSend("))
 
     def test_the_sender_looks_nowhere_else(self):

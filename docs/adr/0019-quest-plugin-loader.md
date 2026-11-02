@@ -99,7 +99,7 @@ reach the APK without also going through the static-init check and the signature
   UNVERIFIED (the design record measured `targetSdkVersion="29"`, `docs/design/2026-07-13-quest-crash-reporter-injection.md:59`).
   Rejected for v1; it is reconsidered only if P3 shows it loads.
 - **A3: both.** Shipped plugins in the library directory; a development-only directory in development builds. The
-  development gate already exists (`nevr_build::kIsDev`, `src/quest/sentinel/entry.cpp:105-107`). Deferred until after slice 1.
+  development gate already exists (`nevr_build_stamp::IsDevelopment()`, `src/quest/sentinel/entry.cpp:105-107`). Deferred until after slice 1.
 
 **Trust (R1 trust).** A shipped plugin is trusted because the APK signature covers every entry of the APK, and the repack
 signs last. A player cannot add a plugin without re-signing the APK, and a re-signed APK cannot update an installed app
@@ -565,7 +565,7 @@ line moves, the symbol named beside it is the anchor.
   `:264-265` (`file` default), `:273-274` (`early`); `docs/reference/example-config.yaml:412-444` (plugins block), `:431`
   (list is the only source), `:436-438` (client `required` rule), `:443-444` (`early`).
 - Quest sentinel: `src/quest/sentinel/CMakeLists.txt:36-52` (`ovrplatformloader` target and output name), `:93-97` (`patchelf` DT_NEEDED);
-  `src/quest/sentinel/entry.cpp:105-107` (development-build gates in `InstallPermissionWaitHook`, `nevr_build::kIsDev`),
+  `src/quest/sentinel/entry.cpp:105-107` (development-build gates in `InstallPermissionWaitHook`, `nevr_build_stamp::IsDevelopment()`),
   `src/quest/sentinel/entry.cpp:149-158` (constructor, calls `RunSentinelConstructor`), `:162-165` (`JNI_OnLoad`).
 - GOT backend: `src/quest/sentinel/got_hook.h:4-13` (scope, no vtable or inline), `:15-31` (preconditions), `:33-39` (lock and CAS),
   `:36-38` (protection source, RELRO fallback), `:41-48` (one log line, failed install, poisoned exception), `:60` (`RelocKind`),
