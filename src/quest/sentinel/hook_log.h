@@ -34,7 +34,7 @@
 
 namespace sentinel {
 
-enum class LogLevel { kInfo, kWarn, kError };
+enum class LogLevel { kInfo, kWarn, kError, kDebug };
 
 using LogSink = void (*)(LogLevel level, const char* line);
 

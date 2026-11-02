@@ -1670,6 +1670,11 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/splash_skip_hook.cpp src/quest/sentinel/ui_texture_mips.cpp src/quest/social/lobby_full_hooks.cpp \
         "${attach_objs[@]}" "${attach_sentinel[@]}" -o "$out/row_hooks_install_test" -ldl
     timeout 300 "$out/row_hooks_install_test"
+    # The lobby-full handlers themselves (#1160): the test includes lobby_full_hooks.cpp and drives OnJoin and OnFailure with a
+    # fake lobby client and failure message, then reads the game buffer and the captured log lines.
+    "${attach[@]}" -fno-exceptions -Isrc/quest/tests src/quest/tests/lobby_full_hooks_test.cpp \
+        "${attach_objs[@]}" "${attach_sentinel[@]}" -o "$out/lobby_full_hooks_test" -ldl
+    timeout 60 "$out/lobby_full_hooks_test"
     "${attach[@]}" -fno-exceptions -Isrc/quest/tests src/quest/tests/credits_text_test.cpp src/quest/sentinel/credits_text.cpp \
         "${attach_objs[@]}" "${attach_sentinel[@]}" -o "$out/credits_text_test" -ldl
     timeout 300 "$out/credits_text_test"

@@ -1,1 +1,0 @@
-The early quit lockout countdown works again when a moderator uses /lockout on a player, and /lockout 0 clears it.
