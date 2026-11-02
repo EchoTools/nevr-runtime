@@ -17,7 +17,7 @@ namespace nevr_build_identity {
 
 struct Info {
   /// The build's version: X.Y.Z for a release, X.Y.Z-dev.N+sha for a development build (X.Y.Z from the committed
-  /// VERSION). Stamped by cmake/nevr_build_stamp.cmake.
+  /// VERSION). Written by cmake/nevr_build_stamp.cmake into the build stamp unit (core/build_stamp.h).
   std::string project_version;
 
   /// Short commit hash, e.g. "abc1234". Set by CMake from git rev-parse.

@@ -1141,7 +1141,7 @@ class ReleaseStagesTest(PackageFixture):
                         (version, COMMIT[:6].encode(), full),
                         (version, COMMIT[:7].encode() + b"0", full),  # the same first 7 digits, a different 8th
                         (version, short.upper(), full.upper()),
-                        (version, full),  # the full commit alone is not kCommit
+                        (version, full),  # the full commit alone is not kCommitShort
                         (version, short)):  # kCommitShort alone, without the build record's commit
             result = self.quest_check(self.quest_library(*strings))
             self.assertEqual(result.returncode, 1, strings)
