@@ -121,12 +121,17 @@ GAME_NAMESPACES = frozenset({
     "CSoundEmitter", "CSoundPlayer", "CSysNet::SAddress", "CSysTime", "CSysWindow", "CTimer", "CVR", "NR15RestAPI",
     "NRadEngine::CGRenderConfig", "NRadEngine::CMemBlock", "NRadEngine::CMemory", "NRadEngine::CSoundEmitter",
     "NRadEngine::CSoundPlayer", "NRadEngine::CSysNet", "NRadEngine::CSysTime", "NRadEngine::NRadGame",
-    "NRadEngine::NRadGame::NR15RestAPI", "NRadGame", "NWriteLog", "SBroadcasterData", "SComponentNodeUtils",
+    "NRadEngine::NRadGame::NR15RestAPI", "NRadGame", "NWriteLog", "SBlackboardCD", "SBroadcasterData",
+    "SComponentNodeUtils",
 })
-# Namespaces that src/reconstruction wrote, not the game's: `NRadEngine::AudioPost` groups functions the file defines
-# under bare names (`// @0x2a490d0 — BeginAudioCommandScope`), and `reconstruction_detail` is a helper namespace. Both break
-# the rule. The rename is in src/reconstruction, which this change does not edit. KNOWN-WRONG #1914
-KNOWN_WRONG_NAMESPACES = frozenset({"NRadEngine::AudioPost", "NRadEngine::NRadGame::reconstruction_detail"})
+# The last component of a namespace is `nevr` or `nevr_<area>`; a game namespace may be the prefix before it, as in
+# `NRadEngine::nevr_reconstruction`.
+NEVR_LAST_COMPONENT = re.compile(r"nevr(?:_[a-z][a-z0-9_]*)?")
+
+
+def nevr_named(name):
+    """True when the namespace's last component is `nevr` or `nevr_<area>` (docs/standards/naming.md)."""
+    return NEVR_LAST_COMPONENT.fullmatch(name.rsplit("::", 1)[-1]) is not None
 
 
 def project_files():
@@ -236,9 +241,9 @@ class NamingTest(unittest.TestCase):
         self.assertEqual(stray, {}, "these namespaces are nevr_<area> now (docs/standards/naming.md)")
 
     def test_every_namespace_is_nevr_or_the_games(self):
-        # The rule is `nevr` or `nevr_<area>` (#131). The game's own namespaces are GAME_NAMESPACES; the two
-        # PascalCase namespaces left are named here with the reason; a new one fails this test, and an entry whose
-        # namespace is gone fails it too.
+        # The rule is `nevr` or `nevr_<area>` as the last component (#131). The game's own namespaces are
+        # GAME_NAMESPACES; the two PascalCase namespaces left are named here with the reason; a new one fails this
+        # test, and an entry whose namespace is gone fails it too.
         exceptions = {
             # The hooking abstraction every patch calls; the name predates the rule.
             "src/core/hooking.h": {"Hooking"},
@@ -257,9 +262,7 @@ class NamingTest(unittest.TestCase):
         declared = set().union(*found.values())
         self.assertEqual(GAME_NAMESPACES - declared, set(),
                          "GAME_NAMESPACES names a namespace the tree no longer declares")
-        self.assertEqual(KNOWN_WRONG_NAMESPACES - declared, set(),
-                         "KNOWN_WRONG_NAMESPACES names a namespace the tree no longer declares")
-        found = {path: names - GAME_NAMESPACES - KNOWN_WRONG_NAMESPACES for path, names in found.items()}
+        found = {path: {n for n in names - GAME_NAMESPACES if not nevr_named(n)} for path, names in found.items()}
         found = {path: names for path, names in found.items() if names}
         self.assertEqual(found, exceptions, "namespaces are nevr or nevr_<area> (docs/standards/naming.md)")
 
