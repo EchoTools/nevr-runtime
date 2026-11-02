@@ -1,6 +1,7 @@
 #include "quest/social/lobby_full_hooks.h"
 
 #include "quest/social/lobby_full_backoff.h"
+#include "quest/social/lobby_full_layout.h"
 
 #include <pthread.h>
 #include <time.h>
@@ -19,17 +20,6 @@ namespace {
 
 using nevr_quest::libr15_patch::ActivateStatus;
 using Verdict = FullLobbyBackoff::Verdict;
-
-// The message offsets the game reads (CR15NetClientLobby::LobbySessionFailureCB, pinned 0x1240cc8). The join's key is the
-// 16 bytes RequestJoin is given (Join, pinned 0x1240ba8: `CNSLobby::RequestJoin(param_1 + 0x18, param_2)`).
-constexpr std::size_t kJoinKeyOffset = 0x18;
-constexpr std::size_t kFailureDataOffset = 0x10;  // *(msg + 0x10) is the failure data
-constexpr std::size_t kFailureCodeOffset = 0x18;  // data + 0x18 is the signed failure code
-// The lobby client's fields the callback reads (pinned 0x1340cc8): the status word its gate tests, and the pointer to
-// the CR15NetGame that owns the error block (`plVar10 = *(long **)(param_1 + 0x910)`; the error block is at its
-// kErrorBlockOffset, login_prompt_hook.cpp).
-constexpr std::size_t kLobbyStatusOffset = 0x448;
-constexpr std::size_t kLobbyGameOffset = 0x910;
 
 struct JoinTag {};
 struct FailureTag {};
@@ -54,12 +44,6 @@ std::uint64_t NowMs() noexcept {
   return static_cast<std::uint64_t>(ts.tv_sec) * 1000u + static_cast<std::uint64_t>(ts.tv_nsec) / 1000000u;
 }
 
-LobbyKey KeyOf(const void* msg) noexcept {
-  LobbyKey key{};
-  std::memcpy(key.data(), static_cast<const std::uint8_t*>(msg) + kJoinKeyOffset, key.size());
-  return key;
-}
-
 // "0x" and the 32 lowercase hex digits of the key, NUL-terminated.
 const char* KeyText(const LobbyKey& key, char (&out)[35]) noexcept {
   static const char kHex[] = "0123456789abcdef";
@@ -71,14 +55,6 @@ const char* KeyText(const LobbyKey& key, char (&out)[35]) noexcept {
   }
   out[34] = '\0';
   return out;
-}
-
-bool FailureCode(const void* msg, std::int8_t* code) noexcept {
-  if (msg == nullptr) return false;
-  const void* data = *reinterpret_cast<const void* const*>(static_cast<const std::uint8_t*>(msg) + kFailureDataOffset);
-  if (data == nullptr) return false;
-  *code = static_cast<std::int8_t>(static_cast<const std::uint8_t*>(data)[kFailureCodeOffset]);
-  return true;
 }
 
 // A join the policy holds back is skipped silently: the game calls Join again on the next tick, so a line here
@@ -101,34 +77,14 @@ void OnJoin(JoinThunk::Fn original, void* self, const void* msg, const void* arg
   original(self, msg, arg);
 }
 
-// The game's own failure callback returns at once unless its lobby status is in range (libr15 0x1340cc8: status - 4 < 3,
-// unsigned, the same gate as the PC callback). A refusal the game ignores is neither counted nor shown.
-bool StatusGateOpen(const void* self) noexcept {
-  if (self == nullptr) return false;
-  std::int32_t status = 0;
-  std::memcpy(&status, static_cast<const std::uint8_t*>(self) + kLobbyStatusOffset, sizeof status);
-  return static_cast<std::uint32_t>(status - 4) < 3U;
-}
-
 void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept {
   std::int8_t code = 0;
   const bool lobbyFull = FailureCode(msg, &code) && code == kLobbyFullCode;
-  // The service's message and the game object whose error page shows it, copied before the original runs: the payload
-  // belongs to the game and may be released when the callback returns (the PC twin, #1443).
-  char message[nevr_lobby_failure_message::kMessageSize] = {};
-  std::uint8_t* game = nullptr;
-  bool gateOpen = false;
-  if (lobbyFull && self != nullptr) {
-    gateOpen = StatusGateOpen(self);
-    std::memcpy(&game, static_cast<const std::uint8_t*>(self) + kLobbyGameOffset, sizeof game);
-    const void* payload = nullptr;
-    std::memcpy(&payload, static_cast<const std::uint8_t*>(msg) + kFailureDataOffset, sizeof payload);
-    if (payload != nullptr)
-      std::memcpy(message, static_cast<const std::uint8_t*>(payload) + nevr_lobby_failure_message::kMessageOffset,
-                  sizeof message);
-  }
+  // The game object whose error page shows the service's message, and the message, copied before the original runs.
+  RefusalReads reads;
+  if (lobbyFull) reads = ReadRefusal(self, msg);
   original(self, msg);
-  if (!lobbyFull || !gateOpen) return;
+  if (!lobbyFull || !reads.gateOpen) return;
 
   LobbyKey key{};
   bool haveLobby = false;
@@ -157,14 +113,13 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
 
   // The game shows a fixed page for code 8 and drops the service's message (#1443). Put the message on the error page,
   // under the code's own name. The write is data in the game object (the error block), not a code page (ADR 0021).
-  if (game != nullptr &&
-      nevr_lobby_failure_message::WriteErrorBlock(game, nevr_lobby_failure_message::Title(kLobbyFullCode), message,
-                                                  sizeof message)) {
+  if (nevr_lobby_failure_message::WriteErrorBlock(reads.game, nevr_lobby_failure_message::Title(kLobbyFullCode),
+                                                  reads.message, sizeof reads.message)) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
                         {{"status", "message_shown"},
                          {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
-                         {"message_bytes", static_cast<std::uint64_t>(
-                                               nevr_lobby_failure_message::MessageBytes(message, sizeof message))}});
+                         {"message_bytes", static_cast<std::uint64_t>(nevr_lobby_failure_message::MessageBytes(
+                                               reads.message, sizeof reads.message))}});
   }
 }
 

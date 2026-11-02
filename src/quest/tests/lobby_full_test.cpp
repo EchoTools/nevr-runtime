@@ -5,11 +5,13 @@
 // Run: lobby_full_test [name-filter]
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include "mini_test.h"
 #include "quest/social/lobby_full_backoff.h"
+#include "quest/social/lobby_full_layout.h"
 #include "runtime/patch/lobby_failure_message_rules.h"
 
 namespace {
@@ -104,6 +106,57 @@ TEST(CodeEightWritesTheLobbyFullPageWithTheServiceMessage) {
   CHECK_EQ(block[0], rules::kErrorFlagFourLines);
   CHECK(std::string(reinterpret_cast<const char*>(block + 1)) == "lobby full");
   CHECK(std::string(reinterpret_cast<const char*>(block + 1 + rules::kErrorLineBytes)) == "Lobby is full, try another");
+}
+
+// The pointer arithmetic the failure hook does (lobby_full_layout.h), on a fake lobby client: +8 holds the CR15NetGame, +0x910
+// holds a different object (LobbySessionFailureCB reads it as a table owner), and +0x448 is the status word. The error block
+// must land in the object at +8 and nothing may be written to the one at +0x910.
+TEST(TheErrorPageIsWrittenIntoTheGameAtPlusEightNotTheObjectAtPlus0x910) {
+  namespace rules = nevr_lobby_failure_message;
+  namespace lf = quest_social::lobby_full;
+  const std::size_t kGameSize = rules::kErrorBlockOffset + 1 + rules::kErrorLines * rules::kErrorLineBytes;
+  std::vector<std::uint8_t> game(kGameSize, 0xAA);
+  std::vector<std::uint8_t> other(kGameSize, 0xBB);
+  std::vector<std::uint8_t> client(0x1000, 0);
+  std::uint8_t* gamePtr = game.data();
+  std::uint8_t* otherPtr = other.data();
+  std::memcpy(client.data() + 0x8, &gamePtr, sizeof gamePtr);
+  std::memcpy(client.data() + 0x910, &otherPtr, sizeof otherPtr);
+  const std::int32_t status = 5;  // inside the game's gate: status - 4 < 3
+  std::memcpy(client.data() + 0x448, &status, sizeof status);
+
+  // msg + 0x10 -> data; data + 0x18 is the code; data + 0x20 is the 64-byte message.
+  std::vector<std::uint8_t> data(0x60, 0);
+  data[0x18] = 8;
+  std::memcpy(data.data() + 0x20, "Lobby is full, try another", sizeof "Lobby is full, try another");
+  std::vector<std::uint8_t> msg(0x20, 0);
+  const std::uint8_t* dataPtr = data.data();
+  std::memcpy(msg.data() + 0x10, &dataPtr, sizeof dataPtr);
+
+  std::int8_t code = 0;
+  CHECK(lf::FailureCode(msg.data(), &code));
+  CHECK_EQ(code, 8);
+  const lf::RefusalReads reads = lf::ReadRefusal(client.data(), msg.data());
+  CHECK(reads.gateOpen);
+  CHECK(reads.game == game.data());
+  CHECK(std::string(reads.message) == "Lobby is full, try another");
+
+  CHECK(rules::WriteErrorBlock(reads.game, rules::Title(8), reads.message, sizeof reads.message));
+  const std::uint8_t* block = game.data() + rules::kErrorBlockOffset;
+  CHECK_EQ(block[0], rules::kErrorFlagFourLines);
+  CHECK(std::string(reinterpret_cast<const char*>(block + 1)) == "lobby full");
+  CHECK(std::string(reinterpret_cast<const char*>(block + 1 + rules::kErrorLineBytes)) == "Lobby is full, try another");
+  CHECK(other == std::vector<std::uint8_t>(kGameSize, 0xBB));  // the object at +0x910 is untouched
+}
+
+TEST(TheStatusGateReadsTheWordAtPlus0x448) {
+  namespace lf = quest_social::lobby_full;
+  std::vector<std::uint8_t> client(0x1000, 0);
+  for (std::int32_t status = 0; status < 10; ++status) {
+    std::memcpy(client.data() + 0x448, &status, sizeof status);
+    CHECK_EQ(lf::StatusGateOpen(client.data()), status >= 4 && status <= 6);
+  }
+  CHECK(!lf::StatusGateOpen(nullptr));
 }
 
 // The server refuses every send and the game ticks every 100 ms for 120 s. Without the backoff every tick sends
