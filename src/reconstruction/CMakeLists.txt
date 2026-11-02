@@ -250,6 +250,16 @@ add_library(nevr_r15_reconstruction STATIC
     r15/create_start_gamespaces.cpp
     r15/login_success.cpp
     r15/allocate_exclusive.cpp
+    r15/c_canvas_display_needs_resize.cpp
+    r15/cbroadcaster_address.cpp
+    r15/cbroadcaster_disconnect.cpp
+    r15/ccanvas_display_resize.cpp
+    r15/chash_table_sbroadcast_peer_destroy.cpp
+    r15/cinput_listener_ctor.cpp
+    r15/scomponent_node_utils_component_handle_cmodel_cs_script_actor_data.cpp
+    r15/script_error.cpp
+    r15/tcp_broadcaster_send.cpp
+    r15/translate_wwise_result.cpp
     r15/set_material_property_node_update.cpp
     r15/fire_bullet_local.cpp
     r15/effect_time.cpp
