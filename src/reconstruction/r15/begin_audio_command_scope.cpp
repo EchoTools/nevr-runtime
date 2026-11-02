@@ -2,7 +2,7 @@
 // ReVault raw parent 100335323, reconstruction node 100600355; grade M.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a490d0 — BeginAudioCommandScope
 /* @confidence: M — matches the raw allocator lookup and stored command handle. */
@@ -12,4 +12,4 @@ void BeginAudioCommandScope(void* scope, std::uint16_t command_kind,
         AllocateAudioCommandStorage(DAT_038cec78, command_kind, command_size);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

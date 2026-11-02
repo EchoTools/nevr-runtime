@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a59d60 — AllocateAudioRingBlock
 /* @confidence: M — reproduces the aligned ring reservation and wrap marker from the raw body. */
@@ -54,4 +54,4 @@ std::byte* AllocateAudioRingBlock(std::uint64_t context,
     }
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

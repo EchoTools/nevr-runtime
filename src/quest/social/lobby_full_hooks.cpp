@@ -1,6 +1,7 @@
 #include "quest/social/lobby_full_hooks.h"
 
 #include "quest/social/lobby_full_backoff.h"
+#include "quest/social/lobby_full_layout.h"
 
 #include <pthread.h>
 #include <time.h>
@@ -12,18 +13,13 @@
 #include "hook_log.h"
 #include "hook_install.h"
 #include "libr15_attach.h"
+#include "runtime/patch/lobby_failure_message_rules.h"
 
 namespace quest_social::lobby_full {
 namespace {
 
 using nevr_quest::libr15_patch::ActivateStatus;
 using Verdict = FullLobbyBackoff::Verdict;
-
-// The message offsets the game reads (CR15NetClientLobby::LobbySessionFailureCB, pinned 0x1240cc8). The join's key is the
-// 16 bytes RequestJoin is given (Join, pinned 0x1240ba8: `CNSLobby::RequestJoin(param_1 + 0x18, param_2)`).
-constexpr std::size_t kJoinKeyOffset = 0x18;
-constexpr std::size_t kFailureDataOffset = 0x10;  // *(msg + 0x10) is the failure data
-constexpr std::size_t kFailureCodeOffset = 0x18;  // data + 0x18 is the signed failure code
 
 struct JoinTag {};
 struct FailureTag {};
@@ -48,12 +44,6 @@ std::uint64_t NowMs() noexcept {
   return static_cast<std::uint64_t>(ts.tv_sec) * 1000u + static_cast<std::uint64_t>(ts.tv_nsec) / 1000000u;
 }
 
-LobbyKey KeyOf(const void* msg) noexcept {
-  LobbyKey key{};
-  std::memcpy(key.data(), static_cast<const std::uint8_t*>(msg) + kJoinKeyOffset, key.size());
-  return key;
-}
-
 // "0x" and the 32 lowercase hex digits of the key, NUL-terminated.
 const char* KeyText(const LobbyKey& key, char (&out)[35]) noexcept {
   static const char kHex[] = "0123456789abcdef";
@@ -65,14 +55,6 @@ const char* KeyText(const LobbyKey& key, char (&out)[35]) noexcept {
   }
   out[34] = '\0';
   return out;
-}
-
-bool FailureCode(const void* msg, std::int8_t* code) noexcept {
-  if (msg == nullptr) return false;
-  const void* data = *reinterpret_cast<const void* const*>(static_cast<const std::uint8_t*>(msg) + kFailureDataOffset);
-  if (data == nullptr) return false;
-  *code = static_cast<std::int8_t>(static_cast<const std::uint8_t*>(data)[kFailureCodeOffset]);
-  return true;
 }
 
 // A join the policy holds back is skipped silently: the game calls Join again on the next tick, so a line here
@@ -97,30 +79,64 @@ void OnJoin(JoinThunk::Fn original, void* self, const void* msg, const void* arg
 
 void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept {
   std::int8_t code = 0;
-  if (FailureCode(msg, &code) && code == kLobbyFullCode) {
-    LobbyKey key{};
-    bool haveLobby = false;
-    FullLobbyBackoff::Decision d;
-    pthread_mutex_lock(&g_mutex);
-    if (g_haveLastJoin) {
-      key = g_lastJoin;
-      haveLobby = true;
-      d = Backoff().OnFull(key, NowMs());
-    }
-    pthread_mutex_unlock(&g_mutex);
-    char keyText[35];
-    if (haveLobby && d.verdict == Verdict::kWait) {
-      sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
-                          {{"status", "wait"},
-                           {"refusal", d.refusals},
-                           {"wait_ms", d.waitMs},
-                           {"lobby", KeyText(key, keyText)}});
-    } else if (haveLobby && d.verdict == Verdict::kGiveUp) {
-      sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
-                          {{"status", "give_up"}, {"refusals", d.refusals}, {"lobby", KeyText(key, keyText)}});
-    }
-  }
+  const bool lobbyFull = FailureCode(msg, &code) && code == kLobbyFullCode;
+  // The game object whose error page shows the service's message, and the message, copied before the original runs.
+  RefusalReads reads;
+  if (lobbyFull) reads = ReadRefusal(self, msg);
   original(self, msg);
+  if (!lobbyFull) return;
+
+  if (!reads.gateOpen) {
+    // The game returned at once on this refusal (its status is out of range), so it is neither counted nor shown.
+    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
+                        {{"status", "refusal_dropped"}, {"reason", "status_gate_closed"}});
+    return;
+  }
+
+  LobbyKey key{};
+  bool haveLobby = false;
+  FullLobbyBackoff::Decision d;
+  pthread_mutex_lock(&g_mutex);
+  if (g_haveLastJoin) {
+    key = g_lastJoin;
+    haveLobby = true;
+    d = Backoff().OnFull(key, NowMs());
+  }
+  pthread_mutex_unlock(&g_mutex);
+  char keyText[35];
+  const char* lobbyText = haveLobby ? KeyText(key, keyText) : "unknown";
+  if (!haveLobby) {
+    // No join went through this hook, so there is no lobby to count the refusal against; the page is still shown.
+    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
+                        {{"status", "refusal_uncounted"}, {"reason", "no_join_recorded"}});
+  } else if (d.verdict == Verdict::kWait) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
+                        {{"status", "wait"}, {"refusal", d.refusals}, {"wait_ms", d.waitMs}, {"lobby", lobbyText}});
+  } else if (d.verdict == Verdict::kGiveUp) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
+                        {{"status", "cooldown"},
+                         {"refusals", d.refusals},
+                         {"cooldown_ms", d.waitMs},
+                         {"lobby", lobbyText}});
+  }
+
+  // The game shows a fixed page for code 8 and drops the service's message (#1443). Put the message on the error page,
+  // under the code's own name. The write is data in the game object (the error block), not a code page (ADR 0021).
+  if (nevr_lobby_failure_message::WriteErrorBlock(reads.game, nevr_lobby_failure_message::Title(kLobbyFullCode),
+                                                  reads.message, sizeof reads.message)) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
+                        {{"status", "message_shown"},
+                         {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
+                         {"lobby", lobbyText},
+                         {"message_bytes", static_cast<std::uint64_t>(nevr_lobby_failure_message::MessageBytes(
+                                               reads.message, sizeof reads.message))}});
+  } else {
+    // An empty message or no game object: the game's own page stays.
+    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
+                        {{"status", "page_unchanged"},
+                         {"reason", reads.game == nullptr ? "no_game_object" : "empty_message"},
+                         {"lobby", lobbyText}});
+  }
 }
 
 void OnSuccess(SuccessThunk::Fn original, void* self, const void* msg) noexcept {

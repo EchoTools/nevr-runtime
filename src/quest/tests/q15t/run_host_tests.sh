@@ -25,7 +25,7 @@ for arm in "0 0" "1 0" "0 1"; do
     -DQ15T_HZ_MATCH90=$cap -DQ15T_T26=$t26 -DQ15T_SLOT_SETCLOCKLEVELS=0x10 -DQ15T_SLOT_SETDISPLAYREFRESHRATE=0x18 -include "$tests/host_overrides.h" \
     -DQ15T_BUILD_ID_FOR_TEST='"b243509c08ce677aeb95fa348016949b3fc45230"' "${@}" \
     -I"$here/src" -I"$nevr/sdk/include" \
-    "$tests/host_test.cpp" "$here/src/plugin.cpp" "$here/src/plugin_log.cpp" "$here/src/import_hook.cpp" "$here/src/clock_levels.cpp" "$here/src/plugin_args.cpp" "$here/src/refresh_rate.cpp" "$here/src/game_tick.cpp" "$here/src/safe_read.cpp" "$here/src/headset_gates.cpp" "$here/src/got_swap.cpp" "$here/src/weapon_arm.cpp" "$here/src/gamespace.cpp" \
+    "$tests/host_test.cpp" "$here/src/plugin.cpp" "$here/src/plugin_log.cpp" "$here/src/script_redirect.cpp" "$here/src/import_hook.cpp" "$here/src/clock_levels.cpp" "$here/src/plugin_args.cpp" "$here/src/refresh_rate.cpp" "$here/src/game_tick.cpp" "$here/src/safe_read.cpp" "$here/src/headset_gates.cpp" "$here/src/got_swap.cpp" "$here/src/weapon_arm.cpp" "$here/src/gamespace.cpp" \
     -o "$out/host_test_${cap}_${t26}" -ldl
   "$out/host_test_${cap}_${t26}"
 done

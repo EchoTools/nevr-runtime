@@ -149,7 +149,18 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cmemory_context_set_current.cpp
     r15/cmemory_context_current.cpp
     r15/cmem_block_ctor.cpp
+    r15/chttp_listener_request_body.cpp
+    r15/chttp_listener_request_reply_with_json.cpp
+    r15/csysnet_saddress_ipv4.cpp
+    r15/csysnet_tipv4_string.cpp
     r15/cmem_block_resize.cpp
+    r15/cfactory_cgvisibility_resource_create_data.cpp
+    r15/cgrenderconfig_set_display_gamma.cpp
+    r15/cgrenderconfig_set_enable_temporal_aa.cpp
+    r15/cgrenderconfig_set_msaa_mode.cpp
+    r15/cgrenderconfig_set_sharpening_amount.cpp
+    r15/cgrenderconfig_set_temporal_aa_blend_weight.cpp
+    r15/nwrite_log_write_log.cpp
     r15/cbvhtree_shutdown.cpp
     r15/cbvhtree_intersect.cpp
     r15/cbvhtree_occluded.cpp
@@ -176,9 +187,26 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cjson_navigate_object_path.cpp
     r15/cjson_navigate_array_path.cpp
     r15/local_teleport.cpp
+    r15/csysnet_send_to.cpp
+    r15/cr15_net_customization_renderer_destroy_context.cpp
+    r15/cr15_net_customization_renderer_load_mesh_data.cpp
+    r15/android_main.cpp
+    r15/cg_engine_resources_initialize.cpp
     r15/query_collision.cpp
+    r15/c_task_kernel_execute_task.cpp
+    r15/cr15_net_game_apply_item_from_loadout.cpp
+    r15/cmem_block_dtor.cpp
+    r15/cmem_block_constructor.cpp
+    r15/cnca_game_space_send_component_event.cpp
+    r15/cnca_game_space_send_component_event_global_2arg.cpp
+    r15/clocal_component_handle_cr15_net_customization_cs_find.cpp
+    r15/sort_512_csimplekey_ccomponentsystem_csymbol64.cpp
+    r15/model_cs_set_material_property.cpp
+    r15/deferred_method_queue_queue_functor.cpp
     r15/resolve_zone.cpp
     r15/csys_string_length.cpp
+    r15/cenvironment_get_global.cpp
+    r15/cenvironment_get_tls_handle.cpp
     r15/csys_string_length_bounded.cpp
     r15/csys_thread_get_tls.cpp
     r15/cfixedstringt_sprintf.cpp
@@ -188,9 +216,36 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cnca_game_space_get_st.cpp
     r15/csys_thread_set_tls.cpp
     r15/csymbol64_append.cpp
+    r15/c_blackboard_cs_copy_component_data.cpp
+    r15/c_deferred_method_queue_queue_functor_social_interact.cpp
+    r15/c_sound_player_send_global_event.cpp
+    r15/c_sound_player_set_switch2d.cpp
+    r15/fun_0294f380.cpp
     r15/query_collision_particle.cpp
+    r15/cquaternion_from_rotation_matrix.cpp
+    r15/cnca_game_space_send_component_event_global.cpp
+    r15/csymbol64_string.cpp
+    r15/cr15_net_game_switch_to.cpp
+    r15/output_error.cpp
+    r15/ctransform_cs_compute_local_to_world_transf_q.cpp
+    r15/cnca_game_space_allocate_pooled_actor.cpp
+    r15/cnca_game_require_game_space.cpp
+    r15/cr15_net_game_log_in_offline.cpp
+    r15/cerr_msg_create_and_add_error.cpp
     r15/connect.cpp
+    r15/sort_512_csimplekey_ctable_ccomponentsystem_csymbol64.cpp
+    r15/ctransfqs_combine.cpp
+    r15/cmodel_swapper_cs_register_pre_model_swap_callback.cpp
+    r15/cmodel_swapper_cs_register_success_model_swap_callback.cpp
+    r15/c_physics_cs_local_velocity.cpp
+    r15/c_stack_allocator_direct_free.cpp
+    r15/cmem_block_destructor.cpp
+    r15/cr15_net_game_server.cpp
+    r15/cr15_net_game_user_name.cpp
     r15/connect_gun.cpp
+    r15/cr15_net_game_user_id_from_net_id.cpp
+    r15/ctransform_cs_compute_local_to_level_transf_q.cpp
+    r15/ctransform_cs_compute_parent_to_world_transf_q.cpp
     r15/cr15_game_ctor.cpp
     r15/cg_mesh_list_resource.cpp
     r15/cfactory_cgshader_set_resource_construct_instance.cpp
@@ -201,20 +256,60 @@ add_library(nevr_r15_reconstruction STATIC
     r15/create_start_gamespaces.cpp
     r15/login_success.cpp
     r15/allocate_exclusive.cpp
+    r15/c_canvas_display_needs_resize.cpp
+    r15/cbroadcaster_address.cpp
+    r15/cbroadcaster_disconnect.cpp
+    r15/ccanvas_display_resize.cpp
+    r15/chash_table_sbroadcast_peer_destroy.cpp
+    r15/cinput_listener_ctor.cpp
+    r15/scomponent_node_utils_component_handle_cmodel_cs_script_actor_data.cpp
+    r15/script_error.cpp
+    r15/tcp_broadcaster_send.cpp
+    r15/translate_wwise_result.cpp
     r15/set_material_property_node_update.cpp
     r15/fire_bullet_local.cpp
+    r15/ccomponent_handle_cr15_net_actor_cs_find_internal.cpp
+    r15/ccomponent_handle_cr15_net_actor_cs_refresh_cache.cpp
+    r15/ccomponent_handle_cr15_net_bullet_cs_find_internal.cpp
+    r15/ccomponent_handle_cr15_net_bullet_cs_refresh_cache.cpp
+    r15/ccomponent_handle_cr15_net_heal_bubble_target_cs_refresh_cache.cpp
+    r15/cr15_net_var_cs_int.cpp
+    r15/cr15_net_var_cs_symbol.cpp
+    r15/scomponent_node_utils_actor.cpp
+    r15/scomponent_node_utils_component_handle_cr15_net_damageable_cs_script_actor_data.cpp
+    r15/scomponent_node_utils_component_handle_cr15_net_id_cs_symbol64.cpp
     r15/effect_time.cpp
     r15/levelname.cpp
     r15/fill_resource_file_request.cpp
     r15/patrol_update.cpp
     r15/set_full_screen_tint_node_enter.cpp
     r15/cr15_game_begin_offline_multiplayer.cpp
+    r15/ccomponent_handle_cphysics_cs_refresh_cache.cpp
+    r15/cg_engine_resources_shutdown.cpp
+    r15/cr15_net_client_lobby_create.cpp
+    r15/cr15_net_client_lobby_find.cpp
+    r15/cr15_net_client_lobby_switch_to.cpp
+    r15/cr15_net_game_begin_multiplayer.cpp
+    r15/cr15_net_game_profile_stat_int.cpp
+    r15/cr15_net_game_set_error_message.cpp
+    r15/party_lobby_unjoinable.cpp
+    r15/session_request_execute.cpp
     r15/cg_irradiance_volumes_query.cpp
     r15/compute_parent_to_level.cpp
     r15/enable_scenario.cpp
     r15/bot_actor_id.cpp
     r15/service_connection_failed.cpp
     r15/update_exclusive.cpp
+    r15/c_deferred_method_queue_queue_functor_damageable_float_user_id.cpp
+    r15/fun_01988a98.cpp
+    r15/cg_shape_num_indices_for_solid_sphere.cpp
+    r15/cg_shape_num_vertices_for_solid_sphere.cpp
+    r15/cg_vertex_format_append_element.cpp
+    r15/cg_vertex_format_append_element_with_alias.cpp
+    r15/cgvertexformat_vertex_size.cpp
+    r15/clear_file_request_data.cpp
+    r15/fun_018dad8c.cpp
+    r15/fun_018db678.cpp
     r15/login_failed.cpp
     r15/create_match.cpp
 )

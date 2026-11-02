@@ -33,6 +33,7 @@
 #include "plugin_log.h"
 #include "powerboost.h"
 #include "refresh_rate.h"
+#include "script_redirect.h"
 #include "sensorwd.h"
 #include "shaderstep.h"
 #include "shieldgamma.h"
@@ -414,6 +415,8 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
     Log(NEVR_LOG_WARNING, "refused: not the pinned game build", start, 7);
     return 0;  // loaded, nothing installed
   }
+  RegisterScriptRedirect(ctx);  // the combat libraries (#1737): all or nothing; plugin init runs after the first hooked dlopen
+                               // returns a handle (script_redirect.h, Register), so loads before that are not redirected
   Report("vrapi_SetClockLevels", InstallClockLevels(ctx->base_addr, Q15T_SLOT_SETCLOCKLEVELS));
   Report("vrapi_SetDisplayRefreshRate", InstallRefreshRate(ctx->base_addr, Q15T_SLOT_SETDISPLAYREFRESHRATE));
   // The three combat gates (combat_gates.h): what is built, less what a kill file turns off; the bot-body gate only with levelname.

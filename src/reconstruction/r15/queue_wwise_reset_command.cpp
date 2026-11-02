@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4a160 — QueueWwiseResetCommand
 /* @confidence: H — both reset-command variants, observed sizes, field offsets and scope commit match the complete stored body. */
@@ -34,4 +34,4 @@ std::uint64_t QueueWwiseResetCommand(std::uint32_t symbol,
     return 1;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

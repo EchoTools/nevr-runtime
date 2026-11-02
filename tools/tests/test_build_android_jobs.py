@@ -26,7 +26,12 @@ class BuildAndroidJobsTest(unittest.TestCase):
             env.pop("CMAKE_BUILD_PARALLEL_LEVEL", None)
             if parallel_level is not None:
                 env["CMAKE_BUILD_PARALLEL_LEVEL"] = parallel_level
-            result = subprocess.run(["just", "build-android"], cwd=REPO, env=env, capture_output=True, text=True)
+            # --no-deps runs the recipe's own body alone: the heavy guard and the configure step are dependencies,
+            # and the guard refuses a Claude Code session whatever the test does. The job count is the body's
+            # (the one `cmake --build` line), and the fake cmake records it. The guard's own dependency on every
+            # heavy recipe is pinned by tools/tests/test_heavy_guard.py.
+            result = subprocess.run(["just", "--no-deps", "build-android"], cwd=REPO, env=env, capture_output=True,
+                                    text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return log.read_text().splitlines()
 

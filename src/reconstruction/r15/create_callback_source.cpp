@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4b5e0 — CreateCallbackSource
 /* @confidence: M — copies each 32-byte callback record and deep-copies its optional string; allocator boundary is inferred. */
@@ -47,4 +47,4 @@ std::uint64_t CreateCallbackSource(std::int32_t count, std::uint64_t records) {
     return reinterpret_cast<std::uintptr_t>(source);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

@@ -19,9 +19,10 @@ std::atomic<LogSink> g_sink{nullptr};
 
 void DefaultSink(LogLevel level, const char* line) {
 #ifdef __ANDROID__
-  const int priority = level == LogLevel::kError  ? ANDROID_LOG_ERROR
-                       : level == LogLevel::kWarn ? ANDROID_LOG_WARN
-                                                  : ANDROID_LOG_INFO;
+  const int priority = level == LogLevel::kError   ? ANDROID_LOG_ERROR
+                       : level == LogLevel::kWarn  ? ANDROID_LOG_WARN
+                       : level == LogLevel::kDebug ? ANDROID_LOG_DEBUG
+                                                   : ANDROID_LOG_INFO;
   __android_log_write(priority, "NEVR-Sentinel", line);
 #else
   static_cast<void>(level);
@@ -30,7 +31,10 @@ void DefaultSink(LogLevel level, const char* line) {
 }
 
 const char* LevelName(LogLevel level) {
-  return level == LogLevel::kError ? "error" : level == LogLevel::kWarn ? "warn" : "info";
+  return level == LogLevel::kError   ? "error"
+         : level == LogLevel::kWarn  ? "warn"
+         : level == LogLevel::kDebug ? "debug"
+                                     : "info";
 }
 
 constexpr std::size_t kLineCapacity = 768;

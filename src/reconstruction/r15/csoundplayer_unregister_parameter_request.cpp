@@ -4,7 +4,7 @@
 
 #include <utility>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x144c584 — CSoundPlayer::UnregisterParameterRequest
 /* @confidence: M — generation check, compacting slot swap, remap update and invalidation match the full body; global layouts are inferred from offsets. */
@@ -36,4 +36,4 @@ void UnregisterParameterRequest(std::uint64_t handle) {
     CLockReadWriteWriteUnlock(&DAT_0386eeb0);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

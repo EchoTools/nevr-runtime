@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 using SoundEventCallback = void (*)(int, void*);
 
@@ -231,4 +231,4 @@ bool AudioCommandQueueHasFourBytes(const std::uint64_t* queue);
 void AdvanceAudioCommandQueueHead(std::uint64_t* queue,
                                  std::int32_t byte_count);
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

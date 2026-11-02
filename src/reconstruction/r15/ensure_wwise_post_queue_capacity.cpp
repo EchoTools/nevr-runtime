@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2aaed80 — EnsureWwisePostQueueCapacity
 /* @confidence: M — preserves the raw 0.9 load threshold and grows the table when empty or overloaded. */
@@ -25,4 +25,4 @@ bool EnsureWwisePostQueueCapacity(std::byte* queue) {
     return bucket_count != 0;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

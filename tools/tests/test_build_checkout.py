@@ -14,6 +14,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "tools" / "build_checkout.py"
 CONFIG_SH = ROOT / "tools" / "ccache_config.sh"
@@ -199,23 +202,29 @@ class CcacheConfigTest(unittest.TestCase):
 
 class JustfileWiringTest(unittest.TestCase):
     def recipe(self, name):
-        match = re.search(rf"(?ms)^{re.escape(name)}[^\n]*:[^\n]*\n(.*?)(?=^\S)", JUSTFILE)
-        self.assertIsNotNone(match, name)
-        return match.group(0)
+        text = just_recipe.recipe(JUSTFILE, name)
+        self.assertIsNotNone(text, name)
+        return text
 
     def test_no_quest_configure_blanks_the_launcher_unconditionally(self):
+        # #1868: the Quest configure passes the ccache launcher in every checkout, read from the environment. It
+        # must not clear it, and must pass it to both compilers.
         self.assertNotRegex(JUSTFILE, r"CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER=",
                             "a Quest configure that always clears the launcher runs every Quest build uncached")
         for name in ("configure-android", "_quest-apk"):
             body = self.recipe(name)
-            self.assertIn("tools/build_checkout.py quest-launcher", body, name)
+            self.assertIn('launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"', body, name)
             self.assertIn('CMAKE_CXX_COMPILER_LAUNCHER="$launcher"', body, name)
+            self.assertIn('CMAKE_C_COMPILER_LAUNCHER="$launcher"', body, name)
 
     def test_the_guard_runs_before_every_configure_that_can_use_the_cache(self):
         self.assertRegex(JUSTFILE, r"(?m)^_build-guard:\n    @python3 -I tools/build_checkout\.py guard$")
-        for header in (r"^configure: _build-guard ", r"^configure-android: _build-guard( _require-ndk)?$",
-                       r"^_quest-apk store_apk: _build-guard( _require-ndk)?$"):
-            self.assertRegex(JUSTFILE, "(?m)" + header)
+        # The dependencies are the words after the header's colon; a recipe's own variadic parameter and the
+        # guard's opt-in call `(_heavy-guard "name" args)` do not change which words are dependencies.
+        for name in ("configure", "configure-android", "_quest-apk"):
+            header = just_recipe.header(JUSTFILE, name)
+            self.assertIsNotNone(header, name)
+            self.assertIn("_build-guard", header.split(":", 1)[1].split(), f"{name} does not depend on _build-guard: {header}")
 
     def test_ccache_reads_one_config_that_lives_in_the_cache_directory(self):
         self.assertNotRegex(JUSTFILE, r'CCACHE_CONFIGPATH :=\s*justfile_directory\(\)',

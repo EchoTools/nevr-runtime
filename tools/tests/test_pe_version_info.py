@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pe_version_info as vi  # noqa: E402
 from pe_version_fixtures import pe_with_resources, resource_tree, shipped_pe, version_block  # noqa: E402
+import just_recipe  # noqa: E402
 
 TOOL = REPO / "tools" / "pe_version_info.py"
 TEMPLATE = REPO / "cmake" / "nevr_version_info.cmake"
@@ -496,7 +497,8 @@ class WiringTest(unittest.TestCase):
         self.assertLess(cmake.index("project(NEVRServer"), cmake.index("enable_language(RC)"))
 
     def test_the_verify_recipe_reads_both_built_files_back(self):
-        recipe = (REPO / "justfile").read_text().split("\nverify:", 1)[1]
+        recipe = just_recipe.body((REPO / "justfile").read_text(), "verify")
+        self.assertIsNotNone(recipe, "justfile no longer has a verify recipe")
         line = ('python3 tools/pe_version_info.py check --dll "build/{{ preset }}/bin/BugSplat64.dll" '
                 '--runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --exe "build/{{ preset }}/bin/echovr_server.exe"')
         self.assertEqual(recipe.count(line), 1)

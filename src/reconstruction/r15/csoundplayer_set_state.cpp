@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x144bf10 — CSoundPlayer::SetState
 /* @confidence: M — sorted cache handling, duplicate suppression, command submission and translated errors match the raw body; sorting semantics are interpreted from the table layout. */
@@ -61,4 +61,4 @@ std::uint64_t SetState(void* player, std::uint32_t group,
     return 0;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

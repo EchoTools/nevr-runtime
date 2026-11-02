@@ -1,3 +1,6 @@
+// NRadEngine::CMemory::Compare
+// Quest libr15.so VA 0x12cae74; ReVault binary 576.
+// ReVault raw parent 100219603, reconstruction node 100600267; grade H: the Quest body is a direct three-argument memcmp thunk.
 // @0x12cae74 — NRadEngine::CMemory::Compare
 /* @confidence: H — the Quest body is a direct three-argument memcmp thunk. */
 #include <cstddef>

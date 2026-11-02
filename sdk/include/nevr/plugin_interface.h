@@ -106,6 +106,17 @@ enum NevrQuestFilterResult : int32_t {
     NEVR_QUEST_FILTER_HOOK_REFUSED  = 4, /* the host could not hook the game's input call; nothing was installed */
 };
 
+/* What register_script_redirect returns. 0 is OK; every other value is a refusal. A refusal other than ALREADY_ARMED
+ * leaves nothing registered, so the plugin may call register_script_redirect again (a missing file may have arrived). */
+enum NevrScriptRedirectResult : int32_t {
+    NEVR_SCRIPT_REDIRECT_OK               = 0,
+    NEVR_SCRIPT_REDIRECT_BAD_ARGUMENT     = 1, /* null plugin_id or hashes, or a count outside 1..16 */
+    NEVR_SCRIPT_REDIRECT_ALREADY_ARMED    = 2, /* a registration is already in force; one per process */
+    NEVR_SCRIPT_REDIRECT_MISSING_LIBRARY  = 3, /* a lib<hash>_q15t.so the registration names is not in the native library
+                                                *   directory; nothing was registered (all or nothing) */
+    NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR   = 4, /* the host could not find the directory its own library was loaded from */
+};
+
 /* The services a Quest host offers a plugin, reached through ctx->quest. Every pointer is process-lifetime. A
  * plugin checks struct_size covers a member before calling it: the struct grows at its tail. */
 struct NevrQuestHostApi {
@@ -114,6 +125,12 @@ struct NevrQuestHostApi {
      * one filter per process, never removed. `plugin_id` is ctx->plugin_id. Returns a NevrQuestFilterResult; the
      * host logs each outcome. Call from init, not from a filter. */
     int32_t (*register_input_filter)(const char* plugin_id, NevrQuestInputFilterFn filter, void* user);
+    /* Redirects the game's loads of the stock script libraries named by `stock_hashes` (count entries, 1..16): the
+     * game asks for lib<hash>.so, and the host opens lib<hash>_q15t.so from the native library directory instead. The
+     * registration is all or nothing: every lib<hash>_q15t.so must be there, or none is registered and the host logs
+     * which are missing. The stock files are never read in its place. One registration per process; call from init. A
+     * refusal other than NEVR_SCRIPT_REDIRECT_ALREADY_ARMED leaves nothing registered: the plugin may call again. */
+    int32_t (*register_script_redirect)(const char* plugin_id, const uint64_t* stock_hashes, uint32_t count);
 };
 
 /* Game context passed to the plugin by the host.

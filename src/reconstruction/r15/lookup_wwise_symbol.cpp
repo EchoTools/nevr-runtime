@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a51d60 — LookupWwiseSymbol
 /* @confidence: H — reduces the identity hash by bucket count, then searches that chain. */
@@ -20,4 +20,4 @@ void* LookupWwiseSymbol(std::uintptr_t table, std::uint32_t event) {
                                       bucket_index);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

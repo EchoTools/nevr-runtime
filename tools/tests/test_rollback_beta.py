@@ -1039,12 +1039,12 @@ class Runbook(unittest.TestCase):
         blocks = self.blocks()
         self.assertNotIn("gh-spritz", blocks)
         self.assertNotIn("systemctl", blocks)
-        self.assertEqual(blocks.count("$GH_BIN variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime"), 2)
+        self.assertEqual(blocks.count("$GH_BIN variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime"), 1)
 
     def test_the_prose_says_what_an_operator_has_to_know_before_pasting(self) -> None:
         prose = self.section()
         self.assertIn("refuses loudly if it is empty", prose)
-        self.assertIn("this tool does not stop the timer", prose)
+        self.assertIn("since the tool does not stop it", prose)
         self.assertIn("When `GH_BIN` is unset the tool uses `gh`", prose)
 
 class Timeouts(RollbackCase):

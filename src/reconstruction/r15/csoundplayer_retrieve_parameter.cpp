@@ -2,7 +2,7 @@
 // ReVault raw parent 100227807, reconstruction node 100600524; grade M.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x144c664 — CSoundPlayer::RetrieveParameter
 /* @confidence: M — audio-disabled output, generation and active-slot checks, result copy, and read-lock scope match the raw body. */
@@ -32,4 +32,4 @@ std::uint32_t RetrieveParameter(std::uint64_t handle,
     return result;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

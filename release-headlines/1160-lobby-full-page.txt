@@ -1,0 +1,1 @@
+On Quest, when the lobby you tried to join is full, you now see a "lobby full" message, and the game waits before it tries that lobby again.

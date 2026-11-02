@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2aaee00 — GrowWwisePostQueue
 /* @confidence: M — preserves the raw prime-capacity sequence, bucket rehash and allocation-failure result. */
@@ -72,4 +72,4 @@ std::uint32_t GrowWwisePostQueue(std::byte* queue,
     return 1;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

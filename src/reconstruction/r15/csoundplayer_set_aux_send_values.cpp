@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x144b8b4 — CSoundPlayer::SetAuxSendValues
 /* @confidence: M — disabled-audio return, sentinel-prefixed 16-byte entries, command result translation, and error-dependent return match the full body; the table is treated as count plus an array of 64-bit values. */
@@ -42,4 +42,4 @@ std::uint64_t SetAuxSendValues(const void* values_table,
     return result;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction
