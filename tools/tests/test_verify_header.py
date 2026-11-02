@@ -1,10 +1,13 @@
 """The header of `just verify` names the commit, says whether the tree is clean, and lists every dirty path (#844)."""
 import pathlib
-import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 JUSTFILE = REPO / "justfile"
@@ -13,9 +16,10 @@ JUSTFILE = REPO / "justfile"
 def header_snippet() -> str:
     """The recipe's lines from the HEAD echo up to the first `just build`, de-indented."""
     text = JUSTFILE.read_text()
-    match = re.search(r"^verify:\n    #!/usr/bin/env bash\n(?P<body>(?:    .*\n|\n)+)", text, re.M)
-    assert match, "justfile has no verify recipe with a bash shebang"
-    lines = match.group("body").splitlines()
+    body = just_recipe.body(text, "verify")
+    assert body is not None, "justfile has no verify recipe"
+    assert body.splitlines()[0].strip() == "#!/usr/bin/env bash", "verify recipe has no bash shebang"
+    lines = body.splitlines()
     start = next(i for i, line in enumerate(lines) if 'echo "verify: HEAD' in line)
     end = next(i for i, line in enumerate(lines) if line.strip() == "just build")
     assert start < end, "the header must come before `just build`"

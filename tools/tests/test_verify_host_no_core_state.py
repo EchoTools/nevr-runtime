@@ -10,6 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import verify_host_no_core_state as sensor  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
 
 TOOL = Path(__file__).resolve().parents[1] / "verify_host_no_core_state.py"
 
@@ -121,10 +123,10 @@ class RecipeWiringTest(unittest.TestCase):
     """`just verify` runs the check on the unstripped build output, against both libraries, with no escape hatch."""
 
     def recipe(self):
-        text = (Path(__file__).resolve().parents[2] / "justfile").read_text()
-        start = text.index("\nverify:\n")
-        end = text.index("\n\n", text.index("verify: OK", start)) if "verify: OK" in text[start:] else len(text)
-        return text[start:end]
+        recipe = just_recipe.recipe((Path(__file__).resolve().parents[2] / "justfile").read_text(), "verify")
+        if recipe is None:
+            raise AssertionError("justfile has no verify recipe")
+        return recipe
 
     def test_verify_runs_the_tool_on_the_unstripped_host_against_core_and_abi(self):
         lines = [line for line in self.recipe().splitlines() if "tools/verify_host_no_core_state.py" in line]

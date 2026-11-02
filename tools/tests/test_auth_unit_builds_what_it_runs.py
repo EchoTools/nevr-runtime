@@ -6,17 +6,20 @@ every earlier binary has run (#1805, test_early_quit_feature_flags in #1803).
 """
 import pathlib
 import re
+import sys
 import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
 
 def recipe_text():
-    justfile = (REPO / "justfile").read_text(encoding="utf-8")
-    match = re.search(r"^test-auth-unit:\n((?:[ \t]+.*\n|\n)*)", justfile, re.M)
-    if match is None:
+    body = just_recipe.body(just_recipe.read_justfile(), "test-auth-unit")
+    if body is None:
         raise AssertionError("no test-auth-unit recipe in the justfile")
-    return match.group(1)
+    return body
 
 
 def code_lines(recipe):
