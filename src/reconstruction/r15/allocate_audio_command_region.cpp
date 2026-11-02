@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a537f0 — AllocateAudioCommandRegion
 /* @confidence: M — increments the activity count around a ring allocation and releases it on failure. */
@@ -22,4 +22,4 @@ std::byte* AllocateAudioCommandRegion(std::uint64_t context,
     return nullptr;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

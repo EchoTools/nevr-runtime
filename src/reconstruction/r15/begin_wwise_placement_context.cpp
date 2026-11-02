@@ -4,7 +4,7 @@
 
 #include <cstddef>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a52030 — BeginWwisePlacementContext
 /* @confidence: H — the raw body has no observable effect. */
@@ -12,4 +12,4 @@ void BeginWwisePlacementContext(void* context) {
     (void)context;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

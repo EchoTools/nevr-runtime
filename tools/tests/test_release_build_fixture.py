@@ -1,8 +1,11 @@
 """#745: a release build must not fetch the real signed fixture from a host outside GitHub."""
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
 
 
 def test_the_verify_step_of_build_yml_marks_a_release_build():
@@ -13,9 +16,8 @@ def test_the_verify_step_of_build_yml_marks_a_release_build():
 
 
 def test_test_auth_unit_fetches_only_outside_a_release_build():
-    text = (ROOT / "justfile").read_text()
-    recipe = text[text.index("\ntest-auth-unit:"):]
-    recipe = recipe[: recipe.index("\n\n", recipe.index("fetch_real_signed_dll"))]
+    recipe = just_recipe.recipe((ROOT / "justfile").read_text(), "test-auth-unit")
+    assert recipe, "no test-auth-unit recipe in the justfile"
     release = re.search(r'if \[\[ "\$\{NEVR_RELEASE_BUILD:-\}" == "1" \]\]; then(.*?)\n    else(.*?)\n    fi', recipe, re.S)
     assert release, "no NEVR_RELEASE_BUILD branch in test-auth-unit"
     assert "fetch_real_signed_dll" not in release.group(1)

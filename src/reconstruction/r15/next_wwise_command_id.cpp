@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4b970 — NextWwiseCommandId
 /* @confidence: M — reproduces the raw atomic increment; ordering follows its exclusive-monitor loop. */
@@ -12,4 +12,4 @@ std::int32_t NextWwiseCommandId(std::int32_t* state) {
     return __atomic_add_fetch(state, 1, __ATOMIC_ACQ_REL);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

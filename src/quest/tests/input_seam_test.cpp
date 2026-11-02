@@ -7,6 +7,7 @@
 // Built and run by `just test-quest-hooks`.
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -17,6 +18,7 @@
 #include "pinned_targets.h"
 #include "quest/plugin/input_seam.h"
 #include "quest/plugin/input_seam_hook.h"
+#include "quest/plugin/script_redirect.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -348,6 +350,29 @@ void AReleaseBuildRefusesAndInstallsNothing() {
   QCHECK(is::RegisterWith(DevEnv(), "autopilot", &Recording, nullptr) == NEVR_QUEST_FILTER_OK);
 }
 
+// The same struct carries the script redirect (#1737) in both builds: a combat unit is not an input filter, so the release API
+// offers it too. Each member reaches script_redirect::Register, which looks in this binary's directory: no combat library is
+// there, so the answer is MISSING_LIBRARY, and a null id is refused as a bad argument.
+void ScriptRedirectIsOfferedByBothApis() {
+  namespace sr = nevr_quest::script_redirect;
+  const std::uint64_t hashes[] = {0x37f88adb0d8066f7ULL};
+  for (const bool devBuild : {false, true}) {
+    const NevrQuestHostApi* api = is::HostApi(devBuild);
+    QCHECK(api != nullptr && api->struct_size >= offsetof(NevrQuestHostApi, register_script_redirect) +
+                                                     sizeof(api->register_script_redirect));
+    if (api == nullptr || api->register_script_redirect == nullptr) {
+      QCHECK(false);  // the member is missing
+      continue;
+    }
+    Capture inner;
+    sr::ResetForTest();
+    QCHECK(api->register_script_redirect("test", hashes, 1) == NEVR_SCRIPT_REDIRECT_MISSING_LIBRARY);
+    QCHECK(api->register_script_redirect(nullptr, hashes, 1) == NEVR_SCRIPT_REDIRECT_BAD_ARGUMENT);
+    QCHECK(sr::ArmedCount() == 0);
+  }
+  sr::ResetForTest();
+}
+
 void UnresolvedCapabilitiesRefuseWithoutInstalling() {
   Reset();
   Capture cap;
@@ -525,6 +550,7 @@ int main() {
   TheHandCacheRemembersEachDevice();
   BadArgumentsAreRefusedBeforeAnything();
   AReleaseBuildRefusesAndInstallsNothing();
+  ScriptRedirectIsOfferedByBothApis();
   UnresolvedCapabilitiesRefuseWithoutInstalling();
   AFailedInstallRefusesAndLeavesNoFilter();
   TheFirstRegistrationOwnsTheSeam();

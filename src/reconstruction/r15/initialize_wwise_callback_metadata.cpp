@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a550b0 — InitializeWwiseCallbackMetadata
 /* @confidence: M — copies the raw fields and transfers the intrusive source reference. */
@@ -31,4 +31,4 @@ void InitializeWwiseCallbackMetadata(std::byte* destination,
     InitializeCallbackArgument(destination, callback_source);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

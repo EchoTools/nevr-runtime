@@ -2,7 +2,7 @@
 // ReVault raw parent 100335420, reconstruction node 100600353; grade M.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4b6d0 — PostWwiseEventCommand
 /* @confidence: M — preserves command fields and branches; engine callback types remain inferred. */
@@ -70,4 +70,4 @@ std::uint32_t PostWwiseEventCommand(std::uint32_t event, std::uint64_t game_obje
     return 0;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

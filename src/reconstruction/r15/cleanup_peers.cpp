@@ -1,3 +1,6 @@
+// NRadEngine::SBroadcasterData::CleanupPeers
+// Quest libr15.so VA 0x25ef9b0; ReVault binary 576.
+// ReVault raw parent 100318060, reconstruction node 100600273; grade M: the Quest raw supplies the authoritative fields and branches, and the PC code confirms the shared broadcaster behavior.
 // @0x25ef9b0 — NRadEngine::SBroadcasterData::CleanupPeers
 // @confidence: M — Quest raw supplies the authoritative fields and branches; PC code confirms the shared broadcaster behavior.
 #include <algorithm>

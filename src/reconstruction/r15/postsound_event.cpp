@@ -2,7 +2,7 @@
 // ReVault raw parent 100319767, reconstruction node 100600350; grade M.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2649264 — CWwiseEngine::PostSoundEvent
 /* @confidence: M — control flow matches the raw body; object and callback ABI types remain inferred. */
@@ -83,4 +83,4 @@ seek:
         0x2a0);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

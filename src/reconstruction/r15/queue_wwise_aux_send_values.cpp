@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4a2b0 — QueueWwiseAuxSendValues
 /* @confidence: H — command kind, variable command size, object/count fields, payload copy, commit, and success result match the complete 32-instruction body. */
@@ -27,4 +27,4 @@ std::uint64_t QueueWwiseAuxSendValues(std::uint32_t object_id,
     return 1;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

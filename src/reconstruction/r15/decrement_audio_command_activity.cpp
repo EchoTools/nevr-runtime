@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a498c0 — DecrementAudioCommandActivity
 /* @confidence: H — decrements the 32-bit counter at context offset 0xac. */
@@ -15,4 +15,4 @@ void DecrementAudioCommandActivity(std::uint64_t context) {
     DecrementAtomicReference(counter);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

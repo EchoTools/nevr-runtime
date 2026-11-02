@@ -2,7 +2,7 @@
 // ReVault raw parent 100227782, reconstruction node 100600541; grade H.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x144b828 — CSoundPlayer::Trigger
 /* @confidence: H — audio-disabled return, Wwise command arguments, result translation, conditional symbol error, and final result follow the complete 35-instruction body. */
@@ -28,4 +28,4 @@ std::uint64_t Trigger(std::uint32_t trigger, std::uint32_t object_id) {
     return result;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction
