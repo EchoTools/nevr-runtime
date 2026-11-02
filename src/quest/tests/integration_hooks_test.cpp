@@ -129,6 +129,8 @@ void TestOnlyTheWantedActionsRun() {
 }
 
 std::string g_hookLines;
+std::string g_observedName;
+void ObserveModule(const char* name, void*) noexcept { g_observedName = name != nullptr ? name : "(null)"; }
 void CaptureHookLine(sentinel::LogLevel, const char* line) {
   g_hookLines += line;
   g_hookLines += '\n';
@@ -156,12 +158,15 @@ void TestHandlerRedirectsARegisteredScriptLibrary() {
   Reset(&CountingAction, &CountingAction);
   g_actionErrno = 0;
   g_hookLines.clear();
+  g_observedName.clear();
+  SetModuleLoadedObserver(&ObserveModule);
   void* const r = RunDlopenHandlerForTest(&FakeDlopenOk, "/data/app/x/lib/arm64/lib37f88adb0d8066f7.so", 2);
   QCHECK(r == &g_marker);
   QCHECK(g_originalCalls == 1 && g_lastFlags == 2);
   QCHECK(g_lastName != nullptr && std::strcmp(g_lastName, "lib37f88adb0d8066f7_q15t.so") == 0);  // the loader got the combat name
   QCHECK(g_hookLines.find("\"event\":\"script_redirected\"") != std::string::npos);
   QCHECK(PostLoadStatsView().calls == 1);  // the post-load actions still ran after the redirected open
+  QCHECK(g_observedName == "/data/app/x/lib/arm64/lib37f88adb0d8066f7.so");  // and the observer got the game's own name
 
   // An unregistered script name, and a name that is not a script library: both reach the loader as asked.
   Reset(&CountingAction, &CountingAction);
@@ -179,6 +184,7 @@ void TestHandlerRedirectsARegisteredScriptLibrary() {
   QCHECK(g_hookLines.find("\"event\":\"script_redirect_failed\"") != std::string::npos);
   QCHECK(g_actionRuns == 0);
 
+  SetModuleLoadedObserver(nullptr);
   sentinel::SetLogSink(nullptr);
   sr::ResetForTest();
   std::remove(file.c_str());
