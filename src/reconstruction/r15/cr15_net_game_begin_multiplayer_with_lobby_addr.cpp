@@ -16,9 +16,15 @@ public:
 
 namespace CSysNet {
 
+// CSysNet::SAddress, returned through the x8 sret pointer by CSysNet::LocalHost
+// (0xfe30c0, the `mov x8, sp` before the call at 0x138c084). A trivially
+// copyable return of 16 bytes or less comes back in x0/x1, so the struct is
+// declared larger than that. The frame of BeginMultiplayerWithLobbyAddr keeps
+// the buffer below its saved x22 at sp + 0x80, which bounds the size here. The
+// true size is not established: LocalHost tail-calls Lookup (0xfd80c0).
 struct SAddress {
-    std::byte storage[16];
-    std::uint32_t Ipv4() const;
+    alignas(8) std::byte storage[0x80];
+    std::uint32_t Ipv4() const;  // 0x1094448: reads the u32 at offset 4
 };
 
 std::uint16_t HToNS(std::uint16_t value);
@@ -82,15 +88,18 @@ void CR15NetGame::BeginMultiplayerWithLobbyAddr(
     std::uint16_t mode) {
     Store(this, 0x88, symbol);
 
-    std::uint16_t network_port = CSysNet::HToNS(port);
-    if (network_port == 0) {
-        network_port = CSysNet::NToHS(0x1a88);
+    // 0x138c04c..0x138c070: the raw port is stored, unless HToNS(port) is zero,
+    // in which case the default NToHS(0x1a88) is stored instead.
+    std::uint16_t stored_port = port;
+    if (CSysNet::HToNS(port) == 0) {
+        stored_port = CSysNet::NToHS(0x1a88);
     }
-    Store(this, 0x94, network_port);
+    Store(this, 0x94, stored_port);
 
+    // 0x138c078..0x138c090: loopback 127.0.0.1 is replaced by the local host's address.
     if (address == 0x0100007fU) {
         const CSysNet::SAddress local = CSysNet::LocalHost(
-            CSysNet::HToNS(network_port));
+            CSysNet::HToNS(stored_port));
         address = local.Ipv4();
     }
     Store(this, 0x90, address);
@@ -118,22 +127,20 @@ void CR15NetGame::BeginMultiplayerWithLobbyAddr(
         }
     }
 
-    alignas(8) std::byte settings_storage[0x50];
-    std::memset(settings_storage, 0, sizeof(settings_storage));
-    auto* const settings = reinterpret_cast<SR15NetMatchSettings*>(
-        settings_storage);
+    // The assembly writes +0x00, +0x08, +0x10, +0x18 and +0x40 and clears nothing else.
+    SR15NetMatchSettings settings;
     const std::uint64_t kind = 0x300000000ULL;
     const std::uint64_t unset = UINT64_MAX;
     const std::uint64_t no_flags = 0;
     void* const owner = reinterpret_cast<void*>(Load<std::uintptr_t>(this, 8));
     const std::uint64_t user_data = Load<std::uint64_t>(owner, 0x8560);
     const std::uint64_t game_data = Load<std::uint64_t>(owner, 0x948);
-    Store(settings->raw, 0x00, kind);
-    Store(settings->raw, 0x08, user_data);
-    Store(settings->raw, 0x10, game_data);
-    Store(settings->raw, 0x18, unset);
-    Store(settings->raw, 0x40, no_flags);
-    BeginMultiplayer(*settings);
+    Store(settings.raw, 0x00, kind);
+    Store(settings.raw, 0x08, user_data);
+    Store(settings.raw, 0x10, game_data);
+    Store(settings.raw, 0x18, unset);
+    Store(settings.raw, 0x40, no_flags);
+    BeginMultiplayer(settings);
 }
 
 }  // namespace NRadGame

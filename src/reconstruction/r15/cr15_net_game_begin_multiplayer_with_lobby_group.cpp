@@ -94,22 +94,20 @@ void CR15NetGame::BeginMultiplayerWithLobbyGroup(
         }
     }
 
-    alignas(8) std::byte settings_storage[0x50];
-    std::memset(settings_storage, 0, sizeof(settings_storage));
-    auto* const settings = reinterpret_cast<SR15NetMatchSettings*>(
-        settings_storage);
+    // The assembly writes +0x00, +0x08, +0x10, +0x18 and +0x40 and clears nothing else.
+    SR15NetMatchSettings settings;
     const std::uint64_t kind = 0x300000000ULL;
     const std::uint64_t unset = UINT64_MAX;
     const std::uint64_t no_flags = 0;
     void* const owner = reinterpret_cast<void*>(Load<std::uintptr_t>(this, 8));
     const std::uint64_t user_data = Load<std::uint64_t>(owner, 0x8560);
     const std::uint64_t game_data = Load<std::uint64_t>(owner, 0x948);
-    Store(settings->raw, 0x00, kind);
-    Store(settings->raw, 0x08, user_data);
-    Store(settings->raw, 0x10, game_data);
-    Store(settings->raw, 0x18, unset);
-    Store(settings->raw, 0x40, no_flags);
-    BeginMultiplayer(*settings);
+    Store(settings.raw, 0x00, kind);
+    Store(settings.raw, 0x08, user_data);
+    Store(settings.raw, 0x10, game_data);
+    Store(settings.raw, 0x18, unset);
+    Store(settings.raw, 0x40, no_flags);
+    BeginMultiplayer(settings);
 }
 
 }  // namespace NRadGame
