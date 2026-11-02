@@ -34,5 +34,41 @@ class ScriptRedirectListTest(unittest.TestCase):
         self.assertIn("lib????????????????_q15t.so", JUSTFILE.read_text(encoding="utf-8"))
 
 
+def _code(path: pathlib.Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _body(text: str, signature: str) -> str:
+    start = text.index(signature)
+    open_at = text.index("{", start)
+    depth = 0
+    for i in range(open_at, len(text)):
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        if depth == 0:
+            return text[open_at : i + 1]
+    raise AssertionError(f"unbalanced body for {signature}")
+
+
+class DlopenHookWiringTest(unittest.TestCase):
+    """dlopen_hook.cpp's install cannot run on the host (it needs libr15's GOT), so its two calls into the redirect are pinned by
+    source shape; the redirect itself runs in script_redirect_test and the handler in integration_hooks_test."""
+
+    SOURCE = _code(REPO / "src/quest/integration/dlopen_hook.cpp")
+
+    def test_the_install_logs_the_redirect_state_once_the_hook_is_live(self):
+        install = _body(self.SOURCE, "DlopenInstall InstallDlopenHook(")
+        self.assertIn("script_redirect::LogState()", install)
+        self.assertGreater(install.index("script_redirect::LogState()"), install.index("g_installed.store(true"))
+        self.assertGreater(install.index("script_redirect::LogState()"), install.index("DlopenInstall::kFailed"))
+
+    def test_the_handler_opens_through_the_redirect_and_tells_the_observer_the_games_own_name(self):
+        handler = _body(self.SOURCE, "void* HookedDlopen(")
+        self.assertIn("script_redirect::OpenRedirected(original, name, flags", handler)
+        self.assertNotIn("original(", handler.replace("OpenRedirected(original", ""))
+        self.assertIn("AfterDlopen(name, handle)", handler)
+
+
 if __name__ == "__main__":
     unittest.main()

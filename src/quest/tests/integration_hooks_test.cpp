@@ -7,10 +7,14 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
+#include <unistd.h>
+
 #include "got_hook.h"
+#include "hook_log.h"
 #include "hook_report.h"
 #include "libr15_identity.h"
 #include "quest/integration/ctor_sequence.h"
@@ -19,6 +23,7 @@
 #include "quest/integration/social_shim.h"
 #include "quest/login/login_hook.h"
 #include "quest/login/login_prerequisites.h"
+#include "quest/plugin/script_redirect.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/tests/test_check.h"
 
@@ -121,6 +126,63 @@ void TestOnlyTheWantedActionsRun() {
   int dummy = RunDlopenHandlerForTest(&FakeDlopenOk, "libx.so", 0) != nullptr ? 1 : 0;
   QCHECK(dummy == 1);
   QCHECK(g_actionRuns == 1);
+}
+
+std::string g_hookLines;
+void CaptureHookLine(sentinel::LogLevel, const char* line) {
+  g_hookLines += line;
+  g_hookLines += '\n';
+}
+
+// The script redirect through the real handler (#1737): with a registry set, the handler opens the combat library's name
+// where the game asked for the stock one, tells the post-load observer the game's own name, and a failed redirected open is
+// logged and reissued; a name that is not registered passes through untouched.
+void TestHandlerRedirectsARegisteredScriptLibrary() {
+  namespace sr = nevr_quest::script_redirect;
+  sr::ResetForTest();
+  const char* const base = std::getenv("TMPDIR");
+  std::string dir = std::string(base != nullptr && base[0] != '\0' ? base : "/tmp") + "/q15t_dlopen_hook_XXXXXX";
+  QCHECK(mkdtemp(dir.data()) != nullptr);
+  const std::string file = dir + "/lib37f88adb0d8066f7_q15t.so";
+  if (std::FILE* f = std::fopen(file.c_str(), "wb")) {
+    std::fputs("aarch64", f);
+    std::fclose(f);
+  }
+  const std::uint64_t hashes[] = {0x37f88adb0d8066f7ULL};
+  sentinel::SetLogSink(nullptr);  // the registration's own line goes to stderr; the cases below are captured
+  QCHECK(sr::RegisterIn(dir.c_str(), "test", hashes, 1) == NEVR_SCRIPT_REDIRECT_OK);
+  sentinel::SetLogSink(&CaptureHookLine);
+
+  Reset(&CountingAction, &CountingAction);
+  g_actionErrno = 0;
+  g_hookLines.clear();
+  void* const r = RunDlopenHandlerForTest(&FakeDlopenOk, "/data/app/x/lib/arm64/lib37f88adb0d8066f7.so", 2);
+  QCHECK(r == &g_marker);
+  QCHECK(g_originalCalls == 1 && g_lastFlags == 2);
+  QCHECK(g_lastName != nullptr && std::strcmp(g_lastName, "lib37f88adb0d8066f7_q15t.so") == 0);  // the loader got the combat name
+  QCHECK(g_hookLines.find("\"event\":\"script_redirected\"") != std::string::npos);
+  QCHECK(PostLoadStatsView().calls == 1);  // the post-load actions still ran after the redirected open
+
+  // An unregistered script name, and a name that is not a script library: both reach the loader as asked.
+  Reset(&CountingAction, &CountingAction);
+  g_hookLines.clear();
+  QCHECK(RunDlopenHandlerForTest(&FakeDlopenOk, "lib0123456789abcdef.so", 2) == &g_marker);
+  QCHECK(std::strcmp(g_lastName, "lib0123456789abcdef.so") == 0);
+  QCHECK(RunDlopenHandlerForTest(&FakeDlopenOk, "libpnsovr.so", 2) == &g_marker);
+  QCHECK(std::strcmp(g_lastName, "libpnsovr.so") == 0);
+  QCHECK(g_hookLines.find("script_redirect") == std::string::npos);
+
+  // A registered name whose redirected open fails: null to the game, the failure logged, and no post-load action.
+  Reset(&CountingAction, &CountingAction);
+  g_hookLines.clear();
+  QCHECK(RunDlopenHandlerForTest(&FakeDlopenFails, "lib37f88adb0d8066f7.so", 2) == nullptr);
+  QCHECK(g_hookLines.find("\"event\":\"script_redirect_failed\"") != std::string::npos);
+  QCHECK(g_actionRuns == 0);
+
+  sentinel::SetLogSink(nullptr);
+  sr::ResetForTest();
+  std::remove(file.c_str());
+  rmdir(dir.c_str());
 }
 
 void TestPinnedDlopenTarget() {
@@ -270,6 +332,7 @@ int main() {
   TestNullHandleRunsNothingAndReturnsNull();
   TestNonNullHandleIsReturnedAndRunsThePostLoadActions();
   TestOnlyTheWantedActionsRun();
+  TestHandlerRedirectsARegisteredScriptLibrary();
   TestPinnedDlopenTarget();
   TestInstallWithoutTheModuleFailsCleanly();
   TestCounterBudget();
