@@ -136,8 +136,8 @@ const char* kManifest = "_data/5932408047/rad15/android/manifests/48037dc70b0eca
 }  // namespace
 
 // The pin the shipped build fetches by and checks against, written out here so that editing plan.h alone fails.
-const char* kPinnedSha256 = "fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c";
-const char* kPinnedUrl = "https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip";
+const char* kPinnedSha256 = "14955d69d6ea04376073272cc7c95685ea508be885b3ba7189a46180de922c4e";
+const char* kPinnedUrl = "https://evr.echo.taxi/nevr-runtime/data/echovr-data-14955d69d6ea.zip";
 
 TEST(TheShippedPinFetchesTheVersionedContentAddressedFileNotABareName) {
   const FetchConfig defaults;

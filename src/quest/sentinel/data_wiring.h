@@ -19,10 +19,11 @@
  *     reads it through a skipped mount or through the data-root hook.
  *   - data::RunDataStep looks at that root only (StepConfig::engine_root), after (development builds only) putting the
  *     leftovers of an interrupted install right (RecoverReplaced, CleanLeftovers):
- *   - data already there: nothing is fetched and one `data_check action=use` line says so; when its manifest is a pinned
- *     data set (data/package_pins.h) one `data_packages` line then says whether the package files are whole (`outcome`
- *     verified, or `unpinned` for a manifest outside the table), and a missing, short, oversize or mismatching package is a
- *     Warning that names it; the data is used either way;
+ *   - data already there: nothing is fetched and one `data_check action=use` line says so. The package files of the
+ *     build's pinned set (data/package_pins.h) are checked on every launch (`data_packages`, `outcome` verified). A missing,
+ *     short, oversize, mismatching or unreadable package refuses the data: the refusal is shown and held twice, and the
+ *     process ends nonzero (`packages_invalid`), so nothing uses the data. Outside require_packages (tests only) the check
+ *     warns and the data is used, and a manifest outside the table reads `unpinned`;
  *   - data missing or of another build, in a development build (Options::allow_fetch): the fetch runs into that root;
  *   - data missing or of another build, in a release build: nothing is fetched or written; the player is shown
  *     data::kGameDataMissing (install with Echo Launcher), it is not held (Options::hold_ms 0), a `data_step outcome=missing`
@@ -68,6 +69,7 @@
 #include <vector>
 
 #include "permission_wait_hook.h"
+#include "quest/data/package_pins.h"
 #include "quest/data/transport.h"
 #include "quest/sentinel/data_root.h"
 
@@ -97,6 +99,12 @@ struct Options {
                                                // 0: not held and not shown again (release builds, entry.cpp)
   bool probe_enabled = false;                  // read the measurement probe file (dev builds only; entry.cpp sets it)
   bool allow_fetch = false;                    // download missing data (dev builds only; entry.cpp sets it); false: only look
+  // The package refusal (data_step.h, issue #1934). entry.cpp sets require_packages in every build. A refusal is shown and
+  // held for refusal_hold_ms twice, in release builds too (hold_ms is 0 there), then the process ends (`packages_invalid`).
+  bool require_packages = false;
+  unsigned refusal_hold_ms = 5000;
+  const data::PinnedDataSet* pinned_sets = nullptr;  // test seam: the required set is pinned_sets[0]; null: the pinned table
+  std::size_t pinned_set_count = 0;
   std::vector<std::string> recovery_roots;     // empty: both data roots (test seam)
   // The bundled content pack (docs/adr/0029-quest-bundled-content-pack.md). `apk_path` empty: the APK the sentinel was
   // mapped from (dladdr). The rest are test seams: free bytes of the root (null: statvfs) and a probe the pack step calls

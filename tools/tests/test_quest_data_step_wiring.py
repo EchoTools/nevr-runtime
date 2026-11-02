@@ -76,6 +76,29 @@ class TheStepOrder(unittest.TestCase):
         entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
         self.assertIn("options.allow_fetch = nevr_build::kIsDev;", entry)
 
+    def test_every_build_requires_its_packages_and_sets_it_once_before_install(self):
+        # issue #1934: the refusal is not a development-build option. One assignment, before Install copies the options.
+        entry = re.sub(
+            r"//[^\n]*",
+            "",
+            extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {"),
+        )
+        self.assertEqual(len(re.findall(r"\brequire_packages\b", entry)), 1, entry)
+        line = "options.require_packages = true;"
+        self.assertEqual(entry.count(line), 1, entry)
+        self.assertLess(entry.index(line), entry.index("nevr_quest::data_wiring::Install(options);"))
+        header = read("data_wiring.h")
+        self.assertRegex(header, r"bool require_packages = false;")
+        self.assertRegex(header, r"unsigned refusal_hold_ms = 5000;")
+
+    def test_a_refusal_holds_its_own_time_logs_at_error_and_ends_the_process_with_its_reason(self):
+        body = self.body()
+        self.assertIn("config.require_packages = Opts().require_packages;", body)
+        self.assertIn("config.on_step_error = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kError, e); };", body)
+        self.assertIn("config.hold_refusal = [&lastMessage] { HoldMessageFor(lastMessage, Opts().refusal_hold_ms); };", body)
+        self.assertRegex(body, r'if \(refused\) \{\s*EndFailed\("packages_invalid"\);')
+        self.assertLess(body.index("RunDataStep"), body.index('EndFailed("packages_invalid")'))
+
     def test_no_storage_grant_with_the_legacy_root_writes_nothing_and_ends_the_process(self):
         body = self.body()
         self.assertRegex(body, r"if \(!granted && engineRoot == data_root::kLegacyRoot\) \{")
@@ -141,13 +164,19 @@ class TheStepOrder(unittest.TestCase):
 
     def test_the_message_is_held_ten_seconds(self):
         self.assertRegex(read("data_wiring.h"), r"unsigned hold_ms = 5000;")
-        hold = extract_braced_function(read("data_wiring.cpp"), "void HoldMessage(const std::string& message) noexcept {")
-        self.assertEqual(hold.count("Sleep(Opts().hold_ms)"), 2)
+        hold = extract_braced_function(
+            read("data_wiring.cpp"), "void HoldMessageFor(const std::string& message, unsigned holdMs) noexcept {"
+        )
+        self.assertEqual(hold.count("Sleep(holdMs)"), 2)
+        held = extract_braced_function(read("data_wiring.cpp"), "void HoldMessage(const std::string& message) noexcept {")
+        self.assertIn("HoldMessageFor(message, Opts().hold_ms)", held)
 
     def test_a_release_build_holds_nothing_while_no_presenter_is_known_to_draw(self):
-        hold = extract_braced_function(read("data_wiring.cpp"), "void HoldMessage(const std::string& message) noexcept {")
-        self.assertLess(hold.index("if (Opts().hold_ms == 0) return;"), hold.index("Sleep(Opts().hold_ms)"))
-        self.assertLess(hold.index("if (Opts().hold_ms == 0) return;"), hold.index("Present("))
+        hold = extract_braced_function(
+            read("data_wiring.cpp"), "void HoldMessageFor(const std::string& message, unsigned holdMs) noexcept {"
+        )
+        self.assertLess(hold.index("if (holdMs == 0) return;"), hold.index("Sleep(holdMs)"))
+        self.assertLess(hold.index("if (holdMs == 0) return;"), hold.index("Present("))
         entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
         # Exactly one mention of hold_ms in the body, and it is the guarded assignment: a second assignment (always
         # zero, or a later non-zero value that undoes the guard) or an unguarded one leaves the release build wrong.

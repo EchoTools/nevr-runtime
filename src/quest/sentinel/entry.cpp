@@ -157,6 +157,8 @@ bool InstallPermissionWaitHook() noexcept {
     options.show_ui = &nevr_quest::toast::ShowOnMainLooper;  // read by the development probe's `ui-toast` kind only (#829)
     options.show_post = &nevr_quest::toast::ShowOnUiThread;  // and `ui-post`
     options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
+    // Every build refuses to start on a data set whose package is missing, short, oversize or fails its pin (issue #1934).
+    options.require_packages = true;
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);

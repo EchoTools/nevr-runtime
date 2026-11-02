@@ -85,6 +85,7 @@ struct Rig {
   std::vector<std::string> order;   // "announce", "present" and "hold", in call order
   std::vector<std::string> events;
   std::vector<std::string> warns;  // the events that went out at Warning
+  std::vector<std::string> errors;  // the events that went out at Error (the package refusal)
 
   explicit Rig(const std::string& zip_bytes = GoodZip()) : zip(zip_bytes) {
     g_present = &present;
@@ -114,6 +115,11 @@ struct Rig {
       std::string line = e.name;
       for (const auto& f : e.fields) line += " " + f.first + "=" + f.second;
       warns.push_back(line);
+    };
+    config.on_step_error = [this](const Event& e) {
+      std::string line = e.name;
+      for (const auto& f : e.fields) line += " " + f.first + "=" + f.second;
+      errors.push_back(line);
     };
   }
   ~Rig() { g_present = nullptr; }
@@ -638,7 +644,9 @@ struct PinnedRig : Rig {
   std::map<std::string, std::uint64_t> sizes;  // the package files the fake filesystem has
   std::string marker;                         // the marker file's content when has_marker
   bool has_marker = false;
-  std::string digest = p1_sha;  // what hash_file answers
+  std::string digest = p1_sha;  // what hash_file answers, unless digests names the path
+  std::map<std::string, std::string> digests;
+  std::string manifest_bytes = kPinnedManifestBytes;  // what the manifest file holds (a stock one in some tests)
   bool hash_readable = true;
   bool write_ok = true;
   int size_calls = 0;
@@ -657,7 +665,7 @@ struct PinnedRig : Rig {
     };
     config.read_file = [this](const std::string& path, std::string& bytes) {
       if (path == Media(kManifestRel)) {
-        bytes = kPinnedManifestBytes;
+        bytes = manifest_bytes;
         return true;
       }
       if (path == MarkerPath() && has_marker) {
@@ -677,7 +685,7 @@ struct PinnedRig : Rig {
       ++hash_calls;
       hashed.push_back(path);
       if (!hash_readable) return false;
-      out = digest;
+      out = digests.count(path) != 0 ? digests[path] : digest;
       return true;
     };
     config.write_file = [this](const std::string& path, const std::string& bytes) {
@@ -690,6 +698,11 @@ struct PinnedRig : Rig {
   }
   static std::string MarkerPath() { return Media("nevr-data-packages.verified"); }
   std::string MarkerFor(const std::string& build) const { return manifest_sha + " " + build + "\n"; }
+  // The package refusal: the build's own set is required (require_packages), whatever manifest the root holds.
+  void Require() {
+    config.require_packages = true;
+    config.required_set = &set;
+  }
   // The step as nothing in it may fetch, announce or show a message.
   void CheckUsedWithoutFetch(const StepResult& r, const OneShotTransport& net) const {
     CHECK_EQ(r.outcome, StepOutcome::kUsed);
@@ -920,7 +933,7 @@ TEST(ThePinnedTableHoldsTheCombatPackAsRecorded) {
   CHECK_EQ(set->packages[0].index, 0u);
   CHECK_EQ(set->packages[0].bytes, std::uint64_t{929620177});
   CHECK_EQ(std::string(set->packages[0].sha256), std::string("14d26efc718a8f8135039e47bd1321cbb556fc4181bf95ffcb5ef59c406a5a3b"));
-  CHECK(!set->packages[0].hashed);
+  CHECK(set->packages[0].hashed);  // the stock package is pinned by digest too (issue #1934)
   CHECK_EQ(set->packages[1].index, 1u);
   CHECK_EQ(set->packages[1].bytes, std::uint64_t{689617013});
   CHECK_EQ(std::string(set->packages[1].sha256), std::string("decc77fdfc8ecd3b75ad3120f33dd1980a6a1f8c4c50f566ceb6483d9092db02"));
@@ -1039,8 +1052,181 @@ TEST(TheRealFileSeamsCheckSizesHashAndMarkerOnDisk) {
   CHECK(!rig.warns.empty() && Contains(rig.warns[0], "package=48037dc70b0ecab2_0 outcome=missing"));
 }
 
+// ---- the package refusal (require_packages, issue #1934): the build's set is required, and a failing file refuses the data ----
+
+namespace {
+
+constexpr const char* kRefusalAdvice =
+    " Install the Echo VR game data again with the installer you used, then start the game again.";
+
+// The refusal's shape: the data is refused naming the package, its outcome and its file; the message is presented and
+// held once; nothing is fetched or announced; one Error line says the same at Error (not Warning).
+void CheckRefused(const Rig& rig, const StepResult& r, const OneShotTransport& net, const std::string& package,
+                  const std::string& outcome, const std::string& path) {
+  CHECK_EQ(r.outcome, StepOutcome::kPackagesInvalid);
+  CHECK_EQ(r.action, DataAction::kUse);
+  CHECK_EQ(r.package, package);
+  CHECK_EQ(r.package_outcome, outcome);
+  CHECK_EQ(r.path, path);
+  CHECK(Contains(r.message, "Echo VR game data is incomplete: " + path + " "));
+  CHECK(Contains(r.message, kRefusalAdvice));
+  CHECK_EQ(net.calls, 0);
+  CHECK_EQ(rig.shown.size(), static_cast<std::size_t>(1));
+  CHECK(rig.shown.empty() || rig.shown[0] == r.message);
+  CHECK(rig.order.size() == 2 && rig.order[0] == "present" && rig.order[1] == "hold");  // no announce, no fetch
+  CHECK(rig.warns.empty());
+  CHECK_EQ(rig.errors.size(), static_cast<std::size_t>(1));
+  if (rig.errors.size() == 1) {
+    CHECK(Contains(rig.errors[0], "data_packages "));
+    CHECK(Contains(rig.errors[0], " package=" + package + " "));
+    CHECK(Contains(rig.errors[0], " outcome=" + outcome + " "));
+    CHECK(Contains(rig.errors[0], " path=" + path + " "));
+  }
+}
+
+}  // namespace
+
+TEST(AMissingOneIsRefusedAndNamed) {
+  PinnedRig rig;
+  rig.Require();
+  rig.sizes.erase(PinnedRig::PackagePath(1));
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CheckRefused(rig, r, net, "48037dc70b0ecab2_1", "missing", PinnedRig::PackagePath(1));
+  CHECK(Contains(r.message, PinnedRig::PackagePath(1) + " is missing."));
+  CHECK(Contains(rig.errors.empty() ? std::string() : rig.errors[0], "found_bytes=none "));
+}
+
+TEST(AMissingZeroIsRefusedAndNamed) {
+  // The stock package is first in the set: a refusal names it, not the pack's package.
+  PinnedRig rig;
+  rig.Require();
+  rig.sizes.erase(PinnedRig::PackagePath(0));
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CheckRefused(rig, r, net, "48037dc70b0ecab2_0", "missing", PinnedRig::PackagePath(0));
+}
+
+TEST(AShortOneIsRefusedWithTheBytesItHas) {
+  PinnedRig rig;
+  rig.Require();
+  rig.sizes[PinnedRig::PackagePath(1)] = 5;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CheckRefused(rig, r, net, "48037dc70b0ecab2_1", "short", PinnedRig::PackagePath(1));
+  CHECK(Contains(r.message, PinnedRig::PackagePath(1) + " has 5 bytes, expected 6."));
+  CHECK(Contains(rig.errors.empty() ? std::string() : rig.errors[0], " found_bytes=5 "));
+}
+
+TEST(AnOversizeZeroIsRefused) {
+  PinnedRig rig;
+  rig.Require();
+  rig.sizes[PinnedRig::PackagePath(0)] = 5;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CheckRefused(rig, r, net, "48037dc70b0ecab2_0", "oversize", PinnedRig::PackagePath(0));
+  CHECK(Contains(r.message, PinnedRig::PackagePath(0) + " has 5 bytes, expected 4."));
+}
+
+TEST(AStockPackageWithAWrongDigestIsRefusedOnceItIsHashed) {
+  // The stock package is pinned by digest too: hashed, its mismatch refuses the data and names both digests.
+  PinnedRig rig;
+  rig.Require();
+  rig.packages[0].hashed = true;
+  rig.digests[PinnedRig::PackagePath(0)] = std::string(64, 'f');
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CheckRefused(rig, r, net, "48037dc70b0ecab2_0", "sha_mismatch", PinnedRig::PackagePath(0));
+  CHECK(Contains(rig.errors.empty() ? std::string() : rig.errors[0], " expected_sha256=" + rig.p0_sha + " "));
+  CHECK(Contains(rig.errors.empty() ? std::string() : rig.errors[0], " found_sha256=" + std::string(64, 'f') + " "));
+  CHECK(rig.writes.empty());  // no marker for a failed check
+}
+
+TEST(AWrongDigestOfTheAddedPackageIsRefused) {
+  PinnedRig rig;
+  rig.Require();
+  rig.digest = std::string(64, 'f');  // what hash_file answers for the hashed package
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CheckRefused(rig, r, net, "48037dc70b0ecab2_1", "sha_mismatch", PinnedRig::PackagePath(1));
+  CHECK(Contains(rig.errors.empty() ? std::string() : rig.errors[0], " expected_sha256=" + rig.p1_sha + " "));
+}
+
+TEST(AnUnreadablePackageIsRefused) {
+  PinnedRig rig;
+  rig.Require();
+  rig.hash_readable = false;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CheckRefused(rig, r, net, "48037dc70b0ecab2_1", "unreadable", PinnedRig::PackagePath(1));
+  CHECK(rig.writes.empty());
+}
+
+TEST(AStockManifestRootWithNo_1IsRefused) {
+  // The root holds only the stock manifest (not in the pinned table): before, nothing was checked and the data was used.
+  // Required, the build's set is checked anyway, and the absent package refuses the data.
+  PinnedRig rig;
+  rig.Require();
+  rig.manifest_bytes = "the stock manifest, not the combat pack's";
+  rig.sizes.erase(PinnedRig::PackagePath(1));
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CheckRefused(rig, r, net, "48037dc70b0ecab2_1", "missing", PinnedRig::PackagePath(1));
+  const std::string stock = rig.manifest_bytes;
+  CHECK(Contains(rig.events.empty() ? std::string() : rig.events[0], "manifest_sha256=" + Sha256Hex(stock.data(), stock.size())));
+}
+
+TEST(ARootWithBothPackagesWholeIsUsedAndRefusesNothing) {
+  PinnedRig rig;
+  rig.Require();
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  rig.CheckUsedWithoutFetch(r, net);
+  CHECK(rig.errors.empty());
+  CHECK(rig.warns.empty());
+  CHECK(!rig.events.empty() && Contains(rig.events.back(), "outcome=verified packages=2 sha=checked"));
+}
+
+TEST(TheRealFileSeamsRefuseAMissingPackageOnDisk) {
+  // The step's own file seams (no injected functions) over a real root with the stock package only: the pack's package
+  // is missing, so the data is refused and the path named is the real file.
+  Rig rig;
+  const std::string root = rig.scratch.Path("real");
+  ::mkdir(root.c_str(), 0755);
+  const std::string manifest_bytes = "a real manifest on disk";
+  const std::string manifest_sha = Sha256Hex(manifest_bytes.data(), manifest_bytes.size());
+  const std::string pkg1 = root + "/" + kPackageDir + "48037dc70b0ecab2_1";
+  MakeTree(root, kManifestRel, manifest_bytes);
+  MakeTree(root, std::string(kPackageDir) + "48037dc70b0ecab2_0", "abc");
+  const char* const abc_sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+  const PinnedPackage packages[2] = {{0, 3, abc_sha, false}, {1, 3, abc_sha, true}};
+  const PinnedDataSet set = {manifest_sha.c_str(), packages, 2};
+  rig.config.required_set = &set;
+  rig.config.require_packages = true;
+  rig.config.engine_root = root;
+  rig.config.exists = &MappedExists;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kPackagesInvalid);
+  CHECK_EQ(r.path, pkg1);
+  CHECK_EQ(r.package_outcome, std::string("missing"));
+  CHECK_EQ(net.calls, 0);
+}
+
+TEST(AFreshRootWithNoDataNamesTheManifestItLookedFor) {
+  // Nothing is there and nothing is fetched: the result names the manifest the step looked for.
+  Rig rig;
+  rig.config.allow_fetch = false;
+  rig.config.engine_root = nevr_quest::data_root::kLegacyRoot;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kMissing);
+  CHECK_EQ(r.path, Legacy() + "/" + kManifestRel);
+}
+
 TEST(TheMissingOutcomeHasAName) {
   CHECK_EQ(std::string(StepOutcomeName(StepOutcome::kMissing)), std::string("missing"));
+  CHECK_EQ(std::string(StepOutcomeName(StepOutcome::kPackagesInvalid)), std::string("packages_invalid"));
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
