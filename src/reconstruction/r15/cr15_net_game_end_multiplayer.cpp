@@ -112,18 +112,21 @@ void Store(void* base, std::size_t offset, T value) {
     *reinterpret_cast<T*>(static_cast<std::byte*>(base) + offset) = value;
 }
 
-void CallVirtualNoArgs(void* object, std::size_t byte_offset) {
+// The slot the binary loads: ldr x8,[obj]; ldr x8,[x8,#off]; blr x8.
+void* VirtualSlot(void* object, std::size_t byte_offset) {
     auto** const table = *reinterpret_cast<void***>(object);
+    return *reinterpret_cast<void**>(reinterpret_cast<std::byte*>(table) +
+                                     byte_offset);
+}
+
+void CallVirtualNoArgs(void* object, std::size_t byte_offset) {
     using Function = void (*)(void*);
-    reinterpret_cast<Function>(reinterpret_cast<std::byte*>(table) +
-                              byte_offset)(object);
+    reinterpret_cast<Function>(VirtualSlot(object, byte_offset))(object);
 }
 
 void CallVirtualFree(void* allocator, void* value) {
-    auto** const table = *reinterpret_cast<void***>(allocator);
     using Function = void (*)(void*, void*);
-    reinterpret_cast<Function>(reinterpret_cast<std::byte*>(table) + 0x38)(
-        allocator, value);
+    reinterpret_cast<Function>(VirtualSlot(allocator, 0x38))(allocator, value);
 }
 
 void Acquire(std::int32_t* lock) {
@@ -265,11 +268,10 @@ void CR15NetGame::EndMultiplayer() {
     if (global_game_state != nullptr) {
         NWriteLog::WriteLog(2, 0, "[NETGAME] Destroying global gs");
         auto* const owner = reinterpret_cast<void*>(Load<std::uintptr_t>(this, 8));
-        auto** const owner_vtable = *reinterpret_cast<void***>(owner);
         using DestroyGlobalState = void (*)(void*, void*, std::uint32_t,
                                             std::uint32_t);
-        reinterpret_cast<DestroyGlobalState>(
-            reinterpret_cast<std::byte*>(owner_vtable) + 0x358)(
+        // ldr x8,[x0]; ldr x8,[x8,#0x358]; blr x8 (0x1388f78-0x1388f80).
+        reinterpret_cast<DestroyGlobalState>(VirtualSlot(owner, 0x358))(
             owner, global_game_state, 1, 1);
     }
 
@@ -312,13 +314,17 @@ void CR15NetGame::EndMultiplayer() {
 
     const std::uint64_t old_tail = Load<std::uint64_t>(this, 0x2af0);
     Store<std::uint64_t>(this, 0x2ae8, 0);
+    // 0x1389064 (count already set): next = 1. 0x138906c (count zero): Resize,
+    // then next = *(this + 0x2ae8) + 1 with the field reloaded after Resize
+    // (0x1389084, 0x1389090).
+    std::uint64_t next = 1;
     if (Load<std::uint64_t>(this, 0x2ae0) == 0) {
         const std::uint64_t capacity = Load<std::uint64_t>(this, 0x2ad8);
         reinterpret_cast<CMemBlock*>(self + 0x2ab8)->Resize(capacity << 4, 1);
         Store<std::uint64_t>(this, 0x2ae0,
                              Load<std::uint64_t>(this, 0x2ae0) + capacity);
+        next = Load<std::uint64_t>(this, 0x2ae8) + 1;
     }
-    constexpr std::uint64_t next = 1;
     Store<std::uint64_t>(this, 0x2ae8, next);
     const std::uintptr_t entries = Load<std::uintptr_t>(this, 0x2ab8);
     Store<std::uint64_t>(reinterpret_cast<void*>(entries + next * 0x10 - 0x10),
