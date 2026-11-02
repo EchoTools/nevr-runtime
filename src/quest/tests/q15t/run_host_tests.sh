@@ -36,6 +36,13 @@ g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I"$here/s
   -o "$out/gates_test" -ldl
 "$out/gates_test"
 
+# the link gate's library name (headset_gates.cpp LibraryName, its dladdr refusal, called directly: the Bind frame is absent on the
+# host). The test includes headset_gates.cpp itself, so it is not listed again.
+g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I"$here/src" -I"$nevr/sdk/include" \
+  "$tests/library_name_test.cpp" "$here/src/plugin_log.cpp" "$here/src/import_hook.cpp" "$here/src/got_swap.cpp" \
+  -o "$out/library_name_test" -ldl
+"$out/library_name_test"
+
 # modules: one tests/mod/<name>.sh each (sourced with $here $nevr $out set; it compiles and runs its own test, and fails loudly)
 for m in "$tests"/mod/*.sh; do
   [ -e "$m" ] || continue

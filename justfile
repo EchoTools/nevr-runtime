@@ -1310,6 +1310,12 @@ test-quest-shared: _vcpkg-quest-host
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include \
         src/core/crash_report.cpp src/quest/tests/crash_report_test.cpp -o "$out/crash_report_test"
     timeout -k 5 120 "$out/crash_report_test"
+    # The Quest side's address resolver (crash_report_quest.cpp, #1927): an address dladdr cannot name is left unresolved. The
+    # test includes the file itself; the stub android/log.h is the host's, and the sentinel log and build-id reader link for real.
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/tests/stub \
+        src/quest/tests/crash_report_quest_test.cpp src/core/crash_report.cpp src/quest/sentinel/elf_build_id.cpp \
+        src/quest/sentinel/sentinel_log.cpp -o "$out/crash_report_quest_test" -ldl
+    timeout -k 5 120 "$out/crash_report_quest_test"
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include \
         src/quest/sentinel/elf_build_id.cpp src/quest/tests/elf_build_id_test.cpp -o "$out/elf_build_id_test"
     timeout -k 5 120 "$out/elf_build_id_test"
