@@ -40,14 +40,22 @@ bool RedirectName(std::uint64_t hash, char* out, std::size_t cap) noexcept;
 bool ParseScriptName(const char* name, std::uint64_t* hash) noexcept;
 
 // The redirect for `name` as the game asks for it. Returns `name` itself unless the registry holds the stock hash of a
-// script name; then returns `buf`, which holds the redirected bare name. Every script-library name (a name ParseScriptName
-// accepts) logs one Info line, `script_load`, with its name and whether the registry was set; a redirected one also logs
-// `script_redirected`. Called from the dlopen handler: no allocation, no exceptions.
+// script name; then returns `buf`, which holds the redirected bare name. A redirect logs one Info line, `script_redirected`
+// (from, to, hash). A registered name that does not fit `buf` is not redirected and logs a Warning, `script_redirect_skipped`.
+// A script-library name that is not redirected logs `script_load` (name, whether a registry is set) only when
+// SetLogEveryLoad is on: that is per-item detail, and a process loads many script libraries. A name that is not a script
+// library logs nothing. Called from the dlopen handler: no allocation, no exceptions.
 const char* RewriteLoadName(const char* name, char* buf, std::size_t cap) noexcept;
 
 // The game's dlopen with the redirect applied: `loader` is the loader's dlopen (or a test double). The name it opens is
 // RewriteLoadName's answer. A redirected open that returns null logs `script_redirect_failed` with the name, the redirected
-// name and dlerror() text, and returns that null; errno is left as the open set it. Called from the dlopen handler.
+// name and dlerror() text, and returns null; errno is left as that open set it.
+//
+// dlerror(): logging the failure reads, and so clears, the loader's error text. The redirected open is therefore issued a
+// second time (never the stock name, which would load the library the redirect replaces), so the game's next dlerror()
+// holds the loader's text for the redirected name. A second open that succeeds is returned as the game's handle, with a
+// Warning, `script_redirect_recovered`. A failing stock-name open is not touched: its dlerror() is the game's. Called from
+// the dlopen handler.
 void* OpenRedirected(void* (*loader)(const char* name, int flags), const char* name, int flags, char* buf,
                      std::size_t cap) noexcept;
 
@@ -56,7 +64,8 @@ NevrScriptRedirectResult RegisterIn(const char* libraryDir, const char* pluginId
                                     std::uint32_t count) noexcept;
 
 // The directory of the library at `path` (dladdr's dli_fname), into dir[cap]: null on success, else the reason no directory
-// can be checked (a library mapped out of an APK, a path with no directory part, a path too long for dir).
+// can be checked, as a stable token (it is the log's `reason`): library_path_missing (no path or no buffer),
+// library_inside_apk (mapped out of an APK), library_path_has_no_directory, library_path_too_long (does not fit dir).
 const char* LibraryDirectoryOf(const char* path, char* dir, std::size_t cap) noexcept;
 
 // The registration against the directory of `libraryPath` (dladdr's dli_fname for the sentinel). A path mapped out of an APK
@@ -72,6 +81,11 @@ NevrScriptRedirectResult RegisterFromLibraryPath(const char* pluginId, const cha
 // redirected; its script_load line (registry_set=false) shows it.
 NevrScriptRedirectResult Register(const char* pluginId, const std::uint64_t* hashes, std::uint32_t count) noexcept;
 
+// Per-item script_load lines for loads that are not redirected: on in a development build, off otherwise. Set when the plugin
+// runtime is planned (plugin_runtime.cpp), which is before the dlopen hook goes in.
+void SetLogEveryLoad(bool on) noexcept;
+bool LogsEveryLoad() noexcept;
+
 // Logs the redirect state once: `registry=<n>` and `status=armed` or `status=pass-through`. Called when the dlopen hook is
 // installed, so a run without a registration still says so (silence is not success).
 void LogState() noexcept;
@@ -82,7 +96,11 @@ std::uint32_t ArmedCount() noexcept;
 // The log's name for a result, as the host writes it.
 const char* ResultName(NevrScriptRedirectResult result) noexcept;
 
-// Clears the registration. Tests only.
+// Tests only. `hook` runs inside RegisterIn after its argument checks and before it claims the registration: a test makes a
+// second registration finish there and shows the first one then refuses (the claim, not an earlier look, decides).
+void SetBeforeClaimHookForTest(void (*hook)() noexcept) noexcept;
+
+// Clears the registration, the per-load logging switch and the claim hook. Tests only.
 void ResetForTest() noexcept;
 
 }  // namespace nevr_quest::script_redirect

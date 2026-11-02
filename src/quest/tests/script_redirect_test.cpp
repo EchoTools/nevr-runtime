@@ -1,7 +1,8 @@
 // Host test for the script redirect (#1737): the name rules (src/quest/plugin/script_redirect.h), the all-or-nothing registry
 // against a real temporary directory, the library-directory rules (an APK-mapped library is refused by name), the
-// empty-registry pass-through, the redirected open (OpenRedirected, which the dlopen handler calls) against a fake loader,
-// and the log lines each path writes. The handler in dlopen_hook.cpp itself is not linked here (it needs the whole
+// empty-registry pass-through, the redirected open (OpenRedirected, which the dlopen handler calls) against a fake loader
+// (including the dlerror() text the game reads after a failed redirected open), the one-claim registration, and the log
+// lines each path writes. The handler in dlopen_hook.cpp itself is not linked here (it needs the whole
 // integration build); its one call is the function this test drives.
 //
 // Built and run by `just test-quest-hooks`.
@@ -115,30 +116,48 @@ void PassThroughWithNoRegistration() {
   QCHECK(sr::ArmedCount() == 0);
   QCHECK(sr::RewriteLoadName(kNameA, buf, sizeof buf) == kNameA);
   QCHECK(sr::RewriteLoadName(nullptr, buf, sizeof buf) == nullptr);
-  // Every script-library load says whether a registry was set, so a run without one shows it.
+  // A load that is not redirected is per-item detail: nothing is logged for it unless the development switch is on.
+  QCHECK(!sr::LogsEveryLoad());
+  QCHECK(g_lines.empty());
+  sr::SetLogEveryLoad(true);
+  QCHECK(sr::LogsEveryLoad());
+  QCHECK(sr::RewriteLoadName(kNameA, buf, sizeof buf) == kNameA);
+  // With it on, a load says whether a registry was set, so a run without one shows it.
   QCHECK(Has("\"event\":\"script_load\"") && Has("\"name\":\"lib37f88adb0d8066f7.so\""));
-  QCHECK(Has("\"registry_set\":\"false\"") && Has("\"redirected\":\"false\""));
+  QCHECK(Has("\"registry_set\":\"false\"") && Has("\"redirected\":\"false\"") && Has("\"verbosity\":\"debug\""));
   QCHECK(LevelOf("script_load") == 'I');
   QCHECK(!Has("script_redirected"));
+  sr::SetLogEveryLoad(false);
+  QCHECK(!sr::LogsEveryLoad());
+  g_lines.clear();
+  QCHECK(sr::RewriteLoadName(kNameA, buf, sizeof buf) == kNameA);
+  QCHECK(g_lines.empty());
+  sr::SetLogEveryLoad(true);
   // A name that is not a script library logs nothing.
   g_lines.clear();
   QCHECK(std::strcmp(sr::RewriteLoadName("libpnsovr.so", buf, sizeof buf), "libpnsovr.so") == 0);
   QCHECK(!Has("script_load"));
   sentinel::SetLogSink(nullptr);
+  sr::ResetForTest();
 }
 
 void LibraryDirectories() {
   char dir[512];
   QCHECK(sr::LibraryDirectoryOf("/data/app/x/lib/arm64/libnevr.so", dir, sizeof dir) == nullptr);
   QCHECK(std::strcmp(dir, "/data/app/x/lib/arm64") == 0);
+  // Each refusal is one stable token, the log's `reason`; no prose rides in it.
   // A library mapped out of the APK: named, not checked as a directory.
   const char* const inApk = sr::LibraryDirectoryOf("/data/app/x/base.apk!/lib/arm64-v8a/libnevr.so", dir, sizeof dir);
-  QCHECK(inApk != nullptr && std::strstr(inApk, "library_inside_apk") != nullptr);
-  QCHECK(sr::LibraryDirectoryOf("libnevr.so", dir, sizeof dir) != nullptr);  // no directory part
-  QCHECK(sr::LibraryDirectoryOf(nullptr, dir, sizeof dir) != nullptr);
-  QCHECK(sr::LibraryDirectoryOf("/a/b/libnevr.so", nullptr, sizeof dir) != nullptr);  // no buffer: refused, not written
-  // The buffer: "/a" and its NUL need three bytes; two refuses.
-  QCHECK(sr::LibraryDirectoryOf("/a/libnevr.so", dir, 2) != nullptr);
+  QCHECK(inApk != nullptr && std::strcmp(inApk, "library_inside_apk") == 0);
+  const char* const noDir = sr::LibraryDirectoryOf("libnevr.so", dir, sizeof dir);  // no directory part
+  QCHECK(noDir != nullptr && std::strcmp(noDir, "library_path_has_no_directory") == 0);
+  const char* const noPath = sr::LibraryDirectoryOf(nullptr, dir, sizeof dir);
+  QCHECK(noPath != nullptr && std::strcmp(noPath, "library_path_missing") == 0);
+  const char* const noBuffer = sr::LibraryDirectoryOf("/a/b/libnevr.so", nullptr, sizeof dir);  // refused, not written
+  QCHECK(noBuffer != nullptr && std::strcmp(noBuffer, "library_path_missing") == 0);
+  // The buffer: "/a" and its NUL need three bytes; two is a path too long for it, which is not a path with no directory.
+  const char* const tooLong = sr::LibraryDirectoryOf("/a/libnevr.so", dir, 2);
+  QCHECK(tooLong != nullptr && std::strcmp(tooLong, "library_path_too_long") == 0);
   QCHECK(sr::LibraryDirectoryOf("/a/libnevr.so", dir, 3) == nullptr && std::strcmp(dir, "/a") == 0);
 }
 
@@ -188,7 +207,11 @@ void AllOrNothingRegistry() {
   QCHECK(std::strcmp(sr::RewriteLoadName("libpnsovr.so", buf, sizeof buf), "libpnsovr.so") == 0);
   QCHECK(Has("\"event\":\"script_redirected\"") && Has("\"to\":\"lib37f88adb0d8066f7_q15t.so\""));
   QCHECK(LevelOf("script_redirected") == 'I');
-  QCHECK(Has("\"name\":\"/data/x/libac4cd8e0a786d5c5.so\"") && Has("\"registry_set\":\"true\"") && Has("\"redirected\":\"true\""));
+  QCHECK(Has("\"from\":\"/data/x/libac4cd8e0a786d5c5.so\"") && Has("\"hash\":\"0xac4cd8e0a786d5c5\""));
+  // A redirect is its own Info line; the per-load line is for loads that are not redirected, and is off here.
+  QCHECK(!Has("script_load"));
+  // A registered name with no room for the combat name: not redirected, and said so at Warning.
+  QCHECK(LevelOf("script_redirect_skipped") == 'W' && Has("\"reason\":\"buffer_too_small\""));
   QCHECK(Has("\"result\":\"ok\"") && Has("\"status\":\"armed\""));
   QCHECK(LevelOf("script_redirect") == 'I');
 
@@ -216,6 +239,7 @@ void AllOrNothingRegistry() {
   const std::uint64_t dup[] = {kA, kA};
   QCHECK(sr::RegisterIn(dir.c_str(), "q15t", dup, 2) == NEVR_SCRIPT_REDIRECT_BAD_ARGUMENT);
   QCHECK(Has("\"reason\":\"duplicate_hash\"") && LevelOf("script_redirect") == 'E');
+  QCHECK(Has("\"detail\":\"the hash list names one stock library twice\""));  // the prose is its own field
   QCHECK(sr::RegisterIn(dir.c_str(), "q15t", pair, 0) == NEVR_SCRIPT_REDIRECT_BAD_ARGUMENT);
   QCHECK(sr::RegisterIn(dir.c_str(), nullptr, pair, 2) == NEVR_SCRIPT_REDIRECT_BAD_ARGUMENT);
   QCHECK(sr::RegisterIn(dir.c_str(), "q15t", nullptr, 2) == NEVR_SCRIPT_REDIRECT_BAD_ARGUMENT);
@@ -263,13 +287,22 @@ void* RecordingOpen(const char* name, int) {
   return &g_openedName;
 }
 
-// A loader that fails the way dlopen does: dlerror() holds the loader's text and errno says why.
+// A loader that fails the way dlopen does: it really asks dlopen for `name`, so dlerror() holds the loader's text for that
+// name, and errno says why.
 void* FailingOpen(const char* name, int) {
   ++g_openCalls;
   g_openedName = name;
-  (void)dlopen("/nonexistent/q15t_redirect_test.so", RTLD_NOW);
+  (void)dlopen(name, RTLD_NOW);
   errno = EACCES;
   return nullptr;
+}
+
+// A loader that fails its first call and opens on the second.
+void* OpensOnTheSecondTry(const char* name, int flags) {
+  if (g_openCalls == 0) return FailingOpen(name, flags);
+  ++g_openCalls;
+  g_openedName = name;
+  return &g_openedName;
 }
 
 // The redirected open (dlopen_hook.cpp's handler goes through it): the name opened, the failure line, and errno.
@@ -296,25 +329,45 @@ void OpenRedirectedPaths() {
   g_openCalls = 0;
   QCHECK(sr::OpenRedirected(&RecordingOpen, kNameA, RTLD_NOW, buf, sizeof buf) == &g_openedName);
   QCHECK(g_openCalls == 1 && g_openedName == "lib37f88adb0d8066f7_q15t.so");
-  QCHECK(LevelOf("script_redirected") == 'I' && Has("\"registry_set\":\"true\""));
+  QCHECK(LevelOf("script_redirected") == 'I' && Has("\"to\":\"lib37f88adb0d8066f7_q15t.so\""));
 
   // A registered name whose redirected open fails: null, a failure line naming both names and the loader's text, and
   // errno as the loader left it (the sink above clobbers errno when it logs).
   g_lines.clear();
+  g_openCalls = 0;
   errno = 0;
+  (void)dlerror();  // nothing pending before the call
   QCHECK(sr::OpenRedirected(&FailingOpen, kNameA, RTLD_NOW, buf, sizeof buf) == nullptr);
+  const int errnoAfter = errno;
   QCHECK(g_openedName == "lib37f88adb0d8066f7_q15t.so");
+  // The failure line read dlerror(), which clears it; the open is issued again so the game's own dlerror() still says why.
+  QCHECK(g_openCalls == 2);
+  const char* const gameSees = dlerror();
+  QCHECK(gameSees != nullptr && std::strstr(gameSees, "lib37f88adb0d8066f7_q15t.so") != nullptr);
   const std::string failure = LineOf("script_redirect_failed");
   QCHECK(failure.find("\"from\":\"lib37f88adb0d8066f7.so\"") != std::string::npos);
   QCHECK(failure.find("\"to\":\"lib37f88adb0d8066f7_q15t.so\"") != std::string::npos);
   QCHECK(failure.find("cannot open shared object file") != std::string::npos);
   QCHECK(LevelOf("script_redirect_failed") == 'E');
-  QCHECK(errno == EACCES);
+  QCHECK(errnoAfter == EACCES);
 
-  // An unregistered name in a registered process: passes through, and its failure is not a redirect failure.
+  // An unregistered name in a registered process: passes through, and its failure is not a redirect failure. Its dlerror()
+  // is the game's, read by nobody here and not reissued.
   g_lines.clear();
+  g_openCalls = 0;
+  (void)dlerror();
   QCHECK(sr::OpenRedirected(&FailingOpen, kNameC, RTLD_NOW, buf, sizeof buf) == nullptr);
   QCHECK(g_openedName == kNameC && !Has("script_redirect_failed"));
+  QCHECK(g_openCalls == 1);
+  const char* const stockText = dlerror();
+  QCHECK(stockText != nullptr && std::strstr(stockText, "lib0123456789abcdef.so") != nullptr);
+
+  // A redirected open that fails once and opens on the second try: the game gets that handle, and the Warning says so.
+  g_lines.clear();
+  g_openCalls = 0;
+  QCHECK(sr::OpenRedirected(&OpensOnTheSecondTry, kNameA, RTLD_NOW, buf, sizeof buf) == &g_openedName);
+  QCHECK(g_openCalls == 2 && g_openedName == "lib37f88adb0d8066f7_q15t.so");
+  QCHECK(LevelOf("script_redirect_failed") == 'E' && LevelOf("script_redirect_recovered") == 'W');
 
   RemoveDir(dir, both, 2);
   sentinel::SetLogSink(nullptr);
@@ -340,7 +393,16 @@ void RegisterFromOwnDirectory() {
   const NevrScriptRedirectResult inApk =
       sr::RegisterFromLibraryPath("q15t", "/data/app/x/base.apk!/lib/arm64-v8a/libnevr.so", pair, 2);
   QCHECK(inApk == NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR);
-  QCHECK(Has("library_inside_apk") && LevelOf("script_redirect") == 'E');
+  QCHECK(Has("\"reason\":\"library_inside_apk\"") && LevelOf("script_redirect") == 'E');
+  QCHECK(Has("\"detail\":\"the native library is mapped from the APK, not extracted to disk\""));
+  // A path that fits no directory buffer, and one with no directory: each its own token.
+  g_lines.clear();
+  const std::string longDir = "/" + std::string(600, 'd') + "/libnevr.so";
+  QCHECK(sr::RegisterFromLibraryPath("q15t", longDir.c_str(), pair, 2) == NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR);
+  QCHECK(Has("\"reason\":\"library_path_too_long\"") && !Has("library_path_has_no_directory"));
+  g_lines.clear();
+  QCHECK(sr::RegisterFromLibraryPath("q15t", "libnevr.so", pair, 2) == NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR);
+  QCHECK(Has("\"reason\":\"library_path_has_no_directory\""));
   QCHECK(sr::ArmedCount() == 0);
 
   // A library on disk: its directory is the one checked, and both names are there, so the registration is armed.
@@ -353,6 +415,37 @@ void RegisterFromOwnDirectory() {
   sr::ResetForTest();
   RemoveDir(dir, both, 2);
 
+  sentinel::SetLogSink(nullptr);
+  sr::ResetForTest();
+}
+
+// The registration claims before it looks: a second registration that finishes while the first is between its argument checks
+// and its claim must make the first refuse, not overwrite it. The hook (SetBeforeClaimHookForTest) is that moment.
+std::string g_claimDir;
+int g_hookRegistrationResult = -1;
+void SecondRegistrationFinishes() noexcept {
+  sr::SetBeforeClaimHookForTest(nullptr);  // the nested call must not run the hook again
+  const std::uint64_t pair[] = {kA, kB};
+  g_hookRegistrationResult = sr::RegisterIn(g_claimDir.c_str(), "second", pair, 2);
+}
+
+void RegistrationClaimsBeforeItLooks() {
+  sr::ResetForTest();
+  g_lines.clear();
+  sentinel::SetLogSink(&Capture);
+  const char* const both[] = {"lib37f88adb0d8066f7_q15t.so", "libac4cd8e0a786d5c5_q15t.so", "lib0123456789abcdef_q15t.so"};
+  g_claimDir = MakeDir(both, 3);
+  QCHECK(!g_claimDir.empty());
+  const std::uint64_t three[] = {kA, kB, kC};
+  g_hookRegistrationResult = -1;
+  sr::SetBeforeClaimHookForTest(&SecondRegistrationFinishes);
+  QCHECK(sr::RegisterIn(g_claimDir.c_str(), "first", three, 3) == NEVR_SCRIPT_REDIRECT_ALREADY_ARMED);
+  QCHECK(g_hookRegistrationResult == NEVR_SCRIPT_REDIRECT_OK);
+  QCHECK(sr::ArmedCount() == 2);  // the second registration's two names stand; the first did not replace them
+  char buf[sr::kNameCapacity];
+  QCHECK(sr::RewriteLoadName(kNameC, buf, sizeof buf) == kNameC);  // the first one's third name was never registered
+  QCHECK(Has("\"reason\":\"already_registered\"") && Has("\"plugin\":\"first\""));
+  RemoveDir(g_claimDir, both, 3);
   sentinel::SetLogSink(nullptr);
   sr::ResetForTest();
 }
@@ -382,6 +475,7 @@ int main() {
   DirectoryIsNotALibrary();
   OpenRedirectedPaths();
   RegisterFromOwnDirectory();
+  RegistrationClaimsBeforeItLooks();
   StateLine();
   ResultNames();
   if (quest_test::Failures() != 0) {

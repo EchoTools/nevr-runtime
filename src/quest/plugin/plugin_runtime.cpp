@@ -12,6 +12,7 @@
 #include "quest/plugin/packaged_plugins.h"
 #include "quest/plugin/plugin_loader.h"
 #include "quest/plugin/plugin_platform.h"
+#include "quest/plugin/script_redirect.h"
 #include "quest/sentinel/hook_log.h"
 #include "runtime/ext/plugin_load_plan_build.h"
 
@@ -113,6 +114,8 @@ PlanCounts PlanPlugins(const std::vector<nevr::PluginSpec>& specs, bool devBuild
   try {
     if (Instance() == nullptr) {
       Instance() = new Runtime(OwnDirectory(), devBuild, configRejected);
+      // The script redirect's per-load lines are a development build's, like a plugin's DEBUG lines (script_redirect.h).
+      script_redirect::SetLogEveryLoad(devBuild);
       // Packaged entries first, then config.yaml: config overrides a packaged plugin in place, or names an unpackaged one
       // (MergePackaged, docs/adr/0019-quest-plugin-loader.md section 2).
       const std::vector<PackagedPlugin> packaged = ReadPackaged(Instance()->platform);

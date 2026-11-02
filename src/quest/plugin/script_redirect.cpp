@@ -20,7 +20,9 @@ constexpr std::size_t kHashDigits = 16;
 constexpr std::size_t kMissingCapacity = kMaxEntries * (kNameCapacity + 1);
 
 std::atomic<std::uint32_t> g_count{0};  // names in force; written once, release-stored after g_hashes
-std::atomic<bool> g_busy{false};        // a registration is between its checks and its store
+std::atomic<bool> g_busy{false};        // a registration holds the claim: it has not yet stored g_count or given the claim up
+std::atomic<bool> g_logEveryLoad{false};  // the development build's per-load lines (SetLogEveryLoad)
+std::atomic<void (*)() noexcept> g_beforeClaimHook{nullptr};  // tests only (SetBeforeClaimHookForTest)
 std::uint64_t g_hashes[kMaxEntries] = {};
 
 // The last '/'-separated component of `name`.
@@ -35,10 +37,33 @@ bool IsRegularFile(const char* path) noexcept {
   return ::stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
+// What each refusal token means, in words. The log's `reason` is always the token; this text is its own field, `detail`.
+const char* ReasonDetail(const char* token) noexcept {
+  struct Row {
+    const char* token;
+    const char* detail;
+  };
+  static constexpr Row kRows[] = {
+      {"argument_out_of_range", "the plugin id or hash list is null, or the count is outside 1..16"},
+      {"duplicate_hash", "the hash list names one stock library twice"},
+      {"no_library_directory", "the host has no native library directory to check the combat libraries in"},
+      {"already_registered", "a registration is already in force, or one is being decided"},
+      {"dladdr_failed", "the loader could not say which file the sentinel was loaded from"},
+      {"library_path_missing", "the loader gave no usable path for the sentinel's own library"},
+      {"library_inside_apk", "the native library is mapped from the APK, not extracted to disk"},
+      {"library_path_has_no_directory", "the sentinel's library path has no directory part"},
+      {"library_path_too_long", "the sentinel's library directory does not fit the host's path buffer"},
+  };
+  for (const Row& row : kRows) {
+    if (std::strcmp(row.token, token) == 0) return row.detail;
+  }
+  return "";
+}
+
 NevrScriptRedirectResult Refuse(NevrScriptRedirectResult result, const char* who, const char* reason) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kError, "script_redirect",
                       {{"op", "register"}, {"result", ResultName(result)}, {"plugin", who}, {"registry", 0},
-                       {"reason", reason}});
+                       {"reason", reason}, {"detail", ReasonDetail(reason)}});
   return result;
 }
 
@@ -97,10 +122,24 @@ const char* RewriteLoadName(const char* name, char* buf, std::size_t cap) noexce
   bool registered = false;
   for (std::uint32_t i = 0; i < count && !registered; ++i) registered = g_hashes[i] == hash;
   const bool redirect = registered && RedirectName(hash, buf, cap);
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "script_load",
-                      {{"name", name}, {"registry_set", count != 0 ? "true" : "false"},
-                       {"redirected", redirect ? "true" : "false"}});
-  if (!redirect) return name;
+  if (registered && !redirect) {
+    // A name the registry holds that cannot be rewritten (the caller's buffer is too small): the game gets the stock
+    // library, which is not what the registration promised.
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "script_redirect_skipped",
+                        {{"name", name}, {"reason", "buffer_too_small"}, {"buffer", static_cast<long long>(cap)},
+                         {"consequence", "the game loads the stock library"}});
+    return name;
+  }
+  if (!redirect) {
+    // Per-item detail: the development build's log only (SetLogEveryLoad). The sentinel has no Debug level; the plugin
+    // loader's Debug lines take the same shape (Info, dropped in a release build).
+    if (g_logEveryLoad.load(std::memory_order_relaxed)) {
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "script_load",
+                          {{"name", name}, {"registry_set", count != 0 ? "true" : "false"}, {"redirected", "false"},
+                           {"verbosity", "debug"}});
+    }
+    return name;
+  }
   char hex[19];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "script_redirected",
                       {{"from", name}, {"to", buf}, {"hash", sentinel::HexString(hex, hash)}});
@@ -110,13 +149,22 @@ const char* RewriteLoadName(const char* name, char* buf, std::size_t cap) noexce
 void* OpenRedirected(void* (*loader)(const char* name, int flags), const char* name, int flags, char* buf,
                      std::size_t cap) noexcept {
   const char* const loadName = RewriteLoadName(name, buf, cap);
-  void* const handle = loader(loadName, flags);
+  void* handle = loader(loadName, flags);
   if (handle == nullptr && loadName != name) {
     // A redirected load that failed fails loudly: the game gets the loader's null, and the names and dlerror() say why.
     const int savedErrno = errno;
-    const char* const reason = dlerror();
+    const char* const reason = dlerror();  // reading the loader's error clears it
     sentinel::LogFields(sentinel::LogLevel::kError, "script_redirect_failed",
                         {{"from", name}, {"to", loadName}, {"dlerror", reason != nullptr ? reason : "(none)"}});
+    // The game's next dlerror() must still say why its load failed, so the same open is issued again: it fails the same
+    // way and the loader's text for the redirected name is readable once more. (The stock name is never opened here: that
+    // would load the library the redirect replaces.) An open that succeeds on this second try is the game's handle.
+    handle = loader(loadName, flags);
+    if (handle != nullptr) {
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "script_redirect_recovered",
+                          {{"from", name}, {"to", loadName},
+                           {"consequence", "the second open of the combat library succeeded; the game gets its handle"}});
+    }
     errno = savedErrno;
   }
   return handle;
@@ -134,8 +182,17 @@ NevrScriptRedirectResult RegisterIn(const char* libraryDir, const char* pluginId
     }
   }
   if (libraryDir == nullptr) return Refuse(NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR, who, "no_library_directory");
+  // Claim first, then look: g_count only changes while the claim is held, so a registration that finished before the
+  // claim is seen here, and one still deciding makes the claim fail. (Looking at g_count before the claim would let a
+  // second registration slip in between and overwrite g_hashes under the dlopen handler's readers.) The plugin loader
+  // runs plugin init under one mutex, so this is not reached concurrently today; the claim keeps it true if that changes.
+  if (const auto hook = g_beforeClaimHook.load(std::memory_order_acquire)) hook();
   bool expected = false;
-  if (g_count.load(std::memory_order_acquire) != 0 || !g_busy.compare_exchange_strong(expected, true)) {
+  if (!g_busy.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+    return Refuse(NEVR_SCRIPT_REDIRECT_ALREADY_ARMED, who, "already_registered");
+  }
+  if (g_count.load(std::memory_order_acquire) != 0) {
+    g_busy.store(false, std::memory_order_release);
     return Refuse(NEVR_SCRIPT_REDIRECT_ALREADY_ARMED, who, "already_registered");
   }
   // Every name must be a file in the library directory before any is registered (all or nothing).
@@ -179,11 +236,10 @@ const char* LibraryDirectoryOf(const char* path, char* dir, std::size_t cap) noe
   if (path == nullptr || dir == nullptr || cap == 0) return "library_path_missing";
   // A library the loader maps out of the APK (a store APK that does not extract native libraries) is named
   // base.apk!/lib/<abi>/<file>: that directory is not on disk, so the names in it cannot be checked as files.
-  if (std::strstr(path, ".apk!/") != nullptr) {
-    return "library_inside_apk: the native library is mapped from the APK, not extracted to disk";
-  }
+  if (std::strstr(path, ".apk!/") != nullptr) return "library_inside_apk";
   const char* const slash = std::strrchr(path, '/');
-  if (slash == nullptr || static_cast<std::size_t>(slash - path) + 1 > cap) return "library_path_has_no_directory";
+  if (slash == nullptr) return "library_path_has_no_directory";
+  if (static_cast<std::size_t>(slash - path) + 1 > cap) return "library_path_too_long";
   const std::size_t dirLength = static_cast<std::size_t>(slash - path);
   std::memcpy(dir, path, dirLength);
   dir[dirLength] = '\0';
@@ -202,6 +258,10 @@ NevrScriptRedirectResult RegisterFromLibraryPath(const char* pluginId, const cha
 
 NevrScriptRedirectResult Register(const char* pluginId, const std::uint64_t* hashes, std::uint32_t count) noexcept {
   const char* const who = pluginId != nullptr ? pluginId : "(null)";
+  // This is the same dladdr-then-directory step as plugin_runtime.cpp's OwnDirectory and plugin_platform.cpp's DirectoryOf,
+  // kept apart on purpose: those return std::string, which allocates and throws, and this file is built -fno-exceptions
+  // and linked alone into the dlopen handler's host tests (plugin_platform.cpp pulls in the whole loader). The buffer
+  // form here also refuses an APK-mapped library, which the string form would hand back as a directory that is not on disk.
   Dl_info info{};
   if (dladdr(reinterpret_cast<const void*>(&Register), &info) == 0 || info.dli_fname == nullptr) {
     return Refuse(NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR, who, "dladdr_failed");
@@ -229,9 +289,17 @@ const char* ResultName(NevrScriptRedirectResult result) noexcept {
   return "unknown";
 }
 
+void SetLogEveryLoad(bool on) noexcept { g_logEveryLoad.store(on, std::memory_order_relaxed); }
+
+bool LogsEveryLoad() noexcept { return g_logEveryLoad.load(std::memory_order_relaxed); }
+
+void SetBeforeClaimHookForTest(void (*hook)() noexcept) noexcept { g_beforeClaimHook.store(hook, std::memory_order_release); }
+
 void ResetForTest() noexcept {
   g_count.store(0, std::memory_order_release);
   g_busy.store(false);
+  g_logEveryLoad.store(false);
+  g_beforeClaimHook.store(nullptr);
 }
 
 }  // namespace nevr_quest::script_redirect
