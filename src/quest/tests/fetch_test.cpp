@@ -304,6 +304,31 @@ TEST(NoSpaceStopsBeforeAnyRequest) {
   CHECK(rig.HasEvent("data_fetch outcome=no_space"));
 }
 
+// The space check with the pinned constants (issue #1934). The other space tests set extracted_bytes themselves, so only
+// this one holds kZipExtractedBytes to its value. A fresh fetch needs the zip plus its extracted tree:
+// 1623117032 + 1635311504 = 3258428536.
+TEST(TheDefaultFetchNeedsThePinnedZipPlusItsExtractedSize) {
+  constexpr std::uint64_t kNeeded = 3258428536ULL;
+  Scratch s;
+  FetchConfig config;  // the defaults: the pinned url, digest, zip length and extracted length
+  config.root = s.Path("root");
+  config.max_attempts = 1;
+  config.utc_stamp = "20261022T000000Z";
+  config.backoff = [](int) {};
+  CHECK_EQ(kNeeded, kZipBytes + kZipExtractedBytes);
+  config.available_bytes = [](const std::string&) { return kNeeded - 1; };
+  const std::string zip = GoodZip();
+  ScriptedTransport short_net(zip, {Step{}});
+  const FetchResult refused = RunFetch(config, short_net);
+  CHECK_EQ(refused.status, FetchStatus::kNoSpace);
+  CHECK_EQ(refused.needed_bytes, kNeeded);
+  CHECK(short_net.offsets.empty());
+  config.available_bytes = [](const std::string&) { return kNeeded; };
+  ScriptedTransport net(zip, {Step{}});
+  CHECK(RunFetch(config, net).status != FetchStatus::kNoSpace);
+  CHECK(!net.offsets.empty());
+}
+
 TEST(ReplacingNeedsTwiceTheSpace) {
   Rig rig;
   const std::uint64_t one = rig.config.bytes + rig.config.extracted_bytes;
