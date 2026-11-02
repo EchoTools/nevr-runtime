@@ -1,3 +1,6 @@
+// NRadEngine::SBroadcasterData::DestroyPeer(record)
+// Quest libr15.so VA 0x25ea1bc; ReVault binary 576.
+// ReVault raw parent 100318011, reconstruction node 100600272; grade M: queue offsets and copied peer fields follow Quest raw, and the allocator and hash-table operations are named imports.
 // @0x25ea1bc — NRadEngine::SBroadcasterData::DestroyPeer(record)
 // @confidence: M — queue offsets and copied peer fields follow Quest raw; allocator and hash-table operations are named imports.
 #include <algorithm>

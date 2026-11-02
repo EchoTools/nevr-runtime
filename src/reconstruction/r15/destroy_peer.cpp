@@ -1,3 +1,6 @@
+// NRadEngine::SBroadcasterData::DestroyPeer(index)
+// Quest libr15.so VA 0x2612cdc; ReVault binary 576.
+// ReVault raw parent 100318541, reconstruction node 100600271; grade M: the Quest raw establishes the peer lookup, state-dependent event, listener dispatch and record cleanup.
 // @0x2612cdc — NRadEngine::SBroadcasterData::DestroyPeer(index)
 // @confidence: M — Quest raw establishes the peer lookup, state-dependent event, listener dispatch, and record cleanup.
 #include <cstddef>

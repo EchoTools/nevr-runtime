@@ -1,3 +1,6 @@
+// NRadEngine::CTimer::DeltaSecondsF
+// Quest libr15.so VA 0x12cd154; ReVault binary 576.
+// ReVault raw parent 100219768, reconstruction node 100600268; grade M: arithmetic and receiver offset follow Quest raw, and the timer globals retain imported names.
 // @0x12cd154 — NRadEngine::CTimer::DeltaSecondsF
 /* @confidence: M — arithmetic and receiver offset follow Quest raw; timer globals retain imported names. */
 #include <cstddef>
