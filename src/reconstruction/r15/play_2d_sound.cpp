@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x144c2a8 — CSoundPlayer::Play2DSound
 /* @confidence: H — forwards the symbol to the current 2D emitter and returns -1 when none is configured. */
@@ -21,4 +21,4 @@ std::int32_t Play2DSound(std::uint64_t player, std::uint64_t event,
     return Play3DSound(player, event, emitter, volume);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

@@ -4,7 +4,7 @@
 
 #include <cstddef>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a52040 — WwisePlacementStorage
 /* @confidence: H — returns the supplied placement address unchanged. */
@@ -13,4 +13,4 @@ void* WwisePlacementStorage(std::size_t size, void* storage) {
     return storage;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

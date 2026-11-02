@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a49c30 — BuildWwiseValueCommand
 /* @confidence: H — both command layouts, sizes, field offsets and the final queue commit match the complete stored body. */
@@ -35,4 +35,4 @@ std::uint64_t BuildWwiseValueCommand(std::uint32_t command_id,
     return 1;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

@@ -114,7 +114,7 @@ extern const std::int64_t kR15Quest2MSAALevel;
 
 } // namespace NRadEngine
 
-namespace NRadEngine::NRadGame::reconstruction_detail {
+namespace NRadEngine::NRadGame::nevr_reconstruction {
 using LogStringTable = const char* const[];
 // The binary accesses relocated pointer tables; their string contents are not
 // guessed here. These references name the tables by their observed role.
@@ -155,14 +155,14 @@ void FindComponentSystems(void* gameSpace, std::uint64_t typeId, CMemBlock*,
                           ComponentSystemRange* result);
 void WriteSettingsToUI(void* settingsTranslatorComponentSystem);
 void CMemBlockDestroy(CMemBlock*);
-} // namespace reconstruction_detail
+} // namespace nevr_reconstruction
 
 namespace NWriteLog {
 void WriteLog(std::int32_t level, std::int32_t category, const char* format, ...);
 }
 
 namespace NRadEngine::NRadGame {
-using namespace reconstruction_detail;
+using namespace nevr_reconstruction;
 
 void ApplyRuntimeGfxSettings(const SR15GfxSettings& g, CR15Game& game,
                              std::uint32_t refreshUI) {

@@ -18,7 +18,7 @@ void WriteLog(int severity, int category, const char* format, ...);
 
 }  // namespace NRadEngine
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 namespace {
 
 std::byte* at(std::uint64_t object, std::size_t offset) {
@@ -197,4 +197,4 @@ std::int32_t Play3DSound(std::uint64_t player, std::uint64_t event,
     return -1;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a51dc0 — AcquireWwiseSymbolReference
 /* @confidence: H — increments the 32-bit reference count at symbol offset 0x14. */
@@ -15,4 +15,4 @@ std::int32_t AcquireWwiseSymbolReference(void* symbol) {
     return ++*count;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

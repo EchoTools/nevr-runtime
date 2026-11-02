@@ -2,7 +2,7 @@
 // ReVault raw parent 100227774, reconstruction node 100600538; grade M.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 namespace {
 
 void LockSoundStateTable(std::atomic<std::int32_t>* lock) {
@@ -61,4 +61,4 @@ bool SoundStopped(const void* player, std::uint32_t expected_state,
     return true;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

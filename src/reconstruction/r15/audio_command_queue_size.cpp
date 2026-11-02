@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a55fd0 — AudioCommandQueueSize
 /* @confidence: H — computes used ring-buffer bytes with wrap at the stored capacity. */
@@ -17,4 +17,4 @@ std::uint64_t AudioCommandQueueSize(const std::uint64_t* queue) {
     return tail - head;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

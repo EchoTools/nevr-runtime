@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a49fc0 — QueueWwiseTrigger
 /* @confidence: H — kind 10, 0x10-byte allocation, object and trigger field offsets, commit, and success result match the complete body. */
@@ -20,4 +20,4 @@ std::uint64_t QueueWwiseTrigger(std::uint32_t trigger,
     return 1;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2aad1a0 — InsertWwisePostNode
 /* @confidence: M — preserves queue growth, callback-count bucket selection, intrusive head insertion and count update. */
@@ -31,4 +31,4 @@ bool InsertWwisePostNode(std::uint64_t context, std::byte* node) {
     return true;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

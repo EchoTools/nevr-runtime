@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2aad070 — SubmitWwisePostCommand
 /* @confidence: M — mirrors the raw allocation, node initialization, metadata copy, flag mask and enqueue sequence. */
@@ -56,4 +56,4 @@ int SubmitWwisePostCommand(std::uint64_t context, std::byte* command,
     return result;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

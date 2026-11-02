@@ -2,7 +2,7 @@
 // ReVault raw parent 100335353, reconstruction node 100600504; grade M.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a49d50 — QueueWwiseValueCommand
 /* @confidence: M — the wrapper's argument forwarding and success return match the stored ARM64 body. */
@@ -16,4 +16,4 @@ std::uint64_t QueueWwiseValueCommand(std::uint64_t symbol,
     return 1;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

@@ -10,7 +10,7 @@ namespace NRadEngine::CMemBlock {
 void Resize(void* block, std::uint64_t bytes);
 }
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 namespace {
 
 template <typename T>
@@ -62,4 +62,4 @@ void InsertSoundKey(void* table_pointer, std::uint64_t index,
     store(table, 0x30, required);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

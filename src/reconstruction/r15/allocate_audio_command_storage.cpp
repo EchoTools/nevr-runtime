@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a53580 — AllocateAudioCommandStorage
 /* @confidence: M — includes the ring-full wait, queue drain and retry from the raw allocator. */
@@ -37,4 +37,4 @@ std::byte* AllocateAudioCommandStorage(std::uint64_t context,
     return block;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction
