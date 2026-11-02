@@ -693,14 +693,16 @@ bool IsMember(const nevr_social_party::View& view, std::uint64_t id) {
   return false;
 }
 
-// A friend is invitable only while the local party is joinable, the friend is not already a member and
-// is reachable (online here). It is not a function of the friend alone.
+// CNSISocial::FriendIsInvitable (libr15 0x1a35ba0), the same rule as the PC facade: the friend is online
+// and not already a member. It needs no party: SendInvite creates one when none exists. Once a party exists,
+// PartyJoinable's rule applies: a full, joining or locked (for a non-host) party shows no "+".
 std::uint32_t SlotFriendIsInvitable(void* self, std::uint32_t index) {
   Impl& impl = *OwnerOf(self);
   std::uint64_t id = 0;
   if (!Friends(impl).IdAt(index, &id) || !Friends(impl).OnlineAt(index)) return 0;
   const auto view = CurrentView(impl);
-  return PartyJoinable(impl, *view) && !IsMember(*view, id) ? 1U : 0U;
+  if (view->partyId != 0 && !PartyJoinable(impl, *view)) return 0;
+  return !IsMember(*view, id) ? 1U : 0U;
 }
 
 // OpenSendInviteUI / OpenNewSendInviteUI(LocalUserID): the party tab's "Invite Members" (#318). pnsovr opened
@@ -776,12 +778,15 @@ const char* SlotRecentName(void* self, std::uint32_t index) { return Recent(*Own
 std::uint32_t SlotRecentStatus(void* self, std::uint32_t index) { return Recent(*OwnerOf(self)).OnlineAt(index) ? 2U : 0U; }
 const char* SlotRecentStatusString(void* self, std::uint32_t index) { return Recent(*OwnerOf(self)).TextAt(index); }
 
+// Recently met: the same rule as SlotFriendIsInvitable (libr15 CNSISocial::RecentlyMetUserIsInvitable,
+// 0x1a35d10): online and not a member. No party is needed; once a party exists, PartyJoinable's rule applies.
 std::uint32_t SlotRecentIsInvitable(void* self, std::uint32_t index) {
   Impl& impl = *OwnerOf(self);
   std::uint64_t id = 0;
   if (!Recent(impl).IdAt(index, &id) || !Recent(impl).OnlineAt(index)) return 0;
   const auto view = CurrentView(impl);
-  return PartyJoinable(impl, *view) && !IsMember(*view, id) ? 1U : 0U;
+  if (view->partyId != 0 && !PartyJoinable(impl, *view)) return 0;
+  return !IsMember(*view, id) ? 1U : 0U;
 }
 
 std::uint64_t SlotRecentPartyId(void* self, std::uint32_t index) { return Recent(*OwnerOf(self)).PartyIdAt(index); }
@@ -997,6 +1002,7 @@ EventKind KindOf(nevr_social_party::EventKind kind, bool* deliver) {
     case Kind::kMemberLeft: return kEvMemberLeft;
     case Kind::kInviteReceived: return kEvInviteReceived;
     case Kind::kInviteFailed: break;  // no game callback is driven from here
+    case Kind::kInvitesDropped: break;  // logged where the queue drains (QueueEvents); no game callback
   }
   *deliver = false;
   return kEvUpdated;
@@ -1145,6 +1151,13 @@ void UpdateCollect(void* self, EventBatch* out, JsonPlan* json) noexcept {
     }
     while (!impl->queuedEvents.empty() && out->count < kMaxPendingEvents) {
       const nevr_social_party::Event& event = impl->queuedEvents.front();
+      if (event.kind == nevr_social_party::EventKind::kInvitesDropped) {
+        std::string targets;
+        for (const std::uint64_t id : event.ids) targets += (targets.empty() ? "" : ",") + std::to_string(id);
+        LogFields(LogLevel::kWarn, "social_invites_dropped",
+                  {{"count", static_cast<long long>(event.index)}, {"targets", targets.c_str()},
+                   {"note", "a failed create drops the invites the + queued; invite again once a party exists"}});
+      }
       bool deliver = false;
       const EventKind kind = KindOf(event.kind, &deliver);
       if (deliver) {

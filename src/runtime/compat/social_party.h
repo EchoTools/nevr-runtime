@@ -272,6 +272,7 @@ enum class EventKind {
   kMemberLeft,       // id, name
   kInviteReceived,
   kInviteFailed,     // id, name, code
+  kInvitesDropped,   // index: the count; ids: the invitees whose invites a failed create dropped
 };
 
 /// Nakama's PartyJoinFailure code as the game's JoinFailed code (see Feed).
@@ -289,6 +290,7 @@ struct Event {
   std::uint64_t id = 0;
   std::string name;
   std::uint32_t code = 0;
+  std::vector<std::uint64_t> ids;  // kInvitesDropped only
 };
 
 inline Event MakeEvent(EventKind kind, std::uint32_t index = 0, std::uint64_t id = 0,
@@ -823,6 +825,13 @@ class State {
       pendingInvites_.clear();
     } else if (n == "PartyCreateFailure") {
       creating_ = false;
+      // The invites the "+" queued for a party that was never created are dropped here. The model has no log of
+      // its own (it is shared with the Quest build), so the drop is an event that each facade logs.
+      if (!pendingInvites_.empty()) {
+        Event dropped = MakeEvent(EventKind::kInvitesDropped, static_cast<std::uint32_t>(pendingInvites_.size()));
+        dropped.ids = pendingInvites_;
+        events_.push_back(std::move(dropped));
+      }
       pendingInvites_.clear();
     } else if (n == "PartyJoinSuccess" && len >= 16) {
       if (partyId_ != 0 && partyId_ != u64(0)) {  // admitted: now leave the party we were in
