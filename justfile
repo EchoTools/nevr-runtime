@@ -390,7 +390,8 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     if [ -n "$extra_libs" ]; then
         [ -d "$extra_libs" ] || { echo "android-repack-apk: script library directory not found: $extra_libs" >&2; exit 1; }
         python3 -I tools/quest_repack_libs.py stage-libs --libs "$extra_libs" --stage "$work/stage" --store-apk "$apk"
-        for f in "$work/stage/lib/arm64-v8a"/lib????????????????.so; do
+        # The plain names, and the redirected names the stage gives the nine stock libraries a combat unit redirects (#1737).
+        for f in "$work/stage/lib/arm64-v8a"/lib????????????????.so "$work/stage/lib/arm64-v8a"/lib????????????????_q15t.so; do
             [ -f "$f" ] && combat_libs+=("lib/arm64-v8a/$(basename "$f")")
         done
     fi
@@ -1959,9 +1960,15 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
     # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/input_seam_test.cpp src/quest/plugin/input_seam_hook.cpp \
+        src/quest/plugin/script_redirect.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "${ident[@]}" \
         -o "$out/input_seam_test" -ldl
     timeout 120 "$out/input_seam_test"
+    # The script redirect (#1737): the stock-name rules, the all-or-nothing registry against a real directory, the empty
+    # registry's pass-through and the log lines. Needs no pinned target: hook_log.cpp is its only sentinel dependency.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/script_redirect_test.cpp src/quest/plugin/script_redirect.cpp \
+        src/quest/sentinel/hook_log.cpp -o "$out/script_redirect_test" -ldl
+    timeout 120 "$out/script_redirect_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
     # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
     jni="${ANDROID_NDK_HOME:?test-quest-hooks: ANDROID_NDK_HOME is not set (the toast test needs jni.h from the NDK)}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
@@ -2308,6 +2315,8 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
     "${off[@]}" -c src/quest/redirect/tstring_thunks.cpp -o "$out/tstring_thunks.o"
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
+    # The dlopen handler calls the script redirect (#1737), built without exceptions as on the device.
+    "${off[@]}" -c src/quest/plugin/script_redirect.cpp -o "$out/script_redirect.o"
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
     "${off[@]}" -c src/quest/invite/frame_dispatch.cpp -o "$out/frame_dispatch.o"
@@ -2348,7 +2357,7 @@ test-quest-integration: _vcpkg-quest-host
         src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp \
         src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/runtime/lifecycle/service_redirect.cpp \
         src/runtime/lifecycle/stable_string_pool.cpp \
-        "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
+        "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/script_redirect.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
         "$out/login_prompt_hook.o" "$out/frame_dispatch.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/texture_menu_hook.o" "$out/texture_menu.o" "$out/clock_levels_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
@@ -2401,12 +2410,14 @@ test-quest-plugins:
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/input_seam_hook.cpp -o "$out/input_seam_hook.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/plugin/script_redirect.cpp -o "$out/script_redirect.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/libr15_identity.o"
     loader=(src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
             src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
             src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp src/core/crash_report.cpp
             "$out/libr15_identity.o" src/quest/patch/libr15_patch_identity.cpp
-            "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o")
+            "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o"
+            "$out/script_redirect.o")
     "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" \
         -o "$out/plugin_loader_test" -ldl
     timeout -k 5 120 "$out/plugin_loader_test" "$out"
@@ -2496,6 +2507,7 @@ test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/sentinel -c src/quest/integration/post_load.cpp -o "$out/post_load.o"
     "${off[@]}" src/quest/tests/integration_pinned_test.cpp "$out/dlopen_hook.o" "$out/post_load.o" \
+        src/quest/plugin/script_redirect.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
         -o "$out/integration_pinned_test" -ldl -pthread

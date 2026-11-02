@@ -1,14 +1,18 @@
 // Built with -fno-exceptions (callback_thunk.h refuses otherwise).
 #include "quest/integration/dlopen_hook.h"
 
+#include <dlfcn.h>
+
 #include <atomic>
 #include <cerrno>
 
 #include "callback_thunk.h"
 #include "hook_install.h"
+#include "hook_log.h"
 #include "hook_report.h"
 #include "pinned_targets.h"
 #include "quest/integration/post_load.h"
+#include "quest/plugin/script_redirect.h"
 
 namespace nevr_quest::integration {
 
@@ -22,7 +26,10 @@ sentinel::GotHook g_dlopenHook;
 std::atomic<bool> g_installed{false};
 
 void* HookedDlopen(DlopenThunk::Fn original, const char* name, int flags) noexcept {
-  void* const handle = original(name, flags);
+  // The script redirect (script_redirect.h): a stock script library's name becomes its combat build's name when the
+  // combat unit registered it, and a failed redirected open is logged there. Every other name passes unchanged.
+  char redirected[script_redirect::kNameCapacity];
+  void* const handle = script_redirect::OpenRedirected(original, name, flags, redirected, sizeof redirected);
   if (handle != nullptr) {
     // The game may read errno/dlerror after a successful dlopen; leave them as the loader left them.
     const int savedErrno = errno;
@@ -58,6 +65,7 @@ DlopenInstall InstallDlopenHook(sentinel::GotStatus* status) noexcept {
     return DlopenInstall::kFailed;
   }
   g_installed.store(true, std::memory_order_release);
+  script_redirect::LogState();  // registry=0 status=pass-through until a combat unit registers (its own line says armed)
   return DlopenInstall::kOk;
 }
 
