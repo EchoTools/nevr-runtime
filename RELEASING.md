@@ -51,12 +51,21 @@ time, under the owner's go.
 
 ## Names
 
-- **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is computed,
-  not chosen: `python3 tools/next_release_version.py` prints it from the feat, fix and perf commits (a breaking change counts
-  only on those types) since the newest `vX.Y.Z` tag reachable from `origin/main` (`docs/standards/planning.md`, "Release
-  versions"). Every other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from; it is never
-  released.
-- **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), on `origin/main`. Created by step 4, never before it.
+- **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is the one
+  line of the committed `VERSION` file at the repository root, and it is chosen by the release owner, not computed.
+  The order is fixed:
+  1. Bump `VERSION` to the new `X.Y.Z` in a commit on `origin/main`.
+  2. Make the tag from that commit: `git tag -a vX.Y.Z -m "X.Y.Z" <commit>`, then push it.
+  3. Make the next development commit on `main` bump `VERSION` to the next version, so the builds after the release stamp
+     that next version (see below). A build between the release and that bump stamps the released version with `-dev`.
+
+  Every build stamps its version at build time (`cmake/nevr_build_stamp.cmake`): a CI build exactly on the tag `vX.Y.Z`
+  of `VERSION` (`GITHUB_ACTIONS=true`, `GITHUB_REF_TYPE=tag`, `GITHUB_REF_NAME=vX.Y.Z`, distance 0) stamps `X.Y.Z`, and a
+  build whose describe string ends in `-dirty` refuses to build as a release. Every other build stamps
+  `X.Y.Z-dev.<distance>+<sha>`, where the distance is the commits since the nearest reachable `vX.Y.Z` tag, and it sorts
+  after the release before it and before `X.Y.Z`. It is never released.
+- **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), on the commit that bumped `VERSION` to `X.Y.Z`, which is on
+  `origin/main`. Created by step 4, never before it.
 - **GitHub release title:** the tag, `vX.Y.Z`, and nothing else.
 - **Pre-release or release:** the flag is the only difference. Promoting a pre-release
   (`gh release edit vX.Y.Z --prerelease=false`) changes no byte and fires no workflow. Nothing in a file depends on the flag.

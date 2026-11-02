@@ -1,11 +1,12 @@
-"""The version of a build comes from git tags only: plain semver.
+"""The version of a build: the committed VERSION file, plus git at build time (#1935).
 
-A CI build exactly on the tag vX.Y.Z stamps exactly X.Y.Z. Every other build stamps
-X.Y.(Z+1)-dev.<N>+<sha>, which sorts after the tag it descends from and before the next release
-(semver.org items 9-11). Pre-release tags such as the v4.0.0-rc.1 history tag are never a base.
+VERSION (exactly X.Y.Z) is the base of every build. A CI build exactly on the tag vX.Y.Z of VERSION stamps exactly X.Y.Z.
+Every other build stamps X.Y.Z-dev.<N>+<sha>, where N is the commits since the nearest release tag, which sorts after
+that tag and before VERSION (semver.org items 9-11). Pre-release tags such as the v4.0.0-rc.1 history tag are never a
+base. A release is made by a commit that bumps VERSION, and the tag is made from that commit (RELEASING.md).
 
-The REAL function runs: cmake/set_project_version_from_git.cmake in a scratch git repository with real
-tags, configured by cmake (not a hand-set PROJECT_VERSION).
+The REAL code runs: cmake/set_project_version_from_git.cmake (configured by cmake) and cmake/nevr_build_stamp.cmake
+(run as the build runs it) in a scratch git repository with real tags.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 VERSION_CMAKE = REPO / "cmake" / "set_project_version_from_git.cmake"
+STAMP_CMAKE = REPO / "cmake" / "nevr_build_stamp.cmake"
 
 CMAKELISTS = f"""cmake_minimum_required(VERSION 3.20)
 project(toy NONE)
@@ -97,14 +99,23 @@ class SemverComparatorTest(unittest.TestCase):
 class ReleaseVersionTest(unittest.TestCase):
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="release-version-", dir="/var/tmp"))
-        self.addCleanup(shutil.rmtree, self.tmp)
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.src = self.tmp / "src"
         self.src.mkdir()
         (self.src / "CMakeLists.txt").write_text(CMAKELISTS)
+        (self.src / "VERSION").write_text("5.0.0\n")
         git(self.src, "init", "-q", "-b", "main")
-        git(self.src, "add", "CMakeLists.txt")
+        git(self.src, "add", "CMakeLists.txt", "VERSION")
         git(self.src, "commit", "-q", "-m", "one")
         self.runs = 0
+
+    def set_version(self, text):
+        (self.src / "VERSION").write_text(text)
+
+    def bump(self, text):
+        """A release bump is a commit (RELEASING.md): the tree is clean when its tag is made."""
+        self.set_version(text)
+        git(self.src, "commit", "-q", "-am", f"bump VERSION to {text.strip()}")
 
     def tag(self, name):
         git(self.src, "tag", "-a", "-m", name, name)
@@ -115,90 +126,119 @@ class ReleaseVersionTest(unittest.TestCase):
     def sha(self):
         return git(self.src, "rev-parse", "--short", "HEAD").stdout.strip()
 
-    def configure(self, **env):
+    def configure(self):
+        """(rc, PROJECT_VERSION, output): cmake configures the toy with set_project_version_from_git()."""
         self.runs += 1
         build = self.tmp / f"build{self.runs}"
         clean = {k: v for k, v in os.environ.items() if not k.startswith("GITHUB_")}
-        clean.update(env)
         result = subprocess.run(["cmake", "-S", str(self.src), "-B", str(build)],
                                 capture_output=True, text=True, env=clean)
         version_file = build / "version.txt"
         version = version_file.read_text() if version_file.exists() else None
         return result.returncode, version, " ".join((result.stdout + result.stderr).split())
 
+    def stamp(self, **env):
+        """(rc, kProjectVersion or None, output): the build's stamp, written by nevr_build_stamp.cmake."""
+        self.runs += 1
+        out = self.tmp / f"stamp{self.runs}" / "nevr_build_stamp.cpp"
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("GITHUB_")}
+        clean.update(env)
+        result = subprocess.run(["cmake", f"-DNEVR_STAMP_SOURCE_DIR={self.src}", f"-DNEVR_STAMP_OUTPUT={out}",
+                                 "-P", str(STAMP_CMAKE)], capture_output=True, text=True, env=clean)
+        text = " ".join((result.stdout + result.stderr).split())
+        match = re.search(r'const char kProjectVersion\[\] = "([^"]*)";', out.read_text()) if out.exists() else None
+        return result.returncode, (match.group(1) if match else None), text
+
     def version(self, **env):
-        rc, version, out = self.configure(**env)
+        rc, version, out = self.stamp(**env)
         self.assertEqual(rc, 0, out)
         return version
 
     def ci(self, tag):
         return dict(CI, GITHUB_REF_NAME=tag)
 
-    # --- a release: exactly the tag ------------------------------------------------------------------
+    # --- the base: PROJECT_VERSION is the VERSION file ------------------------------------------------
 
-    def test_a_ci_build_exactly_on_a_release_tag_stamps_exactly_the_tag(self):
-        self.tag("v5.0.0")
-        self.assertEqual(self.version(**self.ci("v5.0.0")), "5.0.0")
-
-    def test_a_child_of_the_tag_is_the_next_patch_dev_even_with_the_ci_env(self):
+    def test_project_version_is_the_version_file_and_git_is_not_read(self):
+        self.set_version("5.0.1\n")
         self.tag("v5.0.0")
         self.child()
-        self.assertEqual(self.version(**self.ci("v5.0.0")), f"5.0.1-dev.1+{self.sha()}")
+        rc, version, out = self.configure()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(version, "5.0.1")
+
+    def test_a_version_file_with_a_suffix_is_refused_at_configure(self):
+        self.set_version("5.0.1-dev.3\n")
+        rc, version, out = self.configure()
+        self.assertNotEqual(rc, 0, out)
+        self.assertIsNone(version)
+        self.assertIn("must hold exactly X.Y.Z", out)
+
+    # --- the stamp: a dev build and a release ---------------------------------------------------------
+
+    def test_a_dev_build_is_the_version_file_with_the_distance_and_the_commit(self):
+        self.tag("v5.0.0")
+        self.set_version("5.0.1\n")
+        self.child()
         self.assertEqual(self.version(), f"5.0.1-dev.1+{self.sha()}")
-        self.child()
-        self.assertEqual(self.version(), f"5.0.1-dev.2+{self.sha()}")
 
-    def test_the_next_tag_is_the_new_base(self):
-        self.tag("v5.0.0")
-        self.child()
+    def test_a_ci_build_exactly_on_the_release_tag_stamps_the_version(self):
+        self.bump("5.0.1\n")
         self.tag("v5.0.1")
         self.assertEqual(self.version(**self.ci("v5.0.1")), "5.0.1")
-        self.child()
-        self.assertEqual(self.version(), f"5.0.2-dev.1+{self.sha()}")
 
-    def test_the_tag_built_outside_ci_is_a_dev_build(self):
-        self.tag("v5.0.0")
-        self.assertEqual(self.version(), f"5.0.1-dev.0+{self.sha()}")
+    def test_a_release_tag_on_a_dirty_tree_refuses_to_build(self):
+        self.set_version("5.0.1\n")
+        self.tag("v5.0.1")
+        (self.src / "CMakeLists.txt").write_text(CMAKELISTS + "# edited\n")
+        rc, version, out = self.stamp(**self.ci("v5.0.1"))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIsNone(version)
+        self.assertIn("-dirty", out)
 
     def test_the_wrong_ci_ref_never_stamps_a_release(self):
+        self.set_version("5.0.1\n")
         self.tag("v5.0.0")
-        dev = f"5.0.1-dev.0+{self.sha()}"
+        self.child()
+        dev = f"5.0.1-dev.1+{self.sha()}"
         cases = {
             "branch ref": dict(CI, GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main"),
-            "branch named like the tag": dict(CI, GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="v5.0.0"),
-            "no GITHUB_ACTIONS": {"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v5.0.0"},
-            "GITHUB_ACTIONS not exactly true": dict(CI, GITHUB_ACTIONS="TRUE", GITHUB_REF_NAME="v5.0.0"),
-            "another tag": dict(CI, GITHUB_REF_NAME="v5.0.1"),
-            "refs/tags prefix": dict(CI, GITHUB_REF_NAME="refs/tags/v5.0.0"),
+            "branch named like the tag": dict(CI, GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="v5.0.1"),
+            "no GITHUB_ACTIONS": {"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v5.0.1"},
+            "GITHUB_ACTIONS not exactly true": dict(CI, GITHUB_ACTIONS="TRUE", GITHUB_REF_NAME="v5.0.1"),
+            "another tag": dict(CI, GITHUB_REF_NAME="v5.0.0"),
+            "refs/tags prefix": dict(CI, GITHUB_REF_NAME="refs/tags/v5.0.1"),
         }
         for name, env in cases.items():
             with self.subTest(name):
                 self.assertEqual(self.version(**env), dev)
 
-    # --- history tags and the single source ---------------------------------------------------------
+    # --- history tags and the single source ----------------------------------------------------------
 
     def test_a_pre_release_history_tag_is_never_a_base(self):
         self.tag("v3.3.0")
         self.child()
         self.tag("v4.0.0-rc.1")
         self.child()
+        self.set_version("3.3.1\n")
         self.assertEqual(self.version(), f"3.3.1-dev.2+{self.sha()}")  # v4.0.0-rc.1 is ignored
 
     def test_before_the_first_new_tag_a_dev_build_takes_the_nearest_release_tag(self):
         self.tag("v3.3.0")
         self.child()
         self.child()
+        self.set_version("3.3.1\n")
         self.assertEqual(self.version(), f"3.3.1-dev.2+{self.sha()}")
 
     def test_no_tags_at_all_fails_loudly(self):
-        rc, version, out = self.configure()
+        rc, version, out = self.stamp()
         self.assertNotEqual(rc, 0)
         self.assertIsNone(version)
         self.assertIn("no v<X>.<Y>.<Z> tag is reachable", out)
 
     def test_only_a_pre_release_tag_is_no_tag_at_all(self):
         self.tag("v4.0.0-rc.1")
-        rc, version, out = self.configure()
+        rc, version, out = self.stamp()
         self.assertNotEqual(rc, 0)
         self.assertIn("no v<X>.<Y>.<Z> tag is reachable", out)
 
@@ -209,7 +249,7 @@ class ReleaseVersionTest(unittest.TestCase):
         for tag in ("v05.0.0", "v5.00.0", "v5.0.00", "v5.0.0+x"):
             with self.subTest(tag=tag):
                 git(self.src, "tag", "-a", "-m", tag, tag)
-                rc, version, out = self.configure()
+                rc, version, out = self.stamp()
                 self.assertNotEqual(rc, 0, out)
                 self.assertIsNone(version)
                 self.assertIn("cannot parse `git describe` output", out)
@@ -220,6 +260,7 @@ class ReleaseVersionTest(unittest.TestCase):
 
     def test_every_non_tag_build_sorts_after_its_tag_and_before_the_next_release(self):
         self.tag("v3.3.0")
+        self.set_version("3.3.1\n")
         base = "3.3.0"
         self.child()
         first = self.version()
@@ -230,14 +271,17 @@ class ReleaseVersionTest(unittest.TestCase):
         self.assertEqual(semver_key_cmp(second, "3.3.1"), -1)
         self.assertEqual(semver_key_cmp(second, "3.4.0"), -1)
 
-    def test_a_release_sorts_above_the_dev_builds_before_it_and_below_those_after_it(self):
+    def test_a_release_sorts_above_the_dev_builds_before_it_and_below_the_next_version(self):
         self.tag("v5.0.0")
+        self.bump("5.0.1\n")
         self.child()
         before = self.version()
         self.tag("v5.0.1")
         released = self.version(**self.ci("v5.0.1"))
+        self.bump("5.0.2\n")  # the next development starts with the next version (RELEASING.md)
         self.child()
         after = self.version()
+        self.assertEqual(after, f"5.0.2-dev.2+{self.sha()}")
         self.assertEqual(released, "5.0.1")
         self.assertEqual(semver_key_cmp(before, released), -1)
         self.assertEqual(semver_key_cmp(released, after), -1)

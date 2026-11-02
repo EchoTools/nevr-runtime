@@ -354,14 +354,9 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 # so yaml-cpp does not reach them.
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
-# The two files here that read the version (cmake/nevr_build_identity.cmake); a property of this directory, so every
-# target below that compiles them (test_behavioral compiles ws_bridge.cpp) gets it too.
-nevr_build_identity_define(TARGET nevr_runtime READS VERSION
-  SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/lifecycle/initialize.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/compat/ws_bridge.cpp")
-# The host states the same version and commit as the runtime in a literal of its own (host/host_identity.cpp):
-# tools/package_release.py refuses a pair that disagrees.
-nevr_build_identity_define(TARGET nevr_runtime READS VERSION COMMIT_FULL
-  SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/host/host_identity.cpp")
+# The runtime and the host read the version and the commit through the build stamp (src/core/build_stamp.h). The host
+# states the same version and commit as the runtime in its identity literal (host/host_identity.cpp, which reads the
+# same stamp unit): tools/package_release.py refuses a pair that disagrees.
 
 # The host units use no precompiled header: the host links no nevr_core, and nevr_host_core and nevr_host build them alike.
 set_source_files_properties(${NEVR_HOST_UNITS} host/host_dllmain.cpp host/runtime_exports.cpp lifecycle/system_module_loader.cpp
@@ -511,7 +506,7 @@ add_library(nevr_host SHARED
   lifecycle/system_module_loader.cpp
   host/exports.def)
 target_include_directories(nevr_host PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(nevr_host PRIVATE minhook nlohmann_json::nlohmann_json crypt32 advapi32)
+target_link_libraries(nevr_host PRIVATE minhook nlohmann_json::nlohmann_json crypt32 advapi32 nevr_build_stamp)
 set_target_properties(nevr_host PROPERTIES
   OUTPUT_NAME "BugSplat64"
   PREFIX ""
@@ -576,7 +571,7 @@ if(BUILD_TESTING)
     # target that builds the host into BugSplat64.dll (nevr_host) must not define it
     # (tools/tests/test_host_test_seams.py).
     target_compile_definitions(nevr_host_core PUBLIC NEVR_HOST_TESTING)
-    target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json crypt32 advapi32)
+    target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json crypt32 advapi32 nevr_build_stamp)
 
     # Attach-time MinHook proof gate for the BugSplat64.dll / nevr-runtime.dll split
     # (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Proof gate").
@@ -1906,9 +1901,8 @@ if(BUILD_TESTING)
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK
       CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
-    # build_identity.cpp is compiled again here, from src/core (nevr_core's definitions are another directory's).
-    nevr_build_identity_define(TARGET test_behavioral READS VERSION COMMIT_HASH COMMIT_FULL DESCRIBE
-      SOURCES "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp")
+    # build_identity.cpp is compiled again here, from src/core: the stamp unit it reads is linked alike.
+    target_link_libraries(test_behavioral PRIVATE nevr_build_stamp)
     # Disable PCH — the test has its own stub headers and must not depend on
     # the nevr_runtime precompiled header (which pulls in MinHook, etc.).
     set_source_files_properties(

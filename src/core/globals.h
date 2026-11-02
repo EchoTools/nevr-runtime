@@ -2,24 +2,6 @@
 
 #include "abi/echovr_functions.h"
 
-#ifndef NEVR_PROJECT_VERSION          // Set by CMake during the build process
-#define NEVR_PROJECT_VERSION "1.0.0"  // Fallback default version
-#endif
-
-#ifndef NEVR_PROJECT_VERSION_MAJOR    // Set by CMake during the build process
-#define NEVR_PROJECT_VERSION_MAJOR 1  // Fallback default major version
-#endif
-#ifndef NEVR_PROJECT_VERSION_MINOR    // Set by CMake during the build process
-#define NEVR_PROJECT_VERSION_MINOR 0  // Fallback default minor version
-#endif
-#ifndef NEVR_PROJECT_VERSION_PATCH    // Set by CMake during the build process
-#define NEVR_PROJECT_VERSION_PATCH 0  // Fallback default patch version
-#endif
-
-#ifndef NEVR_GIT_COMMIT_HASH            // Set by CMake during the build process
-#define NEVR_GIT_COMMIT_HASH "unknown"  // Fallback default commit hash
-#endif
-
 extern BOOL g_noConsole;
 extern BOOL g_isHeadless;
 extern BOOL g_exitOnError;

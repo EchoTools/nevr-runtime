@@ -20,9 +20,9 @@ add_library(nevr_core STATIC ${CORE_SOURCES} ${CORE_HEADERS})
 
 target_precompile_headers(nevr_core PRIVATE "pch.h")
 
-# build_identity.cpp is the one place the version and the commit are read in this library (cmake/nevr_build_identity.cmake).
-nevr_build_identity_define(TARGET nevr_core READS VERSION COMMIT_HASH COMMIT_FULL DESCRIBE
-  SOURCES "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp")
+# build_identity.cpp reads the version and the commit through the build stamp (src/core/build_stamp.h), which
+# nevr_core links PUBLIC so every consumer of this library carries the one stamp unit (cmake/nevr_build_stamp_targets.cmake).
+target_link_libraries(nevr_core PUBLIC nevr_build_stamp)
 
 target_include_directories(nevr_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
 

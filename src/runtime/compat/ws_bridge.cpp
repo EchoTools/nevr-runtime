@@ -38,6 +38,7 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/ext/module_loader.h"
 #include "abi/echovr_functions.h"
+#include "core/build_stamp.h"
 #include "core/globals.h"
 #include "core/system_info.h"
 #include "core/build_identity.h"   // N112: NEVR version identity
@@ -1033,9 +1034,7 @@ static void WireSelfChecks() {
   nevr_credential_cache_check::Register();  // #562: credential_cache and credential_cache_refused
   nevr_self_check::SetSender(&SendFrameToServer);
   nevr_self_check::SetLogSink(&LogSelfCheck);
-#ifdef NEVR_PROJECT_VERSION
-  nevr_self_check::SetBuild(NEVR_PROJECT_VERSION);
-#endif
+  nevr_self_check::SetBuild(nevr_build_stamp::ProjectVersion());
 }
 
 // Platform codes, the bridge's login platform, the remote Bearer choice and the /ws path test live in

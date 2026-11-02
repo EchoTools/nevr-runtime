@@ -2,25 +2,7 @@
 
 #include <atomic>
 
-// CMake sets these as compile definitions (root CMakeLists.txt:38-45).
-// Fallbacks match the pattern in src/core/globals.h — a build without
-// CMake (manual compiler invocation) gets safe defaults.
-
-#ifndef NEVR_PROJECT_VERSION
-#define NEVR_PROJECT_VERSION "0.0.0"
-#endif
-
-#ifndef NEVR_GIT_COMMIT_HASH
-#define NEVR_GIT_COMMIT_HASH "unknown"
-#endif
-
-#ifndef NEVR_GIT_COMMIT_FULL
-#define NEVR_GIT_COMMIT_FULL "0000000000000000000000000000000000000000"
-#endif
-
-#ifndef NEVR_GIT_DESCRIBE
-#define NEVR_GIT_DESCRIBE "unknown"
-#endif
+#include "core/build_stamp.h"
 
 // CMake sets CMAKE_BUILD_TYPE; plain Makefile/IDE builds do not, and
 // a command-line -DCMAKE_BUILD_TYPE= overrides it. Fall back to a
@@ -29,18 +11,10 @@
 #define CMAKE_BUILD_TYPE "unknown-build-type"
 #endif
 
-// Stringify helper so the raw define survives the preprocessor pass.
-#define NEVR_STR_(x) #x
-#define NEVR_STR(x)  NEVR_STR_(x)
-
 namespace nevr_build_identity {
 
-// The identity literal: a leading NUL in the array so the string is NUL-bounded in the file whatever
-// the linker places before it; the pointer handed out skips it. The version and the commit come from the
-// same compile definitions as Info above (one code path).
-static const char kIdentityArray[] = "\0NEVR-BUILD " NEVR_PROJECT_VERSION " " NEVR_GIT_COMMIT_FULL;
-
-const char* IdentityLiteral() { return kIdentityArray + 1; }
+// The identity literal is written by the build's one stamp unit (src/core/build_stamp.h): NUL-bounded, one per binary.
+const char* IdentityLiteral() { return nevr_build_stamp::IdentityLiteral(); }
 
 // Written once by the runtime's self-check at boot and read by the registration; atomic so a read on another thread is never torn.
 static std::atomic<const char*> g_provenance{"unchecked"};
@@ -52,19 +26,13 @@ void SetProvenance(const char* word) { g_provenance.store(word); }
 const Info& Get() {
   static const Info info = []() {
     Info i;
-    // NEVR_PROJECT_VERSION et al. are already string literals (defined by CMake's
-    // add_compile_definitions with quoted values).  Assigning them directly
-    // avoids NEVR_STR() double-stringification, which produced strings
-    // containing literal double-quote characters that broke JSON encoding
-    // in BuildLoginRequest (N146).
-    i.project_version = NEVR_PROJECT_VERSION;
-    i.git_commit      = NEVR_GIT_COMMIT_HASH;
-    i.git_describe    = NEVR_GIT_DESCRIBE;
+    // The version and the commit come from the build's stamp unit (src/core/build_stamp.h), read at build time.
+    i.project_version = nevr_build_stamp::ProjectVersion();
+    i.git_commit      = nevr_build_stamp::CommitShort();
+    i.git_describe    = nevr_build_stamp::Describe();
     i.build_type      = CMAKE_BUILD_TYPE;
-    // git describe --dirty appends "-dirty" when the working tree has
-    // uncommitted changes. Derive the flag from the string the build
-    // system already computed rather than adding a second source of truth.
-    i.is_dirty = (i.git_describe.find("-dirty") != std::string::npos);
+    // git describe --dirty appends "-dirty" when the working tree has uncommitted changes; the stamp unit says so.
+    i.is_dirty = nevr_build_stamp::IsDirty();
     return i;
   }();
   return info;

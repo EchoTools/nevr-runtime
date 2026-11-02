@@ -31,6 +31,7 @@
 #include "runtime/hook/export_tracer.h"
 #include "runtime/patch/headless_graphics.h"
 #include "core/build_identity.h"
+#include "core/build_stamp.h"
 #include "core/globals.h"
 #include "core/hooking.h"
 #include "core/logging.h"
@@ -368,7 +369,7 @@ static VOID InitializeAfterGameImageGuard() {
   // static-CRT build (see boot_log_tee.h DESIGN DECISION and N43).
   nevr_boot_log_tee::Init();
 
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", NEVR_PROJECT_VERSION, EchoVR::g_GameBaseAddress);
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", nevr_build_stamp::ProjectVersion(), EchoVR::g_GameBaseAddress);
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] %s\n", nevr_build_identity::IdentityLiteral());
   // Where this run is hosted (#673): a crash report names the Wine version without a second question.
   // Boot phase (the tee is open, the game's CLog is not): Get() touches only ntdll and kernel32, as at the mic-policy line below.

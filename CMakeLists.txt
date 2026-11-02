@@ -28,11 +28,12 @@ endfunction()
 # Project Name
 project(NEVRServer LANGUAGES C CXX)
 
-# import the version from the git-version.cmake file
+# PROJECT_VERSION is the committed VERSION file (cmake/set_project_version_from_git.cmake, #1935). The stamp that a
+# build carries (X.Y.Z-dev.<distance>+<sha>, or X.Y.Z on a release tag) and the commit are written at build time by the
+# one generated unit (cmake/nevr_build_stamp_targets.cmake); no source takes them as a compile definition.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/set_project_version_from_git.cmake")
-
-# Set PROJECT_VERSION and GIT_COMMIT_HASH based on the current git state.
 set_project_version_from_git()
+find_package(Git QUIET)
 
 # BugSplat64.dll, nevr-runtime.dll and echovr_server.exe carry a VERSIONINFO resource (cmake/nevr_version_info.cmake, #850): the
 # resource compiler is a language, and enable_language cannot be called from a function.
@@ -41,16 +42,13 @@ if(WIN32)
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_version_info.cmake")
 
-# The version is plain semver from the tags: exactly X.Y.Z for a CI build on the tag vX.Y.Z, otherwise
-# X.Y.(Z+1)-dev.<N>+<sha> (set_project_version_from_git.cmake).
-
-# The version and the commit are NOT defined for the tree: a definition on every compile command rebuilds every
-# translation unit, and every precompiled header, for each new commit or uncommitted edit. The few files that read
-# them get them (cmake/nevr_build_identity.cmake), where those files are built.
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_build_identity.cmake")
+# The build stamp: nevr_build_stamp (the one unit that carries the version and the commit, src/core/build_stamp.h) and
+# nevr_build_stamp_refresh (runs at every build). Targets that call the accessors link nevr_build_stamp.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_build_stamp_targets.cmake")
+nevr_build_stamp_targets(REPO_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Print out the version that was set by set_project_version_from_git()
-message(STATUS "Project version: ${PROJECT_VERSION} (${GIT_COMMIT_HASH})")
+message(STATUS "Project version: ${PROJECT_VERSION} (VERSION)")
 
 # Set the project output name
 set(PROJECT_OUTPUT_NAME "${CMAKE_PROJECT_NAME}")
