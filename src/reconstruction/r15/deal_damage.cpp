@@ -10,6 +10,9 @@
 #include <cstdint>
 #include <cmath>
 #include <algorithm>
+#include <cstring>
+
+struct DamageServerOps;  // defined in process_damage_server.cpp
 
 namespace NRadEngine::NRadGame {
 struct C3Vector { float x, y, z; };
@@ -17,14 +20,28 @@ struct CSymbol64 { std::uint64_t value; };
 struct SCompactPoolHandle { std::uint32_t value; };
 enum class ER15NetDamageableHitBody : std::uint32_t {};
 
+class CR15NetDamageableCS {
+public:
+    void DealDamage(SCompactPoolHandle handle, float damage,
+        std::uint64_t netId, C3Vector position, C3Vector direction,
+        ER15NetDamageableHitBody hitBody, CSymbol64 damageType);
+};
+
 struct DamageOps {
     static float CalculateTotalDamage(void *self, std::uint32_t handle,
         std::uint64_t netId, std::uint32_t hitBody, std::uint64_t damageType,
         float *damage);
     static std::uint64_t UserIdFromNetId(std::uint64_t);
     static std::uint64_t PeerForValidatedUser(std::uint16_t);
-    static void ProcessDamageServer(float damage, void *self,
-        std::uint32_t handle, std::uint64_t damageType, std::uint64_t actorId);
+    // The raw call passes the component pointer, handle, damage (float) and the
+    // damage type and actor id; ProcessDamageServer's own ABI is in
+    // process_damage_server.cpp.
+    static void ProcessDamageServer(void *self, std::uint32_t handle,
+        float damage, std::uint64_t damageType, std::uint64_t actorId,
+        ::DamageServerOps &ops);
+    // UNRESOLVED: the callback table ProcessDamageServer reaches through the
+    // component's own vtables in the raw body; not reconstructed here.
+    static ::DamageServerOps &ServerOps();
     static int UserId(void *netGame, std::uint64_t gameSpace,
         std::uint64_t compactActor);
     static int IsValidDamageable(std::uint32_t packed);
@@ -83,9 +100,10 @@ void CR15NetDamageableCS::DealDamage(SCompactPoolHandle handle, float damage,
             load<std::uint64_t>(load<void *>(self, 0x80), 0x58);
         message.damageType = type;
         message.damage = totalDamage;
-        message.positionX = *reinterpret_cast<std::uint32_t *>(&position.x);
-        message.positionY = *reinterpret_cast<std::uint32_t *>(&position.y);
-        message.positionZ = *reinterpret_cast<std::uint32_t *>(&position.z);
+        // Bit copies of the float words (memcpy, not a type-punned load).
+        std::memcpy(&message.positionX, &position.x, sizeof(float));
+        std::memcpy(&message.positionY, &position.y, sizeof(float));
+        std::memcpy(&message.positionZ, &position.z, sizeof(float));
         message.handleAndLocal = std::uint64_t(packedHandle) | 0x100000000ull;
 
         std::uint64_t peer = 0xffffffffffffffffull;
@@ -118,7 +136,8 @@ void CR15NetDamageableCS::DealDamage(SCompactPoolHandle handle, float damage,
     std::uint64_t actorId = load<std::uint64_t>(actor, 0x30);
     if (body != 6 && actorId == 0xffffffffffffffffull)
         actorId = DamageOps::ActorIdForHitBody(body);
-    DamageOps::ProcessDamageServer(totalDamage, this, packedHandle, type, actorId);
+    DamageOps::ProcessDamageServer(this, packedHandle, totalDamage, type, actorId,
+        DamageOps::ServerOps());
 
     const std::uint16_t refreshedSlot =
         load<std::uint16_t>(load<void *>(self, 0xd0), handleMapOffset);

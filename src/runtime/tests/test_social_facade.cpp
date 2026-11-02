@@ -335,8 +335,8 @@ TEST(SocialFacade, FriendSlotsAnswerFromTheRoster) {
   EXPECT_STREQ(reinterpret_cast<NameFn>(vtable[50])(object, 0), "42");
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[51])(object, 0), 2u);  // online
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[51])(object, 1), 0u);  // offline
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 0u) << "no party: nobody is invitable";
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u);
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u) << "no party: the online friend is invitable";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u) << "the offline friend is not";
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[54])(object, 0), 0u);  // nobody is joinable yet
   nevr_social_roster::Global().Clear();
 }
@@ -749,7 +749,8 @@ TEST(SocialParty, ResetLeavesTheServerPartyWithoutTellingTheGame) {
   for (const auto& event : events) EXPECT_NE(event.kind, nevr_social_party::EventKind::kLeft) << "Reset fires no Left callback";
 }
 
-TEST(SocialFacade, AFriendRowIsInvitableOnlyWhileThePartyIsJoinableAndTheFriendIsNotInIt) {
+// CNSISocial::FriendIsInvitable (libr15 0x1a35ba0): online and not a member, with or without a party.
+TEST(SocialFacade, AFriendRowIsInvitableWhileOnlineAndNotAMemberWithOrWithoutAParty) {
   using CountFn = std::uint32_t (*)(void*);
   using IndexFn = std::uint32_t (*)(void*, std::uint32_t);
   using UpdateFn = void (*)(void*, const void*);
@@ -765,13 +766,14 @@ TEST(SocialFacade, AFriendRowIsInvitableOnlyWhileThePartyIsJoinableAndTheFriendI
   const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
 
   publish();
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 0u) << "no party: no row shows the plus";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u) << "no party: an online friend is invitable (SendInvite creates the party)";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u) << "an offline friend, no party";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 9), 0u) << "past the list";
 
   FeedParty(nevr_social_party::Global(), "PartyCreateSuccess", U64s({7, 77}));
   publish();
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u) << "an online friend, joinable party";
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u) << "an offline friend";
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 9), 0u) << "past the list";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u) << "an online friend, party exists";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u) << "an offline friend, party exists";
 
   FeedParty(nevr_social_party::Global(), "PartyJoinNotify", U64s({7, 300}));
   publish();
@@ -2066,6 +2068,118 @@ TEST(SocialFacadeRecentlyMet, SlotsAnswerFromTheServersList) {
   nevr_social_party::Global().ResetParty();
   nevr_social_party::Global().DrainEvents();
   nevr_social_party::SetSender(nullptr);
+}
+
+// Recently met (libr15 CNSISocial::RecentlyMetUserIsInvitable, 0x1a35d10): an online person who is not a member is
+// invitable with no party, because SendInvite creates one; an offline person and a member are not.
+TEST(SocialFacadeRecentlyMet, AnOnlinePersonIsInvitableWithoutAParty) {
+  using IndexFn = std::uint32_t (*)(void*, std::uint32_t);
+  using UpdateFn = void (*)(void*, const void*);
+  void* object = nevr_social_facade::Object();
+  const Slot* vtable = Vtable(object);
+  nevr_social_party::Global().SetSelf(100, "Me");
+  nevr_social_party::Global().ResetParty();
+  nevr_social_roster::RecentlyMet().SetList(TwoPeople());
+  std::uint8_t flags = 0;
+  const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
+
+  publish();
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[65])(object, 0), 1U) << "no party: an online person is invitable";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[65])(object, 1), 0U) << "an offline person";
+
+  ASSERT_TRUE(FeedParty(nevr_social_party::Global(), "PartyCreateSuccess", U64s({7, 100})));
+  ASSERT_TRUE(FeedParty(nevr_social_party::Global(), "PartyJoinNotify", U64s({7, 900000000000000101ULL})));
+  publish();
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[65])(object, 0), 0U) << "already a member";
+
+  nevr_social_roster::RecentlyMet().SetList({});
+  nevr_social_party::Global().ResetParty();
+  nevr_social_party::Global().DrainEvents();
+}
+
+// The "+" on an online friend row and on a recently-met row follows PartyJoinable once a party exists: hidden for a
+// full party, a joining one, or one locked for a non-host. With no party it shows (SendInvite creates the party).
+TEST(SocialFacadeRecentlyMet, PlusIsHiddenOnlyWhileAPartyIsNotJoinable) {
+  using IndexFn = std::uint32_t (*)(void*, std::uint32_t);
+  using UpdateFn = void (*)(void*, const void*);
+  nevr_social_roster::Global().Clear();
+  nevr_social_roster::Global().BeginList(1);
+  nevr_social_roster::Global().Notify(300, nevr_social_roster::kStatusOnline);
+  nevr_social_roster::RecentlyMet().SetList(TwoPeople());  // row 0: 900000000000000101, online
+  nevr_social_party::Global().SetSelf(77, "Me");
+  nevr_social_party::Global().ResetParty();
+  void* object = nevr_social_facade::Object();
+  const Slot* vtable = Vtable(object);
+  std::uint8_t flags = 0;
+  const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
+  const auto friendPlus = [&] { return reinterpret_cast<IndexFn>(vtable[53])(object, 0); };
+  const auto recentPlus = [&] { return reinterpret_cast<IndexFn>(vtable[65])(object, 0); };
+  const auto hostParty = [&] {
+    nevr_social_party::Global().ResetParty();
+    ASSERT_TRUE(FeedParty(nevr_social_party::Global(), "PartyCreateSuccess", U64s({7, 77})));
+  };
+
+  publish();
+  EXPECT_EQ(friendPlus(), 1u) << "no party: the + shows on a friend";
+  EXPECT_EQ(recentPlus(), 1u) << "no party: the + shows on a recently-met person";
+
+  hostParty();
+  publish();
+  EXPECT_EQ(friendPlus(), 1u) << "our own joinable party";
+  EXPECT_EQ(recentPlus(), 1u) << "our own joinable party";
+
+  for (std::uint64_t id = 401; id <= 403; ++id) ASSERT_TRUE(FeedParty(nevr_social_party::Global(), "PartyJoinNotify", U64s({7, id})));
+  ASSERT_EQ(nevr_social_party::Global().Snapshot().members.size(), 4u) << "kPartyMaxMembers";
+  publish();
+  EXPECT_EQ(friendPlus(), 0u) << "a full party";
+  EXPECT_EQ(recentPlus(), 0u) << "a full party";
+
+  hostParty();
+  ASSERT_TRUE(FeedParty(nevr_social_party::Global(), "PartyInviteNotify", U64s({9, 203})));
+  ASSERT_TRUE(nevr_social_party::Global().BeginJoin(9));
+  nevr_social_party::Global().Join(9);
+  publish();
+  ASSERT_TRUE(nevr_social_party::Global().Snapshot().joining);
+  EXPECT_EQ(friendPlus(), 0u) << "joining another party";
+  EXPECT_EQ(recentPlus(), 0u) << "joining another party";
+
+  hostParty();
+  ASSERT_TRUE(FeedParty(nevr_social_party::Global(), "PartyPassNotify", U64s({7, 500})));  // the owner is now 500, not us
+  publish();
+  EXPECT_EQ(friendPlus(), 1u) << "a guest of an unlocked party";
+  EXPECT_EQ(recentPlus(), 1u) << "a guest of an unlocked party";
+  ASSERT_TRUE(FeedParty(nevr_social_party::Global(), "PartyLockNotify", U64s({7})));
+  publish();
+  EXPECT_EQ(friendPlus(), 0u) << "locked for a guest";
+  EXPECT_EQ(recentPlus(), 0u) << "locked for a guest";
+  ASSERT_TRUE(FeedParty(nevr_social_party::Global(), "PartyUnlockNotify", U64s({7})));
+  publish();
+  EXPECT_EQ(friendPlus(), 1u) << "unlocked again";
+  EXPECT_EQ(recentPlus(), 1u) << "unlocked again";
+
+  nevr_social_party::Global().ResetParty();
+  nevr_social_party::Global().DrainEvents();
+  nevr_social_roster::Global().Clear();
+  nevr_social_roster::RecentlyMet().SetList({});
+}
+
+// PartyCreateFailure drops the invites the "+" queued for a party that was never made, and the drop is an event
+// the facade logs with the invitees named.
+TEST(SocialParty, ACreateFailureDropsTheQueuedInvitesAndNamesThem) {
+  nevr_social_party::State state;
+  state.SetSelf(100);
+  ASSERT_EQ(state.SendInvite(300).size(), 1u) << "no party: the create is sent, and the invite queued behind it";
+  ASSERT_TRUE(FeedParty(state, "PartyCreateFailure", U64s({0})));
+  const auto events = state.DrainEvents();
+  std::size_t drops = 0;
+  for (const auto& event : events) {
+    if (event.kind != nevr_social_party::EventKind::kInvitesDropped) continue;
+    ++drops;
+    EXPECT_EQ(event.index, 1u);
+    ASSERT_EQ(event.ids.size(), 1u);
+    EXPECT_EQ(event.ids[0], 300u);
+  }
+  EXPECT_EQ(drops, 1u);
 }
 
 // #405: an incoming friend request is listed first in the recently-met list, as the facade's recent slots

@@ -35,7 +35,8 @@ void ReturnToLobby(void* self, ReturnLobbyOps& ops) {
         *flags &= ~0x40000000000ULL;
         ops.write_log(2, "[NETGAME] Return to lobby");
 
-        auto* client_lobby = *reinterpret_cast<void**>(game + 0x40);
+        // Byte-addressed: the raw body does offset arithmetic on this pointer.
+        auto* client_lobby = *reinterpret_cast<std::byte**>(game + 0x40);
         if (!client_lobby) return;
 
         const auto current_flags = *flags;
