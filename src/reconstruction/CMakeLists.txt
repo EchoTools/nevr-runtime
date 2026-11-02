@@ -175,6 +175,10 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cjson_count.cpp
     r15/cjson_t_string.cpp
     r15/cjson_int.cpp
+    r15/cjson_set_boolean.cpp
+    r15/cjson_set_string.cpp
+    r15/cjson_boolean.cpp
+    r15/cjson_set_int.cpp
     r15/c_table_xt_sr15_net_ban_reason_expression_data_reset.cpp
     r15/set_delimited_error_message.cpp
     r15/cjson_navigate_path.cpp
@@ -199,6 +203,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/deferred_method_queue_queue_functor.cpp
     r15/resolve_zone.cpp
     r15/csys_string_length.cpp
+    r15/csysnet_has_internet.cpp
     r15/cenvironment_get_global.cpp
     r15/cenvironment_get_tls_handle.cpp
     r15/csys_string_length_bounded.cpp
@@ -206,6 +211,7 @@ add_library(nevr_r15_reconstruction STATIC
     r15/cfixedstringt_sprintf.cpp
     r15/cmemory_copy.cpp
     r15/cjson_constructor.cpp
+    r15/cjson_destructor.cpp
     r15/cr15_game_net_game_mt.cpp
     r15/cnca_game_space_get_st.cpp
     r15/csys_thread_set_tls.cpp
