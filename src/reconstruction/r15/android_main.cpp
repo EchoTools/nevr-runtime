@@ -1,6 +1,6 @@
 // android_main
 // Quest libr15.so VA 0x10784c4; ReVault binary 576.
-// ReVault raw parent 100207664, reconstruction node 100600605; grade M: all 362 instructions read through the ret at 0x1078940; the continuation after each brk #1 is modelled through SoftwareBreakpoint returning, as in cr15_net_customization_renderer_destroy_context.cpp (seven trap addresses 0x107895c, 0x1078988, 0x10789b4, 0x10789e0, 0x1078a0c, 0x1078a38, 0x1078a64, the last a tail to 0x10788dc); 20 placeholders by VA: FUN_010795ac 0x10795ac; GOT 0x3805da0, 0x3818568; data 0x3861218, 0x38611c8, 0x38611d0; stat words 0x3861240, 0x3861280, 0x38612c0, 0x3861300, 0x3861340, 0x3861380, 0x38613c0; storage 0x3861400, 0x3861470, 0x38614e0, 0x3861550, 0x38615c0, 0x3861630, 0x38616a0; the seven allocator sizes are the raw decompile's folded GOT loads.
+// ReVault raw parent 100207664, reconstruction node 100600605; grade M: all 362 instructions read through the ret at 0x1078940; the continuation after each brk #1 is modelled through SoftwareBreakpoint returning, as in cr15_net_customization_renderer_destroy_context.cpp (seven trap addresses 0x107895c, 0x1078988, 0x10789b4, 0x10789e0, 0x1078a0c, 0x1078a38, 0x1078a64, the last a tail to 0x10788dc); 20 placeholders by VA: FUN_010795ac 0x10795ac; GOT 0x3805da0, 0x3818568; data 0x3861218, 0x38611c8, 0x38611d0; stat words 0x3861240, 0x3861280, 0x38612c0, 0x3861300, 0x3861340, 0x3861380, 0x38613c0; storage 0x3861400, 0x3861470, 0x38614e0, 0x3861550, 0x38615c0, 0x3861630, 0x38616a0; the seven allocator sizes (0x19000000, 0xce00000, 0x3200000, 0x400000, 0xa000000, 0x8000000, 0x8000000) are loaded through seven GOT slots (0x381d020, 0x380b720, 0x3807c60, 0x3811ce8, 0x3810188, 0x381f920, 0x381e458) that all read zero in the file, so they are the raw decompile's folded values and are not byte-verified.
 // @0x10784c4 — android_main
 /* @confidence: M */
 
@@ -240,22 +240,23 @@ extern "C" void android_main(android_app* app) {
     frame_words[2] = 0;
     frame_words[3] = 0;
 
-    // 0x1078578-0x1078680: seven elephant allocators. Sizes are the raw decompile's constants (GOT-loaded in the disassembly).
+    // 0x1078578-0x1078680: seven elephant allocators. Each size is loaded through the GOT slot in its trailing comment, and every
+    // one of those slots reads zero in the file: the sizes are the raw decompile's folded values, not byte-verified.
     NRadEngine::CAllocator* const system_allocator =
-        NRadEngine::CreateElephantAllocator(DAT_03861400, 0x19000000, 0, "System", &DAT_03861240, frame_words);
+        NRadEngine::CreateElephantAllocator(DAT_03861400, 0x19000000, 0, "System", &DAT_03861240, frame_words);  // GOT 0x381d020
     NRadEngine::CAllocator* const resource_allocator =
-        NRadEngine::CreateElephantAllocator(DAT_03861470, 0xce00000, 0, "Resource", &DAT_03861280, frame_words);
+        NRadEngine::CreateElephantAllocator(DAT_03861470, 0xce00000, 0, "Resource", &DAT_03861280, frame_words);  // GOT 0x380b720
     NRadEngine::CAllocator* const texture_allocator =
-        NRadEngine::CreateElephantAllocator(DAT_038614e0, 0x3200000, 2, "Texture", &DAT_038612c0, frame_words);
+        NRadEngine::CreateElephantAllocator(DAT_038614e0, 0x3200000, 2, "Texture", &DAT_038612c0, frame_words);  // GOT 0x3807c60
     NRadEngine::CAllocator* const external_allocator =
-        NRadEngine::CreateElephantAllocator(DAT_03861550, 0x400000, 0, "External", &DAT_03861300, frame_words);
+        NRadEngine::CreateElephantAllocator(DAT_03861550, 0x400000, 0, "External", &DAT_03861300, frame_words);  // GOT 0x3811ce8
     // The name at 0x2c2e835 is the four bytes "Gpu\0" (read from the file).
     NRadEngine::CAllocator* const gpu_allocator =
-        NRadEngine::CreateElephantAllocator(DAT_038615c0, 0xa000000, 2, "Gpu", &DAT_03861340, frame_words);
+        NRadEngine::CreateElephantAllocator(DAT_038615c0, 0xa000000, 2, "Gpu", &DAT_03861340, frame_words);  // GOT 0x3810188
     NRadEngine::CAllocator* const gpu_resource_allocator =
-        NRadEngine::CreateElephantAllocator(DAT_03861630, 0x8000000, 2, "GpuResource", &DAT_03861380, frame_words);
+        NRadEngine::CreateElephantAllocator(DAT_03861630, 0x8000000, 2, "GpuResource", &DAT_03861380, frame_words);  // GOT 0x381f920
     NRadEngine::CAllocator* const paged_allocator =
-        NRadEngine::CreateElephantAllocator(DAT_038616a0, 0x8000000, 0, "Paged", &DAT_038613c0, frame_words);
+        NRadEngine::CreateElephantAllocator(DAT_038616a0, 0x8000000, 0, "Paged", &DAT_038613c0, frame_words);  // GOT 0x381e458
 
     // 0x1078684-0x10786a0: the twelve-entry base table (sp+0x10 .. sp+0x68), then SetBaseAllocators(table)
     NRadEngine::CAllocator* base_allocators[12] = {

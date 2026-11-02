@@ -1,6 +1,6 @@
 // NRadEngine::NRadGame::CR15NetCustomizationRenderer::LoadMeshData
 // Quest libr15.so VA 0x1347d90; ReVault binary 576.
-// ReVault raw parent 100223186, reconstruction node 100600616; grade M: all 747 instructions traced to the ret at 0x1348938, every callee named by the decompiler or an import, 1 placeholder stays (global DAT_0386dec8, VA 0x386dec8), the 0x400 size limit behind GOT slot 0x38173d0 is Ghidra's resolved value, brk #1 is the tree's SoftwareBreakpoint call, and the renderer, context, draw-data and init structs are byte offsets only.
+// ReVault raw parent 100223186, reconstruction node 100600616; grade M: all 747 instructions traced to the ret at 0x1348938, every callee named by the decompiler or an import, 1 placeholder stays (global DAT_0386dec8, VA 0x386dec8), the 0x400 size limit behind GOT slot 0x38173d0 is Ghidra's resolved value (that slot is zero on disk, so it is not byte-verified), brk #1 is the tree's SoftwareBreakpoint call, the renderer, context, draw-data and init structs are byte offsets only, the key at 0x2ca4e38 is loaded directly with no lookup, and the thunks at 0x102a260 (GetPropertyValue) and 0x1041f10 (CGGraphicsState::Initialize) are not byte-checked, since their GOT slots 0x37ec818 and 0x37f8670 hold 0x00ecfb40 on disk, not the callee's address.
 // @0x1347d90 — NRadEngine::NRadGame::CR15NetCustomizationRenderer::LoadMeshData
 /* @confidence: M */
 
@@ -97,7 +97,9 @@ class CGMaterial {
  public:
   // NRadEngine::CGMaterial::MaterialData() const @ 0x1962364 (thunk 0xffc5b0): returns *(*(this + 8) + 0x70).
   void* MaterialData() const;
-  // NRadEngine::CGMaterial::GetPropertyValue(CSymbol64, void*, unsigned int) const @ 0x19627b0 (thunk 0x102a260).
+  // NRadEngine::CGMaterial::GetPropertyValue(CSymbol64, void*, unsigned int) const @ 0x19627b0. Called through the thunk at
+  // 0x102a260, which ReVault names thunk_FUN_019627c0 (0x19627c0 is 0x10 bytes into GetPropertyValue); its decompile is a call
+  // to GetPropertyValue. The thunk's GOT slot 0x37ec818 holds 0x00ecfb40 on disk, so the binding to 0x19627b0 is not byte-checked.
   std::uint64_t GetPropertyValue(CSymbol64 name, void* out, std::uint32_t size) const;
 };
 
@@ -176,7 +178,9 @@ struct CGGraphicsStateInit {
 
 class CGGraphicsState {
  public:
-  // NRadEngine::CGGraphicsState::Initialize(CGGraphicsStateInit const&) @ 0x1954cc0 (thunk 0x1041f10).
+  // NRadEngine::CGGraphicsState::Initialize(CGGraphicsStateInit const&) @ 0x1954cc0. Called through the thunk at 0x1041f10,
+  // which ReVault names thunk_FUN_01954cd8 (0x1954cd8 is 0x18 bytes into Initialize); its decompile is a call to
+  // CGGraphicsState::Initialize. The thunk's GOT slot 0x37f8670 holds 0x00ecfb40 on disk, so the binding to 0x1954cc0 is not byte-checked.
   void Initialize(const CGGraphicsStateInit& init);
 };
 
@@ -341,11 +345,13 @@ constexpr auto kErrorLevel = static_cast<NWriteLog::ELogLevel>(8);
 // Symbol keys, as the 8 bytes loaded from .rodata. The string stored right after each key in .rodata is named beside it.
 // The slot's material type: compared with CGMaterial data +0x190. The string after 0x2ca4bb8 is "r15player".
 constexpr std::uint64_t kPlayerMaterialType = 0x7a8154038e31439aULL;
-// Texture symbols looked up in the material data: the strings after 0x2ca4db0, 0x2ca4dd8, 0x2ca4e08 and 0x2ca4e38.
+// Texture symbols looked up in the material data: the keys at 0x2ca4db0, 0x2ca4dd8 and 0x2ca4e08, with the names
+// "shading_basecolormap", "customization_primaryblendmask" and "customization_secondaryblendmask" stored after them. The key
+// at 0x2ca4e38 is not looked up (see kUiNumberArrayKey).
 constexpr std::uint64_t kTextureAKey = 0x01bc8bf07fbfc184ULL;  // "shading_basecolormap"
 constexpr std::uint64_t kTextureBKey = 0x94ffd3d8117518b9ULL;  // "customization_primaryblendmask"
 constexpr std::uint64_t kTextureCKey = 0x7abbb0b3b865219bULL;  // "customization_secondaryblendmask"
-constexpr std::uint64_t kUiNumberArrayKey = 0x6a03c3fb262735e1ULL;  // "ui_number_array"; used directly, not looked up
+constexpr std::uint64_t kUiNumberArrayKey = 0x6a03c3fb262735e1ULL;  // "ui_number_array" (after 0x2ca4e38); loaded directly, not looked up
 // The u64 at 0x2ca3b88, stored at the head of the render target state.
 constexpr std::uint64_t kStateHeader = 0x0000000100000043ULL;
 
