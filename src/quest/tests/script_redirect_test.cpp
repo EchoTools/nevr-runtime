@@ -94,6 +94,15 @@ char LevelOf(const char* event) {
   return g_lines[begin];
 }
 
+// The first captured line that contains `fragment` as a whole, empty when none does.
+std::string LineContaining(const char* fragment) {
+  const std::size_t at = g_lines.find(fragment);
+  if (at == std::string::npos) return std::string();
+  const std::size_t previousEnd = at == 0 ? std::string::npos : g_lines.rfind('\n', at - 1);
+  const std::size_t begin = previousEnd == std::string::npos ? 0 : previousEnd + 1;
+  return g_lines.substr(begin, g_lines.find('\n', at) - begin);
+}
+
 void NameRules() {
   std::uint64_t h = 0;
   QCHECK(sr::ParseScriptName(kNameC, &h) && h == kC);
@@ -231,10 +240,21 @@ void AllOrNothingRegistry() {
   QCHECK(LevelOf("script_redirect_skipped") == 'W' && Has("\"reason\":\"buffer_too_small\""));
   QCHECK(Has("\"result\":\"ok\"") && Has("\"status\":\"armed\""));
   QCHECK(LevelOf("script_redirect") == 'I');
+  // With the development switch on, a load that is not redirected says that a registry is set.
+  sr::SetLogEveryLoad(true);
+  g_lines.clear();
+  QCHECK(sr::RewriteLoadName(kNameC, buf, sizeof buf) == kNameC);
+  QCHECK(Has("\"event\":\"script_load\"") && Has("\"registry_set\":\"true\"") && Has("\"redirected\":\"false\""));
+  sr::SetLogEveryLoad(false);
 
-  // A second registration in the same process is refused, and the first one stands.
+  // A second registration in the same process is refused, and the first one stands. The refusal reports the registry in
+  // force (2) and says what the refusal means.
+  g_lines.clear();
   QCHECK(sr::RegisterIn(dir.c_str(), "q15t", pair, 2) == NEVR_SCRIPT_REDIRECT_ALREADY_ARMED);
   QCHECK(sr::ArmedCount() == 2);
+  const std::string refusal = LineContaining("\"reason\":\"already_registered\"");
+  QCHECK(refusal.find("\"registry\":2") != std::string::npos);
+  QCHECK(Has("\"detail\":\"a registration is already in force, or one is being decided\""));
 
   // One file missing: nothing is registered, the missing name is named, and the stock name passes through.
   sr::ResetForTest();
@@ -264,12 +284,31 @@ void AllOrNothingRegistry() {
   for (std::uint64_t i = 0; i < sr::kMaxEntries + 1; ++i) seventeen[i] = i + 1;
   QCHECK(sr::RegisterIn(dir.c_str(), "q15t", seventeen, sr::kMaxEntries + 1) == NEVR_SCRIPT_REDIRECT_BAD_ARGUMENT);
   QCHECK(Has("\"reason\":\"argument_out_of_range\""));
+  QCHECK(Has("\"detail\":\"the plugin id or hash list is null, or the count is outside 1..16\""));
   QCHECK(sr::ArmedCount() == 0);
   QCHECK(sr::RegisterIn(nullptr, "q15t", pair, 2) == NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR);
   QCHECK(Has("\"reason\":\"no_library_directory\"") && Has("\"result\":\"no_library_dir\""));
+  QCHECK(Has("\"detail\":\"the host has no native library directory to check the combat libraries in\""));
   QCHECK(sr::ArmedCount() == 0);
 
   RemoveDir(dir, all, 2);
+  sentinel::SetLogSink(nullptr);
+  sr::ResetForTest();
+}
+
+// Every missing name is listed, comma-separated, so the operator sees each one.
+void MissingNamesAreListed() {
+  sr::ResetForTest();
+  g_lines.clear();
+  sentinel::SetLogSink(&Capture);
+  const std::string dir = MakeDir(nullptr, 0);  // an empty directory: both names are missing
+  QCHECK(!dir.empty());
+  const std::uint64_t pair[] = {kA, kB};
+  QCHECK(sr::RegisterIn(dir.c_str(), "q15t", pair, 2) == NEVR_SCRIPT_REDIRECT_MISSING_LIBRARY);
+  QCHECK(sr::ArmedCount() == 0);
+  QCHECK(Has("\"missing_count\":2"));
+  QCHECK(Has("\"missing\":\"lib37f88adb0d8066f7_q15t.so,libac4cd8e0a786d5c5_q15t.so\""));
+  RemoveDir(dir, nullptr, 0);
   sentinel::SetLogSink(nullptr);
   sr::ResetForTest();
 }
@@ -311,6 +350,16 @@ void* FailingOpen(const char* name, int) {
   g_openedName = name;
   (void)dlopen(name, RTLD_NOW);
   errno = EACCES;
+  return nullptr;
+}
+
+// A loader that fails both opens the way FailingOpen does, but sets a different errno on each: EACCES on the first, ENOENT on
+// the second. The errno a failed redirected open leaves must be the first open's.
+void* FailingOpenTwice(const char* name, int) {
+  ++g_openCalls;
+  g_openedName = name;
+  (void)dlopen(name, RTLD_NOW);
+  errno = g_openCalls == 1 ? EACCES : ENOENT;
   return nullptr;
 }
 
@@ -368,6 +417,17 @@ void OpenRedirectedPaths() {
   QCHECK(LevelOf("script_redirect_failed") == 'E');
   QCHECK(errnoAfter == EACCES);
 
+  // The errno the failed redirected open leaves is the first open's. The second open sets ENOENT; the failure line's sink
+  // clobbers errno (CaptureAndClobberErrno) between the two, and the restore must hand back EACCES.
+  g_lines.clear();
+  g_openCalls = 0;
+  errno = 0;
+  (void)dlerror();
+  QCHECK(sr::OpenRedirected(&FailingOpenTwice, kNameA, RTLD_NOW, buf, sizeof buf) == nullptr);
+  QCHECK(g_openCalls == 2);
+  QCHECK(errno == EACCES);
+  QCHECK(LevelOf("script_redirect_failed") == 'E');
+
   // An unregistered name in a registered process: passes through, and its failure is not a redirect failure. Its dlerror()
   // is the game's, read by nobody here and not reissued.
   g_lines.clear();
@@ -417,9 +477,16 @@ void RegisterFromOwnDirectory() {
   const std::string longDir = "/" + std::string(600, 'd') + "/libnevr.so";
   QCHECK(sr::RegisterFromLibraryPath("q15t", longDir.c_str(), pair, 2) == NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR);
   QCHECK(Has("\"reason\":\"library_path_too_long\"") && !Has("library_path_has_no_directory"));
+  QCHECK(Has("\"detail\":\"the sentinel's library directory does not fit the host's path buffer\""));
   g_lines.clear();
   QCHECK(sr::RegisterFromLibraryPath("q15t", "libnevr.so", pair, 2) == NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR);
   QCHECK(Has("\"reason\":\"library_path_has_no_directory\""));
+  QCHECK(Has("\"detail\":\"the sentinel's library path has no directory part\""));
+  // No path at all: the loader gave no usable path for the sentinel's own library.
+  g_lines.clear();
+  QCHECK(sr::RegisterFromLibraryPath("q15t", nullptr, pair, 2) == NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR);
+  QCHECK(Has("\"reason\":\"library_path_missing\""));
+  QCHECK(Has("\"detail\":\"the loader gave no usable path for the sentinel's own library\""));
   QCHECK(sr::ArmedCount() == 0);
 
   // A library on disk: its directory is the one checked, and both names are there, so the registration is armed.
@@ -447,6 +514,7 @@ void DladdrFailureRefuses() {
     g_dladdrMode = mode;
     QCHECK(sr::Register("q15t", pair, 2) == NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR);
     QCHECK(Has("\"reason\":\"dladdr_failed\"") && LevelOf("script_redirect") == 'E');
+    QCHECK(Has("\"detail\":\"the loader could not say which file the sentinel was loaded from\""));
     QCHECK(sr::ArmedCount() == 0);
   }
   g_dladdrMode = 0;
@@ -507,6 +575,39 @@ void HeldClaimRefuses() {
   sr::ResetForTest();
 }
 
+int g_claimHookCalls = 0;
+void CountClaimHook() noexcept { ++g_claimHookCalls; }
+
+// ResetForTest is what every case starts from. It must release a claim left held and clear the claim hook, or a later case
+// is refused, or runs a stale hook, for a reason it did not set.
+void ResetClearsTheSeams() {
+  sr::ResetForTest();
+  g_lines.clear();
+  sentinel::SetLogSink(&Capture);
+  const char* const both[] = {"lib37f88adb0d8066f7_q15t.so", "libac4cd8e0a786d5c5_q15t.so"};
+  g_claimDir = MakeDir(both, 2);
+  QCHECK(!g_claimDir.empty());
+  const std::uint64_t pair[] = {kA, kB};
+
+  // The claim is held when the reset runs: the reset releases it, so the registration after it is not refused by it.
+  sr::SetClaimHeldForTest(true);
+  sr::ResetForTest();
+  QCHECK(sr::RegisterIn(g_claimDir.c_str(), "after_reset", pair, 2) == NEVR_SCRIPT_REDIRECT_OK);
+  QCHECK(sr::ArmedCount() == 2);
+  sr::ResetForTest();
+
+  // A claim hook still set when the reset runs does not run in the registration after it.
+  g_claimHookCalls = 0;
+  sr::SetBeforeClaimHookForTest(&CountClaimHook);
+  sr::ResetForTest();
+  QCHECK(sr::RegisterIn(g_claimDir.c_str(), "after_reset", pair, 2) == NEVR_SCRIPT_REDIRECT_OK);
+  QCHECK(g_claimHookCalls == 0);
+
+  RemoveDir(g_claimDir, both, 2);
+  sentinel::SetLogSink(nullptr);
+  sr::ResetForTest();
+}
+
 void StateLine() {
   sr::ResetForTest();
   g_lines.clear();
@@ -531,12 +632,14 @@ int main() {
   LibraryDirectories();
   PassThroughWithNoRegistration();
   AllOrNothingRegistry();
+  MissingNamesAreListed();
   DirectoryIsNotALibrary();
   OpenRedirectedPaths();
   RegisterFromOwnDirectory();
   DladdrFailureRefuses();
   RegistrationClaimsBeforeItLooks();
   HeldClaimRefuses();
+  ResetClearsTheSeams();
   StateLine();
   ResultNames();
   if (quest_test::Failures() != 0) {
