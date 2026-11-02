@@ -264,6 +264,16 @@ add_library(nevr_r15_reconstruction STATIC
     r15/bot_actor_id.cpp
     r15/service_connection_failed.cpp
     r15/update_exclusive.cpp
+    r15/c_deferred_method_queue_queue_functor_damageable_float_user_id.cpp
+    r15/fun_01988a98.cpp
+    r15/cg_shape_num_indices_for_solid_sphere.cpp
+    r15/cg_shape_num_vertices_for_solid_sphere.cpp
+    r15/cg_vertex_format_append_element.cpp
+    r15/cg_vertex_format_append_element_with_alias.cpp
+    r15/cgvertexformat_vertex_size.cpp
+    r15/clear_file_request_data.cpp
+    r15/fun_018dad8c.cpp
+    r15/fun_018db678.cpp
     r15/login_failed.cpp
     r15/create_match.cpp
 )
