@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4ab40 — BeginWwiseSymbolLookup
 /* @confidence: H — stores the mutex address in the scope and acquires that mutex. */
@@ -14,4 +14,4 @@ void BeginWwiseSymbolLookup(std::byte* scope, std::uintptr_t mutex) {
     LockAudioMutex(reinterpret_cast<void*>(mutex));
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

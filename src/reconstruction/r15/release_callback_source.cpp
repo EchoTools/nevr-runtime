@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4b890 — ReleaseCallbackSource
 /* @confidence: M — decrements the source count and frees copied strings at zero; allocator boundary is inferred. */
@@ -26,4 +26,4 @@ void ReleaseCallbackSource(std::uint64_t source_address) {
     std::free(source);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

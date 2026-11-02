@@ -1328,12 +1328,6 @@ cd tests/system && go test -v -short -run ".*DLL.*" ./...
 cd tests/plugins && go test -v -run "TestGroundTruth" ./...
 ```
 
-### Auth Tests (three layers)
-
-1. **Ground truth** — no game binary, no network. Pure logic validation.
-2. **Unit** — cross-compiled GTest under Wine.
-3. **Integration** — needs game binary + MCP harness.
-
 ---
 
 ## Modern C++ Patterns

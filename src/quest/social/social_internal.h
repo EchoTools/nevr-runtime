@@ -154,7 +154,5 @@ void SlotResetEntry(void* self) noexcept;
 // candidate for switching the tablet to its Friends tab, through the game function in GameEvents.
 void SlotInviteUiNoTargetEntry(void* self, std::uint32_t user) noexcept;
 void SlotPartyUiTargetEntry(void* self, std::uint32_t user, std::uint64_t target) noexcept;
-// RefreshFriends (slot 46), the main-menu FRIENDS LIST press (#391): the facade's refresh, then the probe's event.
-void SlotRefreshFriendsEntry(void* self) noexcept;
 
 }  // namespace quest_social::internal

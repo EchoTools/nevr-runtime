@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 namespace {
 
 void LockSwitchCache(std::atomic<std::int32_t>* lock) {
@@ -138,4 +138,4 @@ std::uint64_t SetSwitch(const void* player, std::uint32_t group,
     return 0;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

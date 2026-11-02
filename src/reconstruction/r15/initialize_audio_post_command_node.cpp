@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2aad180 — InitializeAudioPostCommandNode
 /* @confidence: H — initializes both leading pointer pairs and clears the callback metadata fields. */
@@ -17,4 +17,4 @@ void InitializeAudioPostCommandNode(std::byte* node) {
     InitializeCallbackArgument(node + 0x38, nullptr);
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

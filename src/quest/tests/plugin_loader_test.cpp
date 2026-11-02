@@ -62,7 +62,7 @@ constexpr std::uint16_t kOtherMachine = kMachineAarch64;
 
 // The running libr15 build the fake platform reports: the second ID the fixture lists.
 const char* const kGameBuild = "2222222222222222222222222222222222222222";
-const NevrQuestHostApi kFakeQuestApi{sizeof(NevrQuestHostApi), nullptr};
+const NevrQuestHostApi kFakeQuestApi{sizeof(NevrQuestHostApi), nullptr, nullptr};
 // The main level the fake platform reports (its name is set beside it: the loader copies both, it does not look one up).
 constexpr std::uint64_t kArenaLevel = 0x42670f2bed45703cULL;
 

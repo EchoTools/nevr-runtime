@@ -24,6 +24,7 @@
 #include "quest/plugin/plugin_platform.h"
 #include "quest/plugin/plugin_plan.h"
 #include "quest/plugin/plugin_runtime.h"
+#include "quest/plugin/script_redirect.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/mini_test.h"
 
@@ -104,6 +105,19 @@ TEST(PlanSplitsTheEntriesByMomentAndSettlesWhatThePlanAloneCan) {
   CHECK_EQ(far->value("outcome", ""), std::string("refused"));
   CHECK_EQ(far->value("reason", ""), std::string(reason::kFileOutsideDirectory));
   CHECK_EQ(PlanLines(), 1);
+}
+
+// The script redirect logs each load that is not redirected only in a development build (script_redirect.h, SetLogEveryLoad):
+// planning is where the sentinel learns which build it is, and it is before the dlopen hook goes in.
+TEST(PlanningTellsTheScriptRedirectWhetherThisIsADevelopmentBuild) {
+  Scope scope;
+  nevr_quest::script_redirect::SetLogEveryLoad(false);
+  PlanPlugins({}, true);
+  CHECK(nevr_quest::script_redirect::LogsEveryLoad());
+  ResetPluginsForTest();
+  PlanPlugins({}, false);
+  CHECK(!nevr_quest::script_redirect::LogsEveryLoad());
+  nevr_quest::script_redirect::SetLogEveryLoad(false);
 }
 
 TEST(AnEmptyPlanCountsNothingAndWritesOnlyTheSummary) {

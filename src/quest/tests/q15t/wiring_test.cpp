@@ -44,6 +44,16 @@ static void BLog(const char*, uint32_t, const char* msg, const NevrLogField* f, 
   for (uint32_t i = 0; i < n; ++i) t += std::string(" ") + f[i].key + "=" + f[i].value;
   g_blines.push_back(t);
 }
+// The host's script redirect registration (#1737): InitEx asks for it once, on the pinned build only.
+static int g_redirectCalls = 0;
+static std::string g_redirectId;
+static uint32_t g_redirectCount = 0;
+static int32_t FakeRegisterScriptRedirect(const char* id, const uint64_t*, uint32_t count) {
+  ++g_redirectCalls;
+  g_redirectId = id != nullptr ? id : "(null)";
+  g_redirectCount = count;
+  return NEVR_SCRIPT_REDIRECT_OK;
+}
 int main() {
   const size_t kImage = 0x3a00000;
   void* p = mmap(nullptr, kImage, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
@@ -63,8 +73,17 @@ int main() {
   ctx.ctx_size = sizeof(NvrGameContext);
   ctx.plugin_id = "q15t";
   ctx.log = &BLog;
+  const NevrQuestHostApi quest{sizeof(NevrQuestHostApi), nullptr, &FakeRegisterScriptRedirect};
+  ctx.quest = &quest;
+  // Not the pinned build: InitEx refuses before it installs anything, so it registers no redirect either.
+  ctx.game_build_id = "0000000000000000000000000000000000000000";
+  CHECK(NvrPluginInitEx(&ctx, "") == 0, "InitEx must return 0 on a build it refuses");
+  CHECK(g_redirectCalls == 0, "a refused build must not register the script redirect (calls=%d)", g_redirectCalls);
   ctx.game_build_id = Q15T_BUILD_ID_FOR_TEST;
   CHECK(NvrPluginInitEx(&ctx, "") == 0, "InitEx must return 0");
+  CHECK(g_redirectCalls == 1 && g_redirectId == "q15t" && g_redirectCount == 9,
+        "InitEx must register the nine script libraries once (calls=%d id=%s count=%u)", g_redirectCalls, g_redirectId.c_str(),
+        g_redirectCount);
   bool ticks = false, tick_hook = false;
   for (const auto& l : g_blines) {
     if (l.find("game tick callbacks registered=1 max=16") != std::string::npos) ticks = true;

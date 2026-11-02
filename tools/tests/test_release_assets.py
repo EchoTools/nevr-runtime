@@ -88,52 +88,65 @@ class ReleaseAssetsTest(unittest.TestCase):
         agents = (REPO / "AGENTS.md").read_text()
         self.assertIn("Every release follows RELEASING.md.", agents)
 
-    def test_releasing_md_carries_the_three_release_steps_agents_md_carries(self):
+    def test_releasing_md_carries_the_preflight_and_the_one_step_publish_and_agents_md_carries_its_three_steps(self):
+        # RELEASING.md states the flow the release is going to: the preflight, then one `gh release create` that makes the
+        # tag, the release and its assets. KNOWN-WRONG #1865: AGENTS.md and the workflows still tag, cut a draft and
+        # dispatch the build by hand; when #1865 lands AGENTS.md follows RELEASING.md and the second half goes.
         releasing = (REPO / "RELEASING.md").read_text()
-        for step in ("just release-preflight",
-                     'git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z',
-                     "gh workflow run build.yml --ref vX.Y.Z"):
+        for step in ("just release-preflight", "gh release create vX.Y.Z --prerelease <staged files…>"):
             self.assertIn(step, releasing)
         agents = (REPO / "AGENTS.md").read_text()
         for step in ("just release-preflight", 'git tag -a v<x.y.z> -m "<x.y.z>" && git push origin v<x.y.z>',
                      "gh workflow run build.yml --ref v<x.y.z>"):
             self.assertIn(step, agents)
 
-    def test_releasing_md_checks_locally_before_the_tag_and_rehearses_nothing_on_actions(self):
-        # Actions minutes are billed: the workflow runs once, on the real tag. No scratch tag, no dispatch before it.
+    def test_releasing_md_touches_nothing_public_before_the_publish_and_rehearses_nothing_on_actions(self):
+        # Actions minutes are billed: no scratch tag, no rehearsal. The checks run on the staged set and the device and
+        # gameplay tests run after the publish (the full suite and the PC login test run on main after the cut).
         text = (REPO / "RELEASING.md").read_text()
-        before = text.split("## Before the tag", 1)[1].split("## Cut the draft", 1)[0]
-        self.assertIn("just package-dev", before)
-        # The tag's build skips the full suite (#1008), so the section must not ask for a `just verify` of this tip.
-        self.assertNotIn("`just verify` has run on this tip", before)
-        self.assertIn("full suite", " ".join(before.split()))
-        self.assertNotIn("PC login test passes", before)
-        self.assertIn("run on main after the release cut", " ".join(before.split()))
-        self.assertNotIn("gh workflow run", before)
-        self.assertNotIn("v0.0.<issue>", before)
-        dispatches = [l for l in text.splitlines() if l.startswith("gh workflow run build.yml")]
-        self.assertEqual(dispatches, ["gh workflow run build.yml --ref vX.Y.Z                    # 4. build, attest, attach the two files; it stays a draft"])
+        flat = " ".join(text.split())
+        self.assertIn("Steps 1 to 3 touch nothing public. Step 4 is the only point at which a tag or a release is created", flat)
+        self.assertIn("No device or gameplay test runs before the publish", flat)
+        self.assertIn("release tests run after the release is cut, signed and published", flat)
+        self.assertNotIn("`just verify` has run on this tip", text)
+        self.assertNotIn("PC login test passes", text)
+        self.assertNotIn("v0.0.<issue>", text)
+        self.assertEqual([l for l in text.splitlines() if l.startswith("gh workflow run build.yml")], [])
         sign = text.split("## Sign", 1)[1].split("Check a signed file as", 1)[0]
-        self.assertIn("-f dry_run=false", sign)
         self.assertNotIn("-f dry_run=true", sign)
+        self.assertIn("`dry_run=true`, which writes nothing", " ".join(sign.split()))
 
-    def test_releasing_md_creates_a_titled_draft_and_publishes_from_it(self):
+    def test_releasing_md_publishes_a_titled_prerelease_in_one_step_and_names_the_checks_and_the_setting(self):
         text = (REPO / "RELEASING.md").read_text()
-        self.assertIn("gh release create vX.Y.Z --title vX.Y.Z --draft --prerelease --verify-tag", text)
-        self.assertIn("gh release edit vX.Y.Z --draft=false", text)
+        flat = " ".join(text.split())
+        self.assertIn("`gh release create vX.Y.Z --prerelease <files…>` creates the tag, the release and all its assets in one step", flat)
+        self.assertIn("A release is published as a pre-release and is never left as a draft", flat)
+        self.assertIn("**GitHub release title:** the tag, `vX.Y.Z`, and nothing else.", text)
         self.assertIn("gh attestation verify", text)
         self.assertIn("Enable release immutability", text)
 
-    def test_every_gh_release_create_is_a_titled_draft_and_agents_md_publishes_from_it(self):
-        # Release immutability is on: a release created as published is locked before the build attaches files.
-        for name in ("AGENTS.md", "RELEASING.md"):
-            text = (REPO / name).read_text(encoding="utf-8")
-            creates = [l for l in text.splitlines() if "&& gh release create " in l]
-            self.assertTrue(creates, name)
-            for line in creates:
-                self.assertRegex(line, r"--title v\S+ --draft --prerelease --verify-tag", f"{name}: {line}")
-            self.assertIn("gh release edit v", text)
-            self.assertIn("--draft=false", text, name)
+    def test_every_gh_release_create_in_releasing_md_is_a_prerelease_with_its_files_and_never_a_draft(self):
+        # Release immutability is on: a release created as published is locked before any file is attached, so the one
+        # command that creates it carries the files. RELEASING.md's end state has no draft (KNOWN-WRONG #1865).
+        text = (REPO / "RELEASING.md").read_text(encoding="utf-8")
+        creates = [l for l in text.splitlines() if "gh release create " in l]
+        self.assertGreaterEqual(len(creates), 2, creates)
+        for line in creates:
+            self.assertIn("--prerelease", line, line)
+            self.assertRegex(line, r"(<staged files…>|<files…>)", line)
+            self.assertNotIn("--draft", line, line)
+        self.assertNotIn("gh release edit vX.Y.Z --draft=false", text)
+
+    def test_agents_md_still_cuts_a_titled_draft_and_publishes_from_it(self):
+        # KNOWN-WRONG #1865: AGENTS.md describes what the workflows do today (a titled draft, published by edit). It
+        # follows RELEASING.md when #1865 lands, and this test goes with it.
+        text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
+        creates = [l for l in text.splitlines() if "&& gh release create " in l]
+        self.assertTrue(creates)
+        for line in creates:
+            self.assertRegex(line, r"--title v\S+ --draft --prerelease --verify-tag", line)
+        self.assertIn("gh release edit v", text)
+        self.assertIn("--draft=false", text)
 
     def test_every_workflow_gh_release_create_is_a_draft_prerelease_with_a_verified_tag(self):
         # Release immutability is on: a release created as published is locked before any file is attached, so a
@@ -149,25 +162,29 @@ class ReleaseAssetsTest(unittest.TestCase):
                     self.assertIn(flag, line, f"{path.name}: {line.strip()}")
         self.assertGreaterEqual(found, 1)
 
-    def test_releasing_md_covers_the_failed_draft_the_zips_own_sums_and_the_release_body_after_signing(self):
+    def test_releasing_md_covers_the_failed_check_the_zips_own_sums_and_the_release_body_after_signing(self):
         releasing = (REPO / "RELEASING.md").read_text(encoding="utf-8")
-        self.assertIn("A draft that fails its checks is deleted and cut again", releasing)
+        flat = " ".join(releasing.split())
+        self.assertIn("A failed check deletes the staging directory, so no half-built release is ever visible.", flat)
+        row = next(l for l in releasing.splitlines() if l.startswith("| 3f |"))
+        self.assertIn("delete the staging directory", row)
         self.assertIn("gh release delete vX.Y.Z", releasing)
-        self.assertIn("The signer replaces the zip. The `SHA256SUMS` inside it", releasing)
+        sign = releasing.split("## Sign", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("`sha256sum -c SHA256SUMS` inside the unzipped signed zip, in a new, empty directory", " ".join(sign.split()))
         self.assertIn("covers the unsigned build output CI attested", releasing)
-        body = releasing.split("## Write the release body", 1)[1].split("## Publish", 1)[0]
+        body = releasing.split("## Write the release body", 1)[1].split("\n## ", 1)[0]
         self.assertIn("python3 tools/package_release.py notes --assets", body)
         self.assertIn("gh release edit vX.Y.Z --notes-file", body)
-        self.assertIn("after the last signing pass", body)
+        self.assertIn("after the last signing pass", " ".join(body.split()))
         self.assertNotIn("top-level `SHA256SUMS` gets", releasing)
 
-    def test_releasing_md_says_the_attestation_loop_fails_for_the_signed_zip_and_passes_for_the_quest_library(self):
+    def test_releasing_md_says_the_attestation_check_fails_for_the_signed_zip_and_passes_for_the_quest_library(self):
         releasing = (REPO / "RELEASING.md").read_text(encoding="utf-8")
-        after_signing = " ".join(releasing.split("## Sign", 1)[1].split("## Write the release body", 1)[0].split())
-        self.assertIn('The loop under "Check the draft" exits non-zero for the signed zip (`HTTP 404: Not Found` from '
-                      "the attestations API)", after_signing)
-        self.assertIn("still exits 0 for the Quest library, which the signer does not replace", after_signing)
-        self.assertIn("not a bad draft", after_signing)
+        attestation = " ".join(releasing.split("## Attestation", 1)[1].split("\n## ", 1)[0].split())
+        self.assertIn("`gh attestation verify` exits non-zero for the signed zip (`HTTP 404: Not Found` from the attestations API)",
+                      attestation)
+        self.assertIn("still exits 0 for the Quest library, which the signer does not replace", attestation)
+        self.assertIn("not a bad release", attestation)
 
     def test_readme_issue_template_and_justfile_carry_the_asset_names_and_the_body_holds_the_sums(self):
         self.assertIn("-windows.zip", (REPO / "README.md").read_text(encoding="utf-8"))

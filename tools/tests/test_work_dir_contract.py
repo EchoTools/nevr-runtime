@@ -19,6 +19,8 @@ import unittest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS = REPO / "tools"
 sys.path.insert(0, str(TOOLS))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
 
 import test_launch_client as fixtures  # noqa: E402
 
@@ -216,9 +218,9 @@ class JustfileTest(unittest.TestCase):
     test_nevr_config a directory inside the one it removes."""
 
     def recipe(self):
-        text = (REPO / "justfile").read_text()
-        start = text.index("\ntest-auth-unit:")
-        return text[start:text.index("\n\n", start + 1)] if "\n\n" in text[start + 1:] else text[start:]
+        recipe = just_recipe.recipe((REPO / "justfile").read_text(), "test-auth-unit")
+        self.assertIsNotNone(recipe, "justfile no longer has a test-auth-unit recipe")
+        return recipe
 
     def test_the_recipe_sources_the_shell_definition_and_makes_its_scratch_with_a_readme(self):
         recipe = self.recipe()

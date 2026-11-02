@@ -31,9 +31,11 @@ add_library(nevr_quest_plugin STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_runtime.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_game_image.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/input_seam_hook.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/script_redirect.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/ext/plugin_load_plan.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_game_image.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/input_seam_hook.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/script_redirect.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_plugin PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_include_directories(nevr_quest_plugin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")

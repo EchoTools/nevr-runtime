@@ -2,7 +2,7 @@
 // ReVault raw parent 100335440, reconstruction node 100600352; grade M.
 #include "wwise_post.hpp"
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4c1a0 — QueueWwiseSeek
 /* @confidence: M — command field widths and raw queue sequence are preserved. */
@@ -36,4 +36,4 @@ std::uint32_t QueueWwiseSeek(std::uint32_t event, std::uint64_t game_object,
     return 1;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

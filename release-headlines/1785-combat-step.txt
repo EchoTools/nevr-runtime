@@ -1,1 +1,0 @@
-Thrown objects in Echo Combat on community servers travel and slow down the way the game intends again.

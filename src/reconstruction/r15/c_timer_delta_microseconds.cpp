@@ -1,3 +1,6 @@
+// NRadEngine::CTimer::DeltaMicroSeconds
+// Quest libr15.so VA 0x12c8c28; ReVault binary 576.
+// ReVault raw parent 100219489, reconstruction node 100600270; grade M: arithmetic, cache branch and receiver offset follow Quest raw.
 // @0x12c8c28 — NRadEngine::CTimer::DeltaMicroSeconds
 /* @confidence: M — arithmetic, cache branch, and receiver offset follow Quest raw. */
 #include <cstddef>
