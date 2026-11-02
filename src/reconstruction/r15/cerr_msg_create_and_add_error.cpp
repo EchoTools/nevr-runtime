@@ -1,6 +1,6 @@
 // NRadEngine::CErrMsg::CreateAndAddError
 // Quest libr15.so VA 0x12ce4dc; ReVault binary 576.
-// ReVault raw parent 100219806, reconstruction node 100600596; grade M: all 112 instructions checked; 1 placeholder stays, DAT_03861210 (VA 0x3861210), read as the CEnvironment this-pointer.
+// ReVault raw parent 100219806, reconstruction node 100600596; grade M: all 112 instructions checked; 2 placeholders stay, DAT_03861210 (VA 0x3861210), read as the CEnvironment this-pointer, and DAT_0382b7f8 (VA 0x382b7f8), the loader-filled slot the vptr is read from.
 // @0x12ce4dc — NRadEngine::CErrMsg::CreateAndAddError
 /* @confidence: M */
 
@@ -48,7 +48,7 @@ public:
 
 class CErrMsg : public CBasicErr {
 public:
-    // The CErrMsg vtable (g_vptr_CErrMsg) has WriteError at slot 5, offset 0x28 (@0x12ce4b0).
+    // The CErrMsg vtable has WriteError at slot 5, offset 0x28 (@0x12ce4b0).
     static int CreateAndAddError(const char* file, std::uint32_t line, std::uint64_t symbol,
                                  const char* format, ...);
 };
@@ -70,8 +70,9 @@ struct CEnvData {
 
 // Placeholder: DAT_03861210 (VA 0x3861210) holds the CEnvironment pointer; no name is recovered for it.
 extern NRadEngine::CEnvironment* DAT_03861210;
-// vptr value of NRadEngine::CErrMsg: the vtable address point, VA 0x372e3d8 (Ghidra label PTR__CBaseErr_0372e3d8).
-extern const std::byte g_vptr_CErrMsg[];
+// Placeholder: DAT_0382b7f8 (VA 0x382b7f8) is a loader-filled slot, zero on disk. CreateAndAddError loads its value and adds 0x10 to get the stored vptr.
+// ReVault's vtable address for NRadEngine::CErrMsg is 0x372e3d8 (Ghidra label PTR__CBaseErr_0372e3d8). The +0x10 address point is expected to match it, but that binding is not byte-checked: the slot is zero on disk.
+extern const std::byte* DAT_0382b7f8;
 
 namespace {
 
@@ -83,6 +84,8 @@ constexpr std::size_t kObjectSize = kTextOffset + kTextSize;
 // 8 bytes at VA 0x2c2f758: the key the environment is queried with.
 constexpr std::uint64_t kTlsSymbol = 0x35e8860526ed8064ULL;
 
+// Storage with no initializer: the binary does not zero the object. It Fills only the 0x800-byte text
+// region, and the CBasicErr ctor @0x12cdc5c (called on the object first) is not reconstructed here.
 struct ErrorObject {
     alignas(8) std::byte bytes[kObjectSize];
 };
@@ -115,10 +118,12 @@ void* ResolveErrorDb() {
 
 int NRadEngine::CErrMsg::CreateAndAddError(const char* file, std::uint32_t line,
                                            std::uint64_t symbol, const char* format, ...) {
-    ErrorObject object{};
+    ErrorObject object;
     std::byte* const error = object.bytes;
+    // The binary calls CBasicErr::CBasicErr @0x12cdc5c here. That ctor is not reconstructed in this file.
     new (error) NRadEngine::CBasicErr(file, line, symbol);
-    const std::byte* const vptr = g_vptr_CErrMsg;
+    // The binary loads the slot at 0x382b7f8, adds 0x10 and stores the result as the vptr (0x12ce55c..0x12ce574).
+    const std::byte* const vptr = DAT_0382b7f8 + 0x10;
     std::memcpy(error, &vptr, sizeof vptr);
 
     std::byte* const text = error + kTextOffset;
