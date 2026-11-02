@@ -125,7 +125,7 @@ GAME_NAMESPACES = frozenset({
 })
 # Namespaces that src/reconstruction wrote, not the game's: `NRadEngine::AudioPost` groups functions the file defines
 # under bare names (`// @0x2a490d0 — BeginAudioCommandScope`), and `reconstruction_detail` is a helper namespace. Both break
-# the rule. The rename is in src/reconstruction, which this change does not edit. KNOWN-WRONG #1910
+# the rule. The rename is in src/reconstruction, which this change does not edit. KNOWN-WRONG #1914
 KNOWN_WRONG_NAMESPACES = frozenset({"NRadEngine::AudioPost", "NRadEngine::NRadGame::reconstruction_detail"})
 
 

@@ -92,7 +92,7 @@ separate namespace is an open ABI decision, issue #130.
 - The game's own namespaces that `src/reconstruction` takes from the binary (`NRadEngine::CMemory`, `NRadGame`,
   `NWriteLog`, `CVR`, ...) keep the game's spelling; `GAME_NAMESPACES` in `tools/tests/test_naming.py` lists them.
   Two namespaces the reconstruction wrote (`NRadEngine::AudioPost`, `NRadEngine::NRadGame::reconstruction_detail`)
-  break the rule until they are renamed; the test names them as `KNOWN-WRONG #1910`.
+  break the rule until they are renamed; the test names them as `KNOWN-WRONG #1914`.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
