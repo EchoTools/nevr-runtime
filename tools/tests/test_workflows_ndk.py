@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import pathlib
 import re
+import sys
 import unittest
 
 import yaml
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOWS = sorted((REPO / ".github/workflows").glob("*.yml"))
@@ -22,10 +26,10 @@ USES = "./.github/actions/setup-ndk"
 
 def verify_suites(justfile_text: str) -> list[str]:
     """The recipes `just verify` hands to tools/verify-parallel.sh."""
-    match = re.search(r"^verify:\n(.*?)(?=^\S)", justfile_text, re.S | re.M)
-    if match is None:
+    body = just_recipe.body(justfile_text, "verify")
+    if body is None:
         raise AssertionError("no `verify:` recipe in justfile")
-    code = "\n".join(l for l in match.group(1).splitlines() if not l.lstrip().startswith("#"))
+    code = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#"))
     call = re.search(r"verify-parallel\.sh((?:[ \t]*\\\n[ \t]*[\w-]+|[ \t]+[\w-]+)+)", code)
     if call is None:
         raise AssertionError("`verify:` does not call tools/verify-parallel.sh")
@@ -36,20 +40,18 @@ def verify_suites(justfile_text: str) -> list[str]:
 
 
 def recipe(justfile_text: str, name: str) -> tuple[list[str], str]:
-    """One recipe's dependencies (the names after the header's colon) and its body (to the next column-0 line)."""
-    match = re.search(
-        rf"^{re.escape(name)}(?:[ \t][^\n:]*)?:[ \t]*([^\n]*)\n((?:[ \t][^\n]*\n|\n)*)", justfile_text, re.M
-    )
-    if match is None:
+    """One recipe's dependencies (the names after the header's colon that are recipes) and its body."""
+    head = just_recipe.header(justfile_text, name)
+    if head is None:
         raise AssertionError(f"no recipe `{name}` in justfile")
-    header_tail = match.group(1).split("#", 1)[0]
-    deps = [d for d in re.findall(r"[\w-]+", header_tail) if re.search(rf"^{re.escape(d)}(?:[ \t][^\n:]*)?:", justfile_text, re.M)]
-    return deps, match.group(2)
+    header_tail = head.split(":", 1)[1].split("#", 1)[0]
+    deps = [d for d in re.findall(r"[\w-]+", header_tail) if just_recipe.header(justfile_text, d) is not None]
+    return deps, just_recipe.body(justfile_text, name) or ""
 
 
 def uses_ndk(justfile_text: str, name: str, seen: frozenset[str] = frozenset()) -> bool:
     """Does the recipe, or a recipe it depends on, read the NDK (`{{ ndk }}`, ANDROID_NDK_HOME)?"""
-    if name in seen or not re.search(rf"^{re.escape(name)}(?:[ \t][^\n:]*)?:", justfile_text, re.M):
+    if name in seen or just_recipe.header(justfile_text, name) is None:
         return False  # a word after `just` in a script that is not a recipe
     deps, body = recipe(justfile_text, name)
     if re.search(r"\{\{\s*ndk\s*\}\}|ANDROID_NDK_HOME", body):
@@ -178,6 +180,7 @@ class ScanTest(unittest.TestCase):
         self.assertTrue(uses_ndk(self.JUSTFILE, "beta"))
         self.assertTrue(uses_ndk(self.JUSTFILE, "gamma"), "through its dependency")
         self.assertFalse(uses_ndk(self.JUSTFILE, "verify"))
+        self.assertFalse(uses_ndk(self.JUSTFILE, "a word that is no recipe"), "a non-recipe word is not a recipe")
 
     def test_it_finds_the_recipes_a_step_runs(self):
         self.assertEqual(recipes_run_by({"run": "just verify"}, self.JUSTFILE), ["alpha", "beta"])

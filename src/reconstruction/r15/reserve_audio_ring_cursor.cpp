@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a59e40 — ReserveAudioRingCursor
 /* @confidence: M — matches the raw exclusive-store loop with an address compare-and-swap. */
@@ -22,4 +22,4 @@ bool ReserveAudioRingCursor(std::uintptr_t* cursor, std::uintptr_t expected,
     }
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

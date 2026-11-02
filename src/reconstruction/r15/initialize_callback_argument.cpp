@@ -4,7 +4,7 @@
 
 #include <cstddef>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4b6b0 — InitializeCallbackArgument
 /* @confidence: M — stores the callback argument pointer at the supplied command offset. */
@@ -14,4 +14,4 @@ const void* InitializeCallbackArgument(std::byte* destination,
     return argument;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

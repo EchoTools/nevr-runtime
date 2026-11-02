@@ -14,6 +14,8 @@ import zipfile
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 import work_root  # noqa: E402
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
 
 
 class ReleaseContractTest(unittest.TestCase):
@@ -35,8 +37,8 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertNotIn("m_writeIndex", streamer)
 
     def test_new_runtime_gtests_are_built_and_run_by_auth_unit_gate(self):
-        justfile = (REPO / "justfile").read_text()
-        recipe = justfile.split("test-auth-unit:\n", 1)[1].split("# Run auth integration", 1)[0]
+        recipe = just_recipe.recipe((REPO / "justfile").read_text(), "test-auth-unit")
+        self.assertIsNotNone(recipe, "justfile no longer has a test-auth-unit recipe")
         targets = (
             "test_system_module_loader",
             "test_websocket_frame",

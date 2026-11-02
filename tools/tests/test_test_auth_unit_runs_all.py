@@ -9,8 +9,12 @@ import pathlib
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
@@ -25,11 +29,10 @@ FAKE_SYSTEMD_RUN = "#!/usr/bin/env bash\nexit 1\n"
 
 
 def recipe_text():
-    justfile = (REPO / "justfile").read_text(encoding="utf-8")
-    match = re.search(r"^test-auth-unit:\n((?:[ \t]+.*\n|\n)*)", justfile, re.M)
-    if match is None:
+    body = just_recipe.body(just_recipe.read_justfile(), "test-auth-unit")
+    if body is None:
         raise AssertionError("justfile no longer has a test-auth-unit recipe")
-    return match.group(1)
+    return body
 
 
 def run_test_function(body):

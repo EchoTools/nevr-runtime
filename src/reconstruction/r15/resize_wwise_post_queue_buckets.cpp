@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2aaeb70 — ResizeWwisePostQueueBuckets
 /* @confidence: M — preserves the raw growth-size arithmetic, pool reallocation, bucket copy and old-buffer release. */
@@ -36,4 +36,4 @@ bool ResizeWwisePostQueueBuckets(std::byte* table,
     return true;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

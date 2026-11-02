@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a4a070 — BuildWwiseStateCommand
 /* @confidence: H — the 0x10-byte kind-7 command, sentinel normalization, flag masks, field offsets and commit match the complete body. */
@@ -30,4 +30,4 @@ std::uint64_t BuildWwiseStateCommand(std::uint32_t group,
     return 1;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

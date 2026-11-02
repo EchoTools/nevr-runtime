@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 namespace {
 
 void LockSwitchLookup(std::atomic<std::int32_t>* lock) {
@@ -115,4 +115,4 @@ std::uint32_t GetSwitch(const void* player, std::uint32_t group,
     return found != entries + count && found->group == group ? found->value : 0;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

@@ -7,6 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import just_recipe  # noqa: E402
+
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools" / "verify_agents_imports.py"
 IMPORT = "@docs/standards/logging.md"
@@ -19,15 +22,10 @@ def run(root: Path) -> subprocess.CompletedProcess:
 
 def verify_recipe_code() -> list[str]:
     """The non-comment lines of the `verify` recipe in the justfile."""
-    lines = (REPO / "justfile").read_text(encoding="utf-8").splitlines()
-    start = lines.index("verify:")
-    body = []
-    for line in lines[start + 1:]:
-        if line and not line[0].isspace():
-            break
-        if line.strip() and not line.lstrip().startswith("#"):
-            body.append(line.strip())
-    return body
+    body = just_recipe.body((REPO / "justfile").read_text(encoding="utf-8"), "verify")
+    if body is None:
+        raise AssertionError("justfile has no verify recipe")
+    return [line.strip() for line in body.splitlines() if line.strip() and not line.lstrip().startswith("#")]
 
 
 class AgentsImportsTest(unittest.TestCase):

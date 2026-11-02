@@ -6,11 +6,11 @@
 #include <cstdint>
 
 namespace NRadEngine::CGRenderConfig {
-namespace reconstruction_detail {
+namespace nevr_reconstruction {
 extern std::uint32_t g_enableAutoResolution; // DAT_0389c1f4; ELF VA 0x389c1f4
 }
 
 void SetEnableAutoResolution(std::uint32_t enabled) {
-    reconstruction_detail::g_enableAutoResolution = enabled;
+    nevr_reconstruction::g_enableAutoResolution = enabled;
 }
 } // namespace NRadEngine::CGRenderConfig

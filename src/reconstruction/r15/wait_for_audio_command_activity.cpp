@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a53480 — WaitForAudioCommandActivity
 /* @confidence: M — backs off while the activity count stays positive, then issues the raw barrier. */
@@ -22,4 +22,4 @@ void WaitForAudioCommandActivity(std::uint64_t context) {
     AudioCommandMemoryBarrier();
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction

@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-namespace NRadEngine::AudioPost {
+namespace NRadEngine::nevr_reconstruction {
 
 // @0x2a49f00 — QueueWwiseSwitchCommand
 /* @confidence: H — command kind, size, field offsets, commit and success result match the complete ARM64 body. */
@@ -21,4 +21,4 @@ std::uint64_t QueueWwiseSwitchCommand(std::uint32_t group,
     return 1;
 }
 
-}  // namespace NRadEngine::AudioPost
+}  // namespace NRadEngine::nevr_reconstruction
