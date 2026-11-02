@@ -770,6 +770,8 @@ def is_redirected(name: str) -> bool:
 def staged_name(name: str) -> str:
     """The name a script library is staged under: lib<hash16>_q15t.so for a redirected library, else its own name."""
     return f"{name[:-3]}{REDIRECT_SUFFIX}.so" if is_redirected(name) else name
+
+
 _EM_AARCH64 = 183
 
 
@@ -843,6 +845,14 @@ def stage_libs(libs_dir: pathlib.Path, stage: pathlib.Path, store_apk: pathlib.P
                 problems.append(f"{staged_name(name)}: the store APK already holds that name")
         elif f"{ABI_DIR}/{name}" in store_entries and name not in replace:
             problems.append(f"{name}: the store APK holds {ABI_DIR}/{name}; it is staged only when {LIBS_REPLACE} lists it")
+    # The redirect is registered whole or not at all (the runtime's RegisterIn refuses a missing file), so a set that holds
+    # some of the nine redirected libraries must hold every one.
+    if any(is_redirected(name) for name in names):
+        absent = [f"lib{h}.so" for h in COMBAT_REDIRECT_HASHES if f"lib{h}.so" not in names]
+        if absent:
+            problems.append(
+                f"the {len(COMBAT_REDIRECT_HASHES)} redirected script libraries are staged all nine or none, and the libraries "
+                f"directory lacks {', '.join(absent)}")
     for name in listed:
         if name not in names:
             problems.append(f"{name}: listed in {LIBS_SUMS} and missing from the libraries directory")

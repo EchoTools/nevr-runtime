@@ -1192,11 +1192,16 @@ class StageLibsTest(unittest.TestCase):
 
 
 class StageRedirectedLibsTest(unittest.TestCase):
-    """`stage-libs` (#1737): a redirected stock library is staged under its lib<hash16>_q15t.so name; its stock name never is."""
+    """`stage-libs` (#1737): a redirected stock library is staged under its lib<hash16>_q15t.so name; its stock name never is.
 
-    HASH = "37f88adb0d8066f7"  # one of the nine libs.COMBAT_REDIRECT_HASHES
+    The nine redirected libraries are all or nothing (the runtime registers all nine or none): a staged set holds all of
+    them, or none of them.
+    """
+
+    HASH = "37f88adb0d8066f7"  # the first of the nine libs.COMBAT_REDIRECT_HASHES
     STOCK = f"lib{HASH}.so"
     REDIRECTED = f"lib{HASH}_q15t.so"
+    NINE = [f"lib{h}.so" for h in libs.COMBAT_REDIRECT_HASHES]
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -1209,25 +1214,66 @@ class StageRedirectedLibsTest(unittest.TestCase):
         self.stage = self.root / "stage"
         self.stage.mkdir()
         self.data = aarch64_so(b"combat build")
-        (self.libs / self.STOCK).write_bytes(self.data)
+        for name in self.NINE:
+            (self.libs / name).write_bytes(aarch64_so(f"combat build {name}".encode()))
         self.write_sums()
 
-    def write_store(self, *, with_stock):
+    def write_store(self, *, with_stock, extra=()):
         with zipfile.ZipFile(self.store, "w") as zf:
             zf.writestr("lib/arm64-v8a/libr15.so", b"stock")
             if with_stock:
-                zf.writestr(f"lib/arm64-v8a/{self.STOCK}", b"stock script library")
+                for name in self.NINE:
+                    zf.writestr(f"lib/arm64-v8a/{name}", b"stock script library")
+            for name in extra:
+                zf.writestr(f"lib/arm64-v8a/{name}", b"already there")
 
     def write_sums(self):
         lines = [f"{SHA(p.read_bytes())}  {p.name}\n" for p in sorted(self.libs.iterdir()) if p.is_file() and p.name != "SHA256SUMS"]
         (self.libs / "SHA256SUMS").write_text("".join(lines))
 
-    def test_the_redirected_library_is_staged_under_its_q15t_name_and_the_stock_name_is_not(self):
+    def test_the_nine_redirected_libraries_are_staged_under_their_q15t_names_and_no_stock_name_is(self):
         self.assertEqual(libs.stage_libs(self.libs, self.stage, self.store), [])
         staged = self.stage / "lib/arm64-v8a"
-        self.assertEqual((staged / self.REDIRECTED).read_bytes(), self.data)
-        self.assertFalse((staged / self.STOCK).exists())
+        for name in self.NINE:
+            self.assertEqual((staged / libs.staged_name(name)).read_bytes(), (self.libs / name).read_bytes(), name)
+            self.assertFalse((staged / name).exists(), name)
+        self.assertEqual(sorted(p.name for p in staged.iterdir()), sorted(libs.staged_name(n) for n in self.NINE))
         self.assertEqual(libs.replaced_names(self.stage), [])
+
+    def test_a_subset_of_the_nine_is_refused_and_the_missing_ones_are_named(self):
+        for name in (self.NINE[3], self.NINE[8]):
+            (self.libs / name).unlink()
+        self.write_sums()
+        problems = libs.stage_libs(self.libs, self.stage, self.store)
+        joined = "\n".join(problems)
+        self.assertIn(self.NINE[3], joined)
+        self.assertIn(self.NINE[8], joined)
+        self.assertNotIn(self.NINE[0] + " ", joined)  # a present library is not named as missing
+        self.assertTrue(any("all nine or none" in p for p in problems), problems)
+        self.assertFalse((self.stage / "lib/arm64-v8a").exists())
+
+    def test_one_redirected_library_alone_is_refused(self):
+        for name in self.NINE[1:]:
+            (self.libs / name).unlink()
+        self.write_sums()
+        problems = libs.stage_libs(self.libs, self.stage, self.store)
+        self.assertTrue(any("all nine or none" in p and self.NINE[1] in p and self.NINE[8] in p for p in problems), problems)
+        self.assertFalse((self.stage / "lib/arm64-v8a").exists())
+
+    def test_a_set_with_none_of_the_nine_is_staged_as_before(self):
+        for name in self.NINE:
+            (self.libs / name).unlink()
+        other = "lib0123456789abcdef.so"
+        (self.libs / other).write_bytes(aarch64_so(b"not redirected"))
+        self.write_sums()
+        self.assertEqual(libs.stage_libs(self.libs, self.stage, self.store), [])
+        self.assertEqual([p.name for p in (self.stage / "lib/arm64-v8a").iterdir()], [other])
+
+    def test_a_store_apk_that_already_holds_a_redirected_name_is_refused(self):
+        self.write_store(with_stock=True, extra=[self.REDIRECTED])
+        problems = libs.stage_libs(self.libs, self.stage, self.store)
+        self.assertTrue(any(f"{self.REDIRECTED}: the store APK already holds that name" in p for p in problems), problems)
+        self.assertFalse((self.stage / "lib/arm64-v8a").exists())
 
     def test_a_redirected_library_the_store_does_not_hold_is_refused(self):
         self.write_store(with_stock=False)
