@@ -231,6 +231,7 @@ set(PATCHES_HEADERS
     "ext/plugin_load_plan.h"
     "ext/plugin_load_plan_build.h"
     "ext/plugin_manifest.h"
+    "ext/plugin_manager_model.h"
     "ext/module_loader.h"
     "patch/asset_cdn.h"
     "patch/evrp_package.h"
