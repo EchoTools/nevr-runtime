@@ -634,8 +634,9 @@ void TestInviteMembersPostsTheFriendsEvent() {
   SetGameEvents(GameEvents{});
 }
 
-// The main-menu FRIENDS LIST press is not wired (#391): RefreshFriends (slot 46) is only the facade's refresh, so with
-// the probe on it posts nothing and writes no probe line. Restoring the press wiring makes this fail.
+// KNOWN-WRONG #391: the main-menu FRIENDS LIST press is not wired, so the button draws and does nothing. RefreshFriends
+// (slot 46) is only the facade's refresh, so with the probe on it posts nothing and writes no probe line. Restoring the
+// press wiring makes this fail; the fix for #391 (route or hide the button) changes this test with it.
 void TestFriendsListPressPostsNothing() {
   World w;
   static int netGameMarker = 0;
