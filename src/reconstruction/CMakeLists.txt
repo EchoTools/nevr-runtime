@@ -183,6 +183,16 @@ add_library(nevr_r15_reconstruction STATIC
     r15/csys_thread_set_tls.cpp
     r15/csymbol64_append.cpp
     r15/query_collision_particle.cpp
+    r15/cquaternion_from_rotation_matrix.cpp
+    r15/cnca_game_space_send_component_event_global.cpp
+    r15/csymbol64_string.cpp
+    r15/cr15_net_game_switch_to.cpp
+    r15/output_error.cpp
+    r15/ctransform_cs_compute_local_to_world_transf_q.cpp
+    r15/cnca_game_space_allocate_pooled_actor.cpp
+    r15/cnca_game_require_game_space.cpp
+    r15/cr15_net_game_log_in_offline.cpp
+    r15/cerr_msg_create_and_add_error.cpp
     r15/connect.cpp
     r15/connect_gun.cpp
     r15/cr15_game_ctor.cpp
