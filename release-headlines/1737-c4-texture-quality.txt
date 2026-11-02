@@ -1,1 +1,0 @@
-Texture Resolution now works on the community-patched game files too, so the level you choose is the one you see.

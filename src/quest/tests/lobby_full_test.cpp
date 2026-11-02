@@ -5,10 +5,14 @@
 // Run: lobby_full_test [name-filter]
 
 #include <cstdint>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #include "mini_test.h"
 #include "quest/social/lobby_full_backoff.h"
+#include "quest/social/lobby_full_layout.h"
+#include "runtime/patch/lobby_failure_message_rules.h"
 
 namespace {
 
@@ -53,15 +57,106 @@ TEST(WaitsDoubleFromOneSecondAndStopAtThirtySeconds) {
   }
 }
 
-TEST(TheSeventhRefusalGivesUpAndTheLobbyStaysSkipped) {
+// The seventh refusal starts a cooldown of kCooldownMs (60 s, the PC policy's), not a permanent skip: no send until it
+// ends, then the count starts again from the first wait.
+TEST(TheSeventhRefusalStartsACooldownAndTheCountStartsAgain) {
   FullLobbyBackoff b;
   std::uint64_t now = 0;
   for (std::uint32_t i = 1; i < FullLobbyBackoff::kGiveUpAfter; ++i) now += b.OnFull(kLobby, now).waitMs;
   const auto last = b.OnFull(kLobby, now);
   CHECK(last.verdict == FullLobbyBackoff::Verdict::kGiveUp);
   CHECK_EQ(last.refusals, FullLobbyBackoff::kGiveUpAfter);
-  CHECK(b.OnJoin(kLobby, now + 1).verdict == FullLobbyBackoff::Verdict::kGiveUp);
-  CHECK(b.OnJoin(kLobby, now + 10000000).verdict == FullLobbyBackoff::Verdict::kGiveUp);
+  CHECK_EQ(last.waitMs, 60000U);
+  CHECK(b.OnJoin(kLobby, now + 1).verdict == FullLobbyBackoff::Verdict::kWait);
+  CHECK_EQ(b.OnJoin(kLobby, now + 59999).waitMs, 1U);
+  CHECK(b.OnJoin(kLobby, now + 60000).verdict == FullLobbyBackoff::Verdict::kSend);
+  const auto next = b.OnFull(kLobby, now + 60000);
+  CHECK(next.verdict == FullLobbyBackoff::Verdict::kWait);
+  CHECK_EQ(next.refusals, 1U);
+  CHECK_EQ(next.waitMs, 1000U);
+}
+
+// The same run as the PC policy's (lobby_full_backoff_rules.h): 7 sends, a 60 s cooldown, 7 more. Every send is a
+// refusal here, the game ticks every 100 ms, and the window runs to 245 s.
+TEST(ARefusedLobbyIsAskedInCappedRunsSeparatedByTheCooldown) {
+  FullLobbyBackoff b;
+  std::vector<std::uint64_t> sendTimes;
+  for (std::uint64_t now = 0; now <= 245000; now += 100) {
+    if (b.OnJoin(kLobby, now).verdict == FullLobbyBackoff::Verdict::kSend) {
+      sendTimes.push_back(now);
+      b.OnFull(kLobby, now);
+    }
+  }
+  const std::vector<std::uint64_t> expected = {0,      1000,   3000,   7000,   15000,  31000,  61000,
+                                               121000, 122000, 124000, 128000, 136000, 152000, 182000,
+                                               242000, 243000, 245000};
+  CHECK(sendTimes == expected);
+}
+
+// The code-8 page: the title is the code's own name and the service's message is line 2 (the shared rules, PC #1443).
+TEST(CodeEightWritesTheLobbyFullPageWithTheServiceMessage) {
+  namespace rules = nevr_lobby_failure_message;
+  CHECK(rules::TakesServiceMessage(8));
+  CHECK(std::string(rules::Title(8)) == "lobby full");
+  static const std::size_t kSize = rules::kErrorBlockOffset + 1 + rules::kErrorLines * rules::kErrorLineBytes;
+  std::vector<std::uint8_t> game(kSize, 0xAA);
+  const char message[64] = "Lobby is full, try another";
+  CHECK(rules::WriteErrorBlock(game.data(), rules::Title(8), message, sizeof message));
+  std::uint8_t* block = game.data() + rules::kErrorBlockOffset;
+  CHECK_EQ(block[0], rules::kErrorFlagFourLines);
+  CHECK(std::string(reinterpret_cast<const char*>(block + 1)) == "lobby full");
+  CHECK(std::string(reinterpret_cast<const char*>(block + 1 + rules::kErrorLineBytes)) == "Lobby is full, try another");
+}
+
+// The pointer arithmetic the failure hook does (lobby_full_layout.h), on a fake lobby client: +8 holds the CR15NetGame, +0x910
+// holds a different object (LobbySessionFailureCB reads it as a table owner), and +0x448 is the status word. The error block
+// must land in the object at +8 and nothing may be written to the one at +0x910.
+TEST(TheErrorPageIsWrittenIntoTheGameAtPlusEightNotTheObjectAtPlus0x910) {
+  namespace rules = nevr_lobby_failure_message;
+  namespace lf = quest_social::lobby_full;
+  const std::size_t kGameSize = rules::kErrorBlockOffset + 1 + rules::kErrorLines * rules::kErrorLineBytes;
+  std::vector<std::uint8_t> game(kGameSize, 0xAA);
+  std::vector<std::uint8_t> other(kGameSize, 0xBB);
+  std::vector<std::uint8_t> client(0x1000, 0);
+  std::uint8_t* gamePtr = game.data();
+  std::uint8_t* otherPtr = other.data();
+  std::memcpy(client.data() + 0x8, &gamePtr, sizeof gamePtr);
+  std::memcpy(client.data() + 0x910, &otherPtr, sizeof otherPtr);
+  const std::int32_t status = 5;  // inside the game's gate: status - 4 < 3
+  std::memcpy(client.data() + 0x448, &status, sizeof status);
+
+  // msg + 0x10 -> data; data + 0x18 is the code; data + 0x20 is the 64-byte message.
+  std::vector<std::uint8_t> data(0x60, 0);
+  data[0x18] = 8;
+  std::memcpy(data.data() + 0x20, "Lobby is full, try another", sizeof "Lobby is full, try another");
+  std::vector<std::uint8_t> msg(0x20, 0);
+  const std::uint8_t* dataPtr = data.data();
+  std::memcpy(msg.data() + 0x10, &dataPtr, sizeof dataPtr);
+
+  std::int8_t code = 0;
+  CHECK(lf::FailureCode(msg.data(), &code));
+  CHECK_EQ(code, 8);
+  const lf::RefusalReads reads = lf::ReadRefusal(client.data(), msg.data());
+  CHECK(reads.gateOpen);
+  CHECK(reads.game == game.data());
+  CHECK(std::string(reads.message) == "Lobby is full, try another");
+
+  CHECK(rules::WriteErrorBlock(reads.game, rules::Title(8), reads.message, sizeof reads.message));
+  const std::uint8_t* block = game.data() + rules::kErrorBlockOffset;
+  CHECK_EQ(block[0], rules::kErrorFlagFourLines);
+  CHECK(std::string(reinterpret_cast<const char*>(block + 1)) == "lobby full");
+  CHECK(std::string(reinterpret_cast<const char*>(block + 1 + rules::kErrorLineBytes)) == "Lobby is full, try another");
+  CHECK(other == std::vector<std::uint8_t>(kGameSize, 0xBB));  // the object at +0x910 is untouched
+}
+
+TEST(TheStatusGateReadsTheWordAtPlus0x448) {
+  namespace lf = quest_social::lobby_full;
+  std::vector<std::uint8_t> client(0x1000, 0);
+  for (std::int32_t status = 0; status < 10; ++status) {
+    std::memcpy(client.data() + 0x448, &status, sizeof status);
+    CHECK_EQ(lf::StatusGateOpen(client.data()), status >= 4 && status <= 6);
+  }
+  CHECK(!lf::StatusGateOpen(nullptr));
 }
 
 // The server refuses every send and the game ticks every 100 ms for 120 s. Without the backoff every tick sends
