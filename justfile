@@ -1955,6 +1955,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
     # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/input_seam_test.cpp src/quest/plugin/input_seam_hook.cpp \
+        src/quest/plugin/script_redirect.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "${ident[@]}" \
         -o "$out/input_seam_test" -ldl
     timeout 120 "$out/input_seam_test"
@@ -2404,12 +2405,14 @@ test-quest-plugins:
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/input_seam_hook.cpp -o "$out/input_seam_hook.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/plugin/script_redirect.cpp -o "$out/script_redirect.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/libr15_identity.o"
     loader=(src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
             src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
             src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp src/core/crash_report.cpp
             "$out/libr15_identity.o" src/quest/patch/libr15_patch_identity.cpp
-            "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o")
+            "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o"
+            "$out/script_redirect.o")
     "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" \
         -o "$out/plugin_loader_test" -ldl
     timeout -k 5 120 "$out/plugin_loader_test" "$out"
