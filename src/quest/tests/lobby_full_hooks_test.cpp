@@ -420,6 +420,35 @@ TEST(TheDeclineRepeatsAreBoundedToTenPerWindowToo) {
   CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"page_unchanged\""}), 11);
 }
 
+// The uncounted refusal (no join recorded) has its own budget, apart from the dropped kind's: ten Debug records in one window,
+// the eleventh counted, and the next window's first record is the counted summary for refusal_uncounted.
+TEST(TheUncountedRepeatsAreBoundedToTenPerWindowToo) {
+  Capture capture;
+  FreshRefusalState();
+  g_haveLastJoin = false;
+  Rig rig(5, 0x61);  // inside the gate with no join recorded: refusal_uncounted
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());  // the first in the process: Info
+  for (int i = 0; i < 11; ++i) {
+    OnFailure(&FakeFailure, rig.Self(), rig.failure.data());
+  }
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_uncounted\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_uncounted\""}), 10);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"repeats_suppressed\""}), 0);
+
+  g_lines.clear();
+  g_fakeNowMs = RepeatLimiter::kWindowMs;
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());
+  CHECK(g_lines.size() >= 2);
+  if (g_lines.size() >= 2) {
+    CHECK(g_lines[0].level == sentinel::LogLevel::kDebug);
+    CHECK(Has(g_lines[0].text, "\"status\":\"repeats_suppressed\""));
+    CHECK(Has(g_lines[0].text, "\"record\":\"refusal_uncounted\""));
+    CHECK(Has(g_lines[0].text, "\"count\":1,"));
+    CHECK(g_lines[1].level == sentinel::LogLevel::kDebug);
+    CHECK(Has(g_lines[1].text, "\"status\":\"refusal_uncounted\""));
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
