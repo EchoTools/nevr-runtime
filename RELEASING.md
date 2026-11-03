@@ -208,8 +208,12 @@ its gate in `package_release.py` and `verify_symbols.py`, the signer's optional 
 
 ## The Quest APK
 
-The APK is a repack of the store game, so no workflow builds it. From a clone whose HEAD is the release tag's commit, after
-the tag is on origin (`tools/release_preflight.py --tag vX.Y.Z` refuses otherwise):
+The APK is a repack of the reference combat build, so no workflow builds it. Its input is that build as shipped,
+the recipe's argument, which defaults to `NEVR_QUEST_REFERENCE_APK`: `tools/quest_release_base.py` refuses any other file
+(its sha256 is pinned there) and renames it to this package first. The store APK carries none of the reference build's
+combat entries (script libraries, `libassetpatch.so`, the reference `libvrapi.so`, `assets/afk_default_on.txt`), and an
+APK repacked from it has no combat (#1994). From a clone whose HEAD is the release tag's commit, after the tag is on origin
+(`tools/release_preflight.py --tag vX.Y.Z` refuses otherwise):
 
 ```sh
 just release-quest-apk vX.Y.Z   # build/quest-release/vX.Y.Z/nevr-runtime-vX.Y.Z-quest.apk and its .sha256
@@ -217,8 +221,9 @@ just release-quest-apk vX.Y.Z   # build/quest-release/vX.Y.Z/nevr-runtime-vX.Y.Z
 
 It compiles nothing: the loader in the APK is the release's own asset, so the asset and the APK carry one file. The recipe
 downloads the asset (the draft is enough; `gh` is `$GH_BIN`, default `gh`), checks its size and sha256 against what GitHub
-recorded for it and `gh attestation verify`, checks that it carries the tag's version and commit, repacks the store game with
-it, and refuses unless the signed APK's loader has the asset's sha256. The APK is signed with the key the maintainer holds
+recorded for it and `gh attestation verify`, checks that it carries the tag's version and commit, repacks the reference base with
+it, and refuses unless the signed APK's loader has the asset's sha256 and the APK holds every entry of the base
+(`tools/quest_release_base.py check-release`, which names each missing entry). The APK is signed with the key the maintainer holds
 (`tools/quest_keystore.sh`; `just quest-keystore-fingerprint` prints the signer's SHA-256). It uploads nothing. Check the file
 (size, `sha256sum`, `unzip -tq`), then publish it from the same clone:
 

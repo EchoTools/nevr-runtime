@@ -211,7 +211,7 @@ class TimerCase(unittest.TestCase):
         self.env = {**SECRETS, "RELEASE_PUBLIC_BASE": "https://release.invalid", "GH_BIN": "gh-fake",
                     "XDG_STATE_HOME": str(self.root / "state"), "QUEST_RELEASE_WORK_ROOT": str(self.root / "work"),
                     "QUEST_RELEASE_REPO": str(self.root / "repo"), "QUEST_RELEASE_SIGNER_REPO": str(self.root / "signer"),
-                    "PATH": "/usr/bin"}
+                    "NEVR_QUEST_REFERENCE_APK": str(self.root / "reference.apk"), "PATH": "/usr/bin"}
         self.log = self.root / "state" / "nevr-runtime" / "quest-release-timer.jsonl"
         self.sleeps: list[float] = []
 
@@ -443,7 +443,7 @@ class FailsLoud(TimerCase):
         self.assertNotIn("watch", fake.steps())
 
     def test_a_missing_environment_value_is_a_refusal_that_names_it(self) -> None:
-        for name in (*SECRETS, "RELEASE_PUBLIC_BASE"):
+        for name in (*SECRETS, "RELEASE_PUBLIC_BASE", "NEVR_QUEST_REFERENCE_APK"):
             with self.subTest(name=name):
                 self.log.unlink(missing_ok=True)
                 fake = Fake(self.root)
