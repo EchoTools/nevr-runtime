@@ -37,6 +37,10 @@ This ADR gives AGENTS.md's "decision rule" a fixed form for headset and client r
    - **Refuted if**: the observation that proves H wrong.
    - **Then**: what is done if it is refuted (back to the code, a revert, a new issue), decided before the run.
    - **Test**: the steps, the build (its version and variant, ADR 0040) and what to capture.
+
+   An issue's Falsifier (AGENTS.md "What a PR carries") serves as its row's "Refuted if". A run whose expected result
+   AGENTS.md already states has that statement as its row: the PC login test after a release cut, whose log shows the
+   four keys, then `LOGIN SUCCESS` and `to logged in` (AGENTS.md "Verification before merge").
 2. **The result is read against the row.** The report quotes the lines the run produced and says, per row, matched or
    refuted. It never re-describes the prediction after the run, and a prediction is never edited once the run started:
    a changed prediction is a new row and a new run.
@@ -53,7 +57,8 @@ Scope: PRs and issues from this ADR on, and the headset sheets under `docs/testi
   and Test for it. A PR that makes no run is not a hit.
 - **P2.** A run report that states a result without quoting the run's lines, or without matched or refuted per row.
 - **P3.** A row edited after the run it predicts (the PR's or issue's edit history shows it).
-- **P4.** A headset sheet whose steps say what to see but not what refutes the change or what follows.
+- **P4.** A headset sheet that does not say, for each check it makes, what refutes it and what follows, either per step
+  or in one "Pass and fail" section that names each check.
 
 ## Consequences
 

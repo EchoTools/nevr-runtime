@@ -15,8 +15,8 @@ changes the clock levels too (`src/quest/plugins/q15t/src/clock_levels.cpp`, CPU
 
 The display refresh rate is a different case: the render configuration hook only observes `vrapi_SetDisplayRefreshRate`,
 calling the original with the game's own arguments, and q15t's rate rule (`src/quest/plugins/q15t/src/refresh_rate.cpp`)
-is the one module that changes it. Its clash with the sentinel is two hook mechanisms on one slot (ADR 0034, #2000), not
-two owners.
+is the one module in this tree that changes it. Its clash with the sentinel is two hook mechanisms on one slot (ADR 0034,
+#2000), not two owners.
 
 ## Decision
 
@@ -25,7 +25,8 @@ two owners.
 2. **Every other module is an input.** A module that needs to influence the behaviour gives the owner an input (a
    setting the owner reads, or a request through an interface the owner offers); the owner combines the inputs and
    applies one value. A module may also observe the call through a handler in the manager's chain (ADR 0034) that
-   changes neither the arguments nor the result.
+   changes neither the arguments nor the result, unless the function is held by a hot-path full replacement (ADR 0038),
+   which has no chain: there the observer is an input the replacement reports to.
 3. **The owner logs the decision**, naming every input it combined (config, plugin request, headset profile) and the
    value applied.
 4. **The owner is named where the behaviour is.** The owning file's header says it owns the decision and lists its
@@ -47,4 +48,5 @@ Scope: `src/quest`, its plugins, `src/runtime`, `src/modules`.
 ## Not claimed
 
 Which module should own the refresh rate once q15t's rule moves onto the hook service; #2000 and its headset run decide
-that.
+that. Whether the reference runtime's modules in the release APK's `libvrapi.so` (kept in the release by
+`tools/quest_runtime_pin.py`) change clock levels or the refresh rate: O1 covers this tree's code only.

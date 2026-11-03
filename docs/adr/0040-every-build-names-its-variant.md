@@ -1,4 +1,4 @@
-# ADR 0040: every build names its variant in its first log line and its crash reports
+# ADR 0040: every build names its kind and its variant in its first log line and its crash reports
 
 Status: proposed. Applies to every PC and Quest artifact. Builds on N112 (the build identity in logins and
 registrations) and #1997 (the release redesign).
@@ -13,9 +13,12 @@ indistinguishable. What the tree has:
 - **Identity literal.** `NEVR-BUILD <version> <commit40>` binds the version to the commit. Its format is a cross-repo
   contract: the release signer and `tools/package_release.py` read it with a fixed pattern, and the plugin-trust literal
   is kept separate because the identity literal "has no such field".
-- **Build kind.** `dev` or `release` is named in several places: `NEVR-PLUGIN-TRUST dev|release`
-  (`src/runtime/ext/plugin_trust.cpp`), `NEVR-HOST-BUILD dev|release` (`src/runtime/host/host_identity.cpp`), and the
-  Quest login tuple (`src/quest/sentinel/entry.cpp`, `nevr_build::kIsDev ? "dev" : "release"`).
+- **Build kind.** The words `dev` and `release` mean two things today. On Quest, the login tuple's
+  `nevr_build::kIsDev ? "dev" : "release"` (`src/quest/sentinel/entry.cpp`) is `dev` for every build but a CI build of a
+  release tag. On PC, `NEVR-PLUGIN-TRUST dev|release` (`src/runtime/ext/plugin_trust.cpp`) and
+  `NEVR-HOST-BUILD dev|release` (`src/runtime/host/host_identity.cpp`) name the plugin-trust build
+  (`NEVR_ALLOW_UNSIGNED_PLUGINS`, `src/runtime/CMakeLists.txt`), so a `just package-dev` build says `release` there and
+  `dev` on Quest, with a `-dev` version on both.
 - **versionCode.** Derived from the version alone (`tools/quest_apk_version.py`): a release takes slot 999 and a
   development build slot N, so "a development build of X.Y.Z sits between the release before it and the release X.Y.Z".
   #1997 records the defect this rule exists for: a dev build stamped with a release's code. A release's variant APKs (the
@@ -23,18 +26,23 @@ indistinguishable. What the tree has:
 - **versionName.** It stays the store's on purpose: "it names the game, the versionCode names our packaging of it"
   (`tools/quest_apk_version.py`).
 
-What is missing: `dev` or `release` does not say which variant a build is (a q15t or combat APK, a measurement build,
-ADR 0037), and no first log line or crash report carries even that much on every platform.
+What is missing: one meaning of the build kind on both platforms, a name for the variant (a q15t or combat APK, a
+measurement build, ADR 0037), and a first log line and crash report that carry them on every platform.
 
 ## Decision
 
-1. **Every artifact carries a variant name**: `release`, or `dev`, plus a word for each variant or option the recipe adds
-   (`q15t`, `combat`, `perf-probe`). The recipe that makes the artifact sets it. A release's variant APKs share the
-   release's loader, so their name is stamped by the packaging step, where the sentinel reads it, not by the loader build.
+1. **Every artifact carries a build kind and a variant name.**
+   - The build kind is `release` for a release build (ADR 0037 rule 2: an artifact `just release-quest-apk <tag>`
+     builds, any variant, or `build.yml` builds from a release tag) and `dev` for every other build. It is read from the
+     version: a release build's is the tag's `X.Y.Z`, every other carries `-dev`. The plugin-trust word keeps its meaning
+     (N147) and is not the build kind.
+   - The variant name is a word for each variant or option the recipe adds (`q15t`, `combat`, `perf-probe`), set by the
+     recipe that makes the artifact. A release's variant APKs share the release's loader, so their name is stamped by the
+     packaging step, where the sentinel reads it, not by the loader build.
 2. **The first log line says it.** The sentinel's first line and the PC runtime's first line carry the version, the build
    kind and the variant name, and so does every crash report (`docs/reference/crash-report.md`).
-3. **versionCode stays as it is.** Every artifact is stamped through `tools/quest_apk_version.py`; no recipe types a
-   versionCode, and a non-release build is never stamped with a release's version (#1997).
+3. **versionCode stays as it is.** Every Quest APK is stamped through `tools/quest_apk_version.py`; no recipe types a
+   versionCode, and a development build is never stamped with a release's version (#1997).
 4. **Unchanged:** the identity literal's format and the APK's versionName.
 
 ## Finding a violation
@@ -42,7 +50,8 @@ ADR 0037), and no first log line or crash report carries even that much on every
 Scope: the `justfile`, `tools/`, `src/quest/CMakeLists.txt`, `src/runtime/CMakeLists.txt` and the build-information
 sources.
 
-- **B1.** A recipe or tool that stamps a versionCode by hand, or stamps a non-release build with a release's version.
+- **B1.** A recipe or tool that stamps a versionCode by hand, or stamps a development build (rule 1) with a release's
+  version.
 - **B2.** An artifact whose first log line or crash report lacks the version, the build kind or the variant name.
 
 ## Consequences
