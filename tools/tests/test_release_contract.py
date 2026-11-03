@@ -9,7 +9,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import zipfile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
@@ -275,7 +274,7 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertNotIn("windows-latest", workflow)
         self.assertNotIn("CODESIGN_PASS", workflow)
         self.assertNotIn("CODESIGN_PFX_BASE64", workflow)
-        # The one release zip is the sealed Windows tree's; the dist zip is not a release asset.
+        # The one release zip is the sealed Windows tree's; the dist package is a .tar.zst only, never a release asset.
         self.assertIn("          release-assets/*.zip", workflow)
         self.assertNotIn("          dist/*.zip", workflow)
         # The .tar.zst archives are kept as a workflow artifact.
@@ -289,7 +288,7 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn('option(NEVR_CODESIGN_REQUIRED', cmake)
         self.assertIn("--required-signing", cmake)
         self.assertIn('"${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_NAME}"', cmake)
-        self.assertIn("verify_archives(tar_candidate, zip_candidate, package_candidate, signing)", driver)
+        self.assertIn("verify_archives(tar_candidate, package_candidate, signing)", driver)
         self.assertIn("moved_old", driver)
         self.assertIn("CODESIGN_SKIP is forbidden in required signing mode", driver)
         self.assertIn("-require-leaf-hash", driver)
@@ -393,26 +392,20 @@ class DistributionArchiveTest(unittest.TestCase):
         for name in files:
             (payload / name).write_bytes(b"fixture PE data")
         tar_archive = directory / "package.tar.zst"
-        zip_archive = directory / "package.zip"
         if corrupt_tar:
             tar_archive.write_bytes(b"not a zstd tar archive")
         else:
             subprocess.run(["tar", "--zstd", "-cf", str(tar_archive), "-C",
                             str(directory), "payload"], check=True, capture_output=True)
-        with zipfile.ZipFile(zip_archive, "w") as archive:
-            for path in payload.iterdir():
-                archive.write(path, f"payload/{path.name}")
-        return tar_archive, zip_archive
+        return tar_archive
 
-    def run_validator(self, tar_archive: pathlib.Path, zip_archive: pathlib.Path):
+    def run_validator(self, tar_archive: pathlib.Path):
         return subprocess.run([
-            "cmake", f"-DARCHIVE_TAR={tar_archive}", f"-DARCHIVE_ZIP={zip_archive}",
+            "cmake", f"-DARCHIVE_TAR={tar_archive}",
             "-P", str(self.validator),
         ], capture_output=True, text=True)
 
-    def assert_failed_build_does_not_publish(self, fixture_dir: pathlib.Path,
-                                              tar_archive: pathlib.Path,
-                                              zip_archive: pathlib.Path):
+    def assert_failed_build_does_not_publish(self, fixture_dir: pathlib.Path, tar_archive: pathlib.Path):
         build_dir = fixture_dir / "build"
         marker = fixture_dir / "uploadable-artifact.txt"
         cmakelists = fixture_dir / "CMakeLists.txt"
@@ -421,8 +414,7 @@ class DistributionArchiveTest(unittest.TestCase):
             "project(DistributionGate NONE)\n"
             "add_custom_target(dist COMMAND ${CMAKE_COMMAND} -E echo packaging)\n"
             "add_custom_command(TARGET dist POST_BUILD\n"
-            f'  COMMAND ${{CMAKE_COMMAND}} "-DARCHIVE_TAR={tar_archive}" '
-            f'"-DARCHIVE_ZIP={zip_archive}" -P "{self.validator}"\n'
+            f'  COMMAND ${{CMAKE_COMMAND}} "-DARCHIVE_TAR={tar_archive}" -P "{self.validator}"\n'
             "  VERBATIM)\n"
             f'add_custom_target(uploadable COMMAND ${{CMAKE_COMMAND}} -E touch "{marker}" DEPENDS dist)\n'
         )
@@ -437,8 +429,8 @@ class DistributionArchiveTest(unittest.TestCase):
     def test_stripped_archive_pair_pass_runtime_validation(self):
         package_dir = self.root / "stripped"
         package_dir.mkdir()
-        tar_archive, zip_archive = self.make_archives(package_dir)
-        result = self.run_validator(tar_archive, zip_archive)
+        tar_archive = self.make_archives(package_dir)
+        result = self.run_validator(tar_archive)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_missing_corrupt_and_incomplete_archives_fail_closed_without_upload(self):
@@ -454,13 +446,13 @@ class DistributionArchiveTest(unittest.TestCase):
                     "missing-runtime": ("BugSplat64.dll", "echovr_server.exe"),
                     "missing-launcher": ("BugSplat64.dll", "nevr-runtime.dll"),
                 }[variant]
-                tar_archive, zip_archive = self.make_archives(
+                tar_archive = self.make_archives(
                     case, files, corrupt_tar=variant == "corrupt-archive")
                 if variant == "missing-archive":
-                    zip_archive.unlink()
-                result = self.run_validator(tar_archive, zip_archive)
+                    tar_archive.unlink()
+                result = self.run_validator(tar_archive)
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assert_failed_build_does_not_publish(case, tar_archive, zip_archive)
+                self.assert_failed_build_does_not_publish(case, tar_archive)
 
 
 if __name__ == "__main__":

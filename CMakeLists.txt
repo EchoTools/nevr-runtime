@@ -341,26 +341,23 @@ add_dependencies(dist-prepare echovr_server)
 add_custom_target(dist-sign
   COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/build_distribution.py"
     --package "${DIST_STAGE_DIR}" --destination "${DIST_DIR}"
-    --tar "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst"
-    --zip "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip" ${DIST_SIGNING_ARGS}
+    --tar "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst" ${DIST_SIGNING_ARGS}
   DEPENDS dist-prepare
   COMMENT "Signing, verifying, and atomically publishing distribution"
   VERBATIM
 )
 add_custom_target(dist
   DEPENDS dist-sign
-  COMMENT "Distribution packages created: ${DIST_NAME}.tar.zst and ${DIST_NAME}.zip"
+  COMMENT "Distribution package created: ${DIST_NAME}.tar.zst"
 )
 add_custom_command(TARGET dist POST_BUILD
   COMMAND ${CMAKE_COMMAND}
     -DARCHIVE_TAR=${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst
-    -DARCHIVE_ZIP=${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip
     -P ${CMAKE_SOURCE_DIR}/cmake/VerifyDistribution.cmake
   COMMAND ${CMAKE_COMMAND} -E echo ""
   COMMAND ${CMAKE_COMMAND} -E echo "========================================"
   COMMAND ${CMAKE_COMMAND} -E echo "Distribution packages created (stripped, no debug symbols):"
   COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst"
-  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip"
   COMMAND ${CMAKE_COMMAND} -E echo "========================================"
   COMMENT "Checking required runtime in distribution archives"
   VERBATIM

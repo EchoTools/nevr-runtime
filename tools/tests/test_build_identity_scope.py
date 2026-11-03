@@ -74,7 +74,7 @@ def compile_edges():
 
 
 def is_dist(outputs: str, rule: str) -> bool:
-    """The dist-* utility targets name their archives after the version (nevr-runtime-v<version>-windows-server.zip);
+    """The dist-* utility targets name their archive after the version (nevr-runtime-v<version>-windows-server.tar.zst);
     they are not part of `all`, so a new commit does not run them."""
     return rule == "CUSTOM_COMMAND" and "CMakeFiles/dist" in outputs
 
