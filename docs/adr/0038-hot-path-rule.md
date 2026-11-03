@@ -48,7 +48,8 @@ yet; it is the line this ADR uses until a measurement build gives a better one. 
        reached through the function's import slot or its ADR 0021 inline row (the stub's branch remains; the trampoline
        is never called); on PC it is a detour whose handler never calls the trampoline. It is the function's only
        handler: a module that needs to influence it gives it an input, and one that needs to observe it reads what it
-       reports (ADR 0039), instead of a handler in a chain (ADR 0034). Chosen when the whole function can be reconstructed and tested in the PR.
+       reports (ADR 0039), instead of a handler in a chain (ADR 0034). Chosen when the whole function can be
+       reconstructed and tested in the PR.
      - **a checked byte patch**: `nevr_checked_patch` on PC. On Quest the public table holds no word-patch row, so the
        Quest form is a full replacement unless #1737 makes word-patch rows public (ADR 0021 section 11 changes with it).
        Chosen when the change is a few instruction words inside a function too large to reconstruct in the PR.

@@ -43,7 +43,8 @@ Other code looks like measurement but is part of the product, in every build on 
    build-kind constant). A release build carries none of it.
 2. **A release build** is an artifact the release recipes build for a tag (`just release-quest-apk`,
    `release-quest-variant-apk` and `release-quest-combat-apk`, through their shared body `_release-quest-apk`) or that
-   `build.yml` builds from a release tag. Every other build is a development build.
+   `build.yml` builds from a release tag, as `cmake/nevr_build_info.cmake` reads a release tag (an rc tag included).
+   Every other build is a development build.
 3. **Part of the product, allowed in every build:** the five kinds in Context's second list. A comparison setting follows
    rule 6.
 4. **A build that carries an option says so.** Its variant name (ADR 0040) names each measurement option it was built
