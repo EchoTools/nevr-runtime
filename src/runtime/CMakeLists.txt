@@ -1876,6 +1876,8 @@ if(BUILD_TESTING)
       ext/plugin_manifest.cpp
       # #432: plugin_loader.cpp and ws_bridge.cpp read the process-wide plugin asset registry.
       patch/asset_registry.cpp
+      # The engine hooks that serve the registry: the N84 test installs one through InstallHookForTest (PatchDetour).
+      patch/plugin_assets.cpp
       # #741: the signature gate StageOne consults, linked as production source.
       ext/plugin_signature.cpp
       ext/plugin_pins.cpp
@@ -1927,6 +1929,7 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
       patch/asset_registry.cpp
+      patch/plugin_assets.cpp
       ext/plugin_signature.cpp
       ext/plugin_pins.cpp
       ext/plugin_tree.cpp

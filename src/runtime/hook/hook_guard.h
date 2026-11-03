@@ -46,7 +46,13 @@ int VerifyAll(const char* context);
 /// refuse anything else.
 bool IsOurDetour(const void* target);
 
-/// How many addresses are currently recorded.
+/// Forget every live record at `target`, because the hook there is being removed. Call it before the removal
+/// writes the game's bytes back (PatchRetire in patching.h does), so the restored bytes are not reported as an
+/// overwrite. Returns the number of records forgotten. 0 means nothing was recorded there: the call is refused,
+/// and that is logged at Warning. A successful retire logs at Debug. Logs through Log(), like VerifyAll.
+int Retire(const void* target);
+
+/// How many addresses are currently recorded (live records: a retired record is not counted).
 int RecordedCount();
 
 /// How many Record() calls found the table full: detours nothing is guarding.
@@ -58,6 +64,10 @@ int Capacity();
 #ifdef NEVR_TEST_HOOKS
 /// Pause a writer after it fills a reserved slot but before readers may see it.
 void SetBeforePublishForTest(void (*callback)());
+
+/// Run `callback` in VerifyAll right after it copies a slot and before it reads the target's bytes, so a
+/// test can retire or rewrite the record while VerifyAll holds its copy.
+void SetAfterReadForTest(void (*callback)());
 
 /// Test-only: drop every recorded site. The guard is deliberately process-global
 /// (hooked addresses live in loaded modules and are never freed in production),

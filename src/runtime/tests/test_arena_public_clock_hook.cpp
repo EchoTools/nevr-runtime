@@ -28,6 +28,7 @@
 #include "core/hook_lifecycle.h"
 #include "core/hooking.h"
 #include "core/logging.h"
+#include "runtime/hook/hook_guard.h"
 #include "runtime/lifecycle/arena_round_time.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/patch/arena_public_clock.h"
@@ -185,6 +186,7 @@ struct Probe {
   std::vector<std::int64_t> results;  // what each of those callers got back
   // remove
   std::vector<void*> removed;
+  std::vector<bool> removedRecorded;  // the `recorded` flag each removal was handed
   int removeStatus{MH_OK};
 };
 Probe g_probe;
@@ -207,7 +209,7 @@ void CallDetour(std::size_t site) {
 
 // Hooking::Attach over a MinHook that can be told to fail: the same create / publish / enable order and rollback
 // (core/hook_lifecycle.h), with the target read from *original.
-bool ProbeAttach(void** original, void* /*detour*/) {
+bool ProbeAttach(void** original, void* /*detour*/, const char* /*name*/) {
   g_probe.attachEntry = *original;
   if (g_probe.callerBeforeCreate) CallDetour(0);
   g_probe.freed = false;
@@ -225,8 +227,9 @@ bool ProbeAttach(void** original, void* /*detour*/) {
   return stage == nevr::hook::AttachStage::kAttached;
 }
 
-int ProbeRemove(void* target) {
+int ProbeRemove(void* target, bool recorded) {
   g_probe.removed.push_back(target);
+  g_probe.removedRecorded.push_back(recorded);
   if (g_probe.removeStatus == MH_OK) g_probe.freed = true;  // the old trampoline is gone
   return g_probe.removeStatus;
 }
@@ -323,6 +326,36 @@ TEST_F(ArenaPublicClockTrampoline, AFailedRemovalIsLoggedAndTheOldHookIsRemovedA
   ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameB)));
   ASSERT_EQ(g_probe.removed.size(), 2u);
   EXPECT_EQ(g_probe.removed[1], reinterpret_cast<void*>(&GameA)) << "the old hook was forgotten after a failed removal";
+  ASSERT_EQ(g_probe.removedRecorded.size(), 2u);
+  EXPECT_TRUE(g_probe.removedRecorded[0]) << "the first removal was not handed the record PatchDetour made";
+  EXPECT_FALSE(g_probe.removedRecorded[1])
+      << "the failed removal had already forgotten the record, but the next pass asked for a second Retire (a false not_recorded)";
+}
+
+// A script that is unmapped must not leave its HookGuard record behind: the bytes at the old address are then no longer the
+// hook's, and an image mapped there later would be reported as an overwrite by VerifyAll. The next load removes the old hook
+// without a second Retire, since the record is already gone.
+TEST_F(ArenaPublicClockTrampoline, AnUnmappedScriptsHookRecordIsForgottenOnceAndNotAgain) {
+  // Release any reference an earlier test in this process left on the stock script, so its image is not mapped.
+  HMODULE mapped = nullptr;
+  while ((mapped = GetModuleHandleA(kSites[0].dll)) != nullptr) {
+    ASSERT_TRUE(FreeLibrary(mapped));
+  }
+
+  nevr_hook_guard::ResetForTest();
+  ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameA)));
+  // What PatchDetour records on a successful attach; the stand-in attach does not record.
+  nevr_hook_guard::Record(reinterpret_cast<void*>(&GameA), "arena_public_clock bind");
+  ASSERT_EQ(nevr_hook_guard::RecordedCount(), 1);
+
+  RefreshForTest();  // site 0's script is not mapped
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 0) << "the record of an unmapped script outlived its image";
+
+  ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameB)));
+  ASSERT_EQ(g_probe.removed.size(), 1u);
+  EXPECT_EQ(g_probe.removed[0], reinterpret_cast<void*>(&GameA));
+  ASSERT_EQ(g_probe.removedRecorded.size(), 1u);
+  EXPECT_FALSE(g_probe.removedRecorded[0]) << "the reload asked for a second Retire of a record that was already forgotten";
 }
 
 }  // namespace

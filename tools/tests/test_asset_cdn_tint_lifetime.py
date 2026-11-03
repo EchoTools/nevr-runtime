@@ -30,6 +30,16 @@ class TintMapLifetime(unittest.TestCase):
         self.assertNotIn("g_originalFunc = nullptr", body,
                          "the trampoline pointer must stay valid for a call in the detour prologue")
 
+    def test_shutdown_forgets_the_hookguard_record_before_the_disable(self):
+        body = extract_braced_function(SOURCE, "void nevr_asset_cdn::Shutdown()")
+        self.assertLess(body.index("nevr_hook_guard::Retire("), body.index("Hooking::Detach("),
+                        "the record goes first: the disable restores the bytes a live record would report")
+
+    def test_initialize_installs_the_hook_through_patchdetour(self):
+        body = extract_braced_function(SOURCE, "void nevr_asset_cdn::Initialize()")
+        self.assertRegex(body, r'PatchDetour\(\s*&g_originalFunc,[^;]*"Loadout_ResolveDataFromId"')
+        self.assertNotIn("Hooking::Attach(", body, "a raw attach is not recorded in HookGuard")
+
     def test_republish_waits_for_the_gate_before_deleting_the_old_map(self):
         body = extract_braced_function(SOURCE, "static void BackgroundFetchBody()")
         store = body.index("ReaderGate::Publish(g_tintMap, newTintMap")

@@ -26,6 +26,7 @@
 #include "core/logging.h"
 #include "core/schannel_cred_guard.h"
 #include "core/system_info.h"
+#include "runtime/hook/patching.h"  // PatchDetour records each hook in HookGuard under its name
 
 // ---------------------------------------------------------------------------
 // Schannel TLS hook
@@ -205,6 +206,22 @@ HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD 
 // Hook installation helpers
 // ---------------------------------------------------------------------------
 
+// The address of each export a hook replaces: AcquireCredentialsHandleW in Secur32.dll, CreateDirectoryW and
+// CreateDirectoryA in kernel32.dll, CoCreateInstance in ole32.dll. PatchDetour leaves the trampoline in the pointer, so
+// the address is kept here for platform_compat_Shutdown, which forgets each HookGuard record before MH_Uninitialize
+// restores the bytes; a restored hook would otherwise read as an overwrite.
+static void* g_tlsHookTarget = nullptr;
+static void* g_createDirWHookTarget = nullptr;
+static void* g_createDirAHookTarget = nullptr;
+static void* g_coCreateHookTarget = nullptr;
+
+// Forgets one hook's HookGuard record and clears its address. A hook that never installed has no address: skipped.
+static void RetireHookRecord(void*& target) {
+  if (target == nullptr) return;
+  nevr_hook_guard::Retire(target);
+  target = nullptr;
+}
+
 static bool InstallTLSHook() {
   HMODULE hSecur32 = GetModuleHandleA("Secur32.dll");
   if (hSecur32 == NULL) {
@@ -214,12 +231,14 @@ static bool InstallTLSHook() {
     OriginalAcquireCredentialsHandleW =
         (AcquireCredentialsHandleWFunc)GetProcAddress(hSecur32, "AcquireCredentialsHandleW");
     if (OriginalAcquireCredentialsHandleW != NULL) {
-      if (!Hooking::Attach(reinterpret_cast<PVOID*>(&OriginalAcquireCredentialsHandleW),
-                           reinterpret_cast<PVOID>(AcquireCredentialsHandleWHook))) {
+      void* const target = reinterpret_cast<void*>(OriginalAcquireCredentialsHandleW);
+      if (!PatchDetour(&OriginalAcquireCredentialsHandleW, reinterpret_cast<PVOID>(AcquireCredentialsHandleWHook),
+                       "AcquireCredentialsHandleW")) {
         Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] failed to install AcquireCredentialsHandleW hook: %s",
             Hooking::LastAttachError());
         return false;
       }
+      g_tlsHookTarget = target;
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] SSL/TLS modernization hook installed (Schannel)");
       return true;
     }
@@ -239,24 +258,26 @@ static bool InstallCreateDirectoryHooks() {
   bool ok = true;
   OriginalCreateDirectoryW = (CreateDirectoryWFunc)GetProcAddress(hKernel32, "CreateDirectoryW");
   if (OriginalCreateDirectoryW != NULL) {
-    if (!Hooking::Attach(reinterpret_cast<PVOID*>(&OriginalCreateDirectoryW),
-                         reinterpret_cast<PVOID>(CreateDirectoryWHook))) {
+    void* const target = reinterpret_cast<void*>(OriginalCreateDirectoryW);
+    if (!PatchDetour(&OriginalCreateDirectoryW, reinterpret_cast<PVOID>(CreateDirectoryWHook), "CreateDirectoryW")) {
       Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] failed to install CreateDirectoryW hook: %s",
           Hooking::LastAttachError());
       ok = false;
     } else {
+      g_createDirWHookTarget = target;
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryW hook installed");
     }
   }
 
   OriginalCreateDirectoryA = (CreateDirectoryAFunc)GetProcAddress(hKernel32, "CreateDirectoryA");
   if (OriginalCreateDirectoryA != NULL) {
-    if (!Hooking::Attach(reinterpret_cast<PVOID*>(&OriginalCreateDirectoryA),
-                         reinterpret_cast<PVOID>(CreateDirectoryAHook))) {
+    void* const target = reinterpret_cast<void*>(OriginalCreateDirectoryA);
+    if (!PatchDetour(&OriginalCreateDirectoryA, reinterpret_cast<PVOID>(CreateDirectoryAHook), "CreateDirectoryA")) {
       Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] failed to install CreateDirectoryA hook: %s",
           Hooking::LastAttachError());
       ok = false;
     } else {
+      g_createDirAHookTarget = target;
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryA hook installed");
     }
   }
@@ -271,14 +292,15 @@ static bool InstallMsxml6PassThroughHook() {
   if (hOle32 != NULL) {
     OriginalCoCreateInstance = (CoCreateInstanceFunc)GetProcAddress(hOle32, "CoCreateInstance");
     if (OriginalCoCreateInstance != NULL) {
-      if (!Hooking::Attach(reinterpret_cast<PVOID*>(&OriginalCoCreateInstance),
-                           reinterpret_cast<PVOID>(CoCreateInstanceHook))) {
+      void* const target = reinterpret_cast<void*>(OriginalCoCreateInstance);
+      if (!PatchDetour(&OriginalCoCreateInstance, reinterpret_cast<PVOID>(CoCreateInstanceHook), "CoCreateInstance")) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] failed to install CoCreateInstance hook: %s — the MSXML6 pass-through line will not be "
             "logged; the game still uses the system's XMLHTTP object",
             Hooking::LastAttachError());
         return false;
       }
+      g_coCreateHookTarget = target;
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] MSXML6 pass-through hook installed (CoCreateInstance)");
       return true;
     }
@@ -368,5 +390,10 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
 }
 
 NEVR_MODULE_API void platform_compat_Shutdown(void) {
+  // Records first: MH_Uninitialize restores the game's bytes, and a record still in place would report that restore.
+  RetireHookRecord(g_tlsHookTarget);
+  RetireHookRecord(g_createDirWHookTarget);
+  RetireHookRecord(g_createDirAHookTarget);
+  RetireHookRecord(g_coCreateHookTarget);
   Hooking::Shutdown();
 }
