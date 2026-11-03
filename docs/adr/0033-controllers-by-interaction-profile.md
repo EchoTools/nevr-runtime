@@ -8,8 +8,9 @@ scope until it has an OpenXR path.
 The game reads its controllers through VrApi: it enumerates input devices, reads their capabilities and polls their
 tracking state. `src/quest/sentinel/hand_pose_log_hook.cpp` hooks two of those imports to log each controller's type and
 raw pose (#1986). The release APK's VrApi is not Meta's: it is the reference build's runtime, `libvrapi.so`, which
-`tools/quest_release_base.py` lists among the files the release keeps, and which runs VrApi on OpenXR (a v6.16.4 headset
-log shows the game in an OpenXR session). EchoFrame's runtime of the same kind binds the Steam Frame controllers
+`tools/quest_release_base.py` lists among the files the release keeps, and which runs VrApi on OpenXR: it needs
+`libopenxr_loader.so` and imports `xrCreateInstance`, `xrCreateSession` and `xrSuggestInteractionProfileBindings`
+(`readelf -d` and `readelf --dyn-syms` on the reference APK's `lib/arm64-v8a/libvrapi.so`). EchoFrame's runtime of the same kind binds the Steam Frame controllers
 (`XR_VALVE_frame_controller_interaction`), the Valve Index controllers, the Khronos simple controller and Touch through
 OpenXR ([EchoFrame README](https://github.com/heisthecat31/EchoFrame), "Steam Frame", at `7beb80bb`).
 
@@ -57,9 +58,11 @@ Scope: `src/quest` and its plugins, and the Python tools that patch the Quest AP
 
 ## Consequences
 
-- #1986's fix lands in the layer's binding for the controllers it affects, and every headset with those controllers gets
-  it.
-- Steam Frame's and Index's layouts are reconstructed into the layer's bindings, citing EchoFrame.
+- Where #1737 brings the layer into scope (rule 3), #1986's fix lands in the layer's binding for the controllers it
+  affects, every headset with those controllers gets it, and Steam Frame's and Index's layouts are reconstructed into the
+  layer's bindings, citing EchoFrame.
+- Until then, a controller fix above the boundary carries the rule 3 marker at its site, as #1986's interim does
+  (`docs/design/2026-11-02-quest-hand-flip-toggle.md`).
 
 ## Not claimed
 

@@ -27,7 +27,7 @@ Prior art: MDN's guidance for the web is to test for the feature instead of iden
 user agent "is very hard to do reliably, and is often a cause of bugs"
 ([MDN: browser detection using the user agent](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Browser_detection_using_the_user_agent)).
 Mesa's per-application entries name the application they fix, but each sets driver options named for the condition
-they handle, such as allowing implicit derivatives after a discard for one game
+they handle, such as `glsl_correct_derivatives_after_discard` for one game
 ([Mesa's defaults file, `00-mesa-defaults.conf`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/util/00-mesa-defaults.conf)).
 
 ## Decision
@@ -53,7 +53,8 @@ Scope: `src/quest`, `src/runtime`, `src/core`, `sdk`, the `justfile` recipes and
 the Quest APK. Out of scope: tests, documents, `src/reconstruction`.
 
 - **W1.** A fix for a failure (a crash guard, a Vulkan or audio change, a skipped or redirected call) gated on headset
-  identity: any shape of ADR 0031 R1 to R3, or a profile field named for a headset.
+  identity: any shape of ADR 0031 R1 to R3, or a profile field named for a headset. Found by ADR 0031's searches for R1
+  and R2 and its reading for R3, then by reading whether the identity value gates a fix.
 - **W2.** A build flag, preset, recipe parameter or variant that selects a fix by target device.
 - **W3.** A workaround that writes no line when it first decides a case it targets, on either branch: it acted, or it
   declined (for example, a replacement it could not make).

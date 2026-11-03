@@ -29,8 +29,10 @@ Prior art for the same problem:
   regex), checked in order; the first match wins, and generic `Android_Low`, `Android_Mid` and `Android_High` profiles are
   the fallback when no rule fits
   ([Epic: device profiles and scalability for Android](https://dev.epicgames.com/documentation/en-us/unreal-engine/customizing-device-profiles-and-scalability-in-unreal-engine-projects-for-android)).
-- Mesa keeps its per-application and per-device settings in one file, one entry per application with the options it
-  gets ([Mesa's defaults file, `00-mesa-defaults.conf`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/util/00-mesa-defaults.conf)).
+- Mesa keeps its per-application and per-device settings as driconf entries, one per application with the options it
+  gets, in a shared defaults file and in per-driver files such as radv's
+  ([`00-mesa-defaults.conf`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/util/00-mesa-defaults.conf),
+  [`00-radv-defaults.conf`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/amd/vulkan/00-radv-defaults.conf)).
 - OpenXR names the system the app runs on: `xrGetSystemProperties` fills `XrSystemProperties`, whose `vendorId` and
   `systemName` identify the vendor and the system
   ([Khronos: XrSystemProperties](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrSystemProperties.html),
@@ -41,8 +43,8 @@ Prior art for the same problem:
 1. **One identity step per platform**, run once, as soon as its inputs exist and before any consumer reads a setting:
    on Quest at start; on PC at the first rendered frame, where the render configuration first has the headset (ADR
    0022). Quest inputs:
-   `ro.product.manufacturer`, `ro.product.model`, `ro.product.device` and, where an OpenXR runtime is present,
-   `XrSystemProperties.systemName` and `vendorId`. PC inputs: the headset the render configuration already reads
+   `ro.product.manufacturer`, `ro.product.model`, `ro.product.device` and, where the game runs on an OpenXR runtime and
+   the step runs after that runtime has a system (`xrGetSystem`), `XrSystemProperties.systemName` and `vendorId`. PC inputs: the headset the render configuration already reads
    (`src/runtime/patch/render_config.h`). It writes one Info `headset_profile` line: every input, the rule that matched
    and the profile chosen.
 2. **Ordered match rules, first match wins.** A rule names its inputs and their exact values; it never infers a headset
@@ -85,6 +87,8 @@ per-headset values lists; a search alone cannot tell an inference or a hard-code
 
 ## Not claimed
 
-The identity values of any headset other than a Quest 2 (`hollywood`, `src/quest/plugins/q15t/src/heaps.cpp`). Which
+The identity values of any headset other than a Quest 2 (`hollywood`, `src/quest/plugins/q15t/src/heaps.cpp`). Whether
+the Quest step can wait for the OpenXR system and still run before the first setting is read; until a run shows it can,
+Quest rules match on the Android properties. Which
 property or file tells a Lepton container apart from a headset's own Android is not measured here; the first Steam
 Frame rule needs that measurement.

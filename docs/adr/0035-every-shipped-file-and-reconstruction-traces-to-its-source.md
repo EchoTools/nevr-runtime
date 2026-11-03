@@ -14,9 +14,10 @@ a recipe here first:
 - `libvrapi.so`: its libr15 checksum lists are rewritten on every build to the libr15 the APK carries
   (`tools/quest_runtime_pin.py`: "the pin is computed from the staged file on every build"), and `verify-signed` checks the
   signed copy against the pin tool's output (`tools/quest_repack_libs.py`).
-- `libassetpatch.so`: the package rename rewrites two strings in it (`tools/quest_apk_rename_package.py`).
-- `libr15.so`: the reference build's own byte-patched file, accepted by its sha256 (`kLibR15ReferenceSha256` in
-  `src/quest/patch/libr15_patch_table.h`), goes through this repo's patcher (ADR 0021).
+- `libassetpatch.so`: the package rename rewrites two strings in it, as it rewrites five in the reference `libr15.so` and
+  one in the manifest (`tools/quest_apk_rename_package.py`).
+- `libr15.so`: the reference build's own byte-patched file, renamed and then accepted by its sha256
+  (`kLibR15ReferenceSha256` in `src/quest/patch/libr15_patch_table.h`), goes through this repo's patcher (ADR 0021).
 
 The sources that exist for these files are outside this repo: EchoFrame ([heisthecat31/EchoFrame](https://github.com/heisthecat31/EchoFrame),
 MIT) for the VrApi-on-OpenXR runtime; Ducky's reference combat build, whose source repository is not public, for the
@@ -51,10 +52,11 @@ parameter.
    builds the artifact:
    1. a game file, by its sha256 in the store input;
    2. built from this tree;
-   3. built, or transformed, by a recipe in this repo from a pinned input: a game file, a pinned outside source
-      (repository, commit, licence) or a pinned outside file (its sha256), where a second machine running the recipe
-      gets the same output;
-   4. unaudited, with the open issue that moves it into one of the first three.
+   3. built or transformed by a recipe in this repo from game files, this tree and outside sources, each source pinned
+      by repository and commit and published under a licence that lets this repo build from it, where a second machine
+      running the recipe gets the same output;
+   4. carried from an outside file the tree pins by sha256 but whose sources are not all published and pinned (class 3),
+      byte for byte or through a recipe here: unaudited, with the open issue that moves it into one of the first three.
 2. **The release recipe refuses a file in no class.** Class 4 shrinks to empty under its issues, and the release then
    refuses class 4 as well.
 3. **Every reconstruction has a row in one tracked index**:
@@ -66,10 +68,12 @@ parameter.
 
    A tools test checks the index against the pinned addresses in the source in both directions: every pinned address has
    a row, and every row's address is pinned in the source. That is a stronger check than the patch map's today.
-4. **Outside inputs are environment variables or recipe parameters** (AGENTS.md), and the manifest records the commit or
-   sha256 each build used.
-5. **No patch row and no shipped library is built from an input kept out of the repository.** ADR 0021's mechanism for
-   rows outside the repository is retired under #1737.
+4. **Outside inputs are environment variables or recipe parameters** (AGENTS.md). The tree pins each by commit or sha256
+   and the recipe refuses any other, as `tools/quest_release_base.py` refuses any base but `REFERENCE_APK_SHA256`; the
+   manifest records the pin each build used.
+5. **No patch row and no shipped library is built from an input the tree does not pin**: a file kept outside the
+   repository with no commit or sha256 here (an extra-rows file, a build directory an environment variable names). ADR
+   0021's mechanism for rows outside the repository is retired under #1737.
 6. **Credit follows the work.** A port or reconstruction commit credits each person whose work it draws on: a
    `Co-Authored-By` trailer (`<id>+<login>@users.noreply.github.com`) for a person with a GitHub account, and their name in
    the commit body and the README thanks for one without (AGENTS.md).
@@ -84,18 +88,24 @@ tests and `docs/audits/`.
 - **P2.** A pinned address or instruction word in `src/quest` or `src/runtime` whose site cites no origin: no function
   name, no disassembly address, no source project. Found by reading the sites a search for address-sized constants
   lists; a search alone cannot tell a cited constant from an uncited one.
-- **P3.** A file taken byte for byte from another build without class 3 evidence (a recipe and a matching hash).
-- **P4.** A patch row of a game library, or a library a release artifact carries, built from an input that is neither in
-  the tree nor a pinned outside source: an extra-rows file, a library from a build this repo has no recipe for. Search
-  terms: `extra_rows`, `extra-rows`, `never committed`, `private build`.
+- **P3.** A manifest row whose evidence does not fit its class: a class 3 file without its recipe and its sources'
+  repository, commit and licence, or a class 4 file without its sha256 pin and its open issue. A file taken byte for
+  byte from another build, with only a matching hash, is class 4.
+- **P4.** A patch row of a game library, or a library a release artifact carries, built from an input the tree does not
+  pin (rule 5): an extra-rows file, a build directory an environment variable names with no commit or sha256 pinned
+  here. Search terms: `extra_rows`, `extra-rows`, `never committed`, `private build`, `NEVR_COMBAT_LIBSRC`.
 - **P5.** From this ADR on, a commit on `main` that draws on another person's work without the credit of rule 6. Past
   commits are not rewritten: the remedy for one is a later commit that carries the credit and a credits entry.
 
 ## Consequences
 
-- The reference base stays in releases only as long as its files are class 4 with open issues. For its `libvrapi.so`, the
-  pinned input (`REFERENCE_APK_SHA256`) and the pin relation `verify-signed` checks already hold the file in place; a
-  hash of the shipped file cannot, because its checksum lists change with every libr15 this repo patches.
+- Every file the reference base contributes is class 4 today: the reference APK is pinned (`REFERENCE_APK_SHA256`), and
+  none of its files has every source published and pinned here (`libvrapi.so` carries Ducky's modules, whose source is
+  not public). The manifest (#2011) lists each with its issue, and the base stays in releases only while those issues
+  are open. For `libvrapi.so`, the pin relation `verify-signed` checks also holds the shipped file in place; a hash of
+  the shipped file cannot, because its checksum lists change with every libr15 this repo patches.
+- `libr15.so` becomes class 3 when #1737 has ported the reference build's byte patches: the store file through this
+  repo's patcher.
 - If #1737 brings the VrApi-on-OpenXR layer into this repo's scope (its section H15 keeps OpenXR runtime work out of
   scope), the layer becomes class 2: reconstructed here with EchoFrame and Ducky's reference combat build as cited
   references, not built from their sources.
