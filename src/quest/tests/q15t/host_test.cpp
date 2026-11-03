@@ -202,6 +202,19 @@ int main() {
           CHECK(q15t::ClassifyLoadedLevels(g, false, &lv) == q15t::HzLevelKind::kNone, "%s decides without the lobby rule", name);
         }
       }
+      // the Quest 3 and an unlisted device: no Quest 2 rule, so the level rate is the match rate (90) and the install line says so.
+      // The switch directory is one that does not exist, so no switch file is set.
+      {
+        q15t::SetModuleSwitchDirForTest("no-switch-dir-for-host-test");
+        q15t::SetHzDeviceForTest("eureka");
+        q15t::HzRule r3 = q15t::ConfigureHzRule();
+        CHECK(r3.on && !r3.quest2 && r3.low_hz == 90.f, "Quest 3: level rate %.1f", (double)r3.low_hz);
+        CHECK(HasLine("device=eureka") && HasLine("level_hz=90") && HasLine("quest2=0"), "no Quest 3 install record");
+        q15t::SetHzDeviceForTest("panther");
+        q15t::HzRule rp = q15t::ConfigureHzRule();
+        CHECK(rp.on && !rp.quest2 && rp.low_hz == 90.f, "unlisted device: level rate %.1f", (double)rp.low_hz);
+        CHECK(HasLine("device=panther") && HasLine("level_hz=90"), "no unlisted-device install record");
+      }
       // the Quest 2 rule: a "hollywood" device asks 72; hz72q2.off keeps 90; hzlobby90.off drops the lobby; hzlevel.off is witness only
       {
         char dir[] = "/tmp/q15t_hz_XXXXXX";

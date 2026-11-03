@@ -184,6 +184,16 @@ int main() {
   CHECK(GameRead(base, 1) == 640 * kMiB, "unknown device System heap %llu MiB", (unsigned long long)(GameRead(base, 1) >> 20));
   Drop(base);
 
+  // 2c. a device no rule names: the generic profile, whose System heap is the row's own target (640 MiB); the device is logged
+  Fresh("unlisted_device");
+  base = NewLib();
+  Protect(base);
+  r = q15t::InstallHeaps(base);
+  CHECK(r.status == q15t::SwapStatus::kOk, "unlisted install: %s", q15t::StatusName(r.status));
+  CHECK(GameRead(base, 1) == 640 * kMiB, "unlisted device System heap %llu MiB", (unsigned long long)(GameRead(base, 1) >> 20));
+  CHECK(Count("device=unlisted_device") == 4, "unlisted device not logged on the four rows");
+  Drop(base);
+
   // 3. a slot that does not hold base + its rodata address (another hook owns it): that row is refused and left alone, the
   // other three are swapped
   Fresh("eureka");

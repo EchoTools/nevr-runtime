@@ -13,6 +13,9 @@
 //   3  RegisterCounters              every counter of every hook that will be installed (clock, redirect,
 //                                    dlopen, login, social, login prompt), BEFORE ...
 //   4  StartReporter                 ... the single StartReporter (the reporter refuses a later register)
+//      IdentifyHeadset               the headset identity (ADR 0031, integration/headset_identity_step.h): reads the system
+//                                    properties, names the headset and sets its profile, which the texture-quality hook and the
+//                                    texture menu read. Right after the reporter, so its one `headset_profile` line is written
 //      AttachLibR15                  the build-time libr15 patch (docs/adr/0021): checks the live libr15 against the patch
 //                                    table, builds the trampolines, fills every slot and registers the plugin identity and
 //                                    the GOT backend's build-ID alias (integration/libr15_attach_step.h). The first libr15
@@ -168,6 +171,7 @@ enum class StepId : std::uint8_t {
   kRegisterTextureQualityCounters,
   kRegisterClockLevelsCounters,
   kStartReporter,
+  kIdentifyHeadset,
   kAttachLibR15,
   kRunEarlyPlugins,
   kInstallClockHook,
@@ -246,6 +250,9 @@ class Steps {
   // The clock-level hook's counters (#928), registered on every launch.
   virtual bool RegisterClockLevelsCounters() = 0;
   virtual bool StartReporter() = 0;
+  // The headset identity (ADR 0031): names the headset from its system properties and sets its profile. True always; a
+  // throw is a step failure.
+  virtual bool IdentifyHeadset() = 0;
   // The build-time libr15 patch (ADR 0021): Attach, then the plugin identity and the build-ID alias. True when Attach verified
   // libr15; false, with the reason token as the step's detail, for any other result. It is the first libr15 step and runs
   // every launch.

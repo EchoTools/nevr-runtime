@@ -407,8 +407,8 @@ void ApplyPending(void* engine) noexcept {
   const tq::Counts counts = tq::CurrentCounts();
   if (counts.nativeWidth != 0 && counts.nativeHeight != 0) {
     const tq::EyeSize native{static_cast<int>(counts.nativeWidth), static_cast<int>(counts.nativeHeight)};
-    const tq::EyeSize from = tq::EffectiveSize(have, native);
-    const tq::EyeSize to = tq::EffectiveSize(want, native);
+    const tq::EyeSize from = tq::EffectiveSize(have, native, tq::ActiveHeadsetProfile());
+    const tq::EyeSize to = tq::EffectiveSize(want, native, tq::ActiveHeadsetProfile());
     if (from.width == to.width && from.height == to.height) {
       tq::CommitApplied(want);
       g_appliedLevel.store(static_cast<std::uint64_t>(want), std::memory_order_relaxed);
@@ -653,7 +653,8 @@ int PollLocked() noexcept {
     if (g_logged.applied != kUnset) {
       const tq::Counts counts = tq::CurrentCounts();
       const tq::EyeSize size = tq::EffectiveSize(static_cast<Level>(applied),
-                                                 tq::EyeSize{static_cast<int>(counts.nativeWidth), static_cast<int>(counts.nativeHeight)});
+                                                 tq::EyeSize{static_cast<int>(counts.nativeWidth), static_cast<int>(counts.nativeHeight)},
+                                                 tq::ActiveHeadsetProfile());
       sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_applied",
                           {{"from", tq::LevelName(static_cast<Level>(g_logged.applied))},
                            {"to", tq::LevelName(static_cast<Level>(applied))},

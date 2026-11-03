@@ -9,6 +9,7 @@
 #include <sys/system_properties.h>
 #endif
 
+#include "quest/headset_profile.h"
 #include "module_switch.h"
 #include "plugin_log.h"
 #include "safe_read.h"
@@ -21,12 +22,14 @@
 #endif
 
 namespace q15t {
+
+namespace headset_profile = nevr_quest::headset_profile;  // quest/headset_profile.h: the headset's settings
+
 namespace {
 
 using SetRefreshFn = std::int32_t (*)(void* ovr, float hz);
 
-constexpr float kMatchHz = 90.f;
-constexpr float kQuest2Hz = 72.f;  // q15t hz72q2: a Quest 2 ("hollywood") runs combat maps and the lobby at 72
+constexpr float kMatchHz = 90.f;  // the match rate; a headset profile's levelHz is the rate the combat maps and the lobby run at
 // mpl_combat_dyson / _combustion / _fission / _gauss: the level CSymbol64 a gamespace holds at gs+0x58 (q15t the source build's hz)
 constexpr std::uint64_t kCombatLevels[4] = {0x43e2da7914642604ull, 0x42670f2bed45703cull, 0xdf5ca7b7dfa383d4ull,
                                             0x43e2da7a0c623a19ull};
@@ -214,10 +217,12 @@ HzRule ConfigureHzRule() {
   r.level_off = ModuleSwitchPresent("hzlevel.off");
   r.lobby_off = ModuleSwitchPresent("hzlobby90.off");
   r.q2_off = ModuleSwitchPresent("hz72q2.off");
-  r.quest2 = std::strcmp(device, "hollywood") == 0;
+  const headset_profile::Match match = headset_profile::IdentifyDevice(device);
+  r.quest2 = match.profile->id == headset_profile::Id::kQuest2;
   r.on = r.compiled && !r.level_off;
   r.lobby = r.on && !r.lobby_off;
-  r.low_hz = r.on && r.quest2 && !r.q2_off ? kQuest2Hz : kMatchHz;
+  // The headset profile's level rate (72 on a Quest 2, 90 otherwise); the hz72q2.off switch keeps the match rate on a Quest 2.
+  r.low_hz = r.on && !(r.quest2 && r.q2_off) ? match.profile->levelHz : kMatchHz;
   g_rule.store(r.on, std::memory_order_release);
   g_lobby.store(r.lobby, std::memory_order_release);
   g_low.store(r.low_hz, std::memory_order_release);

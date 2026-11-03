@@ -1,8 +1,8 @@
 # heaps: each mutant drops one rule; tests/heaps_test.cpp must fail on it
 runm heaps heaps_no_stock_check     src/heaps.cpp 's/if (!ok || rodata != pin.stock) {/if (false) {/'
 runm heaps heaps_no_reader_check    src/heaps.cpp 's/if (!ok || reader != pin.reader_word) {/if (false) {/'
-runm heaps heaps_quest2_ignored     src/heaps.cpp 's/return std::strcmp(device, "hollywood") == 0 ? kSystemQuest2 : kPins\[row\].target;/return (void)kSystemQuest2, (void)device, kPins[row].target;/'
-runm heaps heaps_quest2_inverted    src/heaps.cpp 's/std::strcmp(device, "hollywood") == 0 ? kSystemQuest2/std::strcmp(device, "hollywood") != 0 ? kSystemQuest2/'
+runm heaps heaps_quest2_ignored     src/heaps.cpp 's/if (match.profile->systemHeapMiB > 0) return/if (false) return/'
+runm heaps heaps_gate_inverted      src/heaps.cpp 's/if (match.profile->systemHeapMiB > 0) return/if (match.profile->systemHeapMiB == 0) return/'
 runm heaps heaps_value_stock        src/heaps.cpp 's/g_value\[row\] = value;/g_value[row] = pin.stock;/'
 runm heaps heaps_no_expected_slot   src/heaps.cpp 's/SwapWord(base + pin.got, base + pin.ro, /SwapWord(base + pin.got, *reinterpret_cast<std::uintptr_t*>(base + pin.got), /'
 runm heaps heaps_stop_on_first      src/heaps.cpp 's/^      ++g_refused;$/      ++g_refused; break;/'

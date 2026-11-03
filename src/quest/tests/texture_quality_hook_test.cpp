@@ -17,6 +17,7 @@
 
 #include "hook_log.h"
 #include "hook_report.h"
+#include "quest/headset_profile.h"
 #include "quest/tests/test_check.h"
 #include "sysprop_int_share.h"
 #include "texture_quality_hook.h"
@@ -24,10 +25,11 @@
 namespace {
 
 namespace tq = nevr_quest::texture_quality;
+namespace headset_profile = nevr_quest::headset_profile;
 using sentinel::pinned::OvrJavaOpaque;
 
-// The runtime's own answers. The defaults are synthetic and name a Quest 3 (width at least 1680); SetStock names another
-// headset's stock size. This test says nothing about any headset's native size.
+// The runtime's own answers, and the headset's profile. The defaults are synthetic: Reset sets the Quest 3 profile (the identity
+// step sets it on a device), and SetStock changes only the runtime's own answer, which `stock` and a missing profile serve.
 constexpr int kNativeWidth = 2064;
 constexpr int kNativeHeight = 2208;
 int g_natW = kNativeWidth;
@@ -106,6 +108,7 @@ void Reset() {
   g_lastId = -1;
   SetStock(kNativeWidth, kNativeHeight);
   tq::ResetForTest();
+  tq::SetHeadsetProfile(&headset_profile::kQuest3);
   tq::SystemPropertyIntThunk::Reset();
   *tq::SystemPropertyIntThunk::OriginalOut() = reinterpret_cast<void*>(&FakeRuntime);
   sentinel::SetSysPropIntObserver(nullptr);
@@ -126,7 +129,7 @@ const Row kRows[] = {
     {tq::Level::kVeryHigh, "very_high", 3584, 3944, 2304, 2528},
     {tq::Level::kUltra, "ultra", 4096, 4506, 2592, 2848},
 };
-// The stock sizes that name each headset: a Quest 3 is 1680x1760 and a Quest 2 is 1440x1584 (texture_quality.h).
+// The stock sizes of each headset: the runtime's own answer on a Quest 3 and on a Quest 2 (Low's table entry is the same pair).
 constexpr int kQ3StockW = 1680, kQ3StockH = 1760;
 constexpr int kQ2StockW = 1440, kQ2StockH = 1584;
 
@@ -134,14 +137,14 @@ constexpr int kQ2StockW = 1440, kQ2StockH = 1584;
 
 void TheTableIsTheInstallersTable() {
   for (const Row& r : kRows) {
-    QCHECK(tq::SizeFor(r.level, tq::Headset::kQuest3).width == r.q3Width);
-    QCHECK(tq::SizeFor(r.level, tq::Headset::kQuest3).height == r.q3Height);
-    QCHECK(tq::SizeFor(r.level, tq::Headset::kQuest2).width == r.q2Width);
-    QCHECK(tq::SizeFor(r.level, tq::Headset::kQuest2).height == r.q2Height);
+    QCHECK(tq::SizeFor(r.level, headset_profile::kQuest3).width == r.q3Width);
+    QCHECK(tq::SizeFor(r.level, headset_profile::kQuest3).height == r.q3Height);
+    QCHECK(tq::SizeFor(r.level, headset_profile::kQuest2).width == r.q2Width);
+    QCHECK(tq::SizeFor(r.level, headset_profile::kQuest2).height == r.q2Height);
     QCHECK(std::strcmp(tq::LevelName(r.level), r.name) == 0);
   }
-  for (const tq::Headset h : {tq::Headset::kQuest2, tq::Headset::kQuest3}) {
-    QCHECK(tq::SizeFor(tq::Level::kStock, h).width == 0 && tq::SizeFor(tq::Level::kStock, h).height == 0);
+  for (const headset_profile::Profile* p : {&headset_profile::kQuest2, &headset_profile::kQuest3}) {
+    QCHECK(tq::SizeFor(tq::Level::kStock, *p).width == 0 && tq::SizeFor(tq::Level::kStock, *p).height == 0);
   }
   QCHECK(std::strcmp(tq::LevelName(tq::Level::kStock), "stock") == 0);
   // The pin: the flip to `high` is this line and the constant, after a Quest 2 is measured at `high` (#943). A mistake is
@@ -151,15 +154,16 @@ void TheTableIsTheInstallersTable() {
   QCHECK(tq::kEyeWidthPropertyId == 5 && tq::kEyeHeightPropertyId == 6);
 }
 
-// The split is one number on both axes: a stock size of 1680 or more is a Quest 3, anything less (and 0, unanswered) a Quest 2.
-void TheHeadsetSplitsAtOneSixEightyOnBothAxes() {
-  QCHECK(tq::HeadsetForStockSize(0) == tq::Headset::kQuest2);
-  QCHECK(tq::HeadsetForStockSize(kQ2StockW) == tq::Headset::kQuest2);
-  QCHECK(tq::HeadsetForStockSize(kQ2StockH) == tq::Headset::kQuest2);
-  QCHECK(tq::HeadsetForStockSize(1679) == tq::Headset::kQuest2);
-  QCHECK(tq::HeadsetForStockSize(1680) == tq::Headset::kQuest3);
-  QCHECK(tq::HeadsetForStockSize(kQ3StockW) == tq::Headset::kQuest3);
-  QCHECK(tq::HeadsetForStockSize(kQ3StockH) == tq::Headset::kQuest3);
+// The profile names the headset, not the native size (ADR 0031, R3): a Quest 3's native size under a Quest 2 profile still gets the
+// Quest 2 table, and with no profile (the identity step has not run) the runtime's own answer stands, never a table.
+void TheProfileNamesTheHeadsetNotTheStockSize() {
+  Reset();
+  SetStock(kQ3StockW, kQ3StockH);
+  tq::SetHeadsetProfile(&headset_profile::kQuest2);
+  QCHECK(tq::ArmForTest(tq::Level::kHigh));
+  QCHECK(Entry()(kJava, 5) == 2016 && Entry()(kJava, 6) == 2224);
+  tq::SetHeadsetProfile(nullptr);
+  QCHECK(Entry()(kJava, 5) == kQ3StockW && Entry()(kJava, 6) == kQ3StockH);
 }
 
 void OnlySevenWordsParse() {
@@ -179,13 +183,13 @@ void OnlySevenWordsParse() {
 
 // ---- the sizes follow the headset ---------------------------------------------------------------------------------------
 
-// On a Quest 2 each level answers the Quest 2 pair, and on a Quest 3 the Quest 3 pair, decided by the runtime's own
-// answer to the same call.
-void EachLevelAnswersTheTableOfTheHeadsetTheRuntimeNames() {
+// On a Quest 2 profile each level answers the Quest 2 pair, and on a Quest 3 profile the Quest 3 pair.
+void EachLevelAnswersTheTableOfTheProfileSet() {
   for (const Row& r : kRows) {
     for (const bool quest3 : {false, true}) {
       Reset();
       SetStock(quest3 ? kQ3StockW : kQ2StockW, quest3 ? kQ3StockH : kQ2StockH);
+      tq::SetHeadsetProfile(quest3 ? &headset_profile::kQuest3 : &headset_profile::kQuest2);
       QCHECK(tq::ArmForTest(r.level));
       QCHECK(Entry()(kJava, 5) == (quest3 ? r.q3Width : r.q2Width));
       QCHECK(Entry()(kJava, 6) == (quest3 ? r.q3Height : r.q2Height));
@@ -194,11 +198,12 @@ void EachLevelAnswersTheTableOfTheHeadsetTheRuntimeNames() {
   }
 }
 
-// Low is the stock size on each headset, so it answers what the runtime answers (the native sizes, not a fixed table).
+// Low's table entry is the stock size on each headset, so Low answers the pair the runtime gives on that headset.
 void LowAnswersTheStockSizeOfEachHeadset() {
   for (const bool quest3 : {false, true}) {
     Reset();
     SetStock(quest3 ? kQ3StockW : kQ2StockW, quest3 ? kQ3StockH : kQ2StockH);
+    tq::SetHeadsetProfile(quest3 ? &headset_profile::kQuest3 : &headset_profile::kQuest2);
     QCHECK(tq::ArmForTest(tq::Level::kLow));
     QCHECK(Entry()(kJava, 5) == (quest3 ? kQ3StockW : kQ2StockW));
     QCHECK(Entry()(kJava, 6) == (quest3 ? kQ3StockH : kQ2StockH));
@@ -328,7 +333,7 @@ void ARequestChangesNothingAndACommitChangesTheNextAnswer() {
   tq::CommitApplied(tq::Level::kStock);
   QCHECK(Entry()(kJava, 5) == kNativeWidth);
   // On a Quest 2 the same commit gives the Quest 2 table.
-  SetStock(kQ2StockW, kQ2StockH);
+  tq::SetHeadsetProfile(&headset_profile::kQuest2);
   tq::CommitApplied(tq::Level::kHigh);
   QCHECK(Entry()(kJava, 5) == 2016 && Entry()(kJava, 6) == 2224);
 }
@@ -641,6 +646,7 @@ void RefreshAnswersTheLevelsSizeOnBothHeadsets() {
     for (const Row& r : kRows) {
       ArmRoute(r.level, tq::EyeInput::kReference, &g_stored, &g_zero);
       SetStock(quest3 ? kQ3StockW : kQ2StockW, quest3 ? kQ3StockH : kQ2StockH);
+      tq::SetHeadsetProfile(quest3 ? &headset_profile::kQuest3 : &headset_profile::kQuest2);
       QCHECK(tq::HookedRefresh() != nullptr);
       tq::HookedRefresh()();
       QCHECK(Lo(g_stored) == (quest3 ? r.q3Width : r.q2Width));
@@ -870,11 +876,11 @@ void AVrapiRefusalAfterTheRouteRollsItBack() {
 
 int main() {
   TheTableIsTheInstallersTable();
-  TheHeadsetSplitsAtOneSixEightyOnBothAxes();
+  TheProfileNamesTheHeadsetNotTheStockSize();
   OnlySevenWordsParse();
   WithNothingArmedEveryQueryIsTheRuntimesOwn();
   EachLevelLatchesAndAnswers();
-  EachLevelAnswersTheTableOfTheHeadsetTheRuntimeNames();
+  EachLevelAnswersTheTableOfTheProfileSet();
   LowAnswersTheStockSizeOfEachHeadset();
   OnlyIds5And6AreAnsweredWithTheSizeAndTheRestPassThrough();
   TheOriginalIsCalledOnceWithTheGamesArgumentsForTheTwoIdsToo();

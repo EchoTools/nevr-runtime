@@ -2,7 +2,7 @@
 # (2) the capability matrix, one plugin.cpp per option. Module objects are compiled once, with the plugin's own flags.
 _w="$out/wiring"
 mkdir -p "$_w/obj"
-_wf="-std=c++17 -g -O0 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I$here/src -I$nevr/sdk/include"
+_wf="-std=c++17 -g -O0 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I$here/src -I$nevr/src -I$nevr/sdk/include"
 _wmods="plugin_log script_redirect import_hook clock_levels plugin_args refresh_rate game_tick safe_read headset_gates got_swap weapon_arm gamespace fxtrail voipdrop custctx droneguard peerclamp gunconnect aibots bvh wallfire impactsnd ec ecfx dronekill dronemuzzle powerboost hudmeter shieldgamma levelname boosterpool music sensorwd decals"
 _wobjs=""
 for _m in $_wmods; do
