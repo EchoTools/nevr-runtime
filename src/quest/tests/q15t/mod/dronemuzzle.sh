@@ -1,5 +1,5 @@
 # host test of the drone muzzle module (plain functions, install, frame tick; the arm64 thunks are stood in for on the host), then the
-# arm64 cross-compile of the thunks and their comparison with the source build's
+# arm64 cross-compile of the thunks and the check that the thunks are in the object
 g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I"$here/src" -I"$nevr/sdk/include" \
   "$tests/dronemuzzle_test.cpp" "$here/src/dronemuzzle.cpp" "$here/src/dronekill.cpp" "$here/src/import_hook.cpp" "$here/src/got_swap.cpp" \
   "$here/src/safe_read.cpp" "$here/src/plugin_log.cpp" -o "$out/dronemuzzle_test" -ldl -lpthread
@@ -12,7 +12,7 @@ if [ -n "${ANDROID_NDK_HOME:-}" ]; then
   done
 fi
 if [ "${Q15T_SKIP_NDK:-0}" = 1 ]; then
-  echo "dronemuzzle: Q15T_SKIP_NDK=1: the arm64 compile and the thunk comparison were NOT run"
+  echo "dronemuzzle: Q15T_SKIP_NDK=1: the arm64 compile and the thunk check were NOT run"
 else
   [ -n "${ANDROID_NDK_HOME:-}" ] || { echo "dronemuzzle: ANDROID_NDK_HOME is not set (point it at an Android NDK r26d install, or set Q15T_SKIP_NDK=1 to skip the arm64 check)"; exit 1; }
   [ -n "$ndk_bin" ] || { echo "dronemuzzle: NDK r26d clang not found (set ANDROID_NDK_HOME, or Q15T_SKIP_NDK=1 to skip the arm64 check)"; exit 1; }

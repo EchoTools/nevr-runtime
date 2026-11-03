@@ -31,9 +31,9 @@ constexpr std::uintptr_t kRecShooterVel = 0x11c, kRecShooterPos = 0x128, kRecSpa
 constexpr std::uintptr_t kPosePos = 0x10;  // CTransfQ: quaternion +0, position +0x10, scale +0x1c
 constexpr int kShotLines = 40, kTracerLines = 3;  // SHOT_LOG
 
-// the arguments as FireBulletLocal passes them (x0..x3 / x0..x6 + s0): integer registers whole, the speed in s0
+// the arguments as FireBulletLocal passes them (x0..x3 / x0..x6 + s0): integer registers whole, the damage in s0
 using TeleportFn = std::uint64_t (*)(void* gs, std::uint64_t actor, const std::uint8_t* pose, std::uint64_t reason);
-using FireFn = std::uint64_t (*)(std::uint8_t* bcs, std::uint64_t handle, const void* gun, float speed, const void* quat, const void* vel,
+using FireFn = std::uint64_t (*)(std::uint8_t* bcs, std::uint64_t handle, const void* gun, float damage, const void* quat, const void* vel,
                                  std::uint64_t remote, std::uint64_t flag);
 
 std::atomic<int> g_shots{0}, g_tracers{0};
@@ -87,13 +87,13 @@ std::uint64_t q15t_dm_teleport(void* gs, std::uint64_t actor, const std::uint8_t
 }
 
 // F6. Reached only from the thunk, only for a call that returns into FireBulletLocal.
-std::uint64_t q15t_dm_fire(std::uint8_t* bcs, std::uint64_t handle, const void* gun, float speed, const void* quat, const void* vel,
+std::uint64_t q15t_dm_fire(std::uint8_t* bcs, std::uint64_t handle, const void* gun, float damage, const void* quat, const void* vel,
                            std::uint64_t remote, std::uint64_t flag) {
   using namespace q15t;
   using namespace q15t::dm;
   const auto next = reinterpret_cast<FireFn>(q15t_dm_fire_next.load(std::memory_order_acquire));
   if (next == nullptr) return 0;
-  const std::uint64_t r = next(bcs, handle, gun, speed, quat, vel, remote, flag);
+  const std::uint64_t r = next(bcs, handle, gun, damage, quat, vel, remote, flag);
   int rem = 0;
   const float* v = DroneKillShotVelocity(&rem);
   const float v2 = v != nullptr ? v[0] * v[0] + v[1] * v[1] + v[2] * v[2] : 0.0f;

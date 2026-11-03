@@ -58,27 +58,34 @@ static void Dump(const char* title) {  // Q15T_TEST_VERBOSE=1: the module's own 
   for (const auto& l : g_lines) std::printf("[%u] %s\n", l.level, l.text.c_str());
 }
 
-// ================================================================ the core (ported from the source's host test)
-namespace ref {  // upstream "df" code, with Pose -> float[3] and g_frame_dt -> an argument
-constexpr float MUZZLE[3] = {0.000024f, 0.075634f, 0.147283f};
-constexpr float BACK_MAX = 0.25f;
-bool MuzzleTransform(float* p, const float* v, float g_frame_dt) {
-  if (!v) return false;
-  float len = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-  if (len < 1e-4f) return false;
-  float z[3] = {v[0] / len, v[1] / len, v[2] / len};
-  float xl = sqrtf(z[2] * z[2] + z[0] * z[0]);
-  float x[3] = {xl > 1e-4f ? z[2] / xl : 1.0f, 0.0f, xl > 1e-4f ? -z[0] / xl : 0.0f};
-  float y[3] = {z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]};
-  float dt = g_frame_dt;
-  dt = dt < 1.0f / 120.0f ? 1.0f / 120.0f : dt > 1.0f / 30.0f ? 1.0f / 30.0f : dt;
-  float back = len * dt > BACK_MAX ? BACK_MAX / len : dt;
-  for (int i = 0; i < 3; ++i) p[i] += MUZZLE[0] * x[i] + MUZZLE[1] * y[i] + MUZZLE[2] * z[i] - v[i] * back;
-  return true;
-}
+// ================================================================ the core: a trigonometric oracle, and hand values
+namespace ref {  // the frame-time average, written out again from its rule
 float Tick(float g_frame_dt, float dt) {
   if (dt > 1.0f / 240.0f && dt < 0.1f) g_frame_dt = g_frame_dt * 0.9f + dt * 0.1f;
   return g_frame_dt;
+}
+// The spawn from the aim's yaw and pitch, with the basis from trigonometry rather than from the core's formulas. The aim is
+// Z = (cos p sin y, sin p, cos p cos y); X = (cos y, 0, -sin y); Y = (-sin p sin y, cos p, -sin p cos y), which is Z x X for that X.
+// When cos p < 1e-4 the rule's fallback applies: X = (1, 0, 0) and Y = Z x X = (0, 0, -sin p). The back-off is min(|v| dt, 0.25) m
+// along -Z, with dt clamped to 1/120..1/30 s. The result is in double; the test compares it with the float result.
+constexpr double kPi = 3.14159265358979323846;
+void TrigSpawn(const float* root, double yaw, double pitch, double speed, double frame_dt, double* out) {
+  const double cp = std::cos(pitch), sp = std::sin(pitch), cy = std::cos(yaw), sy = std::sin(yaw);
+  const double Z[3] = {cp * sy, sp, cp * cy};
+  double X[3] = {cy, 0.0, -sy};
+  double Y[3] = {-sp * sy, cp, -sp * cy};
+  if (cp < 1e-4) {
+    X[0] = 1.0;
+    X[1] = 0.0;
+    X[2] = 0.0;
+    Y[0] = 0.0;
+    Y[1] = 0.0;
+    Y[2] = -sp;
+  }
+  const double dt = frame_dt < 1.0 / 120.0 ? 1.0 / 120.0 : frame_dt > 1.0 / 30.0 ? 1.0 / 30.0 : frame_dt;
+  const double back = std::fmin(speed * dt, 0.25);
+  for (int k = 0; k < 3; ++k)
+    out[k] = root[k] + q15t::dm::kMuzzle[0] * X[k] + q15t::dm::kMuzzle[1] * Y[k] + q15t::dm::kMuzzle[2] * Z[k] - back * Z[k];
 }
 }  // namespace ref
 
@@ -89,28 +96,33 @@ static void TestCore() {
     x = x * 1103515245u + 12345u;
     return static_cast<float>((x >> 8) & 0xffff) / 65535.0f;
   };
-  int moved = 0;
+  // 200000 random aims given by yaw and pitch: the spawn against ref::TrigSpawn to 1e-5 m (float rounding is about 2e-6 m at |root| <= 60 m).
+  // Every 97th aim is vertical (pitch +-pi/2), which takes the rule's X fallback.
+  int checked = 0;
   for (int i = 0; i < 200000; ++i) {
-    float root[3] = {rnd() * 80 - 40, rnd() * 20 - 5, rnd() * 80 - 40};
-    const float s = i % 50 == 0 ? 0.0f : i % 7 == 0 ? 1e-5f : rnd() * 200;
-    float v[3] = {(rnd() - 0.5f) * s, (rnd() - 0.5f) * s, (rnd() - 0.5f) * s};
-    if (i % 97 == 0) {
-      v[0] = 0;
-      v[2] = 0;
-      v[1] = (rnd() - 0.5f) * 200;
-    }
+    const double yaw = (rnd() * 2.0 - 1.0) * ref::kPi;
+    const double pitch = i % 97 == 0 ? (i % 2 == 0 ? 1.0 : -1.0) * ref::kPi / 2 : (rnd() * 2.0 - 1.0) * 1.5;
+    const double speed = 0.5 + rnd() * 299.5;
+    const double cp = std::cos(pitch), sp = std::sin(pitch), cy = std::cos(yaw), sy = std::sin(yaw);
+    const float v[3] = {static_cast<float>(speed * cp * sy), static_cast<float>(speed * sp), static_cast<float>(speed * cp * cy)};
+    const float root[3] = {rnd() * 80 - 40, rnd() * 20 - 5, rnd() * 80 - 40};
     const float dt = rnd() * 0.08f;
-    float a[3], b[3];
-    memcpy(b, root, sizeof b);
-    const bool ok = MuzzleMove(root, v, dt, a);
-    const bool rok = ref::MuzzleTransform(b, v, dt);
-    if (ok != rok || (ok && memcmp(a, b, sizeof a) != 0)) {
-      CHECK(false, "MuzzleMove differs from upstream at step %d", i);
+    double want[3];
+    ref::TrigSpawn(root, yaw, pitch, speed, dt, want);
+    float got[3];
+    if (!MuzzleMove(root, v, dt, got)) {
+      CHECK(false, "a random aim was refused at %d", i);
       break;
     }
-    moved += ok;
+    bool same = true;
+    for (int k = 0; k < 3; ++k) same = same && std::fabs(got[k] - want[k]) < 1e-5;
+    if (!same) {
+      CHECK(false, "aim %d: got %f %f %f want %f %f %f", i, got[0], got[1], got[2], want[0], want[1], want[2]);
+      break;
+    }
+    ++checked;
   }
-  CHECK(moved > 150000, "moved %d", moved);
+  CHECK(checked == 200000, "checked %d aims", checked);
   float avg = 1.0f / 90.0f, avg_ref = avg;
   for (int i = 0; i < 100000; ++i) {
     const float dt = rnd() * 0.12f;
@@ -132,6 +144,10 @@ static void TestCore() {
   CHECK(!MuzzleMove(root, none, 0.01f, out), "zero velocity moved");
   const float nanv[3] = {NAN, 0, 0};
   CHECK(!MuzzleMove(root, nanv, 0.01f, out), "a NaN velocity moved");
+  const float tiny[3] = {0, 0, 1e-5f};
+  CHECK(!MuzzleMove(root, tiny, 0.01f, out), "a 1e-5 velocity moved");
+  const float small[3] = {0, 0, 2e-4f};
+  CHECK(MuzzleMove(root, small, 0.01f, out), "a 2e-4 velocity was refused");
   CHECK(kMuzzle[0] == 0.000024f && kMuzzle[1] == 0.075634f && kMuzzle[2] == 0.147283f && kBackMax == 0.25f, "muzzle constants");
   CHECK(ClampDt(0.001f) == 1.0f / 120.0f && ClampDt(1.0f) == 1.0f / 30.0f && ClampDt(0.02f) == 0.02f, "ClampDt");
   CHECK(FrameDt(0.5f, 0.2f) == 0.5f && FrameDt(0.5f, 0.001f) == 0.5f, "FrameDt bounds");
@@ -314,6 +330,8 @@ static void TestInstallPinned() {
         (unsigned long long)q15t_dm_tp_ret.load(), (unsigned long long)q15t_dm_fire_ret.load());
   CHECK(q15t_dm_tp_next.load() == base + 0x180a384 && q15t_dm_fire_next.load() == base + 0x210c9c4, "next words");
   CHECK(CountLine("dronemuzzle hook install", 1) == 2 && HasLine("dronemuzzle: on (QA)", 1), "install lines");
+  CHECK(HasLine("muzzle_x=0.000024") && HasLine("muzzle_y=0.075634") && HasLine("muzzle_z=0.147283") && HasLine("back_max_m=0.250000"),
+        "the on (QA) line lacks a muzzle constant or the back-off cap");
   munmap(p, sz);
 }
 
