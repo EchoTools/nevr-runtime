@@ -26,9 +26,10 @@ BindFn OriginalForTest(std::size_t site);
 void SetOriginalForTest(std::size_t site, BindFn original);
 /// The two hook calls the hook makes, so a test stands in for them: attach(original, detour, name) behaves as
 /// PatchDetour (reads the target from *original, leaves the trampoline there), remove(target) returns an
-/// MH_STATUS. nullptr restores that call's default.
+/// MH_STATUS; `recorded` says HookGuard still holds the target's record, so the removal forgets it first. nullptr
+/// restores that call's default.
 using AttachFn = bool (*)(void** original, void* detour, const char* name);
-using RemoveFn = int (*)(void* target);
+using RemoveFn = int (*)(void* target, bool recorded);
 void SetBackendForTest(AttachFn attach, RemoveFn remove);
 /// Hooks `target` as site `site`'s bind function (the step RefreshForTest takes once a site is validated).
 bool HookSiteForTest(std::size_t site, void* target);

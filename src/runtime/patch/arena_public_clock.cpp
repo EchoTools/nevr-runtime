@@ -15,6 +15,7 @@
 #include "core/hooking.h"
 #include "core/logging.h"
 #include "runtime/hook/dll_load_hook.h"
+#include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/arena_round_time.h"
 #include "runtime/patch/arena_public_clock_rules.h"
@@ -28,10 +29,11 @@ using BindFn = std::int64_t (*)(void* state, void* node);
 // acquire load and written only by __atomic_store_n (Hooking::Attach publishes the trampoline into it before it
 // enables the hook, core/hook_lifecycle.h). Once a site has been hooked it is never null and never a freed
 // trampoline: it holds the game's bind function (`target`) whenever no live trampoline exists. `target` and
-// `lastReport` are guarded by g_mutex.
+// `lastReport` and `recorded` are guarded by g_mutex.
 struct SiteHook {
   void* original{nullptr};
   void* target{nullptr};
+  bool recorded{false};  // HookGuard holds a record for `target`: set by a successful attach, cleared when it is forgotten
   std::uintptr_t lastReportBase{0};
   SiteState lastReportState{SiteState::Unhooked};
   bool reported{false};
@@ -47,10 +49,12 @@ bool g_installed = false;
 bool DefaultAttach(void** original, void* detour, const char* name) {
   return PatchDetour(original, detour, name) != FALSE;
 }
-int DefaultRemove(void* target) { return PatchRetire(target); }
+// `recorded`: HookGuard still holds the target's record, so the removal forgets it first. A record that Refresh already
+// forgot (the script was unmapped) is not forgotten twice: the second Retire would be refused as unrecorded.
+int DefaultRemove(void* target, bool recorded) { return recorded ? PatchRetire(target) : MH_RemoveHook(target); }
 struct Backend {
   bool (*attach)(void** original, void* detour, const char* name);
-  int (*remove)(void* target);
+  int (*remove)(void* target, bool recorded);
 };
 Backend g_backend{&DefaultAttach, &DefaultRemove};
 
@@ -122,9 +126,10 @@ void Report(SiteHook& hook, const ScriptSite& site, std::uintptr_t base, SiteSta
 bool HookSite(std::size_t i, void* target) {
   SiteHook& hook = g_hooks[i];
   if (hook.target != nullptr) {
-    const int status = g_backend.remove(hook.target);
+    const int status = g_backend.remove(hook.target, hook.recorded);
     if (status == MH_OK || status == MH_ERROR_NOT_CREATED) {
       hook.target = nullptr;
+      hook.recorded = false;
     } else {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.PATCH] arena_public_clock could not remove the earlier hook at %p: %s; it is tried again on the next load",
@@ -134,6 +139,7 @@ bool HookSite(std::size_t i, void* target) {
   __atomic_store_n(&hook.original, target, __ATOMIC_RELEASE);
   if (!g_backend.attach(&hook.original, Detours()[i], kHookName)) return false;
   hook.target = target;
+  hook.recorded = true;  // PatchDetour recorded the hook on success
   return true;
 }
 
@@ -147,7 +153,16 @@ void Refresh() {
     const ScriptSite& site = kSites[i];
     SiteHook& hook = g_hooks[i];
     HMODULE module = GetModuleHandleA(site.dll);
-    if (module == nullptr) continue;
+    if (module == nullptr) {
+      // The image is gone, so the bytes at the hook's address are no longer the hook's. The record is forgotten now: a later
+      // image mapped at that address would otherwise read as an overwrite in VerifyAll. The old MinHook entry stays until the
+      // next load of this script removes it.
+      if (hook.target != nullptr && hook.recorded) {
+        nevr_hook_guard::Retire(hook.target);
+        hook.recorded = false;
+      }
+      continue;
+    }
     const auto* image = reinterpret_cast<const std::uint8_t*>(module);
     const SiteState state = ClassifySite(image, ImageSize(module), site);
     const auto base = reinterpret_cast<std::uintptr_t>(module);
@@ -193,6 +208,7 @@ void ResetForTest() {
   for (SiteHook& hook : g_hooks) {
     __atomic_store_n(&hook.original, static_cast<void*>(nullptr), __ATOMIC_RELEASE);
     hook.target = nullptr;
+    hook.recorded = false;
   }
   g_backend = Backend{&DefaultAttach, &DefaultRemove};
 }
