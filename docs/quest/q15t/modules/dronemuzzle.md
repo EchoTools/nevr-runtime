@@ -21,12 +21,19 @@ a drone shot's `FireBulletLocal`. Without dronekill's FireBulletLocal word `Inst
 DroneMuzzleInstall   InstallDroneMuzzle(base, slots = kDroneMuzzlePinned, wrappers = DroneMuzzleThunks())   // both words or none
 DroneMuzzleWrappers  DroneMuzzleThunks()   // the two naked thunks on arm64; {0, 0} on the host (the install then refuses, loudly)
 DroneMuzzleStats     GetDroneMuzzleStats()
-extern "C" (hidden)  q15t_dm_teleport(gs, actor, pose, reason)  q15t_dm_fire(bcs, handle, gun, speed, quat, vel, remote, flag)
+DroneMuzzleTick      DroneMuzzleTick(game)   // once a frame on the game thread: feeds the frame-time average (AddGameTick)
+extern "C" (hidden)  q15t_dm_teleport(gs, actor, pose, reason)  q15t_dm_fire(bcs, handle, gun, damage, quat, vel, remote, flag)
                      q15t_dm_{tp,fire}_{ret,next}   // the words the thunks read: std::atomic<uintptr_t>, constant-initialised
 ```
 Wiring for the main seat: `InstallDroneKill` first, then `InstallDroneMuzzle`, both before `InstallGameTick`; `AddGameTick(DroneKillTick)`
-before `InstallGameTick` as well. No CMake edit is needed by this module (no new source other than the two
+before `InstallGameTick` as well, and `AddGameTick(DroneMuzzleTick)` likewise (this tree's `plugin.cpp:509` registers it with
+`AddModuleTick("dronemuzzle", &DroneMuzzleTick, &want_tick)`). No CMake edit is needed by this module (no new source other than the two
 .cpp files listed; `dronekill_log.h` is header-only).
+
+**Frame time.** `DroneMuzzleTick` runs once a frame on the game thread (`dronemuzzle.cpp:237-241`). It takes the time since its last
+call from `NowNs()` (CLOCK_MONOTONIC) and feeds that interval to `FrameDt`: an interval in (1/240 s, 0.1 s) moves the running average
+0.9/0.1, and the first call only records the time. Until the second call the average is `kDefaultFrameDt` = 1/90 s
+(`dronemuzzle.cpp:41`). Each shot's back-off uses `ClampDt` of that average (1/120 s to 1/30 s). The game's own delta is not read (see Open).
 
 ## Rows covered, mechanism per row
 
@@ -53,7 +60,7 @@ return-address compare), which prove nothing about the asm: the asm is checked b
 
 - **F4, `q15t_dm_teleport`** (df 916-941): a drone shot (`DroneKillShotVelocity` non-null) reads the 32-byte pose (`CTransfQ`, passed by
   invisible reference in x2) with `SafeRead`; the spawn = the pose's position (+0x10) plus the muzzle offset `(0.000024, 0.075634, 0.147283)`
-  in the aim basis (Z = v/|v|, X = (z, 0, -x)/|..|, Y = Z x X; `dronemuzzle_core.h`), then back along the aim by min(|v| dt, 0.25 m), dt the host's frame interval (`ClampDt`); the real function gets
+  in the aim basis (Z = v/|v|, X = (z, 0, -x)/|..|, Y = Z x X; `dronemuzzle_core.h`), then back along the aim by min(|v| dt, 0.25 m), dt the running average of host frame intervals (`FrameDt`, then `ClampDt`); the real function gets
   a **copy** with that position (the caller's pose is never written). |v| < 1e-4, or an unreadable pose: the call goes through untouched.
 - **F6, `q15t_dm_fire`** (df 943-1019): the real FireBullet first; then for a drone shot with 1e-6 < v^2 < inf: the bullet record
   (`[bcs+0xf8] + ldrh([bcs+0xc8] + (handle & 0xffff) * 4) * 0x298`, the lookup FireBullet itself just made) gets shooter velocity (+0x11c) = 0 and
@@ -140,6 +147,8 @@ With `Q15T_DRONEKILL=1` and `Q15T_DRONEMUZZLE=1` in an EC drone match on the pin
 - A crash in a caller of WorldTeleport/FireBullet other than FireBulletLocal: the thunk altered a register the caller needed (the asm
   text equals the source's, checked above; only x16 is used on the pass-through path).
 - Bullets from the player's gun mis-placed: the record fix ran for a non-drone shot.
+- `frame_ms` stays at 11.111111 (the 1/90 s default) for every `shot` of a run whose frames are not 90 Hz: the tick did not feed the
+  running average (`DroneMuzzleTick` not registered, or never called).
 - `spawn` minus `root` in a `shot` line differs from `kMuzzle` in the aim basis built from `velocity`, less `min(|velocity| * frame_ms / 1000, 0.25)` along the aim by more than 1e-5 m: the
   module does not compute the rule written here.
 
@@ -163,19 +172,21 @@ The spawn rule moves the bullet back along the aim by `min(|v| dt, 0.25 m)` (`dr
 update, `CR15NetBulletCS::UpdateMovement` (VA 0x2224290), already moves each bullet every frame, so whether the back-off is needed depends on
 where that step falls in the frame. Read in the disassembly (libr15.so ELF vaddr + 0x100000):
 
-- the frame delta is the float at +0x3c of the clock object (`ldr s0, [x8, #0x3c]`, 0x22242f4). The clock object is reached through
-  `GlobalClock()` (the thunk at 0xfd4860, called at 0x22242e0), which takes no arguments;
+- the frame delta is the float at +0x3c of the clock object (`ldr s0, [x8, #0x3c]`, 0x22242f4). The clock object is `[[space+0x10]]`,
+  with space = `[this+0x80]`; `GlobalClock()` is called only when that field is 0 (UpdateMovement 0x22242cc..0x22242e0), through the
+  thunk at 0xfd4860, a GOT jump to 0x1907720 (`ldr x0, [0x386cb30]`);
 - the delta is scaled by the time scale (`fmul s0, s1, s0`, 0x2224414), the game's dt for the step;
 - the bullet record's speed is at +0xcc (0x2224570), and travel is dt times speed (0x222457c);
-- the step is `min(travel, rec+0xd0)` (`fsub` at 0x2224580, `cmp w8, #0` at 0x2224590, `fcsel lt` at 0x22245a0). The negative branch of
-  rec+0xd0 was not read;
+- the step is `min(travel, rec+0xd0)` (`fsub` at 0x2224580, `cmp w8, #0` at 0x2224590, `fcsel lt` at 0x22245a0). FireBullet writes rec+0xd0 = -1.0 (0x220cce8). When it is negative, the step
+  first raycasts (`bl 0xff7740` at 0x2224530) and then stores FLT_MAX or the hit distance (0x2224534..0x2224550); the negative test is
+  at 0x22244c4..0x22244cc. The first-step hook point is for #2036;
 - the direction is read from +0x104..+0x10c (0x22244e4..0x22244f0).
 
 Not shown by this read: the order of UpdateMovement against the shot (FireBulletLocal's call to FireBullet) and against the first render of
 the bullet in the same frame. If UpdateMovement runs first, the bullet is advanced once before it is drawn from the spawn; if it runs after,
-the 0.25 m back-off is the only offset the first frame has. The module does not read the game's clock: it holds no address for the clock global
-or the time scale's pointer, so dt is the host's frame interval (`ClampDt`), and the 0.25 m cap is the reference build's value (not read from
-the game). The question, and the evidence needed to answer it, is tracked in #2036.
+the 0.25 m back-off is the only offset the first frame has. This module keeps main's clock on purpose: it does not read the game's clock, and dt is a running average of host frame intervals
+(`FrameDt`, `ClampDt`). It could read the delta from the `gs` that `q15t_dm_teleport` receives (FireBulletLocal passes [this+0x80] at
+0x220c21c), with no new address; switching is #2036's decision. The 0.25 m cap is the reference build's value (not read from the game). The question, and the evidence needed to answer it, is tracked in #2036.
 
 ## Tests and mutants
 
