@@ -67,9 +67,6 @@ CanFollowPartyFn g_originalCanFollowParty = nullptr;
 // The game's network callbacks and its frame loop may run on different threads.
 std::mutex g_mutex;
 Policy g_policy;
-// True from the first join held after a refusal until a join goes out: the hold is said once, not on every tick the game
-// queues the follow (JoinPartyLobby runs every frame). Under g_mutex.
-bool g_holdSaid = false;
 
 // The decline lines written so far (lobby_failure_message_rules.h, NoteDeclined): one per code and reason. The failure
 // callback runs on a network thread, so the state is under its own lock.
@@ -144,26 +141,14 @@ void JoinPartyLobbyHook(void* netGame) {
   }
   const auto now = static_cast<std::uint64_t>(GetTickCount64());
   bool maySend = false;
-  bool sayHold = false;
-  std::uint64_t waitMs = 0;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     maySend = g_policy.MaySend(now);
-    if (maySend) {
-      g_holdSaid = false;  // a join goes out below: the next hold is a new episode
-    } else if (!g_holdSaid) {
-      g_holdSaid = true;
-      sayHold = true;
-      waitMs = g_policy.nextSendMs() - now;  // MaySend is false, so the next send is later than now
-    }
   }
   if (!maySend) {
     EndProceedRun();
-    if (sayHold) {
-      Log(EchoVR::LogLevel::Info,
-          "[NEVR.LOBBY] join held wait_ms=%llu: the lobby refused the last join, and it is sent when the wait ends",
-          static_cast<unsigned long long>(waitMs));
-    }
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.LOBBY] join held reason=refused_last_join: the join goes out when the back-off ends");
     return;
   }
   // The follow goes on to the game's JoinPartyLobby, which may still refuse it through CanFollowParty (its own check).

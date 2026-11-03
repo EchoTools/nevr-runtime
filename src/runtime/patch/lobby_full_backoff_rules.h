@@ -52,9 +52,6 @@ class Policy {
 
   int refusals() const { return refusals_; }
 
-  // The time the next send is allowed (0 before any refusal). A join held at nowMs waits nextSendMs() - nowMs.
-  std::uint64_t nextSendMs() const { return nextSendMs_; }
-
  private:
   int refusals_ = 0;
   std::uint64_t nextSendMs_ = 0;
