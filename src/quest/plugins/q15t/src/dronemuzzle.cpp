@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 
 #include "dronekill.h"
 #include "dronekill_log.h"
@@ -30,12 +31,23 @@ constexpr std::uintptr_t kRecShooterVel = 0x11c, kRecShooterPos = 0x128, kRecSpa
 constexpr std::uintptr_t kPosePos = 0x10;  // CTransfQ: quaternion +0, position +0x10, scale +0x1c
 constexpr int kShotLines = 40, kTracerLines = 3;  // SHOT_LOG
 
-// the arguments as FireBulletLocal passes them (x0..x3 / x0..x6 + s0): integer registers whole, the speed in s0
+// the arguments as FireBulletLocal passes them (x0..x3 / x0..x6 + s0): integer registers whole, the damage in s0
 using TeleportFn = std::uint64_t (*)(void* gs, std::uint64_t actor, const std::uint8_t* pose, std::uint64_t reason);
-using FireFn = std::uint64_t (*)(std::uint8_t* bcs, std::uint64_t handle, const void* gun, float speed, const void* quat, const void* vel,
+using FireFn = std::uint64_t (*)(std::uint8_t* bcs, std::uint64_t handle, const void* gun, float damage, const void* quat, const void* vel,
                                  std::uint64_t remote, std::uint64_t flag);
 
 std::atomic<int> g_shots{0}, g_tracers{0};
+std::atomic<std::uint64_t> g_last_frame_ns{0};
+constexpr float kDefaultFrameDt = 1.0f / 90.0f;
+std::atomic<float> g_frame_dt{kDefaultFrameDt};
+std::uint64_t (*g_clock_ns)() = nullptr;
+
+std::uint64_t NowNs() {
+  if (g_clock_ns != nullptr) return g_clock_ns();
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ull + static_cast<std::uint64_t>(ts.tv_nsec);
+}
 
 std::uint32_t Tid() { return static_cast<std::uint32_t>(syscall(SYS_gettid)); }
 
@@ -62,25 +74,26 @@ std::uint64_t q15t_dm_teleport(void* gs, std::uint64_t actor, const std::uint8_t
   if (!SafeRead(reinterpret_cast<std::uintptr_t>(pose), moved, sizeof moved)) return next(gs, actor, pose, reason);
   float root[3], spawn[3];
   std::memcpy(root, moved + kPosePos, sizeof root);
-  if (!MuzzleMove(root, v, spawn)) return next(gs, actor, pose, reason);  // |v| < 1e-4: untouched
+  const float dt = g_frame_dt.load(std::memory_order_relaxed);
+  if (!MuzzleMove(root, v, dt, spawn)) return next(gs, actor, pose, reason);  // |v| < 1e-4: untouched
   std::memcpy(moved + kPosePos, spawn, sizeof spawn);
   const std::uint64_t r = next(gs, actor, moved, reason);  // the copy: the caller's pose is never written
   const int n = g_shots.fetch_add(1, std::memory_order_relaxed) + 1;
   if (n == kShotLines + 1) LogKv().S("kind", "shot").U("cap", kShotLines).Emit(NEVR_LOG_INFO, "dronemuzzle: log cap reached, more are counted not written");
   if (n <= kShotLines)
     LogKv().U("shot", static_cast<unsigned long long>(n)).S("remote", remote != 0 ? "1" : "0").V3("root", root).V3("spawn", spawn).V3("velocity", v)
-        .U("tid", Tid()).Emit(NEVR_LOG_INFO, "dronemuzzle: shot");
+        .D("frame_ms", ClampDt(dt) * 1000.0f).U("tid", Tid()).Emit(NEVR_LOG_INFO, "dronemuzzle: shot");
   return r;
 }
 
 // F6. Reached only from the thunk, only for a call that returns into FireBulletLocal.
-std::uint64_t q15t_dm_fire(std::uint8_t* bcs, std::uint64_t handle, const void* gun, float speed, const void* quat, const void* vel,
+std::uint64_t q15t_dm_fire(std::uint8_t* bcs, std::uint64_t handle, const void* gun, float damage, const void* quat, const void* vel,
                            std::uint64_t remote, std::uint64_t flag) {
   using namespace q15t;
   using namespace q15t::dm;
   const auto next = reinterpret_cast<FireFn>(q15t_dm_fire_next.load(std::memory_order_acquire));
   if (next == nullptr) return 0;
-  const std::uint64_t r = next(bcs, handle, gun, speed, quat, vel, remote, flag);
+  const std::uint64_t r = next(bcs, handle, gun, damage, quat, vel, remote, flag);
   int rem = 0;
   const float* v = DroneKillShotVelocity(&rem);
   const float v2 = v != nullptr ? v[0] * v[0] + v[1] * v[1] + v[2] * v[2] : 0.0f;
@@ -216,16 +229,28 @@ DroneMuzzleInstall InstallDroneMuzzle(std::uintptr_t base, const DroneMuzzleSlot
   out.shot_source = DroneKillShotActive();
   LogKv().X("teleport_ret", base + slots.teleport_ret).X("fire_ret", base + slots.fire_ret)
       .S("shot_source", out.shot_source ? "dronekill FireBulletLocal word swapped" : "NONE (dronekill off): the thunks only pass through")
-      .D("muzzle_x", kMuzzle[0]).D("muzzle_y", kMuzzle[1]).D("muzzle_z", kMuzzle[2])
+      .D("muzzle_x", kMuzzle[0]).D("muzzle_y", kMuzzle[1]).D("muzzle_z", kMuzzle[2]).D("back_max_m", kBackMax)
       .Emit(out.shot_source ? NEVR_LOG_INFO : NEVR_LOG_WARNING, "dronemuzzle: on (QA)");
   return out;
 }
 
+// once a frame (the game thread, after ExclusiveUpdateGame)
+void DroneMuzzleTick(std::uintptr_t) {
+  const std::uint64_t now = NowNs(), last = g_last_frame_ns.exchange(now, std::memory_order_relaxed);
+  if (last != 0)
+    g_frame_dt.store(FrameDt(g_frame_dt.load(std::memory_order_relaxed), static_cast<float>(now - last) * 1e-9f), std::memory_order_relaxed);
+}
+
 DroneMuzzleStats GetDroneMuzzleStats() { return {static_cast<std::uint32_t>(g_shots.load()), static_cast<std::uint32_t>(g_tracers.load())}; }
+
+void SetDroneMuzzleClockForTest(std::uint64_t (*now_ns)()) { g_clock_ns = now_ns; }
 
 void ResetDroneMuzzleForTest() {
   g_shots.store(0);
   g_tracers.store(0);
+  g_last_frame_ns.store(0);
+  g_frame_dt.store(kDefaultFrameDt);
+  g_clock_ns = nullptr;
   q15t_dm_tp_ret.store(0);
   q15t_dm_tp_next.store(0);
   q15t_dm_fire_ret.store(0);
