@@ -587,7 +587,11 @@ quest-combat-pack:
 quest-autopilot-run route *args:
     python3 tools/quest_autopilot_run.py --route "{{ route }}" {{ args }}
 
-# The Quest APK of a RELEASE: the repack of the store game with the loader CI built from the release tag. That loader is
+# The Quest APK of a RELEASE: the repack of the reference build with the loader CI built from the release tag. The input is the
+# reference combat build as shipped, `reference_apk` (default $NEVR_QUEST_REFERENCE_APK): tools/quest_release_base.py prepare
+# refuses any other file (its sha256 is pinned there) and renames it to this package, the `just quest-reference-base` step; the
+# store APK has none of the reference build's combat entries (#1994). After the repack, tools/quest_release_base.py check-release
+# refuses an APK that lacks any entry of that base. That loader is
 # the release's own asset (nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so): it is downloaded (tools/quest_release_loader.py
 # fetch: the sha256 GitHub recorded for it, then `gh attestation verify`), checked to carry the tag's version and commit
 # (tools/package_release.py quest-library), repacked, and the signed APK's loader is compared with the asset's sha256 before
@@ -598,7 +602,7 @@ quest-autopilot-run route *args:
 # the tag at that commit); the release (a draft is enough) must carry the asset. Writes
 # build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads nothing and never tags. The APK is
 # published outside GitHub (RELEASING.md, "Quest APKs never go on GitHub").
-release-quest-apk tag store_apk=env("NEVR_STORE_APK"): (_release-quest-apk "release-quest-apk" tag store_apk "" "" "" "")
+release-quest-apk tag reference_apk=env("NEVR_QUEST_REFERENCE_APK"): (_release-quest-apk "release-quest-apk" tag reference_apk "" "" "" "")
 
 # The unlisted variant APK of a release (tools/quest_release_timer.py builds it in the same run as the release APK): the same
 # repack of the store game with the same release loader asset, plus the plugin libraries `plugins` names (one path, or several
@@ -633,7 +637,11 @@ _release-quest-apk label tag store_apk plugin variant pack pack_meta libs="":
     tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}") || { echo "$label: tag $tag is not in this clone" >&2; exit 1; }
     head=$(git rev-parse HEAD)
     [ "$tag_commit" = "$head" ] || { echo "$label: HEAD ${head:0:7} is not the commit of $tag (${tag_commit:0:7}); check out the tag's commit" >&2; exit 1; }
-    [ -f "{{ store_apk }}" ] || { echo "$label: store APK not found: {{ store_apk }}" >&2; exit 1; }
+    if [ -z "$variant" ]; then
+        [ -f "{{ store_apk }}" ] || { echo "$label: reference APK not found: '{{ store_apk }}' (set NEVR_QUEST_REFERENCE_APK to the reference build, #1994)" >&2; exit 1; }
+    else
+        [ -f "{{ store_apk }}" ] || { echo "$label: store APK not found: {{ store_apk }}" >&2; exit 1; }
+    fi
     tools/quest_keystore.sh check
     ver="${tag#v}"
     out="build/quest-release/$tag"
@@ -647,6 +655,13 @@ _release-quest-apk label tag store_apk plugin variant pack pack_meta libs="":
     fi
     rm -rf "$out"
     mkdir -p "$out"
+    # The release APK's base is the pinned reference build renamed to this package (#1994); the variant and combat APKs keep
+    # the store APK they are given.
+    base="{{ store_apk }}"
+    if [ -z "$variant" ]; then
+        base="$out/base/reference-r15.apk"
+        python3 -I tools/quest_release_base.py prepare --apk "{{ store_apk }}" --out "$base" >&2
+    fi
     echo "$label: packaging the $tag loader asset at ${head:0:7}" >&2
     loader_sha=$(python3 -I tools/quest_release_loader.py fetch --tag "$tag" --out "$out/loader")
     python3 tools/package_release.py quest-library --lib "$out/loader/libovrplatformloader.so" --version "$ver" --commit "$tag_commit"
@@ -654,11 +669,14 @@ _release-quest-apk label tag store_apk plugin variant pack pack_meta libs="":
     early=""
     if [ "$variant" = combat ]; then early="libq15t_early.so"; fi
     if [ -n "$pack" ] || [ -n "$early" ] || [ -n "$libs" ]; then
-        just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "$early" "" "$pack" "$pack_meta" "$libs"
+        just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "$early" "" "$pack" "$pack_meta" "$libs"
     else
-        just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver"
+        just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver"
     fi
     python3 -I tools/quest_release_loader.py verify-apk --apk "$out/repack/r15_nevr-sentinel_signed.apk" --sha256 "$loader_sha"
+    if [ -z "$variant" ]; then
+        python3 -I tools/quest_release_base.py check-release --apk "$out/repack/r15_nevr-sentinel_signed.apk" --base "$base" >&2
+    fi
     cp -f "$out/repack/r15_nevr-sentinel_signed.apk" "$out/$name"
     (cd "$out" && sha256sum "$name" > "$name.sha256")
     cat "$out/$name.sha256"
