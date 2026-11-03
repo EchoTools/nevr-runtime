@@ -69,7 +69,7 @@ EXPECT_ORIGIN = r"^(git@github\.com:|https://github\.com/|ssh://git@github\.com/
 
 def redact_url(text: str) -> str:
     """Replace the userinfo of every URL in text (a token or password before "@") with <redacted>."""
-    return re.sub(r"(://)[^/@\s]+@", r"\1<redacted>@", text)
+    return re.sub(r"(://)[^/\s]+@", r"\1<redacted>@", text)
 
 def git(*args, cwd):
     """Run git. A missing git binary is a failed result (127), never an exception."""

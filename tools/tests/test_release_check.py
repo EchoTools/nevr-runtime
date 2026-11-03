@@ -137,6 +137,13 @@ class ReleaseCheckTest(unittest.TestCase):
         self.assertNotIn("ghp_FAKEcredential", "\n".join(found))
         self.assertIn("<redacted>@", "\n".join(preflight))
 
+    def test_redaction_covers_an_at_sign_in_the_password(self):
+        from release_preflight import redact_url
+        self.assertEqual(redact_url("https://u:p@ss@example.invalid/x"), "https://<redacted>@example.invalid/x")
+        self.assertEqual(redact_url("git@github.com:EchoTools/nevr-runtime.git"),
+                         "git@github.com:EchoTools/nevr-runtime.git")
+        self.assertEqual(redact_url("https://example.invalid/a@b"), "https://example.invalid/a@b")
+
     def test_env_example_lists_every_input(self):
         example = (pathlib.Path(__file__).resolve().parent.parent.parent / ".env.example").read_text()
         for name, _, _ in release_check.INPUTS:
