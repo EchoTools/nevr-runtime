@@ -50,13 +50,17 @@ inline bool FailureCode(const void* msg, std::int8_t* code) noexcept {
   return true;
 }
 
-// The game's own gate: status - 4 < 3 (unsigned). A refusal the game ignores is neither counted nor shown.
-inline bool StatusGateOpen(const void* self) noexcept {
-  if (self == nullptr) return false;
+// The game's status word (+0x448), 0 when there is no object.
+inline std::int32_t LobbyStatus(const void* self) noexcept {
   std::int32_t status = 0;
-  std::memcpy(&status, static_cast<const std::uint8_t*>(self) + kLobbyStatusOffset, sizeof status);
-  return static_cast<std::uint32_t>(status - 4) < 3U;
+  if (self != nullptr) std::memcpy(&status, static_cast<const std::uint8_t*>(self) + kLobbyStatusOffset, sizeof status);
+  return status;
 }
+
+// The game's own gate: status - 4 < 3 (unsigned). A refusal the game ignores is neither counted nor shown.
+inline bool GateOpenFor(std::int32_t status) noexcept { return static_cast<std::uint32_t>(status - 4) < 3U; }
+
+inline bool StatusGateOpen(const void* self) noexcept { return self != nullptr && GateOpenFor(LobbyStatus(self)); }
 
 // What the hook copies out of the game's objects before the original callback runs: the payload belongs to the game and
 // may be released when the callback returns (the PC twin, #1443).
@@ -64,12 +68,14 @@ struct RefusalReads {
   bool gateOpen = false;
   std::uint8_t* game = nullptr;  // *(self + kLobbyGameOffset)
   char message[nevr_lobby_failure_message::kMessageSize] = {};
+  std::int32_t status = 0;  // the status word the gate was decided from, read once
 };
 
 inline RefusalReads ReadRefusal(const void* self, const void* msg) noexcept {
   RefusalReads r;
   if (self == nullptr || msg == nullptr) return r;
-  r.gateOpen = StatusGateOpen(self);
+  r.status = LobbyStatus(self);
+  r.gateOpen = GateOpenFor(r.status);
   std::memcpy(&r.game, static_cast<const std::uint8_t*>(self) + kLobbyGameOffset, sizeof r.game);
   const void* payload = nullptr;
   std::memcpy(&payload, static_cast<const std::uint8_t*>(msg) + kFailureDataOffset, sizeof payload);

@@ -136,6 +136,7 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
                         {{"status", "refusal_dropped"},
                          {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
                          {"reason", "status_gate_closed"},
+                         {"game_status", reads.status},
                          {"msg",
                           "the game ignored this refusal, so the back-off does not count it and no message is shown"}});
     return;

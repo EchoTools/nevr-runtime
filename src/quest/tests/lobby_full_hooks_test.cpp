@@ -161,6 +161,11 @@ TEST(ARefusalWhileTheStatusIsOutOfRangeWritesNothingAndSaysTheDroppedReasonOnce)
   CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\"", "\"reason\":\"status_gate_closed\""}), 1);
   CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_dropped\"", "\"reason\":\"status_gate_closed\""}),
            3);
+  // Each status is in its own record: the first is Info, and each repeat is Debug with the status it saw.
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\"", "\"game_status\":0"}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_dropped\"", "\"game_status\":3"}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_dropped\"", "\"game_status\":7"}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_dropped\"", "\"game_status\":9"}), 1);
   const Line* dropped = FindAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\""});
   CHECK(dropped != nullptr);
   if (dropped != nullptr) {
