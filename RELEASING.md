@@ -232,7 +232,7 @@ just publish-quest-apk vX.Y.Z   # puts the APK and its .sha256 on the release ho
 ```
 
 The recipe takes the bucket, the public host, the release-signer executable and checkout and a GitHub read token from the
-environment and nothing else: `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `RELEASE_PUBLIC_BASE`,
+environment and nothing else (`just` loads `.env` into it, and `just release-check` checks every one up front, #1997): `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `RELEASE_PUBLIC_BASE`,
 `RELEASE_SIGNER_BIN`, `RELEASE_SIGNER_DIR`, `GH_TOKEN` and `NEVR_RCLONE_REMOTE`. A missing one is a refusal that names it. The
 APK goes up through the signer's `put-quest-apk`, which checks that the release is published, that the APK was built from the
 tag's commit and that it carries the pinned signer certificate, and writes the object only if absent. The recipe then fetches

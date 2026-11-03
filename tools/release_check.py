@@ -17,10 +17,12 @@ What it checks:
   1. this clone is exactly origin/main (tools/release_preflight.py, every one of its checks);
   2. every input in INPUTS is set and not empty;
   3. every input that names a file names an existing, readable file (the signer: an executable one, or a name on PATH);
+  3p. every file input in PINS is the file it is pinned to (its sha256), so a wrong file fails here, not mid-build;
   4. every program in PROGRAMS is on PATH.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
 import shutil
@@ -29,6 +31,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from release_preflight import redact_url  # noqa: E402
+from quest_release_base import REFERENCE_APK_SHA256  # noqa: E402
 
 # Every input a release reads, once each: (name, is it a file, what it is). `.env.example` lists the same names.
 INPUTS: tuple[tuple[str, bool, str], ...] = (
@@ -46,6 +49,11 @@ INPUTS: tuple[tuple[str, bool, str], ...] = (
     ("GH_TOKEN", False, "a GitHub token for the release repository"),
 )
 
+# File inputs that must be one exact file, by sha256. Each pin lives once, where the build uses it, and is read from there.
+PINS: dict[str, str] = {
+    "NEVR_QUEST_REFERENCE_APK": REFERENCE_APK_SHA256,  # tools/quest_release_base.py, the reference combat build
+}
+
 # The programs the release path runs (AGENTS.md, "Quest APK", plus the publish and the preflight).
 PROGRAMS: tuple[str, ...] = (
     "git", "gh", "python3", "rclone", "unzip", "zip", "zipalign", "apksigner", "aapt2", "keytool", "patchelf",
@@ -53,8 +61,18 @@ PROGRAMS: tuple[str, ...] = (
 )
 
 
-def problems(env: dict[str, str], root: pathlib.Path, run_preflight: bool = True) -> list[str]:
+def _sha256(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def problems(env: dict[str, str], root: pathlib.Path, run_preflight: bool = True,
+             pins: dict[str, str] | None = None) -> list[str]:
     """Every problem with the release's inputs, in a fixed order. Empty means ready."""
+    pins = PINS if pins is None else pins
     out: list[str] = []
     if run_preflight:
         pre = subprocess.run([sys.executable, str(root / "tools" / "release_preflight.py")], cwd=root,
@@ -81,6 +99,8 @@ def problems(env: dict[str, str], root: pathlib.Path, run_preflight: bool = True
                 out.append(f"{name} names no file ({what})")
             elif not os.access(path, os.R_OK):
                 out.append(f"{name} names a file this user can't read ({what})")
+            elif name in pins and _sha256(path) != pins[name]:
+                out.append(f"{name} is not the pinned file ({what}): its sha256 differs from the pin")
     for program in PROGRAMS:
         if shutil.which(program, path=env.get("PATH")) is None:
             out.append(f"{program} is not on PATH")

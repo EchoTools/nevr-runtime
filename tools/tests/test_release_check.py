@@ -34,12 +34,13 @@ class ReleaseCheckTest(unittest.TestCase):
             else:
                 self.env[name] = f"value-of-{name}"
         self.root = base
+        self.pins = {name: release_check._sha256(pathlib.Path(self.env[name])) for name in release_check.PINS}
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def check(self, env):
-        return release_check.problems(env, self.root, run_preflight=False)
+        return release_check.problems(env, self.root, run_preflight=False, pins=self.pins)
 
     def test_everything_present_is_ready(self):
         self.assertEqual(self.check(self.env), [])
@@ -143,6 +144,16 @@ class ReleaseCheckTest(unittest.TestCase):
         self.assertEqual(redact_url("git@github.com:EchoTools/nevr-runtime.git"),
                          "git@github.com:EchoTools/nevr-runtime.git")
         self.assertEqual(redact_url("https://example.invalid/a@b"), "https://example.invalid/a@b")
+
+    def test_a_file_that_is_not_its_pin_is_named(self):
+        pathlib.Path(self.env["NEVR_QUEST_REFERENCE_APK"]).write_text("the store APK, say")
+        found = self.check(self.env)
+        self.assertEqual(len(found), 1)
+        self.assertIn("NEVR_QUEST_REFERENCE_APK is not the pinned file", found[0])
+
+    def test_the_reference_pin_is_the_builds_own(self):
+        import quest_release_base
+        self.assertEqual(release_check.PINS["NEVR_QUEST_REFERENCE_APK"], quest_release_base.REFERENCE_APK_SHA256)
 
     def test_env_example_lists_every_input(self):
         example = (pathlib.Path(__file__).resolve().parent.parent.parent / ".env.example").read_text()
