@@ -6,10 +6,14 @@ defect is there: a PR's headset check, an issue's falsifier, a probe build's mea
 ## Context
 
 A headset run read after the fact ("it didn't look right before, it looks right now") cannot tell a fix from a
-coincidence, and cannot catch a regression nobody was looking for. `docs/standards/verification.md` requires every check
-to be falsified ("You SHALL falsify every check you add"), but it is about sensors and tests; nothing requires a
-headset or client run to state its expected result before it starts. ADR 0004 (the Quest verification regime) has no
-prediction rule either.
+coincidence, and cannot catch a regression nobody was looking for.
+
+The ADRs already work the other way. ADRs 0007, 0009, 0014, 0015, 0018 and 0020 to 0026 each carry a "Prediction"
+section written before the first headset run. ADR 0019's section 11 is a table of predictions with a falsifier and the
+place each is tested (`docs/adr/0019-quest-plugin-loader.md`, "Verification and predictions"). What no rule covers is
+the run that is not an ADR's: a PR's headset check or an issue's falsifier. `docs/standards/verification.md` requires
+every check to be falsified ("You SHALL falsify every check you add"), but it is about sensors and tests, and ADR 0004
+(the Quest verification regime) has no prediction rule.
 
 The release redesign (#1997) writes each suggestion with a hypothesis, a prediction, what refutes it and the test. Some
 headset sheets already list what the player should see per step (`docs/testing/quest-texture-quality-headset-sheet.md`,
@@ -22,8 +26,9 @@ nudges the analysis toward the result one hoped for; exploratory work stays allo
 
 ## Decision
 
-1. **A run has a row, written before it.** Each check of a headset or client run has one row, in the PR body (for a PR's
-   check) or the issue (for a defect's falsifier), committed or posted before the run. The row holds:
+1. **A run has a row, written before it**, as the ADRs' "Prediction" sections already are. Each check of a headset or
+   client run has one row, in the ADR, the PR body (for a PR's check) or the issue (for a defect's falsifier), committed
+   or posted before the run. The row holds:
    - **H**: the hypothesis, one sentence.
    - **Predict**: the exact log lines (event and fields) and values expected, per headset or platform where they differ
      (a Quest 2 and a Quest 3 are named separately when a value depends on the headset).
