@@ -94,16 +94,15 @@ build, what to do) is not optional.
 - **Where it runs.** On a worker thread started from the pre-game point; the `android_main` thread waits on it (as
   `WaitForStorage` waits), so the game's own initialization order is untouched. After the storage permission is granted
   (ADR 0009), since the files go to shared storage.
-- **Disk space.** `statvfs` on the target volume before the first byte: the zip (about 1.6 GB) plus the extracted tree (the
-  zip's entries total 1,635,311,504 bytes, `kZipExtractedBytes`, plan.h) plus headroom, doubled in the mismatch case where the old
-  `_data` stays. Not enough: no download, the floor message names the free and needed MiB.
+- **Disk space.** `statvfs` on the target volume before the first byte: the zip (about 937 MB) plus the extracted tree plus
+  headroom, the same 2.2 GiB figure `tools/quest-install.sh` uses, doubled in the mismatch case where the old `_data` stays. Not
+  enough: no download, the floor message names the free and needed MiB.
 - **Download, resume, retry.** Into `<root>/_data.zip.part` (a name our code creates), HTTP `Range` from the part's size, a
   bounded number of attempts with backoff (2, 4, 8, 16 s, then 30 s between attempts, slept in 250 ms slices that a cancel ends), then give up to the floor. The whole-file sha256 is verified at the end only (the
   pin is one digest of the zip); a mismatch deletes that `.part` and counts as a failed attempt, never a retry on the same bytes.
-  **Where from.** `kZipUrl` (plan.h) is `https://evr.echo.taxi/nevr-runtime/data/echovr-data-14955d69d6ea.zip`, named from its own
-  sha256 (first 12 hex). `kZipSha256` pins the whole file and `kZipBytes` its length. Its listing holds the stock manifest
-  (`PinnedListingMatchesThePins`, `src/quest/tests/data_test.cpp`); the two packages `package_pins.h` describes are in it too, at
-  the lengths the pins give. The digest check is what makes the file trusted.
+  **Where from (2026-10-27).** `kZipUrl` is `https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip`: the same bytes under a name made
+  from their own sha256 (first 12 hex), listed as the `game-data` artifact in the signed release manifest. It replaced the bare
+  `https://mia.cdn.echo.taxi/_data.zip`, which names no version. The digest check is unchanged and is what makes the file trusted.
 - **Extract.** Into `<root>/_data.staging-<sha prefix>/`, every entry path checked to stay inside that directory (a zip entry
   with `..` or an absolute path is a failure of the whole fetch), then one `rename` to `<root>/_data`. Every item the step
   creates in the root (the `.part`, the staging directory, a kept `_data.replaced-<utc stamp>`) has a marker file beside it,
@@ -114,32 +113,28 @@ build, what to do) is not optional.
   deletes a name that only carries our prefix, the `.part` (it is kept so the download can resume), or a `_data.replaced-*`.
   `_data` itself exists only when complete: "no partial root left behind" means the game can never see a half-extracted
   `_data`. The root is synced after each rename.
-- **After success.** Delete the zip we downloaded (about 1.6 GB), nothing else.
+- **After success.** Delete the zip we downloaded (about 937 MB), nothing else.
 - **Logging** (repo rule: every path logs, queryable): one structured sentinel event per step, with the path, bytes, free space and
   result: `data_check` (with `data_version`, the folder under `_data` that holds the manifest the game reads, and `manifest_sha256`, the
   sha256 of that file, both read from the root and never from the pins, so a report says which data the player has; `none` when
   there is none), `data_fetch` (start, progress at a coarse interval, retry, verified, failed with the reason),
   `data_extract`, `data_swap`, and after a fetch a `data_version` event with the same two fields for the data it placed. No URL query strings or credentials in them (there are none).
-- **The packages.** The data step checks the package files the data's manifest points into,
-  `<root>/_data/<version folder>/rad15/android/packages/<manifest id>_<index>`, against the pins in `src/quest/data/package_pins.h`.
-  The table names a data set by its manifest digest and lists each package with its byte length and its sha256. Today it holds the
-  combat pack's data set: the stock package `_0` and the pack's package `_1`. The stock manifest is not in the table: a wrong pin
-  there would be a false alarm on every player's headset.
-  The check runs on every use of the data (`CheckPackages`, `src/quest/data/data_step.cpp`). Every build sets `require_packages`
-  (`src/quest/sentinel/entry.cpp`), so the check uses the build's required set whatever manifest the root holds: a root with the
-  stock manifest and no `_1` is refused like any other (issue #1934). The first package that fails refuses the data. It logs a
-  `data_packages` Error (`package`, `path`, `outcome` `missing|short|oversize|sha_mismatch|unreadable`, `expected_bytes`,
-  `found_bytes`, `expected_sha256` and `found_sha256` for a digest mismatch, `consequence`) and a `data_step` Error with
-  `outcome=packages_invalid`. The player sees "Echo VR game data is incomplete: <path> ..." with the advice to install the data
-  again, shown and held `refusal_hold_ms` (5 s) twice, in a release build too; the process then ends nonzero with reason
-  `packages_invalid`. Nothing is fetched or used on that path.
-  Sizes are measured on every launch, in index order. Once every size matched, each package with a pinned digest is hashed in
-  64 KiB chunks, once per build: the marker file `<root>/nevr-data-packages.verified`, whose whole content is
-  `<set manifest sha256> <build id>\n`, is then written (a temporary and a rename), and a later launch with the same content skips
-  the hash (`sha=skipped`). A same-size replacement of a package made after its digest was checked for the build is not detected
-  until the next build. With no build id nothing is hashed or written (`sha=not_due`). A marker that cannot be written is a Warning,
-  and the check still passes. Success is one `data_packages` info line (`outcome=verified`, `packages`, `sha=checked|skipped|not_due`).
-  The check does not repair a refused root: the player installs the game data again, and the next launch checks it again.
+- **The packages.** The presence check above reads the manifest alone. When the data is in use and the manifest's sha256 (the
+  `manifest_sha256` of `data_check`) is in the pinned table `src/quest/data/package_pins.h`, the step also checks the package files
+  the manifest points into, `<root>/_data/<version folder>/rad15/android/packages/<manifest id>_<index>`. The table names a data set
+  by its manifest digest and lists each package with its byte length and, for the file a bundled content pack adds, its sha256; today
+  it holds the combat pack's manifest. The stock manifest is not in the table, and a manifest outside it is logged as `data_packages`
+  `outcome=unpinned` and used as before. Every launch measures each pinned package, in index order (`CheckPackages`,
+  `src/quest/data/data_step.cpp`). Only when every length matched, and only on the first launch of a build, the pack's added package
+  is hashed in 64 KiB chunks; the marker file `<root>/nevr-data-packages.verified`, whose whole content is `<manifest sha256>
+  <build id>\n`, is then written (a temporary and a rename), and a later launch with the same content skips the hash (`sha=skipped`).
+  With no build id nothing is hashed or written (`sha=not_due`). A package that is missing, short, oversize, unreadable or of the wrong
+  digest ends the check at the first one with a single `data_packages` Warning (`root`, `data_version`, `package`, `outcome`
+  `missing|short|oversize|sha_mismatch|unreadable`, `expected_bytes`, `found_bytes`, `consequence`); no marker is written. The decision
+  stays "use": a stock re-fetch would give a player of the pack the stock data and not bring the pack back, so the step logs and the
+  game starts on the data that is there. It shows the player no message. When the APK carries the pack, the pack step that follows
+  (ADR 0029, idempotence) writes a missing or wrong package again. Success is one `data_packages` info line (`outcome=verified`,
+  `packages`, `sha=checked|skipped|not_due`).
 
 ## What the player sees (the open problem)
 

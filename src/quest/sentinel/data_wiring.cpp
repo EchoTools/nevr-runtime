@@ -181,14 +181,12 @@ void EndFailed(const char* reason) noexcept {
 // The message stays up long enough to read: shown, held, shown again, held (two holds of hold_ms, ten seconds). With
 // hold_ms 0 (a release build: no presenter is known to draw, docs/adr/0013) nothing is held and the message is not
 // shown a second time.
-void HoldMessageFor(const std::string& message, unsigned holdMs) noexcept {
-  if (holdMs == 0) return;
-  Sleep(holdMs);
+void HoldMessage(const std::string& message) noexcept {
+  if (Opts().hold_ms == 0) return;
+  Sleep(Opts().hold_ms);
   Present(message, "floor");
-  Sleep(holdMs);
+  Sleep(Opts().hold_ms);
 }
-
-void HoldMessage(const std::string& message) noexcept { HoldMessageFor(message, Opts().hold_ms); }
 
 // The APK this process runs from, taken from where the linker mapped the sentinel (`<apk>!/lib/...`, or a library extracted
 // next to `base.apk`); empty when neither says.
@@ -271,9 +269,6 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   config.legacy_root_readable = granted;
   config.allow_fetch = Opts().allow_fetch;
   config.engine_root = engineRoot;
-  // The package refusal (issue #1934): the required set is the first entry of the table the test seam names, else the pinned set.
-  config.require_packages = Opts().require_packages;
-  config.required_set = Opts().pinned_set_count > 0 ? Opts().pinned_sets : nullptr;
   // Without the grant an unwritable media root is reported once, with the Storage advice, not twice.
   if (!granted) config.bad_root_message = data::kNeedsStoragePermission;
   config.build_id = sentinel::pinned::kLibR15StockBuildId;
@@ -293,7 +288,6 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   config.fetch.on_event = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kInfo, e); };
   config.on_step = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kInfo, e); };
   config.on_step_warn = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kWarn, e); };
-  config.on_step_error = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kError, e); };
   std::string lastMessage;
   config.present = [&lastMessage](const std::string& message) {
     lastMessage = message;
@@ -304,8 +298,6 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
     // The toast lasts a few seconds: show it again once so a player who looked away still reads it.
     HoldMessage(lastMessage);
   };
-  // A refusal holds its own time (refusal_hold_ms), in release builds too: hold_ms is 0 there.
-  config.hold_refusal = [&lastMessage] { HoldMessageFor(lastMessage, Opts().refusal_hold_ms); };
 
   std::unique_ptr<data::CurlTransport> ownedTransport;
   data::Transport* transport = Opts().transport;
@@ -317,16 +309,11 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
 
   const bool failed = result.outcome == data::StepOutcome::kFailed;
   const bool missing = result.outcome == data::StepOutcome::kMissing;
-  const bool refused = result.outcome == data::StepOutcome::kPackagesInvalid;
-  // `package` and `path` are carried only by the outcomes that name a file (the refusal, and the missing manifest).
-  std::vector<sentinel::LogField> stepFields = {{"outcome", data::StepOutcomeName(result.outcome)},
-                                                {"root", result.root.c_str()},
-                                                {"status", data::FetchStatusName(result.status)},
-                                                {"message", result.message.c_str()}};
-  if (!result.package.empty()) stepFields.emplace_back("package", result.package.c_str());
-  if (!result.path.empty()) stepFields.emplace_back("path", result.path.c_str());
-  sentinel::LogFieldList(failed || missing || refused ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo, "data_step",
-                         stepFields.data(), stepFields.size());
+  sentinel::LogFields(failed || missing ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo, "data_step",
+                      {{"outcome", data::StepOutcomeName(result.outcome)},
+                       {"root", result.root.c_str()},
+                       {"status", data::FetchStatusName(result.status)},
+                       {"message", result.message.c_str()}});
   if (failed && !granted && result.status == data::FetchStatus::kBadRoot) {
     // The media root cannot be written and there is no permission: the step already showed and held the Storage
     // message (bad_root_message), so this only records why the process ends.
@@ -338,11 +325,6 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   }
   if (missing) {
     EndFailed("game_data_missing");
-    return;
-  }
-  // The data is there but a package of the build's set is not whole: refused (the message was shown and held by the step).
-  if (refused) {
-    EndFailed("packages_invalid");
     return;
   }
   // The data is in place (found or fetched): the bundled pack, when this APK carries one, goes over it. A release build

@@ -919,7 +919,6 @@ void AReleaseBuildWithoutDataShowsTheMissingMessageHoldsNothingAndEndsNonzero() 
   QCHECK(got == want);
   QCHECK(Has(LineOf("data_step"), "\"outcome\":\"missing\""));
   QCHECK(Has(LineOf("data_check"), "\"root\":\"" + Legacy() + "\""));
-  QCHECK(Has(LineOf("data_step"), "\"path\":\"" + Legacy() + "/" + kManifestRel + "\""));  // the manifest it looked for
 }
 
 void AReleaseBuildWithoutDataEndsTheSameOnTheMicGrantedPath() {
@@ -961,46 +960,6 @@ void AReleaseBuildWithAnObbServingTheMediaRootLooksThereAndWritesNothing() {
   QCHECK(rig.net.calls == 0 && !Exists(rig.options.fetch_root_override));
   QCHECK(g_ends == 1 && g_exit_reason == "game_data_missing");
   QCHECK(Has(LineOf("data_check"), "\"root\":\"" + Media() + "\""));
-}
-
-// ---- the package refusal in a release build (issue #1934): a data set whose package is absent refuses to start ----
-
-// A one-package set standing in for the build's set: package 1, which the root does not hold (the legacy root is not a
-// directory on the host, so the real check finds it missing).
-const nevr_quest::data::PinnedPackage kRefusalPackages[1] = {
-    {1, 6, "decc77fdfc8ecd3b75ad3120f33dd1980a6a1f8c4c50f566ceb6483d9092db02", true}};
-const nevr_quest::data::PinnedDataSet kRefusalSet = {
-    "e1c4903622e4acf5b747f591868ef67d623e619ee63fd4af0268a593874a63e1", kRefusalPackages, 1};
-
-void APackageAbsentRefusesToStartInAReleaseBuild() {
-  Rig rig;
-  rig.options.allow_fetch = false;
-  rig.options.hold_ms = 0;  // entry.cpp: a release build holds nothing, the refusal holds refusal_hold_ms
-  rig.options.require_packages = true;
-  rig.options.pinned_sets = &kRefusalSet;
-  rig.options.pinned_set_count = 1;
-  DataIn(Legacy());  // the data is there, its package is not
-  rig.BootRequest();
-  QCHECK(rig.net.calls == 0 && !Exists(rig.options.fetch_root_override));  // nothing fetched or written
-  QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "packages_invalid");
-  // shown, held, shown again, held, then the process ends: the refusal holds its own time, not hold_ms (0 here).
-  QCHECK(g_shown.size() == 2 && g_shown[0] == g_shown[1]);
-  QCHECK(g_shown.size() == 2 && Has(g_shown[0], "packages/48037dc70b0ecab2_1 is missing."));
-  QCHECK(g_shown.size() == 2 &&
-         Has(g_shown[0], "Install the Echo VR game data again with the installer you used, then start the game again."));
-  const std::vector<std::string> want = {"show", "sleep:5000", "show", "sleep:5000", "end"};
-  std::vector<std::string> got;
-  for (const std::string& e : g_log) {
-    if (e == "sleep:5000" || e == "sleep:7" || e == "show" || e == "end") got.push_back(e);
-  }
-  QCHECK(got == want);
-  const std::string refused = LineOf("data_packages");
-  QCHECK(Has(refused, "\"level\":\"error\""));
-  QCHECK(Has(refused, "\"package\":\"48037dc70b0ecab2_1\""));
-  QCHECK(Has(refused, "\"outcome\":\"missing\""));
-  QCHECK(Has(refused, "\"path\":\"") && Has(refused, "packages/48037dc70b0ecab2_1\""));
-  QCHECK(Has(LineOf("data_step"), "\"outcome\":\"packages_invalid\""));
-  QCHECK(Has(LineOf("data_step"), "\"package\":\"48037dc70b0ecab2_1\""));
 }
 
 // ---- the bundled content pack, after the data step (ADR 0029) ----
@@ -1421,7 +1380,6 @@ int main() {
   AReleaseBuildWithoutTheStorageGrantShowsTheStorageMessageHoldsNothingAndEndsNonzero();
   AReleaseBuildWithDataUsesItAndSaysNothing();
   AReleaseBuildWithAnObbServingTheMediaRootLooksThereAndWritesNothing();
-  APackageAbsentRefusesToStartInAReleaseBuild();
   ThePackIsPlacedAfterTheDataStepUsedTheDataAndTheGameContinues();
   ThePackIsPlacedOverDataTheDataStepFetched();
   AReleaseBuildPlacesThePackToo();

@@ -16,7 +16,6 @@
 #include <utility>
 #include <vector>
 
-#include "quest/data/fetch.h"
 #include "quest/data/plan.h"
 #include "quest/data/sha256.h"
 #include "quest/data/staging.h"
@@ -369,9 +368,9 @@ TEST(PinnedListingMatchesThePins) {
   CHECK_EQ(pinned_zip::kDirectoryOffset + sizeof(pinned_zip::kDirectory), kZipBytes);
   std::vector<ZipEntry> entries;
   std::string detail;
-  const ZipLimits limits = FetchConfig().zip_limits;  // the limit the fetch reads the pinned zip with (issue #1934)
+  ZipLimits limits;
   CHECK_EQ(ReadZipListing(path, limits, &entries, &detail), ZipStatus::kOk);
-  CHECK_EQ(entries.size(), static_cast<std::size_t>(11));
+  CHECK_EQ(entries.size(), static_cast<std::size_t>(10));
   bool manifest = false;
   for (const ZipEntry& e : entries) {
     CHECK(e.name.compare(0, std::strlen(kZipPrefix), kZipPrefix) == 0);
