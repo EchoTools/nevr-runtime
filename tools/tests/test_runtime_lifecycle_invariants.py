@@ -546,9 +546,20 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         hook = extract_braced_function(source, "HRESULT WINAPI CoCreateInstanceHook(")
         self.assertRegex(hook, r"Log\(SUCCEEDED\(hr\)\s*\?\s*EchoVR::LogLevel::Info\s*:\s*EchoVR::LogLevel::Warning")
         install = extract_braced_function(source, "static bool InstallMsxml6PassThroughHook(")
-        attach_failure = install.split("Hooking::Attach", 1)[1].split("return false;", 1)[0]
+        attach_failure = install.split("PatchDetour(", 1)[1].split("return false;", 1)[0]
         self.assertIn("EchoVR::LogLevel::Warning", attach_failure)
         self.assertNotIn("EchoVR::LogLevel::Error", attach_failure)
+
+    def test_platform_compat_hooks_install_through_patchdetour_and_retire_at_shutdown(self):
+        # HookGuard guards only the hooks it records. Each install goes through PatchDetour under the export's name,
+        # and the shutdown forgets each record before MH_Uninitialize restores the game's bytes.
+        source = strip_comments((ROOT / "src/modules/platform-compat/src/platform_compat.cpp").read_text())
+        self.assertNotIn("Hooking::Attach(", source, "a raw attach is not recorded in HookGuard")
+        for export in ("AcquireCredentialsHandleW", "CreateDirectoryW", "CreateDirectoryA", "CoCreateInstance"):
+            self.assertRegex(source, r'PatchDetour\(&\w+,[^;]*"' + export + r'"\)', export)
+        shutdown = extract_braced_function(source, "NEVR_MODULE_API void platform_compat_Shutdown(")
+        self.assertEqual(shutdown.count("RetireHookRecord("), 4, "each of the four hooks is forgotten at shutdown")
+        self.assertLess(shutdown.index("RetireHookRecord("), shutdown.index("Hooking::Shutdown()"))
 
     def test_verify_server_supplies_a_config_when_the_install_has_none(self):
         # Issue #245: a server with no config.yaml gets no embedded defaults and refuses to boot without a

@@ -30,6 +30,7 @@
 #include "runtime/log/security_diagnostics.h"
 #include "nevr/pc/nevr_common.h"      // N97: the one ValidatePrologue
 #include "runtime/hook/addresses.h"
+#include "runtime/hook/patching.h"  // PatchDetour records the hook in HookGuard; Shutdown forgets the record
 
 using json = nlohmann::json;
 
@@ -62,6 +63,8 @@ bool g_hookInstalled = false;
 
 typedef void* (__fastcall* LoadoutResolveDataFromIdFunc)(void* context, int64_t loadout_id);
 LoadoutResolveDataFromIdFunc g_originalFunc = nullptr;
+// The game's address the hook is installed at; Shutdown forgets its HookGuard record. Set with g_hookInstalled.
+void* g_hookTarget = nullptr;
 
 // ============================================================================
 // Tint data map — written by background thread, read by hook
@@ -412,9 +415,10 @@ void nevr_asset_cdn::Initialize() {
 
     g_originalFunc = reinterpret_cast<LoadoutResolveDataFromIdFunc>(target);
 
-    BOOL success = Hooking::Attach(
-        reinterpret_cast<PVOID*>(&g_originalFunc),
-        reinterpret_cast<PVOID>(Hook_LoadoutResolveDataFromId));
+    BOOL success = PatchDetour(
+        &g_originalFunc,
+        reinterpret_cast<PVOID>(Hook_LoadoutResolveDataFromId),
+        "Loadout_ResolveDataFromId");
 
     if (!success) {
         Log(EchoVR::LogLevel::Error,
@@ -424,6 +428,7 @@ void nevr_asset_cdn::Initialize() {
         return;
     }
 
+    g_hookTarget = target;
     g_hookInstalled = true;
     Log(EchoVR::LogLevel::Info,
         "[NEVR.CDN] Loadout_ResolveDataFromId hook installed at %p — CDN tint override active", target);
@@ -473,6 +478,9 @@ void nevr_asset_cdn::Shutdown() {
     // disables the hook (MH_DisableHook); the trampoline stays allocated, so the pointer stays valid.
     const bool hookWasInstalled = g_hookInstalled;
     if (g_hookInstalled) {
+        // The record goes first: the disable restores the game's bytes, and a record still in place would report them.
+        nevr_hook_guard::Retire(g_hookTarget);
+        g_hookTarget = nullptr;
         Hooking::Detach(
             reinterpret_cast<PVOID*>(&g_originalFunc),
             reinterpret_cast<PVOID>(Hook_LoadoutResolveDataFromId));
