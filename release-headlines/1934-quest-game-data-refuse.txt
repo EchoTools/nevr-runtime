@@ -1,1 +1,0 @@
-On Quest, when the game data is missing or damaged, the game stops at a message that names the missing file and asks you to run the installer again.

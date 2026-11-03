@@ -2,9 +2,8 @@
  * data is missing, and say so in words a player can read when it cannot be had.
  *
  * Decide (plan.h) picks use, fetch or replace; RunFetch does the download, verification, extraction and swap. When the
- * data is in use, the package files of the build's pinned set (package_pins.h) are checked and a `data_packages` event says
- * the result. With require_packages a failing package refuses the data (kPackagesInvalid: presented, held, nothing used); without
- * it the failure is logged and the data is still used. A fetch
+ * data is in use and its manifest is in the pinned table (package_pins.h), the package files the manifest points into are
+ * checked and a `data_packages` event says the result; a failure is logged and the data is still used. A fetch
  * that fails is shown through `present` (the visible message, the floor of the plan) and held through `hold` so it can
  * be read before the caller ends the process. Nothing here exits, throws or touches the game: the caller (the
  * permission-wait hook's after-storage step) owns the process.
@@ -29,8 +28,6 @@ enum class StepOutcome {
   kFetched,  // the data was fetched and is in place
   kFailed,   // the data could not be had; the floor message was presented
   kMissing,  // the data is not there and this build does not fetch (allow_fetch false); kGameDataMissing was presented
-  kPackagesInvalid,  // require_packages: a package of the build's set is missing, short, oversize or fails its pin; the
-                     // message was presented and held, nothing was fetched or used (StepResult::package, path, package_outcome)
 };
 
 const char* StepOutcomeName(StepOutcome outcome) noexcept;
@@ -50,7 +47,7 @@ std::string BuildFloorMessage(const FloorInfo& info);
 
 // Shown when a download is about to start, so a first-run player does not read the wait as a hang.
 inline constexpr const char* kDownloadNotice =
-    "Downloading Echo VR game data, about 1.6 GB, this can take a few minutes.";
+    "Downloading Echo VR game data, about 900 MB, this can take a few minutes.";
 
 // Shown when the storage permission was not granted and the media root could not be written either. Without the grant
 // the legacy root cannot be looked at: data the player already has there is only usable once Storage is allowed.
@@ -109,14 +106,6 @@ struct StepConfig {
   // Test seam: the table of pinned data sets. Null: the pinned table (package_pins.h).
   const PinnedDataSet* pinned_sets = nullptr;
   std::size_t pinned_set_count = 0;
-  // The package refusal (issue #1934). With require_packages the package files of required_set (null: kPinnedDataSets[0])
-  // are checked on every use of the data, whatever manifest the root holds, and a file that is missing, short, oversize,
-  // fails its pinned digest or cannot be read refuses the data: kPackagesInvalid, the message presented and held (through
-  // hold_refusal, else hold), nothing fetched and nothing used. False: the check only warns and the data is used.
-  bool require_packages = false;
-  const PinnedDataSet* required_set = nullptr;
-  std::function<void()> hold_refusal;               // the refusal's hold; null: hold
-  std::function<void(const Event&)> on_step_error;  // the refusal's data_packages line, at Error; null: on_step_warn
 };
 
 // The roots the leftovers are put right on: `recovery_roots`, or every candidate when it is empty, without the legacy
@@ -128,12 +117,7 @@ struct StepResult {
   FetchStatus status = FetchStatus::kOk;
   DataAction action = DataAction::kUse;
   std::string root;
-  std::string message;  // set when the outcome is kFailed, kMissing or kPackagesInvalid
-  // kPackagesInvalid: the first package of the required set that failed, its name ("<manifest id>_<index>"), its file and
-  // what was wrong (missing, short, oversize, sha_mismatch or unreadable). kMissing: `path` is the manifest it looked for.
-  std::string package;
-  std::string package_outcome;
-  std::string path;
+  std::string message;  // set when the outcome is kFailed
 };
 
 StepResult RunDataStep(const StepConfig& config, Transport& transport);

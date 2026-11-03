@@ -17,12 +17,9 @@ namespace nevr_quest::data {
 // The data is published under a name made from its own bytes, echovr-data-<first 12 hex of the sha256>.zip, on the same
 // R2 bucket and prefix as the releases and listed in the signed manifest as the `game-data` artifact (release-signer
 // `put-game-data`). The bare `_data.zip` names no version; this one cannot name other bytes.
-inline constexpr const char* kZipUrl = "https://evr.echo.taxi/nevr-runtime/data/echovr-data-14955d69d6ea.zip";
-inline constexpr const char* kZipSha256 = "14955d69d6ea04376073272cc7c95685ea508be885b3ba7189a46180de922c4e";
-inline constexpr std::uint64_t kZipBytes = 1623117032;
-// The zip's entries total 1,635,311,504 bytes uncompressed (the sum of its central directory; `kZipMaxTotalBytes` is the
-// listing limit above that, zip.h). The fetch needs the zip and the extracted tree on disk, so about 3.3 GB.
-inline constexpr std::uint64_t kZipMaxTotalBytes = 1700000000;
+inline constexpr const char* kZipUrl = "https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip";
+inline constexpr const char* kZipSha256 = "fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c";
+inline constexpr std::uint64_t kZipBytes = 937395400;
 
 // Every entry of the zip sits below this prefix; it is removed on extraction.
 inline constexpr const char* kZipPrefix = "_data/";
@@ -47,9 +44,9 @@ inline constexpr const char* kStockBackupSuffix = ".stock";
 inline constexpr const char* kManifestsDir = "manifests";
 inline constexpr const char* kPackagesDir = "packages";
 
-// Disk the fetch needs below the data root: the zip plus its extracted tree, plus the old `_data`
+// Disk the fetch needs below the data root: the zip plus its extracted tree (about 2.2 GiB), plus the old `_data`
 // kept aside when one is replaced.
-inline constexpr std::uint64_t kZipExtractedBytes = 1635311504;
+inline constexpr std::uint64_t kZipExtractedBytes = 1200000000;
 
 enum class DataAction {
   kUse,      // the data is there: nothing to fetch

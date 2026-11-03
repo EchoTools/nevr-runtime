@@ -1,13 +1,12 @@
 /* The data sets whose package files the data step checks (docs/adr/0011-quest-game-data-first-run.md, "The packages").
  * Pure data: a set is named by the sha256 of the manifest the game reads, and lists the package files that manifest
- * points into, each with its byte length and its whole-file sha256.
+ * points into, each with its byte length and, for the files a bundled content pack adds, its whole-file sha256.
  *
  * A package file is `<root>/_data/<version folder>/rad15/android/packages/<manifest id>_<index>` (the manifest id is the
  * last segment of kManifestPath, plan.h; the version folder is the one that holds the manifest, read from the root).
  *
- * The data step checks the set of the build (data_step.h, require_packages). Outside that mode a manifest outside the table
- * is not checked, and the data step says so (`data_packages` outcome `unpinned`). The stock manifest is deliberately not in
- * the table: a wrong pin there would be a false alarm on every player's headset.
+ * A manifest outside the table is not checked, and the data step says so (`data_packages` outcome `unpinned`). The stock
+ * manifest is deliberately not in the table: a wrong pin there would be a false alarm on every player's headset.
  */
 #pragma once
 
@@ -21,7 +20,7 @@ struct PinnedPackage {
   unsigned index;        // the suffix after the manifest id: `<manifest id>_<index>`
   std::uint64_t bytes;   // the file's length
   const char* sha256;    // the file's whole-file digest, 64 lowercase hex characters
-  bool hashed;           // true: the step hashes the file once per build (its sha256 is checked against `sha256`)
+  bool hashed;           // true: the step hashes the file on the first launch of a build (the file the pack adds)
 };
 
 struct PinnedDataSet {
@@ -35,10 +34,9 @@ struct PinnedDataSet {
 // They describe ONE pack release (combatw19s 1.1.9, which requires the stock manifest
 // 762c16ae58c9bc70eee071d8c0e2e8fc0408d1f0691032164029294c5cb7ec48) and change with every pack release, so this table
 // is updated together with the pack and is never edited alone. Package 0 is the stock package the pack's manifest
-// still points into; package 1 is the one the pack adds. Both are checked by length on every launch and by digest once
-// per build (issue #1934: a stock package with the wrong bytes is refused like a missing one).
+// still points into (checked by length only); package 1 is the one the pack adds (length, then digest).
 inline constexpr PinnedPackage kCombatPackPackages[] = {
-    {0, 929620177u, "14d26efc718a8f8135039e47bd1321cbb556fc4181bf95ffcb5ef59c406a5a3b", true},
+    {0, 929620177u, "14d26efc718a8f8135039e47bd1321cbb556fc4181bf95ffcb5ef59c406a5a3b", false},
     {1, 689617013u, "decc77fdfc8ecd3b75ad3120f33dd1980a6a1f8c4c50f566ceb6483d9092db02", true},
 };
 
