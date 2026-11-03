@@ -771,7 +771,7 @@ long long DescribeChain(void** slot, char* out, std::size_t capacity) {
 // What a value in a slot is, for a refusal's log: "null", the owner of the chain entry that holds it, the game's function
 // (the chain's oldest original), or its offset from the module's load base (an address outside the module reads as a large
 // offset). Takes the lock: never call it with the lock held.
-void DescribeSlotValue(void** slot, void* value, std::uintptr_t bias, char* out, std::size_t capacity) {
+void DescribeSlotValue(void** slot, const void* value, std::uintptr_t bias, char* out, std::size_t capacity) {
   const Lock lock;
   if (value == nullptr) {
     std::snprintf(out, capacity, "%s", "null");
@@ -801,7 +801,7 @@ void DescribeSlotValue(void** slot, void* value, std::uintptr_t bias, char* out,
 // `expected` is the value the install waited for, for kOriginalMismatch and kSlotChanged (null when it has none); the value
 // in the slot is read here. `actualBuildId` is set only for a build-ID mismatch.
 void LogInstallRefusal(const GotTarget& t, GotStatus status, const char* stage, int err, void** slot,
-                       std::uintptr_t slotVaddr, std::uintptr_t bias, void* expected, const char* actualBuildId) {
+                       std::uintptr_t slotVaddr, std::uintptr_t bias, const void* expected, const char* actualBuildId) {
   char slotText[19] = "(unresolved)";
   char chain[kChainTextCapacity] = "(none)";
   char expectedText[kValueTextCapacity] = "(none)";
@@ -1120,7 +1120,7 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
     }
     // The value the install waited for: the expected original (kOriginalMismatch), or the value it read or stored over
     // (kSlotChanged). The first handler's read is `observed`.
-    void* const waited = status == GotStatus::kOriginalMismatch ? target.expectedOriginal
+    const void* const waited = status == GotStatus::kOriginalMismatch ? target.expectedOriginal
                        : (expected != nullptr ? expected : prepared.observed);
     LogInstallRefusal(target, status, nevr::hook::AttachStageName(stage), savedErrno, slot,
                       prepared.resolution.slotVaddr, prepared.image.base, waited,

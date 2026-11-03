@@ -1141,7 +1141,7 @@ int B2Handler(int a, int b) noexcept {
 }
 
 // The plugin's NvrPluginInitEx: registers the handler (when the case says so), then fails the init.
-int B2InitEx(const NevrGameContext*, const char*) {
+int B2InitEx(const NvrGameContext*, const char*) {
   if (g_b2Register) {
     g_b2Result = nevr_quest::slot_hook::RegisterSlotHook("b2", "libgotfx_consumer_now.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
                                                          g_b2BuildId.c_str(), reinterpret_cast<void*>(&B2Handler),

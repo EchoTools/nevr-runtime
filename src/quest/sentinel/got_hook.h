@@ -159,9 +159,11 @@ struct GotTarget {
   bool serviceSide = false;  // a service-side hook (sign-in, matchmaking, redirect): see SetServiceSideBuildId
   const char* owner = nullptr;  // who installs the hook, for the chain shown on a refusal; nullptr reads as "(unnamed)"
 
-  GotTarget(const char* moduleName, const char* symbolName, RelocKind relocKind,
-            const char* build = nullptr, std::optional<std::uint64_t> pinnedSlot = std::nullopt,
-            const void* original = nullptr)
+  // constexpr: a GotHook holds a GotTarget, and a namespace-scope array of GotHook (diag/hwdump_install.cpp) must be
+  // constant-initialized; check-android-static-init fails on a dynamic initializer there.
+  constexpr GotTarget(const char* moduleName, const char* symbolName, RelocKind relocKind,
+                      const char* build = nullptr, std::optional<std::uint64_t> pinnedSlot = std::nullopt,
+                      const void* original = nullptr)
       : module(moduleName),
         symbol(symbolName),
         kind(relocKind),
@@ -291,7 +293,7 @@ ProtectFn SetProtectFunction(ProtectFn fn);
 // not outlive it.
 class GotHook {
  public:
-  GotHook() = default;
+  constexpr GotHook() = default;  // constexpr for the same reason as GotTarget's constructor
   GotHook(const GotHook&) = delete;
   GotHook& operator=(const GotHook&) = delete;
 
