@@ -122,20 +122,25 @@ class DeclineLog {
   std::array<std::uint8_t, 256> seen_{};
 };
 
-// Where a decline line goes: the hook passes its Log(), a test passes a capture.
-using DeclineSink = void (*)(const char* line);
+// The decline line, the same text on both platforms: the PC log line, and the Quest sentinel's record (lobby_full_hooks.cpp).
+constexpr const char kDeclineConsequence[] = "the game shows its fixed literal for this code instead";
+constexpr std::size_t kDeclineLineBytes = 192;
 
-// Writes the decline line through `write` the first time `reason` is declined for `code` in this process, and returns
-// true; otherwise writes nothing. The line says the service's message was not shown, with the code, the title, the reason
-// and the consequence (the game's own fixed literal stays on the page).
+// `[NEVR.LOBBY] failure message not shown code=<n> title=<name> reason=<token>: <consequence>`, NUL-terminated.
+inline void FormatDeclineLine(char (&out)[kDeclineLineBytes], std::uint8_t code, Decline reason) {
+  static_cast<void>(std::snprintf(out, sizeof(out),
+                                  "[NEVR.LOBBY] failure message not shown code=%u title=%s reason=%s: %s",
+                                  static_cast<unsigned int>(code), Title(code), DeclineToken(reason), kDeclineConsequence));
+}
+
+// Where a decline goes: the platform's writer, or a test's capture.
+using DeclineSink = void (*)(std::uint8_t code, Decline reason);
+
+// Passes the decline to `write` the first time `reason` is declined for `code` in this process, and returns true; otherwise
+// passes nothing. The caller holds the lock that guards `log`.
 inline bool NoteDeclined(DeclineLog& log, std::uint8_t code, Decline reason, DeclineSink write) {
   if (write == nullptr || !log.FirstTime(code, reason)) return false;
-  char line[192];
-  std::snprintf(line, sizeof(line),
-                "[NEVR.LOBBY] failure message not shown code=%u title=%s reason=%s: "
-                "the game shows its fixed literal for this code instead",
-                static_cast<unsigned int>(code), Title(code), DeclineToken(reason));
-  write(line);
+  write(code, reason);
   return true;
 }
 

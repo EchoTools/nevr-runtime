@@ -78,4 +78,12 @@ inline RefusalReads ReadRefusal(const void* self, const void* msg) noexcept {
   return r;
 }
 
+// The decline when the game keeps its own page: the service's message is not shown and the reason says why (the PC
+// callback's rule, lobby_failure_message_rules.h). Passes it to `write` once per code and reason per process.
+inline bool NoteMessageNotShown(nevr_lobby_failure_message::DeclineLog& log, const RefusalReads& reads,
+                                std::uint8_t code, nevr_lobby_failure_message::DeclineSink write) noexcept {
+  return nevr_lobby_failure_message::NoteDeclined(
+      log, code, nevr_lobby_failure_message::DeclineFor(reads.game, reads.message, sizeof reads.message), write);
+}
+
 }  // namespace quest_social::lobby_full

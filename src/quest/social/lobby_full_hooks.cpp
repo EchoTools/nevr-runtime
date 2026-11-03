@@ -38,6 +38,20 @@ FullLobbyBackoff& Backoff() {
   return backoff;
 }
 
+// The declines already logged in this process, under g_declineMutex (built on first use, as Backoff is).
+pthread_mutex_t g_declineMutex = PTHREAD_MUTEX_INITIALIZER;
+nevr_lobby_failure_message::DeclineLog& Declines() {
+  static nevr_lobby_failure_message::DeclineLog declines;
+  return declines;
+}
+
+// The decline line: the PC callback's text (lobby_failure_message_rules.h), one Info record whose `msg` carries it.
+void WriteDeclineLine(std::uint8_t code, nevr_lobby_failure_message::Decline reason) {
+  char line[nevr_lobby_failure_message::kDeclineLineBytes];
+  nevr_lobby_failure_message::FormatDeclineLine(line, code, reason);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full", {{"msg", line}});
+}
+
 std::uint64_t NowMs() noexcept {
   timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -131,11 +145,10 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
                          {"message_bytes", static_cast<std::uint64_t>(nevr_lobby_failure_message::MessageBytes(
                                                reads.message, sizeof reads.message))}});
   } else {
-    // An empty message or no game object: the game's own page stays.
-    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
-                        {{"status", "page_unchanged"},
-                         {"reason", reads.game == nullptr ? "no_game_object" : "empty_message"},
-                         {"lobby", lobbyText}});
+    // The game keeps its own page, and the decline says why: the PC callback's decision, once per code and reason.
+    pthread_mutex_lock(&g_declineMutex);
+    NoteMessageNotShown(Declines(), reads, static_cast<std::uint8_t>(kLobbyFullCode), &WriteDeclineLine);
+    pthread_mutex_unlock(&g_declineMutex);
   }
 }
 

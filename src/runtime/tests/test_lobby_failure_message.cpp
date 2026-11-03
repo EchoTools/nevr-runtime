@@ -13,12 +13,16 @@
 
 namespace lm = nevr_lobby_failure_message;
 
-// The seam for the decline line (#2006). NoteDeclined takes a plain function pointer, so the capture is a file-level
-// vector: the hook passes Log() there, the tests pass CaptureDecline.
+// The seam for the decline (#2006). NoteDeclined takes a plain function pointer, so the capture is a file-level vector of
+// (code, reason) pairs: the PC hook passes its writer there, the tests pass CaptureDecline.
 namespace {
-std::vector<std::string> g_declineLines;
-void CaptureDecline(const char* line) {
-  g_declineLines.emplace_back(line);
+struct Declined {
+  std::uint8_t code;
+  lm::Decline reason;
+};
+std::vector<Declined> g_declines;
+void CaptureDecline(std::uint8_t code, lm::Decline reason) {
+  g_declines.push_back(Declined{code, reason});
 }
 }  // namespace
 
@@ -118,41 +122,50 @@ TEST(LobbyFailureMessage, DeclineReasonsHaveTheirTokens) {
   EXPECT_STREQ(lm::DeclineToken(lm::Decline::kNone), "none");
 }
 
-TEST(LobbyFailureMessage, FirstDeclineWritesOneLineWithCodeTitleReasonAndConsequence) {
-  g_declineLines.clear();
-  lm::DeclineLog log;
-  EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline));
-  ASSERT_EQ(g_declineLines.size(), 1u);
-  EXPECT_EQ(g_declineLines[0],
-            "[NEVR.LOBBY] failure message not shown code=8 title=lobby full reason=no_message: "
-            "the game shows its fixed literal for this code instead");
+TEST(LobbyFailureMessage, TheDeclineLineIsTheSharedTextWithCodeTitleReasonAndConsequence) {
+  char line[lm::kDeclineLineBytes];
+  lm::FormatDeclineLine(line, 8, lm::Decline::kNoMessage);
+  EXPECT_STREQ(line,
+               "[NEVR.LOBBY] failure message not shown code=8 title=lobby full reason=no_message: "
+               "the game shows its fixed literal for this code instead");
 }
 
-TEST(LobbyFailureMessage, RepeatsOfADeclineWriteNothing) {
-  g_declineLines.clear();
+TEST(LobbyFailureMessage, TheFirstDeclineIsPassedOnceWithItsCodeAndReason) {
+  g_declines.clear();
+  lm::DeclineLog log;
+  EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline));
+  ASSERT_EQ(g_declines.size(), 1u);
+  EXPECT_EQ(g_declines[0].code, 8);
+  EXPECT_EQ(g_declines[0].reason, lm::Decline::kNoMessage);
+}
+
+TEST(LobbyFailureMessage, RepeatsOfADeclineAreNotPassedAgain) {
+  g_declines.clear();
   lm::DeclineLog log;
   EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline));
   for (int i = 0; i < 100; ++i) EXPECT_FALSE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline)) << i;
-  EXPECT_EQ(g_declineLines.size(), 1u);
+  EXPECT_EQ(g_declines.size(), 1u);
 }
 
-TEST(LobbyFailureMessage, EachCodeAndReasonGetsItsOwnLine) {
-  g_declineLines.clear();
+TEST(LobbyFailureMessage, EachCodeAndReasonGetsItsOwnDecline) {
+  g_declines.clear();
   lm::DeclineLog log;
   EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline));
   EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoGameBase, &CaptureDecline));
   EXPECT_TRUE(lm::NoteDeclined(log, 9, lm::Decline::kNoMessage, &CaptureDecline));
-  ASSERT_EQ(g_declineLines.size(), 3u);
-  EXPECT_NE(g_declineLines[1].find("code=8 title=lobby full reason=no_game_base"), std::string::npos);
-  EXPECT_NE(g_declineLines[2].find("code=9 title=internal error reason=no_message"), std::string::npos);
+  ASSERT_EQ(g_declines.size(), 3u);
+  EXPECT_EQ(g_declines[1].code, 8);
+  EXPECT_EQ(g_declines[1].reason, lm::Decline::kNoGameBase);
+  EXPECT_EQ(g_declines[2].code, 9);
+  EXPECT_EQ(g_declines[2].reason, lm::Decline::kNoMessage);
 }
 
-TEST(LobbyFailureMessage, NoneAndAMissingSinkDoNotUseUpTheLine) {
-  g_declineLines.clear();
+TEST(LobbyFailureMessage, NoneAndAMissingSinkDoNotUseUpTheDecline) {
+  g_declines.clear();
   lm::DeclineLog log;
   EXPECT_FALSE(lm::NoteDeclined(log, 8, lm::Decline::kNone, &CaptureDecline));
   EXPECT_FALSE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, nullptr));
-  EXPECT_TRUE(g_declineLines.empty());
+  EXPECT_TRUE(g_declines.empty());
   EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline));
-  EXPECT_EQ(g_declineLines.size(), 1u);
+  EXPECT_EQ(g_declines.size(), 1u);
 }

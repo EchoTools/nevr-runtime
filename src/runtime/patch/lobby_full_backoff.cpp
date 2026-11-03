@@ -204,7 +204,9 @@ int CanFollowPartyHook(void* netGame) {
 }
 
 // The sink NoteDeclined writes through: the decline line, once per code and reason (lobby_failure_message_rules.h).
-void WriteDeclineLine(const char* line) {
+void WriteDeclineLine(std::uint8_t code, nevr_lobby_failure_message::Decline reason) {
+  char line[nevr_lobby_failure_message::kDeclineLineBytes];
+  nevr_lobby_failure_message::FormatDeclineLine(line, code, reason);
   Log(EchoVR::LogLevel::Info, "%s", line);
 }
 
