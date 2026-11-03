@@ -31,7 +31,7 @@ suggested bindings ([Meta: OpenXR actions, action sets and bindings](https://dev
    `xrGetCurrentInteractionProfile` reports.
 2. **Code above the VrApi boundary does not branch on the controller to change input.** That covers the sentinel,
    plugins, and hooks on libr15. It may read and log the controller, as `hand_pose_log_hook.cpp` does.
-3. **The layer is ours, reconstructed in this repo** (ADR 0035), with EchoFrame and echoquest-combat as cited references,
+3. **The layer is ours, reconstructed in this repo** (ADR 0035), with EchoFrame and Ducky's reference combat build as cited references,
    never their sources taken whole (AGENTS.md "Guardrails"). A controller fix goes into that reconstruction. A fix made
    above the boundary for players who need it now is marked at its site as known-wrong, with the issue that moves it into
    the layer.

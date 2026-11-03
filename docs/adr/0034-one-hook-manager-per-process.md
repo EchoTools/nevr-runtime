@@ -19,7 +19,7 @@ game's function, and `GotHook` refuses a slot another handle owns. So a slot tak
 the other: the second consumer either refuses or must be written against the first.
 
 On the release base, a third mechanism runs in the same process: the reference build's runtime (`libvrapi.so`, built from
-the afkxr modules of [kotorvr/echoquest-combat](https://github.com/kotorvr/echoquest-combat)) swaps libr15 GOT and RELRO
+the afkxr modules of Ducky's reference combat build, whose source repository is not public) swaps libr15 GOT and RELRO
 words with its own helper (`SetWord` in `runtime/native/afkxr/afk_texres.cpp`).
 
 **PC.** The host installs every hook through `PatchDetour` and records it with HookGuard (N84). A plugin that installs its

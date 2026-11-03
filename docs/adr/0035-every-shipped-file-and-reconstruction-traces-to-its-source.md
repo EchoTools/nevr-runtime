@@ -11,7 +11,7 @@ runtime's `libvrapi.so` and `assets/afk_default_on.txt`. Those files reach playe
 them. The sources that exist for them are outside this repo:
 
 - [EchoFrame](https://github.com/heisthecat31/EchoFrame) (MIT): the VrApi-on-OpenXR runtime and the Platform SDK stand-in.
-- [kotorvr/echoquest-combat](https://github.com/kotorvr/echoquest-combat): the afkxr modules built into that `libvrapi.so`,
+- Ducky's reference combat build (its source repository is not public): the afkxr modules built into that `libvrapi.so`,
   and the script library sources that `just build-quest-combat-libs` reads through `NEVR_COMBAT_LIBSRC`.
 - The asset patch loader's source repository is not one this repo names.
 
@@ -79,7 +79,7 @@ tests and `docs/audits/`.
 ## Consequences
 
 - The reference base stays in releases only as long as its files are class 4 with open issues. The VrApi-on-OpenXR
-  layer becomes class 2: reconstructed in this repo with EchoFrame and echoquest-combat as cited references, not built
+  layer becomes class 2: reconstructed in this repo with EchoFrame and Ducky's reference combat build as cited references, not built
   from their sources. Until it is, the release pins the shipped `libvrapi.so` by its sha256.
 - Reconstruction lists kept outside the repository are replaced by the index.
 
