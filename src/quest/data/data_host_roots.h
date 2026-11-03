@@ -18,8 +18,8 @@
  * `https://mia.cdn.echo.taxi/_data.zip` (HTTP 206, ssl_verify_result 0). The data is now fetched from evr.echo.taxi
  * (plan.h kZipUrl), the same Cloudflare Universal SSL setup; measured 2026-10-27: leaf CN=fb4ccb60.sni.cloudflaressl.com
  * (issuer GTS WE1), the same GTS WE1 and GTS Root R4 chain, and `curl --cacert` with only the self-signed GTS Root R4 PEM
- * from this file fetched bytes 0-99 of `https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip` (HTTP 206,
- * ssl_verify_result 0, content-range total 937395400). The PEMs come from Google's list
+ * from this file fetched bytes 0-99 of a data zip under `https://evr.echo.taxi/nevr-runtime/data/` (HTTP 206,
+ * ssl_verify_result 0). The PEMs come from Google's list
  * (https://pki.goog/roots.pem) and the system store; each SHA-256 below is the DER fingerprint, checked at start by
  * CheckDataHostRoots().
  */

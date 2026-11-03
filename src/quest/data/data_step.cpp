@@ -156,26 +156,95 @@ void EmitWarn(const StepConfig& config, const Event& e) {
   else if (config.on_step) config.on_step(e);
 }
 
-// Checks the package files of a data set the manifest of which is pinned (package_pins.h) and logs one `data_packages`
-// event: the first package that fails (Warning, with what the step does next), or the verified result. The data is used
-// whatever the result: a replacement fetch would hand a player of the pack the stock data and not bring the pack back.
-// Sizes are checked on every launch; the pack's added package is hashed only when every size matched and this build has
-// not hashed it yet (the marker file). A manifest outside the table is not checked.
-void CheckPackages(const StepConfig& config, const std::string& root, const DataVersion& held) {
-  const PinnedDataSet* set = config.pinned_sets != nullptr
-                                 ? FindPinnedDataSet(held.manifest_sha256, config.pinned_sets, config.pinned_set_count)
-                                 : FindPinnedDataSet(held.manifest_sha256);
+void EmitError(const StepConfig& config, const Event& e) {
+  if (config.on_step_error) config.on_step_error(e);
+  else EmitWarn(config, e);
+}
+
+// The verdict of the package check: `ok`, or the first package of the set that failed and what was wrong with it.
+struct PackageCheck {
+  bool ok = true;
+  std::string package;          // "<manifest id>_<index>"
+  std::string path;             // the package file
+  std::string outcome;          // missing, short, oversize, sha_mismatch or unreadable
+  std::uint64_t expected = 0;   // the pinned length
+  std::string found;            // the length found, or "none"
+  std::string expected_sha256;  // sha_mismatch only
+  std::string found_sha256;     // sha_mismatch only
+};
+
+// The refusal's advice: the one action a player can take (issue #1934, the installer the player used).
+constexpr const char* kPackagesAdvice =
+    "Install the Echo VR game data again with the installer you used, then start the game again.";
+
+// What is wrong with the package, in a sentence.
+std::string PackageDetail(const PackageCheck& check) {
+  if (check.outcome == "missing") return "is missing.";
+  if (check.outcome == "short" || check.outcome == "oversize") {
+    return "has " + check.found + " bytes, expected " + std::to_string(check.expected) + ".";
+  }
+  if (check.outcome == "sha_mismatch") return "does not match its expected checksum.";
+  return "cannot be read.";
+}
+
+// The visible message of a refusal: which file, what is wrong with it, and what the player does next.
+std::string BuildPackagesMessage(const PackageCheck& check) {
+  return "Echo VR game data is incomplete: " + check.path + " " + PackageDetail(check) + " " + kPackagesAdvice;
+}
+
+// Checks the package files of a data set and logs one `data_packages` event: the first package that fails, or the
+// verified result. Without require_packages the set is the one the manifest the data holds names (package_pins.h): a
+// failure is a Warning and the data is used. With require_packages the set is the build's required set whatever manifest
+// the root holds, and a failure is an Error that the caller refuses the data for (RunDataStep). Sizes are checked on every
+// launch; a package with a pinned digest is hashed once per build (the marker file). A manifest outside the table is not
+// checked in the first mode.
+PackageCheck CheckPackages(const StepConfig& config, const std::string& root, const DataVersion& held) {
+  PackageCheck check;
+  const PinnedDataSet* set = nullptr;
+  if (config.require_packages) {
+    set = config.required_set != nullptr ? config.required_set : &kPinnedDataSets[0];
+  } else {
+    set = config.pinned_sets != nullptr
+              ? FindPinnedDataSet(held.manifest_sha256, config.pinned_sets, config.pinned_set_count)
+              : FindPinnedDataSet(held.manifest_sha256);
+  }
   if (set == nullptr) {
     EmitInfo(config, {"data_packages",
                       {{"root", root},
                        {"data_version", held.folder},
                        {"manifest_sha256", held.manifest_sha256},
                        {"outcome", "unpinned"}}});
-    return;
+    return check;
   }
   const std::string manifest_id = std::string(kManifestPath).substr(std::string(kManifestPath).rfind('/') + 1);
   const std::string dir = root + "/_data/" + held.folder + "/rad15/android/" + kPackagesDir + "/";
-  auto fail = [&](const std::string& package, const char* outcome, std::uint64_t expected, const std::string& found) {
+  const bool refuse = config.require_packages;
+  // Records the first failure and emits its event: Error when the data is refused, else the Warning of the warn mode.
+  auto fail = [&](const std::string& package, const char* outcome, std::uint64_t expected, const std::string& found,
+                  const std::string& expected_sha, const std::string& found_sha) {
+    check.ok = false;
+    check.package = package;
+    check.path = dir + package;
+    check.outcome = outcome;
+    check.expected = expected;
+    check.found = found;
+    check.expected_sha256 = expected_sha;
+    check.found_sha256 = found_sha;
+    if (refuse) {
+      Event e{"data_packages",
+              {{"root", root},
+               {"data_version", held.folder},
+               {"package", package},
+               {"outcome", outcome},
+               {"path", check.path},
+               {"expected_bytes", std::to_string(expected)},
+               {"found_bytes", found}}};
+      if (!expected_sha.empty()) e.fields.push_back({"expected_sha256", expected_sha});
+      if (!found_sha.empty()) e.fields.push_back({"found_sha256", found_sha});
+      e.fields.push_back({"consequence", "the run refuses to start; the game data must be installed again"});
+      EmitError(config, e);
+      return;
+    }
     EmitWarn(config, {"data_packages",
                       {{"root", root},
                        {"data_version", held.folder},
@@ -193,16 +262,22 @@ void CheckPackages(const StepConfig& config, const std::string& root, const Data
     std::uint64_t found = 0;
     const std::string path = dir + name;
     const bool there = config.file_size ? config.file_size(path, found) : FileSizeReal(path, found);
-    if (!there) return fail(name, "missing", pin.bytes, "none");
-    if (found != pin.bytes) return fail(name, found < pin.bytes ? "short" : "oversize", pin.bytes, std::to_string(found));
+    if (!there) {
+      fail(name, "missing", pin.bytes, "none", "", "");
+      return check;
+    }
+    if (found != pin.bytes) {
+      fail(name, found < pin.bytes ? "short" : "oversize", pin.bytes, std::to_string(found), "", "");
+      return check;
+    }
   }
 
-  // Every size matched. The pack's added package is hashed once per build; without a build id there is nothing to
-  // record the hash against, so it is not hashed.
+  // Every size matched. The packages with a pinned digest are hashed once per build; without a build id there is nothing
+  // to record the hash against, so nothing is hashed. The marker is keyed by the set's manifest, which is what is checked.
   const char* sha = "not_due";
   if (!config.build_id.empty()) {
     const std::string marker_path = root + "/" + kPackagesMarkerName;
-    const std::string marker = std::string(held.manifest_sha256) + " " + config.build_id + "\n";
+    const std::string marker = std::string(set->manifest_sha256) + " " + config.build_id + "\n";
     std::string held_marker;
     const bool read = config.read_file ? config.read_file(marker_path, held_marker) : ReadFileReal(marker_path, held_marker);
     if (read && held_marker == marker) {
@@ -215,8 +290,14 @@ void CheckPackages(const StepConfig& config, const std::string& root, const Data
         std::string digest;
         const std::string path = dir + name;
         const bool hashed = config.hash_file ? config.hash_file(path, digest) : HashFileReal(path, digest);
-        if (!hashed) return fail(name, "unreadable", pin.bytes, std::to_string(pin.bytes));
-        if (digest != pin.sha256) return fail(name, "sha_mismatch", pin.bytes, std::to_string(pin.bytes));
+        if (!hashed) {
+          fail(name, "unreadable", pin.bytes, std::to_string(pin.bytes), "", "");
+          return check;
+        }
+        if (digest != pin.sha256) {
+          fail(name, "sha_mismatch", pin.bytes, std::to_string(pin.bytes), pin.sha256, digest);
+          return check;
+        }
       }
       sha = "checked";
       const bool wrote = config.write_file ? config.write_file(marker_path, marker) : WriteFileReal(marker_path, marker);
@@ -236,6 +317,7 @@ void CheckPackages(const StepConfig& config, const std::string& root, const Data
                      {"outcome", "verified"},
                      {"packages", std::to_string(set->count)},
                      {"sha", sha}}});
+  return check;
 }
 
 }  // namespace
@@ -246,6 +328,7 @@ const char* StepOutcomeName(StepOutcome outcome) noexcept {
     case StepOutcome::kFetched: return "fetched";
     case StepOutcome::kFailed: return "failed";
     case StepOutcome::kMissing: return "missing";
+    case StepOutcome::kPackagesInvalid: return "packages_invalid";
   }
   return "unknown";
 }
@@ -367,7 +450,19 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
                      {"manifest_sha256", held.manifest_sha256}}});
   }
   if (decision.action == DataAction::kUse) {
-    CheckPackages(config, decision.root, held);
+    const PackageCheck check = CheckPackages(config, decision.root, held);
+    if (config.require_packages && !check.ok) {
+      // The data is refused: nothing is fetched or used. The message is held through hold_refusal (its own time).
+      result.outcome = StepOutcome::kPackagesInvalid;
+      result.package = check.package;
+      result.package_outcome = check.outcome;
+      result.path = check.path;
+      result.message = BuildPackagesMessage(check);
+      if (config.present) config.present(result.message);
+      if (config.hold_refusal) config.hold_refusal();
+      else if (config.hold) config.hold();
+      return result;
+    }
     if (!config.allow_fetch) {
       result.outcome = StepOutcome::kUsed;
       return result;
@@ -379,6 +474,7 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
 
   if (!config.allow_fetch) {
     result.outcome = StepOutcome::kMissing;
+    result.path = std::string(decision.root) + "/" + kManifestPath;
     result.message = kGameDataMissing;
     if (config.present) config.present(result.message);
     if (config.hold) config.hold();

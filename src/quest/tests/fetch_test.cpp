@@ -136,8 +136,8 @@ const char* kManifest = "_data/5932408047/rad15/android/manifests/48037dc70b0eca
 }  // namespace
 
 // The pin the shipped build fetches by and checks against, written out here so that editing plan.h alone fails.
-const char* kPinnedSha256 = "fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c";
-const char* kPinnedUrl = "https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip";
+const char* kPinnedSha256 = "14955d69d6ea04376073272cc7c95685ea508be885b3ba7189a46180de922c4e";
+const char* kPinnedUrl = "https://evr.echo.taxi/nevr-runtime/data/echovr-data-14955d69d6ea.zip";
 
 TEST(TheShippedPinFetchesTheVersionedContentAddressedFileNotABareName) {
   const FetchConfig defaults;
@@ -302,6 +302,31 @@ TEST(NoSpaceStopsBeforeAnyRequest) {
   CHECK_EQ(r.status, FetchStatus::kNoSpace);
   CHECK(net.offsets.empty());
   CHECK(rig.HasEvent("data_fetch outcome=no_space"));
+}
+
+// The space check with the pinned constants (issue #1934). The other space tests set extracted_bytes themselves, so only
+// this one holds kZipExtractedBytes to its value. A fresh fetch needs the zip plus its extracted tree:
+// 1623117032 + 1635311504 = 3258428536.
+TEST(TheDefaultFetchNeedsThePinnedZipPlusItsExtractedSize) {
+  constexpr std::uint64_t kNeeded = 3258428536ULL;
+  Scratch s;
+  FetchConfig config;  // the defaults: the pinned url, digest, zip length and extracted length
+  config.root = s.Path("root");
+  config.max_attempts = 1;
+  config.utc_stamp = "20261022T000000Z";
+  config.backoff = [](int) {};
+  CHECK_EQ(kNeeded, kZipBytes + kZipExtractedBytes);
+  config.available_bytes = [](const std::string&) { return kNeeded - 1; };
+  const std::string zip = GoodZip();
+  ScriptedTransport short_net(zip, {Step{}});
+  const FetchResult refused = RunFetch(config, short_net);
+  CHECK_EQ(refused.status, FetchStatus::kNoSpace);
+  CHECK_EQ(refused.needed_bytes, kNeeded);
+  CHECK(short_net.offsets.empty());
+  config.available_bytes = [](const std::string&) { return kNeeded; };
+  ScriptedTransport net(zip, {Step{}});
+  CHECK(RunFetch(config, net).status != FetchStatus::kNoSpace);
+  CHECK(!net.offsets.empty());
 }
 
 TEST(ReplacingNeedsTwiceTheSpace) {

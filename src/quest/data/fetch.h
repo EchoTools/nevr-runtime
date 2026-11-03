@@ -51,7 +51,7 @@ struct FetchConfig {
   std::uint64_t bytes = kZipBytes;
   std::uint64_t extracted_bytes = kZipExtractedBytes;
   int max_attempts = 5;
-  ZipLimits zip_limits;
+  ZipLimits zip_limits{64, std::uint64_t{1} << 31, kZipMaxTotalBytes};  // the pinned zip's listing (plan.h)
   std::string utc_stamp;  // names the replaced tree, `YYYYMMDDTHHMMSSZ`
   // Seams. Defaults (a null function) mean: statvfs, the default backoff below, never cancelled, no events.
   std::function<std::uint64_t(const std::string& root)> available_bytes;
