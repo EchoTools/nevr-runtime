@@ -470,7 +470,7 @@ release-preflight base="main":
 
 # Everything a release needs, checked up front, before anything is built or published (#1997): this clone is exactly
 # origin/main, every release input in .env is set and every file it names exists, every program is on PATH. One
-# PROBLEM line per thing wrong, then exit 1. Read-only; it never prints a value.
+# PROBLEM line per thing wrong, then exit 1. It changes nothing in the clone and never prints a value.
 release-check:
     tools/release_check.py
 

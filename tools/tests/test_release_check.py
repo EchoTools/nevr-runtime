@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -26,7 +28,8 @@ class ReleaseCheckTest(unittest.TestCase):
         for name, is_file, _ in release_check.INPUTS:
             if is_file:
                 f = base / f"{name}.file"
-                f.write_text("x")
+                f.write_text("#!/bin/sh\n")
+                f.chmod(0o700)
                 self.env[name] = str(f)
             else:
                 self.env[name] = f"value-of-{name}"
@@ -72,13 +75,67 @@ class ReleaseCheckTest(unittest.TestCase):
         self.assertEqual(len(self.check(env)), 3)
 
     def test_no_value_is_ever_printed(self):
-        env = {k: v for k, v in self.env.items() if k == "PATH" or not k.startswith("R2_")}
-        env["NEVR_QUEST_REFERENCE_APK"] = "/no/such/secret-path.apk"
+        env = dict(self.env)
+        for name, is_file, _ in release_check.INPUTS:
+            env[name] = f"/no/such/{name}-secret-value" if is_file else f"{name}-secret-value"
+        (self.root / "bin" / "zip").unlink()
         found = "\n".join(self.check(env))
-        for name, value in self.env.items():
-            if name != "PATH" and not os.path.isabs(value):
-                self.assertNotIn(value, found)
-        self.assertNotIn("secret-path", found)
+        self.assertTrue(found)
+        self.assertNotIn("secret-value", found)
+
+    def test_an_unreadable_file_is_named(self):
+        path = pathlib.Path(self.env["NEVR_QUEST_KEYSTORE"])
+        path.chmod(0)
+        try:
+            if os.access(path, os.R_OK):
+                self.skipTest("running as a user that reads mode-0 files")
+            found = self.check(self.env)
+        finally:
+            path.chmod(0o600)
+        self.assertEqual(found, ["NEVR_QUEST_KEYSTORE names a file this user can't read (the Quest APK signing keystore)"])
+
+    def test_a_tilde_path_is_taken_as_written(self):
+        home = self.root / "home"
+        home.mkdir()
+        (home / "keystore.jks").write_text("x")
+        env = dict(self.env, NEVR_QUEST_KEYSTORE="~/keystore.jks")
+        old = os.environ.get("HOME")
+        os.environ["HOME"] = str(home)
+        try:
+            found = self.check(env)
+        finally:
+            if old is None:
+                del os.environ["HOME"]
+            else:
+                os.environ["HOME"] = old
+        self.assertEqual(len(found), 1)
+        self.assertIn("NEVR_QUEST_KEYSTORE names no file", found[0])
+
+    def test_a_signer_that_is_not_executable_is_named(self):
+        pathlib.Path(self.env["RELEASE_SIGNER_BIN"]).chmod(0o644)
+        found = self.check(self.env)
+        self.assertEqual(len(found), 1)
+        self.assertIn("RELEASE_SIGNER_BIN names no executable file", found[0])
+
+    def test_a_signer_named_on_path_is_ready(self):
+        env = dict(self.env, RELEASE_SIGNER_BIN="git")
+        self.assertEqual(self.check(env), [])
+
+    def test_a_credential_in_the_origin_url_is_redacted(self):
+        tools = pathlib.Path(__file__).resolve().parent.parent
+        root = self.root / "clone"
+        (root / "tools").mkdir(parents=True)
+        for name in ("release_preflight.py", "quest_apk_version.py"):
+            shutil.copy(tools / name, root / "tools" / name)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "remote", "add", "origin",
+                        "https://someone:ghp_FAKEcredential@example.invalid/x/y.git"], check=True)
+        env = dict(os.environ, XDG_STATE_HOME=str(self.root / "state"), GIT_TERMINAL_PROMPT="0")
+        found = release_check.problems(env, root, run_preflight=True)
+        preflight = [p for p in found if p.startswith("preflight:")]
+        self.assertTrue(preflight, found)
+        self.assertNotIn("ghp_FAKEcredential", "\n".join(found))
+        self.assertIn("<redacted>@", "\n".join(preflight))
 
     def test_env_example_lists_every_input(self):
         example = (pathlib.Path(__file__).resolve().parent.parent.parent / ".env.example").read_text()

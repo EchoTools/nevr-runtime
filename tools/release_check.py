@@ -4,13 +4,19 @@
     just release-check
 
 It prints one `release-check: PROBLEM: ...` line for each thing that is missing or wrong (it never stops at the first)
-and exits 1, or prints `release-check: OK` and exits 0. It is read-only: it reads the environment (`just` loads `.env`
-with `set dotenv-load`), stats files, and runs `tools/release_preflight.py`. It never prints a value.
+and exits 1, or prints `release-check: OK` and exits 0. It changes nothing in the clone: it reads the environment
+(`just` loads `.env` with `set dotenv-load`), stats files, and runs `tools/release_preflight.py` (which appends one record
+to its own log). It never prints a value: a line it passes through from the preflight has every URL's userinfo
+redacted.
+
+Paths are taken as written. `just` does not expand `~` in `.env`, and neither do the release recipes, so neither does
+this check. The Quest release timer and the beta rollback (tools/quest_release_timer.py, tools/rollback_beta.py) read
+QUEST_RELEASE_SIGNER_REPO; they are out of scope here, and #1997 removes them.
 
 What it checks:
   1. this clone is exactly origin/main (tools/release_preflight.py, every one of its checks);
   2. every input in INPUTS is set and not empty;
-  3. every input that names a file names an existing, readable file;
+  3. every input that names a file names an existing, readable file (the signer: an executable one, or a name on PATH);
   4. every program in PROGRAMS is on PATH.
 """
 from __future__ import annotations
@@ -20,6 +26,9 @@ import pathlib
 import shutil
 import subprocess
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from release_preflight import redact_url  # noqa: E402
 
 # Every input a release reads, once each: (name, is it a file, what it is). `.env.example` lists the same names.
 INPUTS: tuple[tuple[str, bool, str], ...] = (
@@ -49,11 +58,11 @@ def problems(env: dict[str, str], root: pathlib.Path, run_preflight: bool = True
     out: list[str] = []
     if run_preflight:
         pre = subprocess.run([sys.executable, str(root / "tools" / "release_preflight.py")], cwd=root,
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, env=env)
         if pre.returncode != 0:
             for line in (pre.stdout + pre.stderr).splitlines():
                 if "PROBLEM" in line:
-                    out.append(f"preflight: {line.split('PROBLEM:', 1)[-1].strip()}")
+                    out.append(f"preflight: {redact_url(line.split('PROBLEM:', 1)[-1].strip())}")
             if not out:
                 out.append(f"preflight: tools/release_preflight.py exited {pre.returncode}")
     for name, is_file, what in INPUTS:
@@ -62,7 +71,12 @@ def problems(env: dict[str, str], root: pathlib.Path, run_preflight: bool = True
             out.append(f"{name} is not set ({what}); add it to .env")
             continue
         if is_file:
-            path = pathlib.Path(value).expanduser()
+            if name == "RELEASE_SIGNER_BIN":
+                found = shutil.which(value, path=env.get("PATH"))
+                if found is None:
+                    out.append(f"{name} names no executable file and no program on PATH ({what})")
+                continue
+            path = pathlib.Path(value)
             if not path.is_file():
                 out.append(f"{name} names no file ({what})")
             elif not os.access(path, os.R_OK):
