@@ -224,8 +224,10 @@ TEST(AnEmptyMessageOnTheErrorPageIsDeclinedOnceAndSaidOnce) {
   CHECK(lf::NoteMessageNotShown(log, reads, 8, &declines::Capture));
   CHECK(!lf::NoteMessageNotShown(log, reads, 8, &declines::Capture));  // the repeat says nothing
   CHECK(declines::g_seen.size() == 1U);
-  CHECK(declines::g_seen[0].code == 8);
-  CHECK(declines::g_seen[0].reason == rules::Decline::kNoMessage);
+  if (declines::g_seen.size() == 1U) {  // indexed only when the size holds, so a failed size check does not abort the run
+    CHECK(declines::g_seen[0].code == 8);
+    CHECK(declines::g_seen[0].reason == rules::Decline::kNoMessage);
+  }
 }
 
 TEST(ANoGameObjectIsDeclinedAsNoGameBaseEvenWithAMessageThere) {
@@ -237,7 +239,9 @@ TEST(ANoGameObjectIsDeclinedAsNoGameBaseEvenWithAMessageThere) {
   declines::g_seen.clear();
   CHECK(lf::NoteMessageNotShown(log, reads, 8, &declines::Capture));
   CHECK(declines::g_seen.size() == 1U);
-  CHECK(declines::g_seen[0].reason == rules::Decline::kNoGameBase);
+  if (declines::g_seen.size() == 1U) {
+    CHECK(declines::g_seen[0].reason == rules::Decline::kNoGameBase);
+  }
 }
 
 TEST(EachReasonIsSaidOnceAndAnotherReasonGetsItsOwnLine) {
@@ -253,8 +257,10 @@ TEST(EachReasonIsSaidOnceAndAnotherReasonGetsItsOwnLine) {
   CHECK(lf::NoteMessageNotShown(log, noMessage, 8, &declines::Capture));
   CHECK(!lf::NoteMessageNotShown(log, noGame, 8, &declines::Capture));
   CHECK(declines::g_seen.size() == 2U);
-  CHECK(declines::g_seen[0].reason == rules::Decline::kNoGameBase);
-  CHECK(declines::g_seen[1].reason == rules::Decline::kNoMessage);
+  if (declines::g_seen.size() == 2U) {
+    CHECK(declines::g_seen[0].reason == rules::Decline::kNoGameBase);
+    CHECK(declines::g_seen[1].reason == rules::Decline::kNoMessage);
+  }
 }
 
 TEST(AShownMessageIsNotDeclined) {
