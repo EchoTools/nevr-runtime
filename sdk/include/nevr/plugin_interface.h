@@ -117,8 +117,28 @@ enum NevrScriptRedirectResult : int32_t {
     NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR   = 4, /* the host could not find the directory its own library was loaded from */
 };
 
+/* What register_slot_hook and unregister_slot_hook return. 0 is OK; every other value is a refusal. The host logs a Warning
+ * that names the slot, the chain on it and the reason. A refused register normally leaves nothing chained, so the plugin
+ * may call again. One exception: an install whose store was live when it failed may leave its handler reachable through
+ * the slot. That handle stays held for the life of the process, its code stays mapped, and the register is refused. */
+enum NevrSlotHookResult : int32_t {
+    NEVR_SLOT_HOOK_OK           = 0,
+    NEVR_SLOT_HOOK_BAD_ARGUMENT = 1, /* a null pointer, a name or build ID too long, a reloc outside NevrSlotReloc, or a handle
+                                      *   not held by the calling plugin (a handle another plugin registered is not its own) */
+    NEVR_SLOT_HOOK_NOT_FOUND    = 2, /* the module is not loaded, or it has no relocation of that kind for the symbol */
+    NEVR_SLOT_HOOK_NO_HANDLE    = 3, /* every service handle is in use (eight in this build) */
+    NEVR_SLOT_HOOK_REFUSED      = 4, /* the host refused the install, or could not take the handler out of its chain */
+};
+
+/* Which relocation a slot hook names. The host hooks the slot the module's own relocation writes. */
+enum NevrSlotReloc : int32_t {
+    NEVR_SLOT_RELOC_JUMP_SLOT = 0, /* a call through the PLT: the game calls the symbol by name */
+    NEVR_SLOT_RELOC_GLOB_DAT  = 1, /* a pointer load through the GOT: the game reads the symbol's address */
+};
+
 /* The services a Quest host offers a plugin, reached through ctx->quest. Every pointer is process-lifetime. A
- * plugin checks struct_size covers a member before calling it: the struct grows at its tail. */
+ * plugin checks struct_size covers a member before calling it: the struct grows at its tail. A member may be null on
+ * a host that does not offer it (the release host offers no slot hook service): a plugin checks the pointer too. */
 struct NevrQuestHostApi {
     uint32_t struct_size;
     /* Puts `filter` on the game's controller input (libr15's vrapi_GetCurrentInputState). Development builds only;
@@ -131,6 +151,40 @@ struct NevrQuestHostApi {
      * which are missing. The stock files are never read in its place. One registration per process; call from init. A
      * refusal other than NEVR_SCRIPT_REDIRECT_ALREADY_ARMED leaves nothing registered: the plugin may call again. */
     int32_t (*register_script_redirect)(const char* plugin_id, const uint64_t* stock_hashes, uint32_t count);
+    /* --- Hook service (#2001, ADR 0019 section 5, ADR 0034; tail members, no version bump) --- */
+    /* Chains `handler` onto the game's use of `symbol` through the slot that `module` (a soname such as "libr15.so")
+     * relocates for it. Every handler on one slot is kept in registration order: the newest runs first, and each reaches
+     * the handler before it through *original_out; the oldest reaches the game's function. `build_id` is the GNU build ID
+     * the target expects, as lowercase hex; the host refuses a target without one. `reloc` is a NevrSlotReloc. Call from
+     * init, not from a hook. On NEVR_SLOT_HOOK_OK, *out_handle is the handle for unregister_slot_hook, and *original_out
+     * holds the callable original before the handler can run.
+     *
+     * Lifetime, the host's contract with the plugin: `handler`'s code and `original_out` must stay valid for the whole
+     * process. The host writes *original_out itself after this call returns, whenever a handler newer than this one is
+     * removed, so the plugin reads *original_out at each call and does not cache it. `handler` can run after
+     * unregister_slot_hook returns: a call already in flight keeps the original it read, which stays callable. The host
+     * keeps a plugin's object mapped while one of its handles is held, so the code stays valid; the plugin must not unmap
+     * its own code.
+     *
+     * A handler can run more than once in one call during a concurrent remove and add: a call in flight while a middle
+     * handler is removed and registered again can run a handler, then the removed handler it reached, which calls the
+     * original it read, and so reach a handler on the chain a second time. The handler must not assume it runs once per call.
+     *
+     * The handler runs inside the game's call: it must return promptly, and must not block, take a lock, allocate, log,
+     * throw or call into the game. Build the plugin with -fno-exceptions. The owner the host records for the handler is
+     * "plugin:<plugin_id>". `plugin_id` must be the id the host gave this plugin (ctx->plugin_id, its config.yaml name) when the
+     * call is made on the thread that is running this plugin's init or Shutdown: there, any other id gets
+     * NEVR_SLOT_HOOK_BAD_ARGUMENT and no handler is chained. A call from another thread is not checked against that id; its
+     * handler is chained under the id it names. A handler registered while the host is in a plugin's init or Shutdown keeps
+     * the plugin the host is running mapped, whichever thread registered it. */
+    int32_t (*register_slot_hook)(const char* plugin_id, const char* module, const char* symbol, int32_t reloc,
+                                  const char* build_id, void* handler, void** original_out, uint32_t* out_handle);
+    /* Takes the handler of `handle` out of its chain. `plugin_id` must be the id the handle was registered under: any other
+     * caller gets NEVR_SLOT_HOOK_BAD_ARGUMENT and the handle stays chained. The handler that called it is relinked to what
+     * it called, so the other handlers on the slot keep running. Returns NEVR_SLOT_HOOK_OK, NEVR_SLOT_HOOK_BAD_ARGUMENT
+     * for a handle not held by this plugin, or NEVR_SLOT_HOOK_REFUSED when the host could not take it out, or another
+     * unregister of the same handle is in progress (the Warning or Error names why). */
+    int32_t (*unregister_slot_hook)(const char* plugin_id, uint32_t handle);
 };
 
 /* Game context passed to the plugin by the host.
