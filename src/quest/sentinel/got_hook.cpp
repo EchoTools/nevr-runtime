@@ -919,7 +919,11 @@ GotStatus JoinLocked(const Prepared& p, const GotTarget& target, void* hookFn, v
     // A later handler: the slot must hold the chain's newest hook, and the chain's base must be the expected original.
     const std::size_t newestIndex = NewestOn(slot);
     void* const newest = g_links[newestIndex].hookFn;
-    if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != newest) return GotStatus::kOriginalMismatch;
+    // The refusal names the value the join expected, so the newest hook is set before the return (the refusal log reads it).
+    if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != newest) {
+      *expectedSlot = newest;
+      return GotStatus::kOriginalMismatch;
+    }
     if (target.expectedOriginal != nullptr && g_links[oldest].original != target.expectedOriginal) {
       return GotStatus::kOriginalMismatch;
     }
@@ -1118,10 +1122,11 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
       LogRegistryFull(target, slot, prepared.resolution.slotVaddr);
       return status;
     }
-    // The value the install waited for: the expected original (kOriginalMismatch), or the value it read or stored over
-    // (kSlotChanged). The first handler's read is `observed`.
-    const void* const waited = status == GotStatus::kOriginalMismatch ? target.expectedOriginal
-                       : (expected != nullptr ? expected : prepared.observed);
+    // The value the install waited for: the value JoinLocked named (the chain's newest hook, for a chained join refused on
+    // it); else the expected original (kOriginalMismatch); else the value it read or stored over (kSlotChanged). The first
+    // handler's read is `observed`.
+    const void* const waited = expected != nullptr ? expected
+                             : (status == GotStatus::kOriginalMismatch ? target.expectedOriginal : prepared.observed);
     LogInstallRefusal(target, status, nevr::hook::AttachStageName(stage), savedErrno, slot,
                       prepared.resolution.slotVaddr, prepared.image.base, waited,
                       status == GotStatus::kBuildIdMismatch ? prepared.actualBuildId : nullptr);

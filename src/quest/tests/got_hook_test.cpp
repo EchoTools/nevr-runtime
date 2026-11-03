@@ -761,6 +761,9 @@ void ForeignWriterOnAChainIsARefusalNamingTheChain() {
   QCHECK(Count(LogLevel::kWarn, "\"status\":\"original_mismatch\"") == 1);
   QCHECK(Count(LogLevel::kWarn, "\"slot_vaddr\":\"0x") == 1);
   QCHECK(Count(LogLevel::kWarn, "\"chain\":\"sentinel\",\"chain_length\":1") == 1);
+  // The refusal names the newest hook the join expected, not a null original (round-3 item 5).
+  QCHECK(Count(LogLevel::kWarn, "\"expected\":\"hook of sentinel\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"expected\":\"null\"") == 0);
   ForceWrite(r.slot, AddThunk::EntryAddress());
   QCHECK_STATUS(sentinelHook.Remove(), GotStatus::kOk);
   QCHECK(*r.slot == m.realAdd);
