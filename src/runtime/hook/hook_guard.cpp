@@ -69,6 +69,8 @@ const char* g_firstDropName = nullptr;
 
 #ifdef NEVR_TEST_HOOKS
 void (*g_beforePublishForTest)() = nullptr;
+/// Runs in VerifyAll right after a slot is copied, before the target's bytes are read.
+void (*g_afterReadForTest)() = nullptr;
 #endif
 
 /// Committed+readable check that does not use IsBadReadPtr (deprecated, and
@@ -226,6 +228,9 @@ int VerifyAll(const char* context) {
   for (LONG i = 0; i < used; i++) {
     Snapshot snap{};
     if (!ReadSlot(i, snap)) continue;
+#ifdef NEVR_TEST_HOOKS
+    if (g_afterReadForTest != nullptr) g_afterReadForTest();
+#endif
     if (snap.target == nullptr) continue;
     if (!Readable(snap.target, kSnapshotBytes)) continue;
 
@@ -299,6 +304,7 @@ int Capacity() { return kMaxGuarded; }
 
 #ifdef NEVR_TEST_HOOKS
 void SetBeforePublishForTest(void (*callback)()) { g_beforePublishForTest = callback; }
+void SetAfterReadForTest(void (*callback)()) { g_afterReadForTest = callback; }
 
 void ResetForTest() {
   AcquireSRWLockExclusive(&g_writerLock);
@@ -315,6 +321,7 @@ void ResetForTest() {
   g_firstDropTarget = nullptr;
   g_firstDropName = nullptr;
   g_beforePublishForTest = nullptr;
+  g_afterReadForTest = nullptr;
   ReleaseSRWLockExclusive(&g_writerLock);
 }
 #endif

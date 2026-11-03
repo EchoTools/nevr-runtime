@@ -6004,6 +6004,18 @@ void WaitBeforeGuardPublish() {
     WaitForSingleObject(g_guardContinue, 5000);
 }
 
+// The page the VerifyAll seam retires and restores, or nullptr. The seam runs for every slot VerifyAll copies,
+// so the callback acts once and clears it.
+void* g_seamPage = nullptr;
+
+void RetireAndRestoreAtSeam() {
+    void* page = g_seamPage;
+    g_seamPage = nullptr;
+    if (page == nullptr) return;
+    nevr_hook_guard::Retire(page);  // the record goes first, as PatchRetire does
+    memset(page, 0x90, 5);          // then MinHook writes the game's bytes back over our JMP
+}
+
 }  // namespace
 
 TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
@@ -6349,6 +6361,36 @@ TEST(N84_HookGuard, PluginAssetsRetireAfterMinHookShutdownIsNotAFailedRemoval) {
   nevr_hook_guard::ResetForTest();
 }
 
+// VerifyAll copies a slot, then reads the target's bytes and compares them with the copy. A Retire that lands between the
+// two changes the slot (seq, then gen 0) before MinHook writes the game's bytes back, so the restored bytes are not an
+// overwrite. The seam runs right after the copy and does the retire and the restore there. The seq/gen re-check after a
+// mismatch must skip the slot: VerifyAll reports nothing and logs no overwrite.
+TEST(N84_HookGuard, VerifyAllSkipsASlotRetiredWhileItIsCopied) {
+  nevr_hook_guard::ResetForTest();
+  ClearTestLogs();
+  GuardScratch s;
+  ASSERT_NE(s.page, nullptr);
+  memset(s.page, 0x90, 32);
+  unsigned char* p = static_cast<unsigned char*>(s.page);
+  p[0] = 0xE9;  // our detour's JMP rel32, recorded
+  p[1] = 0x11;
+  p[2] = 0x22;
+  p[3] = 0x33;
+  p[4] = 0x44;
+  nevr_hook_guard::Record(s.page, "N84_seq_recheck");
+  ASSERT_EQ(nevr_hook_guard::VerifyAll("test:seq-baseline"), 0) << "precondition: freshly recorded bytes must match";
+
+  g_seamPage = s.page;
+  nevr_hook_guard::SetAfterReadForTest(&RetireAndRestoreAtSeam);
+  const int mismatches = nevr_hook_guard::VerifyAll("test:seq-recheck");
+  nevr_hook_guard::SetAfterReadForTest(nullptr);
+  EXPECT_EQ(g_seamPage, nullptr) << "the seam never ran: VerifyAll did not copy the record";
+  EXPECT_EQ(mismatches, 0) << "a record retired while VerifyAll held its copy was reported as overwritten";
+  EXPECT_FALSE(TestLogContains("hook overwritten")) << "the restored bytes were logged as an overwrite";
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 0) << "the seam did not retire the record";
+  nevr_hook_guard::ResetForTest();
+}
+
 // WOULD-FAIL-IF (N84): delete the memcmp in nevr_hook_guard::VerifyAll (hook_guard.cpp)
 //   -> OverwrittenBytes_Detected fails: a foreign detour goes unreported.
 // WOULD-FAIL-IF (N84-retire): make nevr_hook_guard::Retire forget nothing (hook_guard.cpp)
@@ -6359,6 +6401,9 @@ TEST(N84_HookGuard, PluginAssetsRetireAfterMinHookShutdownIsNotAFailedRemoval) {
 //   -> PluginAssetsEngineHookIsRecordedUnderItsName fails.
 // WOULD-FAIL-IF (N84-retire-target): make nevr_hook_guard::Retire ignore `s.target != target` (hook_guard.cpp)
 //   -> RetireOfOneTargetKeepsTheRecordOfAnother fails: another target's record is forgotten too.
+// WOULD-FAIL-IF (N84-seq-recheck): delete the seq/gen re-check after a mismatch in nevr_hook_guard::VerifyAll
+//   (hook_guard.cpp, the block after the memcmp)
+//   -> VerifyAllSkipsASlotRetiredWhileItIsCopied fails: a record retired while VerifyAll copied it is reported as overwritten.
 // WOULD-FAIL-IF (N84-assets-notinit): drop MH_ERROR_NOT_INITIALIZED from RetireEngineHook (plugin_assets.cpp)
 //   -> PluginAssetsRetireAfterMinHookShutdownIsNotAFailedRemoval fails: a hook MinHook shut down is logged as a failed removal.
 // WOULD-FAIL-IF (N84-record): delete the Readable() check in nevr_hook_guard::Record

@@ -65,6 +65,10 @@ int Capacity();
 /// Pause a writer after it fills a reserved slot but before readers may see it.
 void SetBeforePublishForTest(void (*callback)());
 
+/// Run `callback` in VerifyAll right after it copies a slot and before it reads the target's bytes, so a
+/// test can retire or rewrite the record while VerifyAll holds its copy.
+void SetAfterReadForTest(void (*callback)());
+
 /// Test-only: drop every recorded site. The guard is deliberately process-global
 /// (hooked addresses live in loaded modules and are never freed in production),
 /// which makes tests order-dependent without this — a freed-and-reallocated
