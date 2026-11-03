@@ -878,6 +878,165 @@ void ServiceRefusesWhatItCannotHoldAndSaysWhy() {
   dlclose(m.handle);
 }
 
+// Forget drops a middle handler without writing the slot (a module that moved or was reloaded): its caller is relinked to
+// what the forgotten handler called, and the rest of the chain keeps running (ForgetLinkLocked, #2001 S5).
+void ForgettingAMiddleHandlerRelinksItsCaller() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  AddThunk::Arm(kAddPlus100);
+  TimesThunk::Arm(kTimesTwo);
+  SubThunk::Arm(kSubPlus100);
+  GotHook addHook;
+  QCHECK_STATUS(Install(addHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("add"),
+                        AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+                GotStatus::kOk);
+  GotHook timesHook;
+  QCHECK_STATUS(Install(timesHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("times"),
+                        TimesThunk::EntryAddress(), TimesThunk::OriginalOut()),
+                GotStatus::kOk);
+  GotHook subHook;
+  QCHECK_STATUS(Install(subHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("sub"),
+                        SubThunk::EntryAddress(), SubThunk::OriginalOut()),
+                GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 314);
+  Captured().clear();
+  timesHook.Forget();
+  QCHECK(!timesHook.installed());
+  QCHECK(Count(LogLevel::kWarn, "\"op\":\"forget\",\"status\":\"ok\"") == 1);
+  QCHECK(m.callAdd(3, 4) == 207);  // the newest calls the bottom entry: SubPlus100(AddPlus100(7))
+  QCHECK_STATUS(subHook.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 107);
+  QCHECK_STATUS(addHook.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(Errors() == 0);
+  dlclose(m.handle);
+}
+
+// A later handler joins only when the chain's base is the expected original (N-free; #2001 S5). A wrong expectation is
+// refused as original_mismatch and leaves the chain as it was; the right one joins.
+void AJoinChecksTheExpectedOriginal() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  AddThunk::Arm(kAddPlus100);
+  TimesThunk::Arm(kTimesTwo);
+  GotHook addHook;
+  QCHECK_STATUS(Install(addHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("add"),
+                        AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+                GotStatus::kOk);
+  GotTarget wrong{so, "fx_add", RelocKind::kJumpSlot};
+  wrong.expectedOriginal = reinterpret_cast<void*>(&SubImpl);
+  GotHook timesHook;
+  Captured().clear();
+  QCHECK_STATUS(Install(timesHook, wrong.Owned("times"), TimesThunk::EntryAddress(), TimesThunk::OriginalOut()),
+                GotStatus::kOriginalMismatch);
+  QCHECK(!timesHook.installed());
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"original_mismatch\"") == 1);
+  QCHECK(m.callAdd(3, 4) == 107);  // the chain is as it was
+  GotTarget right{so, "fx_add", RelocKind::kJumpSlot};
+  right.expectedOriginal = m.realAdd;
+  QCHECK_STATUS(Install(timesHook, right.Owned("times"), TimesThunk::EntryAddress(), TimesThunk::OriginalOut()),
+                GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 214);  // TimesTwo(AddPlus100(7))
+  QCHECK_STATUS(timesHook.Remove(), GotStatus::kOk);
+  QCHECK_STATUS(addHook.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(Errors() == 0);
+  dlclose(m.handle);
+}
+
+// The service's own argument checks (#2001 S5): a name one past its capacity is refused, one at the limit is looked up; an
+// empty build ID is refused; a null module is refused by its pointer.
+void ServiceRefusesBadNamesAndPointersAtTheBoundary() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const std::string live = LiveNoteOf(so);
+  const std::string tooLongModule(96, 'a');  // the service holds 95 characters and the NUL
+  const std::string limitModule(95, 'a');
+  const std::string tooLongSymbol(64, 'b');  // holds 63
+  const std::string tooLongBuildId(80, 'c');  // holds 79
+  void* out = nullptr;
+  std::uint32_t handle = 0;
+  Captured().clear();
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", tooLongModule.c_str(), "fx_add",
+                                         NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(), TimesThunk::EntryAddress(), &out,
+                                         &handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, tooLongSymbol.c_str(), NEVR_SLOT_RELOC_JUMP_SLOT,
+                                         live.c_str(), TimesThunk::EntryAddress(), &out, &handle) ==
+         NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+                                         tooLongBuildId.c_str(), TimesThunk::EntryAddress(), &out, &handle) ==
+         NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"a name is longer than the service holds\"") == 3);
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", limitModule.c_str(), "fx_add",
+                                         NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(), TimesThunk::EntryAddress(), &out,
+                                         &handle) == NEVR_SLOT_HOOK_NOT_FOUND);
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"module_not_loaded\"") == 1);
+  Captured().clear();
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, "",
+                                         TimesThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the target names no build ID") == 1);
+  Captured().clear();
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", nullptr, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+                                         live.c_str(), TimesThunk::EntryAddress(), &out, &handle) ==
+         NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"a required pointer is null\"") == 1);
+  QCHECK(out == nullptr && handle == 0);
+  QCHECK(Errors() == 0);
+  dlclose(m.handle);
+}
+
+// The middle handler is removed and installed again on top while two threads call through the chain (#2001 S5). The
+// chain is add, times, sub (314) until the middle leaves (add, sub: 207); the re-added handler is the newest (add, sub,
+// times: 414). A call that read the old chain before a change can still run the removed handler, which calls add (214).
+// No call may see any other value.
+void CallsSurviveTheMiddleBeingRemovedAndAddedAgain() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  AddThunk::Arm(kAddPlus100);
+  TimesThunk::Arm(kTimesTwo);
+  SubThunk::Arm(kSubPlus100);
+  const GotTarget addTarget = GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("add");
+  const GotTarget timesTarget = GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("times");
+  const GotTarget subTarget = GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("sub");
+  GotHook addHook;
+  QCHECK_STATUS(Install(addHook, addTarget, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  GotHook timesHook;
+  QCHECK_STATUS(Install(timesHook, timesTarget, TimesThunk::EntryAddress(), TimesThunk::OriginalOut()), GotStatus::kOk);
+  GotHook subHook;
+  QCHECK_STATUS(Install(subHook, subTarget, SubThunk::EntryAddress(), SubThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 314);
+
+  std::atomic<bool> stop{false};
+  std::atomic<long> bad{0};
+  std::atomic<long> calls{0};
+  std::thread caller([&] {
+    while (!stop.load()) {
+      const int v = m.callAdd(3, 4);
+      if (v != 314 && v != 207 && v != 414 && v != 214) bad.fetch_add(1);
+      calls.fetch_add(1);
+    }
+  });
+  for (int i = 0; i < 200; ++i) {
+    QCHECK_STATUS(timesHook.Remove(), GotStatus::kOk);
+    QCHECK_STATUS(Install(timesHook, timesTarget, TimesThunk::EntryAddress(), TimesThunk::OriginalOut()), GotStatus::kOk);
+  }
+  stop.store(true);
+  caller.join();
+  QCHECK(bad.load() == 0);
+  QCHECK(calls.load() > 0);
+  QCHECK(m.callAdd(3, 4) == 414);
+  QCHECK_STATUS(timesHook.Remove(), GotStatus::kOk);
+  QCHECK_STATUS(subHook.Remove(), GotStatus::kOk);
+  QCHECK_STATUS(addHook.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(Errors() == 0);
+  dlclose(m.handle);
+}
+
 void ServiceHoldsEightHandlesThenRefuses() {
   Prepare();
   const char* so = "libgotfx_consumer_now.so";
@@ -1900,6 +2059,7 @@ void PoisonedSlotIsKeptWhenMapsAreUnreadable() {
     QCHECK(Count(LogLevel::kError, "\"status\":\"mapping_unknown\"") == 1);
     void* retryOut = nullptr;
     QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &retryOut), GotStatus::kSlotPoisoned);
+    QCHECK(Count(LogLevel::kWarn, "(poisoned)\"") == 1);  // the refused chain names the entry that is poisoned
   }
   // A readable maps file that lists the page: still mapped, reported as such.
   Captured().clear();
@@ -2230,6 +2390,10 @@ int main(int argc, char** argv) {
   ThirdConsumerThroughTheServiceJoinsTheChain();
   ServiceRefusesWhatItCannotHoldAndSaysWhy();
   ServiceHoldsEightHandlesThenRefuses();
+  ForgettingAMiddleHandlerRelinksItsCaller();
+  AJoinChecksTheExpectedOriginal();
+  ServiceRefusesBadNamesAndPointersAtTheBoundary();
+  CallsSurviveTheMiddleBeingRemovedAndAddedAgain();
   ConcurrentCallers();
   SyntheticResolution();
   SyntheticInstall();
