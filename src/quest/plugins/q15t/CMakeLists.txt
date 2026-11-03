@@ -136,7 +136,7 @@ set(Q15T_COMMON_LINK -Wl,--gc-sections -Wl,-z,max-page-size=16384 -Wl,--build-id
 
 add_library(nevr_q15t SHARED ${Q15T_SOURCES})
 set_target_properties(nevr_q15t PROPERTIES OUTPUT_NAME q15t)
-target_include_directories(nevr_q15t PRIVATE "${Q15T_DIR}/src")
+target_include_directories(nevr_q15t PRIVATE "${Q15T_DIR}/src" "${Q15T_DIR}/../../..")  # the second: src/, for "quest/headset_profile.h"
 target_link_libraries(nevr_q15t PRIVATE nevr::plugin_sdk dl)
 target_compile_options(nevr_q15t PRIVATE ${Q15T_COMMON_OPTIONS})
 target_compile_definitions(nevr_q15t PRIVATE
@@ -163,7 +163,7 @@ if(Q15T_EARLY)
     "${Q15T_DIR}/src/plugin_early.cpp" "${Q15T_DIR}/src/plugin_log.cpp" "${Q15T_DIR}/src/got_swap.cpp" "${Q15T_DIR}/src/safe_read.cpp"
     "${Q15T_DIR}/src/import_hook.cpp" "${Q15T_DIR}/src/heaps.cpp" "${Q15T_DIR}/src/memsys.cpp")
   set_target_properties(nevr_q15t_early PROPERTIES OUTPUT_NAME q15t_early)
-  target_include_directories(nevr_q15t_early PRIVATE "${Q15T_DIR}/src")
+  target_include_directories(nevr_q15t_early PRIVATE "${Q15T_DIR}/src" "${Q15T_DIR}/../../..")  # the second: src/, for "quest/headset_profile.h"
   target_link_libraries(nevr_q15t_early PRIVATE nevr::plugin_sdk dl)
   target_compile_options(nevr_q15t_early PRIVATE ${Q15T_COMMON_OPTIONS})
   target_compile_definitions(nevr_q15t_early PRIVATE Q15T_BUILD_ID="${nevr_pinned_build_id}")

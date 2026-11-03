@@ -24,21 +24,21 @@ for arm in "0 0" "1 0" "0 1"; do
   g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -rdynamic -Wall -Wextra -Werror \
     -DQ15T_HZ_MATCH90=$cap -DQ15T_T26=$t26 -DQ15T_SLOT_SETCLOCKLEVELS=0x10 -DQ15T_SLOT_SETDISPLAYREFRESHRATE=0x18 -include "$tests/host_overrides.h" \
     -DQ15T_BUILD_ID_FOR_TEST='"b243509c08ce677aeb95fa348016949b3fc45230"' "${@}" \
-    -I"$here/src" -I"$nevr/sdk/include" \
+    -I"$here/src" -I"$nevr/src" -I"$nevr/sdk/include" \
     "$tests/host_test.cpp" "$here/src/plugin.cpp" "$here/src/plugin_log.cpp" "$here/src/script_redirect.cpp" "$here/src/import_hook.cpp" "$here/src/clock_levels.cpp" "$here/src/plugin_args.cpp" "$here/src/refresh_rate.cpp" "$here/src/game_tick.cpp" "$here/src/safe_read.cpp" "$here/src/headset_gates.cpp" "$here/src/got_swap.cpp" "$here/src/weapon_arm.cpp" "$here/src/gamespace.cpp" \
     -o "$out/host_test_${cap}_${t26}" -ldl
   "$out/host_test_${cap}_${t26}"
 done
 
 # the headset gates (return-address gated wrappers)
-g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I"$here/src" -I"$nevr/sdk/include" \
+g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I"$here/src" -I"$nevr/src" -I"$nevr/sdk/include" \
   "$tests/gates_test.cpp" "$here/src/headset_gates.cpp" "$here/src/plugin_log.cpp" "$here/src/import_hook.cpp" "$here/src/got_swap.cpp" \
   -o "$out/gates_test" -ldl
 "$out/gates_test"
 
 # the link gate's library name (headset_gates.cpp LibraryName, its dladdr refusal, called directly: the Bind frame is absent on the
 # host). The test includes headset_gates.cpp itself, so it is not listed again.
-g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I"$here/src" -I"$nevr/sdk/include" \
+g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I"$here/src" -I"$nevr/src" -I"$nevr/sdk/include" \
   "$tests/library_name_test.cpp" "$here/src/plugin_log.cpp" "$here/src/import_hook.cpp" "$here/src/got_swap.cpp" \
   -o "$out/library_name_test" -ldl
 "$out/library_name_test"

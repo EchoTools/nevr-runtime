@@ -10,8 +10,8 @@
  *
  *   1. The vrapi_GetSystemPropertyInt slot (JUMP_SLOT 0x36fa728), installed at every level. The handler calls the original
  *      with exactly the arguments it was given, and returns:
- *        - for id 5 and id 6, when the applied level is not `stock`, that level's width or height for the headset the runtime's
- *          own answer names (texture_quality.h HeadsetForStockSize, SizeFor);
+ *        - for id 5 and id 6, when the applied level is not `stock`, that level's width or height in the headset's profile
+ *          (headset_profile.h; texture_quality.h SizeFor);
  *        - for every other id, and for 5 and 6 at `stock`, exactly what the original returned.
  *      This is the one place the eye-size decision is made, on both inputs.
  *   2. CVR::RefreshRTSize's slot (JUMP_SLOT 0x36dbd10), installed only when the live body is the reference build's (kReference:
@@ -37,7 +37,7 @@
  *   {"level":"info","event":"texture_quality","result":"installed|refused|skipped",
  *    "quality":"high","source":"config|default","w":0,"h":0,"sizes":"per_headset",...}
  * (`level` is the log severity; the setting is `quality`.) `w` and `h` are 0 on an installed hook: the size depends on
- * the headset, which the first query names, so the swap-chain line is the record of the size served. `refused` is a GotHook
+ * the headset's profile, which the identity step sets at start, so the swap-chain line is the record of the size served. `refused` is a GotHook
  * refusal (the status rides in `status`) or a second level. The `route` field says what the RefreshRTSize route did: installed,
  * refused (an unrecognised RefreshRTSize body, or pins or a slot the route cannot take: its own error line, texture_quality_route,
  * names the address and the bytes, and the vrapi hook still installs), not_needed (stock) or not_attempted; `skipped` is the counters refused. Counters (hook_report.h), registered by
@@ -108,6 +108,11 @@ void ResetForTest() noexcept;
 // The applied level, `stock` when none.
 Level LatchedLevel() noexcept;
 bool IsLatched() noexcept;
+
+// The headset's profile (headset_profile.h, ADR 0031). The identity step sets it once at start, before the first size query;
+// the hook and the texture menu read it. Null until it is set: the runtime's own sizes stand.
+void SetHeadsetProfile(const headset_profile::Profile* profile) noexcept;
+const headset_profile::Profile* ActiveHeadsetProfile() noexcept;
 
 // ---- the RefreshRTSize route (#1737 C4) ---------------------------------------------------------------------------------
 

@@ -1916,6 +1916,14 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/texture_quality_hook_test" -ldl
     timeout 120 "$out/texture_quality_hook_test"
+    # The headset identity (ADR 0031): the rules on device names, the settings each profile holds against the values the code gave
+    # before the table, and the identity step on a host (no property: the generic headset, one headset_profile line).
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/headset_profile_test.cpp \
+        src/quest/integration/headset_identity_step.cpp \
+        src/quest/sentinel/texture_quality_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/headset_profile_test" -ldl
+    timeout 120 "$out/headset_profile_test"
     # The reference libr15's eye-size route, pure half (#1737 C4): the RefreshRTSize body classifier, the reference start index's
     # parse, the index-to-level map and the float truncation. No game, no hook.
     "${cxx[@]}" -fno-exceptions src/quest/tests/refresh_eye_size_test.cpp -o "$out/refresh_eye_size_test"

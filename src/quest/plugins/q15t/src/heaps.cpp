@@ -7,12 +7,16 @@
 #include <sys/system_properties.h>
 #endif
 
+#include "quest/headset_profile.h"
 #include "got_swap.h"
 #include "module_switch.h"
 #include "plugin_log.h"
 #include "safe_read.h"
 
 namespace q15t {
+
+namespace headset_profile = nevr_quest::headset_profile;  // quest/headset_profile.h: the headset's settings
+
 namespace {
 
 constexpr std::uint64_t kMiB = 1ull << 20;
@@ -30,7 +34,6 @@ constexpr HeapRowPin kPins[kRows] = {
     {"R08", "_ZN10NRadEngine17kGpuMemoryAndroidE", 0x3710188, 0x2b9ca98, 0xf78614, kLdrX1FromX8, 160 * kMiB, 512 * kMiB},
     {"R09", "_ZN10NRadEngine24kR15GameSpaceMemoryQuestE", 0x3715198, 0x2b9e1c0, 0x11ffdec, kLdrX0FromX8, 40 * kMiB, 128 * kMiB},
 };
-constexpr std::uint64_t kSystemQuest2 = 512 * kMiB;  // the source build's memsys:253 (ro.product.device "hollywood")
 
 // The values the game reads. A game reader holds the slot's pointer for the process's lifetime, so these stay valid for it:
 // plain static storage of a library that is never unloaded.
@@ -58,8 +61,13 @@ void ReadDevice(char* out, std::size_t n) {
 #endif
 }
 
+// The row's value. The System heap is the headset profile's (headset_profile.h: 512 MiB on a Quest 2, the row's own target
+// otherwise); the other rows are their own target on every headset.
 std::uint64_t ValueFor(int row, const char* device) {
-  if (row == kSystemRow) return std::strcmp(device, "hollywood") == 0 ? kSystemQuest2 : kPins[row].target;
+  if (row == kSystemRow) {
+    const headset_profile::Match match = headset_profile::IdentifyDevice(device);
+    if (match.profile->systemHeapMiB > 0) return static_cast<std::uint64_t>(match.profile->systemHeapMiB) * kMiB;
+  }
   return kPins[row].target;
 }
 
