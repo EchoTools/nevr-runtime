@@ -17,7 +17,7 @@ If #1737 brings the layer into this repo's scope, it is reconstructed here (ADR 
 
 The layer is not in this tree. The release base carries the reference build's `libvrapi.so` (`tools/quest_release_base.py` names it), and `tools/quest_runtime_pin.py` and `tools/quest_repack_libs.py` pin its output into the signed APK. This repo therefore changes no code in the layer. ADR 0035 makes the layer class 2 once it is reconstructed here.
 
-The scope is open. #1737 row G6A-094 marks the VrApi-on-OpenXR runtime out of scope, and its H15 section keeps Quest on the system VrApi. ADR 0033 and ADR 0035 say how the layer is made if #1737 brings it into scope; they do not bring it in. This design does not settle that, and no layer work is scheduled until the scope is settled (#1737).
+The scope is open. #1737 row G6A-094 marks the VrApi-on-OpenXR runtime out of scope for this repo's own code; the release APK carries the reference build's runtime as it is (above), which this repo neither builds nor changes. ADR 0033 and ADR 0035 say how the layer is made if #1737 brings it into scope; they do not bring it in. This design does not settle that, and no layer work is scheduled until the scope is settled (#1737).
 
 ### The key: the interaction profile
 The layer reads `xrGetCurrentInteractionProfile` for each hand's top-level user path, `/user/hand/left` and `/user/hand/right`. For a hand whose profile is one the measurement below shows flips, the layer applies the roll to the orientation it returns for that hand's tracked-remote device: `q' = q * (0, 0, 1, 0) = (y, -x, w, -z)` for `q = (x, y, z, w)`, the same roll as the interim. Position, velocities, status and times stay as written. Other profiles, hand tracking and unknown devices are not touched.

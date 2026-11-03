@@ -68,9 +68,9 @@ parameter.
 
    A tools test checks the index against the pinned addresses in the source in both directions: every pinned address has
    a row, and every row's address is pinned in the source. That is a stronger check than the patch map's today.
-4. **Outside inputs are environment variables or recipe parameters** (AGENTS.md). The tree pins each by commit or sha256
-   and the recipe refuses any other, as `tools/quest_release_base.py` refuses any base but `REFERENCE_APK_SHA256`; the
-   manifest records the pin each build used.
+4. **Outside inputs whose bytes reach a shipped file are environment variables or recipe parameters** (AGENTS.md). The
+   tree pins each by commit or sha256 and the recipe refuses any other, as `tools/quest_release_base.py` refuses any
+   base but `REFERENCE_APK_SHA256`; the manifest records the pin each build used.
 5. **No patch row and no shipped library is built from an input the tree does not pin**: a file kept outside the
    repository with no commit or sha256 here (an extra-rows file, a build directory an environment variable names). ADR
    0021's mechanism for rows outside the repository is retired under #1737.
@@ -84,7 +84,7 @@ Scope: the `justfile` recipes, `tools/`, `src/quest`, `src/runtime`, `config/`, 
 tests and `docs/audits/`.
 
 - **P1.** A file a recipe puts into a shipped artifact with no class of rule 1. For example, an entry copied from a base
-  APK that is neither a game file nor built or transformed by a recipe here from a pinned input.
+  APK the tree does not pin by sha256.
 - **P2.** A pinned address or instruction word in `src/quest` or `src/runtime` whose site cites no origin: no function
   name, no disassembly address, no source project. Found by reading the sites a search for address-sized constants
   lists; a search alone cannot tell a cited constant from an uncited one.

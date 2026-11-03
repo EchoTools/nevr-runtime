@@ -1,7 +1,8 @@
 # ADR 0034: one hook manager per process owns every hooked slot, and plugins hook through it
 
 Status: proposed. Applies to the Quest build and the PC client. Supersedes the parts of ADR 0019 that refuse a second
-handler on one slot: decision 9's refusal of a plugin claim on a registered slot, the "Chaining" bullet of section 5
+handler on one slot: decision 5's "no chaining in v1", decision 9's refusal of a plugin claim on a registered slot, the
+"Chaining" bullet of section 5
 (chaining refused in v1, "a later ADR"), the first two rules of section 9, and "Chaining of hooks on one slot" among
 section 13's non-goals.
 
@@ -28,9 +29,10 @@ registry. N151 names `got_swap.cpp` as an allowed page-protection site.
 The two mechanisms do not compose. The sentinel installs its render-configuration hooks from its constructor
 (`kInstallRenderConfig`, `src/quest/integration/ctor_sequence.cpp`) and q15t installs at the first call after load
 (`PluginsAction`, `src/quest/integration/production_steps.cpp`), so the sentinel takes `vrapi_SetDisplayRefreshRate` and
-`vrapi_SetClockLevels` first, and q15t's `InstallImportHook`, which expects the game's function in the slot, refuses both
+`vrapi_SetClockLevels` first. q15t's `InstallImportHook`, given no expected address, looks the function up with `dlsym`
+and refuses a slot that holds anything else (`src/quest/plugins/q15t/src/import_hook.cpp`), so it refuses both
 (`src/quest/plugins/q15t/src/refresh_rate.cpp`, `src/quest/plugins/q15t/src/clock_levels.cpp`; #2000 is that case, by
-code). In the other order, a `GotHook` with no expected original takes the slot's current value as its original
+code); were the lookup to find nothing, it would accept any executable word outside libr15 and chain without a line. In the other order, a `GotHook` with no expected original takes the slot's current value as its original
 (`Prepare` in `src/quest/sentinel/got_hook.cpp`), and the sentinel's handlers call their original first
 (`src/quest/sentinel/render_config_hook.cpp`), so both would run, the sentinel's outermost, in an order set by which
 installed first, and no line would say so.
@@ -61,7 +63,7 @@ original through its `BYTEHOOK_CALL_PREV()` macro ([bytedance/bhook](https://git
 
 ## Decision
 
-1. **One hook manager per process.** On Quest, the sentinel's GOT backend and its build-time rows. On PC, the runtime's
+1. **One hook manager per process.** On Quest, the sentinel's GOT backend and its build-time inline rows. On PC, the runtime's
    hook table behind `PatchDetour` and HookGuard.
 2. **Several handlers per slot, in a defined order.** The manager keeps a chain for each slot and each handler reaches the
    next through the manager, so a second consumer of a slot never needs a second mechanism. The order and every
@@ -71,13 +73,14 @@ original through its `BYTEHOOK_CALL_PREV()` macro ([bytedance/bhook](https://git
 3. **Plugins hook through the host.** On Quest the hook service is new members of `NevrQuestHostApi`, gated by its
    `struct_size` as ADR 0019 section 4 designed it, so plugins built against the current header keep loading. PC gets a
    service of the same shape (the plugin API change it needs is stated in its own PR, with N114). Once the services
-   exist, `got_swap.cpp` leaves N151's allowlist, so a page-protection call anywhere in a plugin fails N151's scan, and
-   `NEVR_PLUGIN_CAP_HOOKS_ENGINE` is retired.
+   exist, `got_swap.cpp` leaves N151's allowlist, so a page-protection call in a plugin under `src/quest` fails N151's
+   scan, and `NEVR_PLUGIN_CAP_HOOKS_ENGINE` is retired.
 4. **Code ported from another project is ported onto the service.** The module track's modules keep their logic and drop
    their own word-swap helpers.
 5. **A refusal names the slot, the owner chain and the reason** at Warning (`docs/standards/logging.md`, Rule 6).
 6. **Outside this ADR:** checked byte patches (AGENTS.md "Guardrails": a byte patch where a hook would cost something
-   measurable; `nevr_checked_patch` on PC, ADR 0021's word-patch rows on Quest); stores of data the game reads (a
+   measurable; `nevr_checked_patch` on PC, and on Quest ADR 0021's word-patch rows, of which the public table holds none
+   today); stores of data the game reads (a
    timestep, a score, a credits pointer); and the one hook the PC host (`BugSplat64.dll`) puts on the game's main wrapper
    before the runtime exists, which HookGuard records (`docs/adr/0008-bugsplat-host-and-nevr-runtime.md`, N125).
 
