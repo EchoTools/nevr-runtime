@@ -86,6 +86,7 @@ runm dronemuzzle dc_root_kept     src/dronemuzzle_core.h "s/        out\[i\] = r
 runm dronemuzzle dm_log_mx        src/dronemuzzle.cpp "s/.D(\"muzzle_x\"/.D(\"muzzle_q\"/"
 runm dronemuzzle dm_log_my        src/dronemuzzle.cpp "s/.D(\"muzzle_y\"/.D(\"muzzle_q\"/"
 runm dronemuzzle dm_log_mz        src/dronemuzzle.cpp "s/.D(\"muzzle_z\"/.D(\"muzzle_q\"/"
+runm dronemuzzle dm_log_back      src/dronemuzzle.cpp "s/.D(\"back_max_m\"/.D(\"back_max_q\"/"
 runm dronemuzzle dm_tp_args       src/dronemuzzle.cpp "s/if (!MuzzleMove(root, v, dt, spawn))/if (!MuzzleMove(v, root, dt, spawn))/"
 runm dronemuzzle dc_sum_x         src/dronemuzzle_core.h "s/kMuzzle\[0\] \* x\[i\] + //"
 runm dronemuzzle dc_sum_y         src/dronemuzzle_core.h "s/ + kMuzzle\[1\] \* y\[i\]//"

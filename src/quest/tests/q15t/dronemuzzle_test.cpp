@@ -330,6 +330,8 @@ static void TestInstallPinned() {
         (unsigned long long)q15t_dm_tp_ret.load(), (unsigned long long)q15t_dm_fire_ret.load());
   CHECK(q15t_dm_tp_next.load() == base + 0x180a384 && q15t_dm_fire_next.load() == base + 0x210c9c4, "next words");
   CHECK(CountLine("dronemuzzle hook install", 1) == 2 && HasLine("dronemuzzle: on (QA)", 1), "install lines");
+  CHECK(HasLine("muzzle_x=0.000024") && HasLine("muzzle_y=0.075634") && HasLine("muzzle_z=0.147283") && HasLine("back_max_m=0.250000"),
+        "the on (QA) line lacks a muzzle constant or the back-off cap");
   munmap(p, sz);
 }
 
