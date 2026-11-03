@@ -2,6 +2,7 @@
 #include "quest/plugin/input_seam_hook.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 
@@ -131,6 +132,13 @@ const NevrQuestHostApi kDevApi{sizeof(NevrQuestHostApi), &RegisterDev, &Register
 // The release API offers no slot hook service until q15t moves onto it (#2002).
 const NevrQuestHostApi kReleaseApi{sizeof(NevrQuestHostApi), &RegisterRelease, &RegisterScriptRedirect, nullptr,
                                    nullptr};
+
+// The hook service members are tail members: they follow the members a v1 plugin reads, and they keep their order, so a
+// plugin built against the struct before them reads the same offsets (struct_size is its check).
+static_assert(offsetof(NevrQuestHostApi, register_script_redirect) < offsetof(NevrQuestHostApi, register_slot_hook),
+              "the hook service members follow register_script_redirect");
+static_assert(offsetof(NevrQuestHostApi, register_slot_hook) < offsetof(NevrQuestHostApi, unregister_slot_hook),
+              "unregister_slot_hook follows register_slot_hook");
 
 }  // namespace
 
