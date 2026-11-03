@@ -1864,6 +1864,15 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/quit_hook_test" -ldl
     timeout 120 "$out/quit_hook_test"
+    # The controller type and raw pose log (#1986): the real handlers through the thunk entries against stand-ins for
+    # vrapi_EnumerateInputDevices, vrapi_GetInputTrackingState and vrapi_GetInputDeviceCapabilities. The result and every byte
+    # the runtime wrote come back untouched; only type 4 enters the table; the lines are golden. got_pinned_test resolves both
+    # new slots in the real libr15.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/hand_pose_log_hook_test.cpp \
+        src/quest/sentinel/hand_pose_log_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/hand_pose_log_hook_test" -ldl
+    timeout 120 "$out/hand_pose_log_hook_test"
     # libr15's array of free GPU ranges has no bound check (#1759): the real handler through the thunk entry against a model of
     # CGRawInterfaceVK::Free laid out as the game's (512 entries, the count after the last), the pinned words refused when one
     # differs, and the fill and the leaks in the log.

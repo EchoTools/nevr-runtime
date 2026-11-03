@@ -914,6 +914,30 @@ inline GotTarget LibR15GetInputDeviceCapabilities() {
   return {kLibR15, kGetInputDeviceCapabilitiesSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36fc9c8ULL};
 }
 
+// VrApi_Input.h: ovrResult vrapi_EnumerateInputDevices(ovrMobile* ovr, const uint32_t index, ovrInputCapabilityHeader* capsHeader),
+// and ovrResult vrapi_GetInputTrackingState(ovrMobile* ovr, const ovrDeviceID deviceID, const double absTimeInSeconds,
+// ovrTracking* tracking). Both imported (value 0): JUMP_SLOT 0x36d5dd0 and 0x36dc280 (`readelf -rW` on the store file, build ID
+// b243509c...; the stubs are 0xefcdd0 and 0xf09730: `adrp x16, 0x36d5000; ldr x17, [x16, #0xdd0]` and `adrp x16, 0x36dc000;
+// ldr x17, [x16, #0x280]`). The game calls both only from CVR::PollTracking's loop (FUN 0x1a71808): Enumerate at 0x1a71840,
+// then per device tracking state at 0x1a718c4 and 0x1a718dc, and the capabilities at 0x1a718fc for type 4 only (#1986).
+// ovrTracking (VrApi_Types.h): Status (uint32) at 0, 4 bytes of padding, then the ovrRigidBodyPosef whose first member is the
+// orientation (x, y, z, w) at 8; 104 bytes (the game copies 0x68 per hand). The hand-pose log reads them and changes nothing.
+inline constexpr const char* kEnumerateInputDevicesSymbol = "vrapi_EnumerateInputDevices";
+inline constexpr const char* kGetInputTrackingStateSymbol = "vrapi_GetInputTrackingState";
+using EnumerateInputDevicesSig = int(OvrMobileOpaque* ovr, std::uint32_t index, void* caps_header);
+using GetInputTrackingStateSig = int(OvrMobileOpaque* ovr, std::uint32_t device_id, double abs_time_seconds, void* tracking);
+struct LibR15EnumerateInputDevicesTag {};
+struct LibR15GetInputTrackingStateTag {};
+using LibR15EnumerateInputDevicesThunk = CallbackThunk<LibR15EnumerateInputDevicesTag, EnumerateInputDevicesSig>;
+using LibR15GetInputTrackingStateThunk = CallbackThunk<LibR15GetInputTrackingStateTag, GetInputTrackingStateSig>;
+
+inline GotTarget LibR15EnumerateInputDevices() {
+  return {kLibR15, kEnumerateInputDevicesSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36d5dd0ULL};
+}
+inline GotTarget LibR15GetInputTrackingState() {
+  return {kLibR15, kGetInputTrackingStateSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36dc280ULL};
+}
+
 // libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,
 // `readelf -rW` on the pinned image; the PLT stub at 0xf30730 loads it).
 inline GotTarget LibR15FillResourceFileRequest() {
