@@ -991,7 +991,8 @@ void ServiceRefusesBadNamesAndPointersAtTheBoundary() {
 // The middle handler is removed and installed again on top while two threads call through the chain (#2001 S5). The
 // chain is add, times, sub (314) until the middle leaves (add, sub: 207); the re-added handler is the newest (add, sub,
 // times: 414). A call that read the old chain before a change can still run the removed handler, which calls add (214).
-// No call may see any other value.
+// A call can also run sub twice: sub reads the removed times handler as its original, and that handler calls the original
+// it read, which is sub again, so the value is Sub(Times(Sub(Add(7)))) = 514. Any other value is a defect.
 void CallsSurviveTheMiddleBeingRemovedAndAddedAgain() {
   Prepare();
   const char* so = "libgotfx_consumer_now.so";
@@ -1016,7 +1017,7 @@ void CallsSurviveTheMiddleBeingRemovedAndAddedAgain() {
   std::thread caller([&] {
     while (!stop.load()) {
       const int v = m.callAdd(3, 4);
-      if (v != 314 && v != 207 && v != 414 && v != 214) bad.fetch_add(1);
+      if (v != 314 && v != 207 && v != 414 && v != 214 && v != 514) bad.fetch_add(1);
       calls.fetch_add(1);
     }
   });

@@ -166,6 +166,10 @@ struct NevrQuestHostApi {
      * keeps a plugin's object mapped while one of its handles is held, so the code stays valid; the plugin must not unmap
      * its own code.
      *
+     * A handler can run more than once in one call during a concurrent remove and add: a call in flight while a middle
+     * handler is removed and registered again can run a handler, then the removed handler it reached, which calls the
+     * original it read, and so reach a handler on the chain a second time. The handler must not assume it runs once per call.
+     *
      * The handler runs inside the game's call: it must return promptly, and must not block, take a lock, allocate, log,
      * throw or call into the game. Build the plugin with -fno-exceptions. The owner the host records for the handler is
      * "plugin:<plugin_id>". */
