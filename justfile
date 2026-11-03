@@ -1659,7 +1659,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # callback_thunk.h is built without (the header refuses otherwise).
     "${cxx[@]}" -c src/quest/tests/thunk_exception_fixture.cpp -o "$out/thunk_exception_fixture.o"
     "${cxx[@]}" -fno-exceptions src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
-        src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "$out/thunk_exception_fixture.o" \
+        src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp src/quest/plugin/slot_hook.cpp "$out/thunk_exception_fixture.o" \
         -o "$out/got_hook_test" -ldl -pthread
     timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
     # The sentinel's run-time half of the libr15 build-time patch (docs/adr/0021 test 4): Attach on the shipped patcher's
@@ -1993,7 +1993,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
     # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/input_seam_test.cpp src/quest/plugin/input_seam_hook.cpp \
-        src/quest/plugin/script_redirect.cpp \
+        src/quest/plugin/script_redirect.cpp src/quest/plugin/slot_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "${ident[@]}" \
         -o "$out/input_seam_test" -ldl
     timeout 120 "$out/input_seam_test"
@@ -2443,6 +2443,7 @@ test-quest-plugins:
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/input_seam_hook.cpp -o "$out/input_seam_hook.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/plugin/slot_hook.cpp -o "$out/slot_hook.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/script_redirect.cpp -o "$out/script_redirect.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/libr15_identity.o"
     loader=(src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
@@ -2450,7 +2451,7 @@ test-quest-plugins:
             src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp src/core/crash_report.cpp
             "$out/libr15_identity.o" src/quest/patch/libr15_patch_identity.cpp
             "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o"
-            "$out/script_redirect.o")
+            "$out/script_redirect.o" "$out/slot_hook.o")
     "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" \
         -o "$out/plugin_loader_test" -ldl
     timeout -k 5 120 "$out/plugin_loader_test" "$out"

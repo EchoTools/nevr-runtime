@@ -5,8 +5,8 @@
  * levels are 5/5 when CGRenderConfig::StablePowerState() is true and 2/2 otherwise, so a shipping build asks for 2/2.
  * The call is once per entry into VR mode, not per frame.
  *
- * This module owns the decision, not the slot. GotHook allows one owner per libr15 slot (got_hook.h, kAlreadyInstalled), and
- * the render-configuration hook (render_config_hook.cpp, #1139) already owns the vrapi_SetClockLevels slot and is the one
+ * This module owns the decision, not the slot. Until #2001 GotHook refused a second owner of a libr15 slot
+ * (kAlreadyInstalled); it chains handlers now (got_hook.h). The render-configuration hook (render_config_hook.cpp, #1139) already owns the vrapi_SetClockLevels slot and is the one
  * place that sees the call. Its handler asks Choose() which levels to call the original with:
  *   - override on and the game asks for (2, 2): (4, 4);
  *   - any other pair, or override off: the game's own pair.

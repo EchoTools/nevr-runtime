@@ -73,7 +73,7 @@ int main() {
   ctx.ctx_size = sizeof(NvrGameContext);
   ctx.plugin_id = "q15t";
   ctx.log = &BLog;
-  const NevrQuestHostApi quest{sizeof(NevrQuestHostApi), nullptr, &FakeRegisterScriptRedirect};
+  const NevrQuestHostApi quest{sizeof(NevrQuestHostApi), nullptr, &FakeRegisterScriptRedirect, nullptr, nullptr};
   ctx.quest = &quest;
   // Not the pinned build: InitEx refuses before it installs anything, so it registers no redirect either.
   ctx.game_build_id = "0000000000000000000000000000000000000000";

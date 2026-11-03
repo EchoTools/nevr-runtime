@@ -52,11 +52,13 @@
 #include "quest/integration/hook_registry_check.h"
 #include "quest/patch/libr15_patch_table.h"
 #include "quest/plugin/plugin_identity.h"
+#include "quest/plugin/slot_hook.h"
 #include "quest/tests/test_check.h"
 
 namespace {
 
 using namespace sentinel;
+namespace slot_hook = nevr_quest::slot_hook;
 
 // ---- log capture ------------------------------------------------------------
 
@@ -214,6 +216,10 @@ int AddPlus100(AddThunk::Fn original, int a, int b) noexcept { return original(a
 NEVR_HOOK_RECORD(kAddPlus100, AddThunk, &AddPlus100);
 int SubPlus100(SubThunk::Fn original, int a, int b) noexcept { return original(a, b) + 100; }
 NEVR_HOOK_RECORD(kSubPlus100, SubThunk, &SubPlus100);
+struct TimesTag {};
+using TimesThunk = CallbackThunk<TimesTag, int(int, int)>;
+int TimesTwo(TimesThunk::Fn original, int a, int b) noexcept { return original(a, b) * 2; }
+NEVR_HOOK_RECORD(kTimesTwo, TimesThunk, &TimesTwo);
 
 struct Module {
   void* handle = nullptr;
@@ -242,6 +248,7 @@ void Prepare() {
   Captured().clear();
   AddThunk::Reset();
   SubThunk::Reset();
+  TimesThunk::Reset();
 }
 
 void BuildIdNotesStayInsideLoadedSegments() {
@@ -362,7 +369,7 @@ void LazyLinkedModuleRefused() {
   GotTarget target{"libgotfx_consumer_lazy.so", "fx_add", RelocKind::kJumpSlot};
   QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &out), GotStatus::kLazyBinding);
   QCHECK(out == sentinelValue);
-  QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"status\":\"lazy_binding\"") == 1);
+  QCHECK(Errors() == 0 && Count(LogLevel::kWarn, "\"status\":\"lazy_binding\"") == 1);
   QCHECK(m.callAdd(2, 3) == 5);
   // GLOB_DAT slots are resolved at load time even in a lazy module.
   GotTarget glob{"libgotfx_consumer_lazy.so", "fx_sub", RelocKind::kGlobDat};
@@ -419,15 +426,15 @@ void NegativeCases() {
     QCHECK(!hook.installed());
     QCHECK(*addSlot.slot == before);
     QCHECK(out == sentinelValue);
-    QCHECK(Errors() == 1);
-    QCHECK(Count(LogLevel::kError, std::string("\"status\":\"") + GotStatusName(c.expected) + "\"") == 1);
+    QCHECK(Errors() == 0);
+    QCHECK(Count(LogLevel::kWarn, std::string("\"status\":\"") + GotStatusName(c.expected) + "\"") == 1);
   }
   // build-id mismatch names both ids
   Captured().clear();
   GotHook hook;
   void* out = nullptr;
   QCHECK_STATUS(Install(hook, wrongBuildId, AddThunk::EntryAddress(), &out), GotStatus::kBuildIdMismatch);
-  QCHECK(Count(LogLevel::kError, "\"expected_build_id\":\"0000000000000000000000000000000000000000\",\"actual_build_id\":\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"expected_build_id\":\"0000000000000000000000000000000000000000\",\"actual_build_id\":\"") == 1);
 
   GotHook nullFn;
   QCHECK_STATUS(Install(nullFn, GotTarget{so, "fx_add", RelocKind::kJumpSlot}, nullptr, &out),
@@ -513,7 +520,7 @@ void PluginTargetsResolveByTheStockIdOnlyOnTheVerifiedPatchedImage() {
     QCHECK_STATUS(Install(hook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, kThirdBuildId}, AddThunk::EntryAddress(), &out),
                   GotStatus::kBuildIdMismatch);
     QCHECK(!hook.installed());
-    QCHECK(Count(LogLevel::kError, std::string("\"expected_build_id\":\"") + kThirdBuildId + "\",\"actual_build_id\":\"" + live + "\"") == 1);
+    QCHECK(Count(LogLevel::kWarn, std::string("\"expected_build_id\":\"") + kThirdBuildId + "\",\"actual_build_id\":\"" + live + "\"") == 1);
   }
 
   // Not verified: the note alone gives no mapping, so the stock ID is refused (the live note still resolves).
@@ -587,69 +594,104 @@ void AnAliasThatAnswersNothingOrEmptyMapsNothing() {
   dlclose(m.handle);
 }
 
-void ASentinelClaimThenAPluginClaimOnOneSlotIsRefusedAsOwned() {
+// The chain (#2001, ADR 0034): several handlers on one slot run newest first, each calling the next through the entry it
+// was given. Every call here is callAdd(3, 4): the game's fx_add gives 7, AddPlus100 gives 107, TimesTwo doubles what it
+// calls, and SubPlus100 adds 100 to what it calls.
+
+void ASentinelClaimAndAPluginClaimShareOneChain() {
   Prepare();
   const char* so = "libgotfx_consumer_now.so";
   Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
   const std::string live = LiveNoteOf(so);
   const char* const stock = nevr_quest::patch::kLibR15StockBuildId;
   const AliasScope scope(&StockAlias);
   g_patchState = {true, live};
   AddThunk::Arm(kAddPlus100);
+  TimesThunk::Arm(kTimesTwo);
 
-  // The sentinel's claim carries the derived ID (the live note); the plugin's carries the stock ID. One slot, one key:
-  // the plugin's claim is "already installed", not "build ID mismatch" (its ID was accepted) and not a second owner.
+  // The sentinel's claim (the live ID) first, then the plugin's claim with the stock ID: the plugin's handler joins as the
+  // newest entry. Neither is refused as owned by the other.
   GotHook sentinelHook;
-  QCHECK_STATUS(Install(sentinelHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()},
+  QCHECK_STATUS(Install(sentinelHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()}.Owned("sentinel"),
                         AddThunk::EntryAddress(), AddThunk::OriginalOut()),
                 GotStatus::kOk);
   GotHook pluginHook;
-  void* out = nullptr;
-  QCHECK_STATUS(Install(pluginHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, stock},
-                        reinterpret_cast<void*>(&AddImpl), &out),
-                GotStatus::kAlreadyInstalled);
-  QCHECK(!pluginHook.installed());
-  if (pluginHook.installed()) pluginHook.Remove();
-  QCHECK(m.callAdd(2, 3) == 105);  // the sentinel's hook is unaffected
+  QCHECK_STATUS(Install(pluginHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, stock}.Owned("plugin"),
+                        TimesThunk::EntryAddress(), TimesThunk::OriginalOut()),
+                GotStatus::kOk);
+  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"plugin\",\"position\":2,\"chain_length\":2") == 1);
+  QCHECK(m.callAdd(3, 4) == 214);  // TimesTwo(AddPlus100(7)) = (7 + 100) * 2
+  // The bottom entry goes: the plugin's handler now calls the game's function directly.
   QCHECK_STATUS(sentinelHook.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 14);
+  QCHECK_STATUS(pluginHook.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(*r.slot == m.realAdd);
 
-  // And the other way round: the plugin's claim first, then the sentinel's.
+  // The other order: the plugin's claim first, the sentinel's second, joining as the newest entry.
   GotHook pluginFirst;
-  QCHECK_STATUS(Install(pluginFirst, GotTarget{so, "fx_add", RelocKind::kJumpSlot, stock}, AddThunk::EntryAddress(),
-                        AddThunk::OriginalOut()),
+  QCHECK_STATUS(Install(pluginFirst, GotTarget{so, "fx_add", RelocKind::kJumpSlot, stock}.Owned("plugin"),
+                        TimesThunk::EntryAddress(), TimesThunk::OriginalOut()),
                 GotStatus::kOk);
   GotHook sentinelSecond;
-  QCHECK_STATUS(Install(sentinelSecond, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()},
-                        reinterpret_cast<void*>(&AddImpl), &out),
-                GotStatus::kAlreadyInstalled);
-  if (sentinelSecond.installed()) sentinelSecond.Remove();  // a failed check above must not leave the slot owned for later tests
+  QCHECK_STATUS(Install(sentinelSecond, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()}.Owned("sentinel"),
+                        AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+                GotStatus::kOk);
+  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"sentinel\",\"position\":2,\"chain_length\":2") == 1);
+  QCHECK(m.callAdd(3, 4) == 114);  // AddPlus100(TimesTwo(7)) = 14 + 100
+  QCHECK_STATUS(sentinelSecond.Remove(), GotStatus::kOk);  // the newest entry: the slot holds the plugin's handler again
+  QCHECK(m.callAdd(3, 4) == 14);
   QCHECK_STATUS(pluginFirst.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(Errors() == 0);
   dlclose(m.handle);
 }
 
-void DuplicateAndChained() {
+void DuplicateRefusedAndADifferentHandlerChains() {
   Prepare();
-  Module m = Open("libgotfx_consumer_now.so");
   const char* so = "libgotfx_consumer_now.so";
-  GotTarget target{so, "fx_add", RelocKind::kJumpSlot};
+  Module m = Open(so);
   const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
   AddThunk::Arm(kAddPlus100);
+  TimesThunk::Arm(kTimesTwo);
   GotHook first;
-  QCHECK_STATUS(Install(first, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(Install(first, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("first"),
+                        AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+                GotStatus::kOk);
 
-  QCHECK_STATUS(Install(first, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+  // The same handle again: refused before anything is stored, and the Warning says why.
+  Captured().clear();
+  QCHECK_STATUS(Install(first, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("first"),
+                        AddThunk::EntryAddress(), AddThunk::OriginalOut()),
                 GotStatus::kAlreadyInstalled);
+  QCHECK(Count(LogLevel::kWarn, "\"stage\":\"handle\"") == 1);
+  QCHECK(Errors() == 0);
+
+  // Another handle with the same handler on the same slot: refused as already in the chain. The Warning names the chain
+  // it would have joined; nothing is published and nothing is stored.
   GotHook second;
   void* out = nullptr;
-  QCHECK_STATUS(Install(second, target, AddThunk::EntryAddress(), &out), GotStatus::kAlreadyInstalled);
-  QCHECK(out == nullptr);
-  // A different hook function reaches the slot registry rather than the value check.
-  QCHECK_STATUS(Install(second, target, reinterpret_cast<void*>(&AddImpl), &out),
+  Captured().clear();
+  QCHECK_STATUS(Install(second, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("second"),
+                        AddThunk::EntryAddress(), &out),
                 GotStatus::kAlreadyInstalled);
   QCHECK(out == nullptr);
-  QCHECK(m.callAdd(2, 3) == 105);
+  QCHECK(Errors() == 0);
+  QCHECK(Count(LogLevel::kWarn, "\"chain\":\"first\",\"chain_length\":1") == 1);
+  QCHECK(m.callAdd(3, 4) == 107);
 
-  // Someone else overwrote the slot: Remove refuses to write over them.
+  // A different handler joins: it is the newest entry, so it runs first.
+  GotHook times;
+  Captured().clear();
+  QCHECK_STATUS(Install(times, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("times"),
+                        TimesThunk::EntryAddress(), TimesThunk::OriginalOut()),
+                GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 214);
+  QCHECK_STATUS(times.Remove(), GotStatus::kOk);  // the newest entry: the slot holds the first handler again
+  QCHECK(m.callAdd(3, 4) == 107);
+
+  // Someone else overwrote the slot: Remove refuses to write over them, and says so at Error.
   ForceWrite(r.slot, m.realSub);
   Captured().clear();
   QCHECK_STATUS(first.Remove(), GotStatus::kSlotChanged);
@@ -659,9 +701,197 @@ void DuplicateAndChained() {
   ForceWrite(r.slot, AddThunk::EntryAddress());
   QCHECK_STATUS(first.Remove(), GotStatus::kOk);
   QCHECK(*r.slot == m.realAdd);
-  // The slot is free again for a new handle.
-  QCHECK_STATUS(Install(second, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
-  QCHECK_STATUS(second.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 7);
+  dlclose(m.handle);
+}
+
+void RemovingAnyHandlerLeavesTheOthersRunning() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  AddThunk::Arm(kAddPlus100);
+  TimesThunk::Arm(kTimesTwo);
+  SubThunk::Arm(kSubPlus100);
+  GotHook addHook;
+  QCHECK_STATUS(Install(addHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("add"),
+                        AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+                GotStatus::kOk);
+  GotHook timesHook;
+  QCHECK_STATUS(Install(timesHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("times"),
+                        TimesThunk::EntryAddress(), TimesThunk::OriginalOut()),
+                GotStatus::kOk);
+  // The newest entry is the Sub handler, so the chain runs Sub(Times(Add(game))).
+  GotHook subHook;
+  QCHECK_STATUS(Install(subHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("sub"),
+                        SubThunk::EntryAddress(), SubThunk::OriginalOut()),
+                GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 314);  // SubPlus100(TimesTwo(AddPlus100(7))) = ((7 + 100) * 2) + 100
+  QCHECK_STATUS(timesHook.Remove(), GotStatus::kOk);  // the middle entry
+  QCHECK(m.callAdd(3, 4) == 207);  // the newest now calls the bottom entry directly
+  QCHECK_STATUS(addHook.Remove(), GotStatus::kOk);  // the bottom entry
+  QCHECK(m.callAdd(3, 4) == 107);
+  QCHECK_STATUS(subHook.Remove(), GotStatus::kOk);  // the last entry: the slot is the game's again
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(Errors() == 0);
+  dlclose(m.handle);
+}
+
+void ForeignWriterOnAChainIsARefusalNamingTheChain() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  AddThunk::Arm(kAddPlus100);
+  TimesThunk::Arm(kTimesTwo);
+  GotHook sentinelHook;
+  QCHECK_STATUS(Install(sentinelHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("sentinel"),
+                        AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+                GotStatus::kOk);
+  // A writer outside the registry takes the slot. A later handler must not join on top of a value it did not store.
+  ForceWrite(r.slot, m.realSub);
+  Captured().clear();
+  GotHook joiner;
+  void* out = nullptr;
+  QCHECK_STATUS(Install(joiner, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("times"),
+                        TimesThunk::EntryAddress(), &out),
+                GotStatus::kOriginalMismatch);
+  QCHECK(out == nullptr);
+  QCHECK(!joiner.installed());
+  QCHECK(Errors() == 0);
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"original_mismatch\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"slot\":\"0x") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"chain\":\"sentinel\",\"chain_length\":1") == 1);
+  ForceWrite(r.slot, AddThunk::EntryAddress());
+  QCHECK_STATUS(sentinelHook.Remove(), GotStatus::kOk);
+  QCHECK(*r.slot == m.realAdd);
+  dlclose(m.handle);
+}
+
+void ThirdConsumerThroughTheServiceJoinsTheChain() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  const std::string live = LiveNoteOf(so);
+  AddThunk::Arm(kAddPlus100);
+  TimesThunk::Arm(kTimesTwo);
+  GotHook sentinelHook;
+  QCHECK_STATUS(Install(sentinelHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()}.Owned("sentinel"),
+                        AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+                GotStatus::kOk);
+
+  // A third consumer, a plugin, through the service: it joins the sentinel's chain on the same slot.
+  std::uint32_t handle = 0;
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                         TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) ==
+         NEVR_SLOT_HOOK_OK);
+  QCHECK(handle != 0);
+  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"plugin:q15t\",\"position\":2,\"chain_length\":2") == 1);
+  QCHECK(m.callAdd(3, 4) == 214);
+  QCHECK(slot_hook::UnregisterSlotHook(handle) == NEVR_SLOT_HOOK_OK);
+  QCHECK(m.callAdd(3, 4) == 107);
+  QCHECK_STATUS(sentinelHook.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(*r.slot == m.realAdd);
+  QCHECK(slot_hook::UnregisterSlotHook(handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);  // no longer held
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle is not held\"") == 1);
+  QCHECK(Errors() == 0);
+  dlclose(m.handle);
+}
+
+void ServiceRefusesWhatItCannotHoldAndSaysWhy() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const std::string live = LiveNoteOf(so);
+  AddThunk::Arm(kAddPlus100);
+  GotHook sentinelHook;
+  QCHECK_STATUS(Install(sentinelHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()}.Owned("sentinel"),
+                        AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+                GotStatus::kOk);
+  std::uint32_t handle = 0;
+  void* out = nullptr;
+  Captured().clear();
+
+  // A target without a build ID is refused before anything is looked up.
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, nullptr,
+                                         TimesThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the target names no build ID") == 1);
+  // A relocation that is not one of NevrSlotReloc.
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", 7, live.c_str(),
+                                         TimesThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the relocation is not a NevrSlotReloc\"") == 1);
+  // A null handler.
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                         nullptr, &out, &handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"a required pointer is null\"") == 1);
+  // A module that is not loaded, and a symbol the module does not import.
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", "libnope.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+                                         live.c_str(), TimesThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_NOT_FOUND);
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"module_not_loaded\"") == 1);
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_nope", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                         TimesThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_NOT_FOUND);
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"symbol_not_found\"") == 1);
+  QCHECK(out == nullptr && handle == 0);
+  // The same handler on the same slot: refused as already in the chain, and the chain is named.
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                         AddThunk::EntryAddress(), &out, &handle) == NEVR_SLOT_HOOK_REFUSED);
+  QCHECK(Count(LogLevel::kWarn, "\"chain\":\"sentinel\",\"chain_length\":1") == 1);
+  QCHECK(out == nullptr && handle == 0);
+  // Unregister: a handle the service did not issue, and one it does not hold.
+  QCHECK(slot_hook::UnregisterSlotHook(0) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(slot_hook::UnregisterSlotHook(static_cast<std::uint32_t>(slot_hook::kSlotHookHandles + 1)) ==
+         NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(slot_hook::UnregisterSlotHook(static_cast<std::uint32_t>(slot_hook::kSlotHookHandles)) ==
+         NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle is not one the service issued\"") == 2);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle is not held\"") == 1);
+  QCHECK(Errors() == 0);
+  QCHECK_STATUS(sentinelHook.Remove(), GotStatus::kOk);
+  dlclose(m.handle);
+}
+
+void ServiceHoldsEightHandlesThenRefuses() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  const std::string live = LiveNoteOf(so);
+  // Distinct values stand in for handlers. Nothing calls them while they are in the slot: each one is only stored there,
+  // and each new one publishes the value before it as its original.
+  int marks[slot_hook::kSlotHookHandles + 1] = {};
+  void* outs[slot_hook::kSlotHookHandles] = {};
+  std::uint32_t handles[slot_hook::kSlotHookHandles] = {};
+  for (std::size_t i = 0; i < slot_hook::kSlotHookHandles; ++i) {
+    QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                           &marks[i], &outs[i], &handles[i]) == NEVR_SLOT_HOOK_OK);
+  }
+  QCHECK(outs[0] == m.realAdd);
+  for (std::size_t i = 1; i < slot_hook::kSlotHookHandles; ++i) {
+    QCHECK(outs[i] == static_cast<void*>(&marks[i - 1]));
+  }
+  QCHECK(*r.slot == static_cast<void*>(&marks[slot_hook::kSlotHookHandles - 1]));
+  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"plugin:q15t\",\"position\":8,\"chain_length\":8") == 1);
+
+  // The ninth is refused: every handle is in use. Nothing is written for it.
+  Captured().clear();
+  void* ninthOut = nullptr;
+  std::uint32_t ninth = 0;
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                         &marks[slot_hook::kSlotHookHandles], &ninthOut, &ninth) ==
+         NEVR_SLOT_HOOK_NO_HANDLE);
+  QCHECK(ninthOut == nullptr && ninth == 0);
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"no_handle\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "every service handle is in use") == 1);
+  QCHECK(*r.slot == static_cast<void*>(&marks[slot_hook::kSlotHookHandles - 1]));
+
+  // Unregistering newest first gives each one's original back, down to the game's function.
+  for (std::size_t i = slot_hook::kSlotHookHandles; i-- > 0;) {
+    QCHECK(slot_hook::UnregisterSlotHook(handles[i]) == NEVR_SLOT_HOOK_OK);
+  }
+  QCHECK(*r.slot == m.realAdd);
+  QCHECK(m.callAdd(2, 3) == 5);
+  QCHECK(Errors() == 0);
   dlclose(m.handle);
 }
 
@@ -1012,7 +1242,7 @@ void SyntheticInstall() {
     Captured().clear();
     QCHECK_STATUS(Install(hook, SynthTarget(), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                   GotStatus::kOriginalImplausible);
-    QCHECK(Count(LogLevel::kError, "\"status\":\"original_implausible\"") == 1);
+    QCHECK(Count(LogLevel::kWarn, "\"status\":\"original_implausible\"") == 1);
     g_synth = nullptr;
     int dataObject = 0;
     SynthImage img2;
@@ -1040,9 +1270,9 @@ void SyntheticInstall() {
                     GotStatus::kProtectFailed);
       QCHECK(out == sentinelValue);
       QCHECK(*slot == reinterpret_cast<void*>(&AddImpl));
-      QCHECK(Errors() == 1);
-      QCHECK(Count(LogLevel::kError, "\"status\":\"protect_failed\",\"stage\":\"enable_failed\"") == 1);
-      QCHECK(Count(LogLevel::kError, "\"errno\":13") == 1);
+      QCHECK(Errors() == 0);
+      QCHECK(Count(LogLevel::kWarn, "\"status\":\"protect_failed\",\"stage\":\"enable_failed\"") == 1);
+      QCHECK(Count(LogLevel::kWarn, "\"errno\":13") == 1);
     }
     g_synth = nullptr;
   }
@@ -1242,11 +1472,11 @@ void FailedReprotectRollsBackAndKeepsTheOriginal() {
     QCHECK(!hook.installed());
     QCHECK(*slot == reinterpret_cast<void*>(&AddImpl));  // rolled back
     QCHECK(out == reinterpret_cast<void*>(&AddImpl));    // original stays published
-    QCHECK(Count(LogLevel::kError, "\"status\":\"restore_protect_failed\"") == 1);
-    QCHECK(Count(LogLevel::kError, "\"errno\":12") == 1);
+    QCHECK(Count(LogLevel::kWarn, "\"status\":\"restore_protect_failed\"") == 1);
+    QCHECK(Count(LogLevel::kWarn, "\"errno\":12") == 1);
     if (failures > 0) {
       QCHECK(PagePerms(slot) == "r--p");
-      QCHECK(Errors() == 1);
+      QCHECK(Errors() == 0);  // the retry succeeded: the page was re-protected, nothing is left behind
     } else {
       QCHECK(PagePerms(slot) == "rw-p");  // reported, not hidden
       QCHECK(Count(LogLevel::kError, "\"status\":\"page_left_writable\"") == 1);
@@ -1283,7 +1513,7 @@ void InstallIsCompareAndSwap() {
   QCHECK(*r.slot == reinterpret_cast<void*>(&SubImpl));  // the other writer's value stays
   QCHECK(out == sentinelValue);
   QCHECK(!hook.installed());
-  QCHECK(Count(LogLevel::kError, "\"status\":\"slot_changed\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_changed\"") == 1);
   ForceWrite(r.slot, m.realAdd);
   AddThunk::Arm(kAddPlus100);
   QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
@@ -1292,7 +1522,7 @@ void InstallIsCompareAndSwap() {
 }
 
 // The registry's budget (got_hook.h, hook_budget.h): a normal hook may fill it to kRegistryCapacity - kCriticalReserve, a
-// critical one to kRegistryCapacity; the hook that finds no room is refused with ONE Error line that names it and its
+// critical one to kRegistryCapacity; the hook that finds no room is refused with ONE Warning line that names it and its
 // priority, is counted and remembered by name, and writes nothing; removing hooks gives the room back.
 //
 // The synthetic image holds 100 slots, so the capacity is reached across several images (a lookup that answers with the
@@ -1355,15 +1585,15 @@ void RegistryBound() {
   QCHECK(installed == normalRoom);
   QCHECK(RegistrySnapshot().used == kRegistryCapacity - kCriticalReserve);
 
-  // The next normal hook finds the reserve and is refused: one Error line, naming it, and the slot is not written.
+  // The next normal hook finds the reserve and is refused: one Warning line, naming it, and the slot is not written.
   Captured().clear();
   const std::size_t refusedNormal = normalRoom;
   QCHECK_STATUS(fx.InstallAt(refusedNormal, HookPriority::kNormal), GotStatus::kRegistryFull);
-  QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"status\":\"registry_full\"") == 1);
-  QCHECK(Count(LogLevel::kError, "\"module\":\"synthetic.so\"") == 1 && Count(LogLevel::kError, "\"symbol\":\"alpha\"") == 1);
-  QCHECK(Count(LogLevel::kError, "\"priority\":\"normal\"") == 1);
-  QCHECK(Count(LogLevel::kError, "\"capacity\":" + std::to_string(kRegistryCapacity)) == 1);
-  QCHECK(Count(LogLevel::kError, "the game keeps its own code in the slot") == 1);
+  QCHECK(Errors() == 0 && Count(LogLevel::kWarn, "\"status\":\"registry_full\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"module\":\"synthetic.so\"") == 1 && Count(LogLevel::kWarn, "\"symbol\":\"alpha\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"priority\":\"normal\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"capacity\":" + std::to_string(kRegistryCapacity)) == 1);
+  QCHECK(Count(LogLevel::kWarn, "the game keeps its own code in the slot") == 1);
   QCHECK(fx.SlotValue(refusedNormal) == reinterpret_cast<void*>(&AddImpl));
 
   // A critical hook is not crowded out: it takes the reserve, the whole of it, however many normal hooks came first.
@@ -1377,7 +1607,7 @@ void RegistryBound() {
   // Past the whole registry even a critical hook is refused, and says so as critical.
   Captured().clear();
   QCHECK_STATUS(fx.InstallAt(refusedNormal + 1 + criticalRoom, HookPriority::kCritical), GotStatus::kRegistryFull);
-  QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"priority\":\"critical\"") == 1);
+  QCHECK(Errors() == 0 && Count(LogLevel::kWarn, "\"priority\":\"critical\"") == 1);
 
   // The counters and the ledger say who lost, in order.
   const RegistryStats stats = RegistrySnapshot();
@@ -1473,7 +1703,7 @@ void WriteVerifyFailureKeepsTheOriginalPublished() {
   QCHECK(*r.slot == reinterpret_cast<void*>(&SubImpl));  // the other writer's value stays
   QCHECK(out == m.realAdd);                               // not reverted to the entry value
   QCHECK(!hook.installed());
-  QCHECK(Count(LogLevel::kError, "\"status\":\"write_verify_failed\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"write_verify_failed\"") == 1);
 
   // The slot stays reserved: the foreign value in it may chain our entry, and a retry would
   // publish it as the original and make the entry call itself. The refusal has its own status,
@@ -1483,7 +1713,7 @@ void WriteVerifyFailureKeepsTheOriginalPublished() {
   QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &retryOut), GotStatus::kSlotPoisoned);
   QCHECK(retryOut == reinterpret_cast<void*>(0x56));
   QCHECK(*r.slot == reinterpret_cast<void*>(&SubImpl));
-  QCHECK(Count(LogLevel::kError, "\"status\":\"slot_poisoned\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_poisoned\"") == 1);
 
   // A poisoned slot on a mapped module is never given back, whatever range is named.
   const std::uintptr_t page = static_cast<std::uintptr_t>(sysconf(_SC_PAGESIZE));
@@ -1544,7 +1774,7 @@ void ReprotectFailureDoesNotHideAnEarlierFailure() {
   QCHECK(out == sentinelValue);  // our value was never stored: entry value restored
   QCHECK(*slot == reinterpret_cast<void*>(&SubImpl));
   QCHECK(Count(LogLevel::kError, "\"status\":\"page_left_writable\"") == 1);
-  QCHECK(Count(LogLevel::kError, "\"status\":\"slot_changed\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_changed\"") == 1);
   QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
   g_synth = nullptr;
 }
@@ -1576,11 +1806,11 @@ void RollbackCompareAndSwapFailureIsLogged() {
   QCHECK(out == reinterpret_cast<void*>(&AddImpl));
   QCHECK(Count(LogLevel::kError, "\"status\":\"rollback_cas_failed\"") == 1);
   QCHECK(PagePerms(slot) == "r--p");  // the retry succeeded
-  // Their value is in the slot, so a retry is refused (by the original check here; the slot is
-  // also poisoned, which WriteVerifyFailureKeepsTheOriginalPublished shows with a plausible value).
+  // Their value is in the slot and our entry is poisoned: a retry is refused as poisoned, before the original is checked
+  // for an original (the poisoned check runs first, so a foreign value cannot be published as one).
   void* retryOut = nullptr;
   QCHECK_STATUS(Install(hook, target, reinterpret_cast<void*>(&SubImpl), &retryOut, SynthLookup),
-                GotStatus::kOriginalMismatch);
+                GotStatus::kSlotPoisoned);
   // Released only once the image is really unmapped.
   ReleasePoisonedSlotsIn(img.mem, kImageSize);
   void* const base = img.mem;
@@ -1960,11 +2190,16 @@ int main(int argc, char** argv) {
   GlobDatRoundTrip("libgotfx_consumer_now.so");
   LazyLinkedModuleRefused();
   NegativeCases();
-  DuplicateAndChained();
   PluginTargetsResolveByTheStockIdOnlyOnTheVerifiedPatchedImage();
   AnAliasThatAnswersNothingOrEmptyMapsNothing();
-  ASentinelClaimThenAPluginClaimOnOneSlotIsRefusedAsOwned();
   ModuleUnloaded();
+  ASentinelClaimAndAPluginClaimShareOneChain();
+  DuplicateRefusedAndADifferentHandlerChains();
+  RemovingAnyHandlerLeavesTheOthersRunning();
+  ForeignWriterOnAChainIsARefusalNamingTheChain();
+  ThirdConsumerThroughTheServiceJoinsTheChain();
+  ServiceRefusesWhatItCannotHoldAndSaysWhy();
+  ServiceHoldsEightHandlesThenRefuses();
   ConcurrentCallers();
   SyntheticResolution();
   SyntheticInstall();

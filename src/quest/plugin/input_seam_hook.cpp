@@ -9,6 +9,7 @@
 #include "hook_log.h"
 #include "pinned_targets.h"
 #include "quest/plugin/script_redirect.h"
+#include "quest/plugin/slot_hook.h"
 
 namespace nevr_quest::input_seam {
 
@@ -117,14 +118,17 @@ std::int32_t RegisterRelease(const char* pluginId, NevrQuestInputFilterFn filter
   return RegisterWith(env, pluginId, filter, user);
 }
 
-// The host API is one struct, and this file owns its initializers; the script redirect (script_redirect.h) is the
-// other member, offered in both builds: it registers a combat unit's library names, not an input filter.
+// The host API is one struct, and this file owns its initializers. The script redirect (script_redirect.h) and the hook
+// service (slot_hook.h, #2001) are offered in both builds: the redirect registers a combat unit's library names, the
+// service chains a plugin's handler on a GOT slot. Neither is an input filter.
 std::int32_t RegisterScriptRedirect(const char* pluginId, const std::uint64_t* hashes, std::uint32_t count) {
   return static_cast<std::int32_t>(script_redirect::Register(pluginId, hashes, count));
 }
 
-const NevrQuestHostApi kDevApi{sizeof(NevrQuestHostApi), &RegisterDev, &RegisterScriptRedirect};
-const NevrQuestHostApi kReleaseApi{sizeof(NevrQuestHostApi), &RegisterRelease, &RegisterScriptRedirect};
+const NevrQuestHostApi kDevApi{sizeof(NevrQuestHostApi), &RegisterDev, &RegisterScriptRedirect,
+                              &slot_hook::RegisterSlotHook, &slot_hook::UnregisterSlotHook};
+const NevrQuestHostApi kReleaseApi{sizeof(NevrQuestHostApi), &RegisterRelease, &RegisterScriptRedirect,
+                                   &slot_hook::RegisterSlotHook, &slot_hook::UnregisterSlotHook};
 
 }  // namespace
 

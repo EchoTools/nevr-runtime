@@ -1,6 +1,7 @@
 /* Which libr15 slots the render-configuration hooks own (render_config.h), for the hardware dump (src/quest/diag).
  *
- * GotHook allows one owner per slot (got_hook.h, kAlreadyInstalled). Four of the five slots the render-configuration log
+ * Until #2001 GotHook refused a second owner of a slot (kAlreadyInstalled); it chains handlers now (got_hook.h). Four of
+ * the five slots the render-configuration log
  * hooks are slots the hardware dump (docs/adr/0006) hooks as well. The render-configuration hooks are installed first
  * (the constructor sequence runs them before the dump), mark each slot they own here, and the dump installs nothing on a
  * marked slot and reports it as owned_by_render_config. Header-only inline state, like sysprop_int_share.h, so the

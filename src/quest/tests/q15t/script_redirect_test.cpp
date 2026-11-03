@@ -65,7 +65,7 @@ void Reset() {
 }  // namespace
 
 int main() {
-  const NevrQuestHostApi full{sizeof(NevrQuestHostApi), nullptr, &FakeRegister};
+  const NevrQuestHostApi full{sizeof(NevrQuestHostApi), nullptr, &FakeRegister, nullptr, nullptr};
   NvrGameContext ctx{};
   ctx.ctx_size = sizeof(NvrGameContext);
   ctx.plugin_id = "q15t-host-id";
@@ -136,14 +136,14 @@ int main() {
   CHECK(Logged("result=no_host_api") && g_calls == 0, "no_host_api, no call");
 
   Reset();
-  const NevrQuestHostApi old{offsetof(NevrQuestHostApi, register_script_redirect), nullptr, &FakeRegister};
+  const NevrQuestHostApi old{offsetof(NevrQuestHostApi, register_script_redirect), nullptr, &FakeRegister, nullptr, nullptr};
   NvrGameContext oldCtx = ctx;
   oldCtx.quest = &old;
   CHECK(q15t::RegisterScriptRedirect(&oldCtx) == -1, "an api struct that ends before the member");
   CHECK(Logged("result=no_host_api") && g_calls == 0, "no_host_api, no call");
 
   Reset();
-  const NevrQuestHostApi noFn{sizeof(NevrQuestHostApi), nullptr, nullptr};
+  const NevrQuestHostApi noFn{sizeof(NevrQuestHostApi), nullptr, nullptr, nullptr, nullptr};
   NvrGameContext noFnCtx = ctx;
   noFnCtx.quest = &noFn;
   CHECK(q15t::RegisterScriptRedirect(&noFnCtx) == -1, "a null function");

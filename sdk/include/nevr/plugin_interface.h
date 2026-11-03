@@ -117,6 +117,22 @@ enum NevrScriptRedirectResult : int32_t {
     NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR   = 4, /* the host could not find the directory its own library was loaded from */
 };
 
+/* What register_slot_hook returns. 0 is OK; every other value is a refusal. A refusal leaves nothing chained, and the
+ * host logs a Warning that names the slot, the chain on it and the reason, so the plugin may call again. */
+enum NevrSlotHookResult : int32_t {
+    NEVR_SLOT_HOOK_OK           = 0,
+    NEVR_SLOT_HOOK_BAD_ARGUMENT = 1, /* a null pointer, a name or build ID too long, a reloc outside NevrSlotReloc, or a handle not held */
+    NEVR_SLOT_HOOK_NOT_FOUND    = 2, /* the module is not loaded, or it has no relocation of that kind for the symbol */
+    NEVR_SLOT_HOOK_NO_HANDLE    = 3, /* every service handle is in use (eight in this build) */
+    NEVR_SLOT_HOOK_REFUSED      = 4, /* the host refused the install, or could not take the handler out of its chain */
+};
+
+/* Which relocation a slot hook names. The host hooks the slot the module's own relocation writes. */
+enum NevrSlotReloc : int32_t {
+    NEVR_SLOT_RELOC_JUMP_SLOT = 0, /* a call through the PLT: the game calls the symbol by name */
+    NEVR_SLOT_RELOC_GLOB_DAT  = 1, /* a pointer load through the GOT: the game reads the symbol's address */
+};
+
 /* The services a Quest host offers a plugin, reached through ctx->quest. Every pointer is process-lifetime. A
  * plugin checks struct_size covers a member before calling it: the struct grows at its tail. */
 struct NevrQuestHostApi {
@@ -131,6 +147,21 @@ struct NevrQuestHostApi {
      * which are missing. The stock files are never read in its place. One registration per process; call from init. A
      * refusal other than NEVR_SCRIPT_REDIRECT_ALREADY_ARMED leaves nothing registered: the plugin may call again. */
     int32_t (*register_script_redirect)(const char* plugin_id, const uint64_t* stock_hashes, uint32_t count);
+    /* --- Hook service (#2001, ADR 0019 section 5, ADR 0034; tail members, no version bump) --- */
+    /* Chains `handler` onto the game's use of `symbol` through the slot that `module` (a soname such as "libr15.so")
+     * relocates for it. Every handler on one slot is kept in registration order: the newest runs first, and each reaches
+     * the handler before it through *original_out; the oldest reaches the game's function. `build_id` is the GNU build ID
+     * the target expects, as lowercase hex; the host refuses a target without one. `reloc` is a NevrSlotReloc. On
+     * NEVR_SLOT_HOOK_OK, *out_handle is the handle for unregister_slot_hook, and *original_out holds the callable original
+     * before the handler can run. Call from init, not from a hook. The handler runs inside the game's call: it must return
+     * promptly, and must not block, take a lock, allocate, log, throw or call into the game. Build the plugin with
+     * -fno-exceptions. The owner the host records for the handler is "plugin:<plugin_id>". */
+    int32_t (*register_slot_hook)(const char* plugin_id, const char* module, const char* symbol, int32_t reloc,
+                                  const char* build_id, void* handler, void** original_out, uint32_t* out_handle);
+    /* Takes the handler of `handle` out of its chain. The handler that called it is relinked to what it called, so the
+     * other handlers on the slot keep running. Returns NEVR_SLOT_HOOK_OK, or NEVR_SLOT_HOOK_BAD_ARGUMENT for a handle that
+     * is not held, or NEVR_SLOT_HOOK_REFUSED when the host could not take it out (the Warning or Error names why). */
+    int32_t (*unregister_slot_hook)(uint32_t handle);
 };
 
 /* Game context passed to the plugin by the host.
