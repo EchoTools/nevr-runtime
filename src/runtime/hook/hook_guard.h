@@ -46,7 +46,13 @@ int VerifyAll(const char* context);
 /// refuse anything else.
 bool IsOurDetour(const void* target);
 
-/// How many addresses are currently recorded.
+/// Forget every live record at `target`, because the hook there is being removed. Call it before the removal
+/// writes the game's bytes back (PatchRetire in patching.h does), so the restored bytes are not reported as an
+/// overwrite. Returns the number of records forgotten. 0 means nothing was recorded there: the call is refused,
+/// and that is logged at Warning. A successful retire logs at Debug. Logs through Log(), like VerifyAll.
+int Retire(const void* target);
+
+/// How many addresses are currently recorded (live records: a retired record is not counted).
 int RecordedCount();
 
 /// How many Record() calls found the table full: detours nothing is guarding.

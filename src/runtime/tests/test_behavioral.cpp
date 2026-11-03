@@ -59,6 +59,8 @@
 #include "runtime/hook/symbol_corpus.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/hook/patching.h"
+#include "runtime/patch/plugin_assets.h"
 #include "runtime/compat/login_profile.h"
 #include "runtime/tests/test_log_cap.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
@@ -6140,7 +6142,7 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
     VirtualFree(reserved, 0, MEM_RELEASE);
 }
 
-// The table holds every install site the runtime has. 63 is the count of sites in src/ that reach
+// The table holds every install site the runtime has. 65 is the count of call lines in src/ that reach
 // nevr_hook_guard::Record (counted in hook_guard.cpp, next to kMaxGuarded); a capacity below it drops
 // guards on a healthy boot. A new site raises that count and this number with it.
 TEST(N84_HookGuard, CapacityCoversEveryInstallSiteTheRuntimeHas) {
@@ -6195,8 +6197,109 @@ TEST(N84_HookGuard, FullTable_RecordDoesNotLogUnderTheLoaderLock) {
     EXPECT_FALSE(TestLogContains("hook guard")) << "Record() logged on overflow; it can run under the loader lock";
 }
 
+// Retire (#2003): a hook removed through PatchRetire leaves no record, so the bytes its removal writes back are not
+// reported, and the same address hooks again as one fresh record. The stand-in is a real prologue MinHook detours.
+namespace {
+
+// mov eax, 7; ret. The five bytes MinHook moves are one whole instruction.
+constexpr unsigned char kGuardStandInFunction[] = {0xB8, 0x07, 0x00, 0x00, 0x00, 0xC3};
+int GuardDetour() { return 9; }
+
+// Executable memory holding kGuardStandInFunction, freed by the caller with VirtualFree.
+void* GuardStandInPage() {
+  void* page = VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+  if (page != nullptr) memcpy(page, kGuardStandInFunction, sizeof(kGuardStandInFunction));
+  return page;
+}
+
+}  // namespace
+
+TEST(N84_HookGuard, RetireThenHookTheSameTargetReportsNoOverwrite) {
+  nevr_hook_guard::ResetForTest();
+  ClearTestLogs();
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  void* page = GuardStandInPage();
+  ASSERT_NE(page, nullptr);
+  auto fn = reinterpret_cast<int (*)()>(page);
+  ASSERT_EQ(fn(), 7);
+
+  void* original = page;
+  ASSERT_TRUE(PatchDetour(&original, reinterpret_cast<void*>(&GuardDetour), "N84_roundtrip"));
+  EXPECT_EQ(fn(), 9) << "the hook did not take";
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 1);
+  EXPECT_EQ(nevr_hook_guard::VerifyAll("test:hooked"), 0);
+
+  ASSERT_EQ(PatchRetire(page), MH_OK);
+  EXPECT_EQ(fn(), 7) << "the removal did not put the game's bytes back";
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 0) << "the retired record is still counted";
+  EXPECT_EQ(nevr_hook_guard::VerifyAll("test:removed"), 0) << "the restored bytes were reported as an overwrite";
+
+  void* again = page;
+  ASSERT_TRUE(PatchDetour(&again, reinterpret_cast<void*>(&GuardDetour), "N84_roundtrip"));
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 1);
+  EXPECT_EQ(nevr_hook_guard::VerifyAll("test:rehooked"), 0);
+  EXPECT_FALSE(TestLogContains("hook overwritten")) << "a retired hook was reported as overwritten";
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Debug, "hook retired name=N84_roundtrip"));
+
+  ASSERT_EQ(PatchRetire(page), MH_OK);
+  MH_Uninitialize();
+  VirtualFree(page, 0, MEM_RELEASE);
+  nevr_hook_guard::ResetForTest();
+}
+
+TEST(N84_HookGuard, RetireOfAnUnrecordedTargetIsRefusedAndLogged) {
+  nevr_hook_guard::ResetForTest();
+  ClearTestLogs();
+  GuardScratch s;
+  ASSERT_NE(s.page, nullptr);
+  EXPECT_EQ(nevr_hook_guard::Retire(s.page), 0) << "a retire with nothing recorded was not refused";
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "hook retire refused va=0x"))
+      << "the refusal was not logged";
+  EXPECT_FALSE(TestLogContains("hook retired")) << "a refused retire reported a retirement";
+
+  nevr_hook_guard::Record(s.page, "N84_once");
+  EXPECT_EQ(nevr_hook_guard::Retire(s.page), 1);
+  EXPECT_EQ(nevr_hook_guard::Retire(s.page), 0) << "a second retire of the same target found a record";
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 0);
+}
+
+// plugin_assets installs its engine hooks through PatchDetour, so the guard holds each one under its name and an
+// overwrite of it is reported by that name.
+TEST(N84_HookGuard, PluginAssetsEngineHookIsRecordedUnderItsName) {
+  nevr_hook_guard::ResetForTest();
+  ClearTestLogs();
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  void* page = GuardStandInPage();
+  ASSERT_NE(page, nullptr);
+
+  void* original = nullptr;
+  ASSERT_TRUE(nevr::assets::InstallHookForTest(page, reinterpret_cast<void*>(&GuardDetour), &original,
+                                               "plugin_assets submit"));
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 1) << "the engine hook is not in the guard's records";
+  EXPECT_TRUE(nevr_hook_guard::IsOurDetour(page));
+  EXPECT_EQ(nevr_hook_guard::VerifyAll("test:assets"), 0);
+
+  // A second MinHook writes over the engine hook's JMP: the guard reports it under the name it was installed with.
+  unsigned char* p = static_cast<unsigned char*>(page);
+  p[1] = static_cast<unsigned char>(p[1] ^ 0xFF);
+  EXPECT_EQ(nevr_hook_guard::VerifyAll("test:assets-overwritten"), 1);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "hook overwritten name=plugin_assets submit va=0x"));
+
+  ASSERT_EQ(PatchRetire(page), MH_OK);
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 0);
+  MH_Uninitialize();
+  VirtualFree(page, 0, MEM_RELEASE);
+  nevr_hook_guard::ResetForTest();
+}
+
 // WOULD-FAIL-IF (N84): delete the memcmp in nevr_hook_guard::VerifyAll (hook_guard.cpp)
 //   -> OverwrittenBytes_Detected fails: a foreign detour goes unreported.
+// WOULD-FAIL-IF (N84-retire): make nevr_hook_guard::Retire forget nothing (hook_guard.cpp)
+//   -> RetireThenHookTheSameTargetReportsNoOverwrite fails: the restored bytes are reported as an overwrite.
+// WOULD-FAIL-IF (N84-retire-refusal): drop the Warning in Retire when nothing is recorded
+//   -> RetireOfAnUnrecordedTargetIsRefusedAndLogged fails.
+// WOULD-FAIL-IF (N84-assets): plugin_assets InstallOne goes back to MH_CreateHook (no record)
+//   -> PluginAssetsEngineHookIsRecordedUnderItsName fails.
 // WOULD-FAIL-IF (N84-record): delete the Readable() check in nevr_hook_guard::Record
 //   -> UnreadableTarget_Ignored fails, and production VerifyAll faults on the
 //      uncommitted page instead of skipping it.

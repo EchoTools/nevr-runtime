@@ -59,7 +59,8 @@ class TheHookIsTheBindFunctionOfEverySite(unittest.TestCase):
         attach = body.index("HookSite(")
         self.assertLess(classify, attach)
         self.assertIn("SiteState::Unhooked", body)
-        self.assertIn("Hooking::Attach(", hook(), "the default attach is the hooking layer's")
+        self.assertIn("PatchDetour(", hook(), "the default attach is PatchDetour, so HookGuard records the hook")
+        self.assertNotIn("Hooking::Attach(", hook(), "a raw attach is not recorded and its reload is not checked")
 
     def test_a_mismatch_is_a_warning_and_the_script_keeps_its_behaviour(self):
         body = extract_braced_function(hook(), "void Report(")
@@ -69,7 +70,7 @@ class TheHookIsTheBindFunctionOfEverySite(unittest.TestCase):
     def test_a_reload_removes_the_stale_hook_before_hooking_again(self):
         body = extract_braced_function(hook(), "bool HookSite(std::size_t i, void* target)")
         self.assertLess(body.index("g_backend.remove("), body.index("g_backend.attach("))
-        self.assertIn("MH_RemoveHook(target)", hook(), "the default removal is MinHook's")
+        self.assertIn("PatchRetire(target)", hook(), "the default removal forgets the HookGuard record, then removes the hook")
 
     def test_the_trampoline_is_published_into_the_slot_the_detour_reads(self):
         body = extract_braced_function(hook(), "bool HookSite(std::size_t i, void* target)")

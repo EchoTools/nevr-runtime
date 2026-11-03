@@ -207,7 +207,7 @@ void CallDetour(std::size_t site) {
 
 // Hooking::Attach over a MinHook that can be told to fail: the same create / publish / enable order and rollback
 // (core/hook_lifecycle.h), with the target read from *original.
-bool ProbeAttach(void** original, void* /*detour*/) {
+bool ProbeAttach(void** original, void* /*detour*/, const char* /*name*/) {
   g_probe.attachEntry = *original;
   if (g_probe.callerBeforeCreate) CallDetour(0);
   g_probe.freed = false;

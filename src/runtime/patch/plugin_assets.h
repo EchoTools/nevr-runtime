@@ -23,6 +23,12 @@ size_t DeregisterPluginAssets(const void* start, const void* end);
 // Remove the hooks and drop the registry. Idempotent.
 void ShutdownPluginAssets();
 
+#ifdef NEVR_TEST_HOOKS
+// Test-only: installs one hook the way the engine hooks are installed, through PatchDetour, so HookGuard records it
+// under `name`. On entry *original holds the game's function; on success it holds the trampoline.
+bool InstallHookForTest(void* target, void* detour, void** original, const char* name);
+#endif
+
 }  // namespace nevr::assets
 
 extern "C" {
