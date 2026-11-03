@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -85,5 +86,25 @@ inline bool NoteMessageNotShown(nevr_lobby_failure_message::DeclineLog& log, con
   return nevr_lobby_failure_message::NoteDeclined(
       log, code, nevr_lobby_failure_message::DeclineFor(reads.game, reads.message, sizeof reads.message), write);
 }
+
+// The Quest's two refusal records that are said once per process: a refusal the game's gate drops (refusal_dropped), and a
+// refusal no join went through, so the back-off does not count it (refusal_uncounted). One bit per record, one byte per code.
+// Not thread-safe; the caller holds its lock.
+class RefusalSayings {
+ public:
+  enum class Record : std::uint8_t { kDroppedGateClosed = 0x1, kUncountedNoJoin = 0x2 };
+
+  // True the first time `record` is said for `code`, false after.
+  bool FirstTime(std::uint8_t code, Record record) noexcept {
+    std::uint8_t& seen = seen_[code];
+    const auto bit = static_cast<std::uint8_t>(record);
+    if ((seen & bit) != 0) return false;
+    seen |= bit;
+    return true;
+  }
+
+ private:
+  std::array<std::uint8_t, 256> seen_{};
+};
 
 }  // namespace quest_social::lobby_full

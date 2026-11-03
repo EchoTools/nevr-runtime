@@ -45,6 +45,20 @@ nevr_lobby_failure_message::DeclineLog& Declines() {
   return declines;
 }
 
+// The refusal records said so far, under the same lock (built on first use, as Declines is).
+RefusalSayings& Sayings() {
+  static RefusalSayings sayings;
+  return sayings;
+}
+
+// True the first time this refusal record is said for the code in this process, false after (under g_declineMutex).
+bool FirstRefusalSaying(std::uint8_t code, RefusalSayings::Record record) noexcept {
+  pthread_mutex_lock(&g_declineMutex);
+  const bool first = Sayings().FirstTime(code, record);
+  pthread_mutex_unlock(&g_declineMutex);
+  return first;
+}
+
 // The decline record: the decision and the text of the PC callback's line (lobby_failure_message_rules.h), as typed fields.
 // The code, title and reason are fields; `msg` is the consequence, the sentence the PC line ends with.
 void WriteDeclineLine(std::uint8_t code, nevr_lobby_failure_message::Decline reason) {
@@ -106,8 +120,15 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
 
   if (!reads.gateOpen) {
     // The game returned at once on this refusal (its status is out of range), so it is neither counted nor shown.
-    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
-                        {{"status", "refusal_dropped"}, {"reason", "status_gate_closed"}});
+    if (FirstRefusalSaying(static_cast<std::uint8_t>(kLobbyFullCode), RefusalSayings::Record::kDroppedGateClosed)) {
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
+                          {{"status", "refusal_dropped"},
+                           {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
+                           {"reason", "status_gate_closed"},
+                           {"msg",
+                            "the game ignored this refusal, so the back-off does not count it and no message is shown; "
+                            "later ones of this kind are not said again"}});
+    }
     return;
   }
 
@@ -125,8 +146,15 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
   const char* lobbyText = haveLobby ? KeyText(key, keyText) : "unknown";
   if (!haveLobby) {
     // No join went through this hook, so there is no lobby to count the refusal against; the page is still shown.
-    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
-                        {{"status", "refusal_uncounted"}, {"reason", "no_join_recorded"}});
+    if (FirstRefusalSaying(static_cast<std::uint8_t>(kLobbyFullCode), RefusalSayings::Record::kUncountedNoJoin)) {
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
+                          {{"status", "refusal_uncounted"},
+                           {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
+                           {"reason", "no_join_recorded"},
+                           {"msg",
+                            "no join went through this hook, so the back-off has no lobby to count this refusal against; "
+                            "the page is still shown; later ones of this kind are not said again"}});
+    }
   } else if (d.verdict == Verdict::kWait) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
                         {{"status", "wait"}, {"refusal", d.refusals}, {"wait_ms", d.waitMs}, {"lobby", lobbyText}});

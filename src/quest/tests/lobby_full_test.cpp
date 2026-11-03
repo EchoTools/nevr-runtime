@@ -276,6 +276,16 @@ TEST(AShownMessageIsNotDeclined) {
   CHECK(declines::g_seen.empty());
 }
 
+TEST(TheRefusalRecordsAreSaidOncePerCodeAndRecord) {
+  namespace lf = quest_social::lobby_full;
+  lf::RefusalSayings said;
+  CHECK(said.FirstTime(8, lf::RefusalSayings::Record::kDroppedGateClosed));
+  CHECK(!said.FirstTime(8, lf::RefusalSayings::Record::kDroppedGateClosed));
+  CHECK(said.FirstTime(8, lf::RefusalSayings::Record::kUncountedNoJoin));  // another record is said too
+  CHECK(!said.FirstTime(8, lf::RefusalSayings::Record::kUncountedNoJoin));
+  CHECK(said.FirstTime(7, lf::RefusalSayings::Record::kDroppedGateClosed));  // another code is said too
+}
+
 }  // namespace
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

@@ -120,9 +120,10 @@ TEST(ALobbyFullRefusalWritesTheErrorPageIntoTheGameAtPlusEightAndLogsMessageShow
   CHECK(wait != nullptr);
 }
 
-TEST(ARefusalWhileTheStatusIsOutOfRangeWritesNothingAndLogsTheDroppedReason) {
+TEST(ARefusalWhileTheStatusIsOutOfRangeWritesNothingAndSaysTheDroppedReasonOnce) {
+  Capture capture;
+  Sayings() = RefusalSayings();
   for (const std::int32_t status : {0, 3, 7, 9}) {
-    Capture capture;
     Rig rig(status, 0x41);
     g_originalCalls = 0;
     OnJoin(&FakeJoin, rig.Self(), rig.join.data(), nullptr);
@@ -130,12 +131,50 @@ TEST(ARefusalWhileTheStatusIsOutOfRangeWritesNothingAndLogsTheDroppedReason) {
     CHECK_EQ(g_originalCalls, 2);
     CHECK(rig.GameUntouched());
     CHECK(rig.OtherUntouched());
-    const Line* dropped = Find({"\"status\":\"refusal_dropped\"", "\"reason\":\"status_gate_closed\""});
-    CHECK(dropped != nullptr);
-    if (dropped != nullptr) CHECK(dropped->level == sentinel::LogLevel::kDebug);
     CHECK(Find({"\"status\":\"message_shown\""}) == nullptr);
     CHECK(Find({"\"status\":\"wait\""}) == nullptr);  // not counted either
   }
+  // Said once for the four statuses together: the record names the reason, not the status.
+  CHECK_EQ(Count({"\"status\":\"refusal_dropped\"", "\"reason\":\"status_gate_closed\""}), 1);
+  const Line* dropped = Find({"\"status\":\"refusal_dropped\""});
+  CHECK(dropped != nullptr);
+  if (dropped != nullptr) {
+    CHECK(dropped->level == sentinel::LogLevel::kInfo);
+    CHECK(Has(dropped->text, "\"event\":\"lobby_full\""));
+    CHECK(Has(dropped->text, "\"code\":8"));
+    CHECK(Has(dropped->text,
+              "\"msg\":\"the game ignored this refusal, so the back-off does not count it and no message is shown; "
+              "later ones of this kind are not said again\""));
+  }
+}
+
+// A refusal no join went through: the page is still shown, the back-off has no lobby to count it against, and the
+// record is said once.
+TEST(ARefusalWithNoJoinRecordedIsSaidOnceAsUncountedAndStillShowsThePage) {
+  Capture capture;
+  Sayings() = RefusalSayings();
+  g_haveLastJoin = false;
+  Rig rig(5, 0xc1);
+  g_originalCalls = 0;
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());
+  CHECK_EQ(g_originalCalls, 1);
+  const std::uint8_t* block = rig.game.data() + rules::kErrorBlockOffset;
+  CHECK_EQ(block[0], rules::kErrorFlagFourLines);  // the page is still shown
+  CHECK(Find({"\"status\":\"wait\""}) == nullptr);
+  const Line* uncounted = Find({"\"status\":\"refusal_uncounted\""});
+  CHECK(uncounted != nullptr);
+  if (uncounted != nullptr) {
+    CHECK(uncounted->level == sentinel::LogLevel::kInfo);
+    CHECK(Has(uncounted->text, "\"event\":\"lobby_full\""));
+    CHECK(Has(uncounted->text, "\"code\":8"));
+    CHECK(Has(uncounted->text, "\"reason\":\"no_join_recorded\""));
+    CHECK(Has(uncounted->text,
+              "\"msg\":\"no join went through this hook, so the back-off has no lobby to count this refusal against; "
+              "the page is still shown; later ones of this kind are not said again\""));
+  }
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());  // the repeat is not said again
+  CHECK_EQ(g_originalCalls, 2);
+  CHECK_EQ(Count({"\"status\":\"refusal_uncounted\""}), 1);
 }
 
 TEST(AnotherFailureCodeIsPassedThroughUntouched) {
