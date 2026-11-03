@@ -17,6 +17,9 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "path_rewrite_hook.h"
+#if defined(NEVR_QUEST_PERF_PROBE)
+#include "perf_probe_hook.h"
+#endif
 #include "sentinel.h"
 #include "sentinel_log.h"
 #include "splash_skip_hook.h"
@@ -475,6 +478,9 @@ class ProductionSteps final : public Steps {
     // running package's media directory. Only on that file; logs its own outcome.
     if (std::strcmp(outcome.detail, libr15_patch::kReasonPinnedServiceOnly) == 0) {
       nevr_quest::path_rewrite::InstallForServiceOnly();
+#if defined(NEVR_QUEST_PERF_PROBE)
+      nevr_quest::perf_probe::InstallForServiceOnly();  // #1737 measurement build only (perf_probe_hook.h)
+#endif
     }
     return outcome.verified;
   }

@@ -77,6 +77,9 @@ target_compile_options(nevr_quest_integration PRIVATE -Wall -Wextra -Werror
   -fvisibility=hidden -fvisibility-inlines-hidden)
 set_source_files_properties(production_steps.cpp PROPERTIES COMPILE_DEFINITIONS
   "NEVR_QUEST_GIT_COMMIT=\"${NEVR_QUEST_GIT_COMMIT}\";NEVR_QUEST_GIT_DESCRIBE=\"${NEVR_QUEST_GIT_DESCRIBE}\";NEVR_QUEST_PROJECT_VERSION=\"${NEVR_QUEST_GIT_DESCRIBE}\";NEVR_QUEST_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\"")
+if(NEVR_QUEST_PERF_PROBE)
+  set_property(SOURCE production_steps.cpp APPEND PROPERTY COMPILE_DEFINITIONS "NEVR_QUEST_PERF_PROBE=1")
+endif()
 
 # Android-linkable builds of the host tests (they cannot execute on the build machine); the same
 # sources run on the host in `just test-quest-integration`.

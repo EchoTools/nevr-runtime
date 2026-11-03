@@ -109,6 +109,12 @@ add_library(ovrplatformloader SHARED
   credits_text.cpp
   "${NEVR_QUEST_CREDITS_BLOCK_CPP}")
 
+# The #1737 measurement probe, only in a build configured with NEVR_QUEST_PERF_PROBE=ON (src/quest/CMakeLists.txt).
+if(NEVR_QUEST_PERF_PROBE)
+  target_sources(ovrplatformloader PRIVATE perf_probe_hook.cpp)
+  set_source_files_properties(perf_probe_hook.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+endif()
+
 # Emit libovrplatformloader.so (CMake adds the lib prefix + .so suffix).
 set_target_properties(ovrplatformloader PROPERTIES OUTPUT_NAME ovrplatformloader)
 
