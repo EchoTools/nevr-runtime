@@ -13,6 +13,7 @@
 #include "quest/diag/hwdump_handlers.h"
 #include "quest/diag/hwdump_install.h"
 #include "quest/diag/hwdump_records.h"
+#include "quest/headset_profile.h"
 #include "quest/tests/test_check.h"
 #include "render_config_share.h"
 #include "sysprop_int_share.h"
@@ -70,6 +71,7 @@ void WithTheSlotUnownedTheDumpInstallsItsOwnHookAndObservesNothing() {
 
 void WithTheSlotOwnedTheDumpSharesItAndSeesTheRuntimesAnswerNotTheOverride() {
   tq::ResetForTest();
+  tq::SetHeadsetProfile(&nevr_quest::headset_profile::kQuest3);  // the identity step sets it at start; a level needs one
   hw::ResetCaptureForTest();
   QCHECK(tq::InstallVia(tq::Level::kHigh, false, []() noexcept { return sentinel::GotStatus::kOk; }));
   QCHECK(sentinel::SysPropIntSlotOwned());

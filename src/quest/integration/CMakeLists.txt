@@ -56,7 +56,7 @@ add_library(nevr_quest_integration STATIC
   self_check_wiring.cpp
   dlopen_hook.cpp
   social_shim.cpp)
-set_source_files_properties(dlopen_hook.cpp social_shim.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(dlopen_hook.cpp social_shim.cpp headset_identity_step.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_integration PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_include_directories(nevr_quest_integration PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
 target_link_libraries(nevr_quest_integration PUBLIC
