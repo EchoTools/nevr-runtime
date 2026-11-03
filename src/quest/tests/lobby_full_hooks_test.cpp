@@ -200,6 +200,26 @@ TEST(ARefusalWithNoJoinRecordedIsSaidOnceAsUncountedAndStillShowsThePage) {
   CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_uncounted\""}), 1);
 }
 
+// Both refusal records in one process: each is said at Info once and each repeat is a Debug record. Each record has its own
+// once bit, so the first write of one does not make the other's first write a repeat.
+TEST(BothRefusalRecordsInOneProcessAreEachSaidAtInfoOnce) {
+  Capture capture;
+  Sayings() = RefusalSayings();
+  g_haveLastJoin = false;
+  Rig dropped(0, 0x11);    // status 0 is outside the game's gate: refusal_dropped
+  Rig uncounted(5, 0x12);  // inside the gate with no join recorded: refusal_uncounted
+  OnFailure(&FakeFailure, dropped.Self(), dropped.failure.data());
+  OnFailure(&FakeFailure, uncounted.Self(), uncounted.failure.data());
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_uncounted\""}), 1);
+  OnFailure(&FakeFailure, dropped.Self(), dropped.failure.data());
+  OnFailure(&FakeFailure, uncounted.Self(), uncounted.failure.data());
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_uncounted\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_dropped\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_uncounted\""}), 1);
+}
+
 TEST(AnotherFailureCodeIsPassedThroughUntouched) {
   Capture capture;
   Rig rig(5, 0x61);
