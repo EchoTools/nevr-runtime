@@ -10,6 +10,8 @@ import sys
 import tempfile
 import unittest
 
+import yaml
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 import work_root  # noqa: E402
@@ -213,6 +215,25 @@ class ReleaseContractTest(unittest.TestCase):
         inputs["build_distribution.py"] = (REPO / "tools/build_distribution.py").read_text()
         for name, text in inputs.items():
             self.assertNotRegex(text, r"gamepatcheslegacy|gameserverlegacy|dist-legacy|dist-all", name)
+
+    def test_defender_scan_zips_the_dist_package_it_measures(self):
+        """The scan job downloads the one artifact the build-zip job makes. That zip is made from the dist package
+        directory, after the dist target writes it, so the scanned files are the package's files."""
+        self.assertIn("zip=", (REPO / ".github/builder/Dockerfile").read_text())
+        workflow = yaml.safe_load((REPO / ".github/workflows/defender-scan.yml").read_text(encoding="utf-8"))
+        steps = workflow["jobs"]["build-zip"]["steps"]
+        runs = [step.get("run", "") for step in steps]
+        zipping = [i for i, run in enumerate(runs) if "zip -r -D" in run]
+        self.assertEqual(len(zipping), 1, "build-zip must make its one zip with `zip -r -D` from the dist package")
+        zip_step = runs[zipping[0]]
+        self.assertIn("--target dist", zip_step, "the zip step builds the dist package it zips")
+        self.assertLess(zip_step.index("--target dist"), zip_step.index("zip -r -D"),
+                        "the zip is made after the dist target writes the package")
+        self.assertIn("packages=(dist/nevr-runtime-v*/)", zip_step)
+        self.assertIn('if [ "${#packages[@]}" -ne 1 ]', zip_step)
+        self.assertIn('(cd dist && zip -r -D "$name.zip" "$name/")', zip_step)
+        uploads = [s for s in steps if s.get("uses", "").startswith("actions/upload-artifact@")]
+        self.assertEqual([s["with"]["path"] for s in uploads], ["dist/*.zip"])
 
     def test_distribution_targets_build_required_runtime_and_validate_packages(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
