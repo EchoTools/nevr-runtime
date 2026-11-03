@@ -759,7 +759,7 @@ void ForeignWriterOnAChainIsARefusalNamingTheChain() {
   QCHECK(!joiner.installed());
   QCHECK(Errors() == 0);
   QCHECK(Count(LogLevel::kWarn, "\"status\":\"original_mismatch\"") == 1);
-  QCHECK(Count(LogLevel::kWarn, "\"slot\":\"0x") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"slot_vaddr\":\"0x") == 1);
   QCHECK(Count(LogLevel::kWarn, "\"chain\":\"sentinel\",\"chain_length\":1") == 1);
   ForceWrite(r.slot, AddThunk::EntryAddress());
   QCHECK_STATUS(sentinelHook.Remove(), GotStatus::kOk);
@@ -1633,10 +1633,10 @@ void RegistryBound() {
   QCHECK(Errors() == 0);
   QCHECK(RegistrySnapshot().used == kRegistryCapacity);
 
-  // Past the whole registry even a critical hook is refused, and says so as critical.
+  // Past the whole registry even a critical hook is refused, and says so as critical: at Error, because the reserve is for it.
   Captured().clear();
   QCHECK_STATUS(fx.InstallAt(refusedNormal + 1 + criticalRoom, HookPriority::kCritical), GotStatus::kRegistryFull);
-  QCHECK(Errors() == 0 && Count(LogLevel::kWarn, "\"priority\":\"critical\"") == 1);
+  QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"priority\":\"critical\"") == 1);
 
   // The counters and the ledger say who lost, in order.
   const RegistryStats stats = RegistrySnapshot();

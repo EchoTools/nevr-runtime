@@ -120,6 +120,18 @@ std::size_t FindLink(void** slot, void* hookFn) {
   return kNone;
 }
 
+// Under the lock: the 1-based position of entry (slot, hookFn) on its chain, oldest first; 0 when it is not there. The
+// entries of one slot are kept in registration order, so a position is a count of the entries before it.
+std::size_t PositionLocked(void** slot, void* hookFn) {
+  const std::size_t index = FindLink(slot, hookFn);
+  if (index == kNone) return 0;
+  std::size_t position = 0;
+  for (std::size_t i = 0; i <= index; ++i) {
+    if (g_links[i].slot == slot) ++position;
+  }
+  return position;
+}
+
 bool AnyPoisonedOn(void** slot) {
   for (std::size_t i = 0; i < g_linkCount; ++i) {
     if (g_links[i].slot == slot && g_links[i].poisoned) return true;
@@ -691,12 +703,15 @@ struct Prepared {
 struct Joined {
   std::size_t position = 0;
   std::size_t length = 0;
+  char nextOwner[kOwnerCapacity] = {};  // the owner of the entry this one calls (position 2 and up)
 };
 
 // The longest owner text a refusal line carries: the chain's owners, joined.
 constexpr std::size_t kChainTextCapacity = 256;
-// The most fields an install refusal line carries (the two build-ID fields included).
-constexpr std::size_t kInstallRefusalFields = 13;
+// What a value in a slot reads as in a refusal line (DescribeSlotValue).
+constexpr std::size_t kValueTextCapacity = 96;
+// Every field an install refusal line carries; a field that does not apply reads "(none)".
+constexpr std::size_t kInstallRefusalFields = 15;
 
 // The one failure record of a remove. Module names and build IDs are public identifiers; nothing here is a credential.
 void LogFailure(const char* op, const GotTarget& t, GotStatus status, const char* stage, int err) {
@@ -704,7 +719,8 @@ void LogFailure(const char* op, const GotTarget& t, GotStatus status, const char
   const char* symbol = t.symbol != nullptr ? t.symbol : "(null)";
   LogFields(LogLevel::kError, "got_hook",
             {{"op", op}, {"status", GotStatusName(status)}, {"stage", stage}, {"module", module},
-             {"symbol", symbol}, {"reloc", RelocKindName(t.kind)}, {"errno", err}});
+             {"symbol", symbol}, {"reloc", RelocKindName(t.kind)},
+             {"owner", t.owner != nullptr ? t.owner : "(unnamed)"}, {"errno", err}});
 }
 
 // What a refusal means, in one sentence, for the log's `reason` field.
@@ -752,19 +768,55 @@ long long DescribeChain(void** slot, char* out, std::size_t capacity) {
   return count;
 }
 
+// What a value in a slot is, for a refusal's log: "null", the owner of the chain entry that holds it, the game's function
+// (the chain's oldest original), or its offset from the module's load base (an address outside the module reads as a large
+// offset). Takes the lock: never call it with the lock held.
+void DescribeSlotValue(void** slot, void* value, std::uintptr_t bias, char* out, std::size_t capacity) {
+  const Lock lock;
+  if (value == nullptr) {
+    std::snprintf(out, capacity, "%s", "null");
+    return;
+  }
+  for (std::size_t i = 0; i < g_linkCount; ++i) {
+    if (g_links[i].slot == slot && g_links[i].hookFn == value) {
+      std::snprintf(out, capacity, "hook of %s", g_links[i].owner);
+      return;
+    }
+  }
+  const std::size_t oldest = OldestOn(slot);
+  if (oldest != kNone && g_links[oldest].original == value) {
+    std::snprintf(out, capacity, "%s", "the game's function");
+    return;
+  }
+  if (bias != 0) {
+    char offset[19];
+    std::snprintf(out, capacity, "offset %s", HexString(offset, reinterpret_cast<std::uintptr_t>(value) - bias));
+    return;
+  }
+  std::snprintf(out, capacity, "%s", "not in the module");
+}
+
 // The refusal of an install: one Warning line that names the slot, the chain on it and the reason (logging.md Rule 6).
-// `slot` is null when the module or its slot did not resolve; `actualBuildId` is set only for a build-ID mismatch.
+// `slot` is null when the module or its slot did not resolve; `slotVaddr` and `bias` (the module's load base) are 0 then.
+// `expected` is the value the install waited for, for kOriginalMismatch and kSlotChanged (null when it has none); the value
+// in the slot is read here. `actualBuildId` is set only for a build-ID mismatch.
 void LogInstallRefusal(const GotTarget& t, GotStatus status, const char* stage, int err, void** slot,
-                       const char* actualBuildId) {
+                       std::uintptr_t slotVaddr, std::uintptr_t bias, void* expected, const char* actualBuildId) {
   char slotText[19] = "(unresolved)";
   char chain[kChainTextCapacity] = "(none)";
+  char expectedText[kValueTextCapacity] = "(none)";
+  char actualText[kValueTextCapacity] = "(none)";
   long long length = 0;
   if (slot != nullptr) {
-    HexString(slotText, reinterpret_cast<std::uintptr_t>(slot));
+    if (slotVaddr != 0) HexString(slotText, slotVaddr);
     length = DescribeChain(slot, chain, sizeof(chain));
+    if (status == GotStatus::kOriginalMismatch || status == GotStatus::kSlotChanged) {
+      DescribeSlotValue(slot, expected, bias, expectedText, sizeof(expectedText));
+      DescribeSlotValue(slot, __atomic_load_n(slot, __ATOMIC_ACQUIRE), bias, actualText, sizeof(actualText));
+    }
   }
-  // LogField has no default constructor, so the array is initialised whole; the two build-ID fields are logged only for a
-  // build-ID refusal (the count below).
+  // LogField has no default constructor, so the array is initialised whole. Every field is on every line; a field that
+  // does not apply reads "(none)".
   const LogField fields[kInstallRefusalFields] = {
       LogField("op", "install"),
       LogField("status", GotStatusName(status)),
@@ -774,33 +826,34 @@ void LogInstallRefusal(const GotTarget& t, GotStatus status, const char* stage, 
       LogField("symbol", t.symbol),
       LogField("reloc", RelocKindName(t.kind)),
       LogField("errno", err),
-      LogField("slot", slotText),
+      LogField("slot_vaddr", slotText),
       LogField("chain", chain),
       LogField("chain_length", length),
-      LogField("expected_build_id", t.buildId != nullptr ? t.buildId : ""),
+      LogField("expected", expectedText),
+      LogField("actual", actualText),
+      LogField("expected_build_id", t.buildId != nullptr ? t.buildId : "(none)"),
       LogField("actual_build_id", actualBuildId != nullptr && actualBuildId[0] != '\0' ? actualBuildId : "(none)"),
   };
-  const std::size_t n = actualBuildId != nullptr ? kInstallRefusalFields : kInstallRefusalFields - 2;
-  LogFieldList(LogLevel::kWarn, "got_hook", fields, n);
+  LogFieldList(LogLevel::kWarn, "got_hook", fields, kInstallRefusalFields);
 }
 
-// The refusal for want of room: one Warning line that names the hook that lost, its slot and chain, and what that costs.
-// The registry is a budget (hook_budget.h): a line like this one means the budget no longer covers the build, which is a
-// defect to fix, not a condition to ride out.
-void LogRegistryFull(const GotTarget& t, void** slot) {
+// The refusal for want of room: one line that names the hook that lost, its slot and chain, and what that costs. A critical
+// hook that finds no room is Error: the reserve exists for it, so the loss is a defect to see, not a condition to ride out.
+// The registry is a budget (hook_budget.h): a line like this one means the budget no longer covers the build.
+void LogRegistryFull(const GotTarget& t, void** slot, std::uintptr_t slotVaddr) {
   const RegistryStats stats = RegistrySnapshot();
   const bool critical = t.priority == HookPriority::kCritical;
   char slotText[19] = "(unresolved)";
   char chain[kChainTextCapacity] = "(none)";
   long long length = 0;
   if (slot != nullptr) {
-    HexString(slotText, reinterpret_cast<std::uintptr_t>(slot));
+    if (slotVaddr != 0) HexString(slotText, slotVaddr);
     length = DescribeChain(slot, chain, sizeof(chain));
   }
-  LogFields(LogLevel::kWarn, "got_hook",
+  LogFields(critical ? LogLevel::kError : LogLevel::kWarn, "got_hook",
             {{"op", "install"}, {"status", "registry_full"}, {"reason", RefusalReason(GotStatus::kRegistryFull)},
              {"module", t.module}, {"symbol", t.symbol}, {"reloc", RelocKindName(t.kind)},
-             {"priority", critical ? "critical" : "normal"}, {"slot", slotText}, {"chain", chain},
+             {"priority", critical ? "critical" : "normal"}, {"slot_vaddr", slotText}, {"chain", chain},
              {"chain_length", length},
              {"capacity", static_cast<long long>(stats.capacity)}, {"used", static_cast<long long>(stats.used)},
              {"critical_reserve", static_cast<long long>(stats.criticalReserve)},
@@ -864,13 +917,15 @@ GotStatus JoinLocked(const Prepared& p, const GotTarget& target, void* hookFn, v
     *newOriginal = current;
   } else {
     // A later handler: the slot must hold the chain's newest hook, and the chain's base must be the expected original.
-    void* const newest = g_links[NewestOn(slot)].hookFn;
+    const std::size_t newestIndex = NewestOn(slot);
+    void* const newest = g_links[newestIndex].hookFn;
     if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != newest) return GotStatus::kOriginalMismatch;
     if (target.expectedOriginal != nullptr && g_links[oldest].original != target.expectedOriginal) {
       return GotStatus::kOriginalMismatch;
     }
     *expectedSlot = newest;
     *newOriginal = newest;
+    CopyOwner(joined->nextOwner, g_links[newestIndex].owner);
   }
   const bool critical = target.priority == HookPriority::kCritical;
   const std::size_t limit = critical ? kRegistryCapacity : kRegistryCapacity - kCriticalReserve;
@@ -1003,11 +1058,12 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
                            ImageLookup lookup) {
   if (target.module == nullptr || target.symbol == nullptr || hookFn == nullptr ||
       originalOut == nullptr || lookup == nullptr) {
-    LogInstallRefusal(target, GotStatus::kBadArgument, "arguments", 0, nullptr, nullptr);
+    LogInstallRefusal(target, GotStatus::kBadArgument, "arguments", 0, nullptr, 0, 0, nullptr, nullptr);
     return GotStatus::kBadArgument;
   }
   if (installed_) {
-    LogInstallRefusal(target, GotStatus::kAlreadyInstalled, "handle", 0, nullptr, nullptr);
+    LogInstallRefusal(target, GotStatus::kAlreadyInstalled, "handle", 0, slot_,
+                      reinterpret_cast<std::uintptr_t>(slot_) - image_.base, image_.base, nullptr, nullptr);
     return GotStatus::kAlreadyInstalled;
   }
 
@@ -1015,7 +1071,7 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
   GotStatus status = Resolve(target, lookup, &prepared);
   if (status != GotStatus::kOk) {
     LogInstallRefusal(target, status, nevr::hook::AttachStageName(nevr::hook::AttachStage::kCreateFailed), 0,
-                      nullptr, status == GotStatus::kBuildIdMismatch ? prepared.actualBuildId : nullptr);
+                      nullptr, 0, 0, nullptr, status == GotStatus::kBuildIdMismatch ? prepared.actualBuildId : nullptr);
     return status;
   }
 
@@ -1059,10 +1115,15 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
   if (stage != nevr::hook::AttachStage::kAttached) {
     mayBeLive_ = outcome == StoreOutcome::kStoredMayBeLive;
     if (status == GotStatus::kRegistryFull) {
-      LogRegistryFull(target, slot);
+      LogRegistryFull(target, slot, prepared.resolution.slotVaddr);
       return status;
     }
+    // The value the install waited for: the expected original (kOriginalMismatch), or the value it read or stored over
+    // (kSlotChanged). The first handler's read is `observed`.
+    void* const waited = status == GotStatus::kOriginalMismatch ? target.expectedOriginal
+                       : (expected != nullptr ? expected : prepared.observed);
     LogInstallRefusal(target, status, nevr::hook::AttachStageName(stage), savedErrno, slot,
+                      prepared.resolution.slotVaddr, prepared.image.base, waited,
                       status == GotStatus::kBuildIdMismatch ? prepared.actualBuildId : nullptr);
     return status;
   }
@@ -1074,19 +1135,21 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
   restoreReadOnly_ = prepared.resolution.restoreReadOnly;
   installed_ = true;
   mayBeLive_ = false;
-  // The slot's previous value, as an offset from the module's load bias, so a build can be compared with the
-  // previous one (#1530): the same function sits at the same offset in two builds of the same module.
+  // A first handler's original is the game's function: its offset from the module's load bias, so a build can be compared
+  // with the previous one (#1530). A later handler's original is the handler it calls: that handler's owner is named.
   char vaddr[19], bias[19], originalOffset[19];
+  const bool first = joined.position == 1;
   LogFields(LogLevel::kInfo, "got_hook",
             {{"op", "install"}, {"status", "ok"}, {"module", target.module},
              {"symbol", target.symbol}, {"reloc", RelocKindName(target.kind)},
              {"slot_vaddr", HexString(vaddr, prepared.resolution.slotVaddr)},
              {"load_bias", HexString(bias, image_.base)},
-             {"original_offset",
-              HexString(originalOffset, reinterpret_cast<std::uintptr_t>(newOriginal) - image_.base)},
              {"owner", target.owner != nullptr ? target.owner : "(unnamed)"},
              {"position", static_cast<long long>(joined.position)},
-             {"chain_length", static_cast<long long>(joined.length)}});
+             {"chain_length", static_cast<long long>(joined.length)},
+             first ? LogField("original_offset",
+                              HexString(originalOffset, reinterpret_cast<std::uintptr_t>(newOriginal) - image_.base))
+                   : LogField("next_owner", joined.nextOwner)});
   return GotStatus::kOk;
 }
 
@@ -1115,8 +1178,10 @@ GotStatus GotHook::Remove() {
   int savedErrno = 0;
   StoreOutcome outcome = StoreOutcome::kNotStored;
   GotStatus status = GotStatus::kOk;
+  std::size_t position = 0;  // where the entry sat on its chain before it left (1 = the oldest)
   {
     const Lock lock;
+    position = PositionLocked(slot_, hookFn_);
     status = UnlinkLocked(slot_, hookFn_, restoreReadOnly_, &savedErrno, &outcome);
   }
   if (status == GotStatus::kNotInstalled) {
@@ -1130,9 +1195,13 @@ GotStatus GotHook::Remove() {
     return status;
   }
   installed_ = false;
+  char chain[kChainTextCapacity] = "(none)";
+  const long long remaining = DescribeChain(slot_, chain, sizeof(chain));
   LogFields(LogLevel::kInfo, "got_hook",
             {{"op", "remove"}, {"status", "ok"}, {"module", target_.module},
-             {"symbol", target_.symbol}, {"reloc", RelocKindName(target_.kind)}});
+             {"symbol", target_.symbol}, {"reloc", RelocKindName(target_.kind)},
+             {"owner", target_.owner != nullptr ? target_.owner : "(unnamed)"},
+             {"position", static_cast<long long>(position)}, {"chain", chain}, {"chain_length", remaining}});
   return GotStatus::kOk;
 }
 
