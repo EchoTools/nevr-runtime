@@ -82,3 +82,7 @@ runm dronemuzzle dc_x2_guard      src/dronemuzzle_core.h "s/xl > 1e-4f ? -z\[0\]
 runm dronemuzzle dc_y_1           src/dronemuzzle_core.h "s/z\[2\] \* x\[0\] - z\[0\] \* x\[2\],/z[2] * x[0] + z[0] * x[2],/"
 runm dronemuzzle dc_y_2           src/dronemuzzle_core.h "s/z\[0\] \* x\[1\] - z\[1\] \* x\[0\] };/z[0] * x[1] + z[1] * x[0] };/"
 runm dronemuzzle dc_ret_true      src/dronemuzzle_core.h "s/    return true;/    return false;/"
+runm dronemuzzle dc_guard_ret     src/dronemuzzle_core.h "s/if (!(len >= 1e-4f)) return false;/if (!(len >= 1e-4f)) return true;/"
+runm dronemuzzle dc_x1_const      src/dronemuzzle_core.h "s/: 1.0f, 0.0f, xl > 1e-4f/: 1.0f, 0.5f, xl > 1e-4f/"
+runm dronemuzzle dc_loop_bound    src/dronemuzzle_core.h "s/for (int i = 0; i < 3; ++i) {/for (int i = 0; i < 2; ++i) {/"
+runm dronemuzzle dm_tp_args       src/dronemuzzle.cpp "s/if (!MuzzleMove(root, v, spawn))/if (!MuzzleMove(v, root, spawn))/"
