@@ -78,11 +78,12 @@ tests and `docs/audits/`.
 
 ## Consequences
 
-- The reference base stays in releases only as long as its files are class 4 with open issues. The module track turns
-  `libvrapi.so` into class 3 (built from EchoFrame and echoquest-combat at pinned commits).
+- The reference base stays in releases only as long as its files are class 4 with open issues. The VrApi-on-OpenXR
+  layer becomes class 2: reconstructed in this repo with EchoFrame and echoquest-combat as cited references, not built
+  from their sources. Until it is, the release pins the shipped `libvrapi.so` by its sha256.
 - Reconstruction lists kept outside the repository are replaced by the index.
 
 ## Not claimed
 
-That the reference `libvrapi.so` can be reproduced from the published sources at all. Its EchoFrame commit has to be
-fetched and built first, and the comparison may show inputs nobody has published.
+That the reconstruction will match the shipped `libvrapi.so` byte for byte; it is checked by its own tests and headset
+runs, and the hash pin holds the shipped file in place until those pass.

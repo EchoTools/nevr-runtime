@@ -31,9 +31,10 @@ suggested bindings ([Meta: OpenXR actions, action sets and bindings](https://dev
    `xrGetCurrentInteractionProfile` reports.
 2. **Code above the VrApi boundary does not branch on the controller to change input.** That covers the sentinel,
    plugins, and hooks on libr15. It may read and log the controller, as `hand_pose_log_hook.cpp` does.
-3. **The layer is built from source by this repo's recipes** (ADR 0035). A controller fix goes into that source. A fix
-   made above the boundary for players who need it now is marked at its site as known-wrong, with the issue that moves
-   it into the layer.
+3. **The layer is ours, reconstructed in this repo** (ADR 0035), with EchoFrame and echoquest-combat as cited references,
+   never their sources taken whole (AGENTS.md "Guardrails"). A controller fix goes into that reconstruction. A fix made
+   above the boundary for players who need it now is marked at its site as known-wrong, with the issue that moves it into
+   the layer.
 4. **Each controller the layer binds is logged once per session**: the interaction profile path and the pose source used.
 
 ## Finding a violation
@@ -53,7 +54,7 @@ per hand and never ship to players (the autopilot, `docs/adr/0025-quest-autopilo
 
 - #1986's fix lands in the layer's binding for the controllers it affects, and every headset with those controllers gets
   it.
-- Steam Frame's and Index's layouts stay where EchoFrame put them.
+- Steam Frame's and Index's layouts are reconstructed into the layer's bindings, citing EchoFrame.
 
 ## Not claimed
 
