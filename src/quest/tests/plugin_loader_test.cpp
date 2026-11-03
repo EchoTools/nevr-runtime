@@ -1242,7 +1242,8 @@ TEST(LoaderRefusesARegisterUnderAnotherPluginsId) {
   CHECK(!nevr_quest::slot_hook::HoldsHandleOf("b2"));
   CHECK_EQ(env.platform.Record("b2")->keptMapped, std::string("none"));
   CHECK_EQ(env.platform.closed.size(), std::size_t{1});  // nothing was chained: the object is unmapped
-  CHECK_EQ(env.platform.closed[0], std::string("libfx_slotclaim.so"));
+  CHECK(std::find(env.platform.closed.begin(), env.platform.closed.end(), std::string("libfx_slotclaim.so")) !=
+        env.platform.closed.end());
   CHECK_EQ(callAdd(3, 4), 7);  // the game's function: no handler is on the chain
   ::dlclose(consumer);
 }

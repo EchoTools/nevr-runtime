@@ -29,6 +29,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <memory>
@@ -2369,6 +2370,207 @@ void Thunks() {
 
 }  // namespace
 
+// ---- round-3 mutant-killing tests (#2001) ---------------------------------------------------------------------------------
+
+// The nested unregister the store observer makes during the outer Remove of the same handle.
+std::uint32_t g_nestedHandle = 0;
+std::int32_t g_nestedRc = -1;
+bool g_nestedArmed = false;
+
+void NestedUnregisterObserver(void**, void*, StorePhase phase) {
+  if (phase != StorePhase::kBeforeStore || !g_nestedArmed) return;
+  g_nestedArmed = false;
+  g_nestedRc = slot_hook::UnregisterSlotHook("q15t", g_nestedHandle);
+}
+
+// Ends the process, with a message, when `done` is still false after `seconds`: a deadlock fails the run instead of hanging it.
+void ExitIfNotDone(const std::atomic<bool>& done, int seconds, const char* what) {
+  for (int i = 0; i < seconds * 100 && !done.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  if (!done.load()) {
+    std::fprintf(stderr, "got_hook_test: %s: no result after %d s (a deadlock)\n", what, seconds);
+    std::_Exit(1);
+  }
+}
+
+// An unregister of a handle while its own Remove is running is refused, not run again (#2001, round 3 item 6: N02, N02b).
+// The store observer calls unregister on the same handle during the outer Remove's store, under the write lock. With the
+// claim the nested call is refused ("another unregister ... is in progress") and the outer one completes. Without the claim
+// the nested Remove waits for the lock the outer Remove holds, and the watchdog ends the run.
+void AnUnregisterOfAHandleBeingRemovedIsRefused() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const std::string live = LiveNoteOf(so);
+  TimesThunk::Arm(kTimesTwo);
+  std::uint32_t handle = 0;
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                         TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) == NEVR_SLOT_HOOK_OK);
+  g_nestedHandle = handle;
+  g_nestedRc = -1;
+  g_nestedArmed = true;
+  SetStoreObserver(&NestedUnregisterObserver);
+  std::atomic<bool> done{false};
+  std::thread watchdog([&done] { ExitIfNotDone(done, 5, "an unregister of a handle being removed"); });
+  const std::int32_t outer = slot_hook::UnregisterSlotHook("q15t", handle);
+  done.store(true);
+  watchdog.join();
+  SetStoreObserver(nullptr);
+  QCHECK(outer == NEVR_SLOT_HOOK_OK);
+  QCHECK(g_nestedRc == NEVR_SLOT_HOOK_REFUSED);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"another unregister of this handle is in progress\"") == 1);
+  QCHECK(!slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(Errors() == 0);
+  dlclose(m.handle);
+}
+
+// HoldsHandleOf answers for the owner it is given, not for any held handle (#2001, round 3 item 6: N04b).
+void HoldsHandleOfNamesItsOwner() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const std::string live = LiveNoteOf(so);
+  TimesThunk::Arm(kTimesTwo);
+  std::uint32_t handle = 0;
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                         TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) == NEVR_SLOT_HOOK_OK);
+  QCHECK(slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(!slot_hook::HoldsHandleOf("autopilot"));
+  QCHECK(!slot_hook::HoldsHandleOf(nullptr));
+  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_OK);
+  QCHECK(!slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(Errors() == 0);
+  dlclose(m.handle);
+}
+
+// A removal the host could not make (the slot changed under it) leaves the handler chained and the handle held, and the owner
+// may try again once the slot holds the handler (#2001, round 3 item 6: N07).
+void AFailedUnregisterLeavesTheHandleOpenForItsOwner() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  const std::string live = LiveNoteOf(so);
+  TimesThunk::Arm(kTimesTwo);
+  std::uint32_t handle = 0;
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                         TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) == NEVR_SLOT_HOOK_OK);
+  ForceWrite(r.slot, m.realSub);  // another writer holds the slot: the removal refuses to write over it
+  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_REFUSED);
+  QCHECK(Count(LogLevel::kError, "\"op\":\"remove\",\"status\":\"slot_changed\"") == 1);
+  QCHECK(slot_hook::HoldsHandleOf("q15t"));
+  ForceWrite(r.slot, TimesThunk::EntryAddress());  // the handler is in the slot again
+  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_OK);  // the owner's retry is not "in progress"
+  QCHECK(!slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(*r.slot == m.realAdd);
+  QCHECK(m.callAdd(3, 4) == 7);
+  dlclose(m.handle);
+}
+
+// The install, refusal and remove lines name the chain, the owner and the values (#2001, round 3 item 6: N08b, N08c, N09,
+// N10, N13). A second install names the owner it joined on top of; a join refused on its base names the value it expected and
+// the one in the slot; a removal that finds the slot changed names its owner on the Error line; a removal names its owner,
+// its position and the chain it leaves.
+void ChainLinesNameTheChainOwnerAndValues() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  AddThunk::Arm(kAddPlus100);
+  TimesThunk::Arm(kTimesTwo);
+  SubThunk::Arm(kSubPlus100);
+  GotHook addHook;
+  QCHECK_STATUS(Install(addHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("add"), AddThunk::EntryAddress(),
+                        AddThunk::OriginalOut()),
+                GotStatus::kOk);
+  GotHook timesHook;
+  Captured().clear();
+  QCHECK_STATUS(Install(timesHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned("times"), TimesThunk::EntryAddress(),
+                        TimesThunk::OriginalOut()),
+                GotStatus::kOk);
+  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"times\",\"position\":2,\"chain_length\":2,\"next_owner\":\"add\"") == 1);
+
+  GotTarget wrong{so, "fx_add", RelocKind::kJumpSlot};
+  wrong.expectedOriginal = reinterpret_cast<void*>(&SubImpl);
+  GotHook thirdHook;
+  void* out = nullptr;
+  Captured().clear();
+  QCHECK_STATUS(Install(thirdHook, wrong.Owned("third"), SubThunk::EntryAddress(), &out), GotStatus::kOriginalMismatch);
+  QCHECK(Count(LogLevel::kWarn, "\"expected\":\"offset 0x") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"actual\":\"hook of times\"") == 1);  // the slot holds the newest hook, times
+
+  ForceWrite(r.slot, m.realSub);
+  Captured().clear();
+  QCHECK_STATUS(timesHook.Remove(), GotStatus::kSlotChanged);
+  QCHECK(Count(LogLevel::kError, "\"owner\":\"times\"") == 1);
+  ForceWrite(r.slot, TimesThunk::EntryAddress());
+  Captured().clear();
+  QCHECK_STATUS(timesHook.Remove(), GotStatus::kOk);
+  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"times\",\"position\":2,\"chain\":\"") == 1);
+  QCHECK_STATUS(addHook.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(*r.slot == m.realAdd);
+  dlclose(m.handle);
+}
+
+// A failed store whose entry was live leaves the hook's mayBeLive set (#2001, round 3 item 6: N12). The poisoned entry is
+// released once its module is unmapped, as in PoisonedSlotIsKeptWhenMapsAreUnreadable.
+void AFailedLiveStoreSetsMayBeLive() {
+  Prepare();
+  Module m = Open("libgotfx_consumer_now.so");
+  GotTarget target{"libgotfx_consumer_now.so", "fx_add", RelocKind::kJumpSlot};
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  GotHook hook;
+  void* out = nullptr;
+  SetStoreObserver(&AfterStoreClobberObserver);
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &out), GotStatus::kWriteVerifyFailed);
+  SetStoreObserver(nullptr);
+  QCHECK(hook.mayBeLive());
+  const std::uintptr_t page = static_cast<std::uintptr_t>(sysconf(_SC_PAGESIZE));
+  void* const pageStart = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(r.slot) & ~(page - 1));
+  ForceWrite(r.slot, m.realAdd);
+  QCHECK(dlclose(m.handle) == 0);
+  Captured().clear();
+  ReleasePoisonedSlotsIn(pageStart, page);
+  QCHECK(Count(LogLevel::kInfo, "\"status\":\"released\"") == 1);
+}
+
+// A register whose store was live keeps its handle held and its owner's object mapped (N05), and the handle's unregister is
+// refused while the handler may be reachable (N06). The register failed, so the caller got no handle: the held one is found
+// by trying each. This runs last: the held entry stays until the process ends.
+void AKeptHandleStaysHeldAndItsUnregisterIsRefused() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  const std::string live = LiveNoteOf(so);
+  TimesThunk::Arm(kTimesTwo);
+  std::uint32_t handle = 0;
+  const char* const kHeldReason = "a failed install left the handler reachable through its slot; the handle stays held";
+  std::string reasonNeedle = std::string("\"reason\":\"") + kHeldReason + "\"";
+  SetStoreObserver(&AfterStoreClobberObserver);
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                         TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) == NEVR_SLOT_HOOK_REFUSED);
+  SetStoreObserver(nullptr);
+  QCHECK(Count(LogLevel::kWarn, reasonNeedle) == 1);
+  QCHECK(slot_hook::HoldsHandleOf("q15t"));  // N05: the handle stays held
+  std::uint32_t kept = 0;
+  for (std::uint32_t h = 1; h <= slot_hook::kSlotHookHandles; ++h) {
+    if (slot_hook::UnregisterSlotHook("q15t", h) == NEVR_SLOT_HOOK_REFUSED) kept = h;
+  }
+  QCHECK(kept != 0);
+  QCHECK(Count(LogLevel::kWarn, reasonNeedle) == 2);  // N06: the unregister is refused with the same reason
+  QCHECK(slot_hook::HoldsHandleOf("q15t"));
+  const std::uintptr_t page = static_cast<std::uintptr_t>(sysconf(_SC_PAGESIZE));
+  void* const pageStart = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(r.slot) & ~(page - 1));
+  ForceWrite(r.slot, m.realAdd);
+  QCHECK(dlclose(m.handle) == 0);
+  Captured().clear();
+  ReleasePoisonedSlotsIn(pageStart, page);
+  QCHECK(Count(LogLevel::kInfo, "\"status\":\"released\"") == 1);
+}
+
 int main(int argc, char** argv) {
   if (argc != 2) {
     std::fprintf(stderr, "usage: got_hook_test <fixture-dir>\n");
@@ -2396,8 +2598,12 @@ int main(int argc, char** argv) {
   ServiceHoldsEightHandlesThenRefuses();
   ForgettingAMiddleHandlerRelinksItsCaller();
   AJoinChecksTheExpectedOriginal();
+  ChainLinesNameTheChainOwnerAndValues();
   ServiceRefusesBadNamesAndPointersAtTheBoundary();
   CallsSurviveTheMiddleBeingRemovedAndAddedAgain();
+  AnUnregisterOfAHandleBeingRemovedIsRefused();
+  HoldsHandleOfNamesItsOwner();
+  AFailedUnregisterLeavesTheHandleOpenForItsOwner();
   ConcurrentCallers();
   SyntheticResolution();
   SyntheticInstall();
@@ -2416,12 +2622,14 @@ int main(int argc, char** argv) {
   CriticalTargetIsTheSameTargetWithAPriority();
   ArmRefusesARecordOutsideTheSection();
   PoisonedSlotIsKeptWhenMapsAreUnreadable();
+  AFailedLiveStoreSetsMayBeLive();
   ReporterStartStopRace();
   ReporterCounterTableBound();
   ReporterIsBoundedWithAHotAndAnIdleCounter();
   ReporterReportsALateFirstChange();
   LogLinesAreValidJson();
   Thunks();
+  AKeptHandleStaysHeldAndItsUnregisterIsRefused();  // last: it leaves a held service entry for the rest of the process
 
   SetLogSink(nullptr);
   QCHECK(g_invalidLines == 0);
