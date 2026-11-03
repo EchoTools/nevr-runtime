@@ -285,6 +285,18 @@ TEST(ANoGameBaseIsSaidOnceAsNoGameBaseEvenWithAMessage) {
   CHECK(rig.OtherUntouched());
 }
 
+// No lobby client: the status word is not read, so refusal_dropped leaves game_status out rather than reporting 0.
+TEST(ARefusalWithNoLobbyClientLeavesGameStatusOutOfTheDroppedRecord) {
+  Capture capture;
+  Sayings() = RefusalSayings();
+  Rig rig(5, 0x71);
+  g_originalCalls = 0;
+  OnFailure(&FakeFailure, nullptr, rig.failure.data());
+  CHECK_EQ(g_originalCalls, 1);  // the game's own callback still ran
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\"", "\"reason\":\"status_gate_closed\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\"", "\"game_status\""}), 0);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

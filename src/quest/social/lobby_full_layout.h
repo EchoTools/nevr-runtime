@@ -69,12 +69,14 @@ struct RefusalReads {
   std::uint8_t* game = nullptr;  // *(self + kLobbyGameOffset)
   char message[nevr_lobby_failure_message::kMessageSize] = {};
   std::int32_t status = 0;  // the status word the gate was decided from, read once
+  bool haveStatus = false;  // false with no lobby client: `status` is then 0 and is not a reading
 };
 
 inline RefusalReads ReadRefusal(const void* self, const void* msg) noexcept {
   RefusalReads r;
   if (self == nullptr || msg == nullptr) return r;
   r.status = LobbyStatus(self);
+  r.haveStatus = true;
   r.gateOpen = GateOpenFor(r.status);
   std::memcpy(&r.game, static_cast<const std::uint8_t*>(self) + kLobbyGameOffset, sizeof r.game);
   const void* payload = nullptr;

@@ -79,6 +79,26 @@ void WriteRepeatLine(std::uint8_t code, nevr_lobby_failure_message::Decline reas
                        {"msg", nevr_lobby_failure_message::kDeclineConsequence}});
 }
 
+// refusal_dropped. `game_status` is the status the gate was decided from; it is left out when there was no lobby client,
+// so the record does not state a status the game never reported.
+void WriteDropped(sentinel::LogLevel level, const RefusalReads& reads) {
+  constexpr const char* kMsg = "the game ignored this refusal, so the back-off does not count it and no message is shown";
+  if (reads.haveStatus) {
+    sentinel::LogFields(level, "lobby_full",
+                        {{"status", "refusal_dropped"},
+                         {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
+                         {"reason", "status_gate_closed"},
+                         {"game_status", reads.status},
+                         {"msg", kMsg}});
+  } else {
+    sentinel::LogFields(level, "lobby_full",
+                        {{"status", "refusal_dropped"},
+                         {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
+                         {"reason", "status_gate_closed"},
+                         {"msg", kMsg}});
+  }
+}
+
 std::uint64_t NowMs() noexcept {
   timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -132,13 +152,7 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
     // one in the process is Info; each repeat is a Debug record with the same fields (N78: counted, not dropped).
     const bool first =
         FirstRefusalSaying(static_cast<std::uint8_t>(kLobbyFullCode), RefusalSayings::Record::kDroppedGateClosed);
-    sentinel::LogFields(first ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kDebug, "lobby_full",
-                        {{"status", "refusal_dropped"},
-                         {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
-                         {"reason", "status_gate_closed"},
-                         {"game_status", reads.status},
-                         {"msg",
-                          "the game ignored this refusal, so the back-off does not count it and no message is shown"}});
+    WriteDropped(first ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kDebug, reads);
     return;
   }
 
