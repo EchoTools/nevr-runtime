@@ -6,6 +6,7 @@ These never read a secret value: they check where secrets can and cannot go.
 from pathlib import Path
 import re
 import subprocess
+import sys
 import unittest
 
 
@@ -18,7 +19,12 @@ def source(relative_path: str) -> str:
 
 
 class BuiltinDefaultsContractTest(unittest.TestCase):
-    def test_dotenv_is_runtime_only_git_ignored_and_example_holds_no_values(self):
+    def test_dotenv_is_git_ignored_and_example_holds_no_values(self):
+        # .env holds the runtime overrides (NEVR_*) and the release inputs tools/release_check.py names (#1997); the
+        # example lists names only, every value empty, and no other name.
+        sys.path.insert(0, str(REPO / "tools"))
+        import release_check
+        release_inputs = {name for name, _, _ in release_check.INPUTS}
         ignore = source(".gitignore").splitlines()
         self.assertIn("/.env", ignore)
         for line in source(".env.example").splitlines():
@@ -26,7 +32,8 @@ class BuiltinDefaultsContractTest(unittest.TestCase):
             if not stripped or stripped.startswith("#"):
                 continue
             key, _, value = stripped.partition("=")
-            self.assertRegex(key, r"^NEVR_[A-Z_]+$")
+            if key not in release_inputs:
+                self.assertRegex(key, r"^NEVR_[A-Z_]+$")
             self.assertEqual(value, "", f"{key} in .env.example must be empty")
 
     def test_defaults_file_is_git_ignored_and_the_example_names_exactly_the_four_keys_empty(self):
