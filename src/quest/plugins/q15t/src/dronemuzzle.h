@@ -34,15 +34,11 @@ struct DroneMuzzleInstall {
 DroneMuzzleInstall InstallDroneMuzzle(std::uintptr_t base, const DroneMuzzleSlots& slots = kDroneMuzzlePinned,
                                       const DroneMuzzleWrappers& wrappers = DroneMuzzleThunks());
 
-// Once a frame on the game thread (register with AddGameTick): the frame-time average the muzzle's "back by one frame" uses.
-void DroneMuzzleTick(std::uintptr_t game);
-
 struct DroneMuzzleStats {
   std::uint32_t shots, tracers;
 };
 DroneMuzzleStats GetDroneMuzzleStats();
 
-void SetDroneMuzzleClockForTest(std::uint64_t (*now_ns)());
 void ResetDroneMuzzleForTest();
 
 }  // namespace q15t

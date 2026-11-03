@@ -1,5 +1,5 @@
 // Host test of dronemuzzle.cpp (rows R49 / R50): the plain functions the arm64 thunks call, the install of both GOT words, and the
-// frame-time tick, against a fake slot page and fake real functions (real mprotect, /proc/self/maps, SafeRead).
+// muzzle core, against a fake slot page and fake real functions (real mprotect, /proc/self/maps, SafeRead).
 //
 // The naked arm64 thunks cannot run on this host: here the two slots get HOST STAND-INS (below) that do what the thunks do in C++ (compare
 // the return address with the thunk's word, then either call the plain function or jump to the next function). What the thunks themselves
@@ -58,83 +58,75 @@ static void Dump(const char* title) {  // Q15T_TEST_VERBOSE=1: the module's own 
   for (const auto& l : g_lines) std::printf("[%u] %s\n", l.level, l.text.c_str());
 }
 
-// ================================================================ the core (ported from the source's host test)
-namespace ref {  // upstream "df" code, with Pose -> float[3] and g_frame_dt -> an argument
-constexpr float MUZZLE[3] = {0.000024f, 0.075634f, 0.147283f};
-constexpr float BACK_MAX = 0.25f;
-bool MuzzleTransform(float* p, const float* v, float g_frame_dt) {
-  if (!v) return false;
-  float len = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-  if (len < 1e-4f) return false;
-  float z[3] = {v[0] / len, v[1] / len, v[2] / len};
-  float xl = sqrtf(z[2] * z[2] + z[0] * z[0]);
-  float x[3] = {xl > 1e-4f ? z[2] / xl : 1.0f, 0.0f, xl > 1e-4f ? -z[0] / xl : 0.0f};
-  float y[3] = {z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]};
-  float dt = g_frame_dt;
-  dt = dt < 1.0f / 120.0f ? 1.0f / 120.0f : dt > 1.0f / 30.0f ? 1.0f / 30.0f : dt;
-  float back = len * dt > BACK_MAX ? BACK_MAX / len : dt;
-  for (int i = 0; i < 3; ++i) p[i] += MUZZLE[0] * x[i] + MUZZLE[1] * y[i] + MUZZLE[2] * z[i] - v[i] * back;
-  return true;
+// ================================================================ the core: values worked out by hand from the rule
+static bool Near3(const float* a, const float* b, float tol) {
+  return std::fabs(a[0] - b[0]) < tol && std::fabs(a[1] - b[1]) < tol && std::fabs(a[2] - b[2]) < tol;
 }
-float Tick(float g_frame_dt, float dt) {
-  if (dt > 1.0f / 240.0f && dt < 0.1f) g_frame_dt = g_frame_dt * 0.9f + dt * 0.1f;
-  return g_frame_dt;
-}
-}  // namespace ref
 
 static void TestCore() {
   using namespace q15t::dm;
-  unsigned x = 777;
-  auto rnd = [&x]() {
-    x = x * 1103515245u + 12345u;
-    return static_cast<float>((x >> 8) & 0xffff) / 65535.0f;
-  };
-  int moved = 0;
-  for (int i = 0; i < 200000; ++i) {
-    float root[3] = {rnd() * 80 - 40, rnd() * 20 - 5, rnd() * 80 - 40};
-    const float s = i % 50 == 0 ? 0.0f : i % 7 == 0 ? 1e-5f : rnd() * 200;
-    float v[3] = {(rnd() - 0.5f) * s, (rnd() - 0.5f) * s, (rnd() - 0.5f) * s};
-    if (i % 97 == 0) {
-      v[0] = 0;
-      v[2] = 0;
-      v[1] = (rnd() - 0.5f) * 200;
-    }
-    const float dt = rnd() * 0.08f;
-    float a[3], b[3];
-    memcpy(b, root, sizeof b);
-    const bool ok = MuzzleMove(root, v, dt, a);
-    const bool rok = ref::MuzzleTransform(b, v, dt);
-    if (ok != rok || (ok && memcmp(a, b, sizeof a) != 0)) {
-      CHECK(false, "MuzzleMove differs from upstream at step %d", i);
-      break;
-    }
-    moved += ok;
-  }
-  CHECK(moved > 150000, "moved %d", moved);
-  float avg = 1.0f / 90.0f, avg_ref = avg;
-  for (int i = 0; i < 100000; ++i) {
-    const float dt = rnd() * 0.12f;
-    avg = FrameDt(avg, dt);
-    avg_ref = ref::Tick(avg_ref, dt);
-    if (avg != avg_ref) {
-      CHECK(false, "FrameDt differs at step %d", i);
-      break;
-    }
-  }
-  const float root[3] = {0, 0, 0};
+  const float root[3] = {10, 20, 30};
   float out[3];
-  const float v[3] = {0, 0, 120};
-  CHECK(MuzzleMove(root, v, 1.0f / 90.0f, out), "muzzle");
-  CHECK(std::fabs(out[0] - 0.000024f) < 1e-6f && std::fabs(out[1] - 0.075634f) < 1e-6f && std::fabs(out[2] - (0.147283f - 0.25f)) < 1e-6f, "muzzle shape");
-  const float slow[3] = {3, 0, 0};
-  CHECK(MuzzleMove(root, slow, 0.5f, out) && std::fabs(out[0] - (0.147283f - 0.1f)) < 1e-5f, "slow: one clamped frame back");
-  const float none[3] = {0, 0, 0};
-  CHECK(!MuzzleMove(root, none, 0.01f, out), "zero velocity moved");
-  const float nanv[3] = {NAN, 0, 0};
-  CHECK(!MuzzleMove(root, nanv, 0.01f, out), "a NaN velocity moved");
-  CHECK(kMuzzle[0] == 0.000024f && kMuzzle[1] == 0.075634f && kMuzzle[2] == 0.147283f && kBackMax == 0.25f, "muzzle constants");
-  CHECK(ClampDt(0.001f) == 1.0f / 120.0f && ClampDt(1.0f) == 1.0f / 30.0f && ClampDt(0.02f) == 0.02f, "ClampDt");
-  CHECK(FrameDt(0.5f, 0.2f) == 0.5f && FrameDt(0.5f, 0.001f) == 0.5f, "FrameDt bounds");
+  // aim along +Z: X = (1, 0, 0), Y = (0, 1, 0), Z = (0, 0, 1)
+  const float vz[3] = {0, 0, 120};
+  const float wz[3] = {10.000024f, 20.075634f, 30.147283f};
+  CHECK(MuzzleMove(root, vz, out) && Near3(out, wz, 1e-5f), "aim +Z: %f %f %f", out[0], out[1], out[2]);
+  // aim along +X: Z = (1, 0, 0), X = (0, 0, -1), Y = (0, 1, 0): the Z offset is forward
+  const float vx[3] = {10, 0, 0};
+  const float wx[3] = {10.147283f, 20.075634f, 29.999976f};
+  CHECK(MuzzleMove(root, vx, out) && Near3(out, wx, 1e-5f), "aim +X: %f %f %f", out[0], out[1], out[2]);
+  // aim along -Z: X = (-1, 0, 0), Y = (0, 1, 0)
+  const float vnz[3] = {0, 0, -5};
+  const float wnz[3] = {9.999976f, 20.075634f, 29.852717f};
+  CHECK(MuzzleMove(root, vnz, out) && Near3(out, wnz, 1e-5f), "aim -Z: %f %f %f", out[0], out[1], out[2]);
+  // vertical aim: X falls back to (1, 0, 0), Y = (0, 0, -1)
+  const float vy[3] = {0, 5, 0};
+  const float wy[3] = {10.000024f, 20.147283f, 29.924366f};
+  CHECK(MuzzleMove(root, vy, out) && Near3(out, wy, 1e-5f), "vertical aim: %f %f %f", out[0], out[1], out[2]);
+  // refusals: below the length guard, NaN, zero; out is not written on a refusal. The smallest accepted aim is 1e-4.
+  float s[3] = {7, 7, 7};
+  const float tiny[3] = {0, 0, 1e-5f};
+  CHECK(!MuzzleMove(root, tiny, s) && s[0] == 7 && s[1] == 7 && s[2] == 7, "a 1e-5 aim was used");
+  const float nanv[3] = {0, 0, NAN};
+  CHECK(!MuzzleMove(root, nanv, s) && s[0] == 7 && s[1] == 7 && s[2] == 7, "a NaN aim was used");
+  const float zero[3] = {0, 0, 0};
+  CHECK(!MuzzleMove(root, zero, s) && s[0] == 7, "a zero aim was used");
+  const float small[3] = {0, 0, 2e-4f};
+  CHECK(MuzzleMove(root, small, s), "a 2e-4 aim was refused");
+  CHECK(kMuzzle[0] == 0.000024f && kMuzzle[1] == 0.075634f && kMuzzle[2] == 0.147283f, "muzzle constants");
+  // any aim: the offset's dot products with the three axes are kMuzzle's components, and its length is |kMuzzle|
+  const float k2 = kMuzzle[0] * kMuzzle[0] + kMuzzle[1] * kMuzzle[1] + kMuzzle[2] * kMuzzle[2];
+  const float origin[3] = {0, 0, 0};
+  unsigned seed = 777;
+  auto rnd = [&seed]() {
+    seed = seed * 1103515245u + 12345u;
+    return static_cast<float>((seed >> 8) & 0xffff) / 65535.0f;
+  };
+  int checked = 0;
+  for (int i = 0; i < 200000; ++i) {
+    const float v[3] = {(rnd() - 0.5f) * 200, (rnd() - 0.5f) * 200, (rnd() - 0.5f) * 200};
+    if (!MuzzleMove(origin, v, out)) {
+      CHECK(false, "a random aim was refused at %d", i);
+      break;
+    }
+    const float len = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    const float z[3] = {v[0] / len, v[1] / len, v[2] / len};
+    const float xl = sqrtf(z[2] * z[2] + z[0] * z[0]);
+    if (xl < 1e-3f) continue;  // the vertical fallback is checked above
+    const float x[3] = {z[2] / xl, 0.0f, -z[0] / xl};
+    const float y[3] = {z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]};
+    const float len2 = out[0] * out[0] + out[1] * out[1] + out[2] * out[2];
+    const float dx = out[0] * x[0] + out[1] * x[1] + out[2] * x[2];
+    const float dy = out[0] * y[0] + out[1] * y[1] + out[2] * y[2];
+    const float dz = out[0] * z[0] + out[1] * z[1] + out[2] * z[2];
+    if (std::fabs(len2 - k2) > 1e-6f || std::fabs(dx - kMuzzle[0]) > 1e-6f || std::fabs(dy - kMuzzle[1]) > 1e-6f ||
+        std::fabs(dz - kMuzzle[2]) > 1e-6f) {
+      CHECK(false, "aim %d: |offset|^2 %f dots %f %f %f", i, len2, dx, dy, dz);
+      break;
+    }
+    ++checked;
+  }
+  CHECK(checked > 190000, "checked %d aims", checked);
 }
 
 // ================================================================ fakes
@@ -218,9 +210,6 @@ __attribute__((noinline)) static uint64_t FireOut(FireFn f) {
   return r;
 }
 
-static uint64_t g_now_ns = 5000000000ull;
-static uint64_t ClkNs() { return g_now_ns; }
-
 static uintptr_t g_base = 0;
 static uintptr_t* g_w = nullptr;
 static uintptr_t V(const void* fn) { return reinterpret_cast<uintptr_t>(fn) - g_base; }
@@ -263,8 +252,6 @@ static DroneMuzzleInstall Setup() {
   g_lines.clear();
   g_tp.clear();
   g_fire.clear();
-  g_now_ns = 5000000000ull;
-  SetDroneMuzzleClockForTest(&ClkNs);
   BuildBullet();
   NewPage(false);
   SetDroneKillShotActiveForTest(true);
@@ -314,6 +301,7 @@ static void TestInstallPinned() {
         (unsigned long long)q15t_dm_tp_ret.load(), (unsigned long long)q15t_dm_fire_ret.load());
   CHECK(q15t_dm_tp_next.load() == base + 0x180a384 && q15t_dm_fire_next.load() == base + 0x210c9c4, "next words");
   CHECK(CountLine("dronemuzzle hook install", 1) == 2 && HasLine("dronemuzzle: on (QA)", 1), "install lines");
+  CHECK(HasLine("muzzle_x=") && HasLine("muzzle_y=") && HasLine("muzzle_z="), "the install line lacks the muzzle constants");
   munmap(p, sz);
 }
 
@@ -417,14 +405,11 @@ static void TestTeleport() {
   CHECK(TpIn(TpSlot(), g_pose) == 0x1234, "result");
   CHECK(g_tp.size() == 1 && g_tp[0].pose != g_pose, "the caller's pose was passed on, not a copy");
   CHECK(memcmp(before, g_pose, 32) == 0, "the caller's pose was written");
-  const float root[3] = {10, 20, 30};
-  float spawn[3];
-  const float vv[3] = {0, 0, 120};
-  CHECK(dm::MuzzleMove(root, vv, 1.0f / 90.0f, spawn), "expected spawn");
+  // the aim is +Z (the shot's velocity is (0, 0, 120)): the spawn is the root plus kMuzzle along X, Y and Z = (1, 0, 0), (0, 1, 0), (0, 0, 1)
+  const float want[3] = {10.000024f, 20.075634f, 30.147283f};
   float got[3];
   memcpy(got, g_tp[0].copy + 0x10, 12);
-  CHECK(std::fabs(got[0] - spawn[0]) < 1e-6f && std::fabs(got[1] - spawn[1]) < 1e-6f && std::fabs(got[2] - spawn[2]) < 1e-6f, "spawn (%f %f %f) want (%f %f %f)", got[0],
-        got[1], got[2], spawn[0], spawn[1], spawn[2]);
+  CHECK(Near3(got, want, 1e-5f), "spawn (%f %f %f) want (%f %f %f)", got[0], got[1], got[2], want[0], want[1], want[2]);
   CHECK(memcmp(g_tp[0].copy, before, 0x10) == 0 && memcmp(g_tp[0].copy + 0x1c, before + 0x1c, 4) == 0, "the quaternion / scale bytes changed");
   CHECK(g_tp[0].gs == reinterpret_cast<void*>(0xa0) && g_tp[0].actor == 0xb0 && g_tp[0].reason == 0xc0, "other arguments");
   CHECK(GetDroneMuzzleStats().shots == 1 && HasLine("dronemuzzle: shot") && HasLine("remote=1") && HasLine("velocity=0.000000 0.000000 120.000000"), "shot line");
@@ -448,65 +433,6 @@ static void TestTeleport() {
   CHECK(CountLine("dronemuzzle: shot", 1) == 39, "shot lines after 45 more: %d", CountLine("dronemuzzle: shot", 1));  // shots 2..40 are written
   CHECK(CountLine("dronemuzzle: log cap reached", 1) == 1, "cap line");
   CHECK(GetDroneMuzzleStats().shots == 46, "shots %u", GetDroneMuzzleStats().shots);
-  NoShot();
-}
-
-static float SlowShotZ() {
-  Shot(0, 0, 3);
-  SetPose(0, 0, 0);
-  g_tp.clear();
-  TpIn(TpSlot(), g_pose);
-  float got[3] = {0, 0, 0};
-  if (!g_tp.empty()) memcpy(got, g_tp[0].copy + 0x10, 12);
-  NoShot();
-  return got[2];
-}
-
-static void TestFrameTick() {
-  Setup();
-  {  // before any tick the frame time is the 1/90 s default
-    const float root0[3] = {0, 0, 0}, v0[3] = {0, 0, 3};
-    float d0[3];
-    CHECK(dm::MuzzleMove(root0, v0, 1.0f / 90.0f, d0), "expected default");
-    CHECK(std::fabs(SlowShotZ() - d0[2]) < 1e-7f, "the frame time before any tick is not 1/90 s");
-  }
-  {  // the first tick only records the time: a 20 ms "frame" since the epoch is not a frame
-    Setup();
-    g_now_ns = 20000000ull;
-    DroneMuzzleTick(0);
-    const float root0[3] = {0, 0, 0}, v0[3] = {0, 0, 3};
-    float d0[3];
-    CHECK(dm::MuzzleMove(root0, v0, 1.0f / 90.0f, d0), "expected default");
-    CHECK(std::fabs(SlowShotZ() - d0[2]) < 1e-7f, "the first tick fed the frame time");
-  }
-  Setup();
-  Shot(0, 0, 3);  // slow: the "back by one frame of travel" depends on the frame time
-  SetPose(0, 0, 0);
-  const float root[3] = {0, 0, 0}, v[3] = {0, 0, 3};
-  float avg = 1.0f / 90.0f;
-  DroneMuzzleTick(0);  // the first call only records the time
-  for (int i = 0; i < 60; ++i) {
-    g_now_ns += 16666667ull;  // 60 fps
-    DroneMuzzleTick(0);
-    avg = dm::FrameDt(avg, 0.016666667f);
-  }
-  float want[3];
-  CHECK(dm::MuzzleMove(root, v, avg, want), "expected");
-  g_tp.clear();
-  TpIn(TpSlot(), g_pose);
-  float got[3];
-  memcpy(got, g_tp[0].copy + 0x10, 12);
-  CHECK(std::fabs(got[2] - want[2]) < 1e-6f, "frame average not used: got %f want %f", got[2], want[2]);
-  float old[3];
-  CHECK(dm::MuzzleMove(root, v, 1.0f / 90.0f, old) && std::fabs(old[2] - want[2]) > 1e-4f, "the test cannot tell the default from the average");
-  // a hitch (>= 0.1 s) leaves the average alone
-  const float before = got[2];
-  g_now_ns += 500000000ull;
-  DroneMuzzleTick(0);
-  g_tp.clear();
-  TpIn(TpSlot(), g_pose);
-  memcpy(got, g_tp[0].copy + 0x10, 12);
-  CHECK(std::fabs(got[2] - before) < 1e-7f, "a 0.5 s hitch fed the average");
   NoShot();
 }
 
@@ -621,7 +547,6 @@ int main() {
   TestInstallRefusals();
   Dump("refusals (last scenario)");
   TestTeleport();
-  TestFrameTick();
   TestFire();
   TestTracerCap();
   Dump("tracer cap scenario");

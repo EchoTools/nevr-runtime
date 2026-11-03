@@ -506,7 +506,6 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
     const DroneMuzzleInstall dm = InstallDroneMuzzle(base);
     const InstallResult hooks[] = {dm.teleport, dm.fire};
     ReportModule("dronemuzzle", FirstFailure(dm.ok, hooks, 2));
-    if (dm.ok) AddModuleTick("dronemuzzle", &DroneMuzzleTick, &want_tick);
   }
 #endif
 #if Q15T_POWERBOOST > 0
