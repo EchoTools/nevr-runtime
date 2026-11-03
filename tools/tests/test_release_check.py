@@ -151,6 +151,18 @@ class ReleaseCheckTest(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertIn("NEVR_QUEST_REFERENCE_APK is not the pinned file", found[0])
 
+    def test_a_pinned_file_that_fails_to_read_names_the_error_without_none(self):
+        from unittest import mock
+        with mock.patch.object(release_check, "_sha256", side_effect=OSError()):
+            found = self.check(self.env)
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("NEVR_QUEST_REFERENCE_APK names a file that can't be read to the end", found[0])
+        self.assertTrue(found[0].endswith("OSError"), found[0])
+        self.assertNotIn("None", found[0])
+        with mock.patch.object(release_check, "_sha256", side_effect=OSError(5, "Input/output error")):
+            found = self.check(self.env)
+        self.assertTrue(found[0].endswith("Input/output error"), found[0])
+
     def test_the_default_pins_are_applied(self):
         pathlib.Path(self.env["NEVR_QUEST_REFERENCE_APK"]).write_text("not the reference build")
         found = release_check.problems(self.env, self.root, run_preflight=False)
