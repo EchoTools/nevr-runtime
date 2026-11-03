@@ -124,6 +124,7 @@ struct FakeSteps final : Steps {
   bool RegisterTextureQualityCounters() override { return Step("reg_texture"); }
   bool RegisterClockLevelsCounters() override { return Step("reg_clock_levels"); }
   bool StartReporter() override { return Step("reporter"); }
+  bool IdentifyHeadset() override { return Step("identify_headset"); }
   bool AttachLibR15() override { return Step("attach"); }
   bool InstallClockHook() override { return Step("clock"); }
   bool InstallFrameDispatch() override { return Step("frame_dispatch"); }
@@ -1817,7 +1818,7 @@ void TestAttachRunsOnceOnEveryLaunchBeforeEveryLibr15Step() {
     for (const std::string& c : s.calls) if (c == "attach") ++attaches;
     QCHECK(attaches == 1);
     QCHECK(r.at(StepId::kAttachLibR15).state == StepState::kOk);
-    QCHECK(s.Index("attach") == s.Index("reporter") + 1);
+    QCHECK(s.Index("identify_headset") == s.Index("reporter") + 1 && s.Index("attach") == s.Index("identify_headset") + 1);
     for (const char* later : {"plugins_early", "clock", "obb", "texture", "credits", "menu_cards"}) {
       if (s.Ran(later)) QCHECK(s.Index("attach") < s.Index(later));
     }
@@ -1865,7 +1866,7 @@ void TestTheEarlyPluginPassRunsAfterTheReporterAndBeforeTheClockHook() {
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(r.at(StepId::kRunEarlyPlugins).state == StepState::kOk);
   QCHECK(std::strcmp(StepName(StepId::kRunEarlyPlugins), "run_early_plugins") == 0);
-  QCHECK(s.Index("attach") == s.Index("reporter") + 1);
+  QCHECK(s.Index("identify_headset") == s.Index("reporter") + 1 && s.Index("attach") == s.Index("identify_headset") + 1);
   QCHECK(s.Index("plugins_early") == s.Index("attach") + 1);
   QCHECK(s.Index("clock") == s.Index("plugins_early") + 1);
   // An early entry asks for no dlopen hook: the early pass is the whole of it.

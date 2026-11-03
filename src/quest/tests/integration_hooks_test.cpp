@@ -260,6 +260,7 @@ struct RealCounterSteps final : Steps {
   bool RegisterClockLevelsCounters() override { return nevr_quest::clock_levels::RegisterCounters(); }
   // The reporter is started after the budget is measured (below), so a refused registration shows here.
   bool StartReporter() override { return true; }
+  bool IdentifyHeadset() override { return true; }
   bool AttachLibR15() override { return true; }
   bool InstallClockHook() override { return true; }
   bool InstallFrameDispatch() override { return true; }

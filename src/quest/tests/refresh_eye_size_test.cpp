@@ -7,9 +7,11 @@
 #include <limits>
 #include <string>
 
+#include "quest/headset_profile.h"
 #include "quest/sentinel/refresh_eye_size.h"
 
 namespace tq = nevr_quest::texture_quality;
+namespace headset_profile = nevr_quest::headset_profile;
 
 namespace {
 
@@ -124,10 +126,10 @@ void LevelCases() {
   CheckEq(static_cast<int>(tq::LevelForReferenceIndex(-3)), static_cast<int>(tq::Level::kLow), "a negative index clamps to Low");
   CheckEq(static_cast<int>(tq::LevelForReferenceIndex(9)), static_cast<int>(tq::Level::kUltra), "a large index clamps to Ultra");
 
-  tq::EyeSize low3 = tq::SizeFor(tq::LevelForReferenceIndex(0), tq::Headset::kQuest3);
+  tq::EyeSize low3 = tq::SizeFor(tq::LevelForReferenceIndex(0), headset_profile::kQuest3);
   CheckEq(low3.width, 1680, "index 0 on Quest 3 is 1680 wide");
   CheckEq(low3.height, 1760, "index 0 on Quest 3 is 1760 high");
-  tq::EyeSize ultra3 = tq::SizeFor(tq::LevelForReferenceIndex(4), tq::Headset::kQuest3);
+  tq::EyeSize ultra3 = tq::SizeFor(tq::LevelForReferenceIndex(4), headset_profile::kQuest3);
   CheckEq(ultra3.width, 4096, "index 4 on Quest 3 is 4096 wide");
   CheckEq(ultra3.height, 4506, "index 4 on Quest 3 is 4506 high");
 }

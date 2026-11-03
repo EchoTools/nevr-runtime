@@ -27,6 +27,8 @@ std::atomic<int> g_requested{kUnset};
 std::atomic<int> g_requestSource{static_cast<int>(RequestSource::kMenu)};
 std::atomic<StartResolver> g_resolver{nullptr};
 std::atomic<bool> g_startAsked{false};
+// The headset's profile (ADR 0031): set once by the identity step at start; null until then, and a null profile serves no size.
+std::atomic<const headset_profile::Profile*> g_profile{nullptr};
 
 std::atomic<std::uint64_t> g_nativeWidth{0};
 std::atomic<std::uint64_t> g_nativeHeight{0};
@@ -62,9 +64,9 @@ void AskStartResolverOnce() noexcept {
 
 // vrapi_GetSystemPropertyInt. Calls the original with the game's own arguments every time, tells the hardware dump's
 // observer (if any) what the runtime answered, then replaces the answer to the eye width and height ids when the applied level
-// has a size. The size is the applied level's for the headset the runtime's own answer names (HeadsetForStockSize), so the
-// same level is a Quest 2 table on a Quest 2. Never logs or throws: it is live across the call into the runtime
-// (callback_thunk.h rule 1).
+// has a size. The size is the applied level's in the headset's profile (SetHeadsetProfile), so the same level is a Quest 2 table
+// on a Quest 2. With no profile yet the runtime's answer stands. Never logs or throws: it is live across the call into the
+// runtime (callback_thunk.h rule 1).
 int Handler(SystemPropertyIntThunk::Fn original, const OvrJavaOpaque* java, int id) noexcept {
   const int native = original(java, id);
   const sentinel::SysPropIntObserver observer = sentinel::GetSysPropIntObserver();
@@ -73,10 +75,11 @@ int Handler(SystemPropertyIntThunk::Fn original, const OvrJavaOpaque* java, int 
   AskStartResolverOnce();
   g_sizeQueries.fetch_add(1, std::memory_order_relaxed);
   const int latched = g_latched.load(std::memory_order_acquire);
+  const headset_profile::Profile* profile = g_profile.load(std::memory_order_acquire);
   if (id == kEyeWidthPropertyId) {
     g_nativeWidth.store(NonNegative(native), std::memory_order_relaxed);
-    if (latched != kUnset) {
-      const int width = SizeFor(static_cast<Level>(latched), HeadsetForStockSize(native)).width;
+    if (latched != kUnset && profile != nullptr) {
+      const int width = SizeFor(static_cast<Level>(latched), *profile).width;
       if (width > 0) {
         g_served.fetch_add(1, std::memory_order_relaxed);
         return width;
@@ -84,8 +87,8 @@ int Handler(SystemPropertyIntThunk::Fn original, const OvrJavaOpaque* java, int 
     }
   } else {
     g_nativeHeight.store(NonNegative(native), std::memory_order_relaxed);
-    if (latched != kUnset) {
-      const int height = SizeFor(static_cast<Level>(latched), HeadsetForStockSize(native)).height;
+    if (latched != kUnset && profile != nullptr) {
+      const int height = SizeFor(static_cast<Level>(latched), *profile).height;
       if (height > 0) {
         g_served.fetch_add(1, std::memory_order_relaxed);
         return height;
@@ -423,6 +426,12 @@ void ResetForTest() noexcept {
 }
 
 bool IsLatched() noexcept { return g_latched.load(std::memory_order_acquire) != kUnset; }
+
+void SetHeadsetProfile(const headset_profile::Profile* profile) noexcept {
+  g_profile.store(profile, std::memory_order_release);
+}
+
+const headset_profile::Profile* ActiveHeadsetProfile() noexcept { return g_profile.load(std::memory_order_acquire); }
 
 Level LatchedLevel() noexcept {
   const int value = g_latched.load(std::memory_order_acquire);

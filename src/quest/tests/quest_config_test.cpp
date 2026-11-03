@@ -1,6 +1,7 @@
 // Host and Android test for the Quest configuration and activation logic (quest_config.cpp). The file is
 // config.yaml, parsed by the PC's nevr_config (src/core/nevr_config.cpp).
 #include "core/nevr_config.h"
+#include "quest/headset_profile.h"
 #include "quest/sentinel/quest_config.h"
 
 #include <chrono>
@@ -907,7 +908,8 @@ void AGraphicsSectionThatIsNotAMappingFallsBackToStock() {
 void AMistakeNeverUsesTheDefault() {
   namespace tq = nevr_quest::texture_quality;
   CHECK(tq::kFallbackLevel == tq::Level::kStock);
-  CHECK(tq::SizeFor(tq::kFallbackLevel, tq::Headset::kQuest3).width == 0);  // no hook, so no eye size
+  namespace headset_profile = nevr_quest::headset_profile;
+  CHECK(tq::SizeFor(tq::kFallbackLevel, headset_profile::kQuest3).width == 0);  // no hook, so no eye size
 }
 
 // The clock-level override (#928): `diagnostics.clock_levels_override`, off unless the file says true, with no prerequisite.
