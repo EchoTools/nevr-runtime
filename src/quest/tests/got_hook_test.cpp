@@ -1271,7 +1271,9 @@ void SyntheticInstall() {
       QCHECK(out == sentinelValue);
       QCHECK(*slot == reinterpret_cast<void*>(&AddImpl));
       QCHECK(Errors() == 0);
-      QCHECK(Count(LogLevel::kWarn, "\"status\":\"protect_failed\",\"stage\":\"enable_failed\"") == 1);
+      QCHECK(Count(LogLevel::kWarn,
+                   "\"status\":\"protect_failed\",\"reason\":\"the hook is not installed\",\"stage\":\"enable_failed\"") ==
+             1);
       QCHECK(Count(LogLevel::kWarn, "\"errno\":13") == 1);
     }
     g_synth = nullptr;
