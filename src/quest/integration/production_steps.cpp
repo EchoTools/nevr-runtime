@@ -478,10 +478,13 @@ class ProductionSteps final : public Steps {
     // running package's media directory. Only on that file; logs its own outcome.
     if (std::strcmp(outcome.detail, libr15_patch::kReasonPinnedServiceOnly) == 0) {
       nevr_quest::path_rewrite::InstallForServiceOnly();
-#if defined(NEVR_QUEST_PERF_PROBE)
-      nevr_quest::perf_probe::InstallForServiceOnly();  // #1737 measurement build only (perf_probe_hook.h)
-#endif
     }
+#if defined(NEVR_QUEST_PERF_PROBE)
+    // #1737 measurement build only (perf_probe_hook.h): on either file the attach step accepted.
+    if (outcome.verified || std::strcmp(outcome.detail, libr15_patch::kReasonPinnedServiceOnly) == 0) {
+      nevr_quest::perf_probe::Install();
+    }
+#endif
     return outcome.verified;
   }
 

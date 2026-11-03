@@ -358,7 +358,7 @@ std::atomic<bool> g_done{false};
 
 }  // namespace
 
-bool InstallForServiceOnly() noexcept {
+bool Install() noexcept {
   if (g_done.exchange(true, std::memory_order_acq_rel)) return true;
   const char* micState = "absent";
   g_micOverride = ReadMicSwitch(&micState);

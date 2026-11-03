@@ -2,9 +2,11 @@
  * its voice path reads from the microphone. It changes no game behaviour unless its microphone switch file is present.
  *
  * Built only with -DNEVR_QUEST_PERF_PROBE=ON (src/quest/CMakeLists.txt; default OFF), so no release or package-dev APK
- * carries it. Installed only on the pinned service-only libr15 (the reference base, AttachStatus::kPinnedServiceOnly):
- * every target is GotTarget::ServiceSide(), like path_rewrite_hook.h. On the store base the q15t plugin wraps two of the same
- * slots (CVR::HeadsetType, CR15NetGame::PartyMemberHeadsetType), and a probe installed first would make it refuse them.
+ * carries it. Installed right after the libr15 attach step accepts the file, on either input it accepts: the patched file
+ * (the release's reference base, and the store base) or the pinned service-only file (every target is
+ * GotTarget::ServiceSide(), like path_rewrite_hook.h). No sentinel hook uses these six slots. The q15t plugin wraps two of them
+ * (CVR::HeadsetType, CR15NetGame::PartyMemberHeadsetType) and refuses a slot the probe took first, so a probe APK carries no
+ * q15t.
  *
  * Six JUMP_SLOT imports of libr15.so (link-time slot addresses from `readelf -r` of the pinned file), each wrapped, timed
  * around the original call and counted:
@@ -34,6 +36,6 @@
 namespace nevr_quest::perf_probe {
 
 // Reads the microphone switch, resolves libr15's load base, then installs the six hooks. True when all six took.
-bool InstallForServiceOnly() noexcept;
+bool Install() noexcept;
 
 }  // namespace nevr_quest::perf_probe
