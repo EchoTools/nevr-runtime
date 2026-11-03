@@ -29,6 +29,10 @@ struct sigaction g_preexisting[kGuardedCount];
 std::atomic<bool> g_preexistingValid{false};
 std::atomic<bool> g_handlersInstalled{false};
 std::atomic<std::uint32_t> g_displaced[kGuardedCount];
+// The first kept request per guarded signal is logged once (NoteFirstDisplacement). g_crashPath counts the calls of OnSignal
+// that are running: the game's handler runs inside one and may make requests, and those must not log from signal context.
+std::atomic<bool> g_displacedLogged[kGuardedCount];
+std::atomic<std::uint32_t> g_crashPath{0};
 std::atomic<std::uint32_t> g_queried{0};
 std::atomic<std::uint32_t> g_passedThrough{0};
 pthread_mutex_t g_storeMutex = PTHREAD_MUTEX_INITIALIZER;  // serialises the game's requests, never taken by OnSignal
@@ -61,11 +65,36 @@ void PreviousFor(int index, struct sigaction* out) noexcept {
   }
 }
 
-void Remember(int index, const struct sigaction& action) noexcept {
-  if (IsOurHandler(action)) return;  // a game that hands our own action back would make the chain call itself
+// True when the request was kept (not one that hands our own action back).
+bool Remember(int index, const struct sigaction& action) noexcept {
+  if (IsOurHandler(action)) return false;  // a game that hands our own action back would make the chain call itself
   pthread_mutex_lock(&g_storeMutex);
   g_game[index].Store(action);
   pthread_mutex_unlock(&g_storeMutex);
+  return true;
+}
+
+const char* GuardedSignalName(int signo) noexcept {
+  switch (signo) {
+    case SIGSEGV: return "SIGSEGV";
+    case SIGBUS: return "SIGBUS";
+    case SIGABRT: return "SIGABRT";
+    case SIGILL: return "SIGILL";
+    case SIGFPE: return "SIGFPE";
+    default: return "unknown";
+  }
+}
+
+// The first kept request for a guarded signal, logged once. `how` names the entry the game called. While OnSignal runs
+// nothing is written and the signal is not marked, so the next ordinary request for it writes the line: LogFields is not
+// async-signal-safe (hook_log.h).
+void NoteFirstDisplacement(int index, const char* how) noexcept {
+  if (g_crashPath.load(std::memory_order_acquire) > 0) return;
+  if (g_displacedLogged[index].exchange(true, std::memory_order_acq_rel)) return;
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "crash_first_displaced",
+                      {{"signal", GuardedSignalName(kGuardedSignals[index])},
+                       {"how", how},
+                       {"consequence", "the game's handler is kept behind ours and runs after our crash capture"}});
 }
 
 // libr15's sigaction. A guarded signal's request is remembered and answered, never passed to libc.
@@ -79,7 +108,7 @@ int SigactionHandler(SigactionThunk::Fn original, int signo, const struct sigact
   PreviousFor(index, &previous);
   if (act != nullptr) {
     g_displaced[index].fetch_add(1, std::memory_order_relaxed);
-    Remember(index, *act);
+    if (Remember(index, *act)) NoteFirstDisplacement(index, "sigaction");
   } else {
     g_queried.fetch_add(1, std::memory_order_relaxed);
   }
@@ -102,7 +131,7 @@ SignalHandlerFn SignalHandler(SignalThunk::Fn original, int signo, SignalHandler
   sigemptyset(&next.sa_mask);
   next.sa_flags = SA_RESTART;
   g_displaced[index].fetch_add(1, std::memory_order_relaxed);
-  Remember(index, next);
+  if (Remember(index, next)) NoteFirstDisplacement(index, "signal");
   return previous.sa_handler;
 }
 
@@ -147,6 +176,7 @@ int GuardedIndex(int signo) noexcept {
 void OnSignal(int signo, siginfo_t* info, void* ucontext) {
   const int savedErrno = errno;
   const int index = GuardedIndex(signo);
+  g_crashPath.fetch_add(1, std::memory_order_acq_rel);  // the game's handler runs below: its requests do not log from here
   if (g_claim.TryClaim()) {
     // Ours, in order: the report needs the ucontext this signal carries, the dump is the authoritative record.
     if (g_actions.report != nullptr) g_actions.report(signo, info, ucontext);
@@ -161,6 +191,7 @@ void OnSignal(int signo, siginfo_t* info, void* ucontext) {
   const bool chained = index >= 0 && ChainToGame(index, signo, info, ucontext);
   if (g_actions.note != nullptr) g_actions.note(signo, chained, index >= 0 ? DisplacedFor(index) : 0U);
   errno = savedErrno;
+  g_crashPath.fetch_sub(1, std::memory_order_acq_rel);
   // A signal sent by a process (kill, raise, abort) is not raised again when the handler returns; one the kernel raised
   // for a fault is, and reaches the restored handler by itself.
   if (info == nullptr || info->si_code <= 0 || signo == SIGABRT) {
@@ -424,6 +455,8 @@ void ResetForTest() noexcept {
     g_game[i].ResetForTest();
     g_displaced[i].store(0, std::memory_order_relaxed);
   }
+  for (auto& logged : g_displacedLogged) logged.store(false, std::memory_order_relaxed);
+  g_crashPath.store(0, std::memory_order_relaxed);
   g_queried.store(0, std::memory_order_relaxed);
   g_passedThrough.store(0, std::memory_order_relaxed);
   g_lateInstalls.store(0, std::memory_order_relaxed);

@@ -66,15 +66,32 @@ class TheGamesRequestsAreIntercepted(unittest.TestCase):
         self.assertIn('kSigactionSymbol = "sigaction"', pinned)
         self.assertIn('kSignalSymbol = "signal"', pinned)
 
-    def test_the_hook_installs_both_thunks_on_the_pinned_targets_and_never_logs_from_a_handler(self):
+    def test_the_hook_installs_both_thunks_on_the_pinned_targets(self):
         hook = code("sentinel/crash_first_hook.cpp")
         install = body(hook, "bool Install() noexcept")
         self.assertIn("LibR15Sigaction()", install)
         self.assertIn("LibR15Signal()", install)
-        for handler in ("int SigactionHandler(", "SignalHandlerFn SignalHandler("):
+
+    def test_a_handler_logs_its_first_displacement_only_through_the_gate_and_never_from_the_crash_path(self):
+        # #2006: the decision line is written from the game's ordinary context. The handlers call NoteFirstDisplacement, which
+        # checks the crash-path counter and the once-flag before LogFields, and OnSignal brackets its chain with the counter.
+        hook = code("sentinel/crash_first_hook.cpp")
+        for handler, how in (("int SigactionHandler(", "sigaction"), ("SignalHandlerFn SignalHandler(", "signal")):
             text = body(hook, handler)
             self.assertNotIn("LogFields", text)
             self.assertNotIn("__android_log", text)
+            self.assertIn("if (Remember(index,", text)
+            self.assertIn(f'NoteFirstDisplacement(index, "{how}")', text)
+        note = body(hook, "void NoteFirstDisplacement(")
+        gate = note.index("g_crashPath.load(")
+        once = note.index("g_displacedLogged[index].exchange(")
+        write = note.index("sentinel::LogFields(")
+        self.assertLess(gate, once)
+        self.assertLess(once, write)
+        self.assertIn('"crash_first_displaced"', note)
+        on_signal = body(hook, "void OnSignal(")
+        self.assertIn("g_crashPath.fetch_add(", on_signal)
+        self.assertLess(on_signal.index("g_crashPath.fetch_sub("), on_signal.index("SYS_tgkill"))
         # A guarded signal's request is answered here and never reaches libc.
         guarded = body(hook, "int SigactionHandler(")
         self.assertEqual(guarded.count("original("), 1)

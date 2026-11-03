@@ -27,9 +27,11 @@
  *      crash path still runs after ours.
  * A second thread that faults while the first is in steps 1 and 2 waits for it (bounded) and then takes steps 3 and 4.
  *
- * The handlers (the thunk entries' callees) log nothing and take no lock a signal handler could be holding: the game's
- * requests are stored under a mutex in an ordinary thread, and the signal handler reads them through a seqlock
- * (core/crash_first.h). What the hooks did is counted (Counts) and reported by the crash path.
+ * The handlers (the thunk entries' callees) take no lock a signal handler could be holding: the game's requests are stored
+ * under a mutex in an ordinary thread, and the signal handler reads them through a seqlock (core/crash_first.h). Each guarded
+ * signal's first kept request writes one {"event":"crash_first_displaced",...} line, from the game's ordinary context only: a
+ * request the game makes while OnSignal runs writes nothing, and the next ordinary request for that signal writes the line.
+ * What the hooks did is counted (Counts) and reported by the crash path.
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */

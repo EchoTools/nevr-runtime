@@ -64,7 +64,10 @@ platforms share: the game's request is remembered, not carried out; ours runs on
   libraries libpnsrad, libpnsradmatchmaking and libpnsovr import `sigaction` and `signal` too and the game loads them after
   the constructor; the dlopen hook (live on every launch) hands each load to `OnModuleLoaded`, which hooks their two slots
   right after the game's dlopen returns (`{"event":"crash_first_late",...}`), and again for a mapping loaded again. A
-  library's own ELF constructors run inside dlopen, before that moment.
+  library's own ELF constructors run inside dlopen, before that moment. The first request the game makes for each of the five
+  signals writes `{"event":"crash_first_displaced",...}`, naming the signal, the entry it called (`sigaction` or `signal`) and
+  what the request means; a request made while the crash path runs writes nothing, and the next ordinary request for that
+  signal writes the line.
 - PC: `kernel32!SetUnhandledExceptionFilter` is hooked (`src/runtime/lifecycle/crash_first_win.h`); the game's filter is
   remembered and ours stays the top-level filter. On an unhandled exception it writes the report (unless `WriteCrashDump`
   already wrote one) and runs the game's filter. `[NEVR.CRASH] first handler installed` says it is in place and
