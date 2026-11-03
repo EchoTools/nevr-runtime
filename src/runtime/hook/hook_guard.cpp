@@ -19,7 +19,7 @@ constexpr int kSnapshotBytes = 16;
 ///
 /// The bound is found, not set. A `git grep -nE` over src/ for calls to PatchDetour, InstallBootDetour,
 /// hook_guard::Record and RecordBytes (outside src/runtime/tests and hook/patching.h, comment lines
-/// dropped) finds 65 call lines: each is a place an install reaches Record(). A call line can install
+/// dropped) finds 70 call lines: each is a place an install reaches Record(). A call line can install
 /// several records (a loop over a table, or a wrapper called once per row or per engine hook: the
 /// binary_bug_fixes hook table, loading_tips' detour list, arena_public_clock's script rows, plugin_assets'
 /// two engine hooks), so the capacity is about twice the line count. The table holds live records, not call
