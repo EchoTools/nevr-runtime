@@ -1,6 +1,6 @@
 # Quest controller hand flip: placement in the VrApi layer, with a menu toggle (design, not implemented)
 
-Tracking issues: #1986 (the report), #2007 (the placement). The measurement that decides whether this is built is in the tree already (`src/quest/sentinel/hand_pose_log_hook.h`, smoke row Q34 in `docs/testing/smoke-checklist.md`). This document is the design that follows only if that log shows the roll the prediction names. The fix belongs to the VrApi-on-OpenXR layer (Placement). The only fix this tree can make before that layer is reconstructed here is the sentinel interim, which is marked known-wrong below.
+Tracking issues: #1986 (the report), #2007 (the placement). The measurement that decides whether this is built is in this tree (`src/quest/sentinel/hand_pose_log_hook.h`, smoke row Q34 in `docs/testing/smoke-checklist.md`). This document is the design that follows only if that log shows the roll the prediction names. The fix belongs to the VrApi-on-OpenXR layer (Placement). The only fix this tree can make before that layer is reconstructed here is the sentinel interim, which is marked known-wrong below.
 
 ## Condition
 Build it only if the two logs (Touch and Touch Pro or Touch Plus, same Quest 2, same pose) show a relative rotation of 180 degrees (170 to 190) about the controller's local Z axis, with the axis within 15 degrees of Z. Otherwise the logged quaternions decide the transform and this design changes. The gate applies to the layer's key and to the interim alike.
@@ -11,13 +11,13 @@ Disassembly of libr15 (pinned build `b243509c08ce677aeb95fa348016949b3fc45230`; 
 ## Placement
 
 ### The layer owns the fix
-Controller differences belong in the VrApi-on-OpenXR layer: the code that answers the game's `vrapi_GetInputTrackingState` and `vrapi_GetInputDeviceCapabilities` for its controllers. ADR 0033 (controllers are mapped by OpenXR interaction profile inside the VrApi layer) rule 1 puts them there, with pose corrections keyed by the path `xrGetCurrentInteractionProfile` reports. Its rule 2 keeps code above the boundary from branching on the controller to change input. ADR 0031 to 0035 are proposed under #2013 and are not yet on main, so this document cites them by number and title.
+Controller differences belong in the VrApi-on-OpenXR layer: the code that answers the game's `vrapi_GetInputTrackingState` and `vrapi_GetInputDeviceCapabilities` for its controllers. ADR 0033 (controllers are mapped by OpenXR interaction profile inside the VrApi layer) rule 1 puts them there, with pose corrections keyed by the path `xrGetCurrentInteractionProfile` reports. Its rule 2 keeps code above the boundary from branching on the controller to change input.
 
-The layer is ours to reconstruct in this repo under ADR 0035, with EchoFrame and echoquest-combat cited as references and never taken whole (AGENTS.md, Guardrails). The reconstruction takes its facts from the reference binary's disassembly and the OpenXR specification, its lines follow `docs/standards/logging.md`, and its tests fail when the change is reverted.
+The layer is ours to reconstruct in this repo under ADR 0035, with EchoFrame and Ducky's reference combat build cited as references and never taken whole (AGENTS.md, Guardrails). The reconstruction takes its facts from the reference binary's disassembly and the OpenXR specification, its lines follow `docs/standards/logging.md`, and its tests fail when the change is reverted.
 
-The layer is not in this tree. The release base carries the reference build's `libvrapi.so` (`tools/quest_release_base.py` names it), and `tools/quest_runtime_pin.py` and `tools/quest_repack_libs.py` pin its output into the signed APK. This repo therefore changes no code in the layer today. ADR 0035 makes the layer class 2 once it is reconstructed here.
+The layer is not in this tree. The release base carries the reference build's `libvrapi.so` (`tools/quest_release_base.py` names it), and `tools/quest_runtime_pin.py` and `tools/quest_repack_libs.py` pin its output into the signed APK. This repo therefore changes no code in the layer. ADR 0035 makes the layer class 2 once it is reconstructed here.
 
-The scope is open. #1737 row G6A-094 marks the VrApi-on-OpenXR runtime out of scope, and its H15 section keeps Quest on the system VrApi. ADR 0033 and ADR 0035 bring the layer into scope. This design does not settle that, and no layer work is scheduled until the scope is settled (#2007).
+The scope is open. #1737 row G6A-094 marks the VrApi-on-OpenXR runtime out of scope, and its H15 section keeps Quest on the system VrApi. ADR 0033 and ADR 0035 bring the layer into scope. This design does not settle that, and no layer work is scheduled until the scope is settled (#1737).
 
 ### The key: the interaction profile
 The layer reads `xrGetCurrentInteractionProfile` for each hand's top-level user path, `/user/hand/left` and `/user/hand/right`. For a hand whose profile is one the measurement below shows flips, the layer applies the roll to the orientation it returns for that hand's tracked-remote device: `q' = q * (0, 0, 1, 0) = (y, -x, w, -z)` for `q = (x, y, z, w)`, the same roll as the interim. Position, velocities, status and times stay as written. Other profiles, hand tracking and unknown devices are not touched.
@@ -29,11 +29,14 @@ Measurement A decides the key when it separates the two controllers. On one Ques
 
 Measurement B applies only when A does not separate them. It keys on the grip-to-aim relative rotation of the same hand, from the grip and aim spaces the layer locates for it. If the Touch and the Touch Pro or Touch Plus logs differ in that quantity by the Condition's amount (170 to 190 degrees about the controller's local Z axis, axis within 15 degrees of Z), the key is that relation, and the roll applies only where the measured relation shows the flipped pose. If B does not separate them either, the layer has no automatic key: no layer fix is built, and the interim is the only control.
 
-Both measurements come from one line per bound controller per session, which the layer writes (ADR 0033 rule 4): the profile path, the pose source, whether the roll was applied, and the grip and aim orientations. The line's tag and fields follow `docs/standards/logging.md` and `docs/standards/naming.md`.
+Both measurements come from one line per bound controller per session, which the layer writes (ADR 0033 rule 4): the profile path and the pose source. Whether the roll was applied and the grip and aim orientations are this design's own fields, beyond ADR 0033 rule 4. The line's tag and fields follow `docs/standards/logging.md` and `docs/standards/naming.md`.
 
-The current logs cannot decide the key. The `hand_flip_device` line (`src/quest/sentinel/hand_pose_log_hook.cpp`) has no profile field, and no code on main calls `xrGetCurrentInteractionProfile` or locates a grip or aim space. Whether the reference build's own log names the profile path is not checked.
+The current logs cannot decide the key. The `hand_flip_device` line (`src/quest/sentinel/hand_pose_log_hook.cpp`) has no profile field, and no code in this tree calls `xrGetCurrentInteractionProfile` or locates a grip or aim space. Whether the reference build's own log names the profile path is not checked.
 
 ## The interim in the sentinel
+
+KNOWN-WRONG #1986 This section is the interim only: the roll, its type-4 test, the menu toggle beneath it, the carrier field, the live apply, the persistence and the interim tests. All of it sits above the VrApi boundary and is dropped when the layer carries the fix.
+
 The interim roll sits in the sentinel's tracking handler, above the VrApi boundary: KNOWN-WRONG #1986. ADR 0033 rule 3 allows that only for players who need the fix before the layer carries it, and the layer's key replaces it when it is built. The interim's type-4 test is the input-device-type read that ADR 0033 C1 names, which is part of why it is an interim.
 
 ### The interim hook
