@@ -45,11 +45,15 @@ nevr_lobby_failure_message::DeclineLog& Declines() {
   return declines;
 }
 
-// The decline line: the PC callback's text (lobby_failure_message_rules.h), one Info record whose `msg` carries it.
+// The decline record: the decision and the text of the PC callback's line (lobby_failure_message_rules.h), as typed fields.
+// The code, title and reason are fields; `msg` is the consequence, the sentence the PC line ends with.
 void WriteDeclineLine(std::uint8_t code, nevr_lobby_failure_message::Decline reason) {
-  char line[nevr_lobby_failure_message::kDeclineLineBytes];
-  nevr_lobby_failure_message::FormatDeclineLine(line, code, reason);
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full", {{"msg", line}});
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
+                      {{"status", "message_not_shown"},
+                       {"code", static_cast<std::uint64_t>(code)},
+                       {"title", nevr_lobby_failure_message::Title(code)},
+                       {"reason", nevr_lobby_failure_message::DeclineToken(reason)},
+                       {"msg", nevr_lobby_failure_message::kDeclineConsequence}});
 }
 
 std::uint64_t NowMs() noexcept {
