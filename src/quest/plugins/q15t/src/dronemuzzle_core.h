@@ -1,4 +1,4 @@
-// Drone bullet muzzle: where a drone's bullet starts, from the drone's gun pose and the shot velocity. Platform-free: nothing here
+// Drone bullet muzzle: where a drone's bullet starts, from the drone's transform and the shot velocity. Platform-free: nothing here
 // calls the game.
 //
 // The game's code on this path (libr15.so, ReVault binary 576). Every address is a VA: libr15.so's ELF vaddr + 0x100000.
@@ -16,14 +16,20 @@
 //                                         the fields this module reads: SetFireRate (VA 0x220cde4) writes +0x6c, SetBulletDamage (VA 0x220cdbc)
 //                                         writes +0x70, SetBulletSpeed (VA 0x220cd94) writes +0x74 (each has `mov w10, #0x90` and `madd`).
 //   CR15NetAutoTargetCS::FireBulletLocal  VA 0x220bff8. Takes the velocity in s0..s2, stored at sp+0x1e0 and passed as x4 (0x220c268). The
-//                                         gun pose is computed by the call at 0x220c208 (`bl 0x0103d910`, arguments this+0x130 and rec+0x7c),
-//                                         result at sp+0x108. The 32-byte pose passed to WorldTeleport is at sp+0xe0 (call 0x220c228, return
+//                                         drone's transform is read by the call at 0x220c208 (`bl 0x0103d910`, with x0 = this+0x130 and w1 = the
+//                                         32-bit field at rec+0x7c), result at sp+0x108. WorldTeleport's pose argument (sp+0xe0) is a copy of
+//                                         sp+0x108 (0x220c20c..0x220c224), and FireBullet's x3 is sp+0x108 too. The 32-byte pose passed to WorldTeleport is at sp+0xe0 (call 0x220c228, return
 //                                         0x220c22c). FireBullet is called through PLT stub 0x1038c20 (call 0x220c2a0, return 0x220c2a4) with x3 =
 //                                         sp+0x108 (read as a rotation at 0x220ca20), x4 = the velocity, x5 = 0 (`mov w5, wzr` at 0x220c270),
 //                                         x6 = 0 (0x220c27c) and s0 = rec+0x70 (0x220c29c).
 //   CR15NetBulletCS::FireBullet           VA 0x220c9c4. Tests x5 with cbz at 0x220ca44, and w22 (copied from w5 at 0x220ca10) with cbz at 0x220cacc.
-//                                         The bullet's pose: the call 0x0103d910 at 0x220cb34 takes the fields at [x24+0x30] and [x24+0x38]
-//                                         (0x220cb20..0x220cb4c), and the result is stored at [x24+0x134].
+//                                         w5 == 0 takes the path that reads this+0x1a0 and this+0x1a8 (0x220ca5c, 0x220cadc). That path is the
+//                                         local player's, as those reads suggest; no symbol confirms it.
+//                                         +0x134 is the bullet's spawn position: FireBullet stores the position of the pose that 0x0103d910
+//                                         returns for the record's fields +0x30 and +0x38 (the call at 0x220cb34, the stores at 0x220cb40..0x220cb4c).
+//                                         Where those fields are set was not traced, so it is not shown that they hold the pose WorldTeleport set.
+//                                         FireBullet also writes rec+0xd0 = -1.0 (`mov w8, #0xbf800000` at 0x220ccb0, `str w8, [x24, #0xd0]` at
+//                                         0x220cce8): the value UpdateMovement tests for a bullet's first step (see the clock note below).
 //   CR15NetGunCS::ComputeMuzzleXF         VA 0x22529d0. Called at two sites, 0x2252f64 and 0x2255560 (xrefs of thunk 0x10136a0). Neither is on the
 //                                         drone's chain: Update (VA 0x220aeb0) calls AttackTarget, and FireBulletLocal is called by AttackTarget and
 //                                         by FireBulletNetwork (VA 0x220ac80). So it is not this rule.
@@ -37,14 +43,19 @@
 //   X = (z2, 0, -z0) / |(z2, 0, -z0)|: AttackTarget's row 0 with its length divided out; (1, 0, 0) when that length is <= 1e-4
 //   Y = Z x X: the game's row 1 for that X
 //   spawn = root + kMuzzle[0] X + kMuzzle[1] Y + kMuzzle[2] Z - min(|v| dt, kBackMax) Z
-// root is the pose's position. dt is the host's frame interval (FrameDt and ClampDt below). The basis is built from v, not from the
+// root is the pose's position. dt is the running average of host frame intervals (FrameDt and ClampDt below). The basis is built from v, not from the
 // pose's quaternion, because the rotation write may be queued (0x220bcdc) and whether the queue drains before the pose is read (0x220c208) was
 // not read.
 //
-// The game's own frame delta is UpdateMovement's: the clock object's float at +0x3c (0x22242f4) times the time scale (0x2224414). The clock is
-// reached through GlobalClock(), which takes no arguments (the thunk at 0xfd4860 jumps to it). This module does not read the game's clock: it
-// holds no address for the clock global or for the time scale's pointer chain, so dt stays the host's frame interval (CLOCK_MONOTONIC, in
-// dronemuzzle.cpp). kBackMax is the reference build's cap; the code read does not show it.
+// The game reads its frame delta from the game space's clock: [[space+0x10]+0x3c], with space = [this+0x80] (AttackTarget 0x220bc44..0x220bc48,
+// the float read at 0x220bc60). It calls GlobalClock() only when [space+0x10] is 0 (UpdateMovement 0x22242cc..0x22242e0). That call is the
+// thunk at 0xfd4860, a GOT jump to 0x1907720, which loads `ldr x0, [0x386cb30]`. The time scale is read through one GOT word (VA 0x3812618,
+// loaded at 0x22242f8; the float it points to is read at 0x2224318), and the step is the delta times the scale (0x2224414).
+// This module keeps main's clock on purpose and does not read the game's clock. It could read the delta from the `gs` that
+// q15t_dm_teleport already receives: FireBulletLocal passes [this+0x80] to WorldTeleport (x0 at 0x220c21c; the value comes through the
+// thunk at 0xfe2f50, which jumps to GetST 0x18ff2fc, a bare ret), so no new address is needed. Switching to the game's clock is #2036's
+// decision. dt here is a running average of host frame intervals (FrameDt, weights 0.9 and 0.1; 1/90 s until the second tick;
+// CLOCK_MONOTONIC in dronemuzzle.cpp), clamped by ClampDt. kBackMax is the reference build's cap; the code read does not show it.
 #pragma once
 #include <math.h>
 
