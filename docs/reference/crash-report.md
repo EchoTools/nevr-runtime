@@ -65,8 +65,8 @@ platforms share: the game's request is remembered, not carried out; ours runs on
   the constructor; the dlopen hook (live on every launch) hands each load to `OnModuleLoaded`, which hooks their two slots
   right after the game's dlopen returns (`{"event":"crash_first_late",...}`), and again for a mapping loaded again. A
   library's own ELF constructors run inside dlopen, before that moment. The first request the game makes for each of the five
-  signals writes `{"event":"crash_first_displaced",...}`, naming the signal, the entry it called (`sigaction` or `signal`) and
-  what the request means; a request made while the crash path runs writes nothing, and the next ordinary request for that
+  signals writes `{"event":"crash_first_displaced",...}`, naming the signal, the entry it called (`sigaction` or `signal`), and the kind of handler the game kept (`function`, `default` or `ignore`; only a function runs
+  after the crash capture); a request made while the crash path runs writes nothing, and the next ordinary request for that
   signal writes the line.
 - PC: `kernel32!SetUnhandledExceptionFilter` is hooked (`src/runtime/lifecycle/crash_first_win.h`); the game's filter is
   remembered and ours stays the top-level filter. On an unhandled exception it writes the report (unless `WriteCrashDump`

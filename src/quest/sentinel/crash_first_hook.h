@@ -29,7 +29,8 @@
  *
  * The handlers (the thunk entries' callees) take no lock a signal handler could be holding: the game's requests are stored
  * under a mutex in an ordinary thread, and the signal handler reads them through a seqlock (core/crash_first.h). Each guarded
- * signal's first kept request writes one {"event":"crash_first_displaced",...} line, from the game's ordinary context only: a
+ * signal's first kept request writes one {"event":"crash_first_displaced",...} line, naming the entry the game called and what
+ * the kept action is (a function, the default action or ignore), from the game's ordinary context only: a
  * request the game makes while OnSignal runs writes nothing, and the next ordinary request for that signal writes the line.
  * What the hooks did is counted (Counts) and reported by the crash path.
  *

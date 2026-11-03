@@ -85,16 +85,48 @@ const char* GuardedSignalName(int signo) noexcept {
   }
 }
 
-// The first kept request for a guarded signal, logged once. `how` names the entry the game called. While OnSignal runs
-// nothing is written and the signal is not marked, so the next ordinary request for it writes the line: LogFields is not
-// async-signal-safe (hook_log.h).
-void NoteFirstDisplacement(int index, const char* how) noexcept {
+// What the kept action does when the signal arrives: a function that ChainToGame calls, the default action, or ignored (which
+// ChainToGame does not call). Decided from the action the game asked for, the way ChainToGame reads it.
+enum class HandlerKind : std::uint8_t { kFunction, kDefault, kIgnore };
+
+HandlerKind KindOf(const struct sigaction& action) noexcept {
+  const std::uintptr_t handler = (action.sa_flags & SA_SIGINFO) != 0 ? reinterpret_cast<std::uintptr_t>(action.sa_sigaction)
+                                                                    : reinterpret_cast<std::uintptr_t>(action.sa_handler);
+  if (handler == 0) return HandlerKind::kDefault;  // SIG_DFL
+  if (handler == 1) return HandlerKind::kIgnore;   // SIG_IGN
+  return HandlerKind::kFunction;
+}
+
+const char* HandlerName(HandlerKind kind) noexcept {
+  switch (kind) {
+    case HandlerKind::kFunction: return "function";
+    case HandlerKind::kDefault: return "default";
+    case HandlerKind::kIgnore: return "ignore";
+  }
+  return "unknown";
+}
+
+const char* ConsequenceOf(HandlerKind kind) noexcept {
+  switch (kind) {
+    case HandlerKind::kFunction: return "the game's handler is kept behind ours and runs after our crash capture";
+    case HandlerKind::kDefault: return "the game asked for the default action, so no game handler runs after our crash capture";
+    case HandlerKind::kIgnore: return "the game asked to ignore the signal, so no game handler runs after our crash capture";
+  }
+  return "unknown";
+}
+
+// The first kept request for a guarded signal, logged once. `how` names the entry the game called and `kept` is the action it
+// kept. While OnSignal runs nothing is written and the signal is not marked, so the next ordinary request for it writes the
+// line: LogFields is not async-signal-safe (hook_log.h).
+void NoteFirstDisplacement(int index, const char* how, const struct sigaction& kept) noexcept {
   if (g_crashPath.load(std::memory_order_acquire) > 0) return;
   if (g_displacedLogged[index].exchange(true, std::memory_order_acq_rel)) return;
+  const HandlerKind kind = KindOf(kept);
   sentinel::LogFields(sentinel::LogLevel::kInfo, "crash_first_displaced",
                       {{"signal", GuardedSignalName(kGuardedSignals[index])},
                        {"how", how},
-                       {"consequence", "the game's handler is kept behind ours and runs after our crash capture"}});
+                       {"handler", HandlerName(kind)},
+                       {"consequence", ConsequenceOf(kind)}});
 }
 
 // libr15's sigaction. A guarded signal's request is remembered and answered, never passed to libc.
@@ -108,7 +140,7 @@ int SigactionHandler(SigactionThunk::Fn original, int signo, const struct sigact
   PreviousFor(index, &previous);
   if (act != nullptr) {
     g_displaced[index].fetch_add(1, std::memory_order_relaxed);
-    if (Remember(index, *act)) NoteFirstDisplacement(index, "sigaction");
+    if (Remember(index, *act)) NoteFirstDisplacement(index, "sigaction", *act);
   } else {
     g_queried.fetch_add(1, std::memory_order_relaxed);
   }
@@ -131,7 +163,7 @@ SignalHandlerFn SignalHandler(SignalThunk::Fn original, int signo, SignalHandler
   sigemptyset(&next.sa_mask);
   next.sa_flags = SA_RESTART;
   g_displaced[index].fetch_add(1, std::memory_order_relaxed);
-  if (Remember(index, next)) NoteFirstDisplacement(index, "signal");
+  if (Remember(index, next)) NoteFirstDisplacement(index, "signal", next);
   return previous.sa_handler;
 }
 

@@ -540,13 +540,57 @@ void TheFirstKeptRequestForASignalWritesOneLineNamingHowItWasMade() {
   std::string sigsegv;
   QCHECK(DisplacedLines("SIGSEGV", &sigsegv) == 1);
   QCHECK(sigsegv.find("\"how\":\"sigaction\"") != std::string::npos);
+  QCHECK(sigsegv.find("\"handler\":\"function\"") != std::string::npos);
   std::string sigbus;
   QCHECK(DisplacedLines("SIGBUS", &sigbus) == 1);
   QCHECK(sigbus.find("\"how\":\"signal\"") != std::string::npos);
+  QCHECK(sigbus.find("\"handler\":\"function\"") != std::string::npos);
   QCHECK(sigbus.find("\"consequence\":\"the game's handler is kept behind ours and runs after our crash capture\"") !=
          std::string::npos);
   QCHECK(DisplacedLines("SIGABRT") == 0);
   QCHECK(DisplacedLines("SIGILL") == 0);
+}
+
+// A kept request for the default action, or for ignore, says so on its line. Neither is called at a crash (ChainToGame calls
+// only a function), so the consequence is the one that says that, not the function's.
+void TheFirstKeptDefaultOrIgnoreRequestSaysSoOnItsLine() {
+  ArmOverSystemHandlers();
+  const sentinel::LogSink previousSink = sentinel::SetLogSink(&CaptureLine);
+  g_lines.clear();
+  struct sigaction dfl;
+  std::memset(&dfl, 0, sizeof(dfl));
+  dfl.sa_handler = SIG_DFL;
+  QCHECK(g_gameSigaction(SIGSEGV, &dfl, nullptr) == 0);
+  struct sigaction ign;
+  std::memset(&ign, 0, sizeof(ign));
+  ign.sa_handler = SIG_IGN;
+  QCHECK(g_gameSigaction(SIGBUS, &ign, nullptr) == 0);
+  sentinel::SetLogSink(previousSink);
+
+  std::string sigsegv;
+  QCHECK(DisplacedLines("SIGSEGV", &sigsegv) == 1);
+  QCHECK(sigsegv.find("\"how\":\"sigaction\"") != std::string::npos);
+  QCHECK(sigsegv.find("\"handler\":\"default\"") != std::string::npos);
+  QCHECK(sigsegv.find("\"consequence\":\"the game asked for the default action, so no game handler runs after our crash capture\"") !=
+         std::string::npos);
+  std::string sigbus;
+  QCHECK(DisplacedLines("SIGBUS", &sigbus) == 1);
+  QCHECK(sigbus.find("\"handler\":\"ignore\"") != std::string::npos);
+  QCHECK(sigbus.find("\"consequence\":\"the game asked to ignore the signal, so no game handler runs after our crash capture\"") !=
+         std::string::npos);
+}
+
+// A kept default is not called at a crash: ours runs, the system's follows, and no game handler runs between them.
+void AKeptDefaultIsNotCalledAtACrash() {
+  ArmOverSystemHandlers();
+  struct sigaction dfl;
+  std::memset(&dfl, 0, sizeof(dfl));
+  dfl.sa_handler = SIG_DFL;
+  QCHECK(g_gameSigaction(SIGSEGV, &dfl, nullptr) == 0);
+  raise(SIGSEGV);
+  const std::vector<std::string> want = {"report", "dump", "note", "system"};
+  QCHECK(Events() == want);
+  QCHECK(!g_noteChained.load());
 }
 
 // The game's handler asks for another signal while the crash path runs, as a crash path that re-arms its handlers does. The
@@ -593,6 +637,8 @@ int main(int argc, char** argv) {
   ASecondThreadWaitsForTheFirstThreadsReportAndDump();
   ARefusedInstallSaysSo();
   TheFirstKeptRequestForASignalWritesOneLineNamingHowItWasMade();
+  TheFirstKeptDefaultOrIgnoreRequestSaysSoOnItsLine();
+  AKeptDefaultIsNotCalledAtACrash();
   ARequestMadeInTheCrashPathWritesNothingUntilTheNextOrdinaryRequest();
   AProviderLibraryIsHookedWhenItLoadsAndNotBefore();
   EachProviderLibraryIsHookedOnItsOwnAndLibpnsradDoesNotMatchTheMatchmakingLibrary();
