@@ -6320,6 +6320,35 @@ TEST(N84_HookGuard, PluginAssetsEngineHookIsRecordedUnderItsName) {
   nevr_hook_guard::ResetForTest();
 }
 
+// On a dynamic unload, platform_compat's module shutdown runs Hooking::Shutdown (MH_Uninitialize) before plugin_assets retires
+// its hooks. MinHook has restored and forgotten the hook by then, so a retire that finds MinHook uninitialised is not a failed
+// removal, and the hook is not said to stay in place.
+TEST(N84_HookGuard, PluginAssetsRetireAfterMinHookShutdownIsNotAFailedRemoval) {
+  nevr_hook_guard::ResetForTest();
+  ClearTestLogs();
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  void* page = GuardStandInPage();
+  ASSERT_NE(page, nullptr);
+  auto fn = reinterpret_cast<int (*)()>(page);
+  ASSERT_EQ(fn(), 7);
+
+  void* original = nullptr;
+  ASSERT_TRUE(nevr::assets::InstallHookForTest(page, reinterpret_cast<void*>(&GuardDetour), &original,
+                                               "plugin_assets submit"));
+  ASSERT_EQ(fn(), 9) << "the hook did not take";
+  MH_Uninitialize();  // MinHook restores the game's bytes and forgets every hook, as Hooking::Shutdown does
+  EXPECT_EQ(fn(), 7) << "MH_Uninitialize did not restore the game's bytes";
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 1) << "precondition: the guard still holds the record";
+
+  nevr::assets::RetireHookForTest(page, "plugin_assets submit");
+  EXPECT_FALSE(TestLogContains("hook remove failed"))
+      << "a hook that MinHook had already shut down was reported as a failed removal";
+  EXPECT_FALSE(TestLogContains("stays in place")) << "a hook that MH_Uninitialize restored was said to stay in place";
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 0) << "the record was not forgotten";
+  VirtualFree(page, 0, MEM_RELEASE);
+  nevr_hook_guard::ResetForTest();
+}
+
 // WOULD-FAIL-IF (N84): delete the memcmp in nevr_hook_guard::VerifyAll (hook_guard.cpp)
 //   -> OverwrittenBytes_Detected fails: a foreign detour goes unreported.
 // WOULD-FAIL-IF (N84-retire): make nevr_hook_guard::Retire forget nothing (hook_guard.cpp)
@@ -6328,6 +6357,10 @@ TEST(N84_HookGuard, PluginAssetsEngineHookIsRecordedUnderItsName) {
 //   -> RetireOfAnUnrecordedTargetIsRefusedAndLogged fails.
 // WOULD-FAIL-IF (N84-assets): plugin_assets InstallOne goes back to MH_CreateHook (no record)
 //   -> PluginAssetsEngineHookIsRecordedUnderItsName fails.
+// WOULD-FAIL-IF (N84-retire-target): make nevr_hook_guard::Retire ignore `s.target != target` (hook_guard.cpp)
+//   -> RetireOfOneTargetKeepsTheRecordOfAnother fails: another target's record is forgotten too.
+// WOULD-FAIL-IF (N84-assets-notinit): drop MH_ERROR_NOT_INITIALIZED from RetireEngineHook (plugin_assets.cpp)
+//   -> PluginAssetsRetireAfterMinHookShutdownIsNotAFailedRemoval fails: a hook MinHook shut down is logged as a failed removal.
 // WOULD-FAIL-IF (N84-record): delete the Readable() check in nevr_hook_guard::Record
 //   -> UnreadableTarget_Ignored fails, and production VerifyAll faults on the
 //      uncommitted page instead of skipping it.

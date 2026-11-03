@@ -244,11 +244,13 @@ bool InstallOne(void* target, void* detour, void** original, const char* name) {
     return PatchDetour(original, detour, name) != FALSE;
 }
 
-// Removes one engine hook and its HookGuard record. A removal that fails leaves the hook in place; it is no longer
-// guarded, and that is logged.
+// Removes one engine hook and its HookGuard record. MH_ERROR_NOT_CREATED and MH_ERROR_NOT_INITIALIZED mean the hook is
+// already gone: on a dynamic unload, platform_compat's module shutdown (boot.cpp registers it) calls Hooking::Shutdown,
+// which runs MH_Uninitialize and restores every hook before this runs. A removal that fails leaves the hook in place; it
+// is no longer guarded, and that is logged.
 void RetireEngineHook(void* target, const char* what) {
     const MH_STATUS status = PatchRetire(target);
-    if (status != MH_OK && status != MH_ERROR_NOT_CREATED) {
+    if (status != MH_OK && status != MH_ERROR_NOT_CREATED && status != MH_ERROR_NOT_INITIALIZED) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.ASSET] hook remove failed what=%s target=%p status=%s; the hook stays in place and is no longer guarded",
             what, target, MH_StatusToString(status));
@@ -289,6 +291,7 @@ void EnsureHooksInstalled() {
 bool InstallHookForTest(void* target, void* detour, void** original, const char* name) {
     return InstallOne(target, detour, original, name);
 }
+void RetireHookForTest(void* target, const char* what) { RetireEngineHook(target, what); }
 #endif
 
 RegisterStatus RegisterPluginAsset(uint64_t type, uint64_t name, const void* data, uint64_t size,

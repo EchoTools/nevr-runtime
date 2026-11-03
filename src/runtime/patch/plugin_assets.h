@@ -27,6 +27,8 @@ void ShutdownPluginAssets();
 // Test-only: installs one hook the way the engine hooks are installed, through PatchDetour, so HookGuard records it
 // under `name`. On entry *original holds the game's function; on success it holds the trampoline.
 bool InstallHookForTest(void* target, void* detour, void** original, const char* name);
+// Test-only: retires one engine hook the way ShutdownPluginAssets does (PatchRetire, with the same status handling).
+void RetireHookForTest(void* target, const char* what);
 #endif
 
 }  // namespace nevr::assets
