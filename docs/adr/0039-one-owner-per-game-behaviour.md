@@ -26,7 +26,7 @@ is the one module in this tree that changes it. Its clash with the sentinel is t
    setting the owner reads, or a request through an interface the owner offers); the owner combines the inputs and
    applies one value. A module may also observe the call through a handler in the manager's chain (ADR 0034) that
    changes neither the arguments nor the result, unless the function is held by a hot-path full replacement (ADR 0038),
-   which has no chain: there the observer is an input the replacement reports to.
+   which has no chain: there the observer reads what the replacement reports.
 3. **The owner logs the decision**, naming every input it combined (config, plugin request, headset profile) and the
    value applied.
 4. **The owner is named where the behaviour is.** The owning file's header says it owns the decision and lists its

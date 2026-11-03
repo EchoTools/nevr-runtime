@@ -5,11 +5,11 @@ AGENTS.md "Guardrails" ("Prefer a hook to a byte patch") and builds on ADR 0021 
 
 ## Context
 
-AGENTS.md "Guardrails" prefers a hook and makes a byte patch the exception where a hook would cost something measurable
-(a per-frame hot path, a call too frequent to detour), and asks for frequency analysis before a hook adds Sleep or yield
-calls. It gives no counter, no window and no number, and it names one form for a hot path, the checked patch
-(`nevr_checked_patch`). A second form leaves no trampoline on the hot path either: a rewrite of the whole containing
-function.
+AGENTS.md "Guardrails" prefers a hook and allows an exception where a hook would cost something measurable (a per-frame
+hot path, a call too frequent to detour), and asks for frequency analysis before a hook adds Sleep or yield calls. A rule
+of that shape needs a counter, a window and a number before anyone can apply it, and a list of the forms the exception
+may take. The checked patch (`nevr_checked_patch`) is one; a rewrite of the whole containing function leaves no
+trampoline on the hot path either.
 
 A wrapper (a GOT thunk on Quest, a MinHook trampoline on PC) adds a fixed cost to every call, plus whatever its handler
 does; whether that matters depends on how often the game calls the function per frame. On Quest, a function that no
@@ -47,8 +47,8 @@ yet; it is the line this ADR uses until a measurement build gives a better one. 
      - **a full replacement of the containing function**: one handler that never calls the original. On Quest it is
        reached through the function's import slot or its ADR 0021 inline row (the stub's branch remains; the trampoline
        is never called); on PC it is a detour whose handler never calls the trampoline. It is the function's only
-       handler: a module that needs to observe or influence it is an input to it (ADR 0039), not a handler in a chain
-       (ADR 0034). Chosen when the whole function can be reconstructed and tested in the PR.
+       handler: a module that needs to influence it gives it an input, and one that needs to observe it reads what it
+       reports (ADR 0039), instead of a handler in a chain (ADR 0034). Chosen when the whole function can be reconstructed and tested in the PR.
      - **a checked byte patch**: `nevr_checked_patch` on PC. On Quest the public table holds no word-patch row, so the
        Quest form is a full replacement unless #1737 makes word-patch rows public (ADR 0021 section 11 changes with it).
        Chosen when the change is a few instruction words inside a function too large to reconstruct in the PR.
@@ -68,6 +68,8 @@ Scope: hooks and patches added from this ADR on, in `src/runtime` and `src/quest
 - **T2.** A wrapper whose recorded added time per frame is above 10 µs, or a hook that takes a build's recorded total
   above 0.2 ms per frame.
 - **T3.** A function shown to be per-frame, hooked with no measurement at all.
+- **T4.** A full replacement chosen as a hot-path form with no second measurement recorded (rule 4), or one whose recorded
+  added time per frame is above the thresholds.
 
 ## Consequences
 

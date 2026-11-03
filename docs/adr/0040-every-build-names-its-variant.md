@@ -32,10 +32,11 @@ measurement build, ADR 0037), and a first log line and crash report that carry t
 ## Decision
 
 1. **Every artifact carries a build kind and a variant name.**
-   - The build kind is `release` for a release build (ADR 0037 rule 2: an artifact `just release-quest-apk <tag>`
-     builds, any variant, or `build.yml` builds from a release tag) and `dev` for every other build. It is read from the
-     version: a release build's is the tag's `X.Y.Z`, every other carries `-dev`. The plugin-trust word keeps its meaning
-     (N147) and is not the build kind.
+   - The build kind is `release` for a release build (ADR 0037 rule 2: the release recipes' artifacts for a tag, and
+     `build.yml`'s from a release tag) and `dev` for every other build. Both platforms decide it by the rule
+     `cmake/nevr_build_info.cmake` gives `nevr_build::kIsDev`: a version with no `-dev.` part, or a CI build of a release
+     tag (rc tags included) that the CI ref names, is a release build, even when `git describe` gave it a `-dev.`
+     version. The plugin-trust word keeps its meaning (N147) and is not the build kind.
    - The variant name is a word for each variant or option the recipe adds (`q15t`, `combat`, `perf-probe`), set by the
      recipe that makes the artifact. A release's variant APKs share the release's loader, so their name is stamped by the
      packaging step, where the sentinel reads it, not by the loader build.

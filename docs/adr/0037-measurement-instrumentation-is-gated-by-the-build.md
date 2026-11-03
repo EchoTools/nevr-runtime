@@ -21,15 +21,18 @@ The tree already gates this kind of code by the build:
 
 Other code looks like measurement but is part of the product, in every build on purpose:
 
-- Records an ADR or the logging standard requires: ADR 0022's render configuration observers, which call the original
-  and only record (on Quest a "development-free, always-on module", `docs/adr/0022-render-config-log.md`), and
-  `docs/standards/logging.md` Rule 16's lobby records.
+- Records an ADR or the logging standard requires: ADR 0022's render configuration hooks (on Quest a
+  "development-free, always-on module", `docs/adr/0022-render-config-log.md`), and `docs/standards/logging.md` Rule 16's
+  lobby records.
 - Installs whose cost is fixed and small and whose output stays off unless a config switch turns it on: the PC frame-time
   copy is "installed on every client whatever the switch says" and keeps what it reads only while
   `diagnostics.frame_stats` is on (`src/runtime/frame/frame_stats.cpp`).
 - Plain counters that a hook's existing report reads (`src/quest/sentinel/clock_levels_hook.cpp`).
 - A named setting, off by default, that changes behaviour so a headset A/B can compare: `diagnostics.clock_levels_override`
   "stays off until a headset A/B shows a benefit" (`src/quest/sentinel/quest_config.h`).
+- A diagnostic an accepted ADR designs, off by default, that installs nothing while it is off: ADR 0006's hardware dump
+  (`diagnostics.hardware_dump`), whose 18 hooks are installed only when the switch is on
+  (`docs/adr/0006-quest-hardware-dump.md`).
 
 ## Decision
 
@@ -38,19 +41,21 @@ Other code looks like measurement but is part of the product, in every build on 
    added for one. It is compiled in or turned on only in a development build or behind a CMake option or preset that
    defaults to off: on Quest, `nevr_build::kIsDev` or such an option; on PC, such an option or preset (PC has no
    build-kind constant). A release build carries none of it.
-2. **A release build** is an artifact `just release-quest-apk <tag>` builds (any variant) or `build.yml` builds from a
-   release tag. Every other build is a development build.
-3. **Part of the product, allowed in every build:** the four kinds in Context's second list. A comparison setting follows
+2. **A release build** is an artifact the release recipes build for a tag (`just release-quest-apk`,
+   `release-quest-variant-apk` and `release-quest-combat-apk`, through their shared body `_release-quest-apk`) or that
+   `build.yml` builds from a release tag. Every other build is a development build.
+3. **Part of the product, allowed in every build:** the five kinds in Context's second list. A comparison setting follows
    rule 6.
 4. **A build that carries an option says so.** Its variant name (ADR 0040) names each measurement option it was built
    with, in its first log line.
 5. **The release refuses it.** The release recipe refuses an artifact whose variant names a measurement option.
 6. **Measuring changes nothing the game sees, except through a named setting.** Instrumentation calls the original and
    returns its result. A setting that changes behaviour for a comparison is named, off by default, read once at start,
-   and logged either way with its consequence.
+   and logged either way with its consequence, in its own line or in the values it changes (for
+   `diagnostics.clock_levels_override`, the render configuration line's `cpu_level` and `gpu_level`).
 7. **Its log is bounded in a release build**: one install line per instrumented site, then summary lines per fixed window
-   (`docs/standards/logging.md`, Rules 5 and 13). Per-call lines are allowed at Debug only where rule 1 allows the
-   instrumentation itself.
+   (`docs/standards/logging.md`, Rules 5 and 13). Per-call or per-request lines are allowed only where rule 1 allows the
+   instrumentation itself, as ADR 0018's development-build request lines are.
 
 ## Finding a violation
 
