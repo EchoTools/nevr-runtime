@@ -77,8 +77,17 @@ void TheEyeTablesAreTodaysTables() {
     QCHECK(headset_profile::kQuest2.eye[i].height == kQuest2Eyes[i].height);
     QCHECK(headset_profile::kQuest3.eye[i].width == kQuest3Eyes[i].width);
     QCHECK(headset_profile::kQuest3.eye[i].height == kQuest3Eyes[i].height);
-    QCHECK(headset_profile::kGeneric.eye[i].width == kQuest3Eyes[i].width);
-    QCHECK(headset_profile::kGeneric.eye[i].height == kQuest3Eyes[i].height);
+    QCHECK(headset_profile::kGeneric.eye[i].width == kQuest2Eyes[i].width);
+    QCHECK(headset_profile::kGeneric.eye[i].height == kQuest2Eyes[i].height);
+  }
+}
+
+// The generic eye table is the Quest 2 one, which is no larger than the Quest 3 table at any level: a headset no rule names is
+// never given a bigger eye buffer than the Quest 3 values would give it.
+void GenericIsNoLargerThanQuest3AtEveryLevel() {
+  for (std::size_t i = 1; i < headset_profile::kEyeLevelCount; ++i) {
+    QCHECK(headset_profile::kGeneric.eye[i].width <= kQuest3Eyes[i].width);
+    QCHECK(headset_profile::kGeneric.eye[i].height <= kQuest3Eyes[i].height);
   }
 }
 
@@ -92,7 +101,7 @@ void EachLevelIsTodaysPair() {
     const tq::EyeSize q3 = tq::SizeFor(levels[i], headset_profile::kQuest3);
     QCHECK(q3.width == kQuest3Eyes[i + 1].width && q3.height == kQuest3Eyes[i + 1].height);
     const tq::EyeSize generic = tq::SizeFor(levels[i], headset_profile::kGeneric);
-    QCHECK(generic.width == q3.width && generic.height == q3.height);
+    QCHECK(generic.width == q2.width && generic.height == q2.height);
   }
   QCHECK(tq::SizeFor(tq::Level::kStock, headset_profile::kQuest2).width == 0);
 }
@@ -120,10 +129,10 @@ void TheStepNamesTheGenericHeadsetOnAHostAndLogsOneLine() {
   QCHECK(nevr_quest::integration::IdentifyHeadset());
   sentinel::SetLogSink(previous);
 
-  // The step sets the profile the texture hook serves: the generic headset's table, which is the Quest 3 pairs.
+  // The step sets the profile the texture hook serves: the generic headset's table, which is the Quest 2 pairs.
   QCHECK(tq::ActiveHeadsetProfile() == &headset_profile::kGeneric);
   const tq::EyeSize high = tq::SizeFor(tq::Level::kHigh, *tq::ActiveHeadsetProfile());
-  QCHECK(high.width == 3072 && high.height == 3380);
+  QCHECK(high.width == 2016 && high.height == 2224);
 
   std::string line;
   int lines = 0;
@@ -148,6 +157,7 @@ int main() {
   TheDeviceMatchesExactly();
   OnlyTheDeviceDecides();
   TheEyeTablesAreTodaysTables();
+  GenericIsNoLargerThanQuest3AtEveryLevel();
   EachLevelIsTodaysPair();
   TheHeapAndTheRateAreTodaysValues();
   TheStepNamesTheGenericHeadsetOnAHostAndLogsOneLine();

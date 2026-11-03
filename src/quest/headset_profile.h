@@ -62,15 +62,17 @@ inline constexpr EyeSize kQuest3Eyes[kEyeLevelCount] = {
     {0, 0}, {1344, 1408}, {1680, 1760}, {2376, 2568}, {3072, 3380}, {3584, 3944}, {4096, 4506}};
 inline constexpr Profile kQuest3 = {Id::kQuest3, "quest3", kQuest3Eyes, 0, 90.f};
 
-// Any headset no rule names. Its values are the Quest 3 values: the heap and rate the q15t modules already gave every headset
-// that is not a Quest 2, and the size table the patch's values were measured on. A generic headset's own size is not
-// inferred (ADR 0031, R3); a headset that needs other values gets its own rule and row.
-inline constexpr Profile kGeneric = {Id::kGeneric, "generic", kQuest3Eyes, 0, 90.f};
+// Any headset no rule names. Its eye table is the Quest 2 one: at every level that table is no larger than the Quest 3 one, so
+// no such headset gets a bigger eye buffer than the Quest 3 values would give it. The heap and rate are the ones the q15t
+// modules gave every headset that is not a Quest 2 (0 keeps the row's target; 90 Hz). None of these values is measured on a
+// headset that no rule names. A generic headset's own size is not inferred (ADR 0031, R3); a headset that needs other values
+// gets its own rule and row.
+inline constexpr Profile kGeneric = {Id::kGeneric, "generic", kQuest2Eyes, 0, 90.f};
 
 // The rules, in order. An empty device matches any headset: the last rule. The "eureka" value is not measured yet: no headset
 // log in the tree names it, and the tests use it as a Quest 3 fixture only. The headset_profile line of a Quest 3 run states
 // the device it reads; if that is not "eureka", the Quest 3 rule matches nothing and the headset takes the generic profile,
-// whose values are the same.
+// whose eye table is the smaller Quest 2 one.
 struct Rule {
   const char* name;         // the rule_matched name in the headset_profile line
   std::string_view device;  // ro.product.device, exact; empty matches any device
