@@ -2438,6 +2438,11 @@ test-quest-plugins:
     fixture fx_initfail initfail -DFX_INIT_RC=3
     fixture fx_noinfo noinfo -DFX_NO_INFO
     fixture fx_legacy legacy -DFX_LEGACY_INIT
+    # The slot-hook probes (#2001, round 3): the handler lives in the fixture object, so unmapping it under a chained call crashes.
+    # slotclaim registers under another plugin's id and fails its init; slotself registers under its own id, and its Shutdown
+    # unregisters the handler while a call is inside it.
+    fixture fx_slotclaim slotclaim -DFX_SLOT_HOOK -DFX_SLOT_CLAIM='"impostor"' -DFX_INIT_RC=3 -pthread
+    fixture fx_slotself slotself -DFX_SLOT_HOOK -DFX_SLOT_WAIT -DFX_INIT_RC=3 -pthread
     # The GOT fixture the slot hook test chains onto: a real module with a PLT slot for fx_add (got_hook_test builds the same).
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp -o "$out/libgotfx_provider.so"
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 -L"$out" -lgotfx_provider -Wl,-rpath,'$ORIGIN' -Wl,-z,now,-z,relro \

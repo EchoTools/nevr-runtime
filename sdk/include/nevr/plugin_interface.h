@@ -172,7 +172,8 @@ struct NevrQuestHostApi {
      *
      * The handler runs inside the game's call: it must return promptly, and must not block, take a lock, allocate, log,
      * throw or call into the game. Build the plugin with -fno-exceptions. The owner the host records for the handler is
-     * "plugin:<plugin_id>". */
+     * "plugin:<plugin_id>". `plugin_id` must be the id the host gave this plugin (ctx->plugin_id, its config.yaml name) while
+     * the host calls its init or Shutdown; any other id gets NEVR_SLOT_HOOK_BAD_ARGUMENT and no handler is chained. */
     int32_t (*register_slot_hook)(const char* plugin_id, const char* module, const char* symbol, int32_t reloc,
                                   const char* build_id, void* handler, void** original_out, uint32_t* out_handle);
     /* Takes the handler of `handle` out of its chain. `plugin_id` must be the id the handle was registered under: any other

@@ -38,6 +38,9 @@ sentinel::GotHook g_hooks[kSlotHookHandles];
 Held g_held[kSlotHookHandles];
 pthread_mutex_t g_tableLock = PTHREAD_MUTEX_INITIALIZER;
 
+// The binding of the loader's call on this thread (Scope), or null outside any call of the loader.
+thread_local Binding* g_bound = nullptr;
+
 // The owner a plugin's handle is recorded under. The same text is built for a registration and for a comparison, so a long
 // id is truncated the same way in both.
 void OwnerOf(const char* pluginId, char* out, std::size_t capacity) noexcept {
@@ -88,10 +91,15 @@ void LogServiceRefusal(const char* op, std::int32_t result, const char* reason, 
 
 }  // namespace
 
+Scope::Scope(Binding& binding) noexcept : previous_(g_bound) { g_bound = &binding; }
+
+Scope::~Scope() { g_bound = previous_; }
+
 std::int32_t RegisterSlotHookWith(sentinel::ImageLookup lookup, const char* pluginId, const char* module,
                                   const char* symbol, std::int32_t reloc, const char* buildId, void* handler,
                                   void** originalOut, std::uint32_t* outHandle) {
   // Each check names its reason, so a refused plugin's Warning says which argument it got wrong.
+  Binding* const bound = g_bound;
   const char* reason = nullptr;
   if (lookup == nullptr || pluginId == nullptr || module == nullptr || symbol == nullptr || handler == nullptr ||
       originalOut == nullptr || outHandle == nullptr) {
@@ -103,6 +111,9 @@ std::int32_t RegisterSlotHookWith(sentinel::ImageLookup lookup, const char* plug
     reason = "a name is longer than the service holds";
   } else if (reloc != NEVR_SLOT_RELOC_JUMP_SLOT && reloc != NEVR_SLOT_RELOC_GLOB_DAT) {
     reason = "the relocation is not a NevrSlotReloc";
+  } else if (bound != nullptr && std::strcmp(bound->pluginId(), pluginId) != 0) {
+    // The loader knows which plugin is calling. A handler recorded under another id would outlive the object that holds it.
+    reason = "the plugin_id is not the id the host gave this plugin; the handler is refused";
   }
   if (reason != nullptr) {
     LogServiceRefusal("register", NEVR_SLOT_HOOK_BAD_ARGUMENT, reason, pluginId, module, symbol, 0);
@@ -155,6 +166,7 @@ std::int32_t RegisterSlotHookWith(sentinel::ImageLookup lookup, const char* plug
     return ResultOf(status);
   }
   *outHandle = static_cast<std::uint32_t>(index + 1);
+  if (bound != nullptr) bound->NoteRegistered();
   return NEVR_SLOT_HOOK_OK;
 }
 

@@ -30,6 +30,39 @@ namespace nevr_quest::slot_hook {
 // The handles the service holds at once. Each one is a GotHook, declared once in slot_hook.cpp (hook_budget.h counts it).
 inline constexpr std::size_t kSlotHookHandles = 8;
 
+// The plugin a call of the loader is for (#2001, round 3). The loader binds the plugin's id around its init and around the
+// Shutdown it runs after a failed init. While a Scope is live on a thread, a register must name the bound id as its plugin_id,
+// or it is refused (Warning, NEVR_SLOT_HOOK_BAD_ARGUMENT); and the binding records whether it registered a handler, so the
+// loader keeps that plugin mapped for the life of the process even after the handler is unregistered. A register outside any
+// Scope is recorded under the id the caller claims.
+class Binding {
+ public:
+  explicit Binding(const char* pluginId) noexcept : pluginId_(pluginId) {}
+  Binding(const Binding&) = delete;
+  Binding& operator=(const Binding&) = delete;
+
+  const char* pluginId() const noexcept { return pluginId_; }
+  // True once a handler was registered under this binding, in any of its scopes.
+  bool registered() const noexcept { return registered_; }
+  void NoteRegistered() noexcept { registered_ = true; }
+
+ private:
+  const char* pluginId_;
+  bool registered_ = false;
+};
+
+// Makes `binding` the current plugin on this thread until the Scope is destroyed; nested scopes restore the outer one.
+class Scope {
+ public:
+  explicit Scope(Binding& binding) noexcept;
+  ~Scope();
+  Scope(const Scope&) = delete;
+  Scope& operator=(const Scope&) = delete;
+
+ private:
+  Binding* previous_;
+};
+
 // register_slot_hook, with the module lookup the caller names (production: sentinel::FindLoadedImage; a test passes its
 // own image). Returns a NevrSlotHookResult and writes *outHandle on NEVR_SLOT_HOOK_OK only.
 std::int32_t RegisterSlotHookWith(sentinel::ImageLookup lookup, const char* pluginId, const char* module,
