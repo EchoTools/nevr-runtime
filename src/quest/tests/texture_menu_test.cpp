@@ -208,11 +208,28 @@ void TheMarkedValueIsReadFromTheMarkerFile() {
 void TheMarkerTextRoundTripsAndStaysInTheMenu() {
   for (int index = 0; index < 6; ++index) {
     const std::string text = tm::MarkerText(index);
-    QCHECK(Json::parse(text) == Json::parse("{\"menu_index\":" + std::to_string(index) + "}"));  // valid JSON
+    QCHECK(Json::parse(text) == Json::parse("{\"version\":1,\"menu_index\":" + std::to_string(index) + "}"));  // valid JSON
     QCHECK(Marked(text.c_str()) == index);
+    QCHECK(tm::MarkerVersion(text.c_str(), text.size()) == tm::kMarkerVersion);
   }
   QCHECK(Marked(tm::MarkerText(-4).c_str()) == 0);
   QCHECK(Marked(tm::MarkerText(99).c_str()) == 5);
+}
+
+int Version(const char* text) { return tm::MarkerVersion(text, std::strlen(text)); }
+
+void TheMarkerVersionIsReadFromTheMarkerFile() {
+  QCHECK(Version(R"({"version":1,"menu_index":3})") == 1);
+  QCHECK(Version("{\"version\" \t:\r\n 7 }") == 7);
+  // An unversioned marker (what 6.14 to 6.16 wrote) reads 0, as does anything that is not a whole number.
+  QCHECK(Version(R"({"menu_index":3})") == 0);
+  QCHECK(Version("") == 0);
+  QCHECK(Version(R"({"version":"1"})") == 0);
+  QCHECK(Version(R"({"version":1.5})") == 0);
+  QCHECK(Version(R"({"version":-1})") == 0);
+  QCHECK(Version(R"({"versions":1})") == 0);
+  QCHECK(tm::MarkerVersion(nullptr, 10) == 0);
+  QCHECK(tm::kMarkerVersion == 1);
 }
 
 void ANumberOutsideTheMenuIsClamped() {
@@ -255,6 +272,7 @@ int main() {
   TheRewriteDoesNotChangeItsOwnOutput();
   TheMarkedValueIsReadFromTheMarkerFile();
   TheMarkerTextRoundTripsAndStaysInTheMenu();
+  TheMarkerVersionIsReadFromTheMarkerFile();
   ANumberOutsideTheMenuIsClamped();
   NothingUsableIsMinusOne();
   if (quest_test::Failures() != 0) {
