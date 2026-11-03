@@ -24,6 +24,7 @@
 #include <set>
 #include <utility>
 
+#include <winsock2.h>
 #include <windows.h>
 #include <MinHook.h>
 
