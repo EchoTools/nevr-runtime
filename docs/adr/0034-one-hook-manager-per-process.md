@@ -37,13 +37,19 @@ previous one through `BYTEHOOK_CALL_PREV()` ([bytedance/bhook](https://github.co
    behind `PatchDetour` and HookGuard.
 2. **Several handlers per slot, in a defined order.** The manager keeps a chain for each slot and each handler reaches the
    next through the manager, so a second consumer of a slot never needs a second mechanism. The order and every
-   insertion are logged (N17's per-hook outcome and aggregate line).
+   insertion are logged (N17's per-hook outcome and aggregate line). The manager can also retire a hook whose target
+   went away (a script DLL the game unloaded and loads again), so a module that hooks every load of a library has no
+   reason to bypass it.
 3. **Plugins hook through the host.** The plugin API gains a hook service on both platforms, which bumps
    `NEVR_PLUGIN_API_VERSION` and changes N114's statement. Once the service exists, a plugin's own page-protection call or
    GOT write is a violation of N151, and `NEVR_PLUGIN_CAP_HOOKS_ENGINE` is retired.
 4. **Code ported from another project is ported onto the service.** The module track's afkxr modules keep their logic
    and drop their own word-swap helpers.
 5. **A refusal names the slot, the owner chain and the reason** at Warning (`docs/standards/logging.md`, Rule 6).
+6. **Outside this ADR:** checked byte patches (AGENTS.md "Guardrails": a byte patch where a hook would cost something
+   measurable) and ADR 0021's build-time rows, which are patches, not hooks; and the PC host's one hook on the game's main
+   wrapper, which it installs before the runtime exists and HookGuard records (`docs/adr/0008-bugsplat-host-and-nevr-runtime.md`,
+   N125).
 
 ## Finding a violation
 
@@ -52,7 +58,7 @@ manager's own files (`src/quest/sentinel/got_hook.cpp`, `src/quest/sentinel/libr
 `src/runtime/hook/patching.h`, `src/core/hooking.h`).
 
 - **H1.** A page-protection call (`mprotect`, `mmap` or `mremap` on an image page) or a store into a GOT, RELRO, vtable
-  or data slot of a game library, outside the manager.
+  or data slot of a game library, outside the manager. A checked byte patch (rule 6) is not a hit.
 - **H2.** An install path that does not register with the manager: `InstallImportHook`, `InstallChainedImportHook`,
   `SwapWord`, `got_swap`, or a plugin's own `MH_CreateHook`.
 - **H3.** Two installers anywhere in scope that name the same slot address or the same function.

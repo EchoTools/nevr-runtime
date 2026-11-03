@@ -34,8 +34,9 @@ condition it handles, such as allowing implicit derivatives after a discard
 2. **When the condition cannot be observed before the failure**, the workaround says why in its code comment and is
    turned on by a profile flag named for the condition (for example `single_graphics_queue`), never for the headset. The
    row that sets the flag cites the measurement.
-3. **Each workaround logs its decision once**, the first time it decides, whether it acted or passed through, with the
-   condition it observed. `vk_ext_window`'s `action=reordered` and `action=passthrough` lines are the model
+3. **Each workaround logs its decision once**, the first time it decides a case it targets, whether it acted or passed
+   through, with the condition it observed. A call the workaround does not target (an unrelated permission, a path outside
+   its table, a signal it does not guard) passing through is not a decision. `vk_ext_window`'s `action=reordered` and `action=passthrough` lines are the model
    (`docs/standards/logging.md`, Rule 3: silence is not success).
 4. **A workaround costs nothing measurable where its condition is absent**: the check, then the original path.
 5. **No build variant selects a fix by target device.** One APK carries every workaround; the condition decides at run
@@ -49,7 +50,8 @@ the Quest APK. Out of scope: tests, documents, `src/reconstruction`.
 - **W1.** A fix for a failure (a crash guard, a Vulkan or audio change, a skipped or redirected call) gated on headset
   identity: any shape of ADR 0031 R1 to R3, or a profile field named for a headset.
 - **W2.** A build flag, preset, recipe parameter or variant that selects a fix by target device.
-- **W3.** A workaround that writes no line when it decides.
+- **W3.** A workaround that writes no line when it first decides a case it targets, on either branch: it acted, or it
+  declined (for example, a replacement it could not make).
 
 ## Consequences
 

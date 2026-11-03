@@ -28,7 +28,7 @@ Prior art for the same problem:
   regex), checked in order; the first match wins, and generic `Android_Low`, `Android_Mid` and `Android_High` profiles are
   the fallback when no rule fits
   ([Epic: device profiles and scalability for Android](https://dev.epicgames.com/documentation/en-us/unreal-engine/customizing-device-profiles-and-scalability-in-unreal-engine-projects-for-android)).
-- Mesa keeps its per-application and per-device settings in one file, `src/util/00-mesa-defaults.conf`, one entry per
+- Mesa keeps its per-application and per-device settings in one file, Mesa's own `00-mesa-defaults.conf`, one entry per
   application with the options it gets
   ([mesa-commit: driconf workarounds for Teardown](https://lists.freedesktop.org/archives/mesa-commit/2021-April/116936.html)).
 - OpenXR names the system the app runs on: `xrGetSystemProperties` fills `XrSystemProperties`, whose `vendorId` and

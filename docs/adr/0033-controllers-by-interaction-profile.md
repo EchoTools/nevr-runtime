@@ -39,11 +39,13 @@ suggested bindings ([Meta: OpenXR actions, action sets and bindings](https://dev
 ## Finding a violation
 
 Scope: `src/quest` and its plugins, and the Python tools that patch the Quest APK. Out of scope: tests, documents,
-`src/reconstruction`, and the logging-only reads in `hand_pose_log_hook.cpp`.
+`src/reconstruction`, the logging-only reads in `hand_pose_log_hook.cpp`, and dev-only input drivers that replay inputs
+per hand and never ship to players (the autopilot, `docs/adr/0025-quest-autopilot-route.md`).
 
-- **C1.** Outside the VrApi layer, a read of the controller's identity (an input device type, its capability flags, a
-  Touch Pro or Touch Plus bit, the headset model used as a stand-in for the controller) that changes a pose, a button or
-  a binding.
+- **C1.** Outside the VrApi layer, a read of the controller's identity (its model or type: an input device type, its
+  capability flags, a Touch Pro or Touch Plus bit, the headset model used as a stand-in for the controller) that changes a
+  pose, a button or a binding. The hand a controller is held in is not its identity: code that addresses the left or right
+  controller is not a violation.
 - **C2.** A per-controller table (button map, pose offset, handedness flip) in the sentinel, a plugin or a tool.
 - **C3.** A design or issue that places a controller fix above the boundary without the known-wrong marker of rule 3.
 
