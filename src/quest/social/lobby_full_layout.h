@@ -120,4 +120,75 @@ class RefusalSayings {
   std::array<std::uint8_t, 256> seen_{};
 };
 
+// The Debug repeats of the refusal and decline records. Each kind may write kBurst repeats per kWindowMs window, and the rest
+// are counted. The count of a window that ended comes back from the next Admit or Flush, and the caller writes it as a
+// repeats_suppressed record before its own record. The shape is RecordLimiter's (runtime/compat/lobby_frame.h). The reason is
+// that the sentinel log has no level gate: every line reaches logcat, the disk log and the crash ring, and an unbounded stream
+// of repeats would push the lines before a crash out of the ring. No clock and no lock: the caller passes the time and holds
+// g_declineMutex.
+class RepeatLimiter {
+ public:
+  enum class Kind : std::uint8_t { kDroppedGateClosed = 0, kUncountedNoJoin = 1, kPageUnchanged = 2 };
+  static constexpr std::size_t kKindCount = 3;
+  static constexpr std::uint64_t kWindowMs = 10000;
+  static constexpr unsigned kBurst = 10;
+
+  struct Verdict {
+    bool write = false;                                // this repeat is written
+    std::array<std::uint64_t, kKindCount> flushed{};   // per kind: repeats its ended window did not write
+  };
+
+  // A repeat of `kind` at `nowMs`: the windows that ended are flushed first, then the repeat is written or counted.
+  Verdict Admit(Kind kind, std::uint64_t nowMs) noexcept {
+    Verdict verdict = Flush(nowMs);
+    Slot& slot = slots_[static_cast<std::size_t>(kind)];
+    if (!slot.open) {
+      slot.open = true;
+      slot.start = nowMs;
+    }
+    if (slot.written < kBurst) {
+      ++slot.written;
+      verdict.write = true;
+    } else {
+      ++slot.suppressed;
+    }
+    return verdict;
+  }
+
+  // Closes each window that has ended, and reports what it did not write.
+  Verdict Flush(std::uint64_t nowMs) noexcept {
+    Verdict verdict;
+    for (std::size_t i = 0; i < kKindCount; ++i) {
+      Slot& slot = slots_[i];
+      if (slot.open && nowMs - slot.start >= kWindowMs) {
+        verdict.flushed[i] = slot.suppressed;
+        slot = Slot{};
+      }
+    }
+    return verdict;
+  }
+
+ private:
+  struct Slot {
+    bool open = false;
+    std::uint64_t start = 0;
+    unsigned written = 0;
+    std::uint64_t suppressed = 0;
+  };
+  std::array<Slot, kKindCount> slots_{};
+};
+
+// The record a repeats_suppressed record names: the status the repeats were written with.
+constexpr const char* KindName(RepeatLimiter::Kind kind) noexcept {
+  switch (kind) {
+    case RepeatLimiter::Kind::kDroppedGateClosed:
+      return "refusal_dropped";
+    case RepeatLimiter::Kind::kUncountedNoJoin:
+      return "refusal_uncounted";
+    case RepeatLimiter::Kind::kPageUnchanged:
+      return "page_unchanged";
+  }
+  return "unknown";
+}
+
 }  // namespace quest_social::lobby_full

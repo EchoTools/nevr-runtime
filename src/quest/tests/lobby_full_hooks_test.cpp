@@ -88,6 +88,19 @@ int g_originalCalls = 0;
 void FakeJoin(void*, const void*, const void*) { ++g_originalCalls; }
 void FakeFailure(void*, const void*) { ++g_originalCalls; }
 
+// The clock the handlers read in this file: the window tests move g_fakeNowMs (g_nowMs in lobby_full_hooks.cpp).
+std::uint64_t g_fakeNowMs = 0;
+std::uint64_t FakeNow() noexcept { return g_fakeNowMs; }
+
+// Clears the refusal records' once state, their repeat budget and the clock, so each case starts from none.
+void FreshRefusalState() {
+  Sayings() = RefusalSayings();
+  Declines() = rules::DeclineLog();
+  Repeats() = RepeatLimiter();
+  g_nowMs = &FakeNow;
+  g_fakeNowMs = 0;
+}
+
 constexpr std::size_t kGameSize = rules::kErrorBlockOffset + 1 + rules::kErrorLines * rules::kErrorLineBytes;
 
 // A lobby client whose +8 holds `game`, +0x910 holds `other` and +0x448 holds `status`.
@@ -145,7 +158,7 @@ TEST(ALobbyFullRefusalWritesTheErrorPageIntoTheGameAtPlusEightAndLogsMessageShow
 
 TEST(ARefusalWhileTheStatusIsOutOfRangeWritesNothingAndSaysTheDroppedReasonOnce) {
   Capture capture;
-  Sayings() = RefusalSayings();
+  FreshRefusalState();
   for (const std::int32_t status : {0, 3, 7, 9}) {
     Rig rig(status, 0x41);
     g_originalCalls = 0;
@@ -180,7 +193,7 @@ TEST(ARefusalWhileTheStatusIsOutOfRangeWritesNothingAndSaysTheDroppedReasonOnce)
 // record is Info (each repeat is a Debug record).
 TEST(ARefusalWithNoJoinRecordedIsSaidOnceAsUncountedAndStillShowsThePage) {
   Capture capture;
-  Sayings() = RefusalSayings();
+  FreshRefusalState();
   g_haveLastJoin = false;
   Rig rig(5, 0xc1);
   g_originalCalls = 0;
@@ -209,7 +222,7 @@ TEST(ARefusalWithNoJoinRecordedIsSaidOnceAsUncountedAndStillShowsThePage) {
 // once bit, so the first write of one does not make the other's first write a repeat.
 TEST(BothRefusalRecordsInOneProcessAreEachSaidAtInfoOnce) {
   Capture capture;
-  Sayings() = RefusalSayings();
+  FreshRefusalState();
   g_haveLastJoin = false;
   Rig dropped(0, 0x11);    // status 0 is outside the game's gate: refusal_dropped
   Rig uncounted(5, 0x12);  // inside the gate with no join recorded: refusal_uncounted
@@ -241,7 +254,7 @@ TEST(AnotherFailureCodeIsPassedThroughUntouched) {
 // page_unchanged record.
 TEST(AnEmptyMessageOnAnOpenGateIsSaidOnceAsNoMessage) {
   Capture capture;
-  Declines() = rules::DeclineLog();
+  FreshRefusalState();
   Rig rig(5, 0x81);
   rig.data[0x20] = 0;  // the message is empty
   g_originalCalls = 0;
@@ -269,7 +282,7 @@ TEST(AnEmptyMessageOnAnOpenGateIsSaidOnceAsNoMessage) {
 // No game object: the decline names it, whatever the message says, and is said at Info once.
 TEST(ANoGameBaseIsSaidOnceAsNoGameBaseEvenWithAMessage) {
   Capture capture;
-  Declines() = rules::DeclineLog();
+  FreshRefusalState();
   Rig rig(5, 0xa1);
   std::uint8_t* noGame = nullptr;
   std::memcpy(rig.client.data() + 0x8, &noGame, sizeof noGame);  // +8 holds no game object
@@ -288,13 +301,100 @@ TEST(ANoGameBaseIsSaidOnceAsNoGameBaseEvenWithAMessage) {
 // No lobby client: the status word is not read, so refusal_dropped leaves game_status out rather than reporting 0.
 TEST(ARefusalWithNoLobbyClientLeavesGameStatusOutOfTheDroppedRecord) {
   Capture capture;
-  Sayings() = RefusalSayings();
+  FreshRefusalState();
   Rig rig(5, 0x71);
   g_originalCalls = 0;
   OnFailure(&FakeFailure, nullptr, rig.failure.data());
   CHECK_EQ(g_originalCalls, 1);  // the game's own callback still ran
   CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\"", "\"reason\":\"status_gate_closed\""}), 1);
   CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\"", "\"game_status\""}), 0);
+}
+
+// Eleven repeats of one kind in one window: ten are Debug records and the eleventh is counted. The other kind has its own
+// budget, so its repeat is written inside the same window. In the next window the first record is the counted summary.
+TEST(ElevenRepeatsInOneWindowWriteTenAndTheNextWindowSaysOneWasCounted) {
+  Capture capture;
+  FreshRefusalState();
+  Rig first(0, 0x31);
+  OnFailure(&FakeFailure, first.Self(), first.failure.data());  // the first in the process: Info
+  for (int i = 0; i < 11; ++i) {
+    Rig repeat(0, 0x31);
+    OnFailure(&FakeFailure, repeat.Self(), repeat.failure.data());
+  }
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_dropped\""}), 10);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"repeats_suppressed\""}), 0);
+
+  Rig uncountedFirst(5, 0x32);
+  g_haveLastJoin = false;
+  OnFailure(&FakeFailure, uncountedFirst.Self(), uncountedFirst.failure.data());  // Info
+  OnFailure(&FakeFailure, uncountedFirst.Self(), uncountedFirst.failure.data());  // its repeat, in the same window
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_uncounted\""}), 1);
+
+  g_lines.clear();
+  g_fakeNowMs = RepeatLimiter::kWindowMs;
+  Rig next(0, 0x31);
+  OnFailure(&FakeFailure, next.Self(), next.failure.data());
+  CHECK_EQ(g_lines.size(), 2u);
+  if (g_lines.size() == 2) {
+    CHECK(g_lines[0].level == sentinel::LogLevel::kDebug);
+    CHECK(Has(g_lines[0].text, "\"status\":\"repeats_suppressed\""));
+    CHECK(Has(g_lines[0].text, "\"record\":\"refusal_dropped\""));
+    CHECK(Has(g_lines[0].text, "\"count\":1,"));
+    CHECK(Has(g_lines[0].text, "\"window_ms\":10000"));
+    CHECK(g_lines[1].level == sentinel::LogLevel::kDebug);
+    CHECK(Has(g_lines[1].text, "\"status\":\"refusal_dropped\""));
+  }
+}
+
+// The window lasts kWindowMs and no longer: a repeat one millisecond short of it is still counted, and one at kWindowMs opens
+// the next window and says how many the old one did not write.
+TEST(TheRepeatWindowLastsTenSecondsAndNoLonger) {
+  Capture capture;
+  FreshRefusalState();
+  Rig first(0, 0x41);
+  OnFailure(&FakeFailure, first.Self(), first.failure.data());  // the first in the process: Info
+  for (int i = 0; i < 10; ++i) {
+    Rig repeat(0, 0x41);
+    OnFailure(&FakeFailure, repeat.Self(), repeat.failure.data());
+  }
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_dropped\""}), 10);
+
+  g_fakeNowMs = RepeatLimiter::kWindowMs - 1;
+  Rig inside(0, 0x41);
+  OnFailure(&FakeFailure, inside.Self(), inside.failure.data());
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_dropped\""}), 10);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"repeats_suppressed\""}), 0);
+
+  g_fakeNowMs = RepeatLimiter::kWindowMs;
+  Rig after(0, 0x41);
+  OnFailure(&FakeFailure, after.Self(), after.failure.data());
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_dropped\""}), 11);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"repeats_suppressed\"", "\"count\":1,"}), 1);
+}
+
+// The counted repeats of a window come before the next refusal record of any kind: here a first uncounted refusal.
+TEST(TheCountedRepeatsComeBeforeTheNextRecordOfAnyKind) {
+  Capture capture;
+  FreshRefusalState();
+  Rig first(0, 0x51);
+  OnFailure(&FakeFailure, first.Self(), first.failure.data());
+  for (int i = 0; i < 11; ++i) {
+    Rig repeat(0, 0x51);
+    OnFailure(&FakeFailure, repeat.Self(), repeat.failure.data());
+  }
+  g_lines.clear();
+  g_fakeNowMs = RepeatLimiter::kWindowMs;
+  g_haveLastJoin = false;
+  Rig uncounted(5, 0x52);
+  OnFailure(&FakeFailure, uncounted.Self(), uncounted.failure.data());
+  CHECK(g_lines.size() >= 2);
+  if (g_lines.size() >= 2) {
+    CHECK(Has(g_lines[0].text, "\"status\":\"repeats_suppressed\""));
+    CHECK(Has(g_lines[0].text, "\"record\":\"refusal_dropped\""));
+    CHECK(Has(g_lines[1].text, "\"status\":\"refusal_uncounted\""));
+    CHECK(g_lines[1].level == sentinel::LogLevel::kInfo);
+  }
 }
 
 }  // namespace
