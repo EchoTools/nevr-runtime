@@ -6263,6 +6263,34 @@ TEST(N84_HookGuard, RetireOfAnUnrecordedTargetIsRefusedAndLogged) {
   EXPECT_EQ(nevr_hook_guard::RecordedCount(), 0);
 }
 
+// Retire forgets only the records of its own target (#2003). A second record at another address stays live and keeps
+// its overwrite check; a Retire that ignored the target would forget both.
+TEST(N84_HookGuard, RetireOfOneTargetKeepsTheRecordOfAnother) {
+  nevr_hook_guard::ResetForTest();
+  ClearTestLogs();
+  GuardScratch retired;
+  GuardScratch kept;
+  ASSERT_NE(retired.page, nullptr);
+  ASSERT_NE(kept.page, nullptr);
+  memset(retired.page, 0x90, 32);
+  memset(kept.page, 0x90, 32);
+  nevr_hook_guard::Record(retired.page, "N84_retired");
+  nevr_hook_guard::Record(kept.page, "N84_kept");
+  ASSERT_EQ(nevr_hook_guard::RecordedCount(), 2);
+
+  EXPECT_EQ(nevr_hook_guard::Retire(retired.page), 1);
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), 1) << "a retire of one target forgot another target's record";
+  EXPECT_TRUE(nevr_hook_guard::IsOurDetour(kept.page));
+  EXPECT_FALSE(nevr_hook_guard::IsOurDetour(retired.page));
+
+  static_cast<unsigned char*>(kept.page)[0] = 0xE9;  // an overwrite of the kept record, and of the retired address
+  static_cast<unsigned char*>(retired.page)[0] = 0xE9;
+  EXPECT_EQ(nevr_hook_guard::VerifyAll("test:two-targets"), 1) << "the kept record's overwrite was not found";
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "hook overwritten name=N84_kept va=0x"));
+  EXPECT_FALSE(TestLogContains("hook overwritten name=N84_retired")) << "a retired address was reported as overwritten";
+  nevr_hook_guard::ResetForTest();
+}
+
 // plugin_assets installs its engine hooks through PatchDetour, so the guard holds each one under its name and an
 // overwrite of it is reported by that name.
 TEST(N84_HookGuard, PluginAssetsEngineHookIsRecordedUnderItsName) {

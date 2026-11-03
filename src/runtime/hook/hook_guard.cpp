@@ -47,6 +47,7 @@ struct Snapshot {
   const char* name;
   unsigned char bytes[kSnapshotBytes];
   LONG gen;
+  LONG seq;  // the slot's seq when it was copied: even, and unchanged across the copy
 };
 
 GuardedSite g_sites[kMaxGuarded];
@@ -105,6 +106,7 @@ bool ReadSlot(LONG i, Snapshot& out) {
   out.name = s.name;
   memcpy(out.bytes, s.bytes, kSnapshotBytes);
   out.gen = gen;
+  out.seq = before;
   return InterlockedCompareExchange(&s.seq, 0, 0) == before;
 }
 
@@ -231,6 +233,13 @@ int VerifyAll(const char* context) {
     memcpy(now, snap.target, kSnapshotBytes);
     if (memcmp(now, snap.bytes, kSnapshotBytes) == 0) continue;
 
+    // The bytes differ, and a Retire explains that: it changes the slot (seq, then gen 0) before MH_RemoveHook writes the
+    // game's bytes back, so a copy taken across that is not an overwrite. A Record can reuse the slot the same way. A slot
+    // whose seq or gen moved since the copy is skipped; an overwrite that is still there is found by the next pass.
+    if (InterlockedCompareExchange(&g_sites[i].seq, 0, 0) != snap.seq ||
+        InterlockedCompareExchange(&g_sites[i].gen, 0, 0) != snap.gen) {
+      continue;
+    }
     mismatches++;
     // Edge-triggered: log this record's ERROR once, the first check that finds
     // it overwritten. Nothing un-overwrites a clobbered hook, so without this
