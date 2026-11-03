@@ -78,6 +78,16 @@ class TheHookIsTheBindFunctionOfEverySite(unittest.TestCase):
         self.assertLess(body.index("__atomic_store_n(&hook.original, target"), body.index("g_backend.attach("))
 
 
+class DefaultRemovalRetiresOnlyARecordedHook(unittest.TestCase):
+    def test_a_recorded_hook_is_retired_and_any_other_is_removed_plainly(self):
+        self.assertRegex(
+            hook(),
+            r'int\s+DefaultRemove\(\s*void\s*\*\s*target,\s*bool\s+recorded\s*\)\s*\{\s*'
+            r'return\s+recorded\s*\?\s*PatchRetire\(target\)\s*:\s*MH_RemoveHook\(target\)\s*;\s*\}',
+            "a recorded hook is retired (record forgotten, then removed); an unrecorded one is removed without a second Retire",
+        )
+
+
 class TheDecisionIsLogged(unittest.TestCase):
     def test_the_line_has_applied_reason_and_game_type(self):
         code = read("src/runtime/patch/arena_public_clock.cpp")

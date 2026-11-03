@@ -127,9 +127,12 @@ bool HookSite(std::size_t i, void* target) {
   SiteHook& hook = g_hooks[i];
   if (hook.target != nullptr) {
     const int status = g_backend.remove(hook.target, hook.recorded);
+    // A recorded hook's record is forgotten by the removal whatever its status (PatchRetire forgets before MH_RemoveHook),
+    // so the flag is cleared after every removal: a later removal of this target is a plain MH_RemoveHook, never a second
+    // Retire that would be refused as not_recorded.
+    hook.recorded = false;
     if (status == MH_OK || status == MH_ERROR_NOT_CREATED) {
       hook.target = nullptr;
-      hook.recorded = false;
     } else {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.PATCH] arena_public_clock could not remove the earlier hook at %p: %s; it is tried again on the next load",

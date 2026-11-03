@@ -326,6 +326,10 @@ TEST_F(ArenaPublicClockTrampoline, AFailedRemovalIsLoggedAndTheOldHookIsRemovedA
   ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameB)));
   ASSERT_EQ(g_probe.removed.size(), 2u);
   EXPECT_EQ(g_probe.removed[1], reinterpret_cast<void*>(&GameA)) << "the old hook was forgotten after a failed removal";
+  ASSERT_EQ(g_probe.removedRecorded.size(), 2u);
+  EXPECT_TRUE(g_probe.removedRecorded[0]) << "the first removal was not handed the record PatchDetour made";
+  EXPECT_FALSE(g_probe.removedRecorded[1])
+      << "the failed removal had already forgotten the record, but the next pass asked for a second Retire (a false not_recorded)";
 }
 
 // A script that is unmapped must not leave its HookGuard record behind: the bytes at the old address are then no longer the
