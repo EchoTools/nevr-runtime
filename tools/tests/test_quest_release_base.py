@@ -17,7 +17,11 @@ import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import axml_fixtures as fx  # noqa: E402
+import quest_apk_label as ql  # noqa: E402
 import quest_release_base as qb  # noqa: E402
+import test_quest_apk_rename_package as rename_fixture  # noqa: E402
 
 REFERENCE = ("AndroidManifest.xml", "assets/afk_default_on.txt", "lib/arm64-v8a/libassetpatch.so",
              "lib/arm64-v8a/libr15.so", "lib/arm64-v8a/lib0123456789abcdef.so", "META-INF/CERT.SF")
@@ -77,6 +81,28 @@ class Prepare(unittest.TestCase):
         self.assertEqual(caught.exception.fields["missing"],
                          ["assets/afk_default_on.txt", "lib/arm64-v8a/libassetpatch.so"])
 
+    def test_the_real_rename_makes_an_r15_base_labelled_echo_vr(self):
+        ref = self.tmp / "afk-reference.apk"
+        rename_fixture.write_apk(ref, rename_fixture.entries(
+            manifest=fx.build_label_manifest(rename_fixture.OLD, rename_fixture.REFERENCE_LABEL)))
+        sha = hashlib.sha256(ref.read_bytes()).hexdigest()
+        out = self.tmp / "out" / "base.apk"
+        record = qb.prepare(ref, out, expected_sha256=sha)
+        self.assertEqual(record["event"], "base_prepared")
+        base = rename_fixture.read_apk(out)
+        self.assertEqual(ql.label_of(base["AndroidManifest.xml"][0]), "Echo VR")
+        self.assertNotIn(rename_fixture.OLD.encode(), base[rename_fixture.LIBR15][0])
+        self.assertIn("assets/afk_default_on.txt", base)
+
+    def test_a_refused_base_is_not_left_behind(self):
+        def rename_dropping(src, dst, label=None):
+            write_zip(dst, ("AndroidManifest.xml",))
+
+        out = self.tmp / "base.apk"
+        with self.assertRaises(qb.Refused):
+            qb.prepare(self.ref, out, expected_sha256=self.sha, rename=rename_dropping)
+        self.assertFalse(out.exists())
+
     def test_the_pin_is_the_reference_build_v6_12_0_was_made_from(self):
         self.assertEqual(qb.REFERENCE_APK_SHA256, "d0b51a014647643a30469ed318968b17374f39286b7d9ded5723f39299eedb48")
 
@@ -105,10 +131,16 @@ class CheckRelease(unittest.TestCase):
 
     def test_a_store_based_release_is_refused(self):
         store = write_zip(self.tmp / "store.apk", ("AndroidManifest.xml", "lib/arm64-v8a/libr15.so"))
-        release = write_zip(self.tmp / "release.apk", ("AndroidManifest.xml", "lib/arm64-v8a/libr15.so"))
+        release = write_zip(self.tmp / "release.apk", ("AndroidManifest.xml", "lib/arm64-v8a/libr15.so",
+                                                      "lib/arm64-v8a/libovrplatformloader_orig.so"))
         with self.assertRaises(qb.Refused) as caught:
             qb.check_release(release, store)
         self.assertEqual(caught.exception.event, "base_not_reference")
+
+    def test_the_base_itself_is_not_a_release(self):
+        with self.assertRaises(qb.Refused) as caught:
+            qb.check_release(self.base, self.base)
+        self.assertEqual(caught.exception.event, "release_is_the_base")
 
     def test_meta_inf_of_the_base_is_not_required(self):
         release = write_zip(self.tmp / "release.apk", [n for n in REFERENCE if not n.startswith("META-INF/")])
@@ -138,7 +170,7 @@ class Command(unittest.TestCase):
 
     def test_a_pass_is_one_json_line_on_stdout(self):
         base = write_zip(self.tmp / "base.apk", REFERENCE)
-        release = write_zip(self.tmp / "release.apk", REFERENCE)
+        release = write_zip(self.tmp / "release.apk", REFERENCE + ("lib/arm64-v8a/libovrplatformloader_orig.so",))
         rc, out, err = self.run_main("check-release", "--apk", str(release), "--base", str(base))
         self.assertEqual((rc, err), (0, ""))
         self.assertEqual(json.loads(out)["event"], "release_keeps_base")

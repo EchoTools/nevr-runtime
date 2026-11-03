@@ -91,7 +91,11 @@ def prepare(apk: Path, out: Path, expected_sha256: str = REFERENCE_APK_SHA256, r
     except (OSError, zipfile.BadZipFile, qr.RenameError) as error:
         raise Refused("rename_refused", apk=str(apk), error=str(error)) from error
     names = _names(out)
-    _require_reference_entries(out, names)
+    try:
+        _require_reference_entries(out, names)
+    except Refused:
+        out.unlink(missing_ok=True)  # a refused base is not left where the repack would take it
+        raise
     return {"event": "base_prepared", "apk": str(apk), "sha256": sha, "base": str(out), "base_sha256": _sha256(out),
             "entries": len(names)}
 
@@ -99,6 +103,8 @@ def prepare(apk: Path, out: Path, expected_sha256: str = REFERENCE_APK_SHA256, r
 def check_release(apk: Path, base: Path) -> dict:
     base_names = _names(base)
     _require_reference_entries(base, base_names)
+    if _sha256(apk) == _sha256(base):
+        raise Refused("release_is_the_base", apk=str(apk), base=str(base))
     release_names = _names(apk)
     missing = sorted(_outside_meta_inf(base_names) - release_names)
     if missing:
