@@ -32,11 +32,11 @@ namespace nevr_quest::slot_hook {
 // The handles the service holds at once. Each one is a GotHook, declared once in slot_hook.cpp (hook_budget.h counts it).
 inline constexpr std::size_t kSlotHookHandles = 8;
 
-// The plugin a call of the loader is for (#2001, round 3). The loader binds the plugin's id around its init and around the
-// Shutdown it runs after a failed init. While a Scope is live on a thread, a register must name the bound id as its plugin_id,
-// or it is refused (Warning, NEVR_SLOT_HOOK_BAD_ARGUMENT); and the binding records whether it registered a handler, so the
-// loader keeps that plugin mapped for the life of the process even after the handler is unregistered. A register outside any
-// Scope is recorded under the id the caller claims.
+// The plugin a call of the loader is for (#2001, rounds 3 and 4). The loader binds the plugin's id around its init and around the
+// Shutdown it runs after a failed init. On the thread that holds the Scope, a register must name the bound id as its plugin_id,
+// or it is refused (Warning, NEVR_SLOT_HOOK_BAD_ARGUMENT). A register on any other thread is not checked and is recorded under
+// the id the caller claims. A successful register made while any Scope is live, on any thread, marks the binding as registered,
+// and the loader keeps that plugin mapped for the life of the process even after the handler is unregistered.
 class Binding {
  public:
   explicit Binding(const char* pluginId) noexcept : pluginId_(pluginId) {}
@@ -44,7 +44,7 @@ class Binding {
   Binding& operator=(const Binding&) = delete;
 
   const char* pluginId() const noexcept { return pluginId_; }
-  // True once a handler was registered under this binding, in any of its scopes.
+  // True once a handler was registered while this binding was live, on any thread and in any of its scopes.
   bool registered() const noexcept { return registered_; }
   void NoteRegistered() noexcept { registered_ = true; }
 

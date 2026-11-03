@@ -152,7 +152,7 @@ void Loader::Load(PlanEntry& entry) {
   LoadRecord record = BaseRecord(entry, options_.configRejected);
   void* handle = nullptr;  // set once the object is mapped; closed again on every path that does not keep the plugin
   // The plugin's id as the host knows it: bound around its init and the Shutdown after a failed init, so a handler it registers
-  // is recorded under this id and no other (slot_hook.h).
+  // on the loader's thread is recorded under this id and no other (slot_hook.h).
   slot_hook::Binding binding(entry.item.name.c_str());
   const auto close = [&] {
     if (handle == nullptr) return;

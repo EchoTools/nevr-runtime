@@ -55,6 +55,15 @@ Binding* BoundToThisThread() noexcept {
   return bound;
 }
 
+// Marks the binding of the loader's call in progress, on any thread, as having registered a handler. A handler a plugin's thread
+// registers during the plugin's init is chained onto the game's code, and the loader's close would unmap the plugin under it
+// (probe d). A register made outside every Scope marks nothing.
+void NoteRegisteredWhileLive() noexcept {
+  pthread_mutex_lock(&g_tableLock);
+  if (g_bound != nullptr) g_bound->NoteRegistered();
+  pthread_mutex_unlock(&g_tableLock);
+}
+
 // The owner a plugin's handle is recorded under. The same text is built for a registration and for a comparison, so a long
 // id is truncated the same way in both.
 void OwnerOf(const char* pluginId, char* out, std::size_t capacity) noexcept {
@@ -192,7 +201,7 @@ std::int32_t RegisterSlotHookWith(sentinel::ImageLookup lookup, const char* plug
     return ResultOf(status);
   }
   *outHandle = static_cast<std::uint32_t>(index + 1);
-  if (bound != nullptr) bound->NoteRegistered();
+  NoteRegisteredWhileLive();
   return NEVR_SLOT_HOOK_OK;
 }
 

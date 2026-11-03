@@ -81,6 +81,8 @@ void Record(const NvrGameContext* ctx, const char* args) {
 //   FX_SLOT_WAIT: the init starts a thread that calls the chained function until the handler is entered; the handler then
 //   holds that call inside it, and the init returns once it is entered. Shutdown unregisters the handler while the call is
 //   still inside it. The thread's id is in fx_b2_tid, so the test can join it before it unmaps the object.
+//   FX_SLOT_THREAD: the init registers nothing itself. It starts a thread that registers the handler, joins it, and returns.
+//   FX_SLOT_SHUTDOWN: the init registers nothing. Its Shutdown registers the handler; fx_b2_register_rc is that result.
 // args_json: {"build":"<lowercase hex GNU build ID of the module>","call":"<decimal address of the module's call>"}.
 extern "C" {
 __attribute__((visibility("default"))) volatile int fx_b2_entered = 0;
@@ -88,13 +90,14 @@ __attribute__((visibility("default"))) volatile int fx_b2_done = 0;
 __attribute__((visibility("default"))) pthread_t fx_b2_tid = 0;
 __attribute__((visibility("default"))) std::int32_t fx_b2_register_rc = -1;
 __attribute__((visibility("default"))) std::int32_t fx_b2_unregister_rc = -1;
+__attribute__((visibility("default"))) std::uint32_t fx_b2_handle = 0;
 }
 
 namespace {
 void* fx_b2_original = nullptr;  // the game's function, which the handler calls (register publishes it)
-std::uint32_t fx_b2_handle = 0;
 const NevrQuestHostApi* fx_b2_quest = nullptr;
 char fx_b2_claim[96] = {};
+char fx_b2_build[96] = {};
 
 int FxB2Handler(int a, int b) noexcept {
   fx_b2_entered = 1;
@@ -135,9 +138,22 @@ void* CallUntilEntered(void* arg) {
 }
 #endif
 
+// Registers the handler under the claim, against the module the args name. The result is fx_b2_register_rc.
+void RegisterHandler() {
+  fx_b2_register_rc = fx_b2_quest->register_slot_hook(fx_b2_claim, "libgotfx_consumer_now.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+                                                      fx_b2_build, reinterpret_cast<void*>(&FxB2Handler), &fx_b2_original,
+                                                      &fx_b2_handle);
+}
+
+#ifdef FX_SLOT_THREAD
+void* RegisterOnThread(void*) {
+  RegisterHandler();
+  return nullptr;
+}
+#endif
+
 void SlotHookInit(const NvrGameContext* ctx, const char* args_json) {
-  char build[96] = {};
-  if (!ArgBuildId(args_json, build, sizeof(build))) return;
+  if (!ArgBuildId(args_json, fx_b2_build, sizeof(fx_b2_build))) return;
 #ifdef FX_SLOT_CLAIM
   const char* claim = FX_SLOT_CLAIM;
 #else
@@ -149,8 +165,16 @@ void SlotHookInit(const NvrGameContext* ctx, const char* args_json) {
     return;
   }
   fx_b2_quest = quest;
-  fx_b2_register_rc = quest->register_slot_hook(fx_b2_claim, "libgotfx_consumer_now.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
-                                                build, reinterpret_cast<void*>(&FxB2Handler), &fx_b2_original, &fx_b2_handle);
+#if defined(FX_SLOT_THREAD)
+  // The registration runs on a thread this init starts; the init waits for it and does not register itself.
+  pthread_t registrar{};
+  if (pthread_create(&registrar, nullptr, RegisterOnThread, nullptr) == 0) pthread_join(registrar, nullptr);
+  return;
+#elif defined(FX_SLOT_SHUTDOWN)
+  return;  // the registration is the Shutdown's
+#else
+  RegisterHandler();
+#endif
 #ifdef FX_SLOT_WAIT
   if (fx_b2_register_rc == NEVR_SLOT_HOOK_OK) {
     const std::uintptr_t call = ArgCallAddress(args_json);
@@ -166,6 +190,11 @@ void SlotHookShutdown() {
   if (fx_b2_quest != nullptr && fx_b2_register_rc == NEVR_SLOT_HOOK_OK) {
     fx_b2_unregister_rc = fx_b2_quest->unregister_slot_hook(fx_b2_claim, fx_b2_handle);
   }
+}
+#endif
+#ifdef FX_SLOT_SHUTDOWN
+void SlotHookShutdownRegister() {
+  if (fx_b2_quest != nullptr) RegisterHandler();
 }
 #endif
 }  // namespace
@@ -194,5 +223,8 @@ NEVR_PLUGIN_API void NvrPluginShutdown(void) {
   ++fx_seen.shutdown_count;
 #ifdef FX_SLOT_WAIT
   SlotHookShutdown();
+#endif
+#ifdef FX_SLOT_SHUTDOWN
+  SlotHookShutdownRegister();
 #endif
 }
