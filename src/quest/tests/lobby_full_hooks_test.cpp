@@ -397,6 +397,29 @@ TEST(TheCountedRepeatsComeBeforeTheNextRecordOfAnyKind) {
   }
 }
 
+// The decline's repeats are bounded the same way: ten Debug page_unchanged records, the eleventh counted, and the next window's
+// first decline record is the counted summary for page_unchanged.
+TEST(TheDeclineRepeatsAreBoundedToTenPerWindowToo) {
+  Capture capture;
+  FreshRefusalState();
+  g_haveLastJoin = false;
+  Rig rig(5, 0xb1);
+  std::uint8_t* noGame = nullptr;
+  std::memcpy(rig.client.data() + 0x8, &noGame, sizeof noGame);  // +8 holds no game object
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());       // the first decline: Info
+  for (int i = 0; i < 11; ++i) {
+    OnFailure(&FakeFailure, rig.Self(), rig.failure.data());
+  }
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"message_not_shown\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"page_unchanged\""}), 10);
+  g_fakeNowMs = RepeatLimiter::kWindowMs;
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug,
+                   {"\"status\":\"repeats_suppressed\"", "\"record\":\"page_unchanged\"", "\"count\":1,"}),
+           1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"page_unchanged\""}), 11);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
