@@ -16,26 +16,31 @@ Two fixes in and around this tree already test the condition instead of the devi
 
 The same README lists the Steam Frame build's three changes to libr15's `CGS::Initialize` for the Mesa driver
 (`FRAME_CODE_PATCHES` in its `patcher/patch.py`): ask for Vulkan 1.0 instead of version 1, enable every device
-extension the runtime asks for, and fall back to the render queue for the uploader. They are selected by a build flag
-(`patch.py --frame`). Each has a condition the running process can observe: the API version the instance accepts, the
-extension list, the number of queues in the graphics family.
+extension the runtime asks for, and fall back to the render queue for the uploader. The Frame build is selected by a
+build flag (`patch.py --frame`), which is the shape rule 5 rules out, though the uploader fallback inside it tests its
+condition. Each change has a condition the running process can observe: the API version the instance accepts, the
+extension list, the number of queues in the graphics family. The libr15 facts here (the API version the game asks for,
+the two graphics queues it reserves) are the README's and are not read in the disassembly for this ADR; the 128-entry
+read is ADR 0014's, measured on a Quest 3.
 
 Prior art: MDN's guidance for the web is to test for the feature instead of identifying the browser, because parsing the
 user agent "is very hard to do reliably, and is often a cause of bugs"
 ([MDN: browser detection using the user agent](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Browser_detection_using_the_user_agent)).
-Mesa's per-application entries name the application they fix, but each sets a driver option that describes the
-condition it handles, such as allowing implicit derivatives after a discard
-([mesa-commit: workaround for Golf With Friends](https://lists.freedesktop.org/archives/mesa-commit/2021-April/117766.html)).
+Mesa's per-application entries name the application they fix, but each sets driver options named for the condition
+they handle, such as allowing implicit derivatives after a discard for one game
+([Mesa's defaults file, `00-mesa-defaults.conf`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/util/00-mesa-defaults.conf)).
 
 ## Decision
 
 1. **A workaround tests its condition at the point it matters**: a driver's answer, a count, a capability bit, an error
-   return. The headset profile (ADR 0031) never turns a workaround on.
+   return. The headset profile (ADR 0031) never turns a workaround on, except through a flag named for the condition
+   (rule 2).
 2. **When the condition cannot be observed before the failure**, the workaround says why in its code comment and is
    turned on by a profile flag named for the condition (for example `single_graphics_queue`), never for the headset. The
    row that sets the flag cites the measurement.
-3. **Each workaround logs its decision once**, the first time it decides a case it targets, whether it acted or passed
-   through, with the condition it observed. A call the workaround does not target (an unrelated permission, a path outside
+3. **Each workaround logs its decision** the first time it decides a case it targets, whether it acted or passed
+   through, with the condition it observed; if it logs later decisions too, it stops at a stated cap (`vk_ext_window` logs
+   its first 16 buffer calls, ADR 0014). A call the workaround does not target (an unrelated permission, a path outside
    its table, a signal it does not guard) passing through is not a decision. `vk_ext_window`'s `action=reordered` and `action=passthrough` lines are the model
    (`docs/standards/logging.md`, Rule 3: silence is not success).
 4. **A workaround costs nothing measurable where its condition is absent**: the check, then the original path.

@@ -18,8 +18,9 @@ The tree picks per-headset values in several places, each from its own signal:
 - `src/quest/sentinel/render_config_hook.cpp`, `src/quest/sentinel/hand_pose_log_hook.cpp` and
   `src/quest/integration/crash_send_step.cpp` read `ro.product.model` for their log lines.
 
-Players already run our builds on headsets outside that pair: #1765 is a crash report from Steam Frame's Lepton
-Android container on 6.12.0, and EchoFrame runs the Quest APK on Steam Frame through an OpenXR runtime
+Players already run our builds outside that pair: #1765 is four crash reports from a Lepton container ("Quest
+(Lepton)") on 6.12.0, the Android container Steam Frame runs Android apps in, and EchoFrame runs the Quest APK on Steam
+Frame through an OpenXR runtime
 ([EchoFrame README](https://github.com/heisthecat31/EchoFrame), "Steam Frame", at `7beb80bb`).
 
 Prior art for the same problem:
@@ -28,9 +29,8 @@ Prior art for the same problem:
   regex), checked in order; the first match wins, and generic `Android_Low`, `Android_Mid` and `Android_High` profiles are
   the fallback when no rule fits
   ([Epic: device profiles and scalability for Android](https://dev.epicgames.com/documentation/en-us/unreal-engine/customizing-device-profiles-and-scalability-in-unreal-engine-projects-for-android)).
-- Mesa keeps its per-application and per-device settings in one file, Mesa's own `00-mesa-defaults.conf`, one entry per
-  application with the options it gets
-  ([mesa-commit: driconf workarounds for Teardown](https://lists.freedesktop.org/archives/mesa-commit/2021-April/116936.html)).
+- Mesa keeps its per-application and per-device settings in one file, one entry per application with the options it
+  gets ([Mesa's defaults file, `00-mesa-defaults.conf`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/util/00-mesa-defaults.conf)).
 - OpenXR names the system the app runs on: `xrGetSystemProperties` fills `XrSystemProperties`, whose `vendorId` and
   `systemName` identify the vendor and the system
   ([Khronos: XrSystemProperties](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrSystemProperties.html),
@@ -38,7 +38,9 @@ Prior art for the same problem:
 
 ## Decision
 
-1. **One identity step per platform**, run once at start, before any consumer reads a setting. Quest inputs:
+1. **One identity step per platform**, run once, as soon as its inputs exist and before any consumer reads a setting:
+   on Quest at start; on PC at the first rendered frame, where the render configuration first has the headset (ADR
+   0022). Quest inputs:
    `ro.product.manufacturer`, `ro.product.model`, `ro.product.device` and, where an OpenXR runtime is present,
    `XrSystemProperties.systemName` and `vendorId`. PC inputs: the headset the render configuration already reads
    (`src/runtime/patch/render_config.h`). It writes one Info `headset_profile` line: every input, the rule that matched
@@ -48,7 +50,8 @@ Prior art for the same problem:
    the generic profile was taken.
 3. **A profile holds settings only**: values that any headset could run, chosen per headset because they suit it. Per-eye
    size for each texture-quality level, lobby and match refresh rates, heap sizes, the order of the data-root candidates.
-   A fix for something that breaks is not a setting (ADR 0032). Controller handling is not a setting (ADR 0033).
+   A fix for something that breaks is not a setting (ADR 0032), with one exception: a flag named for a condition a
+   workaround cannot observe before the failure (ADR 0032 rule 2). Controller handling is not a setting (ADR 0033).
 4. **Consumers read the profile.** Outside the identity step no code reads the identity inputs to choose behaviour.
    Reading them only to write them into a log line is allowed.
 5. **The rules and the table are plain code** with no platform header, as `texture_quality.h` is today, so one host test
@@ -70,6 +73,9 @@ and `src/reconstruction` (the game's own code, transcribed).
 - **R3.** A headset inferred from another quantity: an eye size, a refresh rate, a memory size, a count of driver
   extensions. `HeadsetForStockSize` is one instance.
 - **R4.** A per-headset value (a size, a rate, a heap size) chosen at its consumer instead of read from the table.
+
+R1 and R2 are found by a search. R3 and R4 are found by reading the consumers a search for the identity inputs and the
+per-headset values lists; a search alone cannot tell an inference or a hard-coded per-headset value from a constant.
 
 ## Consequences
 
