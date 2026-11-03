@@ -306,6 +306,10 @@ class GotHook {
   void Forget();
 
   bool installed() const { return installed_; }
+  // True when a failed Install left its handler reachable through the slot: the store was live before the rollback, so the
+  // entry is poisoned (kSlotPoisoned for the next install). The handler's code must then stay mapped for the life of the
+  // process; the plugin service keeps the handle held (slot_hook.cpp).
+  bool mayBeLive() const { return mayBeLive_; }
 
  private:
   // The raw install, taking any function pointer: joins `hookFn` to the slot's chain and redirects the
@@ -321,6 +325,7 @@ class GotHook {
                     ImageLookup lookup = FindLoadedImage);
 
   bool installed_ = false;
+  bool mayBeLive_ = false;
   GotTarget target_{"", "", RelocKind::kJumpSlot};
   ElfImage image_{};
   void** slot_ = nullptr;

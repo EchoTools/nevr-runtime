@@ -767,6 +767,33 @@ void ForeignWriterOnAChainIsARefusalNamingTheChain() {
   dlclose(m.handle);
 }
 
+// Ownership (#2001, S2): a handle is unregistered by the plugin that registered it, and by no other plugin. The refused call
+// leaves the handler on its chain; the owner's call takes it out.
+void AnotherPluginCannotUnregisterAHandle() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  const std::string live = LiveNoteOf(so);
+  TimesThunk::Arm(kTimesTwo);
+  std::uint32_t handle = 0;
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, live.c_str(),
+                                         TimesThunk::EntryAddress(), TimesThunk::OriginalOut(), &handle) == NEVR_SLOT_HOOK_OK);
+  QCHECK(m.callAdd(3, 4) == 14);  // the handler doubles the original: (3 + 4) * 2
+  QCHECK(slot_hook::UnregisterSlotHook("autopilot", handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle belongs to another plugin\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"plugin\":\"autopilot\"") == 1);
+  QCHECK(m.callAdd(3, 4) == 14);  // still chained
+  QCHECK(slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(!slot_hook::HoldsHandleOf("autopilot"));
+  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_OK);
+  QCHECK(!slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(*r.slot == m.realAdd);
+  QCHECK(Errors() == 0);
+  dlclose(m.handle);
+}
+
 void ThirdConsumerThroughTheServiceJoinsTheChain() {
   Prepare();
   const char* so = "libgotfx_consumer_now.so";
@@ -788,12 +815,12 @@ void ThirdConsumerThroughTheServiceJoinsTheChain() {
   QCHECK(handle != 0);
   QCHECK(Count(LogLevel::kInfo, "\"owner\":\"plugin:q15t\",\"position\":2,\"chain_length\":2") == 1);
   QCHECK(m.callAdd(3, 4) == 214);
-  QCHECK(slot_hook::UnregisterSlotHook(handle) == NEVR_SLOT_HOOK_OK);
+  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_OK);
   QCHECK(m.callAdd(3, 4) == 107);
   QCHECK_STATUS(sentinelHook.Remove(), GotStatus::kOk);
   QCHECK(m.callAdd(3, 4) == 7);
   QCHECK(*r.slot == m.realAdd);
-  QCHECK(slot_hook::UnregisterSlotHook(handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);  // no longer held
+  QCHECK(slot_hook::UnregisterSlotHook("q15t", handle) == NEVR_SLOT_HOOK_BAD_ARGUMENT);  // no longer held
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle is not held\"") == 1);
   QCHECK(Errors() == 0);
   dlclose(m.handle);
@@ -839,10 +866,10 @@ void ServiceRefusesWhatItCannotHoldAndSaysWhy() {
   QCHECK(Count(LogLevel::kWarn, "\"chain\":\"sentinel\",\"chain_length\":1") == 1);
   QCHECK(out == nullptr && handle == 0);
   // Unregister: a handle the service did not issue, and one it does not hold.
-  QCHECK(slot_hook::UnregisterSlotHook(0) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
-  QCHECK(slot_hook::UnregisterSlotHook(static_cast<std::uint32_t>(slot_hook::kSlotHookHandles + 1)) ==
+  QCHECK(slot_hook::UnregisterSlotHook("q15t", 0) == NEVR_SLOT_HOOK_BAD_ARGUMENT);
+  QCHECK(slot_hook::UnregisterSlotHook("q15t", static_cast<std::uint32_t>(slot_hook::kSlotHookHandles + 1)) ==
          NEVR_SLOT_HOOK_BAD_ARGUMENT);
-  QCHECK(slot_hook::UnregisterSlotHook(static_cast<std::uint32_t>(slot_hook::kSlotHookHandles)) ==
+  QCHECK(slot_hook::UnregisterSlotHook("q15t", static_cast<std::uint32_t>(slot_hook::kSlotHookHandles)) ==
          NEVR_SLOT_HOOK_BAD_ARGUMENT);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle is not one the service issued\"") == 2);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the handle is not held\"") == 1);
@@ -887,7 +914,7 @@ void ServiceHoldsEightHandlesThenRefuses() {
 
   // Unregistering newest first gives each one's original back, down to the game's function.
   for (std::size_t i = slot_hook::kSlotHookHandles; i-- > 0;) {
-    QCHECK(slot_hook::UnregisterSlotHook(handles[i]) == NEVR_SLOT_HOOK_OK);
+    QCHECK(slot_hook::UnregisterSlotHook("q15t", handles[i]) == NEVR_SLOT_HOOK_OK);
   }
   QCHECK(*r.slot == m.realAdd);
   QCHECK(m.callAdd(2, 3) == 5);
@@ -2199,6 +2226,7 @@ int main(int argc, char** argv) {
   DuplicateRefusedAndADifferentHandlerChains();
   RemovingAnyHandlerLeavesTheOthersRunning();
   ForeignWriterOnAChainIsARefusalNamingTheChain();
+  AnotherPluginCannotUnregisterAHandle();
   ThirdConsumerThroughTheServiceJoinsTheChain();
   ServiceRefusesWhatItCannotHoldAndSaysWhy();
   ServiceHoldsEightHandlesThenRefuses();

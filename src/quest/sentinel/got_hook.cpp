@@ -1057,6 +1057,7 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
   }
 
   if (stage != nevr::hook::AttachStage::kAttached) {
+    mayBeLive_ = outcome == StoreOutcome::kStoredMayBeLive;
     if (status == GotStatus::kRegistryFull) {
       LogRegistryFull(target, slot);
       return status;
@@ -1072,6 +1073,7 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
   hookFn_ = hookFn;
   restoreReadOnly_ = prepared.resolution.restoreReadOnly;
   installed_ = true;
+  mayBeLive_ = false;
   // The slot's previous value, as an offset from the module's load bias, so a build can be compared with the
   // previous one (#1530): the same function sits at the same offset in two builds of the same module.
   char vaddr[19], bias[19], originalOffset[19];

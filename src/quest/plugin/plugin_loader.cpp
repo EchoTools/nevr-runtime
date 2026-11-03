@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "quest/data/sha256.h"
+#include "quest/plugin/slot_hook.h"
 #include "runtime/ext/plugin_log.h"
 
 namespace nevr_quest::plugin {
@@ -154,6 +155,12 @@ void Loader::Load(PlanEntry& entry) {
     if (handle == nullptr) return;
     void* const mapped = handle;
     handle = nullptr;
+    // A slot hook this plugin registered may still be on its chain (ADR 0034): unmapping the object would leave the game
+    // calling code that is gone. The object stays mapped for the life of the process, and the record says why.
+    if (slot_hook::HoldsHandleOf(entry.item.name.c_str())) {
+      record.keptMapped = "slot_hook";
+      return;
+    }
     try {
       platform_.Close(mapped);
     } catch (const std::exception&) {

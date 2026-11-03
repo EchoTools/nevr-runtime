@@ -2438,6 +2438,10 @@ test-quest-plugins:
     fixture fx_initfail initfail -DFX_INIT_RC=3
     fixture fx_noinfo noinfo -DFX_NO_INFO
     fixture fx_legacy legacy -DFX_LEGACY_INIT
+    # The GOT fixture the slot hook test chains onto: a real module with a PLT slot for fx_add (got_hook_test builds the same).
+    "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp -o "$out/libgotfx_provider.so"
+    "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 -L"$out" -lgotfx_provider -Wl,-rpath,'$ORIGIN' -Wl,-z,now,-z,relro \
+        src/quest/tests/got_fixture_consumer.cpp -o "$out/libgotfx_consumer_now.so"
     # The files that include callback_thunk.h (through pinned_targets.h) are built without exceptions, as on the device.
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
