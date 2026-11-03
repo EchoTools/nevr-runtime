@@ -2,8 +2,9 @@
  * system properties, and one table of the settings each headset's row holds.
  *
  * Pure: no Android, no game header, no hook. The sentinel (integration/headset_identity_step.cpp) and the q15t plugin
- * (plugins/q15t/src/heaps.cpp, refresh_rate.cpp) both include it. The plugin is a separate library, so it calls Identify
- * itself with the same inputs; each caller reads the properties, this header never does.
+ * (plugins/q15t/src/heaps.cpp, refresh_rate.cpp) both include it. The plugin is a separate library: it reads
+ * ro.product.device itself and calls IdentifyDevice, which is Identify with that one input. Identify and IdentifyDevice agree
+ * on every rule (headset_profile_test.cpp). Each caller reads its own properties; this header never does.
  *
  * The rules are checked in order and the first match wins. A rule names its inputs and their exact values. A rule never
  * infers a headset from another quantity (an eye width, a refresh rate, a memory size; ADR 0031, R3). The last rule has an

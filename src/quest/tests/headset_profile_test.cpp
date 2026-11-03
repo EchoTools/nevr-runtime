@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "quest/headset_profile.h"
@@ -59,6 +60,25 @@ void OnlyTheDeviceDecides() {
   in.model = "Quest 2";
   in.device = "eureka";
   QCHECK(headset_profile::Identify(in).profile->id == headset_profile::Id::kQuest3);
+}
+
+// Identify and IdentifyDevice answer the same rule for the same device, whatever the other properties are. The q15t plugin calls
+// IdentifyDevice with the one property it reads; the identity step calls Identify with all three (ADR 0031, R2).
+void IdentifyDeviceAgreesWithIdentifyForEveryRule() {
+  const std::string_view devices[] = {"hollywood", "eureka", "panther", "", "Hollywood", "hollywood2"};
+  for (const std::string_view device : devices) {
+    headset_profile::Inputs in;
+    in.manufacturer = "Acme";
+    in.model = "Unlisted 1";
+    in.device = device;
+    const headset_profile::Match full = headset_profile::Identify(in);
+    const headset_profile::Match one = headset_profile::IdentifyDevice(device);
+    QCHECK(std::strcmp(full.rule, one.rule) == 0);
+    QCHECK(full.profile == one.profile);
+  }
+  for (const headset_profile::Rule& rule : headset_profile::kRules) {
+    if (!rule.device.empty()) QCHECK(std::strcmp(headset_profile::IdentifyDevice(rule.device).rule, rule.name) == 0);
+  }
 }
 
 // ---- the settings -------------------------------------------------------------------------------------------------------
@@ -237,6 +257,7 @@ int main() {
   TheDeviceNamesTheRule();
   TheDeviceMatchesExactly();
   OnlyTheDeviceDecides();
+  IdentifyDeviceAgreesWithIdentifyForEveryRule();
   TheEyeTablesAreTodaysTables();
   GenericIsNoLargerThanQuest3AtEveryLevel();
   EachLevelIsTodaysPair();
