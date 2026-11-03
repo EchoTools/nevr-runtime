@@ -151,6 +151,11 @@ class ReleaseCheckTest(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertIn("NEVR_QUEST_REFERENCE_APK is not the pinned file", found[0])
 
+    def test_the_default_pins_are_applied(self):
+        pathlib.Path(self.env["NEVR_QUEST_REFERENCE_APK"]).write_text("not the reference build")
+        found = release_check.problems(self.env, self.root, run_preflight=False)
+        self.assertTrue(any("NEVR_QUEST_REFERENCE_APK is not the pinned file" in p for p in found), found)
+
     def test_the_reference_pin_is_the_builds_own(self):
         import quest_release_base
         self.assertEqual(release_check.PINS["NEVR_QUEST_REFERENCE_APK"], quest_release_base.REFERENCE_APK_SHA256)

@@ -74,15 +74,6 @@ def problems(env: dict[str, str], root: pathlib.Path, run_preflight: bool = True
     """Every problem with the release's inputs, in a fixed order. Empty means ready."""
     pins = PINS if pins is None else pins
     out: list[str] = []
-    if run_preflight:
-        pre = subprocess.run([sys.executable, str(root / "tools" / "release_preflight.py")], cwd=root,
-                             capture_output=True, text=True, env=env)
-        if pre.returncode != 0:
-            for line in (pre.stdout + pre.stderr).splitlines():
-                if "PROBLEM" in line:
-                    out.append(f"preflight: {redact_url(line.split('PROBLEM:', 1)[-1].strip())}")
-            if not out:
-                out.append(f"preflight: tools/release_preflight.py exited {pre.returncode}")
     for name, is_file, what in INPUTS:
         value = env.get(name, "")
         if not value:
@@ -99,11 +90,25 @@ def problems(env: dict[str, str], root: pathlib.Path, run_preflight: bool = True
                 out.append(f"{name} names no file ({what})")
             elif not os.access(path, os.R_OK):
                 out.append(f"{name} names a file this user can't read ({what})")
-            elif name in pins and _sha256(path) != pins[name]:
-                out.append(f"{name} is not the pinned file ({what}): its sha256 differs from the pin")
+            elif name in pins:
+                try:
+                    if _sha256(path) != pins[name]:
+                        out.append(f"{name} is not the pinned file ({what}): its sha256 differs from the pin")
+                except OSError as err:
+                    out.append(f"{name} names a file that can't be read to the end ({what}): {err.strerror}")
     for program in PROGRAMS:
         if shutil.which(program, path=env.get("PATH")) is None:
             out.append(f"{program} is not on PATH")
+    # The preflight calls origin over the network, so it runs after every local check.
+    if run_preflight:
+        pre = subprocess.run([sys.executable, str(root / "tools" / "release_preflight.py")], cwd=root,
+                             capture_output=True, text=True, env=env)
+        if pre.returncode != 0:
+            for line in (pre.stdout + pre.stderr).splitlines():
+                if "PROBLEM" in line:
+                    out.append(f"preflight: {redact_url(line.split('PROBLEM:', 1)[-1].strip())}")
+            if not out:
+                out.append(f"preflight: tools/release_preflight.py exited {pre.returncode}")
     return out
 
 
