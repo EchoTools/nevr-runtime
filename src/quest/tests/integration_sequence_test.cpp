@@ -2049,6 +2049,11 @@ void TestConstructorBeginNamesTheBuild() {
   QCHECK(CountEventKeys(line) == 1U);
 }
 
+// The step's name is the one the sequence's log and its order lists carry, so the name is pinned as well.
+void TestIdentifyHeadsetStepName() {
+  QCHECK(std::strcmp(StepName(StepId::kIdentifyHeadset), "identify_headset") == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -2115,6 +2120,7 @@ int main() {
   TestMissingAuthStaysFailedAfterFetch();
   TestTheHoldDecisionIsLoggedOnEachChange();
   TestDropReportsOnlyChanges();
+  TestIdentifyHeadsetStepName();
   TestIdentitySourceReadyFollowsObservedState();
   TestIdentitySourceReadyDoesNotAllocate();
   TestFrameTapSignalsLoginSuccessOnlyFromTheServer();

@@ -74,7 +74,7 @@ inline constexpr Profile kGeneric = {Id::kGeneric, "generic", kQuest2Eyes, 0, 90
 // the device it reads; if that is not "eureka", the Quest 3 rule matches nothing and the headset takes the generic profile,
 // whose eye table is the smaller Quest 2 one.
 struct Rule {
-  const char* name;         // the rule_matched name in the headset_profile line
+  const char* name;         // the rule field of the headset_profile line
   std::string_view device;  // ro.product.device, exact; empty matches any device
   const Profile* profile;
 };
