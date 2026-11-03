@@ -61,11 +61,10 @@ inline constexpr std::uint32_t kStockBody[kRefreshBodyWords] = {
     0xf901f128, 0x910103ff, 0xd65f03c0,                                                              // 40..42
 };
 
-// The reference build's cave (libr15 0x1a84890; its first word, and its table for the host test's pins).
+// The reference build's cave at libr15 0x1a84890. ClassifyRefreshBody reports the reference build only when the live library
+// holds kReferenceCaveWord0 at kReferenceCaveVaddr.
 inline constexpr std::uint64_t kReferenceCaveVaddr = 0x1a84890;
 inline constexpr std::uint32_t kReferenceCaveWord0 = 0xa9bc67f8;
-inline constexpr int kReferenceCaveIndexW[5] = {1680, 2376, 3072, 3584, 4096};
-inline constexpr int kReferenceCaveIndexH[5] = {1760, 2568, 3380, 3944, 4506};
 
 // The target of an arm64 `bl` word at `site`: site + the signed 26-bit word offset, in bytes.
 inline std::uint64_t BlTarget(std::uint32_t word, std::uint64_t site) noexcept {
