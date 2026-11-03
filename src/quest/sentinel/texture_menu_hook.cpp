@@ -46,9 +46,12 @@ std::atomic<PropertyReader> g_property{nullptr};
 
 // The index the control starts on when the player has not chosen: the configuration's level (`stock` shows as Low).
 std::atomic<int> g_defaultIndex{tq::kDefaultMenuIndex};
-// What the start resolver found: 0 not asked, 1 the player's marker file, 2 the configuration, 3 the reference input's rule.
-enum StartSource : int { kStartNotAsked = 0, kStartPlayerMarker = 1, kStartConfig = 2, kStartReferenceRule = 3 };
+// What the start resolver found: 0 not asked, 1 the player's marker file, 2 the configuration, 3 the reference input's rule (its
+// settings file named a level), 4 the platform default (the reference input's settings file named none).
+enum StartSource : int { kStartNotAsked = 0, kStartPlayerMarker = 1, kStartConfig = 2, kStartReferenceRule = 3, kStartPlatformDefault = 4 };
 std::atomic<int> g_startSource{kStartNotAsked};
+// Whether the marker file held a choice written without the current format version, which the start did not read.
+std::atomic<bool> g_unversionedMarkerIgnored{false};
 std::atomic<int> g_startLevel{kUnset};
 std::atomic<bool> g_playerSaved{false};
 std::atomic<bool> g_firstDelivery{false};
@@ -224,15 +227,17 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
 
 // Called by the eye-size hook on its first size query, before the game has delivered its settings. Reads the player's choice from
 // the marker file (texture_menu.h): it sits in the directory the game keeps its settings in (GetLocalAppDataDirectory, then
-// "RAD/LoneEcho"), and exists only once the player has changed the control. The game's own saved slot is not read: a settings file
+// "RAD/LoneEcho"), and exists only once the player has changed the control (a marker without the current version is not read:
+// builds before it wrote the level they derived as if the player had chosen it). The game's own saved slot is not read: a settings file
 // that never held the setting reads 0, which is Very Low, and cannot tell "chose Very Low" from "never chose". Returns the Level to
 // start at, or kUnset (no marker, nothing readable): the configuration's level then stands. It runs inside the game's call: no
 // logging, no exceptions.
 // The reference input's start rule (#1737 C4). The reference libr15 starts at the level its own settings file names: the `msaa`
 // index V there (his cave's rule, read by tq::ReferenceIndexFromSettings), at level kLow + V. It applies only on the reference input,
-// after the player's marker has been looked for and found nothing, and only when the configuration is `stock`. The level is queued
-// once as the player's marker, so the next launch reads it from there and this file is not read again. `directory` is the settings
-// directory (nullptr: none, which reads as a missing file). It runs inside the game's call: no logging.
+// after the player's marker has been looked for and found nothing, and only when the configuration is `stock`. A level this rule
+// derives is not the player's choice, so it is never written as the marker: only a change in the menu is (#1988). A settings file that
+// names no level (missing, unreadable, or no `msaa`) starts the platform default, the configuration's level (`stock`, shown as Low).
+// `directory` is the settings directory (nullptr: none, which reads as a missing file). It runs inside the game's call: no logging.
 char g_referenceText[tq::kReferenceReadCap + 1];
 std::atomic<int> g_referenceIndex{kUnset};
 std::atomic<const char*> g_referenceFile{"none"};
@@ -241,6 +246,7 @@ int ResolveReference(const char* directory) noexcept {
   if (tq::InputKind() != tq::EyeInput::kReference || tq::LatchedLevel() != Level::kStock) return kUnset;
   int index = tq::kReferenceDefaultIndex;
   const char* state = "missing";
+  bool sawLevel = false;
   if (directory != nullptr) {
     char path[600];  // %.512s plus the suffix: the directory is at most 512 characters, as the marker path's is
     std::snprintf(path, sizeof(path), "%.512s/RAD/LoneEcho/settings_mp_v2_quest.json", directory);
@@ -251,16 +257,20 @@ int ResolveReference(const char* directory) noexcept {
       bool sawKey = false;
       index = tq::ReferenceIndexFromSettings(g_referenceText, size, &sawKey);
       state = sawKey ? "read" : "no_key";
+      sawLevel = sawKey;
     }
   }
-  const Level level = tq::LevelForReferenceIndex(index);
   g_referenceIndex.store(index, std::memory_order_release);
   g_referenceFile.store(state, std::memory_order_release);
+  if (!sawLevel) {
+    g_startSource.store(kStartPlatformDefault, std::memory_order_release);
+    return kUnset;
+  }
+  const Level level = tq::LevelForReferenceIndex(index);
   g_playerSaved.store(true, std::memory_order_release);
   g_startSource.store(kStartReferenceRule, std::memory_order_release);
   g_startLevel.store(static_cast<int>(level), std::memory_order_release);
   g_appliedLevel.store(static_cast<std::uint64_t>(level), std::memory_order_relaxed);
-  g_pendingMarker.store(tq::MenuIndexForLevel(level), std::memory_order_release);
   return static_cast<int>(level);
 }
 
@@ -285,6 +295,12 @@ int ResolveStart() noexcept {
   std::fclose(file);
   const int index = texture_menu::MarkedMenuIndex(buffer, size);
   if (index < 0) return ResolveReference(fixedString);
+  // A marker without the current version is not a choice we can trust (#1988): the start falls back as if there were none, and
+  // the first change in the menu writes a versioned one.
+  if (texture_menu::MarkerVersion(buffer, size) != texture_menu::kMarkerVersion) {
+    g_unversionedMarkerIgnored.store(true, std::memory_order_release);
+    return ResolveReference(fixedString);
+  }
   g_playerSaved.store(true, std::memory_order_release);
   g_startSource.store(kStartPlayerMarker, std::memory_order_release);
   const Level level = tq::LevelForMenuIndex(index);
@@ -572,21 +588,23 @@ int PollLocked() noexcept {
     g_logged.start = true;
     const int start = g_startLevel.load(std::memory_order_acquire);
     const Level startLevel = start == kUnset ? tq::LatchedLevel() : static_cast<Level>(start);
-    const char* const sourceName = source == kStartPlayerMarker ? "player_marker"
-                                   : source == kStartReferenceRule ? "reference_rule"
-                                                                   : "config";
+    const char* const sourceName = source == kStartPlayerMarker       ? "player_marker"
+                                   : source == kStartReferenceRule    ? "reference_rule"
+                                   : source == kStartPlatformDefault  ? "platform_default"
+                                                                      : "config";
     const int referenceIndex = g_referenceIndex.load(std::memory_order_acquire);
+    const bool reference = source == kStartReferenceRule || source == kStartPlatformDefault;
     const sentinel::LogField fields[] = {
         {"source", sourceName},
         {"input", tq::InputName(tq::InputKind())},
         {"quality", tq::LevelName(startLevel)},
         {"menu_index", tq::MenuIndexForLevel(startLevel)},
+        {"unversioned_marker_ignored", g_unversionedMarkerIgnored.load(std::memory_order_acquire) ? 1 : 0},
         {"reference_index", referenceIndex < 0 ? 0 : referenceIndex},
         {"reference_file", g_referenceFile.load(std::memory_order_acquire)},
-        {"consequence", "the level is saved as the player's choice so the next launch reads it from there"}};
-    // The reference fields ride on the reference rule's line only (the first four fields are the same on every source).
-    sentinel::LogFieldList(sentinel::LogLevel::kInfo, "texture_quality_start", fields,
-                           source == kStartReferenceRule ? 7U : 4U);
+        {"consequence", "this start is not saved; only a change in the menu is remembered for the next launch"}};
+    // The reference fields ride on the reference input's lines only (the first five fields are the same on every source).
+    sentinel::LogFieldList(sentinel::LogLevel::kInfo, "texture_quality_start", fields, reference ? 8U : 5U);
     ++lines;
   }
   for (int document = kMenuSettings; document < kDocuments; ++document) {
@@ -895,6 +913,7 @@ void ResetForTest() noexcept {
   g_markerFailures.store(0);
   g_defaultIndex.store(tq::kDefaultMenuIndex);
   g_startSource.store(kStartNotAsked);
+  g_unversionedMarkerIgnored.store(false);
   g_startLevel.store(kUnset);
   g_playerSaved.store(false);
   g_firstDelivery.store(false);

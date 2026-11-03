@@ -146,22 +146,26 @@ Result RewriteGameSettings(std::string_view text) {
 std::string MarkerText(int menuIndex) noexcept {
   const int last = nevr_quest::texture_quality::kMenuLevelCount - 1;
   Json doc = Json::object();
+  doc["version"] = kMarkerVersion;
   doc["menu_index"] = menuIndex < 0 ? 0 : (menuIndex > last ? last : menuIndex);
   return Dump(doc);
 }
 
-int MarkedMenuIndex(const char* text, std::size_t size) noexcept {
+namespace {
+
+// The whole number after the first `key` (a quoted JSON key, with its quotes) in `text`: negative reads 0, a huge one saturates at
+// 1000 (the caller clamps), and -1 means the key is absent, is cut off by `size`, or is not followed by a whole number.
+// Allocation-free: it runs on the game's first eye-size query.
+long WholeNumberAfterKey(const char* text, std::size_t size, const char* key, std::size_t keyLength) noexcept {
   if (text == nullptr) return -1;
-  constexpr char kKey[] = "\"menu_index\"";
-  constexpr std::size_t kKeyLength = sizeof(kKey) - 1;
   std::size_t at = 0;
-  for (; at + kKeyLength <= size; ++at) {
+  for (; at + keyLength <= size; ++at) {
     std::size_t i = 0;
-    while (i < kKeyLength && text[at + i] == kKey[i]) ++i;
-    if (i == kKeyLength) break;
+    while (i < keyLength && text[at + i] == key[i]) ++i;
+    if (i == keyLength) break;
   }
-  if (at + kKeyLength > size) return -1;
-  std::size_t i = at + kKeyLength;
+  if (at + keyLength > size) return -1;
+  std::size_t i = at + keyLength;
   while (i < size && (text[i] == ' ' || text[i] == '\t' || text[i] == '\r' || text[i] == '\n')) ++i;
   if (i >= size || text[i] != ':') return -1;
   ++i;
@@ -178,9 +182,23 @@ int MarkedMenuIndex(const char* text, std::size_t size) noexcept {
     ++i;
   }
   if (i < size && (text[i] == '.' || text[i] == 'e' || text[i] == 'E')) return -1;  // not a whole number
-  if (negative) value = 0;
+  return negative ? 0 : value;
+}
+
+}  // namespace
+
+int MarkedMenuIndex(const char* text, std::size_t size) noexcept {
+  constexpr char kKey[] = "\"menu_index\"";
+  const long value = WholeNumberAfterKey(text, size, kKey, sizeof(kKey) - 1);
+  if (value < 0) return -1;
   const int last = nevr_quest::texture_quality::kMenuLevelCount - 1;
   return value > last ? last : static_cast<int>(value);
+}
+
+int MarkerVersion(const char* text, std::size_t size) noexcept {
+  constexpr char kKey[] = "\"version\"";
+  const long value = WholeNumberAfterKey(text, size, kKey, sizeof(kKey) - 1);
+  return value < 0 ? 0 : static_cast<int>(value);
 }
 
 }  // namespace nevr_quest::texture_menu

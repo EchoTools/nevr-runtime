@@ -481,7 +481,7 @@ void RemoveSettingsDirectory(const std::string& root) {
 // What the player chose (the marker) starts the game at that level, on the very first eye-size answer, before the game has
 // delivered anything; and the first delivery is the player's, not the configuration's. The game's own slot may hold anything.
 void ASavedLevelStartsTheGameAndOutranksTheConfiguration() {
-  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 0, "sharpening": 1.5}})", R"({"menu_index":4})");
+  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 0, "sharpening": 1.5}})", R"({"version":1,"menu_index":4})");
   QCHECK(!dir.empty());
   Reset(tq::Level::kHigh);  // the configuration says High
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
@@ -512,7 +512,8 @@ void WithNothingSavedTheConfigurationsLevelStarts() {
     RemoveSettingsDirectory(dir);
   }
   // A marker that holds no choice is no marker.
-  for (const char* marker : {"", "{}", "not json at all", R"({"menu_index": "4"})", R"({"menu_index": 2.5})"}) {
+  for (const char* marker : {"", "{}", "not json at all", R"({"menu_index": "4"})", R"({"menu_index": 2.5})",
+                             R"({"menu_index":4})", R"({"version":0,"menu_index":4})", R"({"version":2,"menu_index":4})"}) {
     const std::string dir = MakeSettingsDirectory(nullptr, marker);
     QCHECK(!dir.empty());
     Reset(tq::Level::kMedium);
@@ -580,7 +581,7 @@ void AMenuChoicePersistsToTheNextLaunch() {
   SetMsaa(settings, 4);  // the player picks Very High
   Deliver(settings);
   QCHECK(tm::PollOnceForTest() >= 1);
-  QCHECK(ReadMarker(dir) == R"({"menu_index":4})");
+  QCHECK(ReadMarker(dir) == R"({"version":1,"menu_index":4})");  // a menu change writes the versioned marker
   const std::string saved = LineWith("\"event\":\"texture_quality_saved\"");
   QCHECK(saved.find("\"result\":\"written\"") != std::string::npos && saved.find("\"quality\":\"very_high\"") != std::string::npos);
   QCHECK(saved.find("\"menu_index\":4") != std::string::npos);
@@ -607,7 +608,7 @@ void AMenuChoicePersistsToTheNextLaunch() {
   SetMsaa(settings, 0);
   Deliver(settings);
   tm::PollOnceForTest();
-  QCHECK(ReadMarker(dir) == R"({"menu_index":0})");
+  QCHECK(ReadMarker(dir) == R"({"version":1,"menu_index":0})");
   Reset(tq::Level::kStock, false);
   g_appDataDir = dir;
   QCHECK(Eye().first == 1344 && Eye().second == 1408);  // Very Low on a Quest 3
@@ -821,7 +822,7 @@ void TheSameDocumentReadAgainIsServedTheSameRewrite() {
 // ---- the log -----------------------------------------------------------------------------------------------------------
 
 void ThePollerWritesTheStartTheRequestsAndTheChanges() {
-  const std::string dir = MakeSettingsDirectory(nullptr, R"({"menu_index":2})");
+  const std::string dir = MakeSettingsDirectory(nullptr, R"({"version":1,"menu_index":2})");
   Reset(tq::Level::kLow);
   Capture log;
   g_appDataDir = dir;
@@ -923,25 +924,38 @@ void TheCountersRegisterAndLeaveTheRestOfTheTable() {
 
 // ---- the reference input's start rule (#1737 C4) ------------------------------------------------------------------------------
 
-// On the reference libr15, with a `stock` configuration and no marker, the start is his rule: the settings file's msaa index V,
-// at level kLow + V (no file or no key: V=2, High). The rule is queued as the player's marker, so the next launch reads it there.
-void ReferenceRuleWithNoSettingsFileStartsAtHigh() {
-  Reset(tq::Level::kStock, true);
-  tq::SetInputForTest(tq::EyeInput::kReference);
-  const std::string dir = MakeSettingsDirectory(nullptr);
-  QCHECK(!dir.empty());
-  g_appDataDir = dir;
-  Capture log;
-  QCHECK(Eye().first == 3072 && Eye().second == 3380);  // High on a Quest 3
-  QCHECK(tq::LatchedLevel() == tq::Level::kHigh);
-  QCHECK(tm::PollOnceForTest() > 0);
-  QCHECK(CountLines("\"source\":\"reference_rule\"") == 1);
-  QCHECK(CountLines("\"reference_file\":\"missing\"") == 1);
-  QCHECK(ReadMarker(dir) == R"({"menu_index":3})");  // High, queued as the player's marker
-  RemoveSettingsDirectory(dir);
+// On the reference libr15, with a `stock` configuration and no marker, the start is his rule when the settings file names an `msaa`
+// index V (level kLow + V). With no file or no key it is the platform default, the headset's own size. Neither is the player's choice,
+// so neither is written as the marker (#1988).
+void ReferenceRuleWithNoSettingsFileStartsAtThePlatformDefaultAndSavesNothing() {
+  for (const char* settingsFile : {static_cast<const char*>(nullptr), "{}", R"({"graphics": {"sharpening": 1.5}})"}) {
+    Reset(tq::Level::kStock, true);
+    tq::SetInputForTest(tq::EyeInput::kReference);
+    *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
+    const std::string dir = MakeSettingsDirectory(settingsFile);
+    QCHECK(!dir.empty());
+    g_appDataDir = dir;
+    Capture log;
+    QCHECK(Eye().first == kQ3W && Eye().second == kQ3H);  // the headset's own size, not High
+    QCHECK(tq::LatchedLevel() == tq::Level::kStock);
+    alignas(8) unsigned char settings[kSettingsBytes] = {};
+    SetMsaa(settings, 0);
+    Deliver(settings);
+    QCHECK(GetMsaa(settings) == tq::kDefaultMenuIndex);  // the control shows Low
+    QCHECK(tm::PollOnceForTest() > 0);
+    const std::string start = LineWith("\"event\":\"texture_quality_start\"");
+    QCHECK(start.find("\"source\":\"platform_default\"") != std::string::npos);
+    QCHECK(start.find("\"input\":\"reference\"") != std::string::npos && start.find("\"quality\":\"stock\"") != std::string::npos);
+    QCHECK(start.find("\"unversioned_marker_ignored\":0") != std::string::npos);
+    QCHECK(CountLines("\"source\":\"reference_rule\"") == 0);
+    tm::PollOnceForTest();
+    QCHECK(CountLines("texture_quality_saved") == 0 && ReadMarker(dir).empty());  // no marker written
+    QCHECK(tm::CurrentTotals().markerWrites == 0);
+    RemoveSettingsDirectory(dir);
+  }
 }
 
-void ReferenceRuleReadsTheMsaaIndexOfTheSettingsFile() {
+void ReferenceRuleReadsTheMsaaIndexOfTheSettingsFileAndSavesNothing() {
   Reset(tq::Level::kStock, true);
   tq::SetInputForTest(tq::EyeInput::kReference);
   const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 1, "sharpening": 0.5}})");
@@ -951,8 +965,66 @@ void ReferenceRuleReadsTheMsaaIndexOfTheSettingsFile() {
   QCHECK(Eye().first == 2376 && Eye().second == 2568);  // Medium on a Quest 3: kLow + 1
   QCHECK(tq::LatchedLevel() == tq::Level::kMedium);
   QCHECK(tm::PollOnceForTest() > 0);
+  QCHECK(CountLines("\"source\":\"reference_rule\"") == 1);
   QCHECK(CountLines("\"reference_file\":\"read\"") == 1);
-  QCHECK(ReadMarker(dir) == R"({"menu_index":2})");
+  tm::PollOnceForTest();
+  QCHECK(ReadMarker(dir).empty() && tm::CurrentTotals().markerWrites == 0);  // derived, not chosen
+  RemoveSettingsDirectory(dir);
+}
+
+// The player stuck at High on 6.14 to 6.16 has {"menu_index":3} in the marker file, which cannot be told from a choice. It is not
+// read: the start is the platform default, the log says so, the file is left alone, and the first change in the menu writes the
+// versioned marker, which the next launch honors.
+void AnUnversionedMarkerIsIgnoredAndTheFirstMenuChangeWritesAVersionedOne() {
+  for (const tq::EyeInput input : {tq::EyeInput::kReference, tq::EyeInput::kStock}) {
+    const std::string dir = MakeSettingsDirectory(R"({"graphics": {"sharpening": 1.5}})", R"({"menu_index":3})");
+    QCHECK(!dir.empty());
+    Reset(tq::Level::kStock, true);
+    tq::SetInputForTest(input);
+    *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
+    Capture log;
+    g_appDataDir = dir;
+    QCHECK(Eye().first == kQ3W && Eye().second == kQ3H);  // not High
+    QCHECK(tq::LatchedLevel() == tq::Level::kStock);
+    alignas(8) unsigned char settings[kSettingsBytes] = {};
+    SetMsaa(settings, 3);  // what the game's slot may still hold
+    Deliver(settings);
+    QCHECK(GetMsaa(settings) == tq::kDefaultMenuIndex && tq::RequestedLevelValue() == static_cast<int>(tq::Level::kLow));
+    QCHECK(tm::PollOnceForTest() > 0);
+    const std::string start = LineWith("\"event\":\"texture_quality_start\"");
+    QCHECK(start.find("\"source\":\"player_marker\"") == std::string::npos);
+    QCHECK(start.find("\"quality\":\"stock\"") != std::string::npos);
+    QCHECK(start.find("\"unversioned_marker_ignored\":1") != std::string::npos);
+    QCHECK(ReadMarker(dir) == R"({"menu_index":3})" && tm::CurrentTotals().markerWrites == 0);  // left alone until a real change
+
+    SetMsaa(settings, 2);  // the player picks Medium
+    Deliver(settings);
+    QCHECK(tm::PollOnceForTest() >= 1);
+    QCHECK(ReadMarker(dir) == R"({"version":1,"menu_index":2})");
+
+    Reset(tq::Level::kStock, true);  // the next launch
+    tq::SetInputForTest(input);
+    g_lines.clear();
+    g_appDataDir = dir;
+    QCHECK(Eye().first == 2376 && Eye().second == 2568);  // Medium: the versioned marker is honored
+    tm::PollOnceForTest();
+    const std::string again = LineWith("\"event\":\"texture_quality_start\"");
+    QCHECK(again.find("\"source\":\"player_marker\"") != std::string::npos && again.find("\"quality\":\"medium\"") != std::string::npos);
+    QCHECK(again.find("\"unversioned_marker_ignored\":0") != std::string::npos);
+    RemoveSettingsDirectory(dir);
+  }
+}
+
+// A marker of another version is no more readable than one with none.
+void AMarkerOfAnotherVersionIsIgnored() {
+  const std::string dir = MakeSettingsDirectory(nullptr, R"({"version":2,"menu_index":4})");
+  QCHECK(!dir.empty());
+  Reset(tq::Level::kMedium, true);
+  Capture log;
+  g_appDataDir = dir;
+  QCHECK(Eye().first == 2376 && Eye().second == 2568);  // the configuration's level
+  tm::PollOnceForTest();
+  QCHECK(LineWith("\"event\":\"texture_quality_start\"").find("\"unversioned_marker_ignored\":1") != std::string::npos);
   RemoveSettingsDirectory(dir);
 }
 
@@ -973,7 +1045,7 @@ void AConfiguredLowOutranksTheReferenceRule() {
 void APlayersMarkerOutranksTheReferenceRule() {
   Reset(tq::Level::kStock, true);
   tq::SetInputForTest(tq::EyeInput::kReference);
-  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 3}})", R"({"menu_index":0})");
+  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 3}})", R"({"version":1,"menu_index":0})");
   QCHECK(!dir.empty());
   g_appDataDir = dir;
   Capture log;
@@ -1029,8 +1101,10 @@ int main() {
   ARefusedApplyAndAFailedRebuildAreLoudLinesWithTheirConsequence();
   TheInstallRefusesAndSaysWhyOnAHostWithoutLibr15();
   TheCountersRegisterAndLeaveTheRestOfTheTable();
-  ReferenceRuleWithNoSettingsFileStartsAtHigh();
-  ReferenceRuleReadsTheMsaaIndexOfTheSettingsFile();
+  ReferenceRuleWithNoSettingsFileStartsAtThePlatformDefaultAndSavesNothing();
+  AnUnversionedMarkerIsIgnoredAndTheFirstMenuChangeWritesAVersionedOne();
+  AMarkerOfAnotherVersionIsIgnored();
+  ReferenceRuleReadsTheMsaaIndexOfTheSettingsFileAndSavesNothing();
   AConfiguredLowOutranksTheReferenceRule();
   APlayersMarkerOutranksTheReferenceRule();
   TheStockInputNeverUsesTheReferenceRule();
