@@ -50,6 +50,17 @@ const Line* Find(std::initializer_list<const char*> parts) {
   return nullptr;
 }
 
+// How many captured lines hold every part.
+int Count(std::initializer_list<const char*> parts) {
+  int n = 0;
+  for (const Line& l : g_lines) {
+    bool all = true;
+    for (const char* p : parts) all = all && Has(l.text, p);
+    if (all) ++n;
+  }
+  return n;
+}
+
 int g_originalCalls = 0;
 void FakeJoin(void*, const void*, const void*) { ++g_originalCalls; }
 void FakeFailure(void*, const void*) { ++g_originalCalls; }
@@ -137,6 +148,51 @@ TEST(AnotherFailureCodeIsPassedThroughUntouched) {
   CHECK(rig.GameUntouched());
   CHECK(rig.OtherUntouched());
   CHECK(g_lines.empty());
+}
+
+// An empty message on an open gate: the game keeps its page, and the decline is said once, not on each refusal.
+TEST(AnEmptyMessageOnAnOpenGateIsSaidOnceAsNoMessage) {
+  Capture capture;
+  Declines() = rules::DeclineLog();
+  Rig rig(5, 0x81);
+  rig.data[0x20] = 0;  // the message is empty
+  g_originalCalls = 0;
+  OnJoin(&FakeJoin, rig.Self(), rig.join.data(), nullptr);
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());
+  CHECK_EQ(g_originalCalls, 2);
+  CHECK(rig.GameUntouched());
+  CHECK_EQ(Count({"\"status\":\"message_not_shown\""}), 1);
+  const Line* said = Find({"\"status\":\"message_not_shown\""});
+  if (said != nullptr) {
+    CHECK(said->level == sentinel::LogLevel::kInfo);
+    CHECK(Has(said->text, "\"event\":\"lobby_full\""));
+    CHECK(Has(said->text, "\"code\":8"));
+    CHECK(Has(said->text, "\"title\":\"lobby full\""));
+    CHECK(Has(said->text, "\"reason\":\"no_message\""));
+    CHECK(Has(said->text, "\"msg\":\"the game shows its fixed literal for this code instead\""));
+  }
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());  // the repeat is not said again
+  CHECK_EQ(g_originalCalls, 3);
+  CHECK_EQ(Count({"\"status\":\"message_not_shown\""}), 1);
+  CHECK(Find({"\"status\":\"message_shown\""}) == nullptr);
+}
+
+// No game object: the decline names it, whatever the message says, and is said once.
+TEST(ANoGameBaseIsSaidOnceAsNoGameBaseEvenWithAMessage) {
+  Capture capture;
+  Declines() = rules::DeclineLog();
+  Rig rig(5, 0xa1);
+  std::uint8_t* noGame = nullptr;
+  std::memcpy(rig.client.data() + 0x8, &noGame, sizeof noGame);  // +8 holds no game object
+  g_originalCalls = 0;
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());
+  CHECK_EQ(g_originalCalls, 1);  // the game's own callback still ran
+  CHECK_EQ(Count({"\"status\":\"message_not_shown\"", "\"reason\":\"no_game_base\""}), 1);
+  CHECK_EQ(Count({"\"status\":\"message_not_shown\"", "\"reason\":\"no_message\""}), 0);
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());  // the repeat is not said again
+  CHECK_EQ(g_originalCalls, 2);
+  CHECK_EQ(Count({"\"status\":\"message_not_shown\""}), 1);
+  CHECK(rig.OtherUntouched());
 }
 
 }  // namespace
