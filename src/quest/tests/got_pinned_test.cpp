@@ -286,6 +286,8 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15SubmitFrame2(), "libr15 vrapi_SubmitFrame2 JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetCurrentInputState(), "libr15 vrapi_GetCurrentInputState JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetInputDeviceCapabilities(), "libr15 vrapi_GetInputDeviceCapabilities JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15EnumerateInputDevices(), "libr15 vrapi_EnumerateInputDevices JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15GetInputTrackingState(), "libr15 vrapi_GetInputTrackingState JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
