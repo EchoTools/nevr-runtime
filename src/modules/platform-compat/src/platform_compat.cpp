@@ -206,9 +206,10 @@ HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD 
 // Hook installation helpers
 // ---------------------------------------------------------------------------
 
-// The game-side address each hook was installed at. PatchDetour leaves the trampoline in the pointer, so the address
-// is kept here for platform_compat_Shutdown, which forgets each HookGuard record before MH_Uninitialize restores the
-// bytes; a restored hook would otherwise read as an overwrite.
+// The address of each export a hook replaces: AcquireCredentialsHandleW in Secur32.dll, CreateDirectoryW and
+// CreateDirectoryA in kernel32.dll, CoCreateInstance in ole32.dll. PatchDetour leaves the trampoline in the pointer, so
+// the address is kept here for platform_compat_Shutdown, which forgets each HookGuard record before MH_Uninitialize
+// restores the bytes; a restored hook would otherwise read as an overwrite.
 static void* g_tlsHookTarget = nullptr;
 static void* g_createDirWHookTarget = nullptr;
 static void* g_createDirAHookTarget = nullptr;
