@@ -19,6 +19,8 @@
  */
 #pragma once
 
+#include <pthread.h>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -60,7 +62,8 @@ class Scope {
   Scope& operator=(const Scope&) = delete;
 
  private:
-  Binding* previous_;
+  Binding* previous_ = nullptr;
+  pthread_t previousThread_{};
 };
 
 // register_slot_hook, with the module lookup the caller names (production: sentinel::FindLoadedImage; a test passes its

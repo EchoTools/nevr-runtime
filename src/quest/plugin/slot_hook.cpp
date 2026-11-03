@@ -38,8 +38,22 @@ sentinel::GotHook g_hooks[kSlotHookHandles];
 Held g_held[kSlotHookHandles];
 pthread_mutex_t g_tableLock = PTHREAD_MUTEX_INITIALIZER;
 
-// The binding of the loader's call on this thread (Scope), or null outside any call of the loader.
-thread_local Binding* g_bound = nullptr;
+// The binding of the loader's call in progress (Scope), and the thread making that call. Both are read and written under
+// g_tableLock. They are not thread_local: the sentinel keeps no thread_local state (TestNoEmulatedTLSInHookPath; the
+// emulated form allocates on first use), so the calling thread is compared by id instead.
+Binding* g_bound = nullptr;
+pthread_t g_boundThread{};
+
+// The binding of the loader's call on the calling thread, or null: a register from any other thread is not bound.
+Binding* BoundToThisThread() noexcept {
+  Binding* bound = nullptr;
+  pthread_mutex_lock(&g_tableLock);
+  if (g_bound != nullptr && pthread_equal(g_boundThread, pthread_self()) != 0) {
+    bound = g_bound;
+  }
+  pthread_mutex_unlock(&g_tableLock);
+  return bound;
+}
 
 // The owner a plugin's handle is recorded under. The same text is built for a registration and for a comparison, so a long
 // id is truncated the same way in both.
@@ -91,15 +105,27 @@ void LogServiceRefusal(const char* op, std::int32_t result, const char* reason, 
 
 }  // namespace
 
-Scope::Scope(Binding& binding) noexcept : previous_(g_bound) { g_bound = &binding; }
+Scope::Scope(Binding& binding) noexcept {
+  pthread_mutex_lock(&g_tableLock);
+  previous_ = g_bound;
+  previousThread_ = g_boundThread;
+  g_bound = &binding;
+  g_boundThread = pthread_self();
+  pthread_mutex_unlock(&g_tableLock);
+}
 
-Scope::~Scope() { g_bound = previous_; }
+Scope::~Scope() {
+  pthread_mutex_lock(&g_tableLock);
+  g_bound = previous_;
+  g_boundThread = previousThread_;
+  pthread_mutex_unlock(&g_tableLock);
+}
 
 std::int32_t RegisterSlotHookWith(sentinel::ImageLookup lookup, const char* pluginId, const char* module,
                                   const char* symbol, std::int32_t reloc, const char* buildId, void* handler,
                                   void** originalOut, std::uint32_t* outHandle) {
   // Each check names its reason, so a refused plugin's Warning says which argument it got wrong.
-  Binding* const bound = g_bound;
+  Binding* const bound = BoundToThisThread();
   const char* reason = nullptr;
   if (lookup == nullptr || pluginId == nullptr || module == nullptr || symbol == nullptr || handler == nullptr ||
       originalOut == nullptr || outHandle == nullptr) {
