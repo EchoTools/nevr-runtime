@@ -61,6 +61,29 @@ int Count(std::initializer_list<const char*> parts) {
   return n;
 }
 
+// The first captured line at `level` holding every part, or nullptr.
+const Line* FindAt(sentinel::LogLevel level, std::initializer_list<const char*> parts) {
+  for (const Line& l : g_lines) {
+    if (l.level != level) continue;
+    bool all = true;
+    for (const char* p : parts) all = all && Has(l.text, p);
+    if (all) return &l;
+  }
+  return nullptr;
+}
+
+// How many captured lines at `level` hold every part.
+int CountAt(sentinel::LogLevel level, std::initializer_list<const char*> parts) {
+  int n = 0;
+  for (const Line& l : g_lines) {
+    if (l.level != level) continue;
+    bool all = true;
+    for (const char* p : parts) all = all && Has(l.text, p);
+    if (all) ++n;
+  }
+  return n;
+}
+
 int g_originalCalls = 0;
 void FakeJoin(void*, const void*, const void*) { ++g_originalCalls; }
 void FakeFailure(void*, const void*) { ++g_originalCalls; }
@@ -134,22 +157,22 @@ TEST(ARefusalWhileTheStatusIsOutOfRangeWritesNothingAndSaysTheDroppedReasonOnce)
     CHECK(Find({"\"status\":\"message_shown\""}) == nullptr);
     CHECK(Find({"\"status\":\"wait\""}) == nullptr);  // not counted either
   }
-  // Said once for the four statuses together: the record names the reason, not the status.
-  CHECK_EQ(Count({"\"status\":\"refusal_dropped\"", "\"reason\":\"status_gate_closed\""}), 1);
-  const Line* dropped = Find({"\"status\":\"refusal_dropped\""});
+  // Said at Info once for the four statuses; the three repeats are Debug records of the same reason.
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\"", "\"reason\":\"status_gate_closed\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_dropped\"", "\"reason\":\"status_gate_closed\""}),
+           3);
+  const Line* dropped = FindAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_dropped\""});
   CHECK(dropped != nullptr);
   if (dropped != nullptr) {
-    CHECK(dropped->level == sentinel::LogLevel::kInfo);
     CHECK(Has(dropped->text, "\"event\":\"lobby_full\""));
     CHECK(Has(dropped->text, "\"code\":8"));
     CHECK(Has(dropped->text,
-              "\"msg\":\"the game ignored this refusal, so the back-off does not count it and no message is shown; "
-              "later ones of this kind are not said again\""));
+              "\"msg\":\"the game ignored this refusal, so the back-off does not count it and no message is shown\""));
   }
 }
 
-// A refusal no join went through: the page is still shown, the back-off has no lobby to count it against, and the
-// record is said once.
+// A refusal no join went through: the page is still shown, the back-off has no lobby to count it against, and the first
+// record is Info (each repeat is a Debug record).
 TEST(ARefusalWithNoJoinRecordedIsSaidOnceAsUncountedAndStillShowsThePage) {
   Capture capture;
   Sayings() = RefusalSayings();
@@ -161,20 +184,20 @@ TEST(ARefusalWithNoJoinRecordedIsSaidOnceAsUncountedAndStillShowsThePage) {
   const std::uint8_t* block = rig.game.data() + rules::kErrorBlockOffset;
   CHECK_EQ(block[0], rules::kErrorFlagFourLines);  // the page is still shown
   CHECK(Find({"\"status\":\"wait\""}) == nullptr);
-  const Line* uncounted = Find({"\"status\":\"refusal_uncounted\""});
+  const Line* uncounted = FindAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_uncounted\""});
   CHECK(uncounted != nullptr);
   if (uncounted != nullptr) {
-    CHECK(uncounted->level == sentinel::LogLevel::kInfo);
     CHECK(Has(uncounted->text, "\"event\":\"lobby_full\""));
     CHECK(Has(uncounted->text, "\"code\":8"));
     CHECK(Has(uncounted->text, "\"reason\":\"no_join_recorded\""));
     CHECK(Has(uncounted->text,
               "\"msg\":\"no join went through this hook, so the back-off has no lobby to count this refusal against; "
-              "the page is still shown; later ones of this kind are not said again\""));
+              "the page is still shown\""));
   }
-  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());  // the repeat is not said again
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());  // the repeat is a Debug record, not a second Info line
   CHECK_EQ(g_originalCalls, 2);
-  CHECK_EQ(Count({"\"status\":\"refusal_uncounted\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"refusal_uncounted\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"refusal_uncounted\""}), 1);
 }
 
 TEST(AnotherFailureCodeIsPassedThroughUntouched) {
@@ -189,7 +212,8 @@ TEST(AnotherFailureCodeIsPassedThroughUntouched) {
   CHECK(g_lines.empty());
 }
 
-// An empty message on an open gate: the game keeps its page, and the decline is said once, not on each refusal.
+// An empty message on an open gate: the game keeps its page. The decline is said at Info once; each repeat is a Debug
+// page_unchanged record.
 TEST(AnEmptyMessageOnAnOpenGateIsSaidOnceAsNoMessage) {
   Capture capture;
   Declines() = rules::DeclineLog();
@@ -210,13 +234,14 @@ TEST(AnEmptyMessageOnAnOpenGateIsSaidOnceAsNoMessage) {
     CHECK(Has(said->text, "\"reason\":\"no_message\""));
     CHECK(Has(said->text, "\"msg\":\"the game shows its fixed literal for this code instead\""));
   }
-  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());  // the repeat is not said again
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());  // the repeat is a Debug page_unchanged record
   CHECK_EQ(g_originalCalls, 3);
-  CHECK_EQ(Count({"\"status\":\"message_not_shown\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"message_not_shown\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"page_unchanged\"", "\"reason\":\"no_message\""}), 1);
   CHECK(Find({"\"status\":\"message_shown\""}) == nullptr);
 }
 
-// No game object: the decline names it, whatever the message says, and is said once.
+// No game object: the decline names it, whatever the message says, and is said at Info once.
 TEST(ANoGameBaseIsSaidOnceAsNoGameBaseEvenWithAMessage) {
   Capture capture;
   Declines() = rules::DeclineLog();
@@ -228,9 +253,10 @@ TEST(ANoGameBaseIsSaidOnceAsNoGameBaseEvenWithAMessage) {
   CHECK_EQ(g_originalCalls, 1);  // the game's own callback still ran
   CHECK_EQ(Count({"\"status\":\"message_not_shown\"", "\"reason\":\"no_game_base\""}), 1);
   CHECK_EQ(Count({"\"status\":\"message_not_shown\"", "\"reason\":\"no_message\""}), 0);
-  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());  // the repeat is not said again
+  OnFailure(&FakeFailure, rig.Self(), rig.failure.data());  // the repeat is a Debug page_unchanged record
   CHECK_EQ(g_originalCalls, 2);
-  CHECK_EQ(Count({"\"status\":\"message_not_shown\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kInfo, {"\"status\":\"message_not_shown\""}), 1);
+  CHECK_EQ(CountAt(sentinel::LogLevel::kDebug, {"\"status\":\"page_unchanged\"", "\"reason\":\"no_game_base\""}), 1);
   CHECK(rig.OtherUntouched());
 }
 

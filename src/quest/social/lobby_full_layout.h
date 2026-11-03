@@ -79,12 +79,17 @@ inline RefusalReads ReadRefusal(const void* self, const void* msg) noexcept {
   return r;
 }
 
-// The decline when the game keeps its own page: the service's message is not shown and the reason says why (the PC
-// callback's rule, lobby_failure_message_rules.h). Passes it to `write` once per code and reason per process.
+// The decision for a refusal whose game keeps its page: the reason the service's message is not shown, or kNone when it is
+// shown (the PC callback's rule, lobby_failure_message_rules.h).
+inline nevr_lobby_failure_message::Decline DeclineOf(const RefusalReads& reads) noexcept {
+  return nevr_lobby_failure_message::DeclineFor(reads.game, reads.message, sizeof reads.message);
+}
+
+// The decline when the game keeps its own page. Passes it to `write` once per code and reason per process and returns
+// true then; a repeat returns false and writes nothing (the caller writes the repeat as a Debug record).
 inline bool NoteMessageNotShown(nevr_lobby_failure_message::DeclineLog& log, const RefusalReads& reads,
                                 std::uint8_t code, nevr_lobby_failure_message::DeclineSink write) noexcept {
-  return nevr_lobby_failure_message::NoteDeclined(
-      log, code, nevr_lobby_failure_message::DeclineFor(reads.game, reads.message, sizeof reads.message), write);
+  return nevr_lobby_failure_message::NoteDeclined(log, code, DeclineOf(reads), write);
 }
 
 // The Quest's two refusal records that are said once per process: a refusal the game's gate drops (refusal_dropped), and a
