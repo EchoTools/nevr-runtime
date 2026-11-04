@@ -853,8 +853,19 @@ not `live`, builds `https://api-%s.readyatdawn.com` (`0x126c240`) for `CreateCon
 called through its own PLT (JUMP_SLOT `0x36e8028`), the same shape as the `TString` slot, so it has its own
 thunk (`Slot::kCreateConnection`, installed with libr15's `TString` slot): a URL that starts `https://api.` or
 `https://api-` goes through `ServiceRedirector::ApplyUrl`, the same shared policy and string pool, so it
-reaches `nevr_http_uri` (never the bridge) before the original connects; the handle slot, the result and every
-other URL pass through. The strings of the game's service-status request
+reaches `nevr_http_uri` (never the bridge) before the original connects; the handle slot and the result pass
+through. The same decision then refuses four hosts the game must not contact (#2089): after the redirect has
+answered, a URL that is still `RAD.bugsplat.com` (`RegisterGlobalCrashHandler`, `0x108f528`; the crash-dump upload
+`ProcessDumpFiles`, `0x108de4c`, posts on that connection), `s3-us-west-2.amazonaws.com`
+(`CR15NetPackageDownloadCS::Initialize`, `0x226bf58`), `graph.oculus.com` (`CR15NetGame::Initialize`, `0x1386520`, and
+`CR15NetMatchmakerQueues::Initialize`, `0x138812c`) or `api-<env>.readyatdawn.com` (`0x136c25c`) is passed to the
+original as `https://127.0.0.1:9`. `CreateConnection` makes a connection object and sends nothing (`0x1096c08` strips the
+scheme and tail-calls the three-argument form `0x1096c78`, which allocates and stores host, port and the https flag), and
+its callers keep going on a zero result (`0x226bf58`: a non-zero result ends `Initialize`), so the original still runs and
+the refusal is the address, never an error return: every later request on that object ends in a refused connection on the
+device. All seven call sites in libr15 go through the one PLT stub (`0x1021280`, GOT `0x36e8028`). Each refused host has one
+reporter counter, `http_create_connection_refused_{rad_bugsplat,s3,graph,api_env}`. The block follows the redirect, so a
+graph or api host sent to `nevr_http_uri` is not refused; every other URL passes. The strings of the game's service-status request
 (`status/services,news?env=%s&projectid=rad14`, `libr15.so` `0x2baa0d2`) and of its matchmaker queue API
 (`ready_at_dawn/join_queue`, `poll_queue_position`, `leave_queue`, `0x2bad4ea`, `0x2bad390`, `0x2bad547`) are in
 `libr15.so`, and the PC build sends both on the connection `InitializeHttp`-style code opens to the same base
