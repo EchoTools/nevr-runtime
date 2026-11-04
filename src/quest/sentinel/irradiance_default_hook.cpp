@@ -38,7 +38,7 @@ void Report(const void* resources, std::int32_t status, std::uint32_t substitute
                          {"texel", "0xff6b6b6b"},
                          {"substitutions", substituted},
                          {"initialize_status", status},
-                         {"consequence", "the default 3D texture holds the grey texel instead of black (the reference build's light for areas no irradiance volume covers)"}});
+                         {"consequence", "the default 3D texture was uploaded grey instead of black"}});
     return;
   }
   if (g_loggedNotReached.exchange(true, std::memory_order_relaxed)) return;

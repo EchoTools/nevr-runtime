@@ -257,6 +257,20 @@ void AnotherFormatOrANullTexelIsUntouched() {
   QCHECK(g_seen[1].texel == nullptr);
 }
 
+// Only format 9 itself is the four-byte texel: a format just below it and one just above it, at the same texture with a texel given,
+// are the game's own (a comparison that is not an equality would swap one of them).
+void AFormatBelowOrAboveNineIsUntouched() {
+  Reset();
+  idh::ArmForTest();
+  g_script = {{idh::kDefault3dTextureOffset, 3, kBlack, kName3d},
+              {idh::kDefault3dTextureOffset, idh::kTexelFormat - 1, kBlack, kNameShadow},
+              {idh::kDefault3dTextureOffset, idh::kTexelFormat + 1, kBlack, "Default Above Texture"}};
+  QCHECK(InitializeEntry()(g_resources) == 0);
+  QCHECK(g_seen.size() == 3);
+  for (const Seen& s : g_seen) QCHECK(s.texel == static_cast<const void*>(kBlack) && !IsGrey(s.texelBytes));
+  QCHECK(CountEvents("\"status\":\"not_reached\"") == 1);  // nothing was substituted, and the line says so
+}
+
 // Initialize's status is the game's, and the mark ends with the call.
 void TheStatusComesBackAndTheMarkEnds() {
   Reset();
@@ -358,6 +372,7 @@ int main() {
   ABareOffsetWithNoInitializeInProgressIsUntouched();
   AnotherObjectsOffsetIsUntouched();
   AnotherFormatOrANullTexelIsUntouched();
+  AFormatBelowOrAboveNineIsUntouched();
   TheStatusComesBackAndTheMarkEnds();
   WithoutTheHooksArmedNothingIsChanged();
   TheSubstitutionIsLoggedOnce();
