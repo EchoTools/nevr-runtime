@@ -80,6 +80,7 @@ PROGRAMS = {
         "hwdump_share_test",
         "input_seam_test",
         "invite_join_quest_test",
+        "irradiance_default_test",
         "libr15_attach_test",
         "libr15_extra_rows_identity_test",
         "lobby_full_hooks_test",
