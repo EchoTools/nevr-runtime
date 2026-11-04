@@ -14,13 +14,10 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/lifecycle/readable_memory.h"
-#include "runtime/lifecycle/arena_round_time.h"
 
 #include <atomic>
 #include <exception>
-#include <mutex>
 #include <new>
-#include <optional>
 #include <string>
 
 /// <summary>
