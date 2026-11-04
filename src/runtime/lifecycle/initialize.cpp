@@ -362,8 +362,8 @@ static VOID InitializeAfterGameImageGuard() {
   if (g_initialized) return;
   g_initialized = true;
 
-  // Open the boot log BEFORE the first fprintf — all boot messages tee to both
-  // stderr and nevr-boot.jsonl so early failures leave a record.  Uses only
+  // Start the boot phase BEFORE the first fprintf — all boot messages tee to both
+  // stderr and the process's main log so early failures leave a record.  The writer uses only
   // kernel32 (CreateFileA / WriteFile), safe under the loader lock on a
   // static-CRT build (see boot_log_tee.h DESIGN DECISION and N43).
   nevr_boot_log_tee::Init();

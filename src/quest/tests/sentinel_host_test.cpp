@@ -79,9 +79,9 @@ void Record(int prio, const std::string& text) {
   Captured().push_back({prio, text});
 }
 
-std::vector<std::string> ListDir() {
+std::vector<std::string> ListDir(const std::string& dir = Dir()) {
   std::vector<std::string> names;
-  if (DIR* d = ::opendir(Dir().c_str())) {
+  if (DIR* d = ::opendir(dir.c_str())) {
     while (const dirent* e = ::readdir(d)) names.push_back(e->d_name);
     ::closedir(d);
   }
@@ -97,6 +97,11 @@ void WriteFile(const std::string& path, const std::string& text) {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   out << text;
 }
+
+// This process's log in the default (test build) log folder, <files dir>/nevr/logs, and the archives a rotation made beside it.
+std::string LogsDir() { return Dir() + "/nevr/logs"; }
+std::string LogName() { return sentinel::LogFileName(); }
+std::string LogPath() { return LogsDir() + "/" + LogName(); }
 
 int Count(const std::string& needle) {
   int n = 0;
@@ -123,7 +128,18 @@ __attribute__((constructor(101))) void ArmAlarm() {
 __attribute__((constructor(102))) void HostCtor() {
   ::mkdir(Dir().c_str(), 0755);
   // Stale leftovers from an interrupted earlier run.
-  for (const char* stale : {"/nevr-sentinel.log", "/fifo-config", "/big.yaml", "/bad.yaml", "/locked.yaml", "/absent-dir/config.yaml"}) {
+  // Logs of an interrupted earlier run.
+  for (const char* dir : {"/nevr/logs", "/nevr"}) {
+    if (DIR* d = ::opendir((Dir() + dir).c_str())) {
+      while (const dirent* e = ::readdir(d)) {
+        if (std::strcmp(e->d_name, ".") != 0 && std::strcmp(e->d_name, "..") != 0) ::unlink((Dir() + dir + "/" + e->d_name).c_str());
+      }
+      ::closedir(d);
+    }
+  }
+  ::rmdir((Dir() + "/nevr/logs").c_str());
+  ::rmdir((Dir() + "/nevr").c_str());
+  for (const char* stale : {"/fifo-config", "/big.yaml", "/bad.yaml", "/locked.yaml", "/absent-dir/config.yaml"}) {
     ::unlink((Dir() + stale).c_str());
   }
   WriteFile(Dir() + "/config.yaml",
@@ -192,7 +208,7 @@ void ALeftoverJsonConfigIsReportedAndNeverRead() {
 }
 
 void ScanDiskLogForValues(const char* when) {
-  const std::string disk = ReadAll(Dir() + "/nevr-sentinel.log");
+  const std::string disk = ReadAll(LogPath());
   for (const char* secret : kSecrets) {
     if (disk.find(secret) != std::string::npos) {
       std::fprintf(stderr, "disk log holds a configured value (%s) at: %s\n", secret, when);
@@ -204,11 +220,11 @@ void ScanDiskLogForValues(const char* when) {
 void NoLogLineCarriesAValue() {
   CHECK(!Captured().empty());
   ScanDiskLogForValues("after the constructor");
-  CHECK(!ReadAll(Dir() + "/nevr-sentinel.log").empty());
+  CHECK(!ReadAll(LogPath()).empty());
 }
 
 void DiskLogIsOneJsonObjectPerLine() {
-  const std::string disk = ReadAll(Dir() + "/nevr-sentinel.log");
+  const std::string disk = ReadAll(LogPath());
   std::size_t start = 0;
   std::size_t lines = 0;
   while (start < disk.size()) {
@@ -219,8 +235,13 @@ void DiskLogIsOneJsonObjectPerLine() {
     CHECK(j.is_object());
     if (j.is_object()) {
       CHECK(j.value("tag", "") == "NEVR-Sentinel");
-      CHECK(j["ts_unix_ms"].is_number_integer());
-      CHECK(j.contains("level") && j.contains("msg"));
+      // The PC main log's header: UTC time with milliseconds, the run, the level in lower case.
+      const std::string ts = j.value("ts", "");
+      CHECK(ts.size() == 24 && ts[4] == '-' && ts[10] == 'T' && ts[19] == '.' && ts[23] == 'Z');
+      CHECK(j.value("run", "").find('-') != std::string::npos);
+      const std::string level = j.value("level", "");
+      CHECK(level == "info" || level == "warn" || level == "error");
+      CHECK(!j.contains("ts_unix_ms"));
     }
     ++lines;
     start = end + 1;
@@ -238,7 +259,8 @@ void FormatEscapesHostileMessages() {
   const nlohmann::json j = nlohmann::json::parse(line, nullptr, false);
   CHECK(j.is_object());
   if (!j.is_object()) return;
-  CHECK(j.value("level", "") == "WARN" && j.value("ts_unix_ms", 0LL) == 1234567890123LL);
+  CHECK(j.value("level", "") == "warn" && j.value("ts", "") == "2009-02-13T23:31:30.123Z");
+  CHECK(j.value("run", "").find('-') != std::string::npos && !j.contains("ts_unix_ms"));
   const std::string back = j.value("msg", "");
   CHECK(back.find("quote\" backslash\\ newline\n esc\x1b[31m tab\t ") == 0);
 }
@@ -254,7 +276,7 @@ void StructuredDiskLogIsFlat() {
   CHECK(j.value("result", "") == "installed");
   CHECK(j.value("level", "") == "info");
   CHECK(j.value("tag", "") == "NEVR-Sentinel");
-  CHECK(j.value("ts_unix_ms", 0LL) == 1234567890123LL);
+  CHECK(j.value("ts", "") == "2009-02-13T23:31:30.123Z");
   CHECK(!j.contains("ts_ms") && !j.contains("msg"));
 }
 
@@ -339,12 +361,12 @@ void WriteAllRetriesAndReportsFailure() {
 long long g_fakeNow = 0;
 long long FakeNow() { return g_fakeNow; }
 
-std::string LogPath() { return Dir() + "/nevr-sentinel.log"; }
 
 std::vector<std::string> RotatedNames() {
+  const std::string stem = LogName().substr(0, LogName().size() - std::strlen(".jsonl"));
   std::vector<std::string> names;
-  for (const std::string& name : ListDir()) {
-    if (name.rfind("nevr-sentinel.", 0) == 0 && name != "nevr-sentinel.log") names.push_back(name);
+  for (const std::string& name : ListDir(LogsDir())) {
+    if (name.rfind(stem + ".", 0) == 0 && name != LogName()) names.push_back(name);
   }
   return names;
 }
@@ -352,7 +374,14 @@ std::vector<std::string> RotatedNames() {
 void ClearLogs() {
   sentinel::CloseDiskLog();
   ::unlink(LogPath().c_str());
-  for (const std::string& name : RotatedNames()) ::unlink((Dir() + "/" + name).c_str());
+  for (const std::string& name : RotatedNames()) ::unlink((LogsDir() + "/" + name).c_str());
+}
+
+// The log folders are made again by the next open; the tests that take the files folder away first take these.
+void RemoveLogFolders() {
+  ClearLogs();
+  ::rmdir(LogsDir().c_str());
+  ::rmdir((Dir() + "/nevr").c_str());
 }
 
 std::size_t CountLines(const std::string& text) {
@@ -437,7 +466,7 @@ void NothingWrittenLeavesNoBlankLine() {
 
   // A torn record left by an earlier process: the next record starts a new line.
   ClearLogs();
-  WriteFile(LogPath(), R"({"ts_unix_ms":1,"level":"INFO","msg":"torn)");
+  WriteFile(LogPath(), R"({"ts":"2026-01-01T00:00:00.001Z","level":"info","msg":"torn)");
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "after the fragment");
   const std::string after = ReadAll(LogPath());
   CHECK(CountLines(after) == 2);
@@ -454,18 +483,19 @@ void LargeLogIsRotatedNotDeleted() {
   const std::size_t big = static_cast<std::size_t>(sentinel::kMaxDiskLogBytes) + 1;
   WriteFile(LogPath(), std::string(big, 'x'));
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "after rotation");
-  CHECK(ReadAll(LogPath()).size() < 1024);
+  CHECK(ReadAll(LogPath()).size() < 1024);  // the process goes on writing its own name
   CHECK(ReadAll(LogPath()).find("after rotation") != std::string::npos);
+  const std::string stem = LogName().substr(0, LogName().size() - std::strlen(".jsonl"));
   CHECK(RotatedNames().size() == 1);
-  CHECK(ReadAll(Dir() + "/nevr-sentinel.5000.log").size() == big);
+  CHECK(ReadAll(LogsDir() + "/" + stem + ".1.jsonl").size() == big);  // the old content, renamed
 
-  // A second rotation in the same millisecond must not replace the first rotated file.
+  // A second rotation must not replace the first rotated file.
   sentinel::CloseDiskLog();
   WriteFile(LogPath(), std::string(big + 7, 'y'));
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "after second rotation");
   CHECK(RotatedNames().size() == 2);
-  CHECK(ReadAll(Dir() + "/nevr-sentinel.5000.log").size() == big);
-  CHECK(ReadAll(Dir() + "/nevr-sentinel.5000.1.log").size() == big + 7);
+  CHECK(ReadAll(LogsDir() + "/" + stem + ".1.jsonl").size() == big);
+  CHECK(ReadAll(LogsDir() + "/" + stem + ".2.jsonl").size() == big + 7);
   ClearLogs();
 }
 
@@ -478,7 +508,7 @@ void LogIsRotatedInProcessAtTheBound() {
   const std::vector<std::string> rotated = RotatedNames();
   CHECK(rotated.size() == 1);
   std::size_t lines = CountLines(ReadAll(LogPath()));
-  for (const std::string& name : rotated) lines += CountLines(ReadAll(Dir() + "/" + name));
+  for (const std::string& name : rotated) lines += CountLines(ReadAll(LogsDir() + "/" + name));
   CHECK(lines == static_cast<std::size_t>(total));
   CHECK(ReadAll(LogPath()).size() < static_cast<std::size_t>(sentinel::kMaxDiskLogBytes));
   ClearLogs();
@@ -488,6 +518,7 @@ void EachDiskFailureClassIsReportedOnce() {
   ClearLogs();
   ::unlink((Dir() + "/nevr-quest.json").c_str());
   ::unlink((Dir() + "/config.yaml").c_str());
+  RemoveLogFolders();
   CHECK(::rmdir(Dir().c_str()) == 0);
   g_fakeNow = 100000;
 
@@ -536,6 +567,7 @@ void HostileLogPathsAreRetriedRarelyOrNever() {
   g_fakeNow = 200000;
 
   // A missing directory: one attempt per throttle window, and logging recovers once it exists.
+  RemoveLogFolders();
   CHECK(::rmdir(Dir().c_str()) == 0);
   unsigned before = sentinel::OpenAttemptsForTest();
   for (int i = 0; i < 5; ++i) sentinel::Emit(nevr_quest::LogLevel::kInfo, "missing dir");
@@ -638,6 +670,7 @@ void RetryIntervalIgnoresTheWallClock() {
   g_fakeNow = 500000;
   g_fakeWall = 900000;
   sentinel::SetWallClockForTest(FakeWall);
+  RemoveLogFolders();
   CHECK(::rmdir(Dir().c_str()) == 0);
   const unsigned before = sentinel::OpenAttemptsForTest();
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "wall clock first");
@@ -658,6 +691,8 @@ void RetryIntervalIgnoresTheWallClock() {
 void UnopenablePathsAreRetriedAfterTheWindow() {
   ClearLogs();
   g_fakeNow = 600000;
+  ::mkdir((Dir() + "/nevr").c_str(), 0755);
+  ::mkdir(LogsDir().c_str(), 0755);
   const std::string target = Dir() + "/symlink-target-never-created";
   CHECK(::symlink(target.c_str(), LogPath().c_str()) == 0);
   unsigned before = sentinel::OpenAttemptsForTest();
@@ -758,7 +793,7 @@ void TheLogFolderChainIsCreatedAndReportedOnce() {
   Captured().clear();
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "into a made folder");
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "second record");
-  const std::string log = Dir() + "/lf/a/b/files/nevr-sentinel.log";
+  const std::string log = Dir() + "/lf/a/b/files/" + LogName();
   CHECK(IsDir(Dir() + "/lf/a/b/files"));
   const std::string disk = Slurp(log);
   CHECK(disk.find("into a made folder") != std::string::npos);
@@ -773,7 +808,8 @@ void TheLogFolderChainIsCreatedAndReportedOnce() {
   }
   CHECK(Events("sentinel_log_dir_failed").empty());  // nothing failed, so nothing is reported failed
   const nlohmann::json firstLine = nlohmann::json::parse(disk.substr(0, disk.find('\n')), nullptr, false);
-  CHECK(firstLine.is_object() && firstLine.value("event", "") == "sentinel_log_dir" && firstLine.value("level", "") == "INFO");
+  CHECK(firstLine.is_object() && firstLine.value("event", "") == "sentinel_log_dir" && firstLine.value("level", "") == "info");
+  CHECK(firstLine.value("file", "") == LogName());  // the winner's line names this run's file
   // The config folder is not the log folder.
   CHECK(std::string(sentinel::FilesDir()) == Dir());
 
@@ -782,7 +818,7 @@ void TheLogFolderChainIsCreatedAndReportedOnce() {
   sentinel::CloseDiskLog();
   WriteFile(log, std::string(big, 'z'));
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "after rotation in the made folder");
-  CHECK(::access((Dir() + "/lf/a/b/files/nevr-sentinel.800000.log").c_str(), F_OK) == 0);
+  CHECK(::access((Dir() + "/lf/a/b/files/" + LogName().substr(0, LogName().size() - 6) + ".1.jsonl").c_str(), F_OK) == 0);
   CHECK(RotatedNames().empty());
   CHECK(Events("sentinel_log_dir").size() == 1);  // opening again after a rotation does not choose or name the folder again
 
@@ -805,7 +841,7 @@ void ALinkBelowTheTrustedPartIsNotFollowed() {
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "link refused");
   CHECK(::access((Dir() + "/elsewhere/files").c_str(), F_OK) != 0);  // nothing was made through the link
   CHECK(IsDir(Dir() + "/lk/real/files"));
-  CHECK(Slurp(Dir() + "/lk/real/files/nevr-sentinel.log").find("link refused") != std::string::npos);
+  CHECK(Slurp(Dir() + "/lk/real/files/" + LogName()).find("link refused") != std::string::npos);
   // The skipped candidate is reported with its folder and errno (ENOTDIR: lstat says the link is not a directory),
   // at Warning, and the winner once at Info.
   const std::vector<nlohmann::json> failed = Events("sentinel_log_dir_failed");
@@ -843,7 +879,7 @@ void AFirstCandidateThatCannotBeUsedFallsThrough() {
   Captured().clear();
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "falls through");
   CHECK(sentinel::LogDir() == Dir() + "/fb/data/x/files");
-  CHECK(Slurp(Dir() + "/fb/data/x/files/nevr-sentinel.log").find("falls through") != std::string::npos);
+  CHECK(Slurp(Dir() + "/fb/data/x/files/" + LogName()).find("falls through") != std::string::npos);
   CHECK(Count("on-disk log open failed") == 0);  // the next candidate worked: nothing to report
   const std::vector<nlohmann::json> won = Events("sentinel_log_dir");
   const std::vector<nlohmann::json> failed = Events("sentinel_log_dir_failed");
@@ -851,7 +887,7 @@ void AFirstCandidateThatCannotBeUsedFallsThrough() {
   CHECK(failed.size() == 1 && failed[0].value("candidate", "") == "media" &&
         failed[0].value("dir", "") == Dir() + "/fb/blocker/files" && failed[0].value("errno", 0) == ENOTDIR);
   // On disk too, in order: the failure, then the winner, then the record that opened the log.
-  const std::string disk = Slurp(Dir() + "/fb/data/x/files/nevr-sentinel.log");
+  const std::string disk = Slurp(Dir() + "/fb/data/x/files/" + LogName());
   const std::size_t atFailed = disk.find("\"event\":\"sentinel_log_dir_failed\"");
   const std::size_t atWon = disk.find("\"event\":\"sentinel_log_dir\"");
   const std::size_t atRecord = disk.find("falls through");
@@ -949,8 +985,8 @@ void TheFolderIsChosenAgainWhenItVanishes() {
   g_fakeNow += sentinel::kOpenRetryMs + 1;
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "back");
   CHECK(IsDir(Dir() + "/vn/a/files"));
-  CHECK(Slurp(Dir() + "/vn/a/files/nevr-sentinel.log").find("\"back\"") != std::string::npos ||
-        Slurp(Dir() + "/vn/a/files/nevr-sentinel.log").find("back") != std::string::npos);
+  CHECK(Slurp(Dir() + "/vn/a/files/" + LogName()).find("\"back\"") != std::string::npos ||
+        Slurp(Dir() + "/vn/a/files/" + LogName()).find("back") != std::string::npos);
   CHECK(Events("sentinel_log_dir").size() == 1);  // chosen again: named again, once
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
   RemoveTree(Dir() + "/vn");
@@ -962,10 +998,10 @@ void TheShippedCandidatesAreMediaThenData() {
   const sentinel::LogDirCandidate* c = sentinel::ShippedLogDirCandidatesForTest(&n);
   CHECK(n == 2);
   if (n != 2) return;
-  CHECK(std::string(c[0].name) == "android_media" && std::string(c[0].dir) == nevr_quest::data_root::kMediaRoot);
+  CHECK(std::string(c[0].name) == "android_media" && std::string(c[0].dir) == std::string(nevr_quest::data_root::kMediaRoot) + "/nevr/logs");
   CHECK(std::string(c[0].trusted) == "/sdcard/Android/media/com.readyatdawn.r15");
   CHECK(std::string(c[1].name) == "android_data" &&
-        std::string(c[1].dir) == "/sdcard/Android/data/com.readyatdawn.r15/files");
+        std::string(c[1].dir) == "/sdcard/Android/data/com.readyatdawn.r15/files/nevr/logs");
   CHECK(std::string(c[1].trusted) == "/sdcard/Android/data");
   for (std::size_t i = 0; i < n; ++i) {  // every folder is below its trusted part
     const std::string dir = c[i].dir;
@@ -986,7 +1022,7 @@ void TheFolderLineSurvivesAFailedWriteAndTheBound() {
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "refused first");
   AllowWrites();
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "accepted next");
-  const std::string disk = Slurp(Dir() + "/an/files/nevr-sentinel.log");
+  const std::string disk = Slurp(Dir() + "/an/files/" + LogName());
   const std::size_t folder = disk.find("\"event\":\"sentinel_log_dir\"");
   const std::size_t next = disk.find("accepted next");
   CHECK(folder != std::string::npos && next != std::string::npos && folder < next);
@@ -998,9 +1034,9 @@ void TheFolderLineSurvivesAFailedWriteAndTheBound() {
   c.Install();  // forgets the chosen folder
   CHECK(::mkdir((Dir() + "/an").c_str(), 0755) == 0);
   CHECK(::mkdir((Dir() + "/an/files").c_str(), 0755) == 0);
-  WriteFile(Dir() + "/an/files/nevr-sentinel.log", std::string(static_cast<std::size_t>(sentinel::kMaxDiskLogBytes) - 20, 'q'));
+  WriteFile(Dir() + "/an/files/" + LogName(), std::string(static_cast<std::size_t>(sentinel::kMaxDiskLogBytes) - 20, 'q'));
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "record after the folder line");
-  CHECK(Slurp(Dir() + "/an/files/nevr-sentinel.log").find("record after the folder line") != std::string::npos);
+  CHECK(Slurp(Dir() + "/an/files/" + LogName()).find("record after the folder line") != std::string::npos);
 
   // Two queued lines (a failure, then the winner) with the log 20 bytes under its bound: the first fills it and the
   // second, and the record, still land.
@@ -1013,9 +1049,9 @@ void TheFolderLineSurvivesAFailedWriteAndTheBound() {
   two.Install();
   CHECK(::mkdir((Dir() + "/an").c_str(), 0755) == 0);
   CHECK(::mkdir((Dir() + "/an/files").c_str(), 0755) == 0);
-  WriteFile(Dir() + "/an/files/nevr-sentinel.log", std::string(static_cast<std::size_t>(sentinel::kMaxDiskLogBytes) - 20, 'q'));
+  WriteFile(Dir() + "/an/files/" + LogName(), std::string(static_cast<std::size_t>(sentinel::kMaxDiskLogBytes) - 20, 'q'));
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "record after two queued lines");
-  const std::string fresh = Slurp(Dir() + "/an/files/nevr-sentinel.log");
+  const std::string fresh = Slurp(Dir() + "/an/files/" + LogName());
   CHECK(fresh.find("\"event\":\"sentinel_log_dir\"") != std::string::npos);
   CHECK(fresh.find("record after two queued lines") != std::string::npos);
   ::unlink((Dir() + "/blocker2").c_str());
@@ -1036,7 +1072,7 @@ void EveryChoiceOfTheFolderIsReportedAndWritten() {
   Captured().clear();
   for (int cycle = 1; cycle <= 4; ++cycle) {
     sentinel::Emit(nevr_quest::LogLevel::kInfo, "cycle " + std::to_string(cycle));
-    const std::string disk = Slurp(Dir() + "/rc/files/nevr-sentinel.log");
+    const std::string disk = Slurp(Dir() + "/rc/files/" + LogName());
     CHECK(disk.find("\"event\":\"sentinel_log_dir_failed\"") != std::string::npos);
     CHECK(disk.find("\"event\":\"sentinel_log_dir\"") != std::string::npos);
     CHECK(Events("sentinel_log_dir_failed").size() == static_cast<std::size_t>(cycle));
@@ -1175,178 +1211,139 @@ void TheBuildsOwnCrashFolderIsTriedFirstAndNeverCreated() {
   RemoveTree(Dir() + "/ov");
 }
 
-// ---- the previous session's log is kept whole (#1797 4b) ----
+// ---- one file for each process; the previous session's log is the file before this one ----
 
-std::vector<std::string> SessionNames() {
+std::vector<std::string> RunLogNames(const std::string& dir) {
   std::vector<std::string> names;
-  for (const std::string& name : ListDir()) {
-    if (name.rfind("nevr-sentinel.session-", 0) == 0) names.push_back(name);
+  for (const std::string& name : ListDir(dir)) {
+    if (name.rfind("nevr-", 0) == 0 && name.size() > 6 && name.compare(name.size() - 6, 6, ".jsonl") == 0) names.push_back(name);
   }
   return names;
 }
 
-const std::string kPreviousText = "{\"ts_unix_ms\":1,\"level\":\"INFO\",\"msg\":\"auth poll 9\"}\n{\"ts_unix_ms\":2,\"level\":\"INFO\",\"msg\":\"last line\"}\n";
-
-void ThePreviousSessionIsKeptWholeAtTheFirstOpen() {
+// A process's log is named for the UTC time of its first open, with milliseconds, in the shape of the PC's main log, and is the only
+// file this process makes: no nevr-sentinel.log and no session file, anywhere below the files folder.
+void AProcessWritesOneFileNamedByItsStart() {
   ClearLogs();
-  g_fakeNow = 900001;
-  WriteFile(LogPath(), kPreviousText);
-  CHECK(sentinel::PreviousSessionLog().empty());
-  sentinel::ResetSessionForTest();  // a new process: the first open of it keeps the file that is there
+  sentinel::ResetSessionForTest();
+  g_fakeNow = 1700000000123LL;
   Captured().clear();
-  sentinel::Emit(nevr_quest::LogLevel::kInfo, "new session line");
-  const std::string kept = Dir() + "/nevr-sentinel.session-900001.log";
-  CHECK(ReadAll(kept) == kPreviousText);  // whole, byte for byte
-  const std::string now = ReadAll(LogPath());
-  CHECK(now.find("new session line") != std::string::npos);
-  CHECK(now.find("auth poll 9") == std::string::npos);  // the new session starts a file of its own
-  CHECK(sentinel::PreviousSessionLog() == kept);
-  CHECK(SessionNames().size() == 1);
-  // Told once, at Info, in logcat and in the new file.
-  const std::vector<nlohmann::json> told = Events("sentinel_log_session_kept");
-  CHECK(told.size() == 1);
-  if (told.size() == 1) {
-    CHECK(told[0].value("_prio", 0) == 4);
-    CHECK(told[0].value("kept_as", "") == kept);
-    CHECK(told[0].value("bytes", 0) == static_cast<int>(kPreviousText.size()));
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "a line");
+  CHECK(LogName() == "nevr-2023-11-14T22-13-20.123.jsonl");
+  const std::string disk = ReadAll(LogPath());
+  CHECK(disk.find("a line") != std::string::npos);
+  const nlohmann::json first = nlohmann::json::parse(disk.substr(0, disk.find('\n')), nullptr, false);
+  CHECK(first.is_object() && first.value("ts", "") == "2023-11-14T22:13:20.123Z");
+  // The run id is the PC's format (N80): the process id in hex, a dash, the process start time in hex.
+  char pid[32];
+  std::snprintf(pid, sizeof(pid), "%lx-", static_cast<unsigned long>(::getpid()));
+  CHECK(first.value("run", "").rfind(pid, 0) == 0 && first.value("run", "").size() > std::strlen(pid));
+  // Nothing of the old layout is made, in the files folder or the log folder.
+  for (const std::string& dir : {Dir(), LogsDir()}) {
+    for (const std::string& name : ListDir(dir)) {
+      CHECK(name.rfind("nevr-sentinel", 0) != 0);
+    }
   }
-  CHECK(now.find("\"event\":\"sentinel_log_session_kept\"") != std::string::npos);
-
-  // The same process opening again (closed, or rotated by size) does not keep its own file as a session.
-  sentinel::CloseDiskLog();
-  g_fakeNow = 900002;
-  sentinel::Emit(nevr_quest::LogLevel::kInfo, "same session again");
-  CHECK(SessionNames().size() == 1);
-  CHECK(ReadAll(LogPath()).find("new session line") != std::string::npos);
-  CHECK(Events("sentinel_log_session_kept").size() == 1);
+  CHECK(RunLogNames(LogsDir()).size() == 1);
   ClearLogs();
 }
 
-void SessionsAreNeverReplacedAndThePreviousIsTheNewest() {
+void ANewProcessStartsAFileOfItsOwnAndThePreviousSessionIsTheOneBefore() {
   ClearLogs();
-  g_fakeNow = 910000;
-  WriteFile(LogPath(), "first session\n");
   sentinel::ResetSessionForTest();
-  sentinel::Emit(nevr_quest::LogLevel::kInfo, "second session");
-  sentinel::CloseDiskLog();
-  g_fakeNow = 920000;
-  sentinel::ResetSessionForTest();
-  sentinel::Emit(nevr_quest::LogLevel::kInfo, "third session");
-  CHECK(ReadAll(Dir() + "/nevr-sentinel.session-910000.log") == "first session\n");  // still there, unchanged
-  CHECK(ReadAll(Dir() + "/nevr-sentinel.session-920000.log").find("second session") != std::string::npos);
-  CHECK(sentinel::PreviousSessionLog() == Dir() + "/nevr-sentinel.session-920000.log");
-  // Two sessions kept in the same millisecond: the second does not replace the first, and it is the newer.
-  sentinel::CloseDiskLog();
-  sentinel::ResetSessionForTest();
-  sentinel::Emit(nevr_quest::LogLevel::kInfo, "fourth session");
-  CHECK(ReadAll(Dir() + "/nevr-sentinel.session-920000.log").find("second session") != std::string::npos);
-  CHECK(ReadAll(Dir() + "/nevr-sentinel.session-920000.1.log").find("third session") != std::string::npos);
-  CHECK(sentinel::PreviousSessionLog() == Dir() + "/nevr-sentinel.session-920000.1.log");
-  CHECK(SessionNames().size() == 3);
-  ClearLogs();
-}
-
-void AnEmptyOrAbsentLogIsNotKept() {
-  ClearLogs();
-  g_fakeNow = 930000;
-  Captured().clear();
-  sentinel::ResetSessionForTest();
-  sentinel::Emit(nevr_quest::LogLevel::kInfo, "no file before");
-  CHECK(SessionNames().empty() && Events("sentinel_log_session_kept").empty());
-  ClearLogs();
-  WriteFile(LogPath(), "");
-  sentinel::ResetSessionForTest();
-  sentinel::Emit(nevr_quest::LogLevel::kInfo, "empty file before");
-  CHECK(SessionNames().empty() && Events("sentinel_log_session_kept").empty());
+  g_fakeNow = 900001;
   CHECK(sentinel::PreviousSessionLog().empty());
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "first session");
+  const std::string first = LogPath();
+  sentinel::CloseDiskLog();
+  sentinel::ResetSessionForTest();  // a new process
+  g_fakeNow = 910000;
+  Captured().clear();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "second session");
+  CHECK(LogPath() != first);
+  CHECK(ReadAll(first).find("first session") != std::string::npos);    // the earlier session's file is untouched, whole
+  CHECK(ReadAll(first).find("second session") == std::string::npos);
+  CHECK(ReadAll(LogPath()).find("second session") != std::string::npos);
+  CHECK(ReadAll(LogPath()).find("first session") == std::string::npos);  // the new session starts a file of its own
+  CHECK(sentinel::PreviousSessionLog() == first);
+  // A third process: the previous session is the second one, the newest other file.
+  sentinel::CloseDiskLog();
+  const std::string second = LogPath();
+  sentinel::ResetSessionForTest();
+  g_fakeNow = 920000;
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "third session");
+  CHECK(sentinel::PreviousSessionLog() == second);
+  CHECK(RunLogNames(LogsDir()).size() == 3);
+  const std::string third = LogPath();
+  sentinel::CloseDiskLog();
+  ::unlink(first.c_str());
+  ::unlink(second.c_str());
+  ::unlink(third.c_str());
+  sentinel::ResetSessionForTest();
+}
+
+// Only another process's main log is a previous session: a rotation's archive, the old layout's names and other files are not.
+void OnlyProcessLogsArePreviousSessions() {
+  ClearLogs();
+  sentinel::ResetSessionForTest();
+  g_fakeNow = 930000;
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "this session");
+  CHECK(sentinel::PreviousSessionLog().empty());
+  const std::vector<std::string> junk = {"nevr-1970-01-01T00-00-01.000.1.jsonl", "nevr-sentinel.log", "nevr-sentinel.session-77.log",
+                                         "nevr-1970-01-01T00-00-01.000.log", "other.jsonl", "nevr-.jsonl", "nevr-pid.jsonl",
+                                         "nevr-pidxyz.jsonl", "nevr-1970-01-01T00-00-01.00.jsonl"};
+  for (const std::string& name : junk) WriteFile(LogsDir() + "/" + name, "junk\n");
+  CHECK(sentinel::PreviousSessionLog().empty());
+  WriteFile(LogsDir() + "/nevr-pid1f4.jsonl", "a process whose start time was unreadable\n");
+  CHECK(sentinel::PreviousSessionLog() == LogsDir() + "/nevr-pid1f4.jsonl");  // a pid-named file when nothing is timestamped
+  WriteFile(LogsDir() + "/nevr-1969-12-31T23-59-59.999.jsonl", "a session\n");
+  CHECK(sentinel::PreviousSessionLog() == LogsDir() + "/nevr-1969-12-31T23-59-59.999.jsonl");  // a timestamped name outranks it
+  for (const std::string& name : junk) ::unlink((LogsDir() + "/" + name).c_str());
+  ::unlink((LogsDir() + "/nevr-pid1f4.jsonl").c_str());
+  ::unlink((LogsDir() + "/nevr-1969-12-31T23-59-59.999.jsonl").c_str());
   ClearLogs();
 }
 
-// Only a regular file is a log to keep: a folder at the log path is left where it is.
-void AFolderAtTheLogPathIsNotKept() {
+// A folder at the log path cannot be opened as a log: the lines go to logcat, the process goes on, the folder is left where it is.
+void AFolderAtTheLogPathIsNotOpenedAsALog() {
   ClearLogs();
-  g_fakeNow = 935000;
-  CHECK(::mkdir(LogPath().c_str(), 0755) == 0);
   sentinel::ResetSessionForTest();
+  g_fakeNow = 935000;
+  CHECK(::mkdir(LogsDir().c_str(), 0755) == 0 || IsDir(LogsDir()));
+  CHECK(::mkdir(LogPath().c_str(), 0755) == 0);
+  Captured().clear();
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "folder at the log path");
-  CHECK(SessionNames().empty());
+  CHECK(Count("folder at the log path") == 1);
   CHECK(IsDir(LogPath()));
   ::rmdir(LogPath().c_str());
   ClearLogs();
 }
 
-int FailingSessionRename(const char*, const char*) {
-  errno = EACCES;
-  return -1;
-}
-
-void AFailedKeepLosesNothingAndIsToldOnce() {
-  ClearLogs();
-  g_fakeNow = 940000;
-  WriteFile(LogPath(), kPreviousText);
-  sentinel::SetRenameForTest(&FailingSessionRename);
-  sentinel::ResetSessionForTest();
-  Captured().clear();
-  sentinel::Emit(nevr_quest::LogLevel::kInfo, "after a failed keep");
-  sentinel::CloseDiskLog();
-  sentinel::Emit(nevr_quest::LogLevel::kInfo, "and again");
-  sentinel::SetRenameForTest(nullptr);
-  const std::string disk = ReadAll(LogPath());
-  CHECK(disk.find("auth poll 9") != std::string::npos);  // the old lines are still there, in the same file
-  CHECK(disk.find("after a failed keep") != std::string::npos);
-  CHECK(SessionNames().empty());
-  const std::vector<nlohmann::json> failed = Events("sentinel_log_session_keep_failed");
-  CHECK(failed.size() == 1);  // not retried, so not repeated
-  if (failed.size() == 1) {
-    CHECK(failed[0].value("_prio", 0) == 5);
-    CHECK(failed[0].value("errno", 0) == EACCES);
-    CHECK(failed[0].value("kept_as", "").find("nevr-sentinel.session-940000.log") != std::string::npos);
-  }
-  ClearLogs();
-}
-
-void OnlySessionFilesAreThePreviousSession() {
-  ClearLogs();
-  WriteFile(Dir() + "/nevr-sentinel.5000.log", "rotated by size\n");  // the size bound's name
-  WriteFile(Dir() + "/nevr-sentinel.session-abc.log", "not a number\n");
-  WriteFile(Dir() + "/nevr-sentinel.session-77.txt", "not a log\n");
-  WriteFile(Dir() + "/other.session-99.log", "not ours\n");
-  WriteFile(Dir() + "/abcdefghijklmnopqrstuv123.log", "the same length as a session name, another prefix\n");
-  WriteFile(Dir() + "/nevr-sentinel.session-.5.log", "no time\n");
-  CHECK(sentinel::PreviousSessionLog().empty());
-  WriteFile(Dir() + "/nevr-sentinel.session-77.log", "a session\n");
-  CHECK(sentinel::PreviousSessionLog() == Dir() + "/nevr-sentinel.session-77.log");
-  ::unlink((Dir() + "/nevr-sentinel.5000.log").c_str());
-  ::unlink((Dir() + "/nevr-sentinel.session-abc.log").c_str());
-  ::unlink((Dir() + "/nevr-sentinel.session-77.txt").c_str());
-  ::unlink((Dir() + "/nevr-sentinel.session-77.log").c_str());
-  ::unlink((Dir() + "/other.session-99.log").c_str());
-  ::unlink((Dir() + "/abcdefghijklmnopqrstuv123.log").c_str());
-  ::unlink((Dir() + "/nevr-sentinel.session-.5.log").c_str());
-  ClearLogs();
-}
-
 void ThePreviousSessionIsInTheLogFolder() {
   RemoveTree(Dir() + "/ps");
+  sentinel::ResetSessionForTest();
   g_fakeNow = 950000;
   Cands c;
   c.Add("only", Dir() + "/ps/files", Dir());
   c.Install();
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "first session in the folder");
+  const std::string firstName = LogName();
   sentinel::CloseDiskLog();
   sentinel::ResetSessionForTest();
+  g_fakeNow = 960000;
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "second session in the folder");
-  CHECK(sentinel::PreviousSessionLog() == sentinel::LogDir() + "/nevr-sentinel.session-950000.log");
+  CHECK(LogName() != firstName);
+  CHECK(sentinel::PreviousSessionLog() == sentinel::LogDir() + "/" + firstName);
   CHECK(ReadAll(sentinel::PreviousSessionLog()).find("first session in the folder") != std::string::npos);
-  CHECK(!ReadAll(sentinel::LogDir() + "/nevr-sentinel.log").empty());
-  CHECK(access((Dir() + "/nevr-sentinel.session-950000.log").c_str(), F_OK) != 0);  // not beside the config
+  CHECK(!ReadAll(sentinel::LogDir() + "/" + LogName()).empty());
+  CHECK(access((Dir() + "/" + firstName).c_str(), F_OK) != 0);  // not beside the config
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
   RemoveTree(Dir() + "/ps");
 }
 
 void TheBuiltInListIsTheOverrideAloneInATestBuild() {
   sentinel::SetLogDirCandidatesForTest(nullptr, 0);
-  CHECK(sentinel::LogDir() == Dir());
+  CHECK(sentinel::LogDir() == Dir() + "/nevr/logs");  // below the files folder, never in it
   CHECK(std::string(sentinel::FilesDir()) == Dir());
 }
 
@@ -1404,12 +1401,10 @@ int main() {
   ALinkBelowTheTrustedPartIsNotFollowed();
   AFirstCandidateThatCannotBeUsedFallsThrough();
   TheFolderIsChosenAgainWhenItVanishes();
-  ThePreviousSessionIsKeptWholeAtTheFirstOpen();
-  SessionsAreNeverReplacedAndThePreviousIsTheNewest();
-  AnEmptyOrAbsentLogIsNotKept();
-  AFolderAtTheLogPathIsNotKept();
-  AFailedKeepLosesNothingAndIsToldOnce();
-  OnlySessionFilesAreThePreviousSession();
+  AProcessWritesOneFileNamedByItsStart();
+  ANewProcessStartsAFileOfItsOwnAndThePreviousSessionIsTheOneBefore();
+  AFolderAtTheLogPathIsNotOpenedAsALog();
+  OnlyProcessLogsArePreviousSessions();
   ThePreviousSessionIsInTheLogFolder();
   ClearLogs();
   ::rmdir(Dir().c_str());

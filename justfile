@@ -3478,7 +3478,7 @@ verify *args: (_heavy-guard "verify" args)
     fi
 
     # The XPID patch's outcome was unobservable: it runs before the log filter is
-    # up and its Log() output reached neither the console log nor nevr-boot.jsonl,
+    # up and its Log() output reached neither the console log nor the main log,
     # so across every captured run it reported nothing at all. `login injected
     # xpid=DSC-` does NOT cover it — ws_bridge builds that prefix itself and stays
     # green even when this patch never ran.

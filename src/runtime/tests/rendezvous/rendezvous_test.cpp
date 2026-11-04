@@ -496,7 +496,7 @@ std::string ReadAll(const wchar_t* path) {
 
 // --- the host's JSON records ---------------------------------------------------
 
-// Every record in `<dir>\nevr\echovr\logs\nevr-bootstrap.jsonl`, parsed. A line that
+// Every host record in the main logs of `<dir>\nevr\echovr\logs`, parsed. A line that
 // does not parse, or lacks the host header, fails the harness.
 std::vector<nlohmann::json> ReadHostRecords(const std::wstring& dir) {
   const std::string text = ReadAll((nevr_test::HostLogPath(dir)).c_str());
@@ -649,7 +649,7 @@ struct StopExpectation {
   const char* record_event;      // the host-log record that carries the same facts
 };
 
-// `local` is the child's %LOCALAPPDATA%: the host log is `<local>\nevr\echovr\logs\nevr-bootstrap.jsonl`.
+// `local` is the child's %LOCALAPPDATA%: the host's records are in the main log, `<local>\nevr\echovr\logs\nevr-<timestamp>.jsonl`.
 nlohmann::json ExpectStopLine(const std::wstring& stderr_file, const std::wstring& local, const std::wstring& root,
                               const StopExpectation& expected, const char* label) {
   const std::vector<StopText> lines = StopLines(stderr_file);

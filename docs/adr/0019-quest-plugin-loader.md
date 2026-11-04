@@ -60,7 +60,7 @@ Summary of the recommendations. Each has alternatives and a reason in its sectio
 9. **Registry.** One process-wide slot registry, the single copy of the GOT backend, seeded with every slot the sentinel
    names in `pinned_targets.h`, installed or not. A plugin claim on a registered slot is refused loudly and names the owner.
 10. **Logging.** Plugin lines keep the Rule 15 shape `[NEVR.PLUGIN] plugin=<id> ...` and reach the sentinel logger
-    (logcat and `nevr-sentinel.log`). The loader writes exactly one `plugin_load` record per plan entry, including
+    (logcat and the run's log, `nevr/logs/nevr-<timestamp>.jsonl`). The loader writes exactly one `plugin_load` record per plan entry, including
     refusals and disabled entries.
 11. **Verification.** The ADR 0004 regime: pin binaries, host tests with fixture shared objects, and an explicit blocker
     list for every Bionic-only claim. Predictions and falsifiers are written in section 11 before any code.
@@ -411,7 +411,7 @@ Shaped by AGENTS.md (logging is part of the work) and `docs/standards/logging.md
 - **Plugin lines.** Through `ctx->log` (`sdk/include/nevr/plugin_interface.h:69-70`) into the sentinel logger. Format
   `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` (Rule 15, `logging.md:534-536`), so one filter works on every
   platform. The `plugin=` value is the host's name for the plugin (`ctx->plugin_id`), not text the plugin chooses.
-  Lines reach logcat (tag `NEVR-Sentinel`) and `nevr-sentinel.log` (`docs/adr/0003-quest-networking-port.md:1801-1806`).
+  Lines reach logcat (tag `NEVR-Sentinel`) and the run's log, `nevr/logs/nevr-<timestamp>.jsonl` (`docs/adr/0003-quest-networking-port.md:1801-1806`).
 - **Loader record.** Exactly one `plugin_load` record per plan entry, whatever its outcome. Fields: `name`, `file`,
   `sha256` of the bytes the loader read, `plugin_build_id`, `game_build_id`, `phase` (`early` or `normal`), `outcome`
   (`planned`, `loaded`, `refused`, `disabled`, `not_started`, `failed`), and `reason` as a stable token. A plan entry
@@ -431,8 +431,8 @@ Shaped by AGENTS.md (logging is part of the work) and `docs/standards/logging.md
 - **Secrets.** `args` values are interpolated config values and may hold secrets. The loader logs the argument keys
   only, never the values.
 - **Stderr.** A plugin does not write to stderr (`logging.md:527-530`). The Quest sentinel does not collect it.
-- **Durability.** `nevr-sentinel.log` lives in the app's files directory and survives a process restart. The sentinel
-  rotates it: once it reaches `kMaxDiskLogBytes` (1 MiB) it is renamed to a name not yet taken and never deleted
+- **Durability.** The run's log lives in `nevr/logs` below the app's files directory and survives a process restart. The sentinel
+  rotates it: once it reaches `kMaxDiskLogBytes` (1 MiB) it is renamed to `nevr-<timestamp>.<n>.jsonl`, a name not yet taken, and never deleted
   (`src/quest/sentinel/sentinel_log.cpp:119`, `:290`). Keep-by-default applies: nothing in this ADR shortens it.
 - **Loud failure.** If the file sink cannot write a record, the failure must be visible. The logcat path is a separate
   sink. The file sink reports its own write failure once, to logcat (`src/quest/sentinel/sentinel_log.cpp:286`), and the
@@ -520,7 +520,7 @@ Any change to the PC loader or the ADR 0010 gate. The design of any game-data ge
   **Decision:** accept moment (b) with P8's bound for v1. A deferred thread is a later change if P8 fails.
 - **Q5.** Does Quest report plugins to login (`nevr_plugins`)? That is a service-visible change.
   **Decision:** yes. Quest reports plugins to login the same way PC does, so neither platform is left behind.
-- **Q6.** Does `nevr-sentinel.log` rotate or truncate? Does its file sink report its own write failures?
+- **Q6.** Does the run's log rotate or truncate? Does its file sink report its own write failures?
   **Decision:** the sentinel log rotates and reports its own write failures. Both hold in the tree today
   (`src/quest/sentinel/sentinel_log.cpp:119`, `:286`), so no issue is needed. The failure rule it follows is
   `docs/standards/logging.md:250`.

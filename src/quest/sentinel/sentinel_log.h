@@ -1,7 +1,8 @@
-// Sentinel logging: every line goes to logcat (tag NEVR-Sentinel) and is appended to the on-disk
-// log `nevr-sentinel.log` as one JSON object per line. The log lives in LogDir(), not in FilesDir():
-// the app's Android/data folder may not exist on a headset, and the media folder is the one the
-// player can reach. Callers pass key and feature names only, never configured values.
+// Sentinel logging: every line goes to logcat (tag NEVR-Sentinel) and is appended to this run's on-disk log,
+// `nevr-<UTC time of the first open>.jsonl`, as one JSON object per line: the PC's main log shape (docs/standards/logging.md, Rule 17).
+// The log lives in LogDir(), `nevr/logs` below the game's files folder, not in FilesDir(): the app's Android/data folder may not
+// exist on a headset, and the media folder is the one the player can reach. Callers pass key and feature names only, never
+// configured values.
 #pragma once
 
 #include "quest/sentinel/quest_config.h"
@@ -38,28 +39,35 @@ bool EnsureDirBelow(const LogDirCandidate& c);
 // The folder the on-disk log and its rotated files are in, for everything that reads them (the log
 // upload). It is chosen once, on the first open that works: the first candidate whose folder can be
 // made and whose log file can be opened. Candidates, in order: with NEVR_QUEST_FILES_DIR defined at
-// build time (the host tests) only that folder, which is never created; otherwise the app's
-// Android/media folder (`nevr_quest::data_root::kMediaRoot`, created below
-// Android/media/com.readyatdawn.r15) then the Android/data files folder (created below Android/data).
+// build time (the host tests) only `<that folder>/nevr/logs`, below that folder, which is never created; otherwise
+// `nevr/logs` below the app's Android/media files folder (`nevr_quest::data_root::kMediaRoot`, created below
+// Android/media/com.readyatdawn.r15) then below the Android/data files folder (created below Android/data).
 // Before any open has worked it is the first candidate's folder. If the folder vanishes the next open
 // chooses again. Each choice is told in the log (logcat at once, the file when it is open): one Warning per
 // candidate that could not be used, event `sentinel_log_dir_failed` with its `dir`, `errno` and `error` (not
-// repeated while it keeps failing the same way), then one Info, event `sentinel_log_dir`, for the winner.
+// repeated while it keeps failing the same way), then one Info, event `sentinel_log_dir`, for the winner: its `candidate` is
+// `android_media` or `android_data`, which says which root was used, and its `file` is this run's log.
 std::string LogDir();
 
-// The log of the session before this one, kept whole (the file `nevr-sentinel.session-<unix ms>.log` in LogDir() with
-// the highest time, then the highest collision number), or "" when there is none. The first open of a process renames
-// the log a previous process left to such a name, so the log upload reads two files: LogDir()/nevr-sentinel.log (this
-// session) and this one. A session that ran past kMaxDiskLogBytes also left size-rotated files beside it
-// (`nevr-sentinel.<unix ms>.log`); those are not named here and are never deleted.
+// The log of the session before this one: the newest other `nevr-<timestamp>.jsonl` in LogDir() (a `nevr-pid<hex>.jsonl`
+// only when there is no timestamped one), or "" when there is none. Every process writes a file of its own name, so the log
+// upload reads two files: this session's (LogDir() with the name in the `sentinel_log_dir` line) and this one. A session that
+// ran past kMaxDiskLogBytes also left size-rotated files beside it (`nevr-<timestamp>.<n>.jsonl`); those are not named here and
+// are never deleted.
 std::string PreviousSessionLog();
 
-// Test seam: the next open behaves as the first open of a new process (it keeps the log that is there).
+// The name of this process's log, `nevr-<UTC time>.jsonl` (made on first use and kept until ResetSessionForTest), so a reader can
+// tell this session's file from the previous one's. The file is in LogDir().
+const char* LogFileName();
+
+// Test seam: the next open behaves as the first open of a new process (it makes a new file name).
 void ResetSessionForTest();
 
 // One line of the on-disk log: a single JSON object ending in '\n', no ANSI, valid UTF-8 (invalid bytes in
 // `message` are replaced). A `message` that is itself a JSON object is flattened into the line: its fields stay
-// fields, its `ts_ms` is dropped, its `level` is kept (else `level` names `level`); any other message becomes `msg`.
+// fields, its `ts_ms` is dropped, its `level` is kept (else `level` names `level`, lower case as on the PC); any other
+// message becomes `msg`. The header is the PC main log's: `ts` (UTC, ISO 8601 with milliseconds), `run` (`<pid hex>-<start hex>`, this
+// process's, as core/run_id.h), `level` and `tag`.
 std::string FormatDiskLogLine(nevr_quest::LogLevel level, long long unixMs, const std::string& message);
 
 // Writes `message` to logcat and the on-disk log. Open failures and write failures are each
@@ -86,8 +94,8 @@ bool WriteAll(int fd, const char* data, std::size_t size, int* err, WriteFn writ
 // left a partial record in the file; a failure that wrote nothing leaves it as it was.
 bool WriteRecord(int fd, const std::string& line, bool* torn, int* err, WriteFn write);
 
-// The on-disk log is kept by session (see PreviousSessionLog) and is also rotated (renamed to a name that does not exist
-// yet, never deleted) when it reaches this size: at open, and in-process once this run has written that much. A rename that
+// The on-disk log is one file for each process (see PreviousSessionLog) and is rotated (renamed to nevr-<timestamp>.<n>.jsonl, a
+// name that does not exist yet, never deleted) when it reaches this size: at open, and in-process once this run has written that much. A rename that
 // fails is logged once to logcat and not attempted again for kOpenRetryMs; the log keeps growing
 // meanwhile, and a rotation that later succeeds re-arms the report.
 inline constexpr long long kMaxDiskLogBytes = 1024 * 1024;

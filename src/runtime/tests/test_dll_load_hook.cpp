@@ -706,7 +706,7 @@ TEST(DllLoadHookBootVerdict, APartialInstallFailsTheBootAndNamesTheCount) {
 
 // #654: the hook's own lines (a refused load, a fired patch callback, a truncated filter name, a DLL that was
 // already loaded) reach the durable log, not only stderr. Boot phase: through the boot tee, into
-// nevr-boot.jsonl. After boot: through Log() to the game's CLog, stood in for by a recorder. Under the loader
+// the main log. After boot: through Log() to the game's CLog, stood in for by a recorder. Under the loader
 // lock after boot, CLog is not usable (#495): the line waits and is written by the next LoadLibrary that
 // returns outside the lock.
 namespace {

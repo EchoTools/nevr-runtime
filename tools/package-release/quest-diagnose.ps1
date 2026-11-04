@@ -221,23 +221,24 @@ try {
   # The runtime also serves the Android/media files folder when it exists without _data (android_media_unmarked, #749).
   $mediaDir = Test-RemoteDir "$mediaRoot/files"
 
-  # The runtime's own log and crash files: nevr-sentinel*.log (this session, the kept previous sessions, the size-rotated
-  # files) and nevr-crashes. The Android/media files folder is read first (where the runtime writes them, and where a
-  # player can reach them); the Android/data folder is the fallback.
+  # The runtime's own logs and crash files: every nevr-*.jsonl in nevr/logs (one log for each run of the game, and the
+  # rotated files of a long run) and nevr-crashes. The Android/media files folder is read first (where the runtime writes
+  # them, and where a player can reach them); the Android/data folder is the fallback.
   New-Item -ItemType Directory -Path (Join-Path $script:Work 'sentinel') -Force | Out-Null
-  $logPath = Join-Path $script:Work 'sentinel/nevr-sentinel.log'
   $logDir = ''
-  $sentinelLog = $null
+  $logNames = @()
   foreach ($candidate in @("$mediaRoot/files", $filesDir)) {
-    $sentinelLog = Invoke-Device 120 @('pull', "$candidate/nevr-sentinel.log", $logPath)
-    if ($sentinelLog.Code -eq 0) { $logDir = $candidate; break }
+    $listing = Get-DeviceText 30 @('shell', "ls $candidate/nevr/logs")
+    $found = @($listing -split "`r?`n" | Where-Object { $_ -match '^nevr-.+\.jsonl$' })
+    if ($found.Count -gt 0) { $logDir = "$candidate/nevr/logs"; $logNames = $found; break }
   }
-  $keptPulls = ''
+  $logRc = 1
+  $logPulls = ''
   if ($logDir) {
-    $listing = Get-DeviceText 30 @('shell', "ls $logDir")
-    foreach ($name in @($listing -split "`r?`n" | Where-Object { $_ -match '^nevr-sentinel\..+\.log$' })) {
-      $kept = Invoke-Device 120 @('pull', "$logDir/$name", (Join-Path $script:Work "sentinel/$name"))
-      $keptPulls += "${name}: exit $($kept.Code) $($kept.Output)`n"
+    $logRc = 0
+    foreach ($name in $logNames) {
+      $pulled = Invoke-Device 120 @('pull', "$logDir/$name", (Join-Path $script:Work "sentinel/$name"))
+      $logPulls += "${name}: $($pulled.Output)`n"
     }
   }
   $crashes = $null
@@ -245,7 +246,7 @@ try {
     $crashes = Invoke-Device 120 @('pull', "$candidate/nevr-crashes", (Join-Path $script:Work 'sentinel'))
     if ($crashes.Code -eq 0) { break }
   }
-  $logFiles = @(Get-ChildItem -LiteralPath (Join-Path $script:Work 'sentinel') -File -Filter 'nevr-sentinel*.log' -ErrorAction SilentlyContinue)
+  $logFiles = @(Get-ChildItem -LiteralPath (Join-Path $script:Work 'sentinel') -File -Filter 'nevr-*.jsonl' -ErrorAction SilentlyContinue)
   foreach ($file in $logFiles) { Save-Text ($file.FullName.Substring($script:Work.Length + 1)) ([System.IO.File]::ReadAllText($file.FullName)) }
   $logFullNames = @($logFiles | ForEach-Object { $_.FullName })
   $crashFiles = @(Get-ChildItem -LiteralPath (Join-Path $script:Work 'sentinel') -Recurse -File -ErrorAction SilentlyContinue |
@@ -254,7 +255,7 @@ try {
     if ($file.Extension -in '.log', '.txt', '.json') { Save-Text ($file.FullName.Substring($script:Work.Length + 1)) ([System.IO.File]::ReadAllText($file.FullName)) }
   }
   $folderName = if ($logDir) { $logDir } else { 'none' }
-  Save-Text 'sentinel/pull_results.txt' ("nevr-sentinel.log: exit $($sentinelLog.Code) $($sentinelLog.Output) (folder: $folderName)`n${keptPulls}nevr-crashes: exit $($crashes.Code) $($crashes.Output)`n")
+  Save-Text 'sentinel/pull_results.txt' ("run logs: exit $logRc (folder: $folderName)`n${logPulls}nevr-crashes: exit $($crashes.Code) $($crashes.Output)`n")
 
   # ONE clean launch. The headset's log of the run the tester came with is saved first: logcat -c erases it.
   Write-Host "Starting the game once and waiting $LaunchWaitSeconds s (this closes it first if it is running and erases the headset's log buffer after saving a copy) ..."

@@ -21,8 +21,7 @@ struct LogFileInfo {
 };
 
 /// True for the runtime's run log names, nevr-<year>-<month>-...jsonl (core/run_log_path.h): the one main log of a process, which
-/// the host, the boot phase, the filter and the crash path all write to. Older releases also wrote nevr-boot.jsonl and
-/// nevr-bootstrap.jsonl; those are not run logs.
+/// the host, the boot phase, the filter and the crash path all write to.
 inline bool IsRunLogName(std::string_view name) {
   constexpr std::string_view kPrefix = "nevr-";
   constexpr std::string_view kSuffix = ".jsonl";

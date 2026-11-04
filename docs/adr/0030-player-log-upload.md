@@ -32,9 +32,9 @@ service, and shows a short code. The player posts the code in Discord and a main
   (`HandleApply`). There is no row-adding facility in the tree.
 - **The seam on PC:** no settings-row seam. The nearest are the inserted menu cards (`src/runtime/patch/menu_page.h`,
   `menu_cards.h`, #906) and the text writer (`src/runtime/patch/ui_text.h`, #896).
-- **Log files.** PC: the run log written by `src/runtime/log/builtin_filter.cpp` and `nevr-boot.jsonl`
-  (`src/runtime/log/boot_log_tee.cpp`) in the `logs` folder under the nevr root (`nevr_root::LogsDir`). Quest:
-  `nevr-sentinel.log` and its rotated files (`src/quest/sentinel/sentinel_log.cpp`) in the game's files folder.
+- **Log files.** PC: the process's one main log, `nevr-<timestamp>.jsonl`, in the `logs` folder under the nevr root (`nevr_root::LogsDir`); the
+  filter (`src/runtime/log/builtin_filter.cpp`), the boot tee (`src/runtime/log/boot_log_tee.cpp`), the host and the crash path all write into it. Quest:
+  the run's `nevr-<timestamp>.jsonl` and its rotated files (`src/quest/sentinel/sentinel_log.cpp`) in `nevr/logs` below the game's files folder.
 
 ## Decision
 
@@ -69,7 +69,7 @@ service, and shows a short code. The player posts the code in Discord and a main
   an injected `post` function. PC: libcurl (`src/core/nevr_curl.h`, as `invite_transport_curl.cpp`). Quest:
   `curl_http.h` `PostJsonWithHeaders`. Certificates are verified, redirects are refused, as in the crash path.
 - **Which files.** The current session's log and the previous session's log, nothing else: on PC the run log of this
-  process and the newest earlier run log; on Quest `nevr-sentinel.log` and its first rotation. No minidump, no
+  process and the newest earlier run log; on Quest the run's log and the newest earlier one (`sentinel::PreviousSessionLog`). No minidump, no
   crash folder, no config, no credentials file, no directory listing. The file list is fixed in code, not read from
   the file system.
 - **Size.** The last 256 KiB of each file; `truncated` says when the head was cut. The whole body is at most 1 MiB; a

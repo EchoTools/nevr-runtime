@@ -466,7 +466,7 @@ int Install() {
     // (This path does not go through PatchDetour, so it needs its own reporting.)
     // #632: Install() runs in the boot phase (initialization, from the host's wrapper detour, before
     // the game's log exists; not under the loader lock), so its report goes
-    // through the boot tee (stderr and nevr-boot.jsonl), and it returns the outcome for the caller.
+    // through the boot tee (stderr and the main log), and it returns the outcome for the caller.
     struct HookSpec { const char* name; void* target; void* detour; void** original; };
     const HookSpec specs[] = {
         {"LoadLibraryA",   reinterpret_cast<void*>(&LoadLibraryA),   reinterpret_cast<void*>(&HookedLoadLibraryA),

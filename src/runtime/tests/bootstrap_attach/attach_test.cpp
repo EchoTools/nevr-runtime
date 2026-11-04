@@ -20,7 +20,7 @@
 //
 // Every child validates, from the recorded events (index order is a
 // linearization: each record takes its slot with InterlockedIncrement) and from the
-// host's own bootstrap records (nevr-bootstrap.jsonl in the scenario's directory):
+// host's own bootstrap records (the NEVR.HOST lines of the main logs in the scenario's directory):
 //   - host attach: enter < hook live (JMP written) < exit, with nevr-runtime.dll NOT loaded
 //     at attach exit; the records are the decisions in order with exactly one
 //     hook_install record when hooked and none when not;
