@@ -1,4 +1,4 @@
-# module `boosterpool`: each line removes one rule from src/boosterpool.cpp; tests/mod/boosterpool.sh must fail on it
+# module `boosterpool`: each line removes one rule from src/boosterpool.cpp; its tests (mod/boosterpool.cmake, `just test-quest-q15t boosterpool`) must fail on it
 runm boosterpool bp_no_substitution   src/boosterpool.cpp "s/  return real(st, plain);/  return real(st, name);/"
 runm boosterpool bp_always_substitute src/boosterpool.cpp "s/  if (name != suffixed) return real(st, name);/  (void)0;/"
 runm boosterpool bp_plain_args_ignored src/boosterpool.cpp "s/  const std::uint64_t suffixed = append(plain, kSuffix, 1, 1);/  const std::uint64_t suffixed = append(name, kSuffix, 1, 1);/"

@@ -1,7 +1,7 @@
 # impactsnd: bullet impact sounds (rows R12 to R16, and R17: the Shutdown lock)
 
 Port of the source build's `the source build's impactsnd` (v1 to v6) to a plugin module. Files: `src/impactsnd.{h,cpp}`,
-`src/quest/tests/q15t/impactsnd_test.cpp`, `src/quest/tests/q15t/mod/impactsnd.sh`, `src/quest/tests/q15t/mutants.d/impactsnd.sh`. Pinned build: libr15 build id
+`src/quest/tests/q15t/impactsnd_test.cpp`, `src/quest/tests/q15t/mod/impactsnd.cmake`, `src/quest/tests/q15t/mutants.d/impactsnd.sh`. Pinned build: libr15 build id
 `b243509c08ce677aeb95fa348016949b3fc45230` (the disassembly). ELF vaddr = disassembly VA - 0x100000. Source citations are
 `the source build's impactsnd:<line>`; disassembly citations are quoted from read-only queries (scratch SQL, a source-build note not in this tree,
 run with the contract's recipe).
@@ -376,7 +376,7 @@ changed or freed before the write` appears only if a pass and a Shutdown actuall
 - Optional: `-DQ15T_IMPACTSND_NOWRITE=1` for a read-and-log-only build.
 - Link `-pthread` (the module uses `pthread_mutex_t`; no namespace-scope constructor and no `__cxa_atexit` reference: checked on
   host and NDK aarch64 objects, `readelf` finds no `.init_array`/`.ctors`).
-- `src/quest/tests/q15t/mod/impactsnd.sh` is picked up by `src/quest/tests/q15t/run_host_tests.sh` and `Q15T_MODULE=impactsnd`.
+- `src/quest/tests/q15t/mod/impactsnd.cmake` is picked up by `just test-quest-q15t` and `just test-quest-q15t impactsnd`.
 
 ## Tests and mutants
 

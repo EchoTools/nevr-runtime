@@ -2507,11 +2507,51 @@ test-quest-plugins:
     timeout -k 5 120 "$out/libr15_attach_step_test" src/quest/tests/fixtures
     echo "test-quest-plugins: all plugin loader tests pass on the host"
 
-# The q15t plugin's host tests (src/quest/tests/q15t/): the plugin built for the host against fake game memory and a
-# fake loader, one program per module, in the capped build slice. No NDK for most; the modules whose tests cross-compile find the
-# NDK at ANDROID_NDK_HOME. The mutation run (tests/mutants.sh, about an hour) is not part of this gate. Fail-close.
-test-quest-q15t:
-    bash src/quest/tests/q15t/run_host_tests.sh
+# The q15t plugin's host tests (src/quest/tests/q15t/, a CMake project; ADR 0041): the plugin built for the host against fake game
+# memory and a fake loader, one program per module (mod/<module>.cmake), configured, built and run by ctest in the capped build
+# slice. Then the same project configured with the NDK toolchain file (preset q15t-ndk-checks) builds the arm64 compile checks and
+# the thunk program, and ctest judges them (no static initializer, thunk disassembly, thunk under qemu-aarch64). The NDK is
+# Q15T_NDK, else ANDROID_NDK_HOME (an NDK r26d install); Q15T_SKIP_NDK=1 skips the second stage and says so, Q15T_SKIP_QEMU=1 skips
+# the qemu run and says so. `just test-quest-q15t <module>` builds and runs one module's tests. A program that allocates forever
+# dies alone under a 2 GiB address-space cap (Q15T_TEST_VMEM_KB). The mutation run (src/quest/tests/q15t/mutants.sh, about an
+# hour) is not part of this gate. Fail-close.
+test-quest-q15t module="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Every build and test runs in the shared capped slice: re-exec inside it when not there already.
+    if ! grep -q 'nevr-builds.slice' /proc/self/cgroup 2>/dev/null; then
+      exec systemd-run --user --scope --quiet --slice=nevr-builds.slice -p MemoryMax=4G -- "{{ just_executable() }}" test-quest-q15t "{{ module }}"
+    fi
+    module="{{ module }}"
+    jobs="${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    cd src/quest/tests/q15t
+    ctest_args=()
+    ctest_ndk_args=()
+    if [ -n "$module" ]; then
+      ctest_args=(-L "^${module}$")
+      ctest_ndk_args=(-L "^${module}$" --no-tests=ignore)
+    fi
+    cmake --preset q15t-host-tests
+    if [ -n "$module" ]; then
+      cmake --build --preset q15t-host-tests -j "$jobs" --target "mod_${module}"
+    else
+      cmake --build --preset q15t-host-tests -j "$jobs"
+    fi
+    (ulimit -v "${Q15T_TEST_VMEM_KB:-2097152}" && ctest --preset q15t-host-tests "${ctest_args[@]}")
+    if [ "${Q15T_SKIP_NDK:-0}" = 1 ]; then
+      echo "test-quest-q15t: Q15T_SKIP_NDK=1: the arm64 compile checks, the thunk checks and the qemu run were NOT run"
+      exit 0
+    fi
+    export Q15T_NDK="${Q15T_NDK:-${ANDROID_NDK_HOME:-}}"
+    [ -n "$Q15T_NDK" ] || { echo "test-quest-q15t: Q15T_NDK is not set (point it at an Android NDK r26d install, or set Q15T_SKIP_NDK=1 to skip the arm64 checks)" >&2; exit 1; }
+    cmake --preset q15t-ndk-checks
+    if [ -n "$module" ]; then
+      cmake --build --preset q15t-ndk-checks -j "$jobs" --target "mod_${module}"
+    else
+      cmake --build --preset q15t-ndk-checks -j "$jobs"
+    fi
+    (ulimit -v "${Q15T_TEST_VMEM_KB:-2097152}" && ctest --preset q15t-ndk-checks "${ctest_ndk_args[@]}")
+    echo "test-quest-q15t: all q15t host tests and arm64 checks pass"
 
 # The Quest autopilot plugin on the host (#1202, docs/adr/0025-quest-autopilot-route.md): the route grammar, every
 # derived bit and limit, the clock, the filter against a fake clock, the event ring (two producers), and the plugin's

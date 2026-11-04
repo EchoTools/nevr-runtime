@@ -1,6 +1,6 @@
 # Module `music` (source ticket T-48; no R-id)
 
-Files: `src/music.{h,cpp}`, `src/quest/tests/q15t/music_test.cpp`, `src/quest/tests/q15t/mod/music.sh`, `src/quest/tests/q15t/mutants.d/music.sh`.
+Files: `src/music.{h,cpp}`, `src/quest/tests/q15t/music_test.cpp`, `src/quest/tests/q15t/mod/music.cmake`, `src/quest/tests/q15t/mutants.d/music.sh`.
 
 `R1_functions.md` has no row for `PostSoundEvent` (searched `music` and `PostSoundEvent` in the source-build function note, not in this tree: no match), so this
 note has no R-id; the unit is the source build's `the source build's music` ("the source build" below, read in full).
@@ -25,7 +25,7 @@ note has no R-id; the unit is the source build's `the source build's music` ("th
   the plugin) and uses the header-only `module_switch.h`; no other new dependency.
 - Capability: not `ALTERS_GAMEPLAY` (it only posts audio events; my judgement, same class as `impactsnd` in the comment in plugin.cpp).
 - `Report()` string: `music`. The kill file makes the module report a non-ok status with reason `off_file`.
-- Host test and mutants are picked up by the existing loops (`src/quest/tests/q15t/mod/*.sh`, `src/quest/tests/q15t/mutants.d/*.sh`).
+- Host test and mutants are picked up by the existing globs (`src/quest/tests/q15t/mod/*.cmake`, `src/quest/tests/q15t/mutants.d/*.sh`).
 
 ## What it does (source the source build's music:1-34)
 
@@ -61,7 +61,7 @@ on a refusal; INFO `music off`; INFO `music play`, `music post`, `music: combat 
 
 `InstallImportHook(symbol, base, 0x36d76e8, &PostWrapper, &g_real, 0x2549264)`: a data-page swap through `got_swap` (which refuses an
 executable page), the slot must hold exactly `base + 0x2549264`. No code write, no `PROT_EXEC`, no constructor
-(`src/quest/tests/q15t/mod/music.sh` cross-compiles `src/quest/plugins/q15t/src/music.cpp` with the NDK r26d clang and fails on `.init_array`/`.ctors`).
+(`src/quest/tests/q15t/mod/music.cmake` cross-compiles `src/quest/plugins/q15t/src/music.cpp` with the NDK r26d clang and fails on `.init_array`/`.ctors`).
 
 Gate order: build id (plugin `InitEx`, not re-checked) -> 29 code-word pins read with SafeRead at `base + ELF vaddr` before anything is
 touched (`word_pin_mismatch`, one ERROR naming `pin=0x<ELF vaddr> found=0x<word or unreadable> expected=0x<word>`) -> `music.off` ->

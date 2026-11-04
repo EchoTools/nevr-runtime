@@ -1,6 +1,6 @@
 # Module `sensorwd` (T-07, the `sensorwd.on` half)
 
-Files: `src/sensorwd.{h,cpp}`, `src/quest/tests/q15t/sensorwd_test.cpp`, `src/quest/tests/q15t/mod/sensorwd.sh`, `src/quest/tests/q15t/mutants.d/sensorwd.sh`.
+Files: `src/sensorwd.{h,cpp}`, `src/quest/tests/q15t/sensorwd_test.cpp`, `src/quest/tests/q15t/mod/sensorwd.cmake`, `src/quest/tests/q15t/mutants.d/sensorwd.sh`.
 Pinned build: libr15 build id `b243509c08ce677aeb95fa348016949b3fc45230` (the disassembly). ELF vaddr = disassembly VA - 0x100000.
 Source citations are in "the source build" (`the source build's fx`, generator the source build's tools);
 Disassembly citations are quoted from read-only queries (scratch queries, a source-build note not in this tree, run with the
@@ -24,7 +24,7 @@ contract's recipe).
   module refuses with reason `off_file` and one INFO line `sensorwd off`; `ReportModule` will show that as a non-ok status. No `setprop` switch.
 - The build-id gate is the plugin's InitEx (not repeated here). Gate order inside the module: kill file, 34 code-word pins, the three words
   hold the stock functions, then the swaps. There is no MD5 or other file-hash gate.
-- Host test: `Q15T_MODULE=sensorwd bash src/quest/tests/q15t/run_host_tests.sh` (picked up by the `src/quest/tests/q15t/mod/*.sh` loop; also does the NDK arm64 compile and the
+- Host test: `just test-quest-q15t sensorwd` (picked up by the `src/quest/tests/q15t/mod/*.cmake` glob; also does the NDK arm64 compile and the
   no-`.init_array` check). Mutants: `Q15T_MUTANTS_ONLY=sensorwd bash src/quest/tests/q15t/mutants.sh` (picked up by the `src/quest/tests/q15t/mutants.d/*.sh` loop).
 
 ## Row covered

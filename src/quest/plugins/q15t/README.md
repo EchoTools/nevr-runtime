@@ -14,7 +14,7 @@ Neither library is in a release or package-dev APK. `just build-quest-q15t` buil
 ## Layout
 
 - `src/` the plugin (`src/<module>.{h,cpp}`, `plugin.cpp` installs them in the order the module docs fix).
-- `tests/` host tests: `src/quest/tests/q15t/run_host_tests.sh` (`just test-quest-q15t`), one `tests/mod/<module>.sh` per module,
+- `tests/` host tests: a CMake project, `src/quest/tests/q15t/CMakeLists.txt` (`just test-quest-q15t`, or `just test-quest-q15t <module>`), one `tests/mod/<module>.cmake` per module,
   `src/quest/tests/q15t/mutants.sh` and `src/quest/tests/q15t/mutants.d/` (the mutation run, about an hour, one at a time, not part of the gate).
 - `docs/quest/q15t/modules/<module>.md`, `docs/quest/q15t/adr/`: one document per module and the two plugin decisions.
 - `CMakeLists.txt`: the options (defaults and the reason for each are in it), added by `src/quest/integration/CMakeLists.txt`.

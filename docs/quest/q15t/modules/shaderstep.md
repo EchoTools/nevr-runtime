@@ -1,6 +1,6 @@
 # Module `shaderstep` (issue #1553): CGShaderSetResource table growth step 32 -> 1
 
-Files: `src/quest/plugins/q15t/src/shaderstep.{h,cpp}`, `src/quest/tests/q15t/shaderstep_test.cpp`, `src/quest/tests/q15t/mod/shaderstep.sh`.
+Files: `src/quest/plugins/q15t/src/shaderstep.{h,cpp}`, `src/quest/tests/q15t/shaderstep_test.cpp`, `src/quest/tests/q15t/mod/shaderstep.cmake`.
 Option: `Q15T_SHADERSTEP` (default ON). Off switch: `shaderstep.off` in the q15t data directory.
 
 ## What the game does (pinned build b243509c, libr15, the disassembly of `libr15.so`)

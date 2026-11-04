@@ -1,0 +1,20 @@
+bti c
+adrp x16, 0x0 <q15t_pb_resolve_thunk>
+ reloc R_AARCH64_ADR_PREL_PG_HI21 q15t_pb_cone_ret
+ldr x16, [x16]
+ reloc R_AARCH64_LDST64_ABS_LO12_NC q15t_pb_cone_ret
+cmp x30, x16
+b.eq 0x20 <q15t_pb_resolve_thunk+0x20>
+adrp x16, 0x0 <q15t_pb_resolve_thunk>
+ reloc R_AARCH64_ADR_PREL_PG_HI21 q15t_pb_resolve_real
+ldr x16, [x16]
+ reloc R_AARCH64_LDST64_ABS_LO12_NC q15t_pb_resolve_real
+br x16
+stp x29, x30, [sp, #-0x10]!
+mov x29, sp
+add x1, sp, #0x10
+mov x2, x24
+bl 0x30 <q15t_pb_resolve_thunk+0x30>
+ reloc R_AARCH64_CALL26 q15t_pb_cone_at
+ldp x29, x30, [sp], #0x10
+ret
