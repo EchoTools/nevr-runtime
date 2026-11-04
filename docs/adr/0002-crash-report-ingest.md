@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0002-crash-report-ingest.md
+audience: all
+---
+
 # ADR 0002: Crash reports reach the game service through a spool and a deferred uploader
 
 Status: accepted. The HTTPS spool and sink below are not implemented. The readable report is sent by the BugSplat64.dll

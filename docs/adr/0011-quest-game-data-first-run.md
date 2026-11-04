@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0011-quest-game-data-first-run.md
+audience: all
+---
+
 # ADR 0011: Quest game data: how a headset-only install gets `_data`, and what the player sees when it is missing
 
 Status: superseded by ADR 0013 (#758) for who fetches the game data and for whom. The fetch design, the toast fallback plan and the

@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0008-bugsplat-host-and-nevr-runtime.md
+audience: all
+---
+
 # ADR 0008: BugSplat64.dll is the stable host, nevr-runtime.dll is the runtime
 
 Status: accepted. The contract, the descriptor, the host units and their harnesses are

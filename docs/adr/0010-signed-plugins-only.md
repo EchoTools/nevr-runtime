@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0010-signed-plugins-only.md
+audience: all
+---
+
 # ADR 0010: plugins are checked against the release-signer pipeline, and a run can require the signature
 
 Status: accepted, implemented by #745 (merge commit 712fb5c4226335f9084ef5dcd42da986e62efc04: the signature check; signed-only and dev

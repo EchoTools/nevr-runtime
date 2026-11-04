@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0041-native-code-is-built-by-cmake.md
+audience: all
+---
+
 # ADR 0041: native code is built by CMake, not by scripts
 
 Status: proposed. Applies to every native binary this repo builds, on PC and Quest. States the rule that the C++ Mingw

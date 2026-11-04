@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0023-core-install-method.md
+audience: all
+---
+
 # ADR 0023: the core install method: every installer verifies the signed manifest, installs what it names, and ends in a known state
 
 Status: proposed. Tracking issue: #1140. Builds on #898 (the signed manifest) and

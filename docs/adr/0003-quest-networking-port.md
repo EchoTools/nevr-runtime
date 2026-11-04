@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0003-quest-networking-port.md
+audience: all
+---
+
 # ADR 0003: Quest networking shares the PCVR protocol core and differs only in adapters
 
 Status: accepted. The login-profile builder, the EVR frame codec and the redirect policy are

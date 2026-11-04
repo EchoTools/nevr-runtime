@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0038-hot-path-rule.md
+audience: all
+---
+
 # ADR 0038: a measured cost per frame decides between a hook, a full replacement and a checked byte patch
 
 Status: proposed. Applies to every change this repo makes to a game function on a hot path, on PC and Quest. Amends

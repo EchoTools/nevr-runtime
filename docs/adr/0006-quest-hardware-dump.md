@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0006-quest-hardware-dump.md
+audience: all
+---
+
 # ADR 0006: Quest hardware and environment dump
 
 Status: accepted, implemented (`src/quest/diag/`, #335). Off by default.

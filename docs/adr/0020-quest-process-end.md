@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0020-quest-process-end.md
+audience: all
+---
+
 # ADR 0020: the Quest process ends when the game's android_main returns
 
 Status: accepted, implemented (`src/quest/sentinel/process_end_hook.{h,cpp}`, #621). On in every Quest build, with no feature

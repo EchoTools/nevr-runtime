@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0024-pc-self-update.md
+audience: all
+---
+
 # ADR 0024: PC self-update: the runtime stages a verified release in the nevr root, the host swaps it in at the next launch
 
 Status: proposed. Tracking issue: #1200. Builds on ADR 0012 (the static install folder and the nevr root, #575) and ADR 0023

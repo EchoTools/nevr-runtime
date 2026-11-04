@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0015-quest-texture-quality.md
+audience: all
+---
+
 # ADR 0015: Quest texture quality is a config key and an in-game control, applied by GOT hooks
 
 Status: accepted, implemented (`src/quest/sentinel/texture_quality.h`, `texture_quality_hook.{h,cpp}`, `sysprop_int_share.h`, #943; the in-game control and the live apply: `texture_menu.{h,cpp}`, `texture_menu_hook.{h,cpp}`, #1012, #1186). On in every Quest build; the default level is `stock`, which serves the runtime's own size.

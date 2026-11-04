@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0019-quest-plugin-loader.md
+audience: all
+---
+
 # ADR 0019: a plugin loader for the Quest build
 
 Status: Proposed.
@@ -111,9 +118,9 @@ entry that loads a packaged file is checked against it, whichever config entry i
 **Alternatives for trust.**
 
 - **T2: a hash in `config.yaml`.** Rejected. The config is data a player can write, the same reason ADR 0010 keeps the
-  signature mode out of config (`docs/adr/0010-signed-plugins-only.md:224-225`).
+  signature mode out of config (`docs/adr/0010-signed-plugins-only.md:231-232`).
 - **T3: a signed manifest inside the APK, pinning the SHA-256 of files outside it.** Only meaningful with A2. It still
-  does not stop a same-account writer, which is the residual threat ADR 0010 already states (`docs/adr/0010-signed-plugins-only.md:29-32`).
+  does not stop a same-account writer, which is the residual threat ADR 0010 already states (`docs/adr/0010-signed-plugins-only.md:36-39`).
 - **T4: a project key, checked inside the sentinel, for plugins outside the APK.** Deferred to slice 5 and its own ADR.
   The crypto is available (OpenSSL is already a Quest dependency, `src/quest/CMakeLists.txt:145-146`). It needs a
   denylist plan of the kind ADR 0010 section 2 has for the PC pipeline.
@@ -170,7 +177,7 @@ If P10 fails (a `dlopen` from the constructor does not complete), `early` entrie
 
 ## 3. Where the loader runs, and the two install moments
 
-The sentinel constructor order is fixed in ADR 0003 ("Order", `docs/adr/0003-quest-networking-port.md:1744-1752`):
+The sentinel constructor order is fixed in ADR 0003 ("Order", `docs/adr/0003-quest-networking-port.md:1751-1759`):
 (1) crash reporter, (2) configuration, (3) every counter of every hook that will be installed, (4) the single reporter
 start, (5) the clock hook, (6) token auth, (7) prompt hooks, (8) bridge, (9) redirect, (10) social facade, (11) the hook
 on the game's `dlopen` slot.
@@ -225,7 +232,7 @@ header already says shutdown is not guaranteed on process exit (`plugin_interfac
   (`plugin_interface.h:85-96`, `:190-205`):
   - `const char* game_build_id`: the libr15 build ID in lowercase hex, read from the ELF note (`ReadBuildId`,
     `src/quest/sentinel/got_hook.h:149`).
-  - `const char* data_dir`: the owner's data root as `data_root::Resolve` returns it (`docs/adr/0013-quest-game-data-from-the-launcher.md:25-27`).
+  - `const char* data_dir`: the owner's data root as `data_root::Resolve` returns it (`docs/adr/0013-quest-game-data-from-the-launcher.md:32-34`).
   - `const NevrQuestHostApi* quest`: a versioned struct of host function pointers (section 5), with its own `struct_size` so
     it can grow.
 
@@ -299,7 +306,7 @@ pointer-sized word no relocation names: a vtable entry, or a function pointer in
 
 **(iv) Inline backend.** Not in v1. The sentinel's own records say an internal hook needs a backend that validates the
 exact prologue, relocates PC-relative instructions, handles branch range, builds an original-call trampoline and restores
-instruction-cache coherence, and that a blind branch at a cached address is refused (`docs/adr/0003-quest-networking-port.md:1290-1296`).
+instruction-cache coherence, and that a blind branch at a cached address is refused (`docs/adr/0003-quest-networking-port.md:1297-1303`).
 Any future inline backend is its own ADR with binary evidence.
 
 ## 6. Helper services
@@ -351,8 +358,8 @@ mapped and then fails (`no_plugin_info`, `init_failed`, an exception) is `dlclos
 - The note is additive and Quest-only (the PC loader does not read it), so it needs no bump (`plugin_interface.h:183`).
 
 **Rules that hold regardless.** No address is used without a pin: a `GotTarget` with a null build ID is refused in the host
-API. A plugin's `SwapWord` or `CheckedWrite` target needs the same pin. This is the ADR 0003 identity gate (`docs/adr/0003-quest-networking-port.md:1276-1281`)
-and ADR 0004 step 0 (`docs/adr/0004-quest-verification-regime.md:38-48`), applied to plugins.
+API. A plugin's `SwapWord` or `CheckedWrite` target needs the same pin. This is the ADR 0003 identity gate (`docs/adr/0003-quest-networking-port.md:1283-1288`)
+and ADR 0004 step 0 (`docs/adr/0004-quest-verification-regime.md:45-55`), applied to plugins.
 
 **Alternative: the list in `config.yaml`.** Rejected. The operator's config would decide which builds a plugin may
 touch, and the plugin's author is the party who knows which builds the addresses hold for.
@@ -365,7 +372,7 @@ touch, and the plugin's author is the party who knows which builds the addresses
   copies of game files. This is a rule about what a shipped plugin contains. The loader cannot enforce it, and review
   and the APK signature are the controls.
 - Game-derived data is made on the device from the owner's own installed copy, at first run, the way the data step
-  already does (`docs/adr/0013-quest-game-data-from-the-launcher.md:9-12`: a release build never writes, replaces or
+  already does (`docs/adr/0013-quest-game-data-from-the-launcher.md:16-19`: a release build never writes, replaces or
   deletes the player's data, and never fetches it in a release).
 - A plugin reaches the data through two host calls: `data_dir` (section 4) and `RequestGenerate(name)`. The host runs a
   named generator, which writes only into the owner's data directory and logs. The generators are not designed here.
@@ -411,7 +418,7 @@ Shaped by AGENTS.md (logging is part of the work) and `docs/standards/logging.md
 - **Plugin lines.** Through `ctx->log` (`sdk/include/nevr/plugin_interface.h:69-70`) into the sentinel logger. Format
   `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` (Rule 15, `logging.md:534-536`), so one filter works on every
   platform. The `plugin=` value is the host's name for the plugin (`ctx->plugin_id`), not text the plugin chooses.
-  Lines reach logcat (tag `NEVR-Sentinel`) and the run's log, `nevr/logs/nevr-<timestamp>.jsonl` (`docs/adr/0003-quest-networking-port.md:1801-1806`).
+  Lines reach logcat (tag `NEVR-Sentinel`) and the run's log, `nevr/logs/nevr-<timestamp>.jsonl` (`docs/adr/0003-quest-networking-port.md:1808-1813`).
 - **Loader record.** Exactly one `plugin_load` record per plan entry, whatever its outcome. Fields: `name`, `file`,
   `sha256` of the bytes the loader read, `plugin_build_id`, `game_build_id`, `phase` (`early` or `normal`), `outcome`
   (`planned`, `loaded`, `refused`, `disabled`, `not_started`, `failed`), and `reason` as a stable token. A plan entry
@@ -444,7 +451,7 @@ Shaped by AGENTS.md (logging is part of the work) and `docs/standards/logging.md
 
 - *Step 0, pin.* Record each plugin's SHA-256, ELF build ID, machine type, SONAME, `DT_NEEDED`, undefined symbols and
   relocations (`readelf`), and the libr15 build ID the fixture was taken from. Fixtures go under
-  `tests/quest/fixtures/<build-id>/` (`docs/adr/0004-quest-verification-regime.md:38-48`).
+  `tests/quest/fixtures/<build-id>/` (`docs/adr/0004-quest-verification-regime.md:45-55`).
 - *Host tests.* The loader's plan, refusal, registry and checked-write logic run on the host against fixture shared
   objects and in-memory images, as `src/quest/tests/got_hook_test.cpp` does for the GOT backend. Tests that need `dlopen`
   of a fixture object run on the host too.
@@ -581,15 +588,15 @@ line moves, the symbol named beside it is the anchor.
 - Quest build: `src/quest/CMakeLists.txt:11-16` (ANDROID-only), `:145-146` (OpenSSL and CURL), `:206-208` (single GOT backend, the comment on a second copy).
 - Repack: `justfile:124-131` (static-init check on the shim), `:171-173` (keystore, not printed), `:174-214` (`android-repack-apk`), `:193` (extract the store library),
   `:199` (shim copied in), `:210-211` (`zip -0` of the two objects).
-- ADRs: `docs/adr/0003-quest-networking-port.md:120` (DT_NEEDED, no `JNI_OnLoad`), `:989-1003` (`dlopen` hook), `:1276-1281` (identity gate),
-  `:1290-1296` (GOT only, inline needs a backend), `:1744-1752` (constructor order), `:1778-1783` (post-load installs), `:1792-1799` (outside-game-call sensor),
-  `:1801-1806` (stage logs), `:1808-1811` (not run on a headset), `:1817-1821` (activation gates);
-  `docs/adr/0004-quest-verification-regime.md:38-48` (step 0), `:139-142` (Bionic blocker);
-  `docs/adr/0006-quest-hardware-dump.md:26` (18 GOT hooks);
-  `docs/adr/0020-quest-process-end.md:9` (`android_main` slot, process ends on return);
-  `docs/adr/0009-quest-permission-wait.md:3-4` (status), `:17` (slot);
-  `docs/adr/0010-signed-plugins-only.md:8-11` (run mode), `:29-32` (threat model), `:41-58` (PC checks), `:224-225` (no config key sets the mode);
-  `docs/adr/0013-quest-game-data-from-the-launcher.md:9-12` (requirement, player data), `:25-27` (data root);
+- ADRs: `docs/adr/0003-quest-networking-port.md:127` (DT_NEEDED, no `JNI_OnLoad`), `:996-1010` (`dlopen` hook), `:1283-1288` (identity gate),
+  `:1297-1303` (GOT only, inline needs a backend), `:1751-1759` (constructor order), `:1785-1790` (post-load installs), `:1799-1806` (outside-game-call sensor),
+  `:1808-1813` (stage logs), `:1815-1818` (not run on a headset), `:1824-1828` (activation gates);
+  `docs/adr/0004-quest-verification-regime.md:45-55` (step 0), `:146-149` (Bionic blocker);
+  `docs/adr/0006-quest-hardware-dump.md:33` (18 GOT hooks);
+  `docs/adr/0020-quest-process-end.md:16` (`android_main` slot, process ends on return);
+  `docs/adr/0009-quest-permission-wait.md:10-11` (status), `:24` (slot);
+  `docs/adr/0010-signed-plugins-only.md:15-18` (run mode), `:36-39` (threat model), `:48-65` (PC checks), `:231-232` (no config key sets the mode);
+  `docs/adr/0013-quest-game-data-from-the-launcher.md:16-19` (requirement, player data), `:32-34` (data root);
   `docs/design/2026-07-13-quest-crash-reporter-injection.md:59` (`targetSdkVersion="29"`), `:89-99` (load chain, on-device confirmation item).
 - Standards and reference: `docs/standards/logging.md:525-555` (Rule 15), `:527-530` (stderr), `:534-536` (identity), `:547-552` (when);
   `docs/reference/plugin-assets.md:93` (Quest asset follow-up).

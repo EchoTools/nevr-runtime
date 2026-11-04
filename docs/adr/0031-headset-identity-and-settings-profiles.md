@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0031-headset-identity-and-settings-profiles.md
+audience: all
+---
+
 # ADR 0031: one step names the headset, and one table holds the settings each headset gets
 
 Status: proposed. Applies to the Quest build (`src/quest` and its plugins) and the PC client (`src/runtime`). Works with

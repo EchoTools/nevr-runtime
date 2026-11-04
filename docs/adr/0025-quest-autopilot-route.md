@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0025-quest-autopilot-route.md
+audience: all
+---
+
 # ADR 0025: a Quest autopilot that drives the local player through a scripted route
 
 Status: Proposed. Tracking issue: #1202.
