@@ -168,9 +168,10 @@ test-android *args: (_heavy-guard "test-android" args) check-android-static-init
     # The sentinel embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
     # CSymbol64Hash sign-extends a byte >= 0x80 under the NDK's AArch64 clang, where plain char is unsigned (#657).
-    # The vectors are static_asserts, so compiling the file is the check; the NDK's static bionic binary does not
-    # start under qemu-user (TLS segment alignment), so nothing is run here.
-    "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -fsyntax-only src/quest/tests/symbol_hash_test.cpp
+    # The vectors are static_asserts, so compiling the file is the check: the target nevr_quest_symbol_hash_check
+    # (src/quest/CMakeLists.txt) is that compile. The NDK's static bionic binary does not start under qemu-user
+    # (TLS segment alignment), so nothing is run here.
+    cd src/quest && cmake --build --preset android-arm64 --target nevr_quest_symbol_hash_check
     cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
@@ -2569,7 +2570,8 @@ test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_
 
 # docs/lua-scripting.md. Fail-close: a missing submodule or header, a build error, a failed check or
 # fewer tests than the floor exits nonzero. Part of `just verify`.
-# Build src/scripting for mingw and run its tests under wine, then the script type checker on the host.
+# Build src/scripting for mingw (presets scripting-mingw-shared and -pervm) and run its tests under wine, then the script type checker on the host
+# (preset script-check, which also builds the host copy of the stubs generator).
 test-scripting:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2608,12 +2610,7 @@ test-scripting:
     # debugging, NEVR_LUAU_SHARED_STATE=OFF). Neither may rot.
     for mode in shared pervm; do
         out="$PWD/build/scripting-mingw-$mode"
-        flag=ON
-        [[ "$mode" == pervm ]] && flag=OFF
-        cmake -S src/scripting -B "$out" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-mingw64.cmake" \
-            -DCMAKE_BUILD_TYPE=Release -DNEVR_SCRIPT_VM=luau -DNEVR_JSON_INCLUDE_DIR="$json" \
-            -DNEVR_LUAU_SHARED_STATE="$flag" > /dev/null
-        cmake --build "$out"
+        (cd src/scripting && cmake --preset "scripting-mingw-$mode" -DNEVR_JSON_INCLUDE_DIR="$json" > /dev/null && cmake --build --preset "scripting-mingw-$mode")
         run_suite "$out/nevr_script_registry_test.exe" 20
         run_suite "$out/nevr_script_host_test.exe" 12
         run_suite "$out/nevr_script_stubs_test.exe" 3
@@ -2640,14 +2637,9 @@ test-scripting:
         echo "test-scripting: [$mode] --pattern-dos and --gc-dos stopped"
     done
     # The author-side checker: the definitions come from a host build of the stubs generator.
-    host="$PWD/build/scripting-host"
-    mkdir -p "$host"
-    g++ -std=c++17 -O1 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json" \
-        src/scripting/host_registry.cpp src/scripting/script_stubs.cpp src/scripting/tests/script_stubs_test.cpp \
-        -o "$host/script_stubs_test"
-    cmake -S src/scripting/check -B "$PWD/build/script-check" -G Ninja -DCMAKE_BUILD_TYPE=Release > /dev/null
-    cmake --build "$PWD/build/script-check"
-    src/scripting/check/check_test.sh "$host/script_stubs_test" "$PWD/build/script-check/nevr_script_check" "$host/check"
+    check="$PWD/build/script-check"
+    (cd src/scripting/check && cmake --preset script-check -DNEVR_JSON_INCLUDE_DIR="$json" > /dev/null && cmake --build --preset script-check)
+    src/scripting/check/check_test.sh "$check/nevr_script_stubs_host_test" "$check/nevr_script_check" "$check/check"
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
 # the hardened C++ GTest suite under Wine. Fail-close: exits nonzero on any failure.

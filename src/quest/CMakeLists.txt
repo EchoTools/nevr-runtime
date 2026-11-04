@@ -103,6 +103,17 @@ add_executable(stable_string_pool_test tests/stable_string_pool_test.cpp)
 target_link_libraries(stable_string_pool_test PRIVATE nevr_quest_stable_string_pool)
 target_compile_options(stable_string_pool_test PRIVATE -Wall -Wextra -Werror)
 
+# CSymbol64Hash on bytes >= 0x80 sign-extends under this AArch64 clang, where plain char is unsigned (#657). The vectors of
+# tests/symbol_hash_test.cpp are static_asserts, so compiling the file is the check; the NDK's static bionic binary does not start
+# under qemu-user (TLS segment alignment), so nothing is linked or run. `just test-android` builds this target:
+#   cd src/quest && cmake --build --preset android-arm64 --target nevr_quest_symbol_hash_check
+# -fsyntax-only writes no object, so ninja treats the target as out of date and runs the check every time it is asked for. It is
+# excluded from the default build, which the sentinel link and check-android-static-init read.
+add_library(nevr_quest_symbol_hash_check OBJECT EXCLUDE_FROM_ALL tests/symbol_hash_test.cpp)
+set_target_properties(nevr_quest_symbol_hash_check PROPERTIES CXX_EXTENSIONS OFF)
+target_include_directories(nevr_quest_symbol_hash_check PRIVATE "${NEVR_REPO_ROOT}/src" "${NEVR_REPO_ROOT}/sdk/include")
+target_compile_options(nevr_quest_symbol_hash_check PRIVATE -Wall -Wextra -Werror -fsyntax-only)
+
 # Quest social provider: a CNSISocial-compatible facade over the shared PCVR social model, the frame
 # observer that feeds it and the hook installer (docs/adr/0003, "Social provider"). The sentinel links it
 # through nevr_quest_integration, which owns activation.
