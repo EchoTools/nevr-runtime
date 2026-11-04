@@ -1,6 +1,6 @@
 # Module `dronemuzzle` (rows R49, R50)
 
-Files: `src/dronemuzzle.{h,cpp}`, `src/quest/plugins/q15t/src/dronemuzzle_core.h`, `src/quest/tests/q15t/dronemuzzle_test.cpp`, `src/quest/tests/q15t/mod/dronemuzzle.sh`,
+Files: `src/dronemuzzle.{h,cpp}`, `src/quest/plugins/q15t/src/dronemuzzle_core.h`, `src/quest/tests/q15t/dronemuzzle_test.cpp`, `src/quest/tests/q15t/mod/dronemuzzle.cmake`,
 `src/quest/tests/q15t/mutants.d/dronemuzzle.sh`. Shares `src/quest/plugins/q15t/src/dronekill_log.h` with dronekill.
 
 Port of Ducky's reference combat build's `dronemuzzle` (drone fix F4 + F6: a drone's bullets leave the drone's
@@ -110,9 +110,9 @@ not FireBulletLocal's, which goes through the PLT).
 `src/quest/tests/q15t/dronemuzzle_test.cpp`: the plain functions against fake real functions; the install against a fake slot page (real `mprotect`, real
 `SafeRead`); the thunk decision through host stand-ins; the `#if defined(__aarch64__)` section of the test is empty on this host.
 
-`src/quest/tests/q15t/mod/dronemuzzle.sh` also cross-compiles the module with the NDK r26d clang (`-fno-exceptions -fno-rtti -fvisibility=hidden -Wall -Wextra
+`src/quest/tests/q15t/mod/dronemuzzle.cmake` also cross-compiles the module with the NDK r26d clang (`-fno-exceptions -fno-rtti -fvisibility=hidden -Wall -Wextra
 -Werror -O2`), checks that the object has no `.init_array` (the repack refuses a static constructor), and counts the instruction-word and relocation lines of the two
-thunks (at least 38; `mod/dronemuzzle.sh`). Output:
+thunks (at least 38; `mod/dronemuzzle.cmake`). Output:
 ```
 dronemuzzle: arm64 compile ok, no .init_array
 dronemuzzle: arm64 thunks present (<n> lines of instruction words and relocations)
@@ -190,7 +190,7 @@ the 0.25 m back-off is the only offset the first frame has. This module keeps ma
 
 ## Tests and mutants
 
-Host test (`Q15T_MODULE=dronemuzzle bash src/quest/tests/q15t/run_host_tests.sh`):
+Host test (`just test-quest-q15t dronemuzzle`):
 ```
 dronemuzzle_test: all checks passed
 dronemuzzle: arm64 compile ok, no .init_array

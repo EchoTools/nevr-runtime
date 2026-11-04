@@ -1,4 +1,4 @@
-# `ec` module mutants (judged by Q15T_MODULE=ec: tests/mod/ec.sh). Each removes or bends one rule; the tests must fail.
+# `ec` module mutants (judged by mod/ec.cmake: `just test-quest-q15t ec`). Each removes or bends one rule; the tests must fail.
 # the pure rules (src/ec_core.h)
 runm ec ec_ours_len        src/ec_core.h "s#if (n != static_cast<long>(sizeof(Packet))) return false;#if (n < 0) return false;#"
 runm ec ec_no_magic2       src/ec_core.h "s# \&\& out->magic2 == kMagic2##"

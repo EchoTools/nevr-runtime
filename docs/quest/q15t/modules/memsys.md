@@ -1,6 +1,6 @@
 # Module `memsys` (rows R37 R38): render-target layout pool 512 -> 1024, and the android_main timing witness
 
-Files: `src/memsys.{h,cpp}`, `src/quest/plugins/q15t/src/module_switch.h` (shared with `heaps`), `src/quest/tests/q15t/memsys_test.cpp`, `src/quest/tests/q15t/mod/memsys.sh`,
+Files: `src/memsys.{h,cpp}`, `src/quest/plugins/q15t/src/module_switch.h` (shared with `heaps`), `src/quest/tests/q15t/memsys_test.cpp`, `src/quest/tests/q15t/mod/memsys.cmake`,
 `src/quest/tests/q15t/mutants.d/memsys.sh`. Option macro for the main seat to wire: `Q15T_MEMSYS`, default **ON** (the source build arms memsys on every launch,
 the source build's memsys:214-226). API: `InstallResult InstallMemsys(std::uintptr_t base)`; no tick. Per-module switch: `memsys.off`
 (in `/sdcard/Android/data/<pkg>/files/q15t/`): installs nothing and also makes `heaps` leave R07 stock.
@@ -94,7 +94,7 @@ Falsifiers:
 
 ## Host tests and mutants
 
-`Q15T_MODULE=memsys bash src/quest/tests/q15t/run_host_tests.sh` -> `memsys_test: all checks passed`. The fake library is one anonymous mapping holding
+`just test-quest-q15t memsys` -> `memsys_test: all checks passed`. The fake library is one anonymous mapping holding
 the pinned words and the two read-only slots; the fake `Alloc` builds the real layout; a fake inline fill pushes 511..0; the test
 asserts the free stack is 0..1023 exactly once, the pass-through for the wrong caller and wrong capacity, five unrecognised
 layouts (count not 0, no stack, capacity read back wrong, stack capacity short, stack unreadable), the witness once, word and slot

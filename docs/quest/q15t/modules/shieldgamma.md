@@ -1,7 +1,7 @@
 # Module `shieldgamma` (row R58)
 
 Files: `src/shieldgamma.{h,cpp}`, `src/quest/plugins/q15t/src/pbhud_log.h`, `src/quest/tests/q15t/shieldgamma_test.cpp`, `src/quest/tests/q15t/pbhud_image.h`,
-`src/quest/tests/q15t/mod/shieldgamma.sh` (+ `src/quest/tests/q15t/mod/pbhud_ndk.sh`), `src/quest/tests/q15t/mutants.d/shieldgamma.sh`.
+`src/quest/tests/q15t/mod/shieldgamma.cmake`, `src/quest/tests/q15t/mutants.d/shieldgamma.sh`.
 
 Option macro for the main seat to wire: `Q15T_SHIELDGAMMA`, a bitmask, default **2** (mirror ON, gamma OFF), the source's defaults:
 `g_gamma = Switch(... "shieldgamma.on" ...)  // TEST, off by default` and `g_mirror = !Switch(... "tubemirror.off" ...) // ship
