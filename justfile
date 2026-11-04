@@ -558,18 +558,35 @@ build-quest-q15t: configure-android
         || { echo "build-quest-q15t: libq15t.so does not carry the shipped defaults (q15t-config marker)" >&2; exit 1; }
     (cd "$out" && sha256sum libq15t.so libq15t_early.so)
 
+# The game's NDK, r21b (tools/game_ndk.pin; evidence in docs/reference/quest-game-ndk.md). The store APK's Quest binaries were built
+# with it, so a build that is compared with them uses it: the combat script libraries (build-quest-combat-libs). Downloads the
+# archive once, verifies its sha256, gates on the pinned `clang --version` line, and installs under
+# $XDG_CACHE_HOME/nevr-runtime/toolchain (else ~/.cache), outside the checkout, shared by every worktree. A repeat run re-verifies.
+# The sentinel and the plugins still build with the r26d NDK that ANDROID_NDK_HOME names.
+toolchain-r21b:
+    python3 -I tools/install_game_ndk.py
+
 # The combat script libraries: each library in the libsrc directory NEVR_COMBAT_LIBSRC names (no default; no line of it is
-# copied into this repository) is compiled with the NDK clang and checked with the plugin static-init check. Writes
-# build/quest-combat-libs/: lib<hash16>.so per library and SHA256SUMS. The rows that link libr15 take the stock file from the store APK.
+# copied into this repository) is compiled by src/quest/combat_libs on the game's NDK, r21b (tools/game_ndk.pin; installed by
+# `just toolchain-r21b`, which this recipe runs first), and checked with the plugin static-init check. Writes
+# build/quest-combat-libs/: lib<hash16>.so per library and SHA256SUMS; the output of the build is build/quest-combat-libs/build.log.
+# The rows that link libr15 take the stock file from the store APK NEVR_STORE_APK names.
 build-quest-combat-libs libsrc=env("NEVR_COMBAT_LIBSRC", "") store_apk=env("NEVR_STORE_APK", ""):
     #!/usr/bin/env bash
     set -euo pipefail
     [ -n "{{ libsrc }}" ] || { echo "build-quest-combat-libs: NEVR_COMBAT_LIBSRC names no libsrc directory" >&2; exit 1; }
     [ -n "{{ store_apk }}" ] || { echo "build-quest-combat-libs: NEVR_STORE_APK names no store APK" >&2; exit 1; }
-    [ -n "${ANDROID_NDK_HOME:-}" ] || { echo "build-quest-combat-libs: ANDROID_NDK_HOME is not set" >&2; exit 1; }
-    llvm="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-    python3 -I tools/build_quest_combat_libs.py --libsrc "{{ libsrc }}" --store-apk "{{ store_apk }}" --out build/quest-combat-libs \
-        --ndk-clang "$llvm/aarch64-linux-android21-clang++" --llvm-bin "$llvm" --check-script tools/check_quest_static_init.sh
+    python3 -I tools/install_game_ndk.py
+    ndk=$(python3 -I tools/install_game_ndk.py --print-dir)
+    out=build/quest-combat-libs
+    cmake -Wno-deprecated -S src/quest/combat_libs -B "$out" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
+        -DNEVR_COMBAT_LIBSRC="{{ libsrc }}" -DNEVR_STORE_APK="{{ store_apk }}"
+    if ! cmake --build "$out" > "$out/build.log" 2>&1; then
+        cat "$out/build.log" >&2
+        echo "build-quest-combat-libs: the build failed; its output is in $out/build.log" >&2
+        exit 1
+    fi
+    echo "build-quest-combat-libs: $(wc -l < "$out/SHA256SUMS") libraries in $out; SHA256SUMS written"
 
 # The combat content pack (docs/adr/0029-quest-bundled-content-pack.md): the manifest and the one package the pack adds, taken
 # from the game-data zip NEVR_GAME_DATA_ZIP names, whose sha-256 must be NEVR_GAME_DATA_SHA256 (the digest the signed manifest
