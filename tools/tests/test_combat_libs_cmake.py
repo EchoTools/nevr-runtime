@@ -248,8 +248,13 @@ class CombatLibsBuild(unittest.TestCase):
     def write_rows(self) -> None:
         self.fx.write_libs({H1: link(libr15=True), H2: link(asm=True, ldl=True)})
         (self.fx.libsrc / H1 / f"{H1}.cpp").write_text(
-            '#include "regen_rt.h"\n#include <cstdint>\nextern "C" int libr15_fixture(void);\n'
-            f'extern "C" int row_{H1}(void) {{ std::int32_t v = libr15_fixture() + REGEN_RT_FIXTURE; return v; }}\n')
+            '#include "regen_rt.h"\n#include <cstdint>\n#include <string.h>\nextern "C" int libr15_fixture(void);\n'
+            'extern "C" void sink(char *);\nextern "C" int _Unwind_Backtrace(void *, void *);\n'
+            # An array on the stack that a call fills with an unknown length: -fstack-protector-strong guards it, and
+            # _FORTIFY_SOURCE=2 would turn the memcpy into __memcpy_chk.
+            'extern "C" void row_copy(const char *src, unsigned n) { char buf[8]; memcpy(buf, src, n); sink(buf); }\n'
+            # _Unwind_Backtrace pulls the NDK's static libgcc unwinder in, whose objects carry .debug_* sections of their own.
+            f'extern "C" int row_{H1}(void) {{ std::int32_t v = libr15_fixture() + REGEN_RT_FIXTURE; return v + _Unwind_Backtrace(0, 0); }}\n')
         (self.fx.libsrc / H2 / f"{H2}.cpp").write_text(
             '#include <dlfcn.h>\nextern "C" int donor(void);\nextern "C" int resolved_at_load(void);\n'
             f'extern "C" int row_{H2}(void) {{ return dlopen("x", RTLD_NOW) ? donor() + resolved_at_load() : 0; }}\n')
@@ -296,8 +301,35 @@ class CombatLibsBuild(unittest.TestCase):
         self.assertIn("-ldl", link2.split())
         for flag in ("-nostdlib++", "-Wl,--gc-sections", "-Wl,--allow-shlib-undefined"):
             self.assertIn(flag, link1.split())
-        # Neither links the C++ runtime (-nostdlib++).
+        # Neither links the C++ runtime (-nostdlib++), and neither has NEEDED libm.so: the store's script libraries have libc and
+        # libdl only. The link is done by the C driver, which does not add -lm.
         self.assertNotIn("libc++", dyn1 + dyn2)
+        for dyn in (dyn1, dyn2):
+            self.assertIn("Shared library: [libc.so]", dyn)
+            self.assertIn("Shared library: [libdl.so]", dyn)
+            self.assertNotIn("libm.so", dyn)
+        driver = link1.split()[link1.split().index("&&") + 1]
+        self.assertTrue(driver.endswith("/clang"), driver)
+        # What the store's libraries show, and the NDK toolchain file's defaults would not give: no debug section, no build-id
+        # note (the donor object of row 2 has none either), no fortified libc import, no frame pointer set up.
+        for lib in (H1, H2):
+            sections = self.readelf("-S", "-W", str(out / f"lib{lib}.so"))
+            self.assertNotIn(".debug_", sections)
+            self.assertNotIn(".note.gnu.build-id", sections)
+        und1 = run([str(self.llvm / "llvm-nm"), "-D", "--undefined-only", str(out / f"lib{H1}.so")]).stdout
+        self.assertNotIn("__memcpy_chk", und1)
+        self.assertIn("__stack_chk_fail", und1, "the stack protector stays: every store script library imports __stack_chk_fail")
+        asm1 = run([str(self.llvm / "llvm-objdump"), "-d", "--no-show-raw-insn", str(out / f"lib{H1}.so")]).stdout
+        # row_copy is not a leaf (it calls memcpy and sink), which the NDK's default compiles with a frame pointer.
+        body = re.search(r"\brow_copy:\n(.*?)(?:\n\n|\Z)", asm1, re.S)
+        self.assertIsNotNone(body, "row_copy is in the library")
+        self.assertIn("bl", body.group(1))
+        self.assertNotRegex(body.group(1), r"\b(?:add|mov)\s+x29, sp\b")
+        self.assertIn("-Wl,--build-id=none", link1.split())
+        self.assertIn("-Wl,--strip-debug", link1.split())
+        for kept in ("-latomic", "-Wl,--fatal-warnings", "-fstack-protector-strong"):
+            self.assertIn(kept, link1.split(), "the toolchain file's flag the store libraries cannot settle is kept")
+        self.assertIn("dl_iterate_phdr", und1, "the unwinder of libgcc.a is linked in, so the strip is exercised")
         # The donor object is part of row 2: its symbol is defined in the library, and row 1 does not define it.
         defined2 = run([str(self.llvm / "llvm-nm"), "--defined-only", str(out / f"lib{H2}.so")]).stdout
         self.assertRegex(defined2, r"\bT donor\b")
@@ -313,6 +345,17 @@ class CombatLibsBuild(unittest.TestCase):
         self.assertIn("-O2", cmd1)
         self.assertIn("-fPIC", cmd1)
         self.assertIn("--target=aarch64-none-linux-android21", cmd1)
+        for flag in ("-g0", "-U_FORTIFY_SOURCE", "-fomit-frame-pointer"):
+            self.assertIn(flag, cmd1.split())
+        for kept in ("-fstack-protector-strong", "-funwind-tables", "-fdata-sections", "-ffunction-sections"):
+            self.assertIn(kept, cmd1.split(), "the toolchain file's flag the store libraries show or cannot settle is kept")
+        obj1 = next(c["output"] for c in commands if c["file"].endswith(f"{H1}.cpp"))
+        objsec = self.readelf("-S", "-W", str(out / obj1))
+        self.assertNotIn(".debug_", objsec, "-g0 leaves no debug section in the compiled row")
+        obj2 = next(c["output"] for c in commands if c["file"].endswith(f"{H2}.donor.s"))
+        self.assertNotIn(".debug_", self.readelf("-S", "-W", str(out / obj2)), "nor in the assembled donor object")
+        self.assertGreater(cmd1.split().index("-U_FORTIFY_SOURCE"), cmd1.split().index("-D_FORTIFY_SOURCE=2"))
+        self.assertGreater(cmd1.split().index("-g0"), cmd1.split().index("-g"))
         self.assertIn(f"-I{self.fx.scripts.resolve()}", cmd1)
 
     def test_the_sums_script_sorts_by_name_and_refuses_a_library_that_was_not_built(self):
@@ -331,6 +374,21 @@ class CombatLibsBuild(unittest.TestCase):
         gone = run(["cmake", f"-DNEVR_NAMES_FILE={names}", f"-DNEVR_OUT_DIR={out}", "-P", str(script)])
         self.assertNotEqual(gone.returncode, 0)
         self.assertIn(f"lib{H1}.so was not built", squash(gone.stderr))
+
+    def test_a_c_compiler_that_is_not_the_pinned_clang_is_refused_though_the_cxx_compiler_is(self):
+        # The rows are linked by the C driver, so its version is gated as well as the C++ compiler's.
+        stub = self.fx.root / "not-clang.sh"
+        stub.write_text("#!/bin/sh\necho 'some other compiler 1.0'\n")
+        stub.chmod(0o755)
+        wrapper = self.fx.root / "wrapper-toolchain.cmake"
+        tc = self.ndk / "build" / "cmake" / "android.toolchain.cmake"
+        wrapper.write_text(f'include("{tc}")\nset(CMAKE_C_COMPILER "{stub}")\n')
+        self.make_stock()
+        self.write_rows()
+        result = run(self.fx.configure_args(f"-DCMAKE_TOOLCHAIN_FILE={wrapper}"))
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f"the compiler {stub} is not the game's NDK clang", squash(result.stderr))
+        self.assertIn("actual: some other compiler 1.0", squash(result.stderr))
 
     def test_a_library_with_a_dynamic_initializer_fails_the_static_init_check(self):
         self.make_stock()

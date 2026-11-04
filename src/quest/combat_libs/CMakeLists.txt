@@ -149,7 +149,7 @@ set(ANDROID_PLATFORM android-21 CACHE STRING "")
 set(ANDROID_STL c++_shared CACHE STRING "")
 set(ANDROID_ALLOW_UNDEFINED_SYMBOLS ON CACHE BOOL "")
 
-project(nevr_quest_combat_libs LANGUAGES CXX)
+project(nevr_quest_combat_libs LANGUAGES C CXX)
 if(nevr_any_asm)
   enable_language(ASM)
 endif()
@@ -166,14 +166,33 @@ endforeach()
 if(NOT nevr_pin_clang)
   nevr_combat_refuse("${nevr_pin} has no CLANG_VERSION")
 endif()
-execute_process(COMMAND "${CMAKE_CXX_COMPILER}" --version
-                OUTPUT_VARIABLE nevr_clang_out ERROR_VARIABLE nevr_clang_err RESULT_VARIABLE nevr_clang_rc TIMEOUT 60)
-string(REGEX MATCH "^[^\n]*" nevr_clang_first "${nevr_clang_out}${nevr_clang_err}")
-if(NOT nevr_clang_rc EQUAL 0 OR NOT nevr_clang_first STREQUAL nevr_pin_clang)
-  nevr_combat_refuse("the compiler ${CMAKE_CXX_COMPILER} is not the game's NDK clang pinned in tools/game_ndk.pin (run `just toolchain-r21b`)\n  expected: ${nevr_pin_clang}\n  actual:   ${nevr_clang_first}")
-endif()
+# The C++ compiler compiles the rows and the C compiler links them (see "The flags" below), so both are checked.
+foreach(nevr_lang CXX C)
+  execute_process(COMMAND "${CMAKE_${nevr_lang}_COMPILER}" --version
+                  OUTPUT_VARIABLE nevr_clang_out ERROR_VARIABLE nevr_clang_err RESULT_VARIABLE nevr_clang_rc TIMEOUT 60)
+  string(REGEX MATCH "^[^\n]*" nevr_clang_first "${nevr_clang_out}${nevr_clang_err}")
+  if(NOT nevr_clang_rc EQUAL 0 OR NOT nevr_clang_first STREQUAL nevr_pin_clang)
+    nevr_combat_refuse("the compiler ${CMAKE_${nevr_lang}_COMPILER} is not the game's NDK clang pinned in tools/game_ndk.pin (run `just toolchain-r21b`)\n  expected: ${nevr_pin_clang}\n  actual:   ${nevr_clang_first}")
+  endif()
+endforeach()
 get_filename_component(nevr_llvm_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
 set(nevr_check_script "${NEVR_COMBAT_REPO_ROOT}/tools/check_quest_static_init.sh")
+
+# ── The flags ───────────────────────────────────────────────────────────
+# The NDK's toolchain file adds flags of its own. Each one is kept only when the store APK's libraries show it
+# (docs/reference/quest-game-ndk.md, "Flags", has the counts over its 465 script libraries and libr15.so):
+#   -g                         overridden by -g0, and --strip-debug (the NDK's static libgcc unwinder brings its own .debug_*): none
+#                              has a .debug_* section (they keep .symtab)
+#   -D_FORTIFY_SOURCE=2        overridden by -U_FORTIFY_SOURCE: none imports a __*_chk function
+#   (frame pointer)            -fomit-frame-pointer: they set one up in 53 of 22588 function prologues, the NDK default does in 95%
+#   -Wl,--build-id             overridden by --build-id=none: none has an NT_GNU_BUILD_ID note
+#   -lm                        dropped by linking with the C driver: none has NEEDED libm.so
+# Kept, because the libraries show them or cannot settle them: -fstack-protector-strong (they all import __stack_chk_fail),
+# -funwind-tables, -fdata-sections, -ffunction-sections, -DANDROID, -Wl,--fatal-warnings, -latomic.
+set(CMAKE_C_STANDARD_LIBRARIES "-latomic")
+# CMake also appends the C++ compiler's implicit libraries (-lc++ -lm) to a link whose objects are C++, even when the C driver
+# links them; no row links the C++ runtime or libm.
+set(CMAKE_CXX_IMPLICIT_LINK_LIBRARIES "")
 
 # ── The libraries ───────────────────────────────────────────────────────
 # ROOT is the parent of the libsrc directory: the generated sources include regen_rt.h from its tools/scripts.
@@ -194,10 +213,15 @@ foreach(nevr_hash IN LISTS nevr_hashes)
     list(APPEND nevr_sources "${nevr_libsrc}/${nevr_hash}/${nevr_hash}.donor.s")
   endif()
   add_library(${nevr_target} SHARED ${nevr_sources})
-  set_target_properties(${nevr_target} PROPERTIES OUTPUT_NAME "${nevr_hash}" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+  # The link is done by the C driver, not the C++ one: the C++ driver adds -lm to every link, and none of the store's script
+  # libraries has NEEDED libm.so.
+  set_target_properties(${nevr_target} PROPERTIES OUTPUT_NAME "${nevr_hash}" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+                        LINKER_LANGUAGE C)
   target_include_directories(${nevr_target} PRIVATE "${nevr_scripts_dir}")
-  target_compile_options(${nevr_target} PRIVATE -O2 -fPIC)
-  target_link_options(${nevr_target} PRIVATE -nostdlib++ -Wl,--gc-sections -Wl,--allow-shlib-undefined)
+  target_compile_options(${nevr_target} PRIVATE -O2 -fPIC -g0
+                         $<$<COMPILE_LANGUAGE:CXX>:-fomit-frame-pointer -U_FORTIFY_SOURCE>)
+  target_link_options(${nevr_target} PRIVATE -nostdlib++ -Wl,--gc-sections -Wl,--allow-shlib-undefined -Wl,--build-id=none
+                      -Wl,--strip-debug)
   if(nevr_row_${nevr_hash}_libr15)
     target_link_libraries(${nevr_target} PRIVATE nevr_stock_libr15)
   endif()
