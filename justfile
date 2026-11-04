@@ -1891,6 +1891,12 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/hand_pose_log_hook_test" -ldl
     timeout 120 "$out/hand_pose_log_hook_test"
+    # The Controller Hand Flip toggle, pure half (#1986, KNOWN-WRONG #2043): the roll (y, -x, w, -z), the versioned file, the start
+    # resolver, the save and the golden lines, against a temporary game directory.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/hand_flip_test.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/hand_flip_test" -ldl
+    timeout 120 "$out/hand_flip_test"
     # libr15's array of free GPU ranges has no bound check (#1759): the real handler through the thunk entry against a model of
     # CGRawInterfaceVK::Free laid out as the game's (512 entries, the count after the last), the pinned words refused when one
     # differs, and the fill and the leaks in the log.

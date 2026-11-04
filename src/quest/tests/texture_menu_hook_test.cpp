@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "hand_flip.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "quest/tests/test_check.h"
@@ -29,6 +30,7 @@ namespace {
 
 namespace tq = nevr_quest::texture_quality;
 namespace tm = nevr_quest::texture_menu;
+namespace hf = nevr_quest::hand_flip;
 namespace pin = sentinel::pinned;
 
 using SysThunk = tq::SystemPropertyIntThunk;
@@ -1068,6 +1070,137 @@ void TheStockInputNeverUsesTheReferenceRule() {
   RemoveSettingsDirectory(dir);
 }
 
+// ---- the Controller Hand Flip row (KNOWN-WRONG #2043) -------------------------------------------------------------------
+
+std::uint32_t GetFlags(const unsigned char* settings) {
+  std::uint32_t v;
+  std::memcpy(&v, settings + hf::kCarrierOffset, sizeof(v));
+  return v;
+}
+void SetFlags(unsigned char* settings, std::uint32_t v) { std::memcpy(settings + hf::kCarrierOffset, &v, sizeof(v)); }
+
+std::uint32_t g_applySawFlags = 0;
+void FakeApplyFlags(const unsigned char* settings, void*, std::uint32_t) {
+  ++g_applyCalls;
+  if (settings != nullptr) g_applySawFlags = GetFlags(settings);
+}
+
+void WriteHandFlipFile(const std::string& root, const char* text) {
+  std::FILE* f = std::fopen((root + "/RAD/LoneEcho/" + hf::kFileName).c_str(), "w");
+  if (f == nullptr) return;
+  std::fputs(text, f);
+  std::fclose(f);
+}
+std::string ReadHandFlipFile(const std::string& root) {
+  std::FILE* f = std::fopen((root + "/RAD/LoneEcho/" + hf::kFileName).c_str(), "r");
+  if (f == nullptr) return "";
+  char buffer[256] = {};
+  const std::size_t n = std::fread(buffer, 1, sizeof(buffer) - 1, f);
+  std::fclose(f);
+  return std::string(buffer, n);
+}
+void RemoveHandFlipFile(const std::string& root) {
+  std::remove((root + "/RAD/LoneEcho/" + hf::kFileName).c_str());
+  std::remove((root + "/RAD/LoneEcho/" + hf::kFileName + ".tmp").c_str());
+}
+
+// The first delivery is the load: with no stored choice the carrier bit is the default (Off) whatever the game's settings file held,
+// so a bit the game saved for its own fullscreen reads as nothing. A later delivery with another bit is the player's choice, and
+// the flag the tracking handler reads takes it at once: no restart, no re-enumeration, no poll. The choice is written by the poller,
+// as the versioned file, and the texture marker is not touched. A redelivery of the same bit is no choice.
+void AMenuChangeOfTheHandFlipRowAppliesLiveAndIsRemembered() {
+  const std::string dir = MakeSettingsDirectory(nullptr);
+  QCHECK(!dir.empty());
+  Reset(tq::Level::kLow);
+  Capture log;
+  *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
+  g_appDataDir = dir;
+  Eye();
+  alignas(8) unsigned char settings[kSettingsBytes] = {};
+  SetMsaa(settings, 1);
+  SetFlags(settings, 0x5);  // the game's saved flags: fullscreen set, TAA set
+  Deliver(settings);
+  QCHECK(!hf::Enabled() && hf::CurrentBy() == hf::kByDefault);
+  QCHECK(GetFlags(settings) == 0x4 && g_applySawFlags == 0x4);  // bit 0 is the toggle's default; the other bits are the game's
+  Deliver(settings);                                             // another setting changed: no choice
+  QCHECK(!hf::Enabled() && hf::Poll() == 1);                     // the start line only; nothing to save
+
+  SetFlags(settings, GetFlags(settings) | hf::kCarrierBit);  // the player picks On
+  Deliver(settings);
+  QCHECK(hf::Enabled() && hf::CurrentBy() == hf::kByMenu);   // live, before any poll
+  QCHECK(GetFlags(settings) == 0x5 && g_applySawFlags == 0x5);  // the game's own function sees what the menu holds
+  QCHECK(hf::Poll() == 1);
+  QCHECK(ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":1})");
+  QCHECK(ReadMarker(dir).empty() && tm::CurrentTotals().markerWrites == 0);  // the texture marker is not touched
+  Deliver(settings);                                         // redelivered unchanged
+  QCHECK(hf::Enabled() && hf::Poll() == 0);
+
+  SetFlags(settings, GetFlags(settings) & ~hf::kCarrierBit);  // and Off again
+  Deliver(settings);
+  QCHECK(!hf::Enabled());
+  QCHECK(hf::Poll() == 1 && ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":0})");
+  QCHECK(tq::RequestedLevelValue() == static_cast<int>(tq::Level::kLow));  // and the texture control did not move
+  RemoveHandFlipFile(dir);
+  RemoveSettingsDirectory(dir);
+}
+
+// The next launch: the stored choice is resolved on the first eye-size query, the menu document starts the row on it, and the
+// first delivery puts the carrier bit on it whatever the game's own file held; restoring it is not choosing it.
+void AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain() {
+  const std::string dir = MakeSettingsDirectory(nullptr);
+  QCHECK(!dir.empty());
+  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
+  ResetDocuments();
+  Capture log;
+  *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
+  g_appDataDir = dir;
+  Eye();  // the start is resolved here, before the menu document is read
+  QCHECK(hf::Started() && hf::Enabled() && hf::CurrentBy() == hf::kByPlayerMarker);
+  Read("/d/json/r14/config/uisettings/menu_settings.json", kMenuDocument);
+  QCHECK(g_parsed.size() == 1);
+  QCHECK(g_parsed[0].find(R"("path":"graphics|fullscreen","name":"Controller Hand Flip","idx":1,"type":"STRING ARRAY","values":["Off","On"])") !=
+         std::string::npos);
+  alignas(8) unsigned char settings[kSettingsBytes] = {};
+  SetMsaa(settings, 1);
+  SetFlags(settings, 0);  // the game's file held nothing for it
+  Deliver(settings);
+  QCHECK(GetFlags(settings) == 1 && g_applySawFlags == 1 && hf::Enabled());
+  QCHECK(hf::Poll() == 1);  // the start line, and nothing saved
+  QCHECK(ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":1})");
+  RemoveHandFlipFile(dir);
+  RemoveSettingsDirectory(dir);
+}
+
+// The tracking handler can need the flag before the eye-size query has resolved it: the provider the control registers reads the
+// same file.
+void TheTrackingSideCanResolveTheStartThroughTheControl() {
+  const std::string dir = MakeSettingsDirectory(nullptr);
+  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
+  Reset(tq::Level::kLow);
+  g_appDataDir = dir;
+  QCHECK(!hf::Started());
+  hf::EnsureStarted();
+  QCHECK(hf::Started() && hf::Enabled() && hf::CurrentBy() == hf::kByPlayerMarker);
+  RemoveHandFlipFile(dir);
+  RemoveSettingsDirectory(dir);
+}
+
+// The settings document stops hiding the new row's setting along with the control's, and the poller says how many rows each
+// document got.
+void TheSettingsDocumentStopsHidingTheHandFlipSetting() {
+  ResetDocuments();
+  Capture log;
+  Read("/d/json/r14/config/gamesettings_config.json",
+       R"json({"quest": {"settings": [{"path": "graphics|msaa", "operator": "remove"}, {"path": "graphics|fullscreen", "operator": "remove"}], "pages": ["GRAPHICS (1/3)"]}})json");
+  QCHECK(g_parsed.size() == 1 && g_parsed[0].find("graphics|fullscreen") == std::string::npos);
+  Read("/d/json/r14/config/uisettings/menu_settings.json", kMenuDocument);
+  QCHECK(tm::PollOnceForTest() >= 2);
+  const std::string menu = LineWith("\"document\":\"menu_settings\"");
+  QCHECK(menu.find("\"result\":\"rewritten\",\"rows\":1,\"pages\":1,\"hand_flip_rows\":1}") != std::string::npos);
+  const std::string settings = LineWith("\"document\":\"gamesettings_config\"");
+  QCHECK(settings.find("\"result\":\"rewritten\",\"rows\":1,\"pages\":1,\"hand_flip_rows\":1}") != std::string::npos);
+}
+
 }  // namespace
 
 int main() {
@@ -1107,6 +1240,10 @@ int main() {
   ReferenceRuleReadsTheMsaaIndexOfTheSettingsFileAndSavesNothing();
   AConfiguredLowOutranksTheReferenceRule();
   APlayersMarkerOutranksTheReferenceRule();
+  AMenuChangeOfTheHandFlipRowAppliesLiveAndIsRemembered();
+  AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain();
+  TheTrackingSideCanResolveTheStartThroughTheControl();
+  TheSettingsDocumentStopsHidingTheHandFlipSetting();
   TheStockInputNeverUsesTheReferenceRule();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "texture_menu_hook_test: %d check(s) failed\n", quest_test::Failures());

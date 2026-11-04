@@ -100,16 +100,17 @@ void StockAndLowGiveTheSameEyeSizeOnEachHeadset() {
 void TheMenuRowBecomesTheSixLevelControlOnAPageOfItsOwn() {
   const tm::Result r = tm::RewriteMenuSettings(kMenu, 1);
   QCHECK(r.status == tm::Status::kRewritten);
-  QCHECK(r.rows == 1 && r.pages == 1);
+  QCHECK(r.rows == 1 && r.pages == 1 && r.handFlipRows == 1);
   QCHECK(r.page == "GRAPHICS (1/3)");
   const Json doc = Json::parse(r.text, nullptr, false);
   QCHECK(!doc.is_discarded());
-  // The page keeps the one row and is called GRAPHICS; the page it was is gone.
+  // The page keeps the Texture Resolution row and the Controller Hand Flip row under it, and is called GRAPHICS; the page it was is
+  // gone.
   QCHECK(PageNamed(doc, "GRAPHICS (1/3)") == nullptr);
   const Json* page = PageNamed(doc, "GRAPHICS");
   QCHECK(page != nullptr);
   if (page == nullptr) return;
-  QCHECK((*page)["rows"].size() == 1);
+  QCHECK((*page)["rows"].size() == 2);
   const Json& row = (*page)["rows"][0];
   QCHECK(row["path"] == "graphics|msaa");
   QCHECK(row["name"] == "Texture Resolution");
@@ -137,6 +138,68 @@ void TheDefaultIndexIsTheCallers() {
     const Json doc = Json::parse(r.text, nullptr, false);
     QCHECK((*PageNamed(doc, "GRAPHICS"))["rows"][0]["idx"] == index);
   }
+}
+
+// KNOWN-WRONG #2043 The interim Controller Hand Flip row: the second row of the page, after Texture Resolution, a STRING ARRAY
+// Off / On bound to `graphics|fullscreen`, starting on the index the caller gives (Off by default).
+void TheHandFlipRowIsTheSecondRowAfterTextureResolution() {
+  const tm::Result r = tm::RewriteMenuSettings(kMenu, 1);
+  QCHECK(r.status == tm::Status::kRewritten && r.handFlipRows == 1);
+  const Json doc = Json::parse(r.text, nullptr, false);
+  const Json* page = PageNamed(doc, "GRAPHICS");
+  QCHECK(page != nullptr && (*page)["rows"].size() == 2);
+  if (page == nullptr || (*page)["rows"].size() != 2) return;
+  QCHECK((*page)["rows"][0]["name"] == "Texture Resolution");
+  const Json& flip = (*page)["rows"][1];
+  QCHECK(flip["path"] == "graphics|fullscreen");
+  QCHECK(flip["name"] == "Controller Hand Flip");
+  QCHECK(flip["type"] == "STRING ARRAY");
+  QCHECK(flip["values"] == Json::array({"Off", "On"}));
+  QCHECK(flip["idx"] == 0);
+  // The stock fullscreen row on the DISPLAY page is another page's and is not ours.
+  const Json* display = PageNamed(doc, "DISPLAY");
+  QCHECK(display != nullptr && (*display)["rows"].size() == 1 && (*display)["rows"][0]["type"] == "NAMED FLAG");
+  // The caller's index is the row's start (the stored choice), and anything but 0 reads as On.
+  for (const int index : {0, 1, 5}) {
+    const Json withIndex = Json::parse(tm::RewriteMenuSettings(kMenu, 1, index).text, nullptr, false);
+    QCHECK((*PageNamed(withIndex, "GRAPHICS"))["rows"][1]["idx"] == (index == 0 ? 0 : 1));
+  }
+}
+
+// The texture rows are what they were: the Texture Resolution row is the same with and without the new row beside it.
+void TheTextureRowIsUnchangedByTheNewRow() {
+  const Json doc = Json::parse(tm::RewriteMenuSettings(kMenu, 3, 1).text, nullptr, false);
+  const Json& row = (*PageNamed(doc, "GRAPHICS"))["rows"][0];
+  QCHECK(row["path"] == "graphics|msaa" && row["name"] == "Texture Resolution" && row["type"] == "STRING ARRAY");
+  QCHECK(row["idx"] == 3);  // the texture default, not the hand flip index
+  QCHECK(row["values"] == Json::array({"Very Low", "Low", "Medium", "High", "Very High", "Ultra"}));
+  QCHECK(row.size() == 5);  // path, name, idx, type, values: the stock row's keys, no more
+  // The row beside it is built from the stock row's keys too: nothing the engine does not read.
+  const Json& flip = (*PageNamed(doc, "GRAPHICS"))["rows"][1];
+  QCHECK(flip.size() == row.size());
+}
+
+// A menu with no Texture Resolution row to hang it under is a shape mismatch: the row is added beside the texture control or not
+// at all, never alone.
+void TheHandFlipRowIsNeverAddedAlone() {
+  const tm::Result alone = tm::RewriteMenuSettings(
+      R"({"pages": [{"name": "DISPLAY", "rows": [{"path": "graphics|fullscreen", "name": "Fullscreen", "type": "NAMED FLAG"}]}]})", 1, 1);
+  QCHECK(alone.status == tm::Status::kShapeMismatch && alone.text.empty() && alone.handFlipRows == 0);
+}
+
+// The hiding entry of the settings document goes with the control's: the row is shown and its value saved.
+void TheSettingsDocumentStopsHidingTheHandFlipSetting() {
+  const char* const document = R"json({"quest": {"settings": [{"path": "graphics|msaa", "operator": "remove"},
+      {"path": "graphics|fullscreen", "value": true, "operator": "remove"}, {"path": "graphics|sharpening", "operator": "remove"}],
+      "pages": ["GRAPHICS (1/3)"]}})json";
+  const tm::Result r = tm::RewriteGameSettings(document);
+  QCHECK(r.status == tm::Status::kRewritten && r.rows == 1 && r.handFlipRows == 1);
+  const Json doc = Json::parse(r.text, nullptr, false);
+  QCHECK(doc["quest"]["settings"].size() == 1 && doc["quest"]["settings"][0]["path"] == "graphics|sharpening");
+  // A document with no msaa removal is still not ours, whatever else it hides.
+  const tm::Result alone = tm::RewriteGameSettings(
+      R"json({"quest": {"settings": [{"path": "graphics|fullscreen", "operator": "remove"}], "pages": ["GRAPHICS (1/3)"]}})json");
+  QCHECK(alone.status == tm::Status::kShapeMismatch && alone.text.empty());
 }
 
 void AMenuWithoutTheRowIsLeftAlone() {
@@ -266,6 +329,10 @@ int main() {
   TheMenuRowBecomesTheSixLevelControlOnAPageOfItsOwn();
   TheKeysKeepTheirOrderSoTheGameReadsWhatItReadBefore();
   TheDefaultIndexIsTheCallers();
+  TheHandFlipRowIsTheSecondRowAfterTextureResolution();
+  TheTextureRowIsUnchangedByTheNewRow();
+  TheHandFlipRowIsNeverAddedAlone();
+  TheSettingsDocumentStopsHidingTheHandFlipSetting();
   AMenuWithoutTheRowIsLeftAlone();
   TheSettingsDocumentStopsHidingTheControlAndItsPage();
   ASettingsDocumentWithoutTheRemovalIsLeftAlone();
