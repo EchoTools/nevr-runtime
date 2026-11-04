@@ -1,6 +1,6 @@
 # Module `fxtrail` (row R29)
 
-Files: `src/fxtrail.{h,cpp}`, `src/quest/tests/q15t/fxtrail_test.cpp`, `src/quest/tests/q15t/mod/fxtrail.sh`, `src/quest/tests/q15t/mutants.d/fxtrail.sh`.
+Files: `src/fxtrail.{h,cpp}`, `src/quest/tests/q15t/fxtrail_test.cpp`, `src/quest/tests/q15t/mod/fxtrail.cmake`, `src/quest/tests/q15t/mutants.d/fxtrail.sh`.
 
 Option macro for the main seat to wire: `Q15T_FXTRAIL`, default **ON** (the source build installs it unless switched off:
 the source build's fxtrail:1 "ON by default", the source build's fxtrail:60-77 `Off()`; called unconditionally from the source build's tap:174).

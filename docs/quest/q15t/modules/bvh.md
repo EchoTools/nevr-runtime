@@ -230,7 +230,7 @@ Falsifiers (any one means the module or my reading is wrong, and the module shou
 
 ## 9. Tests and mutants
 
-`Q15T_MODULE=bvh bash src/quest/tests/q15t/run_host_tests.sh` runs `bvh_core_test` (the pure core on synthetic meshes: header parse and limits, ray validity,
+`just test-quest-q15t bvh` runs `bvh_core_test` (the pure core on synthetic meshes: header parse and limits, ray validity,
 hits and misses with exact `t`/`u`/`v`/normal, open range ends, a room at several leaf sizes, a random soup against two brute-force references,
 degenerate and malformed trees, the stack and cycle limits, empty children, a node reference past the block) and `bvh_test` (the real
 installer on fake slot pages; the wrappers called through their slots; the gate from two call sites and two threads; refusals and rollback;

@@ -1,0 +1,62 @@
+{
+    "version": 4,
+    "configurePresets": [
+        {
+            "name": "q15t-host-tests",
+            "displayName": "q15t plugin host tests (the host compiler, fake game memory)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../../../../build/q15t-host-tests",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_COLOR_DIAGNOSTICS": "ON"
+            }
+        },
+        {
+            "name": "q15t-ndk-checks",
+            "displayName": "q15t plugin arm64 checks (NDK clang: static-init objects, thunk disassembly, thunk under qemu)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../../../../build/q15t-ndk-checks",
+            "toolchainFile": "$env{Q15T_NDK}/build/cmake/android.toolchain.cmake",
+            "cacheVariables": {
+                "ANDROID_ABI": "arm64-v8a",
+                "ANDROID_PLATFORM": "android-26",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_COLOR_DIAGNOSTICS": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "q15t-host-tests",
+            "configurePreset": "q15t-host-tests"
+        },
+        {
+            "name": "q15t-ndk-checks",
+            "configurePreset": "q15t-ndk-checks"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "q15t-host-tests",
+            "configurePreset": "q15t-host-tests",
+            "output": {
+                "verbosity": "verbose",
+                "outputOnFailure": true
+            },
+            "execution": {
+                "noTestsAction": "error"
+            }
+        },
+        {
+            "name": "q15t-ndk-checks",
+            "configurePreset": "q15t-ndk-checks",
+            "output": {
+                "verbosity": "verbose",
+                "outputOnFailure": true
+            },
+            "execution": {
+                "noTestsAction": "error"
+            }
+        }
+    ]
+}

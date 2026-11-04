@@ -1,6 +1,6 @@
 # Module `custctx` (rows R31, R32, R33)
 
-Files: `src/custctx.{h,cpp}`, `src/quest/tests/q15t/custctx_test.cpp`, `src/quest/tests/q15t/mod/custctx.sh`, `src/quest/tests/q15t/mutants.d/custctx.sh`.
+Files: `src/custctx.{h,cpp}`, `src/quest/tests/q15t/custctx_test.cpp`, `src/quest/tests/q15t/mod/custctx.cmake`, `src/quest/tests/q15t/mutants.d/custctx.sh`.
 
 Option macro for the main seat to wire: `Q15T_CUSTCTX`, default **ON** (the source build's custctx:1 "DEFAULT ON", `Switch()`; installed from
 the source build's tap:174). API: `InstallResult InstallCustCtx(std::uintptr_t base)` (all three hooks or none; one ERROR line and the first

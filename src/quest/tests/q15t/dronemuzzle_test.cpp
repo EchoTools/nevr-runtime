@@ -3,7 +3,7 @@
 //
 // The naked arm64 thunks cannot run on this host: here the two slots get HOST STAND-INS (below) that do what the thunks do in C++ (compare
 // the return address with the thunk's word, then either call the plain function or jump to the next function). What the thunks themselves
-// are is checked by src/quest/tests/q15t/mod/dronemuzzle.sh (NDK cross-compile; instruction words and relocations compared with the source build's).
+// are is checked by src/quest/tests/q15t/mod/dronemuzzle.cmake (NDK cross-compile; instruction words and relocations compared with the source build's).
 #include <sys/mman.h>
 #include <unistd.h>
 

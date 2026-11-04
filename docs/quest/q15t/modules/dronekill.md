@@ -1,6 +1,6 @@
 # Module `dronekill` (rows R45, R47, R48, and the Actor slot Enter's capture needs)
 
-Files: `src/dronekill.{h,cpp}`, `src/quest/plugins/q15t/src/dronekill_core.h`, `src/quest/plugins/q15t/src/dronekill_log.h`, `src/quest/tests/q15t/dronekill_test.cpp`, `src/quest/tests/q15t/mod/dronekill.sh`,
+Files: `src/dronekill.{h,cpp}`, `src/quest/plugins/q15t/src/dronekill_core.h`, `src/quest/plugins/q15t/src/dronekill_log.h`, `src/quest/tests/q15t/dronekill_test.cpp`, `src/quest/tests/q15t/mod/dronekill.cmake`,
 `tests/mutants.d/dronekill*.sh` (six files: one list, split so that each `Q15T_MUTANTS_ONLY=<file>` run fits the 10-minute tool limit).
 
 Port of the source build's `the source build's dronekill` (drone kill / lock-on / gun mirror / chase / shot velocity) and of its
@@ -202,13 +202,13 @@ With `Q15T_DRONEKILL=1` (all five words) in an EC drone match on the pinned buil
 
 ## Tests and mutants
 
-Host test (`Q15T_MODULE=dronekill bash src/quest/tests/q15t/run_host_tests.sh`, 2026-10-28):
+Host test (`just test-quest-q15t dronekill`, 2026-10-28):
 ```
 dronekill_test: all checks passed
 dronekill: arm64 compile ok, no .init_array
 ```
 (the arm64 step is an NDK r26d clang++ compile with `-fno-exceptions -fno-rtti -fvisibility=hidden -Wall -Wextra -Werror -O2` and an
-`.init_array` check; the full `bash src/quest/tests/q15t/run_host_tests.sh` also passes, rc=0.) The test pins the tables by FNV-1a hash and every offset /
+`.init_array` check; the full `just test-quest-q15t` also passes, rc=0.) The test pins the tables by FNV-1a hash and every offset /
 symbol / constant as a literal, ports the source's core tests, and drives the real module against the fake game for install (pinned vaddrs on a
 58 MB fake base, all-or-none, rollback), Enter / K / tick, R3, lookups and shapes, gun mirror, lock-on, shot accessor (nested), chase (about 40
 scenarios), log caps, the wrappers with no real function, and the function-address check.
