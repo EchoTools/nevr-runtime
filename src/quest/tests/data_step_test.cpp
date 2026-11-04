@@ -711,7 +711,7 @@ TEST(AShortPackageIsWarnedAboutAndTheDataIsStillUsed) {
   const StepResult r = RunDataStep(rig.config, net);
   rig.CheckUsedWithoutFetch(r, net);
   CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
-  CHECK(Contains(rig.warns[0],
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0],
                  "data_packages root=" + Media() +
                      " data_version=5932408047 package=48037dc70b0ecab2_1 outcome=short expected_bytes=6 found_bytes=5 " +
                      kWarnConsequence));
@@ -728,7 +728,7 @@ TEST(AMissingPackageIsWarnedAboutWithNoFoundBytes) {
   const StepResult r = RunDataStep(rig.config, net);
   rig.CheckUsedWithoutFetch(r, net);
   CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
-  CHECK(Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=missing expected_bytes=6 found_bytes=none "));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=missing expected_bytes=6 found_bytes=none "));
   CHECK_EQ(rig.hash_calls, 0);
   CHECK(rig.writes.empty());
 }
@@ -740,7 +740,7 @@ TEST(AnOversizePackageIsWarnedAbout) {
   const StepResult r = RunDataStep(rig.config, net);
   rig.CheckUsedWithoutFetch(r, net);
   CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
-  CHECK(Contains(rig.warns[0], "package=48037dc70b0ecab2_0 outcome=oversize expected_bytes=4 found_bytes=5 "));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "package=48037dc70b0ecab2_0 outcome=oversize expected_bytes=4 found_bytes=5 "));
 }
 
 TEST(OnlyTheFirstFailingPackageIsReportedInOrder) {
@@ -751,8 +751,8 @@ TEST(OnlyTheFirstFailingPackageIsReportedInOrder) {
   const StepResult r = RunDataStep(rig.config, net);
   rig.CheckUsedWithoutFetch(r, net);
   CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
-  CHECK(Contains(rig.warns[0], "package=48037dc70b0ecab2_0 outcome=short expected_bytes=4 found_bytes=3 "));
-  CHECK(!Contains(rig.warns[0], "_1"));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "package=48037dc70b0ecab2_0 outcome=short expected_bytes=4 found_bytes=3 "));
+  CHECK(!rig.warns.empty() && !Contains(rig.warns[0], "_1"));
 }
 
 TEST(AFailingPackageIsWarnedAboutWhenTheEngineRootIsNamedAndWhenAFetchIsNotAllowed) {
@@ -764,7 +764,7 @@ TEST(AFailingPackageIsWarnedAboutWhenTheEngineRootIsNamedAndWhenAFetchIsNotAllow
     const StepResult r = RunDataStep(rig.config, net);
     rig.CheckUsedWithoutFetch(r, net);
     CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
-    CHECK(Contains(rig.warns[0], "outcome=short"));
+    CHECK(!rig.warns.empty() && Contains(rig.warns[0], "outcome=short"));
   }
   {
     PinnedRig rig;
@@ -854,8 +854,8 @@ TEST(AHashThatDoesNotMatchIsWarnedAboutAndNoMarkerIsWritten) {
   CHECK_EQ(rig.hash_calls, 1);
   CHECK(rig.writes.empty());
   CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
-  CHECK(Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=sha_mismatch expected_bytes=6 found_bytes=6 "));
-  CHECK(Contains(rig.warns[0], kWarnConsequence));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=sha_mismatch expected_bytes=6 found_bytes=6 "));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], kWarnConsequence));
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(1));  // no `verified` line after a failure
 }
 
@@ -867,7 +867,7 @@ TEST(AFileThatCannotBeReadToItsEndIsWarnedAboutAndNoMarkerIsWritten) {
   rig.CheckUsedWithoutFetch(r, net);
   CHECK(rig.writes.empty());
   CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
-  CHECK(Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=unreadable "));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "package=48037dc70b0ecab2_1 outcome=unreadable "));
 }
 
 TEST(AMarkerThatCannotBeWrittenIsWarnedAboutAndTheCheckStillPasses) {
@@ -877,8 +877,8 @@ TEST(AMarkerThatCannotBeWrittenIsWarnedAboutAndTheCheckStillPasses) {
   const StepResult r = RunDataStep(rig.config, net);
   rig.CheckUsedWithoutFetch(r, net);
   CHECK_EQ(rig.warns.size(), static_cast<std::size_t>(1));
-  CHECK(Contains(rig.warns[0], "data_packages_marker "));
-  CHECK(Contains(rig.warns[0], "result=write_failed"));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "data_packages_marker "));
+  CHECK(!rig.warns.empty() && Contains(rig.warns[0], "result=write_failed"));
   CHECK(Contains(rig.events.back(), "outcome=verified packages=2 sha=checked"));
 }
 
