@@ -7,6 +7,10 @@
 // thread. TelemetrySnapshotStore owns three instances and leases writer,
 // published, and reader roles under its metadata mutex.
 struct TelemetrySnapshot {
+  // SnapshotGameState found the net game and its game state. A snapshot it could not read is published
+  // cleared, with this false, and event detection skips it (telemetry_events.h).
+  bool gameRead;
+
   // --- Game function results (game thread only) ---
   float gameClock;
   uint64_t gameStatusHash;  // raw symbol hash from property lookup

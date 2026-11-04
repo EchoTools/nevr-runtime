@@ -16,6 +16,7 @@
 #include "telemetry/v2/echo_arena.pb.h"
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
+#include "runtime/server/telemetry_events.h"
 #include "runtime/server/telemetry_game_status.h"
 #include "runtime/server/telemetry_game_type.h"
 #include "runtime/server/telemetry_player_read.h"
@@ -116,6 +117,7 @@ void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, con
   m_sessionStartTime = std::chrono::steady_clock::now();
   m_lastSnapshotTime = m_sessionStartTime;
   m_prevSnapshot.Clear();
+  m_eventState = TelemetryEventState{};
   m_leftOutWarned = false;
   m_lastReadSnapshotSequence = 0;
   m_droppedFrames = 0;
@@ -476,6 +478,7 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
   ResolveFunctionPointers();
 
   if (!ResolveGamePointers()) return;
+  snap->gameRead = true;
 
   CHAR* netGameBase = reinterpret_cast<CHAR*>(m_netGame);
   CHAR* gsdBase = reinterpret_cast<CHAR*>(m_gameStateData);
@@ -689,8 +692,9 @@ void TelemetryStreamer::Run() {
         }
 
         // Keep the reader lease alive through both serialization/send work and
-        // this copy; release occurs when `lease` leaves scope.
-        m_prevSnapshot = snapshot;
+        // this copy; release occurs when `lease` leaves scope. Only a read snapshot becomes the previous
+        // one, so the next read one is compared with the last state the game gave (telemetry_events.h).
+        if (snapshot.gameRead) m_prevSnapshot = snapshot;
         m_lastReadSnapshotSequence = lease.sequence();
       }
     }
@@ -865,9 +869,9 @@ void TelemetryStreamer::BuildAndSendFrame(const TelemetrySnapshot& snap) {
     }
   }
 
-  // Phase 4: detect events by comparing current and previous snapshots
+  // Phase 4: detect events by comparing current and previous snapshots (telemetry_events.h)
   if (m_frameIndex > 0) {
-    DetectEvents(snap, m_prevSnapshot, arena);
+    DetectTelemetryEvents(snap, m_prevSnapshot, m_eventState, arena);
   }
 
   // Serialize and send
@@ -877,120 +881,6 @@ void TelemetryStreamer::BuildAndSendFrame(const TelemetrySnapshot& snap) {
     m_frameIndex++;
   } else {
     Log(EchoVR::LogLevel::Error, "[NEVR.TELEMETRY] Failed to serialize frame %u", m_frameIndex);
-  }
-}
-
-void TelemetryStreamer::DetectEvents(const TelemetrySnapshot& curr, const TelemetrySnapshot& prev,
-                                     telemetry::v2::EchoArenaFrame* frame) {
-  // Detect game status change
-  int32_t currStatus = MapGameStatus(curr.gameStatusHash);
-  int32_t prevStatus = MapGameStatus(prev.gameStatusHash);
-  if (currStatus != prevStatus && prevStatus != 0) {
-    // Status transitions → specific events
-    if (currStatus == static_cast<int32_t>(telemetry::v2::GAME_STATUS_ROUND_START)) {
-      auto* ev = frame->add_events();
-      ev->mutable_round_started();
-    } else if (currStatus == static_cast<int32_t>(telemetry::v2::GAME_STATUS_ROUND_OVER)) {
-      auto* ev = frame->add_events();
-      ev->mutable_round_ended();
-    } else if (currStatus == static_cast<int32_t>(telemetry::v2::GAME_STATUS_POST_MATCH)) {
-      auto* ev = frame->add_events();
-      ev->mutable_match_ended();
-    }
-  }
-
-  // Detect score changes
-  if (curr.bluePoints != prev.bluePoints || curr.orangePoints != prev.orangePoints) {
-    auto* ev = frame->add_events();
-    auto* sb = ev->mutable_scoreboard_updated();
-    sb->set_blue_points(curr.bluePoints);
-    sb->set_orange_points(curr.orangePoints);
-  }
-
-  // Detect goal scored (last score data changed)
-  if (curr.lastScore.scorerPacked != prev.lastScore.scorerPacked &&
-      curr.lastScore.pointAmount > 0) {
-    auto* ev = frame->add_events();
-    auto* gs = ev->mutable_goal_scored();
-    gs->set_team(static_cast<telemetry::v2::Role>(curr.lastScore.team));
-    gs->set_point_amount(curr.lastScore.pointAmount);
-    gs->set_disc_speed(curr.lastScore.discSpeed);
-    gs->set_distance_thrown(curr.lastScore.distanceThrown);
-    gs->set_scorer_slot(curr.lastScore.scorerPacked & 0x1F);
-    if ((curr.lastScore.assistPacked & 0x1F) != 0x1F) {
-      gs->set_assist_slot(curr.lastScore.assistPacked & 0x1F);
-    }
-  }
-
-  // Detect player join/leave and stat changes
-  for (uint16_t i = 0; i < 16; i++) {
-    bool currPresent = curr.playerInfo[i].present;
-    bool prevPresent = prev.playerInfo[i].present;
-
-    if (currPresent && !prevPresent) {
-      auto* ev = frame->add_events();
-      auto* pj = ev->mutable_player_joined();
-      pj->set_slot(i);
-      pj->set_role(nevr_telemetry_player::RoleFromTeam(curr.playerInfo[i].teamIndex));
-      pj->set_account_number(curr.playerInfo[i].accountId);
-      pj->set_display_name(curr.playerInfo[i].displayName);
-    } else if (!currPresent && prevPresent) {
-      auto* ev = frame->add_events();
-      auto* pl = ev->mutable_player_left();
-      pl->set_player_slot(i);
-    } else if (currPresent && prevPresent) {
-      // Detect team switch
-      if (curr.playerInfo[i].teamIndex != prev.playerInfo[i].teamIndex) {
-        auto* ev = frame->add_events();
-        auto* sw = ev->mutable_player_switched_team();
-        sw->set_player_slot(i);
-        sw->set_new_role(nevr_telemetry_player::RoleFromTeam(curr.playerInfo[i].teamIndex));
-        sw->set_prev_role(nevr_telemetry_player::RoleFromTeam(prev.playerInfo[i].teamIndex));
-      }
-
-      // Detect stat changes (stuns, blocks, saves, etc.)
-      const auto& cs = curr.stats[i];
-      const auto& ps = prev.stats[i];
-
-      if (cs.stuns > ps.stuns) {
-        auto* ev = frame->add_events();
-        auto* stun = ev->mutable_player_stun();
-        stun->set_player_slot(i);
-        stun->set_total_stuns(cs.stuns);
-      }
-      if (cs.blocks > ps.blocks) {
-        auto* ev = frame->add_events();
-        auto* block = ev->mutable_player_block();
-        block->set_player_slot(i);
-        block->set_total_blocks(cs.blocks);
-      }
-      if (cs.saves > ps.saves) {
-        auto* ev = frame->add_events();
-        auto* save = ev->mutable_player_save();
-        save->set_player_slot(i);
-        save->set_total_saves(cs.saves);
-      }
-      if (cs.interceptions > ps.interceptions) {
-        auto* ev = frame->add_events();
-        auto* interception = ev->mutable_player_interception();
-        interception->set_player_slot(i);
-      }
-      if (cs.steals > ps.steals) {
-        auto* ev = frame->add_events();
-        auto* steal = ev->mutable_player_steal();
-        steal->set_player_slot(i);
-      }
-      if (cs.passes > ps.passes) {
-        auto* ev = frame->add_events();
-        auto* pass = ev->mutable_player_pass();
-        pass->set_player_slot(i);
-      }
-      if (cs.shotsTaken > ps.shotsTaken) {
-        auto* ev = frame->add_events();
-        auto* shot = ev->mutable_player_shot_taken();
-        shot->set_player_slot(i);
-      }
-    }
   }
 }
 

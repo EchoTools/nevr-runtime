@@ -9,6 +9,7 @@
 
 #include "runtime/server/bearer_reconnect_auth.h"
 #include "runtime/server/event_ring_buffer.h"
+#include "runtime/server/telemetry_events.h"
 #include "runtime/server/telemetry_snapshot.h"
 #include "runtime/server/telemetry_snapshot_store.h"
 
@@ -20,9 +21,6 @@ using WebSocketMessagePtr = std::unique_ptr<WebSocketMessage>;
 
 namespace nevr_game_server {
 class ServerContext;
-}
-namespace telemetry::v2 {
-class EchoArenaFrame;
 }
 
 // Telemetry event pushed from broadcaster callbacks (game thread).
@@ -159,9 +157,8 @@ class TelemetryStreamer {
   // Previous snapshot for event diffing (Phase 4)
   TelemetrySnapshot m_prevSnapshot;
 
-  // Detect events by comparing current and previous snapshots
-  void DetectEvents(const TelemetrySnapshot& curr, const TelemetrySnapshot& prev,
-                    telemetry::v2::EchoArenaFrame* frame);
+  // What event detection keeps across frames (telemetry thread; telemetry_events.h)
+  TelemetryEventState m_eventState;
 
   // Game function pointers (resolved once on first snapshot)
   bool m_funcPtrsResolved{false};
