@@ -16,7 +16,6 @@ Native code is also built another way in places. The inventory is in "Where the 
 
 - **A compiler command in a recipe.** 53 lines in `justfile` run `g++ -std=c++17` with `-Wall -Wextra -Werror` and list their
   sources and include paths by hand (`test-quest-*`, `quest-patcher`, `test-scripting`).
-- **A compiler command in a shell script.** One script per test module, each with its own compiler command lines.
 - **A compiler command in a Python script.** `tools/build_quest_combat_libs.py` runs the NDK `clang++` once for each Quest
   script library; `tools/gen_plugin_signature_fixtures.py` and `tools/winvm/systest.py` run `x86_64-w64-mingw32-gcc`.
 
