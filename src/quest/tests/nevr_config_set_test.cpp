@@ -251,6 +251,58 @@ void TwoThreadsEachSettingTheirOwnKeyNeverLoseEachOther(bool secondSpelledAnothe
   }
 }
 
+// The in-memory update is inside the lock (the same case as the PC test ASecondSetNeverGetsInBetween...): the first Set is held between
+// its file step and its object update; a second Set of the same key on the same object must wait for it, so the object ends with the
+// file's value.
+std::atomic<int> g_hookCalls{0};
+std::atomic<bool> g_firstIsHeld{false};
+std::atomic<bool> g_secondDone{false};
+std::atomic<bool> g_firstReturned{false};
+std::atomic<bool> g_secondBeforeFirstReturned{false};
+void HoldTheFirstSet() {
+  if (g_hookCalls.fetch_add(1) != 0) return;
+  g_firstIsHeld.store(true);
+  for (int i = 0; i < 400 && !g_secondDone.load(); ++i) usleep(1000);
+}
+struct SharedJob {
+  nevr::NevrConfig* cfg;
+  bool value;
+};
+void* FirstSet(void* arg) {
+  SharedJob* job = static_cast<SharedJob*>(arg);
+  QCHECK(job->cfg->Set("graphics.hand_flip", job->value).ok);
+  g_firstReturned.store(true);
+  return nullptr;
+}
+void* SecondSet(void* arg) {
+  SharedJob* job = static_cast<SharedJob*>(arg);
+  QCHECK(job->cfg->Set("graphics.hand_flip", job->value).ok);
+  g_secondBeforeFirstReturned.store(!g_firstReturned.load());
+  g_secondDone.store(true);
+  return nullptr;
+}
+
+void ASecondSetNeverGetsInBetweenTheFileAndTheObjectUpdateOfTheFirst() {
+  Dir dir;
+  Write(dir.File(), "graphics:\n  hand_flip: false\n");
+  nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFile(dir.File());
+  nevr::config_testing::SetBeforeMemoryUpdateForTest(&HoldTheFirstSet);
+  SharedJob first{&cfg, true};
+  SharedJob second{&cfg, false};
+  pthread_t a, b;
+  QCHECK(pthread_create(&a, nullptr, &FirstSet, &first) == 0);
+  while (!g_firstIsHeld.load()) sched_yield();
+  QCHECK(pthread_create(&b, nullptr, &SecondSet, &second) == 0);
+  pthread_join(a, nullptr);
+  pthread_join(b, nullptr);
+  nevr::config_testing::SetBeforeMemoryUpdateForTest(nullptr);
+  QCHECK(!g_secondBeforeFirstReturned.load());
+  const nevr::NevrConfig onDisk = nevr::NevrConfig::LoadFromFile(dir.File());
+  QCHECK(onDisk.GetBool("graphics.hand_flip").has_value() && cfg.GetBool("graphics.hand_flip").has_value());
+  QCHECK(*cfg.GetBool("graphics.hand_flip") == *onDisk.GetBool("graphics.hand_flip"));
+  QCHECK(!*onDisk.GetBool("graphics.hand_flip"));
+}
+
 }  // namespace
 
 int main() {
@@ -266,6 +318,7 @@ int main() {
   ATextThatIsNotAPlainWordIsRefusedAndNothingIsWritten();
   TwoThreadsEachSettingTheirOwnKeyNeverLoseEachOther(false);
   TwoThreadsEachSettingTheirOwnKeyNeverLoseEachOther(true);
+  ASecondSetNeverGetsInBetweenTheFileAndTheObjectUpdateOfTheFirst();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "nevr_config_set_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

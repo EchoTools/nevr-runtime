@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -529,4 +530,51 @@ TEST(NevrConfigSetConcurrent, TwoThreadsOnOneObjectBothKeysReadBack) {
     EXPECT_EQ(reloaded.GetBool("graphics.hand_flip").value_or(!((kSetsPerThread - 1) % 2 == 0)), (kSetsPerThread - 1) % 2 == 0) << "round " << round;
     EXPECT_EQ(reloaded.GetString("graphics.texture_quality").value_or(""), kWords[(kSetsPerThread - 1) % 4]) << "round " << round;
   }
+}
+
+// The in-memory update is inside the lock. The first Set is held after its file step and before the memory update (the seam); a second
+// Set of the same key on the same object starts meanwhile. With the update inside the lock the second Set waits until the first has
+// returned, so the file and the object end with the second value. With the lock released before the update, the second Set finishes
+// first and the first then writes its older value into the object: the object disagrees with the file.
+namespace {
+std::atomic<int> g_hookCalls{0};
+std::atomic<bool> g_firstIsHeld{false};
+std::atomic<bool> g_secondDone{false};
+void HoldTheFirstSet() {
+  if (g_hookCalls.fetch_add(1) != 0) return;  // only the first Set is held
+  g_firstIsHeld.store(true);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+  while (!g_secondDone.load() && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+}
+}  // namespace
+
+TEST(NevrConfigSetConcurrent, ASecondSetNeverGetsInBetweenTheFileAndTheObjectUpdateOfTheFirst) {
+  Dir dir;
+  Write(dir.File(), "graphics:\n  hand_flip: false\n");
+  nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFile(dir.File());
+  g_hookCalls.store(0);
+  g_firstIsHeld.store(false);
+  g_secondDone.store(false);
+  std::atomic<bool> firstReturned{false};
+  std::atomic<bool> secondFinishedBeforeFirstReturned{false};
+  nevr::config_testing::SetBeforeMemoryUpdateForTest(&HoldTheFirstSet);
+  std::thread first([&] {
+    EXPECT_TRUE(cfg.Set("graphics.hand_flip", true).ok);
+    firstReturned.store(true);
+  });
+  while (!g_firstIsHeld.load()) std::this_thread::yield();
+  std::thread second([&] {
+    EXPECT_TRUE(cfg.Set("graphics.hand_flip", false).ok);  // changes the file back: a real write
+    secondFinishedBeforeFirstReturned.store(!firstReturned.load());
+    g_secondDone.store(true);
+  });
+  first.join();
+  second.join();
+  nevr::config_testing::SetBeforeMemoryUpdateForTest(nullptr);
+  EXPECT_FALSE(secondFinishedBeforeFirstReturned.load()) << "a second Set ran to the end between the file and the object update of the first";
+  const nevr::NevrConfig onDisk = nevr::NevrConfig::LoadFromFile(dir.File());
+  ASSERT_TRUE(onDisk.GetBool("graphics.hand_flip").has_value());
+  ASSERT_TRUE(cfg.GetBool("graphics.hand_flip").has_value());
+  EXPECT_EQ(*cfg.GetBool("graphics.hand_flip"), *onDisk.GetBool("graphics.hand_flip")) << "the object disagrees with the file";
+  EXPECT_FALSE(*onDisk.GetBool("graphics.hand_flip"));  // the second Set came last
 }
