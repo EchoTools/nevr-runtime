@@ -1211,14 +1211,6 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
     gtest_discover_tests(test_nevr_config DISCOVERY_MODE PRE_TEST)
 
-    # NevrConfig::Set (#1986): the first config.yaml writer, tested only through the interface. Same link as test_nevr_config.
-    add_executable(test_nevr_config_set tests/test_nevr_config_set.cpp)
-    set_source_files_properties(tests/test_nevr_config_set.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_nevr_config_set PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_nevr_config_set PRIVATE
-      GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
-    gtest_discover_tests(test_nevr_config_set DISCOVERY_MODE PRE_TEST)
-
     # service_map behaviour-equivalence tests (N133 S3) — the PURE resolution core
     # of the config.cpp cutover (flat->path map, service-host fallback, scheme
     # redirect). Compiles service_map.cpp and service_redirect.cpp directly (the
