@@ -16,7 +16,7 @@ namespace {
 
 using Names = nevr_root::Names<wchar_t>;
 
-// One file to move, and the folder it leaves (whose marker records the move).
+// One file to move.
 struct Item {
   std::wstring from;
   std::wstring to;
@@ -26,9 +26,6 @@ struct Item {
 struct Source {
   std::wstring dir;
   std::vector<Item> items;
-  // Whether a move out of `dir` leaves MOVED-TO-NEVR-ROOT.txt in it. The plugins folder is in the game folder, where
-  // nothing of ours is written, so its move says what it did in the log and leaves no file.
-  bool leaves_marker = true;
 };
 
 bool Exists(const std::wstring& path) { return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
@@ -176,22 +173,6 @@ std::wstring ParentOf(const std::wstring& path) {
   return slash == std::wstring::npos ? std::wstring() : path.substr(0, slash);
 }
 
-// MOVED-TO-NEVR-ROOT.txt in `dir`, naming the root.
-bool WriteMarker(const std::wstring& dir, const std::wstring& root, std::wstring* path, unsigned long* error) {
-  *path = nevr_root::Join(dir, Names::kMovedMarker);
-  const std::string text = "nEVR moved its files out of this folder to " + ToUtf8(root) + "\r\n";
-  HANDLE file = CreateFileW(path->c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) {
-    *error = GetLastError();
-    return false;
-  }
-  DWORD written = 0;
-  const BOOL ok = WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
-  *error = ok ? 0 : GetLastError();
-  CloseHandle(file);
-  return ok != FALSE && written == text.size();
-}
-
 }  // namespace
 
 bool IsNevrLogFileName(const std::wstring& name) {
@@ -222,7 +203,7 @@ std::vector<Event> Run(const Inputs& inputs) {
   {
     Source cosmetics{inputs.legacy_cosmetics_dir, {}};
     const std::wstring to_dir = nevr_root::CosmeticsDir(inputs.root);
-    for (const std::wstring& name : FilesIn(inputs.legacy_cosmetics_dir, [](const std::wstring& n) { return n != Names::kMovedMarker; })) {
+    for (const std::wstring& name : FilesIn(inputs.legacy_cosmetics_dir, [](const std::wstring& n) { return n != Names::kMovedMarker; })  /* a note an earlier release left is not ours to carry */) {
       cosmetics.items.push_back(
           {nevr_root::Join(inputs.legacy_cosmetics_dir, name.c_str()), nevr_root::Join(to_dir, name.c_str())});
     }
@@ -231,8 +212,8 @@ std::vector<Event> Run(const Inputs& inputs) {
 
   {
     // The plugins folder beside the game executable: its files (not its subfolders, which are not plugin files) go to the
-    // root's plugins\. It is in the game folder, so the move leaves no marker file there.
-    Source plugins{inputs.legacy_plugins_dir, {}, false};
+    // root's plugins\.
+    Source plugins{inputs.legacy_plugins_dir, {}};
     const std::wstring to_dir = nevr_root::PluginsDir(inputs.root);
     for (const std::wstring& name : FilesIn(inputs.legacy_plugins_dir, [](const std::wstring&) { return true; })) {
       plugins.items.push_back({nevr_root::Join(inputs.legacy_plugins_dir, name.c_str()), nevr_root::Join(to_dir, name.c_str())});
@@ -250,7 +231,6 @@ std::vector<Event> Run(const Inputs& inputs) {
   }
 
   for (const Source& source : sources) {
-    bool moved_any = false;
     for (const Item& item : source.items) {
       if (Exists(item.to)) {
         events.push_back({Outcome::kLeftRootHasIt, item.from, item.to, 0});
@@ -276,16 +256,6 @@ std::vector<Event> Run(const Inputs& inputs) {
         continue;
       }
       events.push_back({Outcome::kMoved, item.from, item.to, 0});
-      moved_any = true;
-    }
-    if (moved_any && source.leaves_marker) {
-      std::wstring marker;
-      unsigned long error = 0;
-      if (WriteMarker(source.dir, inputs.root, &marker, &error)) {
-        events.push_back({Outcome::kMarkerWritten, source.dir, marker, 0});
-      } else {
-        events.push_back({Outcome::kMarkerFailed, source.dir, marker, error});
-      }
     }
   }
   return events;
@@ -345,12 +315,6 @@ void RunAndLog() {
         ++left;
         Log(EchoVR::LogLevel::Warning, "[NEVR.ROOT] left %s: could not move it to %s (error %lu); the next run tries again",
             from.c_str(), to.c_str(), e.error);
-        break;
-      case Outcome::kMarkerWritten:
-        Log(EchoVR::LogLevel::Info, "[NEVR.ROOT] wrote %s", to.c_str());
-        break;
-      case Outcome::kMarkerFailed:
-        Log(EchoVR::LogLevel::Warning, "[NEVR.ROOT] could not write %s (error %lu)", to.c_str(), e.error);
         break;
       case Outcome::kRootUnavailable:
         Log(EchoVR::LogLevel::Warning, "[NEVR.ROOT] could not create %s (error %lu): nothing moved", to.c_str(), e.error);
