@@ -83,6 +83,7 @@ class BuiltIdentityLiteralTest(unittest.TestCase):
                 self.assertRegex(version, r"^\d+\.\d+\.\d+(-dev\.\d+\+[0-9a-f]{7,40})?$")
 
     def test_the_host_and_the_runtime_are_one_build(self):
+        skip_if_stale(self)
         self.assertEqual(IDENTITY.findall(HOST.read_bytes()), IDENTITY.findall(RUNTIME.read_bytes()))
 
     def test_the_commit_is_the_checked_out_commit_when_the_build_is_current(self):
@@ -182,7 +183,8 @@ class StaleBuildTest(unittest.TestCase):
     def both(self):
         return {m: self.outcome(m) for m in (
             "test_each_dll_has_exactly_one_identity_literal_matching_its_definitions",
-            "test_the_commit_is_the_checked_out_commit_when_the_build_is_current")}
+            "test_the_commit_is_the_checked_out_commit_when_the_build_is_current",
+            "test_the_host_and_the_runtime_are_one_build")}
 
     def test_a_current_tree_is_asserted_and_passes(self):
         for method, result in self.both().items():
