@@ -168,9 +168,10 @@ test-android *args: (_heavy-guard "test-android" args) check-android-static-init
     # The sentinel embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
     # CSymbol64Hash sign-extends a byte >= 0x80 under the NDK's AArch64 clang, where plain char is unsigned (#657).
-    # The vectors are static_asserts, so compiling the file is the check; the NDK's static bionic binary does not
-    # start under qemu-user (TLS segment alignment), so nothing is run here.
-    "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -fsyntax-only src/quest/tests/symbol_hash_test.cpp
+    # The vectors are static_asserts, so compiling the file is the check: the target nevr_quest_symbol_hash_check
+    # (src/quest/CMakeLists.txt) is that compile. The NDK's static bionic binary does not start under qemu-user
+    # (TLS segment alignment), so nothing is run here.
+    cd src/quest && cmake --build --preset android-arm64 --target nevr_quest_symbol_hash_check
     cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
@@ -768,7 +769,8 @@ test-system-verbose *args: (_heavy-guard "test-system-verbose" args)
 # tools/winvm/README.md. Exit 1 = runtime failed a check,
 # exit 2 = the VM/environment is unusable.
 test-winvm *ARGS:
-    tools/winvm/systest.py {{ARGS}}
+    cmake --build --preset {{ preset }} --target gai_probe
+    tools/winvm/systest.py --gai-probe "build/{{ preset }}/bin/winvm/gai_probe.exe" {{ARGS}}
 
 # One social scenario, end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md):
 # builds the mingw-scenario DLL (test-only control endpoint), launches the client the
@@ -879,7 +881,9 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     trap 'rm -rf "$sigfix"' EXIT
     # test_nevr_config writes its fixture files here (a Linux path; Wine reaches it as Z:); removed with sigfix.
     export NEVR_CONFIG_TEST_DIR="$sigfix/nevr-config-tests"
-    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll" --plugin-dll "build/{{ preset }}/bin/rendezvous/fixtures/good/nevr-runtime.dll"
+    # The unsigned DLLs the fixtures are made from are CMake targets (src/runtime/tests/sigfix, ADR 0041); the script signs and damages them.
+    cmake --build --preset {{ preset }} --target sigfix_dlls
+    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --dll-dir "build/{{ preset }}/bin/sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll" --plugin-dll "build/{{ preset }}/bin/rendezvous/fixtures/good/nevr-runtime.dll"
     export NEVR_SIGFIX_DIR="$sigfix"
     # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept under build/: test_plugin_trust
     # verifies the production pins against it. A failed fetch or a digest that does not match fails the recipe, and
@@ -1914,6 +1918,12 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/hand_pose_log_hook_test" -ldl
     timeout 120 "$out/hand_pose_log_hook_test"
+    # The Controller Hand Flip toggle, pure half (#1986, KNOWN-WRONG #2043): the roll (y, -x, w, -z), the versioned file, the start
+    # resolver, the save and the golden lines, against a temporary game directory.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/hand_flip_test.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/hand_flip_test" -ldl
+    timeout 120 "$out/hand_flip_test"
     # libr15's array of free GPU ranges has no bound check (#1759): the real handler through the thunk entry against a model of
     # CGRawInterfaceVK::Free laid out as the game's (512 entries, the count after the last), the pinned words refused when one
     # differs, and the fill and the leaks in the log.
@@ -2146,10 +2156,12 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
 test-quest-apk-patch-map patch_repo:
     python3 tools/quest_apk_patch_map.py --repo "{{ patch_repo }}"
 
-# The libr15 build-time patcher (docs/adr/0021): builds the host tool quest_patch_libr15 into
-# build/quest-patcher/ with plain host g++. nlohmann::json comes from the tools/quest-host-deps manifest, which
-# _vcpkg-quest-host installs for the x64-linux triplet (never a system package), so a clean clone builds it with no
-# other build first; pass the include directory that holds nlohmann/json.hpp as json_include to use another tree.
+# The libr15 build-time patcher (docs/adr/0021): builds the host tool quest_patch_libr15 into build/quest-patcher/ with
+# the quest-patcher preset (src/quest/CMakePresets.json; the target is in src/quest/host/CMakeLists.txt; docs/adr/0041).
+# nlohmann::json comes from the tools/quest-host-deps manifest, which _vcpkg-quest-host installs for the x64-linux
+# triplet (never a system package), so a clean clone builds it with no other build first; pass the include directory
+# that holds nlohmann/json.hpp as json_include to use another tree. build/quest-patcher/json_inc is the directory the
+# preset is given and the one the host patcher tests (test-quest-patcher) put on their include path.
 quest-patcher json_include="": _vcpkg-quest-host
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2162,10 +2174,9 @@ quest-patcher json_include="": _vcpkg-quest-host
     fi
     mkdir -p "$out/json_inc"
     ln -sfn "$(cd "$inc" && pwd)/nlohmann" "$out/json_inc/nlohmann"
-    g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$out/json_inc" \
-        src/quest/patch/quest_patch_libr15.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_extra_rows.cpp src/quest/patch/libr15_patcher_cli.cpp \
-        src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp src/quest/sentinel/arm64_reloc.cpp \
-        -o "$out/quest_patch_libr15"
+    json_inc="$(cd "$out/json_inc" && pwd)"
+    (cd src/quest && cmake --preset quest-patcher -DNEVR_HOST_JSON_INCLUDE="$json_inc")
+    (cd src/quest && cmake --build --preset quest-patcher --target nevr_quest_patch_libr15)
     [ -x "$out/quest_patch_libr15" ] || { echo "quest-patcher: FAIL - $out/quest_patch_libr15 was not produced" >&2; exit 1; }
     echo "quest-patcher: built $out/quest_patch_libr15"
 
@@ -2586,7 +2597,8 @@ test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_
 
 # docs/lua-scripting.md. Fail-close: a missing submodule or header, a build error, a failed check or
 # fewer tests than the floor exits nonzero. Part of `just verify`.
-# Build src/scripting for mingw and run its tests under wine, then the script type checker on the host.
+# Build src/scripting for mingw (presets scripting-mingw-shared and -pervm) and run its tests under wine, then the script type checker on the host
+# (preset script-check, which also builds the host copy of the stubs generator).
 test-scripting:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2625,12 +2637,7 @@ test-scripting:
     # debugging, NEVR_LUAU_SHARED_STATE=OFF). Neither may rot.
     for mode in shared pervm; do
         out="$PWD/build/scripting-mingw-$mode"
-        flag=ON
-        [[ "$mode" == pervm ]] && flag=OFF
-        cmake -S src/scripting -B "$out" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-mingw64.cmake" \
-            -DCMAKE_BUILD_TYPE=Release -DNEVR_SCRIPT_VM=luau -DNEVR_JSON_INCLUDE_DIR="$json" \
-            -DNEVR_LUAU_SHARED_STATE="$flag" > /dev/null
-        cmake --build "$out"
+        (cd src/scripting && cmake --preset "scripting-mingw-$mode" -DNEVR_JSON_INCLUDE_DIR="$json" > /dev/null && cmake --build --preset "scripting-mingw-$mode")
         run_suite "$out/nevr_script_registry_test.exe" 20
         run_suite "$out/nevr_script_host_test.exe" 12
         run_suite "$out/nevr_script_stubs_test.exe" 3
@@ -2657,14 +2664,9 @@ test-scripting:
         echo "test-scripting: [$mode] --pattern-dos and --gc-dos stopped"
     done
     # The author-side checker: the definitions come from a host build of the stubs generator.
-    host="$PWD/build/scripting-host"
-    mkdir -p "$host"
-    g++ -std=c++17 -O1 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json" \
-        src/scripting/host_registry.cpp src/scripting/script_stubs.cpp src/scripting/tests/script_stubs_test.cpp \
-        -o "$host/script_stubs_test"
-    cmake -S src/scripting/check -B "$PWD/build/script-check" -G Ninja -DCMAKE_BUILD_TYPE=Release > /dev/null
-    cmake --build "$PWD/build/script-check"
-    src/scripting/check/check_test.sh "$host/script_stubs_test" "$PWD/build/script-check/nevr_script_check" "$host/check"
+    check="$PWD/build/script-check"
+    (cd src/scripting/check && cmake --preset script-check -DNEVR_JSON_INCLUDE_DIR="$json" > /dev/null && cmake --build --preset script-check)
+    src/scripting/check/check_test.sh "$check/nevr_script_stubs_host_test" "$check/nevr_script_check" "$check/check"
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
 # the hardened C++ GTest suite under Wine. Fail-close: exits nonzero on any failure.

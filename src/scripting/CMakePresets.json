@@ -1,0 +1,36 @@
+{
+    "version": 4,
+    "configurePresets": [
+        {
+            "name": "scripting-mingw-shared",
+            "displayName": "Script host for Windows (mingw-w64), Luau, one shared state (the default binding)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../../build/scripting-mingw-shared",
+            "toolchainFile": "${sourceDir}/../../cmake/toolchain-mingw64.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "NEVR_SCRIPT_VM": "luau",
+                "NEVR_LUAU_SHARED_STATE": "ON"
+            }
+        },
+        {
+            "name": "scripting-mingw-pervm",
+            "displayName": "Script host for Windows (mingw-w64), Luau, one state per script (NEVR_LUAU_SHARED_STATE=OFF, for debugging)",
+            "inherits": "scripting-mingw-shared",
+            "binaryDir": "${sourceDir}/../../build/scripting-mingw-pervm",
+            "cacheVariables": {
+                "NEVR_LUAU_SHARED_STATE": "OFF"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "scripting-mingw-shared",
+            "configurePreset": "scripting-mingw-shared"
+        },
+        {
+            "name": "scripting-mingw-pervm",
+            "configurePreset": "scripting-mingw-pervm"
+        }
+    ]
+}

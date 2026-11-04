@@ -81,9 +81,10 @@ pub fn semver_ok(v: &str) -> bool {
         && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && (*p == "0" || !p.starts_with('0')))
 }
 
-/// Two `X.Y.Z` versions compared as numbers (`2.10.0` is above `2.9.0`); `None` when either is not `X.Y.Z`.
+/// Two `X.Y.Z` versions compared as numbers (`2.10.0` is above `2.9.0`); `None` when either is not `X.Y.Z`, or has a
+/// component that does not fit a u64 (it is not dropped: that would compare the rest as a shorter version).
 pub fn semver_cmp(a: &str, b: &str) -> Option<std::cmp::Ordering> {
-    let parts = |v: &str| -> Option<Vec<u64>> { semver_ok(v).then(|| v.split('.').filter_map(|p| p.parse().ok()).collect()) };
+    let parts = |v: &str| -> Option<Vec<u64>> { semver_ok(v).then(|| v.split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<Vec<u64>>>()).flatten() };
     Some(parts(a)?.cmp(&parts(b)?))
 }
 
@@ -295,6 +296,15 @@ mod tests {
         for bad in ["", "/etc/passwd", "a/../b", "a//b", "./a", "a\\b", "C:/x", "a b", "a/"] {
             assert!(!rel_path_ok(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn semver_cmp_refuses_an_overflowing_component() {
+        // A component that does not fit a u64 is unreadable: it must not be dropped, which compares the rest as a
+        // shorter version (`[0, 0]` sorts below `[5, 17, 0]`).
+        assert_eq!(semver_cmp("99999999999999999999.0.0", "5.17.0"), None);
+        assert_eq!(semver_cmp("18446744073709551616.0.0", "1.0.0"), None);
+        assert_eq!(semver_cmp("1.0.99999999999999999999", "1.0.0"), None);
     }
 
     #[test]
