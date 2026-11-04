@@ -7,6 +7,7 @@
 //
 // Built and run by `just test-quest-hooks`.
 
+#include <pthread.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -1261,6 +1262,137 @@ void AReReadOfTheMenuServesTheCurrentHandFlipChoice() {
   RemoveSettingsDirectory(dir);
 }
 
+// ---- the start race, and a row that is not offered (KNOWN-WRONG #2043) ----------------------------------------------------
+
+std::atomic<int> g_raceSeamEntered{0};
+std::atomic<int> g_raceSeamReleased{0};
+alignas(8) unsigned char g_raceSettings[kSettingsBytes];
+void RaceSeam() noexcept {
+  g_raceSeamEntered.store(1);
+  for (int i = 0; i < 10000 && g_raceSeamReleased.load() == 0; ++i) usleep(1000);
+}
+void* RaceStartThread(void*) {
+  hf::EnsureStarted();  // the tracking handler's first call: the provider reads the stored choice, then the seam holds it
+  return nullptr;
+}
+void* RaceDeliverThread(void*) {
+  Deliver(g_raceSettings);
+  return nullptr;
+}
+bool RaceWaitFor(const std::atomic<int>& word, int want) {
+  for (int i = 0; i < 5000 && word.load() != want; ++i) usleep(1000);
+  return word.load() == want;
+}
+
+// The tracking thread is inside the start (it has read the stored On and not yet stored it) when the first settings delivery
+// arrives: the delivery waits for the start and then writes the bit from On (cleared), where an unsynchronised delivery would have
+// read Off and written the game's value over the stored choice.
+void AFirstDeliveryWaitsForAStartAnotherThreadIsResolving() {
+  const std::string dir = MakeSettingsDirectory(nullptr);
+  QCHECK(!dir.empty());
+  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
+  ResetDocuments();
+  Capture log;
+  *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
+  g_appDataDir = dir;
+  std::memset(g_raceSettings, 0, sizeof(g_raceSettings));
+  SetMsaa(g_raceSettings, 1);
+  SetFlags(g_raceSettings, 0x5);
+  g_raceSeamEntered.store(0);
+  g_raceSeamReleased.store(0);
+  hf::g_startSeam.store(&RaceSeam);
+  pthread_t starter, deliverer;
+  QCHECK(pthread_create(&starter, nullptr, &RaceStartThread, nullptr) == 0);
+  QCHECK(RaceWaitFor(g_raceSeamEntered, 1));
+  QCHECK(!hf::Started());
+  QCHECK(pthread_create(&deliverer, nullptr, &RaceDeliverThread, nullptr) == 0);
+  QCHECK(RaceWaitFor(hf::g_startWaiters, 1));   // the delivery is waiting for the start
+  QCHECK(GetFlags(g_raceSettings) == 0x5);       // and has written nothing yet
+  g_raceSeamReleased.store(1);
+  pthread_join(starter, nullptr);
+  pthread_join(deliverer, nullptr);
+  hf::g_startSeam.store(nullptr);
+  QCHECK(hf::Enabled() && GetFlags(g_raceSettings) == 0x4 && g_applySawFlags == 0x4);  // On: the bit cleared
+  QCHECK(hf::Poll() == 2);
+  QCHECK(LineWith("hand_flip_carrier").find("\"before\":1,\"after\":0,") != std::string::npos);
+  RemoveHandFlipFile(dir);
+  RemoveSettingsDirectory(dir);
+}
+
+// A delivery that gives up waiting touches nothing and leaves the load to the next delivery.
+void AFirstDeliveryThatTimesOutLeavesTheLoadToTheNextOne() {
+  const std::string dir = MakeSettingsDirectory(nullptr);
+  QCHECK(!dir.empty());
+  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
+  ResetDocuments();
+  Capture log;
+  *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
+  g_appDataDir = dir;
+  std::memset(g_raceSettings, 0, sizeof(g_raceSettings));
+  SetMsaa(g_raceSettings, 1);
+  SetFlags(g_raceSettings, 0x5);
+  g_raceSeamEntered.store(0);
+  g_raceSeamReleased.store(0);
+  hf::g_startSeam.store(&RaceSeam);
+  hf::g_startWaitMs.store(50);
+  pthread_t starter;
+  QCHECK(pthread_create(&starter, nullptr, &RaceStartThread, nullptr) == 0);
+  QCHECK(RaceWaitFor(g_raceSeamEntered, 1));
+  Deliver(g_raceSettings);
+  QCHECK(GetFlags(g_raceSettings) == 0x5 && g_applySawFlags == 0x5 && !hf::Enabled());  // untouched
+  g_raceSeamReleased.store(1);
+  pthread_join(starter, nullptr);
+  hf::g_startSeam.store(nullptr);
+  Deliver(g_raceSettings);  // the next delivery is the load
+  QCHECK(hf::Enabled() && GetFlags(g_raceSettings) == 0x4 && g_applySawFlags == 0x4);
+  QCHECK(hf::Poll() == 3);  // the start line, the timeout line, the carrier line
+  QCHECK(LineWith("hand_flip_start_wait").find("\"level\":\"warn\"") != std::string::npos);
+  RemoveHandFlipFile(dir);
+  RemoveSettingsDirectory(dir);
+}
+
+const char* const kSettingsWithFullscreen =
+    R"json({"quest": {"settings": [{"path": "graphics|msaa", "operator": "remove"},
+      {"path": "graphics|fullscreen", "value": true, "operator": "remove"}], "pages": ["GRAPHICS (1/3)"]}})json";
+
+// With the hand pose hooks not installed the row is not offered: the menu has none, the settings document keeps the stock hiding
+// entry, the saved choice is ignored, the game's bit is never written (not at the load, not on a change), nothing is saved, and the
+// texture poller says so once.
+void ARowThatIsNotOfferedIsNotInTheMenuAndTheBitIsLeftAlone() {
+  const std::string dir = MakeSettingsDirectory(nullptr);
+  QCHECK(!dir.empty());
+  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
+  ResetDocuments();
+  hf::SetOffered(false);
+  Capture log;
+  *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
+  g_appDataDir = dir;
+  Eye();
+  QCHECK(hf::Started() && !hf::Enabled() && hf::CurrentBy() == hf::kByDefault);  // the saved On is not read
+  Read("/d/json/r14/config/uisettings/menu_settings.json", kMenuDocument);
+  Read("/d/json/r14/config/gamesettings_config.json", kSettingsWithFullscreen);
+  QCHECK(g_parsed.size() == 2);
+  QCHECK(g_parsed[0].find("Texture Resolution") != std::string::npos && g_parsed[0].find("Controller Hand Flip") == std::string::npos);
+  QCHECK(g_parsed[1].find("graphics|fullscreen") != std::string::npos && g_parsed[1].find("graphics|msaa") == std::string::npos);
+  alignas(8) unsigned char settings[kSettingsBytes] = {};
+  SetMsaa(settings, 1);
+  SetFlags(settings, 0x5);
+  Deliver(settings);
+  QCHECK(GetFlags(settings) == 0x5 && g_applySawFlags == 0x5);  // the load does not write the bit
+  SetFlags(settings, 0x4);                                      // the game's bit changes, and no row is there to have changed it
+  Deliver(settings);
+  QCHECK(!hf::Enabled() && hf::CurrentBy() == hf::kByDefault);
+  hf::Poll();  // (the start line, if the poller runs)
+  QCHECK(LineWith("hand_flip_carrier").empty() && LineWith("hand_flip_saved").empty());  // no carrier write, no save
+  QCHECK(ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":1})");
+  tm::PollOnceForTest();
+  tm::PollOnceForTest();
+  QCHECK(CountLines("\"event\":\"hand_flip_row\"") == 1);
+  QCHECK(LineWith("\"document\":\"menu_settings\"").find("\"hand_flip_rows\":0}") != std::string::npos);
+  RemoveHandFlipFile(dir);
+  RemoveSettingsDirectory(dir);
+}
+
 // The tracking handler can need the flag before the eye-size query has resolved it: the provider the control registers reads the
 // same file.
 void TheTrackingSideCanResolveTheStartThroughTheControl() {
@@ -1334,6 +1466,9 @@ int main() {
   ADefaultStartPutsAClearedBitBackToTheGamesValue();
   AStockRestoreAfterOnReadsAsOffAndIsSavedOnce();
   AReReadOfTheMenuServesTheCurrentHandFlipChoice();
+  AFirstDeliveryWaitsForAStartAnotherThreadIsResolving();
+  AFirstDeliveryThatTimesOutLeavesTheLoadToTheNextOne();
+  ARowThatIsNotOfferedIsNotInTheMenuAndTheBitIsLeftAlone();
   AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain();
   TheTrackingSideCanResolveTheStartThroughTheControl();
   TheSettingsDocumentStopsHidingTheHandFlipSetting();

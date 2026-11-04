@@ -187,6 +187,22 @@ void TheHandFlipRowIsNeverAddedAlone() {
   QCHECK(alone.status == tm::Status::kShapeMismatch && alone.text.empty() && alone.handFlipRows == 0);
 }
 
+// With no row offered (the hand pose hooks are not installed) the menu keeps the Texture Resolution row alone and the settings
+// document keeps its stock entry for the toggle's setting.
+void ANotOfferedRowAddsNoRowAndKeepsTheStockEntry() {
+  const tm::Result r = tm::RewriteMenuSettings(kMenu, 1, tm::kNoHandFlipRow);
+  QCHECK(r.status == tm::Status::kRewritten && r.rows == 1 && r.handFlipRows == 0);
+  const Json doc = Json::parse(r.text, nullptr, false);
+  QCHECK((*PageNamed(doc, "GRAPHICS"))["rows"].size() == 1);
+  QCHECK((*PageNamed(doc, "GRAPHICS"))["rows"][0]["name"] == "Texture Resolution");
+  const char* const document = R"json({"quest": {"settings": [{"path": "graphics|msaa", "operator": "remove"},
+      {"path": "graphics|fullscreen", "value": true, "operator": "remove"}], "pages": ["GRAPHICS (1/3)"]}})json";
+  const tm::Result settings = tm::RewriteGameSettings(document, false);
+  QCHECK(settings.status == tm::Status::kRewritten && settings.rows == 1 && settings.handFlipRows == 0);
+  const Json kept = Json::parse(settings.text, nullptr, false);
+  QCHECK(kept["quest"]["settings"].size() == 1 && kept["quest"]["settings"][0]["path"] == "graphics|fullscreen");
+}
+
 // The hiding entry of the settings document goes with the control's: the row is shown and its value saved.
 void TheSettingsDocumentStopsHidingTheHandFlipSetting() {
   const char* const document = R"json({"quest": {"settings": [{"path": "graphics|msaa", "operator": "remove"},
@@ -333,6 +349,7 @@ int main() {
   TheTextureRowIsUnchangedByTheNewRow();
   TheHandFlipRowIsNeverAddedAlone();
   TheSettingsDocumentStopsHidingTheHandFlipSetting();
+  ANotOfferedRowAddsNoRowAndKeepsTheStockEntry();
   AMenuWithoutTheRowIsLeftAlone();
   TheSettingsDocumentStopsHidingTheControlAndItsPage();
   ASettingsDocumentWithoutTheRemovalIsLeftAlone();

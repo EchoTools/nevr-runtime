@@ -107,9 +107,10 @@ class TheInterimRollIsTheOnlyWriteAndIsMarked(unittest.TestCase):
         order = [tracking.index(name) for name in ("Find(deviceId)", "RecordFirstPose(slot, tracking)", "hand_flip::Enabled()", "RollOrientation(tracking)")]
         self.assertEqual(order, sorted(order))
         self.assertRegex(tracking, r"if \(slot == nullptr\) return rc;")
-        self.assertRegex(tracking, r"if \(hand_flip::Enabled\(\)\) RollOrientation\(tracking\);")
+        self.assertRegex(tracking, r"if \(hand_flip::Started\(\) && hand_flip::Enabled\(\)\) RollOrientation\(tracking\);")
         roll = extract_braced_function(code, "void RollOrientation(")
-        self.assertEqual(len(re.findall(r"memcpy\(", roll)), 2)
+        self.assertEqual(len(re.findall(r"memcpy\(", roll)), 3)  # the status read, the orientation read, the one write
+        self.assertEqual(len(re.findall(r"memcpy\(\s*static_cast<unsigned char\*>\(tracking\)", roll)), 1)  # the write
         self.assertIn("offsetof(TrackingPrefix, orientation)", roll)
         self.assertIn("sizeof(orientation)", roll)
         self.assertEqual(code.count("RollOrientation("), 2)  # its definition and its one call
@@ -161,6 +162,42 @@ class TheInterimRollIsTheOnlyWriteAndIsMarked(unittest.TestCase):
             self.assertIn("KNOWN-WRONG #2043", text, path)
             # The report these markers once named is closed by the change that built the interim; a marker names the open issue.
             self.assertNotIn("KNOWN-WRONG #1986", text, path)
+
+    def test_the_row_is_offered_only_when_both_hooks_and_the_poller_are_in(self):
+        code = strip_comments(read("src/quest/sentinel/hand_pose_log_hook.cpp"))
+        install = extract_braced_function(code, "bool InstallAt(")
+        self.assertIn("const bool polling = e == sentinel::GotStatus::kOk && StartPoller();", install)
+        self.assertIn("hand_flip::SetOffered(all && polling);", install)
+        hook = strip_comments(read("src/quest/sentinel/texture_menu_hook.cpp"))
+        rewrite = extract_braced_function(hook, "Served RewriteDocument(")
+        self.assertIn("hand_flip::Offered()", rewrite)
+        self.assertIn("texture_menu::kNoHandFlipRow", rewrite)
+        self.assertIn("texture_menu::RewriteGameSettings(input, offered)", rewrite)
+        delivery = extract_braced_function(hook, "void HandleHandFlipDelivery(")
+        self.assertRegex(delivery, r"if \(!hand_flip::Offered\(\)\) return;")
+        # The start is awaited to completion (a condition variable, with a timeout) before the flag is trusted.
+        self.assertRegex(delivery, r"if \(!hand_flip::AwaitStart\(\)\) return;")
+        self.assertLess(delivery.index("hand_flip::AwaitStart()"), delivery.index("hand_flip::Current()"))
+        header = strip_comments(read("src/quest/sentinel/hand_flip.h"))
+        await_start = extract_braced_function(header, "inline bool AwaitStart() noexcept {")
+        self.assertIn("pthread_cond_timedwait(&g_startCond, &g_startMutex, &deadline)", await_start)
+        self.assertNotRegex(await_start, r"\bwhile \(!?Started\(\)\)")  # no spin on the state
+        self.assertIn("Offered()", extract_braced_function(header, "inline void StartFromDirectory(const char* directory) noexcept {"))
+
+    def test_the_per_frame_path_never_waits_and_rolls_only_a_started_tracked_pose(self):
+        code = strip_comments(read("src/quest/sentinel/hand_pose_log_hook.cpp"))
+        tracking = extract_braced_function(code, "int TrackingHandler(")
+        self.assertNotIn("AwaitStart", tracking)
+        self.assertRegex(tracking, r"if \(hand_flip::Started\(\) && hand_flip::Enabled\(\)\) RollOrientation\(tracking\);")
+        roll = extract_braced_function(code, "void RollOrientation(")
+        self.assertIn("(prefix.status & kStatusOrientationTracked) == 0", roll)
+
+    def test_a_save_that_fails_is_a_warning_and_is_retried(self):
+        header = strip_comments(read("src/quest/sentinel/hand_flip.h"))
+        write = extract_braced_function(header, "inline int WritePending() noexcept {")
+        self.assertNotIn("kError", write)
+        self.assertEqual(write.count("sentinel::LogLevel::kWarn"), 2)
+        self.assertIn("g_pendingSave.compare_exchange_strong(none, flip", write)
 
     def test_nothing_else_in_the_sentinel_writes_a_tracking_pose(self):
         sentinel = ROOT / "src/quest/sentinel"

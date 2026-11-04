@@ -13,6 +13,10 @@
 //
 // Built and run by `just test-quest-hooks`.
 
+#include <pthread.h>
+#include <time.h>
+
+#include <atomic>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -504,6 +508,106 @@ void TheStartLineIsWrittenOnceByThePoller() {
   }
 }
 
+// A result whose Status does not say the orientation is tracked holds no orientation to turn: it comes back as written with the toggle
+// On, and the same call with the bit set is rolled.
+void AnUntrackedPoseIsNotRolled() {
+  Reset();
+  Arm();
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  hf::SetFromMenu(1);
+  SetTracking(0x0, 0.5F, -0.5F, 0.25F, 0.75F);
+  const Result untracked = Track(kLeft);
+  QCHECK(untracked.rc == 0 && std::memcmp(untracked.bytes, g_tracking, sizeof(g_tracking)) == 0);
+  SetTracking(hpl::kStatusOrientationTracked, 0.5F, -0.5F, 0.25F, 0.75F);
+  const Result tracked = Track(kLeft);
+  QCHECK(OrientationOf(tracked.bytes, 0) == -0.5F && OrientationOf(tracked.bytes, 2) == 0.75F);
+}
+
+// The table holds eight and never frees: a ninth type-4 id is not recorded, not rolled, and said once by the poller with its id.
+void ANinthIdIsNotRolledAndSaidOnce() {
+  Reset();
+  Arm();
+  sentinel::SetLogSink(&CaptureLine);
+  for (std::uint32_t i = 0; i < 9; ++i) g_devices.push_back({4, 0x30000000U + i});
+  EnumerateAll();
+  EnumerateAll();  // the game enumerates every frame: still one line
+  hf::SetFromMenu(1);
+  const Result ninth = Track(0x30000008U);
+  QCHECK(ninth.rc == 0 && std::memcmp(ninth.bytes, g_tracking, sizeof(g_tracking)) == 0);  // not in the table: not rolled
+  const Result first = Track(0x30000000U);
+  QCHECK(OrientationOf(first.bytes, 0) == -0.5F);  // a table device still is
+  hpl::PollOnceForTest();
+  hpl::PollOnceForTest();
+  sentinel::SetLogSink(nullptr);
+  QCHECK(CountOf("hand_flip_table_full") == 1);
+  const std::string* line = LineOf("hand_flip_table_full");
+  QCHECK(line != nullptr);
+  if (line != nullptr) {
+    QCHECK(Golden(*line) ==
+           "\"event\":\"hand_flip_table_full\",\"slots\":8,\"device\":805306376,"
+           "\"consequence\":\"this controller's pose is not logged or rolled; the device table holds eight and never frees\"}");
+    QCHECK(line->find("\"level\":\"warn\"") != std::string::npos);
+  }
+}
+
+std::atomic<int> g_seamEntered{0};
+std::atomic<int> g_seamReleased{0};
+void BlockingSeam() noexcept {
+  g_seamEntered.store(1);
+  for (int i = 0; i < 10000 && g_seamReleased.load() == 0; ++i) {
+    timespec nap{0, 1000000};
+    nanosleep(&nap, nullptr);
+  }
+}
+void* StartThread(void*) {
+  hf::StartFromDirectory(nullptr);
+  return nullptr;
+}
+
+// The per-frame path never waits for another thread's start: while one is mid-resolve a tracking call comes back at once, as written
+// (the flag reads Off for that frame), though the wait a settings delivery would make is set long.
+void TheTrackingPathNeverWaitsForAnotherThreadsStart() {
+  Reset();
+  Arm();
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  g_seamEntered.store(0);
+  g_seamReleased.store(0);
+  hf::g_startSeam.store(&BlockingSeam);
+  hf::g_startWaitMs.store(5000);
+  pthread_t starter;
+  QCHECK(pthread_create(&starter, nullptr, &StartThread, nullptr) == 0);
+  for (int i = 0; i < 5000 && g_seamEntered.load() == 0; ++i) {
+    timespec nap{0, 1000000};
+    nanosleep(&nap, nullptr);
+  }
+  QCHECK(g_seamEntered.load() == 1 && !hf::Started());
+  timespec before, after;
+  clock_gettime(CLOCK_MONOTONIC, &before);
+  const Result r = Track(kLeft);
+  clock_gettime(CLOCK_MONOTONIC, &after);
+  const long elapsedMs = (after.tv_sec - before.tv_sec) * 1000L + (after.tv_nsec - before.tv_nsec) / 1000000L;
+  QCHECK(r.rc == 0 && std::memcmp(r.bytes, g_tracking, sizeof(g_tracking)) == 0);
+  QCHECK(elapsedMs < 1000);
+  g_seamReleased.store(1);
+  pthread_join(starter, nullptr);
+  hf::g_startSeam.store(nullptr);
+}
+
+// The row is offered only when the hooks that roll, save and log it are installed: an install that is refused says so, and the
+// row is not offered (the texture hook's menu then has none).
+void ARefusedInstallLeavesTheRowNotOffered() {
+  Reset();
+  QCHECK(hf::Offered());  // a test starts offered
+  sentinel::SetLogSink(&CaptureLine);
+  const sentinel::GotTarget missing{"libnevr_no_such_library.so", "vrapi_EnumerateInputDevices", sentinel::RelocKind::kJumpSlot};
+  QCHECK(!hpl::InstallAt(missing, missing, nullptr));
+  sentinel::SetLogSink(nullptr);
+  QCHECK(!hf::Offered());
+  QCHECK(CountOf("hand_pose_log_install") == 1);
+}
+
 // The two slots the hooks are installed in are the pinned ones (got_pinned_test resolves them in the real library): the roll
 // rides on the existing tracking hook and adds no slot.
 void TheRollAddsNoSlot() {
@@ -535,6 +639,10 @@ int main() {
   TheDeviceLineSaysWhetherTheToggleIsOnAndWhatSetIt();
   TheStartLineIsWrittenOnceByThePoller();
   TheRollAddsNoSlot();
+  AnUntrackedPoseIsNotRolled();
+  ANinthIdIsNotRolledAndSaidOnce();
+  TheTrackingPathNeverWaitsForAnotherThreadsStart();
+  ARefusedInstallLeavesTheRowNotOffered();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "hand_pose_log_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

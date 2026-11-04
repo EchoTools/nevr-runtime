@@ -9,6 +9,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <pthread.h>
+
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -310,8 +313,9 @@ void AChoiceThatCannotBeWrittenIsLoud() {
   if (g_lines.size() == 1) {
     QCHECK(Golden(g_lines[0]) ==
            "\"event\":\"hand_flip_saved\",\"result\":\"write_failed\",\"flip\":1,\"errno\":2,"
-           "\"consequence\":\"this choice is not remembered at the next launch\"}");
-    QCHECK(g_lines[0].find("\"level\":\"error\"") != std::string::npos);
+           "\"consequence\":\"this choice is not remembered yet; the previous choice comes back at the next launch unless a later "
+           "attempt (one every poll) writes it\"}");
+    QCHECK(g_lines[0].find("\"level\":\"warn\"") != std::string::npos);  // a feature that keeps running: a warning, not an error
   }
 }
 
@@ -327,8 +331,150 @@ void AChoiceWithNoDirectoryIsLoud() {
   if (g_lines.size() == 1) {
     QCHECK(Golden(g_lines[0]) ==
            "\"event\":\"hand_flip_saved\",\"result\":\"no_directory\",\"flip\":1,\"errno\":0,"
-           "\"consequence\":\"this choice is not remembered at the next launch\"}");
+           "\"consequence\":\"this choice is not remembered; the previous choice comes back at the next launch\"}");
+    QCHECK(g_lines[0].find("\"level\":\"warn\"") != std::string::npos);
   }
+  QCHECK(hf::Poll() == 0);  // no directory cannot be retried: said once
+}
+
+// A save that failed is kept and tried again at the next poll, without repeating its line, and the line of the write that finally
+// works says so. A newer choice replaces the one waiting.
+void AFailedSaveIsRetriedAtTheNextPollAndSaidOnce() {
+  hf::ResetForTest();
+  const std::string dir = MakeDirectory(nullptr);
+  Capture log;
+  hf::StartFromDirectory(dir.c_str());
+  hf::Poll();
+  g_lines.clear();
+  const std::string lone = dir + "/RAD/LoneEcho";
+  const std::string moved = dir + "/RAD/Elsewhere";
+  QCHECK(std::rename(lone.c_str(), moved.c_str()) == 0);  // the directory is gone: the file cannot be made
+  hf::SetFromMenu(1);
+  QCHECK(hf::Poll() == 1 && g_lines.size() == 1 && g_lines[0].find("\"result\":\"write_failed\"") != std::string::npos);
+  QCHECK(hf::Poll() == 0 && g_lines.size() == 1);  // retried, still failing, not said again
+  QCHECK(hf::Poll() == 0 && g_lines.size() == 1);
+  QCHECK(std::rename(moved.c_str(), lone.c_str()) == 0);  // the disk is back
+  QCHECK(hf::Poll() == 1 && g_lines.size() == 2);
+  QCHECK(g_lines.size() == 2 && g_lines[1].find("\"result\":\"written\"") != std::string::npos && g_lines[1].find("\"flip\":1") != std::string::npos);
+  QCHECK(ReadFile(dir) == R"({"version":1,"hand_flip":1})");
+  QCHECK(hf::Poll() == 0);  // and no further attempt
+  // A later choice is the one that is written, not the one that failed.
+  QCHECK(std::rename(lone.c_str(), moved.c_str()) == 0);
+  hf::SetFromMenu(0);
+  QCHECK(hf::Poll() == 1);  // fails
+  hf::SetFromMenu(1);       // the player chose again while it was failing
+  QCHECK(std::rename(moved.c_str(), lone.c_str()) == 0);
+  g_lines.clear();
+  QCHECK(hf::Poll() == 1);
+  QCHECK(g_lines.size() == 1 && g_lines[0].find("\"result\":\"written\"") != std::string::npos &&
+         g_lines[0].find("\"flip\":1") != std::string::npos);  // the newer choice, not the one that failed
+  QCHECK(ReadFile(dir) == R"({"version":1,"hand_flip":1})");
+  RemoveDirectory(dir);
+}
+
+// The row is offered only when the hooks that roll, save and log it say so: the product starts not offered, and a start that is not
+// offered ignores the saved choice (the roll stays Off) and says so once, where the hand pose poller is not running.
+void ANotOfferedStartIgnoresTheSavedChoiceAndSaysSoOnce() {
+  hf::ResetForTest();
+  hf::SetOffered(false);
+  const std::string dir = MakeDirectory(R"({"version":1,"hand_flip":1})");
+  Capture log;
+  hf::StartFromDirectory(dir.c_str());
+  QCHECK(hf::Started() && !hf::Enabled() && hf::CurrentBy() == hf::kByDefault);
+  QCHECK(hf::PollRow() == 1 && g_lines.size() == 1);
+  if (g_lines.size() == 1) {
+    QCHECK(Golden(g_lines[0]) ==
+           "\"event\":\"hand_flip_row\",\"offered\":0,\"reason\":\"the hand pose hooks or their poller are not installed\","
+           "\"consequence\":\"the Controller Hand Flip row is not in the menu, a saved choice is ignored and the roll stays Off\"}");
+    QCHECK(g_lines[0].find("\"level\":\"warn\"") != std::string::npos);
+  }
+  QCHECK(hf::PollRow() == 0);  // once
+  QCHECK(ReadFile(dir) == R"({"version":1,"hand_flip":1})");  // and the file is left alone
+  // Offered, the same file is the player's choice and nothing is said.
+  hf::ResetForTest();
+  g_lines.clear();
+  hf::StartFromDirectory(dir.c_str());
+  QCHECK(hf::Enabled() && hf::CurrentBy() == hf::kByPlayerMarker && hf::PollRow() == 0 && g_lines.empty());
+  RemoveDirectory(dir);
+}
+
+// ---- the start and the threads that trust it ------------------------------------------------------------------------
+
+std::atomic<int> g_seamEntered{0};
+std::atomic<int> g_seamReleased{0};
+std::atomic<int> g_awaitResult{-1};
+std::atomic<int> g_flagSeenByAwait{-1};
+
+bool WaitFor(const std::atomic<int>& word, int want) {  // bounded: a test that never reaches it fails, it does not hang
+  for (int i = 0; i < 5000 && word.load() != want; ++i) usleep(1000);
+  return word.load() == want;
+}
+void BlockingSeam() noexcept {
+  g_seamEntered.store(1);
+  for (int i = 0; i < 10000 && g_seamReleased.load() == 0; ++i) usleep(1000);
+}
+void* StartThread(void* directory) {
+  hf::StartFromDirectory(static_cast<const char*>(directory));
+  return nullptr;
+}
+void* AwaitThread(void*) {
+  g_awaitResult.store(hf::AwaitStart() ? 1 : 0);
+  g_flagSeenByAwait.store(hf::Current());
+  return nullptr;
+}
+
+// A thread that asks for the start while another is still resolving it waits until it is resolved, and then sees the flag the
+// resolution stored: it does not return with the flag still Off.
+void AnAwaitingThreadSeesTheFinishedStart() {
+  hf::ResetForTest();
+  const std::string dir = MakeDirectory(R"({"version":1,"hand_flip":1})");
+  g_seamEntered.store(0);
+  g_seamReleased.store(0);
+  g_awaitResult.store(-1);
+  g_flagSeenByAwait.store(-1);
+  hf::g_startSeam.store(&BlockingSeam);
+  pthread_t starter, waiter;
+  QCHECK(pthread_create(&starter, nullptr, &StartThread, const_cast<char*>(dir.c_str())) == 0);
+  QCHECK(WaitFor(g_seamEntered, 1));
+  QCHECK(!hf::Started() && hf::Current() == 0);  // mid-resolve: the file is read, the flag is not stored
+  QCHECK(pthread_create(&waiter, nullptr, &AwaitThread, nullptr) == 0);
+  QCHECK(WaitFor(hf::g_startWaiters, 1));         // it is waiting inside AwaitStart
+  QCHECK(g_awaitResult.load() == -1);
+  g_seamReleased.store(1);
+  pthread_join(starter, nullptr);
+  pthread_join(waiter, nullptr);
+  QCHECK(g_awaitResult.load() == 1 && g_flagSeenByAwait.load() == 1);
+  QCHECK(hf::g_startWaiters.load() == 0);
+  hf::g_startSeam.store(nullptr);
+  RemoveDirectory(dir);
+}
+
+// A wait that gives up says so once, leaves the flag as it was and counts; the next ask, after the start, succeeds.
+void AWaitThatTimesOutSaysSoAndTheNextAskSucceeds() {
+  hf::ResetForTest();
+  const std::string dir = MakeDirectory(R"({"version":1,"hand_flip":1})");
+  Capture log;
+  g_seamEntered.store(0);
+  g_seamReleased.store(0);
+  hf::g_startSeam.store(&BlockingSeam);
+  hf::g_startWaitMs.store(50);
+  pthread_t starter;
+  QCHECK(pthread_create(&starter, nullptr, &StartThread, const_cast<char*>(dir.c_str())) == 0);
+  QCHECK(WaitFor(g_seamEntered, 1));
+  QCHECK(!hf::AwaitStart());
+  QCHECK(!hf::Started() && !hf::Enabled());
+  QCHECK(hf::Poll() == 1 && g_lines.size() == 1);
+  if (g_lines.size() == 1) {
+    QCHECK(Golden(g_lines[0]) ==
+           "\"event\":\"hand_flip_start_wait\",\"result\":\"timed_out\",\"wait_ms\":50,\"consequence\":\"a settings delivery did "
+           "not wait longer for the start; the toggle's load waits for the next delivery\"}");
+  }
+  QCHECK(hf::Poll() == 0);  // once
+  g_seamReleased.store(1);
+  pthread_join(starter, nullptr);
+  QCHECK(hf::AwaitStart() && hf::Enabled());
+  hf::g_startSeam.store(nullptr);
+  RemoveDirectory(dir);
 }
 
 void TheMenuRowIsBoundToTheCarrierBitAndNamedForThePlayer() {
@@ -374,6 +520,7 @@ void TheCarrierWriteIsLoggedOnce() {
 }  // namespace
 
 int main() {
+  QCHECK(!hf::Offered());  // the product starts with no row: only the hooks' install says otherwise (before any ResetForTest)
   TheRollIsTheProductWithAHalfTurnAboutZ();
   TheRollAppliedTwiceGivesTheNegatedQuaternion();
   TheRollKeepsTheLength();
@@ -388,6 +535,10 @@ int main() {
   AMenuChangeWritesTheVersionedFile();
   AChoiceThatCannotBeWrittenIsLoud();
   AChoiceWithNoDirectoryIsLoud();
+  AFailedSaveIsRetriedAtTheNextPollAndSaidOnce();
+  ANotOfferedStartIgnoresTheSavedChoiceAndSaysSoOnce();
+  AnAwaitingThreadSeesTheFinishedStart();
+  AWaitThatTimesOutSaysSoAndTheNextAskSucceeds();
   TheMenuRowIsBoundToTheCarrierBitAndNamedForThePlayer();
   TheBitIsTheInverseOfTheChoice();
   TheCarrierWriteIsLoggedOnce();
