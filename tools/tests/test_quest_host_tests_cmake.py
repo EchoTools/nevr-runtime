@@ -73,6 +73,7 @@ PROGRAMS = {
         "embedding_check",
         "frame_dispatch_test",
         "got_hook_test",
+        "hand_flip_test",
         "hand_pose_log_hook_test",
         "hwdump_share_test",
         "input_seam_test",

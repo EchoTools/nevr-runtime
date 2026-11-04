@@ -221,6 +221,10 @@ nevr_ht_test(quit_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_iden
 # the real libr15.
 nevr_ht_test(hand_pose_log_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/hand_pose_log_hook_test.cpp src/quest/sentinel/hand_pose_log_hook.cpp)
+# The Controller Hand Flip toggle, pure half (#1986, KNOWN-WRONG #2043): the roll (y, -x, w, -z), the versioned file, the start
+# resolver, the save and the golden lines, against a temporary game directory.
+nevr_ht_test(hand_flip_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+  SRC src/quest/tests/hand_flip_test.cpp)
 # libr15's array of free GPU ranges has no bound check (#1759): the real handler through the thunk entry against a model of
 # CGRawInterfaceVK::Free laid out as the game's (512 entries, the count after the last), the pinned words refused when one differs,
 # and the fill and the leaks in the log.
