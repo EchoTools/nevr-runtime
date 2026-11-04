@@ -4,6 +4,7 @@
 // nlohmann::json.
 
 #include "runtime/host/bootstrap_diagnostics.h"
+#include "runtime/tests/run_log_test_path.h"
 
 #include "runtime/host/host_paths.h"
 #include "runtime/host/path_buffer.h"
@@ -86,81 +87,74 @@ void MakeFile(const std::wstring& path) {
   CloseHandle(file);
 }
 
-const std::wstring kLogsFile = L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
-
 }  // namespace
 
-TEST(BootstrapDiagnostics, PrepareBuildsTheThreeDirectoriesFromTheEnvironmentAndTheHostModule) {
+TEST(BootstrapDiagnostics, PrepareBuildsTheLogFolderFromTheEnvironmentAndTheHostModule) {
   const std::wstring local = MakeTempDir(L"local");
-  const std::wstring temp = MakeTempDir(L"temp");
   SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
-  SetEnvironmentVariableW(L"TEMP", temp.c_str());
 
   BootstrapDiagnostics diagnostics;
   diagnostics.Prepare(GetModuleHandleW(nullptr));
   ASSERT_TRUE(diagnostics.PrimaryReady());
-  ASSERT_TRUE(diagnostics.FallbackReady());
   ASSERT_TRUE(diagnostics.HostDirReady());
   EXPECT_EQ(std::wstring(diagnostics.PrimaryDir()), local + L"\\nevr\\echovr\\logs");
-  EXPECT_EQ(std::wstring(diagnostics.FallbackDir()), temp + L"\\nevr\\echovr\\logs");
   EXPECT_EQ(std::wstring(diagnostics.HostDir()).back(), L'\\');
 }
 
-TEST(BootstrapDiagnostics, EmitWritesOneParseableStampedLineToThePrimaryDirectory) {
+// One log (docs/standards/logging.md, "One log"): the host's records are lines of the process's main log, named by the process's
+// creation time, the file the runtime's boot phase and filter write to. Not nevr-bootstrap.jsonl.
+TEST(BootstrapDiagnostics, EmitWritesOneParseableStampedLineToTheMainLog) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), MakeTempDir(L"temp").c_str(), nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
 
   const nlohmann::json record = {{"event", "runtime_load"}, {"win32_error", 2}};
   EXPECT_EQ(diagnostics.Emit(record), DiagnosticDestination::kPrimary);
 
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
-  ASSERT_EQ(records.size(), 1u);
+  const std::wstring expected = nevr_run_log::PathForThisProcess(local + L"\\nevr\\echovr\\logs");
+  const std::vector<nlohmann::json> records = ReadRecords(expected);
+  ASSERT_EQ(records.size(), 1u) << "the host's record is in the main log " << std::string(expected.begin(), expected.end());
   EXPECT_EQ(records[0].at("event"), "runtime_load");
   EXPECT_EQ(records[0].at("win32_error"), 2);
   EXPECT_EQ(records[0].at("tag"), "NEVR.HOST");
+  EXPECT_EQ(records[0].at("level"), "info") << "a record of the main log carries a level";
   EXPECT_EQ(records[0].at("pid"), GetCurrentProcessId());
   EXPECT_EQ(records[0].at("ts").get<std::string>().size(), 24u);
+  EXPECT_EQ(GetFileAttributesW((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str()), INVALID_FILE_ATTRIBUTES)
+      << "no separate host log is written";
+  wchar_t path[MAX_PATH] = {};
+  ASSERT_TRUE(diagnostics.LogFilePath(path, MAX_PATH));
+  EXPECT_EQ(std::wstring(path), expected);
 }
 
-TEST(BootstrapDiagnostics, EmitFallsBackToTempWhenThePrimaryIsUnwritable) {
-  const std::wstring local = MakeTempDir(L"local");
-  const std::wstring temp = MakeTempDir(L"temp");
-  // Block the primary: "nevr" is a FILE under %LOCALAPPDATA%, so the logs directory
-  // beneath it can be neither created nor written.
-  MakeFile(local + L"\\nevr");
-
-  BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), temp.c_str(), nullptr);
-  EXPECT_EQ(diagnostics.Emit({{"event", "runtime_load"}, {"win32_error", 5}}),
-            DiagnosticDestination::kFallback);
-
-  const std::vector<nlohmann::json> records = ReadRecords(temp + kLogsFile);
-  ASSERT_EQ(records.size(), 1u);
-  EXPECT_EQ(records[0].at("win32_error"), 5);
-}
-
-TEST(BootstrapDiagnostics, EmitFallsBackToTheHostDirectoryWhenBothEnvironmentPathsAreBlocked) {
+// No fallback place: a main log that cannot be written is reported on stderr and the record goes nowhere else, neither to
+// %TEMP% nor to the folder of the host DLL.
+TEST(BootstrapDiagnostics, WhenTheMainLogCannotBeWrittenNothingIsWrittenAnywhereElse) {
   const std::wstring local = MakeTempDir(L"local");
   const std::wstring temp = MakeTempDir(L"temp");
   const std::wstring host = MakeTempDir(L"host");
+  // Block the primary: "nevr" is a FILE under %LOCALAPPDATA%, so the logs directory beneath it can be neither created nor written.
   MakeFile(local + L"\\nevr");
-  MakeFile(temp + L"\\nevr");
+  SetEnvironmentVariableW(L"TEMP", temp.c_str());
+  SetEnvironmentVariableW(L"TMP", temp.c_str());
 
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), temp.c_str(), host.c_str());
-  EXPECT_EQ(diagnostics.Emit({{"event", "runtime_load"}}), DiagnosticDestination::kHostDirectory);
+  diagnostics.PrepareForTest(local.c_str(), host.c_str());
+  EXPECT_EQ(diagnostics.Emit({{"event", "runtime_load"}, {"win32_error", 5}}), DiagnosticDestination::kDropped);
 
-  const std::vector<nlohmann::json> records = ReadRecords(host + L"\\nevr-bootstrap.jsonl");
-  ASSERT_EQ(records.size(), 1u);
-  EXPECT_EQ(records[0].at("event"), "runtime_load");
+  EXPECT_EQ(GetFileAttributesW((temp + L"\\nevr").c_str()), INVALID_FILE_ATTRIBUTES) << "nothing in %TEMP%";
+  WIN32_FIND_DATAW found;
+  HANDLE find = FindFirstFileW((host + L"\\nevr*").c_str(), &found);
+  EXPECT_EQ(find, INVALID_HANDLE_VALUE) << "nothing beside the host DLL";
+  if (find != INVALID_HANDLE_VALUE) FindClose(find);
+  wchar_t path[MAX_PATH] = {};
+  EXPECT_FALSE(diagnostics.LogFilePath(path, MAX_PATH)) << "the last record reached no file";
 }
 
 TEST(BootstrapDiagnostics, EmitReportsDroppedWhenNoDestinationIsAvailable) {
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(L"", L"", L"");
+  diagnostics.PrepareForTest(L"", L"");
   EXPECT_FALSE(diagnostics.PrimaryReady());
-  EXPECT_FALSE(diagnostics.FallbackReady());
   EXPECT_FALSE(diagnostics.HostDirReady());
   EXPECT_EQ(diagnostics.Emit({{"event", "runtime_load"}}), DiagnosticDestination::kDropped);
 }
@@ -168,13 +162,13 @@ TEST(BootstrapDiagnostics, EmitReportsDroppedWhenNoDestinationIsAvailable) {
 TEST(BootstrapDiagnostics, AnOversizedRecordIsReplacedByAMarkerNotTruncated) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   nlohmann::json record;
   record["event"] = "runtime_load";
   record["huge"] = std::string(BootstrapDiagnostics::kMaxRecordBytes, 'x');
   EXPECT_EQ(diagnostics.Emit(record), DiagnosticDestination::kPrimary);
 
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 1u);
   EXPECT_EQ(records[0].at("event"), "runtime_load");
   EXPECT_EQ(records[0].at("error"), "record_too_large");
@@ -184,13 +178,13 @@ TEST(BootstrapDiagnostics, AnOversizedRecordIsReplacedByAMarkerNotTruncated) {
 TEST(BootstrapDiagnostics, InvalidUtf8InARecordIsReplacedNotThrown) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   nlohmann::json record;
   record["event"] = "runtime_load";
   record["path"] = std::string("C:\\bad\xff" "name");
   EXPECT_EQ(diagnostics.Emit(record), DiagnosticDestination::kPrimary);
 
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 1u);
   EXPECT_EQ(records[0].at("path"), "C:\\bad\xEF\xBF\xBD" "name");
 }
@@ -198,10 +192,10 @@ TEST(BootstrapDiagnostics, InvalidUtf8InARecordIsReplacedNotThrown) {
 TEST(BootstrapDiagnostics, AppendLineWritesAFormattedLineWithoutTheHeap) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   const char line[] = "{\"event\":\"fixed\"}\n";
   EXPECT_EQ(diagnostics.AppendLine(line, sizeof(line) - 1), DiagnosticDestination::kPrimary);
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 1u);
   EXPECT_EQ(records[0].at("event"), "fixed");
 }
@@ -209,7 +203,7 @@ TEST(BootstrapDiagnostics, AppendLineWritesAFormattedLineWithoutTheHeap) {
 TEST(BootstrapDiagnostics, TheAttachJournalIsWrittenInOrderWithTheDecisionsThatMattered) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
 
   unsigned char actual[nevr_host::kGameMainWrapperPrologueSize];
   for (std::size_t at = 0; at < sizeof(actual); ++at) actual[at] = nevr_host::kGameMainWrapperPrologue[at];
@@ -221,10 +215,10 @@ TEST(BootstrapDiagnostics, TheAttachJournalIsWrittenInOrderWithTheDecisionsThatM
   EXPECT_TRUE(diagnostics.AttachDegraded());
 
   // Nothing is written until the flush: recording is for the loader-lock path.
-  EXPECT_TRUE(ReadAll(local + kLogsFile).empty());
+  EXPECT_TRUE(ReadAll(nevr_test::HostLogPath(local)).empty());
   diagnostics.FlushAttachJournal();
 
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 3u);
   EXPECT_EQ(records[0].at("event"), "host_attach");
   EXPECT_EQ(records[0].at("step"), "image_check");
@@ -252,7 +246,7 @@ TEST(BootstrapDiagnostics, TheAttachJournalIsWrittenInOrderWithTheDecisionsThatM
 TEST(BootstrapDiagnostics, AnInstalledHookIsOneRecordNamingTheEnableStageAndStatusOk) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kAccepted, 0,
                            nevr_host::kGameMainWrapperPrologue);
   diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kAccepted, 0,
@@ -260,7 +254,7 @@ TEST(BootstrapDiagnostics, AnInstalledHookIsOneRecordNamingTheEnableStageAndStat
   EXPECT_FALSE(diagnostics.AttachDegraded());
   diagnostics.FlushAttachJournal();
 
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 2u);
   int installs = 0;
   for (const nlohmann::json& record : records) installs += record.at("step") == "hook_install" ? 1 : 0;
@@ -276,7 +270,7 @@ TEST(BootstrapDiagnostics, AnInstalledHookIsOneRecordNamingTheEnableStageAndStat
 TEST(BootstrapDiagnostics, EachMinHookStageHasItsOwnName) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 1, nullptr,
                            nevr_host::HookStage::kInitialize);
   diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 2, nullptr,
@@ -284,7 +278,7 @@ TEST(BootstrapDiagnostics, EachMinHookStageHasItsOwnName) {
   diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 3, nullptr,
                            nevr_host::HookStage::kEnable);
   diagnostics.FlushAttachJournal();
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 3u);
   EXPECT_EQ(records[0].at("stage"), "initialize");
   EXPECT_EQ(records[1].at("stage"), "create");
@@ -295,22 +289,22 @@ TEST(BootstrapDiagnostics, EachMinHookStageHasItsOwnName) {
 TEST(BootstrapDiagnostics, AFlushWritesEachStepOnceAndPicksUpLaterSteps) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
 
   diagnostics.FlushAttachJournal();  // nothing recorded: no line
-  EXPECT_TRUE(ReadAll(local + kLogsFile).empty());
+  EXPECT_TRUE(ReadAll(nevr_test::HostLogPath(local)).empty());
   EXPECT_FALSE(diagnostics.AttachDegraded());
 
   diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   diagnostics.FlushAttachJournal();
   diagnostics.FlushAttachJournal();  // idempotent
-  EXPECT_EQ(ReadRecords(local + kLogsFile).size(), 1u);
+  EXPECT_EQ(ReadRecords(nevr_test::HostLogPath(local)).size(), 1u);
   EXPECT_EQ(diagnostics.JournalFlushed(), 1u);
   EXPECT_FALSE(diagnostics.AttachDegraded());
 
   diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kAccepted);
   diagnostics.FlushAttachJournal();
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 2u);
   EXPECT_EQ(records[1].at("step"), "hook_install");
   EXPECT_EQ(records[1].at("outcome"), "enabled");
@@ -319,7 +313,7 @@ TEST(BootstrapDiagnostics, AFlushWritesEachStepOnceAndPicksUpLaterSteps) {
 TEST(BootstrapDiagnostics, TheJournalKeepsTheFirstEntriesAndCountsWhatItDropped) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   for (std::size_t at = 0; at < BootstrapDiagnostics::kJournalCapacity + 3; ++at) {
     diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   }
@@ -327,7 +321,7 @@ TEST(BootstrapDiagnostics, TheJournalKeepsTheFirstEntriesAndCountsWhatItDropped)
   diagnostics.FlushAttachJournal();
 
   // The kept entries, then one record that says three were dropped.
-  std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), BootstrapDiagnostics::kJournalCapacity + 1);
   EXPECT_EQ(records.back().at("event"), "host_attach");
   EXPECT_EQ(records.back().at("step"), "journal");
@@ -336,10 +330,10 @@ TEST(BootstrapDiagnostics, TheJournalKeepsTheFirstEntriesAndCountsWhatItDropped)
 
   // Nothing new dropped: nothing new written. A later drop is reported with the new total.
   diagnostics.FlushAttachJournal();
-  EXPECT_EQ(ReadRecords(local + kLogsFile).size(), BootstrapDiagnostics::kJournalCapacity + 1);
+  EXPECT_EQ(ReadRecords(nevr_test::HostLogPath(local)).size(), BootstrapDiagnostics::kJournalCapacity + 1);
   diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   diagnostics.FlushAttachJournal();
-  records = ReadRecords(local + kLogsFile);
+  records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), BootstrapDiagnostics::kJournalCapacity + 2);
   EXPECT_EQ(records.back().at("dropped"), 4);
 }
@@ -351,7 +345,7 @@ TEST(BootstrapDiagnostics, ConcurrentFlushesWriteEachEntryExactlyOnce) {
   for (int round = 0; round < 150; ++round) {
     const std::wstring local = MakeTempDir(L"local");
     BootstrapDiagnostics diagnostics;
-    diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+    diagnostics.PrepareForTest(local.c_str(), nullptr);
     struct Shared {
       BootstrapDiagnostics* diagnostics;
       volatile LONG stop;
@@ -388,7 +382,7 @@ TEST(BootstrapDiagnostics, ConcurrentFlushesWriteEachEntryExactlyOnce) {
 TEST(BootstrapDiagnostics, TheWaitDefectAndRefusalRecordsSayWhatHappenedAndWhatHappensNext) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   using nevr_host::AttachNote;
   diagnostics.RecordAttach(AttachStep::kInstallWait, AttachOutcome::kAccepted, 0, nullptr,
                            nevr_host::HookStage::kNone, AttachNote::kInstallWaitSignalled);
@@ -402,7 +396,7 @@ TEST(BootstrapDiagnostics, TheWaitDefectAndRefusalRecordsSayWhatHappenedAndWhatH
   diagnostics.RecordAttach(AttachStep::kSetGameModule, AttachOutcome::kRejected, 0, nullptr,
                            nevr_host::HookStage::kNone, AttachNote::kDuplicateSetGameModule);
   diagnostics.FlushAttachJournal();
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 5u);
   EXPECT_EQ(records[0].at("step"), "install_wait");
   EXPECT_EQ(records[0].at("outcome"), "signalled");
@@ -426,13 +420,13 @@ TEST(BootstrapDiagnostics, TheWaitDefectAndRefusalRecordsSayWhatHappenedAndWhatH
 TEST(BootstrapDiagnostics, ARejectedTargetStepStillSaysTheHostRunsTheOriginalOnly) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kRejected);
   diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
   diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 9, nullptr,
                            nevr_host::HookStage::kCreate);
   diagnostics.FlushAttachJournal();
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 3u);
   for (const nlohmann::json& record : records) EXPECT_EQ(record.at("degraded_action"), "run_original_only");
 }
@@ -440,13 +434,13 @@ TEST(BootstrapDiagnostics, ARejectedTargetStepStillSaysTheHostRunsTheOriginalOnl
 TEST(BootstrapDiagnostics, AnUnreadHookRecordIsOnTheInstallRecordAndDegradesTheAttach) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kAccepted, 0,
                            nevr_host::kGameMainWrapperPrologue, nevr_host::HookStage::kEnable,
                            nevr_host::AttachNote::kHookBytesUnread);
   EXPECT_TRUE(diagnostics.AttachDegraded());
   diagnostics.FlushAttachJournal();
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 1u);
   EXPECT_EQ(records[0].at("outcome"), "enabled");
   EXPECT_EQ(records[0].at("hook_bytes"), "unread");
@@ -455,19 +449,19 @@ TEST(BootstrapDiagnostics, AnUnreadHookRecordIsOnTheInstallRecordAndDegradesTheA
 
 TEST(BootstrapDiagnostics, AttachDegradedIsTrueForAnyRejectionOrFailureAndFalseOtherwise) {
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(L"", L"", L"");
+  diagnostics.PrepareForTest(L"", L"");
   EXPECT_FALSE(diagnostics.AttachDegraded());
   diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   EXPECT_FALSE(diagnostics.AttachDegraded());
 
   BootstrapDiagnostics rejected;
-  rejected.PrepareForTest(L"", L"", L"");
+  rejected.PrepareForTest(L"", L"");
   rejected.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   rejected.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
   EXPECT_TRUE(rejected.AttachDegraded());
 
   BootstrapDiagnostics failed;
-  failed.PrepareForTest(L"", L"", L"");
+  failed.PrepareForTest(L"", L"");
   failed.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 7);
   EXPECT_TRUE(failed.AttachDegraded());
 }
@@ -648,11 +642,11 @@ TEST(BootstrapDiagnostics, ConcurrentAppendersToOneFileLoseNoLine) {
   for (const int threads : {1, 2, 4, 8}) {
     const std::wstring local = MakeTempDir(L"local");
     BootstrapDiagnostics diagnostics;
-    diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+    diagnostics.PrepareForTest(local.c_str(), nullptr);
     constexpr int kLines = 300;
     std::atomic<int> dropped{0};
     AppendConcurrently(diagnostics, threads, kLines, "A", &dropped);
-    const std::string text = ReadAll(local + kLogsFile);
+    const std::string text = ReadAll(nevr_test::HostLogPath(local));
     const LineCount count = CountLinesWithPrefix(text, 'A');
     const std::size_t expected = static_cast<std::size_t>(threads * kLines);
     // The record of a short file: the lock state at the end, the dropped appends, and the lock records.
@@ -671,7 +665,7 @@ TEST(BootstrapDiagnostics, AppendHelperForTheTwoProcessTest) {
   if (GetEnvironmentVariableW(L"NEVR_TEST_APPEND_DIR", dir, MAX_PATH) == 0) GTEST_SKIP() << "helper process only";
   GetEnvironmentVariableW(L"NEVR_TEST_APPEND_ID", id, 16);
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(dir, nullptr, nullptr);
+  diagnostics.PrepareForTest(dir, nullptr);
   char prefix[16] = {};
   std::snprintf(prefix, sizeof(prefix), "P%ls", id);
   AppendConcurrently(diagnostics, 4, 100, prefix);
@@ -700,7 +694,7 @@ TEST(BootstrapDiagnostics, TwoProcessesAppendingToOneFileLoseNoLine) {
   for (HANDLE child : children) CloseHandle(child);
   SetEnvironmentVariableW(L"NEVR_TEST_APPEND_DIR", nullptr);
   SetEnvironmentVariableW(L"NEVR_TEST_APPEND_ID", nullptr);
-  const LineCount count = CountLines(ReadAll(local + kLogsFile));
+  const LineCount count = CountLines(ReadAll(nevr_test::HostLogPath(local)));
   EXPECT_EQ(count.lines, 800u);
   EXPECT_EQ(count.distinct, 800u);
 }
@@ -783,7 +777,7 @@ TEST(BootstrapDiagnostics, ConcurrentAppendersKeepEveryLineWhileTheLockIsHeldPas
   ScopedLogMutexName scoped(g_holder_mutex_name);
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   HoldFor hold{ready, 3000};
   HANDLE holder = CreateThread(nullptr, 0, &HoldLogLockFor, &hold, 0, nullptr);
@@ -799,7 +793,7 @@ TEST(BootstrapDiagnostics, ConcurrentAppendersKeepEveryLineWhileTheLockIsHeldPas
 
   EXPECT_TRUE(BootstrapDiagnostics::LogLockUnreliableForTest())
       << "the appends did not time out on the lock; the test forces nothing";
-  const std::string text = ReadAll(local + kLogsFile);
+  const std::string text = ReadAll(nevr_test::HostLogPath(local));
   const std::size_t expected = static_cast<std::size_t>(kThreads * kLines);
   const LineCount own = CountLinesWithPrefix(text, 'H');
   // A count that is off prints the lines that are neither an appended line nor the lock record, so the odd line is in
@@ -819,7 +813,7 @@ TEST(BootstrapDiagnostics, FirstAppendsHelperInAFreshProcess) {
   GetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_MUTEX", name, 128);
   BootstrapDiagnostics::SetLogMutexNameForTest(name);
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(dir, nullptr, nullptr);
+  diagnostics.PrepareForTest(dir, nullptr);
   AppendConcurrently(diagnostics, 8, 300, "F");
 }
 
@@ -847,7 +841,7 @@ TEST(BootstrapDiagnostics, FirstConcurrentAppendsInAFreshProcessLoseNoLine) {
   SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_DIR", nullptr);
   SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_MUTEX", nullptr);
   EXPECT_EQ(code, 0u) << "the helper process failed";
-  EXPECT_EQ(CountLinesWithPrefix(ReadAll(local + kLogsFile), 'F').distinct, static_cast<std::size_t>(8 * 300));
+  EXPECT_EQ(CountLinesWithPrefix(ReadAll(nevr_test::HostLogPath(local)), 'F').distinct, static_cast<std::size_t>(8 * 300));
 }
 
 // A holder that never lets go must delay an append by the bounded wait at most; the line is still written.
@@ -855,7 +849,7 @@ TEST(BootstrapDiagnostics, AnAppendIsNotBlockedForeverByAnotherThreadHoldingTheL
   ScopedLogMutexName scoped(UniqueMutexName(L"blocked"));
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   HANDLE handles[2] = {CreateEventW(nullptr, TRUE, FALSE, nullptr), CreateEventW(nullptr, TRUE, FALSE, nullptr)};
   HANDLE holder = CreateThread(nullptr, 0, &HoldLogLock, handles, 0, nullptr);
   ASSERT_NE(holder, nullptr);
@@ -874,7 +868,7 @@ TEST(BootstrapDiagnostics, AnAppendIsNotBlockedForeverByAnotherThreadHoldingTheL
   EXPECT_EQ(where, DiagnosticDestination::kPrimary);
   EXPECT_LT(elapsed.count(), 4000);  // bounded, not the holder's 10 s
   EXPECT_GE(elapsed.count(), 300);   // it did wait for the lock first
-  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 2u);  // the line, then the host_log_lock record
+  EXPECT_EQ(CountLines(ReadAll(nevr_test::HostLogPath(local))).lines, 2u);  // the line, then the host_log_lock record
 }
 
 // A crash inside an append runs the crash callback on the thread that holds the lock: the mutex is
@@ -884,7 +878,7 @@ TEST(BootstrapDiagnostics, AnAppendOnTheThreadThatHoldsTheLogLockIsImmediate) {
   ScopedLogMutexName scoped(name);
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   HANDLE mutex = CreateMutexW(nullptr, FALSE, name.c_str());
   ASSERT_NE(mutex, nullptr);
   ASSERT_EQ(WaitForSingleObject(mutex, 5000), WAIT_OBJECT_0);
@@ -895,7 +889,7 @@ TEST(BootstrapDiagnostics, AnAppendOnTheThreadThatHoldsTheLogLockIsImmediate) {
   ReleaseMutex(mutex);
   CloseHandle(mutex);
   EXPECT_LT(elapsed.count(), 200);
-  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 1u);
+  EXPECT_EQ(CountLines(ReadAll(nevr_test::HostLogPath(local))).lines, 1u);
 }
 
 // The mutex is created at attach (Prepare) and never by an append: the crash callback is an append, and
@@ -921,7 +915,7 @@ TEST(BootstrapDiagnostics, AnAppendBeforeAttachCreatesNoLogMutex) {
   ScopedLogMutexName scoped(name);
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   // Nothing has attached in this process (the log mutex is forgotten), and the first write is an
   // append, as a crash before the first flush is.
   BootstrapDiagnostics::ResetLogLockForTest();
@@ -929,7 +923,7 @@ TEST(BootstrapDiagnostics, AnAppendBeforeAttachCreatesNoLogMutex) {
   const char line[] = "{\"event\":\"first_write_is_a_crash\"}\n";
   EXPECT_EQ(diagnostics.AppendLine(line, sizeof(line) - 1), DiagnosticDestination::kPrimary);
   EXPECT_FALSE(MutexExists(name.c_str())) << "an append created the log mutex";
-  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 1u);
+  EXPECT_EQ(CountLines(ReadAll(nevr_test::HostLogPath(local))).lines, 1u);
 }
 
 // One crash writes up to four records. With a holder that never releases, the first record waits and
@@ -938,7 +932,7 @@ TEST(BootstrapDiagnostics, ACrashOfFourRecordsPaysOneLockWaitWhenAHolderNeverRel
   ScopedLogMutexName scoped(UniqueMutexName(L"four"));
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   HANDLE handles[2] = {CreateEventW(nullptr, TRUE, FALSE, nullptr), CreateEventW(nullptr, TRUE, FALSE, nullptr)};
   HANDLE holder = CreateThread(nullptr, 0, &HoldLogLock, handles, 0, nullptr);
   ASSERT_NE(holder, nullptr);
@@ -958,7 +952,7 @@ TEST(BootstrapDiagnostics, ACrashOfFourRecordsPaysOneLockWaitWhenAHolderNeverRel
   EXPECT_TRUE(unreliable);
   EXPECT_GE(elapsed.count(), 300);  // the first record did wait
   EXPECT_LT(elapsed.count(), 900);  // four waits would be about 2000
-  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 5u);  // four records and the one host_log_lock record
+  EXPECT_EQ(CountLines(ReadAll(nevr_test::HostLogPath(local))).lines, 5u);  // four records and the one host_log_lock record
 }
 
 namespace {
@@ -985,7 +979,7 @@ TEST(BootstrapDiagnostics, WaitsThatEndOwnedAreNotCountedAgainstTheLock) {
   ScopedLogMutexName scoped(UniqueMutexName(L"releasing"));
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   HANDLE events[2] = {CreateEventW(nullptr, FALSE, FALSE, nullptr), CreateEventW(nullptr, FALSE, FALSE, nullptr)};
   HANDLE holder = CreateThread(nullptr, 0, &ReleasingHolder, events, 0, nullptr);
   ASSERT_NE(holder, nullptr);
@@ -1003,7 +997,7 @@ TEST(BootstrapDiagnostics, WaitsThatEndOwnedAreNotCountedAgainstTheLock) {
   CloseHandle(events[0]);
   CloseHandle(events[1]);
   EXPECT_FALSE(BootstrapDiagnostics::LogLockUnreliableForTest());
-  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 4u);  // no host_log_lock record
+  EXPECT_EQ(CountLines(ReadAll(nevr_test::HostLogPath(local))).lines, 4u);  // no host_log_lock record
   EXPECT_GE(total_ms, 800);   // each append waited for the holder: there is no per-process budget
   EXPECT_LT(total_ms, 4 * static_cast<long long>(nevr_host::kBootstrapLogLockWaitMs) + 1000);
 }
@@ -1013,7 +1007,7 @@ TEST(BootstrapDiagnostics, ATimedOutLogLockWaitIsRecordedOnceWithWhatHappensNext
   ScopedLogMutexName scoped(UniqueMutexName(L"record"));
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   HANDLE handles[2] = {CreateEventW(nullptr, TRUE, FALSE, nullptr), CreateEventW(nullptr, TRUE, FALSE, nullptr)};
   HANDLE holder = CreateThread(nullptr, 0, &HoldLogLock, handles, 0, nullptr);
   ASSERT_NE(holder, nullptr);
@@ -1027,7 +1021,7 @@ TEST(BootstrapDiagnostics, ATimedOutLogLockWaitIsRecordedOnceWithWhatHappensNext
   CloseHandle(handles[1]);
 
   std::vector<nlohmann::json> locks;
-  for (const nlohmann::json& record : ReadRecords(local + kLogsFile)) {
+  for (const nlohmann::json& record : ReadRecords(nevr_test::HostLogPath(local))) {
     if (record.value("event", "") == "host_log_lock") locks.push_back(record);
   }
   ASSERT_EQ(locks.size(), 1u);
@@ -1045,14 +1039,14 @@ TEST(BootstrapDiagnostics, AFailedLogMutexCreationIsJournalledAndAppendsStillWor
   ScopedLogMutexName scoped(L"Local\\nevr-test\\not\\a\\valid\\mutex\\name");
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   ASSERT_EQ(diagnostics.JournalSize(), 1u);
   EXPECT_FALSE(diagnostics.AttachDegraded()) << "a missing log lock is not a failed attach";
   diagnostics.FlushAttachJournal();
   const char line[] = "{\"event\":\"after\"}\n";
   EXPECT_EQ(diagnostics.AppendLine(line, sizeof(line) - 1), DiagnosticDestination::kPrimary);
 
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 2u);
   EXPECT_EQ(records[0].at("event"), "host_attach");
   EXPECT_EQ(records[0].at("step"), "log_mutex");
@@ -1105,7 +1099,7 @@ TEST(BootstrapDiagnostics, AFlushNeverEmitsAnEntryBeforeItIsWritten) {
   for (int round = 0; round < 2000; ++round) {
     records.clear();
     BootstrapDiagnostics diagnostics;
-    diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+    diagnostics.PrepareForTest(nullptr, nullptr);
     FlushState state{&diagnostics, 0};
     HANDLE flushers[4];
     for (HANDLE& flusher : flushers) flusher = CreateThread(nullptr, 0, &FlushUntilStopped, &state, 0, nullptr);
@@ -1182,7 +1176,7 @@ TEST(BootstrapDiagnostics, AnEntryThatIsReservedButNotWrittenIsNotEmittedUntilIt
   std::vector<nlohmann::json> records;
   ScopedSink sink(&records);
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  diagnostics.PrepareForTest(nullptr, nullptr);
   g_reserved_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   g_release_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   BootstrapDiagnostics::SetRecordPauseForTest(&PauseInsideRecordAttach);
@@ -1298,26 +1292,26 @@ TEST(BootstrapDiagnostics, TheLastFlushWritesNothingTwiceAndNothingWhenEverythin
 TEST(BootstrapDiagnostics, TheLastFlushDoesNotRepeatAClaimedStepThatIsAlreadyInTheLogAndWritesOneThatIsNot) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
   diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);
   diagnostics.FlushAttachJournal();
-  ASSERT_EQ(ReadRecords(local + kLogsFile).size(), 3u);
+  ASSERT_EQ(ReadRecords(nevr_test::HostLogPath(local)).size(), 3u);
 
   diagnostics.SetEntryStateForTest(1, BootstrapDiagnostics::kEntryClaimed);  // written, not marked
   diagnostics.FlushAttachJournalAtExit();
-  std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   EXPECT_EQ(records.size(), 3u);
 
   const std::wstring other = MakeTempDir(L"local");
   BootstrapDiagnostics lost;
-  lost.PrepareForTest(other.c_str(), nullptr, nullptr);
+  lost.PrepareForTest(other.c_str(), nullptr);
   lost.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   lost.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
   lost.SetEntryStateForTest(1, BootstrapDiagnostics::kEntryClaimed);  // claimed, never written
   lost.FlushAttachJournalAtExit();
-  records = ReadRecords(other + kLogsFile);
+  records = ReadRecords(nevr_test::HostLogPath(other));
   ASSERT_EQ(records.size(), 2u);
   EXPECT_EQ(records[0].at("step"), "prologue_check");
   EXPECT_EQ(records[1].at("step"), "image_check");
@@ -1327,11 +1321,11 @@ TEST(BootstrapDiagnostics, TheLastFlushDoesNotRepeatAClaimedStepThatIsAlreadyInT
 TEST(BootstrapDiagnostics, EachJournalRecordCarriesItsSeqAndNoPidSeqPairRepeats) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   for (int at = 0; at < 5; ++at) diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   diagnostics.FlushAttachJournal();
   diagnostics.FlushAttachJournalAtExit();
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 5u);
   std::set<std::pair<std::string, unsigned long long>> keys;
   for (std::size_t at = 0; at < records.size(); ++at) {
@@ -1352,23 +1346,23 @@ TEST(BootstrapDiagnostics, ThePidOfAnOlderProcessDoesNotHideAClaimedStepOfThisOn
   // The older process: same pid, another run token.
   BootstrapDiagnostics::SetRunTokenForTest(mine ^ 0x5A5A5A5A5A5A5A5Aull);
   BootstrapDiagnostics older;
-  older.PrepareForTest(local.c_str(), nullptr, nullptr);
+  older.PrepareForTest(local.c_str(), nullptr);
   older.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   older.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kAccepted);
   older.FlushAttachJournal();
-  ASSERT_EQ(ReadRecords(local + kLogsFile).size(), 2u);
+  ASSERT_EQ(ReadRecords(nevr_test::HostLogPath(local)).size(), 2u);
 
   // This process: its entry 1 is claimed and never written.
   BootstrapDiagnostics::SetRunTokenForTest(mine);
   BootstrapDiagnostics now;
-  now.PrepareForTest(local.c_str(), nullptr, nullptr);
+  now.PrepareForTest(local.c_str(), nullptr);
   now.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   now.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
   now.SetEntryStateForTest(1, BootstrapDiagnostics::kEntryClaimed);
   now.SetEntryStateForTest(0, BootstrapDiagnostics::kEntryWritten);
   now.FlushAttachJournalAtExit();
 
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 3u);  // the decisive record landed
   EXPECT_EQ(records[2].at("step"), "prologue_check");
   EXPECT_EQ(records[2].at("outcome"), "mismatch");
@@ -1383,14 +1377,14 @@ TEST(BootstrapDiagnostics, ARecordOfThisRunIsFoundAmongOlderLinesWithTheSamePid)
   const std::wstring local = MakeTempDir(L"local");
   const std::uint64_t mine = BootstrapDiagnostics::RunTokenForTest();
   BootstrapDiagnostics now;
-  now.PrepareForTest(local.c_str(), nullptr, nullptr);
+  now.PrepareForTest(local.c_str(), nullptr);
   now.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   now.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
   now.FlushAttachJournal();
 
   BootstrapDiagnostics::SetRunTokenForTest(mine ^ 0x00FF00FF00FF00FFull);
   BootstrapDiagnostics older;
-  older.PrepareForTest(local.c_str(), nullptr, nullptr);
+  older.PrepareForTest(local.c_str(), nullptr);
   older.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   older.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kAccepted);
   older.FlushAttachJournal();
@@ -1398,7 +1392,7 @@ TEST(BootstrapDiagnostics, ARecordOfThisRunIsFoundAmongOlderLinesWithTheSamePid)
 
   now.SetEntryStateForTest(1, BootstrapDiagnostics::kEntryClaimed);
   now.FlushAttachJournalAtExit();
-  EXPECT_EQ(ReadRecords(local + kLogsFile).size(), 4u);  // nothing added
+  EXPECT_EQ(ReadRecords(nevr_test::HostLogPath(local)).size(), 4u);  // nothing added
   BootstrapDiagnostics::SetRunTokenForTest(0);
 }
 
@@ -1438,7 +1432,7 @@ TEST(BootstrapDiagnostics, TheLastFlushIsNotHeldForeverByAnotherThreadHoldingThe
   ScopedLogMutexName scoped(UniqueMutexName(L"exitheld"));
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
   diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
   diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);
@@ -1453,7 +1447,7 @@ TEST(BootstrapDiagnostics, TheLastFlushIsNotHeldForeverByAnotherThreadHoldingThe
   EXPECT_LT(elapsed.count(), 1500);  // one bounded wait, not one per record and not the holder's 10 s
   EXPECT_GE(elapsed.count(), 200);   // it did wait for the lock first
   EXPECT_EQ(BootstrapDiagnostics::ExitFlushSkippedForTest(), 1u);
-  EXPECT_TRUE(ReadAll(local + kLogsFile).empty());  // nothing was written without the lock
+  EXPECT_TRUE(ReadAll(nevr_test::HostLogPath(local)).empty());  // nothing was written without the lock
 
   SetEvent(handles[1]);
   WaitForSingleObject(holder, 10000);
@@ -1462,7 +1456,7 @@ TEST(BootstrapDiagnostics, TheLastFlushIsNotHeldForeverByAnotherThreadHoldingThe
   CloseHandle(handles[1]);
 
   diagnostics.FlushAttachJournalAtExit();  // the lock is free now: everything that was skipped is written, once
-  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  const std::vector<nlohmann::json> records = ReadRecords(nevr_test::HostLogPath(local));
   ASSERT_EQ(records.size(), 3u);
   EXPECT_EQ(records[0].at("step"), "prologue_check");
 }

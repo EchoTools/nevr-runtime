@@ -625,13 +625,12 @@ static VOID InitializeAfterGameImageGuard() {
   // could not distinguish server from client. The call lives in boot.cpp, where g_isServer
   // is known, so a headless server never opens the CDN connection.
 
-  // Boot phase complete — close the boot log file.  From here on, Log() and
-  // the builtin_log_filter own the rotating JSONL file.  Any remaining
-  // TeeFprintf calls after this write to stderr only.
+  // Boot phase complete. From here on Log() reaches the game's CLog and the builtin_log_filter writes into the same main log the
+  // boot phase wrote to (run_log_writer.h), so there is no second file to replay. Any remaining TeeFprintf calls write to stderr and
+  // that file.
   nevr_boot_log_tee::TeeFprintf(
       "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\nevr\\echovr\\logs\\nevr-<timestamp>.jsonl\n");
   nevr_boot_log_tee::Close();
-  nevr_builtin_log_filter::ReplayBootTail();  // after Close nothing appends: the lines written since the main log opened (#5)
 
   Log(g_bootHookFailed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
       "[NEVR.PATCH] boot hooks installed ok=%s", g_bootHookFailed ? "false" : "true");

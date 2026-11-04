@@ -7,7 +7,10 @@
 #include "runtime/lifecycle/boot_hook_policy.h"
 #include "runtime/patch/pnsrad_load_queue.h"
 #include "core/logging.h"
+#include <filesystem>
+
 #include "runtime/log/boot_log_tee.h"
+#include "runtime/log/run_log_writer.h"
 
 #include <MinHook.h>
 #include <gtest/gtest.h>
@@ -306,13 +309,21 @@ void UseFakeHooks() {
 
 const char* const kVariants[] = {"LoadLibraryA", "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW"};
 
-// What the boot tee wrote to nevr-boot.jsonl while `install` ran (#632). Install() runs inside the runtime's
+// What the boot tee wrote to the main log while `install` ran (#632). Install() runs inside the runtime's
 // boot phase, so its report must reach this file, not only stderr. The window is exact: from the file size
 // at Init() to the file size when `install` returns, so an absence assertion over it cannot be satisfied or
 // broken by what earlier runs appended to the shared, append-only file. The tee is closed on every path.
 struct BootTeeScope {
-  BootTeeScope() { nevr_boot_log_tee::Init(); }
-  ~BootTeeScope() { nevr_boot_log_tee::Close(); }
+  BootTeeScope() {
+    nevr_run_log_writer::Close();
+    nevr_run_log_writer::SetDirectory(
+        (std::filesystem::temp_directory_path() / ("nevr-boot-tee-scope-" + std::to_string(GetCurrentProcessId()))).string().c_str());
+    nevr_boot_log_tee::Init();
+  }
+  ~BootTeeScope() {
+    nevr_boot_log_tee::Close();
+    nevr_run_log_writer::Close();
+  }
   BootTeeScope(const BootTeeScope&) = delete;
   BootTeeScope& operator=(const BootTeeScope&) = delete;
 };
@@ -326,7 +337,7 @@ template <typename Fn>
 std::string BootFileTextWrittenBy(Fn install) {
   BootTeeScope tee;
   const std::string path = nevr_boot_log_tee::Path();
-  if (path.empty()) return "<the boot tee could not resolve nevr-boot.jsonl>";
+  if (path.empty()) return "<the boot tee could not resolve the main log>";
   const std::streamoff start = FileSizeOf(path);
   install();
   const std::streamoff end = FileSizeOf(path);

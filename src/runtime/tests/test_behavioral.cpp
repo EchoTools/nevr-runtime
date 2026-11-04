@@ -72,6 +72,7 @@
 #include "runtime/patch/evrp_package.h"
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/log/boot_log_tee.h"
+#include "runtime/log/run_log_writer.h"
 #include "runtime/hook/addresses.h"
 #include <MinHook.h>  // XpidPrefixDetourBoot initialises the hooking engine for one test
 
@@ -6727,19 +6728,26 @@ struct XpidBaseScope {
     }
 };
 
-// Opens the boot tee's file for one test and closes it again. Init() starts the boot phase, so
+// Opens the boot phase for one test and closes it again. Init() starts the boot phase, so
 // the code under test reports through TeeFprintf exactly as it does under the loader lock.
-// Output() returns what the tee wrote to nevr-boot.jsonl after the guard was constructed.
+// Output() returns what the tee wrote to the main log (run_log_writer.h) after the guard was constructed. The main log is
+// made in a folder of the test's own, never in the user's nevr root.
 struct BootTeeCapture {
     std::string path;
     std::streamoff start = 0;
     BootTeeCapture() {
+        nevr_run_log_writer::Close();
+        nevr_run_log_writer::SetDirectory(
+            (std::filesystem::temp_directory_path() / ("nevr-boot-tee-capture-" + std::to_string(GetCurrentProcessId()))).string().c_str());
         nevr_boot_log_tee::Init();
         path = nevr_boot_log_tee::Path();
         std::ifstream in(path, std::ios::binary | std::ios::ate);
         if (in) start = in.tellg();
     }
-    ~BootTeeCapture() { nevr_boot_log_tee::Close(); }
+    ~BootTeeCapture() {
+        nevr_boot_log_tee::Close();
+        nevr_run_log_writer::Close();
+    }
     std::string Output() const {
         std::ifstream in(path, std::ios::binary);
         in.seekg(start);
@@ -6818,7 +6826,7 @@ TEST(XpidPatchBoot, AMismatchRecordsSiteExpectedAndActualBytesInTheBootLogNotLog
     std::string written;
     {
         BootTeeCapture tee;
-        ASSERT_FALSE(tee.path.empty()) << "the boot tee could not resolve nevr-boot.jsonl";
+        ASSERT_FALSE(tee.path.empty()) << "the boot tee could not resolve the main log";
         XpidBaseScope scope(base);
         PatchDscProvider();
         written = tee.Output();
@@ -6873,7 +6881,7 @@ TEST(XpidPrefixDetourBoot, AFailedDetourFailsTheBootThroughTheFlagAndNamesItself
     std::string written;
     {
         BootTeeCapture tee;
-        ASSERT_FALSE(tee.path.empty()) << "the boot tee could not resolve nevr-boot.jsonl";
+        ASSERT_FALSE(tee.path.empty()) << "the boot tee could not resolve the main log";
         XpidBaseScope scope(base);
         PatchProviderPrefixOvrOrg();
         EXPECT_TRUE(g_bootHookFailed) << "a failed OVR-ORG detour must reach boot.cpp's server check";

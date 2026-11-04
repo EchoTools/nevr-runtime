@@ -20,8 +20,9 @@ struct LogFileInfo {
   unsigned long long written = 0;
 };
 
-/// True for the runtime's run log names, nevr-<year>-<month>-...jsonl (BuildLogFilePath in runtime/log/builtin_filter.cpp).
-/// The boot spool (nevr-boot.jsonl) and the host's log (nevr-bootstrap.jsonl) are not run logs.
+/// True for the runtime's run log names, nevr-<year>-<month>-...jsonl (core/run_log_path.h): the one main log of a process, which
+/// the host, the boot phase, the filter and the crash path all write to. Older releases also wrote nevr-boot.jsonl and
+/// nevr-bootstrap.jsonl; those are not run logs.
 inline bool IsRunLogName(std::string_view name) {
   constexpr std::string_view kPrefix = "nevr-";
   constexpr std::string_view kSuffix = ".jsonl";

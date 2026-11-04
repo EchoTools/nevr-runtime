@@ -36,6 +36,7 @@
 //   - load/API/init failures stop the game (the host's test seam records the stop with exit code 78 and the
 //     original runs after it) and never dispatch.
 
+#include "runtime/tests/run_log_test_path.h"
 #include "runtime/tests/bootstrap_attach/abi.h"
 
 #include <nlohmann/json.hpp>
@@ -378,7 +379,7 @@ std::vector<nlohmann::json> ReadHostRecords() {
   wchar_t local[MAX_PATH] = {};
   const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
   Require(length != 0 && length < MAX_PATH, "the scenario's LOCALAPPDATA is not set");
-  const std::wstring path = std::wstring(local, length) + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
+  const std::wstring path = std::nevr_test::HostLogPath(wstring(local, length));
   HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   std::string text;

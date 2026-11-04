@@ -28,6 +28,7 @@
 //     prologue, MinHook stage and status, and runtime_load saying the loader lock
 //     was not held.
 
+#include "runtime/tests/run_log_test_path.h"
 #include "runtime/tests/rendezvous/abi.h"
 
 #include "runtime/host/game_targets.h"
@@ -498,7 +499,7 @@ std::string ReadAll(const wchar_t* path) {
 // Every record in `<dir>\nevr\echovr\logs\nevr-bootstrap.jsonl`, parsed. A line that
 // does not parse, or lacks the host header, fails the harness.
 std::vector<nlohmann::json> ReadHostRecords(const std::wstring& dir) {
-  const std::string text = ReadAll((dir + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  const std::string text = ReadAll((nevr_test::HostLogPath(dir)).c_str());
   std::vector<nlohmann::json> records;
   std::size_t start = 0;
   while (start < text.size()) {
@@ -694,7 +695,7 @@ nlohmann::json ExpectStopLine(const std::wstring& stderr_file, const std::wstrin
   Require(json.at("runtime_version") == "not loaded", "the NEVR.STOP line states a runtime version for a runtime that was not read");
   const std::string detail = json.at("detail").get<std::string>();
   Require(!detail.empty() && detail.rfind(expected.detail_prefix, 0) == 0, "the NEVR.STOP line's detail is empty or does not say what was expected");
-  const std::wstring log_path = local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
+  const std::wstring log_path = nevr_test::HostLogPath(local);
   Require(json.at("log") == WideToUtf8(log_path), "the NEVR.STOP line's log is not the host log the facts went to");
   Require(GetFileAttributesW(log_path.c_str()) != INVALID_FILE_ATTRIBUTES, "the host log the line names does not exist");
 
@@ -910,7 +911,7 @@ int RunSuite() {
       // A client is shown the sentence, then the version and the log (the shim writes the text instead of a dialog).
       const std::string notice = StopNoticeOf(scenario_dir);
       const std::string expected_tail = "\n\nnEVR " + HostVersionOfFile(root + L"BugSplat64.dll") + "\nLog: " +
-                                        WideToUtf8(scenario_dir + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+                                        WideToUtf8(nevr_test::HostLogPath(scenario_dir));
       Require(notice.rfind("nEVR couldn't start: nevr-runtime.dll is missing.", 0) == 0 &&
                   notice.size() > expected_tail.size() &&
                   notice.compare(notice.size() - expected_tail.size(), expected_tail.size(), expected_tail) == 0,
