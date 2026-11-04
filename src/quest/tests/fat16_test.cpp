@@ -153,6 +153,7 @@ TEST(BootSectorFaultsAreRefused) {
   CHECK_EQ(Open(Sample(), [](BuiltImage& b) { Put16(b.bytes, 14, 0); }).status.code, std::string("fat_bad_boot_sector"));
   // The volume claims more sectors than the image holds.
   CHECK_EQ(Open(Sample(), [](BuiltImage& b) { Put16(b.bytes, 19, 60000); }).status.code, std::string("fat_bad_boot_sector"));
+  CHECK_EQ(Open(Sample(), [](BuiltImage& b) { Put16(b.bytes, 19, Get16(b.bytes, 19) + 1); }).status.code, std::string("fat_bad_boot_sector"));  // one sector more than the image holds
   // A FAT too small for the clusters the volume claims.
   CHECK_EQ(Open(Sample(), [](BuiltImage& b) { Put16(b.bytes, 22, 2); }).status.code, std::string("fat_bad_boot_sector"));
   // Reserved sectors that fill the volume.
@@ -302,22 +303,26 @@ TEST(TheClusterCountDecidesTheFatType) {
 }
 
 TEST(EveryEndOfChainMarkEndsAChain) {
-  for (std::uint32_t mark : {0xFFF8u, 0xFFFAu, 0xFFFFu}) {
+  for (std::uint32_t mark : {0xFFF8u, 0xFFFAu, 0xFFFEu, 0xFFFFu}) {
+    // A directory is read to the end of its chain, so its last link is the mark.
     Opened o = Open(Sample());
-    std::uint32_t cluster = o.built.first_cluster.at(kBigPath);
-    for (;;) {  // the last cluster of the chain
-      const std::uint32_t next = Get16(o.built.bytes, o.built.layout.FatEntryOffset(cluster));
-      if (next >= 0xFFF8) break;
-      cluster = next;
-    }
-    Put16(o.built.bytes, o.built.layout.FatEntryOffset(cluster), mark);
+    Put16(o.built.bytes, o.built.layout.FatEntryOffset(o.built.first_cluster.at("_data")), mark);
     MemorySource source(o.built.bytes);
     std::unique_ptr<Fat16Volume> volume;
     CHECK(Fat16Volume::Open(source, &volume).ok);
     Status s;
     const auto all = WalkAll(*volume, &s);
-    CHECK(Read(*volume, all.at(kBigPath), &s) == Pattern(20000, 4));
     CHECK(s.ok);
+    CHECK(all.count("_data/5932408047") == 1);
+    // A file whose chain ends too early is short, not out of range.
+    Opened p = Open(Sample());
+    Put16(p.built.bytes, p.built.layout.FatEntryOffset(p.built.first_cluster.at(kBigPath)), mark);
+    MemorySource source2(p.built.bytes);
+    std::unique_ptr<Fat16Volume> volume2;
+    CHECK(Fat16Volume::Open(source2, &volume2).ok);
+    const auto all2 = WalkAll(*volume2, &s);
+    Read(*volume2, all2.at(kBigPath), &s);
+    CHECK_EQ(s.code, std::string("fat_chain_too_short"));
   }
 }
 
@@ -351,6 +356,39 @@ TEST(ALongNameWhoseEntriesAreOutOfOrderFallsBackToTheShortName) {
   CHECK(s.ok);
   CHECK_EQ(all.size(), 1u);
   CHECK(all.count("A_RATH~1.TXT") == 1);
+}
+
+TEST(ALongNameThatLacksItsFirstEntryFallsBackToTheShortName) {
+  FatSpec spec;
+  spec.root.push_back(File("a_rather_long_name.txt", Pattern(4, 1)));  // entries 0x42, 0x01, then the 8.3 entry
+  Opened o = Open(spec, [](BuiltImage& b) { b.bytes[b.entry_offset.at("a_rather_long_name.txt") - 32] = 0xE5; });  // 0x01 is deleted
+  Status s;
+  const auto all = WalkAll(*o.volume, &s);
+  CHECK(s.ok);
+  CHECK_EQ(all.size(), 1u);
+  CHECK(all.count("A_RATH~1.TXT") == 1);  // 0x42 alone is not a name: the sequence must run down to 1
+}
+
+TEST(ALongNameWithAnEntryOutOfSequenceInTheMiddleFallsBackToTheShortName) {
+  FatSpec spec;
+  spec.root.push_back(File("this_is_a_name_longer_than_26.txt", Pattern(4, 1)));  // 33 characters: entries 0x43, 0x02, 0x01
+  Opened o = Open(spec, [](BuiltImage& b) { b.bytes[b.entry_offset.at("this_is_a_name_longer_than_26.txt") - 64] = 5; });
+  Status s;
+  const auto all = WalkAll(*o.volume, &s);
+  CHECK(s.ok);
+  CHECK_EQ(all.size(), 1u);
+  CHECK(all.count("THIS_I~1.TXT") == 1);
+}
+
+TEST(ALongNameWhoseFirstEntryCountsMoreThanTwentyPartsIsNotAName) {
+  FatSpec spec;
+  spec.root.push_back(File("ab", Pattern(4, 1)));
+  Opened o = Open(spec, [](BuiltImage& b) { b.bytes[b.entry_offset.at("ab") - 32] = 0x40 | 0x1F; });  // "the last of 31 entries"
+  Status s;
+  const auto all = WalkAll(*o.volume, &s);
+  CHECK(s.ok);
+  CHECK_EQ(all.size(), 1u);
+  CHECK(all.count("AB~1") == 1);
 }
 
 TEST(NamesOfEveryUtf8LengthAreRead) {

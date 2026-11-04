@@ -93,6 +93,17 @@ TEST(EveryByteOfTheSectorNumberIsInTheIv) {
   CHECK(got != plain);  // another sector number is another IV
 }
 
+TEST(AReadThatWouldRunIntoTheFooterIsRefusedByTheImage) {
+  // The encrypted source is the whole OBB, footer included; the image ends before it.
+  const std::vector<std::uint8_t> plain = Pattern(2 * 512, 1);
+  const std::vector<std::uint8_t> ref_key = ReferenceKey("k", kSalt);
+  MemorySource obb(BuildObb(plain));
+  DecryptingSource image(obb, KeyOf(ref_key), plain.size());
+  std::vector<std::uint8_t> got(512);
+  CHECK(image.ReadAt(512, got.data(), got.size()).ok);
+  CHECK_EQ(image.ReadAt(513, got.data(), got.size()).code, std::string("source_short_read"));
+}
+
 namespace {
 // A source that claims to be as large as asked and reads as zeros.
 class ZeroSource final : public ByteSource {

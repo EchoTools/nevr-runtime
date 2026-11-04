@@ -1,6 +1,7 @@
 #include "quest/obb/fat16.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstring>
 
@@ -15,7 +16,6 @@ constexpr int kMaxDepth = 16;
 // Microsoft's FAT specification: fewer than 4085 data clusters is FAT12, fewer than 65525 is FAT16.
 constexpr std::uint32_t kFat12Limit = 4085;
 constexpr std::uint32_t kFat16Limit = 65525;
-constexpr std::uint32_t kFirstReservedMark = 0xFFF0;
 constexpr std::uint32_t kBadClusterMark = 0xFFF7;
 constexpr std::uint32_t kEndOfChain = 0xFFF8;
 constexpr std::uint8_t kAttrDirectory = 0x10;
@@ -76,7 +76,7 @@ struct LongName {
   std::uint8_t expected_ordinal = 0;  // the ordinal the next long-name entry must carry, plus one
   std::uint8_t checksum = 0;
   std::size_t parts = 0;
-  std::u16string chunks[kMaxLongParts + 1];
+  std::array<std::u16string, kMaxLongParts + 1> chunks;  // indexed by ordinal; operator[] is range-checked (_GLIBCXX_ASSERTIONS)
   void Reset() { active = false; }
 };
 
@@ -142,9 +142,7 @@ std::uint64_t Fat16Volume::ClusterOffset(std::uint32_t cluster) const {
 }
 
 Status Fat16Volume::NextCluster(std::uint32_t cluster, std::uint32_t* next, bool* end) const {
-  if (cluster < 2 || cluster > cluster_count_ + 1) {
-    return Status::Fail("fat_chain_out_of_range", "cluster " + std::to_string(cluster) + " is outside 2.." + std::to_string(cluster_count_ + 1));
-  }
+  // `cluster` is a data cluster: ChainRuns checks each one before it asks for the next.
   const std::uint32_t v = fat_[cluster];
   *end = false;
   if (v == 0) return Status::Fail("fat_free_cluster_in_chain", "cluster " + std::to_string(cluster) + " links to a free cluster");
@@ -153,7 +151,8 @@ Status Fat16Volume::NextCluster(std::uint32_t cluster, std::uint32_t* next, bool
     *end = true;
     return Status::Ok();
   }
-  if (v >= kFirstReservedMark || v < 2 || v > cluster_count_ + 1) {
+  // 1, and everything above the last cluster (which holds the reserved marks 0xFFF0 to 0xFFF6), is not a link.
+  if (v < 2 || v > cluster_count_ + 1) {
     return Status::Fail("fat_chain_out_of_range", "cluster " + std::to_string(cluster) + " links to " + std::to_string(v) + ", which is not a data cluster");
   }
   *next = v;

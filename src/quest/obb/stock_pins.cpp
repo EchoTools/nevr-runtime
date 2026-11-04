@@ -44,8 +44,9 @@ std::string_view Word(std::string_view* rest) {
   return word;
 }
 
+// An empty component is what a leading, a doubled or a trailing '/' leaves, so the loop below refuses all three.
 bool SafeRelativePath(std::string_view path) {
-  if (path.empty() || path.front() == '/' || path.back() == '/') return false;
+  if (path.empty()) return false;
   if (path.find('\\') != std::string_view::npos || path.find('\0') != std::string_view::npos) return false;
   std::size_t start = 0;
   while (start <= path.size()) {

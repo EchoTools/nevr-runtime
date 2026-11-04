@@ -86,13 +86,13 @@ bool CacheIsValid(const fs::path& dir, const StockPins& pins, bool rehash, std::
   for (const PinnedFile& p : pins.files) pinned.insert(p.path);
   std::error_code ec;
   for (fs::recursive_directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-    const fs::file_status st = it->symlink_status(ec);
+    const fs::file_status st = it->symlink_status(ec);  // a link at a pinned name is refused below, where each pinned file is read
     if (ec) break;
     if (fs::is_directory(st)) continue;
     const std::string rel = fs::relative(it->path(), dir, ec).generic_string();
     if (ec) break;
     if (rel == kStockDataManifestName) continue;
-    if (!fs::is_regular_file(st) || !pinned.count(rel)) {
+    if (!pinned.count(rel)) {
       *why = "the cache holds '" + rel + "', which is not a pinned file";
       return false;
     }

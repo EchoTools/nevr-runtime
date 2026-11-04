@@ -53,11 +53,18 @@ TEST(ShortFilesAreRefused) {
 }
 
 TEST(FooterSizeBeyondTheFileIsRefused) {
-  std::vector<std::uint8_t> obb = BuildObb(SmallImage(80));  // 40 KiB, so 32769 still fits in the file
-  Put32(obb, obb.size() - 8, static_cast<std::uint32_t>(obb.size()));  // as big as the whole file
+  std::vector<std::uint8_t> small = BuildObb(SmallImage());  // about 2 KiB: the size field beyond the file is the only fault
+  Put32(small, small.size() - 8, static_cast<std::uint32_t>(small.size()));
   ObbFooter footer;
-  CHECK_EQ(Parse(obb, &footer).code, std::string("obb_bad_footer_size"));
-  Put32(obb, obb.size() - 8, 32769);  // above what Android reads
+  CHECK_EQ(Parse(small, &footer).code, std::string("obb_bad_footer_size"));
+  Put32(small, small.size() - 8, static_cast<std::uint32_t>(small.size() - 7));
+  CHECK_EQ(Parse(small, &footer).code, std::string("obb_bad_footer_size"));
+}
+
+TEST(FooterSizeAboveWhatAndroidReadsIsRefused) {
+  std::vector<std::uint8_t> obb = BuildObb(SmallImage(80));  // 40 KiB, so 32769 still fits in the file
+  Put32(obb, obb.size() - 8, 32769);
+  ObbFooter footer;
   CHECK_EQ(Parse(obb, &footer).code, std::string("obb_bad_footer_size"));
 }
 
