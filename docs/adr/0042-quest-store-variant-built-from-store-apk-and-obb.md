@@ -53,7 +53,7 @@ in the build knew where the data came from, so nothing could say that two machin
    | Install | `just quest-store-install` | the repack's output | the headset |
 
 3. **The extractor is a host tool.** `nevr_quest_obb_extract` is a C++17 target of the host-tools project
-   (`src/quest/host`, preset `quest-patcher`). Its cryptography is nettle, installed from `tools/quest-host-deps/vcpkg.json`
+   (`src/quest/host`, preset `quest-obb-extract`). Its cryptography is nettle, installed from `tools/quest-host-deps/vcpkg.json`
    (never a system library). It:
    - reads the footer and refuses a file that is too short, has another tag, has a footer size that does not fit, has a
      footer version other than 1, is unsalted, or whose image is not a whole number of 512-byte sectors;
