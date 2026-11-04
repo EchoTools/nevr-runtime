@@ -30,14 +30,19 @@ struct TelemetrySnapshot {
 
   // --- Direct memory reads ---
 
+  // Indexed by game slot (the entrant word's low 5 bits), not by the net game's entrant array order.
+  // flags and teamIndex come from the net-game entrant; accountId, displayName and ping from the lobby
+  // entrant at the same slot (telemetry_player_read.h). present: a player (team 0 to 2) whose slot is below
+  // 16 and has an entry in the lobby's entrant table.
   struct PlayerInfo {
+    bool present;
     uint16_t flags;
     uint64_t accountId;
     char displayName[36];
     uint16_t ping;
-    uint16_t teamIndex;
+    uint16_t teamIndex;  // 0 blue, 1 orange, 2 spectator
   } playerInfo[16];
-  uint16_t playerCount;
+  uint16_t playerCount;  // players read (present slots)
 
   // Disc state (direct read from GameStateData)
   float discPos[3], discVel[3], discOrient[4];
@@ -53,11 +58,11 @@ struct TelemetrySnapshot {
     uint32_t scorerPacked;
   } lastScore;
 
-  // Per-player stats (direct read)
+  // Per-player stats (direct read), indexed by game slot like playerInfo
   struct PlayerStats {
     uint32_t points, goals, assists, stuns, blocks, saves;
     uint32_t interceptions, steals, catches, passes, shotsTaken;
-    uint32_t possessionTime;
+    float possessionTime;  // seconds
   } stats[16];
 
   void Clear() { std::memset(this, 0, sizeof(*this)); }
@@ -79,36 +84,56 @@ constexpr uint64_t ENTITY_HANDLE_RESOLVER_OFFSET = 0x08;  // *(CR15NetGame + 8) 
 constexpr uint64_t WORLD_OBJECT_OFFSET = 0x2B08;          // *(CR15NetGame + 0x2B08) → world/scene
 constexpr uint64_t ENTITY_MANAGER_OFFSET = 0x08;          // *(world + 8) → entity manager
 
-// Player array: CR15NetGame + 0x178, stride 0x250
+// Net-game entrants: CR15NetGame + 0x178, stride 0x250, count u16 at + 0xE2 (echovr.exe 0x1401563c7
+// `movzx ecx, word ptr [rax + 0xe2]`, 0x14015642a `imul r12, rax, 0x250`, 0x140156435
+// `movzx eax, word ptr [rcx + r12 + 0x178]`). The game reads a slot's stats only for a slot below 16
+// (0x14015652b `and ax, 0x1f`, 0x140156548 `cmp bx, 0x10; jae`), so the snapshot holds 16 slots. Its loop
+// runs to the count (0x140156403 `cmp bx, cx`); PLAYER_ARRAY_CAPACITY is this reader's own cap on the count.
 constexpr uint64_t PLAYER_ARRAY_OFFSET = 0x178;
 constexpr uint64_t PLAYER_STRIDE = 0x250;
-constexpr uint64_t PLAYER_FLAGS_OFFSET = 0x00;
-constexpr uint64_t PLAYER_ACCOUNT_ID_OFFSET = 0x08;
-constexpr uint64_t PLAYER_DISPLAY_NAME_OFFSET = 0x3C;
-constexpr uint64_t PLAYER_PING_OFFSET = 0x8A;
-constexpr uint64_t PLAYER_TEAM_INDEX_OFFSET = 0x8E;
+constexpr uint64_t PLAYER_FLAGS_OFFSET = 0x00;  // the entrant word
 constexpr uint64_t PLAYER_COUNT_OFFSET = 0xE2;
+constexpr uint16_t PLAYER_ARRAY_CAPACITY = 16;
+// The entrant word: game slot in bits 0-4 (0x14015649b `and edx, 0x1f`), team in bits 10-12
+// (0x140156441 `shr ax, 0xa`, 0x140156445 `and ax, 7`). /session skips a team above 2 (0x140156452
+// `cmp r14w, 2; ja`): 0 blue, 1 orange, 2 spectator; the server's own entrant is team 4.
+constexpr uint16_t ENTRANT_SLOT_MASK = 0x1F;
+constexpr uint16_t ENTRANT_TEAM_SHIFT = 10;
+constexpr uint16_t ENTRANT_TEAM_MASK = 0x7;
+constexpr uint16_t ENTRANT_TEAM_LAST_PLAYER = 2;
 
-// Player stats: CR15NetGame + 0x72AC + teamRole * 0x4D08
-// teamRole = flags & 0x1F (5 bits → 0–31), but the actual table capacity
-// is smaller (per-slot data for up to 16 players).  Clamp to prevent OOB
-// reads when a corrupted/edge-case flags byte produces a high index.
-constexpr uint64_t STATS_BASE_OFFSET = 0x72AC;
-constexpr uint64_t STATS_STRIDE = 0x4D08;
-constexpr uint16_t STATS_TABLE_MAX_ENTRIES = 16;
-// Each stat entry: { uint32_t type, uint32_t count, double value } = 16 bytes
-constexpr uint64_t STAT_POINTS = 0x000;
-constexpr uint64_t STAT_GOALS = 0x010;
-constexpr uint64_t STAT_ASSISTS = 0x020;
-constexpr uint64_t STAT_STUNS = 0x030;
-constexpr uint64_t STAT_BLOCKS = 0x040;
-constexpr uint64_t STAT_SAVES = 0x050;
-constexpr uint64_t STAT_INTERCEPTIONS = 0x060;
-constexpr uint64_t STAT_STEALS = 0x070;
-constexpr uint64_t STAT_CATCHES = 0x080;
-constexpr uint64_t STAT_PASSES = 0x090;
-constexpr uint64_t STAT_SHOTS_TAKEN = 0x0A0;
-constexpr uint64_t STAT_POSSESSION_TIME = 0x300;
+// The lobby: the CNSLobby (EchoVR::Lobby) at *(CR15NetGame + 0x40) + 0x18 (echovr.exe 0x1401b3a94
+// `mov rcx, [rax + 0x40]`, 0x1401b3aa8 `add rcx, 0x18`; CR15NetGame hands the same object to LoadServerSupport,
+// 0x14015995b, which passes it to IServerLib::Initialize, 0x14060bcfa). Its entrant table is
+// EchoVR::Lobby::entrantData (0xD8 per slot, indexed by game slot): items at +0x360, length at +0x368
+// (0x1406093c9 `cmp [rcx + 0x368], r8`, 0x1406093d2 `mov rax, [rcx + 0x360]`). The game reads the user id
+// (0x1406093c0), the name (0x140608310 with flag 1: +0x60, sfwDisplayName) and the ping (0x1406084e7
+// `movzx eax, word ptr [rax + rdx + 0x8a]`) there.
+constexpr uint64_t LOBBY_POINTER_OFFSET = 0x40;
+constexpr uint64_t LOBBY_SUBOBJECT_OFFSET = 0x18;
+
+// Player stats: one block per game slot at CR15NetGame + slot * 0x4D08 (0x1401565ab `imul rcx, rax,
+// 0x4d08`); each stat is an entry { u32 type, value, u32 count } at the offset below (the `lea rax,
+// [rdx + off]` blocks at 0x1401565b2-0x140156785). The value of an entry whose type is 5 is value / count,
+// 0 when count is 0 (0x140156ad0 `cmp dword ptr [rax], 5`, 0x140156af2 `div ecx`, 0x140156af6); possession
+// time's value is a float (0x140156a09 `movss`, 0x140156a27 `divss`).
+constexpr uint64_t SLOT_STATS_STRIDE = 0x4D08;
+constexpr uint64_t STAT_ENTRY_TYPE = 0x0;
+constexpr uint64_t STAT_ENTRY_VALUE = 0x4;
+constexpr uint64_t STAT_ENTRY_COUNT = 0x8;
+constexpr uint32_t STAT_TYPE_AVERAGE = 5;
+constexpr uint64_t SLOT_STAT_STUNS = 0x7184;
+constexpr uint64_t SLOT_STAT_BLOCKS = 0x71B4;
+constexpr uint64_t SLOT_STAT_POINTS = 0x72A4;
+constexpr uint64_t SLOT_STAT_GOALS = 0x72D4;
+constexpr uint64_t SLOT_STAT_STEALS = 0x7394;
+constexpr uint64_t SLOT_STAT_ASSISTS = 0x73C4;
+constexpr uint64_t SLOT_STAT_SAVES = 0x73F4;
+constexpr uint64_t SLOT_STAT_SHOTS_TAKEN = 0x7454;
+constexpr uint64_t SLOT_STAT_PASSES = 0x74B4;
+constexpr uint64_t SLOT_STAT_CATCHES = 0x74E4;
+constexpr uint64_t SLOT_STAT_INTERCEPTIONS = 0x7544;
+constexpr uint64_t SLOT_STAT_POSSESSION_TIME = 0x75A4;
 
 // Disc: GameStateData offsets
 constexpr uint64_t DISC_ORIENT_OFFSET = 0xE4;   // float[4] quaternion

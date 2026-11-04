@@ -121,6 +121,10 @@ class TelemetryStreamer {
   uint32_t m_rateHz{30};
   std::chrono::steady_clock::time_point m_lastSnapshotTime;
 
+  // Game thread: players the reader left out (a slot of 16 or more, no lobby entry, a slot held twice) are
+  // warned about once per session
+  bool m_leftOutWarned{false};
+
   // Diagnostics (game thread, 1Hz)
   std::chrono::steady_clock::time_point m_lastDiagTime;
   TelemetrySnapshot m_diagSnapshot;

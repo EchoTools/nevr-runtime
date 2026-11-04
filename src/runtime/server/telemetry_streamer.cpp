@@ -18,6 +18,7 @@
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/server/telemetry_game_status.h"
 #include "runtime/server/telemetry_game_type.h"
+#include "runtime/server/telemetry_player_read.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
@@ -115,6 +116,7 @@ void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, con
   m_sessionStartTime = std::chrono::steady_clock::now();
   m_lastSnapshotTime = m_sessionStartTime;
   m_prevSnapshot.Clear();
+  m_leftOutWarned = false;
   m_lastReadSnapshotSequence = 0;
   m_droppedFrames = 0;
   m_reconnectCount = 0;
@@ -289,11 +291,13 @@ void TelemetryStreamer::RunDiagnostics() {
   Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Scores: blue=%d, orange=%d", props.bluePoints,
       props.orangePoints);
 
-  // --- Player count ---
-  uint16_t playerCount = *reinterpret_cast<uint16_t*>(ngBase + nevr_game_offsets::PLAYER_COUNT_OFFSET);
-  if (playerCount > 16) playerCount = 16;
-  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] PlayerCount=%u (ng+0x%X)",
-      playerCount, (unsigned)nevr_game_offsets::PLAYER_COUNT_OFFSET);
+  // --- Players, by game slot (the same reader as SnapshotGameState) ---
+  m_diagSnapshot.Clear();
+  const nevr_telemetry_player::PlayerReadResult read =
+      nevr_telemetry_player::ReadPlayers(reinterpret_cast<const uint8_t*>(ngBase), &m_diagSnapshot);
+  Log(EchoVR::LogLevel::Debug,
+      "[TELEMETRY.DIAG] players=%u not_players=%u slot_out_of_range=%u no_identity=%u duplicate_slot=%u",
+      m_diagSnapshot.playerCount, read.notPlayers, read.slotOutOfRange, read.noIdentity, read.duplicateSlot);
 
   // --- Disc state ---
   if (gsd) {
@@ -318,18 +322,16 @@ void TelemetryStreamer::RunDiagnostics() {
   }
 
   // --- Per-player info + entity resolution ---
-  for (uint16_t i = 0; i < playerCount && i < 4; i++) {  // Log first 4 players max
-    CHAR* playerBase = ngBase + nevr_game_offsets::PLAYER_ARRAY_OFFSET + i * nevr_game_offsets::PLAYER_STRIDE;
-    uint16_t flags = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_FLAGS_OFFSET);
-    uint64_t accountId = *reinterpret_cast<uint64_t*>(playerBase + nevr_game_offsets::PLAYER_ACCOUNT_ID_OFFSET);
-    char* name = playerBase + nevr_game_offsets::PLAYER_DISPLAY_NAME_OFFSET;
-    uint16_t ping = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_PING_OFFSET);
-    uint16_t team = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_TEAM_INDEX_OFFSET);
+  uint16_t logged = 0;
+  for (uint8_t slot = 0; slot < nevr_telemetry_player::kMaxSlots && logged < 4; slot++) {  // Log first 4 players max
+    const auto& info = m_diagSnapshot.playerInfo[slot];
+    if (!info.present) continue;
+    logged++;
+    const uint64_t accountId = info.accountId;
 
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Player slot=%u: name=%.20s, acct=%llu, flags=0x%04X, team=%u, ping=%u",
+        slot, info.displayName, static_cast<unsigned long long>(accountId), info.flags, info.teamIndex, info.ping);
     if (accountId == 0) continue;
-
-    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Player[%u]: name=%.20s, acct=%llu, flags=0x%04X, team=%u, ping=%u",
-        i, name, (unsigned long long)accountId, flags, team, ping);
 
     // Try entity resolution
     if (handleResolver && entityMgr && m_resolveEntityHandle && m_entityLookup) {
@@ -395,24 +397,13 @@ void TelemetryStreamer::RunDiagnostics() {
     }
 
     // Stats
-    uint16_t teamRole = flags & 0x1F;
-    if (teamRole >= nevr_game_offsets::STATS_TABLE_MAX_ENTRIES) {
-      Log(EchoVR::LogLevel::Warning,
-          "[TELEMETRY.DIAG]   Stats: teamRole=%u out of bounds (max=%u), clamping to 0",
-          teamRole, nevr_game_offsets::STATS_TABLE_MAX_ENTRIES);
-      teamRole = 0;
-    }
-    CHAR* statsBase = ngBase + nevr_game_offsets::STATS_BASE_OFFSET + teamRole * nevr_game_offsets::STATS_STRIDE;
-    uint32_t points = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_POINTS + 4);
-    uint32_t goals = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_GOALS + 4);
-    uint32_t assists = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_ASSISTS + 4);
-    uint32_t stuns = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_STUNS + 4);
+    const auto& stats = m_diagSnapshot.stats[slot];
     Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Stats: pts=%u, goals=%u, ast=%u, stuns=%u",
-        points, goals, assists, stuns);
+        stats.points, stats.goals, stats.assists, stats.stuns);
   }
 
-  if (playerCount > 4) {
-    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] ... and %u more players", playerCount - 4);
+  if (m_diagSnapshot.playerCount > 4) {
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] ... and %u more players", m_diagSnapshot.playerCount - 4);
   }
 
   Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] ==============================");
@@ -499,48 +490,18 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
 
   // --- Direct memory reads ---
 
-  // Player count
-  snap->playerCount = *reinterpret_cast<uint16_t*>(netGameBase + nevr_game_offsets::PLAYER_COUNT_OFFSET);
-  if (snap->playerCount > 16) snap->playerCount = 16;
-
-  // Player info array
-  for (uint16_t i = 0; i < snap->playerCount; i++) {
-    CHAR* playerBase = netGameBase + nevr_game_offsets::PLAYER_ARRAY_OFFSET + i * nevr_game_offsets::PLAYER_STRIDE;
-    auto& info = snap->playerInfo[i];
-
-    info.flags = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_FLAGS_OFFSET);
-    info.accountId = *reinterpret_cast<uint64_t*>(playerBase + nevr_game_offsets::PLAYER_ACCOUNT_ID_OFFSET);
-    std::memcpy(info.displayName, playerBase + nevr_game_offsets::PLAYER_DISPLAY_NAME_OFFSET, 36);
-    info.displayName[35] = '\0';
-    info.ping = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_PING_OFFSET);
-    info.teamIndex = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_TEAM_INDEX_OFFSET);
-  }
-
-  // Player stats
-  for (uint16_t i = 0; i < snap->playerCount; i++) {
-    uint16_t teamRole = snap->playerInfo[i].flags & 0x1F;
-    if (teamRole >= nevr_game_offsets::STATS_TABLE_MAX_ENTRIES) {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.TELEMETRY] Stats: teamRole=%u out of bounds (max=%u) for player %u, clamping to 0",
-          teamRole, nevr_game_offsets::STATS_TABLE_MAX_ENTRIES, i);
-      teamRole = 0;
-    }
-    CHAR* statsBase = netGameBase + nevr_game_offsets::STATS_BASE_OFFSET + teamRole * nevr_game_offsets::STATS_STRIDE;
-    auto& s = snap->stats[i];
-
-    // Each stat entry: [4B type][4B count][8B value] — we read the count field at offset +4
-    s.points = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_POINTS + 4);
-    s.goals = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_GOALS + 4);
-    s.assists = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_ASSISTS + 4);
-    s.stuns = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_STUNS + 4);
-    s.blocks = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_BLOCKS + 4);
-    s.saves = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_SAVES + 4);
-    s.interceptions = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_INTERCEPTIONS + 4);
-    s.steals = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_STEALS + 4);
-    s.catches = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_CATCHES + 4);
-    s.passes = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_PASSES + 4);
-    s.shotsTaken = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_SHOTS_TAKEN + 4);
-    s.possessionTime = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_POSSESSION_TIME + 4);
+  // Players by game slot: identity from the lobby, stats from the slot's block (telemetry_player_read.h)
+  const nevr_telemetry_player::PlayerReadResult read =
+      nevr_telemetry_player::ReadPlayers(reinterpret_cast<const uint8_t*>(netGameBase), snap);
+  const unsigned leftOut = read.slotOutOfRange + read.noIdentity + read.duplicateSlot;
+  if (leftOut != 0 && !m_leftOutWarned) {
+    m_leftOutWarned = true;
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.TELEMETRY] players left out of the stream session_id=%s slot_out_of_range=%u no_identity=%u "
+        "duplicate_slot=%u: a game slot of %u or more, a slot with no entry in the lobby's entrant table, or a slot "
+        "an earlier entrant holds; their frames and events are not sent (logged once per session)",
+        m_sessionId.c_str(), read.slotOutOfRange, read.noIdentity, read.duplicateSlot,
+        nevr_telemetry_player::kMaxSlots);
   }
 
   // Disc state
@@ -561,8 +522,8 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
   // For each player, resolve their entity and read transform component data.
   // The transform component (FUN_14042d690) returns a pointer to transform data
   // containing position and orientation. We read bone 0 (root) for body position.
-  for (uint16_t i = 0; i < snap->playerCount; i++) {
-    if (snap->playerInfo[i].accountId == 0) continue;
+  for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {
+    if (!snap->playerInfo[i].present || snap->playerInfo[i].accountId == 0) continue;
 
     void* entity = ResolvePlayerEntity(snap->playerInfo[i].accountId);
     if (!entity) continue;
@@ -635,8 +596,8 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
 void TelemetryStreamer::SnapshotPlayerBones(TelemetrySnapshot* snap) {
   if (!m_getBoneData || !m_entityManager) return;
 
-  for (uint16_t i = 0; i < snap->playerCount; i++) {
-    if (snap->playerInfo[i].accountId == 0) continue;
+  for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {
+    if (!snap->playerInfo[i].present || snap->playerInfo[i].accountId == 0) continue;
 
     void* entity = ResolvePlayerEntity(snap->playerInfo[i].accountId);
     if (!entity) continue;
@@ -794,9 +755,9 @@ void TelemetryStreamer::BuildAndSendFrame(const TelemetrySnapshot& snap) {
   disc->set_bounce_count(static_cast<uint32_t>(snap.discBounceCount));
 
   // Players
-  for (uint16_t i = 0; i < snap.playerCount; i++) {
+  for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {  // i is the game slot
     const auto& pi = snap.playerInfo[i];
-    if (pi.accountId == 0) continue;
+    if (!pi.present) continue;
 
     auto* ps = arena->add_players();
     ps->set_slot(i);
@@ -963,8 +924,8 @@ void TelemetryStreamer::DetectEvents(const TelemetrySnapshot& curr, const Teleme
 
   // Detect player join/leave and stat changes
   for (uint16_t i = 0; i < 16; i++) {
-    bool currPresent = (i < curr.playerCount && curr.playerInfo[i].accountId != 0);
-    bool prevPresent = (i < prev.playerCount && prev.playerInfo[i].accountId != 0);
+    bool currPresent = curr.playerInfo[i].present;
+    bool prevPresent = prev.playerInfo[i].present;
 
     if (currPresent && !prevPresent) {
       auto* ev = frame->add_events();
@@ -1080,9 +1041,9 @@ bool TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
   skel->set_orientation_stride(16);  // 4 x float32
 
   // Initial roster from snapshot
-  for (uint16_t i = 0; i < snap.playerCount && i < 16; i++) {
+  for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {  // i is the game slot
     const auto& pi = snap.playerInfo[i];
-    if (pi.accountId == 0) continue;
+    if (!pi.present) continue;
     auto* entry = ah->add_initial_roster();
     entry->set_slot(i);
     entry->set_account_number(pi.accountId);
