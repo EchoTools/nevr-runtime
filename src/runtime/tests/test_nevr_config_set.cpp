@@ -1,4 +1,4 @@
-// NevrConfig::Set — the first config.yaml writer (#1986). Every test goes through the interface (bind a file, Set, read the
+// NevrConfig::Set — the first config.yaml writer (#2060). Every test goes through the interface (bind a file, Set, read the
 // file's bytes back, read the value back through the getter); none calls the splice. Format preservation is the point: a
 // commented file keeps every byte but the key's value.
 //
@@ -378,7 +378,8 @@ TEST(NevrConfigSetWord, FlowStyleAndBrokenFilesAreRefusedAndNothingIsWritten) {
 
 // Only a plain word is written: text that YAML would read as another type, or that needs quoting, is refused before the file is read.
 TEST(NevrConfigSetWord, ATextThatIsNotAPlainWordIsRefused) {
-  for (const char* word : {"", "high: 1", "a b", "\"high\"", "#high", "true", "No", "NULL", "-high", "high\n", "x\ty"}) {
+  for (const char* word : {"", "high: 1", "a b", "\"high\"", "#high", "true", "No", "NULL", "-high", "high\n", "x\ty",
+                           "123", "1.5", "1e3", "0x1f", "1_000", ".5", ".inf"}) {
     Dir dir;
     Write(dir.File(), "graphics:\n  texture_quality: low\n");
     const nevr::ConfigSetResult r = SetWord(dir.File(), word);

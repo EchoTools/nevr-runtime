@@ -1371,7 +1371,7 @@ test-quest-shared: _vcpkg-quest-host
         src/quest/tests/quest_config_test.cpp "$yaml_lib" \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
-    # NevrConfig::Set (#1986), the first config.yaml writer: the same nevr_config.cpp the PC compiles, tested through its interface.
+    # NevrConfig::Set (#2060), the first config.yaml writer: the same nevr_config.cpp the PC compiles, tested through its interface.
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include "${yaml_inc[@]}" \
         src/core/nevr_config.cpp src/quest/tests/nevr_config_set_test.cpp "$yaml_lib" \
         -o "$out/nevr_config_set_test"

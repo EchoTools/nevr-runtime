@@ -1,4 +1,4 @@
-// Host test for NevrConfig::Set on the Quest build (#1986): the first config.yaml writer, the same source the PC compiles
+// Host test for NevrConfig::Set on the Quest build (#2060): the first config.yaml writer, the same source the PC compiles
 // (src/core/nevr_config.cpp). Every case goes through the interface (bind a file, Set, read the bytes back, read the getter);
 // the PC GTest (src/runtime/tests/test_nevr_config_set.cpp) runs the wider set.
 //
@@ -183,7 +183,8 @@ void AWordThatIsAlreadyThereIsNotRewrittenAndQuotesStay() {
 }
 
 void ATextThatIsNotAPlainWordIsRefusedAndNothingIsWritten() {
-  const char* const kinds[] = {"", "two words", "a: b", "# c", "true", "No", "null", "-lead", "line\nbreak", "quote\"d"};
+  const char* const kinds[] = {"", "two words", "a: b", "# c", "true", "No", "null", "-lead", "line\nbreak", "quote\"d",
+                              "123", "1.5", "1e3", "0x1f", "1_000", ".5", ".inf"};
   for (const char* kind : kinds) {
     Dir dir;
     const std::string before = "graphics:\n  texture_quality: low\n";
