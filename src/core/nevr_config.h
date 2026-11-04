@@ -166,7 +166,8 @@ class NevrConfig {
   /// and toml_edit (https://docs.rs/toml_edit/).
   ConfigSetResult Set(const std::string& path, bool value) noexcept;
 
-  /// The same edit for a plain word (letters, digits, `_`, `.`, `-`; at most 64; not a YAML boolean or null word), such as the
+  /// The same edit for a plain word (starts with a letter or `_`, then letters, digits, `_`, `.`, `-`; at most 64; not a YAML boolean or
+  /// null word, and never numeric-looking, which is why a digit cannot start one), such as the
   /// level name at "graphics.texture_quality". Any other text is refused with "value_not_a_plain_word" and nothing is written.
   /// A string literal must name this overload: `Set(path, "high")` would pick the boolean one, so that spelling is deleted.
   ConfigSetResult Set(const std::string& path, const std::string& value) noexcept;

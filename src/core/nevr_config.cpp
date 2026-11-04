@@ -506,6 +506,10 @@ using ScalarEdit = NevrConfig::ScalarEdit;
 // YAML 1.1 reads as a boolean or a null, so a getter reads back the string that was written.
 bool IsPlainWord(const std::string& word) {
   if (word.empty() || word.size() > 64) return false;
+  // Starts with a letter or `_`: a word that starts with a digit reads as a number in YAML ("123", "1.5", "1e3", "0x1f", "1_000"),
+  // and Set must write what GetString reads back.
+  const char first = word[0];
+  if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_')) return false;
   for (std::size_t i = 0; i < word.size(); ++i) {
     const char c = word[i];
     const bool alnum = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
