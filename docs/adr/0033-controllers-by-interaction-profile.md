@@ -16,7 +16,7 @@ OpenXR ([EchoFrame README](https://github.com/heisthecat31/EchoFrame), "Steam Fr
 
 #1986 reports a Quest 2 whose hands are flipped with Touch Pro controllers (Touch Plus is not tested there).
 `docs/design/2026-11-02-quest-hand-flip-toggle.md` places its fix in the VrApi layer, keyed on the interaction profile,
-with an interim roll in the sentinel's tracking hook behind a player's menu toggle, marked `KNOWN-WRONG #1986`.
+with an interim roll in the sentinel's tracking hook behind a player's menu toggle, marked `KNOWN-WRONG #2043`.
 
 OpenXR's own model: an application suggests bindings once per interaction profile it supports
 (`xrSuggestInteractionProfileBindings`), the runtime chooses among the suggested profiles for the device present, and

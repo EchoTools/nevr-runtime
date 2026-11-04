@@ -1,1 +1,0 @@
-Texture quality on Quest now starts at the level you chose, or Low if you never chose, instead of staying stuck at High.

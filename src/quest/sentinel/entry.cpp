@@ -164,8 +164,9 @@ bool InstallPermissionWaitHook() noexcept {
     // The main-menu QUIT finishes the activity (#1276), installed on every launch from this step. Its quit_install line
     // says whether it went in; a refused install leaves the game's QUIT as it is.
     nevr_quest::quit::Install();
-    // The controller type and raw pose log (#1986): two read-only hooks and a poller thread; no pose is changed. Its
-    // hand_pose_log_install line says whether it went in; a refused install leaves the game's calls as they are.
+    // The controller type and raw pose log (#1986): two hooks and a poller thread; a pose is changed only while Controller Hand Flip
+    // is On (hand_flip.h, off by default; KNOWN-WRONG #2043 the toggle is the interim). Its hand_pose_log_install line says whether
+    // it went in; a refused install leaves the game's calls as they are.
     nevr_quest::hand_pose_log::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
