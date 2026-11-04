@@ -594,7 +594,16 @@ build-quest-combat-libs libsrc=env("NEVR_COMBAT_LIBSRC", "") store_apk=env("NEVR
         echo "build-quest-combat-libs: the build failed; its output is in build/quest-combat-libs/build.log" >&2
         exit 1
     fi
-    echo "build-quest-combat-libs: $(wc -l < "$out/SHA256SUMS") libraries in build/quest-combat-libs; SHA256SUMS written"
+    # The directory android-repack-apk's extra_libs (and the release recipes' libs) takes: the libraries and SHA256SUMS only,
+    # never the CMake tree beside them (#2092). Hard links into the build tree; a copy where a link cannot be made.
+    libs="$out/libs"
+    rm -rf "$libs"
+    mkdir -p "$libs"
+    for f in "$out"/lib????????????????.so "$out/SHA256SUMS"; do
+        ln "$f" "$libs/" 2>/dev/null || cp "$f" "$libs/"
+    done
+    (cd "$libs" && sha256sum -c --quiet SHA256SUMS)
+    echo "build-quest-combat-libs: $(wc -l < "$out/SHA256SUMS") libraries in build/quest-combat-libs; SHA256SUMS written; the repack takes build/quest-combat-libs/libs"
 
 # The combat content pack (docs/adr/0029-quest-bundled-content-pack.md): the manifest and the one package the pack adds, taken
 # from the game-data zip NEVR_GAME_DATA_ZIP names, whose sha-256 must be NEVR_GAME_DATA_SHA256 (the digest the signed manifest

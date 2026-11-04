@@ -228,6 +228,17 @@ class CombatLibsConfigure(unittest.TestCase):
         self.assertNotIn("ANDROID_NDK_HOME", recipe)
         self.assertFalse((REPO / "tools" / "build_quest_combat_libs.py").exists())
 
+    def test_the_recipe_writes_the_directory_the_repack_takes(self):
+        # #2092: android-repack-apk's stage-libs refuses the CMake build tree (CMakeFiles/, build.ninja, stock/ ...); the recipe
+        # gives it a directory of the libraries and SHA256SUMS only, and checks the sums there.
+        text = (REPO / "justfile").read_text(encoding="utf-8")
+        start = text.index("\nbuild-quest-combat-libs ")
+        recipe = text[start:text.index("\n\n#", start)]
+        self.assertIn('libs="$out/libs"', recipe)
+        self.assertIn('for f in "$out"/lib????????????????.so "$out/SHA256SUMS"; do', recipe)
+        self.assertIn('(cd "$libs" && sha256sum -c --quiet SHA256SUMS)', recipe)
+        self.assertIn("the repack takes build/quest-combat-libs/libs", recipe)
+
 
 def pinned_ndk() -> pathlib.Path | None:
     done = subprocess.run([sys.executable, "-I", str(INSTALLER), "--print-dir"], capture_output=True, text=True)
