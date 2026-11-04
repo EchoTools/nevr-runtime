@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "quest/data/sha256.h"
+#include "quest/plugin/slot_hook.h"
 #include "runtime/ext/plugin_log.h"
 
 namespace nevr_quest::plugin {
@@ -150,10 +151,21 @@ void Loader::RefreshMainLevel() {
 void Loader::Load(PlanEntry& entry) {
   LoadRecord record = BaseRecord(entry, options_.configRejected);
   void* handle = nullptr;  // set once the object is mapped; closed again on every path that does not keep the plugin
+  // The plugin's id as the host knows it: bound around its init and the Shutdown after a failed init, so a handler it registers
+  // on the loader's thread is recorded under this id and no other (slot_hook.h).
+  slot_hook::Binding binding(entry.item.name.c_str());
   const auto close = [&] {
     if (handle == nullptr) return;
     void* const mapped = handle;
     handle = nullptr;
+    // A slot hook this plugin registered may still be on its chain (ADR 0034): unmapping the object would leave the game
+    // calling code that is gone. The object stays mapped for the life of the process, and the record says why. A plugin
+    // that registered a handler during its init keeps its object mapped even after it unregisters it: the call that was
+    // inside the handler when it unregistered may still be running that code.
+    if (binding.registered() || slot_hook::HoldsHandleOf(entry.item.name.c_str())) {
+      record.keptMapped = "slot_hook";
+      return;
+    }
     try {
       platform_.Close(mapped);
     } catch (const std::exception&) {
@@ -235,14 +247,21 @@ void Loader::Load(PlanEntry& entry) {
     const auto initEx = Resolve<NvrPluginInitEx_fn>(platform_, handle, "NvrPluginInitEx");
     const auto init = Resolve<NvrPluginInit_fn>(platform_, handle, "NvrPluginInit");
     int rc = 0;
-    switch (ChoosePluginInit(initEx != nullptr, init != nullptr)) {
-      case PluginInitKind::Ex: rc = initEx(ctx, entry.item.args_json.c_str()); break;
-      case PluginInitKind::Legacy: rc = init(ctx); break;
-      case PluginInitKind::None: break;
+    {
+      const slot_hook::Scope scope(binding);
+      switch (ChoosePluginInit(initEx != nullptr, init != nullptr)) {
+        case PluginInitKind::Ex: rc = initEx(ctx, entry.item.args_json.c_str()); break;
+        case PluginInitKind::Legacy: rc = init(ctx); break;
+        case PluginInitKind::None: break;
+      }
     }
     if (rc != 0) {
-      // The documented lifecycle: a failed init is followed by the plugin's Shutdown, when it has one.
-      if (const auto shutdown = Resolve<NvrPluginShutdown_fn>(platform_, handle, "NvrPluginShutdown")) shutdown();
+      // The documented lifecycle: a failed init is followed by the plugin's Shutdown, when it has one. It runs under the same
+      // binding, so an unregister there is the owner's and the handler it takes out is the one the init registered.
+      if (const auto shutdown = Resolve<NvrPluginShutdown_fn>(platform_, handle, "NvrPluginShutdown")) {
+        const slot_hook::Scope scope(binding);
+        shutdown();
+      }
       return end(Outcome::kFailed, reason::kInitFailed);
     }
     loaded_.push_back(std::move(plugin));

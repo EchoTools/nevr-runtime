@@ -6,10 +6,25 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "runtime/patch/lobby_failure_message_rules.h"
 
 namespace lm = nevr_lobby_failure_message;
+
+// The seam for the decline (#2006). NoteDeclined takes a plain function pointer, so the capture is a file-level vector of
+// (code, reason) pairs: the PC hook passes its writer there, the tests pass CaptureDecline.
+namespace {
+struct Declined {
+  std::uint8_t code;
+  lm::Decline reason;
+};
+std::vector<Declined> g_declines;
+void CaptureDecline(std::uint8_t code, lm::Decline reason) {
+  g_declines.push_back(Declined{code, reason});
+}
+}  // namespace
 
 TEST(LobbyFailureMessage, LiteralCodesTakeTheServiceMessage) {
   for (std::uint8_t code = 0; code <= 10; ++code) EXPECT_TRUE(lm::TakesServiceMessage(code)) << int(code);
@@ -73,4 +88,84 @@ TEST(LobbyFailureMessage, MessageBytesCountsBeforeTheNul) {
   std::memset(full, 'y', sizeof(full));
   EXPECT_EQ(lm::MessageBytes(full, sizeof(full)), 64u);
   EXPECT_EQ(lm::MessageBytes(nullptr, 64), 0u);
+}
+
+TEST(LobbyFailureMessage, DeclineChecksTheBaseFirstAndNamesWhatWriteErrorBlockDeclinedFor) {
+  std::array<std::uint8_t, lm::kErrorBlockOffset + 1 + 4 * 64> game{};
+  char msg[64] = "server says no";
+  char empty[64] = {};
+  EXPECT_EQ(lm::DeclineFor(nullptr, msg, sizeof(msg)), lm::Decline::kNoGameBase);
+  EXPECT_EQ(lm::DeclineFor(nullptr, empty, sizeof(empty)), lm::Decline::kNoGameBase);  // the base is checked first
+  EXPECT_EQ(lm::DeclineFor(game.data(), empty, sizeof(empty)), lm::Decline::kNoMessage);
+  EXPECT_EQ(lm::DeclineFor(game.data(), nullptr, 0), lm::Decline::kNoMessage);
+  EXPECT_EQ(lm::DeclineFor(game.data(), msg, sizeof(msg)), lm::Decline::kNone);
+}
+
+TEST(LobbyFailureMessage, DeclineIsNoneExactlyWhenWriteErrorBlockWrites) {
+  std::array<std::uint8_t, lm::kErrorBlockOffset + 1 + 4 * 64> game{};
+  char msg[64] = "server says no";
+  char empty[64] = {};
+  struct Case {
+    std::uint8_t* base;
+    const char* field;
+  };
+  const Case cases[] = {{nullptr, msg}, {game.data(), empty}, {game.data(), msg}, {nullptr, empty}};
+  for (const Case& c : cases) {
+    const bool wrote = lm::WriteErrorBlock(c.base, "lobby full", c.field, sizeof(msg));
+    EXPECT_EQ(wrote, lm::DeclineFor(c.base, c.field, sizeof(msg)) == lm::Decline::kNone);
+  }
+}
+
+TEST(LobbyFailureMessage, DeclineReasonsHaveTheirTokens) {
+  EXPECT_STREQ(lm::DeclineToken(lm::Decline::kNoGameBase), "no_game_base");
+  EXPECT_STREQ(lm::DeclineToken(lm::Decline::kNoMessage), "no_message");
+  EXPECT_STREQ(lm::DeclineToken(lm::Decline::kNone), "none");
+}
+
+TEST(LobbyFailureMessage, TheDeclineLineIsTheSharedTextWithCodeTitleReasonAndConsequence) {
+  char line[lm::kDeclineLineBytes];
+  lm::FormatDeclineLine(line, 8, lm::Decline::kNoMessage);
+  EXPECT_STREQ(line,
+               "[NEVR.LOBBY] failure message not shown code=8 title=lobby full reason=no_message: "
+               "the game shows its fixed literal for this code instead");
+}
+
+TEST(LobbyFailureMessage, TheFirstDeclineIsPassedOnceWithItsCodeAndReason) {
+  g_declines.clear();
+  lm::DeclineLog log;
+  EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline));
+  ASSERT_EQ(g_declines.size(), 1u);
+  EXPECT_EQ(g_declines[0].code, 8);
+  EXPECT_EQ(g_declines[0].reason, lm::Decline::kNoMessage);
+}
+
+TEST(LobbyFailureMessage, RepeatsOfADeclineAreNotPassedAgain) {
+  g_declines.clear();
+  lm::DeclineLog log;
+  EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline));
+  for (int i = 0; i < 100; ++i) EXPECT_FALSE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline)) << i;
+  EXPECT_EQ(g_declines.size(), 1u);
+}
+
+TEST(LobbyFailureMessage, EachCodeAndReasonGetsItsOwnDecline) {
+  g_declines.clear();
+  lm::DeclineLog log;
+  EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline));
+  EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoGameBase, &CaptureDecline));
+  EXPECT_TRUE(lm::NoteDeclined(log, 9, lm::Decline::kNoMessage, &CaptureDecline));
+  ASSERT_EQ(g_declines.size(), 3u);
+  EXPECT_EQ(g_declines[1].code, 8);
+  EXPECT_EQ(g_declines[1].reason, lm::Decline::kNoGameBase);
+  EXPECT_EQ(g_declines[2].code, 9);
+  EXPECT_EQ(g_declines[2].reason, lm::Decline::kNoMessage);
+}
+
+TEST(LobbyFailureMessage, NoneAndAMissingSinkDoNotUseUpTheDecline) {
+  g_declines.clear();
+  lm::DeclineLog log;
+  EXPECT_FALSE(lm::NoteDeclined(log, 8, lm::Decline::kNone, &CaptureDecline));
+  EXPECT_FALSE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, nullptr));
+  EXPECT_TRUE(g_declines.empty());
+  EXPECT_TRUE(lm::NoteDeclined(log, 8, lm::Decline::kNoMessage, &CaptureDecline));
+  EXPECT_EQ(g_declines.size(), 1u);
 }

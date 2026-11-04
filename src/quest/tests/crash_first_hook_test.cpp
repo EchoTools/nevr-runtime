@@ -58,6 +58,19 @@ bool HasLine(const char* needle) {
   return false;
 }
 
+// The crash_first_displaced lines for `signal` in g_lines: how many, and the last one in `last`.
+int DisplacedLines(const char* signal, std::string* last = nullptr) {
+  const std::string field = std::string("\"signal\":\"") + signal + "\"";
+  int count = 0;
+  for (const std::string& line : g_lines) {
+    if (line.find("\"event\":\"crash_first_displaced\"") == std::string::npos) continue;
+    if (line.find(field) == std::string::npos) continue;
+    ++count;
+    if (last != nullptr) *last = line;
+  }
+  return count;
+}
+
 // What the report and the dump were handed.
 std::atomic<int> g_reportSignal{0};
 std::atomic<bool> g_reportHadContext{false};
@@ -504,6 +517,106 @@ void ABuildThatIsNotThePinnedOneIsRefusedAndSaidOnce() {
   cf::SetLateModulesForTest(nullptr, 0);
 }
 
+// ---- the displacement line: once per guarded signal, from ordinary context ----------------------------------------
+
+// The game's first kept request for a signal writes one line naming the entry it called. Its repeats, its queries and a
+// handler handed back (our own action, not kept) write nothing.
+void TheFirstKeptRequestForASignalWritesOneLineNamingHowItWasMade() {
+  ArmOverSystemHandlers();
+  const sentinel::LogSink previousSink = sentinel::SetLogSink(&CaptureLine);
+  g_lines.clear();
+  const struct sigaction game = SiginfoAction(&GameSiginfoHandler);
+  QCHECK(g_gameSigaction(SIGSEGV, &game, nullptr) == 0);
+  QCHECK(g_gameSigaction(SIGSEGV, &game, nullptr) == 0);  // a repeat
+  struct sigaction asked;
+  std::memset(&asked, 0, sizeof(asked));
+  QCHECK(g_gameSigaction(SIGABRT, nullptr, &asked) == 0);  // a query, not a request
+  const struct sigaction ours = SiginfoAction(&cf::OnSignal);
+  QCHECK(g_gameSigaction(SIGILL, &ours, nullptr) == 0);  // our own action handed back: not kept
+  g_gameSignal(SIGBUS, &GamePlainHandler);
+  g_gameSignal(SIGBUS, &GamePlainHandler);  // a repeat
+  sentinel::SetLogSink(previousSink);
+
+  std::string sigsegv;
+  QCHECK(DisplacedLines("SIGSEGV", &sigsegv) == 1);
+  QCHECK(sigsegv.find("\"how\":\"sigaction\"") != std::string::npos);
+  QCHECK(sigsegv.find("\"handler\":\"function\"") != std::string::npos);
+  std::string sigbus;
+  QCHECK(DisplacedLines("SIGBUS", &sigbus) == 1);
+  QCHECK(sigbus.find("\"how\":\"signal\"") != std::string::npos);
+  QCHECK(sigbus.find("\"handler\":\"function\"") != std::string::npos);
+  QCHECK(sigbus.find("\"consequence\":\"the game's handler is kept behind ours and runs after our crash capture\"") !=
+         std::string::npos);
+  QCHECK(DisplacedLines("SIGABRT") == 0);
+  QCHECK(DisplacedLines("SIGILL") == 0);
+}
+
+// A kept request for the default action, or for ignore, says so on its line. Neither is called at a crash (ChainToGame calls
+// only a function), so the consequence is the one that says that, not the function's.
+void TheFirstKeptDefaultOrIgnoreRequestSaysSoOnItsLine() {
+  ArmOverSystemHandlers();
+  const sentinel::LogSink previousSink = sentinel::SetLogSink(&CaptureLine);
+  g_lines.clear();
+  struct sigaction dfl;
+  std::memset(&dfl, 0, sizeof(dfl));
+  dfl.sa_handler = SIG_DFL;
+  QCHECK(g_gameSigaction(SIGSEGV, &dfl, nullptr) == 0);
+  struct sigaction ign;
+  std::memset(&ign, 0, sizeof(ign));
+  ign.sa_handler = SIG_IGN;
+  QCHECK(g_gameSigaction(SIGBUS, &ign, nullptr) == 0);
+  sentinel::SetLogSink(previousSink);
+
+  std::string sigsegv;
+  QCHECK(DisplacedLines("SIGSEGV", &sigsegv) == 1);
+  QCHECK(sigsegv.find("\"how\":\"sigaction\"") != std::string::npos);
+  QCHECK(sigsegv.find("\"handler\":\"default\"") != std::string::npos);
+  QCHECK(sigsegv.find("\"consequence\":\"the game asked for the default action, so no game handler runs after our crash capture\"") !=
+         std::string::npos);
+  std::string sigbus;
+  QCHECK(DisplacedLines("SIGBUS", &sigbus) == 1);
+  QCHECK(sigbus.find("\"handler\":\"ignore\"") != std::string::npos);
+  QCHECK(sigbus.find("\"consequence\":\"the game asked to ignore the signal, so no game handler runs after our crash capture\"") !=
+         std::string::npos);
+}
+
+// A kept default is not called at a crash: ours runs, the system's follows, and no game handler runs between them.
+void AKeptDefaultIsNotCalledAtACrash() {
+  ArmOverSystemHandlers();
+  struct sigaction dfl;
+  std::memset(&dfl, 0, sizeof(dfl));
+  dfl.sa_handler = SIG_DFL;
+  QCHECK(g_gameSigaction(SIGSEGV, &dfl, nullptr) == 0);
+  raise(SIGSEGV);
+  const std::vector<std::string> want = {"report", "dump", "note", "system"};
+  QCHECK(Events() == want);
+  QCHECK(!g_noteChained.load());
+}
+
+// The game's handler asks for another signal while the crash path runs, as a crash path that re-arms its handlers does. The
+// request is kept, but writes no line from the signal context; the next ordinary request for that signal writes the one line.
+void ReRequestingGameHandler(int, siginfo_t*, void*) {
+  Event("game");
+  const struct sigaction bus = SiginfoAction(&GameSiginfoHandler);
+  g_gameSigaction(SIGBUS, &bus, nullptr);
+}
+
+void ARequestMadeInTheCrashPathWritesNothingUntilTheNextOrdinaryRequest() {
+  ArmOverSystemHandlers();
+  const sentinel::LogSink previousSink = sentinel::SetLogSink(&CaptureLine);
+  g_lines.clear();
+  const struct sigaction rerequest = SiginfoAction(&ReRequestingGameHandler);
+  QCHECK(g_gameSigaction(SIGFPE, &rerequest, nullptr) == 0);  // ordinary context: the SIGFPE line
+  raise(SIGFPE);
+  const std::vector<std::string> want = {"report", "dump", "game", "note", "system"};
+  QCHECK(Events() == want);  // the game's handler ran, and its SIGBUS request was made inside the crash path
+  QCHECK(DisplacedLines("SIGBUS") == 0);
+  g_gameSignal(SIGBUS, &GamePlainHandler);  // ordinary context again
+  sentinel::SetLogSink(previousSink);
+  QCHECK(DisplacedLines("SIGFPE") == 1);
+  QCHECK(DisplacedLines("SIGBUS") == 1);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -523,6 +636,10 @@ int main(int argc, char** argv) {
   AGameHandlerOfIgnoreOrDefaultIsNotCalled();
   ASecondThreadWaitsForTheFirstThreadsReportAndDump();
   ARefusedInstallSaysSo();
+  TheFirstKeptRequestForASignalWritesOneLineNamingHowItWasMade();
+  TheFirstKeptDefaultOrIgnoreRequestSaysSoOnItsLine();
+  AKeptDefaultIsNotCalledAtACrash();
+  ARequestMadeInTheCrashPathWritesNothingUntilTheNextOrdinaryRequest();
   AProviderLibraryIsHookedWhenItLoadsAndNotBefore();
   EachProviderLibraryIsHookedOnItsOwnAndLibpnsradDoesNotMatchTheMatchmakingLibrary();
   AProviderLibraryLoadedAgainIsHookedAgain();
