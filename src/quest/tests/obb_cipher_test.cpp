@@ -93,17 +93,6 @@ TEST(EveryByteOfTheSectorNumberIsInTheIv) {
   CHECK(got != plain);  // another sector number is another IV
 }
 
-TEST(AReadThatWouldRunIntoTheFooterIsRefusedByTheImage) {
-  // The encrypted source is the whole OBB, footer included; the image ends before it.
-  const std::vector<std::uint8_t> plain = Pattern(2 * 512, 1);
-  const std::vector<std::uint8_t> ref_key = ReferenceKey("k", kSalt);
-  MemorySource obb(BuildObb(plain));
-  DecryptingSource image(obb, KeyOf(ref_key), plain.size());
-  std::vector<std::uint8_t> got(512);
-  CHECK(image.ReadAt(512, got.data(), got.size()).ok);
-  CHECK_EQ(image.ReadAt(513, got.data(), got.size()).code, std::string("source_short_read"));
-}
-
 namespace {
 // A source that claims to be as large as asked and reads as zeros.
 class ZeroSource final : public ByteSource {
@@ -130,6 +119,17 @@ TEST(AnImageWithMoreSectorsThanA32BitNumberCountsIsRefused) {
   const std::uint64_t fits = 0x100000000ull;  // exactly 2^32 sectors: the last sector number is 0xFFFFFFFF
   DecryptingSource edge(huge, key, fits * 512);
   CHECK(edge.ReadAt(0, got, sizeof got).ok);
+}
+
+TEST(AReadPastTheImageIsRefusedEvenWhenTheSourceBelowItCouldAnswer) {
+  // The encrypted source is larger than the image (an OBB holds its footer after it, and here more): only the image's own bound refuses.
+  ZeroSource wide(1 << 20);
+  VolumeKey key{};
+  DecryptingSource image(wide, key, 2 * 512);
+  std::vector<std::uint8_t> got(16);
+  CHECK(image.ReadAt(1024 - 16, got.data(), got.size()).ok);
+  CHECK_EQ(image.ReadAt(1024 - 8, got.data(), got.size()).code, std::string("source_short_read"));
+  CHECK_EQ(image.ReadAt(1025, got.data(), 1).code, std::string("source_short_read"));
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

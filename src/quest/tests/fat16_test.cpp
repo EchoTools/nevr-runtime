@@ -369,6 +369,17 @@ TEST(ALongNameThatLacksItsFirstEntryFallsBackToTheShortName) {
   CHECK(all.count("A_RATH~1.TXT") == 1);  // 0x42 alone is not a name: the sequence must run down to 1
 }
 
+TEST(ALongNameWhoseFirstEntryClaimsMorePartsThanFollowFallsBackToTheShortName) {
+  FatSpec spec;
+  spec.root.push_back(File("abcdefghijk.t", Pattern(4, 1)));  // 13 characters: one long-name entry, 0x41
+  Opened o = Open(spec, [](BuiltImage& b) { b.bytes[b.entry_offset.at("abcdefghijk.t") - 32] = 0x42; });  // "the last of two"
+  Status s;
+  const auto all = WalkAll(*o.volume, &s);
+  CHECK(s.ok);
+  CHECK_EQ(all.size(), 1u);
+  CHECK(all.count("ABCDEF~1.T") == 1);  // the sequence stops at 2: it never reaches 1
+}
+
 TEST(ALongNameWithAnEntryOutOfSequenceInTheMiddleFallsBackToTheShortName) {
   FatSpec spec;
   spec.root.push_back(File("this_is_a_name_longer_than_26.txt", Pattern(4, 1)));  // 33 characters: entries 0x43, 0x02, 0x01
