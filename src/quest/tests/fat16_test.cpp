@@ -14,6 +14,9 @@ using namespace obb_test;
 
 namespace {
 
+const char kBig[] = "_data/5932408047/rad15/android/packages/48037dc70b0ecab2_0";
+const char* const kBigPath = kBig;
+
 FatSpec Sample(bool fragmented = false, std::uint32_t spc = 1) {
   FatSpec spec;
   spec.fragmented = fragmented;
@@ -134,12 +137,10 @@ TEST(Fat12AndFat32AreRefused) {
   FatSpec big;
   big.clusters = 65600;  // 65525 or more: FAT32
   CHECK_EQ(Open(big).status.code, std::string("fat_unsupported_fat32"));
-  // A boot sector in the FAT32 layout: no fixed root directory and no 16-bit FAT size.
-  Opened o = Open(Sample(), [](BuiltImage& b) {
-    Put16(b.bytes, 17, 0);
-    Put16(b.bytes, 22, 0);
-  });
-  CHECK_EQ(o.status.code, std::string("fat_unsupported_fat32"));
+  // A boot sector in the FAT32 layout: no fixed root directory and no 16-bit FAT size; either one alone says it.
+  CHECK_EQ(Open(Sample(), [](BuiltImage& b) { Put16(b.bytes, 17, 0); Put16(b.bytes, 22, 0); }).status.code, std::string("fat_unsupported_fat32"));
+  CHECK_EQ(Open(Sample(), [](BuiltImage& b) { Put16(b.bytes, 17, 0); }).status.code, std::string("fat_unsupported_fat32"));
+  CHECK_EQ(Open(Sample(), [](BuiltImage& b) { Put16(b.bytes, 22, 0); }).status.code, std::string("fat_unsupported_fat32"));
 }
 
 TEST(BootSectorFaultsAreRefused) {
@@ -154,6 +155,8 @@ TEST(BootSectorFaultsAreRefused) {
   CHECK_EQ(Open(Sample(), [](BuiltImage& b) { Put16(b.bytes, 19, 60000); }).status.code, std::string("fat_bad_boot_sector"));
   // A FAT too small for the clusters the volume claims.
   CHECK_EQ(Open(Sample(), [](BuiltImage& b) { Put16(b.bytes, 22, 2); }).status.code, std::string("fat_bad_boot_sector"));
+  // Reserved sectors that fill the volume.
+  CHECK_EQ(Open(Sample(), [](BuiltImage& b) { Put16(b.bytes, 14, 4300); }).status.code, std::string("fat_bad_boot_sector"));
   // An image shorter than a boot sector.
   MemorySource tiny(std::vector<std::uint8_t>(100, 0));
   std::unique_ptr<Fat16Volume> v;
@@ -172,7 +175,6 @@ Status ReadByPath(const std::string& path, void (*damage)(BuiltImage&), std::vec
   if (got) *got = bytes;
   return r;
 }
-const char kBig[] = "_data/5932408047/rad15/android/packages/48037dc70b0ecab2_0";
 }  // namespace
 
 TEST(ALoopedChainIsRefused) {
@@ -285,6 +287,166 @@ TEST(DeletedLabelAndTrailingEntriesAreSkipped) {
   const auto all = WalkAll(*o.volume, &s);
   CHECK(s.ok);
   CHECK_EQ(all.size(), 0u);
+}
+
+TEST(TheClusterCountDecidesTheFatType) {
+  FatSpec spec;
+  spec.clusters = 4084;
+  CHECK_EQ(Open(spec).status.code, std::string("fat_unsupported_fat12"));
+  spec.clusters = 4085;
+  CHECK(Open(spec).status.ok);
+  spec.clusters = 65524;
+  CHECK(Open(spec).status.ok);
+  spec.clusters = 65525;
+  CHECK_EQ(Open(spec).status.code, std::string("fat_unsupported_fat32"));
+}
+
+TEST(EveryEndOfChainMarkEndsAChain) {
+  for (std::uint32_t mark : {0xFFF8u, 0xFFFAu, 0xFFFFu}) {
+    Opened o = Open(Sample());
+    std::uint32_t cluster = o.built.first_cluster.at(kBigPath);
+    for (;;) {  // the last cluster of the chain
+      const std::uint32_t next = Get16(o.built.bytes, o.built.layout.FatEntryOffset(cluster));
+      if (next >= 0xFFF8) break;
+      cluster = next;
+    }
+    Put16(o.built.bytes, o.built.layout.FatEntryOffset(cluster), mark);
+    MemorySource source(o.built.bytes);
+    std::unique_ptr<Fat16Volume> volume;
+    CHECK(Fat16Volume::Open(source, &volume).ok);
+    Status s;
+    const auto all = WalkAll(*volume, &s);
+    CHECK(Read(*volume, all.at(kBigPath), &s) == Pattern(20000, 4));
+    CHECK(s.ok);
+  }
+}
+
+TEST(TheLastDataClusterIsReadableAndOneBeyondItIsNot) {
+  Opened o = Open(Sample());
+  const std::uint32_t last = o.built.layout.clusters + 1;
+  Put16(o.built.bytes, o.built.layout.FatEntryOffset(last), 0xFFFF);
+  Put16(o.built.bytes, o.built.entry_offset.at("notes.txt") + 26, last);
+  MemorySource source(o.built.bytes);
+  std::unique_ptr<Fat16Volume> volume;
+  CHECK(Fat16Volume::Open(source, &volume).ok);
+  Status s;
+  auto all = WalkAll(*volume, &s);
+  CHECK_EQ(Read(*volume, all.at("notes.txt"), &s).size(), 10u);
+  CHECK(s.ok);
+  Put16(o.built.bytes, o.built.entry_offset.at("notes.txt") + 26, last + 1);
+  MemorySource beyond(o.built.bytes);
+  std::unique_ptr<Fat16Volume> volume2;
+  CHECK(Fat16Volume::Open(beyond, &volume2).ok);
+  all = WalkAll(*volume2, &s);
+  Read(*volume2, all.at("notes.txt"), &s);
+  CHECK_EQ(s.code, std::string("fat_chain_out_of_range"));
+}
+
+TEST(ALongNameWhoseEntriesAreOutOfOrderFallsBackToTheShortName) {
+  FatSpec spec;
+  spec.root.push_back(File("a_rather_long_name.txt", Pattern(4, 1)));  // two long-name entries: 0x42 then 0x01
+  Opened o = Open(spec, [](BuiltImage& b) { b.bytes[b.entry_offset.at("a_rather_long_name.txt") - 32] = 5; });
+  Status s;
+  const auto all = WalkAll(*o.volume, &s);
+  CHECK(s.ok);
+  CHECK_EQ(all.size(), 1u);
+  CHECK(all.count("A_RATH~1.TXT") == 1);
+}
+
+TEST(NamesOfEveryUtf8LengthAreRead) {
+  FatSpec spec;
+  spec.root.push_back(File("caf\xC3\xA9.txt", Pattern(4, 1)));               // 2 bytes
+  spec.root.push_back(File("\xE2\x82\xAC" "uro.txt", Pattern(4, 2)));       // 3 bytes (the euro sign)
+  spec.root.push_back(File("smile\xF0\x9F\x98\x80.txt", Pattern(4, 3)));   // 4 bytes: a surrogate pair
+  Opened o = Open(spec);
+  Status s;
+  const auto all = WalkAll(*o.volume, &s);
+  CHECK(s.ok);
+  CHECK(all.count("caf\xC3\xA9.txt") == 1);
+  CHECK(all.count("\xE2\x82\xAC" "uro.txt") == 1);
+  CHECK(all.count("smile\xF0\x9F\x98\x80.txt") == 1);
+}
+
+TEST(AnUnpairedSurrogateInALongNameIsRefused) {
+  for (std::uint32_t unit : {0xD800u, 0xDC00u}) {  // a lone high, a lone low
+    FatSpec spec;
+    spec.root.push_back(File("ab", Pattern(4, 1)));
+    Opened o = Open(spec);
+    Put16(o.built.bytes, o.built.entry_offset.at("ab") - 32 + 1, unit);
+    MemorySource source(o.built.bytes);
+    std::unique_ptr<Fat16Volume> volume;
+    CHECK(Fat16Volume::Open(source, &volume).ok);
+    Status s;
+    WalkAll(*volume, &s);
+    CHECK_EQ(s.code, std::string("fat_bad_long_name"));
+  }
+  // A high surrogate followed by a plain letter.
+  FatSpec spec;
+  spec.root.push_back(File("ab", Pattern(4, 1)));
+  Opened o = Open(spec);
+  Put16(o.built.bytes, o.built.entry_offset.at("ab") - 32 + 1, 0xD800);
+  MemorySource source(o.built.bytes);
+  std::unique_ptr<Fat16Volume> volume;
+  CHECK(Fat16Volume::Open(source, &volume).ok);
+  Status s;
+  WalkAll(*volume, &s);
+  CHECK_EQ(s.code, std::string("fat_bad_long_name"));
+}
+
+TEST(AShortNameWithAHighByteAndNoLongNameIsRefused) {
+  FatSpec spec;
+  spec.root.push_back(File("ABC.TXT", Pattern(4, 1), Node::Naming::kShortUpper));
+  Opened o = Open(spec, [](BuiltImage& b) { b.bytes[b.entry_offset.at("ABC.TXT") + 1] = 0xE9; });
+  Status s;
+  WalkAll(*o.volume, &s);
+  CHECK_EQ(s.code, std::string("fat_bad_short_name"));
+}
+
+TEST(AShortNameThatStartsWith0x05MeansE5AndIsRefusedAsAHighByte) {
+  FatSpec spec;
+  spec.root.push_back(File("ABC.TXT", Pattern(4, 1), Node::Naming::kShortUpper));
+  Opened o = Open(spec, [](BuiltImage& b) { b.bytes[b.entry_offset.at("ABC.TXT")] = 0x05; });
+  Status s;
+  WalkAll(*o.volume, &s);
+  CHECK_EQ(s.code, std::string("fat_bad_short_name"));  // 0x05 stands for 0xE5, a byte above 0x7F; a control character would pass
+}
+
+TEST(NestingUpToTheLimitIsReadAndOneMoreIsRefused) {
+  auto nested = [](int levels) {
+    Node inner = File("leaf.txt", Pattern(3, 1));
+    Node d = Dir("d" + std::to_string(levels), {inner});
+    for (int i = levels - 1; i >= 1; --i) d = Dir("d" + std::to_string(i), {d});
+    FatSpec spec;
+    spec.root.push_back(d);
+    return spec;
+  };
+  Status s;
+  Opened ok = Open(nested(16));
+  WalkAll(*ok.volume, &s);
+  CHECK(s.ok);
+  Opened too_deep = Open(nested(17));
+  WalkAll(*too_deep.volume, &s);
+  CHECK_EQ(s.code, std::string("fat_directory_too_deep"));
+}
+
+TEST(AFileLargerThanOneReadRunReadsBackInPieces) {
+  FatSpec spec;
+  spec.sectors_per_cluster = 4;  // 2 KiB clusters: 8.6 MB of data clusters
+  const std::vector<std::uint8_t> big = Pattern(2500003, 6);
+  spec.root.push_back(File("big.bin", big));
+  Opened o = Open(spec);
+  Status s;
+  const auto all = WalkAll(*o.volume, &s);
+  std::vector<std::uint8_t> got;
+  std::size_t largest = 0;
+  s = o.volume->ReadFile(all.at("big.bin"), [&](const std::uint8_t* b, std::size_t n) {
+    largest = std::max(largest, n);
+    got.insert(got.end(), b, b + n);
+    return Status::Ok();
+  });
+  CHECK(s.ok);
+  CHECK(got == big);
+  CHECK(largest <= (1u << 20));
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

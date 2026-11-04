@@ -93,10 +93,16 @@ inline std::vector<std::uint16_t> ToUtf16(const std::string& s) {
     } else if ((c & 0xE0) == 0xC0) {
       out.push_back(static_cast<std::uint16_t>(((c & 0x1F) << 6) | (static_cast<unsigned char>(s[i + 1]) & 0x3F)));
       i += 2;
-    } else {
+    } else if ((c & 0xF0) == 0xE0) {
       out.push_back(static_cast<std::uint16_t>(((c & 0x0F) << 12) | ((static_cast<unsigned char>(s[i + 1]) & 0x3F) << 6) |
                                                (static_cast<unsigned char>(s[i + 2]) & 0x3F)));
       i += 3;
+    } else {  // four bytes: a surrogate pair
+      const std::uint32_t cp = ((c & 0x07u) << 18) | ((static_cast<unsigned char>(s[i + 1]) & 0x3Fu) << 12) |
+                               ((static_cast<unsigned char>(s[i + 2]) & 0x3Fu) << 6) | (static_cast<unsigned char>(s[i + 3]) & 0x3Fu);
+      out.push_back(static_cast<std::uint16_t>(0xD800 + ((cp - 0x10000) >> 10)));
+      out.push_back(static_cast<std::uint16_t>(0xDC00 + ((cp - 0x10000) & 0x3FF)));
+      i += 4;
     }
   }
   return out;

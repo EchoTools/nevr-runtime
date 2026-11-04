@@ -48,7 +48,7 @@ std::string FileLine(const std::string& path, const std::vector<std::uint8_t>& c
   return "file " + Sha256Hex(content.data(), content.size()) + " " + std::to_string(content.size()) + " " + path + "\n";
 }
 
-Rig MakeRig(const std::string& name, const obb_test::ObbSpec& obb_spec = obb_test::ObbSpec()) {
+Rig MakeRig(const std::string& name, const obb_test::ObbSpec& obb_spec = obb_test::ObbSpec(), bool duplicate_name = false) {
   Rig r;
   const char* tmp = std::getenv("NEVR_TEST_TMP");
   r.dir = fs::path(tmp ? tmp : ".") / ("obb-flow-" + name);
@@ -65,7 +65,9 @@ Rig MakeRig(const std::string& name, const obb_test::ObbSpec& obb_spec = obb_tes
   obb_test::FatSpec spec;
   spec.fragmented = true;
   spec.root.push_back(obb_test::Dir("_data", {obb_test::Dir("5932408047", {obb_test::Dir("rad15", {obb_test::Dir("android", {
-      obb_test::Dir("manifests", {obb_test::File("48037dc70b0ecab2", r.files[0].second), obb_test::File("2b47aab238f60515", r.files[2].second)}),
+      obb_test::Dir("manifests", duplicate_name
+          ? std::vector<obb_test::Node>{obb_test::File("48037dc70b0ecab2", r.files[0].second), obb_test::File("48037dc70b0ecab2", r.files[2].second)}
+          : std::vector<obb_test::Node>{obb_test::File("48037dc70b0ecab2", r.files[0].second), obb_test::File("2b47aab238f60515", r.files[2].second)}),
       obb_test::Dir("packages", {obb_test::File("48037dc70b0ecab2_0", r.files[1].second)})})})})}));
   r.obb = obb_test::BuildObb(obb_test::BuildFat16(spec).bytes, obb_spec);
   Spit(r.obb_path, std::string(r.obb.begin(), r.obb.end()));
@@ -335,6 +337,67 @@ TEST(HashFileMatchesTheDigestOfItsBytes) {
   CHECK_EQ(sha, r.obb_sha);
   CHECK_EQ(size, static_cast<std::uint64_t>(r.obb.size()));
   CHECK_EQ(HashFile(r.dir.string() + "/absent", &sha, &size).code, std::string("source_open_failed"));
+}
+
+TEST(AnImageThatNamesAFileTwiceIsRefused) {
+  Rig r = MakeRig("duplicate", obb_test::ObbSpec(), /*duplicate_name=*/true);
+  const Status s = Run(r, Options(r));
+  CHECK_EQ(s.code, std::string("fat_duplicate_name"));
+  CHECK(CacheEntries(r).empty());
+}
+
+TEST(ACacheWhoseManifestNamesAnotherObbIsExtractedAgain) {
+  Rig r = MakeRig("manifestobb");
+  CHECK(Run(r, Options(r)).ok);
+  const std::string manifest = r.cache_root + "/" + r.obb_sha + "/" + kStockDataManifestName;
+  Json j = Json::parse(Slurp(manifest));
+  j["obb_sha256"] = std::string(64, '0');
+  Spit(manifest, j.dump());
+  StockDataResult result;
+  CHECK(Run(r, Options(r), &result).ok);
+  CHECK(!result.cache_hit);
+  CHECK_EQ(Count(r, "cache_invalid"), 1);
+}
+
+TEST(ACacheWhoseManifestDisagreesWithThePinsIsExtractedAgain) {
+  Rig r = MakeRig("manifestdigest");
+  CHECK(Run(r, Options(r)).ok);
+  const std::string manifest = r.cache_root + "/" + r.obb_sha + "/" + kStockDataManifestName;
+  Json j = Json::parse(Slurp(manifest));
+  j["files"][0]["sha256"] = std::string(64, 'f');
+  Spit(manifest, j.dump());
+  StockDataResult result;
+  CHECK(Run(r, Options(r), &result).ok);
+  CHECK(!result.cache_hit);
+  CHECK_EQ(Count(r, "cache_invalid"), 1);
+}
+
+TEST(ACacheWithoutItsManifestOrWithAnUnreadableOneIsExtractedAgain) {
+  Rig r = MakeRig("nomanifest");
+  CHECK(Run(r, Options(r)).ok);
+  const std::string manifest = r.cache_root + "/" + r.obb_sha + "/" + kStockDataManifestName;
+  Spit(manifest, "{ not json");
+  StockDataResult result;
+  CHECK(Run(r, Options(r), &result).ok);
+  CHECK(!result.cache_hit);
+  fs::remove(manifest);
+  CHECK(Run(r, Options(r), &result).ok);
+  CHECK(!result.cache_hit);
+  CHECK(Exists(manifest));
+}
+
+TEST(ASymbolicLinkInTheCacheIsNotAPinnedFile) {
+  Rig r = MakeRig("symlink");
+  CHECK(Run(r, Options(r)).ok);
+  const std::string file = r.cache_root + "/" + r.obb_sha + "/" + r.files[0].first;
+  const std::string copy = r.dir.string() + "/copy.bin";
+  fs::copy_file(file, copy);
+  fs::remove(file);
+  fs::create_symlink(copy, file);
+  StockDataResult result;
+  CHECK(Run(r, Options(r), &result).ok);
+  CHECK(!result.cache_hit);
+  CHECK(fs::is_regular_file(fs::symlink_status(file)));
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv, std::chrono::seconds(120)); }

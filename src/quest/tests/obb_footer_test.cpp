@@ -91,7 +91,20 @@ TEST(ImageThatIsNotWholeSectorsIsRefused) {
   ObbFooter footer;
   std::vector<std::uint8_t> odd = Pattern(513, 3);
   CHECK_EQ(Parse(BuildObb(odd), &footer).code, std::string("obb_image_not_sector_aligned"));
+  CHECK_EQ(Parse(BuildObb(Pattern(768, 3)), &footer).code, std::string("obb_image_not_sector_aligned"));  // a multiple of 256, not of 512
   CHECK_EQ(Parse(BuildObb({}), &footer).code, std::string("obb_image_not_sector_aligned"));
+}
+
+TEST(ASaltedFlagOnAFooterTooSmallForASaltIsRefused) {
+  // An unsalted footer with an empty name is 16 bytes; flip the flag to salted and there is no room for the salt.
+  ObbSpec spec;
+  spec.flags = 0;
+  spec.package_name = "";
+  std::vector<std::uint8_t> obb = BuildObb(SmallImage(), spec);
+  const std::size_t footer_start = obb.size() - 8 - 16;
+  Put32(obb, footer_start + 8, 2);
+  ObbFooter footer;
+  CHECK_EQ(Parse(obb, &footer).code, std::string("obb_bad_footer_size"));
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

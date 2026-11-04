@@ -52,6 +52,8 @@ TEST(PinSyntaxFaultsNameTheirLine) {
       {head + "file " + kA + " -1 p\n", "pin_syntax"},
       {head + "file " + std::string(63, '1') + " 10 p\n", "pin_syntax"},          // digest too short
       {head + "file " + std::string(64, 'G') + " 10 p\n", "pin_syntax"},          // not hex
+      {head + "file " + std::string(64, 'g') + " 10 p\n", "pin_syntax"},          // not hex, lower case
+      {head + "file " + std::string(65, '1') + " 10 p\n", "pin_syntax"},          // digest too long
       {head + "file " + std::string(64, 'A') + " 10 p\n", "pin_syntax"},          // upper case
       {head + "bogus 1\n", "pin_syntax"},                                         // unknown record
       {"obb_sha256 xyz\nobb_size 5\nfile " + kA + " 1 p\n", "pin_syntax"},

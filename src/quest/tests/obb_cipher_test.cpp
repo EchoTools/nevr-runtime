@@ -1,6 +1,8 @@
 // Host tests for the OBB image cipher (src/quest/obb/obb_cipher.cpp, docs/adr/0042): Twofish-128 CBC with dm-crypt's plain IV,
 // checked against an image encrypted here with nettle's own encrypt side.
 
+#include <cstring>
+
 #include "quest/obb/byte_source.h"
 #include "quest/obb/obb_cipher.h"
 #include "quest/tests/mini_test.h"
@@ -72,6 +74,51 @@ TEST(AnotherKeyDoesNotDecrypt) {
   std::vector<std::uint8_t> got(plain.size());
   CHECK(image.ReadAt(0, got.data(), got.size()).ok);
   CHECK(got != plain);
+}
+
+TEST(EveryByteOfTheSectorNumberIsInTheIv) {
+  // Sector 0x01020304 chains from the IV 04 03 02 01 00 ... : written out here, not derived from the tool's own code.
+  const std::vector<std::uint8_t> plain = Pattern(512, 77);
+  const std::vector<std::uint8_t> key = ReferenceKey("k", kSalt);
+  twofish_ctx ctx;
+  nettle_twofish_set_key(&ctx, key.size(), key.data());
+  std::uint8_t iv[16] = {0x04, 0x03, 0x02, 0x01};
+  std::vector<std::uint8_t> encrypted(512);
+  nettle_cbc_encrypt(&ctx, reinterpret_cast<nettle_cipher_func*>(nettle_twofish_encrypt), 16, iv, 512, encrypted.data(), plain.data());
+  TwofishCbcPlain cipher(KeyOf(key));
+  std::vector<std::uint8_t> got(512);
+  cipher.DecryptSector(0x01020304u, encrypted.data(), got.data());
+  CHECK(got == plain);
+  cipher.DecryptSector(0x01020305u, encrypted.data(), got.data());
+  CHECK(got != plain);  // another sector number is another IV
+}
+
+namespace {
+// A source that claims to be as large as asked and reads as zeros.
+class ZeroSource final : public ByteSource {
+ public:
+  explicit ZeroSource(std::uint64_t size) : size_(size) {}
+  std::uint64_t Size() const override { return size_; }
+  Status ReadAt(std::uint64_t, void* dst, std::size_t length) const override {
+    std::memset(dst, 0, length);
+    return Status::Ok();
+  }
+
+ private:
+  std::uint64_t size_;
+};
+}  // namespace
+
+TEST(AnImageWithMoreSectorsThanA32BitNumberCountsIsRefused) {
+  const std::uint64_t sectors = 0x100000001ull;
+  ZeroSource huge(sectors * 512);
+  VolumeKey key{};
+  DecryptingSource image(huge, key, sectors * 512);
+  std::uint8_t got[16];
+  CHECK_EQ(image.ReadAt(0, got, sizeof got).code, std::string("obb_image_too_large"));
+  const std::uint64_t fits = 0x100000000ull;  // exactly 2^32 sectors: the last sector number is 0xFFFFFFFF
+  DecryptingSource edge(huge, key, fits * 512);
+  CHECK(edge.ReadAt(0, got, sizeof got).ok);
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
