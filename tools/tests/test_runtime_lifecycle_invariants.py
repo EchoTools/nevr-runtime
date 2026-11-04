@@ -676,6 +676,26 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         hook = extract_braced_function(filt, "static void __fastcall hook_PrintfImpl(")
         self.assertIn("g_rate.Check(buf, emit_len, GetEpochSeconds(), summary,", hook)
 
+    def test_the_crash_path_writes_no_text_file_and_only_ever_the_main_log(self):
+        # #2060: a crash line is one record of the process's main log. Before, it was also a text file, nevr-crash-<run id>.txt, in the
+        # logs folder and, with no folder, in the game's own logs folder. crash_recovery.cpp links no test binary (it hooks the game), so
+        # this reads the source: the one file the crash path opens is the path PrepareCrashRecordPath builds from the nevr root's logs
+        # folder, and it builds none when there is no root.
+        crash = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
+        self.assertNotIn("nevr-crash", crash, "no crash text file")
+        self.assertNotIn(".txt", crash, "no crash text file")
+        self.assertEqual(len(re.findall(r"\bCreateFile[AW]?\(", crash)), 1, "the crash record handle is the only file the crash path opens")
+        arm = extract_braced_function(crash, "static void ArmCrashRecord(")
+        self.assertIn("CreateFileA(g_crashRecordPath", arm)
+        prepare = extract_braced_function(crash, "static void PrepareCrashRecordPath(")
+        self.assertIn("nevr_root::LogsDir(nevr_root::RootA())", prepare)
+        self.assertIn("if (logs.empty()) return;", prepare, "no root: no path, and no folder beside the game")
+        self.assertIn("nevr_run_log::PathForThisProcess(logs)", prepare)
+        for other in ("GetModuleFileName", "GetTempPath", "exe"):
+            self.assertNotIn(other, prepare, "the path is never built from the game's folder or %TEMP%")
+        assigned = re.findall(r"(?:memcpy|snprintf|strcpy|strncpy)\(\s*g_crashRecordPath", crash)
+        self.assertEqual(len(assigned), 1, "g_crashRecordPath is written in one place only")
+
     def test_the_boot_phase_and_the_filter_write_one_main_log_with_no_replay(self):
         # Boot and runtime events are one stream in one file, <root>\\logs\\nevr-<process creation time>.jsonl. The boot
         # tee and the filter both append through run_log_writer.h, so nothing is copied from one file into another and no
