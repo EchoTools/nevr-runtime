@@ -271,6 +271,18 @@ TEST(ALongNameWithAWrongChecksumFallsBackToTheShortName) {
   CHECK(all.count("A_RATH~1.TXT") == 1);
 }
 
+TEST(ALongNameThatBelongsToAnotherShortNameIsNotUsed) {
+  FatSpec spec;
+  spec.root.push_back(File("ab", Pattern(4, 1)));
+  // The long-name entry is whole and consistent; the 8.3 entry after it is another one (as after an edit that did not know long names).
+  Opened o = Open(spec, [](BuiltImage& b) { b.bytes[b.entry_offset.at("ab") + 1] = 'C'; });
+  Status s;
+  const auto all = WalkAll(*o.volume, &s);
+  CHECK(s.ok);
+  CHECK_EQ(all.size(), 1u);
+  CHECK(all.count("AC~1") == 1);
+}
+
 TEST(DeletedLabelAndTrailingEntriesAreSkipped) {
   FatSpec spec;
   spec.root.push_back(File("one.txt", Pattern(4, 1)));
