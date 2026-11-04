@@ -18,7 +18,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace nevr {
@@ -93,22 +92,6 @@ struct PluginSpec {
 /// The kind of node a config path names (NevrConfig::Kind). `kNull` is a key written with no value (or `~`, `null`).
 enum class NodeKind { kAbsent, kNull, kScalar, kSequence, kMapping };
 
-/// What NevrConfig::Set did (the first config.yaml writer in the tree). `ok`: the file now holds the value (`wrote` says whether
-/// a write was needed). `reason` is a stable token when `ok` is false and "" otherwise; `err` is the errno-style code of the
-/// failing file step, or 0 for a refusal that is about the file's content. The core logs nothing: the caller words the Warning.
-///
-/// Refusals (nothing is written): "no_file", "unsupported_path", "unreadable", "not_a_regular_file", "too_large",
-/// "unparseable" (a YAML error, which includes a truncated file), "multi_document", "not_a_mapping", "root_flow_style",
-/// "section_not_a_mapping", "section_flow_style", "duplicate_section", "duplicate_key", "value_not_a_scalar",
-/// "value_not_plain", "value_not_on_key_line", "multiline_scalar", "position_mismatch", "verify_failed". A failed
-/// write step gives "write_failed" or "rename_failed" with `err`, and leaves the previous file as it was.
-struct ConfigSetResult {
-  bool ok = false;
-  bool wrote = false;
-  const char* reason = "";
-  int err = 0;
-};
-
 class NevrConfig {
  public:
   NevrConfig();
@@ -149,23 +132,6 @@ class NevrConfig {
   /// A sequence at `path` as strings; a lone scalar becomes a single element.
   std::vector<std::string> GetStringList(const std::string& path) const;
 
-  /// The file `Set` edits. LoadFromFile binds the path it read; a config built from a string, or default-constructed, is bound
-  /// with BindFile (the Quest reads the file itself and parses the text).
-  void BindFile(std::string path) { boundFile_ = std::move(path); }
-  const std::string& BoundFile() const { return boundFile_; }
-
-  /// Typed setter beside the getters, and the only code that writes `config.yaml`: sets the boolean at the two-level dotted
-  /// `path` ("graphics.hand_flip") in the bound file and persists it in this one call, then updates the in-memory tree so a
-  /// getter reads the new value. The file is read afresh from disk (it may have changed since the load), edited by splicing
-  /// bytes at the span the parser reports for the key's value (or at the end of the section's block mapping, at its child
-  /// indentation), and replaced atomically (a temporary file in the same directory, then a rename). Every other byte of the
-  /// file, comments included, is untouched: the document is never re-emitted. A missing file is created holding just the key.
-  /// Never throws. See ConfigSetResult for the refusals.
-  ///
-  /// Prior art for editing through the parser's source positions: ruamel.yaml's round-trip mode (https://yaml.readthedocs.io/)
-  /// and toml_edit (https://docs.rs/toml_edit/).
-  ConfigSetResult Set(const std::string& path, bool value) noexcept;
-
   const std::vector<PluginSpec>& Plugins() const { return plugins_; }
   bool Empty() const { return empty_; }
   /// Names of unset bare ${VAR} references found at load, each once, sorted. Their text stays in
@@ -181,7 +147,6 @@ class NevrConfig {
   struct Impl;                       // holds the interpolated yaml-cpp tree (.cpp only)
   std::unique_ptr<Impl> impl_;
   std::vector<PluginSpec> plugins_;
-  std::string boundFile_;
   bool empty_ = true;
   std::vector<std::string> unsetBareVars_;
   std::size_t duplicateKeys_ = 0;
