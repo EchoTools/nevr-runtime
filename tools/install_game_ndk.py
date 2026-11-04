@@ -3,10 +3,12 @@
 
   python3 -I tools/install_game_ndk.py [--pin FILE] [--root DIR] [--print-dir]
 
-Steps: read the pin -> download the archive once (kept in <root>/downloads/) -> verify its sha256 against the pin ->
+Steps: read the pin -> download the archive once (kept in <root>/downloads/) -> verify its sha256 and its sha1 against the pin ->
 extract into a temporary directory inside <root> -> gate on the first line of `clang --version` equalling the pin's
 CLANG_VERSION exactly -> rename into place as <root>/ndk-<release>. A run that finds the toolchain in place re-verifies
-it (the cached archive's sha256, when the archive is still there, and the clang line) and changes nothing.
+it (the cached archive's digests, when the archive is still there, and the clang line) and changes nothing. A cached archive
+whose digests are not the pin's is moved aside to <name>.zip.corrupt (logged as archive_cached_corrupt) and downloaded again.
+Two installs started together are safe: the one that finds the toolchain in place when it renames re-verifies it and stops.
 
 <root> is --root, else $XDG_CACHE_HOME/nevr-runtime/toolchain, else ~/.cache/nevr-runtime/toolchain: a directory the repo's
 tools own and every worktree and checkout of one user shares.
@@ -30,7 +32,7 @@ import urllib.error
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
-KEYS = ("NDK_RELEASE", "NDK_BUILD", "NDK_URL", "NDK_SHA256", "CLANG_VERSION")
+KEYS = ("NDK_RELEASE", "NDK_BUILD", "NDK_URL", "NDK_SHA256", "NDK_SHA1", "CLANG_VERSION")
 CLANG_REL = pathlib.Path("toolchains/llvm/prebuilt/linux-x86_64/bin/clang")
 DOWNLOAD_ATTEMPTS = 3
 SOCKET_TIMEOUT_S = 60  # per read; a stalled transfer fails the attempt, and the attempt is retried
@@ -97,19 +99,44 @@ def read_pin(log, path):
     return pin
 
 
-def sha256_of(path):
-    digest = hashlib.sha256()
+def digests_of(path):
+    sha256, sha1 = hashlib.sha256(), hashlib.sha1()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+            sha256.update(chunk)
+            sha1.update(chunk)
+    return sha256.hexdigest(), sha1.hexdigest()
+
+
+def archive_problem(pin, path):
+    """None when the file has the pin's sha256 and sha1, else (event, fields) naming the digest that differs."""
+    sha256, sha1 = digests_of(path)
+    if sha256 != pin["NDK_SHA256"]:
+        return "sha256_mismatch", {"expected_sha256": pin["NDK_SHA256"], "actual_sha256": sha256, "file": path}
+    if sha1 != pin["NDK_SHA1"]:
+        return "sha1_mismatch", {"expected_sha1": pin["NDK_SHA1"], "actual_sha1": sha1, "file": path}
+    return None
 
 
 def check_archive(log, pin, path):
-    actual = sha256_of(path)
-    if actual != pin["NDK_SHA256"]:
-        log.die("sha256_mismatch", expected_sha256=pin["NDK_SHA256"], actual_sha256=actual, file=path)
-    log.info("sha256_ok", sha256=actual, bytes=path.stat().st_size, file=path)
+    problem = archive_problem(pin, path)
+    if problem:
+        log.die(problem[0], **problem[1])
+    log.info("sha256_ok", sha256=pin["NDK_SHA256"], bytes=path.stat().st_size, file=path)
+    log.info("sha1_ok", sha1=pin["NDK_SHA1"], file=path)
+
+
+def set_aside_if_corrupt(log, pin, path):
+    """A cached archive that is not the pinned one is a cache fault, not a verdict on the pin: move it aside and say so."""
+    problem = archive_problem(pin, path)
+    if problem is None:
+        log.info("archive_cached_ok", path=path)
+        return True
+    aside = path.with_name(path.name + ".corrupt")
+    os.replace(path, aside)
+    log.write("WARN", "archive_cached_corrupt", reason=problem[0], file=path, moved_to=aside,
+              action="moved aside; the archive is downloaded again")
+    return False
 
 
 def check_clang(log, pin, clang):
@@ -141,6 +168,11 @@ def download(log, pin, target):
     log.die("download_failed", url=pin["NDK_URL"], error=last)
 
 
+def reverify(log, pin, dest):
+    check_clang(log, pin, dest / CLANG_REL)
+    log.info("noop_reverified", dest=dest)
+
+
 def install(log, pin, root):
     release = pin["NDK_RELEASE"]
     dest = root / f"ndk-{release}"
@@ -149,11 +181,10 @@ def install(log, pin, root):
     if dest.is_dir():
         log.info("already_present", dest=dest)
         if archive.is_file():
-            check_archive(log, pin, archive)
+            set_aside_if_corrupt(log, pin, archive)  # a bad cache file does not make the installed toolchain bad
         else:
             log.info("archive_absent", path=archive, note="archive cache removed; toolchain verified by the clang gate only")
-        check_clang(log, pin, dest / CLANG_REL)
-        log.info("noop_reverified", dest=dest)
+        reverify(log, pin, dest)
         return dest
     root.mkdir(parents=True, exist_ok=True)
     build = pathlib.Path(tempfile.mkdtemp(prefix=".build-", dir=root))
@@ -161,8 +192,12 @@ def install(log, pin, root):
         (root / "downloads").mkdir(exist_ok=True)
         if archive.is_file():
             log.info("archive_cached", path=archive)
-            check_archive(log, pin, archive)
+            if not set_aside_if_corrupt(log, pin, archive):
+                archive = None
         else:
+            archive = None
+        if archive is None:
+            archive = root / "downloads" / f"android-ndk-{release}-linux-x86_64.zip"
             fetched = build / "archive.zip"
             download(log, pin, fetched)
             check_archive(log, pin, fetched)
@@ -182,7 +217,15 @@ def install(log, pin, root):
         if not inner.is_dir():
             log.die("layout_unexpected", expected_dir=f"android-ndk-{release}")
         check_clang(log, pin, inner / CLANG_REL)
-        inner.rename(dest)
+        try:
+            inner.rename(dest)
+        except OSError as err:
+            if not dest.is_dir():
+                log.die("install_failed", dest=dest, error=err)
+            # Another install finished first: its toolchain is the one in place. Re-verify it; ours is discarded.
+            log.info("already_present", dest=dest, note="another install finished first; ours is discarded")
+            reverify(log, pin, dest)
+            return dest
         log.info("built", dest=dest)
         return dest
     finally:
@@ -207,6 +250,12 @@ def main(argv=None):
             return 0
         install(log, pin, root)
     except Failed:
+        return 1
+    except OSError as err:
+        try:
+            log.write("ERROR", "unexpected_os_error", error=err, errno=err.errno, path=err.filename)
+        except Failed:
+            pass
         return 1
     return 0
 

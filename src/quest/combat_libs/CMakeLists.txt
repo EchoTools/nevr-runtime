@@ -166,8 +166,13 @@ endforeach()
 if(NOT nevr_pin_clang)
   nevr_combat_refuse("${nevr_pin} has no CLANG_VERSION")
 endif()
-# The C++ compiler compiles the rows and the C compiler links them (see "The flags" below), so both are checked.
-foreach(nevr_lang CXX C)
+# The C++ compiler compiles the rows, the C compiler links them (see "The flags" below) and the ASM compiler assembles the donor
+# objects (108 of the 116 rows have one), so all three are checked.
+set(nevr_gated_languages CXX C)
+if(nevr_any_asm)
+  list(APPEND nevr_gated_languages ASM)
+endif()
+foreach(nevr_lang IN LISTS nevr_gated_languages)
   execute_process(COMMAND "${CMAKE_${nevr_lang}_COMPILER}" --version
                   OUTPUT_VARIABLE nevr_clang_out ERROR_VARIABLE nevr_clang_err RESULT_VARIABLE nevr_clang_rc TIMEOUT 60)
   string(REGEX MATCH "^[^\n]*" nevr_clang_first "${nevr_clang_out}${nevr_clang_err}")

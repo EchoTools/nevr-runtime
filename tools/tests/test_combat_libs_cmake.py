@@ -193,6 +193,18 @@ class CombatLibsConfigure(unittest.TestCase):
         self.assertIn("expected: Android (6317467 based on r365631c1) clang version 9.0.8", squash(result.stderr))
         self.assertIn("just toolchain-r21b", squash(result.stderr))
 
+    # --- the preset ---
+
+    def test_the_preset_names_the_toolchain_file_of_the_game_ndk_from_the_environment(self):
+        presets = json.loads((PROJECT / "CMakePresets.json").read_text())
+        configure = {p["name"]: p for p in presets["configurePresets"]}["quest-combat-libs"]
+        self.assertEqual(configure["generator"], "Ninja")
+        self.assertEqual(configure["toolchainFile"], "$env{NEVR_GAME_NDK}/build/cmake/android.toolchain.cmake")
+        self.assertEqual(configure["binaryDir"], "${sourceDir}/../../../build/quest-combat-libs")
+        self.assertEqual((PROJECT / "../../../build/quest-combat-libs").resolve(), (REPO / "build" / "quest-combat-libs").resolve())
+        builds = {p["name"]: p for p in presets["buildPresets"]}
+        self.assertEqual(builds["quest-combat-libs"]["configurePreset"], "quest-combat-libs")
+
     # --- the recipe ---
 
     def test_the_recipe_runs_cmake_not_the_python_builder(self):
@@ -203,8 +215,15 @@ class CombatLibsConfigure(unittest.TestCase):
         self.assertIn("NEVR_COMBAT_LIBSRC names no libsrc directory", recipe)
         self.assertIn("NEVR_STORE_APK names no store APK", recipe)
         self.assertIn("src/quest/combat_libs", recipe)
-        self.assertIn("-DCMAKE_TOOLCHAIN_FILE=", recipe)
+        # ADR 0041 rule 2: the NDK's toolchain file is named by a preset, never passed to cmake by the recipe (violation V2).
+        self.assertIn("cmake --preset quest-combat-libs", recipe)
+        self.assertIn("cmake --build --preset quest-combat-libs", recipe)
+        self.assertIn("tools/install_game_ndk.py --print-dir", recipe)
+        self.assertRegex(recipe, r"NEVR_GAME_NDK=\$\(python3 -I tools/install_game_ndk\.py --print-dir\)")
+        self.assertIn("export NEVR_GAME_NDK", recipe)
         self.assertIn("build/quest-combat-libs", recipe)
+        for forbidden in ("-DCMAKE_TOOLCHAIN_FILE", "cmake -S", " -S ", " -B ", "-G Ninja", "clang"):
+            self.assertNotIn(forbidden, recipe)
         self.assertNotIn("build_quest_combat_libs.py", recipe)
         self.assertNotIn("ANDROID_NDK_HOME", recipe)
         self.assertFalse((REPO / "tools" / "build_quest_combat_libs.py").exists())
@@ -375,6 +394,31 @@ class CombatLibsBuild(unittest.TestCase):
         self.assertNotEqual(gone.returncode, 0)
         self.assertIn(f"lib{H1}.so was not built", squash(gone.stderr))
 
+    def test_the_preset_configures_and_builds_the_fixture_on_the_ndk_the_environment_names(self):
+        self.make_stock()
+        self.write_rows()
+        env = {**os.environ, "NEVR_GAME_NDK": str(self.ndk)}
+        binary = self.fx.build
+        conf = subprocess.run(["cmake", "--preset", "quest-combat-libs", "-B", str(binary), f"-DNEVR_COMBAT_LIBSRC={self.fx.libsrc}",
+                               f"-DNEVR_STORE_APK={self.fx.store}"], cwd=PROJECT, capture_output=True, text=True, env=env, timeout=900)
+        self.assertEqual(conf.returncode, 0, conf.stdout + conf.stderr)
+        cache = (binary / "CMakeCache.txt").read_text()
+        self.assertIn(f"CMAKE_TOOLCHAIN_FILE:FILEPATH={self.ndk}/build/cmake/android.toolchain.cmake", cache)
+        self.assertNotIn("Compatibility with CMake < 3.10", conf.stdout + conf.stderr, "the preset silences the NDK file's deprecation")
+        built = self.build()  # the fixture's directory, not the preset's own build/quest-combat-libs
+        self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+        self.assertTrue((binary / f"lib{H1}.so").is_file())
+
+    def test_a_preset_configure_without_the_ndk_in_the_environment_fails_on_the_toolchain_file(self):
+        self.make_stock()
+        self.write_rows()
+        env = {k: v for k, v in os.environ.items() if k != "NEVR_GAME_NDK"}
+        conf = subprocess.run(["cmake", "--preset", "quest-combat-libs", "-B", str(self.fx.build),
+                               f"-DNEVR_COMBAT_LIBSRC={self.fx.libsrc}", f"-DNEVR_STORE_APK={self.fx.store}"],
+                              cwd=PROJECT, capture_output=True, text=True, env=env, timeout=300)
+        self.assertNotEqual(conf.returncode, 0)
+        self.assertFalse((self.fx.build / "build.ninja").exists())
+
     def test_a_c_compiler_that_is_not_the_pinned_clang_is_refused_though_the_cxx_compiler_is(self):
         # The rows are linked by the C driver, so its version is gated as well as the C++ compiler's.
         stub = self.fx.root / "not-clang.sh"
@@ -389,6 +433,23 @@ class CombatLibsBuild(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(f"the compiler {stub} is not the game's NDK clang", squash(result.stderr))
         self.assertIn("actual: some other compiler 1.0", squash(result.stderr))
+
+    def test_an_asm_compiler_that_is_not_the_pinned_clang_is_refused_when_a_row_has_a_donor_object(self):
+        # 108 of the 116 real rows assemble a donor .s, so the assembler is gated as well. The stand-in forwards everything to
+        # the real clang except --version, so CMake's own checks of it pass and only the pin comparison can refuse it.
+        stub = self.fx.root / "asm-not-clang.sh"
+        stub.write_text(f"#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'some other assembler 2.0'; exit 0; fi\n"
+                        f"exec {self.llvm / 'clang'} \"$@\"\n")
+        stub.chmod(0o755)
+        wrapper = self.fx.root / "wrapper-asm-toolchain.cmake"
+        tc = self.ndk / "build" / "cmake" / "android.toolchain.cmake"
+        wrapper.write_text(f'include("{tc}")\nset(CMAKE_ASM_COMPILER "{stub}")\n')
+        self.make_stock()
+        self.write_rows()
+        result = run(self.fx.configure_args(f"-DCMAKE_TOOLCHAIN_FILE={wrapper}"))
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f"the compiler {stub} is not the game's NDK clang", squash(result.stderr))
+        self.assertIn("actual: some other assembler 2.0", squash(result.stderr))
 
     def test_a_library_with_a_dynamic_initializer_fails_the_static_init_check(self):
         self.make_stock()

@@ -13,23 +13,28 @@ names (`AGENTS.md`, "Quest APK"). r26d is not replaced.
 ## The pin
 
 `tools/game_ndk.pin` is the one place the toolchain is named: the release (`r21b`), the build (`6352462`), the archive URL,
-the archive's sha256 and the exact first line of `clang --version`. `just toolchain-r21b`
+the archive's sha256 and sha1 and the exact first line of `clang --version`. `just toolchain-r21b`
 (`tools/install_game_ndk.py`) installs it:
 
 1. downloads the archive once (3 attempts, 60 s per read) into `downloads/`;
-2. refuses it unless its sha256 is the pin's;
+2. refuses it unless its sha256 and its sha1 are the pin's;
 3. extracts it into a temporary directory;
 4. refuses it unless the first line of its `clang --version` equals the pin's `CLANG_VERSION`;
 5. renames it into place as `ndk-r21b`.
 
-A repeat run re-verifies the archive (when it is still there) and the clang line, and changes nothing. Each step is one JSON
+A repeat run re-verifies the archive (when it is still there) and the clang line, and changes nothing. A cached archive whose
+digests are not the pin's is moved aside to `<name>.zip.corrupt`, logged as `archive_cached_corrupt` (a warning that names the
+file and where it went), and the archive is downloaded again; a download that is not the pinned file is a refusal. When two
+installs run together, the one that finds the toolchain in place at its final rename re-verifies it and logs `already_present`. Each step is one JSON
 line on standard output (standard error for an error), also appended to `ndk-install.log`. Where it installs: a directory
 the repository's tools own, outside every checkout, so all worktrees share one copy:
 `$XDG_CACHE_HOME/nevr-runtime/toolchain/` (else `~/.cache/nevr-runtime/toolchain/`). `--root DIR` overrides it and
 `--print-dir` prints the NDK directory when it is installed.
 
-`src/quest/combat_libs/CMakeLists.txt` reads the same pin: a configure whose compiler's first `--version` line is not the
-pin's stops with both lines in the message. `tools/tests/test_install_game_ndk.py` runs the installer offline against a
+`src/quest/combat_libs/CMakeLists.txt` reads the same pin: a configure whose C++, C or assembler compiler's first `--version`
+line is not the pin's stops with both lines in the message. The preset `quest-combat-libs`
+(`src/quest/combat_libs/CMakePresets.json`) names the NDK's `android.toolchain.cmake` from `$NEVR_GAME_NDK`, which
+`just build-quest-combat-libs` sets from `tools/install_game_ndk.py --print-dir` (ADR 0041, rule 2). `tools/tests/test_install_game_ndk.py` runs the installer offline against a
 fixture archive.
 
 ## Evidence for each pinned value
@@ -61,11 +66,21 @@ Android (6317467 based on r365631c1) clang version 9.0.8 (https://android.google
 the libraries linked into it came from several toolchains. The first entry is the one a script library carries alone, and the
 one the pin names. The installed `clang --version` prints it as its first line, which is what the install gate compares.
 
-**The URL and the sha256.** `curl -sSI` on the URL answers `HTTP/2 200` with `content-length: 1162377080`. The installer's
-download verified to the pinned digest, `0c7af5dd23c5d2564915194e71b1053578438ac992958904703161c7672cbed7`
-(`sha256_ok`, `bytes` `1162377080` in `ndk-install.log`), the same digest the pin was first taken from on an earlier download
-of the same URL. The digest is trust-on-first-use: the pin does not rest on a checksum the NDK's publisher states for this
-archive, and the clang gate is the second check.
+**The URL, the sha256 and the sha1.** `curl -sSI` on the URL answers `HTTP/2 200` with `content-length: 1162377080`. Google's
+SDK repository XML, `https://dl.google.com/android/repository/repository2-3.xml`, lists the file in the package
+`ndk;21.1.6352462`:
+
+```
+<size>1162377080</size>
+<checksum type="sha1">50250fcba479de477b45801e2699cca47f7e1267</checksum>
+<url>android-ndk-r21b-linux-x86_64.zip</url>
+```
+
+`sha1sum` of the installed archive prints `50250fcba479de477b45801e2699cca47f7e1267`, and `stat -c %s` prints `1162377080`.
+That sha1 is `NDK_SHA1` in the pin. The sha256 the installer verified,
+`0c7af5dd23c5d2564915194e71b1053578438ac992958904703161c7672cbed7` (`sha256_ok`, `bytes` `1162377080` in `ndk-install.log`),
+is the digest of the same file; the XML lists a sha1 only, so the sha256 is not a published value. The installer checks both, and
+the clang gate is the third check.
 
 ## Flags
 

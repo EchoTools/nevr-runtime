@@ -6,6 +6,8 @@
 NDK_RELEASE=r21b
 NDK_BUILD=6352462
 NDK_URL=https://dl.google.com/android/repository/android-ndk-r21b-linux-x86_64.zip
-# No checksum is published for r21b: this is the sha256 of the first download.
+# NDK_SHA1 is the checksum Google's SDK repository XML (repository2-3.xml, package ndk;21.1.6352462) lists for this archive
+# (size 1162377080). NDK_SHA256 is the sha256 of the same file; the installer checks both.
 NDK_SHA256=0c7af5dd23c5d2564915194e71b1053578438ac992958904703161c7672cbed7
+NDK_SHA1=50250fcba479de477b45801e2699cca47f7e1267
 CLANG_VERSION=Android (6317467 based on r365631c1) clang version 9.0.8 (https://android.googlesource.com/toolchain/llvm-project e0caee08e5f09b374a27a676d04978c81fcb1928) (based on LLVM 9.0.8svn)

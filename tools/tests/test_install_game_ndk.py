@@ -7,10 +7,14 @@ network and no real NDK. The pin file itself is checked against the values the s
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import importlib.util
+import io
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -61,10 +65,14 @@ class InstallGameNdk(unittest.TestCase):
         make_fixture_zip(self.good_zip, PINNED)
         self.good_sha = hashlib.sha256(self.good_zip.read_bytes()).hexdigest()
 
-    def pin_for(self, name: str, zip_path: pathlib.Path, sha: str, clang: str = PINNED, extra: str = "") -> pathlib.Path:
+    def pin_for(self, name: str, zip_path: pathlib.Path, sha: str, clang: str = PINNED, extra: str = "",
+                sha1: str | None = None) -> pathlib.Path:
         pin = self.tmp / f"{name}.pin"
+        if sha1 is None:
+            sha1 = hashlib.sha1(zip_path.read_bytes()).hexdigest() if zip_path.exists() else "0" * 40
         pin.write_text(
-            f"NDK_RELEASE=r21b\nNDK_BUILD=test\nNDK_URL={zip_path.as_uri()}\nNDK_SHA256={sha}\nCLANG_VERSION={clang}\n{extra}",
+            f"NDK_RELEASE=r21b\nNDK_BUILD=test\nNDK_URL={zip_path.as_uri()}\nNDK_SHA256={sha}\nNDK_SHA1={sha1}\n"
+            f"CLANG_VERSION={clang}\n{extra}",
             encoding="utf-8",
         )
         return pin
@@ -93,6 +101,7 @@ class InstallGameNdk(unittest.TestCase):
             "NDK_BUILD": "6352462",
             "NDK_URL": "https://dl.google.com/android/repository/android-ndk-r21b-linux-x86_64.zip",
             "NDK_SHA256": "0c7af5dd23c5d2564915194e71b1053578438ac992958904703161c7672cbed7",
+            "NDK_SHA1": "50250fcba479de477b45801e2699cca47f7e1267",
             "CLANG_VERSION": PINNED,
         })
 
@@ -106,7 +115,8 @@ class InstallGameNdk(unittest.TestCase):
         clang = root / "ndk-r21b" / CLANG_REL
         self.assertTrue(os.access(clang, os.X_OK), "the extracted clang keeps its execute bit")
         self.assertEqual(self.names(root), [
-            "run_start", "download_start", "sha256_ok", "download_done", "extract_start", "clang_version_ok", "built"])
+            "run_start", "download_start", "sha256_ok", "sha1_ok", "download_done", "extract_start", "clang_version_ok",
+            "built"])
         for record in self.events(root):
             self.assertEqual(record["component"], "toolchain-ndk")
             self.assertIn("ts", record)
@@ -159,20 +169,116 @@ class InstallGameNdk(unittest.TestCase):
         self.assertEqual(again.returncode, 1)
         self.assertIn("clang_version_mismatch", self.names(root))
 
-    def test_a_cached_archive_whose_bytes_changed_is_refused_before_it_is_extracted(self):
+    def test_a_sha1_that_is_not_the_pins_is_refused_though_the_sha256_matches(self):
+        root = self.tmp / "root5a"
+        result = self.run_script(root, self.pin_for("p5a", self.good_zip, self.good_sha, sha1="1" * 40))
+        self.assertEqual(result.returncode, 1)
+        bad = [e for e in self.events(root) if e["event"] == "sha1_mismatch"]
+        self.assertEqual(len(bad), 1)
+        self.assertEqual(bad[0]["expected_sha1"], "1" * 40)
+        self.assertEqual(bad[0]["actual_sha1"], hashlib.sha1(self.good_zip.read_bytes()).hexdigest())
+        self.assertFalse((root / "ndk-r21b").exists())
+        self.assertFalse((root / "downloads" / "android-ndk-r21b-linux-x86_64.zip").exists())
+
+    def test_a_corrupt_cached_archive_is_moved_aside_logged_and_downloaded_again(self):
         root = self.tmp / "root5"
         pin = self.pin_for("p5", self.good_zip, self.good_sha)
         self.assertEqual(self.run_script(root, pin).returncode, 0)
         # Remove the install so the next run must extract again, and corrupt the cached archive.
         subprocess.run(["rm", "-rf", str(root / "ndk-r21b")], check=True)
-        (root / "downloads" / "android-ndk-r21b-linux-x86_64.zip").write_bytes(b"not the archive")
+        cached = root / "downloads" / "android-ndk-r21b-linux-x86_64.zip"
+        cached.write_bytes(b"not the archive")
         before = len(self.events(root))
         again = self.run_script(root, pin)
-        self.assertEqual(again.returncode, 1)
-        later = [e["event"] for e in self.events(root)[before:]]
-        self.assertIn("archive_cached", later)
-        self.assertIn("sha256_mismatch", later)
-        self.assertNotIn("extract_start", later)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        later = self.events(root)[before:]
+        names = [e["event"] for e in later]
+        self.assertEqual(names[:4], ["run_start", "archive_cached", "archive_cached_corrupt", "download_start"])
+        corrupt = later[2]
+        self.assertEqual(corrupt["level"], "WARN")
+        self.assertEqual(corrupt["file"], str(cached))
+        self.assertEqual(corrupt["moved_to"], str(cached) + ".corrupt")
+        self.assertEqual(corrupt["reason"], "sha256_mismatch")
+        self.assertEqual((root / "downloads" / (cached.name + ".corrupt")).read_bytes(), b"not the archive")
+        self.assertEqual(cached.read_bytes(), self.good_zip.read_bytes(), "the archive was downloaded again")
+        self.assertTrue((root / "ndk-r21b" / CLANG_REL).is_file())
+
+    def test_a_corrupt_cache_and_a_bad_download_still_end_in_a_refusal(self):
+        root = self.tmp / "root5b"
+        pin = self.pin_for("p5b", self.good_zip, "0" * 64)
+        cached = root / "downloads" / "android-ndk-r21b-linux-x86_64.zip"
+        cached.parent.mkdir(parents=True)
+        cached.write_bytes(b"not the archive")
+        result = self.run_script(root, pin)
+        self.assertEqual(result.returncode, 1)
+        names = self.names(root)
+        self.assertIn("archive_cached_corrupt", names)
+        self.assertEqual(names[-1], "sha256_mismatch")
+        self.assertFalse((root / "ndk-r21b").exists())
+
+    def test_a_corrupt_cached_archive_does_not_make_an_installed_toolchain_fail(self):
+        root = self.tmp / "root5c"
+        pin = self.pin_for("p5c", self.good_zip, self.good_sha)
+        self.assertEqual(self.run_script(root, pin).returncode, 0)
+        cached = root / "downloads" / "android-ndk-r21b-linux-x86_64.zip"
+        cached.write_bytes(b"not the archive")
+        again = self.run_script(root, pin)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("archive_cached_corrupt", self.names(root))
+        self.assertEqual(self.names(root)[-1], "noop_reverified")
+
+    def test_a_destination_that_appeared_during_the_install_is_reverified_not_a_traceback(self):
+        spec = importlib.util.spec_from_file_location("install_game_ndk", SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        root = self.tmp / "root5d"
+        pin = mod.read_pin(mod.Log(root / "ndk-install.log"), self.pin_for("p5d", self.good_zip, self.good_sha))
+        log = mod.Log(root / "ndk-install.log")
+        dest = root / "ndk-r21b"
+        real_check = mod.check_clang
+        def other_install_finishes_first(lg, pn, clang):
+            real_check(lg, pn, clang)
+            if not dest.exists():  # the first call is on the extracted tree, just before the rename
+                shutil.copytree(clang.parents[5], dest, symlinks=True)
+        mod.check_clang = other_install_finishes_first
+        with contextlib.redirect_stdout(io.StringIO()):
+            got = mod.install(log, pin, root)
+        self.assertEqual(got, dest)
+        names = [e["event"] for e in self.events(root)]
+        self.assertIn("already_present", names)
+        self.assertEqual(names[-1], "noop_reverified")
+        self.assertEqual([p.name for p in root.iterdir() if p.name.startswith(".build-")], [])
+
+    def test_a_destination_that_appeared_with_another_compiler_is_a_structured_refusal(self):
+        spec = importlib.util.spec_from_file_location("install_game_ndk2", SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        root = self.tmp / "root5e"
+        log = mod.Log(root / "ndk-install.log")
+        pin = mod.read_pin(log, self.pin_for("p5e", self.good_zip, self.good_sha))
+        dest = root / "ndk-r21b"
+        real_check = mod.check_clang
+        def other_install_leaves_a_bad_tree(lg, pn, clang):
+            real_check(lg, pn, clang)
+            if not dest.exists():
+                (dest / "toolchains/llvm/prebuilt/linux-x86_64/bin").mkdir(parents=True)
+                bad = dest / mod.CLANG_REL
+                bad.write_text(f"#!/usr/bin/env bash\necho '{WRONG}'\n")
+                bad.chmod(0o755)
+        mod.check_clang = other_install_leaves_a_bad_tree
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(mod.Failed):
+                mod.install(log, pin, root)
+        self.assertIn("clang_version_mismatch", [e["event"] for e in self.events(root)])
+
+    def test_an_os_error_is_a_logged_refusal_not_a_traceback(self):
+        root = self.tmp / "root5f"
+        root.mkdir()
+        (root / "downloads").write_text("a file where the download directory should be")
+        result = self.run_script(root, self.pin_for("p5f", self.good_zip, self.good_sha))
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("unexpected_os_error", self.names(root))
 
     def test_a_download_that_fails_is_refused_and_named(self):
         root = self.tmp / "root6"
@@ -198,7 +304,7 @@ class InstallGameNdk(unittest.TestCase):
         unknown = self.pin_for("p8", self.good_zip, self.good_sha, extra="NDK_FLAVOUR=x\n")
         self.assertEqual(self.run_script(root, unknown).returncode, 1)
         self.assertIn("pin_unknown_key", self.names(root))
-        for field in ("NDK_SHA256", "NDK_URL", "CLANG_VERSION", "NDK_RELEASE", "NDK_BUILD"):
+        for field in ("NDK_SHA256", "NDK_SHA1", "NDK_URL", "CLANG_VERSION", "NDK_RELEASE", "NDK_BUILD"):
             with self.subTest(empty=field):
                 root_n = self.tmp / f"root8-{field}"
                 lines = [line for line in self.pin_for("p8b", self.good_zip, self.good_sha).read_text().splitlines()]

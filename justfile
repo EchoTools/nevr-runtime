@@ -561,33 +561,40 @@ build-quest-q15t: configure-android
 
 # The game's NDK, r21b (tools/game_ndk.pin; evidence in docs/reference/quest-game-ndk.md). The store APK's Quest binaries were built
 # with it, so a build that is compared with them uses it: the combat script libraries (build-quest-combat-libs). Downloads the
-# archive once, verifies its sha256, gates on the pinned `clang --version` line, and installs under
+# archive once, verifies its sha256 and sha1, gates on the pinned `clang --version` line, and installs under
 # $XDG_CACHE_HOME/nevr-runtime/toolchain (else ~/.cache), outside the checkout, shared by every worktree. A repeat run re-verifies.
 # The sentinel and the plugins still build with the r26d NDK that ANDROID_NDK_HOME names.
+
+# Install the game's NDK (r21b, pinned in tools/game_ndk.pin) outside the checkout, verified; a repeat run re-verifies
 toolchain-r21b:
     python3 -I tools/install_game_ndk.py
 
 # The combat script libraries: each library in the libsrc directory NEVR_COMBAT_LIBSRC names (no default; no line of it is
 # copied into this repository) is compiled by src/quest/combat_libs on the game's NDK, r21b (tools/game_ndk.pin; installed by
-# `just toolchain-r21b`, which this recipe runs first), and checked with the plugin static-init check. Writes
-# build/quest-combat-libs/: lib<hash16>.so per library and SHA256SUMS; the output of the build is build/quest-combat-libs/build.log.
-# The rows that link libr15 take the stock file from the store APK NEVR_STORE_APK names.
+# `just toolchain-r21b`, which this recipe runs first), and checked with the plugin static-init check. The preset
+# quest-combat-libs (src/quest/combat_libs/CMakePresets.json) names the NDK's toolchain file from NEVR_GAME_NDK, which the recipe sets from
+# `tools/install_game_ndk.py --print-dir`. Writes build/quest-combat-libs/: lib<hash16>.so per library and SHA256SUMS; the output of
+# the build is build/quest-combat-libs/build.log. The rows that link libr15 take the stock file from the store APK NEVR_STORE_APK names.
+
+# Build the combat script libraries (NEVR_COMBAT_LIBSRC, NEVR_STORE_APK) on the game's NDK r21b into build/quest-combat-libs
 build-quest-combat-libs libsrc=env("NEVR_COMBAT_LIBSRC", "") store_apk=env("NEVR_STORE_APK", ""):
     #!/usr/bin/env bash
     set -euo pipefail
     [ -n "{{ libsrc }}" ] || { echo "build-quest-combat-libs: NEVR_COMBAT_LIBSRC names no libsrc directory" >&2; exit 1; }
     [ -n "{{ store_apk }}" ] || { echo "build-quest-combat-libs: NEVR_STORE_APK names no store APK" >&2; exit 1; }
+    libsrc=$(realpath -m "{{ libsrc }}")
+    store_apk=$(realpath -m "{{ store_apk }}")
     python3 -I tools/install_game_ndk.py
-    ndk=$(python3 -I tools/install_game_ndk.py --print-dir)
-    out=build/quest-combat-libs
-    cmake -Wno-deprecated -S src/quest/combat_libs -B "$out" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
-        -DNEVR_COMBAT_LIBSRC="{{ libsrc }}" -DNEVR_STORE_APK="{{ store_apk }}"
-    if ! cmake --build "$out" > "$out/build.log" 2>&1; then
+    NEVR_GAME_NDK=$(python3 -I tools/install_game_ndk.py --print-dir)
+    export NEVR_GAME_NDK
+    out="$PWD/build/quest-combat-libs"
+    (cd src/quest/combat_libs && cmake --preset quest-combat-libs -DNEVR_COMBAT_LIBSRC="$libsrc" -DNEVR_STORE_APK="$store_apk")
+    if ! (cd src/quest/combat_libs && cmake --build --preset quest-combat-libs) > "$out/build.log" 2>&1; then
         cat "$out/build.log" >&2
-        echo "build-quest-combat-libs: the build failed; its output is in $out/build.log" >&2
+        echo "build-quest-combat-libs: the build failed; its output is in build/quest-combat-libs/build.log" >&2
         exit 1
     fi
-    echo "build-quest-combat-libs: $(wc -l < "$out/SHA256SUMS") libraries in $out; SHA256SUMS written"
+    echo "build-quest-combat-libs: $(wc -l < "$out/SHA256SUMS") libraries in build/quest-combat-libs; SHA256SUMS written"
 
 # The combat content pack (docs/adr/0029-quest-bundled-content-pack.md): the manifest and the one package the pack adds, taken
 # from the game-data zip NEVR_GAME_DATA_ZIP names, whose sha-256 must be NEVR_GAME_DATA_SHA256 (the digest the signed manifest
