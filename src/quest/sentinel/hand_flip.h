@@ -11,13 +11,19 @@
  * unknown device ids are never touched. Default Off: nothing here chooses by controller (the sentinel does not read the
  * interaction profile, ADR 0033 C1).
  *
- * The menu row. texture_menu.cpp adds "Controller Hand Flip" (STRING ARRAY, Off / On) under Texture Resolution on the GRAPHICS
+ * The menu row. texture_menu.cpp adds "Controller Hand Flip" (STRING ARRAY, On / Off) under Texture Resolution on the GRAPHICS
  * page. The row is bound to the setting `graphics|fullscreen`, which the game stores in SR15GfxSettings flags bit 0
  * (kCarrierBit): a Quest has no fullscreen mode, and the consumer audit (docs/design/2026-11-02-quest-hand-flip-toggle.md,
  * "The interim in the sentinel") found nothing in libr15 that reads the bit except a log line in ApplyRuntimeGfxSettings, the
  * JSON round trip of the settings file, and the script expression CR15GfxSettingsExpression, which copies the struct and exposes
- * the bit as a boolean output. texture_menu_hook.cpp's HandleApply reads the bit on every delivery: the first delivery is
- * set to the stored choice (or the default), a later delivery with another bit is the player's choice (SetFromMenu).
+ * the bit as a boolean output.
+ *
+ * The polarity. The game's own value of the bit is 1 (the v6.16.4 headset log prints `Fullscreen: Enabled` at every start), so
+ * Off is the bit set, which is the game's value, and On is the bit cleared. A player who never turns the toggle on therefore
+ * leaves the game's setting as the game holds it (nothing is changed, nothing differs when it is saved). texture_menu_hook.cpp's
+ * HandleApply reads the bit on every delivery: the first delivery is set to the stored choice (or the default, Off), a later
+ * delivery with another bit is the player's choice (SetFromMenu with the choice the bit now means). BitFor and FlipFor are the one
+ * place the inversion is written; the menu's index for a choice is MenuIndexFor (index 0 is "On").
  *
  * The persisted choice. Its own file beside the texture marker, {"version":1,"hand_flip":0|1} (kFileName), written only by a
  * menu change (a derived or default value is never saved). A file without the version, with another version, or with a value
@@ -27,7 +33,10 @@
  *
  * Nothing on the game's call path logs. The poller thread of hand_pose_log_hook.cpp calls Poll(), which writes
  *   {"event":"hand_flip_start","source":"player_marker|default","flip":0|1,"unversioned_marker_ignored":0|1,"consequence":...}
- * once, and, after a change in the menu,
+ * once, then, once, the write of the first delivery into the game's bit
+ *   {"event":"hand_flip_carrier","before":0|1,"after":0|1,"consequence":...}
+ * (before is the bit as the game held it, after the bit the toggle's start chose: with the default, Off, both are 1), and, after a
+ * change in the menu,
  *   {"event":"hand_flip_saved","result":"written|write_failed|no_directory","flip":0|1,"errno":N,"consequence":...}
  * The existing hand_flip_device line carries `flip` (the flag when it is written) and `by` (default, player_marker or menu).
  * There is no per-frame logging.
@@ -54,11 +63,17 @@ inline constexpr std::size_t kCarrierOffset = 0x00;
 inline constexpr std::uint32_t kCarrierBit = 1U;
 inline constexpr const char* kMenuName = "Controller Hand Flip";
 inline constexpr int kMenuValueCount = 2;
-inline constexpr const char* kMenuLabels[kMenuValueCount] = {"Off", "On"};
+inline constexpr const char* kMenuLabels[kMenuValueCount] = {"On", "Off"};
 
 // The persisted choice: a file of our own beside the texture marker (RAD/LoneEcho/ under the game's local app data directory).
 inline constexpr char kFileName[] = "nevr_hand_flip.json";
 inline constexpr int kFileVersion = 1;
+
+// The bit the game holds for a choice, the choice a bit means, and the menu index of a choice (the row lists "On" first, so On is
+// index 0). The game's own value of the bit is 1 (Off); each is its own inverse.
+inline constexpr int BitFor(int flip) noexcept { return flip != 0 ? 0 : 1; }
+inline constexpr int FlipFor(int bit) noexcept { return bit != 0 ? 0 : 1; }
+inline constexpr int MenuIndexFor(int flip) noexcept { return flip != 0 ? 0 : 1; }
 
 // What set the flag: nothing (the default), the player's file at the start, or a change in the menu.
 enum By : int { kByDefault = 0, kByPlayerMarker = 1, kByMenu = 2 };
@@ -153,10 +168,13 @@ inline std::atomic<int> g_startSource{kByDefault};  // kByPlayerMarker when the 
 inline std::atomic<int> g_startFlip{0};          // the flag the start resolved to (the menu may have changed g_flip since)
 inline std::atomic<bool> g_ignored{false};       // the file was there and was not ours to read
 inline std::atomic<int> g_pendingSave{-1};       // the menu's last choice the poller has not yet written (-1: none)
+inline std::atomic<int> g_carrierBefore{-1};     // the bit as the game held it at the first delivery (-1: no delivery yet)
+inline std::atomic<int> g_carrierAfter{-1};      // the bit after the first delivery set it to the start's choice
 inline std::atomic<bool> g_pathReady{false};
 inline char g_path[704];                         // the file's path, written once before g_pathReady
 inline std::atomic<void (*)() noexcept> g_provider{nullptr};  // what resolves the start from the game's directory
 inline bool g_startLogged = false;               // the poller pass only (the poll mutex of hand_pose_log_hook.cpp)
+inline bool g_carrierLogged = false;             // likewise
 
 inline bool Enabled() noexcept { return g_flip.load(std::memory_order_relaxed) != 0; }
 inline int Current() noexcept { return g_flip.load(std::memory_order_relaxed); }
@@ -211,6 +229,13 @@ inline void EnsureStarted() noexcept {
   }
 }
 
+// The first delivery's write into the game's bit, kept for the poller to log once: the bit as the game held it and the bit it was
+// set to. Runs inside the game's call: no logging.
+inline void RecordCarrier(int before, int after) noexcept {
+  g_carrierBefore.store(before != 0 ? 1 : 0, std::memory_order_relaxed);
+  g_carrierAfter.store(after != 0 ? 1 : 0, std::memory_order_release);
+}
+
 // A change in the menu: the flag takes the player's choice at once (the tracking handler reads it on its next call) and the choice
 // is queued for the poller to write. The start is resolved first, so it cannot overwrite the choice afterwards.
 inline void SetFromMenu(int flip) noexcept {
@@ -262,7 +287,7 @@ inline int WritePending() noexcept {
   return 1;
 }
 
-// One poller pass: the start line once it is resolved, then a pending save. Returns the number of lines logged.
+// One poller pass: the start line once it is resolved, the carrier line once the first delivery has written, then a pending save. Returns the number of lines logged.
 inline int Poll() noexcept {
   int lines = 0;
   if (!g_startLogged && g_startState.load(std::memory_order_acquire) == 2) {
@@ -272,6 +297,15 @@ inline int Poll() noexcept {
                          {"flip", g_startFlip.load(std::memory_order_relaxed)},
                          {"unversioned_marker_ignored", g_ignored.load(std::memory_order_acquire) ? 1 : 0},
                          {"consequence", "this start is not saved; only a change in the menu is remembered for the next launch"}});
+    ++lines;
+  }
+  const int after = g_carrierAfter.load(std::memory_order_acquire);
+  if (!g_carrierLogged && after >= 0) {
+    g_carrierLogged = true;
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "hand_flip_carrier",
+                        {{"before", g_carrierBefore.load(std::memory_order_relaxed)},
+                         {"after", after},
+                         {"consequence", "the game's fullscreen setting bit carries the toggle: 1 is Off (the game's own value), 0 is On"}});
     ++lines;
   }
   lines += WritePending();
@@ -288,10 +322,13 @@ inline void ResetForTest() noexcept {
   g_startFlip.store(0);
   g_ignored.store(false);
   g_pendingSave.store(-1);
+  g_carrierBefore.store(-1);
+  g_carrierAfter.store(-1);
   g_pathReady.store(false);
   g_path[0] = '\0';
   g_provider.store(nullptr);
   g_startLogged = false;
+  g_carrierLogged = false;
 }
 
 }  // namespace nevr_quest::hand_flip

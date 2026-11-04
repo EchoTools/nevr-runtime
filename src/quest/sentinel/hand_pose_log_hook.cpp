@@ -230,6 +230,7 @@ int PollLocked() noexcept {
                            {"reserved5", caps[4]},
                            {"hand", HandName(s)},
                            {"model", g_model},
+                           // KNOWN-WRONG #2043 the toggle's flag and what set it (hand_flip.h) leave this line with the toggle.
                            {"flip", hand_flip::Current()},
                            {"by", hand_flip::ByName(hand_flip::CurrentBy())}});
       ++lines;
@@ -251,7 +252,7 @@ int PollLocked() noexcept {
       ++lines;
     }
   }
-  lines += hand_flip::Poll();
+  lines += hand_flip::Poll();  // KNOWN-WRONG #2043 the toggle's start, carrier and save lines
   return lines;
 }
 

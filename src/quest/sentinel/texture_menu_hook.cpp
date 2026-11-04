@@ -213,8 +213,9 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   pthread_mutex_unlock(&g_keptMutex);
   if (kept.text != nullptr && kept.hash == hash && kept.inputSize == input.size()) return {kept.text->data(), kept.text->size()};
   // The Controller Hand Flip row starts on the stored choice when the start was resolved before the menu was read (it is resolved
-  // on the first eye-size query, earlier than the menu document), else on Off.
-  const int handFlipIndex = hand_flip::Started() ? hand_flip::Current() : 0;
+  // on the first eye-size query, earlier than the menu document), else on Off. Its index 0 is "On" (hand_flip::MenuIndexFor).
+  // KNOWN-WRONG #2043 the toggle is the interim.
+  const int handFlipIndex = hand_flip::MenuIndexFor(hand_flip::Started() ? hand_flip::Current() : 0);
   const texture_menu::Result r = document == kMenuSettings
                                      ? texture_menu::RewriteMenuSettings(input, g_defaultIndex.load(std::memory_order_acquire), handFlipIndex)
                                      : texture_menu::RewriteGameSettings(input);
@@ -382,27 +383,33 @@ void HandleValidate(ValidateThunk::Fn original, unsigned char* settings) noexcep
   StoreAt<std::int32_t>(settings, pin::gfx_layout::kMsaa, held < 0 ? 0 : (held > last ? last : held));
 }
 
-// KNOWN-WRONG #2043 The Controller Hand Flip row rides on `graphics|fullscreen`, SR15GfxSettings flags bit 0 (hand_flip.h). The
-// first delivery is the load: the bit is set to the stored choice (or the default Off), so the menu shows it and the next save
-// keeps it. A later delivery with another bit is the player's choice in the menu: the flag the tracking handler reads on its next
-// call takes it now (no restart), and the choice is queued to be written. The game redelivers an unchanged bit when another setting
-// changes; that is not a change.
+// KNOWN-WRONG #2043 The Controller Hand Flip row rides on `graphics|fullscreen`, SR15GfxSettings flags bit 0 (hand_flip.h), whose
+// value in the game is 1: Off is the bit set (the game's own value), On is the bit cleared (hand_flip::BitFor). The first delivery
+// is the load: the bit is set to the stored choice's bit (with the default, Off, it is already 1 and nothing is written), so the
+// menu shows the choice and the next save keeps it; the write, if any, is recorded for the poller to log once (hand_flip_carrier).
+// A later delivery with another bit is the player's choice in the menu: the flag the tracking handler reads on its next call
+// takes it now (no restart), and the choice is queued to be written. The game redelivers an unchanged bit when another setting
+// changes; that is not a change. The game can also put the stock settings back without the menu (UpdateSettings re-reads the
+// settings JSON, InitCI copies the UI rows back): the stock bit is 1, which is Off, so a restore after On reads as the player
+// turning it Off, is saved once (the next delivery carries the same bit, which is no change), and never turns the roll on.
 void HandleHandFlipDelivery(unsigned char* settings) noexcept {
   hand_flip::EnsureStarted();
   std::uint32_t flags = LoadAt<std::uint32_t>(settings, hand_flip::kCarrierOffset);
   int carried = (flags & hand_flip::kCarrierBit) != 0 ? 1 : 0;
   if (g_lastHandFlip.load(std::memory_order_acquire) == kUnset) {
-    const int start = hand_flip::Current();
-    if (carried != start) {
-      flags = start != 0 ? (flags | hand_flip::kCarrierBit) : (flags & ~hand_flip::kCarrierBit);
+    const int before = carried;
+    const int wanted = hand_flip::BitFor(hand_flip::Current());
+    if (carried != wanted) {
+      flags = wanted != 0 ? (flags | hand_flip::kCarrierBit) : (flags & ~hand_flip::kCarrierBit);
       StoreAt<std::uint32_t>(settings, hand_flip::kCarrierOffset, flags);
-      carried = start;
+      carried = wanted;
     }
+    hand_flip::RecordCarrier(before, carried);
     g_lastHandFlip.store(carried, std::memory_order_release);
     return;
   }
   const int previous = g_lastHandFlip.exchange(carried, std::memory_order_acq_rel);
-  if (previous != carried) hand_flip::SetFromMenu(carried);
+  if (previous != carried) hand_flip::SetFromMenu(hand_flip::FlipFor(carried));
 }
 
 // ApplyRuntimeGfxSettings: the game's settings, delivered at boot and on every change. `graphics|msaa` is the control.
@@ -664,6 +671,7 @@ int PollLocked() noexcept {
                          {"result", texture_menu::StatusName(static_cast<texture_menu::Status>(status - 1))},
                          {"rows", g_jsonRows[document].load(std::memory_order_relaxed)},
                          {"pages", g_jsonPages[document].load(std::memory_order_relaxed)},
+                         // KNOWN-WRONG #2043 the Controller Hand Flip rows the rewrite wrote or removed (hand_flip.h).
                          {"hand_flip_rows", g_jsonHandFlip[document].load(std::memory_order_relaxed)}});
     ++lines;
   }
@@ -936,6 +944,7 @@ void ArmForTest(const Game& game, tq::Level configLevel, bool /*fromConfig*/, Pr
   g_property.store(property, std::memory_order_release);
   g_defaultIndex.store(tq::MenuIndexForLevel(configLevel), std::memory_order_release);
   tq::SetStartResolver(&ResolveStart);
+  // KNOWN-WRONG #2043 the Controller Hand Flip start is resolved from the same directory as the texture marker.
   hand_flip::SetStartProvider(&ProvideHandFlipStart);
   FileThunk::Arm(kFileHook);
   TextThunk::Arm(kTextHook);
