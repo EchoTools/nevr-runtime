@@ -10,6 +10,7 @@
  */
 
 #include "sentinel.h"
+#include "sentinel_log.h"
 #include "generated/nevr_build_info.h"
 #include "got_hook.h"
 #include "clock_levels_hook.h"
@@ -197,6 +198,8 @@ bool RegisterTextureQualityCounters() noexcept {
 bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
                                bool countersRegistered) noexcept {
     if (!nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered)) return false;
+    // A level chosen in the menu is written to the same config.yaml the key was read from.
+    nevr_quest::texture_menu::SetConfigFile(nevr_quest::ConfigFilePath(sentinel::FilesDir()).c_str());
     return nevr_quest::texture_menu::Install(level, fromConfig);
 }
 

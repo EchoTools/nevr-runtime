@@ -30,7 +30,8 @@
 // mapping, a list, a key with no value), an unset ${VAR}, a `graphics` section that is not a mapping, or a file that is
 // rejected as a whole. Each is one Warning that names the key (and the word, when it is short printable ASCII). A key under
 // `graphics` other than `texture_quality` (a misspelling, another case) is one Warning that names it, and changes nothing else.
-// `stock` leaves the headset runtime's own eye-buffer size.
+// `stock` leaves the headset runtime's own eye-buffer size. The key is also where a choice made in the Texture Resolution control is
+// kept (texture_menu_hook.h): the sentinel writes it through NevrConfig::Set, so the next launch reads the player's last choice here.
 #pragma once
 
 #include <cstddef>

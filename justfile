@@ -1937,8 +1937,13 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     "${cxx[@]}" -fno-exceptions -pthread -isystem "$out/attach_json_inc" -c src/quest/sentinel/texture_menu_hook.cpp \
         -o "$out/texture_menu_hook.o"
     "${cxx[@]}" -isystem "$out/attach_json_inc" -c src/quest/sentinel/texture_menu.cpp -o "$out/texture_menu.o"
+    # The player's choice is written to config.yaml by NevrConfig::Set (src/core/nevr_config.cpp, built with exceptions against the host
+    # yaml-cpp, like test-quest-shared), so the test links it and the host yaml-cpp.
+    yaml_host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    [[ -f "$yaml_host/lib/libyaml-cpp.a" ]] || { echo "test-quest-hooks: FAIL — $yaml_host/lib/libyaml-cpp.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    "${cxx[@]}" -isystem "$yaml_host/include" -c src/core/nevr_config.cpp -o "$out/nevr_config.o"
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/texture_menu_hook_test.cpp "$out/texture_menu_hook.o" "$out/texture_menu.o" \
-        src/quest/sentinel/texture_quality_hook.cpp \
+        "$out/nevr_config.o" "$yaml_host/lib/libyaml-cpp.a" src/quest/sentinel/texture_quality_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/texture_menu_hook_test" -ldl
     timeout 120 "$out/texture_menu_hook_test"

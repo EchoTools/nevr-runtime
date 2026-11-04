@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/nevr_config.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "quest/tests/test_check.h"
@@ -442,56 +443,65 @@ void AStockConfigurationChangesNothingAtTheFirstDelivery() {
 
 // ---- the saved value -----------------------------------------------------------------------------------------------------
 
-// A game directory with RAD/LoneEcho in it: the game's settings file (`settings`), and the player's marker (`marker`), each only
-// when given.
-std::string MakeSettingsDirectory(const char* settings, const char* marker = nullptr) {
+// A game directory with RAD/LoneEcho in it: the game's settings file (`settings`), and the player's config.yaml (`config`) at the
+// root of the directory, each only when given.
+std::string MakeSettingsDirectory(const char* settings, const char* config = nullptr) {
   char dir[] = "/tmp/texmenuXXXXXX";
   if (mkdtemp(dir) == nullptr) return "";
   const std::string root = dir;
   const std::string rad = root + "/RAD";
   const std::string lone = rad + "/LoneEcho";
   if (mkdir(rad.c_str(), 0700) != 0 || mkdir(lone.c_str(), 0700) != 0) return "";
-  for (const auto& [name, contents] : {std::pair<const char*, const char*>{"settings_mp_v2_quest.json", settings},
-                                       std::pair<const char*, const char*>{tm::kMarkerFile, marker}}) {
+  for (const auto& [name, contents] : {std::pair<std::string, const char*>{lone + "/settings_mp_v2_quest.json", settings},
+                                       std::pair<std::string, const char*>{root + "/config.yaml", config}}) {
     if (contents == nullptr) continue;
-    std::FILE* f = std::fopen((lone + "/" + name).c_str(), "w");
+    std::FILE* f = std::fopen(name.c_str(), "w");
     if (f == nullptr) return "";
     std::fputs(contents, f);
     std::fclose(f);
   }
   return root;
 }
-std::string ReadMarker(const std::string& root) {
-  std::FILE* f = std::fopen((root + "/RAD/LoneEcho/" + tm::kMarkerFile).c_str(), "r");
+std::string ConfigPath(const std::string& root) { return root + "/config.yaml"; }
+std::string ReadConfig(const std::string& root) {
+  std::FILE* f = std::fopen(ConfigPath(root).c_str(), "r");
   if (f == nullptr) return "";
-  char buffer[256] = {};
+  char buffer[512] = {};
   const std::size_t n = std::fread(buffer, 1, sizeof(buffer) - 1, f);
   std::fclose(f);
   return std::string(buffer, n);
 }
+// The level the next launch reads from the directory's config.yaml (graphics.texture_quality), as quest_config does, or
+// `fallback` when the key is absent.
+tq::Level NextLaunchLevel(const std::string& root, tq::Level fallback) {
+  const nevr::NevrConfig config = nevr::NevrConfig::LoadFromFile(ConfigPath(root));
+  const std::string word = config.GetString("graphics.texture_quality").value_or("");
+  tq::Level level = fallback;
+  return tq::ParseLevel(word.c_str(), &level) ? level : fallback;
+}
 void RemoveSettingsDirectory(const std::string& root) {
   std::remove((root + "/RAD/LoneEcho/settings_mp_v2_quest.json").c_str());
-  std::remove((root + "/RAD/LoneEcho/" + tm::kMarkerFile).c_str());
-  std::remove((root + "/RAD/LoneEcho/" + tm::kMarkerFile + ".tmp").c_str());
+  std::remove(ConfigPath(root).c_str());
+  std::remove((ConfigPath(root) + ".tmp").c_str());
   rmdir((root + "/RAD/LoneEcho").c_str());
   rmdir((root + "/RAD").c_str());
   rmdir(root.c_str());
 }
 
-// What the player chose (the marker) starts the game at that level, on the very first eye-size answer, before the game has
-// delivered anything; and the first delivery is the player's, not the configuration's. The game's own slot may hold anything.
-void ASavedLevelStartsTheGameAndOutranksTheConfiguration() {
-  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 0, "sharpening": 1.5}})", R"({"version":1,"menu_index":4})");
+// The configuration's level (the key the menu writes) starts the game on the very first eye-size answer, before the game has
+// delivered anything; and the first delivery is that level, not the game's slot, which may hold anything.
+void TheConfigurationsLevelStartsTheGameWhateverTheGamesSlotHolds() {
+  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 0, "sharpening": 1.5}})", "graphics:\n  texture_quality: very_high\n");
   QCHECK(!dir.empty());
-  Reset(tq::Level::kHigh);  // the configuration says High
+  Reset(tq::Level::kVeryHigh, true);  // the file says Very High
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
   g_appDataDir = dir;
-  QCHECK(Eye().first == 3584 && Eye().second == 3944);  // Very High, the marked level
+  QCHECK(Eye().first == 3584 && Eye().second == 3944);  // Very High
   QCHECK(tq::LatchedLevel() == tq::Level::kVeryHigh);
   alignas(8) unsigned char settings[kSettingsBytes] = {};
-  SetMsaa(settings, 0);  // the game's slot says Very Low (an older file): the player's choice stands, in the settings the game keeps
+  SetMsaa(settings, 0);  // the game's slot says Very Low (an older file): the configuration stands, in the settings the game keeps
   Deliver(settings);
-  QCHECK(GetMsaa(settings) == 4 && g_applySawMsaa == 4 && tm::CurrentTotals().configOverrides == 0);
+  QCHECK(GetMsaa(settings) == 4 && g_applySawMsaa == 4 && tm::CurrentTotals().configOverrides == 1);
   QCHECK(tq::RequestedLevelValue() == static_cast<int>(tq::Level::kVeryHigh));
   g_order.clear();
   Frame();
@@ -499,8 +509,8 @@ void ASavedLevelStartsTheGameAndOutranksTheConfiguration() {
   RemoveSettingsDirectory(dir);
 }
 
-void WithNothingSavedTheConfigurationsLevelStarts() {
-  // Whatever the game's own file holds (a saved `msaa` included: it is not a choice of the player's), with no marker.
+void WithNoKeyTheConfigurationsLevelStarts() {
+  // Whatever the game's own file holds (a saved `msaa` included: it is not a choice of the player's), with no key in the file.
   for (const char* contents : {static_cast<const char*>(nullptr), "{}", "{\"graphics\": {\"sharpening\": 1.5}}", "not json at all",
                                "{\"graphics\": {\"msaa\": 0}}", "{\"graphics\": {\"msaa\": 4}}"}) {
     const std::string dir = MakeSettingsDirectory(contents);
@@ -509,16 +519,6 @@ void WithNothingSavedTheConfigurationsLevelStarts() {
     g_appDataDir = dir;
     QCHECK(Eye().first == 2376 && Eye().second == 2568);
     QCHECK(tq::LatchedLevel() == tq::Level::kMedium);
-    RemoveSettingsDirectory(dir);
-  }
-  // A marker that holds no choice is no marker.
-  for (const char* marker : {"", "{}", "not json at all", R"({"menu_index": "4"})", R"({"menu_index": 2.5})",
-                             R"({"menu_index":4})", R"({"version":0,"menu_index":4})", R"({"version":2,"menu_index":4})"}) {
-    const std::string dir = MakeSettingsDirectory(nullptr, marker);
-    QCHECK(!dir.empty());
-    Reset(tq::Level::kMedium);
-    g_appDataDir = dir;
-    QCHECK(Eye().first == 2376 && Eye().second == 2568);
     RemoveSettingsDirectory(dir);
   }
   // No directory at all (the game's function wrote nothing): the same.
@@ -551,49 +551,55 @@ void AFreshSettingsFileStartsAtTheDefaultNotVeryLow() {
     QCHECK(tm::CurrentTotals().configOverrides == 1);
     QCHECK(tm::PollOnceForTest() >= 1);  // the poller runs seconds before the first frame applies anything
     const std::string start = LineWith("\"event\":\"texture_quality_start\"");
-    QCHECK(start.find("\"source\":\"config\"") != std::string::npos && start.find("\"quality\":\"stock\"") != std::string::npos);
+    QCHECK(start.find("\"source\":\"default\"") != std::string::npos && start.find("\"quality\":\"stock\"") != std::string::npos);
     g_order.clear();
     Frame();
     QCHECK(g_resizeCalls == 0 && Eye().first == kQ3W);  // Low is the stock size: nothing is rebuilt
     tm::PollOnceForTest();
-    QCHECK(CountLines("texture_quality_saved") == 0 && ReadMarker(dir).empty());  // nothing was chosen, nothing is remembered
-    QCHECK(tm::CurrentTotals().markerWrites == 0);
+    QCHECK(CountLines("texture_quality_saved") == 0 && ReadConfig(dir).empty());  // nothing was chosen, nothing is remembered
+    QCHECK(tm::CurrentTotals().saveWrites == 0);
     RemoveSettingsDirectory(dir);
   }
 }
 
-// What the player chooses in the menu is remembered, and only that: the next launch starts there.
-void AMenuChoicePersistsToTheNextLaunch() {
-  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 0}})");
+// What the player chooses in the menu is remembered, and only that: the next launch starts there. It is remembered as the one key
+// graphics.texture_quality in config.yaml, edited in place: the comments and every other key of the file stay.
+void AMenuChoicePersistsToTheNextLaunchAsTheConfigKey() {
+  const char* const before = "# nEVR config\nservices:\n  socket_uri: wss://example.invalid/ws   # kept\n";
+  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 0}})", before);
   QCHECK(!dir.empty());
   Reset(tq::Level::kStock, false);
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
   Capture log;
   g_appDataDir = dir;
+  tm::SetConfigFile(ConfigPath(dir).c_str());
   Eye();
   alignas(8) unsigned char settings[kSettingsBytes] = {};
   SetMsaa(settings, 0);
   Deliver(settings);  // the load: the default, no choice
   Deliver(settings);  // another setting changed: the same index again is no choice
   tm::PollOnceForTest();
-  QCHECK(ReadMarker(dir).empty() && tm::CurrentTotals().markerWrites == 0);
+  QCHECK(ReadConfig(dir) == before && tm::CurrentTotals().saveWrites == 0);
 
   SetMsaa(settings, 4);  // the player picks Very High
   Deliver(settings);
   QCHECK(tm::PollOnceForTest() >= 1);
-  QCHECK(ReadMarker(dir) == R"({"version":1,"menu_index":4})");  // a menu change writes the versioned marker
+  QCHECK(ReadConfig(dir) == std::string(before) + "graphics:\n  texture_quality: very_high\n");  // appended; the rest is untouched
   const std::string saved = LineWith("\"event\":\"texture_quality_saved\"");
   QCHECK(saved.find("\"result\":\"written\"") != std::string::npos && saved.find("\"quality\":\"very_high\"") != std::string::npos);
   QCHECK(saved.find("\"menu_index\":4") != std::string::npos);
-  QCHECK(tm::CurrentTotals().markerWrites == 1 && tm::CurrentTotals().markerFailures == 0);
+  QCHECK(tm::CurrentTotals().saveWrites == 1 && tm::CurrentTotals().saveFailures == 0);
   Deliver(settings);  // redelivered unchanged
   tm::PollOnceForTest();
-  QCHECK(CountLines("texture_quality_saved") == 1 && tm::CurrentTotals().markerWrites == 1);
+  QCHECK(CountLines("texture_quality_saved") == 1 && tm::CurrentTotals().saveWrites == 1);
 
-  // The next launch: the marker starts the game at Very High, and the control shows it whatever the game's slot holds.
-  Reset(tq::Level::kStock, false);
+  // The next launch reads the key like any other: it starts the game at Very High, and the control shows it whatever the slot holds.
+  const tq::Level next = NextLaunchLevel(dir, tq::Level::kStock);
+  QCHECK(next == tq::Level::kVeryHigh);
+  Reset(next, true);
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
   g_appDataDir = dir;
+  tm::SetConfigFile(ConfigPath(dir).c_str());
   QCHECK(Eye().first == 3584 && Eye().second == 3944);
   SetMsaa(settings, 0);
   Deliver(settings);
@@ -601,27 +607,30 @@ void AMenuChoicePersistsToTheNextLaunch() {
   g_lines.clear();
   tm::PollOnceForTest();
   const std::string start = LineWith("\"event\":\"texture_quality_start\"");
-  QCHECK(start.find("\"source\":\"player_marker\"") != std::string::npos && start.find("\"quality\":\"very_high\"") != std::string::npos);
+  QCHECK(start.find("\"source\":\"config\"") != std::string::npos && start.find("\"quality\":\"very_high\"") != std::string::npos);
   QCHECK(CountLines("texture_quality_saved") == 0);  // restoring is not choosing
 
-  // Choosing Very Low is a choice like any other, and is told apart from never having chosen.
+  // A later choice replaces the value in place (the key is not added twice); Very Low is a choice like any other.
   SetMsaa(settings, 0);
   Deliver(settings);
   tm::PollOnceForTest();
-  QCHECK(ReadMarker(dir) == R"({"version":1,"menu_index":0})");
-  Reset(tq::Level::kStock, false);
+  QCHECK(ReadConfig(dir) == std::string(before) + "graphics:\n  texture_quality: very_low\n");
+  QCHECK(NextLaunchLevel(dir, tq::Level::kStock) == tq::Level::kVeryLow);
+  Reset(tq::Level::kVeryLow, true);
   g_appDataDir = dir;
   QCHECK(Eye().first == 1344 && Eye().second == 1408);  // Very Low on a Quest 3
-  QCHECK(tq::LatchedLevel() == tq::Level::kVeryLow);
   RemoveSettingsDirectory(dir);
 }
 
-// A choice that cannot be written is loud, with what it costs, and counted.
+// A choice that cannot be written is loud, with the reason and what it costs, and counted; the file it could not edit is left as it was.
 void AChoiceThatCannotBeWrittenIsLoud() {
+  // A file nevr_config will not edit in place (the graphics block is flow style): refused, the file untouched.
+  const std::string dir = MakeSettingsDirectory(nullptr, "graphics: {texture_quality: low}\n");
   Reset(tq::Level::kStock, false);
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
   Capture log;
-  g_appDataDir = "/nonexistent/texmenu";
+  g_appDataDir = dir;
+  tm::SetConfigFile(ConfigPath(dir).c_str());
   Eye();
   alignas(8) unsigned char settings[kSettingsBytes] = {};
   SetMsaa(settings, 1);
@@ -629,12 +638,28 @@ void AChoiceThatCannotBeWrittenIsLoud() {
   SetMsaa(settings, 3);
   Deliver(settings);
   QCHECK(tm::PollOnceForTest() >= 1);
-  const std::string saved = LineWith("\"event\":\"texture_quality_saved\"");
-  QCHECK(saved.find("\"level\":\"error\"") != std::string::npos && saved.find("\"result\":\"write_failed\"") != std::string::npos);
-  QCHECK(saved.find("\"errno\":2") != std::string::npos && saved.find("\"consequence\"") != std::string::npos);
-  QCHECK(tm::CurrentTotals().markerFailures == 1 && tm::CurrentTotals().markerWrites == 0);
+  const std::string refused = LineWith("\"event\":\"texture_quality_saved\"");
+  QCHECK(refused.find("\"level\":\"warn\"") != std::string::npos && refused.find("\"result\":\"refused\"") != std::string::npos);
+  QCHECK(refused.find("\"reason\":\"section_flow_style\"") != std::string::npos && refused.find("\"consequence\"") != std::string::npos);
+  QCHECK(ReadConfig(dir) == "graphics: {texture_quality: low}\n");
+  QCHECK(tm::CurrentTotals().saveFailures == 1 && tm::CurrentTotals().saveWrites == 0);
+  RemoveSettingsDirectory(dir);
 
-  // The start resolver never ran (no eye-size query): there is no directory to write to, and it says so.
+  // A file in a folder that is not there: the write fails with the errno.
+  Reset(tq::Level::kStock, false);
+  *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
+  g_lines.clear();
+  tm::SetConfigFile("/nonexistent/texmenu/config.yaml");
+  SetMsaa(settings, 1);
+  Deliver(settings);
+  SetMsaa(settings, 3);
+  Deliver(settings);
+  tm::PollOnceForTest();
+  const std::string failed = LineWith("\"event\":\"texture_quality_saved\"");
+  QCHECK(failed.find("\"reason\":\"write_failed\"") != std::string::npos && failed.find("\"errno\":2") != std::string::npos);
+  QCHECK(tm::CurrentTotals().saveFailures == 1 && tm::CurrentTotals().saveWrites == 0);
+
+  // No config path was given (SetConfigFile never ran): there is nothing to write to, and it says so.
   Reset(tq::Level::kStock, false);
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
   g_lines.clear();
@@ -643,8 +668,8 @@ void AChoiceThatCannotBeWrittenIsLoud() {
   SetMsaa(settings, 3);
   Deliver(settings);
   tm::PollOnceForTest();
-  QCHECK(LineWith("\"event\":\"texture_quality_saved\"").find("\"result\":\"no_directory\"") != std::string::npos);
-  QCHECK(tm::CurrentTotals().markerFailures == 1);
+  QCHECK(LineWith("\"event\":\"texture_quality_saved\"").find("\"result\":\"no_config_file\"") != std::string::npos);
+  QCHECK(tm::CurrentTotals().saveFailures == 1);
 }
 
 // ---- ValidateGfxSettings -------------------------------------------------------------------------------------------------
@@ -822,14 +847,14 @@ void TheSameDocumentReadAgainIsServedTheSameRewrite() {
 // ---- the log -----------------------------------------------------------------------------------------------------------
 
 void ThePollerWritesTheStartTheRequestsAndTheChanges() {
-  const std::string dir = MakeSettingsDirectory(nullptr, R"({"version":1,"menu_index":2})");
-  Reset(tq::Level::kLow);
+  const std::string dir = MakeSettingsDirectory(nullptr, "graphics:\n  texture_quality: medium\n");
+  Reset(tq::Level::kMedium, true);
   Capture log;
   g_appDataDir = dir;
-  Eye();  // the first query: the marked level is Medium
+  Eye();  // the first query: the configured level is Medium
   QCHECK(tm::PollOnceForTest() >= 1);
   const std::string start = LineWith("\"event\":\"texture_quality_start\"");
-  QCHECK(start.find("\"source\":\"player_marker\"") != std::string::npos && start.find("\"quality\":\"medium\"") != std::string::npos);
+  QCHECK(start.find("\"source\":\"config\"") != std::string::npos && start.find("\"quality\":\"medium\"") != std::string::npos);
   QCHECK(start.find("\"menu_index\":2") != std::string::npos);
   QCHECK(CountLines("texture_quality_start") == 1);
   tm::PollOnceForTest();
@@ -924,9 +949,9 @@ void TheCountersRegisterAndLeaveTheRestOfTheTable() {
 
 // ---- the reference input's start rule (#1737 C4) ------------------------------------------------------------------------------
 
-// On the reference libr15, with a `stock` configuration and no marker, the start is his rule when the settings file names an `msaa`
+// On the reference libr15, with a `stock` configuration, the start is his rule when the settings file names an `msaa`
 // index V (level kLow + V). With no file or no key it is the platform default, the headset's own size. Neither is the player's choice,
-// so neither is written as the marker (#1988).
+// so neither is written to config.yaml (#1988).
 void ReferenceRuleWithNoSettingsFileStartsAtThePlatformDefaultAndSavesNothing() {
   for (const char* settingsFile : {static_cast<const char*>(nullptr), "{}", R"({"graphics": {"sharpening": 1.5}})"}) {
     Reset(tq::Level::kStock, true);
@@ -946,11 +971,10 @@ void ReferenceRuleWithNoSettingsFileStartsAtThePlatformDefaultAndSavesNothing() 
     const std::string start = LineWith("\"event\":\"texture_quality_start\"");
     QCHECK(start.find("\"source\":\"platform_default\"") != std::string::npos);
     QCHECK(start.find("\"input\":\"reference\"") != std::string::npos && start.find("\"quality\":\"stock\"") != std::string::npos);
-    QCHECK(start.find("\"unversioned_marker_ignored\":0") != std::string::npos);
     QCHECK(CountLines("\"source\":\"reference_rule\"") == 0);
     tm::PollOnceForTest();
-    QCHECK(CountLines("texture_quality_saved") == 0 && ReadMarker(dir).empty());  // no marker written
-    QCHECK(tm::CurrentTotals().markerWrites == 0);
+    QCHECK(CountLines("texture_quality_saved") == 0 && ReadConfig(dir).empty());  // nothing written to config.yaml
+    QCHECK(tm::CurrentTotals().saveWrites == 0);
     RemoveSettingsDirectory(dir);
   }
 }
@@ -968,22 +992,22 @@ void ReferenceRuleReadsTheMsaaIndexOfTheSettingsFileAndSavesNothing() {
   QCHECK(CountLines("\"source\":\"reference_rule\"") == 1);
   QCHECK(CountLines("\"reference_file\":\"read\"") == 1);
   tm::PollOnceForTest();
-  QCHECK(ReadMarker(dir).empty() && tm::CurrentTotals().markerWrites == 0);  // derived, not chosen
+  QCHECK(ReadConfig(dir).empty() && tm::CurrentTotals().saveWrites == 0);  // derived, not chosen
   RemoveSettingsDirectory(dir);
 }
 
-// The player stuck at High on 6.14 to 6.16 has {"menu_index":3} in the marker file, which cannot be told from a choice. It is not
-// read: the start is the platform default, the log says so, the file is left alone, and the first change in the menu writes the
-// versioned marker, which the next launch honors.
-void AnUnversionedMarkerIsIgnoredAndTheFirstMenuChangeWritesAVersionedOne() {
+// On either input a choice in the menu is written as the config key, and the next launch honors it: the reference rule does not run
+// once the key names a level.
+void AMenuChoiceIsWrittenAndHonoredOnTheNextLaunchOnEveryInput() {
   for (const tq::EyeInput input : {tq::EyeInput::kReference, tq::EyeInput::kStock}) {
-    const std::string dir = MakeSettingsDirectory(R"({"graphics": {"sharpening": 1.5}})", R"({"menu_index":3})");
+    const std::string dir = MakeSettingsDirectory(R"({"graphics": {"sharpening": 1.5}})");
     QCHECK(!dir.empty());
-    Reset(tq::Level::kStock, true);
+    Reset(tq::Level::kStock, false);
     tq::SetInputForTest(input);
     *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApply);
     Capture log;
     g_appDataDir = dir;
+    tm::SetConfigFile(ConfigPath(dir).c_str());
     QCHECK(Eye().first == kQ3W && Eye().second == kQ3H);  // not High
     QCHECK(tq::LatchedLevel() == tq::Level::kStock);
     alignas(8) unsigned char settings[kSettingsBytes] = {};
@@ -991,41 +1015,25 @@ void AnUnversionedMarkerIsIgnoredAndTheFirstMenuChangeWritesAVersionedOne() {
     Deliver(settings);
     QCHECK(GetMsaa(settings) == tq::kDefaultMenuIndex && tq::RequestedLevelValue() == static_cast<int>(tq::Level::kLow));
     QCHECK(tm::PollOnceForTest() > 0);
-    const std::string start = LineWith("\"event\":\"texture_quality_start\"");
-    QCHECK(start.find("\"source\":\"player_marker\"") == std::string::npos);
-    QCHECK(start.find("\"quality\":\"stock\"") != std::string::npos);
-    QCHECK(start.find("\"unversioned_marker_ignored\":1") != std::string::npos);
-    QCHECK(ReadMarker(dir) == R"({"menu_index":3})" && tm::CurrentTotals().markerWrites == 0);  // left alone until a real change
+    QCHECK(ReadConfig(dir).empty() && tm::CurrentTotals().saveWrites == 0);  // left alone until a real change
 
     SetMsaa(settings, 2);  // the player picks Medium
     Deliver(settings);
     QCHECK(tm::PollOnceForTest() >= 1);
-    QCHECK(ReadMarker(dir) == R"({"version":1,"menu_index":2})");
+    QCHECK(ReadConfig(dir) == "graphics:\n  texture_quality: medium\n");
 
-    Reset(tq::Level::kStock, true);  // the next launch
+    const tq::Level next = NextLaunchLevel(dir, tq::Level::kStock);  // the next launch
+    QCHECK(next == tq::Level::kMedium);
+    Reset(next, true);
     tq::SetInputForTest(input);
     g_lines.clear();
     g_appDataDir = dir;
-    QCHECK(Eye().first == 2376 && Eye().second == 2568);  // Medium: the versioned marker is honored
+    QCHECK(Eye().first == 2376 && Eye().second == 2568);  // Medium: the key is honored
     tm::PollOnceForTest();
     const std::string again = LineWith("\"event\":\"texture_quality_start\"");
-    QCHECK(again.find("\"source\":\"player_marker\"") != std::string::npos && again.find("\"quality\":\"medium\"") != std::string::npos);
-    QCHECK(again.find("\"unversioned_marker_ignored\":0") != std::string::npos);
+    QCHECK(again.find("\"source\":\"config\"") != std::string::npos && again.find("\"quality\":\"medium\"") != std::string::npos);
     RemoveSettingsDirectory(dir);
   }
-}
-
-// A marker of another version is no more readable than one with none.
-void AMarkerOfAnotherVersionIsIgnored() {
-  const std::string dir = MakeSettingsDirectory(nullptr, R"({"version":2,"menu_index":4})");
-  QCHECK(!dir.empty());
-  Reset(tq::Level::kMedium, true);
-  Capture log;
-  g_appDataDir = dir;
-  QCHECK(Eye().first == 2376 && Eye().second == 2568);  // the configuration's level
-  tm::PollOnceForTest();
-  QCHECK(LineWith("\"event\":\"texture_quality_start\"").find("\"unversioned_marker_ignored\":1") != std::string::npos);
-  RemoveSettingsDirectory(dir);
 }
 
 void AConfiguredLowOutranksTheReferenceRule() {
@@ -1042,14 +1050,14 @@ void AConfiguredLowOutranksTheReferenceRule() {
   RemoveSettingsDirectory(dir);
 }
 
-void APlayersMarkerOutranksTheReferenceRule() {
-  Reset(tq::Level::kStock, true);
+void AConfiguredVeryLowOutranksTheReferenceRule() {
+  Reset(tq::Level::kVeryLow, true);
   tq::SetInputForTest(tq::EyeInput::kReference);
-  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 3}})", R"({"version":1,"menu_index":0})");
+  const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 3}})", "graphics:\n  texture_quality: very_low\n");
   QCHECK(!dir.empty());
   g_appDataDir = dir;
   Capture log;
-  QCHECK(Eye().first == 1344 && Eye().second == 1408);  // Very Low: the marker, not msaa 3 (High)
+  QCHECK(Eye().first == 1344 && Eye().second == 1408);  // Very Low: the key, not msaa 3 (High)
   QCHECK(tq::LatchedLevel() == tq::Level::kVeryLow);
   QCHECK(CountLines("\"source\":\"reference_rule\"") == 0);
   RemoveSettingsDirectory(dir);
@@ -1084,10 +1092,10 @@ int main() {
   EveryDeliveryAsksForTheLevelTheMenuHolds();
   TheFirstDeliveryTakesTheConfigurationsLevelWhenNothingIsSaved();
   AStockConfigurationChangesNothingAtTheFirstDelivery();
-  ASavedLevelStartsTheGameAndOutranksTheConfiguration();
-  WithNothingSavedTheConfigurationsLevelStarts();
+  TheConfigurationsLevelStartsTheGameWhateverTheGamesSlotHolds();
+  WithNoKeyTheConfigurationsLevelStarts();
   AFreshSettingsFileStartsAtTheDefaultNotVeryLow();
-  AMenuChoicePersistsToTheNextLaunch();
+  AMenuChoicePersistsToTheNextLaunchAsTheConfigKey();
   AChoiceThatCannotBeWrittenIsLoud();
   TheSixLevelsSurviveTheGamesClamp();
   TheMenuDocumentIsParsedAsTheControl();
@@ -1102,11 +1110,10 @@ int main() {
   TheInstallRefusesAndSaysWhyOnAHostWithoutLibr15();
   TheCountersRegisterAndLeaveTheRestOfTheTable();
   ReferenceRuleWithNoSettingsFileStartsAtThePlatformDefaultAndSavesNothing();
-  AnUnversionedMarkerIsIgnoredAndTheFirstMenuChangeWritesAVersionedOne();
-  AMarkerOfAnotherVersionIsIgnored();
+  AMenuChoiceIsWrittenAndHonoredOnTheNextLaunchOnEveryInput();
   ReferenceRuleReadsTheMsaaIndexOfTheSettingsFileAndSavesNothing();
   AConfiguredLowOutranksTheReferenceRule();
-  APlayersMarkerOutranksTheReferenceRule();
+  AConfiguredVeryLowOutranksTheReferenceRule();
   TheStockInputNeverUsesTheReferenceRule();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "texture_menu_hook_test: %d check(s) failed\n", quest_test::Failures());
