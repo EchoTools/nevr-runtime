@@ -37,6 +37,8 @@ RECIPE_GROUPS = {
     "test-quest-hooks-pinned": "hooks-pinned",
     "test-quest-patcher": "patcher",
     "test-quest-patcher-pinned": "patcher-pinned",
+    "test-quest-obb": "obb",
+    "test-quest-obb-pinned": "obb-pinned",
     "test-quest-social": "social",
     "test-quest-social-pinned": "social-pinned",
     "test-quest-integration": "integration",
@@ -47,7 +49,7 @@ RECIPE_GROUPS = {
 
 # Groups whose test programs need a harness the recipe starts (servers, certificates) or the store files it extracts: the
 # recipe runs them by name, so they are targets and not ctest tests.
-RUN_BY_NAME = {"data-net", "tls", "hooks-pinned", "patcher-pinned", "social-pinned", "integration-pinned"}
+RUN_BY_NAME = {"data-net", "tls", "hooks-pinned", "patcher-pinned", "social-pinned", "integration-pinned", "obb-pinned"}
 
 # The test programs each recipe built, as the recipes built them before they were targets.
 PROGRAMS = {
@@ -114,6 +116,17 @@ PROGRAMS = {
     ),
     "hooks-pinned": (
         "got_pinned_test",
+    ),
+    "obb": (
+        "fat16_test",
+        "obb_cipher_test",
+        "obb_footer_test",
+        "obb_key_test",
+        "stock_data_flow_test",
+        "stock_pins_test",
+    ),
+    "obb-pinned": (
+        "obb_pinned_test",
     ),
     "integration": (
         "integration_hooks_test",

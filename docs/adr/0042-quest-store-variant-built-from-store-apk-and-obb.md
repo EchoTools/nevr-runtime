@@ -5,7 +5,7 @@ ADR 0041 (native code is built by CMake).
 
 ## Context
 
-The Quest store variant is the stock game plus the nEVR sentinel. Its inputs are two files the store ships:
+The Quest store variant is the stock game plus the sentinel this repository builds. Its inputs are two files the store ships:
 
 - The store APK `r15_goldmaster_store-4987566.apk` (its `lib/arm64-v8a/libr15.so` has build ID `b243509c08ce677aeb95fa348016949b3fc45230`,
   which `justfile` pins).
@@ -39,7 +39,11 @@ in the build knew where the data came from, so nothing could say that two machin
    per-machine path, appears in the tree.
 2. **Every step is a cached step.** A step's output is stored under `build/`, in a directory or a manifest keyed by the
    SHA-256 of its inputs. A second run with the same inputs finds the output, logs `cache_hit` with the key and does nothing
-   else. A different input makes a different key, and the old output is left in place.
+   else. A different input makes a different key. An output that is incomplete or no longer matches is never trusted: the stock-data
+   directory is made under another name and renamed into place only when finished, and a store-build manifest is removed before
+   a rebuild starts. What a hit reads: the stock-data step finds the pinned files by path and size, finds nothing else in the
+   tree, and takes the digests the extraction recorded (`--rehash` hashes every file again); the store-build step reads every
+   output file again and compares it with the manifest.
 
    | Step | Recipe | Inputs (the key) | Output |
    | --- | --- | --- | --- |
@@ -73,9 +77,11 @@ in the build knew where the data came from, so nothing could say that two machin
    `$NEVR_STORE_APK`, and collects `build/quest-store/`: the signed APK, the `_data` tree (hard links to the cache, else
    copies) and `store-build.json`, the manifest of every input and output digest. A second run whose input key equals the
    manifest's finds both outputs in place and the manifest's output digests still true, and runs nothing.
-7. **The headset step** (`just quest-store-install`) is `adb install -r` of the APK, then replacing the headset's
-   `/sdcard/Android/media/com.readyatdawn.r15/files/_data` with the stock `_data` and hashing the manifest on the device. It
-   logs each `adb` step and refuses without exactly one attached device. It is never part of `quest-store-build`.
+7. **The headset step** (`just quest-store-install`) is `adb install -r` of the APK, then the stock `_data` is pushed to a
+   staging folder beside the game's data folder, every pushed file is hashed on the device and compared with the manifest, and only
+   then does it replace `/sdcard/Android/media/com.readyatdawn.r15/files/_data`. It logs each `adb` call, refuses without exactly
+   one attached device (or the `--serial` named), refuses a store build that no longer matches its manifest before it calls
+   `adb`, and uninstalls nothing. It is never part of `quest-store-build`.
 8. **Other projects' build outputs are not inputs.** The combat script libraries' generated sources and the combat pack
    come from other projects and are inputs of the store variant only where a recipe marks them `KNOWN-WRONG` with their open
    issue (#1737 for the pack). The store variant as this ADR defines it uses none.

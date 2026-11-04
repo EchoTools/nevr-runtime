@@ -140,6 +140,7 @@ for row.
 | `[NEVR.STOP]`         | The one line the `BugSplat64.dll` host writes to standard error when it stops the game or leaves it running without `nevr-runtime.dll` (`runtime/host/stop_line.h`, #1252), with the same facts in the host log. The value of the line's `tag` field; fields and exit codes in "The `NEVR.STOP` line" below |
 | `[NEVR.LOGSEND]`      | The player log upload (`core/log_send.h`, ADR 0030, #1788): one Info line per tap with the file names and sizes, one Info line with the status and the code, a Warning with the status and the transport error or HTTP status on a failure. Never the text of a log, the body or the answer |
 | `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |
+| `[NEVR.QUESTBUILD]`   | The Quest store build's host tools (`nevr_quest_obb_extract`, `tools/quest_store_build.py`, `tools/quest_store_install.py`, ADR 0042): one JSON line per step on standard output, with `schema`, `ts`, `level`, `tag`, `event` and the step's own fields (digests, byte counts, `ms`); a refusal is the event `refused` with a `code` and a `detail`. Never a key, a passphrase or file contents |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you

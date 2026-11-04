@@ -1509,6 +1509,51 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
 test-quest-apk-patch-map patch_repo:
     python3 tools/quest_apk_patch_map.py --repo "{{ patch_repo }}"
 
+# --- The Quest store variant, built from the store APK and the store OBB (docs/adr/0042-quest-store-variant-built-from-store-apk-and-obb.md) ---
+# Two per-machine inputs, environment variables with no default: NEVR_STORE_APK (the store APK) and NEVR_STORE_OBB (the store OBB);
+# the signing key is NEVR_QUEST_KEYSTORE and NEVR_QUEST_KEYSTORE_PASS (tools/quest_keystore.sh). Every step logs JSON lines
+# (tag NEVR.QUESTBUILD) and is cached under build/ by the digests of its inputs.
+
+# Stop, naming the variable, unless the named inputs (apk, obb, keystore) are there.
+[positional-arguments]
+_quest-store-require *kinds:
+    python3 -I tools/quest_store_build.py require "$@"
+
+# The stock game data: extracts $NEVR_STORE_OBB (decrypt, FAT16) into build/quest-stock-data/<obb sha256>/ with the nevr_quest_obb_extract
+# host tool (preset quest-obb-extract, nettle from tools/quest-host-deps), and refuses a tree that differs from tools/quest_stock_data.pin.
+# A second run with the same OBB hashes it, finds the tree and writes nothing.
+
+# Extract $NEVR_STORE_OBB into build/quest-stock-data/<obb sha256>/ and check it against tools/quest_stock_data.pin
+quest-stock-data: (_quest-store-require "obb") _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    (cd src/quest && cmake --preset quest-obb-extract && cmake --build --preset quest-obb-extract)
+    build/quest-obb-extract/quest_obb_extract --obb "$NEVR_STORE_OBB" --pins tools/quest_stock_data.pin --cache-root build/quest-stock-data
+
+# The store variant from the two inputs: quest-stock-data, build-android and android-repack-apk on $NEVR_STORE_APK, into build/quest-store/
+# (the signed APK, the stock `_data` tree and store-build.json, the manifest of every input and output digest). A second run with the same
+# inputs finds the outputs, reads their digests again and rebuilds nothing (tools/quest_store_build.py check). Never installs.
+
+# Build the signed store-variant APK and its stock _data into build/quest-store from NEVR_STORE_APK and NEVR_STORE_OBB
+quest-store-build: (_quest-store-require "apk" "obb" "keystore") quest-stock-data build-android quest-patcher
+    #!/usr/bin/env bash
+    set -euo pipefail
+    status=0
+    python3 -I tools/quest_store_build.py check || status=$?
+    [ "$status" -ne 0 ] || exit 0
+    [ "$status" -eq 3 ] || exit "$status"
+    just android-repack-apk "$NEVR_STORE_APK" build/android-arm64/sentinel/libovrplatformloader.so build/quest-store/repack
+    python3 -I tools/quest_store_build.py collect
+
+# Put the store build on the one attached headset: `adb install -r` of the APK, then the stock `_data` replaces the headset's
+# /sdcard/Android/media/com.readyatdawn.r15/files/_data once every pushed file has hashed to its digest on the device. Refuses without a
+# device, with more than one (`--serial S`), or when build/quest-store does not match its manifest. Uninstalls nothing.
+
+# Install build/quest-store's APK and stock _data on the one attached headset (adb)
+[positional-arguments]
+quest-store-install *args:
+    python3 -I tools/quest_store_install.py "$@"
+
 # The store OBB extractor's units on the host (src/quest/obb, docs/adr/0042): the footer, the key, the Twofish-CBC plain-IV cipher, the
 # FAT16 reader and the pins, over images built in the test, and the whole stock-data step over a synthetic OBB (extraction, cache hit,
 # every refusal). No game file, no device. Fail-close.

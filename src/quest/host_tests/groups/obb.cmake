@@ -6,9 +6,12 @@ if(NEVR_QUEST_OBB_EXTRACT)
   # ── obb ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
   nevr_ht_group(obb)
   set(_obb_env NEVR_TEST_TMP=${CMAKE_BINARY_DIR}/obb)
-  foreach(t obb_footer_test obb_key_test obb_cipher_test fat16_test stock_pins_test stock_data_flow_test)
-    nevr_ht_test(${t} GROUP obb PTHREAD TIMEOUT 300 ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/${t}.cpp)
-  endforeach()
+  nevr_ht_test(obb_footer_test GROUP obb PTHREAD TIMEOUT 300 ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/obb_footer_test.cpp)
+  nevr_ht_test(obb_key_test GROUP obb PTHREAD TIMEOUT 300 ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/obb_key_test.cpp)
+  nevr_ht_test(obb_cipher_test GROUP obb PTHREAD TIMEOUT 300 ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/obb_cipher_test.cpp)
+  nevr_ht_test(fat16_test GROUP obb PTHREAD TIMEOUT 300 ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/fat16_test.cpp)
+  nevr_ht_test(stock_pins_test GROUP obb PTHREAD TIMEOUT 300 ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/stock_pins_test.cpp)
+  nevr_ht_test(stock_data_flow_test GROUP obb PTHREAD TIMEOUT 300 ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/stock_data_flow_test.cpp)
 
   # ── obb-pinned ────────────────────────────────────────────────────────────────────────────────────────────────────────
   # The extractor on the real store OBB. The recipe runs it by name with the OBB, the pin file and a scratch directory, so it is
