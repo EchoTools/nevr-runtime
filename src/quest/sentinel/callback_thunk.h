@@ -63,8 +63,11 @@
  *      sentinel-only frames that are not live across a call into game code (a helper that does
  *      its throwing work, catches, and returns before the handler touches the game).
  *   4. A hook is installed only through InstallThunk<Thunk> (hook_install.h). The raw
- *      GotHook::Install taking an arbitrary function pointer is private; only the test access
- *      class (tests/) may call it, and TestRawInstallOnlyInTests pins that.
+ *      GotHook::Install taking an arbitrary function pointer is private. Two callers reach it: the
+ *      test access class (tests/), which TestRawInstallOnlyInTests pins, and the plugin hook service's
+ *      install (got_hook.h; #2001, ADR 0034). A plugin's handler is a plain
+ *      function built outside this sensor's build, so the service installs it as one, and
+ *      plugin_interface.h (register_slot_hook) states that rule for plugins.
  *   5. Helpers. A function a handler calls directly and that can be on the stack across the
  *      call into game code must be personality-free ("zR"): no try/catch, no destructor-bearing
  *      object, and no indirect call (function pointer, virtual, std::function) into code built

@@ -191,6 +191,101 @@ TEST(AnotherLobbyIsNotHeldBack) {
   CHECK(b.OnJoin(kOther, 1).verdict == FullLobbyBackoff::Verdict::kSend);
 }
 
+// The decline on the error page (#2006): the shared decision, once per code and reason, with the PC callback's text. The
+// capture stands in for the Quest writer, which is a sentinel log record (lobby_full_hooks.cpp).
+namespace declines {
+struct Seen {
+  std::uint8_t code;
+  nevr_lobby_failure_message::Decline reason;
+};
+std::vector<Seen> g_seen;
+void Capture(std::uint8_t code, nevr_lobby_failure_message::Decline reason) {
+  g_seen.push_back(Seen{code, reason});
+}
+}  // namespace declines
+
+TEST(TheDeclineLineIsThePCCallbacksTextForCodeEightWithNoMessage) {
+  namespace rules = nevr_lobby_failure_message;
+  char line[rules::kDeclineLineBytes];
+  rules::FormatDeclineLine(line, 8, rules::Decline::kNoMessage);
+  CHECK(std::string(line) ==
+        "[NEVR.LOBBY] failure message not shown code=8 title=lobby full reason=no_message: "
+        "the game shows its fixed literal for this code instead");
+}
+
+TEST(AnEmptyMessageOnTheErrorPageIsDeclinedOnceAndSaidOnce) {
+  namespace rules = nevr_lobby_failure_message;
+  namespace lf = quest_social::lobby_full;
+  std::vector<std::uint8_t> game(rules::kErrorBlockOffset + 1 + rules::kErrorLines * rules::kErrorLineBytes, 0xAA);
+  lf::RefusalReads reads;
+  reads.game = game.data();  // the message is left empty
+  rules::DeclineLog log;
+  declines::g_seen.clear();
+  CHECK(lf::NoteMessageNotShown(log, reads, 8, &declines::Capture));
+  CHECK(!lf::NoteMessageNotShown(log, reads, 8, &declines::Capture));  // the repeat says nothing
+  CHECK(declines::g_seen.size() == 1U);
+  if (declines::g_seen.size() == 1U) {  // indexed only when the size holds, so a failed size check does not abort the run
+    CHECK(declines::g_seen[0].code == 8);
+    CHECK(declines::g_seen[0].reason == rules::Decline::kNoMessage);
+  }
+}
+
+TEST(ANoGameObjectIsDeclinedAsNoGameBaseEvenWithAMessageThere) {
+  namespace rules = nevr_lobby_failure_message;
+  namespace lf = quest_social::lobby_full;
+  lf::RefusalReads reads;  // the game object is null
+  std::memcpy(reads.message, "Lobby is full, try another", sizeof "Lobby is full, try another");
+  rules::DeclineLog log;
+  declines::g_seen.clear();
+  CHECK(lf::NoteMessageNotShown(log, reads, 8, &declines::Capture));
+  CHECK(declines::g_seen.size() == 1U);
+  if (declines::g_seen.size() == 1U) {
+    CHECK(declines::g_seen[0].reason == rules::Decline::kNoGameBase);
+  }
+}
+
+TEST(EachReasonIsSaidOnceAndAnotherReasonGetsItsOwnLine) {
+  namespace rules = nevr_lobby_failure_message;
+  namespace lf = quest_social::lobby_full;
+  std::vector<std::uint8_t> game(rules::kErrorBlockOffset + 1 + rules::kErrorLines * rules::kErrorLineBytes, 0xAA);
+  lf::RefusalReads noGame;  // no game object, empty message: no_game_base
+  lf::RefusalReads noMessage;
+  noMessage.game = game.data();  // a game object, empty message: no_message
+  rules::DeclineLog log;
+  declines::g_seen.clear();
+  CHECK(lf::NoteMessageNotShown(log, noGame, 8, &declines::Capture));
+  CHECK(lf::NoteMessageNotShown(log, noMessage, 8, &declines::Capture));
+  CHECK(!lf::NoteMessageNotShown(log, noGame, 8, &declines::Capture));
+  CHECK(declines::g_seen.size() == 2U);
+  if (declines::g_seen.size() == 2U) {
+    CHECK(declines::g_seen[0].reason == rules::Decline::kNoGameBase);
+    CHECK(declines::g_seen[1].reason == rules::Decline::kNoMessage);
+  }
+}
+
+TEST(AShownMessageIsNotDeclined) {
+  namespace rules = nevr_lobby_failure_message;
+  namespace lf = quest_social::lobby_full;
+  std::vector<std::uint8_t> game(rules::kErrorBlockOffset + 1 + rules::kErrorLines * rules::kErrorLineBytes, 0xAA);
+  lf::RefusalReads reads;
+  reads.game = game.data();
+  std::memcpy(reads.message, "Lobby is full, try another", sizeof "Lobby is full, try another");
+  rules::DeclineLog log;
+  declines::g_seen.clear();
+  CHECK(!lf::NoteMessageNotShown(log, reads, 8, &declines::Capture));
+  CHECK(declines::g_seen.empty());
+}
+
+TEST(TheRefusalRecordsAreSaidOncePerCodeAndRecord) {
+  namespace lf = quest_social::lobby_full;
+  lf::RefusalSayings said;
+  CHECK(said.FirstTime(8, lf::RefusalSayings::Record::kDroppedGateClosed));
+  CHECK(!said.FirstTime(8, lf::RefusalSayings::Record::kDroppedGateClosed));
+  CHECK(said.FirstTime(8, lf::RefusalSayings::Record::kUncountedNoJoin));  // another record is said too
+  CHECK(!said.FirstTime(8, lf::RefusalSayings::Record::kUncountedNoJoin));
+  CHECK(said.FirstTime(7, lf::RefusalSayings::Record::kDroppedGateClosed));  // another code is said too
+}
+
 }  // namespace
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

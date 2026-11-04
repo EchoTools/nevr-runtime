@@ -841,7 +841,7 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_early_quit_feature_flags --target test_lobby_full_backoff --target test_party_follow_dedup --target test_follow_record --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_log_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook --target test_server_bots --target test_deadlock_monitor test_arena_rules_hook test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_early_quit_feature_flags --target test_lobby_full_backoff --target test_lobby_failure_message --target test_party_follow_dedup --target test_follow_record --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_log_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook --target test_server_bots --target test_deadlock_monitor test_arena_rules_hook test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -1023,6 +1023,12 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     fi
     run_test "$bin"
     bin="build/{{ preset }}/bin/test_lobby_full_backoff.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_lobby_failure_message.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
@@ -1664,7 +1670,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # callback_thunk.h is built without (the header refuses otherwise).
     "${cxx[@]}" -c src/quest/tests/thunk_exception_fixture.cpp -o "$out/thunk_exception_fixture.o"
     "${cxx[@]}" -fno-exceptions src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
-        src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "$out/thunk_exception_fixture.o" \
+        src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp src/quest/plugin/slot_hook.cpp "$out/thunk_exception_fixture.o" \
         -o "$out/got_hook_test" -ldl -pthread
     timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
     # The sentinel's run-time half of the libr15 build-time patch (docs/adr/0021 test 4): Attach on the shipped patcher's
@@ -2003,7 +2009,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
     # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/input_seam_test.cpp src/quest/plugin/input_seam_hook.cpp \
-        src/quest/plugin/script_redirect.cpp \
+        src/quest/plugin/script_redirect.cpp src/quest/plugin/slot_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "${ident[@]}" \
         -o "$out/input_seam_test" -ldl
     timeout 120 "$out/input_seam_test"
@@ -2448,11 +2454,24 @@ test-quest-plugins:
     fixture fx_initfail initfail -DFX_INIT_RC=3
     fixture fx_noinfo noinfo -DFX_NO_INFO
     fixture fx_legacy legacy -DFX_LEGACY_INIT
+    # The slot-hook probes (#2001, round 3): the handler lives in the fixture object, so unmapping it under a chained call crashes.
+    # slotclaim registers under another plugin's id and fails its init; slotself registers under its own id, and its Shutdown
+    # unregisters the handler while a call is inside it.
+    fixture fx_slotclaim slotclaim -DFX_SLOT_HOOK -DFX_SLOT_CLAIM='"impostor"' -DFX_INIT_RC=3 -pthread
+    fixture fx_slotself slotself -DFX_SLOT_HOOK -DFX_SLOT_WAIT -DFX_INIT_RC=3 -pthread
+    # slotthread: the init starts a thread that registers under another id (probe d); slotshutdown registers in its Shutdown (B06).
+    fixture fx_slotthread slotthread -DFX_SLOT_HOOK -DFX_SLOT_THREAD -DFX_SLOT_CLAIM='"impostor"' -DFX_INIT_RC=3 -pthread
+    fixture fx_slotshutdown slotshutdown -DFX_SLOT_HOOK -DFX_SLOT_SHUTDOWN -DFX_SLOT_CLAIM='"impostor"' -DFX_INIT_RC=3 -pthread
+    # The GOT fixture the slot hook test chains onto: a real module with a PLT slot for fx_add (got_hook_test builds the same).
+    "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp -o "$out/libgotfx_provider.so"
+    "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 -L"$out" -lgotfx_provider -Wl,-rpath,'$ORIGIN' -Wl,-z,now,-z,relro \
+        src/quest/tests/got_fixture_consumer.cpp -o "$out/libgotfx_consumer_now.so"
     # The files that include callback_thunk.h (through pinned_targets.h) are built without exceptions, as on the device.
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/input_seam_hook.cpp -o "$out/input_seam_hook.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/plugin/slot_hook.cpp -o "$out/slot_hook.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/script_redirect.cpp -o "$out/script_redirect.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/libr15_identity.o"
     loader=(src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
@@ -2460,7 +2479,7 @@ test-quest-plugins:
             src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp src/core/crash_report.cpp
             "$out/libr15_identity.o" src/quest/patch/libr15_patch_identity.cpp
             "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o"
-            "$out/script_redirect.o")
+            "$out/script_redirect.o" "$out/slot_hook.o")
     "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" \
         -o "$out/plugin_loader_test" -ldl
     timeout -k 5 120 "$out/plugin_loader_test" "$out"

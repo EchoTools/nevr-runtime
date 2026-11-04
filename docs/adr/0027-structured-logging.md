@@ -54,7 +54,7 @@ script yet.
 | printf `Log(` calls outside `src/quest/`, `src/runtime/tests/` and `Router::Log` | 1,045 in 63 files: `src/runtime` 983, `src/modules` 54, `src/core` 7, `plugins/common` 1 |
 | by level | Info 374, Warning 348, Debug 173, Error 110, an expression (a ternary or a variable) 40 |
 | by format (not recounted) | 225 literals with no conversion; 769 with conversions; 48 pass a string built elsewhere through `"%s"`; 3 formats are not literals |
-| subsystem (not recounted) | 36 leading tags; 57 calls carry none (the 48 `"%s"` calls and 9 literals). 13 tags in code are not rows of the standard's table: `NEVR.MIC` (61 calls), `NEVR.SOCIAL` (60), `TELEMETRY.DIAG` (32), `NEVR.SERVERDB` (28), `NEVR.ASSET` (13), `NEVR.PARTY` (9), `NEVR.TRACE` (8), `NEVR.ROOT` (8), `NEVR.BOOT` (5), `NEVR.COOPAI` (5), `NEVR.SERVER` (4), `NEVR.EARLYQUIT` (3), `NEVR.LOBBY` (3) |
+| subsystem (not recounted) | 36 leading tags; 57 calls carry none (the 48 `"%s"` calls and 9 literals). 12 tags in code are not rows of the standard's table: `NEVR.MIC` (61 calls), `NEVR.SOCIAL` (60), `TELEMETRY.DIAG` (32), `NEVR.SERVERDB` (28), `NEVR.ASSET` (13), `NEVR.PARTY` (9), `NEVR.TRACE` (8), `NEVR.ROOT` (8), `NEVR.BOOT` (5), `NEVR.COOPAI` (5), `NEVR.SERVER` (4), `NEVR.EARLYQUIT` (3) |
 | identifiers in the text (not recounted) | 523 formats carry a `key=` token; 438 distinct keys (`name` 80, `reason` 66, `va` 51, `error` 33, `conn` 30) |
 | text keys that name a header key (not recounted) | `msg` 3, `level` 1, `event` 1, `tag` 1; `error` 33 and `plugin` 9, which section 2 keeps as field keys |
 | non-ASCII in formats (not recounted) | 187 formats: U+2014 (em dash) in 186, U+2192 in 1 |

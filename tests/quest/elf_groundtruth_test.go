@@ -407,10 +407,13 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 
 // The raw GotHook::Install (any function pointer) is private. Its test access class may be
 // named only in got_hook.h (the friend declaration) and under src/quest/tests; production code
-// installs through InstallThunk, which keeps every hook a recorded, walked thunk entry. The
-// check is textual and cheap. It reads every file with a .cpp, .cc, .cxx, .h, .hpp or .inc
-// extension under src/, and it fails if a file outside a tests/ directory
+// installs through InstallThunk, which keeps every hook a recorded, walked thunk entry. The one
+// other install is the plugin hook service's (PluginHandlerInstaller, ADR 0034); the second check
+// below pins where that name may appear. The check is textual and cheap. It reads every file with
+// a .cpp, .cc, .cxx, .h, .hpp or .inc extension under src/, and it fails if a file outside a
+// tests/ directory
 //   - names GotHookTestAccess, or
+//   - names PluginHandlerInstaller outside got_hook.h, got_hook.cpp and plugin/slot_hook.cpp, or
 //   - includes a header that lives anywhere under src/quest/tests (recursively): the include is
 //     resolved the ways a compiler would find it here (relative to the including file, relative
 //     to src/ because of -Isrc, and relative to src/quest/sentinel because of the target's own
@@ -419,6 +422,14 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 // It is not bypass-proof (macro token pasting defeats it); it exists to catch an honest mistake
 // (callback_thunk.h, "Limits").
 var includeRe = regexp.MustCompile(`#\s*include(?:_next)?\s*[<"]([^>"]+)[>"]`)
+
+// The plugin hook service's raw install (ADR 0034) is named only where it is declared and defined, and where the service
+// calls it. Each of the three must name it, or the check is looking at nothing.
+var pluginInstallerFiles = map[string]bool{
+	"quest/sentinel/got_hook.h":   true,
+	"quest/sentinel/got_hook.cpp": true,
+	"quest/plugin/slot_hook.cpp":  true,
+}
 
 func TestRawInstallOnlyInTests(t *testing.T) {
 	root, err := filepath.Abs("../../src")
@@ -442,6 +453,7 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 		t.Fatalf("found only %d files under src/quest/tests: the walk is looking at nothing", len(testFiles))
 	}
 	seen := 0
+	installerSeen := map[string]bool{}
 	err = filepath.Walk(root, func(p string, info os.FileInfo, werr error) error {
 		if werr == nil && info.Mode()&os.ModeSymlink != 0 {
 			// filepath.Walk does not follow a symlink, so a link under src/ would hide the files behind it
@@ -463,6 +475,12 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 			seen++
 			if rel != "quest/sentinel/got_hook.h" && !inTests {
 				t.Errorf("%s names GotHookTestAccess; only got_hook.h and src/quest/tests may", rel)
+			}
+		}
+		if strings.Contains(string(data), "PluginHandlerInstaller") {
+			installerSeen[rel] = true
+			if !inTests && !pluginInstallerFiles[rel] {
+				t.Errorf("%s names PluginHandlerInstaller; only got_hook.h, got_hook.cpp and plugin/slot_hook.cpp may (ADR 0034)", rel)
 			}
 		}
 		// Other tests (src/runtime/tests, ...) may include the shared test vectors; production may not.
@@ -487,6 +505,11 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 	}
 	if seen < 2 {
 		t.Errorf("GotHookTestAccess found in %d files, want at least got_hook.h and the host test", seen)
+	}
+	for f := range pluginInstallerFiles {
+		if !installerSeen[f] {
+			t.Errorf("%s does not name PluginHandlerInstaller: the pin is looking at nothing", f)
+		}
 	}
 }
 

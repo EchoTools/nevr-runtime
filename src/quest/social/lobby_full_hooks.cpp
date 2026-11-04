@@ -38,11 +38,96 @@ FullLobbyBackoff& Backoff() {
   return backoff;
 }
 
+// The declines already logged in this process, under g_declineMutex (built on first use, as Backoff is).
+pthread_mutex_t g_declineMutex = PTHREAD_MUTEX_INITIALIZER;
+nevr_lobby_failure_message::DeclineLog& Declines() {
+  static nevr_lobby_failure_message::DeclineLog declines;
+  return declines;
+}
+
+// The refusal records said so far, under the same lock (built on first use, as Declines is).
+RefusalSayings& Sayings() {
+  static RefusalSayings sayings;
+  return sayings;
+}
+
+// The Debug repeats written and counted so far, under g_declineMutex (built on first use, as Declines is).
+RepeatLimiter& Repeats() {
+  static RepeatLimiter repeats;
+  return repeats;
+}
+
+// The decline record: the decision and the text of the PC callback's line (lobby_failure_message_rules.h), as typed fields.
+// The code, title and reason are fields; `msg` is the consequence, the sentence the PC line ends with.
+void WriteDeclineLine(std::uint8_t code, nevr_lobby_failure_message::Decline reason) {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
+                      {{"status", "message_not_shown"},
+                       {"code", static_cast<std::uint64_t>(code)},
+                       {"title", nevr_lobby_failure_message::Title(code)},
+                       {"reason", nevr_lobby_failure_message::DeclineToken(reason)},
+                       {"msg", nevr_lobby_failure_message::kDeclineConsequence}});
+}
+
+// A repeat of a decline this process has said: the same decision, the game's page unchanged, as a Debug record.
+void WriteRepeatLine(std::uint8_t code, nevr_lobby_failure_message::Decline reason) {
+  sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
+                      {{"status", "page_unchanged"},
+                       {"code", static_cast<std::uint64_t>(code)},
+                       {"reason", nevr_lobby_failure_message::DeclineToken(reason)},
+                       {"msg", nevr_lobby_failure_message::kDeclineConsequence}});
+}
+
+// One repeats_suppressed Debug record for each kind whose ended window did not write all of its repeats (under g_declineMutex).
+void SaySummaries(const RepeatLimiter::Verdict& verdict) {
+  for (std::size_t i = 0; i < RepeatLimiter::kKindCount; ++i) {
+    if (verdict.flushed[i] == 0) continue;
+    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
+                        {{"status", "repeats_suppressed"},
+                         {"record", KindName(static_cast<RepeatLimiter::Kind>(i))},
+                         {"count", verdict.flushed[i]},
+                         {"window_ms", RepeatLimiter::kWindowMs}});
+  }
+}
+
+// refusal_uncounted: no join went through this hook, so the back-off has no lobby to count the refusal against.
+void WriteUncounted(sentinel::LogLevel level) {
+  sentinel::LogFields(level, "lobby_full",
+                      {{"status", "refusal_uncounted"},
+                       {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
+                       {"reason", "no_join_recorded"},
+                       {"msg",
+                        "no join went through this hook, so the back-off has no lobby to count this refusal against; "
+                        "the page is still shown"}});
+}
+
+// refusal_dropped. `game_status` is the status the gate was decided from; it is left out when there was no lobby client,
+// so the record does not state a status the game never reported.
+void WriteDropped(sentinel::LogLevel level, const RefusalReads& reads) {
+  constexpr const char* kMsg = "the game ignored this refusal, so the back-off does not count it and no message is shown";
+  if (reads.haveStatus) {
+    sentinel::LogFields(level, "lobby_full",
+                        {{"status", "refusal_dropped"},
+                         {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
+                         {"reason", "status_gate_closed"},
+                         {"game_status", reads.status},
+                         {"msg", kMsg}});
+  } else {
+    sentinel::LogFields(level, "lobby_full",
+                        {{"status", "refusal_dropped"},
+                         {"code", static_cast<std::uint64_t>(kLobbyFullCode)},
+                         {"reason", "status_gate_closed"},
+                         {"msg", kMsg}});
+  }
+}
+
 std::uint64_t NowMs() noexcept {
   timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return static_cast<std::uint64_t>(ts.tv_sec) * 1000u + static_cast<std::uint64_t>(ts.tv_nsec) / 1000000u;
 }
+
+// The clock the refusal records and the back-off read. A host test replaces it to move time past a repeat window.
+std::uint64_t (*g_nowMs)() noexcept = &NowMs;
 
 // "0x" and the 32 lowercase hex digits of the key, NUL-terminated.
 const char* KeyText(const LobbyKey& key, char (&out)[35]) noexcept {
@@ -67,7 +152,7 @@ void OnJoin(JoinThunk::Fn original, void* self, const void* msg, const void* arg
   const LobbyKey key = KeyOf(msg);
   FullLobbyBackoff::Decision d;
   pthread_mutex_lock(&g_mutex);
-  d = Backoff().OnJoin(key, NowMs());
+  d = Backoff().OnJoin(key, g_nowMs());
   if (d.verdict == Verdict::kSend) {
     g_lastJoin = key;
     g_haveLastJoin = true;
@@ -86,10 +171,23 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
   original(self, msg);
   if (!lobbyFull) return;
 
+  // The counted repeats of a window that ended go before this refusal's records, whichever kind they are.
+  pthread_mutex_lock(&g_declineMutex);
+  SaySummaries(Repeats().Flush(g_nowMs()));
+  pthread_mutex_unlock(&g_declineMutex);
+
   if (!reads.gateOpen) {
-    // The game returned at once on this refusal (its status is out of range), so it is neither counted nor shown.
-    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
-                        {{"status", "refusal_dropped"}, {"reason", "status_gate_closed"}});
+    // The game returned at once on this refusal (its status is out of range), so it is neither counted nor shown. The first
+    // one in the process is Info; each repeat is a Debug record with the same fields, up to the repeat budget (N78: counted).
+    pthread_mutex_lock(&g_declineMutex);
+    if (Sayings().FirstTime(static_cast<std::uint8_t>(kLobbyFullCode), RefusalSayings::Record::kDroppedGateClosed)) {
+      WriteDropped(sentinel::LogLevel::kInfo, reads);
+    } else {
+      const RepeatLimiter::Verdict verdict = Repeats().Admit(RepeatLimiter::Kind::kDroppedGateClosed, g_nowMs());
+      SaySummaries(verdict);
+      if (verdict.write) WriteDropped(sentinel::LogLevel::kDebug, reads);
+    }
+    pthread_mutex_unlock(&g_declineMutex);
     return;
   }
 
@@ -100,15 +198,23 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
   if (g_haveLastJoin) {
     key = g_lastJoin;
     haveLobby = true;
-    d = Backoff().OnFull(key, NowMs());
+    d = Backoff().OnFull(key, g_nowMs());
   }
   pthread_mutex_unlock(&g_mutex);
   char keyText[35];
   const char* lobbyText = haveLobby ? KeyText(key, keyText) : "unknown";
   if (!haveLobby) {
     // No join went through this hook, so there is no lobby to count the refusal against; the page is still shown.
-    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
-                        {{"status", "refusal_uncounted"}, {"reason", "no_join_recorded"}});
+    // The first one in the process is Info; each repeat is a Debug record with the same fields, up to the repeat budget.
+    pthread_mutex_lock(&g_declineMutex);
+    if (Sayings().FirstTime(static_cast<std::uint8_t>(kLobbyFullCode), RefusalSayings::Record::kUncountedNoJoin)) {
+      WriteUncounted(sentinel::LogLevel::kInfo);
+    } else {
+      const RepeatLimiter::Verdict verdict = Repeats().Admit(RepeatLimiter::Kind::kUncountedNoJoin, g_nowMs());
+      SaySummaries(verdict);
+      if (verdict.write) WriteUncounted(sentinel::LogLevel::kDebug);
+    }
+    pthread_mutex_unlock(&g_declineMutex);
   } else if (d.verdict == Verdict::kWait) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "lobby_full",
                         {{"status", "wait"}, {"refusal", d.refusals}, {"wait_ms", d.waitMs}, {"lobby", lobbyText}});
@@ -131,11 +237,18 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
                          {"message_bytes", static_cast<std::uint64_t>(nevr_lobby_failure_message::MessageBytes(
                                                reads.message, sizeof reads.message))}});
   } else {
-    // An empty message or no game object: the game's own page stays.
-    sentinel::LogFields(sentinel::LogLevel::kDebug, "lobby_full",
-                        {{"status", "page_unchanged"},
-                         {"reason", reads.game == nullptr ? "no_game_object" : "empty_message"},
-                         {"lobby", lobbyText}});
+    // The game keeps its own page, and the decline says why: the PC callback's decision. Its first write is Info, once per
+    // code and reason; a repeat of the same decision is a Debug page_unchanged record.
+    const nevr_lobby_failure_message::Decline reason = DeclineOf(reads);
+    const auto code8 = static_cast<std::uint8_t>(kLobbyFullCode);
+    pthread_mutex_lock(&g_declineMutex);
+    const bool first = NoteMessageNotShown(Declines(), reads, code8, &WriteDeclineLine);
+    if (!first && reason != nevr_lobby_failure_message::Decline::kNone) {
+      const RepeatLimiter::Verdict verdict = Repeats().Admit(RepeatLimiter::Kind::kPageUnchanged, g_nowMs());
+      SaySummaries(verdict);
+      if (verdict.write) WriteRepeatLine(code8, reason);
+    }
+    pthread_mutex_unlock(&g_declineMutex);
   }
 }
 
