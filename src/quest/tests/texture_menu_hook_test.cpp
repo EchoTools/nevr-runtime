@@ -565,7 +565,7 @@ void AFreshSettingsFileStartsAtTheDefaultNotVeryLow() {
 // What the player chooses in the menu is remembered, and only that: the next launch starts there. It is remembered as the one key
 // graphics.texture_quality in config.yaml, edited in place: the comments and every other key of the file stay.
 void AMenuChoicePersistsToTheNextLaunchAsTheConfigKey() {
-  const char* const before = "# nEVR config\nservices:\n  socket_uri: wss://example.invalid/ws   # kept\n";
+  const char* const before = "# nevr config\nservices:\n  socket_uri: wss://example.invalid/ws   # kept\n";
   const std::string dir = MakeSettingsDirectory(R"({"graphics": {"msaa": 0}})", before);
   QCHECK(!dir.empty());
   Reset(tq::Level::kStock, false);

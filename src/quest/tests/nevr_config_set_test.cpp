@@ -55,7 +55,7 @@ nevr::ConfigSetResult SetOn(const std::string& file, bool value) {
 
 void ACommentedFileKeepsEveryByteButTheValue() {
   const std::string before =
-      "# nEVR config\nversion: 1   # schema\n\nservices:\n  socket_uri: wss://example.invalid/ws   # c\n\n"
+      "# nevr config\nversion: 1   # schema\n\nservices:\n  socket_uri: wss://example.invalid/ws   # c\n\n"
       "graphics:\n  # the level\n  texture_quality: high\n  hand_flip: false   # set by the menu\n  # note\n\nsocial:\n  facade: true\n";
   Dir dir;
   Write(dir.File(), before);

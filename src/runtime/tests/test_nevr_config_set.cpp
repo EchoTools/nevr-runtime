@@ -59,7 +59,7 @@ nevr::ConfigSetResult SetOn(const std::string& file, bool value, const char* key
 // A commented file keeps every byte except the key's value, in both directions.
 TEST(NevrConfigSet, ACommentedFileKeepsEveryByteButTheValue) {
   const std::string before =
-      "# nEVR config\n"
+      "# nevr config\n"
       "version: 1   # schema\n"
       "\n"
       "services:\n"
@@ -304,7 +304,7 @@ nevr::ConfigSetResult SetWord(const std::string& file, const std::string& word, 
 // The level the player picks replaces the old one in place; every other byte of a commented file stays.
 TEST(NevrConfigSetWord, ACommentedFileKeepsEveryByteButTheWord) {
   const std::string before =
-      "# nEVR config\n"
+      "# nevr config\n"
       "graphics:\n"
       "  # the level the headset renders at\n"
       "  texture_quality: high   # the player's pick\n"

@@ -720,7 +720,7 @@ the run id is built from.
 **Where:** `src/core/run_log_path.h`, `src/runtime/log/run_log_writer.h`, `src/runtime/host/bootstrap_diagnostics.cpp`,
 `src/runtime/lifecycle/crash_recovery.cpp` (`BuildCrashRecord` in `crash_record_line.h`), `src/runtime/log/boot_log_tee.cpp`.
 Tests: `test_boot_log_routing.cpp`, `test_bootstrap_diagnostics.cpp`, `test_host_crash_capture.cpp`, `test_host_stop_line.cpp`,
-`tests/host_crash/host_crash_test.cpp`.
+`src/runtime/tests/host_crash/host_crash_test.cpp`.
 
 ---
 
