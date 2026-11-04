@@ -51,6 +51,14 @@
 // on whatever the original returns. Its counters are loginFallbackVersioned, loginFallbackKept and
 // loginFallbackFailed. The query is dropped when the redirect is effective, which is the case
 // Apply documents above.
+//
+// Outbound block (#2089). ApplyUrl owns the host every CSysHttp::CreateConnection connects to (docs/adr/0039): the
+// redirect decides first, then the block looks at the URL the redirect chose. When that URL is one of the four hosts
+// the game must not reach (ClassifyOutboundHost), the original is called with kRefusedUrl instead: the connection
+// object the game keeps is still made, with the same result, so no caller's path changes, and every request on it
+// ends at once in a refused connection on the device's own loopback. A refused connect moves one counter
+// (refusedBugSplat, ...); the reporter thread writes the line (a hooked call never logs). The block does not depend on
+// the redirect being effective: it holds wherever the hook is armed, and the hook is armed with the redirect.
 #pragma once
 
 #include <array>
@@ -88,6 +96,26 @@ bool IsApiBaseUrl(const char* url) noexcept;
 // queue's join_queue / poll_queue_position / leave_queue requests go to it (#414). Exactly that host, with an
 // optional path.
 bool IsGraphBaseUrl(const char* url) noexcept;
+
+// The hosts the game must not contact (#2089). Each is the argument of a CSysHttp::CreateConnection call in libr15
+// (all through the one PLT slot the redirect hooks):
+//   kRadBugSplat     "https://RAD.bugsplat.com", CDebugCrashReport::RegisterGlobalCrashHandler (0x108f528, the
+//                    connection ProcessDumpFiles posts crash dumps on, 0x108de4c);
+//   kAmazonS3        "https://s3-us-west-2.amazonaws.com", CR15NetPackageDownloadCS::Initialize (0x226bf58);
+//   kOculusGraph     "https://graph.oculus.com", CR15NetGame::Initialize (0x1386520) and
+//                    CR15NetMatchmakerQueues::Initialize (0x138812c);
+//   kApiEnvironment  "https://api-%s.readyatdawn.com" with the environment filled in, CR15NetStoreTransactions::
+//                    InitializeHttp (0x136c25c); the live base "https://api.readyatdawn.com" is the redirect's, not this.
+enum class OutboundHost : std::uint8_t { kNone, kRadBugSplat, kAmazonS3, kOculusGraph, kApiEnvironment };
+
+// What CreateConnection is given for a refused host: the loopback address and the discard port, where nothing listens,
+// so a request on the connection fails at connect with no packet leaving the device.
+inline constexpr char kRefusedUrl[] = "https://127.0.0.1:9";
+
+// The host of `url` ("https://", "http://" or no scheme; an optional port, path, query or fragment; any letter case)
+// when it is one of the four above, else kNone. A host that merely starts or ends like one of them is kNone. Allocation-
+// free and never throws.
+OutboundHost ClassifyOutboundHost(const char* url) noexcept;
 
 // The built-in defaults the game passes as fallback for those keys. Used to prewarm the cache.
 struct BuiltinDefault {
@@ -127,6 +155,12 @@ struct RedirectCounters {
   // per CSysHttp::CreateConnection URL that is an API or graph base. #408
   std::atomic<std::uint64_t> urlRedirected{0};    // the connect was sent to the configured HTTP service
   std::atomic<std::uint64_t> urlPassThrough{0};   // the original URL was kept (no target, feature off, doubt)
+  // The outbound block's refusals (#2089), one counter per host so the reporter's first_change line names the host: the
+  // connect went to kRefusedUrl instead.
+  std::atomic<std::uint64_t> refusedBugSplat{0};
+  std::atomic<std::uint64_t> refusedAmazonS3{0};
+  std::atomic<std::uint64_t> refusedGraph{0};
+  std::atomic<std::uint64_t> refusedApiEnvironment{0};
   // ApplyFallback's decisions for the login_host fallback (login_fallback.h).
   std::atomic<std::uint64_t> loginFallbackVersioned{0};  // a ws:// fallback got the build identity's query
   std::atomic<std::uint64_t> loginFallbackKept{0};       // a ws:// fallback already had a query: passed through
@@ -161,6 +195,8 @@ class ServiceRedirector {
   // pool as Apply. An https://api...readyatdawn.com base goes through the shared policy to the configured HTTP
   // service (nevr_http_uri; never the bridge); the matchmaker queue's graph host goes to nevr_http_uri directly
   // (the shared policy only rewrites readyatdawn.com hosts). Same failure behaviour: any doubt returns `url`.
+  // Then the outbound block: a URL that is still one of the four hosts of ClassifyOutboundHost is answered with
+  // kRefusedUrl, whether or not the redirect is effective.
   const char* ApplyUrl(const char* url) noexcept;
 
   // Runs the policy for the built-in defaults so the first game reads are cache hits, and the
