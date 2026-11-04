@@ -143,12 +143,12 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         '#!/bin/bash\n'
         'logs="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs"\n'
         '[[ -n "${FAKE_WINE_STARTED:-}" ]] && echo started > "$FAKE_WINE_STARTED"  # the script deploys before it starts the game\n'
-        '[[ -n "${FAKE_HOST_BOOTSTRAP:-}" ]] && echo \'{"event":"host_attach"}\' > "$logs/nevr-bootstrap.jsonl"  # the host writes its record into the same folder\n'
+        '[[ -n "${FAKE_HOST_BOOTSTRAP:-}" ]] && echo \'{"event":"host_attach"}\' > "$logs/nevr-update.jsonl"  # the installer writes its own log into the same folder\n'
         '# A host that refuses nevr-runtime.dll writes these records and the runtime, which writes the game log, never runs.\n'
         'if [[ -n "${FAKE_HOST_STOP:-}" ]]; then\n'
         '  ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\n'
         '  printf \'%s\\n\' \'{"event":"runtime_load","outcome":"runtime_refused","path":"Z:\\\\game\\\\nevr-runtime.dll","run":"r1","tag":"NEVR.HOST","ts":"\'$ts\'","verify":"refused","verify_reason":"\'$FAKE_HOST_STOP\'"}\' \\\n'
-        '    \'{"event":"game_stop","exit_code":78,"reason":"runtime_refused","run":"r1","tag":"NEVR.HOST","ts":"\'$ts\'"}\' > "$logs/nevr-bootstrap.jsonl"\n'
+        '    \'{"event":"game_stop","exit_code":78,"reason":"runtime_refused","run":"r1","tag":"NEVR.HOST","ts":"\'$ts\'"}\' > "$logs/nevr-$(date -u +%Y-%m-%dT%H-%M-%S).000.jsonl"\n'
         'elif [[ -n "${FAKE_LOG_TEXT:-}" ]]; then sleep "${FAKE_WINE_LOG_DELAY:-0}"; printf "%b" "$FAKE_LOG_TEXT" > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"\n'
         'else sleep "${FAKE_WINE_LOG_DELAY:-0}"; echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"; fi\n'
         '[[ -n "${FAKE_WINE_ARGS:-}" ]] && printf "%s\\n" "$*" > "$FAKE_WINE_ARGS"\n'
@@ -374,23 +374,22 @@ class LaunchClientTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("could not copy the game log", result.stderr)
 
-    def test_the_hosts_bootstrap_record_in_the_same_folder_is_not_the_run_log(self):
-        # In a root that had no nevr-bootstrap.jsonl when the run began, the host's record is a new nevr-*.jsonl
-        # and sorts after the run log; judging it would fail a run that logged in.
-        # A real run log is named nevr-<timestamp>.jsonl, which sorts before nevr-bootstrap.jsonl.
+    def test_the_installers_own_log_in_the_same_folder_is_not_the_run_log(self):
+        # In a root that had no nevr-update.jsonl when the run began, the installer's log is a new nevr-*.jsonl and sorts
+        # after the run log; judging it would fail a run that logged in. A real run log is named nevr-<timestamp>.jsonl.
         env = dict(self.env, FAKE_HOST_BOOTSTRAP="1", FAKE_LOG_PREFIX="nevr-2026-10-27T17-57-53.")
         result = self.run_script("--dll", str(self.dll), env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertRegex(result.stdout, r"=== game log: .*/logs/nevr-2026-10-27T17-57-53\.")
-        self.assertNotIn("nevr-bootstrap.jsonl", result.stdout)
+        self.assertNotIn("nevr-update.jsonl", result.stdout)
 
-    def test_a_host_that_refused_the_runtime_is_named_when_no_game_log_appears(self):
-        # #1122: the host stops the game and the runtime, which writes the game log, never runs. The launcher says
-        # why from the host's record, not only that no log was written.
+    def test_a_host_that_refused_the_runtime_is_named_when_the_log_holds_only_its_records(self):
+        # #1122: the host stops the game and the runtime, which writes the game lines, never runs. The host's records share the
+        # run's one log, so the launcher says why from them, not that the log has no login.
         env = dict(self.env, FAKE_HOST_STOP="unsigned")
         result = self.run_script("--dll", str(self.dll), env=env)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("no game log written", result.stderr)
+        self.assertNotIn("no game log written", result.stderr)
         self.assertIn("the host refused nevr-runtime.dll: unsigned", result.stderr)
         self.assertIn("build with mingw-plugin-dev or mingw-scenario", result.stderr)
         self.assertEqual(self.deployed(), ORIGINAL)
@@ -405,7 +404,7 @@ class LaunchClientTest(unittest.TestCase):
 
     def test_a_stop_from_before_the_run_is_not_blamed_on_it(self):
         logs = self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr/logs"
-        (logs / "nevr-bootstrap.jsonl").write_text(
+        (logs / "nevr-2026-10-01T00-00-00.000.jsonl").write_text(
             '{"event":"game_stop","exit_code":78,"reason":"runtime_refused","run":"old","ts":"2026-10-01T00:00:00.000Z"}\n')
         env = dict(self.env, FAKE_LOG_PREFIX="other-")
         result = self.run_script("--dll", str(self.dll), env=env)
@@ -1075,8 +1074,11 @@ class VerifyServerTest(unittest.TestCase):
                       "the host refused nevr-runtime.dll: unsigned", stopped.stdout)
         # The fake runs are under a second apart; a real boot is not, so the first run's record is replaced by one
         # from an earlier day: a stop the host wrote before this run is not this run's.
-        (self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser()
-         / "AppData/Local/nevr/echovr/logs/nevr-bootstrap.jsonl").write_text(
+        logs = (self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser()
+                / "AppData/Local/nevr/echovr/logs")
+        for first_run in logs.glob("nevr-*.jsonl"):
+            first_run.unlink()
+        (logs / "nevr-2026-10-01T00-00-00.000.jsonl").write_text(
             '{"event":"game_stop","exit_code":78,"reason":"runtime_refused","run":"old","ts":"2026-10-01T00:00:00.000Z"}\n')
         normal = subprocess.run(self.command(), env=self.env, cwd=self.checkout, capture_output=True, text=True,
                                 timeout=60)

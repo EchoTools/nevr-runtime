@@ -53,7 +53,7 @@ def wineprefix() -> pathlib.Path:
 
 
 def nevr_root_logs() -> pathlib.Path:
-    """The prefix's nevr root logs folder (src/core/nevr_root.h): where the host writes nevr-bootstrap.jsonl."""
+    """The prefix's nevr root logs folder (src/core/nevr_root.h): where every process writes its main log."""
     return wineprefix() / "drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr/logs"
 
 
@@ -433,8 +433,7 @@ class Run:
 
     def host_stopped(self):
         """The host's own words for a stop it made since this launch, or None (tools/host_stop_cause.py)."""
-        log = nevr_root_logs() / "nevr-bootstrap.jsonl"
-        return host_stop_cause.cause(log, self.launched_at)
+        return host_stop_cause.cause(nevr_root_logs(), self.launched_at)
 
     def launch(self):
         launcher_out = self.out / "launch-client.out"

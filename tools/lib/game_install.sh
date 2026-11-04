@@ -188,8 +188,9 @@ save_back_stored_sign_in() {
 }
 
 # host_stop_cause <the nevr root's logs folder> <the run's start, unix seconds>: when the host stopped the game
-# (nevr-runtime.dll absent or refused), the runtime never ran and wrote no game log; the host's own record says why.
-# Prints one line and returns 0, or prints nothing and returns 3 when the record holds no stop since then (#1122).
+# (nevr-runtime.dll absent or refused), the runtime never ran and wrote no game lines; the host's own records, in the
+# run's main log, say why. Prints one line and returns 0, or prints nothing and returns 3 when the logs hold no stop since
+# then (#1122).
 host_stop_cause() {
-  python3 -I "$(dirname "${BASH_SOURCE[0]}")/../host_stop_cause.py" --log "$1/nevr-bootstrap.jsonl" --since "$2"
+  python3 -I "$(dirname "${BASH_SOURCE[0]}")/../host_stop_cause.py" --log "$1" --since "$2"
 }

@@ -298,14 +298,14 @@ if [[ -n "$TRACE_EXPORTS" ]]; then
 fi
 # The newest game log THIS run wrote: a file that did not exist when the run started (names carry a
 # millisecond timestamp, so they are unique per run) and was modified since. Judging by mtime alone
-# let a previous run's log, last written in the same second the run started, decide the verdict. The host's
-# nevr-bootstrap.jsonl lives in the same folder and is new in a root the host has not written to before.
+# let a previous run's log, last written in the same second the run started, decide the verdict. The host writes its
+# records into the same file as the runtime, so a run the host stopped has a log too (it is judged below).
 pre_logs=$(for f in "$LOGDIR"/nevr-*.jsonl; do [[ -e "$f" ]] && printf '%s\n' "$f"; done || true)
 newest_run_log() {
   local f found=""
   for f in "$LOGDIR"/nevr-*.jsonl; do
     [[ -f "$f" && $(stat -c %Y "$f") -ge $start ]] || continue
-    [[ "$f" == */nevr-bootstrap.jsonl ]] && continue  # the host's record, in the same folder: not the game's log
+    [[ "$f" == */nevr-update.jsonl ]] && continue  # the installer's own log, in the same folder: not the game's
     grep -qxF -- "$f" <<<"$pre_logs" && continue
     found="$f"
   done
@@ -370,11 +370,10 @@ fi
 run_log=$(newest_run_log)
 if [[ -z "$run_log" ]]; then
   echo "FAIL: no game log written since this run started ($LOGDIR)" >&2
-  # The runtime writes the game log, so a host that stopped the game before the runtime ran leaves none; the host's
-  # own record says why (#1122).
-  if cause=$(host_stop_cause "$LOGDIR" "$start"); then echo "FAIL: $cause" >&2; fi
   exit 1
 fi
+# A host that stopped the game before the runtime ran left only its own records in the log; they say why (#1122).
+if cause=$(host_stop_cause "$LOGDIR" "$start"); then echo "FAIL: $cause" >&2; exit 1; fi
 # The run's log is copied into this run's scratch directory before the verdict (#1297): the test that made the game copy
 # deletes it when the run ends, and a log left in the copy goes with it. A copy that does not match the original fails the run.
 RUN_LOG_COPY="$SCRATCH/game-log.jsonl"
