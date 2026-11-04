@@ -362,9 +362,17 @@ pub fn plan(obs: &Observed, pkg: &Package, allow_downgrade: bool) -> Plan {
             if !original_unknown && obs.backup_is_nevr {
                 return needs("the recorded backup is a NEVR runtime, not the game's own file; restore the game's BugSplat64.dll (Verify Files), delete nevr-install.txt, then run again");
             }
-            if let Some(installed) = r.get("release").filter(|_| !allow_downgrade) {
-                if semver_cmp(installed, &pkg.version) == Some(std::cmp::Ordering::Greater) {
-                    return needs(&format!("release {installed} is installed and newer than the offered {}; pass --allow-downgrade to install the older one", pkg.version));
+            // An empty release is no release recorded (a record from before the key), the same as a missing one.
+            if let Some(installed) = r.get("release").filter(|v| !v.is_empty()).filter(|_| !allow_downgrade) {
+                match semver_cmp(installed, &pkg.version) {
+                    Some(std::cmp::Ordering::Greater) => {
+                        return needs(&format!("release {installed} is installed and newer than the offered {}; pass --allow-downgrade to install the older one", pkg.version));
+                    }
+                    Some(_) => {}
+                    // Not comparable (not X.Y.Z, or a number past u64::MAX): refused, never taken for an older release.
+                    None => {
+                        return needs(&format!("the installed release {installed} in nevr-install.txt cannot be compared with the offered {}; correct its release= line if it was edited by hand, or pass --allow-downgrade to install over it; nothing was changed", pkg.version));
+                    }
                 }
             }
             if orig == ours {
