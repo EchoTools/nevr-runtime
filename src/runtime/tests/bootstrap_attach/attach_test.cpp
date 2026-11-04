@@ -374,16 +374,17 @@ void ValidateNoEarlyRuntime(const std::vector<EventRecord>& events, const Expect
   }
 }
 
-// The host's own records for this run: parsed, each with the NEVR.HOST header.
+// The host's own records for this run, parsed: the NEVR.HOST lines of every process's main log in the scenario's folder.
 std::vector<nlohmann::json> ReadHostRecords() {
   wchar_t local[MAX_PATH] = {};
   const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
   Require(length != 0 && length < MAX_PATH, "the scenario's LOCALAPPDATA is not set");
-  const std::wstring path = std::nevr_test::HostLogPath(wstring(local, length));
-  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  // Each process writes its own main log (named from its creation time), so a scenario that starts several holds several files.
   std::string text;
-  if (file != INVALID_HANDLE_VALUE) {
+  for (const std::wstring& path : nevr_test::HostLogPaths(std::wstring(local, length))) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) continue;
     char buffer[512] = {};
     DWORD read = 0;
     while (ReadFile(file, buffer, sizeof(buffer), &read, nullptr) != FALSE && read != 0) {
@@ -398,8 +399,8 @@ std::vector<nlohmann::json> ReadHostRecords() {
     Require(end != std::string::npos, "a host record is missing its terminating newline");
     nlohmann::json record = nlohmann::json::parse(text.substr(start, end - start), nullptr, false);
     Require(!record.is_discarded(), "a host record does not parse as JSON");
-    Require(record.value("tag", "") == "NEVR.HOST", "a host record lacks the NEVR.HOST tag");
-    records.push_back(std::move(record));
+    // The main log is the whole process's: the runtime's boot lines share it with the host's records. Only the host's are read.
+    if (record.value("tag", "") == "NEVR.HOST") records.push_back(std::move(record));
     start = end + 1;
   }
   return records;
@@ -433,6 +434,15 @@ void ValidateHostRecords(const Expectation& expect) {
     flush();
   }
   const std::vector<nlohmann::json> records = ReadHostRecords();
+  if (CountRecords(records, "host_attach", "hook_install") != (expect.hooked ? 1u : 0u)) {
+    // Say what was read, so a failure names the files and the records it found.
+    wchar_t local[MAX_PATH] = {};
+    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+    for (const std::wstring& path : nevr_test::HostLogPaths(std::wstring(local, length))) {
+      std::fprintf(stderr, "bootstrap attach test: read %ls\n", path.c_str());
+    }
+    for (const nlohmann::json& record : records) std::fprintf(stderr, "bootstrap attach test: record %s\n", record.dump().c_str());
+  }
   // One install record when hooked, none when the game was rejected: a second install attempt
   // or an install over a rejected image would show here.
   Require(CountRecords(records, "host_attach", "hook_install") == (expect.hooked ? 1u : 0u),

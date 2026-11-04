@@ -27,6 +27,7 @@
 
 #include <windows.h>
 #include <dbghelp.h>
+#include <shellapi.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -452,9 +453,9 @@ void RunScenario(const Scenario& scenario, const std::wstring& base,
   // Every record the child wrote: the main log, or the console when the main log could not be written. There is no other place:
   // nothing is written in %TEMP% or in the host's folder, whatever is blocked.
   Require(GetFileAttributesW((temp + L"\\nevr").c_str()) == INVALID_FILE_ATTRIBUTES, "something was written in %TEMP%");
-  {
+  for (const wchar_t* pattern : {L"\\nevr-*.jsonl", L"\\nevr-*.txt", L"\\nevr-*.dmp", L"\\nevr-bootstrap*"}) {
     WIN32_FIND_DATAW beside{};
-    HANDLE find = FindFirstFileW((shim_dir + L"\\nevr*").c_str(), &beside);
+    HANDLE find = FindFirstFileW((shim_dir + pattern).c_str(), &beside);
     const bool any = find != INVALID_HANDLE_VALUE;
     if (any) FindClose(find);
     Require(!any, "something was written beside the host DLL");

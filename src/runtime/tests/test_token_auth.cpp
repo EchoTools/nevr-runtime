@@ -1736,7 +1736,7 @@ TEST_F(CredentialsDirFixture, AReaderDuringAWriteSeesTheOldTokenNotABlockedOrPar
 TEST_F(CredentialsDirFixture, TheRootsCacheIsTheOnlyOneSelected) {
   const std::string nevrRoot = (root_ / "appdata" / "nevr" / "echovr").string();
   Write(root_ / "appdata" / "nevr" / "echovr" / ".credentials.json", Credentials("in-root").dump());
-  Write(CachePath(), Credentials("in-local").dump());
+  Write(root_ / "bin" / "win10" / "_local" / ".credentials.json", Credentials("in-local").dump());
 
   const CredentialCacheLocation location = SelectCredentialCacheLocation(nevrRoot);
   EXPECT_EQ(std::filesystem::path(location.credentialsPath).lexically_normal(),
@@ -1749,6 +1749,7 @@ TEST_F(CredentialsDirFixture, TheRootsCacheIsTheOnlyOneSelected) {
 TEST_F(CredentialsDirFixture, AnOldCacheUnderLocalIsNeverReadOrWrittenWhetherOrNotTheMoveRan) {
   const std::string nevrRoot = (root_ / "appdata" / "nevr" / "echovr").string();
   for (const char* where : {"bin/win10/_local", "bin/_local", "_local"}) {
+    std::filesystem::remove(CachePath());  // each spot starts with an empty root
     const auto legacy = root_ / where / ".credentials.json";
     const std::string contents = Credentials(std::string("old-") + where).dump();
     Write(legacy, contents);

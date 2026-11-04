@@ -659,6 +659,9 @@ TEST(BootstrapDiagnostics, ConcurrentAppendersToOneFileLoseNoLine) {
 
 // The same test as a helper for a second process: it appends only when the parent asks through
 // the environment, so the normal run of this binary skips it.
+// Each process names its main log from its own creation time, so two processes share a file only when a test says so.
+constexpr wchar_t kSharedLogName[] = L"nevr-2026-11-04T00-00-00.001.jsonl";
+
 TEST(BootstrapDiagnostics, AppendHelperForTheTwoProcessTest) {
   wchar_t dir[MAX_PATH] = {};
   wchar_t id[16] = {};
@@ -666,6 +669,7 @@ TEST(BootstrapDiagnostics, AppendHelperForTheTwoProcessTest) {
   GetEnvironmentVariableW(L"NEVR_TEST_APPEND_ID", id, 16);
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(dir, nullptr);
+  diagnostics.SetLogNameForTest(kSharedLogName);
   char prefix[16] = {};
   std::snprintf(prefix, sizeof(prefix), "P%ls", id);
   AppendConcurrently(diagnostics, 4, 100, prefix);

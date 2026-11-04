@@ -394,6 +394,9 @@ class TestNevrRoot {
     } else {
       SetEnvironmentVariableA("LOCALAPPDATA", nullptr);
     }
+    // The run log is a file of this folder, held open by the writer: let go of it before the folder is removed, or the removal
+    // finds the file delete-pending and never finishes. The next record resolves the log again under the restored folder.
+    nevr_run_log_writer::Close();
     std::error_code ec;
     std::filesystem::remove_all(localAppData_, ec);
   }

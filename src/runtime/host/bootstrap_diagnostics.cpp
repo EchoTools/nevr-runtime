@@ -254,6 +254,12 @@ void BootstrapDiagnostics::EnsureLogMutex() noexcept {
 void BootstrapDiagnostics::SetRunTokenForTest(std::uint64_t token) { g_run_token.store(token); }
 std::uint64_t BootstrapDiagnostics::RunTokenForTest() { return RunToken(); }
 
+void BootstrapDiagnostics::SetLogNameForTest(const wchar_t* name) {
+  const std::size_t length = wcslen(name);
+  if (length + 1 > sizeof(log_name_) / sizeof(log_name_[0])) return;
+  std::memcpy(log_name_, name, (length + 1) * sizeof(wchar_t));
+}
+
 void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const wchar_t* host_dir) {
   primary_ready_ = false;
   host_dir_ready_ = false;

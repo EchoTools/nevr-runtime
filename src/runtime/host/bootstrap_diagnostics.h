@@ -184,6 +184,10 @@ class BootstrapDiagnostics {
   /// mutex and clears the "lock timed out" mark, as Prepare does at attach.
   void PrepareForTest(const wchar_t* local_app_data, const wchar_t* host_dir);
 
+  /// Test seam: name the main log file. Two test processes use it to append to one file, which two processes never do in
+  /// a run (each names its own log from its creation time); the append lock is what keeps their lines whole.
+  void SetLogNameForTest(const wchar_t* name);
+
   /// Close the log mutex and forget it and clear the timed-out mark, so a test can show what an append
   /// does when no mutex exists (a crash before the first Prepare).
   static void ResetLogLockForTest();
