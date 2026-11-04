@@ -222,8 +222,10 @@ void AWordThatIsNotTheStockDefaultIsLeftAlone() {
   }
 }
 
-// A saved settings file is read after the constructor and wins: a false it holds clears the bit this set, and nothing the hook
-// keeps puts it back. The load is a stand-in for CR15Game::LoadSettings (FromJson on the current copy, then current over pending).
+// A documentation test, not a proof: the load below is this test's own stand-in for CR15Game::LoadSettings (FromJson on the current
+// copy, then current over pending), so it cannot fail if the game's real order changed. It shows only that the hook keeps nothing
+// that could put the bit back after a later clear. That the real LoadSettings runs after the constructor is read from the
+// disassembly (match_tags.h) and is the headset row's claim (the saved-false run).
 void ASavedFalseIsNotUndone() {
   Reset();
   mt::ArmForTest();
@@ -333,6 +335,41 @@ void AnInstallThatFindsNoSlotRefusesAndSaysWhy() {
   QCHECK(Get32(g_object, kCurrent) == 0x1003);
 }
 
+// One slot refused, the other installed: the refused slot's handler is off and the installed one's stays on, whichever it is. Were a
+// refused slot's handler left armed, a construction through it would be changed although its install was refused.
+void ARefusedSlotsHandlerStaysOffAndTheOthersOn() {
+  Reset();
+  mt::ArmForTest();
+  QCHECK(!mt::SettleInstall(sentinel::GotStatus::kOk, sentinel::GotStatus::kSlotChanged));
+  C2Entry()(g_object, &g_mainArgs);
+  QCHECK(Get32(g_object, kCurrent) == 0x1003);  // C2 refused: the game's own constructor
+  QCHECK(Get32(g_object, kPending) == 0x1003);
+  C1Entry()(g_object, &g_mainArgs);
+  QCHECK(Get32(g_object, kCurrent) == 0x3003);  // C1 installed: defaulted
+  QCHECK(Get32(g_object, kPending) == 0x3003);
+  const std::string* line = LineOf("combat_match_tags_install");
+  QCHECK(line != nullptr);
+  if (line != nullptr) {
+    QCHECK(Golden(*line) == "\"event\":\"combat_match_tags_install\",\"result\":\"partial\",\"c1\":\"ok\",\"c2\":\"slot_changed\"}");
+  }
+
+  Reset();
+  mt::ArmForTest();
+  QCHECK(!mt::SettleInstall(sentinel::GotStatus::kSymbolNotFound, sentinel::GotStatus::kOk));
+  C1Entry()(g_object, &g_mainArgs);
+  QCHECK(Get32(g_object, kCurrent) == 0x1003);  // C1 refused
+  C2Entry()(g_object, &g_mainArgs);
+  QCHECK(Get32(g_object, kCurrent) == 0x3003);  // C2 installed
+
+  Reset();
+  mt::ArmForTest();
+  QCHECK(mt::SettleInstall(sentinel::GotStatus::kOk, sentinel::GotStatus::kOk));
+  C1Entry()(g_object, &g_mainArgs);
+  QCHECK(Get32(g_object, kCurrent) == 0x3003);
+  C2Entry()(g_object, &g_mainArgs);
+  QCHECK(Get32(g_object, kCurrent) == 0x3003);
+}
+
 // The install line's result: both slots, one slot (either), neither.
 void TheInstallResultNamesHowManySlotsTookTheirThunk() {
   QCHECK(std::strcmp(mt::InstallResultName(true, true), "installed") == 0);
@@ -372,6 +409,7 @@ int main() {
   ThePartialLineCountsOneCopy();
   OneLinePerConstruction();
   AnInstallThatFindsNoSlotRefusesAndSaysWhy();
+  ARefusedSlotsHandlerStaysOffAndTheOthersOn();
   TheInstallResultNamesHowManySlotsTookTheirThunk();
   ThePinnedTargetsAreTheStoreLibr15s();
   sentinel::SetLogSink(nullptr);

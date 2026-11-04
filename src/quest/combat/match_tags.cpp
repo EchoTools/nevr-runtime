@@ -82,20 +82,25 @@ const char* InstallResultName(bool c1Installed, bool c2Installed) noexcept {
   return c1Installed || c2Installed ? "partial" : "refused";
 }
 
-bool InstallAt(const sentinel::GotTarget& c1, const sentinel::GotTarget& c2) noexcept {
-  C1Thunk::Arm(kC1Hook);
-  C2Thunk::Arm(kC2Hook);
-  const sentinel::GotStatus s1 = sentinel::InstallThunk<C1Thunk>(g_c1Hook, c1);
-  const sentinel::GotStatus s2 = sentinel::InstallThunk<C2Thunk>(g_c2Hook, c2);
+bool SettleInstall(sentinel::GotStatus s1, sentinel::GotStatus s2) noexcept {
   const bool ok1 = s1 == sentinel::GotStatus::kOk;
   const bool ok2 = s2 == sentinel::GotStatus::kOk;
   // A slot that did not take its thunk is never called, but the handler stays off with it.
   if (!ok1) C1Thunk::Disarm();
   if (!ok2) C2Thunk::Disarm();
-  const char* result = InstallResultName(ok1, ok2);
   sentinel::LogFields(ok1 && ok2 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "combat_match_tags_install",
-                      {{"result", result}, {"c1", sentinel::GotStatusName(s1)}, {"c2", sentinel::GotStatusName(s2)}});
+                      {{"result", InstallResultName(ok1, ok2)},
+                       {"c1", sentinel::GotStatusName(s1)},
+                       {"c2", sentinel::GotStatusName(s2)}});
   return ok1 && ok2;
+}
+
+bool InstallAt(const sentinel::GotTarget& c1, const sentinel::GotTarget& c2) noexcept {
+  C1Thunk::Arm(kC1Hook);
+  C2Thunk::Arm(kC2Hook);
+  const sentinel::GotStatus s1 = sentinel::InstallThunk<C1Thunk>(g_c1Hook, c1);
+  const sentinel::GotStatus s2 = sentinel::InstallThunk<C2Thunk>(g_c2Hook, c2);
+  return SettleInstall(s1, s2);
 }
 
 bool Install() noexcept { return InstallAt(sentinel::pinned::LibR15CR15GameC1(), sentinel::pinned::LibR15CR15GameC2()); }

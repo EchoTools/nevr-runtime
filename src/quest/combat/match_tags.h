@@ -17,6 +17,12 @@
  * touching either. So a file that holds MatchTagDisplay (a player's saved false included) overrides this default, and a file or a
  * start without the key keeps it.
  *
+ * Who that reaches. Every stock save writes the key: SR15GameSettings::Inspect<CJsonInspectorWrite> (0x20ed668) passes "MatchTagDisplay"
+ * and the mask 0x2000 to CJsonInspectorWrite::InspectFlagBit (0x1514264), which stores `tst w8, w21; cset w2, ne` as a boolean, so a
+ * settings file that was ever saved holds an explicit true or false. The default therefore reaches a player with no settings file, or
+ * with a file that has no such key; a player who has saved once keeps what the file says. The reference build changes the same
+ * default and has the same reach. No migration of an existing file is made here.
+ *
  * What this does. The reference combat build rewrites the two literals, 0x1003 to 0x3003. Here the constructor is wrapped
  * instead: the original runs, then bit 13 is set in each copy that still holds exactly the stock default 0x1003, so a copy
  * something else already changed (it holds no stock value) is left alone. One line per construction says what each copy held
@@ -74,6 +80,10 @@ const char* InstallResultName(bool c1Installed, bool c2Installed) noexcept;
 // Installs the hooks into libr15's C1 and C2 constructor slots. True when both slots hold their thunks. Logs one
 // combat_match_tags_install line; a refused slot leaves the game's constructor call as it is.
 bool Install() noexcept;
+
+// What an install does with the two slots' statuses once both installs were tried: a slot that did not take its thunk gets its
+// handler disarmed, and one combat_match_tags_install line says how many did. True when both are kOk.
+bool SettleInstall(sentinel::GotStatus c1, sentinel::GotStatus c2) noexcept;
 
 // The install on any two targets (the host test installs it against modules that are not loaded).
 bool InstallAt(const sentinel::GotTarget& c1, const sentinel::GotTarget& c2) noexcept;
