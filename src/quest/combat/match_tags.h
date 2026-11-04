@@ -18,7 +18,7 @@
  * start without the key keeps it.
  *
  * Who that reaches. Every stock save writes the key: SR15GameSettings::Inspect<CJsonInspectorWrite> (0x20ed668) passes "MatchTagDisplay"
- * and the mask 0x2000 to CJsonInspectorWrite::InspectFlagBit (0x1514264), which stores `tst w8, w21; cset w2, ne` as a boolean, so a
+ * and the mask 0x2000 to CJsonInspectorWrite::InspectFlagBit (0x1414264), which stores `tst w8, w21; cset w2, ne` as a boolean, so a
  * settings file that was ever saved holds an explicit true or false. The default therefore reaches a player with no settings file, or
  * with a file that has no such key; a player who has saved once keeps what the file says. The reference build changes the same
  * default and has the same reach. No migration of an existing file is made here.
