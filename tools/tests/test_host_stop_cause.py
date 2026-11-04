@@ -63,6 +63,12 @@ class HostStopCauseTest(unittest.TestCase):
         self.assertIn("the host refused nevr-runtime.dll: unsigned", text)
         self.assertNotIn("decoy", text)
 
+    def test_a_log_named_by_process_id_is_a_main_log(self):
+        # src/core/run_log_path.h names the file nevr-pid<hex>.jsonl when the process's start time cannot be read.
+        (self.tmp / "nevr-pid1f4.jsonl").write_text("".join(json.dumps(r) + "\n" for r in stop_records(self.now)))
+        text = host_stop_cause.cause(self.tmp, self.now - 5)
+        self.assertIn("the host refused nevr-runtime.dll: unsigned", text)
+
     def test_an_unsigned_runtime_is_named_with_the_build_that_fixes_it(self):
         self.write(stop_records(self.now))
         text = host_stop_cause.cause(self.log, self.now - 5)
