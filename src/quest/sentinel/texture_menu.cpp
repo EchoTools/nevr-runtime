@@ -25,10 +25,11 @@ bool IsMsaaRow(const Json& node) { return HasPath(node, kSettingPath); }
 
 // KNOWN-WRONG #2043 The interim toggle's row: a NAMED FLAG, the kind the stock menu uses for this same boolean setting (its DISPLAY
 // page's {"path":"graphics|fullscreen","name":"Fullscreen","value":true,"type":"NAMED FLAG"}), in that row's key order, with its two
-// states named by `truestr` and `falsestr`. libr15's menu row reader reads both keys (FUN_01f8dacc, ReVault VA 0x208dacc; the strings
-// "NAMED FLAG" 0x32b468c, "|truestr" 0x32b470e and "|falsestr" 0x32b4717). A flag writes a JSON boolean back to the setting; a STRING
-// ARRAY writes its index, which the game refuses for a boolean key (headset log: "cannot change type of [graphics|fullscreen] to
-// integer").
+// states named by `truestr` and `falsestr`. libr15 (ReVault VAs): CR15UISettingsCS::LoadSettingsFromJson (0x208ca4c) reads a NAMED
+// FLAG row's `value` as a boolean (0x208e6b4), the state the row shows, and `truestr` and `falsestr` (0x208e7b8, 0x208f074; "" when
+// absent, with no fallback label); the row's Serialize (0x21ebca8) writes the value back with CJson::SetBoolean. A STRING ARRAY row
+// writes its `idx` with CJson::SetInt (Serialize 0x21ebb40), whose type check (0x10a605c) refuses an integer in a boolean key (headset
+// log: "cannot change type of [graphics|fullscreen] to integer").
 Json HandFlipRow(int handFlipIndex) {
   Json row = Json::object();
   row["path"] = nevr_quest::hand_flip::kMenuPath;
