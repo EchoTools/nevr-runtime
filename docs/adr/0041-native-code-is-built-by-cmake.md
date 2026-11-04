@@ -70,9 +70,8 @@ What this costs, measured in the tree:
 Each row is a violation of rule 3. A row goes when its issue closes; the grep
 under "Finding a violation" is the list of record.
 
-| Where | What it builds | Issue |
-| --- | --- | --- |
-| the 18 `test-quest-*` recipes in `justfile` (`test-quest-data`, `-data-net`, `-invite`, `-shared`, `-router`, `-invite-transport`, `-tls`, `-hooks`, `-redirect`, `-hooks-pinned`, `-patcher`, `-patcher-pinned`, `-social`, `-social-pinned`, `-integration`, `-plugins`, `-autopilot`, `-integration-pinned`) | host test programs for the Quest code | #2049 |
+No row is open. Invocations this inventory did not list (the MSVC plugin workflow, the installer tests' C compiles, two
+configures without a preset) are tracked by #2065, which adds their rows or their exemptions.
 
 Out of scope, by rule 4: `android-repack-libovr` and `android-repack-apk` in `justfile` (`patchelf`, `zip`, `zipalign`,
 `apksigner`), `tools/quest_repack_libs.py`, `tools/quest_apk_rename_package.py`, `tools/quest_pack_from_game_data.py`,
