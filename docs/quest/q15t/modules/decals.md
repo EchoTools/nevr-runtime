@@ -1,6 +1,6 @@
 # Module `decals` (issue #1619)
 
-Files: `src/quest/plugins/q15t/src/decals.{h,cpp}`, `src/quest/plugins/q15t/src/decals_core.h`, `src/quest/tests/q15t/decals_test.cpp`, `src/quest/tests/q15t/mod/decals.sh`,
+Files: `src/quest/plugins/q15t/src/decals.{h,cpp}`, `src/quest/plugins/q15t/src/decals_core.h`, `src/quest/tests/q15t/decals_test.cpp`, `src/quest/tests/q15t/mod/decals.cmake`,
 `src/quest/tests/q15t/mutants.d/decals.sh`; the chained hook it needs is `InstallChainedImportHook` in `src/quest/plugins/q15t/src/import_hook.{h,cpp}`.
 
 Option macro: `Q15T_DECALS`, default **ON**; the module is inert (one INFO line, reason `off`) when no `decals.bin` is found, so a build

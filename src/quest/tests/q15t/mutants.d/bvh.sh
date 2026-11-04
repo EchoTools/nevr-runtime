@@ -1,4 +1,4 @@
-# bvh (part 1 of 2, run as Q15T_MUTANTS_ONLY=bvh): each rule of src/bvh_core.h removed once; tests/mod/bvh.sh (bvh_core_test + bvh_test) must fail on every one.
+# bvh (part 1 of 2, run as Q15T_MUTANTS_ONLY=bvh): each rule of src/bvh_core.h removed once; the bvh tests (mod/bvh.cmake: bvh_core_test + bvh_test) must fail on every one.
 # Part 2 (src/bvh.cpp, src/bvh.h) is tests/mutants.d/bvhwrap.sh, run as Q15T_MUTANTS_ONLY=bvhwrap: the list is too long for one run to fit a 10 minute tool call.
 # -- header parse (bvh_core.h)
 runm bvh bvh_parse_empty_tri    src/bvh_core.h "s/if (s0 == 0 || s1 == 0) {/if (s1 == 0) {/"

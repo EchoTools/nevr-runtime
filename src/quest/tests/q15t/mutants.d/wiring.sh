@@ -1,4 +1,4 @@
-# plugin.cpp's wiring of the modules, judged by tests/mod/wiring.sh (tests/wiring_test.cpp); the tick table, judged by tests/mod/game_tick.sh.
+# plugin.cpp's wiring of the modules, judged by mod/wiring.cmake (tests/wiring_test.cpp); the tick table, judged by mod/game_tick.cmake.
 # Not mutated: InitGunConnect / InitAiBots (they only store the base, which the host cannot observe: no libr15 is loaded), and the
 # success branches of dronekill, dronemuzzle and powerboost (they need the real libr15 to resolve their engine functions).
 for _m in DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE AIBOTS GUNCONNECT BVH WALLFIRE LEVELNAME; do
