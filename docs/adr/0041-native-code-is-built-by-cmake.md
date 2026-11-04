@@ -75,7 +75,6 @@ under "Finding a violation" is the list of record.
 | `tools/build_quest_combat_libs.py`, called by the `build-quest-combat-libs` recipe | the Quest combat script libraries | #2047 |
 | the 18 `test-quest-*` recipes in `justfile` (`test-quest-data`, `-data-net`, `-invite`, `-shared`, `-router`, `-invite-transport`, `-tls`, `-hooks`, `-redirect`, `-hooks-pinned`, `-patcher`, `-patcher-pinned`, `-social`, `-social-pinned`, `-integration`, `-plugins`, `-autopilot`, `-integration-pinned`) | host test programs for the Quest code | #2049 |
 | `src/quest/tests/q15t/run_host_tests.sh` and `src/quest/tests/q15t/mod/*.sh` (recipe `test-quest-q15t`) | the q15t plugin's host tests | #2053 |
-| the `quest-patcher` recipe | `quest_patch_libr15`, run by the APK repack | #2050 |
 | `tools/gen_plugin_signature_fixtures.py`, `tools/winvm/systest.py` | signature-fixture DLLs and the `getaddrinfo` probe | #2051 |
 | the `test-android` and `test-scripting` recipes, `.github/workflows/echo-symbols-sync.yml` | compile checks; `test-scripting` also configures CMake with flags instead of a preset | #2052 |
 
