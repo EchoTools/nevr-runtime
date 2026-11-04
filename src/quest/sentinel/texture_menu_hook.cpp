@@ -183,11 +183,13 @@ std::uint64_t Fnv1a(std::string_view text) noexcept {
 }
 
 // The rewritten text of each document, kept for the life of the process: the parser may keep pointers into what it was given, and
-// a document is read once. A second read of the same text (same length and hash) is served from here. Heap objects that are
-// never freed, so no static destructor runs under a game thread.
+// a document is read once. A second read of the same text (same length and hash) is served from here, while the Controller Hand Flip
+// row's index it was written with is still the current one (KNOWN-WRONG #2043: a re-read of the menu in one run then shows the
+// current choice, not the launch-time one). Heap objects that are never freed, so no static destructor runs under a game thread.
 struct Kept {
   std::uint64_t hash = 0;
   std::size_t inputSize = 0;
+  int handFlipIndex = 0;
   const std::string* text = nullptr;
 };
 // std::mutex is out: its unlock carries a personality on the hook path. A pthread mutex with a constant initializer has no
@@ -211,11 +213,13 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   pthread_mutex_lock(&g_keptMutex);
   const Kept kept = g_kept[document];
   pthread_mutex_unlock(&g_keptMutex);
-  if (kept.text != nullptr && kept.hash == hash && kept.inputSize == input.size()) return {kept.text->data(), kept.text->size()};
   // The Controller Hand Flip row starts on the stored choice when the start was resolved before the menu was read (it is resolved
   // on the first eye-size query, earlier than the menu document), else on Off. Its index 0 is "On" (hand_flip::MenuIndexFor).
   // KNOWN-WRONG #2043 the toggle is the interim.
-  const int handFlipIndex = hand_flip::MenuIndexFor(hand_flip::Started() ? hand_flip::Current() : 0);
+  const int handFlipIndex = document == kMenuSettings ? hand_flip::MenuIndexFor(hand_flip::Started() ? hand_flip::Current() : 0) : 0;
+  if (kept.text != nullptr && kept.hash == hash && kept.inputSize == input.size() && kept.handFlipIndex == handFlipIndex) {
+    return {kept.text->data(), kept.text->size()};
+  }
   const texture_menu::Result r = document == kMenuSettings
                                      ? texture_menu::RewriteMenuSettings(input, g_defaultIndex.load(std::memory_order_acquire), handFlipIndex)
                                      : texture_menu::RewriteGameSettings(input);
@@ -226,7 +230,7 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   if (r.status != texture_menu::Status::kRewritten) return {};
   const std::string* const out = new std::string(r.text);
   pthread_mutex_lock(&g_keptMutex);
-  g_kept[document] = Kept{hash, input.size(), out};
+  g_kept[document] = Kept{hash, input.size(), handFlipIndex, out};
   pthread_mutex_unlock(&g_keptMutex);
   g_jsonRewrites.fetch_add(1, std::memory_order_relaxed);
   return {out->data(), out->size()};

@@ -1223,6 +1223,36 @@ void AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain() {
   RemoveSettingsDirectory(dir);
 }
 
+// A second read of the menu document in one run serves the row's current choice, not the one it was first rewritten with; a read
+// with nothing changed in between is still served the kept text.
+void AReReadOfTheMenuServesTheCurrentHandFlipChoice() {
+  const std::string dir = MakeSettingsDirectory(nullptr);
+  QCHECK(!dir.empty());
+  ResetDocuments();
+  Capture log;
+  g_appDataDir = dir;
+  Eye();
+  const char* const path = "/d/json/r14/config/uisettings/menu_settings.json";
+  const char* const off = R"("path":"graphics|fullscreen","name":"Controller Hand Flip","idx":1,"type":"STRING ARRAY","values":["On","Off"])";
+  const char* const on = R"("path":"graphics|fullscreen","name":"Controller Hand Flip","idx":0,"type":"STRING ARRAY","values":["On","Off"])";
+  Read(path, kMenuDocument);
+  Read(path, kMenuDocument);  // nothing changed: the kept text
+  QCHECK(g_parsed.size() == 2 && g_parsed[0].find(off) != std::string::npos && g_parsed[0] == g_parsed[1]);
+  QCHECK(tm::CurrentTotals().jsonRewrites == 1);
+  hf::SetFromMenu(1);  // the player chose On since
+  Read(path, kMenuDocument);
+  QCHECK(g_parsed.size() == 3 && g_parsed[2].find(on) != std::string::npos && g_parsed[2].find(off) == std::string::npos);
+  QCHECK(tm::CurrentTotals().jsonRewrites == 2);
+  Read(path, kMenuDocument);
+  QCHECK(g_parsed.size() == 4 && g_parsed[3] == g_parsed[2] && tm::CurrentTotals().jsonRewrites == 2);
+  hf::SetFromMenu(0);
+  Read(path, kMenuDocument);
+  QCHECK(g_parsed.size() == 5 && g_parsed[4].find(off) != std::string::npos && g_parsed[4] == g_parsed[0]);
+  hf::Poll();
+  RemoveHandFlipFile(dir);
+  RemoveSettingsDirectory(dir);
+}
+
 // The tracking handler can need the flag before the eye-size query has resolved it: the provider the control registers reads the
 // same file.
 void TheTrackingSideCanResolveTheStartThroughTheControl() {
@@ -1295,6 +1325,7 @@ int main() {
   AMenuChangeOfTheHandFlipRowAppliesLiveAndIsRemembered();
   ADefaultStartPutsAClearedBitBackToTheGamesValue();
   AStockRestoreAfterOnReadsAsOffAndIsSavedOnce();
+  AReReadOfTheMenuServesTheCurrentHandFlipChoice();
   AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain();
   TheTrackingSideCanResolveTheStartThroughTheControl();
   TheSettingsDocumentStopsHidingTheHandFlipSetting();

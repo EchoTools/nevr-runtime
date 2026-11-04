@@ -140,6 +140,9 @@ class TheInterimRollIsTheOnlyWriteAndIsMarked(unittest.TestCase):
         self.assertRegex(header, r"BitFor\(int flip\) noexcept \{ return flip != 0 \? 0 : 1; \}")
         rewrite = extract_braced_function(hook, "Served RewriteDocument(")
         self.assertIn("hand_flip::MenuIndexFor(", rewrite)
+        # The kept rewrite is keyed on the row's index as well as the text, so a re-read serves the current choice.
+        self.assertIn("kept.handFlipIndex == handFlipIndex", rewrite)
+        self.assertIn("Kept{hash, input.size(), handFlipIndex, out}", rewrite)
 
     def test_every_site_of_the_interim_names_the_issue_that_tracks_it(self):
         sites = (
