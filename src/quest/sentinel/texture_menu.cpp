@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "quest/sentinel/hand_flip.h"
 #include "quest/sentinel/texture_quality.h"
 
 namespace nevr_quest::texture_menu {
@@ -14,15 +15,31 @@ namespace {
 
 using Json = nlohmann::ordered_json;
 
-bool IsMsaaRow(const Json& node) {
+bool HasPath(const Json& node, const char* wanted) {
   if (!node.is_object()) return false;
   const auto path = node.find("path");
-  return path != node.end() && path->is_string() && path->get_ref<const std::string&>() == kSettingPath;
+  return path != node.end() && path->is_string() && path->get_ref<const std::string&>() == wanted;
 }
 
-// Turns every `graphics|msaa` row into the control and every `rows` list that holds one into that row alone, under the control's
-// page name. Preorder, as the rewrite of the patch repository walks: the page first, then its rows.
-void WalkMenu(Json& node, int defaultIndex, Result* out) {
+bool IsMsaaRow(const Json& node) { return HasPath(node, kSettingPath); }
+
+// KNOWN-WRONG #2043 The interim toggle's row: the stock msaa row's shape (its keys, in its order), turned into the two-entry
+// STRING ARRAY. Built from the row the page holds, so the engine reads a row of the kind it already reads.
+Json HandFlipRowLike(const Json& msaaRow, int handFlipIndex) {
+  Json row = msaaRow;
+  row["path"] = nevr_quest::hand_flip::kMenuPath;
+  row["name"] = nevr_quest::hand_flip::kMenuName;
+  row["type"] = "STRING ARRAY";
+  Json labels = Json::array();
+  for (const char* label : nevr_quest::hand_flip::kMenuLabels) labels.push_back(label);
+  row["values"] = std::move(labels);
+  row["idx"] = handFlipIndex != 0 ? 1 : 0;
+  return row;
+}
+
+// Turns every `graphics|msaa` row into the control and every `rows` list that holds one into that row and the Controller Hand Flip
+// row under it, under the control's page name. Preorder, as the rewrite of the patch repository walks: the page first, then its rows.
+void WalkMenu(Json& node, int defaultIndex, int handFlipIndex, Result* out) {
   if (node.is_object()) {
     if (IsMsaaRow(node)) {
       node["name"] = nevr_quest::texture_quality::kMenuControlName;
@@ -39,8 +56,18 @@ void WalkMenu(Json& node, int defaultIndex, Result* out) {
       for (const Json& row : *rows) holds = holds || IsMsaaRow(row);
       if (holds) {
         Json kept = Json::array();
+        bool flipAdded = false;
         for (Json& row : *rows) {
-          if (IsMsaaRow(row)) kept.push_back(std::move(row));
+          if (!IsMsaaRow(row)) continue;
+          if (!flipAdded) {
+            const Json flipRow = HandFlipRowLike(row, handFlipIndex);
+            kept.push_back(std::move(row));
+            kept.push_back(flipRow);
+            flipAdded = true;
+            ++out->handFlipRows;
+          } else {
+            kept.push_back(std::move(row));
+          }
         }
         *rows = std::move(kept);
         const auto name = node.find("name");
@@ -49,13 +76,14 @@ void WalkMenu(Json& node, int defaultIndex, Result* out) {
         ++out->pages;
       }
     }
-    for (auto& child : node) WalkMenu(child, defaultIndex, out);
+    for (auto& child : node) WalkMenu(child, defaultIndex, handFlipIndex, out);
   } else if (node.is_array()) {
-    for (auto& child : node) WalkMenu(child, defaultIndex, out);
+    for (auto& child : node) WalkMenu(child, defaultIndex, handFlipIndex, out);
   }
 }
 
-// Removes the setting entries that remove `graphics|msaa`, and the page entries that remove the stock graphics page, wherever a
+// Removes the setting entries that remove `graphics|msaa` (and, KNOWN-WRONG #2043, the one that removes `graphics|fullscreen`, the
+// interim toggle's setting), and the page entries that remove the stock graphics page, wherever a
 // `settings` or `pages` list carries them.
 void WalkGameSettings(Json& node, Result* out) {
   if (node.is_object()) {
@@ -65,6 +93,8 @@ void WalkGameSettings(Json& node, Result* out) {
       for (Json& entry : *settings) {
         if (IsMsaaRow(entry)) {
           ++out->rows;
+        } else if (HasPath(entry, nevr_quest::hand_flip::kMenuPath)) {
+          ++out->handFlipRows;
         } else {
           kept.push_back(std::move(entry));
         }
@@ -115,11 +145,11 @@ const char* StatusName(Status status) noexcept {
   return "unknown";
 }
 
-Result RewriteMenuSettings(std::string_view text, int defaultIndex) {
+Result RewriteMenuSettings(std::string_view text, int defaultIndex, int handFlipIndex) {
   Result result;
   Json doc;
   if (!Parse(text, &doc)) return result;
-  WalkMenu(doc, defaultIndex, &result);
+  WalkMenu(doc, defaultIndex, handFlipIndex, &result);
   if (result.rows == 0) {
     result.status = Status::kShapeMismatch;
     return result;

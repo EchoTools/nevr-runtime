@@ -4,6 +4,7 @@
 #include <time.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 
@@ -11,6 +12,7 @@
 #include <sys/system_properties.h>
 #endif
 
+#include "hand_flip.h"
 #include "hook_install.h"
 #include "hook_log.h"
 
@@ -117,23 +119,44 @@ int EnumerateHandler(EnumerateThunk::Fn original, pin::OvrMobileOpaque* ovr, std
   return rc;
 }
 
-// vrapi_GetInputTrackingState: the original first; its result and the tracking it filled go back untouched. The first result
-// of a table device whose Status says the orientation is tracked gives its raw orientation, stored once. Same rule as above.
+// Stores the raw orientation of a table device once, from its first result whose Status says the orientation is tracked. The
+// measurement log reads it, so it is taken before the roll below.
+void RecordFirstPose(Slot* slot, const void* tracking) noexcept {
+  if ((slot->state.load(std::memory_order_acquire) & kPoseSeen) != 0) return;
+  TrackingPrefix prefix;
+  std::memcpy(&prefix, tracking, sizeof(prefix));
+  if ((prefix.status & kStatusOrientationTracked) == 0) return;
+  std::uint32_t token = 0;
+  if (!BeginWrite(*slot, &token)) return;
+  slot->pose[0].store(prefix.status, std::memory_order_relaxed);
+  for (int i = 0; i < 4; ++i) slot->pose[1 + i].store(Bits(prefix.orientation[i]), std::memory_order_relaxed);
+  slot->state.store(slot->state.load(std::memory_order_relaxed) | kPoseSeen, std::memory_order_release);
+  EndWrite(*slot, token);
+}
+
+// KNOWN-WRONG #2043 The interim roll (hand_flip.h): the orientation of a table device (type 4 only) is post-multiplied by a 180
+// degree roll about its local Z axis, in place. The four orientation floats are the only bytes written.
+void RollOrientation(void* tracking) noexcept {
+  float orientation[4];
+  std::memcpy(orientation, static_cast<unsigned char*>(tracking) + offsetof(TrackingPrefix, orientation), sizeof(orientation));
+  hand_flip::Roll(orientation);
+  std::memcpy(static_cast<unsigned char*>(tracking) + offsetof(TrackingPrefix, orientation), orientation, sizeof(orientation));
+}
+
+// vrapi_GetInputTrackingState: the original first; its result goes back as it came. The first result of a table device whose
+// Status says the orientation is tracked gives its raw orientation, stored once. KNOWN-WRONG #2043 Then, for a table device (type
+// 4: a hand-tracking or unknown id is never in the table) and only while Controller Hand Flip is On, the orientation is rolled;
+// every other byte of the result stays as the runtime wrote it. Each call of a frame (the game polls twice per device) is rolled.
+// Same rule as above: never logs, allocates or throws.
 int TrackingHandler(TrackingThunk::Fn original, pin::OvrMobileOpaque* ovr, std::uint32_t deviceId, double absTime,
                     void* tracking) noexcept {
   const int rc = original(ovr, deviceId, absTime, tracking);
   if (rc < 0 || tracking == nullptr) return rc;
   Slot* const slot = Find(deviceId);
-  if (slot == nullptr || (slot->state.load(std::memory_order_acquire) & kPoseSeen) != 0) return rc;
-  TrackingPrefix prefix;
-  std::memcpy(&prefix, tracking, sizeof(prefix));
-  if ((prefix.status & kStatusOrientationTracked) == 0) return rc;
-  std::uint32_t token = 0;
-  if (!BeginWrite(*slot, &token)) return rc;
-  slot->pose[0].store(prefix.status, std::memory_order_relaxed);
-  for (int i = 0; i < 4; ++i) slot->pose[1 + i].store(Bits(prefix.orientation[i]), std::memory_order_relaxed);
-  slot->state.store(slot->state.load(std::memory_order_relaxed) | kPoseSeen, std::memory_order_release);
-  EndWrite(*slot, token);
+  if (slot == nullptr) return rc;
+  RecordFirstPose(slot, tracking);
+  if (!hand_flip::Started()) hand_flip::EnsureStarted();
+  if (hand_flip::Enabled()) RollOrientation(tracking);
   return rc;
 }
 
@@ -206,7 +229,9 @@ int PollLocked() noexcept {
                            {"reserved4", caps[3]},
                            {"reserved5", caps[4]},
                            {"hand", HandName(s)},
-                           {"model", g_model}});
+                           {"model", g_model},
+                           {"flip", hand_flip::Current()},
+                           {"by", hand_flip::ByName(hand_flip::CurrentBy())}});
       ++lines;
     }
     if (!g_loggedPose[i] && (s.state & kPoseSeen) != 0) {
@@ -226,6 +251,7 @@ int PollLocked() noexcept {
       ++lines;
     }
   }
+  lines += hand_flip::Poll();
   return lines;
 }
 
@@ -323,7 +349,7 @@ bool InstallAt(const sentinel::GotTarget& enumerate, const sentinel::GotTarget& 
                        {"enumerate_input_devices", sentinel::GotStatusName(e)},
                        {"get_input_tracking_state", sentinel::GotStatusName(t)},
                        {"caps_function", caps != nullptr ? "found" : "missing"},
-                       {"consequence", "a log of each controller's type and raw pose; no pose is changed"}});
+                       {"consequence", "a log of each controller's type and raw pose; a pose is rolled only while Controller Hand Flip is On"}});
   if (e == sentinel::GotStatus::kOk) StartPoller();
   return all;
 }
@@ -346,6 +372,7 @@ void ResetForTest() noexcept {
   for (bool& logged : g_loggedPose) logged = false;
   g_modelRead = false;
   g_model[0] = '\0';
+  hand_flip::ResetForTest();
   g_caps.store(nullptr, std::memory_order_relaxed);
   g_property.store(nullptr, std::memory_order_relaxed);
 }
