@@ -1,0 +1,15 @@
+{
+    "version": 4,
+    "configurePresets": [
+        {
+            "name": "quest-host-extra-rows-configure",
+            "displayName": "The extra-rows configure step on its own (test-quest-hooks): no compiler, no NDK",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../../../../build/quest-host-extra-rows-configure",
+            "cacheVariables": {
+                "NEVR_SRC_ROOT": "${sourceDir}/../../..",
+                "NEVR_JSON_INCLUDE": "${sourceDir}/../../../../build/quest-host-vcpkg/x64-linux/include"
+            }
+        }
+    ]
+}

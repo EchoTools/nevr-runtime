@@ -8,6 +8,16 @@
 cmake_minimum_required(VERSION 3.23)
 project(nevr_quest LANGUAGES C CXX)
 
+# The host tests (no NDK): the quest-host-* presets turn this on, and the project is then only the test programs of
+# src/quest/host_tests, built by the host compiler (ADR 0041). Everything below is the Android build.
+option(NEVR_QUEST_HOST_TESTS "Build the Quest host tests with the host compiler instead of the Android sentinel" OFF)
+if(NEVR_QUEST_HOST_TESTS)
+  get_filename_component(NEVR_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+  enable_testing()
+  add_subdirectory(host_tests)
+  return()
+endif()
+
 if(NOT ANDROID)
   message(FATAL_ERROR
     "src/quest is an Android target. Configure with the android-arm64 preset:\n"
