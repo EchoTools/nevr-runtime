@@ -1,0 +1,1 @@
+Quest 2 players with Touch Pro or Touch Plus controllers whose hands look backwards can turn on Controller Hand Flip in the graphics settings, under Texture Resolution.

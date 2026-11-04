@@ -1,8 +1,10 @@
-"""#1986: the controller type and raw pose log is built into the sentinel, installed on every launch, and only reads.
+"""#1986: the controller type and raw pose log is built into the sentinel, installed on every launch, and reads; the one write
+is the interim Controller Hand Flip roll (KNOWN-WRONG #2043), behind the toggle.
 
 The handlers are driven by hand_pose_log_hook_test.cpp and the two slots are checked against the real libr15 by
-got_pinned_test.cpp. This file pins what neither can see: the build and the install, the pinned slots, and that the file
-hooks no other slot and writes nothing to a pose.
+got_pinned_test.cpp. This file pins what neither can see: the build and the install, the pinned slots, that the file hooks no
+other slot, that the only write to a pose is the roll (sixteen bytes, the orientation, after the raw pose is taken and only for
+a table device while the toggle is on), and that every site of the interim carries the marker that names #2043.
 """
 
 import re
@@ -59,6 +61,8 @@ class TheHandPoseLogIsWired(unittest.TestCase):
         justfile = read("justfile")
         self.assertIn("src/quest/tests/hand_pose_log_hook_test.cpp", justfile)
         self.assertIn('timeout 120 "$out/hand_pose_log_hook_test"', justfile)
+        self.assertIn("src/quest/tests/hand_flip_test.cpp", justfile)
+        self.assertIn('timeout 120 "$out/hand_flip_test"', justfile)
 
 
 class TheHandPoseLogOnlyReads(unittest.TestCase):
@@ -81,7 +85,7 @@ class TheHandPoseLogOnlyReads(unittest.TestCase):
         tracking = extract_braced_function(code, "int TrackingHandler(")
         self.assertRegex(enumerate, r"const int rc = original\(ovr, index, header\);")
         self.assertRegex(tracking, r"const int rc = original\(ovr, deviceId, absTime, tracking\);")
-        # Nothing is written through the pointers the runtime was given.
+        # Nothing is written through the pointers the runtime was given, by these two functions: the one write is RollOrientation's.
         for body in (enumerate, tracking):
             self.assertNotRegex(body, r"memcpy\(\s*(header|tracking)\s*,")
             self.assertNotRegex(body, r"\*\s*\(?(header|tracking)\)?\s*=")
@@ -92,6 +96,78 @@ class TheHandPoseLogOnlyReads(unittest.TestCase):
             body = extract_braced_function(code, name)
             self.assertNotIn("LogFields", body)
             self.assertNotIn("LogEvent", body)
+
+
+class TheInterimRollIsTheOnlyWriteAndIsMarked(unittest.TestCase):
+    """KNOWN-WRONG #2043: the roll, its toggle, its row, its file and its lines are the interim (ADR 0033 rule 3)."""
+
+    def test_the_roll_runs_after_the_raw_pose_is_taken_for_a_table_device_with_the_toggle_on(self):
+        code = strip_comments(read("src/quest/sentinel/hand_pose_log_hook.cpp"))
+        tracking = extract_braced_function(code, "int TrackingHandler(")
+        order = [tracking.index(name) for name in ("Find(deviceId)", "RecordFirstPose(slot, tracking)", "hand_flip::Enabled()", "RollOrientation(tracking)")]
+        self.assertEqual(order, sorted(order))
+        self.assertRegex(tracking, r"if \(slot == nullptr\) return rc;")
+        self.assertRegex(tracking, r"if \(hand_flip::Enabled\(\)\) RollOrientation\(tracking\);")
+        roll = extract_braced_function(code, "void RollOrientation(")
+        self.assertEqual(len(re.findall(r"memcpy\(", roll)), 2)
+        self.assertIn("offsetof(TrackingPrefix, orientation)", roll)
+        self.assertIn("sizeof(orientation)", roll)
+        self.assertEqual(code.count("RollOrientation("), 2)  # its definition and its one call
+
+    def test_the_handler_does_not_log_or_allocate_for_the_roll(self):
+        code = strip_comments(read("src/quest/sentinel/hand_pose_log_hook.cpp"))
+        for name in ("int TrackingHandler(", "void RollOrientation("):
+            body = extract_braced_function(code, name)
+            for forbidden in ("LogFields", "LogEvent", "new ", "std::string", "std::vector"):
+                self.assertNotIn(forbidden, body)
+
+    def test_the_row_is_bound_to_the_carrier_and_the_delivery_reads_it(self):
+        header = strip_comments(read("src/quest/sentinel/hand_flip.h"))
+        self.assertIn('kMenuPath = "graphics|fullscreen"', header)
+        self.assertIn("kCarrierOffset = 0x00", header)
+        self.assertIn("kCarrierBit = 1U", header)
+        hook = strip_comments(read("src/quest/sentinel/texture_menu_hook.cpp"))
+        apply = extract_braced_function(hook, "void HandleApply(")
+        self.assertIn("HandleHandFlipDelivery(const_cast<unsigned char*>(settings));", apply)
+        delivery = extract_braced_function(hook, "void HandleHandFlipDelivery(")
+        # The game's own value of the bit is 1 and that is Off: a change reads as the inverse of the bit, and the load writes the
+        # inverse of the choice, so a player who never turns the toggle on leaves the bit as the game holds it.
+        self.assertIn("hand_flip::SetFromMenu(hand_flip::FlipFor(carried))", delivery)
+        self.assertIn("hand_flip::BitFor(hand_flip::Current())", delivery)
+        self.assertIn("hand_flip::RecordCarrier(before, carried)", delivery)
+        self.assertIn("hand_flip::kCarrierBit", delivery)
+        self.assertRegex(header, r"kMenuLabels\[kMenuValueCount\] = \{\"On\", \"Off\"\}")
+        self.assertRegex(header, r"BitFor\(int flip\) noexcept \{ return flip != 0 \? 0 : 1; \}")
+        rewrite = extract_braced_function(hook, "Served RewriteDocument(")
+        self.assertIn("hand_flip::MenuIndexFor(", rewrite)
+        # The kept rewrite is keyed on the row's index as well as the text, so a re-read serves the current choice.
+        self.assertIn("kept.handFlipIndex == handFlipIndex", rewrite)
+        self.assertIn("Kept{hash, input.size(), handFlipIndex, out}", rewrite)
+
+    def test_every_site_of_the_interim_names_the_issue_that_tracks_it(self):
+        sites = (
+            "src/quest/sentinel/hand_flip.h",
+            "src/quest/sentinel/hand_pose_log_hook.cpp",
+            "src/quest/sentinel/hand_pose_log_hook.h",
+            "src/quest/sentinel/texture_menu.cpp",
+            "src/quest/sentinel/texture_menu.h",
+            "src/quest/sentinel/texture_menu_hook.cpp",
+            "src/quest/sentinel/entry.cpp",
+            "src/quest/tests/hand_flip_test.cpp",
+            "docs/design/2026-11-02-quest-hand-flip-toggle.md",
+        )
+        for path in sites:
+            text = read(path)
+            self.assertIn("KNOWN-WRONG #2043", text, path)
+            # The report these markers once named is closed by the change that built the interim; a marker names the open issue.
+            self.assertNotIn("KNOWN-WRONG #1986", text, path)
+
+    def test_nothing_else_in_the_sentinel_writes_a_tracking_pose(self):
+        sentinel = ROOT / "src/quest/sentinel"
+        for path in sorted(sentinel.glob("*.cpp")):
+            if path.name == "hand_pose_log_hook.cpp":
+                continue
+            self.assertNotIn("hand_flip::Roll", strip_comments(path.read_text()), path.name)
 
 
 if __name__ == "__main__":
