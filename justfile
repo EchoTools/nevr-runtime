@@ -751,7 +751,8 @@ test-system-verbose *args: (_heavy-guard "test-system-verbose" args)
 # tools/winvm/README.md. Exit 1 = runtime failed a check,
 # exit 2 = the VM/environment is unusable.
 test-winvm *ARGS:
-    tools/winvm/systest.py {{ARGS}}
+    cmake --build --preset {{ preset }} --target gai_probe
+    tools/winvm/systest.py --gai-probe "build/{{ preset }}/bin/winvm/gai_probe.exe" {{ARGS}}
 
 # One social scenario, end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md):
 # builds the mingw-scenario DLL (test-only control endpoint), launches the client the
@@ -862,7 +863,9 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     trap 'rm -rf "$sigfix"' EXIT
     # test_nevr_config writes its fixture files here (a Linux path; Wine reaches it as Z:); removed with sigfix.
     export NEVR_CONFIG_TEST_DIR="$sigfix/nevr-config-tests"
-    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll" --plugin-dll "build/{{ preset }}/bin/rendezvous/fixtures/good/nevr-runtime.dll"
+    # The unsigned DLLs the fixtures are made from are CMake targets (src/runtime/tests/sigfix, ADR 0041); the script signs and damages them.
+    cmake --build --preset {{ preset }} --target sigfix_dlls
+    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --dll-dir "build/{{ preset }}/bin/sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll" --plugin-dll "build/{{ preset }}/bin/rendezvous/fixtures/good/nevr-runtime.dll"
     export NEVR_SIGFIX_DIR="$sigfix"
     # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept under build/: test_plugin_trust
     # verifies the production pins against it. A failed fetch or a digest that does not match fails the recipe, and
