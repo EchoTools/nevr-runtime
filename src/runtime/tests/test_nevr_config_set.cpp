@@ -6,11 +6,14 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 
 #include "core/nevr_config.h"
 #include "core/nevr_config_testing.h"
@@ -33,6 +36,8 @@ class Dir {
   }
   std::string File() const { return (path_ / "config.yaml").string(); }
   std::string Tmp() const { return File() + ".tmp"; }
+  // The same file spelled another way (up one level and back down): one file, a different string.
+  std::string OtherSpelling() const { return (path_ / ".." / path_.filename() / "config.yaml").string(); }
 
  private:
   fs::path path_;
@@ -398,4 +403,130 @@ TEST(NevrConfigSetWord, SetThenReadRoundTrip) {
   EXPECT_EQ(cfg.GetString("graphics.texture_quality").value_or(""), "ultra");
   const nevr::NevrConfig again = nevr::NevrConfig::LoadFromFile(dir.File());
   EXPECT_EQ(again.GetString("graphics.texture_quality").value_or(""), "ultra");
+}
+
+// ---- two callers in one process ------------------------------------------------------------------------------------------------
+
+namespace {
+
+// Two threads each edit their own key of one config.yaml, many times at once, each through a config object of its own bound to the
+// file (the way two pollers do). One sets `graphics.hand_flip` and flips it every time, the other sets `graphics.texture_quality`
+// and cycles four words, so every call writes. Neither key may be lost, every call must succeed, and at the end each key holds the
+// last value its thread set. `fileForSecond` is the path the second thread binds: the same file, perhaps spelled another way.
+struct RoundOutcome {
+  int failures = 0;
+  std::string firstFailure;
+  std::string text;
+  std::optional<bool> handFlip;
+  std::optional<std::string> textureQuality;
+  bool tmpLeft = false;
+};
+
+constexpr int kSetsPerThread = 120;
+const char* const kWords[] = {"low", "medium", "high", "very_high"};
+
+RoundOutcome RunRound(const Dir& dir, const std::string& fileForSecond) {
+  Write(dir.File(), "social:\n  facade: true\n");
+  std::atomic<int> failures{0};
+  std::atomic<bool> go{false};
+  std::string firstFailure;
+  std::atomic_flag firstFailureTaken = ATOMIC_FLAG_INIT;
+  auto note = [&](const nevr::ConfigSetResult& r) {
+    if (r.ok) return;
+    ++failures;
+    if (!firstFailureTaken.test_and_set()) firstFailure = std::string(r.reason) + " err=" + std::to_string(r.err);
+  };
+  std::thread flipper([&] {
+    while (!go.load()) std::this_thread::yield();
+    for (int i = 0; i < kSetsPerThread; ++i) {
+      nevr::NevrConfig cfg;
+      cfg.BindFile(dir.File());
+      note(cfg.Set("graphics.hand_flip", i % 2 == 0));
+    }
+  });
+  std::thread leveller([&] {
+    while (!go.load()) std::this_thread::yield();
+    for (int i = 0; i < kSetsPerThread; ++i) {
+      nevr::NevrConfig cfg;
+      cfg.BindFile(fileForSecond);
+      note(cfg.Set("graphics.texture_quality", std::string(kWords[i % 4])));
+    }
+  });
+  go.store(true);
+  flipper.join();
+  leveller.join();
+  RoundOutcome out;
+  out.failures = failures.load();
+  out.firstFailure = firstFailure;
+  out.text = Read(dir.File());
+  out.tmpLeft = Exists(dir.Tmp());
+  try {
+    const nevr::NevrConfig loaded = nevr::NevrConfig::LoadFromFile(dir.File());
+    out.handFlip = loaded.GetBool("graphics.hand_flip");
+    out.textureQuality = loaded.GetString("graphics.texture_quality");
+  } catch (const nevr::NevrConfigError&) {
+    // the file is unreadable: the outcome keeps no values and the checks below say so
+  }
+  return out;
+}
+
+void ExpectBothKeysSurvive(const RoundOutcome& out, int round) {
+  EXPECT_EQ(out.failures, 0) << "round " << round << ": a Set failed (" << out.firstFailure << ")";
+  ASSERT_TRUE(out.handFlip.has_value()) << "round " << round << ": graphics.hand_flip was lost; the file reads:\n" << out.text;
+  EXPECT_EQ(*out.handFlip, (kSetsPerThread - 1) % 2 == 0) << "round " << round << ": hand_flip is not the last value set";
+  ASSERT_TRUE(out.textureQuality.has_value()) << "round " << round << ": graphics.texture_quality was lost; the file reads:\n" << out.text;
+  EXPECT_EQ(*out.textureQuality, kWords[(kSetsPerThread - 1) % 4]) << "round " << round << ": texture_quality is not the last value set";
+  EXPECT_FALSE(out.tmpLeft) << "round " << round << ": a temporary file was left";
+}
+
+}  // namespace
+
+TEST(NevrConfigSetConcurrent, TwoThreadsEachSettingTheirOwnKeyNeverLoseEachOther) {
+  for (int round = 0; round < 6; ++round) {
+    Dir dir;
+    ExpectBothKeysSurvive(RunRound(dir, dir.File()), round);
+    if (HasFatalFailure()) return;
+  }
+}
+
+// One file has many spellings; the callers' lock is the file's, not the string's.
+TEST(NevrConfigSetConcurrent, TheSameFileSpelledTwoWaysIsStillOneFile) {
+  for (int round = 0; round < 6; ++round) {
+    Dir dir;
+    ExpectBothKeysSurvive(RunRound(dir, dir.OtherSpelling()), round);
+    if (HasFatalFailure()) return;
+  }
+}
+
+// Two threads on ONE config object: the in-memory tree they both update is inside the lock too, so the object ends up reading both keys.
+TEST(NevrConfigSetConcurrent, TwoThreadsOnOneObjectBothKeysReadBack) {
+  for (int round = 0; round < 6; ++round) {
+    Dir dir;
+    Write(dir.File(), "social:\n  facade: true\n");
+    nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFile(dir.File());
+    std::atomic<int> failures{0};
+    std::atomic<bool> go{false};
+    std::thread flipper([&] {
+      while (!go.load()) std::this_thread::yield();
+      for (int i = 0; i < kSetsPerThread; ++i) {
+        if (!cfg.Set("graphics.hand_flip", i % 2 == 0).ok) ++failures;
+      }
+    });
+    std::thread leveller([&] {
+      while (!go.load()) std::this_thread::yield();
+      for (int i = 0; i < kSetsPerThread; ++i) {
+        if (!cfg.Set("graphics.texture_quality", std::string(kWords[i % 4])).ok) ++failures;
+      }
+    });
+    go.store(true);
+    flipper.join();
+    leveller.join();
+    EXPECT_EQ(failures.load(), 0) << "round " << round;
+    ASSERT_TRUE(cfg.GetBool("graphics.hand_flip").has_value()) << "round " << round << ": the object lost hand_flip";
+    EXPECT_EQ(*cfg.GetBool("graphics.hand_flip"), (kSetsPerThread - 1) % 2 == 0) << "round " << round;
+    EXPECT_EQ(cfg.GetString("graphics.texture_quality").value_or(""), kWords[(kSetsPerThread - 1) % 4]) << "round " << round;
+    const nevr::NevrConfig reloaded = nevr::NevrConfig::LoadFromFile(dir.File());
+    EXPECT_EQ(reloaded.GetBool("graphics.hand_flip").value_or(!((kSetsPerThread - 1) % 2 == 0)), (kSetsPerThread - 1) % 2 == 0) << "round " << round;
+    EXPECT_EQ(reloaded.GetString("graphics.texture_quality").value_or(""), kWords[(kSetsPerThread - 1) % 4]) << "round " << round;
+  }
 }

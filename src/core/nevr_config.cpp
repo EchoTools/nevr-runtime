@@ -24,6 +24,8 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <sstream>
@@ -741,6 +743,51 @@ Splice SpliceScalar(const std::string* existing, const std::string& section, con
   return result;
 }
 
+// One mutex per config file for the whole of a Set: the read of the file, the splice, the write of `<file>.tmp`, the rename and the update of
+// the in-memory tree. Two callers in one process (the Quest's texture poller and hand pose poller each edit config.yaml from a thread
+// of their own) would otherwise share the one `<file>.tmp` and each read the file before the other published its edit, so the later
+// rename dropped the earlier one's key. A unique temporary name alone does not cure that: both would still read the same old text,
+// and the second rename would still replace the first one's result with a file that lacks its key. Holding one lock across read,
+// splice and rename makes the second caller read what the first published.
+//
+// The key is the file's canonical path (its directory canonical, see LockKeyFor), so `a/config.yaml` and `a/../a/config.yaml` take
+// the same mutex.
+// Mutexes are never removed: the registry is a leaked heap object (no destructor to race a poller still running at exit, no
+// load-time initializer for the Quest's check), and one entry is a few dozen bytes per distinct config path a process ever edits.
+// Another process editing the same file is not covered (that needs an advisory file lock, which is a different change).
+struct FileLocks {
+  std::mutex registry;
+  std::map<std::string, std::unique_ptr<std::mutex>> byFile;
+};
+
+// The lock's key: the file's directory made canonical (links and `..` resolved) plus the file's own name. The file itself is never
+// opened to find its identity: on Windows a canonicalizing open of the target, taken by a caller waiting for the lock while the holder
+// renames the new text over it, makes the holder's rename fail with access denied (measured under Wine: rename_failed err=13).
+// A link standing at the file's own name is the thing Set's rename replaces, so the name belongs in the key as written.
+std::string LockKeyFor(const std::string& boundFile) {
+  std::error_code ec;
+  const fs::path absolute = fs::absolute(fs::path(boundFile), ec);
+  if (ec) return fs::path(boundFile).lexically_normal().string();
+  const fs::path directory = fs::weakly_canonical(absolute.parent_path(), ec);  // the directory is read, never the file
+  std::string key = ec ? absolute.lexically_normal().string() : (directory / absolute.filename()).string();
+#ifdef _WIN32
+  // Windows paths compare without regard to case; the mutex must not depend on how the caller cased the path.
+  for (char& c : key) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
+#endif
+  return key;
+}
+
+std::mutex& MutexFor(const std::string& boundFile) {
+  static FileLocks* const locks = new FileLocks;  // leaked on purpose, see above
+  const std::string key = LockKeyFor(boundFile);
+  const std::lock_guard<std::mutex> hold(locks->registry);
+  std::unique_ptr<std::mutex>& slot = locks->byFile[key];
+  if (!slot) slot = std::make_unique<std::mutex>();
+  return *slot;
+}
+
 int RealRename(const char* from, const char* to) {
   std::error_code ec;
   fs::rename(fs::path(from), fs::path(to), ec);
@@ -790,6 +837,10 @@ ConfigSetResult NevrConfig::SetScalar(const std::string& path, const ScalarEdit&
     }
     const std::string section = path.substr(0, dot);
     const std::string key = path.substr(dot + 1);
+
+    // From here to the return, no other caller in this process edits the same file (see MutexFor). The in-memory update at the end is
+    // inside it too, so two threads calling Set on one NevrConfig object do not race on its tree either.
+    const std::lock_guard<std::mutex> fileLock(MutexFor(boundFile_));
 
     std::error_code ec;
     const fs::file_status status = fs::status(fs::path(boundFile_), ec);
