@@ -38,7 +38,7 @@ if(NEVR_LIBR15_EXTRA_ROWS)
   list(GET NEVR_EXTRA_ROWS_JSON_INCLUDE 0 NEVR_EXTRA_ROWS_JSON_INCLUDE)
   set(NEVR_EXTRA_ROWS_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/libr15_extra_rows_data.cpp")
   nevr_libr15_extra_rows("${NEVR_EXTRA_ROWS_FILE}" "${NEVR_EXTRA_ROWS_SOURCE}" "${NEVR_REPO_ROOT}/src"
-                         "${NEVR_EXTRA_ROWS_JSON_INCLUDE}" "${CMAKE_CURRENT_BINARY_DIR}/extra_rows_check")
+                         "${NEVR_EXTRA_ROWS_JSON_INCLUDE}")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${NEVR_EXTRA_ROWS_FILE}")
   target_sources(nevr_quest_got_hook PRIVATE ../patch/libr15_extra_rows.cpp "${NEVR_EXTRA_ROWS_SOURCE}")
   target_compile_definitions(nevr_quest_got_hook PRIVATE NEVR_LIBR15_EXTRA_ROWS=1)

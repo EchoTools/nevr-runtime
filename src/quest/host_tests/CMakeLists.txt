@@ -1,8 +1,8 @@
 # The Quest host tests: C++ test programs for the Quest code, built with the host compiler (no NDK, no Android) and run by
 # ctest (ADR 0041: native code, test programs included, is built by CMake targets, never by compiler lines in a recipe).
 #
-# Reached from src/quest/CMakeLists.txt when NEVR_QUEST_HOST_TESTS is ON, which the quest-host-* configure presets in
-# src/quest/CMakePresets.json set. One preset per `just test-quest-*` recipe: its own build tree (build/quest-host-<group>), so
+# Reached from src/quest/host/CMakeLists.txt (the host tools project, NEVR_QUEST_HOST_TOOLS) when NEVR_QUEST_HOST_TESTS is ON,
+# which the quest-host-* configure presets in src/quest/CMakePresets.json set. One preset per `just test-quest-*` recipe: its own build tree (build/quest-host-<group>), so
 # the recipes `just verify` runs in parallel never share a ninja directory; its build preset builds the target
 # host-tests-<group>; its test preset runs the tests labelled <group>. Every group is defined in every tree, and a recipe
 # builds only its own.
@@ -24,16 +24,10 @@ set(NEVR_HT_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 # `just _vcpkg-quest-host` into build/quest-host-vcpkg; never a system package. libcurl, openssl and zstd are the host's
 # development files (pkg-config libcurl; -lssl -lcrypto; -lzstd), as the recipes always took them.
 set(NEVR_HOST_PREFIX "" CACHE PATH "The x64-linux vcpkg tree of tools/quest-host-deps (the quest-host-* presets set it)")
-set(NEVR_HOST_JSON_INCLUDE "" CACHE PATH "The directory that holds nlohmann/json.hpp (empty: NEVR_HOST_PREFIX/include)")
-set(NEVR_QUEST_PATCH_LIBR15 "${NEVR_REPO_ROOT}/build/quest-patcher/quest_patch_libr15" CACHE FILEPATH
-    "The libr15 patcher tool the patcher test runs (built by `just quest-patcher`)")
-
+# NEVR_HOST_JSON_INCLUDE (the directory that holds nlohmann/json.hpp) is the host tools' cache variable, declared in
+# src/quest/host/CMakeLists.txt, which enters this directory; a recipe may pass another tree.
 set(NEVR_HOST_INCLUDE "${NEVR_HOST_PREFIX}/include")
-if(NEVR_HOST_JSON_INCLUDE STREQUAL "")
-  set(NEVR_JSON_INCLUDE "${NEVR_HOST_INCLUDE}")
-else()
-  get_filename_component(NEVR_JSON_INCLUDE "${NEVR_HOST_JSON_INCLUDE}" ABSOLUTE BASE_DIR "${NEVR_REPO_ROOT}")
-endif()
+get_filename_component(NEVR_JSON_INCLUDE "${NEVR_HOST_JSON_INCLUDE}" ABSOLUTE BASE_DIR "${NEVR_REPO_ROOT}")
 find_library(NEVR_ZLIB_LIB NAMES libz.a PATHS "${NEVR_HOST_PREFIX}/lib" NO_DEFAULT_PATH)
 find_library(NEVR_YAML_LIB NAMES libyaml-cpp.a PATHS "${NEVR_HOST_PREFIX}/lib" NO_DEFAULT_PATH)
 foreach(dep ZLIB YAML)

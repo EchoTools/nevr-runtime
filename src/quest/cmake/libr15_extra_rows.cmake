@@ -4,9 +4,9 @@
 # carries no row. A variant build is given the same file the patcher is (`android-repack-apk ... extra_rows=<file>`), so the
 # sentinel computes the same patched build ID as the libr15 it will meet.
 #
-#   nevr_libr15_extra_rows(<rows-file> <out-cpp> <src-root> <json-include> <work-dir>)
+#   nevr_libr15_extra_rows(<rows-file> <out-cpp> <src-root> <json-include>)
 #
-# 1. checks the file with the patcher's own parser, compiled for the host and run now: a file the patcher would refuse is a
+# 1. checks the file with the patcher's own parser, built for the host (the quest-patcher preset) and run now: a file the patcher would refuse is a
 #    CONFIGURE error naming the refusal, never something the sentinel finds out on a headset;
 # 2. writes <out-cpp>: the file's bytes and SHA-256 as nevr_libr15_extra_rows_data::{kBytes,kSize,kSha256}, which
 #    sentinel/libr15_identity.cpp parses with the same function on first use. Only the digest and the row count are ever
@@ -49,27 +49,28 @@ const char kSha256[] = \"@digest@\";
 ")
 endfunction()
 
-function(nevr_libr15_check_extra_rows rows_file src_root json_include work_dir)
+function(nevr_libr15_check_extra_rows rows_file src_root json_include)
   if(NOT EXISTS "${rows_file}")
     message(FATAL_ERROR "NEVR_LIBR15_EXTRA_ROWS: the file does not exist: ${rows_file}")
   endif()
   if(NOT EXISTS "${json_include}/nlohmann/json.hpp")
     message(FATAL_ERROR "NEVR_LIBR15_EXTRA_ROWS: nlohmann/json.hpp is not under ${json_include}; the check needs it")
   endif()
-  # The build's compiler is the NDK's and cannot run here; the check is a host program.
-  find_program(NEVR_HOST_CXX NAMES g++ c++ clang++ NO_CMAKE_FIND_ROOT_PATH)
-  if(NOT NEVR_HOST_CXX)
-    message(FATAL_ERROR "NEVR_LIBR15_EXTRA_ROWS: no host C++ compiler (g++, c++ or clang++) on PATH to check the file with")
+  # The build's compiler is the NDK's and cannot run here; the check is a host program, the target
+  # nevr_quest_libr15_extra_rows_check of src/quest/host/CMakeLists.txt, which the quest-patcher preset (the host tools,
+  # docs/adr/0041) builds into build/quest-patcher. Nothing here names a compiler.
+  set(quest_dir "${src_root}/quest")
+  get_filename_component(checker_dir "${src_root}/../build/quest-patcher" ABSOLUTE)
+  set(checker "${checker_dir}/libr15_extra_rows_check")
+  execute_process(COMMAND "${CMAKE_COMMAND}" --preset quest-patcher "-DNEVR_HOST_JSON_INCLUDE=${json_include}"
+                  WORKING_DIRECTORY "${quest_dir}" RESULT_VARIABLE configured OUTPUT_VARIABLE configure_out ERROR_VARIABLE configure_error)
+  if(NOT configured EQUAL 0)
+    message(FATAL_ERROR "NEVR_LIBR15_EXTRA_ROWS: could not configure the host check (preset quest-patcher):\n${configure_out}${configure_error}")
   endif()
-  file(MAKE_DIRECTORY "${work_dir}")
-  set(checker "${work_dir}/libr15_extra_rows_check")
-  execute_process(
-    COMMAND "${NEVR_HOST_CXX}" -std=c++17 -O1 "-I${src_root}" -isystem "${json_include}"
-            "${src_root}/quest/patch/libr15_extra_rows_check.cpp" "${src_root}/quest/patch/libr15_extra_rows.cpp"
-            "${src_root}/quest/patch/libr15_patch_identity.cpp" "${src_root}/quest/data/sha256.cpp" -o "${checker}"
-    RESULT_VARIABLE compiled ERROR_VARIABLE compile_error)
+  execute_process(COMMAND "${CMAKE_COMMAND}" --build --preset quest-patcher --target nevr_quest_libr15_extra_rows_check
+                  WORKING_DIRECTORY "${quest_dir}" RESULT_VARIABLE compiled OUTPUT_VARIABLE compile_out ERROR_VARIABLE compile_error)
   if(NOT compiled EQUAL 0)
-    message(FATAL_ERROR "NEVR_LIBR15_EXTRA_ROWS: could not build the host check:\n${compile_error}")
+    message(FATAL_ERROR "NEVR_LIBR15_EXTRA_ROWS: could not build the host check:\n${compile_out}${compile_error}")
   endif()
   execute_process(COMMAND "${checker}" "${rows_file}" RESULT_VARIABLE status OUTPUT_VARIABLE summary ERROR_VARIABLE refusal
                   OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_STRIP_TRAILING_WHITESPACE)
@@ -79,8 +80,8 @@ function(nevr_libr15_check_extra_rows rows_file src_root json_include work_dir)
   set(NEVR_LIBR15_EXTRA_ROWS_SUMMARY "${summary}" PARENT_SCOPE)
 endfunction()
 
-function(nevr_libr15_extra_rows rows_file out_cpp src_root json_include work_dir)
-  nevr_libr15_check_extra_rows("${rows_file}" "${src_root}" "${json_include}" "${work_dir}")
+function(nevr_libr15_extra_rows rows_file out_cpp src_root json_include)
+  nevr_libr15_check_extra_rows("${rows_file}" "${src_root}" "${json_include}")
   nevr_libr15_generate_extra_rows_source("${rows_file}" "${out_cpp}")
   file(SHA256 "${rows_file}" digest)
   message(STATUS "nevr_quest: libr15 extra rows ${NEVR_LIBR15_EXTRA_ROWS_SUMMARY} sha256=${digest} (a variant build: its libr15 has its own build ID)")

@@ -25,15 +25,29 @@
             "binaryDir": "${sourceDir}/../../build/android-dev"
         },
         {
+            "name": "quest-patcher",
+            "displayName": "Quest host tools (the libr15 patcher) with the host compiler, not the NDK",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../../build/quest-patcher",
+            "cacheVariables": {
+                "NEVR_QUEST_HOST_TOOLS": "ON",
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
+                "NEVR_HOST_JSON_INCLUDE": "${sourceDir}/../../build/quest-host-vcpkg/x64-linux/include"
+            }
+        },
+        {
             "name": "quest-host-base",
             "hidden": true,
-            "displayName": "Quest host tests: the host g++, no NDK (src/quest/host_tests)",
+            "displayName": "Quest host tests: the host g++, no NDK (src/quest/host_tests, entered from src/quest/host)",
             "generator": "Ninja",
             "cacheVariables": {
+                "NEVR_QUEST_HOST_TOOLS": "ON",
                 "NEVR_QUEST_HOST_TESTS": "ON",
                 "CMAKE_C_COMPILER": "gcc",
                 "CMAKE_CXX_COMPILER": "g++",
-                "NEVR_HOST_PREFIX": "${sourceDir}/../../build/quest-host-vcpkg/x64-linux"
+                "NEVR_HOST_PREFIX": "${sourceDir}/../../build/quest-host-vcpkg/x64-linux",
+                "NEVR_HOST_JSON_INCLUDE": "${sourceDir}/../../build/quest-host-vcpkg/x64-linux/include"
             }
         },
         {
@@ -155,6 +169,11 @@
             "name": "android-arm64-dev",
             "displayName": "Build Android arm64-v8a (local dev package)",
             "configurePreset": "android-arm64-dev"
+        },
+        {
+            "name": "quest-patcher",
+            "displayName": "Build the Quest host tools",
+            "configurePreset": "quest-patcher"
         },
         {
             "name": "quest-host-data",
