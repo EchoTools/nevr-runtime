@@ -948,7 +948,7 @@ TEST(WithNoWarningSinkAFailureReachesTheStepSinkAtItsLevel) {
   rig.CheckUsedWithoutFetch(r, net);
   CHECK(rig.warns.empty());
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));  // data_check, then the failure
-  CHECK(Contains(rig.events[1], "data_packages root=" + Media() + " data_version=5932408047 package=48037dc70b0ecab2_1 outcome=short"));
+  CHECK(rig.events.size() > 1 && Contains(rig.events[1], "data_packages root=" + Media() + " data_version=5932408047 package=48037dc70b0ecab2_1 outcome=short"));
 }
 
 // The production defaults of the file seams (a stat, a chunked hash, a temporary and a rename, a bounded read) over a real
