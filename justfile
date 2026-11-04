@@ -1509,6 +1509,33 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
 test-quest-apk-patch-map patch_repo:
     python3 tools/quest_apk_patch_map.py --repo "{{ patch_repo }}"
 
+# The store OBB extractor's units on the host (src/quest/obb, docs/adr/0042): the footer, the key, the Twofish-CBC plain-IV cipher, the
+# FAT16 reader and the pins, over images built in the test, and the whole stock-data step over a synthetic OBB (extraction, cache hit,
+# every refusal). No game file, no device. Fail-close.
+test-quest-obb: _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd src/quest
+    cmake --preset quest-host-obb
+    cmake --build --preset quest-host-obb
+    ctest --preset quest-host-obb
+
+# The extractor on the real store OBB (`obb`, default $NEVR_STORE_OBB): the footer, the extraction to a scratch cache and the
+# digests of the four files, written out in src/quest/tests/obb_pinned_test.cpp from the measurements in #2081. Stops, naming the
+# variable, when no OBB is given.
+test-quest-obb-pinned obb=env("NEVR_STORE_OBB", ""): _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    obb="{{ obb }}"
+    [ -n "$obb" ] || { echo "test-quest-obb-pinned: NEVR_STORE_OBB names no store OBB" >&2; exit 1; }
+    [ -f "$obb" ] || { echo "test-quest-obb-pinned: NEVR_STORE_OBB is not a file: $obb" >&2; exit 1; }
+    (cd src/quest && cmake --preset quest-host-obb-pinned && cmake --build --preset quest-host-obb-pinned)
+    scratch="build/quest-host-obb-pinned/scratch"
+    build/quest-host-obb-pinned/obb-pinned/obb_pinned_test "$obb" tools/quest_stock_data.pin "$scratch" | tee "build/quest-host-obb-pinned/run.log"
+    rm -rf "$scratch"
+    grep -qx 'PASS TheStoreObbExtractsToThePinnedTree' build/quest-host-obb-pinned/run.log || { echo "test-quest-obb-pinned: the extraction test did not run and pass" >&2; exit 1; }
+    echo "test-quest-obb-pinned: the real store OBB extracts to the pinned tree"
+
 # The libr15 build-time patcher (docs/adr/0021): builds the host tool quest_patch_libr15 into build/quest-patcher/ with
 # the quest-patcher preset (src/quest/CMakePresets.json; the target is in src/quest/host/CMakeLists.txt; docs/adr/0041).
 # nlohmann::json comes from the tools/quest-host-deps manifest, which _vcpkg-quest-host installs for the x64-linux
@@ -1856,6 +1883,7 @@ verify *args: (_heavy-guard "verify" args)
         test-quest-invite \
         test-quest-plugins \
         test-quest-autopilot \
+        test-quest-obb \
         test-quest-q15t \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------

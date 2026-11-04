@@ -49,6 +49,43 @@ target_include_directories(nevr_quest_libr15_extra_rows_check SYSTEM PRIVATE "${
 target_compile_options(nevr_quest_libr15_extra_rows_check PRIVATE -O1)
 set_target_properties(nevr_quest_libr15_extra_rows_check PROPERTIES OUTPUT_NAME libr15_extra_rows_check RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+# The store OBB extractor (docs/adr/0042-quest-store-variant-built-from-store-apk-and-obb.md): `just quest-stock-data` builds it with the
+# quest-obb-extract preset and runs it; the host tests (host_tests/groups/obb.cmake) link the same library. nettle comes from the
+# tools/quest-host-deps manifest, installed by `just _vcpkg-quest-host` into NEVR_HOST_PREFIX; never a system library, whose
+# version (and function types) can differ. Off in the other host-tools trees, so a tree configured without that install still builds.
+option(NEVR_QUEST_OBB_EXTRACT "Build the store OBB extractor (needs nettle from NEVR_HOST_PREFIX)" OFF)
+set(NEVR_HOST_PREFIX "" CACHE PATH "The x64-linux vcpkg tree of tools/quest-host-deps (the quest-* host presets set it)")
+if(NEVR_QUEST_OBB_EXTRACT)
+  find_library(NEVR_NETTLE_LIB NAMES libnettle.a PATHS "${NEVR_HOST_PREFIX}/lib" NO_DEFAULT_PATH)
+  if(NOT NEVR_NETTLE_LIB OR NOT EXISTS "${NEVR_HOST_PREFIX}/include/nettle/twofish.h")
+    message(FATAL_ERROR
+      "nevr_quest host tools: nettle (libnettle.a and nettle/twofish.h) is not under NEVR_HOST_PREFIX='${NEVR_HOST_PREFIX}'; "
+      "'just _vcpkg-quest-host' installs it from tools/quest-host-deps")
+  endif()
+  add_library(nevr_quest_obb STATIC
+    ../obb/byte_source.cpp
+    ../obb/obb_footer.cpp
+    ../obb/obb_key.cpp
+    ../obb/obb_cipher.cpp
+    ../obb/fat16.cpp
+    ../obb/stock_pins.cpp
+    ../obb/build_log.cpp
+    ../obb/stock_data.cpp
+    ../data/sha256.cpp)
+  target_include_directories(nevr_quest_obb PUBLIC "${NEVR_REPO_ROOT}/src")
+  # -isystem puts the pinned nettle ahead of any system copy. _GLIBCXX_ASSERTIONS: the tool reads a file it did not write; an
+  # out-of-range operator[] aborts instead of reading past the buffer.
+  target_include_directories(nevr_quest_obb SYSTEM PUBLIC "${NEVR_HOST_PREFIX}/include" "${NEVR_HOST_JSON_INCLUDE}")
+  target_compile_definitions(nevr_quest_obb PUBLIC _GLIBCXX_ASSERTIONS)
+  target_compile_options(nevr_quest_obb PRIVATE -O2 -Wall -Wextra -Werror)
+  target_link_libraries(nevr_quest_obb PUBLIC "${NEVR_NETTLE_LIB}")
+
+  add_executable(nevr_quest_obb_extract ../obb/obb_extract_main.cpp)
+  target_link_libraries(nevr_quest_obb_extract PRIVATE nevr_quest_obb)
+  target_compile_options(nevr_quest_obb_extract PRIVATE -O2 -Wall -Wextra -Werror)
+  set_target_properties(nevr_quest_obb_extract PROPERTIES OUTPUT_NAME quest_obb_extract RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+endif()
+
 # The host tests of the `just test-quest-*` recipes (docs/adr/0041): the quest-host-* presets turn this on, besides the host tools.
 if(NEVR_QUEST_HOST_TESTS)
   add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../host_tests" host_tests)
