@@ -89,8 +89,21 @@ class CStyleCastInDllLoadHook(unittest.TestCase):
             "out = (char)(c + 32);",
             "p = (const char*)q;",
             "c = '\\\"'; p = (char)c; s = \"ok\";",
+            "x = (uint64_t)y;",
+            "x = ( char )c;",
         ):
             self.assertEqual(1, len(c_style_casts(text)), text)
+
+    def test_every_listed_type_is_matched(self):
+        # Written out again here, not read from TYPES: an entry dropped from TYPES then fails this test.
+        for name in (
+            "void", "char", "wchar_t", "bool", "int", "long", "short", "float", "double",
+            "size_t", "uintptr_t", "intptr_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+            "int8_t", "int16_t", "int32_t", "int64_t", "std::size_t", "std::uintptr_t",
+            "DWORD", "BYTE", "WORD", "UINT", "BOOL", "HMODULE", "HANDLE", "FARPROC", "LPVOID",
+            "LPCSTR", "LPCWSTR", "LPSTR", "LPWSTR", "MH_STATUS",
+        ):
+            self.assertEqual(1, len(c_style_casts("x = (%s)y;" % name)), name)
 
     def test_ignores_what_is_not_a_cast(self):
         for text in (
@@ -103,6 +116,9 @@ class CStyleCastInDllLoadHook(unittest.TestCase):
             "// (char)c in a comment",
             "/* (void*)p in a block comment */",
             'log("(char)c in a string");',
+            's = "(char)c \\" x";',
+            "g(x, bool) && y;",
+            "/* first line\n   (char)c in a block comment */\nint x;\n",
         ):
             self.assertEqual([], c_style_casts(text), text)
 
