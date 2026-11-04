@@ -1898,6 +1898,12 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/hand_pose_log_hook_test" -ldl
     timeout 120 "$out/hand_pose_log_hook_test"
+    # The Controller Hand Flip toggle, pure half (#1986, KNOWN-WRONG #2043): the roll (y, -x, w, -z), the versioned file, the start
+    # resolver, the save and the golden lines, against a temporary game directory.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/hand_flip_test.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/hand_flip_test" -ldl
+    timeout 120 "$out/hand_flip_test"
     # libr15's array of free GPU ranges has no bound check (#1759): the real handler through the thunk entry against a model of
     # CGRawInterfaceVK::Free laid out as the game's (512 entries, the count after the last), the pinned words refused when one
     # differs, and the fill and the leaks in the log.
@@ -2130,10 +2136,12 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
 test-quest-apk-patch-map patch_repo:
     python3 tools/quest_apk_patch_map.py --repo "{{ patch_repo }}"
 
-# The libr15 build-time patcher (docs/adr/0021): builds the host tool quest_patch_libr15 into
-# build/quest-patcher/ with plain host g++. nlohmann::json comes from the tools/quest-host-deps manifest, which
-# _vcpkg-quest-host installs for the x64-linux triplet (never a system package), so a clean clone builds it with no
-# other build first; pass the include directory that holds nlohmann/json.hpp as json_include to use another tree.
+# The libr15 build-time patcher (docs/adr/0021): builds the host tool quest_patch_libr15 into build/quest-patcher/ with
+# the quest-patcher preset (src/quest/CMakePresets.json; the target is in src/quest/host/CMakeLists.txt; docs/adr/0041).
+# nlohmann::json comes from the tools/quest-host-deps manifest, which _vcpkg-quest-host installs for the x64-linux
+# triplet (never a system package), so a clean clone builds it with no other build first; pass the include directory
+# that holds nlohmann/json.hpp as json_include to use another tree. build/quest-patcher/json_inc is the directory the
+# preset is given and the one the host patcher tests (test-quest-patcher) put on their include path.
 quest-patcher json_include="": _vcpkg-quest-host
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2146,10 +2154,9 @@ quest-patcher json_include="": _vcpkg-quest-host
     fi
     mkdir -p "$out/json_inc"
     ln -sfn "$(cd "$inc" && pwd)/nlohmann" "$out/json_inc/nlohmann"
-    g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$out/json_inc" \
-        src/quest/patch/quest_patch_libr15.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_extra_rows.cpp src/quest/patch/libr15_patcher_cli.cpp \
-        src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp src/quest/sentinel/arm64_reloc.cpp \
-        -o "$out/quest_patch_libr15"
+    json_inc="$(cd "$out/json_inc" && pwd)"
+    (cd src/quest && cmake --preset quest-patcher -DNEVR_HOST_JSON_INCLUDE="$json_inc")
+    (cd src/quest && cmake --build --preset quest-patcher --target nevr_quest_patch_libr15)
     [ -x "$out/quest_patch_libr15" ] || { echo "quest-patcher: FAIL - $out/quest_patch_libr15 was not produced" >&2; exit 1; }
     echo "quest-patcher: built $out/quest_patch_libr15"
 
