@@ -39,6 +39,7 @@ Json HandFlipRowLike(const Json& msaaRow, int handFlipIndex) {
 
 // Turns every `graphics|msaa` row into the control and every `rows` list that holds one into that row and the Controller Hand Flip
 // row under it, under the control's page name. Preorder, as the rewrite of the patch repository walks: the page first, then its rows.
+// KNOWN-WRONG #2043 `handFlipIndex` (the toggle's row index; kNoHandFlipRow: no row) is the interim toggle's.
 void WalkMenu(Json& node, int defaultIndex, int handFlipIndex, Result* out) {
   if (node.is_object()) {
     if (IsMsaaRow(node)) {
@@ -56,10 +57,10 @@ void WalkMenu(Json& node, int defaultIndex, int handFlipIndex, Result* out) {
       for (const Json& row : *rows) holds = holds || IsMsaaRow(row);
       if (holds) {
         Json kept = Json::array();
-        bool flipAdded = false;
+        bool flipAdded = false;  // KNOWN-WRONG #2043 the interim toggle's row, once per page
         for (Json& row : *rows) {
           if (!IsMsaaRow(row)) continue;
-          if (!flipAdded) {
+          if (!flipAdded && handFlipIndex != kNoHandFlipRow) {
             const Json flipRow = HandFlipRowLike(row, handFlipIndex);
             kept.push_back(std::move(row));
             kept.push_back(flipRow);
@@ -85,7 +86,7 @@ void WalkMenu(Json& node, int defaultIndex, int handFlipIndex, Result* out) {
 // Removes the setting entries that remove `graphics|msaa` (and, KNOWN-WRONG #2043, the one that removes `graphics|fullscreen`, the
 // interim toggle's setting), and the page entries that remove the stock graphics page, wherever a
 // `settings` or `pages` list carries them.
-void WalkGameSettings(Json& node, Result* out) {
+void WalkGameSettings(Json& node, bool offerHandFlip, Result* out) {
   if (node.is_object()) {
     const auto settings = node.find("settings");
     if (settings != node.end() && settings->is_array()) {
@@ -93,7 +94,7 @@ void WalkGameSettings(Json& node, Result* out) {
       for (Json& entry : *settings) {
         if (IsMsaaRow(entry)) {
           ++out->rows;
-        } else if (HasPath(entry, nevr_quest::hand_flip::kMenuPath)) {
+        } else if (offerHandFlip && HasPath(entry, nevr_quest::hand_flip::kMenuPath)) {
           ++out->handFlipRows;
         } else {
           kept.push_back(std::move(entry));
@@ -113,9 +114,9 @@ void WalkGameSettings(Json& node, Result* out) {
       }
       *pages = std::move(kept);
     }
-    for (auto& child : node) WalkGameSettings(child, out);
+    for (auto& child : node) WalkGameSettings(child, offerHandFlip, out);
   } else if (node.is_array()) {
-    for (auto& child : node) WalkGameSettings(child, out);
+    for (auto& child : node) WalkGameSettings(child, offerHandFlip, out);
   }
 }
 
@@ -159,11 +160,11 @@ Result RewriteMenuSettings(std::string_view text, int defaultIndex, int handFlip
   return result;
 }
 
-Result RewriteGameSettings(std::string_view text) {
+Result RewriteGameSettings(std::string_view text, bool offerHandFlip) {
   Result result;
   Json doc;
   if (!Parse(text, &doc)) return result;
-  WalkGameSettings(doc, &result);
+  WalkGameSettings(doc, offerHandFlip, &result);
   if (result.rows == 0) {
     result.status = Status::kShapeMismatch;
     return result;

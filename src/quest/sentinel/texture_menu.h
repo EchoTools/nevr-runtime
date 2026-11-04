@@ -54,18 +54,20 @@ struct Result {
   std::string page;          // menu: the name of the page that held the row ("" when none was named)
   int rows = 0;              // menu: `graphics|msaa` rows turned into the control; settings: removals made
   int pages = 0;             // menu: pages reduced to the one row; settings: page removals made
-  int handFlipRows = 0;      // menu: Controller Hand Flip rows added under Texture Resolution; settings: its removals made
+  int handFlipRows = 0;      // KNOWN-WRONG #2043 menu: Controller Hand Flip rows added under Texture Resolution; settings: its removals made
 };
 
 // menu_settings.json -> the Texture Resolution control, and under it, on the same page, the Controller Hand Flip row (hand_flip.h;
 // KNOWN-WRONG #2043 the row is the interim toggle). `defaultIndex` is the control's default selected index (the "idx" field the
 // engine honours as the default); `handFlipIndex` is the toggle's (the row lists On first: 0 On, 1 Off, the default; the player's stored
-// choice when it was resolved before the menu was read).
+// choice when it was resolved before the menu was read). kNoHandFlipRow adds no row: the toggle is not offered when the hand pose
+// hooks that roll, save and log it are not installed (hand_flip.h, Offered).
+inline constexpr int kNoHandFlipRow = -1;  // KNOWN-WRONG #2043 the toggle is the interim
 Result RewriteMenuSettings(std::string_view text, int defaultIndex, int handFlipIndex = 1);
 
-// gamesettings_config.json -> the entries that hide the control and its page removed, and any entry that hides the Controller Hand
-// Flip row's setting.
-Result RewriteGameSettings(std::string_view text);
+// gamesettings_config.json -> the entries that hide the control and its page removed, and, when `offerHandFlip`, any entry that hides
+// the Controller Hand Flip row's setting (KNOWN-WRONG #2043: with no row offered the stock entry stays).
+Result RewriteGameSettings(std::string_view text, bool offerHandFlip = true);
 
 // The player's choice, kept in a file of our own beside the game's settings (RAD/LoneEcho/ under the game's local app data
 // directory). The game's own saved slot (`msaa` in settings_mp_v2_quest.json) cannot say whether the player chose: a settings file

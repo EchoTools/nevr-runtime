@@ -90,6 +90,7 @@ constexpr int kDocuments = 3;
 std::atomic<int> g_jsonStatus[kDocuments];
 std::atomic<int> g_jsonRows[kDocuments];
 std::atomic<int> g_jsonPages[kDocuments];
+// KNOWN-WRONG #2043 Controller Hand Flip rows each document's rewrite added or removed (hand_flip.h).
 std::atomic<int> g_jsonHandFlip[kDocuments];
 
 // The document each thread is inside the file read of (kNone: none). Not a thread_local: the .so would get emulated TLS on the hook
@@ -216,16 +217,20 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   // The Controller Hand Flip row starts on the stored choice when the start was resolved before the menu was read (it is resolved
   // on the first eye-size query, earlier than the menu document), else on Off. Its index 0 is "On" (hand_flip::MenuIndexFor).
   // KNOWN-WRONG #2043 the toggle is the interim.
-  const int handFlipIndex = document == kMenuSettings ? hand_flip::MenuIndexFor(hand_flip::Started() ? hand_flip::Current() : 0) : 0;
+  // With the hand pose hooks not installed there is no row (kNoHandFlipRow), and the settings document keeps its stock entry.
+  const bool offered = hand_flip::Offered();
+  const int handFlipIndex = !offered ? texture_menu::kNoHandFlipRow
+                            : document == kMenuSettings ? hand_flip::MenuIndexFor(hand_flip::Started() ? hand_flip::Current() : 0)
+                                                        : 0;
   if (kept.text != nullptr && kept.hash == hash && kept.inputSize == input.size() && kept.handFlipIndex == handFlipIndex) {
     return {kept.text->data(), kept.text->size()};
   }
   const texture_menu::Result r = document == kMenuSettings
                                      ? texture_menu::RewriteMenuSettings(input, g_defaultIndex.load(std::memory_order_acquire), handFlipIndex)
-                                     : texture_menu::RewriteGameSettings(input);
+                                     : texture_menu::RewriteGameSettings(input, offered);
   g_jsonRows[document].store(r.rows, std::memory_order_relaxed);
   g_jsonPages[document].store(r.pages, std::memory_order_relaxed);
-  g_jsonHandFlip[document].store(r.handFlipRows, std::memory_order_relaxed);
+  g_jsonHandFlip[document].store(r.handFlipRows, std::memory_order_relaxed);  // KNOWN-WRONG #2043 the interim toggle's rows
   g_jsonStatus[document].store(static_cast<int>(r.status) + 1, std::memory_order_release);
   if (r.status != texture_menu::Status::kRewritten) return {};
   const std::string* const out = new std::string(r.text);
@@ -397,7 +402,12 @@ void HandleValidate(ValidateThunk::Fn original, unsigned char* settings) noexcep
 // settings JSON, InitCI copies the UI rows back): the stock bit is 1, which is Off, so a restore after On reads as the player
 // turning it Off, is saved once (the next delivery carries the same bit, which is no change), and never turns the roll on.
 void HandleHandFlipDelivery(unsigned char* settings) noexcept {
-  hand_flip::EnsureStarted();
+  // No row, no write to the game's bit: the hooks that roll, save and log it are not installed.
+  if (!hand_flip::Offered()) return;
+  // The start is resolved to completion before its flag is trusted: another thread may be inside it (the tracking handler's
+  // first call), and reading the flag now would write the bit from a value the start has not stored yet. A wait that times out
+  // leaves the load to the next delivery: the bit is untouched and the last-delivery word stays unset.
+  if (!hand_flip::AwaitStart()) return;
   std::uint32_t flags = LoadAt<std::uint32_t>(settings, hand_flip::kCarrierOffset);
   int carried = (flags & hand_flip::kCarrierBit) != 0 ? 1 : 0;
   if (g_lastHandFlip.load(std::memory_order_acquire) == kUnset) {
@@ -441,7 +451,7 @@ void HandleApply(ApplyThunk::Fn original, const unsigned char* settings, void* g
     const Level level = tq::LevelForMenuIndex(index);
     g_menuLevel.store(static_cast<std::uint64_t>(level), std::memory_order_relaxed);
     tq::RequestLevel(level, tq::RequestSource::kMenu);
-    HandleHandFlipDelivery(const_cast<unsigned char*>(settings));
+    HandleHandFlipDelivery(const_cast<unsigned char*>(settings));  // KNOWN-WRONG #2043 the interim toggle rides on this delivery
   }
   original(settings, game, refreshUi);
 }
@@ -748,6 +758,7 @@ int PollLocked() noexcept {
                          {"consequence", "the engine could not rebuild; the previous level was put back"}});
     ++lines;
   }
+  lines += hand_flip::PollRow();  // KNOWN-WRONG #2043 says once that the toggle's row is not offered
   return lines;
 }
 
@@ -999,7 +1010,7 @@ void ResetForTest() noexcept {
     g_jsonStatus[i].store(0);
     g_jsonRows[i].store(0);
     g_jsonPages[i].store(0);
-    g_jsonHandFlip[i].store(0);
+    g_jsonHandFlip[i].store(0);  // KNOWN-WRONG #2043
   }
   g_logged = Logged();
   g_propertyLast.store(kUnset);
