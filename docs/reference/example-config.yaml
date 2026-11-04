@@ -147,7 +147,7 @@ graphics:
   # Quest 2 very_low 1152x1264, low 1440x1584, medium 1728x1904, high 2016x2224, very_high 2304x2528, ultra 2592x2848; 2
   # samples. This build has not measured any headset's native size. A bigger size looks sharper and costs frame time.
   # `stock` answers the headset's own size; every other level answers the profile's table.
-  # The game's settings menu has the same setting: a GRAPHICS page with one control, "Texture Resolution", of the six
+  # The game's settings menu has the same setting: a NEVR page with one control, "Texture Resolution", of the six
   # levels (Very Low to Ultra). A change there applies at the next frame, with no restart, and the game saves it. This key
   # is the level the game starts at when the player has chosen nothing; what the player saved always wins over it. The
   # control shows `stock` as Low.

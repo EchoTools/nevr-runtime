@@ -14,8 +14,9 @@
  *
  *   menu_settings.json    the `graphics|msaa` row becomes the six-level "Texture Resolution" STRING ARRAY (labels and the default
  *                         index in texture_quality.h), and the page that holds that row keeps that row and one more, and is
- *                         called "GRAPHICS" (the other graphics rows are not functional on a Quest and stay hidden). The one more
- *                         is "Controller Hand Flip", a STRING ARRAY On / Off bound to `graphics|fullscreen` (hand_flip.h).
+ *                         called "NEVR" (the other graphics rows are not functional on a Quest and stay hidden). The one more
+ *                         is "Controller Hand Flip", a NAMED FLAG bound to `graphics|fullscreen`, its states named Off (true) and
+ *                         On (false) (hand_flip.h).
  *   gamesettings_config.json  the quest `settings` entry that removes `graphics|msaa` and the quest `pages` entry that removes the
  *                         page "GRAPHICS (1/3)" go, so the control is shown and its value saved; so does any `settings` entry
  *                         that removes `graphics|fullscreen`, for the hand flip row.
@@ -54,18 +55,21 @@ struct Result {
   std::string page;          // menu: the name of the page that held the row ("" when none was named)
   int rows = 0;              // menu: `graphics|msaa` rows turned into the control; settings: removals made
   int pages = 0;             // menu: pages reduced to the one row; settings: page removals made
-  int handFlipRows = 0;      // menu: Controller Hand Flip rows added under Texture Resolution; settings: its removals made
+  int handFlipRows = 0;      // KNOWN-WRONG #2043 menu: Controller Hand Flip rows added under Texture Resolution; settings: its removals made
 };
 
 // menu_settings.json -> the Texture Resolution control, and under it, on the same page, the Controller Hand Flip row (hand_flip.h;
 // KNOWN-WRONG #2043 the row is the interim toggle). `defaultIndex` is the control's default selected index (the "idx" field the
-// engine honours as the default); `handFlipIndex` is the toggle's (the row lists On first: 0 On, 1 Off, the default; the player's stored
-// choice when it was resolved before the menu was read).
+// engine honours as the default); `handFlipIndex` is the toggle's choice as hand_flip::MenuIndexFor gives it (0 On, 1 Off, the
+// default; the player's stored choice when it was resolved before the menu was read), which the row carries as its `value`
+// (hand_flip::MenuValueFor: Off is true). kNoHandFlipRow adds no row: the toggle is not offered when the hand pose
+// hooks that roll, save and log it are not installed (hand_flip.h, Offered).
+inline constexpr int kNoHandFlipRow = -1;  // KNOWN-WRONG #2043 the toggle is the interim
 Result RewriteMenuSettings(std::string_view text, int defaultIndex, int handFlipIndex = 1);
 
-// gamesettings_config.json -> the entries that hide the control and its page removed, and any entry that hides the Controller Hand
-// Flip row's setting.
-Result RewriteGameSettings(std::string_view text);
+// gamesettings_config.json -> the entries that hide the control and its page removed, and, when `offerHandFlip`, any entry that hides
+// the Controller Hand Flip row's setting (KNOWN-WRONG #2043: with no row offered the stock entry stays).
+Result RewriteGameSettings(std::string_view text, bool offerHandFlip = true);
 
 // The player's choice, kept in a file of our own beside the game's settings (RAD/LoneEcho/ under the game's local app data
 // directory). The game's own saved slot (`msaa` in settings_mp_v2_quest.json) cannot say whether the player chose: a settings file

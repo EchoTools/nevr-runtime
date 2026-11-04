@@ -11,25 +11,41 @@
  * unknown device ids are never touched. Default Off: nothing here chooses by controller (the sentinel does not read the
  * interaction profile, ADR 0033 C1).
  *
- * The menu row. texture_menu.cpp adds "Controller Hand Flip" (STRING ARRAY, On / Off) under Texture Resolution on the GRAPHICS
- * page. The row is bound to the setting `graphics|fullscreen`, which the game stores in SR15GfxSettings flags bit 0
+ * The menu row. texture_menu.cpp adds "Controller Hand Flip" under Texture Resolution on the NEVR page (texture_quality.h
+ * kMenuPageName). It is a NAMED FLAG row: a boolean the game shows by the row's `truestr` and `falsestr` and writes back as a JSON
+ * boolean (a STRING ARRAY row writes its index, which the game's json-path writer refuses to put in a boolean key: "cannot change
+ * type of [graphics|fullscreen] to integer"). The row is bound to the setting `graphics|fullscreen`, which the game stores in
+ * SR15GfxSettings flags bit 0
  * (kCarrierBit): a Quest has no fullscreen mode, and the consumer audit (docs/design/2026-11-02-quest-hand-flip-toggle.md,
  * "The interim in the sentinel") found nothing in libr15 that reads the bit except a log line in ApplyRuntimeGfxSettings, the
  * JSON round trip of the settings file, and the script expression CR15GfxSettingsExpression, which copies the struct and exposes
  * the bit as a boolean output.
  *
  * The polarity. The game's own value of the bit is 1 (the v6.16.4 headset log prints `Fullscreen: Enabled` at every start), so
- * Off is the bit set, which is the game's value, and On is the bit cleared. A player who never turns the toggle on therefore
+ * Off is the bit set (the row's true, `truestr` "Off"), which is the game's value, and On is the bit cleared (false, `falsestr`
+ * "On"). A player who never turns the toggle on therefore
  * leaves the game's setting as the game holds it (nothing is changed, nothing differs when it is saved). texture_menu_hook.cpp's
  * HandleApply reads the bit on every delivery: the first delivery is set to the stored choice (or the default, Off), a later
  * delivery with another bit is the player's choice (SetFromMenu with the choice the bit now means). BitFor and FlipFor are the one
- * place the inversion is written; the menu's index for a choice is MenuIndexFor (index 0 is "On").
+ * place the inversion is written; the hook hands the menu a choice as MenuIndexFor (index 0 is "On"), and the row's `value` for that
+ * index is MenuValueFor (true for Off).
  *
  * The persisted choice. Its own file beside the texture marker, {"version":1,"hand_flip":0|1} (kFileName), written only by a
  * menu change (a derived or default value is never saved). A file without the version, with another version, or with a value
  * other than 0 or 1 is ignored and the ignore is logged (hand_flip_start unversioned_marker_ignored=1). It is read once, by
  * StartFromDirectory, before the first tracking call can use the flag: the texture hook's start resolver calls it on the game's
  * first eye-size query, and the tracking handler calls EnsureStarted() when that has not happened.
+ *
+ * Offered. The row exists only when the pieces that make it mean something are installed: the two hand pose hooks (the roll) and the
+ * poller that saves and logs (hand_pose_log_hook.cpp InstallAt calls SetOffered). When it is not offered the menu has no row and the
+ * stock hiding entry of the setting stays, the saved choice is not read (the roll stays Off), the bit is never written, and the
+ * texture poller says so once (hand_flip_row).
+ *
+ * The start and who may trust it. The start is resolved by whichever thread asks first (the texture hook's eye-size query, the
+ * tracking handler); a thread that finds it being resolved by another returns at once. The tracking handler is the per-frame path
+ * and never waits: until the start is resolved the flag reads Off for that frame. The settings delivery and the menu change
+ * (AwaitStart) wait, on a condition variable with a timeout, until the start is resolved before they read the flag, so a first
+ * delivery cannot write the bit from a flag the start has not yet set. A wait that times out leaves the load to the next delivery.
  *
  * Nothing on the game's call path logs. The poller thread of hand_pose_log_hook.cpp calls Poll(), which writes
  *   {"event":"hand_flip_start","source":"player_marker|default","flip":0|1,"unversioned_marker_ignored":0|1,"consequence":...}
@@ -45,6 +61,9 @@
  * inline variables: no static initialiser runs at load (tools/check_quest_static_init.sh).
  */
 #pragma once
+
+#include <pthread.h>
+#include <time.h>
 
 #include <atomic>
 #include <cerrno>
@@ -64,6 +83,8 @@ inline constexpr std::uint32_t kCarrierBit = 1U;
 inline constexpr const char* kMenuName = "Controller Hand Flip";
 inline constexpr int kMenuValueCount = 2;
 inline constexpr const char* kMenuLabels[kMenuValueCount] = {"On", "Off"};
+inline constexpr const char* kMenuTrueLabel = "Off";  // the row's `truestr`: true is the bit set, the game's value
+inline constexpr const char* kMenuFalseLabel = "On";  // the row's `falsestr`: false is the bit cleared, the roll on
 
 // The persisted choice: a file of our own beside the texture marker (RAD/LoneEcho/ under the game's local app data directory).
 inline constexpr char kFileName[] = "nevr_hand_flip.json";
@@ -74,6 +95,8 @@ inline constexpr int kFileVersion = 1;
 inline constexpr int BitFor(int flip) noexcept { return flip != 0 ? 0 : 1; }
 inline constexpr int FlipFor(int bit) noexcept { return bit != 0 ? 0 : 1; }
 inline constexpr int MenuIndexFor(int flip) noexcept { return flip != 0 ? 0 : 1; }
+// The NAMED FLAG row's `value` for a menu index: index 0 (On) is false, the bit cleared; any other index (Off) is true, the bit set.
+inline constexpr bool MenuValueFor(int menuIndex) noexcept { return menuIndex != 0; }
 
 // What set the flag: nothing (the default), the player's file at the start, or a change in the menu.
 enum By : int { kByDefault = 0, kByPlayerMarker = 1, kByMenu = 2 };
@@ -163,6 +186,7 @@ inline std::size_t FileText(int flip, char* out, std::size_t capacity) noexcept 
 
 inline std::atomic<int> g_flip{0};               // the flag the tracking handler reads on every call
 inline std::atomic<int> g_by{kByDefault};        // what set it
+inline std::atomic<bool> g_offered{false};       // the hooks that roll, save and log are installed (SetOffered); false: no row
 inline std::atomic<int> g_startState{0};         // 0 not started, 1 being resolved, 2 resolved
 inline std::atomic<int> g_startSource{kByDefault};  // kByPlayerMarker when the file gave the start, else kByDefault
 inline std::atomic<int> g_startFlip{0};          // the flag the start resolved to (the menu may have changed g_flip since)
@@ -173,8 +197,21 @@ inline std::atomic<int> g_carrierAfter{-1};      // the bit after the first deli
 inline std::atomic<bool> g_pathReady{false};
 inline char g_path[704];                         // the file's path, written once before g_pathReady
 inline std::atomic<void (*)() noexcept> g_provider{nullptr};  // what resolves the start from the game's directory
+inline std::atomic<int> g_failedFlip{-1};        // the choice whose save last failed (-1: none), so a retry does not repeat the line
+inline std::atomic<std::uint64_t> g_startTimeouts{0};  // waits for the start that gave up
+inline std::atomic<int> g_startWaitMs{2000};     // how long the delivery waits for another thread's start to resolve
+inline std::atomic<int> g_startWaiters{0};       // threads inside the wait (for the test)
+inline std::atomic<void (*)() noexcept> g_startSeam{nullptr};  // test only: runs inside the start, after the file is read, before it stores
+inline pthread_mutex_t g_startMutex = PTHREAD_MUTEX_INITIALIZER;  // constant-initialised: no static initialiser (check_quest_static_init)
+inline pthread_cond_t g_startCond = PTHREAD_COND_INITIALIZER;
 inline bool g_startLogged = false;               // the poller pass only (the poll mutex of hand_pose_log_hook.cpp)
+inline bool g_timeoutLogged = false;             // likewise
+inline bool g_rowLogged = false;                 // the texture poller's pass only
 inline bool g_carrierLogged = false;             // likewise
+
+// The row is offered only while the hooks that give it a meaning are installed (hand_pose_log::InstallAt). Until they say so it is not.
+inline bool Offered() noexcept { return g_offered.load(std::memory_order_acquire); }
+inline void SetOffered(bool offered) noexcept { g_offered.store(offered, std::memory_order_release); }
 
 inline bool Enabled() noexcept { return g_flip.load(std::memory_order_relaxed) != 0; }
 inline int Current() noexcept { return g_flip.load(std::memory_order_relaxed); }
@@ -188,7 +225,7 @@ inline void StartFromDirectory(const char* directory) noexcept {
   if (!g_startState.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) return;
   int flip = 0;
   int source = kByDefault;
-  if (directory != nullptr && directory[0] != '\0') {
+  if (directory != nullptr && directory[0] != '\0' && Offered()) {  // not offered: the saved choice is not read, the roll stays Off
     static_assert(512 + sizeof("/RAD/LoneEcho/") + sizeof(kFileName) <= sizeof(g_path), "hand flip path buffer fits the directory");
     std::snprintf(g_path, sizeof(g_path), "%.512s/RAD/LoneEcho/%s", directory, kFileName);
     g_pathReady.store(true, std::memory_order_release);
@@ -207,11 +244,16 @@ inline void StartFromDirectory(const char* directory) noexcept {
       }
     }
   }
+  void (*const seam)() noexcept = g_startSeam.load(std::memory_order_acquire);
+  if (seam != nullptr) seam();
   g_flip.store(flip, std::memory_order_relaxed);
   g_by.store(source, std::memory_order_relaxed);
   g_startSource.store(source, std::memory_order_relaxed);
   g_startFlip.store(flip, std::memory_order_relaxed);
+  pthread_mutex_lock(&g_startMutex);
   g_startState.store(2, std::memory_order_release);
+  pthread_cond_broadcast(&g_startCond);
+  pthread_mutex_unlock(&g_startMutex);
 }
 
 // What resolves the start when the tracking handler needs it first (the texture hook registers its directory lookup here).
@@ -236,10 +278,36 @@ inline void RecordCarrier(int before, int after) noexcept {
   g_carrierAfter.store(after != 0 ? 1 : 0, std::memory_order_release);
 }
 
+// Resolves the start if nobody has, else waits for the thread that is resolving it (a condition variable, no spin) for at most
+// g_startWaitMs. True when the start is resolved. For the settings delivery and the menu change only: the per-frame tracking path
+// never calls it.
+inline bool AwaitStart() noexcept {
+  EnsureStarted();
+  if (Started()) return true;
+  timespec deadline;
+  clock_gettime(CLOCK_REALTIME, &deadline);  // PTHREAD_COND_INITIALIZER waits on the realtime clock
+  const long waitMs = g_startWaitMs.load(std::memory_order_relaxed);
+  deadline.tv_sec += waitMs / 1000;
+  deadline.tv_nsec += (waitMs % 1000) * 1000000L;
+  if (deadline.tv_nsec >= 1000000000L) {
+    deadline.tv_nsec -= 1000000000L;
+    ++deadline.tv_sec;
+  }
+  pthread_mutex_lock(&g_startMutex);
+  g_startWaiters.fetch_add(1, std::memory_order_acq_rel);
+  int rc = 0;
+  while (g_startState.load(std::memory_order_acquire) != 2 && rc == 0) rc = pthread_cond_timedwait(&g_startCond, &g_startMutex, &deadline);
+  g_startWaiters.fetch_sub(1, std::memory_order_acq_rel);
+  pthread_mutex_unlock(&g_startMutex);
+  if (Started()) return true;
+  g_startTimeouts.fetch_add(1, std::memory_order_relaxed);
+  return false;
+}
+
 // A change in the menu: the flag takes the player's choice at once (the tracking handler reads it on its next call) and the choice
 // is queued for the poller to write. The start is resolved first, so it cannot overwrite the choice afterwards.
 inline void SetFromMenu(int flip) noexcept {
-  EnsureStarted();  // a later start would overwrite the choice
+  if (!AwaitStart()) return;  // a later start would overwrite the choice; the delivery that calls this has awaited it already
   const int value = flip != 0 ? 1 : 0;
   g_flip.store(value, std::memory_order_relaxed);
   g_by.store(kByMenu, std::memory_order_relaxed);
@@ -253,9 +321,10 @@ inline void SetFromMenu(int flip) noexcept {
 inline int WritePending() noexcept {
   const int flip = g_pendingSave.exchange(-1, std::memory_order_acq_rel);
   if (flip < 0) return 0;
-  const char* const consequence = "this choice is not remembered at the next launch";
+  const char* const consequence =
+      "this choice is not remembered; the previous choice comes back at the next launch";
   if (!g_pathReady.load(std::memory_order_acquire)) {
-    sentinel::LogFields(sentinel::LogLevel::kError, "hand_flip_saved",
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "hand_flip_saved",
                         {{"result", "no_directory"}, {"flip", flip}, {"errno", 0}, {"consequence", consequence}});
     return 1;
   }
@@ -275,10 +344,19 @@ inline int WritePending() noexcept {
   if (error == 0 && std::rename(temporary, g_path) != 0) error = errno;
   if (error != 0) {
     std::remove(temporary);
-    sentinel::LogFields(sentinel::LogLevel::kError, "hand_flip_saved",
-                        {{"result", "write_failed"}, {"flip", flip}, {"errno", error}, {"consequence", consequence}});
+    // Kept for the next poll unless the player has chosen again since; the line is written for the first failure of a choice only.
+    int none = -1;
+    g_pendingSave.compare_exchange_strong(none, flip, std::memory_order_acq_rel);
+    if (g_failedFlip.exchange(flip, std::memory_order_acq_rel) == flip) return 0;
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "hand_flip_saved",
+                        {{"result", "write_failed"},
+                         {"flip", flip},
+                         {"errno", error},
+                         {"consequence", "this choice is not remembered yet; the previous choice comes back at the next launch "
+                                         "unless a later attempt (one every poll) writes it"}});
     return 1;
   }
+  g_failedFlip.store(-1, std::memory_order_release);
   sentinel::LogFields(sentinel::LogLevel::kInfo, "hand_flip_saved",
                       {{"result", "written"},
                        {"flip", flip},
@@ -308,8 +386,28 @@ inline int Poll() noexcept {
                          {"consequence", "the game's fullscreen setting bit carries the toggle: 1 is Off (the game's own value), 0 is On"}});
     ++lines;
   }
+  if (!g_timeoutLogged && g_startTimeouts.load(std::memory_order_relaxed) != 0) {
+    g_timeoutLogged = true;
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "hand_flip_start_wait",
+                        {{"result", "timed_out"},
+                         {"wait_ms", g_startWaitMs.load(std::memory_order_relaxed)},
+                         {"consequence", "a settings delivery did not wait longer for the start; the toggle's load waits for the next delivery"}});
+    ++lines;
+  }
   lines += WritePending();
   return lines;
+}
+
+// The texture poller's half: when the row is not offered, says so once (the hand pose poller, which would say it otherwise, is
+// not running then). Returns the number of lines logged.
+inline int PollRow() noexcept {
+  if (g_rowLogged || Offered() || g_startState.load(std::memory_order_acquire) != 2) return 0;
+  g_rowLogged = true;
+  sentinel::LogFields(sentinel::LogLevel::kWarn, "hand_flip_row",
+                      {{"offered", 0},
+                       {"reason", "the hand pose hooks or their poller are not installed"},
+                       {"consequence", "the Controller Hand Flip row is not in the menu, a saved choice is ignored and the roll stays Off"}});
+  return 1;
 }
 
 // ---- test support ------------------------------------------------------------------------------------------------------
@@ -329,6 +427,13 @@ inline void ResetForTest() noexcept {
   g_provider.store(nullptr);
   g_startLogged = false;
   g_carrierLogged = false;
+  g_timeoutLogged = false;
+  g_rowLogged = false;
+  g_failedFlip.store(-1);
+  g_startTimeouts.store(0);
+  g_startWaitMs.store(2000);
+  g_startSeam.store(nullptr);
+  g_offered.store(true);  // a test starts with the row offered; it says otherwise when it tests the other case
 }
 
 }  // namespace nevr_quest::hand_flip

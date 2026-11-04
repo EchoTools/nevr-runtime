@@ -66,7 +66,7 @@ inline constexpr int kMenuLevelCount = 6;
 inline constexpr int kDefaultMenuIndex = 1;  // Low
 inline constexpr const char* kMenuLabels[kMenuLevelCount] = {"Very Low", "Low", "Medium", "High", "Very High", "Ultra"};
 inline constexpr const char* kMenuControlName = "Texture Resolution";
-inline constexpr const char* kMenuPageName = "GRAPHICS";
+inline constexpr const char* kMenuPageName = "NEVR";
 
 // The level a menu index names; an index outside 0..5 is clamped (the saved value is a number a player or an older build could
 // have written).
