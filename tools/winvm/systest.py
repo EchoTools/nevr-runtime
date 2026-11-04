@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import functools
 import os
 import pathlib
 import re
@@ -36,6 +37,8 @@ sys.path.insert(0, str(REPO / "tools"))
 import checks  # noqa: E402
 import work_root  # noqa: E402
 
+# The getaddrinfo probe: tools/winvm/CMakeLists.txt builds it (target gai_probe) into <bin>/winvm.
+DEFAULT_GAI_PROBE = REPO / "build/mingw-release/bin/winvm/gai_probe.exe"
 ROOT = "C:\\nevr-systest"          # the rig; never the user's own install
 GAME = "C:\\echovr"                # the user's install, used read-only
 SMB_ROOT = "nevr-systest"
@@ -318,13 +321,12 @@ def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args) -> list[
     return results
 
 
-def scenario_gai(g: Guest, out: pathlib.Path) -> list[checks.Result]:
-    cc = shutil.which("x86_64-w64-mingw32-gcc")
-    if not cc:
-        raise EnvError("x86_64-w64-mingw32-gcc not found (needed to build the getaddrinfo probe)")
-    exe = out / "gai_probe.exe"
-    subprocess.run([cc, "-O0", "-Wall", "-Wextra", "-Werror", "-o", str(exe),
-                    str(HERE / "gai_probe.c"), "-lws2_32"], check=True)
+def scenario_gai(g: Guest, out: pathlib.Path, probe: pathlib.Path | None = None) -> list[checks.Result]:
+    """Copy the probe CMake built to the guest and run it. `probe` defaults to DEFAULT_GAI_PROBE."""
+    exe = probe if probe is not None else DEFAULT_GAI_PROBE
+    if not exe.is_file():
+        raise EnvError(f"{exe} not found; the getaddrinfo probe is a CMake target: run `just build` "
+                       "(or `cmake --build --preset mingw-release --target gai_probe`) first")
     g.ps(rf"New-Item -ItemType Directory -Force -Path '{ROOT}\run' | Out-Null")
     g.put(exe, f"{SMB_ROOT}/run", "gai_probe.exe")
     text = g.ps(rf"& '{ROOT}\run\gai_probe.exe' 3")
@@ -369,6 +371,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--domain", default=os.environ.get("WINVM_DOMAIN"),
                     help="libvirt domain, used to find the IP when WINVM_HOST is unset (default: $WINVM_DOMAIN, required then)")
     ap.add_argument("--dll", type=pathlib.Path, default=REPO / "build/mingw-release/bin/BugSplat64.dll")
+    ap.add_argument("--gai-probe", type=pathlib.Path, default=DEFAULT_GAI_PROBE,
+                    help="the gai_probe.exe CMake built (target gai_probe); copied to the guest, never compiled here")
     ap.add_argument("--game-args", default="-noovr -server -headless -no-console",
                     help="note: the legacy dbgcore.dll rejects its no-console flag unless -headless is also given")
     ap.add_argument("--wait", type=int, default=90, help="seconds to observe the boot (minimum 45)")
@@ -395,6 +399,9 @@ def main(argv: list[str] | None = None) -> int:
             raise EnvError("set WINVM_USER and WINVM_PASS (never commit them)")
         if args.scenario in ("boot", "all") and not args.dll.exists():
             raise EnvError(f"{args.dll} not found; run `just build` first")
+        if args.scenario in ("gai", "all") and not args.gai_probe.is_file():
+            raise EnvError(f"{args.gai_probe} not found; the getaddrinfo probe is a CMake target: run `just build` "
+                           "(or `cmake --build --preset mingw-release --target gai_probe`) first")
         host = os.environ.get("WINVM_HOST")
         if not host:
             if not args.domain:
@@ -405,7 +412,8 @@ def main(argv: list[str] | None = None) -> int:
         preflight(guest)
         if args.scenario in ("boot", "all"):
             print(f"runtime under test: {args.dll} ({args.dll.stat().st_size} bytes)")
-        results += dispatch_scenarios(args.scenario, guest, out, args.dll, args)
+        results += dispatch_scenarios(args.scenario, guest, out, args.dll, args,
+                                      gai_runner=functools.partial(scenario_gai, probe=args.gai_probe))
     except (EnvError, RuntimeError) as e:
         # RuntimeError is a failed guest/SMB command: the rig broke, not the runtime.
         print(f"ENV: {e}", file=sys.stderr)
