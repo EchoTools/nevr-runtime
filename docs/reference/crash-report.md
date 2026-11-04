@@ -100,7 +100,7 @@ it to `<stem>.report.txt.rejected` and it is never offered again. Anything else 
 leaves it for the next start. A 2xx lost on the way back sends the same `(install_id, report_id)` again; the service counts it
 once.
 
-**Log.** PC: a `crash_send` record in `nevr-bootstrap.jsonl` (`tag` `NEVR.HOST`); Quest: a `crash_send` line in the sentinel
+**Log.** PC: a `crash_send` record in the run's main log (`nevr-<timestamp>.jsonl`, `tag` `NEVR.HOST`); Quest: a `crash_send` line in the sentinel
 log. `state` is `sent`, `rejected`, `deferred`, `unreadable`, `install_id_unavailable`, `off` or `pass` (what was sent and
 rejected, and how many are left). A folder with nothing to send writes nothing. The report text and the body are never logged.
 

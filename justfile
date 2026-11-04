@@ -3118,21 +3118,26 @@ verify *args: (_heavy-guard "verify" args)
         exit 1
     fi
 
-    # --- N43: the boot log tee writes its file through kernel32 only ------------
-    # The tee opens and writes its file during initialization, which runs on the
-    # host's wrapper detour while the loader lock may be held. A CRT file call
-    # (fopen, freopen, fprintf or fwrite to a FILE*, an iostream file) takes CRT
-    # locks there; CreateFileA and WriteFile take none. The rule is AGENTS.md N43.
-    N43_RC=0; N43_TEE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/log/boot_log_tee.cpp) || N43_RC=$?
-    sensor_stage1 "N43 boot tee kernel32 only" "src/runtime/log/boot_log_tee.cpp" "$N43_RC"
-    sensor_nonempty "N43 boot tee kernel32 only" "non-comment lines of boot_log_tee.cpp" "$N43_TEE"
+    # --- N43: the boot tee's records reach the main log through kernel32 only ----
+    # The tee appends to the main log during initialization, which runs on the host's
+    # wrapper detour while the loader lock may be held. It does so through
+    # run_log_writer.h, which opens and writes with CreateFileA and WriteFile. A CRT file
+    # call (fopen, freopen, fprintf or fwrite to a FILE*, an iostream file) in either
+    # takes CRT locks there; CreateFileA and WriteFile take none. The rule is AGENTS.md N43.
+    N43_RC=0; N43_TEE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/log/boot_log_tee.cpp src/runtime/log/run_log_writer.h) || N43_RC=$?
+    sensor_stage1 "N43 boot tee kernel32 only" "src/runtime/log/boot_log_tee.cpp and run_log_writer.h" "$N43_RC"
+    sensor_nonempty "N43 boot tee kernel32 only" "non-comment lines of boot_log_tee.cpp and run_log_writer.h" "$N43_TEE"
     if grep -qE '\b(fopen|_wfopen|fopen_s|_wfopen_s|freopen|_fsopen|fprintf|fwrite|fputs|std::ofstream|std::fstream|std::ifstream)\b' <<<"$N43_TEE"; then
-        echo "verify: FAIL — N43 boot_log_tee.cpp calls a CRT file function (fopen, fprintf, fwrite, an iostream file)." >&2
+        echo "verify: FAIL — N43 boot_log_tee.cpp or run_log_writer.h calls a CRT file function (fopen, fprintf, fwrite, an iostream file)." >&2
         echo "The tee runs while the loader lock may be held; CRT file calls take CRT locks there. Open and write with CreateFileA and WriteFile." >&2
         exit 1
     fi
     if ! grep -qF 'CreateFileA' <<<"$N43_TEE" || ! grep -qF 'WriteFile' <<<"$N43_TEE"; then
-        echo "verify: FAIL — N43 boot_log_tee.cpp no longer opens and writes its file through kernel32 (CreateFileA and WriteFile)." >&2
+        echo "verify: FAIL — N43 the boot tee's writer (run_log_writer.h) no longer opens and writes the main log through kernel32 (CreateFileA and WriteFile)." >&2
+        exit 1
+    fi
+    if ! grep -qF 'nevr_run_log_writer::Append' src/runtime/log/boot_log_tee.cpp; then
+        echo "verify: FAIL — N43 boot_log_tee.cpp no longer appends through nevr_run_log_writer::Append: the boot records would need a file of their own." >&2
         exit 1
     fi
 

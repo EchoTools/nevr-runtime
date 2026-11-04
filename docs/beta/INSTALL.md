@@ -73,8 +73,7 @@ files. Attach them by dragging them into the form:
 | File | Where it is |
 |---|---|
 | The game's log for that session (**always attach it**) | `%LOCALAPPDATA%\nevr\echovr\logs\`: the `nevr-<date>T<time>.jsonl` file from that session (newest first if it just happened). Paste `%LOCALAPPDATA%\nevr\echovr\logs` into the Explorer address bar to get there. |
-| The start-up log | `bin\win10\logs\nevr-boot.jsonl` in your Echo VR folder. |
-| If the game crashed | **`nevr-crash-<id>.txt`** in the same `%LOCALAPPDATA%\nevr\echovr\logs\` folder: the crash record (what failed, where, and what called it). |
+| If the game crashed | The same file holds the crash record (what failed, where, and what called it): the lines with `NEVR.CRASH`. A crash dump, when one was written, is in `%LOCALAPPDATA%\nevr\echovr\crashes\`. |
 
 **The line we read first.** The game's log holds a `render_config` line from the first rendered frame of the session, and another each time
 the picture setup changes: your graphics card and driver, the headset and its refresh rate, the render resolution and scale, and the game's
