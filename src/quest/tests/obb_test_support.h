@@ -329,8 +329,8 @@ inline std::vector<std::uint8_t> ReferenceKey(const std::string& key_string, con
 inline std::vector<std::uint8_t> EncryptImage(const std::vector<std::uint8_t>& plain, const std::vector<std::uint8_t>& key) {
   twofish_ctx ctx;
   nettle_twofish_set_key(&ctx, key.size(), key.data());
-  std::vector<std::uint8_t> out(plain.size());
-  for (std::size_t s = 0; s * 512 < plain.size(); ++s) {
+  std::vector<std::uint8_t> out(plain);  // a trailing partial sector, if a test builds one, stays as it is
+  for (std::size_t s = 0; (s + 1) * 512 <= plain.size(); ++s) {
     std::uint8_t iv[16] = {};
     iv[0] = static_cast<std::uint8_t>(s);
     iv[1] = static_cast<std::uint8_t>(s >> 8);
