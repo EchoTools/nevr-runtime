@@ -67,7 +67,7 @@ void TheMenuLevelsAreInTheMenusOrder() {
   const char* const labels[] = {"Very Low", "Low", "Medium", "High", "Very High", "Ultra"};
   for (int i = 0; i < 6; ++i) QCHECK(std::strcmp(tq::kMenuLabels[i], labels[i]) == 0);
   QCHECK(std::strcmp(tq::kMenuControlName, "Texture Resolution") == 0);
-  QCHECK(std::strcmp(tq::kMenuPageName, "GRAPHICS") == 0);
+  QCHECK(std::strcmp(tq::kMenuPageName, "NEVR") == 0);
   QCHECK(tq::kDefaultMenuIndex == 1);  // Low, the stock size
   const tq::Level levels[] = {tq::Level::kVeryLow, tq::Level::kLow, tq::Level::kMedium,
                               tq::Level::kHigh,    tq::Level::kVeryHigh, tq::Level::kUltra};
@@ -104,10 +104,10 @@ void TheMenuRowBecomesTheSixLevelControlOnAPageOfItsOwn() {
   QCHECK(r.page == "GRAPHICS (1/3)");
   const Json doc = Json::parse(r.text, nullptr, false);
   QCHECK(!doc.is_discarded());
-  // The page keeps the Texture Resolution row and the Controller Hand Flip row under it, and is called GRAPHICS; the page it was is
+  // The page keeps the Texture Resolution row and the Controller Hand Flip row under it, and is called NEVR; the page it was is
   // gone.
   QCHECK(PageNamed(doc, "GRAPHICS (1/3)") == nullptr);
-  const Json* page = PageNamed(doc, "GRAPHICS");
+  const Json* page = PageNamed(doc, "NEVR");
   QCHECK(page != nullptr);
   if (page == nullptr) return;
   QCHECK((*page)["rows"].size() == 2);
@@ -136,47 +136,52 @@ void TheDefaultIndexIsTheCallers() {
     const tm::Result r = tm::RewriteMenuSettings(kMenu, index);
     QCHECK(r.status == tm::Status::kRewritten);
     const Json doc = Json::parse(r.text, nullptr, false);
-    QCHECK((*PageNamed(doc, "GRAPHICS"))["rows"][0]["idx"] == index);
+    QCHECK((*PageNamed(doc, "NEVR"))["rows"][0]["idx"] == index);
   }
 }
 
-// KNOWN-WRONG #2043 The interim Controller Hand Flip row: the second row of the page, after Texture Resolution, a STRING ARRAY
-// On / Off bound to `graphics|fullscreen`, starting on the index the caller gives (1, Off, by default: On is the first entry).
+// KNOWN-WRONG #2043 The interim Controller Hand Flip row: the second row of the page, after Texture Resolution, a NAMED FLAG bound
+// to `graphics|fullscreen` whose true is "Off" (the bit set) and false is "On", starting on the choice the caller gives (index 1, Off,
+// by default: index 0 is On).
 void TheHandFlipRowIsTheSecondRowAfterTextureResolution() {
   const tm::Result r = tm::RewriteMenuSettings(kMenu, 1);  // no index given: the row starts on Off
   QCHECK(r.status == tm::Status::kRewritten && r.handFlipRows == 1);
   const Json doc = Json::parse(r.text, nullptr, false);
-  const Json* page = PageNamed(doc, "GRAPHICS");
+  const Json* page = PageNamed(doc, "NEVR");
   QCHECK(page != nullptr && (*page)["rows"].size() == 2);
   if (page == nullptr || (*page)["rows"].size() != 2) return;
   QCHECK((*page)["rows"][0]["name"] == "Texture Resolution");
   const Json& flip = (*page)["rows"][1];
   QCHECK(flip["path"] == "graphics|fullscreen");
   QCHECK(flip["name"] == "Controller Hand Flip");
-  QCHECK(flip["type"] == "STRING ARRAY");
-  QCHECK(flip["values"] == Json::array({"On", "Off"}));
-  QCHECK(flip["idx"] == 1);  // the default is Off, the second entry
+  QCHECK(flip["type"] == "NAMED FLAG");
+  QCHECK(flip["truestr"] == "Off" && flip["falsestr"] == "On");
+  QCHECK(flip["value"] == true);  // the default is Off: the bit set, the game's own value
+  QCHECK(!flip.contains("idx") && !flip.contains("values"));  // a STRING ARRAY's keys: the game would write an index back
   // The stock fullscreen row on the DISPLAY page is another page's and is not ours.
   const Json* display = PageNamed(doc, "DISPLAY");
   QCHECK(display != nullptr && (*display)["rows"].size() == 1 && (*display)["rows"][0]["type"] == "NAMED FLAG");
-  // The caller's index is the row's start (the stored choice): 0 is On, anything else is Off.
+  // The caller's index is the row's start (the stored choice): 0 is On (false), anything else is Off (true).
   for (const int index : {0, 1, 5}) {
     const Json withIndex = Json::parse(tm::RewriteMenuSettings(kMenu, 1, index).text, nullptr, false);
-    QCHECK((*PageNamed(withIndex, "GRAPHICS"))["rows"][1]["idx"] == (index == 0 ? 0 : 1));
+    QCHECK((*PageNamed(withIndex, "NEVR"))["rows"][1]["value"] == (index != 0));
   }
 }
 
 // The texture rows are what they were: the Texture Resolution row is the same with and without the new row beside it.
 void TheTextureRowIsUnchangedByTheNewRow() {
   const Json doc = Json::parse(tm::RewriteMenuSettings(kMenu, 3, 1).text, nullptr, false);
-  const Json& row = (*PageNamed(doc, "GRAPHICS"))["rows"][0];
+  const Json& row = (*PageNamed(doc, "NEVR"))["rows"][0];
   QCHECK(row["path"] == "graphics|msaa" && row["name"] == "Texture Resolution" && row["type"] == "STRING ARRAY");
   QCHECK(row["idx"] == 3);  // the texture default, not the hand flip index
   QCHECK(row["values"] == Json::array({"Very Low", "Low", "Medium", "High", "Very High", "Ultra"}));
   QCHECK(row.size() == 5);  // path, name, idx, type, values: the stock row's keys, no more
-  // The row beside it is built from the stock row's keys too: nothing the engine does not read.
-  const Json& flip = (*PageNamed(doc, "GRAPHICS"))["rows"][1];
-  QCHECK(flip.size() == row.size());
+  // The row beside it has the stock NAMED FLAG row's keys, in its order, and the two state names: nothing the engine does not read.
+  const Json& flip = (*PageNamed(doc, "NEVR"))["rows"][1];
+  QCHECK(flip.size() == 6);
+  const char* const keys[] = {"path", "name", "value", "type", "truestr", "falsestr"};
+  int at = 0;
+  for (auto it = flip.begin(); it != flip.end() && at < 6; ++it, ++at) QCHECK(it.key() == keys[at]);
 }
 
 // A menu with no Texture Resolution row to hang it under is a shape mismatch: the row is added beside the texture control or not
@@ -193,8 +198,8 @@ void ANotOfferedRowAddsNoRowAndKeepsTheStockEntry() {
   const tm::Result r = tm::RewriteMenuSettings(kMenu, 1, tm::kNoHandFlipRow);
   QCHECK(r.status == tm::Status::kRewritten && r.rows == 1 && r.handFlipRows == 0);
   const Json doc = Json::parse(r.text, nullptr, false);
-  QCHECK((*PageNamed(doc, "GRAPHICS"))["rows"].size() == 1);
-  QCHECK((*PageNamed(doc, "GRAPHICS"))["rows"][0]["name"] == "Texture Resolution");
+  QCHECK((*PageNamed(doc, "NEVR"))["rows"].size() == 1);
+  QCHECK((*PageNamed(doc, "NEVR"))["rows"][0]["name"] == "Texture Resolution");
   const char* const document = R"json({"quest": {"settings": [{"path": "graphics|msaa", "operator": "remove"},
       {"path": "graphics|fullscreen", "value": true, "operator": "remove"}], "pages": ["GRAPHICS (1/3)"]}})json";
   const tm::Result settings = tm::RewriteGameSettings(document, false);
@@ -263,7 +268,7 @@ void TheRewriteDoesNotChangeItsOwnOutput() {
   const tm::Result menu = tm::RewriteMenuSettings(kMenu, 1);
   QCHECK(menu.status == tm::Status::kRewritten);
   const tm::Result again = tm::RewriteMenuSettings(menu.text, 1);
-  QCHECK(again.status == tm::Status::kRewritten && again.page == "GRAPHICS");  // it still has the row: it is idempotent
+  QCHECK(again.status == tm::Status::kRewritten && again.page == "NEVR");  // it still has the row: it is idempotent
   QCHECK(Json::parse(again.text) == Json::parse(menu.text));
   const tm::Result settings = tm::RewriteGameSettings(kGameSettings);
   QCHECK(tm::RewriteGameSettings(settings.text).status == tm::Status::kShapeMismatch);

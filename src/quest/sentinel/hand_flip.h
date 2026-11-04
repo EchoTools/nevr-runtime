@@ -11,19 +11,24 @@
  * unknown device ids are never touched. Default Off: nothing here chooses by controller (the sentinel does not read the
  * interaction profile, ADR 0033 C1).
  *
- * The menu row. texture_menu.cpp adds "Controller Hand Flip" (STRING ARRAY, On / Off) under Texture Resolution on the GRAPHICS
- * page. The row is bound to the setting `graphics|fullscreen`, which the game stores in SR15GfxSettings flags bit 0
+ * The menu row. texture_menu.cpp adds "Controller Hand Flip" under Texture Resolution on the NEVR page (texture_quality.h
+ * kMenuPageName). It is a NAMED FLAG row: a boolean the game shows by the row's `truestr` and `falsestr` and writes back as a JSON
+ * boolean (a STRING ARRAY row writes its index, which the game's json-path writer refuses to put in a boolean key: "cannot change
+ * type of [graphics|fullscreen] to integer"). The row is bound to the setting `graphics|fullscreen`, which the game stores in
+ * SR15GfxSettings flags bit 0
  * (kCarrierBit): a Quest has no fullscreen mode, and the consumer audit (docs/design/2026-11-02-quest-hand-flip-toggle.md,
  * "The interim in the sentinel") found nothing in libr15 that reads the bit except a log line in ApplyRuntimeGfxSettings, the
  * JSON round trip of the settings file, and the script expression CR15GfxSettingsExpression, which copies the struct and exposes
  * the bit as a boolean output.
  *
  * The polarity. The game's own value of the bit is 1 (the v6.16.4 headset log prints `Fullscreen: Enabled` at every start), so
- * Off is the bit set, which is the game's value, and On is the bit cleared. A player who never turns the toggle on therefore
+ * Off is the bit set (the row's true, `truestr` "Off"), which is the game's value, and On is the bit cleared (false, `falsestr`
+ * "On"). A player who never turns the toggle on therefore
  * leaves the game's setting as the game holds it (nothing is changed, nothing differs when it is saved). texture_menu_hook.cpp's
  * HandleApply reads the bit on every delivery: the first delivery is set to the stored choice (or the default, Off), a later
  * delivery with another bit is the player's choice (SetFromMenu with the choice the bit now means). BitFor and FlipFor are the one
- * place the inversion is written; the menu's index for a choice is MenuIndexFor (index 0 is "On").
+ * place the inversion is written; the hook hands the menu a choice as MenuIndexFor (index 0 is "On"), and the row's `value` for that
+ * index is MenuValueFor (true for Off).
  *
  * The persisted choice. Its own file beside the texture marker, {"version":1,"hand_flip":0|1} (kFileName), written only by a
  * menu change (a derived or default value is never saved). A file without the version, with another version, or with a value
@@ -78,6 +83,8 @@ inline constexpr std::uint32_t kCarrierBit = 1U;
 inline constexpr const char* kMenuName = "Controller Hand Flip";
 inline constexpr int kMenuValueCount = 2;
 inline constexpr const char* kMenuLabels[kMenuValueCount] = {"On", "Off"};
+inline constexpr const char* kMenuTrueLabel = "Off";  // the row's `truestr`: true is the bit set, the game's value
+inline constexpr const char* kMenuFalseLabel = "On";  // the row's `falsestr`: false is the bit cleared, the roll on
 
 // The persisted choice: a file of our own beside the texture marker (RAD/LoneEcho/ under the game's local app data directory).
 inline constexpr char kFileName[] = "nevr_hand_flip.json";
@@ -88,6 +95,8 @@ inline constexpr int kFileVersion = 1;
 inline constexpr int BitFor(int flip) noexcept { return flip != 0 ? 0 : 1; }
 inline constexpr int FlipFor(int bit) noexcept { return bit != 0 ? 0 : 1; }
 inline constexpr int MenuIndexFor(int flip) noexcept { return flip != 0 ? 0 : 1; }
+// The NAMED FLAG row's `value` for a menu index: index 0 (On) is false, the bit cleared; any other index (Off) is true, the bit set.
+inline constexpr bool MenuValueFor(int menuIndex) noexcept { return menuIndex != 0; }
 
 // What set the flag: nothing (the default), the player's file at the start, or a change in the menu.
 enum By : int { kByDefault = 0, kByPlayerMarker = 1, kByMenu = 2 };

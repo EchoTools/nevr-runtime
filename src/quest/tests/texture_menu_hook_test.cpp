@@ -729,7 +729,7 @@ void TheMenuDocumentIsParsedAsTheControl() {
   QCHECK(Read("/data/sourcedb/rad15/json/r14/config/uisettings/menu_settings.json", kMenuDocument) == 0);
   QCHECK(g_parsed.size() == 1);
   QCHECK(g_parsed[0].find("\"name\":\"Texture Resolution\"") != std::string::npos);
-  QCHECK(g_parsed[0].find("\"name\":\"GRAPHICS\"") != std::string::npos);
+  QCHECK(g_parsed[0].find("\"name\":\"NEVR\"") != std::string::npos);
   QCHECK(g_parsed[0].find("Anti-aliasing") == std::string::npos);
   QCHECK(g_parsed[0].find("Graphics Quality") == std::string::npos);
   QCHECK(g_parsed[0].find("\"idx\":1") != std::string::npos);
@@ -1211,7 +1211,7 @@ void AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain() {
   QCHECK(hf::Started() && hf::Enabled() && hf::CurrentBy() == hf::kByPlayerMarker);
   Read("/d/json/r14/config/uisettings/menu_settings.json", kMenuDocument);
   QCHECK(g_parsed.size() == 1);
-  QCHECK(g_parsed[0].find(R"("path":"graphics|fullscreen","name":"Controller Hand Flip","idx":0,"type":"STRING ARRAY","values":["On","Off"])") !=
+  QCHECK(g_parsed[0].find(R"("path":"graphics|fullscreen","name":"Controller Hand Flip","value":false,"type":"NAMED FLAG","truestr":"Off","falsestr":"On")") !=
          std::string::npos);
   alignas(8) unsigned char settings[kSettingsBytes] = {};
   SetMsaa(settings, 1);
@@ -1234,8 +1234,8 @@ void AReReadOfTheMenuServesTheCurrentHandFlipChoice() {
   g_appDataDir = dir;
   Eye();
   const char* const path = "/d/json/r14/config/uisettings/menu_settings.json";
-  const char* const off = R"("path":"graphics|fullscreen","name":"Controller Hand Flip","idx":1,"type":"STRING ARRAY","values":["On","Off"])";
-  const char* const on = R"("path":"graphics|fullscreen","name":"Controller Hand Flip","idx":0,"type":"STRING ARRAY","values":["On","Off"])";
+  const char* const off = R"("path":"graphics|fullscreen","name":"Controller Hand Flip","value":true,"type":"NAMED FLAG","truestr":"Off","falsestr":"On")";
+  const char* const on = R"("path":"graphics|fullscreen","name":"Controller Hand Flip","value":false,"type":"NAMED FLAG","truestr":"Off","falsestr":"On")";
   Read(path, kMenuDocument);
   Read(path, kMenuDocument);  // nothing changed: the kept text
   QCHECK(g_parsed.size() == 2 && g_parsed[0].find(off) != std::string::npos && g_parsed[0] == g_parsed[1]);

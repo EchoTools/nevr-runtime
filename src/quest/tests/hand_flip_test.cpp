@@ -489,6 +489,7 @@ void TheMenuRowIsBoundToTheCarrierBitAndNamedForThePlayer() {
   QCHECK(hf::kCarrierOffset == 0 && hf::kCarrierBit == 1U);  // SR15GfxSettings flags, bit 0
   QCHECK(std::strcmp(hf::kMenuName, "Controller Hand Flip") == 0);
   QCHECK(hf::kMenuValueCount == 2 && std::strcmp(hf::kMenuLabels[0], "On") == 0 && std::strcmp(hf::kMenuLabels[1], "Off") == 0);
+  QCHECK(std::strcmp(hf::kMenuTrueLabel, "Off") == 0 && std::strcmp(hf::kMenuFalseLabel, "On") == 0);  // true is the bit set
   QCHECK(std::strcmp(hf::kFileName, "nevr_hand_flip.json") == 0 && hf::kFileVersion == 1);
   QCHECK(std::strcmp(hf::ByName(hf::kByDefault), "default") == 0 && std::strcmp(hf::ByName(hf::kByPlayerMarker), "player_marker") == 0 &&
          std::strcmp(hf::ByName(hf::kByMenu), "menu") == 0);
@@ -499,6 +500,8 @@ void TheBitIsTheInverseOfTheChoice() {
   QCHECK(hf::BitFor(0) == 1 && hf::BitFor(1) == 0);  // Off is the bit set, the game's own value
   QCHECK(hf::FlipFor(1) == 0 && hf::FlipFor(0) == 1);
   QCHECK(hf::MenuIndexFor(1) == 0 && hf::MenuIndexFor(0) == 1);  // "On" is index 0
+  QCHECK(!hf::MenuValueFor(0) && hf::MenuValueFor(1));            // the row's value: On is false, Off is true
+  for (const int flip : {0, 1}) QCHECK(hf::MenuValueFor(hf::MenuIndexFor(flip)) == (hf::BitFor(flip) != 0));  // the value is the bit
   for (const int flip : {0, 1}) QCHECK(hf::FlipFor(hf::BitFor(flip)) == flip);
 }
 
