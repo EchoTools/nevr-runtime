@@ -306,5 +306,32 @@ class EveryProgramIsATarget(unittest.TestCase):
                 self.assertIn(f"nevr_ht_group({group})", text)
 
 
+class TheHostToolsProjectIsReused(unittest.TestCase):
+    """The host tests ride the host tools project of the quest-patcher preset (#2050); no second entry gate."""
+
+    def test_the_host_presets_turn_on_the_host_tools_and_the_tests(self):
+        presets = json.loads((REPO / "src" / "quest" / "CMakePresets.json").read_text(encoding="utf-8"))
+        base = {p["name"]: p for p in presets["configurePresets"]}["quest-host-base"]
+        self.assertEqual(base["cacheVariables"]["NEVR_QUEST_HOST_TOOLS"], "ON")
+        self.assertEqual(base["cacheVariables"]["NEVR_QUEST_HOST_TESTS"], "ON")
+        self.assertEqual(base["cacheVariables"]["CMAKE_CXX_COMPILER"], "g++")
+        self.assertNotIn("toolchainFile", base)
+
+    def test_the_tests_are_entered_from_the_host_directory(self):
+        host = code_lines((REPO / "src" / "quest" / "host" / "CMakeLists.txt").read_text(encoding="utf-8"))
+        self.assertRegex(host, r"if\(NEVR_QUEST_HOST_TESTS\)\s+add_subdirectory\([^)]*host_tests")
+        top = code_lines((REPO / "src" / "quest" / "CMakeLists.txt").read_text(encoding="utf-8"))
+        self.assertNotIn("add_subdirectory(host_tests", top)
+
+    def test_the_extra_rows_check_is_a_host_target_built_through_the_preset(self):
+        cmake = code_lines((REPO / "src" / "quest" / "cmake" / "libr15_extra_rows.cmake").read_text(encoding="utf-8"))
+        self.assertIsNone(COMPILER.search(cmake), "libr15_extra_rows.cmake names a compiler")
+        self.assertNotIn("find_program(NEVR_HOST_CXX", cmake)
+        self.assertIn("--preset quest-patcher", cmake)
+        self.assertIn("--target nevr_quest_libr15_extra_rows_check", cmake)
+        host = code_lines((REPO / "src" / "quest" / "host" / "CMakeLists.txt").read_text(encoding="utf-8"))
+        self.assertRegex(host, r"add_executable\(nevr_quest_libr15_extra_rows_check\s+\.\./patch/libr15_extra_rows_check\.cpp")
+
+
 if __name__ == "__main__":
     unittest.main()

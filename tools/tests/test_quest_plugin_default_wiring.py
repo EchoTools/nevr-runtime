@@ -31,9 +31,9 @@ class PackagedPluginWiringTest(unittest.TestCase):
 
     def test_the_manifest_source_is_in_the_sentinel_build_and_the_host_test(self):
         self.assertIn("packaged_plugins.cpp", self.read("src/quest/integration/CMakeLists.txt"))
-        justfile = self.read("justfile")
-        self.assertIn("src/quest/plugin/packaged_plugins.cpp", justfile)
-        self.assertIn("src/quest/tests/packaged_plugins_test.cpp", justfile)
+        plugins_cmake = self.read("src/quest/host_tests/groups/plugins.cmake")
+        self.assertIn("src/quest/plugin/packaged_plugins.cpp", plugins_cmake)
+        self.assertIn("src/quest/tests/packaged_plugins_test.cpp", plugins_cmake)
 
     def test_the_manifest_source_has_no_namespace_scope_object_with_a_constructor(self):
         code = strip_comments(self.read("src/quest/plugin/packaged_plugins.cpp"))
