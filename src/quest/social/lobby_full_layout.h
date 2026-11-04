@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -49,13 +50,17 @@ inline bool FailureCode(const void* msg, std::int8_t* code) noexcept {
   return true;
 }
 
-// The game's own gate: status - 4 < 3 (unsigned). A refusal the game ignores is neither counted nor shown.
-inline bool StatusGateOpen(const void* self) noexcept {
-  if (self == nullptr) return false;
+// The game's status word (+0x448), 0 when there is no object.
+inline std::int32_t LobbyStatus(const void* self) noexcept {
   std::int32_t status = 0;
-  std::memcpy(&status, static_cast<const std::uint8_t*>(self) + kLobbyStatusOffset, sizeof status);
-  return static_cast<std::uint32_t>(status - 4) < 3U;
+  if (self != nullptr) std::memcpy(&status, static_cast<const std::uint8_t*>(self) + kLobbyStatusOffset, sizeof status);
+  return status;
 }
+
+// The game's own gate: status - 4 < 3 (unsigned). A refusal the game ignores is neither counted nor shown.
+inline bool GateOpenFor(std::int32_t status) noexcept { return static_cast<std::uint32_t>(status - 4) < 3U; }
+
+inline bool StatusGateOpen(const void* self) noexcept { return self != nullptr && GateOpenFor(LobbyStatus(self)); }
 
 // What the hook copies out of the game's objects before the original callback runs: the payload belongs to the game and
 // may be released when the callback returns (the PC twin, #1443).
@@ -63,12 +68,16 @@ struct RefusalReads {
   bool gateOpen = false;
   std::uint8_t* game = nullptr;  // *(self + kLobbyGameOffset)
   char message[nevr_lobby_failure_message::kMessageSize] = {};
+  std::int32_t status = 0;  // the status word the gate was decided from, read once
+  bool haveStatus = false;  // false with no lobby client: `status` is then 0 and is not a reading
 };
 
 inline RefusalReads ReadRefusal(const void* self, const void* msg) noexcept {
   RefusalReads r;
   if (self == nullptr || msg == nullptr) return r;
-  r.gateOpen = StatusGateOpen(self);
+  r.status = LobbyStatus(self);
+  r.haveStatus = true;
+  r.gateOpen = GateOpenFor(r.status);
   std::memcpy(&r.game, static_cast<const std::uint8_t*>(self) + kLobbyGameOffset, sizeof r.game);
   const void* payload = nullptr;
   std::memcpy(&payload, static_cast<const std::uint8_t*>(msg) + kFailureDataOffset, sizeof payload);
@@ -76,6 +85,110 @@ inline RefusalReads ReadRefusal(const void* self, const void* msg) noexcept {
     std::memcpy(r.message, static_cast<const std::uint8_t*>(payload) + nevr_lobby_failure_message::kMessageOffset,
                 sizeof r.message);
   return r;
+}
+
+// The decision for a refusal whose game keeps its page: the reason the service's message is not shown, or kNone when it is
+// shown (the PC callback's rule, lobby_failure_message_rules.h).
+inline nevr_lobby_failure_message::Decline DeclineOf(const RefusalReads& reads) noexcept {
+  return nevr_lobby_failure_message::DeclineFor(reads.game, reads.message, sizeof reads.message);
+}
+
+// The decline when the game keeps its own page. Passes it to `write` once per code and reason per process and returns
+// true then; a repeat returns false and writes nothing (the caller writes the repeat as a Debug record).
+inline bool NoteMessageNotShown(nevr_lobby_failure_message::DeclineLog& log, const RefusalReads& reads,
+                                std::uint8_t code, nevr_lobby_failure_message::DeclineSink write) noexcept {
+  return nevr_lobby_failure_message::NoteDeclined(log, code, DeclineOf(reads), write);
+}
+
+// The Quest's two refusal records that are said once per process: a refusal the game's gate drops (refusal_dropped), and a
+// refusal no join went through, so the back-off does not count it (refusal_uncounted). One bit per record, one byte per code.
+// Not thread-safe; the caller holds its lock.
+class RefusalSayings {
+ public:
+  enum class Record : std::uint8_t { kDroppedGateClosed = 0x1, kUncountedNoJoin = 0x2 };
+
+  // True the first time `record` is said for `code`, false after.
+  bool FirstTime(std::uint8_t code, Record record) noexcept {
+    std::uint8_t& seen = seen_[code];
+    const auto bit = static_cast<std::uint8_t>(record);
+    if ((seen & bit) != 0) return false;
+    seen |= bit;
+    return true;
+  }
+
+ private:
+  std::array<std::uint8_t, 256> seen_{};
+};
+
+// The Debug repeats of the refusal and decline records. Each kind may write kBurst repeats per kWindowMs window, and the rest
+// are counted. The count of a window that ended comes back from the next Admit or Flush, and the caller writes it as a
+// repeats_suppressed record before its own record. The shape is RecordLimiter's (runtime/compat/lobby_frame.h). The reason is
+// that the sentinel log has no level gate: every line reaches logcat, the disk log and the crash ring, and an unbounded stream
+// of repeats would push the lines before a crash out of the ring. No clock and no lock: the caller passes the time and holds
+// g_declineMutex.
+class RepeatLimiter {
+ public:
+  enum class Kind : std::uint8_t { kDroppedGateClosed = 0, kUncountedNoJoin = 1, kPageUnchanged = 2 };
+  static constexpr std::size_t kKindCount = 3;
+  static constexpr std::uint64_t kWindowMs = 10000;
+  static constexpr unsigned kBurst = 10;
+
+  struct Verdict {
+    bool write = false;                                // this repeat is written
+    std::array<std::uint64_t, kKindCount> flushed{};   // per kind: repeats its ended window did not write
+  };
+
+  // A repeat of `kind` at `nowMs`: the windows that ended are flushed first, then the repeat is written or counted.
+  Verdict Admit(Kind kind, std::uint64_t nowMs) noexcept {
+    Verdict verdict = Flush(nowMs);
+    Slot& slot = slots_[static_cast<std::size_t>(kind)];
+    if (!slot.open) {
+      slot.open = true;
+      slot.start = nowMs;
+    }
+    if (slot.written < kBurst) {
+      ++slot.written;
+      verdict.write = true;
+    } else {
+      ++slot.suppressed;
+    }
+    return verdict;
+  }
+
+  // Closes each window that has ended, and reports what it did not write.
+  Verdict Flush(std::uint64_t nowMs) noexcept {
+    Verdict verdict;
+    for (std::size_t i = 0; i < kKindCount; ++i) {
+      Slot& slot = slots_[i];
+      if (slot.open && nowMs - slot.start >= kWindowMs) {
+        verdict.flushed[i] = slot.suppressed;
+        slot = Slot{};
+      }
+    }
+    return verdict;
+  }
+
+ private:
+  struct Slot {
+    bool open = false;
+    std::uint64_t start = 0;
+    unsigned written = 0;
+    std::uint64_t suppressed = 0;
+  };
+  std::array<Slot, kKindCount> slots_{};
+};
+
+// The record a repeats_suppressed record names: the status the repeats were written with.
+constexpr const char* KindName(RepeatLimiter::Kind kind) noexcept {
+  switch (kind) {
+    case RepeatLimiter::Kind::kDroppedGateClosed:
+      return "refusal_dropped";
+    case RepeatLimiter::Kind::kUncountedNoJoin:
+      return "refusal_uncounted";
+    case RepeatLimiter::Kind::kPageUnchanged:
+      return "page_unchanged";
+  }
+  return "unknown";
 }
 
 }  // namespace quest_social::lobby_full

@@ -45,6 +45,7 @@ struct LoadRecord {
   bool overridden = false;               // a config.yaml entry named this packaged file
   std::string expectedSha256;            // the manifest's hash for the file; empty when the file has none to be checked against
   bool configRejected = false;           // config.yaml was rejected as a whole: this plugin loaded with its manifest values alone
+  std::string keptMapped = "none";       // "slot_hook" when the object was not unmapped: a slot hook it registered is still chained
 };
 
 // The game's main level, as a plugin context carries it (level_symbol, level_name). `name` is null when the symbol is 0 or the

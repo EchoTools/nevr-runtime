@@ -4,7 +4,13 @@ Status: proposed. Applies to the Quest build and the PC client. Supersedes the p
 handler on one slot: decision 5's "no chaining in v1", decision 9's refusal of a plugin claim on a registered slot, the
 "Chaining" bullet of section 5
 (chaining refused in v1, "a later ADR"), the first two rules of section 9, and "Chaining of hooks on one slot" among
-section 13's non-goals.
+section 13's non-goals. It also supersedes, from ADR 0019 section 5, the statement that a plugin's handler is wrapped by
+`InstallThunk`: the plugin hook service installs the handler as a plain function, the exception that
+`callback_thunk.h` rule 4 names. It supersedes the refusal of a plugin whose imports include `__gxx_personality_v0`,
+which the tree never implemented (the name appears only in comments under `src/quest`). And from ADR 0019 section 11 it
+supersedes predictions P5 and P6: a second claim on a slot chains, and a plugin claim on a sentinel slot joins the chain.
+`DuplicateRefusedAndADifferentHandlerChains` and `ASentinelClaimAndAPluginClaimShareOneChain` in
+`src/quest/tests/got_hook_test.cpp` test those joins.
 
 ## Context
 
