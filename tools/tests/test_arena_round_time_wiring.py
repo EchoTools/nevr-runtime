@@ -1,13 +1,14 @@
-"""#982: the public Arena round default is decided from a session type stored before the game starts the session.
+"""The session game type is stored before the game starts the session, and the round_time detour does not read it.
 
 Source sensors for what the GTests in src/runtime/tests/test_arena_rules_hook.cpp and test_server_bots.cpp cannot
 reach (the callbacks in gameserver_callbacks.cpp are not linked by any test target):
 
   - the legacy GameServerSessionStart branch stores the frame's game type BEFORE it forwards the frame to the game,
-    so the game's reads that the forward triggers see the session's type, not the previous one's or none;
-  - the protobuf session create stores through the same function, which logs the type, its source, the type it
-    replaces and the reads that found none;
-  - the detour counts a read that found no type and exists once, in arena_rules_hook.cpp.
+    so the session's step (#1785) is set from the session's type, not the previous one's;
+  - the protobuf session create stores through the same function, which logs the type, its source and the type it
+    replaces;
+  - the detour answers round_time from config.yaml only, never from the session's type, and exists once, in
+    arena_rules_hook.cpp.
 """
 
 import unittest
@@ -40,16 +41,15 @@ class TheSessionTypeIsStoredBeforeTheGameStartsTheSession(unittest.TestCase):
         self.assertIn('StoreSessionGameType(gameType.gameType, "session_create"', self.callbacks[create:end])
         self.assertNotIn("SetSessionGameType(", self.callbacks[create:end], "a store that skips the log line")
 
-    def test_only_the_store_function_sets_the_type_and_takes_the_count(self):
+    def test_only_the_store_function_sets_the_type(self):
         self.assertEqual(self.callbacks.count("nevr_arena_round_time::SetSessionGameType("), 1)
-        self.assertEqual(self.callbacks.count("nevr_arena_round_time::TakeReadsWithoutType()"), 1)
 
 
-class TheDetourCountsAReadThatFoundNoType(unittest.TestCase):
-    def test_the_count_is_noted_where_the_decision_is_made(self):
+class TheDetourAnswersRoundTimeFromConfigOnly(unittest.TestCase):
+    def test_the_detour_does_not_read_the_session_type(self):
         hook = read("src/runtime/lifecycle/arena_rules_hook.cpp")
-        self.assertIn("if (!gameType) nevr_arena_round_time::NoteReadWithoutType();", hook)
-        self.assertLess(hook.index("DecideRoundTimeDefault(gameType)"), hook.index("NoteReadWithoutType()"))
+        self.assertNotIn("nevr_arena_round_time", hook)
+        self.assertNotIn("SessionGameType", hook)
 
     def test_the_detour_is_defined_once(self):
         for path in ("src/runtime/lifecycle/config.cpp",):
