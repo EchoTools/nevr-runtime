@@ -1,4 +1,4 @@
-# bvh (part 2 of 2, run as Q15T_MUTANTS_ONLY=bvhwrap): each rule of src/bvh.cpp and src/bvh.h removed once; tests/mod/bvh.sh must fail on every one.
+# bvh (part 2 of 2, run as Q15T_MUTANTS_ONLY=bvhwrap): each rule of src/bvh.cpp and src/bvh.h removed once; the bvh tests (mod/bvh.cmake) must fail on every one.
 # -- wrappers (bvh.cpp)
 runm bvh bvh_w_init_real        src/bvh.cpp "s/  if (real != nullptr) real(self, data);/  (void)real;/"
 runm bvh bvh_w_init_null_self   src/bvh.cpp "s/  if (self == nullptr) return;\$/  (void)self;/"

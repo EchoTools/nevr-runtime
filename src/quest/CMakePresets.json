@@ -35,6 +35,128 @@
                 "CMAKE_CXX_COMPILER": "g++",
                 "NEVR_HOST_JSON_INCLUDE": "${sourceDir}/../../build/quest-host-vcpkg/x64-linux/include"
             }
+        },
+        {
+            "name": "quest-host-base",
+            "hidden": true,
+            "displayName": "Quest host tests: the host g++, no NDK (src/quest/host_tests, entered from src/quest/host)",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "NEVR_QUEST_HOST_TOOLS": "ON",
+                "NEVR_QUEST_HOST_TESTS": "ON",
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
+                "NEVR_HOST_PREFIX": "${sourceDir}/../../build/quest-host-vcpkg/x64-linux",
+                "NEVR_HOST_JSON_INCLUDE": "${sourceDir}/../../build/quest-host-vcpkg/x64-linux/include"
+            }
+        },
+        {
+            "name": "quest-host-data",
+            "displayName": "Quest host tests: test-quest-data",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-data"
+        },
+        {
+            "name": "quest-host-data-net",
+            "displayName": "Quest host tests: test-quest-data-net",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-data-net"
+        },
+        {
+            "name": "quest-host-invite",
+            "displayName": "Quest host tests: test-quest-invite",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-invite"
+        },
+        {
+            "name": "quest-host-shared",
+            "displayName": "Quest host tests: test-quest-shared",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-shared"
+        },
+        {
+            "name": "quest-host-router",
+            "displayName": "Quest host tests: test-quest-router",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-router"
+        },
+        {
+            "name": "quest-host-invite-transport",
+            "displayName": "Quest host tests: test-quest-invite-transport",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-invite-transport"
+        },
+        {
+            "name": "quest-host-tls",
+            "displayName": "Quest host tests: test-quest-tls",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-tls"
+        },
+        {
+            "name": "quest-host-hooks",
+            "displayName": "Quest host tests: test-quest-hooks",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-hooks"
+        },
+        {
+            "name": "quest-host-redirect",
+            "displayName": "Quest host tests: test-quest-redirect",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-redirect"
+        },
+        {
+            "name": "quest-host-patcher",
+            "displayName": "Quest host tests: test-quest-patcher",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-patcher"
+        },
+        {
+            "name": "quest-host-patcher-pinned",
+            "displayName": "Quest host tests: test-quest-patcher-pinned",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-patcher-pinned"
+        },
+        {
+            "name": "quest-host-social",
+            "displayName": "Quest host tests: test-quest-social",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-social"
+        },
+        {
+            "name": "quest-host-social-pinned",
+            "displayName": "Quest host tests: test-quest-social-pinned",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-social-pinned"
+        },
+        {
+            "name": "quest-host-integration",
+            "displayName": "Quest host tests: test-quest-integration",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-integration"
+        },
+        {
+            "name": "quest-host-plugins",
+            "displayName": "Quest host tests: test-quest-plugins",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-plugins"
+        },
+        {
+            "name": "quest-host-autopilot",
+            "displayName": "Quest host tests: test-quest-autopilot",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-autopilot"
+        },
+        {
+            "name": "quest-host-integration-pinned",
+            "displayName": "Quest host tests: test-quest-integration-pinned",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-integration-pinned"
+        },
+        {
+            "name": "quest-host-hooks-pinned",
+            "displayName": "Quest host tests: test-quest-hooks-pinned",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-hooks-pinned"
         }
     ],
     "buildPresets": [
@@ -52,6 +174,336 @@
             "name": "quest-patcher",
             "displayName": "Build the Quest host tools",
             "configurePreset": "quest-patcher"
+        },
+        {
+            "name": "quest-host-data",
+            "configurePreset": "quest-host-data",
+            "targets": [
+                "host-tests-data"
+            ]
+        },
+        {
+            "name": "quest-host-data-net",
+            "configurePreset": "quest-host-data-net",
+            "targets": [
+                "host-tests-data-net"
+            ]
+        },
+        {
+            "name": "quest-host-invite",
+            "configurePreset": "quest-host-invite",
+            "targets": [
+                "host-tests-invite"
+            ]
+        },
+        {
+            "name": "quest-host-shared",
+            "configurePreset": "quest-host-shared",
+            "targets": [
+                "host-tests-shared"
+            ]
+        },
+        {
+            "name": "quest-host-router",
+            "configurePreset": "quest-host-router",
+            "targets": [
+                "host-tests-router"
+            ]
+        },
+        {
+            "name": "quest-host-invite-transport",
+            "configurePreset": "quest-host-invite-transport",
+            "targets": [
+                "host-tests-invite-transport"
+            ]
+        },
+        {
+            "name": "quest-host-tls",
+            "configurePreset": "quest-host-tls",
+            "targets": [
+                "host-tests-tls"
+            ]
+        },
+        {
+            "name": "quest-host-hooks",
+            "configurePreset": "quest-host-hooks",
+            "targets": [
+                "host-tests-hooks"
+            ]
+        },
+        {
+            "name": "quest-host-redirect",
+            "configurePreset": "quest-host-redirect",
+            "targets": [
+                "host-tests-redirect"
+            ]
+        },
+        {
+            "name": "quest-host-patcher",
+            "configurePreset": "quest-host-patcher",
+            "targets": [
+                "host-tests-patcher"
+            ]
+        },
+        {
+            "name": "quest-host-patcher-pinned",
+            "configurePreset": "quest-host-patcher-pinned",
+            "targets": [
+                "host-tests-patcher-pinned"
+            ]
+        },
+        {
+            "name": "quest-host-social",
+            "configurePreset": "quest-host-social",
+            "targets": [
+                "host-tests-social"
+            ]
+        },
+        {
+            "name": "quest-host-social-pinned",
+            "configurePreset": "quest-host-social-pinned",
+            "targets": [
+                "host-tests-social-pinned"
+            ]
+        },
+        {
+            "name": "quest-host-integration",
+            "configurePreset": "quest-host-integration",
+            "targets": [
+                "host-tests-integration"
+            ]
+        },
+        {
+            "name": "quest-host-plugins",
+            "configurePreset": "quest-host-plugins",
+            "targets": [
+                "host-tests-plugins"
+            ]
+        },
+        {
+            "name": "quest-host-autopilot",
+            "configurePreset": "quest-host-autopilot",
+            "targets": [
+                "host-tests-autopilot"
+            ]
+        },
+        {
+            "name": "quest-host-integration-pinned",
+            "configurePreset": "quest-host-integration-pinned",
+            "targets": [
+                "host-tests-integration-pinned"
+            ]
+        },
+        {
+            "name": "quest-host-hooks-pinned",
+            "configurePreset": "quest-host-hooks-pinned",
+            "targets": [
+                "host-tests-hooks-pinned"
+            ]
+        },
+        {
+            "name": "quest-host-hooks-jni",
+            "configurePreset": "quest-host-hooks",
+            "targets": [
+                "host-tests-hooks-jni"
+            ]
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "quest-host-data",
+            "configurePreset": "quest-host-data",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^data$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-invite",
+            "configurePreset": "quest-host-invite",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^invite$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-shared",
+            "configurePreset": "quest-host-shared",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^shared$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-router",
+            "configurePreset": "quest-host-router",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^router$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-invite-transport",
+            "configurePreset": "quest-host-invite-transport",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^invite-transport$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-hooks",
+            "configurePreset": "quest-host-hooks",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^hooks$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-redirect",
+            "configurePreset": "quest-host-redirect",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^redirect$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-patcher",
+            "configurePreset": "quest-host-patcher",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^patcher$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-social",
+            "configurePreset": "quest-host-social",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^social$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-integration",
+            "configurePreset": "quest-host-integration",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^integration$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-plugins",
+            "configurePreset": "quest-host-plugins",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^plugins$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-autopilot",
+            "configurePreset": "quest-host-autopilot",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^autopilot$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-hooks-jni",
+            "configurePreset": "quest-host-hooks",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^hooks-jni$"
+                }
+            }
         }
     ]
 }

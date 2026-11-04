@@ -1,6 +1,6 @@
 # Module `voipdrop` (row R30)
 
-Files: `src/voipdrop.{h,cpp}`, `src/quest/tests/q15t/voipdrop_test.cpp`, `src/quest/tests/q15t/mod/voipdrop.sh`, `src/quest/tests/q15t/mutants.d/voipdrop.sh`.
+Files: `src/voipdrop.{h,cpp}`, `src/quest/tests/q15t/voipdrop_test.cpp`, `src/quest/tests/q15t/mod/voipdrop.cmake`, `src/quest/tests/q15t/mutants.d/voipdrop.sh`.
 
 Option macro for the main seat to wire: `Q15T_VOIPDROP`, default **ON** (the source build's voipdrop:1 "DEFAULT ON", `Switch()` `:114-130`;
 installed from the source build's tap:174). API: `InstallResult InstallVoipDrop(std::uintptr_t base)` (resolves the four engine exports

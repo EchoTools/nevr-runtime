@@ -43,9 +43,8 @@ class TheGuardIsWired(unittest.TestCase):
         self.assertIn("nevr_quest::vk_free_guard::Install();", body)
 
     def test_the_host_test_runs_in_the_hooks_recipe(self):
-        justfile = read("justfile")
-        self.assertIn("src/quest/tests/vk_free_guard_test.cpp", justfile)
-        self.assertIn('timeout 120 "$out/vk_free_guard_test"', justfile)
+        hooks_cmake = read("src/quest/host_tests/groups/hooks.cmake")
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(vk_free_guard_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/vk_free_guard_test\.cpp")
 
     def test_the_real_library_check_covers_the_slot_and_the_layout(self):
         text = read("src/quest/tests/got_pinned_test.cpp")

@@ -1,6 +1,6 @@
 # Module `pfx` (issue #1631): the particle-effect renderer's gate
 
-Files: `src/quest/plugins/q15t/src/pfx.{h,cpp}`, `src/quest/tests/q15t/pfx_test.cpp`, `src/quest/tests/q15t/mod/pfx.sh`.
+Files: `src/quest/plugins/q15t/src/pfx.{h,cpp}`, `src/quest/tests/q15t/pfx_test.cpp`, `src/quest/tests/q15t/mod/pfx.cmake`.
 Option: `Q15T_PFX` (default ON). Off switch: `pfx.off` in the q15t data directory (module_switch.h).
 
 ## What the switch decides

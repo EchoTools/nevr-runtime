@@ -58,11 +58,9 @@ class TheHandPoseLogIsWired(unittest.TestCase):
         self.assertEqual(body.count("nevr_quest::hand_pose_log::Install();"), 1)
 
     def test_the_host_test_runs_in_the_hooks_recipe(self):
-        justfile = read("justfile")
-        self.assertIn("src/quest/tests/hand_pose_log_hook_test.cpp", justfile)
-        self.assertIn('timeout 120 "$out/hand_pose_log_hook_test"', justfile)
-        self.assertIn("src/quest/tests/hand_flip_test.cpp", justfile)
-        self.assertIn('timeout 120 "$out/hand_flip_test"', justfile)
+        hooks_cmake = read("src/quest/host_tests/groups/hooks.cmake")
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(hand_pose_log_hook_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/hand_pose_log_hook_test\.cpp")
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(hand_flip_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/hand_flip_test\.cpp")
 
 
 class TheHandPoseLogOnlyReads(unittest.TestCase):

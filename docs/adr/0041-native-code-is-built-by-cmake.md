@@ -16,16 +16,16 @@ Native code is also built another way in places. The inventory is in "Where the 
 
 - **A compiler command in a recipe.** 53 lines in `justfile` run `g++ -std=c++17` with `-Wall -Wextra -Werror` and list their
   sources and include paths by hand (`test-quest-*`, `quest-patcher`, `test-scripting`).
-- **A compiler command in a shell script.** `src/quest/tests/q15t/run_host_tests.sh` and the scripts under `src/quest/tests/q15t/mod/` it sources.
-- **A compiler command in a Python script.** `tools/build_quest_combat_libs.py` runs the NDK `clang++` once for each Quest
-  script library; `tools/gen_plugin_signature_fixtures.py` and `tools/winvm/systest.py` run `x86_64-w64-mingw32-gcc`.
+- **A compiler command in a Python script.** `86283cd30b9b6e3a967f9f0fc1975ac2ab099b8d:tools/build_quest_combat_libs.py` ran the NDK `clang++` once for each Quest
+  script library (the `src/quest/combat_libs` project and the `build-quest-combat-libs` recipe replace it);
+  `tools/gen_plugin_signature_fixtures.py` and `tools/winvm/systest.py` ran `x86_64-w64-mingw32-gcc` (the `sigfix_dlls` and `gai_probe` targets replace it).
 
 What this costs, measured in the tree:
 
 - **Flags and toolchain are repeated.** All 53 `g++ -std=` lines in `justfile` spell their own `-Wall -Wextra -Werror` and their own
   `-Isrc -Isdk/include`. A preset names its toolchain once (`VCPKG_CHAINLOAD_TOOLCHAIN_FILE` in
-  `src/quest/CMakePresets.json` and `CMakePresets.json`); `build-quest-combat-libs` hands its script a compiler path
-  (`--ndk-clang`).
+  `src/quest/CMakePresets.json` and `CMakePresets.json`); `86283cd30b9b6e3a967f9f0fc1975ac2ab099b8d:justfile` handed the combat-libs script a compiler
+  path (`--ndk-clang`), where `src/quest/combat_libs/CMakePresets.json` now names the NDK's toolchain file.
 - **The compiler cache and incremental builds are bypassed.** `justfile` sets `CMAKE_C_COMPILER_LAUNCHER` and
   `CMAKE_CXX_COMPILER_LAUNCHER` to ccache, which only a CMake build reads. A recipe's `g++` line recompiles every source
   each run; `tools/verify-parallel.sh` says "each test-quest-* compiles its own host binary and runs it, so the serial wall
@@ -33,7 +33,7 @@ What this costs, measured in the tree:
 - **No compile database.** The root `CMakeLists.txt` sets `CMAKE_EXPORT_COMPILE_COMMANDS ON`, and
   `tools/tests/test_werror_live.py` reads `build/mingw-release/compile_commands.json`. A `g++` line in a recipe is in no
   compile database, so an IDE, clang-tidy and that test do not see its flags.
-- **A script can merge without its compiler ever running.** #1853 added `tools/build_quest_combat_libs.py`; its PR body says
+- **A script can merge without its compiler ever running.** #1853 added `86283cd30b9b6e3a967f9f0fc1975ac2ab099b8d:tools/build_quest_combat_libs.py`; its PR body says
   "Not run: a real compile (no NDK, no libsrc)", its tests use a stand-in compiler, check script and APK, and it states an
   assumption about the include directory that "the first real run fails in the compiler" if wrong. #2047 replaces the
   script with a CMake project and pins the NDK the game was built with (r21b), so the compiler comes from that NDK's CMake
@@ -45,7 +45,7 @@ What this costs, measured in the tree:
    make: PC DLLs and EXEs, the Quest sentinel, the Quest plugins, the Quest script libraries, host tools the build runs
    (`quest_patch_libr15`), and test programs, including a program whose only job is a compile check.
 2. **Configuration is a preset and a toolchain file.** The compiler, its version pin, the sysroot, the API level, the flags and
-   the include paths a binary needs are in `CMakePresets.json` (root or `src/quest`), a toolchain file, or the target's
+   the include paths a binary needs are in `CMakePresets.json` (root, `src/quest`, or beside the CMake project it configures, as `src/quest/tests/q15t` does), a toolchain file, or the target's
    `CMakeLists.txt`. A toolchain the game's binaries require (the NDK that built them) is a toolchain file the preset names;
    it is never a compiler path passed to a script.
 3. **Recipes dispatch.** A `justfile` recipe configures with `cmake --preset`, builds with `cmake --build --preset` (with
@@ -70,11 +70,8 @@ What this costs, measured in the tree:
 Each row is a violation of rule 3. A row goes when its issue closes; the grep
 under "Finding a violation" is the list of record.
 
-| Where | What it builds | Issue |
-| --- | --- | --- |
-| `tools/build_quest_combat_libs.py`, called by the `build-quest-combat-libs` recipe | the Quest combat script libraries | #2047 |
-| the 18 `test-quest-*` recipes in `justfile` (`test-quest-data`, `-data-net`, `-invite`, `-shared`, `-router`, `-invite-transport`, `-tls`, `-hooks`, `-redirect`, `-hooks-pinned`, `-patcher`, `-patcher-pinned`, `-social`, `-social-pinned`, `-integration`, `-plugins`, `-autopilot`, `-integration-pinned`) | host test programs for the Quest code | #2049 |
-| `src/quest/tests/q15t/run_host_tests.sh` and `src/quest/tests/q15t/mod/*.sh` (recipe `test-quest-q15t`) | the q15t plugin's host tests | #2053 |
+No row is open. Invocations this inventory did not list (the MSVC plugin workflow, the installer tests' C compiles, two
+configures without a preset) are tracked by #2065, which adds their rows or their exemptions.
 
 Out of scope, by rule 4: `android-repack-libovr` and `android-repack-apk` in `justfile` (`patchelf`, `zip`, `zipalign`,
 `apksigner`), `tools/quest_repack_libs.py`, `tools/quest_apk_rename_package.py`, `tools/quest_pack_from_game_data.py`,

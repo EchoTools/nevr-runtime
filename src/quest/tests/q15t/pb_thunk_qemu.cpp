@@ -1,6 +1,6 @@
 // Runs the plugin's one naked arm64 function (src/quest/plugins/q15t/src/powerboost_thunk.inc, the very text src/quest/plugins/q15t/src/powerboost.cpp includes) under
 // qemu-aarch64. Freestanding: no libc, no plugin code; only the thunk, the two words it reads and a recording stand-in for
-// q15t_pb_cone_at. Build: NDK r26d clang++ -static -nostdlib (src/quest/tests/q15t/mod/powerboost.sh).
+// q15t_pb_cone_at. Build: the q15t-ndk-checks preset (NDK r26d clang++ -static -nostdlib; src/quest/tests/q15t/mod/powerboost.cmake).
 //
 // What is checked, by running it:
 //   - a call whose return address is not q15t_pb_cone_ret reaches the real function with x0, x1, x2 and x30 as the caller

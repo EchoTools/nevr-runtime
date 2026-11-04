@@ -8,6 +8,13 @@
 cmake_minimum_required(VERSION 3.23)
 project(nevr_quest LANGUAGES C CXX)
 
+# The host tests (docs/adr/0041): the quest-host-* presets turn this on besides NEVR_QUEST_HOST_TOOLS, and host/CMakeLists.txt then
+# adds the test programs of src/quest/host_tests. ctest runs from the top of the tree, so testing is enabled here.
+option(NEVR_QUEST_HOST_TESTS "Build the Quest host tests with the host compiler (the quest-host-* presets)" OFF)
+if(NEVR_QUEST_HOST_TESTS)
+  enable_testing()
+endif()
+
 # The quest-patcher preset builds the host tools (host/CMakeLists.txt) with the host compiler, and nothing of the Android project.
 option(NEVR_QUEST_HOST_TOOLS "Build the Quest host tools with the host compiler (the quest-patcher preset)" OFF)
 if(NEVR_QUEST_HOST_TOOLS)

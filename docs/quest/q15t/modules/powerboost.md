@@ -2,7 +2,7 @@
 
 Files: `src/powerboost.{h,cpp}`, `src/quest/plugins/q15t/src/powerboost_core.h`, `src/quest/plugins/q15t/src/powerboost_thunk.inc`, `src/quest/plugins/q15t/src/pbhud_log.h` (shared log helper of
 the powerboost / hudmeter / shieldgamma ports), `src/quest/tests/q15t/powerboost_test.cpp`, `src/quest/tests/q15t/pb_thunk_qemu.cpp`, `src/quest/tests/q15t/pbhud_image.h`,
-`src/quest/tests/q15t/mod/powerboost.sh` (+ `src/quest/tests/q15t/mod/pbhud_ndk.sh`), `src/quest/tests/q15t/mutants.d/powerboost.sh`.
+`src/quest/tests/q15t/mod/powerboost.cmake`, `src/quest/tests/q15t/mutants.d/powerboost.sh`.
 
 Port of `<source build>/the source build's powerboost` (598 lines) and the source build's powerboost_core (156 lines):
 EC's POWER BOOST on the Quest client. A heal amount of 1,000,000 or more is never a heal: it is a marker the
@@ -130,7 +130,7 @@ plugin compiles and the qemu test runs (`src/quest/tests/q15t/pb_thunk_qemu.cpp`
 
 ## Tests, and what they do not show
 
-`Q15T_MODULE=powerboost bash src/quest/tests/q15t/run_host_tests.sh` runs, in order: the host test against a fake image (a 0x3730000-byte lazy
+`just test-quest-q15t powerboost` runs, in order: the host test against a fake image (a 0x3730000-byte lazy
 anonymous mapping so real ELF vaddrs are slots; x86 trampolines stand in for the game functions; slot pages made read-only like
 RELRO; real `mprotect`, real `/proc/self/maps`), the NDK r26d clang++ arm64 build (fails if the object has `.init_array` or
 `.ctors`), a golden check of the compiled thunk with `llvm-objdump -dr` (exactly the 15 instructions and 5 relocations), and the

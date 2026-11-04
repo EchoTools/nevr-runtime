@@ -111,9 +111,8 @@ class TheGamesRequestsAreIntercepted(unittest.TestCase):
     def test_the_hook_is_built_without_exceptions_and_the_host_test_runs_in_test_quest_hooks(self):
         cmake = (QUEST / "sentinel/CMakeLists.txt").read_text()
         self.assertEqual(cmake.count("crash_first_hook.cpp"), 2)  # a source, and the -fno-exceptions list
-        justfile = (ROOT / "justfile").read_text()
-        self.assertIn("src/quest/tests/crash_first_hook_test.cpp", justfile)
-        self.assertIn("timeout 120 \"$out/crash_first_hook_test\"", justfile)
+        hooks_cmake = (ROOT / "src/quest/host_tests/groups/hooks.cmake").read_text()
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(crash_first_hook_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/crash_first_hook_test\.cpp")
 
 
 class TheProviderLibrariesAreHookedWhenTheyLoad(unittest.TestCase):

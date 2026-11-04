@@ -1,5 +1,5 @@
 // Host test of the plugin's hook install and wrapper against a fake "game library" slot (an mmap'd page).
-// Built per arm (Hz level rule, T-26) by src/quest/tests/q15t/run_host_tests.sh; the clock raise is a runtime switch (args {clock: raise}), tested in every build. Real code, real mprotect, real /proc/self/maps.
+// Built per arm (Hz level rule, T-26) by src/quest/tests/q15t/CMakeLists.txt; the clock raise is a runtime switch (args {clock: raise}), tested in every build. Real code, real mprotect, real /proc/self/maps.
 #include <dlfcn.h>
 #include <sys/mman.h>
 #include <unistd.h>

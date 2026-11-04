@@ -1,4 +1,4 @@
-# module `levelname`: each line removes one rule from src/levelname.cpp; tests/mod/levelname.sh must fail on it
+# module `levelname`: each line removes one rule from src/levelname.cpp; its tests (mod/levelname.cmake, `just test-quest-q15t levelname`) must fail on it
 runm levelname ln_key_wrong       src/levelname.cpp "s/kGlobalMp = 0x3F9915D3001DC28Eull;/kGlobalMp = 0x3F9915D3001DC28Full;/"
 runm levelname ln_any_name        src/levelname.cpp "s/if (name == kGlobalMp) {/if (true) {/"
 runm levelname ln_no_flag_test    src/levelname.cpp "s/if (ok \&\& (flags \& kLowspecMask) != 0) {/if (ok \&\& flags != 0x5a5a5a5au) {/"

@@ -71,9 +71,8 @@ class TheQuitHookIsWired(unittest.TestCase):
         self.assertIn("nevr_quest::quit::Install();", body)
 
     def test_the_host_test_runs_in_the_hooks_recipe(self):
-        justfile = read("justfile")
-        self.assertIn("src/quest/tests/quit_hook_test.cpp", justfile)
-        self.assertIn('timeout 120 "$out/quit_hook_test"', justfile)
+        hooks_cmake = read("src/quest/host_tests/groups/hooks.cmake")
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(quit_hook_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/quit_hook_test\.cpp")
 
 
 if __name__ == "__main__":

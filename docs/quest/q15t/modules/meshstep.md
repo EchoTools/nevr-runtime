@@ -1,6 +1,6 @@
 # Module `meshstep` (issue #1555): mesh-list table growth step 1
 
-Files: `src/quest/plugins/q15t/src/meshstep.{h,cpp}`, `src/quest/tests/q15t/meshstep_test.cpp`, `src/quest/tests/q15t/mod/meshstep.sh`.
+Files: `src/quest/plugins/q15t/src/meshstep.{h,cpp}`, `src/quest/tests/q15t/meshstep_test.cpp`, `src/quest/tests/q15t/mod/meshstep.cmake`.
 CMake option `Q15T_MESHSTEP`, default ON. Kill file `meshstep.off` in the plugin data directory.
 
 ## What the stock code does (pinned build b243509c, disassembly `libr15.so`, ELF vaddr = disassembly VA - 0x100000)
@@ -40,7 +40,7 @@ constructed object (`meshstep: first CGMeshListResource built ...`, growth_step 
 
 ## Tests
 
-`src/quest/tests/q15t/meshstep_test.cpp` (`mod/meshstep.sh`): a 64 MiB fake image with the pinned words, vtable words and GOT word at
+`src/quest/tests/q15t/meshstep_test.cpp` (`mod/meshstep.cmake`): a 64 MiB fake image with the pinned words, vtable words and GOT word at
 their ELF offsets; the swapped word is called, the object's fields are checked against the stock order, the eleven CMemBlock calls
 and step 1 are checked; a mismatched pin, a zero vtable word and a missing helper each refuse with nothing swapped.
 Not covered by the host test: the kill file (needs a writable data directory), `wiring_test.cpp` (the module is not in its
