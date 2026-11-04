@@ -373,6 +373,22 @@ void ScriptRedirectIsOfferedByBothApis() {
   sr::ResetForTest();
 }
 
+// The hook service (#2001) is offered by the development API only. The release API offers none until q15t moves onto it
+// (#2002): its two members are null there, and struct_size still covers them. A plugin checks both, so on a release host
+// the service reads as not offered rather than as a call through a null pointer.
+void SlotHookIsOfferedByTheDevApiOnly() {
+  const NevrQuestHostApi* release = is::HostApi(false);
+  const NevrQuestHostApi* dev = is::HostApi(true);
+  QCHECK(release != nullptr && dev != nullptr);
+  if (release == nullptr || dev == nullptr) return;
+  QCHECK(release->struct_size >= offsetof(NevrQuestHostApi, unregister_slot_hook) + sizeof(release->unregister_slot_hook));
+  QCHECK(release->register_slot_hook == nullptr);
+  QCHECK(release->unregister_slot_hook == nullptr);
+  QCHECK(dev->struct_size >= offsetof(NevrQuestHostApi, unregister_slot_hook) + sizeof(dev->unregister_slot_hook));
+  QCHECK(dev->register_slot_hook != nullptr);
+  QCHECK(dev->unregister_slot_hook != nullptr);
+}
+
 void UnresolvedCapabilitiesRefuseWithoutInstalling() {
   Reset();
   Capture cap;
@@ -551,6 +567,7 @@ int main() {
   BadArgumentsAreRefusedBeforeAnything();
   AReleaseBuildRefusesAndInstallsNothing();
   ScriptRedirectIsOfferedByBothApis();
+  SlotHookIsOfferedByTheDevApiOnly();
   UnresolvedCapabilitiesRefuseWithoutInstalling();
   AFailedInstallRefusesAndLeavesNoFilter();
   TheFirstRegistrationOwnsTheSeam();

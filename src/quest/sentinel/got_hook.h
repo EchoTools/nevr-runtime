@@ -27,8 +27,10 @@
  *   - the relocation has no addend and its slot is an aligned pointer inside a
  *     writable segment of the image,
  *   - the slot holds the expected original, or an address inside an executable
- *     mapping, and does not already hold the hook,
- *   - no other handle in the process owns the slot.
+ *     mapping (the first handler on a slot); a later handler joins the slot's chain,
+ *     and the slot must hold the chain's newest hook,
+ *   - the handler is not already in the chain, and no entry the chain holds was left
+ *     reachable by a failed install (kSlotPoisoned).
  *
  * Writes are serialized by one process-wide lock and are compare-and-swap: Install
  * stores only over the original it read, Remove only over its own hook. A slot
@@ -37,6 +39,13 @@
  * read from /proc/self/maps under that lock; the PT_GNU_RELRO range is the fallback when that is
  * unreadable. More than one slot for the symbol and relocation type is refused
  * unless the target pins the slot.
+ *
+ * Several handlers may hold one slot: a chain (docs/adr/0034). The newest handler runs first and reaches the one before
+ * it through its original; the oldest reaches the game's function. A handle's original is the value published through
+ * the originalOut pointer it was installed with, so a handler calls its original the same way whether or not it is
+ * chained. Remove relinks the handler that called the removed one (or, for the newest, restores the slot to what it
+ * called), so the others keep running. The chain's order is the order of registration. A handler's install is refused,
+ * with a Warning that names the slot, the chain and the reason, when the slot holds a value the chain does not account for.
  *
  * Install and Remove log exactly one structured line (hook_log.h) and return a
  * status; a failed Install leaves the slot and its page protection as they were
@@ -82,7 +91,7 @@ constexpr RelocNumbers kNativeRelocs = kX86_64Relocs;
 enum class GotStatus : std::uint8_t {
   kOk,
   kBadArgument,
-  kAlreadyInstalled,       // this handle, another handle, or the slot already holds the hook
+  kAlreadyInstalled,       // this handle already holds a hook, or the handler is already in the slot's chain
   kModuleNotLoaded,
   kNoDynamicSegment,
   kMalformedDynamic,       // a dynamic table is missing, unsupported or outside the image
@@ -95,7 +104,7 @@ enum class GotStatus : std::uint8_t {
   kUnsupportedAddend,
   kSlotMisaligned,
   kSlotOutsideImage,       // not inside a writable PT_LOAD
-  kOriginalMismatch,       // slot value differs from the expected original
+  kOriginalMismatch,       // slot value differs from the expected original (on a chain: from its newest hook)
   kOriginalImplausible,    // slot value is null or not in an executable mapping
   kProtectFailed,
   kWriteVerifyFailed,
@@ -148,10 +157,13 @@ struct GotTarget {
   const void* expectedOriginal;            // exact slot value, or nullptr to require plausibility
   HookPriority priority = HookPriority::kNormal;  // kCritical: may use the registry's reserve (kCriticalReserve)
   bool serviceSide = false;  // a service-side hook (sign-in, matchmaking, redirect): see SetServiceSideBuildId
+  const char* owner = nullptr;  // who installs the hook, for the chain shown on a refusal; nullptr reads as "(unnamed)"
 
-  GotTarget(const char* moduleName, const char* symbolName, RelocKind relocKind,
-            const char* build = nullptr, std::optional<std::uint64_t> pinnedSlot = std::nullopt,
-            const void* original = nullptr)
+  // constexpr: a GotHook holds a GotTarget, and a namespace-scope array of GotHook (diag/hwdump_install.cpp) must be
+  // constant-initialized; check-android-static-init fails on a dynamic initializer there.
+  constexpr GotTarget(const char* moduleName, const char* symbolName, RelocKind relocKind,
+                      const char* build = nullptr, std::optional<std::uint64_t> pinnedSlot = std::nullopt,
+                      const void* original = nullptr)
       : module(moduleName),
         symbol(symbolName),
         kind(relocKind),
@@ -163,6 +175,13 @@ struct GotTarget {
   GotTarget ServiceSide() const {
     GotTarget copy = *this;
     copy.serviceSide = true;
+    return copy;
+  }
+
+  // The same target, named as the installer of its hook. `name` must outlive the handle.
+  GotTarget Owned(const char* name) const {
+    GotTarget copy = *this;
+    copy.owner = name;
     return copy;
   }
 
@@ -274,7 +293,7 @@ ProtectFn SetProtectFunction(ProtectFn fn);
 // not outlive it.
 class GotHook {
  public:
-  GotHook() = default;
+  constexpr GotHook() = default;  // constexpr for the same reason as GotTarget's constructor
   GotHook(const GotHook&) = delete;
   GotHook& operator=(const GotHook&) = delete;
 
@@ -289,27 +308,40 @@ class GotHook {
   void Forget();
 
   bool installed() const { return installed_; }
+  // True when a failed Install left its handler reachable through the slot: the store was live before the rollback, so the
+  // entry is poisoned (kSlotPoisoned for the next install). The handler's code must then stay mapped for the life of the
+  // process; the plugin service keeps the handle held (slot_hook.cpp).
+  bool mayBeLive() const { return mayBeLive_; }
 
  private:
-  // The raw install, taking any function pointer: redirects the slot to `hookFn` and stores
-  // the previous slot value in `*originalOut` before the slot changes; `*originalOut` is
-  // restored to its entry value on failure (see the notes at the top of this file for the
-  // one exception). Private on purpose: production code installs a CallbackThunk through
-  // InstallThunk (hook_install.h), which keeps every hook inside the frame sensor's reach;
-  // tests use GotHookTestAccess.
+  // The raw install, taking any function pointer: joins `hookFn` to the slot's chain and redirects the
+  // slot to it. Before the slot changes, `*originalOut` is published with the value hookFn calls (the
+  // previous slot value, or the chain's newest hook); on failure it is restored to its entry value (see
+  // the notes at the top of this file for the one exception). Private on purpose: production code
+  // installs a CallbackThunk through InstallThunk (hook_install.h), which keeps every hook inside the frame
+  // sensor's reach; tests use GotHookTestAccess, and the plugin service uses PluginHandlerInstaller.
   friend struct ThunkInstaller;
   friend struct GotHookTestAccess;
+  friend struct PluginHandlerInstaller;
   GotStatus Install(const GotTarget& target, void* hookFn, void** originalOut,
                     ImageLookup lookup = FindLoadedImage);
 
   bool installed_ = false;
+  bool mayBeLive_ = false;
   GotTarget target_{"", "", RelocKind::kJumpSlot};
   ElfImage image_{};
   void** slot_ = nullptr;
   void* hookFn_ = nullptr;
-  void* original_ = nullptr;
   bool restoreReadOnly_ = false;
   ImageLookup lookup_ = FindLoadedImage;
+};
+
+// The plugin hook service's install (plugin/slot_hook.cpp): GotHook::Install for a handler a plugin supplies at run
+// time. Plugin code is outside the frame sensor's build, so the handler is a plain function the host does not thunk;
+// callback_thunk.h rule 4 names this as its one exception to InstallThunk.
+struct PluginHandlerInstaller {
+  static GotStatus Install(GotHook& hook, const GotTarget& target, void* hookFn, void** originalOut,
+                           ImageLookup lookup = FindLoadedImage);
 };
 
 }  // namespace sentinel
