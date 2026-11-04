@@ -651,9 +651,9 @@ static void InstallBroadcasterAllowIncoming() {
 VOID PatchEnableServer() {
   using namespace nevr_patch_addresses;
 
-  // Patch the server flag checks inside fcn.140157fb0 (SERVER_FLAGS_CHECK; BeginMultiplayer calls it)
-  // This sets bit 2 (load sessions from broadcast) and bit 3 (dedicated server flag)
-  // permanently, bypassing the normal conditional checks
+  // Patch the server flag checks inside fcn.140157fb0 at disassembly 0x1401580C3 (SERVER_FLAGS_CHECK; BeginMultiplayer calls it)
+  // The patch sets bits 1 and 2 of the flags qword that CR15NetGame+0x2DA0 points to (see addresses.h). The NOPs
+  // remove the stock tests of bits 1, 2 and 6, so the function always continues at 0x1401580EB.
   const BYTE serverFlagsCheck[] = {
       0x48, 0x83, 0x08, 0x06,                                      // OR QWORD ptr[rax], 0x6
       0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,  // NOPs to skip conditional checks

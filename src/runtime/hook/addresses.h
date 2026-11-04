@@ -22,14 +22,18 @@ namespace nevr_patch_addresses {
 // Server Mode Patches (PatchEnableServer)
 // ============================================================================
 
-/// Address: inside fcn.140157fb0 (0x140157fb0..0x14015a039; BeginMultiplayer calls it)
-/// Forces bits in game state flags at CR15NetGame + 0x2DA0:
-///   bit 1, bit 2 (loadout_save_allowed), bit 3 (loadout_action_enabled),
-///   bit 6 (LAN), bit 14 (game_mode_active)
+/// Address: fcn.140157fb0, disassembly 0x140157fb0 (BeginMultiplayer and fcn.14015a050..fcn.14015a500 call it).
+/// The site is 0x113 bytes in, at disassembly 0x1401580C3 (RVA 0x1580C3), after MOV RAX,[RSI+0x2DA0] at 0x1401580BC.
+/// The patch takes effect only when fcn.140157fb0 executes. [RSI+0x2DA0] is a POINTER: the flags are the qword it
+/// points to, loaded by MOV RCX,[RAX] at 0x1401580C3.
+/// Original (stock bytes, ReVault read of echovr.exe): three TEST R14B / JNZ pairs, with R14D = 1 from 0x14015806F,
+/// test bits 1, 2 and 6 of that qword. Bit 1 set jumps to 0x1401581B2; else bit 2 set falls to 0x1401580EB; else bit 6
+/// set jumps to 0x1401581B2; else falls to 0x1401580EB. So the jump is taken when bit 1 OR (NOT bit 2 AND bit 6).
+/// The bit names are not established here: ReVault's own comments name the same bits differently.
 /// The game's CLI registry has NO -server/-dedicated argument — this NOP sled
 /// is the correct approach. See: MatchLifecycle.cpp, CR15NetDedicatedLobby.cpp
-/// Original: Conditional checks for server mode
-/// Patched: OR QWORD ptr[rax], 0x6 followed by NOPs
+/// Patched: OR QWORD ptr[rax], 0x6 sets bits 1 and 2 of that qword on every call that reaches the site. The NOPs
+/// remove the three tests, so the function always continues at 0x1401580EB. Bits 3 and 14 are not read or written here.
 constexpr uintptr_t SERVER_FLAGS_CHECK = 0x1580C3;
 constexpr size_t SERVER_FLAGS_CHECK_SIZE = 40;
 
