@@ -292,7 +292,9 @@ def plugin_manifest_problems(stage: pathlib.Path) -> list[str]:
         if actual != entry.get("sha256"):
             problems.append(f"{MANIFEST_ENTRY}: the sha256 it lists for {file_name} is {entry.get('sha256')}, "
                             f"the staged file's is {actual}")
+    # The recipe's own files, and the script libraries stage_libs staged (recorded in the stage, #2092): neither is a plugin.
     own = set(STAGED_BY_RECIPE) | {pathlib.Path(PATCHED_LIBRARY).name, pathlib.Path(PINNED_LIBRARY).name}
+    own |= set(staged_script_libs(stage))
     for staged in sorted(p for p in (stage / ABI_DIR).iterdir() if p.is_file()):
         if staged.name in own or staged.name in listed:
             continue
@@ -751,6 +753,7 @@ LIB_NAME = re.compile(r"^lib[0-9a-f]{16}\.so$")
 LIBS_SUMS = "SHA256SUMS"
 LIBS_REPLACE = "REPLACE"  # in the libraries directory: the store libraries these replace, one name per line
 STAGED_REPLACE_LIST = "lib-replace.txt"  # in the stage directory: read back by verify_signed
+STAGED_SCRIPT_LIST = "script-libs.txt"  # in the stage directory: the script libraries stage_libs staged, by their staged names
 # The nine stock script libraries a combat unit redirects (#1737). Each is given to the APK as lib<hash16>_q15t.so, beside the
 # stock lib<hash16>.so, which is never replaced: verify_signed checks every store library is byte-identical. The builder
 # names them lib<hash16>.so; the redirect name is given here, at staging. src/quest/plugins/q15t/src/script_redirect.h holds
@@ -779,6 +782,14 @@ def is_aarch64_shared_object(data: bytes) -> bool:
     """A 64-bit little-endian ELF whose machine is AArch64 (ELF header: class 2, data 1, e_machine at offset 18)."""
     return len(data) >= 20 and data[:4] == b"\x7fELF" and data[4] == 2 and data[5] == 1 and \
         struct.unpack_from("<H", data, 18)[0] == _EM_AARCH64
+
+
+def staged_script_libs(stage: pathlib.Path) -> list[str]:
+    """The file names stage_libs staged under lib/arm64-v8a, as the stage recorded them (empty when it staged none)."""
+    path = stage / STAGED_SCRIPT_LIST
+    if not path.is_file():
+        return []
+    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def replaced_names(stage: pathlib.Path) -> list[str]:
@@ -867,6 +878,7 @@ def stage_libs(libs_dir: pathlib.Path, stage: pathlib.Path, store_apk: pathlib.P
         (target / staged_name(name)).write_bytes((libs_dir / name).read_bytes())
         print(f"quest_repack_libs: script library {staged_name(name)} sha256 {listed[name]}", flush=True)
     (stage / STAGED_REPLACE_LIST).write_text("".join(f"{n}\n" for n in sorted(replace)), encoding="utf-8")
+    (stage / STAGED_SCRIPT_LIST).write_text("".join(f"{staged_name(n)}\n" for n in sorted(names)), encoding="utf-8")
     return []
 
 
