@@ -203,7 +203,7 @@ fn main() -> ExitCode {
                 Ok((end, Some(plan)))
             }
             ("pc", "launch-check") => {
-                let dir = PathBuf::from(args.val("--dir").ok_or_else(|| nevr_install::error::Error::new(11, "--dir is required"))?);
+                args.val("--dir").ok_or_else(|| nevr_install::error::Error::new(11, "--dir is required"))?;
                 sess.manifest()?;
                 let (m, v) = sess.release(version.as_deref())?;
                 let art = nevr_install::manifest::find(&m, &v, "windows-zip", None)?;
@@ -214,8 +214,17 @@ fn main() -> ExitCode {
                         return Ok((sess.end("needs-user", &why.msg)?, None));
                     }
                 }
-                // The host writes its log under the nevr root (ADR 0012); the game folder is the fallback for an older host.
-                let log_path = args.val("--bootstrap-log").map(PathBuf::from).unwrap_or_else(|| sess.cfg.nevr_root.as_ref().map(|r| r.join("logs")).unwrap_or_else(|| dir.join("logs")).join("nevr-bootstrap.jsonl"));
+                // The host writes its records into the process's main log in the nevr root (ADR 0012, ADR 0027): the newest one.
+                let log_path = match args.val("--bootstrap-log").map(PathBuf::from) {
+                    Some(p) => p,
+                    None => {
+                        let Some(root) = sess.cfg.nevr_root.as_ref() else {
+                            return Err(nevr_install::error::Error::new(11, "the nevr root is not known: pass --nevr-root or --bootstrap-log"));
+                        };
+                        let logs = root.join("logs");
+                        nevr_install::pc::newest_run_log(&logs).ok_or_else(|| nevr_install::error::Error::new(11, format!("{}: no main log of the game yet", logs.display())))?
+                    }
+                };
                 let text = std::fs::read_to_string(&log_path).map_err(|e| nevr_install::error::Error::new(11, format!("{}: {e}", log_path.display())))?;
                 match nevr_install::pc::launch_witness(&text, &sha("BugSplat64.dll"), &sha("nevr-runtime.dll")) {
                     Ok(w) => {
