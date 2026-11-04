@@ -938,6 +938,60 @@ inline GotTarget LibR15GetInputTrackingState() {
   return {kLibR15, kGetInputTrackingStateSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36dc280ULL};
 }
 
+// libr15.so's slots for the CR15Game constructor (#2090), defined in libr15 itself. C1 and C2 are one function (both dynsym
+// entries are 0x11fce34, size 2288), each called through its own PLT stub and its own JUMP_SLOT (`readelf -rW` on the store file,
+// build ID b243509c...):
+//   R_AARCH64_JUMP_SLOT 0x36c0018 -> 0x11fce34 _ZN10NRadEngine8NRadGame8CR15GameC1ERKNS_9CMainArgsE   (stub 0xed1260, one `bl`: Main_)
+//   R_AARCH64_JUMP_SLOT 0x36e7828 -> 0x11fce34 _ZN10NRadEngine8NRadGame8CR15GameC2ERKNS_9CMainArgsE   (stub 0xf20280, three `bl`:
+//                                                                  CR15NetDedicatedServer, CR15NetServer, CR15NetLanServer)
+// An Itanium constructor takes the object in x0 and the CMainArgs reference in x1 and returns nothing. The match-tags default
+// (combat/match_tags.h) wraps both.
+inline constexpr const char* kCR15GameC1Symbol = "_ZN10NRadEngine8NRadGame8CR15GameC1ERKNS_9CMainArgsE";
+inline constexpr const char* kCR15GameC2Symbol = "_ZN10NRadEngine8NRadGame8CR15GameC2ERKNS_9CMainArgsE";
+using CR15GameCtorSig = void(void* game, const void* main_args);
+struct LibR15CR15GameC1Tag {};
+struct LibR15CR15GameC2Tag {};
+using LibR15CR15GameC1Thunk = CallbackThunk<LibR15CR15GameC1Tag, CR15GameCtorSig>;
+using LibR15CR15GameC2Thunk = CallbackThunk<LibR15CR15GameC2Tag, CR15GameCtorSig>;
+
+inline GotTarget LibR15CR15GameC1() {
+  return {kLibR15, kCR15GameC1Symbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36c0018ULL};
+}
+inline GotTarget LibR15CR15GameC2() {
+  return {kLibR15, kCR15GameC2Symbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e7828ULL};
+}
+
+// What the match-tags default relies on in the store file (#2090; got_pinned_test.cpp checks every line against the real libr15).
+// Both symbols are defined at kCR15GameVaddr. The constructor stores two 16-byte literals into the object (x27 = this + 0x7b08):
+//   0x11fd204 ldr q1, [0x2b9fe40]  -> 0x11fd21c str q1, [x27, #0x10fc]   = this+0x8c04, {0, 0x1003, 1, 0}: the flags at this+0x8c08
+//   0x11fd27c ldr q0, [0x2b9fe60]  -> 0x11fd28c str q0, [x27, #0x11dc]   = this+0x8ce4, {0x1003, 1, 0, 0xa}: the flags at this+0x8ce4
+// The calls: Main_ reaches C1 once (0xfb02ec); C2 is reached by CR15NetDedicatedServer, CR15NetServer and CR15NetLanServer.
+inline constexpr std::uint64_t kCR15GameVaddr = 0x11fce34ULL;
+inline constexpr std::uint64_t kCR15GameC1Stub = 0xed1260ULL;
+inline constexpr std::uint64_t kCR15GameC2Stub = 0xf20280ULL;
+inline constexpr std::uint64_t kCR15GameC1CallSite = 0xfb02ecULL;
+inline constexpr std::uint64_t kCR15GameC2CallSites[3] = {0x124b1b8ULL, 0x124b1e4ULL, 0x12ae1dcULL};
+inline constexpr std::uint64_t kCR15GameCurrentLiteral = 0x2b9fe40ULL;  // 16 bytes: 0, 0x1003, 1, 0 (32-bit words)
+inline constexpr std::uint64_t kCR15GamePendingLiteral = 0x2b9fe60ULL;  // 16 bytes: 0x1003, 1, 0, 0xa
+inline constexpr std::uint32_t kCR15GameCurrentLiteralWords[4] = {0, 0x1003, 1, 0};
+inline constexpr std::uint32_t kCR15GamePendingLiteralWords[4] = {0x1003, 1, 0, 0xa};
+struct CR15GameWord {
+  std::uint64_t vaddr;
+  std::uint32_t word;
+};
+inline constexpr CR15GameWord kCR15GameSettingsCode[] = {
+    {0x11fce60, 0x528f610a},  // mov w10, #0x7b08
+    {0x11fce70, 0x8b0a001b},  // add x27, x0, x10
+    {0x11fd200, 0xd000cd08},  // adrp x8, 0x2b9f000
+    {0x11fd204, 0x3dc39101},  // ldr q1, [x8, #0xe40]
+    {0x11fd208, 0x52821f89},  // mov w9, #0x10fc
+    {0x11fd21c, 0x3ca96b61},  // str q1, [x27, x9]
+    {0x11fd278, 0xd000cd08},  // adrp x8, 0x2b9f000
+    {0x11fd27c, 0x3dc39900},  // ldr q0, [x8, #0xe60]
+    {0x11fd280, 0x52823b88},  // mov w8, #0x11dc
+    {0x11fd28c, 0x3ca86b60},  // str q0, [x27, x8]
+};
+
 // libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,
 // `readelf -rW` on the pinned image; the PLT stub at 0xf30730 loads it).
 inline GotTarget LibR15FillResourceFileRequest() {

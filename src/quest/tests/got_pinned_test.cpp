@@ -288,6 +288,8 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15GetInputDeviceCapabilities(), "libr15 vrapi_GetInputDeviceCapabilities JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15EnumerateInputDevices(), "libr15 vrapi_EnumerateInputDevices JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetInputTrackingState(), "libr15 vrapi_GetInputTrackingState JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15CR15GameC1(), "libr15 CR15Game::CR15Game (C1) JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15CR15GameC2(), "libr15 CR15Game::CR15Game (C2) JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
@@ -665,6 +667,82 @@ int main(int argc, char** argv) {
                    static_cast<unsigned long long>(pinned::kShowSystemUICallSite));
       for (const std::uint64_t at : callers) std::fprintf(stderr, "  caller %#llx\n", static_cast<unsigned long long>(at));
       QCHECK(false);
+    }
+  }
+
+  // The combat name tags default (#2090): both CR15Game constructor symbols are defined at the one address pinned_targets.h says, each
+  // PLT stub loads its hooked slot and has exactly the callers it lists in the executable segments, the two literals hold the
+  // stock settings, and the constructor's own code stores them at the offsets combat/match_tags.h writes (x27 = this + 0x7b08,
+  // so this+0x8c04 and this+0x8ce4: the flags words at +0x8c08 and +0x8ce4).
+  for (const char* symbol : {pinned::kCR15GameC1Symbol, pinned::kCR15GameC2Symbol}) {
+    if (DynamicSymbolValue(r15, symbol) != pinned::kCR15GameVaddr) {
+      std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", symbol, static_cast<unsigned long long>(pinned::kCR15GameVaddr));
+      QCHECK(false);
+    }
+  }
+  {
+    struct Constructor {
+      const char* name;
+      std::uint64_t stub;
+      std::uint64_t slot;
+      std::vector<std::uint64_t> callSites;
+    };
+    const Constructor constructors[] = {
+        {"C1", pinned::kCR15GameC1Stub, pinned::LibR15CR15GameC1().slotVaddr.value_or(0), {pinned::kCR15GameC1CallSite}},
+        {"C2", pinned::kCR15GameC2Stub, pinned::LibR15CR15GameC2().slotVaddr.value_or(0),
+         std::vector<std::uint64_t>(std::begin(pinned::kCR15GameC2CallSites), std::end(pinned::kCR15GameC2CallSites))},
+    };
+    for (const Constructor& c : constructors) {
+      std::uint32_t stub[4] = {};
+      std::memcpy(stub, static_cast<const unsigned char*>(r15.mem) + c.stub, sizeof(stub));
+      const std::uint64_t immlo = (stub[0] >> 29) & 0x3U;
+      const std::uint64_t immhi = (stub[0] >> 5) & 0x7FFFFU;
+      const std::uint64_t adrpPage = (c.stub & ~0xFFFULL) + (((immhi << 2) | immlo) << 12);
+      const std::uint64_t ldrOffset = ((stub[1] >> 10) & 0xFFFU) * 8;
+      if ((stub[0] & 0x9F00001FU) != 0x90000010U || adrpPage != (c.slot & ~0xFFFULL) || (stub[1] & 0xFFC003FFU) != 0xF9400211U ||
+          ldrOffset != (c.slot & 0xFFFU) || stub[3] != 0xD61F0220U) {
+        std::fprintf(stderr, "libr15 CR15Game %s PLT stub at %#llx does not load the slot %#llx\n", c.name,
+                     static_cast<unsigned long long>(c.stub), static_cast<unsigned long long>(c.slot));
+        QCHECK(false);
+      }
+      std::vector<std::uint64_t> callers;
+      for (const Elf64_Phdr& ph : r15.phdrs) {
+        if (ph.p_type != PT_LOAD || (ph.p_flags & PF_X) == 0) continue;
+        for (std::uint64_t at = ph.p_vaddr; at + 4 <= ph.p_vaddr + ph.p_filesz; at += 4) {
+          std::uint32_t word = 0;
+          std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + at, sizeof(word));
+          if ((word & 0x7c000000U) != 0x14000000U) continue;  // b or bl
+          std::int64_t imm = static_cast<std::int64_t>(word & 0x03ffffffU);
+          if ((imm & 0x02000000) != 0) imm -= 0x04000000;
+          if (at + static_cast<std::uint64_t>(imm * 4) == c.stub) callers.push_back(at);
+        }
+      }
+      if (callers != c.callSites) {
+        std::fprintf(stderr, "libr15 CR15Game %s stub has %zu b/bl callers, not the %zu pinned\n", c.name, callers.size(),
+                     c.callSites.size());
+        for (const std::uint64_t at : callers) std::fprintf(stderr, "  caller %#llx\n", static_cast<unsigned long long>(at));
+        QCHECK(false);
+      }
+    }
+    std::uint32_t current[4] = {};
+    std::uint32_t pending[4] = {};
+    std::memcpy(current, static_cast<const unsigned char*>(r15.mem) + pinned::kCR15GameCurrentLiteral, sizeof(current));
+    std::memcpy(pending, static_cast<const unsigned char*>(r15.mem) + pinned::kCR15GamePendingLiteral, sizeof(pending));
+    if (std::memcmp(current, pinned::kCR15GameCurrentLiteralWords, sizeof(current)) != 0 ||
+        std::memcmp(pending, pinned::kCR15GamePendingLiteralWords, sizeof(pending)) != 0) {
+      std::fprintf(stderr, "libr15 CR15Game settings literals at %#llx and %#llx are not the stock {0, 0x1003, 1, 0} and {0x1003, 1, 0, 0xa}\n",
+                   static_cast<unsigned long long>(pinned::kCR15GameCurrentLiteral),
+                   static_cast<unsigned long long>(pinned::kCR15GamePendingLiteral));
+      QCHECK(false);
+    }
+    for (const pinned::CR15GameWord& w : pinned::kCR15GameSettingsCode) {
+      std::uint32_t word = 0;
+      std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + w.vaddr, sizeof(word));
+      if (word != w.word) {
+        std::fprintf(stderr, "libr15 CR15Game constructor word at %#llx is %#x, not the pinned %#x\n",
+                     static_cast<unsigned long long>(w.vaddr), word, w.word);
+        QCHECK(false);
+      }
     }
   }
 
