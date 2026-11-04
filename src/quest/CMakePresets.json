@@ -37,6 +37,20 @@
             }
         },
         {
+            "name": "quest-obb-extract",
+            "displayName": "Quest store OBB extractor (nettle) with the host compiler, not the NDK",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../../build/quest-obb-extract",
+            "cacheVariables": {
+                "NEVR_QUEST_HOST_TOOLS": "ON",
+                "NEVR_QUEST_OBB_EXTRACT": "ON",
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
+                "NEVR_HOST_PREFIX": "${sourceDir}/../../build/quest-host-vcpkg/x64-linux",
+                "NEVR_HOST_JSON_INCLUDE": "${sourceDir}/../../build/quest-host-vcpkg/x64-linux/include"
+            }
+        },
+        {
             "name": "quest-host-base",
             "hidden": true,
             "displayName": "Quest host tests: the host g++, no NDK (src/quest/host_tests, entered from src/quest/host)",
@@ -44,6 +58,7 @@
             "cacheVariables": {
                 "NEVR_QUEST_HOST_TOOLS": "ON",
                 "NEVR_QUEST_HOST_TESTS": "ON",
+                "NEVR_QUEST_OBB_EXTRACT": "ON",
                 "CMAKE_C_COMPILER": "gcc",
                 "CMAKE_CXX_COMPILER": "g++",
                 "NEVR_HOST_PREFIX": "${sourceDir}/../../build/quest-host-vcpkg/x64-linux",
@@ -157,6 +172,18 @@
             "displayName": "Quest host tests: test-quest-hooks-pinned",
             "inherits": "quest-host-base",
             "binaryDir": "${sourceDir}/../../build/quest-host-hooks-pinned"
+        },
+        {
+            "name": "quest-host-obb",
+            "displayName": "Quest host tests: test-quest-obb",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-obb"
+        },
+        {
+            "name": "quest-host-obb-pinned",
+            "displayName": "Quest host tests: test-quest-obb-pinned",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-obb-pinned"
         }
     ],
     "buildPresets": [
@@ -174,6 +201,14 @@
             "name": "quest-patcher",
             "displayName": "Build the Quest host tools",
             "configurePreset": "quest-patcher"
+        },
+        {
+            "name": "quest-obb-extract",
+            "displayName": "Build the Quest store OBB extractor",
+            "configurePreset": "quest-obb-extract",
+            "targets": [
+                "nevr_quest_obb_extract"
+            ]
         },
         {
             "name": "quest-host-data",
@@ -306,6 +341,20 @@
             "configurePreset": "quest-host-hooks",
             "targets": [
                 "host-tests-hooks-jni"
+            ]
+        },
+        {
+            "name": "quest-host-obb",
+            "configurePreset": "quest-host-obb",
+            "targets": [
+                "host-tests-obb"
+            ]
+        },
+        {
+            "name": "quest-host-obb-pinned",
+            "configurePreset": "quest-host-obb-pinned",
+            "targets": [
+                "host-tests-obb-pinned"
             ]
         }
     ],
@@ -502,6 +551,21 @@
             "filter": {
                 "include": {
                     "label": "^hooks-jni$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-obb",
+            "configurePreset": "quest-host-obb",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^obb$"
                 }
             }
         }

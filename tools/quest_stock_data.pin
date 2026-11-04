@@ -1,0 +1,12 @@
+# The stock game data of the Quest store build 4987566: the store OBB the build accepts and the exact tree it holds
+# (docs/adr/0042-quest-store-variant-built-from-store-apk-and-obb.md). `just quest-stock-data` extracts the OBB and refuses a
+# result that differs from this file in any file, size or digest.
+#   obb_sha256 <64 hex>
+#   obb_size <bytes>
+#   file <64 hex> <bytes> <path below the extraction directory>
+obb_sha256 8020d1791c8806b3c9592806d2476c9b9c9771cbfcbce112914b357b66180607
+obb_size 946094131
+file 762c16ae58c9bc70eee071d8c0e2e8fc0408d1f0691032164029294c5cb7ec48 828213 _data/5932408047/rad15/android/manifests/48037dc70b0ecab2
+file 14d26efc718a8f8135039e47bd1321cbb556fc4181bf95ffcb5ef59c406a5a3b 929620177 _data/5932408047/rad15/android/packages/48037dc70b0ecab2_0
+file 26becc4814f88436b522a36318463eff60c15e4337f0912d7f21237b17754ebe 1461 _data/5932408047/rad15/android/manifests/2b47aab238f60515
+file dd0a1087acfe15b0563c17298963b707f949ad4efb42d0ae85b8faa0b4b47e12 14995192 _data/5932408047/rad15/android/packages/2b47aab238f60515_0
