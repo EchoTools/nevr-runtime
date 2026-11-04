@@ -190,10 +190,8 @@ PROGRAMS = {
 
 # ADR 0041, "Finding a violation", V1: a compiler or linker command.
 COMPILER = re.compile(
-    r"(^|[^[:alnum:]_.+-])(g\+\+|gcc|clang\+\+|clang|ndk-build|windres|x86_64-w64-mingw32-(gcc|g\+\+|ld|ar|windres)"
-    r"|aarch64-linux-android[0-9]*-clang(\+\+)?)($|[^[:alnum:]_+-])".replace("[[:alnum:]_.+-]", "[A-Za-z0-9_.+-]").replace(
-        "[[:alnum:]_+-]", "[A-Za-z0-9_+-]"
-    ),
+    r"(^|[^A-Za-z0-9_.+-])(g\+\+|gcc|clang\+\+|clang|ndk-build|windres|x86_64-w64-mingw32-(gcc|g\+\+|ld|ar|windres)"
+    r"|aarch64-linux-android[0-9]*-clang(\+\+)?)($|[^A-Za-z0-9_+-])",
     re.M,
 )
 
