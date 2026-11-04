@@ -5,6 +5,7 @@
 
 #include "abi/echovr.h"
 #include "runtime/server/telemetry_snapshot.h"
+#include "telemetry/v2/echo_arena.pb.h"
 
 // The players of a net game, read the way the game's own /session writer reads them (echovr.exe
 // 34.4.631547.1, players 0x140156380-0x140157800, identity 0x1401b3780-0x1401b3e00). Pure: it reads the
@@ -28,6 +29,21 @@ inline uint8_t EntrantSlot(uint16_t word) {
 }
 inline uint16_t EntrantTeam(uint16_t word) {
   return static_cast<uint16_t>((word >> nevr_game_offsets::ENTRANT_TEAM_SHIFT) & nevr_game_offsets::ENTRANT_TEAM_MASK);
+}
+
+// The stream's role for a player's team (EntrantTeam): 0 blue, 1 orange, 2 spectator, as /session names
+// them (0x14015645d-0x140156488). The roster, joins and team switches all map through this.
+inline telemetry::v2::Role RoleFromTeam(uint16_t team) {
+  switch (team) {
+    case 0:
+      return telemetry::v2::ROLE_BLUE_TEAM;
+    case 1:
+      return telemetry::v2::ROLE_ORANGE_TEAM;
+    case 2:
+      return telemetry::v2::ROLE_SPECTATOR;
+    default:
+      return telemetry::v2::ROLE_UNSPECIFIED;
+  }
 }
 
 // One stat of one slot: `value`, or `value / count` when the entry's type is the average type, and 0 for

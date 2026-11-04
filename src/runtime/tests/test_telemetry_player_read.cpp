@@ -112,6 +112,14 @@ TEST(TelemetryEntrantWord, SlotIsTheLowFiveBitsAndTeamIsBitsTenToTwelve) {
   EXPECT_EQ(nevr_telemetry_player::EntrantTeam(0x03E0), 0);
 }
 
+TEST(TelemetryRole, ATeamMapsToItsRoleAndAnythingElseToNone) {
+  EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(0), telemetry::v2::ROLE_BLUE_TEAM);
+  EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(1), telemetry::v2::ROLE_ORANGE_TEAM);
+  EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(2), telemetry::v2::ROLE_SPECTATOR);
+  EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(3), telemetry::v2::ROLE_UNSPECIFIED);
+  EXPECT_EQ(nevr_telemetry_player::RoleFromTeam(4), telemetry::v2::ROLE_UNSPECIFIED);
+}
+
 TEST(TelemetryPlayerRead, EachStatIsReadFromItsOwnEntryAtTheSlot) {
   NetGame ng;
   ng.SetEntrants({Word(3, 0)});

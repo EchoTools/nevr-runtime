@@ -931,6 +931,7 @@ void TelemetryStreamer::DetectEvents(const TelemetrySnapshot& curr, const Teleme
       auto* ev = frame->add_events();
       auto* pj = ev->mutable_player_joined();
       pj->set_slot(i);
+      pj->set_role(nevr_telemetry_player::RoleFromTeam(curr.playerInfo[i].teamIndex));
       pj->set_account_number(curr.playerInfo[i].accountId);
       pj->set_display_name(curr.playerInfo[i].displayName);
     } else if (!currPresent && prevPresent) {
@@ -943,7 +944,8 @@ void TelemetryStreamer::DetectEvents(const TelemetrySnapshot& curr, const Teleme
         auto* ev = frame->add_events();
         auto* sw = ev->mutable_player_switched_team();
         sw->set_player_slot(i);
-        sw->set_new_role(static_cast<telemetry::v2::Role>(curr.playerInfo[i].teamIndex));
+        sw->set_new_role(nevr_telemetry_player::RoleFromTeam(curr.playerInfo[i].teamIndex));
+        sw->set_prev_role(nevr_telemetry_player::RoleFromTeam(prev.playerInfo[i].teamIndex));
       }
 
       // Detect stat changes (stuns, blocks, saves, etc.)
@@ -1048,8 +1050,7 @@ bool TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
     entry->set_slot(i);
     entry->set_account_number(pi.accountId);
     entry->set_display_name(pi.displayName);
-    // teamIndex: 0=blue->ROLE_BLUE_TEAM(1), 1=orange->ROLE_ORANGE_TEAM(2), 2=spec->ROLE_SPECTATOR(3)
-    entry->set_role(static_cast<telemetry::v2::Role>(pi.teamIndex + 1));
+    entry->set_role(nevr_telemetry_player::RoleFromTeam(pi.teamIndex));
   }
 
   std::string serialized;
