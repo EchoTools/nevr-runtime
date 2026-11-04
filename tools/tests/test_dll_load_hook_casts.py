@@ -7,6 +7,7 @@ operand. The file's conversions are static_cast and reinterpret_cast.
 
 import pathlib
 import re
+import tempfile
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -47,18 +48,38 @@ def c_style_casts(text):
 
 
 class CStyleCastInDllLoadHook(unittest.TestCase):
-    def test_the_file_has_no_c_style_cast(self):
-        path = REPO / TARGET
-        self.assertTrue(path.is_file(), "missing %s" % TARGET)
+    def read_source(self, path, label):
+        """The text of the source to scan: the file must exist and be the real file, not a stub."""
+        self.assertTrue(path.is_file(), "missing %s" % label)
         text = path.read_text(encoding="utf-8")
-        self.assertGreater(len(text), 1000, "%s is too short to be the real file" % TARGET)
+        self.assertGreater(len(text), 1000, "%s is too short to be the real file" % label)
+        return text
+
+    def assert_no_c_style_cast(self, text, label):
         hits = c_style_casts(text)
         self.assertEqual(
             [],
             hits,
             "C-style casts in %s (use static_cast or reinterpret_cast):\n%s"
-            % (TARGET, "\n".join("  %s:%d: %s" % (TARGET, n, s) for n, s in hits)),
+            % (label, "\n".join("  %s:%d: %s" % (label, n, s) for n, s in hits)),
         )
+
+    def test_the_file_has_no_c_style_cast(self):
+        text = self.read_source(REPO / TARGET, TARGET)
+        self.assert_no_c_style_cast(text, TARGET)
+
+    def test_the_source_guards_refuse_a_missing_or_stub_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = pathlib.Path(tmp) / "stub.cpp"
+            stub.write_text("int x;\n", encoding="utf-8")
+            with self.assertRaises(AssertionError):
+                self.read_source(stub, "stub.cpp")
+            with self.assertRaises(AssertionError):
+                self.read_source(pathlib.Path(tmp) / "missing.cpp", "missing.cpp")
+
+    def test_the_assertion_fails_on_a_cast(self):
+        with self.assertRaises(AssertionError):
+            self.assert_no_c_style_cast("x = (char)c;\n", "fixture.cpp")
 
     def test_matches_each_cast_shape(self):
         for text in (
@@ -67,6 +88,7 @@ class CStyleCastInDllLoadHook(unittest.TestCase):
             "x = (int) y;",
             "out = (char)(c + 32);",
             "p = (const char*)q;",
+            "c = '\\\"'; p = (char)c; s = \"ok\";",
         ):
             self.assertEqual(1, len(c_style_casts(text)), text)
 
