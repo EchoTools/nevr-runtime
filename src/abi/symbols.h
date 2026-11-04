@@ -272,8 +272,10 @@ constexpr SymbolId LobbySessionSuccessV5 = 0x6d4de3650ee3110f;
 // CSymbol64("SNSLobbySettingsResponse"); the local-event form of the same message is Symbols::LobbySettingsResponse.
 // The dedicated server reads its ServerDB socket itself and relays this one (server/lobby_settings_relay.h, #905).
 constexpr SymbolId LobbySettingsResponse = 0x5b71b22a4483bda5;
-constexpr SymbolId GameClientMsg2 = 0xa88cb5d166cc2ca;
-constexpr SymbolId GameClientMsg3 = 0xa7a9e5a70b2429db;
+// CSymbol64("SNSServerSettingsResponsev2") and CSymbol64("SNSRewardsSettings"); the names follow the file's
+// SNS-less convention (LobbySettingsResponse above). tools/tests/test_abi_symbols.py holds each to its string.
+constexpr SymbolId ServerSettingsResponsev2 = 0xa88cb5d166cc2ca;
+constexpr SymbolId RewardsSettings = 0xa7a9e5a70b2429db;
 
 }  // namespace Tcp
 
