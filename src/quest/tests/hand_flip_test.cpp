@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <pthread.h>
+#include <time.h>
 
 #include <atomic>
 #include <cmath>
@@ -433,6 +434,7 @@ void AnAwaitingThreadSeesTheFinishedStart() {
   g_awaitResult.store(-1);
   g_flagSeenByAwait.store(-1);
   hf::g_startSeam.store(&BlockingSeam);
+  hf::g_startWaitMs.store(5000);  // long: the waiter must be woken by the start finishing, not by this timeout
   pthread_t starter, waiter;
   QCHECK(pthread_create(&starter, nullptr, &StartThread, const_cast<char*>(dir.c_str())) == 0);
   QCHECK(WaitFor(g_seamEntered, 1));
@@ -440,10 +442,15 @@ void AnAwaitingThreadSeesTheFinishedStart() {
   QCHECK(pthread_create(&waiter, nullptr, &AwaitThread, nullptr) == 0);
   QCHECK(WaitFor(hf::g_startWaiters, 1));         // it is waiting inside AwaitStart
   QCHECK(g_awaitResult.load() == -1);
+  timespec before, after;
+  clock_gettime(CLOCK_MONOTONIC, &before);
   g_seamReleased.store(1);
   pthread_join(starter, nullptr);
   pthread_join(waiter, nullptr);
+  clock_gettime(CLOCK_MONOTONIC, &after);
+  const long wokeAfterMs = (after.tv_sec - before.tv_sec) * 1000L + (after.tv_nsec - before.tv_nsec) / 1000000L;
   QCHECK(g_awaitResult.load() == 1 && g_flagSeenByAwait.load() == 1);
+  QCHECK(wokeAfterMs < 2000);  // woken by the start, not by the 5 s timeout
   QCHECK(hf::g_startWaiters.load() == 0);
   hf::g_startSeam.store(nullptr);
   RemoveDirectory(dir);
