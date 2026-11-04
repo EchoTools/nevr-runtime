@@ -1248,6 +1248,14 @@ void AReReadOfTheMenuServesTheCurrentHandFlipChoice() {
   hf::SetFromMenu(0);
   Read(path, kMenuDocument);
   QCHECK(g_parsed.size() == 5 && g_parsed[4].find(off) != std::string::npos && g_parsed[4] == g_parsed[0]);
+  // The settings document has no row for the choice to start: a change of the choice does not make a re-read rewrite it again.
+  const char* const settingsPath = "/d/json/r14/config/gamesettings_config.json";
+  Read(settingsPath, kSettingsDocument);
+  const unsigned long long rewritten = tm::CurrentTotals().jsonRewrites;
+  hf::SetFromMenu(1);
+  Read(settingsPath, kSettingsDocument);
+  QCHECK(g_parsed.size() == 7 && g_parsed[6] == g_parsed[5] && tm::CurrentTotals().jsonRewrites == rewritten);
+  hf::SetFromMenu(0);
   hf::Poll();
   RemoveHandFlipFile(dir);
   RemoveSettingsDirectory(dir);
