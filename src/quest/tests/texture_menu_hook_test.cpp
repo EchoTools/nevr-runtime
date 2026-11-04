@@ -1104,10 +1104,11 @@ void RemoveHandFlipFile(const std::string& root) {
   std::remove((root + "/RAD/LoneEcho/" + hf::kFileName + ".tmp").c_str());
 }
 
-// The first delivery is the load: with no stored choice the carrier bit is the default (Off) whatever the game's settings file held,
-// so a bit the game saved for its own fullscreen reads as nothing. A later delivery with another bit is the player's choice, and
-// the flag the tracking handler reads takes it at once: no restart, no re-enumeration, no poll. The choice is written by the poller,
-// as the versioned file, and the texture marker is not touched. A redelivery of the same bit is no choice.
+// The game's own value of the carrier bit is 1, and that is Off. The first delivery is the load: with no stored choice the bit is
+// the default (Off), which is the value the game holds, so nothing is written to it and the poller says so once
+// (hand_flip_carrier before=1 after=1). A later delivery with another bit is the player's choice, and the flag the tracking handler
+// reads takes it at once: no restart, no re-enumeration, no poll. The choice is written by the poller, as the versioned file, and the
+// texture marker is not touched. A redelivery of the same bit is no choice.
 void AMenuChangeOfTheHandFlipRowAppliesLiveAndIsRemembered() {
   const std::string dir = MakeSettingsDirectory(nullptr);
   QCHECK(!dir.empty());
@@ -1118,28 +1119,79 @@ void AMenuChangeOfTheHandFlipRowAppliesLiveAndIsRemembered() {
   Eye();
   alignas(8) unsigned char settings[kSettingsBytes] = {};
   SetMsaa(settings, 1);
-  SetFlags(settings, 0x5);  // the game's saved flags: fullscreen set, TAA set
+  SetFlags(settings, 0x5);  // the game's own flags: bit 0 set (the game's value), TAA set
   Deliver(settings);
   QCHECK(!hf::Enabled() && hf::CurrentBy() == hf::kByDefault);
-  QCHECK(GetFlags(settings) == 0x4 && g_applySawFlags == 0x4);  // bit 0 is the toggle's default; the other bits are the game's
+  QCHECK(GetFlags(settings) == 0x5 && g_applySawFlags == 0x5);  // Off is the game's own value: nothing written to its bit
   Deliver(settings);                                             // another setting changed: no choice
-  QCHECK(!hf::Enabled() && hf::Poll() == 1);                     // the start line only; nothing to save
+  QCHECK(!hf::Enabled() && hf::Poll() == 2);                     // the start line and the carrier line; nothing to save
+  QCHECK(LineWith("hand_flip_carrier").find("\"before\":1,\"after\":1,") != std::string::npos);
 
-  SetFlags(settings, GetFlags(settings) | hf::kCarrierBit);  // the player picks On
+  SetFlags(settings, GetFlags(settings) & ~hf::kCarrierBit);  // the player picks On: the bit is cleared
   Deliver(settings);
   QCHECK(hf::Enabled() && hf::CurrentBy() == hf::kByMenu);   // live, before any poll
-  QCHECK(GetFlags(settings) == 0x5 && g_applySawFlags == 0x5);  // the game's own function sees what the menu holds
+  QCHECK(GetFlags(settings) == 0x4 && g_applySawFlags == 0x4);  // the game's own function sees what the menu holds
   QCHECK(hf::Poll() == 1);
   QCHECK(ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":1})");
   QCHECK(ReadMarker(dir).empty() && tm::CurrentTotals().markerWrites == 0);  // the texture marker is not touched
   Deliver(settings);                                         // redelivered unchanged
   QCHECK(hf::Enabled() && hf::Poll() == 0);
 
-  SetFlags(settings, GetFlags(settings) & ~hf::kCarrierBit);  // and Off again
+  SetFlags(settings, GetFlags(settings) | hf::kCarrierBit);  // and Off again: the bit is set
   Deliver(settings);
   QCHECK(!hf::Enabled());
   QCHECK(hf::Poll() == 1 && ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":0})");
   QCHECK(tq::RequestedLevelValue() == static_cast<int>(tq::Level::kLow));  // and the texture control did not move
+  RemoveHandFlipFile(dir);
+  RemoveSettingsDirectory(dir);
+}
+
+// A game whose own file held the bit clear (not the game's value) is put on Off at the load: the one write a player who never
+// touched the toggle can get, and it is logged.
+void ADefaultStartPutsAClearedBitBackToTheGamesValue() {
+  const std::string dir = MakeSettingsDirectory(nullptr);
+  QCHECK(!dir.empty());
+  Reset(tq::Level::kLow);
+  Capture log;
+  *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
+  g_appDataDir = dir;
+  Eye();
+  alignas(8) unsigned char settings[kSettingsBytes] = {};
+  SetMsaa(settings, 1);
+  SetFlags(settings, 0x4);
+  Deliver(settings);
+  QCHECK(!hf::Enabled() && GetFlags(settings) == 0x5 && g_applySawFlags == 0x5);
+  QCHECK(hf::Poll() == 2);
+  QCHECK(LineWith("hand_flip_carrier").find("\"before\":0,\"after\":1,") != std::string::npos);
+  QCHECK(!hf::Enabled() && ReadHandFlipFile(dir).empty());  // a default is never saved
+  RemoveSettingsDirectory(dir);
+}
+
+// The game can put the stock settings back without the menu (UpdateSettings re-reads the settings JSON, InitCI copies the UI rows
+// back). The stock bit is 1, which is Off: a restore after On reads as the player turning it Off, is saved once, and a further
+// delivery of the same bit is no change.
+void AStockRestoreAfterOnReadsAsOffAndIsSavedOnce() {
+  const std::string dir = MakeSettingsDirectory(nullptr);
+  QCHECK(!dir.empty());
+  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
+  ResetDocuments();
+  Capture log;
+  *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
+  g_appDataDir = dir;
+  Eye();
+  alignas(8) unsigned char settings[kSettingsBytes] = {};
+  SetMsaa(settings, 1);
+  SetFlags(settings, 0x5);
+  Deliver(settings);  // the load: On, so the bit is cleared
+  QCHECK(hf::Enabled() && GetFlags(settings) == 0x4 && g_applySawFlags == 0x4);
+  QCHECK(hf::Poll() == 2);  // the start line and the carrier line (before=1 after=0)
+  QCHECK(LineWith("hand_flip_carrier").find("\"before\":1,\"after\":0,") != std::string::npos);
+  SetFlags(settings, 0x5);  // the game restores its stock flags
+  Deliver(settings);
+  QCHECK(!hf::Enabled() && hf::CurrentBy() == hf::kByMenu);
+  QCHECK(hf::Poll() == 1 && ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":0})");
+  Deliver(settings);  // and delivers it again
+  QCHECK(!hf::Enabled() && hf::Poll() == 0);
   RemoveHandFlipFile(dir);
   RemoveSettingsDirectory(dir);
 }
@@ -1158,14 +1210,14 @@ void AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain() {
   QCHECK(hf::Started() && hf::Enabled() && hf::CurrentBy() == hf::kByPlayerMarker);
   Read("/d/json/r14/config/uisettings/menu_settings.json", kMenuDocument);
   QCHECK(g_parsed.size() == 1);
-  QCHECK(g_parsed[0].find(R"("path":"graphics|fullscreen","name":"Controller Hand Flip","idx":1,"type":"STRING ARRAY","values":["Off","On"])") !=
+  QCHECK(g_parsed[0].find(R"("path":"graphics|fullscreen","name":"Controller Hand Flip","idx":0,"type":"STRING ARRAY","values":["On","Off"])") !=
          std::string::npos);
   alignas(8) unsigned char settings[kSettingsBytes] = {};
   SetMsaa(settings, 1);
-  SetFlags(settings, 0);  // the game's file held nothing for it
+  SetFlags(settings, 1);  // the game's own value
   Deliver(settings);
-  QCHECK(GetFlags(settings) == 1 && g_applySawFlags == 1 && hf::Enabled());
-  QCHECK(hf::Poll() == 1);  // the start line, and nothing saved
+  QCHECK(GetFlags(settings) == 0 && g_applySawFlags == 0 && hf::Enabled());
+  QCHECK(hf::Poll() == 2);  // the start line and the carrier line, and nothing saved
   QCHECK(ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":1})");
   RemoveHandFlipFile(dir);
   RemoveSettingsDirectory(dir);
@@ -1241,6 +1293,8 @@ int main() {
   AConfiguredLowOutranksTheReferenceRule();
   APlayersMarkerOutranksTheReferenceRule();
   AMenuChangeOfTheHandFlipRowAppliesLiveAndIsRemembered();
+  ADefaultStartPutsAClearedBitBackToTheGamesValue();
+  AStockRestoreAfterOnReadsAsOffAndIsSavedOnce();
   AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain();
   TheTrackingSideCanResolveTheStartThroughTheControl();
   TheSettingsDocumentStopsHidingTheHandFlipSetting();

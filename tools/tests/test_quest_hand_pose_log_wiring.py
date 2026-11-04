@@ -130,8 +130,16 @@ class TheInterimRollIsTheOnlyWriteAndIsMarked(unittest.TestCase):
         apply = extract_braced_function(hook, "void HandleApply(")
         self.assertIn("HandleHandFlipDelivery(const_cast<unsigned char*>(settings));", apply)
         delivery = extract_braced_function(hook, "void HandleHandFlipDelivery(")
-        self.assertIn("hand_flip::SetFromMenu(carried)", delivery)
+        # The game's own value of the bit is 1 and that is Off: a change reads as the inverse of the bit, and the load writes the
+        # inverse of the choice, so a player who never turns the toggle on leaves the bit as the game holds it.
+        self.assertIn("hand_flip::SetFromMenu(hand_flip::FlipFor(carried))", delivery)
+        self.assertIn("hand_flip::BitFor(hand_flip::Current())", delivery)
+        self.assertIn("hand_flip::RecordCarrier(before, carried)", delivery)
         self.assertIn("hand_flip::kCarrierBit", delivery)
+        self.assertRegex(header, r"kMenuLabels\[kMenuValueCount\] = \{\"On\", \"Off\"\}")
+        self.assertRegex(header, r"BitFor\(int flip\) noexcept \{ return flip != 0 \? 0 : 1; \}")
+        rewrite = extract_braced_function(hook, "Served RewriteDocument(")
+        self.assertIn("hand_flip::MenuIndexFor(", rewrite)
 
     def test_every_site_of_the_interim_names_the_issue_that_tracks_it(self):
         sites = (
@@ -141,6 +149,7 @@ class TheInterimRollIsTheOnlyWriteAndIsMarked(unittest.TestCase):
             "src/quest/sentinel/texture_menu.cpp",
             "src/quest/sentinel/texture_menu.h",
             "src/quest/sentinel/texture_menu_hook.cpp",
+            "src/quest/sentinel/entry.cpp",
             "src/quest/tests/hand_flip_test.cpp",
             "docs/design/2026-11-02-quest-hand-flip-toggle.md",
         )

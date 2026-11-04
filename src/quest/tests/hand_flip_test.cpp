@@ -335,10 +335,40 @@ void TheMenuRowIsBoundToTheCarrierBitAndNamedForThePlayer() {
   QCHECK(std::strcmp(hf::kMenuPath, "graphics|fullscreen") == 0);
   QCHECK(hf::kCarrierOffset == 0 && hf::kCarrierBit == 1U);  // SR15GfxSettings flags, bit 0
   QCHECK(std::strcmp(hf::kMenuName, "Controller Hand Flip") == 0);
-  QCHECK(hf::kMenuValueCount == 2 && std::strcmp(hf::kMenuLabels[0], "Off") == 0 && std::strcmp(hf::kMenuLabels[1], "On") == 0);
+  QCHECK(hf::kMenuValueCount == 2 && std::strcmp(hf::kMenuLabels[0], "On") == 0 && std::strcmp(hf::kMenuLabels[1], "Off") == 0);
   QCHECK(std::strcmp(hf::kFileName, "nevr_hand_flip.json") == 0 && hf::kFileVersion == 1);
   QCHECK(std::strcmp(hf::ByName(hf::kByDefault), "default") == 0 && std::strcmp(hf::ByName(hf::kByPlayerMarker), "player_marker") == 0 &&
          std::strcmp(hf::ByName(hf::kByMenu), "menu") == 0);
+}
+
+// The game's own value of the bit is 1 and that is Off: the bit and the choice are each other's inverse, and the row lists On first.
+void TheBitIsTheInverseOfTheChoice() {
+  QCHECK(hf::BitFor(0) == 1 && hf::BitFor(1) == 0);  // Off is the bit set, the game's own value
+  QCHECK(hf::FlipFor(1) == 0 && hf::FlipFor(0) == 1);
+  QCHECK(hf::MenuIndexFor(1) == 0 && hf::MenuIndexFor(0) == 1);  // "On" is index 0
+  for (const int flip : {0, 1}) QCHECK(hf::FlipFor(hf::BitFor(flip)) == flip);
+}
+
+// The first delivery's write into the game's bit is logged once, by the poller, with the bit as the game held it and the bit it was
+// set to.
+void TheCarrierWriteIsLoggedOnce() {
+  hf::ResetForTest();
+  Capture log;
+  hf::StartFromDirectory(nullptr);
+  QCHECK(hf::Poll() == 1);  // the start line; no delivery has written yet, so no carrier line
+  QCHECK(g_lines.size() == 1 && g_lines[0].find("hand_flip_carrier") == std::string::npos);
+  hf::RecordCarrier(1, 0);
+  QCHECK(hf::Poll() == 1);
+  QCHECK(g_lines.size() == 2);
+  if (g_lines.size() == 2) {
+    QCHECK(Golden(g_lines[1]) ==
+           "\"event\":\"hand_flip_carrier\",\"before\":1,\"after\":0,\"consequence\":\"the game's fullscreen setting bit carries the "
+           "toggle: 1 is Off (the game's own value), 0 is On\"}");
+  }
+  QCHECK(hf::Poll() == 0);  // once
+  hf::RecordCarrier(0, 1);
+  QCHECK(hf::Poll() == 0);  // and never again, whatever a later record holds
+  hf::ResetForTest();
 }
 
 }  // namespace
@@ -359,6 +389,8 @@ int main() {
   AChoiceThatCannotBeWrittenIsLoud();
   AChoiceWithNoDirectoryIsLoud();
   TheMenuRowIsBoundToTheCarrierBitAndNamedForThePlayer();
+  TheBitIsTheInverseOfTheChoice();
+  TheCarrierWriteIsLoggedOnce();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "hand_flip_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

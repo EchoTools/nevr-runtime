@@ -141,9 +141,9 @@ void TheDefaultIndexIsTheCallers() {
 }
 
 // KNOWN-WRONG #2043 The interim Controller Hand Flip row: the second row of the page, after Texture Resolution, a STRING ARRAY
-// Off / On bound to `graphics|fullscreen`, starting on the index the caller gives (Off by default).
+// On / Off bound to `graphics|fullscreen`, starting on the index the caller gives (1, Off, by default: On is the first entry).
 void TheHandFlipRowIsTheSecondRowAfterTextureResolution() {
-  const tm::Result r = tm::RewriteMenuSettings(kMenu, 1);
+  const tm::Result r = tm::RewriteMenuSettings(kMenu, 1);  // no index given: the row starts on Off
   QCHECK(r.status == tm::Status::kRewritten && r.handFlipRows == 1);
   const Json doc = Json::parse(r.text, nullptr, false);
   const Json* page = PageNamed(doc, "GRAPHICS");
@@ -154,12 +154,12 @@ void TheHandFlipRowIsTheSecondRowAfterTextureResolution() {
   QCHECK(flip["path"] == "graphics|fullscreen");
   QCHECK(flip["name"] == "Controller Hand Flip");
   QCHECK(flip["type"] == "STRING ARRAY");
-  QCHECK(flip["values"] == Json::array({"Off", "On"}));
-  QCHECK(flip["idx"] == 0);
+  QCHECK(flip["values"] == Json::array({"On", "Off"}));
+  QCHECK(flip["idx"] == 1);  // the default is Off, the second entry
   // The stock fullscreen row on the DISPLAY page is another page's and is not ours.
   const Json* display = PageNamed(doc, "DISPLAY");
   QCHECK(display != nullptr && (*display)["rows"].size() == 1 && (*display)["rows"][0]["type"] == "NAMED FLAG");
-  // The caller's index is the row's start (the stored choice), and anything but 0 reads as On.
+  // The caller's index is the row's start (the stored choice): 0 is On, anything else is Off.
   for (const int index : {0, 1, 5}) {
     const Json withIndex = Json::parse(tm::RewriteMenuSettings(kMenu, 1, index).text, nullptr, false);
     QCHECK((*PageNamed(withIndex, "GRAPHICS"))["rows"][1]["idx"] == (index == 0 ? 0 : 1));
