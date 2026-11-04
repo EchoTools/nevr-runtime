@@ -251,8 +251,8 @@ void TwoThreadsEachSettingTheirOwnKeyNeverLoseEachOther(bool secondSpelledAnothe
   }
 }
 
-// The in-memory update is inside the lock (the same case as the PC test ASecondSetNeverGetsInBetween...): the first Set is held between
-// its file step and its object update; a second Set of the same key on the same object must wait for it, so the object ends with the
+// The lock is held through the in-memory update (the same case as the PC test TheLockIsHeldThroughTheObjectUpdate): the first Set is held
+// at the seam after its object update; a second Set of the same key on the same object must wait for it, and the object ends with the
 // file's value.
 std::atomic<int> g_hookCalls{0};
 std::atomic<bool> g_firstIsHeld{false};
@@ -282,11 +282,11 @@ void* SecondSet(void* arg) {
   return nullptr;
 }
 
-void ASecondSetNeverGetsInBetweenTheFileAndTheObjectUpdateOfTheFirst() {
+void TheLockIsHeldThroughTheObjectUpdate() {
   Dir dir;
   Write(dir.File(), "graphics:\n  hand_flip: false\n");
   nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFile(dir.File());
-  nevr::config_testing::SetBeforeMemoryUpdateForTest(&HoldTheFirstSet);
+  nevr::config_testing::SetAfterMemoryUpdateForTest(&HoldTheFirstSet);
   SharedJob first{&cfg, true};
   SharedJob second{&cfg, false};
   pthread_t a, b;
@@ -295,7 +295,7 @@ void ASecondSetNeverGetsInBetweenTheFileAndTheObjectUpdateOfTheFirst() {
   QCHECK(pthread_create(&b, nullptr, &SecondSet, &second) == 0);
   pthread_join(a, nullptr);
   pthread_join(b, nullptr);
-  nevr::config_testing::SetBeforeMemoryUpdateForTest(nullptr);
+  nevr::config_testing::SetAfterMemoryUpdateForTest(nullptr);
   QCHECK(!g_secondBeforeFirstReturned.load());
   const nevr::NevrConfig onDisk = nevr::NevrConfig::LoadFromFile(dir.File());
   QCHECK(onDisk.GetBool("graphics.hand_flip").has_value() && cfg.GetBool("graphics.hand_flip").has_value());
@@ -318,7 +318,7 @@ int main() {
   ATextThatIsNotAPlainWordIsRefusedAndNothingIsWritten();
   TwoThreadsEachSettingTheirOwnKeyNeverLoseEachOther(false);
   TwoThreadsEachSettingTheirOwnKeyNeverLoseEachOther(true);
-  ASecondSetNeverGetsInBetweenTheFileAndTheObjectUpdateOfTheFirst();
+  TheLockIsHeldThroughTheObjectUpdate();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "nevr_config_set_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

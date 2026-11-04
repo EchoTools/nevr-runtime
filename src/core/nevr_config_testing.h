@@ -1,6 +1,6 @@
 // nevr_config_testing.h — the seams the NevrConfig::Set tests need: the rename that publishes the temporary file (a test installs a
-// rename that fails to prove the previous file is left intact) and a call made just before the in-memory tree is updated (a test
-// holds one Set there to prove no other Set gets in between). Not for production code.
+// rename that fails to prove the previous file is left intact) and a call made after the in-memory tree is updated, still under the file's
+// lock (a test holds one Set there to prove the lock is held through the update). Not for production code.
 #pragma once
 
 namespace nevr::config_testing {
@@ -10,9 +10,10 @@ namespace nevr::config_testing {
 using RenameFn = int (*)(const char* from, const char* to);
 void SetRenameForTest(RenameFn rename);
 
-/// Called by NevrConfig::Set after the file holds the value and before the in-memory tree is updated, on the calling thread. nullptr
-/// removes it. With the per-file lock held across the update, no other Set on that file runs while it waits.
-using BeforeMemoryUpdateFn = void (*)();
-void SetBeforeMemoryUpdateForTest(BeforeMemoryUpdateFn hook);
+/// Called by NevrConfig::Set on the calling thread after the file holds the value and the in-memory tree is updated, just before it
+/// returns, with the file's lock still held. nullptr removes it. With the lock held through the update, no other Set on that file
+/// runs while it waits. A hook that calls Set on the same file would deadlock on that lock: test-only, never do it.
+using AfterMemoryUpdateFn = void (*)();
+void SetAfterMemoryUpdateForTest(AfterMemoryUpdateFn hook);
 
 }  // namespace nevr::config_testing

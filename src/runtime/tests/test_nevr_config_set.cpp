@@ -532,10 +532,10 @@ TEST(NevrConfigSetConcurrent, TwoThreadsOnOneObjectBothKeysReadBack) {
   }
 }
 
-// The in-memory update is inside the lock. The first Set is held after its file step and before the memory update (the seam); a second
-// Set of the same key on the same object starts meanwhile. With the update inside the lock the second Set waits until the first has
-// returned, so the file and the object end with the second value. With the lock released before the update, the second Set finishes
-// first and the first then writes its older value into the object: the object disagrees with the file.
+// The lock is held through the in-memory update. The first Set is held at the seam after the object is updated and before it returns;
+// a second Set of the same key on the same object starts meanwhile and must wait for the lock, so it cannot finish before the first
+// returns, and the file and the object end with the second value. With the lock released at or before the update, the second Set
+// finishes while the first is held (and may even be overwritten in the object by the first's older value).
 namespace {
 std::atomic<int> g_hookCalls{0};
 std::atomic<bool> g_firstIsHeld{false};
@@ -548,7 +548,7 @@ void HoldTheFirstSet() {
 }
 }  // namespace
 
-TEST(NevrConfigSetConcurrent, ASecondSetNeverGetsInBetweenTheFileAndTheObjectUpdateOfTheFirst) {
+TEST(NevrConfigSetConcurrent, TheLockIsHeldThroughTheObjectUpdate) {
   Dir dir;
   Write(dir.File(), "graphics:\n  hand_flip: false\n");
   nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFile(dir.File());
@@ -557,7 +557,7 @@ TEST(NevrConfigSetConcurrent, ASecondSetNeverGetsInBetweenTheFileAndTheObjectUpd
   g_secondDone.store(false);
   std::atomic<bool> firstReturned{false};
   std::atomic<bool> secondFinishedBeforeFirstReturned{false};
-  nevr::config_testing::SetBeforeMemoryUpdateForTest(&HoldTheFirstSet);
+  nevr::config_testing::SetAfterMemoryUpdateForTest(&HoldTheFirstSet);
   std::thread first([&] {
     EXPECT_TRUE(cfg.Set("graphics.hand_flip", true).ok);
     firstReturned.store(true);
@@ -570,8 +570,8 @@ TEST(NevrConfigSetConcurrent, ASecondSetNeverGetsInBetweenTheFileAndTheObjectUpd
   });
   first.join();
   second.join();
-  nevr::config_testing::SetBeforeMemoryUpdateForTest(nullptr);
-  EXPECT_FALSE(secondFinishedBeforeFirstReturned.load()) << "a second Set ran to the end between the file and the object update of the first";
+  nevr::config_testing::SetAfterMemoryUpdateForTest(nullptr);
+  EXPECT_FALSE(secondFinishedBeforeFirstReturned.load()) << "a second Set ran to the end while the first still held the object update (the lock was released too early)";
   const nevr::NevrConfig onDisk = nevr::NevrConfig::LoadFromFile(dir.File());
   ASSERT_TRUE(onDisk.GetBool("graphics.hand_flip").has_value());
   ASSERT_TRUE(cfg.GetBool("graphics.hand_flip").has_value());

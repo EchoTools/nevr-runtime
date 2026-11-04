@@ -795,7 +795,7 @@ int RealRename(const char* from, const char* to) {
 }
 
 config_testing::RenameFn g_rename = nullptr;
-config_testing::BeforeMemoryUpdateFn g_beforeMemoryUpdate = nullptr;
+config_testing::AfterMemoryUpdateFn g_afterMemoryUpdate = nullptr;
 
 constexpr std::uintmax_t kMaxEditableBytes = 1024 * 1024;
 
@@ -803,7 +803,7 @@ constexpr std::uintmax_t kMaxEditableBytes = 1024 * 1024;
 
 namespace config_testing {
 void SetRenameForTest(RenameFn rename) { g_rename = rename; }
-void SetBeforeMemoryUpdateForTest(BeforeMemoryUpdateFn hook) { g_beforeMemoryUpdate = hook; }
+void SetAfterMemoryUpdateForTest(AfterMemoryUpdateFn hook) { g_afterMemoryUpdate = hook; }
 }  // namespace config_testing
 
 ConfigSetResult NevrConfig::Set(const std::string& path, bool value) noexcept {
@@ -923,7 +923,6 @@ ConfigSetResult NevrConfig::SetScalar(const std::string& path, const ScalarEdit&
     }
     r.ok = true;
     r.reason = "";
-    if (g_beforeMemoryUpdate != nullptr) g_beforeMemoryUpdate();
     if (impl_) {
       try {
         if (edit.isBool) {
@@ -935,6 +934,7 @@ ConfigSetResult NevrConfig::SetScalar(const std::string& path, const ScalarEdit&
         // The file holds the value; the in-memory tree keeps what it had.
       }
     }
+    if (g_afterMemoryUpdate != nullptr) g_afterMemoryUpdate();  // test seam: still inside the file's lock
     return r;
   } catch (const std::exception&) {
     r.ok = false;
