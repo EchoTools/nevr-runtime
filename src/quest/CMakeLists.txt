@@ -8,6 +8,14 @@
 cmake_minimum_required(VERSION 3.23)
 project(nevr_quest LANGUAGES C CXX)
 
+# The quest-patcher preset builds the host tools (host/CMakeLists.txt) with the host compiler, and nothing of the Android project.
+option(NEVR_QUEST_HOST_TOOLS "Build the Quest host tools with the host compiler (the quest-patcher preset)" OFF)
+if(NEVR_QUEST_HOST_TOOLS)
+  get_filename_component(NEVR_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+  add_subdirectory(host)
+  return()
+endif()
+
 if(NOT ANDROID)
   message(FATAL_ERROR
     "src/quest is an Android target. Configure with the android-arm64 preset:\n"
