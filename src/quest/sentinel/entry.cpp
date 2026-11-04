@@ -281,7 +281,8 @@ static void nevr_sentinel_ctor() {
     // The crash handlers first (#1689): a crash anywhere below, the begin record and the UI looper capture included, leaves a
     // report the next start sends. Arm is idempotent: the sequence's first step calls it again after setting the log sink.
     sentinel::Arm();
-    nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);
+    nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit,
+                                                      nevr_build::kIsDev ? "dev" : "release");
     // The login_host fallback carries this build's tuple (login_fallback.h): set before the sequence installs the redirect.
     nevr_quest::redirect::SetLoginIdentity(
         {"nevr_quest", nevr_build::kIsDev ? "dev" : "release", nevr_build::kVersion, nevr_build::kCommit});

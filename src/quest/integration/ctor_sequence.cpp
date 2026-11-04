@@ -7,10 +7,11 @@
 
 namespace nevr_quest::integration {
 
-// The begin record (#1391): the build's version and commit are fields of the line, so a log names the build that ran.
-void LogConstructorBegin(const char* version, const char* commit) noexcept {
+// The begin record (#1391): the build's version, commit and kind are fields of the line, so a log names the build that ran
+// (ADR 0040 rule 2; the variant name has no source yet, so it is not a field).
+void LogConstructorBegin(const char* version, const char* commit, const char* kind) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor",
-                      {{"action", "begin"}, {"version", version}, {"commit", commit}});
+                      {{"action", "begin"}, {"version", version}, {"commit", commit}, {"kind", kind}});
 }
 
 const char* StepStateName(StepState state) {
