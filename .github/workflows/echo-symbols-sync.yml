@@ -5,8 +5,8 @@ name: echo-symbols sync
 # regenerate src/runtime/log/symcache_data.cpp, run the tool tests and a compile
 # check, then open or update one PR. It never merges and never opens a second PR
 # for the same branch. What actually runs here: `go test ./...`, `validate`,
-# `regenerate`, `diff` and `g++ -std=c++17 -fsyntax-only` on the generated
-# table. The full build is the
+# `regenerate`, `diff` and the `symcache-check` preset (tools/symcache/check) on the
+# generated table. The full build is the
 # reviewer's quick check; build.yml runs only on workflow_dispatch and release,
 # and a PR opened with GITHUB_TOKEN starts no workflow runs at all.
 #
@@ -100,7 +100,8 @@ jobs:
           go run . diff --old "$RUNNER_TEMP/old-pc.json" --new "$RUNNER_TEMP/new-pc.json" \
             --old-quest "$RUNNER_TEMP/old-quest.json" --new-quest "$RUNNER_TEMP/new-quest.json" > "$RUNNER_TEMP/diff.md"
           # The generated table is C++ data in the runtime; compile it before proposing it.
-          g++ -std=c++17 -fsyntax-only -I../../src ../../src/runtime/log/symcache_data.cpp
+          command -v ninja > /dev/null || sudo apt-get install -y ninja-build
+          (cd check && cmake --preset symcache-check && cmake --build --preset symcache-check)
 
       - name: Open or update the PR
         if: steps.pin.outputs.changed == 'true'
@@ -205,7 +206,7 @@ jobs:
             echo "- \`go run . validate\` on the corpus at \`$head\`: keys, strings, every name re-hashed with CSymbol64, count within 20% of \`$pin\`"
             echo "- \`go run . regenerate\`: wrote \`src/runtime/log/symcache_data.cpp\` (the table in this commit)"
             echo "- \`go run . diff\`: produced the lists above"
-            echo "- \`g++ -std=c++17 -fsyntax-only -Isrc src/runtime/log/symcache_data.cpp\`"
+            echo "- \`cmake --preset symcache-check\` and \`cmake --build --preset symcache-check\` in \`tools/symcache/check\` (a syntax-only compile of \`src/runtime/log/symcache_data.cpp\`)"
             echo
             echo "## What did not run"
             echo

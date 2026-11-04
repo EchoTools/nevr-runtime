@@ -4,16 +4,27 @@
 // got_pinned_test.cpp resolves the two pinned slots in the real library.
 //
 // What it pins: only type-4 devices enter the table (eight at most); the capabilities are asked once per device; both handlers return
-// the runtime's result and leave every byte it wrote as it wrote it; the first tracked orientation of a table device is the one
-// logged; each log line is written once, with the golden fields.
+// the runtime's result and leave every byte it wrote as it wrote it while Controller Hand Flip is Off (the default); the first
+// tracked orientation of a table device is the one logged, raw; each log line is written once, with the golden fields.
+//
+// And the interim Controller Hand Flip roll (KNOWN-WRONG #2043, hand_flip.h): with the toggle On, only a table device (type 4) has
+// its orientation rolled, by q' = (y, -x, w, -z), and only those four floats change; hand tracking, the headset and an id never
+// enumerated are untouched; both calls of a frame are rolled; a failed call is not; the toggle takes effect on the next call.
 //
 // Built and run by `just test-quest-hooks`.
 
+#include <pthread.h>
+#include <time.h>
+
+#include <atomic>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "hand_flip.h"
 #include "hand_pose_log_hook.h"
 #include "hook_log.h"
 #include "quest/tests/test_check.h"
@@ -21,6 +32,7 @@
 namespace {
 
 namespace hpl = nevr_quest::hand_pose_log;
+namespace hf = nevr_quest::hand_flip;
 namespace is = nevr_quest::input_seam;
 using sentinel::pinned::OvrMobileOpaque;
 
@@ -225,11 +237,11 @@ void TheDeviceLineIsGolden() {
   const std::string left =
       "\"event\":\"hand_flip_device\",\"device\":536870914,\"type\":4,\"caps_read\":\"yes\",\"caps\":\"0x00004004\","
       "\"button_caps\":\"0x00000011\",\"touch_caps\":\"0x00000022\",\"reserved4\":\"0x00000033\",\"reserved5\":\"0x00000044\","
-      "\"hand\":\"left\",\"model\":\"Quest 2\"}";
+      "\"hand\":\"left\",\"model\":\"Quest 2\",\"flip\":0,\"by\":\"default\"}";
   const std::string right =
       "\"event\":\"hand_flip_device\",\"device\":536870915,\"type\":4,\"caps_read\":\"yes\",\"caps\":\"0x00004008\","
       "\"button_caps\":\"0x00000011\",\"touch_caps\":\"0x00000022\",\"reserved4\":\"0x00000033\",\"reserved5\":\"0x00000044\","
-      "\"hand\":\"right\",\"model\":\"Quest 2\"}";
+      "\"hand\":\"right\",\"model\":\"Quest 2\",\"flip\":0,\"by\":\"default\"}";
   QCHECK(g_lines.size() == 2);
   if (g_lines.size() == 2) {
     QCHECK(Golden(g_lines[0]) == left);
@@ -257,7 +269,7 @@ void ADeviceWithNoCapabilitiesIsLoggedAsSuch() {
       QCHECK(Golden(g_lines[0]) ==
              "\"event\":\"hand_flip_device\",\"device\":536870914,\"type\":4,\"caps_read\":\"no\",\"caps\":\"0x00000000\","
              "\"button_caps\":\"0x00000000\",\"touch_caps\":\"0x00000000\",\"reserved4\":\"0x00000000\","
-             "\"reserved5\":\"0x00000000\",\"hand\":\"unknown\",\"model\":\"Quest 2\"}");
+             "\"reserved5\":\"0x00000000\",\"hand\":\"unknown\",\"model\":\"Quest 2\",\"flip\":0,\"by\":\"default\"}");
     }
   }
 }
@@ -273,7 +285,7 @@ void ThePoseLineIsTheFirstTrackedOrientationAndWrittenOnce() {
 
   SetTracking(0x00, 9.0F, 9.0F, 9.0F, 9.0F);  // not tracked yet: not recorded
   QCHECK(TrackingEntry()(nullptr, kLeft, 1.0, tracking) == 0);
-  QCHECK(hpl::PollOnceForTest() == 1);  // the device line only
+  QCHECK(hpl::PollOnceForTest() == 2);  // the device line, and the toggle's start line (the first tracking call resolved it)
   QCHECK(CountOf("hand_flip_pose") == 0);
 
   SetTracking(0x0f, 0.5F, -0.5F, 0.25F, 0.75F);
@@ -329,6 +341,280 @@ void DisarmingTheHookStopsTheRecording() {
   QCHECK(CountOf("hand_flip_pose") == 0);
 }
 
+// ---- the interim roll (KNOWN-WRONG #2043) ---------------------------------------------------------------------------------
+
+// The 104 bytes after a call for `id`, from the runtime's standard tracking buffer (g_tracking).
+struct Result {
+  int rc;
+  unsigned char bytes[hpl::kTrackingBytes];
+};
+Result Track(std::uint32_t id) {
+  Result r;
+  std::memset(r.bytes, 0x5A, sizeof(r.bytes));
+  r.rc = TrackingEntry()(nullptr, id, 1.0, r.bytes);
+  return r;
+}
+float OrientationOf(const unsigned char* bytes, int i) {
+  float v;
+  std::memcpy(&v, bytes + offsetof(hpl::TrackingPrefix, orientation) + i * sizeof(float), sizeof(v));
+  return v;
+}
+
+// Off is the default, and with it every byte the runtime wrote comes back as written (the measurement log's rule).
+void WithTheToggleOffNothingIsChanged() {
+  Reset();
+  Arm();
+  g_devices = {{4, kLeft}, {4, kRight}};
+  EnumerateAll();
+  QCHECK(!hf::Enabled());
+  for (const std::uint32_t id : {kLeft, kRight}) {
+    const Result r = Track(id);
+    QCHECK(r.rc == 0 && std::memcmp(r.bytes, g_tracking, sizeof(g_tracking)) == 0);
+  }
+}
+
+// On: a table device's four orientation floats are (y, -x, w, -z) of what the runtime wrote, and every other byte is as written.
+void WithTheToggleOnOnlyTheFourOrientationFloatsChange() {
+  Reset();
+  Arm();
+  g_devices = {{4, kLeft}, {4, kRight}};
+  EnumerateAll();
+  hf::SetFromMenu(1);
+  for (const std::uint32_t id : {kLeft, kRight}) {
+    const Result r = Track(id);
+    QCHECK(r.rc == 0);
+    // SetTracking(0x0f, 0.5, -0.5, 0.25, 0.75) is what the runtime wrote.
+    QCHECK(OrientationOf(r.bytes, 0) == -0.5F && OrientationOf(r.bytes, 1) == -0.5F);
+    QCHECK(OrientationOf(r.bytes, 2) == 0.75F && OrientationOf(r.bytes, 3) == -0.25F);
+    const std::size_t from = offsetof(hpl::TrackingPrefix, orientation);
+    QCHECK(std::memcmp(r.bytes, g_tracking, from) == 0);                                  // Status and padding
+    QCHECK(std::memcmp(r.bytes + from + 16, g_tracking + from + 16, sizeof(g_tracking) - from - 16) == 0);  // pose, velocities, times
+  }
+}
+
+// Only a type-4 device in the table is rolled: hand tracking, the headset and an id never enumerated are not.
+void OnlyTypeFourIsRolled() {
+  Reset();
+  Arm();
+  g_devices = {{1, kHmd}, {4, kLeft}, {8, kHandTracking}};
+  EnumerateAll();
+  hf::SetFromMenu(1);
+  const Result left = Track(kLeft);
+  QCHECK(OrientationOf(left.bytes, 0) == -0.5F);  // rolled
+  for (const std::uint32_t id : {kHandTracking, kHmd, kRight}) {
+    const Result r = Track(id);
+    QCHECK(r.rc == 0 && std::memcmp(r.bytes, g_tracking, sizeof(g_tracking)) == 0);
+  }
+}
+
+// The game polls twice per device in a frame (predicted, then current): each of the two results is rolled once, and neither is
+// rolled twice.
+void BothPollsOfAFrameAreRolled() {
+  Reset();
+  Arm();
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  hf::SetFromMenu(1);
+  const Result predicted = Track(kLeft);
+  const Result current = Track(kLeft);
+  QCHECK(std::memcmp(predicted.bytes, current.bytes, sizeof(current.bytes)) == 0);
+  QCHECK(OrientationOf(predicted.bytes, 0) == -0.5F && OrientationOf(predicted.bytes, 3) == -0.25F);
+  QCHECK(OrientationOf(current.bytes, 0) == -0.5F && OrientationOf(current.bytes, 3) == -0.25F);
+}
+
+// The toggle takes effect on the next call, either way, with no restart and no re-enumeration.
+void TheToggleTakesEffectOnTheNextCall() {
+  Reset();
+  Arm();
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  QCHECK(OrientationOf(Track(kLeft).bytes, 0) == 0.5F);
+  hf::SetFromMenu(1);
+  QCHECK(OrientationOf(Track(kLeft).bytes, 0) == -0.5F);
+  hf::SetFromMenu(0);
+  QCHECK(OrientationOf(Track(kLeft).bytes, 0) == 0.5F);
+}
+
+// A failed call is not touched, with the toggle On.
+void AFailedCallIsNotRolled() {
+  Reset();
+  Arm();
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  hf::SetFromMenu(1);
+  g_trackingRc = -3;
+  alignas(8) unsigned char untouched[hpl::kTrackingBytes];
+  std::memset(untouched, 0x77, sizeof(untouched));
+  QCHECK(TrackingEntry()(nullptr, kLeft, 1.0, untouched) == -3);
+  for (unsigned char byte : untouched) QCHECK(byte == 0x77);
+}
+
+// The pose line is the raw orientation, taken before the roll, so a log from a headset with the toggle On still shows what VrApi
+// reported.
+void ThePoseLineStaysRawWithTheToggleOn() {
+  Reset();
+  Arm();
+  sentinel::SetLogSink(&CaptureLine);
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  hf::SetFromMenu(1);
+  QCHECK(OrientationOf(Track(kLeft).bytes, 0) == -0.5F);
+  hpl::PollOnceForTest();
+  sentinel::SetLogSink(nullptr);
+  const std::string* pose = LineOf("hand_flip_pose");
+  QCHECK(pose != nullptr);
+  if (pose != nullptr) {
+    QCHECK(Golden(*pose) ==
+           "\"event\":\"hand_flip_pose\",\"device\":536870914,\"hand\":\"left\",\"status\":\"0x0000000f\",\"qx\":\"0.500000\","
+           "\"qy\":\"-0.500000\",\"qz\":\"0.250000\",\"qw\":\"0.750000\"}");
+  }
+}
+
+// The device line says whether the toggle is on and what set it.
+void TheDeviceLineSaysWhetherTheToggleIsOnAndWhatSetIt() {
+  Reset();
+  Arm();
+  sentinel::SetLogSink(&CaptureLine);
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  hf::SetFromMenu(1);
+  hpl::PollOnceForTest();
+  sentinel::SetLogSink(nullptr);
+  const std::string* device = LineOf("hand_flip_device");
+  QCHECK(device != nullptr);
+  if (device != nullptr) {
+    QCHECK(device->find("\"model\":\"Quest 2\",\"flip\":1,\"by\":\"menu\"}") != std::string::npos);
+  }
+}
+
+// The start line is the poller's, once, golden, after the first tracking call resolved it to the default.
+void TheStartLineIsWrittenOnceByThePoller() {
+  Reset();
+  Arm();
+  sentinel::SetLogSink(&CaptureLine);
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  Track(kLeft);
+  hpl::PollOnceForTest();
+  hpl::PollOnceForTest();
+  sentinel::SetLogSink(nullptr);
+  QCHECK(CountOf("hand_flip_start") == 1);
+  const std::string* start = LineOf("hand_flip_start");
+  QCHECK(start != nullptr);
+  if (start != nullptr) {
+    QCHECK(Golden(*start) ==
+           "\"event\":\"hand_flip_start\",\"source\":\"default\",\"flip\":0,\"unversioned_marker_ignored\":0,"
+           "\"consequence\":\"this start is not saved; only a change in the menu is remembered for the next launch\"}");
+  }
+}
+
+// A result whose Status does not say the orientation is tracked holds no orientation to turn: it comes back as written with the toggle
+// On, and the same call with the bit set is rolled.
+void AnUntrackedPoseIsNotRolled() {
+  Reset();
+  Arm();
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  hf::SetFromMenu(1);
+  SetTracking(0x0, 0.5F, -0.5F, 0.25F, 0.75F);
+  const Result untracked = Track(kLeft);
+  QCHECK(untracked.rc == 0 && std::memcmp(untracked.bytes, g_tracking, sizeof(g_tracking)) == 0);
+  SetTracking(hpl::kStatusOrientationTracked, 0.5F, -0.5F, 0.25F, 0.75F);
+  const Result tracked = Track(kLeft);
+  QCHECK(OrientationOf(tracked.bytes, 0) == -0.5F && OrientationOf(tracked.bytes, 2) == 0.75F);
+}
+
+// The table holds eight and never frees: a ninth type-4 id is not recorded, not rolled, and said once by the poller with its id.
+void ANinthIdIsNotRolledAndSaidOnce() {
+  Reset();
+  Arm();
+  sentinel::SetLogSink(&CaptureLine);
+  for (std::uint32_t i = 0; i < 9; ++i) g_devices.push_back({4, 0x30000000U + i});
+  EnumerateAll();
+  EnumerateAll();  // the game enumerates every frame: still one line
+  hf::SetFromMenu(1);
+  const Result ninth = Track(0x30000008U);
+  QCHECK(ninth.rc == 0 && std::memcmp(ninth.bytes, g_tracking, sizeof(g_tracking)) == 0);  // not in the table: not rolled
+  const Result first = Track(0x30000000U);
+  QCHECK(OrientationOf(first.bytes, 0) == -0.5F);  // a table device still is
+  hpl::PollOnceForTest();
+  hpl::PollOnceForTest();
+  sentinel::SetLogSink(nullptr);
+  QCHECK(CountOf("hand_flip_table_full") == 1);
+  const std::string* line = LineOf("hand_flip_table_full");
+  QCHECK(line != nullptr);
+  if (line != nullptr) {
+    QCHECK(Golden(*line) ==
+           "\"event\":\"hand_flip_table_full\",\"slots\":8,\"device\":805306376,"
+           "\"consequence\":\"this controller's pose is not logged or rolled; the device table holds eight and never frees\"}");
+    QCHECK(line->find("\"level\":\"warn\"") != std::string::npos);
+  }
+}
+
+std::atomic<int> g_seamEntered{0};
+std::atomic<int> g_seamReleased{0};
+void BlockingSeam() noexcept {
+  g_seamEntered.store(1);
+  for (int i = 0; i < 10000 && g_seamReleased.load() == 0; ++i) {
+    timespec nap{0, 1000000};
+    nanosleep(&nap, nullptr);
+  }
+}
+void* StartThread(void*) {
+  hf::StartFromDirectory(nullptr);
+  return nullptr;
+}
+
+// The per-frame path never waits for another thread's start: while one is mid-resolve a tracking call comes back at once, as written
+// (the flag reads Off for that frame), though the wait a settings delivery would make is set long.
+void TheTrackingPathNeverWaitsForAnotherThreadsStart() {
+  Reset();
+  Arm();
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  g_seamEntered.store(0);
+  g_seamReleased.store(0);
+  hf::g_startSeam.store(&BlockingSeam);
+  hf::g_startWaitMs.store(5000);
+  pthread_t starter;
+  QCHECK(pthread_create(&starter, nullptr, &StartThread, nullptr) == 0);
+  for (int i = 0; i < 5000 && g_seamEntered.load() == 0; ++i) {
+    timespec nap{0, 1000000};
+    nanosleep(&nap, nullptr);
+  }
+  QCHECK(g_seamEntered.load() == 1 && !hf::Started());
+  timespec before, after;
+  clock_gettime(CLOCK_MONOTONIC, &before);
+  const Result r = Track(kLeft);
+  clock_gettime(CLOCK_MONOTONIC, &after);
+  const long elapsedMs = (after.tv_sec - before.tv_sec) * 1000L + (after.tv_nsec - before.tv_nsec) / 1000000L;
+  QCHECK(r.rc == 0 && std::memcmp(r.bytes, g_tracking, sizeof(g_tracking)) == 0);
+  QCHECK(elapsedMs < 1000);
+  g_seamReleased.store(1);
+  pthread_join(starter, nullptr);
+  hf::g_startSeam.store(nullptr);
+}
+
+// The row is offered only when the hooks that roll, save and log it are installed: an install that is refused says so, and the
+// row is not offered (the texture hook's menu then has none).
+void ARefusedInstallLeavesTheRowNotOffered() {
+  Reset();
+  QCHECK(hf::Offered());  // a test starts offered
+  sentinel::SetLogSink(&CaptureLine);
+  const sentinel::GotTarget missing{"libnevr_no_such_library.so", "vrapi_EnumerateInputDevices", sentinel::RelocKind::kJumpSlot};
+  QCHECK(!hpl::InstallAt(missing, missing, nullptr));
+  sentinel::SetLogSink(nullptr);
+  QCHECK(!hf::Offered());
+  QCHECK(CountOf("hand_pose_log_install") == 1);
+}
+
+// The two slots the hooks are installed in are the pinned ones (got_pinned_test resolves them in the real library): the roll
+// rides on the existing tracking hook and adds no slot.
+void TheRollAddsNoSlot() {
+  QCHECK(sentinel::pinned::LibR15EnumerateInputDevices().slotVaddr == std::optional<std::uint64_t>(0x36d5dd0ULL));
+  QCHECK(sentinel::pinned::LibR15GetInputTrackingState().slotVaddr == std::optional<std::uint64_t>(0x36dc280ULL));
+}
+
 }  // namespace
 
 int main() {
@@ -343,6 +629,20 @@ int main() {
   ThePoseLineIsTheFirstTrackedOrientationAndWrittenOnce();
   APoseOfAnotherDeviceIsNotLogged();
   DisarmingTheHookStopsTheRecording();
+  WithTheToggleOffNothingIsChanged();
+  WithTheToggleOnOnlyTheFourOrientationFloatsChange();
+  OnlyTypeFourIsRolled();
+  BothPollsOfAFrameAreRolled();
+  TheToggleTakesEffectOnTheNextCall();
+  AFailedCallIsNotRolled();
+  ThePoseLineStaysRawWithTheToggleOn();
+  TheDeviceLineSaysWhetherTheToggleIsOnAndWhatSetIt();
+  TheStartLineIsWrittenOnceByThePoller();
+  TheRollAddsNoSlot();
+  AnUntrackedPoseIsNotRolled();
+  ANinthIdIsNotRolledAndSaidOnce();
+  TheTrackingPathNeverWaitsForAnotherThreadsStart();
+  ARefusedInstallLeavesTheRowNotOffered();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "hand_pose_log_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

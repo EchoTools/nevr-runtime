@@ -25,7 +25,7 @@ purpose: a misconfigured VM must never read as a runtime regression.
   task. Log in once at the console and leave it.
 - The game installed at `C:\echovr` with its data under
   `_data\<version>\rad15\win10\packages`.
-- On the machine that runs the test: `pywinrm`, `smbclient`, and `x86_64-w64-mingw32-gcc`.
+- On the machine that runs the test: `pywinrm` and `smbclient`. The getaddrinfo probe is a CMake target (`gai_probe`, built by `just build` and by `just test-winvm`); the test copies the built file and compiles nothing.
 - Optional, for `--dump-on-fail` analysis: `pip install minidump`.
 
 ## The rig
@@ -39,7 +39,7 @@ with no production contact and no credentials.
 
 ## Scenarios and checks
 
-`gai` builds `tools/winvm/gai_probe.c` and times the exact `getaddrinfo` call that
+`gai` copies `gai_probe.exe` (built from `tools/winvm/gai_probe.c` by CMake) to the guest and times the exact `getaddrinfo` call that
 `CBroadcaster::Initialize` makes (empty node string, flags 0, `AF_INET`/UDP).
 
 `boot` deploys the DLL, launches `echovr.exe -noovr -server -headless -no-console`,

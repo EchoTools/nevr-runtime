@@ -1,4 +1,4 @@
-/* The controller type and raw pose log (#1986, measurement only).
+/* The controller type and raw pose log (#1986), and the interim Controller Hand Flip roll that rides on its tracking hook.
  *
  * Why. Players on a Quest 2 report hands rolled backwards with Touch Pro / Touch Plus controllers. libr15 has no per-controller
  * logic (pinned_targets.h, the VrApi input block): CVR::PollTracking (FUN 0x1a71808) enumerates the input devices, keeps type 4
@@ -17,14 +17,18 @@
  *   vrapi_GetInputTrackingState   after the original returns success, the first result of a table device whose Status has the
  *                                 orientation-tracked bit gives its raw orientation quaternion, stored once.
  *
- * The result of both calls and every byte they wrote are returned exactly as the runtime wrote them. No pose is changed, no
- * menu row or setting exists, no flag turns anything on.
+ * The result of both calls is returned as the runtime gave it, and so is every byte they wrote, with one exception.
+ * KNOWN-WRONG #2043 While the player has Controller Hand Flip On (hand_flip.h), the tracking handler rolls the orientation of a
+ * type-4 table device by 180 degrees about its local Z axis, and writes nothing else. With the toggle Off (the default) no byte
+ * is changed.
  *
  * Log lines, written by a poller thread (`nevr-handpose`, twice a second), never on the game's call path (callback_thunk.h
  * rule 1). Each is written once per device per session, Info:
  *   {"event":"hand_flip_device","device":<id>,"type":4,"caps_read":"yes|no","caps":"0x%08x","button_caps":"0x%08x",
  *    "touch_caps":"0x%08x","reserved4":"0x%08x","reserved5":"0x%08x","hand":"left|right|unknown","model":"<ro.product.model>"}
  *   {"event":"hand_flip_pose","device":<id>,"hand":"left|right|unknown","status":"0x%08x","qx":"%.6f","qy":..,"qz":..,"qw":..}
+ * The device line also carries "flip" (the toggle's value when the line is written) and "by" (what set it: default, player_marker
+ * or menu). The pose line is the raw orientation, taken before the roll. The poller also writes hand_flip.h's own lines.
  * `caps` is ControllerCapabilities; `hand` is the LeftHand / RightHand bit (input_seam.h HandFromCaps); a floating-point value
  * is a string with six decimals.
  *
