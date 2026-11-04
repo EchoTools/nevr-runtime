@@ -147,6 +147,53 @@ void SetThenReadRoundTrip() {
   QCHECK(reloaded.UnknownKeyCount() == 0);
 }
 
+nevr::ConfigSetResult SetWord(const std::string& file, const std::string& word) {
+  nevr::NevrConfig cfg;
+  cfg.BindFile(file);
+  return cfg.Set("graphics.texture_quality", word);
+}
+
+// The texture level the player picks (a plain word) replaces the old one in place; every other byte stays. The same cases run on
+// PC in src/runtime/tests/test_nevr_config_set.cpp (NevrConfigSetWord): one setter, both platforms.
+void AWordReplacesTheOldOneInPlaceAndGoesBack() {
+  const std::string before =
+      "# nevr config\ngraphics:\n  # the level\n  texture_quality: high   # the player's pick\n  hand_flip: true\n\nsocial:\n  facade: true\n";
+  Dir dir;
+  Write(dir.File(), before);
+  const nevr::ConfigSetResult r = SetWord(dir.File(), "very_high");
+  QCHECK(r.ok && r.wrote);
+  std::string expected = before;
+  expected.replace(expected.find("high   # the player's pick"), 4, "very_high");
+  QCHECK(Read(dir.File()) == expected);
+  QCHECK(SetWord(dir.File(), "high").ok);
+  QCHECK(Read(dir.File()) == before);
+  QCHECK(!Exists(dir.Tmp()));
+}
+
+void AWordThatIsAlreadyThereIsNotRewrittenAndQuotesStay() {
+  Dir same;
+  Write(same.File(), "graphics:\n  texture_quality: \"ultra\"\n");
+  const nevr::ConfigSetResult r = SetWord(same.File(), "ultra");
+  QCHECK(r.ok && !r.wrote);
+  QCHECK(Read(same.File()) == "graphics:\n  texture_quality: \"ultra\"\n");
+  Dir quoted;
+  Write(quoted.File(), "graphics:\n  texture_quality: 'low'\n");
+  QCHECK(SetWord(quoted.File(), "medium").ok);
+  QCHECK(Read(quoted.File()) == "graphics:\n  texture_quality: 'medium'\n");
+}
+
+void ATextThatIsNotAPlainWordIsRefusedAndNothingIsWritten() {
+  const char* const kinds[] = {"", "two words", "a: b", "# c", "true", "No", "null", "-lead", "line\nbreak", "quote\"d"};
+  for (const char* kind : kinds) {
+    Dir dir;
+    const std::string before = "graphics:\n  texture_quality: low\n";
+    Write(dir.File(), before);
+    const nevr::ConfigSetResult r = SetWord(dir.File(), kind);
+    QCHECK(!r.ok && !r.wrote && std::string(r.reason) == "value_not_a_plain_word");
+    QCHECK(Read(dir.File()) == before);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -157,6 +204,9 @@ int main() {
   AFlowStyleGraphicsBlockAndATruncatedFileAreRefused();
   AFailedRenameLeavesThePreviousFileIntact();
   SetThenReadRoundTrip();
+  AWordReplacesTheOldOneInPlaceAndGoesBack();
+  AWordThatIsAlreadyThereIsNotRewrittenAndQuotesStay();
+  ATextThatIsNotAPlainWordIsRefusedAndNothingIsWritten();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "nevr_config_set_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
