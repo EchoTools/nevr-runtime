@@ -9,6 +9,8 @@
  * consumers through Bionic's local-group symbol lookup.
  */
 
+#include "activation.h"
+#include "hand_flip.h"
 #include "sentinel.h"
 #include "sentinel_log.h"
 #include "generated/nevr_build_info.h"
@@ -167,7 +169,11 @@ bool InstallPermissionWaitHook() noexcept {
     nevr_quest::quit::Install();
     // The controller type and raw pose log (#1986): two hooks and a poller thread; a pose is changed only while Controller Hand Flip
     // is On (hand_flip.h, off by default; KNOWN-WRONG #2043 the toggle is the interim). Its hand_pose_log_install line says whether
-    // it went in; a refused install leaves the game's calls as they are.
+    // it went in; a refused install leaves the game's calls as they are. The toggle's choice is the configuration's graphics.hand_flip
+    // (#2082): config.yaml's path and what the reader found are handed over before the hooks that read them exist.
+    const nevr_quest::HandFlipChoice& handFlip = sentinel::ActiveConfig().handFlip;
+    nevr_quest::hand_flip::Configure(nevr_quest::ConfigFilePath(sentinel::FilesDir()).c_str(),
+                                     handFlip.source == nevr_quest::Source::kFile, handFlip.on);
     nevr_quest::hand_pose_log::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);

@@ -487,6 +487,48 @@ void TheDeviceLineSaysWhetherTheToggleIsOnAndWhatSetIt() {
   }
 }
 
+// graphics.hand_flip: true (#2082): the tracking handler's first call resolves the start from the configuration the Quest handed over
+// (hf::Configure), with no menu change at all, so a restart with the key set rolls the first pose it sees, and the lines say where
+// the choice came from.
+void AConfiguredOnRollsFromTheFirstCallAndSaysSo() {
+  Reset();
+  Arm();
+  hf::Configure("/nonexistent/hand-flip/config.yaml", true, true);
+  sentinel::SetLogSink(&CaptureLine);
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  const Result r = Track(kLeft);
+  QCHECK(hf::Started() && hf::Enabled() && hf::CurrentBy() == hf::kByConfig);
+  QCHECK(OrientationOf(r.bytes, 0) == -0.5F && OrientationOf(r.bytes, 1) == -0.5F);
+  QCHECK(OrientationOf(r.bytes, 2) == 0.75F && OrientationOf(r.bytes, 3) == -0.25F);
+  hpl::PollOnceForTest();
+  sentinel::SetLogSink(nullptr);
+  const std::string* start = LineOf("hand_flip_start");
+  QCHECK(start != nullptr);
+  if (start != nullptr) QCHECK(start->find("\"source\":\"config\",\"flip\":1,") != std::string::npos);
+  const std::string* device = LineOf("hand_flip_device");
+  QCHECK(device != nullptr);
+  if (device != nullptr) QCHECK(device->find("\"flip\":1,\"by\":\"config\"}") != std::string::npos);
+  QCHECK(LineOf("hand_flip_saved") == nullptr);  // reading the key is not a change: nothing is saved
+}
+
+// graphics.hand_flip: false in the file is Off, from the file: no byte changes and the start says config.
+void AConfiguredOffChangesNothingAndSaysSo() {
+  Reset();
+  Arm();
+  hf::Configure("/nonexistent/hand-flip/config.yaml", true, false);
+  sentinel::SetLogSink(&CaptureLine);
+  g_devices = {{4, kLeft}};
+  EnumerateAll();
+  const Result r = Track(kLeft);
+  QCHECK(!hf::Enabled() && std::memcmp(r.bytes, g_tracking, sizeof(g_tracking)) == 0);
+  hpl::PollOnceForTest();
+  sentinel::SetLogSink(nullptr);
+  const std::string* start = LineOf("hand_flip_start");
+  QCHECK(start != nullptr);
+  if (start != nullptr) QCHECK(start->find("\"source\":\"config\",\"flip\":0,") != std::string::npos);
+}
+
 // The start line is the poller's, once, golden, after the first tracking call resolved it to the default.
 void TheStartLineIsWrittenOnceByThePoller() {
   Reset();
@@ -503,8 +545,8 @@ void TheStartLineIsWrittenOnceByThePoller() {
   QCHECK(start != nullptr);
   if (start != nullptr) {
     QCHECK(Golden(*start) ==
-           "\"event\":\"hand_flip_start\",\"source\":\"default\",\"flip\":0,\"unversioned_marker_ignored\":0,"
-           "\"consequence\":\"this start is not saved; only a change in the menu is remembered for the next launch\"}");
+           "\"event\":\"hand_flip_start\",\"source\":\"default\",\"flip\":0,"
+           "\"consequence\":\"this start is not saved; only a change in the menu is written to config.yaml for the next launch\"}");
   }
 }
 
@@ -561,7 +603,7 @@ void BlockingSeam() noexcept {
   }
 }
 void* StartThread(void*) {
-  hf::StartFromDirectory(nullptr);
+  hf::Start();
   return nullptr;
 }
 
@@ -638,6 +680,8 @@ int main() {
   ThePoseLineStaysRawWithTheToggleOn();
   TheDeviceLineSaysWhetherTheToggleIsOnAndWhatSetIt();
   TheStartLineIsWrittenOnceByThePoller();
+  AConfiguredOnRollsFromTheFirstCallAndSaysSo();
+  AConfiguredOffChangesNothingAndSaysSo();
   TheRollAddsNoSlot();
   AnUntrackedPoseIsNotRolled();
   ANinthIdIsNotRolledAndSaidOnce();
