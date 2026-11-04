@@ -1253,6 +1253,8 @@ class StageRedirectedLibsTest(unittest.TestCase):
             self.assertFalse((staged / name).exists(), name)
         self.assertEqual(sorted(p.name for p in staged.iterdir()), sorted(libs.staged_name(n) for n in self.NINE))
         self.assertEqual(libs.replaced_names(self.stage), [])
+        # The record the plugin-manifest check reads holds the names as staged, _q15t and all (#2092).
+        self.assertEqual(sorted(libs.staged_script_libs(self.stage)), sorted(libs.staged_name(n) for n in self.NINE))
 
     def test_a_subset_of_the_nine_is_refused_and_the_missing_ones_are_named(self):
         for name in (self.NINE[3], self.NINE[8]):

@@ -235,7 +235,8 @@ class CombatLibsConfigure(unittest.TestCase):
         start = text.index("\nbuild-quest-combat-libs ")
         recipe = text[start:text.index("\n\n#", start)]
         self.assertIn('libs="$out/libs"', recipe)
-        self.assertIn('for f in "$out"/lib????????????????.so "$out/SHA256SUMS"; do', recipe)
+        self.assertIn('done < "$out/SHA256SUMS"', recipe)  # the names SHA256SUMS lists, never a glob over the build tree
+        self.assertIn("no library was built", recipe)
         self.assertIn('(cd "$libs" && sha256sum -c --quiet SHA256SUMS)', recipe)
         self.assertIn("the repack takes build/quest-combat-libs/libs", recipe)
 

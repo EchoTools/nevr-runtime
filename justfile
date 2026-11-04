@@ -220,6 +220,8 @@ quest-reference-base apk out label="Echo VR":
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key, a keystore file named by
 # NEVR_QUEST_KEYSTORE with its passphrase in NEVR_QUEST_KEYSTORE_PASS (tools/quest_keystore.sh): it is copied into a
 # private tmpfs file for the signing command only and is never generated here.
+# `extra_libs` is a directory of lib<hash16>.so script libraries and their SHA256SUMS only (tools/quest_repack_libs.py stage-libs):
+# `build/quest-combat-libs/libs`, which `just build-quest-combat-libs` writes.
 android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -596,12 +598,15 @@ build-quest-combat-libs libsrc=env("NEVR_COMBAT_LIBSRC", "") store_apk=env("NEVR
     fi
     # The directory android-repack-apk's extra_libs (and the release recipes' libs) takes: the libraries and SHA256SUMS only,
     # never the CMake tree beside them (#2092). Hard links into the build tree; a copy where a link cannot be made.
+    # The names come from SHA256SUMS, not a glob, so a library an earlier libsrc left in the build tree is not taken.
     libs="$out/libs"
     rm -rf "$libs"
     mkdir -p "$libs"
-    for f in "$out"/lib????????????????.so "$out/SHA256SUMS"; do
-        ln "$f" "$libs/" 2>/dev/null || cp "$f" "$libs/"
-    done
+    [ -s "$out/SHA256SUMS" ] || { echo "build-quest-combat-libs: no library was built (build/quest-combat-libs/SHA256SUMS is empty or missing)" >&2; exit 1; }
+    while read -r _ name; do
+        ln "$out/$name" "$libs/" 2>/dev/null || cp "$out/$name" "$libs/"
+    done < "$out/SHA256SUMS"
+    ln "$out/SHA256SUMS" "$libs/" 2>/dev/null || cp "$out/SHA256SUMS" "$libs/"
     (cd "$libs" && sha256sum -c --quiet SHA256SUMS)
     echo "build-quest-combat-libs: $(wc -l < "$out/SHA256SUMS") libraries in build/quest-combat-libs; SHA256SUMS written; the repack takes build/quest-combat-libs/libs"
 
@@ -650,6 +655,7 @@ release-quest-variant-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pa
 
 # The combat APK of a release: the same repack as release-quest-apk, from the same loader asset, with the plugin libraries
 # `plugins` names (colon-separated). It is written to build/quest-release/<tag>/combat/ under the release's own name,
+# `libs` is a directory of script libraries and their SHA256SUMS: `build/quest-combat-libs/libs`, which `just build-quest-combat-libs` writes.
 # nevr-runtime-<tag>-quest.apk, with its .sha256 beside. It uploads nothing and never tags. `pack` and `pack_meta` as for the variant.
 release-quest-combat-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pack_meta="" libs="": (_release-quest-apk "release-quest-combat-apk" tag store_apk plugins "combat" pack pack_meta libs)
 
