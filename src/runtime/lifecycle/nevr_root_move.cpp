@@ -292,7 +292,7 @@ void RunAndLog() {
   const Inputs inputs = InputsFromEnvironment();
   if (inputs.root.empty()) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.ROOT] LOCALAPPDATA is unset or too long: no nevr root, nothing moved; logs and caches fall back to the game folder or are off");
+        "[NEVR.ROOT] LOCALAPPDATA is unset or too long: no nevr root, nothing moved; log records go to the console and are counted, and the sign-in cache is not saved");
     return;
   }
 
