@@ -179,9 +179,10 @@ void TheTextureRowIsUnchangedByTheNewRow() {
   // The row beside it has the stock NAMED FLAG row's keys, in its order, and the two state names: nothing the engine does not read.
   const Json& flip = (*PageNamed(doc, "NEVR"))["rows"][1];
   QCHECK(flip.size() == 6);
-  const char* const keys[] = {"path", "name", "value", "type", "truestr", "falsestr"};
-  int at = 0;
-  for (auto it = flip.begin(); it != flip.end() && at < 6; ++it, ++at) QCHECK(it.key() == keys[at]);
+  // The order is read from the text: this file's Json sorts its keys, the rewrite keeps the order it wrote.
+  const std::string text = tm::RewriteMenuSettings(kMenu, 3, 1).text;
+  QCHECK(text.find(R"({"path":"graphics|fullscreen","name":"Controller Hand Flip","value":true,"type":"NAMED FLAG","truestr":"Off",)"
+                   R"("falsestr":"On"})") != std::string::npos);
 }
 
 // A menu with no Texture Resolution row to hang it under is a shape mismatch: the row is added beside the texture control or not
