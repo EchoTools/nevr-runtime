@@ -2149,7 +2149,7 @@ quest-patcher json_include="": _vcpkg-quest-host
     ln -sfn "$(cd "$inc" && pwd)/nlohmann" "$out/json_inc/nlohmann"
     json_inc="$(cd "$out/json_inc" && pwd)"
     (cd src/quest && cmake --preset quest-patcher -DNEVR_HOST_JSON_INCLUDE="$json_inc")
-    (cd src/quest && cmake --build --preset quest-patcher --target quest_patch_libr15)
+    (cd src/quest && cmake --build --preset quest-patcher --target nevr_quest_patch_libr15)
     [ -x "$out/quest_patch_libr15" ] || { echo "quest-patcher: FAIL - $out/quest_patch_libr15 was not produced" >&2; exit 1; }
     echo "quest-patcher: built $out/quest_patch_libr15"
 

@@ -1,4 +1,4 @@
-"""#2050 (ADR 0041): quest_patch_libr15 is a CMake target, and the `quest-patcher` recipe builds it through the preset.
+"""#2050 (ADR 0041): quest_patch_libr15 is built by a CMake target (nevr_quest_patch_libr15, file name unchanged), and the `quest-patcher` recipe builds it through the preset.
 
 The recipe holds no compiler or linker command; the sources, the flags and the include paths of the tool are the target's
 (src/quest/host/CMakeLists.txt); the compiler is the preset's (src/quest/CMakePresets.json). The scope is this recipe and
@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 RECIPE = "quest-patcher"
-TARGET = "quest_patch_libr15"
+TARGET = "nevr_quest_patch_libr15"
 SOURCES = [
     "../patch/quest_patch_libr15.cpp",
     "../patch/libr15_patcher.cpp",
@@ -106,6 +106,7 @@ class QuestPatcherTarget(unittest.TestCase):
 
     def test_the_output_lands_where_the_repack_recipe_looks(self):
         self.assertIn('RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"', self.cmake)
+        self.assertIn("OUTPUT_NAME quest_patch_libr15", self.cmake)
         presets = json.loads((ROOT / "src/quest/CMakePresets.json").read_text())
         configure = {p["name"]: p for p in presets["configurePresets"]}["quest-patcher"]
         self.assertTrue(configure["binaryDir"].endswith("/../../build/quest-patcher"))

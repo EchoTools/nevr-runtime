@@ -22,7 +22,7 @@ endif()
 # The libr15 build-time patcher (docs/adr/0021): `android-repack-apk` runs it on the store's libr15.so, and the host tests
 # (`just test-quest-patcher`, `test-quest-patcher-pinned`) run it. It lands in the build directory itself:
 # build/quest-patcher/quest_patch_libr15.
-add_executable(quest_patch_libr15
+add_executable(nevr_quest_patch_libr15
   ../patch/quest_patch_libr15.cpp
   ../patch/libr15_patcher.cpp
   ../patch/libr15_extra_rows.cpp
@@ -30,7 +30,8 @@ add_executable(quest_patch_libr15
   ../patch/libr15_patch_identity.cpp
   ../data/sha256.cpp
   ../sentinel/arm64_reloc.cpp)
-target_include_directories(quest_patch_libr15 PRIVATE "${NEVR_REPO_ROOT}/src" "${NEVR_REPO_ROOT}/sdk/include")
-target_include_directories(quest_patch_libr15 SYSTEM PRIVATE "${NEVR_HOST_JSON_INCLUDE}")
-target_compile_options(quest_patch_libr15 PRIVATE -O2 -Wall -Wextra -Werror)
-set_target_properties(quest_patch_libr15 PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+target_include_directories(nevr_quest_patch_libr15 PRIVATE "${NEVR_REPO_ROOT}/src" "${NEVR_REPO_ROOT}/sdk/include")
+target_include_directories(nevr_quest_patch_libr15 SYSTEM PRIVATE "${NEVR_HOST_JSON_INCLUDE}")
+target_compile_options(nevr_quest_patch_libr15 PRIVATE -O2 -Wall -Wextra -Werror)
+# The target is nevr_<name> (docs/standards/naming.md); the file is the tool's name, which the repack recipe and the tests run.
+set_target_properties(nevr_quest_patch_libr15 PROPERTIES OUTPUT_NAME quest_patch_libr15 RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
