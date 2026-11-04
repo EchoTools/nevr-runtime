@@ -16,7 +16,7 @@ Native code is also built another way in places. The inventory is in "Where the 
 
 - **A compiler command in a recipe.** 53 lines in `justfile` run `g++ -std=c++17` with `-Wall -Wextra -Werror` and list their
   sources and include paths by hand (`test-quest-*`, `quest-patcher`, `test-scripting`).
-- **A compiler command in a shell script.** `src/quest/tests/q15t/run_host_tests.sh` and the scripts under `src/quest/tests/q15t/mod/` it sources.
+- **A compiler command in a shell script.** One script per test module, each with its own compiler command lines.
 - **A compiler command in a Python script.** `tools/build_quest_combat_libs.py` runs the NDK `clang++` once for each Quest
   script library; `tools/gen_plugin_signature_fixtures.py` and `tools/winvm/systest.py` run `x86_64-w64-mingw32-gcc`.
 
@@ -45,7 +45,7 @@ What this costs, measured in the tree:
    make: PC DLLs and EXEs, the Quest sentinel, the Quest plugins, the Quest script libraries, host tools the build runs
    (`quest_patch_libr15`), and test programs, including a program whose only job is a compile check.
 2. **Configuration is a preset and a toolchain file.** The compiler, its version pin, the sysroot, the API level, the flags and
-   the include paths a binary needs are in `CMakePresets.json` (root or `src/quest`), a toolchain file, or the target's
+   the include paths a binary needs are in `CMakePresets.json` (root, `src/quest`, or beside the CMake project it configures, as `src/quest/tests/q15t` does), a toolchain file, or the target's
    `CMakeLists.txt`. A toolchain the game's binaries require (the NDK that built them) is a toolchain file the preset names;
    it is never a compiler path passed to a script.
 3. **Recipes dispatch.** A `justfile` recipe configures with `cmake --preset`, builds with `cmake --build --preset` (with
@@ -74,7 +74,6 @@ under "Finding a violation" is the list of record.
 | --- | --- | --- |
 | `tools/build_quest_combat_libs.py`, called by the `build-quest-combat-libs` recipe | the Quest combat script libraries | #2047 |
 | the 18 `test-quest-*` recipes in `justfile` (`test-quest-data`, `-data-net`, `-invite`, `-shared`, `-router`, `-invite-transport`, `-tls`, `-hooks`, `-redirect`, `-hooks-pinned`, `-patcher`, `-patcher-pinned`, `-social`, `-social-pinned`, `-integration`, `-plugins`, `-autopilot`, `-integration-pinned`) | host test programs for the Quest code | #2049 |
-| `src/quest/tests/q15t/run_host_tests.sh` and `src/quest/tests/q15t/mod/*.sh` (recipe `test-quest-q15t`) | the q15t plugin's host tests | #2053 |
 | the `quest-patcher` recipe | `quest_patch_libr15`, run by the APK repack | #2050 |
 | `tools/gen_plugin_signature_fixtures.py`, `tools/winvm/systest.py` | signature-fixture DLLs and the `getaddrinfo` probe | #2051 |
 | the `test-android` and `test-scripting` recipes, `.github/workflows/echo-symbols-sync.yml` | compile checks; `test-scripting` also configures CMake with flags instead of a preset | #2052 |
