@@ -144,13 +144,14 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         'logs="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs"\n'
         '[[ -n "${FAKE_WINE_STARTED:-}" ]] && echo started > "$FAKE_WINE_STARTED"  # the script deploys before it starts the game\n'
         '[[ -n "${FAKE_HOST_BOOTSTRAP:-}" ]] && echo \'{"event":"host_attach"}\' > "$logs/nevr-update.jsonl"  # the installer writes its own log into the same folder\n'
+        '[[ -n "${FAKE_NOT_RUN_LOGS:-}" ]] && for n in nevr-2099-01-01T00-00-00.000.1.jsonl nevr-notes.jsonl nevr-2099-01-01.jsonl; do echo \'{"msg":"not a run log"}\' > "$logs/$n"; done  # same folder, not a main log\n'
         '# A host that refuses nevr-runtime.dll writes these records and the runtime, which writes the game log, never runs.\n'
         'if [[ -n "${FAKE_HOST_STOP:-}" ]]; then\n'
         '  ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\n'
         '  printf \'%s\\n\' \'{"event":"runtime_load","outcome":"runtime_refused","path":"Z:\\\\game\\\\nevr-runtime.dll","run":"r1","tag":"NEVR.HOST","ts":"\'$ts\'","verify":"refused","verify_reason":"\'$FAKE_HOST_STOP\'"}\' \\\n'
         '    \'{"event":"game_stop","exit_code":78,"reason":"runtime_refused","run":"r1","tag":"NEVR.HOST","ts":"\'$ts\'"}\' > "$logs/nevr-$(date -u +%Y-%m-%dT%H-%M-%S).000.jsonl"\n'
-        'elif [[ -n "${FAKE_LOG_TEXT:-}" ]]; then sleep "${FAKE_WINE_LOG_DELAY:-0}"; printf "%b" "$FAKE_LOG_TEXT" > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"\n'
-        'else sleep "${FAKE_WINE_LOG_DELAY:-0}"; echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"; fi\n'
+        'elif [[ -n "${FAKE_LOG_TEXT:-}" ]]; then sleep "${FAKE_WINE_LOG_DELAY:-0}"; printf "%b" "$FAKE_LOG_TEXT" > "$logs/${FAKE_LOG_PREFIX:-nevr-$(date -u +%Y-%m-%dT%H-%M-%S).}$(date +%3N).jsonl"\n'
+        'else sleep "${FAKE_WINE_LOG_DELAY:-0}"; echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/${FAKE_LOG_PREFIX:-nevr-$(date -u +%Y-%m-%dT%H-%M-%S).}$(date +%3N).jsonl"; fi\n'
         '[[ -n "${FAKE_WINE_ARGS:-}" ]] && printf "%s\\n" "$*" > "$FAKE_WINE_ARGS"\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
         '# The host loads the runtime from the nevr root (the folder above logs), never from beside itself (ADR 0012).\n'
@@ -355,7 +356,7 @@ class LaunchClientTest(unittest.TestCase):
     def test_the_run_log_is_read_from_the_nevr_root(self):
         result = self.run_script("--dll", str(self.dll))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertRegex(result.stdout, r"=== game log: .*/AppData/Local/nevr/echovr/logs/nevr-fake-")
+        self.assertRegex(result.stdout, r"=== game log: .*/AppData/Local/nevr/echovr/logs/nevr-\d{4}-")
 
     def test_the_run_log_is_copied_into_the_run_directory_before_the_game_copy_goes(self):
         # #1297: the test that made the game copy deletes it when the run ends, so the run's log must already be out of it.
@@ -382,6 +383,15 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertRegex(result.stdout, r"=== game log: .*/logs/nevr-2026-10-27T17-57-53\.")
         self.assertNotIn("nevr-update.jsonl", result.stdout)
+
+    def test_only_a_main_log_is_judged_not_an_archive_or_another_file_of_the_folder(self):
+        # A rotation's archive (nevr-<time>.<n>.jsonl) and any other nevr-*.jsonl share the logs folder and sort after the run's log.
+        # Only nevr-<timestamp>.jsonl and nevr-pid<hex>.jsonl are a process's main log (src/core/run_log_path.h).
+        env = dict(self.env, FAKE_NOT_RUN_LOGS="1")
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("nevr-notes.jsonl", result.stdout)
+        self.assertNotIn("000.1.jsonl", result.stdout)
 
     def test_a_host_that_refused_the_runtime_is_named_when_the_log_holds_only_its_records(self):
         # #1122: the host stops the game and the runtime, which writes the game lines, never runs. The host's records share the
@@ -1499,6 +1509,27 @@ class HostBrowserChainTest(unittest.TestCase):
         done = subprocess.run([REAL_WINE, "cmd", "/c", "type", "%LOCALAPPDATA%\\nevr\\echovr\\.credentials.json"],
                               env=self.env, capture_output=True, text=True, timeout=300)
         self.assertIn(LINK_MARKER, done.stdout, done.stdout + done.stderr)
+
+
+class RunLogNameTest(unittest.TestCase):
+    """is_run_log_name (tools/lib/game_install.sh) is the one rule launch-client.sh and verify-server.sh judge a game log by."""
+
+    def accepts(self, name: str) -> bool:
+        done = subprocess.run(["bash", "-c", 'source tools/lib/game_install.sh; is_run_log_name "$1"', "x", name],
+                              cwd=REPO, capture_output=True, text=True, timeout=30)
+        return done.returncode == 0
+
+    def test_a_process_main_log_is_one_and_nothing_else_in_the_folder_is(self):
+        for name in ("nevr-2026-11-04T10-43-51.990.jsonl", "nevr-pid1f4.jsonl"):
+            self.assertTrue(self.accepts(name), name)
+        for name in ("nevr-update.jsonl", "nevr-2026-11-04T10-43-51.990.1.jsonl", "nevr-notes.jsonl", "nevr-pid.jsonl",
+                     "nevr-2026-11-04.jsonl", "xnevr-2026-11-04T10-43-51.990.jsonl", "nevr-2026-11-04T10-43-51.990.jsonl.bak"):
+            self.assertFalse(self.accepts(name), name)
+
+    def test_verify_server_judges_logs_by_that_rule(self):
+        text = (REPO / "verify-server.sh").read_text()
+        self.assertIn('is_run_log_name "${f##*/}" || continue', text)
+        self.assertNotIn("nevr-update.jsonl) continue", text)
 
 
 if __name__ == "__main__":

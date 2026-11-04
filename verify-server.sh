@@ -251,7 +251,7 @@ RUN_LOG_COPY="$OUT/game-log.jsonl"
 run_log=""
 for f in "$RUN_LOGDIR"/nevr-*.jsonl; do
   [ -f "$f" ] || continue
-  case "$f" in */nevr-update.jsonl) continue ;; esac  # the installer's own log is not the game's
+  is_run_log_name "${f##*/}" || continue  # the installer's nevr-update.jsonl and a rotation's archive share the folder: not the game's
   [ "$(stat -c %Y "$f")" -ge "$RUN_START_EPOCH" ] && run_log="$f"
 done
 copied_to=none

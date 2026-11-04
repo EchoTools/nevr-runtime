@@ -300,12 +300,12 @@ fi
 # millisecond timestamp, so they are unique per run) and was modified since. Judging by mtime alone
 # let a previous run's log, last written in the same second the run started, decide the verdict. The host writes its
 # records into the same file as the runtime, so a run the host stopped has a log too (it is judged below).
-pre_logs=$(for f in "$LOGDIR"/nevr-*.jsonl; do [[ -e "$f" ]] && printf '%s\n' "$f"; done || true)
+pre_logs=$(for f in "$LOGDIR"/nevr-*.jsonl; do [[ -e "$f" ]] && is_run_log_name "${f##*/}" && printf '%s\n' "$f"; done || true)
 newest_run_log() {
   local f found=""
   for f in "$LOGDIR"/nevr-*.jsonl; do
     [[ -f "$f" && $(stat -c %Y "$f") -ge $start ]] || continue
-    [[ "$f" == */nevr-update.jsonl ]] && continue  # the installer's own log, in the same folder: not the game's
+    is_run_log_name "${f##*/}" || continue  # the installer's nevr-update.jsonl and a rotation's archive share the folder: not the game's
     grep -qxF -- "$f" <<<"$pre_logs" && continue
     found="$f"
   done
