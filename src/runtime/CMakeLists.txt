@@ -1805,6 +1805,10 @@ if(BUILD_TESTING)
       nevr_host_core GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
     gtest_discover_tests(test_plugin_signature DISCOVERY_MODE PRE_TEST)
 
+    # The unsigned DLLs those fixtures are made from (ADR 0041): the `sigfix_dlls` target builds them, and
+    # gen_plugin_signature_fixtures.py is handed <bin>/sigfix.
+    add_subdirectory(tests/sigfix)
+
     # plugin_tree tests (ADR 0010, #741): a plugin's imports, delay loads and forwarders from its own directory
     # pass the same check, over fixture directories the same generator writes.
     add_executable(test_plugin_tree

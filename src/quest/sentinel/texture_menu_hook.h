@@ -26,7 +26,7 @@
  * The two JSON hooks and the rest are installed together or not at all: the control is offered only when the three hooks that make
  * it work are in place.
  *
- * What a player meets, from one setting. The settings menu has a GRAPHICS page with one control, "Texture Resolution", of six
+ * What a player meets, from one setting. The settings menu has a NEVR page with one control, "Texture Resolution", of six
  * entries (Very Low, Low, Medium, High, Very High, Ultra), default Low (the headset's stock size, or the level the configuration
  * names). A change applies at the next rendered frame. The choice is remembered in config.yaml, as the one key
  * graphics.texture_quality: the poller writes the level word after the player changes the control (NevrConfig::Set, which edits the

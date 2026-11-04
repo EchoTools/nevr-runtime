@@ -1421,6 +1421,23 @@ TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileIsLeftAlone) {
   EXPECT_FALSE(TestLogContains("refused a later load"));
 }
 
+// Pin test (#1167). A plugin whose configured name is spelled in capitals is the file it names: the loader compares the
+// configured path with the held file's path, both lowered (NameHeldFile), so it does not write the "is loaded from"
+// line, and the plugin loads. Breaking the lowering of the held path at plugin_loader.cpp:965 (mutant M965) makes the
+// line appear and turns this test red. Under Wine the held file's final path keeps the spelling it was opened with, so
+// a file-name case difference between the disk and the entry is not reproducible here; this test pins the comparison.
+TEST_F(PluginDependencyGateTest, AStagedPluginNamedInCapitalsIsNotSaidToBeLoadedFromElsewhere) {
+  const std::string source = fixtures_ + "/" + manifest_["files"]["test_plugin_onframe.signed"].get<std::string>();
+  const std::string onDisk = pluginsDir_ + "CaseTest_Staged.dll";
+  ASSERT_TRUE(CopyFileA(source.c_str(), onDisk.c_str(), FALSE)) << source << " error " << GetLastError();
+  copies_.push_back(onDisk);
+  g_testPluginLoadPlan.push_back({"CaseTest_Staged.dll", "CaseTest_Staged.dll", false, "", "{}"});
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_NE(GetModuleHandleA("CaseTest_Staged.dll"), nullptr) << "the file the entry names did not load";
+  EXPECT_FALSE(TestLogContains("is loaded from ")) << "a case-only difference was reported as another file";
+}
+
 TEST_F(PluginDependencyGateTest, LateLoadByBareNameResolvesToThePluginsDirectory) {
   Plan("late_bare.dll", "unsigned");
   g_testPluginLoadPlan.clear();

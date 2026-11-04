@@ -1,0 +1,20 @@
+{
+    "version": 4,
+    "configurePresets": [
+        {
+            "name": "script-check",
+            "displayName": "Script checker and the host build of the stubs generator (host compiler)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../../../build/script-check",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "script-check",
+            "configurePreset": "script-check"
+        }
+    ]
+}
