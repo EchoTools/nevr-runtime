@@ -6,8 +6,10 @@
 // (CR15NetGame::SetErrorMessage, echovr.exe 0x1401ae5e0) is laid out. The hook that applies them is in
 // lobby_full_backoff.cpp.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 namespace nevr_lobby_failure_message {
@@ -79,6 +81,66 @@ inline bool WriteErrorBlock(std::uint8_t* gameBase, const char* title, const cha
   std::memcpy(lines, title, titleLen < kErrorLineBytes - 1 ? titleLen : kErrorLineBytes - 1);
   const std::size_t messageLen = MessageBytes(field, fieldSize);
   std::memcpy(lines + kErrorLineBytes, field, messageLen < kErrorLineBytes - 1 ? messageLen : kErrorLineBytes - 1);
+  return true;
+}
+
+// Why WriteErrorBlock declines (and writes nothing): the game has no base to write into, or the service sent no message.
+// It checks the base first, and DeclineFor keeps that order, so DeclineFor names the reason WriteErrorBlock declined for.
+enum class Decline : std::uint8_t { kNone, kNoGameBase, kNoMessage };
+
+inline Decline DeclineFor(const std::uint8_t* gameBase, const char* field, std::size_t fieldSize) {
+  if (gameBase == nullptr) return Decline::kNoGameBase;
+  if (!HasMessage(field, fieldSize)) return Decline::kNoMessage;
+  return Decline::kNone;
+}
+
+// The reason's token in the decline line.
+inline const char* DeclineToken(Decline reason) {
+  switch (reason) {
+    case Decline::kNoGameBase: return "no_game_base";
+    case Decline::kNoMessage: return "no_message";
+    case Decline::kNone: break;
+  }
+  return "none";
+}
+
+// The declines already logged in this process: one bit per reason, one byte per code. Not thread-safe; the caller holds
+// its lock.
+class DeclineLog {
+ public:
+  // True the first time `reason` is declined for `code`, false after.
+  bool FirstTime(std::uint8_t code, Decline reason) {
+    if (reason == Decline::kNone) return false;
+    const std::uint8_t bit = reason == Decline::kNoGameBase ? 0x1 : 0x2;
+    std::uint8_t& seen = seen_[code];
+    if ((seen & bit) != 0) return false;
+    seen |= bit;
+    return true;
+  }
+
+ private:
+  std::array<std::uint8_t, 256> seen_{};
+};
+
+// The decline line, the same text on both platforms: the PC log line, and the Quest sentinel's record (lobby_full_hooks.cpp).
+constexpr const char kDeclineConsequence[] = "the game shows its fixed literal for this code instead";
+constexpr std::size_t kDeclineLineBytes = 192;
+
+// `[NEVR.LOBBY] failure message not shown code=<n> title=<name> reason=<token>: <consequence>`, NUL-terminated.
+inline void FormatDeclineLine(char (&out)[kDeclineLineBytes], std::uint8_t code, Decline reason) {
+  static_cast<void>(std::snprintf(out, sizeof(out),
+                                  "[NEVR.LOBBY] failure message not shown code=%u title=%s reason=%s: %s",
+                                  static_cast<unsigned int>(code), Title(code), DeclineToken(reason), kDeclineConsequence));
+}
+
+// Where a decline goes: the platform's writer, or a test's capture.
+using DeclineSink = void (*)(std::uint8_t code, Decline reason);
+
+// Passes the decline to `write` the first time `reason` is declined for `code` in this process, and returns true; otherwise
+// passes nothing. The caller holds the lock that guards `log`.
+inline bool NoteDeclined(DeclineLog& log, std::uint8_t code, Decline reason, DeclineSink write) {
+  if (write == nullptr || !log.FirstTime(code, reason)) return false;
+  write(code, reason);
   return true;
 }
 
