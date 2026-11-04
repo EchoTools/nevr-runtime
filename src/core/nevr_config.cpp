@@ -489,7 +489,44 @@ bool OnlySpaceOrComment(const std::string& text, std::size_t from, std::size_t t
 
 const char* BoolText(bool value) { return value ? "true" : "false"; }
 
-bool ReadsBack(const std::string& text, const std::string& section, const std::string& key, bool value) {
+}  // namespace
+
+// What Set writes: a boolean (written as true/false) or a plain word.
+struct NevrConfig::ScalarEdit {
+  std::string text;
+  bool isBool = false;
+  bool boolValue = false;
+};
+
+namespace {
+
+using ScalarEdit = NevrConfig::ScalarEdit;
+
+// A word Set may write without quotes: letters, digits, `_`, `.` and `-`, starting with a letter, digit or `_`, and not a word
+// YAML 1.1 reads as a boolean or a null, so a getter reads back the string that was written.
+bool IsPlainWord(const std::string& word) {
+  if (word.empty() || word.size() > 64) return false;
+  for (std::size_t i = 0; i < word.size(); ++i) {
+    const char c = word[i];
+    const bool alnum = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+    if (!alnum && (i == 0 || (c != '.' && c != '-'))) return false;
+  }
+  std::string lower;
+  for (const char c : word) lower += static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+  for (const char* reserved : {"true", "false", "yes", "no", "on", "off", "y", "n", "null"}) {
+    if (lower == reserved) return false;
+  }
+  return true;
+}
+
+bool ScalarMatches(const YAML::Node& node, const ScalarEdit& edit) {
+  if (!node.IsDefined() || !node.IsScalar()) return false;
+  if (!edit.isBool) return node.Scalar() == edit.text;
+  bool got = false;
+  return YAML::convert<bool>::decode(node, got) && got == edit.boolValue;
+}
+
+bool ReadsBack(const std::string& text, const std::string& section, const std::string& key, const ScalarEdit& edit) {
   try {
     const std::vector<YAML::Node> docs = YAML::LoadAll(text);
     if (docs.size() != 1 || !docs[0].IsMap()) return false;
@@ -497,8 +534,7 @@ bool ReadsBack(const std::string& text, const std::string& section, const std::s
     const YAML::Node sectionNode = rootNode[section];
     if (!sectionNode.IsDefined() || !sectionNode.IsMap()) return false;
     const YAML::Node keyNode = static_cast<const YAML::Node&>(sectionNode)[key];
-    bool got = false;
-    return keyNode.IsDefined() && keyNode.IsScalar() && YAML::convert<bool>::decode(keyNode, got) && got == value;
+    return ScalarMatches(keyNode, edit);
   } catch (const YAML::Exception&) {
     return false;
   }
@@ -530,8 +566,8 @@ std::string LineEnding(const std::string& text, const std::vector<std::size_t>& 
 }
 
 // The edit itself. `existing` is the file's text, or null when the file is missing.
-Splice SpliceBool(const std::string* existing, const std::string& section, const std::string& key, bool value, std::string* out) {
-  const std::string v = BoolText(value);
+Splice SpliceScalar(const std::string* existing, const std::string& section, const std::string& key, const ScalarEdit& edit, std::string* out) {
+  const std::string& v = edit.text;
   if (existing == nullptr) {
     *out = section + ":\n  " + key + ": " + v + "\n";
     Splice s;
@@ -642,8 +678,7 @@ Splice SpliceBool(const std::string* existing, const std::string& section, const
           } else {
             if (!valueNode.IsScalar()) return Refused("value_not_a_scalar");
             if (valueNode.Tag() != "?" && valueNode.Tag() != "!") return Refused("value_not_plain");  // a tag, e.g. !!str
-            bool current = false;
-            if (YAML::convert<bool>::decode(valueNode, current) && current == value) {
+            if (ScalarMatches(valueNode, edit)) {
               *out = text;
               result.ok = true;
               result.unchanged = true;
@@ -695,7 +730,7 @@ Splice SpliceBool(const std::string* existing, const std::string& section, const
     }
   }
   if (!result.ok) return Refused("position_mismatch");
-  if (!ReadsBack(*out, section, key, value)) {
+  if (!ReadsBack(*out, section, key, edit)) {
     out->clear();
     return Refused("verify_failed");
   }
@@ -719,6 +754,25 @@ void SetRenameForTest(RenameFn rename) { g_rename = rename; }
 }  // namespace config_testing
 
 ConfigSetResult NevrConfig::Set(const std::string& path, bool value) noexcept {
+  ScalarEdit edit;
+  edit.text = BoolText(value);
+  edit.isBool = true;
+  edit.boolValue = value;
+  return SetScalar(path, edit);
+}
+
+ConfigSetResult NevrConfig::Set(const std::string& path, const std::string& value) noexcept {
+  ScalarEdit edit;
+  edit.text = value;
+  if (!IsPlainWord(value)) {
+    ConfigSetResult r;
+    r.reason = "value_not_a_plain_word";
+    return r;
+  }
+  return SetScalar(path, edit);
+}
+
+ConfigSetResult NevrConfig::SetScalar(const std::string& path, const ScalarEdit& edit) noexcept {
   ConfigSetResult r;
   try {
     if (boundFile_.empty()) {
@@ -775,7 +829,7 @@ ConfigSetResult NevrConfig::Set(const std::string& path, bool value) noexcept {
     }
 
     std::string edited;
-    const Splice splice = SpliceBool(existing, section, key, value, &edited);
+    const Splice splice = SpliceScalar(existing, section, key, edit, &edited);
     if (!splice.ok) {
       r.reason = splice.reason;
       return r;
@@ -814,7 +868,11 @@ ConfigSetResult NevrConfig::Set(const std::string& path, bool value) noexcept {
     r.reason = "";
     if (impl_) {
       try {
-        impl_->root[section][key] = value;
+        if (edit.isBool) {
+          impl_->root[section][key] = edit.boolValue;
+        } else {
+          impl_->root[section][key] = edit.text;
+        }
       } catch (const YAML::Exception&) {
         // The file holds the value; the in-memory tree keeps what it had.
       }

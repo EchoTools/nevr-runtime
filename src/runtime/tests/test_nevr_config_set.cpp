@@ -288,3 +288,113 @@ TEST(NevrConfigSet, SetThenReadRoundTrip) {
 }
 
 }  // namespace
+
+// ---- a plain word: the player's texture level (graphics.texture_quality) ------------------------------------------------------
+
+namespace {
+
+nevr::ConfigSetResult SetWord(const std::string& file, const std::string& word, const char* key = "graphics.texture_quality") {
+  nevr::NevrConfig cfg;
+  cfg.BindFile(file);
+  return cfg.Set(key, word);
+}
+
+}  // namespace
+
+// The level the player picks replaces the old one in place; every other byte of a commented file stays.
+TEST(NevrConfigSetWord, ACommentedFileKeepsEveryByteButTheWord) {
+  const std::string before =
+      "# nEVR config\n"
+      "graphics:\n"
+      "  # the level the headset renders at\n"
+      "  texture_quality: high   # the player's pick\n"
+      "  hand_flip: true\n"
+      "\n"
+      "social:\n"
+      "  facade: true\n";
+  Dir dir;
+  Write(dir.File(), before);
+  const nevr::ConfigSetResult r = SetWord(dir.File(), "very_high");
+  ASSERT_TRUE(r.ok) << r.reason;
+  EXPECT_TRUE(r.wrote);
+  std::string expected = before;
+  expected.replace(expected.find("high   # the player's pick"), 4, "very_high");
+  EXPECT_EQ(Read(dir.File()), expected);
+  ASSERT_TRUE(SetWord(dir.File(), "high").ok);
+  EXPECT_EQ(Read(dir.File()), before);  // and back, byte for byte
+  EXPECT_FALSE(Exists(dir.Tmp()));
+}
+
+TEST(NevrConfigSetWord, AWordThatIsAlreadyThereIsNotRewritten) {
+  Dir dir;
+  Write(dir.File(), "graphics:\n  texture_quality: \"ultra\"\n");
+  const nevr::ConfigSetResult r = SetWord(dir.File(), "ultra");
+  ASSERT_TRUE(r.ok) << r.reason;
+  EXPECT_FALSE(r.wrote);
+  EXPECT_EQ(Read(dir.File()), "graphics:\n  texture_quality: \"ultra\"\n");
+}
+
+TEST(NevrConfigSetWord, QuotedAndUnquotedValuesKeepTheirQuotes) {
+  Dir quoted;
+  Write(quoted.File(), "graphics:\n  texture_quality: 'low'\n");
+  ASSERT_TRUE(SetWord(quoted.File(), "medium").ok);
+  EXPECT_EQ(Read(quoted.File()), "graphics:\n  texture_quality: 'medium'\n");
+  Dir bare;
+  Write(bare.File(), "graphics:\n  texture_quality: low\n");
+  ASSERT_TRUE(SetWord(bare.File(), "medium").ok);
+  EXPECT_EQ(Read(bare.File()), "graphics:\n  texture_quality: medium\n");
+}
+
+// A block without the key gets it at the block's indentation; a missing file is created holding just the key.
+TEST(NevrConfigSetWord, AnInsertAndACreatedFile) {
+  Dir block;
+  Write(block.File(), "graphics:\n    hand_flip: true   # four spaces\n\nsocial:\n  facade: true\n");
+  ASSERT_TRUE(SetWord(block.File(), "high").ok);
+  EXPECT_EQ(Read(block.File()), "graphics:\n    hand_flip: true   # four spaces\n    texture_quality: high\n\nsocial:\n  facade: true\n");
+  Dir missing;
+  ASSERT_TRUE(SetWord(missing.File(), "low").ok);
+  EXPECT_EQ(Read(missing.File()), "graphics:\n  texture_quality: low\n");
+}
+
+TEST(NevrConfigSetWord, FlowStyleAndBrokenFilesAreRefusedAndNothingIsWritten) {
+  const struct {
+    const char* text;
+    const char* reason;
+  } cases[] = {
+      {"graphics: {texture_quality: low}\n", "section_flow_style"},
+      {"graphics:\n  texture_quality: [low, high]\n", "value_not_a_scalar"},
+      {"graphics:\n  texture_quality: low\n  broken: [unclosed\n", "unparseable"},
+  };
+  for (const auto& c : cases) {
+    Dir dir;
+    Write(dir.File(), c.text);
+    const nevr::ConfigSetResult r = SetWord(dir.File(), "high");
+    EXPECT_FALSE(r.ok) << c.text;
+    EXPECT_STREQ(r.reason, c.reason) << c.text;
+    EXPECT_EQ(Read(dir.File()), c.text) << "a refusal changed the file";
+    EXPECT_FALSE(Exists(dir.Tmp()));
+  }
+}
+
+// Only a plain word is written: text that YAML would read as another type, or that needs quoting, is refused before the file is read.
+TEST(NevrConfigSetWord, ATextThatIsNotAPlainWordIsRefused) {
+  for (const char* word : {"", "high: 1", "a b", "\"high\"", "#high", "true", "No", "NULL", "-high", "high\n", "x\ty"}) {
+    Dir dir;
+    Write(dir.File(), "graphics:\n  texture_quality: low\n");
+    const nevr::ConfigSetResult r = SetWord(dir.File(), word);
+    EXPECT_FALSE(r.ok) << "[" << word << "]";
+    EXPECT_STREQ(r.reason, "value_not_a_plain_word") << "[" << word << "]";
+    EXPECT_EQ(Read(dir.File()), "graphics:\n  texture_quality: low\n");
+  }
+}
+
+// The getter reads what was written, so the Quest's next read of the key in this process sees the choice.
+TEST(NevrConfigSetWord, SetThenReadRoundTrip) {
+  Dir dir;
+  Write(dir.File(), "graphics:\n  texture_quality: low\n");
+  nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFile(dir.File());
+  ASSERT_TRUE(cfg.Set("graphics.texture_quality", std::string("ultra")).ok);
+  EXPECT_EQ(cfg.GetString("graphics.texture_quality").value_or(""), "ultra");
+  const nevr::NevrConfig again = nevr::NevrConfig::LoadFromFile(dir.File());
+  EXPECT_EQ(again.GetString("graphics.texture_quality").value_or(""), "ultra");
+}

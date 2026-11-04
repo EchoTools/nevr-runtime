@@ -100,7 +100,7 @@ enum class NodeKind { kAbsent, kNull, kScalar, kSequence, kMapping };
 /// Refusals (nothing is written): "no_file", "unsupported_path", "unreadable", "not_a_regular_file", "too_large",
 /// "unparseable" (a YAML error, which includes a truncated file), "multi_document", "not_a_mapping", "root_flow_style",
 /// "section_not_a_mapping", "section_flow_style", "duplicate_section", "duplicate_key", "value_not_a_scalar",
-/// "value_not_plain", "value_not_on_key_line", "multiline_scalar", "position_mismatch", "verify_failed". A failed
+/// "value_not_plain", "value_not_a_plain_word", "value_not_on_key_line", "multiline_scalar", "position_mismatch", "verify_failed". A failed
 /// write step gives "write_failed" or "rename_failed" with `err`, and leaves the previous file as it was.
 struct ConfigSetResult {
   bool ok = false;
@@ -166,6 +166,12 @@ class NevrConfig {
   /// and toml_edit (https://docs.rs/toml_edit/).
   ConfigSetResult Set(const std::string& path, bool value) noexcept;
 
+  /// The same edit for a plain word (letters, digits, `_`, `.`, `-`; at most 64; not a YAML boolean or null word), such as the
+  /// level name at "graphics.texture_quality". Any other text is refused with "value_not_a_plain_word" and nothing is written.
+  /// A string literal must name this overload: `Set(path, "high")` would pick the boolean one, so that spelling is deleted.
+  ConfigSetResult Set(const std::string& path, const std::string& value) noexcept;
+  ConfigSetResult Set(const std::string& path, const char* value) = delete;
+
   const std::vector<PluginSpec>& Plugins() const { return plugins_; }
   bool Empty() const { return empty_; }
   /// Names of unset bare ${VAR} references found at load, each once, sorted. Their text stays in
@@ -179,6 +185,11 @@ class NevrConfig {
 
  private:
   struct Impl;                       // holds the interpolated yaml-cpp tree (.cpp only)
+ public:
+  struct ScalarEdit;  // what Set writes (.cpp only)
+
+ private:
+  ConfigSetResult SetScalar(const std::string& path, const ScalarEdit& edit) noexcept;
   std::unique_ptr<Impl> impl_;
   std::vector<PluginSpec> plugins_;
   std::string boundFile_;
