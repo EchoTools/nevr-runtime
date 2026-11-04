@@ -7,10 +7,10 @@ if(NOT Q15T_ARM64)
     list(APPEND _wsources "${Q15T_PLUGIN_SRC}/${m}.cpp")
   endforeach()
   set(_wopts -g -O0 -fno-exceptions -fno-rtti -Wall -Wextra -Werror)
-  add_library(wiring_modules OBJECT ${_wsources})
-  target_compile_options(wiring_modules PRIVATE ${_wopts})
-  target_include_directories(wiring_modules PRIVATE "${Q15T_PLUGIN_SRC}" "${Q15T_SDK_INCLUDE}")
-  add_dependencies(mod_wiring wiring_modules)
+  add_library(nevr_q15t_wiring_modules OBJECT ${_wsources})
+  target_compile_options(nevr_q15t_wiring_modules PRIVATE ${_wopts})
+  target_include_directories(nevr_q15t_wiring_modules PRIVATE "${Q15T_PLUGIN_SRC}" "${Q15T_SDK_INCLUDE}")
+  add_dependencies(mod_wiring nevr_q15t_wiring_modules)
 endif()
 
 set(_wall Q15T_FXTRAIL=1 Q15T_VOIPDROP=1 Q15T_CUSTCTX=1 Q15T_DRONEGUARD=1 Q15T_PEERCLAMP=1 Q15T_GUNCONNECT=1 Q15T_AIBOTS=1 Q15T_BVH=1 Q15T_WALLFIRE=1 Q15T_IMPACTSND=1 Q15T_EC=1 Q15T_ECFX=1 Q15T_DRONEKILL=1 Q15T_DRONEMUZZLE=1 Q15T_POWERBOOST=3 Q15T_HUDMETER=1 Q15T_SHIELDGAMMA=2 Q15T_LEVELNAME=1 Q15T_MUSIC=1 Q15T_SENSORWD=1)
@@ -21,7 +21,7 @@ set(_winclude "SHELL:-include ${Q15T_TESTS_DIR}/host_overrides.h")
 # wiring_program(<program> <defs>...): wiring_test.cpp and plugin.cpp built with the defines, linked with the module objects
 function(wiring_program program)
   q15t_host_test(${program} TEST wiring_test.cpp SRC plugin BASE_OPTS ${_wopts} OPTS "${_winclude}"
-    OBJECTS $<TARGET_OBJECTS:wiring_modules> DEFS ${ARGN} LINK_OPTS -rdynamic LIBS dl pthread)
+    OBJECTS $<TARGET_OBJECTS:nevr_q15t_wiring_modules> DEFS ${ARGN} LINK_OPTS -rdynamic LIBS dl pthread)
 endfunction()
 
 wiring_program(wiring_test ${_wall} Q15T_HZ_MATCH90=1 Q15T_T26=0 ${_wslots} ${_wbuild})

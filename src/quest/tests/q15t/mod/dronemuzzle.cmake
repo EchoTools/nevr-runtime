@@ -5,6 +5,6 @@ q15t_arm64_object(dronemuzzle)
 if(Q15T_ARM64)
   # the two naked thunks are in the object: instruction words and relocations, at least 38 lines
   add_test(NAME dronemuzzle.arm64_thunks
-           COMMAND "${Q15T_TESTS_DIR}/check/dronemuzzle_thunks.sh" "${Q15T_NDK_BIN}/llvm-objdump" "$<TARGET_OBJECTS:arm64_dronemuzzle>")
+           COMMAND "${Q15T_TESTS_DIR}/check/dronemuzzle_thunks.sh" "${Q15T_NDK_BIN}/llvm-objdump" "$<TARGET_OBJECTS:nevr_q15t_arm64_dronemuzzle>")
   set_tests_properties(dronemuzzle.arm64_thunks PROPERTIES LABELS dronemuzzle)
 endif()
