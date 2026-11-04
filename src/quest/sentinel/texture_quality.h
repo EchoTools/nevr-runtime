@@ -75,7 +75,7 @@ constexpr EyeSize SizeFor(Level level, Headset headset) noexcept {
 //
 // The game's own settings menu carries the level as the `graphics|msaa` setting (a field the render path never reads; texture_menu.h
 // has the reason and the evidence), as the index of a six-entry STRING ARRAY. The index is the menu's order, lowest resolution
-// first, and the remembered choice (nevr_texture_quality.json, texture_menu.h) is that index. `stock` has no entry of its own: the
+// first, and the remembered choice (the graphics.texture_quality key in config.yaml, texture_menu_hook.cpp) is that level. `stock` has no entry of its own: the
 // menu shows it as Low, because Low is the stock size.
 inline constexpr int kMenuLevelCount = 6;
 inline constexpr int kDefaultMenuIndex = 1;  // Low
