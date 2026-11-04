@@ -60,7 +60,12 @@ FAKE_ADB = textwrap.dedent('''\
         (root / "installed.log").write_text(args[-1])
         print("Performing Streamed Install")
         print("Success")
+        if os.environ.get("FAKE_ADB_INSTALL") == "rc":
+            sys.exit(1)  # says Success and still exits non-zero: the exit code decides
     elif cmd == "push":
+        if os.environ.get("FAKE_ADB_PUSH") == "fail":
+            print("adb: error: failed to copy: No space left on device", file=sys.stderr)
+            sys.exit(1)
         local, remote = pathlib.Path(args[1]), dev(args[2])
         target = remote / local.name if remote.is_dir() else remote
         shutil.copytree(local, target)
@@ -207,6 +212,18 @@ class StoreInstallTest(unittest.TestCase):
         self.assertEqual(self.refused(lines), "install_failed")
         self.assertIn("INSTALL_FAILED_VERSION_DOWNGRADE", lines[-1]["detail"])
         self.assertNotIn("push", [c[0] for c in self.calls()])
+
+    def test_an_install_that_prints_success_and_exits_non_zero_is_a_refusal(self):
+        done, lines = self.run_tool(FAKE_ADB_INSTALL="rc")
+        self.assertEqual(self.refused(lines), "install_failed")
+
+    def test_a_push_that_fails_is_refused_and_leaves_no_staging_and_the_old_data(self):
+        done, lines = self.run_tool(FAKE_ADB_PUSH="fail")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.refused(lines), "push_failed")
+        self.assertIn("No space left", lines[-1]["detail"])
+        self.assertEqual(self.device_files(), {"old_stock.bin": b"data from an earlier install"})
+        self.assertFalse((self.fake / "device" / "sdcard/Android/media/com.readyatdawn.r15/files/.nevr-stock-staging").exists())
 
     def test_data_that_is_not_on_the_device_after_the_move_is_refused(self):
         done, lines = self.run_tool(FAKE_ADB_LOSE="1")

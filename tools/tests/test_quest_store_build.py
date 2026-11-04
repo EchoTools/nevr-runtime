@@ -138,6 +138,14 @@ class CollectTest(StoreBuildCase):
             self.collect()
         self.assertEqual(caught.exception.code, "repack_missing")
 
+    def test_a_refused_collect_leaves_no_manifest_from_an_earlier_one(self):
+        self.collect()
+        self.assertTrue(self.layout.manifest.exists())
+        (self.layout.stock_root / fx.OBB_SHA / next(iter(fx.DATA))).write_bytes(b"x" * len(fx.DATA[next(iter(fx.DATA))]))
+        with self.assertRaises(qsb.Refused):
+            self.collect()
+        self.assertFalse(self.layout.manifest.exists())  # check cannot take the old manifest for the outputs of a failed run
+
     def test_a_missing_stock_data_directory_names_the_step_to_run(self):
         import shutil
         shutil.rmtree(self.layout.stock_root)

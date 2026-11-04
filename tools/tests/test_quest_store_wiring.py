@@ -55,6 +55,12 @@ class RecipesTest(unittest.TestCase):
         self.assertLess(text.index("android-repack-apk"), text.index("quest_store_build.py collect"))
         self.assertIn('[ "$status" -eq 3 ] || exit "$status"', text)  # only a miss rebuilds; any other failure stops
 
+    def test_the_miss_status_of_check_is_the_one_the_recipe_waits_for(self):
+        source = (ROOT / "tools/quest_store_build.py").read_text()
+        status = re.search(r"(?m)^EXIT_MISS = (\d+)$", source).group(1)
+        self.assertIn(f'[ "$status" -eq {status} ] || exit "$status"', recipe("quest-store-build"))
+        self.assertEqual(status, "3")
+
     def test_the_install_recipe_runs_the_install_tool_and_is_not_a_dependency_of_the_build(self):
         self.assertIn('python3 -I tools/quest_store_install.py "$@"', recipe("quest-store-install"))
         self.assertNotIn("quest-store-install", recipe("quest-store-build").split("\n", 1)[0])

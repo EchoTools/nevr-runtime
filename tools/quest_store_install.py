@@ -127,7 +127,8 @@ def replace_data(out: pathlib.Path, adb: Adb, manifest: Dict[str, object]) -> No
             raise build.Refused("adb_failed", f"{' '.join(command)} exited {done.returncode}: {done.stderr.strip()[-200:]}")
     done = adb.run("data_push", ["push", str(out / "_data"), DEVICE_STAGING + "/"], PUSH_TIMEOUT_S)
     if done.returncode != 0:
-        raise build.Refused("push_failed", f"adb push exited {done.returncode}: {(done.stdout + done.stderr).strip()[-300:]}")
+        adb.shell("staging_removed", ["rm", "-rf", DEVICE_STAGING])
+        raise build.Refused("push_failed", f"adb push exited {done.returncode}: {(done.stdout + done.stderr).strip()[-300:]} (the data in use is untouched)")
     try:
         for entry in files:
             measured = device_sha256(adb, f"{DEVICE_STAGING}/{entry['path']}")
