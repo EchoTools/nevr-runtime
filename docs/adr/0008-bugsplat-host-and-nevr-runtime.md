@@ -102,10 +102,9 @@ stand-in whose `game_main` runs the original wrapper through the trampoline; it 
 
 The host writes under its own per-game folder, never the game's `EchoVR` folder:
 
-- `%LOCALAPPDATA%\nevr\echovr\logs\nevr-bootstrap.jsonl`, then
-  `%TEMP%\nevr\echovr\logs`, then the directory of `BugSplat64.dll`;
-- `%LOCALAPPDATA%\nevr\echovr\crashes\nevr-<pid>-<n>.dmp`, then
-  `%TEMP%\nevr\echovr\crashes`, then the directory of `BugSplat64.dll`.
+- `%LOCALAPPDATA%\nevr\echovr\logs\nevr-<UTC process creation time>.jsonl`, the process's one main log, which the runtime and
+  the crash path append to as well (`docs/standards/logging.md`, Rule 17); there is no other place for it;
+- `%LOCALAPPDATA%\nevr\echovr\crashes\nevr-<pid>-<n>.dmp`, and no other place for a dump.
 
 Every record is one JSON object per line with `tag` (`NEVR.HOST`), `ts` (UTC),
 `pid`, `run` and `event`. `run` is a per-process token, 16 hex digits, made once from the process's creation
@@ -123,7 +122,7 @@ decisions a full journal dropped), `runtime_load`
 (outcome, path, Win32 error, expected and actual ABI, ABI status, init code, degraded
 action, and `loader_lock_held`, which the host reads from the PEB) and `crash_dump`
 (written, or each destination that failed and why, suppressed re-entry, dbghelp
-unavailable, failed). A line that fits no directory goes to `stderr`; a record is never
+unavailable, failed). A record that cannot be written to the main log goes to `stderr`; a record is never
 dropped silently, and one too large for the 4 KiB bound is replaced by a marker, not
 truncated. KNOWN-WRONG #1252: a stop writes nothing to the console, so an operator watching a `-server`
 sees none of it.
@@ -248,7 +247,7 @@ typed thunks in the host (`src/runtime/host/runtime_exports.cpp`) that call thro
 
 A runtime that cannot be used after attach stops the game: a missing or unloadable file, a
 descriptor that does not validate, an `initialize` that fails or throws. The host writes one
-`game_stop` record to `logs/nevr-bootstrap.jsonl` and ends the process with exit code 78
+`game_stop` record to the run's main log (`logs/nevr-<timestamp>.jsonl`) and ends the process with exit code 78
 (`RuntimeRendezvous::StopGame`), because a game that runs on without its runtime is a game
 without the fixes the runtime exists to make. KNOWN-WRONG #1252: the console gets nothing, and every
 outcome shares exit code 78. A rejection at attach (a bad image, a changed

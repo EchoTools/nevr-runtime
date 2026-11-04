@@ -49,15 +49,6 @@ inline std::string GetExeDirectory() {
 #endif
 }
 
-// Relative suffixes to search for _local/ from the exe directory (and parents).
-static constexpr const char* kLocalSuffixes[] = {
-    "_local",
-    "..\\_local",
-    "..\\..\\_local",
-    "../_local",
-    "../../_local",
-};
-
 inline std::string JoinCredentialPath(const std::string& directory, const std::string& child) {
     if (directory.empty()) return child;
     const char last = directory.back();
@@ -81,7 +72,7 @@ inline bool CredentialPathExists(const std::string& path) {
 
 // The nevr root of this Windows user (core/nevr_root.h); empty off Windows or without %LOCALAPPDATA%.
 // The writer below takes ANSI paths, so a root that does not survive the conversion (a user name outside the ANSI code page) is
-// no root: the cache then stays where the older search finds it, which works, instead of being lost to a path with '?' in it.
+// no root, and there is then no cache (the writer below refuses and says why) rather than one at a path with '?' in it.
 inline std::string DefaultCredentialRoot() {
 #ifdef _WIN32
     const std::wstring wide = nevr_root::RootW();
@@ -97,46 +88,17 @@ inline std::string DefaultCredentialRoot() {
 #endif
 }
 
-// The cache before the nevr root existed. Existing credentials take precedence over YAML so a refresh cannot silently move
-// an operator's cache; absent credentials follow the first NEVR config, then exeDir/_local.
-inline CredentialCacheLocation SelectLegacyCredentialCacheLocation(const std::string& exeDir) {
-    for (const auto* suffix : kLocalSuffixes) {
-        const std::string directory = JoinCredentialPath(exeDir, suffix);
-        const std::string credentialsPath = JoinCredentialPath(directory, ".credentials.json");
-        if (CredentialPathExists(credentialsPath)) return {directory, credentialsPath};
-    }
-
-    for (const auto* suffix : kLocalSuffixes) {
-        const std::string directory = JoinCredentialPath(exeDir, suffix);
-        const std::string configPath = JoinCredentialPath(directory, "config.yaml");
-        std::ifstream config(configPath, std::ios::binary);
-        if (config.is_open()) {
-            return {directory, JoinCredentialPath(directory, ".credentials.json")};
-        }
-    }
-
-    const std::string directory = JoinCredentialPath(exeDir, "_local");
-    return {directory, JoinCredentialPath(directory, ".credentials.json")};
+// The sign-in cache is one file, <nevr root>\.credentials.json (ADR 0012), and nowhere else. A cache an older release left under
+// the install's _local folders is moved into the root once by nevr_root_move (src/runtime/lifecycle/nevr_root_move.cpp), the only
+// code that looks at those folders; it is never read or written from here, whether or not the move succeeded (a move that could not
+// run leaves the old file where it is, unread, and the player signs in again). Without a root (no %LOCALAPPDATA%, or one that is not
+// ANSI) there is no cache: the location is empty, a load finds no token and a save is refused with its reason.
+inline CredentialCacheLocation SelectCredentialCacheLocation(const std::string& root) {
+    if (root.empty()) return {};
+    return {root, nevr_root::CredentialsPath(root)};
 }
 
-// Select once for both cache reads and writes (ADR 0012): the sign-in cache is one file in the nevr root. A cache the one-time
-// move could not move (nevr_root_move) is still read, and written back where it is, until a later run moves it; the root's
-// own cache always wins. Without a root (no %LOCALAPPDATA%) the legacy search above decides.
-inline CredentialCacheLocation SelectCredentialCacheLocation(const std::string& exeDir, const std::string& root) {
-    if (root.empty()) return SelectLegacyCredentialCacheLocation(exeDir);
-    const std::string rootPath = nevr_root::CredentialsPath(root);
-    if (CredentialPathExists(rootPath)) return {root, rootPath};
-    for (const auto* suffix : kLocalSuffixes) {
-        const std::string directory = JoinCredentialPath(exeDir, suffix);
-        const std::string credentialsPath = JoinCredentialPath(directory, ".credentials.json");
-        if (CredentialPathExists(credentialsPath)) return {directory, credentialsPath};
-    }
-    return {root, rootPath};
-}
-
-inline CredentialCacheLocation SelectCredentialCacheLocation(const std::string& exeDir) {
-    return SelectCredentialCacheLocation(exeDir, DefaultCredentialRoot());
-}
+inline CredentialCacheLocation SelectCredentialCacheLocation() { return SelectCredentialCacheLocation(DefaultCredentialRoot()); }
 
 // Reads a selected .credentials.json. Missing, unreadable, or malformed files
 // return an empty token; no farther cache is consulted after selection.
@@ -151,24 +113,28 @@ inline CachedAuthToken LoadCachedAuthTokenFromPath(const std::string& path) {
     return ParseCredentialsJson(contents.str(), static_cast<uint64_t>(time(nullptr)));
 }
 
-inline CachedAuthToken LoadCachedAuthToken(const std::string& exeDir, const std::string& root) {
-    const CredentialCacheLocation location = SelectCredentialCacheLocation(exeDir, root);
+inline CachedAuthToken LoadCachedAuthToken(const std::string& root) {
+    const CredentialCacheLocation location = SelectCredentialCacheLocation(root);
+    if (location.credentialsPath.empty()) return {};
     return LoadCachedAuthTokenFromPath(location.credentialsPath);
 }
 
-inline CachedAuthToken LoadCachedAuthToken(const std::string& exeDir) {
-    return LoadCachedAuthToken(exeDir, DefaultCredentialRoot());
-}
-
 // Does NOT validate expiry — caller decides whether to use token or refresh.
-inline CachedAuthToken LoadCachedAuthToken() { return LoadCachedAuthToken(GetExeDirectory()); }
+inline CachedAuthToken LoadCachedAuthToken() { return LoadCachedAuthToken(DefaultCredentialRoot()); }
 
-// Saves the REFRESH TOKEN (and identity) to .credentials.json in the place SelectCredentialCacheLocation picks: the nevr
-// root, created when missing. The access token is deliberately NOT persisted — it lives in memory only.
-inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir, const std::string& root) {
+// Saves the REFRESH TOKEN (and identity) to .credentials.json in the nevr root (SelectCredentialCacheLocation), created when
+// missing. The access token is deliberately NOT persisted — it lives in memory only.
+inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& root) {
     if (auth.refresh_token.empty()) return false;
 
-    const CredentialCacheLocation location = SelectCredentialCacheLocation(exeDir, root);
+    const CredentialCacheLocation location = SelectCredentialCacheLocation(root);
+    if (location.credentialsPath.empty()) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] Credentials not written: there is no nevr root (%%LOCALAPPDATA%% is unset, too long or not ANSI); the sign-in "
+            "is not remembered and is asked for again next launch");
+        nevr_credential_stats::NoteRefused("no_root");
+        return false;
+    }
     const std::string& target_dir = location.directory;
     if (!CredentialPathExists(target_dir)) {
 #ifdef _WIN32
@@ -215,8 +181,4 @@ inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir
     return true;
 }
 
-inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir) {
-    return SaveAuthToken(auth, exeDir, DefaultCredentialRoot());
-}
-
-inline bool SaveAuthToken(const CachedAuthToken& auth) { return SaveAuthToken(auth, GetExeDirectory()); }
+inline bool SaveAuthToken(const CachedAuthToken& auth) { return SaveAuthToken(auth, DefaultCredentialRoot()); }

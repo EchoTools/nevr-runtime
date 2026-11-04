@@ -3,12 +3,11 @@
 // Host-owned bounded diagnostic recorder for the stable BugSplat64.dll host
 // (docs/adr/0008-bugsplat-host-and-nevr-runtime.md).
 //
-// One bounded JSON line is appended per event to nevr-bootstrap.jsonl in the
-// first writable of three directories:
-//   %LOCALAPPDATA%\nevr\echovr\logs
-//   %TEMP%\nevr\echovr\logs
-//   the directory of the host DLL
-// If none is writable the line goes to stderr and the caller is told it was
+// One bounded JSON line is appended per event to the process's main log,
+//   %LOCALAPPDATA%\nevr\echovr\logs\nevr-<UTC creation time of the process>.jsonl
+// (core/run_log_path.h), the file the runtime's boot phase and log filter write to as well
+// (docs/standards/logging.md, "One log"). There is no other place: no %TEMP% folder and no folder beside the game.
+// If the file cannot be written the line goes to stderr and the caller is told it was
 // dropped; a diagnostic is never lost silently.
 //
 // What may run where:
@@ -46,10 +45,8 @@
 namespace nevr_host {
 
 enum class DiagnosticDestination {
-  kPrimary,        // %LOCALAPPDATA%\nevr\echovr\logs
-  kFallback,       // %TEMP%\nevr\echovr\logs
-  kHostDirectory,  // next to BugSplat64.dll
-  kDropped,        // no directory was writable (the line went to stderr)
+  kPrimary,  // %LOCALAPPDATA%\nevr\echovr\logs, the process's main log
+  kDropped,  // the main log could not be written (the line went to stderr)
 };
 
 /// Stable lower-case token for a destination, as written in records.
@@ -106,8 +103,8 @@ enum class AttachFailure : std::uint32_t {
 
 class BootstrapDiagnostics {
  public:
-  /// Copy %LOCALAPPDATA%, %TEMP% and the directory of `host_module`, compute the three log
-  /// directories and create the log mutex (once per process). No file I/O.
+  /// Copy %LOCALAPPDATA% and the directory of `host_module`, compute the log folder and the log's file name and create
+  /// the log mutex (once per process). No file I/O.
   void Prepare(HMODULE host_module);
 
   /// Store one attach step. `actual` (optional, kGameMainWrapperPrologueSize long) is the
@@ -144,9 +141,9 @@ class BootstrapDiagnostics {
   /// RecordAttach (an atomic, no I/O), so it is readable under the loader lock and from any thread.
   AttachFailure FirstAttachFailure() const noexcept;
 
-  /// The full path of the log file records go to (`<dir>\nevr-bootstrap.jsonl`) into `out`: the directory the last append
-  /// reached, or, before any append, the first directory that is ready. False, with `out` emptied, when no directory is
-  /// ready or the path does not fit `size` wide characters. Fixed buffers only.
+  /// The full path of the main log records go to (`<logs>\nevr-<creation time>.jsonl`) into `out`. False, with `out`
+  /// emptied, when %LOCALAPPDATA% is unusable, the last record reached no file, or the path does not fit `size` wide
+  /// characters. Fixed buffers only.
   bool LogFilePath(wchar_t* out, std::size_t size) const noexcept;
 
   /// True when any recorded attach step was a rejection or a failure, an install record says its
@@ -175,20 +172,21 @@ class BootstrapDiagnostics {
 
   // Read-only accessors.
   const wchar_t* PrimaryDir() const { return primary_dir_; }
-  const wchar_t* FallbackDir() const { return fallback_dir_; }
-  const wchar_t* HostDir() const { return host_dir_; }
+  const wchar_t* HostDir() const { return host_dir_; }  // only named in the stop notice; records are never written there
   bool PrimaryReady() const { return primary_ready_; }
-  bool FallbackReady() const { return fallback_ready_; }
   bool HostDirReady() const { return host_dir_ready_; }
   std::size_t JournalFlushed() const { return flushed_upto_.load(); }
   std::size_t JournalSize() const { return journal_count_.load(); }
   std::size_t JournalDropped() const { return dropped_.load(); }
 #if defined(NEVR_HOST_TESTING)
-  /// Test seam: set the three directories directly instead of reading the environment
-  /// and the module path. An empty string leaves that destination unavailable. Also creates the log
+  /// Test seam: set the local app data folder and the host directory directly instead of reading the environment
+  /// and the module path. An empty string leaves that one unavailable. Also creates the log
   /// mutex and clears the "lock timed out" mark, as Prepare does at attach.
-  void PrepareForTest(const wchar_t* local_app_data, const wchar_t* temp,
-                      const wchar_t* host_dir);
+  void PrepareForTest(const wchar_t* local_app_data, const wchar_t* host_dir);
+
+  /// Test seam: name the main log file. Two test processes use it to append to one file, which two processes never do in
+  /// a run (each names its own log from its creation time); the append lock is what keeps their lines whole.
+  void SetLogNameForTest(const wchar_t* name);
 
   /// Close the log mutex and forget it and clear the timed-out mark, so a test can show what an append
   /// does when no mutex exists (a crash before the first Prepare).
@@ -257,14 +255,13 @@ class BootstrapDiagnostics {
   DiagnosticDestination ReportDropped(const char* line, std::size_t length) noexcept;
   void EnsureLogMutex() noexcept;
   bool AppendTo(const wchar_t* dir, bool create_dir, const char* line, std::size_t length) noexcept;
+  bool NameRunLog() noexcept;  // log_name_ from this process's creation time
 
   wchar_t local_app_data_[MAX_PATH] = {};
-  wchar_t temp_[MAX_PATH] = {};
   wchar_t primary_dir_[MAX_PATH] = {};   // %LOCALAPPDATA%\nevr\echovr\logs
-  wchar_t fallback_dir_[MAX_PATH] = {};  // %TEMP%\nevr\echovr\logs
+  wchar_t log_name_[64] = {};            // nevr-<creation time>.jsonl, the process's main log
   wchar_t host_dir_[MAX_PATH] = {};      // directory of BugSplat64.dll
   bool primary_ready_ = false;
-  bool fallback_ready_ = false;
   bool host_dir_ready_ = false;
   JournalEntry journal_[kJournalCapacity] = {};
   std::atomic<std::size_t> journal_count_{0};

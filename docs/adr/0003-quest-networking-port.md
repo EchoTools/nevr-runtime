@@ -461,8 +461,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    features, one Error line `config file=<path> rejected reason=<token> (embedded defaults stay)` where the token is
    `nevr_config`'s class of failure (`ReasonToken`), never the parser's text.
    Every key source, requested and effective feature state, and rejection is logged by key or
-   feature name, never by value, to logcat tag `NEVR-Sentinel` and to `nevr-sentinel.log` in the
-   same directory, as one JSON object per line, and the log names the file it read
+   feature name, never by value, to logcat tag `NEVR-Sentinel` and to the run's log (`nevr-<timestamp>.jsonl` in `nevr/logs` below the
+   files directory), as one JSON object per line, and the log names the file it read
    (`config file=<path> loaded`, or `absent, using embedded defaults`). A value the file gives as the empty
    string is rejected and cannot clear an embedded default. A `nevr-quest.json` in the
    same directory is not read; the log says once that it is present and ignored. The sentinel constructor reads the file once (contract 4 states the constructor's I/O
@@ -704,8 +704,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
      16 KiB), installs handlers for `SIGSEGV`, `SIGABRT`, `SIGFPE`, `SIGILL`, `SIGBUS` and `SIGTRAP`
      (`InstallHandlersLocked`, `kExceptionSignals`), and creates a dump GUID from `getrandom`
      (`GRND_NONBLOCK`) or, failing that, `/dev/urandom` (`extern/breakpad/src/common/linux/guid_creator.cc`);
-   - `InitActivation()`: opens `config.yaml` read-only and `nevr-sentinel.log` read-write in
-     append mode in the app's external files directory. Both opens are non-blocking, the log open
+   - `InitActivation()`: opens `config.yaml` read-only in the app's external files directory and the run's log
+     (`nevr-<timestamp>.jsonl`, in `nevr/logs` below it) read-write in append mode. Both opens are non-blocking, the log open
      does not follow symlinks, and each target must be a regular file (a FIFO or device is
      refused, not opened for I/O). The config read is bounded at 64 KiB. A failed log open (a
      missing directory, or a directory or a symlink at the path) is retried at most once per 30 s,
@@ -1864,7 +1864,7 @@ and two linked probes (`frames_probe_ok`, `frames_probe_bad`).
 `redirect_installed`, `social_hook_installed`, `dlopen_hook_installed`, `libpnsovr_loaded`,
 `login_hook_installed`, `matchmaking_redirect_installed`, `router_remote_connected`,
 `router_remote_failed`, `login_rewritten`, `login_accepted`, `login_refused`. The hook backend's lines
-and the stage lines reach logcat (tag `NEVR-Sentinel`) and the on-disk `nevr-sentinel.log`.
+and the stage lines reach logcat (tag `NEVR-Sentinel`) and the on-disk run log (`nevr/logs/nevr-<timestamp>.jsonl`).
 
 **Not run on a headset.** Everything in this section except the sentinel base (loader shim, Breakpad,
 clock hook) is built and host-tested only: the order of the constructor against the game's first config

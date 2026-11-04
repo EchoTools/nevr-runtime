@@ -1,9 +1,9 @@
 // nevr_root_move.h: the one-time move of nEVR's own files into the nevr root (ADR 0012 "The one-time move", #857).
 //
 // Before this change nEVR wrote its run log, crash record and cosmetic packages under %LOCALAPPDATA%\EchoVR and kept the sign-in
-// cache in the install's _local folder. The first run that finds those files moves them to %LOCALAPPDATA%\nevr\echovr and
-// leaves MOVED-TO-NEVR-ROOT.txt in each folder it took something from (the plugins folder beside the game executable
-// excepted: nothing of ours is written there), so a player or support can see why the folder is empty.
+// cache in the install's _local folder. The first run that finds those files moves them to %LOCALAPPDATA%\nevr\echovr and writes
+// nothing in the folders it took them from: no note is left behind, in the game folder or in the original game's own folder.
+// What the move did is in the log (one [NEVR.ROOT] line per file).
 // The sign-in cache is the only file taken from _local: config.yaml is not moved (it is read from the root, and an old `_local`
 // copy is copied there once: config_yaml_source.h). The sign-in cache
 // is moved through the protected write it is saved with, so the moved file is as private as a saved one. The move
@@ -28,8 +28,6 @@ enum class Outcome {
   kMoved,           // from -> to
   kLeftRootHasIt,   // from stays: `to` already exists in the root, and the move never overwrites
   kLeftMoveFailed,  // from stays: the move failed (error); a later run tries again
-  kMarkerWritten,   // `to` is the MOVED-TO-NEVR-ROOT.txt written in the folder something was moved out of
-  kMarkerFailed,    // the marker could not be written (error)
   kRootUnavailable  // the root could not be created (error); nothing was moved
 };
 

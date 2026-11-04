@@ -28,16 +28,15 @@
  *
  * What a player meets, from one setting. The settings menu has a NEVR page with one control, "Texture Resolution", of six
  * entries (Very Low, Low, Medium, High, Very High, Ultra), default Low (the headset's stock size, or the level the configuration
- * names). A change applies at the next rendered frame. The choice is remembered in a marker file of our own,
- * nevr_texture_quality.json beside the game's settings (texture_menu.h), written by the poller after the player changes the control
- * and read back at the next launch, before the swap chain is made (ResolveStart reads it, because the game delivers its settings
- * after that). Only a change in the menu writes the marker, and it carries a format version: a marker without the current version is
- * not read. The game's own saved slot (`msaa` in settings_mp_v2_quest.json) is not read: a settings file that never held the
- * setting reads 0, which is Very Low, and cannot say whether the player chose. A player who never chose starts at the default: the
- * configuration's graphics.texture_quality, Low for `stock`; on the reference libr15 with a `stock` configuration it is the reference
- * build's own start rule when its settings file names an `msaa` index (level kLow + index), else the same default. A level the rule
- * derives is not written as the marker. The game's first delivery of its settings is changed to the marker's level, or to that
- * start when there is no marker, so the menu shows it. A marker always wins over the configuration.
+ * names). A change applies at the next rendered frame. The choice is remembered in config.yaml, as the one key
+ * graphics.texture_quality: the poller writes the level word after the player changes the control (NevrConfig::Set, which edits the
+ * file in place and replaces it atomically), and the next launch reads that key like any other (quest_config.h), before the swap
+ * chain is made. Only a change in the menu writes it. The game's own saved slot (`msaa` in settings_mp_v2_quest.json) is not read: a
+ * settings file that never held the setting reads 0, which is Very Low, and cannot say whether the player chose. A player who never
+ * chose starts at the default: the key's level, Low for `stock` or an absent key; on the reference libr15 with a `stock`
+ * configuration it is the reference build's own start rule when its settings file names an `msaa` index (level kLow + index), else
+ * the same default. A level the rule derives is not written to config.yaml. The game's first delivery of its settings is changed to
+ * the start level, so the menu shows it.
  *
  * What the apply refuses, and why. It waits for the engine's ready flag and for the VR layer to be initialised and not
  * display-lost (CheckForResize itself and ApplyRuntimeGfxSettings test the same). It refuses for good when the engine's resize
@@ -63,6 +62,10 @@ inline constexpr int kCounterCount = 13;
 
 // The development property a level can be set through while the game runs (a level word, or a menu index 0..5).
 inline constexpr const char* kLevelProperty = "debug.nevr.texture_level";
+
+// Where the player's choice is written: the path of config.yaml (quest_config.h, ConfigFilePath). Call before Install. Without one
+// a choice made in the menu applies for this run and is logged as not remembered.
+void SetConfigFile(const char* path) noexcept;
 
 // Registers the counters. Call before sentinel::StartReporter, with texture_quality::RegisterCounters.
 bool RegisterCounters() noexcept;
@@ -104,8 +107,8 @@ struct Totals {
   unsigned long long refused;          // applies refused for good
   unsigned long long failed;           // rebuilds the engine reported as failed
   unsigned long long configOverrides;  // first deliveries changed to the default level (the player had not chosen)
-  unsigned long long markerWrites;     // the player's choices written to the marker file
-  unsigned long long markerFailures;   // the player's choices that could not be written
+  unsigned long long saveWrites;       // the player's choices written to config.yaml (or already there)
+  unsigned long long saveFailures;     // the player's choices that could not be written
   bool disabled;                       // the live apply is off for this process
   const char* disabledWhy;
 };

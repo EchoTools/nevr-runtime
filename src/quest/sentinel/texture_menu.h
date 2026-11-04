@@ -71,25 +71,4 @@ Result RewriteMenuSettings(std::string_view text, int defaultIndex, int handFlip
 // the Controller Hand Flip row's setting (KNOWN-WRONG #2043: with no row offered the stock entry stays).
 Result RewriteGameSettings(std::string_view text, bool offerHandFlip = true);
 
-// The player's choice, kept in a file of our own beside the game's settings (RAD/LoneEcho/ under the game's local app data
-// directory). The game's own saved slot (`msaa` in settings_mp_v2_quest.json) cannot say whether the player chose: a settings file
-// that never held the setting reads 0, which is the Very Low entry. The marker exists only after the player changed the control.
-inline constexpr char kMarkerFile[] = "nevr_texture_quality.json";
-
-// The marker's format version. A marker that carries it is the player's choice made in the menu. A marker without it (builds that
-// wrote `{"menu_index":N}` alone also wrote it for a level they derived themselves, so it cannot be told from a choice) or with another
-// version is not read.
-inline constexpr int kMarkerVersion = 1;
-
-// The text the marker file holds for a menu index (clamped to the menu's range): {"version":1,"menu_index":N}.
-std::string MarkerText(int menuIndex) noexcept;
-
-// The value of the first `"menu_index"` key in a marker file's text, clamped to the menu's range, or -1 when there is none or it is
-// not a whole number. Allocation-free: it runs on the game's first eye-size query. It does not look at the version.
-int MarkedMenuIndex(const char* text, std::size_t size) noexcept;
-
-// The value of the first `"version"` key in a marker file's text, or 0 when there is none or it is not a whole number (an
-// unversioned marker reads 0). Allocation-free.
-int MarkerVersion(const char* text, std::size_t size) noexcept;
-
 }  // namespace nevr_quest::texture_menu

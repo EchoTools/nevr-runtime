@@ -676,38 +676,50 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         hook = extract_braced_function(filt, "static void __fastcall hook_PrintfImpl(")
         self.assertIn("g_rate.Check(buf, emit_len, GetEpochSeconds(), summary,", hook)
 
-    def test_boot_lines_are_replayed_into_the_main_log_at_first_open_only(self):
-        # Issue #5: boot and runtime events are one stream. The main log replays this run's
-        # nevr-boot.jsonl lines when it first opens; rotation reopens without replaying; the boot file
-        # is read, never deleted (it is the crash spool).
+    def test_the_crash_path_writes_no_text_file_and_only_ever_the_main_log(self):
+        # #2060: a crash line is one record of the process's main log. Before, it was also a text file, nevr-crash-<run id>.txt, in the
+        # logs folder and, with no folder, in the game's own logs folder. crash_recovery.cpp links no test binary (it hooks the game), so
+        # this reads the source: the one file the crash path opens is the path PrepareCrashRecordPath builds from the nevr root's logs
+        # folder, and it builds none when there is no root.
+        crash = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
+        self.assertNotIn("nevr-crash", crash, "no crash text file")
+        self.assertNotIn(".txt", crash, "no crash text file")
+        self.assertEqual(len(re.findall(r"\bCreateFile[AW]?\(", crash)), 1, "the crash record handle is the only file the crash path opens")
+        arm = extract_braced_function(crash, "static void ArmCrashRecord(")
+        self.assertIn("CreateFileA(g_crashRecordPath", arm)
+        prepare = extract_braced_function(crash, "static void PrepareCrashRecordPath(")
+        self.assertIn("nevr_root::LogsDir(nevr_root::RootA())", prepare)
+        self.assertIn("if (logs.empty()) return;", prepare, "no root: no path, and no folder beside the game")
+        self.assertIn("nevr_run_log::PathForThisProcess(logs)", prepare)
+        for other in ("GetModuleFileName", "GetTempPath", "exe"):
+            self.assertNotIn(other, prepare, "the path is never built from the game's folder or %TEMP%")
+        assigned = re.findall(r"(?:memcpy|snprintf|strcpy|strncpy)\(\s*g_crashRecordPath", crash)
+        self.assertEqual(len(assigned), 1, "g_crashRecordPath is written in one place only")
+
+    def test_the_boot_phase_and_the_filter_write_one_main_log_with_no_replay(self):
+        # Boot and runtime events are one stream in one file, <root>\\logs\\nevr-<process creation time>.jsonl. The boot
+        # tee and the filter both append through run_log_writer.h, so nothing is copied from one file into another and no
+        # boot file exists (ADR 0027 section 5).
         filt = strip_comments((ROOT / "src/runtime/log/builtin_filter.cpp").read_text())
-        init = extract_braced_function(filt, "static void InitFileLogging(")
-        self.assertLess(init.index("OpenLogFile()"), init.index("ReplayBootLines()"))
-        rotate = extract_braced_function(filt, "static void RotateIfNeeded(")
-        self.assertNotIn("ReplayBootLines", rotate)
-        replay = extract_braced_function(filt, "static void ReplayBootLines(")
-        self.assertIn("nevr_boot_replay::ReadNew(path, GetRunId(), g_boot_cursor", replay)
-        self.assertRegex(replay, r"ReadNew\([^;]*\)\)\s*\{\s*BlfLog\(", "an unreadable boot file is reported, not skipped")
+        for gone in ("ReplayBootLines", "ReplayBootTail", "GetDefaultLogDir", "nevr_boot_replay"):
+            self.assertNotIn(gone, filt, "the filter replays nothing and picks no folder of its own")
+        open_file = extract_braced_function(filt, "static void OpenLogFile(")
+        self.assertIn("nevr_run_log_writer::Path()", open_file, "the filter adopts the file the boot phase already writes")
         record = extract_braced_function(filt, "static void WriteFileRecord(")
+        self.assertIn("nevr_run_log_writer::Append(", record)
         self.assertEqual(len(re.findall(r"nevr_json_escape::AppendTo\(line, (ts|lvl)", record)), 2,
-                         "ts and level come from the parsed boot file and are escaped like the message")
-        # The tee stays open until initialize() closes it; the lines it writes after the main log
-        # opened are replayed once more, under the file lock, just before the tee closes.
-        tail = extract_braced_function(filt, "void nevr_builtin_log_filter::ReplayBootTail(")
-        self.assertIn("g_file_mutex", tail)
-        self.assertIn("ReplayBootLines()", tail)
+                         "ts and level are escaped like the message")
+        rotate = extract_braced_function(filt, "static void RotateIfNeeded(")
+        self.assertIn("nevr_run_log_writer::Rotate()", rotate, "the old content is renamed and the process keeps its file name")
         init_cpp = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
-        self.assertRegex(init_cpp, r"nevr_boot_log_tee::Close\(\);\s*nevr_builtin_log_filter::ReplayBootTail\(\);",
-                         "the tail is read after Close(), when nothing can append any more")
-        for forbidden in ("remove(", "DeleteFile", "unlink(", "trash"):
-            self.assertNotIn(forbidden, replay, "the boot file is the crash spool and is never deleted")
+        self.assertNotIn("ReplayBootTail", init_cpp)
         tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())
         self.assertIn("nevr_boot_lines::Build(", tee)
-        # #664: the replay carries each record's own level into the main log, not a literal.
-        self.assertRegex(replay, r"WriteFileRecord\(\s*line\.ts\.c_str\(\)\s*,\s*line\.level\.c_str\(\)")
-        self.assertIn("GetSystemTime(", tee)
+        self.assertIn("nevr_run_log_writer::Append(", tee, "a boot record goes straight into the main log")
+        for forbidden in ("fopen", "CreateFile", "nevr-boot.jsonl"):
+            self.assertNotIn(forbidden, tee, "the tee opens no file of its own")
         close = extract_braced_function(tee, "void nevr_boot_log_tee::Close(")
-        self.assertNotIn("g_boot_path", close, "Path() must stay valid after Close()")
+        self.assertNotIn("nevr_run_log_writer::Close", close, "the filter goes on writing the same file after the boot phase")
 
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches

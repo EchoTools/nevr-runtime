@@ -16,6 +16,7 @@
 #include <sys/system_properties.h>
 #endif
 
+#include "core/nevr_config.h"
 #include "hand_flip.h"
 #include "hook_install.h"
 #include "hook_log.h"
@@ -47,27 +48,29 @@ std::atomic<PropertyReader> g_property{nullptr};
 
 // The index the control starts on when the player has not chosen: the configuration's level (`stock` shows as Low).
 std::atomic<int> g_defaultIndex{tq::kDefaultMenuIndex};
-// What the start resolver found: 0 not asked, 1 the player's marker file, 2 the configuration, 3 the reference input's rule (its
-// settings file named a level), 4 the platform default (the reference input's settings file named none).
-enum StartSource : int { kStartNotAsked = 0, kStartPlayerMarker = 1, kStartConfig = 2, kStartReferenceRule = 3, kStartPlatformDefault = 4 };
+// What the start resolver found: 0 not asked, 2 the configuration (the file's graphics.texture_quality, which is also where a
+// choice made in the menu is kept, or the default when the file names none), 3 the reference input's rule (its settings file named
+// a level), 4 the platform default (the reference input's settings file named none). 1 is not used: the player's choice is the
+// configuration's key.
+enum StartSource : int { kStartNotAsked = 0, kStartConfig = 2, kStartReferenceRule = 3, kStartPlatformDefault = 4 };
 std::atomic<int> g_startSource{kStartNotAsked};
-// Whether the marker file held a choice written without the current format version, which the start did not read.
-std::atomic<bool> g_unversionedMarkerIgnored{false};
+// Whether the file gave the configuration's level (else it is the default).
+std::atomic<bool> g_fromConfig{false};
 std::atomic<int> g_startLevel{kUnset};
 std::atomic<bool> g_playerSaved{false};
 std::atomic<bool> g_firstDelivery{false};
-// The index of the last delivery, and the index the player changed the control to that the poller has not yet written to the
-// marker file (kUnset: none). A delivery whose index differs from the one before it is a change in the menu: the first delivery
+// The index of the last delivery, and the index the player changed the control to that the poller has not yet written to
+// config.yaml (kUnset: none). A delivery whose index differs from the one before it is a change in the menu: the first delivery
 // is the load, and the game redelivers an unchanged setting when another setting changes.
 std::atomic<int> g_lastIndex{kUnset};
-std::atomic<int> g_pendingMarker{kUnset};
+std::atomic<int> g_pendingSave{kUnset};
 // KNOWN-WRONG #2043 The Controller Hand Flip row's bit (hand_flip.h) of the last delivery (kUnset: no delivery yet).
 std::atomic<int> g_lastHandFlip{kUnset};
-// The marker file's path, built once by the start resolver on the game's thread and read by the poller after g_markerPathReady.
-char g_markerPath[704];
-std::atomic<bool> g_markerPathReady{false};
-std::atomic<std::uint64_t> g_markerWrites{0};
-std::atomic<std::uint64_t> g_markerFailures{0};
+// config.yaml's path, set before the hooks are armed (SetConfigFile) and read by the poller after g_configFileReady.
+char g_configFile[704];
+std::atomic<bool> g_configFileReady{false};
+std::atomic<std::uint64_t> g_saveWrites{0};
+std::atomic<std::uint64_t> g_saveFailures{0};
 
 std::atomic<std::uint64_t> g_deliveries{0};
 std::atomic<std::uint64_t> g_menuLevel{0};      // the Level of the last delivery
@@ -243,17 +246,14 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
 
 // ---- the start level: what the player chose -----------------------------------------------------------------------------
 
-// Called by the eye-size hook on its first size query, before the game has delivered its settings. Reads the player's choice from
-// the marker file (texture_menu.h): it sits in the directory the game keeps its settings in (GetLocalAppDataDirectory, then
-// "RAD/LoneEcho"), and exists only once the player has changed the control (a marker without the current version is not read:
-// builds before it wrote the level they derived as if the player had chosen it). The game's own saved slot is not read: a settings file
-// that never held the setting reads 0, which is Very Low, and cannot tell "chose Very Low" from "never chose". Returns the Level to
-// start at, or kUnset (no marker, nothing readable): the configuration's level then stands. It runs inside the game's call: no
-// logging, no exceptions.
+// The start level is the configuration's: graphics.texture_quality in config.yaml, which is also where the poller writes a choice made
+// in the menu (SaveChoice, through nevr_config), so the player's last choice is the key at the next launch and nothing else holds
+// it. The game's own saved slot (`msaa` in settings_mp_v2_quest.json) is not read: a settings file that never held the setting
+// reads 0, which is Very Low, and cannot tell "chose Very Low" from "never chose".
 // The reference input's start rule (#1737 C4). The reference libr15 starts at the level its own settings file names: the `msaa`
 // index V there (his cave's rule, read by tq::ReferenceIndexFromSettings), at level kLow + V. It applies only on the reference input,
-// after the player's marker has been looked for and found nothing, and only when the configuration is `stock`. A level this rule
-// derives is not the player's choice, so it is never written as the marker: only a change in the menu is (#1988). A settings file that
+// and only when the configuration is `stock` (the key absent or `stock`). A level this rule derives is not the player's choice, so it
+// is never written to config.yaml: only a change in the menu is (#1988). A settings file that
 // names no level (missing, unreadable, or no `msaa`) starts the platform default, the configuration's level (`stock`, shown as Low).
 // `directory` is the settings directory (nullptr: none, which reads as a missing file). It runs inside the game's call: no logging.
 char g_referenceText[tq::kReferenceReadCap + 1];
@@ -266,7 +266,7 @@ int ResolveReference(const char* directory) noexcept {
   const char* state = "missing";
   bool sawLevel = false;
   if (directory != nullptr) {
-    char path[600];  // %.512s plus the suffix: the directory is at most 512 characters, as the marker path's is
+    char path[600];  // %.512s plus the suffix: the directory is at most 512 characters
     std::snprintf(path, sizeof(path), "%.512s/RAD/LoneEcho/settings_mp_v2_quest.json", directory);
     std::FILE* const file = std::fopen(path, "r");
     if (file != nullptr) {
@@ -310,36 +310,14 @@ void ProvideHandFlipStart() noexcept {
   hand_flip::StartFromDirectory(LocalDirectory(fixedString, sizeof(fixedString)));
 }
 
+// The start: the texture level comes from config.yaml (the latched configuration) or the reference rule; the Controller Hand Flip
+// start is read from its own file in the same directory (KNOWN-WRONG #2043, hand_flip.h).
 int ResolveStart() noexcept {
   g_startSource.store(kStartConfig, std::memory_order_release);
   alignas(8) char fixedString[1024];
   const char* const directoryPath = LocalDirectory(fixedString, sizeof(fixedString));
-  hand_flip::StartFromDirectory(directoryPath);  // KNOWN-WRONG #2043 the toggle's choice is read with the texture marker
-  if (directoryPath == nullptr) return ResolveReference(nullptr);
-  // fixedString holds at most 512 characters (its last byte is the NUL above), so the precision bounds the directory and
-  // the suffix fits: a longer directory cannot truncate the path silently.
-  static_assert(512 + sizeof("/RAD/LoneEcho/") + sizeof(texture_menu::kMarkerFile) <= sizeof(g_markerPath), "marker path buffer fits the directory");
-  std::snprintf(g_markerPath, sizeof(g_markerPath), "%.512s/RAD/LoneEcho/%s", fixedString, texture_menu::kMarkerFile);
-  g_markerPathReady.store(true, std::memory_order_release);
-  std::FILE* const file = std::fopen(g_markerPath, "r");
-  if (file == nullptr) return ResolveReference(fixedString);
-  char buffer[256];  // the marker is {"menu_index":N}
-  const std::size_t size = std::fread(buffer, 1, sizeof(buffer), file);
-  std::fclose(file);
-  const int index = texture_menu::MarkedMenuIndex(buffer, size);
-  if (index < 0) return ResolveReference(fixedString);
-  // A marker without the current version is not a choice we can trust (#1988): the start falls back as if there were none, and
-  // the first change in the menu writes a versioned one.
-  if (texture_menu::MarkerVersion(buffer, size) != texture_menu::kMarkerVersion) {
-    g_unversionedMarkerIgnored.store(true, std::memory_order_release);
-    return ResolveReference(fixedString);
-  }
-  g_playerSaved.store(true, std::memory_order_release);
-  g_startSource.store(kStartPlayerMarker, std::memory_order_release);
-  const Level level = tq::LevelForMenuIndex(index);
-  g_startLevel.store(static_cast<int>(level), std::memory_order_release);
-  g_appliedLevel.store(static_cast<std::uint64_t>(level), std::memory_order_relaxed);
-  return static_cast<int>(level);
+  hand_flip::StartFromDirectory(directoryPath);
+  return ResolveReference(directoryPath);
 }
 
 // ---- the five handlers --------------------------------------------------------------------------------------------------
@@ -433,10 +411,10 @@ void HandleApply(ApplyThunk::Fn original, const unsigned char* settings, void* g
     unsigned char* const field = const_cast<unsigned char*>(settings) + pin::gfx_layout::kMsaa;
     std::int32_t index = LoadAt<std::int32_t>(field, 0);
     // The first delivery is the load. What the game holds in the slot is not the player's choice (a settings file that never held
-    // the setting reads 0, Very Low): the player's marker is, and with none the default (the configuration's level, Low for
-    // `stock`). The settings are changed to it, so the control shows it and the next save keeps it.
+    // the setting reads 0, Very Low): the configuration's level is (the file's key, else the default, Low for `stock`), or the
+    // reference input's rule's. The settings are changed to it, so the control shows it and the next save keeps it.
     if (!g_firstDelivery.exchange(true, std::memory_order_acq_rel)) {
-      const bool marked = g_playerSaved.load(std::memory_order_acquire);
+      const bool marked = g_playerSaved.load(std::memory_order_acquire);  // the reference rule named a level
       const int start = marked ? tq::MenuIndexForLevel(static_cast<Level>(g_startLevel.load(std::memory_order_acquire)))
                                : g_defaultIndex.load(std::memory_order_acquire);
       if (index != start) {
@@ -445,9 +423,9 @@ void HandleApply(ApplyThunk::Fn original, const unsigned char* settings, void* g
         if (!marked) g_configOverrides.fetch_add(1, std::memory_order_relaxed);
       }
     }
-    // Every later delivery with another index is the player's choice in the menu: it is kept for the next launch.
+    // Every later delivery with another index is the player's choice in the menu: it is written to config.yaml for the next launch.
     const int previous = g_lastIndex.exchange(index, std::memory_order_acq_rel);
-    if (previous != kUnset && previous != index) g_pendingMarker.store(index, std::memory_order_release);
+    if (previous != kUnset && previous != index) g_pendingSave.store(index, std::memory_order_release);
     const Level level = tq::LevelForMenuIndex(index);
     g_menuLevel.store(static_cast<std::uint64_t>(level), std::memory_order_relaxed);
     tq::RequestLevel(level, tq::RequestSource::kMenu);
@@ -597,44 +575,41 @@ bool ParsePropertyLevel(const char* value, Level* out) noexcept {
 int AndroidProperty(const char* name, char* out) noexcept { return __system_property_get(name, out); }
 #endif
 
-// Writes the player's last choice in the menu to the marker file, through a temporary file and a rename so a reader never sees half
-// of it. Runs on the poller thread, never inside a game call. A failed write is logged with its errno; the choice then lasts
-// until the game exits. Returns the number of lines logged.
-int WriteMarker() noexcept {
-  const int index = g_pendingMarker.exchange(kUnset, std::memory_order_acq_rel);
+// Writes the player's last choice in the menu to config.yaml as graphics.texture_quality, through nevr_config (NevrConfig::Set: the
+// file is edited in place, comments and every other key kept, and replaced atomically; a file it cannot edit safely is refused and
+// left as it was). Runs on the poller thread, never inside a game call. A refusal or failure is logged with its reason and errno; the
+// choice then lasts until the game exits. Returns the number of lines logged.
+int SaveChoice() noexcept {
+  const int index = g_pendingSave.exchange(kUnset, std::memory_order_acq_rel);
   if (index == kUnset) return 0;
   const char* const consequence = "this choice is not remembered at the next launch";
-  if (!g_markerPathReady.load(std::memory_order_acquire)) {
-    g_markerFailures.fetch_add(1, std::memory_order_relaxed);
+  if (!g_configFileReady.load(std::memory_order_acquire)) {
+    g_saveFailures.fetch_add(1, std::memory_order_relaxed);
     sentinel::LogFields(sentinel::LogLevel::kError, "texture_quality_saved",
-                        {{"result", "no_directory"}, {"menu_index", index}, {"consequence", consequence}});
+                        {{"result", "no_config_file"}, {"menu_index", index}, {"consequence", consequence}});
     return 1;
   }
-  char temporary[sizeof(g_markerPath) + 8];
-  std::snprintf(temporary, sizeof(temporary), "%s.tmp", g_markerPath);
-  const std::string text = texture_menu::MarkerText(index);
-  int error = 0;
-  std::FILE* const file = std::fopen(temporary, "w");
-  if (file == nullptr) {
-    error = errno;
-  } else {
-    const bool wrote = std::fwrite(text.data(), 1, text.size(), file) == text.size();
-    const bool closed = std::fclose(file) == 0;
-    if (!wrote || !closed) error = errno != 0 ? errno : EIO;
-  }
-  if (error == 0 && std::rename(temporary, g_markerPath) != 0) error = errno;
-  if (error != 0) {
-    std::remove(temporary);
-    g_markerFailures.fetch_add(1, std::memory_order_relaxed);
-    sentinel::LogFields(sentinel::LogLevel::kError, "texture_quality_saved",
-                        {{"result", "write_failed"}, {"menu_index", index}, {"errno", error}, {"consequence", consequence}});
+  const Level level = tq::LevelForMenuIndex(index);
+  nevr::NevrConfig config;
+  config.BindFile(g_configFile);
+  const nevr::ConfigSetResult set = config.Set("graphics.texture_quality", std::string(tq::LevelName(level)));
+  if (!set.ok) {
+    g_saveFailures.fetch_add(1, std::memory_order_relaxed);
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "texture_quality_saved",
+                        {{"result", "refused"},
+                         {"reason", set.reason},
+                         {"errno", set.err},
+                         {"menu_index", index},
+                         {"config_file", g_configFile},
+                         {"consequence", consequence}});
     return 1;
   }
-  g_markerWrites.fetch_add(1, std::memory_order_relaxed);
+  g_saveWrites.fetch_add(1, std::memory_order_relaxed);
   sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality_saved",
-                      {{"result", "written"},
-                       {"quality", tq::LevelName(tq::LevelForMenuIndex(index))},
+                      {{"result", set.wrote ? "written" : "unchanged"},
+                       {"quality", tq::LevelName(level)},
                        {"menu_index", index},
+                       {"config_file", g_configFile},
                        {"consequence", "the next launch starts at this level"}});
   return 1;
 }
@@ -656,23 +631,30 @@ int PollLocked() noexcept {
     g_logged.start = true;
     const int start = g_startLevel.load(std::memory_order_acquire);
     const Level startLevel = start == kUnset ? tq::LatchedLevel() : static_cast<Level>(start);
-    const char* const sourceName = source == kStartPlayerMarker       ? "player_marker"
-                                   : source == kStartReferenceRule    ? "reference_rule"
-                                   : source == kStartPlatformDefault  ? "platform_default"
-                                                                      : "config";
+    const char* const sourceName = source == kStartReferenceRule     ? "reference_rule"
+                                   : source == kStartPlatformDefault ? "platform_default"
+                                   : g_fromConfig.load(std::memory_order_acquire) ? "config"
+                                                                                  : "default";
     const int referenceIndex = g_referenceIndex.load(std::memory_order_acquire);
     const bool reference = source == kStartReferenceRule || source == kStartPlatformDefault;
-    const sentinel::LogField fields[] = {
-        {"source", sourceName},
-        {"input", tq::InputName(tq::InputKind())},
-        {"quality", tq::LevelName(startLevel)},
-        {"menu_index", tq::MenuIndexForLevel(startLevel)},
-        {"unversioned_marker_ignored", g_unversionedMarkerIgnored.load(std::memory_order_acquire) ? 1 : 0},
-        {"reference_index", referenceIndex < 0 ? 0 : referenceIndex},
-        {"reference_file", g_referenceFile.load(std::memory_order_acquire)},
-        {"consequence", "this start is not saved; only a change in the menu is remembered for the next launch"}};
-    // The reference fields ride on the reference input's lines only (the first five fields are the same on every source).
-    sentinel::LogFieldList(sentinel::LogLevel::kInfo, "texture_quality_start", fields, reference ? 8U : 5U);
+    const char* const consequence = "this start is not saved; only a change in the menu is written to config.yaml for the next launch";
+    if (reference) {
+      const sentinel::LogField fields[] = {{"source", sourceName},
+                                           {"input", tq::InputName(tq::InputKind())},
+                                           {"quality", tq::LevelName(startLevel)},
+                                           {"menu_index", tq::MenuIndexForLevel(startLevel)},
+                                           {"reference_index", referenceIndex < 0 ? 0 : referenceIndex},
+                                           {"reference_file", g_referenceFile.load(std::memory_order_acquire)},
+                                           {"consequence", consequence}};
+      sentinel::LogFieldList(sentinel::LogLevel::kInfo, "texture_quality_start", fields, 7U);
+    } else {
+      const sentinel::LogField fields[] = {{"source", sourceName},
+                                           {"input", tq::InputName(tq::InputKind())},
+                                           {"quality", tq::LevelName(startLevel)},
+                                           {"menu_index", tq::MenuIndexForLevel(startLevel)},
+                                           {"consequence", consequence}};
+      sentinel::LogFieldList(sentinel::LogLevel::kInfo, "texture_quality_start", fields, 5U);
+    }
     ++lines;
   }
   for (int document = kMenuSettings; document < kDocuments; ++document) {
@@ -689,7 +671,7 @@ int PollLocked() noexcept {
                          {"hand_flip_rows", g_jsonHandFlip[document].load(std::memory_order_relaxed)}});
     ++lines;
   }
-  lines += WriteMarker();
+  lines += SaveChoice();
   const int requested = tq::RequestedLevelValue();
   if (requested != kUnset && requested != g_logged.request) {
     const int from = g_logged.request == kUnset ? static_cast<int>(tq::LatchedLevel()) : g_logged.request;
@@ -869,6 +851,16 @@ bool RegisterCounters() noexcept {
   return true;
 }
 
+void SetConfigFile(const char* path) noexcept {
+  const std::size_t length = path == nullptr ? 0 : std::strlen(path);
+  if (length == 0 || length >= sizeof(g_configFile)) {
+    g_configFileReady.store(false, std::memory_order_release);
+    return;
+  }
+  std::memcpy(g_configFile, path, length + 1);
+  g_configFileReady.store(true, std::memory_order_release);
+}
+
 bool Install(tq::Level level, bool fromConfig) noexcept {
   const char* const source = fromConfig ? "config" : "default";
   auto skipped = [&](const char* why, const char* detail) noexcept {
@@ -949,7 +941,8 @@ bool Install(tq::Level level, bool fromConfig) noexcept {
   return all;
 }
 
-void ArmForTest(const Game& game, tq::Level configLevel, bool /*fromConfig*/, PropertyReader property) noexcept {
+void ArmForTest(const Game& game, tq::Level configLevel, bool fromConfig, PropertyReader property) noexcept {
+  g_fromConfig.store(fromConfig, std::memory_order_release);
   g_refreshRtSize.store(game.refreshRtSize, std::memory_order_release);
   g_vrInitialized.store(game.vrInitialized, std::memory_order_release);
   g_vrGraphicsInitialized.store(game.vrGraphicsInitialized, std::memory_order_release);
@@ -959,7 +952,7 @@ void ArmForTest(const Game& game, tq::Level configLevel, bool /*fromConfig*/, Pr
   g_property.store(property, std::memory_order_release);
   g_defaultIndex.store(tq::MenuIndexForLevel(configLevel), std::memory_order_release);
   tq::SetStartResolver(&ResolveStart);
-  // KNOWN-WRONG #2043 the Controller Hand Flip start is resolved from the same directory as the texture marker.
+  // KNOWN-WRONG #2043 the Controller Hand Flip start is resolved from the same directory as the texture reference file.
   hand_flip::SetStartProvider(&ProvideHandFlipStart);
   FileThunk::Arm(kFileHook);
   TextThunk::Arm(kTextHook);
@@ -979,16 +972,16 @@ void ResetForTest() noexcept {
   g_engineResize.store(nullptr);
   g_property.store(nullptr);
   g_lastIndex.store(kUnset);
-  g_pendingMarker.store(kUnset);
+  g_pendingSave.store(kUnset);
   g_lastHandFlip.store(kUnset);
   hand_flip::ResetForTest();
-  g_markerPathReady.store(false);
-  g_markerPath[0] = '\0';
-  g_markerWrites.store(0);
-  g_markerFailures.store(0);
+  g_configFileReady.store(false);
+  g_configFile[0] = '\0';
+  g_saveWrites.store(0);
+  g_saveFailures.store(0);
   g_defaultIndex.store(tq::kDefaultMenuIndex);
   g_startSource.store(kStartNotAsked);
-  g_unversionedMarkerIgnored.store(false);
+  g_fromConfig.store(false);
   g_startLevel.store(kUnset);
   g_playerSaved.store(false);
   g_firstDelivery.store(false);
@@ -1024,8 +1017,8 @@ int PollOnceForTest() noexcept { return PollOnce(); }
 
 Totals CurrentTotals() noexcept {
   return {g_deliveries.load(), g_jsonRewrites.load(), g_applies.load(),       g_equalCommits.load(),
-          g_refused.load(),    g_failed.load(),       g_configOverrides.load(), g_markerWrites.load(),
-          g_markerFailures.load(), g_disabled.load(), g_disabledWhy.load()};
+          g_refused.load(),    g_failed.load(),       g_configOverrides.load(), g_saveWrites.load(),
+          g_saveFailures.load(), g_disabled.load(), g_disabledWhy.load()};
 }
 
 }  // namespace nevr_quest::texture_menu

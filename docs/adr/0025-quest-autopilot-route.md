@@ -148,7 +148,7 @@ plugins:
   `--start-on <regex>` it creates the start file when a logcat line matches. It waits for `route_end` (or its timeout,
   or the launch check's line for this app, which ends the run at once as `launch_blocked`),
   force-stops the game, sends `com.oculus.vrpowermanager.automation_disable` to give the sensor back, and saves the
-  logcat and `nevr-sentinel.log`. It writes one JSON record per step, plus a summary that carries the `route_start`
+  logcat and the run's log (the newest `nevr-<timestamp>.jsonl` in `nevr/logs`). It writes one JSON record per step, plus a summary that carries the `route_start`
   and `route_end` fields, to `runs.jsonl` in its output directory under the work root. It exits 0 only when
   `route_end` arrived and every hand the route drives has a non-zero `frames_driven`. `just quest-autopilot-run <route>`
   runs it. The routes the repo ships are in `tools/quest_autopilot_routes/` (`lobby_loop.txt`: walk, turn, walk back
@@ -157,7 +157,7 @@ plugins:
 ### Logging
 
 Through `ctx->log`, so lines are `[NEVR.PLUGIN] plugin=nevr_autopilot <message> key=value ...` in logcat (tag
-`NEVR-Sentinel`) and in `nevr-sentinel.log` (ADR 0019 section 10).
+`NEVR-Sentinel`) and in the run's log (ADR 0019 section 10).
 
 | message | level | when | fields |
 | --- | --- | --- | --- |

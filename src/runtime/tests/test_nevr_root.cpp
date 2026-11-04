@@ -16,6 +16,7 @@
 
 #include "core/credential_write.h"
 #include "core/nevr_root.h"
+#include "core/run_log_path.h"
 #include "core/system_info.h"
 #include "runtime/lifecycle/nevr_root_move.h"
 
@@ -162,12 +163,11 @@ TEST(NevrRootPaths, EnsureDirectoryTreeMakesEveryParentAndRefusesAFile) {
   std::filesystem::remove_all(std::filesystem::path(base), ec);
 }
 
-TEST_F(NevrRootMove, TheOldLayoutMovesIntoTheRootAndEachEmptiedFolderSaysWhy) {
+TEST_F(NevrRootMove, TheOldLayoutMovesIntoTheRootAndLeavesNoNoteBehind) {
   OldLayout();
   const std::vector<move::Event> events = move::Run(Inputs());
 
   EXPECT_EQ(Count(events, Outcome::kMoved), 4u) << "three nEVR log files, one cosmetic package";
-  EXPECT_EQ(Count(events, Outcome::kMarkerWritten), 2u) << "the old logs folder and the old cosmetics folder";
   EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-2026-10-01T10-00-00.000.jsonl"), "{\"msg\":\"run log\"}\n");
   EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-2026-10-01T10-00-00.001.log"), "plain run log\n");
   EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-crash-abc123.txt"), "[NEVR.CRASH] record\n");
@@ -179,20 +179,18 @@ TEST_F(NevrRootMove, TheOldLayoutMovesIntoTheRootAndEachEmptiedFolderSaysWhy) {
   // What is not nEVR's stays.
   EXPECT_EQ(ReadAll(legacy_logs_ + L"\\other-tool.log"), "not ours\n");
 
-  for (const std::wstring& dir : {legacy_logs_, legacy_cosmetics_}) {
-    const std::string marker = ReadAll(dir + L"\\MOVED-TO-NEVR-ROOT.txt");
-    EXPECT_NE(marker.find("nevr\\echovr"), std::string::npos) << "the marker names the root";
+  // Nothing is written in a folder the files were taken from: no note, in the original game's folders or in the install.
+  for (const std::wstring& dir : {legacy_logs_, legacy_cosmetics_, install_local_}) {
+    EXPECT_FALSE(Exists(dir + L"\\MOVED-TO-NEVR-ROOT.txt")) << "no note is left in " << std::string(dir.begin(), dir.end());
   }
-  EXPECT_FALSE(Exists(install_local_ + L"\\MOVED-TO-NEVR-ROOT.txt")) << "a folder nothing was taken from gets no marker";
 }
 
 TEST_F(NevrRootMove, ASecondRunMovesNothing) {
   OldLayout();
   ASSERT_FALSE(move::Run(Inputs()).empty());
-  const std::string marker = ReadAll(legacy_logs_ + L"\\MOVED-TO-NEVR-ROOT.txt");
   const std::vector<move::Event> again = move::Run(Inputs());
-  EXPECT_TRUE(again.empty()) << "no file is left to move, so no event and no rewritten marker";
-  EXPECT_EQ(ReadAll(legacy_logs_ + L"\\MOVED-TO-NEVR-ROOT.txt"), marker);
+  EXPECT_TRUE(again.empty()) << "no file is left to move, so no event";
+  EXPECT_FALSE(Exists(legacy_logs_ + L"\\MOVED-TO-NEVR-ROOT.txt"));
   EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-crash-abc123.txt"), "[NEVR.CRASH] record\n");
 }
 
@@ -252,7 +250,7 @@ TEST_F(NevrRootMove, WithoutARootTheMoveDoesNothing) {
 }
 
 // #856: the plugins folder beside echovr.exe moves into the root's plugins\ (ADR 0012).
-TEST_F(NevrRootMove, ThePluginsFolderBesideTheGameMovesIntoTheRootsPluginsAndSaysWhy) {
+TEST_F(NevrRootMove, ThePluginsFolderBesideTheGameMovesIntoTheRootsPlugins) {
   Write(legacy_plugins_ + L"\\alpha.dll", "alpha bytes");
   Write(legacy_plugins_ + L"\\beta.dll", "beta bytes");
   Write(legacy_plugins_ + L"\\beta.yaml", "beta data");
@@ -260,7 +258,6 @@ TEST_F(NevrRootMove, ThePluginsFolderBesideTheGameMovesIntoTheRootsPluginsAndSay
   const std::vector<move::Event> events = move::Run(Inputs());
 
   EXPECT_EQ(Count(events, Outcome::kMoved), 3u) << "the three files at the top of the folder";
-  EXPECT_EQ(Count(events, Outcome::kMarkerWritten), 0u) << "nothing of ours is written to the game folder";
   EXPECT_EQ(ReadAll(root_ + L"\\plugins\\alpha.dll"), "alpha bytes");
   EXPECT_EQ(ReadAll(root_ + L"\\plugins\\beta.dll"), "beta bytes");
   EXPECT_EQ(ReadAll(root_ + L"\\plugins\\beta.yaml"), "beta data");
@@ -315,17 +312,16 @@ class NevrRootCredentialMove : public NevrRootMove {
   static std::string Narrow(const std::wstring& wide) { return std::string(wide.begin(), wide.end()); }
 };
 
-TEST_F(NevrRootCredentialMove, TheSignInCacheMovesIntoTheRootAndTheLocalFolderSaysWhy) {
+TEST_F(NevrRootCredentialMove, TheSignInCacheMovesIntoTheRootAndLeavesNoNoteInTheLocalFolder) {
   const std::string token = "{\"refresh_token\":\"r-1\",\"refresh_token_expiry\":2000000000}";
   Write(Cache(local_[0]), token);
   const std::vector<move::Event> events = move::Run(Inputs());
 
   EXPECT_EQ(Count(events, Outcome::kMoved), 1u);
-  EXPECT_EQ(Count(events, Outcome::kMarkerWritten), 1u);
   EXPECT_EQ(ReadAll(Cache(root_)), token) << "byte for byte: the login survives";
   EXPECT_FALSE(Exists(Cache(local_[0])));
   EXPECT_FALSE(Exists(Cache(root_) + L".tmp")) << "the temp file of the protected write is renamed away";
-  EXPECT_NE(ReadAll(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt").find("nevr\\echovr"), std::string::npos);
+  EXPECT_FALSE(Exists(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt")) << "no note is left in the install's _local folder";
   if (nevr_system_info::Get().IsWine()) {
     EXPECT_EQ(nevr_credential_write::WineHostMode(Narrow(Cache(root_))), "600") << "as private as a cache saved by the runtime";
   }
@@ -581,6 +577,48 @@ TEST(NevrRootMoveEnvironment, TheInputsComeFromLocalAppData) {
   SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
   EXPECT_TRUE(move::InputsFromEnvironment().root.empty());
   if (had != 0) SetEnvironmentVariableW(L"LOCALAPPDATA", saved);
+}
+
+
+// The process's one main log is named by the process's creation time, so the host and the runtime (two images) name the same file.
+unsigned long long TicksOf(WORD year, WORD month, WORD day, WORD hour, WORD minute, WORD second, WORD ms) {
+  SYSTEMTIME st{};
+  st.wYear = year; st.wMonth = month; st.wDay = day; st.wHour = hour; st.wMinute = minute; st.wSecond = second; st.wMilliseconds = ms;
+  FILETIME ft{};
+  SystemTimeToFileTime(&st, &ft);
+  return (static_cast<unsigned long long>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+}
+
+TEST(RunLogPath, TheFileNameIsTheProcessCreationTimeInTheRunLogsNameFormat) {
+  char name[64] = {};
+  ASSERT_TRUE(nevr_run_log::FileName(TicksOf(2026, 10, 1, 10, 2, 3, 45), 1234ul, name, sizeof(name)));
+  EXPECT_STREQ(name, "nevr-2026-10-01T10-02-03.045.jsonl");
+  wchar_t wide[64] = {};
+  ASSERT_TRUE(nevr_run_log::FileName(TicksOf(2026, 10, 1, 10, 2, 3, 45), 1234ul, wide, 64));
+  EXPECT_EQ(std::wstring(wide), L"nevr-2026-10-01T10-02-03.045.jsonl") << "the host (wide) and the runtime (narrow) name one file";
+}
+
+TEST(RunLogPath, AnUnreadableCreationTimeStillNamesOneFileForEveryImageOfTheProcess) {
+  char name[64] = {};
+  ASSERT_TRUE(nevr_run_log::FileName(0, 0x4d2ul, name, sizeof(name)));
+  EXPECT_STREQ(name, "nevr-pid4d2.jsonl");
+}
+
+TEST(RunLogPath, ThePathIsInTheLogsFolderAndNothingFitsNowhere) {
+  const std::wstring logs = nevr_root::LogsDir(nevr_root::RootUnder(std::wstring(L"C:\\Users\\u\\AppData\\Local")));
+  EXPECT_EQ(nevr_run_log::PathIn(logs, TicksOf(2026, 10, 1, 10, 2, 3, 45), 1ul),
+            L"C:\\Users\\u\\AppData\\Local\\nevr\\echovr\\logs\\nevr-2026-10-01T10-02-03.045.jsonl");
+  EXPECT_TRUE(nevr_run_log::PathIn(std::wstring(), TicksOf(2026, 10, 1, 10, 2, 3, 45), 1ul).empty()) << "no root, no path, no fallback";
+  char tiny[8] = {};
+  EXPECT_FALSE(nevr_run_log::FileName(TicksOf(2026, 10, 1, 10, 2, 3, 45), 1ul, tiny, sizeof(tiny)));
+}
+
+TEST(RunLogPath, TheTimestampSortsInStartOrder) {
+  char a[64] = {};
+  char b[64] = {};
+  ASSERT_TRUE(nevr_run_log::FileName(TicksOf(2026, 10, 1, 10, 2, 3, 45), 1ul, a, sizeof(a)));
+  ASSERT_TRUE(nevr_run_log::FileName(TicksOf(2026, 10, 1, 10, 2, 3, 46), 1ul, b, sizeof(b)));
+  EXPECT_LT(std::string(a), std::string(b)) << "the launcher and the prune read name order as start order";
 }
 
 }  // namespace

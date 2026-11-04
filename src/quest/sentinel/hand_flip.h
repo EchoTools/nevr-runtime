@@ -30,7 +30,7 @@
  * place the inversion is written; the hook hands the menu a choice as MenuIndexFor (index 0 is "On"), and the row's `value` for that
  * index is MenuValueFor (true for Off).
  *
- * The persisted choice. Its own file beside the texture marker, {"version":1,"hand_flip":0|1} (kFileName), written only by a
+ * The persisted choice. Its own file beside the game's settings file (RAD/LoneEcho/), {"version":1,"hand_flip":0|1} (kFileName), written only by a
  * menu change (a derived or default value is never saved). A file without the version, with another version, or with a value
  * other than 0 or 1 is ignored and the ignore is logged (hand_flip_start unversioned_marker_ignored=1). It is read once, by
  * StartFromDirectory, before the first tracking call can use the flag: the texture hook's start resolver calls it on the game's
@@ -86,7 +86,7 @@ inline constexpr const char* kMenuLabels[kMenuValueCount] = {"On", "Off"};
 inline constexpr const char* kMenuTrueLabel = "Off";  // the row's `truestr`: true is the bit set, the game's value
 inline constexpr const char* kMenuFalseLabel = "On";  // the row's `falsestr`: false is the bit cleared, the roll on
 
-// The persisted choice: a file of our own beside the texture marker (RAD/LoneEcho/ under the game's local app data directory).
+// The persisted choice: a file of our own beside the game's settings file (RAD/LoneEcho/ under the game's local app data directory).
 inline constexpr char kFileName[] = "nevr_hand_flip.json";
 inline constexpr int kFileVersion = 1;
 

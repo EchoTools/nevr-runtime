@@ -45,7 +45,7 @@ One root per game: `%LOCALAPPDATA%\nevr\echovr\`. The install folder keeps the g
 | `content\` | content packs: `content\<id>\` is one pack's folder, which only the plugin that serves it reads (ADR 0028) |
 | `config.yaml` | the nEVR configuration, when no `-config` folder is given |
 | `.credentials.json` | the sign-in cache, one per machine, for clients and servers alike |
-| `logs\`, `crashes\` | the run log and the crash record (`nevr-crash-<run id>.txt`) the runtime writes, the host's log and minidumps |
+| `logs\`, `crashes\` | each process's one main log (`nevr-<timestamp>.jsonl`: the host, the boot phase, the runtime and the crash path all write it) and the minidumps and crash reports |
 | `cache\`, `cosmetics\v1\packages\` | the asset cache, and the downloaded cosmetic packages |
 | `update\` | what self-update stages, swaps and rolls back (ADR 0024) |
 | `installer\` | the core installer's record (`nevr-install.txt`) and, in `installer\aside\`, the files it sets aside; nothing in the install folder but `BugSplat64.dll` is written (ADR 0023) |
@@ -74,7 +74,7 @@ because the file sits in the install folder.
    detour on the game's main wrapper (ADR 0008's rendezvous), never in `DllMain`: ADR 0008's rule that `DllMain` does no file I/O
    and returns `TRUE` stands, and the dialog is shown without the loader lock held.
 4. **The host's export table does not change** (the names and ordinals `tools/verify_pe_contract.py` pins). Logging stays in
-   the host as ADR 0008 describes it (`nevr-bootstrap.jsonl`, `crash_capture`).
+   the host as ADR 0008 describes it (its records in the run's main log, `crash_capture`).
 
 The last-known-good copy of `nevr-runtime.dll` is the one self-update keeps in `update\previous\` (ADR 0024). The plugin loader stays in `nevr-runtime.dll`.
 
@@ -142,10 +142,9 @@ On the first run that finds the old layout, the runtime moves, and logs every fi
 - from the install's `_local` directories: `.credentials.json`, nearest first, through the protected write the cache is saved with
   (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved by this step (the config choice copies a
   `_local` one into the root once, `nevr_config_yaml::Resolve`), and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
-  finds it there. A cache the move could not take (or whose root path does not fit the ANSI code page) is still read, and written back where it is,
-  until a later run moves it;
+  finds it there. The old spots are never read again: a cache the move could not take stays where it is, and the next run tries the move again;
 - from `%LOCALAPPDATA%\EchoVR\logs`: nEVR's own files, which are the run logs the built-in filter writes (`BuildLogFilePath` in
-  `builtin_filter.cpp`, whose prefix is configurable) and `nevr-crash-<run id>.txt` (`PrepareCrashRecordPath`), never the game's own.
+  `builtin_filter.cpp`, whose prefix is configurable) and `nevr-crash-<run id>.txt` (a crash record an earlier release wrote), never the game's own.
   The move recognises them by the names those writers use. That list is `nevr-*.jsonl` and `nevr-*.log` (the run log) and `nevr-crash-*.txt` (the crash
   record), moved to the root's `logs\`;
 - from `%LOCALAPPDATA%\EchoVR\cosmetics\v1\packages`: every file, the downloaded cosmetic packages, moved to the root's `cosmetics\v1\packages`;
@@ -154,13 +153,9 @@ On the first run that finds the old layout, the runtime moves, and logs every fi
   The plugins move leaves no file behind: the game folder holds nothing of ours but the host.
 
 The credentials move first, so a player who updates keeps their login. The move never overwrites a file already in the root, is
-safe to run twice, and leaves a file in place, with a log line, when it cannot move it. Nothing is deleted that was not moved. When
-it has moved anything out of a `_local` directory, it writes `MOVED-TO-NEVR-ROOT.txt` there, naming the root, so a player or support
-can see why that folder is empty.
-
-The uninstaller puts back what the move took: it copies `.credentials.json` from the root into the `_local` folder that holds a marker (never over a file there) and sets
-`MOVED-TO-NEVR-ROOT.txt` aside as `MOVED-TO-NEVR-ROOT.txt.undone-<timestamp>`, and leaves the root as it is, so uninstalling and then installing a pre-split release keeps the login. It does not put plugins back: they stay in the root's `plugins\`, and a pre-split
-release, which reads only `plugins\` beside `echovr.exe`, finds none until they are copied there.
+safe to run twice, and leaves a file in place, with a log line, when it cannot move it. Nothing is deleted that was not moved, and nothing is written in the folders it takes files from: no note is left in `_local`, in
+the original game's folder or in the game folder. What it did is in the log, one `[NEVR.ROOT]` line per file. The uninstaller leaves the
+root as it is and puts nothing back: a release that reads the old places finds no login and no plugins until they are copied there.
 
 ### Updating only the host, and going back
 
@@ -191,11 +186,11 @@ Each step is its own pull request with its own issue under #575, mergeable and t
 
 - **The runtime DLL's name:** `nevr-runtime.dll`, in the root, signed by the release signer.
 - **The root layout and file names:** `%LOCALAPPDATA%\nevr\echovr\` holding `nevr-runtime.dll`, `plugins\`, `content\`, `config.yaml`,
-  `.credentials.json`, `logs\` and `crashes\`, as in the table. `nevr-bootstrap.jsonl` stays the host's log file name.
+  `.credentials.json`, `logs\` and `crashes\`, as in the table.
 - **`NEVR_ROOT`**, honoured only in a dev build, replaces `%LOCALAPPDATA%\nevr\echovr`; it lands in step 4.
 - **The `versions` record:** written by the host's detour on the game's main wrapper right after the verdict on `nevr-runtime.dll`: the first
   record of that process after the verdict (attach records before it are fine; every record carries the `pid`, so the log reads per
-  process). It goes to `nevr-bootstrap.jsonl` with `tag` `NEVR.HOST`, `event` `versions`, and the fields `host_version`, `host_build` (`release` or `dev`), `host_sha256`, `runtime_version`, `runtime_sha256` (the last two
+  process). It goes to the run's main log with `tag` `NEVR.HOST`, `event` `versions`, and the fields `host_version`, `host_build` (`release` or `dev`), `host_sha256`, `runtime_version`, `runtime_sha256` (the last two
   `unavailable` when `nevr-runtime.dll` is missing or refused, with the path searched in `runtime_path`).
 - **The exit code** after the refusal dialog on a client, and on a server or headless run, is 78 (free in `src/` today; 78 is `EX_CONFIG`
   in sysexits). The host ends the process by its own call, `TerminateProcess(GetCurrentProcess(), 78)`, as it already does for an

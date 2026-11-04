@@ -529,6 +529,26 @@ fn launch_witness_reads_the_hosts_own_records() {
 }
 
 #[test]
+fn the_hosts_log_is_the_newest_process_main_log_and_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in [
+        "nevr-2026-11-03T09-00-00.100.jsonl",
+        "nevr-2026-11-04T10-43-51.990.jsonl",
+        "nevr-2026-11-04T10-43-51.990.1.jsonl", // a rotation's archive
+        "nevr-update.jsonl",                    // the installer's own log
+        "nevr-bootstrap.jsonl",
+        "nevr-2026-11-05T00-00-00.000.log",
+    ] {
+        fs::write(dir.path().join(name), "").unwrap();
+    }
+    let newest = pc::newest_run_log(dir.path()).unwrap();
+    assert_eq!(newest.file_name().unwrap().to_str().unwrap(), "nevr-2026-11-04T10-43-51.990.jsonl");
+    assert!(pc::is_run_log_name("nevr-pid1f4.jsonl"));
+    assert!(!pc::is_run_log_name("nevr-pid.jsonl"));
+    assert!(pc::newest_run_log(&dir.path().join("absent")).is_none());
+}
+
+#[test]
 fn an_error_before_anything_changed_ends_unchanged_not_restored() {
     let w = world();
     // A file where the installer folder goes: the aside folder cannot be made, and nothing has been touched yet.

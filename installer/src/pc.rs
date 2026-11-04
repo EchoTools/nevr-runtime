@@ -915,10 +915,41 @@ pub fn verify_installed(l: &Layout, pkg: &Package, log: &Log, seam: &Seam) -> st
     }
 }
 
-/// Step 11 on PC: the host's own record of the last start (`nevr-bootstrap.jsonl`). Returns the witness line when the
+/// True for the name of a process's main log: `nevr-<UTC creation time>.jsonl` (`nevr-2026-11-04T10-43-51.990.jsonl`), or
+/// `nevr-pid<hex>.jsonl` when the process's creation time could not be read (`src/core/run_log_path.h`). The installer's own
+/// `nevr-update.jsonl` and a rotation's archive (`nevr-<time>.<n>.jsonl`) are not.
+pub fn is_run_log_name(name: &str) -> bool {
+    let Some(stem) = name.strip_prefix("nevr-").and_then(|n| n.strip_suffix(".jsonl")) else { return false };
+    if let Some(hex) = stem.strip_prefix("pid") {
+        return !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit());
+    }
+    let b = stem.as_bytes();
+    // YYYY-MM-DDTHH-MM-SS.mmm
+    b.len() == 23
+        && b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 | 13 | 16 => *c == b'-',
+            10 => *c == b'T',
+            19 => *c == b'.',
+            _ => c.is_ascii_digit(),
+        })
+}
+
+/// The newest process main log in `logs` (names sort by time), or None when the folder holds none.
+pub fn newest_run_log(logs: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut names: Vec<String> = std::fs::read_dir(logs)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| is_run_log_name(n))
+        .collect();
+    names.sort();
+    names.pop().map(|n| logs.join(n))
+}
+
+/// Step 11 on PC: the host's own record of the last start, in the newest process main log of the nevr root. Returns the witness line when the
 /// last `versions` record names the installed hashes and the last `runtime_load` was accepted.
-pub fn launch_witness(bootstrap_jsonl: &str, host_sha: &str, runtime_sha: &str) -> std::result::Result<String, String> {
-    let recs: Vec<Value> = bootstrap_jsonl.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+pub fn launch_witness(run_log_jsonl: &str, host_sha: &str, runtime_sha: &str) -> std::result::Result<String, String> {
+    let recs: Vec<Value> = run_log_jsonl.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
     let versions = recs.iter().rev().find(|r| r["event"] == "versions").ok_or("no versions record: the game has not started with this host")?;
     if versions["host_sha256"] != host_sha || versions["runtime_sha256"] != runtime_sha {
         return Err(format!("the last start ran other files: host {} runtime {}", versions["host_sha256"], versions["runtime_sha256"]));

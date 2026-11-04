@@ -255,7 +255,11 @@ class TheConstructorBeginNamesTheBuild(unittest.TestCase):
     def test_the_constructor_passes_the_generated_build_identity(self):
         text = re.sub(r"//[^\n]*", "", read("entry.cpp"))
         ctor = extract_braced_function(text, "static void nevr_sentinel_ctor() {")
-        self.assertIn("nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);", ctor)
+        flat = re.sub(r"\s+", " ", ctor)
+        self.assertIn(
+            'nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit, '
+            'nevr_build::kIsDev ? "dev" : "release");',
+            flat)
 
 
 class NoLoadTimeInitializer(unittest.TestCase):

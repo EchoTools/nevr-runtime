@@ -77,7 +77,7 @@ B01@@boot@@MinHook initialised@@minhook initialized@@
 B02@@boot@@Game function pointers resolved@@function pointers resolved@@
 B03@@boot@@Boot hook result reported@@\[NEVR\.PATCH\] boot hooks installed ok=[Tt][Rr][Uu][Ee]@@\[NEVR\.PATCH\] boot hooks installed ok=[Ff][Aa][Ll][Ss][Ee]
 B04@@boot@@Every hook installed, none failed@@hooks installed: [0-9]+ succeeded, 0 failed@@hooks installed: [0-9]+ succeeded, [1-9][0-9]* failed
-B05@@boot@@Boot log tee opened (nevr-boot.jsonl)@@boot log opened run=@@
+B05@@boot@@Boot phase writes into the main log@@boot log opened run=@@
 B06@@boot@@Built-in log filter installed@@log filter installed@@
 B07@@boot@@Log filter emitting health counters@@\[NEVR\.LOGFILTER\] health emitted=@@CAPTURED ZERO GAME LINES
 B08@@boot@@Optional config.json searched (issue #21)@@Early config loaded from:|no _local/config\.json under@@exists but did not parse|Failed to early-load config

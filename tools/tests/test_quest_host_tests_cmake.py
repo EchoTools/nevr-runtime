@@ -168,6 +168,7 @@ PROGRAMS = {
         "login_prerequisites_test",
         "login_rewrite_test",
         "login_standin_test",
+        "nevr_config_set_test",
         "quest_config_test",
         "sentinel_host_test",
         "service_redirect_test",

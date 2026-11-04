@@ -2035,7 +2035,7 @@ void TestConstructorBeginNamesTheBuild() {
   constexpr const char* kCommit = "0123456789abcdef0123456789abcdef01234567";
   g_beginLines.clear();
   const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureBeginLine);
-  nevr_quest::integration::LogConstructorBegin(kVersion, kCommit);
+  nevr_quest::integration::LogConstructorBegin(kVersion, kCommit, "dev");
   sentinel::SetLogSink(previous);
   QCHECK(g_beginLines.size() == 1U);
   if (g_beginLines.size() != 1U) return;
@@ -2045,6 +2045,7 @@ void TestConstructorBeginNamesTheBuild() {
   QCHECK(j.value("action", "") == "begin");
   QCHECK(j.value("version", "") == std::string(kVersion));
   QCHECK(j.value("commit", "") == std::string(kCommit));
+  QCHECK(j.value("kind", "") == "dev");  // ADR 0040 rule 2: the first record names the build kind
   QCHECK(CountEventKeys(line) == 1U);
 }
 

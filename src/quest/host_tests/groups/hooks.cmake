@@ -254,8 +254,11 @@ nevr_ht_test(texture_menu_test GROUP hooks HOST INCS ${_sent} TIMEOUT 120
 # rewrite it calls keeps them (it runs before the game is called: NEVR_OUTSIDE_GAME_CALL).
 nevr_ht_obj(o_hooks_texture_menu_hook GROUP hooks NOEXC PTHREAD HOST INCS ${_sent} SRC src/quest/sentinel/texture_menu_hook.cpp)
 nevr_ht_obj(o_hooks_texture_menu GROUP hooks HOST INCS ${_sent} SRC src/quest/sentinel/texture_menu.cpp)
-nevr_ht_test(texture_menu_hook_test GROUP hooks ${_hf} TIMEOUT 120
-  OBJS o_hooks_texture_menu_hook o_hooks_texture_menu ${_core} ${_ident}
+# The player's choice is written to config.yaml by NevrConfig::Set (src/core/nevr_config.cpp, built with exceptions against the host
+# yaml-cpp, like the shared group), so the test links it and the host yaml-cpp.
+nevr_ht_obj(o_hooks_nevr_config GROUP hooks HOST SRC src/core/nevr_config.cpp)
+nevr_ht_test(texture_menu_hook_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_YAML_LIB}
+  OBJS o_hooks_texture_menu_hook o_hooks_texture_menu o_hooks_nevr_config ${_core} ${_ident}
   SRC src/quest/tests/texture_menu_hook_test.cpp src/quest/sentinel/texture_quality_hook.cpp)
 # The hardware dump on the shared vrapi_GetSystemPropertyInt slot (#943): owned by the texture-quality hook, the dump installs
 # nothing there and records the runtime's own answers through the observer.

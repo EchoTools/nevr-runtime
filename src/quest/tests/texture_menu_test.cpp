@@ -275,74 +275,6 @@ void TheRewriteDoesNotChangeItsOwnOutput() {
   QCHECK(tm::RewriteGameSettings(settings.text).status == tm::Status::kShapeMismatch);
 }
 
-// ---- the player's marker ---------------------------------------------------------------------------------------------------
-
-int Marked(const char* text) { return tm::MarkedMenuIndex(text, std::strlen(text)); }
-
-void TheMarkedValueIsReadFromTheMarkerFile() {
-  QCHECK(Marked(R"({"menu_index": 3})") == 3);
-  QCHECK(Marked(R"({"menu_index":0})") == 0);
-  QCHECK(Marked("{\"menu_index\" \t:\r\n 5 }") == 5);
-  QCHECK(Marked(R"({"menu_index": 1, "other": 4})") == 1);
-  QCHECK(Marked(R"({"menu_index": 1, "menu_index": 4})") == 1);  // the first one
-  // The game's own slot is not the marker: a settings file that held the setting is not read as a choice.
-  QCHECK(Marked(R"({"graphics": {"msaa": 4}})") == -1);
-  QCHECK(Marked(R"({"graphics": {"msaa": 0}})") == -1);
-}
-
-void TheMarkerTextRoundTripsAndStaysInTheMenu() {
-  for (int index = 0; index < 6; ++index) {
-    const std::string text = tm::MarkerText(index);
-    QCHECK(Json::parse(text) == Json::parse("{\"version\":1,\"menu_index\":" + std::to_string(index) + "}"));  // valid JSON
-    QCHECK(Marked(text.c_str()) == index);
-    QCHECK(tm::MarkerVersion(text.c_str(), text.size()) == tm::kMarkerVersion);
-  }
-  QCHECK(Marked(tm::MarkerText(-4).c_str()) == 0);
-  QCHECK(Marked(tm::MarkerText(99).c_str()) == 5);
-}
-
-int Version(const char* text) { return tm::MarkerVersion(text, std::strlen(text)); }
-
-void TheMarkerVersionIsReadFromTheMarkerFile() {
-  QCHECK(Version(R"({"version":1,"menu_index":3})") == 1);
-  QCHECK(Version("{\"version\" \t:\r\n 7 }") == 7);
-  // An unversioned marker (what 6.14 to 6.16 wrote) reads 0, as does anything that is not a whole number.
-  QCHECK(Version(R"({"menu_index":3})") == 0);
-  QCHECK(Version("") == 0);
-  QCHECK(Version(R"({"version":"1"})") == 0);
-  QCHECK(Version(R"({"version":1.5})") == 0);
-  QCHECK(Version(R"({"version":-1})") == 0);
-  QCHECK(Version(R"({"versions":1})") == 0);
-  QCHECK(tm::MarkerVersion(nullptr, 10) == 0);
-  QCHECK(tm::kMarkerVersion == 1);
-}
-
-void ANumberOutsideTheMenuIsClamped() {
-  QCHECK(Marked(R"({"menu_index": 6})") == 5);
-  QCHECK(Marked(R"({"menu_index": 99999999999999999999})") == 5);
-  QCHECK(Marked(R"({"menu_index": -1})") == 0);
-  QCHECK(Marked(R"({"menu_index": -300})") == 0);
-}
-
-void NothingUsableIsMinusOne() {
-  QCHECK(Marked("") == -1);
-  QCHECK(Marked("{}") == -1);
-  QCHECK(Marked(R"({"menu_indexx": 3})") == -1);
-  QCHECK(Marked(R"({"Menu_index": 3})") == -1);
-  QCHECK(Marked(R"({"menu_index": "3"})") == -1);
-  QCHECK(Marked(R"({"menu_index": null})") == -1);
-  QCHECK(Marked(R"({"menu_index": true})") == -1);
-  QCHECK(Marked(R"({"menu_index": 2.5})") == -1);
-  QCHECK(Marked(R"({"menu_index": 2e1})") == -1);
-  QCHECK(Marked(R"({"menu_index" 3})") == -1);
-  QCHECK(tm::MarkedMenuIndex(nullptr, 10) == -1);
-  // The size bounds the read: a number cut off by the end of the text is read as far as it goes, a key cut off is not a key.
-  QCHECK(tm::MarkedMenuIndex("\"menu_index\":34", 14) == 3);
-  QCHECK(tm::MarkedMenuIndex("\"menu_index\":34", 15) == 5);
-  QCHECK(tm::MarkedMenuIndex("\"menu_index\":3", 13) == -1);
-  QCHECK(tm::MarkedMenuIndex("\"menu_index\":34", 3) == -1);
-}
-
 }  // namespace
 
 int main() {
@@ -360,11 +292,6 @@ int main() {
   TheSettingsDocumentStopsHidingTheControlAndItsPage();
   ASettingsDocumentWithoutTheRemovalIsLeftAlone();
   TheRewriteDoesNotChangeItsOwnOutput();
-  TheMarkedValueIsReadFromTheMarkerFile();
-  TheMarkerTextRoundTripsAndStaysInTheMenu();
-  TheMarkerVersionIsReadFromTheMarkerFile();
-  ANumberOutsideTheMenuIsClamped();
-  NothingUsableIsMinusOne();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "texture_menu_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
