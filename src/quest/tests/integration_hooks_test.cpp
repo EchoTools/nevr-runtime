@@ -227,7 +227,8 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // reads it there.
 constexpr int kSentinelCounters = 2 + 21 + 1 + 2 + 24 + 26 + 17 + 5 + 6 + 4 + 13 + 2 + 4;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
-              "the sentinel's hooks register more counters than the reporter holds");
+              "the sentinel's hooks register more counters than the reporter holds: raise sentinel::kMaxReportCounters "
+              "(hook_report.h), the static_assert on it in got_hook_test.cpp and the figure in docs/adr/0003, together");
 
 struct RealCounterSteps final : Steps {
   nevr_quest::ResolvedConfig config;
