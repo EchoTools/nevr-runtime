@@ -72,12 +72,12 @@ class QuestMenuVersionIsAGotHook(unittest.TestCase):
         self.assertLess(body.index("InstallSocialHook"), body.index("InstallMenuVersionLabelHook"))
 
     def test_the_recipe_runs_the_host_test_with_the_real_handler(self):
-        text = JUSTFILE.read_text()
+        text = (ROOT / "src/quest/host_tests/groups/hooks.cmake").read_text()
         self.assertRegex(
             text,
-            r"src/quest/tests/menu_version_label_test\.cpp\s*\\\n\s*src/quest/social/menu_version_label\.cpp",
+            r"nevr_ht_test\(menu_version_label_test GROUP hooks[^)]*TIMEOUT 120[^)]*"
+            r"src/quest/tests/menu_version_label_test\.cpp\s+src/quest/social/menu_version_label\.cpp",
         )
-        self.assertIn('timeout 120 "$out/menu_version_label_test"', text)
 
 
 if __name__ == "__main__":

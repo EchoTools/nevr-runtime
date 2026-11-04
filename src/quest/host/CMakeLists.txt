@@ -35,3 +35,21 @@ target_include_directories(nevr_quest_patch_libr15 SYSTEM PRIVATE "${NEVR_HOST_J
 target_compile_options(nevr_quest_patch_libr15 PRIVATE -O2 -Wall -Wextra -Werror)
 # The target is nevr_<name> (docs/standards/naming.md); the file is the tool's name, which the repack recipe and the tests run.
 set_target_properties(nevr_quest_patch_libr15 PROPERTIES OUTPUT_NAME quest_patch_libr15 RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+# The host check of an extra-rows file (docs/adr/0021 section 11): the patcher's own parser on the public spec. The Quest build runs
+# it at configure time (cmake/libr15_extra_rows.cmake, through this preset) so a file the patcher would refuse stops the
+# sentinel's build instead of surfacing on a headset.
+add_executable(nevr_quest_libr15_extra_rows_check
+  ../patch/libr15_extra_rows_check.cpp
+  ../patch/libr15_extra_rows.cpp
+  ../patch/libr15_patch_identity.cpp
+  ../data/sha256.cpp)
+target_include_directories(nevr_quest_libr15_extra_rows_check PRIVATE "${NEVR_REPO_ROOT}/src" "${NEVR_REPO_ROOT}/sdk/include")
+target_include_directories(nevr_quest_libr15_extra_rows_check SYSTEM PRIVATE "${NEVR_HOST_JSON_INCLUDE}")
+target_compile_options(nevr_quest_libr15_extra_rows_check PRIVATE -O1)
+set_target_properties(nevr_quest_libr15_extra_rows_check PROPERTIES OUTPUT_NAME libr15_extra_rows_check RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+# The host tests of the `just test-quest-*` recipes (docs/adr/0041): the quest-host-* presets turn this on, besides the host tools.
+if(NEVR_QUEST_HOST_TESTS)
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../host_tests" host_tests)
+endif()
