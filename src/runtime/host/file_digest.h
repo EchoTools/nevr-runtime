@@ -1,6 +1,6 @@
 #pragma once
 
-// What the host reads from a file it is about to trust: its bytes, their SHA-256 and, for a nEVR build, the version
+// What the host reads from a file it is about to trust: its bytes, their SHA-256 and, for one of our builds, the version
 // its "NEVR-BUILD <version> <commit40>" literal carries. Shared by the runtime load (the `versions` record) and the
 // self-update swap (the staged files, the version of the runtime it moves out). CryptoAPI only (advapi32, which the
 // host links for the verifier).
