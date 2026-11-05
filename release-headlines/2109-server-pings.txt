@@ -1,0 +1,1 @@
+Game servers now answer ping checks the moment they arrive instead of on their next tick, so the ping you see to a server is its real distance.

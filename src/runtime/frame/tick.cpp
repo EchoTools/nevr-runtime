@@ -7,8 +7,11 @@
  * WHICH SITE DRIVES THIS, AND WHY IT MATTERS (N86)
  *
  * The obvious frame site — CPrecisionSleep::Wait, the engine's own frame pacer —
- * is entered ZERO times on a dedicated server. Measured across a full run, with
- * the hook confirmed installed. Wiring per-frame work there and watching
+ * was entered ZERO times on a dedicated server, measured across a full run with
+ * the hook installed, before #511 paced the server's clock. Since then it runs on
+ * every server frame that ends inside its step, and never on one that overruns,
+ * so it is still no per-frame site (#2109 serves UDP pings from it). Wiring
+ * per-frame work there and watching
  * `just verify` go green proved the call site existed in source; it proved
  * nothing about whether it runs. Plugins got no OnFrame, modules got no tick,
  * and nothing said so.

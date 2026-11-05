@@ -189,11 +189,23 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
     case gameservice::v1::Envelope::kLobbySessionEvent: {
       const auto& event = envelope.lobby_session_event();
       if (event.code() == gameservice::v1::LobbySessionEventMessage::CODE_ENDED) {
+        // #2109: only the service's end of the session this server runs puts it back on the idle step; a late
+        // CODE_ENDED that names an earlier session does not idle the one now running.
+        const std::string currentSessionId = self->GetContext().GetSessionState().lobbySessionId;
+        const bool idles = nevr_server_timestep::IdlesAfterSessionEnd(
+            nevr_server_timestep::SessionEndCause::kServiceEnded, event.lobby_session_id(), currentSessionId);
         Log(EchoVR::LogLevel::Info,
-            "[NEVR.GAMESERVER] session ended by ServerDB session_id=%s — scheduling return to lobby",
-            event.lobby_session_id().c_str());
+            "[NEVR.GAMESERVER] session ended by ServerDB session_id=%s current_session=%s idle_tick=%s — scheduling "
+            "return to lobby",
+            event.lobby_session_id().c_str(), currentSessionId.empty() ? "none" : currentSessionId.c_str(),
+            idles ? "yes" : "no (it names another session than the one this server runs)");
         CallScheduleReturnToLobby();
         self->GetContext().EndSession();
+        if (idles) {
+          ApplyServerIdleTimestep(nevr_server_timestep::SessionEndCauseName(
+                                      nevr_server_timestep::SessionEndCause::kServiceEnded),
+                                  event.lobby_session_id());
+        }
       }
       break;
     }
@@ -877,6 +889,9 @@ void GameServerLib::RegisterTcpCallbacks() {
               nevr_game_type_table::GameTypeOfSessionStart(static_cast<const uint8_t*>(data), size)) {
         StoreSessionGameType(*frameType, "legacy_session_start", nevr_server_bots::SessionIdOf(
                                                                       static_cast<const uint8_t*>(data), size));
+      } else {
+        // #2109: a start frame with no game type still opens a session: it must not run at the idle step.
+        ApplyUntypedSessionTimestep(nevr_server_bots::SessionIdOf(static_cast<const uint8_t*>(data), size));
       }
       // #1423: a session start with no broadcaster is not forwarded, so it must not keep the last one's bots flag.
       nevr_server_bots::ForgetSession();
@@ -904,6 +919,8 @@ void GameServerLib::RegisterTcpCallbacks() {
       [](const nevr_game_server::LobbySettingsRecord& cleared, const char* reason, const std::string& sessionId) {
         Log(EchoVR::LogLevel::Info, "%s",
             nevr_game_server::FormatLobbySettingsCleared(cleared, reason, sessionId).c_str());
+        // #2109: no idle step here. Every context EndSession reaches this handler, a reconnect's included, and a
+        // reconnect does not end the game's match; the idle step follows only a real end (IdlesAfterSessionEnd).
       });
 
   // Re-register on WebSocket reconnection so nakama knows we're available for new sessions.
@@ -921,10 +938,13 @@ void GameServerLib::ProcessPendingReconnect() {
   // Only re-register if we were previously registered (not on first connect)
   if (!m_context->IsRegistered()) return;
 
-  // End any stale session state from before the disconnect
+  // End any stale session state from before the disconnect. #2109: only the runtime's record; the game's match, if one
+  // runs (the socket drops during level loads), goes on at its tick rate (IdlesAfterSessionEnd: kReconnect).
   m_context->EndSession();
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket reconnected — re-registering server_id=%llu",
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] websocket reconnected — re-registering server_id=%llu (the session record is dropped; a "
+      "running match keeps its tick rate)",
       static_cast<unsigned long long>(m_context->GetSessionState().serverId));
 
   SessionState state = m_context->GetSessionState();

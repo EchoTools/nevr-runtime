@@ -397,7 +397,7 @@ VOID GameServerLib::Unregister() {
 }
 
 void GameServerLib::ShutdownUnregisterOnGameThread() {
-  EndSession();
+  EndServerSession(nevr_server_timestep::SessionEndCause::kShutdown);
   UnregisterFromServerDb(true);
 }
 
@@ -405,7 +405,7 @@ void GameServerLib::ShutdownUnregisterOffGameThread() {
   // Everything here is safe off the game thread: ServerContext state is
   // mutex-guarded and WebSocketClient is documented thread-safe. The callback
   // registry is not, so it is skipped (GH #44).
-  EndSession();
+  EndServerSession(nevr_server_timestep::SessionEndCause::kShutdown);
   UnregisterFromServerDb(false);
 }
 

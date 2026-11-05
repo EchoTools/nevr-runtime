@@ -117,35 +117,31 @@ constexpr size_t HEADLESS_RENDERER_SIZE = 2;
 constexpr uintptr_t HEADLESS_EFFECTS = 0x62CA91;
 constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 
-/// HEADLESS_DELTATIME (0xCF46D) is deliberately NOT patched. Two independent
-/// reasons, and the SECOND is the decisive one.
-///
-/// (1) It only matters under fixed timestep. A server is always fixed-timestep:
-///     boot.cpp sets the game's flag and config.cpp writes the step from
-///     network.tick_rate_hz. `-timestep`/`-fixedtimestep` are removed from a
-///     server's command line before the game parses it (cmdline_strip.h); the
-///     rate comes from the config key, not from v1's `headlessTimeStep`. Whether
-///     a server's clock holds the step is read back once and logged
-///     (config.cpp LogServerStepReadBack), not assumed here. This reason
-///     therefore does not rule the patch out by itself; (2) does.
-///
-/// (2) THE PATCH IS ALREADY IN THE SHIPPED BINARY, AND THE v1 BYTES NO LONGER
-///     MATCH IT. Measured on echovr/bin/win10/echovr.exe:
-///
-///         shipped at RVA 0xCF46D : 73 67     (jae +0x67 -> 0x1400CF4D6)
-///         v1 patch writes        : 73 7a     (jae +0x7a -> 0x1400CF4E9)
-///
-///     Opcode 0x73 is identical — the "JLE (signed) -> JAE (unsigned)" fix the v1
-///     comment describes is ALREADY PRESENT in the game as shipped. Only the
-///     displacement differs, so applying the v1 patch today would not fix a
-///     comparison; it would RETARGET THE JUMP by 0x13 bytes into an unrelated
-///     branch (0x1400CF4E9: `lea 0x8(%rdi),%rcx` + call). That patch was written
-///     against a DIFFERENT BUILD of echovr.exe.
-///
-/// So this is not dead weight that happens to be harmless — restoring it would
-/// corrupt control flow. If you find the v1 DLLs applying it and conclude this
-/// build has a regression, re-read the shipped bytes first. That is exactly the
-/// conclusion the evidence invites and it is wrong.
+/// HEADLESS_DELTATIME (0xCF46D) is patched on a server only, by patch/server_frame_wait.cpp (kOverrunDeltaRva, #2109).
+/// 0x1400cf46d is the `jae` in CClock::UpdateAndPace taken when a frame took at least its step: `73 67` goes to
+/// 0x1400cf4d6, where a fixed-step clock takes dt = step; EchoRelay's `73 7a` goes to 0x1400cf4e9, the variable-step arm
+/// of the same choice (`lea rcx,[rdi+8]; call 0x1400ce8d0`, the measured elapsed time). The bytes shipped in this build
+/// are `73 67`, and the patch was written for this build (C-Luddy, EchoTools/EchoRelay commit 21e15b28, imported in
+/// 324857cc as GamePatches/patches.cpp: "if deltatime is higher than timestep tell engine time is deltatime"). Its premise holds: a server is always fixed-step (boot.cpp
+/// sets the flag, config.cpp writes the step). It goes in only where the frame wait cannot return early, because the
+/// measured elapsed time is unsigned and the clock's maximum dt is 10 s (server_frame_wait.h, MayPatchOverrunDelta).
+
+/// Address: CBroadcaster::SendRecvDrain (0x140f8e310), the broadcaster port's once-a-frame UDP send and receive pump,
+/// called by CBroadcaster::Update (0x140f8ea10, site 0x140f8ea58). Its first argument is the port; the port's socket
+/// is the second quadword (`param_1[1]`, closed and set to -1 on a fatal error). #2109 records the port from a hook.
+/// Prologue: push rbx; push rbp; push rsi; push r12; push r13 (40 53 55 56 41 54 41 55).
+constexpr uintptr_t BROADCASTER_SEND_RECV_DRAIN = 0xF8E310;
+
+/// Address: udp_recvfrom_sockaddr_storage (0x1401f8d90, CSysNet::ReceiveFrom): the only caller of the recvfrom import
+/// (0x1416c3b50, xref 0x1401f8e42), called only by SendRecvDrain (site 0x140f8e7e0). Arguments: socket, a 0x80-byte
+/// address, the buffer, the size (capacity in, bytes out), the state out; returns 0 except on an unmapped Winsock
+/// error. #2109 hands it back what the frame wait read early. Prologue: mov [rsp+8],rbx; mov [rsp+0x18],rsi.
+constexpr uintptr_t BROADCASTER_UDP_RECVFROM = 0x1F8D90;
+
+/// Address: CBroadcastPort_SendPacket (0x140f89840): sends one datagram from a broadcaster port to a 0x80-byte address
+/// (immediately through CSysNet::SendTo unless the port simulates lag). ReceiveFromPeer answers a raw ping through it
+/// (0x140f86033); #2109's frame wait answers through it too. Returns the bytes sent, 0 when nothing was sent.
+constexpr uintptr_t BROADCAST_PORT_SEND_PACKET = 0xF89840;
 
 /// VA 0x140109209: CALL to FUN_140c31870 (ApplyGraphicsSettings) inside FUN_1401090c0
 /// FUN_140c31870 calls ~66 CGRenderer methods (MSAA, TAA, resolution scale, etc.)
