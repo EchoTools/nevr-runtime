@@ -4,8 +4,8 @@ A reused build tree keeps the executables of earlier builds. A target that a lat
 executable on disk, and a recipe that runs that file by path then passes on a program no build makes.
 tools/check_fresh_test_programs.py fails such a run. These tests drive the tool on fixture trees, and check the
 recipe's wiring: each program is removed before the build, judged after it, and judged before it is run; every program
-a run_suite, wine or check_test.sh line runs is in the list check_fresh judges; and the list removed before a build is
-the list judged after it.
+a run_suite, wine or check_test.sh line runs is in the list check_fresh judges for its tree, in each mode that runs it;
+and the list removed before a build is the list judged after it.
 """
 import os
 import pathlib
@@ -156,16 +156,27 @@ class ToolRefusesWhatItCannotJudge(Fixture):
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
 
 
-# The recipe's shape, read from the justfile. Each mode removes its programs, builds, judges them, then runs them.
-# A program the recipe runs is an argument under $out (a scripting tree) or $check (the script-check tree) on a line
-# that runs it: run_suite, wine (the runaway probes) or check_test.sh. Each one must be in the list check_fresh judges
-# for its tree: the programs=() list for $out, the words after check_fresh "$check" for $check. The list the recipe
-# removes before a tree's build must be the list check_fresh judges after it.
-PROGRAMS_ASSIGN = re.compile(r"^\s*programs\+?=\((?P<words>[^)]*)\)", re.M)
+# The recipe's shape, read from the justfile. Each mode of the `for mode in ...` loop removes its programs, builds,
+# judges them, then runs them. A program the recipe runs is an argument under $out (a scripting tree) or $check (the
+# script-check tree) on a line that runs it: run_suite, wine (the runaway probes) or check_test.sh.
+# The scan walks the loop once per mode. A line in an `if [[ "$mode" == <mode> ]]` branch belongs to that mode only,
+# and every other line of the loop to each mode, so a mode's programs=() list is the base list plus what its own
+# branch appends (programs+=()). A program a mode runs must be in the list check_fresh "$out" judges in that mode; a
+# $check program must be in the words after check_fresh "$check". The list the recipe removes before a tree's build
+# must be the list check_fresh judges after it. A line the scan cannot place is reported, not passed: another test of
+# $mode, an else or elif branch of one, a run of $out outside the loop, or a run that names a build tree by its path or
+# names $out or $check in another form.
+PROGRAMS_ASSIGN = re.compile(r"^\s*programs(?P<op>\+?=)\((?P<words>[^)]*)\)")
 RUNNER = re.compile(r"\b(?P<runner>run_suite|wine|check_test\.sh)\b")
 PROGRAM_ARG = re.compile(r"\$\{?(?P<tree>out|check)\}?/(?P<program>[^\"'\s;)]+)")
+TREE_REF = re.compile(r"\$\{?(?:out|check)")
+TREE_PATH = re.compile(r"build/(?:scripting-mingw-|script-check)")
 REMOVAL_LOOP = re.compile(r'for p in (?P<words>[^;]*); do rm -f -- "\$(?P<tree>out|check)/\$p"; done')
 CHECK_FRESH_CALL = re.compile(r'check_fresh "\$(?P<tree>out|check)"(?P<words>.*)$')
+MODE_LOOP = re.compile(r"^(?P<indent>\s*)for mode in (?P<modes>[^;]+); do\s*$")
+MODE_IF = re.compile(r'^\s*if \[\[ "\$mode" == (?P<mode>[\w-]+) \]\]; then\s*$')
+MODE_TEST = re.compile(r'(?:\[\[?|\btest)\s[^]]*\$\{?mode\b|\bcase\s+"?\$\{?mode\b')
+ALL_PROGRAMS = "${programs[@]}"
 
 
 def _code(body):
@@ -181,10 +192,126 @@ def _index(lines, needle):
     return None
 
 
+def _words(text):
+    return [word.strip("\"'") for word in text.split()]
+
+
+def _runs(line, problems):
+    """The programs a line runs, as (runner, tree, program). A build tree it names another way is a problem."""
+    runner = RUNNER.search(line)
+    if runner is None:
+        return []
+    name = runner.group("runner")
+    args = list(PROGRAM_ARG.finditer(line))
+    if TREE_PATH.search(line):
+        problems.append(f"{name} names a build tree by its path, not through $out or $check, so no list check_fresh "
+                        f"judges covers what it runs: {line.strip()}")
+    if len(TREE_REF.findall(line)) != len(args):
+        problems.append(f"{name} names $out or $check in a form the scan does not read: {line.strip()}")
+    if name == "check_test.sh":
+        args = args[:-1]  # its last argument is the output directory (src/scripting/check/check_test.sh, usage)
+    return [(name, arg.group("tree"), arg.group("program")) for arg in args]
+
+
+def _place(lines, problems):
+    """The modes of the mode loop, and each line with the modes it runs in (None outside the loop) and its runs."""
+    start = end = None
+    modes = []
+    for i, line in enumerate(lines):
+        loop = MODE_LOOP.match(line)
+        if loop is not None:
+            start, modes = i, loop.group("modes").split()
+            done = loop.group("indent") + "done"
+            end = next((j for j in range(i + 1, len(lines)) if lines[j].rstrip() == done), None)
+            break
+    if start is None or end is None:
+        problems.append("no `for mode in ...; do` loop with its `done`, so no mode's programs can be read")
+    placed = []
+    branches = []  # one entry per open `if`: the mode its branch runs in, or None for a test of anything else
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        mode_if = MODE_IF.match(line)
+        if mode_if is None and MODE_TEST.search(line):
+            problems.append(f"a test of $mode the scan does not read, so it cannot tell which mode runs: {stripped}")
+        if mode_if is not None:
+            branches.append(mode_if.group("mode"))
+        elif stripped == "fi":
+            if not branches:
+                problems.append("a `fi` with no `if` the scan read")
+            else:
+                branches.pop()
+        elif re.match(r"(?:else|elif)\b", stripped):
+            if branches and branches[-1] is not None:
+                problems.append(f"an {stripped.split()[0]} branch of a test of $mode, which the scan does not read: "
+                                f"{stripped}")
+        elif re.match(r"if\b", stripped) and not re.search(r"\bfi$", stripped):
+            branches.append(None)
+        in_loop = start is not None and end is not None and start < i < end
+        line_modes = None
+        if in_loop:
+            line_modes = {m for m in modes if all(b is None or b == m for b in branches)}
+        placed.append((line, line_modes, _runs(line, problems)))
+    if branches:
+        problems.append("an `if` with no `fi` the scan read")
+    return modes, placed
+
+
+def _expand(words, programs, label, problems):
+    expanded = []
+    for word in _words(words):
+        if word != ALL_PROGRAMS:
+            expanded.append(word)
+        elif programs is None:
+            problems.append(f'{label} names "{ALL_PROGRAMS}" before any programs=() list')
+        else:
+            expanded.extend(programs)
+    return expanded
+
+
+def _mode_problems(modes, placed, problems):
+    """Each mode's runs of $out programs against the list check_fresh "$out" judges in that mode."""
+    unjudged = {}
+    for mode in modes:
+        programs = removed = judged = None
+        runs = []
+        for line, line_modes, line_runs in placed:
+            if line_modes is None or mode not in line_modes:
+                continue
+            assign = PROGRAMS_ASSIGN.match(line)
+            if assign is not None:
+                words = _words(assign.group("words"))
+                programs = (programs or []) + words if assign.group("op") == "+=" else words
+            for match in REMOVAL_LOOP.finditer(line):
+                if match.group("tree") == "out":
+                    removed = _expand(match.group("words"), programs, f"the removal loop of mode {mode}", problems)
+            match = CHECK_FRESH_CALL.search(line)
+            if match is not None and match.group("tree") == "out":
+                judged = _expand(match.group("words"), programs, f'check_fresh "$out" in mode {mode}', problems)
+            runs.extend((runner, program) for runner, tree, program in line_runs if tree == "out")
+        if removed is None:
+            problems.append(f"no removal loop runs in mode {mode}, so a program on disk there can be an earlier "
+                            "build's")
+        if judged is None:
+            problems.append(f'check_fresh "$out" does not run in mode {mode}, so no program of that mode is judged')
+            continue
+        if removed is not None and set(removed) != set(judged):
+            problems.append(
+                f"in mode {mode}, the programs removed before the $out build are not the programs check_fresh judges "
+                f"after it (only removed: {' '.join(sorted(set(removed) - set(judged))) or 'none'}; "
+                f"only judged: {' '.join(sorted(set(judged) - set(removed))) or 'none'})")
+        for runner, program in runs:
+            if program not in judged:
+                in_modes = unjudged.setdefault((runner, program), [])
+                if mode not in in_modes:
+                    in_modes.append(mode)
+    for (runner, program), in_modes in unjudged.items():
+        problems.append(f"{runner} runs $out/{program} in mode{'s' if len(in_modes) > 1 else ''} "
+                        f"{', '.join(in_modes)}, but check_fresh does not judge it there")
+
+
 def wiring_problems(body):
     """What is wrong with the test-scripting recipe body as far as the freshness check goes. [] when nothing is."""
     lines = _code(body)
-    text = "\n".join(lines)
     problems = []
 
     def need(label, needle):
@@ -207,37 +334,30 @@ def wiring_problems(body):
     if None not in (rm_check, build_check, check_check, test_check) and not rm_check < build_check < check_check < test_check:
         problems.append("the script-check programs are not removed, built, judged, then run, in that order")
 
-    removed = {"out": set(), "check": set()}
-    judged = {"out": set(), "check": set()}
-    for line in lines:
-        for match in REMOVAL_LOOP.finditer(line):
-            removed[match.group("tree")].update(match.group("words").split())
-        match = CHECK_FRESH_CALL.search(line)
-        if match:
-            judged[match.group("tree")].update(match.group("words").split())
-    for tree in ("out", "check"):
-        if removed[tree] and judged[tree] and removed[tree] != judged[tree]:
-            problems.append(
-                f"the programs removed before the ${tree} build are not the programs check_fresh judges after it "
-                f"(only removed: {' '.join(sorted(removed[tree] - judged[tree])) or 'none'}; "
-                f"only judged: {' '.join(sorted(judged[tree] - removed[tree])) or 'none'})")
+    modes, placed = _place(lines, problems)
+    _mode_problems(modes, placed, problems)
 
-    listed = {"out": set(), "check": judged["check"]}
-    for match in PROGRAMS_ASSIGN.finditer(text):
-        listed["out"].update(match.group("words").split())
-    names = {"out": "no programs=() list names it", "check": 'the check_fresh "$check" list does not name it'}
-    for line in lines:
-        runner = RUNNER.search(line)
-        if runner is None:
-            continue
-        args = list(PROGRAM_ARG.finditer(line))
-        if runner.group("runner") == "check_test.sh":
-            args = args[:-1]  # its last argument is the output directory (src/scripting/check/check_test.sh, usage)
-        for arg in args:
-            tree, program = arg.group("tree"), arg.group("program")
-            if program not in listed[tree]:
-                problems.append(f"{runner.group('runner')} runs ${tree}/{program}, but {names[tree]}, "
+    check_removed, check_judged = set(), set()
+    for line, _, _ in placed:
+        for match in REMOVAL_LOOP.finditer(line):
+            if match.group("tree") == "check":
+                check_removed.update(_words(match.group("words")))
+        match = CHECK_FRESH_CALL.search(line)
+        if match is not None and match.group("tree") == "check":
+            check_judged.update(_words(match.group("words")))
+    if check_removed and check_judged and check_removed != check_judged:
+        problems.append(
+            "the programs removed before the $check build are not the programs check_fresh judges after it "
+            f"(only removed: {' '.join(sorted(check_removed - check_judged)) or 'none'}; "
+            f"only judged: {' '.join(sorted(check_judged - check_removed)) or 'none'})")
+    for line, line_modes, line_runs in placed:
+        for runner, tree, program in line_runs:
+            if tree == "check" and program not in check_judged:
+                problems.append(f'{runner} runs $check/{program}, but the check_fresh "$check" list does not name it, '
                                 "so check_fresh does not judge it")
+            elif tree == "out" and line_modes is None:
+                problems.append(f"{runner} runs $out/{program} outside the mode loop, where no mode's check_fresh "
+                                "judges it")
     return problems
 
 
@@ -330,9 +450,99 @@ class RecipeWiring(unittest.TestCase):
         problems = wiring_problems(self.replaced(
             'for p in "${programs[@]}"; do rm -f -- "$out/$p"; done',
             'for p in nevr_script_registry_test.exe; do rm -f -- "$out/$p"; done'))
-        self.assertTrue(any("$out" in p and "only removed: nevr_script_registry_test.exe" in p for p in problems),
+        self.assertTrue(any("$out" in p and "nevr_script_host_test.exe" in p.partition("only judged: ")[2]
+                            for p in problems), problems)
+
+    # The shared state's own test: the shared mode appends it to its list and runs it in a branch of its own.
+    SHARED_RUN = ('        if [[ "$mode" == shared ]]; then\n'
+                  '            run_suite "$out/nevr_luau_shared_test.exe" 10\n'
+                  '        fi\n')
+    SHARED_RUN_COMMON = '        run_suite "$out/nevr_luau_shared_test.exe" 10\n'
+
+    def shared_branch_with(self, line):
+        # The shared run branch with `line` added before its `fi`.
+        return self.replaced(self.SHARED_RUN, self.SHARED_RUN.replace("        fi\n", line + "        fi\n"))
+
+    def only_in_shared(self, line):
+        # `line`, a whole line of the mode loop, moved into a branch that runs in the shared mode only.
+        return self.replaced(line, '        if [[ "$mode" == shared ]]; then\n    ' + line + "        fi\n")
+
+    def test_a_shared_only_program_run_in_both_modes_is_reported(self):
+        # The run moved into the common loop: the pervm mode runs a program its list does not name.
+        problems = wiring_problems(self.replaced(self.SHARED_RUN, self.SHARED_RUN_COMMON))
+        self.assertTrue(any("run_suite runs $out/nevr_luau_shared_test.exe in mode pervm" in p for p in problems),
                         problems)
 
+    def test_a_shared_only_program_run_in_the_other_mode_is_reported(self):
+        problems = wiring_problems(self.replaced(self.SHARED_RUN, self.SHARED_RUN.replace("== shared", "== pervm")))
+        self.assertTrue(any("run_suite runs $out/nevr_luau_shared_test.exe in mode pervm" in p for p in problems),
+                        problems)
+
+    def test_a_shared_only_probe_in_its_own_branch_is_not_reported(self):
+        body = self.shared_branch_with('            wine "$out/nevr_luau_shared_test.exe" --probe\n')
+        self.assertEqual(wiring_problems(body), [])
+
+    def test_a_mode_test_the_scan_does_not_read_is_reported(self):
+        one_line = '        [[ "$mode" == shared ]] && ' + self.SHARED_RUN_COMMON.lstrip()
+        problems = wiring_problems(self.replaced(self.SHARED_RUN, one_line))
+        self.assertTrue(any("test of $mode" in p for p in problems), problems)
+
+    def test_an_else_branch_of_a_mode_test_is_reported(self):
+        problems = wiring_problems(self.shared_branch_with(
+            '        else\n            wine "$out/nevr_script_host_test.exe" --probe\n'))
+        self.assertTrue(any("else" in p and "$mode" in p for p in problems), problems)
+
+    def test_a_freshness_check_in_one_mode_only_is_reported(self):
+        problems = wiring_problems(self.only_in_shared('        check_fresh "$out" "${programs[@]}"\n'))
+        self.assertTrue(any('check_fresh "$out"' in p and "mode pervm" in p for p in problems), problems)
+
+    def test_a_removal_in_one_mode_only_is_reported(self):
+        problems = wiring_problems(self.only_in_shared(
+            '        for p in "${programs[@]}"; do rm -f -- "$out/$p"; done\n'))
+        self.assertTrue(any("no removal loop runs in mode pervm" in p for p in problems), problems)
+
+    def test_a_scripting_program_run_after_the_mode_loop_is_reported(self):
+        anchor = 'check="$PWD/build/script-check"'
+        body = self.replaced(anchor, 'wine "$out/nevr_script_host_test.exe" --probe\n    ' + anchor)
+        problems = wiring_problems(body)
+        self.assertTrue(any("wine runs $out/nevr_script_host_test.exe outside the mode loop" in p for p in problems),
+                        problems)
+
+    def test_a_probe_that_names_its_tree_by_path_is_reported(self):
+        problems = wiring_problems(self.with_probe('wine "$PWD/build/scripting-mingw-$mode/unlisted.exe" --probe'))
+        self.assertTrue(any("wine" in p and "build/scripting-mingw-" in p and "$out" in p for p in problems), problems)
+
+    def test_a_script_check_run_that_names_its_tree_by_path_is_reported(self):
+        anchor = 'src/scripting/check/check_test.sh "$check/nevr_script_stubs_host_test"'
+        body = self.replaced(anchor, 'wine "$PWD/build/script-check/unlisted" --probe\n    ' + anchor)
+        problems = wiring_problems(body)
+        self.assertTrue(any("wine" in p and "build/script-check" in p and "$check" in p for p in problems), problems)
+
+    def test_a_tree_variable_in_a_form_the_scan_does_not_read_is_reported(self):
+        problems = wiring_problems(self.with_probe('wine "$out"/unlisted.exe --probe'))
+        self.assertTrue(any("wine" in p and "in a form the scan does not read" in p for p in problems), problems)
+
+    def test_a_probe_inside_another_if_is_still_judged(self):
+        probe = 'if true; then\n            wine "$out/unlisted.exe" --probe\n        fi'
+        problems = wiring_problems(self.with_probe(probe))
+        self.assertTrue(any("wine runs $out/unlisted.exe in modes shared, pervm" in p for p in problems), problems)
+
+    def test_a_recipe_without_the_mode_loop_is_reported(self):
+        problems = wiring_problems(self.replaced("for mode in shared pervm; do", "for m in shared pervm; do"))
+        self.assertTrue(any("no `for mode in ...; do` loop" in p for p in problems), problems)
+
+    def test_an_if_without_its_fi_is_reported(self):
+        problems = wiring_problems(self.replaced(self.SHARED_RUN, self.SHARED_RUN.replace("        fi\n", "")))
+        self.assertTrue(any("an `if` with no `fi`" in p for p in problems), problems)
+
+    def test_a_fi_without_its_if_is_reported(self):
+        problems = wiring_problems(self.replaced(self.SHARED_RUN, self.SHARED_RUN_COMMON + "        fi\n"))
+        self.assertTrue(any("a `fi` with no `if`" in p for p in problems), problems)
+
+    def test_the_program_list_named_before_it_is_set_is_reported(self):
+        problems = wiring_problems(self.replaced("programs=(nevr_script_registry_test.exe",
+                                                 "progs=(nevr_script_registry_test.exe"))
+        self.assertTrue(any('names "${programs[@]}" before any programs=() list' in p for p in problems), problems)
 
 if __name__ == "__main__":
     unittest.main()
