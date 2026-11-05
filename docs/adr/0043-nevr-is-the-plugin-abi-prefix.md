@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0043-nevr-is-the-plugin-abi-prefix.md
+audience: all
+---
+
 # ADR 0043: `Nevr` is the prefix of the plugin and module C ABI, and `Nvr` is a deprecated alias
 
 Status: proposed. Applies to `sdk/include/nevr/`, `src/extension/`, both plugin loaders (`src/runtime/ext/plugin_loader.cpp`,
