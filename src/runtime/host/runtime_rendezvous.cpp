@@ -238,7 +238,18 @@ BOOL CALLBACK RuntimeRendezvous::LoadRuntimeOnce(PINIT_ONCE, PVOID parameter, PV
   // The attach decisions are reported first, now that attach has returned, so the
   // load record that follows reads in order.
   self->diagnostics_->FlushAttachJournal();
-  const RuntimeLoadResult result = self->loader_.Load(self->context_, *self->diagnostics_);
+  // Self-update's swap (ADR 0024, section 4): before the load probes the runtime path, a staged release is put in place.
+  // The lock it takes is held through the mapping and released by the load. A root it cannot leave whole loads nothing.
+  UpdateLock update_lock;
+  RuntimeLoadResult result;
+  const wchar_t* runtime_path = self->loader_.Path();
+  const UpdateResult update =
+      runtime_path == nullptr ? UpdateResult{} : RunUpdateAtStart(runtime_path, *self->diagnostics_, update_lock);
+  if (update.action == UpdateAction::kStop) {
+    self->loader_.RecordStopForUpdate(update.reason);
+  } else {
+    result = self->loader_.Load(self->context_, *self->diagnostics_, &update_lock);
+  }
   if (result.Loaded()) self->api_.store(result.api, std::memory_order_release);
   // A load that did not wait for the install may have run ahead of its last journal entry.
   if (waited != InstallWait::kSignalled) self->diagnostics_->FlushAttachJournal();
