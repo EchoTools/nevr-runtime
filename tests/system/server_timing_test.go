@@ -130,42 +130,105 @@ func percentile(sorted []time.Duration, p float64) time.Duration {
 	return sorted[i]
 }
 
-// cpuTicks is utime + stime of a process (/proc/<pid>/stat fields 14 and 15), in clock ticks.
-func cpuTicks(pid int) (uint64, error) {
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+// statTicks is utime + stime (fields 14 and 15) of a /proc stat file, a process's or one thread's, in clock ticks.
+func statTicks(path string) (uint64, error) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return 0, err
 	}
 	text := string(raw)
 	end := strings.LastIndexByte(text, ')')
 	if end < 0 {
-		return 0, fmt.Errorf("unreadable /proc/%d/stat", pid)
+		return 0, fmt.Errorf("unreadable %s", path)
 	}
 	fields := strings.Fields(text[end+2:])
 	if len(fields) < 13 {
-		return 0, fmt.Errorf("short /proc/%d/stat", pid)
+		return 0, fmt.Errorf("short %s", path)
 	}
 	utime, err1 := strconv.ParseUint(fields[11], 10, 64)
 	stime, err2 := strconv.ParseUint(fields[12], 10, 64)
 	if err1 != nil || err2 != nil {
-		return 0, fmt.Errorf("bad times in /proc/%d/stat", pid)
+		return 0, fmt.Errorf("bad times in %s", path)
 	}
 	return utime + stime, nil
 }
 
-// cpuPercent is the process's CPU over `window` as a percent of one core (USER_HZ is 100 on Linux x86-64).
-func cpuPercent(pid int, window time.Duration) (float64, error) {
+// cpuTicks is utime + stime of a process, in clock ticks.
+func cpuTicks(pid int) (uint64, error) { return statTicks(fmt.Sprintf("/proc/%d/stat", pid)) }
+
+type threadTime struct {
+	name  string
+	ticks uint64
+}
+
+// threadTicks is utime + stime of every thread of a process, by tid, with the thread's name (/proc/<pid>/task/<tid>/comm,
+// which Wine sets from the game's own thread names). A thread that ends between the two reads is left out.
+func threadTicks(pid int) map[int]threadTime {
+	out := map[int]threadTime{}
+	entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		tid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		ticks, err := statTicks(fmt.Sprintf("/proc/%d/task/%d/stat", pid, tid))
+		if err != nil {
+			continue
+		}
+		name, _ := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/comm", pid, tid))
+		out[tid] = threadTime{name: strings.TrimSpace(string(name)), ticks: ticks}
+	}
+	return out
+}
+
+// threadBreakdown is the CPU each thread used between two samples, as a percent of one core, busiest first, as text:
+// the main thread and the job workers run once per frame, so this says how much of an idle server's cost follows the
+// frame and how much runs on a clock of its own.
+func threadBreakdown(before, after map[int]threadTime, seconds float64, top int) string {
+	type row struct {
+		tid  int
+		name string
+		pct  float64
+	}
+	var rows []row
+	for tid, a := range after {
+		b, ok := before[tid]
+		if !ok || a.ticks < b.ticks {
+			continue
+		}
+		rows = append(rows, row{tid, a.name, float64(a.ticks-b.ticks) / 100.0 / seconds * 100.0})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].pct > rows[j].pct })
+	var parts []string
+	for i, r := range rows {
+		if i == top || r.pct == 0 {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%d %q %.1f%%", r.tid, r.name, r.pct))
+	}
+	return fmt.Sprintf("%d threads; busiest: %s", len(after), strings.Join(parts, ", "))
+}
+
+// cpuPercent is the process's CPU over `window` as a percent of one core (USER_HZ is 100 on Linux x86-64), and the
+// per-thread breakdown of the same window.
+func cpuPercent(pid int, window time.Duration) (float64, string, error) {
+	threadsBefore := threadTicks(pid)
 	before, err := cpuTicks(pid)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	start := time.Now()
 	time.Sleep(window)
 	after, err := cpuTicks(pid)
+	threadsAfter := threadTicks(pid)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return float64(after-before) / 100.0 / time.Since(start).Seconds() * 100.0, nil
+	seconds := time.Since(start).Seconds()
+	return float64(after-before) / 100.0 / seconds * 100.0, threadBreakdown(threadsBefore, threadsAfter, seconds, 10), nil
 }
 
 // frameStats returns the frames counted by each `frame_stats` line in the run log, oldest first.
@@ -245,11 +308,12 @@ func timingIdle(t *testing.T, pid int, logPath func() string) {
 				maxPct = f
 			}
 		}
-		pct, err := cpuPercent(pid, timingCPUWindow)
+		pct, threads, err := cpuPercent(pid, timingCPUWindow)
 		if err != nil {
 			t.Errorf("CPU of pid %d: %v", pid, err)
 		} else {
 			t.Logf("idle CPU: %.1f%% of one core over %v (pid %d)", pct, timingCPUWindow, pid)
+			t.Logf("idle CPU by thread: %s", threads)
 			if pct > maxPct {
 				t.Errorf("idle CPU %.1f%% of one core is above %.1f%%", pct, maxPct)
 			}
