@@ -865,7 +865,7 @@ def history_since_reset(history: list[dict]) -> list[dict]:
 
 
 def counted_failures(history: list[dict]) -> list[dict]:
-    # A log written before the draft stage was removed may hold `failed` records with part "draft": they were never one of the three.
+    # An older log may hold `failed` records with part "draft": they do not count toward the three.
     return [e for e in history_since_reset(history) if e.get("event") == "failed" and e.get("part") != "draft"]
 
 

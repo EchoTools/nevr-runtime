@@ -1,6 +1,5 @@
 """The draft checks (tools/release_check_draft.sh) and the audience section and player line of the release body
-(tools/release_audience_section.py, which tools/package_release.py imports). The file is named for the release train it
-used to cover; the train is gone."""
+(tools/release_audience_section.py, which tools/package_release.py imports)."""
 
 import pathlib
 import subprocess

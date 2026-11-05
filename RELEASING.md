@@ -62,7 +62,7 @@ time, under the owner's go.
 - **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), on `origin/main`. Created by step 4, never before it.
   **A patch release of an older version** is the one exception: when `main` has moved on and the fix has to reach players
   without the changes since, the release is cut from a branch `release/X.Y`, made at the line's newest tag, that holds only the
-  fix, and the tag sits on that branch's tip, so it is not an ancestor of `main`. v6.16.5 is `d797e3d2`, the v6.16.4 commit plus
+  fix, and the tag sits on that branch's tip, so it is not an ancestor of `main`. v6.16.5 is the v6.16.4 commit plus
   one fix, cut from `release/6.16`; its version is the next patch of the 6.16 line. The same fix also reaches `main` through its
   own pull request. `next_release_version.py` counts from the newest tag reachable from `origin/main`, so a patch-branch tag
   is not its base.
@@ -350,7 +350,7 @@ serves it (hashed as it streams in); that logs `variant_listed`, builds nothing 
 either file is a failure.
 
 **One run at a time.** A run that does work takes a non-blocking lock on `timer.lock` in the timer's work directory and holds it
-until it ends. A run that finds it held (a hand `--tag` run while the timer's is working, say) records `busy`, prints one line
+until it ends. A run that finds it held (a second hand `--tag` run while the first is working, say) records `busy`, prints one line
 to stderr and exits 0 having done nothing, so it can neither sweep a live run's scratch nor publish twice. `--reset-failures` does no work and takes no lock.
 
 **A completed main release is never run again.** A tag whose history has `main_complete` takes the variant-only path
