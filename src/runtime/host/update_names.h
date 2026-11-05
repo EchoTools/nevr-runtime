@@ -38,6 +38,9 @@ inline constexpr char kPluginSuffix[] = ".dll";
 inline constexpr std::size_t kMaxNameLength = 64;
 /// Every JSON file the host reads from update\ is capped at this many bytes (ADR 0024, section 4.3).
 inline constexpr std::size_t kMaxJsonBytes = 64 * 1024;
+/// ... and at this many levels of nested arrays and objects. The files of update\ are at most 3 deep; a deeper one is
+/// damage, and is never parsed into a tree (copying or writing one recurses once per level).
+inline constexpr std::size_t kMaxJsonDepth = 16;
 
 /// True for a Windows device name, in any case, compared on the part before the first '.'.
 bool IsDeviceName(std::string_view name) noexcept;

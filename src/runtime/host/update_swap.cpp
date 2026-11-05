@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <ctime>
 #include <exception>
+#include <initializer_list>
 #include <map>
 #include <string>
 #include <string_view>
@@ -60,28 +61,78 @@ std::string UtcNow() {
   return text;
 }
 
-enum class JsonRead { kAbsent, kBad, kOk };
+// Two names of a release's files are one file when they differ only in case: Windows opens either.
+bool SameName(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    const auto lower = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; };
+    if (lower(a[i]) != lower(b[i])) return false;
+  }
+  return true;
+}
 
-// A JSON file of update\, at most names::kMaxJsonBytes (ADR 0024, section 4.3).
-JsonRead ReadJsonFile(const std::wstring& path, json* out) {
+// kUnreadable is a file that is there but cannot be opened or read (another program holds it, access is denied): not
+// damage, and never treated as damage (logging.md Rule 10; ADR 0024, section 4.6). kBad is a file read whole that is
+// not usable: too large, too deep, or not JSON.
+enum class JsonRead { kAbsent, kUnreadable, kBad, kOk };
+
+// True when the text's arrays and objects, outside strings, nest at most `max` deep. nlohmann's parser builds a tree
+// without recursion, but copying or writing one recurses once per level, so a file nested tens of thousands deep would
+// end the process; the text is measured before it is parsed.
+bool NestedAtMost(std::string_view text, std::size_t max) {
+  std::size_t depth = 0;
+  bool in_string = false;
+  bool escaped = false;
+  for (const char c : text) {
+    if (in_string) {
+      if (escaped) {
+        escaped = false;
+      } else if (c == '\\') {
+        escaped = true;
+      } else if (c == '"') {
+        in_string = false;
+      }
+    } else if (c == '"') {
+      in_string = true;
+    } else if (c == '[' || c == '{') {
+      if (++depth > max) return false;
+    } else if ((c == ']' || c == '}') && depth > 0) {
+      --depth;
+    }
+  }
+  return true;
+}
+
+// A JSON file of update\, at most names::kMaxJsonBytes and names::kMaxJsonDepth (ADR 0024, section 4.3). `error` is the
+// Win32 error of a kUnreadable result.
+JsonRead ReadJsonFile(const std::wstring& path, json* out, DWORD* error) {
+  *error = 0;
   const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                   FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
-    const DWORD error = GetLastError();
-    return (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) ? JsonRead::kAbsent : JsonRead::kBad;
+    *error = GetLastError();
+    return (*error == ERROR_FILE_NOT_FOUND || *error == ERROR_PATH_NOT_FOUND) ? JsonRead::kAbsent
+                                                                                : JsonRead::kUnreadable;
   }
   LARGE_INTEGER size{};
-  std::string text;
-  bool ok = GetFileSizeEx(file, &size) != FALSE && size.QuadPart >= 0 &&
-            static_cast<unsigned long long>(size.QuadPart) <= names::kMaxJsonBytes;
-  if (ok) {
-    text.resize(static_cast<std::size_t>(size.QuadPart));
-    DWORD read = 0;
-    ok = text.empty() || (ReadFile(file, text.data(), static_cast<DWORD>(text.size()), &read, nullptr) != FALSE &&
-                          read == text.size());
+  if (GetFileSizeEx(file, &size) == FALSE) {
+    *error = GetLastError();
+    CloseHandle(file);
+    return JsonRead::kUnreadable;
+  }
+  if (size.QuadPart < 0 || static_cast<unsigned long long>(size.QuadPart) > names::kMaxJsonBytes) {
+    CloseHandle(file);
+    return JsonRead::kBad;
+  }
+  std::string text(static_cast<std::size_t>(size.QuadPart), '\0');
+  DWORD read = 0;
+  if (!text.empty() && ReadFile(file, text.data(), static_cast<DWORD>(text.size()), &read, nullptr) == FALSE) {
+    *error = GetLastError();
+    CloseHandle(file);
+    return JsonRead::kUnreadable;
   }
   CloseHandle(file);
-  if (!ok) return JsonRead::kBad;
+  if (read != text.size() || !NestedAtMost(text, names::kMaxJsonDepth)) return JsonRead::kBad;
   *out = json::parse(text, nullptr, false);
   return out->is_discarded() ? JsonRead::kBad : JsonRead::kOk;
 }
@@ -123,13 +174,13 @@ struct Staged {
 
 bool HasMember(const std::vector<names::Member>& members, const names::Member& member) {
   for (const names::Member& m : members) {
-    if (m.runtime == member.runtime && m.plugin == member.plugin) return true;
+    if (m.runtime == member.runtime && SameName(m.plugin, member.plugin)) return true;
   }
   return false;
 }
 
 // staged.json: {"version", "files": [{"path", "size", "sha256"}]}, the spelling of NevrPcStage's result. Every name in
-// the vocabulary, no file twice, exactly one runtime.
+// the vocabulary, no file twice (in any case), exactly one runtime.
 bool ParseStaged(const json& doc, Staged* out) {
   if (!doc.is_object() || !doc.contains("version") || !doc["version"].is_string() || !doc.contains("files") ||
       !doc["files"].is_array() || doc["files"].empty()) {
@@ -250,12 +301,16 @@ class SwapRun {
   static UpdateResult Stop(const char* reason) { return {UpdateAction::kStop, reason}; }
 
   std::wstring UpdateFile(const wchar_t* name) const { return Join(update_, name); }
-  std::wstring StagingDir(const std::string& version) const {
-    return Join(Join(update_, names::kStagingDir), Widen(version));
+  // The folders the swap works in, relative to the root: what a reparse_point record names.
+  static std::wstring StagingRel(const std::string& version) {
+    return Join(Join(names::kUpdateDir, names::kStagingDir), Widen(version));
   }
-  std::wstring PreviousDir(const std::string& version) const {
-    return Join(Join(update_, names::kPreviousDir), Widen(version));
+  static std::wstring PreviousRel(const std::string& version) {
+    return Join(Join(names::kUpdateDir, names::kPreviousDir), Widen(version));
   }
+  std::wstring StagingDir(const std::string& version) const { return Join(root_, StagingRel(version)); }
+  std::wstring PreviousDir(const std::string& version) const { return Join(root_, PreviousRel(version)); }
+  std::string FirstLink(std::initializer_list<std::wstring> relative) const;
   std::wstring InRoot(const names::Member& member) const { return Join(root_, names::MemberRelativePath(member)); }
   std::wstring In(const std::wstring& dir, const names::Member& member) const {
     return Join(dir, names::MemberRelativePath(member));
@@ -274,17 +329,24 @@ class SwapRun {
   bool WriteJson(const std::wstring& path, const json& doc);
   void MakeDirFor(const std::wstring& file) { CreateDirectoryW(file.substr(0, file.find_last_of(L'\\')).c_str(), nullptr); }
 
+  // How state.json was read: kEnded when the test seam ended the start while the file was rebuilt.
+  enum class StateRead { kOk, kUnreadable, kEnded };
+
   void Record(const char* outcome, const char* reason, json fields = json::object());
-  bool LoadState();
+  void RemoveStaleTemporaries();
+  StateRead LoadState();
   json RebuiltState() const;
-  UpdateResult Recover();
+  UpdateResult Recover(bool state_readable);
   bool UndoMoves(const Journal& journal, bool phase_in);
+  bool PendingNames(const std::string& version, const std::string& runtime_sha256) const;
+  bool StagedNames(const std::string& version) const;
   bool FinishDone(const Journal& journal);
   UpdateResult SwapStaged();
   std::string CheckStagedFile(const Staged& staged, const StagedFile& file) const;
+  bool Quarantined(const Staged& staged) const;
   UpdateResult Discard(const Staged& staged, const std::string& why);
-  bool RuntimeInUse(DWORD* error) const;
-  bool ClearPrevious();
+  DWORD RuntimeWriteError() const;
+  bool ClearPrevious(std::string* linked);
   UpdateResult Swap(const Staged& staged, const std::string& from, const std::vector<names::Member>& out);
 
   BootstrapDiagnostics& diagnostics_;
@@ -364,76 +426,167 @@ bool SwapRun::WriteJson(const std::wstring& path, const json& doc) {
   return Step();
 }
 
-// What a damaged state.json is replaced by (ADR 0024, section 4.8): the runtime in the root, owned and current.
+// The first of `relative` (folders relative to the root, each parent before its children) that is a reparse point,
+// spelled as the record names it ("update/staging/1.2.3"); empty when none is. ADR 0024 section 4.2: the swap never
+// moves, makes or deletes anything through a link out of the root. Every name here is from the vocabulary.
+std::string SwapRun::FirstLink(std::initializer_list<std::wstring> relative) const {
+  for (const std::wstring& dir : relative) {
+    if (!IsReparsePoint(Join(root_, dir))) continue;
+    std::string label;
+    for (const wchar_t c : dir) label.push_back(c == L'\\' ? '/' : static_cast<char>(c));
+    return label;
+  }
+  return {};
+}
+
+// What a damaged state.json is replaced by (ADR 0024, section 4.8): the runtime in the root, owned, and current when
+// its NEVR-BUILD version is a version name (it is read from a file nothing has verified yet).
 json SwapRun::RebuiltState() const {
   json state = {{"owned", json::array()}};
   const FileFacts runtime = FactsOf(Join(root_, names::kRuntimeFile));
   if (!runtime.sha256.empty()) {
     state["owned"].push_back({{"path", names::kRuntimeMember}, {"sha256", runtime.sha256}});
-    state["current"] = {{"version", runtime.version}, {"runtime_sha256", runtime.sha256}};
+    if (names::IsVersionName(runtime.version)) {
+      state["current"] = {{"version", runtime.version}, {"runtime_sha256", runtime.sha256}};
+    }
   }
   return state;
 }
 
-// False only when the start was ended (the seam).
-bool SwapRun::LoadState() {
+// A start killed between a JSON file's temporary write and its rename (WriteJson) leaves <file>.tmp-<pid>. Under the
+// lock no writer is live, so each one of the host's own files is a leftover: it is removed, and nothing else is.
+void SwapRun::RemoveStaleTemporaries() {
+  std::vector<std::wstring> stale;
+  WIN32_FIND_DATAW data;
+  const HANDLE find = FindFirstFileW(UpdateFile(L"*.tmp-*").c_str(), &data);
+  if (find == INVALID_HANDLE_VALUE) return;
+  do {
+    const std::wstring name = data.cFileName;
+    if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) continue;
+    for (const wchar_t* file : {names::kStateJson, names::kPendingJson, names::kSwapJson}) {
+      const std::wstring prefix = std::wstring(file) + L".tmp-";
+      if (name.size() > prefix.size() && name.compare(0, prefix.size(), prefix) == 0 &&
+          name.find_first_not_of(L"0123456789", prefix.size()) == std::wstring::npos) {
+        stale.push_back(name);
+      }
+    }
+  } while (FindNextFileW(find, &data) != FALSE);
+  FindClose(find);
+  int removed = 0;
+  int failed = 0;
+  DWORD error = 0;
+  for (const std::wstring& name : stale) {
+    if (Remove(UpdateFile(name.c_str()))) {
+      ++removed;
+    } else if (killed_) {
+      return;
+    } else {
+      ++failed;
+      error = last_error_;
+    }
+  }
+  if (removed == 0 && failed == 0) return;
+  json fields = {{"removed", removed}};
+  if (failed != 0) {
+    fields["failed"] = failed;
+    fields["win32_error"] = error;
+  }
+  Record("recovered", "temporaries_removed", fields);
+}
+
+SwapRun::StateRead SwapRun::LoadState() {
   json doc;
-  const JsonRead read = ReadJsonFile(UpdateFile(names::kStateJson), &doc);
+  DWORD error = 0;
+  const JsonRead read = ReadJsonFile(UpdateFile(names::kStateJson), &doc, &error);
   if (read == JsonRead::kAbsent) {
     state_ = json::object();
-    return true;
+    return StateRead::kOk;
+  }
+  if (read == JsonRead::kUnreadable) {
+    // Not damage: the file is there and something keeps this start from it. It is neither rebuilt nor written over, and
+    // nothing is swapped without its ownership list (sections 4.7, 4.8).
+    Record("deferred", "state_unreadable", {{"win32_error", error}});
+    return StateRead::kUnreadable;
   }
   if (read == JsonRead::kOk && ValidState(doc)) {
-    state_ = doc;
-    return true;
+    state_ = std::move(doc);
+    return StateRead::kOk;
   }
   state_ = RebuiltState();
   const bool written = WriteJson(UpdateFile(names::kStateJson), state_);
-  if (killed_) return false;
+  if (killed_) return StateRead::kEnded;
   json fields = {{"state_written", written}};
   if (!written) fields["win32_error"] = last_error_;
   Record("recovered", "state_rebuilt", fields);
-  return true;
+  return StateRead::kOk;
 }
 
 UpdateResult SwapRun::Run() {
   if (root_.empty() || !IsDirectory(update_)) return {UpdateAction::kNoUpdateFolder, nullptr};
+  // update\ itself first: the lock is a file inside it, and a link is never followed, not even to take the lock.
+  if (IsReparsePoint(update_)) {
+    Record("blocked", "reparse_point", {{"folder", "update"}});
+    return Load();
+  }
   if (!lock_.Acquire(update_.c_str(), SwapLockTimeoutMs(), SwapLockStepMs())) {
     // Another start holds it past the wait. With a journal the root may be half moved: nothing is loaded.
     const bool journal = Exists(UpdateFile(names::kSwapJson));
     Record("blocked", "lock_timeout", {{"journal", journal}});
     return journal ? Stop("lock_timeout") : Load();
   }
-  for (const std::wstring& dir : {update_, Join(update_, names::kStagingDir), Join(update_, names::kPreviousDir),
-                                  Join(root_, names::kPluginsDir)}) {
-    if (IsReparsePoint(dir)) {
-      Record("blocked", "reparse_point");
-      return Load();
-    }
-  }
   const bool journal = Exists(UpdateFile(names::kSwapJson));
+  const std::string linked =
+      FirstLink({Join(names::kUpdateDir, names::kStagingDir), Join(names::kUpdateDir, names::kPreviousDir),
+                 names::kPluginsDir});
+  if (!linked.empty()) {
+    // With a journal the root may be half moved, and its recovery would move files through the link: nothing loads.
+    Record("blocked", "reparse_point", {{"folder", linked}, {"journal", journal}});
+    return journal ? Stop("reparse_point") : Load();
+  }
+  RemoveStaleTemporaries();
+  if (killed_) return Load();
   if (!journal && !Exists(UpdateFile(names::kStagedJson))) return Load();
-  if (!LoadState()) return Load();
+  const StateRead state = LoadState();
+  if (state == StateRead::kEnded) return Load();
   if (journal) {
-    const UpdateResult recovered = Recover();
+    const UpdateResult recovered = Recover(state == StateRead::kOk);
     // A journal still there is a recovery that did not finish: no new swap starts over it.
     if (killed_ || recovered.action == UpdateAction::kStop || Exists(UpdateFile(names::kSwapJson))) return recovered;
   }
+  if (state != StateRead::kOk) return Load();  // its record is written: no swap without the ownership list
   if (Exists(UpdateFile(names::kStagedJson))) return SwapStaged();
   return Load();
 }
 
-// ADR 0024, section 4.6: out or in are undone to the last whole state; done finishes its cleanup.
-UpdateResult SwapRun::Recover() {
+// ADR 0024, section 4.6: out or in are undone to the last whole state; done finishes its cleanup, which writes
+// state.json and so waits for a start that can read it (`state_readable`).
+UpdateResult SwapRun::Recover(bool state_readable) {
   json doc;
   Journal journal;
-  if (ReadJsonFile(UpdateFile(names::kSwapJson), &doc) != JsonRead::kOk || !ParseJournal(doc, &journal)) {
+  DWORD error = 0;
+  const JsonRead read = ReadJsonFile(UpdateFile(names::kSwapJson), &doc, &error);
+  if (read == JsonRead::kUnreadable) {
+    // The journal may be fine; this start cannot tell, and the root may be half moved.
+    Record("blocked", "journal_unreadable", {{"win32_error", error}});
+    return Stop("journal_unreadable");
+  }
+  if (read != JsonRead::kOk || !ParseJournal(doc, &journal)) {
     Record("blocked", "bad_journal");
     return Stop("bad_journal");
   }
+  json fields = {{"kind", "swap"}, {"phase", journal.phase}, {"from", journal.from}, {"to", journal.to}};
+  const std::string linked =
+      FirstLink({StagingRel(journal.to), Join(StagingRel(journal.to), names::kPluginsDir), PreviousRel(journal.from),
+                 Join(PreviousRel(journal.from), names::kPluginsDir)});
+  if (!linked.empty()) {
+    // Nothing is moved or removed through the link. At done every file is in place, so the start loads.
+    fields["folder"] = linked;
+    Record("blocked", "reparse_point", fields);
+    return journal.phase == "done" ? Load() : Stop("reparse_point");
+  }
+  if (journal.phase == "done" && !state_readable) return Load();
   const bool whole = journal.phase == "done" ? FinishDone(journal) : UndoMoves(journal, journal.phase == "in");
   if (killed_) return Load();
-  json fields = {{"kind", "swap"}, {"phase", journal.phase}, {"from", journal.from}, {"to", journal.to}};
   if (!whole) {
     fields["win32_error"] = last_error_;
     Record("blocked", "move_failed", fields);
@@ -464,8 +617,29 @@ bool SwapRun::UndoMoves(const Journal& journal, bool phase_in) {
   return Remove(UpdateFile(names::kSwapJson));
 }
 
-// At done: the files the swap placed are owned, the release is pending, and staged.json, the staging folder, a stale
-// crash marker and the journal go, in that order (ADR 0024, section 4.5). Every step can be run again.
+// True when pending.json is the record of this swap: `to` is `version` with the runtime's sha256.
+bool SwapRun::PendingNames(const std::string& version, const std::string& runtime_sha256) const {
+  json doc;
+  DWORD error = 0;
+  if (runtime_sha256.empty() || ReadJsonFile(UpdateFile(names::kPendingJson), &doc, &error) != JsonRead::kOk) return false;
+  if (!doc.is_object() || !doc.contains("to") || !doc["to"].is_object()) return false;
+  const json& to = doc["to"];
+  return to.value("version", json()) == json(version) && to.value("sha256", json()) == json(runtime_sha256);
+}
+
+// True when staged.json, read whole, names `version`.
+bool SwapRun::StagedNames(const std::string& version) const {
+  json doc;
+  DWORD error = 0;
+  return ReadJsonFile(UpdateFile(names::kStagedJson), &doc, &error) == JsonRead::kOk && doc.is_object() &&
+         doc.value("version", json()) == json(version);
+}
+
+// At done: the files the swap placed are owned, a stale crash marker goes and the release is pending, then
+// staged.json, the staging folder and the journal go (ADR 0024, section 4.5). Every step can be run again, and a run
+// that finishes an earlier start's cleanup undoes nothing that happened since: a pending.json that already names this
+// swap is kept with what the release did since (boot_attempts, failed_reason) and so is a crash marker (the stale one
+// went before pending.json was written), and a staged.json that names another release is the next swap's.
 bool SwapRun::FinishDone(const Journal& journal) {
   json owned = json::array();
   for (const names::Member& member : journal.in) {
@@ -474,16 +648,18 @@ bool SwapRun::FinishDone(const Journal& journal) {
   state_["owned"] = owned;
   if (!WriteJson(UpdateFile(names::kStateJson), state_)) return false;
   const FileFacts to = FactsOf(Join(root_, names::kRuntimeFile));
-  const FileFacts from = FactsOf(Join(PreviousDir(journal.from), names::kRuntimeFile));
-  const json pending = {{"to", {{"version", journal.to}, {"sha256", to.sha256}}},
-                        {"from", from.present ? json{{"version", journal.from}, {"sha256", from.sha256}} : json()},
-                        {"boot_attempts", 1},
-                        {"failed_reason", nullptr}};
-  if (!WriteJson(UpdateFile(names::kPendingJson), pending)) return false;
-  if (!Remove(UpdateFile(names::kStagedJson))) return false;
+  if (!PendingNames(journal.to, to.sha256)) {
+    if (!Remove(UpdateFile(names::kCrashedFile))) return false;
+    const FileFacts from = FactsOf(Join(PreviousDir(journal.from), names::kRuntimeFile));
+    const json pending = {{"to", {{"version", journal.to}, {"sha256", to.sha256}}},
+                          {"from", from.present ? json{{"version", journal.from}, {"sha256", from.sha256}} : json()},
+                          {"boot_attempts", 1},
+                          {"failed_reason", nullptr}};
+    if (!WriteJson(UpdateFile(names::kPendingJson), pending)) return false;
+  }
+  if (StagedNames(journal.to) && !Remove(UpdateFile(names::kStagedJson))) return false;
   const std::wstring staging = StagingDir(journal.to);
   if (!RemoveDir(Join(staging, names::kPluginsDir)) || !RemoveDir(staging)) return false;
-  if (!Remove(UpdateFile(names::kCrashedFile))) return false;
   return Remove(UpdateFile(names::kSwapJson));
 }
 
@@ -510,15 +686,28 @@ std::string SwapRun::CheckStagedFile(const Staged& staged, const StagedFile& fil
   return why;
 }
 
-// A failed check removes staged.json and counts the release's discard; the third quarantines it (section 4.3).
-UpdateResult SwapRun::Discard(const Staged& staged, const std::string& why) {
-  if (!Remove(UpdateFile(names::kStagedJson))) {
-    if (killed_) return Load();
+// True when state.json's quarantine already holds this release (its version and runtime sha256).
+bool SwapRun::Quarantined(const Staged& staged) const {
+  if (!state_.contains("quarantine") || !state_["quarantine"].is_array()) return false;
+  for (const json& entry : state_["quarantine"]) {
+    if (entry.is_object() && entry.value("version", json()) == json(staged.version) &&
+        entry.value("runtime_sha256", json()) == json(staged.runtime_sha256)) {
+      return true;
+    }
   }
+  return false;
+}
+
+// A failed check removes staged.json and counts the release's discard; the third quarantines it, once (section 4.3).
+// A staged.json that cannot be removed comes back at the next start, so the record says so, with the error.
+UpdateResult SwapRun::Discard(const Staged& staged, const std::string& why) {
+  const bool removed = Remove(UpdateFile(names::kStagedJson));
+  if (killed_) return Load();
+  const DWORD remove_error = removed ? 0 : last_error_;
   if (!state_.contains("discards") || !state_["discards"].is_object()) state_["discards"] = json::object();
   const std::uint64_t discards = state_["discards"].value(staged.version, std::uint64_t{0}) + 1;
   state_["discards"][staged.version] = discards;
-  if (discards >= kDiscardsToQuarantine) {
+  if (discards >= kDiscardsToQuarantine && !Quarantined(staged)) {
     if (!state_.contains("quarantine") || !state_["quarantine"].is_array()) state_["quarantine"] = json::array();
     state_["quarantine"].push_back(
         {{"version", staged.version}, {"runtime_sha256", staged.runtime_sha256}, {"reason", why}, {"time", UtcNow()}});
@@ -526,41 +715,72 @@ UpdateResult SwapRun::Discard(const Staged& staged, const std::string& why) {
   const bool written = WriteJson(UpdateFile(names::kStateJson), state_);
   if (killed_) return Load();
   json fields = {{"to", staged.version}, {"discards", discards}, {"quarantined", discards >= kDiscardsToQuarantine}};
-  if (!written) fields["state_written"] = false;
+  if (!removed) {
+    fields["staged_removed"] = false;
+    fields["staged_win32_error"] = remove_error;
+  }
+  if (!written) {
+    fields["state_written"] = false;
+    fields["state_win32_error"] = last_error_;
+  }
   Record("discarded", why.c_str(), fields);
   return Load();
 }
 
-// ADR 0024, section 4.4: a runtime mapped as an image by another process refuses a write-open.
-bool SwapRun::RuntimeInUse(DWORD* error) const {
+// ADR 0024, section 4.4: a runtime mapped as an image by another process refuses a write-open with a sharing
+// violation. 0 when it opens (or there is none), else the error.
+DWORD SwapRun::RuntimeWriteError() const {
   const std::wstring path = Join(root_, names::kRuntimeFile);
   const HANDLE file =
       CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file != INVALID_HANDLE_VALUE) {
     CloseHandle(file);
-    return false;
+    return 0;
   }
-  *error = GetLastError();
-  return *error != ERROR_FILE_NOT_FOUND && *error != ERROR_PATH_NOT_FOUND;
+  const DWORD error = GetLastError();
+  return (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) ? 0 : error;
 }
 
 UpdateResult SwapRun::SwapStaged() {
   json doc;
   Staged staged;
-  if (ReadJsonFile(UpdateFile(names::kStagedJson), &doc) != JsonRead::kOk || !ParseStaged(doc, &staged)) {
+  DWORD read_error = 0;
+  const JsonRead read = ReadJsonFile(UpdateFile(names::kStagedJson), &doc, &read_error);
+  if (read == JsonRead::kUnreadable) {
+    // Not a damaged file: it stays for a start that can read it, and nothing is counted.
+    Record("deferred", "staged_unreadable", {{"win32_error", read_error}});
+    return Load();
+  }
+  if (read != JsonRead::kOk || !ParseStaged(doc, &staged)) {
     // A name outside the vocabulary: the file is not used (section 4.2), and not counted against any release.
-    Remove(UpdateFile(names::kStagedJson));
+    const bool removed = Remove(UpdateFile(names::kStagedJson));
     if (killed_) return Load();
-    Record("discarded", "bad_staged");
+    json fields = json::object();
+    if (!removed) {
+      fields["staged_removed"] = false;
+      fields["staged_win32_error"] = last_error_;
+    }
+    Record("discarded", "bad_staged", fields);
+    return Load();
+  }
+  const std::string linked =
+      FirstLink({StagingRel(staged.version), Join(StagingRel(staged.version), names::kPluginsDir)});
+  if (!linked.empty()) {
+    Record("blocked", "reparse_point", {{"to", staged.version}, {"folder", linked}});
     return Load();
   }
   for (const StagedFile& file : staged.files) {
     const std::string why = CheckStagedFile(staged, file);
     if (!why.empty()) return Discard(staged, why);
   }
-  DWORD in_use_error = 0;
-  if (RuntimeInUse(&in_use_error)) {
-    Record("deferred", "runtime_in_use", {{"to", staged.version}, {"win32_error", in_use_error}});
+  const DWORD write_error = RuntimeWriteError();
+  if (write_error == ERROR_SHARING_VIOLATION) {
+    Record("deferred", "runtime_in_use", {{"to", staged.version}, {"win32_error", write_error}});
+    return Load();
+  }
+  if (write_error != 0) {
+    // Not "in use": a cause the swap cannot see past (access denied, ...). Nothing moves until it is gone.
+    Record("blocked", "runtime_not_writable", {{"to", staged.version}, {"win32_error", write_error}});
     return Load();
   }
   const FileFacts runtime = FactsOf(Join(root_, names::kRuntimeFile));
@@ -568,6 +788,12 @@ UpdateResult SwapRun::SwapStaged() {
     // The release in the root has no NEVR-BUILD version to name update\previous\<from>\ by (or there is no runtime at
     // all). ADR 0024 does not say what happens then (an open question on #2105); until it does, nothing is moved.
     Record("blocked", "no_from_version", {{"to", staged.version}});
+    return Load();
+  }
+  if (!names::IsVersionName(runtime.version)) {
+    // The NEVR-BUILD field of a file nothing has verified yet would name update\previous\<from>\: a value outside the
+    // vocabulary is never used as a path (section 4.2), and never logged.
+    Record("blocked", "bad_from_version", {{"to", staged.version}});
     return Load();
   }
   // Ownership (section 4.7): the runtime always; a plugin when state.json lists it with the sha256 of the file in the root.
@@ -591,7 +817,8 @@ UpdateResult SwapRun::SwapStaged() {
 }
 
 // The older generation in update\previous\ goes before a new one moves in (section 4.5). Only names in the vocabulary.
-bool SwapRun::ClearPrevious() {
+// A version folder or its plugins folder that is a link stops it before anything is deleted, and `linked` names it.
+bool SwapRun::ClearPrevious(std::string* linked) {
   const std::wstring previous = Join(update_, names::kPreviousDir);
   std::vector<std::wstring> versions;
   WIN32_FIND_DATAW data;
@@ -601,10 +828,13 @@ bool SwapRun::ClearPrevious() {
     std::string name;
     for (const wchar_t* c = data.cFileName; *c != L'\0'; ++c) name.push_back(*c < 0x80 ? static_cast<char>(*c) : '?');
     if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 && names::IsVersionName(name)) {
+      *linked = FirstLink({PreviousRel(name), Join(PreviousRel(name), names::kPluginsDir)});
+      if (!linked->empty()) break;
       versions.push_back(Join(previous, data.cFileName));
     }
   } while (FindNextFileW(find, &data) != FALSE);
   FindClose(find);
+  if (!linked->empty()) return false;
   for (const std::wstring& dir : versions) {
     if (!Remove(Join(dir, names::kRuntimeFile))) return false;
     const std::wstring plugins = Join(dir, names::kPluginsDir);
@@ -654,7 +884,14 @@ UpdateResult SwapRun::Swap(const Staged& staged, const std::string& from, const 
     Record("blocked", "move_failed", fields);
     return undone ? Load() : Stop("move_failed");
   };
-  if (!ClearPrevious()) return failed(false);
+  std::string linked;
+  if (!ClearPrevious(&linked)) {
+    if (killed_ || linked.empty()) return failed(false);
+    json fields = identity;
+    fields["folder"] = linked;
+    Record("blocked", "reparse_point", fields);
+    return Load();
+  }
   if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(journal))) {
     if (killed_) return Load();
     json fields = identity;
@@ -732,7 +969,7 @@ UpdateResult RunUpdateAtStart(const wchar_t* runtime_path, BootstrapDiagnostics&
       return start.AfterException();
     }
   } catch (const std::exception&) {
-    // Not even the record could be built: load only what a journal does not call into doubt.
+    // Not even the start could be set up, or its record written: nothing is known about the root, so nothing loads.
     return {UpdateAction::kStop, "internal_error"};
   }
 }

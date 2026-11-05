@@ -105,6 +105,28 @@ std::wstring WinPath(const std::string& unix_path) {
 
 bool Exists(const std::wstring& path) { return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
 
+// A handle another program keeps on a file, as a virus scanner or a backup tool can: share mode 0 refuses every other
+// open; FILE_SHARE_READ lets the host read the file and refuses its removal.
+class Held {
+ public:
+  Held(const std::wstring& path, DWORD share)
+      : handle_(CreateFileW(path.c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)) {}
+  Held(const Held&) = delete;
+  Held& operator=(const Held&) = delete;
+  ~Held() { Close(); }
+  bool ok() const { return handle_ != INVALID_HANDLE_VALUE; }
+  void Close() {
+    if (ok()) CloseHandle(handle_);
+    handle_ = INVALID_HANDLE_VALUE;
+  }
+
+ private:
+  HANDLE handle_;
+};
+
+// `depth` arrays, each holding the next: "[[[]]]" is 3.
+std::string Arrays(std::size_t depth) { return std::string(depth, '[') + std::string(depth, ']'); }
+
 std::string ReadAll(const std::wstring& path) {
   const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                   nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -337,12 +359,14 @@ class HostUpdateSwap : public ::testing::Test {
 
   void WriteState(const nlohmann::json& state) { Put(L"update\\state.json", state.dump()); }
 
-  // The usual start: the old release in the root (runtime and one owned plugin), the new one staged.
+  // The usual start: the old release in the root (runtime and one owned plugin), the new one staged, and a crash
+  // marker an earlier release left, stale once the new release is pending.
   void OldReleaseInTheRootAndANewOneStaged() {
     Put(L"nevr-runtime.dll", old_runtime_);
     Put(L"plugins\\example.dll", old_plugin_);
     WriteState({{"channel", "beta"}, {"owned", {{{"path", "plugins/example.dll"}, {"sha256", Sha256Hex(old_plugin_)}}}}});
     Stage("1.2.3", {{"nevr-runtime.dll", new_runtime_}, {"plugins/example.dll", new_plugin_}});
+    Put(L"update\\crashed", "");
   }
 
   // What the root holds after that release was swapped in.
@@ -354,6 +378,7 @@ class HostUpdateSwap : public ::testing::Test {
     EXPECT_FALSE(Exists(update_ + L"\\staged.json"));
     EXPECT_FALSE(Exists(update_ + L"\\swap.json"));
     EXPECT_FALSE(Exists(update_ + L"\\staging\\1.2.3"));
+    EXPECT_FALSE(Exists(update_ + L"\\crashed")) << "the stale crash marker went when the release became pending";
     const nlohmann::json pending = ReadJson(update_ + L"\\pending.json");
     EXPECT_EQ(pending, nlohmann::json({{"to", {{"version", "1.2.3"}, {"sha256", Sha256Hex(new_runtime_)}}},
                                        {"from", {{"version", "7.7.7"}, {"sha256", Sha256Hex(old_runtime_)}}},
@@ -365,6 +390,55 @@ class HostUpdateSwap : public ::testing::Test {
     EXPECT_EQ(state["owned"], nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"sha256", Sha256Hex(new_runtime_)}},
                                                      {{"path", "plugins/example.dll"}, {"sha256", Sha256Hex(new_plugin_)}}}))
         << state.dump();
+  }
+
+  // A root runtime whose NEVR-BUILD field is `version`: the swap reads the first NUL-bounded literal it finds.
+  std::string RuntimeNamed(const std::string& version) const {
+    std::string bytes(1, '\0');
+    bytes += "NEVR-BUILD " + version + " " + std::string(40, 'c');
+    bytes.push_back('\0');
+    return bytes + old_runtime_;
+  }
+
+  // Move the real folder `relative` (to the root) aside and put a directory link where it was. Returns the folder the
+  // link points at, or empty (with a failure) when this system cannot make one.
+  std::wstring LinkAway(const std::wstring& relative) {
+    static LONG counter = 0;
+    const std::wstring path = root_ + L"\\" + relative;
+    const std::wstring elsewhere = scratch_ + L"\\elsewhere-" + std::to_wstring(InterlockedIncrement(&counter));
+    if (MoveFileExW(path.c_str(), elsewhere.c_str(), 0) == FALSE) {
+      ADD_FAILURE() << "move " << Narrow(path) << ": " << GetLastError();
+      return {};
+    }
+    if (CreateSymbolicLinkW(path.c_str(), elsewhere.c_str(),
+                            SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) == FALSE) {
+      ADD_FAILURE() << "link " << Narrow(path) << ": " << GetLastError();
+      return {};
+    }
+    if ((GetFileAttributesW(path.c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+      ADD_FAILURE() << "this system does not report the link as a reparse point";
+      return {};
+    }
+    return elsewhere;
+  }
+
+  // A fresh root with the usual release staged, a swap of it ended after step `kill`, and the journal's phase then
+  // ("" when the kill left no journal).
+  std::string KilledSwap(int kill) {
+    RemoveTree(root_);
+    CreateDirectoryW(root_.c_str(), nullptr);
+    OldReleaseInTheRootAndANewOneStaged();
+    g_kill_at.store(kill);
+    RunStart();
+    g_kill_at.store(0);
+    const nlohmann::json journal = ReadJson(update_ + L"\\swap.json");
+    return journal.is_object() ? journal.value("phase", "") : std::string();
+  }
+
+  static std::string Journal(const std::string& phase, const std::string& extra = "") {
+    const std::string members = "[\"nevr-runtime.dll\", \"plugins/example.dll\"]";
+    return "{\"kind\": \"swap\", \"from\": \"7.7.7\", \"to\": \"1.2.3\", \"phase\": \"" + phase + "\", \"out\": " +
+           members + ", \"in\": " + members + extra + "}";
   }
 
   Start RunStart() {
@@ -550,8 +624,10 @@ TEST_F(HostUpdateSwap, F7_AKillAfterAnyStepIsRecoveredAndTheNextStartEndsWithOne
   EXPECT_TRUE(saw_recovery_of_a_move) << "some kill fell between two moves and was undone, then swapped again";
 }
 
-// F8: a dedicated server beside a client shares the root; the swap waits until nobody runs the runtime.
-TEST_F(HostUpdateSwap, F8_ARuntimeAnotherProcessHasMappedDefersTheSwap) {
+// F8: a dedicated server beside a client shares the root; the swap waits until nobody runs the runtime. The runtime is
+// mapped here by this test's own process: a mapping by a second process is not measured (ADR 0024, "What is not
+// known").
+TEST_F(HostUpdateSwap, F8_AMappedRuntimeDefersTheSwap) {
   OldReleaseInTheRootAndANewOneStaged();
   const HMODULE mapped = LoadLibraryExW(runtime_path_.c_str(), nullptr, 0);
   ASSERT_NE(mapped, nullptr) << GetLastError();
@@ -562,7 +638,25 @@ TEST_F(HostUpdateSwap, F8_ARuntimeAnotherProcessHasMappedDefersTheSwap) {
   ASSERT_EQ(records.size(), 1u);
   EXPECT_EQ(records[0].value("outcome", ""), "deferred");
   EXPECT_EQ(records[0].value("reason", ""), "runtime_in_use");
+  EXPECT_EQ(records[0].value("win32_error", 0u), static_cast<unsigned>(ERROR_SHARING_VIOLATION));
   EXPECT_EQ(Tree(root_), before) << "staged.json stays for a later start";
+}
+
+// F8, review note 5: only a sharing violation says the runtime is in use. A write-open refused for another reason (here
+// a read-only file: access denied) blocks the swap under its own reason and error, never as "in use".
+TEST_F(HostUpdateSwap, F8_ARuntimeThatRefusesAWriteOpenForAnotherReasonBlocksWithThatError) {
+  OldReleaseInTheRootAndANewOneStaged();
+  ASSERT_NE(SetFileAttributesW(runtime_path_.c_str(), FILE_ATTRIBUTE_READONLY), FALSE) << GetLastError();
+  const auto before = Tree(root_);
+  const Start start = RunStart();
+  SetFileAttributesW(runtime_path_.c_str(), FILE_ATTRIBUTE_NORMAL);
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  const auto records = SwapRecords(start.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("outcome", ""), "blocked");
+  EXPECT_EQ(records[0].value("reason", ""), "runtime_not_writable");
+  EXPECT_EQ(records[0].value("win32_error", 0u), static_cast<unsigned>(ERROR_ACCESS_DENIED));
+  EXPECT_EQ(Tree(root_), before) << "nothing moved; staged.json stays";
 }
 
 // F23: a host that cannot get the lock in time.
@@ -748,6 +842,13 @@ TEST_F(HostUpdateSwap, F22_AStagedJsonOutsideTheVocabularyIsNotUsedAndNothingOut
       {"runtime and a device plugin", beside_runtime("plugins/CON.dll")},
       {"runtime and a plugin named .", beside_runtime("plugins/..dll")},
       {"the runtime twice", beside_runtime("nevr-runtime.dll")},
+      // Review note 10: Windows names are one file in any case, so two spellings of one plugin are one file twice.
+      {"one plugin twice, in two cases",
+       nlohmann::json({{"version", "1.2.3"},
+                       {"files", nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"size", new_runtime_.size()}, {"sha256", runtime_sha}},
+                                                        {{"path", "plugins/Example.dll"}, {"size", new_plugin_.size()}, {"sha256", Sha256Hex(new_plugin_)}},
+                                                        {{"path", "plugins/example.dll"}, {"size", new_plugin_.size()}, {"sha256", Sha256Hex(new_plugin_)}}})}})
+           .dump()},
       {"not JSON", "{\"version\": \"1.2.3\", \"files\": ["},
       {"too large", "{\"version\": \"1.2.3\", \"pad\": \"" + std::string(70 * 1024, 'x') + "\"}"},
   };
@@ -802,32 +903,136 @@ TEST_F(HostUpdateSwap, F22_AJournalThisHostCannotReadStopsTheStartAndIsNotExecut
   }
 }
 
+// Every folder the swap reads, moves into or deletes from, as a link out of the root: nothing behind the link is
+// moved or deleted, and the record names the folder (logging.md Rule 1). update\previous\<v>\ is the older generation
+// the swap clears; staging\<v>\ is the staged release's.
 TEST_F(HostUpdateSwap, F22_AReparsePointInTheUpdateFoldersBlocksTheSwap) {
-  for (const wchar_t* linked : {L"update\\staging", L"plugins"}) {
-    SCOPED_TRACE(Narrow(linked));
+  struct Case {
+    const wchar_t* linked;
+    const char* folder;
+  };
+  for (const Case& c : {Case{L"update", "update"}, Case{L"update\\staging", "update/staging"},
+                        Case{L"update\\previous", "update/previous"}, Case{L"plugins", "plugins"},
+                        Case{L"update\\staging\\1.2.3", "update/staging/1.2.3"},
+                        Case{L"update\\staging\\1.2.3\\plugins", "update/staging/1.2.3/plugins"},
+                        Case{L"update\\previous\\0.0.1", "update/previous/0.0.1"},
+                        Case{L"update\\previous\\0.0.1\\plugins", "update/previous/0.0.1/plugins"}}) {
+    SCOPED_TRACE(c.folder);
     RemoveTree(root_);
     ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
     OldReleaseInTheRootAndANewOneStaged();
-    // Move the real folder aside and put a directory link where it was.
-    const std::wstring path = root_ + L"\\" + linked;
-    const std::wstring elsewhere = scratch_ + L"\\elsewhere-" + std::to_wstring(GetTickCount64());
-    ASSERT_NE(MoveFileExW(path.c_str(), elsewhere.c_str(), 0), FALSE) << GetLastError();
-    ASSERT_NE(CreateSymbolicLinkW(path.c_str(), elsewhere.c_str(),
-                                  SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE),
-              FALSE)
-        << GetLastError();
-    ASSERT_NE(GetFileAttributesW(path.c_str()) & FILE_ATTRIBUTE_REPARSE_POINT, 0u)
-        << "this system does not report the link as a reparse point";
+    Put(L"update\\previous\\0.0.1\\nevr-runtime.dll", "an older generation");
+    Put(L"update\\previous\\0.0.1\\plugins\\older.dll", "an older generation's plugin");
+    const std::wstring elsewhere = LinkAway(c.linked);
+    ASSERT_FALSE(elsewhere.empty());
+    const auto outside = Tree(elsewhere);
     const std::string before_runtime = Get(L"nevr-runtime.dll");
     const Start start = RunStart();
+    EXPECT_EQ(start.result.action, UpdateAction::kLoad);
     const auto records = SwapRecords(start.records);
     ASSERT_EQ(records.size(), 1u);
     EXPECT_EQ(records[0].value("outcome", ""), "blocked");
     EXPECT_EQ(records[0].value("reason", ""), "reparse_point");
+    EXPECT_EQ(records[0].value("folder", ""), c.folder);
     EXPECT_EQ(Get(L"nevr-runtime.dll"), before_runtime);
     EXPECT_TRUE(Exists(update_ + L"\\staged.json"));
-    RemoveDirectoryW(path.c_str());
-    RemoveTree(elsewhere);
+    EXPECT_EQ(Tree(elsewhere), outside) << "nothing behind the link was moved, made or deleted";
+  }
+}
+
+// update\lock is a file inside update\: a link there is refused before the lock is taken through it. Here a lock is
+// held in the link's target, so a host that took the lock first would wait for it and time out.
+TEST_F(HostUpdateSwap, F22_ALinkedUpdateFolderIsRefusedBeforeTheLockIsTakenThroughIt) {
+  OldReleaseInTheRootAndANewOneStaged();
+  const std::wstring elsewhere = LinkAway(L"update");
+  ASSERT_FALSE(elsewhere.empty());
+  nevr_host::SetUpdateLockTimingForTest(300, 25);
+  UpdateLock other;
+  ASSERT_TRUE(other.Acquire(elsewhere.c_str(), 1000, 25));
+  const Start start = RunStart();
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  EXPECT_FALSE(start.lock_held);
+  const auto records = SwapRecords(start.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("reason", ""), "reparse_point");
+  EXPECT_EQ(records[0].value("folder", ""), "update");
+}
+
+// A link beside a journal: the root may be half moved and recovery would move files through the link, so the start
+// stops (ADR 0024, section 4.1's rule for a journal the host cannot act on).
+TEST_F(HostUpdateSwap, F22_AReparsePointBesideAJournalStopsTheStart) {
+  OldReleaseInTheRootAndANewOneStaged();
+  Put(L"update\\swap.json", Journal("out"));
+  ASSERT_FALSE(LinkAway(L"update\\staging").empty());
+  const auto before = Tree(root_);
+  const Start start = RunStart();
+  EXPECT_EQ(start.result.action, UpdateAction::kStop);
+  ASSERT_NE(start.result.reason, nullptr);
+  EXPECT_STREQ(start.result.reason, "reparse_point");
+  const auto records = SwapRecords(start.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("folder", ""), "update/staging");
+  EXPECT_EQ(records[0].value("journal", false), true);
+  EXPECT_EQ(Tree(root_), before);
+}
+
+// Recovery moves files between the root and previous\<from>\ or staging\<to>\: with either one a link, it moves
+// nothing. In phase out or in the root may be half moved, so the start stops; in phase done every file is in place and
+// the start loads, leaving the cleanup and the journal.
+TEST_F(HostUpdateSwap, F22_ARecoveryNeverMovesFilesThroughALinkedFolder) {
+  ASSERT_EQ(KilledSwap(5), "in");
+  std::wstring elsewhere = LinkAway(L"update\\previous\\7.7.7");
+  ASSERT_FALSE(elsewhere.empty());
+  auto outside = Tree(elsewhere);
+  ASSERT_EQ(outside.count("nevr-runtime.dll"), 1u) << "the moved-out runtime is behind the link";
+  Start start = RunStart();
+  EXPECT_EQ(start.result.action, UpdateAction::kStop);
+  ASSERT_NE(start.result.reason, nullptr);
+  EXPECT_STREQ(start.result.reason, "reparse_point");
+  auto records = SwapRecords(start.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("folder", ""), "update/previous/7.7.7");
+  EXPECT_EQ(records[0].value("phase", ""), "in");
+  EXPECT_EQ(Tree(elsewhere), outside) << "nothing was moved back through the link";
+  EXPECT_TRUE(Exists(update_ + L"\\swap.json"));
+
+  ASSERT_EQ(KilledSwap(7), "done");
+  elsewhere = LinkAway(L"update\\staging\\1.2.3");
+  ASSERT_FALSE(elsewhere.empty());
+  outside = Tree(elsewhere);
+  ASSERT_EQ(outside.count("plugins\\"), 1u) << "the emptied staging folder's plugins folder is behind the link";
+  start = RunStart();
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  records = SwapRecords(start.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("reason", ""), "reparse_point");
+  EXPECT_EQ(records[0].value("folder", ""), "update/staging/1.2.3");
+  EXPECT_EQ(Tree(elsewhere), outside) << "no folder behind the link was removed";
+  EXPECT_TRUE(Exists(update_ + L"\\swap.json"));
+}
+
+// The review's probe 4: an older generation in previous\ that is a link out of the root. Clearing it deleted the files
+// behind the link; it must leave them, whether the version folder or its plugins folder is the link.
+TEST_F(HostUpdateSwap, F22_ALinkedOlderGenerationIsNotClearedThroughTheLink) {
+  for (const wchar_t* linked : {L"update\\previous\\0.0.1", L"update\\previous\\0.0.1\\plugins"}) {
+    SCOPED_TRACE(Narrow(linked));
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    OldReleaseInTheRootAndANewOneStaged();
+    Put(L"update\\previous\\0.0.1\\nevr-runtime.dll", "a file outside the root");
+    Put(L"update\\previous\\0.0.1\\plugins\\anything.dll", "a plugin outside the root");
+    const std::wstring victim = LinkAway(linked);
+    ASSERT_FALSE(victim.empty());
+    const auto outside = Tree(victim);
+    ASSERT_FALSE(outside.empty());
+    const auto before = Tree(root_);
+    const Start start = RunStart();
+    EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+    EXPECT_EQ(Tree(victim), outside) << "a file outside the nevr root was deleted";
+    EXPECT_EQ(Tree(root_), before) << "nothing moved; staged.json stays";
+    const auto records = SwapRecords(start.records);
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].value("reason", ""), "reparse_point");
   }
 }
 
@@ -876,6 +1081,349 @@ TEST_F(HostUpdateSwap, ATornStateJsonIsRebuiltWithOnlyTheRuntimeOwned) {
   const nlohmann::json state = ReadJson(update_ + L"\\state.json");
   EXPECT_EQ(state["owned"], nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"sha256", Sha256Hex(new_runtime_)}}}))
       << state.dump();
+}
+
+// ---- review fixes (#2108) ------------------------------------------------------------------------------------------
+
+// B1 (ADR 0024 section 4.2; #2104's falsifier "a path or version outside the vocabulary is acted on"): the root runtime
+// is moved out before anything verifies it, so the version in its NEVR-BUILD field is a name read from a file. One
+// outside the vocabulary blocks the swap: it never names update\previous\<from>\ and is never logged. The review's
+// probes: "..\..\..\escaped" moved the runtime out of the nevr root; "9.9.9_x" (a legal file name) left a journal the
+// host then refused at every start. Each runs once with a kill after the second step, then once to its end.
+TEST_F(HostUpdateSwap, B1_ARootRuntimeVersionOutsideTheVocabularyBlocksTheSwapAndNeverBecomesAPath) {
+  for (const std::string& version : {std::string("..\\..\\..\\escaped"), std::string("9.9.9_x"), std::string("CON"),
+                                     std::string("a/b"), std::string("\xff\xfe")}) {
+    SCOPED_TRACE(version);
+    RemoveTree(root_);
+    RemoveTree(scratch_ + L"\\escaped");
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    OldReleaseInTheRootAndANewOneStaged();
+    Put(L"nevr-runtime.dll", RuntimeNamed(version));
+    const auto before = Tree(root_);
+    for (const int kill : {2, 0}) {
+      SCOPED_TRACE(kill);
+      g_kill_at.store(kill);
+      const Start start = RunStart();
+      g_kill_at.store(0);
+      EXPECT_FALSE(Exists(scratch_ + L"\\escaped\\nevr-runtime.dll")) << "the runtime was moved out of the nevr root";
+      EXPECT_EQ(Tree(root_), before) << "nothing moved, no journal, staged.json kept";
+      EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+      const auto records = SwapRecords(start.records);
+      ASSERT_EQ(records.size(), 1u);
+      EXPECT_EQ(records[0].value("outcome", ""), "blocked");
+      EXPECT_EQ(records[0].value("reason", ""), "bad_from_version");
+      EXPECT_EQ(records[0].value("to", ""), "1.2.3");
+      EXPECT_FALSE(records[0].contains("from")) << "a name outside the vocabulary is not logged";
+    }
+  }
+}
+
+// B1's sibling: a state.json rebuilt from the root runtime (section 4.8) records that runtime as `current` only when its
+// version is a version name.
+TEST_F(HostUpdateSwap, B1_ARebuiltStateNamesNoCurrentReleaseWhoseVersionIsOutsideTheVocabulary) {
+  for (const std::string& version : {std::string("..\\x"), std::string("\xff")}) {
+    SCOPED_TRACE(version);
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    const std::string runtime = RuntimeNamed(version);
+    Put(L"nevr-runtime.dll", runtime);
+    Put(L"update\\state.json", "{\"owned\": [");
+    Stage("1.2.3", {{"nevr-runtime.dll", new_runtime_}});
+    const Start start = RunStart();
+    const auto records = SwapRecords(start.records);
+    ASSERT_EQ(records.size(), 2u);
+    EXPECT_EQ(records[0].value("reason", ""), "state_rebuilt");
+    EXPECT_EQ(records[0].value("state_written", false), true);
+    EXPECT_EQ(records[1].value("reason", ""), "bad_from_version");
+    const nlohmann::json state = ReadJson(update_ + L"\\state.json");
+    EXPECT_FALSE(state.contains("current")) << state.dump();
+    EXPECT_EQ(state["owned"], nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"sha256", Sha256Hex(runtime)}}}));
+  }
+}
+
+// B2 (logging.md Rule 10; ADR 0024 section 4.6): a file the host cannot open is not a damaged file. The review's
+// probe 3: a valid journal another program held open read as bad_journal, with no error code.
+TEST_F(HostUpdateSwap, B2_AJournalAnotherProgramHoldsOpenStopsUnderItsOwnReasonWithTheError) {
+  OldReleaseInTheRootAndANewOneStaged();
+  Put(L"update\\swap.json", Journal("out"));
+  {
+    Held held(update_ + L"\\swap.json", 0);
+    ASSERT_TRUE(held.ok());
+    const auto before = Tree(root_);
+    const Start start = RunStart();
+    EXPECT_EQ(start.result.action, UpdateAction::kStop);
+    ASSERT_NE(start.result.reason, nullptr);
+    EXPECT_STREQ(start.result.reason, "journal_unreadable");
+    const auto records = SwapRecords(start.records);
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].value("outcome", ""), "blocked");
+    EXPECT_EQ(records[0].value("reason", ""), "journal_unreadable");
+    EXPECT_EQ(records[0].value("win32_error", 0u), static_cast<unsigned>(ERROR_SHARING_VIOLATION));
+    EXPECT_EQ(Tree(root_), before);
+  }
+  const Start next = RunStart();
+  EXPECT_EQ(Outcomes(next.records), (std::vector<std::string>{"recovered", "swapped"})) << "the journal was fine";
+  ExpectSwapped();
+}
+
+TEST_F(HostUpdateSwap, B2_AStagedJsonAnotherProgramHoldsOpenIsLeftWhereItIs) {
+  OldReleaseInTheRootAndANewOneStaged();
+  const std::string staged = Get(L"update\\staged.json");
+  {
+    Held held(update_ + L"\\staged.json", 0);
+    ASSERT_TRUE(held.ok());
+    const auto before = Tree(root_);
+    const Start start = RunStart();
+    EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+    const auto records = SwapRecords(start.records);
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].value("outcome", ""), "deferred");
+    EXPECT_EQ(records[0].value("reason", ""), "staged_unreadable");
+    EXPECT_EQ(records[0].value("win32_error", 0u), static_cast<unsigned>(ERROR_SHARING_VIOLATION));
+    EXPECT_EQ(Tree(root_), before);
+  }
+  EXPECT_EQ(Get(L"update\\staged.json"), staged) << "not deleted, not counted";
+  EXPECT_FALSE(ReadJson(update_ + L"\\state.json").contains("discards"));
+  EXPECT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"swapped"});
+}
+
+TEST_F(HostUpdateSwap, B2_AStateJsonAnotherProgramHoldsOpenIsNeitherRebuiltNorSwappedWithout) {
+  OldReleaseInTheRootAndANewOneStaged();
+  WriteState({{"channel", "beta"},
+              {"owned", {{{"path", "plugins/example.dll"}, {"sha256", Sha256Hex(old_plugin_)}}}},
+              {"discards", {{"0.9.0", 1}}},
+              {"quarantine", nlohmann::json::array({{{"version", "0.8.0"}}})}});
+  const std::string state = Get(L"update\\state.json");
+  {
+    Held held(update_ + L"\\state.json", 0);
+    ASSERT_TRUE(held.ok());
+    const auto before = Tree(root_);
+    const Start start = RunStart();
+    EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+    const auto records = SwapRecords(start.records);
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].value("outcome", ""), "deferred");
+    EXPECT_EQ(records[0].value("reason", ""), "state_unreadable");
+    EXPECT_EQ(records[0].value("win32_error", 0u), static_cast<unsigned>(ERROR_SHARING_VIOLATION));
+    EXPECT_EQ(Tree(root_), before) << "no swap without the ownership list";
+  }
+  EXPECT_EQ(Get(L"update\\state.json"), state) << "channel, discards and quarantine are kept";
+  EXPECT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"swapped"});
+}
+
+// An interrupted swap does not need state.json to be undone, so it is undone; phase done's cleanup writes state.json,
+// so it waits for a start that can read it. state.json is never overwritten while it cannot be read.
+TEST_F(HostUpdateSwap, B2_AnInterruptedSwapIsStillUndoneWhileStateJsonCannotBeReadAndItsCleanupWaits) {
+  for (const int kill : {5, 7}) {
+    SCOPED_TRACE(kill);
+    const std::string phase = KilledSwap(kill);
+    ASSERT_EQ(phase, kill == 5 ? "in" : "done");
+    const std::string state = Get(L"update\\state.json");
+    {
+      Held held(update_ + L"\\state.json", 0);
+      ASSERT_TRUE(held.ok());
+      const Start start = RunStart();
+      EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+      if (phase == "in") {
+        EXPECT_EQ(Outcomes(start.records), (std::vector<std::string>{"deferred", "recovered"}));
+        EXPECT_EQ(Get(L"nevr-runtime.dll"), old_runtime_) << "undone to the old release";
+        EXPECT_EQ(Get(L"plugins\\example.dll"), old_plugin_);
+        EXPECT_FALSE(Exists(update_ + L"\\swap.json"));
+        EXPECT_TRUE(Exists(update_ + L"\\staged.json")) << "no new swap without state.json";
+      } else {
+        EXPECT_EQ(Outcomes(start.records), std::vector<std::string>{"deferred"});
+        EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_) << "every file is in place";
+        EXPECT_TRUE(Exists(update_ + L"\\swap.json")) << "the cleanup waits";
+        EXPECT_FALSE(Exists(update_ + L"\\pending.json"));
+      }
+    }
+    EXPECT_EQ(Get(L"update\\state.json"), state);
+    RunStart();
+    ExpectSwapped();
+  }
+}
+
+// Review note 3: a state.json nested 32,000 arrays deep in 64 KiB ended the host. The text is measured before it is
+// parsed; a file nested past names::kMaxJsonDepth is damaged, whichever file it is, and one at the cap is not.
+TEST_F(HostUpdateSwap, AJsonFileNestedPastTheCapIsDamagedAndOneAtTheCapIsNot) {
+  const std::size_t cap = names::kMaxJsonDepth;
+  const std::string runtime_sha = Sha256Hex(new_runtime_);
+  for (const std::size_t depth : {cap, cap + 1, std::size_t{32000}}) {
+    SCOPED_TRACE(depth);
+    const bool deep = depth > cap;
+    // state.json: one object holding `depth - 1` arrays.
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    Put(L"nevr-runtime.dll", old_runtime_);
+    Stage("1.2.3", {{"nevr-runtime.dll", new_runtime_}});
+    Put(L"update\\state.json", "{\"channel\": \"beta\", \"x\": " + Arrays(depth - 1) + "}");
+    Start start = RunStart();
+    EXPECT_EQ(Outcomes(start.records),
+              deep ? (std::vector<std::string>{"recovered", "swapped"}) : std::vector<std::string>{"swapped"});
+    EXPECT_EQ(ReadJson(update_ + L"\\state.json").value("channel", ""), deep ? "" : "beta");
+    if (depth > cap + 1) continue;  // staged.json and swap.json at 32,000 are the same reader
+    // staged.json: valid, plus a key holding `depth - 1` arrays.
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    Put(L"nevr-runtime.dll", old_runtime_);
+    Stage("1.2.3", {{"nevr-runtime.dll", new_runtime_}});
+    Put(L"update\\staged.json",
+        "{\"version\": \"1.2.3\", \"files\": [{\"path\": \"nevr-runtime.dll\", \"size\": " +
+            std::to_string(new_runtime_.size()) + ", \"sha256\": \"" + runtime_sha + "\"}], \"x\": " + Arrays(depth - 1) +
+            "}");
+    start = RunStart();
+    const auto records = SwapRecords(start.records);
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].value("reason", ""), deep ? "bad_staged" : "");
+    // swap.json: a phase-out journal, plus a key holding `depth - 1` arrays.
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    OldReleaseInTheRootAndANewOneStaged();
+    Put(L"update\\swap.json", Journal("out", ", \"x\": " + Arrays(depth - 1)));
+    start = RunStart();
+    EXPECT_EQ(start.result.action, deep ? UpdateAction::kStop : UpdateAction::kLoad);
+    EXPECT_EQ(SwapRecords(start.records).at(0).value("reason", ""), deep ? "bad_journal" : "");
+  }
+}
+
+// Review note 2, the review's probe 5: a done journal a start could not finish is finished by a later one. By then the
+// runtime may have published a newer staged.json, and the pending record and a crash marker may say how the swapped
+// release did since (#2105 reads them). The cleanup takes none of them.
+TEST_F(HostUpdateSwap, F7_ALeftoverDoneJournalKeepsANewerStagedReleaseForTheSwapThatFollows) {
+  OldReleaseInTheRootAndANewOneStaged();
+  ASSERT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"swapped"});
+  Put(L"update\\swap.json", Journal("done"));
+  Stage("2.0.0", {{"nevr-runtime.dll", new_runtime_}, {"plugins/example.dll", new_plugin_}});
+  const Start start = RunStart();
+  EXPECT_EQ(Outcomes(start.records), (std::vector<std::string>{"recovered", "swapped"}));
+  const auto records = SwapRecords(start.records);
+  ASSERT_EQ(records.size(), 2u);
+  EXPECT_EQ(records[1].value("to", ""), "2.0.0");
+  EXPECT_EQ(ReadJson(update_ + L"\\pending.json")["to"].value("version", ""), "2.0.0");
+  EXPECT_FALSE(Exists(update_ + L"\\staged.json"));
+}
+
+TEST_F(HostUpdateSwap, F7_ALeftoverDoneJournalKeepsThePendingRecordAndACrashMarkerMadeSince) {
+  OldReleaseInTheRootAndANewOneStaged();
+  ASSERT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"swapped"});
+  nlohmann::json pending = ReadJson(update_ + L"\\pending.json");
+  ASSERT_EQ(pending["to"].value("version", ""), "1.2.3");
+  pending["boot_attempts"] = 2;
+  pending["failed_reason"] = "init_failed";
+  Put(L"update\\pending.json", pending.dump());
+  Put(L"update\\crashed", "");
+  for (int start = 1; start <= 2; ++start) {
+    SCOPED_TRACE(start);
+    Put(L"update\\swap.json", Journal("done"));
+    EXPECT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"recovered"});
+    EXPECT_EQ(ReadJson(update_ + L"\\pending.json"), pending) << "not reset to boot_attempts 1";
+    EXPECT_TRUE(Exists(update_ + L"\\crashed")) << "a crash of the swapped release is not forgotten";
+    EXPECT_FALSE(Exists(update_ + L"\\swap.json"));
+  }
+}
+
+// Review note 4: a staged.json the host cannot remove (another program holds it without delete sharing) is offered
+// again at every start. Its release is quarantined once, and each record says the removal failed and why.
+TEST_F(HostUpdateSwap, F6_AStagedJsonThatCannotBeRemovedIsQuarantinedOnceAndSaysWhy) {
+  OldReleaseInTheRootAndANewOneStaged();
+  WriteState({{"channel", "beta"}, {"owned", nlohmann::json::array()}, {"discards", {{"1.2.3", 2}}}});
+  std::string changed = new_runtime_;
+  changed[100] ^= 0x01;
+  Put(L"update\\staging\\1.2.3\\nevr-runtime.dll", changed);
+  Held held(update_ + L"\\staged.json", FILE_SHARE_READ);
+  ASSERT_TRUE(held.ok());
+  for (int start = 1; start <= 2; ++start) {
+    SCOPED_TRACE(start);
+    const auto records = SwapRecords(RunStart().records);
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].value("outcome", ""), "discarded");
+    EXPECT_EQ(records[0].value("staged_removed", true), false);
+    EXPECT_EQ(records[0].value("staged_win32_error", 0u), static_cast<unsigned>(ERROR_SHARING_VIOLATION));
+  }
+  const nlohmann::json state = ReadJson(update_ + L"\\state.json");
+  ASSERT_TRUE(state["quarantine"].is_array()) << state.dump();
+  EXPECT_EQ(state["quarantine"].size(), 1u) << state.dump();
+  EXPECT_EQ(state["discards"].value("1.2.3", 0), 4);
+}
+
+// The same for a bad staged.json the host cannot remove, and for a state.json it cannot write over (another program
+// holds each without delete sharing): the record says so, with the error (logging.md Rule 10).
+TEST_F(HostUpdateSwap, F22_ABadStagedJsonOrAStateJsonTheHostCannotReplaceIsReportedWithTheError) {
+  Put(L"nevr-runtime.dll", old_runtime_);
+  Put(L"update\\staged.json", "{\"version\": \"..\"}");
+  {
+    Held held(update_ + L"\\staged.json", FILE_SHARE_READ);
+    ASSERT_TRUE(held.ok());
+    const auto records = SwapRecords(RunStart().records);
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].value("reason", ""), "bad_staged");
+    EXPECT_EQ(records[0].value("staged_removed", true), false);
+    EXPECT_EQ(records[0].value("staged_win32_error", 0u), static_cast<unsigned>(ERROR_SHARING_VIOLATION));
+  }
+  RemoveTree(root_);
+  ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+  OldReleaseInTheRootAndANewOneStaged();
+  std::string changed = new_runtime_;
+  changed[100] ^= 0x01;
+  Put(L"update\\staging\\1.2.3\\nevr-runtime.dll", changed);
+  Held held(update_ + L"\\state.json", FILE_SHARE_READ);
+  ASSERT_TRUE(held.ok());
+  const auto records = SwapRecords(RunStart().records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("outcome", ""), "discarded");
+  EXPECT_EQ(records[0].value("state_written", true), false);
+  EXPECT_NE(records[0].value("state_win32_error", 0u), 0u) << records[0].dump();
+}
+
+// Review note 7: a kill between a JSON file's temporary write and its rename leaves <file>.tmp-<pid>. Under the lock no
+// writer is live, so a start removes the host's own leftovers, and only those.
+TEST_F(HostUpdateSwap, AStartRemovesTheTemporaryFilesAKilledWriteLeftAndNothingElse) {
+  Put(L"nevr-runtime.dll", old_runtime_);
+  for (const wchar_t* ours : {L"state.json.tmp-1234", L"pending.json.tmp-7", L"swap.json.tmp-42"}) {
+    Put(std::wstring(L"update\\") + ours, "{");
+  }
+  for (const wchar_t* theirs : {L"staged.json.tmp-5", L"state.json.tmp-12a", L"state.json.tmp-", L"notes.tmp-1"}) {
+    Put(std::wstring(L"update\\") + theirs, "not the host's");
+  }
+  const Start start = RunStart();
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  const auto records = SwapRecords(start.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("outcome", ""), "recovered");
+  EXPECT_EQ(records[0].value("reason", ""), "temporaries_removed");
+  EXPECT_EQ(records[0].value("removed", 0), 3);
+  for (const wchar_t* ours : {L"state.json.tmp-1234", L"pending.json.tmp-7", L"swap.json.tmp-42"}) {
+    EXPECT_FALSE(Exists(update_ + L"\\" + ours)) << Narrow(ours);
+  }
+  for (const wchar_t* theirs : {L"staged.json.tmp-5", L"state.json.tmp-12a", L"state.json.tmp-", L"notes.tmp-1"}) {
+    EXPECT_TRUE(Exists(update_ + L"\\" + theirs)) << Narrow(theirs);
+  }
+}
+
+// Review note 8: a kill while a start recovers an earlier kill. Each recovery step is itself a step the seam can end;
+// the start after it still ends with one whole release.
+TEST_F(HostUpdateSwap, F7_AKillWhileRecoveringIsRecoveredInTurnByTheNextStart) {
+  OldReleaseInTheRootAndANewOneStaged();
+  RunStart();
+  const int steps = g_last_step.load();
+  int interrupted_recoveries = 0;
+  for (int kill = 1; kill <= steps; ++kill) {
+    for (int again = 1; again <= 6; ++again) {
+      SCOPED_TRACE(std::to_string(kill) + " then " + std::to_string(again));
+      if (KilledSwap(kill).empty()) break;  // nothing to recover after this kill
+      g_last_step.store(0);
+      g_kill_at.store(again);
+      RunStart();
+      g_kill_at.store(0);
+      if (g_last_step.load() < again) break;  // this start has fewer steps
+      ++interrupted_recoveries;
+      const Start last = RunStart();
+      EXPECT_EQ(last.result.action, UpdateAction::kLoad);
+      ExpectSwapped();
+    }
+  }
+  // Every kill but the last (the journal's removal) leaves a journal, and each such recovery has at least one step.
+  EXPECT_GE(interrupted_recoveries, steps - 1);
 }
 
 }  // namespace

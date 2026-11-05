@@ -214,12 +214,36 @@ flowchart TD
    `NevrPcStage` result does: `staged.json` is `{"version", "files": [{"path", "size", "sha256"}]}` with `path`
    `nevr-runtime.dll` or `plugins/<name>.dll`; `swap.json` is `{"kind", "from", "to", "phase", "out": [path], "in":
    [path]}`; `state.json` keeps `owned` as `[{"path", "sha256"}]`, and the swap rewrites `owned` at `done` to the files it
-   placed. A start that "stops" (the lock not taken with a journal, a journal it cannot read, an undo that fails) loads
-   nothing and ends the game with exit 78: `game_stop` and the `NEVR.STOP` line carry the reason `update_blocked` and the
-   swap's own reason in `update_reason`. A `staged.json` outside the vocabulary is removed without a discard counted
-   (`update_swap outcome=discarded reason=bad_staged`); a `state.json` rebuilt says `outcome=recovered
-   reason=state_rebuilt`. A root runtime without a `NEVR-BUILD` version blocks the swap (`reason=no_from_version`) until
-   #2105 settles it.
+   placed. Two names that differ only in case are one file. A start that "stops" (the lock not taken with a journal, a
+   journal that does not parse (`bad_journal`) or cannot be opened (`journal_unreadable`), a link beside a journal
+   (`reparse_point`), an undo that fails) loads nothing and ends the game with exit 78: `game_stop` and the `NEVR.STOP`
+   line carry the reason `update_blocked` and the swap's own reason in `update_reason`. A `staged.json` outside the
+   vocabulary is removed without a discard counted (`update_swap outcome=discarded reason=bad_staged`); a `state.json`
+   rebuilt says `outcome=recovered reason=state_rebuilt`, and records the root runtime as `current` only when its version
+   is a version name. A root runtime without a `NEVR-BUILD` version blocks the swap (`reason=no_from_version`) until
+   #2105 settles it; one whose version is outside the vocabulary blocks it (`reason=bad_from_version`): that version is
+   read from a file nothing has verified yet, so it is never a path and never logged.
+   - **A file that cannot be read is not a damaged file.** A file of `update\` that is there but cannot be opened or
+     read (another program holds it, access is denied) is recorded with its `win32_error`: a journal stops the start
+     (`journal_unreadable`); a `staged.json` stays and nothing is counted (`outcome=deferred reason=staged_unreadable`);
+     a `state.json` is neither rebuilt nor written over, and nothing is swapped without it (`outcome=deferred
+     reason=state_unreadable`), though an interrupted swap is still undone and a `done` cleanup waits for a start that
+     can read it. A JSON file nested deeper than 16 arrays and objects is damaged and never parsed into a tree
+     (`kMaxJsonDepth`).
+   - **Links.** Besides the four folders of item 2, `update\staging\<version>\`, `update\previous\<version>\` and
+     their `plugins\` folders are checked before anything is moved into, made in or deleted from them, and `update\`
+     itself is checked before the lock is taken through it. The record names the `folder`.
+   - **In use.** Only a sharing violation on the write-open of item 4 means another process runs the runtime
+     (`deferred reason=runtime_in_use`); any other refusal blocks the swap with its error
+     (`reason=runtime_not_writable`).
+   - **Discards.** A release already in `quarantine` gets no second entry; a `staged.json` the host cannot remove says
+     so (`staged_removed=false`, `staged_win32_error`).
+   - **Done, again.** The stale `crashed` goes before `pending.json` is written. A start that finishes an earlier
+     start's `done` keeps a `pending.json` that already names the release (and any `crashed` written since), and
+     removes `staged.json` only when it names that release: a newer one is the next swap's.
+   - **Temporary files.** A start removes the host's own `state.json.tmp-<pid>`, `pending.json.tmp-<pid>` and
+     `swap.json.tmp-<pid>`, which a kill between a write and its rename leaves (`outcome=recovered
+     reason=temporaries_removed`).
 10. **Left-overs.** The core's stage removes `<version>.partial-*` folders not touched for 10 minutes and a
    `staging\<version>` that has no `staged.json` pointing at it, before it starts.
 
@@ -276,7 +300,7 @@ a rollback can restore a release denylisted after the player ran it (the accepte
 ### 7. The installer's part
 
 `install-nevr-runtime pc install` (and so `install.ps1`) writes `update\state.json` with the channel and the installed release, under
-the lock, and removes `staged.json`, `staging\`, `previous\`, `failed\`, `pending.json` and `crashed`: after an install the
+the lock, and removes `swap.json`, `staged.json`, `staging\`, `previous\`, `failed\`, `pending.json` and `crashed`: after an install the
 installer's release is the baseline and nothing older competes with it. The quarantine list stays. `uninstall.ps1` does not
 touch `update\`. The channel precedence is `update.channel` in `config.yaml`, then `state.json`, then the core's default;
 every `update check` line carries `channel_source`, so a player whose config disagrees with the installer shows it in the log.
@@ -399,7 +423,8 @@ Falsifiers: any member extracted that `contents` does not list; any download whe
 ## What is not known
 
 - That a loaded `nevr-runtime.dll` refuses a write-open on Windows. Under Wine (11.20) it does: `test_host_update_swap`
-  maps the root's runtime in its own process and the swap is deferred (`F8_ARuntimeAnotherProcessHasMappedDefersTheSwap`);
+  maps the root's runtime in its own process, the write-open is refused with a sharing violation (32) and the swap is
+  deferred (`F8_AMappedRuntimeDefersTheSwap`);
   a second process mapping it is not measured. Under the same Wine a directory symbolic link reads as a reparse point, so
   the junction check works there (`F22_AReparsePointInTheUpdateFoldersBlocksTheSwap`). Native Windows is not measured.
 - That `MoveFileExW` renames of a runtime that another process has open for read are allowed, and what a rename of a mapped

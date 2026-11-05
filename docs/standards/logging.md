@@ -178,7 +178,7 @@ process, and in a `host_not_attached` record when the game keeps running. The li
 | `null_descriptor`        | `true`    | 78                        | `NEVR_GetRuntimeApi` returned no descriptor                                     |
 | `abi_rejected`           | `true`    | 78                        | The descriptor's ABI version or size was rejected                               |
 | `init_failed`            | `true`    | 78                        | `initialize` returned non-zero or threw                                         |
-| `update_blocked`         | `true`    | 78                        | A self-update left the nEVR root unfinished and this start could not finish it (ADR 0024): nothing was loaded; `update_reason` in `game_stop` and `detail` name why (`lock_timeout`, `bad_journal`, `move_failed`, `internal_error`) |
+| `update_blocked`         | `true`    | 78                        | A self-update left the nEVR root unfinished and this start could not finish it (ADR 0024): nothing was loaded; `update_reason` in `game_stop` and `detail` name why (`lock_timeout`, `bad_journal`, `journal_unreadable`, `reparse_point`, `move_failed`, `internal_error`) |
 | `no_path`                | `true`    | 78                        | No nEVR root could be formed (no `%LOCALAPPDATA%` that fits)                    |
 | `unsupported_image`      | `true`    | 3762421763 (`0xE0420003`) | The process image is not the supported `echovr.exe` build (the image guard)     |
 | `host_not_attached`      | `false`   | none                      | The image check, the prologue check or the hook install failed: no detour was installed and the game runs without the runtime. `detail` names the step |

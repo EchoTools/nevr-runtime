@@ -7,13 +7,16 @@
 //   1. the host takes update\lock (exclusive, delete on close), retrying for up to 30 s, and keeps it until the
 //      runtime is mapped (RuntimeLoader::Load releases it before initialize);
 //   2. an interrupted swap (update\swap.json) is recovered: phase out or in is undone to the last whole state, phase
-//      done finishes its cleanup; a journal this host cannot read stops the game (reason bad_journal);
+//      done finishes its cleanup; a journal that does not parse stops the game (reason bad_journal), and so does one
+//      that cannot be opened (journal_unreadable, with the Win32 error);
 //   3. a staged release (update\staged.json) is checked again (confined names, size, sha256, the Authenticode
 //      verifier with the host's policy); a file that fails is discarded and counted, the third discard quarantines;
 //   4. it is swapped in only when no other process has the root's runtime mapped and no staged file would replace a
 //      file self-update does not own: the journal is written, the owned files move to update\previous\<from>\, the
 //      staged files move into the root, then update\state.json (owned), update\pending.json (boot_attempts 1) and
 //      the cleanup.
+// No folder the swap moves into, makes or deletes from is followed when it is a link (reason reparse_point, with the
+// folder), and a file the host cannot open is never taken for a damaged one.
 // Every outcome is one update_swap record in the run's main log (tag NEVR.HOST).
 //
 // Not here (ADR 0024 step 2, #2105): what happens to a pending release (rollback, boot_attempts, the crash marker)
@@ -58,7 +61,7 @@ enum class UpdateAction {
 
 struct UpdateResult {
   UpdateAction action = UpdateAction::kNoUpdateFolder;
-  /// For kStop: lock_timeout, bad_journal, move_failed or internal_error.
+  /// For kStop: lock_timeout, bad_journal, journal_unreadable, reparse_point, move_failed or internal_error.
   const char* reason = nullptr;
 };
 
