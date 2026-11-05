@@ -249,10 +249,7 @@ func exitCode(e *exec.ExitError) int {
 	if ws, ok := e.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 		return 128 + int(ws.Signal())
 	}
-	if c := e.ExitCode(); c > 0 {
-		return c
-	}
-	return 1
+	return e.ExitCode()
 }
 
 // lineScan remembers the text after prefix on the last line that starts with it.

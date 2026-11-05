@@ -772,3 +772,37 @@ func TestOnlyTheLastLinesOfATestsOutputAreKeptForItsSkipReason(t *testing.T) {
 	_, stdout, _ := newRig(t, stream, 0).run()
 	mustHave(t, stdout, "go SKIP "+pkg+" TestLoud: no reason given")
 }
+
+func TestThePythonHalfsStandardErrorIsPassedOn(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.script(r.py, "stderr", "py: a warning\n")
+	r.script(r.py, "exit", "0")
+	if _, _, stderr := r.run("--", "python3"); !strings.Contains(stderr, "py: a warning") {
+		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+// A stream is never overwritten: a second run with the same stem is an error, not a lost record.
+func TestAStreamThatAlreadyExistsIsNotOverwritten(t *testing.T) {
+	t.Parallel()
+	const stem = "20261105T120000.123456Z-4242-0123456789abcdef-aabbccddeeff"
+	r := newRig(t, passingStream(), 0)
+	if err := os.MkdirAll(r.logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(r.logDir, stem+"-go.jsonl")
+	if err := os.WriteFile(existing, []byte("the earlier run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := r.both("0", "test-tools: log "+filepath.Join(r.logDir, stem+".log")+"\n")
+	if code != 2 || !strings.Contains(stderr, stem) {
+		t.Errorf("exit %d, stderr %q", code, stderr)
+	}
+	if got, _ := os.ReadFile(existing); string(got) != "the earlier run\n" {
+		t.Errorf("the earlier stream was overwritten: %q", got)
+	}
+	if n := len(r.fake.Calls(t)); n != 0 {
+		t.Errorf("go ran %d times with nowhere to keep its stream", n)
+	}
+}
