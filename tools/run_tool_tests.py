@@ -49,8 +49,8 @@ with replacements; the log keeps it as read.
 
 The plugins. pytest is started with plugin autoload off (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`: every pytest plugin
 installed on the machine would otherwise load, about 5 s per pytest start) and with the two the suite uses named,
-`-p xdist -p randomly`. With pytest-xdist the suite runs on `-n <workers>` processes: $NEVR_TEST_WORKERS is `auto` (the
-default: one per physical core), `logical` (one per hardware thread) or a whole number, 0 for serial. Without pytest-xdist
+`-p xdist -p randomly`. With pytest-xdist the suite runs on `-n <workers>` processes: $NEVR_TEST_WORKERS is `logical` (the
+default: one per hardware thread), `auto` (one per physical core) or a whole number, 0 for serial. Without pytest-xdist
 the suite runs serially, with one `WARN` line on stderr. Both records and the log's header carry `mode` (`parallel` or
 `serial`), `workers` and `serial_reason`. A `-n` or `-p no:xdist` in the arguments comes after the runner's own flags
 and wins.
@@ -130,7 +130,7 @@ def seconds_from_env(name: str, default: float):
 
 # The plugins the suite uses, as (name for `-p`, module that provides it); pytest starts with autoload off and these.
 SUITE_PLUGINS = (("xdist", "xdist"), ("randomly", "pytest_randomly"))
-DEFAULT_WORKERS = "auto"
+DEFAULT_WORKERS = "logical"
 
 # Seconds pytest gets after the first signal, and seconds its output may stay open after it exits, held
 # by a process it left behind (also the most the echo is waited for).
