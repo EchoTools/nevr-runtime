@@ -245,7 +245,8 @@ func TestLinesThatAreNotJSONAreKeptAndDoNotStopTheCount(t *testing.T) {
 
 func TestAStreamWithNoFinalNewlineIsStillCounted(t *testing.T) {
 	t.Parallel()
-	r := newRig(t, strings.TrimSuffix(passingStream(), "\n"), 0)
+	// The last line is a test's pass, so a line lost for want of a newline loses a count.
+	r := newRig(t, strings.TrimSuffix(ev("run", pkg, "TestA")+ev("pass", pkg, "TestA")+ev("run", pkg, "TestB")+ev("pass", pkg, "TestB"), "\n"), 0)
 	if code, stdout, _ := r.run(); code != 0 || !strings.Contains(stdout, "2 tests passed") {
 		t.Errorf("exit %d, stdout %q", code, stdout)
 	}

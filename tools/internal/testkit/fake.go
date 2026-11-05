@@ -234,7 +234,7 @@ func runFake(name string, fn func(*Call) int) int {
 		fmt.Fprintf(os.Stderr, "testkit: fake %s: %v\n", name, err)
 		return exitFakeSetup
 	}
-	args := append([]string{}, os.Args[1:]...)
+	args := os.Args[1:] // empty, not nil, when there are none: the record then reads "args":[]
 	rec := Record{Name: name, Args: args, Dir: wd}
 	for _, key := range side.Env {
 		if v, ok := os.LookupEnv(key); ok {
