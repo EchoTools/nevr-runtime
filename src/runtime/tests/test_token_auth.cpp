@@ -28,7 +28,7 @@
 #include "off_thread_wait.h"
 #include "token_auth.h"
 
-extern "C" int token_auth_Init(const NvrModuleContext* ctx);
+extern "C" int token_auth_Init(const NevrModuleContext* ctx);
 extern "C" void token_auth_Shutdown(void);
 extern "C" uint32_t token_auth_ApiVersion(void);
 
@@ -41,8 +41,8 @@ std::string MakeJwt(const std::string& payload) {
   return std::string(kJwtHeader) + "." + payload + "." + kJwtSignature;
 }
 
-NvrModuleContext MakeModuleContext(uint32_t flags) {
-  NvrModuleContext context{};
+NevrModuleContext MakeModuleContext(uint32_t flags) {
+  NevrModuleContext context{};
   context.flags = flags;
   return context;
 }
@@ -1267,7 +1267,7 @@ TEST(DeviceAuthFlow, MalformedVerifiedCandidateDoesNotChangeStateOrSave) {
 }
 
 TEST(TokenAuthModule, ServerHostSkipsDeviceAuthentication) {
-  const NvrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_SERVER);
+  const NevrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_SERVER);
 
   EXPECT_EQ(token_auth_Init(&context), 0);
   const auto snapshot = nevr_token_auth::GetAuthSnapshot();
@@ -1281,7 +1281,7 @@ TEST(TokenAuthModule, ServerHostSkipsDeviceAuthentication) {
 }
 
 TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
-  const NvrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_CLIENT);
+  const NevrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_CLIENT);
 
   EXPECT_EQ(token_auth_Init(&context), 0);
   const auto snapshot = nevr_token_auth::GetAuthSnapshot();

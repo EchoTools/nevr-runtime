@@ -76,7 +76,7 @@ NevrScriptRedirectResult RegisterFromLibraryPath(const char* pluginId, const cha
 // The registration against the directory the sentinel was loaded from (dladdr on this function). Called from plugin init.
 // A refusal other than ALREADY_ARMED leaves nothing registered, so a caller may call again.
 //
-// Timing: the q15t plugin calls this from its NvrPluginInitEx, which the loader runs after a hooked dlopen has returned a
+// Timing: the q15t plugin calls this from its NevrPluginInitEx, which the loader runs after a hooked dlopen has returned a
 // handle (post_load.cpp, AfterDlopen -> RunPlugins). A script-library load whose hooked open comes before that is not
 // redirected; its script_load line (registry_set=false) shows it.
 NevrScriptRedirectResult Register(const char* pluginId, const std::uint64_t* hashes, std::uint32_t count) noexcept;

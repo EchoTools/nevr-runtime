@@ -46,7 +46,7 @@ void Copy(char* to, std::size_t cap, const char* from) {
   to[cap - 1] = '\0';
 }
 
-void Record(const NvrGameContext* ctx, const char* args) {
+void Record(const NevrGameContext* ctx, const char* args) {
   ++fx_seen.init_count;
   fx_seen.ctx_size = ctx->ctx_size;
   fx_seen.flags = ctx->flags;
@@ -55,18 +55,18 @@ void Record(const NvrGameContext* ctx, const char* args) {
   fx_seen.game_state = ctx->game_state;
   Copy(fx_seen.plugin_id, sizeof(fx_seen.plugin_id), ctx->plugin_id);
   Copy(fx_seen.args, sizeof(fx_seen.args), args);
-  if (ctx->ctx_size >= offsetof(NvrGameContext, level_name) + sizeof(ctx->level_name)) {
+  if (ctx->ctx_size >= offsetof(NevrGameContext, level_name) + sizeof(ctx->level_name)) {
     fx_seen.level_symbol = ctx->level_symbol;
     fx_seen.level_name = ctx->level_name;
   }
   fx_seen.covers_game_build_id =
-      ctx->ctx_size >= offsetof(NvrGameContext, game_build_id) + sizeof(ctx->game_build_id) ? 1 : 0;
+      ctx->ctx_size >= offsetof(NevrGameContext, game_build_id) + sizeof(ctx->game_build_id) ? 1 : 0;
   if (fx_seen.covers_game_build_id != 0) Copy(fx_seen.game_build_id, sizeof(fx_seen.game_build_id), ctx->game_build_id);
-  fx_seen.covers_quest = ctx->ctx_size >= offsetof(NvrGameContext, quest) + sizeof(ctx->quest) ? 1 : 0;
+  fx_seen.covers_quest = ctx->ctx_size >= offsetof(NevrGameContext, quest) + sizeof(ctx->quest) ? 1 : 0;
   if (fx_seen.covers_quest != 0) fx_seen.quest = ctx->quest;
   fx_seen.plugin_count_at_init = ctx->get_plugin_count != nullptr ? ctx->get_plugin_count() : -1;
   if (fx_seen.plugin_count_at_init > 0) {
-    const NvrLoadedPluginInfo* first = ctx->get_plugin_info(0);
+    const NevrLoadedPluginInfo* first = ctx->get_plugin_info(0);
     Copy(fx_seen.first_plugin_name, sizeof(fx_seen.first_plugin_name), first != nullptr ? first->name : "");
   }
   const NevrLogField fields[] = {{"k", "v"}};
@@ -152,7 +152,7 @@ void* RegisterOnThread(void*) {
 }
 #endif
 
-void SlotHookInit(const NvrGameContext* ctx, const char* args_json) {
+void SlotHookInit(const NevrGameContext* ctx, const char* args_json) {
   if (!ArgBuildId(args_json, fx_b2_build, sizeof(fx_b2_build))) return;
 #ifdef FX_SLOT_CLAIM
   const char* claim = FX_SLOT_CLAIM;
@@ -201,17 +201,17 @@ void SlotHookShutdownRegister() {
 #endif  // FX_SLOT_HOOK
 
 #ifndef FX_NO_INFO
-NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) { return {FX_NAME, "loader test fixture", 1, 2, 3}; }
+NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) { return {FX_NAME, "loader test fixture", 1, 2, 3}; }
 #endif
-NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
-NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void) { return NEVR_PLUGIN_CAP_OBSERVES_ONLY; }
+NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
+NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) { return NEVR_PLUGIN_CAP_OBSERVES_ONLY; }
 #ifdef FX_LEGACY_INIT
-NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
+NEVR_PLUGIN_API int NevrPluginInit(const NevrGameContext* ctx) {
   Record(ctx, "");
   return FX_INIT_RC;
 }
 #else
-NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_json) {
+NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* args_json) {
   Record(ctx, args_json);
 #ifdef FX_SLOT_HOOK
   SlotHookInit(ctx, args_json);
@@ -219,7 +219,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
   return FX_INIT_RC;
 }
 #endif
-NEVR_PLUGIN_API void NvrPluginShutdown(void) {
+NEVR_PLUGIN_API void NevrPluginShutdown(void) {
   ++fx_seen.shutdown_count;
 #ifdef FX_SLOT_WAIT
   SlotHookShutdown();

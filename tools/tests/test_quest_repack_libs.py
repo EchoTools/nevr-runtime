@@ -1141,6 +1141,20 @@ class StageLibsTest(unittest.TestCase):
         self.assertEqual((self.stage / libs.STAGED_REPLACE_LIST).read_text(), "")
         self.assertEqual(libs.replaced_names(self.stage), [])
 
+    def test_the_staged_names_are_recorded_so_the_plugin_manifest_check_skips_them(self):
+        # #2092: a repack with a plugin and script libraries wrote a plugin manifest, then staged the libraries; the signed-APK
+        # check then named every staged script library "staged, not listed in libnevr_plugin_manifest.so".
+        self.assertEqual(self.run_stage(), [])
+        self.assertEqual(sorted(libs.staged_script_libs(self.stage)), sorted(self.names))
+        abi = self.stage / "lib/arm64-v8a"
+        (abi / "libplugin.so").write_bytes(b"plugin")
+        (abi / libs.MANIFEST_NAME).write_text(json.dumps({"plugins": [
+            {"name": "plugin", "file": "libplugin.so", "enabled": True, "early": False, "sha256": SHA(b"plugin")}]}))
+        self.assertEqual(libs.plugin_manifest_problems(self.stage), [])
+        (abi / "libstray.so").write_bytes(b"staged by nothing")
+        self.assertEqual(libs.plugin_manifest_problems(self.stage),
+                         [f"lib/arm64-v8a/libstray.so: staged, not listed in {libs.MANIFEST_NAME}"])
+
     def test_an_unlisted_library_is_refused(self):
         self.write_sums()
         (self.libs / "SHA256SUMS").write_text(f"{SHA(self.names['lib0123456789abcdef.so'])}  lib0123456789abcdef.so\n")
@@ -1239,6 +1253,8 @@ class StageRedirectedLibsTest(unittest.TestCase):
             self.assertFalse((staged / name).exists(), name)
         self.assertEqual(sorted(p.name for p in staged.iterdir()), sorted(libs.staged_name(n) for n in self.NINE))
         self.assertEqual(libs.replaced_names(self.stage), [])
+        # The record the plugin-manifest check reads holds the names as staged, _q15t and all (#2092).
+        self.assertEqual(sorted(libs.staged_script_libs(self.stage)), sorted(libs.staged_name(n) for n in self.NINE))
 
     def test_a_subset_of_the_nine_is_refused_and_the_missing_ones_are_named(self):
         for name in (self.NINE[3], self.NINE[8]):

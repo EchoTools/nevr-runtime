@@ -38,9 +38,9 @@ Every refusal is also a `Warning` in the log: `[NEVR.ASSET] register refused lab
 
 ## Order and lifetime
 
-- Register from `NvrPluginInit` / `NvrPluginInitEx`. That is before the engine's first load of the name.
+- Register from `NevrPluginInit` / `NevrPluginInitEx`. That is before the engine's first load of the name.
   Registering after the engine has loaded a name is refused (`NEVR_ASSET_ALREADY_LOADED`); it is never ignored.
-- Deregister from `NvrPluginShutdown` with the plugin's own image range:
+- Deregister from `NevrPluginShutdown` with the plugin's own image range:
   `NEVR_DeregisterAssets(image_base, image_base + SizeOfImage)`.
 - The runtime also drops every asset inside a plugin's image before it frees that image
   (`[NEVR.ASSET] released N asset(s) still registered by a plugin at unload`), so a plugin that forgets cannot

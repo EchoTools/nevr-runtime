@@ -217,7 +217,7 @@ void Report(const char* hook, const q15t::InstallResult& r) {
   Log(r.status == SwapStatus::kOk ? NEVR_LOG_INFO : NEVR_LOG_ERROR, "hook install", done, 4);
 }
 
-bool Covers(const NvrGameContext* ctx, std::size_t end_of_field) { return ctx->ctx_size >= end_of_field; }
+bool Covers(const NevrGameContext* ctx, std::size_t end_of_field) { return ctx->ctx_size >= end_of_field; }
 
 // Every compiled-in module, by name, for the init line.
 constexpr char kCompiledModules[] =
@@ -362,11 +362,11 @@ constexpr char kCompiledModules[] =
 
 }  // namespace
 
-NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) {
+NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
   return {"q15t", "display clock and refresh-rate witnesses and candidates", 0, 2, 0};
 }
-NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
-NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void) {
+NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
+NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
   // The clock raise (args {clock: raise}) is a runtime switch the loader cannot see here, and it is not gameplay: it asks the headset
   // for higher CPU/GPU levels (performance and heat, no physics, weapons, movement or rules). It is not part of the declaration.
@@ -390,11 +390,11 @@ NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void) {
   return caps;
 }
 
-NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_json) {
+NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* args_json) {
   if (ctx == nullptr) return 1;
   using namespace q15t;
-  if (Covers(ctx, offsetof(NvrGameContext, log) + sizeof(ctx->log))) SetLogContext(ctx);
-  const bool covers_id = Covers(ctx, offsetof(NvrGameContext, game_build_id) + sizeof(ctx->game_build_id));
+  if (Covers(ctx, offsetof(NevrGameContext, log) + sizeof(ctx->log))) SetLogContext(ctx);
+  const bool covers_id = Covers(ctx, offsetof(NevrGameContext, game_build_id) + sizeof(ctx->game_build_id));
   const bool quest = (ctx->flags & NEVR_HOST_PLATFORM_QUEST) != 0;
   const char* id = covers_id && ctx->game_build_id != nullptr ? ctx->game_build_id : "";
   // args {clock: raise} turns the clock raise on; absent or "log" keeps the log-only default; anything else stays log-only, loudly.
@@ -631,4 +631,4 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
   return 0;
 }
 
-NEVR_PLUGIN_API void NvrPluginShutdown(void) {}
+NEVR_PLUGIN_API void NevrPluginShutdown(void) {}

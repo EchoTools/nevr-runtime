@@ -220,6 +220,8 @@ quest-reference-base apk out label="Echo VR":
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key, a keystore file named by
 # NEVR_QUEST_KEYSTORE with its passphrase in NEVR_QUEST_KEYSTORE_PASS (tools/quest_keystore.sh): it is copied into a
 # private tmpfs file for the signing command only and is never generated here.
+# `extra_libs` is a directory of lib<hash16>.so script libraries and their SHA256SUMS only (tools/quest_repack_libs.py stage-libs):
+# `build/quest-combat-libs/libs`, which `just build-quest-combat-libs` writes.
 android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -594,7 +596,19 @@ build-quest-combat-libs libsrc=env("NEVR_COMBAT_LIBSRC", "") store_apk=env("NEVR
         echo "build-quest-combat-libs: the build failed; its output is in build/quest-combat-libs/build.log" >&2
         exit 1
     fi
-    echo "build-quest-combat-libs: $(wc -l < "$out/SHA256SUMS") libraries in build/quest-combat-libs; SHA256SUMS written"
+    # The directory android-repack-apk's extra_libs (and the release recipes' libs) takes: the libraries and SHA256SUMS only,
+    # never the CMake tree beside them (#2092). Hard links into the build tree; a copy where a link cannot be made.
+    # The names come from SHA256SUMS, not a glob, so a library an earlier libsrc left in the build tree is not taken.
+    libs="$out/libs"
+    rm -rf "$libs"
+    mkdir -p "$libs"
+    [ -s "$out/SHA256SUMS" ] || { echo "build-quest-combat-libs: no library was built (build/quest-combat-libs/SHA256SUMS is empty or missing)" >&2; exit 1; }
+    while read -r _ name; do
+        ln "$out/$name" "$libs/" 2>/dev/null || cp "$out/$name" "$libs/"
+    done < "$out/SHA256SUMS"
+    ln "$out/SHA256SUMS" "$libs/" 2>/dev/null || cp "$out/SHA256SUMS" "$libs/"
+    (cd "$libs" && sha256sum -c --quiet SHA256SUMS)
+    echo "build-quest-combat-libs: $(wc -l < "$out/SHA256SUMS") libraries in build/quest-combat-libs; SHA256SUMS written; the repack takes build/quest-combat-libs/libs"
 
 # The combat content pack (docs/adr/0029-quest-bundled-content-pack.md): the manifest and the one package the pack adds, taken
 # from the game-data zip NEVR_GAME_DATA_ZIP names, whose sha-256 must be NEVR_GAME_DATA_SHA256 (the digest the signed manifest
@@ -641,6 +655,7 @@ release-quest-variant-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pa
 
 # The combat APK of a release: the same repack as release-quest-apk, from the same loader asset, with the plugin libraries
 # `plugins` names (colon-separated). It is written to build/quest-release/<tag>/combat/ under the release's own name,
+# `libs` is a directory of script libraries and their SHA256SUMS: `build/quest-combat-libs/libs`, which `just build-quest-combat-libs` writes.
 # nevr-runtime-<tag>-quest.apk, with its .sha256 beside. It uploads nothing and never tags. `pack` and `pack_meta` as for the variant.
 release-quest-combat-apk tag plugins store_apk=env("NEVR_STORE_APK") pack="" pack_meta="" libs="": (_release-quest-apk "release-quest-combat-apk" tag store_apk plugins "combat" pack pack_meta libs)
 
@@ -1509,6 +1524,78 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
 test-quest-apk-patch-map patch_repo:
     python3 tools/quest_apk_patch_map.py --repo "{{ patch_repo }}"
 
+# --- The Quest store variant, built from the store APK and the store OBB (docs/adr/0042-quest-store-variant-built-from-store-apk-and-obb.md) ---
+# Two per-machine inputs, environment variables with no default: NEVR_STORE_APK (the store APK) and NEVR_STORE_OBB (the store OBB);
+# the signing key is NEVR_QUEST_KEYSTORE and NEVR_QUEST_KEYSTORE_PASS (tools/quest_keystore.sh). Every step logs JSON lines
+# (tag NEVR.QUESTBUILD) and is cached under build/ by the digests of its inputs.
+
+# Stop, naming the variable, unless the named inputs (apk, obb, keystore) are there.
+[positional-arguments]
+_quest-store-require *kinds:
+    python3 -I tools/quest_store_build.py require "$@"
+
+# The stock game data: extracts $NEVR_STORE_OBB (decrypt, FAT16) into build/quest-stock-data/<obb sha256>/ with the nevr_quest_obb_extract
+# host tool (preset quest-obb-extract, nettle from tools/quest-host-deps), and refuses a tree that differs from tools/quest_stock_data.pin.
+# A second run with the same OBB hashes it, finds the tree and writes nothing.
+
+# Extract $NEVR_STORE_OBB into build/quest-stock-data/<obb sha256>/ and check it against tools/quest_stock_data.pin
+quest-stock-data: (_quest-store-require "obb") _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    (cd src/quest && cmake --preset quest-obb-extract && cmake --build --preset quest-obb-extract)
+    build/quest-obb-extract/quest_obb_extract --obb "$NEVR_STORE_OBB" --pins tools/quest_stock_data.pin --cache-root build/quest-stock-data
+
+# The store variant from the two inputs: quest-stock-data, build-android and android-repack-apk on $NEVR_STORE_APK, into build/quest-store/
+# (the signed APK, the stock `_data` tree and store-build.json, the manifest of every input and output digest). A second run with the same
+# inputs finds the outputs, reads their digests again and rebuilds nothing (tools/quest_store_build.py check). Never installs.
+
+# Build the signed store-variant APK and its stock _data into build/quest-store from NEVR_STORE_APK and NEVR_STORE_OBB
+quest-store-build: (_quest-store-require "apk" "obb" "keystore") quest-stock-data build-android quest-patcher
+    #!/usr/bin/env bash
+    set -euo pipefail
+    status=0
+    python3 -I tools/quest_store_build.py check || status=$?
+    [ "$status" -ne 0 ] || exit 0
+    [ "$status" -eq 3 ] || exit "$status"
+    just android-repack-apk "$NEVR_STORE_APK" build/android-arm64/sentinel/libovrplatformloader.so build/quest-store/repack
+    python3 -I tools/quest_store_build.py collect
+
+# Put the store build on the one attached headset: `adb install -r` of the APK, then the stock `_data` replaces the headset's
+# /sdcard/Android/media/com.readyatdawn.r15/files/_data once every pushed file has hashed to its digest on the device. Refuses without a
+# device, with more than one (`--serial S`), or when build/quest-store does not match its manifest. Uninstalls nothing.
+
+# Install build/quest-store's APK and stock _data on the one attached headset (adb)
+[positional-arguments]
+quest-store-install *args:
+    python3 -I tools/quest_store_install.py "$@"
+
+# The store OBB extractor's units on the host (src/quest/obb, docs/adr/0042): the footer, the key, the Twofish-CBC plain-IV cipher, the
+# FAT16 reader and the pins, over images built in the test, and the whole stock-data step over a synthetic OBB (extraction, cache hit,
+# every refusal). No game file, no device. Fail-close.
+test-quest-obb: _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd src/quest
+    cmake --preset quest-host-obb
+    cmake --build --preset quest-host-obb
+    ctest --preset quest-host-obb
+
+# The extractor on the real store OBB (`obb`, default $NEVR_STORE_OBB): the footer, the extraction to a scratch cache and the
+# digests of the four files, written out in src/quest/tests/obb_pinned_test.cpp from the measurements in #2081. Stops, naming the
+# variable, when no OBB is given.
+test-quest-obb-pinned obb=env("NEVR_STORE_OBB", ""): _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    obb="{{ obb }}"
+    [ -n "$obb" ] || { echo "test-quest-obb-pinned: NEVR_STORE_OBB names no store OBB" >&2; exit 1; }
+    [ -f "$obb" ] || { echo "test-quest-obb-pinned: NEVR_STORE_OBB is not a file: $obb" >&2; exit 1; }
+    (cd src/quest && cmake --preset quest-host-obb-pinned && cmake --build --preset quest-host-obb-pinned)
+    scratch="build/quest-host-obb-pinned/scratch"
+    build/quest-host-obb-pinned/obb-pinned/obb_pinned_test "$obb" tools/quest_stock_data.pin "$scratch" | tee "build/quest-host-obb-pinned/run.log"
+    rm -rf "$scratch"
+    grep -qx 'PASS TheStoreObbExtractsToThePinnedTree' build/quest-host-obb-pinned/run.log || { echo "test-quest-obb-pinned: the extraction test did not run and pass" >&2; exit 1; }
+    echo "test-quest-obb-pinned: the real store OBB extracts to the pinned tree"
+
 # The libr15 build-time patcher (docs/adr/0021): builds the host tool quest_patch_libr15 into build/quest-patcher/ with
 # the quest-patcher preset (src/quest/CMakePresets.json; the target is in src/quest/host/CMakeLists.txt; docs/adr/0041).
 # nlohmann::json comes from the tools/quest-host-deps manifest, which _vcpkg-quest-host installs for the x64-linux
@@ -1856,6 +1943,7 @@ verify *args: (_heavy-guard "verify" args)
         test-quest-invite \
         test-quest-plugins \
         test-quest-autopilot \
+        test-quest-obb \
         test-quest-q15t \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------
@@ -2165,7 +2253,7 @@ verify *args: (_heavy-guard "verify" args)
     DLLMAIN_RC=0; DLLMAIN_BODY=$(awk '/^BOOL APIENTRY DllMain\(/,/^}/' src/runtime/lifecycle/dllmain.cpp) || DLLMAIN_RC=$?
     sensor_stage1 "Plugin detach teardown boundary" "src/runtime/lifecycle/dllmain.cpp" "$DLLMAIN_RC"
     sensor_nonempty "Plugin detach teardown boundary" "DllMain() body in src/runtime/lifecycle/dllmain.cpp" "$DLLMAIN_BODY"
-    if grep -Eq 'UnloadPlugins[[:space:]]*\(|NvrPluginShutdown' <<<"$DLLMAIN_BODY"; then
+    if grep -Eq 'UnloadPlugins[[:space:]]*\(|Ne?vrPluginShutdown' <<<"$DLLMAIN_BODY"; then
         echo "verify: FAIL — DllMain calls plugin shutdown/unload under the loader lock." >&2
         exit 1
     fi
@@ -2689,13 +2777,13 @@ verify *args: (_heavy-guard "verify" args)
     # channel, and exactly the class of half-wiring this repo keeps finding
     # (N48 shipped half-implemented for five weeks the same way).
     #
-    # Comment-stripped: `// GetProcAddress(... "NvrPluginGetCapabilities")` would
+    # Comment-stripped: `// ResolvePluginExportAs<...>(hPlugin, "PluginGetCapabilities", ...)` would
     # otherwise satisfy a plain grep (N111).
     N114_RC=0; N114_LOADER=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/ext/plugin_loader.cpp) || N114_RC=$?
     sensor_stage1 "N114 plugin capabilities wired" "src/runtime/ext/plugin_loader.cpp" "$N114_RC"
     sensor_nonempty "N114 plugin capabilities wired" "non-comment lines of ext/plugin_loader.cpp" "$N114_LOADER"
-    if ! grep -q 'GetProcAddress(hPlugin, "NvrPluginGetCapabilities")' <<<"$N114_LOADER"; then
-        echo "verify: FAIL — N114 the host no longer resolves NvrPluginGetCapabilities." >&2
+    if ! grep -q 'ResolvePluginExportAs<NevrPluginGetCapabilities_fn>(hPlugin, "PluginGetCapabilities"' <<<"$N114_LOADER"; then
+        echo "verify: FAIL — N114 the host no longer resolves NevrPluginGetCapabilities." >&2
         echo "The ABI would still declare the export while every plugin read as UNDECLARED. A server cannot judge a session it cannot ask about." >&2
         exit 1
     fi
@@ -2710,23 +2798,23 @@ verify *args: (_heavy-guard "verify" args)
         echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 8; the capability (v3) + args (v4) + query-API (v5) + host-log (v6) + asset (v7) + level (v8) channels must not regress below v8." >&2
         exit 1
     fi
-    # N134 S7: the host must resolve NvrPluginInitEx — the v4 per-plugin-args init
+    # N134 S7: the host must resolve NevrPluginInitEx — the v4 per-plugin-args init
     # export. This check is in the ABI header (typedef), the loader resolves the
     # symbol at runtime, so the static check is that the typedef exists and the
     # loader's GetProcAddress references it. Falsified: comment out the typedef;
-    # rename the loader's "NvrPluginInitEx" string; revert API version to 3.
-    if ! grep -q 'typedef.*NvrPluginInitEx_fn' <<<"$N114_ABI"; then
-        echo "verify: FAIL — N114 S7 NvrPluginInitEx typedef removed from plugin_interface.h; the v4 args channel is dead without it." >&2
+    # rename the loader's "PluginInitEx" suffix; revert API version to 3.
+    if ! grep -q 'typedef.*NevrPluginInitEx_fn' <<<"$N114_ABI"; then
+        echo "verify: FAIL — N114 S7 NevrPluginInitEx typedef removed from plugin_interface.h; the v4 args channel is dead without it." >&2
         exit 1
     fi
-    if ! grep -q 'GetProcAddress(hPlugin, "NvrPluginInitEx")' <<<"$N114_LOADER"; then
-        echo "verify: FAIL — N114 S7 the loader no longer resolves NvrPluginInitEx; a v4 plugin (InitEx + args_json) would fall through to Init (no args)." >&2
+    if ! grep -q 'ResolvePluginExportAs<NevrPluginInitEx_fn>(hPlugin, "PluginInitEx"' <<<"$N114_LOADER"; then
+        echo "verify: FAIL — N114 S7 the loader no longer resolves NevrPluginInitEx; a v4 plugin (InitEx + args_json) would fall through to Init (no args)." >&2
         exit 1
     fi
-    # N134 S8: ctx_size must be set at every NvrGameContext construction site.
+    # N134 S8: ctx_size must be set at every NevrGameContext construction site.
     # The field is how a v5+ plugin discovers the query API at runtime.
-    # Falsified: remove any ctx_size = sizeof(NvrGameContext) line.
-    if ! grep -q 'ctx_size = sizeof(NvrGameContext)' <<<"$N114_LOADER"; then
+    # Falsified: remove any ctx_size = sizeof(NevrGameContext) line.
+    if ! grep -q 'ctx_size = sizeof(NevrGameContext)' <<<"$N114_LOADER"; then
         echo "verify: FAIL — N134 S8 ctx_size not set in LoadPlugins; a v5 plugin cannot discover the query API." >&2
         exit 1
     fi
@@ -3484,7 +3572,7 @@ verify *args: (_heavy-guard "verify" args)
     # present in module_interface.h. Its removal would silently break token_auth's
     # config.yaml reads and revert modules to the game-JSON path.
     if ! grep -q 'config_get' src/extension/module_interface.h; then
-        echo "verify: FAIL — N133 S7c: NvrModuleContext.config_get removed from" >&2
+        echo "verify: FAIL — N133 S7c: NevrModuleContext.config_get removed from" >&2
         echo "module_interface.h. This is the S5 deliverable that lets modules read" >&2
         echo "config.yaml. Without it token_auth reverts to game-JSON reads." >&2
         exit 1

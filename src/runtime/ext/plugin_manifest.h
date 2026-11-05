@@ -23,8 +23,8 @@ struct PluginManifestEntry {
   // Why an enabled plugin did not load: the same clause FailPluginLoad logs.
   // Never carries plugin args. Empty when the plugin loaded or is disabled.
   std::string error;
-  // Filled only when loaded: the plugin's own NvrPluginGetInfo version, its API
-  // version, and its NvrPluginCapabilities bitmask (0 = undeclared).
+  // Filled only when loaded: the plugin's own NevrPluginGetInfo version, its API
+  // version, and its NevrPluginCapabilities bitmask (0 = undeclared).
   uint32_t version_major = 0;
   uint32_t version_minor = 0;
   uint32_t version_patch = 0;

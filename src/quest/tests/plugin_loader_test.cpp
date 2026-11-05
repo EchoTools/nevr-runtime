@@ -100,6 +100,7 @@ class FakePlatform final : public Platform {
   }
   void* Symbol(void* handle, const char* name) override {
     if (!throwOnSymbol.empty() && throwOnSymbol == name) throw std::runtime_error("symbol");
+    if (std::find(hiddenSymbols.begin(), hiddenSymbols.end(), name) != hiddenSymbols.end()) return nullptr;
     const auto replaced = symbolOverride.find(name);
     if (replaced != symbolOverride.end()) return replaced->second;
     return ::dlsym(handle, name);
@@ -166,6 +167,7 @@ class FakePlatform final : public Platform {
   bool readFromDisk = true;
   std::string throwOnRead;
   std::string throwOnSymbol;
+  std::vector<std::string> hiddenSymbols;  // a symbol the fake says the object does not export
   std::map<std::string, void*> symbolOverride;  // a symbol the fake answers itself, instead of the object's
   std::map<std::string, std::vector<std::uint8_t>> memory;
   std::map<std::string, void*> handles;
@@ -592,7 +594,7 @@ TEST(LoaderGivesThePluginTheQuestContext) {
   if (seen == nullptr) return;
   CHECK_EQ(seen->init_count, 1u);
   CHECK_EQ(seen->flags, static_cast<std::uint32_t>(NEVR_HOST_IS_CLIENT | NEVR_HOST_PLATFORM_QUEST));
-  CHECK_EQ(seen->ctx_size, static_cast<std::uint32_t>(sizeof(NvrGameContext)));
+  CHECK_EQ(seen->ctx_size, static_cast<std::uint32_t>(sizeof(NevrGameContext)));
   CHECK_EQ(seen->base_addr, env.platform.base);
   CHECK(seen->net_game == nullptr);
   CHECK_EQ(seen->game_state, 0u);
@@ -1111,13 +1113,64 @@ TEST(LoaderFailsAPluginWhoseInitFailsAndContinues) {
 
 TEST(LoaderUnmapsAPluginWhenTheLoaderThrowsAfterMappingIt) {
   Env env;
-  env.platform.throwOnSymbol = "NvrPluginGetInfo";
+  env.platform.throwOnSymbol = "NevrPluginGetInfo";
   env.loader->Plan({Item("ok", "libfx_ok.so")});
   env.loader->RunPhase(PluginPhase::Normal);
   CHECK(env.platform.Record("ok")->outcome == Outcome::kFailed);
   CHECK_EQ(env.platform.Record("ok")->reason, std::string(reason::kException));
   CHECK_EQ(env.platform.closed.size(), std::size_t{1});
   CHECK_EQ(env.platform.RecordsFor("ok"), std::size_t{1});
+}
+
+// A plugin built before the prefix rename exports Nvr* names only. The loader resolves each entry point under its Nevr name
+// first and falls back to the Nvr one, and says once that the plugin loaded through the deprecated names.
+int g_deprecatedInitCalls = 0;
+NevrPluginInfo DeprecatedGetInfo() { return {"deprecated", "exports only Nvr names", 4, 5, 6}; }
+int DeprecatedInitEx(const NevrGameContext*, const char*) {
+  ++g_deprecatedInitCalls;
+  return 0;
+}
+
+TEST(LoaderLoadsAPluginThatExportsOnlyTheDeprecatedNvrNames) {
+  Env env;
+  for (const char* suffix : {"PluginGetInfo", "PluginInitEx", "PluginInit"}) {
+    env.platform.hiddenSymbols.push_back(std::string("Nevr") + suffix);
+  }
+  env.platform.symbolOverride["NvrPluginGetInfo"] = reinterpret_cast<void*>(&DeprecatedGetInfo);
+  env.platform.symbolOverride["NvrPluginInitEx"] = reinterpret_cast<void*>(&DeprecatedInitEx);
+  g_deprecatedInitCalls = 0;
+  env.loader->Plan({Item("old", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("old")->outcome == Outcome::kLoaded);
+  CHECK_EQ(g_deprecatedInitCalls, 1);
+  CHECK_EQ(env.platform.lines.size(), std::size_t{1});
+  if (env.platform.lines.empty()) return;
+  CHECK_EQ(env.platform.lines[0].first, static_cast<std::uint32_t>(NEVR_LOG_INFO));
+  CHECK(env.platform.lines[0].second.find("plugin=old file=libfx_ok.so loaded with deprecated Nvr exports (NvrPluginGetInfo, "
+                                          "NvrPluginInitEx)") != std::string::npos);
+}
+
+// The deprecated line is written once every entry point is resolved, Shutdown included: a plugin whose only Nvr export is
+// PluginShutdown is reported as well, and the line names it.
+void DeprecatedShutdown() {}
+
+TEST(LoaderReportsADeprecatedShutdownExportOnce) {
+  Env env;
+  env.platform.hiddenSymbols.push_back("NevrPluginShutdown");
+  env.platform.symbolOverride["NvrPluginShutdown"] = reinterpret_cast<void*>(&DeprecatedShutdown);
+  env.loader->Plan({Item("old", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("old")->outcome == Outcome::kLoaded);
+  // The fixture's own Nevr init writes a line of its own, so count the deprecation lines, not all of them.
+  std::vector<std::pair<std::uint32_t, std::string>> deprecated;
+  for (const auto& line : env.platform.lines) {
+    if (line.second.find("loaded with deprecated Nvr exports") != std::string::npos) deprecated.push_back(line);
+  }
+  CHECK_EQ(deprecated.size(), std::size_t{1});
+  if (deprecated.size() != 1) return;
+  CHECK_EQ(deprecated[0].first, static_cast<std::uint32_t>(NEVR_LOG_INFO));
+  CHECK(deprecated[0].second.find("plugin=old file=libfx_ok.so loaded with deprecated Nvr exports (NvrPluginShutdown)") !=
+        std::string::npos);
 }
 
 TEST(LoaderKeepsALoadedPluginMapped) {
@@ -1141,8 +1194,8 @@ int B2Handler(int a, int b) noexcept {
   return reinterpret_cast<int (*)(int, int)>(g_b2Original)(a, b) + 100;
 }
 
-// The plugin's NvrPluginInitEx: registers the handler (when the case says so), then fails the init.
-int B2InitEx(const NvrGameContext*, const char*) {
+// The plugin's NevrPluginInitEx: registers the handler (when the case says so), then fails the init.
+int B2InitEx(const NevrGameContext*, const char*) {
   if (g_b2Register) {
     g_b2Result = nevr_quest::slot_hook::RegisterSlotHook("b2", "libgotfx_consumer_now.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
                                                          g_b2BuildId.c_str(), reinterpret_cast<void*>(&B2Handler),
@@ -1167,7 +1220,7 @@ TEST(LoaderKeepsAFailedPluginMappedWhileItsSlotHookIsChained) {
 
   g_b2Register = true;
   Env env;
-  env.platform.symbolOverride["NvrPluginInitEx"] = reinterpret_cast<void*>(&B2InitEx);
+  env.platform.symbolOverride["NevrPluginInitEx"] = reinterpret_cast<void*>(&B2InitEx);
   env.loader->Plan({Item("b2", "libfx_ok.so")});
   env.loader->RunPhase(PluginPhase::Normal);
   CHECK_EQ(g_b2Result, std::int32_t{NEVR_SLOT_HOOK_OK});  // the init chained its handler before it failed
@@ -1187,7 +1240,7 @@ TEST(LoaderKeepsAFailedPluginMappedWhileItsSlotHookIsChained) {
 TEST(LoaderUnmapsAFailedPluginThatChainedNoSlotHook) {
   g_b2Register = false;
   Env env;
-  env.platform.symbolOverride["NvrPluginInitEx"] = reinterpret_cast<void*>(&B2InitEx);
+  env.platform.symbolOverride["NevrPluginInitEx"] = reinterpret_cast<void*>(&B2InitEx);
   env.loader->Plan({Item("b2", "libfx_ok.so")});
   env.loader->RunPhase(PluginPhase::Normal);
   g_b2Register = true;
@@ -1699,7 +1752,7 @@ TEST(PlatformOpensTheDirectoryQualifiedPathAndNeverTheBareName) {
   void* const handle = platform.Open("libfx_ok.so");  // only in g_dir: a bare-name dlopen would search elsewhere and fail
   CHECK(handle != nullptr);
   if (handle != nullptr) {
-    CHECK(platform.Symbol(handle, "NvrPluginGetInfo") != nullptr);
+    CHECK(platform.Symbol(handle, "NevrPluginGetInfo") != nullptr);
     ::dlclose(handle);
   }
   // A name the linker resolves from the system, absent from the library directory, must not load.

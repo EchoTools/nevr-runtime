@@ -2,7 +2,7 @@
 
 namespace {
 
-constexpr NvrPluginInfo kInfo = {
+constexpr NevrPluginInfo kInfo = {
     "test-plugin-future-api",
     "Hermetic plugin-loader API mismatch test fixture",
     1u,
@@ -12,10 +12,10 @@ constexpr NvrPluginInfo kInfo = {
 
 }  // namespace
 
-NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) {
+NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
   return kInfo;
 }
 
-NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
+NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) {
   return NEVR_PLUGIN_API_VERSION + 1u;
 }

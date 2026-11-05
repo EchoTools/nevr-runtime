@@ -6,7 +6,7 @@
  * log_filter.dll plugin by name (N89).
  *
  * Unlike a plugin:
- *   - No NvrPlugin* exports (built-in, not dynamically loaded)
+ *   - No NevrPlugin* exports (built-in, not dynamically loaded)
  *   - No MH_Initialize/MH_Uninitialize (gamepatches core owns MinHook lifecycle)
  *   - No MH_DisableHook(MH_ALL_HOOKS) (would kill all hooks process-wide)
  *   - Config discovery searches relative to game directory, not plugins/ subdir
