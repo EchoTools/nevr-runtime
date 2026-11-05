@@ -3018,7 +3018,9 @@ verify *args: (_heavy-guard "verify" args)
     # Known bugs warn (and stay visible); anything NEW is a hard failure.
     # 1500 s, not 600: the full suite (1737 tests) took 457 s on the developer machine and about 574 s
     # for 1145 tests on the CI runner (#1004, release build 40454435804, killed at 600 s with exit 124).
-    timeout -k 10 1500 python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    # The suite's fixed environment (tools/run_tool_tests.py HERMETIC_SET and HERMETIC_UNSET; a test holds the two equal):
+    # no user git configuration or signing key, a fixed identity, no display.
+    timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
