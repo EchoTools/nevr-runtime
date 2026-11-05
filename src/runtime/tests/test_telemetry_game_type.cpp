@@ -66,7 +66,7 @@ TEST(TelemetryGameType, MalformedSettingsFallBackToTheLobbyType) {
 }
 
 // #1493: the service sends gametype as a number. A combat or social session in a public lobby used to read as
-// echo_arena (the lobby fallback), which applied the public Arena round default and clock to it.
+// echo_arena (the lobby fallback).
 TEST(TelemetryGameType, ASignedNumberNamesTheCombatModeInAPublicLobby) {
   auto game = nevr_telemetry_header::GameTypeForSession(SettingsWithMode("echo_combat", false), false);
   EXPECT_EQ(game.gameType, "echo_combat");

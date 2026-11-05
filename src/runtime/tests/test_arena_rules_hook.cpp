@@ -1,6 +1,6 @@
-// #982: the CJson_GetFloat detour (lifecycle/arena_rules_hook.cpp) answers round_time with 480 s for a public Arena
-// session on a server with no arena.round_time in config.yaml, however the game's reads and the session's messages are
-// ordered. The tests call the detour itself; the game's CJson_GetFloat is a stub that answers the game's own 300 s.
+// The CJson_GetFloat detour (lifecycle/arena_rules_hook.cpp) answers round_time with the game's own value for every
+// session, public Arena on a server included; only arena.round_time in config.yaml overrides it. The tests call the
+// detour itself; the game's CJson_GetFloat is a stub that answers the game's own 300 s.
 
 #include <gtest/gtest.h>
 
@@ -18,7 +18,7 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/server/game_type_table.h"
 
-BOOL g_isServer = TRUE;  // the runtime defines it in cli.cpp; the detour reads it
+BOOL g_isServer = TRUE;  // the runtime defines it in cli.cpp
 
 namespace {
 
@@ -54,38 +54,25 @@ class ArenaRulesHook : public ::testing::Test {
   }
 };
 
-TEST_F(ArenaRulesHook, PublicArenaOnAServerReadsEightMinutes) {
+TEST_F(ArenaRulesHook, PublicArenaOnAServerReadsTheGameValue) {
   nevr_arena_round_time::SetSessionGameType("echo_arena");
-  EXPECT_FLOAT_EQ(ReadRoundTime(), 480.0f);
-  EXPECT_FLOAT_EQ(ReadRoundTime("rules|arena|round_time"), 480.0f);
-  EXPECT_EQ(g_pathsRead.size(), 2u) << "the game's own read still runs before the answer";
-}
-
-TEST_F(ArenaRulesHook, AReadBeforeTheSessionTypeKeepsTheGameValueAndTheNextReadIsEightMinutes) {
-  EXPECT_FLOAT_EQ(ReadRoundTime(), kGameValue) << "no session is known: the game's value";
   EXPECT_FLOAT_EQ(ReadRoundTime(), kGameValue);
-
-  nevr_arena_round_time::SetSessionGameType("echo_arena");
-
-  EXPECT_FLOAT_EQ(ReadRoundTime(), 480.0f) << "the session's reads after its type arrives";
+  EXPECT_FLOAT_EQ(ReadRoundTime("rules|arena|round_time"), kGameValue);
+  EXPECT_EQ(g_pathsRead.size(), 2u) << "the game's own read runs";
 }
 
-TEST_F(ArenaRulesHook, ReadsThatFoundNoTypeAreCountedUntilTheSessionStoresIt) {
-  ReadRoundTime();
-  ReadRoundTime();
-  ReadRoundTime("round_time_private");  // never reaches the decision: not counted
-  EXPECT_EQ(nevr_arena_round_time::TakeReadsWithoutType(), 2u);
-  EXPECT_EQ(nevr_arena_round_time::TakeReadsWithoutType(), 0u) << "taking the count resets it";
-
-  nevr_arena_round_time::SetSessionGameType("echo_arena");
-  ReadRoundTime();
-  EXPECT_EQ(nevr_arena_round_time::TakeReadsWithoutType(), 0u) << "a read that found a type is not counted";
+TEST_F(ArenaRulesHook, EverySessionTypeAndNoSessionReadTheGameValue) {
+  EXPECT_FLOAT_EQ(ReadRoundTime(), kGameValue) << "no session is known";
+  for (const char* type :
+       {"echo_arena", "echo_arena_private", "echo_combat", "echo_combat_private", "social_2.0"}) {
+    nevr_arena_round_time::SetSessionGameType(type);
+    EXPECT_FLOAT_EQ(ReadRoundTime(), kGameValue) << type;
+  }
 }
 
-TEST_F(ArenaRulesHook, TheSessionStartFramesTypeIsInPlaceForTheGamesRead) {
+TEST_F(ArenaRulesHook, APublicArenaSessionFromTheSessionStartFrameReadsTheGameValue) {
   // The previous session was a combat match; this session arrives as the legacy frame alone (no protobuf create).
   nevr_arena_round_time::SetSessionGameType("echo_combat");
-  EXPECT_FLOAT_EQ(ReadRoundTime(), kGameValue);
 
   const auto frame = SessionStartFrame(R"({"gametype":"echo_arena","level":"mpl_arena_a"})");
   const auto type = nevr_game_type_table::GameTypeOfSessionStart(frame.data(), frame.size());
@@ -93,28 +80,7 @@ TEST_F(ArenaRulesHook, TheSessionStartFramesTypeIsInPlaceForTheGamesRead) {
   const auto previous = nevr_arena_round_time::SetSessionGameType(*type);
   EXPECT_EQ(previous, std::optional<std::string>("echo_combat"));
 
-  EXPECT_FLOAT_EQ(ReadRoundTime(), 480.0f);
-}
-
-TEST_F(ArenaRulesHook, ThePreviousPublicArenaSessionDoesNotLeakIntoACombatOrPrivateSession) {
-  nevr_arena_round_time::SetSessionGameType("echo_arena");
-  EXPECT_FLOAT_EQ(ReadRoundTime(), 480.0f);
-
-  for (const char* settings : {R"({"gametype":"echo_combat"})", R"({"gametype":"echo_arena_private"})",
-                               R"({"gametype":"social_2.0"})"}) {
-    const auto frame = SessionStartFrame(settings);
-    const auto type = nevr_game_type_table::GameTypeOfSessionStart(frame.data(), frame.size());
-    ASSERT_TRUE(type.has_value()) << settings;
-    nevr_arena_round_time::SetSessionGameType(*type);
-    EXPECT_FLOAT_EQ(ReadRoundTime(), kGameValue) << settings;
-  }
-}
-
-TEST_F(ArenaRulesHook, PrivateCombatAndSocialSessionsKeepTheGameValue) {
-  for (const char* type : {"echo_arena_private", "echo_combat", "echo_combat_private", "social_2.0"}) {
-    nevr_arena_round_time::SetSessionGameType(type);
-    EXPECT_FLOAT_EQ(ReadRoundTime(), kGameValue) << type;
-  }
+  EXPECT_FLOAT_EQ(ReadRoundTime(), kGameValue);
 }
 
 TEST_F(ArenaRulesHook, ThePrivateAndTimerPathsKeepTheGameValueInAPublicArenaSession) {
@@ -130,7 +96,7 @@ TEST_F(ArenaRulesHook, AClientKeepsTheGameValue) {
   EXPECT_FLOAT_EQ(ReadRoundTime(), kGameValue);
 }
 
-TEST_F(ArenaRulesHook, AnArenaRoundTimeInConfigWinsOverTheDefault) {
+TEST_F(ArenaRulesHook, AnArenaRoundTimeInConfigWinsOverTheGameValue) {
   g_arenaRoundTime = 240.0f;
   nevr_arena_round_time::SetSessionGameType("echo_arena");
   EXPECT_FLOAT_EQ(ReadRoundTime(), 240.0f);
