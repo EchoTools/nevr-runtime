@@ -6,8 +6,9 @@
 ///
 /// Three bugs in this ledger were the same defect: a fix wired to a path that
 /// never executes.
-///   N86  TickPlugins/TickModules wired into CPrecisionSleep::Wait, which is
-///        never called in server mode. Plugins got no OnFrame for a day.
+///   N86  TickPlugins/TickModules wired into CPrecisionSleep::Wait, which was
+///        never called in server mode then (before #511 paced the server's
+///        clock). Plugins got no OnFrame for a day.
 ///   N83  a guard installed on a function whose identity was invented.
 ///   N67  a fix landed in a translation unit CMake does not build.
 /// Every one passed its gate, because every gate checked SOURCE SHAPE — "the

@@ -2850,9 +2850,10 @@ verify *args: (_heavy-guard "verify" args)
     # --- N110: exactly ONE per-frame dispatcher ---------------------------------
     # There were two. The second (inside PrecisionSleepWaitHook) hard-coded
     # gctx.flags = NEVR_HOST_IS_SERVER with the comment "always server at this
-    # point", while hook_liveness.cpp records that same hook as "CLIENT ONLY —
-    # never runs on a server (N86)". The one path that runs only on a client told
-    # every plugin it was on a server, for as long as both copies existed.
+    # point", while hook_liveness.cpp then recorded that same hook as "CLIENT ONLY —
+    # never runs on a server (N86)" (true until #511 paced the server's clock). The
+    # one path that ran only on a client told every plugin it was on a server, for as
+    # long as both copies existed.
     #
     # Two copies is the shape to guard against: a correct dispatcher beside a second one that
     # asserts the opposite flag. So the invariant is about COUNT, not about the flag value.
@@ -3123,7 +3124,7 @@ verify *args: (_heavy-guard "verify" args)
     sensor_nonempty "N86 per-frame dispatch" "DispatchPerFrameWork() body in src/runtime/frame/tick.cpp" "$N86_BODY"
     if ! grep -q 'TickPlugins' <<<"$N86_BODY"; then
         echo "verify: FAIL — N86 TickPlugins missing from DispatchPerFrameWork; the server-mode" >&2
-        echo "per-frame tick is dead again (PrecisionSleep::Wait never runs on a server)." >&2
+        echo "per-frame tick is dead again (PrecisionSleep::Wait does not run on every server frame)." >&2
         exit 1
     fi
     if ! grep -q 'TickModules' <<<"$N86_BODY"; then

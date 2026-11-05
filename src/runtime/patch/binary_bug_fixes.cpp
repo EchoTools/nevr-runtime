@@ -340,11 +340,10 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
 
     // N68/N86/N110: ONE dispatcher, shared with GetTimeMicrosecondsHook.
     //
-    // This path runs ONLY on a client (hook_liveness.cpp:18 records this hook as
-    // "CLIENT ONLY — never runs on a server"), so a hard-coded
-    // `gctx.flags = NEVR_HOST_IS_SERVER` would tell every plugin and module it
-    // was running on a server. The shared dispatcher derives the flags and gives
-    // the client path the rate limit and re-entrancy guard the server path has.
+    // This path runs on a client and, since #511 paced the server's clock, on every
+    // server frame that ends inside its step, so a hard-coded host flag would be wrong
+    // for one of them: the shared dispatcher derives the flags from g_isServer and
+    // gives this path the rate limit and re-entrancy guard the GetTimeMicroseconds path has.
     nevr_frame::DispatchPerFrameWork(QpcMicroseconds());
 
     if (microseconds <= 0) {
