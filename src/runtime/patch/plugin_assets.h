@@ -23,6 +23,15 @@ size_t DeregisterPluginAssets(const void* start, const void* end);
 // Remove the hooks and drop the registry. Idempotent.
 void ShutdownPluginAssets();
 
+// #2161: installs the resolver hook (and the submit hook beside it) when they are not yet installed. True when the
+// resolver hook (FillResourceFileRequest, 0x140fa1fe0) is in place, which the resource sets need.
+bool EnsureResolverHook();
+
+// #2161: the game's live manifest (*(resource manager + 8)), read with the game's own CPackageManifest::FindEntry
+// (0x140f9eee0). StockRecordCount is 0 before the manifest exists; StockHas is false then.
+uint64_t StockRecordCount();
+bool StockHas(uint64_t type, uint64_t name);
+
 #ifdef NEVR_TEST_HOOKS
 // Test-only: installs one hook the way the engine hooks are installed, through PatchDetour, so HookGuard records it
 // under `name`. On entry *original holds the game's function; on success it holds the trampoline.

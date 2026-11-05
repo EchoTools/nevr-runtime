@@ -187,6 +187,36 @@ struct NevrQuestHostApi {
     int32_t (*unregister_slot_hook)(const char* plugin_id, uint32_t handle);
 };
 
+/* --- Resource sets (API v9, #2161; docs/reference/plugin-resources.md) --- */
+
+/* What register_resources returns. 0 is OK; every other value is a refusal that registers nothing, and the host logs
+ * one Warning that names it. */
+enum NevrResourcesStatus : int32_t {
+    NEVR_RESOURCES_OK           = 0,
+    NEVR_RESOURCES_BAD_ARGUMENT = 1, /* a null pointer, a struct_size smaller than this version's, a nonzero flags, or a
+                                      *   plugin_id that is not the plugin whose init is running on this thread */
+    NEVR_RESOURCES_NOT_IN_FILE  = 2, /* the bytes are not file bytes of the calling plugin's own image: outside it, across
+                                      *   a section boundary, past a section's raw data, or touched by a base relocation;
+                                      *   or the file does not hold the same bytes there */
+    NEVR_RESOURCES_BAD_FORMAT   = 3, /* not a resource set (nevr/resource_set.h); the Warning names the rule */
+    NEVR_RESOURCES_COLLIDES     = 4, /* a record names a key another resource set of this process already holds; the
+                                      *   Warning names the key and the plugin that holds it */
+    NEVR_RESOURCES_TOO_LATE     = 5, /* the host has already mounted the resource sets of this run */
+};
+
+/* A resource set the plugin carries in its own file. `data` and `size` are the set's bytes as the plugin's image maps
+ * them: they must lie in one section's raw data with no base relocation in them (an .incbin into a read-only section,
+ * nevr/pc/plugin_resources.h). The host reads the set's tables during the call and never keeps a pointer into the
+ * image; the game's reader reads the chunks from the plugin's file, which the host holds open, read-only and
+ * deny-write, for the life of the process. `label` names the set in logs and in the login report; it is copied. */
+struct NevrResourcesDesc {
+    uint32_t    struct_size;  /* sizeof(NevrResourcesDesc) */
+    uint32_t    flags;        /* 0; no flag is defined */
+    const void* data;
+    uint64_t    size;
+    const char* label;
+};
+
 /* Game context passed to the plugin by the host.
  *
  * The host fills every field; a pre-v5 plugin compiled without the trailing
@@ -227,6 +257,16 @@ struct NevrGameContext {
                                  *   checks ctx_size covers it first, and NEVR_HOST_PLATFORM_QUEST is set. */
     const NevrQuestHostApi* quest; /* Quest only (#1202): the host services above, process-lifetime. nullptr on PC
                                     *   and on a Quest host that offers none. Check ctx_size covers it first. */
+
+    /* --- v9 additions (#2161) --- */
+    /* Registers a resource set this plugin carries in its own file (NevrResourcesDesc), so the game's resolver finds its
+     * records: whole levels, each with its archive and every resource the archive lists. Call it from init
+     * (NevrPluginInit / NevrPluginInitEx), on the thread running that init, with ctx->plugin_id. The set is held
+     * until the init returns: an init that fails drops it. The host mounts every set once, after its plugin pass,
+     * and refuses at the mount a set whose records include a key the game already has, or a level whose archive or
+     * whose listed resources resolve nowhere; the Warning names the key. Returns a NevrResourcesStatus. A host
+     * that offers no resource sets leaves this null: check ctx_size covers it, and the pointer. */
+    int32_t (*register_resources)(const char* plugin_id, const NevrResourcesDesc* desc);
 };
 
 /* Host capability flags */
@@ -317,6 +357,11 @@ typedef void (*NevrPluginShutdown_fn)(void);
  * cross-DLL export signature changes in a backward-incompatible way.
  * Adding new optional exports or new NevrHostFlags values does NOT require a bump.
  *
+ * v9 (#2161): adds register_resources to the TAIL of NevrGameContext, after the Quest fields, so a plugin can carry
+ * whole levels in its own file (NevrResourcesDesc, nevr/resource_set.h). A plugin checks ctx->ctx_size covers
+ * ctx->register_resources, and the pointer, before calling it; a pre-v9 plugin never reads it. The host fills it in
+ * the context it passes to init only; elsewhere it is null.
+ *
  * v8 (#1094): adds level_symbol + level_name to the TAIL of NevrGameContext, so a plugin can switch itself on
  * for the levels its config names. A plugin checks ctx->ctx_size covers ctx->level_name before reading them,
  * exactly as for v5 and v6; a pre-v8 plugin never reads them. The host fills them in every context it passes
@@ -360,7 +405,7 @@ typedef void (*NevrPluginShutdown_fn)(void);
  * the plugin is v1 (pre-versioning). Fully backward-compatible — existing
  * plugins don't need recompilation.
  */
-#define NEVR_PLUGIN_API_VERSION 8
+#define NEVR_PLUGIN_API_VERSION 9
 
 /* Optional: return the API version the plugin was compiled against */
 typedef uint32_t (*NevrPluginGetApiVersion_fn)(void);

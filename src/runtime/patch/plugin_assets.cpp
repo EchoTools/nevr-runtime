@@ -33,6 +33,7 @@
 #include "runtime/hook/patching.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/patch/game_buffer.h"
+#include "runtime/patch/resource_sets.h"
 
 namespace nevr::assets {
 
@@ -45,6 +46,10 @@ constexpr uintptr_t kRvaRequest = 0xFA1FE0;      // FUN_140fa1fe0: table lookup 
 constexpr uintptr_t kRvaCompletion = 0xFA16D0;   // CResourceManager::AsyncResourceIOCallback
 constexpr uintptr_t kRvaIsLoaded = 0xFA3410;     // FUN_140fa3410({type, name}) -> loaded?
 constexpr uintptr_t kRvaManager = 0x20A2AB8;     // DAT_1420a2ab8: the resource manager
+constexpr uintptr_t kRvaFindEntry = 0xF9EEE0;    // CPackageManifest::FindEntry(manifest, {type, name}, &index) -> 1 on a hit
+// The resource manager's live manifest: *(manager + 8). Its record count is at +0x30 (docs/engine/asset-system.md).
+constexpr size_t kManagerManifest = 0x8;
+constexpr size_t kManifestCount = 0x30;
 constexpr uintptr_t kRvaSymbolTable = 0x209FE18; // DAT_14209fe18: symbol table used by 0x140fa3410
 constexpr uintptr_t kRvaScheduler = 0x209FE20;   // DAT_14209fe20: task scheduler (0 = initialize inline)
 constexpr uintptr_t kRvaSecondaryOn = 0x20A8A68; // DAT_1420a8a68: 0 turns the second buffer off
@@ -77,6 +82,7 @@ using SubmitFn = uint64_t(__cdecl*)(void* manager, void* resource, void* queue);
 using RequestFn = uint64_t(__cdecl*)(void*, uint64_t, uint64_t, uint64_t, uint64_t, void*, uint64_t, void*);
 using CompletionFn = void(__cdecl*)(void* completion);
 using IsLoadedFn = uint64_t(__cdecl*)(uint64_t* key);
+using FindEntryFn = int(__cdecl*)(const void* manifest, const uint64_t* key, uint64_t* index);
 using BufferKeyFn = const uint64_t*(__cdecl*)(void* resource, void* scratch, uint32_t index);
 
 // ── State ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -222,6 +228,12 @@ uint64_t __cdecl Hook_Submit(void* manager, void* resource, void* queue) {
 // fail with its generic "Cannot find resource" assert.
 uint64_t __cdecl Hook_Request(void* manager, uint64_t typeKey, uint64_t nameKey, uint64_t a4, uint64_t a5,
                               void* resource, uint64_t index, void* request) {
+    // #2161: a key a plugin's resource set holds, and the game's manifests do not, is filled from the resource sets'
+    // shadow manifest: the game's own function fills the request from it, and the game's own reader reads the
+    // plugin's file. Every other key goes to the game's manifest unchanged.
+    if (const void* shadowManager = nevr_resource_sets::ManagerFor(typeKey, nameKey)) {
+        return g_origRequest(const_cast<void*>(shadowManager), typeKey, nameKey, a4, a5, resource, index, request);
+    }
     if (!Global().Empty()) {
         Asset asset;
         if (Global().Find(typeKey, nameKey, &asset) && FirstWarningFor(typeKey, nameKey ^ 1)) {
@@ -286,6 +298,38 @@ void EnsureHooksInstalled() {
 }
 
 }  // namespace
+
+bool EnsureResolverHook() {
+    EnsureHooksInstalled();
+    return g_requestTarget != nullptr;
+}
+
+// The game's live manifest, or null before the resource manager or its manifest exists.
+static const void* LiveManifest() {
+    if (!EchoVR::g_GameBaseAddress) return nullptr;
+    const uintptr_t managerAt = ReadAt<uintptr_t>(kRvaManager);
+    if (managerAt == 0) return nullptr;
+    const void* manifest = nullptr;
+    std::memcpy(&manifest, reinterpret_cast<const void*>(managerAt + kManagerManifest), sizeof(manifest));
+    return manifest;
+}
+
+uint64_t StockRecordCount() {
+    const void* manifest = LiveManifest();
+    if (manifest == nullptr) return 0;
+    uint64_t count = 0;
+    std::memcpy(&count, static_cast<const uint8_t*>(manifest) + kManifestCount, sizeof(count));
+    return count;
+}
+
+bool StockHas(uint64_t type, uint64_t name) {
+    const void* manifest = LiveManifest();
+    if (manifest == nullptr) return false;
+    const uint64_t key[2] = {type, name};
+    uint64_t index = 0;
+    const auto findEntry = reinterpret_cast<FindEntryFn>(Base() + kRvaFindEntry);
+    return findEntry(manifest, key, &index) != 0;
+}
 
 #ifdef NEVR_TEST_HOOKS
 bool InstallHookForTest(void* target, void* detour, void** original, const char* name) {

@@ -47,6 +47,9 @@ std::string BuildLoginProfileJson(const LoginProfileInputs& inputs) {
   // The levels and resources those plugins carry (#432), so the game service knows what this game client can
   // load. Absent when there are none: a login with no asset-carrying plugin is unchanged on the wire.
   if (inputs.assets.is_array() && !inputs.assets.empty()) profile["nevr_assets"] = inputs.assets;
+  // The resource sets those plugins carry (#2161): their levels, so the game service can send a client only to a
+  // level it carries. Absent when there are none, so a login with no resource set is unchanged on the wire.
+  if (inputs.resources.is_array() && !inputs.resources.empty()) profile["nevr_resources"] = inputs.resources;
 
   auto& system = profile["system_info"];
   system["headset_type"] = inputs.headset_type;

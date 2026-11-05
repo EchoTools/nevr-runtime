@@ -33,6 +33,7 @@
 #include "runtime/hook/dll_load_hook.h"         // #741: loads a plugin makes after init
 #include "runtime/ext/plugin_trust.h"           // #741: what the runtime pins, and whether this build enforces it
 #include "runtime/patch/asset_registry.h"      // #432: assets a plugin carries leave with its image
+#include "runtime/patch/resource_sets.h"       // #2161: the resource sets a plugin registers from its init
 
 struct LoadedPlugin {
   HMODULE                     hModule;
@@ -1299,11 +1300,15 @@ class PluginLoadRun {
     const char* pluginId = InternPluginId(s.item.name);
     const NevrGameContext pluginCtx = ContextFor(ctx, pluginId);
     int result = 0;
+    // #2161: register_resources is open for this plugin, on this thread, while its init runs; an init that fails
+    // drops what it registered.
+    nevr_resource_sets::BeginPluginInit(pluginId, s.hModule);
     switch (s.initKind) {
       case PluginInitKind::Ex:     result = s.initExFn(&pluginCtx, s.item.args_json.c_str()); break;
       case PluginInitKind::Legacy: result = s.initFn(&pluginCtx); break;
       case PluginInitKind::None:   break;  // no init export — plugin still loads
     }
+    nevr_resource_sets::EndPluginInit(pluginId, result == 0);
     if (result != 0) {
       // An unsuccessful init may already have installed detours or acquired
       // resources. Give the plugin its shutdown callback before unmapping
@@ -1465,6 +1470,7 @@ void LoadPlugins(PluginPhase phase) {
   ctx.ctx_size = sizeof(NevrGameContext);
   ctx.get_plugin_count = GetLoadedPluginCount;
   ctx.get_plugin_info = GetLoadedPluginInfo;
+  ctx.register_resources = nevr_resource_sets::HostRegisterResources;  // v9 (#2161): init contexts only
 
   InstallPluginLoadFilter(pluginDir);  // loads a plugin makes after its init face the same check
 
