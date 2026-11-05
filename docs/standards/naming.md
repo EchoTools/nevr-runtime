@@ -8,7 +8,7 @@ when, they appear in all capitals, as shown here.
 **Required reading** for anyone adding a name to this repository. It covers how the project name is
 spelled inside a name, and which spellings already in the tree are not models. It does not set case
 rules for locals, members, enumerators or macros other than the project prefix: the tree has no single
-convention for them to codify.
+convention for them to codify. It also fixes the opening lines of an ADR, its read contract.
 
 The identifier rules below are for **new** names. The tree contains older names that break them; the section
 "Names in the tree that are not models" lists the kinds, so nobody copies one.
@@ -58,6 +58,37 @@ Markdown. A file name is kebab-case, except the root scaffolding names that tool
 exact name (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE`, and
 the like) and the date prefixes and ADR numbers already in the tree. A heading is a descriptive phrase in
 sentence case, as in `docs/standards/` and `docs/adr/` (an ADR's H1 is `ADR NNNN: <phrase>`).
+
+## The read contract at the top of an ADR
+
+Every file in `docs/adr/` opens with the same six lines, then a blank line, then its `# ADR NNNN: <phrase>` heading:
+
+```
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/<this file's own name>
+audience: all
+---
+```
+
+The block says how the document is to be read before anyone acts on it. An ADR states a decision in one section, the
+alternatives in another and the consequences in a third, and cites other ADRs by file and line, so a reader who takes one
+section can act on a decision whose limits are in a part they did not read. The block makes the whole read a stated rule
+of the document. `atwd` ("all the way down") is the maintainers' name for this convention, in which each document of a
+body of rules declares its own extent and audience. The heading line is a YAML comment that marks the block, and the
+three keys are:
+
+| Key | Meaning | Value in an ADR |
+| --- | --- | --- |
+| `read` | How much of the document is to be read before acting on it. `whole` is every line, as one read: no `head`, `tail`, `sed -n`, `grep` or offset and limit. The convention also has `head` (the first lines are required, the rest is read on demand) and `query` (the document is read only through a query tool). | `whole` |
+| `read_via` | The command that reads the document the way `read` requires, run from the repository root. | `cat docs/adr/<own file name>` |
+| `audience` | Whom the contract binds. `all` is every reader of the repository, a person or an agent, not one role or project. The convention also has narrower values (roles, seats, a project's seats). | `all` |
+
+A new ADR carries the block, with `read_via` naming its own file. Nothing in this repository enforces it: no test or
+check reads the block, and the hook that warns on a partial read of a file that declares one runs on one maintainer's
+machine, outside the repository. For a reader without that hook, this section is the whole rule: read the ADR to its
+last line, with the `read_via` command, before relying on any part of it.
 
 ## The plugin and module C ABI prefix: `Nevr`, with `Nvr` deprecated
 
