@@ -771,9 +771,15 @@ quest-install *args: build-installer
 # The end record names the failing tests. Exit code is pytest's, except 2 for a record that cannot be kept
 # and 128 + the signal for an interrupt, 130 for CTRL+C (tools/run_tool_tests.py). Args replace the
 # default `-q tools/tests` (#913).
+# A failing Python run stops the recipe; then the Go tests of tools/ (ADR 0044) run, their `go test -json` stream kept beside the run's log as <stamp>-go.jsonl (tools/cmd/test-go-tools).
 [positional-arguments]
 test-tools *ARGS:
     python3 tools/run_tool_tests.py "$@"
+    go -C tools run ./cmd/test-go-tools
+
+# Build the Go tools of tools/go.mod (ADR 0044) into build/go-tools/; a recipe that runs one depends on this.
+go-tools:
+    go -C tools build -trimpath -o ../build/go-tools/ ./cmd/...
 
 # The core installer (installer/, ADR 0023): library, CLI and C ABI tests. The build is locked to the committed
 # Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
@@ -898,7 +904,7 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     cmake --build --preset {{ preset }} --target test_runtime_abi
     cmake --build --preset {{ preset }} --target test_runtime_export_guard
     cmake --build --preset {{ preset }} --target test_bootstrap_attach
-    cmake --build --preset {{ preset }} --target test_host_json --target test_host_stop_line --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_crash_send --target test_host_crash_report --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_exports --target test_host_crash --target test_rendezvous --target test_host_runtime_verify --target test_host_update_swap
+    cmake --build --preset {{ preset }} --target test_host_json --target test_host_stop_line --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_crash_send --target test_host_crash_report --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_exports --target test_host_crash --target test_rendezvous --target test_host_runtime_verify
     # The host units carry no test seam when NEVR_HOST_TESTING is not defined: each is compiled again
     # without it with the build's own flags and its object is read with nm (docs/adr/0008). Fail-close.
     python3 tools/verify_host_seams.py "build/{{ preset }}"
@@ -980,8 +986,8 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     run_test "$bin"
     # The stable BugSplat64.dll host (src/runtime/host/): the fixed-buffer JSON writer, the
     # diagnostic recorder, the minidump capture, the runtime load state machine, the rendezvous's prologue
-    # validation, the export thunks, the self-update swap (ADR 0024) and the minidump parser the crash harness trusts.
-    for name in test_host_json test_host_stop_line test_bootstrap_diagnostics test_host_crash_capture test_host_crash_send test_host_crash_report test_host_runtime_load test_host_minidump test_host_rendezvous test_host_runtime_verify test_host_update_swap test_host_exports; do
+    # validation, the export thunks and the minidump parser the crash harness trusts.
+    for name in test_host_json test_host_stop_line test_bootstrap_diagnostics test_host_crash_capture test_host_crash_send test_host_crash_report test_host_runtime_load test_host_minidump test_host_rendezvous test_host_runtime_verify test_host_exports; do
         bin="build/{{ preset }}/bin/$name.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -3021,6 +3027,7 @@ verify *args: (_heavy-guard "verify" args)
     # The suite's fixed environment (tools/run_tool_tests.py HERMETIC_SET and HERMETIC_UNSET; a test holds the two equal):
     # no user git configuration or signing key, a fixed identity, no display.
     timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    go -C tools run ./cmd/test-go-tools
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.

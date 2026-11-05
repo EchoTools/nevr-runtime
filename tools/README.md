@@ -44,3 +44,15 @@ source-invariant tests over the C++ tree and the release contract
 | `quest_stock_data.pin` | The store OBB that `just quest-stock-data` accepts (SHA-256 and size) and the exact tree it must hold, one `file <sha256> <bytes> <path>` line each (ADR 0042). The extractor (`nevr_quest_obb_extract`) and `quest_store_build.py` each read it. |
 | `hook_identity_manifest.json` | The pinned prologues `verify_hook_invariants.py` checks. |
 | `echomod/` | Standalone Echo VR modding scripts; see `echomod/README.md`. |
+
+## Go tools
+
+`go.mod` here is the one Go module of the tools (ADR 0044: tools and their tests are Go; Python only with a recorded reason).
+`just go-tools` builds `cmd/*` into `build/go-tools/`.
+
+| Path | What it is |
+| --- | --- |
+| `cmd/test-go-tools/` | Runs `go test -json` over this module, keeps the stream as `<stamp>-go.jsonl` beside the Python runner's log and names the failing tests; `just test-tools` and `just verify` run it. |
+| `internal/testkit/` | The kit every Go test of a tool uses: `Env` (a hermetic environment), `Main` and `Fake` (fake commands that are the test binary), `WaitFor` and `WaitLines` (waits with a deadline, no sleeping), `Fifo`. |
+| `internal/runlog/` | The durable log of a Go tool: one JSON line per event in `$XDG_STATE_HOME/nevr-runtime/<tool>.jsonl`; a log that cannot be written is a line on standard error and a non-zero exit. |
+| `internal/policy/` | The checks of ADR 0044: `python_to_port.txt` (the Python files still to port; it only shrinks), the table of Python that stays, and the scan for `time.Sleep` used to wait. |
