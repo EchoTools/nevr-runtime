@@ -38,7 +38,7 @@ host that looks only for new ones refuses it. A frozen set kept two prefixes in 
   published ABI for good, with the lifecycle types (the surface plugin authors touch first) spelled the odd way, and every
   new interface that joins one of the old structs (a new `Nevr*` function-pointer type in an `Nvr*` context) mixes them again.
 - **Hard rename, no alias and no fallback.** One prefix and no compatibility code. Every plugin already built, including
-  any a third party published and no one here can rebuild, fails to load until its author ships a new build.
+  any a third party published and no one here can rebuild, fails to load and loads again only after its author ships a new build.
 
 ## Reason
 
