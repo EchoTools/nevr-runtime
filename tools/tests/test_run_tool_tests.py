@@ -12,6 +12,7 @@ import json
 import os
 import resource
 import select
+import shlex
 import shutil
 import signal
 import stat
@@ -102,6 +103,38 @@ def pytest_unconfigure(config):
     if path:
         with open(path, "w") as f:
             f.write("<not xml")
+'''
+
+# Writes the environment pytest was started with to $RUN_TOOL_TESTS_ENVDUMP (whole, by rename).
+ENV_SUITE = '''
+import json, os, pathlib
+
+def test_dumps_its_environment():
+    dump = pathlib.Path(os.environ["RUN_TOOL_TESTS_ENVDUMP"])
+    tmp = dump.with_suffix(".tmp")
+    tmp.write_text(json.dumps(dict(os.environ)))
+    tmp.rename(dump)
+'''
+
+# Makes a repository, a signed-by-default commit and an annotated tag the way a tool test does, with no identity of its own.
+GIT_SUITE = '''
+import pathlib, subprocess, tempfile
+
+def run(repo, *args):
+    done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    return done.stdout.strip()
+
+def test_commits_and_tags_with_the_caller_wanting_signatures():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = pathlib.Path(tmp)
+        run(repo, "init", "-q")
+        (repo / "a.txt").write_text("one\\n")
+        run(repo, "add", "a.txt")
+        run(repo, "commit", "-q", "-m", "one")
+        run(repo, "tag", "-a", "v1", "-m", "one")
+        assert run(repo, "log", "-1", "--format=%an <%ae> %G?") == "nevr-test <test@example.invalid> N"
+        assert run(repo, "symbolic-ref", "--short", "HEAD") == "main"
 '''
 
 
@@ -1306,6 +1339,84 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
         self.assertEqual([p.name for p in self.logs.iterdir() if not p.name.startswith(".")], [])
 
+    def env_dump_run(self, **caller: str):
+        """Run the script over ENV_SUITE with `caller` added to the caller's environment; (the child's environment, the start record)."""
+        suite = self.write_suite("envdump", ENV_SUITE)
+        dump = self.root / "env.json"
+        env = self.env(self.logs, RUN_TOOL_TESTS_ENVDUMP=str(dump), **caller)
+        result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", str(suite)],
+                                capture_output=True, text=True, cwd=REPO, env=env, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return json.loads(dump.read_text()), self.records("start")[0]
+
+    EXPECTED_GIT_ENV = {
+        "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_COUNT": "5",
+        "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "nevr-test",
+        "GIT_CONFIG_KEY_1": "user.email", "GIT_CONFIG_VALUE_1": "test@example.invalid",
+        "GIT_CONFIG_KEY_2": "commit.gpgsign", "GIT_CONFIG_VALUE_2": "false",
+        "GIT_CONFIG_KEY_3": "tag.gpgsign", "GIT_CONFIG_VALUE_3": "false",
+        "GIT_CONFIG_KEY_4": "init.defaultBranch", "GIT_CONFIG_VALUE_4": "main"}
+
+    def test_the_child_pytest_gets_a_fixed_git_identity_and_no_display_or_gpg_home(self):
+        # The caller has a git setup of its own, a display and a gpg home; none of it reaches the child.
+        seen, _ = self.env_dump_run(DISPLAY=":9", WAYLAND_DISPLAY="wayland-9", GNUPGHOME="/nonexistent/gnupg",
+                                    GIT_CONFIG_GLOBAL="/nonexistent/gitconfig", GIT_CONFIG_COUNT="1",
+                                    GIT_CONFIG_KEY_0="commit.gpgsign", GIT_CONFIG_VALUE_0="true")
+        for key, value in self.EXPECTED_GIT_ENV.items():
+            self.assertEqual(seen.get(key), value, key)
+        for key in ("DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME"):
+            self.assertNotIn(key, seen)
+
+    def test_the_start_record_names_what_was_set_and_removed(self):
+        _, start = self.env_dump_run(DISPLAY=":9", WAYLAND_DISPLAY="wayland-9", GNUPGHOME="/nonexistent/gnupg")
+        self.assertEqual(start["env_set"], self.EXPECTED_GIT_ENV)
+        self.assertEqual(start["env_removed"], ["DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME"])
+        log = Path(start["log"]).read_text()
+        self.assertIn("test-tools: env removed DISPLAY WAYLAND_DISPLAY GNUPGHOME\n", log)
+        self.assertIn("test-tools: env set GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 ", log)
+
+    def test_a_variable_the_caller_never_had_is_not_recorded_as_removed(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME")}
+        suite = self.write_suite("envdump", ENV_SUITE)
+        env.update(NEVR_TEST_LOG_DIR=str(self.logs), RUN_TOOL_TESTS_ENVDUMP=str(self.root / "env.json"))
+        env.pop("PYTEST_ADDOPTS", None)
+        result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", str(suite)],
+                                capture_output=True, text=True, cwd=REPO, env=env, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        start = self.records("start")[0]
+        self.assertEqual(start["env_removed"], [])
+        self.assertIn("test-tools: env removed none\n", Path(start["log"]).read_text())
+
+    def test_a_child_that_commits_and_tags_ignores_the_callers_git_config_signing_hooks_and_identity(self):
+        home = self.root / "home"
+        hooks = home / "hooks"
+        hooks.mkdir(parents=True)
+        (hooks / "pre-commit").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (hooks / "pre-commit").chmod(0o755)
+        (home / ".gitconfig").write_text(
+            "[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n[gpg]\n\tprogram = /bin/false\n"
+            "[user]\n\tname = Someone Else\n\temail = else@example.invalid\n[init]\n\tdefaultBranch = trunk\n"
+            f"[core]\n\thooksPath = {hooks}\n", encoding="utf-8")
+        suite = self.write_suite("gitsuite", GIT_SUITE)
+        env = self.env(self.logs, HOME=str(home), XDG_CONFIG_HOME=str(home / "xdg"))
+        result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", str(suite)],
+                                capture_output=True, text=True, cwd=REPO, env=env, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_the_verify_recipes_unittest_line_has_the_runners_environment(self):
+        module = load_script()
+        line = next(ln for ln in JUSTFILE.read_text().splitlines() if "unittest discover" in ln)
+        words = shlex.split(line)
+        self.assertEqual(words[words.index("env") + 1:words.index("env") + 7],
+                         ["-u", "DISPLAY", "-u", "WAYLAND_DISPLAY", "-u", "GNUPGHOME"])
+        assigned = dict(w.split("=", 1) for w in words if w.startswith("GIT_"))
+        self.assertEqual(assigned, module.HERMETIC_SET)
+        self.assertEqual(module.HERMETIC_UNSET, ("DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME"))
+        self.assertLess(line.index("env"), line.index("python3 -m unittest"))
+
+    def test_the_hermetic_set_is_the_five_git_settings_and_the_two_isolation_variables(self):
+        self.assertEqual(load_script().HERMETIC_SET, self.EXPECTED_GIT_ENV)
+
     def test_a_junit_file_that_cannot_be_read_is_recorded_as_unreadable(self):
         module = load_script()
         self.assertEqual(module.failing_ids(self.root), ([], "unreadable"))  # a directory
@@ -1348,7 +1459,11 @@ NEEDS_PYTEST = (
     "test_pytest_is_killed_when_it_outlives_the_grace_period",
     "test_pytest_killed_by_a_signal_the_runner_did_not_send_exits_128_plus_it",
     "test_pytests_output_is_echoed_to_stdout",
+    "test_a_child_that_commits_and_tags_ignores_the_callers_git_config_signing_hooks_and_identity",
+    "test_a_variable_the_caller_never_had_is_not_recorded_as_removed",
+    "test_the_child_pytest_gets_a_fixed_git_identity_and_no_display_or_gpg_home",
     "test_the_exit_code_names_the_first_of_two_different_signals",
+    "test_the_start_record_names_what_was_set_and_removed",
     "test_the_grace_period_runs_from_the_first_signal_not_the_last",
     "test_the_recipe_passes_each_argument_through_whole",
     "test_the_same_signal_twice_at_once_is_one_interrupt",
