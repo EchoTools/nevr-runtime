@@ -1,11 +1,10 @@
-"""`tools/quest_release_timer.py` (#1210): the Quest half of a release, run on a schedule or by hand by the maintainer who holds the Quest signing key.
-For the newest published tag that is not done it builds the release signer, makes a clean worktree at the tag, builds and
+"""`tools/quest_release_timer.py` (#1210): the Quest half of a release, run by hand by the maintainer who holds the Quest signing key.
+For the tag it is given, when that tag is not done, it builds the release signer, makes a clean worktree at the tag, builds and
 publishes the Quest APK, dispatches the beta manifest publish live, requires every job that publishes to have run, and
 requires `verify-manifest --live` to list the tag. The commands are fakes that record what they were called with; the
 log is real, and no secret may reach it."""
 
 import contextlib
-import datetime
 import fcntl
 import gzip
 import hashlib
@@ -35,7 +34,6 @@ sys.path.insert(0, str(ROOT / "tools"))
 import quest_release_timer as timer  # noqa: E402
 
 TAG = "v5.17.0"
-DRAFT = "v5.18.0"  # a draft release, newer than TAG: the draft stage's tag
 SECRETS = {
     "R2_ENDPOINT": "https://sentinel-endpoint.invalid",
     "R2_BUCKET": "sentinel-bucket",
@@ -44,7 +42,7 @@ SECRETS = {
     "NEVR_RCLONE_REMOTE": "sentinel_remote",
 }
 TOKEN = "sentinel-gh-token"
-STEPS = ["checkout", "tags", "token", "list", "build_signer", "check_listed", "worktree", "build_slot", "configure", "build_apk",
+STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "worktree", "build_slot", "configure", "build_apk",
          "publish_apk", "dispatch", "watch", "check_jobs", "verify_live", "cleanup"]
 CARRIED = {"name": "echovr-data-fc2eedeacc50.zip", "kind": "game-data", "platform": "android-arm64", "size": 937395400}
 PC_DATA = {"name": "echovr-data-win10-0123456789ab.zip", "kind": "game-data", "platform": "windows-x86_64", "size": 5120}
@@ -76,31 +74,15 @@ class Fake:
         self.jobs = [{"name": name, "conclusion": "success"} for name in PUBLISHING_JOBS]
         self.local_tags: dict = dict(TAGS)  # what the checkout holds
         self.remote_tags: dict = dict(TAGS)  # what origin holds
-        self.api_listing: str | None = None  # the REST release list (`gh api`); None is default_api()
-        self.draft_polls: list[bool] = [False]  # `isDraft` of each `gh release view`, in order; the last value repeats
-        self.poll_answers: list[bool] = []  # what each `isDraft` poll answered, in order
-        self.view_rc = 0  # nonzero: a `gh release view` fails, which is a release that is gone
-        self.loader_rc = 0  # the exit of `quest_release_loader.py verify-apk`
-        self.loader_digest = "sha256:" + "cd" * 32  # the digest GitHub gives the published loader asset
-        self.loader_state = "uploaded"  # the loader asset's state in the release listing
-
-    def assets_for(self, tag: str) -> list[dict]:
-        return [{"name": timer.loader_asset_name(tag[1:]), "state": self.loader_state, "digest": self.loader_digest}]
-
-    def default_api(self) -> str:
-        """The REST list of a repository whose newest draft carries its uploaded loader asset."""
-        return rest_releases(DRAFT)
-
     def step_of(self, argv: list[str]) -> str:
         joined = " ".join(argv)
         repo = f"{self.root}/repo"
         table = [
-            ("releases?per_page", "list_api"), ("release view", "release_view"), ("verify-apk", "verify_apk"),
             (f"{repo} fetch --quiet origin main", "checkout.fetch"), (f"{repo} status --porcelain", "checkout.status"),
             (f"{repo} for-each-ref refs/tags", "tags.local"), (f"{repo} ls-remote --tags origin", "tags.remote"),
             (f"{repo} rev-parse HEAD", "checkout.head"), (f"{repo} rev-parse origin/main", "checkout.main"),
             ("curl", "manifest"),
-            ("auth token", "token"), ("release list", "list"), (" fetch origin main", "build_signer.fetch"),
+            ("auth token", "token"), (" fetch origin main", "build_signer.fetch"),
             ("rev-parse origin/main", "build_signer.rev"), (" archive ", "build_signer.archive"), ("tar -xf", "build_signer.tar"),
             ("go build", "build_signer.go"), ("verify-manifest", "verify"), (" fetch origin tag ", "worktree.fetch"),
             ("^{commit}", "worktree.rev"), ("worktree add", "worktree.add"), ("worktree-setup", "worktree.setup"),
@@ -142,21 +124,6 @@ class Fake:
             return completed(argv, 0, self.manifest_bytes())
         if step == "token":
             return completed(argv, 0, TOKEN + "\n")
-        if step == "list_api":
-            return completed(argv, 0, self.api_listing if self.api_listing is not None else self.default_api())
-        if step == "release_view":
-            if "assets" in argv:
-                return completed(argv, 0, json.dumps({"assets": self.assets_for(DRAFT)}))
-            if self.view_rc:
-                return completed(argv, self.view_rc, "", "release not found")
-            draft = self.draft_polls.pop(0) if len(self.draft_polls) > 1 else self.draft_polls[0]
-            self.poll_answers.append(draft)
-            return completed(argv, 0, json.dumps({"isDraft": draft}))
-        if step == "verify_apk":
-            return completed(argv, self.loader_rc, "", "the loader differs" if self.loader_rc else "")
-        if step == "list":
-            return completed(argv, 0, json.dumps([{"tagName": "v5.18.0", "isDraft": True}, {"tagName": TAG, "isDraft": False},
-                                                  {"tagName": "v5.16.1", "isDraft": False}]))
         if step == "build_signer.tar":
             pathlib.Path(argv[argv.index("-C") + 1]).mkdir(parents=True, exist_ok=True)
         if step == "build_signer.rev":
@@ -216,7 +183,9 @@ class TimerCase(unittest.TestCase):
         self.sleeps: list[float] = []
 
     def run_timer(self, fake: Fake, *args: str, env: dict | None = None) -> int:
-        return timer.main(list(args), env or self.env, runner=fake, sleep=self.sleeps.append)
+        """The timer needs `--tag`; a test that names none is about TAG."""
+        argv = list(args) if "--tag" in args else ["--tag", TAG, *args]
+        return timer.main(argv, env or self.env, runner=fake, sleep=self.sleeps.append)
 
     def events(self) -> list[dict]:
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -241,7 +210,6 @@ class RunsInOrder(TimerCase):
         self.assertEqual(steps, STEPS)
         self.assertEqual(self.names()[-1], "done")
         self.assertEqual(self.events()[-1]["tag"], TAG)
-        # the newest published tag, not the draft v5.18.0 and not the older v5.16.1
         build = next(c for c in fake.calls if c["step"] == "build_apk")
         self.assertEqual(build["argv"][-1], TAG)
 
@@ -279,13 +247,6 @@ class RunsInOrder(TimerCase):
         self.assertEqual(argv[argv.index("watch") + 1], "40746571311")
         self.assertIn("thesprockee/release-signer", argv)
         self.assertIn("--exit-status", argv)
-
-    def test_the_newest_tag_is_the_highest_version_not_the_last_string(self) -> None:
-        listing = json.dumps([{"tagName": t, "isDraft": False} for t in ("v5.9.0", "v5.17.0", "v5.10.2")])
-        fake = Fake(self.root, overrides={"list": lambda argv: completed(argv, 0, listing)})
-        self.run_timer(fake)
-        build = next(c for c in fake.calls if c["step"] == "build_apk")
-        self.assertEqual(build["argv"][-1], "v5.17.0")
 
     def test_the_publish_gets_the_credentials_and_the_signer_it_built(self) -> None:
         fake = Fake(self.root)
@@ -464,7 +425,7 @@ class SkipsWhatIsDone(TimerCase):
         self.write_log({"event": "done", "tag": TAG})
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual(fake.steps()[6:], ["token", "list"])
+        self.assertEqual(fake.steps()[6:], ["token"])
         self.assertIn("nothing_to_do", self.names())
 
     def test_a_tag_the_live_manifest_already_lists_is_marked_done_without_a_build(self) -> None:
@@ -480,7 +441,7 @@ class SkipsWhatIsDone(TimerCase):
         self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk"} for _ in range(3)))
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual(fake.steps()[6:], ["token", "list"])
+        self.assertEqual(fake.steps()[6:], ["token"])
         self.assertIn("skipped_after_failures", self.names())
 
     def test_two_failures_are_retried(self) -> None:
@@ -494,7 +455,6 @@ class SkipsWhatIsDone(TimerCase):
         self.assertEqual(self.run_timer(fake, "--tag", "v5.16.1"), 0)
         build = next(c for c in fake.calls if c["step"] == "build_apk")
         self.assertEqual(build["argv"][-1], "v5.16.1")
-        self.assertNotIn("list", fake.steps())
 
 
 class CredentialsPerStep(TimerCase):
@@ -1118,7 +1078,7 @@ class TagsAgreeWithThePreflight(TimerCase):
     def test_through_main_the_run_is_refused_for_the_tags_the_preflight_flags(self) -> None:
         clone = self.clone_with_tags(offenders=True)
         flagged = self.preflight_flagged(clone)
-        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        self.assertEqual(timer.main(["--tag", TAG], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
         [refusal] = [e for e in self.events() if e["event"] == "refused"]
         self.assertEqual(refusal["step"], "tags")
         head = refusal["error"].split(" | ")[0]
@@ -1128,7 +1088,7 @@ class TagsAgreeWithThePreflight(TimerCase):
     def test_through_main_a_clone_the_preflight_accepts_passes_the_tags_step(self) -> None:
         clone = self.clone_with_tags(offenders=False)
         self.assertEqual(self.preflight_flagged(clone), [])
-        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        self.assertEqual(timer.main(["--tag", TAG], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
         self.assertEqual([e for e in self.events() if e["event"] == "refused"], [])
         ok = [e for e in self.events() if e["event"] == "step_ok"]
         self.assertEqual([(e["step"], e.get("count")) for e in ok if e["step"] == "tags"], [("tags", 2)])
@@ -1149,7 +1109,7 @@ class TagsAgreeWithThePreflight(TimerCase):
         for name in names:
             self.git(clone, "update-ref", f"refs/tags/{name}", "HEAD")
             ids[name] = self.git(clone, "rev-parse", f"refs/tags/{name}")
-        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        self.assertEqual(timer.main(["--tag", TAG], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
         [refusal] = [e for e in self.events() if e["event"] == "refused"]
         commands = self.printed_commands(refusal["error"])
         self.assertEqual(sorted(commands), sorted(names))
@@ -1168,7 +1128,7 @@ class TagsAgreeWithThePreflight(TimerCase):
         hostile = f"x;touch$IFS{marker}"
         self.git(clone, "tag", hostile)
         object_id = self.git(clone, "rev-parse", f"refs/tags/{hostile}")
-        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        self.assertEqual(timer.main(["--tag", TAG], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
         [refusal] = [e for e in self.events() if e["event"] == "refused"]
         remove = refusal["error"].split("remove: ", 1)[1].split("; rollback: ", 1)[0]
         rollback = refusal["error"].split("rollback: ", 1)[1].split(" | ", 1)[0]
@@ -1212,7 +1172,7 @@ class RealProcess(TimerCase):
     """The tool as the unit starts it: a real interpreter, a real log file, a fake `gh` first on the path."""
 
     def start(self, env: dict, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run([sys.executable, "-I", str(ROOT / "tools" / "quest_release_timer.py"), *args],
+        return subprocess.run([sys.executable, "-I", str(ROOT / "tools" / "quest_release_timer.py"), "--tag", TAG, *args],
                               capture_output=True, text=True, env=env, cwd=self.tmp.name)
 
     def test_a_missing_credential_is_logged_and_exits_1(self) -> None:
@@ -1265,7 +1225,7 @@ LIBRARIES = ("libq15t.so", "libq15t_early.so")
 # Unique strings in the names of the private directory and the pins file: nothing a run writes or runs may carry them.
 VDIR_MARK = "VARIANTDIRMARK-6f1c2a"
 PINS_MARK = "PINSFILEMARK-9d4e7b"
-MAIN_STEPS = ["checkout", "tags", "token", "list", "build_signer", "check_listed", "worktree", "build_slot", "configure",
+MAIN_STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "worktree", "build_slot", "configure",
               "build_apk", "publish_apk", "dispatch", "watch", "check_jobs", "verify_live"]
 
 
@@ -1790,7 +1750,7 @@ class VariantOfAListedRelease(VariantCase):
         fake = self.listed()
         code, stderr = self.run_captured(fake)
         self.assertEqual((code, stderr), (0, ""))
-        self.assertEqual(self.step_oks(), ["checkout", "tags", "token", "list", "build_signer", "check_listed", "variant_exists",
+        self.assertEqual(self.step_oks(), ["checkout", "tags", "token", "build_signer", "check_listed", "variant_exists",
                                            "variant_pins", "worktree", "build_slot", "configure", "variant_build", "variant_publish", "cleanup"])
         self.assertEqual(self.host.requests, [("GET", f"/nevr-runtime/{TAG}/{VARIANT_APK}")])
         self.assertEqual(self.host.agents, [timer.USER_AGENT], "the release host answers 403 to the default agent")
@@ -1819,7 +1779,7 @@ class VariantOfAListedRelease(VariantCase):
         self.host.mode = "present"
         fake = self.listed()
         self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual(self.step_oks(), ["checkout", "tags", "token", "list", "build_signer", "check_listed", "variant_exists",
+        self.assertEqual(self.step_oks(), ["checkout", "tags", "token", "build_signer", "check_listed", "variant_exists",
                                            "cleanup"])
         [asked] = [e for e in self.events() if e["event"] == "step_ok" and e["step"] == "variant_exists"]
         self.assertEqual((asked["listed"], asked["apk"]), (True, VARIANT_APK))
@@ -2297,7 +2257,7 @@ class VariantOnlyAfterTheMainRelease(VariantCase):
         self.assertEqual((code, stderr), (0, ""))
         for never in self.MAIN_ONLY:
             self.assertNotIn(never, fake.steps(), never)
-        self.assertEqual(self.step_oks(), ["checkout", "tags", "token", "list", "variant_exists", "variant_pins", "worktree", "build_slot",
+        self.assertEqual(self.step_oks(), ["checkout", "tags", "token", "variant_exists", "variant_pins", "worktree", "build_slot",
                                            "configure", "variant_build", "variant_publish", "cleanup"])
         self.assertEqual(self.names()[-1], "done")
         self.assertEqual(self.names().count("main_complete"), 1, "written once")
@@ -2381,8 +2341,8 @@ class RunLock(TimerCase):
     def test_a_real_second_process_finds_the_lock_held(self) -> None:
         self.hold()
         env = {**self.env, "PATH": "/usr/bin"}
-        result = subprocess.run([sys.executable, "-I", str(ROOT / "tools" / "quest_release_timer.py")], env=env,
-                                capture_output=True, text=True, cwd=self.tmp.name)
+        result = subprocess.run([sys.executable, "-I", str(ROOT / "tools" / "quest_release_timer.py"), "--tag", TAG],
+                                env=env, capture_output=True, text=True, cwd=self.tmp.name)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("busy", result.stderr)
         self.assertIn("busy", self.names())
@@ -2589,11 +2549,19 @@ class TagIsWholeString(TimerCase):
                 self.assertIn("is not a release tag", err.getvalue())
                 self.assertEqual(fake.calls, [])
 
-    def test_a_release_name_with_a_trailing_newline_is_never_the_newest(self) -> None:
-        listing = json.dumps([{"tagName": "v9.9.9\n", "isDraft": False}, {"tagName": TAG, "isDraft": False}])
-        self.assertEqual(timer.newest_published(listing), TAG)
-        with self.assertRaises(timer.StepFailure):
-            timer.newest_published(json.dumps([{"tagName": "v9.9.9\n", "isDraft": False}]))
+
+class TagIsRequired(TimerCase):
+    """There is no newest-tag default: a run that names no tag is refused by the argument parser and runs nothing."""
+
+    def test_a_run_with_no_tag_is_refused_and_runs_no_command(self) -> None:
+        fake = Fake(self.root)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as stopped:
+            timer.main([], self.env, runner=fake, sleep=self.sleeps.append)
+        self.assertEqual(stopped.exception.code, 2)
+        self.assertIn("--tag", err.getvalue())
+        self.assertEqual(fake.calls, [])
+        self.assertFalse(self.log.exists())
 
 
 class ResetFailures(TimerCase):
@@ -2663,8 +2631,9 @@ class ResetFailures(TimerCase):
     def test_a_reset_needs_a_tag_and_records_nothing_without_one(self) -> None:
         fake = Fake(self.root)
         err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            self.assertEqual(self.run_timer(fake, "--reset-failures"), 1)
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as stopped:
+            timer.main(["--reset-failures"], self.env, runner=fake, sleep=self.sleeps.append)
+        self.assertEqual(stopped.exception.code, 2)
         self.assertIn("--tag", err.getvalue())
         self.assertNotIn("failures_reset", self.names())
         self.assertEqual(fake.calls, [])
@@ -2969,254 +2938,10 @@ class VariantRealProcess(TimerCase):
         self.assertEqual([c for c in new if c["tool"] in ("just", "rclone")], [])
 
 
-def rest_releases(draft: str | None = None, loader: str | None = "uploaded") -> str:
-    """The REST release list (`gh api repos/<slug>/releases`): TAG published, and `draft` (when given) with its loader asset in
-    the state `loader` (None: no loader asset)."""
-    releases = [{"tag_name": TAG, "draft": False, "assets": []}]
-    if draft is not None:
-        assets = [] if loader is None else [{"name": timer.loader_asset_name(draft[1:]), "state": loader, "digest": ""}]
-        releases.insert(0, {"tag_name": draft, "draft": True, "assets": assets})
-    return json.dumps(releases)
-
-
-class ChooseTag(unittest.TestCase):
-    """choose_tag is the one rule for which release a run takes; the probe and the draft stage read it the same way."""
-
-    def test_a_draft_newer_than_the_published_release_with_its_loader_uploaded_is_chosen(self) -> None:
-        self.assertEqual(timer.choose_tag(rest_releases(DRAFT), []), (DRAFT, "draft"))
-
-    def test_a_draft_whose_loader_is_not_uploaded_is_passed_over(self) -> None:
-        for state in (None, "starter"):
-            with self.subTest(loader=state):
-                self.assertEqual(timer.choose_tag(rest_releases(DRAFT, state), []), (TAG, "published"))
-
-    def test_a_draft_older_than_the_newest_published_release_is_passed_over(self) -> None:
-        self.assertEqual(timer.choose_tag(rest_releases("v5.16.0"), []), (TAG, "published"))
-
-    def test_a_draft_with_a_draft_abandoned_record_is_passed_over(self) -> None:
-        events = [{"event": "draft_abandoned", "tag": DRAFT, "reason": "gone"}]
-        self.assertEqual(timer.choose_tag(rest_releases(DRAFT), events), (TAG, "published"))
-
-    def test_no_published_release_and_no_draft_is_a_failure(self) -> None:
-        with self.assertRaises(timer.StepFailure):
-            timer.choose_tag("[]", [])
-
-
-class DraftStage(TimerCase):
-    """`--stage-draft`: the APK is built while the release is a draft, and nothing reaches R2 until the release is published,
-    its loader is the published one, and beta has not moved."""
-
-    def polls(self, fake: Fake) -> list[int]:
-        return [i for i, c in enumerate(fake.calls) if c["step"] == "release_view" and "isDraft" in c["argv"]]
-
-    def test_a_draft_with_its_loader_builds_then_publishes_on_the_first_poll_that_sees_it_published(self) -> None:
-        fake = Fake(self.root)
-        fake.draft_polls = [True, True, False]
-        self.assertEqual(self.run_timer(fake, "--stage-draft"), 0)
-        order = [c["step"] for c in fake.calls]
-        build, publish = order.index("build_apk"), order.index("publish_apk")
-        polls = self.polls(fake)
-        self.assertEqual(len(polls), 3)
-        self.assertTrue(all(build < i < publish for i in polls), "every poll falls after the build and before the publish")
-        self.assertEqual(self.sleeps, [10, 10], "one wait after each poll that still sees a draft")
-        self.assertEqual(self.names()[-1], "done")
-        self.assertEqual(self.events()[-1]["tag"], DRAFT)
-        dispatch = next(c["argv"] for c in fake.calls if c["step"] == "dispatch")
-        # The same dispatch the published path makes, for the same release: only the tag differs.
-        plain_root = self.root / "plain"
-        plain_env = {**self.env, "XDG_STATE_HOME": str(plain_root / "state"), "QUEST_RELEASE_WORK_ROOT": str(plain_root / "work")}
-        plain = Fake(self.root)
-        self.assertEqual(timer.main([], plain_env, runner=plain, sleep=self.sleeps.append), 0)
-        plain_dispatch = next(c["argv"] for c in plain.calls if c["step"] == "dispatch")
-        self.assertEqual([a.replace(DRAFT, TAG) for a in dispatch], plain_dispatch)
-
-    def test_publish_apk_never_runs_while_the_release_is_a_draft(self) -> None:
-        fake = Fake(self.root)
-        fake.draft_polls = [True, True, False]
-
-        def publish(argv: list[str]) -> subprocess.CompletedProcess:
-            if not fake.poll_answers or fake.poll_answers[-1]:
-                raise AssertionError("publish_apk ran while the release was a draft")
-            pathlib.Path(argv[argv.index("--extra-out") + 1]).write_text(json.dumps([{"name": f"nevr-runtime-{TAG}-quest.apk"}]))
-            return completed(argv)
-
-        fake.overrides["publish_apk"] = publish
-        self.assertEqual(self.run_timer(fake, "--stage-draft"), 0)
-        self.assertEqual(fake.poll_answers, [True, True, False])
-        self.assertIn("publish_apk", fake.steps())
-
-    def test_a_draft_that_is_never_published_is_abandoned_and_reaches_no_r2(self) -> None:
-        fake = Fake(self.root)
-        fake.draft_polls = [True]
-        self.assertEqual(self.run_timer(fake, "--stage-draft"), 0)
-        self.assertEqual(len(self.sleeps), 270, "2700 seconds of 10-second waits")
-        abandoned = [e for e in self.events() if e["event"] == "draft_abandoned"]
-        self.assertEqual(abandoned[-1]["reason"], "wait_expired")
-        self.assertNotIn("publish_apk", fake.steps())
-        self.assertNotIn("dispatch", fake.steps())
-        self.assertEqual([c["step"] for c in fake.calls if c["env"] and "R2_SECRET_ACCESS_KEY" in c["env"]], [])
-        removed = [c["argv"] for c in fake.calls if c["step"] == "cleanup.worktree"]
-        self.assertEqual(removed[-1][-1], str(self.root / "work" / DRAFT))
-        self.assertNotIn("failed", self.names())
-
-    def test_a_draft_deleted_while_waiting_is_abandoned_not_failed(self) -> None:
-        fake = Fake(self.root)
-        fake.draft_polls = [True]
-
-        def sleep(seconds: float) -> None:
-            self.sleeps.append(seconds)
-            fake.view_rc = 1  # the release is deleted during the first wait
-
-        self.assertEqual(timer.main(["--stage-draft"], self.env, runner=fake, sleep=sleep), 0)
-        self.assertEqual(len(self.sleeps), 1)
-        self.assertNotIn("failed", self.names())
-        abandoned = [e for e in self.events() if e["event"] == "draft_abandoned"]
-        self.assertEqual(abandoned[-1]["reason"], "gone")
-
-    def test_a_draft_stage_failure_is_not_one_of_the_three(self) -> None:
-        failing = Fake(self.root, fail="build_apk")
-        self.assertEqual(self.run_timer(failing, "--stage-draft"), 0)
-        failed = [e for e in self.events() if e["event"] == "failed"]
-        self.assertEqual([(e["step"], e["part"], e["tag"]) for e in failed], [("build_apk", "draft", DRAFT)])
-        abandoned = [e for e in self.events() if e["event"] == "draft_abandoned"]
-        self.assertEqual(abandoned[-1]["reason"], "failed:build_apk")
-        self.assertEqual(timer.counted_failures([e for e in self.events() if e.get("tag") == DRAFT]), [])
-        # The next run takes the published release, because the draft is abandoned.
-        second = Fake(self.root)
-        self.assertEqual(self.run_timer(second, "--stage-draft"), 0)
-        self.assertIn("publish_apk", second.steps())
-        self.assertEqual((self.events()[-1]["event"], self.events()[-1]["tag"]), ("done", TAG))
-
-    def test_a_loader_that_changed_before_publication_is_refused_before_the_upload(self) -> None:
-        fake = Fake(self.root)
-        fake.draft_polls = [True, False]
-        fake.loader_rc = 1
-        self.assertEqual(self.run_timer(fake, "--stage-draft"), 1)
-        self.assertIn("verify_apk", fake.steps())
-        self.assertNotIn("publish_apk", fake.steps())
-        failed = [e for e in self.events() if e["event"] == "failed"]
-        self.assertEqual((failed[-1]["step"], failed[-1]["part"]), ("verify_loader", "main"))
-
-    def test_beta_moving_during_the_wait_fails_before_the_dispatch(self) -> None:
-        fake = Fake(self.root)
-        fake.draft_polls = [True, False]
-
-        def sleep(seconds: float) -> None:
-            self.sleeps.append(seconds)
-            fake.beta = "5.17.0"  # beta moves while the draft waits
-
-        self.assertEqual(timer.main(["--stage-draft"], self.env, runner=fake, sleep=sleep), 1)
-        failed = [e for e in self.events() if e["event"] == "failed"]
-        self.assertEqual(failed[-1]["step"], "check_listed")
-        self.assertIn("beta moved", failed[-1]["error"])
-        self.assertNotIn("publish_apk", fake.steps())
-        self.assertNotIn("dispatch", fake.steps())
-
-    def test_without_the_flag_a_draft_is_ignored(self) -> None:
-        fake = Fake(self.root)
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual([e["step"] for e in self.events() if e["event"] == "step_ok"], STEPS)
-        self.assertNotIn("release_view", fake.steps())
-        self.assertNotIn("list_api", fake.steps())
-        self.assertNotIn("draft_abandoned", self.names())
-
-
-class Probe(TimerCase):
-    """`--probe`, the unit's ExecCondition: one GitHub call, then 0 when a run has work, 1 when it is idle, 255 when the probe
-    itself failed."""
-
-    def at(self, minutes_ago: float) -> str:
-        return (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=minutes_ago)).isoformat()
-
-    def record(self, event: str, minutes_ago: float, tag: str = TAG, **fields: object) -> dict:
-        return {"ts": self.at(minutes_ago), "event": event, "tag": tag, **fields}
-
-    def probe(self, fake: Fake, now: datetime.datetime | None = None) -> int:
-        if now is None:
-            return self.run_timer(fake, "--probe")
-        return timer.probe(self.env, fake, self.log, now)
-
-    def test_idle_when_the_newest_published_tag_is_done(self) -> None:
-        fake = Fake(self.root)
-        fake.api_listing = rest_releases()
-        self.write_log(self.record("start", 1), self.record("done", 1))
-        self.assertEqual(self.probe(fake), 1)
-
-    def test_work_for_a_published_tag_that_is_not_done(self) -> None:
-        fake = Fake(self.root)
-        fake.api_listing = rest_releases()
-        self.assertEqual(self.probe(fake), 0)
-
-    def test_work_for_a_draft_with_its_loader(self) -> None:
-        fake = Fake(self.root)
-        fake.api_listing = rest_releases(DRAFT)
-        self.write_log(self.record("start", 1), self.record("done", 1))
-        self.assertEqual(self.probe(fake), 0)
-
-    def test_idle_for_a_draft_without_its_loader_or_with_it_not_uploaded(self) -> None:
-        for loader in (None, "starter"):
-            with self.subTest(loader=loader):
-                fake = Fake(self.root)
-                fake.api_listing = rest_releases(DRAFT, loader)
-                self.write_log(self.record("start", 1), self.record("done", 1))
-                self.assertEqual(self.probe(fake), 1)
-
-    def test_a_counted_failure_holds_its_tag_for_thirty_minutes(self) -> None:
-        fake = Fake(self.root)
-        fake.api_listing = rest_releases()
-        self.write_log(self.record("start", 1), self.record("failed", 5, step="publish_apk", part="main", error="x"))
-        self.assertEqual(self.probe(fake), 1, "a failure five minutes old is still holding the tag")
-        self.write_log(self.record("start", 1), self.record("failed", 31, step="publish_apk", part="main", error="x"))
-        self.assertEqual(self.probe(fake), 0, "a failure thirty-one minutes old is retried")
-
-    def test_heartbeat_asks_for_a_run_after_thirty_minutes_without_one(self) -> None:
-        fake = Fake(self.root)
-        fake.api_listing = rest_releases()
-        self.write_log(self.record("start", 31), self.record("done", 31))
-        self.assertEqual(self.probe(fake), 0)
-        self.write_log(self.record("start", 5), self.record("done", 5))
-        self.assertEqual(self.probe(fake), 1)
-
-    def test_one_gh_call_and_no_git(self) -> None:
-        fake = Fake(self.root)
-        fake.api_listing = rest_releases()
-        self.write_log(self.record("start", 1), self.record("done", 1))
-        self.assertEqual(self.probe(fake), 1)
-        self.assertEqual([c["step"] for c in fake.calls], ["list_api"])
-
-    def test_a_gh_error_exits_255_and_logs_a_failed_probe(self) -> None:
-        fake = Fake(self.root)
-        fake.overrides["list_api"] = lambda argv: completed(argv, 1, "", "gh: boom")
-        self.assertEqual(self.probe(fake), 255)
-        failed = [e for e in self.events() if e["event"] == "failed"]
-        self.assertEqual(failed[-1]["step"], "probe")
-
-    def test_twenty_idle_probes_write_one_probe_record(self) -> None:
-        fake = Fake(self.root)
-        fake.api_listing = rest_releases()
-        self.write_log(self.record("start", 1), self.record("done", 1))
-        for _ in range(20):
-            self.assertEqual(self.probe(fake), 1)
-        probes = [e for e in self.events() if e["event"] == "probe"]
-        self.assertEqual(len(probes), 1)
-        self.assertEqual(probes[0]["decision"], "idle")
-
-    def test_idle_while_a_run_holds_the_lock(self) -> None:
-        fake = Fake(self.root)
-        fake.api_listing = rest_releases()
-        held = timer.take_lock(self.root / "work")
-        self.assertIsNotNone(held)
-        try:
-            self.assertEqual(self.probe(fake), 1)
-        finally:
-            os.close(held)
-        self.assertEqual(self.probe(fake), 0)
-
-
 class ReleasingDoc(unittest.TestCase):
     def test_the_doc_and_the_module_docstring_state_the_variant_steps_the_environment_and_the_failure_rule(self) -> None:
         text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
-        section = text.split("## The Quest half of the train", 1)[1].split("\n## ", 1)[0]
+        section = text.split("## The Quest half of a release", 1)[1].split("\n## ", 1)[0]
         for want in ("variant_pins", "variant_build", "variant_publish", "variant_exists", "variant_listed",
                      "NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS", "variant_not_configured",
                      "never blocks", "release-quest-variant-apk", "--variant"):
@@ -3226,14 +2951,14 @@ class ReleasingDoc(unittest.TestCase):
 
     def test_the_doc_states_the_pair_check_its_repair_the_build_log_the_part_and_the_reset(self) -> None:
         text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
-        section = text.split("## The Quest half of the train", 1)[1].split("\n## ", 1)[0]
+        section = text.split("## The Quest half of a release", 1)[1].split("\n## ", 1)[0]
         for want in ("--reset-failures", "failures_reset", "-build.log", "`part`", "by hand", "the publisher's credential",
                      "half-published", "variant_exists", "`local_files`", "main_complete", "`unexpected`",
                      "never copy the digest from the error message", "delete BOTH objects"):
             self.assertIn(want, section)
         self.assertNotIn("`variant_publish` record in", section)
         self.assertNotIn("when that worktree still exists", section)
-        for want in ("run that reaches the release list", "timer.lock", "`busy`", "variant-only", "could not confirm"):
+        for want in ("run that gets past the checkout, tags and token steps", "timer.lock", "`busy`", "variant-only", "could not confirm"):
             self.assertIn(want, section)
         self.assertIn("`.made-by-quest-release-timer`", section)
         self.assertNotIn("A tag that beta already lists is done.", section)
@@ -3244,18 +2969,14 @@ class ReleasingDoc(unittest.TestCase):
                       timer.__doc__.split("The R2 credential goes only to", 1)[1].split("\n", 2)[1])
         self.assertIn("--reset-failures", timer.__doc__)
 
-    def test_the_doc_says_the_timer_takes_the_newest_tag_only(self) -> None:
+    def test_the_doc_and_the_docstring_describe_a_by_hand_run_of_one_given_tag(self) -> None:
         text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
-        section = text.split("## The Quest half of the train", 1)[1].split("\n## ", 1)[0]
-        self.assertIn("newest tag only", section)
-
-    def test_the_doc_names_the_probe_the_draft_wait_and_the_abandonment(self) -> None:
-        text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
-        section = text.split("## The Quest half of the train", 1)[1].split("\n## ", 1)[0]
-        for want in ("--probe", "--stage-draft", "draft_abandoned", "await_published", "verify_loader", "recheck_beta"):
-            self.assertIn(want, section)
-        for want in ("--probe", "--stage-draft", "draft_abandoned"):
-            self.assertIn(want, timer.__doc__)
+        section = text.split("## The Quest half of a release", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("`--tag vX.Y.Z`", section)
+        self.assertIn("Nothing runs it on a schedule", section)
+        for gone in ("--probe", "--stage-draft", "draft_abandoned", "await_published", "newest tag only"):
+            self.assertNotIn(gone, section)
+            self.assertNotIn(gone, timer.__doc__)
 
 
 if __name__ == "__main__":
