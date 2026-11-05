@@ -527,6 +527,9 @@ func newHalves(t *testing.T) *halves {
 	if err := os.MkdirAll(filepath.Join(h.dir, "build", "go-tools"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(h.dir, "tools"), 0o755); err != nil { // the module directory, which -C names
+		t.Fatal(err)
+	}
 	if err := os.Symlink(bin, filepath.Join(h.dir, "build", "go-tools", "test-go-tools")); err != nil {
 		t.Fatal(err)
 	}
@@ -556,6 +559,8 @@ func (h *halves) check(t *testing.T, out string, err error) {
 	calls := h.goBin.Calls(t)
 	if len(calls) != 1 || len(calls[0].Args) == 0 || calls[0].Args[0] != "test" {
 		t.Errorf("the Go half did not run after the Python half failed: go calls %+v", calls)
+	} else if want := filepath.Join(h.dir, "tools"); calls[0].Dir != want {
+		t.Errorf("go test ran in %s, want the module directory %s (the module is tools/go.mod, not the root's)", calls[0].Dir, want)
 	}
 	for _, want := range []string{"go FAIL p TestB", "FAIL: python half exit 1, go half exit 1"} {
 		if !strings.Contains(out, want) {
@@ -620,7 +625,7 @@ func TestJustVerifyRunsTheGoHalfWhenThePythonHalfFailsAndNamesBoth(t *testing.T)
 		if l == "just go-tools" {
 			built = true
 		}
-		if strings.HasPrefix(l, "build/go-tools/test-go-tools -- ") {
+		if strings.HasPrefix(l, "build/go-tools/test-go-tools -C tools -- ") {
 			if line != "" {
 				t.Fatalf("two test-go-tools lines in verify: %q and %q", line, l)
 			}

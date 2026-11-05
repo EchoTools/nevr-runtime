@@ -1,6 +1,9 @@
 // Command test-go-tools runs the tool suite's two halves, the Python half and the Go half, and keeps the Go half:
 //
-//	test-go-tools [package patterns] [-- python command and arguments]
+//	test-go-tools [-C dir] [package patterns] [-- python command and arguments]
+//
+// -C names the directory go test runs in, as go's own -C does (the module is tools/go.mod, and a recipe runs from the
+// repository root); the Python command runs where test-go-tools was started.
 //
 // With a Python command after "--" it runs that first (its output passes through, its exit code is kept), then, unless it
 // was interrupted (an exit code above 128), the Go half whatever the Python half did, so a red Python test never hides
@@ -69,8 +72,16 @@ const (
 
 func testTools(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer, log *slog.Logger) int {
 	patterns, pyCmd, hasPy := splitArgs(args)
+	moduleDir := ""
+	if len(patterns) > 0 && patterns[0] == "-C" {
+		if len(patterns) < 2 {
+			fmt.Fprintln(stderr, "test-tools: FAIL usage: -C needs a directory")
+			return exitSetup
+		}
+		moduleDir, patterns = patterns[1], patterns[2:]
+	}
 	if hasPy && len(pyCmd) == 0 {
-		fmt.Fprintln(stderr, "test-tools: FAIL usage: test-go-tools [package patterns] [-- python command and arguments]; nothing follows --")
+		fmt.Fprintln(stderr, "test-tools: FAIL usage: test-go-tools [-C dir] [package patterns] [-- python command and arguments]; nothing follows --")
 		return exitSetup
 	}
 	if len(patterns) == 0 {
@@ -147,6 +158,7 @@ func testTools(ctx context.Context, args []string, getenv func(string) string, s
 
 	col := &collector{}
 	cmd := exec.CommandContext(ctx, goPath, goArgs...)
+	cmd.Dir = moduleDir
 	cmd.Env = env
 	cmd.Stdout = io.MultiWriter(stream, col)
 	cmd.Stderr = stderr

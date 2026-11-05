@@ -806,3 +806,38 @@ func TestAStreamThatAlreadyExistsIsNotOverwritten(t *testing.T) {
 		t.Errorf("go ran %d times with nowhere to keep its stream", n)
 	}
 }
+
+// The module is not at the repository root: go test must run inside tools/, which the recipes name with -C, as go does.
+func TestMinusCRunsGoTestInThatDirectory(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	mod := t.TempDir()
+	code, _, stderr := r.run("-C", mod, "./internal/...")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	calls := r.fake.Calls(t)
+	if len(calls) != 1 || calls[0].Dir != mod || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 5m0s ./internal/..." {
+		t.Errorf("go call = %+v, want it run in %s with the pattern after -C's argument", calls, mod)
+	}
+}
+
+func TestMinusCNeedsADirectory(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	code, _, stderr := r.run("-C")
+	if code != 2 || !strings.Contains(stderr, "-C") || len(r.fake.Calls(t)) != 0 {
+		t.Errorf("exit %d, stderr %q", code, stderr)
+	}
+}
+
+func TestMinusCDoesNotMoveThePythonHalf(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	mod := t.TempDir()
+	r.both("0", "", "-C", mod)
+	here, _ := os.Getwd()
+	if calls := r.py.Calls(t); len(calls) != 1 || calls[0].Dir != here {
+		t.Errorf("python call %+v, want it run where the recipe runs (%s), not in %s", calls, here, mod)
+	}
+}
