@@ -120,7 +120,6 @@ set(PATCHES_SOURCES
     # #1419, docs/adr/0022: the GPU score the auto-selector reads, filled when the game's own rating is zero (pure rule).
     "patch/gpu_score.cpp"
     "patch/early_quit_lockout.cpp"
-    "patch/arena_public_clock.cpp"
     # #1774 P13: the dedicated lobby's allow_incoming bit, forced by a hook on CBroadcaster::Initialize (pure rule in server/broadcaster_config.h).
     "patch/broadcaster_allow_incoming.cpp"
     "patch/lobby_full_backoff.cpp"
@@ -197,8 +196,6 @@ set(PATCHES_HEADERS
     "patch/loading_tips.h"
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
-    "patch/arena_public_clock.h"
-    "patch/arena_public_clock_rules.h"
     "patch/broadcaster_allow_incoming.h"
     "patch/render_config.h"
     "patch/render_config_hook.h"
@@ -976,7 +973,7 @@ if(BUILD_TESTING)
       nevr::plugin_sdk nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_telemetry_game_type DISCOVERY_MODE PRE_TEST)
 
-    # #982: the public Arena round default applies only to a stored public Arena session (arena_round_time.cpp).
+    # The session game type store: each store returns the type it replaces (lifecycle/arena_round_time.cpp).
     add_executable(test_arena_round_time tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp)
     set_source_files_properties(tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -985,8 +982,8 @@ if(BUILD_TESTING)
     target_link_libraries(test_arena_round_time PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_arena_round_time DISCOVERY_MODE PRE_TEST)
 
-    # #982: the CJson_GetFloat detour answers round_time with 480 s for a public Arena session, whatever the order of
-    # the game's reads and the session's messages (lifecycle/arena_rules_hook.cpp).
+    # The CJson_GetFloat detour answers round_time with the game's own value for every session, unless config.yaml
+    # sets arena.round_time (lifecycle/arena_rules_hook.cpp).
     add_executable(test_arena_rules_hook tests/test_arena_rules_hook.cpp lifecycle/arena_rules_hook.cpp
       lifecycle/arena_round_time.cpp)
     set_source_files_properties(tests/test_arena_rules_hook.cpp lifecycle/arena_rules_hook.cpp
@@ -1010,26 +1007,6 @@ if(BUILD_TESTING)
     target_include_directories(test_server_team_size PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_server_team_size PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_server_team_size DISCOVERY_MODE PRE_TEST)
-
-    # #982: the public Arena match clock keeps counting through goals (patch/arena_public_clock_rules.h).
-    add_executable(test_arena_public_clock tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp)
-    set_source_files_properties(tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_arena_public_clock PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_arena_public_clock PRIVATE GTest::gtest GTest::gtest_main)
-    gtest_discover_tests(test_arena_public_clock DISCOVERY_MODE PRE_TEST)
-
-    # #982: the hook on the real stock Arena script DLLs under MinHook (needs NEVR_SCRIPT_DLL_DIR; skips without it).
-    add_executable(test_arena_public_clock_hook tests/test_arena_public_clock_hook.cpp patch/arena_public_clock.cpp
-      lifecycle/arena_round_time.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
-    set_source_files_properties(tests/test_arena_public_clock_hook.cpp patch/arena_public_clock.cpp
-      lifecycle/arena_round_time.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_compile_definitions(test_arena_public_clock_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING
-      NEVR_TEST_HOOKS NEVR_ARENA_PUBLIC_CLOCK_TESTING)
-    target_include_directories(test_arena_public_clock_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_arena_public_clock_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
-    gtest_discover_tests(test_arena_public_clock_hook DISCOVERY_MODE PRE_TEST)
 
     # #1774 P13: the allow_incoming detour on CBroadcaster::Initialize, under MinHook on a 15-parameter stand-in.
     add_executable(test_broadcaster_allow_incoming tests/test_broadcaster_allow_incoming.cpp
@@ -2054,9 +2031,21 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_info_keeper"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    # The entry-point prefix is Nevr; a plugin built before that exports Nvr. One fixture of each.
+    foreach(_exports_fixture nevr deprecated)
+      add_library(test_plugin_${_exports_fixture}_exports SHARED
+        tests/plugin_${_exports_fixture}_exports_test_dll.cpp)
+      target_compile_definitions(test_plugin_${_exports_fixture}_exports PRIVATE NEVR_PLUGIN_EXPORTS)
+      target_link_libraries(test_plugin_${_exports_fixture}_exports PRIVATE nevr::plugin_sdk)
+      set_target_properties(test_plugin_${_exports_fixture}_exports PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_${_exports_fixture}_exports"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    endforeach()
     add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail
       test_plugin_partial_init_fail test_plugin_info_keeper test_plugin_logging_a test_plugin_logging_b
-      test_plugin_level)
+      test_plugin_level
+      test_plugin_nevr_exports test_plugin_deprecated_exports)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 

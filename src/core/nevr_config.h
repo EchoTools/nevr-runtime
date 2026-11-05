@@ -162,6 +162,11 @@ class NevrConfig {
   /// file, comments included, is untouched: the document is never re-emitted. A missing file is created holding just the key.
   /// Never throws. See ConfigSetResult for the refusals.
   ///
+  /// Callers in one process may call Set at the same time, on the same file or on the same object: one mutex per file (keyed by its
+  /// canonical path) covers the whole read, splice, write, rename and in-memory update, so no caller's key is lost to another's.
+  /// Another process editing the file is not covered. The getters take no lock: do not read an object while another thread calls
+  /// Set on it.
+  ///
   /// Prior art for editing through the parser's source positions: ruamel.yaml's round-trip mode (https://yaml.readthedocs.io/)
   /// and toml_edit (https://docs.rs/toml_edit/).
   ConfigSetResult Set(const std::string& path, bool value) noexcept;

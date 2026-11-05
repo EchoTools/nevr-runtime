@@ -21,7 +21,7 @@ The Quest build has no plugin host:
 
 - The sentinel is one shared object, `ovrplatformloader` (`src/quest/sentinel/CMakeLists.txt:36-52`), loaded as a
   `DT_NEEDED` dependency of the game's library (`src/quest/sentinel/entry.cpp:149-158`). Nothing in `src/quest`
-  references an `NvrPlugin*` export, a plugin path, or a plugin file (see Evidence).
+  references an `NevrPlugin*` export, a plugin path, or a plugin file (see Evidence).
 - The config parser already accepts `plugins:` with the same keys as PC (`src/core/nevr_config.cpp:242-285`), but no
   Quest code acts on the list. The Quest login rewrite drops the `nevr_plugins` key (`src/quest/tests/login_rewrite_test.cpp:282`).
 - The only in-process hook backend on Quest is the GOT import hook (`src/quest/sentinel/got_hook.h:4-13`). It cannot
@@ -219,16 +219,16 @@ on the game's `dlopen` slot.
 
 **Recommendation (R4).** The existing C ABI is the base, with no changes to any existing signature or struct layout
 (`sdk/include/nevr/plugin_interface.h:28-106`, `:108-176`). The exports a Quest plugin may provide are the optional set
-the PC plugin already uses: `NvrPluginGetInfo` (required), `NvrPluginGetApiVersion`, `NvrPluginGetCapabilities`,
-`NvrPluginInitEx` or `NvrPluginInit`, `NvrPluginOnFrame`, `NvrPluginOnGameStateChange`, `NvrPluginShutdown`.
-`NvrPluginShutdown` is not relied on: Quest processes end by `_exit` at the end of `android_main` (ADR 0020), and the
+the PC plugin already uses: `NevrPluginGetInfo` (required), `NevrPluginGetApiVersion`, `NevrPluginGetCapabilities`,
+`NevrPluginInitEx` or `NevrPluginInit`, `NevrPluginOnFrame`, `NevrPluginOnGameStateChange`, `NevrPluginShutdown`.
+`NevrPluginShutdown` is not relied on: Quest processes end by `_exit` at the end of `android_main` (ADR 0020), and the
 header already says shutdown is not guaranteed on process exit (`plugin_interface.h:119-128`).
 
 **Quest additions (all additive).**
 
-- `NEVR_HOST_PLATFORM_QUEST = 0x20` in the `NvrHostFlags` enum. The header says new flags need no bump
+- `NEVR_HOST_PLATFORM_QUEST = 0x20` in the `NevrHostFlags` enum. The header says new flags need no bump
   (`plugin_interface.h:183`).
-- Tail fields, appended after `log` in `NvrGameContext`, each gated by `ctx_size` the way the v5 and v6 tails are
+- Tail fields, appended after `log` in `NevrGameContext`, each gated by `ctx_size` the way the v5 and v6 tails are
   (`plugin_interface.h:85-96`, `:190-205`):
   - `const char* game_build_id`: the libr15 build ID in lowercase hex, read from the ELF note (`ReadBuildId`,
     `src/quest/sentinel/got_hook.h:149`).
@@ -466,7 +466,7 @@ Shaped by AGENTS.md (logging is part of the work) and `docs/standards/logging.md
 | ID | Prediction (result named before the check) | Falsifier | Tested in |
 | --- | --- | --- | --- |
 | P1 | The sentinel's constructor-time `dladdr` names a path whose directory holds the shipped `lib<name>.so`, after install from the repacked APK. | The path names a file outside the native library directory, or the plugin object is absent from it. Then the directory rule (R1) is rewritten. | S1 |
-| P2 | `dlopen` of the shipped plugin object at moment (b) returns a handle, and its `NvrPluginGetInfo` returns the name in the manifest. | `dlopen` fails, or the name differs. | S1 |
+| P2 | `dlopen` of the shipped plugin object at moment (b) returns a handle, and its `NevrPluginGetInfo` returns the name in the manifest. | `dlopen` fails, or the name differs. | S1 |
 | P3 | `dlopen` of a plugin object from the app's private files directory fails with a permission error on this build. | It succeeds. Then A2 is reconsidered (section 1). | S1 (probe only) |
 | P4 | A plugin whose build-ID list omits the running build is refused before init, with one `plugin_load` line naming `build_id_unsupported`, and the game reaches the main menu. | The plugin's init runs; or the game does not reach the main menu. | S1 |
 | P5 | Two plugins claiming one slot: the second install returns a non-OK status and logs `slot_owned_by=plugin:<first>`; the first's hook stays in place. | Both installs report OK, or the second overwrites the first. | S2 |
@@ -564,8 +564,8 @@ Paths are repo-relative to the nevr-runtime tree. Line numbers were checked agai
 line moves, the symbol named beside it is the anchor.
 
 - Plugin host on PC and its ABI: `src/runtime/ext/plugin_loader.cpp:79` (`HostPluginLog`), `:123` (`BuildPluginManifestJson`), `:1100` (`LoadPlugins`);
-  `sdk/include/nevr/plugin_interface.h:17-25` (export macro), `:28-34` (`NvrPluginInfo`), `:49-70` (log levels, `NevrLogFn`),
-  `:78-97` (`NvrGameContext`, v5 and v6 tails), `:99-106` (host flags), `:108-128` (lifecycle, shutdown not guaranteed),
+  `sdk/include/nevr/plugin_interface.h:17-25` (export macro), `:28-34` (`NevrPluginInfo`), `:49-70` (log levels, `NevrLogFn`),
+  `:78-97` (`NevrGameContext`, v5 and v6 tails), `:99-106` (host flags), `:108-128` (lifecycle, shutdown not guaranteed),
   `:141-176` (exports), `:178-220` (versioning, v5 to v7 notes), `:183` (additive exports need no bump), `:190-196` (no log before init),
   `:236-241` (capabilities are a declaration), `:249-264` (capability flags), `:259-260` (`HOOKS_ENGINE`), `:266-299` (assets).
 - Plugin config: `src/core/nevr_config.cpp:195-201` (allowed top-level keys), `:242-285` (`ParsePlugins`), `:246` (`kBadPlugins`),

@@ -230,7 +230,7 @@ TEST(ServerBotsGameType, TheSymbolsAreTheServicesHashes) {
   }
 }
 
-// #982: the session start frame's game type, as the runtime stores it for the public Arena round default.
+// The session start frame's game type, as the runtime stores it for the session's step (#1785).
 TEST(ServerBotsGameType, TheSessionStartFramesTypeIsReadByName) {
   const auto typeOf = [](const std::string& settings) {
     const std::vector<uint8_t> f = Frame(settings, kEntrants);

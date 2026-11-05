@@ -414,7 +414,7 @@ static void SwitchTest() {
 }
 
 int main(int argc, char** argv) {
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.ctx_size = sizeof ctx;
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;

@@ -34,6 +34,7 @@ struct HookBudgetRow {
 inline constexpr std::size_t kGrowthHeadroom = 32;
 
 inline constexpr HookBudgetRow kHookBudget[] = {
+    {"combat/match_tags.cpp", 2, 0},
     {"diag/hwdump_install.cpp", 18, 0},
     {"integration/dlopen_hook.cpp", 1, 0},
     {"invite/wizard_metric_hook.cpp", 1, 0},
@@ -45,6 +46,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"sentinel/crash_first_hook.cpp", 8, 0},
     {"sentinel/entry.cpp", 1, 0},
     {"sentinel/hand_pose_log_hook.cpp", 2, 0},
+    {"sentinel/irradiance_default_hook.cpp", 1, 0},
     {"sentinel/login_prompt_hook.cpp", 3, 0},
     {"sentinel/login_title_hook.cpp", 1, 0},
     {"sentinel/menu_cards_hook.cpp", 1, 0},

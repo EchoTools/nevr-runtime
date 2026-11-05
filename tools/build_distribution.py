@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sign a staged runtime package and atomically publish verified archives."""
+"""Sign a staged runtime package and atomically publish its verified .tar.zst archive."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import zipfile
 from pathlib import Path
 
 
@@ -213,12 +212,9 @@ def sign_package(package: Path, required: bool) -> tuple[str, list[str]] | None:
     return config
 
 
-def verify_archives(tar_path: Path, zip_path: Path, package: Path,
-                    signing: tuple[str, list[str]] | None) -> None:
+def verify_archives(tar_path: Path, package: Path, signing: tuple[str, list[str]] | None) -> None:
     if not tar_path.is_file() or tar_path.stat().st_size == 0:
         raise RuntimeError("tar.zst candidate is missing or empty")
-    if not zip_path.is_file() or zip_path.stat().st_size == 0:
-        raise RuntimeError("zip candidate is missing or empty")
     result = subprocess.run(["tar", "--zstd", "-tf", str(tar_path)], text=True,
                             capture_output=True, check=False)
     if result.returncode:
@@ -226,53 +222,31 @@ def verify_archives(tar_path: Path, zip_path: Path, package: Path,
     for name in REQUIRED_FILES:
         if not any(line.rstrip("/").endswith("/" + name) for line in result.stdout.splitlines()):
             raise RuntimeError(f"tar candidate lacks {name}")
-    with zipfile.ZipFile(zip_path) as archive:
-        names = archive.namelist()
-        bad_member = archive.testzip()
-        if bad_member:
-            raise RuntimeError(f"zip candidate has corrupt member: {bad_member}")
-    for name in REQUIRED_FILES:
-        if not any(item.rstrip("/").endswith("/" + name) for item in names):
-            raise RuntimeError(f"zip candidate lacks {name}")
 
     manifest = pe_manifest(package)
     with tempfile.TemporaryDirectory(prefix="nevr-archive-verify-", dir=tar_path.parent) as temp_name:
         temp = Path(temp_name)
-        with zipfile.ZipFile(zip_path) as zip_archive:
-            for index, (source, expected_hash) in enumerate(manifest.items()):
-                relative = source.relative_to(package)
-                member = str(Path(package.name) / relative).replace("\\", "/")
-                zip_payload = zip_archive.read(member)
-                if hashlib.sha256(zip_payload).hexdigest().upper() != expected_hash:
-                    raise RuntimeError(f"zip payload differs from signed package: {relative}")
-                tar_result = subprocess.run(["tar", "--zstd", "-xOf", str(tar_path), member],
-                                            capture_output=True, check=False)
-                if tar_result.returncode:
-                    raise RuntimeError(f"cannot read tar payload {relative}: {tar_result.stderr.decode(errors='replace')}")
-                if hashlib.sha256(tar_result.stdout).hexdigest().upper() != expected_hash:
-                    raise RuntimeError(f"tar payload differs from signed package: {relative}")
-                if signing is not None:
-                    kind, tool = signing
-                    zip_copy = temp / f"zip-{index}{source.suffix}"
-                    tar_copy = temp / f"tar-{index}{source.suffix}"
-                    zip_copy.write_bytes(zip_payload)
-                    tar_copy.write_bytes(tar_result.stdout)
-                    verify_one(kind, tool, zip_copy)
-                    verify_one(kind, tool, tar_copy)
+        for index, (source, expected_hash) in enumerate(manifest.items()):
+            relative = source.relative_to(package)
+            member = str(Path(package.name) / relative).replace("\\", "/")
+            tar_result = subprocess.run(["tar", "--zstd", "-xOf", str(tar_path), member],
+                                        capture_output=True, check=False)
+            if tar_result.returncode:
+                raise RuntimeError(f"cannot read tar payload {relative}: {tar_result.stderr.decode(errors='replace')}")
+            if hashlib.sha256(tar_result.stdout).hexdigest().upper() != expected_hash:
+                raise RuntimeError(f"tar payload differs from signed package: {relative}")
+            if signing is not None:
+                kind, tool = signing
+                tar_copy = temp / f"tar-{index}{source.suffix}"
+                tar_copy.write_bytes(tar_result.stdout)
+                verify_one(kind, tool, tar_copy)
 
 
-def create_zip(package: Path, archive_path: Path, archive_root: str) -> None:
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(package.rglob("*")):
-            if path.is_file():
-                archive.write(path, Path(archive_root) / path.relative_to(package))
-
-
-def publish(package: Path, destination: Path, tar_path: Path, zip_path: Path,
+def publish(package: Path, destination: Path, tar_path: Path,
             signing: tuple[str, list[str]] | None) -> None:
     root = destination.parent
     name = destination.name
-    if tar_path.parent != root or zip_path.parent != root:
+    if tar_path.parent != root:
         raise RuntimeError("package and archive outputs must share one publication directory")
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="nevr-dist-", dir=root) as temp_name:
@@ -280,19 +254,16 @@ def publish(package: Path, destination: Path, tar_path: Path, zip_path: Path,
         package_candidate = temp / name
         shutil.copytree(package, package_candidate)
         tar_candidate = temp / tar_path.name
-        zip_candidate = temp / zip_path.name
         command(["tar", "--zstd", "-cf", str(tar_candidate), "-C", str(temp), name])
-        create_zip(package_candidate, zip_candidate, name)
-        verify_archives(tar_candidate, zip_candidate, package_candidate, signing)
+        verify_archives(tar_candidate, package_candidate, signing)
 
         # Preserve old published state until all outputs validate. Roll back on
         # any rename failure; callers only upload after this target succeeds.
         destinations = [
             (destination, temp / f"old-package-{name}"),
             (tar_path, temp / f"old-{tar_path.name}"),
-            (zip_path, temp / f"old-{zip_path.name}"),
         ]
-        candidates = [package_candidate, tar_candidate, zip_candidate]
+        candidates = [package_candidate, tar_candidate]
         moved_old: list[tuple[Path, Path]] = []
         installed: list[Path] = []
         try:
@@ -325,13 +296,12 @@ def main() -> int:
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--tar", type=Path, required=True)
-    parser.add_argument("--zip", type=Path, required=True)
     parser.add_argument("--required-signing", action="store_true")
     args = parser.parse_args()
     try:
         signing = sign_package(args.package, args.required_signing)
-        publish(args.package, args.destination, args.tar, args.zip, signing)
-    except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as error:
+        publish(args.package, args.destination, args.tar, signing)
+    except (OSError, RuntimeError, ValueError) as error:
         print(f"distribution failed: {error}", file=sys.stderr)
         return 1
     return 0

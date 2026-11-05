@@ -44,8 +44,8 @@ static_assert(IsRootChild(kCrashesSubdirectory, nevr_root::Names<wchar_t>::kCras
 // an append. Each append's wait is bounded by kBootstrapLogLockWaitMs. A wait that times out (or fails)
 // marks the lock unreliable, and every later append in the process writes without waiting. A wait that
 // ends with the lock acquired is not capped per process: if a holder releases inside every wait, every
-// destination an append opens waits once (at most kBootstrapLogLockWaitMs), and a record whose write
-// fails after its wait falls back to the next of up to three destinations and waits again.
+// append waits once (at most kBootstrapLogLockWaitMs). The main log is an append's one destination: a
+// record whose write fails goes to stderr and waits no more, so one record waits at most once.
 inline constexpr const wchar_t* kBootstrapLogMutexName = nevr_run_log::kMutexName;  // one name for the host and the runtime
 inline constexpr unsigned long kBootstrapLogLockWaitMs = 500;
 

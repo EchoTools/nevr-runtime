@@ -96,10 +96,16 @@ inline constexpr Row kRows[] = {
      {{0x19e75c4, 3, {0xd103c3ffu, 0xa90d53f5u, 0xa90e7bf3u}}}},
     {"splash_skip.widget_update", "CR15VRMenuWidgetCS::Update", RowKind::kInlineHook, "WidgetUpdateHook", 4, 1,
      {{0x209a7a0, 3, {0xd10443ffu, 0x6d0b23e9u, 0xa90c6bfcu}}}},
+    // The image upload helper (the disassembly's FUN_019daf90, 1,768 bytes, 25 `bl` sites in the store file; first parameter an
+    // SGTexture*, x5 the texel data, x2 the format). No symbol names it and the engine calls it directly, so there is no GOT slot.
+    // The handler substitutes the grey texel of the "Default 3D Texture" during CGEngineResources::Initialize only
+    // (sentinel/irradiance_default_hook.h, #2091).
+    {"irradiance_default.upload", "the image upload helper FUN_019daf90 (CGRawInterfaceVK texture create-and-upload)",
+     RowKind::kInlineHook, "OnUpload", 5, 1, {{0x19daf90, 3, {0xd10603ffu, 0xa9126ffcu, 0xa91367fau}}}},
     // CR15CreditsUICS::InitCreditsUICI (ADRP x8, ADD x8) and OnComponentDisabled (ADRP x12, ADD x12): sites 0/1 and
     // 2/3 are the two ADRP+ADD pairs (#970); both load the credits blob and share the row's slot.
     {"credits.pairs", "CR15CreditsUICS::InitCreditsUICI, CR15CreditsUICS::OnComponentDisabled", RowKind::kCreditsPair,
-     "credits_text::Install", 5, 4,
+     "credits_text::Install", 6, 4,
      {{0x1ea1284, 1, {0xd000a008u}},
       {0x1ea1290, 1, {0x91378508u}},
       {0x1ea1d84, 1, {0xd000a00cu}},
@@ -124,7 +130,7 @@ constexpr bool TableIsWellFormed() {
 }
 static_assert(TableIsWellFormed(), "libr15_patch_table.h: a row is malformed");
 static_assert(kSlotAreaVaddr == 0x37d2640, "the slot area starts at the 64-byte boundary kSlotAreaGap bytes after the stock image end");
-static_assert(kSlotAreaVaddr + kSlotBytes * kRowCount == 0x37d2670, "ADR 0021 section 4: the grown end is 0x37d2670");
+static_assert(kSlotAreaVaddr + kSlotBytes * kRowCount == 0x37d2678, "ADR 0021 section 4: the grown end is 0x37d2678");
 static_assert(kSlotAreaVaddr + kSlotBytes * kRowCount <= RoundUp(kStockImageEnd, 4096), "the grown end stays inside the page the linker already maps");
 
 /// Limits of the extra-rows file, format 1 (ADR 0021 section 11).

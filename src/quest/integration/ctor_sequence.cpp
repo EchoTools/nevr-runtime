@@ -55,6 +55,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallRenderConfig: return "install_render_config";
     case StepId::kInstallCreditsText: return "install_credits_text";
     case StepId::kInstallMenuCards: return "install_menu_cards";
+    case StepId::kInstallIrradianceDefault: return "install_irradiance_default";
     case StepId::kInstallWizardMetric: return "install_wizard_metric";
     case StepId::kArmClockLevels: return "arm_clock_levels";
     case StepId::kStartTokenAuth: return "start_token_auth";
@@ -310,6 +311,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Run(StepId::kArmClockLevels, [&] { return steps.ArmClockLevels(true, want.clockLevels); });
     }
+
+    // The grey default irradiance texture (#2091): every launch, no counters. The hooks must be in place before the engine runs
+    // CGEngineResources::Initialize, which is after the constructor.
+    r.Run(StepId::kInstallIrradianceDefault, [&] { return steps.InstallIrradianceDefault(); });
 
     bool tokenOk = false;
     if (wantTokenAuth) {

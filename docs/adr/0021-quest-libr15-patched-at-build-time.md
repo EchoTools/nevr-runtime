@@ -69,10 +69,10 @@ A new header, libr15_patch_table.h, in a new directory under src/quest, is the o
 - the kind (`kInlineHook`, `kCreditsPair` or `kWordPatch`, section 11) and the handler's name.
 
 The sentinel's hook files (`lobby_full_hooks.cpp`, `ui_texture_mips.cpp`, `splash_skip_hook.cpp`) keep
-their handlers and lose their per-file `kXxxVaddr` and prologue constants; they name a table row. The six rows are:
+their handlers and lose their per-file `kXxxVaddr` and prologue constants; they name a table row. The seven rows are:
 `lobby_full.join` (disassembly 0x1340ba8), `lobby_full.failure` (0x1340cc8), `lobby_full.success` (0x134024c), `ui_texture.attach`
-(0x19e75c4), `splash_skip.widget_update` (0x209a7a0; #1128's correct address), and
-`credits.pairs` (disassembly 0x1ea1284/0x1ea1290 and 0x1ea1d84/0x1ea1d88, the two pairs of #970).
+(0x19e75c4), `splash_skip.widget_update` (0x209a7a0; #1128's correct address), `irradiance_default.upload` (0x19daf90, the image upload helper;
+#2091), and `credits.pairs` (disassembly 0x1ea1284/0x1ea1290 and 0x1ea1d84/0x1ea1d88, the two pairs of #970).
 
 ### 2. The patcher: a host tool that reads the stock file and refuses on any doubt
 
@@ -122,7 +122,7 @@ linker already maps (the page ends at 0x37d3000); nothing follows it. Other patc
 the same slack right after the image end (the reference build's two at 0x37d2540 and 0x37d2560, the community patcher's latches
 at 0x37d2540, 0x37d2560 and 0x37d2570), so the patcher leaves `kSlotAreaGap` (0x100) bytes free and puts the slot area at
 `roundup(0x37d2538 + 0x100, 64) = 0x37d2640`. It raises that segment's `p_memsz` (and `.bss`'s `sh_size`) so it ends at
-`0x37d2640 + 8 * rows = 0x37d2670` (`p_memsz` 0x1d87c0; `p_filesz` and every file offset unchanged). The slot area is
+`0x37d2640 + 8 * rows = 0x37d2678` (`p_memsz` 0x1d87c8; `p_filesz` and every file offset unchanged). The slot area is
 zero-initialised memory outside `GNU_RELRO` (which ends at 0x372c000), so a store to a slot needs no `mprotect` at all. Slot *i*
 is at `0x37d2640 + 8 * i`. A row's stub names its own slot; the credits pairs share one slot.
 
@@ -231,7 +231,7 @@ the public recipes pass none.
 ### 10. Logging
 
 The patcher's per-row JSON (section 2) goes to the build log and `--report`. The sentinel writes, to logcat and its on-disk log:
-`{"event":"libr15_patch","status":"verified","build_id":"<patched>","stock_build_id":"b243509c...","rows":6,"slot_area":"0x...."}`
+`{"event":"libr15_patch","status":"verified","build_id":"<patched>","stock_build_id":"b243509c...","rows":7,"slot_area":"0x...."}`
 once, then per row `{"event":"inline_hook","status":"ok","id":...,"target":...,"slot":...,"trampoline":...,"page_perms":"r-xp"}`
 (`page_perms` is read from `/proc/self/maps` after the activation: it is the evidence that no protection changed), and
 `credits_text` as today with the slot. The `mmap`/`mprotect` errno logging of the trampoline step (#1131) stays.
@@ -417,11 +417,11 @@ Written before any run. Lines are from the sentinel's log; "no execmod" means th
 `avc: denied { execmod }` for `libr15.so`.
 
 **Quest 3 (the tester's headset, OS build 52641960030600520).** In the constructor's log, in this order:
-1. `libr15_patch` `status=verified`, `build_id` = the patched ID, `stock_build_id` = `b243509c...`, `rows=6`;
-2. five `inline_hook` lines `status=ok`, each `page_perms":"r-xp"` (one per inline row of the table), and one `credits_text`
+1. `libr15_patch` `status=verified`, `build_id` = the patched ID, `stock_build_id` = `b243509c...`, `rows=7`;
+2. six `inline_hook` lines `status=ok`, each `page_perms":"r-xp"` (one per inline row of the table), and one `credits_text`
    line `status=applied` (the credits slot);
 3. the constructor's summary reads `steps_failed=0`, and `steps_ok + steps_failed + steps_skipped` is the number of constructor
-   steps (32 in this tree: the `StepId` values before `kCount` in `ctor_sequence.h`, including `attach_libr15`). The earlier
+   steps (40 in this tree: the `StepId` values before `kCount` in `ctor_sequence.h`, including `attach_libr15`). The earlier
    capture's one failed step was `credits_text`, which is now an `ok` step;
 4. the process stays up past the first minute and reaches the login (`to logged in`); there is no `SIGSEGV`, and no `execmod`
    anywhere in the capture. The menu's version label shows the build's version (its GOT hook installs without the patch) and the splash skip runs (its pin is now right).

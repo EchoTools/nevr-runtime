@@ -81,6 +81,7 @@ nevr_ht_test(libr15_attach_test GROUP hooks ${_af} NOEXC DL TIMEOUT 300 ARGS src
 nevr_ht_test(row_hooks_install_test GROUP hooks ${_af} NOEXC DL TIMEOUT 300 INCS src/quest/tests
   OBJS ${_attach_objs} o_hooks_attach_sentinel
   SRC src/quest/tests/row_hooks_install_test.cpp src/quest/sentinel/splash_skip_hook.cpp src/quest/sentinel/ui_texture_mips.cpp
+      src/quest/sentinel/irradiance_default_hook.cpp src/quest/sentinel/irradiance_default_install.cpp
       src/quest/social/lobby_full_hooks.cpp)
 # The lobby-full handlers themselves (#1160): the test includes lobby_full_hooks.cpp and drives OnJoin and OnFailure with a fake
 # lobby client and failure message, then reads the game buffer and the captured log lines.
@@ -215,15 +216,31 @@ nevr_ht_test(pns_provider_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core}
 # ANativeActivity_finish (the activity finished; no app, no activity or no finisher leaves the game's call).
 nevr_ht_test(quit_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/quit_hook_test.cpp src/quest/sentinel/quit_hook.cpp src/quest/sentinel/process_end_hook.cpp)
+# The player's choices are written to config.yaml by NevrConfig::Set (src/core/nevr_config.cpp, built with exceptions against the host
+# yaml-cpp, like the shared group): the Texture Resolution control (#2072) and the Controller Hand Flip toggle (#2082, hand_flip.h,
+# which the hand pose handler and the texture menu both include). A test that includes hand_flip.h links it and the host yaml-cpp.
+nevr_ht_obj(o_hooks_nevr_config GROUP hooks HOST SRC src/core/nevr_config.cpp)
 # The controller type and raw pose log (#1986): the real handlers through the thunk entries against stand-ins for
 # vrapi_EnumerateInputDevices, vrapi_GetInputTrackingState and vrapi_GetInputDeviceCapabilities. The result and every byte the
 # runtime wrote come back untouched; only type 4 enters the table; the lines are golden. got_pinned_test resolves both new slots in
 # the real libr15.
-nevr_ht_test(hand_pose_log_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+nevr_ht_test(hand_pose_log_hook_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_YAML_LIB} OBJS o_hooks_nevr_config ${_core} ${_ident}
   SRC src/quest/tests/hand_pose_log_hook_test.cpp src/quest/sentinel/hand_pose_log_hook.cpp)
-# The Controller Hand Flip toggle, pure half (#1986, KNOWN-WRONG #2043): the roll (y, -x, w, -z), the versioned file, the start
-# resolver, the save and the golden lines, against a temporary game directory.
-nevr_ht_test(hand_flip_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+# Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
+# CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
+# 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
+# the real libr15.
+nevr_ht_test(match_tag_default_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+  SRC src/quest/tests/match_tag_default_test.cpp src/quest/combat/match_tags.cpp)
+# The grey default irradiance texture (#2091, #1737 U25): the real handlers through the two thunk entries against models of
+# CGEngineResources::Initialize and of the image upload helper. The texel is substituted for the default 3D texture during
+# Initialize only; every other call of the helper, and Initialize's status, pass through. got_pinned_test pins the slot and the
+# call site in the real libr15; row_hooks_install_test activates the row.
+nevr_ht_test(irradiance_default_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+  SRC src/quest/tests/irradiance_default_test.cpp src/quest/sentinel/irradiance_default_hook.cpp)
+# The Controller Hand Flip toggle, pure half (#1986, KNOWN-WRONG #2043): the roll (y, -x, w, -z), the start from the configuration's
+# graphics.hand_flip (#2082), the save through NevrConfig::Set and the golden lines, against a temporary files directory.
+nevr_ht_test(hand_flip_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_YAML_LIB} OBJS o_hooks_nevr_config ${_core} ${_ident}
   SRC src/quest/tests/hand_flip_test.cpp)
 # libr15's array of free GPU ranges has no bound check (#1759): the real handler through the thunk entry against a model of
 # CGRawInterfaceVK::Free laid out as the game's (512 entries, the count after the last), the pinned words refused when one differs,
@@ -254,9 +271,7 @@ nevr_ht_test(texture_menu_test GROUP hooks HOST INCS ${_sent} TIMEOUT 120
 # rewrite it calls keeps them (it runs before the game is called: NEVR_OUTSIDE_GAME_CALL).
 nevr_ht_obj(o_hooks_texture_menu_hook GROUP hooks NOEXC PTHREAD HOST INCS ${_sent} SRC src/quest/sentinel/texture_menu_hook.cpp)
 nevr_ht_obj(o_hooks_texture_menu GROUP hooks HOST INCS ${_sent} SRC src/quest/sentinel/texture_menu.cpp)
-# The player's choice is written to config.yaml by NevrConfig::Set (src/core/nevr_config.cpp, built with exceptions against the host
-# yaml-cpp, like the shared group), so the test links it and the host yaml-cpp.
-nevr_ht_obj(o_hooks_nevr_config GROUP hooks HOST SRC src/core/nevr_config.cpp)
+# (o_hooks_nevr_config is defined with the hand pose tests above.)
 nevr_ht_test(texture_menu_hook_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_YAML_LIB}
   OBJS o_hooks_texture_menu_hook o_hooks_texture_menu o_hooks_nevr_config ${_core} ${_ident}
   SRC src/quest/tests/texture_menu_hook_test.cpp src/quest/sentinel/texture_quality_hook.cpp)

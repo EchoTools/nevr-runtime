@@ -788,7 +788,7 @@ void AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey() {
     CHECK(EventsWithAreAtLevel(r, std::string("config file key=graphics rejected reason=unknown_key name=") +
                                       (std::string(spelling) == "texture_quality " ? "(not printable ASCII without spaces)" : spelling) + " (",
                                LogLevel::kWarn));
-    CHECK(EventsContain(r, "the only key under graphics is texture_quality"));
+    CHECK(EventsContain(r, "the keys under graphics are texture_quality and hand_flip"));
     CHECK(!HasLevel(r, LogLevel::kError));
   }
   {  // the real key beside a misspelt one: the real one applies, the other is named
@@ -819,6 +819,78 @@ void AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey() {
     CHECK(EventsWithAreAtLevel(r, "reason=unknown_key more=12 (ignored)", LogLevel::kWarn));
     const LoadResult atCap = Load(Full(), "graphics:\n  a: 1\n  b: 1\n  c: 1\n  d: 1\n  e: 1\n  f: 1\n  g: 1\n  h: 1\n");
     CHECK(!EventsContain(atCap, "more="));
+  }
+}
+
+// graphics.hand_flip (#2082): the Controller Hand Flip choice, where the menu keeps it. Absent is Off and from the default; true is
+// On from the file; a value that is no boolean is Off, from the default, with one Warning that names the key and not the value.
+void HandFlipIsOffUnlessTheFileSaysTrue() {
+  {  // no file, an empty file, no section, a section without the key, the texture key alone: Off, from the default, nothing said
+    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+    CHECK(!none.config.handFlip.on && none.config.handFlip.source != Source::kFile);
+    CHECK(EventsContain(none, "config key=graphics.hand_flip flip=0 source=default"));
+    CHECK(!HasLevel(none, LogLevel::kWarn) && !HasLevel(none, LogLevel::kError));
+    for (const char* text : {"", "version: 1\n", "graphics: {}\n", "graphics:\n", "graphics:\n  texture_quality: high\n"}) {
+      const LoadResult r = Load(Full(), text);
+      CHECK(!r.config.handFlip.on && r.config.handFlip.source != Source::kFile);
+      CHECK(EventsContain(r, "config key=graphics.hand_flip flip=0 source=default"));
+      CHECK(!HasLevel(r, LogLevel::kWarn));
+    }
+  }
+  for (const char* word : {"true", "yes", "True", "\"true\""}) {  // On, from the file
+    const LoadResult r = Load(Full(), std::string("graphics:\n  hand_flip: ") + word + "\n");
+    CHECK(r.config.handFlip.on && r.config.handFlip.source == Source::kFile);
+    CHECK(EventsContain(r, "config key=graphics.hand_flip flip=1 source=config"));
+    CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
+    CHECK(std::string(nevr_quest::HandFlipSourceName(r.config.handFlip)) == "config");
+    CHECK(DefaultsOnly(r.config.requested) && DefaultsOnly(r.config.effective));  // no feature moves
+    CHECK(IsDefault(r));                                                          // and the texture level is untouched
+  }
+  for (const char* word : {"false", "no", "False"}) {  // Off, but the file said so: the source is the file
+    const LoadResult r = Load(Full(), std::string("graphics:\n  hand_flip: ") + word + "\n");
+    CHECK(!r.config.handFlip.on && r.config.handFlip.source == Source::kFile);
+    CHECK(EventsContain(r, "config key=graphics.hand_flip flip=0 source=config"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  {  // beside the texture key: both apply, and neither is named as unknown
+    const LoadResult r = Load(Full(), "graphics:\n  texture_quality: low\n  hand_flip: true\n");
+    CHECK(r.config.handFlip.on && r.config.handFlip.source == Source::kFile);
+    CHECK(r.config.textureQuality.level == nevr_quest::texture_quality::Level::kLow && r.config.textureQuality.source == Source::kFile);
+    CHECK(!EventsContain(r, "unknown_key") && !EventsContain(r, "unknown_nested=") && !HasLevel(r, LogLevel::kWarn));
+  }
+  for (const char* text : {"graphics:\n  hand_flip: maybe\n", "graphics:\n  hand_flip: 2\n", "graphics:\n  hand_flip: [true]\n",
+                           "graphics:\n  hand_flip: {a: 1}\n", "graphics:\n  hand_flip:\n"}) {  // a value nobody meant: Off, the default
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected);
+    CHECK(!r.config.handFlip.on && r.config.handFlip.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=graphics.hand_flip rejected reason=", LogLevel::kWarn));
+    CHECK(EventsContain(r, "config key=graphics.hand_flip flip=0 source=default"));
+    CHECK(!EventsContain(r, "maybe") && !HasLevel(r, LogLevel::kError));
+  }
+  {  // an unset ${VAR} is named by its reason, and the choice is Off
+    const LoadResult r = Load(Full(), "graphics:\n  hand_flip: ${NEVR_QUEST_TEST_UNSET_HAND_FLIP}\n");
+    CHECK(!r.config.handFlip.on && r.config.handFlip.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=graphics.hand_flip rejected reason=unset_variable", LogLevel::kWarn));
+  }
+  {  // a file rejected as a whole contributes nothing, this key included
+    const LoadResult r = Load(Full(), "graphics:\n  hand_flip: true\nnot_a_section: 1\n");
+    CHECK(r.fileRejected);
+    CHECK(!r.config.handFlip.on && r.config.handFlip.source != Source::kFile);
+    CHECK(EventsContain(r, "config key=graphics.hand_flip flip=0 source=default"));
+  }
+  {  // the section is not a mapping: no hand flip, and the texture rule's own Warning
+    const LoadResult r = Load(Full(), "graphics: true\n");
+    CHECK(!r.config.handFlip.on && r.config.handFlip.source != Source::kFile);
+  }
+  {  // a misspelling is named, like the texture key's, and the choice stays Off
+    const LoadResult r = Load(Full(), "graphics:\n  hand_flp: true\n  Hand_Flip: true\n");
+    CHECK(!r.config.handFlip.on && r.config.handFlip.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "reason=unknown_key name=hand_flp (", LogLevel::kWarn));
+    CHECK(EventsWithAreAtLevel(r, "reason=unknown_key name=Hand_Flip (", LogLevel::kWarn));
+  }
+  {  // the same key anywhere else is nothing
+    const LoadResult r = Load(Full(), "diagnostics:\n  hand_flip: true\n");
+    CHECK(!r.config.handFlip.on && r.config.handFlip.source != Source::kFile);
   }
 }
 
@@ -1097,6 +1169,7 @@ int main() {
   ATextureQualityThatIsNotAWordFallsBackToStock();
   AGraphicsSectionThatIsNotAMappingFallsBackToStock();
   AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey();
+  HandFlipIsOffUnlessTheFileSaysTrue();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   ClockLevelsOverrideIsOffUnlessTheDiagnosticsKeyIsTrue();

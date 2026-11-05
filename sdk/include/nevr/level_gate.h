@@ -8,9 +8,9 @@
  *
  *   static LevelGate g_gate;
  *
- *   NvrPluginInitEx(ctx, args_json):  g_gate.Set(levels read from args_json);
- *   NvrPluginOnFrame(ctx):            const bool on = g_gate.Allows(ctx);      // act only while `on`
- *   NvrPluginOnGameStateChange(ctx):  const bool on = g_gate.Allows(ctx);      // a level can also load with
+ *   NevrPluginInitEx(ctx, args_json):  g_gate.Set(levels read from args_json);
+ *   NevrPluginOnFrame(ctx):            const bool on = g_gate.Allows(ctx);      // act only while `on`
+ *   NevrPluginOnGameStateChange(ctx):  const bool on = g_gate.Allows(ctx);      // a level can also load with
  *                                                                              // no state change, so decide
  *                                                                              // per frame as well
  *
@@ -41,13 +41,13 @@ public:
     bool Configured() const { return !symbols_.empty(); }
 
     /// True when `ctx` came from a host that reports the level (v8+): its ctx_size reaches past level_name.
-    static bool Covers(const NvrGameContext* ctx) {
+    static bool Covers(const NevrGameContext* ctx) {
         return ctx != nullptr &&
-               ctx->ctx_size >= offsetof(NvrGameContext, level_name) + sizeof(ctx->level_name);
+               ctx->ctx_size >= offsetof(NevrGameContext, level_name) + sizeof(ctx->level_name);
     }
 
     /// Whether the plugin should act in this context: no names configured, or the context's level is one of them.
-    bool Allows(const NvrGameContext* ctx) const {
+    bool Allows(const NevrGameContext* ctx) const {
         if (!Configured()) return true;
         if (!Covers(ctx)) return false;
         for (const uint64_t symbol : symbols_) {

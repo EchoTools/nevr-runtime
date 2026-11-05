@@ -126,7 +126,7 @@ int main() {
   if (mkdtemp(tmpl) == nullptr) return 2;
   g_dir = tmpl;
   q15t::SetModuleSwitchDirForTest(g_dir.c_str());
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.ctx_size = sizeof ctx;
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;

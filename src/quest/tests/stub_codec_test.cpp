@@ -134,7 +134,7 @@ TEST(TheCreditsPairsLoadFromTheirSlotLikeBinutilsReadsThem) {
   // Disassembled with aarch64-linux-gnu-objdump -D -b binary -m aarch64: the first pair (adrp x8 at 0x1da1284) and the
   // second (adrp x12 at 0x1da1d84) both name the page 0x37d2000 and the codec input slot 0x37d2568 (offset 1384). That slot is
   // an arbitrary 8-byte-aligned input to the encoder, not a table slot and not a word of the patched libr15: the table's
-  // slots are 0x37d2640..0x37d2668 since row C8.
+  // slots are 0x37d2640..0x37d2670 since row C8 and #2091's row.
   //   b000d188 adrp x8, 0x37d2000   f942b508 ldr x8, [x8, #1384]
   //   b000d18c adrp x12, 0x37d2000  f942b58c ldr x12, [x12, #1384]
   SlotLoadPair a{};

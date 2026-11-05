@@ -432,7 +432,7 @@ TEST(PluginManifest, HostileNamesStillProduceValidJson) {
   PluginManifestEntry e;
   e.name = "a \"quoted\" \\ name";
   e.file = std::string("bad\xff\xfe") + ".dll";
-  e.error = "NvrPluginGetInfo returned NULL name";
+  e.error = "NevrPluginGetInfo returned NULL name";
   const std::string out = BuildPluginManifest({e});
   const nlohmann::json parsed = nlohmann::json::parse(out);
   ASSERT_EQ(parsed.size(), 1u);
@@ -494,7 +494,7 @@ TEST(PluginManagerRows, RowsKeepTheReportOrderAndEachEntrysNameAndFile) {
 
 TEST(PluginManagerRows, EachKindOfEntryHasItsOwnState) {
   const std::vector<Row> rows = BuildRows({LoadedEntry("a", 0), DisabledEntry("b"),
-                                           FailedEntry("c", "NvrPluginGetInfo returned NULL name")});
+                                           FailedEntry("c", "NevrPluginGetInfo returned NULL name")});
   ASSERT_EQ(rows.size(), 3u);
   EXPECT_EQ(rows[0].state, RowState::Loaded);
   EXPECT_EQ(rows[1].state, RowState::Disabled);

@@ -1,7 +1,7 @@
 // The clock-level witness and candidate: a GOT wrapper on the game's import of vrapi_SetClockLevels.
 //
 // Always: log what the game asks for (levels, count, the runtime's answer). With SetClockRaise(true) (config.yaml `args: {clock: raise}`,
-// read in NvrPluginInitEx; default off): ask the runtime for at least Q15T_CPU_LEVEL / Q15T_GPU_LEVEL instead of what the game asked
+// read in NevrPluginInitEx; default off): ask the runtime for at least Q15T_CPU_LEVEL / Q15T_GPU_LEVEL instead of what the game asked
 // for. The wrapper only ever raises a level. The switch is a runtime flag, so one binary serves both arms of the A/B.
 #pragma once
 

@@ -21,7 +21,7 @@ constexpr int kSnapshotBytes = 16;
 /// hook_guard::Record and RecordBytes (outside src/runtime/tests and hook/patching.h, comment lines
 /// dropped) finds 70 call lines: each is a place an install reaches Record(). A call line can install
 /// several records (a loop over a table, or a wrapper called once per row or per engine hook: the
-/// binary_bug_fixes hook table, loading_tips' detour list, arena_public_clock's script rows, plugin_assets'
+/// binary_bug_fixes hook table, loading_tips' detour list, plugin_assets'
 /// two engine hooks), so the capacity is about twice the line count. The table holds live records, not call
 /// lines: a retired record's slot is reused. If the table fills, Record() counts the drop (never silent):
 /// VerifyAll() reports it at ERROR and DroppedCount() exposes it.

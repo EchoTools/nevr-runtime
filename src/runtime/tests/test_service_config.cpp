@@ -114,7 +114,7 @@ const char* InvokeAccessor(Accessor accessor) {
     case Accessor::kAutoRelay: return NevrCfgAutoRelay(53748);
     case Accessor::kGameNativeConfigJson: return NevrCfgGameNativeConfigJson();
     case Accessor::kModuleConfigGet: {
-      NvrModuleContext context{};
+      NevrModuleContext context{};
       context.config_get = &NevrCfgGetFlat;
       return context.config_get("nevr_socket_uri");
     }
@@ -170,7 +170,7 @@ TEST(StableStringPoolAccessors, InjectedConfigAndDefaultsNeverDiscoverFilesOrRea
   const nlohmann::json document = nlohmann::json::parse(json);
   EXPECT_EQ(document["social_plugin"]["server_key"], "secret-test-key");
 
-  NvrModuleContext context{};
+  NevrModuleContext context{};
   context.config_get = &NevrCfgGetFlat;
   EXPECT_EQ(context.config_get("nevr_socket_uri"), socket);
 }

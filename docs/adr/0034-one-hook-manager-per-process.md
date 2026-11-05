@@ -63,9 +63,7 @@ G6A-094 names those modules' source: the `afkxr` modules of Ducky's reference co
 `src/runtime/patch/social_facade.cpp`, `src/runtime/hook/dll_load_hook.cpp`). Some install directly and are recorded
 nowhere: the `BuildCmdLineSyntaxDefinitions` and `PreprocessCommandLine` hooks of `src/runtime/lifecycle/initialize.cpp`
 (`Hooking::Attach`), `src/runtime/patch/asset_cdn.cpp` (`Hooking::Attach`), the four hooks of
-`src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/plugin_assets.cpp` (`MH_CreateHook`) and
-`src/runtime/patch/arena_public_clock.cpp`, which says why: HookGuard has no retire, so a hook per reload of a script DLL
-would fill its table. A plugin that installs its own
+`src/modules/platform-compat/src/platform_compat.cpp` and `src/runtime/patch/plugin_assets.cpp` (`MH_CreateHook`). A plugin that installs its own
 detours declares `NEVR_PLUGIN_CAP_HOOKS_ENGINE`, whose comment says "a second MinHook instance does not share the host's
 hook table" (`sdk/include/nevr/plugin_interface.h`); the SDK's `nevr/pc/hook_manager.h` is a scoped MinHook lifecycle the
 plugin supplies itself.

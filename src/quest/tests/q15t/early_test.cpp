@@ -18,9 +18,9 @@
 #include "plugin_log.h"
 
 extern "C" {
-NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void);
-NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void);
-NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext*, const char*);
+NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void);
+NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void);
+NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext*, const char*);
 }
 
 static int g_fail = 0;
@@ -89,11 +89,11 @@ static bool Untouched(uintptr_t base) {
 }
 
 static const char* kId = "b243509c08ce677aeb95fa348016949b3fc45230";
-static NvrGameContext MakeCtx(uintptr_t base, const char* id, bool quest = true) {
-  NvrGameContext c{};
+static NevrGameContext MakeCtx(uintptr_t base, const char* id, bool quest = true) {
+  NevrGameContext c{};
   c.base_addr = base;
   c.flags = NEVR_HOST_IS_CLIENT | (quest ? static_cast<uint32_t>(NEVR_HOST_PLATFORM_QUEST) : 0u);
-  c.ctx_size = sizeof(NvrGameContext);
+  c.ctx_size = sizeof(NevrGameContext);
   c.plugin_id = "q15t_early";
   c.log = &FakeLog;
   c.game_build_id = id;
@@ -106,10 +106,10 @@ int main() {
   q15t::SetModuleSwitchDirForTest(tmpl);
 
   // 0. what the loader reads before it calls the init
-  const NvrPluginInfo info = NvrPluginGetInfo();
+  const NevrPluginInfo info = NevrPluginGetInfo();
   CHECK(info.name != nullptr && std::strcmp(info.name, "q15t_early") == 0, "plugin name %s: it must differ from the main plugin's", info.name);
-  CHECK(NvrPluginGetCapabilities() == NEVR_PLUGIN_CAP_HOOKS_ENGINE, "caps 0x%x: only HOOKS_ENGINE (sizes are not gameplay)", NvrPluginGetCapabilities());
-  CHECK(NvrPluginInitEx(nullptr, "{}") != 0, "a null context must be refused");
+  CHECK(NevrPluginGetCapabilities() == NEVR_PLUGIN_CAP_HOOKS_ENGINE, "caps 0x%x: only HOOKS_ENGINE (sizes are not gameplay)", NevrPluginGetCapabilities());
+  CHECK(NevrPluginInitEx(nullptr, "{}") != 0, "a null context must be refused");
 
   // 1. the pinned build on a Quest, the library base known: heaps swapped all four rows, memsys refused on this image (its code words
   // are not there) with its own ERROR record, and the init returns 0 either way
@@ -119,8 +119,8 @@ int main() {
     q15t::SetHeapsDeviceForTest("eureka");
     q15t::ResetMemsysForTest();
     const uintptr_t base = NewLib();
-    NvrGameContext ctx = MakeCtx(base, kId);
-    CHECK(NvrPluginInitEx(&ctx, "{}") == 0, "InitEx must return 0 with hooks swapped");
+    NevrGameContext ctx = MakeCtx(base, kId);
+    CHECK(NevrPluginInitEx(&ctx, "{}") == 0, "InitEx must return 0 with hooks swapped");
     for (int i = 0; i < 4; ++i)
       CHECK(GameRead(base, i) == kExpect[i].target, "row %d: the game reads %llu MiB, want %llu", i,
             (unsigned long long)(GameRead(base, i) >> 20), (unsigned long long)(kExpect[i].target >> 20));
@@ -135,8 +135,8 @@ int main() {
     g_lines.clear();
     q15t::ResetHeapsForTest();
     const uintptr_t base = NewLib();
-    NvrGameContext ctx = MakeCtx(base, "0000000000000000000000000000000000000000");
-    CHECK(NvrPluginInitEx(&ctx, "{}") == 0, "a refused build must still return 0");
+    NevrGameContext ctx = MakeCtx(base, "0000000000000000000000000000000000000000");
+    CHECK(NevrPluginInitEx(&ctx, "{}") == 0, "a refused build must still return 0");
     CHECK(Untouched(base), "a slot was swapped on the wrong build");
     CHECK(Count("refused: not the pinned game build", 2) == 1, "no WARNING for the refusal");
     CHECK(Count("module install") == 0, "a module ran on the wrong build");
@@ -147,12 +147,12 @@ int main() {
     g_lines.clear();
     q15t::ResetHeapsForTest();
     const uintptr_t base = NewLib();
-    NvrGameContext none = MakeCtx(base, nullptr);
-    CHECK(NvrPluginInitEx(&none, "{}") == 0 && Untouched(base), "no build id: must refuse and touch nothing");
-    NvrGameContext pc = MakeCtx(base, kId, /*quest=*/false);
-    CHECK(NvrPluginInitEx(&pc, "{}") == 0 && Untouched(base), "not a Quest: must refuse and touch nothing");
-    NvrGameContext nobase = MakeCtx(0, kId);
-    CHECK(NvrPluginInitEx(&nobase, "{}") == 0, "base 0: must return 0");
+    NevrGameContext none = MakeCtx(base, nullptr);
+    CHECK(NevrPluginInitEx(&none, "{}") == 0 && Untouched(base), "no build id: must refuse and touch nothing");
+    NevrGameContext pc = MakeCtx(base, kId, /*quest=*/false);
+    CHECK(NevrPluginInitEx(&pc, "{}") == 0 && Untouched(base), "not a Quest: must refuse and touch nothing");
+    NevrGameContext nobase = MakeCtx(0, kId);
+    CHECK(NevrPluginInitEx(&nobase, "{}") == 0, "base 0: must return 0");
     CHECK(Untouched(base), "base 0: a slot of another library was touched");
     CHECK(Count("refused: not the pinned game build", 2) == 3, "three refusals expected, got %d", Count("refused: not the pinned game build", 2));
     CHECK(Count("module install") == 0, "a module ran although the context was refused");
@@ -161,9 +161,9 @@ int main() {
   // 4. a context too small to carry the log and the build id (an old host): refused, no crash
   {
     g_lines.clear();
-    NvrGameContext small = MakeCtx(0x1000, kId);
-    small.ctx_size = offsetof(NvrGameContext, flags) + sizeof(small.flags);
-    CHECK(NvrPluginInitEx(&small, "{}") == 0, "a short context must return 0");
+    NevrGameContext small = MakeCtx(0x1000, kId);
+    small.ctx_size = offsetof(NevrGameContext, flags) + sizeof(small.flags);
+    CHECK(NevrPluginInitEx(&small, "{}") == 0, "a short context must return 0");
     CHECK(Count("module install") == 0, "a module ran on a short context");
   }
   if (g_fail == 0) std::printf("early_test: all checks passed\n");

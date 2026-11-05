@@ -22,10 +22,10 @@ void NEVR_DeregisterResourceOverrides(const void* data_start, const void* data_e
 // The module entry points are declared NEVR_MODULE_API (dllimport without NEVR_MODULE_EXPORTS) in the module
 // interface; the static modules are linked into this DLL, so declare them plainly, as boot.cpp does.
 extern "C" {
-int platform_compat_Init(const NvrModuleContext* ctx);
+int platform_compat_Init(const NevrModuleContext* ctx);
 uint32_t platform_compat_ApiVersion(void);
 void platform_compat_Shutdown(void);
-int token_auth_Init(const NvrModuleContext* ctx);
+int token_auth_Init(const NevrModuleContext* ctx);
 uint32_t token_auth_ApiVersion(void);
 void token_auth_Shutdown(void);
 const char* TokenAuth_GetToken(void);
@@ -94,7 +94,7 @@ std::uint32_t PlatformCompatApiVersion() {
 
 int PlatformCompatInit(const void* ctx) {
   return Guarded("platform_compat_init", &ReportThrew, kInitFailed,
-                 [ctx] { return platform_compat_Init(static_cast<const NvrModuleContext*>(ctx)); });
+                 [ctx] { return platform_compat_Init(static_cast<const NevrModuleContext*>(ctx)); });
 }
 
 void PlatformCompatShutdown() {
@@ -107,7 +107,7 @@ std::uint32_t TokenAuthApiVersion() {
 
 int TokenAuthInit(const void* ctx) {
   return Guarded("token_auth_init", &ReportThrew, kInitFailed,
-                 [ctx] { return token_auth_Init(static_cast<const NvrModuleContext*>(ctx)); });
+                 [ctx] { return token_auth_Init(static_cast<const NevrModuleContext*>(ctx)); });
 }
 
 void TokenAuthShutdown() {

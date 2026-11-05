@@ -23,11 +23,11 @@
   #define NEVR_MODULE_API extern "C" __attribute__((visibility("default")))
 #endif
 
-/* Host flags — use the same values as NvrHostFlags in nevr_plugin_interface.h.
+/* Host flags — use the same values as NevrHostFlags in nevr_plugin_interface.h.
  * Defined as an enum to avoid #define collisions when both headers are included. */
 #ifndef NEVR_HOST_FLAGS_DEFINED
 #define NEVR_HOST_FLAGS_DEFINED
-enum NvrModuleHostFlags : uint32_t {
+enum NevrModuleHostFlags : uint32_t {
     NEVR_MODULE_HOST_IS_SERVER   = 0x02,
     NEVR_MODULE_HOST_IS_CLIENT   = 0x04,
     NEVR_MODULE_HOST_IS_HEADLESS = 0x10,
@@ -36,7 +36,7 @@ enum NvrModuleHostFlags : uint32_t {
 #endif
 
 /* Context passed to every module at init time */
-struct NvrModuleContext {
+struct NevrModuleContext {
     uintptr_t base_addr;      /* echovr.exe ImageBase */
     void*     early_config;   /* g_earlyConfigPtr (game JSON), may be NULL.
                                * KEPT for ABI stability; new code should read
@@ -64,14 +64,14 @@ struct NvrModuleContext {
 /*
  * Module API versioning (N133 S5).
  *
- * v1 is the pre-versioning ABI: NvrModuleContext WITHOUT config_get, and no
- * version export (a module that does not export NvrModuleApiVersion is treated
+ * v1 is the pre-versioning ABI: NevrModuleContext WITHOUT config_get, and no
+ * version export (a module that does not export NevrModuleApiVersion is treated
  * as v1, mirroring the plugin convention). v2 appends config_get to
- * NvrModuleContext — a layout change to this published cross-DLL struct, so it
+ * NevrModuleContext — a layout change to this published cross-DLL struct, so it
  * is a backward-incompatible bump.
  *
  * A module reports the version it was compiled against via the optional
- * NvrModuleApiVersion export. The boot sequence REFUSES (FatalError — modules are
+ * NevrModuleApiVersion export. The boot sequence REFUSES (FatalError — modules are
  * required) a module whose reported version EXCEEDS the
  * host's: such a module was built against a newer ABI and would expect context
  * fields this host does not set. An older/equal module is accepted — appended
@@ -81,24 +81,41 @@ struct NvrModuleContext {
 #define NEVR_MODULE_API_VERSION 2
 
 /* Optional export: the API version the module was compiled against. */
-typedef uint32_t (*NvrModuleGetApiVersion_fn)(void);
+typedef uint32_t (*NevrModuleGetApiVersion_fn)(void);
 
 /* Host acceptance predicate. A module version is supported iff it does not
  * exceed the host's. Header-only + constexpr so the loader and the unit test
  * share exactly one definition of the refusal rule. */
-constexpr bool NvrModuleApiVersionSupported(uint32_t module_version) {
+constexpr bool NevrModuleApiVersionSupported(uint32_t module_version) {
     return module_version <= NEVR_MODULE_API_VERSION;
 }
 
 /* Required export: called once by the boot sequence. Return 0 on success, non-zero on failure.
  * On failure, the boot sequence calls FatalError and the game does not start. */
-typedef int (*NvrModuleInit_fn)(const NvrModuleContext* ctx);
+typedef int (*NevrModuleInit_fn)(const NevrModuleContext* ctx);
 
 /* Optional export: called during shutdown for cleanup */
-typedef void (*NvrModuleShutdown_fn)(void);
+typedef void (*NevrModuleShutdown_fn)(void);
 
 /* Optional export: called each game tick */
-typedef void (*NvrModuleOnFrame_fn)(const NvrModuleContext* ctx);
+typedef void (*NevrModuleOnFrame_fn)(const NevrModuleContext* ctx);
 
 /* Optional export: called on game state transitions */
-typedef void (*NvrModuleOnGameStateChange_fn)(const NvrModuleContext* ctx, uint32_t old_state, uint32_t new_state);
+typedef void (*NevrModuleOnGameStateChange_fn)(const NevrModuleContext* ctx, uint32_t old_state, uint32_t new_state);
+
+/*
+ * Deprecated Nvr* aliases: the prefix of this ABI is Nevr. These keep a module written against the old names
+ * compiling, with a deprecation warning; they name the same types and the same function.
+ */
+using NvrModuleHostFlags [[deprecated("use NevrModuleHostFlags")]] = NevrModuleHostFlags;
+using NvrModuleContext [[deprecated("use NevrModuleContext")]] = NevrModuleContext;
+using NvrModuleGetApiVersion_fn [[deprecated("use NevrModuleGetApiVersion_fn")]] = NevrModuleGetApiVersion_fn;
+using NvrModuleInit_fn [[deprecated("use NevrModuleInit_fn")]] = NevrModuleInit_fn;
+using NvrModuleShutdown_fn [[deprecated("use NevrModuleShutdown_fn")]] = NevrModuleShutdown_fn;
+using NvrModuleOnFrame_fn [[deprecated("use NevrModuleOnFrame_fn")]] = NevrModuleOnFrame_fn;
+using NvrModuleOnGameStateChange_fn [[deprecated("use NevrModuleOnGameStateChange_fn")]] =
+    NevrModuleOnGameStateChange_fn;
+[[deprecated("use NevrModuleApiVersionSupported")]] constexpr bool NvrModuleApiVersionSupported(
+    uint32_t module_version) {
+    return NevrModuleApiVersionSupported(module_version);
+}
