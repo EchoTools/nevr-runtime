@@ -113,10 +113,9 @@ func goDefaults() map[string]string {
 		if err != nil {
 			return
 		}
-		for i, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
-			if i < len(keys) {
-				goDefaultsValue[keys[i]] = line
-			}
+		lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+		for i := range min(len(keys), len(lines)) {
+			goDefaultsValue[keys[i]] = lines[i]
 		}
 	})
 	return goDefaultsValue
