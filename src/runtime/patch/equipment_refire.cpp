@@ -130,7 +130,8 @@ void SetterHook(void* component, std::uint32_t handle, std::uint64_t value) {
   Verdict verdict;
   {
     std::lock_guard<std::mutex> guard(g_lock);
-    verdict = g_debouncer.Changed(row.slot, cs, handle, value, local, server, changed, GetTickCount64());
+    // An unchanged call was never asked who owns the record, so it must not read as "not local" (the verdict would say so).
+    verdict = g_debouncer.Changed(row.slot, cs, handle, value, local || !changed, server, changed, GetTickCount64());
     if (verdict == Verdict::kTracked) reader(cs, &g_vtable[I], sizeof g_vtable[I]);
   }
   char text[96];

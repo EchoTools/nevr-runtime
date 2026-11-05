@@ -116,6 +116,11 @@ class Wiring(unittest.TestCase):
         local = text[text.index("bool IsLocalRecord") : text.index("void ValueText")]
         self.assertLess(local.index("kNetGameFieldOffset"), local.index("g_netGame("))
 
+    def test_an_unchanged_call_is_not_reported_as_a_remote_record(self):
+        text = strip_comments(GLUE.read_text())
+        hook = text[text.index("void SetterHook") : text.index("const char* StaleReason")]
+        self.assertIn("local || !changed, server, changed", hook)
+
     def test_the_handler_is_called_for_the_slot_that_was_due(self):
         text = strip_comments(GLUE.read_text())
         self.assertIn("g_handler[slotIndex](reinterpret_cast<void*>(r.owner), r.handle);", text)

@@ -10,7 +10,8 @@
 //       tac mod  PC 0x140d43f00 writes record+0x20, calls 0x140ceaaa0    Quest SetAbilitySlot 0x227cde4, HandleAbilityChange 0x227b124
 //       ordnance PC 0x140d45990 writes record+0x28, calls 0x140ceb720    Quest SetGrenadeSlot 0x227cf90, HandleGrenadeChange 0x227b1dc
 //     The setters take (component, handle, value). The handler takes (component, handle), reads the value from the record
-//     and sends the equipment-changed event (0xefe2dea238cf2e32) to the scripts that arm the slot.
+//     and sends the slot's equipment-changed event to the scripts that arm the slot (Quest: the ability handler sends
+//     0xefe2dea238cf2e32, the weapon handler 0x141da9bee941e9bc).
 //   - The scripts drop an event that arrives while they are still handling the previous one (#2121: the ability core's change
 //     handler, "the earlier tac mod is armed"); the record already holds the new value, so the HUD shows the last choice and
 //     the game uses an earlier one. A tester reported the same for weapons and ordnance. The only information that is lost is the
