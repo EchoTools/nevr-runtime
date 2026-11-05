@@ -89,6 +89,7 @@ PROGRAMS = {
         "login_prompt_hook_test",
         "login_signin_code_chain_test",
         "login_title_hook_test",
+        "match_tag_default_test",
         "menu_cards_hook_test",
         "menu_version_label_test",
         "obb_skip_hook_test",

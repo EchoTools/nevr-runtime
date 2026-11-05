@@ -9,6 +9,8 @@
  * consumers through Bionic's local-group symbol lookup.
  */
 
+#include "activation.h"
+#include "hand_flip.h"
 #include "sentinel.h"
 #include "sentinel_log.h"
 #include "generated/nevr_build_info.h"
@@ -19,6 +21,7 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "quest/combat/match_tags.h"
 #include "quest/invite/frame_dispatch.h"
 #include "main_level.h"
 #include "menu_cards_hook.h"
@@ -167,8 +170,17 @@ bool InstallPermissionWaitHook() noexcept {
     nevr_quest::quit::Install();
     // The controller type and raw pose log (#1986): two hooks and a poller thread; a pose is changed only while Controller Hand Flip
     // is On (hand_flip.h, off by default; KNOWN-WRONG #2043 the toggle is the interim). Its hand_pose_log_install line says whether
-    // it went in; a refused install leaves the game's calls as they are.
+    // it went in; a refused install leaves the game's calls as they are. The toggle's choice is the configuration's graphics.hand_flip
+    // (#2082): config.yaml's path and what the reader found are handed over before the hooks that read them exist.
+    const nevr_quest::HandFlipChoice& handFlip = sentinel::ActiveConfig().handFlip;
+    nevr_quest::hand_flip::Configure(nevr_quest::ConfigFilePath(sentinel::FilesDir()).c_str(),
+                                     handFlip.source == nevr_quest::Source::kFile, handFlip.on);
     nevr_quest::hand_pose_log::Install();
+    // Combat name tags on by default (#2090): CR15Game's two constructor slots, installed on every launch before the game builds its
+    // game object (the sentinel's constructor runs while libr15 is being loaded). A copy of the settings the constructor left at the
+    // stock default gets bit 13; a saved choice still wins, because LoadSettings runs after the constructor. Its
+    // combat_match_tags_install line says whether it went in; a refused install leaves the game's constructor as it is.
+    nevr_quest::combat::match_tags::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();

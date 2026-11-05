@@ -57,6 +57,46 @@ class TheHandPoseLogIsWired(unittest.TestCase):
         )
         self.assertEqual(body.count("nevr_quest::hand_pose_log::Install();"), 1)
 
+    def test_the_choice_is_the_configurations_key_handed_over_before_the_hooks_exist(self):
+        """#2082: graphics.hand_flip, read by the Quest's reader, is handed to hand_flip.h with config.yaml's path first."""
+        body = extract_braced_function(
+            strip_comments(read("src/quest/sentinel/entry.cpp")), "bool InstallPermissionWaitHook() noexcept {"
+        )
+        self.assertIn("sentinel::ActiveConfig().handFlip", body)
+        self.assertRegex(
+            body,
+            r"nevr_quest::hand_flip::Configure\(nevr_quest::ConfigFilePath\(sentinel::FilesDir\(\)\)\.c_str\(\),\s*"
+            r"handFlip\.source == nevr_quest::Source::kFile, handFlip\.on\);",
+        )
+        self.assertLess(body.index("hand_flip::Configure("), body.index("hand_pose_log::Install();"))
+        config = strip_comments(read("src/quest/sentinel/quest_config.cpp"))
+        self.assertIn('kHandFlipKey = "graphics.hand_flip"', config)
+        self.assertIn("ReadHandFlip(cfg, r);", extract_braced_function(config, "void ApplyLoaded("))
+        header = strip_comments(read("src/quest/sentinel/hand_flip.h"))
+        self.assertIn('kConfigKey = "graphics.hand_flip"', header)
+
+    def test_the_only_file_the_toggle_writes_is_config_yaml_through_the_setter_on_the_poller(self):
+        """#2082: no file of its own; the write is NevrConfig::Set from WritePending, which only the poller's Poll() calls."""
+        header = strip_comments(read("src/quest/sentinel/hand_flip.h"))
+        for forbidden in ("fopen", "fwrite", "fclose", "rename(", "remove(", "nevr_hand_flip", "ofstream", "ParseFile"):
+            self.assertNotIn(forbidden, header)
+        write = extract_braced_function(header, "inline int WritePending() noexcept {")
+        self.assertIn("config.Set(kConfigKey, flip != 0)", write)
+        self.assertIn("const ConfigWriteLock lock;", write)
+        self.assertEqual(len(re.findall(r"\bWritePending\(\)", header)), 2)  # its definition and its one call, in Poll
+        self.assertIn("lines += WritePending();", extract_braced_function(header, "inline int Poll() noexcept {"))
+        # The settings delivery and the tracking handler (the game's call path) only queue a save and never reach the writer.
+        hook = strip_comments(read("src/quest/sentinel/texture_menu_hook.cpp"))
+        poller = strip_comments(read("src/quest/sentinel/hand_pose_log_hook.cpp"))
+        self.assertNotIn("WritePending", hook)
+        self.assertNotIn("WritePending", extract_braced_function(poller, "int TrackingHandler("))
+        self.assertEqual(poller.count("hand_flip::Poll()"), 1)
+        # Both pollers edit the same file one at a time.
+        self.assertIn("const ConfigWriteLock lock;", extract_braced_function(hook, "int SaveChoice() noexcept {"))
+        for path in sorted((ROOT / "src/quest").rglob("*.[ch]*")):
+            if path.suffix in (".cpp", ".h") and "/tests/" not in str(path):
+                self.assertNotIn("nevr_hand_flip", strip_comments(path.read_text()), str(path))
+
     def test_the_host_test_runs_in_the_hooks_recipe(self):
         hooks_cmake = read("src/quest/host_tests/groups/hooks.cmake")
         self.assertRegex(hooks_cmake, r"nevr_ht_test\(hand_pose_log_hook_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/hand_pose_log_hook_test\.cpp")
@@ -180,7 +220,7 @@ class TheInterimRollIsTheOnlyWriteAndIsMarked(unittest.TestCase):
         await_start = extract_braced_function(header, "inline bool AwaitStart() noexcept {")
         self.assertIn("pthread_cond_timedwait(&g_startCond, &g_startMutex, &deadline)", await_start)
         self.assertNotRegex(await_start, r"\bwhile \(!?Started\(\)\)")  # no spin on the state
-        self.assertIn("Offered()", extract_braced_function(header, "inline void StartFromDirectory(const char* directory) noexcept {"))
+        self.assertIn("Offered()", extract_braced_function(header, "inline void Start() noexcept {"))
 
     def test_the_per_frame_path_never_waits_and_rolls_only_a_started_tracked_pose(self):
         code = strip_comments(read("src/quest/sentinel/hand_pose_log_hook.cpp"))

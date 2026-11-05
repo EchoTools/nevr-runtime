@@ -40,7 +40,9 @@ constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          
 constexpr const char* kPnsradProviderKey = "diagnostics.pnsrad_provider";        // Quest only (default false, #1220)
 constexpr const char* kTextureQualityKey = "graphics.texture_quality";          // Quest only (default stock)
 constexpr const char* kTextureQualitySection = "graphics";
-constexpr const char* kTextureQualityName = "texture_quality";  // the one key `graphics` has
+constexpr const char* kTextureQualityName = "texture_quality";  // a key `graphics` has
+constexpr const char* kHandFlipKey = "graphics.hand_flip";       // Quest only (default false, #2082)
+constexpr const char* kHandFlipName = "hand_flip";               // the other key `graphics` has
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
 // unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
@@ -209,7 +211,7 @@ void FallBackToStock(LoadResult& r, const std::string& why) {
           texture_quality::LevelName(texture_quality::kFallbackLevel) + "; allowed: stock, very_low, low, medium, high, very_high, ultra)");
 }
 
-// Any key under `graphics` other than texture_quality is a mistake the file's author wants to hear about: a misspelling
+// Any key under `graphics` other than texture_quality and hand_flip is a mistake the file's author wants to hear about: a misspelling
 // (`texture_qualty`) or a different case (`Texture_Quality`) would otherwise give the default without a word, and when the
 // default is raised that is a silent change of level. The level itself is not touched (the key is absent, so it is the
 // default). The name is the file's own word, so it is named only when it is short printable ASCII (DescribeRejectedWord).
@@ -217,12 +219,12 @@ void WarnUnknownGraphicsKeys(const nevr::NevrConfig& cfg, LoadResult& r) {
   if (cfg.Kind(kTextureQualitySection) != nevr::NodeKind::kMapping) return;
   std::size_t unknown = 0;
   for (const std::string& key : cfg.MappingKeys(kTextureQualitySection)) {
-    if (key == kTextureQualityName) continue;
+    if (key == kTextureQualityName || key == kHandFlipName) continue;
     if (++unknown > kMaxUnknownKeyWarnings) continue;
     Add(r, LogLevel::kWarn,
         std::string("config file key=") + kTextureQualitySection + " rejected reason=unknown_key name=" +
-            DescribeRejectedWord(key) + " (ignored; the only key under " + kTextureQualitySection + " is " +
-            kTextureQualityName + ")");
+            DescribeRejectedWord(key) + " (ignored; the keys under " + kTextureQualitySection + " are " +
+            kTextureQualityName + " and " + kHandFlipName + ")");
   }
   if (unknown > kMaxUnknownKeyWarnings) {
     Add(r, LogLevel::kWarn,
@@ -262,6 +264,19 @@ void ReadTextureQuality(const nevr::NevrConfig& cfg, LoadResult& r) {
     return;
   }
   r.config.textureQuality = {level, Source::kFile};
+}
+
+// graphics.hand_flip (#2082). Absent: Off, from the default. A boolean: that value, from the file (false is the file's word too, so the
+// start line says `config`). Anything else: Off, from the default, and ReadBool's one Warning that names the key.
+void ReadHandFlip(const nevr::NevrConfig& cfg, LoadResult& r) {
+  const bool given = cfg.GetBool(kHandFlipKey).has_value();
+  // The getters give nullopt for an absent key and for a node that is not a scalar alike (a mapping, a list, a key with no value);
+  // the kind tells them apart, and the second is a mistake.
+  if (!cfg.GetString(kHandFlipKey) && cfg.Kind(kHandFlipKey) != nevr::NodeKind::kAbsent) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kHandFlipKey + " rejected reason=not_a_boolean (default stays)");
+  }
+  const bool on = ReadBool(cfg, kHandFlipKey, false, r);
+  r.config.handFlip = {on, given ? Source::kFile : Source::kAbsent};
 }
 
 // Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
@@ -306,6 +321,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   want.pnsradProvider = ReadBool(cfg, kPnsradProviderKey, false, r);
   want.inviteCodes = ReadInviteCodes(cfg, r);
   ReadTextureQuality(cfg, r);
+  ReadHandFlip(cfg, r);
   r.config.plugins = cfg.Plugins();
 }
 
@@ -407,6 +423,9 @@ void ReportState(LoadResult& r) {
       std::string("config key=") + kTextureQualityKey + " quality=" +
           texture_quality::LevelName(r.config.textureQuality.level) +
           " source=" + TextureSourceName(r.config.textureQuality));
+  Add(r, LogLevel::kInfo,
+      std::string("config key=") + kHandFlipKey + " flip=" + (r.config.handFlip.on ? "1" : "0") +
+          " source=" + HandFlipSourceName(r.config.handFlip));
   for (const FeatureSpec& f : kFeatures) {
     Add(r, LogLevel::kInfo,
         std::string("feature=") + f.name + " requested=" + (r.config.requested.*f.flag ? "on" : "off") +
@@ -474,6 +493,8 @@ const char* SourceName(Source source) {
 }
 
 const char* TextureSourceName(const TextureChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
+
+const char* HandFlipSourceName(const HandFlipChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
 
 std::optional<std::string> ResolveQuestRedirect(const ResolvedConfig& config, const std::string& url,
                                            bool bridgeReady, unsigned bridgePort) {
