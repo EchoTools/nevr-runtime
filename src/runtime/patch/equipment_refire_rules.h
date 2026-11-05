@@ -1,7 +1,8 @@
 #pragma once
-// When the equipment change the game dropped is applied again (#2121), apart from the hooks that apply it
-// (patch/equipment_refire.cpp on PC, quest/plugins/q15t/src/equiprefire.cpp on Quest) so the rule is unit-tested without
-// the game and is one definition for both builds.
+// When the equipment change the game dropped is applied again (#2121). This header is the whole feature above the hooks: the
+// debounce, the reads that find a record and the local player, how a setter call becomes a verdict, when a due re-fire is stale,
+// the loop that fires what is due, and the words of the log lines. The hooks that feed it are patch/equipment_refire.cpp on PC and
+// quest/combat/equip_refire.cpp on Quest (each is an Env, below); the PC GTest drives this one definition with a fake Env.
 //
 // Evidence (ReVault, project echovr; PC VAs are echovr.exe, Quest VAs are libr15.so as the disassembly shows them):
 //   - CR15NetPlayerEquipmentCS keeps one 0x58-byte record per player. Three setters write a slot and, only when the value
@@ -16,9 +17,13 @@
 //     handler, "the earlier tac mod is armed"); the record already holds the new value, so the HUD shows the last choice and
 //     the game uses an earlier one. A tester reported the same for weapons and ordnance. The only information that is lost is the
 //     event, so sending it once more when nothing is in flight restores the state the record already has.
-//   - The chain a change starts takes about 2 s (the reference build's own measurement in the community EchoCombat tool that
-//     found the drop, credited in the README thanks), so the slot must be still for longer than that before the event is sent
+//   - The chain a change starts takes about 2 s (measured by he_is_the_cat's equip_guard script in the EchoCombat repository, which
+//     found the drop; credited in config/credits.json), so the slot must be still for longer than that before the event is sent
 //     again; a re-fire that lands inside a chain would be dropped like the change it repairs.
+//
+// Frequency (ADR 0038). The setters run once per loadout event (a station button press, a bot cycling its gun, the game restoring a
+// loadout), reached from script nodes and the deferred queue, never per frame (callers read in ReVault; not measured). The per-frame
+// cost is FireDue: one lock, one clock read and an empty-table test.
 //
 // The re-fire calls the handler, never the setter, so it cannot start another debounce. It is sent once per quiet period: after
 // it, the slot is idle until the next change.
@@ -69,6 +74,7 @@ inline constexpr std::size_t kRecordValueOffset[3] = {0x18, 0x20, 0x28};  // wea
 // the local player in slot 0 (PC 0x140c46bd0 SetTier reads it so to find the local player's customization; the lookup of a slot by
 // actor, PC 0x1401c92d0 and Quest 0x135a9b8, returns a handle built the same way).
 inline constexpr std::size_t kGameSlotCountOffset = 0xdc;
+inline constexpr std::size_t kGameSlotCount2Offset = 0xde;  // SetTier (PC 0x140c46bd0) and ApplyItemFromLoadout (Quest 0x135a6dc) test both counts
 inline constexpr std::size_t kGameLocalFieldOffset = 0x178;
 inline constexpr std::size_t kGameSlotGenerationOffset = 0x13a;
 inline constexpr std::uint32_t kSlotMask = 0x1f;
@@ -126,13 +132,16 @@ bool ReadActorKey(Read& read, std::uintptr_t component, std::uint32_t handle, Ac
   return true;
 }
 
-// The handle of the net game's slot 0, the local player's. False when the game has no slots in use or a read fails.
+// The handle of the net game's slot 0, the local player's. False when the game has no slots in use (either count is zero, as
+// SetTier requires) or a read fails.
 template <typename Read>
 bool LocalSlotHandle(Read& read, std::uintptr_t game, std::uint32_t* out) {
   std::uint16_t slots = 0;
+  std::uint16_t slots2 = 0;
   std::uint16_t field = 0;
   std::uint16_t generation = 0;
   if (game == 0 || !ReadValue(read, game + kGameSlotCountOffset, &slots) || slots == 0 ||
+      !ReadValue(read, game + kGameSlotCount2Offset, &slots2) || slots2 == 0 ||
       !ReadValue(read, game + kGameLocalFieldOffset, &field) ||
       !ReadValue(read, game + kGameSlotGenerationOffset + static_cast<std::uintptr_t>(field & kSlotMask) * 4, &generation)) {
     return false;
@@ -145,8 +154,9 @@ bool LocalSlotHandle(Read& read, std::uintptr_t game, std::uint32_t* out) {
 enum class Verdict : std::uint8_t {
   kTracked,    // a change of the local player's record: re-fire after the slot is still
   kUnchanged,  // the setter was given the value the record already held: the game ran no handler, nothing to repair
-  kNotLocal,   // another player's record: its owner repairs it, never this process
+  kNotLocal,   // another player's record: not tracked; the re-fire is the local player's own and sends nothing to other clients
   kServer,     // this process is a dedicated server: it re-fires for no one
+  kUnreadable, // the record could not be read before the call (stale handle, unreadable component): nothing can be said about it
 };
 
 constexpr const char* VerdictName(Verdict verdict) {
@@ -155,6 +165,7 @@ constexpr const char* VerdictName(Verdict verdict) {
     case Verdict::kUnchanged: return "unchanged";
     case Verdict::kNotLocal: return "not_local";
     case Verdict::kServer: return "server";
+    case Verdict::kUnreadable: return "unreadable";
   }
   return "unknown";
 }
@@ -213,7 +224,7 @@ class Debouncer {
     return false;
   }
 
-  // Drops everything tracked, for a component that is gone (the level unloaded under a pending change).
+  // Drops everything tracked. Production never calls it: a component that is gone is caught by StaleReason when its re-fire is due.
   void Clear() {
     for (Entry& e : entries_) e = Entry{};
   }
@@ -231,5 +242,125 @@ class Debouncer {
   };
   Entry entries_[kSlotCount];
 };
+
+// ---- The feature above the hooks, once. -----------------------------------------------------------------------------------------
+//
+// An Env is the build's side of it (PC glue, Quest glue, the GTest's fake). It is also the reader the layout templates above take.
+//   bool operator()(std::uintptr_t address, void* out, std::size_t size)   read that never faults; false when unreadable
+//   static constexpr std::size_t kNetGameField                             offset the net game getter reads at its argument (PC 0x8518, Quest 0x8510)
+//   std::uintptr_t NetGame(std::uintptr_t arg)                             the game's getter (PC GetNetGameFromContext 0x140113a90, Quest NetGameMT 0x13027d4)
+//   std::uint32_t SlotOf(std::uintptr_t game, const std::uint64_t key[2])  the game's slot-handle lookup by actor key (PC 0x1401c92d0, Quest UserId 0x135a9b8)
+//   void CallHandler(Slot, std::uintptr_t owner, std::uint32_t handle)     the slot's change handler
+//   std::uint64_t NowMs();  void Lock();  void Unlock();                   a monotonic millisecond clock; one non-recursive lock around the Tracker
+//   void LogChange(Slot, const SetterResult&, std::uint32_t handle, std::uint64_t value)
+//   void LogRefired(const Refire&);  void LogSkipped(const Refire&, const char* reason)   with the words below
+
+// The words of the log lines (the PC line is `[NEVR.EQUIP] <message> slot=.. value=.. handle=.. changes=.. quiet_ms=..`, the Quest line
+// the same message and keys in a sentinel record).
+inline constexpr const char* kMsgChange = "equipment change";
+inline constexpr const char* kMsgRefired =
+    "equipment re-fired (the game's change handler ran once more so the slot's scripts see the last choice)";
+inline constexpr const char* kMsgSkipped = "equipment re-fire skipped (the change is left as the game made it)";
+
+// What is remembered between a setter call and its re-fire. Guarded by Env::Lock.
+struct Tracker {
+  Debouncer debouncer;
+  std::uintptr_t vtable[kSlotCount] = {};  // the component's vtable when the change was tracked: a different one later is another component
+};
+
+// True when the record the handle names in the component belongs to the net game's slot 0, the local player. Fails closed: anything
+// unreadable or unmatched is "not local" and the change is not tracked.
+template <typename Env>
+bool IsLocalRecord(Env& env, std::uintptr_t component, std::uint32_t handle) {
+  ActorKey actor;
+  if (!ReadActorKey(env, component, handle, &actor)) return false;
+  // The getter loads [arg + kNetGameField] without a check, so the argument is probed before the game's code reads it.
+  std::uintptr_t probe = 0;
+  if (!ReadValue(env, actor.netGameArg + Env::kNetGameField, &probe)) return false;
+  const std::uintptr_t game = env.NetGame(actor.netGameArg);
+  std::uint32_t local = 0;
+  if (!LocalSlotHandle(env, game, &local)) return false;
+  return env.SlotOf(game, actor.key) == local;
+}
+
+// What a setter call became, and the facts behind it (for the log).
+struct SetterResult {
+  Verdict verdict = Verdict::kServer;
+  bool read = false;     // the record's value could be read before the call
+  bool changed = false;  // it differed from the value set, so the game ran the slot's handler
+  bool local = false;    // the record is the local player's (asked only for a change)
+};
+
+// A setter ran. `callOriginal` runs the game's setter. The record's value is read BEFORE it (afterwards both sides are equal), the
+// change is judged after, and a dedicated server (`server`) reads nothing and tracks nothing. A call that changed nothing was never
+// asked who owns the record, so it reports unchanged, not not_local.
+template <typename Env, typename Original>
+SetterResult OnSetter(Env& env, Tracker& tracker, Slot slot, std::uintptr_t component, std::uint32_t handle, std::uint64_t value,
+                      bool server, Original&& callOriginal) {
+  SetterResult r;
+  std::uint64_t before = 0;
+  r.read = !server && RecordValue(env, component, handle, slot, &before);
+  callOriginal();
+  if (server) {
+    r.verdict = Verdict::kServer;
+  } else if (!r.read) {
+    r.verdict = Verdict::kUnreadable;
+  } else {
+    r.changed = before != value;
+    r.local = r.changed && IsLocalRecord(env, component, handle);
+    env.Lock();
+    r.verdict = tracker.debouncer.Changed(slot, component, handle, value, r.local || !r.changed, false, r.changed, env.NowMs());
+    if (r.verdict == Verdict::kTracked) {
+      std::uintptr_t vtable = 0;
+      env(component, &vtable, sizeof vtable);  // unreadable stays 0: the re-fire then reads as component_replaced
+      tracker.vtable[static_cast<std::size_t>(slot)] = vtable;
+    }
+    env.Unlock();
+  }
+  env.LogChange(slot, r, handle, value);
+  return r;
+}
+
+// Why a due re-fire is not made, or nullptr when it is. Everything is read again: the component may have been freed, the level
+// unloaded, the record reused or the choice changed by something other than the setter.
+template <typename Env>
+const char* StaleReason(Env& env, Tracker& tracker, const Refire& r) {
+  std::uint8_t span[kComponentSpan];
+  if (!env(r.owner, span, sizeof span)) return "component_unreadable";
+  std::uintptr_t vtable = 0;
+  for (std::size_t i = 0; i < sizeof vtable; ++i) vtable |= static_cast<std::uintptr_t>(span[i]) << (8 * i);
+  env.Lock();
+  const std::uintptr_t tracked = tracker.vtable[static_cast<std::size_t>(r.slot)];
+  env.Unlock();
+  if (vtable == 0 || vtable != tracked) return "component_replaced";
+  std::uint64_t current = 0;
+  if (!RecordValue(env, r.owner, r.handle, r.slot, &current)) return "record_gone";
+  if (current != r.value) return "record_changed_elsewhere";
+  if (!IsLocalRecord(env, r.owner, r.handle)) return "not_local";
+  return nullptr;
+}
+
+// Fires what is due: for each slot still for kSettleMs, the handler runs once more unless the record changed under it. Returns how
+// many handlers ran. Call it from the thread the game's scripts run on (the handlers send events into them).
+template <typename Env>
+std::size_t FireDue(Env& env, Tracker& tracker) {
+  Refire due[kSlotCount];
+  std::size_t count = 0;
+  env.Lock();
+  const std::uint64_t now = env.NowMs();
+  while (count < kSlotCount && tracker.debouncer.Due(now, &due[count])) ++count;
+  env.Unlock();
+  std::size_t fired = 0;
+  for (std::size_t n = 0; n < count; ++n) {
+    if (const char* why = StaleReason(env, tracker, due[n])) {
+      env.LogSkipped(due[n], why);
+      continue;
+    }
+    env.CallHandler(due[n].slot, due[n].owner, due[n].handle);
+    env.LogRefired(due[n]);
+    ++fired;
+  }
+  return fired;
+}
 
 }  // namespace nevr_equipment_refire

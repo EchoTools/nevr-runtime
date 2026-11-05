@@ -1,7 +1,8 @@
 """The PC equipment re-fire (#2121, src/runtime/patch/equipment_refire.cpp): the parts a host test cannot reach without the game.
 
-The decisions are tested in src/runtime/tests/test_equipment_refire.cpp. What stays here is the glue's own tables and its wiring, read as
-source: each setter row pins the whole 100-byte body of the setter it hooks, and the row's slot, record field and handler must be what
+Every decision (the local-player check, how a setter call becomes a verdict, the stale checks, the fire loop) is one definition in
+src/runtime/patch/equipment_refire_rules.h, driven by src/runtime/tests/test_equipment_refire.cpp with a fake Env. What stays here is
+the PC glue's own tables and its wiring, read as source: each setter row pins the whole 100-byte body of the setter it hooks, and the row's slot, record field and handler must be what
 those bytes say (a row whose bytes belong to another setter would hook the wrong function or re-fire the wrong handler); the runtime
 installs the hooks once at boot and runs the due re-fires on the game loop's thread only.
 
@@ -29,12 +30,12 @@ def rows():
     text = strip_comments(GLUE.read_text())
     table = text[text.index("constexpr SetterRow kRows") : text.index("constexpr std::uint64_t kNetGameVa")]
     pattern = re.compile(
-        r'\{Slot::(\w+),\s*"([^"]+)",\s*(0x[0-9A-Fa-f]+),\s*(0x[0-9A-Fa-f]+),\s*\{([^}]*)\},\s*\{([^}]*)\}\}', re.S
+        r'\{Slot::(\w+),\s*"([^"]+)",\s*(0x[0-9A-Fa-f]+),\s*(0x[0-9A-Fa-f]+),\s*"(\w+)",\s*\{([^}]*)\},\s*\{([^}]*)\}\}', re.S
     )
     out = []
     for m in pattern.finditer(table):
-        body = bytes(int(b, 16) for b in re.findall(r"0x[0-9a-fA-F]{2}", m.group(5)))
-        handler = bytes(int(b, 16) for b in re.findall(r"0x[0-9a-fA-F]{2}", m.group(6)))
+        body = bytes(int(b, 16) for b in re.findall(r"0x[0-9a-fA-F]{2}", m.group(6)))
+        handler = bytes(int(b, 16) for b in re.findall(r"0x[0-9a-fA-F]{2}", m.group(7)))
         out.append((m.group(1), m.group(2), int(m.group(3), 16), int(m.group(4), 16), body, handler))
     return out
 
@@ -79,6 +80,51 @@ class SetterRows(unittest.TestCase):
 
 
 class Wiring(unittest.TestCase):
+    def test_the_hook_reads_the_mode_at_call_time_not_at_install(self):
+        # g_isServer is not set when initialize.cpp installs (N131), so the glue reads it in the hook, not in Install.
+        text = strip_comments(GLUE.read_text())
+        hook = text[text.index("void SetterHook") : text.index("void HexBytes")]
+        self.assertIn("g_isServer != FALSE", hook)
+        install = text[text.index("void Install(") : text.index("void OnFrame()")]
+        self.assertNotIn("g_isServer", install)
+
+    def test_the_setter_hook_is_the_one_call_into_the_header_and_nothing_else(self):
+        text = strip_comments(GLUE.read_text())
+        body = text[text.index("void SetterHook") : text.index("void HexBytes")]
+        body = " ".join(body.split())
+        want = (
+            "void SetterHook(void* component, std::uint32_t handle, std::uint64_t value) { PcEnv env; "
+            "OnSetter(env, g_tracker, kRows[I].slot, reinterpret_cast<std::uintptr_t>(component), handle, value, g_isServer != FALSE, "
+            "[&] { g_original[I](component, handle, value); }); }"
+        )
+        self.assertEqual(body, want)
+        frame = " ".join(text[text.index("void OnFrame()") :].split())
+        self.assertEqual(frame, "void OnFrame() { if (!g_installed) return; PcEnv env; FireDue(env, g_tracker); } }")
+
+    def test_the_net_game_getters_field_is_the_displacement_of_its_pinned_body(self):
+        text = strip_comments(GLUE.read_text())
+        field = re.search(r"kNetGameField = (0x[0-9a-fA-F]+);", text)
+        body = re.search(r"kNetGamePrologue = \{([^}]*)\}", text)
+        self.assertIsNotNone(field)
+        self.assertIsNotNone(body)
+        raw = bytes(int(b, 16) for b in re.findall(r"0x[0-9a-fA-F]{2}", body.group(1)))
+        self.assertEqual(raw[:3], bytes([0x48, 0x8B, 0x81]))  # MOV RAX,[RCX+disp32]
+        self.assertEqual(int.from_bytes(raw[3:7], "little"), int(field.group(1), 16))
+
+    def test_the_glue_decides_nothing_the_header_decides(self):
+        # one definition (AGENTS.md "Project"): the glue calls the header's templates and holds none of their logic
+        text = strip_comments(GLUE.read_text())
+        for call in ("OnSetter(env, g_tracker", "FireDue(env, g_tracker"):
+            self.assertIn(call, text)
+        for logic in ("StaleReason", "IsLocalRecord", "record_changed_elsewhere", "component_replaced", "Debouncer", "LocalSlotHandle"):
+            self.assertNotIn(logic, text, f"{logic} belongs to equipment_refire_rules.h")
+
+    def test_a_mismatch_names_the_bytes_and_the_handler(self):
+        text = strip_comments(GLUE.read_text())
+        self.assertIn("expected=%s actual=%s", text)
+        self.assertIn("row.handlerName", text)
+        self.assertIn("hooks: 0 of %zu installed", text)
+
     def test_boot_installs_the_hooks_once_after_the_hooking_engine_is_up(self):
         text = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
         calls = re.findall(r"nevr_equipment_refire::Install\(", text)
@@ -94,43 +140,6 @@ class Wiring(unittest.TestCase):
     def test_the_source_is_in_the_runtime_dll(self):
         text = strip_comments((ROOT / "src/runtime/CMakeLists.txt").read_text())
         self.assertIn('"patch/equipment_refire.cpp"', text)
-
-    def test_a_server_never_tracks_and_the_hook_reads_the_mode_at_call_time(self):
-        # g_isServer is not set when initialize.cpp installs (N131), so the glue reads it in the hook, not in Install.
-        text = strip_comments(GLUE.read_text())
-        hook = text[text.index("void SetterHook") : text.index("const char* StaleReason")]
-        self.assertIn("g_isServer != FALSE", hook)
-        install = text[text.index("void Install(") : text.index("void OnFrame()")]
-        self.assertNotIn("g_isServer", install)
-
-    def test_the_net_game_getters_argument_is_checked_before_the_game_reads_it(self):
-        text = strip_comments(GLUE.read_text())
-        disp = re.search(r"kNetGameFieldOffset = (0x[0-9a-fA-F]+);", text)
-        body = re.search(r"kNetGamePrologue = \{([^}]*)\}", text)
-        self.assertIsNotNone(disp)
-        self.assertIsNotNone(body)
-        raw = bytes(int(b, 16) for b in re.findall(r"0x[0-9a-fA-F]{2}", body.group(1)))
-        # MOV RAX,[RCX+disp32]; RET
-        self.assertEqual(raw[:3], bytes([0x48, 0x8B, 0x81]))
-        self.assertEqual(int.from_bytes(raw[3:7], "little"), int(disp.group(1), 16))
-        local = text[text.index("bool IsLocalRecord") : text.index("void ValueText")]
-        self.assertLess(local.index("kNetGameFieldOffset"), local.index("g_netGame("))
-
-    def test_an_unchanged_call_is_not_reported_as_a_remote_record(self):
-        text = strip_comments(GLUE.read_text())
-        hook = text[text.index("void SetterHook") : text.index("const char* StaleReason")]
-        self.assertIn("local || !changed, server, changed", hook)
-
-    def test_the_handler_is_called_for_the_slot_that_was_due(self):
-        text = strip_comments(GLUE.read_text())
-        self.assertIn("g_handler[slotIndex](reinterpret_cast<void*>(r.owner), r.handle);", text)
-
-    def test_the_original_runs_before_the_change_is_judged(self):
-        text = strip_comments(GLUE.read_text())
-        hook = text[text.index("void SetterHook") : text.index("const char* StaleReason")]
-        self.assertLess(hook.index("RecordValue("), hook.index("g_original[I]("))
-        self.assertLess(hook.index("g_original[I]("), hook.index("IsLocalRecord("))
-        self.assertLess(hook.index("IsLocalRecord("), hook.index("g_debouncer.Changed("))
 
 
 if __name__ == "__main__":
