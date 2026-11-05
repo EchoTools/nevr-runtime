@@ -87,19 +87,19 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
 
   // Notify plugins of state change
   {
-    NvrGameContext ctx = {};
+    NevrGameContext ctx = {};
     ctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
     ctx.net_game = pGame;
     ctx.game_state = static_cast<uint32_t>(state);
     ctx.flags = NEVR_HOST_HAS_NETGAME;
     if (g_isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
     else ctx.flags |= NEVR_HOST_IS_CLIENT;
-    ctx.ctx_size = sizeof(NvrGameContext);
+    ctx.ctx_size = sizeof(NevrGameContext);
     ctx.get_plugin_count = GetLoadedPluginCount;
     ctx.get_plugin_info = GetLoadedPluginInfo;
     NotifyPluginsStateChange(&ctx, fromState, static_cast<uint32_t>(state));
     {
-      NvrModuleContext mctx = {};
+      NevrModuleContext mctx = {};
       mctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
       mctx.flags = NEVR_HOST_HAS_NETGAME;
       if (g_isServer) mctx.flags |= NEVR_HOST_IS_SERVER;

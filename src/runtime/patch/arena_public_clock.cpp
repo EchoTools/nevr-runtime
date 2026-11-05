@@ -15,6 +15,8 @@
 #include "core/hooking.h"
 #include "core/logging.h"
 #include "runtime/hook/dll_load_hook.h"
+#include "runtime/hook/hook_guard.h"
+#include "runtime/hook/patching.h"
 #include "runtime/lifecycle/arena_round_time.h"
 #include "runtime/patch/arena_public_clock_rules.h"
 
@@ -27,10 +29,11 @@ using BindFn = std::int64_t (*)(void* state, void* node);
 // acquire load and written only by __atomic_store_n (Hooking::Attach publishes the trampoline into it before it
 // enables the hook, core/hook_lifecycle.h). Once a site has been hooked it is never null and never a freed
 // trampoline: it holds the game's bind function (`target`) whenever no live trampoline exists. `target` and
-// `lastReport` are guarded by g_mutex.
+// `lastReport` and `recorded` are guarded by g_mutex.
 struct SiteHook {
   void* original{nullptr};
   void* target{nullptr};
+  bool recorded{false};  // HookGuard holds a record for `target`: set by a successful attach, cleared when it is forgotten
   std::uintptr_t lastReportBase{0};
   SiteState lastReportState{SiteState::Unhooked};
   bool reported{false};
@@ -40,15 +43,23 @@ std::mutex g_mutex;
 SiteHook g_hooks[kSiteCount];
 bool g_installed = false;
 
-// The two MinHook calls the hook makes, behind pointers so a test can stand in for them (RefreshForTest needs the
-// stock script DLLs; the attach window and the removal do not).
-bool DefaultAttach(void** original, void* detour) { return Hooking::Attach(original, detour) != FALSE; }
-int DefaultRemove(void* target) { return MH_RemoveHook(target); }
+// The two hook calls the hook makes, behind pointers so a test can stand in for them (RefreshForTest needs the
+// stock script DLLs; the attach window and the removal do not). PatchDetour records each hook in HookGuard and
+// PatchRetire forgets the record before it removes the hook, so every reload is checked like the first load.
+bool DefaultAttach(void** original, void* detour, const char* name) {
+  return PatchDetour(original, detour, name) != FALSE;
+}
+// `recorded`: HookGuard still holds the target's record, so the removal forgets it first. A record that Refresh already
+// forgot (the script was unmapped) is not forgotten twice: the second Retire would be refused as unrecorded.
+int DefaultRemove(void* target, bool recorded) { return recorded ? PatchRetire(target) : MH_RemoveHook(target); }
 struct Backend {
-  bool (*attach)(void** original, void* detour);
-  int (*remove)(void* target);
+  bool (*attach)(void** original, void* detour, const char* name);
+  int (*remove)(void* target, bool recorded);
 };
 Backend g_backend{&DefaultAttach, &DefaultRemove};
+
+// HookGuard keeps the name pointer, so it is a literal, not a string built per site.
+constexpr const char kHookName[] = "arena_public_clock bind";
 
 template <std::size_t I>
 std::int64_t BindDetour(void* state, void* node) {
@@ -109,12 +120,17 @@ void Report(SiteHook& hook, const ScriptSite& site, std::uintptr_t base, SiteSta
 // trampoline dies with it, and the slot takes the new target on the next line, so a caller that reaches the detour
 // after that finds the game's function. (MinHook frees the trampoline inside MH_RemoveHook; a thread that is past the
 // detour's load of the slot, or that arrives between that call and the store, is outside what this layer can order.)
-// A removal that failed leaves the old hook and its trampoline alive: it is logged, the slot is left alone until
-// the new target replaces it, and the next pass removes the old hook again.
+// PatchRetire forgets the old hook's HookGuard record before it removes the hook, so the restored bytes are not
+// reported as an overwrite. A removal that failed leaves the old hook and its trampoline alive: it is logged, the slot
+// is left alone until the new target replaces it, and the next pass removes the old hook again.
 bool HookSite(std::size_t i, void* target) {
   SiteHook& hook = g_hooks[i];
   if (hook.target != nullptr) {
-    const int status = g_backend.remove(hook.target);
+    const int status = g_backend.remove(hook.target, hook.recorded);
+    // A recorded hook's record is forgotten by the removal whatever its status (PatchRetire forgets before MH_RemoveHook),
+    // so the flag is cleared after every removal: a later removal of this target is a plain MH_RemoveHook, never a second
+    // Retire that would be refused as not_recorded.
+    hook.recorded = false;
     if (status == MH_OK || status == MH_ERROR_NOT_CREATED) {
       hook.target = nullptr;
     } else {
@@ -124,23 +140,32 @@ bool HookSite(std::size_t i, void* target) {
     }
   }
   __atomic_store_n(&hook.original, target, __ATOMIC_RELEASE);
-  if (!g_backend.attach(&hook.original, Detours()[i])) return false;
+  if (!g_backend.attach(&hook.original, Detours()[i], kHookName)) return false;
   hook.target = target;
+  hook.recorded = true;  // PatchDetour recorded the hook on success
   return true;
 }
 
 // Runs after every LoadLibrary the hooks see. A script DLL that is mapped and still carries the shipped bytes is
 // hooked: the first load, and every reload after the game released the script (the new image is fresh, and a hook
-// left on the old mapping is gone with it). This is a raw Hooking::Attach, not PatchDetour: HookGuard records one
-// site per call and has no retire, so a hook per reload would fill its table and report each fresh image as an
-// overwrite.
+// left on the old mapping is gone with it). HookSite retires the old hook's record before it removes that hook, so a
+// reload leaves one live record per site.
 void Refresh() {
   std::lock_guard<std::mutex> lock(g_mutex);
   for (std::size_t i = 0; i < kSiteCount; ++i) {
     const ScriptSite& site = kSites[i];
     SiteHook& hook = g_hooks[i];
     HMODULE module = GetModuleHandleA(site.dll);
-    if (module == nullptr) continue;
+    if (module == nullptr) {
+      // The image is gone, so the bytes at the hook's address are no longer the hook's. The record is forgotten now: a later
+      // image mapped at that address would otherwise read as an overwrite in VerifyAll. The old MinHook entry stays until the
+      // next load of this script removes it.
+      if (hook.target != nullptr && hook.recorded) {
+        nevr_hook_guard::Retire(hook.target);
+        hook.recorded = false;
+      }
+      continue;
+    }
     const auto* image = reinterpret_cast<const std::uint8_t*>(module);
     const SiteState state = ClassifySite(image, ImageSize(module), site);
     const auto base = reinterpret_cast<std::uintptr_t>(module);
@@ -154,10 +179,9 @@ void Refresh() {
     }
     void* target = const_cast<std::uint8_t*>(image) + site.bindRva;
     if (!HookSite(i, target)) {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] arena_public_clock hook FAILED script=%s target=%p reason=%s; the script keeps the game's "
-          "behaviour",
-          site.dll, target, Hooking::LastAttachError());
+      // PatchDetour's own Warning names the hook, the target and the reason; this line says what the script keeps.
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] arena_public_clock script=%s not hooked; the script keeps the game's behaviour",
+          site.dll);
       continue;
     }
     Report(hook, site, base, state, "hooked");
@@ -187,6 +211,7 @@ void ResetForTest() {
   for (SiteHook& hook : g_hooks) {
     __atomic_store_n(&hook.original, static_cast<void*>(nullptr), __ATOMIC_RELEASE);
     hook.target = nullptr;
+    hook.recorded = false;
   }
   g_backend = Backend{&DefaultAttach, &DefaultRemove};
 }

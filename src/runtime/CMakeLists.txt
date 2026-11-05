@@ -1211,6 +1211,14 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
     gtest_discover_tests(test_nevr_config DISCOVERY_MODE PRE_TEST)
 
+    # NevrConfig::Set (#2060): the first config.yaml writer, tested only through the interface. Same link as test_nevr_config.
+    add_executable(test_nevr_config_set tests/test_nevr_config_set.cpp)
+    set_source_files_properties(tests/test_nevr_config_set.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_nevr_config_set PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_nevr_config_set PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
+    gtest_discover_tests(test_nevr_config_set DISCOVERY_MODE PRE_TEST)
+
     # service_map behaviour-equivalence tests (N133 S3) — the PURE resolution core
     # of the config.cpp cutover (flat->path map, service-host fallback, scheme
     # redirect). Compiles service_map.cpp and service_redirect.cpp directly (the
@@ -1797,6 +1805,10 @@ if(BUILD_TESTING)
       nevr_host_core GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
     gtest_discover_tests(test_plugin_signature DISCOVERY_MODE PRE_TEST)
 
+    # The unsigned DLLs those fixtures are made from (ADR 0041): the `sigfix_dlls` target builds them, and
+    # gen_plugin_signature_fixtures.py is handed <bin>/sigfix.
+    add_subdirectory(tests/sigfix)
+
     # plugin_tree tests (ADR 0010, #741): a plugin's imports, delay loads and forwarders from its own directory
     # pass the same check, over fixture directories the same generator writes.
     add_executable(test_plugin_tree
@@ -1876,6 +1888,8 @@ if(BUILD_TESTING)
       ext/plugin_manifest.cpp
       # #432: plugin_loader.cpp and ws_bridge.cpp read the process-wide plugin asset registry.
       patch/asset_registry.cpp
+      # The engine hooks that serve the registry: the N84 test installs one through InstallHookForTest (PatchDetour).
+      patch/plugin_assets.cpp
       # #741: the signature gate StageOne consults, linked as production source.
       ext/plugin_signature.cpp
       ext/plugin_pins.cpp
@@ -1927,6 +1941,7 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
       patch/asset_registry.cpp
+      patch/plugin_assets.cpp
       ext/plugin_signature.cpp
       ext/plugin_pins.cpp
       ext/plugin_tree.cpp
@@ -2039,9 +2054,21 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_info_keeper"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    # The entry-point prefix is Nevr; a plugin built before that exports Nvr. One fixture of each.
+    foreach(_exports_fixture nevr deprecated)
+      add_library(test_plugin_${_exports_fixture}_exports SHARED
+        tests/plugin_${_exports_fixture}_exports_test_dll.cpp)
+      target_compile_definitions(test_plugin_${_exports_fixture}_exports PRIVATE NEVR_PLUGIN_EXPORTS)
+      target_link_libraries(test_plugin_${_exports_fixture}_exports PRIVATE nevr::plugin_sdk)
+      set_target_properties(test_plugin_${_exports_fixture}_exports PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_${_exports_fixture}_exports"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    endforeach()
     add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail
       test_plugin_partial_init_fail test_plugin_info_keeper test_plugin_logging_a test_plugin_logging_b
-      test_plugin_level)
+      test_plugin_level
+      test_plugin_nevr_exports test_plugin_deprecated_exports)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 

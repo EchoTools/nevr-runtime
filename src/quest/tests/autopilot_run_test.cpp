@@ -34,10 +34,10 @@
 #include "quest/tests/test_check.h"
 
 extern "C" {
-NvrPluginInfo NvrPluginGetInfo(void);
-uint32_t NvrPluginGetApiVersion(void);
-int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_json);
-void NvrPluginShutdown(void);
+NevrPluginInfo NevrPluginGetInfo(void);
+uint32_t NevrPluginGetApiVersion(void);
+int NevrPluginInitEx(const NevrGameContext* ctx, const char* args_json);
+void NevrPluginShutdown(void);
 }
 
 namespace {
@@ -374,12 +374,12 @@ std::int32_t Register(const char* id, NevrQuestInputFilterFn filter, void* user)
   g_user = user;
   return NEVR_QUEST_FILTER_OK;
 }
-const NevrQuestHostApi kApi{sizeof(NevrQuestHostApi), &Register, nullptr};
+const NevrQuestHostApi kApi{sizeof(NevrQuestHostApi), &Register, nullptr, nullptr, nullptr};
 
-NvrGameContext Context(const NevrQuestHostApi* api) {
-  NvrGameContext ctx{};
+NevrGameContext Context(const NevrQuestHostApi* api) {
+  NevrGameContext ctx{};
   ctx.flags = NEVR_HOST_IS_CLIENT | NEVR_HOST_PLATFORM_QUEST;
-  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.plugin_id = "nevr_autopilot";
   ctx.log = &HostLog;
   ctx.quest = api;
@@ -479,11 +479,11 @@ bool DriveUntil(const char* message, int ms) {
 }
 
 void ThePluginNamesItself() {
-  const NvrPluginInfo info = NvrPluginGetInfo();
+  const NevrPluginInfo info = NevrPluginGetInfo();
   QCHECK(std::strcmp(info.name, "nevr_autopilot") == 0);
   QCHECK(std::strcmp(info.description, "drives the controllers through a route file (dev builds; #1202)") == 0);
   QCHECK(info.version_major == 1u && info.version_minor == 0u && info.version_patch == 0u);
-  QCHECK(NvrPluginGetApiVersion() == NEVR_PLUGIN_API_VERSION);
+  QCHECK(NevrPluginGetApiVersion() == NEVR_PLUGIN_API_VERSION);
 }
 
 // One init the plugin refuses: it returns 1, logs `message` at Error with `field`=`value`, registers nothing that
@@ -492,7 +492,7 @@ void Refused(const std::string& args, const NevrQuestHostApi* api, const ap::plu
              const char* field, const char* value) {
   ResetHost();
   const std::size_t fds = Fds();
-  const NvrGameContext ctx = Context(api);
+  const NevrGameContext ctx = Context(api);
   QCHECK(ap::plugin::InitWith(&ctx, args.c_str(), os) == 1);
   Logged l;
   const bool found = FindLog(message, &l);
@@ -506,7 +506,7 @@ void Refused(const std::string& args, const NevrQuestHostApi* api, const ap::plu
   QCHECK(Fds() == fds);
   QCHECK(ThreadsFallTo(kMainOnly, 1000));  // none was started
   const std::size_t lines = g_log.size();
-  NvrPluginShutdown();
+  NevrPluginShutdown();
   QCHECK(g_log.size() == lines);
 }
 
@@ -519,8 +519,8 @@ void InitRefusesWhatItCannotRun() {
   big += "\nstep 1\n";
   const std::string tooBig = WriteRoute("big.txt", big);
   const ap::plugin::Os& os = ap::plugin::RealOs();
-  const NevrQuestHostApi small{sizeof(std::uint32_t), &Register, nullptr};
-  const NevrQuestHostApi noFn{sizeof(NevrQuestHostApi), nullptr, nullptr};
+  const NevrQuestHostApi small{sizeof(std::uint32_t), &Register, nullptr, nullptr, nullptr};
+  const NevrQuestHostApi noFn{sizeof(NevrQuestHostApi), nullptr, nullptr, nullptr, nullptr};
   Refused("not json", &kApi, os, "route_refused", "reason", "the plugin's args are not a JSON object");
   Refused("[1]", &kApi, os, "route_refused", "reason", "the plugin's args are not a JSON object");
   Refused("{}", &kApi, os, "route_refused", "reason", "args.route is not a path");
@@ -544,11 +544,11 @@ void InitRefusesWhatItCannotRun() {
   QCHECK(g_registers == 0);
   // A context too small to carry `quest` is treated as no host API, whatever lies past its end.
   ResetHost();
-  NvrGameContext shortCtx = Context(&kApi);
-  shortCtx.ctx_size = static_cast<std::uint32_t>(offsetof(NvrGameContext, quest));
-  QCHECK(NvrPluginInitEx(&shortCtx, Args(good).c_str()) == 1);
+  NevrGameContext shortCtx = Context(&kApi);
+  shortCtx.ctx_size = static_cast<std::uint32_t>(offsetof(NevrGameContext, quest));
+  QCHECK(NevrPluginInitEx(&shortCtx, Args(good).c_str()) == 1);
   QCHECK(g_registers == 0);
-  QCHECK(NvrPluginInitEx(nullptr, Args(good).c_str()) == 1);
+  QCHECK(NevrPluginInitEx(nullptr, Args(good).c_str()) == 1);
 }
 
 void EachHostRefusalIsNamedAndTheReporterJoined() {
@@ -566,8 +566,8 @@ void EachHostRefusalIsNamedAndTheReporterJoined() {
     g_registerResult = c.result;
     g_slowReporterEnd = true;
     const std::size_t fds = Fds();
-    const NvrGameContext ctx = Context(&kApi);
-    QCHECK(NvrPluginInitEx(&ctx, Args(good).c_str()) == 1);
+    const NevrGameContext ctx = Context(&kApi);
+    QCHECK(NevrPluginInitEx(&ctx, Args(good).c_str()) == 1);
     g_slowReporterEnd = false;
     Logged l;
     QCHECK(FindLog("input_filter", &l) && l.fields["result"] == c.name && l.level == NEVR_LOG_ERROR);
@@ -587,9 +587,9 @@ void RouteLoadedDescribesTheRoute() {
     ResetHost();
     g_registerResult = NEVR_QUEST_FILTER_NOT_DEV_BUILD;
     const std::string path = WriteRoute("described.txt", text);
-    NvrGameContext ctx = Context(&kApi);
+    NevrGameContext ctx = Context(&kApi);
     ctx.plugin_id = id;
-    QCHECK(NvrPluginInitEx(&ctx, Args(path).c_str()) == 1);
+    QCHECK(NevrPluginInitEx(&ctx, Args(path).c_str()) == 1);
     Logged l;
     QCHECK(FindLog("route_loaded", &l) && l.level == NEVR_LOG_INFO && l.fields["route"] == path);
     return l;
@@ -619,10 +619,10 @@ void ARunLogsItsWindow() {
   const std::string text =
       "autopilot-route 1\nname window\nstart_after 0.02\nrepeat 2\nstep 0.05 left.stick=0,1\nstep 0.03 right.trigger=1\n";
   const std::string path = WriteRoute("window.txt", text);
-  const NvrGameContext ctx = Context(&kApi);
+  const NevrGameContext ctx = Context(&kApi);
   QCHECK(ThreadsFallTo(kMainOnly, 1000));
   const Bracket before;
-  QCHECK(NvrPluginInitEx(&ctx, Args(path).c_str()) == 0);
+  QCHECK(NevrPluginInitEx(&ctx, Args(path).c_str()) == 0);
   Logged loaded;
   QCHECK(FindLog("route_loaded", &loaded));
   QCHECK(loaded.fields["name"] == "window");
@@ -675,8 +675,8 @@ void ARunLogsItsWindow() {
   Logged done;
   QCHECK(FindLog("reporter_end", &done) && done.fields["reason"] == "route_end");
   // A second init in the same process is refused: one run per process.
-  QCHECK(NvrPluginInitEx(&ctx, Args(path).c_str()) == 1);
-  NvrPluginShutdown();
+  QCHECK(NevrPluginInitEx(&ctx, Args(path).c_str()) == 1);
+  NevrPluginShutdown();
   QCHECK(CountLog("route_stopped") == 0u);  // it ended
 }
 
@@ -688,8 +688,8 @@ int ChildStartFile() {
   const std::string path = WriteRoute("trigger.txt", "autopilot-route 1\nname trig\nstep 0.05 right.grip=1\n");
   const std::string startFile = g_dir + "/start";
   ::unlink(startFile.c_str());
-  const NvrGameContext ctx = Context(&kApi);
-  QCHECK(NvrPluginInitEx(&ctx, Args(path, startFile).c_str()) == 0);
+  const NevrGameContext ctx = Context(&kApi);
+  QCHECK(NevrPluginInitEx(&ctx, Args(path, startFile).c_str()) == 0);
   Logged loaded;
   QCHECK(FindLog("route_loaded", &loaded) && loaded.fields["start"] == "start_file");
   // Without the file, a frame changes nothing.
@@ -711,7 +711,7 @@ int ChildStartFile() {
   g_filter(g_user, &r);
   QCHECK(r.grip_trigger == 1.0f);
   QCHECK(DriveUntil("route_end", 2000));
-  NvrPluginShutdown();
+  NevrPluginShutdown();
   return quest_test::Failures() == 0 ? 0 : 1;
 }
 
@@ -719,8 +719,8 @@ int ChildStartFile() {
 // While it waits, the reporter takes no CPU.
 int ChildStopped() {
   const std::string path = WriteRoute("long.txt", "autopilot-route 1\nname long\nstep 60 left.grip=1\n");
-  const NvrGameContext ctx = Context(&kApi);
-  QCHECK(NvrPluginInitEx(&ctx, Args(path).c_str()) == 0);
+  const NevrGameContext ctx = Context(&kApi);
+  QCHECK(NevrPluginInitEx(&ctx, Args(path).c_str()) == 0);
   QCHECK(DriveUntil("route_start", 1000));
   const std::int64_t cpu0 = ClockNs(CLOCK_PROCESS_CPUTIME_ID);
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -730,7 +730,7 @@ int ChildStopped() {
   QCHECK(idleCpuNs < 60 * kMs);
   g_slowReporterEnd = true;
   const Bracket before;
-  NvrPluginShutdown();
+  NevrPluginShutdown();
   const Bracket after;
   Logged done;
   QCHECK(FindLog("reporter_end", &done) && done.fields["reason"] == "stopped");
@@ -755,10 +755,10 @@ int ChildStoppedWaiting() {
   const std::string path = WriteRoute("waiting.txt", "autopilot-route 1\nname waiting\nstep 1 left.grip=1\n");
   const std::string startFile = g_dir + "/never";
   ::unlink(startFile.c_str());
-  const NvrGameContext ctx = Context(&kApi);
-  QCHECK(NvrPluginInitEx(&ctx, Args(path, startFile).c_str()) == 0);
+  const NevrGameContext ctx = Context(&kApi);
+  QCHECK(NevrPluginInitEx(&ctx, Args(path, startFile).c_str()) == 0);
   QCHECK(!DriveUntil("route_start", 200));
-  NvrPluginShutdown();
+  NevrPluginShutdown();
   Logged done;
   QCHECK(FindLog("reporter_end", &done) && done.fields["reason"] == "stopped");
   QCHECK(ThreadsFallTo(kMainOnly, 1000));
@@ -810,7 +810,7 @@ void TheImageDeclaresItsBuildIds() {
 // runs the route.
 int ChildFdZero() {
   const std::string path = WriteRoute("zero.txt", "autopilot-route 1\nname zero\nstep 0.2 left.grip=1\n");
-  const NvrGameContext ctx = Context(&kApi);
+  const NevrGameContext ctx = Context(&kApi);
   ::close(0);
   QCHECK(ap::plugin::InitWith(&ctx, Args(path).c_str(), kNoThread) == 1);
   QCHECK(::fcntl(0, F_GETFD) == -1 && errno == EBADF);

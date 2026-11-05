@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override and graphics.texture_quality. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality and graphics.hand_flip. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -146,16 +146,28 @@ graphics:
   # 1152x1264, low 1440x1584, medium 1728x1904, high 2016x2224, very_high 2304x2528, ultra 2592x2848; 2 samples. This build
   # has not measured any headset's native size. A bigger size looks sharper and costs frame time. `low` answers the
   # headset's own size, and so does `stock`.
-  # The game's settings menu has the same setting: a GRAPHICS page with one control, "Texture Resolution", of the six
+  # The game's settings menu has the same setting: a NEVR page with one control, "Texture Resolution", of the six
   # levels (Very Low to Ultra). A change there applies at the next frame, with no restart, and the game saves it. This key
   # is the level the game starts at when the player has chosen nothing; what the player saved always wins over it. The
   # control shows `stock` as Low.
   # Read once at launch. Any mistake (a value that is not one of the seven words, a mapping or a list, a key with no value,
   # a `graphics` that is not a mapping, an unset ${VAR}, a file rejected as a whole) gives `stock`, with a warning in the
-  # sentinel log that names the key. Any other key under `graphics` (a misspelling such as `texture_qualty`, or
-  # `Texture_Quality`) is ignored with a warning that names it.
+  # sentinel log that names the key. Any other key under `graphics` than `texture_quality` and `hand_flip` (a misspelling such as
+  # `texture_qualty`, or `Texture_Quality`) is ignored with a warning that names it.
   # Default (absent): stock. The log line `texture_quality` in the sentinel log names the level, its source and the size.
   # texture_quality: high
+
+  # Quest only. Controller Hand Flip: a boolean. true turns the controllers' orientation by 180 degrees about their local Z axis,
+  # for players on a Quest 2 whose Touch Pro or Touch Plus controllers show their hands rolled backwards; false (and absent) leaves
+  # every pose as the headset runtime reports it. The settings menu has the same setting, a "Controller Hand Flip" row under
+  # Texture Resolution on the NEVR page; a change there takes effect on the next frame, and the sentinel writes it here as `true` (On)
+  # or `false` (Off) within about a second, so the next launch starts with the player's last choice. It is the choice at launch
+  # only; the menu's choice wins while the game runs. Read once at launch. A value that is not a boolean (a word such as `maybe`, a
+  # number, a mapping or a list, a key with no value, an unset ${VAR}) is Off, with a warning in the sentinel log that names the
+  # key. The sentinel log line `hand_flip_start` names the value and its source (`config` when this file gave it, `default`
+  # when it did not), and `hand_flip_saved` names each write of this key.
+  # Default (absent): false.
+  # hand_flip: true
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
@@ -519,16 +531,16 @@ arena:
 # plugins — plugin loading and configuration
 #
 # Plugins are optional DLLs loaded from plugins\ in the nEVR root
-# (%LOCALAPPDATA%\nevr\echovr, ADR 0012), never from the game folder. Each plugin exports the NvrPluginInterface lifecycle:
+# (%LOCALAPPDATA%\nevr\echovr, ADR 0012), never from the game folder. Each plugin exports the NevrPluginInterface lifecycle:
 #
-#   NvrPluginGetInfo()      — returns name, version, description (REQUIRED)
-#   NvrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
-#   NvrPluginInit(ctx)      — called once at load time (optional)
-#   NvrPluginOnFrame(ctx)   — called each game frame (optional)
-#   NvrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
-#   NvrPluginShutdown()     — called at unload time (optional)
+#   NevrPluginGetInfo()      — returns name, version, description (REQUIRED)
+#   NevrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
+#   NevrPluginInit(ctx)      — called once at load time (optional)
+#   NevrPluginOnFrame(ctx)   — called each game frame (optional)
+#   NevrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
+#   NevrPluginShutdown()     — called at unload time (optional)
 #
-# InitEx contract (NvrPluginInitEx, optional, API v4): a plugin that exports it
+# InitEx contract (NevrPluginInitEx, optional, API v4): a plugin that exports it
 # is called with (ctx, args_json), where args_json is the entry's `args` as a
 # flat JSON object string ("{}" when the entry has none, never null). The
 # plugin extracts the keys it understands, ignores the rest, and uses sensible

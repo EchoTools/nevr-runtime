@@ -246,8 +246,8 @@ TCP = {
     'LobbyRegistrationFailure': 'SNSLobbyRegistrationFailure',
     'LobbySessionSuccessV5': 'SNSLobbySessionSuccessv5',
     'LobbySettingsResponse': 'SNSLobbySettingsResponse',
-    'GameClientMsg2': 'SNSServerSettingsResponsev2',
-    'GameClientMsg3': 'SNSRewardsSettings',
+    'ServerSettingsResponsev2': 'SNSServerSettingsResponsev2',
+    'RewardsSettings': 'SNSRewardsSettings',
 }
 
 # identifier -> value, for constants whose source string is not known

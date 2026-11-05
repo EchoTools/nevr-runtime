@@ -43,7 +43,7 @@ static const TickFn kTicks[16] = {&Tick<1>, &Tick<2>,  &Tick<3>,  &Tick<4>,  &Ti
                                   &Tick<9>, &Tick<10>, &Tick<11>, &Tick<12>, &Tick<13>, &Tick<14>, &Tick<15>, &Tick<16>};
 
 int main() {
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.ctx_size = sizeof ctx;
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;

@@ -85,7 +85,7 @@ void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mod
   // the log mutex (created in Prepare, so no crash callback creates it). No directory creation, no
   // file I/O, no runtime load.
   g_diagnostics.Prepare(host_module);
-  g_capture.Prepare(host_module, &g_diagnostics);
+  g_capture.Prepare(&g_diagnostics);
   PrepareCrashReport(&g_diagnostics);  // the file name and the platform: no file I/O and no module enumeration (loader lock)
   StartDbgHelpPreload();
   if (launcher_mode) return;  // SetGameModule drives the rendezvous after LoadLibrary

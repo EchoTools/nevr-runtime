@@ -10,19 +10,27 @@ drifts; the hygiene rules at the end are how it gets corrected, on a schedule, t
 
 ## Release milestones
 
-Milestones are ordered by when they ship, not by version number. There are three:
+A release milestone is titled with the version the next tag will compute to: the version
+`python3 tools/next_release_version.py` gives for `main` (see "Release versions"). The tool counts every commit on
+`main` that the highest release tag reachable from `main` (`vX.Y.Z` below) does not contain, so every commit merged
+since that tag ships under one version, whatever milestone its issue is in. With no breaking `feat`, `fix` or `perf`
+merged since that tag, the milestones are:
 
 | milestone | holds |
 |---|---|
-| `Next release` | what ships in the next tagged release |
-| `Release after` | what ships in the release after that |
+| `vX.Y.(Z+1)`, the next patch | the next release, while the commits merged since `vX.Y.Z` hold a `fix` or `perf` and no `feat` |
+| `vX.(Y+1).0`, the next minor | the next release, once a `feat` is merged since `vX.Y.Z` |
 | `Future` | wanted, not scheduled |
+
+Work of any other type (`docs`, `chore`, `ci`, ...) bumps nothing. It ships in the next release, and with no `fix`,
+`perf` or `feat` merged since `vX.Y.Z` the tool names no version for it: it exits 1, nothing to release.
 
 - The description opens with `Outcome:`: the state of the world when the release is done, then its definition of done.
 - **No due dates.** Releases are scoped by work, not by the calendar.
-- When a release is tagged, `Next release` is renamed to the version it shipped as (`v5.6.0`) and closed. Anything
-  still open in it moves to `Release after` first. Unfinished work never holds a release. `Release after` is then
-  renamed `Next release`, and a new `Release after` is opened.
+- **An item moves when a merge changes the computed version.** A milestone whose `feat` has not merged yet carries the
+  version the tool gives for `main` now. When a merge changes that version (a `feat` merging turns the next patch into
+  the next minor), the milestone's items move to the milestone of the new version.
+- Unfinished work never holds a release.
 - Work nobody has decided to schedule has no milestone and carries the `backlog` label.
 
 ### Release versions
@@ -122,8 +130,9 @@ mechanical and reversible) or listed for a decision. Branches and issues are nev
   "Branch lifecycle"); nothing is left to age across sprints.
 
 **Milestones**
-- An open milestone's title is `Next release`, `Release after` or `Future`. A milestone closed when its release is tagged is
-  titled with the version it shipped as, `vX.Y.Z`; the closed `v4.x` milestones keep their titles.
+- An open milestone's title is `Future` or the version the next tag will compute to (see "Release milestones"). A
+  milestone closed when its release is tagged is titled with the version it shipped as, `vX.Y.Z`; the closed `v4.x`
+  milestones keep their titles.
 - The description starts with `Outcome:`.
 - No due date.
 - A closed milestone has no open items.

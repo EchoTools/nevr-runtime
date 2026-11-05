@@ -14,6 +14,7 @@
 #include <dlfcn.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -30,6 +31,7 @@
 #include "runtime/compat/status_redirect_check.h"
 #include "got_hook.h"
 #include "hook_log.h"
+#include "hook_report.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/redirect/service_redirector.h"
 #include "quest/redirect/tstring_thunks.h"
@@ -614,18 +616,20 @@ void TheMatchmakerQueuesGraphHostIsRedirectedToTheHttpService() {
   QCHECK(std::strcmp(read, "https://graph.oculus.com") == 0);
 }
 
-void TheGraphHostIsLeftAloneWithoutAnHttpTargetOrTheFeature() {
+// The redirect has no target for the graph host (no nevr_http_uri) or is off: the redirect leaves the URL, and the
+// outbound block (#2089) then refuses it, so the graph host is never reached either way.
+void TheGraphHostIsRefusedWhenNothingRedirectsIt() {
   Scenario noHttp(Config(kSocketOnly));
   unsigned long handle = 0;
   const char* graph = "https://graph.oculus.com";
   ConnectEntry()(&handle, graph);
-  QCHECK(g_connectUrl == graph);
+  QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kRefusedUrl) == 0);
   EmbeddedDefaults embedded;
   embedded.httpUri = "https://emb.example:7350";
   Scenario off(WithRedirectOff(nevr_quest::ResolveConfig(embedded, nullptr).config));  // the feature off
   g_connectUrl = nullptr;
   ConnectEntry()(&handle, graph);
-  QCHECK(g_connectUrl == graph);
+  QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kRefusedUrl) == 0);
 }
 
 void ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists() {
@@ -717,6 +721,167 @@ void EveryConnectIsCountedByClassForTheStatusRedirectCheck() {
   ConnectEntry()(&handle, "https://api.readyatdawn.com");  // no http target: the connect is left alone
   QCHECK(nevr_status_redirect_check::Process().Counts().apiPassthrough == 1);
   nevr_status_redirect_check::ResetForTest();
+}
+
+// ---- the outbound block (#2089) ----------------------------------------------
+
+// The four hosts, by what the game passes to CSysHttp::CreateConnection: libr15 0x108f528 (RAD.bugsplat.com),
+// 0x226bf58 (s3-us-west-2.amazonaws.com), 0x1386520 and 0x138812c (graph.oculus.com), 0x136c25c (api-<env>).
+void OutboundHostsAreTheFourTheGameMustNotReach() {
+  QCHECK(ClassifyOutboundHost("https://RAD.bugsplat.com") == OutboundHost::kRadBugSplat);
+  QCHECK(ClassifyOutboundHost("https://s3-us-west-2.amazonaws.com") == OutboundHost::kAmazonS3);
+  QCHECK(ClassifyOutboundHost("https://graph.oculus.com") == OutboundHost::kOculusGraph);
+  QCHECK(ClassifyOutboundHost("https://api-dev.readyatdawn.com") == OutboundHost::kApiEnvironment);
+  QCHECK(ClassifyOutboundHost("https://api-%s.readyatdawn.com") == OutboundHost::kApiEnvironment);  // the unexpanded literal
+  // The scheme, the port, a path and the letter case do not change the host.
+  QCHECK(ClassifyOutboundHost("http://rad.bugsplat.com") == OutboundHost::kRadBugSplat);
+  QCHECK(ClassifyOutboundHost("RAD.bugsplat.com") == OutboundHost::kRadBugSplat);  // CreateConnection takes a bare host too
+  QCHECK(ClassifyOutboundHost("https://rad.bugsplat.com:443/post/bp/crash/postBP.php") == OutboundHost::kRadBugSplat);
+  QCHECK(ClassifyOutboundHost("https://GRAPH.oculus.com/v1?x=1") == OutboundHost::kOculusGraph);
+  QCHECK(ClassifyOutboundHost("https://S3-US-WEST-2.amazonaws.com#frag") == OutboundHost::kAmazonS3);
+  QCHECK(ClassifyOutboundHost("https://API-Live.readyatdawn.com:7350") == OutboundHost::kApiEnvironment);
+  // Neighbours and look-alikes are not them.
+  for (const char* other : {"https://api.readyatdawn.com",          // the live API base: the redirect's, not the block's
+                            "https://api-.readyatdawn.com",         // an empty environment
+                            "https://api-dev.readyatdawn.com.evil.example", "https://api-dev.readyatdawn.comx",
+                            "https://xapi-dev.readyatdawn.com", "https://login.readyatdawn.com",
+                            "https://graph.oculus.com.evil.example", "https://graph.oculus.comx",
+                            "https://graph.facebook.com", "https://RAD.bugsplat.com.evil.example",
+                            "https://bugsplat.com", "https://s3-us-east-1.amazonaws.com",
+                            "https://s3-us-west-2.amazonaws.com.evil.example", "https://amazonaws.com",
+                            "https://127.0.0.1:9", "wss://login.readyatdawn.com/rad/rad15_live", "https://", "", "x"}) {
+    QCHECK(ClassifyOutboundHost(other) == OutboundHost::kNone);
+  }
+  QCHECK(ClassifyOutboundHost(nullptr) == OutboundHost::kNone);
+  QCHECK(std::strcmp(kRefusedUrl, "https://127.0.0.1:9") == 0);
+}
+
+// Each of the four is connected to the refusal address instead: the original still runs (the connection object the
+// game keeps is made, so its callers' result paths do not change), its result and handle pass through, and the
+// host the game asked for never reaches it. The redirect has no target here, so it leaves all four alone.
+void EachOutboundHostIsConnectedToTheRefusalAddress() {
+  Scenario s(Config(kSocketOnly));
+  unsigned long handle = 0;
+  for (const char* url : {"https://RAD.bugsplat.com", "https://s3-us-west-2.amazonaws.com", "https://graph.oculus.com",
+                          "https://api-dev.readyatdawn.com"}) {
+    g_connectUrl = nullptr;
+    g_connectHandle = nullptr;
+    const int rc = ConnectEntry()(&handle, url);
+    QCHECK(rc == 7);  // the original's result, unchanged
+    QCHECK(g_connectHandle == &handle);
+    QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kRefusedUrl) == 0);
+  }
+}
+
+// The redirect decides first: a host it sends to the configured service is not refused, and no counter moves.
+void TheBlockSeesTheRedirectsAnswerNotTheGamesURL() {
+  Scenario s(Config(kRedirectOn));
+  unsigned long handle = 0;
+  GlobalCounters().refusedGraph.store(0);
+  GlobalCounters().refusedApiEnvironment.store(0);
+  ConnectEntry()(&handle, "https://graph.oculus.com");
+  QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kHttpTarget) == 0);
+  ConnectEntry()(&handle, "https://api-dev.readyatdawn.com");
+  QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kHttpTarget) == 0);
+  QCHECK(GlobalCounters().refusedGraph.load() == 0);
+  QCHECK(GlobalCounters().refusedApiEnvironment.load() == 0);
+  // The two hosts the redirect has no rule for are refused with the redirect on.
+  ConnectEntry()(&handle, "https://RAD.bugsplat.com");
+  QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kRefusedUrl) == 0);
+  ConnectEntry()(&handle, "https://s3-us-west-2.amazonaws.com");
+  QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kRefusedUrl) == 0);
+}
+
+// A URL the block does not name reaches the original as the very pointer the game passed (and the live API base,
+// which the redirect owns, is not refused when the redirect has no target).
+void OtherHostsAreNotRefused() {
+  Scenario s(Config(kSocketOnly));
+  unsigned long handle = 0;
+  for (const char* other : {"https://api.readyatdawn.com", "https://login.readyatdawn.com", "https://graph.facebook.com",
+                            "https://cdn.example.com/asset", "https://s3-us-east-1.amazonaws.com", "https://api"}) {
+    g_connectUrl = nullptr;
+    ConnectEntry()(&handle, other);
+    QCHECK(g_connectUrl == other);
+  }
+  ConnectEntry()(&handle, nullptr);
+  QCHECK(g_connectUrl == nullptr);
+  QCHECK(GlobalCounters().refusedBugSplat.load() == 0);
+  QCHECK(GlobalCounters().refusedAmazonS3.load() == 0);
+  QCHECK(GlobalCounters().refusedGraph.load() == 0);
+  QCHECK(GlobalCounters().refusedApiEnvironment.load() == 0);
+}
+
+// One counter per host, moved once per refused connect and by nothing else. The reporter thread writes the line
+// ("hook_counter", why first_change) from them, so a hooked call never logs (docs/adr/0003).
+void EachRefusedHostHasItsOwnCounterAndNothingLogs() {
+  Scenario s(Config(kSocketOnly));
+  Lines().clear();
+  unsigned long handle = 0;
+  RedirectCounters& c = GlobalCounters();
+  ConnectEntry()(&handle, "https://RAD.bugsplat.com");
+  QCHECK(c.refusedBugSplat.load() == 1 && c.refusedAmazonS3.load() == 0 && c.refusedGraph.load() == 0 &&
+         c.refusedApiEnvironment.load() == 0);
+  ConnectEntry()(&handle, "https://s3-us-west-2.amazonaws.com");
+  ConnectEntry()(&handle, "https://s3-us-west-2.amazonaws.com");
+  ConnectEntry()(&handle, "https://graph.oculus.com");
+  ConnectEntry()(&handle, "https://api-dev.readyatdawn.com");
+  QCHECK(c.refusedBugSplat.load() == 1);
+  QCHECK(c.refusedAmazonS3.load() == 2);
+  QCHECK(c.refusedGraph.load() == 1);
+  QCHECK(c.refusedApiEnvironment.load() == 1);
+  QCHECK(Lines().empty());
+  ResetCountersForTest();
+  QCHECK(c.refusedBugSplat.load() == 0 && c.refusedAmazonS3.load() == 0 && c.refusedGraph.load() == 0 &&
+         c.refusedApiEnvironment.load() == 0);
+}
+
+// The status_redirect self-check counts what the redirect did: an API base the redirect left alone and the block
+// then refused is a passthrough (a failure to redirect), never a redirect.
+void ARefusedApiHostIsStillCountedAsNotRedirected() {
+  Scenario s(Config(kSocketOnly));
+  nevr_status_redirect_check::ResetForTest();
+  unsigned long handle = 0;
+  ConnectEntry()(&handle, "https://api-dev.readyatdawn.com");
+  const nevr_status_redirect_check::Snapshot c = nevr_status_redirect_check::Process().Counts();
+  QCHECK(c.apiPassthrough == 1);
+  QCHECK(c.apiRedirected == 0);
+  nevr_status_redirect_check::ResetForTest();
+}
+
+// The line the first refusal of each host leaves is the reporter's (the hooked call only counts): one `hook_counter`
+// record per host, named for the call and the host, `first_change` for a host the game tried and `never_fired` for
+// one it did not (the grace window decides which), so the log says which of the four a run went for.
+bool WaitForLineContaining(const char* first, const char* second, int timeoutMs) {
+  for (int waited = 0; waited <= timeoutMs; waited += 5) {
+    {
+      const std::lock_guard<std::mutex> lock(g_linesMutex);
+      for (const std::string& l : Lines()) {
+        if (l.find(first) != std::string::npos && l.find(second) != std::string::npos) return true;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return false;
+}
+
+void TheReporterNamesTheCallAndTheHostOfEachRefusal() {
+  sentinel::StopReporter();  // empties the counter table: this test registers the redirect's own
+  QCHECK(RegisterRedirectCounters());
+  Scenario s(Config(kSocketOnly));
+  {
+    const std::lock_guard<std::mutex> lock(g_linesMutex);
+    Lines().clear();
+  }
+  QCHECK(sentinel::StartReporter(5, 150, 60000));
+  unsigned long handle = 0;
+  ConnectEntry()(&handle, "https://RAD.bugsplat.com");
+  ConnectEntry()(&handle, "https://s3-us-west-2.amazonaws.com");
+  QCHECK(WaitForLineContaining("\"counter\":\"http_create_connection_refused_rad_bugsplat\"", "\"why\":\"first_change\"", 5000));
+  QCHECK(WaitForLineContaining("\"counter\":\"http_create_connection_refused_s3\"", "\"why\":\"first_change\"", 5000));
+  // The two the run did not try are said once the grace window ends.
+  QCHECK(WaitForLineContaining("\"counter\":\"http_create_connection_refused_graph\"", "\"why\":\"never_fired\"", 5000));
+  QCHECK(WaitForLineContaining("\"counter\":\"http_create_connection_refused_api_env\"", "\"why\":\"never_fired\"", 5000));
+  sentinel::StopReporter();
 }
 
 // All 16 slots computed under the current bridge state: a further value is not remembered. A change
@@ -1157,11 +1322,18 @@ int main(int argc, char** argv) {
   IsApiBaseUrlMatchesOnlyTheTwoRealPrefixes();
   ApiBaseUrlIsRedirectedBeforeTheOriginalConnects();
   TheMatchmakerQueuesGraphHostIsRedirectedToTheHttpService();
-  TheGraphHostIsLeftAloneWithoutAnHttpTargetOrTheFeature();
+  TheGraphHostIsRefusedWhenNothingRedirectsIt();
   ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists();
   ConnectUrlRedirectIsStableAndCountedWithoutLogging();
   UrlDecisionsHaveTheirOwnCounters();
   EveryConnectIsCountedByClassForTheStatusRedirectCheck();
+  OutboundHostsAreTheFourTheGameMustNotReach();
+  EachOutboundHostIsConnectedToTheRefusalAddress();
+  TheBlockSeesTheRedirectsAnswerNotTheGamesURL();
+  OtherHostsAreNotRefused();
+  EachRefusedHostHasItsOwnCounterAndNothingLogs();
+  ARefusedApiHostIsStillCountedAsNotRedirected();
+  TheReporterNamesTheCallAndTheHostOfEachRefusal();
   CacheFullAndStaleBridgeBehaviour();
   LoginFallbackComposesTheStockDefaultOnce();
   LoginFallbackKeepsAFallbackThatHasAQuery();

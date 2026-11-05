@@ -1,4 +1,4 @@
-// Force-included into the plugin sources by src/quest/tests/q15t/run_host_tests.sh: the host test's fake game function stands in for
+// Force-included into the plugin sources by src/quest/tests/q15t/CMakeLists.txt (the host_test programs): the host test's fake game function stands in for
 // CncaGame::ExclusiveUpdateGame, so its "pinned vaddr" is its address minus the fake base.
 #pragma once
 #include <cstdint>

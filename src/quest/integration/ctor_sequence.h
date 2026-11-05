@@ -95,6 +95,12 @@
 //                                    on every launch, right after the credits step; its counters are registered with the
 //                                    others (step 3). The switch (`diagnostics.clock_levels_override`, default off)
 //                                    decides whether the (2, 2) the game asks for is rewritten to (4, 4).
+//      InstallIrradianceDefault      the default irradiance texture is grey, not black (#2091, #1737 U25): one GOT hook on
+//                                    CGEngineResources::Initialize (JUMP_SLOT 0x36fba08) and the row `irradiance_default.upload`
+//                                    of the patched libr15 (ADR 0021), on every launch, right after the clock-level
+//                                    arming; no counters. Initialize runs after the constructor, so the hooks are in place before the
+//                                    texture is uploaded. Refused (the step reports failure) unless Attach verified libr15;
+//                                    the game then uploads its own black texel.
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   Attach not verified     -> NOTHING is gated on it by the sequence: AttachLibR15 reports failure with the reason token
@@ -185,6 +191,7 @@ enum class StepId : std::uint8_t {
   kInstallMenuCards,
   kInstallWizardMetric,
   kArmClockLevels,
+  kInstallIrradianceDefault,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -291,6 +298,9 @@ class Steps {
   // The CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot (the streaming reader's read-finished
   // callback), on every launch, no counters.
   virtual bool InstallMenuCards() = 0;
+  // The grey default irradiance texture (#2091): the GOT hook on CGEngineResources::Initialize and the row of the patched libr15
+  // that holds the upload helper, on every launch, no counters. True when both are live.
+  virtual bool InstallIrradianceDefault() = 0;
   // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2). Asked before its step runs; the step is skipped when false.
   virtual bool WizardMetricWanted() = 0;
   virtual bool InstallWizardMetric() = 0;
@@ -324,7 +334,8 @@ class Steps {
 ConstructorReport RunConstructorSequence(Steps& steps) noexcept;
 
 // The begin record of the constructor (#1391): one sentinel_ctor line, action=begin, with the version and the commit of this
-// build. entry.cpp passes nevr_build::kVersion and nevr_build::kCommit from its generated build header. Never throws.
-void LogConstructorBegin(const char* version, const char* commit) noexcept;
+// build, and its kind ("dev" or "release", ADR 0040). entry.cpp passes nevr_build::kVersion, nevr_build::kCommit and
+// nevr_build::kIsDev from its generated build header. Never throws.
+void LogConstructorBegin(const char* version, const char* commit, const char* kind) noexcept;
 
 }  // namespace nevr_quest::integration

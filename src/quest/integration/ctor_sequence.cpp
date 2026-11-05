@@ -7,10 +7,11 @@
 
 namespace nevr_quest::integration {
 
-// The begin record (#1391): the build's version and commit are fields of the line, so a log names the build that ran.
-void LogConstructorBegin(const char* version, const char* commit) noexcept {
+// The begin record (#1391): the build's version, commit and kind are fields of the line, so a log names the build that ran
+// (ADR 0040 rule 2; the variant name has no source yet, so it is not a field).
+void LogConstructorBegin(const char* version, const char* commit, const char* kind) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor",
-                      {{"action", "begin"}, {"version", version}, {"commit", commit}});
+                      {{"action", "begin"}, {"version", version}, {"commit", commit}, {"kind", kind}});
 }
 
 const char* StepStateName(StepState state) {
@@ -54,6 +55,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallRenderConfig: return "install_render_config";
     case StepId::kInstallCreditsText: return "install_credits_text";
     case StepId::kInstallMenuCards: return "install_menu_cards";
+    case StepId::kInstallIrradianceDefault: return "install_irradiance_default";
     case StepId::kInstallWizardMetric: return "install_wizard_metric";
     case StepId::kArmClockLevels: return "arm_clock_levels";
     case StepId::kStartTokenAuth: return "start_token_auth";
@@ -309,6 +311,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Run(StepId::kArmClockLevels, [&] { return steps.ArmClockLevels(true, want.clockLevels); });
     }
+
+    // The grey default irradiance texture (#2091): every launch, no counters. The hooks must be in place before the engine runs
+    // CGEngineResources::Initialize, which is after the constructor.
+    r.Run(StepId::kInstallIrradianceDefault, [&] { return steps.InstallIrradianceDefault(); });
 
     bool tokenOk = false;
     if (wantTokenAuth) {

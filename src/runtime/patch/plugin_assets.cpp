@@ -24,11 +24,13 @@
 #include <set>
 #include <utility>
 
+#include <winsock2.h>
 #include <windows.h>
 #include <MinHook.h>
 
 #include "core/globals.h"
 #include "core/logging.h"
+#include "runtime/hook/patching.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/patch/game_buffer.h"
 
@@ -234,21 +236,25 @@ uint64_t __cdecl Hook_Request(void* manager, uint64_t typeKey, uint64_t nameKey,
     return g_origRequest(manager, typeKey, nameKey, a4, a5, resource, index, request);
 }
 
-bool InstallOne(void* target, void* detour, void** original, const char* what) {
-    MH_STATUS created = MH_CreateHook(target, detour, original);
-    if (created != MH_OK) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.ASSET] hook create failed what=%s target=%p status=%s", what,
-            target, MH_StatusToString(created));
-        return false;
+// One engine hook, through PatchDetour, so HookGuard records it under `name`. PatchDetour reads the game's function from
+// the slot on entry and leaves the trampoline there on success; on failure the slot is put back to the game's function,
+// and PatchDetour's own Warning names the hook.
+bool InstallOne(void* target, void* detour, void** original, const char* name) {
+    *original = target;
+    return PatchDetour(original, detour, name) != FALSE;
+}
+
+// Removes one engine hook and its HookGuard record. MH_ERROR_NOT_CREATED and MH_ERROR_NOT_INITIALIZED mean the hook is
+// already gone: on a dynamic unload, platform_compat's module shutdown (boot.cpp registers it) calls Hooking::Shutdown,
+// which runs MH_Uninitialize and restores every hook before this runs. A removal that fails leaves the hook in place; it
+// is no longer guarded, and that is logged.
+void RetireEngineHook(void* target, const char* what) {
+    const MH_STATUS status = PatchRetire(target);
+    if (status != MH_OK && status != MH_ERROR_NOT_CREATED && status != MH_ERROR_NOT_INITIALIZED) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.ASSET] hook remove failed what=%s target=%p status=%s; the hook stays in place and is no longer guarded",
+            what, target, MH_StatusToString(status));
     }
-    MH_STATUS enabled = MH_EnableHook(target);
-    if (enabled != MH_OK) {
-        MH_RemoveHook(target);
-        Log(EchoVR::LogLevel::Warning, "[NEVR.ASSET] hook enable failed what=%s target=%p status=%s", what,
-            target, MH_StatusToString(enabled));
-        return false;
-    }
-    return true;
 }
 
 void EnsureHooksInstalled() {
@@ -263,14 +269,14 @@ void EnsureHooksInstalled() {
 
     g_submitTarget = reinterpret_cast<void*>(Base() + kRvaSubmit);
     if (!InstallOne(g_submitTarget, reinterpret_cast<void*>(Hook_Submit),
-                    reinterpret_cast<void**>(&g_origSubmit), "submit")) {
+                    reinterpret_cast<void**>(&g_origSubmit), "plugin_assets submit")) {
         g_submitTarget = nullptr;
         g_hookAttemptFailed = true;
         return;
     }
     g_requestTarget = reinterpret_cast<void*>(Base() + kRvaRequest);
     if (!InstallOne(g_requestTarget, reinterpret_cast<void*>(Hook_Request),
-                    reinterpret_cast<void**>(&g_origRequest), "request")) {
+                    reinterpret_cast<void**>(&g_origRequest), "plugin_assets request")) {
         // The submit hook alone serves loads; only the named diagnosis for the direct paths is missing.
         g_requestTarget = nullptr;
     }
@@ -280,6 +286,13 @@ void EnsureHooksInstalled() {
 }
 
 }  // namespace
+
+#ifdef NEVR_TEST_HOOKS
+bool InstallHookForTest(void* target, void* detour, void** original, const char* name) {
+    return InstallOne(target, detour, original, name);
+}
+void RetireHookForTest(void* target, const char* what) { RetireEngineHook(target, what); }
+#endif
 
 RegisterStatus RegisterPluginAsset(uint64_t type, uint64_t name, const void* data, uint64_t size,
                                    const char* label) {
@@ -318,13 +331,11 @@ size_t DeregisterPluginAssets(const void* start, const void* end) {
 void ShutdownPluginAssets() {
     std::lock_guard<std::mutex> lock(g_installMutex);
     if (g_requestTarget) {
-        MH_DisableHook(g_requestTarget);
-        MH_RemoveHook(g_requestTarget);
+        RetireEngineHook(g_requestTarget, "plugin_assets request");
         g_requestTarget = nullptr;
     }
     if (g_submitTarget) {
-        MH_DisableHook(g_submitTarget);
-        MH_RemoveHook(g_submitTarget);
+        RetireEngineHook(g_submitTarget, "plugin_assets submit");
         g_submitTarget = nullptr;
     }
     g_origSubmit = nullptr;

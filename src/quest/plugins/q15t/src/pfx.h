@@ -18,7 +18,7 @@ struct PfxGateDecision {
 // The decision from one fact: whether `pfx.off` is present in the data directory. Pure, so the host test drives both branches.
 PfxGateDecision DecidePfxGate(bool off_file_present);
 
-// Reads the switch, stores the decision for PfxGateOn(), and logs one INFO line naming it. Called once from NvrPluginInitEx on the
+// Reads the switch, stores the decision for PfxGateOn(), and logs one INFO line naming it. Called once from NevrPluginInitEx on the
 // pinned build (plugin.cpp). Returns the decision it stored.
 PfxGateDecision InitPfxGate();
 

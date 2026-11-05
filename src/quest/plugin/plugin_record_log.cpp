@@ -22,6 +22,7 @@ void LogLoadRecord(const LoadRecord& record) {
       {"source", record.source.c_str()},
       {"overridden", record.overridden ? 1 : 0},
       {"config_rejected", record.configRejected ? 1 : 0},  // config.yaml was rejected whole: this plugin ran on its manifest
+      {"kept_mapped", record.keptMapped.c_str()},  // "none", or "slot_hook": not unmapped, its handler is still chained (ADR 0034)
   };
   const bool fine = record.outcome == Outcome::kLoaded || record.outcome == Outcome::kDisabled;
   sentinel::LogFieldList(fine ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "plugin_load", fields,

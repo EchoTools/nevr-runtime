@@ -37,8 +37,7 @@ def body(text: str, signature: str) -> str:
 class DbgHelpPreloadTest(unittest.TestCase):
     def test_the_crash_callback_and_its_helpers_call_no_loader_function(self):
         text = CAPTURE.read_text()
-        for signature in (r"bool CrashCapture::Capture\(", r"CrashCapture::Outcome CrashCapture::WriteDumpTo\(",
-                          r"void CrashCapture::WriteTextDiagnostic\("):
+        for signature in (r"bool CrashCapture::Capture\(", r"CrashCapture::Outcome CrashCapture::WriteDumpTo\("):
             with self.subTest(signature):
                 self.assertNotRegex(body(text, signature), r"LoadLibrary|LdrLoadDll|LoadPackagedLibrary")
 

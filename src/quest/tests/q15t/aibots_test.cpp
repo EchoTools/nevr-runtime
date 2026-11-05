@@ -145,7 +145,7 @@ int main() {
   char tmpl[] = "/tmp/q15t-ai-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) return 2;
   g_dir = tmpl;
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.ctx_size = sizeof ctx;
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;

@@ -13,6 +13,7 @@
 // throwaway PKI into the directory named by NEVR_SIGFIX_DIR (`just test-auth-unit` makes it). The tests that need them
 // fail without it: a verifier test that skips is a verifier nobody tested.
 
+#include "runtime/tests/run_log_test_path.h"
 #include "runtime/host/host_identity.h"
 #include "runtime/host/runtime_load.h"
 #include "runtime/host/runtime_rendezvous.h"
@@ -329,7 +330,7 @@ class HostRuntimeVerify : public ::testing::Test {
  protected:
   void SetUp() override {
     const char* dir = std::getenv("NEVR_SIGFIX_DIR");
-    ASSERT_NE(dir, nullptr) << "NEVR_SIGFIX_DIR is not set: run tools/gen_plugin_signature_fixtures.py <dir> "
+    ASSERT_NE(dir, nullptr) << "NEVR_SIGFIX_DIR is not set: run tools/gen_plugin_signature_fixtures.py <dir> --dll-dir <bin>/sigfix "
                                "--plugin-dll <the rendezvous nevr-runtime.dll> and export it (just test-auth-unit does)";
     fixtures_ = dir;
     std::ifstream in(fixtures_ + "/fixtures.json");
@@ -358,7 +359,7 @@ class HostRuntimeVerify : public ::testing::Test {
     ASSERT_NE(CreateDirectoryW(nevr_root_.c_str(), nullptr), FALSE);
     runtime_path_ = nevr_root_ + L"\\nevr-runtime.dll";
     nevr_host::SetRuntimeDirForTest(nevr_root_.c_str());
-    g_log_path = local_ + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
+    g_log_path = nevr_test::HostLogPath(local_);
     g_versions_written_before_load = false;
 
     // The host stand-in, in the install directory: the game's folder, where the runtime is no longer looked for.
@@ -399,7 +400,7 @@ class HostRuntimeVerify : public ::testing::Test {
     RemoveDirectoryW(nevr_root_.c_str());
     DeleteFileW((install_ + L"\\BugSplat64.dll").c_str());
     RemoveDirectoryW(install_.c_str());
-    DeleteFileW((local_ + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+    DeleteFileW((nevr_test::HostLogPath(local_)).c_str());
   }
 
   std::wstring FixtureFile(const char* key) const {
@@ -435,7 +436,7 @@ class HostRuntimeVerify : public ::testing::Test {
     BootstrapDiagnostics diagnostics;
     // The host stand-in sits in install_: its directory is where an old-layout runtime would be found.
     const std::wstring host_dir = install_ + L"\\";
-    diagnostics.PrepareForTest(local_.c_str(), nullptr, host_dir.c_str());
+    diagnostics.PrepareForTest(local_.c_str(), host_dir.c_str());
     nevr_test::StderrCapture capture;
     {
       ReturningTarget target;
@@ -445,7 +446,7 @@ class HostRuntimeVerify : public ::testing::Test {
       EXPECT_NE(rendezvous.Install(target.code()), nullptr);
       outcome.result = RuntimeRendezvous::GameMainWrapperDetour(0x1234);
       diagnostics.FlushAttachJournal();
-      outcome.records = ParseRecords(ReadAll(local_ + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl"));
+      outcome.records = ParseRecords(ReadAll(nevr_test::HostLogPath(local_)));
       RuntimeRendezvous::ResetActiveForTest();
     }
     outcome.stderr_text = capture.Text();
@@ -665,7 +666,7 @@ TEST_F(HostRuntimeVerify, ADevBuildLoadsAnUnsignedRuntimeAndSaysSoInTheRecord) {
 TEST_F(HostRuntimeVerify, ARuntimeThatLoadsAndFailsToInitializeStatesItsVersionInTheStopFacts) {
   StageCopy("nevr-runtime.signed");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(local_.c_str(), nullptr, nullptr);
+  diagnostics.PrepareForTest(local_.c_str(), nullptr);
   nevr_host::RuntimeLoader loader;
   loader.Prepare();
   NevrHostContext host{};

@@ -1,7 +1,8 @@
 /* Sharing libr15's vrapi_GetSystemPropertyInt slot (JUMP_SLOT ELF 0x36fa728) between two users.
  *
- * GotHook allows one owner per slot (got_hook.h, kAlreadyInstalled), and two things want this one: the texture-quality
- * hook (texture_quality_hook.h, #943), which answers two property ids, and the hardware dump (src/quest/diag, #335),
+ * GotHook chains handlers on one slot (got_hook.h). Two
+ * things want this one: the texture-quality hook (texture_quality_hook.h, #943), which answers two property ids, and the
+ * hardware dump (src/quest/diag, #335),
  * which records every answer. The texture-quality hook owns the slot when it installs; the hardware dump then asks to
  * be told each query's native answer instead of installing a second hook:
  *

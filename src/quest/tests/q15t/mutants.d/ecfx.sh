@@ -1,4 +1,4 @@
-# `ecfx` module mutants (judged by Q15T_MODULE=ecfx: tests/mod/ecfx.sh).
+# `ecfx` module mutants (judged by mod/ecfx.cmake: `just test-quest-q15t ecfx`).
 runm ecfx ecfx_stale        src/ecfx_core.h "s#const bool stale = last \&\& nowMs - last > kStaleMs;#const bool stale = false;#"
 runm ecfx ecfx_stale_edge   src/ecfx_core.h "s#nowMs - last > kStaleMs#nowMs - last >= kStaleMs#"
 runm ecfx ecfx_stale_first  src/ecfx_core.h "s#const bool stale = last \&\& #const bool stale = #"

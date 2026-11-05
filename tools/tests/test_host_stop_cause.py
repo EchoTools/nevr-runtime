@@ -44,12 +44,30 @@ class HostStopCauseTest(unittest.TestCase):
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="host-stop-cause-test-", dir="/var/tmp"))
         self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp))
-        self.log = self.tmp / "nevr-bootstrap.jsonl"
+        self.log = self.tmp / "nevr-2026-11-04T10-43-51.990.jsonl"
         self.now = time.time()
 
     def write(self, *groups, raw=""):
         lines = [json.dumps(r) for group in groups for r in group]
         self.log.write_text("\n".join(lines) + "\n" + raw, encoding="utf-8")
+
+    def test_a_folder_is_read_as_every_process_main_log_and_nothing_else(self):
+        # The host writes into the process's one main log (nevr-<timestamp>.jsonl): a folder holds one per process. The
+        # installer's own log and a rotation's archive are not main logs and are not read.
+        (self.tmp / "nevr-2026-11-04T09-00-00.000.jsonl").write_text(json.dumps(loaded_records(self.now - 3600)[0]) + "\n")
+        self.write(stop_records(self.now))
+        decoy = json.dumps({"event": "game_stop", "exit_code": 1, "reason": "decoy", "run": "x", "ts": iso(self.now)}) + "\n"
+        (self.tmp / "nevr-update.jsonl").write_text(decoy)
+        (self.tmp / "nevr-2026-11-04T10-43-51.990.1.jsonl").write_text(decoy)
+        text = host_stop_cause.cause(self.tmp, self.now - 5)
+        self.assertIn("the host refused nevr-runtime.dll: unsigned", text)
+        self.assertNotIn("decoy", text)
+
+    def test_a_log_named_by_process_id_is_a_main_log(self):
+        # src/core/run_log_path.h names the file nevr-pid<hex>.jsonl when the process's start time cannot be read.
+        (self.tmp / "nevr-pid1f4.jsonl").write_text("".join(json.dumps(r) + "\n" for r in stop_records(self.now)))
+        text = host_stop_cause.cause(self.tmp, self.now - 5)
+        self.assertIn("the host refused nevr-runtime.dll: unsigned", text)
 
     def test_an_unsigned_runtime_is_named_with_the_build_that_fixes_it(self):
         self.write(stop_records(self.now))
@@ -140,7 +158,7 @@ class ScenarioWaitEndsOnAHostStop(unittest.TestCase):
         run_scenario.nevr_root_logs = lambda: logs
         self.addCleanup(setattr, run_scenario, "nevr_root_logs", original)
         self.assertIsNone(run.host_stopped(), "no record yet")
-        (logs / "nevr-bootstrap.jsonl").write_text("\n".join(json.dumps(r) for r in stop_records(time.time())) + "\n")
+        (logs / "nevr-2026-11-04T10-43-51.990.jsonl").write_text("\n".join(json.dumps(r) for r in stop_records(time.time())) + "\n")
         self.assertIn("the host refused nevr-runtime.dll: unsigned", run.host_stopped())
         run.launched_at = time.time() + 60
         self.assertIsNone(run.host_stopped(), "a stop from before the launch is not this launch's")

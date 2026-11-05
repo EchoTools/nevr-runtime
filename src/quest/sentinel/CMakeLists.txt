@@ -38,7 +38,7 @@ if(NEVR_LIBR15_EXTRA_ROWS)
   list(GET NEVR_EXTRA_ROWS_JSON_INCLUDE 0 NEVR_EXTRA_ROWS_JSON_INCLUDE)
   set(NEVR_EXTRA_ROWS_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/libr15_extra_rows_data.cpp")
   nevr_libr15_extra_rows("${NEVR_EXTRA_ROWS_FILE}" "${NEVR_EXTRA_ROWS_SOURCE}" "${NEVR_REPO_ROOT}/src"
-                         "${NEVR_EXTRA_ROWS_JSON_INCLUDE}" "${CMAKE_CURRENT_BINARY_DIR}/extra_rows_check")
+                         "${NEVR_EXTRA_ROWS_JSON_INCLUDE}")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${NEVR_EXTRA_ROWS_FILE}")
   target_sources(nevr_quest_got_hook PRIVATE ../patch/libr15_extra_rows.cpp "${NEVR_EXTRA_ROWS_SOURCE}")
   target_compile_definitions(nevr_quest_got_hook PRIVATE NEVR_LIBR15_EXTRA_ROWS=1)
@@ -90,6 +90,8 @@ add_library(ovrplatformloader SHARED
   texture_menu.cpp
   render_config_hook.cpp
   ui_texture_mips.cpp
+  irradiance_default_hook.cpp
+  irradiance_default_install.cpp
   quit_hook.cpp
   hand_pose_log_hook.cpp
   vk_free_guard.cpp
@@ -118,14 +120,14 @@ target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
-target_link_libraries(ovrplatformloader PRIVATE nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_invite_join nevr_quest_data_net nevr_quest_data nevr_quest_symcache breakpad_client log dl)
+target_link_libraries(ovrplatformloader PRIVATE nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_invite_join nevr_quest_combat nevr_quest_data_net nevr_quest_data nevr_quest_symcache breakpad_client log dl)
 
 # The hook path (entry.cpp and login_prompt_hook.cpp: the thunk entries and the handlers they
 # call; the prompt board the login-prompt handler reads is built the same way, see
 # src/quest/CMakeLists.txt) is compiled without exception support so its frames carry no
 # personality or LSDA; see the contract in callback_thunk.h. tests/quest
 # TestHookFramesCarryNoPersonality pins it.
-set_source_files_properties(entry.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp main_level.cpp login_title_hook.cpp obb_skip_hook.cpp path_rewrite_hook.cpp process_end_hook.cpp crash_first_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp texture_menu_hook.cpp ui_texture_mips.cpp quit_hook.cpp hand_pose_log_hook.cpp vk_free_guard.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(entry.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp main_level.cpp login_title_hook.cpp obb_skip_hook.cpp path_rewrite_hook.cpp process_end_hook.cpp crash_first_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp texture_menu_hook.cpp ui_texture_mips.cpp irradiance_default_hook.cpp irradiance_default_install.cpp quit_hook.cpp hand_pose_log_hook.cpp vk_free_guard.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # The Quest join on a resolved invite code (#966, S4). Its std::function<bool()> and std::function<std::int64_t()>
 # come through the shared invite_join.h; libc++ marks those templates' type info default-visibility, so an object

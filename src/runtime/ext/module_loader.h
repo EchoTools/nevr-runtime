@@ -7,24 +7,24 @@
 /// NotifyModulesStateChange, and UnloadModules find it. hModule must be nullptr
 /// for static modules — UnloadModules skips FreeLibrary on them.
 void RegisterStaticModule(const char* name, uint32_t api_version,
-                          NvrModuleOnFrame_fn on_frame,
-                          NvrModuleOnGameStateChange_fn on_state,
-                          NvrModuleShutdown_fn shutdown);
+                          NevrModuleOnFrame_fn on_frame,
+                          NevrModuleOnGameStateChange_fn on_state,
+                          NevrModuleShutdown_fn shutdown);
 
-/// Unload all modules in reverse order, calling NvrModuleShutdown on each.
+/// Unload all modules in reverse order, calling NevrModuleShutdown on each.
 void UnloadModules();
 
-/// Tick all modules that export NvrModuleOnFrame.
-void TickModules(const NvrModuleContext* ctx);
+/// Tick all modules that export NevrModuleOnFrame.
+void TickModules(const NevrModuleContext* ctx);
 
 /// Notify all modules of a game state change.
-void NotifyModulesStateChange(const NvrModuleContext* ctx, uint32_t old_state, uint32_t new_state);
+void NotifyModulesStateChange(const NevrModuleContext* ctx, uint32_t old_state, uint32_t new_state);
 
 /// Store the module context globally so GetModuleContext() works.
-void SetModuleContext(const NvrModuleContext* ctx);
+void SetModuleContext(const NevrModuleContext* ctx);
 
 /// Get the stored module context.
-const NvrModuleContext* GetModuleContext();
+const NevrModuleContext* GetModuleContext();
 
 /// Register a named proc for cross-module resolution.
 void RegisterModuleProc(const char* name, void* proc);
@@ -39,7 +39,7 @@ void* ResolveModuleProc(const char* name);
 // ============================================================================
 
 #ifdef NEVR_TEST_HOOKS
-void TestHook_RegisterModuleOnFrame(NvrModuleOnFrame_fn fn);
-void TestHook_RegisterModuleOnStateChange(NvrModuleOnGameStateChange_fn fn);
+void TestHook_RegisterModuleOnFrame(NevrModuleOnFrame_fn fn);
+void TestHook_RegisterModuleOnStateChange(NevrModuleOnGameStateChange_fn fn);
 void TestHook_ClearModules();
 #endif

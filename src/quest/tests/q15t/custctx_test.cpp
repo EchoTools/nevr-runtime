@@ -220,7 +220,7 @@ static int FailThird(void** out, size_t align, size_t size) {
 }
 
 int main() {
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.ctx_size = sizeof ctx;
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;

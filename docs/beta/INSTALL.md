@@ -73,14 +73,13 @@ files. Attach them by dragging them into the form:
 | File | Where it is |
 |---|---|
 | The game's log for that session (**always attach it**) | `%LOCALAPPDATA%\nevr\echovr\logs\`: the `nevr-<date>T<time>.jsonl` file from that session (newest first if it just happened). Paste `%LOCALAPPDATA%\nevr\echovr\logs` into the Explorer address bar to get there. |
-| The start-up log | `bin\win10\logs\nevr-boot.jsonl` in your Echo VR folder. |
-| If the game crashed | **`nevr-crash-<id>.txt`** in the same `%LOCALAPPDATA%\nevr\echovr\logs\` folder: the crash record (what failed, where, and what called it). |
+| If the game crashed | The same file holds the crash record (what failed, where, and what called it): the lines with `NEVR.CRASH`. A crash dump, when one was written, is in `%LOCALAPPDATA%\nevr\echovr\crashes\`. |
 
 **The line we read first.** The game's log holds a `render_config` line from the first rendered frame of the session, and another each time
 the picture setup changes: your graphics card and driver, the headset and its refresh rate, the render resolution and scale, and the game's
 graphics settings with what set them. A report about stutter, a low frame rate or a blurry picture is read against that line, so attach the log
-even when the problem does not look like a crash. On a Quest headset the same line is in `nevr-sentinel.log`, in the game's folder on the
-headset (`/sdcard/Android/media/com.readyatdawn.r15/files/`; the Android/data files folder on a headset where that one is not writable). The log of the previous session is kept beside it as `nevr-sentinel.session-<number>.log`.
+even when the problem does not look like a crash. On a Quest headset the same line is in the newest `nevr-<date>T<time>.jsonl`, in `nevr/logs` of the game's folder on the
+headset (`/sdcard/Android/media/com.readyatdawn.r15/files/`; the Android/data files folder on a headset where that one is not writable). Each run of the game writes a file of its own, so the previous session's log is the one before it.
 
 **What these files contain:** your Discord account id, and file paths, which can include your Windows user
 name. They do not contain your saved sign-in or its tokens. A

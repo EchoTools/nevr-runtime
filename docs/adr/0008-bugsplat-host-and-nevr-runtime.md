@@ -102,10 +102,9 @@ stand-in whose `game_main` runs the original wrapper through the trampoline; it 
 
 The host writes under its own per-game folder, never the game's `EchoVR` folder:
 
-- `%LOCALAPPDATA%\nevr\echovr\logs\nevr-bootstrap.jsonl`, then
-  `%TEMP%\nevr\echovr\logs`, then the directory of `BugSplat64.dll`;
-- `%LOCALAPPDATA%\nevr\echovr\crashes\nevr-<pid>-<n>.dmp`, then
-  `%TEMP%\nevr\echovr\crashes`, then the directory of `BugSplat64.dll`.
+- `%LOCALAPPDATA%\nevr\echovr\logs\nevr-<UTC process creation time>.jsonl`, the process's one main log, which the runtime and
+  the crash path append to as well (`docs/standards/logging.md`, Rule 17); there is no other place for it;
+- `%LOCALAPPDATA%\nevr\echovr\crashes\nevr-<pid>-<n>.dmp`, and no other place for a dump.
 
 Every record is one JSON object per line with `tag` (`NEVR.HOST`), `ts` (UTC),
 `pid`, `run` and `event`. `run` is a per-process token, 16 hex digits, made once from the process's creation
@@ -123,10 +122,14 @@ decisions a full journal dropped), `runtime_load`
 (outcome, path, Win32 error, expected and actual ABI, ABI status, init code, degraded
 action, and `loader_lock_held`, which the host reads from the PEB) and `crash_dump`
 (written, or each destination that failed and why, suppressed re-entry, dbghelp
-unavailable, failed). A line that fits no directory goes to `stderr`; a record is never
+unavailable, failed). A record that cannot be written to the main log goes to `stderr`; a record is never
 dropped silently, and one too large for the 4 KiB bound is replaced by a marker, not
-truncated. KNOWN-WRONG #1252: a stop writes nothing to the console, so an operator watching a `-server`
-sees none of it.
+truncated. Every way the host stops the game, and every attach that leaves the game running without the runtime,
+writes its facts in one record (`game_stop` when the host ends the process, `host_not_attached` when the game keeps
+running) and then, once per run, the same facts as one `NEVR.STOP` line on standard error, so an operator watching a
+`-server` from a console sees the cause (`docs/standards/logging.md`, "The `NEVR.STOP` line"). The line is written only
+when the process has a standard error handle that takes the write (`PutStopLine`, `src/runtime/host/stop_line.cpp`);
+the record does not depend on it.
 
 The exit flush (`BootstrapDiagnostics::FlushAttachJournalAtExit`, run at `DLL_PROCESS_DETACH` with
 `lpReserved != NULL`, when every other thread is already dead) writes each journal step not yet written, the failing
@@ -248,11 +251,20 @@ typed thunks in the host (`src/runtime/host/runtime_exports.cpp`) that call thro
 
 A runtime that cannot be used after attach stops the game: a missing or unloadable file, a
 descriptor that does not validate, an `initialize` that fails or throws. The host writes one
-`game_stop` record to `logs/nevr-bootstrap.jsonl` and ends the process with exit code 78
-(`RuntimeRendezvous::StopGame`), because a game that runs on without its runtime is a game
-without the fixes the runtime exists to make. KNOWN-WRONG #1252: the console gets nothing, and every
-outcome shares exit code 78. A rejection at attach (a bad image, a changed
-prologue, a failed hook install) installs nothing and the game runs unmodified.
+`game_stop` record to the run's main log (`logs/nevr-<timestamp>.jsonl`) and ends the process with exit code 78
+(`RuntimeRendezvous::StopGame`, `kRuntimeStopExitCode`), because a game that runs on without its runtime is a game
+without the fixes the runtime exists to make. Every reason the runtime did not load exits with code 78, and the
+`NEVR.STOP` line names the reason and the code.
+
+A rejection at attach installs nothing; what follows depends on the entry point. In a direct-import attach
+(`OnProcessAttach`, from `DllMain`) a bad image, a changed prologue and a failed hook install each leave the game
+running unmodified: the host writes a `host_not_attached` record and a `NEVR.STOP` line with `stopped` false and no
+code. Through `NEVR_SetGameModule` (`SetGameModule`) a changed prologue and a failed hook install do the same, and a
+bad image stops the game: the host writes a `game_stop` record and a `NEVR.STOP` line, both with reason
+`unsupported_image`, then the image guard ends the process with exit code `0xE0420003` (`RequireSupportedGameModule`,
+`nevr_game_image_guard::kUnsupportedImageExitCode` in `src/runtime/lifecycle/game_image_guard.h`). So the line's code
+is 78, `0xE0420003` or absent; `docs/standards/logging.md`, "The `NEVR.STOP` line", lists each reason with its code.
+The line is written only when the process has a standard error handle ("The host's own files").
 
 Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 (`sdk/include/nevr/plugin_interface.h`) "host" is the runtime.

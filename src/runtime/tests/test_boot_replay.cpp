@@ -31,6 +31,7 @@ TEST(BootLines, RecordIsOneJsonLineWithATimestamp) {
   EXPECT_EQ(json.at("ts"), "2026-10-09T01:02:03.004Z");
   EXPECT_EQ(json.at("run"), "run-1");
   EXPECT_EQ(json.at("level"), "info");
+  EXPECT_EQ(json.at("src"), "boot") << "a boot-phase line is marked as one in the main log";
   EXPECT_EQ(json.at("msg"), "hooks \"ok\"\n");
 }
 

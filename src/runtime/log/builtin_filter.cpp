@@ -6,7 +6,7 @@
  * log_filter.dll plugin by name (N89).
  *
  * Unlike a plugin:
- *   - No NvrPlugin* exports (built-in, not dynamically loaded)
+ *   - No NevrPlugin* exports (built-in, not dynamically loaded)
  *   - No MH_Initialize/MH_Uninitialize (gamepatches core owns MinHook lifecycle)
  *   - No MH_DisableHook(MH_ALL_HOOKS) (would kill all hooks process-wide)
  *   - Config discovery searches relative to game directory, not plugins/ subdir
@@ -20,7 +20,7 @@
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/log/boot_log_tee.h"
-#include "runtime/log/boot_replay.h"
+#include "runtime/log/run_log_writer.h"
 #include "runtime/log/bridge_line.h"
 #include "runtime/log/game_line_format.h"
 #include "runtime/log/gpu_hung_notice.h"
@@ -127,13 +127,11 @@ static std::atomic<uint64_t> g_emitted_count{0};
 static std::atomic<uint64_t> g_game_line_count{0};
 
 /* File output state */
-static FILE* g_log_file = nullptr;
+static bool g_log_file_open = false;  /* the filter is writing records into the process's main log (run_log_writer.h) */
 static std::mutex g_file_mutex;
 static std::string g_log_file_path;
-static uint64_t g_file_bytes_written = 0;
 static uint64_t g_file_open_time = 0;
-static std::string g_log_file_prefix;
-static std::string g_log_dir;
+static std::string g_log_dir;         /* the folder of g_log_file_path, for PruneOldLogs */
 
 /* va_list must be a simple pointer on x64 for our int64_t* cast to work */
 static_assert(sizeof(va_list) == sizeof(void*),
@@ -482,110 +480,63 @@ static void FormatTimestamp(char* buf, size_t buf_size) {
 #endif
 }
 
-static void FormatTimestampFilename(char* buf, size_t buf_size) {
-#ifdef _WIN32
-    SYSTEMTIME st;
-    GetSystemTime(&st);
-    snprintf(buf, buf_size, "%04d-%02d-%02dT%02d-%02d-%02d.%03d",
-             st.wYear, st.wMonth, st.wDay,
-             st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    struct tm tm;
-    gmtime_r(&ts.tv_sec, &tm);
-    snprintf(buf, buf_size, "%04d-%02d-%02dT%02d-%02d-%02d.%03ld",
-             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-             tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec / 1000000);
-#endif
-}
-
 /* ------------------------------------------------------------------ */
 /* File output                                                         */
 /* ------------------------------------------------------------------ */
 
-static std::string BuildLogFilePath() {
-    char ts[32];
-    FormatTimestampFilename(ts, sizeof(ts));
-    const char* ext = g_config.file_jsonl ? ".jsonl" : ".log";
-    std::string path = g_log_dir;
-    if (!path.empty() && path.back() != '/' && path.back() != '\\') path += '/';
-    path += g_log_file_prefix + "-" + ts + ext;
-    return path;
-}
-
+/* The main log is the process's one file, <root>\logs\nevr-<process creation time>.jsonl (core/run_log_path.h), written through
+ * run_log_writer.h. The boot phase and the host already write into it; the filter adopts the same file, so there is no second file and
+ * no replay between two. A run that cannot make the folder or open the file is told so on stderr by the writer and records nothing
+ * here: there is no fallback folder (docs/standards/logging.md, "One log"). */
 static void OpenLogFile() {
-    g_log_file_path = BuildLogFilePath();
-    g_log_file = std::fopen(g_log_file_path.c_str(), "ab");
-    if (!g_log_file) {
-        BlfLog("failed to open log file: %s", g_log_file_path.c_str());
+    const char* path = nevr_run_log_writer::Path();
+    if (path == nullptr || path[0] == '\0') {
+        BlfLog("failed to open the run log (see the [NEVR.LOG] error line on stderr): this run's game and runtime lines are not recorded");
         return;
     }
-    g_file_bytes_written = 0;
+    g_log_file_path = path;
+    const std::string::size_type slash = g_log_file_path.find_last_of("\\/");
+    g_log_dir = slash == std::string::npos ? std::string() : g_log_file_path.substr(0, slash);
+    g_log_file_open = true;
     g_file_open_time = GetEpochSeconds();
     BlfLog("logging to: %s", g_log_file_path.c_str());
 }
 
 static void CloseLogFile() {
-    if (g_log_file) {
-        std::fclose(g_log_file);
-        g_log_file = nullptr;
-    }
+    g_log_file_open = false;
+    nevr_run_log_writer::Close();
 }
 
 static void PruneOldLogs() {
-    if (g_config.rotate_keep <= 0) return;
+    if (g_config.rotate_keep <= 0 || g_log_dir.empty()) return;
 
     std::vector<std::string> files;
-    const char* ext = g_config.file_jsonl ? ".jsonl" : ".log";
-
-#ifdef _WIN32
-    std::string pattern = g_log_dir;
-    if (!pattern.empty() && pattern.back() != '\\') pattern += '\\';
-    pattern += g_log_file_prefix + "-*" + ext;
+    const std::string pattern = g_log_dir + "\\nevr-*.jsonl";
 
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
     if (h != INVALID_HANDLE_VALUE) {
         do {
-            std::string full = g_log_dir;
-            if (!full.empty() && full.back() != '\\') full += '\\';
-            full += fd.cFileName;
-            files.push_back(full);
+            files.push_back(g_log_dir + "\\" + fd.cFileName);
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
-#else
-    DIR* dir = opendir(g_log_dir.c_str());
-    if (dir) {
-        struct dirent* ent;
-        while ((ent = readdir(dir)) != nullptr) {
-            std::string name = ent->d_name;
-            if (name.find(g_log_file_prefix) == 0 &&
-                name.size() > std::strlen(ext) &&
-                name.compare(name.size() - std::strlen(ext), std::strlen(ext), ext) == 0) {
-                std::string full = g_log_dir + "/" + name;
-                files.push_back(full);
-            }
-        }
-        closedir(dir);
-    }
-#endif
 
     std::sort(files.begin(), files.end());
 
     int to_delete = static_cast<int>(files.size()) - g_config.rotate_keep;
     for (int i = 0; i < to_delete; i++) {
+        if (files[i] == g_log_file_path) continue;  /* never the file being written */
         std::remove(files[i].c_str());
     }
 }
 
 static bool ShouldRotate() {
-    if (!g_config.rotate_enabled || !g_log_file) return false;
+    if (!g_config.rotate_enabled || !g_log_file_open) return false;
 
     if (g_config.rotate_max_size_mb > 0) {
         uint64_t limit = static_cast<uint64_t>(g_config.rotate_max_size_mb) * 1024 * 1024;
-        if (g_file_bytes_written >= limit) return true;
+        if (nevr_run_log_writer::Bytes() >= limit) return true;
     }
 
     if (g_config.rotate_interval_min > 0) {
@@ -596,117 +547,40 @@ static bool ShouldRotate() {
     return false;
 }
 
+/* The file written so far becomes nevr-<ts>.<n>.jsonl and the process's own name starts again, so the host and the crash path,
+ * which append to that name, keep writing to the live file (run_log_writer.h, Rotate). */
 static void RotateIfNeeded() {
     if (!ShouldRotate()) return;
-    CloseLogFile();
+    nevr_run_log_writer::Rotate();
+    g_file_open_time = GetEpochSeconds();  /* a refused rename is retried after one more interval, not on every line */
     PruneOldLogs();
-    OpenLogFile();
 }
 
-static std::string GetDefaultLogDir() {
-#ifdef _WIN32
-    // %LOCALAPPDATA%\nevr\echovr\logs (core/nevr_root.h, ADR 0012): the nevr root, never the original game's EchoVR folder
-    const std::string root = nevr_root::RootA();
-    if (!root.empty()) {
-        const std::string dir = nevr_root::LogsDir(root);
-        if (nevr_root::EnsureDirectoryTree(dir)) return dir;
-        BlfLog("could not create the log folder %s; falling back to the game folder", dir.c_str());
-    }
-    // Fallback: module directory (shouldn't happen but be safe)
-    char mod_path[MAX_PATH];
-    GetModuleFileNameA(nullptr, mod_path, MAX_PATH);
-    std::string dir(mod_path);
-    auto slash = dir.find_last_of("\\/");
-    if (slash != std::string::npos) dir = dir.substr(0, slash);
-    dir += "\\logs";
-    CreateDirectoryA(dir.c_str(), nullptr);
-    return dir;
-#else
-    const char* home = getenv("HOME");
-    if (!home) home = "/tmp";
-    std::string dir = std::string(home) + "/.local/share/echovr/logs";
-    mkdir((std::string(home) + "/.local").c_str(), 0755);
-    mkdir((std::string(home) + "/.local/share").c_str(), 0755);
-    mkdir((std::string(home) + "/.local/share/echovr").c_str(), 0755);
-    mkdir(dir.c_str(), 0755);
-    return dir;
-#endif
-}
-
-/* One record in the main log. fromBoot marks a line replayed from nevr-boot.jsonl (#5). */
-static void WriteFileRecord(const char* ts, const char* lvl, const char* message, int len, bool fromBoot) {
-    if (g_config.file_jsonl) {
-        std::string line = "{\"ts\":\"";
-        nevr_json_escape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
-        line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
-        line += GetRunId();
-        line += "\",\"level\":\"";
-        nevr_json_escape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
-        line += fromBoot ? "\",\"src\":\"boot\",\"msg\":\"" : "\",\"msg\":\"";
-        nevr_json_escape::AppendTo(line, message, len);
-        line += "\"}\n";
-
-        size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);
-        g_file_bytes_written += written;
-    } else {
-        int n;
-        if (g_config.timestamps) {
-            n = std::fprintf(g_log_file, "%s %s %.*s\n", ts, lvl, len, message);
-        } else {
-            n = std::fprintf(g_log_file, "%s %.*s\n", lvl, len, message);
-        }
-        if (n > 0) g_file_bytes_written += n;
-    }
-}
-
-/* Where the replay of this run's nevr-boot.jsonl stopped (#5). */
-static nevr_boot_replay::Cursor g_boot_cursor;
-
-/* #5: replay this run's nevr-boot.jsonl lines that are not yet in the main log, so boot and runtime
- * events are one stream. Called at the main log's first open and once more after the boot tee has
- * closed (nevr_builtin_log_filter::ReplayBootTail); not on rotation. The second call reads from the byte
- * offset the first stopped at. The boot file stays where it is: it is the crash spool and is never
- * deleted. The first read looks at the last 1 MiB only (the file accumulates every run). */
-static void ReplayBootLines() {
-    const char* path = nevr_boot_log_tee::Path();
-    if (path == nullptr || path[0] == '\0' || !g_log_file) return;
-    std::vector<nevr_boot_replay::Line> lines;
-    int err = 0;
-    if (!nevr_boot_replay::ReadNew(path, GetRunId(), g_boot_cursor, lines, &err)) {
-        BlfLog("boot log %s is not readable (errno=%d); its lines are not replayed into this log", path, err);
-        return;
-    }
-    for (const nevr_boot_replay::Line& line : lines) {
-        WriteFileRecord(line.ts.c_str(), line.level.c_str(), line.msg.c_str(), static_cast<int>(line.msg.size()),
-                        /*fromBoot=*/true);
-    }
-    std::fflush(g_log_file);
-    BlfLog("replayed %zu boot line(s) from %s into this log", lines.size(), path);
+/* One record in the main log. */
+static void WriteFileRecord(const char* ts, const char* lvl, const char* message, int len) {
+    std::string line = "{\"ts\":\"";
+    nevr_json_escape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
+    line += "\",\"run\":\"";   /* N80 */
+    line += GetRunId();
+    line += "\",\"level\":\"";
+    nevr_json_escape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
+    line += "\",\"msg\":\"";
+    nevr_json_escape::AppendTo(line, message, len);
+    line += "\"}\n";
+    nevr_run_log_writer::Append(line.data(), line.size());
 }
 
 static void InitFileLogging() {
     if (!g_config.file_enabled) return;
 
-    g_log_file_prefix = "nevr";
-
-    if (g_config.file_dir.empty()) {
-        g_log_dir = GetDefaultLogDir();
-    } else {
-        g_log_dir = g_config.file_dir;
-#ifdef _WIN32
-        CreateDirectoryA(g_log_dir.c_str(), nullptr);
-#else
-        mkdir(g_log_dir.c_str(), 0755);
-#endif
+    if (!g_config.file_jsonl) {
+        BlfLog("file_jsonl is off, which is ignored: the run log is always JSON lines in the one main log (docs/standards/logging.md)");
     }
-
+    if (!g_config.file_dir.empty()) {
+        /* A folder the operator named: the same file name goes there. Boot-phase lines already written stay in the default folder. */
+        nevr_run_log_writer::SetDirectory(g_config.file_dir.c_str());
+    }
     OpenLogFile();
-    ReplayBootLines();  // the first open only: RotateIfNeeded calls OpenLogFile, not this
-}
-
-void nevr_builtin_log_filter::ReplayBootTail() {
-    std::lock_guard<std::mutex> lock(g_file_mutex);
-    ReplayBootLines();
 }
 
 static void ShutdownFileLogging() {
@@ -860,9 +734,8 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     /* File output */
     if (g_config.file_enabled) {
         std::lock_guard<std::mutex> lock(g_file_mutex);
-        if (g_log_file) {
-            WriteFileRecord(ts, lvl, message, len, /*fromBoot=*/false);
-            std::fflush(g_log_file);
+        if (g_log_file_open) {
+            WriteFileRecord(ts, lvl, message, len);
             RotateIfNeeded();
         }
     }

@@ -213,7 +213,7 @@ static void ExtractLowerFilenameW(const wchar_t* path, char* out, size_t out_siz
     size_t i = 0;
     for (; last_sep[i] && i < out_size - 1; ++i) {
         wchar_t c = last_sep[i];
-        out[i] = (c >= L'A' && c <= L'Z') ? (char)(c + 32) : (char)c;
+        out[i] = (c >= L'A' && c <= L'Z') ? static_cast<char>(c + 32) : static_cast<char>(c);
     }
     out[i] = '\0';
 }
@@ -466,7 +466,7 @@ int Install() {
     // (This path does not go through PatchDetour, so it needs its own reporting.)
     // #632: Install() runs in the boot phase (initialization, from the host's wrapper detour, before
     // the game's log exists; not under the loader lock), so its report goes
-    // through the boot tee (stderr and nevr-boot.jsonl), and it returns the outcome for the caller.
+    // through the boot tee (stderr and the main log), and it returns the outcome for the caller.
     struct HookSpec { const char* name; void* target; void* detour; void** original; };
     const HookSpec specs[] = {
         {"LoadLibraryA",   reinterpret_cast<void*>(&LoadLibraryA),   reinterpret_cast<void*>(&HookedLoadLibraryA),
@@ -526,10 +526,10 @@ int Install() {
 
 void Shutdown() {
 #ifdef _WIN32
-    if (g_origLoadLibraryA)   MH_DisableHook((void*)&LoadLibraryA);
-    if (g_origLoadLibraryW)   MH_DisableHook((void*)&LoadLibraryW);
-    if (g_origLoadLibraryExA) MH_DisableHook((void*)&LoadLibraryExA);
-    if (g_origLoadLibraryExW) MH_DisableHook((void*)&LoadLibraryExW);
+    if (g_origLoadLibraryA)   MH_DisableHook(reinterpret_cast<void*>(&LoadLibraryA));
+    if (g_origLoadLibraryW)   MH_DisableHook(reinterpret_cast<void*>(&LoadLibraryW));
+    if (g_origLoadLibraryExA) MH_DisableHook(reinterpret_cast<void*>(&LoadLibraryExA));
+    if (g_origLoadLibraryExW) MH_DisableHook(reinterpret_cast<void*>(&LoadLibraryExW));
 #endif
     std::lock_guard<std::mutex> lock(g_registryMutex);
     g_registrations.clear();

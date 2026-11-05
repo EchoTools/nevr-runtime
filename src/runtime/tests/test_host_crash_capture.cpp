@@ -3,6 +3,7 @@
 // JSON record of every decision, and a real in-process MiniDumpWriteDump through
 // the BugSplat_createReport body.
 
+#include "runtime/tests/run_log_test_path.h"
 #include "runtime/host/crash_capture.h"
 
 #include "runtime/host/host_paths.h"
@@ -12,6 +13,8 @@
 #include <nlohmann/json.hpp>
 
 #include <gtest/gtest.h>
+
+#include "core/nevr_root.h"
 
 #include <windows.h>
 #include <dbghelp.h>
@@ -108,7 +111,7 @@ std::string ReadText(const std::wstring& path) {
 // The crash records in the bootstrap log, parsed.
 std::vector<nlohmann::json> CrashRecords(const std::wstring& local) {
   std::vector<nlohmann::json> records;
-  const std::string text = ReadText(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+  const std::string text = ReadText(nevr_test::HostLogPath(local));
   std::size_t start = 0;
   while (start < text.size()) {
     const std::size_t end = text.find('\n', start);
@@ -129,22 +132,35 @@ struct Prepared {
     SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
     SetEnvironmentVariableW(L"TEMP", temp.c_str());
     diagnostics.Prepare(GetModuleHandleW(nullptr));
-    capture.Prepare(GetModuleHandleW(nullptr), &diagnostics);
+    capture.Prepare(&diagnostics);
   }
 };
 
 }  // namespace
 
-TEST(HostCrashCapture, PrepareComputesTheThreeDestinations) {
+// Decision: a minidump goes only to %LOCALAPPDATA%\nevr\echovr\crashes. Never %TEMP%, never the game folder.
+TEST(HostCrashCapture, PrepareComputesTheOneCrashDirectory) {
   const std::wstring local = MakeTempDir(L"local");
   const std::wstring temp = MakeTempDir(L"temp");
   Prepared prepared(local, temp);
   ASSERT_TRUE(prepared.capture.LocalReady());
-  ASSERT_TRUE(prepared.capture.TempReady());
-  ASSERT_TRUE(prepared.capture.HostDirReady());
   EXPECT_EQ(std::wstring(prepared.capture.LocalCrashDir()), local + L"\\nevr\\echovr\\crashes");
-  EXPECT_EQ(std::wstring(prepared.capture.TempCrashDir()), temp + L"\\nevr\\echovr\\crashes");
-  EXPECT_GE(std::wstring(prepared.capture.HostDir()).size(), 1u);
+}
+
+std::wstring FirstFileMatching(const std::wstring& pattern) {
+  WIN32_FIND_DATAW data{};
+  const HANDLE find = FindFirstFileW(pattern.c_str(), &data);
+  if (find == INVALID_HANDLE_VALUE) return {};
+  FindClose(find);
+  return data.cFileName;
+}
+
+// The folder of the executable stands in for "beside the game": the host's directory was the last resort for a dump and its text.
+std::wstring ExecutableDir() {
+  wchar_t path[MAX_PATH] = {};
+  GetModuleFileNameW(nullptr, path, MAX_PATH);
+  std::wstring dir(path);
+  return dir.substr(0, dir.find_last_of(L"\\/"));
 }
 
 TEST(HostCrashCapture, ReentrancyGuardHoldsAndClears) {
@@ -199,27 +215,26 @@ TEST(HostCrashCapture, TheCaptureCreatesNoLogMutexWhenItIsTheFirstToWrite) {
   prepared.diagnostics.Prepare(GetModuleHandleW(nullptr));  // leave the process attached for later tests
 }
 
-TEST(HostCrashCapture, WithoutDbghelpCaptureFailsWritesATextDiagnosticAndSaysWhy) {
+TEST(HostCrashCapture, WithoutDbghelpCaptureFailsWritesNoTextFileAndSaysWhy) {
   const std::wstring local = MakeTempDir(L"local");
-  Prepared prepared(local, MakeTempDir(L"temp"));
+  const std::wstring temp = MakeTempDir(L"temp");
+  Prepared prepared(local, temp);
   // dbghelp.dll is intentionally not loaded: Capture must not LoadLibrary it.
   ASSERT_EQ(GetModuleHandleW(L"dbghelp.dll"), nullptr);
   EXPECT_FALSE(prepared.capture.Capture(nullptr));
 
-  wchar_t pattern[MAX_PATH] = {};
-  swprintf(pattern, MAX_PATH, L"%ls\\nevr-%lu-*.txt",
-           (local + L"\\nevr\\echovr\\crashes").c_str(),
-           static_cast<unsigned long>(GetCurrentProcessId()));
-  WIN32_FIND_DATAW data{};
-  const HANDLE find = FindFirstFileW(pattern, &data);
-  EXPECT_NE(find, INVALID_HANDLE_VALUE);
-  if (find != INVALID_HANDLE_VALUE) FindClose(find);
+  // The crash text is the "failed" record in the main log; no text file is written in the crash folder, %TEMP% or the game folder.
+  const std::wstring pid_pattern = L"\\nevr-" + std::to_wstring(GetCurrentProcessId()) + L"-*.txt";
+  EXPECT_EQ(FirstFileMatching(local + L"\\nevr\\echovr\\crashes" + pid_pattern), L"");
+  EXPECT_EQ(FirstFileMatching(temp + L"\\nevr\\echovr\\crashes" + pid_pattern), L"");
+  EXPECT_EQ(FirstFileMatching(ExecutableDir() + pid_pattern), L"");
 
   const std::vector<nlohmann::json> records = CrashRecords(local);
   ASSERT_EQ(records.size(), 2u);
   EXPECT_EQ(records[0].at("outcome"), "dbghelp_unavailable");
   EXPECT_EQ(records[0].at("win32_error"), ERROR_MOD_NOT_FOUND);
   EXPECT_EQ(records[1].at("outcome"), "failed");
+  EXPECT_EQ(records[1].at("thread"), GetCurrentThreadId());
 }
 
 TEST(HostCrashCapture, PreloadDbgHelpMapsTheSystemLibraryOnceAndWritesNoRecordWhenItSucceeds) {
@@ -237,6 +252,43 @@ TEST(HostCrashCapture, PreloadDbgHelpMapsTheSystemLibraryOnceAndWritesNoRecordWh
   wchar_t system_dir[MAX_PATH] = {};
   ASSERT_NE(GetSystemDirectoryW(system_dir, MAX_PATH), 0u);
   EXPECT_EQ(_wcsnicmp(path, system_dir, wcslen(system_dir)), 0) << "loaded from outside System32";
+}
+
+// Runs after the tests that need dbghelp.dll unloaded: it preloads it.
+TEST(HostCrashCapture, WhenTheCrashDirectoryCannotBeUsedNoDumpOrTextIsWrittenAnywhereElse) {
+  const std::wstring local = MakeTempDir(L"local");
+  const std::wstring temp = MakeTempDir(L"temp");
+  // "crashes" is a FILE under the nevr root: the crashes directory can be neither made nor written. The logs folder is fine.
+  ASSERT_TRUE(nevr_root::EnsureDirectoryTree(local + L"\\nevr\\echovr\\logs"));
+  HANDLE blocker = CreateFileW((local + L"\\nevr\\echovr\\crashes").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(blocker, INVALID_HANDLE_VALUE);
+  CloseHandle(blocker);
+  Prepared prepared(local, temp);
+  ASSERT_TRUE(prepared.capture.PreloadDbgHelp());
+
+  void* handler = AddVectoredExceptionHandler(1, CaptureVeh);
+  ASSERT_NE(handler, nullptr);
+  RaiseException(kProbeException, 0, 0, nullptr);
+  RemoveVectoredExceptionHandler(handler);
+  ASSERT_EQ(g_captured, 1L);
+  EXCEPTION_POINTERS pointers{};
+  pointers.ExceptionRecord = &g_captured_record;
+  pointers.ContextRecord = &g_captured_context;
+  const std::wstring pid_pattern = L"\\nevr-" + std::to_wstring(GetCurrentProcessId()) + L"-*";
+
+  EXPECT_FALSE(prepared.capture.Capture(&pointers));
+
+  EXPECT_EQ(FirstFileMatching(temp + L"\\nevr\\echovr\\crashes" + pid_pattern), L"") << "nothing in %TEMP%";
+  EXPECT_EQ(GetFileAttributesW((temp + L"\\nevr").c_str()), INVALID_FILE_ATTRIBUTES);
+  EXPECT_EQ(FirstFileMatching(ExecutableDir() + pid_pattern), L"") << "nothing beside the game";
+  // The failure is in the main log, with the exception's code and address and the thread: that record is the crash text.
+  const std::vector<nlohmann::json> records = CrashRecords(local);
+  ASSERT_FALSE(records.empty());
+  EXPECT_EQ(records.back().at("outcome"), "failed");
+  EXPECT_EQ(records.back().at("code"), "0xe0000001");
+  EXPECT_EQ(records.back().at("thread"), GetCurrentThreadId());
+  EXPECT_TRUE(records.back().contains("address"));
 }
 
 TEST(HostCrashCapture, WritesAStructurallyValidMinidumpNamingTheThreadAndRecordsIt) {

@@ -1,0 +1,16 @@
+# ctest wrapper: a file of bytes 0 to 255 is embedded by the generated source and written back byte for byte.
+#   cmake -DEXE=<embedding_check> -DEXPECTED=<all_bytes.bin> -DOUT=<file> -P embedding_check.cmake
+foreach(var EXE EXPECTED OUT)
+  if(NOT DEFINED ${var})
+    message(FATAL_ERROR "embedding_check.cmake: ${var} is not set")
+  endif()
+endforeach()
+execute_process(COMMAND "${EXE}" RESULT_VARIABLE rc OUTPUT_FILE "${OUT}")
+if(NOT rc EQUAL 0)
+  message(FATAL_ERROR "${EXE} exited ${rc}")
+endif()
+execute_process(COMMAND "${CMAKE_COMMAND}" -E compare_files "${EXPECTED}" "${OUT}" RESULT_VARIABLE same)
+if(NOT same EQUAL 0)
+  message(FATAL_ERROR "the embedded bytes differ from ${EXPECTED}")
+endif()
+message("every byte value 0 to 255 survives the generated source")

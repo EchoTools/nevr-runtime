@@ -238,6 +238,11 @@ add_subdirectory(src/libovr-stub)
 # Server launcher — thin CreateProcess wrapper that spawns echovr.exe -server -no-console
 add_subdirectory(src/launcher)
 
+# The getaddrinfo probe tools/winvm/systest.py copies to its Windows VM (ADR 0041).
+if(MINGW)
+  add_subdirectory(tools/winvm)
+endif()
+
 # =============================================================================
 # Optional drop-in build modules (modules/*/CMakeLists.txt)
 # =============================================================================

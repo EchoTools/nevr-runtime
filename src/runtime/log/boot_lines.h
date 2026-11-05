@@ -1,10 +1,10 @@
 #pragma once
 
-// One record of nevr-boot.jsonl: {"ts":"<UTC>","run":"<id>","level":"<level>","msg":"<escaped>"}\n
+// One boot-phase record of the main log (nevr-<creation time>.jsonl, core/run_log_path.h):
+// {"ts":"<UTC>","run":"<id>","level":"<level>","src":"boot","msg":"<escaped>"}\n
 // The level is the one the message states after its tag (logging.md Rule 12: `[NEVR.X] warn; ...`), so a
 // boot line can be found by level (#664). A message with no level word is `info`.
-// Heap-free so the boot tee (which runs under the DllMain loader lock) can build it; the same
-// header parses the file back for the replay into the main log (boot_replay.h).
+// Heap-free so the boot tee can build it before the game's logger exists. `src` marks the line as written in the boot phase.
 
 #include <cstdio>
 #include <cstring>
@@ -33,7 +33,7 @@ inline const char* LevelOf(const char* msg) {
 /// `escapedMsg` is already JSON-escaped. Returns the length, or -1 if it did not fit.
 inline int Build(char* buf, int size, const char* ts, const char* runId, const char* escapedMsg) {
   const int n = std::snprintf(buf, static_cast<size_t>(size),
-                              "{\"ts\":\"%s\",\"run\":\"%s\",\"level\":\"%s\",\"msg\":\"%s\"}\n", ts, runId,
+                              "{\"ts\":\"%s\",\"run\":\"%s\",\"level\":\"%s\",\"src\":\"boot\",\"msg\":\"%s\"}\n", ts, runId,
                               LevelOf(escapedMsg), escapedMsg);
   return (n <= 0 || n >= size) ? -1 : n;
 }

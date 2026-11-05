@@ -28,7 +28,7 @@
 #include "off_thread_wait.h"
 #include "token_auth.h"
 
-extern "C" int token_auth_Init(const NvrModuleContext* ctx);
+extern "C" int token_auth_Init(const NevrModuleContext* ctx);
 extern "C" void token_auth_Shutdown(void);
 extern "C" uint32_t token_auth_ApiVersion(void);
 
@@ -41,61 +41,29 @@ std::string MakeJwt(const std::string& payload) {
   return std::string(kJwtHeader) + "." + payload + "." + kJwtSignature;
 }
 
-NvrModuleContext MakeModuleContext(uint32_t flags) {
-  NvrModuleContext context{};
+NevrModuleContext MakeModuleContext(uint32_t flags) {
+  NevrModuleContext context{};
   context.flags = flags;
   return context;
 }
 
+// The sign-in cache is one file in the nevr root (ADR 0012), %LOCALAPPDATA%\nevr\echovr\.credentials.json. This points the process at a
+// root of its own for the life of the fixture and writes `credentials` there; nothing is written beside the test executable.
 class ExecutableCredentialCacheFixture {
  public:
-  explicit ExecutableCredentialCacheFixture(const nlohmann::json& credentials)
-      : mutex_(CreateMutexA(nullptr, FALSE, "Local\\nevr-runtime-test-token-auth-cache")) {
-    if (mutex_ == nullptr) {
-      throw std::runtime_error("CreateMutexA failed for credential cache fixture");
-    }
-    const DWORD wait = WaitForSingleObject(mutex_, INFINITE);
-    if (wait != WAIT_OBJECT_0) {
-      CloseHandle(mutex_);
-      mutex_ = nullptr;
-      throw std::runtime_error("credential cache fixture mutex was not acquired");
-    }
-    mutex_acquired_ = true;
-
-    cache_directory_ = GetExeDirectory() + "_local";
-    cache_path_ = cache_directory_ + "/.credentials.json";
-    const DWORD attributes = GetFileAttributesA(cache_directory_.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES) {
-      if (!CreateDirectoryA(cache_directory_.c_str(), nullptr)) {
-        ReleaseMutex(mutex_);
-        CloseHandle(mutex_);
-        mutex_ = nullptr;
-        mutex_acquired_ = false;
-        throw std::runtime_error("CreateDirectoryA failed for credential cache fixture");
-      }
-      created_directory_ = true;
-    } else if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-      ReleaseMutex(mutex_);
-      CloseHandle(mutex_);
-      mutex_ = nullptr;
-      mutex_acquired_ = false;
-      throw std::runtime_error("credential cache fixture path is not a directory");
-    }
-
-    std::ifstream existing(cache_path_, std::ios::binary);
-    if (existing.is_open()) {
-      original_contents_.assign(std::istreambuf_iterator<char>(existing),
-                                std::istreambuf_iterator<char>());
-      had_original_file_ = true;
-    }
-
-    std::ofstream fixture(cache_path_, std::ios::binary | std::ios::trunc);
+  explicit ExecutableCredentialCacheFixture(const nlohmann::json& credentials) {
+    directory_ = std::filesystem::temp_directory_path() / ("nevr-token-auth-cache-" + std::to_string(GetCurrentProcessId()) + "-" +
+                                                           std::to_string(GetTickCount64()));
+    cache_directory_ = directory_ / "nevr" / "echovr";
+    std::filesystem::create_directories(cache_directory_);
+    saved_ = CurrentLocalAppData();
+    SetEnvironmentVariableW(L"LOCALAPPDATA", directory_.wstring().c_str());
+    std::ofstream fixture(cache_directory_ / ".credentials.json", std::ios::binary | std::ios::trunc);
     if (!fixture.is_open()) {
       Restore();
       throw std::runtime_error("failed to write credential cache fixture");
     }
     fixture << credentials.dump();
-    fixture.close();
   }
 
   ExecutableCredentialCacheFixture(const ExecutableCredentialCacheFixture&) = delete;
@@ -104,36 +72,20 @@ class ExecutableCredentialCacheFixture {
   ~ExecutableCredentialCacheFixture() { Restore(); }
 
  private:
+  static std::wstring CurrentLocalAppData() {
+    wchar_t buffer[MAX_PATH * 2] = {};
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0])));
+    return n != 0 && n < sizeof(buffer) / sizeof(buffer[0]) ? std::wstring(buffer, n) : std::wstring();
+  }
   void Restore() noexcept {
-    if (mutex_ == nullptr) {
-      return;
-    }
-    if (had_original_file_) {
-      std::ofstream original(cache_path_, std::ios::binary | std::ios::trunc);
-      if (original.is_open()) {
-        original.write(original_contents_.data(), static_cast<std::streamsize>(original_contents_.size()));
-      }
-    } else {
-      DeleteFileA(cache_path_.c_str());
-    }
-    if (created_directory_) {
-      RemoveDirectoryA(cache_directory_.c_str());
-    }
-    if (mutex_acquired_) {
-      ReleaseMutex(mutex_);
-    }
-    CloseHandle(mutex_);
-    mutex_ = nullptr;
-    mutex_acquired_ = false;
+    SetEnvironmentVariableW(L"LOCALAPPDATA", saved_.empty() ? nullptr : saved_.c_str());
+    std::error_code ignored;
+    std::filesystem::remove_all(directory_, ignored);
   }
 
-  HANDLE mutex_ = nullptr;
-  bool mutex_acquired_ = false;
-  bool created_directory_ = false;
-  bool had_original_file_ = false;
-  std::string cache_directory_;
-  std::string cache_path_;
-  std::string original_contents_;
+  std::filesystem::path directory_;
+  std::filesystem::path cache_directory_;
+  std::wstring saved_;
 };
 
 }  // namespace
@@ -1315,7 +1267,7 @@ TEST(DeviceAuthFlow, MalformedVerifiedCandidateDoesNotChangeStateOrSave) {
 }
 
 TEST(TokenAuthModule, ServerHostSkipsDeviceAuthentication) {
-  const NvrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_SERVER);
+  const NevrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_SERVER);
 
   EXPECT_EQ(token_auth_Init(&context), 0);
   const auto snapshot = nevr_token_auth::GetAuthSnapshot();
@@ -1329,7 +1281,7 @@ TEST(TokenAuthModule, ServerHostSkipsDeviceAuthentication) {
 }
 
 TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
-  const NvrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_CLIENT);
+  const NevrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_CLIENT);
 
   EXPECT_EQ(token_auth_Init(&context), 0);
   const auto snapshot = nevr_token_auth::GetAuthSnapshot();
@@ -1495,10 +1447,15 @@ class CredentialsDirFixture : public ::testing::Test {
              ::testing::UnitTest::GetInstance()->current_test_info()->name());
     std::filesystem::remove_all(root_);
     std::filesystem::create_directories(root_ / "bin" / "win10");
-    // GetExeDirectory's shape: absolute, trailing separator.
-    exe_dir_ = (root_ / "bin" / "win10").string() + "\\";
+    // The cache is the nevr root's (ADR 0012): %LOCALAPPDATA% is a folder of this test's own.
+    SetEnvironmentVariableW(L"LOCALAPPDATA", (root_ / "appdata").wstring().c_str());
   }
-  void TearDown() override { std::filesystem::remove_all(root_); }
+  void TearDown() override {
+    SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
+    std::filesystem::remove_all(root_);
+  }
+
+  std::filesystem::path CachePath() const { return root_ / "appdata" / "nevr" / "echovr" / ".credentials.json"; }
 
   void Write(const std::filesystem::path& file, const std::string& contents) {
     std::filesystem::create_directories(file.parent_path());
@@ -1517,15 +1474,14 @@ class CredentialsDirFixture : public ::testing::Test {
   }
 
   std::filesystem::path root_;
-  std::string exe_dir_;
 };
 
-TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutChangingConfig) {
-  const auto yamlPath = root_ / "bin" / "win10" / "_local" / "config.yaml";
+TEST_F(CredentialsDirFixture, SaveRotatesAndReloadsTheRefreshTokenInTheRootWithoutChangingConfig) {
+  const auto yamlPath = root_ / "appdata" / "nevr" / "echovr" / "config.yaml";
   const std::string yamlContents = "services:\n  telemetry: https://example.test\n";
   Write(yamlPath, yamlContents);
 
-  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
+  const CredentialCacheLocation location = SelectCredentialCacheLocation();
   EXPECT_TRUE(std::filesystem::equivalent(location.directory, yamlPath.parent_path()));
   const std::string credentialSuffix = ".credentials.json";
   ASSERT_GE(location.credentialsPath.size(), credentialSuffix.size());
@@ -1539,7 +1495,7 @@ TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutCh
   auth.refresh_token_expiry = 2100000000U;
   auth.user_id = "account-17";
   auth.username = "cached-player";
-  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+  ASSERT_TRUE(SaveAuthToken(auth));
   EXPECT_FALSE(std::filesystem::exists(location.credentialsPath + ".tmp")) << "the temp file is renamed away";
 
   nlohmann::json expected = {{"refresh_token", "refresh-token-v1"},
@@ -1558,15 +1514,15 @@ TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutCh
   EXPECT_FALSE(actual.contains("token_expiry"));
   EXPECT_EQ(Read(yamlPath), yamlContents);
 
-  CachedAuthToken loaded = LoadCachedAuthToken(exe_dir_);
+  CachedAuthToken loaded = LoadCachedAuthToken();
   EXPECT_TRUE(loaded.token.empty());
   EXPECT_EQ(loaded.refresh_token, "refresh-token-v1");
   EXPECT_EQ(loaded.user_id, "account-17");
 
   auth.refresh_token = "refresh-token-v2";
   auth.refresh_token_expiry = 2200000000U;
-  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
-  loaded = LoadCachedAuthToken(exe_dir_);
+  ASSERT_TRUE(SaveAuthToken(auth));
+  loaded = LoadCachedAuthToken();
   EXPECT_EQ(loaded.refresh_token, "refresh-token-v2");
   EXPECT_EQ(loaded.refresh_token_expiry, 2200000000U);
   EXPECT_EQ(Read(yamlPath), yamlContents);
@@ -1574,10 +1530,9 @@ TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutCh
 
 namespace {
 CachedAuthToken* g_midWriteObserved = nullptr;
-const std::string* g_midWriteExeDir = nullptr;
 void ObserveCacheDuringWrite() {
-  if (g_midWriteObserved != nullptr && g_midWriteExeDir != nullptr) {
-    *g_midWriteObserved = LoadCachedAuthToken(*g_midWriteExeDir);
+  if (g_midWriteObserved != nullptr) {
+    *g_midWriteObserved = LoadCachedAuthToken();
   }
 }
 
@@ -1594,10 +1549,10 @@ CachedAuthToken TokenWith(const std::string& refresh) {
 // the host's chmod and the mode is read back; the token is written only after that.
 TEST_F(CredentialsDirFixture, WineCacheWriteSetsAndVerifiesHostMode600) {
   if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
-  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto path = CachePath();
   std::filesystem::create_directories(path.parent_path());
-  ASSERT_TRUE(SaveAuthToken(TokenWith("wine-refresh"), exe_dir_));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "wine-refresh");
+  ASSERT_TRUE(SaveAuthToken(TokenWith("wine-refresh")));
+  EXPECT_EQ(LoadCachedAuthToken().refresh_token, "wine-refresh");
   EXPECT_EQ(nevr_credential_write::WineHostMode(path.string()), "600");
   EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
 }
@@ -1605,10 +1560,10 @@ TEST_F(CredentialsDirFixture, WineCacheWriteSetsAndVerifiesHostMode600) {
 // A crash can leave a temp file with a wrong mode and stale bytes: it is re-protected before being reused.
 TEST_F(CredentialsDirFixture, AStaleTempFileDoesNotWeakenTheProtection) {
   if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
-  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto path = CachePath();
   Write(path.string() + ".tmp", "stale-bytes-from-a-crashed-write");
-  ASSERT_TRUE(SaveAuthToken(TokenWith("after-crash"), exe_dir_));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "after-crash");
+  ASSERT_TRUE(SaveAuthToken(TokenWith("after-crash")));
+  EXPECT_EQ(LoadCachedAuthToken().refresh_token, "after-crash");
   EXPECT_EQ(nevr_credential_write::WineHostMode(path.string()), "600");
   EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
 }
@@ -1617,14 +1572,14 @@ TEST_F(CredentialsDirFixture, AStaleTempFileDoesNotWeakenTheProtection) {
 // result path must not exist beforehand, and nothing is written when it does.
 TEST_F(CredentialsDirFixture, AStaleReadOnlyResultFileWritesNothing) {
   if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
-  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto path = CachePath();
   std::filesystem::create_directories(path.parent_path());
   const std::string stale = path.string() + ".stale.mode";
   Write(stale, "600\n");
   ASSERT_NE(SetFileAttributesA(stale.c_str(), FILE_ATTRIBUTE_READONLY), 0);
 
   nevr_credential_write::g_forceResultPath = stale;
-  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"));
   nevr_credential_write::g_forceResultPath.clear();
   SetFileAttributesA(stale.c_str(), FILE_ATTRIBUTE_NORMAL);
 
@@ -1637,11 +1592,11 @@ TEST_F(CredentialsDirFixture, AStaleReadOnlyResultFileWritesNothing) {
 // A host chmod that "succeeds" but leaves a mode that is not 600 must stop the write before a byte lands.
 TEST_F(CredentialsDirFixture, AHostModeThatIsNot600WritesNothing) {
   if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
-  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto path = CachePath();
   std::filesystem::create_directories(path.parent_path());
 
   nevr_credential_write::g_forcedHostMode = "644";
-  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"));
   nevr_credential_write::g_forcedHostMode.clear();
 
   EXPECT_FALSE(saved);
@@ -1696,13 +1651,13 @@ void ExpectNothingOfTheSecret(const std::string& line, const std::string& secret
 // #562: a save that wrote the cache is counted and logged at Info with the path and how the file is protected,
 // and never with a token byte, its length or a digest of it. (Wine: the host mode was read back as 600.)
 TEST_F(CredentialsDirFixture, ASavedCacheIsCountedAndLoggedWithPathAndProtectionButNothingOfTheToken) {
-  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto path = CachePath();
   std::filesystem::create_directories(path.parent_path());
   nevr_credential_stats::ResetForTest();
   g_cacheLog.clear();
   const std::string token = "sekret-refresh-value-for-the-test-31";  // 36 characters: a length no path digit run equals
   SetBootLogSink(&CaptureCacheLog);
-  const bool saved = SaveAuthToken(TokenWith(token), exe_dir_);
+  const bool saved = SaveAuthToken(TokenWith(token));
   SetBootLogSink(nullptr);
   ASSERT_TRUE(saved);
 
@@ -1728,11 +1683,11 @@ TEST_F(CredentialsDirFixture, ASavedCacheIsCountedAndLoggedWithPathAndProtection
 // #562: a save that wrote nothing is counted with its reason.
 TEST_F(CredentialsDirFixture, ARefusedSaveIsCountedWithItsReason) {
   if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
-  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto path = CachePath();
   std::filesystem::create_directories(path.parent_path());
   nevr_credential_stats::ResetForTest();
   nevr_credential_write::g_forcedHostMode = "644";
-  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"));
   nevr_credential_write::g_forcedHostMode.clear();
   EXPECT_FALSE(saved);
   const nevr_credential_stats::Snapshot snap = nevr_credential_stats::Get();
@@ -1743,162 +1698,73 @@ TEST_F(CredentialsDirFixture, ARefusedSaveIsCountedWithItsReason) {
 
 // #563: a write that fails part-way must leave the previous token exactly as it was.
 TEST_F(CredentialsDirFixture, AFailedWriteLeavesTheOldTokenIntact) {
-  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto path = CachePath();
   std::filesystem::create_directories(path.parent_path());
-  ASSERT_TRUE(SaveAuthToken(TokenWith("old-refresh-token"), exe_dir_));
+  ASSERT_TRUE(SaveAuthToken(TokenWith("old-refresh-token")));
   const std::string before = Read(path);
   ASSERT_FALSE(before.empty());
 
   nevr_credential_write::g_failAfterBytes = 20;  // inside the JSON, after the first chunks are on disk
-  const bool saved = SaveAuthToken(TokenWith("new-refresh-token-that-must-not-land"), exe_dir_);
+  const bool saved = SaveAuthToken(TokenWith("new-refresh-token-that-must-not-land"));
   nevr_credential_write::g_failAfterBytes = SIZE_MAX;
 
   EXPECT_FALSE(saved);
   EXPECT_EQ(Read(path), before) << "the failed write changed the cache";
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "old-refresh-token");
+  EXPECT_EQ(LoadCachedAuthToken().refresh_token, "old-refresh-token");
   EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp")) << "the temp file is removed on failure";
 }
 
 // #563: a reader opening the cache while a write is in flight is never blocked and never sees a partial file.
 TEST_F(CredentialsDirFixture, AReaderDuringAWriteSeesTheOldTokenNotABlockedOrPartialFile) {
-  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto path = CachePath();
   std::filesystem::create_directories(path.parent_path());
-  ASSERT_TRUE(SaveAuthToken(TokenWith("old-refresh"), exe_dir_));
+  ASSERT_TRUE(SaveAuthToken(TokenWith("old-refresh")));
 
   CachedAuthToken observed;
   g_midWriteObserved = &observed;
-  g_midWriteExeDir = &exe_dir_;
   nevr_credential_write::g_midWriteHook = &ObserveCacheDuringWrite;
-  const bool saved = SaveAuthToken(TokenWith("new-refresh"), exe_dir_);
+  const bool saved = SaveAuthToken(TokenWith("new-refresh"));
   nevr_credential_write::g_midWriteHook = nullptr;
   g_midWriteObserved = nullptr;
-  g_midWriteExeDir = nullptr;
 
   ASSERT_TRUE(saved);
   EXPECT_EQ(observed.refresh_token, "old-refresh") << "the reader met a locked or half-written cache";
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "new-refresh");
+  EXPECT_EQ(LoadCachedAuthToken().refresh_token, "new-refresh");
 }
 
-TEST_F(CredentialsDirFixture, NearExistingCredentialsBeatFartherYaml) {
-  const auto nearCredentials = root_ / "bin" / "win10" / "_local" / ".credentials.json";
-  const auto fartherYaml = root_ / "_local" / "config.yaml";
-  Write(nearCredentials, Credentials("near-existing").dump());
-  const std::string fartherContents = "services: farther\n";
-  Write(fartherYaml, fartherContents);
-
-  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
-  EXPECT_TRUE(std::filesystem::equivalent(location.credentialsPath, nearCredentials));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "near-existing");
-
-  CachedAuthToken auth;
-  auth.refresh_token = "rotated-near";
-  auth.refresh_token_expiry = 2100000000U;
-  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "rotated-near");
-  EXPECT_EQ(Read(fartherYaml), fartherContents);
-}
-
-TEST_F(CredentialsDirFixture, FartherExistingCredentialsBeatNearYaml) {
-  const auto nearYaml = root_ / "bin" / "win10" / "_local" / "config.yaml";
-  const auto fartherCredentials = root_ / "bin" / "_local" / ".credentials.json";
-  const std::string nearContents = "services: near\n";
-  Write(nearYaml, nearContents);
-  Write(fartherCredentials, Credentials("farther-existing").dump());
-
-  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
-  EXPECT_TRUE(std::filesystem::equivalent(location.credentialsPath, fartherCredentials));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "farther-existing");
-  EXPECT_EQ(Read(nearYaml), nearContents);
-}
-
-TEST_F(CredentialsDirFixture, FirstYamlDirectoryInSuffixOrderWinsWhenNoCredentialsExist) {
-  const auto nearYaml = root_ / "bin" / "win10" / "_local" / "config.yaml";
-  const auto fartherYaml = root_ / "bin" / "_local" / "config.yaml";
-  const std::string nearContents = "services: near\n";
-  Write(nearYaml, nearContents);
-  Write(fartherYaml, "services: farther\n");
-
-  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
-  EXPECT_TRUE(std::filesystem::equivalent(location.directory, nearYaml.parent_path()));
-  CachedAuthToken auth;
-  auth.refresh_token = "near-yaml-refresh";
-  auth.refresh_token_expiry = 2100000000U;
-  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
-  EXPECT_TRUE(std::filesystem::exists(nearYaml.parent_path() / ".credentials.json"));
-  EXPECT_FALSE(std::filesystem::exists(fartherYaml.parent_path() / ".credentials.json"));
-  EXPECT_EQ(Read(nearYaml), nearContents);
-}
-
-TEST_F(CredentialsDirFixture, FirstExistingCredentialsInSuffixOrderWins) {
-  const auto nearCredentials = root_ / "bin" / "win10" / "_local" / ".credentials.json";
-  const auto parentCredentials = root_ / "bin" / "_local" / ".credentials.json";
-  const auto rootCredentials = root_ / "_local" / ".credentials.json";
-  Write(nearCredentials, Credentials("near").dump());
-  Write(parentCredentials, Credentials("parent").dump());
-  Write(rootCredentials, Credentials("root").dump());
-
-  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
-  EXPECT_TRUE(std::filesystem::equivalent(location.credentialsPath, nearCredentials));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "near");
-}
-
-TEST_F(CredentialsDirFixture, MalformedSelectedCredentialsDoNotFallThroughAndSaveRepairsThem) {
-  const auto selected = root_ / "bin" / "win10" / "_local" / ".credentials.json";
-  const auto farther = root_ / "bin" / "_local" / ".credentials.json";
-  Write(selected, "{ malformed");
-  const std::string fartherContents = Credentials("farther-valid").dump();
-  Write(farther, fartherContents);
-
-  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
-  EXPECT_TRUE(std::filesystem::equivalent(location.credentialsPath, selected));
-  EXPECT_TRUE(LoadCachedAuthToken(exe_dir_).refresh_token.empty());
-
-  CachedAuthToken auth;
-  auth.refresh_token = "repaired-selected";
-  auth.refresh_token_expiry = 2100000000U;
-  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "repaired-selected");
-  EXPECT_EQ(Read(farther), fartherContents);
-}
-
-TEST_F(CredentialsDirFixture, NoCredentialsOrYamlFallsBackBesideExecutable) {
-  const auto fallback = root_ / "bin" / "win10" / "_local" / ".credentials.json";
-  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
-  EXPECT_EQ(std::filesystem::path(location.directory).lexically_normal(), fallback.parent_path().lexically_normal());
-
-  CachedAuthToken auth;
-  auth.refresh_token = "fallback-refresh";
-  auth.refresh_token_expiry = 2100000000U;
-  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "fallback-refresh");
-  EXPECT_TRUE(std::filesystem::exists(fallback));
-}
-
-// ADR 0012 / #857: the sign-in cache is one file in the nevr root.
-TEST_F(CredentialsDirFixture, TheRootsCacheIsSelectedAndOutranksALegacyOne) {
+// ADR 0012 / #857: the sign-in cache is one file in the nevr root, and nowhere else.
+TEST_F(CredentialsDirFixture, TheRootsCacheIsTheOnlyOneSelected) {
   const std::string nevrRoot = (root_ / "appdata" / "nevr" / "echovr").string();
   Write(root_ / "appdata" / "nevr" / "echovr" / ".credentials.json", Credentials("in-root").dump());
   Write(root_ / "bin" / "win10" / "_local" / ".credentials.json", Credentials("in-local").dump());
 
-  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_, nevrRoot);
+  const CredentialCacheLocation location = SelectCredentialCacheLocation(nevrRoot);
   EXPECT_EQ(std::filesystem::path(location.credentialsPath).lexically_normal(),
             (std::filesystem::path(nevrRoot) / ".credentials.json").lexically_normal());
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_, nevrRoot).refresh_token, "in-root");
+  EXPECT_EQ(LoadCachedAuthToken(nevrRoot).refresh_token, "in-root");
 }
 
-TEST_F(CredentialsDirFixture, ALegacyCacheTheMoveLeftIsStillReadAndWrittenBackWhereItIs) {
+// Decision: an old cache under the game's _local folders is moved into the root once (nevr_root_move) and the old spots are never
+// read again. Here the move has not run (or could not): the old file is neither read nor written, whatever it holds.
+TEST_F(CredentialsDirFixture, AnOldCacheUnderLocalIsNeverReadOrWrittenWhetherOrNotTheMoveRan) {
   const std::string nevrRoot = (root_ / "appdata" / "nevr" / "echovr").string();
-  const auto legacy = root_ / "bin" / "_local" / ".credentials.json";
-  Write(legacy, Credentials("left-behind").dump());
+  for (const char* where : {"bin/win10/_local", "bin/_local", "_local"}) {
+    std::filesystem::remove(CachePath());  // each spot starts with an empty root
+    const auto legacy = root_ / where / ".credentials.json";
+    const std::string contents = Credentials(std::string("old-") + where).dump();
+    Write(legacy, contents);
 
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_, nevrRoot).refresh_token, "left-behind") << "the login is not lost while the move cannot run";
-  CachedAuthToken auth;
-  auth.refresh_token = "rotated";
-  auth.refresh_token_expiry = 2100000000U;
-  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_, nevrRoot));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_, nevrRoot).refresh_token, "rotated");
-  EXPECT_NE(Read(legacy).find("rotated"), std::string::npos) << "written where it was found, so one cache exists until the move";
-  EXPECT_FALSE(std::filesystem::exists(root_ / "appdata"));
+    EXPECT_TRUE(LoadCachedAuthToken(nevrRoot).refresh_token.empty()) << where << ": the login in an old spot is not read";
+    EXPECT_EQ(SelectCredentialCacheLocation(nevrRoot).credentialsPath,
+              (std::filesystem::path(nevrRoot) / ".credentials.json").string());
+
+    CachedAuthToken auth;
+    auth.refresh_token = std::string("new-") + where;
+    auth.refresh_token_expiry = 2100000000U;
+    ASSERT_TRUE(SaveAuthToken(auth, nevrRoot));
+    EXPECT_EQ(LoadCachedAuthToken(nevrRoot).refresh_token, std::string("new-") + where);
+    EXPECT_EQ(Read(legacy), contents) << where << ": the old file is not written back";
+  }
 }
 
 TEST_F(CredentialsDirFixture, WithNoCacheAnywhereTheRootIsCreatedAndLocalIsNot) {
@@ -1906,17 +1772,22 @@ TEST_F(CredentialsDirFixture, WithNoCacheAnywhereTheRootIsCreatedAndLocalIsNot) 
   CachedAuthToken auth;
   auth.refresh_token = "first-login";
   auth.refresh_token_expiry = 2100000000U;
-  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_, nevrRoot));
+  ASSERT_TRUE(SaveAuthToken(auth, nevrRoot));
   EXPECT_TRUE(std::filesystem::exists(root_ / "appdata" / "nevr" / "echovr" / ".credentials.json"));
   EXPECT_FALSE(std::filesystem::exists(root_ / "bin" / "win10" / "_local"));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_, nevrRoot).refresh_token, "first-login");
+  EXPECT_EQ(LoadCachedAuthToken(nevrRoot).refresh_token, "first-login");
 }
 
-TEST_F(CredentialsDirFixture, WithoutARootTheOlderSearchDecides) {
+TEST_F(CredentialsDirFixture, WithoutARootThereIsNoCacheAndASaveIsRefusedNotWrittenBesideTheGame) {
   Write(root_ / "bin" / "_local" / ".credentials.json", Credentials("legacy").dump());
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_, std::string()).refresh_token, "legacy");
-  EXPECT_EQ(SelectCredentialCacheLocation(exe_dir_, std::string()).credentialsPath,
-            SelectCredentialCacheLocation(exe_dir_).credentialsPath) << "no %LOCALAPPDATA% in these tests";
+  EXPECT_TRUE(LoadCachedAuthToken(std::string()).refresh_token.empty()) << "an old spot is not a fallback";
+  EXPECT_TRUE(SelectCredentialCacheLocation(std::string()).credentialsPath.empty());
+  CachedAuthToken auth;
+  auth.refresh_token = "must-not-land";
+  auth.refresh_token_expiry = 2100000000U;
+  EXPECT_FALSE(SaveAuthToken(auth, std::string())) << "refused: there is no root to keep it in";
+  EXPECT_EQ(Read(root_ / "bin" / "_local" / ".credentials.json"), Credentials("legacy").dump());
+  EXPECT_FALSE(std::filesystem::exists(root_ / "bin" / "win10" / "_local"));
 }
 
 TEST_F(CredentialsDirFixture, TheOneArgumentFormsUseLocalAppData) {
@@ -1925,20 +1796,23 @@ TEST_F(CredentialsDirFixture, TheOneArgumentFormsUseLocalAppData) {
   CachedAuthToken auth;
   auth.refresh_token = "via-env";
   auth.refresh_token_expiry = 2100000000U;
-  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+  ASSERT_TRUE(SaveAuthToken(auth));
   EXPECT_TRUE(std::filesystem::exists(root_ / "appdata" / "nevr" / "echovr" / ".credentials.json"));
-  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "via-env");
+  EXPECT_EQ(LoadCachedAuthToken().refresh_token, "via-env");
   EXPECT_EQ(std::filesystem::path(DefaultCredentialRoot()).lexically_normal(),
             (root_ / "appdata" / "nevr" / "echovr").lexically_normal());
 }
 
-TEST_F(CredentialsDirFixture, ARootThatIsNotAnsiGivesNoRootSoTheCacheStaysWhereItWorks) {
+TEST_F(CredentialsDirFixture, ARootThatIsNotAnsiGivesNoRootAndSoNoCache) {
   if (GetACP() == CP_UTF8) GTEST_SKIP() << "the ANSI code page is UTF-8 here, so every path converts";
   ScopedLocalAppData scoped(L"C:\\Users\\\U0001F600\\AppData\\Local");
   EXPECT_TRUE(DefaultCredentialRoot().empty());
 }
 
-TEST_F(CredentialsDirFixture, NoLocalAppDataGivesNoRoot) { EXPECT_TRUE(DefaultCredentialRoot().empty()); }
+TEST_F(CredentialsDirFixture, NoLocalAppDataGivesNoRoot) {
+  SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
+  EXPECT_TRUE(DefaultCredentialRoot().empty());
+}
 
 TEST(CredentialCachePath, JoinHandlesTrailingAndMissingSeparators) {
   EXPECT_EQ(JoinCredentialPath("C:\\games\\bin\\", "_local"), "C:\\games\\bin\\_local");

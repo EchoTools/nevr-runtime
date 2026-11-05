@@ -10,6 +10,7 @@
 // Run: plugin_loader_test <fixture-dir> [name-filter]
 
 #include <dlfcn.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -37,6 +38,7 @@
 #include "quest/plugin/plugin_loader.h"
 #include "quest/plugin/plugin_platform.h"
 #include "quest/plugin/plugin_record_log.h"
+#include "quest/plugin/slot_hook.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/mini_test.h"
 #include "quest/tests/plugin_fixture_seen.h"
@@ -62,7 +64,7 @@ constexpr std::uint16_t kOtherMachine = kMachineAarch64;
 
 // The running libr15 build the fake platform reports: the second ID the fixture lists.
 const char* const kGameBuild = "2222222222222222222222222222222222222222";
-const NevrQuestHostApi kFakeQuestApi{sizeof(NevrQuestHostApi), nullptr, nullptr};
+const NevrQuestHostApi kFakeQuestApi{sizeof(NevrQuestHostApi), nullptr, nullptr, nullptr, nullptr};
 // The main level the fake platform reports (its name is set beside it: the loader copies both, it does not look one up).
 constexpr std::uint64_t kArenaLevel = 0x42670f2bed45703cULL;
 
@@ -98,6 +100,9 @@ class FakePlatform final : public Platform {
   }
   void* Symbol(void* handle, const char* name) override {
     if (!throwOnSymbol.empty() && throwOnSymbol == name) throw std::runtime_error("symbol");
+    if (std::find(hiddenSymbols.begin(), hiddenSymbols.end(), name) != hiddenSymbols.end()) return nullptr;
+    const auto replaced = symbolOverride.find(name);
+    if (replaced != symbolOverride.end()) return replaced->second;
     return ::dlsym(handle, name);
   }
   std::string GameBuildId() override {
@@ -162,6 +167,8 @@ class FakePlatform final : public Platform {
   bool readFromDisk = true;
   std::string throwOnRead;
   std::string throwOnSymbol;
+  std::vector<std::string> hiddenSymbols;  // a symbol the fake says the object does not export
+  std::map<std::string, void*> symbolOverride;  // a symbol the fake answers itself, instead of the object's
   std::map<std::string, std::vector<std::uint8_t>> memory;
   std::map<std::string, void*> handles;
   std::vector<std::string> opened;
@@ -587,7 +594,7 @@ TEST(LoaderGivesThePluginTheQuestContext) {
   if (seen == nullptr) return;
   CHECK_EQ(seen->init_count, 1u);
   CHECK_EQ(seen->flags, static_cast<std::uint32_t>(NEVR_HOST_IS_CLIENT | NEVR_HOST_PLATFORM_QUEST));
-  CHECK_EQ(seen->ctx_size, static_cast<std::uint32_t>(sizeof(NvrGameContext)));
+  CHECK_EQ(seen->ctx_size, static_cast<std::uint32_t>(sizeof(NevrGameContext)));
   CHECK_EQ(seen->base_addr, env.platform.base);
   CHECK(seen->net_game == nullptr);
   CHECK_EQ(seen->game_state, 0u);
@@ -1106,7 +1113,7 @@ TEST(LoaderFailsAPluginWhoseInitFailsAndContinues) {
 
 TEST(LoaderUnmapsAPluginWhenTheLoaderThrowsAfterMappingIt) {
   Env env;
-  env.platform.throwOnSymbol = "NvrPluginGetInfo";
+  env.platform.throwOnSymbol = "NevrPluginGetInfo";
   env.loader->Plan({Item("ok", "libfx_ok.so")});
   env.loader->RunPhase(PluginPhase::Normal);
   CHECK(env.platform.Record("ok")->outcome == Outcome::kFailed);
@@ -1115,12 +1122,384 @@ TEST(LoaderUnmapsAPluginWhenTheLoaderThrowsAfterMappingIt) {
   CHECK_EQ(env.platform.RecordsFor("ok"), std::size_t{1});
 }
 
+// A plugin built before the prefix rename exports Nvr* names only. The loader resolves each entry point under its Nevr name
+// first and falls back to the Nvr one, and says once that the plugin loaded through the deprecated names.
+int g_deprecatedInitCalls = 0;
+NevrPluginInfo DeprecatedGetInfo() { return {"deprecated", "exports only Nvr names", 4, 5, 6}; }
+int DeprecatedInitEx(const NevrGameContext*, const char*) {
+  ++g_deprecatedInitCalls;
+  return 0;
+}
+
+TEST(LoaderLoadsAPluginThatExportsOnlyTheDeprecatedNvrNames) {
+  Env env;
+  for (const char* suffix : {"PluginGetInfo", "PluginInitEx", "PluginInit"}) {
+    env.platform.hiddenSymbols.push_back(std::string("Nevr") + suffix);
+  }
+  env.platform.symbolOverride["NvrPluginGetInfo"] = reinterpret_cast<void*>(&DeprecatedGetInfo);
+  env.platform.symbolOverride["NvrPluginInitEx"] = reinterpret_cast<void*>(&DeprecatedInitEx);
+  g_deprecatedInitCalls = 0;
+  env.loader->Plan({Item("old", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("old")->outcome == Outcome::kLoaded);
+  CHECK_EQ(g_deprecatedInitCalls, 1);
+  CHECK_EQ(env.platform.lines.size(), std::size_t{1});
+  if (env.platform.lines.empty()) return;
+  CHECK_EQ(env.platform.lines[0].first, static_cast<std::uint32_t>(NEVR_LOG_INFO));
+  CHECK(env.platform.lines[0].second.find("plugin=old file=libfx_ok.so loaded with deprecated Nvr exports (NvrPluginGetInfo, "
+                                          "NvrPluginInitEx)") != std::string::npos);
+}
+
+// The deprecated line is written once every entry point is resolved, Shutdown included: a plugin whose only Nvr export is
+// PluginShutdown is reported as well, and the line names it.
+void DeprecatedShutdown() {}
+
+TEST(LoaderReportsADeprecatedShutdownExportOnce) {
+  Env env;
+  env.platform.hiddenSymbols.push_back("NevrPluginShutdown");
+  env.platform.symbolOverride["NvrPluginShutdown"] = reinterpret_cast<void*>(&DeprecatedShutdown);
+  env.loader->Plan({Item("old", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("old")->outcome == Outcome::kLoaded);
+  // The fixture's own Nevr init writes a line of its own, so count the deprecation lines, not all of them.
+  std::vector<std::pair<std::uint32_t, std::string>> deprecated;
+  for (const auto& line : env.platform.lines) {
+    if (line.second.find("loaded with deprecated Nvr exports") != std::string::npos) deprecated.push_back(line);
+  }
+  CHECK_EQ(deprecated.size(), std::size_t{1});
+  if (deprecated.size() != 1) return;
+  CHECK_EQ(deprecated[0].first, static_cast<std::uint32_t>(NEVR_LOG_INFO));
+  CHECK(deprecated[0].second.find("plugin=old file=libfx_ok.so loaded with deprecated Nvr exports (NvrPluginShutdown)") !=
+        std::string::npos);
+}
+
 TEST(LoaderKeepsALoadedPluginMapped) {
   Env env;
   env.loader->Plan({Item("ok", "libfx_ok.so")});
   env.loader->RunPhase(PluginPhase::Normal);
   CHECK(env.platform.Record("ok")->outcome == Outcome::kLoaded);
   CHECK(env.platform.closed.empty());
+}
+
+// #2001 (ADR 0034): a plugin whose init chains a handler onto a module's slot and then fails must stay mapped, because the
+// handler's code is the plugin's own. The module is the GOT fixture libgotfx_consumer_now.so (built next to this test by the
+// justfile): its fx_call_add calls fx_add through a PLT slot, which the handler chains onto.
+bool g_b2Register = true;
+std::uint32_t g_b2Handle = 0;
+void* g_b2Original = nullptr;
+std::int32_t g_b2Result = -1;
+std::string g_b2BuildId;
+
+int B2Handler(int a, int b) noexcept {
+  return reinterpret_cast<int (*)(int, int)>(g_b2Original)(a, b) + 100;
+}
+
+// The plugin's NevrPluginInitEx: registers the handler (when the case says so), then fails the init.
+int B2InitEx(const NevrGameContext*, const char*) {
+  if (g_b2Register) {
+    g_b2Result = nevr_quest::slot_hook::RegisterSlotHook("b2", "libgotfx_consumer_now.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+                                                         g_b2BuildId.c_str(), reinterpret_cast<void*>(&B2Handler),
+                                                         &g_b2Original, &g_b2Handle);
+  }
+  return 3;
+}
+
+TEST(LoaderKeepsAFailedPluginMappedWhileItsSlotHookIsChained) {
+  const std::string consumerPath = g_dir + "/libgotfx_consumer_now.so";
+  void* consumer = ::dlopen(consumerPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+  CHECK(consumer != nullptr);
+  if (consumer == nullptr) return;
+  const std::vector<std::uint8_t> consumerBytes = Slurp(consumerPath);
+  g_b2BuildId = BuildIdOf(consumerBytes.data(), consumerBytes.size());
+  CHECK(!g_b2BuildId.empty());
+  using CallAdd = int (*)(int, int);
+  const auto callAdd = reinterpret_cast<CallAdd>(::dlsym(consumer, "fx_call_add"));
+  CHECK(callAdd != nullptr);
+  if (callAdd == nullptr) return;
+  CHECK_EQ(callAdd(3, 4), 7);  // before the install: fx_add itself
+
+  g_b2Register = true;
+  Env env;
+  env.platform.symbolOverride["NevrPluginInitEx"] = reinterpret_cast<void*>(&B2InitEx);
+  env.loader->Plan({Item("b2", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK_EQ(g_b2Result, std::int32_t{NEVR_SLOT_HOOK_OK});  // the init chained its handler before it failed
+  CHECK(env.platform.Record("b2")->outcome == Outcome::kFailed);
+  CHECK_EQ(env.platform.Record("b2")->reason, std::string(reason::kInitFailed));
+  CHECK(nevr_quest::slot_hook::HoldsHandleOf("b2"));
+  CHECK_EQ(env.platform.Record("b2")->keptMapped, std::string("slot_hook"));
+  CHECK(env.platform.closed.empty());  // the object was not unmapped: its handler is still on the chain
+  CHECK(env.platform.handles.count("libfx_ok.so") == 1);
+  CHECK_EQ(callAdd(3, 4), 107);  // the handler runs through the chain: (3 + 4) + 100
+  CHECK_EQ(nevr_quest::slot_hook::UnregisterSlotHook("b2", g_b2Handle), std::int32_t{NEVR_SLOT_HOOK_OK});
+  CHECK(!nevr_quest::slot_hook::HoldsHandleOf("b2"));
+  CHECK_EQ(callAdd(3, 4), 7);  // the chain is back to the game's function
+  ::dlclose(consumer);
+}
+
+TEST(LoaderUnmapsAFailedPluginThatChainedNoSlotHook) {
+  g_b2Register = false;
+  Env env;
+  env.platform.symbolOverride["NevrPluginInitEx"] = reinterpret_cast<void*>(&B2InitEx);
+  env.loader->Plan({Item("b2", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  g_b2Register = true;
+  CHECK(env.platform.Record("b2")->outcome == Outcome::kFailed);
+  CHECK_EQ(env.platform.Record("b2")->keptMapped, std::string("none"));
+  CHECK_EQ(env.platform.closed.size(), std::size_t{1});  // nothing chained: unmapped as before
+  CHECK_EQ(env.platform.closed[0], std::string("libfx_ok.so"));
+}
+
+// The host's slot-hook members, the production functions, for a plugin the test loads with the service on (the fixture's
+// init reads them from ctx->quest; the other members stay absent).
+NevrQuestHostApi MakeSlotQuestApi() {
+  NevrQuestHostApi api{};
+  api.struct_size = sizeof(NevrQuestHostApi);
+  api.register_slot_hook = &nevr_quest::slot_hook::RegisterSlotHook;
+  api.unregister_slot_hook = &nevr_quest::slot_hook::UnregisterSlotHook;
+  return api;
+}
+const NevrQuestHostApi kSlotQuestApi = MakeSlotQuestApi();
+
+// The args the slot-hook fixtures read: the module's GNU build ID, and the address of the module's call (the fixture calls it).
+std::string SlotArgs(const std::string& buildId, const void* call) {
+  return "{\"build\":\"" + buildId + "\",\"call\":\"" + std::to_string(reinterpret_cast<std::uintptr_t>(call)) + "\"}";
+}
+
+// #2001 round 3, probe (b): a plugin registers a handler under another plugin's id, and its init fails. The host refuses the
+// register (the id is not the one it bound to the plugin), so nothing is chained: the object is unmapped and a call reaches the
+// game's function. Without the bound id the handler was recorded under the claimed id, the object was unmapped under it, and
+// the call went through the slot into unmapped code.
+TEST(LoaderRefusesARegisterUnderAnotherPluginsId) {
+  const std::string consumerPath = g_dir + "/libgotfx_consumer_now.so";
+  void* consumer = ::dlopen(consumerPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+  CHECK(consumer != nullptr);
+  if (consumer == nullptr) return;
+  const std::vector<std::uint8_t> consumerBytes = Slurp(consumerPath);
+  const std::string buildId = BuildIdOf(consumerBytes.data(), consumerBytes.size());
+  using CallAdd = int (*)(int, int);
+  const auto callAdd = reinterpret_cast<CallAdd>(::dlsym(consumer, "fx_call_add"));
+  CHECK(!buildId.empty() && callAdd != nullptr);
+  if (buildId.empty() || callAdd == nullptr) {
+    ::dlclose(consumer);
+    return;
+  }
+  CHECK_EQ(callAdd(3, 4), 7);  // before the plan: fx_add itself
+
+  Env env;
+  env.platform.questApi = &kSlotQuestApi;
+  env.loader->Plan({Item("b2", "libfx_slotclaim.so", false, true, SlotArgs(buildId, reinterpret_cast<const void*>(callAdd)))});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("b2")->outcome == Outcome::kFailed);
+  CHECK_EQ(env.platform.Record("b2")->reason, std::string(reason::kInitFailed));
+  CHECK(!nevr_quest::slot_hook::HoldsHandleOf("b2"));
+  CHECK_EQ(env.platform.Record("b2")->keptMapped, std::string("none"));
+  CHECK_EQ(env.platform.closed.size(), std::size_t{1});  // nothing was chained: the object is unmapped
+  CHECK(std::find(env.platform.closed.begin(), env.platform.closed.end(), std::string("libfx_slotclaim.so")) !=
+        env.platform.closed.end());
+  CHECK_EQ(callAdd(3, 4), 7);  // the game's function: no handler is on the chain
+  ::dlclose(consumer);
+}
+
+// #2001 round 3, probe (c): a plugin registers its handler in init; a call is inside the handler when its Shutdown (run after
+// the failed init) unregisters it. The registration is sticky, so the object stays mapped and the call returns from code that
+// is still there. Without the sticky keep the object was unmapped under the call, and the call crashed.
+TEST(LoaderKeepsAPluginMappedThatUnregistersWhileACallIsInItsHandler) {
+  const std::string consumerPath = g_dir + "/libgotfx_consumer_now.so";
+  void* consumer = ::dlopen(consumerPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+  CHECK(consumer != nullptr);
+  if (consumer == nullptr) return;
+  const std::vector<std::uint8_t> consumerBytes = Slurp(consumerPath);
+  const std::string buildId = BuildIdOf(consumerBytes.data(), consumerBytes.size());
+  using CallAdd = int (*)(int, int);
+  const auto callAdd = reinterpret_cast<CallAdd>(::dlsym(consumer, "fx_call_add"));
+  CHECK(!buildId.empty() && callAdd != nullptr);
+  if (buildId.empty() || callAdd == nullptr) {
+    ::dlclose(consumer);
+    return;
+  }
+
+  Env env;
+  env.platform.questApi = &kSlotQuestApi;
+  env.loader->Plan({Item("b2", "libfx_slotself.so", false, true, SlotArgs(buildId, reinterpret_cast<const void*>(callAdd)))});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("b2")->outcome == Outcome::kFailed);
+  CHECK_EQ(env.platform.Record("b2")->reason, std::string(reason::kInitFailed));
+  CHECK_EQ(env.platform.Record("b2")->keptMapped, std::string("slot_hook"));
+  CHECK(env.platform.closed.empty());  // kept mapped: a registration was made in its init
+  CHECK(!nevr_quest::slot_hook::HoldsHandleOf("b2"));  // its Shutdown unregistered the handle, so the keep is the sticky one
+
+  void* const object = env.platform.handles.at("libfx_slotself.so");
+  CHECK_EQ(*static_cast<const std::int32_t*>(::dlsym(object, "fx_b2_register_rc")), std::int32_t{NEVR_SLOT_HOOK_OK});
+  CHECK_EQ(*static_cast<const std::int32_t*>(::dlsym(object, "fx_b2_unregister_rc")), std::int32_t{NEVR_SLOT_HOOK_OK});
+  const pthread_t caller = *static_cast<const pthread_t*>(::dlsym(object, "fx_b2_tid"));
+  CHECK(pthread_join(caller, nullptr) == 0);  // the call that was inside the handler returns from the kept object
+  CHECK(*static_cast<const volatile int*>(::dlsym(object, "fx_b2_done")) == 1);
+  CHECK_EQ(callAdd(3, 4), 7);  // the chain is back to the game's function
+  ::dlclose(consumer);
+}
+
+// #2001 round 4, probe (d): a plugin's init starts a thread that registers its handler under another plugin's id, joins the
+// thread, and fails. The register runs on a thread the loader does not bind, so the id is not checked and the handler is
+// chained. The plugin must stay mapped: a registration made while the loader's call is live keeps that plugin mapped, on any
+// thread. Without that the object is unmapped under the chain, and the call goes into unmapped code.
+TEST(LoaderKeepsAPluginMappedWhenAThreadItStartedRegistersAHandler) {
+  const std::string consumerPath = g_dir + "/libgotfx_consumer_now.so";
+  void* consumer = ::dlopen(consumerPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+  CHECK(consumer != nullptr);
+  if (consumer == nullptr) return;
+  const std::vector<std::uint8_t> consumerBytes = Slurp(consumerPath);
+  const std::string buildId = BuildIdOf(consumerBytes.data(), consumerBytes.size());
+  using CallAdd = int (*)(int, int);
+  const auto callAdd = reinterpret_cast<CallAdd>(::dlsym(consumer, "fx_call_add"));
+  CHECK(!buildId.empty() && callAdd != nullptr);
+  if (buildId.empty() || callAdd == nullptr) {
+    ::dlclose(consumer);
+    return;
+  }
+  CHECK_EQ(callAdd(3, 4), 7);  // before the plan: fx_add itself
+
+  Env env;
+  env.platform.questApi = &kSlotQuestApi;
+  env.loader->Plan({Item("slotthread", "libfx_slotthread.so", false, true, SlotArgs(buildId, reinterpret_cast<const void*>(callAdd)))});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("slotthread")->outcome == Outcome::kFailed);
+  CHECK_EQ(env.platform.Record("slotthread")->reason, std::string(reason::kInitFailed));
+  CHECK_EQ(env.platform.Record("slotthread")->keptMapped, std::string("slot_hook"));
+  CHECK(env.platform.closed.empty());  // kept mapped: the handler registered on the thread is on the chain
+  CHECK(!nevr_quest::slot_hook::HoldsHandleOf("slotthread"));  // the owner is the id the thread named
+  CHECK(nevr_quest::slot_hook::HoldsHandleOf("impostor"));
+
+  // The chained handler is called before anything reads the object: on a loader that unmapped it, this call goes into the
+  // unmapped code and the process faults there.
+  CHECK_EQ(callAdd(3, 4), 107);  // (3 + 4) + 100, from the handler the thread registered
+  if (env.platform.handles.count("libfx_slotthread.so") == 1) {
+    void* const object = env.platform.handles.at("libfx_slotthread.so");
+    CHECK_EQ(*static_cast<const std::int32_t*>(::dlsym(object, "fx_b2_register_rc")), std::int32_t{NEVR_SLOT_HOOK_OK});
+    const std::uint32_t handle = *static_cast<const std::uint32_t*>(::dlsym(object, "fx_b2_handle"));
+    CHECK_EQ(nevr_quest::slot_hook::UnregisterSlotHook("impostor", handle), std::int32_t{NEVR_SLOT_HOOK_OK});
+    CHECK(!nevr_quest::slot_hook::HoldsHandleOf("impostor"));
+    CHECK_EQ(callAdd(3, 4), 7);  // the chain is back to the game's function
+  }
+  ::dlclose(consumer);
+}
+
+// #2001 round 4, B02: the id check applies only on the thread that holds the Scope. Here the loader's call is live on this thread
+// (bound to "b2"), and another plugin's thread registers under its own id. The register is neither refused nor recorded under
+// "b2": it is recorded under the id it names, and the live call is kept mapped.
+void* g_otherOriginal = nullptr;
+
+int OtherHandler(int a, int b) noexcept {
+  return reinterpret_cast<int (*)(int, int)>(g_otherOriginal)(a, b) + 100;
+}
+
+struct OtherThreadRegister {
+  const std::string* buildId = nullptr;
+  std::int32_t rc = -1;
+  std::uint32_t handle = 0;
+  void* original = nullptr;
+};
+
+void* RegisterOnOtherThread(void* arg) {
+  auto* reg = static_cast<OtherThreadRegister*>(arg);
+  reg->rc = nevr_quest::slot_hook::RegisterSlotHook("other", "libgotfx_consumer_now.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+                                                    reg->buildId->c_str(), reinterpret_cast<void*>(&OtherHandler), &reg->original,
+                                                    &reg->handle);
+  return nullptr;
+}
+
+TEST(ARegisterOnAnotherThreadWhileALoaderCallIsLiveIsNotCheckedOrRecordedUnderIt) {
+  const std::string consumerPath = g_dir + "/libgotfx_consumer_now.so";
+  void* consumer = ::dlopen(consumerPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+  CHECK(consumer != nullptr);
+  if (consumer == nullptr) return;
+  const std::vector<std::uint8_t> consumerBytes = Slurp(consumerPath);
+  const std::string buildId = BuildIdOf(consumerBytes.data(), consumerBytes.size());
+  using CallAdd = int (*)(int, int);
+  const auto callAdd = reinterpret_cast<CallAdd>(::dlsym(consumer, "fx_call_add"));
+  CHECK(!buildId.empty() && callAdd != nullptr);
+  if (buildId.empty() || callAdd == nullptr) {
+    ::dlclose(consumer);
+    return;
+  }
+  CHECK_EQ(callAdd(3, 4), 7);  // before the registration: fx_add itself
+
+  nevr_quest::slot_hook::Binding bound("b2");
+  OtherThreadRegister reg;
+  reg.buildId = &buildId;
+  {
+    const nevr_quest::slot_hook::Scope scope(bound);
+    pthread_t thread{};
+    CHECK(pthread_create(&thread, nullptr, RegisterOnOtherThread, &reg) == 0);
+    CHECK(pthread_join(thread, nullptr) == 0);
+  }
+  CHECK_EQ(reg.rc, std::int32_t{NEVR_SLOT_HOOK_OK});  // not refused: the thread is not the one the loader bound
+  CHECK(nevr_quest::slot_hook::HoldsHandleOf("other"));  // recorded under the id the caller named
+  CHECK(!nevr_quest::slot_hook::HoldsHandleOf("b2"));    // and not under the plugin the loader is initialising
+  CHECK(bound.registered());                             // a registration while the loader's call is live keeps it mapped
+  g_otherOriginal = reg.original;
+  CHECK_EQ(callAdd(3, 4), 107);  // (3 + 4) + 100, through the handler the other thread registered
+  CHECK_EQ(nevr_quest::slot_hook::UnregisterSlotHook("other", reg.handle), std::int32_t{NEVR_SLOT_HOOK_OK});
+  CHECK(!nevr_quest::slot_hook::HoldsHandleOf("other"));
+  CHECK_EQ(callAdd(3, 4), 7);  // the chain is back to the game's function
+  ::dlclose(consumer);
+}
+
+// #2001 round 4, B05: a Scope's destructor restores the binding it replaced. After an inner Scope ends, a register on this thread
+// is checked against the outer binding again; after the outer Scope ends, no binding is live and any id passes the check. The
+// lookup finds no module, so a register that passes the check ends with NEVR_SLOT_HOOK_NOT_FOUND, and a refused one with BAD_ARGUMENT.
+bool NoImage(const char*, sentinel::ElfImage*) { return false; }
+
+TEST(ANestedBindingIsRestoredWhenItsInnerScopeEnds) {
+  nevr_quest::slot_hook::Binding outer("outer");
+  nevr_quest::slot_hook::Binding inner("inner");
+  const char* const buildId = "0123456789abcdef0123456789abcdef01234567";
+  void* original = nullptr;
+  std::uint32_t handle = 0;
+  {
+    const nevr_quest::slot_hook::Scope scopeOuter(outer);
+    {
+      const nevr_quest::slot_hook::Scope scopeInner(inner);
+    }
+    const std::int32_t rc = nevr_quest::slot_hook::RegisterSlotHookWith(
+        &NoImage, "outer", "libgotfx_consumer_now.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, buildId,
+        reinterpret_cast<void*>(&B2Handler), &original, &handle);
+    CHECK_EQ(rc, std::int32_t{NEVR_SLOT_HOOK_NOT_FOUND});  // the outer id passes the check
+  }
+  const std::int32_t rc = nevr_quest::slot_hook::RegisterSlotHookWith(
+      &NoImage, "inner", "libgotfx_consumer_now.so", "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT, buildId,
+      reinterpret_cast<void*>(&B2Handler), &original, &handle);
+  CHECK_EQ(rc, std::int32_t{NEVR_SLOT_HOOK_NOT_FOUND});  // no call is live: the id is not checked
+}
+
+// #2001 round 4, B06: the loader binds the Shutdown it runs after a failed init, as it binds the init. The fixture registers a
+// handler in its Shutdown under another id: the register is refused, nothing is chained, and the object is unmapped.
+TEST(LoaderBindsTheIdOfAFailedPluginsShutdown) {
+  const std::string consumerPath = g_dir + "/libgotfx_consumer_now.so";
+  void* consumer = ::dlopen(consumerPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+  CHECK(consumer != nullptr);
+  if (consumer == nullptr) return;
+  const std::vector<std::uint8_t> consumerBytes = Slurp(consumerPath);
+  const std::string buildId = BuildIdOf(consumerBytes.data(), consumerBytes.size());
+  using CallAdd = int (*)(int, int);
+  const auto callAdd = reinterpret_cast<CallAdd>(::dlsym(consumer, "fx_call_add"));
+  CHECK(!buildId.empty() && callAdd != nullptr);
+  if (buildId.empty() || callAdd == nullptr) {
+    ::dlclose(consumer);
+    return;
+  }
+
+  Env env;
+  env.platform.questApi = &kSlotQuestApi;
+  env.loader->Plan({Item("slotshutdown", "libfx_slotshutdown.so", false, true, SlotArgs(buildId, reinterpret_cast<const void*>(callAdd)))});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("slotshutdown")->outcome == Outcome::kFailed);
+  CHECK_EQ(env.platform.Record("slotshutdown")->reason, std::string(reason::kInitFailed));
+  CHECK_EQ(env.platform.Record("slotshutdown")->keptMapped, std::string("none"));
+  CHECK_EQ(env.platform.closed.size(), std::size_t{1});  // nothing was chained: the object is unmapped
+  CHECK(!nevr_quest::slot_hook::HoldsHandleOf("impostor"));  // the Shutdown's register under another id was refused
+  CHECK_EQ(callAdd(3, 4), 7);  // no handler is on the chain (a loader that chained it runs unmapped code here)
+  ::dlclose(consumer);
 }
 
 TEST(LoaderKeepsGoingWhenARequiredPluginFails) {
@@ -1373,7 +1752,7 @@ TEST(PlatformOpensTheDirectoryQualifiedPathAndNeverTheBareName) {
   void* const handle = platform.Open("libfx_ok.so");  // only in g_dir: a bare-name dlopen would search elsewhere and fail
   CHECK(handle != nullptr);
   if (handle != nullptr) {
-    CHECK(platform.Symbol(handle, "NvrPluginGetInfo") != nullptr);
+    CHECK(platform.Symbol(handle, "NevrPluginGetInfo") != nullptr);
     ::dlclose(handle);
   }
   // A name the linker resolves from the system, absent from the library directory, must not load.

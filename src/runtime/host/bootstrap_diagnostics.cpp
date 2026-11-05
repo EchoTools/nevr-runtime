@@ -3,6 +3,7 @@
 #include "runtime/host/host_json.h"
 #include "runtime/host/host_paths.h"
 #include "runtime/host/path_buffer.h"
+#include "core/run_log_path.h"
 #include "runtime/host/game_targets.h"
 
 #include <nlohmann/json.hpp>
@@ -207,8 +208,6 @@ DWORD CreateLogMutex() noexcept {
 const char* DestinationName(DiagnosticDestination destination) noexcept {
   switch (destination) {
     case DiagnosticDestination::kPrimary: return "localappdata";
-    case DiagnosticDestination::kFallback: return "temp";
-    case DiagnosticDestination::kHostDirectory: return "host_directory";
     case DiagnosticDestination::kDropped: return "dropped";
   }
   return "unknown";
@@ -216,18 +215,30 @@ const char* DestinationName(DiagnosticDestination destination) noexcept {
 
 void BootstrapDiagnostics::Prepare(HMODULE host_module) {
   primary_ready_ = false;
-  fallback_ready_ = false;
   host_dir_ready_ = false;
 
+  // The one place the host records: the process's main log, <root>\logs\nevr-<creation time>.jsonl (core/run_log_path.h), the file
+  // the runtime's boot phase and log filter write to as well. There is no fallback folder.
   const bool local_ok = CopyEnv(local_app_data_, MAX_PATH, L"LOCALAPPDATA");
-  const bool temp_ok = CopyEnv(temp_, MAX_PATH, L"TEMP");
   if (local_ok) primary_ready_ = AppendPath(primary_dir_, MAX_PATH, local_app_data_, kLogsSubdirectory);
-  if (temp_ok) fallback_ready_ = AppendPath(fallback_dir_, MAX_PATH, temp_, kLogsSubdirectory);
+  primary_ready_ = primary_ready_ && NameRunLog();
   host_dir_ready_ = DirOfModule(host_dir_, MAX_PATH, host_module);
   // The log's mutex is created here, at attach, and never inside an append: a crash callback that is
   // the first to write must not have to create it. CreateMutexW is a kernel32 call. That it is safe under
   // the loader lock is an inference (it opens a named kernel object and loads no module), not a measurement.
   EnsureLogMutex();
+}
+
+bool BootstrapDiagnostics::NameRunLog() noexcept {
+  FILETIME created = {};
+  FILETIME exited = {};
+  FILETIME kernel = {};
+  FILETIME user = {};
+  unsigned long long ticks = 0;
+  if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+    ticks = (static_cast<unsigned long long>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+  }
+  return nevr_run_log::FileName(ticks, GetCurrentProcessId(), log_name_, sizeof(log_name_) / sizeof(log_name_[0]));
 }
 
 void BootstrapDiagnostics::EnsureLogMutex() noexcept {
@@ -243,16 +254,17 @@ void BootstrapDiagnostics::EnsureLogMutex() noexcept {
 void BootstrapDiagnostics::SetRunTokenForTest(std::uint64_t token) { g_run_token.store(token); }
 std::uint64_t BootstrapDiagnostics::RunTokenForTest() { return RunToken(); }
 
-void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const wchar_t* temp,
-                                          const wchar_t* host_dir) {
+void BootstrapDiagnostics::SetLogNameForTest(const wchar_t* name) {
+  const std::size_t length = wcslen(name);
+  if (length + 1 > sizeof(log_name_) / sizeof(log_name_[0])) return;
+  std::memcpy(log_name_, name, (length + 1) * sizeof(wchar_t));
+}
+
+void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const wchar_t* host_dir) {
   primary_ready_ = false;
-  fallback_ready_ = false;
   host_dir_ready_ = false;
   if (local_app_data != nullptr && local_app_data[0] != L'\0') {
-    primary_ready_ = AppendPath(primary_dir_, MAX_PATH, local_app_data, kLogsSubdirectory);
-  }
-  if (temp != nullptr && temp[0] != L'\0') {
-    fallback_ready_ = AppendPath(fallback_dir_, MAX_PATH, temp, kLogsSubdirectory);
+    primary_ready_ = AppendPath(primary_dir_, MAX_PATH, local_app_data, kLogsSubdirectory) && NameRunLog();
   }
   if (host_dir != nullptr && host_dir[0] != L'\0') {
     // The host directory is used as given: it already exists and is not created.
@@ -335,20 +347,9 @@ AttachFailure BootstrapDiagnostics::FirstAttachFailure() const noexcept {
 bool BootstrapDiagnostics::LogFilePath(wchar_t* out, std::size_t size) const noexcept {
   if (out == nullptr || size == 0) return false;
   out[0] = L'\0';
-  const wchar_t* dir = nullptr;
-  const int last = last_destination_.load();
-  if (last == -1) {
-    // Nothing written yet: the first directory an append will try.
-    dir = primary_ready_ ? primary_dir_ : (fallback_ready_ ? fallback_dir_ : (host_dir_ready_ ? host_dir_ : nullptr));
-  } else if (last == static_cast<int>(DiagnosticDestination::kPrimary)) {
-    dir = primary_dir_;
-  } else if (last == static_cast<int>(DiagnosticDestination::kFallback)) {
-    dir = fallback_dir_;
-  } else if (last == static_cast<int>(DiagnosticDestination::kHostDirectory)) {
-    dir = host_dir_;
-  }  // kDropped: the last record reached no file
-  if (dir == nullptr) return false;
-  return AppendPath(out, size, dir, kBootstrapLogName);
+  // The one place records go. kDropped: the last record reached no file.
+  if (!primary_ready_ || last_destination_.load() == static_cast<int>(DiagnosticDestination::kDropped)) return false;
+  return AppendPath(out, size, primary_dir_, log_name_);
 }
 
 bool BootstrapDiagnostics::AttachDegraded() const noexcept {
@@ -448,20 +449,20 @@ void BootstrapDiagnostics::FlushAttachJournalAtExit() noexcept {
 }
 
 bool BootstrapDiagnostics::EntryIsInLog(std::size_t seq) const noexcept {
-  // The last part of each log file: the records of this process are at its end. Reads take no lock.
-  const wchar_t* const dirs[3] = {primary_ready_ ? primary_dir_ : nullptr, fallback_ready_ ? fallback_dir_ : nullptr,
-                                  host_dir_ready_ ? host_dir_ : nullptr};
+  // The last 64 KiB of the main log: this process's host records are at its end while the log is young. The main log also holds the
+  // runtime's lines, so after a long run a record can lie further back; it is then written again (a repeated record, never a lost one).
+  // Reads take no lock.
+  if (!primary_ready_) return false;
   char run_key[48];
   char seq_key[40];
   snprintf(run_key, sizeof(run_key), "\"run\":\"%016llx\"", static_cast<unsigned long long>(RunToken()));
   snprintf(seq_key, sizeof(seq_key), "\"seq\":%llu", static_cast<unsigned long long>(seq));
-  for (const wchar_t* dir : dirs) {
-    if (dir == nullptr) continue;
+  {
     wchar_t path[MAX_PATH] = {};
-    if (!AppendPath(path, MAX_PATH, dir, kBootstrapLogName)) continue;
+    if (!AppendPath(path, MAX_PATH, primary_dir_, log_name_)) return false;
     HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) continue;
+    if (file == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER size = {};
     char buffer[64 * 1024 + 1];
     DWORD got = 0;
@@ -494,9 +495,8 @@ bool BootstrapDiagnostics::EntryIsInLog(std::size_t seq) const noexcept {
       }
     }
     CloseHandle(file);
-    if (found) return true;
+    return found;
   }
-  return false;
 }
 
 void BootstrapDiagnostics::EmitDroppedTotal() noexcept {
@@ -636,6 +636,8 @@ DiagnosticDestination BootstrapDiagnostics::EmitChecked(const nlohmann::json& re
   nlohmann::json stamped = record;
   char timestamp[kTimestampSize] = {};
   if (!stamped.contains("tag")) stamped["tag"] = "NEVR.HOST";
+  // The main log's records carry a level (docs/standards/logging.md); a host record that names none is informational.
+  if (!stamped.contains("level")) stamped["level"] = "info";
   if (!stamped.contains("ts")) {
     stamped["ts"] = FormatUtcTimestamp(timestamp) ? timestamp : "unknown";
   }
@@ -655,26 +657,15 @@ DiagnosticDestination BootstrapDiagnostics::EmitChecked(const nlohmann::json& re
 }
 
 DiagnosticDestination BootstrapDiagnostics::AppendRecordNamingLog(nlohmann::json& stamped) {
-  struct Candidate {
-    const wchar_t* dir;
-    bool create_dir;
-    bool ready;
-    DiagnosticDestination destination;
-  };
-  const Candidate candidates[] = {
-      {primary_dir_, true, primary_ready_, DiagnosticDestination::kPrimary},
-      {fallback_dir_, true, fallback_ready_, DiagnosticDestination::kFallback},
-      {host_dir_, false, host_dir_ready_, DiagnosticDestination::kHostDirectory},
-  };
-  for (const Candidate& candidate : candidates) {
-    if (!candidate.ready) continue;
+  if (primary_ready_) {
     wchar_t path[MAX_PATH] = {};
-    if (!AppendPath(path, MAX_PATH, candidate.dir, kBootstrapLogName)) continue;
-    stamped["log"] = PathToUtf8(path);
-    const std::string line = SerializeRecord(stamped);
-    if (AppendTo(candidate.dir, candidate.create_dir, line.data(), line.size())) {
-      last_destination_.store(static_cast<int>(candidate.destination));
-      return candidate.destination;
+    if (AppendPath(path, MAX_PATH, primary_dir_, log_name_)) {
+      stamped["log"] = PathToUtf8(path);
+      const std::string line = SerializeRecord(stamped);
+      if (AppendTo(primary_dir_, true, line.data(), line.size())) {
+        last_destination_.store(static_cast<int>(DiagnosticDestination::kPrimary));
+        return DiagnosticDestination::kPrimary;
+      }
     }
   }
   stamped["log"] = "";
@@ -687,15 +678,6 @@ DiagnosticDestination BootstrapDiagnostics::AppendLine(const char* line,
   if (primary_ready_ && AppendTo(primary_dir_, true, line, length)) {
     last_destination_.store(static_cast<int>(DiagnosticDestination::kPrimary));
     return DiagnosticDestination::kPrimary;
-  }
-  if (fallback_ready_ && AppendTo(fallback_dir_, true, line, length)) {
-    last_destination_.store(static_cast<int>(DiagnosticDestination::kFallback));
-    return DiagnosticDestination::kFallback;
-  }
-  // The host's own directory exists already; it is not created.
-  if (host_dir_ready_ && AppendTo(host_dir_, false, line, length)) {
-    last_destination_.store(static_cast<int>(DiagnosticDestination::kHostDirectory));
-    return DiagnosticDestination::kHostDirectory;
   }
   return ReportDropped(line, length);
 }
@@ -716,7 +698,7 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
                                     std::size_t length) noexcept {
   if (!InitOnceExecuteOnce(&g_log_local_lock_once, InitLogLocalLock, nullptr, nullptr)) return false;
   wchar_t path[MAX_PATH] = {};
-  if (!AppendPath(path, MAX_PATH, dir, kBootstrapLogName)) return false;
+  if (!AppendPath(path, MAX_PATH, dir, log_name_)) return false;
 
   if (create_dir) {
     wchar_t dir_copy[MAX_PATH] = {};

@@ -25,9 +25,9 @@ const char* ResultText(std::int32_t result) {
 
 }  // namespace
 
-int RegisterScriptRedirect(const NvrGameContext* ctx) {
+int RegisterScriptRedirect(const NevrGameContext* ctx) {
   if (ctx == nullptr) return -1;
-  const bool covered = ctx->ctx_size >= offsetof(NvrGameContext, quest) + sizeof(ctx->quest);
+  const bool covered = ctx->ctx_size >= offsetof(NevrGameContext, quest) + sizeof(ctx->quest);
   const NevrQuestHostApi* quest = covered ? ctx->quest : nullptr;
   const bool hasRedirect = quest != nullptr && quest->struct_size >= offsetof(NevrQuestHostApi, register_script_redirect) +
                                                   sizeof(quest->register_script_redirect);
@@ -36,7 +36,7 @@ int RegisterScriptRedirect(const NvrGameContext* ctx) {
     Log(NEVR_LOG_ERROR, "script redirect not registered", fields, 2);
     return -1;
   }
-  const bool hasId = ctx->ctx_size >= offsetof(NvrGameContext, plugin_id) + sizeof(ctx->plugin_id);
+  const bool hasId = ctx->ctx_size >= offsetof(NevrGameContext, plugin_id) + sizeof(ctx->plugin_id);
   const char* const id = hasId && ctx->plugin_id != nullptr ? ctx->plugin_id : kPluginName;
   const std::int32_t result = quest->register_script_redirect(id, kScriptRedirectHashes, static_cast<std::uint32_t>(kCount));
   const NevrLogField fields[] = {{"result", ResultText(result)}};

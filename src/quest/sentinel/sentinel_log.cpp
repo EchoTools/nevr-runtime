@@ -1,13 +1,16 @@
 #include "sentinel_log.h"
 
 #include "core/crash_report.h"
+#include "core/run_id.h"
 #include "quest/sentinel/data_root.h"
 
 #include <android/log.h>
 
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <cerrno>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -51,10 +54,14 @@ bool g_rotateFailed = false;     // the last rename failed; retried after kOpenR
 // The chosen log folder. Fixed buffers, not std::string: a namespace-scope std::string has a dynamic
 // initializer and an atexit destructor, and the ELF constructor logs before either could be set up.
 constexpr std::size_t kMaxDirBytes = 400;
-constexpr char kSessionPrefix[] = "nevr-sentinel.session-";
 char g_logDir[kMaxDirBytes + 1] = "";
 bool g_dirResolved = false;
-bool g_sessionKept = false;      // this process has already dealt with the log a previous process left
+// This process's log: nevr-<UTC time of its first open>.jsonl, the same name shape as the PC's main log (core/run_log_path.h), made once
+// and kept for the life of the process (a size rotation renames the old content and goes on writing this name). A new process makes
+// a new name, so a previous session's log is simply the file before this one. g_runId stamps every record of the process.
+constexpr std::size_t kMaxNameBytes = 64;
+char g_logName[kMaxNameBytes] = "";
+char g_runId[40] = "";
 // Lines about choosing the folder wait here for the disk: they are made while the open is in progress (g_mutex
 // held), and the file they belong in is not open until it has succeeded. Logcat has them at once.
 struct PendingLine {
@@ -88,11 +95,11 @@ class Lock {
 
 const char* LevelName(nevr_quest::LogLevel level) {
   switch (level) {
-    case nevr_quest::LogLevel::kInfo: return "INFO";
-    case nevr_quest::LogLevel::kWarn: return "WARN";
+    case nevr_quest::LogLevel::kInfo: return "info";
+    case nevr_quest::LogLevel::kWarn: return "warn";
     case nevr_quest::LogLevel::kError: break;
   }
-  return "ERROR";
+  return "error";
 }
 
 int Priority(nevr_quest::LogLevel level) {
@@ -131,13 +138,15 @@ long long MonotonicMs() {
 
 // Android/media/<package> is made by the platform for the app and holds the game's data, so only the
 // folders below it are created; Android/data is created from its top.
+// The log is in nevr/logs below the game's files folder (`nevr_quest::data_root::kMediaRoot` for the first, which the shipped test
+// pins), the same layout as the PC's nevr root: nevr/logs/nevr-<timestamp>.jsonl.
 constexpr LogDirCandidate kShippedCandidates[] = {
-    {"android_media", nevr_quest::data_root::kMediaRoot, "/sdcard/Android/media/com.readyatdawn.r15"},
-    {"android_data", "/sdcard/Android/data/com.readyatdawn.r15/files", "/sdcard/Android/data"},
+    {"android_media", "/sdcard/Android/media/com.readyatdawn.r15/files/nevr/logs", "/sdcard/Android/media/com.readyatdawn.r15"},
+    {"android_data", "/sdcard/Android/data/com.readyatdawn.r15/files/nevr/logs", "/sdcard/Android/data"},
 };
 #ifdef NEVR_QUEST_LOG_DIR_OVERRIDE
 constexpr LogDirCandidate kBuiltInCandidates[] = {
-    {"override", NEVR_QUEST_FILES_DIR, NEVR_QUEST_FILES_DIR},
+    {"override", NEVR_QUEST_FILES_DIR "/nevr/logs", NEVR_QUEST_FILES_DIR},
 };
 #else
 constexpr const LogDirCandidate (&kBuiltInCandidates)[2] = kShippedCandidates;
@@ -169,16 +178,16 @@ void RotationFailed(const char* what, int err) {
                       std::strerror(err));
 }
 
-// Renames a log that has reached the size bound to a name that does not exist yet; nothing is
-// ever deleted or replaced. Best effort: on failure the log keeps growing, the failure is
+// Renames a log that has reached the size bound to nevr-<timestamp>.<n>.jsonl, the first n from 1 that is free; nothing is ever
+// deleted or replaced, and the process goes on writing its own name. Best effort: on failure the log keeps growing, the failure is
 // logged once, and the next attempt is a retry interval later.
 void RotateIfLarge(const std::string& dir, const std::string& path) {
   struct stat st {};
   if (::lstat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < kMaxDiskLogBytes) return;
   if (RotationBlocked()) return;
-  const std::string base = dir + "/nevr-sentinel." + std::to_string(NowMs());
-  for (int n = 0; n < 1000; ++n) {
-    const std::string rotated = base + (n == 0 ? "" : "." + std::to_string(n)) + ".log";
+  const std::string stem = std::string(g_logName, std::strlen(g_logName) - (sizeof(".jsonl") - 1));
+  for (int n = 1; n < 1000; ++n) {
+    const std::string rotated = dir + "/" + stem + "." + std::to_string(n) + ".jsonl";
     struct stat taken {};
     if (::lstat(rotated.c_str(), &taken) == 0) continue;
     if ((g_rename != nullptr ? g_rename : &::rename)(path.c_str(), rotated.c_str()) != 0) {
@@ -200,44 +209,50 @@ void FailOpen(int err, const char* what) {
 
 void QueueLine(nevr_quest::LogLevel level, const nlohmann::json& line);
 
-// The first open of a process keeps the log a previous process left: it is renamed, whole, to
-// `nevr-sentinel.session-<unix ms>.log` (a name that does not exist yet; nothing is ever replaced or deleted), so
-// the new session starts a file of its own and the one before it is still readable from its first line. An absent or
-// empty log leaves nothing to keep. A rename that fails leaves the old log where it is, appended to as before, and is
-// told once; it is not retried in this process.
-void KeepPreviousSession(const std::string& dir, const std::string& path) {
-  if (g_sessionKept) return;
-  g_sessionKept = true;
-  struct stat st {};
-  if (::lstat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size == 0) return;
-  const std::string base = dir + "/" + kSessionPrefix + std::to_string(NowMs());
-  for (int n = 0; n < 1000; ++n) {
-    const std::string kept = base + (n == 0 ? "" : "." + std::to_string(n)) + ".log";
-    struct stat taken {};
-    if (::lstat(kept.c_str(), &taken) == 0) continue;
-    nlohmann::json line = nlohmann::json::object();
-    line["kept_as"] = kept;
-    line["bytes"] = static_cast<long long>(st.st_size);
-    if ((g_rename != nullptr ? g_rename : &::rename)(path.c_str(), kept.c_str()) != 0) {
-      line["event"] = "sentinel_log_session_keep_failed";
-      line["errno"] = errno;
-      line["error"] = std::strerror(errno);
-      line["msg"] = "the previous session's log stays in nevr-sentinel.log and this session appends to it";
-      QueueLine(nevr_quest::LogLevel::kWarn, line);
-    } else {
-      line["event"] = "sentinel_log_session_kept";
-      line["msg"] = "the previous session's log is kept whole in kept_as; this session starts nevr-sentinel.log";
-      QueueLine(nevr_quest::LogLevel::kInfo, line);
-    }
-    return;
+// The process's start time in clock ticks since boot (field 22 of /proc/self/stat), or 0 when it cannot be read: the Quest's
+// stand-in for the PC's process creation time in the run id (docs/adr/0027, section 11). Reads one small file with the kernel's own
+// calls, the same as the rest of the first open; it allocates nothing.
+unsigned long long ProcessStartTicks() {
+  char text[1024];
+  const int fd = ::open("/proc/self/stat", O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return 0;
+  const ssize_t n = ::read(fd, text, sizeof(text) - 1);
+  ::close(fd);
+  if (n <= 0) return 0;
+  text[n] = '\0';
+  const char* p = std::strrchr(text, ')');  // the command name may hold spaces and parentheses; the fields follow the last one
+  if (p == nullptr) return 0;
+  ++p;
+  for (int field = 3; field < 22; ++field) {  // skip fields 3 .. 21
+    while (*p == ' ') ++p;
+    while (*p != ' ' && *p != '\0') ++p;
   }
+  while (*p == ' ') ++p;
+  return std::strtoull(p, nullptr, 10);
 }
 
-// Rotates a log at the size bound, then opens `dir`/nevr-sentinel.log. The open is non-blocking and
-// never follows a symlink.
+// Makes this process's log name and run id from the wall clock, once: nevr-YYYY-MM-DDTHH-MM-SS.mmm.jsonl (UTC), the shape of the PC's
+// main log. Before a clock is readable (a wall clock at or before the epoch) the name carries the process id, as the PC's does.
+void MakeLogName() {
+  if (g_logName[0] != '\0') return;
+  const long long ms = NowMs();
+  if (ms > 0) {
+    const time_t seconds = static_cast<time_t>(ms / 1000);
+    struct tm utc {};
+    ::gmtime_r(&seconds, &utc);
+    std::snprintf(g_logName, sizeof(g_logName), "nevr-%04d-%02d-%02dT%02d-%02d-%02d.%03d.jsonl", utc.tm_year + 1900, utc.tm_mon + 1,
+                  utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec, static_cast<int>(ms % 1000));
+  } else {
+    std::snprintf(g_logName, sizeof(g_logName), "nevr-pid%x.jsonl", static_cast<unsigned>(::getpid()));
+  }
+  // The run id, `<pid hex>-<start hex>`, formatted as on the PC (core/run_id.h, N80).
+  nevr_run_id::Format(static_cast<unsigned long>(::getpid()), ProcessStartTicks(), g_runId, sizeof(g_runId));
+}
+
+// Rotates a log at the size bound, then opens `dir`/nevr-<timestamp>.jsonl. The open is non-blocking and never follows a symlink.
 int OpenLogFile(const std::string& dir) {
-  const std::string path = dir + "/nevr-sentinel.log";
-  KeepPreviousSession(dir, path);
+  MakeLogName();
+  const std::string path = dir + "/" + g_logName;
   RotateIfLarge(dir, path);
   return ::open(path.c_str(), O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW, 0644);
 }
@@ -262,6 +277,7 @@ void ReportChoice(nevr_quest::LogLevel level, const char* event, const char* nam
   line["event"] = event;
   line["candidate"] = name;
   line["dir"] = dir;
+  if (g_logName[0] != '\0') line["file"] = g_logName;
   if (err != 0) {
     line["errno"] = err;
     line["error"] = std::strerror(err);
@@ -292,7 +308,7 @@ int OpenInChosenDir(int* err) {
         g_dirResolved = true;
         for (int& reported : g_reportedErrno) reported = 0;  // a later failure of any candidate is news again
         ReportChoice(nevr_quest::LogLevel::kInfo, "sentinel_log_dir", list[i].name, list[i].dir, 0,
-                     "nevr-sentinel.log and its rotated files are written in this folder");
+                     "this run's log, nevr-<timestamp>.jsonl, and its rotated files are written in this folder");
         return fd;
       }
     }
@@ -300,7 +316,7 @@ int OpenInChosenDir(int* err) {
     if (i < kMaxCandidates && g_reportedErrno[i] != *err) {
       g_reportedErrno[i] = *err;
       ReportChoice(nevr_quest::LogLevel::kWarn, "sentinel_log_dir_failed", list[i].name, list[i].dir, *err,
-                   "this folder cannot hold nevr-sentinel.log; the next candidate is tried");
+                   "this folder cannot hold this run's log; the next candidate is tried");
     }
   }
   return -1;
@@ -399,25 +415,30 @@ bool EnsureDirBelow(const LogDirCandidate& c) {
 
 const char* FilesDir() { return NEVR_QUEST_FILES_DIR; }
 
-// "<digits>" or "<digits>.<digits>" between the prefix and ".log": the session's unix ms and its collision number.
-static bool ParseSessionName(const char* name, unsigned long long* ms, unsigned long long* n) {
-  const std::size_t prefix = sizeof(kSessionPrefix) - 1;
+// True for a process's main log name: nevr-YYYY-MM-DDTHH-MM-SS.mmm.jsonl, or nevr-pid<hex>.jsonl. A rotation's archive
+// (nevr-<timestamp>.<n>.jsonl) is not one.
+static bool IsLiveLogName(const char* name, bool* timestamped) {
   const std::size_t len = std::strlen(name);
-  if (len <= prefix + 4 || std::strncmp(name, kSessionPrefix, prefix) != 0 || std::strcmp(name + len - 4, ".log") != 0) {
+  constexpr char kSuffix[] = ".jsonl";
+  if (len <= 5 + sizeof(kSuffix) - 1 || std::strncmp(name, "nevr-", 5) != 0 || std::strcmp(name + len - (sizeof(kSuffix) - 1), kSuffix) != 0) {
     return false;
   }
-  const std::string middle(name + prefix, len - prefix - 4);
-  const std::size_t dot = middle.find('.');
-  const std::string first = middle.substr(0, dot);
-  const std::string second = dot == std::string::npos ? "0" : middle.substr(dot + 1);
-  for (const std::string* part : {&first, &second}) {
-    if (part->empty()) return false;
-    for (const char c : *part) {
-      if (c < '0' || c > '9') return false;
+  const std::string stem(name + 5, len - 5 - (sizeof(kSuffix) - 1));
+  if (stem.compare(0, 3, "pid") == 0) {
+    if (stem.size() == 3) return false;
+    for (std::size_t i = 3; i < stem.size(); ++i) {
+      if (!std::isxdigit(static_cast<unsigned char>(stem[i]))) return false;
     }
+    *timestamped = false;
+    return true;
   }
-  *ms = std::strtoull(first.c_str(), nullptr, 10);
-  *n = std::strtoull(second.c_str(), nullptr, 10);
+  if (stem.size() != 23) return false;  // YYYY-MM-DDTHH-MM-SS.mmm
+  for (std::size_t i = 0; i < stem.size(); ++i) {
+    const char c = stem[i];
+    const bool separator = i == 4 || i == 7 || i == 13 || i == 16;
+    if (separator ? c != '-' : (i == 10 ? c != 'T' : (i == 19 ? c != '.' : (c < '0' || c > '9')))) return false;
+  }
+  *timestamped = true;
   return true;
 }
 
@@ -426,25 +447,35 @@ std::string PreviousSessionLog() {
   DIR* handle = ::opendir(dir.c_str());
   if (handle == nullptr) return "";
   std::string best;
-  unsigned long long bestMs = 0;
-  unsigned long long bestN = 0;
+  bool bestTimestamped = false;
+  std::string current;
+  {
+    Lock lock;
+    current = g_logName;
+  }
   while (const dirent* entry = ::readdir(handle)) {
-    unsigned long long ms = 0;
-    unsigned long long n = 0;
-    if (!ParseSessionName(entry->d_name, &ms, &n)) continue;
-    if (best.empty() || ms > bestMs || (ms == bestMs && n > bestN)) {
+    bool timestamped = false;
+    if (!IsLiveLogName(entry->d_name, &timestamped) || current == entry->d_name) continue;
+    // A timestamped name outranks a pid-named one; among equals the later name is the later process.
+    if (best.empty() || (timestamped && !bestTimestamped) || (timestamped == bestTimestamped && best < entry->d_name)) {
       best = entry->d_name;
-      bestMs = ms;
-      bestN = n;
+      bestTimestamped = timestamped;
     }
   }
   ::closedir(handle);
   return best.empty() ? best : dir + "/" + best;
 }
 
+const char* LogFileName() {
+  Lock lock;
+  MakeLogName();
+  return g_logName;
+}
+
 void ResetSessionForTest() {
   Lock lock;
-  g_sessionKept = false;
+  g_logName[0] = '\0';
+  g_runId[0] = '\0';
   if (g_fd >= 0) ::close(g_fd);
   g_fd = -1;
 }
@@ -550,7 +581,15 @@ std::string FormatDiskLogLine(nevr_quest::LogLevel level, long long unixMs, cons
     line["level"] = LevelName(level);
     line["msg"] = message;
   }
-  line["ts_unix_ms"] = unixMs;
+  // The PC main log's header (logging.md Rule 17): the UTC time, the run, the level. The event and its fields are the record's own.
+  const time_t seconds = static_cast<time_t>(unixMs / 1000);
+  struct tm utc {};
+  ::gmtime_r(&seconds, &utc);
+  char stamp[64];
+  std::snprintf(stamp, sizeof(stamp), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+                utc.tm_hour, utc.tm_min, utc.tm_sec, static_cast<int>(unixMs % 1000));
+  line["ts"] = stamp;
+  line["run"] = g_runId[0] != '\0' ? g_runId : "0-0";
   line["tag"] = NEVR_TAG;
   return line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 }

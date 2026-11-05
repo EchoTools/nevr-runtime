@@ -76,7 +76,7 @@ TEST(TheShippedPatchersOutputIsVerifiedAndEverySlotHoldsItsTrampoline) {
       CHECK(value == reinterpret_cast<void*>(live.Base() + credits_text::kBlobVaddr));  // the game's own blob
     }
   }
-  CHECK_EQ(distinct.size(), 5u);
+  CHECK_EQ(distinct.size(), 6u);
 
   // One verified line, once.
   CHECK_EQ(CountLines("\"event\":\"libr15_patch\""), 1);
@@ -85,16 +85,16 @@ TEST(TheShippedPatchersOutputIsVerifiedAndEverySlotHoldsItsTrampoline) {
   if (line != nullptr) {
     CHECK(Has(*line, "\"build_id\":\"" + patch::PatchedBuildId() + "\""));
     CHECK(Has(*line, std::string("\"stock_build_id\":\"") + patch::kLibR15StockBuildId + "\""));
-    CHECK(Has(*line, "\"rows\":6"));
+    CHECK(Has(*line, "\"rows\":7"));
     CHECK(Has(*line, "\"slot_area\":\"" + Hex(patch::kSlotAreaVaddr) + "\""));
     CHECK(!Has(*line, "extra_rows"));
   }
 
-  // Data only: the only protection calls are the five trampoline pages (RW to RX), none on the image.
-  CHECK_EQ(g.protects.size(), 5u);
+  // Data only: the only protection calls are the six trampoline pages (RW to RX), none on the image.
+  CHECK_EQ(g.protects.size(), 6u);
   for (const ProtectCall& c : g.protects) CHECK_EQ(c.prot, PROT_READ | PROT_EXEC);
   ExpectNoImageProtection(live);
-  CHECK_EQ(g.mapCalls, 5);
+  CHECK_EQ(g.mapCalls, 6);
   CHECK(live.MapsLines() == mapsBefore);
 }
 
@@ -404,8 +404,8 @@ TEST(CheckC_TheCreditsSlotBeyondTheGrownSegmentIsRefused) {
   std::vector<std::uint8_t> file = PatchedBytes();
   const std::size_t d = DataLoadIndex(file);
   Elf64_Phdr p = ProgramHeaders(file)[d];
-  // Slots 0 to 4 fit; only the last slot (the credits row's) ends past the segment.
-  p.p_memsz = patch::kSlotAreaVaddr + 5 * 8 - p.p_vaddr;
+  // Every slot but the last fits; only the last slot (the credits row's) ends past the segment.
+  p.p_memsz = patch::kSlotAreaVaddr + (patch::kRowCount - 1) * patch::kSlotBytes - p.p_vaddr;
   SetProgramHeader(file, d, p);
   ExpectRowRefusal(file, "libr15_patch_row_segment", "segment", "credits.pairs");
 }
@@ -571,7 +571,7 @@ TEST(ActivatingEveryInlineRowNeverCallsTheProtectionSeamOnTheImage) {
   }
   // Zero calls whose range intersects the image's mapping: the test that fails if a code write comes back.
   ExpectNoImageProtection(live);
-  CHECK_EQ(g.protects.size(), 5u);
+  CHECK_EQ(g.protects.size(), 6u);
   CHECK(live.MapsLines() == mapsBefore);
   for (std::size_t i = 0; i < patch::kRowCount; ++i) {
     if (patch::kRows[i].kind == patch::RowKind::kInlineHook) CHECK(*live.Slot(i) == reinterpret_cast<void*>(&DummyDetour));

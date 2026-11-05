@@ -2,7 +2,7 @@
 
 // The one console line the host writes whenever it stops the game, or leaves the game running without nevr-runtime.dll
 // (tag `NEVR.STOP`, #1252). A `-server` operator has a console and no dialog; this is what they read, and the same facts
-// go to the host log (nevr-bootstrap.jsonl) so the two agree. The line is built in a fixed buffer with JsonLine
+// go to the host's records in the run's main log so the two agree. The line is built in a fixed buffer with JsonLine
 // (host_json.h) and written with one WriteFile to the standard error handle: no heap, no lock, safe in the places the
 // host stops the game from. Nothing here calls the NEVR logger.
 //
