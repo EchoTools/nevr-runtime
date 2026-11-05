@@ -27,6 +27,39 @@ bool IsFormattedKey(const char* key, const char* prefix, const char* suffix) noe
          std::memcmp(key + keyLen - suffixLen, suffix, suffixLen) == 0;
 }
 
+// ASCII case-insensitive equality of the `length` bytes at `text` with the NUL-terminated lower-case `lower`.
+bool EqualsLower(const char* text, std::size_t length, const char* lower) noexcept {
+  if (std::strlen(lower) != length) return false;
+  for (std::size_t i = 0; i < length; ++i) {
+    const char c = text[i];
+    if ((c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c) != lower[i]) return false;
+  }
+  return true;
+}
+
+// True when the first `length` bytes of `text` start (prefix) or end (suffix) with the lower-case `lower`.
+bool HasLowerPrefix(const char* text, std::size_t length, const char* lower) noexcept {
+  const std::size_t n = std::strlen(lower);
+  return length >= n && EqualsLower(text, n, lower);
+}
+bool HasLowerSuffix(const char* text, std::size_t length, const char* lower) noexcept {
+  const std::size_t n = std::strlen(lower);
+  return length >= n && EqualsLower(text + length - n, n, lower);
+}
+
+// Answers a connect to a host of the outbound block with kRefusedUrl, counting it; any other URL is returned as it is.
+const char* BlockOutbound(const char* url) noexcept {
+  RedirectCounters& counters = GlobalCounters();
+  switch (ClassifyOutboundHost(url)) {
+    case OutboundHost::kNone: return url;
+    case OutboundHost::kRadBugSplat: counters.refusedBugSplat.fetch_add(1, std::memory_order_relaxed); break;
+    case OutboundHost::kAmazonS3: counters.refusedAmazonS3.fetch_add(1, std::memory_order_relaxed); break;
+    case OutboundHost::kOculusGraph: counters.refusedGraph.fetch_add(1, std::memory_order_relaxed); break;
+    case OutboundHost::kApiEnvironment: counters.refusedApiEnvironment.fetch_add(1, std::memory_order_relaxed); break;
+  }
+  return kRefusedUrl;
+}
+
 }  // namespace
 
 RedirectCounters& GlobalCounters() noexcept {
@@ -44,6 +77,10 @@ void ResetCountersForTest() noexcept {
   c.exceptions.store(0);
   c.urlRedirected.store(0);
   c.urlPassThrough.store(0);
+  c.refusedBugSplat.store(0);
+  c.refusedAmazonS3.store(0);
+  c.refusedGraph.store(0);
+  c.refusedApiEnvironment.store(0);
   c.loginFallbackVersioned.store(0);
   c.loginFallbackKept.store(0);
   c.loginFallbackFailed.store(0);
@@ -67,6 +104,33 @@ bool IsGraphBaseUrl(const char* url) noexcept {
   constexpr char kGraph[] = "https://graph.oculus.com";
   constexpr std::size_t kLength = sizeof(kGraph) - 1;
   return url != nullptr && std::strncmp(url, kGraph, kLength) == 0 && (url[kLength] == '\0' || url[kLength] == '/');
+}
+
+OutboundHost ClassifyOutboundHost(const char* url) noexcept {
+  if (url == nullptr) return OutboundHost::kNone;
+  // CSysHttp::CreateConnection strips "https://" or "http://" and takes the rest as host[:port]; a bare host is valid.
+  const char* host = url;
+  if (HasLowerPrefix(host, std::strlen(host), "https://")) {
+    host += 8;
+  } else if (HasLowerPrefix(host, std::strlen(host), "http://")) {
+    host += 7;
+  }
+  std::size_t length = 0;
+  while (host[length] != '\0' && host[length] != ':' && host[length] != '/' && host[length] != '?' &&
+         host[length] != '#') {
+    ++length;
+  }
+  if (EqualsLower(host, length, "rad.bugsplat.com")) return OutboundHost::kRadBugSplat;
+  if (EqualsLower(host, length, "s3-us-west-2.amazonaws.com")) return OutboundHost::kAmazonS3;
+  if (EqualsLower(host, length, "graph.oculus.com")) return OutboundHost::kOculusGraph;
+  // "api-" + an environment of at least one character + ".readyatdawn.com".
+  constexpr char kApiPrefix[] = "api-";
+  constexpr char kApiSuffix[] = ".readyatdawn.com";
+  if (length > sizeof(kApiPrefix) - 1 + sizeof(kApiSuffix) - 1 && HasLowerPrefix(host, length, kApiPrefix) &&
+      HasLowerSuffix(host, length, kApiSuffix)) {
+    return OutboundHost::kApiEnvironment;
+  }
+  return OutboundHost::kNone;
 }
 
 ServiceRedirector::ServiceRedirector(const nevr_quest::ResolvedConfig& config, InternFn intern,
@@ -149,13 +213,15 @@ const char* ServiceRedirector::ApplyUrl(const char* url) noexcept {
     // redirector leaves alone: a service-domain host it does not cover is the failing shape of #408. Relaxed
     // atomics and a bounded host copy only (this runs in the game's CreateConnection).
     nevr_status_redirect_check::NoteConnect(url, url);
-    return url;
+    return BlockOutbound(url);
   }
   const char* const chosen = ApplyChecked(url, /*graphRule=*/true);
   RedirectCounters& counters = GlobalCounters();
   (chosen != url ? counters.urlRedirected : counters.urlPassThrough).fetch_add(1, std::memory_order_relaxed);
   nevr_status_redirect_check::NoteConnect(url, chosen);
-  return chosen;
+  // The block sees the redirect's answer, so a host the redirect sent to the configured service is not refused, and
+  // the status_redirect check above counts what the redirect did, not the refusal.
+  return BlockOutbound(chosen);
 }
 
 const char* ServiceRedirector::ApplyChecked(const char* result, bool graphRule) noexcept {
