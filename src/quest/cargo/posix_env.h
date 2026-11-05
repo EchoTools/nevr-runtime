@@ -1,4 +1,4 @@
-/* The Quest's nevr_cargo::Env (docs/adr/0044-cdn-texture-delivery.md): POSIX files, the data fetch's Transport (libcurl in the app) for
+/* The Quest's nevr_cargo::Env (docs/adr/0045-cdn-texture-delivery.md): POSIX files, the data fetch's Transport (libcurl in the app) for
  * the network, SHA-256 from quest/data, and the sentinel log for events.
  *
  * A blob is opened with open(2) read-only and its handle is the descriptor: CSysFile::Open (pinned_targets.h, flags 1 is O_RDONLY)

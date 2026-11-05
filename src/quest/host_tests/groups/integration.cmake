@@ -36,7 +36,7 @@ nevr_ht_obj(o_integ_texture_menu GROUP integration ${_on} SRC src/quest/sentinel
 # quit_hook.cpp is compiled here as a check and is not in the link of the hooks test.
 nevr_ht_obj(o_integ_quit_hook GROUP integration ${_off} SRC src/quest/sentinel/quit_hook.cpp)
 nevr_ht_obj(o_integ_resource_request_hook GROUP integration ${_off} SRC src/quest/sentinel/resource_request_hook.cpp)
-# The shared core the hook's cargo decision links (docs/adr/0044-cdn-texture-delivery.md).
+# The shared core the hook's cargo decision links (docs/adr/0045-cdn-texture-delivery.md).
 nevr_ht_obj(o_integ_cargo_shadow GROUP integration ${_off} SRC src/core/resource_shadow.cpp)
 nevr_ht_obj(o_integ_cargo_resolver GROUP integration ${_off} SRC src/core/cargo_resolver.cpp)
 nevr_ht_obj(o_integ_clock_levels_hook GROUP integration ${_off} SRC src/quest/sentinel/clock_levels_hook.cpp)

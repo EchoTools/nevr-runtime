@@ -1,4 +1,4 @@
-/* The cargo cache (docs/adr/0044-cdn-texture-delivery.md D3): blobs named by their SHA-256, an index naming the ones to serve, and
+/* The cargo cache (docs/adr/0045-cdn-texture-delivery.md D3): blobs named by their SHA-256, an index naming the ones to serve, and
  * the mount that turns the index into a shadow manifest.
  *
  *   <dir>/<sha256>.blob   one stored zstd frame (a stock-format chunk)

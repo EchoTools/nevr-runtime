@@ -65,7 +65,7 @@ class TheHandlerOnlyReadsOnAHit(unittest.TestCase):
     def test_the_game_is_called_on_every_path_that_is_not_served(self):
         body = handler_body()
         # The one call to the game's function: with the live manager, or with a cargo shadow's manager when the published cargo set
-        # holds the key (docs/adr/0044-cdn-texture-delivery.md); every other argument is the game's own.
+        # holds the key (docs/adr/0045-cdn-texture-delivery.md); every other argument is the game's own.
         self.assertIn("original(filledFrom, type, name, unused, allocator, owner, index, request)", body)
         self.assertRegex(body, r"filledFrom\s*=\s*fromCargo\s*\?[^;]*cargo->manager\(\)[^;]*:\s*manager;")
         self.assertEqual(body.count("original("), 1)

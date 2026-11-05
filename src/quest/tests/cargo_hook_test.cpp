@@ -1,5 +1,5 @@
 // Host test for the cargo decision in the resource request hook (src/quest/sentinel/resource_request_hook.cpp;
-// docs/adr/0044-cdn-texture-delivery.md D1 and T1): the real handler through the thunk's entry, against a stand-in for
+// docs/adr/0045-cdn-texture-delivery.md D1 and T1): the real handler through the thunk's entry, against a stand-in for
 // FillResourceFileRequest that reads the manager it is given the way the game does (nevr_shadow::ReadLikeTheEngine) and fills the
 // request from the record, the chunk and the handle. The live manager is itself a shadow of "stock" keys, so the stand-in is the same
 // code for both.

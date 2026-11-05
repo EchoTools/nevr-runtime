@@ -316,7 +316,7 @@ bool IsAssetLabel(const std::string& s) {
   return true;
 }
 
-// assets.* (docs/adr/0044). Every key is optional; a wrong one is a Warning naming the key and the default stays.
+// assets.* (docs/adr/0045). Every key is optional; a wrong one is a Warning naming the key and the default stays.
 void ReadAssets(const nevr::NevrConfig& cfg, LoadResult& r) {
   AssetsChoice a;
   bool given = false;

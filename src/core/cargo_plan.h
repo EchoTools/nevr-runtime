@@ -1,4 +1,4 @@
-/* What a client fetches from a cargo manifest (docs/adr/0044-cdn-texture-delivery.md, D5 and D6): the labels whose state is on, the
+/* What a client fetches from a cargo manifest (docs/adr/0045-cdn-texture-delivery.md, D5 and D6): the labels whose state is on, the
  * entries of this platform, the size rules, all decided before any request is made.
  *
  * State of a label. Code holds the defaults (kLabelDefaults) and what an unlisted label is (kUnlistedLabelState); config only

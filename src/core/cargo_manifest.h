@@ -1,5 +1,5 @@
 /* The cargo manifest: the JSON document on the CDN that lists the texture buffers a client may fetch
- * (docs/adr/0044-cdn-texture-delivery.md). One document, `v1/manifest.json` (or the test manifest a config names), keyed by
+ * (docs/adr/0045-cdn-texture-delivery.md). One document, `v1/manifest.json` (or the test manifest a config names), keyed by
  * label; every entry is one buffer of one resource, named the way the game names it on disk.
  *
  *   {"schema": "nevr-cargo-manifest", "schema_version": 1,
@@ -36,7 +36,7 @@ inline constexpr const char* kSchema = "nevr-cargo-manifest";
 inline constexpr int kSchemaVersion = 1;
 inline constexpr const char* kFormatZstdFrame = "zstd-frame";
 
-// A platform's names for a texture's two buffers (docs/adr/0044 "The per-binary table"; resource_buffer_key.h on PC, the
+// A platform's names for a texture's two buffers (docs/adr/0045 "The per-binary table"; resource_buffer_key.h on PC, the
 // Quest log of the poster's two reads for Android).
 struct Platform {
   const char* name;

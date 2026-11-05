@@ -1,4 +1,4 @@
-/* Which shadow a resolver request is filled from (docs/adr/0044-cdn-texture-delivery.md D1 and D3), decided without a lock or an
+/* Which shadow a resolver request is filled from (docs/adr/0045-cdn-texture-delivery.md D1 and D3), decided without a lock or an
  * allocation, because it runs in the game's frame on whatever thread asks for a resource.
  *
  * A mounted set is published once and never changes; a newer set replaces it for later requests. A texture is two reads of one

@@ -1,5 +1,5 @@
 // Host test for the cargo manifest parser and the fetch plan (src/core/cargo_manifest.*, src/core/cargo_plan.*;
-// docs/adr/0044-cdn-texture-delivery.md D2, D5, D6): the one document shape, every refusal with its status and the label and index it
+// docs/adr/0045-cdn-texture-delivery.md D2, D5, D6): the one document shape, every refusal with its status and the label and index it
 // names (never text from the file), the label states that code and config decide and the manifest cannot, the platform split, the
 // size and pairing rules, and the cap. The documents are built with nlohmann::json here; the code under test reads them with its
 // non-throwing calls only.

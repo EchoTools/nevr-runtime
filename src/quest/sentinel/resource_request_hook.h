@@ -38,7 +38,7 @@
  *   resource_overlay_served         manifest misses served from a loose file
  *   resource_overlay_failed         manifest misses whose loose file could not be served (the game's error follows)
  *
- * The CDN textures (docs/adr/0044-cdn-texture-delivery.md). A mounted cargo set (PublishCargo) is a shadow manifest in the game's own
+ * The CDN textures (docs/adr/0045-cdn-texture-delivery.md). A mounted cargo set (PublishCargo) is a shadow manifest in the game's own
  * layout (core/resource_shadow.h). Before the overlay and before the game's own search, a request whose (type, name) the published
  * shadow holds is filled by calling the game's function with the shadow's manager in place of the live one: the engine fills the
  * request itself and its own reader reads our file, so cargo replaces stock for that key. A texture is two reads of one name on one

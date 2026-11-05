@@ -1,4 +1,4 @@
-# ADR 0044: Game textures are served from a CDN cache through the game's own resolver
+# ADR 0045: Game textures are served from a CDN cache through the game's own resolver
 
 Status: proposed. Applies to `src/core/resource_shadow.*`, `src/core/cargo_*`, `src/quest/cargo/`, the resolver hook in
 `src/quest/sentinel/resource_request_hook.cpp` and, for the PC half, `src/runtime/patch/plugin_assets.cpp`. Supersedes

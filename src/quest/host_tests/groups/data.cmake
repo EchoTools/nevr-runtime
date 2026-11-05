@@ -16,7 +16,7 @@ nevr_ht_test(data_step_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/data_step_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_data_step LIBS ${NEVR_ZLIB_LIB})
 nevr_ht_test(pack_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/pack_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_pack LIBS ${NEVR_ZLIB_LIB})
-# The CDN texture delivery (docs/adr/0044-cdn-texture-delivery.md): the shared pure core in src/core, built here as the sentinel builds
+# The CDN texture delivery (docs/adr/0045-cdn-texture-delivery.md): the shared pure core in src/core, built here as the sentinel builds
 # it (no exceptions; nlohmann::json is used through its non-throwing calls only).
 foreach(f resource_shadow cargo_manifest cargo_plan cargo_store cargo_run cargo_resolver)
   nevr_ht_obj(o_cargo_${f} GROUP data NOEXC HOST SRC src/core/${f}.cpp)

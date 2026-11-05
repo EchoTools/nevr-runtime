@@ -33,7 +33,7 @@
 // `stock` leaves the headset runtime's own eye-buffer size. The key is also where a choice made in the Texture Resolution control is
 // kept (texture_menu_hook.h): the sentinel writes it through NevrConfig::Set, so the next launch reads the player's last choice here.
 //
-// `assets.cdn_url`, `assets.manifest`, `assets.required_only` and `assets.labels.<label>` (docs/adr/0044) change the CDN texture delivery's defaults
+// `assets.cdn_url`, `assets.manifest`, `assets.required_only` and `assets.labels.<label>` (docs/adr/0045) change the CDN texture delivery's defaults
 // (AssetsChoice); a wrong value is one Warning that names the key and leaves the default.
 //
 // `graphics.hand_flip` (#2082) is the Controller Hand Flip choice (hand_flip.h): a boolean, `true` is On; absent, it is Off (nothing is
@@ -136,7 +136,7 @@ struct HandFlipChoice {
   Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, Off
 };
 
-// The CDN texture delivery's settings (docs/adr/0044-cdn-texture-delivery.md D6), after the file and the defaults have spoken. The
+// The CDN texture delivery's settings (docs/adr/0045-cdn-texture-delivery.md D6), after the file and the defaults have spoken. The
 // defaults live in code (quest/cargo/cargo_service.h); the file only changes them, and an empty field means the code's default.
 //   assets.cdn_url        the host's base (https only); assets.manifest the manifest's path under it (a test device names its own)
 //   assets.required_only  fetch only the labels whose state is `required`

@@ -1,4 +1,4 @@
-// Host test for the cargo cache (src/core/cargo_store.*; docs/adr/0044-cdn-texture-delivery.md D3): the index v2 file, what a damaged
+// Host test for the cargo cache (src/core/cargo_store.*; docs/adr/0045-cdn-texture-delivery.md D3): the index v2 file, what a damaged
 // index is, and the mount, which opens and hashes every blob again through the handle it keeps and mounts a name's buffers together
 // or not at all. The machine is cargo_fake_env.h's.
 //

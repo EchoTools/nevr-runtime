@@ -1,4 +1,4 @@
-/* The platform seam of the cargo code (docs/adr/0044-cdn-texture-delivery.md): everything the fetch, the cache and the mount need
+/* The platform seam of the cargo code (docs/adr/0045-cdn-texture-delivery.md): everything the fetch, the cache and the mount need
  * from the machine, as one interface, so the same code runs on the Quest (POSIX files, libcurl, the game's file open), on the PC
  * (Win32 files, libcurl) and in a test (memory files, a scripted server, a clock that stops).
  *

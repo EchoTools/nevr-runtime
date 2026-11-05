@@ -822,7 +822,7 @@ void AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey() {
   }
 }
 
-// assets.* (docs/adr/0044-cdn-texture-delivery.md): the CDN texture delivery's settings. Absent is the code's default and nothing is said;
+// assets.* (docs/adr/0045-cdn-texture-delivery.md): the CDN texture delivery's settings. Absent is the code's default and nothing is said;
 // a good file changes the defaults; a wrong key is one Warning that names the key and never the value, and the default stays.
 void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
   {

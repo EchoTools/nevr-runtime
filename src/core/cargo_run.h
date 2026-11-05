@@ -1,8 +1,8 @@
-/* The cargo worker (docs/adr/0044-cdn-texture-delivery.md D3 and D4): mount what the cache holds, then fetch what the manifest
+/* The cargo worker (docs/adr/0045-cdn-texture-delivery.md D3 and D4): mount what the cache holds, then fetch what the manifest
  * names, verify it, store it, write the index and mount what arrived. It runs on its own thread on a client, never in the game's
  * frame, and never blocks the boot: the mount at boot reads files only, and the fetch runs after.
  *
- * Every outcome is an event (docs/adr/0044 "Log vocabulary"): cargo_start, cargo_manifest, cargo_plan, cargo_blob, cargo_index,
+ * Every outcome is an event (docs/adr/0045 "Log vocabulary"): cargo_start, cargo_manifest, cargo_plan, cargo_blob, cargo_index,
  * cargo_mounted, cargo_done. A failure leaves the cache and the mounted set as they were.
  */
 #pragma once

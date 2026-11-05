@@ -285,14 +285,14 @@ nevr_ht_test(hwdump_share_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_i
 nevr_ht_test(render_config_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/render_config_hook_test.cpp src/quest/sentinel/render_config_hook.cpp
       src/quest/sentinel/texture_quality_hook.cpp src/quest/sentinel/clock_levels_hook.cpp)
-# The shared core of the CDN texture delivery that resource_request_hook.cpp links (docs/adr/0044-cdn-texture-delivery.md).
+# The shared core of the CDN texture delivery that resource_request_hook.cpp links (docs/adr/0045-cdn-texture-delivery.md).
 nevr_ht_obj(o_hooks_cargo_shadow GROUP hooks NOEXC INCS ${_sent} SRC src/core/resource_shadow.cpp)
 nevr_ht_obj(o_hooks_cargo_resolver GROUP hooks NOEXC INCS ${_sent} SRC src/core/cargo_resolver.cpp)
 # The log-only resource request hook (#871): the real handler through the thunk entry against a stand-in for
 # FillResourceFileRequest that fills a request the way the pinned function does.
 nevr_ht_test(resource_request_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident} o_hooks_cargo_shadow o_hooks_cargo_resolver
   SRC src/quest/tests/resource_request_hook_test.cpp src/quest/sentinel/resource_request_hook.cpp)
-# The CDN texture delivery's decision in that hook (docs/adr/0044-cdn-texture-delivery.md): a key the published shadow holds is filled by
+# The CDN texture delivery's decision in that hook (docs/adr/0045-cdn-texture-delivery.md): a key the published shadow holds is filled by
 # the game's own function from the shadow, and the shadow of a texture's index 0 answers its index 1. The shadow builder and the pins
 # are the shared core, built here as the sentinel builds it.
 nevr_ht_test(cargo_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident} o_hooks_cargo_shadow o_hooks_cargo_resolver

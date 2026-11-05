@@ -1,4 +1,4 @@
-/* The shadow manifest: a read-only package the game's own resolver can be pointed at (docs/adr/0044-cdn-texture-delivery.md).
+/* The shadow manifest: a read-only package the game's own resolver can be pointed at (docs/adr/0045-cdn-texture-delivery.md).
  *
  * The game fills every read request in one function, CResourceManager::FillResourceFileRequest (echovr.exe 0x140fa1fe0,
  * libr15.so 0x25439f0). It reads a 16-byte manager whose +8 points at a manifest, binary-searches the manifest's records for

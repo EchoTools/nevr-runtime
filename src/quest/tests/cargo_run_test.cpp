@@ -1,4 +1,4 @@
-// Host test for the cargo worker (src/core/cargo_run.*; docs/adr/0044-cdn-texture-delivery.md D3, D4 and T1): a scripted server
+// Host test for the cargo worker (src/core/cargo_run.*; docs/adr/0045-cdn-texture-delivery.md D3, D4 and T1): a scripted server
 // serves a manifest and two blobs, the worker fetches, verifies, stores, writes the index last, mounts and publishes, and the second
 // launch makes no blob request. Then every way a fetch can go wrong leaves the cache with an index that names only verified blobs,
 // including a kill after each step. The machine is cargo_fake_env.h's; the log lines are the design's T1 lines.

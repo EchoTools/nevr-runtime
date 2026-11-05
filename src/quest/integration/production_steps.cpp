@@ -582,7 +582,7 @@ class ProductionSteps final : public Steps {
   bool InstallResourceRequestLog(bool countersRegistered, bool logLines) override {
     const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered, logLines);
     detail_ = ok ? "ok" : "got_hook_refused";
-    // The CDN textures (docs/adr/0044): served through this hook, so they start only when it is installed.
+    // The CDN textures (docs/adr/0045): served through this hook, so they start only when it is installed.
     if (ok) nevr_quest::cargo::Start(sentinel::ActiveConfig().assets);
     return ok;
   }

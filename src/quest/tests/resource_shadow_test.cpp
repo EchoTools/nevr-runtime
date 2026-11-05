@@ -1,4 +1,4 @@
-// Host test for the shadow manifest builder (src/core/resource_shadow.{h,cpp}; docs/adr/0044-cdn-texture-delivery.md): the
+// Host test for the shadow manifest builder (src/core/resource_shadow.{h,cpp}; docs/adr/0045-cdn-texture-delivery.md): the
 // bytes it builds are the layout the game's own resolver reads (manager +8, records at +0 sorted as signed, the count at +0x30,
 // the chunk table at +0x80, the handle table at +0x128), every chunk index it hands out is above the stock manifest's, and each
 // refusal is the one the plugin-level and cargo designs rely on. The reference reading is ReadLikeTheEngine plus this file's own

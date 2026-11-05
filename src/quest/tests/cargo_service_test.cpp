@@ -1,4 +1,4 @@
-// Host test for the Quest side of the CDN texture delivery (src/quest/cargo/; docs/adr/0044-cdn-texture-delivery.md): the POSIX Env on
+// Host test for the Quest side of the CDN texture delivery (src/quest/cargo/; docs/adr/0045-cdn-texture-delivery.md): the POSIX Env on
 // real files in a scratch directory (temp and rename, held read handles, hashing, atomic writes, the events as sentinel JSON lines),
 // the settings the config file changes, and the whole first launch and second launch through the shared worker over a scripted
 // transport. The handle a mounted blob is given reads the bytes that were hashed, even when the file at its path is replaced.

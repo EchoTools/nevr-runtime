@@ -1,4 +1,4 @@
-// Host test for the cargo resolver pins (src/core/cargo_resolver.*; docs/adr/0044-cdn-texture-delivery.md D3 "A texture's pair"): the
+// Host test for the cargo resolver pins (src/core/cargo_resolver.*; docs/adr/0045-cdn-texture-delivery.md D3 "A texture's pair"): the
 // shadow that answers a texture's index 0 answers its index 1, on that thread, however many sets are published between the two, and a
 // thread that saw no cargo at index 0 sees none at index 1. Distinct threads have distinct pins, and a full pin table degrades to the
 // published set without a crash.

@@ -1,4 +1,4 @@
-/* The CDN texture delivery on the Quest (docs/adr/0044-cdn-texture-delivery.md D3 and D4): at start it mounts what the cache holds, with
+/* The CDN texture delivery on the Quest (docs/adr/0045-cdn-texture-delivery.md D3 and D4): at start it mounts what the cache holds, with
  * no network, and publishes it to the resolver hook; then one background thread fetches the manifest, the blobs it names, writes the
  * index and publishes what arrived. The game's frame never waits for it. A first launch may show the stock texture; a second launch
  * shows the CDN texture from its first load.
