@@ -86,6 +86,9 @@ func TestEachEventIsOneJSONLineWrittenAtOnce(t *testing.T) {
 	defer l.Close()
 	l.Logger.Info("started", "pid", 42, "args", []string{"a", "b"})
 	// Read before Close: the line is on disk when Info returns.
+	if fi, err := os.Stat(filepath.Join(state, "nevr-runtime", "my-tool.jsonl")); err != nil || fi.Mode().Perm()&0o600 != 0o600 {
+		t.Errorf("the log file's mode is %v (%v), want it readable and writable by its owner", fi, err)
+	}
 	lines := readLines(t, filepath.Join(state, "nevr-runtime", "my-tool.jsonl"))
 	if len(lines) != 1 {
 		t.Fatalf("%d lines after one event, want 1: %v", len(lines), lines)
@@ -189,8 +192,8 @@ func TestRunDoesNotRunTheBodyWhenTheLogCannotBeOpenedAndSaysWhy(t *testing.T) {
 	if ran {
 		t.Error("the body ran with no log")
 	}
-	if got != ExitLogFailure {
-		t.Errorf("exit = %d, want %d", got, ExitLogFailure)
+	if got != 74 || ExitLogFailure != 74 { // EX_IOERR; the literal, so changing the constant is noticed
+		t.Errorf("exit = %d (ExitLogFailure %d), want 74", got, ExitLogFailure)
 	}
 	for _, want := range []string{"my-tool", "run log", blocker} {
 		if !strings.Contains(stderr.String(), want) {
@@ -219,8 +222,8 @@ func TestRunFailsAfterTheBodyWhenAnEventCouldNotBeWritten(t *testing.T) {
 
 	var stderr bytes.Buffer
 	got := Run("my-tool", e, &stderr, func(log *slog.Logger) int { log.Info("lost"); return 0 })
-	if got != ExitLogFailure {
-		t.Errorf("a body that returned 0 got exit %d, want %d", got, ExitLogFailure)
+	if got != 74 {
+		t.Errorf("a body that returned 0 got exit %d, want 74", got)
 	}
 	for _, want := range []string{"my-tool", "run log", "no space left on device"} { // /dev/full's answer to a write
 		if !strings.Contains(stderr.String(), want) {

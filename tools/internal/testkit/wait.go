@@ -2,7 +2,6 @@ package testkit
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,7 +97,7 @@ func WaitLines(t T, fifo string, n int) []string {
 	for len(lines) < n {
 		if _, err := f.Read(b[:]); err != nil {
 			why := err
-			if errors.Is(err, os.ErrDeadlineExceeded) && ctx.Err() != nil {
+			if ctx.Err() != nil { // the read was cut short by the deadline set when the context ended
 				why = ctx.Err()
 			}
 			t.Fatalf("testkit.WaitLines: %s: have %d of %d lines (%q, then %q): %v", fifo, len(lines), n, lines, partial, why)

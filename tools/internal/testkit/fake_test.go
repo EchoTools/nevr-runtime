@@ -239,8 +239,9 @@ func TestFakeRefusesANameThatIsNotAPlainFileName(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"", "a/b", ".", ".."} {
 		ft := newFakeT(t.Context(), t.TempDir())
-		if msg := fatalOf(func() { Fake(ft, name) }); msg == "" {
-			t.Errorf("Fake(%q) did not fail", name)
+		msg := fatalOf(func() { Fake(ft, name) })
+		if !strings.Contains(msg, "plain command name") { // not the later "no fake of that name", which would also fail
+			t.Errorf("Fake(%q) failed with %q, want it to say the name is not a plain command name", name, msg)
 		}
 	}
 }

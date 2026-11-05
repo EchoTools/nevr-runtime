@@ -184,6 +184,9 @@ func TestWithPathPutsDirectoriesFirst(t *testing.T) {
 	if got, _ := lookup(WithPath(nil, "/x"), "PATH"); got != "/x" {
 		t.Errorf("PATH with no PATH before = %q, want /x", got)
 	}
+	if got, _ := lookup(WithPath([]string{"PATH="}, "/x"), "PATH"); got != "/x" {
+		t.Errorf("PATH with an empty PATH before = %q, want /x with no empty entry after it", got)
+	}
 }
 
 func TestGetenvReadsTheLastValueOfAKey(t *testing.T) {

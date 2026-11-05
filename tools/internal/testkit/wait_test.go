@@ -168,7 +168,7 @@ func TestWaitLinesFailsAtTheDeadlineWithTheLinesItHad(t *testing.T) {
 	defer cancel()
 	ft := newFakeT(ctx, t.TempDir())
 	msg := fatalOf(func() { WaitLines(ft, fifo, 2) })
-	mustContain(t, "message", msg, "1 of 2", "done", "partial")
+	mustContain(t, "message", msg, "1 of 2", "done", "partial", "context deadline exceeded") // the context's reason, not the read's "i/o timeout"
 }
 
 func TestWaitLinesFailsAtTheDeadlineWhenNothingIsWritten(t *testing.T) {
@@ -179,6 +179,15 @@ func TestWaitLinesFailsAtTheDeadlineWhenNothingIsWritten(t *testing.T) {
 	ft := newFakeT(ctx, t.TempDir())
 	msg := fatalOf(func() { WaitLines(ft, fifo, 1) })
 	mustContain(t, "message", msg, "0 of 1")
+}
+
+func TestWaitLinesDropsACarriageReturnBeforeTheNewline(t *testing.T) {
+	t.Parallel()
+	fifo := Fifo(t)
+	holdWriter(t, fifo, "dos\r\nunix\n")
+	if got := WaitLines(t, fifo, 2); strings.Join(got, "|") != "dos|unix" {
+		t.Errorf("lines = %q, want dos|unix", got)
+	}
 }
 
 func TestWaitLinesRefusesAPathThatIsNotAFifo(t *testing.T) {
