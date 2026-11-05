@@ -1833,6 +1833,8 @@ test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_
 # fewer tests than the floor exits nonzero. Part of `just verify`.
 # Build src/scripting for mingw (presets scripting-mingw-shared and -pervm) and run its tests under wine, then the script type checker on the host
 # (preset script-check, which also builds the host copy of the stubs generator).
+# Every program the recipe runs is removed before its build and must then be declared by that build and on disk
+# (tools/check_fresh_test_programs.py, #2069): a reused build tree keeps the programs of earlier builds.
 test-scripting:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1867,11 +1869,25 @@ test-scripting:
         fi
         echo "test-scripting: [$mode] $(basename "$1"): $n tests, 0 failed checks"
     }
+    # The programs on disk must be the ones the build declares and just made (#2069). The listing is the output of
+    # `ninja -t targets all`; the checker judges each program named after the build that ran.
+    check_fresh() { # $1 build directory, then the programs, relative to it
+        ninja -C "$1" -t targets all > "$1/test-scripting-targets.txt"
+        python3 tools/check_fresh_test_programs.py --build-dir "$1" --targets "$1/test-scripting-targets.txt" "${@:2}"
+    }
     # Both modes of the Luau binding: the shared state (the default) and one state per script (for
     # debugging, NEVR_LUAU_SHARED_STATE=OFF). Neither may rot.
     for mode in shared pervm; do
         out="$PWD/build/scripting-mingw-$mode"
+        # The programs this mode runs, below and in the probes. Each is removed before the build, so the build must
+        # make it again; check_fresh fails a program it did not make.
+        programs=(nevr_script_registry_test.exe nevr_script_host_test.exe nevr_script_stubs_test.exe nevr_script_conformance.exe vm/luau/nevr_luau_memory_test.exe)
+        if [[ "$mode" == shared ]]; then
+            programs+=(nevr_luau_shared_test.exe)
+        fi
+        for p in "${programs[@]}"; do rm -f -- "$out/$p"; done
         (cd src/scripting && cmake --preset "scripting-mingw-$mode" -DNEVR_JSON_INCLUDE_DIR="$json" > /dev/null && cmake --build --preset "scripting-mingw-$mode")
+        check_fresh "$out" "${programs[@]}"
         run_suite "$out/nevr_script_registry_test.exe" 20
         run_suite "$out/nevr_script_host_test.exe" 12
         run_suite "$out/nevr_script_stubs_test.exe" 3
@@ -1899,7 +1915,9 @@ test-scripting:
     done
     # The author-side checker: the definitions come from a host build of the stubs generator.
     check="$PWD/build/script-check"
+    for p in nevr_script_stubs_host_test nevr_script_check; do rm -f -- "$check/$p"; done
     (cd src/scripting/check && cmake --preset script-check -DNEVR_JSON_INCLUDE_DIR="$json" > /dev/null && cmake --build --preset script-check)
+    check_fresh "$check" nevr_script_stubs_host_test nevr_script_check
     src/scripting/check/check_test.sh "$check/nevr_script_stubs_host_test" "$check/nevr_script_check" "$check/check"
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
