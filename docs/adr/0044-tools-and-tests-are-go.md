@@ -116,8 +116,9 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
     `XDG_*_HOME`, `NEVR_WORK_ROOT` and `TMPDIR` under `t.TempDir()`, the caller's `PATH`, and no `DISPLAY`,
     `WAYLAND_DISPLAY` or `GNUPGHOME`, plus only what the test adds. Nothing of the user's configuration reaches a test.
 12. **Toolchain tests are gated by their inputs.** A test that runs a real Wine, pwsh, JVM tool, compiler, `cargo`,
-    `ninja`, or a nested test suite is a toolchain test. The gate table, `tools/internal/gate`, names each one (a Go
-    test, or a Python test class by its pytest node id) and its inputs (paths and globs in the tree). The runner behind
+    `ninja`, or a nested test suite is a toolchain test. The gate table, a Go package of the tools module that unit G1b
+    of #2132 adds, names each one (a Go test, or a Python test class by its pytest node id) and its inputs (paths and
+    globs in the tree). The runner behind
     `just test-tools` computes the files that differ from the merge-base with `origin/main` (committed, staged,
     unstaged or untracked); a toolchain test whose inputs are all unchanged is skipped (a Python class through
     `pytest --deselect`, a Go test through `testkit.Toolchain`), and the run record names it with its inputs. It
