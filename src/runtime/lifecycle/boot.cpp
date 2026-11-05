@@ -41,7 +41,7 @@
 
 // Statically-linked module entry points (the modules are linked into
 // BugSplat64.dll). Each module's symbols are prefixed to avoid
-// collisions — both define NvrModuleInit/NvrModuleApiVersion/etc.
+// collisions — both define NevrModuleInit/NevrModuleApiVersion/etc.
 namespace nevr_token_auth {
 std::string GetToken();  // token_auth.h: thread-safe; statically linked, so called directly
 bool SignInEndedWithoutToken();  // token_auth.h (#1446)
@@ -49,11 +49,11 @@ bool SignInEndedWithoutToken();  // token_auth.h (#1446)
 
 extern "C" {
 // platform_compat
-int platform_compat_Init(const NvrModuleContext* ctx);
+int platform_compat_Init(const NevrModuleContext* ctx);
 uint32_t platform_compat_ApiVersion(void);
 void platform_compat_Shutdown(void);
 // token_auth
-int token_auth_Init(const NvrModuleContext* ctx);
+int token_auth_Init(const NevrModuleContext* ctx);
 uint32_t token_auth_ApiVersion(void);
 void token_auth_Shutdown(void);
 const char* TokenAuth_GetToken(void);
@@ -412,7 +412,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // Load modules. Order matters — dependencies must load first.
   {
-    static NvrModuleContext moduleCtx = {};
+    static NevrModuleContext moduleCtx = {};
     moduleCtx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
     moduleCtx.early_config = g_earlyConfigPtr;
     moduleCtx.flags = 0;
@@ -433,7 +433,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     // Must load before any network-using code. Statically linked (2026-08-02).
     {
       uint32_t apiVer = platform_compat_ApiVersion();
-      if (!NvrModuleApiVersionSupported(apiVer)) {
+      if (!NevrModuleApiVersionSupported(apiVer)) {
         Log(EchoVR::LogLevel::Error,
             "[NEVR.MODULE] platform_compat: API v%u exceeds host v%u — refusing (rebuild the "
             "module against this host)",
@@ -453,7 +453,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     // Statically linked (2026-08-02).
     {
       uint32_t apiVer = token_auth_ApiVersion();
-      if (!NvrModuleApiVersionSupported(apiVer)) {
+      if (!NevrModuleApiVersionSupported(apiVer)) {
         Log(EchoVR::LogLevel::Error,
             "[NEVR.MODULE] token_auth: API v%u exceeds host v%u — refusing (rebuild the module "
             "against this host)",

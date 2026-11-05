@@ -27,7 +27,7 @@ def read(path: str) -> str:
 class EveryWriterUsesTheRoot(unittest.TestCase):
     def test_each_site_resolves_through_nevr_root(self):
         sites = (
-            ("src/runtime/log/builtin_filter.cpp", "static std::string GetDefaultLogDir(", "nevr_root::LogsDir("),
+            ("src/runtime/log/run_log_writer.h", "inline bool Resolve(", "nevr_root::LogsDir("),
             ("src/runtime/lifecycle/crash_recovery.cpp", "static void PrepareCrashRecordPath(", "nevr_root::LogsDir("),
             ("src/runtime/patch/asset_cache.cpp", "std::wstring DefaultDir(", "nevr_root::CacheDir("),
             ("src/runtime/patch/asset_cdn.cpp", "std::string nevr_asset_cdn::GetCacheDir(", "nevr_root::CosmeticsDir("),
@@ -70,13 +70,12 @@ class TheMoveRunsFirst(unittest.TestCase):
         self.assertEqual(len(re.findall(r"Names::kCredentials", code)), 1, "the one file taken from _local")
         self.assertIn("nevr_credential_write::WriteProtectedTemp", code, "the cache is moved through the protected write")
 
-    def test_the_cache_is_selected_in_the_root_first_with_the_older_search_as_the_fallback(self):
+    def test_the_cache_is_selected_in_the_root_only(self):
         code = strip_comments(read("src/core/auth_token.h"))
-        body = extract_braced_function(
-            code, "inline CredentialCacheLocation SelectCredentialCacheLocation(const std::string& exeDir, const std::string& root)")
+        body = extract_braced_function(code, "inline CredentialCacheLocation SelectCredentialCacheLocation(const std::string& root)")
         self.assertIn("nevr_root::CredentialsPath(root)", body)
-        self.assertLess(body.index("nevr_root::CredentialsPath(root)"), body.index("kLocalSuffixes"))
-        self.assertIn("SelectLegacyCredentialCacheLocation(exeDir)", body)
+        for old in ("kLocalSuffixes", "SelectLegacyCredentialCacheLocation", "exeDir", "_local"):
+            self.assertNotIn(old, code, "an old cache spot is never read again: only nevr_root_move touches one, once")
 
     def test_the_move_deletes_only_what_it_moved(self):
         code = strip_comments(read("src/runtime/lifecycle/nevr_root_move.cpp"))

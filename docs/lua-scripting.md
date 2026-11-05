@@ -217,8 +217,8 @@ which must check clean. It also runs one sample per mistake, and each must be re
 | `bad_hook.lua` | misspelt hook name |
 
 ```sh
-cmake -S src/scripting/check -B build/script-check -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build/script-check
-src/scripting/check/check_test.sh <build>/nevr_script_stubs_test build/script-check/nevr_script_check /tmp/nevr-check
+(cd src/scripting/check && cmake --preset script-check -DNEVR_JSON_INCLUDE_DIR=<dir holding nlohmann/json.hpp> && cmake --build --preset script-check)
+src/scripting/check/check_test.sh build/script-check/nevr_script_stubs_host_test build/script-check/nevr_script_check build/script-check/check
 ```
 
 ## Build and test
@@ -228,10 +228,8 @@ The prototype is a standalone CMake project, built with the same toolchains as t
 ```sh
 json=<dir holding nlohmann/json.hpp>   # e.g. build/mingw-release/vcpkg_installed/x64-mingw-static/include
 git submodule update --init extern/luau
-cmake -S src/scripting -B build/scripting-mingw -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake -DNEVR_SCRIPT_VM=luau -DNEVR_JSON_INCLUDE_DIR=$json
-cmake --build build/scripting-mingw
-wine build/scripting-mingw/nevr_script_conformance.exe   # also: nevr_script_registry_test, nevr_script_host_test
+(cd src/scripting && cmake --preset scripting-mingw-shared -DNEVR_JSON_INCLUDE_DIR=$json && cmake --build --preset scripting-mingw-shared)
+wine build/scripting-mingw-shared/nevr_script_conformance.exe   # also: nevr_script_registry_test, nevr_script_host_test
 cmake -S src/scripting -B build/scripting-android -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_static \
@@ -265,7 +263,7 @@ mingw-w64 under wine and NDK arm64 under qemu.
 ## What is left
 
 1. **Embedding.** Link `nevr_script_host` and the Luau binding into `BugSplat64.dll` and the Quest library.
-   Then hand `NevrHostApi` to native plugins through `NvrGameContext`, which is a plugin ABI change.
+   Then hand `NevrHostApi` to native plugins through `NevrGameContext`, which is a plugin ABI change.
 2. **The first real override point.** Hook the CJson readers per module and register real keys:
    - **Windows:** detour through `Hooking::AttachPublished`.
    - **Quest:** pin the Real, Int and Boolean GOT slots (`0x36dc158`, `0x36e2050`, `0x36f6988`) next to the

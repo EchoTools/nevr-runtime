@@ -4,13 +4,13 @@
 
 namespace q15t {
 namespace {
-const NvrGameContext* g_ctx = nullptr;
+const NevrGameContext* g_ctx = nullptr;
 }
 
-void SetLogContext(const NvrGameContext* ctx) { g_ctx = ctx; }
+void SetLogContext(const NevrGameContext* ctx) { g_ctx = ctx; }
 
 void Log(std::uint32_t level, const char* message, const NevrLogField* fields, std::uint32_t count) {
-  const NvrGameContext* c = g_ctx;
+  const NevrGameContext* c = g_ctx;
   if (c == nullptr || c->log == nullptr || c->plugin_id == nullptr) return;
   c->log(c->plugin_id, level, message, fields, count);
 }

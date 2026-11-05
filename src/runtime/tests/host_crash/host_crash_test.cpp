@@ -19,12 +19,15 @@
 // held the dump. When no directory is writable the records must reach the child's
 // stderr, never vanish.
 
+#include "core/nevr_root.h"
+#include "runtime/tests/run_log_test_path.h"
 #include "runtime/tests/host_crash/minidump.h"
 
 #include <nlohmann/json.hpp>
 
 #include <windows.h>
 #include <dbghelp.h>
+#include <shellapi.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -229,12 +232,12 @@ struct Scenario {
   const wchar_t* name;
   const wchar_t* fixture;  // nullptr = no nevr-runtime.dll
   const char* load_outcome;  // the runtime_load record's outcome
-  bool block_local;
-  bool block_temp;
+  bool block_local;         // %LOCALAPPDATA%\nevr is a file: neither the main log nor the crash folder can be made
+  bool block_crashes;       // only the crash folder is blocked: the main log is fine
   bool vanish_shim;
   bool reenter;             // nested fault while reporting (guard must suppress)
   bool fail_writes;         // simulated full-disk/write failure -> text diagnostic
-  enum class Destination { kLocal, kTemp, kHost, kNone } destination;
+  enum class Destination { kLocal, kBlockedCrashes, kNone } destination;
 };
 
 // Block a destination by creating "nevr" as a FILE under it, so the crashes
@@ -331,8 +334,8 @@ void ValidateRecords(const Scenario& scenario, const std::vector<nlohmann::json>
   };
 
   if (scenario.fail_writes) {
-    Require(count("destination_failed") == 3 && count("failed") == 1 && count("written") == 0,
-            "a failed write was not recorded as three failed destinations and a failure");
+    Require(count("destination_failed") == 1 && count("failed") == 1 && count("written") == 0,
+            "a failed write was not recorded as one failed destination and a failure");
     for (const nlohmann::json& crash : crashes) {
       if (crash.at("outcome") != "destination_failed") continue;
       Require(crash.at("stage") == "simulated_write_failure" && crash.at("win32_error") == ERROR_DISK_FULL,
@@ -340,23 +343,16 @@ void ValidateRecords(const Scenario& scenario, const std::vector<nlohmann::json>
     }
     return;
   }
-  if (scenario.destination == Scenario::Destination::kNone) {
+  if (scenario.destination == Scenario::Destination::kNone || scenario.destination == Scenario::Destination::kBlockedCrashes) {
     Require(count("written") == 0 && count("failed") == 1,
             "an unwritable run was not recorded as a failure");
-    Require(count("destination_failed") == 3, "each of the three destinations did not record its failure");
+    Require(count("destination_failed") == 1, "the one crash folder did not record its failure");
     return;
   }
 
   Require(count("written") == 1 && count("failed") == 0, "a captured crash was not recorded as written once");
-  const char* written_to = scenario.destination == Scenario::Destination::kLocal
-                               ? "localappdata"
-                               : (scenario.destination == Scenario::Destination::kTemp ? "temp"
-                                                                                       : "host_directory");
-  const std::size_t expected_failures = scenario.destination == Scenario::Destination::kLocal
-                                            ? 0
-                                            : (scenario.destination == Scenario::Destination::kTemp ? 1 : 2);
-  Require(count("destination_failed") == expected_failures,
-          "the destinations tried before the one that held the dump were not each recorded as failed");
+  const char* written_to = "localappdata";
+  Require(count("destination_failed") == 0, "a captured crash recorded a failed destination");
   for (const nlohmann::json& crash : crashes) {
     if (crash.at("outcome") != "written") continue;
     Require(crash.at("destination") == written_to, "the dump was recorded at the wrong destination");
@@ -386,7 +382,14 @@ void RunScenario(const Scenario& scenario, const std::wstring& base,
   }
 
   if (scenario.block_local) BlockEnvDir(local);
-  if (scenario.block_temp) BlockEnvDir(temp);
+  if (scenario.block_crashes) {
+    // The nevr root exists and the logs folder can be made; "crashes" is a file, so no dump can be written there.
+    Require(nevr_root::EnsureDirectoryTree(local + L"\\nevr\\echovr\\logs"), "could not make the logs folder");
+    HANDLE file = CreateFileW((local + L"\\nevr\\echovr\\crashes").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    Require(file != INVALID_HANDLE_VALUE, "could not block the crash folder");
+    CloseHandle(file);
+  }
 
   SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
   SetEnvironmentVariableW(L"TEMP", temp.c_str());
@@ -447,12 +450,19 @@ void RunScenario(const Scenario& scenario, const std::wstring& base,
   const std::wstring temp_crashes = temp + L"\\nevr\\echovr\\crashes";
   const std::wstring host_dest = shim_dir;
 
+  // Every record the child wrote: the main log, or the console when the main log could not be written. There is no other place:
+  // nothing is written in %TEMP% or in the host's folder, whatever is blocked.
+  Require(GetFileAttributesW((temp + L"\\nevr").c_str()) == INVALID_FILE_ATTRIBUTES, "something was written in %TEMP%");
+  for (const wchar_t* pattern : {L"\\nevr-*.jsonl", L"\\nevr-*.txt", L"\\nevr-*.dmp", L"\\nevr-bootstrap*"}) {
+    WIN32_FIND_DATAW beside{};
+    HANDLE find = FindFirstFileW((shim_dir + pattern).c_str(), &beside);
+    const bool any = find != INVALID_HANDLE_VALUE;
+    if (any) FindClose(find);
+    Require(!any, "something was written beside the host DLL");
+  }
   // Every record the child wrote, from wherever it landed.
   std::vector<nlohmann::json> records;
-  AppendRecords(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl", pid, &records);
-  AppendRecords(temp + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl", pid, &records);
-  AppendRecords(shim_dir + L"\\nevr-bootstrap.jsonl", pid, &records);
-  AppendRecords(shim_dir + L"-gone\\nevr-bootstrap.jsonl", pid, &records);
+  AppendRecords(nevr_test::HostLogPath(local), pid, &records);
   AppendRecords(stderr_path, pid, &records);
   ValidateRecords(scenario, records);
   std::printf("  %-22s %zu host records parsed (runtime_load=%s)\n", "validated", records.size(),
@@ -469,15 +479,24 @@ void RunScenario(const Scenario& scenario, const std::wstring& base,
     return;
   }
 
-  // Simulated full-disk / write failure: every destination's dump write fails after
-  // the file opens, so Capture falls through to the fixed-size text diagnostic.
+  // Simulated full-disk / write failure: the dump write fails after the file opens. The crash text is the "failed" record in the
+  // main log; no text file is written anywhere.
   if (scenario.fail_writes) {
-    Require(HasText(local_crashes, pid),
-            "no text diagnostic was written after a simulated write failure");
+    Require(!HasText(local_crashes, pid) && !HasText(temp_crashes, pid) && !HasText(host_dest, pid),
+            "a crash text file was written after a simulated write failure");
     Require(!HasDump(local_crashes, pid) && !HasDump(temp_crashes, pid) && !HasDump(host_dest, pid),
             "a dump was written despite the simulated write failure");
-    std::printf("  %-22s write failure fell through to the text diagnostic (no dump)\n",
+    std::printf("  %-22s write failure left a record in the main log and no text file (no dump)\n",
                 "validated");
+    return;
+  }
+
+  if (scenario.destination == Scenario::Destination::kBlockedCrashes) {
+    Require(!HasDump(local_crashes, pid) && !HasDump(temp_crashes, pid) && !HasDump(host_dest, pid),
+            "a dump was written although the crash folder was unwritable");
+    Require(!HasText(local_crashes, pid) && !HasText(temp_crashes, pid) && !HasText(host_dest, pid),
+            "a crash text file was written");
+    std::printf("  %-22s no dump (crash folder unwritable), recorded in the main log\n", "validated");
     return;
   }
 
@@ -494,11 +513,7 @@ void RunScenario(const Scenario& scenario, const std::wstring& base,
     return;
   }
 
-  const std::wstring expected = scenario.destination == Scenario::Destination::kLocal
-                                    ? local_crashes
-                                    : (scenario.destination == Scenario::Destination::kTemp
-                                           ? temp_crashes
-                                           : host_dest);
+  const std::wstring expected = local_crashes;
   const std::wstring dump = FindNewest(expected.c_str(), pid, L"dmp");
   Require(!dump.empty(), "no minidump found in the expected destination");
   ValidateDump(dump, pid, main_thread);
@@ -531,9 +546,12 @@ int RunSuite() {
        Destination::kLocal},
       // A compatible runtime: the host dump is written all the same.
       {L"runtime-good", L"good", "loaded", false, false, false, false, false, Destination::kLocal},
-      {L"dest-temp", nullptr, "runtime_absent", true, false, false, false, false, Destination::kTemp},
-      {L"dest-host", nullptr, "runtime_absent", true, true, false, false, false, Destination::kHost},
-      {L"dest-none", nullptr, "runtime_absent", true, true, true, false, false, Destination::kNone},
+      // Only the crash folder is blocked: no dump anywhere, nothing in %TEMP% or beside the host, and the failure is a record in the
+      // main log.
+      {L"dest-crashes-blocked", nullptr, "runtime_absent", false, true, false, false, false,
+       Destination::kBlockedCrashes},
+      // The nevr root cannot be made: neither the main log nor a dump can be written, and the records reach the console.
+      {L"dest-none", nullptr, "runtime_absent", true, false, true, false, false, Destination::kNone},
       // A second crash while the first report is being written: the atomic
       // reentrancy guard must suppress the nested capture (no recursion/deadlock).
       {L"reentrant-crash", nullptr, "runtime_absent", false, false, false, true, false,

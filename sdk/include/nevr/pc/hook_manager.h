@@ -5,11 +5,11 @@
  * catastrophic MH_DisableHook(MH_ALL_HOOKS) pattern that disables
  * every hook in the process (crash handler, log filter, etc).
  *
- * Plugins should still call MH_Initialize() themselves in NvrPluginInit
+ * Plugins should still call MH_Initialize() themselves in NevrPluginInit
  * before using HookManager (returns MH_ERROR_ALREADY_INITIALIZED
  * harmlessly if gamepatches already called it).
  *
- * Call RemoveAll() explicitly in NvrPluginShutdown — the destructor
+ * Call RemoveAll() explicitly in NevrPluginShutdown — the destructor
  * does NOT auto-remove hooks to avoid order-of-destruction issues.
  */
 #pragma once

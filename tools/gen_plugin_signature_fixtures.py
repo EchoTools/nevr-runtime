@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Generate the signed and unsigned DLLs the plugin-signature GTests read (ADR 0010, #741).
 
-    gen_plugin_signature_fixtures.py <out-dir> [--now <unix seconds>]
+    gen_plugin_signature_fixtures.py <out-dir> --dll-dir <built sigfix dir> [--now <unix seconds>]
 
 Everything is made offline from a throwaway PKI: a pinned test root, a second root that is NOT pinned, leaf
 certificates with chosen validity windows and EKUs, and timestamps from osslsigncode's built-in TSA at chosen
 times. Writes <out-dir>/fixtures.json, the manifest the tests read: the pinned root and the facts about each
-file (what a correct verifier must say). Needs openssl, osslsigncode and x86_64-w64-mingw32-gcc on PATH.
+file (what a correct verifier must say). Needs openssl and osslsigncode on PATH.
+
+The unsigned DLLs are not made here: CMake builds them (the `sigfix_dlls` target, src/runtime/tests/sigfix/) and
+--dll-dir names the directory it wrote them to (<build>/bin/sigfix). This script copies them into <out-dir>, patches
+the two that need a hand-made PE table, damages and signs them. It runs no compiler (ADR 0041).
 """
 
 import argparse
@@ -68,30 +72,6 @@ class Pki:
         return {"key": key, "pem": pem, "serial_hex": format(serial, "x"), "cn": cn}
 
 
-def build_dll(work, name, marker):
-    src = work / f"{name}.c"
-    # A distinct body per file so two DLLs never share a digest; DllMain only, no imports beyond the CRT start-up.
-    src.write_text(f'const char kMarker[] = "{marker}";\nint __stdcall DllMain(void*a,unsigned long b,void*c)'
-                   f'{{(void)a;(void)b;(void)c;return kMarker[0]!=0;}}\n')
-    out = work / f"{name}.dll"
-    run(["x86_64-w64-mingw32-gcc", "-shared", "-O1", "-nostdlib", "-Wl,--entry=DllMain", "-o", str(out), str(src)])
-    return out
-
-
-def build_c(work, name, source, extra=(), defs=None):
-    """Compile `source` (C text) into <work>/<name>.dll; `extra` are further linker inputs/flags, `defs` a .def text."""
-    src = work / f"{name}.c"
-    src.write_text(source)
-    out = work / f"{name}.dll"
-    cmd = ["x86_64-w64-mingw32-gcc", "-shared", "-O1", "-nostdlib", "-Wl,--entry=DllMain", "-o", str(out), str(src)]
-    if defs is not None:
-        def_file = work / f"{name}.def"
-        def_file.write_text(defs)
-        cmd.append(str(def_file))
-    run(cmd + list(extra))
-    return out
-
-
 def set_data_dir(path, index, rva, size):
     """Point data directory `index` of a PE32+ file at (rva, size)."""
     data = bytearray(Path(path).read_bytes())
@@ -114,56 +94,30 @@ def section_rva(path, name):
     raise SystemExit(f"gen_plugin_signature_fixtures: FAIL no section {name} in {path}")
 
 
-def build_dependency_dlls(work):
-    """The unsigned DLLs the tree fixtures are made of. dep exports Dep; each other names dep.dll (or mid.dll) in
-    the table the test is about: import, delay-load import, or forwarded export."""
-    stub = ('int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return 1;}\n')
-    dep = build_c(work, "dep", '__declspec(dllexport) int Dep(void){return 7;}\n' + stub)
-    build_c(work, "importer", '__declspec(dllimport) int Dep(void);\n'
-            'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return Dep();}\n', [str(dep)])
-    build_c(work, "mid", '__declspec(dllimport) int Dep(void);\n__declspec(dllexport) int Mid(void){return Dep();}\n' + stub,
-            [str(dep)])
-    mid = work / "mid.dll"
-    build_c(work, "toplevel", '__declspec(dllimport) int Mid(void);\n'
-            'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return Mid();}\n', [str(mid)])
-    build_c(work, "forwarder", stub, defs="EXPORTS\n  Fwd = dep.Dep\n")
-    # A plugin that loads another library from its own DllMain: the file named by NEVR_TEST_DLLMAIN_LOAD. It exports
-    # no plugin entry points; what is under test is the load it makes while the loader still holds the loader lock.
-    build_c(work, "dllmain_loader",
-            '#include <stddef.h>\n'
-            '__declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableW(const wchar_t*, wchar_t*, unsigned long);\n'
-            '__declspec(dllimport) void* __stdcall LoadLibraryW(const wchar_t*);\n'
-            'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)c;\n'
-            '  if(b==1){wchar_t path[520];unsigned long n=GetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD",path,520);\n'
-            '    if(n>0&&n<520)LoadLibraryW(path);}\n'
-            '  return 1;}\n', ["-lkernel32"])
-    # A delay-load descriptor (data directory 13) written by hand: this linker has no delay-load support. The
-    # descriptor is the attribute word (1: RVAs, not addresses), the DLL name RVA and six zero words; a zero
-    # descriptor ends the table.
-    build_c(work, "delayer",
-            '__asm__(".section .didat,\\"dr\\"\\nnevr_delay_desc:\\n.long 1\\n.rva nevr_delay_name\\n'
-            '.fill 24,1,0\\n.fill 32,1,0\\n.section .rdata,\\"dr\\"\\nnevr_delay_name:\\n.asciz \\"dep.dll\\"\\n.text\\n");\n' + stub)
+# The DLLs CMake builds (src/runtime/tests/sigfix/CMakeLists.txt, sigfix_dll()), by file stem.
+CAP_COUNT = 65
+BUILT_DLLS = ("plain", "plain2", "dep", "importer", "mid", "toplevel", "forwarder", "delayer", "broken",
+              "dllmain_loader", "sysimporter", "decoy_hid", "cap64", "cap65",
+              *(f"capdep_{i:03d}" for i in range(1, CAP_COUNT + 1)))
+
+
+def collect_built_dlls(work, dll_dir):
+    """Copy the CMake-built DLLs from `dll_dir` into `work` and finish the two that need a PE table the linker
+    does not write. Returns the path of dep.dll. A missing file is named: it means the build did not make it."""
+    dll_dir = Path(dll_dir)
+    missing = [f"{stem}.dll" for stem in BUILT_DLLS if not (dll_dir / f"{stem}.dll").is_file()]
+    if missing:
+        raise SystemExit(f"gen_plugin_signature_fixtures: FAIL {dll_dir} lacks {', '.join(missing)}; "
+                         "build them with: cmake --build --preset <preset> --target sigfix_dlls")
+    for stem in BUILT_DLLS:
+        shutil.copy(dll_dir / f"{stem}.dll", work / f"{stem}.dll")
+    # A delay-load descriptor (data directory 13): delayer.c lays the descriptor down in .didat, the linker does not
+    # point the directory at it, so it is pointed here.
     delayer = work / "delayer.dll"
     set_data_dir(delayer, 13, section_rva(delayer, ".didat"), 64)
-    # A plugin whose one import is a System32 library (hid.dll, which the test process does not load), and a stand-in
-    # for that library: it exports the same function and says it was loaded by setting NEVR_TEST_DECOY_LOADED. A
-    # test puts the stand-in in the plugin's directory after the check; the loader searches that directory before
-    # System32 for a name that is not already loaded.
-    build_c(work, "sysimporter",
-            '__declspec(dllimport) void __stdcall HidD_GetHidGuid(void*);\n'
-            'void (__stdcall *volatile nevr_keep_import)(void*) = HidD_GetHidGuid;\n'
-            'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return nevr_keep_import!=0;}\n',
-            ["-lhid"])
-    build_c(work, "decoy_hid",
-            '__declspec(dllimport) int __stdcall SetEnvironmentVariableA(const char*, const char*);\n'
-            '__declspec(dllexport) void __stdcall HidD_GetHidGuid(void*g){(void)g;}\n'
-            'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)c;\n'
-            '  if(b==1)SetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED","1");\n'
-            '  return 1;}\n', ["-lkernel32"])
     # An import directory that points outside the image: a file whose dependencies cannot be listed.
-    build_c(work, "broken", stub)
     set_data_dir(work / "broken.dll", 1, 0x7FFFF000, 40)
-    return dep
+    return work / "dep.dll"
 
 
 def pe_layout(data):
@@ -271,25 +225,6 @@ def build_corpus(work):
     data = bytearray(importer)
     put("import_system_uppercase", data.replace(b"dep.dll\0", b"HID.DLL\0"), True)
     return corpus
-
-
-def build_cap_dlls(work, count):
-    """capdep_001.dll .. capdep_<count>.dll, each exporting one function, and two importers: cap64.dll names the
-    first 64, cap65.dll names all 65."""
-    names = [f"capdep_{i:03d}" for i in range(1, count + 1)]
-    for i, name in enumerate(names, 1):
-        build_c(work, name, f'__declspec(dllexport) int F{i}(void){{return {i};}}\n'
-                'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return 1;}\n')
-
-    def importer(out_name, used):
-        decl = "".join(f"__declspec(dllimport) int F{i}(void);\n" for i in range(1, used + 1))
-        body = "+".join(f"F{i}()" for i in range(1, used + 1))
-        build_c(work, out_name, decl + f'int __stdcall DllMain(void*a,unsigned long b,void*c){{(void)a;(void)b;(void)c;return {body};}}\n',
-                [str(work / f"{n}.dll") for n in names[:used]])
-
-    importer("cap64", 64)
-    importer("cap65", 65)
-    return names
 
 
 def sign(unsigned, out, leaf, chain_pems, tsa=None, tsa_time=None, digest="sha256"):
@@ -436,12 +371,14 @@ def attr_named(signer, oid):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("out")
+    parser.add_argument("--dll-dir", required=True, type=Path,
+                        help="the directory CMake wrote the unsigned fixture DLLs to (<build>/bin/sigfix)")
     parser.add_argument("--now", type=int, default=int(time.time()))
     parser.add_argument("--plugin-dll", action="append", default=[],
                         help="a real plugin DLL: also written signed by the good signer (<stem>.signed.dll), signed "
                              "with another signer's EKU (<stem>.wrong_eku.dll) and unsigned (<stem>.unsigned.dll)")
     args = parser.parse_args()
-    for tool in ("openssl", "osslsigncode", "x86_64-w64-mingw32-gcc"):
+    for tool in ("openssl", "osslsigncode"):
         if shutil.which(tool) is None:
             sys.exit(f"gen_plugin_signature_fixtures: FAIL {tool} not found on PATH")
     out = Path(args.out)
@@ -476,8 +413,9 @@ def main():
     tsa_weak = {"key": tsa_weak_leaf["key"], "pem_chain": pki.path("tsa_weak.chain.pem")}
     Path(tsa_weak["pem_chain"]).write_text(Path(tsa_weak_leaf["pem"]).read_text() + Path(pinned["pem"]).read_text())
 
-    plain = build_dll(out, "plain", "plugin-one")
-    plain2 = build_dll(out, "plain2", "plugin-two")
+    collect_built_dlls(out, args.dll_dir)
+    plain = out / "plain.dll"
+    plain2 = out / "plain2.dll"
     shutil.copy(plain, out / "unsigned.dll")
 
     pinned_chain = [pinned["pem"]]
@@ -577,7 +515,6 @@ def main():
 
     # Dependency trees (PR 4): a directory per case, holding the plugin and what it names. `signed` files carry the
     # good signature; the manifest says which file a correct tree walk refuses, how it reached it, and why.
-    build_dependency_dlls(out)
     trees = {}
 
     def tree(name, root, members, refuses=None, via=None, reason=None):
@@ -622,7 +559,7 @@ def main():
     trees["import_system"]["decoy"] = "decoy_hid/hid.dll"
 
     # The 64-file cap: 64 signed dependencies pass, a 65th is refused (and the walk does not fail open).
-    cap_names = build_cap_dlls(out, 65)
+    cap_names = [f"capdep_{i:03d}" for i in range(1, CAP_COUNT + 1)]
     signed_cap = out / "signed_cap"
     signed_cap.mkdir(exist_ok=True)
     for n in cap_names:

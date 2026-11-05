@@ -1,7 +1,7 @@
 # Module `heaps` (rows R06 R07 R08 R09, plus the B3 table-step words as word-patch rows)
 
 Files: `src/heaps.{h,cpp}`, `src/quest/plugins/q15t/src/module_switch.h` (shared by `heaps` and `memsys`: the per-module off switch),
-`src/quest/tests/q15t/heaps_test.cpp`, `src/quest/tests/q15t/mod/heaps.sh`, `src/quest/tests/q15t/mutants.d/heaps.sh`.
+`src/quest/tests/q15t/heaps_test.cpp`, `src/quest/tests/q15t/mod/heaps.cmake`, `src/quest/tests/q15t/mutants.d/heaps.sh`.
 Option macro for the main seat to wire: `Q15T_HEAPS`, default **ON** (the source build's default: its on-list
 lines 4041, 10645 carry `--resource-heap-mib=320`; the other three are in the source build's patch table and
 `the source build's memsys`). API: `InstallResult InstallHeaps(std::uintptr_t base)`; no tick.
@@ -17,7 +17,7 @@ below passes on a headset) `heaps` cannot be claimed to work.** What is shown, a
 Shown (file:line, nevr-runtime-work/plugin-repack, read-only):
 - Two phases exist. The early pass is step "RunEarlyPlugins" of the sentinel constructor sequence: after the reporter starts,
   before the clock hook (`src/quest/integration/ctor_sequence.h:16-17`, run at `ctor_sequence.cpp:188-194`, bound to
-  `plugin::RunEarlyPlugins()` at `src/quest/integration/production_steps.cpp:381-383`). It calls `NvrPluginInitEx` through
+  `plugin::RunEarlyPlugins()` at `src/quest/integration/production_steps.cpp:381-383`). It calls `NevrPluginInitEx` through
   `Loader::RunPhase(Early)` (`src/quest/plugin/plugin_runtime.cpp:82-89`; the init call is `plugin_loader.cpp:192`).
 - The normal pass runs at "the first post-load call" (`production_steps.cpp:335-339`, `PluginsAction`), i.e. after the game's
   own first `dlopen` returns (`src/quest/integration/post_load.cpp:69-80`, called at `:160` after the login/matchmaking
@@ -144,7 +144,7 @@ Falsifiers (any one disproves it):
 
 ## 6. Host tests and mutants
 
-`Q15T_MODULE=heaps bash src/quest/tests/q15t/run_host_tests.sh` -> `heaps_test: all checks passed` (12 case groups against a fake image: the pins equal
+`just test-quest-q15t heaps` -> `heaps_test: all checks passed` (12 case groups against a fake image: the pins equal
 the readelf table; Quest 3, Quest 2 and an empty device; a foreign slot; a non-stock `.rodata` word; a bad reader word; an
 executable page; `heaps.off`; `memsys.off` skipping only R07; base 0; no chaining on a second install). 23 mutants in
 `src/quest/tests/q15t/mutants.d/heaps.sh`, one per rule; each is killed. The numbers from the full `src/quest/tests/q15t/mutants.sh` are in the report.
@@ -153,6 +153,6 @@ executable page; `heaps.off`; `memsys.off` skipping only R07; base 0; no chainin
 
 Built into its own library, `libq15t_early.so` (`src/quest/plugins/q15t/src/plugin_early.cpp`, CMake option `Q15T_EARLY`, default ON, OFF in the test arms), together
 with `memsys`, and listed as its own `early: true` entry (`src/quest/plugins/q15t/README.md`). `heaps.off` / `memsys.off` still apply. Host test:
-`src/quest/tests/q15t/early_test.cpp` (`src/quest/tests/q15t/mod/early.sh`). Unverified until a headset runs it: ADR 0019 P10 (does the early phase run, is the slot
+`src/quest/tests/q15t/early_test.cpp` (`src/quest/tests/q15t/mod/early.cmake`). Unverified until a headset runs it: ADR 0019 P10 (does the early phase run, is the slot
 relocated at that point). The repack recipe takes ONE plugin file (`just android-repack-apk ... <plugin .so>`), so shipping this library
 next to `libq15t.so` needs a repack that takes two; until then the early library is built and tested but not in any APK.

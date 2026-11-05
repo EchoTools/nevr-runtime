@@ -1,13 +1,13 @@
 #pragma once
 
 #include "core/nevr_root.h"
+#include "core/run_log_path.h"
 
 // Where the stable host keeps what it writes: in its own per-game folder, never in
 // the game's own %LOCALAPPDATA%\EchoVR:
-//   %LOCALAPPDATA%\nevr\echovr\logs\nevr-bootstrap.jsonl
+//   %LOCALAPPDATA%\nevr\echovr\logs\nevr-<creation time>.jsonl  (the process's one main log, core/run_log_path.h)
 //   %LOCALAPPDATA%\nevr\echovr\crashes\nevr-<pid>-<n>.dmp
-// with %TEMP%\nevr\echovr\{logs,crashes} as the fallback and the host's own
-// directory as the last resort.
+// and nowhere else: no %TEMP% folder and no folder beside the game.
 
 namespace nevr_host {
 
@@ -35,8 +35,6 @@ static_assert(IsRootChild(kLogsSubdirectory, nevr_root::Names<wchar_t>::kLogs), 
 static_assert(IsRootChild(kCrashesSubdirectory, nevr_root::Names<wchar_t>::kCrashes), "host crashes folder differs from nevr_root");
 }  // namespace host_paths_detail
 
-inline constexpr wchar_t kBootstrapLogName[] = L"nevr-bootstrap.jsonl";
-
 // One append to the log is serialized with this named mutex. WriteFile with FILE_APPEND_DATA is not
 // atomic under Wine: concurrent appenders overwrite each other's lines, within a process and across
 // two processes that share a prefix (a client and a local server). A named mutex covers both, is
@@ -46,9 +44,9 @@ inline constexpr wchar_t kBootstrapLogName[] = L"nevr-bootstrap.jsonl";
 // an append. Each append's wait is bounded by kBootstrapLogLockWaitMs. A wait that times out (or fails)
 // marks the lock unreliable, and every later append in the process writes without waiting. A wait that
 // ends with the lock acquired is not capped per process: if a holder releases inside every wait, every
-// destination an append opens waits once (at most kBootstrapLogLockWaitMs), and a record whose write
-// fails after its wait falls back to the next of up to three destinations and waits again.
-inline constexpr wchar_t kBootstrapLogMutexName[] = L"Local\\nevr-host-bootstrap-log";
+// append waits once (at most kBootstrapLogLockWaitMs). The main log is an append's one destination: a
+// record whose write fails goes to stderr and waits no more, so one record waits at most once.
+inline constexpr const wchar_t* kBootstrapLogMutexName = nevr_run_log::kMutexName;  // one name for the host and the runtime
 inline constexpr unsigned long kBootstrapLogLockWaitMs = 500;
 
 // The last flush of a process that is ending waits this long for the log mutex, once, and writes nothing when it

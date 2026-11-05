@@ -40,7 +40,7 @@ static int CountLines(const char* needle, int level = -1) {
 }
 
 int main() {
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.ctx_size = sizeof ctx;
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;

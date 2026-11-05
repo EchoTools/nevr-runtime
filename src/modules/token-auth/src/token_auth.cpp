@@ -1,5 +1,5 @@
 /* SYNTHESIS -- custom tool code, not from binary */
-/* Module version — uses NvrModuleContext instead of config.h globals */
+/* Module version — uses NevrModuleContext instead of config.h globals */
 /* Log levels follow the N47 taxonomy: phase outcomes at Info, per-step detail
  * at Debug. Merge 2f29312 once reverted nine Debug demotions here by taking a
  * stale branch copy wholesale — a revert-by-merge diffs clean against both
@@ -1298,7 +1298,7 @@ NEVR_MODULE_API uint32_t token_auth_ApiVersion(void) {
     return NEVR_MODULE_API_VERSION;
 }
 
-NEVR_MODULE_API int token_auth_Init(const NvrModuleContext* ctx) {
+NEVR_MODULE_API int token_auth_Init(const NevrModuleContext* ctx) {
     EchoVR::g_GameBaseAddress = (CHAR*)ctx->base_addr;
     // Function pointers are host-owned and may already contain MinHook
     // trampolines. Reinitializing them here would discard those trampolines and

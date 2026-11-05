@@ -1438,7 +1438,7 @@ file, `nevr-runtime.dll`, that the host loads. What a player's machine does befo
 - After the verdict and before the runtime is mapped, the host writes a `versions` record: its own version and SHA-256,
   and the runtime's, or `unavailable` for a runtime that is absent or refused (a refused file is never read out). The
   `runtime_load` record that follows carries `verify` (`accepted`, `unsigned_allowed` or `refused`) and, for a refusal,
-  `verify_reason`, in the verifier's own words. Both go to `%LOCALAPPDATA%\nevr\echovr\logs\nevr-bootstrap.jsonl`.
+  `verify_reason`, in the verifier's own words. Both go to the run's main log, `%LOCALAPPDATA%\nevr\echovr\logs\nevr-<timestamp>.jsonl`.
 - The host then validates the runtime's ABI descriptor (`src/core/runtime_abi.h`, ABI major `kMajor` = 1; a major
   mismatch is rejected) and calls it.
 - When the runtime does not load (absent, refused, unreadable, a missing dependency, a rejected descriptor or a failed

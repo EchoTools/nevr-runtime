@@ -1,0 +1,25 @@
+{
+    "version": 4,
+    "configurePresets": [
+        {
+            "name": "quest-combat-libs",
+            "displayName": "Quest combat script libraries on the game's NDK (r21b, tools/game_ndk.pin)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../../../build/quest-combat-libs",
+            "toolchainFile": "$env{NEVR_GAME_NDK}/build/cmake/android.toolchain.cmake",
+            "cacheVariables": {
+                "CMAKE_WARN_DEPRECATED": {
+                    "type": "BOOL",
+                    "value": "OFF"
+                }
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "quest-combat-libs",
+            "displayName": "Build the Quest combat script libraries",
+            "configurePreset": "quest-combat-libs"
+        }
+    ]
+}

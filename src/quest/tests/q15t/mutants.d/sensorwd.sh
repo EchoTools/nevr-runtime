@@ -1,5 +1,5 @@
 # sensorwd mutants: each removes or breaks one rule of src/sensorwd.cpp (or its header, or the shared word_pins.h it uses);
-# tests/sensorwd_test.cpp must fail on it. (A mutant that hangs on a lock is killed by the 30 s timeout in tests/mod/sensorwd.sh.)
+# tests/sensorwd_test.cpp must fail on it. (A mutant that hangs on a lock is killed by the 30 s ctest TIMEOUT in mod/sensorwd.cmake.)
 # ids and constants from the source build
 runm sensorwd sphere_id_value        src/sensorwd.cpp 's/0xac2d3f9f080ba45full/0xac2d3f9f080ba45eull/'
 runm sensorwd triggered_id_value     src/sensorwd.cpp 's/0xfd8cf56544b904a3ull/0xfd8cf56544b904a2ull/'

@@ -187,9 +187,17 @@ save_back_stored_sign_in() {
   return 1
 }
 
+# is_run_log_name <file name>: true for a process's main log, nevr-<UTC start time>.jsonl or nevr-pid<hex>.jsonl
+# (src/core/run_log_path.h). Not the installer's nevr-update.jsonl and not a rotation's archive nevr-<time>.<n>.jsonl, which share the
+# folder. The same rule as tools/host_stop_cause.py and installer/src/pc.rs.
+is_run_log_name() {
+  [[ "$1" =~ ^nevr-([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}\.[0-9]{3}|pid[0-9a-fA-F]+)\.jsonl$ ]]
+}
+
 # host_stop_cause <the nevr root's logs folder> <the run's start, unix seconds>: when the host stopped the game
-# (nevr-runtime.dll absent or refused), the runtime never ran and wrote no game log; the host's own record says why.
-# Prints one line and returns 0, or prints nothing and returns 3 when the record holds no stop since then (#1122).
+# (nevr-runtime.dll absent or refused), the runtime never ran and wrote no game lines; the host's own records, in the
+# run's main log, say why. Prints one line and returns 0, or prints nothing and returns 3 when the logs hold no stop since
+# then (#1122).
 host_stop_cause() {
-  python3 -I "$(dirname "${BASH_SOURCE[0]}")/../host_stop_cause.py" --log "$1/nevr-bootstrap.jsonl" --since "$2"
+  python3 -I "$(dirname "${BASH_SOURCE[0]}")/../host_stop_cause.py" --log "$1" --since "$2"
 }

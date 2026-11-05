@@ -16,6 +16,7 @@
 #include "credits_text.h"
 #include "hook_log.h"
 #include "hook_report.h"
+#include "irradiance_default.h"
 #include "path_rewrite_hook.h"
 #include "sentinel.h"
 #include "sentinel_log.h"
@@ -607,6 +608,14 @@ class ProductionSteps final : public Steps {
   bool InstallMenuCards() override {
     const bool ok = nevr_quest::integration::InstallMenuCardsHook();
     detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallIrradianceDefault() override {
+    // A GOT hook on CGEngineResources::Initialize and an inline row of the patched libr15 (ADR 0021). The install logs its own
+    // `irradiance_default` lines, with the status when it refuses (not_verified on a file Attach did not verify).
+    const bool ok = nevr_quest::irradiance_default::Install();
+    detail_ = ok ? "ok" : "refused";
     return ok;
   }
 

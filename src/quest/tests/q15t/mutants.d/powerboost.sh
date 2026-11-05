@@ -1,5 +1,5 @@
 # powerboost: each rule of src/powerboost.cpp, src/powerboost_core.h and the thunk removed once; the host test, the arm64
-# disassembly golden and the qemu run of tests/mod/powerboost.sh must fail on every one
+# disassembly golden and the qemu run (mod/powerboost.cmake) must fail on every one
 # install: all three words or none, loud, in order
 runm powerboost pb_no_rollback      src/powerboost.cpp 's/const SwapResult s = SwapWord(base + hooks\[k\].slot, hooks\[k\].wrapper, base + hooks\[k\].fn);/SwapResult s; s.status = SwapStatus::kOk; (void)k;/'
 runm powerboost pb_swallow_unguarded src/powerboost.cpp 's/if (!Swapped(r)) why = "Heal.s GLOB_DAT word was not swapped";/(void)r;/'

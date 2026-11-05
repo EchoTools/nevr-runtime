@@ -50,7 +50,7 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
    `CallbackThunk` (`src/quest/sentinel/callback_thunk.h`) is installed through `InstallThunk`, pinned by build ID and
    link-time slot (0x36ec0f0). The handler calls the original and then gives the state to a registered filter.
    Nothing else is hooked: no pose, no head tracking, no code page.
-2. **Plugins reach it through one host call, not a general hook API.** A Quest tail field in `NvrGameContext`,
+2. **Plugins reach it through one host call, not a general hook API.** A Quest tail field in `NevrGameContext`,
    `const NevrQuestHostApi* quest`, is gated by `ctx_size`. It is additive and needs no version bump (ADR 0019, Q9).
    `NevrQuestHostApi` has its own `struct_size` and one function in v1, `register_input_filter(plugin_id, filter,
    user)`. A filter gets one `NevrQuestControllerState`: hand, buttons, touches, index trigger, grip trigger and stick.
@@ -78,9 +78,9 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
 6. **The filter never logs, allocates, locks or calls into the game.** It reads `CLOCK_MONOTONIC`, sets the state,
    and puts events into a fixed ring with their timestamps taken at the frame they happen, then wakes the reporter
    with one non-blocking write to an eventfd. A reporter thread, started in the plugin's init, waits on that eventfd
-   and writes the events through `ctx->log`. The thread ends after `route_end`, or at `NvrPluginShutdown`,
+   and writes the events through `ctx->log`. The thread ends after `route_end`, or at `NevrPluginShutdown`,
    which wakes and joins it. Events the ring cannot hold are counted, and `route_end` reports the count. The host has
-   no way to remove a filter, so the run a registered filter points at is never freed: `NvrPluginShutdown` ends it,
+   no way to remove a filter, so the run a registered filter points at is never freed: `NevrPluginShutdown` ends it,
    and from then on the filter changes nothing.
 
 ### The route file
@@ -148,7 +148,7 @@ plugins:
   `--start-on <regex>` it creates the start file when a logcat line matches. It waits for `route_end` (or its timeout,
   or the launch check's line for this app, which ends the run at once as `launch_blocked`),
   force-stops the game, sends `com.oculus.vrpowermanager.automation_disable` to give the sensor back, and saves the
-  logcat and `nevr-sentinel.log`. It writes one JSON record per step, plus a summary that carries the `route_start`
+  logcat and the run's log (the newest `nevr-<timestamp>.jsonl` in `nevr/logs`). It writes one JSON record per step, plus a summary that carries the `route_start`
   and `route_end` fields, to `runs.jsonl` in its output directory under the work root. It exits 0 only when
   `route_end` arrived and every hand the route drives has a non-zero `frames_driven`. `just quest-autopilot-run <route>`
   runs it. The routes the repo ships are in `tools/quest_autopilot_routes/` (`lobby_loop.txt`: walk, turn, walk back
@@ -157,7 +157,7 @@ plugins:
 ### Logging
 
 Through `ctx->log`, so lines are `[NEVR.PLUGIN] plugin=nevr_autopilot <message> key=value ...` in logcat (tag
-`NEVR-Sentinel`) and in `nevr-sentinel.log` (ADR 0019 section 10).
+`NEVR-Sentinel`) and in the run's log (ADR 0019 section 10).
 
 | message | level | when | fields |
 | --- | --- | --- | --- |

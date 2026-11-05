@@ -3,9 +3,12 @@
 #include <atomic>
 #include <exception>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "quest/data/sha256.h"
+#include "quest/plugin/slot_hook.h"
 #include "runtime/ext/plugin_log.h"
 
 namespace nevr_quest::plugin {
@@ -15,9 +18,19 @@ namespace {
 // The one loader the plugins' C callbacks (ctx->get_plugin_count, ctx->log) reach. A process has one.
 std::atomic<Loader*> g_active{nullptr};
 
+// A plugin entry point, under its Nevr name first and, when the plugin does not export that, under the deprecated Nvr
+// name a plugin built before the prefix rename exports. `suffix` is the name without the prefix ("PluginInitEx").
+// `deprecatedUsed` collects the deprecated names that resolved, so the loader can say once that the plugin loaded
+// through them.
 template <typename Fn>
-Fn Resolve(Platform& platform, void* handle, const char* name) {
-  return reinterpret_cast<Fn>(platform.Symbol(handle, name));
+Fn Resolve(Platform& platform, void* handle, const char* suffix, std::vector<std::string>* deprecatedUsed) {
+  if (void* canonical = platform.Symbol(handle, (std::string("Nevr") + suffix).c_str())) {
+    return reinterpret_cast<Fn>(canonical);
+  }
+  const std::string old = std::string("Nvr") + suffix;
+  void* deprecated = platform.Symbol(handle, old.c_str());
+  if (deprecated != nullptr) deprecatedUsed->push_back(old);
+  return reinterpret_cast<Fn>(deprecated);
 }
 
 LoadRecord BaseRecord(const PlanEntry& entry, bool configRejected) {
@@ -119,13 +132,13 @@ std::size_t Loader::PendingFor(PluginPhase phase) const {
   return count;
 }
 
-NvrGameContext Loader::ContextFor(const PlanEntry& entry, const char* pluginViewBuildId) const {
-  NvrGameContext ctx = {};
+NevrGameContext Loader::ContextFor(const PlanEntry& entry, const char* pluginViewBuildId) const {
+  NevrGameContext ctx = {};
   ctx.base_addr = gameBase_;
   ctx.net_game = nullptr;
   ctx.game_state = 0;
   ctx.flags = NEVR_HOST_IS_CLIENT | NEVR_HOST_PLATFORM_QUEST;
-  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.get_plugin_count = &Loader::GetLoadedPluginCount;
   ctx.get_plugin_info = &Loader::GetLoadedPluginInfo;
   ctx.plugin_id = entry.item.name.c_str();
@@ -141,7 +154,7 @@ NvrGameContext Loader::ContextFor(const PlanEntry& entry, const char* pluginView
 void Loader::RefreshMainLevel() {
   if (contexts_.empty()) return;  // no plugin holds a context yet: nothing to keep current, and no read of the game
   const MainLevel level = platform_.CurrentMainLevel();
-  for (NvrGameContext& ctx : contexts_) {
+  for (NevrGameContext& ctx : contexts_) {
     ctx.level_symbol = level.symbol;
     ctx.level_name = level.name;
   }
@@ -150,10 +163,21 @@ void Loader::RefreshMainLevel() {
 void Loader::Load(PlanEntry& entry) {
   LoadRecord record = BaseRecord(entry, options_.configRejected);
   void* handle = nullptr;  // set once the object is mapped; closed again on every path that does not keep the plugin
+  // The plugin's id as the host knows it: bound around its init and the Shutdown after a failed init, so a handler it registers
+  // on the loader's thread is recorded under this id and no other (slot_hook.h).
+  slot_hook::Binding binding(entry.item.name.c_str());
   const auto close = [&] {
     if (handle == nullptr) return;
     void* const mapped = handle;
     handle = nullptr;
+    // A slot hook this plugin registered may still be on its chain (ADR 0034): unmapping the object would leave the game
+    // calling code that is gone. The object stays mapped for the life of the process, and the record says why. A plugin
+    // that registered a handler during its init keeps its object mapped even after it unregisters it: the call that was
+    // inside the handler when it unregistered may still be running that code.
+    if (binding.registered() || slot_hook::HoldsHandleOf(entry.item.name.c_str())) {
+      record.keptMapped = "slot_hook";
+      return;
+    }
     try {
       platform_.Close(mapped);
     } catch (const std::exception&) {
@@ -212,37 +236,54 @@ void Loader::Load(PlanEntry& entry) {
     handle = platform_.Open(entry.item.file);
     if (handle == nullptr) return end(Outcome::kFailed, reason::kDlopenFailed);
 
-    const auto getInfo = Resolve<NvrPluginGetInfo_fn>(platform_, handle, "NvrPluginGetInfo");
+    std::vector<std::string> deprecatedUsed;
+    const auto getInfo = Resolve<NevrPluginGetInfo_fn>(platform_, handle, "PluginGetInfo", &deprecatedUsed);
     if (getInfo == nullptr) return end(Outcome::kFailed, reason::kNoPluginInfo);
 
-    const NvrPluginInfo info = getInfo();
+    const NevrPluginInfo info = getInfo();
     LoadedPlugin plugin;
     plugin.name = info.name != nullptr ? info.name : "";
     plugin.description = info.description != nullptr ? info.description : "";
     plugin.info.version_major = info.version_major;
     plugin.info.version_minor = info.version_minor;
     plugin.info.version_patch = info.version_patch;
-    if (const auto apiVersion = Resolve<NvrPluginGetApiVersion_fn>(platform_, handle, "NvrPluginGetApiVersion")) {
+    if (const auto apiVersion = Resolve<NevrPluginGetApiVersion_fn>(platform_, handle, "PluginGetApiVersion", &deprecatedUsed)) {
       plugin.info.api_version = apiVersion();
     }
-    if (const auto capabilities = Resolve<NvrPluginGetCapabilities_fn>(platform_, handle, "NvrPluginGetCapabilities")) {
+    if (const auto capabilities = Resolve<NevrPluginGetCapabilities_fn>(platform_, handle, "PluginGetCapabilities", &deprecatedUsed)) {
       plugin.info.capabilities = capabilities();
     }
 
     viewIds_.push_back(view.buildId);  // a deque: the context keeps this pointer for the life of the process
     contexts_.push_back(ContextFor(entry, viewIds_.back().c_str()));
-    const NvrGameContext* ctx = &contexts_.back();
-    const auto initEx = Resolve<NvrPluginInitEx_fn>(platform_, handle, "NvrPluginInitEx");
-    const auto init = Resolve<NvrPluginInit_fn>(platform_, handle, "NvrPluginInit");
+    const NevrGameContext* ctx = &contexts_.back();
+    const auto initEx = Resolve<NevrPluginInitEx_fn>(platform_, handle, "PluginInitEx", &deprecatedUsed);
+    const auto init = Resolve<NevrPluginInit_fn>(platform_, handle, "PluginInit", &deprecatedUsed);
+    const auto shutdown = Resolve<NevrPluginShutdown_fn>(platform_, handle, "PluginShutdown", &deprecatedUsed);
+    // Every entry point is resolved above, Shutdown included, so the line names every deprecated export the plugin uses.
+    if (!deprecatedUsed.empty()) {
+      std::string names;
+      for (const std::string& n : deprecatedUsed) names += (names.empty() ? "" : ", ") + n;
+      platform_.PluginLine(NEVR_LOG_INFO, "[NEVR.PLUGIN] plugin=" + entry.item.name + " file=" + entry.item.file +
+                                              " loaded with deprecated Nvr exports (" + names +
+                                              "); rebuild against the current SDK to export the Nevr names");
+    }
     int rc = 0;
-    switch (ChoosePluginInit(initEx != nullptr, init != nullptr)) {
-      case PluginInitKind::Ex: rc = initEx(ctx, entry.item.args_json.c_str()); break;
-      case PluginInitKind::Legacy: rc = init(ctx); break;
-      case PluginInitKind::None: break;
+    {
+      const slot_hook::Scope scope(binding);
+      switch (ChoosePluginInit(initEx != nullptr, init != nullptr)) {
+        case PluginInitKind::Ex: rc = initEx(ctx, entry.item.args_json.c_str()); break;
+        case PluginInitKind::Legacy: rc = init(ctx); break;
+        case PluginInitKind::None: break;
+      }
     }
     if (rc != 0) {
-      // The documented lifecycle: a failed init is followed by the plugin's Shutdown, when it has one.
-      if (const auto shutdown = Resolve<NvrPluginShutdown_fn>(platform_, handle, "NvrPluginShutdown")) shutdown();
+      // The documented lifecycle: a failed init is followed by the plugin's Shutdown, when it has one. It runs under the same
+      // binding, so an unregister there is the owner's and the handler it takes out is the one the init registered.
+      if (shutdown != nullptr) {
+        const slot_hook::Scope scope(binding);
+        shutdown();
+      }
       return end(Outcome::kFailed, reason::kInitFailed);
     }
     loaded_.push_back(std::move(plugin));
@@ -260,7 +301,7 @@ int Loader::GetLoadedPluginCount() {
   return loader != nullptr ? static_cast<int>(loader->loaded_.size()) : 0;
 }
 
-const NvrLoadedPluginInfo* Loader::GetLoadedPluginInfo(int index) {
+const NevrLoadedPluginInfo* Loader::GetLoadedPluginInfo(int index) {
   const Loader* loader = g_active.load();
   if (loader == nullptr || index < 0 || static_cast<std::size_t>(index) >= loader->loaded_.size()) return nullptr;
   return &loader->loaded_[static_cast<std::size_t>(index)].info;

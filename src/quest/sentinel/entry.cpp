@@ -9,7 +9,10 @@
  * consumers through Bionic's local-group symbol lookup.
  */
 
+#include "activation.h"
+#include "hand_flip.h"
 #include "sentinel.h"
+#include "sentinel_log.h"
 #include "generated/nevr_build_info.h"
 #include "got_hook.h"
 #include "clock_levels_hook.h"
@@ -18,6 +21,7 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "quest/combat/match_tags.h"
 #include "quest/invite/frame_dispatch.h"
 #include "main_level.h"
 #include "menu_cards_hook.h"
@@ -164,9 +168,19 @@ bool InstallPermissionWaitHook() noexcept {
     // The main-menu QUIT finishes the activity (#1276), installed on every launch from this step. Its quit_install line
     // says whether it went in; a refused install leaves the game's QUIT as it is.
     nevr_quest::quit::Install();
-    // The controller type and raw pose log (#1986): two read-only hooks and a poller thread; no pose is changed. Its
-    // hand_pose_log_install line says whether it went in; a refused install leaves the game's calls as they are.
+    // The controller type and raw pose log (#1986): two hooks and a poller thread; a pose is changed only while Controller Hand Flip
+    // is On (hand_flip.h, off by default; KNOWN-WRONG #2043 the toggle is the interim). Its hand_pose_log_install line says whether
+    // it went in; a refused install leaves the game's calls as they are. The toggle's choice is the configuration's graphics.hand_flip
+    // (#2082): config.yaml's path and what the reader found are handed over before the hooks that read them exist.
+    const nevr_quest::HandFlipChoice& handFlip = sentinel::ActiveConfig().handFlip;
+    nevr_quest::hand_flip::Configure(nevr_quest::ConfigFilePath(sentinel::FilesDir()).c_str(),
+                                     handFlip.source == nevr_quest::Source::kFile, handFlip.on);
     nevr_quest::hand_pose_log::Install();
+    // Combat name tags on by default (#2090): CR15Game's two constructor slots, installed on every launch before the game builds its
+    // game object (the sentinel's constructor runs while libr15 is being loaded). A copy of the settings the constructor left at the
+    // stock default gets bit 13; a saved choice still wins, because LoadSettings runs after the constructor. Its
+    // combat_match_tags_install line says whether it went in; a refused install leaves the game's constructor as it is.
+    nevr_quest::combat::match_tags::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();
@@ -197,6 +211,8 @@ bool RegisterTextureQualityCounters() noexcept {
 bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
                                bool countersRegistered) noexcept {
     if (!nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered)) return false;
+    // A level chosen in the menu is written to the same config.yaml the key was read from.
+    nevr_quest::texture_menu::SetConfigFile(nevr_quest::ConfigFilePath(sentinel::FilesDir()).c_str());
     return nevr_quest::texture_menu::Install(level, fromConfig);
 }
 
@@ -278,7 +294,8 @@ static void nevr_sentinel_ctor() {
     // The crash handlers first (#1689): a crash anywhere below, the begin record and the UI looper capture included, leaves a
     // report the next start sends. Arm is idempotent: the sequence's first step calls it again after setting the log sink.
     sentinel::Arm();
-    nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);
+    nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit,
+                                                      nevr_build::kIsDev ? "dev" : "release");
     // The login_host fallback carries this build's tuple (login_fallback.h): set before the sequence installs the redirect.
     nevr_quest::redirect::SetLoginIdentity(
         {"nevr_quest", nevr_build::kIsDev ? "dev" : "release", nevr_build::kVersion, nevr_build::kCommit});

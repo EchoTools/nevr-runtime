@@ -24,8 +24,8 @@
   #define NEVR_PLUGIN_API extern "C" __attribute__((visibility("default")))
 #endif
 
-/* Plugin info returned by NvrPluginGetInfo */
-struct NvrPluginInfo {
+/* Plugin info returned by NevrPluginGetInfo */
+struct NevrPluginInfo {
     const char* name;           /* short identifier, e.g. "disabled_weapons" */
     const char* description;    /* human-readable description */
     uint32_t    version_major;
@@ -36,14 +36,14 @@ struct NvrPluginInfo {
 /* Plugin info returned by the host's plugin-query API (get_plugin_info, v5+).
  * A plugin calling get_plugin_info(n) receives a pointer to this struct. The
  * pointer is process-lifetime stable (g_plugins never shrinks after load). */
-struct NvrLoadedPluginInfo {
+struct NevrLoadedPluginInfo {
     const char* name;
     const char* description;
     uint32_t    version_major;
     uint32_t    version_minor;
     uint32_t    version_patch;
     uint32_t    api_version;     /* NEVR_PLUGIN_API_VERSION the plugin was compiled against */
-    uint32_t    capabilities;    /* NvrPluginCapabilities bitmask (0 = UNDECLARED) */
+    uint32_t    capabilities;    /* NevrPluginCapabilities bitmask (0 = UNDECLARED) */
 };
 
 /* Log levels a plugin passes to ctx->log (API v6). */
@@ -117,8 +117,28 @@ enum NevrScriptRedirectResult : int32_t {
     NEVR_SCRIPT_REDIRECT_NO_LIBRARY_DIR   = 4, /* the host could not find the directory its own library was loaded from */
 };
 
+/* What register_slot_hook and unregister_slot_hook return. 0 is OK; every other value is a refusal. The host logs a Warning
+ * that names the slot, the chain on it and the reason. A refused register normally leaves nothing chained, so the plugin
+ * may call again. One exception: an install whose store was live when it failed may leave its handler reachable through
+ * the slot. That handle stays held for the life of the process, its code stays mapped, and the register is refused. */
+enum NevrSlotHookResult : int32_t {
+    NEVR_SLOT_HOOK_OK           = 0,
+    NEVR_SLOT_HOOK_BAD_ARGUMENT = 1, /* a null pointer, a name or build ID too long, a reloc outside NevrSlotReloc, or a handle
+                                      *   not held by the calling plugin (a handle another plugin registered is not its own) */
+    NEVR_SLOT_HOOK_NOT_FOUND    = 2, /* the module is not loaded, or it has no relocation of that kind for the symbol */
+    NEVR_SLOT_HOOK_NO_HANDLE    = 3, /* every service handle is in use (eight in this build) */
+    NEVR_SLOT_HOOK_REFUSED      = 4, /* the host refused the install, or could not take the handler out of its chain */
+};
+
+/* Which relocation a slot hook names. The host hooks the slot the module's own relocation writes. */
+enum NevrSlotReloc : int32_t {
+    NEVR_SLOT_RELOC_JUMP_SLOT = 0, /* a call through the PLT: the game calls the symbol by name */
+    NEVR_SLOT_RELOC_GLOB_DAT  = 1, /* a pointer load through the GOT: the game reads the symbol's address */
+};
+
 /* The services a Quest host offers a plugin, reached through ctx->quest. Every pointer is process-lifetime. A
- * plugin checks struct_size covers a member before calling it: the struct grows at its tail. */
+ * plugin checks struct_size covers a member before calling it: the struct grows at its tail. A member may be null on
+ * a host that does not offer it (the release host offers no slot hook service): a plugin checks the pointer too. */
 struct NevrQuestHostApi {
     uint32_t struct_size;
     /* Puts `filter` on the game's controller input (libr15's vrapi_GetCurrentInputState). Development builds only;
@@ -131,6 +151,40 @@ struct NevrQuestHostApi {
      * which are missing. The stock files are never read in its place. One registration per process; call from init. A
      * refusal other than NEVR_SCRIPT_REDIRECT_ALREADY_ARMED leaves nothing registered: the plugin may call again. */
     int32_t (*register_script_redirect)(const char* plugin_id, const uint64_t* stock_hashes, uint32_t count);
+    /* --- Hook service (#2001, ADR 0019 section 5, ADR 0034; tail members, no version bump) --- */
+    /* Chains `handler` onto the game's use of `symbol` through the slot that `module` (a soname such as "libr15.so")
+     * relocates for it. Every handler on one slot is kept in registration order: the newest runs first, and each reaches
+     * the handler before it through *original_out; the oldest reaches the game's function. `build_id` is the GNU build ID
+     * the target expects, as lowercase hex; the host refuses a target without one. `reloc` is a NevrSlotReloc. Call from
+     * init, not from a hook. On NEVR_SLOT_HOOK_OK, *out_handle is the handle for unregister_slot_hook, and *original_out
+     * holds the callable original before the handler can run.
+     *
+     * Lifetime, the host's contract with the plugin: `handler`'s code and `original_out` must stay valid for the whole
+     * process. The host writes *original_out itself after this call returns, whenever a handler newer than this one is
+     * removed, so the plugin reads *original_out at each call and does not cache it. `handler` can run after
+     * unregister_slot_hook returns: a call already in flight keeps the original it read, which stays callable. The host
+     * keeps a plugin's object mapped while one of its handles is held, so the code stays valid; the plugin must not unmap
+     * its own code.
+     *
+     * A handler can run more than once in one call during a concurrent remove and add: a call in flight while a middle
+     * handler is removed and registered again can run a handler, then the removed handler it reached, which calls the
+     * original it read, and so reach a handler on the chain a second time. The handler must not assume it runs once per call.
+     *
+     * The handler runs inside the game's call: it must return promptly, and must not block, take a lock, allocate, log,
+     * throw or call into the game. Build the plugin with -fno-exceptions. The owner the host records for the handler is
+     * "plugin:<plugin_id>". `plugin_id` must be the id the host gave this plugin (ctx->plugin_id, its config.yaml name) when the
+     * call is made on the thread that is running this plugin's init or Shutdown: there, any other id gets
+     * NEVR_SLOT_HOOK_BAD_ARGUMENT and no handler is chained. A call from another thread is not checked against that id; its
+     * handler is chained under the id it names. A handler registered while the host is in a plugin's init or Shutdown keeps
+     * the plugin the host is running mapped, whichever thread registered it. */
+    int32_t (*register_slot_hook)(const char* plugin_id, const char* module, const char* symbol, int32_t reloc,
+                                  const char* build_id, void* handler, void** original_out, uint32_t* out_handle);
+    /* Takes the handler of `handle` out of its chain. `plugin_id` must be the id the handle was registered under: any other
+     * caller gets NEVR_SLOT_HOOK_BAD_ARGUMENT and the handle stays chained. The handler that called it is relinked to what
+     * it called, so the other handlers on the slot keep running. Returns NEVR_SLOT_HOOK_OK, NEVR_SLOT_HOOK_BAD_ARGUMENT
+     * for a handle not held by this plugin, or NEVR_SLOT_HOOK_REFUSED when the host could not take it out, or another
+     * unregister of the same handle is in progress (the Warning or Error names why). */
+    int32_t (*unregister_slot_hook)(const char* plugin_id, uint32_t handle);
 };
 
 /* Game context passed to the plugin by the host.
@@ -139,19 +193,19 @@ struct NevrQuestHostApi {
  * fields still reads the first four at their original offsets. A v5+ plugin can
  * check ctx_size to decide whether ctx->get_plugin_count and friends are valid;
  * a v6+ plugin checks it covers ctx->log before calling it. */
-struct NvrGameContext {
+struct NevrGameContext {
     uintptr_t   base_addr;      /* echovr.exe base address (ImageBase) */
     void*       net_game;       /* CR15NetGame* if available, else nullptr */
     uint32_t    game_state;     /* ENetGameState enum value */
     uint32_t    flags;          /* host capability flags */
 
     /* --- v5 additions (N134 S8) --- */
-    uint32_t    ctx_size;       /* sizeof(NvrGameContext) as the host sees it —
+    uint32_t    ctx_size;       /* sizeof(NevrGameContext) as the host sees it —
                                  *   a plugin compares this against its own
                                  *   compile-time sizeof to decide which trailing
                                  *   fields are present. */
     int         (*get_plugin_count)(void);
-    const NvrLoadedPluginInfo* (*get_plugin_info)(int index);
+    const NevrLoadedPluginInfo* (*get_plugin_info)(int index);
 
     /* --- v6 additions (#598) --- */
     const char* plugin_id;      /* the host's name for this plugin: the `name` of its config.yaml
@@ -176,7 +230,7 @@ struct NvrGameContext {
 };
 
 /* Host capability flags */
-enum NvrHostFlags : uint32_t {
+enum NevrHostFlags : uint32_t {
     NEVR_HOST_HAS_NETGAME   = 0x01, /* net_game pointer is valid */
     NEVR_HOST_IS_SERVER     = 0x02, /* running as dedicated server */
     NEVR_HOST_IS_CLIENT     = 0x04, /* running as client */
@@ -192,13 +246,13 @@ enum NvrHostFlags : uint32_t {
  *   1. Host loads plugins from config.yaml in list order (v5: ordered by
  *      capability priority within each explicit-ordering band).
  *   2. Host calls LoadLibrary on plugin DLL
- *   3. Host calls NvrPluginGetInfo() to read metadata
- *   4. Host calls NvrPluginInitEx(ctx, args_json) if exported (v4); otherwise
- *      NvrPluginInit(ctx) if exported (v3); else skips init (init is optional).
- *   5. Host calls NvrPluginOnFrame(ctx) each server/client tick (optional)
- *   6. Host calls NvrPluginOnGameStateChange(ctx, old, new) on state transitions
+ *   3. Host calls NevrPluginGetInfo() to read metadata
+ *   4. Host calls NevrPluginInitEx(ctx, args_json) if exported (v4); otherwise
+ *      NevrPluginInit(ctx) if exported (v3); else skips init (init is optional).
+ *   5. Host calls NevrPluginOnFrame(ctx) each server/client tick (optional)
+ *   6. Host calls NevrPluginOnGameStateChange(ctx, old, new) on state transitions
  *   7. During explicit normal-thread teardown, the host may call
- *      NvrPluginShutdown() in REVERSE load order before releasing its module
+ *      NevrPluginShutdown() in REVERSE load order before releasing its module
  *      references (last loaded shuts down first, so hooks installed on top of
  *      earlier plugins' hooks are torn down before what they depend on).
  *      If init returns non-zero and this export exists, the host calls it
@@ -208,21 +262,21 @@ enum NvrHostFlags : uint32_t {
  *      Shutdown is not guaranteed on process exit. Runtime dynamic unloading
  *      is not a supported lifecycle path.
  *
- * All functions are optional except NvrPluginGetInfo.
+ * All functions are optional except NevrPluginGetInfo.
  * The host checks GetProcAddress for each and skips if not exported.
  *
  * v5 addition: ctx->get_plugin_count() and ctx->get_plugin_info(n) let a plugin
  * discover its neighbours at runtime. A plugin compiled against v5 checks
- * ctx->ctx_size >= sizeof(NvrGameContext) before calling these — a pre-v5 host
+ * ctx->ctx_size >= sizeof(NevrGameContext) before calling these — a pre-v5 host
  * sends a smaller ctx struct, so the pointers land at offsets the host didn't
  * fill and their values are undefined.
  */
 
 /* Required: return plugin metadata */
-typedef NvrPluginInfo (*NvrPluginGetInfo_fn)(void);
+typedef NevrPluginInfo (*NevrPluginGetInfo_fn)(void);
 
 /* Optional: one-time initialization after game modules are loaded */
-typedef int (*NvrPluginInit_fn)(const NvrGameContext* ctx);
+typedef int (*NevrPluginInit_fn)(const NevrGameContext* ctx);
 
 /*
  * Optional (API v4): one-time initialization WITH per-instance args.
@@ -232,38 +286,38 @@ typedef int (*NvrPluginInit_fn)(const NvrGameContext* ctx);
  * empty object "{}" (never null). Return 0 on success, non-zero to fail the load
  * (a `required: true` plugin that returns non-zero is fatal on a server).
  *
- * Backward compatibility (REQUIRED): the host prefers NvrPluginInitEx when the
- * plugin exports it, and otherwise calls NvrPluginInit(ctx) — so a v3 plugin
- * that exports only NvrPluginInit still loads unchanged, just without args. A
- * plugin exporting BOTH gets NvrPluginInitEx (NvrPluginInit is not also called).
+ * Backward compatibility (REQUIRED): the host prefers NevrPluginInitEx when the
+ * plugin exports it, and otherwise calls NevrPluginInit(ctx) — so a v3 plugin
+ * that exports only NevrPluginInit still loads unchanged, just without args. A
+ * plugin exporting BOTH gets NevrPluginInitEx (NevrPluginInit is not also called).
  *
  * args_json shape (v4 contract): a FLAT JSON object whose keys are the entry's
  * args flattened to dotted paths (a nested `a: {b: 1}` becomes "a.b") and whose
  * values are strings (post-interpolation; the runtime interpolates ${VAR} refs
  * before serialization, and an unset bare ${VAR} stays as written). Example: {"greeting":"hi","limits.max":"5"}.
  */
-typedef int (*NvrPluginInitEx_fn)(const NvrGameContext* ctx, const char* args_json);
+typedef int (*NevrPluginInitEx_fn)(const NevrGameContext* ctx, const char* args_json);
 
 /* Optional: per-frame tick */
-typedef void (*NvrPluginOnFrame_fn)(const NvrGameContext* ctx);
+typedef void (*NevrPluginOnFrame_fn)(const NevrGameContext* ctx);
 
 /* Optional: game state transition */
-typedef void (*NvrPluginOnGameStateChange_fn)(const NvrGameContext* ctx,
+typedef void (*NevrPluginOnGameStateChange_fn)(const NevrGameContext* ctx,
                                               uint32_t old_state,
                                               uint32_t new_state);
 
 /* Optional: cleanup during explicit normal-thread host teardown. Process exit
  * does not guarantee this callback. */
-typedef void (*NvrPluginShutdown_fn)(void);
+typedef void (*NevrPluginShutdown_fn)(void);
 
 /*
  * Plugin API versioning.
  *
- * Bump NEVR_PLUGIN_API_VERSION when NvrPluginInfo, NvrGameContext, or any
+ * Bump NEVR_PLUGIN_API_VERSION when NevrPluginInfo, NevrGameContext, or any
  * cross-DLL export signature changes in a backward-incompatible way.
- * Adding new optional exports or new NvrHostFlags values does NOT require a bump.
+ * Adding new optional exports or new NevrHostFlags values does NOT require a bump.
  *
- * v8 (#1094): adds level_symbol + level_name to the TAIL of NvrGameContext, so a plugin can switch itself on
+ * v8 (#1094): adds level_symbol + level_name to the TAIL of NevrGameContext, so a plugin can switch itself on
  * for the levels its config names. A plugin checks ctx->ctx_size covers ctx->level_name before reading them,
  * exactly as for v5 and v6; a pre-v8 plugin never reads them. The host fills them in every context it passes
  * (init, per-frame, state change). The game sets the level as it enters the "loading level" state, so the
@@ -276,7 +330,7 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * existing struct or signature changes, so the bump is a CAPABILITY signal. A plugin that registers assets
  * should declare api version 7 and treat a missing export as "this host cannot carry assets".
  *
- * v6 (N135, #598): adds plugin_id + log to the TAIL of NvrGameContext. A plugin
+ * v6 (N135, #598): adds plugin_id + log to the TAIL of NevrGameContext. A plugin
  * checks ctx->ctx_size covers ctx->log before calling it, exactly as for the v5
  * query API; a pre-v6 plugin never reads the new fields. The host fills them in
  * every context it passes (init, per-frame, state change), per plugin, and the
@@ -287,34 +341,34 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * level control as the host's lines.
  *
  * v5 (N134 S8): adds ctx_size + get_plugin_count / get_plugin_info to the TAIL
- * of NvrGameContext. This is backward-compatible — a pre-v5 plugin still reads
+ * of NevrGameContext. This is backward-compatible — a pre-v5 plugin still reads
  * base_addr / net_game / game_state / flags at their original offsets — so the
  * bump is a CAPABILITY signal, not a break: a plugin can check ctx_size at
  * runtime to discover whether the host provides the query API, and the host can
  * check a plugin's declared API version to know whether it understands ctx_size.
  *
- * v4 (N134 S6): the additive NvrPluginInitEx(ctx, args_json) export + config-driven
- * ordered loading. This is a compatible addition — a v3 plugin (NvrPluginInit
+ * v4 (N134 S6): the additive NevrPluginInitEx(ctx, args_json) export + config-driven
+ * ordered loading. This is a compatible addition — a v3 plugin (NevrPluginInit
  * only) still loads — so the bump is a CAPABILITY signal, not a break: a plugin
  * can query the host version to decide whether to rely on receiving args. The
- * args_json string shape is part of this version's contract (see NvrPluginInitEx).
+ * args_json string shape is part of this version's contract (see NevrPluginInitEx).
  *
- * v3 (N114): added NvrPluginGetCapabilities export (a plugin can declare what it
+ * v3 (N114): added NevrPluginGetCapabilities export (a plugin can declare what it
  * does). Additive; existing plugins keep loading.
  *
- * The host resolves NvrPluginGetApiVersion via GetProcAddress. If absent,
+ * The host resolves NevrPluginGetApiVersion via GetProcAddress. If absent,
  * the plugin is v1 (pre-versioning). Fully backward-compatible — existing
  * plugins don't need recompilation.
  */
 #define NEVR_PLUGIN_API_VERSION 8
 
 /* Optional: return the API version the plugin was compiled against */
-typedef uint32_t (*NvrPluginGetApiVersion_fn)(void);
+typedef uint32_t (*NevrPluginGetApiVersion_fn)(void);
 
 /*
  * Plugin capabilities — what the plugin DOES. (API v3.)
  *
- * NvrHostFlags runs the other way: host -> plugin, describing what the host is
+ * NevrHostFlags runs the other way: host -> plugin, describing what the host is
  * offering. There was no channel for the reverse, so a plugin that rewrites
  * match rules was indistinguishable from one that recolours a menu.
  *
@@ -329,13 +383,13 @@ typedef uint32_t (*NvrPluginGetApiVersion_fn)(void);
  * plugins that make none, and that operators get a manifest. Do not describe
  * it as a security control, because it is not one.
  *
- * Declared via an optional export, exactly like NvrPluginGetApiVersion: absent
+ * Declared via an optional export, exactly like NevrPluginGetApiVersion: absent
  * means UNDECLARED, and existing v1/v2 plugins keep loading unchanged. Adding
- * a field to NvrPluginInfo instead would have changed its size, and the host
+ * a field to NevrPluginInfo instead would have changed its size, and the host
  * reads that struct by value from the plugin — an older plugin would return a
  * smaller struct and the host would read past its end.
  */
-enum NvrPluginCapabilities : uint32_t {
+enum NevrPluginCapabilities : uint32_t {
     /* No declaration was made. NOT a claim of harmlessness — it is the absence
      * of a claim, and a strict host should treat it as unknown, not as safe. */
     NEVR_PLUGIN_CAP_UNDECLARED      = 0x00,
@@ -349,8 +403,8 @@ enum NvrPluginCapabilities : uint32_t {
                                              * instance does not share the host's hook table */
 };
 
-/* Optional: return a bitwise OR of NvrPluginCapabilities. Absent => UNDECLARED. */
-typedef uint32_t (*NvrPluginGetCapabilities_fn)(void);
+/* Optional: return a bitwise OR of NevrPluginCapabilities. Absent => UNDECLARED. */
+typedef uint32_t (*NevrPluginGetCapabilities_fn)(void);
 
 /*
  * Plugin assets (API v7).
@@ -368,10 +422,10 @@ typedef uint32_t (*NvrPluginGetCapabilities_fn)(void);
  * `label` is a short name for logs and for the `nevr_assets` list the game client reports to the game service
  * at login; it is copied.
  *
- * Register before the engine first loads the resource (NvrPluginInit/InitEx is early enough). A name the
+ * Register before the engine first loads the resource (NevrPluginInit/InitEx is early enough). A name the
  * engine has already loaded is refused with NEVR_ASSET_ALREADY_LOADED, never silently ignored.
  *
- * Lifetime: call NEVR_DeregisterAssets(image_start, image_end) from NvrPluginShutdown. The host also drops
+ * Lifetime: call NEVR_DeregisterAssets(image_start, image_end) from NevrPluginShutdown. The host also drops
  * every asset inside a plugin's image before it frees that image.
  *
  * Only single-buffer resources are served in v7; the host logs a warning naming any asset it cannot serve.
@@ -386,6 +440,32 @@ enum NevrAssetStatus : int32_t {
 typedef int  (*NevrRegisterAsset_fn)(uint64_t type_hash, uint64_t name_hash, const void* data, uint64_t size,
                                     const char* label);
 typedef void (*NevrDeregisterAssets_fn)(const void* data_start, const void* data_end);
+
+/*
+ * Deprecated Nvr* aliases.
+ *
+ * The prefix of this ABI is Nevr. A plugin built before that rename exports and compiles against Nvr* names; the
+ * host still loads such a plugin (it resolves the Nevr* export first and falls back to the Nvr* one), and the
+ * aliases below keep source written against the old names compiling, with a deprecation warning. They name the
+ * same types, so no layout changes. A plugin exports NevrPluginGetInfo, NevrPluginInit, NevrPluginInitEx,
+ * NevrPluginOnFrame, NevrPluginOnGameStateChange, NevrPluginShutdown, NevrPluginGetApiVersion and
+ * NevrPluginGetCapabilities; the deprecated export spellings are the same names with Nvr in place of Nevr.
+ * Rebuild against these headers to drop the warnings.
+ */
+using NvrPluginInfo [[deprecated("use NevrPluginInfo")]] = NevrPluginInfo;
+using NvrLoadedPluginInfo [[deprecated("use NevrLoadedPluginInfo")]] = NevrLoadedPluginInfo;
+using NvrGameContext [[deprecated("use NevrGameContext")]] = NevrGameContext;
+using NvrHostFlags [[deprecated("use NevrHostFlags")]] = NevrHostFlags;
+using NvrPluginCapabilities [[deprecated("use NevrPluginCapabilities")]] = NevrPluginCapabilities;
+using NvrPluginGetInfo_fn [[deprecated("use NevrPluginGetInfo_fn")]] = NevrPluginGetInfo_fn;
+using NvrPluginInit_fn [[deprecated("use NevrPluginInit_fn")]] = NevrPluginInit_fn;
+using NvrPluginInitEx_fn [[deprecated("use NevrPluginInitEx_fn")]] = NevrPluginInitEx_fn;
+using NvrPluginOnFrame_fn [[deprecated("use NevrPluginOnFrame_fn")]] = NevrPluginOnFrame_fn;
+using NvrPluginOnGameStateChange_fn [[deprecated("use NevrPluginOnGameStateChange_fn")]] =
+    NevrPluginOnGameStateChange_fn;
+using NvrPluginShutdown_fn [[deprecated("use NevrPluginShutdown_fn")]] = NevrPluginShutdown_fn;
+using NvrPluginGetApiVersion_fn [[deprecated("use NevrPluginGetApiVersion_fn")]] = NevrPluginGetApiVersion_fn;
+using NvrPluginGetCapabilities_fn [[deprecated("use NevrPluginGetCapabilities_fn")]] = NevrPluginGetCapabilities_fn;
 
 /*
  * Supported libr15 builds, declared where the Quest loader can read them without running the plugin.

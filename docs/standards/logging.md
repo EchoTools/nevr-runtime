@@ -134,11 +134,13 @@ for row.
 | `[NEVR.UITEXTURE]`    | UI, splash and menu textures at their top mip: one line per UI texture naming the mip requested (`patch/ui_texture_mips.h`) |
 | `[NEVR.UI]`           | The UI text writer (`patch/ui_text.h`, `patch/ui_text_writer.h`, #896): `text writer ready`/`off` with the three pins, one `text written` or `text dropped` line per request with `actor`, `element`, `bytes` and `attempts`, and `text first write` with the writing thread and the game-loop thread. A text is never logged, only its size |
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
+| `[NEVR.LOBBY]`        | The lobby-full back-off and the failure-message rewrite, PC and Quest (`patch/lobby_full_backoff.cpp`, `patch/lobby_failure_message_rules.h`; Quest: `social/lobby_full_hooks.cpp`, `social/lobby_full_layout.h`): the join hold and refusal lines, the code-8 page shown, and the decline when the game keeps its own page (`failure message not shown`, Info once per code and reason; each later one is a Debug `page_unchanged` record). A Quest line is a `lobby_full` sentinel record: its fields are `status`, `code`, `reason` and the consequence as `msg` (the decline also carries `title`; `refusal_dropped` also carries `game_status` when there is a lobby client). `refusal_dropped` and `refusal_uncounted` are Info once per process for each code, and Debug after. The Quest caps those Debug repeats and the decline's repeat (`page_unchanged`) at 10 per 10 s per kind (`RepeatLimiter`, `social/lobby_full_layout.h`): the repeats a window does not write are counted, and the count is written as one Debug `repeats_suppressed` record (`record`, `count`, `window_ms` `10000`) before the next refusal or decline record of any kind. The sentinel log has no level gate, so these caps are what bound its disk log and its crash ring. The PC join hold (`join held`) is a Debug line with `reason=refused_last_join`, written on each tick a join is held; the per-refusal Info line (`full lobby: refused N of M`) is its summary. The built-in filter's N78 limiter (`runtime/log/rate_limiter.h`) caps the hold line at 3 per 5 s for one line text, then writes a counted `[NEVR.LOGFILTER] repeated count=<n> window_s=<t>` line |
 | `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU and the rating score the auto-selector reads (`gpu_score`), headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines, a one-time `settings_trace` line, and one `gpu_score kept|filled|unrated` line a run, which says the score the selector read and, when unrated, why (`patch/render_config.h`, `patch/render_config_hook.h`, `patch/gpu_score.h`, ADR 0022, #1419) |
-| `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump, crash report send (`event` `crash_send`, #1689), and the console notice that follows a `game_stop` (`event` `console_notice`, #1533: `reason`, and `written`, whether a console took the plain line). The value of the record's `tag` field; the host writes no `Log()` line |
+| `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records, in the run's main log (Rule 17): attach decisions, runtime load, crash dump, crash report send (`event` `crash_send`, #1689), and the console notice that follows a `game_stop` (`event` `console_notice`, #1533: `reason`, and `written`, whether a console took the plain line). The value of the record's `tag` field; the host writes no `Log()` line |
 | `[NEVR.STOP]`         | The one line the `BugSplat64.dll` host writes to standard error when it stops the game or leaves it running without `nevr-runtime.dll` (`runtime/host/stop_line.h`, #1252), with the same facts in the host log. The value of the line's `tag` field; fields and exit codes in "The `NEVR.STOP` line" below |
 | `[NEVR.LOGSEND]`      | The player log upload (`core/log_send.h`, ADR 0030, #1788): one Info line per tap with the file names and sizes, one Info line with the status and the code, a Warning with the status and the transport error or HTTP status on a failure. Never the text of a log, the body or the answer |
 | `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |
+| `[NEVR.QUESTBUILD]`   | The Quest store build's host tools (`nevr_quest_obb_extract`, `tools/quest_store_build.py`, `tools/quest_store_install.py`, ADR 0042): one JSON line per step on standard output, with `schema`, `ts`, `level`, `tag`, `event` and the step's own fields (digests, byte counts, `ms`); a refusal is the event `refused` with a `code` and a `detail`. Never a key, a passphrase or file contents |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you
@@ -148,10 +150,11 @@ for review.
 ### The `NEVR.STOP` line
 
 Every way the host stops the game, and every attach that leaves the game running without the runtime, writes one JSON
-object on one line to standard error, once per run. A `-server` operator has a console and no dialog; this is what they
-read. The host log (`nevr-bootstrap.jsonl`) carries the same facts: in the `game_stop` record when the host ends the
-process, and in a `host_not_attached` record when the game keeps running. The line is built in a fixed buffer
-(`JsonLine`, no heap, no lock) and written with one `WriteFile`. The exit codes do not change.
+object on one line to standard error, once per run, when the process has a standard error handle that takes the write
+(`PutStopLine` writes nothing without one). A `-server` operator has a console and no dialog; this is what they read.
+The host's records in the main log (Rule 17) carry the same facts whether or not the line is written: in the `game_stop`
+record when the host ends the process, and in a `host_not_attached` record when the game keeps running. The line is
+built in a fixed buffer (`JsonLine`, no heap, no lock) and written with one `WriteFile`. The exit codes do not change.
 
 | Field             | Meaning                                                                                              |
 | ----------------- | ---------------------------------------------------------------------------------------------------- |
@@ -536,7 +539,7 @@ it was applied.
 The runtime boots under the DllMain loader lock, where the game's CLog is not
 usable. The boot phase runs from `nevr_boot_log_tee::Init()` to
 `nevr_boot_log_tee::Close()`, and in it `Log()` itself reports through the boot
-tee (stderr and `nevr-boot.jsonl`): `Init()` sets `Log()`'s boot sink
+tee (stderr and the main log, Rule 17): `Init()` sets `Log()`'s boot sink
 (`SetBootLogSink` in `src/core/logging.h`) and `Close()` clears it. Code that
 runs both during boot and after it calls `Log()` and never branches on the
 phase.
@@ -627,8 +630,8 @@ call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `Pl
   spaces, so a plugin cannot start a second line, and message, keys and values are capped so a line
   fits the 2048-byte buffer `Log()` uses before the game logger exists; fields past the cap are counted
   in `fields_dropped=<n>`.
-- **When.** A plugin has a host log from its init callback (`NvrPluginInit` or `NvrPluginInitEx`)
-  on, from any thread, including from `NvrPluginShutdown` with the id and function it kept. There is
+- **When.** A plugin has a host log from its init callback (`NevrPluginInit` or `NevrPluginInitEx`)
+  on, from any thread, including from `NevrPluginShutdown` with the id and function it kept. There is
   none before init (no context exists) and none from `DllMain`, which runs under the loader lock. A
   host older than v6 passes a context that does not cover `ctx->log`; the plugin logger then falls back
   to stderr (`<prefix> <LEVEL> <message>`), which that host does not collect.
@@ -690,6 +693,36 @@ record, and `ClientLobbyRecords`, which both writers use); `LogClientLobbyMessag
 `LobbyFrameRequests`, `LobbyFrameText` and `LobbyFrameRecords` in `src/runtime/tests/test_lobby_frame.cpp`; the
 `lobby records` cases in `src/quest/tests/session_router_test.cpp`. Both suites compare their output with the
 expected lines in `src/runtime/tests/lobby_record_golden.h`, so the two writers' bytes are pinned to one text.
+
+### Rule 17: One log — every record of a process goes into one file
+
+A process writes one main log, `<nevr root>\logs\nevr-<UTC time the process started>.jsonl`
+(`src/core/run_log_path.h`; `nevr-pid<hex>.jsonl` when the start time cannot be read). The host, the boot phase, the runtime's filter
+and the crash path all append to it, so a run is read from one file in time order, and no record waits in a spool to be replayed.
+The host DLL and `nevr-runtime.dll` share no memory, so each derives the name from the process's creation time, which is also what
+the run id is built from.
+
+- **What marks a writer.** A host record carries `"tag":"NEVR.HOST"`; a boot-phase record carries `"src":"boot"`; a crash line
+  carries `"tag":"NEVR.CRASH"` and `"event":"crash_record"`; the filter's own lines carry `ts`, `run`, `level` and `msg`. A reader
+  tells them apart by those keys, never by the file.
+- **No other place.** When the folder cannot be made or the file cannot be opened (no `%LOCALAPPDATA%`, a path that does not
+  fit, a full disk), the record goes to standard error and a count of the records lost is kept and logged once a file opens. It
+  never goes to a folder beside the game, to `%TEMP%` or to a second file. A crash writes no text file: the record in the main log
+  is the text. Crash dumps and readable crash reports go only to `<nevr root>\crashes`.
+- **Appends are whole lines.** A record is one `WriteFile` with `FILE_APPEND_DATA`, taken under an in-process lock and the named
+  mutex `Local\nevr-host-bootstrap-log` (`nevr_run_log::kMutexName`), because Wine does not make a `FILE_APPEND_DATA` write atomic
+  and the host's crash-report thread appends while the runtime does. The crash path takes no lock and no heap (N70): it writes a fixed
+  buffer to a handle opened when the crash path was armed.
+- **Rotation keeps the name.** A file that reaches its size or age limit is renamed `nevr-<timestamp>.<n>.jsonl` and the process
+  goes on writing its own name, so the host and the crash path never hold a name that has moved.
+- **Quest.** The sentinel writes the same shape to `nevr-<timestamp>.jsonl` in `nevr/logs` below the media or the data folder it
+  chose (the `sentinel_log_dir` line says which). Logcat keeps receiving every line.
+- **Not covered.** The core installer's own run log (`installer/`, ADR 0023) and the game's own `_local\r14logs`.
+
+**Where:** `src/core/run_log_path.h`, `src/runtime/log/run_log_writer.h`, `src/runtime/host/bootstrap_diagnostics.cpp`,
+`src/runtime/lifecycle/crash_recovery.cpp` (`BuildCrashRecord` in `crash_record_line.h`), `src/runtime/log/boot_log_tee.cpp`.
+Tests: `test_boot_log_routing.cpp`, `test_bootstrap_diagnostics.cpp`, `test_host_crash_capture.cpp`, `test_host_stop_line.cpp`,
+`src/runtime/tests/host_crash/host_crash_test.cpp`.
 
 ---
 

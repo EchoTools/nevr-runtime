@@ -268,7 +268,7 @@ every `update check` line carries `channel_source`, so a player whose config dis
 ### 8. Logging
 
 A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag is added to the table of
-`docs/standards/logging.md` by the runtime step). The host writes JSONL records to `nevr-bootstrap.jsonl` with tag
+`docs/standards/logging.md` by the runtime step). The host writes JSONL records to the run's main log (`nevr-<timestamp>.jsonl`) with tag
 `NEVR.HOST`. The core writes `[NEVR.INSTALL]` records to `logs\nevr-update.jsonl`. No record carries a token or a response body.
 
 | Where | Event | Fields |

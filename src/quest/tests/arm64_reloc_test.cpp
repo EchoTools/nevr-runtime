@@ -950,7 +950,7 @@ TEST(EveryInlineRowOfThePatchTableRelocatesInItsThreeWordWindow) {
     }
     g_opaque.clear();
   }
-  CHECK_EQ(inlineRows, static_cast<std::size_t>(5));
+  CHECK_EQ(inlineRows, static_cast<std::size_t>(6));
 }
 
 TEST(ThreeWordWindowsWithEveryPcRelativeKindRunLikeTheOriginal) {

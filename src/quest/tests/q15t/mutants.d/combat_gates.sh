@@ -1,4 +1,4 @@
-# module `combat_gates`: each line removes one rule from src/combat_gates.h; tests/mod/combat_gates.sh must fail on it
+# module `combat_gates`: each line removes one rule from src/combat_gates.h; its tests (mod/combat_gates.cmake, `just test-quest-q15t combat_gates`) must fail on it
 runm combat_gates cg_bots_without_levelname src/combat_gates.h "s/c.bots = built.bots \&\& !off.bots \&\& c.levelname;/c.bots = built.bots \&\& !off.bots;/"
 runm combat_gates cg_perm_off_ignored       src/combat_gates.h "s/c.perm = built.perm \&\& !off.perm;/c.perm = built.perm;/"
 runm combat_gates cg_levelname_off_ignored  src/combat_gates.h "s/c.levelname = built.levelname \&\& !off.levelname;/c.levelname = built.levelname;/"

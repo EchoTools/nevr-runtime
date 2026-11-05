@@ -88,7 +88,7 @@ struct NevrRuntimeExports {
   const char* (*token_auth_get_token)();
   std::uint64_t (*token_auth_get_discord_id)();
   const char* (*token_auth_get_username)();
-  // The two static modules' entry points (src/extension/module_interface.h); `ctx` is an NvrModuleContext.
+  // The two static modules' entry points (src/extension/module_interface.h); `ctx` is an NevrModuleContext.
   std::uint32_t (*platform_compat_api_version)();
   int (*platform_compat_init)(const void* ctx);
   void (*platform_compat_shutdown)();

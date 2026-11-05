@@ -4,5 +4,4 @@
 cmake_minimum_required(VERSION 3.23)
 project(nevr_extra_rows_configure LANGUAGES NONE)
 include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/libr15_extra_rows.cmake")
-nevr_libr15_extra_rows("${NEVR_LIBR15_EXTRA_ROWS}" "${CMAKE_CURRENT_BINARY_DIR}/generated.cpp" "${NEVR_SRC_ROOT}" "${NEVR_JSON_INCLUDE}"
-                       "${CMAKE_CURRENT_BINARY_DIR}/check")
+nevr_libr15_extra_rows("${NEVR_LIBR15_EXTRA_ROWS}" "${CMAKE_CURRENT_BINARY_DIR}/generated.cpp" "${NEVR_SRC_ROOT}" "${NEVR_JSON_INCLUDE}")

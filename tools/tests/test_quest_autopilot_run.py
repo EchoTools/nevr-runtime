@@ -59,6 +59,7 @@ case "$*" in
   "logcat -c") ;;
   "shell am start -n com.readyatdawn.r15/com.oculus.gles3jni.MainActivity") echo "Starting: Intent { cmp=com.readyatdawn.r15/com.oculus.gles3jni.MainActivity }" ;;
   "logcat -v epoch") echo $$ > "$FAKE_LOGCAT_PID"; cat "$FAKE_STREAM"; exec sleep "${FAKE_HOLD:-600}" ;;
+  "shell ls "*) printf '%b' "${FAKE_LS-nevr-2026-11-03T09-00-00.100.jsonl\nnevr-2026-11-04T10-43-51.990.jsonl\nnevr-2026-11-04T10-43-51.990.1.jsonl\nnevr-sentinel.log\n}" ;;
   "pull "*) printf '{"event":"sentinel_ctor"}\n' > "$3"; echo "1 file pulled" ;;
   *) echo "unexpected adb call: $*" >&2; exit 9 ;;
 esac
@@ -159,7 +160,9 @@ class RunnerTest(unittest.TestCase):
                  "shell am force-stop com.readyatdawn.r15",
                  "shell am broadcast -a com.oculus.vrpowermanager.automation_disable"]
         self.assertEqual(calls[:len(order)], order)
-        self.assertEqual(calls[len(order)].split()[:2], ["pull", f"{MEDIA_FILES}/nevr-sentinel.log"])
+        self.assertEqual(calls[len(order)], f"shell ls {MEDIA_FILES}/nevr/logs")
+        # The run's log is the newest process log in the folder: not an archive, not the old layout's name.
+        self.assertEqual(calls[len(order) + 1].split()[:2], ["pull", f"{MEDIA_FILES}/nevr/logs/nevr-2026-11-04T10-43-51.990.jsonl"])
         self.assertEqual(len([c for c in calls if c.startswith("pull ")]), 1)  # the media folder answered
         self.assertEqual(self.pushed.read_text(), self.route.read_text())
         self.assertTrue(self.logcat_is_gone())
@@ -194,15 +197,24 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(end["steps_logged"], 2)
         run_dir = pathlib.Path(start["out"])
         self.assertIn("route_end", (run_dir / "logcat.txt").read_text())
-        self.assertTrue((run_dir / "nevr-sentinel.log").exists())
+        self.assertTrue((run_dir / "run-log.jsonl").exists())
 
-    def test_the_android_data_folder_is_the_fallback_for_the_sentinel_log(self):
+    def test_the_android_data_folder_is_the_fallback_for_the_run_log(self):
         p = self.go(LOAD + LOADED + SEAM + REGISTERED + START_LINE + STEPS + end_line(),
-                    env={"FAKE_FAIL": f"pull {MEDIA_FILES}"})
+                    env={"FAKE_FAIL": f"shell ls {MEDIA_FILES}"})
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        lists = [c for c in self.calls() if c.startswith("shell ls ")]
+        self.assertEqual(lists, [f"shell ls {MEDIA_FILES}/nevr/logs", f"shell ls {FILES}/nevr/logs"])
         pulls = [c.split()[1] for c in self.calls() if c.startswith("pull ")]
-        self.assertEqual(pulls, [f"{MEDIA_FILES}/nevr-sentinel.log", f"{FILES}/nevr-sentinel.log"])
-        self.assertTrue((pathlib.Path(self.last("run_start")["out"]) / "nevr-sentinel.log").exists())
+        self.assertEqual(pulls, [f"{FILES}/nevr/logs/nevr-2026-11-04T10-43-51.990.jsonl"])
+        self.assertTrue((pathlib.Path(self.last("run_start")["out"]) / "run-log.jsonl").exists())
+
+    def test_a_folder_without_a_process_log_pulls_nothing(self):
+        p = self.go(LOAD + LOADED + SEAM + REGISTERED + START_LINE + STEPS + end_line(),
+                    env={"FAKE_LS": "nevr-sentinel.log\nnevr-2026-11-04T10-43-51.990.1.jsonl\n"})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual([c for c in self.calls() if c.startswith("pull ")], [])
+        self.assertFalse((pathlib.Path(self.last("run_start")["out"]) / "run-log.jsonl").exists())
 
     def test_a_burst_is_read_without_waiting_for_more_output(self):
         # The whole stream arrives at once and logcat then stays open and quiet; the run still ends at route_end.
@@ -223,8 +235,11 @@ class RunnerTest(unittest.TestCase):
         end = self.last("run_end")
         self.assertEqual(end["result"], "fail")
         self.assertEqual(end["reasons"], ["the route drives the right hand and frames_driven_right is 0"])
-        self.assertEqual(self.calls()[-3:-1], ["shell am force-stop com.readyatdawn.r15",
-                                               "shell am broadcast -a com.oculus.vrpowermanager.automation_disable"])
+        calls = self.calls()
+        stop = calls.index("shell am force-stop com.readyatdawn.r15", calls.index("logcat -v epoch"))
+        self.assertEqual(calls[stop:stop + 2], ["shell am force-stop com.readyatdawn.r15",
+                                                "shell am broadcast -a com.oculus.vrpowermanager.automation_disable"])
+        self.assertEqual(calls[stop + 2], f"shell ls {MEDIA_FILES}/nevr/logs")  # the log is pulled after the game is stopped
 
     def test_a_hand_the_route_does_not_drive_may_have_no_frames(self):
         loaded = LOADED.replace("drives=left+right", "drives=left")

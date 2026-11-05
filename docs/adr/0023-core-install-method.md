@@ -88,7 +88,7 @@ flowchart TD
     P6b --> P7[read both back: sha256 equals the manifest]
     P7 -->|any failure| R[restored: every changed file put back; needs-user, naming the file, when one cannot be]
     P7 --> P8[write the record in root/installer]
-    P8 --> P9[first launch: nevr-bootstrap.jsonl versions record, runtime_load verify=accepted]
+    P8 --> P9[first launch: the main log's host versions record, runtime_load verify=accepted]
 ```
 
 The layout is ADR 0012's. The only file the plan writes beside `echovr.exe` is `BugSplat64.dll`, the host. The runtime goes to

@@ -14,7 +14,7 @@ What it does, in order:
      plugin_load), Horizon OS blocks the launch (launch_blocked: no controller is connected), or --timeout passes;
      with --start-on REGEX it creates the start file at the first logcat line the regex matches;
   5. force-stops the game, gives the sensor back (`automation_disable`), and saves the run's logcat and
-     nevr-sentinel.log.
+     run log (the newest nevr-<timestamp>.jsonl in nevr/logs of the game's files folder).
 
 Every step is a JSON record in <out>/runs.jsonl (default: quest-autopilot/ under the work root), with a run id, the
 headset serial, the route's sha256, and the plugin's route_start/route_end fields in the summary record. The exit code is
@@ -48,10 +48,11 @@ PACKAGE = "com.readyatdawn.r15"
 ACTIVITY = f"{PACKAGE}/com.oculus.gles3jni.MainActivity"
 FILES = f"/sdcard/Android/data/{PACKAGE}/files"
 CONFIG = f"{FILES}/config.yaml"
-# The runtime writes nevr-sentinel.log in the Android/media files folder; the Android/data one is read when an older
-# build left it there.
+# The runtime writes each run's log, nevr-<timestamp>.jsonl, in nevr/logs below the Android/media files folder, or below the
+# Android/data one when the media folder cannot be used (the `sentinel_log_dir` line says which). The run's log is the newest.
 MEDIA_FILES = f"/sdcard/Android/media/{PACKAGE}/files"
-SENTINEL_LOGS = (f"{MEDIA_FILES}/nevr-sentinel.log", f"{FILES}/nevr-sentinel.log")
+RUN_LOG_DIRS = (f"{MEDIA_FILES}/nevr/logs", f"{FILES}/nevr/logs")
+RUN_LOG_NAME = re.compile(r"^nevr-(\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d\.\d{3}|pid[0-9a-f]+)\.jsonl$")
 PLUGIN = "nevr_autopilot"
 PROX_CLOSE = "com.oculus.vrpowermanager.prox_close"
 PROX_RESTORE = "com.oculus.vrpowermanager.automation_disable"
@@ -279,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out = args.out or work_root.work_root() / "quest-autopilot"
     work_root.ensure_dir(out, "Autopilot runs on a Quest (tools/quest_autopilot_run.py): runs.jsonl, each run's logcat and "
-                         "nevr-sentinel.log.", "a run's files when the PR or report citing them is closed; runs.jsonl is kept.")
+                         "the run's log.", "a run's files when the PR or report citing them is closed; runs.jsonl is kept.")
     run_id = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
     rec = Recorder(out / "runs.jsonl", run_id)
     run_dir = out / run_id
@@ -329,9 +330,12 @@ def main(argv: list[str] | None = None) -> int:
     if stopped is not None:
         rec.write("run_end", result=stopped[0], reason=stopped[1])
         return stopped[2]
-    for remote in SENTINEL_LOGS:
-        adb.run("pull", remote, str(run_dir / "nevr-sentinel.log"), check=False)
-        if (run_dir / "nevr-sentinel.log").exists():
+    for folder in RUN_LOG_DIRS:
+        names = sorted(n for n in adb.run("shell", "ls", folder, check=False).split() if RUN_LOG_NAME.match(n))
+        if not names:
+            continue
+        adb.run("pull", f"{folder}/{names[-1]}", str(run_dir / "run-log.jsonl"), check=False)
+        if (run_dir / "run-log.jsonl").exists():
             break
     code, reasons = verdict(seen)
     rec.write("run_end", result="pass" if code == 0 else "fail", reasons=reasons, outcome=seen["outcome"],

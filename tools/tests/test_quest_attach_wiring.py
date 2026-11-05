@@ -91,6 +91,17 @@ class AttachIsWired(unittest.TestCase):
         self.assertIn("nevr_quest::ui_texture_mips::InstallUiTextureMips()", social)
         self.assertIn("nevr_quest::splash_skip::Install()", social)
 
+    def test_the_grey_default_irradiance_texture_has_its_own_step_that_social_does_not_gate(self):
+        steps = code("integration/production_steps.cpp")
+        irradiance = body(steps, "bool InstallIrradianceDefault() override")
+        self.assertIn("nevr_quest::irradiance_default::Install()", irradiance)
+        self.assertIn('detail_ = ok ? "ok" : "refused";', irradiance)
+        self.assertIn("return ok;", irradiance)
+        # Not inside InstallSocial: that step is skipped when social is off, the login is off or the bridge is down.
+        self.assertNotIn("irradiance_default", body(steps, "bool InstallSocial() override"))
+        sequence = code("integration/ctor_sequence.cpp")
+        self.assertIn("r.Run(StepId::kInstallIrradianceDefault, [&] { return steps.InstallIrradianceDefault(); });", sequence)
+
     def test_no_step_logs_a_skipped_code_write_any_more(self):
         for path in sorted(QUEST.rglob("*")):
             if path.suffix in (".cpp", ".h"):
@@ -101,7 +112,8 @@ class AttachIsWired(unittest.TestCase):
     def test_the_hook_free_translation_unit_keeps_its_exceptions_and_the_thunk_header_out(self):
         steps = (QUEST / "integration/production_steps.cpp").read_text()
         self.assertNotRegex(steps, r'#include\s+"[^"]*callback_thunk\.h"')
-        for header in ("sentinel/credits_text.h", "sentinel/splash_skip_hook.h", "sentinel/ui_texture_mips.h", "social/lobby_full_hooks.h",
+        for header in ("sentinel/credits_text.h", "sentinel/splash_skip_hook.h", "sentinel/ui_texture_mips.h", "sentinel/irradiance_default.h",
+                       "social/lobby_full_hooks.h",
                        "integration/libr15_attach_step.h"):
             self.assertNotRegex((QUEST / header).read_text(), r'#include\s+"[^"]*callback_thunk\.h"', header)
 
