@@ -52,7 +52,7 @@ source-invariant tests over the C++ tree and the release contract
 
 | Path | What it is |
 | --- | --- |
-| `cmd/test-go-tools/` | Runs `go test -json` over this module, keeps the stream as `<stamp>-go.jsonl` beside the Python runner's log and names the failing tests; `just test-tools` and `just verify` run it. |
+| `cmd/test-go-tools/` | Runs the Python half (the command after `--`), then `go test -json` over this module whatever the Python half did, keeps the stream as `<stem>-go.jsonl` beside the Python runner's log, records go_start and go_end in its `runs.jsonl`, names failing and skipped tests and each failed half; `just test-tools` and `just verify` run it. |
 | `internal/testkit/` | The kit every Go test of a tool uses: `Env` (a hermetic environment), `Main` and `Fake` (fake commands that are the test binary), `WaitFor` and `WaitLines` (waits with a deadline, no sleeping), `Fifo`. |
-| `internal/runlog/` | The durable log of a Go tool: one JSON line per event in `$XDG_STATE_HOME/nevr-runtime/<tool>.jsonl`; a log that cannot be written is a line on standard error and a non-zero exit. |
+| `internal/runlog/` | The durable log of a Go tool: one JSON line per event (`ts` in UTC, `level`, `event`, `tool`, `run`, `pid`, then the call's fields) in `$XDG_STATE_HOME/nevr-runtime/<tool>.jsonl`; a log that cannot be written is a line on standard error and a non-zero exit. |
 | `internal/policy/` | The checks of ADR 0044: `python_to_port.txt` (the Python files still to port; it only shrinks), the table of Python that stays, and the scan for `time.Sleep` used to wait. |

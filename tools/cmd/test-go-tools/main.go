@@ -1,11 +1,22 @@
-// Command test-go-tools runs the Go tests of the tools module and keeps the run: `go test -json` over the module (or
-// the packages given), its stream written byte for byte to a file in the test-run log directory, the failing tests
-// named on standard output, and go's exit code returned. `just test-tools` runs it after the Python runner (ADR 0044).
+// Command test-go-tools runs the tool suite's two halves, the Python half and the Go half, and keeps the Go half:
 //
-// The stream is <log dir>/<UTC stamp>-<pid>-<random>-go.jsonl, in $NEVR_TEST_LOG_DIR, else test-runs/tools-tests in the
-// work root ($NEVR_WORK_ROOT, else ~/src/nevr-runtime-work): beside the Python runner's <stem>.log and runs.jsonl. Exit
-// codes: go's own; 2 when the run could not be kept or go could not be started; 74 when the tool's run log fails
-// (internal/runlog).
+//	test-go-tools [package patterns] [-- python command and arguments]
+//
+// With a Python command after "--" it runs that first (its output passes through, its exit code is kept), then, unless it
+// was interrupted (an exit code above 128), the Go half whatever the Python half did, so a red Python test never hides
+// the Go tests and the ADR 0044 policy checks. The Go half is `go test -count=1 -json -timeout 5m` over ./... (or the
+// patterns given), started with the hermetic environment of testkit.EnvAt (no credentials, display, git configuration
+// or signing key; the Go caches kept), its stream written byte for byte to a file in the test-run log directory, the
+// failing and skipped tests named on standard output, and go_start and go_end records appended to the Python runner's
+// runs.jsonl. The run ends with one line that names each failed half, and the exit code is the Python half's when it
+// failed, else go's.
+//
+// The stream is <stem>-go.jsonl in $NEVR_TEST_LOG_DIR, else test-runs/tools-tests in the work root ($NEVR_WORK_ROOT,
+// else ~/src/nevr-runtime-work), where <stem> is the Python run's file stem (read from its "test-tools: log <path>"
+// line, so the two halves of one run share a name), or a stem of its own. Exit codes: as above; 2 when the run could not
+// be kept or go could not be started; 74 when the tool's own run log fails (internal/runlog).
+//
+// ADR 0044 and `just test-tools` and `just verify` use it.
 package main
 
 import (
@@ -21,28 +32,47 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
+	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
 )
 
 func main() {
-	os.Exit(run(context.Background(), os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	code := run(ctx, os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }
 
-func run(ctx context.Context, args []string, getenv func(string) string, _ io.Reader, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return runlog.Run("test-go-tools", getenv, stderr, func(log *slog.Logger) int {
-		return testGo(ctx, args, getenv, stdout, stderr, log)
+		return testTools(ctx, args, getenv, stdin, stdout, stderr, log)
 	})
 }
 
-// exitSetup is the exit code of a run that could not be made or kept.
-const exitSetup = 2
+const (
+	// exitSetup is the exit code of a run that could not be made or kept.
+	exitSetup = 2
+	// goTestTimeout ends a hung test with its name and a stack, in place of go's ten minutes a package.
+	goTestTimeout = 5 * time.Minute
+	// pythonLogPrefix starts the line in which the Python runner names its log (tools/run_tool_tests.py).
+	pythonLogPrefix = "test-tools: log "
+	// interruptedAbove: the Python runner exits 128 plus the signal after an interrupt.
+	interruptedAbove = 128
+)
 
-func testGo(ctx context.Context, patterns []string, getenv func(string) string, stdout, stderr io.Writer, log *slog.Logger) int {
+func testTools(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer, log *slog.Logger) int {
+	patterns, pyCmd, hasPy := splitArgs(args)
+	if hasPy && len(pyCmd) == 0 {
+		fmt.Fprintln(stderr, "test-tools: FAIL usage: test-go-tools [package patterns] [-- python command and arguments]; nothing follows --")
+		return exitSetup
+	}
 	if len(patterns) == 0 {
 		patterns = []string{"./..."}
 	}
@@ -53,31 +83,83 @@ func testGo(ctx context.Context, patterns []string, getenv func(string) string, 
 		return exitSetup
 	}
 	dir := logDir(getenv)
-	stream, err := createStream(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fmt.Fprintf(stderr, "test-tools: FAIL cannot write the run record to %s: %v\n", dir, err)
+		log.Error("no log dir", "dir", dir, "error", err.Error())
+		return exitSetup
+	}
+
+	pyRC, stem := -1, ""
+	if hasPy {
+		pyRC, stem = runPython(ctx, pyCmd, getenv, stdin, stdout, stderr)
+		log.Info("python half", "cmd", pyCmd, "exit", pyRC, "stem", stem)
+		if pyRC > interruptedAbove || ctx.Err() != nil {
+			fmt.Fprintf(stdout, "test-tools: python half exited %d (interrupted): go half not run\n", pyRC)
+			if pyRC <= interruptedAbove {
+				return 130
+			}
+			return pyRC
+		}
+	}
+	paired := stem != ""
+	if !paired {
+		if stem, err = newStem(); err != nil {
+			fmt.Fprintf(stderr, "test-tools: FAIL %v\n", err)
+			return exitSetup
+		}
+	}
+	stream, err := os.OpenFile(filepath.Join(dir, stem+"-go.jsonl"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		fmt.Fprintf(stderr, "test-tools: FAIL cannot write the go test stream in %s: %v\n", dir, err)
 		log.Error("no stream", "dir", dir, "error", err.Error())
 		return exitSetup
 	}
-	log.Info("start", "go", goPath, "patterns", patterns, "stream", stream.Name())
+	scratch, err := os.MkdirTemp("", "test-go-tools-")
+	if err != nil {
+		stream.Close()
+		fmt.Fprintf(stderr, "test-tools: FAIL cannot make a scratch directory for go test: %v\n", err)
+		return exitSetup
+	}
+	defer os.RemoveAll(scratch)
+	env, err := testkit.EnvAt(scratch)
+	if err != nil {
+		stream.Close()
+		fmt.Fprintf(stderr, "test-tools: FAIL cannot make go test's environment: %v\n", err)
+		return exitSetup
+	}
+
+	recorded := true
+	record := func(rec map[string]any) {
+		rec["ts"] = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+		rec["stem"], rec["paired"], rec["stream"] = stem, paired, stream.Name()
+		if pyRC >= 0 {
+			rec["python_rc"] = pyRC
+		}
+		if err := appendRecord(filepath.Join(dir, "runs.jsonl"), rec); err != nil {
+			recorded = false
+			fmt.Fprintf(stderr, "test-tools: FAIL cannot append to %s: %v\n", filepath.Join(dir, "runs.jsonl"), err)
+			log.Error("no record", "error", err.Error())
+		}
+	}
+	goArgs := append([]string{"test", "-count=1", "-json", "-timeout", goTestTimeout.String()}, patterns...)
+	record(map[string]any{"event": "go_start", "cmd": append([]string{"go"}, goArgs...)})
+	log.Info("go half", "go", goPath, "args", goArgs, "stream", stream.Name())
 
 	col := &collector{}
-	cmd := exec.CommandContext(ctx, goPath, append([]string{"test", "-count=1", "-json"}, patterns...)...)
+	cmd := exec.CommandContext(ctx, goPath, goArgs...)
+	cmd.Env = env
 	cmd.Stdout = io.MultiWriter(stream, col)
 	cmd.Stderr = stderr
 	runErr := cmd.Run()
 	col.flush()
 	closeErr := stream.Close()
 
-	code := 0
+	goRC := 0
 	var exitErr *exec.ExitError
 	switch {
 	case runErr == nil:
 	case errors.As(runErr, &exitErr):
-		code = exitErr.ExitCode()
-		if code <= 0 { // killed by a signal
-			code = 1
-		}
+		goRC = exitCode(exitErr)
 	default:
 		fmt.Fprintf(stderr, "test-tools: FAIL go test did not run: %v (stream %s)\n", runErr, stream.Name())
 		log.Error("go did not run", "error", runErr.Error(), "stream", stream.Name())
@@ -88,10 +170,145 @@ func testGo(ctx context.Context, patterns []string, getenv func(string) string, 
 		log.Error("stream not written", "stream", stream.Name(), "error", closeErr.Error())
 		return exitSetup
 	}
-	col.report(stdout, code, stream.Name())
-	log.Info("end", "exit", code, "passed", col.passed, "failed", len(col.failedTests), "failed_packages", len(col.failedPackages),
-		"packages", len(col.packages), "stream", stream.Name())
-	return code
+	col.report(stdout, goRC, stream.Name())
+	record(map[string]any{"event": "go_end", "rc": goRC, "passed": col.passed, "failed": nonNil(col.failedTests),
+		"failed_packages": nonNil(col.failedPackages), "skipped": nonNil(col.skipped), "packages": len(col.packages)})
+	log.Info("end", "exit", goRC, "passed", col.passed, "failed", len(col.failedTests), "failed_packages", len(col.failedPackages),
+		"skipped", len(col.skipped), "packages", len(col.packages), "stream", stream.Name())
+
+	var failed []string
+	if pyRC > 0 {
+		failed = append(failed, fmt.Sprintf("python half exit %d", pyRC))
+	}
+	if goRC != 0 {
+		failed = append(failed, fmt.Sprintf("go half exit %d", goRC))
+	}
+	if len(failed) > 0 {
+		fmt.Fprintf(stdout, "test-tools: FAIL: %s\n", strings.Join(failed, ", "))
+	}
+	switch {
+	case pyRC > 0:
+		return pyRC
+	case goRC != 0:
+		return goRC
+	case !recorded:
+		return exitSetup
+	}
+	return 0
+}
+
+// splitArgs separates the package patterns from the Python command after the first "--".
+func splitArgs(args []string) (patterns, pyCmd []string, hasPy bool) {
+	for i, a := range args {
+		if a == "--" {
+			return args[:i], args[i+1:], true
+		}
+	}
+	return args, nil, false
+}
+
+// runPython runs the Python half: its standard output passes through and is read for the line that names its log; its
+// standard error and input pass through. It returns the exit code (127 when the command could not be started, 128 plus
+// the signal when it was killed by one) and the stem of the log it named, "" when it named none.
+func runPython(ctx context.Context, argv []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) (rc int, stem string) {
+	path := argv[0]
+	if !strings.ContainsRune(path, '/') {
+		var err error
+		if path, err = lookPath(argv[0], getenv("PATH")); err != nil {
+			fmt.Fprintf(stderr, "test-tools: FAIL cannot start the python half %q: %v\n", argv[0], err)
+			return 127, ""
+		}
+	}
+	scan := &lineScan{prefix: pythonLogPrefix}
+	cmd := exec.CommandContext(ctx, path, argv[1:]...)
+	cmd.Stdin = stdin
+	cmd.Stdout = io.MultiWriter(stdout, scan)
+	cmd.Stderr = stderr
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGINT) } // the runner turns it into its own clean end
+	cmd.WaitDelay = 30 * time.Second
+	err := cmd.Run()
+	scan.flush()
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		rc = 0
+	case errors.As(err, &exitErr):
+		rc = exitCode(exitErr)
+	default:
+		fmt.Fprintf(stderr, "test-tools: FAIL cannot start the python half %q: %v\n", argv[0], err)
+		return 127, ""
+	}
+	if scan.value != "" {
+		stem = strings.TrimSuffix(filepath.Base(scan.value), ".log")
+	}
+	return rc, stem
+}
+
+// exitCode is the process's exit code, 128 plus the signal when a signal ended it.
+func exitCode(e *exec.ExitError) int {
+	if ws, ok := e.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	if c := e.ExitCode(); c > 0 {
+		return c
+	}
+	return 1
+}
+
+// lineScan remembers the text after prefix on the last line that starts with it.
+type lineScan struct {
+	prefix  string
+	partial []byte
+	value   string
+}
+
+func (l *lineScan) Write(p []byte) (int, error) {
+	l.partial = append(l.partial, p...)
+	for {
+		i := bytes.IndexByte(l.partial, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		l.line(string(l.partial[:i]))
+		l.partial = l.partial[i+1:]
+	}
+}
+
+func (l *lineScan) flush() {
+	if len(l.partial) > 0 {
+		l.line(string(l.partial))
+		l.partial = nil
+	}
+}
+
+func (l *lineScan) line(s string) {
+	if v, ok := strings.CutPrefix(s, l.prefix); ok {
+		l.value = strings.TrimSpace(v)
+	}
+}
+
+// appendRecord appends rec to the file as one JSON line, with one write on a file opened for appending.
+func appendRecord(path string, rec map[string]any) error {
+	line, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // logDir is $NEVR_TEST_LOG_DIR, else test-runs/tools-tests in the work root, as the Python runner has it.
@@ -106,18 +323,13 @@ func logDir(getenv func(string) string) string {
 	return filepath.Join(root, "test-runs", "tools-tests")
 }
 
-// createStream makes the stream's file, named by the UTC start time to the microsecond, the process id and 16 random
-// hex digits, so no other run shares it.
-func createStream(dir string) (*os.File, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
+// newStem is <UTC stamp to the microsecond>-<pid>-<16 random hex digits>, the Python runner's stem without the commit.
+func newStem() (string, error) {
 	var salt [8]byte
 	if _, err := rand.Read(salt[:]); err != nil {
-		return nil, err
+		return "", err
 	}
-	name := fmt.Sprintf("%s-%d-%s-go.jsonl", time.Now().UTC().Format("20060102T150405.000000Z"), os.Getpid(), hex.EncodeToString(salt[:]))
-	return os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	return fmt.Sprintf("%s-%d-%s", time.Now().UTC().Format("20060102T150405.000000Z"), os.Getpid(), hex.EncodeToString(salt[:])), nil
 }
 
 // lookPath finds an executable file called name in the directories of path (a PATH value).
@@ -143,15 +355,20 @@ type event struct {
 	Output     string
 }
 
-// collector reads the stream as it is written: which tests passed and failed, and the output of the packages that failed.
+// collector reads the stream as it is written: which tests passed, failed and were skipped, and the output of the
+// packages that failed.
 type collector struct {
 	partial        []byte
 	passed         int
 	failedTests    []string // "package Test"
 	failedPackages []string
+	skipped        []string // "package Test: reason"
 	packages       map[string]bool
-	output         map[string]*strings.Builder // by package or import path
+	output         map[string]*strings.Builder // of a package, by package or import path
+	testOutput     map[string][]string         // the last lines of each test, by "package Test"
 }
+
+const keptTestLines = 6
 
 func (c *collector) Write(p []byte) (int, error) {
 	c.partial = append(c.partial, p...)
@@ -178,7 +395,7 @@ func (c *collector) line(b []byte) {
 		return // go's own notices are in the stream file, not in the count
 	}
 	if c.packages == nil {
-		c.packages, c.output = map[string]bool{}, map[string]*strings.Builder{}
+		c.packages, c.output, c.testOutput = map[string]bool{}, map[string]*strings.Builder{}, map[string][]string{}
 	}
 	key := e.Package
 	if key == "" {
@@ -194,10 +411,21 @@ func (c *collector) line(b []byte) {
 				c.output[key] = &strings.Builder{}
 			}
 			c.output[key].WriteString(e.Output)
+		} else if e.Test != "" {
+			k := e.Package + " " + e.Test
+			lines := append(c.testOutput[k], strings.TrimRight(e.Output, "\n"))
+			if len(lines) > keptTestLines {
+				lines = lines[len(lines)-keptTestLines:]
+			}
+			c.testOutput[k] = lines
 		}
 	case "pass":
 		if e.Test != "" {
 			c.passed++
+		}
+	case "skip":
+		if e.Test != "" {
+			c.skipped = append(c.skipped, e.Package+" "+e.Test+": "+skipReason(c.testOutput[e.Package+" "+e.Test]))
 		}
 	case "fail":
 		if e.Test != "" {
@@ -205,12 +433,24 @@ func (c *collector) line(b []byte) {
 		} else {
 			c.failedPackages = append(c.failedPackages, e.Package)
 		}
-	case "build-fail":
-		c.failedPackages = append(c.failedPackages, key)
 	}
 }
 
-// report prints what failed: each failing test, each failing package with the output it had, then the counts.
+// skipReason is the text the test gave t.Skip: the last output line of the form "file.go:12: reason" (go's own
+// "--- SKIP" and "=== RUN" lines are not it).
+func skipReason(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" || strings.HasPrefix(l, "---") || strings.HasPrefix(l, "===") {
+			continue
+		}
+		return l
+	}
+	return "no reason given"
+}
+
+// report prints what failed and what was skipped: each failing test, each failing package with the output it had, each
+// skipped test with its reason, then the counts.
 func (c *collector) report(w io.Writer, code int, stream string) {
 	sort.Strings(c.failedTests)
 	for _, t := range c.failedTests {
@@ -234,15 +474,23 @@ func (c *collector) report(w io.Writer, code int, stream string) {
 			}
 		}
 	}
+	sort.Strings(c.skipped)
+	for _, s := range c.skipped {
+		fmt.Fprintf(w, "test-tools: go SKIP %s\n", s)
+	}
+	skips := ""
+	if len(c.skipped) > 0 {
+		skips = fmt.Sprintf(", %d skipped", len(c.skipped))
+	}
 	switch {
 	case code != 0 && len(c.failedTests) == 0 && len(seen) == 0:
 		fmt.Fprintf(w, "test-tools: go FAIL go test exited %d and the stream names no failing test; read %s\n", code, stream)
 	case code == 0:
-		fmt.Fprintf(w, "test-tools: go tests passed: %d tests passed in %d %s; stream %s\n", c.passed, len(c.packages), plural("package", len(c.packages)), stream)
+		fmt.Fprintf(w, "test-tools: go tests passed: %d tests passed%s in %d %s; stream %s\n", c.passed, skips, len(c.packages), plural("package", len(c.packages)), stream)
 		return
 	}
-	fmt.Fprintf(w, "test-tools: go tests failed: %d tests passed, %d failed, %d %s failed; exit %d; stream %s\n",
-		c.passed, len(c.failedTests), len(seen), plural("package", len(seen)), code, stream)
+	fmt.Fprintf(w, "test-tools: go tests failed: %d tests passed%s, %d failed, %d %s failed; exit %d; stream %s\n",
+		c.passed, skips, len(c.failedTests), len(seen), plural("package", len(seen)), code, stream)
 }
 
 func plural(word string, n int) string {

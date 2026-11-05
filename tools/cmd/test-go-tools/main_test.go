@@ -18,7 +18,7 @@ import (
 
 // The fake `go`: prints the file "stdout" beside it to standard output and "stderr" to standard error, and exits with
 // the number in "exit" (0 when there is none). A test writes those files before it runs the tool.
-var fakes = testkit.Fakes{"go": func(c *testkit.Call) int {
+func scripted(c *testkit.Call) int {
 	if out, err := os.ReadFile(filepath.Join(c.FakeDir, "stdout")); err == nil {
 		c.Stdout.Write(out)
 	}
@@ -33,7 +33,10 @@ var fakes = testkit.Fakes{"go": func(c *testkit.Call) int {
 		return n
 	}
 	return 0
-}}
+}
+
+// The same script plays go and python3 (the two halves); each has its own directory with its own files.
+var fakes = testkit.Fakes{"go": scripted, "python3": scripted}
 
 func TestMain(m *testing.M) { testkit.Main(m, fakes) }
 
@@ -41,6 +44,7 @@ func TestMain(m *testing.M) { testkit.Main(m, fakes) }
 type rig struct {
 	t      *testing.T
 	fake   *testkit.FakeCommand
+	py     *testkit.FakeCommand
 	logDir string
 	env    []string
 }
@@ -51,17 +55,22 @@ func newRig(t *testing.T, stdout string, exit int) *rig {
 
 func newRigExit(t *testing.T, stdout, exit string) *rig {
 	t.Helper()
-	f := testkit.Fake(t, "go")
-	write := func(name, content string) {
-		if err := os.WriteFile(filepath.Join(f.Dir(), name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	f := testkit.Fake(t, "go", "DISPLAY", "GNUPGHOME", "GH_TOKEN", "GIT_CONFIG_GLOBAL", "HOME", "GOCACHE", "GIT_CONFIG_PARAMETERS")
+	py := testkit.Fake(t, "python3")
+	r := &rig{t: t, fake: f, py: py}
+	r.script(f, "stdout", stdout)
+	r.script(f, "exit", exit)
+	r.script(py, "exit", "0")
+	r.logDir = filepath.Join(t.TempDir(), "runs")
+	r.env = testkit.WithPath(testkit.Env(t, "NEVR_TEST_LOG_DIR="+r.logDir), f.Dir(), py.Dir())
+	return r
+}
+
+func (r *rig) script(f *testkit.FakeCommand, name, content string) {
+	r.t.Helper()
+	if err := os.WriteFile(filepath.Join(f.Dir(), name), []byte(content), 0o644); err != nil {
+		r.t.Fatal(err)
 	}
-	write("stdout", stdout)
-	write("exit", exit)
-	logDir := filepath.Join(t.TempDir(), "runs")
-	env := testkit.WithPath(testkit.Env(t, "NEVR_TEST_LOG_DIR="+logDir), f.Dir())
-	return &rig{t: t, fake: f, logDir: logDir, env: env}
 }
 
 func (r *rig) run(args ...string) (code int, stdout, stderr string) {
@@ -139,7 +148,7 @@ func TestGoIsStartedWithTestCountOneJSONAndEveryPackage(t *testing.T) {
 	r := newRig(t, passingStream(), 0)
 	r.run()
 	calls := r.fake.Calls(t)
-	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json ./..." {
+	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 5m0s ./..." {
 		t.Errorf("go was called as %+v, want: go test -count=1 -json ./...", calls)
 	}
 }
@@ -149,7 +158,7 @@ func TestPackagePatternsGivenOnTheCommandLineReplaceTheDefault(t *testing.T) {
 	r := newRig(t, passingStream(), 0)
 	r.run("./internal/testkit/", "./symcache/")
 	calls := r.fake.Calls(t)
-	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json ./internal/testkit/ ./symcache/" {
+	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 5m0s ./internal/testkit/ ./symcache/" {
 		t.Errorf("go was called as %+v", calls)
 	}
 }
@@ -337,8 +346,8 @@ func TestTheRunIsLoggedToTheToolsRunLog(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			t.Fatalf("not JSON: %q", line)
 		}
-		switch rec["msg"] {
-		case "start":
+		switch rec["event"] {
+		case "go half":
 			sawStart = true
 		case "end":
 			sawEnd = true
@@ -368,10 +377,10 @@ func TestAGoKilledBySignalIsAFailureWithAnExitCode(t *testing.T) {
 	t.Parallel()
 	r := newRigExit(t, passingStream(), "kill")
 	code, stdout, _ := r.run()
-	if code != 1 {
-		t.Errorf("exit %d, want 1 (a negative exit status is not a usable code)", code)
+	if code != 137 {
+		t.Errorf("exit %d, want 128 + SIGKILL (a negative exit status is not a usable code)", code)
 	}
-	if !strings.Contains(stdout, "go FAIL") {
+	if !strings.Contains(stdout, "go FAIL") || !strings.Contains(stdout, "go half exit 137") {
 		t.Errorf("stdout does not report the failure: %q", stdout)
 	}
 }
@@ -388,5 +397,264 @@ func TestWithNoLogDirOrWorkRootTheDefaultIsUnderHome(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(home, "src", "nevr-runtime-work", "test-runs", "tools-tests", "*-go.jsonl"))
 	if len(files) != 1 {
 		t.Errorf("streams under $HOME/src/nevr-runtime-work/test-runs/tools-tests = %v", files)
+	}
+}
+
+// ---- the two halves (B1): the Python half first, the Go half whatever it did ----
+
+func (r *rig) both(pyExit string, pyOut string, patterns ...string) (int, string, string) {
+	r.t.Helper()
+	r.script(r.py, "exit", pyExit)
+	r.script(r.py, "stdout", pyOut)
+	return r.run(append(append([]string{}, patterns...), "--", "python3", "tools/run_tool_tests.py", "-q")...)
+}
+
+func TestTheGoHalfRunsWhenThePythonHalfFailsAndBothAreNamed(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, ev("run", pkg, "TestB")+ev("fail", pkg, "TestB")+ev("fail", pkg, ""), 1)
+	code, stdout, _ := r.both("1", "FAILED tools/tests/test_x.py::T::test_y\n")
+	if code == 0 {
+		t.Errorf("exit 0 with both halves red")
+	}
+	if n := len(r.fake.Calls(t)); n != 1 {
+		t.Errorf("go ran %d times, want once even though the Python half failed", n)
+	}
+	for _, want := range []string{"FAILED tools/tests/test_x.py::T::test_y", "go FAIL " + pkg + " TestB", "FAIL: python half exit 1, go half exit 1"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestOnlyThePythonHalfFailingFailsTheRunAndNamesOnlyIt(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	code, stdout, _ := r.both("3", "")
+	if code != 3 {
+		t.Errorf("exit %d, want the Python half's 3", code)
+	}
+	if !strings.Contains(stdout, "FAIL: python half exit 3\n") || strings.Contains(stdout, "go half") {
+		t.Errorf("summary:\n%s", stdout)
+	}
+	if len(r.fake.Calls(t)) != 1 || len(r.streams()) != 1 {
+		t.Error("the Go half did not run and keep its stream")
+	}
+}
+
+func TestOnlyTheGoHalfFailingFailsTheRunAndNamesOnlyIt(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, ev("fail", pkg, "TestB")+ev("fail", pkg, ""), 1)
+	code, stdout, _ := r.both("0", "")
+	if code != 1 {
+		t.Errorf("exit %d, want go's 1", code)
+	}
+	if !strings.Contains(stdout, "FAIL: go half exit 1\n") || strings.Contains(stdout, "python half") {
+		t.Errorf("summary:\n%s", stdout)
+	}
+}
+
+func TestBothHalvesPassingExitsZeroWithNoFailLine(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	code, stdout, _ := r.both("0", "py output line\n")
+	if code != 0 || strings.Contains(stdout, "FAIL") || !strings.Contains(stdout, "py output line") {
+		t.Errorf("exit %d, stdout:\n%s", code, stdout)
+	}
+}
+
+func TestAnInterruptedPythonHalfEndsTheRunWithoutTheGoHalf(t *testing.T) {
+	t.Parallel()
+	for _, rc := range []string{"130", "143", "129"} {
+		r := newRig(t, passingStream(), 0)
+		code, stdout, _ := r.both(rc, "")
+		if n, _ := strconv.Atoi(rc); code != n {
+			t.Errorf("rc %s: exit %d", rc, code)
+		}
+		if n := len(r.fake.Calls(t)); n != 0 {
+			t.Errorf("rc %s: go ran %d times after an interrupt", rc, n)
+		}
+		if !strings.Contains(stdout, "interrupted") || !strings.Contains(stdout, "go half not run") {
+			t.Errorf("rc %s: stdout does not say so:\n%s", rc, stdout)
+		}
+	}
+}
+
+func TestAPythonHalfThatCannotStartFailsAndTheGoHalfStillRuns(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	code, stdout, stderr := r.run("--", "tk-no-such-command-anywhere")
+	if code != 127 || len(r.fake.Calls(t)) != 1 {
+		t.Errorf("exit %d, go calls %d", code, len(r.fake.Calls(t)))
+	}
+	mustHave(t, stderr, "tk-no-such-command-anywhere")
+	mustHave(t, stdout, "FAIL: python half exit 127")
+}
+
+func mustHave(t *testing.T, got string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// ---- the Go stream is named like the Python run's log, and the half is recorded in runs.jsonl (B3) ----
+
+func (r *rig) records() []map[string]any {
+	r.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(r.logDir, "runs.jsonl"))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			r.t.Fatalf("runs.jsonl line %q: %v", line, err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func TestTheStreamTakesThePythonRunsStemAndRunsJSONLRecordsTheGoHalf(t *testing.T) {
+	t.Parallel()
+	const stem = "20261105T120000.123456Z-4242-0123456789abcdef-aabbccddeeff"
+	r := newRig(t, ev("fail", pkg, "TestB")+ev("fail", pkg, ""), 1)
+	code, stdout, _ := r.both("1", "noise\ntest-tools: log "+filepath.Join(r.logDir, stem+".log")+"\n")
+	if code == 0 {
+		t.Fatal("exit 0")
+	}
+	if got := r.streams(); len(got) != 1 || filepath.Base(got[0]) != stem+"-go.jsonl" {
+		t.Fatalf("streams = %v, want %s-go.jsonl", got, stem)
+	}
+	recs := r.records()
+	if len(recs) != 2 || recs[0]["event"] != "go_start" || recs[1]["event"] != "go_end" {
+		t.Fatalf("records = %v, want go_start then go_end", recs)
+	}
+	end := recs[1]
+	if end["stem"] != stem || end["rc"] != float64(1) || end["python_rc"] != float64(1) || end["stream"] == "" || end["ts"] == nil {
+		t.Errorf("go_end = %v", end)
+	}
+	if failed, _ := end["failed"].([]any); len(failed) != 1 || failed[0] != pkg+" TestB" {
+		t.Errorf("go_end failed = %v", end["failed"])
+	}
+	if recs[0]["stem"] != stem {
+		t.Errorf("go_start = %v", recs[0])
+	}
+	mustHave(t, stdout, stem+"-go.jsonl")
+}
+
+func TestWithoutAPythonLogLineTheStreamHasItsOwnStemAndIsStillRecorded(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.both("0", "no log line here\n")
+	files := r.streams()
+	if len(files) != 1 {
+		t.Fatal(files)
+	}
+	recs := r.records()
+	if recs[1]["stem"] != strings.TrimSuffix(filepath.Base(files[0]), "-go.jsonl") || recs[1]["paired"] != false {
+		t.Errorf("go_end = %v", recs[1])
+	}
+}
+
+func TestAGoOnlyRunIsRecordedToo(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.run()
+	recs := r.records()
+	if len(recs) != 2 || recs[1]["event"] != "go_end" || recs[1]["python_rc"] != nil {
+		t.Errorf("records = %v", recs)
+	}
+}
+
+func TestARecordThatCannotBeWrittenFailsTheRunEvenWhenEveryTestPassed(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	if err := os.MkdirAll(filepath.Join(r.logDir, "runs.jsonl"), 0o755); err != nil { // a directory where the file goes
+		t.Fatal(err)
+	}
+	code, _, stderr := r.run()
+	if code != 2 || !strings.Contains(stderr, "runs.jsonl") {
+		t.Errorf("exit %d, stderr %q", code, stderr)
+	}
+}
+
+// ---- go test is started with a hermetic environment, a timeout and the caches it needs (N1, N2, N6) ----
+
+func TestGoTestGetsATimeoutSoAHungTestEndsTheRunWithAName(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.run()
+	calls := r.fake.Calls(t)
+	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 5m0s ./..." {
+		t.Errorf("go was called as %+v", calls)
+	}
+}
+
+// Not parallel: it sets variables of the test process, as a person's shell has them.
+func TestGoTestDoesNotSeeTheCallersCredentialsDisplayOrGitConfigButKeepsItsGoCache(t *testing.T) {
+	t.Setenv("GH_TOKEN", "secret-token")
+	t.Setenv("DISPLAY", ":0")
+	t.Setenv("GNUPGHOME", "/nonexistent/gnupg")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'user.signingkey=owner'")
+	t.Setenv("GOCACHE", "/caller/gocache")
+	realHome := os.Getenv("HOME")
+	r := newRig(t, passingStream(), 0)
+	r.run()
+	calls := r.fake.Calls(t)
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v", calls)
+	}
+	env := calls[0].Env
+	for _, key := range []string{"GH_TOKEN", "DISPLAY", "GNUPGHOME", "GIT_CONFIG_PARAMETERS"} {
+		if v, ok := env[key]; ok {
+			t.Errorf("go test saw %s=%s", key, v)
+		}
+	}
+	if env["GIT_CONFIG_GLOBAL"] != "/dev/null" {
+		t.Errorf("GIT_CONFIG_GLOBAL = %q", env["GIT_CONFIG_GLOBAL"])
+	}
+	if env["HOME"] == "" || env["HOME"] == realHome {
+		t.Errorf("HOME = %q, want a directory of its own, not %q", env["HOME"], realHome)
+	}
+	if env["GOCACHE"] != "/caller/gocache" {
+		t.Errorf("GOCACHE = %q, want the caller's", env["GOCACHE"])
+	}
+}
+
+func TestTheScratchHomeOfGoTestIsRemovedWhenTheRunEnds(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.run()
+	home := r.fake.Calls(t)[0].Env["HOME"]
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Errorf("%s still exists after the run (%v)", home, err)
+	}
+}
+
+// ---- skipped tests are reported (N4) ----
+
+func TestASkippedTestIsNamedWithItsReasonInTheOutputAndTheRecord(t *testing.T) {
+	t.Parallel()
+	out := func(test, text string) string {
+		b, _ := json.Marshal(map[string]string{"Action": "output", "Package": pkg, "Test": test, "Output": text})
+		return string(b) + "\n"
+	}
+	stream := ev("run", pkg, "TestOnlyShrinks") + out("TestOnlyShrinks", "=== RUN   TestOnlyShrinks\n") +
+		out("TestOnlyShrinks", "    policy_test.go:117: there is no origin/main in this clone\n") +
+		out("TestOnlyShrinks", "--- SKIP: TestOnlyShrinks (0.00s)\n") + ev("skip", pkg, "TestOnlyShrinks") +
+		ev("run", pkg, "TestB") + ev("pass", pkg, "TestB") + ev("pass", pkg, "")
+	r := newRig(t, stream, 0)
+	code, stdout, _ := r.run()
+	if code != 0 {
+		t.Errorf("exit %d: a skip is not a failure", code)
+	}
+	mustHave(t, stdout, "go SKIP "+pkg+" TestOnlyShrinks: policy_test.go:117: there is no origin/main in this clone", "1 skipped")
+	end := r.records()[1]
+	if sk, _ := end["skipped"].([]any); len(sk) != 1 || !strings.Contains(sk[0].(string), "TestOnlyShrinks") {
+		t.Errorf("go_end skipped = %v", end["skipped"])
 	}
 }

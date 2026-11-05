@@ -91,11 +91,17 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
    `os.Exit(run(ctx, args, os.Getenv, os.Stdin, os.Stdout, os.Stderr))`. Tests call `run` in the test process; they
    start the binary only where the process boundary is what is tested (an exit status from a signal, a process group,
    an environment that must not leak to a child).
-7. **Built by `go`, from `just`.** `just go-tools` runs `go -C tools build -trimpath -o ../build/go-tools/ ./cmd/...`;
-   a recipe that runs a tool depends on it and runs `build/go-tools/<name>`. CI runs the same recipe in the builder
-   image. A generator that CMake runs during a build is a binary that a CMake custom command makes with `go build`
-   (CMake starts Go's own build tool and compiles no Go itself), and such a generator imports only the standard library,
-   so a CMake build needs no network.
+7. **Built by `go`, from `just`; run from a recipe or from a script.** `just go-tools` runs
+   `go -C tools build -trimpath -o ../build/go-tools/ ./cmd/...`. A `just` recipe that runs a tool depends on `go-tools`
+   and runs `build/go-tools/<name>`. A shell script, the launch scripts and `tools/lib/*.sh` included, may run a Go tool
+   as it runs any other command. A script is started by hand or by another program, with no recipe and so no build step
+   before it, and it must not run a stale binary, so it runs the tool through `go -C <tools dir> run ./cmd/<name>`, the
+   tools directory found from the script's own location. Go builds what changed and serves the rest from its cache
+   (0.04 to 0.16 s for a cached tool), so a script pays for a build only after the tool's source changed. A missing `go`
+   or a tool that does not build fails the command like any other failing command, and the script reports it in its own
+   words; no script falls back to Python. CI runs `just go-tools` in the builder image. A generator that CMake runs during
+   a build is a binary that a CMake custom command makes with `go build` (CMake starts Go's own build tool and compiles no
+   Go itself), and such a generator imports only the standard library, so a CMake build needs no network.
 8. **Tests are `go test`, standard library only.** Each test calls `t.Parallel()` or says in a comment why it cannot.
    State lives under `t.TempDir()`. A tool reads its environment through the `getenv` it is given, never from
    `os.Getenv` below `main`, so no test needs `t.Setenv`, which forbids `t.Parallel()`.
@@ -113,8 +119,11 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
     name (`Call.Exec`). No fake is a script in an interpreter.
 11. **A hermetic environment.** Every command a test starts gets `testkit.Env`: `GIT_CONFIG_GLOBAL=/dev/null`,
     `GIT_CONFIG_NOSYSTEM=1`, a fixed identity and `commit.gpgsign=false` through `GIT_CONFIG_COUNT`, `HOME`,
-    `XDG_*_HOME`, `NEVR_WORK_ROOT` and `TMPDIR` under `t.TempDir()`, the caller's `PATH`, and no `DISPLAY`,
-    `WAYLAND_DISPLAY` or `GNUPGHOME`, plus only what the test adds. Nothing of the user's configuration reaches a test.
+    `XDG_*_HOME`, `NEVR_WORK_ROOT` and `TMPDIR` under `t.TempDir()`, the caller's `PATH` and Go build and module caches
+    (`GOCACHE`, `GOMODCACHE`: build caches, not user configuration, and an empty one makes every `go` a test starts build
+    cold), and no `DISPLAY`, `WAYLAND_DISPLAY` or `GNUPGHOME`, plus only what the test adds. Nothing of the user's
+    configuration reaches a test. The Go half of `just test-tools` itself starts `go test` with the same environment
+    (`testkit.EnvAt`), so a tool under test cannot reach a real credential through its own `PATH`.
 12. **Toolchain tests are gated by their inputs.** A test that runs a real Wine, pwsh, JVM tool, compiler, `cargo`,
     `ninja`, or a nested test suite is a toolchain test. The gate table, a Go package of the tools module that unit G1b
     of #2132 adds, names each one (a Go test, or a Python test class by its pytest node id) and its inputs (paths and
@@ -125,10 +134,13 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
     always runs under `just test-tools --all`, which `just verify` uses, and whenever the runner cannot compute the
     changed files. A table entry whose test or input no longer exists fails the gate's own test. Until the unit that
     builds the gate (G1b of #2132) lands, every test runs.
-13. **Logs.** A Go tool logs through `tools/internal/runlog`: `log/slog` with the JSON handler, a durable file
-    `$XDG_STATE_HOME/nevr-runtime/<tool>.jsonl` (with `$XDG_STATE_HOME` at its default when unset), and a failure to
-    open or write it is a line on standard error and a non-zero exit (`runlog.Run`). A port keeps the file name and the
-    fields of the Python tool's log, so a query over the history keeps working.
+13. **Logs.** A Go tool logs through `tools/internal/runlog` (`runlog.Run`): `log/slog` with the JSON handler, a durable
+    file `$XDG_STATE_HOME/nevr-runtime/<tool>.jsonl` (with `$XDG_STATE_HOME` at its default when unset), and a failure to
+    open or write it is a line on standard error and a non-zero exit. A record has the keys the Python tools' logs have:
+    `ts` (UTC, RFC 3339 with milliseconds and a `Z`), `level` (lower case), `event`, then `tool`, `run` (the run's id, in
+    the form of the test runner's file stem) and `pid`, then the fields of the call. A port keeps the file name and the
+    fields of the Python tool's log, passing any field `runlog` does not add itself as a field of the call, so a query over
+    the history keeps working.
 14. **A port proves itself.** A pull request that ports a tool:
     1. runs the Python tests that start the tool as a process against the Go binary, once, before it deletes them,
        and shows them passing;
@@ -170,6 +182,9 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
 
 ## Consequences
 
+- `just test-tools` and `just verify` run both halves, the Python one and the Go one, whatever the first did, and end
+  with one line naming each failed half (`build/go-tools/test-go-tools`; a red Python test never hides the Go tests and
+  these checks). The Go half runs `go test` with a timeout and reports each skipped test with its reason.
 - One language and one runner for the tool suite; pytest and pytest-xdist leave the quick check when the last unit
   lands, and `just verify` runs `go test` over `tools/`.
 - A contributor needs Go 1.25 or later (for `testing/synctest`). Go is already needed to build: `configure` depends on
