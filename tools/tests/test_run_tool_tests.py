@@ -511,6 +511,7 @@ class RunToolTestsRecord(unittest.TestCase):
                 # What pytest really ran: the failure section names its worker only with workers.
                 self.assertEqual("[gw" in log, workers > 0, log)
 
+    @unittest.skipIf(importlib.util.find_spec("xdist") is None, "pytest-xdist is not installed")
     def test_the_workers_are_counted_by_the_runner_not_left_as_a_word(self):
         module = load_script()
         with mock.patch.dict(os.environ, {"PYTEST_XDIST_AUTO_NUM_WORKERS": "5"}):
@@ -520,6 +521,7 @@ class RunToolTestsRecord(unittest.TestCase):
         plan = module.plugin_plan([], {}, "logical")
         self.assertEqual(plan["flags"][-2:], ["-n", str(plan["workers"])])
 
+    @unittest.skipIf(importlib.util.find_spec("xdist") is None, "pytest-xdist is not installed")
     def test_a_worker_count_xdist_will_not_give_is_left_to_xdist_and_recorded(self):
         module = load_script()
         with mock.patch("xdist.plugin.pytest_xdist_auto_num_workers", side_effect=TypeError("changed")):
@@ -531,6 +533,29 @@ class RunToolTestsRecord(unittest.TestCase):
             plan = module.plugin_plan([], {}, "auto")
         self.assertEqual((plan["mode"], plan["workers"], plan["serial_reason"]),
                          ("serial", 0, "xdist counted 0 workers"))
+
+    @unittest.skipIf(importlib.util.find_spec("xdist") is None, "pytest-xdist is not installed")
+    def test_a_worker_count_in_the_arguments_that_is_not_a_count_is_recorded_as_such(self):
+        module = load_script()
+        for given in ("many", "-1", "1.5", "\u00b2"):
+            with self.subTest(given=given):
+                plan = module.plugin_plan(["-n", given], {}, 2)
+                self.assertEqual((plan["mode"], plan["workers"], plan["serial_reason"]),
+                                 ("serial", 0, "-n in the arguments is not a count"))
+                self.assertNotIn("-n", plan["flags"])  # the argument carries it, and pytest refuses it
+
+    @unittest.skipIf(importlib.util.find_spec("xdist") is None, "pytest-xdist is not installed")
+    def test_a_worker_count_left_to_xdist_is_a_warning_on_stderr(self):
+        prelude = ("def broken(config):\n"
+                   "    raise TypeError('changed')\n"
+                   "import xdist.plugin\n"
+                   "xdist.plugin.pytest_xdist_auto_num_workers = broken")
+        result = self.run_driver(prelude, "-q", "-p", "no:cacheprovider", str(self.suite), NEVR_TEST_WORKERS="logical")
+        self.assertEqual(result.stderr.count("test-tools: WARN worker count left to xdist (TypeError)"), 1,
+                         result.stderr)
+        for record in self.records("start") + self.records():
+            self.assertEqual((record["mode"], record["workers"]), ("parallel", "logical"))
+            self.assertIn("TypeError", record["serial_reason"])
 
     def test_a_workers_setting_that_is_not_a_count_refuses_the_run(self):
         for i, value in enumerate(("many", "-1", "1.5", "\u00b2")):
@@ -1411,6 +1436,18 @@ class RunToolTestsRecord(unittest.TestCase):
             for _ in range(3):
                 run.on_signal(signal.SIGINT, None)
         self.assertEqual(run.escalations, 1)
+
+    def test_a_signal_more_than_a_second_after_the_one_before_it_is_a_new_interrupt(self):
+        # The window has an upper bound too: at 0 and 1.2 s the second signal escalates, so a second CTRL+C
+        # still stops a pytest that ignored the first.
+        module = load_script()
+        times = iter([100.0, 101.2])
+        module.time = types.SimpleNamespace(monotonic=lambda: next(times))
+        with open(os.devnull, "w") as log:
+            run = module.Run(log)
+            for _ in range(2):
+                run.on_signal(signal.SIGINT, None)
+        self.assertEqual(run.escalations, 2)
 
     def test_the_grace_period_runs_from_the_first_signal_not_the_last(self):
         # Repeats every 0.6 s never escalate; pytest, which ignores SIGINT, is still killed once

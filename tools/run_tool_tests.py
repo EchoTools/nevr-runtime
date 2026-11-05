@@ -627,6 +627,9 @@ def main(argv: list) -> int:
     STDERR_ECHO = run.errs
     if plan["serial_reason"] == "pytest-xdist is not installed":
         report("test-tools: WARN pytest-xdist is not installed: the suite runs serially, about ten times slower")
+    if str(plan["serial_reason"]).startswith("worker count left to xdist"):
+        report(f"test-tools: WARN {plan['serial_reason']}: pytest is given `-n {plan['workers']}` and counts the "
+               "workers itself; the records name the word, not a number")
     previous = {}
     for s in HANDLED_SIGNALS:
         if signal.getsignal(s) is not signal.SIG_IGN:
