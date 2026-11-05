@@ -7,8 +7,8 @@
 
 It is the work list for the rename pass and the way to see what is left: a category that prints nothing is
 done. It reads tracked and untracked-but-not-ignored files, and skips what test_naming.py skips
-(extern, gen, docs/audits). The frozen `Nvr*` plugin/module ABI is not a finding (it is
-FROZEN_NVR in tools/tests/test_naming.py). A name that is public (a config key, a log line, a DLL export,
+(extern, gen, docs/audits). The deprecated `Nvr*` aliases of the plugin/module ABI are not a finding (they are
+ALIAS_HEADERS and DEPRECATED_NVR_USES in tools/tests/test_naming.py). A name that is public (a config key, a log line, a DLL export,
 a file name users touch) is listed here too, tagged `public`: it is not renamed without a decision, and the
 rename PRs list each one as a deliberate exception.
 """

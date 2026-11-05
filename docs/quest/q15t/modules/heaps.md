@@ -17,7 +17,7 @@ below passes on a headset) `heaps` cannot be claimed to work.** What is shown, a
 Shown (file:line, nevr-runtime-work/plugin-repack, read-only):
 - Two phases exist. The early pass is step "RunEarlyPlugins" of the sentinel constructor sequence: after the reporter starts,
   before the clock hook (`src/quest/integration/ctor_sequence.h:16-17`, run at `ctor_sequence.cpp:188-194`, bound to
-  `plugin::RunEarlyPlugins()` at `src/quest/integration/production_steps.cpp:381-383`). It calls `NvrPluginInitEx` through
+  `plugin::RunEarlyPlugins()` at `src/quest/integration/production_steps.cpp:381-383`). It calls `NevrPluginInitEx` through
   `Loader::RunPhase(Early)` (`src/quest/plugin/plugin_runtime.cpp:82-89`; the init call is `plugin_loader.cpp:192`).
 - The normal pass runs at "the first post-load call" (`production_steps.cpp:335-339`, `PluginsAction`), i.e. after the game's
   own first `dlopen` returns (`src/quest/integration/post_load.cpp:69-80`, called at `:160` after the login/matchmaking

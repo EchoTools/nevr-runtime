@@ -10,7 +10,7 @@ contract's recipe).
 
 - Option macro `Q15T_SENSORWD`, default **1 (ON)**: the source build ships `sensorwd.on` in its on-list (its commit subject:
   "on-list +drrlow / p18add / sensorwd"; the list itself, the source build's on-list file, ends with `"sensorwd.on"`).
-- Install and tick, next to the other modules in `NvrPluginInitEx`:
+- Install and tick, next to the other modules in `NevrPluginInitEx`:
   ```cpp
   #if Q15T_SENSORWD
     ReportModule("sensorwd", InstallSensorWd(base));

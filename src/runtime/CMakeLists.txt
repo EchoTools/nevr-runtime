@@ -2054,9 +2054,21 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_info_keeper"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    # The entry-point prefix is Nevr; a plugin built before that exports Nvr. One fixture of each.
+    foreach(_exports_fixture nevr deprecated)
+      add_library(test_plugin_${_exports_fixture}_exports SHARED
+        tests/plugin_${_exports_fixture}_exports_test_dll.cpp)
+      target_compile_definitions(test_plugin_${_exports_fixture}_exports PRIVATE NEVR_PLUGIN_EXPORTS)
+      target_link_libraries(test_plugin_${_exports_fixture}_exports PRIVATE nevr::plugin_sdk)
+      set_target_properties(test_plugin_${_exports_fixture}_exports PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_${_exports_fixture}_exports"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    endforeach()
     add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail
       test_plugin_partial_init_fail test_plugin_info_keeper test_plugin_logging_a test_plugin_logging_b
-      test_plugin_level)
+      test_plugin_level
+      test_plugin_nevr_exports test_plugin_deprecated_exports)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 

@@ -370,7 +370,7 @@ changed or freed before the write` appears only if a pass and a Shutdown actuall
 ## Wiring for the main seat (plugin.cpp, CMakeLists.txt; not edited here)
 
 - Source file `src/quest/plugins/q15t/src/impactsnd.cpp`. Option `Q15T_IMPACTSND`, default ON (the source build's default since v6).
-- In `NvrPluginInitEx`, before `InstallGameTick`: `Report("impactsnd (LoadSoundSettings)", InstallImpactSnd(ctx->base_addr));`
+- In `NevrPluginInitEx`, before `InstallGameTick`: `Report("impactsnd (LoadSoundSettings)", InstallImpactSnd(ctx->base_addr));`
   and `want_tick = AddGameTick(&ImpactSndTick) || want_tick;`. `Report` prints the wrapper's status; the module's own lines carry
   the details. The module writes game data (D, table ids); capability flags are the main seat's call.
 - Optional: `-DQ15T_IMPACTSND_NOWRITE=1` for a read-and-log-only build.

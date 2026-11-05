@@ -263,7 +263,7 @@ mingw-w64 under wine and NDK arm64 under qemu.
 ## What is left
 
 1. **Embedding.** Link `nevr_script_host` and the Luau binding into `BugSplat64.dll` and the Quest library.
-   Then hand `NevrHostApi` to native plugins through `NvrGameContext`, which is a plugin ABI change.
+   Then hand `NevrHostApi` to native plugins through `NevrGameContext`, which is a plugin ABI change.
 2. **The first real override point.** Hook the CJson readers per module and register real keys:
    - **Windows:** detour through `Hooking::AttachPublished`.
    - **Quest:** pin the Real, Int and Boolean GOT slots (`0x36dc158`, `0x36e2050`, `0x36f6988`) next to the

@@ -6,7 +6,7 @@
 // One `plugin_load` record ends every plan entry, whatever its outcome (loaded, refused, disabled, not_started, failed). The
 // loader never throws and never ends the process: `required` on a client is recorded and the game goes on.
 //
-// What a plugin sees is the existing C ABI (nevr/plugin_interface.h): the same NvrGameContext as on PC, with
+// What a plugin sees is the existing C ABI (nevr/plugin_interface.h): the same NevrGameContext as on PC, with
 // base_addr the libr15 load base, net_game null, game_state 0, flags IS_CLIENT | PLATFORM_QUEST, the main level
 // (level_symbol, level_name) the platform reports now and RefreshMainLevel keeps current (#1106), and game_build_id the
 // plugin identity (plugin_identity.h: the stock libr15 ID when the running libr15 is our verified patched file, else the
@@ -128,17 +128,17 @@ class Loader {
   struct LoadedPlugin {
     std::string name;
     std::string description;
-    NvrLoadedPluginInfo info{};
+    NevrLoadedPluginInfo info{};
   };
 
   void Load(PlanEntry& entry);
   // Ends `entry` with `record`'s outcome and writes the record. A platform that throws while writing it does not stop
   // the loader.
   void Settle(PlanEntry& entry, const LoadRecord& record);
-  NvrGameContext ContextFor(const PlanEntry& entry, const char* pluginViewBuildId) const;
+  NevrGameContext ContextFor(const PlanEntry& entry, const char* pluginViewBuildId) const;
 
   static int GetLoadedPluginCount();
-  static const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index);
+  static const NevrLoadedPluginInfo* GetLoadedPluginInfo(int index);
   static void HostLog(const char* pluginId, std::uint32_t level, const char* message, const NevrLogField* fields,
                       std::uint32_t fieldCount);
 
@@ -150,7 +150,7 @@ class Loader {
   std::uintptr_t gameBase_ = 0;
   std::deque<LoadedPlugin> loaded_;
   std::deque<std::string> viewIds_;      // the plugin identity each context points at (ctx.game_build_id)
-  std::deque<NvrGameContext> contexts_;  // one per plugin that reached its init; a plugin may keep the pointer
+  std::deque<NevrGameContext> contexts_;  // one per plugin that reached its init; a plugin may keep the pointer
 };
 
 }  // namespace nevr_quest::plugin
