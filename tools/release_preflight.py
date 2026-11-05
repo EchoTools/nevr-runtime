@@ -31,7 +31,7 @@ version is close to its limit: development distance N above 900, minor or patch 
 cmake/set_project_version_from_git.cmake would write: the nearest release tag when HEAD is on it, else its next
 patch with `-dev.<commits since the tag>`.
 
-It is READ-ONLY. The git commands it runs, and nothing else:
+It changes nothing in the clone (it appends one record to its own log). The git commands it runs, and nothing else:
   git rev-parse --show-toplevel          git config --get remote.origin.url   git rev-parse HEAD
   git describe --tags --long --match "v[0-9]*" --exclude "v*-*"   (the nearest release tag and the distance to it)
   git status --porcelain=v1 --untracked-files=all
@@ -65,6 +65,11 @@ MAX_PATHS = 20
 # origin must be this repository, in either URL form; the project is public, so this is not a secret.
 EXPECT_ORIGIN = r"^(git@github\.com:|https://github\.com/|ssh://git@github\.com/)EchoTools/nevr-runtime(\.git)?/?$"
 
+
+
+def redact_url(text: str) -> str:
+    """Replace the userinfo of every URL in text (a token or password before "@") with <redacted>."""
+    return re.sub(r"(://)[^/\s]+@", r"\1<redacted>@", text)
 
 def git(*args, cwd):
     """Run git. A missing git binary is a failed result (127), never an exception."""
@@ -194,14 +199,14 @@ def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN, tag: str = N
         problems.append("no remote named origin: nothing to compare this clone with")
         return problems, facts
     origin_url = remote.stdout.strip()
-    facts["origin_url"] = origin_url
+    facts["origin_url"] = redact_url(origin_url)
     if not re.match(expect_origin, origin_url):
-        problems.append(f"origin is {origin_url}, not the project's repository "
+        problems.append(f"origin is {redact_url(origin_url)}, not the project's repository "
                         f"(github.com/EchoTools/nevr-runtime); a clone of another repository proves nothing")
     refs = git("ls-remote", "origin", cwd=root)
     if refs.returncode != 0:
         first = (refs.stderr.strip().splitlines() or ["no error text"])[0]
-        problems.append(f"cannot reach origin ({remote.stdout.strip()}): {first}")
+        problems.append(f"cannot reach origin ({redact_url(remote.stdout.strip())}): {redact_url(first)}")
         return problems, facts
     heads, remote_tags = parse_ls_remote(refs.stdout)
 

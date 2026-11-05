@@ -986,8 +986,9 @@ your seat name, for example `claude-main` or `codex`.
   The build embeds the public client defaults from `config/public-defaults.env` (git-ignored: CI
   writes it from the repository's Actions variables, and `just worktree-setup` copies it from the main
   checkout; copy `config/public-defaults.env.example` to make one) and reads nothing else: not `.env`,
-  not the environment. The build fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored,
-  never copied into a worktree, never compiled in); never print it.
+  not the environment. The build fails when the file is missing. `.env` holds local overrides and the release inputs
+  (`.env.example` lists them); `just` loads it into recipes (`set dotenv-load`), the build never reads it, it is
+  git-ignored, never copied into a worktree and never compiled in; never print it.
 - **Client login test mechanics.** Run `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the
   build's BugSplat64.dll; the nevr-runtime.dll beside it is deployed with it> --exit-after-login` from your checkout. The
   build is `mingw-plugin-dev` (the default `--dll`, #1230): a `mingw-release` host refuses its unsigned runtime and the

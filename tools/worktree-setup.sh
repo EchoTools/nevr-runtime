@@ -6,7 +6,7 @@
 # checkout, and the git-ignored config/public-defaults.env (the public client defaults the build embeds).
 # It also fills extern/luau (read by `just test-scripting`, so by `just verify`) on a branch that pins it:
 # from the main checkout when that has it, else by `git submodule update --init extern/luau` here.
-# .env is runtime-only and is never copied here.
+# .env (local overrides and release inputs) is never copied here.
 #
 # It then seeds build/$PRESET (default mingw-release, as in the justfile) from the main checkout's build/$PRESET
 # with tools/seed_build_tree.py, so the first build in this worktree compiles only what differs from the main

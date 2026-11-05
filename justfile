@@ -1,5 +1,9 @@
 # NEVR Runtime Build System
 
+# Every recipe gets .env (git-ignored; .env.example lists its names) in its environment. A missing .env is not an
+# error here: a recipe that needs an input reads it with one-argument env("NAME") or checks it, and fails naming it.
+set dotenv-load
+
 # Default preset: mingw-release on Linux, release on Windows
 default_preset := if os() == "linux" { "mingw-release" } else { "release" }
 preset := env("PRESET", default_preset)
@@ -466,6 +470,12 @@ quest-keystore-fingerprint:
 # tag's commit instead of origin's tip (release-quest-apk does), run tools/release_preflight.py --tag vX.Y.Z.
 release-preflight base="main":
     tools/release_preflight.py --base {{ quote(base) }}
+
+# Everything a release needs, checked up front, before anything is built or published (#1997): this clone is exactly
+# origin/main, every release input in .env is set and every file it names exists, every program is on PATH. One
+# PROBLEM line per thing wrong, then exit 1. It changes nothing in the clone and never prints a value.
+release-check:
+    tools/release_check.py
 
 # A LOCAL package: the Windows zip and the Quest APK from a CLEAN tree at HEAD, in build/package-dev/<sha>/.
 # Every non-tag build stamps a DEVELOPMENT version, X.Y.(Z+1)-dev.<N>+<sha> (cmake/set_project_version_from_git.cmake),
