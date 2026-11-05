@@ -576,7 +576,7 @@ Optional DLLs loaded by the runtime from a `plugins/` subdirectory next to the g
 | `nevr/pc/address_registry.h` | PC (echovr.exe addresses) | verified virtual addresses for plugin hooks |
 | `nevr/pc/plugin_assets.h` | PC (`<windows.h>`, the host's exports) | `NEVR_RegisterAsset` and `NEVR_DeregisterAssets` wrappers |
 | `nevr/pc/resource_registry.h` | PC (`<windows.h>`, the host's exports) | the resource-override export wrappers |
-| `nevr/pc/plugin_resources.h` | PC (GCC or Clang for the embedding macros) | embed a resource set in the plugin's file and register it and its overrides |
+| `nevr/pc/plugin_resources.h` | PC (GCC or Clang: `#embed` and the section attribute) | embed a resource set in the plugin's file and register it and its overrides |
 | `nevr/pc/safe_memory.h` | PC (`<windows.h>`) | VEH-guarded memory reads |
 | `nevr/pc/hook_manager.h` | PC (`<MinHook.h>`, which the plugin supplies) | `nevr::HookManager`, scoped MinHook lifecycle |
 

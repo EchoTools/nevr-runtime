@@ -88,7 +88,8 @@ enum class Problem {
     kChunkNotZstd,       // a frame does not start with the zstd magic
     kChunkSize,          // a chunk that decompresses to 0 bytes
     kRecordChunk,        // a record names a chunk the table does not have
-    kRecordRange,        // a record of 0 bytes, or one that runs past its chunk's decompressed bytes
+    kRecordRange,        // a record that runs past its chunk's decompressed bytes (a record of 0 bytes is allowed:
+                         //   the game's own manifest holds 2,515 of them)
     kRecordAlignment,    // an alignment that is 0 or not a power of two
     kRecordInLargeChunk, // a record of at most kBlockLimit bytes in a chunk larger than kBlockLimit
     kRecordNotAlone,     // a record larger than kBlockLimit that is not alone in its chunk
@@ -233,7 +234,7 @@ struct Parser {
             const Record r = v.RecordAt(i);
             if (r.chunk >= v.chunks_) return {Problem::kRecordChunk, i};
             const Chunk c = v.ChunkAt(r.chunk);
-            if (r.size == 0 || !detail::Inside(r.offset_in_chunk, r.size, c.decompressed)) return {Problem::kRecordRange, i};
+            if (!detail::Inside(r.offset_in_chunk, r.size, c.decompressed)) return {Problem::kRecordRange, i};
             if (!detail::PowerOfTwo(r.alignment)) return {Problem::kRecordAlignment, i};
             if (r.size <= kBlockLimit) {
                 if (c.decompressed > kBlockLimit) return {Problem::kRecordInLargeChunk, i};

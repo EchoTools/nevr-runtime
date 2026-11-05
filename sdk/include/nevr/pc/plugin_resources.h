@@ -3,18 +3,21 @@
  * docs/reference/plugin-resources.md).
  *
  * A resource set (nevr/resource_set.h) is embedded in a read-only section of the plugin DLL, so the plugin stays one
- * file and the runtime can serve the set's chunks straight from it. Two ways to embed one:
+ * file and the runtime can serve the set's chunks straight from it. Embed it with #embed (C23, C++26; GCC 15 and
+ * Clang 19 accept it in C++ as an extension) into the section NEVR_RESOURCE_SET_SECTION names:
  *
- *   NEVR_EMBED_RESOURCE_SET_FILE(levels, "build/levels.nevrres");   // GCC or Clang (MinGW): .incbin of a file
- *   NEVR_RESOURCE_SET_SECTION const unsigned char levels_data[] = {...};  // any compiler that has the attribute
+ *   NEVR_RESOURCE_SET_SECTION const unsigned char levels_data[] = {
+ *   #embed "levels.nevrres"
+ *   };
  *
- * The first defines `levels_data` and `levels_size`; the second is for a set written out as an array. Either puts
- * the bytes in the section `.nevrres`, which the linker keeps as initialised, read-only data with no relocation in
- * it: the runtime refuses a set whose bytes a relocation touches (NEVR_RESOURCES_NOT_IN_FILE).
+ * The section `.nevrres` is initialised, read-only data with no relocation in it: the runtime refuses a set whose
+ * bytes a relocation touches (NEVR_RESOURCES_NOT_IN_FILE). The MinGW assembler cannot switch sections and back from a
+ * top-level asm statement on PE (it has no .pushsection or .previous), so #embed is the one way; a 1 GiB set builds in
+ * about two minutes.
  *
  * Then, from NevrPluginInit / NevrPluginInitEx:
  *
- *   NevrRegisterEmbeddedResources(ctx, levels_data, levels_size, "my levels");
+ *   NevrRegisterEmbeddedResources(ctx, levels_data, sizeof(levels_data), "my levels");
  *
  * It registers the set with ctx->register_resources, then each of the set's overrides (replacement bytes for
  * resources the game already has) with NEVR_RegisterResourceOverride (nevr/pc/resource_registry.h). It returns the
@@ -31,21 +34,6 @@
 
 #if defined(__GNUC__) || defined(__clang__)
 #define NEVR_RESOURCE_SET_SECTION __attribute__((section(".nevrres"), used))
-// `name`_data is the first byte and `name`_size the byte count, as extern "C" symbols in this DLL. The section flag
-// "dr" is PE's initialised, read-only data.
-#define NEVR_EMBED_RESOURCE_SET_FILE(name, path)                                                      \
-    extern "C" const unsigned char name##_data[];                                                     \
-    extern "C" const unsigned char name##_end[];                                                      \
-    __asm__(".pushsection .nevrres,\"dr\"\n"                                                          \
-            ".balign 16\n"                                                                            \
-            ".globl " NEVR_RESOURCE_SET_ASM_NAME(name##_data) "\n" NEVR_RESOURCE_SET_ASM_NAME(name##_data) ":\n" \
-            ".incbin \"" path "\"\n"                                                                  \
-            ".globl " NEVR_RESOURCE_SET_ASM_NAME(name##_end) "\n" NEVR_RESOURCE_SET_ASM_NAME(name##_end) ":\n"   \
-            ".popsection\n");                                                                         \
-    static const std::uint64_t name##_size =                                                          \
-        static_cast<std::uint64_t>(name##_end - name##_data)
-// x86-64 PE and ELF symbols carry no leading underscore.
-#define NEVR_RESOURCE_SET_ASM_NAME(sym) #sym
 #endif
 
 struct NevrEmbeddedResourcesResult {

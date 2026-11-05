@@ -114,7 +114,6 @@ TEST(ResourceSetFormat, EachRuleTheReaderNeedsIsARefusal) {
       {"record chunk", Problem::kRecordChunk, [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(1) + 0x10, 7); }},
       {"record range", Problem::kRecordRange,
        [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(2) + 0x18, 100000); }},
-      {"record of 0 bytes", Problem::kRecordRange, [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(2) + 0x18, 0); }},
       {"alignment", Problem::kRecordAlignment, [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(2) + 0x1c, 12); }},
       {"duplicate", Problem::kDuplicate,
        [](SetBuilder& b, std::vector<unsigned char>& v) {
@@ -128,6 +127,13 @@ TEST(ResourceSetFormat, EachRuleTheReaderNeedsIsARefusal) {
     c.mutate(b, bytes);
     EXPECT_EQ(ParseProblem(bytes), c.expected) << c.name << ": got " << nevr_resource_set::ProblemName(ParseProblem(bytes));
   }
+}
+
+TEST(ResourceSetFormat, ARecordOfZeroBytesIsAccepted) {
+  // The game's own manifest (48037dc70b0ecab2) holds 2,515 records of 0 bytes; a level built from it carries some.
+  SetBuilder b = LevelSet();
+  b.AddRecord(kMeshType, 0x7777ULL, {}, 0);
+  EXPECT_EQ(ParseProblem(b.Build()), Problem::kNone);
 }
 
 TEST(ResourceSetFormat, ASmallRecordInALargeChunkIsRefusedAndALargeRecordMustBeAlone) {

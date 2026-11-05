@@ -35,7 +35,8 @@ A resource set is one block of bytes, `"NEVRRES1"` and a 48-byte header, then th
 - **overrides**: whole replacement bytes for resources the game already has (see "Overrides").
 
 `nevr_resource_set::Parse` enforces the conditions the game's reader needs: every table and frame lies inside the set;
-a frame starts with the zstd magic; a record lies inside its chunk; a record of at most `0x80000` bytes sits in a chunk
+a frame starts with the zstd magic; a record lies inside its chunk (a record of 0 bytes is allowed, as in the game's own
+manifest); a record of at most `0x80000` bytes sits in a chunk
 of at most `0x80000` decompressed bytes (the reader's block cache); a larger record is alone in its chunk; alignments are
 powers of two; and no two records, and no two overrides, share a key. Record order is free.
 
@@ -44,17 +45,22 @@ powers of two; and no two records, and no two overrides, share a key. Record ord
 ```cpp
 #include "nevr/pc/plugin_resources.h"
 
-NEVR_EMBED_RESOURCE_SET_FILE(levels, "levels.nevrres");  // GCC or Clang (MinGW): .incbin into .nevrres
+NEVR_RESOURCE_SET_SECTION const unsigned char levels_data[] = {
+#embed "levels.nevrres"
+};
 
 NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* args) {
-    const NevrEmbeddedResourcesResult r = NevrRegisterEmbeddedResources(ctx, levels_data, levels_size, "my levels");
+    const NevrEmbeddedResourcesResult r = NevrRegisterEmbeddedResources(ctx, levels_data, sizeof(levels_data), "my levels");
     return r.status == NEVR_RESOURCES_OK ? 0 : 1;
 }
 ```
 
 The bytes must be file bytes of the plugin's own image: in one section's raw data, with no base relocation in them. The
-section `.nevrres` that the macros use is initialised read-only data. The runtime checks this
-(`src/runtime/patch/image_file_range.h`) and compares the mapped bytes with the file's.
+section `.nevrres` that `NEVR_RESOURCE_SET_SECTION` names is initialised read-only data. The runtime checks this
+(`src/runtime/patch/image_file_range.h`) and compares the mapped bytes with the file's. `#embed` is C23 and C++26; GCC
+15 and Clang 19 accept it in C++ as an extension. The MinGW assembler has no `.pushsection` or `.previous` for PE, so an
+`.incbin` in a top-level asm statement cannot return to the section the compiler was in. A 1 GiB set builds in about two
+minutes.
 
 `register_resources` returns:
 
@@ -110,4 +116,4 @@ once per 10 s window in which the game read from a set). No line is written per 
 - Quest. The resolver and its layout are the same on Quest (libr15 `0x25439f0`), but which file a Quest plugin's
   handle opens is not established.
 - New script code. A `CScriptResource` is a DLL the game loads by name, which a single file cannot carry.
-- MSVC: both embedding macros (`NEVR_EMBED_RESOURCE_SET_FILE`, `NEVR_RESOURCE_SET_SECTION`) need GCC or Clang.
+- MSVC: `NEVR_RESOURCE_SET_SECTION` and `#embed` need GCC or Clang.
