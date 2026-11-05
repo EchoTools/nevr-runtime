@@ -38,6 +38,8 @@ So the q15t plugin carries a second mechanism, with its own page-protection call
 (`src/quest/plugins/q15t/src/got_swap.cpp`) and its own install helpers (`InstallImportHook`, `InstallChainedImportHook` in
 `src/quest/plugins/q15t/src/import_hook.h`). Most of its modules install through those helpers, outside the sentinel's
 registry. N151 names `got_swap.cpp` as an allowed page-protection site.
+ADR 0046 (`docs/adr/0046-combat-is-part-of-the-quest-runtime.md`) ends this: the plugin's modules move into the runtime, one
+unit at a time, and install through the manager.
 
 The two mechanisms do not compose. The sentinel installs its render-configuration hooks from its constructor
 (`kInstallRenderConfig`, `src/quest/integration/ctor_sequence.cpp`) and q15t installs at the first call after load

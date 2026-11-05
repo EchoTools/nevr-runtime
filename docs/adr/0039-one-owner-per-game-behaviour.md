@@ -54,6 +54,6 @@ Scope: `src/quest`, its plugins, `src/runtime`, `src/modules`.
 
 ## Not claimed
 
-Which module should own the refresh rate once q15t's rule moves onto the hook service; #2000 and its headset run decide
-that. Whether the reference runtime's modules in the release APK's `libvrapi.so` (kept in the release by
-`tools/quest_runtime_pin.py`) change clock levels or the refresh rate: O1 covers this tree's code only.
+Whether the refresh-rate owner ADR 0046 names (the combat refresh-rate rule, which the render configuration handler asks)
+holds on a headset; the run of #2000 shows it. Whether the reference runtime's modules in the release APK's `libvrapi.so`
+(kept in the release by `tools/quest_runtime_pin.py`) change clock levels or the refresh rate: O1 covers this tree's code only.
