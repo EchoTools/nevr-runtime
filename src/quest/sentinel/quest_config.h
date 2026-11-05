@@ -32,6 +32,12 @@
 // `graphics` other than `texture_quality` (a misspelling, another case) is one Warning that names it, and changes nothing else.
 // `stock` leaves the headset runtime's own eye-buffer size. The key is also where a choice made in the Texture Resolution control is
 // kept (texture_menu_hook.h): the sentinel writes it through NevrConfig::Set, so the next launch reads the player's last choice here.
+//
+// `graphics.hand_flip` (#2082) is the Controller Hand Flip choice (hand_flip.h): a boolean, `true` is On; absent, it is Off (nothing is
+// written for a default). A value that is no boolean (a word, a number, a list, a mapping, a key with no value, an unset ${VAR}) is Off
+// with one Warning that names the key, never the value. It is also where a choice made in the menu is kept: the sentinel writes it
+// through NevrConfig::Set (hand_flip.h), so the next launch reads the player's last choice here. A file rejected as a whole says
+// nothing about it: Off, from the default.
 #pragma once
 
 #include <cstddef>
@@ -120,6 +126,12 @@ struct TextureChoice {
   Source source = Source::kAbsent;  // kFile: the file gave the level; anything else: the default did, or a mistake fell back
 };
 
+// The Controller Hand Flip setting (#2082), after the file and the default have spoken.
+struct HandFlipChoice {
+  bool on = false;
+  Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, Off
+};
+
 struct LogEvent {
   LogLevel level;
   std::string message;  // never contains a configured value, only key and feature names; the one exception is a rejected
@@ -134,6 +146,7 @@ struct ResolvedConfig {
   Features requested;  // what the file and the defaults ask for
   Features effective;  // requested, after prerequisite checks
   TextureChoice textureQuality;
+  HandFlipChoice handFlip;
   // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
   // plans from it (quest/plugin/plugin_runtime.h).
   std::vector<nevr::PluginSpec> plugins;
@@ -162,6 +175,8 @@ const char* FeatureName(Feature feature);
 const char* SourceName(Source source);
 // "config" when the file gave the texture level, else "default": the words the install log line and the config report use.
 const char* TextureSourceName(const TextureChoice& choice);
+// "config" when the file gave the hand flip value, else "default".
+const char* HandFlipSourceName(const HandFlipChoice& choice);
 
 // The shared redirect policy (runtime/lifecycle/service_redirect) gated by the redirect and bridge
 // features. nullopt leaves the game's original value untouched.

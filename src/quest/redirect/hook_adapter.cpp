@@ -120,6 +120,12 @@ bool RegisterRedirectCounters() noexcept {
   // The CSysHttp::CreateConnection decisions alone (#408): `redirect_applied` also counts the config-key reads.
   ok = sentinel::RegisterReportCounter("redirect_url_redirected", &c.urlRedirected) && ok;
   ok = sentinel::RegisterReportCounter("redirect_url_pass_through", &c.urlPassThrough) && ok;
+  // The outbound block (#2089): one counter per host the connect was refused for, named for the call and the host so the
+  // reporter's line says both. A host the run did not try is reported `never_fired` when the grace window ends.
+  ok = sentinel::RegisterReportCounter("http_create_connection_refused_rad_bugsplat", &c.refusedBugSplat) && ok;
+  ok = sentinel::RegisterReportCounter("http_create_connection_refused_s3", &c.refusedAmazonS3) && ok;
+  ok = sentinel::RegisterReportCounter("http_create_connection_refused_graph", &c.refusedGraph) && ok;
+  ok = sentinel::RegisterReportCounter("http_create_connection_refused_api_env", &c.refusedApiEnvironment) && ok;
   // The login_host fallback decisions (login_fallback.h): versioned for a stock fallback, kept for one that already has a query.
   ok = sentinel::RegisterReportCounter("redirect_login_fallback_versioned", &c.loginFallbackVersioned) && ok;
   ok = sentinel::RegisterReportCounter("redirect_login_fallback_kept", &c.loginFallbackKept) && ok;
