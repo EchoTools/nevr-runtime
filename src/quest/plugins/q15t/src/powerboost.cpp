@@ -19,6 +19,7 @@
 #include "plugin_log.h"
 #include "powerboost_core.h"
 #include "safe_read.h"
+#include "thread_word.h"
 
 // The two words the naked thunk reads and the function it calls (powerboost_thunk.inc). Global scope, C names, hidden.
 extern "C" {
@@ -83,7 +84,7 @@ std::atomic<std::uint32_t> g_markers{0}, g_swallowed{0}, g_sent{0}, g_held_n{0},
 std::uint64_t (*g_clock)() = nullptr;
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 LinkFilter g_filter;  // under g_mu
-thread_local int t_in_node = 0;  // NodeWrap's real Enter is running on this thread
+ThreadWord g_t_in_node;  // per thread, how many NodeWrap real Enters are running on it; a key, not thread_local: no allocation in a hooked call
 
 struct Held {
   void* cs = nullptr;
@@ -183,9 +184,10 @@ void NodeWrap(void* node, const std::uint8_t* data) {
     std::memcpy(&amount, raw, sizeof amount);
     std::memcpy(&user, raw + 4, sizeof user);
   }
-  ++t_in_node;
+  const std::uintptr_t depth = g_t_in_node.Get();
+  g_t_in_node.Set(depth + 1);
   real(node, data);
-  --t_in_node;
+  g_t_in_node.Set(depth);
   if (have && amount >= kMarkerMin) MarkerLine(amount, "node", -1, user);
 }
 
@@ -193,7 +195,8 @@ void HealWrap(void* cs, std::uint64_t handle, float amount, std::uint64_t user) 
   if (g_swallow.load(std::memory_order_acquire) && amount >= kMarkerMin) {  // stage 2: a marker never reaches Heal; this path never sends
     const Marker m = Decode(amount);
     if (m.kind) {
-      if (t_in_node && m.kind == 1) {  // the node's direct path: held for the next queued heal
+      const bool in_node = g_t_in_node.Get() != 0;
+      if (in_node && m.kind == 1) {  // the node's direct path: held for the next queued heal
         bool replaced;
         {
           Lock l;
@@ -208,7 +211,7 @@ void HealWrap(void* cs, std::uint64_t handle, float amount, std::uint64_t user) 
         SwallowLine(m, "node heal", handle, replaced ? "held for the next queued heal (an older held one dropped)" : "held for the next queued heal");
       } else {
         g_swallowed.fetch_add(1, std::memory_order_relaxed);
-        SwallowLine(m, t_in_node ? "node heal" : "heal", handle, t_in_node ? "nothing sent" : "relayed by the server: never re-sent");
+        SwallowLine(m, in_node ? "node heal" : "heal", handle, in_node ? "nothing sent" : "relayed by the server: never re-sent");
       }
       return;
     }
@@ -450,6 +453,11 @@ InstallResult InstallPowerboost(std::uintptr_t base, int stage, bool net_tick, c
     return out;
   }
   if (stage > kPowerboostCone) stage = kPowerboostCone;
+  if (!g_t_in_node.Create()) {  // the node mark is per thread, in a pthread key
+    Rec().S("why", "no pthread key for the per-thread node mark").Emit(NEVR_LOG_ERROR, "powerboost: OFF; nothing installed");
+    out.reason = "no_thread_key";
+    return out;
+  }
   g_base = base;
   PowerboostFns f{};
   const bool have = fns != nullptr ? (f = *fns, true) : ResolvePowerboostFns(base, &f);

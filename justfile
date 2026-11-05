@@ -549,7 +549,8 @@ quest-autopilot-apk store_apk=env("NEVR_STORE_APK"): build-android
     just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so "" "" "" "" "" libnevr_autopilot.so
 
 # The q15t plugin libraries (#1546, src/quest/plugins/q15t/README.md): libq15t.so and libq15t_early.so, built with the android-arm64
-# preset, each through the plugin static-init check (tools/check_quest_static_init.sh --plugin). Copies them to build/quest-q15t/,
+# preset, each through the plugin static-init check (tools/check_quest_static_init.sh --plugin) and the emulated-TLS check
+# (src/quest/tests/q15t/check/no_emutls.sh: thread_local allocates on a thread's first use under API 26). Copies them to build/quest-q15t/,
 # checks that each names the pinned libr15 build id and that libq15t.so carries the shipped defaults (the config marker in plugin.cpp),
 # and prints the sha256 of each. No release or package-dev APK carries them; the variant recipe (release-quest-variant-apk) packages them.
 build-quest-q15t: configure-android
@@ -565,6 +566,7 @@ build-quest-q15t: configure-android
         [ -f "$built/$lib" ] || { echo "build-quest-q15t: $built/$lib was not built" >&2; exit 1; }
         cp "$built/$lib" "$out/$lib"
         tools/check_quest_static_init.sh --plugin "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" "$out/$lib"
+        src/quest/tests/q15t/check/no_emutls.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" "$out/$lib" "$lib"
         grep -qaF "$id" "$out/$lib" || { echo "build-quest-q15t: $lib does not name libr15 build id $id" >&2; exit 1; }
     done
     grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 hz_level=1 build_id=$id" "$out/libq15t.so" \

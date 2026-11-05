@@ -10,6 +10,7 @@
 #include "bvh_core.h"
 #include "plugin_log.h"
 #include "safe_read.h"
+#include "thread_word.h"
 
 namespace q15t {
 namespace {
@@ -37,7 +38,7 @@ enum { kInit, kShut, kInt, kOcc, kTouch, kGate };
 std::atomic<bool> g_installed{false}, g_gate_on{false};
 BvhPins g_pins{};
 std::uintptr_t g_base = 0;
-thread_local bool t_allowed = false;  // this thread is inside a cast the tree answers
+ThreadWord g_t_allowed;  // per thread, 1 while this thread is inside a cast the tree answers (a key, not thread_local: no allocation in a hooked call)
 std::atomic<std::uintptr_t> g_last_gate_ret{0};
 
 std::atomic<std::uint64_t> g_built{0}, g_refused{0}, g_int{0}, g_int_hit{0}, g_occ{0}, g_occ_hit{0}, g_gated{0}, g_touch{0}, g_stock{0};
@@ -187,7 +188,7 @@ const bvh::Tree* TreeOf(const void* self) {
 using IntersectFn = bool (*)(const void*, const float*, std::uint8_t*);
 __attribute__((noinline)) bool IntersectWrapper(const void* self, const float* ray, std::uint8_t* hit) {
   const auto real = reinterpret_cast<IntersectFn>(g_real[kInt].load(std::memory_order_acquire));
-  if (g_gate_on.load(std::memory_order_relaxed) && !t_allowed) {  // not a cast the tree is for: the stock miss
+  if (g_gate_on.load(std::memory_order_relaxed) && g_t_allowed.Get() == 0) {  // not a cast the tree is for: the stock miss
     g_gated.fetch_add(1, std::memory_order_relaxed);
     return real != nullptr ? real(self, ray, hit) : false;
   }
@@ -269,10 +270,10 @@ __attribute__((noinline)) bool GateWrapper(const void* self, const void* ray, vo
   for (int i = 0; i < g_pins.n_allowed; ++i) allowed |= g_pins.allowed[i] == ret;
   const auto real = reinterpret_cast<StaticRaycastFn>(g_real[kGate].load(std::memory_order_acquire));
   if (real == nullptr) return false;
-  const bool outer = t_allowed;
-  t_allowed = allowed;
+  const std::uintptr_t outer = g_t_allowed.Get();
+  g_t_allowed.Set(allowed ? 1 : 0);
   const bool got = real(self, ray, hit, gs);
-  t_allowed = outer;
+  g_t_allowed.Set(outer);
   return got;
 }
 
@@ -348,6 +349,7 @@ InstallResult InstallBvhAt(std::uintptr_t base, const BvhPins& pins) {
     if (word != base + check[i]->s.fn) return Refuse("slot_mismatch", check[i]->name, SwapStatus::kUnexpectedOriginal);
   }
 
+  if (!g_t_allowed.Create()) return Refuse("no_thread_key", "pthread_key_create failed", SwapStatus::kNullSlot);
   g_base = base;
   g_pins = pins;
   // the gate first: until its wrapper is in, no cast is marked, so a tree installed a moment later answers none
@@ -452,7 +454,7 @@ void ResetBvhForTest() {
   g_first_hit = g_first_block = false;
   g_next_summary = 0;
   g_last_gate_ret = 0;
-  t_allowed = false;
+  g_t_allowed.Set(0);
 }
 std::uintptr_t BvhLastGateRetForTest() { return g_last_gate_ret.load(); }
 

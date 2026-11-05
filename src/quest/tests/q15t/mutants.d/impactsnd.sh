@@ -100,7 +100,7 @@ runm impactsnd lock_dropped_rowpass src/impactsnd.cpp 's/if (pthread_mutex_trylo
 runm impactsnd lock_blocking        src/impactsnd.cpp 's/if (pthread_mutex_trylock(\&g_table_mu) != 0) {/if (pthread_mutex_lock(\&g_table_mu) != 0) {/'
 runm impactsnd lock_dropped_shutdown src/impactsnd.cpp 's/if (outer) pthread_mutex_lock(\&g_table_mu);//'
 runm impactsnd unlock_dropped_shutdown src/impactsnd.cpp 's/if (outer) pthread_mutex_unlock(\&g_table_mu);//'
-runm impactsnd nested_lock_again    src/impactsnd.cpp 's/const bool outer = t_shutdown_depth == 0;/const bool outer = true;/'
+runm impactsnd nested_lock_again    src/impactsnd.cpp 's/const bool outer = depth == 0;/const bool outer = true;/'
 runm impactsnd held_not_released    src/impactsnd.cpp 's/    if (on) pthread_mutex_unlock(\&g_table_mu);//'
 runm impactsnd held_not_set         src/impactsnd.cpp 's/^      held.on = true;$//'
 runm impactsnd recheck_map_off      src/impactsnd.cpp 's/ || m2 != map//'
@@ -125,3 +125,6 @@ runm impactsnd thread_loader_unlogged src/impactsnd.cpp 's/^  NoteThread(kRoleLo
 runm impactsnd thread_shutdown_unlogged src/impactsnd.cpp 's/^  NoteThread(kRoleShutdown);$//'
 runm impactsnd thread_logged_each_call src/impactsnd.cpp 's/ == tid) return;/ == -1) return;/'
 runm impactsnd thread_cap_value     src/impactsnd.cpp 's/kThreadLines = 24;/kThreadLines = 1000;/'
+runm impactsnd depth_shared_word    src/impactsnd.cpp "s/^ThreadWord g_t_shutdown_depth;.*/$SHARED_WORD g_t_shutdown_depth;/"
+runm impactsnd depth_not_restored   src/impactsnd.cpp 's/^  g_t_shutdown_depth.Set(depth);$/  (void)depth;/'
+runm impactsnd key_failure_ignored  src/impactsnd.cpp 's/if (!g_t_shutdown_depth.Create()) {/if (!g_t_shutdown_depth.Create() \&\& false) {/'

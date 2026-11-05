@@ -78,6 +78,7 @@ HOST_TESTS = frozenset(
         "shaderstep.shaderstep_test",
         "shieldgamma.shieldgamma_test",
         "tablestep.tablestep_test",
+        "thread_word.thread_word_test",
         "voipdrop.voipdrop_test",
         "wallfire.wallfire_test",
         "weapon_arm.t26_test",
@@ -118,9 +119,10 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_EC",
     ]
 )
-# q15t_arm64_object(<src name>): the NDK static-initializer test for each of these, one per module the repack checks
+# q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack
+# checks and one for each module that keeps per-thread state (bvh, dronekill, impactsnd, powerboost, sensorwd)
 ARM64_OBJECTS = frozenset(
-    "decals dronekill dronemuzzle plugin_early hudmeter instmodel music pfx pfxtev powerboost sensorwd shaderstep shieldgamma tablestep".split()
+    "bvh decals dronekill dronemuzzle impactsnd plugin_early hudmeter instmodel music pfx pfxtev powerboost sensorwd shaderstep shieldgamma tablestep".split()
 )
 # the checks that read an object or run a freestanding program, registered by hand in a module file
 NDK_CHECKS = {
@@ -243,6 +245,50 @@ class HostTestsAreTargets(unittest.TestCase):
         self.assertEqual(sorted(modules - labels), [], "a module file registers no host test")
 
 
+class NoEmulatedTls(unittest.TestCase):
+    """check/no_emutls.sh: the Quest build targets API 26, where thread_local is emulated (__emutls_v.*) and allocates on first use."""
+
+    SCRIPT = Q15T / "check/no_emutls.sh"
+
+    def run_script(self, nm_output: str, *, nm_exit: int = 0, file_exists: bool = True):
+        with tempfile.TemporaryDirectory(prefix="q15t-no-emutls-") as tmp:
+            tmp_path = Path(tmp)
+            nm = tmp_path / "fake-nm"
+            nm.write_text(f"#!/bin/sh\ncat <<'EOF'\n{nm_output}\nEOF\nexit {nm_exit}\n", encoding="utf-8")
+            nm.chmod(0o755)
+            target = tmp_path / "libx.so"
+            if file_exists:
+                target.write_bytes(b"")
+            return subprocess.run([str(self.SCRIPT), str(nm), str(target), "x"], capture_output=True, text=True, check=False)
+
+    def test_an_emulated_variable_of_q15t_fails(self):
+        done = self.run_script("0000000000014f40 d __emutls_v._ZN4q15t12_GLOBAL__N_19t_allowedE\n0000000000001000 t main")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertIn("__emutls_v._ZN4q15t12_GLOBAL__N_19t_allowedE", done.stdout)
+
+    def test_every_emulated_variable_is_named(self):
+        done = self.run_script("0 d __emutls_v.a\n0 d __emutls_v.b")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("__emutls_v.a", done.stdout)
+        self.assertIn("__emutls_v.b", done.stdout)
+
+    def test_libcxxabis_own_slot_is_allowed(self):
+        done = self.run_script("0000000000007b5c0 d __emutls_v._ZZN10__cxxabiv112_GLOBAL__N_19__globalsEvE10eh_globals")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_the_runtime_support_functions_are_not_a_variable_of_q15t(self):
+        done = self.run_script("000000000006b00c t __emutls_get_address\n0000000000088ac4 b emutls_pthread_key")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_an_nm_that_fails_is_a_failure(self):
+        done = self.run_script("", nm_exit=1)
+        self.assertEqual(done.returncode, 1, done.stdout)
+
+    def test_a_missing_file_is_a_failure(self):
+        done = self.run_script("", file_exists=False)
+        self.assertEqual(done.returncode, 1, done.stdout)
+
+
 class NdkChecksAreRegistered(unittest.TestCase):
     def test_a_static_initializer_test_per_checked_module(self):
         found = set()
@@ -250,6 +296,13 @@ class NdkChecksAreRegistered(unittest.TestCase):
             for call in re.findall(r"q15t_arm64_object\(([^)]*)\)", path.read_text(encoding="utf-8")):
                 found.update(call.split())
         self.assertEqual(found, set(ARM64_OBJECTS))
+
+    def test_an_emulated_tls_test_per_arm64_object(self):
+        # q15t_arm64_object registers it beside the static-initializer test, so every object listed above has one
+        text = (Q15T / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn("NAME ${Q15T_MODULE}.arm64_no_emutls_${m}", text)
+        self.assertIn("check/no_emutls.sh", text)
+        self.assertIn("llvm-nm", text)
 
     def test_the_thunk_and_qemu_checks_are_registered(self):
         for relative, names in NDK_CHECKS.items():

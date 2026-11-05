@@ -85,7 +85,8 @@ void DroneKillTick(std::uintptr_t game);
 void DroneKillOnKilled(std::uint32_t index);
 
 // The shot accessor (the source's source-build drone_shot_velocity): the velocity of the shot FireBulletLocal is making on this thread, null
-// outside the real call or when the FireBulletLocal word was not swapped. *remote = 1 for a remote shot.
+// outside the real call or when the FireBulletLocal word was not swapped. *remote = 1 for a remote shot. The pointer is valid until the
+// real call returns (it points into the wrapper's frame).
 const float* DroneKillShotVelocity(int* remote);
 bool DroneKillShotActive();  // the FireBulletLocal word is swapped (the accessor can be non-null)
 

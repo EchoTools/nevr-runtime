@@ -14,6 +14,7 @@
 #include "nevr/symbol_hash.h"
 #include "plugin_log.h"
 #include "safe_read.h"
+#include "thread_word.h"
 
 // 1: build without writing anything to the game: D and the rows are read and logged, never written (the source build's
 // `nowrite=1`). The wrappers and the tick still run.
@@ -141,7 +142,7 @@ void (*g_hook)(int) = nullptr;
 // The table lock. Held across the real CR15NetBulletCS::Shutdown (which frees the table and clears the global), and across
 // every row write. A plain POD (no constructor at load).
 pthread_mutex_t g_table_mu = PTHREAD_MUTEX_INITIALIZER;
-thread_local unsigned t_shutdown_depth = 0;  // this thread is inside the Shutdown wrapper (it holds the lock)
+ThreadWord g_t_shutdown_depth;  // per thread, how deep this thread is inside the Shutdown wrapper (it holds the lock); a key, not thread_local: no allocation in a hooked call
 
 bool g_table_line_done = false;  // the count line was logged; from then on IdsTick
 bool g_table_gone = false;
@@ -533,12 +534,13 @@ std::uint64_t ShutdownWrapper(std::uint64_t self) {
   const auto real = reinterpret_cast<std::uint64_t (*)(std::uint64_t)>(g_real_shutdown.load(std::memory_order_acquire));
   if (real == nullptr) return 0;  // not reachable: the slot is swapped only after g_real_shutdown is set
   NoteThread(kRoleShutdown);
-  const bool outer = t_shutdown_depth == 0;
-  ++t_shutdown_depth;
+  const std::uintptr_t depth = g_t_shutdown_depth.Get();
+  const bool outer = depth == 0;
+  g_t_shutdown_depth.Set(depth + 1);
   if (outer) pthread_mutex_lock(&g_table_mu);
   const std::uint64_t r = real(self);
   if (outer) pthread_mutex_unlock(&g_table_mu);
-  --t_shutdown_depth;
+  g_t_shutdown_depth.Set(depth);
   g_shutdowns.fetch_add(1, std::memory_order_relaxed);
   if (outer && Budget(&g_note_lines, kNoteLines, "notes")) {
     std::uintptr_t map = 0;
@@ -637,6 +639,12 @@ InstallResult InstallImpactSnd(std::uintptr_t base) {
   out.status = SwapStatus::kUnexpectedOriginal;
   g_base = base;
   g_t0 = Now();
+  // The Shutdown wrapper keeps its depth per thread in a pthread key (not thread_local: that allocates in a hooked call).
+  if (!g_t_shutdown_depth.Create()) {
+    Refuse("no pthread key for the Shutdown wrapper's per-thread depth", 0, 0, 0);
+    out.reason = "no_thread_key";
+    return out;
+  }
   // R15: the hit code the module's reasoning is about. A word that differs = not the pinned build: nothing is written.
   for (std::size_t i = 0; i < 4; ++i) {
     std::uint32_t have = 0;
@@ -787,7 +795,7 @@ void ResetImpactSndForTest() {
   g_skipped.store(0);
   g_shutdowns.store(0);
   for (auto& t : g_tid) t.store(0);
-  t_shutdown_depth = 0;
+  g_t_shutdown_depth.Set(0);
   g_table_line_done = g_table_gone = g_wait_logged = false;
   g_t0 = g_seen = g_next = g_wait_t0 = 0;
   g_wait_data = g_sorted_data = g_uns_data = 0;

@@ -11,8 +11,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "key_hog.h"
 #include "nevr/plugin_interface.h"
 #include "pbhud_image.h"
 #include "plugin_log.h"
@@ -86,6 +88,7 @@ static const void *g_node_arg = nullptr, *g_node_data = nullptr;
 static const void *g_link_cs = nullptr, *g_link_target = nullptr, *g_link_pos = nullptr;
 static uint64_t g_link_bubble = 0, g_link_argv = 0;
 static bool g_node_heals = false;       // the fake node Enter takes its direct path: it calls Heal through the slot
+static bool g_node_other_thread = false;  // the fake node Enter, while it runs, has another thread relay a marker through the Heal slot
 static pbhud::Image* g_img = nullptr;
 
 using HealFn = void (*)(void*, uint64_t, float, uint64_t);
@@ -97,6 +100,10 @@ static void FakeNode(void* node, const uint8_t* data) {
   ++g_node_calls;
   g_node_arg = node;
   g_node_data = data;
+  if (g_node_other_thread) {
+    g_node_other_thread = false;
+    std::thread([] { reinterpret_cast<HealFn>(g_img->Get(kSlotHeal))(reinterpret_cast<void*>(0xc0), 0x10001, 1250030.0f, 5); }).join();
+  }
   if (g_node_heals && data != nullptr) {
     float amount;
     uint32_t user;
@@ -178,6 +185,7 @@ static void Fresh(pbhud::Image& img) {
   g_sends.clear();
   g_node_calls = g_link_calls = 0;
   g_node_heals = false;
+  g_node_other_thread = false;
   g_resolve_calls = 0;
   g_now = 1000;
   g_img = &img;
@@ -266,6 +274,16 @@ int main() {
   // ---- stage 1 (read-only): three words swapped, nothing else
   Fresh(img);
   PowerboostFns fns = Fns();
+  // no pthread key left for the per-thread node mark: the install refuses and swaps nothing
+  {
+    KeyHog hog;
+    const InstallResult none = InstallPowerboost(img.base, kPowerboostRead, false, &fns);
+    CHECK(none.status != SwapStatus::kOk && std::strcmp(none.reason, "no_thread_key") == 0, "no key: %s %s", StatusName(none.status), none.reason);
+    CHECK(Slot(img, kSlotNode) == img.base + kFnNode && Slot(img, kSlotHeal) == img.base + kFnHeal && Slot(img, kSlotLink) == img.base + kFnLink, "no key: a slot was swapped");
+    CHECK(Count("powerboost: OFF; nothing installed", 3) == 1 && Count("no pthread key") == 1, "no key: the refusal is not logged");
+    CHECK(GetPowerboostStats().stage == 0, "no key: stage %d", GetPowerboostStats().stage);
+  }
+  Fresh(img);
   InstallResult r = InstallPowerboost(img.base, kPowerboostRead, false, &fns);
   CHECK(r.status == SwapStatus::kOk && std::strcmp(r.reason, "") == 0, "stage 1 install: %s %s", StatusName(r.status), r.reason);
   CHECK(Slot(img, kSlotNode) != img.base + kFnNode && Slot(img, kSlotHeal) != img.base + kFnHeal && Slot(img, kSlotLink) != img.base + kFnLink, "a stage-1 slot not swapped");
@@ -455,6 +473,28 @@ int main() {
     HealSlot(img)(cs, 1, 5500000.0f, 1);
     HealSlot(img)(cs, 1, 7500000.0f, 1);
     CHECK(g_heals.size() == 2, "non-marker amounts swallowed");
+  }
+  // the node mark is per thread: a marker relayed by the server on another thread while this thread is inside the node's Enter is not the
+  // node's own heal. It is swallowed as a relayed one ("heal", nothing held), and the node's own direct heal on this thread is still held.
+  {
+    g_sends.clear();
+    g_heals.clear();
+    g_lines.clear();
+    const uint32_t held_before = GetPowerboostStats().held;
+    g_node_other_thread = true;
+    g_node_heals = true;
+    NodeData d = Data(1250030.0f, 5);
+    NodeSlot(img)(node, d.b);
+    g_node_heals = false;
+    CHECK(Count("relayed by the server: never re-sent") == 1, "the other thread's marker was not taken for a relayed one (%d lines)", Count("relayed by the server: never re-sent"));
+    CHECK(Count("held for the next queued heal") == 1 && GetPowerboostStats().held == held_before + 1,
+          "the node's own heal, not the other thread's, was held (held %u -> %u)", held_before, GetPowerboostStats().held);
+    CHECK(g_heals.empty() && g_sends.empty(), "a marker reached Heal / was sent");
+    QueuedSlot(img)(cs, 1, 1.0f, 1);  // drain the held one
+    // and after the node's Enter returned, a relayed marker on this thread is a relayed one again
+    g_lines.clear();
+    HealSlot(img)(cs, 0x10001, 1250030.0f, 5);
+    CHECK(Count("relayed by the server: never re-sent") == 1, "the node mark leaked past the Enter");
   }
   // the queued path directly: kind 1 is sent at once, kinds 2 / 3 swallowed, ordinary heals run
   {

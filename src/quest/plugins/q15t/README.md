@@ -49,6 +49,11 @@ native library directory only, so a plugin that is not in the APK is not loaded.
 
 - No code page is written: a hook is one GOT word on a data page (`src/quest/plugins/q15t/src/got_swap.cpp` refuses an executable page), because the
   headset's OS denies `execmod` on the game's code pages.
+- No `thread_local` in code a hooked game call reaches: the Quest build targets API 26, where the compiler emulates it and the
+  first use on a thread allocates. Per-thread state is a `ThreadWord` (`src/quest/plugins/q15t/src/thread_word.h`): a pthread key made at
+  the module's install, whose value lives in the thread's control block, so a hooked call never allocates. A module whose key cannot be
+  made refuses to install. `src/quest/tests/q15t/check/no_emutls.sh` fails on an `__emutls_v.*` symbol in each arm64 module object
+  (`just test-quest-q15t`) and in each built library (`just build-quest-q15t`).
 - It refuses any libr15 build id other than the one it declares (the NEVR build-id note, and again at `InitEx`), before it
   touches memory.
 - No game binary, asset or table is in this tree. The game-derived values are virtual addresses and the single instruction words a
