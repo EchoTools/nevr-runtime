@@ -121,6 +121,19 @@ func TestWaitForTakesAConditionThatTurnsTrueAtTheDeadline(t *testing.T) {
 	}
 }
 
+func TestWithinReleasesItsContextAtCleanup(t *testing.T) {
+	t.Parallel()
+	ft := newFakeT(t.Context(), t.TempDir())
+	w := Within(ft, time.Hour)
+	if w.Context().Err() != nil {
+		t.Fatal("the context is done before cleanup")
+	}
+	ft.finish()
+	if w.Context().Err() == nil {
+		t.Error("the context is still live after cleanup")
+	}
+}
+
 func mkfifo(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "fifo")
