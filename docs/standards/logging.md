@@ -150,10 +150,11 @@ for review.
 ### The `NEVR.STOP` line
 
 Every way the host stops the game, and every attach that leaves the game running without the runtime, writes one JSON
-object on one line to standard error, once per run. A `-server` operator has a console and no dialog; this is what they
-read. The host's records in the main log (Rule 17) carry the same facts: in the `game_stop` record when the host ends the
-process, and in a `host_not_attached` record when the game keeps running. The line is built in a fixed buffer
-(`JsonLine`, no heap, no lock) and written with one `WriteFile`. The exit codes do not change.
+object on one line to standard error, once per run, when the process has a standard error handle that takes the write
+(`PutStopLine` writes nothing without one). A `-server` operator has a console and no dialog; this is what they read.
+The host's records in the main log (Rule 17) carry the same facts whether or not the line is written: in the `game_stop`
+record when the host ends the process, and in a `host_not_attached` record when the game keeps running. The line is
+built in a fixed buffer (`JsonLine`, no heap, no lock) and written with one `WriteFile`. The exit codes do not change.
 
 | Field             | Meaning                                                                                              |
 | ----------------- | ---------------------------------------------------------------------------------------------------- |
