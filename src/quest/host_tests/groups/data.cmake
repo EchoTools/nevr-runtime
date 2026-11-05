@@ -18,11 +18,20 @@ nevr_ht_test(pack_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/pack_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_pack LIBS ${NEVR_ZLIB_LIB})
 # The CDN texture delivery (docs/adr/0044-cdn-texture-delivery.md): the shared pure core in src/core, built here as the sentinel builds
 # it (no exceptions; nlohmann::json is used through its non-throwing calls only).
-foreach(f resource_shadow)
+foreach(f resource_shadow cargo_manifest cargo_plan cargo_store cargo_run cargo_resolver)
   nevr_ht_obj(o_cargo_${f} GROUP data NOEXC HOST SRC src/core/${f}.cpp)
 endforeach()
 nevr_ht_test(resource_shadow_test GROUP data HOST NOEXC TIMEOUT 120
   SRC src/quest/tests/resource_shadow_test.cpp OBJS o_cargo_resource_shadow)
+nevr_ht_test(cargo_manifest_test GROUP data HOST TIMEOUT 120
+  SRC src/quest/tests/cargo_manifest_test.cpp OBJS o_cargo_cargo_manifest o_cargo_cargo_plan)
+set(_cargo_objs o_cargo_resource_shadow o_cargo_cargo_manifest o_cargo_cargo_plan o_cargo_cargo_store o_cargo_cargo_run o_data_sha256)
+nevr_ht_test(cargo_store_test GROUP data HOST TIMEOUT 120
+  SRC src/quest/tests/cargo_store_test.cpp OBJS ${_cargo_objs})
+nevr_ht_test(cargo_run_test GROUP data HOST TIMEOUT 120
+  SRC src/quest/tests/cargo_run_test.cpp OBJS ${_cargo_objs})
+nevr_ht_test(cargo_resolver_test GROUP data HOST PTHREAD TIMEOUT 120
+  SRC src/quest/tests/cargo_resolver_test.cpp OBJS o_cargo_resource_shadow o_cargo_cargo_resolver)
 
 # ── data-net ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 # curl_transport_test needs a throwaway CA and six servers, which the recipe starts; data_wiring_test runs after it. Both are
