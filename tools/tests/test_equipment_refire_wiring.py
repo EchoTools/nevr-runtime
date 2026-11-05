@@ -103,6 +103,19 @@ class Wiring(unittest.TestCase):
         install = text[text.index("void Install(") : text.index("void OnFrame()")]
         self.assertNotIn("g_isServer", install)
 
+    def test_the_net_game_getters_argument_is_checked_before_the_game_reads_it(self):
+        text = strip_comments(GLUE.read_text())
+        disp = re.search(r"kNetGameFieldOffset = (0x[0-9a-fA-F]+);", text)
+        body = re.search(r"kNetGamePrologue = \{([^}]*)\}", text)
+        self.assertIsNotNone(disp)
+        self.assertIsNotNone(body)
+        raw = bytes(int(b, 16) for b in re.findall(r"0x[0-9a-fA-F]{2}", body.group(1)))
+        # MOV RAX,[RCX+disp32]; RET
+        self.assertEqual(raw[:3], bytes([0x48, 0x8B, 0x81]))
+        self.assertEqual(int.from_bytes(raw[3:7], "little"), int(disp.group(1), 16))
+        local = text[text.index("bool IsLocalRecord") : text.index("void ValueText")]
+        self.assertLess(local.index("kNetGameFieldOffset"), local.index("g_netGame("))
+
     def test_the_handler_is_called_for_the_slot_that_was_due(self):
         text = strip_comments(GLUE.read_text())
         self.assertIn("g_handler[slotIndex](reinterpret_cast<void*>(r.owner), r.handle);", text)

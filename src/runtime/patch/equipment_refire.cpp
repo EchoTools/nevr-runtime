@@ -64,6 +64,7 @@ constexpr SetterRow kRows[kSlotCount] = {
 
 // GetNetGameFromContext (0x140113a90): MOV RAX,[RCX+0x8518]; RET. The argument is *(ctx + 8).
 constexpr std::uint64_t kNetGameVa = 0x140113A90;
+constexpr std::size_t kNetGameFieldOffset = 0x8518;  // the displacement in kNetGamePrologue
 constexpr std::array<std::uint8_t, 8> kNetGamePrologue = {0x48, 0x8b, 0x81, 0x18, 0x85, 0x00, 0x00, 0xc3};
 // The net game's "slot handle of the player whose actor key this is" (0x1401c92d0): (game, u32* out, u64 key[2]) -> out.
 constexpr std::uint64_t kFindSlotVa = 0x1401C92D0;
@@ -102,6 +103,9 @@ bool IsLocalRecord(std::uintptr_t component, std::uint32_t handle) {
   ActorKey actor;
   std::uint32_t local = 0;
   if (!ReadActorKey(read, component, handle, &actor)) return false;
+  // GetNetGameFromContext only loads [arg + 0x8518] (the pinned body); the argument is checked before the game's code reads it.
+  std::uintptr_t netGameField = 0;
+  if (!read(actor.netGameArg + kNetGameFieldOffset, &netGameField, sizeof netGameField)) return false;
   const auto game = reinterpret_cast<std::uintptr_t>(g_netGame(reinterpret_cast<void*>(actor.netGameArg)));
   if (!LocalSlotHandle(read, game, &local)) return false;
   std::uint32_t found = 0xffffffffU;
