@@ -450,4 +450,131 @@ TEST(IdleTickRate, AClientWritesNoIdleStep) {
   EXPECT_EQ(slot, 33333u);
 }
 
+// #2109: only the end of the session the server is running puts it back on the idle step.
+
+using nevr_server_timestep::IdlesAfterSessionEnd;
+using nevr_server_timestep::SessionEndCause;
+
+TEST(SessionEndIdle, TheGamesOwnEndIdles) {
+  // CNSLobby::EndSession disconnects every peer, then calls IServerLib::EndSession: nothing is left to simulate. The
+  // runtime's record may already be gone (a reconnect cleared it), so the ids do not matter.
+  EXPECT_TRUE(IdlesAfterSessionEnd(SessionEndCause::kGameEnded, "", ""));
+  EXPECT_TRUE(IdlesAfterSessionEnd(SessionEndCause::kGameEnded, "a", "b"));
+}
+
+TEST(SessionEndIdle, AReconnectMidMatchDoesNotIdle) {
+  // ProcessPendingReconnect ends the runtime's record of the session and registers again; the game's match goes on.
+  EXPECT_FALSE(IdlesAfterSessionEnd(SessionEndCause::kReconnect, "sess-1", "sess-1"));
+  EXPECT_FALSE(IdlesAfterSessionEnd(SessionEndCause::kReconnect, "", ""));
+}
+
+TEST(SessionEndIdle, TheServicesEndOfTheCurrentSessionIdles) {
+  EXPECT_TRUE(IdlesAfterSessionEnd(SessionEndCause::kServiceEnded, "sess-1", "sess-1"));
+}
+
+TEST(SessionEndIdle, ALateCodeEndedForAnotherSessionDoesNotIdleTheNewOne) {
+  EXPECT_FALSE(IdlesAfterSessionEnd(SessionEndCause::kServiceEnded, "sess-old", "sess-new"));
+  EXPECT_FALSE(IdlesAfterSessionEnd(SessionEndCause::kServiceEnded, "sess-old", "")) << "no current session record";
+  EXPECT_FALSE(IdlesAfterSessionEnd(SessionEndCause::kServiceEnded, "", "")) << "an empty id names no session";
+  EXPECT_FALSE(IdlesAfterSessionEnd(SessionEndCause::kServiceEnded, "", "sess-new"));
+}
+
+TEST(SessionEndIdle, AShutdownWritesNoStep) {
+  EXPECT_FALSE(IdlesAfterSessionEnd(SessionEndCause::kShutdown, "sess-1", "sess-1"));
+}
+
+TEST(SessionEndIdle, EachCauseHasAName) {
+  EXPECT_STREQ(nevr_server_timestep::SessionEndCauseName(SessionEndCause::kGameEnded), "game_ended");
+  EXPECT_STREQ(nevr_server_timestep::SessionEndCauseName(SessionEndCause::kServiceEnded), "service_ended");
+  EXPECT_STREQ(nevr_server_timestep::SessionEndCauseName(SessionEndCause::kReconnect), "reconnect");
+  EXPECT_STREQ(nevr_server_timestep::SessionEndCauseName(SessionEndCause::kShutdown), "shutdown");
+}
+
+// #2109: a session never runs at the idle step a write could have changed.
+
+using nevr_server_timestep::ApplySessionStep;
+using nevr_server_timestep::SessionFallbackRateHz;
+using nevr_server_timestep::StepWrite;
+
+TEST(SessionStepFallback, AWriteThatHoldsNeedsNoFallback) {
+  uint64_t slot = 166666;
+  const auto r = ApplySessionStep(true, 120, &slot);
+  EXPECT_EQ(r.first.outcome, StepOutcome::kSet);
+  EXPECT_EQ(r.fallbackHz, 0u);
+  EXPECT_EQ(r.fallback.outcome, StepOutcome::kNotApplied);
+  EXPECT_EQ(slot, 8333u);
+}
+
+TEST(SessionStepFallback, AFailedWriteOverTheIdleStepWritesTheGamesOwnStep) {
+  // A rate the plan refuses stands in for any failure that leaves the slot as it was. The slot held the idle step, so
+  // the session would run at 6 a second: the game's own step is written instead.
+  uint64_t slot = 166666;
+  const auto r = ApplySessionStep(true, 5, &slot);
+  EXPECT_EQ(r.first.outcome, StepOutcome::kRateRefused);
+  EXPECT_EQ(r.fallbackHz, 30u);
+  EXPECT_EQ(r.fallback.outcome, StepOutcome::kSet);
+  EXPECT_EQ(slot, kGameDefaultStepUs) << "the session runs at 30 a second, never 6";
+}
+
+TEST(SessionStepFallback, AFailedWriteOverAnotherStepLeavesIt) {
+  // The slot holds a session step (the session that ran before): the session is not at the idle step.
+  uint64_t slot = 8333;
+  const auto r = ApplySessionStep(true, 5, &slot);
+  EXPECT_EQ(r.first.outcome, StepOutcome::kRateRefused);
+  EXPECT_EQ(r.fallbackHz, 0u);
+  EXPECT_EQ(slot, 8333u);
+}
+
+TEST(SessionStepFallback, ASlotThatHoldsNoStepGetsNoSecondWrite) {
+  // N31: a value that is no step means the address is not the step slot; a second write would be refused too.
+  uint64_t slot = 0;
+  const auto r = ApplySessionStep(true, 120, &slot);
+  EXPECT_EQ(r.first.outcome, StepOutcome::kUnexpectedOldValue);
+  EXPECT_EQ(r.fallbackHz, 0u);
+  EXPECT_EQ(slot, 0u);
+}
+
+TEST(SessionStepFallback, AnUnreadableClockGetsNoSecondWrite) {
+  const auto r = ApplySessionStep(true, 120, nullptr);
+  EXPECT_EQ(r.first.outcome, StepOutcome::kStateMissing);
+  EXPECT_EQ(r.fallbackHz, 0u);
+}
+
+TEST(SessionStepFallback, AWriteThatDidNotHoldFallsBackOnlyWhenItReadsTheIdleStep) {
+  StepWrite w;
+  w.outcome = StepOutcome::kWriteDidNotHold;
+  w.was = 33333;
+  w.after = 166666;
+  EXPECT_EQ(SessionFallbackRateHz(w), 30u) << "read back as the idle step: the session would run at 6 a second";
+  w.after = 33333;
+  EXPECT_EQ(SessionFallbackRateHz(w), 0u);
+}
+
+TEST(SessionStepFallback, ARateOfZeroIsTheGamesStepAndAClientNothing) {
+  uint64_t slot = 166666;
+  EXPECT_EQ(ApplySessionStep(true, 0, &slot).first.outcome, StepOutcome::kSet);
+  EXPECT_EQ(slot, kGameDefaultStepUs);
+  uint64_t clientSlot = 166666;
+  const auto c = ApplySessionStep(false, 120, &clientSlot);
+  EXPECT_EQ(c.first.outcome, StepOutcome::kNotServer);
+  EXPECT_EQ(c.fallbackHz, 0u);
+  EXPECT_EQ(clientSlot, 166666u);
+}
+
+TEST(UntypedSessionStart, WritesASessionRateOnlyOverTheIdleStep) {
+  // A legacy start frame with no game type, with no session create before it: the slot is still at the idle step.
+  StepWrite idle;
+  idle.outcome = StepOutcome::kSet;
+  idle.stepUs = 166666;
+  EXPECT_TRUE(nevr_server_timestep::UntypedSessionStartWrites(idle));
+  // The session create already wrote Combat's 30 a second: the frame cannot say better.
+  StepWrite session = idle;
+  session.stepUs = 33333;
+  EXPECT_FALSE(nevr_server_timestep::UntypedSessionStartWrites(session));
+  // The boot write failed: the slot holds the game's own step, not the idle step.
+  StepWrite failedBoot;
+  failedBoot.outcome = StepOutcome::kStateMissing;
+  EXPECT_FALSE(nevr_server_timestep::UntypedSessionStartWrites(failedBoot));
+}
+
 }  // namespace

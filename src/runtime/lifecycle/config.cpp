@@ -17,6 +17,7 @@
 #include "runtime/lifecycle/arena_round_time.h"
 
 #include <atomic>
+#include <cstdio>
 #include <exception>
 #include <mutex>
 #include <new>
@@ -186,9 +187,14 @@ static void ApplyServerTimestep() {
 // written again when a session opens: Combat gets the 30 a second its physics was tuned for (the game's damping is
 // per step, not per second), Arena and every other type the configured/default rate, and an explicit
 // network.tick_rate_hz wins for all. The same plan, bounds checks and read-back as the boot write (ApplyStep, N31).
-// Called from the session-create callbacks (server/gameserver_callbacks.cpp) with the type they stored.
+// Called from the session-create callbacks (server/gameserver_callbacks.cpp) with the type they stored; an empty
+// type is a start frame that named none (ApplyUntypedSessionTimestep).
+// #2109: the slot holds the idle step until now. A rate of 0 writes the game's own step back (RateToWrite), and a
+// write that failed and left the idle step in the slot is followed by the game's own step (ApplySessionStep,
+// SessionFallbackRateHz), so a session never runs at 6 a second when a write could change it.
 void ApplySessionTimestep(const std::string& gameType, const std::string& sessionId) {
   using nevr_server_timestep::StepOutcome;
+  const char* typeName = gameType.empty() ? "unknown" : gameType.c_str();
   try {
     const nevr_server_timestep::SessionRate rate = nevr_server_timestep::TickRateForGameType(
         gameType, g_headlessTickRateHz, g_tickRateConfigured.load(std::memory_order_relaxed));
@@ -196,33 +202,71 @@ void ApplySessionTimestep(const std::string& gameType, const std::string& sessio
     const bool readable = nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan);
     uint64_t* stepField =
         nevr_server_timestep::FieldAt(readable ? state : nullptr, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
-    // #2109: the slot holds the idle step until now, so a rate of 0 writes the game's own step back (RateToWrite).
-    const nevr_server_timestep::StepWrite w =
-        nevr_server_timestep::ApplyStep(g_isServer != FALSE, nevr_server_timestep::RateToWrite(rate.hz), stepField);
+    const nevr_server_timestep::SessionStepWrite s =
+        nevr_server_timestep::ApplySessionStep(g_isServer != FALSE, rate.hz, stepField);
+    const nevr_server_timestep::StepWrite& w = s.first;
     if (w.outcome == StepOutcome::kNotServer) return;
     if (w.outcome == StepOutcome::kSet) g_stepRecord.Store(w);  // the read-back compares with the latest write
+    if (s.fallbackHz != 0 && s.fallback.outcome == StepOutcome::kSet) g_stepRecord.Store(s.fallback);
     const bool failed = nevr_server_timestep::StepFailed(w.outcome);
+
+    // What the session runs at when its own write failed, as far as the writes saw the slot.
+    char runsAt[200] = "";
+    if (failed) {
+      uint64_t holds = 0;
+      if (s.fallbackHz != 0 && s.fallback.outcome == StepOutcome::kSet) {
+        std::snprintf(runsAt, sizeof(runsAt), " (the session runs at the game's own %u a second: the slot held the idle "
+                      "step, and the fallback write held, step_us=%u)",
+                      static_cast<unsigned>(s.fallbackHz), static_cast<unsigned>(s.fallback.stepUs));
+      } else if (s.fallbackHz != 0) {
+        std::snprintf(runsAt, sizeof(runsAt), " (the slot holds the idle step and the fallback write to %u a second "
+                      "failed too, outcome=%s: the session may run at %u a second)",
+                      static_cast<unsigned>(s.fallbackHz), nevr_server_timestep::OutcomeName(s.fallback.outcome),
+                      static_cast<unsigned>(nevr_server_timestep::kIdleTickRateHz));
+      } else if (nevr_server_timestep::SlotAfterFailure(w, &holds)) {
+        std::snprintf(runsAt, sizeof(runsAt), " (the session runs at the step the slot holds, %llu us, which is not the "
+                      "idle step)", static_cast<unsigned long long>(holds));
+      } else {
+        std::snprintf(runsAt, sizeof(runsAt), " (the clock is not readable, so nothing was written; the session "
+                      "runs at whatever step that clock holds)");
+      }
+    }
     // N122: a mode decision logs its outcome at Info even when the step was already that value.
     Log(failed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
         "[NEVR.PATCH] session tick rate game_type=%s session=%s rate_hz=%u source=%s step_us=%u was_us=%llu "
         "outcome=%s%s",
-        gameType.c_str(), sessionId.c_str(), static_cast<unsigned>(rate.hz),
+        typeName, sessionId.c_str(), static_cast<unsigned>(rate.hz),
         nevr_server_timestep::RateSourceName(rate.source), static_cast<unsigned>(w.stepUs),
-        static_cast<unsigned long long>(w.was), nevr_server_timestep::OutcomeName(w.outcome),
-        failed ? " (the session runs on the step the server had before it)" : "");
+        static_cast<unsigned long long>(w.was), nevr_server_timestep::OutcomeName(w.outcome), runsAt);
   } catch (const std::bad_alloc&) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (out of memory)",
-        gameType.c_str());
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (out of memory)", typeName);
   } catch (const std::exception&) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (std::exception)",
-        gameType.c_str());
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (std::exception)", typeName);
   }
 }
 
-// #2109: a session that ended and left the process running (a session the service ended before the match began; one
-// that reached the match exits the process, state_machine.cpp) puts the server back on the idle step. Called from the
-// session-boundary handler (server/gameserver_callbacks.cpp) with reason "session_end". The same plan, bounds checks
-// and read-back as the other writes (ApplyStep, N31).
+// #2109: a legacy start frame that names no game type still opens a session. When the slot holds the idle step (no
+// session create wrote a rate first), the session gets the rate for an unknown type, the configured or default rate
+// a server ran every session at before the step followed the type (UntypedSessionStartWrites). When a session create
+// already wrote the session's own rate, it stays.
+void ApplyUntypedSessionTimestep(const std::string& sessionId) {
+  if (!g_isServer) return;
+  const nevr_server_timestep::StepWrite last = ServerStepWrite();
+  if (nevr_server_timestep::UntypedSessionStartWrites(last)) {
+    ApplySessionTimestep(std::string(), sessionId);
+    return;
+  }
+  // N122: the decision is logged when nothing is written too.
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] session tick rate game_type=unknown session=%s outcome=kept step_us=%u last_write=%s (the start frame "
+      "named no game type; the step already set for this session stays)",
+      sessionId.c_str(), static_cast<unsigned>(last.stepUs), nevr_server_timestep::OutcomeName(last.outcome));
+}
+
+// #2109: puts the server back on the idle step when the game ends its session, or the service ends the one the server
+// runs (nevr_server_timestep::IdlesAfterSessionEnd decides; server/gameserver.cpp EndServerSession and the CODE_ENDED
+// case in server/gameserver_callbacks.cpp call this). A ServerDB reconnect does not: the game's match goes on. The same
+// plan, bounds checks and read-back as the other writes (ApplyStep, N31).
 void ApplyServerIdleTimestep(const char* reason, const std::string& sessionId) {
   using nevr_server_timestep::StepOutcome;
   try {
@@ -238,7 +282,7 @@ void ApplyServerIdleTimestep(const char* reason, const std::string& sessionId) {
     // N122: a mode decision logs its outcome at Info even when the step was already that value.
     Log(failed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
         "[NEVR.PATCH] idle tick rate reason=%s session=%s rate_hz=%u step_us=%u was_us=%llu outcome=%s%s",
-        reason != nullptr ? reason : "unknown", sessionId.c_str(),
+        reason != nullptr ? reason : "unknown", sessionId.empty() ? "none" : sessionId.c_str(),
         static_cast<unsigned>(nevr_server_timestep::kIdleTickRateHz), static_cast<unsigned>(w.stepUs),
         static_cast<unsigned long long>(w.was), nevr_server_timestep::OutcomeName(w.outcome),
         failed ? " (the server keeps the step it had)" : "");

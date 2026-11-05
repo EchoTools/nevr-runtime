@@ -8,6 +8,7 @@
 #include "runtime/server/constants.h"
 #include "abi/echovr.h"
 #include "core/pch.h"
+#include "runtime/lifecycle/server_timestep.h"
 #include "runtime/server/ended_session_watchdog.h"
 #include "runtime/server/main_thread_handoff.h"
 #include "runtime/server/server_context.h"
@@ -106,6 +107,10 @@ class GameServerLib : public EchoVR::IServerLib {
   // Shutdown-thread work, split by the thread it may run on (GH #44).
   void ShutdownUnregisterOnGameThread();   // EndSession + full Unregister
   void ShutdownUnregisterOffGameThread();  // EndSession + ServerDB unregister, registry untouched
+
+  // EndSession() body. #2109: `cause` decides whether the server goes back to the idle step
+  // (nevr_server_timestep::IdlesAfterSessionEnd): the game's own call does, the shutdown paths do not.
+  void EndServerSession(nevr_server_timestep::SessionEndCause cause);
 };
 
 // Logging helper (uses game's logging system)
