@@ -81,6 +81,7 @@ nevr_ht_test(libr15_attach_test GROUP hooks ${_af} NOEXC DL TIMEOUT 300 ARGS src
 nevr_ht_test(row_hooks_install_test GROUP hooks ${_af} NOEXC DL TIMEOUT 300 INCS src/quest/tests
   OBJS ${_attach_objs} o_hooks_attach_sentinel
   SRC src/quest/tests/row_hooks_install_test.cpp src/quest/sentinel/splash_skip_hook.cpp src/quest/sentinel/ui_texture_mips.cpp
+      src/quest/sentinel/irradiance_default_hook.cpp src/quest/sentinel/irradiance_default_install.cpp
       src/quest/social/lobby_full_hooks.cpp)
 # The lobby-full handlers themselves (#1160): the test includes lobby_full_hooks.cpp and drives OnJoin and OnFailure with a fake
 # lobby client and failure message, then reads the game buffer and the captured log lines.
@@ -231,6 +232,12 @@ nevr_ht_test(hand_pose_log_hook_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_
 # the real libr15.
 nevr_ht_test(match_tag_default_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/match_tag_default_test.cpp src/quest/combat/match_tags.cpp)
+# The grey default irradiance texture (#2091, #1737 U25): the real handlers through the two thunk entries against models of
+# CGEngineResources::Initialize and of the image upload helper. The texel is substituted for the default 3D texture during
+# Initialize only; every other call of the helper, and Initialize's status, pass through. got_pinned_test pins the slot and the
+# call site in the real libr15; row_hooks_install_test activates the row.
+nevr_ht_test(irradiance_default_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+  SRC src/quest/tests/irradiance_default_test.cpp src/quest/sentinel/irradiance_default_hook.cpp)
 # The Controller Hand Flip toggle, pure half (#1986, KNOWN-WRONG #2043): the roll (y, -x, w, -z), the start from the configuration's
 # graphics.hand_flip (#2082), the save through NevrConfig::Set and the golden lines, against a temporary files directory.
 nevr_ht_test(hand_flip_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_YAML_LIB} OBJS o_hooks_nevr_config ${_core} ${_ident}

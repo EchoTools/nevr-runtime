@@ -231,6 +231,35 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15ConfigRequestSend(), "libr15 SNSConfigRequestv24Send JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15SetDelimitedErrorMessage(), "libr15 CR15NetGame::SetDelimitedErrorMessage JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15NetGameUpdate(), "libr15 CR15NetGame::Update JUMP_SLOT");
+  // The grey default irradiance texture (#2091): Initialize's slot, where the symbol is defined, that nothing reaches the function
+  // but the PLT stub (no `b`/`bl` in the executable segments names it, so the slot sees every call), and the words that make
+  // `this + 0x1458` the default 3D texture's destination, its texel and its format.
+  CheckTarget(r15, pinned::LibR15CGEngineResourcesInitialize(), "libr15 CGEngineResources::Initialize JUMP_SLOT");
+  CheckDefinedAt(r15, pinned::kCGEngineResourcesInitializeSymbol, pinned::kCGEngineResourcesInitializeVaddr);
+  for (const Elf64_Phdr& ph : r15.phdrs) {
+    if (ph.p_type != PT_LOAD || (ph.p_flags & PF_X) == 0) continue;
+    for (std::uint64_t at = ph.p_vaddr; at + 4 <= ph.p_vaddr + ph.p_filesz; at += 4) {
+      std::uint32_t word = 0;
+      std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + at, sizeof(word));
+      if ((word & 0x7c000000U) != 0x14000000U) continue;  // b or bl
+      std::int64_t imm = static_cast<std::int64_t>(word & 0x03ffffffU);
+      if ((imm & 0x02000000) != 0) imm -= 0x04000000;
+      if (at + static_cast<std::uint64_t>(imm * 4) == pinned::kCGEngineResourcesInitializeVaddr) {
+        std::fprintf(stderr, "libr15 CGEngineResources::Initialize: a direct branch at %#llx reaches it, past the slot\n",
+                     static_cast<unsigned long long>(at));
+        QCHECK(false);
+      }
+    }
+  }
+  for (const pinned::PinnedCode* block : {&pinned::kDefault3dTextureOffset, &pinned::kDefault3dTextureAddress,
+                                          &pinned::kDefault3dTextureTexel, &pinned::kDefault3dTextureFormat,
+                                          &pinned::kDefault3dTextureCall}) {
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block->vaddr, block->code, block->words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the word at %#llx differs from the pinned one\n", block->name,
+                   static_cast<unsigned long long>(block->vaddr));
+      QCHECK(false);
+    }
+  }
   CheckTarget(r15, pinned::LibR15AndroidMain(), "libr15 android_main JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15EnablePageNodeEnter(), "libr15 CR15UIPage2EnablePageNode::Enter JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15RequestPermissions(), "libr15 CSysInfo::RequestPermissions JUMP_SLOT");
@@ -612,6 +641,11 @@ int main(int argc, char** argv) {
          std::vector<std::uint64_t>(std::begin(pinned::kProviderDestroyCallSites),
                                     std::end(pinned::kProviderDestroyCallSites)),
          std::size(pinned::kProviderDestroyCallSites)},
+        {"libr15 CGEngineResources::Initialize", pinned::kCGEngineResourcesInitializeStub,
+         *pinned::LibR15CGEngineResourcesInitialize().slotVaddr,
+         std::vector<std::uint64_t>(std::begin(pinned::kCGEngineResourcesInitializeCallSites),
+                                    std::end(pinned::kCGEngineResourcesInitializeCallSites)),
+         std::size(pinned::kCGEngineResourcesInitializeCallSites)},
         {"libr15 CNSProvider::ProviderID", pinned::kProviderIdStub, *pinned::LibR15ProviderId().slotVaddr, {},
          pinned::kProviderIdCallers},
         {"libr15 CNSProvider::UserProviderID", pinned::kUserProviderIdStub, *pinned::LibR15UserProviderId().slotVaddr, {},

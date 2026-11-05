@@ -276,6 +276,7 @@ struct RealCounterSteps final : Steps {
   bool InstallRenderConfig(const nevr_quest::TextureChoice&) override { return true; }
   bool InstallCreditsText() override { return true; }
   bool InstallMenuCards() override { return true; }
+  bool InstallIrradianceDefault() override { return true; }
   bool WizardMetricWanted() override { return false; }  // the invite switch is not on main (ADR 0017 slice S1)
   bool InstallWizardMetric() override { return true; }
   bool ArmClockLevels(bool counted, bool) override { return counted; }

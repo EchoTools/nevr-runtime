@@ -83,7 +83,7 @@ bool DefaultDigest(const char* path, char* out) noexcept {
 // (`build_id_mismatch` for a GOT hook, `not_verified` for a row or the credits slot).
 constexpr const char* kServiceOnlySkipped =
     "inline_rows,credits_text,clock,frame_dispatch,login_prompt,social,obb_skip,process_end,crash_first,permission_wait,"
-    "vk_ext_window,os_build_gate,texture_quality,render_config,menu_cards,wizard_metric,splash_skip,ui_texture_mips,"
+    "vk_ext_window,os_build_gate,texture_quality,render_config,menu_cards,irradiance_default,wizard_metric,splash_skip,ui_texture_mips,"
     "pns_provider";
 constexpr const char* kServiceOnlyKept = "tstring_redirect,create_connection_redirect,dlopen(login,matchmaking)";
 

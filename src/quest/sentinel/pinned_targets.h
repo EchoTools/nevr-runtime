@@ -1205,4 +1205,31 @@ inline constexpr std::uint32_t kCapacity = 512;
 static_assert(kTableVaddr + static_cast<std::uint64_t>(kEntryBytes) * kCapacity == kCountVaddr, "the count follows the last entry");
 }  // namespace vk_hole_layout
 
+// The default irradiance texture (#2091, irradiance_default_hook.h). NRadEngine::CGEngineResources::Initialize (libr15 0x183e52c
+// pinned; disassembly 0x193e52c; 8,580 bytes, exported) builds the engine's default GPU resources. libr15 reaches it only through
+// its own PLT stub (disassembly 0x1048640: JUMP_SLOT 0x36fba08; no `b`/`bl` in .text names the function and no ADRP+ADD forms its
+// address, scanned over the whole text of the store file). `this` is x0 (kept in x19), returns the first failing step's status or 0
+// in w0. The wrapper installed on the slot is a GOT hook; the helper it marks is the row `irradiance_default.upload` of the
+// build-time patch table (quest/patch/libr15_patch_table.h).
+inline constexpr const char* kCGEngineResourcesInitializeSymbol = "_ZN10NRadEngine17CGEngineResources10InitializeEv";
+inline GotTarget LibR15CGEngineResourcesInitialize() {
+  return {kLibR15, kCGEngineResourcesInitializeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36fba08ULL};
+}
+inline constexpr std::uint64_t kCGEngineResourcesInitializeVaddr = 0x183e52cULL;  // the .dynsym value of the symbol above
+// The PLT stub that loads the slot (adrp x16, 0x36fb000; ldr x17, [x16, #0xa08]; add x16, x16, #0xa08; br x17) and the one `bl` in
+// .text that reaches it (disassembly 0x26e9a70, in the engine's resource parse step).
+inline constexpr std::uint64_t kCGEngineResourcesInitializeStub = 0xf48640ULL;
+inline constexpr std::uint64_t kCGEngineResourcesInitializeCallSites[] = {0x25e9a70ULL};
+
+// The words at the "Default 3D Texture" upload in Initialize (disassembly 0x193f28c to 0x193f2d0; the store file at each vaddr,
+// which the patch does not touch). They are what makes `this + 0x1458` the destination: `mov w9, #0x1458` and `add x23, x19, x9`
+// (x19 is `this`) form the SGTexture the helper is given as x0, `add x5, sp, #0x45c` is the texel pointer (one word, zeroed at
+// 0x193efd0 `str wzr, [sp, #0x45c]`), `mov w2, #9` the format (a four-byte texel: the size table at 0x2c658b8 holds 4 at entry 9),
+// and the `bl` is the one call of the helper that carries the name "Default 3D Texture" (0x2c585b2) in x6.
+inline constexpr PinnedCode kDefault3dTextureOffset = {"Initialize: mov w9, #0x1458", 0x183f28cULL, {0x52828b09, 0, 0, 0, 0, 0}, 1};
+inline constexpr PinnedCode kDefault3dTextureAddress = {"Initialize: add x23, x19, x9", 0x183f2acULL, {0x8b090277, 0, 0, 0, 0, 0}, 1};
+inline constexpr PinnedCode kDefault3dTextureTexel = {"Initialize: add x5, sp, #0x45c", 0x183f2b8ULL, {0x911173e5, 0, 0, 0, 0, 0}, 1};
+inline constexpr PinnedCode kDefault3dTextureFormat = {"Initialize: mov w2, #9", 0x183f2bcULL, {0x52800122, 0, 0, 0, 0, 0}, 1};
+inline constexpr PinnedCode kDefault3dTextureCall = {"Initialize: bl upload helper", 0x183f2d0ULL, {0x94026f30, 0, 0, 0, 0, 0}, 1};
+
 }  // namespace sentinel::pinned

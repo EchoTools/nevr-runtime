@@ -1,6 +1,7 @@
-// Host test for the three feature files that take their hooks through rows of the build-time patched libr15
+// Host test for the feature files that take their hooks through rows of the build-time patched libr15
 // (docs/adr/0021 sections 5 and 7, test 6): the lobby-full policy (rows lobby_full.join, .failure, .success), the UI texture
-// mips (row ui_texture.attach) and the splash skip (row splash_skip.widget_update).
+// mips (row ui_texture.attach), the splash skip (row splash_skip.widget_update) and the grey default irradiance texture (row
+// irradiance_default.upload, and the refusal of its GOT half).
 //
 // The image is libr15_live_image.h's: Attach verifies the shipped patcher's output for a synthetic stock libr15, which
 // fills every row's slot with its trampoline. Each test then runs one feature's Install against it and reads what the
@@ -18,6 +19,8 @@
 #include <vector>
 
 #include "libr15_attach.h"
+#include "irradiance_default.h"
+#include "irradiance_default_hook.h"
 #include "libr15_live_image.h"
 #include "mini_test.h"
 #include "pinned_targets.h"
@@ -349,6 +352,136 @@ TEST(AllThreeFeaturesInstallOnOneVerifiedImageAndTouchNoPageOfIt) {
   CHECK(live.MapsLines() == mapsBefore);
   // The credits row's slot is not a hook's: none of the three installs reached it.
   CHECK(*live.Slot(RowIndex("credits.pairs")) == creditsBefore);
+}
+
+// ---- the grey default irradiance texture (#2091) ------------------------------------------------------------------------
+
+bool NoLibr15(const char*, sentinel::ElfImage*) { return false; }
+
+// Stand-ins for the game: Initialize uploads the default 3D texture through the thunk entry of the helper, as the game's `bl` reaches
+// the row's stub; the helper records the texel it was given.
+unsigned char g_irradianceResources[0x2900];
+const unsigned char g_irradianceBlack[4] = {0, 0, 0, 0};
+unsigned char g_irradianceSeen[4];
+int g_irradianceUploads = 0;
+void IrradianceStandInUpload(void*, const void*, std::uint32_t, std::int32_t, std::int32_t, const void* texel, const char*) {
+  ++g_irradianceUploads;
+  std::memcpy(g_irradianceSeen, texel, sizeof(g_irradianceSeen));
+}
+std::int32_t IrradianceStandInInitialize(void* self) {
+  reinterpret_cast<irradiance_default::UploadThunk::Fn>(irradiance_default::UploadThunk::EntryAddress())(
+      static_cast<unsigned char*>(self) + irradiance_default::kDefault3dTextureOffset, nullptr, irradiance_default::kTexelFormat, 0, 0,
+      g_irradianceBlack, "Default 3D Texture");
+  return 0;
+}
+
+TEST(TheIrradianceRowInstallActivatesItsRowAndLogsItsTarget) {
+  Env env;
+  LiveImage live(PatchedBytes());
+  AttachVerified(live);
+  void* const trampoline = *live.Slot(RowIndex("irradiance_default.upload"));
+  const std::vector<std::string> mapsBefore = live.MapsLines();
+
+  CHECK(irradiance_default::InstallUploadRow());
+
+  CHECK(*live.Slot(RowIndex("irradiance_default.upload")) != trampoline);  // the thunk entry replaced the trampoline in the slot
+  const std::string* line = RowLine("irradiance_default", "irradiance_default.upload");
+  CHECK(line != nullptr);
+  if (line != nullptr) {
+    CHECK(Has(*line, "\"status\":\"installed\""));
+    CHECK(Has(*line, "\"hook\":\"image upload helper\""));
+    CHECK(Has(*line, "\"target\":\"" + TargetOf(live, "irradiance_default.upload") + "\""));
+  }
+  ExpectNoImageProtection(live);  // one atomic store; no page was written or re-protected
+  CHECK(live.MapsLines() == mapsBefore);
+}
+
+// The install arms the handler it activates: with the Initialize half armed too, an Initialize that uploads the default 3D texture
+// through the row's thunk entry gives the helper the grey texel.
+TEST(TheIrradianceRowInstallArmsTheUploadHandler) {
+  Env env;
+  LiveImage live(PatchedBytes());
+  AttachVerified(live);
+  irradiance_default::UploadThunk::Reset();
+  irradiance_default::InitializeThunk::Reset();
+  CHECK(irradiance_default::InstallUploadRow());
+  *irradiance_default::UploadThunk::OriginalOut() = reinterpret_cast<void*>(&IrradianceStandInUpload);  // the trampoline is AArch64
+  *irradiance_default::InitializeThunk::OriginalOut() = reinterpret_cast<void*>(&IrradianceStandInInitialize);
+  irradiance_default::ResetForTest();
+  irradiance_default::ArmInitializeForTest();
+  g_irradianceUploads = 0;
+  std::memset(g_irradianceSeen, 0xEE, sizeof(g_irradianceSeen));
+
+  CHECK_EQ(reinterpret_cast<irradiance_default::InitializeThunk::Fn>(irradiance_default::InitializeThunk::EntryAddress())(g_irradianceResources), 0);
+
+  CHECK_EQ(g_irradianceUploads, 1);
+  CHECK(g_irradianceSeen[0] == 0x6b && g_irradianceSeen[1] == 0x6b && g_irradianceSeen[2] == 0x6b && g_irradianceSeen[3] == 0xff);
+  irradiance_default::UploadThunk::Reset();
+  irradiance_default::InitializeThunk::Reset();
+}
+
+TEST(TheIrradianceRowInstallBeforeAttachActivatesNothingAndLogsNotVerified) {
+  Env env;
+  LiveImage live(PatchedBytes());
+  g_live = &live;
+  live.FillCanaries();
+
+  CHECK(!irradiance_default::InstallUploadRow());
+
+  CHECK(live.SlotsAreCanaries());
+  const std::string* line = RowLine("irradiance_default", "irradiance_default.upload");
+  CHECK(line != nullptr);
+  if (line != nullptr) {
+    CHECK(Has(*line, "\"status\":\"not_verified\""));
+    CHECK(Has(*line, "\"target\":\"" + Hex(0) + "\""));
+  }
+}
+
+TEST(ASecondIrradianceRowInstallIsRefusedByTheRowAndLeavesTheFirstHook) {
+  Env env;
+  LiveImage live(PatchedBytes());
+  AttachVerified(live);
+  CHECK(irradiance_default::InstallUploadRow());
+  void* const first = *live.Slot(RowIndex("irradiance_default.upload"));
+  g.lines.clear();
+
+  CHECK(!irradiance_default::InstallUploadRow());
+
+  CHECK(*live.Slot(RowIndex("irradiance_default.upload")) == first);
+  const std::string* line = RowLine("irradiance_default", "irradiance_default.upload");
+  CHECK(line != nullptr);
+  if (line != nullptr) CHECK(Has(*line, "\"status\":\"already_activated\""));
+}
+
+// The GOT half is installed first: with it refused the row is never activated, so the upload helper stays the game's.
+TEST(AnIrradianceInstallWhoseGotHookIsRefusedLeavesTheRowPassThrough) {
+  Env env;
+  LiveImage live(PatchedBytes());
+  AttachVerified(live);
+  void* const trampoline = *live.Slot(RowIndex("irradiance_default.upload"));
+
+  CHECK(!irradiance_default::InstallAt(sentinel::pinned::LibR15CGEngineResourcesInitialize(), &NoLibr15));
+
+  CHECK(*live.Slot(RowIndex("irradiance_default.upload")) == trampoline);
+  CHECK(RowLine("irradiance_default", "irradiance_default.upload") == nullptr);  // the row's install was never reached
+  const std::string* line = FindLine("\"hook\":\"CGEngineResources::Initialize\"");
+  CHECK(line != nullptr);
+  if (line != nullptr) {
+    CHECK(Has(*line, "\"level\":\"error\""));
+    CHECK(!Has(*line, "\"status\":\"installed\""));
+    CHECK(Has(*line, "\"symbol\":\"_ZN10NRadEngine17CGEngineResources10InitializeEv\""));
+  }
+
+  // The Initialize handler is armed before the slot is tried, so a slot that does take the entry finds a live handler: an Initialize
+  // run through the entry (its original published by hand, as the GOT install would) writes its outcome line.
+  irradiance_default::ResetForTest();
+  irradiance_default::UploadThunk::Reset();  // an earlier test left the row's trampoline (AArch64 code) as its original
+  *irradiance_default::InitializeThunk::OriginalOut() = reinterpret_cast<void*>(&IrradianceStandInInitialize);
+  g.lines.clear();
+  CHECK_EQ(reinterpret_cast<irradiance_default::InitializeThunk::Fn>(irradiance_default::InitializeThunk::EntryAddress())(g_irradianceResources), 0);
+  CHECK(FindLine("\"event\":\"irradiance_default\"") != nullptr);
+  irradiance_default::InitializeThunk::Reset();
+  irradiance_default::UploadThunk::Reset();
 }
 
 }  // namespace
