@@ -47,6 +47,13 @@ taking lines; the echo was dropped, or did not finish within $NEVR_TEST_DRAIN_S 
 line on stderr names the log, which holds the whole output. A line stdout cannot encode is echoed
 with replacements; the log keeps it as read.
 
+The environment. pytest is started with a fixed one, so a run gives the same answer for whoever starts it:
+`HERMETIC_SET` (no user or system git configuration, a fixed identity, no commit or tag signing, `main` as the
+initial branch) and without the variables in `HERMETIC_UNSET` (no display for a test that starts Wine, no gpg home).
+Both records, and the log's header, name what was set and which of the removed variables the caller had
+(`env_set`, `env_removed`). The `verify` recipe's unittest line in the justfile carries the same variables, and a test
+holds the two equal.
+
 Exit code: pytest's. Exceptions, each loud on stderr:
 - 2 before pytest runs, when the log directory, the log or the start record cannot be written, the
   echo threads cannot start, `--junitxml` is passed (the run owns its XML path), or a wait above is
@@ -120,6 +127,16 @@ INTERRUPT_GRACE_S = WAITS["NEVR_TEST_INTERRUPT_GRACE_S"]
 DRAIN_S = WAITS["NEVR_TEST_DRAIN_S"]
 # A repeat of a signal sooner than this after the one before it is the same event delivered twice.
 REPEAT_S = 1.0
+# What every child pytest is started with: git reads no user or system configuration and finds a fixed identity, never
+# signs, and starts a repository on `main`; and none of HERMETIC_UNSET (a display would let a test that starts Wine
+# reach the user's desktop; a gpg home would let a signing attempt find the user's key).
+HERMETIC_GIT_CONFIG = (("user.name", "nevr-test"), ("user.email", "test@example.invalid"),
+                       ("commit.gpgsign", "false"), ("tag.gpgsign", "false"), ("init.defaultBranch", "main"))
+HERMETIC_SET = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_COUNT": str(len(HERMETIC_GIT_CONFIG)),
+                **{f"GIT_CONFIG_{kind}_{i}": text for i, pair in enumerate(HERMETIC_GIT_CONFIG)
+                   for kind, text in zip(("KEY", "VALUE"), pair)}}
+HERMETIC_UNSET = ("DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME")
 # Lines the echo may fall behind stdout before it is dropped.
 ECHO_BACKLOG = 10000
 HANDLED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
@@ -176,6 +193,17 @@ def git(*args: str):
     except OSError:
         return None
     return out.stdout.strip() if out.returncode == 0 else None
+
+
+def hermetic_environment(environ) -> tuple:
+    """(the environment pytest is started with, the variables of HERMETIC_UNSET `environ` had).
+
+    A GIT_CONFIG_KEY_n or GIT_CONFIG_VALUE_n of the caller's past HERMETIC_SET's count is left where it is: git reads
+    only the first GIT_CONFIG_COUNT of them."""
+    removed = [name for name in HERMETIC_UNSET if name in environ]
+    env = {k: v for k, v in environ.items() if k not in HERMETIC_UNSET}
+    env.update(HERMETIC_SET)
+    return env, removed
 
 
 def run_stem(start: datetime.datetime, head: str) -> str:
@@ -471,10 +499,12 @@ def main(argv: list) -> int:
     seed_args, seed = randomly_seed(args, os.environ)
     cmd = [sys.executable, "-m", "pytest", f"--junitxml={xml_path}", *seed_args, *args]
     env = pytest_environment()
+    child_env, env_removed = hermetic_environment(os.environ)
     base = {"start": start.isoformat(), "checkout": git("rev-parse", "--show-toplevel"), "cwd": cwd(),
             "user": user(), "head": head, "tree": tree,
             "cmd": cmd, "pytest": env["pytest"],
-            "plugins": env["plugins"], "randomly_seed": seed, "log": str(log_path), "junit": str(xml_path)}
+            "plugins": env["plugins"], "randomly_seed": seed, "env_set": HERMETIC_SET, "env_removed": env_removed,
+            "log": str(log_path), "junit": str(xml_path)}
 
     try:
         log = log_path.open("w", encoding="utf-8")
@@ -501,13 +531,15 @@ def main(argv: list) -> int:
         for line in (f"test-tools: start {start.isoformat()}", f"test-tools: HEAD {head}",
                      f"test-tools: tree {tree}", f"test-tools: pytest {env['pytest']}",
                      f"test-tools: plugins {' '.join(f'{k}={v}' for k, v in env['plugins'].items())}",
-                     f"test-tools: randomly-seed {seed}", f"test-tools: cmd {' '.join(cmd)}"):
+                     f"test-tools: randomly-seed {seed}",
+                     f"test-tools: env set {' '.join(f'{k}={v}' for k, v in HERMETIC_SET.items())}",
+                     f"test-tools: env removed {' '.join(env_removed) or 'none'}", f"test-tools: cmd {' '.join(cmd)}"):
             run.emit(line + "\n")
         output_complete = True
         if not run.signals:
             try:
                 run.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                            encoding="utf-8", errors="replace", start_new_session=True,
+                                            env=child_env, encoding="utf-8", errors="replace", start_new_session=True,
                                             preexec_fn=die_with_parent)
             except (OSError, subprocess.SubprocessError) as exc:
                 run.start_error = f"{type(exc).__name__}: {exc}"
