@@ -11,7 +11,9 @@ import (
 	"go/parser"
 	"go/token"
 	"os/exec"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -272,4 +274,167 @@ func constantDuration(e ast.Expr, consts map[string]bool) bool {
 		return len(e.Args) > 0
 	}
 	return false
+}
+
+// BaselineList returns the port list as it is at the merge-base of HEAD and origin/main, for the check that the list
+// only shrinks. skipped is a reason, when the comparison cannot be made for a reason that is not a fault of the tree
+// (there is no origin/main here, or the list is new in this change); err is set when it should be possible and is not:
+// origin/main exists but shares no history with HEAD, as in a shallow clone, which must not look like a pass.
+func BaselineList(root string, env []string) (list []string, skipped string, err error) {
+	git := func(args ...string) (string, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir, cmd.Env = root, env
+		out, err := cmd.Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	if _, err := git("rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"); err != nil {
+		return nil, "there is no origin/main in this clone: the list cannot be compared with the one at the merge-base; it is compared wherever origin/main exists", nil
+	}
+	base, err := git("merge-base", "HEAD", "origin/main")
+	if err != nil || base == "" {
+		return nil, "", fmt.Errorf("origin/main exists but git merge-base HEAD origin/main found nothing (%v): the history is too shallow to compare the port list with the merge-base; fetch more history (git fetch --deepen=100 origin main, or --unshallow)", err)
+	}
+	text, err := git("show", base+":tools/internal/policy/python_to_port.txt")
+	if err != nil {
+		return nil, "the port list does not exist at the merge-base " + base + ": it is new in this change", nil
+	}
+	return parseList(text), "", nil
+}
+
+// ServeForeverExempt reports whether a Python test file is left out of the serve_forever scan: the file that holds the
+// scan's own Python implementation and its examples, which names serve_forever in code the scan would flag.
+func ServeForeverExempt(path string) bool { return path == "tools/tests/test_run_tool_tests.py" }
+
+// MaxPollInterval is the longest poll_interval a test server may use, in seconds. socketserver's serve_forever notices a
+// stop request once per poll_interval (0.5 s by default), so every shutdown() of a test server waits out up to that.
+const MaxPollInterval = 0.05
+
+var (
+	callPollRE   = regexp.MustCompile(`(?:^|,)\s*poll_interval\s*=\s*([^,\s)]+)`)
+	dictPollRE   = regexp.MustCompile(`["']poll_interval["']\s*:\s*([^,}\s]+)`)
+	kwargsDictRE = regexp.MustCompile(`kwargs\s*=\s*\{`)
+	targetRE     = regexp.MustCompile(`target\s*=\s*[\w.]*$`)
+)
+
+// ServeForeverProblems returns one "name:line: problem" for each serve_forever in the Python source that is not given a
+// poll_interval of MaxPollInterval or less: a call `x.serve_forever(poll_interval=0.01)`, or a reference
+// `Thread(target=x.serve_forever, kwargs={"poll_interval": 0.01})`. Any other use is a problem too, since the scan cannot
+// read it. Comments are skipped. This is the scan the Python suite had in tools/tests/test_run_tool_tests.py, read from
+// the text because Go has no Python parser.
+func ServeForeverProblems(name, src string) []string {
+	var problems []string
+	add := func(i int, msg string) {
+		problems = append(problems, fmt.Sprintf("%s:%d: %s", name, 1+strings.Count(src[:i], "\n"), msg))
+	}
+	for from := 0; ; {
+		rel := strings.Index(src[from:], "serve_forever")
+		if rel < 0 {
+			break
+		}
+		i := from + rel
+		from = i + len("serve_forever")
+		lineStart := strings.LastIndexByte(src[:i], '\n') + 1
+		if strings.Contains(src[lineStart:i], "#") {
+			continue
+		}
+		after := src[from:]
+		if strings.HasPrefix(after, "(") {
+			args := balanced(after, '(', ')')
+			if m := callPollRE.FindStringSubmatch(args); m != nil {
+				if msg := checkInterval("serve_forever call", m[1]); msg != "" {
+					add(i, msg)
+				}
+			} else {
+				add(i, "serve_forever call: no poll_interval (the default is 0.5 s)")
+			}
+			continue
+		}
+		if !targetRE.MatchString(src[lineStart:i]) && !targetRE.MatchString(src[max(0, i-80):i]) {
+			add(i, "serve_forever used in a way this scan does not read; start it as "+
+				`Thread(target=x.serve_forever, kwargs={"poll_interval": 0.01}) or x.serve_forever(poll_interval=0.01)`)
+			continue
+		}
+		call := enclosingCall(src, i)
+		if loc := kwargsDictRE.FindStringIndex(call); loc != nil {
+			dict := balanced(call[loc[1]-1:], '{', '}')
+			if m := dictPollRE.FindStringSubmatch(dict); m != nil {
+				if msg := checkInterval("Thread target=serve_forever", m[1]); msg != "" {
+					add(i, msg)
+				}
+				continue
+			}
+		}
+		add(i, "Thread target=serve_forever: no poll_interval (the default is 0.5 s)")
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+func checkInterval(what, literal string) string {
+	v, err := strconv.ParseFloat(literal, 64)
+	if err != nil {
+		return what + ": poll_interval is not a literal number"
+	}
+	if v > MaxPollInterval {
+		return fmt.Sprintf("%s: poll_interval=%v is over %v", what, literal, MaxPollInterval)
+	}
+	return ""
+}
+
+// balanced returns the text after the opening bracket that starts s, up to its matching close; all of s when unmatched.
+func balanced(s string, open, close byte) string {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return s[1:i]
+			}
+		}
+	}
+	return s[1:]
+}
+
+// enclosingCall returns the text of the call that contains offset i: from its opening parenthesis to its closing one.
+func enclosingCall(src string, i int) string {
+	depth := 0
+	start := 0
+	for j := i - 1; j >= 0; j-- {
+		switch src[j] {
+		case ')':
+			depth++
+		case '(':
+			if depth == 0 {
+				start = j
+				return src[start : start+1+len(balanced(src[start:], '(', ')'))+1]
+			}
+			depth--
+		}
+	}
+	return src[i:]
+}
+
+// Recipe returns the signature line and the body lines (without their four-space indent) of the recipe called name in
+// a justfile; attribute lines such as [positional-arguments] directly above it are returned in attrs.
+func Recipe(justfile, name string) (attrs []string, header string, body []string, ok bool) {
+	lines := strings.Split(justfile, "\n")
+	for i, l := range lines {
+		if !strings.HasPrefix(l, name+" ") && !strings.HasPrefix(l, name+":") {
+			continue
+		}
+		for j := i - 1; j >= 0 && strings.HasPrefix(lines[j], "["); j-- {
+			attrs = append([]string{lines[j]}, attrs...)
+		}
+		for _, b := range lines[i+1:] {
+			if b != "" && !strings.HasPrefix(b, "    ") && !strings.HasPrefix(b, "\t") {
+				break
+			}
+			body = append(body, strings.TrimPrefix(b, "    "))
+		}
+		return attrs, l, body, true
+	}
+	return nil, "", nil, false
 }

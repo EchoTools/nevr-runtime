@@ -1,15 +1,34 @@
 package policy
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
 )
+
+// The fakes of the recipe tests: python3 and go, each scripted by the files "stdout" and "exit" beside it.
+func scripted(c *testkit.Call) int {
+	if out, err := os.ReadFile(filepath.Join(c.FakeDir, "stdout")); err == nil {
+		c.Stdout.Write(out)
+	}
+	if raw, err := os.ReadFile(filepath.Join(c.FakeDir, "exit")); err == nil {
+		n, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+		return n
+	}
+	return 0
+}
+
+func TestMain(m *testing.M) {
+	testkit.Main(m, testkit.Fakes{"python3": scripted, "go": scripted})
+}
 
 // repoRoot is the checkout this package is in: tools/internal/policy is three levels below it.
 func repoRoot(t *testing.T) string {
@@ -121,18 +140,106 @@ func TestGrownNamesWhatTheNewListAdds(t *testing.T) {
 
 func TestThePortListIsNotLargerThanAtTheMergeBaseWithOriginMain(t *testing.T) {
 	t.Parallel()
-	root := repoRoot(t)
-	base, err := git(t, root, "merge-base", "HEAD", "origin/main")
+	old, skipped, err := BaselineList(repoRoot(t), testkit.Env(t))
 	if err != nil {
-		t.Skipf("no merge-base with origin/main here (%v): the list cannot be compared; it is compared wherever origin/main exists", err)
+		t.Fatal(err)
 	}
-	old, err := git(t, root, "show", strings.TrimSpace(base)+":tools/internal/policy/python_to_port.txt")
-	if err != nil {
-		t.Skipf("the port list does not exist at the merge-base %s: it is new in this change", strings.TrimSpace(base))
+	if skipped != "" {
+		t.Skip(skipped)
 	}
-	if added := Grown(parseList(old), ToPort()); len(added) > 0 {
+	if added := Grown(old, ToPort()); len(added) > 0 {
 		t.Errorf("the port list grew since the merge-base; it only shrinks (a file that is not on it is Go, or has a recorded reason):\n  %s",
 			strings.Join(added, "\n  "))
+	}
+}
+
+// scratchRepo makes a repository whose origin/main is a ref we choose, so BaselineList can be shown each case.
+func scratchRepo(t *testing.T) (dir string, env []string, run func(args ...string) string) {
+	t.Helper()
+	dir = t.TempDir()
+	env = testkit.Env(t)
+	run = func(args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir, cmd.Env = dir, env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("init", "-q")
+	return dir, env, run
+}
+
+func commitList(t *testing.T, dir string, run func(...string) string, lines ...string) {
+	t.Helper()
+	path := filepath.Join(dir, "tools", "internal", "policy", "python_to_port.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("# comment\n"+strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "-A")
+	run("commit", "-q", "-m", "x")
+}
+
+func TestBaselineListReadsTheListAtTheMergeBase(t *testing.T) {
+	t.Parallel()
+	dir, env, run := scratchRepo(t)
+	commitList(t, dir, run, "tools/a.py", "tools/b.py")
+	run("update-ref", "refs/remotes/origin/main", "HEAD")
+	commitList(t, dir, run, "tools/a.py")
+	old, skipped, err := BaselineList(dir, env)
+	if err != nil || skipped != "" || strings.Join(old, ",") != "tools/a.py,tools/b.py" {
+		t.Errorf("old %q skipped %q err %v", old, skipped, err)
+	}
+}
+
+func TestBaselineListSkipsWithAReasonWhenThereIsNoOriginMain(t *testing.T) {
+	t.Parallel()
+	dir, env, run := scratchRepo(t)
+	commitList(t, dir, run, "tools/a.py")
+	_, skipped, err := BaselineList(dir, env)
+	if err != nil || !strings.Contains(skipped, "origin/main") {
+		t.Errorf("skipped %q err %v, want a skip that names origin/main", skipped, err)
+	}
+}
+
+// A shallow clone has origin/main and no merge-base: the check cannot be made, and a check that cannot be made must not
+// look like one that passed.
+func TestBaselineListFailsWhenOriginMainExistsButHasNoMergeBase(t *testing.T) {
+	t.Parallel()
+	dir, env, run := scratchRepo(t)
+	commitList(t, dir, run, "tools/a.py")
+	run("update-ref", "refs/remotes/origin/main", "HEAD")
+	run("checkout", "-q", "--orphan", "other")
+	commitList(t, dir, run, "tools/a.py", "tools/c.py") // a different tree: the same one would be the same root commit
+	_, skipped, err := BaselineList(dir, env)
+	if err == nil || skipped != "" {
+		t.Fatalf("skipped %q err %v, want an error", skipped, err)
+	}
+	for _, want := range []string{"merge-base", "fetch"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+}
+
+func TestBaselineListSkipsWhenTheListIsNewInThisChange(t *testing.T) {
+	t.Parallel()
+	dir, env, run := scratchRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "x"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "-A")
+	run("commit", "-q", "-m", "base")
+	run("update-ref", "refs/remotes/origin/main", "HEAD")
+	commitList(t, dir, run, "tools/a.py")
+	old, skipped, err := BaselineList(dir, env)
+	if err != nil || old != nil || !strings.Contains(skipped, "new") {
+		t.Errorf("old %q skipped %q err %v", old, skipped, err)
 	}
 }
 
@@ -292,4 +399,245 @@ func TestNoGoFileUnderToolsSleepsToWait(t *testing.T) {
 		t.Errorf("time.Sleep to wait (ADR 0044 rule 9: a test blocks on the event with a deadline or runs on the synctest clock; "+
 			"a tool's delay is a parameter):\n  %s", strings.Join(violations, "\n  "))
 	}
+}
+
+// ---- serve_forever polls fast in the Python test files (the scan unit A3 added in Python) ----
+
+func TestServeForeverScanReadsEachWayACallCanBeWritten(t *testing.T) {
+	t.Parallel()
+	ok := []string{
+		"import threading\nthreading.Thread(target=s.serve_forever, kwargs={\"poll_interval\": 0.01}).start()\n",
+		"threading.Thread(target=self.httpd.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True).start()\n",
+		"s.serve_forever(poll_interval=0.05)\n",
+		"s.serve_forever(poll_interval = 0.01)\n",
+		"# s.serve_forever() in a comment\nx = 1\n",
+	}
+	for _, src := range ok {
+		if got := ServeForeverProblems("a.py", src); len(got) != 0 {
+			t.Errorf("%q: %q, want none", src, got)
+		}
+	}
+	bad := map[string]string{
+		"import threading\nthreading.Thread(target=s.serve_forever).start()\n":                     "no poll_interval",
+		"threading.Thread(target=s.serve_forever, kwargs={\"poll_interval\": 0.5}).start()\n":      "over 0.05",
+		"threading.Thread(target=s.serve_forever, kwargs={\"poll_interval\": interval}).start()\n": "not a literal number",
+		"s.serve_forever()\n":                                             "no poll_interval",
+		"s.serve_forever(0.5)\n":                                          "no poll_interval",
+		"s.serve_forever(poll_interval=0.5)\n":                            "over 0.05",
+		"s.serve_forever(poll_interval=delay)\n":                          "not a literal number",
+		"run(s.serve_forever)\n":                                          "does not read",
+		"threading.Thread(target=s.serve_forever, kwargs=opts).start()\n": "no poll_interval",
+	}
+	for src, want := range bad {
+		got := ServeForeverProblems("a.py", src)
+		if len(got) != 1 || !strings.Contains(got[0], want) || !strings.HasPrefix(got[0], "a.py:") {
+			t.Errorf("%q: %q, want one problem containing %q", src, got, want)
+		}
+	}
+}
+
+func TestServeForeverProblemsNameTheLine(t *testing.T) {
+	t.Parallel()
+	got := ServeForeverProblems("a.py", "x = 1\n\n    s.serve_forever()\n")
+	if len(got) != 1 || !strings.HasPrefix(got[0], "a.py:3:") {
+		t.Errorf("problems = %q, want line 3", got)
+	}
+}
+
+func TestEveryServeForeverInTheTestFilesSetsAShortPollInterval(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	files, err := TrackedPython(root, testkit.Env(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problems []string
+	scanned := 0
+	for _, f := range files {
+		if !strings.HasPrefix(f, "tools/tests/") || strings.Count(f, "/") != 2 || ServeForeverExempt(f) {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(root, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(src), "serve_forever") {
+			continue
+		}
+		scanned++
+		problems = append(problems, ServeForeverProblems(f, string(src))...)
+	}
+	if scanned == 0 {
+		t.Fatal("no test file mentions serve_forever: the scan reads nothing")
+	}
+	if len(problems) > 0 {
+		t.Errorf("a serve_forever with the default poll_interval makes shutdown() wait up to 0.5 s; pass poll_interval=0.01 at each call:\n  %s",
+			strings.Join(problems, "\n  "))
+	}
+}
+
+// ---- the recipes run both halves (B1) ----
+
+var (
+	buildOnce sync.Once
+	builtBin  string
+	buildErr  error
+)
+
+// testGoToolsBinary builds cmd/test-go-tools once for this test process.
+func testGoToolsBinary(t *testing.T) string {
+	t.Helper()
+	buildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "policy-test-go-tools-")
+		if err != nil {
+			buildErr = err
+			return
+		}
+		builtBin = filepath.Join(dir, "test-go-tools")
+		env, err := testkit.EnvAt(filepath.Join(dir, "env"))
+		if err != nil {
+			buildErr = err
+			return
+		}
+		cmd := exec.Command("go", "-C", filepath.Join(repoRoot(t), "tools"), "build", "-o", builtBin, "./cmd/test-go-tools")
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			buildErr = fmt.Errorf("go build: %v\n%s", err, out)
+		}
+	})
+	if buildErr != nil {
+		t.Fatal(buildErr)
+	}
+	return builtBin
+}
+
+// halves is a project directory laid out as the recipes expect (build/go-tools/test-go-tools, the real tool), with a
+// fake python3 and a fake go on PATH, both failing.
+type halves struct {
+	dir, logs string
+	py, goBin *testkit.FakeCommand
+	env       []string
+}
+
+func newHalves(t *testing.T) *halves {
+	t.Helper()
+	bin := testGoToolsBinary(t)
+	h := &halves{dir: t.TempDir(), logs: filepath.Join(t.TempDir(), "logs")}
+	if err := os.MkdirAll(filepath.Join(h.dir, "build", "go-tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(bin, filepath.Join(h.dir, "build", "go-tools", "test-go-tools")); err != nil {
+		t.Fatal(err)
+	}
+	h.py, h.goBin = testkit.Fake(t, "python3"), testkit.Fake(t, "go")
+	script := func(f *testkit.FakeCommand, name, content string) {
+		if err := os.WriteFile(filepath.Join(f.Dir(), name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script(h.py, "exit", "1")
+	script(h.py, "stdout", "FAILED tools/tests/test_x.py::T::test_y\ntest-tools: log "+filepath.Join(h.logs, "20261105T120000.123456Z-1-0123456789abcdef-aabbccddeeff.log")+"\n")
+	script(h.goBin, "exit", "1")
+	script(h.goBin, "stdout", `{"Action":"fail","Package":"p","Test":"TestB"}`+"\n"+`{"Action":"fail","Package":"p"}`+"\n")
+	h.env = testkit.WithPath(testkit.Env(t, "NEVR_TEST_LOG_DIR="+h.logs), h.py.Dir(), h.goBin.Dir())
+	return h
+}
+
+// check asserts what the recipe line showed when both halves failed.
+func (h *halves) check(t *testing.T, out string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Error("the recipe line exited 0 with both halves red")
+	}
+	if n := len(h.py.Calls(t)); n != 1 {
+		t.Errorf("the Python half ran %d times, want 1", n)
+	}
+	calls := h.goBin.Calls(t)
+	if len(calls) != 1 || len(calls[0].Args) == 0 || calls[0].Args[0] != "test" {
+		t.Errorf("the Go half did not run after the Python half failed: go calls %+v", calls)
+	}
+	for _, want := range []string{"go FAIL p TestB", "FAIL: python half exit 1, go half exit 1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(h.logs, "20261105T120000.123456Z-1-0123456789abcdef-aabbccddeeff-go.jsonl")); err != nil {
+		t.Errorf("the Go stream does not carry the Python run's stem: %v", err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(h.logs, "runs.jsonl"))
+	if !strings.Contains(string(raw), `"event":"go_end"`) {
+		t.Errorf("runs.jsonl has no go_end record: %s", raw)
+	}
+}
+
+func TestJustTestToolsRunsTheGoHalfWhenThePythonHalfFailsAndNamesBoth(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("just"); err != nil {
+		t.Fatalf("just is a dependency of the tool suite: %v", err)
+	}
+	root := repoRoot(t)
+	text, err := os.ReadFile(filepath.Join(root, "justfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs, header, body, ok := Recipe(string(text), "test-tools")
+	if !ok {
+		t.Fatal("no test-tools recipe")
+	}
+	if !strings.Contains(header, ": go-tools") {
+		t.Errorf("test-tools does not depend on go-tools (ADR 0044 rule 7): %q", header)
+	}
+	h := newHalves(t)
+	// The recipe as written, beside a go-tools that does nothing (the binary is already there), run by just itself.
+	jf := strings.Join(attrs, "\n") + "\n" + header + "\n    " + strings.Join(body, "\n    ") + "\ngo-tools:\n    @true\n"
+	if err := os.WriteFile(filepath.Join(h.dir, "justfile"), []byte(jf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), "just", "test-tools", "tools/tests/test_x.py")
+	cmd.Dir, cmd.Env = h.dir, h.env
+	out, err := cmd.CombinedOutput()
+	h.check(t, string(out), err)
+	if calls := h.py.Calls(t); len(calls) == 1 && (len(calls[0].Args) < 2 || calls[0].Args[len(calls[0].Args)-1] != "tools/tests/test_x.py") {
+		t.Errorf("the recipe's arguments did not reach the Python runner: %+v", calls)
+	}
+}
+
+func TestJustVerifyRunsTheGoHalfWhenThePythonHalfFailsAndNamesBoth(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	text, err := os.ReadFile(filepath.Join(root, "justfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, body, ok := Recipe(string(text), "verify")
+	if !ok {
+		t.Fatal("no verify recipe")
+	}
+	var line string
+	built := false
+	for _, l := range body {
+		if l == "just go-tools" {
+			built = true
+		}
+		if strings.HasPrefix(l, "build/go-tools/test-go-tools -- ") {
+			if line != "" {
+				t.Fatalf("two test-go-tools lines in verify: %q and %q", line, l)
+			}
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatal("verify has no build/go-tools/test-go-tools line")
+	}
+	if !built {
+		t.Error("verify does not run `just go-tools` (ADR 0044 rule 7)")
+	}
+	if !strings.Contains(line, "python3 -m unittest") {
+		t.Errorf("the line does not run the Python suite: %q", line)
+	}
+	h := newHalves(t)
+	cmd := exec.CommandContext(t.Context(), "bash", "-c", "set -euo pipefail\n"+line)
+	cmd.Dir, cmd.Env = h.dir, h.env
+	out, err := cmd.CombinedOutput()
+	h.check(t, string(out), err)
 }
