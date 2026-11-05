@@ -4,10 +4,10 @@
 #include "runtime/host/file_digest.h"
 #include "runtime/host/runtime_load.h"
 #include "runtime/host/update_names.h"
+#include "runtime/host/update_seams.h"
 
 #include <nlohmann/json.hpp>
 
-#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -22,28 +22,6 @@ namespace {
 
 namespace names = update_names;
 using nlohmann::json;
-
-#if defined(NEVR_HOST_TESTING)
-std::atomic<DWORD> g_lock_timeout_for_test{0};
-std::atomic<DWORD> g_lock_step_for_test{0};
-std::atomic<bool (*)(int)> g_step_hook_for_test{nullptr};
-std::atomic<int> g_failing_move_for_test{0};
-std::atomic<DWORD> g_failing_move_error_for_test{0};
-#endif
-
-DWORD LockTimeoutMs() {
-#if defined(NEVR_HOST_TESTING)
-  if (const DWORD ms = g_lock_timeout_for_test.load()) return ms;
-#endif
-  return kUpdateLockTimeoutMs;
-}
-
-DWORD LockStepMs() {
-#if defined(NEVR_HOST_TESTING)
-  if (const DWORD ms = g_lock_step_for_test.load()) return ms;
-#endif
-  return kUpdateLockStepMs;
-}
 
 std::wstring Widen(std::string_view ascii) {
   std::wstring out;
@@ -249,9 +227,9 @@ bool ValidState(const json& doc) {
 }
 
 // One start's work on update\. Every path is composed here from the root and the vocabulary.
-class UpdateStart {
+class SwapRun {
  public:
-  UpdateStart(const wchar_t* runtime_path, BootstrapDiagnostics& diagnostics, UpdateLock& lock)
+  SwapRun(const wchar_t* runtime_path, BootstrapDiagnostics& diagnostics, UpdateLock& lock)
       : diagnostics_(diagnostics), lock_(lock), started_(GetTickCount64()) {
     root_ = runtime_path;
     const std::size_t separator = root_.find_last_of(L"\\/");
@@ -259,17 +237,17 @@ class UpdateStart {
     update_ = Join(root_, names::kUpdateDir);
   }
 
-  UpdateStartResult Run();
+  UpdateResult Run();
 
   /// The answer after an exception: stop when a journal says the root may be half moved, else load.
-  UpdateStartResult AfterException() {
+  UpdateResult AfterException() {
     Record("blocked", "internal_error");
     return Exists(UpdateFile(names::kSwapJson)) ? Stop("internal_error") : Load();
   }
 
  private:
-  static UpdateStartResult Load() { return {UpdateStartAction::kLoad, nullptr}; }
-  static UpdateStartResult Stop(const char* reason) { return {UpdateStartAction::kStop, reason}; }
+  static UpdateResult Load() { return {UpdateAction::kLoad, nullptr}; }
+  static UpdateResult Stop(const char* reason) { return {UpdateAction::kStop, reason}; }
 
   std::wstring UpdateFile(const wchar_t* name) const { return Join(update_, name); }
   std::wstring StagingDir(const std::string& version) const {
@@ -285,12 +263,8 @@ class UpdateStart {
 
   // A step that changed the disk. False when the test seam ended the start here (as a kill would).
   bool Step() {
-#if defined(NEVR_HOST_TESTING)
     ++steps_;
-    if (const auto hook = g_step_hook_for_test.load()) {
-      if (hook(steps_)) killed_ = true;
-    }
-#endif
+    if (SwapStepEnds(steps_)) killed_ = true;
     return !killed_;
   }
 
@@ -303,15 +277,15 @@ class UpdateStart {
   void Record(const char* outcome, const char* reason, json fields = json::object());
   bool LoadState();
   json RebuiltState() const;
-  UpdateStartResult Recover();
+  UpdateResult Recover();
   bool UndoMoves(const Journal& journal, bool phase_in);
   bool FinishDone(const Journal& journal);
-  UpdateStartResult SwapStaged();
+  UpdateResult SwapStaged();
   std::string CheckStagedFile(const Staged& staged, const StagedFile& file) const;
-  UpdateStartResult Discard(const Staged& staged, const std::string& why);
+  UpdateResult Discard(const Staged& staged, const std::string& why);
   bool RuntimeInUse(DWORD* error) const;
   bool ClearPrevious();
-  UpdateStartResult Swap(const Staged& staged, const std::string& from, const std::vector<names::Member>& out);
+  UpdateResult Swap(const Staged& staged, const std::string& from, const std::vector<names::Member>& out);
 
   BootstrapDiagnostics& diagnostics_;
   UpdateLock& lock_;
@@ -322,12 +296,10 @@ class UpdateStart {
   int moves_ = 0;
   DWORD last_error_ = 0;
   bool killed_ = false;
-#if defined(NEVR_HOST_TESTING)
   int steps_ = 0;
-#endif
 };
 
-void UpdateStart::Record(const char* outcome, const char* reason, json fields) {
+void SwapRun::Record(const char* outcome, const char* reason, json fields) {
   if (killed_) return;  // a kill writes nothing after the step it ended on
   json record = std::move(fields);
   record["event"] = "update_swap";
@@ -337,15 +309,10 @@ void UpdateStart::Record(const char* outcome, const char* reason, json fields) {
   diagnostics_.Emit(record);
 }
 
-bool UpdateStart::Move(const std::wstring& from, const std::wstring& to) {
+bool SwapRun::Move(const std::wstring& from, const std::wstring& to) {
   if (killed_) return false;
   ++moves_;
-#if defined(NEVR_HOST_TESTING)
-  if (moves_ == g_failing_move_for_test.load()) {
-    last_error_ = g_failing_move_error_for_test.load();
-    return false;
-  }
-#endif
+  if (SwapMoveFails(moves_, &last_error_)) return false;
   // No MOVEFILE_COPY_ALLOWED: a move to another volume fails, and the journal undoes it (ADR 0024, section 4.2).
   // No MOVEFILE_REPLACE_EXISTING: a file where one is going is a failure, never overwritten.
   if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH) == FALSE) {
@@ -355,7 +322,7 @@ bool UpdateStart::Move(const std::wstring& from, const std::wstring& to) {
   return Step();
 }
 
-bool UpdateStart::Remove(const std::wstring& path) {
+bool SwapRun::Remove(const std::wstring& path) {
   if (killed_) return false;
   if (!Exists(path)) return true;
   if (DeleteFileW(path.c_str()) == FALSE) {
@@ -365,7 +332,7 @@ bool UpdateStart::Remove(const std::wstring& path) {
   return Step();
 }
 
-bool UpdateStart::RemoveDir(const std::wstring& path) {
+bool SwapRun::RemoveDir(const std::wstring& path) {
   if (killed_) return false;
   if (!IsDirectory(path)) return true;
   if (RemoveDirectoryW(path.c_str()) == FALSE) return true;  // not empty: something that is not ours stays
@@ -373,7 +340,7 @@ bool UpdateStart::RemoveDir(const std::wstring& path) {
 }
 
 // A temporary file of this process, flushed, then renamed over the file: a reader sees the old file or the new one.
-bool UpdateStart::WriteJson(const std::wstring& path, const json& doc) {
+bool SwapRun::WriteJson(const std::wstring& path, const json& doc) {
   if (killed_) return false;
   const std::wstring temporary = path + L".tmp-" + std::to_wstring(GetCurrentProcessId());
   const std::string text = doc.dump();
@@ -398,7 +365,7 @@ bool UpdateStart::WriteJson(const std::wstring& path, const json& doc) {
 }
 
 // What a damaged state.json is replaced by (ADR 0024, section 4.8): the runtime in the root, owned and current.
-json UpdateStart::RebuiltState() const {
+json SwapRun::RebuiltState() const {
   json state = {{"owned", json::array()}};
   const FileFacts runtime = FactsOf(Join(root_, names::kRuntimeFile));
   if (!runtime.sha256.empty()) {
@@ -409,7 +376,7 @@ json UpdateStart::RebuiltState() const {
 }
 
 // False only when the start was ended (the seam).
-bool UpdateStart::LoadState() {
+bool SwapRun::LoadState() {
   json doc;
   const JsonRead read = ReadJsonFile(UpdateFile(names::kStateJson), &doc);
   if (read == JsonRead::kAbsent) {
@@ -429,9 +396,9 @@ bool UpdateStart::LoadState() {
   return true;
 }
 
-UpdateStartResult UpdateStart::Run() {
-  if (root_.empty() || !IsDirectory(update_)) return {UpdateStartAction::kNoUpdateFolder, nullptr};
-  if (!lock_.Acquire(update_.c_str(), LockTimeoutMs(), LockStepMs())) {
+UpdateResult SwapRun::Run() {
+  if (root_.empty() || !IsDirectory(update_)) return {UpdateAction::kNoUpdateFolder, nullptr};
+  if (!lock_.Acquire(update_.c_str(), SwapLockTimeoutMs(), SwapLockStepMs())) {
     // Another start holds it past the wait. With a journal the root may be half moved: nothing is loaded.
     const bool journal = Exists(UpdateFile(names::kSwapJson));
     Record("blocked", "lock_timeout", {{"journal", journal}});
@@ -448,16 +415,16 @@ UpdateStartResult UpdateStart::Run() {
   if (!journal && !Exists(UpdateFile(names::kStagedJson))) return Load();
   if (!LoadState()) return Load();
   if (journal) {
-    const UpdateStartResult recovered = Recover();
+    const UpdateResult recovered = Recover();
     // A journal still there is a recovery that did not finish: no new swap starts over it.
-    if (killed_ || recovered.action == UpdateStartAction::kStop || Exists(UpdateFile(names::kSwapJson))) return recovered;
+    if (killed_ || recovered.action == UpdateAction::kStop || Exists(UpdateFile(names::kSwapJson))) return recovered;
   }
   if (Exists(UpdateFile(names::kStagedJson))) return SwapStaged();
   return Load();
 }
 
 // ADR 0024, section 4.6: out or in are undone to the last whole state; done finishes its cleanup.
-UpdateStartResult UpdateStart::Recover() {
+UpdateResult SwapRun::Recover() {
   json doc;
   Journal journal;
   if (ReadJsonFile(UpdateFile(names::kSwapJson), &doc) != JsonRead::kOk || !ParseJournal(doc, &journal)) {
@@ -477,7 +444,7 @@ UpdateStartResult UpdateStart::Recover() {
 }
 
 // Files that moved in go back to staging, then files that moved out go back to the root; the journal goes last.
-bool UpdateStart::UndoMoves(const Journal& journal, bool phase_in) {
+bool SwapRun::UndoMoves(const Journal& journal, bool phase_in) {
   const std::wstring staging = StagingDir(journal.to);
   const std::wstring previous = PreviousDir(journal.from);
   if (phase_in) {
@@ -499,7 +466,7 @@ bool UpdateStart::UndoMoves(const Journal& journal, bool phase_in) {
 
 // At done: the files the swap placed are owned, the release is pending, and staged.json, the staging folder, a stale
 // crash marker and the journal go, in that order (ADR 0024, section 4.5). Every step can be run again.
-bool UpdateStart::FinishDone(const Journal& journal) {
+bool SwapRun::FinishDone(const Journal& journal) {
   json owned = json::array();
   for (const names::Member& member : journal.in) {
     owned.push_back({{"path", names::MemberPath(member)}, {"sha256", FactsOf(InRoot(member)).sha256}});
@@ -522,7 +489,7 @@ bool UpdateStart::FinishDone(const Journal& journal) {
 
 // ADR 0024, section 4.3: the file as it is on disk now, against staged.json and the verifier. Empty when it passes,
 // else the reason: "unreadable", "size", "sha256", or the verifier's own words.
-std::string UpdateStart::CheckStagedFile(const Staged& staged, const StagedFile& file) const {
+std::string SwapRun::CheckStagedFile(const Staged& staged, const StagedFile& file) const {
   const std::wstring path = In(StagingDir(staged.version), file.member);
   const HANDLE handle =
       CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -544,7 +511,7 @@ std::string UpdateStart::CheckStagedFile(const Staged& staged, const StagedFile&
 }
 
 // A failed check removes staged.json and counts the release's discard; the third quarantines it (section 4.3).
-UpdateStartResult UpdateStart::Discard(const Staged& staged, const std::string& why) {
+UpdateResult SwapRun::Discard(const Staged& staged, const std::string& why) {
   if (!Remove(UpdateFile(names::kStagedJson))) {
     if (killed_) return Load();
   }
@@ -565,7 +532,7 @@ UpdateStartResult UpdateStart::Discard(const Staged& staged, const std::string& 
 }
 
 // ADR 0024, section 4.4: a runtime mapped as an image by another process refuses a write-open.
-bool UpdateStart::RuntimeInUse(DWORD* error) const {
+bool SwapRun::RuntimeInUse(DWORD* error) const {
   const std::wstring path = Join(root_, names::kRuntimeFile);
   const HANDLE file =
       CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -577,7 +544,7 @@ bool UpdateStart::RuntimeInUse(DWORD* error) const {
   return *error != ERROR_FILE_NOT_FOUND && *error != ERROR_PATH_NOT_FOUND;
 }
 
-UpdateStartResult UpdateStart::SwapStaged() {
+UpdateResult SwapRun::SwapStaged() {
   json doc;
   Staged staged;
   if (ReadJsonFile(UpdateFile(names::kStagedJson), &doc) != JsonRead::kOk || !ParseStaged(doc, &staged)) {
@@ -624,7 +591,7 @@ UpdateStartResult UpdateStart::SwapStaged() {
 }
 
 // The older generation in update\previous\ goes before a new one moves in (section 4.5). Only names in the vocabulary.
-bool UpdateStart::ClearPrevious() {
+bool SwapRun::ClearPrevious() {
   const std::wstring previous = Join(update_, names::kPreviousDir);
   std::vector<std::wstring> versions;
   WIN32_FIND_DATAW data;
@@ -664,7 +631,7 @@ bool UpdateStart::ClearPrevious() {
 }
 
 // Journal, out, in, done (section 4.5). A failed move or journal write is undone to the last whole state.
-UpdateStartResult UpdateStart::Swap(const Staged& staged, const std::string& from, const std::vector<names::Member>& out) {
+UpdateResult SwapRun::Swap(const Staged& staged, const std::string& from, const std::vector<names::Member>& out) {
   json files = json::array();
   Journal journal;
   journal.from = from;
@@ -754,11 +721,11 @@ void UpdateLock::Release() noexcept {
   handle_ = INVALID_HANDLE_VALUE;
 }
 
-UpdateStartResult RunUpdateAtStart(const wchar_t* runtime_path, BootstrapDiagnostics& diagnostics,
+UpdateResult RunUpdateAtStart(const wchar_t* runtime_path, BootstrapDiagnostics& diagnostics,
                                    UpdateLock& lock) noexcept {
   if (runtime_path == nullptr || runtime_path[0] == L'\0') return {};
   try {
-    UpdateStart start(runtime_path, diagnostics, lock);
+    SwapRun start(runtime_path, diagnostics, lock);
     try {
       return start.Run();
     } catch (const std::exception&) {
@@ -766,20 +733,9 @@ UpdateStartResult RunUpdateAtStart(const wchar_t* runtime_path, BootstrapDiagnos
     }
   } catch (const std::exception&) {
     // Not even the record could be built: load only what a journal does not call into doubt.
-    return {UpdateStartAction::kStop, "internal_error"};
+    return {UpdateAction::kStop, "internal_error"};
   }
 }
 
-#if defined(NEVR_HOST_TESTING)
-void SetUpdateLockTimingForTest(DWORD timeout_ms, DWORD step_ms) noexcept {
-  g_lock_timeout_for_test.store(timeout_ms);
-  g_lock_step_for_test.store(step_ms);
-}
-void SetUpdateStepHookForTest(bool (*hook)(int step)) noexcept { g_step_hook_for_test.store(hook); }
-void SetUpdateMoveFailureForTest(int move_number, DWORD error) noexcept {
-  g_failing_move_for_test.store(move_number);
-  g_failing_move_error_for_test.store(error);
-}
-#endif
 
 }  // namespace nevr_host

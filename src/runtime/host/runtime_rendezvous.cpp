@@ -243,10 +243,10 @@ BOOL CALLBACK RuntimeRendezvous::LoadRuntimeOnce(PINIT_ONCE, PVOID parameter, PV
   UpdateLock update_lock;
   RuntimeLoadResult result;
   const wchar_t* runtime_path = self->loader_.Path();
-  const UpdateStartResult update =
-      runtime_path == nullptr ? UpdateStartResult{} : RunUpdateAtStart(runtime_path, *self->diagnostics_, update_lock);
-  if (update.action == UpdateStartAction::kStop) {
-    self->loader_.RecordUpdateStop(update.reason);
+  const UpdateResult update =
+      runtime_path == nullptr ? UpdateResult{} : RunUpdateAtStart(runtime_path, *self->diagnostics_, update_lock);
+  if (update.action == UpdateAction::kStop) {
+    self->loader_.RecordStopForUpdate(update.reason);
   } else {
     result = self->loader_.Load(self->context_, *self->diagnostics_, &update_lock);
   }

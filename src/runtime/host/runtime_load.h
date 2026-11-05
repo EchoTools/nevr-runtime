@@ -90,7 +90,7 @@ struct RuntimeLoadResult {
   // The CERT_CHAIN_ENGINE_CONFIG cbSize the verifier made its chain engine with: 88, or 80 on a Wine before 11.5 (#1262).
   // 0 when the file was not accepted by a check.
   std::uint32_t verify_engine_cbsize = 0;
-  // For kUpdateBlocked: why the start stopped before any load (update_swap.h, UpdateStartResult::reason).
+  // For kUpdateBlocked: why the start stopped before any load (update_swap.h, UpdateResult::reason).
   const char* update_reason = nullptr;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
@@ -200,9 +200,9 @@ class RuntimeLoader {
   RuntimeLoadResult Load(const NevrHostContext& host, BootstrapDiagnostics& diagnostics,
                          UpdateLock* update_lock = nullptr);
 
-  /// The start stopped before any load because a self-update left the root unfinished (UpdateStartAction::kStop):
+  /// The start stopped before any load because a self-update left the root unfinished (UpdateAction::kStop):
   /// the result is kUpdateBlocked with `reason`, and nothing is loaded.
-  void RecordUpdateStop(const char* reason);
+  void RecordStopForUpdate(const char* reason);
 
   /// The prepared runtime path, or null when none could be formed.
   const wchar_t* Path() const { return path_ok_ ? path_ : nullptr; }

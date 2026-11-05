@@ -50,21 +50,21 @@ inline constexpr DWORD kUpdateLockStepMs = 100;
 /// Discards of one release after which it is quarantined (ADR 0024, section 4.3).
 inline constexpr std::uint32_t kDiscardsToQuarantine = 3;
 
-enum class UpdateStartAction {
+enum class UpdateAction {
   kNoUpdateFolder,  ///< no update\: nothing was read or written
   kLoad,            ///< load what is in the root now (the lock is held when it was taken)
   kStop,            ///< the root may be half moved: the game must not load anything (reason says why)
 };
 
-struct UpdateStartResult {
-  UpdateStartAction action = UpdateStartAction::kNoUpdateFolder;
+struct UpdateResult {
+  UpdateAction action = UpdateAction::kNoUpdateFolder;
   /// For kStop: lock_timeout, bad_journal, move_failed or internal_error.
   const char* reason = nullptr;
 };
 
 /// The step ADR 0024 section 4 runs at every start. `runtime_path` is the path RuntimeLoader::Load will probe
 /// (`<root>\nevr-runtime.dll`); its folder is the root. Writes its records through `diagnostics`. Never throws.
-UpdateStartResult RunUpdateAtStart(const wchar_t* runtime_path, BootstrapDiagnostics& diagnostics,
+UpdateResult RunUpdateAtStart(const wchar_t* runtime_path, BootstrapDiagnostics& diagnostics,
                                    UpdateLock& lock) noexcept;
 
 #if defined(NEVR_HOST_TESTING)

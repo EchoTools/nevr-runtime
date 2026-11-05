@@ -261,7 +261,7 @@ void SetAfterMapHookForTest(void (*hook)(const wchar_t* path)) noexcept { g_afte
 
 const nevr_plugin_signature::Policy& HostVerifyPolicy() noexcept { return VerifyPolicy(); }
 
-void RuntimeLoader::RecordUpdateStop(const char* reason) {
+void RuntimeLoader::RecordStopForUpdate(const char* reason) {
   result_ = RuntimeLoadResult{};
   result_.outcome = RuntimeLoadOutcome::kUpdateBlocked;
   result_.update_reason = reason;

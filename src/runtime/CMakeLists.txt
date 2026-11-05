@@ -27,6 +27,7 @@ set(NEVR_HOST_UNITS
     "host/stop_line.cpp"
     # Self-update's swap at start (ADR 0024, section 4).
     "host/update_names.cpp"
+    "host/update_seams.cpp"
     "host/update_swap.cpp"
     # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).
     "ext/plugin_pins.cpp"

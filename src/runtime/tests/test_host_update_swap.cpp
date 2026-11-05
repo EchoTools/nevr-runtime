@@ -34,8 +34,8 @@ namespace {
 using nevr_host::BootstrapDiagnostics;
 using nevr_host::RunUpdateAtStart;
 using nevr_host::UpdateLock;
-using nevr_host::UpdateStartAction;
-using nevr_host::UpdateStartResult;
+using nevr_host::UpdateAction;
+using nevr_host::UpdateResult;
 namespace names = nevr_host::update_names;
 
 // ---- the vocabulary ----------------------------------------------------------------------------------------------
@@ -244,7 +244,7 @@ bool KillAt(int step) {
 }
 
 struct Start {
-  UpdateStartResult result;
+  UpdateResult result;
   bool lock_held = false;
   std::vector<nlohmann::json> records;
 };
@@ -400,7 +400,7 @@ TEST_F(HostUpdateSwap, AStartWithNoUpdateFolderReadsAndWritesNothing) {
   Put(L"nevr-runtime.dll", old_runtime_);
   const auto before = Tree(scratch_);
   const Start start = RunStart();
-  EXPECT_EQ(start.result.action, UpdateStartAction::kNoUpdateFolder);
+  EXPECT_EQ(start.result.action, UpdateAction::kNoUpdateFolder);
   EXPECT_FALSE(start.lock_held);
   EXPECT_TRUE(start.records.empty());
   EXPECT_EQ(Tree(scratch_), before) << "nothing was written anywhere";
@@ -411,7 +411,7 @@ TEST_F(HostUpdateSwap, AnUpdateFolderWithNothingStagedTakesTheLockAndChangesNoth
   MakeDirs(update_);
   const auto before = Tree(root_);
   const Start start = RunStart();
-  EXPECT_EQ(start.result.action, UpdateStartAction::kLoad);
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
   EXPECT_TRUE(start.lock_held) << "the lock is held until the runtime is mapped";
   EXPECT_TRUE(SwapRecords(start.records).empty());
   EXPECT_EQ(Tree(root_), before);
@@ -421,7 +421,7 @@ TEST_F(HostUpdateSwap, AVerifiedStagedReleaseIsSwappedInAndTheOldOneIsKeptAsPrev
   OldReleaseInTheRootAndANewOneStaged();
   Put(L"update\\previous\\0.0.1\\nevr-runtime.dll", "an older generation");
   const Start start = RunStart();
-  EXPECT_EQ(start.result.action, UpdateStartAction::kLoad);
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
   EXPECT_TRUE(start.lock_held);
   ExpectSwapped();
   EXPECT_FALSE(Exists(update_ + L"\\previous\\0.0.1")) << "one generation is kept";
@@ -459,7 +459,7 @@ TEST_F(HostUpdateSwap, F6_AStagedFileChangedOnDiskIsDiscardedCountedAndNothingMo
   Put(L"update\\staging\\1.2.3\\nevr-runtime.dll", changed);
   auto before = Tree(root_);
   const Start start = RunStart();
-  EXPECT_EQ(start.result.action, UpdateStartAction::kLoad);
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
   const auto records = SwapRecords(start.records);
   ASSERT_EQ(records.size(), 1u);
   EXPECT_EQ(records[0].value("outcome", ""), "discarded");
@@ -535,7 +535,7 @@ TEST_F(HostUpdateSwap, F7_AKillAfterAnyStepIsRecoveredAndTheNextStartEndsWithOne
     // Between the two starts the root holds the old release, the new one, or a journal that says which way to go.
     const bool journal = Exists(update_ + L"\\swap.json");
     const Start next = RunStart();
-    EXPECT_EQ(next.result.action, UpdateStartAction::kLoad);
+    EXPECT_EQ(next.result.action, UpdateAction::kLoad);
     ExpectSwapped();
     const auto outcomes = Outcomes(next.records);
     if (journal) {
@@ -575,7 +575,7 @@ TEST_F(HostUpdateSwap, F23_ALockHeldElsewhereTimesOutAndWithNoJournalLoadsWithou
   const ULONGLONG started = GetTickCount64();
   const Start start = RunStart();
   EXPECT_GE(GetTickCount64() - started, 250u) << "it waited";
-  EXPECT_EQ(start.result.action, UpdateStartAction::kLoad);
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
   EXPECT_FALSE(start.lock_held);
   const auto records = SwapRecords(start.records);
   ASSERT_EQ(records.size(), 1u);
@@ -594,7 +594,7 @@ TEST_F(HostUpdateSwap, F23_ALockHeldElsewhereWithAJournalStopsTheStart) {
   ASSERT_TRUE(other.Acquire(update_.c_str(), 1000, 25));
   const auto before = Tree(root_);
   const Start start = RunStart();
-  EXPECT_EQ(start.result.action, UpdateStartAction::kStop);
+  EXPECT_EQ(start.result.action, UpdateAction::kStop);
   ASSERT_NE(start.result.reason, nullptr);
   EXPECT_STREQ(start.result.reason, "lock_timeout");
   EXPECT_EQ(Tree(root_), before);
@@ -619,8 +619,8 @@ TEST_F(HostUpdateSwap, F17_TwoStartsAtOnceSwapOnceAndTheSecondFindsTheWorkDone) 
     records = g_records;
   }
   EXPECT_EQ(Outcomes(records), std::vector<std::string>{"swapped"}) << "one start swapped; the other found nothing to do";
-  EXPECT_EQ(results[0].result.action, UpdateStartAction::kLoad);
-  EXPECT_EQ(results[1].result.action, UpdateStartAction::kLoad);
+  EXPECT_EQ(results[0].result.action, UpdateAction::kLoad);
+  EXPECT_EQ(results[1].result.action, UpdateAction::kLoad);
   ExpectSwapped();
 }
 
@@ -764,7 +764,7 @@ TEST_F(HostUpdateSwap, F22_AStagedJsonOutsideTheVocabularyIsNotUsedAndNothingOut
     Put(L"update\\staged.json", c.staged);
     auto before = Tree(root_);
     const Start start = RunStart();
-    EXPECT_EQ(start.result.action, UpdateStartAction::kLoad);
+    EXPECT_EQ(start.result.action, UpdateAction::kLoad);
     const auto records = SwapRecords(start.records);
     ASSERT_EQ(records.size(), 1u);
     EXPECT_EQ(records[0].value("outcome", ""), "discarded");
@@ -791,7 +791,7 @@ TEST_F(HostUpdateSwap, F22_AJournalThisHostCannotReadStopsTheStartAndIsNotExecut
     Put(L"update\\swap.json", journal);
     const auto before = Tree(root_);
     const Start start = RunStart();
-    EXPECT_EQ(start.result.action, UpdateStartAction::kStop);
+    EXPECT_EQ(start.result.action, UpdateAction::kStop);
     ASSERT_NE(start.result.reason, nullptr);
     EXPECT_STREQ(start.result.reason, "bad_journal");
     const auto records = SwapRecords(start.records);
@@ -842,7 +842,7 @@ TEST_F(HostUpdateSwap, F22_AMoveThatFailsIsUndoneAndTheRootIsAsItWas) {
     nevr_host::SetUpdateMoveFailureForTest(failing, ERROR_NOT_SAME_DEVICE);
     const Start start = RunStart();
     nevr_host::SetUpdateMoveFailureForTest(0, 0);
-    EXPECT_EQ(start.result.action, UpdateStartAction::kLoad);
+    EXPECT_EQ(start.result.action, UpdateAction::kLoad);
     const auto records = SwapRecords(start.records);
     ASSERT_EQ(records.size(), 1u);
     EXPECT_EQ(records[0].value("outcome", ""), "blocked");
