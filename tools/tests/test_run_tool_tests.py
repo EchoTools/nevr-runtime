@@ -1087,9 +1087,10 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(record["echo"], "stalled")
 
     def test_a_signal_after_pytest_exits_while_its_output_drains_does_not_change_the_outcome(self):
-        # pytest stays alive for 2 s after it prints its summary, so a signal sent at the summary would arrive
-        # while it still runs; the test waits for its exit instead of for a time.
-        slow_exit = "import time\n\ndef pytest_unconfigure(config):\n    time.sleep(2)\n"
+        # pytest stays alive for 2 s after its summary has reached the runner (the flush puts it on the pipe, which
+        # pytest would otherwise do at exit), so a signal sent at the summary would arrive while it still runs; the
+        # test waits for its exit instead of for a time.
+        slow_exit = "import sys, time\n\ndef pytest_unconfigure(config):\n    sys.stdout.flush()\n    time.sleep(2)\n"
         stray = self.write_suite("stray", STRAY_SUITE, slow_exit)
         proc = subprocess.Popen([sys.executable, str(SCRIPT), "-q", "-s", "-p", "no:cacheprovider", str(stray)],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=REPO,
