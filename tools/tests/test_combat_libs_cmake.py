@@ -147,6 +147,31 @@ class DonorWrapperGenerator(unittest.TestCase):
                 self.assertIn("a :got: operand this tool does not read", squash(done.stderr))
                 self.assertFalse(self.wrapper.exists())
 
+    def test_an_upper_case_got_specifier_is_refused_not_skipped(self):
+        # r21b's assembler folds `:GOT:` like `:got:`; a reader that skipped it would declare nothing and the check would pass.
+        for upper in (TWO_STATICS.replace(":got:", ":GOT:"), TWO_STATICS.replace(":got_lo12:", ":GOT_LO12:"),
+                      TWO_STATICS.replace(":got:", ":Got:")):
+            with self.subTest(donor=upper[:60]):
+                done = self.generate(upper)
+                self.assertNotEqual(done.returncode, 0, done.stdout)
+                self.assertIn("a :got: operand this tool does not read", squash(done.stderr))
+                self.assertFalse(self.wrapper.exists())
+
+    def test_a_global_declaration_that_names_more_than_one_symbol_is_refused(self):
+        # `.hidden _dd_b` on a symbol the list exports would silently remove it from the dynamic symbol table.
+        for line in (".globl load_b2, _dd_b", ".global _dd_b,load_b2", ".weak _dd_b, other", ".globl load_b2 _dd_b"):
+            with self.subTest(line=line):
+                done = self.generate(TWO_STATICS + line + "\n")
+                self.assertNotEqual(done.returncode, 0, done.stdout)
+                self.assertIn("does not name exactly one symbol", squash(done.stderr))
+                self.assertFalse(self.wrapper.exists())
+
+    def test_a_global_declaration_with_a_trailing_comment_is_still_one_symbol(self):
+        for line in (".globl load_b2 # the entry", ".globl load_b2 // the entry", ".globl load_b2\r"):
+            with self.subTest(line=line):
+                done = self.generate(TWO_STATICS + line + "\n")
+                self.assertEqual(done.returncode, 0, done.stderr)
+
     def test_the_tool_names_its_missing_inputs(self):
         done = run(["cmake", "-P", str(GEN)])
         self.assertNotEqual(done.returncode, 0)
@@ -544,6 +569,7 @@ class CombatLibsBuild(unittest.TestCase):
         self.assertIn("check_quest_static_init", text)
         self.assertIn(f"lib{H1}.so", text)
         self.assertFalse((self.fx.build / "SHA256SUMS").exists(), "no sums over a failed build")
+        self.assertFalse((self.fx.build / f"lib{H1}.so").exists(), "the library the static-init check rejected is deleted")
 
     def test_a_source_that_does_not_compile_names_the_library(self):
         self.make_stock()
@@ -643,6 +669,37 @@ class CombatLibsBuild(unittest.TestCase):
         self.assertNotEqual(bad.returncode, 0)
         self.assertIn("raw.so: 1 of 2 symbols the donor loads through the GOT have no GOT slot that holds their address, first: "
                       "_dd_b (at 0x", squash(bad.stderr))
+
+    def test_a_library_the_check_rejects_is_deleted(self):
+        # Left in the build tree, a later link-only change makes ninja treat the rejected file as built (and the sums hash it).
+        self.build_two_statics()
+        raw = self.unwrapped_two_statics()
+        self.assertTrue(raw.is_file())
+        bad = self.check(raw, self.fx.root / "raw.s")
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertFalse(raw.exists(), "the rejected library is removed")
+        raw = self.unwrapped_two_statics()
+        refused = self.check(raw, self.fx.root / "missing.s")
+        self.assertNotEqual(refused.returncode, 0)
+        other = self.fx.root / "other.s"
+        other.write_bytes(TWO_STATICS.replace(":got:", ":GOT:").encode())
+        self.assertTrue(raw.is_file(), "a missing donor is an input error, not a verdict on the library")
+        unreadable = self.check(raw, other)
+        self.assertNotEqual(unreadable.returncode, 0)
+        self.assertFalse(raw.exists(), "a donor the reader refuses also removes the library")
+        # No .got section at all, and a file the tools cannot read, are verdicts on the library too.
+        raw = self.unwrapped_two_statics()
+        done = run([str(self.llvm / "llvm-objcopy"), "--remove-section=.got", str(raw)])
+        self.assertEqual(done.returncode, 0, done.stderr)
+        no_got = self.check(raw, self.fx.root / "raw.s")
+        self.assertNotEqual(no_got.returncode, 0)
+        self.assertIn("no .got section, and the donor loads 2 addresses through the GOT", squash(no_got.stderr))
+        self.assertFalse(raw.exists(), "a library with no .got is removed")
+        raw.write_bytes(b"not an ELF file")
+        unreadable_lib = self.check(raw, self.fx.root / "raw.s")
+        self.assertNotEqual(unreadable_lib.returncode, 0)
+        self.assertIn("exited", squash(unreadable_lib.stderr))
+        self.assertFalse(raw.exists(), "a library the tools cannot read is removed")
 
     def test_the_check_refuses_a_symbol_the_library_does_not_define_and_a_library_whose_got_holds_none_of_the_donors(self):
         wrapped = self.build_two_statics()

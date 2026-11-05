@@ -6,7 +6,8 @@
 # address, and its R_AARCH64_RELATIVE relocations in .got give each slot's content (a GOT slot of a symbol the library defines is
 # filled at load by a relative relocation whose addend is the symbol's address). A library whose GOT has folded the donor's
 # loads into one slot per section has slots for the section starts only, so the other symbols have none. A symbol with no slot
-# holding its address is a failure naming it; the build stops.
+# holding its address is a failure naming it; the build stops and the rejected library is deleted, so no later run can find it in
+# the build tree and treat it as built and checked.
 #
 # This reads the addresses, not the instructions: that each load names its own slot is what the assembler's wrapper
 # (gen_donor_wrapper.cmake) arranges, and a slot per symbol is what the link has to produce for it.
@@ -32,7 +33,7 @@ endif()
 function(nevr_tool_output out_var)
   execute_process(COMMAND ${ARGN} OUTPUT_VARIABLE nevr_out ERROR_VARIABLE nevr_err RESULT_VARIABLE nevr_rc)
   if(NOT nevr_rc EQUAL 0)
-    message(FATAL_ERROR "check_donor_got: ${nevr_lib_name}: ${ARGN} exited ${nevr_rc}: ${nevr_err}")
+    nevr_donor_refuse("check_donor_got: ${nevr_lib_name}: ${ARGN} exited ${nevr_rc}: ${nevr_err}")
   endif()
   set(${out_var} "${nevr_out}" PARENT_SCOPE)
 endfunction()
@@ -51,7 +52,7 @@ endfunction()
 # .got: its address and size, from the section table (`[ 9] .got PROGBITS 0000000000024fb0 023fb0 000050 08 WA 0 0 8`).
 nevr_tool_output(nevr_sections "${NEVR_LLVM_BIN}/llvm-readelf" -S -W "${NEVR_LIB}")
 if(NOT nevr_sections MATCHES "\\]+[ \t]+\\.got[ \t]+PROGBITS[ \t]+([0-9a-f]+)[ \t]+[0-9a-f]+[ \t]+([0-9a-f]+)[ \t]")
-  message(FATAL_ERROR "check_donor_got: ${nevr_lib_name}: no .got section, and the donor loads ${nevr_count} addresses through the GOT")
+  nevr_donor_refuse("check_donor_got: ${nevr_lib_name}: no .got section, and the donor loads ${nevr_count} addresses through the GOT")
 endif()
 math(EXPR nevr_got_begin "0x${CMAKE_MATCH_1}")
 math(EXPR nevr_got_end "0x${CMAKE_MATCH_1} + 0x${CMAKE_MATCH_2}")
@@ -94,6 +95,6 @@ if(nevr_wrong_count GREATER 0)
   list(LENGTH nevr_wrong nevr_wrong_total)
   list(SUBLIST nevr_wrong 0 3 nevr_first)
   string(REPLACE ";" ", " nevr_first "${nevr_first}")
-  message(FATAL_ERROR "check_donor_got: ${nevr_lib_name}: ${nevr_wrong_count} of ${nevr_count} symbols the donor loads through the GOT have no GOT slot that holds their address, first: ${nevr_first}")
+  nevr_donor_refuse("check_donor_got: ${nevr_lib_name}: ${nevr_wrong_count} of ${nevr_count} symbols the donor loads through the GOT have no GOT slot that holds their address, first: ${nevr_first}")
 endif()
 message(STATUS "check_donor_got: OK ${nevr_lib_name}: ${nevr_count} of ${nevr_count} symbols the donor loads through the GOT have a GOT slot holding their own address")

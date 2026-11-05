@@ -245,7 +245,8 @@ foreach(nevr_hash IN LISTS nevr_hashes)
     target_link_libraries(${nevr_target} PRIVATE dl)
   endif()
   add_custom_command(TARGET ${nevr_target} POST_BUILD
-    COMMAND bash "${nevr_check_script}" --plugin "${nevr_llvm_bin}" "$<TARGET_FILE:${nevr_target}>"
+    # A library the check rejects is deleted: left in the build tree, a later link-only change would let ninja treat it as built.
+    COMMAND bash -c "bash \"$0\" --plugin \"$1\" \"$2\" || { rm -f \"$2\"; exit 1; }" "${nevr_check_script}" "${nevr_llvm_bin}" "$<TARGET_FILE:${nevr_target}>"
     COMMENT "static-init check: lib${nevr_hash}.so"
     VERBATIM)
   if(nevr_row_${nevr_hash}_asm)
