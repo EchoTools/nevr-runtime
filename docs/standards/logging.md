@@ -629,8 +629,8 @@ call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `Pl
   spaces, so a plugin cannot start a second line, and message, keys and values are capped so a line
   fits the 2048-byte buffer `Log()` uses before the game logger exists; fields past the cap are counted
   in `fields_dropped=<n>`.
-- **When.** A plugin has a host log from its init callback (`NvrPluginInit` or `NvrPluginInitEx`)
-  on, from any thread, including from `NvrPluginShutdown` with the id and function it kept. There is
+- **When.** A plugin has a host log from its init callback (`NevrPluginInit` or `NevrPluginInitEx`)
+  on, from any thread, including from `NevrPluginShutdown` with the id and function it kept. There is
   none before init (no context exists) and none from `DllMain`, which runs under the loader lock. A
   host older than v6 passes a context that does not cover `ctx->log`; the plugin logger then falls back
   to stderr (`<prefix> <LEVEL> <message>`), which that host does not collect.

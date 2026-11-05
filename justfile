@@ -2253,7 +2253,7 @@ verify *args: (_heavy-guard "verify" args)
     DLLMAIN_RC=0; DLLMAIN_BODY=$(awk '/^BOOL APIENTRY DllMain\(/,/^}/' src/runtime/lifecycle/dllmain.cpp) || DLLMAIN_RC=$?
     sensor_stage1 "Plugin detach teardown boundary" "src/runtime/lifecycle/dllmain.cpp" "$DLLMAIN_RC"
     sensor_nonempty "Plugin detach teardown boundary" "DllMain() body in src/runtime/lifecycle/dllmain.cpp" "$DLLMAIN_BODY"
-    if grep -Eq 'UnloadPlugins[[:space:]]*\(|NvrPluginShutdown' <<<"$DLLMAIN_BODY"; then
+    if grep -Eq 'UnloadPlugins[[:space:]]*\(|Ne?vrPluginShutdown' <<<"$DLLMAIN_BODY"; then
         echo "verify: FAIL — DllMain calls plugin shutdown/unload under the loader lock." >&2
         exit 1
     fi
@@ -2777,13 +2777,13 @@ verify *args: (_heavy-guard "verify" args)
     # channel, and exactly the class of half-wiring this repo keeps finding
     # (N48 shipped half-implemented for five weeks the same way).
     #
-    # Comment-stripped: `// GetProcAddress(... "NvrPluginGetCapabilities")` would
+    # Comment-stripped: `// ResolvePluginExportAs<...>(hPlugin, "PluginGetCapabilities", ...)` would
     # otherwise satisfy a plain grep (N111).
     N114_RC=0; N114_LOADER=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/ext/plugin_loader.cpp) || N114_RC=$?
     sensor_stage1 "N114 plugin capabilities wired" "src/runtime/ext/plugin_loader.cpp" "$N114_RC"
     sensor_nonempty "N114 plugin capabilities wired" "non-comment lines of ext/plugin_loader.cpp" "$N114_LOADER"
-    if ! grep -q 'GetProcAddress(hPlugin, "NvrPluginGetCapabilities")' <<<"$N114_LOADER"; then
-        echo "verify: FAIL — N114 the host no longer resolves NvrPluginGetCapabilities." >&2
+    if ! grep -q 'ResolvePluginExportAs<NevrPluginGetCapabilities_fn>(hPlugin, "PluginGetCapabilities"' <<<"$N114_LOADER"; then
+        echo "verify: FAIL — N114 the host no longer resolves NevrPluginGetCapabilities." >&2
         echo "The ABI would still declare the export while every plugin read as UNDECLARED. A server cannot judge a session it cannot ask about." >&2
         exit 1
     fi
@@ -2798,23 +2798,23 @@ verify *args: (_heavy-guard "verify" args)
         echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 8; the capability (v3) + args (v4) + query-API (v5) + host-log (v6) + asset (v7) + level (v8) channels must not regress below v8." >&2
         exit 1
     fi
-    # N134 S7: the host must resolve NvrPluginInitEx — the v4 per-plugin-args init
+    # N134 S7: the host must resolve NevrPluginInitEx — the v4 per-plugin-args init
     # export. This check is in the ABI header (typedef), the loader resolves the
     # symbol at runtime, so the static check is that the typedef exists and the
     # loader's GetProcAddress references it. Falsified: comment out the typedef;
-    # rename the loader's "NvrPluginInitEx" string; revert API version to 3.
-    if ! grep -q 'typedef.*NvrPluginInitEx_fn' <<<"$N114_ABI"; then
-        echo "verify: FAIL — N114 S7 NvrPluginInitEx typedef removed from plugin_interface.h; the v4 args channel is dead without it." >&2
+    # rename the loader's "PluginInitEx" suffix; revert API version to 3.
+    if ! grep -q 'typedef.*NevrPluginInitEx_fn' <<<"$N114_ABI"; then
+        echo "verify: FAIL — N114 S7 NevrPluginInitEx typedef removed from plugin_interface.h; the v4 args channel is dead without it." >&2
         exit 1
     fi
-    if ! grep -q 'GetProcAddress(hPlugin, "NvrPluginInitEx")' <<<"$N114_LOADER"; then
-        echo "verify: FAIL — N114 S7 the loader no longer resolves NvrPluginInitEx; a v4 plugin (InitEx + args_json) would fall through to Init (no args)." >&2
+    if ! grep -q 'ResolvePluginExportAs<NevrPluginInitEx_fn>(hPlugin, "PluginInitEx"' <<<"$N114_LOADER"; then
+        echo "verify: FAIL — N114 S7 the loader no longer resolves NevrPluginInitEx; a v4 plugin (InitEx + args_json) would fall through to Init (no args)." >&2
         exit 1
     fi
-    # N134 S8: ctx_size must be set at every NvrGameContext construction site.
+    # N134 S8: ctx_size must be set at every NevrGameContext construction site.
     # The field is how a v5+ plugin discovers the query API at runtime.
-    # Falsified: remove any ctx_size = sizeof(NvrGameContext) line.
-    if ! grep -q 'ctx_size = sizeof(NvrGameContext)' <<<"$N114_LOADER"; then
+    # Falsified: remove any ctx_size = sizeof(NevrGameContext) line.
+    if ! grep -q 'ctx_size = sizeof(NevrGameContext)' <<<"$N114_LOADER"; then
         echo "verify: FAIL — N134 S8 ctx_size not set in LoadPlugins; a v5 plugin cannot discover the query API." >&2
         exit 1
     fi
@@ -3572,7 +3572,7 @@ verify *args: (_heavy-guard "verify" args)
     # present in module_interface.h. Its removal would silently break token_auth's
     # config.yaml reads and revert modules to the game-JSON path.
     if ! grep -q 'config_get' src/extension/module_interface.h; then
-        echo "verify: FAIL — N133 S7c: NvrModuleContext.config_get removed from" >&2
+        echo "verify: FAIL — N133 S7c: NevrModuleContext.config_get removed from" >&2
         echo "module_interface.h. This is the S5 deliverable that lets modules read" >&2
         echo "config.yaml. Without it token_auth reverts to game-JSON reads." >&2
         exit 1

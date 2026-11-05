@@ -1068,7 +1068,7 @@ int main() {
     std::printf("FAIL: impactsnd_test watchdog: 60 s without finishing (hang)\n");
     std::_Exit(2);
   }).detach();
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.ctx_size = sizeof ctx;
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;

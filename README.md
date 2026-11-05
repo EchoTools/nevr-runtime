@@ -278,7 +278,7 @@ Arguments the runtime reads from the game's command line (`--name` works as well
 
 The `platform_compat` and `token_auth` modules are statically linked into
 `nevr-runtime.dll`; there are no separate module DLLs to deploy. They use
-`NvrModuleContext`, not the plugin interface.
+`NevrModuleContext`, not the plugin interface.
 
 | Module | Linked into | Purpose |
 | ------ | ----------- | ------- |
@@ -290,7 +290,7 @@ speaks plaintext to a local proxy, and the proxy terminates TLS outbound.
 
 ### Plugins
 
-Optional, loaded from `plugins\` in the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012) via the `NvrPluginInterface` lifecycle.
+Optional, loaded from `plugins\` in the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012) via the `NevrPluginInterface` lifecycle.
 A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored
 (`LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`). A `plugins\` folder left beside `echovr.exe` by an earlier release is moved into the root on the first run.
 

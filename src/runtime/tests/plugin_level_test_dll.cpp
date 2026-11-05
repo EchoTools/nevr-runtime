@@ -8,7 +8,7 @@
 
 namespace {
 
-constexpr NvrPluginInfo kInfo = {
+constexpr NevrPluginInfo kInfo = {
     "test-plugin-level",
     "Hermetic plugin-loader fixture that reads the current level",
     1u,
@@ -27,11 +27,11 @@ Seen g_init;
 Seen g_frame;
 Seen g_state;
 
-bool CtxCoversLevel(const NvrGameContext* ctx) {
-  return ctx != nullptr && ctx->ctx_size >= offsetof(NvrGameContext, level_name) + sizeof(ctx->level_name);
+bool CtxCoversLevel(const NevrGameContext* ctx) {
+  return ctx != nullptr && ctx->ctx_size >= offsetof(NevrGameContext, level_name) + sizeof(ctx->level_name);
 }
 
-void Record(Seen& seen, const NvrGameContext* ctx) {
+void Record(Seen& seen, const NevrGameContext* ctx) {
   seen.covered = CtxCoversLevel(ctx);
   seen.symbol = seen.covered ? ctx->level_symbol : 0;
   seen.name = seen.covered ? ctx->level_name : nullptr;
@@ -40,15 +40,15 @@ void Record(Seen& seen, const NvrGameContext* ctx) {
 
 }  // namespace
 
-NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) {
+NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
   return kInfo;
 }
 
-NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
+NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) {
   return NEVR_PLUGIN_API_VERSION;
 }
 
-NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char*) {
+NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char*) {
   g_init = Seen{};
   g_frame = Seen{};
   g_state = Seen{};
@@ -56,11 +56,11 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char*) {
   return 0;
 }
 
-NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext* ctx) {
+NEVR_PLUGIN_API void NevrPluginOnFrame(const NevrGameContext* ctx) {
   Record(g_frame, ctx);
 }
 
-NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx, uint32_t oldState, uint32_t newState) {
+NEVR_PLUGIN_API void NevrPluginOnGameStateChange(const NevrGameContext* ctx, uint32_t oldState, uint32_t newState) {
   Record(g_state, ctx);
   if (!g_state.covered || ctx->plugin_id == nullptr || ctx->log == nullptr) return;
   char from[16];

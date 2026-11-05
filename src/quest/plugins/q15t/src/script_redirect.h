@@ -19,6 +19,6 @@ inline constexpr std::uint64_t kScriptRedirectHashes[] = {
 
 // Asks the host for the redirect, once, from init. Returns the host's NevrScriptRedirectResult (0 is OK), or -1 when the host
 // offers no script redirect (an older host, or a context too short to carry the API). Logs the outcome either way.
-int RegisterScriptRedirect(const NvrGameContext* ctx);
+int RegisterScriptRedirect(const NevrGameContext* ctx);
 
 }  // namespace q15t

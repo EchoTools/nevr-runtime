@@ -9,20 +9,20 @@
 
 struct LoadedModule {
   const char*                   name;
-  NvrModuleShutdown_fn          shutdown;
-  NvrModuleOnFrame_fn           on_frame;
-  NvrModuleOnGameStateChange_fn on_state;
+  NevrModuleShutdown_fn          shutdown;
+  NevrModuleOnFrame_fn           on_frame;
+  NevrModuleOnGameStateChange_fn on_state;
 };
 
 static std::vector<LoadedModule> g_modules;
 static std::unordered_map<std::string, void*> g_moduleProcs;
-static const NvrModuleContext* g_storedCtx = nullptr;
+static const NevrModuleContext* g_storedCtx = nullptr;
 
-void SetModuleContext(const NvrModuleContext* ctx) {
+void SetModuleContext(const NevrModuleContext* ctx) {
   g_storedCtx = ctx;
 }
 
-const NvrModuleContext* GetModuleContext() {
+const NevrModuleContext* GetModuleContext() {
   return g_storedCtx;
 }
 
@@ -37,9 +37,9 @@ void* ResolveModuleProc(const char* name) {
 }
 
 void RegisterStaticModule(const char* name, uint32_t api_version,
-                          NvrModuleOnFrame_fn on_frame,
-                          NvrModuleOnGameStateChange_fn on_state,
-                          NvrModuleShutdown_fn shutdown) {
+                          NevrModuleOnFrame_fn on_frame,
+                          NevrModuleOnGameStateChange_fn on_state,
+                          NevrModuleShutdown_fn shutdown) {
   LoadedModule m = {};
   m.name = name;
   m.shutdown = shutdown;
@@ -59,7 +59,7 @@ void UnloadModules() {
   g_moduleProcs.clear();
 }
 
-void TickModules(const NvrModuleContext* ctx) {
+void TickModules(const NevrModuleContext* ctx) {
   for (auto& m : g_modules) {
     if (m.on_frame) {
       m.on_frame(ctx);
@@ -67,7 +67,7 @@ void TickModules(const NvrModuleContext* ctx) {
   }
 }
 
-void NotifyModulesStateChange(const NvrModuleContext* ctx, uint32_t old_state, uint32_t new_state) {
+void NotifyModulesStateChange(const NevrModuleContext* ctx, uint32_t old_state, uint32_t new_state) {
   for (auto& m : g_modules) {
     if (m.on_state) {
       m.on_state(ctx, old_state, new_state);
@@ -84,7 +84,7 @@ void NotifyModulesStateChange(const NvrModuleContext* ctx, uint32_t old_state, u
 
 #ifdef NEVR_TEST_HOOKS
 
-void TestHook_RegisterModuleOnFrame(NvrModuleOnFrame_fn fn) {
+void TestHook_RegisterModuleOnFrame(NevrModuleOnFrame_fn fn) {
   LoadedModule m = {};
   m.name = "test_mock";
   m.shutdown = nullptr;
@@ -93,7 +93,7 @@ void TestHook_RegisterModuleOnFrame(NvrModuleOnFrame_fn fn) {
   g_modules.push_back(m);
 }
 
-void TestHook_RegisterModuleOnStateChange(NvrModuleOnGameStateChange_fn fn) {
+void TestHook_RegisterModuleOnStateChange(NevrModuleOnGameStateChange_fn fn) {
   LoadedModule m = {};
   m.name = "test_mock";
   m.shutdown = nullptr;

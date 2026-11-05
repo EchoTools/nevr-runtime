@@ -2,7 +2,7 @@
 
 namespace {
 
-constexpr NvrPluginInfo kInfo = {
+constexpr NevrPluginInfo kInfo = {
     "test-plugin-init-fail",
     "Hermetic plugin-loader fixture whose init reports failure",
     1u,
@@ -12,14 +12,14 @@ constexpr NvrPluginInfo kInfo = {
 
 }  // namespace
 
-NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) {
+NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
   return kInfo;
 }
 
-NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
+NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) {
   return NEVR_PLUGIN_API_VERSION;
 }
 
-NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext*) {
+NEVR_PLUGIN_API int NevrPluginInit(const NevrGameContext*) {
   return 1;
 }

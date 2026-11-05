@@ -26,15 +26,15 @@
  * Stderr line form: "<prefix> <LEVEL> <message>", with " key=value" for each field.
  *
  * When. A plugin has no host log before its init callback (there is no context yet), and must not
- * log from DllMain (the loader lock is held there). Bind at the top of NvrPluginInit or
- * NvrPluginInitEx; the binding then also serves OnFrame, OnGameStateChange and Shutdown, from any
+ * log from DllMain (the loader lock is held there). Bind at the top of NevrPluginInit or
+ * NevrPluginInitEx; the binding then also serves OnFrame, OnGameStateChange and Shutdown, from any
  * thread. A failure is PluginLogWarning or PluginLogError, never PluginLog.
  *
  * Invoke once per plugin, optionally inside a namespace for multi-TU plugins.
  *
  * Example (single-TU plugin):
  *   NEVR_DEFINE_PLUGIN_LOG("[my_plugin]")
- *   NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
+ *   NEVR_PLUGIN_API int NevrPluginInit(const NevrGameContext* ctx) {
  *       PluginLogBind(ctx);
  *       PluginLogFields(NEVR_LOG_INFO, "initialized", {{"hooks", "3"}});
  *       return 0;
@@ -188,10 +188,10 @@ inline void FlushHeldPluginLines(PluginLogBinding& binding, const char* prefix) 
 /// Binds to the host's log when `ctx` carries one: it is from a v6+ host (ctx_size reaches past ctx->log),
 /// and the host filled plugin_id and log. Otherwise the binding stays on stderr. Either way the held lines
 /// are written now, in order, through whichever sink the bind chose.
-inline bool BindPluginLog(PluginLogBinding& binding, const char* prefix, const NvrGameContext* ctx) {
+inline bool BindPluginLog(PluginLogBinding& binding, const char* prefix, const NevrGameContext* ctx) {
     bool bound = false;
     if (ctx != nullptr) {
-        constexpr std::size_t needed = offsetof(NvrGameContext, log) + sizeof(NevrLogFn);
+        constexpr std::size_t needed = offsetof(NevrGameContext, log) + sizeof(NevrLogFn);
         bound = ctx->ctx_size >= needed && ctx->plugin_id != nullptr && ctx->log != nullptr;
     }
     binding.id = bound ? ctx->plugin_id : nullptr;
@@ -224,7 +224,7 @@ inline void EmitPluginLogV(PluginLogBinding& binding, const char* prefix, uint32
         static ::nevr::PluginLogBinding binding;                                           \
         return binding;                                                                    \
     }                                                                                      \
-    inline bool PluginLogBind(const NvrGameContext* ctx) {                                 \
+    inline bool PluginLogBind(const NevrGameContext* ctx) {                                 \
         return ::nevr::BindPluginLog(PluginLogState(), prefix, ctx);                       \
     }                                                                                      \
     inline void PluginLogFields(uint32_t level, const char* message,                       \

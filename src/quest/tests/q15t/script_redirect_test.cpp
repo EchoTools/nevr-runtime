@@ -66,8 +66,8 @@ void Reset() {
 
 int main() {
   const NevrQuestHostApi full{sizeof(NevrQuestHostApi), nullptr, &FakeRegister, nullptr, nullptr};
-  NvrGameContext ctx{};
-  ctx.ctx_size = sizeof(NvrGameContext);
+  NevrGameContext ctx{};
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.plugin_id = "q15t-host-id";
   ctx.log = &Record;
   ctx.quest = &full;
@@ -112,7 +112,7 @@ int main() {
 
   // The host gave no plugin_id: the plugin names itself.
   Reset();
-  NvrGameContext noId = ctx;
+  NevrGameContext noId = ctx;
   noId.plugin_id = nullptr;
   CHECK(q15t::RegisterScriptRedirect(&noId) == NEVR_SCRIPT_REDIRECT_OK, "ok through a context with no id");
   CHECK(g_id == "q15t", "the plugin's own name is the fallback id, got %s", g_id.c_str());
@@ -123,28 +123,28 @@ int main() {
   CHECK(g_calls == 0, "no call without a context");
 
   Reset();
-  NvrGameContext noQuest = ctx;
+  NevrGameContext noQuest = ctx;
   noQuest.quest = nullptr;
   CHECK(q15t::RegisterScriptRedirect(&noQuest) == -1, "no quest api");
   CHECK(Logged("3|script redirect not registered|result=no_host_api"), "an Error line with result=no_host_api");
   CHECK(g_calls == 0, "no call without an api");
 
   Reset();
-  NvrGameContext shortContext = ctx;
-  shortContext.ctx_size = offsetof(NvrGameContext, quest);  // an older host: the context ends before the quest member
+  NevrGameContext shortContext = ctx;
+  shortContext.ctx_size = offsetof(NevrGameContext, quest);  // an older host: the context ends before the quest member
   CHECK(q15t::RegisterScriptRedirect(&shortContext) == -1, "a context that does not cover quest");
   CHECK(Logged("result=no_host_api") && g_calls == 0, "no_host_api, no call");
 
   Reset();
   const NevrQuestHostApi old{offsetof(NevrQuestHostApi, register_script_redirect), nullptr, &FakeRegister, nullptr, nullptr};
-  NvrGameContext oldCtx = ctx;
+  NevrGameContext oldCtx = ctx;
   oldCtx.quest = &old;
   CHECK(q15t::RegisterScriptRedirect(&oldCtx) == -1, "an api struct that ends before the member");
   CHECK(Logged("result=no_host_api") && g_calls == 0, "no_host_api, no call");
 
   Reset();
   const NevrQuestHostApi noFn{sizeof(NevrQuestHostApi), nullptr, nullptr, nullptr, nullptr};
-  NvrGameContext noFnCtx = ctx;
+  NevrGameContext noFnCtx = ctx;
   noFnCtx.quest = &noFn;
   CHECK(q15t::RegisterScriptRedirect(&noFnCtx) == -1, "a null function");
   CHECK(Logged("result=no_host_api"), "no_host_api");
