@@ -1,6 +1,7 @@
-"""docs/standards/naming.md, enforced: the `Nvr` plugin/module ABI spelling is a frozen set that does not
-grow, and a non-canonical spelling of the project name does not appear in any file or identifier that does
-not already carry it. Both sets are written out below on purpose: changing one is a visible edit here."""
+"""docs/standards/naming.md, enforced: `Nevr` is the prefix of the plugin/module C ABI and `Nvr` survives only as
+deprecated aliases (and the places that prove the old names still load), and a non-canonical spelling of the
+project name does not appear in any file or identifier that does not already carry it. The places `Nvr` may
+appear are written out below on purpose: changing one is a visible edit here."""
 from __future__ import annotations
 
 import json
@@ -10,7 +11,8 @@ import subprocess
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-# `Nvr` followed by a capital, not preceded by a letter; the _fn/_t typedef suffixes are folded away.
+# `Nvr` followed by a capital, not preceded by a letter; the _fn/_t typedef suffixes are folded away. A
+# deprecated alias is `Nvr<Rest>` for the canonical `Nevr<Rest>`.
 NVR = re.compile(r"(?<![A-Za-z])Nvr[A-Z][A-Za-z0-9_]*")
 # Any spelling of the name made of the letters n-e-v-r in some case, not preceded by a letter.
 ANY_CASE = re.compile(r"(?<![A-Za-z])[Nn][Ee][Vv][Rr][A-Za-z0-9_]*")
@@ -24,20 +26,32 @@ UPPERCASE_BRAND_IN_DOCS = re.compile(
 SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py"})
 EXCLUDED_PREFIXES = ("extern/", "gen/", "docs/audits/")
 
-# The published plugin/module C ABI (sdk/include/nevr/plugin_interface.h, src/extension/module_interface.h) and
-# everything that names it. Nothing is added.
-FROZEN_NVR = frozenset({
-    "NvrGameContext", "NvrHostFlags", "NvrLoadedPluginInfo", "NvrModuleApiVersion",
-    "NvrModuleApiVersionSupported", "NvrModuleContext", "NvrModuleGetApiVersion", "NvrModuleHostFlags",
-    "NvrModuleInit", "NvrModuleOnFrame", "NvrModuleOnGameStateChange", "NvrModuleShutdown",
-    "NvrPluginCapabilities", "NvrPluginGetApiVersion", "NvrPluginGetCapabilities", "NvrPluginGetInfo",
-    "NvrPluginInfo", "NvrPluginInit", "NvrPluginInitEx", "NvrPluginOnFrame", "NvrPluginOnGameStateChange",
-    "NvrPluginShutdown",
-    # Not ABI symbols: a wildcard in a comment, the prose name of the lifecycle, and the exports of the
-    # test plugin DLL (src/runtime/tests/plugin_onframe_test_dll.cpp).
-    "NvrPlugin", "NvrPluginInterface", "NvrTestPluginGetFrameCount", "NvrTestPluginGetInitCount",
-    "NvrTestPluginGetKeptInfo",
-})
+# The headers that publish the plugin/module C ABI. Each `Nvr*` name in them is a deprecated alias of the `Nevr*`
+# name with the same rest, declared `[[deprecated("use Nevr...")]]`, so code built against the old SDK compiles
+# with a warning. The deprecated export spelling (`NvrPluginInit`, ...) is not declared in a header: a plugin
+# built before the rename exports it, and the loaders resolve it after the Nevr one.
+ALIAS_HEADERS = ("sdk/include/nevr/plugin_interface.h", "src/extension/module_interface.h")
+# Every other place a deprecated `Nvr*` name appears, with the names: the loaders name the export they fall
+# back to in a failure message, the fixtures export or resolve the old names to prove a plugin built before the
+# rename still loads, and one invariant test forbids either spelling in `DllMain`. Nothing is added for a name
+# we choose; an entry goes when the name leaves the file.
+DEPRECATED_NVR_USES = {
+    "src/runtime/ext/plugin_loader.cpp": {"NvrPluginGetInfo"},
+    "src/runtime/tests/plugin_deprecated_exports_test_dll.cpp": {
+        "NvrPluginGetApiVersion", "NvrPluginGetCapabilities", "NvrPluginGetInfo", "NvrPluginInitEx",
+        "NvrPluginOnFrame", "NvrPluginOnGameStateChange", "NvrPluginShutdown", "NvrTestPluginExportsGetCount",
+    },
+    "src/runtime/tests/test_behavioral.cpp": {"NvrPluginGetCapabilities", "NvrTestPluginExportsGetCount"},
+    "src/quest/tests/plugin_loader_test.cpp": {"NvrPluginGetInfo", "NvrPluginInitEx"},
+    # The decision record names the old spellings it deprecates.
+    "docs/adr/0043-nevr-is-the-plugin-abi-prefix.md": {
+        "NvrGameContext", "NvrModuleApiVersionSupported", "NvrModuleContext", "NvrPluginInfo", "NvrPluginInit",
+    },
+    "tools/tests/test_runtime_lifecycle_invariants.py": {"NvrPluginShutdown"},
+}
+# `using NvrX [[deprecated("use NevrX")]] = NevrX;` and the one deprecated function.
+ALIAS_DECL = re.compile(r"using\s+(Nvr\w+)\s*\[\[deprecated\(\"use (Nevr\w+)\"\)\]\]\s*=\s*(Nevr\w+)\s*;")
+FUNCTION_ALIAS_DECL = re.compile(r"\[\[deprecated\(\"use (Nevr\w+)\"\)\]\]\s*constexpr\s+\w+\s+(Nvr\w+)\s*\(")
 # Plugins other people publish keep their own names (docs/standards/naming.md, "Names that belong to ... third
 # parties"). These are named in config examples and docs because a host lists them in config.yaml. Each is one
 # third party's file name; nothing here is ours, and nothing is added for a name we choose.
@@ -156,19 +170,44 @@ class NamingTest(unittest.TestCase):
         self.assertGreater(len(files), 300, "the sensor is reading almost nothing")
         self.assertIn("sdk/include/nevr/plugin_interface.h", files)
 
-    def test_no_nvr_identifier_outside_the_frozen_set(self):
+    def test_nvr_is_only_a_deprecated_alias(self):
+        files = dict(project_files())
+        for header in ALIAS_HEADERS:
+            text = files[header]
+            aliases = {m.group(1): (m.group(2), m.group(3)) for m in ALIAS_DECL.finditer(text)}
+            aliases.update({m.group(2): (m.group(1), m.group(1)) for m in FUNCTION_ALIAS_DECL.finditer(text)})
+            used = {re.sub(r"(_fn|_t)$", "", t) for t in NVR.findall(text)}
+            self.assertEqual(sorted(used - {re.sub(r"(_fn|_t)$", "", a) for a in aliases}), [],
+                             f"{header}: a `Nvr` name that is not a [[deprecated]] alias of its Nevr twin")
+            for alias, (message, target) in aliases.items():
+                twin = "Nevr" + alias[len("Nvr"):]
+                self.assertEqual((message, target), (twin, twin), f"{header}: {alias} must alias {twin}")
+                self.assertRegex(text, r"(?:enum|struct|typedef|constexpr)[^;{]*\b" + re.escape(twin) + r"\b",
+                                 f"{header}: {twin} is not declared there")
         stray = {}
         for path, text in project_files():
-            for token in {re.sub(r"(_fn|_t)$", "", t) for t in NVR.findall(text)} - FROZEN_NVR - THIRD_PARTY_NVR:
-                stray.setdefault(token, []).append(path)
-        self.assertEqual(stray, {}, "`Nvr` is the frozen plugin/module ABI spelling; new names use Nevr/NEVR_ "
-                         "(docs/standards/naming.md)")
+            if path in ALIAS_HEADERS:
+                continue
+            tokens = {re.sub(r"(_fn|_t)$", "", t) for t in NVR.findall(text)} - THIRD_PARTY_NVR
+            tokens -= DEPRECATED_NVR_USES.get(path, set())
+            if tokens:
+                stray[path] = sorted(tokens)
+        self.assertEqual(stray, {}, "`Nevr` is the prefix of the plugin/module C ABI; `Nvr` survives only as the "
+                         "deprecated aliases in the SDK headers (docs/standards/naming.md)")
 
-    def test_every_frozen_nvr_name_is_still_used(self):
-        used = set()
-        for _, text in project_files():
-            used |= {re.sub(r"(_fn|_t)$", "", t) for t in NVR.findall(text)}
-        self.assertEqual(sorted(FROZEN_NVR - used), [], "remove names that no longer exist from FROZEN_NVR")
+    def test_every_deprecated_nvr_use_is_still_present(self):
+        files = dict(project_files())
+        gone = {p: sorted(tokens - {re.sub(r"(_fn|_t)$", "", t) for t in NVR.findall(files.get(p, ""))})
+                for p, tokens in DEPRECATED_NVR_USES.items()}
+        gone = {p: tokens for p, tokens in gone.items() if tokens}
+        self.assertEqual(gone, {}, "remove names that left the file from DEPRECATED_NVR_USES")
+
+    def test_the_headers_declare_no_nvr_name_that_is_not_deprecated(self):
+        # Every `Nvr` declaration in the published headers is an alias carrying [[deprecated]]; a bare
+        # `struct NvrX`, `enum NvrX` or `typedef ... NvrX` would be a new name in the old prefix.
+        bare = re.compile(r"\b(?:struct|enum(?:\s+class)?|class|typedef\b[^;]*?)\s+\(?\*?(Nvr\w+)")
+        found = {h: sorted(set(bare.findall(dict(project_files())[h]))) for h in ALIAS_HEADERS}
+        self.assertEqual({h: n for h, n in found.items() if n}, {}, "a published type or typedef is spelled Nvr")
 
     def test_no_new_noncanonical_spelling(self):
         offenders = {}

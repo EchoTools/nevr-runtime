@@ -87,8 +87,8 @@ inline long DuplicatePluginEntry(const std::vector<PluginLoadItem>& plan, size_t
 }
 
 // Which init export the loader should call for a plugin, given which exports it
-// resolved. Prefers the v4 args-aware NvrPluginInitEx; falls back to the v3
-// NvrPluginInit (so a v3 plugin still loads, without args); None when the plugin
+// resolved. Prefers the v4 args-aware NevrPluginInitEx; falls back to the v3
+// NevrPluginInit (so a v3 plugin still loads, without args); None when the plugin
 // exports neither (init is optional — the plugin still loads). Pure + inline so
 // both the loader and the test share ONE definition with no extra link symbol.
 enum class PluginInitKind : std::uint8_t { None = 0, Legacy = 1, Ex = 2 };
