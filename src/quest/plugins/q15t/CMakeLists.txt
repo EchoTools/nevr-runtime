@@ -66,6 +66,11 @@ option(Q15T_TABLESTEP "tablestep (#1552): shader-set table growth step 32 -> 1 b
 # sendguard: CSendEventNode::Enter (disassembly libr15 0x2825a80) faults on a send to a game space that is not loaded (the menu gate lets the menu
 # reach such a send on a Quest without the combat content pack). A wrapper on its data slots drops that send with a log line. Off file: sendguard.off.
 option(Q15T_SENDGUARD "sendguard: a script send to a game space that is not loaded is dropped, not faulted, by a wrapper on CSendEventNode::Enter's data slots" ON)
+# equiprefire (issue #2121): the game's scripts drop an equipment change that arrives while they are still handling the previous one. The three
+# CR15NetPlayerEquipmentCS slot setters are wrapped (a JUMP_SLOT and a GLOB_DAT word each) and, after the local player's last change of a slot has
+# been still for 2.5 s, the slot's change handler is called once more from the game tick. Shares its rule with the PC build
+# (src/runtime/patch/equipment_refire_rules.h). Always on; off file: equiprefire.off.
+option(Q15T_EQUIPREFIRE "equiprefire (#2121): an equipment change the scripts dropped is applied again once the slot has been still (wrappers on the three slot setters' data words, handler re-fired from the game tick)" ON)
 # decals (issue #1619): the combat levels' static decals, which the Quest renderer cannot draw, as quads in dynamic-mesh nodes from the
 # content pack's decals.bin. ON, and inert (one INFO line, reason "off") when no decals.bin is found. Off file: decals.off. Needs impactsnd's
 # Shutdown wrapper to be installed first when Q15T_IMPACTSND is on (plugin.cpp installs it in that order; the wrapper chains on it).
@@ -122,6 +127,9 @@ endif()
 if(Q15T_SENDGUARD)
   list(APPEND Q15T_SOURCES src/sendguard.cpp)
 endif()
+if(Q15T_EQUIPREFIRE)
+  list(APPEND Q15T_SOURCES src/equiprefire.cpp)
+endif()
 if(Q15T_SHADERSTEP)
   list(APPEND Q15T_SOURCES src/shaderstep.cpp)
 endif()
@@ -136,7 +144,8 @@ set(Q15T_COMMON_LINK -Wl,--gc-sections -Wl,-z,max-page-size=16384 -Wl,--build-id
 
 add_library(nevr_q15t SHARED ${Q15T_SOURCES})
 set_target_properties(nevr_q15t PROPERTIES OUTPUT_NAME q15t)
-target_include_directories(nevr_q15t PRIVATE "${Q15T_DIR}/src")
+# "${Q15T_DIR}/../../.." is the repository's src/: the shared PC/Quest rule headers are included path-qualified ("runtime/patch/...")
+target_include_directories(nevr_q15t PRIVATE "${Q15T_DIR}/src" "${Q15T_DIR}/../../..")
 target_link_libraries(nevr_q15t PRIVATE nevr::plugin_sdk dl)
 target_compile_options(nevr_q15t PRIVATE ${Q15T_COMMON_OPTIONS})
 target_compile_definitions(nevr_q15t PRIVATE
@@ -151,7 +160,7 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
   Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
   Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}> Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
-  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}> Q15T_PFX=$<BOOL:${Q15T_PFX}>
+  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_EQUIPREFIRE=$<BOOL:${Q15T_EQUIPREFIRE}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}> Q15T_PFX=$<BOOL:${Q15T_PFX}>
   Q15T_PFXTEV=$<BOOL:${Q15T_PFXTEV}>)
 if(NOT "${Q15T_EC_DEFAULT_WORDS}" STREQUAL "")
   target_compile_definitions(nevr_q15t PRIVATE "Q15T_EC_DEFAULT_WORDS=\"${Q15T_EC_DEFAULT_WORDS}\"")

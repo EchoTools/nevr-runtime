@@ -21,6 +21,9 @@ set(Q15T_SDK_INCLUDE "${CMAKE_CURRENT_LIST_DIR}/../../../../sdk/include" CACHE P
 get_filename_component(Q15T_PLUGIN_DIR "${Q15T_PLUGIN_DIR}" ABSOLUTE)
 get_filename_component(Q15T_SDK_INCLUDE "${Q15T_SDK_INCLUDE}" ABSOLUTE)
 set(Q15T_PLUGIN_SRC "${Q15T_PLUGIN_DIR}/src")
+# The repository's src/ (path-qualified shared headers such as "runtime/patch/equipment_refire_rules.h"); the mutation run's scratch copy of
+# the plugin passes the real SDK include directory, which is two levels below the checkout root.
+get_filename_component(Q15T_REPO_SRC "${Q15T_SDK_INCLUDE}/../../src" ABSOLUTE)
 set(Q15T_TESTS_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 set(Q15T_BUILD_ID_FOR_TEST "b243509c08ce677aeb95fa348016949b3fc45230")
@@ -75,7 +78,7 @@ function(q15t_host_test program)
     if(T_INCLUDES)
       target_include_directories(${program} PRIVATE ${T_INCLUDES})
     else()
-      target_include_directories(${program} PRIVATE "${Q15T_PLUGIN_SRC}" "${Q15T_SDK_INCLUDE}")
+      target_include_directories(${program} PRIVATE "${Q15T_PLUGIN_SRC}" "${Q15T_SDK_INCLUDE}" "${Q15T_REPO_SRC}")
     endif()
   endif()
   if(T_DEFS)
@@ -116,7 +119,7 @@ function(q15t_arm64_object)
   foreach(m IN LISTS ARGN)
     add_library(nevr_q15t_arm64_${m} OBJECT "${Q15T_PLUGIN_SRC}/${m}.cpp")
     target_compile_options(nevr_q15t_arm64_${m} PRIVATE ${Q15T_ARM64_OPTIONS})
-    target_include_directories(nevr_q15t_arm64_${m} PRIVATE "${Q15T_PLUGIN_SRC}" "${Q15T_SDK_INCLUDE}")
+    target_include_directories(nevr_q15t_arm64_${m} PRIVATE "${Q15T_PLUGIN_SRC}" "${Q15T_SDK_INCLUDE}" "${Q15T_REPO_SRC}")
     add_dependencies(mod_${Q15T_MODULE} nevr_q15t_arm64_${m})
     add_test(NAME ${Q15T_MODULE}.arm64_${m}
              COMMAND "${Q15T_TESTS_DIR}/check/arm64_no_static_init.sh" "${Q15T_NDK_BIN}/llvm-readelf" "$<TARGET_OBJECTS:nevr_q15t_arm64_${m}>" ${m})
