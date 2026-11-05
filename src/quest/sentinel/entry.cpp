@@ -21,6 +21,7 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "quest/combat/match_tags.h"
 #include "quest/invite/frame_dispatch.h"
 #include "main_level.h"
 #include "menu_cards_hook.h"
@@ -175,6 +176,11 @@ bool InstallPermissionWaitHook() noexcept {
     nevr_quest::hand_flip::Configure(nevr_quest::ConfigFilePath(sentinel::FilesDir()).c_str(),
                                      handFlip.source == nevr_quest::Source::kFile, handFlip.on);
     nevr_quest::hand_pose_log::Install();
+    // Combat name tags on by default (#2090): CR15Game's two constructor slots, installed on every launch before the game builds its
+    // game object (the sentinel's constructor runs while libr15 is being loaded). A copy of the settings the constructor left at the
+    // stock default gets bit 13; a saved choice still wins, because LoadSettings runs after the constructor. Its
+    // combat_match_tags_install line says whether it went in; a refused install leaves the game's constructor as it is.
+    nevr_quest::combat::match_tags::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();
