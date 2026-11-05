@@ -722,4 +722,74 @@ TEST_F(HostRuntimeVerify, AServerIsRefusedTheSameWayWithTheRecordsAndNoDialog) {
   EXPECT_EQ(line.at("code"), 78);
 }
 
+// Self-update (docs/adr/0024-pc-self-update.md, section 4; #2104), through the detour: the swap runs before the verdict,
+// the file the verdict accepts and the load maps is the swapped one, and update_swap comes before versions (section 8).
+// The test's own update\ files are removed by exact path at its end.
+void RemoveUpdateFiles(const std::wstring& nevr_root) {
+  for (const wchar_t* file : {L"\\update\\previous\\7.7.7\\nevr-runtime.dll", L"\\update\\staging\\1.2.3\\nevr-runtime.dll",
+                              L"\\update\\staged.json", L"\\update\\swap.json", L"\\update\\pending.json", L"\\update\\state.json"}) {
+    DeleteFileW((nevr_root + file).c_str());
+  }
+  for (const wchar_t* dir : {L"\\update\\previous\\7.7.7", L"\\update\\previous", L"\\update\\staging\\1.2.3",
+                             L"\\update\\staging", L"\\update"}) {
+    RemoveDirectoryW((nevr_root + dir).c_str());
+  }
+}
+
+TEST_F(HostRuntimeVerify, AStagedReleaseIsSwappedInBeforeTheVerdictAndIsWhatLoads) {
+  StageCopy("nevr-runtime.unsigned");  // the release in the root, which the swap moves out unchecked
+  const std::vector<unsigned char> staged = ReadBytes(FixtureFile("nevr-runtime.signed"));
+  const std::wstring update = nevr_root_ + L"\\update";
+  ASSERT_NE(CreateDirectoryW(update.c_str(), nullptr), FALSE);
+  ASSERT_NE(CreateDirectoryW((update + L"\\staging").c_str(), nullptr), FALSE);
+  ASSERT_NE(CreateDirectoryW((update + L"\\staging\\1.2.3").c_str(), nullptr), FALSE);
+  WriteBytes(update + L"\\staging\\1.2.3\\nevr-runtime.dll", staged);
+  const nlohmann::json staged_json = {
+      {"version", "1.2.3"},
+      {"files", nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"size", staged.size()}, {"sha256", Sha256Hex(staged)}}})}};
+  const std::string text = staged_json.dump();
+  WriteBytes(update + L"\\staged.json", std::vector<unsigned char>(text.begin(), text.end()));
+
+  const Outcome outcome = Run();
+  RemoveUpdateFiles(nevr_root_);
+
+  EXPECT_EQ(outcome.result, kOriginalResult) << "the swapped runtime was loaded and its game_main ran";
+  EXPECT_TRUE(g_events.empty());
+  const nlohmann::json swap = Only(outcome, "update_swap");
+  EXPECT_EQ(swap.at("outcome"), "swapped");
+  EXPECT_EQ(swap.at("to"), "1.2.3");
+  EXPECT_EQ(Only(outcome, "versions").at("runtime_sha256"), Sha256Hex(staged)) << "the verdict was on the swapped file";
+  EXPECT_EQ(Only(outcome, "runtime_load").at("verify"), "accepted");
+  EXPECT_LT(IndexOf(outcome.records, "update_swap"), IndexOf(outcome.records, "versions"));
+}
+
+// ADR 0024, section 4.6: a journal the host cannot read is not executed, and the game loads nothing: the root may hold
+// files of two releases.
+TEST_F(HostRuntimeVerify, AJournalTheHostCannotReadStopsTheGameBeforeAnyLoad) {
+  StageCopy("nevr-runtime.signed");
+  const std::wstring update = nevr_root_ + L"\\update";
+  ASSERT_NE(CreateDirectoryW(update.c_str(), nullptr), FALSE);
+  const std::string journal = "{\"kind\": \"swap\", \"phase\": ";
+  WriteBytes(update + L"\\swap.json", std::vector<unsigned char>(journal.begin(), journal.end()));
+
+  const Outcome outcome = Run();
+  RemoveUpdateFiles(nevr_root_);
+
+  EXPECT_FALSE(outcome.runtime_mapped) << "nothing is loaded from a root the journal says may be half moved";
+  EXPECT_EQ(g_before_load_calls.load(), 0);
+  EXPECT_EQ(g_events, (std::vector<std::string>{"notice", "stop"}));
+  EXPECT_EQ(g_stop_code, 78u);
+  const nlohmann::json swap = Only(outcome, "update_swap");
+  EXPECT_EQ(swap.at("outcome"), "blocked");
+  EXPECT_EQ(swap.at("reason"), "bad_journal");
+  const nlohmann::json stop = Only(outcome, "game_stop");
+  EXPECT_EQ(stop.at("reason"), "update_blocked");
+  EXPECT_EQ(stop.at("update_reason"), "bad_journal");
+  EXPECT_EQ(IndexOf(outcome.records, "versions"), -1) << "no verdict was taken";
+  const nlohmann::json line = OneStopLine(outcome);
+  EXPECT_EQ(line.at("reason"), "update_blocked");
+  const std::string detail = line.at("detail");
+  EXPECT_NE(detail.find("bad_journal"), std::string::npos) << detail;
+}
+
 }  // namespace

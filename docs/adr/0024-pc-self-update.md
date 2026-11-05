@@ -10,7 +10,11 @@ audience: all
 Status: proposed. Tracking issue: #1200. Builds on ADR 0012 (the static install folder and the nevr root, #575) and ADR 0023
 (the core install method and its C ABI, #1140). **It amends ADR 0012 in one place:** "A last-known-good copy of
 `nevr-runtime.dll` is out of scope until there is a reason for one" no longer holds; "The root" gains the `update\` folder
-of "Layout". Nothing in this record is built when it is written, and it assumes #855 (the runtime loads from the root; today the host takes it from the game folder); "What is not known" lists what no measurement covers.
+of "Layout". **It amends ADR 0008 in one place:** the host and the runtime that run together agree on the ABI's major, and
+are not always one release ("Relation to other records"). Of the "Order of work", step 1 (the core's `pc stage`, #1209) is
+built, and of step 2 the swap (#2104: section 4, everything but the pending decision); the rest of step 2 (rollback, the
+crash marker, the capability word) is #2105, and steps 3 to 5 are not built. The runtime and the plugins load from the
+root (#855, #856). "What is not known" lists what no measurement covers.
 
 ## Requirement
 
@@ -39,7 +43,7 @@ What exists, read from this tree:
 - A failed runtime stays mapped in production: the host never frees it (`src/runtime/lifecycle/dllmain.cpp`, the comment on
   `DLL_PROCESS_DETACH`). The host's policy (`PinnedPolicy`, `src/runtime/ext/plugin_pins.cpp`) has an empty denylist.
 - The root (`src/core/nevr_root.h`: `kRoot`, `kLogs`, `kCrashes`, ...) is `%LOCALAPPDATA%\nevr\echovr`. ADR 0012 puts
-  `nevr-runtime.dll` at its top and plugins in `plugins\` (plugins still load from the game folder until #856); the host links no core state (`tools/verify_host_no_core_state.py`).
+  `nevr-runtime.dll` at its top and plugins in `plugins\` (#855, #856); the host links no core state (`tools/verify_host_no_core_state.py`).
 - The host's crash capture (`src/runtime/host/crash_capture.cpp`) runs inside the faulting process and writes with raw
   Win32 calls; the same rule holds for any file it touches (AGENTS.md N70 states the same rule for the runtime's own crash path).
 - ADR 0023 defines the core: the manifest chain of `docs/reference/verifying-a-release.md` (steps 1 to 8: signature, schema,
@@ -63,7 +67,8 @@ What exists, read from this tree:
 | `echovr_server.exe`, the scripts, the docs, `install-nevr-runtime.exe` | no | they are not loaded by the game |
 | anything a player or a third party put in `plugins\` | never touched | not in the ownership list ("Ownership") |
 
-The host and runtime are a matched pair behind one versioned ABI (ADR 0008). A release whose runtime needs a newer host
+The host and runtime speak one versioned ABI (ADR 0008), and self-update runs a runtime under a host from an earlier
+release: what runs together is a pair that agrees on the ABI's major. A release whose runtime needs a newer host
 cannot be reached by self-update: the new host must come from the installer. Self-update does not try to detect that
 beforehand; the load does (`abi_rejected`, `load_failed`), and "Start confirmation and rollback" puts the working runtime
 back and remembers the refusal. A player on a build older than the first release that carries this record has no swap in the host and runs the
@@ -210,7 +215,43 @@ flowchart TD
    (swap, rollback, discards), the runtime (`UpdateConfirm`) and the installer. A `state.json` that does not parse (it
    cannot be torn by a writer; this is a hand edit or damage) is replaced by one rebuilt from the running runtime, with
    `owned` reduced to the runtime, and the host says so.
-9. **Left-overs.** The core's stage removes `<version>.partial-*` folders not touched for 10 minutes and a
+9. **As built (#2104).** The vocabulary is stricter than the patterns above: a version or a plugin name never starts or
+   ends with `.` (so `.` and `..` are never a name) and is never a Windows device name (`CON`, `NUL`, `COM1`, ...)
+   before its first dot (`src/runtime/host/update_names.h`). The files name a release's members as the core's
+   `NevrPcStage` result does: `staged.json` is `{"version", "files": [{"path", "size", "sha256"}]}` with `path`
+   `nevr-runtime.dll` or `plugins/<name>.dll`; `swap.json` is `{"kind", "from", "to", "phase", "out": [path], "in":
+   [path]}`; `state.json` keeps `owned` as `[{"path", "sha256"}]`, and the swap rewrites `owned` at `done` to the files it
+   placed. Two names that differ only in case are one file. A start that "stops" (the lock not taken with a journal, a
+   journal that does not parse (`bad_journal`) or cannot be opened (`journal_unreadable`), a link beside a journal
+   (`reparse_point`), an undo that fails) loads nothing and ends the game with exit 78: `game_stop` and the `NEVR.STOP`
+   line carry the reason `update_blocked` and the swap's own reason in `update_reason`. A `staged.json` outside the
+   vocabulary is removed without a discard counted (`update_swap outcome=discarded reason=bad_staged`); a `state.json`
+   rebuilt says `outcome=recovered reason=state_rebuilt`, and records the root runtime as `current` only when its version
+   is a version name. A root runtime without a `NEVR-BUILD` version blocks the swap (`reason=no_from_version`) until
+   #2105 settles it; one whose version is outside the vocabulary blocks it (`reason=bad_from_version`): that version is
+   read from a file nothing has verified yet, so it is never a path and never logged.
+   - **A file that cannot be read is not a damaged file.** A file of `update\` that is there but cannot be opened or
+     read (another program holds it, access is denied) is recorded with its `win32_error`: a journal stops the start
+     (`journal_unreadable`); a `staged.json` stays and nothing is counted (`outcome=deferred reason=staged_unreadable`);
+     a `state.json` is neither rebuilt nor written over, and nothing is swapped without it (`outcome=deferred
+     reason=state_unreadable`), though an interrupted swap is still undone and a `done` cleanup waits for a start that
+     can read it. A JSON file nested deeper than 16 arrays and objects is damaged and never parsed into a tree
+     (`kMaxJsonDepth`).
+   - **Links.** Besides the four folders of item 2, `update\staging\<version>\`, `update\previous\<version>\` and
+     their `plugins\` folders are checked before anything is moved into, made in or deleted from them, and `update\`
+     itself is checked before the lock is taken through it. The record names the `folder`.
+   - **In use.** Only a sharing violation on the write-open of item 4 means another process runs the runtime
+     (`deferred reason=runtime_in_use`); any other refusal blocks the swap with its error
+     (`reason=runtime_not_writable`).
+   - **Discards.** A release already in `quarantine` gets no second entry; a `staged.json` the host cannot remove says
+     so (`staged_removed=false`, `staged_win32_error`).
+   - **Done, again.** The stale `crashed` goes before `pending.json` is written. A start that finishes an earlier
+     start's `done` keeps a `pending.json` that already names the release (and any `crashed` written since), and
+     removes `staged.json` only when it names that release: a newer one is the next swap's.
+   - **Temporary files.** A start removes the host's own `state.json.tmp-<pid>`, `pending.json.tmp-<pid>` and
+     `swap.json.tmp-<pid>`, which a kill between a write and its rename leaves (`outcome=recovered
+     reason=temporaries_removed`).
+10. **Left-overs.** The core's stage removes `<version>.partial-*` folders not touched for 10 minutes and a
    `staging\<version>` that has no `staged.json` pointing at it, before it starts.
 
 ### 5. Plugins
@@ -219,8 +260,7 @@ A staged plugin is a member under `plugins/` of the release's zip. The host swap
 accepts it. Plugins are not signed by the release pipeline today, so no plugin is swapped today, and the zip lists none. The
 mechanism (ownership, journal, rollback, the same swap as the runtime, in the same set so a release is never half applied)
 is built and tested on fixtures that carry a test signature through the test policy; it has no real input until a plugin
-ships signed. Plugins load from the game folder until #856 moves them to the root; the plugin half of the swap follows that
-move. A plugin a release stops listing moves to `previous\` with the rest. Unsigned third-party plugins keep loading by the
+ships signed. Plugins load from the root's `plugins\` (#856), where the swap puts them. A plugin a release stops listing moves to `previous\` with the rest. Unsigned third-party plugins keep loading by the
 rules of ADR 0010 and are not part of any of this.
 
 ### 6. Start confirmation and rollback
@@ -267,7 +307,7 @@ a rollback can restore a release denylisted after the player ran it (the accepte
 ### 7. The installer's part
 
 `install-nevr-runtime pc install` (and so `install.ps1`) writes `update\state.json` with the channel and the installed release, under
-the lock, and removes `staged.json`, `staging\`, `previous\`, `failed\`, `pending.json` and `crashed`: after an install the
+the lock, and removes `swap.json`, `staged.json`, `staging\`, `previous\`, `failed\`, `pending.json` and `crashed`: after an install the
 installer's release is the baseline and nothing older competes with it. The quarantine list stays. `uninstall.ps1` does not
 touch `update\`. The channel precedence is `update.channel` in `config.yaml`, then `state.json`, then the core's default;
 every `update check` line carries `channel_source`, so a player whose config disagrees with the installer shows it in the log.
@@ -389,9 +429,11 @@ Falsifiers: any member extracted that `contents` does not list; any download whe
 
 ## What is not known
 
-- That a loaded `nevr-runtime.dll` refuses a write-open on Windows and under Wine alike. The swap's "in use" test depends
-  on it. If Wine allows the open, a second process can swap under a running one; the lock and the journal still keep the
-  files whole, but the running process and the plugins it loads later could be of two releases.
+- That a loaded `nevr-runtime.dll` refuses a write-open on Windows. Under Wine (11.20) it does: `test_host_update_swap`
+  maps the root's runtime in its own process, the write-open is refused with a sharing violation (32) and the swap is
+  deferred (`F8_AMappedRuntimeDefersTheSwap`);
+  a second process mapping it is not measured. Under the same Wine a directory symbolic link reads as a reparse point, so
+  the junction check works there (`F22_AReparsePointInTheUpdateFoldersBlocksTheSwap`). Native Windows is not measured.
 - That `MoveFileExW` renames of a runtime that another process has open for read are allowed, and what a rename of a mapped
   image does under Wine.
 - That 10 s of per-frame work is the right mark. A runtime that crashes after 10 s counts as started (F21); the log of such a
@@ -429,7 +471,10 @@ Each step is its own pull request with its own issue under #1200, mergeable and 
 - ADR 0023 is built on: the core and its log are the update's engine, section 6's C ABI gains `NevrPcStage`, and section 7's
   in-app updater gets its PC half here.
 - ADR 0008 is extended: the host context gains a capabilities field (the versioning rules are in
-  `src/core/runtime_abi.h`).
+  `src/core/runtime_abi.h`). It is **amended** in one consequence: "a matched pair; a package or a test deployment that
+  carries one without the other is a defect" now holds for what is released, installed and deployed, while what runs
+  together is a host and a runtime that agree on `abi_major`, because self-update replaces the runtime under the
+  installed host.
 - ADR 0010 is extended: the verifier has a third use, the host's check of a staged file before the swap.
 - ADR 0013 and the Quest records are unaffected.
 

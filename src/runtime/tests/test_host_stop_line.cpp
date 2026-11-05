@@ -271,6 +271,7 @@ TEST(StopLineRuntime, EveryOutcomeThatStopsTheGameHasItsOwnReasonAndTheSameExitC
       {RuntimeLoadOutcome::kAbiRejected, "abi_rejected"},
       {RuntimeLoadOutcome::kInitFailed, "init_failed"},
       {RuntimeLoadOutcome::kRuntimeRefused, "runtime_refused"},
+      {RuntimeLoadOutcome::kUpdateBlocked, "update_blocked"},
   };
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(nullptr, nullptr);
@@ -291,6 +292,17 @@ TEST(StopLineRuntime, AnAbsentRuntimeSaysItIsMissingAndWhereTheHostLooked) {
   diagnostics.PrepareForTest(nullptr, nullptr);
   const RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeAbsent, L"C:\\nevr\\echovr\\nevr-runtime.dll");
   EXPECT_EQ(DetailOf(diagnostics, result), "nevr-runtime.dll is missing; path=C:\\nevr\\echovr\\nevr-runtime.dll");
+}
+
+// ADR 0024, section 4: a start that stops because a self-update left the root unfinished says why and where.
+TEST(StopLineRuntime, AnUnfinishedUpdateSaysWhyAndNamesTheRoot) {
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(nullptr, nullptr);
+  RuntimeLoadResult result = Result(RuntimeLoadOutcome::kUpdateBlocked, L"C:\\nevr\\echovr\\nevr-runtime.dll");
+  result.update_reason = "bad_journal";
+  EXPECT_EQ(DetailOf(diagnostics, result),
+            "a self-update left the nEVR root unfinished and this start could not finish it (bad_journal), so nothing "
+            "was loaded; path=C:\\nevr\\echovr\\nevr-runtime.dll");
 }
 
 TEST(StopLineRuntime, ARefusedRuntimeCarriesTheVerifiersOwnWordsAndNoVersion) {

@@ -36,7 +36,8 @@ When the runtime does not load, the game stops. There is no run without nEVR:
 - a dialog says what is wrong (`StopNoticeTextFor` in `src/runtime/host/stop_notice.h`: missing, unsigned, changed, unreadable), unless the run is
   `-server`, `-headless` or the loader lock is held, which write the record only (`notice` in the `game_stop` record);
 - the stop reasons are the `outcome` values of `RuntimeLoadResult::OutcomeName`: `no_path`, `runtime_absent`, `dependency_load_failed`,
-  `load_failed`, `missing_entry`, `null_descriptor`, `abi_rejected`, `init_failed`, `runtime_refused`. A runtime that was never
+  `load_failed`, `missing_entry`, `null_descriptor`, `abi_rejected`, `init_failed`, `runtime_refused`, `update_blocked` (a self-update that left the
+  root unfinished, ADR 0024). A runtime that was never
   installed in the root is `runtime_absent`; a file the verifier does not accept is `runtime_refused`.
 
 ## What a launcher can read
