@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
@@ -25,6 +26,9 @@ var fakes = testkit.Fakes{"go": func(c *testkit.Call) int {
 		c.Stderr.Write(out)
 	}
 	if raw, err := os.ReadFile(filepath.Join(c.FakeDir, "exit")); err == nil {
+		if strings.TrimSpace(string(raw)) == "kill" {
+			syscall.Kill(os.Getpid(), syscall.SIGKILL)
+		}
 		n, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
 		return n
 	}
@@ -42,6 +46,10 @@ type rig struct {
 }
 
 func newRig(t *testing.T, stdout string, exit int) *rig {
+	return newRigExit(t, stdout, strconv.Itoa(exit))
+}
+
+func newRigExit(t *testing.T, stdout, exit string) *rig {
 	t.Helper()
 	f := testkit.Fake(t, "go")
 	write := func(name, content string) {
@@ -50,7 +58,7 @@ func newRig(t *testing.T, stdout string, exit int) *rig {
 		}
 	}
 	write("stdout", stdout)
-	write("exit", strconv.Itoa(exit))
+	write("exit", exit)
 	logDir := filepath.Join(t.TempDir(), "runs")
 	env := testkit.WithPath(testkit.Env(t, "NEVR_TEST_LOG_DIR="+logDir), f.Dir())
 	return &rig{t: t, fake: f, logDir: logDir, env: env}
@@ -352,5 +360,32 @@ func TestACancelledContextStopsGoAndIsReported(t *testing.T) {
 	code := run(ctx, nil, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
 	if code == 0 {
 		t.Errorf("a run whose context was cancelled before go started exited 0 (stderr %q)", errb.String())
+	}
+}
+
+func TestAGoKilledBySignalIsAFailureWithAnExitCode(t *testing.T) {
+	t.Parallel()
+	r := newRigExit(t, passingStream(), "kill")
+	code, stdout, _ := r.run()
+	if code != 1 {
+		t.Errorf("exit %d, want 1 (a negative exit status is not a usable code)", code)
+	}
+	if !strings.Contains(stdout, "go FAIL") {
+		t.Errorf("stdout does not report the failure: %q", stdout)
+	}
+}
+
+func TestWithNoLogDirOrWorkRootTheDefaultIsUnderHome(t *testing.T) {
+	t.Parallel()
+	f := testkit.Fake(t, "go")
+	env := testkit.WithPath(testkit.Env(t, "NEVR_WORK_ROOT="), f.Dir())
+	home := testkit.Getenv(env)("HOME")
+	var out, errb bytes.Buffer
+	if code := run(t.Context(), nil, testkit.Getenv(env), strings.NewReader(""), &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	files, _ := filepath.Glob(filepath.Join(home, "src", "nevr-runtime-work", "test-runs", "tools-tests", "*-go.jsonl"))
+	if len(files) != 1 {
+		t.Errorf("streams under $HOME/src/nevr-runtime-work/test-runs/tools-tests = %v", files)
 	}
 }

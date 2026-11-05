@@ -241,15 +241,17 @@ func good1(d time.Duration) { time.Sleep(d) }
 type S struct{ Interval time.Duration }
 func (s S) good2() { time.Sleep(s.Interval) }
 func good3(n int) { time.Sleep(time.Duration(n) * time.Millisecond) }
+func bad4()  { time.Sleep((time.Second)) }
+func bad5()  { time.Sleep(-time.Second) }
 `
 	got, err := SleepViolations("tool.go", []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("violations = %q, want the three constant sleeps (lines 4, 5, 6)", got)
+	if len(got) != 5 {
+		t.Fatalf("violations = %q, want the five constant sleeps (lines 4, 5, 6, 11, 12)", got)
 	}
-	for i, line := range []string{":4", ":5", ":6"} {
+	for i, line := range []string{":4", ":5", ":6", ":11", ":12"} {
 		if !strings.Contains(got[i], "tool.go"+line) {
 			t.Errorf("violation %d = %q, want line %s", i, got[i], line)
 		}

@@ -37,6 +37,14 @@ var testFakes = Fakes{
 	"basename": func(c *Call) int {
 		return c.Exec("basename", "some/dir/real-basename-ran")
 	},
+	// Replaces itself with a shell that prints the FOO it was started with.
+	"tk-envexec": func(c *Call) int {
+		return c.Exec("sh", "-c", "echo exec-saw-$FOO")
+	},
+	// Replaces itself with itself by path: Exec refuses.
+	"tk-selfexec": func(c *Call) int {
+		return c.Exec(filepath.Join(c.FakeDir, "tk-selfexec"))
+	},
 	// Replaces itself with a program that does not exist.
 	"tk-noexec": func(c *Call) int {
 		return c.Exec("tk-no-such-program-anywhere")
@@ -287,5 +295,28 @@ func TestAFakeKnowsTheDirectoryItWasFoundInSoATestCanLeaveItAFileBeside(t *testi
 		if code != 0 || out != f.Dir()+"\nscenario one\n" {
 			t.Errorf("%s: exit %d, stdout %q, stderr %q", how, code, out, errOut)
 		}
+	}
+}
+
+func TestExecHandsTheRealProgramTheFakesEnvironment(t *testing.T) {
+	t.Parallel()
+	f := Fake(t, "tk-envexec")
+	out, _, code := sh(t, WithPath(Env(t, "FOO=carried"), f.Dir()), "tk-envexec", "")
+	if code != 0 || out != "exec-saw-carried\n" {
+		t.Errorf("exit %d, stdout %q, want the environment to reach the replacement", code, out)
+	}
+}
+
+// Without this a fake that finds itself would start itself for ever.
+func TestExecRefusesToStartTheTestBinaryAgain(t *testing.T) {
+	t.Parallel()
+	f := Fake(t, "tk-selfexec")
+	_, errOut, code := sh(t, WithPath(Env(t), f.Dir()), "tk-selfexec", "")
+	if code != 127 {
+		t.Errorf("exit %d, want 127", code)
+	}
+	mustContain(t, "stderr", errOut, "test binary")
+	if n := len(f.Calls(t)); n != 1 {
+		t.Errorf("the fake ran %d times, want once", n)
 	}
 }

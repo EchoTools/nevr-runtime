@@ -36,8 +36,8 @@ func TestWaitForReturnsAsSoonAsTheConditionTurnsTrue(t *testing.T) {
 		start := time.Now()
 		WaitFor(ft, "the flag", flag.Load)
 		got := time.Since(start)
-		if got < 3*time.Second || got > 3*time.Second+pollInterval {
-			t.Errorf("returned after %v, want within one poll interval (%v) of 3s", got, pollInterval)
+		if got < 3*time.Second || got > 3*time.Second+50*time.Millisecond { // a short poll interval, written out so a change to it is noticed
+			t.Errorf("returned after %v, want within 50ms of 3s", got)
 		}
 	})
 }
@@ -48,9 +48,9 @@ func TestWaitForFailsAtTheDefaultBudgetAndNamesWhatItWaitedFor(t *testing.T) {
 		ft := newFakeT(context.Background(), t.TempDir())
 		start := time.Now()
 		msg := fatalOf(func() { WaitFor(ft, "the server to listen", func() bool { return false }) })
-		mustContain(t, "message", msg, "the server to listen", DefaultBudget.String())
-		if got := time.Since(start); got != DefaultBudget {
-			t.Errorf("gave up after %v, want exactly the budget %v", got, DefaultBudget)
+		mustContain(t, "message", msg, "the server to listen", "30s")
+		if got := time.Since(start); got != 30*time.Second || DefaultBudget != 30*time.Second {
+			t.Errorf("gave up after %v (DefaultBudget %v), want exactly 30s", got, DefaultBudget)
 		}
 	})
 }
@@ -92,21 +92,32 @@ func TestWithinSetsTheBudgetAndTheEarlierDeadlineWins(t *testing.T) {
 		if got := time.Since(start); got != 7*time.Second {
 			t.Errorf("Within(7s) gave up after %v", got)
 		}
+		// A budget longer than the default is honoured: Within is how a slow wait asks for it.
+		ft3 := newFakeT(context.Background(), t.TempDir())
+		start = time.Now()
+		msg = fatalOf(func() { WaitFor(Within(ft3, 2*time.Minute), "z", func() bool { return false }) })
+		mustContain(t, "message", msg, "z", "2m0s")
+		if got := time.Since(start); got != 2*time.Minute {
+			t.Errorf("Within(2m) gave up after %v", got)
+		}
 		ft.finish()
 		ft2.finish()
+		ft3.finish()
 	})
 }
 
-func TestWithinReleasesItsContextAtCleanup(t *testing.T) {
+// A condition that turns true at the very instant the budget ends is true: WaitFor looks once more before it fails. The
+// poll tick and the deadline are both due then, and select picks either, so many rounds make the order irrelevant.
+func TestWaitForTakesAConditionThatTurnsTrueAtTheDeadline(t *testing.T) {
 	t.Parallel()
-	ft := newFakeT(t.Context(), t.TempDir())
-	w := Within(ft, time.Hour)
-	if w.Context().Err() != nil {
-		t.Fatal("the context is done before cleanup")
-	}
-	ft.finish()
-	if w.Context().Err() == nil {
-		t.Error("the context is still live after cleanup")
+	for range 40 {
+		synctest.Test(t, func(t *testing.T) {
+			w := Within(newFakeT(context.Background(), t.TempDir()), time.Second)
+			ctx := w.Context()
+			if msg := fatalOf(func() { WaitFor(w, "at the deadline", func() bool { return ctx.Err() != nil }) }); msg != "" {
+				t.Errorf("failed although the condition held at the deadline: %s", msg)
+			}
+		})
 	}
 }
 

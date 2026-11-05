@@ -31,7 +31,7 @@ type Call struct {
 	Stderr  io.Writer
 
 	// FakeDir is the directory the fake was found in: the one Fake made, which a test may leave files in for the fake
-	// to read (what it should print, what code to exit with). Exec does not search it.
+	// to read (what it should print, what code to exit with).
 	FakeDir string
 }
 
@@ -134,11 +134,12 @@ func (f *FakeCommand) Calls(t T) []Record {
 }
 
 // Exec replaces the fake's process with the real program of that name: the first executable file called program on the
-// fake's PATH outside the directory the fake was found in (a program with a slash in its name is used as it is). The
+// fake's PATH that is not the test binary itself, under this or another fake's link (a program with a slash in its name
+// is used as it is, and must not be a fake). The
 // arguments are args, and the environment is the fake's own. It returns only when it could not, with the exit code 127
 // and a line on standard error.
 func (c *Call) Exec(program string, args ...string) int {
-	path, err := lookPath(program, c.Environ, c.FakeDir)
+	path, err := lookPath(program, c.Environ)
 	if err == nil {
 		err = syscall.Exec(path, append([]string{program}, args...), c.Environ)
 	}
@@ -146,11 +147,27 @@ func (c *Call) Exec(program string, args ...string) int {
 	return 127
 }
 
-func lookPath(program string, environ []string, skipDir string) (string, error) {
+// lookPath finds program on the PATH of environ, skipping every file that is the running test binary: a fake that
+// replaces itself with "the real one" must never find a fake, itself included, or it would start itself without end.
+func lookPath(program string, environ []string) (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	selfInfo, err := os.Stat(self)
+	if err != nil {
+		return "", err
+	}
+	isSelf := func(path string) bool {
+		fi, err := os.Stat(path)
+		return err == nil && os.SameFile(fi, selfInfo)
+	}
 	if strings.ContainsRune(program, '/') {
+		if isSelf(program) {
+			return "", fmt.Errorf("%s is the test binary", program)
+		}
 		return program, nil
 	}
-	skip, _ := filepath.Abs(skipDir)
 	var path string
 	for _, kv := range environ {
 		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
@@ -161,15 +178,12 @@ func lookPath(program string, environ []string, skipDir string) (string, error) 
 		if dir == "" {
 			continue
 		}
-		if abs, err := filepath.Abs(dir); err == nil && abs == skip {
-			continue
-		}
 		candidate := filepath.Join(dir, program)
-		if fi, err := os.Stat(candidate); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
+		if fi, err := os.Stat(candidate); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 && !isSelf(candidate) {
 			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("no executable %q on PATH outside %s", program, skipDir)
+	return "", fmt.Errorf("no executable %q on PATH other than the test binary", program)
 }
 
 const sidecarSuffix = ".fake.json"
