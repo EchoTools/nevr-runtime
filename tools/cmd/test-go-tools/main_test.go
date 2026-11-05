@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -20,6 +21,13 @@ import (
 // The fake `go`: prints the file "stdout" beside it to standard output and "stderr" to standard error, and exits with
 // the number in "exit" (0 when there is none). A test writes those files before it runs the tool.
 func scripted(c *testkit.Call) int {
+	if _, err := os.Stat(filepath.Join(c.FakeDir, "wait-sigint")); err == nil {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGINT)
+		os.WriteFile(filepath.Join(c.FakeDir, "ready"), nil, 0o644)
+		<-ch
+		return 130 // what the Python runner does after an interrupt
+	}
 	if _, err := os.Stat(filepath.Join(c.FakeDir, "echo-stdin")); err == nil {
 		io.Copy(c.Stdout, c.Stdin)
 	}
@@ -719,4 +727,48 @@ func TestASkipReasonIsNeitherGosRunLineNorItsSkipLine(t *testing.T) {
 	stream := out("    x_test.go:9: the real reason\n") + out("=== NAME  TestS\n") + out("--- SKIP: TestS (0.00s)\n") + out("\n") + ev("skip", pkg, "TestS") + ev("pass", pkg, "")
 	_, stdout, _ := newRig(t, stream, 0).run()
 	mustHave(t, stdout, "go SKIP "+pkg+" TestS: x_test.go:9: the real reason")
+}
+
+// Cancelling the run interrupts the Python runner with SIGINT, which it turns into its own clean end (a kill would
+// leave its record unfinished).
+func TestCancellingTheRunInterruptsThePythonHalfWithSIGINT(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.script(r.py, "wait-sigint", "")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan int, 1)
+	var out, errb bytes.Buffer
+	go func() {
+		done <- run(ctx, []string{"--", "python3"}, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
+	}()
+	testkit.WaitFor(t, "the Python fake to be waiting for SIGINT", func() bool {
+		_, err := os.Stat(filepath.Join(r.py.Dir(), "ready"))
+		return err == nil
+	})
+	cancel()
+	select {
+	case code := <-done:
+		if code != 130 || len(r.fake.Calls(t)) != 0 || !strings.Contains(out.String(), "python half exited 130 (interrupted)") {
+			t.Errorf("exit %d (want 130: SIGINT, not a kill's 137), go calls %d, stdout %q", code, len(r.fake.Calls(t)), out.String())
+		}
+	case <-t.Context().Done():
+		t.Fatal("the run did not end after the cancel")
+	}
+}
+
+// The test's own output is kept to its last lines, so a test that prints a lot costs no memory.
+func TestOnlyTheLastLinesOfATestsOutputAreKeptForItsSkipReason(t *testing.T) {
+	t.Parallel()
+	out := func(text string) string {
+		b, _ := json.Marshal(map[string]string{"Action": "output", "Package": pkg, "Test": "TestLoud", "Output": text})
+		return string(b) + "\n"
+	}
+	stream := out("    old_test.go:1: an old reason\n")
+	for range 8 {
+		stream += out("--- noise\n")
+	}
+	stream += ev("skip", pkg, "TestLoud") + ev("pass", pkg, "")
+	_, stdout, _ := newRig(t, stream, 0).run()
+	mustHave(t, stdout, "go SKIP "+pkg+" TestLoud: no reason given")
 }

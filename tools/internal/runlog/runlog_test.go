@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -331,6 +332,9 @@ func TestEveryRecordCarriesTsInUTCEventToolPidAndRun(t *testing.T) {
 	run, _ := lines[0]["run"].(string)
 	if !regexp.MustCompile(`^\d{8}T\d{6}\.\d{6}Z-\d+-[0-9a-f]{16}$`).MatchString(run) {
 		t.Errorf("run = %q, want <UTC stamp>-<pid>-<16 hex>, the form of the test runner's stem", run)
+	}
+	if !strings.Contains(run, "-"+strconv.Itoa(os.Getpid())+"-") {
+		t.Errorf("run = %q does not carry this process's pid %d", run, os.Getpid())
 	}
 	if lines[1]["run"] != run || l.RunID() != run {
 		t.Errorf("run differs between records or from RunID(): %v, %v, %q", lines[1]["run"], run, l.RunID())

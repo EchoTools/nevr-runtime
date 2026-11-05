@@ -424,6 +424,7 @@ func TestServeForeverScanReadsEachWayACallCanBeWritten(t *testing.T) {
 		"s.serve_forever()\n":                                             "no poll_interval",
 		"s.serve_forever(0.5)\n":                                          "no poll_interval",
 		"s.serve_forever(poll_interval=0.5)\n":                            "over 0.05",
+		"s.serve_forever(my_poll_interval=0.01)\n":                        "no poll_interval",
 		"s.serve_forever(poll_interval=delay)\n":                          "not a literal number",
 		"run(s.serve_forever)\n":                                          "does not read",
 		"threading.Thread(target=s.serve_forever, kwargs=opts).start()\n": "no poll_interval",
