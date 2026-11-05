@@ -23,10 +23,22 @@ CONFIG_SH = ROOT / "tools" / "ccache_config.sh"
 JUSTFILE = (ROOT / "justfile").read_text()
 
 
+HERMETIC_GIT_ENV = {
+    "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_COUNT": "5",
+    "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "nevr-test",
+    "GIT_CONFIG_KEY_1": "user.email", "GIT_CONFIG_VALUE_1": "test@example.invalid",
+    "GIT_CONFIG_KEY_2": "commit.gpgsign", "GIT_CONFIG_VALUE_2": "false",
+    "GIT_CONFIG_KEY_3": "tag.gpgsign", "GIT_CONFIG_VALUE_3": "false",
+    "GIT_CONFIG_KEY_4": "init.defaultBranch", "GIT_CONFIG_VALUE_4": "main"}
+
+
 def run(args, cwd, env_extra=None, path=None):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "NEVR_"))}
     env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
                 "GIT_COMMITTER_EMAIL": "t@example.com"})
+    # Dropping every GIT_ variable also drops the ones the runner sets, so this test sets its own: git reads no user or
+    # system configuration (no signing, whatever the person running it has) and starts a repository on `main`.
+    env.update(HERMETIC_GIT_ENV)
     env.update(env_extra or {})
     if path is not None:
         env["PATH"] = path
@@ -71,6 +83,15 @@ class World:
 
 
 class FixedCheckoutTest(unittest.TestCase):
+    def test_a_commit_is_never_signed_whatever_the_callers_git_config_says(self):
+        home = Path(tempfile.mkdtemp(prefix="build-checkout-home-"))
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        (home / ".gitconfig").write_text("[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /bin/false\n")
+        world = World(self)
+        done = run(["git", "commit", "-q", "--allow-empty", "-m", "unsigned"], world.main,
+                   env_extra={"HOME": str(home), "XDG_CONFIG_HOME": str(home / "xdg")})
+        self.assertEqual(done.returncode, 0, done.stderr)
+
     def test_the_path_is_the_environment_override_or_under_the_work_root(self):
         world = World(self)
         self.assertEqual(world.tool("path").stdout.strip(), str(world.fixed))

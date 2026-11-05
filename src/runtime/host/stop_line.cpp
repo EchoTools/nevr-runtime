@@ -146,6 +146,11 @@ void DescribeOutcome(const RuntimeLoadResult& result, Text& text) noexcept {
       text.AddVersion(result.expected_major, result.expected_minor).Add(", runtime abi ");
       text.AddVersion(result.actual_major, result.actual_minor);
       break;
+    case RuntimeLoadOutcome::kUpdateBlocked:
+      text.Add("a self-update left the nEVR root unfinished and this start could not finish it (")
+          .Add(result.update_reason != nullptr ? result.update_reason : "unknown")
+          .Add("), so nothing was loaded");
+      break;
     case RuntimeLoadOutcome::kInitFailed:
       if (result.init_threw) {
         text.Add("initialize threw an exception");

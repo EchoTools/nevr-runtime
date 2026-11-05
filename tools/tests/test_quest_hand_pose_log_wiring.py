@@ -25,6 +25,10 @@ def strip_comments(text: str) -> str:
     return re.sub(r"//[^\n]*", "", text)
 
 
+# A lock of any kind in a writer's body: a mutex, a lock guard, a lock class, a lock call.
+LOCK_WORDS = re.compile(r"[Ll]ock|[Mm]utex")
+
+
 class TheHandPoseLogIsWired(unittest.TestCase):
     def test_the_two_slots_are_the_games_own_vrapi_imports(self):
         text = read("src/quest/sentinel/pinned_targets.h")
@@ -82,7 +86,7 @@ class TheHandPoseLogIsWired(unittest.TestCase):
             self.assertNotIn(forbidden, header)
         write = extract_braced_function(header, "inline int WritePending() noexcept {")
         self.assertIn("config.Set(kConfigKey, flip != 0)", write)
-        self.assertIn("const ConfigWriteLock lock;", write)
+        self.assertNotRegex(write, LOCK_WORDS, "WritePending takes no lock of its own: NevrConfig::Set locks the file")
         self.assertEqual(len(re.findall(r"\bWritePending\(\)", header)), 2)  # its definition and its one call, in Poll
         self.assertIn("lines += WritePending();", extract_braced_function(header, "inline int Poll() noexcept {"))
         # The settings delivery and the tracking handler (the game's call path) only queue a save and never reach the writer.
@@ -91,8 +95,14 @@ class TheHandPoseLogIsWired(unittest.TestCase):
         self.assertNotIn("WritePending", hook)
         self.assertNotIn("WritePending", extract_braced_function(poller, "int TrackingHandler("))
         self.assertEqual(poller.count("hand_flip::Poll()"), 1)
-        # Both pollers edit the same file one at a time.
-        self.assertIn("const ConfigWriteLock lock;", extract_braced_function(hook, "int SaveChoice() noexcept {"))
+        # Both pollers edit the same file one at a time because NevrConfig::Set holds one lock per file across its read, splice and
+        # rename (src/core/nevr_config.cpp, FileLocks); neither writer adds a lock of its own around the call.
+        save = extract_braced_function(hook, "int SaveChoice() noexcept {")
+        self.assertIn('config.Set("graphics.texture_quality"', save)
+        self.assertNotRegex(save, LOCK_WORDS, "SaveChoice takes no lock of its own: NevrConfig::Set locks the file")
+        self.assertFalse((ROOT / "src/quest/sentinel/config_write_lock.h").exists())
+        for path in sorted((ROOT / "src/quest").rglob("*.[ch]*")):
+            self.assertNotIn("ConfigWriteLock", path.read_text(), str(path))
         for path in sorted((ROOT / "src/quest").rglob("*.[ch]*")):
             if path.suffix in (".cpp", ".h") and "/tests/" not in str(path):
                 self.assertNotIn("nevr_hand_flip", strip_comments(path.read_text()), str(path))
