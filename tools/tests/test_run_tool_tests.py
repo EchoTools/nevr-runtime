@@ -3,6 +3,7 @@
 These tests run the real script, as `just test-tools` does, against small suites written for each case.
 """
 
+import ast
 import datetime
 import getpass
 import importlib.metadata
@@ -1473,6 +1474,86 @@ NEEDS_PYTEST = (
 for _name in NEEDS_PYTEST:
     setattr(RunToolTestsRecord, _name, unittest.skipIf(importlib.util.find_spec("pytest") is None,
                                                        "pytest is not installed")(getattr(RunToolTestsRecord, _name)))
+
+
+class SuiteHygiene(unittest.TestCase):
+    """Properties of the test files themselves, read from their text."""
+
+    # socketserver's serve_forever notices a stop request once per poll_interval (0.5 s by default), so
+    # every shutdown() of a test server waits out up to that long. A test server polls at 0.05 s or less.
+    MAX_POLL_INTERVAL = 0.05
+    maxDiff = None
+
+    @staticmethod
+    def serve_forever_problems(source, name):
+        """One line per serve_forever in the source that is not given a poll_interval of MAX_POLL_INTERVAL or less."""
+        tree = ast.parse(source, filename=name)
+        problems = []
+        accounted = set()
+
+        def interval_of(keywords, what):
+            for keyword in keywords:
+                if keyword.arg == "poll_interval":
+                    value = keyword.value
+                    if isinstance(value, ast.Constant) and isinstance(value.value, (int, float)):
+                        if value.value <= SuiteHygiene.MAX_POLL_INTERVAL:
+                            return None
+                        return "%s: poll_interval=%r is over %s" % (what, value.value, SuiteHygiene.MAX_POLL_INTERVAL)
+                    return "%s: poll_interval is not a literal number" % what
+            return "%s: no poll_interval (the default is 0.5 s)" % what
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "serve_forever":
+                accounted.add(id(func))
+                found = interval_of(node.keywords, "serve_forever call")
+                if found is not None:
+                    problems.append("%s:%d: %s" % (name, node.lineno, found))
+                continue
+            for keyword in node.keywords:
+                value = keyword.value
+                if keyword.arg == "target" and isinstance(value, ast.Attribute) and value.attr == "serve_forever":
+                    accounted.add(id(value))
+                    kwargs = [k.value for k in node.keywords if k.arg == "kwargs"]
+                    if len(kwargs) == 1 and isinstance(kwargs[0], ast.Dict):
+                        pairs = [ast.keyword(arg=key.value, value=item) for key, item in zip(kwargs[0].keys, kwargs[0].values)
+                                 if isinstance(key, ast.Constant) and isinstance(key.value, str)]
+                    else:
+                        pairs = []
+                    found = interval_of(pairs, "Thread target=serve_forever")
+                    if found is not None:
+                        problems.append("%s:%d: %s" % (name, value.lineno, found))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr == "serve_forever" and id(node) not in accounted:
+                problems.append("%s:%d: serve_forever used in a way this scan does not read; start it as "
+                                "Thread(target=x.serve_forever, kwargs={\"poll_interval\": 0.01}) or x.serve_forever(poll_interval=0.01)"
+                                % (name, node.lineno))
+        return sorted(problems)
+
+    def test_every_serve_forever_in_the_test_files_sets_a_short_poll_interval(self):
+        problems = []
+        scanned = 0
+        for path in sorted((REPO / "tools" / "tests").glob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            if "serve_forever" not in source:
+                continue
+            scanned += 1
+            problems += self.serve_forever_problems(source, path.relative_to(REPO).as_posix())
+        self.assertGreater(scanned, 0, "no test file mentions serve_forever: the scan reads nothing")
+        self.assertEqual([], problems, "a serve_forever with the default poll_interval makes shutdown() wait up to "
+                         "0.5 s; pass poll_interval=0.01 at each call")
+
+    def test_the_scan_reads_each_way_a_call_can_be_written(self):
+        check = self.serve_forever_problems
+        self.assertEqual([], check("import threading\nthreading.Thread(target=s.serve_forever, kwargs={\"poll_interval\": 0.01}).start()\n", "a.py"))
+        self.assertEqual([], check("s.serve_forever(poll_interval=0.05)\n", "a.py"))
+        self.assertEqual(1, len(check("import threading\nthreading.Thread(target=s.serve_forever).start()\n", "a.py")))
+        self.assertEqual(1, len(check("import threading\nthreading.Thread(target=s.serve_forever, kwargs={\"poll_interval\": 0.5}).start()\n", "a.py")))
+        self.assertEqual(1, len(check("s.serve_forever()\n", "a.py")))
+        self.assertEqual(1, len(check("s.serve_forever(0.5)\n", "a.py")))
+        self.assertEqual(1, len(check("run(s.serve_forever)\n", "a.py")))
 
 
 if __name__ == "__main__":

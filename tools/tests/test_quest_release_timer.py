@@ -1297,7 +1297,7 @@ class PublicHost:
                     self.reply(200, "text/plain", lines[host.sidecar].encode())
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         case.addCleanup(self.server.server_close)
         case.addCleanup(self.server.shutdown)
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -1345,7 +1345,7 @@ class RawHost:
         socketserver.ThreadingTCPServer.allow_reuse_address = True
         self.server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         case.addCleanup(self.server.server_close)
         case.addCleanup(self.server.shutdown)
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -2867,7 +2867,7 @@ class VariantRealProcess(TimerCase):
         (self.served / "nevr-runtime" / TAG).mkdir(parents=True)
         handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory=str(self.served), **k)  # noqa: E731
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         self.calls = self.root / "calls.jsonl"
