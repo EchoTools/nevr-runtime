@@ -51,7 +51,7 @@ into the build tree: it `.include`s the donor and adds `.globl S` and `.hidden S
 so nothing outside the library can override it. The generator stops, naming S, when S is not a label defined in the file or is
 already declared global or weak in it. After each such library links, `check_donor_got.cmake` requires, for every S, a GOT slot
 (an `R_AARCH64_RELATIVE` relocation inside `.got`) whose content is S's own address in the library's symbol table; it reads
-addresses, not instructions. `tools/tests/test_combat_libs_cmake.py` builds a donor of two statics both ways with the pinned NDK: assembled
+addresses, not instructions. A library that this check or the static-init check rejects is deleted, so a later build cannot find it in the build tree. The operand reader matches the specifier in any case and refuses a form it does not read, and refuses a `.globl`, `.global` or `.weak` line that names more than one symbol. `tools/tests/test_combat_libs_cmake.py` builds a donor of two statics both ways with the pinned NDK: assembled
 alone the two loads share one slot, wrapped each has its own.
 
 ## Evidence for each pinned value
