@@ -134,6 +134,8 @@ set(PATCHES_SOURCES
     # #1420: the netgun bullet ids of the four unfinished weapons (pure logic in netgun_bullet_ids.h).
     "patch/netgun_bullet_ids.cpp"
     "patch/splash_skip.cpp"
+    # #2121: the equipment change the game drops is applied again (pure logic in equipment_refire_rules.h).
+    "patch/equipment_refire.cpp"
     # #896, #906: the UI text writer (pure logic in ui_text.h).
     "patch/ui_text.cpp"
     "patch/ui_texture_mips.cpp"
@@ -1666,6 +1668,13 @@ if(BUILD_TESTING)
     target_include_directories(test_menu_version_label PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_menu_version_label PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_menu_version_label DISCOVERY_MODE PRE_TEST)
+
+    # test_equipment_refire.cpp (#2121, header-only patch/equipment_refire_rules.h; the Quest host test compiles the same header).
+    add_executable(test_equipment_refire tests/test_equipment_refire.cpp)
+    set_source_files_properties(tests/test_equipment_refire.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_equipment_refire PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_equipment_refire PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_equipment_refire DISCOVERY_MODE PRE_TEST)
 
     # test_splash_skip.cpp (#962, header-only patch/splash_skip_rules.h).
     add_executable(test_splash_skip tests/test_splash_skip.cpp)
