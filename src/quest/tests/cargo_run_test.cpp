@@ -130,13 +130,14 @@ void TheFirstLaunchFetchesVerifiesStoresIndexesMountsAndPublishes() {
   if (w.published.empty() || !w.published[0]->shadow) return;
   nevr_shadow::Found f;
   QCHECK(w.published[0]->shadow->Find(0xe2efe7289d5985b8ULL, kPosterName, &f));
-  QCHECK(f.chunk >= nevr_shadow::kCargoChunkBase && f.compressed == 40 && f.decompressed == 248 && f.size == 248);
+  QCHECK(f.chunk >= nevr_shadow::kFirstChunkIndex && f.compressed == 40 && f.decompressed == 248 && f.size == 248);
   QCHECK(w.published[0]->shadow->Find(0x489bb35d53ca50e9ULL, kPosterName, &f));
-  QCHECK(f.chunk >= nevr_shadow::kCargoChunkBase && f.compressed == 2000 && f.decompressed == 8388608 && f.size == 8388608);
+  QCHECK(f.chunk >= nevr_shadow::kFirstChunkIndex && f.compressed == 2000 && f.decompressed == 8388608 && f.size == 8388608);
   QCHECK(w.env.open_blobs() == 2);
 }
 
 void TheLogLinesAreTheDesignsInTheDesignsOrder() {
+  nevr_shadow::Shadow::ResetChunkCounterForTest();  // a fresh process: the first shadow starts at the first index
   World w;
   w.Run();
   QCHECK(w.env.EventOrder() == "cargo_start,cargo_manifest,cargo_plan,cargo_blob,cargo_blob,cargo_index,cargo_mounted,cargo_done");
@@ -160,6 +161,39 @@ void TheLogLinesAreTheDesignsInTheDesignsOrder() {
   QCHECK(FakeEnv::Value(e[7], "fetched") == "2" && FakeEnv::Value(e[7], "cached") == "0" && FakeEnv::Value(e[7], "failed") == "0");
   QCHECK(FakeEnv::Value(e[7], "bytes") == "2040");
   for (const std::string& line : e) QCHECK(Level(line, "info"));
+}
+
+// A republish after a fetch is a second shadow in the same process: it takes indices above the first's, so the engine's block cache
+// (keyed by the chunk index alone) never serves one shadow's decompressed block for the other's chunk.
+void ARepublishTakesFreshChunkIndicesAboveTheFirstShadows() {
+  nevr_shadow::Shadow::ResetChunkCounterForTest();
+  World w;
+  w.Run();
+  QCHECK(w.published.size() == 1 && w.published[0]->shadow != nullptr);
+  // The manifest now names a second texture; the worker fetches it and publishes a second set.
+  const std::string other = Bytes(60, 'o');
+  json doc = w.Doc();
+  doc["labels"]["lobby_posters"]["entries"].push_back(EntryJson(kPixType, "0x77", other, 4096, 4096));
+  w.ServeManifest(doc);
+  w.ServeBlob(other);
+  const nc::RunResult r = w.Run();
+  QCHECK(r.fetched == 1 && r.published && w.published.size() == 2 && w.published[1]->shadow != nullptr);
+  if (w.published.size() != 2 || !w.published[0]->shadow || !w.published[1]->shadow) return;
+  const nevr_shadow::Shadow& a = *w.published[0]->shadow;
+  const nevr_shadow::Shadow& b = *w.published[1]->shadow;
+  QCHECK(b.chunk_base() == a.chunk_base() + a.chunk_count());  // the second range starts where the first ended
+  nevr_shadow::Found fa, fb;
+  QCHECK(a.Find(0x489bb35d53ca50e9ULL, kPosterName, &fa) && b.Find(0x489bb35d53ca50e9ULL, kPosterName, &fb));  // the same texture in both
+  QCHECK(fa.chunk != fb.chunk);                                                                              // never the same cache key
+  QCHECK(fa.chunk < b.chunk_base() && fb.chunk >= b.chunk_base());
+  // The mount line says which range each shadow took.
+  const std::vector<std::string> mounts = w.env.EventsNamed("cargo_mounted");
+  char want[16];
+  QCHECK(mounts.size() == 2);
+  std::snprintf(want, sizeof(want), "0x%08x", static_cast<unsigned>(a.chunk_base()));
+  QCHECK(mounts.size() == 2 && FakeEnv::Value(mounts[0], "chunk_base") == want);
+  std::snprintf(want, sizeof(want), "0x%08x", static_cast<unsigned>(b.chunk_base()));
+  QCHECK(mounts.size() == 2 && FakeEnv::Value(mounts[1], "chunk_base") == want);
 }
 
 void TheSecondLaunchMountsFromTheCacheAndRequestsNoBlob() {
@@ -408,6 +442,7 @@ void AFlippedByteInAHeldBlobIsFetchedAgain() {
 int main() {
   TheFirstLaunchFetchesVerifiesStoresIndexesMountsAndPublishes();
   TheLogLinesAreTheDesignsInTheDesignsOrder();
+  ARepublishTakesFreshChunkIndicesAboveTheFirstShadows();
   TheSecondLaunchMountsFromTheCacheAndRequestsNoBlob();
   ABootWithNoIndexMountsNothingAndSaysNothing();
   AManifestThatCannotBeUsedChangesNothing();

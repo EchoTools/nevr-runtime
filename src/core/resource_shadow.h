@@ -19,9 +19,13 @@
  *
  * Chunk numbering. A record's chunk word is chunk_base + its index in Input::chunks, and the +0x80 pointer is the table's
  * address minus chunk_base * 0x10 (as an integer, wrapping), so the game's `table + chunk * 0x10` lands on the right entry. The
- * engine's block cache is keyed by the chunk index alone, so a shadow chunk index must never equal a stock one (stock has 10,304
- * chunks). A base above the stock count, with (base + chunks) * 0x10 below 2^31, lands on the same entry whether the game does the
- * multiply in 32 or 64 bits, signed or unsigned.
+ * engine's block cache is keyed by the chunk index alone (echovr.exe 0x1415255a0: the cached block's slot holds the chunk index),
+ * so a shadow chunk index must never equal a stock one (stock has 10,304 chunks) and never equal another shadow's, whether that is
+ * a second kind of shadow (cargo and plugin packages) or the same kind built again (a cargo republish): a cached block of one would
+ * be served as the other. So the indices of every shadow in the process come from ONE counter that never gives a value out twice:
+ * Build takes n fresh indices, above every index given before, and fails (taking none) when fewer than n are left below
+ * kChunkIndexLimit. A base above the stock count, with (base + chunks) * 0x10 below 2^31, lands on the same entry whether the game
+ * does the multiply in 32 or 64 bits, signed or unsigned.
  *
  * This is the one builder both the CDN textures (cargo) and the plugin levels use. Nothing here allocates after Build, takes a
  * lock or writes: a Shadow is immutable, and a reader needs no synchronisation once it holds the pointer. It is never freed by
@@ -48,11 +52,12 @@ inline constexpr std::size_t kManifestHandles = 0x128;
 inline constexpr std::size_t kRecordBytes = 0x20;
 inline constexpr std::size_t kChunkBytes = 0x10;
 
-// The stock manifest holds 10,304 chunks; no shadow chunk index may be below this.
-inline constexpr std::uint32_t kMinChunkBase = 0x10000;
-// The proposed base of the cargo shadow (design Q20): above stock, and (base + n) * 0x10 stays below 2^31 for n < 117,440,512.
-inline constexpr std::uint32_t kCargoChunkBase = 0x01000000;
-inline constexpr std::uint64_t kMaxScaledChunk = (std::uint64_t{1} << 31) / kChunkBytes;
+// The stock manifest holds 10,304 chunks; no shadow chunk index may be below this (kFirstChunkIndex is far above).
+inline constexpr std::uint32_t kStockChunkCount = 10304;
+// The first index the process-wide counter gives out (above stock; the cargo design's Q20), and the limit it stays under:
+// (index) * 0x10 stays below 2^31 for every index below kChunkIndexLimit, so the game's index multiply is the same in any width.
+inline constexpr std::uint32_t kFirstChunkIndex = 0x01000000;
+inline constexpr std::uint64_t kChunkIndexLimit = (std::uint64_t{1} << 31) / kChunkBytes;  // 0x08000000
 
 // One resource, as the caller states it. `chunk` indexes Input::chunks (0-based); Build adds the base.
 struct Record {
@@ -77,13 +82,12 @@ struct Input {
   std::vector<Record> records;  // any order; Build sorts them as signed (type, name)
   std::vector<Chunk> chunks;
   std::vector<std::int64_t> handles;  // one open file handle per package, in the engine's handle type (a long on Android)
-  std::uint32_t chunk_base = kCargoChunkBase;
 };
 
 enum class Status {
   kOk = 0,
   kEmpty,         // no records
-  kChunkBase,     // the base is at or below the stock chunk count, or the scaled index would reach 2^31
+  kIndexSpace,    // fewer indices are left below kChunkIndexLimit than the input has chunks (none are taken)
   kChunkIndex,    // a record names a chunk that is not in Input::chunks
   kPackageIndex,  // a chunk names a package that has no handle
   kDuplicate,     // two records with one (type, name)
@@ -111,8 +115,13 @@ bool ReadLikeTheEngine(const void* manager, std::uint64_t type, std::uint64_t na
 
 class Shadow {
  public:
-  // Builds a shadow, or returns the first thing wrong with the input and leaves *out empty.
+  // Builds a shadow, or returns the first thing wrong with the input and leaves *out empty. A shadow takes its chunk indices from
+  // the process-wide counter (see the header); a Build that fails takes none.
   static Status Build(const Input& input, std::unique_ptr<Shadow>* out);
+
+  // The next index the counter gives out. Test support: ResetChunkCounterForTest sets it (kFirstChunkIndex by default).
+  static std::uint32_t NextChunkIndex() noexcept;
+  static void ResetChunkCounterForTest(std::uint32_t next = kFirstChunkIndex) noexcept;
 
   // The 16-byte manager to pass to the game's function in place of the live one.
   const void* manager() const noexcept { return manager_; }
@@ -121,6 +130,7 @@ class Shadow {
   bool Find(std::uint64_t type, std::uint64_t name, Found* out, std::uint32_t* user = nullptr) const noexcept;
 
   std::size_t record_count() const noexcept { return records_.size() / kRecordBytes; }
+  // The first of this shadow's chunk indices; it owns [chunk_base(), chunk_base() + chunk_count()).
   std::uint32_t chunk_base() const noexcept { return chunk_base_; }
   std::size_t chunk_count() const noexcept { return chunks_.size() / kChunkBytes; }
 

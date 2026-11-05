@@ -121,6 +121,7 @@ void HashFileIsTheSha256OfTheFile() {
 }
 
 void AMountOpensEveryBlobAndBuildsTheShadow() {
+  nevr_shadow::Shadow::ResetChunkCounterForTest();
   FakeEnv env;
   const std::string desc = Bytes(40, 'd'), pix = Bytes(2000, 'p');
   const nc::Index index = PosterOnDisk(env, desc, pix);
@@ -128,11 +129,11 @@ void AMountOpensEveryBlobAndBuildsTheShadow() {
   QCHECK(m.shadow != nullptr);
   if (!m.shadow) return;
   QCHECK(m.names == 1 && m.records == 2 && m.refused == 0 && m.labels.size() == 1 && m.labels[0] == "lobby_posters");
-  QCHECK(m.shadow->chunk_base() == nevr_shadow::kCargoChunkBase);
+  QCHECK(m.shadow->chunk_base() == nevr_shadow::kFirstChunkIndex);
   nevr_shadow::Found f;
   std::uint32_t user = 99;
   QCHECK(m.shadow->Find(kDescType, kPoster, &f, &user));
-  QCHECK(f.chunk >= nevr_shadow::kCargoChunkBase && f.file_offset == 0 && f.compressed == 40 && f.decompressed == 248);
+  QCHECK(f.chunk >= nevr_shadow::kFirstChunkIndex && f.file_offset == 0 && f.compressed == 40 && f.decompressed == 248);
   QCHECK(f.offset_in_chunk == 0 && f.size == 248 && f.alignment == 16 && user == 0);
   QCHECK(env.PathOfHandle(f.handle) == nc::BlobPath(kDir, Sha256Of(desc)));
   QCHECK(m.shadow->Find(kPixType, kPoster, &f));

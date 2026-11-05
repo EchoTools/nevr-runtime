@@ -179,7 +179,6 @@ Mounted Mount(Env& env, const std::string& dir, const Index& index, const Policy
     groups[std::make_pair(e.label, e.name)].push_back(&e);
   }
   nevr_shadow::Input input;
-  input.chunk_base = nevr_shadow::kCargoChunkBase;
   std::map<std::string, std::uint32_t> labelIndex;
   for (const auto& group : groups) {
     struct Opened {

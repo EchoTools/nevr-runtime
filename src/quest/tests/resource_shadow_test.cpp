@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <set>
+#include <string>
 #include <vector>
 
 #include "core/resource_shadow.h"
@@ -32,7 +34,6 @@ constexpr std::uint64_t kLowType = 0x489bb35d53ca50e9ULL;
 
 ns::Input ThreeRecords() {
   ns::Input in;
-  in.chunk_base = ns::kCargoChunkBase;
   in.handles = {101, 202};
   in.chunks = {{0, 0, 40, 248}, {1, 0, 2000, 4096}, {1, 64, 90, 300}};
   // Deliberately not in signed order.
@@ -42,6 +43,9 @@ ns::Input ThreeRecords() {
   return in;
 }
 
+// The counter is process-wide, so each test that reads absolute indices starts it from its first value.
+void FreshCounter() { ns::Shadow::ResetChunkCounterForTest(); }
+
 std::unique_ptr<ns::Shadow> BuildOk(const ns::Input& in) {
   std::unique_ptr<ns::Shadow> s;
   const ns::Status status = ns::Shadow::Build(in, &s);
@@ -50,6 +54,7 @@ std::unique_ptr<ns::Shadow> BuildOk(const ns::Input& in) {
 }
 
 void TheManifestIsTheEnginesLayout() {
+  FreshCounter();
   const ns::Input in = ThreeRecords();
   const auto s = BuildOk(in);
   if (!s) return;
@@ -74,7 +79,7 @@ void TheManifestIsTheEnginesLayout() {
   // The engine's arithmetic, in 64 bits and in the 32-bit signed form a compiler might choose: the same entry.
   for (int r = 0; r < 3; ++r) {
     const std::uint32_t word = LoadAt<std::uint32_t>(records, static_cast<std::size_t>(r) * ns::kRecordBytes + 0x10);
-    QCHECK(word >= ns::kCargoChunkBase);
+    QCHECK(word >= ns::kFirstChunkIndex);
     const unsigned char* viaU64 = reinterpret_cast<const unsigned char*>(chunkTable + static_cast<std::uint64_t>(word) * 0x10);
     const unsigned char* viaS64 =
         reinterpret_cast<const unsigned char*>(chunkTable + static_cast<std::uint64_t>(static_cast<std::int64_t>(word) * 0x10));
@@ -84,19 +89,20 @@ void TheManifestIsTheEnginesLayout() {
 }
 
 void TheEngineReadingFindsEveryRecordWithItsChunkAndHandle() {
+  FreshCounter();
   const auto s = BuildOk(ThreeRecords());
   if (!s) return;
   ns::Found f;
   QCHECK(ns::ReadLikeTheEngine(s->manager(), kHighType, 0x3fa6d25bc24a7b01ULL, &f));
-  QCHECK(f.chunk == ns::kCargoChunkBase + 0);
+  QCHECK(f.chunk == ns::kFirstChunkIndex + 0);
   QCHECK(f.package == 0 && f.handle == 101);
   QCHECK(f.file_offset == 0 && f.compressed == 40 && f.decompressed == 248);
   QCHECK(f.offset_in_chunk == 0 && f.size == 248 && f.alignment == 16);
   QCHECK(ns::ReadLikeTheEngine(s->manager(), kLowType, 0x3fa6d25bc24a7b01ULL, &f));
-  QCHECK(f.chunk == ns::kCargoChunkBase + 1 && f.package == 1 && f.handle == 202);
+  QCHECK(f.chunk == ns::kFirstChunkIndex + 1 && f.package == 1 && f.handle == 202);
   QCHECK(f.compressed == 2000 && f.decompressed == 4096 && f.size == 4096);
   QCHECK(ns::ReadLikeTheEngine(s->manager(), kLowType, 5, &f));
-  QCHECK(f.chunk == ns::kCargoChunkBase + 2 && f.file_offset == 64 && f.compressed == 90 && f.decompressed == 300);
+  QCHECK(f.chunk == ns::kFirstChunkIndex + 2 && f.file_offset == 64 && f.compressed == 90 && f.decompressed == 300);
   QCHECK(f.offset_in_chunk == 12 && f.size == 100 && f.alignment == 8);
 }
 
@@ -128,6 +134,7 @@ void AKeyThatIsNotThereIsAMissOnEveryEdge() {
 }
 
 void EveryChunkWordIsAboveTheStockManifestsAndUnique() {
+  FreshCounter();
   ns::Input in;
   in.handles = {1};
   for (std::uint32_t i = 0; i < 200; ++i) {
@@ -140,28 +147,66 @@ void EveryChunkWordIsAboveTheStockManifestsAndUnique() {
   for (std::uint32_t i = 0; i < 200; ++i) {
     ns::Found f;
     QCHECK(s->Find(kLowType, 1000u + i, &f));
-    QCHECK(f.chunk >= ns::kMinChunkBase);  // stock has 10,304 chunks
-    QCHECK(f.chunk == ns::kCargoChunkBase + i);
+    QCHECK(f.chunk >= ns::kStockChunkCount);  // stock has 10,304 chunks
+    QCHECK(f.chunk == ns::kFirstChunkIndex + i);
     words.push_back(f.chunk);
   }
   for (std::size_t i = 1; i < words.size(); ++i) QCHECK(words[i] != words[i - 1]);
 }
 
-void ABaseThatCouldMeetAStockChunkOrOverflowTheScaledIndexIsRefused() {
-  ns::Input in = ThreeRecords();
+void AShadowThatDoesNotFitTheIndexSpaceIsRefusedAndTakesNoIndex() {
+  ns::Input in = ThreeRecords();  // three chunks
   std::unique_ptr<ns::Shadow> s;
-  in.chunk_base = 0;
-  QCHECK(ns::Shadow::Build(in, &s) == ns::Status::kChunkBase && !s);
-  in.chunk_base = 10304;  // the stock chunk count: the first index past stock would still be inside the stock range
-  QCHECK(ns::Shadow::Build(in, &s) == ns::Status::kChunkBase && !s);
-  in.chunk_base = ns::kMinChunkBase - 1;
-  QCHECK(ns::Shadow::Build(in, &s) == ns::Status::kChunkBase);
-  in.chunk_base = 0x80000000u;  // the plugin-level design's first proposal: * 0x10 is 2^35
-  QCHECK(ns::Shadow::Build(in, &s) == ns::Status::kChunkBase);
-  in.chunk_base = static_cast<std::uint32_t>(ns::kMaxScaledChunk) - 2;  // base + 3 chunks reaches 2^31 / 0x10
-  QCHECK(ns::Shadow::Build(in, &s) == ns::Status::kChunkBase);
-  in.chunk_base = static_cast<std::uint32_t>(ns::kMaxScaledChunk) - 3;  // base + 3 chunks is the last that stays below
+  ns::Shadow::ResetChunkCounterForTest(static_cast<std::uint32_t>(ns::kChunkIndexLimit) - 2);  // two left: not enough
+  QCHECK(ns::Shadow::Build(in, &s) == ns::Status::kIndexSpace && !s);
+  QCHECK(ns::Shadow::NextChunkIndex() == ns::kChunkIndexLimit - 2);  // a refusal took none
+  ns::Shadow::ResetChunkCounterForTest(static_cast<std::uint32_t>(ns::kChunkIndexLimit) - 3);  // exactly three left
   QCHECK(ns::Shadow::Build(in, &s) == ns::Status::kOk && s);
+  QCHECK(s && s->chunk_base() == ns::kChunkIndexLimit - 3);
+  QCHECK(ns::Shadow::NextChunkIndex() == ns::kChunkIndexLimit);  // the space is spent
+  QCHECK(ns::Shadow::Build(in, &s) == ns::Status::kIndexSpace && !s);
+  // The counter does not wrap into an index already given out.
+  QCHECK(ns::Shadow::NextChunkIndex() == ns::kChunkIndexLimit);
+  QCHECK(std::string(ns::StatusName(ns::Status::kIndexSpace)) == "index_space");
+}
+
+// design 8.1 (plugin levels): shadows built in turn, then a republish, never share an index; each takes fresh indices above the last.
+void ShadowsBuiltInTurnNeverShareAnIndex() {
+  FreshCounter();
+  const auto cargo = BuildOk(ThreeRecords());         // the cargo shadow: indices [first, first + 3)
+  const auto packages = BuildOk(ThreeRecords());      // the package shadow: the next three
+  const auto republish = BuildOk(ThreeRecords());     // a cargo republish after a fetch: three more
+  if (!cargo || !packages || !republish) return;
+  QCHECK(cargo->chunk_base() == ns::kFirstChunkIndex);
+  QCHECK(packages->chunk_base() == cargo->chunk_base() + cargo->chunk_count());
+  QCHECK(republish->chunk_base() == packages->chunk_base() + packages->chunk_count());
+  QCHECK(ns::Shadow::NextChunkIndex() == republish->chunk_base() + republish->chunk_count());
+  std::set<std::uint32_t> seen;
+  for (const ns::Shadow* shadow : {cargo.get(), packages.get(), republish.get()}) {
+    for (std::uint64_t name : {0x3fa6d25bc24a7b01ULL}) {
+      ns::Found f;
+      QCHECK(shadow->Find(kHighType, name, &f));
+      QCHECK(seen.insert(f.chunk).second);  // no chunk word repeats across shadows
+    }
+    ns::Found g;
+    QCHECK(shadow->Find(kLowType, 5, &g) && seen.insert(g.chunk).second);
+    QCHECK(shadow->Find(kLowType, 0x3fa6d25bc24a7b01ULL, &g) && seen.insert(g.chunk).second);
+  }
+  QCHECK(seen.size() == 9);
+  // And each still reads its own handle: the second shadow's table is not the first's.
+  ns::Found a, b;
+  QCHECK(cargo->Find(kLowType, 5, &a) && republish->Find(kLowType, 5, &b) && a.chunk != b.chunk && a.handle == b.handle);
+}
+
+void AFailedBuildBetweenTwoGoodOnesLeavesNoGap() {
+  FreshCounter();
+  const auto first = BuildOk(ThreeRecords());
+  ns::Input bad = ThreeRecords();
+  bad.records[0].chunk = 9;  // refused: a chunk that is not there
+  std::unique_ptr<ns::Shadow> none;
+  QCHECK(ns::Shadow::Build(bad, &none) == ns::Status::kChunkIndex && !none);
+  const auto second = BuildOk(ThreeRecords());
+  QCHECK(first && second && second->chunk_base() == first->chunk_base() + first->chunk_count());
 }
 
 void EachRefusalIsNamedAndLeavesNothing() {
@@ -184,7 +229,7 @@ void EachRefusalIsNamedAndLeavesNothing() {
 }
 
 void TheStatusNamesAreDistinct() {
-  const ns::Status all[] = {ns::Status::kOk,         ns::Status::kEmpty,        ns::Status::kChunkBase,
+  const ns::Status all[] = {ns::Status::kOk,         ns::Status::kEmpty,        ns::Status::kIndexSpace,
                             ns::Status::kChunkIndex, ns::Status::kPackageIndex, ns::Status::kDuplicate};
   for (std::size_t i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
     for (std::size_t j = i + 1; j < sizeof(all) / sizeof(all[0]); ++j) {
@@ -213,7 +258,9 @@ int main() {
   FindAgreesWithTheEngineReadingAndGivesTheCallersTag();
   AKeyThatIsNotThereIsAMissOnEveryEdge();
   EveryChunkWordIsAboveTheStockManifestsAndUnique();
-  ABaseThatCouldMeetAStockChunkOrOverflowTheScaledIndexIsRefused();
+  AShadowThatDoesNotFitTheIndexSpaceIsRefusedAndTakesNoIndex();
+  ShadowsBuiltInTurnNeverShareAnIndex();
+  AFailedBuildBetweenTwoGoodOnesLeavesNoGap();
   EachRefusalIsNamedAndLeavesNothing();
   TheStatusNamesAreDistinct();
   TwoShadowsDoNotShareStorage();

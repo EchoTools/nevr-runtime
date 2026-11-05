@@ -1,6 +1,7 @@
 #include "core/resource_shadow.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 namespace nevr_shadow {
@@ -61,7 +62,7 @@ const char* StatusName(Status status) noexcept {
   switch (status) {
     case Status::kOk: return "ok";
     case Status::kEmpty: return "empty";
-    case Status::kChunkBase: return "chunk_base";
+    case Status::kIndexSpace: return "index_space";
     case Status::kChunkIndex: return "chunk_index";
     case Status::kPackageIndex: return "package_index";
     case Status::kDuplicate: return "duplicate";
@@ -96,14 +97,34 @@ bool ReadLikeTheEngine(const void* manager, std::uint64_t type, std::uint64_t na
   return true;
 }
 
+namespace {
+
+// The one counter of the process: the next chunk index no shadow has been given. Never decreases outside a test, never gives a value
+// twice, so no two shadows (of any kind, built or rebuilt) share a key in the engine's block cache.
+static_assert(kFirstChunkIndex > kStockChunkCount, "a shadow index must never equal a stock chunk index");
+std::atomic<std::uint32_t> g_nextChunkIndex{kFirstChunkIndex};
+
+// Takes `n` consecutive indices and returns the first, or false when fewer than n are left below kChunkIndexLimit (none are taken).
+bool TakeChunkIndices(std::size_t n, std::uint32_t* first) noexcept {
+  std::uint32_t at = g_nextChunkIndex.load(std::memory_order_relaxed);
+  for (;;) {
+    if (static_cast<std::uint64_t>(at) + n > kChunkIndexLimit) return false;
+    if (g_nextChunkIndex.compare_exchange_weak(at, static_cast<std::uint32_t>(at + n), std::memory_order_relaxed)) {
+      *first = at;
+      return true;
+    }
+  }
+}
+
+}  // namespace
+
+std::uint32_t Shadow::NextChunkIndex() noexcept { return g_nextChunkIndex.load(std::memory_order_relaxed); }
+
+void Shadow::ResetChunkCounterForTest(std::uint32_t next) noexcept { g_nextChunkIndex.store(next, std::memory_order_relaxed); }
+
 Status Shadow::Build(const Input& input, std::unique_ptr<Shadow>* out) {
   out->reset();
   if (input.records.empty()) return Status::kEmpty;
-  // The base must clear the stock chunks, and the largest scaled index must stay below 2^31 whatever width the game multiplies in.
-  if (input.chunk_base < kMinChunkBase ||
-      static_cast<std::uint64_t>(input.chunk_base) + input.chunks.size() > kMaxScaledChunk) {
-    return Status::kChunkBase;
-  }
   for (const Record& r : input.records) {
     if (r.chunk >= input.chunks.size()) return Status::kChunkIndex;
   }
@@ -123,8 +144,12 @@ Status Shadow::Build(const Input& input, std::unique_ptr<Shadow>* out) {
     if (a.type == b.type && a.name == b.name) return Status::kDuplicate;
   }
 
+  // Last, so a refused input takes no index: this shadow's range, above every index given before.
+  std::uint32_t base = 0;
+  if (!TakeChunkIndices(input.chunks.size(), &base)) return Status::kIndexSpace;
+
   std::unique_ptr<Shadow> shadow(new Shadow());
-  shadow->chunk_base_ = input.chunk_base;
+  shadow->chunk_base_ = base;
   shadow->records_.assign(input.records.size() * kRecordBytes, 0);
   shadow->users_.resize(input.records.size());
   for (std::size_t i = 0; i < order.size(); ++i) {
@@ -132,7 +157,7 @@ Status Shadow::Build(const Input& input, std::unique_ptr<Shadow>* out) {
     unsigned char* const rec = shadow->records_.data() + i * kRecordBytes;
     StoreAt<std::uint64_t>(rec, 0, r.type);
     StoreAt<std::uint64_t>(rec, 8, r.name);
-    StoreAt<std::uint32_t>(rec, 0x10, input.chunk_base + r.chunk);
+    StoreAt<std::uint32_t>(rec, 0x10, base + r.chunk);
     StoreAt<std::uint32_t>(rec, 0x14, r.offset_in_chunk);
     StoreAt<std::uint32_t>(rec, 0x18, r.size);
     StoreAt<std::uint32_t>(rec, 0x1c, r.alignment);
@@ -154,7 +179,7 @@ Status Shadow::Build(const Input& input, std::unique_ptr<Shadow>* out) {
   // The table address minus base * 0x10, as an integer that wraps: the game adds chunk * 0x10 back.
   StoreAt<std::uintptr_t>(m, kManifestChunks,
                           reinterpret_cast<std::uintptr_t>(shadow->chunks_.data()) -
-                              static_cast<std::uintptr_t>(input.chunk_base) * kChunkBytes);
+                              static_cast<std::uintptr_t>(base) * kChunkBytes);
   StoreAt<std::uintptr_t>(m, kManifestHandles, reinterpret_cast<std::uintptr_t>(shadow->handles_.data()));
   StoreAt<std::uintptr_t>(shadow->manager_, kManagerManifest, reinterpret_cast<std::uintptr_t>(m));
   *out = std::move(shadow);

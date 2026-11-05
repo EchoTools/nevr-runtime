@@ -285,7 +285,7 @@ void TheFirstLaunchOnRealFilesPublishesAShadowWhoseHandlesReadTheHashedBytes() {
   if (g_published.size() != 1 || !g_published[0]->shadow) return;
   nevr_shadow::Found f;
   QCHECK(g_published[0]->shadow->Find(0x489bb35d53ca50e9ULL, 0x3fa6d25bc24a7b01ULL, &f));
-  QCHECK(f.compressed == 2000 && f.decompressed == 8388608 && f.chunk >= nevr_shadow::kCargoChunkBase && f.file_offset == 0);
+  QCHECK(f.compressed == 2000 && f.decompressed == 8388608 && f.chunk >= nevr_shadow::kFirstChunkIndex && f.file_offset == 0);
   // What the engine would do with the request: read `compressed` bytes at the chunk's file offset through the handle.
   std::string viaHandle(f.compressed, '\0');
   std::size_t got = 0;
@@ -309,6 +309,7 @@ void TheSecondLaunchMountsFromTheCacheAndMakesNoBlobRequest() {
   rig.transport.requests.clear();
   g_published.clear();
   ClearLog();
+  nevr_shadow::Shadow::ResetChunkCounterForTest();  // the second launch is a new process
   qc::PosixEnv env(&rig.transport);
   const nc::RunResult r = qc::RunOnce(env, rig.config, &Publish, [] { return true; });
   QCHECK(r.fetched == 0 && r.cached == 2 && r.failed == 0);

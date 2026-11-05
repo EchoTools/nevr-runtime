@@ -38,9 +38,11 @@ process.
 2. **Precedence: cargo, then stock, then plugin packages.** A cargo entry is a deliberate, published replacement of a stock name
    and is served before stock. A plugin package never replaces a stock name: a package that collides with stock is refused, so a
    server and its clients resolve a name to the same bytes. Each rule has its reason; neither changes the other.
-3. **Chunk base `0x01000000`.** Shadow chunk words start above the stock manifest's 10,304 chunks, because the engine's block
-   cache is keyed by the chunk index alone, and `(base + n) * 0x10` stays below 2^31, so the game's index multiply lands on the same
-   entry in 32 or 64 bits, signed or unsigned.
+3. **One process-wide chunk-index counter, first value `0x01000000`.** Shadow chunk words start above the stock manifest's 10,304
+   chunks, because the engine's block cache is keyed by the chunk index alone: a cached block of one shadow would be served as
+   another's. So every shadow in the process (cargo, plugin packages, a cargo republish) takes its indices from one counter that
+   never gives a value out twice, and a build that finds fewer than it needs below `0x08000000` takes none and fails. Below that
+   limit `index * 0x10` stays under 2^31, so the game's index multiply lands on the same entry in 32 or 64 bits, signed or unsigned.
 4. **The manifest supersedes ADR 0005's.** One JSON document keyed `(platform, on-disk type, name)` (`src/core/cargo_manifest.h`),
    a blob being one stock-format chunk: one zstd frame whose decompressed bytes are the buffer. The runtime never decompresses; the
    SHA-256 of the stored frame proves it is the published one. The manifest is unsigned in this decision (see Not claimed).

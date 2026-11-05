@@ -165,7 +165,7 @@ void ACargoKeyIsFilledFromTheCargoShadowAndNeverTheLiveManager() {
   QCHECK(Call(kDescType, kPoster, 0, request) == 0);
   QCHECK(g_fill.manager == g_cargoSet->shadow->manager() && g_fill.calls == 1);
   QCHECK(Get<std::int64_t>(request, layout::kPackageHandle) == kCargoDescHandle);
-  QCHECK(Get<std::int64_t>(request, layout::kChunkIndex) >= static_cast<std::int64_t>(nevr_shadow::kCargoChunkBase));
+  QCHECK(Get<std::int64_t>(request, layout::kChunkIndex) >= static_cast<std::int64_t>(nevr_shadow::kFirstChunkIndex));
   QCHECK(Get<std::uint64_t>(request, layout::kChunkFileOffset) == 0);
   QCHECK(Get<std::uint64_t>(request, layout::kChunkCompressed) == 40 && Get<std::uint64_t>(request, layout::kChunkDecompressed) == 248);
   QCHECK(Get<std::uint64_t>(request, layout::kSize) == 248 && Get<std::uint64_t>(request, layout::kAlignment) == 16);
@@ -305,7 +305,7 @@ void TheServedLineIsWrittenAtTheKeysPowersOfTwo() {
   // The request line of a development build is written for a cargo request as for any other.
   const std::vector<std::string> reqs = Lines("resource_request");
   QCHECK(!reqs.empty());
-  if (!reqs.empty()) QCHECK(std::stoll(Field(reqs[0], "chunk")) >= static_cast<long long>(nevr_shadow::kCargoChunkBase));
+  if (!reqs.empty()) QCHECK(std::stoll(Field(reqs[0], "chunk")) >= static_cast<long long>(nevr_shadow::kFirstChunkIndex));
 }
 
 void ALabelIsTheSecondSetsOwnNotTheFirsts() {

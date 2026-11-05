@@ -37,9 +37,11 @@ std::string StatesText(const Policy& policy, const Manifest* manifest) {
   return text;
 }
 
-std::string ChunkBaseText() {
+// The first chunk index of the mounted shadow, or "none" when nothing mounted (every shadow of the process owns a range of its own).
+std::string ChunkBaseText(const Mounted& m) {
+  if (!m.shadow) return "none";
   char buf[16];
-  std::snprintf(buf, sizeof(buf), "0x%08x", static_cast<unsigned>(nevr_shadow::kCargoChunkBase));
+  std::snprintf(buf, sizeof(buf), "0x%08x", static_cast<unsigned>(m.shadow->chunk_base()));
   return buf;
 }
 
@@ -49,7 +51,7 @@ void SayMounted(Env& env, const char* source, const Mounted& m) {
              {"labels", m.labels.size()},
              {"names", m.names},
              {"records", m.records},
-             {"chunk_base", ChunkBaseText()},
+             {"chunk_base", ChunkBaseText(m)},
              {"refused", m.refused}});
 }
 
