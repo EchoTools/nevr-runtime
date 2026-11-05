@@ -36,6 +36,9 @@ nevr_ht_obj(o_integ_texture_menu GROUP integration ${_on} SRC src/quest/sentinel
 # quit_hook.cpp is compiled here as a check and is not in the link of the hooks test.
 nevr_ht_obj(o_integ_quit_hook GROUP integration ${_off} SRC src/quest/sentinel/quit_hook.cpp)
 nevr_ht_obj(o_integ_resource_request_hook GROUP integration ${_off} SRC src/quest/sentinel/resource_request_hook.cpp)
+# The shared core the hook's cargo decision links (docs/adr/0044-cdn-texture-delivery.md).
+nevr_ht_obj(o_integ_cargo_shadow GROUP integration ${_off} SRC src/core/resource_shadow.cpp)
+nevr_ht_obj(o_integ_cargo_resolver GROUP integration ${_off} SRC src/core/cargo_resolver.cpp)
 nevr_ht_obj(o_integ_clock_levels_hook GROUP integration ${_off} SRC src/quest/sentinel/clock_levels_hook.cpp)
 nevr_ht_obj(o_integ_login_counters GROUP integration ${_off} SRC src/quest/login/login_counters.cpp)
 # login_counters.cpp reads the local-answer counters of login_prerequisites.cpp (#411).
@@ -62,7 +65,7 @@ nevr_ht_test(integration_hooks_test GROUP integration ${_on} DL PTHREAD TIMEOUT 
   OBJS o_integ_got_hook o_integ_hook_report o_integ_tstring_thunks o_integ_dlopen_hook o_integ_script_redirect o_integ_social_shim
        o_integ_social_game_calls o_integ_social_install o_integ_social_invite_gate o_integ_social_facade o_integ_hook_log
        o_integ_social_names o_integ_login_prompt_hook o_integ_frame_dispatch o_integ_login_title_hook o_integ_obb_skip_hook
-       o_integ_resource_request_hook o_integ_texture_quality_hook o_integ_texture_menu_hook o_integ_texture_menu
+       o_integ_resource_request_hook o_integ_cargo_shadow o_integ_cargo_resolver o_integ_texture_quality_hook o_integ_texture_menu_hook o_integ_texture_menu
        o_integ_clock_levels_hook o_integ_prompt_board o_integ_login_counters o_integ_login_prerequisites o_integ_login_standin
        o_integ_id_libr15_identity o_integ_id_libr15_patch_identity o_integ_id_sha256
   SRC src/quest/tests/integration_hooks_test.cpp src/quest/integration/post_load.cpp src/quest/integration/ctor_sequence.cpp

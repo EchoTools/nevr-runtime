@@ -219,6 +219,17 @@ void AManifestThatCannotBeUsedChangesNothing() {
   }
 }
 
+void APartialContentAnswerToTheWholeRangeIsTheWholeObject() {
+  // The transport sends `Range: bytes=0-`; Cloudflare answers 206 and the body is the whole object.
+  World w;
+  w.env.server[std::string(kBase) + kManifestPath].status = 206;
+  w.env.server[w.BlobUrl(w.desc)].status = 206;
+  w.env.server[w.BlobUrl(w.pix)].status = 206;
+  const nc::RunResult r = w.Run();
+  QCHECK(r.manifest_loaded && r.fetched == 2 && r.failed == 0 && r.published);
+  QCHECK(FakeEnv::Value(w.env.EventsNamed("cargo_manifest")[0], "http_status") == "206");
+}
+
 void ARefusedManifestNamesTheLabelAndIndexNeverTheText() {
   World w;
   json doc = w.Doc();
@@ -400,6 +411,7 @@ int main() {
   TheSecondLaunchMountsFromTheCacheAndRequestsNoBlob();
   ABootWithNoIndexMountsNothingAndSaysNothing();
   AManifestThatCannotBeUsedChangesNothing();
+  APartialContentAnswerToTheWholeRangeIsTheWholeObject();
   ARefusedManifestNamesTheLabelAndIndexNeverTheText();
   ABlobThatIsNotWhatTheManifestSaidIsNeverStored();
   ARequiredLabelsFailureIsAnError();

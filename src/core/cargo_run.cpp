@@ -10,6 +10,10 @@ namespace {
 
 constexpr const char* kBlobPrefix = "blobs/sha256/";
 
+// The transport asks every GET with `Range: bytes=0-` (quest/data/transport.h), which a CDN answers 206 with the whole object, and a
+// server that ignores a range answers 200. Both carry the object from its first byte.
+bool IsWholeBody(long status) noexcept { return status == 200 || status == 206; }
+
 // The host part of a URL, for the log: never the path or a query.
 std::string HostOf(const std::string& url) {
   const std::size_t scheme = url.find("://");
@@ -73,7 +77,7 @@ Downloaded Download(Env& env, const RunConfig& config, const Entry& e, const std
   const HttpResult http = env.Get(config.base_url + kBlobPrefix + e.sha256,
                                   [&](long st, const void* data, std::size_t length) {
                                     status = st;
-                                    if (st != 200) return false;
+                                    if (!IsWholeBody(st)) return false;
                                     if (got + length > e.size) {
                                       tooMuch = true;
                                       return false;
@@ -105,7 +109,7 @@ Downloaded Download(Env& env, const RunConfig& config, const Entry& e, const std
     out.reason = "write_failed";
     return out;
   }
-  if (out.status != 200) {
+  if (!IsWholeBody(out.status)) {
     temp->Abort();
     out.reason = out.status == 0 ? "transport" : "http_status";
     return out;
@@ -192,7 +196,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
   const HttpResult http = env.Get(config.base_url + config.manifest_path,
                                   [&](long st, const void* data, std::size_t length) {
                                     status = st;
-                                    if (st != 200) return false;
+                                    if (!IsWholeBody(st)) return false;
                                     if (body.size() + length > kMaxManifestBytes) {
                                       tooBig = true;
                                       return false;
@@ -209,7 +213,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
   const char* manifestFailure = nullptr;
   if (tooBig) {
     manifestFailure = "too_large";
-  } else if (httpStatus != 200) {
+  } else if (!IsWholeBody(httpStatus)) {
     manifestFailure = httpStatus == 0 ? "transport" : "http_status";
   } else if (!http.completed) {
     manifestFailure = "transport";

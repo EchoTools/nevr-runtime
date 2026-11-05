@@ -110,6 +110,7 @@ void ThreadKeyZeroIsAUsableThread() {
   r.Select(0, kPoster, 0);
   r.Publish(second.get());
   QCHECK(r.Select(0, kPoster, 1) == first.get());
+  QCHECK(r.pins_in_use() == 1);  // thread key 0 is stored as a used slot, not as a free one
 }
 
 void ManyThreadsPublishingAndReadingNeverSplitAPair() {

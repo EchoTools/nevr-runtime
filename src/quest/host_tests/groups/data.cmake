@@ -30,6 +30,16 @@ nevr_ht_test(cargo_store_test GROUP data HOST TIMEOUT 120
   SRC src/quest/tests/cargo_store_test.cpp OBJS ${_cargo_objs})
 nevr_ht_test(cargo_run_test GROUP data HOST TIMEOUT 120
   SRC src/quest/tests/cargo_run_test.cpp OBJS ${_cargo_objs})
+# The Quest side: the POSIX env on real files, the settings, and the worker end to end over a scripted transport. quest_config.h is read
+# for the settings struct only (nothing of quest_config.cpp is linked).
+nevr_ht_obj(o_cargo_posix_env GROUP data NOEXC HOST INCS src/quest/sentinel SRC src/quest/cargo/posix_env.cpp)
+nevr_ht_obj(o_cargo_service GROUP data NOEXC HOST INCS src/quest/sentinel SRC src/quest/cargo/cargo_service.cpp)
+nevr_ht_obj(o_cargo_hook_log GROUP data NOEXC HOST INCS src/quest/sentinel SRC src/quest/sentinel/hook_log.cpp)
+nevr_ht_obj(o_cargo_atomic_write GROUP data NOEXC HOST SRC src/quest/auth/atomic_write.cpp)
+nevr_ht_test(cargo_service_test GROUP data HOST INCS src/quest/sentinel TIMEOUT 120 ENV ${_data_env}
+  SRC src/quest/tests/cargo_service_test.cpp
+  OBJS ${_cargo_objs} o_cargo_posix_env o_cargo_service o_cargo_hook_log o_cargo_atomic_write o_data_staging
+  LIBS ${NEVR_ZLIB_LIB})
 nevr_ht_test(cargo_resolver_test GROUP data HOST PTHREAD TIMEOUT 120
   SRC src/quest/tests/cargo_resolver_test.cpp OBJS o_cargo_resource_shadow o_cargo_cargo_resolver)
 
