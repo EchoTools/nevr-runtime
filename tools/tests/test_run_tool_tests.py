@@ -110,6 +110,20 @@ def test_holds():
     assert True
 '''
 
+# Passes only in a pytest the runner started with plugin autoload off.
+AUTOLOAD_PROBE_SUITE = '''
+import os
+
+def test_plugin_autoload_is_off():
+    assert os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1"
+'''
+
+# Passes only in a pytest-xdist worker.
+WORKER_PROBE_SUITE = AUTOLOAD_PROBE_SUITE + '''
+def test_runs_in_a_worker():
+    assert os.environ.get("PYTEST_XDIST_WORKER", "").startswith("gw")
+'''
+
 # Exits at once but leaves a process in a session of its own holding pytest's output open (run with
 # -s): a kill of pytest's process group does not reach it. Its pid goes to $RUN_TOOL_TESTS_MARKER.
 SETSID_STRAY_SUITE = '''
@@ -169,10 +183,17 @@ class RunToolTestsRecord(unittest.TestCase):
             (d / "conftest.py").write_text(conftest, encoding="utf-8")
         return d
 
-    def env(self, log_dir: Path, **extra: str) -> dict:
-        env = dict(os.environ, NEVR_TEST_LOG_DIR=str(log_dir), **extra)
+    def env(self, log_dir: Path, **extra) -> dict:
+        """The environment of a run of the script: the caller's, with the log directory, a serial pytest (a
+        suite of two tests does not need workers) and none of the variables that change which plugins load or
+        what they add (a test sets the ones it means to test); an `extra` value of None removes the variable."""
+        env = dict(os.environ, NEVR_TEST_LOG_DIR=str(log_dir), NEVR_TEST_WORKERS="0")
         env.pop("PYTEST_ADDOPTS", None)
-        env.update({k: v for k, v in extra.items() if k == "PYTEST_ADDOPTS"})
+        env.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD", None)
+        env.pop("PYTEST_XDIST_AUTO_NUM_WORKERS", None)
+        env.update({k: v for k, v in extra.items() if v is not None})
+        for name in [k for k, v in extra.items() if v is None]:
+            env.pop(name, None)
         return env
 
     def run_script(self, log_dir: Path, *args: str, cwd: Path = REPO) -> subprocess.CompletedProcess:
@@ -359,6 +380,64 @@ class RunToolTestsRecord(unittest.TestCase):
         self.run_script(self.logs, "-q", "-p", "no:cacheprovider", str(named))
         self.assertIsInstance(self.records()[0]["randomly_seed"], int)
 
+    @staticmethod
+    def names_plugin(cmd: list, name: str) -> bool:
+        return any(a == "-p" and b == name for a, b in zip(cmd, cmd[1:]))
+
+    @unittest.skipIf(importlib.util.find_spec("xdist") is None, "pytest-xdist is not installed")
+    def test_the_child_runs_on_xdist_workers_with_plugin_autoload_off(self):
+        suite = self.write_suite("probe", WORKER_PROBE_SUITE)
+        result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", str(suite)],
+                                capture_output=True, text=True, cwd=REPO, timeout=120,
+                                env=self.env(self.logs, NEVR_TEST_WORKERS=None, PYTEST_XDIST_AUTO_NUM_WORKERS="2"))
+        # The tests pass only in a worker, and only with the variable set in the child's environment.
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for record in self.records("start") + self.records():
+            cmd = record["cmd"]
+            self.assertTrue(self.names_plugin(cmd, "xdist"), cmd)
+            self.assertEqual(cmd[cmd.index("-n") + 1], "2")
+            self.assertEqual((record["mode"], record["workers"], record["serial_reason"]), ("parallel", 2, None))
+        if importlib.util.find_spec("pytest_randomly") is not None:
+            self.assertTrue(self.names_plugin(self.records()[0]["cmd"], "randomly"))
+        self.assertIn("test-tools: workers 2 (parallel)", Path(self.records()[0]["log"]).read_text())
+
+    def test_a_serial_run_still_has_plugin_autoload_off(self):
+        suite = self.write_suite("autoload", AUTOLOAD_PROBE_SUITE)
+        result = self.run_script(self.logs, "-q", "-p", "no:cacheprovider", str(suite))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = self.records()[0]
+        self.assertEqual((record["mode"], record["workers"], record["serial_reason"]),
+                         ("serial", 0, "NEVR_TEST_WORKERS=0"))
+        self.assertNotIn("-n", record["cmd"])
+        self.assertNotIn("WARN", result.stderr)
+
+    @unittest.skipIf(importlib.util.find_spec("pytest") is None, "pytest is not installed")
+    def test_without_xdist_the_run_is_serial_and_says_so_on_stderr_and_in_the_records(self):
+        prelude = ("real = m.importlib.util.find_spec\n"
+                   "m.importlib.util.find_spec = lambda name, *a: None if name == 'xdist' else real(name, *a)")
+        result = self.run_driver(prelude, NEVR_TEST_WORKERS=None)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stderr.count("test-tools: WARN pytest-xdist is not installed"), 1, result.stderr)
+        self.assertIn("serially", result.stderr)
+        for record in self.records("start") + self.records():
+            self.assertEqual((record["mode"], record["workers"]), ("serial", 0))
+            self.assertIn("pytest-xdist is not installed", record["serial_reason"])
+            self.assertNotIn("-n", record["cmd"])
+            self.assertFalse(self.names_plugin(record["cmd"], "xdist"))
+        self.assertEqual(self.records()[0]["failed"], ["test_sample::test_breaks"])
+
+    def test_a_workers_setting_that_is_not_a_count_refuses_the_run(self):
+        for i, value in enumerate(("many", "-1", "1.5", "\u00b2")):
+            with self.subTest(value=value):
+                logs = self.logs / str(i)
+                result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider",
+                                         str(self.suite)], capture_output=True, text=True, cwd=REPO, timeout=120,
+                                        env=self.env(logs, NEVR_TEST_WORKERS=value))
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(f"test-tools: FAIL $NEVR_TEST_WORKERS={value!r} is not auto, logical or a whole number",
+                              result.stderr)
+                self.assertFalse((logs / "runs.jsonl").exists())
+
     def test_an_unwritable_log_directory_refuses_the_run(self):
         blocker = self.root / "a-file"
         blocker.write_text("")
@@ -423,6 +502,32 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(proc.returncode, 2, stdout + stderr)
         self.assertIn("test-tools: FAIL cannot append the end record", stderr)
         self.assertNotIn("test-tools: log ", stdout)
+
+    def wait_until(self, condition, what: str, timeout: float = 60) -> None:
+        """Poll `condition` until it holds, up to `timeout` seconds; the test fails naming `what` if it never does."""
+        deadline = time.monotonic() + timeout
+        while not condition():
+            if time.monotonic() > deadline:
+                self.fail(f"gave up after {timeout} s waiting for {what}")
+            time.sleep(0.02)
+
+    @staticmethod
+    def children_of(pid: int) -> list:
+        """The pids of the processes `pid` started and that still run (Linux, /proc/<pid>/task/*/children)."""
+        found = []
+        for path in Path(f"/proc/{pid}/task").glob("*/children"):
+            try:
+                found += path.read_text().split()
+            except OSError:  # the thread ended between the listing and the read
+                pass
+        return found
+
+    def log_of_the_run(self) -> str:
+        """The live log of the run (its start record names it), as written so far."""
+        try:
+            return Path(self.records("start")[0]["log"]).read_text(encoding="utf-8", errors="replace")
+        except (OSError, FileNotFoundError, IndexError):
+            return ""
 
     def read_stdout_until(self, proc, text: str, timeout: float = 30) -> str:
         """The wrapper's stdout up to the line containing `text`, read while it still runs."""
@@ -702,8 +807,14 @@ class RunToolTestsRecord(unittest.TestCase):
     def test_an_inherited_ignored_hangup_stays_ignored(self):
         # As under nohup: SIGHUP is ignored before the script starts.
         proc = self.start_slow(preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN))
+        # The handlers are in before pytest starts, and the test is running: the kernel's own account says
+        # whether SIGHUP is ignored, so the signal below is discarded when it is sent (no wait for a late death).
+        status = dict(line.split(":\t", 1) for line in Path(f"/proc/{proc.pid}/status").read_text().splitlines()
+                      if line.startswith(("SigIgn", "SigCgt")))
+        hangup = 1 << (signal.SIGHUP - 1)
+        self.assertTrue(int(status["SigIgn"], 16) & hangup, "the script does not ignore the SIGHUP it inherited")
+        self.assertFalse(int(status["SigCgt"], 16) & hangup, "the script took over the ignored SIGHUP")
         proc.send_signal(signal.SIGHUP)
-        time.sleep(0.5)
         self.assertIsNone(proc.poll())
         self.go.write_text("")
         stdout, stderr = proc.communicate(timeout=90)
@@ -824,7 +935,9 @@ class RunToolTestsRecord(unittest.TestCase):
         loud = SLOW_SUITE.replace("    marker = ", "    for _ in range(2000):\n"
                                   "        print('y' * 99, flush=True)\n    marker = ")
         proc = self.start_slow(loud, "-s", NEVR_TEST_INTERRUPT_GRACE_S="2", NEVR_TEST_DRAIN_S="1")
-        time.sleep(1)
+        # The test has printed everything (its marker is written after the loop): wait until the runner has
+        # read it all into the log, with nobody reading the runner's stdout.
+        self.wait_until(lambda: self.log_of_the_run().count("y" * 99) >= 2000, "the runner to read the output")
         os.killpg(proc.pid, signal.SIGINT)
         try:
             proc.wait(timeout=60)
@@ -928,7 +1041,8 @@ class RunToolTestsRecord(unittest.TestCase):
         proc = self.start_slow(loud, "-s", merge_stderr=True, NEVR_TEST_INTERRUPT_GRACE_S="2",
                                NEVR_TEST_DRAIN_S="1",
                                preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit)))
-        time.sleep(2)
+        # The log fills up to its size limit while the runner's stdout and stderr, one pipe, are never read.
+        self.wait_until(lambda: len(self.log_of_the_run().encode()) >= limit - 4096, "the log to reach its limit")
         os.kill(proc.pid, signal.SIGINT)
         try:
             proc.wait(timeout=60)
@@ -940,7 +1054,10 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(record["echo"], "stalled")
 
     def test_a_signal_after_pytest_exits_while_its_output_drains_does_not_change_the_outcome(self):
-        stray = self.write_suite("stray", STRAY_SUITE)
+        # pytest stays alive for 2 s after it prints its summary, so a signal sent at the summary would arrive
+        # while it still runs; the test waits for its exit instead of for a time.
+        slow_exit = "import time\n\ndef pytest_unconfigure(config):\n    time.sleep(2)\n"
+        stray = self.write_suite("stray", STRAY_SUITE, slow_exit)
         proc = subprocess.Popen([sys.executable, str(SCRIPT), "-q", "-s", "-p", "no:cacheprovider", str(stray)],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=REPO,
                                 env=self.env(self.logs, NEVR_TEST_DRAIN_S="5"), start_new_session=True)
@@ -948,7 +1065,10 @@ class RunToolTestsRecord(unittest.TestCase):
         for line in proc.stdout:
             if "1 passed" in line:
                 break
-        time.sleep(1.5)  # pytest has exited; its child still holds the output, so the run is draining
+        self.assertTrue(self.children_of(proc.pid), "pytest had already exited at its summary")
+        # pytest has exited when the runner has no child left; its stray child (not the runner's) still holds
+        # the output, so the run is draining.
+        self.wait_until(lambda: not self.children_of(proc.pid), "pytest to exit")
         os.kill(proc.pid, signal.SIGINT)
         proc.stdout.read()
         proc.wait(timeout=60)
@@ -1212,7 +1332,9 @@ NEEDS_PYTEST = (
     "test_a_signal_after_pytest_exits_while_its_output_drains_does_not_change_the_outcome",
     "test_a_stderr_nobody_reads_holds_up_no_failure_line_nor_the_record",
     "test_a_stdout_nobody_reads_holds_up_the_echo_not_the_run",
+    "test_a_serial_run_still_has_plugin_autoload_off",
     "test_a_terminate_is_passed_on_as_an_interrupt_and_recorded",
+    "test_a_workers_setting_that_is_not_a_count_refuses_the_run",
     "test_an_errored_test_is_named_like_a_failed_one",
     "test_an_inherited_ignored_hangup_stays_ignored",
     "test_an_interrupt_is_passed_on_and_still_recorded",

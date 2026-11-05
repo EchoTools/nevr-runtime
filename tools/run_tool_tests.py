@@ -47,10 +47,18 @@ taking lines; the echo was dropped, or did not finish within $NEVR_TEST_DRAIN_S 
 line on stderr names the log, which holds the whole output. A line stdout cannot encode is echoed
 with replacements; the log keeps it as read.
 
+The plugins. pytest is started with plugin autoload off (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`: every pytest plugin
+installed on the machine would otherwise load, about 5 s per pytest start) and with the two the suite uses named,
+`-p xdist -p randomly`. With pytest-xdist the suite runs on `-n <workers>` processes: $NEVR_TEST_WORKERS is `auto` (the
+default: one per physical core), `logical` (one per hardware thread) or a whole number, 0 for serial. Without pytest-xdist
+the suite runs serially, with one `WARN` line on stderr. Both records and the log's header carry `mode` (`parallel` or
+`serial`), `workers` and `serial_reason`. A `-n` or `-p no:xdist` in the arguments comes after the runner's own flags
+and wins.
+
 Exit code: pytest's. Exceptions, each loud on stderr:
 - 2 before pytest runs, when the log directory, the log or the start record cannot be written, the
-  echo threads cannot start, `--junitxml` is passed (the run owns its XML path), or a wait above is
-  not a positive number of seconds: a run whose record cannot be kept is refused, never run
+  echo threads cannot start, `--junitxml` is passed (the run owns its XML path), a wait above is
+  not a positive number of seconds, or $NEVR_TEST_WORKERS is not `auto`, `logical` or a whole number: a run whose record cannot be kept is refused, never run
   unrecorded;
 - 2 when pytest cannot be started (`start_error`; the end record is still written);
 - 128 + the number of the first signal when a signal interrupted the run (130 for SIGINT);
@@ -84,6 +92,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -111,6 +120,10 @@ def seconds_from_env(name: str, default: float):
         return None
     return value if math.isfinite(value) and value > 0 else None
 
+
+# The plugins the suite uses, as (name for `-p`, module that provides it); pytest starts with autoload off and these.
+SUITE_PLUGINS = (("xdist", "xdist"), ("randomly", "pytest_randomly"))
+DEFAULT_WORKERS = "auto"
 
 # Seconds pytest gets after the first signal, and seconds its output may stay open after it exits, held
 # by a process it left behind (also the most the echo is waited for).
@@ -214,6 +227,61 @@ def pytest_environment() -> dict:
     return {"pytest": version, "plugins": dict(sorted(plugins.items()))}
 
 
+def option_tokens(args: list, environ) -> list:
+    """$PYTEST_ADDOPTS (split as pytest splits it) followed by the arguments."""
+    try:
+        addopts = shlex.split(environ.get("PYTEST_ADDOPTS", ""))
+    except ValueError:
+        addopts = []  # pytest rejects it too, and says so in the log
+    return addopts + list(args)
+
+
+def plugin_names(tokens: list) -> list:
+    """The names given with `-p NAME` or `-pNAME`."""
+    names = [tokens[i + 1] for i, tok in enumerate(tokens[:-1]) if tok == "-p"]
+    return names + [tok[2:] for tok in tokens if tok.startswith("-p") and len(tok) > 2]
+
+
+def workers_setting(environ):
+    """$NEVR_TEST_WORKERS as `auto`, `logical` or a whole number; None when it is none of them."""
+    raw = environ.get("NEVR_TEST_WORKERS") or DEFAULT_WORKERS
+    if raw in ("auto", "logical"):
+        return raw
+    return int(raw) if raw.isascii() and raw.isdigit() else None
+
+
+def plugin_plan(args: list, environ, workers) -> dict:
+    """What the plugins and the workers add to pytest's command: {"flags", "mode", "workers", "serial_reason"}.
+
+    `-p NAME` for each suite plugin that is installed and not switched off (`-p no:NAME`) in the arguments or
+    $PYTEST_ADDOPTS, then `-n <workers>` when pytest-xdist is loaded and `workers` (`auto`, `logical` or a number)
+    is not 0. `workers` is counted here, by xdist's own rule, so the record names the number pytest is given.
+    """
+    named = set(plugin_names(option_tokens(args, environ)))
+    flags = []
+    loaded = set()
+    for name, module in SUITE_PLUGINS:
+        if f"no:{name}" not in named and importlib.util.find_spec(module) is not None:
+            flags += ["-p", name]
+            loaded.add(name)
+    if workers == 0:
+        reason = "NEVR_TEST_WORKERS=0"
+    elif "xdist" in loaded:
+        if not isinstance(workers, int):
+            from xdist.plugin import pytest_xdist_auto_num_workers
+            workers = pytest_xdist_auto_num_workers(types.SimpleNamespace(option=types.SimpleNamespace(
+                numprocesses=workers)))
+        if workers > 0:
+            return {"flags": [*flags, "-n", str(workers)], "mode": "parallel", "workers": workers,
+                    "serial_reason": None}
+        reason = f"xdist counted {workers} workers"
+    elif "no:xdist" in named:
+        reason = "-p no:xdist"
+    else:
+        reason = "pytest-xdist is not installed"
+    return {"flags": flags, "mode": "serial", "workers": 0, "serial_reason": reason}
+
+
 def randomly_seed(args: list, environ) -> tuple:
     """(extra args, seed) for pytest-randomly, from the arguments and the environment.
 
@@ -223,13 +291,8 @@ def randomly_seed(args: list, environ) -> tuple:
     """
     if importlib.util.find_spec("pytest_randomly") is None:
         return [], None
-    try:
-        addopts = shlex.split(environ.get("PYTEST_ADDOPTS", ""))
-    except ValueError:
-        addopts = []  # pytest rejects it too, and says so in the log
-    tokens = addopts + list(args)
-    plugin_args = [tokens[i + 1] for i, tok in enumerate(tokens[:-1]) if tok == "-p"]
-    plugin_args += [tok[2:] for tok in tokens if tok.startswith("-p") and len(tok) > 2]
+    tokens = option_tokens(args, environ)
+    plugin_args = plugin_names(tokens)
     if "no:randomly" in plugin_args:
         return [], None
     if environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") and not {"randomly", "pytest_randomly"} & set(plugin_args):
@@ -449,6 +512,11 @@ def main(argv: list) -> int:
             print(f"test-tools: FAIL ${name}={os.environ.get(name)!r} is not a positive number of seconds",
                   file=sys.stderr)
             return 2
+    workers = workers_setting(os.environ)
+    if workers is None:
+        print(f"test-tools: FAIL $NEVR_TEST_WORKERS={os.environ.get('NEVR_TEST_WORKERS')!r} is not auto, logical or "
+              "a whole number", file=sys.stderr)
+        return 2
 
     log_dir = pathlib.Path(os.environ.get("NEVR_TEST_LOG_DIR") or DEFAULT_LOG_DIR)
     try:
@@ -468,13 +536,18 @@ def main(argv: list) -> int:
     xml_path = log_dir / f"{stem}.xml"
     index = log_dir / "runs.jsonl"
     args = argv or ["-q", "tools/tests"]
-    seed_args, seed = randomly_seed(args, os.environ)
-    cmd = [sys.executable, "-m", "pytest", f"--junitxml={xml_path}", *seed_args, *args]
+    # The plugins and workers come before the arguments, so an argument (`-n 2`, `-p no:xdist`) wins.
+    plan = plugin_plan(args, os.environ, workers)
+    child_env = {**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
+    seed_args, seed = randomly_seed([*plan["flags"], *args], child_env)
+    cmd = [sys.executable, "-m", "pytest", f"--junitxml={xml_path}", *plan["flags"], *seed_args, *args]
     env = pytest_environment()
     base = {"start": start.isoformat(), "checkout": git("rev-parse", "--show-toplevel"), "cwd": cwd(),
             "user": user(), "head": head, "tree": tree,
             "cmd": cmd, "pytest": env["pytest"],
-            "plugins": env["plugins"], "randomly_seed": seed, "log": str(log_path), "junit": str(xml_path)}
+            "plugins": env["plugins"], "plugin_autoload": "off", "mode": plan["mode"], "workers": plan["workers"],
+            "serial_reason": plan["serial_reason"], "randomly_seed": seed, "log": str(log_path),
+            "junit": str(xml_path)}
 
     try:
         log = log_path.open("w", encoding="utf-8")
@@ -490,6 +563,8 @@ def main(argv: list) -> int:
         print(f"test-tools: FAIL cannot start the run: {exc}", file=sys.stderr)
         return 2
     STDERR_ECHO = run.errs
+    if plan["serial_reason"] == "pytest-xdist is not installed":
+        report("test-tools: WARN pytest-xdist is not installed: the suite runs serially, about ten times slower")
     previous = {}
     for s in HANDLED_SIGNALS:
         if signal.getsignal(s) is not signal.SIG_IGN:
@@ -501,13 +576,16 @@ def main(argv: list) -> int:
         for line in (f"test-tools: start {start.isoformat()}", f"test-tools: HEAD {head}",
                      f"test-tools: tree {tree}", f"test-tools: pytest {env['pytest']}",
                      f"test-tools: plugins {' '.join(f'{k}={v}' for k, v in env['plugins'].items())}",
-                     f"test-tools: randomly-seed {seed}", f"test-tools: cmd {' '.join(cmd)}"):
+                     f"test-tools: randomly-seed {seed}",
+                     f"test-tools: workers {plan['workers']} ({plan['mode']}"
+                     + (f": {plan['serial_reason']}" if plan["serial_reason"] else "") + ")",
+                     f"test-tools: cmd {' '.join(cmd)}"):
             run.emit(line + "\n")
         output_complete = True
         if not run.signals:
             try:
                 run.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                            encoding="utf-8", errors="replace", start_new_session=True,
+                                            env=child_env, encoding="utf-8", errors="replace", start_new_session=True,
                                             preexec_fn=die_with_parent)
             except (OSError, subprocess.SubprocessError) as exc:
                 run.start_error = f"{type(exc).__name__}: {exc}"
