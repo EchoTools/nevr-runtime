@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0029-quest-bundled-content-pack.md
+audience: all
+---
+
 # ADR 0029: a Quest APK can carry a game-data pack, and the first-run data step places it
 
 Status: proposed. Tracking issue: #1608; a newer pack over an older one is #1614. Builds on ADR 0011 and ADR 0013 (the first-run

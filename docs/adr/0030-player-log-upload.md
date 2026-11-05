@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0030-player-log-upload.md
+audience: all
+---
+
 # ADR 0030: A player sends their log with one tap and gets a short code
 
 Status: proposed. Nothing below is implemented. The service half needs a deploy that only the owner makes.

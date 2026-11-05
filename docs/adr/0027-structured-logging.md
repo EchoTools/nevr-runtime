@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0027-structured-logging.md
+audience: all
+---
+
 # ADR 0027: structured logging: a record names its event, and each field is its own JSON key
 
 Status: proposed. Tracking issue: #841. Nothing in this record is built when it is written. It supersedes the sub-section

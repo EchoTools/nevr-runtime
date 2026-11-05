@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0022-render-config-log.md
+audience: all
+---
+
 # ADR 0022: the nevr log records the render configuration
 
 Status: proposed (#1139). Written before any code; the "Prediction" section is what the first runs must show.

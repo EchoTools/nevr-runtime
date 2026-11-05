@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0039-one-owner-per-game-behaviour.md
+audience: all
+---
+
 # ADR 0039: each game behaviour this repo changes has one owner, and every other module is an input to it
 
 Status: proposed. Applies to the runtime, the Quest sentinel and every plugin, on both platforms. Builds on AGENTS.md

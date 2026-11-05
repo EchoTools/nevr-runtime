@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0040-every-build-names-its-variant.md
+audience: all
+---
+
 # ADR 0040: every build names its kind and its variant in its first log line and its crash reports
 
 Status: proposed. Applies to every PC and Quest artifact. Builds on N112 (the build identity in logins and

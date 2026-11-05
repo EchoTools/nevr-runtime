@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0028-game-derived-packs-on-the-cdn.md
+audience: all
+---
+
 # ADR 0028: game-derived content packs live on the CDN and in the signed manifest, never on a release page; they ship off
 
 Status: proposed. Tracking issue: #1585 (the installer's fetch and placement, and what it does not yet cover). Builds on ADR 0012 (the nevr root), ADR 0019 decision 8 (a plugin carries no game-derived bytes)

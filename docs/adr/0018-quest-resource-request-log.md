@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0018-quest-resource-request-log.md
+audience: all
+---
+
 # ADR 0018: a log of every resource request the Quest game makes
 
 Status: accepted, implemented (`src/quest/sentinel/resource_request_hook.{h,cpp}`, #871; the loose-file overlay, #1737 C5). Installed in every build; the per-request log lines are development builds only (`nevr_build::kIsDev`), and a release build writes the failed requests alone, rate limited (the amendment on release failures below). On a manifest hit the hook only reads: the game's call, its arguments, its result and the request it fills are the game's, byte for byte. On a manifest miss it may serve a loose file (see the amendment below).

@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0033-controllers-by-interaction-profile.md
+audience: all
+---
+
 # ADR 0033: controllers are mapped by OpenXR interaction profile inside the VrApi layer, not by controller model above it
 
 Status: proposed. Applies to the Quest build. The PC client reads its controllers through the Oculus SDK and is out of

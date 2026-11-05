@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0021-quest-libr15-patched-at-build-time.md
+audience: all
+---
+
 # ADR 0021: libr15.so is patched at build time; no code page is written at run time
 
 Status: proposed (#1132). In the tree and tested on the host: the patcher (`quest_patch_libr15`), the patch table, the patched

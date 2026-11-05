@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0034-one-hook-manager-per-process.md
+audience: all
+---
+
 # ADR 0034: one hook manager per process owns every hooked slot, and plugins hook through it
 
 Status: proposed. Applies to the Quest build and the PC client. Supersedes the parts of ADR 0019 that refuse a second

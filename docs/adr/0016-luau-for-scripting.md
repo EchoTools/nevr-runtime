@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0016-luau-for-scripting.md
+audience: all
+---
+
 # ADR 0016: Luau is the scripting VM
 
 Status: accepted for the prototype (#440). The binding is `src/scripting/vm/luau/`, pinned to Luau `0.742`.

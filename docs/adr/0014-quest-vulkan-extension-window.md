@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0014-quest-vulkan-extension-window.md
+audience: all
+---
+
 # ADR 0014: the device extensions the game requires stay inside the list it reads
 
 Status: accepted, implemented (`src/quest/sentinel/vk_ext_window.{h,cpp}`, #868, #869). On in every Quest build, with no feature flag; where the driver's list fits the game's buffer it changes nothing.
