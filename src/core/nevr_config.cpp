@@ -848,6 +848,14 @@ ConfigSetResult NevrConfig::Set(const std::string& path, const std::string& valu
   return SetScalar(path, edit);
 }
 
+// #1857: the red stub. The four NevrConfigSetPlugin tests fail against this for the right reason until the splice is written
+// (after the design is agreed on the issue).
+ConfigSetResult NevrConfig::SetPluginEnabled(std::size_t /*index*/, bool /*enabled*/) noexcept {
+  ConfigSetResult r;
+  r.reason = "not_implemented";
+  return r;
+}
+
 ConfigSetResult NevrConfig::SetScalar(const std::string& path, const ScalarEdit& edit) noexcept {
   ConfigSetResult r;
   try {

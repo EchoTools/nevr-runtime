@@ -178,6 +178,13 @@ class NevrConfig {
   ConfigSetResult Set(const std::string& path, const std::string& value) noexcept;
   ConfigSetResult Set(const std::string& path, const char* value) = delete;
 
+  /// Turns `plugins[index]`'s `enabled` on or off in the bound file, the same splice-and-rename as Set: every other byte is
+  /// kept. Inserts `enabled:` at the entry's child indentation when the entry has none. A flow-style list or entry is refused
+  /// with a named reason, and so is an index past the end; nothing is written then. By index, not name: the loader keeps
+  /// list order and two entries may share a name (#1857). Never throws.
+  ConfigSetResult SetPluginEnabled(std::size_t index, bool enabled) noexcept;
+
+
   const std::vector<PluginSpec>& Plugins() const { return plugins_; }
   bool Empty() const { return empty_; }
   /// Names of unset bare ${VAR} references found at load, each once, sorted. Their text stays in
