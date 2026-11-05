@@ -37,6 +37,23 @@ line is not the pin's stops with both lines in the message. The preset `quest-co
 `just build-quest-combat-libs` sets from `tools/install_game_ndk.py --print-dir` (ADR 0041, rule 2). `tools/tests/test_install_game_ndk.py` runs the installer offline against a
 fixture archive.
 
+## The donor object's GOT
+
+A row of `LIBS.json` whose `link.asm` is true links a donor object, assembled from `<hash16>.donor.s`. Its code takes the address of
+the statics and functions it owns with `adrp xN, :got:S` and `ldr xN, [xN, :got_lo12:S]`, where S is a label local to the file.
+r21b's assembler (clang 9.0.8) writes such a relocation against the section symbol plus S's offset, and r21b's GNU ld makes one GOT
+entry per symbol and drops the offset, so every such load in a section reads the same slot: whichever pointer the library's
+bindings wrote there last. A global symbol is relocated against itself and gets its own slot.
+
+`src/quest/combat_libs` therefore never assembles `donor.s` alone. `gen_donor_wrapper.cmake` writes `<hash16>.donor_got.s`
+into the build tree: it `.include`s the donor and adds `.globl S` and `.hidden S` for each `:got:` operand S, which
+`donor_got_operands.cmake` reads from the donor. `.hidden` keeps S out of the library's dynamic symbol table (the link makes it local),
+so nothing outside the library can override it. The generator stops, naming S, when S is not a label defined in the file or is
+already declared global or weak in it. After each such library links, `check_donor_got.cmake` requires, for every S, a GOT slot
+(an `R_AARCH64_RELATIVE` relocation inside `.got`) whose content is S's own address in the library's symbol table; it reads
+addresses, not instructions. `tools/tests/test_combat_libs_cmake.py` builds a donor of two statics both ways with the pinned NDK: assembled
+alone the two loads share one slot, wrapped each has its own.
+
 ## Evidence for each pinned value
 
 Every value was measured on the files named here. The reference binaries are the unmodified store APK's.
