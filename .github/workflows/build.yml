@@ -473,17 +473,8 @@ jobs:
       run: |
         set -euo pipefail
         shopt -s nullglob
-        zips=(dist/*.zip)
         tars=(dist/*.tar.zst)
-        test "${#zips[@]}" -eq 1
         test "${#tars[@]}" -eq 1
-        for archive in "${zips[@]}"; do
-          test -s "$archive"
-          zip_entries=$(cmake -E tar tf "$archive")
-          [[ "$zip_entries" == *BugSplat64.dll* ]]
-          [[ "$zip_entries" == *nevr-runtime.dll* ]]
-          [[ "$zip_entries" == *echovr_server.exe* ]]
-        done
         for archive in "${tars[@]}"; do
           test -s "$archive"
           tar_entries=$(tar --zstd -tf "$archive")
@@ -821,9 +812,8 @@ jobs:
         for pkg in staged/nevr-runtime-v*/; do
           name=$(basename "$pkg")
           python3 tools/build_distribution.py --package "$pkg" --destination "dist/$name" \
-            --tar "dist/$name.tar.zst" --zip "dist/$name.zip"
-          cmake -DARCHIVE_TAR="dist/$name.tar.zst" -DARCHIVE_ZIP="dist/$name.zip" \
-            -P cmake/VerifyDistribution.cmake
+            --tar "dist/$name.tar.zst"
+          cmake -DARCHIVE_TAR="dist/$name.tar.zst" -P cmake/VerifyDistribution.cmake
         done
         ls -la dist
 
@@ -832,13 +822,11 @@ jobs:
       run: |
         set -euo pipefail
         shopt -s nullglob
-        zips=(dist/*.zip)
         tars=(dist/*.tar.zst)
-        test "${#zips[@]}" -eq 1
         test "${#tars[@]}" -eq 1
 
-    # The .tar.zst archives and the dist zip are built and checked but are not release assets: the release is
-    # the one sealed Windows zip and the Quest library. The archives stay here as a workflow artifact.
+    # The .tar.zst archive is built and checked but is not a release asset: the release is the one sealed
+    # Windows zip and the Quest library. The archive stays here as a workflow artifact.
     - name: Keep the .tar.zst archives as a workflow artifact
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:

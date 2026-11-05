@@ -95,7 +95,8 @@ def problems(env: dict[str, str], root: pathlib.Path, run_preflight: bool = True
                     if _sha256(path) != pins[name]:
                         out.append(f"{name} is not the pinned file ({what}): its sha256 differs from the pin")
                 except OSError as err:
-                    out.append(f"{name} names a file that can't be read to the end ({what}): {err.strerror}")
+                    reason = err.strerror or type(err).__name__
+                    out.append(f"{name} names a file that can't be read to the end ({what}): {reason}")
     for program in PROGRAMS:
         if shutil.which(program, path=env.get("PATH")) is None:
             out.append(f"{program} is not on PATH")

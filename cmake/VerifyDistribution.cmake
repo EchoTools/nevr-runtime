@@ -1,4 +1,4 @@
-foreach(required_var IN ITEMS ARCHIVE_TAR ARCHIVE_ZIP)
+foreach(required_var IN ITEMS ARCHIVE_TAR)
   if(NOT DEFINED ${required_var})
     message(FATAL_ERROR "VerifyDistribution requires ${required_var}")
   endif()
@@ -24,21 +24,5 @@ foreach(required_artifact IN ITEMS BugSplat64.dll nevr-runtime.dll echovr_server
   string(REPLACE "." "\\." escaped_artifact "${required_artifact}")
   if(NOT tar_entries MATCHES "(^|/)${escaped_artifact}([\r\n]|$)")
     message(FATAL_ERROR "Distribution tar.zst lacks ${required_artifact}: ${ARCHIVE_TAR}")
-  endif()
-endforeach()
-
-execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E tar tf "${ARCHIVE_ZIP}"
-  RESULT_VARIABLE zip_result
-  OUTPUT_VARIABLE zip_entries
-  ERROR_VARIABLE zip_error
-)
-if(NOT zip_result EQUAL 0)
-  message(FATAL_ERROR "Cannot list distribution zip ${ARCHIVE_ZIP}: ${zip_error}")
-endif()
-foreach(required_artifact IN ITEMS BugSplat64.dll nevr-runtime.dll echovr_server.exe)
-  string(REPLACE "." "\\." escaped_artifact "${required_artifact}")
-  if(NOT zip_entries MATCHES "(^|/)${escaped_artifact}([\r\n]|$)")
-    message(FATAL_ERROR "Distribution zip lacks ${required_artifact}: ${ARCHIVE_ZIP}")
   endif()
 endforeach()
