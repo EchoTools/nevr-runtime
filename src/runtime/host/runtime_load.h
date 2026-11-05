@@ -92,11 +92,23 @@ struct RuntimeLoadResult {
   std::uint32_t verify_engine_cbsize = 0;
   // For kUpdateBlocked: why the start stopped before any load (update_swap.h, UpdateResult::reason).
   const char* update_reason = nullptr;
+  // True when the runtime is a release the host swapped in that was mapped and failed: the host marked it, and the
+  // next start puts the previous release back (ADR 0024, section 6). The stop notice says so.
+  bool update_failed = false;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
   const char* OutcomeName() const;
   const char* DegradedAction() const;
 };
+
+/// What a failed load of the pending release asks of the host (ADR 0024, section 6).
+enum class PendingFailure : std::uint8_t {
+  kNone,      ///< loaded, or a stop that is not the release's doing
+  kNeverRan,  ///< refused, absent, or not loadable: no line of the runtime ran, so the previous one is put back at once
+  kMapped,    ///< mapped and then failed: it stays mapped, so the next start puts the previous one back
+};
+
+PendingFailure ClassifyPendingFailure(RuntimeLoadOutcome outcome) noexcept;
 
 /// What the host found when it looked for nevr-runtime.dll at the path ResolveRuntimePath returned.
 enum class RuntimeFile : std::uint8_t {
@@ -199,6 +211,12 @@ class RuntimeLoader {
   // loaded, and always before the runtime's entry is looked up and its initialize runs (ADR 0024, section 4.1).
   RuntimeLoadResult Load(const NevrHostContext& host, BootstrapDiagnostics& diagnostics,
                          UpdateLock* update_lock = nullptr);
+
+  /// The start's whole load (ADR 0024, section 4 and 6): self-update's swap and pending decision, the load, and for a
+  /// pending release that fails to load, the rollback in this start (R1, never ran) or the mark for the next one
+  /// (R1, mapped). Emits the same records as Load, once per load: a start that falls back writes two `versions` and two
+  /// `runtime_load` records with `update_rollback` between them.
+  RuntimeLoadResult LoadAtStart(const NevrHostContext& host, BootstrapDiagnostics& diagnostics);
 
   /// The start stopped before any load because a self-update left the root unfinished (UpdateAction::kStop):
   /// the result is kUpdateBlocked with `reason`, and nothing is loaded.

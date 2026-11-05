@@ -8,6 +8,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -211,13 +212,20 @@ bool ParseStaged(const json& doc, Staged* out) {
   return runtimes == 1;
 }
 
-// swap.json: {"kind": "swap", "from", "to", "phase": "out"|"in"|"done", "out": [member path], "in": [member path]}.
+// swap.json: {"kind": "swap"|"rollback", "from", "to", "phase": "out"|"in"|"done", "out": [member path], "in": [member
+// path]}. For a swap, `from` is the release moved out and `to` the one moved in. For a rollback (ADR 0024, section 6),
+// `from` is the failed release leaving the root and `to` the previous release coming back; it also carries
+// "failed_sha256" (the failed runtime, for the quarantine) and "reason" (why), so an interrupted rollback can be
+// completed from the journal alone.
 struct Journal {
+  std::string kind = "swap";
   std::string from;
   std::string to;
   std::string phase;
   std::vector<names::Member> out;
   std::vector<names::Member> in;
+  std::string failed_sha256;
+  std::string reason;
 };
 
 bool ParseMembers(const json& list, std::vector<names::Member>* out) {
@@ -230,18 +238,36 @@ bool ParseMembers(const json& list, std::vector<names::Member>* out) {
   return true;
 }
 
-// This host executes the kind "swap" only; a "rollback" journal is the next step's (#2105).
+// A reason word: what a load outcome, a failure or the host calls a cause. Lower case, digits and '_', at most 40.
+bool IsReasonToken(const std::string& text) {
+  if (text.empty() || text.size() > 40) return false;
+  for (const char c : text) {
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
+  }
+  return true;
+}
+
 bool ParseJournal(const json& doc, Journal* out) {
   if (!doc.is_object()) return false;
   for (const char* key : {"kind", "from", "to", "phase"}) {
     if (!doc.contains(key) || !doc[key].is_string()) return false;
   }
-  if (doc["kind"].get<std::string>() != "swap") return false;
+  out->kind = doc["kind"].get<std::string>();
+  if (out->kind != "swap" && out->kind != "rollback") return false;
   out->from = doc["from"].get<std::string>();
   out->to = doc["to"].get<std::string>();
   out->phase = doc["phase"].get<std::string>();
   if (!names::IsVersionName(out->from) || !names::IsVersionName(out->to)) return false;
   if (out->phase != "out" && out->phase != "in" && out->phase != "done") return false;
+  if (out->kind == "rollback") {
+    if (!doc.contains("failed_sha256") || !doc["failed_sha256"].is_string() || !doc.contains("reason") ||
+        !doc["reason"].is_string()) {
+      return false;
+    }
+    out->failed_sha256 = doc["failed_sha256"].get<std::string>();
+    out->reason = doc["reason"].get<std::string>();
+    if (!IsSha256Hex(out->failed_sha256) || !IsReasonToken(out->reason)) return false;
+  }
   return doc.contains("out") && doc.contains("in") && ParseMembers(doc["out"], &out->out) && ParseMembers(doc["in"], &out->in);
 }
 
@@ -250,7 +276,54 @@ json JournalJson(const Journal& journal) {
   json in = json::array();
   for (const names::Member& m : journal.out) out.push_back(names::MemberPath(m));
   for (const names::Member& m : journal.in) in.push_back(names::MemberPath(m));
-  return {{"kind", "swap"}, {"from", journal.from}, {"to", journal.to}, {"phase", journal.phase}, {"out", out}, {"in", in}};
+  json doc = {{"kind", journal.kind}, {"from", journal.from}, {"to", journal.to}, {"phase", journal.phase}, {"out", out}, {"in", in}};
+  if (journal.kind == "rollback") {
+    doc["failed_sha256"] = journal.failed_sha256;
+    doc["reason"] = journal.reason;
+  }
+  return doc;
+}
+
+// pending.json (ADR 0024, section 2): {"to": {"version", "sha256"}, "from": {"version", "sha256"} or null,
+// "boot_attempts", "failed_reason": null or a reason word}. `from` is null when the swap found no previous runtime.
+struct Pending {
+  std::string to_version;
+  std::string to_sha256;
+  bool has_from = false;
+  std::string from_version;
+  std::string from_sha256;
+  std::uint64_t boot_attempts = 0;
+  std::string failed_reason;  // empty: null
+};
+
+bool ParsePending(const json& doc, Pending* out) {
+  if (!doc.is_object() || !doc.contains("to") || !doc["to"].is_object() || !doc.contains("boot_attempts") ||
+      !doc["boot_attempts"].is_number_unsigned()) {
+    return false;
+  }
+  const json& to = doc["to"];
+  if (!to.contains("version") || !to["version"].is_string() || !to.contains("sha256") || !to["sha256"].is_string()) return false;
+  out->to_version = to["version"].get<std::string>();
+  out->to_sha256 = to["sha256"].get<std::string>();
+  if (!names::IsVersionName(out->to_version) || !IsSha256Hex(out->to_sha256)) return false;
+  out->boot_attempts = doc["boot_attempts"].get<std::uint64_t>();
+  if (doc.contains("from") && !doc["from"].is_null()) {
+    const json& from = doc["from"];
+    if (!from.is_object() || !from.contains("version") || !from["version"].is_string() || !from.contains("sha256") ||
+        !from["sha256"].is_string()) {
+      return false;
+    }
+    out->from_version = from["version"].get<std::string>();
+    out->from_sha256 = from["sha256"].get<std::string>();
+    if (!names::IsVersionName(out->from_version) || !IsSha256Hex(out->from_sha256)) return false;
+    out->has_from = true;
+  }
+  if (doc.contains("failed_reason") && !doc["failed_reason"].is_null()) {
+    if (!doc["failed_reason"].is_string()) return false;
+    out->failed_reason = doc["failed_reason"].get<std::string>();
+    if (!IsReasonToken(out->failed_reason)) return false;
+  }
+  return true;
 }
 
 // state.json (ADR 0024, section 2): an object; "owned", when present, a list of {"path", "sha256"} in the vocabulary;
@@ -290,6 +363,11 @@ class SwapRun {
 
   UpdateResult Run();
 
+  /// R1, never ran (ADR 0024, section 6): put the previous release back now, in this start.
+  UpdateResult RollBackNow(const char* reason);
+  /// R1, mapped: write `failed_reason` into pending.json. True when it is there.
+  bool MarkFailed(const char* reason);
+
   /// The answer after an exception: stop when a journal says the root may be half moved, else load.
   UpdateResult AfterException() {
     Record("blocked", "internal_error");
@@ -297,19 +375,24 @@ class SwapRun {
   }
 
  private:
-  static UpdateResult Load() { return {UpdateAction::kLoad, nullptr}; }
-  static UpdateResult Stop(const char* reason) { return {UpdateAction::kStop, reason}; }
+  static UpdateResult Load() { return {UpdateAction::kLoad, nullptr, false}; }
+  // Load, and the release in the root is on trial (the load of it that fails is the host's to handle).
+  static UpdateResult Trial() { return {UpdateAction::kLoad, nullptr, true}; }
+  static UpdateResult Stop(const char* reason) { return {UpdateAction::kStop, reason, false}; }
 
   std::wstring UpdateFile(const wchar_t* name) const { return Join(update_, name); }
   // The folders the swap works in, relative to the root: what a reparse_point record names.
   static std::wstring StagingRel(const std::string& version) {
     return Join(Join(names::kUpdateDir, names::kStagingDir), Widen(version));
   }
-  static std::wstring PreviousRel(const std::string& version) {
-    return Join(Join(names::kUpdateDir, names::kPreviousDir), Widen(version));
+  static std::wstring GenerationRel(const wchar_t* folder, const std::string& version) {
+    return Join(Join(names::kUpdateDir, folder), Widen(version));
   }
+  static std::wstring PreviousRel(const std::string& version) { return GenerationRel(names::kPreviousDir, version); }
+  static std::wstring FailedRel(const std::string& version) { return GenerationRel(names::kFailedDir, version); }
   std::wstring StagingDir(const std::string& version) const { return Join(root_, StagingRel(version)); }
   std::wstring PreviousDir(const std::string& version) const { return Join(root_, PreviousRel(version)); }
+  std::wstring FailedDir(const std::string& version) const { return Join(root_, FailedRel(version)); }
   std::string FirstLink(std::initializer_list<std::wstring> relative) const;
   std::wstring InRoot(const names::Member& member) const { return Join(root_, names::MemberRelativePath(member)); }
   std::wstring In(const std::wstring& dir, const names::Member& member) const {
@@ -337,6 +420,7 @@ class SwapRun {
   StateRead LoadState();
   json RebuiltState() const;
   UpdateResult Recover(bool state_readable);
+  UpdateResult RecoverRollback(const Journal& journal, bool state_readable);
   bool UndoMoves(const Journal& journal, bool phase_in);
   bool PendingNames(const std::string& version, const std::string& runtime_sha256) const;
   bool StagedNames(const std::string& version) const;
@@ -346,8 +430,21 @@ class SwapRun {
   bool Quarantined(const Staged& staged) const;
   UpdateResult Discard(const Staged& staged, const std::string& why);
   DWORD RuntimeWriteError() const;
-  bool ClearPrevious(std::string* linked);
+  bool ClearGenerations(const wchar_t* folder, std::string* linked);
   UpdateResult Swap(const Staged& staged, const std::string& from, const std::vector<names::Member>& out);
+
+  // The pending release (ADR 0024, section 6).
+  enum class PendingStep { kNone, kTrial, kHold, kStop };
+  enum class RollbackEnd { kDone, kBlocked, kStop };
+  void RecordRollback(const char* outcome, const char* reason, json fields = json::object());
+  std::vector<names::Member> OwnedMembers() const;
+  std::vector<names::Member> MembersIn(const std::wstring& dir) const;
+  std::string VerifyRuntimeAt(const std::wstring& path) const;
+  bool IsQuarantined(const std::string& version, const std::string& runtime_sha256) const;
+  PendingStep DecidePending(UpdateResult* stop);
+  RollbackEnd DoRollback(const Pending& pending, const std::string& reason, const char* mode, UpdateResult* stop);
+  bool CompleteRollback(Journal* journal);
+  bool FinishRollback(const Journal& journal);
 
   BootstrapDiagnostics& diagnostics_;
   UpdateLock& lock_;
@@ -359,6 +456,9 @@ class SwapRun {
   DWORD last_error_ = 0;
   bool killed_ = false;
   int steps_ = 0;
+  // A swap's cleanup this start finished: that swap's start was killed before its runtime could load, so this start's
+  // load is the release's first try, not a second.
+  bool finished_swap_ = false;
 };
 
 void SwapRun::Record(const char* outcome, const char* reason, json fields) {
@@ -522,7 +622,7 @@ SwapRun::StateRead SwapRun::LoadState() {
 }
 
 UpdateResult SwapRun::Run() {
-  if (root_.empty() || !IsDirectory(update_)) return {UpdateAction::kNoUpdateFolder, nullptr};
+  if (root_.empty() || !IsDirectory(update_)) return {UpdateAction::kNoUpdateFolder, nullptr, false};
   // update\ itself first: the lock is a file inside it, and a link is never followed, not even to take the lock.
   if (IsReparsePoint(update_)) {
     Record("blocked", "reparse_point", {{"folder", "update"}});
@@ -537,7 +637,7 @@ UpdateResult SwapRun::Run() {
   const bool journal = Exists(UpdateFile(names::kSwapJson));
   const std::string linked =
       FirstLink({Join(names::kUpdateDir, names::kStagingDir), Join(names::kUpdateDir, names::kPreviousDir),
-                 names::kPluginsDir});
+                 Join(names::kUpdateDir, names::kFailedDir), names::kPluginsDir});
   if (!linked.empty()) {
     // With a journal the root may be half moved, and its recovery would move files through the link: nothing loads.
     Record("blocked", "reparse_point", {{"folder", linked}, {"journal", journal}});
@@ -545,7 +645,7 @@ UpdateResult SwapRun::Run() {
   }
   RemoveStaleTemporaries();
   if (killed_) return Load();
-  if (!journal && !Exists(UpdateFile(names::kStagedJson))) return Load();
+  if (!journal && !Exists(UpdateFile(names::kStagedJson)) && !Exists(UpdateFile(names::kPendingJson))) return Load();
   const StateRead state = LoadState();
   if (state == StateRead::kEnded) return Load();
   if (journal) {
@@ -553,7 +653,20 @@ UpdateResult SwapRun::Run() {
     // A journal still there is a recovery that did not finish: no new swap starts over it.
     if (killed_ || recovered.action == UpdateAction::kStop || Exists(UpdateFile(names::kSwapJson))) return recovered;
   }
-  if (state != StateRead::kOk) return Load();  // its record is written: no swap without the ownership list
+  if (state != StateRead::kOk) return Load();  // its record is written: no swap and no rollback without the ownership list
+  if (Exists(UpdateFile(names::kPendingJson))) {
+    UpdateResult stop;
+    switch (DecidePending(&stop)) {
+      case PendingStep::kStop: return stop;
+      case PendingStep::kHold: return Load();
+      case PendingStep::kTrial:
+        // A staged release waits: swapping now would move the unconfirmed release over the last confirmed one.
+        if (Exists(UpdateFile(names::kStagedJson))) Record("deferred", "release_pending");
+        return Trial();
+      case PendingStep::kNone: break;
+    }
+    if (killed_) return Load();
+  }
   if (Exists(UpdateFile(names::kStagedJson))) return SwapStaged();
   return Load();
 }
@@ -574,6 +687,7 @@ UpdateResult SwapRun::Recover(bool state_readable) {
     Record("blocked", "bad_journal");
     return Stop("bad_journal");
   }
+  if (journal.kind == "rollback") return RecoverRollback(journal, state_readable);
   json fields = {{"kind", "swap"}, {"phase", journal.phase}, {"from", journal.from}, {"to", journal.to}};
   const std::string linked =
       FirstLink({StagingRel(journal.to), Join(StagingRel(journal.to), names::kPluginsDir), PreviousRel(journal.from),
@@ -593,6 +707,7 @@ UpdateResult SwapRun::Recover(bool state_readable) {
     return journal.phase == "done" ? Load() : Stop("move_failed");
   }
   Record("recovered", nullptr, fields);
+  if (journal.phase == "done") finished_swap_ = true;
   return Load();
 }
 
@@ -687,16 +802,18 @@ std::string SwapRun::CheckStagedFile(const Staged& staged, const StagedFile& fil
 }
 
 // True when state.json's quarantine already holds this release (its version and runtime sha256).
-bool SwapRun::Quarantined(const Staged& staged) const {
+bool SwapRun::IsQuarantined(const std::string& version, const std::string& runtime_sha256) const {
   if (!state_.contains("quarantine") || !state_["quarantine"].is_array()) return false;
   for (const json& entry : state_["quarantine"]) {
-    if (entry.is_object() && entry.value("version", json()) == json(staged.version) &&
-        entry.value("runtime_sha256", json()) == json(staged.runtime_sha256)) {
+    if (entry.is_object() && entry.value("version", json()) == json(version) &&
+        entry.value("runtime_sha256", json()) == json(runtime_sha256)) {
       return true;
     }
   }
   return false;
 }
+
+bool SwapRun::Quarantined(const Staged& staged) const { return IsQuarantined(staged.version, staged.runtime_sha256); }
 
 // A failed check removes staged.json and counts the release's discard; the third quarantines it, once (section 4.3).
 // A staged.json that cannot be removed comes back at the next start, so the record says so, with the error.
@@ -763,6 +880,18 @@ UpdateResult SwapRun::SwapStaged() {
     Record("discarded", "bad_staged", fields);
     return Load();
   }
+  if (IsQuarantined(staged.version, staged.runtime_sha256)) {
+    // A release that failed to start is not offered again (ADR 0024, requirement 3): dropped, and not counted as a discard.
+    const bool removed = Remove(UpdateFile(names::kStagedJson));
+    if (killed_) return Load();
+    json fields = {{"to", staged.version}};
+    if (!removed) {
+      fields["staged_removed"] = false;
+      fields["staged_win32_error"] = last_error_;
+    }
+    Record("discarded", "quarantined", fields);
+    return Load();
+  }
   const std::string linked =
       FirstLink({StagingRel(staged.version), Join(StagingRel(staged.version), names::kPluginsDir)});
   if (!linked.empty()) {
@@ -797,16 +926,7 @@ UpdateResult SwapRun::SwapStaged() {
     return Load();
   }
   // Ownership (section 4.7): the runtime always; a plugin when state.json lists it with the sha256 of the file in the root.
-  std::vector<names::Member> out = {names::Member{true, {}}};
-  if (state_.contains("owned")) {
-    for (const json& entry : state_["owned"]) {
-      names::Member member;
-      names::ParseMember(entry["path"].get<std::string>(), &member);
-      if (member.runtime || HasMember(out, member)) continue;
-      const FileFacts facts = FactsOf(InRoot(member));
-      if (facts.present && facts.sha256 == entry["sha256"].get<std::string>()) out.push_back(member);
-    }
-  }
+  const std::vector<names::Member> out = OwnedMembers();
   for (const StagedFile& file : staged.files) {
     if (!file.member.runtime && Exists(InRoot(file.member)) && !HasMember(out, file.member)) {
       Record("blocked", "foreign_file", {{"to", staged.version}, {"path", names::MemberPath(file.member)}});
@@ -816,10 +936,11 @@ UpdateResult SwapRun::SwapStaged() {
   return Swap(staged, runtime.version, out);
 }
 
-// The older generation in update\previous\ goes before a new one moves in (section 4.5). Only names in the vocabulary.
-// A version folder or its plugins folder that is a link stops it before anything is deleted, and `linked` names it.
-bool SwapRun::ClearPrevious(std::string* linked) {
-  const std::wstring previous = Join(update_, names::kPreviousDir);
+// The older generation in update\<folder>\ (previous, failed) goes before a new one moves in (section 4.5). Only names
+// in the vocabulary. A version folder or its plugins folder that is a link stops it before anything is deleted, and
+// `linked` names it.
+bool SwapRun::ClearGenerations(const wchar_t* folder, std::string* linked) {
+  const std::wstring previous = Join(update_, folder);
   std::vector<std::wstring> versions;
   WIN32_FIND_DATAW data;
   HANDLE find = FindFirstFileW(Join(previous, L"*").c_str(), &data);
@@ -828,7 +949,7 @@ bool SwapRun::ClearPrevious(std::string* linked) {
     std::string name;
     for (const wchar_t* c = data.cFileName; *c != L'\0'; ++c) name.push_back(*c < 0x80 ? static_cast<char>(*c) : '?');
     if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 && names::IsVersionName(name)) {
-      *linked = FirstLink({PreviousRel(name), Join(PreviousRel(name), names::kPluginsDir)});
+      *linked = FirstLink({GenerationRel(folder, name), Join(GenerationRel(folder, name), names::kPluginsDir)});
       if (!linked->empty()) break;
       versions.push_back(Join(previous, data.cFileName));
     }
@@ -885,7 +1006,7 @@ UpdateResult SwapRun::Swap(const Staged& staged, const std::string& from, const 
     return undone ? Load() : Stop("move_failed");
   };
   std::string linked;
-  if (!ClearPrevious(&linked)) {
+  if (!ClearGenerations(names::kPreviousDir, &linked)) {
     if (killed_ || linked.empty()) return failed(false);
     json fields = identity;
     fields["folder"] = linked;
@@ -921,7 +1042,365 @@ UpdateResult SwapRun::Swap(const Staged& staged, const std::string& from, const 
   fields["files"] = files;
   if (!finished) fields["cleanup"] = "incomplete";  // the next start finishes it from the journal
   Record("swapped", nullptr, fields);
+  return Trial();
+}
+
+// ---- the pending release: rollback (ADR 0024, section 6) -----------------------------------------------------------
+
+void SwapRun::RecordRollback(const char* outcome, const char* reason, json fields) {
+  if (killed_) return;
+  json record = std::move(fields);
+  record["event"] = "update_rollback";
+  record["outcome"] = outcome;
+  if (reason != nullptr) record["reason"] = reason;
+  record["elapsed_ms"] = GetTickCount64() - started_;
+  diagnostics_.Emit(record);
+}
+
+std::string AsciiName(const wchar_t* name) {
+  std::string out;
+  for (const wchar_t* c = name; *c != L'\0'; ++c) out.push_back(*c < 0x80 ? static_cast<char>(*c) : '?');
+  return out;
+}
+
+// Ownership (section 4.7): the runtime always; a plugin when state.json lists it with the sha256 of the file in the root.
+std::vector<names::Member> SwapRun::OwnedMembers() const {
+  std::vector<names::Member> out = {names::Member{true, {}}};
+  if (!state_.contains("owned")) return out;
+  for (const json& entry : state_["owned"]) {
+    names::Member member;
+    names::ParseMember(entry["path"].get<std::string>(), &member);
+    if (member.runtime || HasMember(out, member)) continue;
+    const FileFacts facts = FactsOf(InRoot(member));
+    if (facts.present && facts.sha256 == entry["sha256"].get<std::string>()) out.push_back(member);
+  }
+  return out;
+}
+
+// The files of a release kept in a generation folder: its runtime, then its plugins in name order.
+std::vector<names::Member> SwapRun::MembersIn(const std::wstring& dir) const {
+  std::vector<names::Member> out;
+  if (Exists(Join(dir, names::kRuntimeFile))) out.push_back(names::Member{true, {}});
+  std::vector<std::string> plugins;
+  WIN32_FIND_DATAW data;
+  const HANDLE find = FindFirstFileW(Join(Join(dir, names::kPluginsDir), L"*.dll").c_str(), &data);
+  if (find != INVALID_HANDLE_VALUE) {
+    do {
+      names::Member member;
+      if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+          names::ParseMember(std::string(names::kPluginPrefix) + AsciiName(data.cFileName), &member)) {
+        plugins.push_back(member.plugin);
+      }
+    } while (FindNextFileW(find, &data) != FALSE);
+    FindClose(find);
+  }
+  std::sort(plugins.begin(), plugins.end());
+  for (const std::string& plugin : plugins) out.push_back(names::Member{false, plugin});
+  return out;
+}
+
+// The restored runtime passes the same check as any runtime before it loads (section 6). Empty when it does.
+std::string SwapRun::VerifyRuntimeAt(const std::wstring& path) const {
+  const HANDLE handle =
+      CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) return "unreadable";
+  const nevr_plugin_signature::Verdict verdict = nevr_plugin_signature::VerifyPluginFile(
+      handle, HostVerifyPolicy(), static_cast<std::int64_t>(std::time(nullptr)));
+  CloseHandle(handle);
+  return verdict.accepted() ? std::string() : verdict.Describe();
+}
+
+// Section 4.6, "A rollback is never undone: it is completed". Phase out moves the failed release's files to
+// update\failed\<failed>\, phase in moves the previous release's files back, phase done finishes. Every step can be
+// run again: a file is moved only when it is still where the journal says it was.
+bool SwapRun::CompleteRollback(Journal* journal) {
+  const std::wstring failed = FailedDir(journal->from);
+  const std::wstring previous = PreviousDir(journal->to);
+  if (journal->phase == "out") {
+    CreateDirectoryW(Join(update_, names::kFailedDir).c_str(), nullptr);
+    CreateDirectoryW(failed.c_str(), nullptr);
+    for (const names::Member& member : journal->out) {
+      if (!Exists(InRoot(member)) || Exists(In(failed, member))) continue;
+      MakeDirFor(In(failed, member));
+      if (!Move(InRoot(member), In(failed, member))) return false;
+    }
+    journal->phase = "in";
+    if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(*journal))) return false;
+  }
+  if (journal->phase == "in") {
+    for (const names::Member& member : journal->in) {
+      if (!Exists(In(previous, member)) || Exists(InRoot(member))) continue;
+      MakeDirFor(InRoot(member));
+      if (!Move(In(previous, member), InRoot(member))) return false;
+    }
+    journal->phase = "done";
+    if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(*journal))) return false;
+  }
+  return FinishRollback(*journal);
+}
+
+// At done: the files that came back are the owned ones, the previous release is current, the failed one is quarantined
+// (before pending.json goes, so it is never offered again), then the pending record and the crash marker, the emptied
+// generation folder and the journal. Every step can be run again.
+bool SwapRun::FinishRollback(const Journal& journal) {
+  json owned = json::array();
+  for (const names::Member& member : journal.in) {
+    owned.push_back({{"path", names::MemberPath(member)}, {"sha256", FactsOf(InRoot(member)).sha256}});
+  }
+  state_["owned"] = owned;
+  const FileFacts runtime = FactsOf(Join(root_, names::kRuntimeFile));
+  if (!runtime.sha256.empty()) state_["current"] = {{"version", journal.to}, {"runtime_sha256", runtime.sha256}};
+  if (!IsQuarantined(journal.from, journal.failed_sha256)) {
+    if (!state_.contains("quarantine") || !state_["quarantine"].is_array()) state_["quarantine"] = json::array();
+    state_["quarantine"].push_back(
+        {{"version", journal.from}, {"runtime_sha256", journal.failed_sha256}, {"reason", journal.reason}, {"time", UtcNow()}});
+  }
+  if (!WriteJson(UpdateFile(names::kStateJson), state_)) return false;
+  if (!Remove(UpdateFile(names::kCrashedFile)) || !Remove(UpdateFile(names::kPendingJson))) return false;
+  const std::wstring previous = PreviousDir(journal.to);
+  if (!RemoveDir(Join(previous, names::kPluginsDir)) || !RemoveDir(previous)) return false;
+  return Remove(UpdateFile(names::kSwapJson));
+}
+
+UpdateResult SwapRun::RecoverRollback(const Journal& journal, bool state_readable) {
+  json fields = {{"kind", "rollback"}, {"phase", journal.phase}, {"from", journal.from}, {"to", journal.to}};
+  const std::string linked = FirstLink({Join(names::kUpdateDir, names::kFailedDir), FailedRel(journal.from),
+                                        Join(FailedRel(journal.from), names::kPluginsDir), PreviousRel(journal.to),
+                                        Join(PreviousRel(journal.to), names::kPluginsDir)});
+  if (!linked.empty()) {
+    // Nothing is moved or removed through the link. At done every file is in place, so the start loads.
+    fields["folder"] = linked;
+    Record("blocked", "reparse_point", fields);
+    return journal.phase == "done" ? Load() : Stop("reparse_point");
+  }
+  if (journal.phase == "done" && !state_readable) return Load();
+  Journal resumed = journal;
+  const bool whole = CompleteRollback(&resumed);
+  if (killed_) return Load();
+  if (!whole) {
+    fields["win32_error"] = last_error_;
+    Record("blocked", "move_failed", fields);
+    return journal.phase == "done" ? Load() : Stop("move_failed");
+  }
+  Record("recovered", nullptr, fields);
   return Load();
+}
+
+// The rollback itself: checks first and moves nothing until they pass, then the journal and CompleteRollback. kBlocked
+// leaves the root as it was (the pending release stays); kStop is a cause the start cannot go on from, in `stop`.
+SwapRun::RollbackEnd SwapRun::DoRollback(const Pending& pending, const std::string& reason, const char* mode,
+                                         UpdateResult* stop) {
+  json common = {{"mode", mode}, {"from", pending.to_version}, {"boot_attempts", pending.boot_attempts}};
+  if (pending.has_from) common["to"] = pending.from_version;
+  const auto fail = [&](const char* why, RollbackEnd end, json extra = json::object()) {
+    json fields = common;
+    for (auto& [key, value] : extra.items()) fields[key] = value;
+    RecordRollback("failed", why, fields);
+    if (end == RollbackEnd::kStop) *stop = Stop(why);
+    return end;
+  };
+  if (!pending.has_from) return fail("no_previous", RollbackEnd::kStop);
+  const std::string& restored = pending.from_version;
+  const std::wstring previous = PreviousDir(restored);
+  const std::string linked = FirstLink({Join(names::kUpdateDir, names::kFailedDir), FailedRel(pending.to_version),
+                                        Join(FailedRel(pending.to_version), names::kPluginsDir), PreviousRel(restored),
+                                        Join(PreviousRel(restored), names::kPluginsDir)});
+  if (!linked.empty()) return fail("reparse_point", RollbackEnd::kBlocked, {{"folder", linked}});
+  const std::wstring previous_runtime = Join(previous, names::kRuntimeFile);
+  if (!Exists(previous_runtime)) return fail("no_previous", RollbackEnd::kStop);
+  const std::string verdict = VerifyRuntimeAt(previous_runtime);
+  if (!verdict.empty()) return fail("previous_unverified", RollbackEnd::kStop, {{"verify_reason", verdict}});
+
+  Journal journal;
+  journal.kind = "rollback";
+  journal.from = pending.to_version;
+  journal.to = restored;
+  journal.phase = "out";
+  journal.out = OwnedMembers();
+  journal.in = MembersIn(previous);
+  journal.failed_sha256 = pending.to_sha256;
+  journal.reason = reason;
+  // A file that is not the failed release's sits where a restored plugin goes: it is not replaced (section 4.7).
+  for (const names::Member& member : journal.in) {
+    if (!member.runtime && Exists(InRoot(member)) && !HasMember(journal.out, member)) {
+      return fail("foreign_file", RollbackEnd::kBlocked, {{"path", names::MemberPath(member)}});
+    }
+  }
+  std::string cleared;
+  if (!ClearGenerations(names::kFailedDir, &cleared)) {
+    if (killed_) return RollbackEnd::kBlocked;
+    if (!cleared.empty()) return fail("reparse_point", RollbackEnd::kBlocked, {{"folder", cleared}});
+    return fail("move_failed", RollbackEnd::kBlocked, {{"win32_error", last_error_}});
+  }
+  if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(journal))) {
+    if (killed_) return RollbackEnd::kBlocked;
+    return fail("journal_write_failed", RollbackEnd::kBlocked, {{"win32_error", last_error_}});
+  }
+  if (!CompleteRollback(&journal)) {
+    if (killed_) return RollbackEnd::kBlocked;
+    // The journal stays: a rollback is completed by the next start, and the root may be half moved now.
+    return fail("move_failed", RollbackEnd::kStop, {{"win32_error", last_error_}});
+  }
+  json files = json::array();
+  for (const names::Member& member : journal.in) {
+    files.push_back({{"path", names::MemberPath(member)}, {"sha256", FactsOf(InRoot(member)).sha256}});
+  }
+  json fields = common;
+  fields["files"] = files;
+  RecordRollback("rolled_back", reason.c_str(), fields);
+  return RollbackEnd::kDone;
+}
+
+// ADR 0024, section 6, R2: what a start does with a release that is pending.
+SwapRun::PendingStep SwapRun::DecidePending(UpdateResult* stop) {
+  json doc;
+  DWORD error = 0;
+  const JsonRead read = ReadJsonFile(UpdateFile(names::kPendingJson), &doc, &error);
+  if (read == JsonRead::kAbsent) return PendingStep::kNone;
+  if (read == JsonRead::kUnreadable) {
+    // Not damage: the record is there and something keeps this start from it. Nothing is judged, counted or swapped.
+    RecordRollback("deferred", "pending_unreadable", {{"win32_error", error}});
+    return PendingStep::kHold;
+  }
+  Pending pending;
+  if (read != JsonRead::kOk || !ParsePending(doc, &pending)) {
+    // A record the host did not write: it names nothing the host can put back. The release in the root is verified at
+    // every load, so it is treated as started and the record and its marker go.
+    const bool removed = Remove(UpdateFile(names::kPendingJson)) && Remove(UpdateFile(names::kCrashedFile));
+    if (killed_) return PendingStep::kHold;
+    RecordRollback("discarded", "bad_pending", {{"removed", removed}});
+    return PendingStep::kNone;
+  }
+  const FileFacts runtime = FactsOf(Join(root_, names::kRuntimeFile));
+  if (runtime.present && !runtime.sha256.empty() && runtime.sha256 != pending.to_sha256) {
+    // The root holds a runtime this record is not about: the host moves no file it did not place (section 4.7).
+    const bool removed = Remove(UpdateFile(names::kPendingJson)) && Remove(UpdateFile(names::kCrashedFile));
+    if (killed_) return PendingStep::kHold;
+    RecordRollback("discarded", "pending_stale", {{"from", pending.to_version}, {"removed", removed}});
+    return PendingStep::kNone;
+  }
+  std::string reason = pending.failed_reason;
+  if (reason.empty() && Exists(UpdateFile(names::kCrashedFile))) reason = "crashed";
+  if (reason.empty() && pending.boot_attempts >= 2) reason = "unconfirmed";
+  const DWORD write_error = RuntimeWriteError();
+  json common = {{"mode", "next_start"}, {"from", pending.to_version}, {"boot_attempts", pending.boot_attempts}};
+  if (pending.has_from) common["to"] = pending.from_version;
+  if (!reason.empty()) {
+    if (write_error == ERROR_SHARING_VIOLATION) {
+      // Another process runs the pending release, perhaps inside its ten seconds: it is not condemned (R2).
+      common["cause"] = reason;
+      RecordRollback("deferred", "runtime_in_use", common);
+      return PendingStep::kTrial;
+    }
+    if (write_error != 0) {
+      common["cause"] = reason;
+      common["win32_error"] = write_error;
+      RecordRollback("blocked", "runtime_not_writable", common);
+      return PendingStep::kTrial;
+    }
+    const RollbackEnd end = DoRollback(pending, reason, "next_start", stop);
+    if (killed_) return PendingStep::kHold;
+    if (end == RollbackEnd::kStop) return PendingStep::kStop;
+    return end == RollbackEnd::kDone ? PendingStep::kNone : PendingStep::kTrial;
+  }
+  // One more try. A start beside a running one is not a try (the first one's trial is the trial), and neither is the
+  // load that follows a swap whose cleanup this start finished: the swap's own start never got to load.
+  if (write_error == 0 && !finished_swap_) {
+    json counted = doc;
+    counted["boot_attempts"] = pending.boot_attempts + 1;
+    if (!WriteJson(UpdateFile(names::kPendingJson), counted)) {
+      if (killed_) return PendingStep::kHold;
+      RecordRollback("blocked", "pending_write_failed", {{"win32_error", last_error_}});
+    }
+  }
+  return PendingStep::kTrial;
+}
+
+bool SwapRun::MarkFailed(const char* reason) {
+  if (root_.empty() || !IsDirectory(update_) || IsReparsePoint(update_)) return false;
+  if (!lock_.Acquire(update_.c_str(), SwapLockTimeoutMs(), SwapLockStepMs())) {
+    RecordRollback("failed", "lock_timeout", {{"mode", "next_start"}, {"cause", reason}});
+    return false;
+  }
+  json doc;
+  DWORD error = 0;
+  Pending pending;
+  if (ReadJsonFile(UpdateFile(names::kPendingJson), &doc, &error) != JsonRead::kOk || !ParsePending(doc, &pending)) {
+    RecordRollback("failed", "pending_unavailable", {{"mode", "next_start"}, {"cause", reason}, {"win32_error", error}});
+    return false;
+  }
+  json fields = {{"mode", "next_start"}, {"from", pending.to_version}, {"boot_attempts", pending.boot_attempts}};
+  if (pending.has_from) fields["to"] = pending.from_version;
+  if (!pending.failed_reason.empty()) {
+    // The first failure is the cause that stays.
+    RecordRollback("scheduled", pending.failed_reason.c_str(), fields);
+    return true;
+  }
+  doc["failed_reason"] = reason;
+  if (!WriteJson(UpdateFile(names::kPendingJson), doc)) {
+    fields["win32_error"] = last_error_;
+    RecordRollback("failed", "pending_write_failed", fields);
+    return false;
+  }
+  RecordRollback("scheduled", reason, fields);
+  return true;
+}
+
+UpdateResult SwapRun::RollBackNow(const char* reason) {
+  if (root_.empty() || !IsDirectory(update_)) return Stop("no_previous");
+  if (IsReparsePoint(update_)) {
+    Record("blocked", "reparse_point", {{"folder", "update"}});
+    return Stop("reparse_point");
+  }
+  if (!lock_.Acquire(update_.c_str(), SwapLockTimeoutMs(), SwapLockStepMs())) {
+    RecordRollback("failed", "lock_timeout", {{"mode", "in_process"}, {"cause", reason}});
+    return Stop("lock_timeout");
+  }
+  const bool journal = Exists(UpdateFile(names::kSwapJson));
+  const std::string linked =
+      FirstLink({Join(names::kUpdateDir, names::kStagingDir), Join(names::kUpdateDir, names::kPreviousDir),
+                 Join(names::kUpdateDir, names::kFailedDir), names::kPluginsDir});
+  if (!linked.empty()) {
+    Record("blocked", "reparse_point", {{"folder", linked}, {"journal", journal}});
+    return Stop("reparse_point");
+  }
+  RemoveStaleTemporaries();
+  if (killed_) return Load();
+  const StateRead state = LoadState();
+  if (state == StateRead::kEnded) return Load();
+  if (journal) {
+    // A cleanup the swap of this start left unfinished, or an earlier one: finished before anything else.
+    const UpdateResult recovered = Recover(state == StateRead::kOk);
+    if (killed_ || recovered.action == UpdateAction::kStop || Exists(UpdateFile(names::kSwapJson))) return recovered;
+  }
+  if (state != StateRead::kOk) return Stop("state_unreadable");
+  json doc;
+  DWORD error = 0;
+  const JsonRead read = ReadJsonFile(UpdateFile(names::kPendingJson), &doc, &error);
+  if (read == JsonRead::kUnreadable) {
+    RecordRollback("failed", "pending_unreadable", {{"mode", "in_process"}, {"win32_error", error}});
+    return Stop("pending_unreadable");
+  }
+  Pending pending;
+  if (read != JsonRead::kOk || !ParsePending(doc, &pending)) return Load();  // nothing is pending any more
+  const FileFacts runtime = FactsOf(Join(root_, names::kRuntimeFile));
+  if (runtime.present && !runtime.sha256.empty() && runtime.sha256 != pending.to_sha256) return Load();  // already put back
+  const DWORD write_error = RuntimeWriteError();
+  if (write_error != 0) {
+    // The failed runtime cannot be moved now; the next start puts it back.
+    RecordRollback("failed", write_error == ERROR_SHARING_VIOLATION ? "runtime_in_use" : "runtime_not_writable",
+                   {{"mode", "in_process"}, {"from", pending.to_version}, {"win32_error", write_error}});
+    json marked = doc;
+    marked["failed_reason"] = reason;
+    WriteJson(UpdateFile(names::kPendingJson), marked);
+    return Stop(write_error == ERROR_SHARING_VIOLATION ? "runtime_in_use" : "runtime_not_writable");
+  }
+  UpdateResult stop;
+  const RollbackEnd end = DoRollback(pending, reason, "in_process", &stop);
+  if (killed_) return Load();
+  if (end == RollbackEnd::kDone) return Load();  // the lock stays held for the load that follows
+  if (end == RollbackEnd::kStop) return stop;
+  return Stop("rollback_blocked");
 }
 
 }  // namespace
@@ -974,5 +1453,38 @@ UpdateResult RunUpdateAtStart(const wchar_t* runtime_path, BootstrapDiagnostics&
   }
 }
 
+
+UpdateResult RollBackInProcess(const wchar_t* runtime_path, BootstrapDiagnostics& diagnostics, UpdateLock& lock,
+                               const char* reason) noexcept {
+  if (runtime_path == nullptr || runtime_path[0] == L'\0' || reason == nullptr) return {UpdateAction::kStop, "no_previous", false};
+  try {
+    SwapRun start(runtime_path, diagnostics, lock);
+    try {
+      return start.RollBackNow(reason);
+    } catch (const std::exception&) {
+      return {UpdateAction::kStop, "internal_error", false};
+    }
+  } catch (const std::exception&) {
+    return {UpdateAction::kStop, "internal_error", false};
+  }
+}
+
+bool MarkPendingFailed(const wchar_t* runtime_path, BootstrapDiagnostics& diagnostics, UpdateLock& lock,
+                       const char* reason) noexcept {
+  if (runtime_path == nullptr || runtime_path[0] == L'\0' || reason == nullptr) return false;
+  bool marked = false;
+  try {
+    SwapRun start(runtime_path, diagnostics, lock);
+    try {
+      marked = start.MarkFailed(reason);
+    } catch (const std::exception&) {
+      marked = false;
+    }
+  } catch (const std::exception&) {
+    marked = false;
+  }
+  lock.Release();  // the load released it before initialize; this start took it only to write the record
+  return marked;
+}
 
 }  // namespace nevr_host

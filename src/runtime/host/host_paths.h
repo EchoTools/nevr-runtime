@@ -2,17 +2,20 @@
 
 #include "core/nevr_root.h"
 #include "core/run_log_path.h"
+#include "runtime/host/update_names.h"
 
 // Where the stable host keeps what it writes: in its own per-game folder, never in
 // the game's own %LOCALAPPDATA%\EchoVR:
 //   %LOCALAPPDATA%\nevr\echovr\logs\nevr-<creation time>.jsonl  (the process's one main log, core/run_log_path.h)
 //   %LOCALAPPDATA%\nevr\echovr\crashes\nevr-<pid>-<n>.dmp
+//   %LOCALAPPDATA%\nevr\echovr\update\crashed          (self-update's crash marker, docs/adr/0024-pc-self-update.md)
 // and nowhere else: no %TEMP% folder and no folder beside the game.
 
 namespace nevr_host {
 
 inline constexpr wchar_t kLogsSubdirectory[] = L"nevr\\echovr\\logs";
 inline constexpr wchar_t kCrashesSubdirectory[] = L"nevr\\echovr\\crashes";
+inline constexpr wchar_t kUpdateSubdirectory[] = L"nevr\\echovr\\update";
 
 // The runtime resolves the same folders through core/nevr_root.h (#857). The host keeps its literals (it links no core code),
 // and these checks make a drift between the two a compile error: each literal is <root>\<child> in nevr_root's names.
@@ -33,6 +36,7 @@ constexpr bool IsRootChild(const wchar_t* path, const wchar_t* child) {
 }
 static_assert(IsRootChild(kLogsSubdirectory, nevr_root::Names<wchar_t>::kLogs), "host logs folder differs from nevr_root");
 static_assert(IsRootChild(kCrashesSubdirectory, nevr_root::Names<wchar_t>::kCrashes), "host crashes folder differs from nevr_root");
+static_assert(IsRootChild(kUpdateSubdirectory, update_names::kUpdateDir), "host update folder differs from the swap's");
 }  // namespace host_paths_detail
 
 // One append to the log is serialized with this named mutex. WriteFile with FILE_APPEND_DATA is not

@@ -67,11 +67,42 @@ void CrashCapture::SetFailWrites(bool fail) noexcept {
 void CrashCapture::Prepare(BootstrapDiagnostics* diagnostics) {
   diagnostics_ = diagnostics;
   local_ready_ = false;
+  update_ready_ = false;
+  local_update_dir_[0] = L'\0';
+  pending_path_[0] = L'\0';
+  crashed_path_[0] = L'\0';
 
   // The one folder a minidump goes to: %LOCALAPPDATA%\nevr\echovr\crashes. Never %TEMP% and never a folder beside the game.
   if (CopyEnv(local_app_data_, MAX_PATH, L"LOCALAPPDATA")) {
     local_ready_ = AppendPath(local_crash_dir_, MAX_PATH, local_app_data_, kCrashesSubdirectory);
+    // Self-update's crash marker lives beside the pending record it answers (update_names.h): prepared here, so the
+    // crash path builds no path.
+    update_ready_ = AppendPath(local_update_dir_, MAX_PATH, local_app_data_, kUpdateSubdirectory) &&
+                    AppendPath(pending_path_, MAX_PATH, local_update_dir_, update_names::kPendingJson) &&
+                    AppendPath(crashed_path_, MAX_PATH, local_update_dir_, update_names::kCrashedFile);
+    if (!update_ready_) {
+      local_update_dir_[0] = L'\0';
+      pending_path_[0] = L'\0';
+      crashed_path_[0] = L'\0';
+    }
   }
+}
+
+void CrashCapture::MarkUpdateCrashed() noexcept {
+  if (!update_ready_ || GetFileAttributesW(pending_path_) == INVALID_FILE_ATTRIBUTES) return;
+  const HANDLE marker = CreateFileW(crashed_path_, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+  const DWORD error = marker == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+  if (marker != INVALID_HANDLE_VALUE) CloseHandle(marker);
+  if (diagnostics_ == nullptr) return;
+  char buffer[1024];
+  JsonLine line(buffer, sizeof(buffer), "crash_marker");
+  line.Str("outcome", marker != INVALID_HANDLE_VALUE ? "written" : "failed");
+  if (error != 0) line.UInt("win32_error", error);
+  line.Wide("path", crashed_path_);
+  line.UInt("thread", GetCurrentThreadId());
+  const std::size_t length = line.Finish();
+  if (length != 0) diagnostics_->AppendLine(buffer, length);
 }
 
 void CrashCapture::Record(const char* outcome, const char* destination, const char* stage,
@@ -122,6 +153,9 @@ bool CrashCapture::Capture(PEXCEPTION_POINTERS exception_pointers) noexcept {
 #if defined(NEVR_HOST_TESTING)
   if (g_capture_probe != nullptr) g_capture_probe();
 #endif
+
+  // First, whatever the dump does: the next start rolls a release that crashed while pending back.
+  MarkUpdateCrashed();
 
   bool captured = false;
   const HMODULE dbghelp = GetModuleHandleW(kDbgHelpModule);

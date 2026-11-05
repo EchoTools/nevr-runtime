@@ -30,6 +30,7 @@ inline constexpr wchar_t kStateJson[] = L"state.json";
 inline constexpr wchar_t kCrashedFile[] = L"crashed";
 inline constexpr wchar_t kStagingDir[] = L"staging";
 inline constexpr wchar_t kPreviousDir[] = L"previous";
+inline constexpr wchar_t kFailedDir[] = L"failed";
 inline constexpr wchar_t kPluginsDir[] = L"plugins";
 inline constexpr wchar_t kRuntimeFile[] = L"nevr-runtime.dll";
 inline constexpr char kRuntimeMember[] = "nevr-runtime.dll";
