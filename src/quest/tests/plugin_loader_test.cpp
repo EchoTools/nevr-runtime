@@ -1150,6 +1150,29 @@ TEST(LoaderLoadsAPluginThatExportsOnlyTheDeprecatedNvrNames) {
                                           "NvrPluginInitEx)") != std::string::npos);
 }
 
+// The deprecated line is written once every entry point is resolved, Shutdown included: a plugin whose only Nvr export is
+// PluginShutdown is reported as well, and the line names it.
+void DeprecatedShutdown() {}
+
+TEST(LoaderReportsADeprecatedShutdownExportOnce) {
+  Env env;
+  env.platform.hiddenSymbols.push_back("NevrPluginShutdown");
+  env.platform.symbolOverride["NvrPluginShutdown"] = reinterpret_cast<void*>(&DeprecatedShutdown);
+  env.loader->Plan({Item("old", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("old")->outcome == Outcome::kLoaded);
+  // The fixture's own Nevr init writes a line of its own, so count the deprecation lines, not all of them.
+  std::vector<std::pair<std::uint32_t, std::string>> deprecated;
+  for (const auto& line : env.platform.lines) {
+    if (line.second.find("loaded with deprecated Nvr exports") != std::string::npos) deprecated.push_back(line);
+  }
+  CHECK_EQ(deprecated.size(), std::size_t{1});
+  if (deprecated.size() != 1) return;
+  CHECK_EQ(deprecated[0].first, static_cast<std::uint32_t>(NEVR_LOG_INFO));
+  CHECK(deprecated[0].second.find("plugin=old file=libfx_ok.so loaded with deprecated Nvr exports (NvrPluginShutdown)") !=
+        std::string::npos);
+}
+
 TEST(LoaderKeepsALoadedPluginMapped) {
   Env env;
   env.loader->Plan({Item("ok", "libfx_ok.so")});

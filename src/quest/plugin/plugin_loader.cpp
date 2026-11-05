@@ -259,6 +259,8 @@ void Loader::Load(PlanEntry& entry) {
     const NevrGameContext* ctx = &contexts_.back();
     const auto initEx = Resolve<NevrPluginInitEx_fn>(platform_, handle, "PluginInitEx", &deprecatedUsed);
     const auto init = Resolve<NevrPluginInit_fn>(platform_, handle, "PluginInit", &deprecatedUsed);
+    const auto shutdown = Resolve<NevrPluginShutdown_fn>(platform_, handle, "PluginShutdown", &deprecatedUsed);
+    // Every entry point is resolved above, Shutdown included, so the line names every deprecated export the plugin uses.
     if (!deprecatedUsed.empty()) {
       std::string names;
       for (const std::string& n : deprecatedUsed) names += (names.empty() ? "" : ", ") + n;
@@ -278,7 +280,7 @@ void Loader::Load(PlanEntry& entry) {
     if (rc != 0) {
       // The documented lifecycle: a failed init is followed by the plugin's Shutdown, when it has one. It runs under the same
       // binding, so an unregister there is the owner's and the handler it takes out is the one the init registered.
-      if (const auto shutdown = Resolve<NevrPluginShutdown_fn>(platform_, handle, "PluginShutdown", &deprecatedUsed)) {
+      if (shutdown != nullptr) {
         const slot_hook::Scope scope(binding);
         shutdown();
       }

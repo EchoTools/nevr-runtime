@@ -42,7 +42,7 @@ DEPRECATED_NVR_USES = {
         "NvrPluginOnFrame", "NvrPluginOnGameStateChange", "NvrPluginShutdown", "NvrTestPluginExportsGetCount",
     },
     "src/runtime/tests/test_behavioral.cpp": {"NvrPluginGetCapabilities", "NvrTestPluginExportsGetCount"},
-    "src/quest/tests/plugin_loader_test.cpp": {"NvrPluginGetInfo", "NvrPluginInitEx"},
+    "src/quest/tests/plugin_loader_test.cpp": {"NvrPluginGetInfo", "NvrPluginInitEx", "NvrPluginShutdown"},
     # The decision record names the old spellings it deprecates.
     "docs/adr/0043-nevr-is-the-plugin-abi-prefix.md": {
         "NvrGameContext", "NvrModuleApiVersionSupported", "NvrModuleContext", "NvrPluginInfo", "NvrPluginInit",
