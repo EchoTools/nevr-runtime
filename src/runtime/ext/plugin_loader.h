@@ -17,19 +17,19 @@ void LoadPlugins(PluginPhase phase = PluginPhase::Normal);
 // dynamic unloading is not a supported lifecycle path.
 void UnloadPlugins();
 
-// Call NvrPluginOnFrame on all loaded plugins that export it.
-void TickPlugins(const NvrGameContext* ctx);
+// Call NevrPluginOnFrame on all loaded plugins that export it.
+void TickPlugins(const NevrGameContext* ctx);
 
-// Call NvrPluginOnGameStateChange on all loaded plugins that export it.
-void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uint32_t new_state);
+// Call NevrPluginOnGameStateChange on all loaded plugins that export it.
+void NotifyPluginsStateChange(const NevrGameContext* ctx, uint32_t old_state, uint32_t new_state);
 
 // Plugin-query API (N134 S8, v5). A plugin calls ctx->get_plugin_count() and
 // ctx->get_plugin_info(n) to discover its neighbours at runtime. These are
-// filled into every NvrGameContext by the host (LoadPlugins / TickPlugins /
+// filled into every NevrGameContext by the host (LoadPlugins / TickPlugins /
 // NotifyPluginsStateChange), so a v5+ plugin that checks ctx->ctx_size can
 // call them from its init, on_frame, or on_state_change callback.
 int  GetLoadedPluginCount(void);
-const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index);
+const NevrLoadedPluginInfo* GetLoadedPluginInfo(int index);
 
 // #598: ctx->log. The host writes a plugin's line through Log() as
 // "[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ..." (see plugin_log.h). Every context the loader
@@ -80,8 +80,8 @@ std::string BuildPluginManifestJson();
 // ============================================================================
 
 #ifdef NEVR_TEST_HOOKS
-void TestHook_RegisterPluginOnFrame(NvrPluginOnFrame_fn fn);
-void TestHook_RegisterPluginOnStateChange(NvrPluginOnGameStateChange_fn fn);
+void TestHook_RegisterPluginOnFrame(NevrPluginOnFrame_fn fn);
+void TestHook_RegisterPluginOnStateChange(NevrPluginOnGameStateChange_fn fn);
 void TestHook_ClearPlugins();
 // #741: whether LoadModule may retry with the default search order after the restricted load failed.
 bool TestHook_RestrictedSearchFallbackAllowed(bool enforcing, unsigned long error);

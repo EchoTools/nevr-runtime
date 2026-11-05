@@ -7,8 +7,8 @@
 
 namespace q15t {
 
-// Set once by NvrPluginInitEx, before any hook is installed. A plain pointer: no constructor runs at load time.
-void SetLogContext(const NvrGameContext* ctx);
+// Set once by NevrPluginInitEx, before any hook is installed. A plain pointer: no constructor runs at load time.
+void SetLogContext(const NevrGameContext* ctx);
 
 // One structured line with up to 8 key/value fields. `message` is plain text. Safe from any thread; a context without
 // a log function drops the line (the caller cannot do more).

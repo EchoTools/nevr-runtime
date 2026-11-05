@@ -18,8 +18,8 @@
 #include "nevr/plugin_interface.h"
 
 extern "C" {
-NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext*, const char*);
-NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void);
+NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext*, const char*);
+NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void);
 }
 
 static int g_fail = 0;
@@ -71,11 +71,11 @@ static bool HasLine(const char* needle, int level = -1) {
 
 static const char* kId = Q15T_BUILD_ID_FOR_TEST;
 
-static NvrGameContext MakeCtx(uintptr_t base, const char* build_id) {
-  NvrGameContext c{};
+static NevrGameContext MakeCtx(uintptr_t base, const char* build_id) {
+  NevrGameContext c{};
   c.base_addr = base;
   c.flags = NEVR_HOST_IS_CLIENT | NEVR_HOST_PLATFORM_QUEST;
-  c.ctx_size = sizeof(NvrGameContext);
+  c.ctx_size = sizeof(NevrGameContext);
   c.plugin_id = "q15t";
   c.log = &FakeLog;
   c.game_build_id = build_id;
@@ -99,8 +99,8 @@ int main() {
   {
     g_lines.clear();
     uintptr_t* page = NewSlotPage(PROT_READ);
-    NvrGameContext ctx = MakeCtx(reinterpret_cast<uintptr_t>(page), kId);
-    const int init_rc = NvrPluginInitEx(&ctx, "");
+    NevrGameContext ctx = MakeCtx(reinterpret_cast<uintptr_t>(page), kId);
+    const int init_rc = NevrPluginInitEx(&ctx, "");
     CHECK(init_rc == 0, "InitEx returned %d with hooks swapped: the loader would dlclose a live plugin", init_rc);
     const uintptr_t now = page[slot_off / sizeof(uintptr_t)];
     CHECK(now != reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels), "slot not replaced");
@@ -274,8 +274,8 @@ int main() {
   {
     g_lines.clear();
     uintptr_t* page = NewSlotPage(PROT_READ);
-    NvrGameContext ctx = MakeCtx(reinterpret_cast<uintptr_t>(page), "0000000000000000000000000000000000000000");
-    CHECK(NvrPluginInitEx(&ctx, "") == 0, "InitEx must return 0 on a refused build id (loaded, nothing installed)");
+    NevrGameContext ctx = MakeCtx(reinterpret_cast<uintptr_t>(page), "0000000000000000000000000000000000000000");
+    CHECK(NevrPluginInitEx(&ctx, "") == 0, "InitEx must return 0 on a refused build id (loaded, nothing installed)");
     CHECK(page[slot_off / sizeof(uintptr_t)] == reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels), "slot touched on wrong build");
     CHECK(HasLine("refused", 2), "no refusal line");
   }
@@ -286,8 +286,8 @@ int main() {
     mprotect(page, 4096, PROT_READ | PROT_WRITE);
     page[slot_off / sizeof(uintptr_t)] = 0x1234560;
     mprotect(page, 4096, PROT_READ);
-    NvrGameContext ctx = MakeCtx(reinterpret_cast<uintptr_t>(page), kId);
-    CHECK(NvrPluginInitEx(&ctx, "") == 0, "InitEx must return 0 when a slot is refused");
+    NevrGameContext ctx = MakeCtx(reinterpret_cast<uintptr_t>(page), kId);
+    CHECK(NevrPluginInitEx(&ctx, "") == 0, "InitEx must return 0 when a slot is refused");
     CHECK(page[slot_off / sizeof(uintptr_t)] == 0x1234560, "foreign word overwritten");
     CHECK(HasLine("status=unexpected_original", 3), "no ERROR refusal for foreign word");
   }
@@ -295,15 +295,15 @@ int main() {
   {
     g_lines.clear();
     uintptr_t* page = NewSlotPage(PROT_READ | PROT_EXEC);
-    NvrGameContext ctx = MakeCtx(reinterpret_cast<uintptr_t>(page), kId);
-    CHECK(NvrPluginInitEx(&ctx, "") == 0, "InitEx must return 0 when a page is executable");
+    NevrGameContext ctx = MakeCtx(reinterpret_cast<uintptr_t>(page), kId);
+    CHECK(NevrPluginInitEx(&ctx, "") == 0, "InitEx must return 0 when a page is executable");
     CHECK(page[slot_off / sizeof(uintptr_t)] == reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels), "executable page was written");
     CHECK(HasLine("status=executable_page", 3), "no ERROR for executable page");
   }
   // 5. no context: refused before anything is touched. 6. the capability flags of the perf and T-26 arms (no module option is on here).
-  CHECK(NvrPluginInitEx(nullptr, "") != 0, "a null context must be refused");
+  CHECK(NevrPluginInitEx(nullptr, "") != 0, "a null context must be refused");
   {
-    const uint32_t caps = NvrPluginGetCapabilities();
+    const uint32_t caps = NevrPluginGetCapabilities();
     const bool gameplay = (caps & NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY) != 0;
     CHECK(gameplay == (Q15T_HZ_MATCH90 || Q15T_T26), "caps 0x%x: ALTERS_GAMEPLAY is %d for this arm (the clock raise is not gameplay)", caps, gameplay);
     CHECK((caps & NEVR_PLUGIN_CAP_HOOKS_ENGINE) != 0 && (caps & NEVR_PLUGIN_CAP_NETWORK) == 0, "caps 0x%x", caps);
@@ -352,8 +352,8 @@ int main() {
     for (const Case& c : cases) {
       g_lines.clear();
       uintptr_t* page = NewSlotPage(PROT_READ);
-      NvrGameContext ctx = MakeCtx(reinterpret_cast<uintptr_t>(page), kId);
-      CHECK(NvrPluginInitEx(&ctx, c.args) == 0, "InitEx failed for %s", c.what);
+      NevrGameContext ctx = MakeCtx(reinterpret_cast<uintptr_t>(page), kId);
+      CHECK(NevrPluginInitEx(&ctx, c.args) == 0, "InitEx failed for %s", c.what);
       CHECK(q15t::ClockRaise() == c.raise, "%s: ClockRaise()=%d want %d", c.what, q15t::ClockRaise(), c.raise);
       auto fn = reinterpret_cast<int32_t (*)(void*, int32_t, int32_t)>(page[slot_off / sizeof(uintptr_t)]);
       fn(nullptr, 1, 1);  // the wrapper logs the first calls and every change of the asked levels: make this one a change

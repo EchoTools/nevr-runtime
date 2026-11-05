@@ -79,7 +79,7 @@ of the work (the logging standard `AGENTS.md` opens with, `docs/standards/loggin
 | --- | --- |
 | PC host and runtime | "DLL Components", the boot, shutdown and crash N-rules (N36, N43, N62, N70, N82, N125, N146), "No hand-built serialization" |
 | Dedicated server | "Startup timing" (45 s patience), N102, N120, N149; a server never blocks on a prompt |
-| Plugins and trust | "Plugins", N114, N134, N135, N147, N150; `sdk/include/nevr/plugin_interface.h` is a frozen ABI (`docs/standards/naming.md`) |
+| Plugins and trust | "Plugins", N114, N134, N135, N147, N150; `sdk/include/nevr/plugin_interface.h` is the published plugin ABI, `Nevr*` with deprecated `Nvr*` aliases (`docs/standards/naming.md`) |
 | Hooks and patches | "Guardrails" (prologue validation, hook over byte patch), the hooks N-rules (N83, N84, N96, N97, N126) |
 | Protocol | "Guardrails" and "Conventions" on generated protobuf; N91, N112, N132; the wire format is checked against the game service, not guessed |
 | Quest | N151 (no code page written at run time), "Project" on sharing code with `src/runtime/`, ADR 0003/0004/0021 |

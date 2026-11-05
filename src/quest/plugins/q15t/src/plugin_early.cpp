@@ -31,7 +31,7 @@ NEVR_DECLARE_SUPPORTED_BUILD_IDS(Q15T_BUILD_ID);
 
 namespace {
 
-bool Covers(const NvrGameContext* ctx, std::size_t end_of_field) { return ctx->ctx_size >= end_of_field; }
+bool Covers(const NevrGameContext* ctx, std::size_t end_of_field) { return ctx->ctx_size >= end_of_field; }
 
 // One structured line per module install, in the same shape as plugin.cpp's (module=, status=, reason=, real_resolved=).
 [[maybe_unused]] void ReportModule(const char* module, const q15t::InstallResult& r) {
@@ -48,17 +48,17 @@ bool Covers(const NvrGameContext* ctx, std::size_t end_of_field) { return ctx->c
 
 }  // namespace
 
-NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) {
+NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
   return {"q15t_early", "heap sizes and render-target pool, before android_main reads them", 0, 1, 0};
 }
-NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
-NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void) { return NEVR_PLUGIN_CAP_HOOKS_ENGINE; }
+NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
+NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) { return NEVR_PLUGIN_CAP_HOOKS_ENGINE; }
 
-NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* /*args_json*/) {
+NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*args_json*/) {
   if (ctx == nullptr) return 1;
   using namespace q15t;
-  if (Covers(ctx, offsetof(NvrGameContext, log) + sizeof(ctx->log))) SetLogContext(ctx);
-  const bool covers_id = Covers(ctx, offsetof(NvrGameContext, game_build_id) + sizeof(ctx->game_build_id));
+  if (Covers(ctx, offsetof(NevrGameContext, log) + sizeof(ctx->log))) SetLogContext(ctx);
+  const bool covers_id = Covers(ctx, offsetof(NevrGameContext, game_build_id) + sizeof(ctx->game_build_id));
   const bool quest = (ctx->flags & NEVR_HOST_PLATFORM_QUEST) != 0;
   const char* id = covers_id && ctx->game_build_id != nullptr ? ctx->game_build_id : "";
   char base_hex[24];
@@ -80,4 +80,4 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* /*arg
   return 0;
 }
 
-NEVR_PLUGIN_API void NvrPluginShutdown(void) {}
+NEVR_PLUGIN_API void NevrPluginShutdown(void) {}
