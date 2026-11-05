@@ -56,9 +56,9 @@ void FakeHostLog(const char* id, uint32_t level, const char* message, const Nevr
     g_hostCalls.push_back(call);
 }
 
-NvrGameContext V6Context() {
-    NvrGameContext ctx = {};
-    ctx.ctx_size = sizeof(NvrGameContext);
+NevrGameContext V6Context() {
+    NevrGameContext ctx = {};
+    ctx.ctx_size = sizeof(NevrGameContext);
     ctx.plugin_id = "bound-plugin";
     ctx.log = FakeHostLog;
     return ctx;
@@ -83,7 +83,7 @@ std::string CaptureStderr(Body body) {
 
 TEST(PluginLoggerHost, BoundCallsGoToTheHostWithIdLevelAndFields) {
     g_hostCalls.clear();
-    const NvrGameContext ctx = V6Context();
+    const NevrGameContext ctx = V6Context();
     ASSERT_TRUE(PluginLogBind(&ctx));
     const std::string err = CaptureStderr([] {
         PluginLogDebug("d %d", 0);
@@ -109,7 +109,7 @@ TEST(PluginLoggerHost, BoundCallsGoToTheHostWithIdLevelAndFields) {
 
 TEST(PluginLoggerHost, APercentInAnArgumentIsNotAFormat) {
     g_hostCalls.clear();
-    const NvrGameContext ctx = V6Context();
+    const NevrGameContext ctx = V6Context();
     ASSERT_TRUE(PluginLogBind(&ctx));
     PluginLog("%s", "100%s done %n");
     ASSERT_EQ(g_hostCalls.size(), 1u);
@@ -119,8 +119,8 @@ TEST(PluginLoggerHost, APercentInAnArgumentIsNotAFormat) {
 
 TEST(PluginLoggerHost, AHostThatPredatesV6IsNotCalledThroughFieldsItDoesNotHave) {
     g_hostCalls.clear();
-    NvrGameContext ctx = V6Context();
-    ctx.ctx_size = static_cast<uint32_t>(offsetof(NvrGameContext, plugin_id));  // a v5 host's size
+    NevrGameContext ctx = V6Context();
+    ctx.ctx_size = static_cast<uint32_t>(offsetof(NevrGameContext, plugin_id));  // a v5 host's size
     EXPECT_FALSE(PluginLogBind(&ctx));
     const std::string err = CaptureStderr([] { PluginLogWarning("fallback %d", 5); });
     EXPECT_EQ(err, "[test_plugin] WARNING fallback 5\n");
@@ -129,7 +129,7 @@ TEST(PluginLoggerHost, AHostThatPredatesV6IsNotCalledThroughFieldsItDoesNotHave)
 
 TEST(PluginLoggerHost, AContextWithNoLogFunctionStaysOnStderr) {
     g_hostCalls.clear();
-    NvrGameContext ctx = V6Context();
+    NevrGameContext ctx = V6Context();
     ctx.log = nullptr;
     EXPECT_FALSE(PluginLogBind(&ctx));
     ctx = V6Context();
@@ -142,9 +142,9 @@ TEST(PluginLoggerHost, AContextWithNoLogFunctionStaysOnStderr) {
 
 TEST(PluginLoggerHost, RebindingToAnotherContextFollowsIt) {
     g_hostCalls.clear();
-    NvrGameContext first = V6Context();
+    NevrGameContext first = V6Context();
     ASSERT_TRUE(PluginLogBind(&first));
-    NvrGameContext none = V6Context();
+    NevrGameContext none = V6Context();
     none.log = nullptr;
     EXPECT_FALSE(PluginLogBind(&none));
     const std::string err = CaptureStderr([] { PluginLog("after unbind"); });
@@ -161,7 +161,7 @@ TEST(PluginLoggerHeld, LinesLoggedBeforeABindReachTheHostInOrderWhenItBinds) {
     const std::string err = CaptureStderr([] {
         PluginLog("early %d", 1);
         PluginLogFields(NEVR_LOG_WARNING, "early fields", {{"k", "v"}});
-        const NvrGameContext ctx = V6Context();
+        const NevrGameContext ctx = V6Context();
         EXPECT_TRUE(PluginLogBind(&ctx));
     });
     EXPECT_EQ(err, "") << "a bind with a host log writes the held lines through the host, not to stderr";
@@ -185,7 +185,7 @@ TEST(PluginLoggerHeld, AHeldLineKeepsItsOwnCopyOfItsText) {
     std::string value = "first";
     PluginLogFields(NEVR_LOG_INFO, "held", {{"k", value.c_str()}});
     value[0] = 'X';
-    const NvrGameContext ctx = V6Context();
+    const NevrGameContext ctx = V6Context();
     ASSERT_TRUE(PluginLogBind(&ctx));
     ASSERT_EQ(g_hostCalls.size(), 1u);
     ASSERT_EQ(g_hostCalls[0].fields.size(), 1u);
@@ -199,7 +199,7 @@ TEST(PluginLoggerHeld, LinesPastTheCapAreCountedAndTheBindReportsTheCount) {
     g_hostCalls.clear();
     const std::size_t dropped = 10;
     for (std::size_t i = 0; i < kPluginLogHeldLines + dropped; ++i) PluginLog("line %zu", i);
-    const NvrGameContext ctx = V6Context();
+    const NevrGameContext ctx = V6Context();
     ASSERT_TRUE(PluginLogBind(&ctx));
     ASSERT_EQ(g_hostCalls.size(), kPluginLogHeldLines + 1);
     EXPECT_EQ(g_hostCalls[kPluginLogHeldLines - 1].message, "line 255");
@@ -216,7 +216,7 @@ TEST(PluginLoggerHeld, WithNoHostLogTheHeldLinesGoToStderrBehindANoteThatSaysSo)
     const std::string err = CaptureStderr([] {
         PluginLog("a %d", 1);
         PluginLogError("b");
-        NvrGameContext ctx = V6Context();
+        NevrGameContext ctx = V6Context();
         ctx.log = nullptr;
         EXPECT_FALSE(PluginLogBind(&ctx));
     });

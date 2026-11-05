@@ -99,7 +99,7 @@ using Fn = uint64_t (*)(void*, uint64_t);
 static uint64_t CallSlot(int i, void* game, uint64_t name) { return reinterpret_cast<Fn>(Word(kSlot[i]))(game, name); }
 
 int main() {
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.ctx_size = sizeof ctx;
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;

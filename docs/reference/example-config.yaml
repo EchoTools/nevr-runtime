@@ -519,16 +519,16 @@ arena:
 # plugins — plugin loading and configuration
 #
 # Plugins are optional DLLs loaded from plugins\ in the nEVR root
-# (%LOCALAPPDATA%\nevr\echovr, ADR 0012), never from the game folder. Each plugin exports the NvrPluginInterface lifecycle:
+# (%LOCALAPPDATA%\nevr\echovr, ADR 0012), never from the game folder. Each plugin exports the NevrPluginInterface lifecycle:
 #
-#   NvrPluginGetInfo()      — returns name, version, description (REQUIRED)
-#   NvrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
-#   NvrPluginInit(ctx)      — called once at load time (optional)
-#   NvrPluginOnFrame(ctx)   — called each game frame (optional)
-#   NvrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
-#   NvrPluginShutdown()     — called at unload time (optional)
+#   NevrPluginGetInfo()      — returns name, version, description (REQUIRED)
+#   NevrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
+#   NevrPluginInit(ctx)      — called once at load time (optional)
+#   NevrPluginOnFrame(ctx)   — called each game frame (optional)
+#   NevrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
+#   NevrPluginShutdown()     — called at unload time (optional)
 #
-# InitEx contract (NvrPluginInitEx, optional, API v4): a plugin that exports it
+# InitEx contract (NevrPluginInitEx, optional, API v4): a plugin that exports it
 # is called with (ctx, args_json), where args_json is the entry's `args` as a
 # flat JSON object string ("{}" when the entry has none, never null). The
 # plugin extracts the keys it understands, ignores the rest, and uses sensible

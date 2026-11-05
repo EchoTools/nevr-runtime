@@ -50,7 +50,7 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
    `CallbackThunk` (`src/quest/sentinel/callback_thunk.h`) is installed through `InstallThunk`, pinned by build ID and
    link-time slot (0x36ec0f0). The handler calls the original and then gives the state to a registered filter.
    Nothing else is hooked: no pose, no head tracking, no code page.
-2. **Plugins reach it through one host call, not a general hook API.** A Quest tail field in `NvrGameContext`,
+2. **Plugins reach it through one host call, not a general hook API.** A Quest tail field in `NevrGameContext`,
    `const NevrQuestHostApi* quest`, is gated by `ctx_size`. It is additive and needs no version bump (ADR 0019, Q9).
    `NevrQuestHostApi` has its own `struct_size` and one function in v1, `register_input_filter(plugin_id, filter,
    user)`. A filter gets one `NevrQuestControllerState`: hand, buttons, touches, index trigger, grip trigger and stick.
@@ -78,9 +78,9 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
 6. **The filter never logs, allocates, locks or calls into the game.** It reads `CLOCK_MONOTONIC`, sets the state,
    and puts events into a fixed ring with their timestamps taken at the frame they happen, then wakes the reporter
    with one non-blocking write to an eventfd. A reporter thread, started in the plugin's init, waits on that eventfd
-   and writes the events through `ctx->log`. The thread ends after `route_end`, or at `NvrPluginShutdown`,
+   and writes the events through `ctx->log`. The thread ends after `route_end`, or at `NevrPluginShutdown`,
    which wakes and joins it. Events the ring cannot hold are counted, and `route_end` reports the count. The host has
-   no way to remove a filter, so the run a registered filter points at is never freed: `NvrPluginShutdown` ends it,
+   no way to remove a filter, so the run a registered filter points at is never freed: `NevrPluginShutdown` ends it,
    and from then on the filter changes nothing.
 
 ### The route file

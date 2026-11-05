@@ -14,7 +14,7 @@ Code is cited by file and symbol; every measurement names its probe; what is not
 
 ## Context
 
-`LoadPlugins` loads every DLL that `config.yaml`'s `plugins:` list names from the plugins directory and runs its `NvrPluginInit*`
+`LoadPlugins` loads every DLL that `config.yaml`'s `plugins:` list names from the plugins directory and runs its `NevrPluginInit*`
 inside the game process, with the runtime's authority. Nothing asks who built the file. The signing pipeline for releases exists
 (`thesprockee/release-signer`, Azure Artifact Signing, profile `andrew-bates-public`); the runtime does not use its output for plugins.
 The pipeline has produced a signed file: the v5.4.3 release's `BugSplat64.dll` (`tools/fetch_real_signed_dll.py` fetches
@@ -121,7 +121,7 @@ the load against the same verifier and refuses (null, `ERROR_MOD_NOT_FOUND`) on 
   left to the OS search (the plugins directory may not be on it), and a file the filter cannot name is refused (#1177);
 The loader's own load of a staged plugin is not checked again, because `StageOne` checked the file: the path being loaded is kept per
 thread for the call, and the filter lets that path through only while this thread does not hold the loader lock. The plugin's `DllMain`
-runs inside the same call with the lock held, so a load made there, by that path or another, is checked (`PluginDllMainLoadTest`). The export and API-version checks run after the load, so a plugin's `DllMain` runs before its `NvrPluginGetInfo` export and API version are checked: signed-only, not those checks, is what keeps unknown code out.
+runs inside the same call with the lock held, so a load made there, by that path or another, is checked (`PluginDllMainLoadTest`). The export and API-version checks run after the load, so a plugin's `DllMain` runs before its `NevrPluginGetInfo` export and API version are checked: signed-only, not those checks, is what keeps unknown code out.
 An unsigned-allowed run logs the line `a plugin loads <file> after its init: <reason>, allowed because plugin signatures are not
 required in this run (plugin trust mode <mode>)` and allows it. Known gaps, recorded and not claimed closed: a load by an absolute path outside the plugins directory (it is
 not a plugin file); under Wine, a unix symbolic link to the plugins directory is not recognised by the final-path compare, so an

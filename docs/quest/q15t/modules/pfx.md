@@ -8,7 +8,7 @@ Option: `Q15T_PFX` (default ON). Off switch: `pfx.off` in the q15t data director
 - The source build's `On()` (the particle-effect renderer's gate, read by every `pfx*` switch) is off unless a switch file
   `pfx.on` exists in the data directory, or the debug property reads `1`. Its per-switch reads are in the same function.
 - The working build has the renderer on. This gate is therefore ON by default, and `pfx.off` turns it off.
-- The gate installs no hook and writes no byte. `InitPfxGate` (called from `NvrPluginInitEx` after the pinned-build check)
+- The gate installs no hook and writes no byte. `InitPfxGate` (called from `NevrPluginInitEx` after the pinned-build check)
   stores the decision and logs one line: `[NEVR.PLUGIN] plugin=q15t pfx gate module=pfx status=on|off reason=default|off_file switch=pfx.off`.
 - `PfxGateOn()` reads the stored decision. It reads off until `InitPfxGate` has run. A future `pfx*` module reads it and does
   nothing while it is off.
