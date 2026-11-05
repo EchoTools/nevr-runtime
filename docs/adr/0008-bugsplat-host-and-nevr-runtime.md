@@ -258,8 +258,11 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 
 ## Consequences
 
-- `BugSplat64.dll` and `nevr-runtime.dll` are a matched pair; a package or a test deployment
-  that carries one without the other is a defect, not a configuration.
+- `BugSplat64.dll` and `nevr-runtime.dll` are released as a matched pair: a package, an install or a test deployment
+  carries both, from one release, and one that carries one without the other is a defect, not a configuration. What
+  runs together is a host and a runtime that agree on `abi_major` (`src/core/runtime_abi.h`), not always one release:
+  self-update (ADR 0024) replaces the runtime in the nevr root under the host already installed, and a release whose
+  runtime needs a newer host reaches players by installer only. (ADR 0024 amends this consequence.)
 - The export table is part of the contract: a change to it is a change to
   `tools/verify_pe_contract.py` in the same commit.
 - `src/runtime/host/` (the entry points, the rendezvous, the diagnostics, the crash capture and

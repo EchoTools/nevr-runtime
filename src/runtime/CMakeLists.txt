@@ -17,6 +17,7 @@ set(NEVR_HOST_UNITS
     "host/crash_report_host.cpp"
     "host/crash_send_host.cpp"
     "host/crash_send_winhttp.cpp"
+    "host/file_digest.cpp"
     "host/host_entry.cpp"
     "host/host_identity.cpp"
     "host/minidmp_sender_exports.cpp"
@@ -24,6 +25,9 @@ set(NEVR_HOST_UNITS
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
     "host/stop_line.cpp"
+    # Self-update's swap at start (ADR 0024, section 4).
+    "host/update_names.cpp"
+    "host/update_swap.cpp"
     # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).
     "ext/plugin_pins.cpp"
     "ext/plugin_signature.cpp"
@@ -705,6 +709,13 @@ if(BUILD_TESTING)
     target_compile_options(test_host_runtime_verify PRIVATE -Werror)
     target_link_libraries(test_host_runtime_verify PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_runtime_verify DISCOVERY_MODE PRE_TEST)
+
+    # Self-update's swap at start (ADR 0024, section 4; #2104): the lock, the vocabulary, the journal and its recovery,
+    # over real files in a temporary nevr root and the signed fixtures of NEVR_SIGFIX_DIR.
+    add_executable(test_host_update_swap tests/test_host_update_swap.cpp)
+    target_compile_options(test_host_update_swap PRIVATE -Werror)
+    target_link_libraries(test_host_update_swap PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_update_swap DISCOVERY_MODE PRE_TEST)
 
     # The host's sixteen export thunks: the shipped file (host/runtime_exports.cpp) is one of the host units the
     # library holds, and the test pulls it from there.

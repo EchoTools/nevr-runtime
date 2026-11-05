@@ -12,6 +12,7 @@
 
 #include "core/runtime_abi.h"
 #include "runtime/host/bootstrap_diagnostics.h"
+#include "runtime/host/update_swap.h"
 #include "runtime/ext/plugin_signature.h"
 
 #include <windows.h>
@@ -33,6 +34,7 @@ enum class RuntimeLoadOutcome : std::uint32_t {
   kAbiRejected = 7,          // ValidateRuntimeApi rejected (see abi_status)
   kInitFailed = 8,           // initialize() returned nonzero
   kRuntimeRefused = 9,       // the verifier refused nevr-runtime.dll, or it could not be read: never loaded (#854)
+  kUpdateBlocked = 10,       // a self-update left the root unfinished and could not finish it: nothing loaded (ADR 0024)
 };
 
 /// Where the root of the runtime came from (docs/adr/0012-static-install-root.md, "Where state resolves").
@@ -88,6 +90,8 @@ struct RuntimeLoadResult {
   // The CERT_CHAIN_ENGINE_CONFIG cbSize the verifier made its chain engine with: 88, or 80 on a Wine before 11.5 (#1262).
   // 0 when the file was not accepted by a check.
   std::uint32_t verify_engine_cbsize = 0;
+  // For kUpdateBlocked: why the start stopped before any load (update_swap.h, UpdateStartResult::reason).
+  const char* update_reason = nullptr;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
   const char* OutcomeName() const;
@@ -171,10 +175,17 @@ void SetVerifyPolicyForTest(const nevr_plugin_signature::Policy* policy) noexcep
 void SetDevBuildForTest(int mode) noexcept;
 // Test seam: called once with the path just before the load, while the verified file is still held.
 void SetBeforeLoadHookForTest(void (*hook)(const wchar_t* path)) noexcept;
+// Test seam: called once with the path right after the update lock was released, before the runtime's entry is looked
+// up and its initialize runs (ADR 0024, section 4.1).
+void SetAfterMapHookForTest(void (*hook)(const wchar_t* path)) noexcept;
 // Test seam: the folder the runtime is looked for in, instead of the nevr root. Null: the production rule. The string
 // must outlive the loads; a harness that stages a runtime beside its host stand-in passes that folder.
 void SetRuntimeDirForTest(const wchar_t* directory) noexcept;
 #endif
+
+/// The policy the host verifies a file against: nevr_plugin_pins::PinnedPolicy(), or a test target's own
+/// (SetVerifyPolicyForTest). The swap's check of a staged file uses it too (ADR 0024, section 4.3).
+const nevr_plugin_signature::Policy& HostVerifyPolicy() noexcept;
 
 class RuntimeLoader {
  public:
@@ -183,8 +194,18 @@ class RuntimeLoader {
 
   // Run the state machine against the prepared path. Emits a diagnostic on every
   // outcome. The failed runtime is left mapped (it may already have
-  // patched something); it is never FreeLibrary'd.
-  RuntimeLoadResult Load(const NevrHostContext& host, BootstrapDiagnostics& diagnostics);
+  // patched something); it is never FreeLibrary'd. `update_lock`, when not null, is the self-update lock the start
+  // holds (update_swap.h): it is released once LoadLibraryExW has returned, or once the verdict says the file is not
+  // loaded, and always before the runtime's entry is looked up and its initialize runs (ADR 0024, section 4.1).
+  RuntimeLoadResult Load(const NevrHostContext& host, BootstrapDiagnostics& diagnostics,
+                         UpdateLock* update_lock = nullptr);
+
+  /// The start stopped before any load because a self-update left the root unfinished (UpdateStartAction::kStop):
+  /// the result is kUpdateBlocked with `reason`, and nothing is loaded.
+  void RecordUpdateStop(const char* reason);
+
+  /// The prepared runtime path, or null when none could be formed.
+  const wchar_t* Path() const { return path_ok_ ? path_ : nullptr; }
 
   /// Call api->initialize(&host). Returns its result; an exception of any type that escapes it is caught here
   /// (exceptions must not cross the DLL boundary), sets *threw and returns kInitThrewCode.

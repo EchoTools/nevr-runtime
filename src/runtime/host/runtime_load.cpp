@@ -1,5 +1,6 @@
 #include "runtime/host/runtime_load.h"
 
+#include "runtime/host/file_digest.h"
 #include "runtime/host/host_identity.h"
 #include "runtime/host/host_json.h"
 #include "runtime/host/loader_lock.h"
@@ -69,6 +70,7 @@ std::atomic<const nevr_plugin_signature::Policy*> g_policy_for_test{nullptr};
 std::atomic<int> g_dev_build_for_test{-1};
 std::atomic<void (*)(const wchar_t*)> g_before_load_for_test{nullptr};
 std::atomic<const wchar_t*> g_runtime_dir_for_test{nullptr};
+std::atomic<void (*)(const wchar_t*)> g_after_map_for_test{nullptr};
 #endif
 
 // The policy the verdict is taken against: the pins, the same constants the runtime's own policy starts from.
@@ -105,67 +107,6 @@ struct FileFacts {
 };
 
 constexpr char kUnavailable[] = "unavailable";
-
-// The whole file, read from offset 0 through `file`. False on any read failure or an empty file.
-bool ReadWholeFile(HANDLE file, std::vector<unsigned char>* out) {
-  LARGE_INTEGER size{};
-  LARGE_INTEGER start{};
-  if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0) return false;
-  if (!SetFilePointerEx(file, start, nullptr, FILE_BEGIN)) return false;
-  out->resize(static_cast<std::size_t>(size.QuadPart));
-  std::size_t done = 0;
-  while (done < out->size()) {
-    const DWORD want = static_cast<DWORD>(std::min<std::size_t>(out->size() - done, std::size_t{1} << 20));
-    DWORD got = 0;
-    if (!ReadFile(file, out->data() + done, want, &got, nullptr) || got == 0) return false;
-    done += got;
-  }
-  return true;
-}
-
-// SHA-256 of `bytes` as 64 lowercase hex characters, through CryptoAPI (advapi32, which the host links for the
-// verifier). Empty on any failure.
-std::string Sha256Hex(const std::vector<unsigned char>& bytes) {
-  HCRYPTPROV provider = 0;
-  if (!CryptAcquireContextW(&provider, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) return {};
-  std::string hex;
-  HCRYPTHASH hash = 0;
-  if (CryptCreateHash(provider, CALG_SHA_256, 0, 0, &hash)) {
-    bool ok = true;
-    std::size_t done = 0;
-    while (ok && done < bytes.size()) {
-      const std::size_t chunk = std::min<std::size_t>(bytes.size() - done, std::size_t{1} << 20);
-      ok = CryptHashData(hash, bytes.data() + done, static_cast<DWORD>(chunk), 0) != FALSE;
-      done += chunk;
-    }
-    BYTE digest[32] = {};
-    DWORD length = sizeof(digest);
-    if (ok && CryptGetHashParam(hash, HP_HASHVAL, digest, &length, 0) && length == sizeof(digest)) {
-      constexpr char kDigits[] = "0123456789abcdef";
-      for (const BYTE b : digest) {
-        hex.push_back(kDigits[b >> 4]);
-        hex.push_back(kDigits[b & 0x0f]);
-      }
-    }
-    CryptDestroyHash(hash);
-  }
-  CryptReleaseContext(provider, 0);
-  return hex;
-}
-
-// The version field of the file's "NEVR-BUILD <version> <commit40>" literal (the NUL-bounded one, src/core and
-// host_identity.cpp). Empty when the file has no such literal.
-std::string BuildVersion(const std::vector<unsigned char>& bytes) {
-  static constexpr unsigned char kPrefix[] = {0, 'N', 'E', 'V', 'R', '-', 'B', 'U', 'I', 'L', 'D', ' '};
-  const auto found = std::search(bytes.begin(), bytes.end(), std::begin(kPrefix), std::end(kPrefix));
-  if (found == bytes.end()) return {};
-  std::string version;
-  for (auto at = found + static_cast<std::ptrdiff_t>(sizeof(kPrefix));
-       at != bytes.end() && *at != 0 && *at != ' ' && version.size() < 64; ++at) {
-    version.push_back(static_cast<char>(*at));
-  }
-  return version;
-}
 
 FileFacts FactsOf(HANDLE file, bool want_version) {
   FileFacts facts;
@@ -214,6 +155,7 @@ bool DescriptorRead(RuntimeLoadOutcome outcome) {
     case RuntimeLoadOutcome::kLoadFailed:
     case RuntimeLoadOutcome::kMissingEntry:
     case RuntimeLoadOutcome::kRuntimeRefused:
+    case RuntimeLoadOutcome::kUpdateBlocked:
       return false;
   }
   return false;
@@ -233,6 +175,7 @@ const char* RuntimeLoadResult::OutcomeName() const {
     case RuntimeLoadOutcome::kAbiRejected: return "abi_rejected";
     case RuntimeLoadOutcome::kInitFailed: return "init_failed";
     case RuntimeLoadOutcome::kRuntimeRefused: return "runtime_refused";
+    case RuntimeLoadOutcome::kUpdateBlocked: return "update_blocked";
   }
   return "unknown";
 }
@@ -312,7 +255,21 @@ void SetDevBuildForTest(int mode) noexcept { g_dev_build_for_test.store(mode); }
 void SetBeforeLoadHookForTest(void (*hook)(const wchar_t* path)) noexcept { g_before_load_for_test.store(hook); }
 
 void SetRuntimeDirForTest(const wchar_t* directory) noexcept { g_runtime_dir_for_test.store(directory); }
+
+void SetAfterMapHookForTest(void (*hook)(const wchar_t* path)) noexcept { g_after_map_for_test.store(hook); }
 #endif
+
+const nevr_plugin_signature::Policy& HostVerifyPolicy() noexcept { return VerifyPolicy(); }
+
+void RuntimeLoader::RecordUpdateStop(const char* reason) {
+  result_ = RuntimeLoadResult{};
+  result_.outcome = RuntimeLoadOutcome::kUpdateBlocked;
+  result_.update_reason = reason;
+  result_.path_ok = path_ok_;
+  CopyPath(result_.path, MAX_PATH, path_);
+  result_.root_source = choice_.source;
+  result_.root_override_ignored = choice_.override_ignored;
+}
 
 VerifyDecision DecideVerify(RuntimeFile file, bool verify_enabled, bool accepted, bool dev_build) noexcept {
   VerifyDecision decision;
@@ -407,6 +364,7 @@ void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
     DescribeRuntimeStop(diagnostics, result, text);
     AddStopFacts(record, text.facts);
     if (notice != nullptr) record["notice"] = notice;
+    if (result.update_reason != nullptr) record["update_reason"] = result.update_reason;
     // The path searched: the one thing a player or support needs for a missing file.
     if (result.path_ok) record["runtime_path"] = ToUtf8(result.path);
     if (result.win32_error != 0) record["win32_error"] = result.win32_error;
@@ -576,8 +534,8 @@ std::int32_t RuntimeLoader::CallInitialize(const NevrRuntimeApi* api, const Nevr
   }
 }
 
-RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
-                                      BootstrapDiagnostics& diagnostics) {
+RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host, BootstrapDiagnostics& diagnostics,
+                                      UpdateLock* update_lock) {
   result_ = RuntimeLoadResult{};
   result_.path_ok = path_ok_;
   CopyPath(result_.path, MAX_PATH, path_);
@@ -651,6 +609,13 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
                             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (module == nullptr) load_error = GetLastError();
   }
+  // The self-update lock (ADR 0024, section 4.1): held from the first read of update\ through the mapping of the file
+  // the verdict was on, so no other host moves the runtime in between; released before the runtime's entry is looked
+  // up and its initialize runs.
+  if (update_lock != nullptr) update_lock->Release();
+#if defined(NEVR_HOST_TESTING)
+  if (const auto hook = g_after_map_for_test.load()) hook(path_);
+#endif
   if (module != nullptr) {
     const auto get_api = reinterpret_cast<NevrGetRuntimeApiFn>(
         GetProcAddress(module, nevr_runtime_abi::kGetRuntimeApiExport));
