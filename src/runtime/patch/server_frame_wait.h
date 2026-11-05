@@ -105,15 +105,17 @@ class DatagramQueue {
   std::size_t Size() const { return count_; }
 
   /// Hands the oldest record to the game's drain the way the wrapper would have: the address, at most `*size` bytes
-  /// (the caller's capacity), then the size, state and return value the wrapper reported. False when empty.
+  /// (the caller's capacity), then the size it copied, and the state and return value the wrapper reported. False
+  /// when empty. The wait reads with the drain's own capacity (kReceiveCapacity), so a record never exceeds it; were
+  /// it to, the size reported is what was copied, never more than the caller's buffer holds.
   bool PopInto(uint8_t* address, uint8_t* buffer, int64_t* size, uint32_t* status, uint64_t* result) {
     if (count_ == 0) return false;
     const Datagram& d = slots_[head_];
     std::memcpy(address, d.address, kAddressBytes);
-    const int64_t capacity = *size;
+    const int64_t capacity = *size > 0 ? *size : 0;
     const int64_t n = d.size < capacity ? d.size : capacity;
     if (n > 0) std::memcpy(buffer, d.data, static_cast<std::size_t>(n));
-    *size = d.size;
+    *size = n > 0 ? n : 0;
     *status = d.status;
     *result = d.result;
     head_ = (head_ + 1) % N;
@@ -138,6 +140,104 @@ class DatagramQueue {
 /// The queue the server uses: a frame's worth of a full match's datagrams with room to spare. When it is full, the
 /// rest stay in the socket for the game's drain, behind the queued ones, in order.
 constexpr std::size_t kQueueSlots = 64;
+
+/// A socket handle that names no socket (INVALID_SOCKET; SendRecvDrain stores it in the port when it closes the socket).
+constexpr uint64_t kNoSocket = ~uint64_t{0};
+
+/// The hooks' state, on the game loop thread (server_frame_wait.cpp is the thin game side of it): the port the last
+/// drain served and the socket it read, and the records the wait took, with the port and socket they came from.
+///
+/// One port is drained a frame: CR15NetGame::Update (0x1401bf610) calls CBroadcaster::Update on [netgame+0x28c8] at
+/// 0x1401bf715 or 0x1401bfb59 (two exclusive branches, the same broadcaster), and CBroadcaster::Update calls
+/// SendRecvDrain once, on [data]+0x10 (0x140f8ea44-0x140f8ea58). Nothing here assumes it: a call of the wrapper for
+/// another socket passes through and leaves the queue as it is, and the queue is dropped only when its own port no
+/// longer holds the socket its records came from (the game closed or replaced that socket, so it would never have
+/// read them).
+///
+/// The port's lifetime: [netgame+0x28c8] has one writer, ConfigureEngine (0x1401460dd, at boot), and the port is
+/// SBroadcasterData+0x10, which CBroadcaster::Update reaches through the same pointer every frame; a port the hooks
+/// recorded is read only on the game loop thread, between that frame's drain and the next.
+///
+/// `readSocket(port)` reads the port's socket field (the port's second quadword).
+template <std::size_t N>
+class HandBack {
+ public:
+  /// What the next wait may serve: the port and socket of the drain that ran since the last wait.
+  struct Target {
+    void* port = nullptr;
+    uint64_t socket = 0;
+    bool ready = false;
+  };
+
+  /// CBroadcaster::SendRecvDrain is about to drain `port`.
+  template <class ReadSocket>
+  void OnDrain(void* port, ReadSocket&& readSocket) {
+    DropIfStale(readSocket);
+    drainPort_ = port;
+    drainSocket_ = 0;  // OnReceive fills it in when this drain reads
+    drainFresh_ = true;
+  }
+
+  /// The game's wrapper is called for `socket`. True when the call was served from the queue: the oldest record the
+  /// wait took from this socket is in the out parameters. False: the caller calls the wrapper itself (the queue is
+  /// empty, or its records came from another socket; they stay queued for theirs).
+  bool OnReceive(uint64_t socket, uint8_t* address, uint8_t* buffer, int64_t* size, uint32_t* status, uint64_t* result) {
+    drainSocket_ = socket;
+    if (queue_.Size() == 0 || socket != queueSocket_) return false;
+    queue_.PopInto(address, buffer, size, status, result);
+    ++replayed_;
+    return true;
+  }
+
+  /// The wait is about to start: the port and socket it may serve. Ready only when a drain ran since the last wait, read
+  /// a socket, and its port still holds that socket, and the queue holds nothing from another port or socket.
+  template <class ReadSocket>
+  Target BeginWait(bool pingsInstalled, ReadSocket&& readSocket) {
+    DropIfStale(readSocket);
+    Target t;
+    const bool fresh = drainFresh_;
+    drainFresh_ = false;
+    if (!pingsInstalled || !fresh || drainPort_ == nullptr || drainSocket_ == 0 || drainSocket_ == kNoSocket) return t;
+    const uint64_t portSocket = readSocket(drainPort_);
+    if (portSocket != drainSocket_) return t;
+    if (queue_.Size() != 0 && (queuePort_ != drainPort_ || queueSocket_ != portSocket)) return t;
+    queuePort_ = drainPort_;
+    queueSocket_ = portSocket;
+    t.port = drainPort_;
+    t.socket = portSocket;
+    t.ready = true;
+    return t;
+  }
+
+  DatagramQueue<N>& Queue() { return queue_; }
+  std::size_t Queued() const { return queue_.Size(); }
+
+  /// Records handed back, and records dropped, since the last call.
+  uint64_t TakeReplayed() { return Take(replayed_); }
+  uint64_t TakeDropped() { return Take(dropped_); }
+
+ private:
+  template <class ReadSocket>
+  void DropIfStale(ReadSocket& readSocket) {
+    if (queue_.Size() == 0 || queuePort_ == nullptr) return;
+    if (readSocket(queuePort_) != queueSocket_) dropped_ += queue_.Clear();
+  }
+
+  static uint64_t Take(uint64_t& counter) {
+    const uint64_t n = counter;
+    counter = 0;
+    return n;
+  }
+
+  DatagramQueue<N> queue_;
+  void* queuePort_ = nullptr;
+  uint64_t queueSocket_ = 0;
+  void* drainPort_ = nullptr;
+  uint64_t drainSocket_ = 0;
+  bool drainFresh_ = false;
+  uint64_t replayed_ = 0;
+  uint64_t dropped_ = 0;
+};
 
 // --- the wait ------------------------------------------------------------------------------------------------------
 
@@ -239,6 +339,34 @@ WaitStats WaitUntil(Env& env, Queue& queue, uint64_t deadlineUs, bool socketRead
   }
 }
 
+/// How late past the game's deadline the wait returns, at least. CClock::UpdateAndPace's elapsed (0x1400ce8d0) is
+/// CTimer::GetTicks (QueryPerformanceCounter, 0x1400de770) * 1,000,000 / the cached QueryPerformanceFrequency
+/// (0x1400de790), rounded down: the value the wait's clock computes from the same counter, so the two agree to the
+/// microsecond. (Its other branch reads a frozen time when the flag at 0x142099038 is set; that flag has 18 reads and
+/// no writer.) The margin covers what that reading cannot: a counter something else reads differently. It costs
+/// nothing: the game moves the frame start on by one step after the wait (0x1400cf4c6), so a late return is not carried
+/// into the next frame.
+constexpr uint64_t kNeverEarlyMarginUs = 50;
+
+/// The time a wait of `microseconds` asked for at `startUs` must not end before.
+inline uint64_t DeadlineUs(uint64_t startUs, int64_t microseconds) {
+  return startUs + static_cast<uint64_t>(microseconds > 0 ? microseconds : 0) + kNeverEarlyMarginUs;
+}
+
+/// What the runtime's Wait hook does with a server's wait.
+enum class WaitMode {
+  kNotOurs,      ///< The frame wait is not active: the hook's own wait runs, and the overrun patch is not in.
+  kClockOnly,    ///< Off the game loop thread, or before it is known: a never-early wait on the clock, no socket.
+  kServeSocket,  ///< The game loop thread: the socket is served for the rest of the step (HandBack decides if it can be).
+};
+
+/// Every wait on an active server is never early, whatever thread makes it, so the overrun patch's guarantee does not
+/// depend on which thread calls CPrecisionSleep::Wait or on the loop thread being known yet.
+inline WaitMode ChooseWaitMode(bool active, bool onLoopThread) {
+  if (!active) return WaitMode::kNotOurs;
+  return onLoopThread ? WaitMode::kServeSocket : WaitMode::kClockOnly;
+}
+
 // --- the overrun delta-time patch ------------------------------------------------------------------------------------
 
 /// CClock::UpdateAndPace 0x1400cf46d: the `jae` taken when the frame took at least its step (0x1400cf46a
@@ -259,8 +387,9 @@ inline nevr_checked_patch::Site OverrunDeltaSite() {
 /// The patch makes the measured elapsed time the frame's dt. That time is unsigned: a wait that returned before frame
 /// start + step leaves the start ahead of now, the next elapsed wraps around, and the clock's maximum dt
 /// ([clock+0x60] = 10,000,000 us, CClock::CClock 0x1400cd942) becomes the frame's dt. Without the patch the same wrap
-/// gives dt = step. So the patch goes in only on a server whose CPrecisionSleep::Wait is the runtime's (WaitUntil
-/// never returns before its deadline); a client is never patched.
-inline bool MayPatchOverrunDelta(bool isServer, bool frameWaitOwned) { return isServer && frameWaitOwned; }
+/// gives dt = step. So the patch goes in only on a server whose frame wait is active: the runtime owns
+/// CPrecisionSleep::Wait and has a clock, and then every wait through it, on any thread, is a WaitUntil that never
+/// returns before DeadlineUs (ChooseWaitMode). A client is never patched.
+inline bool MayPatchOverrunDelta(bool isServer, bool frameWaitActive) { return isServer && frameWaitActive; }
 
 }  // namespace nevr_server_frame_wait

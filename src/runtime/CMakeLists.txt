@@ -226,6 +226,7 @@ set(PATCHES_HEADERS
     "patch/server_team_size.h"
     "patch/server_team_size_install.h"
     "patch/server_frame_wait.h"
+    "patch/server_frame_wait_env.h"
     "patch/server_frame_wait_install.h"
     "patch/asset_cache.h"
     "patch/asset_registry.h"
@@ -1016,11 +1017,13 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_server_team_size DISCOVERY_MODE PRE_TEST)
 
     # #2109: a server's frame wait (raw pings answered as they arrive, never an early return) and the overrun delta-time
-    # patch's site and gate, driven on a fake clock and a fake socket (header-only patch/server_frame_wait.h).
-    add_executable(test_server_frame_wait tests/test_server_frame_wait.cpp)
-    set_source_files_properties(tests/test_server_frame_wait.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # patch's site and gate, driven on a fake clock and a fake socket (header-only patch/server_frame_wait.h), and the
+    # Env the server runs it on over a real UDP socket on the loopback (patch/server_frame_wait_env.h).
+    add_executable(test_server_frame_wait tests/test_server_frame_wait.cpp tests/test_server_frame_wait_socket.cpp)
+    set_source_files_properties(tests/test_server_frame_wait.cpp tests/test_server_frame_wait_socket.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_server_frame_wait PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_server_frame_wait PRIVATE GTest::gtest GTest::gtest_main)
+    target_link_libraries(test_server_frame_wait PRIVATE GTest::gtest GTest::gtest_main ws2_32)
     gtest_discover_tests(test_server_frame_wait DISCOVERY_MODE PRE_TEST)
 
     # #982: the public Arena match clock keeps counting through goals (patch/arena_public_clock_rules.h).

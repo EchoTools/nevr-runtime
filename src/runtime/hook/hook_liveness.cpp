@@ -41,9 +41,6 @@ const Entry kEntries[] = {
     {"CR15PickLoadingTipNode::Enter", "server mode, loading screen", false},
     {"CR15SelectLoadingTipByIndexNode::Enter", "server mode, loading screen", false},
     {"CR15SelectLoadingTipNode::Enter", "server mode, loading screen", false},
-    // #2109: installed on a server only; a client never installs them.
-    {"CBroadcaster::SendRecvDrain", "server, once a frame", false},
-    {"udp_recvfrom_sockaddr_storage", "server, every datagram and every drain", false},
 };
 
 // kEntries is sized by its INITIALIZER, not by kCount. That is load-bearing: if

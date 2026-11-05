@@ -351,9 +351,13 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
         return;
     }
 
-    // #2109: a server's frame wait answers raw pings as they arrive and never returns early (the overrun delta-time
-    // patch depends on that). False when it does not apply: off the game loop thread, or not installed as a server.
-    if (g_isServer && nevr_server_frame_wait::Wait(microseconds)) return;
+    // #2109: a server's frame wait answers raw pings as they arrive and never returns early, on any thread (the overrun
+    // delta-time patch depends on that). False only when the frame wait is not active; the patch is not in then, and
+    // the wait below, which can end early, is said once.
+    if (g_isServer) {
+        if (nevr_server_frame_wait::Wait(microseconds)) return;
+        nevr_server_frame_wait::NoteFallbackWait(microseconds);
+    }
 
     if (s_cached_timer != NULL) {
         // High-precision wait using persistent timer handle.

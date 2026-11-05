@@ -1,6 +1,7 @@
 // #2109: a dedicated server's frame wait: raw pings answered as they arrive, the game's datagrams handed back in order,
 // never an early return, and the overrun delta-time patch that depends on it. The decisions are in
-// server_frame_wait.h; this file is the game's side of them: two hooks, the Env WaitUntil runs on, and the logging.
+// server_frame_wait.h (WaitUntil, HandBack, ChooseWaitMode, DeadlineUs) and the Env in server_frame_wait_env.h; this
+// file is the game's side of them: two hooks, the game's functions handed to the Env, and the logging.
 
 #include "runtime/patch/server_frame_wait_install.h"
 
@@ -15,13 +16,13 @@
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
 #include "runtime/hook/addresses.h"
-#include "runtime/hook/hook_liveness.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/lifecycle/crash_recovery.h"  // GameLoopThreadId
 #include "runtime/patch/binary_bug_fixes.h"    // FrameWaitOwned
 #include "runtime/patch/checked_patch.h"
 #include "runtime/patch/server_frame_wait.h"
+#include "runtime/patch/server_frame_wait_env.h"
 
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
@@ -43,37 +44,40 @@ constexpr std::size_t kPortSocketOffset = 8;
 constexpr uint64_t kSummaryWindowUs = 60ULL * 1000 * 1000;
 
 using DrainFn = void(__fastcall*)(void* port, float budgetSeconds);
-using RecvFn = uint64_t(__fastcall*)(uint64_t socket, uint8_t* address, uint8_t* buffer, int64_t* size,
-                                     uint32_t* status);
-using SendFn = uint64_t(__fastcall*)(void* port, const uint8_t* address, const uint8_t* data, uint64_t size);
 
 DrainFn s_origDrain = nullptr;
 RecvFn s_origRecv = nullptr;
-SendFn s_send = nullptr;  // CBroadcastPort_SendPacket: called, not hooked
+// CBroadcastPort_SendPacket, called, not hooked. No other thread sends on the port while the wait does: its callers
+// are ReceiveFromPeer (under CBroadcaster::UpdateReceive) and SendFlush's two senders (under CBroadcaster::Update, and
+// LogOut through 0x140f731d0), all on the game loop thread, and its four data references are unwind entries (.pdata
+// 0x142186e1c and the chained unwind records at 0x141f95f8c, 0x141f95fa4, 0x141f95fb4), not function pointers. The
+// wait runs on that same thread, so its send never overlaps the game's (lag-simulation queue included).
+SendFn s_send = nullptr;
 
-std::atomic<bool> g_active{false};  // a server whose CPrecisionSleep::Wait is the runtime's
+std::atomic<bool> g_active{false};  // a server whose CPrecisionSleep::Wait is the runtime's, with a clock
 std::atomic<bool> g_pings{false};   // and the broadcaster hooks are in: the wait serves the socket
 
-// Game loop thread only: the drain, the wrapper and the wait all run there (anything else passes through).
-DatagramQueue<kQueueSlots> g_queue;
-uint64_t g_queueSocket = 0;   // the socket the queued records came from
-void* g_drainPort = nullptr;  // the port the last drain served
-uint64_t g_drainSocket = 0;   // the socket that drain passed to the wrapper
-bool g_drainFresh = false;    // a drain ran since the last wait
+// Game loop thread only: the drain, the wrapper and the socket-serving wait all run there.
+HandBack<kQueueSlots> g_handBack;
 
-HANDLE g_timer = nullptr;
+HANDLE g_timer = nullptr;  // the game loop thread's; a wait on another thread sleeps without it
 int64_t g_qpcFrequency = 0;
+
+// Waits off the game loop thread (or before it is known): never early, on the clock alone. Counted from any thread.
+std::atomic<uint64_t> g_clockOnlyWaits{0};
+std::atomic<bool> g_clockOnlyLogged{false};
+std::atomic<bool> g_fallbackLogged{false};
 
 struct Window {
   uint64_t startUs = 0;
   uint64_t waits = 0;
   uint64_t socketWaits = 0;
+  uint64_t drains = 0;
+  uint64_t wrapperCalls = 0;
   uint64_t pingsAnswered = 0;
   uint64_t sendFailures = 0;
   uint64_t queued = 0;
   uint64_t errorsQueued = 0;
-  uint64_t replayed = 0;
-  uint64_t dropped = 0;
   uint64_t pollFailures = 0;
   uint64_t earlyTimeouts = 0;
   uint64_t emptyReadable = 0;
@@ -89,63 +93,9 @@ bool OnGameLoopThread() {
   return loop != 0 && loop == GetCurrentThreadId();
 }
 
-/// Monotonic microseconds from QPC, overflow-safe (the whole and fractional parts are never multiplied together).
-/// 0 when the frequency is unknown.
-uint64_t QpcMicroseconds() {
-  const int64_t pf = g_qpcFrequency;
-  if (pf <= 0) return 0;
-  LARGE_INTEGER counter;
-  QueryPerformanceCounter(&counter);
-  const int64_t pc = counter.QuadPart;
-  return static_cast<uint64_t>((pc / pf) * 1000000LL + ((pc % pf) * 1000000LL) / pf);
+uint64_t ReadPortSocket(void* port) {
+  return *reinterpret_cast<const volatile uint64_t*>(static_cast<const uint8_t*>(port) + kPortSocketOffset);
 }
-
-struct GameEnv {
-  void* port = nullptr;
-  uint64_t socket = 0;
-  int pollError = 0;
-
-  uint64_t NowUs() { return QpcMicroseconds(); }
-
-  PollResult Poll(uint32_t timeoutMs) {
-    WSAPOLLFD pfd = {};
-    pfd.fd = static_cast<SOCKET>(socket);
-    pfd.events = POLLRDNORM;
-    const int r = WSAPoll(&pfd, 1, static_cast<INT>(timeoutMs));
-    if (r == SOCKET_ERROR) {
-      pollError = WSAGetLastError();
-      return PollResult::kFailed;
-    }
-    if (r == 0) return PollResult::kTimeout;
-    if ((pfd.revents & POLLNVAL) != 0) {
-      pollError = WSAENOTSOCK;
-      return PollResult::kFailed;
-    }
-    return PollResult::kReadable;  // data, or POLLERR/POLLHUP: the wrapper reports which, the game handles it
-  }
-
-  void Receive(Datagram* d) {
-    d->size = static_cast<int64_t>(kReceiveCapacity);
-    d->status = 0;
-    d->result = s_origRecv(socket, d->address, d->data, &d->size, &d->status);
-  }
-
-  bool SendAck(const uint8_t* address, const uint8_t* ack) {
-    return s_send(port, address, ack, kRawPingBytes) == kRawPingBytes;
-  }
-
-  void SleepUs(uint64_t us) {
-    if (g_timer != nullptr) {
-      LARGE_INTEGER due;
-      due.QuadPart = -static_cast<LONGLONG>(us * 10);  // relative, 100 ns units
-      if (SetWaitableTimerEx(g_timer, &due, 0, nullptr, nullptr, nullptr, 0)) {
-        WaitForSingleObject(g_timer, static_cast<DWORD>(us / 1000) + 2);
-        return;
-      }
-    }
-    Sleep(static_cast<DWORD>(us / 1000));  // 0 yields; WaitUntil checks the clock again either way
-  }
-};
 
 void Account(const WaitStats& st, bool socketWait, int pollError) {
   Window& w = g_window;
@@ -170,19 +120,25 @@ void MaybeLogSummary(uint64_t nowUs) {
     return;
   }
   if (nowUs - w.startUs < kSummaryWindowUs) return;
+  const uint64_t replayed = g_handBack.TakeReplayed();
+  const uint64_t dropped = g_handBack.TakeDropped();
+  const uint64_t clockOnly = g_clockOnlyWaits.exchange(0, std::memory_order_relaxed);
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] server frame wait window_s=%llu waits=%llu socket_waits=%llu pings_answered=%llu "
-      "ping_send_failures=%llu datagrams_queued=%llu datagrams_handed_back=%llu datagrams_dropped=%llu "
-      "errors_handed_back=%llu poll_failures=%llu last_poll_error=%d early_timeouts=%llu empty_readable=%llu "
-      "queue_full=%llu max_late_us=%llu (raw pings are answered during the wait, not on the next frame)",
+      "[NEVR.PATCH] server frame wait window_s=%llu waits=%llu socket_waits=%llu clock_only_waits=%llu drains=%llu "
+      "wrapper_calls=%llu pings_answered=%llu ping_send_failures=%llu datagrams_queued=%llu "
+      "datagrams_handed_back=%llu datagrams_dropped=%llu errors_handed_back=%llu poll_failures=%llu "
+      "last_poll_error=%d early_timeouts=%llu empty_readable=%llu queue_full=%llu max_late_us=%llu (raw pings are "
+      "answered during the wait, not on the next frame; drains=0 means the broadcaster has not run, as on a server "
+      "with no service)",
       static_cast<unsigned long long>((nowUs - w.startUs) / 1000000ULL), static_cast<unsigned long long>(w.waits),
-      static_cast<unsigned long long>(w.socketWaits), static_cast<unsigned long long>(w.pingsAnswered),
-      static_cast<unsigned long long>(w.sendFailures), static_cast<unsigned long long>(w.queued),
-      static_cast<unsigned long long>(w.replayed), static_cast<unsigned long long>(w.dropped),
-      static_cast<unsigned long long>(w.errorsQueued), static_cast<unsigned long long>(w.pollFailures),
-      w.lastPollError, static_cast<unsigned long long>(w.earlyTimeouts),
-      static_cast<unsigned long long>(w.emptyReadable), static_cast<unsigned long long>(w.queueFull),
-      static_cast<unsigned long long>(w.maxLateUs));
+      static_cast<unsigned long long>(w.socketWaits), static_cast<unsigned long long>(clockOnly),
+      static_cast<unsigned long long>(w.drains), static_cast<unsigned long long>(w.wrapperCalls),
+      static_cast<unsigned long long>(w.pingsAnswered), static_cast<unsigned long long>(w.sendFailures),
+      static_cast<unsigned long long>(w.queued), static_cast<unsigned long long>(replayed),
+      static_cast<unsigned long long>(dropped), static_cast<unsigned long long>(w.errorsQueued),
+      static_cast<unsigned long long>(w.pollFailures), w.lastPollError,
+      static_cast<unsigned long long>(w.earlyTimeouts), static_cast<unsigned long long>(w.emptyReadable),
+      static_cast<unsigned long long>(w.queueFull), static_cast<unsigned long long>(w.maxLateUs));
   w = Window{};
   w.startUs = nowUs;
 }
@@ -190,30 +146,18 @@ void MaybeLogSummary(uint64_t nowUs) {
 // --- the hooks ---------------------------------------------------------------------------------------------------
 
 void __fastcall DrainHook(void* port, float budgetSeconds) {
-  nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterSendRecvDrain);
   if (OnGameLoopThread()) {
-    g_drainPort = port;
-    g_drainSocket = 0;  // the wrapper hook fills it in when this drain reads
-    g_drainFresh = true;
+    ++g_window.drains;
+    g_handBack.OnDrain(port, ReadPortSocket);
   }
   s_origDrain(port, budgetSeconds);
 }
 
 uint64_t __fastcall RecvHook(uint64_t socket, uint8_t* address, uint8_t* buffer, int64_t* size, uint32_t* status) {
-  nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterUdpRecvFrom);
   if (OnGameLoopThread()) {
-    g_drainSocket = socket;
-    if (g_queue.Size() != 0) {
-      if (socket == g_queueSocket) {
-        uint64_t result = 0;
-        g_queue.PopInto(address, buffer, size, status, &result);
-        ++g_window.replayed;
-        return result;
-      }
-      // The game replaced its socket after the wait read from the old one: those records belong to a socket it
-      // closed, as they would have if it had read them itself before closing.
-      g_window.dropped += g_queue.Clear();
-    }
+    ++g_window.wrapperCalls;
+    uint64_t result = 0;
+    if (g_handBack.OnReceive(socket, address, buffer, size, status, &result)) return result;
   }
   return s_origRecv(socket, address, buffer, size, status);
 }
@@ -259,32 +203,47 @@ bool ProcessWrite(void* dest, const void* src, size_t n) {
   return g_writeErrors.Note(ProcessMemcpy(dest, src, n, &error), error);
 }
 
+/// A wait off the game loop thread, or before the loop thread is known: never early, on the clock alone (no socket, no
+/// shared timer). Counted, and said once.
+void WaitClockOnly(int64_t microseconds) {
+  SocketEnv env;
+  env.qpcFrequency = g_qpcFrequency;
+  const uint64_t deadlineUs = DeadlineUs(env.NowUs(), microseconds);
+  DatagramQueue<1> unused;  // WaitUntil reserves from the queue only while it serves a socket
+  WaitUntil(env, unused, deadlineUs, false);
+  g_clockOnlyWaits.fetch_add(1, std::memory_order_relaxed);
+  if (!g_clockOnlyLogged.exchange(true, std::memory_order_relaxed)) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] server frame wait: a wait on thread %lu (game loop thread %lu) waited on the clock alone "
+        "wait_us=%lld: never early, no socket served (counted as clock_only_waits)",
+        static_cast<unsigned long>(GetCurrentThreadId()), GameLoopThreadId(), static_cast<long long>(microseconds));
+  }
+}
+
 }  // namespace
 
 bool Wait(int64_t microseconds) {
-  if (!g_active.load(std::memory_order_acquire) || !OnGameLoopThread()) return false;
-  GameEnv env;
-  const uint64_t startUs = env.NowUs();
-  if (startUs == 0) return false;
-  const uint64_t deadlineUs = startUs + static_cast<uint64_t>(microseconds > 0 ? microseconds : 0);
-
-  // The socket the game's own drain read since the last wait, if its port still says it is the port's socket. A
-  // port or socket from an earlier frame is never used: the broadcaster may have closed or replaced it since.
-  bool socketReady = false;
-  if (g_pings.load(std::memory_order_acquire) && g_drainFresh && g_drainPort != nullptr && g_drainSocket != 0 &&
-      g_drainSocket != static_cast<uint64_t>(INVALID_SOCKET)) {
-    const uint64_t portSocket =
-        *reinterpret_cast<const volatile uint64_t*>(static_cast<const uint8_t*>(g_drainPort) + kPortSocketOffset);
-    if (portSocket == g_drainSocket && (g_queue.Size() == 0 || g_queueSocket == portSocket)) {
-      env.port = g_drainPort;
-      env.socket = portSocket;
-      g_queueSocket = portSocket;
-      socketReady = true;
-    }
+  const WaitMode mode = ChooseWaitMode(g_active.load(std::memory_order_acquire), OnGameLoopThread());
+  if (mode == WaitMode::kNotOurs) return false;
+  if (mode == WaitMode::kClockOnly) {
+    WaitClockOnly(microseconds);
+    return true;
   }
-  g_drainFresh = false;
 
-  const WaitStats st = WaitUntil(env, g_queue, deadlineUs, socketReady);
+  SocketEnv env;
+  env.recvFn = s_origRecv;
+  env.sendFn = s_send;
+  env.timer = g_timer;
+  env.qpcFrequency = g_qpcFrequency;
+  const uint64_t deadlineUs = DeadlineUs(env.NowUs(), microseconds);
+
+  // The socket the game's own drain read since the last wait, if its port still holds it (HandBack::BeginWait).
+  const HandBack<kQueueSlots>::Target target =
+      g_handBack.BeginWait(g_pings.load(std::memory_order_acquire), ReadPortSocket);
+  env.port = target.port;
+  env.socket = target.socket;
+
+  const WaitStats st = WaitUntil(env, g_handBack.Queue(), deadlineUs, target.ready);
   if (st.pingsAnswered > 0 && !g_firstPingLogged) {
     g_firstPingLogged = true;
     Log(EchoVR::LogLevel::Info,
@@ -292,9 +251,17 @@ bool Wait(int64_t microseconds) {
         "arrive, not on the next frame",
         static_cast<long long>(microseconds));
   }
-  Account(st, socketReady, env.pollError);
+  Account(st, target.ready, env.pollError);
   MaybeLogSummary(env.NowUs());
   return true;
+}
+
+void NoteFallbackWait(int64_t microseconds) {
+  if (g_fallbackLogged.exchange(true, std::memory_order_relaxed)) return;
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.PATCH] server frame wait not active: a frame waited on the old timer (wait_us=%lld), which can end early; "
+      "the overrun delta-time patch is not applied on this server, so an early end costs one step, not a 10 s dt",
+      static_cast<long long>(microseconds));
 }
 
 void Install(bool isServer) {
@@ -323,7 +290,8 @@ void Install(bool isServer) {
     }
   }
 
-  // The wait: the runtime must own CPrecisionSleep::Wait, or nothing here runs and the overrun patch stays out.
+  // The wait: the runtime must own CPrecisionSleep::Wait and have a clock, or nothing here runs and the overrun patch
+  // stays out.
   const bool waitOwned = nevr_binary_bug_fixes::FrameWaitOwned();
   g_active.store(waitOwned && g_qpcFrequency > 0, std::memory_order_release);
 
@@ -364,7 +332,7 @@ void Install(bool isServer) {
   char deltaState[160];
   if (!MayPatchOverrunDelta(true, g_active.load(std::memory_order_acquire))) {
     std::snprintf(deltaState, sizeof(deltaState),
-                  "not_applied (CPrecisionSleep::Wait is not the runtime's, so a wait could end early)");
+                  "not_applied (the frame wait is not active, so a wait could end early)");
   } else {
     uint8_t* const site = base + kOverrunDeltaRva;
     uint8_t before[2];
@@ -382,9 +350,10 @@ void Install(bool isServer) {
 
   const bool degraded = !g_active.load() || !g_pings.load() || g_timer == nullptr;
   Log(degraded ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] server frame wait: active=%s (a frame never ends before its step) raw_pings=%s timer=%s%s "
-      "overrun_delta=%s (an overrun frame's dt is the time it took, so game time keeps up with wall time)",
-      g_active.load() ? "yes" : "no", pingState, timerKind,
+      "[NEVR.PATCH] server frame wait: active=%s (no wait on a server ends before its step, on any thread; margin %llu "
+      "us) raw_pings=%s timer=%s%s overrun_delta=%s (an overrun frame's dt is the time it took, so game time keeps up "
+      "with wall time)",
+      g_active.load() ? "yes" : "no", static_cast<unsigned long long>(kNeverEarlyMarginUs), pingState, timerKind,
       timerError != 0 ? " (no waitable timer: the sub-millisecond tail sleeps 0 ms and checks the clock)" : "",
       deltaState);
 }

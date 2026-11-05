@@ -321,7 +321,7 @@ TEST(DatagramQueue, PopIntoCopiesNoMoreThanTheCallersCapacity) {
   ASSERT_TRUE(q.PopInto(address, buffer, &size, &status, &result));
   EXPECT_EQ(buffer[3], 3);
   for (int i = 4; i < 8; ++i) EXPECT_EQ(buffer[i], 0xee) << "byte " << i << " is past the caller's capacity";
-  EXPECT_EQ(size, 10) << "the size the wrapper reported, as recvfrom would for the caller's own call";
+  EXPECT_EQ(size, 4) << "the size reported is what was copied: the drain never reads past what it was given";
 }
 
 TEST(DatagramQueue, PopIntoCopiesAWholeDatagramThatFits) {
@@ -358,6 +358,229 @@ TEST(DatagramQueue, ClearDropsEverything) {
   q.Commit();
   EXPECT_EQ(q.Clear(), 2u);
   EXPECT_EQ(q.Size(), 0u);
+}
+
+// --- the hand-back state (HandBack) ------------------------------------------------------------------------------
+
+// A broadcaster port as the hooks see it: its socket is the second quadword.
+struct FakePort {
+  uint64_t vtable = 0;
+  uint64_t socket = 0;
+};
+
+uint64_t ReadSocket(void* port) { return static_cast<FakePort*>(port)->socket; }
+
+using HandBack = sfw::HandBack<8>;
+
+// Queues one game datagram the way the wait does: received into a reserved slot, then committed.
+void QueueDatagram(HandBack& hb, uint8_t first) {
+  sfw::Datagram* d = hb.Queue().Reserve();
+  ASSERT_NE(d, nullptr);
+  *d = MakeDatagram({first});
+  hb.Queue().Commit();
+}
+
+struct Drained {
+  bool served = false;
+  int64_t size = 0;
+  uint8_t first = 0;
+};
+
+Drained Receive(HandBack& hb, uint64_t socket) {
+  uint8_t address[sfw::kAddressBytes];
+  uint8_t buffer[sfw::kReceiveCapacity] = {};
+  Drained r;
+  r.size = sfw::kReceiveCapacity;
+  uint32_t status = 0;
+  uint64_t result = 0;
+  r.served = hb.OnReceive(socket, address, buffer, &r.size, &status, &result);
+  r.first = buffer[0];
+  return r;
+}
+
+TEST(HandBack, AFrameDrainsWhatTheWaitBeforeItTook) {
+  // Frame N's drain reads socket 7; the wait that ends frame N serves socket 7 and queues two datagrams; frame N+1's
+  // drain gets them back in order, then reads the socket itself.
+  FakePort port{0, 7};
+  HandBack hb;
+  hb.OnDrain(&port, ReadSocket);
+  EXPECT_FALSE(Receive(hb, 7).served) << "an empty queue: the wrapper reads the socket";
+  const auto target = hb.BeginWait(true, ReadSocket);
+  ASSERT_TRUE(target.ready);
+  EXPECT_EQ(target.port, &port);
+  EXPECT_EQ(target.socket, 7u);
+  QueueDatagram(hb, 0xa1);
+  QueueDatagram(hb, 0xa2);
+  hb.OnDrain(&port, ReadSocket);
+  const auto first = Receive(hb, 7);
+  const auto second = Receive(hb, 7);
+  EXPECT_TRUE(first.served);
+  EXPECT_EQ(first.first, 0xa1);
+  EXPECT_TRUE(second.served);
+  EXPECT_EQ(second.first, 0xa2);
+  EXPECT_FALSE(Receive(hb, 7).served) << "then the game reads its socket again";
+  EXPECT_EQ(hb.TakeReplayed(), 2u);
+  EXPECT_EQ(hb.TakeDropped(), 0u);
+}
+
+TEST(HandBack, AReadForAnotherSocketPassesThroughAndLeavesTheQueue) {
+  // Two ports drained in one frame (the game drains one, revault 0x140f8ea58; this guards the shape anyway): port B's
+  // read must not take or drop what the wait queued from port A.
+  FakePort a{0, 7};
+  FakePort b{0, 9};
+  HandBack hb;
+  hb.OnDrain(&a, ReadSocket);
+  Receive(hb, 7);
+  ASSERT_TRUE(hb.BeginWait(true, ReadSocket).ready);
+  QueueDatagram(hb, 0xa1);
+  hb.OnDrain(&b, ReadSocket);
+  EXPECT_FALSE(Receive(hb, 9).served) << "port B's wrapper call reads B's socket";
+  EXPECT_EQ(hb.Queued(), 1u) << "and A's record is still queued";
+  hb.OnDrain(&a, ReadSocket);
+  const auto r = Receive(hb, 7);
+  EXPECT_TRUE(r.served);
+  EXPECT_EQ(r.first, 0xa1);
+  EXPECT_EQ(hb.TakeDropped(), 0u);
+}
+
+TEST(HandBack, TheQueueIsDroppedOnlyWhenItsOwnPortNoLongerHoldsItsSocket) {
+  FakePort a{0, 7};
+  HandBack hb;
+  hb.OnDrain(&a, ReadSocket);
+  Receive(hb, 7);
+  ASSERT_TRUE(hb.BeginWait(true, ReadSocket).ready);
+  QueueDatagram(hb, 0xa1);
+  QueueDatagram(hb, 0xa2);
+  a.socket = sfw::kNoSocket;  // SendRecvDrain closed the socket: the game would never have read them
+  hb.OnDrain(&a, ReadSocket);
+  EXPECT_EQ(hb.Queued(), 0u);
+  EXPECT_EQ(hb.TakeDropped(), 2u);
+  EXPECT_FALSE(Receive(hb, sfw::kNoSocket).served);
+}
+
+TEST(HandBack, AReplacedSocketIsNotServedWithTheOldOnesRecords) {
+  FakePort a{0, 7};
+  HandBack hb;
+  hb.OnDrain(&a, ReadSocket);
+  Receive(hb, 7);
+  ASSERT_TRUE(hb.BeginWait(true, ReadSocket).ready);
+  QueueDatagram(hb, 0xa1);
+  a.socket = 11;  // the game opened a new socket on the same port
+  hb.OnDrain(&a, ReadSocket);
+  EXPECT_FALSE(Receive(hb, 11).served) << "socket 11 never had socket 7's datagram";
+  EXPECT_EQ(hb.TakeDropped(), 1u);
+}
+
+TEST(HandBack, AWaitServesOnlyAFreshDrainWhosePortStillHoldsTheSocketItRead) {
+  FakePort a{0, 7};
+  HandBack hb;
+  EXPECT_FALSE(hb.BeginWait(true, ReadSocket).ready) << "no drain yet";
+  hb.OnDrain(&a, ReadSocket);
+  EXPECT_FALSE(hb.BeginWait(true, ReadSocket).ready) << "the drain read nothing: no socket to serve";
+  hb.OnDrain(&a, ReadSocket);
+  Receive(hb, 7);
+  EXPECT_FALSE(hb.BeginWait(false, ReadSocket).ready) << "the broadcaster hooks are not installed";
+  hb.OnDrain(&a, ReadSocket);
+  Receive(hb, 7);
+  ASSERT_TRUE(hb.BeginWait(true, ReadSocket).ready);
+  EXPECT_FALSE(hb.BeginWait(true, ReadSocket).ready) << "a drain from an earlier frame is never used again";
+  hb.OnDrain(&a, ReadSocket);
+  Receive(hb, 7);
+  a.socket = 11;
+  EXPECT_FALSE(hb.BeginWait(true, ReadSocket).ready) << "the port no longer holds the socket the drain read";
+  hb.OnDrain(&a, ReadSocket);
+  Receive(hb, sfw::kNoSocket);
+  EXPECT_FALSE(hb.BeginWait(true, ReadSocket).ready) << "a closed socket is never served";
+}
+
+TEST(HandBack, AWaitDoesNotServeAnotherPortWhileThisOnesRecordsAreQueued) {
+  FakePort a{0, 7};
+  FakePort b{0, 9};
+  HandBack hb;
+  hb.OnDrain(&a, ReadSocket);
+  Receive(hb, 7);
+  ASSERT_TRUE(hb.BeginWait(true, ReadSocket).ready);
+  QueueDatagram(hb, 0xa1);
+  hb.OnDrain(&b, ReadSocket);
+  Receive(hb, 9);
+  EXPECT_FALSE(hb.BeginWait(true, ReadSocket).ready) << "one queue, one port: B waits until A's records are read";
+  EXPECT_EQ(hb.Queued(), 1u);
+}
+
+TEST(HandBack, TheWaitAndTheHandBackTogetherKeepArrivalOrderAcrossFrames) {
+  // The full path on the fake socket: frame N's drain, the wait (a game datagram, a ping, another game datagram), frame
+  // N+1's drain through OnReceive with the wrapper behind it, and a datagram that arrived after the wait.
+  FakePort port{0, 7};
+  HandBack hb;
+  FakeEnv env;
+  env.pending.push_back({1000, MakeDatagram({0x01}, 0x21)});
+  env.pending.push_back({1500, MakeDatagram(RawPing(5), 0x22)});
+  env.pending.push_back({2000, MakeDatagram({0x02}, 0x23)});
+  env.pending.push_back({9000, MakeDatagram({0x03}, 0x24)});  // after the wait's deadline
+  hb.OnDrain(&port, ReadSocket);
+  Receive(hb, 7);
+  const auto target = hb.BeginWait(true, ReadSocket);
+  ASSERT_TRUE(target.ready);
+  sfw::WaitUntil(env, hb.Queue(), 8333, target.ready);
+  ASSERT_EQ(env.sent.size(), 1u);
+  EXPECT_EQ(env.sent[0].atUs, 1500u);
+  env.now = 9500;  // the next frame
+  hb.OnDrain(&port, ReadSocket);
+  std::vector<uint8_t> order;
+  for (int i = 0; i < 4; ++i) {
+    uint8_t address[sfw::kAddressBytes];
+    uint8_t buffer[sfw::kReceiveCapacity] = {};
+    int64_t size = sfw::kReceiveCapacity;
+    uint32_t status = 0;
+    uint64_t result = 0;
+    if (!hb.OnReceive(7, address, buffer, &size, &status, &result)) {
+      sfw::Datagram d;
+      env.Receive(&d);  // the wrapper reads the socket itself
+      if (sfw::IsNothing(d)) break;
+      order.push_back(d.data[0]);
+      continue;
+    }
+    order.push_back(buffer[0]);
+  }
+  EXPECT_EQ(order, (std::vector<uint8_t>{0x01, 0x02, 0x03}));
+}
+
+// --- every server wait is never early (ChooseWaitMode, DeadlineUs) -----------------------------------------------
+
+TEST(WaitMode, AnActiveServerWaitIsNeverEarlyOnAnyThread) {
+  EXPECT_EQ(sfw::ChooseWaitMode(true, true), sfw::WaitMode::kServeSocket);
+  EXPECT_EQ(sfw::ChooseWaitMode(true, false), sfw::WaitMode::kClockOnly)
+      << "off the loop thread, or before it is known: a never-early wait on the clock, not the old wait";
+  EXPECT_EQ(sfw::ChooseWaitMode(false, true), sfw::WaitMode::kNotOurs);
+  EXPECT_EQ(sfw::ChooseWaitMode(false, false), sfw::WaitMode::kNotOurs);
+}
+
+TEST(WaitMode, TheOverrunPatchFollowsTheSameFlagAsTheWait) {
+  // MayPatchOverrunDelta and ChooseWaitMode read one flag: the patch is in exactly when no server wait can end early.
+  for (bool active : {false, true}) {
+    const bool neverEarlyOnEveryThread = sfw::ChooseWaitMode(active, true) != sfw::WaitMode::kNotOurs &&
+                                         sfw::ChooseWaitMode(active, false) != sfw::WaitMode::kNotOurs;
+    EXPECT_EQ(sfw::MayPatchOverrunDelta(true, active), neverEarlyOnEveryThread) << "active=" << active;
+  }
+}
+
+TEST(WaitDeadline, TheDeadlineIsTheAskPlusTheMargin) {
+  EXPECT_GT(sfw::kNeverEarlyMarginUs, 0u);
+  EXPECT_LE(sfw::kNeverEarlyMarginUs, 1000u) << "a margin, not a slower frame";
+  EXPECT_EQ(sfw::DeadlineUs(1000, 8333), 1000u + 8333u + sfw::kNeverEarlyMarginUs);
+  EXPECT_EQ(sfw::DeadlineUs(1000, 0), 1000u + sfw::kNeverEarlyMarginUs);
+  EXPECT_EQ(sfw::DeadlineUs(1000, -5), 1000u + sfw::kNeverEarlyMarginUs) << "a negative ask is no wait, not a wrap";
+}
+
+TEST(WaitDeadline, AClockOnlyWaitEndsNoEarlierThanTheAskPlusTheMargin) {
+  // The clock-only path is WaitUntil with no socket: a timer that returns at once still loops until the deadline.
+  FakeEnv env;
+  env.now = 500;
+  env.sleepReturnsAtOnce = true;
+  sfw::DatagramQueue<1> unused;
+  sfw::WaitUntil(env, unused, sfw::DeadlineUs(env.NowUs(), 8333), false);
+  EXPECT_GE(env.now, 500u + 8333u + sfw::kNeverEarlyMarginUs);
+  EXPECT_EQ(env.polls, 0) << "no socket is polled off the loop thread";
 }
 
 // --- the overrun delta-time patch ------------------------------------------------------------------------------
