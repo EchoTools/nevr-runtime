@@ -24,10 +24,10 @@
 //     kBootstrapLogLockWaitMs; a wait that times out or fails marks the lock unreliable (one
 //     host_log_lock record) and later appends in the process write without waiting. A wait that
 //     ends owned is not capped per process: with a holder that releases inside every wait, every
-//     destination an append opens waits once, and a record whose write fails after its wait falls
-//     back to the next of up to three destinations and waits again. So one record can wait more
-//     than once, and a crash of up to four records more than four times. Whether the file calls or
-//     the wait allocate is not measured. No logger.
+//     append waits once. The main log is the one destination (at most one AppendTo call per record, and AppendTo
+//     waits at most once): a record whose write fails goes to stderr, and no other destination is tried.
+//     So one record waits at most once, and a crash of up to four records at most four times.
+//     Whether the file calls or the wait allocate is not measured. No logger.
 //   - Emit(), FlushAttachJournal() build records with nlohmann::json and so run
 //     only after attach has returned, off the crash path.
 // Nothing here calls the NEVR logger.
@@ -157,7 +157,7 @@ class BootstrapDiagnostics {
   /// Never throws: a failure to build the record is reported on stderr and returned as
   /// kDropped.
   /// A record whose `log` member is a string names the file it was written to: the member is replaced with the full path
-  /// of the log file that accepted the record (empty when none did), so a fallback to %TEMP% is not reported as the primary.
+  /// of the log file that accepted the record (empty when none did), so a dropped record does not name the main log.
   DiagnosticDestination Emit(const nlohmann::json& record) noexcept;
 
   /// Append an already-formatted line (ends in '\n'), also from the crash callback. It creates no
