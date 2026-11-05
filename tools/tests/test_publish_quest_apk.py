@@ -114,7 +114,7 @@ class PublishFixture(unittest.TestCase):
         Quiet.mode = "plain"
         handler = lambda *a, **k: Quiet(*a, directory=str(self.served), **k)  # noqa: E731
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         self.env = {

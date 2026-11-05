@@ -77,7 +77,6 @@
 #include <cstdio>
 #include <cstring>
 
-#include "config_write_lock.h"
 #include "core/nevr_config.h"
 #include "hook_log.h"
 
@@ -268,11 +267,7 @@ inline int WritePending() noexcept {
   }
   nevr::NevrConfig config;
   config.BindFile(g_configFile);
-  nevr::ConfigSetResult set;
-  {
-    const ConfigWriteLock lock;  // the texture poller edits the same file (config_write_lock.h)
-    set = config.Set(kConfigKey, flip != 0);
-  }
+  const nevr::ConfigSetResult set = config.Set(kConfigKey, flip != 0);  // the texture poller edits the same file: Set locks it
   if (!set.ok) {
     int none = -1;
     g_pendingSave.compare_exchange_strong(none, flip, std::memory_order_acq_rel);
