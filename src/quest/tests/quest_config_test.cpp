@@ -822,6 +822,81 @@ void AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey() {
   }
 }
 
+// assets.* (docs/adr/0044-cdn-texture-delivery.md): the CDN texture delivery's settings. Absent is the code's default and nothing is said;
+// a good file changes the defaults; a wrong key is one Warning that names the key and never the value, and the default stays.
+void TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue() {
+  {
+    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+    CHECK(none.config.assets.cdnUrl.empty() && none.config.assets.manifest.empty() && !none.config.assets.requiredOnly);
+    CHECK(none.config.assets.labels.empty() && none.config.assets.source == Source::kAbsent);
+    CHECK(EventsContain(none, "config key=assets labels=0 required_only=0 cdn_url=default manifest=default source=default"));
+    for (const char* text : {"", "assets: {}\n", "assets:\n"}) {
+      const LoadResult r = Load(Full(), text);
+      CHECK(r.config.assets.source == Source::kAbsent && !HasLevel(r, LogLevel::kWarn));
+    }
+  }
+  {
+    const LoadResult r = Load(Full(),
+                              "assets:\n  cdn_url: https://cargo.example.test/base\n  manifest: v1/test/manifest.json\n"
+                              "  required_only: true\n  labels:\n    lobby_posters: required\n    extra_label: off\n    third: on\n");
+    CHECK(r.config.assets.cdnUrl == "https://cargo.example.test/base/");  // a trailing slash is added
+    CHECK(r.config.assets.manifest == "v1/test/manifest.json" && r.config.assets.requiredOnly);
+    CHECK(r.config.assets.labels.size() == 3 && r.config.assets.labels[0].first == "lobby_posters" && r.config.assets.labels[0].second == "required");
+    CHECK(r.config.assets.labels[1].second == "off" && r.config.assets.labels[2].second == "on");
+    CHECK(r.config.assets.source == Source::kFile);
+    CHECK(EventsContain(r, "config key=assets labels=3 required_only=1 cdn_url=config manifest=config source=config"));
+    CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
+    CHECK(!EventsContain(r, "cargo.example.test"));  // a configured value is never logged on the Quest
+    CHECK(!EventsContain(r, "unknown_nested="));     // every assets key is on the schema
+  }
+  const auto rejected = [](const char* yaml, const char* reasonText, const char* valueText) {
+    const LoadResult r = Load(Full(), yaml);
+    CHECK(EventsContain(r, reasonText));
+    CHECK(valueText == nullptr || !EventsContain(r, valueText));
+    return r;
+  };
+  {
+    const LoadResult r = rejected("assets:\n  cdn_url: http://plain.example.test/\n", "key=assets.cdn_url rejected reason=not_an_https_address", "plain.example.test");
+    CHECK(r.config.assets.cdnUrl.empty() && r.config.assets.source == Source::kAbsent);
+    for (const char* bad : {"https://", "https:///x", "ftp://x/", "https://host/with space", "https://host/?q=1", "https://user@host/", "cargo.example.test"}) {
+      const LoadResult b = Load(Full(), std::string("assets:\n  cdn_url: \"") + bad + "\"\n");
+      CHECK(b.config.assets.cdnUrl.empty());
+      CHECK(EventsContain(b, "key=assets.cdn_url rejected"));
+    }
+  }
+  for (const char* bad : {"../escape.json", "/absolute.json", "plain.txt", "a b.json", "a:b.json", ".json"}) {
+    const LoadResult b = Load(Full(), std::string("assets:\n  manifest: \"") + bad + "\"\n");
+    CHECK(b.config.assets.manifest.empty() && EventsContain(b, "key=assets.manifest rejected reason=not_a_relative_json_path"));
+  }
+  {
+    const LoadResult r = rejected("assets:\n  required_only: maybe\n", "key=assets.required_only rejected reason=not_a_boolean", "maybe");
+    CHECK(!r.config.assets.requiredOnly);
+  }
+  {
+    const LoadResult r = Load(Full(), "assets:\n  labels:\n    ok_label: on\n    Bad-Label: on\n    wrong_state: maybe\n    nested:\n      a: b\n");
+    CHECK(r.config.assets.labels.size() == 1 && r.config.assets.labels[0].first == "ok_label");
+    CHECK(EventsContain(r, "rejected reason=bad_label_name name=Bad-Label"));
+    CHECK(EventsContain(r, "rejected reason=bad_state label=wrong_state") && !EventsContain(r, "maybe"));
+    CHECK(EventsContain(r, "rejected reason=bad_state label=nested"));
+  }
+  {
+    const LoadResult r = rejected("assets:\n  labels: on\n", "key=assets.labels rejected reason=not_a_mapping", nullptr);
+    CHECK(r.config.assets.labels.empty());
+  }
+  {
+    std::string many = "assets:\n  labels:\n";
+    for (int i = 0; i < 40; ++i) many += "    l" + std::to_string(i) + ": on\n";
+    const LoadResult r = Load(Full(), many);
+    CHECK(r.config.assets.labels.size() == 32);
+    CHECK(EventsContain(r, "reason=too_many_labels more=1"));
+  }
+  {  // beside the other sections: nothing else moves
+    const LoadResult r = Load(Full(), "assets:\n  labels:\n    lobby_posters: off\ngraphics:\n  hand_flip: true\n");
+    CHECK(r.config.handFlip.on && r.config.assets.labels.size() == 1);
+    CHECK(DefaultsOnly(r.config.requested));
+  }
+}
+
 // graphics.hand_flip (#2082): the Controller Hand Flip choice, where the menu keeps it. Absent is Off and from the default; true is
 // On from the file; a value that is no boolean is Off, from the default, with one Warning that names the key and not the value.
 void HandFlipIsOffUnlessTheFileSaysTrue() {
@@ -1170,6 +1245,7 @@ int main() {
   AGraphicsSectionThatIsNotAMappingFallsBackToStock();
   AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey();
   HandFlipIsOffUnlessTheFileSaysTrue();
+  TheAssetsKeysChangeTheDefaultsAndAWrongOneIsAWarningWithoutItsValue();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   ClockLevelsOverrideIsOffUnlessTheDiagnosticsKeyIsTrue();
