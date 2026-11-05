@@ -2,6 +2,11 @@
 // $XDG_STATE_HOME/nevr-runtime/<tool>.jsonl (with $XDG_STATE_HOME at ~/.local/state when it is unset). A log that cannot
 // be opened or written is a line on standard error and a non-zero exit; a tool never goes on without its record.
 //
+// A record has the keys the Python tools' logs have: ts (UTC, RFC 3339 with milliseconds and a Z), level (debug, info,
+// warn or error, lower case), event (what happened), then tool (the tool's name), run (an id for this process's run, in
+// the form of the test runner's file stem: <UTC stamp>-<pid>-<16 hex>) and pid, and then the fields the call gives.
+// Debug records are not written. A port that must keep more of a Python tool's fields passes them as fields.
+//
 // A tool's main is os.Exit(run(...)); run wraps its work in Run:
 //
 //	func run(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -14,13 +19,17 @@
 package runlog
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
+	"time"
 )
 
 // ExitLogFailure is the exit code of a run whose log could not be opened, or whose body succeeded but lost an event
@@ -51,6 +60,7 @@ func Path(tool string, getenv func(string) string) (string, error) {
 // several goroutines, and from several processes, do not interleave.
 type Log struct {
 	Logger *slog.Logger
+	run    string
 	path   string
 	file   *os.File
 	w      *failureWriter
@@ -75,9 +85,49 @@ func OpenAt(path string) (*Log, error) {
 	if err != nil {
 		return nil, fmt.Errorf("run log %s: %w", path, err)
 	}
+	run, err := newRunID(time.Now())
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("run log %s: %w", path, err)
+	}
 	w := &failureWriter{w: f}
-	return &Log{Logger: slog.New(slog.NewJSONHandler(w, nil)), path: path, file: f, w: w}, nil
+	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: replaceAttr})
+	logger := slog.New(handler).With("tool", toolOf(path), "run", run, "pid", os.Getpid())
+	return &Log{Logger: logger, run: run, path: path, file: f, w: w}, nil
 }
+
+// toolOf is the tool name a log file at path belongs to: the file name without ".jsonl".
+func toolOf(path string) string { return strings.TrimSuffix(filepath.Base(path), ".jsonl") }
+
+// newRunID is <UTC stamp to the microsecond>-<pid>-<16 random hex digits>, the form of the test runner's file stem
+// without the commit.
+func newRunID(now time.Time) (string, error) {
+	var salt [8]byte
+	if _, err := rand.Read(salt[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-%d-%s", now.UTC().Format("20060102T150405.000000Z"), os.Getpid(), hex.EncodeToString(salt[:])), nil
+}
+
+// replaceAttr renames slog's keys to the repository's: time becomes ts in UTC, msg becomes event, and the level is a
+// lower-case name.
+func replaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) > 0 {
+		return a
+	}
+	switch a.Key {
+	case slog.TimeKey:
+		return slog.String("ts", a.Value.Time().UTC().Format("2006-01-02T15:04:05.000Z"))
+	case slog.MessageKey:
+		return slog.String("event", a.Value.String())
+	case slog.LevelKey:
+		return slog.String(slog.LevelKey, strings.ToLower(a.Value.Any().(slog.Level).String()))
+	}
+	return a
+}
+
+// RunID is the id carried by every record of this log.
+func (l *Log) RunID() string { return l.run }
 
 // Path is the file this log writes.
 func (l *Log) Path() string { return l.path }

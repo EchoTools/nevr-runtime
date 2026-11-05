@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func env(kv map[string]string) func(string) string { return func(k string) string { return kv[k] } }
@@ -94,11 +96,8 @@ func TestEachEventIsOneJSONLineWrittenAtOnce(t *testing.T) {
 		t.Fatalf("%d lines after one event, want 1: %v", len(lines), lines)
 	}
 	got := lines[0]
-	if got["msg"] != "started" || got["level"] != "INFO" || got["pid"] != float64(42) {
+	if got["event"] != "started" || got["level"] != "info" || got["pid"] != float64(42) {
 		t.Errorf("line = %v", got)
-	}
-	if _, ok := got["time"].(string); !ok {
-		t.Errorf("line has no time: %v", got)
 	}
 	if args, _ := got["args"].([]any); len(args) != 2 {
 		t.Errorf("args = %v", got["args"])
@@ -120,7 +119,7 @@ func TestOpenAppendsToTheFileAndNeverTruncatesIt(t *testing.T) {
 		}
 	}
 	lines := readLines(t, filepath.Join(state, "nevr-runtime", "my-tool.jsonl"))
-	if len(lines) != 2 || lines[0]["msg"] != "first" || lines[1]["msg"] != "second" {
+	if len(lines) != 2 || lines[0]["event"] != "first" || lines[1]["event"] != "second" {
 		t.Errorf("lines = %v", lines)
 	}
 }
@@ -286,7 +285,89 @@ func TestOpenAtWritesTheFileItIsGivenAndMakesItsDirectory(t *testing.T) {
 	if err := l.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if lines := readLines(t, path); len(lines) != 1 || lines[0]["level"] != "WARN" {
+	if lines := readLines(t, path); len(lines) != 1 || lines[0]["level"] != "warn" {
 		t.Errorf("lines = %v", lines)
+	}
+}
+
+// The shape the Python tools' logs have (ts in UTC, event) and the identity a record needs to be found by who and when
+// (AGENTS.md, logging): ADR 0044 rule 13.
+func TestEveryRecordCarriesTsInUTCEventToolPidAndRun(t *testing.T) {
+	t.Parallel()
+	state := t.TempDir()
+	l, err := Open("my-tool", env(map[string]string{"XDG_STATE_HOME": state}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().UTC().Add(-time.Second)
+	l.Logger.Info("start")
+	l.Logger.Error("boom", "code", 3)
+	l.Close()
+	lines := readLines(t, filepath.Join(state, "nevr-runtime", "my-tool.jsonl"))
+	if len(lines) != 2 {
+		t.Fatalf("%d lines", len(lines))
+	}
+	for i, rec := range lines {
+		for _, gone := range []string{"time", "msg"} {
+			if _, ok := rec[gone]; ok {
+				t.Errorf("record %d has the slog default key %q: %v", i, gone, rec)
+			}
+		}
+		ts, _ := rec["ts"].(string)
+		parsed, err := time.Parse("2006-01-02T15:04:05.000Z", ts)
+		if err != nil {
+			t.Fatalf("record %d: ts %q is not UTC with milliseconds and a Z: %v", i, ts, err)
+		}
+		if parsed.Before(before) || parsed.After(time.Now().UTC().Add(time.Second)) {
+			t.Errorf("record %d: ts %v is not now", i, parsed)
+		}
+		if rec["tool"] != "my-tool" {
+			t.Errorf("record %d: tool = %v", i, rec["tool"])
+		}
+		if rec["pid"] != float64(os.Getpid()) {
+			t.Errorf("record %d: pid = %v, want %d", i, rec["pid"], os.Getpid())
+		}
+	}
+	run, _ := lines[0]["run"].(string)
+	if !regexp.MustCompile(`^\d{8}T\d{6}\.\d{6}Z-\d+-[0-9a-f]{16}$`).MatchString(run) {
+		t.Errorf("run = %q, want <UTC stamp>-<pid>-<16 hex>, the form of the test runner's stem", run)
+	}
+	if lines[1]["run"] != run || l.RunID() != run {
+		t.Errorf("run differs between records or from RunID(): %v, %v, %q", lines[1]["run"], run, l.RunID())
+	}
+	if lines[1]["level"] != "error" || lines[1]["code"] != float64(3) || lines[1]["event"] != "boom" {
+		t.Errorf("record 1 = %v", lines[1])
+	}
+}
+
+func TestTwoOpensGetTwoRunIDs(t *testing.T) {
+	t.Parallel()
+	state := t.TempDir()
+	e := env(map[string]string{"XDG_STATE_HOME": state})
+	a, _ := Open("my-tool", e)
+	b, _ := Open("my-tool", e)
+	defer a.Close()
+	defer b.Close()
+	if a.RunID() == "" || a.RunID() == b.RunID() {
+		t.Errorf("run ids %q and %q", a.RunID(), b.RunID())
+	}
+}
+
+func TestLevelsAreLowerCaseNames(t *testing.T) {
+	t.Parallel()
+	state := t.TempDir()
+	l, _ := Open("my-tool", env(map[string]string{"XDG_STATE_HOME": state}))
+	l.Logger.Debug("d")
+	l.Logger.Info("i")
+	l.Logger.Warn("w")
+	l.Logger.Error("e")
+	l.Close()
+	var got []string
+	for _, rec := range readLines(t, filepath.Join(state, "nevr-runtime", "my-tool.jsonl")) {
+		got = append(got, rec["level"].(string))
+	}
+	// Debug is not written: the log is for what an operator reads (docs/standards/logging.md, level guidelines).
+	if strings.Join(got, ",") != "info,warn,error" {
+		t.Errorf("levels = %v", got)
 	}
 }
