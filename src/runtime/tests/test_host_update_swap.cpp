@@ -727,6 +727,13 @@ TEST_F(HostUpdateSwap, F22_AStagedJsonOutsideTheVocabularyIsNotUsedAndNothingOut
                            {"files", {{{"path", path}, {"size", new_runtime_.size()}, {"sha256", runtime_sha}}}}})
         .dump();
   };
+  // A good runtime beside one bad name: the bad name alone must make the file unusable, not the missing runtime.
+  auto beside_runtime = [&](const std::string& path) {
+    return nlohmann::json({{"version", "1.2.3"},
+                           {"files", nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"size", new_runtime_.size()}, {"sha256", runtime_sha}},
+                                                            {{"path", path}, {"size", new_plugin_.size()}, {"sha256", Sha256Hex(new_plugin_)}}})}})
+        .dump();
+  };
   const std::vector<Case> cases = {
       {"version ..", staged("..", "nevr-runtime.dll")},
       {"version CON", staged("CON", "nevr-runtime.dll")},
@@ -736,6 +743,11 @@ TEST_F(HostUpdateSwap, F22_AStagedJsonOutsideTheVocabularyIsNotUsedAndNothingOut
       {"path with a backslash", staged("1.2.3", "plugins\\x.dll")},
       {"device plugin", staged("1.2.3", "plugins/CON.dll")},
       {"no runtime", staged("1.2.3", "plugins/example.dll")},
+      {"runtime and plugins/../", beside_runtime("plugins/../example.dll")},
+      {"runtime and a backslash", beside_runtime("plugins\\example.dll")},
+      {"runtime and a device plugin", beside_runtime("plugins/CON.dll")},
+      {"runtime and a plugin named .", beside_runtime("plugins/..dll")},
+      {"the runtime twice", beside_runtime("nevr-runtime.dll")},
       {"not JSON", "{\"version\": \"1.2.3\", \"files\": ["},
       {"too large", "{\"version\": \"1.2.3\", \"pad\": \"" + std::string(70 * 1024, 'x') + "\"}"},
   };
