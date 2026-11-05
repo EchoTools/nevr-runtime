@@ -5,6 +5,9 @@ publishes them together, and nothing public exists before that go: no tag, no re
 staging directory, so no half-built release is ever visible. Nothing about a published release is edited afterwards: a wrong
 release is fixed by the next version.
 
+**When to release.** A person cuts a release when it is ready. Nothing cuts one on a schedule or by itself: no workflow, timer
+or switch starts a release, and a release the person has not decided on does not exist.
+
 **Owner.** The release owner is accountable for a release from staging until it is live and watched, or until it is
 withdrawn and cleaned up. The publish (step 4) happens on the owner's go.
 
@@ -57,6 +60,12 @@ time, under the owner's go.
   versions"). Every other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from; it is never
   released.
 - **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), on `origin/main`. Created by step 4, never before it.
+  **A patch release of an older version** is the one exception: when `main` has moved on and the fix has to reach players
+  without the changes since, the release is cut from a branch `release/X.Y`, made at the line's newest tag, that holds only the
+  fix, and the tag sits on that branch's tip, so it is not an ancestor of `main`. v6.16.5 is `d797e3d2`, the v6.16.4 commit plus
+  one fix, cut from `release/6.16`; its version is the next patch of the 6.16 line. The same fix also reaches `main` through its
+  own pull request. `next_release_version.py` counts from the newest tag reachable from `origin/main`, so a patch-branch tag
+  is not its base.
 - **GitHub release title:** the tag, `vX.Y.Z`, and nothing else.
 - **Pre-release or release:** the flag is the only difference. Promoting a pre-release
   (`gh release edit vX.Y.Z --prerelease=false`) changes no byte and fires no workflow. Nothing in a file depends on the flag.
@@ -252,30 +261,18 @@ same loader asset plus private plugin libraries that stay outside this repositor
 `tools/publish_quest_apk.py vX.Y.Z --variant q15t`, with no signer call and no manifest entry. The combat APK is built by
 `just release-quest-combat-apk`. Neither is in the manifest through this document's flow.
 
-## The Quest half of the train
+## The Quest half of a release
 
-`tools/quest_release_timer.py` finishes the Quest half of a release as the workflows cut it today: it takes a draft or a
-published tag, so this section describes the draft path of KNOWN-WRONG #1865 until that lands.
+`tools/quest_release_timer.py` finishes the Quest half of a release, by hand, once the release is published: the person who
+holds the Quest signing key runs it with `--tag vX.Y.Z`. Nothing runs it on a schedule.
 
 The Quest APK is built from the store game and signed with the Quest signing key, and the R2 credential is the publisher's, so no
-workflow can build or upload it. The train publishes the GitHub release; a scheduler on the publisher's machine runs
-`tools/quest_release_timer.py --probe` first (the repository ships no unit for it). The probe makes one GitHub call and starts the run only when there is work: a
-draft with its loader asset uploaded, a published tag that is not done with fewer than three counted failures and none in the
-last 30 minutes, or no run started in the last 30 minutes. A run for a draft builds the APK while the signer runs
-(`build_apk`), polls the release every 10 seconds for up to 45 minutes (`await_published`), and on publication checks the
-APK's loader against the published asset (`verify_loader`) and that beta has not moved (`recheck_beta`), then runs
-`publish_apk` and the unchanged beta dispatch. Nothing is uploaded to R2 while the release is a draft, because the signer's
-`put-quest-apk` accepts only a published release. A draft that is deleted, or not published in 45 minutes, is recorded as
-`draft_abandoned` and left to the published path; its failures before its publication are not counted. A scheduled run runs
-`tools/quest_release_timer.py --stage-draft`, which takes a qualifying draft or else the newest published tag.
-
-The timer takes the **newest tag only**: the newest draft that qualifies (above), or else the newest published tag. A
-release that is not the newest when the timer first sees it is never built, because a later tag supersedes it. That is
-intended. A tag is built by hand (`--tag vX.Y.Z`) when it must be.
+workflow can build or upload it. The tool needs the release published, because the signer's `put-quest-apk` accepts only a
+published release.
 
 It runs from a clone of the repository that the publisher keeps for it, named by `QUEST_RELEASE_REPO` (default: the clone the script sits in). It fetches `origin/main` itself, and the `checkout` step refuses, as a `refused` record, unless the clone is clean and HEAD is the freshly fetched `origin/main`. The `tags` step then refuses, the same way, while any tag in that clone is not on origin or points at another commit there (the rule of `tools/release_preflight.py`, which `just release-quest-apk` runs later); the refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted remove and restore commands, with the full object id, for each tag it lists.
 
-1. Takes the newest tag (above). A tag that has a `done` record in the log is left alone. A tag that has
+1. Takes the tag given with `--tag`. A tag that has a `done` record in the log is left alone. A tag that has
    failed three times is not retried: the run writes `skipped_after_failures`, with the step and the part of the last failure, and exits 0.
    `python3 tools/quest_release_timer.py --tag vX.Y.Z --reset-failures` (the tag is required) records `failures_reset` for that
    tag and does nothing else; only the failures after the newest reset count toward the three. Use it after fixing what made a tag fail three times (a stale pin, say), then run the tag again.
@@ -298,7 +295,7 @@ It runs from a clone of the repository that the publisher keeps for it, named by
 7. Builds and publishes the variant APK, when it is configured (below).
 8. Removes the worktree, the signer snapshot and the variant scratch by exact path.
 
-Stable stays an owner step (`approve-stable`); the timer only publishes beta. To stop the timer and the train from moving beta forward behind a rollback, see "Emergency: roll beta back". **Credentials go only where they are used:**
+Stable stays an owner step (`approve-stable`); the timer only publishes beta. A rollback refuses while a timer run holds its lock; see "Emergency: roll beta back". **Credentials go only where they are used:**
 the R2 credential to `publish_apk` and `variant_publish`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
@@ -340,7 +337,7 @@ recorded as `failed` with the step `unexpected`, naming its class and where it h
 the worktree and the scratch are removed, the run exits 1, and it counts toward the three tries like any other failure.
 
 The private copies of the libraries are in `variant-vX.Y.Z` in the timer's work directory, which carries the marker file
-`.made-by-quest-release-timer` from the moment the timer makes it. Every run that reaches the release list (or has `--tag`), the
+`.made-by-quest-release-timer` from the moment the timer makes it. Every run that gets past the checkout, tags and token steps, the
 already-listed path and a failing run included, removes a directory of that name that carries the marker (a killed run's leftovers): the files first, then the marker, then the directory, so
 a sweep that fails part way leaves a directory that is still marked and the next run retries it. It records
 `variant_scratch_removed`; a directory without the marker, or a link, is never removed, and the pins step then fails because it
@@ -434,9 +431,8 @@ fault in the manifest, a service or a player's own files is not cured by moving 
 
 **Where, and as whom.** Run it from a clean checkout of nevr-runtime `main`, on the machine that runs the Quest release timer,
 because it reads that timer's lock (`timer.lock`, in the timer's work directory) and refuses while a run holds it. The account
-`GH_BIN` runs as must be able to dispatch workflows on the release-signer repository and to set repository variables on
-`EchoTools/nevr-runtime`. When `GH_BIN` is unset the tool uses `gh`, which must be signed in as that account; export `GH_BIN`
-before you start, since the fourth line below uses it. The manifest host's public base is `RELEASE_PUBLIC_BASE`, which the tool
+`GH_BIN` runs as must be able to dispatch workflows on the release-signer repository. When `GH_BIN` is unset the tool uses
+`gh`, which must be signed in as that account. The manifest host's public base is `RELEASE_PUBLIC_BASE`, which the tool
 requires (the host is named in `docs/reference/verifying-a-release.md`, "Quest APKs"); the tool refuses loudly if it is empty. The release signer is `RELEASE_SIGNER_BIN` with `RELEASE_SIGNER_DIR`, or
 else `QUEST_RELEASE_SIGNER_REPO`, a local clone of the signer repository.
 
@@ -444,13 +440,11 @@ else `QUEST_RELEASE_SIGNER_REPO`, a local clone of the signer repository.
 export RELEASE_PUBLIC_BASE=...   # the manifest host's public base, see docs/reference/verifying-a-release.md
 python3 tools/rollback_beta.py vX.Y.Z --dry-run
 python3 tools/rollback_beta.py vX.Y.Z --live --yes
-$GH_BIN variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime
 ```
 
-Always run the dry run first. The live run pauses the release-cut switch (`RELEASE_TRAIN`, read by the current cut workflow
-`.github/workflows/release-train.yml`), dispatches the publish, verifies it, and stops there: it never resumes the switch.
-The fourth line resumes it, once the owner has decided which release beta should follow. Stop whatever schedules
-`tools/quest_release_timer.py` before a live run, since the tool does not stop it. Each step appends a record to
+Always run the dry run first. The live run refuses while a run of `tools/quest_release_timer.py` holds its lock or a
+`sign-manifest.yml` run is in progress, reads beta again, dispatches the publish and verifies it. Do not start the timer while
+a rollback is under way: the tool checks the lock once and does not hold it. Each step appends a record to
 `$XDG_STATE_HOME/nevr-runtime/rollback-beta.jsonl`; no token, credential or host is printed or logged.
 
 **Ship the fix.** The fix reaches beta through a new release cut through the same flow as any release. The bad release's tag is
