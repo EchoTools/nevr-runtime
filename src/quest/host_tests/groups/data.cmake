@@ -16,6 +16,13 @@ nevr_ht_test(data_step_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/data_step_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_data_step LIBS ${NEVR_ZLIB_LIB})
 nevr_ht_test(pack_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
   SRC src/quest/tests/pack_test.cpp OBJS o_data_sha256 o_data_zip o_data_staging o_data_fetch o_data_pack LIBS ${NEVR_ZLIB_LIB})
+# The CDN texture delivery (docs/adr/0044-cdn-texture-delivery.md): the shared pure core in src/core, built here as the sentinel builds
+# it (no exceptions; nlohmann::json is used through its non-throwing calls only).
+foreach(f resource_shadow)
+  nevr_ht_obj(o_cargo_${f} GROUP data NOEXC HOST SRC src/core/${f}.cpp)
+endforeach()
+nevr_ht_test(resource_shadow_test GROUP data HOST NOEXC TIMEOUT 120
+  SRC src/quest/tests/resource_shadow_test.cpp OBJS o_cargo_resource_shadow)
 
 # ── data-net ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 # curl_transport_test needs a throwaway CA and six servers, which the recipe starts; data_wiring_test runs after it. Both are
