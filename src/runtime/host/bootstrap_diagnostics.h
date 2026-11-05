@@ -24,10 +24,10 @@
 //     kBootstrapLogLockWaitMs; a wait that times out or fails marks the lock unreliable (one
 //     host_log_lock record) and later appends in the process write without waiting. A wait that
 //     ends owned is not capped per process: with a holder that releases inside every wait, every
-//     destination an append opens waits once, and a record whose write fails after its wait falls
-//     back to the next of up to three destinations and waits again. So one record can wait more
-//     than once, and a crash of up to four records more than four times. Whether the file calls or
-//     the wait allocate is not measured. No logger.
+//     append waits once. The main log is the one destination (one AppendTo call per record, and AppendTo
+//     waits at most once): a record whose write fails goes to stderr, and no other destination is tried.
+//     So one record waits at most once, and a crash of up to four records at most four times.
+//     Whether the file calls or the wait allocate is not measured. No logger.
 //   - Emit(), FlushAttachJournal() build records with nlohmann::json and so run
 //     only after attach has returned, off the crash path.
 // Nothing here calls the NEVR logger.

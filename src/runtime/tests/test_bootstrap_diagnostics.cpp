@@ -930,11 +930,11 @@ TEST(BootstrapDiagnostics, AnAppendBeforeAttachCreatesNoLogMutex) {
   EXPECT_EQ(CountLines(ReadAll(nevr_test::HostLogPath(local))).lines, 1u);
 }
 
-// One crash writes up to four records. With a holder that never releases, the first record waits and
-// the lock is then marked unreliable: the other three find the mark and write without waiting. The count
-// is the append path's own (UnlockedWritesForTest, incremented only where an append skips the wait), so the
-// test asserts the number of waits, not how long the crash took: three skipped waits means one wait,
-// and four waits would leave the count at zero.
+// One crash writes up to four records. With a holder that never releases, the first record waits and the lock is then
+// marked unreliable: the other three find the mark and write without waiting. The test counts waits, not time. Each
+// AppendLine makes one AppendTo call (the main log is its one destination). AppendTo is the one place an append waits
+// on the log mutex, and with the mutex present it either waits once or skips the wait and adds one to
+// UnlockedWritesForTest. With all four records in the file, three skips means one wait; four waits would leave zero.
 TEST(BootstrapDiagnostics, ACrashOfFourRecordsPaysOneLockWaitWhenAHolderNeverReleases) {
   ScopedLogMutexName scoped(UniqueMutexName(L"four"));
   const std::wstring local = MakeTempDir(L"local");
