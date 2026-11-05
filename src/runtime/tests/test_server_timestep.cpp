@@ -113,10 +113,11 @@ TEST(ServerTimestep, NothingIsWrittenForARateOutOfRange) {
 TEST(ServerTimestep, NothingIsWrittenOverAStepNoStepCanBe) {
   EXPECT_EQ(PlanStepWrite(120, 0).action, StepAction::RefuseSlot);
   EXPECT_EQ(PlanStepWrite(120, 999).action, StepAction::RefuseSlot);
-  EXPECT_EQ(PlanStepWrite(120, 100001).action, StepAction::RefuseSlot);
+  EXPECT_EQ(PlanStepWrite(120, 166667).action, StepAction::RefuseSlot);  // #2109: one past the idle step
   EXPECT_EQ(PlanStepWrite(120, 0xDEADBEEFu).action, StepAction::RefuseSlot);
   EXPECT_EQ(PlanStepWrite(120, 1000).action, StepAction::Write);
   EXPECT_EQ(PlanStepWrite(120, 100000).action, StepAction::Write);
+  EXPECT_EQ(PlanStepWrite(120, 166666).action, StepAction::Write);  // #2109: the idle step
 }
 
 TEST(ServerTimestep, TheReadBackMustBeTheStepWritten) {
@@ -181,7 +182,7 @@ TEST(ServerTimestep, ARateOfZeroOrMissingStateWritesNothingAndSaysSo) {
 
 TEST(ServerTimestep, AFieldHoldingNoStepIsNotWritten) {
   // N31 (main's PlanStepWrite): a value no step can have means the address is not the step slot.
-  for (const uint64_t other : {0ULL, 999ULL, 100001ULL}) {
+  for (const uint64_t other : {0ULL, 999ULL, 166667ULL}) {  // #2109: 166666 is the idle step
     uint64_t field = other;
     const auto w = ApplyStep(true, 120, &field);
     EXPECT_EQ(w.outcome, StepOutcome::kUnexpectedOldValue) << other;
@@ -387,6 +388,66 @@ TEST(SessionTickRate, TheSessionRateIsWrittenToTheStepSlotAndReadBack) {
   EXPECT_EQ(slot, kGameDefaultStepUs);
   EXPECT_EQ(session("echo_arena").outcome, StepOutcome::kSet);
   EXPECT_EQ(slot, 8333u) << "the next Arena session on the same process gets 120 again";
+}
+
+
+// #2109: a server with no session ticks at the idle rate. Boot writes it; a session writes its own rate when it opens
+// and the idle rate again when it ends. The literals below are the values the slot holds, so a header that refuses
+// them fails at run time, not only at compile time.
+
+TEST(IdleTickRate, TheIdleRateIsWrittenAtBoot) {
+  // The boot write (config.cpp ApplyServerTimestep) over the game's own step.
+  uint64_t slot = 33333;
+  const auto w = ApplyStep(true, 6, &slot);
+  EXPECT_EQ(w.outcome, StepOutcome::kSet);
+  EXPECT_EQ(slot, 166666u) << "6 a second is a step of 166,666 us";
+}
+
+TEST(IdleTickRate, OnlyTheIdleRateMayBeBelowTheConfigMinimum) {
+  EXPECT_EQ(PlanStepWrite(6, 33333).action, StepAction::Write);
+  EXPECT_EQ(PlanStepWrite(6, 33333).stepUs, 166666u);
+  EXPECT_EQ(PlanStepWrite(5, 33333).action, StepAction::RefuseRate);
+  EXPECT_EQ(PlanStepWrite(7, 33333).action, StepAction::RefuseRate);
+  std::string problem;
+  EXPECT_EQ(ParseTickRateHz("6", &problem), kDefaultTickRateHz) << "an operator cannot configure the idle rate";
+  EXPECT_FALSE(problem.empty());
+}
+
+TEST(IdleTickRate, ASessionRateIsWrittenOverTheIdleStep) {
+  // N31's plausibility check must take the idle step for a step: a slot holding it is the slot, not a misread.
+  uint64_t slot = 166666;
+  const auto w = ApplyStep(true, 120, &slot);
+  EXPECT_EQ(w.outcome, StepOutcome::kSet);
+  EXPECT_EQ(w.was, 166666u);
+  EXPECT_EQ(slot, 8333u);
+  EXPECT_EQ(PlanStepWrite(120, 166667).action, StepAction::RefuseSlot) << "one past the idle step is no step";
+}
+
+TEST(IdleTickRate, ASessionAtRateZeroGetsTheGamesOwnStepBackFromIdle) {
+  // Rate 0 used to mean "leave the slot alone": the slot held the game's 33333 then. It holds the idle step now, so
+  // a session at rate 0 writes the game's step itself.
+  EXPECT_EQ(nevr_server_timestep::RateToWrite(0), 30u);
+  EXPECT_EQ(nevr_server_timestep::RateToWrite(120), 120u);
+  uint64_t slot = 166666;
+  const auto w = ApplyStep(true, nevr_server_timestep::RateToWrite(0), &slot);
+  EXPECT_EQ(w.outcome, StepOutcome::kSet);
+  EXPECT_EQ(slot, kGameDefaultStepUs);
+}
+
+TEST(IdleTickRate, IdleThenSessionThenIdle) {
+  uint64_t slot = 33333;
+  EXPECT_EQ(ApplyStep(true, 6, &slot).outcome, StepOutcome::kSet);
+  EXPECT_EQ(slot, 166666u);
+  EXPECT_EQ(ApplyStep(true, TickRateForGameType("echo_combat", 120, false).hz, &slot).outcome, StepOutcome::kSet);
+  EXPECT_EQ(slot, 33333u);
+  EXPECT_EQ(ApplyStep(true, 6, &slot).outcome, StepOutcome::kSet);
+  EXPECT_EQ(slot, 166666u);
+}
+
+TEST(IdleTickRate, AClientWritesNoIdleStep) {
+  uint64_t slot = 33333;
+  EXPECT_EQ(ApplyStep(false, 6, &slot).outcome, StepOutcome::kNotServer);
+  EXPECT_EQ(slot, 33333u);
 }
 
 }  // namespace

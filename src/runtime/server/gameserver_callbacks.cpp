@@ -904,6 +904,8 @@ void GameServerLib::RegisterTcpCallbacks() {
       [](const nevr_game_server::LobbySettingsRecord& cleared, const char* reason, const std::string& sessionId) {
         Log(EchoVR::LogLevel::Info, "%s",
             nevr_game_server::FormatLobbySettingsCleared(cleared, reason, sessionId).c_str());
+        // #2109: no session, no match to simulate: back to the idle tick until the next session opens.
+        if (std::strcmp(reason, "session_end") == 0) ApplyServerIdleTimestep(reason, sessionId);
       });
 
   // Re-register on WebSocket reconnection so nakama knows we're available for new sessions.

@@ -31,6 +31,10 @@ nevr_server_timestep::StepWrite ServerStepWrite();
 /// network.tick_rate_hz for all) when the session opens. A client writes nothing.
 void ApplySessionTimestep(const std::string& gameType, const std::string& sessionId);
 
+/// #2109: puts a server back on the idle step (nevr_server_timestep::kIdleTickRateHz) when a session ends and the process
+/// keeps running. `reason` names the boundary in the log line. A client writes nothing.
+void ApplyServerIdleTimestep(const char* reason, const std::string& sessionId);
+
 /// #515: logs once what the clock the server runs on holds (its step and mode bits), so a run's log says
 /// whether the step NEVR wrote is live. Called from the per-frame tick on one tick (frame/tick.cpp).
 void LogServerStepReadBack(long tick);

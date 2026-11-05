@@ -130,46 +130,51 @@ static void ApplyServerTimestep() {
     }
   }
   // The global is module data and always readable; ApplyStep decides on isServer, so a client writes nothing.
+  // #2109: a server boots with no session, so the boot write is the idle step. The session's rate (the parsed
+  // network.tick_rate_hz, or the game type's default) is written when a session opens (ApplySessionTimestep).
+  const uint32_t bootRate = nevr_server_timestep::kIdleTickRateHz;
   CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
   uint64_t* stepField = nevr_server_timestep::FieldAt(state, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
-  const nevr_server_timestep::StepWrite w =
-      nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField);
+  const nevr_server_timestep::StepWrite w = nevr_server_timestep::ApplyStep(g_isServer != FALSE, bootRate, stepField);
   g_stepRecord.Store(w);
   const char* source = rateText != nullptr && rateText[0] != '\0' ? "config.yaml" : "default";
   switch (w.outcome) {
     case StepOutcome::kSet:
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.PATCH] server tick rate: %u a second (step %u us; the game had %llu us); source=%s",
-          static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(w.stepUs),
-          static_cast<unsigned long long>(w.was), source);
+          "[NEVR.PATCH] server tick rate: %u a second until a session opens (idle step %u us; the game had %llu us); "
+          "a session runs at network.tick_rate_hz=%u (source=%s; 0 is the game's own %u a second, and Combat gets %u "
+          "unless the key is set)",
+          static_cast<unsigned>(bootRate), static_cast<unsigned>(w.stepUs), static_cast<unsigned long long>(w.was),
+          static_cast<unsigned>(g_headlessTickRateHz), source,
+          static_cast<unsigned>(nevr_server_timestep::kGameTickRateHz),
+          static_cast<unsigned>(nevr_server_timestep::kCombatTickRateHz));
       break;
-    case StepOutcome::kKeepGameStep:
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] server tick rate: 0 keeps the game's own step (%llu us); source=%s",
+    case StepOutcome::kKeepGameStep:  // not reached: the boot rate is the idle rate, never 0
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] server tick rate: the game's own step is kept (%llu us); source=%s",
           static_cast<unsigned long long>(w.was), source);
       break;
     case StepOutcome::kStateMissing:
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] server tick rate not set rate=%u Hz: the game's time step state is not there when the "
-          "local config loads",
-          static_cast<unsigned>(g_headlessTickRateHz));
+          "[NEVR.PATCH] server idle tick rate not set rate=%u Hz: the game's time step state is not there when the "
+          "local config loads (the server idles at the game's own step)",
+          static_cast<unsigned>(bootRate));
       break;
     case StepOutcome::kRateRefused:
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] server tick rate not set rate=%u Hz: outside the allowed range",
-          static_cast<unsigned>(g_headlessTickRateHz));
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] server idle tick rate not set rate=%u Hz: outside the allowed range",
+          static_cast<unsigned>(bootRate));
       break;
     case StepOutcome::kUnexpectedOldValue:
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] server tick rate not set rate=%u Hz: the step slot holds %llu us, which is no step "
+          "[NEVR.PATCH] server idle tick rate not set rate=%u Hz: the step slot holds %llu us, which is no step "
           "(version drift; allowed %u..%u us)",
-          static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned long long>(w.was),
+          static_cast<unsigned>(bootRate), static_cast<unsigned long long>(w.was),
           static_cast<unsigned>(nevr_server_timestep::kMinPlausibleStepUs),
           static_cast<unsigned>(nevr_server_timestep::kMaxPlausibleStepUs));
       break;
     case StepOutcome::kWriteDidNotHold:
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] server tick rate write did not hold rate=%u Hz wrote=%u us read_back=%llu us",
-          static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(w.stepUs),
-          static_cast<unsigned long long>(w.after));
+          "[NEVR.PATCH] server idle tick rate write did not hold rate=%u Hz wrote=%u us read_back=%llu us",
+          static_cast<unsigned>(bootRate), static_cast<unsigned>(w.stepUs), static_cast<unsigned long long>(w.after));
       break;
     case StepOutcome::kNotServer:
     case StepOutcome::kNotApplied:
@@ -191,9 +196,11 @@ void ApplySessionTimestep(const std::string& gameType, const std::string& sessio
     const bool readable = nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan);
     uint64_t* stepField =
         nevr_server_timestep::FieldAt(readable ? state : nullptr, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
+    // #2109: the slot holds the idle step until now, so a rate of 0 writes the game's own step back (RateToWrite).
     const nevr_server_timestep::StepWrite w =
-        nevr_server_timestep::ApplyStep(g_isServer != FALSE, rate.hz, stepField);
+        nevr_server_timestep::ApplyStep(g_isServer != FALSE, nevr_server_timestep::RateToWrite(rate.hz), stepField);
     if (w.outcome == StepOutcome::kNotServer) return;
+    if (w.outcome == StepOutcome::kSet) g_stepRecord.Store(w);  // the read-back compares with the latest write
     const bool failed = nevr_server_timestep::StepFailed(w.outcome);
     // N122: a mode decision logs its outcome at Info even when the step was already that value.
     Log(failed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
@@ -209,6 +216,38 @@ void ApplySessionTimestep(const std::string& gameType, const std::string& sessio
   } catch (const std::exception&) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] session tick rate not set game_type=%s (std::exception)",
         gameType.c_str());
+  }
+}
+
+// #2109: a session that ended and left the process running (a session the service ended before the match began; one
+// that reached the match exits the process, state_machine.cpp) puts the server back on the idle step. Called from the
+// session-boundary handler (server/gameserver_callbacks.cpp) with reason "session_end". The same plan, bounds checks
+// and read-back as the other writes (ApplyStep, N31).
+void ApplyServerIdleTimestep(const char* reason, const std::string& sessionId) {
+  using nevr_server_timestep::StepOutcome;
+  try {
+    CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
+    const bool readable = nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan);
+    uint64_t* stepField =
+        nevr_server_timestep::FieldAt(readable ? state : nullptr, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
+    const nevr_server_timestep::StepWrite w =
+        nevr_server_timestep::ApplyStep(g_isServer != FALSE, nevr_server_timestep::kIdleTickRateHz, stepField);
+    if (w.outcome == StepOutcome::kNotServer) return;
+    if (w.outcome == StepOutcome::kSet) g_stepRecord.Store(w);
+    const bool failed = nevr_server_timestep::StepFailed(w.outcome);
+    // N122: a mode decision logs its outcome at Info even when the step was already that value.
+    Log(failed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] idle tick rate reason=%s session=%s rate_hz=%u step_us=%u was_us=%llu outcome=%s%s",
+        reason != nullptr ? reason : "unknown", sessionId.c_str(),
+        static_cast<unsigned>(nevr_server_timestep::kIdleTickRateHz), static_cast<unsigned>(w.stepUs),
+        static_cast<unsigned long long>(w.was), nevr_server_timestep::OutcomeName(w.outcome),
+        failed ? " (the server keeps the step it had)" : "");
+  } catch (const std::bad_alloc&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] idle tick rate not set reason=%s (out of memory)",
+        reason != nullptr ? reason : "unknown");
+  } catch (const std::exception&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] idle tick rate not set reason=%s (std::exception)",
+        reason != nullptr ? reason : "unknown");
   }
 }
 

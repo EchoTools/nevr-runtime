@@ -22,7 +22,9 @@ struct Entry {
 const Entry kEntries[] = {
     {"GetTimeMicroseconds", "all modes", false},
     {"CTimer_GetMilliSeconds", "all modes", false},
-    {"CPrecisionSleep::Wait", "CLIENT ONLY — never runs on a server", true},
+    // #2109: a server's clock is paced (#511), so every server frame that ends inside its step waits here. The
+    // "never runs on a server" reading was measured before #511.
+    {"CPrecisionSleep::Wait", "server frames that end inside their step (the paced clock)", false},
     {"EndMultiplayer", "session teardown", false},
     {"CSpinWait::WaitForValue", "under contention", false},
     {"HTTPListenerBringup", "server bringup", false},
@@ -39,6 +41,9 @@ const Entry kEntries[] = {
     {"CR15PickLoadingTipNode::Enter", "server mode, loading screen", false},
     {"CR15SelectLoadingTipByIndexNode::Enter", "server mode, loading screen", false},
     {"CR15SelectLoadingTipNode::Enter", "server mode, loading screen", false},
+    // #2109: installed on a server only; a client never installs them.
+    {"CBroadcaster::SendRecvDrain", "server, once a frame", false},
+    {"udp_recvfrom_sockaddr_storage", "server, every datagram and every drain", false},
 };
 
 // kEntries is sized by its INITIALIZER, not by kCount. That is load-bearing: if

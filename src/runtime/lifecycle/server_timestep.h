@@ -8,6 +8,12 @@
 // (config.cpp), as the legacy patch did. A server is always fixed-timestep; the rate is the config key
 // network.tick_rate_hz (flat key nevr_tick_rate_hz, #595).
 //
+// #2109: a server with no session ticks at kIdleTickRateHz. The boot write is the idle step; a session writes its own
+// rate when it opens (ApplySessionTimestep) and the idle rate again when it ends. The game paces each frame itself,
+// in CClock::UpdateAndPace (echovr.exe 0x1400cf3b0): with the clock's mode bits 0x18 it waits out the rest of the step
+// in CPrecisionSleep::Wait, which the runtime owns (patch/server_frame_wait.h answers UDP raw pings during that wait,
+// so a slow idle tick does not delay them).
+//
 // What is pure: ParseTickRateHz, StepMicroseconds, PlanStepWrite, ReadBackMatches, WithFixedTimestep and the
 // decision/format functions (DecideReadBack, ReadBackLine, OutcomeName) touch no memory but their arguments.
 // ApplyFlag and ApplyStep write, and ApplyStep reads, the field a caller hands them; ReadClock reads the
@@ -42,6 +48,14 @@ constexpr uint32_t kMinTickRateHz = 10;
 constexpr uint32_t kMaxTickRateHz = 1000;
 /// The game's own fixed step, 30 a second, in microseconds.
 constexpr uint32_t kGameDefaultStepUs = 33333;
+/// The game's own rate, the one kGameDefaultStepUs is the step of.
+constexpr uint32_t kGameTickRateHz = 30;
+
+/// #2109: the rate a server ticks at while it has no session. It is below kMinTickRateHz on purpose: an operator
+/// cannot configure it (ParseTickRateHz refuses it), only the idle write uses it. With no session there is no player to
+/// simulate for; what still runs per frame is the network update (a session that opens is seen up to one idle step
+/// later) and the per-frame work of an empty level. UDP raw pings do not wait for it: the frame wait answers them.
+constexpr uint32_t kIdleTickRateHz = 6;
 
 /// The step for `ticksPerSecond`, in microseconds. 0 for a rate of 0: leave the game's step.
 inline uint32_t StepMicroseconds(uint32_t ticksPerSecond) {
@@ -87,10 +101,15 @@ inline SessionRate TickRateForGameType(std::string_view gameType, uint32_t confi
   return {kDefaultTickRateHz, RateSource::kDefault};
 }
 
-/// The steps a step slot can plausibly hold: those of the rates in range. A value outside is not a
-/// step, so the address it was read from is not the step slot (N31).
+/// The steps a step slot can plausibly hold: those of the rates in range and the idle rate's (#2109). A value outside
+/// is not a step, so the address it was read from is not the step slot (N31).
 constexpr uint32_t kMinPlausibleStepUs = 1000000u / kMaxTickRateHz;
-constexpr uint32_t kMaxPlausibleStepUs = 1000000u / kMinTickRateHz;
+constexpr uint32_t kMaxPlausibleStepUs = 1000000u / kIdleTickRateHz;
+static_assert(kIdleTickRateHz < kMinTickRateHz, "the idle rate is below every rate an operator can configure");
+
+/// #2109: the rate to write for a session's rate `hz`. 0 is the game's own rate: the slot holds the idle step while
+/// no session runs, so a session at rate 0 writes the game's step back instead of leaving the slot alone.
+inline uint32_t RateToWrite(uint32_t hz) { return hz == 0 ? kGameTickRateHz : hz; }
 
 /// Parses network.tick_rate_hz. Absent or empty is kDefaultTickRateHz. 0 is 0: the game's own step,
 /// still fixed (the flag is set for every server), never an unpaced loop. A value that is not a plain
@@ -131,10 +150,11 @@ struct StepPlan {
 };
 
 /// What to do with the step slot for `hz`, given the `currentStepUs` read from it. The rate is
-/// range-checked and the value read back is bounds-checked before anything is written.
+/// range-checked (the configurable range, or the idle rate) and the value read back is bounds-checked before anything
+/// is written.
 inline StepPlan PlanStepWrite(uint32_t hz, uint32_t currentStepUs) {
   if (hz == 0) return {StepAction::KeepGameStep, 0};
-  if (hz < kMinTickRateHz || hz > kMaxTickRateHz) return {StepAction::RefuseRate, 0};
+  if (hz != kIdleTickRateHz && (hz < kMinTickRateHz || hz > kMaxTickRateHz)) return {StepAction::RefuseRate, 0};
   if (currentStepUs < kMinPlausibleStepUs || currentStepUs > kMaxPlausibleStepUs) {
     return {StepAction::RefuseSlot, 0};
   }

@@ -38,6 +38,8 @@ enum Id : int {
   kLoadingTipPick,
   kLoadingTipSelectByIndex,
   kLoadingTipSelect,
+  kBroadcasterSendRecvDrain,
+  kBroadcasterUdpRecvFrom,
   kCount
 };
 

@@ -24,7 +24,9 @@
  * 0d. CPrecisionSleep::Wait — cached high-res timer (BUG #11, #12, High)
  *     Original: creates/destroys kernel timer each frame (180 kernel
  *     transitions/sec at 90fps) with standard-res timer. Fix: persistent
- *     high-res waitable timer created once at init.
+ *     high-res waitable timer created once at init. On a server it is the
+ *     frame wait (#2109, patch/server_frame_wait.h): raw pings answered as
+ *     they arrive, never an early return.
  *
  * 0e. CSpinWait::WaitForValue — corrected backoff (BUG #14, High)
  *     Original: sleep_ms starts at 10 and decrements to 0 (maximum CPU
@@ -62,6 +64,7 @@
 #include "runtime/lifecycle/cli.h"              // g_isServer
 #include "runtime/lifecycle/crash_recovery.h"   // ForceFatalExit, EnsureStackReserve
 #include "runtime/patch/http_port_scan.h"       // HTTP session API port scan (#1511)
+#include "runtime/patch/server_frame_wait_install.h"  // #2109: a server's frame wait
 #endif
 
 /* --------------------------------------------------------------------
@@ -306,12 +309,16 @@ static void __fastcall EndMultiplayerHook(int64_t arg1, int64_t arg2) {
  * Timer precision improves from ~15.6ms to ~0.5ms on Windows 10 1803+.
  * Falls back to standard timer on older Windows.
  *
- * No other hook chains on this function (N26): server_timing's Init has no
- * call sites, so no WSAPoll-based event-driven recv hook is installed on top.
- * This hook is the only owner of CPrecisionSleep::Wait.
+ * No other hook chains on this function (N26): this hook is its only owner.
  *
- * Note it does NOT run in server mode at all (N86, measured: zero entries over a
- * full run) — server-mode per-frame work is driven from GetTimeMicroseconds.
+ * Who calls it: CClock::UpdateAndPace (0x1400cf4b7) when the clock is paced (mode
+ * bit 0x10) and the frame ended inside its step, and CncaGame::RunMainLoop's frame
+ * cap (0x14050bf50). A server's clock has been paced since #511 (mode bits 0x18), so
+ * on a server this is the frame wait: every frame that ends inside its step comes
+ * here, on the game loop thread, and nevr_server_frame_wait::Wait serves it (#2109).
+ * N86's "zero entries on a server" was measured before #511, when the server's clock
+ * was not paced. Per-frame work is still driven from GetTimeMicroseconds (N86): a
+ * frame that overruns its step never waits.
  * -------------------------------------------------------------------- */
 
 using PrecisionSleepWait_t = void(__fastcall*)(int64_t microseconds, int64_t unk, void* unk2);
@@ -344,6 +351,10 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
         SwitchToThread();
         return;
     }
+
+    // #2109: a server's frame wait answers raw pings as they arrive and never returns early (the overrun delta-time
+    // patch depends on that). False when it does not apply: off the game loop thread, or not installed as a server.
+    if (g_isServer && nevr_server_frame_wait::Wait(microseconds)) return;
 
     if (s_cached_timer != NULL) {
         // High-precision wait using persistent timer handle.
@@ -812,6 +823,14 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
         diagNetGameHostCheckStatus);
 
     g_initialized = (installed > 0);
+#endif
+}
+
+bool nevr_binary_bug_fixes::FrameWaitOwned() {
+#ifdef _WIN32
+    return s_origPrecisionSleepWait != nullptr;
+#else
+    return false;
 #endif
 }
 
