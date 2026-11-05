@@ -3,7 +3,9 @@
 A reused build tree keeps the executables of earlier builds. A target that a later configure removes leaves its
 executable on disk, and a recipe that runs that file by path then passes on a program no build makes.
 tools/check_fresh_test_programs.py fails such a run. These tests drive the tool on fixture trees, and check the
-recipe's wiring: each program is removed before the build, judged after it, and judged before it is run.
+recipe's wiring: each program is removed before the build, judged after it, and judged before it is run; every program
+a run_suite, wine or check_test.sh line runs is in the list check_fresh judges; and the list removed before a build is
+the list judged after it.
 """
 import os
 import pathlib
@@ -155,13 +157,21 @@ class ToolRefusesWhatItCannotJudge(Fixture):
 
 
 # The recipe's shape, read from the justfile. Each mode removes its programs, builds, judges them, then runs them.
+# A program the recipe runs is an argument under $out (a scripting tree) or $check (the script-check tree) on a line
+# that runs it: run_suite, wine (the runaway probes) or check_test.sh. Each one must be in the list check_fresh judges
+# for its tree: the programs=() list for $out, the words after check_fresh "$check" for $check. The list the recipe
+# removes before a tree's build must be the list check_fresh judges after it.
 PROGRAMS_ASSIGN = re.compile(r"^\s*programs\+?=\((?P<words>[^)]*)\)", re.M)
-RUN_SUITE = re.compile(r'^\s*run_suite "\$out/(?P<program>[^"]+)"', re.M)
-CHECK_PATH = re.compile(r'"\$check/([^"]+)"')
+RUNNER = re.compile(r"\b(?P<runner>run_suite|wine|check_test\.sh)\b")
+PROGRAM_ARG = re.compile(r"\$\{?(?P<tree>out|check)\}?/(?P<program>[^\"'\s;)]+)")
+REMOVAL_LOOP = re.compile(r'for p in (?P<words>[^;]*); do rm -f -- "\$(?P<tree>out|check)/\$p"; done')
+CHECK_FRESH_CALL = re.compile(r'check_fresh "\$(?P<tree>out|check)"(?P<words>.*)$')
 
 
 def _code(body):
-    return [line for line in body.splitlines() if not line.lstrip().startswith("#")]
+    # A command continued with a backslash is one line, so a program argument on its second line is still found.
+    joined = re.sub(r"\\\n\s*", " ", body)
+    return [line for line in joined.splitlines() if not line.lstrip().startswith("#")]
 
 
 def _index(lines, needle):
@@ -197,23 +207,37 @@ def wiring_problems(body):
     if None not in (rm_check, build_check, check_check, test_check) and not rm_check < build_check < check_check < test_check:
         problems.append("the script-check programs are not removed, built, judged, then run, in that order")
 
-    declared = set()
-    for match in PROGRAMS_ASSIGN.finditer(text):
-        declared.update(match.group("words").split())
-    for match in RUN_SUITE.finditer(text):
-        if match.group("program") not in declared:
-            problems.append(f"run_suite runs {match.group('program')}, which no programs=() list names, so it is not judged")
+    removed = {"out": set(), "check": set()}
+    judged = {"out": set(), "check": set()}
+    for line in lines:
+        for match in REMOVAL_LOOP.finditer(line):
+            removed[match.group("tree")].update(match.group("words").split())
+        match = CHECK_FRESH_CALL.search(line)
+        if match:
+            judged[match.group("tree")].update(match.group("words").split())
+    for tree in ("out", "check"):
+        if removed[tree] and judged[tree] and removed[tree] != judged[tree]:
+            problems.append(
+                f"the programs removed before the ${tree} build are not the programs check_fresh judges after it "
+                f"(only removed: {' '.join(sorted(removed[tree] - judged[tree])) or 'none'}; "
+                f"only judged: {' '.join(sorted(judged[tree] - removed[tree])) or 'none'})")
 
-    checked = set()
+    listed = {"out": set(), "check": judged["check"]}
+    for match in PROGRAMS_ASSIGN.finditer(text):
+        listed["out"].update(match.group("words").split())
+    names = {"out": "no programs=() list names it", "check": 'the check_fresh "$check" list does not name it'}
     for line in lines:
-        if 'check_fresh "$check"' in line:
-            checked.update(line.split('"$check"', 1)[1].split())
-    for line in lines:
-        if "src/scripting/check/check_test.sh" in line:
-            paths = CHECK_PATH.findall(line)
-            for program in paths[:-1]:  # the last argument is the output directory
-                if program not in checked:
-                    problems.append(f"check_test.sh runs {program}, which the script-check freshness check does not judge")
+        runner = RUNNER.search(line)
+        if runner is None:
+            continue
+        args = list(PROGRAM_ARG.finditer(line))
+        if runner.group("runner") == "check_test.sh":
+            args = args[:-1]  # its last argument is the output directory (src/scripting/check/check_test.sh, usage)
+        for arg in args:
+            tree, program = arg.group("tree"), arg.group("program")
+            if program not in listed[tree]:
+                problems.append(f"{runner.group('runner')} runs ${tree}/{program}, but {names[tree]}, "
+                                "so check_fresh does not judge it")
     return problems
 
 
@@ -255,6 +279,59 @@ class RecipeWiring(unittest.TestCase):
         problems = wiring_problems(self.replaced(
             'check_fresh "$check" nevr_script_stubs_host_test nevr_script_check'))
         self.assertTrue(any("freshness check of the script-check programs" in p for p in problems), problems)
+
+    def with_probe(self, probe):
+        # A probe line added after the mode's two runaway probes, inside the mode loop.
+        anchor = 'echo "test-scripting: [$mode] --pattern-dos and --gc-dos stopped"'
+        return self.replaced(anchor, probe + "\n        " + anchor)
+
+    def test_a_wine_probe_of_an_unlisted_program_is_reported(self):
+        problems = wiring_problems(self.with_probe(
+            'dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/unlisted.exe" --probe 2>&1)'))
+        self.assertTrue(any("wine runs $out/unlisted.exe" in p for p in problems), problems)
+
+    def test_a_wine_probe_that_spans_two_lines_is_reported(self):
+        problems = wiring_problems(self.with_probe(
+            'dos=$(WINEDEBUG=-all timeout -k 10 120 wine \\\n            "$out/unlisted.exe" --probe 2>&1)'))
+        self.assertTrue(any("wine runs $out/unlisted.exe" in p for p in problems), problems)
+
+    def test_a_wine_probe_spelled_with_braces_is_reported(self):
+        problems = wiring_problems(self.with_probe('wine "${out}/unlisted.exe" --probe'))
+        self.assertTrue(any("wine runs $out/unlisted.exe" in p for p in problems), problems)
+
+    def test_a_listed_probe_is_not_reported(self):
+        problems = wiring_problems(self.with_probe('wine "$out/nevr_script_host_test.exe" --probe'))
+        self.assertEqual(problems, [])
+
+    def test_a_wine_run_of_an_unjudged_script_check_program_is_reported(self):
+        anchor = 'src/scripting/check/check_test.sh "$check/nevr_script_stubs_host_test"'
+        problems = wiring_problems(self.replaced(anchor, 'wine "$check/unlisted" --probe\n    ' + anchor))
+        self.assertTrue(any("wine runs $check/unlisted" in p for p in problems), problems)
+
+    def test_a_check_test_program_outside_the_judged_list_is_reported(self):
+        problems = wiring_problems(self.replaced('"$check/nevr_script_check" "$check/check"',
+                                                 '"$check/nevr_script_check" "$check/unlisted" "$check/check"'))
+        self.assertTrue(any("check_test.sh runs $check/unlisted" in p for p in problems), problems)
+
+    def test_a_script_check_removal_list_that_differs_from_the_judged_list_is_reported(self):
+        problems = wiring_problems(self.replaced(
+            'for p in nevr_script_stubs_host_test nevr_script_check; do',
+            'for p in nevr_script_stubs_host_test; do'))
+        self.assertTrue(any("$check" in p and "only judged: nevr_script_check" in p for p in problems), problems)
+
+    def test_a_script_check_judged_list_that_differs_from_the_removal_list_is_reported(self):
+        problems = wiring_problems(self.replaced(
+            'check_fresh "$check" nevr_script_stubs_host_test nevr_script_check',
+            'check_fresh "$check" nevr_script_check'))
+        self.assertTrue(any("$check" in p and "only removed: nevr_script_stubs_host_test" in p for p in problems),
+                        problems)
+
+    def test_a_mode_removal_list_that_is_not_its_programs_is_reported(self):
+        problems = wiring_problems(self.replaced(
+            'for p in "${programs[@]}"; do rm -f -- "$out/$p"; done',
+            'for p in nevr_script_registry_test.exe; do rm -f -- "$out/$p"; done'))
+        self.assertTrue(any("$out" in p and "only removed: nevr_script_registry_test.exe" in p for p in problems),
+                        problems)
 
 
 if __name__ == "__main__":
