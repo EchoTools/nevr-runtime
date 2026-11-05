@@ -4,7 +4,7 @@ This directory is the historical record. Its entries are dated by design and are
 current-tree rule in `AGENTS.md` ("Documentation, plans and findings"): they cite the tree as it was
 when measured, and nothing here is rewritten or deleted without the owner's confirmation.
 
-No audit record lives in the tree any more. Each was checked against the code it
+One record lives in the tree (see "Records kept in the tree"). The others were each checked against the code they
 described; what was still open became a GitHub issue, and the record was removed.
 A deleted file is not a lost file: `git show <sha>:<path>` returns its exact bytes,
 so a citation is sufficient and keeping a stale copy is not required. Every command
@@ -24,6 +24,12 @@ Retired findings that were not filed, and why:
 - Bug-hunt `unsigned-release-accepted` — release packages require signing; local unsigned development is an owner decision.
 - Bug-hunt `native-windows-gate-optional` — the native VM gate stays separate by owner decision.
 - Fable B5, B7, B8 — marked STALE by the ledger itself (mitigated or guarded).
+
+## Records kept in the tree
+
+| File | What it holds |
+|------|---------------|
+| `2026-11-05-q15t-origin-citations.md` | the origin citations of the old q15t plugin repository (file, line and source commit of each), its module rules, its commit log and the provenance of the variant libraries; kept so that repository can be deleted (#2167) |
 
 ## Reading an old citation
 
