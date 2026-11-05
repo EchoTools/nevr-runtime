@@ -237,3 +237,69 @@ func TestGitCommitWithEnvSucceedsWithNoKeyAndNoUserConfig(t *testing.T) {
 		t.Errorf("the commit's author and signature status = %q, want the fixed identity and N (unsigned)", got)
 	}
 }
+
+func goEnv(t *testing.T, name string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "go", "env", name)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go env %s: %v", name, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// A hermetic HOME and XDG_CACHE_HOME would make every go command a test starts build cold (26 s against 1.6 s for this
+// module): the build caches are not user configuration, so they stay where the caller has them.
+func TestEnvKeepsTheGoBuildAndModuleCachesOfTheCaller(t *testing.T) {
+	t.Parallel()
+	env := Env(t)
+	for key, want := range map[string]string{"GOCACHE": goEnv(t, "GOCACHE"), "GOMODCACHE": goEnv(t, "GOMODCACHE")} {
+		got, ok := lookup(env, key)
+		if !ok || got != want || got == "" {
+			t.Errorf("%s = %q (set %v), want the caller's %q", key, got, ok, want)
+		}
+	}
+	home, _ := lookup(env, "HOME")
+	if cache, _ := lookup(env, "GOCACHE"); strings.HasPrefix(cache, home+"/") {
+		t.Errorf("GOCACHE %q is inside the hermetic HOME %q: it would start empty", cache, home)
+	}
+}
+
+func TestEnvTakesTheGoCachesFromTheCallersVariablesWhenTheyAreSet(t *testing.T) {
+	t.Setenv("GOCACHE", "/caller/gocache")
+	t.Setenv("GOMODCACHE", "/caller/modcache")
+	env := Env(t)
+	if got, _ := lookup(env, "GOCACHE"); got != "/caller/gocache" {
+		t.Errorf("GOCACHE = %q", got)
+	}
+	if got, _ := lookup(env, "GOMODCACHE"); got != "/caller/modcache" {
+		t.Errorf("GOMODCACHE = %q", got)
+	}
+}
+
+func TestEnvAtMakesItsDirectoriesBelowTheRootItIsGiven(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	env, err := EnvAt(root, "FOO=bar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _ := lookup(env, "HOME")
+	if rel, err := filepath.Rel(root, home); err != nil || strings.HasPrefix(rel, "..") {
+		t.Errorf("HOME %q is not below %q", home, root)
+	}
+	if got, _ := lookup(env, "FOO"); got != "bar" {
+		t.Errorf("FOO = %q", got)
+	}
+	if got, _ := lookup(env, "GIT_CONFIG_GLOBAL"); got != "/dev/null" {
+		t.Errorf("GIT_CONFIG_GLOBAL = %q", got)
+	}
+	if _, err := EnvAt(root, "NOEQUALS"); err == nil {
+		t.Error("EnvAt accepted an addition with no '='")
+	}
+	blocker := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(blocker, nil, 0o600)
+	if _, err := EnvAt(filepath.Join(blocker, "sub")); err == nil {
+		t.Error("EnvAt made directories below a file")
+	}
+}
