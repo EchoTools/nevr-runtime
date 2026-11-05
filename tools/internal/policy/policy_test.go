@@ -641,3 +641,30 @@ func TestJustVerifyRunsTheGoHalfWhenThePythonHalfFailsAndNamesBoth(t *testing.T)
 	out, err := cmd.CombinedOutput()
 	h.check(t, string(out), err)
 }
+
+func TestGoToolsRecipeBuildsEveryCommandIntoBuildGoTools(t *testing.T) {
+	t.Parallel()
+	text, err := os.ReadFile(filepath.Join(repoRoot(t), "justfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, header, body, ok := Recipe(string(text), "go-tools")
+	if !ok || header != "go-tools:" {
+		t.Fatalf("go-tools recipe: %q, %v", header, ok)
+	}
+	if got := strings.TrimSpace(strings.Join(body, "\n")); got != "go -C tools build -trimpath -o ../build/go-tools/ ./cmd/..." {
+		t.Errorf("go-tools builds with %q (ADR 0044 rule 7)", got)
+	}
+}
+
+func TestRecipeFindsAttributesHeaderAndBody(t *testing.T) {
+	t.Parallel()
+	jf := "# comment\nother:\n    x\n\n[positional-arguments]\n[private]\nname *A: dep\n    one\n    two \"$@\"\n\nlater:\n    three\n"
+	attrs, header, body, ok := Recipe(jf, "name")
+	if !ok || header != "name *A: dep" || strings.Join(attrs, ",") != "[positional-arguments],[private]" || strings.Join(body, "|") != "one|two \"$@\"|" {
+		t.Errorf("attrs %q header %q body %q ok %v", attrs, header, body, ok)
+	}
+	if _, _, _, ok := Recipe(jf, "absent"); ok {
+		t.Error("found a recipe that is not there")
+	}
+}

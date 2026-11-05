@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +20,9 @@ import (
 // The fake `go`: prints the file "stdout" beside it to standard output and "stderr" to standard error, and exits with
 // the number in "exit" (0 when there is none). A test writes those files before it runs the tool.
 func scripted(c *testkit.Call) int {
+	if _, err := os.Stat(filepath.Join(c.FakeDir, "echo-stdin")); err == nil {
+		io.Copy(c.Stdout, c.Stdin)
+	}
 	if out, err := os.ReadFile(filepath.Join(c.FakeDir, "stdout")); err == nil {
 		c.Stdout.Write(out)
 	}
@@ -657,4 +661,62 @@ func TestASkippedTestIsNamedWithItsReasonInTheOutputAndTheRecord(t *testing.T) {
 	if sk, _ := end["skipped"].([]any); len(sk) != 1 || !strings.Contains(sk[0].(string), "TestOnlyShrinks") {
 		t.Errorf("go_end skipped = %v", end["skipped"])
 	}
+}
+
+func TestTheCallersStandardInputReachesThePythonHalf(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.script(r.py, "echo-stdin", "")
+	var out, errb bytes.Buffer
+	code := run(t.Context(), []string{"--", "python3"}, testkit.Getenv(r.env), strings.NewReader("typed input\n"), &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "typed input") {
+		t.Errorf("exit %d, stdout %q", code, out.String())
+	}
+}
+
+func TestACancelledContextEndsTheRunBeforeTheGoHalfWhenThereIsAPythonHalf(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	var out, errb bytes.Buffer
+	code := run(ctx, []string{"--", "python3"}, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
+	if code != 130 || len(r.fake.Calls(t)) != 0 || !strings.Contains(out.String(), "go half not run") {
+		t.Errorf("exit %d, go calls %d, stdout %q", code, len(r.fake.Calls(t)), out.String())
+	}
+}
+
+func TestNothingAfterTheSeparatorIsAUsageError(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	code, _, stderr := r.run("--")
+	if code != 2 || !strings.Contains(stderr, "usage") || len(r.fake.Calls(t)) != 0 {
+		t.Errorf("exit %d, stderr %q", code, stderr)
+	}
+}
+
+func TestWhenBothHalvesFailTheExitCodeIsThePythonHalfs(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, ev("fail", pkg, "TestB")+ev("fail", pkg, ""), 1)
+	if code, _, _ := r.both("3", ""); code != 3 {
+		t.Errorf("exit %d, want the Python half's 3", code)
+	}
+}
+
+func TestASkipWithNoOutputIsStillNamedWithAReason(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, ev("skip", pkg, "TestQuiet")+ev("pass", pkg, ""), 0)
+	_, stdout, _ := r.run()
+	mustHave(t, stdout, "go SKIP "+pkg+" TestQuiet: no reason given")
+}
+
+func TestASkipReasonIsNeitherGosRunLineNorItsSkipLine(t *testing.T) {
+	t.Parallel()
+	out := func(text string) string {
+		b, _ := json.Marshal(map[string]string{"Action": "output", "Package": pkg, "Test": "TestS", "Output": text})
+		return string(b) + "\n"
+	}
+	stream := out("    x_test.go:9: the real reason\n") + out("=== NAME  TestS\n") + out("--- SKIP: TestS (0.00s)\n") + out("\n") + ev("skip", pkg, "TestS") + ev("pass", pkg, "")
+	_, stdout, _ := newRig(t, stream, 0).run()
+	mustHave(t, stdout, "go SKIP "+pkg+" TestS: x_test.go:9: the real reason")
 }
