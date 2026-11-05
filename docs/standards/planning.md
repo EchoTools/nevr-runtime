@@ -13,7 +13,8 @@ drifts; the hygiene rules at the end are how it gets corrected, on a schedule, t
 A release milestone is titled with the version the next tag will compute to: the version
 `python3 tools/next_release_version.py` gives for `main` (see "Release versions"). The tool counts every commit on
 `main` that the highest release tag reachable from `main` (`vX.Y.Z` below) does not contain, so every commit merged
-since that tag ships under one version, whatever milestone its issue is in. With no breaking change, the milestones are:
+since that tag ships under one version, whatever milestone its issue is in. With no breaking `feat`, `fix` or `perf`
+merged since that tag, the milestones are:
 
 | milestone | holds |
 |---|---|
@@ -21,8 +22,8 @@ since that tag ships under one version, whatever milestone its issue is in. With
 | `vX.(Y+1).0`, the next minor | the next release, once a `feat` is merged since `vX.Y.Z` |
 | `Future` | wanted, not scheduled |
 
-Work of any other type (`docs`, `chore`, `ci`, ...) bumps nothing. It ships in the next release, and with nothing else
-merged since `vX.Y.Z` the tool names no version for it: it exits 1, nothing to release.
+Work of any other type (`docs`, `chore`, `ci`, ...) bumps nothing. It ships in the next release, and with no `fix`,
+`perf` or `feat` merged since `vX.Y.Z` the tool names no version for it: it exits 1, nothing to release.
 
 - The description opens with `Outcome:`: the state of the world when the release is done, then its definition of done.
 - **No due dates.** Releases are scoped by work, not by the calendar.
