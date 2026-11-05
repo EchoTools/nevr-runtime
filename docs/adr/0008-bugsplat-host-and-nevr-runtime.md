@@ -124,8 +124,9 @@ action, and `loader_lock_held`, which the host reads from the PEB) and `crash_du
 (written, or each destination that failed and why, suppressed re-entry, dbghelp
 unavailable, failed). A record that cannot be written to the main log goes to `stderr`; a record is never
 dropped silently, and one too large for the 4 KiB bound is replaced by a marker, not
-truncated. KNOWN-WRONG #1252: a stop writes nothing to the console, so an operator watching a `-server`
-sees none of it.
+truncated. Every way the host stops the game, and every attach that leaves the game running without the runtime,
+also writes one `NEVR.STOP` line to standard error, once per run, so an operator watching a `-server` sees the cause
+(`docs/standards/logging.md`, "The `NEVR.STOP` line").
 
 The exit flush (`BootstrapDiagnostics::FlushAttachJournalAtExit`, run at `DLL_PROCESS_DETACH` with
 `lpReserved != NULL`, when every other thread is already dead) writes each journal step not yet written, the failing
@@ -249,9 +250,9 @@ A runtime that cannot be used after attach stops the game: a missing or unloadab
 descriptor that does not validate, an `initialize` that fails or throws. The host writes one
 `game_stop` record to the run's main log (`logs/nevr-<timestamp>.jsonl`) and ends the process with exit code 78
 (`RuntimeRendezvous::StopGame`), because a game that runs on without its runtime is a game
-without the fixes the runtime exists to make. KNOWN-WRONG #1252: the console gets nothing, and every
-outcome shares exit code 78. A rejection at attach (a bad image, a changed
-prologue, a failed hook install) installs nothing and the game runs unmodified.
+without the fixes the runtime exists to make. Every runtime outcome exits with code 78, and the `NEVR.STOP` line
+on standard error names the outcome and its code (`docs/standards/logging.md`, "The `NEVR.STOP` line"). A rejection
+at attach (a bad image, a changed prologue, a failed hook install) installs nothing and the game runs unmodified.
 
 Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 (`sdk/include/nevr/plugin_interface.h`) "host" is the runtime.
