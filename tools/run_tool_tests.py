@@ -5,8 +5,9 @@ A run that is only printed is lost when the terminal scrolls: a one-off failure 
 and no name. Every run therefore writes, under the log directory:
 
 - `<stem>.log`, the stem being `<UTC stamp to the microsecond>-<pid>-<16 random hex>-<sha12>`: a
-  header (UTC start, HEAD, tree clean, DIRTY or unknown, pytest's version and plugins, the
-  pytest-randomly seed, the command), then pytest's full output, also echoed to stdout line by
+  header (UTC start, HEAD, tree clean, DIRTY or unknown, pytest's version and the plugins installed
+  on the machine (only those the command names with `-p` load), the pytest-randomly seed, the
+  workers, the command), then pytest's full output, also echoed to stdout line by
   line, then an end line with the exit code;
 - `<stem>.xml`: pytest's JUnit XML, one record per test;
 - two JSON lines in `runs.jsonl`: `"event": "start"` before pytest starts (so a run that is killed
@@ -21,10 +22,13 @@ and no name. Every run therefore writes, under the log directory:
   the run was started in (`cwd`; None when it no longer exists) and the user who ran it (`user`).
 
 pytest's short summary (on by default, `-rfE`) names every failure and error even under `-q`; the
-log keeps it whole. When pytest-randomly is installed and loads automatically, and neither the
-arguments nor `$PYTEST_ADDOPTS` set a seed or disable it (`-p no:randomly`), the run draws a seed
-and passes it as `--randomly-seed`, so an order-dependent failure can be replayed; a seed given
-there is recorded as given. An ini file's `addopts` is not read: this repo has none.
+log keeps it whole. When pytest-randomly is installed (the run names it with `-p randomly`), and
+neither the arguments nor `$PYTEST_ADDOPTS` set a seed or disable it (`-p no:randomly`), the run
+draws a seed and passes it as `--randomly-seed`; a seed given there is recorded as given. On one
+process the seed replays an order-dependent failure; on workers the order within each worker also
+depends on which tests the worker was handed, which neither the XML nor the log records, so the
+seed alone does not replay it (run with `-n 0` or `NEVR_TEST_WORKERS=0` to replay serially). An ini
+file's `addopts` is not read: this repo has none.
 
 Signals. pytest runs in its own session, so a terminal's CTRL+C or hangup reaches this script
 alone. From before the start record until after the end record, SIGINT, SIGTERM and SIGHUP are
@@ -52,8 +56,8 @@ installed on the machine would otherwise load, about 5 s per pytest start) and w
 `-p xdist -p randomly`. With pytest-xdist the suite runs on `-n <workers>` processes: $NEVR_TEST_WORKERS is `logical` (the
 default: one per hardware thread), `auto` (one per physical core) or a whole number, 0 for serial. Without pytest-xdist
 the suite runs serially, with one `WARN` line on stderr. Both records and the log's header carry `mode` (`parallel` or
-`serial`), `workers` and `serial_reason`. A `-n` or `-p no:xdist` in the arguments comes after the runner's own flags
-and wins.
+`serial`), `workers` and `serial_reason`. A `-n` in the arguments replaces $NEVR_TEST_WORKERS and is what the
+records name (`-n 0` is serial); `-p no:xdist` in the arguments makes the run serial.
 
 The environment. pytest is started with a fixed one, so a run gives the same answer for whoever starts it:
 `HERMETIC_SET` (no user or system git configuration, a fixed identity, no commit or tag signing, `main` as the
@@ -278,12 +282,28 @@ def workers_setting(environ):
     return int(raw) if raw.isascii() and raw.isdigit() else None
 
 
+def given_workers(args: list):
+    """The worker count the arguments set, as the last `-n N`, `-nN`, `--numprocesses N` or `--numprocesses=N`
+    names it (argparse keeps the last): None when they set none, else the word as given."""
+    given = None
+    for i, tok in enumerate(args):
+        if tok in ("-n", "--numprocesses") and i + 1 < len(args):
+            given = args[i + 1]
+        elif tok.startswith("--numprocesses="):
+            given = tok.split("=", 1)[1]
+        elif tok.startswith("-n") and len(tok) > 2 and not tok.startswith("--"):
+            given = tok[2:]
+    return given
+
+
 def plugin_plan(args: list, environ, workers) -> dict:
     """What the plugins and the workers add to pytest's command: {"flags", "mode", "workers", "serial_reason"}.
 
     `-p NAME` for each suite plugin that is installed and not switched off (`-p no:NAME`) in the arguments or
     $PYTEST_ADDOPTS, then `-n <workers>` when pytest-xdist is loaded and `workers` (`auto`, `logical` or a number)
-    is not 0. `workers` is counted here, by xdist's own rule, so the record names the number pytest is given.
+    is not 0. A `-n` in the arguments replaces `workers` and is not added a second time; the record names the count
+    it gives (`-n 0` is a serial run). A count of `auto` or `logical` is counted here, by xdist's own rule, so the
+    record names the number pytest is given.
     """
     named = set(plugin_names(option_tokens(args, environ)))
     flags = []
@@ -292,21 +312,34 @@ def plugin_plan(args: list, environ, workers) -> dict:
         if f"no:{name}" not in named and importlib.util.find_spec(module) is not None:
             flags += ["-p", name]
             loaded.add(name)
+    given = given_workers(args)
+    if given is not None:
+        source = "-n in the arguments"
+        workers = given if given in ("auto", "logical") else int(given) if given.isascii() and given.isdigit() else None
+    else:
+        source = "NEVR_TEST_WORKERS"
     if workers == 0:
-        reason = "NEVR_TEST_WORKERS=0"
-    elif "xdist" in loaded:
+        reason = f"{source} is 0" if given is not None else "NEVR_TEST_WORKERS=0"
+    elif "xdist" in loaded and workers is not None:
         if not isinstance(workers, int):
-            from xdist.plugin import pytest_xdist_auto_num_workers
-            workers = pytest_xdist_auto_num_workers(types.SimpleNamespace(option=types.SimpleNamespace(
-                numprocesses=workers)))
+            try:
+                from xdist.plugin import pytest_xdist_auto_num_workers
+                workers = pytest_xdist_auto_num_workers(types.SimpleNamespace(option=types.SimpleNamespace(
+                    numprocesses=workers)))
+            except (ImportError, AttributeError, TypeError) as exc:
+                # xdist's own count is not reachable: hand pytest the word and record it as given.
+                return {"flags": flags if given is not None else [*flags, "-n", workers], "mode": "parallel",
+                        "workers": workers, "serial_reason": f"worker count left to xdist ({type(exc).__name__})"}
         if workers > 0:
-            return {"flags": [*flags, "-n", str(workers)], "mode": "parallel", "workers": workers,
-                    "serial_reason": None}
+            return {"flags": flags if given is not None else [*flags, "-n", str(workers)], "mode": "parallel",
+                    "workers": workers, "serial_reason": None}
         reason = f"xdist counted {workers} workers"
     elif "no:xdist" in named:
         reason = "-p no:xdist"
-    else:
+    elif "xdist" not in loaded:
         reason = "pytest-xdist is not installed"
+    else:
+        reason = f"{source} is not a count"
     return {"flags": flags, "mode": "serial", "workers": 0, "serial_reason": reason}
 
 
@@ -604,7 +637,7 @@ def main(argv: list) -> int:
             return 2
         for line in (f"test-tools: start {start.isoformat()}", f"test-tools: HEAD {head}",
                      f"test-tools: tree {tree}", f"test-tools: pytest {env['pytest']}",
-                     f"test-tools: plugins {' '.join(f'{k}={v}' for k, v in env['plugins'].items())}",
+                     f"test-tools: installed plugins {' '.join(f'{k}={v}' for k, v in env['plugins'].items())}",
                      f"test-tools: randomly-seed {seed}",
                      f"test-tools: workers {plan['workers']} ({plan['mode']}"
                      + (f": {plan['serial_reason']}" if plan["serial_reason"] else "") + ")",

@@ -169,6 +169,19 @@ def test_leaves_a_child_in_its_own_session():
         f.write(str(child.pid))
 '''
 
+# A prelude (see DRIVER) for a test that sends the runner a second signal: the runner writes a line to
+# $RUN_TOOL_TESTS_HANDLED after it has handled each signal, so the test sends the next one when that state is
+# reached and not after a guessed time, and the repeat window is `{repeat}` seconds, so the test does not depend
+# on how long the runner took to get to its handler.
+HANDLED_PRELUDE = (
+    "real_on_signal = m.Run.on_signal\n"
+    "def on_signal(self, signum, frame):\n"
+    "    real_on_signal(self, signum, frame)\n"
+    "    with open(os.environ['RUN_TOOL_TESTS_HANDLED'], 'a') as f:\n"
+    "        f.write('handled\\n')\n"
+    "m.Run.on_signal = on_signal\n"
+    "m.REPEAT_S = {repeat}")
+
 # Runs the script's main() with a change made first ({prelude}), as `python3 tools/run_tool_tests.py` would.
 DRIVER = '''
 import importlib.util, os, signal, subprocess, sys
@@ -225,6 +238,8 @@ class RunToolTestsRecord(unittest.TestCase):
         env.pop("PYTEST_ADDOPTS", None)
         env.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD", None)
         env.pop("PYTEST_XDIST_AUTO_NUM_WORKERS", None)
+        for name in ("PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT", "PYTEST_XDIST_TESTRUNUID"):
+            env.pop(name, None)  # the outer run may be a worker; the nested run is not one unless it starts workers
         env.update({k: v for k, v in extra.items() if v is not None})
         for name in [k for k, v in extra.items() if v is None]:
             env.pop(name, None)
@@ -281,7 +296,7 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(set(record["plugins"]), expected)
         for name, dist in record["plugins"].items():
             self.assertRegex(dist, r"\S+ \S+")
-        self.assertIn("test-tools: plugins ", Path(record["log"]).read_text())
+        self.assertIn("test-tools: installed plugins ", Path(record["log"]).read_text())
 
     def test_an_xfail_run_keeps_its_summary(self):
         suite = self.write_suite("xfail", XFAIL_SUITE)
@@ -431,6 +446,7 @@ class RunToolTestsRecord(unittest.TestCase):
             self.assertTrue(self.names_plugin(cmd, "xdist"), cmd)
             self.assertEqual(cmd[cmd.index("-n") + 1], "2")
             self.assertEqual((record["mode"], record["workers"], record["serial_reason"]), ("parallel", 2, None))
+            self.assertEqual(record["plugin_autoload"], "off")
         if importlib.util.find_spec("pytest_randomly") is not None:
             self.assertTrue(self.names_plugin(self.records()[0]["cmd"], "randomly"))
         self.assertIn("test-tools: workers 2 (parallel)", Path(self.records()[0]["log"]).read_text())
@@ -443,7 +459,9 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual((record["mode"], record["workers"], record["serial_reason"]),
                          ("serial", 0, "NEVR_TEST_WORKERS=0"))
         self.assertNotIn("-n", record["cmd"])
+        self.assertEqual(record["plugin_autoload"], "off")
         self.assertNotIn("WARN", result.stderr)
+        self.assertIn("test-tools: workers 0 (serial: NEVR_TEST_WORKERS=0)\n", Path(record["log"]).read_text())
 
     @unittest.skipIf(importlib.util.find_spec("pytest") is None, "pytest is not installed")
     def test_without_xdist_the_run_is_serial_and_says_so_on_stderr_and_in_the_records(self):
@@ -458,7 +476,61 @@ class RunToolTestsRecord(unittest.TestCase):
             self.assertIn("pytest-xdist is not installed", record["serial_reason"])
             self.assertNotIn("-n", record["cmd"])
             self.assertFalse(self.names_plugin(record["cmd"], "xdist"))
+        self.assertIn("test-tools: workers 0 (serial: pytest-xdist is not installed)\n",
+                      Path(self.records()[0]["log"]).read_text())
         self.assertEqual(self.records()[0]["failed"], ["test_sample::test_breaks"])
+
+    @unittest.skipIf(importlib.util.find_spec("xdist") is None, "pytest-xdist is not installed")
+    def test_the_workers_the_arguments_set_are_what_the_records_name(self):
+        cases = (  # (arguments, mode, workers, serial_reason)
+            (["-n", "0"], "serial", 0, "-n in the arguments is 0"),
+            (["-n0"], "serial", 0, "-n in the arguments is 0"),
+            (["-n", "3"], "parallel", 3, None),
+            (["-n3"], "parallel", 3, None),
+            (["--numprocesses", "3"], "parallel", 3, None),
+            (["--numprocesses=3"], "parallel", 3, None),
+            (["-n", "2", "-n", "3"], "parallel", 3, None),  # argparse keeps the last
+            (["-p", "no:xdist"], "serial", 0, "-p no:xdist"),
+        )
+        for i, (given, mode, workers, reason) in enumerate(cases):
+            with self.subTest(arguments=given):
+                logs = self.logs / str(i)
+                result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", *given,
+                                         str(self.suite)], capture_output=True, text=True, cwd=REPO, timeout=120,
+                                        env=self.env(logs, NEVR_TEST_WORKERS="2"))
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                records = [json.loads(line) for line in (logs / "runs.jsonl").read_text().splitlines()]
+                for record in records:
+                    self.assertEqual((record["mode"], record["workers"], record["serial_reason"]),
+                                     (mode, workers, reason))
+                    # The runner adds no worker count of its own beside the one the arguments give.
+                    spellings = [a for a in record["cmd"] if a.startswith(("-n", "--numprocesses"))]
+                    self.assertEqual(len(spellings), len([a for a in given if a.startswith(("-n", "--numprocesses"))]))
+                log = Path(records[-1]["log"]).read_text()
+                self.assertIn(f"test-tools: workers {workers} ({mode}", log)
+                # What pytest really ran: the failure section names its worker only with workers.
+                self.assertEqual("[gw" in log, workers > 0, log)
+
+    def test_the_workers_are_counted_by_the_runner_not_left_as_a_word(self):
+        module = load_script()
+        with mock.patch.dict(os.environ, {"PYTEST_XDIST_AUTO_NUM_WORKERS": "5"}):
+            plan = module.plugin_plan(["-n", "auto"], {}, 2)
+        self.assertEqual((plan["mode"], plan["workers"]), ("parallel", 5))
+        self.assertNotIn("-n", plan["flags"])  # the argument carries it
+        plan = module.plugin_plan([], {}, "logical")
+        self.assertEqual(plan["flags"][-2:], ["-n", str(plan["workers"])])
+
+    def test_a_worker_count_xdist_will_not_give_is_left_to_xdist_and_recorded(self):
+        module = load_script()
+        with mock.patch("xdist.plugin.pytest_xdist_auto_num_workers", side_effect=TypeError("changed")):
+            plan = module.plugin_plan([], {}, "logical")
+        self.assertEqual(plan["flags"][-2:], ["-n", "logical"])
+        self.assertEqual((plan["mode"], plan["workers"]), ("parallel", "logical"))
+        self.assertIn("TypeError", plan["serial_reason"])
+        with mock.patch("xdist.plugin.pytest_xdist_auto_num_workers", return_value=0):
+            plan = module.plugin_plan([], {}, "auto")
+        self.assertEqual((plan["mode"], plan["workers"], plan["serial_reason"]),
+                         ("serial", 0, "xdist counted 0 workers"))
 
     def test_a_workers_setting_that_is_not_a_count_refuses_the_run(self):
         for i, value in enumerate(("many", "-1", "1.5", "\u00b2")):
@@ -504,14 +576,22 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.logs.iterdir()), ["runs.jsonl"])
 
     def start_slow(self, body: str = SLOW_SUITE, *extra_args: str, preexec_fn=None, merge_stderr=False,
-                   **extra_env: str):
-        """Start the wrapper in its own session on a suite that waits; return it once the test runs."""
+                   prelude: str = "", **extra_env: str):
+        """Start the wrapper in its own session on a suite that waits; return it once the test runs.
+
+        With a `prelude` the wrapper runs through a driver that applies it first (see `run_driver`)."""
         slow = self.write_suite("slow", body)
         self.marker = self.root / "marker"
         self.go = self.root / "go"
+        self.handled = self.root / "handled"
         env = self.env(self.logs, RUN_TOOL_TESTS_MARKER=str(self.marker), RUN_TOOL_TESTS_GO=str(self.go),
-                       **extra_env)
-        argv = [sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", *extra_args, str(slow)]
+                       RUN_TOOL_TESTS_HANDLED=str(self.handled), **extra_env)
+        entry = str(SCRIPT)
+        if prelude:
+            driver = self.root / "driver.py"
+            driver.write_text(DRIVER.format(script=str(SCRIPT), prelude=prelude), encoding="utf-8")
+            entry = str(driver)
+        argv = [sys.executable, entry, "-q", "-p", "no:cacheprovider", *extra_args, str(slow)]
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE, text=True,
                                 cwd=REPO, env=env, start_new_session=True, preexec_fn=preexec_fn)
@@ -544,6 +624,16 @@ class RunToolTestsRecord(unittest.TestCase):
             if time.monotonic() > deadline:
                 self.fail(f"gave up after {timeout} s waiting for {what}")
             time.sleep(0.02)
+
+    def wait_for_handled(self, count: int) -> None:
+        """Wait until the runner has handled `count` signals: its handler (see HANDLED_PRELUDE) writes a line each."""
+        def handled() -> bool:
+            try:
+                return len(self.handled.read_text().splitlines()) >= count
+            except FileNotFoundError:
+                return False
+
+        self.wait_until(handled, f"the runner to handle signal {count}")
 
     @staticmethod
     def children_of(pid: int) -> list:
@@ -619,9 +709,11 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertIn("KeyboardInterrupt", Path(record["log"]).read_text())
 
     def test_a_second_signal_kills_pytest_and_is_still_recorded(self):
-        proc = self.start_slow(STUBBORN_SUITE)
+        # Every signal is a new event here (no repeat window): the window is tested by
+        # test_a_signal_is_a_repeat_only_within_a_second_of_the_one_before_it.
+        proc = self.start_slow(STUBBORN_SUITE, prelude=HANDLED_PRELUDE.format(repeat=0))
         os.killpg(proc.pid, signal.SIGINT)
-        time.sleep(1.5)  # further apart than a repeat of the same signal
+        self.wait_for_handled(1)
         self.assertIsNone(proc.poll(), "the stubborn test stopped on the first SIGINT")
         os.killpg(proc.pid, signal.SIGINT)
         record = self.assert_interrupted(proc, "SIGINT", 130, ["SIGINT", "SIGINT"])
@@ -858,9 +950,9 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertFalse(record["interrupted"])
 
     def test_the_exit_code_names_the_first_of_two_different_signals(self):
-        proc = self.start_slow(STUBBORN_SUITE)
+        proc = self.start_slow(STUBBORN_SUITE, prelude=HANDLED_PRELUDE.format(repeat=0))
         proc.send_signal(signal.SIGHUP)
-        time.sleep(1.5)
+        self.wait_for_handled(1)
         self.assertIsNone(proc.poll(), "the stubborn test stopped on the first SIGINT")
         proc.send_signal(signal.SIGTERM)
         record = self.assert_interrupted(proc, "SIGHUP", 128 + signal.SIGHUP, ["SIGHUP", "SIGTERM"])
@@ -868,10 +960,12 @@ class RunToolTestsRecord(unittest.TestCase):
 
     def test_the_same_signal_twice_at_once_is_one_interrupt(self):
         # `just` passes on a SIGTERM its process group also got: the script sees it twice.
-        proc = self.start_slow(STUBBORN_SUITE, NEVR_TEST_INTERRUPT_GRACE_S="3")
+        # An hour-long repeat window: the second signal is a repeat however long the first took to be handled.
+        proc = self.start_slow(STUBBORN_SUITE, prelude=HANDLED_PRELUDE.format(repeat=3600),
+                               NEVR_TEST_INTERRUPT_GRACE_S="3")
         sent = time.monotonic()
         proc.send_signal(signal.SIGTERM)
-        time.sleep(0.2)  # two pending SIGTERMs would merge into one before delivery
+        self.wait_for_handled(1)  # two pending SIGTERMs would merge into one before delivery
         proc.send_signal(signal.SIGTERM)
         record = self.assert_interrupted(proc, "SIGTERM", 128 + signal.SIGTERM, ["SIGTERM", "SIGTERM"])
         # Not escalated: the stubborn test outlived the second signal and was killed at the grace period.
