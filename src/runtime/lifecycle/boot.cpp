@@ -1,3 +1,4 @@
+#include "runtime/combat/combat.h"
 #include "runtime/lifecycle/boot.h"
 #include "runtime/lifecycle/bridge_policy.h"
 #include "runtime/lifecycle/cli.h"
@@ -753,6 +754,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // after InstallResourceOverride, which created the registry.
   nevr_netgun_bullet_ids::Install();
 
+  // EchoCombat's balance values: a transform of the player's own stock mp_weapon_settings (runtime/combat/combat.h). It
+  // reads combat.balance when the resource first loads, after config.yaml is readable.
+  nevr_combat::RegisterBalance();
+
   // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
   // posted to the game service when network.invite_codes is on (the service below; on unless the config says off), and so is
   // a create; the answer is written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every
@@ -889,6 +894,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     Log(EchoVR::LogLevel::Info, "[NEVR.BOOT] runtime provenance=%s version=%s reason=\"%s\"", provenance.word,
         provenance.version.c_str(), provenance.reason.c_str());
   }
+
+  // EchoCombat, built in (runtime/combat/combat.h): after every hook of the runtime's own is in place, so its write gate
+  // sees them all, and where Cat's three plugins loaded before.
+  nevr_combat::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), g_isServer != FALSE);
 
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();

@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "src" / "runtime"
 EXEMPT = {RUNTIME / "hook" / "process_memory.h"}
 CALL = re.compile(r"(?<![\w:])ProcessMemcpy\s*\(")
-EXPECTED_ARGUMENTS = 4
+# dest, src, n, error; a fifth names the writer in the registry of written ranges (write_ranges.h, #2242).
+EXPECTED_ARGUMENTS = (4, 5)
 
 
 def code_only(text: str) -> str:
@@ -80,7 +81,7 @@ def violations_in(text: str) -> list[tuple[int, int]]:
     found = []
     for match in CALL.finditer(code):
         count = argument_count(code, match.end() - 1)
-        if count != EXPECTED_ARGUMENTS:
+        if count not in EXPECTED_ARGUMENTS:
             found.append((code.count("\n", 0, match.start()) + 1, count))
     return found
 

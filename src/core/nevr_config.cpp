@@ -231,12 +231,19 @@ void ValidateTopLevel(const YAML::Node& root) {
   }
 }
 
+// The PC's EchoCombat keys in the combat section (src/runtime/combat/combat_settings.h, #2242): its group switches and
+// `settings`, which holds Cat's ini values.
+std::map<std::string, std::set<std::string>> WithPcCombatKeys(std::map<std::string, std::set<std::string>> sections) {
+  sections["combat"].insert({"drone", "overcharge", "medigun", "veil", "match_control", "balance", "clean_exit", "settings"});
+  return sections;
+}
+
 // The keys each known section holds, for every reader of either build (#583). The PC reads a key through
 // service_map.cpp (FlatKeyToYamlPath) or a direct getter; the Quest reads its keys through quest_config.cpp.
 // A key missing here is ignored by the reader, so it is counted as unknown. Keep it in step with those readers:
 // test_service_map (MigratedYamlPaths) and test_nevr_config (the Quest list) fail when a read key is missing.
 const std::map<std::string, std::set<std::string>>& KnownSections() {
-  static const std::map<std::string, std::set<std::string>> kSections = {
+  static const std::map<std::string, std::set<std::string>> kSections = WithPcCombatKeys({
       {"identity", {"discord_id"}},
       {"auth", {"http_uri", "http_key", "server_key", "password"}},
       {"services",
@@ -253,7 +260,7 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override", "frame_stats"}},
       {"graphics", {"texture_quality", "hand_flip"}},
       {"combat", {"force", "heaps", "memsys", "sendguard", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "pfx", "pfxtev"}},
-  };
+  });
   return kSections;
 }
 

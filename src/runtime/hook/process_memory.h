@@ -1,5 +1,6 @@
 #pragma once
 #include "core/pch.h"
+#include "runtime/hook/write_ranges.h"
 
 /// <summary>
 /// Copies memory from a source buffer of a given size to a destination process memory buffer,
@@ -53,9 +54,14 @@ inline bool ProcessMemcpyWithFlush(PVOID pDestAddr, const void* pSrcAddr, size_t
       static_cast<Flush&&>(flush));
 }
 
-inline bool ProcessMemcpy(PVOID pDestAddr, const void* pSrcAddr, size_t szSrcSize, DWORD* pOutError = nullptr) {
-  return ProcessMemcpyWithFlush(pDestAddr, pSrcAddr, szSrcSize, pOutError,
-                                [](HANDLE process, LPCVOID address, SIZE_T size) {
-                                  return FlushInstructionCache(process, address, size);
-                                });
+/// Every range it wrote is recorded under `owner` (write_ranges.h), so a later writer can refuse to write over it
+/// (nevr_hook_guard::FindOverlap).
+inline bool ProcessMemcpy(PVOID pDestAddr, const void* pSrcAddr, size_t szSrcSize, DWORD* pOutError = nullptr,
+                          const char* owner = "ProcessMemcpy") {
+  const bool ok = ProcessMemcpyWithFlush(pDestAddr, pSrcAddr, szSrcSize, pOutError,
+                                         [](HANDLE process, LPCVOID address, SIZE_T size) {
+                                           return FlushInstructionCache(process, address, size);
+                                         });
+  if (ok) nevr_write_ranges::Record(pDestAddr, szSrcSize, owner);
+  return ok;
 }
