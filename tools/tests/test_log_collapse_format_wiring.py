@@ -38,7 +38,18 @@ class CollapseFormatWiring(unittest.TestCase):
     def test_the_filter_hands_the_limiter_the_game_line_whole(self):
         hook = extract_braced_function(self.filter, "static void __fastcall hook_PrintfImpl(")
         self.assertIn("g_rate.Check(buf, emit_len,", hook)
-        self.assertLess(hook.index("ShouldSuppress(buf, level)"), hook.index("g_rate.Check(buf, emit_len,"))
+        self.assertLess(hook.index("ShouldSuppress(buf, level, &entry)"), hook.index("g_rate.Check(buf, emit_len,"))
+
+    def test_a_suppressed_line_is_counted_under_its_entry_in_the_limiter(self):
+        # #2214: the deleting branch hands the limiter the matched entry; it never just bumps the total and returns.
+        hook = extract_braced_function(self.filter, "static void __fastcall hook_PrintfImpl(")
+        branch = hook[hook.index("ShouldSuppress(buf, level, &entry)"):hook.index("int emit_len")]
+        self.assertIn("g_rate.CountSuppressed(entry,", branch)
+        self.assertIn("EmitLine(LOG_LEVEL_INFO, summary", branch)
+        should = extract_braced_function(self.filter, "static bool ShouldSuppress(")
+        self.assertEqual(should.count("return true;"), 3, "level gate, channel, pattern: only the last two name an entry")
+        self.assertEqual(should.count("*entry = ch.c_str()") + should.count("*entry = pat.c_str()"), 2)
+        self.assertIn("suppressed count=%u", self.limiter)
 
     def test_the_rule_table_names_the_script_format_and_is_a_listed_source(self):
         rules = strip_comments(self.rules)
