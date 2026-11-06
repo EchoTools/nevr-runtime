@@ -211,58 +211,6 @@ void ARequestAboveTheLevelRateInALevelIsKept() {
   QCHECK(rr::RateFor(q2, true, 90.0f) == 72.0f);
 }
 
-// ---- the levels ---------------------------------------------------------------------------------------------------------------
-
-void EveryLevelIdIsTheCSymbol64OfItsName() {
-  const char* lobbies[] = {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b2_lowspec", "mpl_lobby_b_combat", "mpl_lobby_b_arena", "mpl_lobby_b_social"};
-  const char* combats[] = {"mpl_combat_dyson", "mpl_combat_combustion", "mpl_combat_fission", "mpl_combat_gauss"};
-  const char* arenas[] = {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a"};
-  std::uint64_t level = 0;
-  for (const char* name : lobbies) {
-    ClearGame();
-    PutLevel(0, 0, CSymbol64Hash(name));
-    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kCombatOrLobby && level == CSymbol64Hash(name));
-    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), false, &level) == rr::LevelKind::kNone);  // the lobby rule off: not a level of the rule
-  }
-  for (const char* name : combats) {
-    ClearGame();
-    PutLevel(0, 0, CSymbol64Hash(name));
-    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), false, &level) == rr::LevelKind::kCombatOrLobby && level == CSymbol64Hash(name));
-    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kCombatOrLobby);
-  }
-  for (const char* name : arenas) {
-    ClearGame();
-    PutLevel(0, 0, CSymbol64Hash(name));
-    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kEchoArena && level == CSymbol64Hash(name));
-    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), false, &level) == rr::LevelKind::kNone);  // decides only under the lobby rule
-  }
-}
-
-void AnEchoArenaLevelWinsOverALobbyLevelAndTheGamespaceMustBeTheGames() {
-  std::uint64_t level = 0;
-  ClearGame();
-  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_social"));
-  PutLevel(1, 0, CSymbol64Hash("mpl_arena_a"));  // in the second table
-  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kEchoArena);
-  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), false, &level) == rr::LevelKind::kNone);  // no lobby rule: the lobby level does not count
-  // A gamespace some other game owns is not this game's level.
-  ClearGame();
-  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"), /*owner=*/0xdead0000);
-  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kNone && level == 0);
-  // An unknown level, an empty game and an absurd count are no level.
-  ClearGame();
-  PutLevel(0, 0, CSymbol64Hash("mpl_somewhere_else"));
-  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kNone);
-  ClearGame();
-  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kNone);
-  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
-  g_game.words[kCount0 / 8] = 65;  // more than the 64 the rule trusts
-  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kNone);
-  // An unreadable game is no level (fail closed): the read never faults.
-  QCHECK(rr::ClassifyLoadedLevels(0x1000, true, &level) == rr::LevelKind::kNone);
-  QCHECK(rr::ClassifyLoadedLevels(0, true, &level) == rr::LevelKind::kNone);
-}
-
 // ---- the owner, release and variants ------------------------------------------------------------------------------------------
 
 // The release case: combat does not run here, so the answer is the game's own rate whatever is loaded and nothing is logged, kept or
@@ -493,6 +441,33 @@ void TheCombatOnlyModeDoesNotCountTheLobby() {
   Done();
 }
 
+// An arena match on the combat APK: the APK is active, but the loaded level is an Echo Arena level, so the game's own rate stands whatever it
+// asks, with the lobby key on or off, and nothing is re-asked. Combat then arena again: the rate comes back in both directions.
+void AnArenaMatchOnTheCombatApkKeepsTheGamesRate() {
+  for (const bool lobby : {true, false}) {
+    World(bv::Variant::kCombat, Keys(true, lobby, true), 0);
+    rr::InstallNormal();
+    PutLevel(0, 0, CSymbol64Hash("mpl_arena_a"));
+    QCHECK(GameAsks(120.0f) == 120.0f);
+    Frame();
+    Frame();
+    QCHECK(g_asks.empty());
+    QCHECK(GameAsks(120.0f) == 120.0f);  // asked again mid-match: still the game's
+    QCHECK(!rr::CurrentStats().inLevel && rr::CurrentStats().switches == 0);
+    // Arena to combat: 90; combat back to arena: the session rate, in both directions.
+    PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+    Frame();
+    QCHECK(g_asks.size() == 1U && g_asks[0].hz == 90.0f);
+    QCHECK(GameAsks(120.0f) == 90.0f);
+    PutLevel(0, 0, CSymbol64Hash("mpl_arena_b"));
+    Frame();
+    QCHECK(g_asks.size() == 2U && g_asks[1].hz == 120.0f);  // a combat map unloaded for an arena level: the rate comes back
+    QCHECK(GameAsks(120.0f) == 120.0f);
+    QCHECK(!rr::CurrentStats().inLevel);
+    Done();
+  }
+}
+
 // The gate is the owner's first word, not only the release's absence of a published rule: with the rule published and a level loaded, a
 // process where combat is not active answers the game's own rate and writes nothing.
 void TheGateComesBeforeThePublishedRule() {
@@ -596,8 +571,6 @@ void TheProductionReaskCallsTheWordNowInTheSlot() {
 int main() {
   TheRuleFollowsItsThreeKeysAndTheHeadset();
   ARequestAboveTheLevelRateInALevelIsKept();
-  EveryLevelIdIsTheCSymbol64OfItsName();
-  AnEchoArenaLevelWinsOverALobbyLevelAndTheGamespaceMustBeTheGames();
   ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched();
   AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined();
   TheInstallLineFollowsTheKeysAndTheHeadset();
@@ -609,6 +582,7 @@ int main() {
   TheCombatOnlyModeDoesNotCountTheLobby();
   TheProductionReaskCallsTheWordNowInTheSlot();
   TheGateComesBeforeThePublishedRule();
+  AnArenaMatchOnTheCombatApkKeepsTheGamesRate();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "refresh_rate_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

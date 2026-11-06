@@ -61,6 +61,7 @@ PROGRAMS = {
     "combat": (
         "combat_active_test",
         "combat_install_test",
+        "combat_level_test",
         "combat_tick_test",
         "equip_refire_test",
         "match_tag_default_test",

@@ -10,8 +10,12 @@
  *     (combat_install.h, quest_config.h CombatConfig);
  *   - the headset: a Quest 2 or not (`quest2`). KNOWN-WRONG #2037: this file reads `ro.product.device` itself (`ReadDeviceIsQuest2`),
  *     which ADR 0031 decision 4 reserves to the identity step; it takes the headset profile from that step when #2037 lands;
- *   - the loaded levels (`level`, the deciding level's CSymbol64): a combat map or a lobby level asks for the level rate, an Echo Arena
- *     level keeps the session rate and wins over a lobby level still loaded during a transition.
+ *   - the loaded levels (`level`, the deciding level's CSymbol64, from combat_level.h): a combat map or a lobby level asks for the level rate, an
+ *     Echo Arena level keeps the session rate and wins over a lobby level still loaded during a transition.
+ *
+ * Arena (same APK). Arena and combat run on the same APK, so the rule is scoped by the loaded level, not by the APK: in an Echo Arena match the
+ * game's own rate stands, and a player who leaves combat for arena gets the session rate back at the tick's next look. The social lobby is
+ * neither: it asks for the level rate unless `refresh_rate_lobby` is off.
  *
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only: with `combat::Active()` false `Choose` answers the game's own rate,
  * `Note` writes nothing and no tick is registered, so the release APK, whose base carries the reference build's own combat modules,
@@ -49,6 +53,7 @@
 #include <cstdint>
 
 #include "quest/combat/combat_install.h"
+#include "quest/combat/combat_level.h"
 #include "quest/sentinel/got_hook.h"
 
 namespace nevr_quest::combat::refresh_rate {
@@ -70,17 +75,9 @@ struct Rule {
 };
 Rule Decide(const Inputs& inputs) noexcept;
 
-// What the loaded gamespaces decide: a combat map (or, with `lobby`, a social-lobby level) asks for the level rate; with `lobby`, an
-// Echo Arena level wins and keeps the session rate.
-enum class LevelKind { kNone, kCombatOrLobby, kEchoArena };
-
 // The rate to send for a request of `askedHz`: `rule.levelHz` when the rule is on, a level of it is loaded (`inLevel`) and the request
 // is above the level rate; `askedHz` otherwise (pure).
 float RateFor(const Rule& rule, bool inLevel, float askedHz) noexcept;
-
-// What the loaded levels of `game` decide, `level` getting the deciding level's CSymbol64 (or 0). Reads with process_vm_readv; a read
-// that fails is no level (fail closed).
-LevelKind ClassifyLoadedLevels(std::uintptr_t game, bool lobby, std::uint64_t* level) noexcept;
 
 // The rate the render-configuration handler calls vrapi_SetDisplayRefreshRate with. `ovr` is the pointer the game passed.
 float Choose(void* ovr, float askedHz) noexcept;

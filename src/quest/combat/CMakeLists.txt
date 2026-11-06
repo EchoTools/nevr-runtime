@@ -8,6 +8,7 @@
 add_library(nevr_quest_combat STATIC
   combat_active.cpp
   combat_install.cpp
+  combat_level.cpp
   combat_tick.cpp
   equip_refire.cpp
   match_tags.cpp

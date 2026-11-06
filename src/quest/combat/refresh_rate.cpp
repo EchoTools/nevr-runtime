@@ -13,8 +13,8 @@
 #endif
 
 #include "quest/combat/combat_active.h"
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
-#include "quest/combat/safe_read.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/pinned_targets.h"
@@ -23,21 +23,6 @@ namespace nevr_quest::combat::refresh_rate {
 
 namespace {
 
-// mpl_combat_dyson / _combustion / _fission / _gauss: the level CSymbol64 a gamespace holds at +0x58.
-constexpr std::uint64_t kCombatLevels[4] = {0x43e2da7914642604ULL, 0x42670f2bed45703cULL, 0xdf5ca7b7dfa383d4ULL, 0x43e2da7a0c623a19ULL};
-// mpl_lobby_b / _b2 / _b2_lowspec / _b_combat / _b_arena / _b_social: the social lobby. Each is EchoVR::CSymbol64Hash of its name
-// (sdk/include/nevr/symbol_hash.h), checked by refresh_rate_test.
-constexpr std::uint64_t kLobbyLevels[6] = {0x5763ceff4e96bc48ULL, 0xd09afd15b1c75c04ULL, 0x05361c73bb73db19ULL,
-                                           0xcb9977f7fc2b4526ULL, 0x6daa00a6d33d44b7ULL, 0xcb9967f7f220453eULL};
-// mpl_arena_a / _a_lowspec / _b, mpl_tutorial_a: the Echo Arena game. Under the lobby rule an arena level keeps the session rate and wins
-// over a lobby level still loaded during a transition.
-constexpr std::uint64_t kEchoArenaLevels[4] = {0x576ed3f8428ebc4bULL, 0x7691d78d414c5701ULL, 0x576ed3f8428ebc48ULL, 0x3f20b99c97955721ULL};
-// CR15Game's two gamespace tables {sym, gs*} (16-byte rows) and their counts, in the pinned build.
-constexpr std::uintptr_t kTables[2][2] = {{0x1f48, 0x1f78}, {0x1f88, 0x1fb8}};
-constexpr std::uint64_t kMaxGamespaces = 64;
-constexpr std::uintptr_t kRowGamespace = 8;      // a table row's gamespace pointer
-constexpr std::uintptr_t kGamespaceOwner = 0x8;  // a gamespace's CR15Game
-constexpr std::uintptr_t kGamespaceLevel = 0x58;  // a gamespace's level CSymbol64
 constexpr double kLookEverySeconds = 0.5;
 
 // The rule, published once by the normal step; read by the handler (any thread) and the tick (the game thread).
@@ -66,14 +51,6 @@ std::atomic<double (*)() noexcept> g_clock{nullptr};
 
 long ThisThread() noexcept { return static_cast<long>(syscall(SYS_gettid)); }
 bool IsOwnReask() noexcept { return g_reaskThread.load(std::memory_order_acquire) == ThisThread(); }
-
-template <std::size_t N>
-bool In(std::uint64_t level, const std::uint64_t (&set)[N]) noexcept {
-  for (const std::uint64_t v : set) {
-    if (level == v) return true;
-  }
-  return false;
-}
 
 double Now() noexcept {
   const auto clock = g_clock.load(std::memory_order_acquire);
@@ -157,31 +134,6 @@ float RateFor(const Rule& rule, bool inLevel, float askedHz) noexcept {
   return rule.on && inLevel && askedHz > rule.levelHz ? rule.levelHz : askedHz;
 }
 
-LevelKind ClassifyLoadedLevels(std::uintptr_t game, bool lobby, std::uint64_t* level) noexcept {
-  std::uint64_t hit = 0;
-  for (const auto& table : kTables) {
-    bool ok = true;
-    const auto rows = SafeRead<std::uintptr_t>(game + table[0], &ok);
-    const auto count = SafeRead<std::uint64_t>(game + table[1], &ok);
-    if (!ok || rows == 0 || count > kMaxGamespaces) continue;
-    for (std::uint64_t i = 0; i < count; ++i) {
-      bool rowOk = true;
-      const auto gamespace = SafeRead<std::uintptr_t>(rows + i * 16 + kRowGamespace, &rowOk);
-      if (!rowOk || gamespace == 0) continue;
-      if (SafeRead<std::uintptr_t>(gamespace + kGamespaceOwner, &rowOk) != game || !rowOk) continue;
-      const auto current = SafeRead<std::uint64_t>(gamespace + kGamespaceLevel, &rowOk);
-      if (!rowOk) continue;
-      if (lobby && In(current, kEchoArenaLevels)) {  // an Echo Arena level wins: the session rate
-        *level = current;
-        return LevelKind::kEchoArena;
-      }
-      if (hit == 0 && (In(current, kCombatLevels) || (lobby && In(current, kLobbyLevels)))) hit = current;
-    }
-  }
-  *level = hit;
-  return hit != 0 ? LevelKind::kCombatOrLobby : LevelKind::kNone;
-}
-
 float Choose(void* ovr, float askedHz) noexcept {
   if (!Active()) return askedHz;  // the release case: the game's own rate, nothing kept
   if (IsOwnReask()) return askedHz;  // the tick's re-ask is the answer already, not a request of the game's
@@ -250,8 +202,8 @@ void Tick(std::uintptr_t game) noexcept {
   void* const ovr = g_ovr.load(std::memory_order_acquire);
   if (session <= low || ovr == nullptr) return;  // no request seen yet, or nothing above the level rate to lower
   std::uint64_t level = 0;
-  const LevelKind kind = ClassifyLoadedLevels(game, g_lobby.load(std::memory_order_acquire), &level);
-  const bool in = kind == LevelKind::kCombatOrLobby;
+  const level::Kind kind = level::Classify(game, g_lobby.load(std::memory_order_acquire), &level);
+  const bool in = kind == level::Kind::kCombatOrLobby;
   if (in == g_inLevel.load(std::memory_order_acquire)) return;
   g_inLevel.store(in, std::memory_order_release);
   const float rate = in ? low : session;
@@ -269,7 +221,7 @@ void Tick(std::uintptr_t game) noexcept {
                        {"rc", result},
                        {"level", levelText},
                        {"why", in ? "combat or lobby level loaded"
-                               : kind == LevelKind::kEchoArena ? "echo arena level loaded: session rate"
+                               : kind == level::Kind::kEchoArena ? "echo arena level loaded: session rate"
                                                                : "no combat or lobby level: session rate"},
                        {"mode", ModeName()},
                        {"quest2", g_quest2.load(std::memory_order_relaxed) ? 1 : 0}});

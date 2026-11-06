@@ -108,7 +108,6 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_WALLFIRE",
         "wiring.wiring_caps_LEVELNAME",
         "wiring.wiring_caps_T26",
-        "wiring.wiring_caps_HZ_MATCH90",
         "wiring.wiring_caps_GATE_LINK",
         "wiring.wiring_caps_GATE_PERM",
         "wiring.wiring_caps_GATE_BOTS",

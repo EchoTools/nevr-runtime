@@ -31,7 +31,7 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # not_started record, and the `combat_config` line.
 nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
-      src/quest/sentinel/build_variant.cpp src/quest/combat/combat_tick.cpp src/quest/combat/refresh_rate.cpp)
+      src/quest/sentinel/build_variant.cpp src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
 # CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
 # 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
@@ -53,11 +53,16 @@ nevr_ht_test(equip_refire_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${
 nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   INCS src/quest/plugins/q15t/src
   SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_tick.cpp src/quest/combat/combat_install.cpp
-      src/quest/combat/combat_active.cpp src/quest/combat/refresh_rate.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/combat_active.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/sentinel/build_variant.cpp
       src/quest/plugins/q15t/src/game_tick.cpp src/quest/plugins/q15t/src/import_hook.cpp src/quest/plugins/q15t/src/got_swap.cpp
       src/quest/plugins/q15t/src/safe_read.cpp src/quest/plugins/q15t/src/plugin_log.cpp)
 # The refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3): the decision, the levels, the keys, the session from the arena to a
 # combat map and back through the tick, the release case (the game's own rate, nothing logged or registered).
 nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_tick.cpp
+  SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_tick.cpp
       src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/sentinel/build_variant.cpp)
+# What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, an
+# Echo Arena level and the social lobby, each id checked against the CSymbol64 of its name; an arena level wins; a gamespace of another game, an
+# absurd count and an unreadable game are no level.
+nevr_ht_test(combat_level_test GROUP combat ${_cf} TIMEOUT 120
+  SRC src/quest/tests/combat_level_test.cpp src/quest/combat/combat_level.cpp)
