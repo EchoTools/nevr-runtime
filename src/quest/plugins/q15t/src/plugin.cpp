@@ -13,8 +13,6 @@
 #include "droneguard.h"
 #include "dronekill.h"
 #include "dronemuzzle.h"
-#include "ec.h"
-#include "ecfx.h"
 #include "nevr/plugin_interface.h"
 #include "fxtrail.h"
 #include "game_tick.h"
@@ -83,12 +81,6 @@
 #ifndef Q15T_IMPACTSND
 #define Q15T_IMPACTSND 0
 #endif
-#ifndef Q15T_EC
-#define Q15T_EC 0
-#endif
-#ifndef Q15T_ECFX  // needs Q15T_EC
-#define Q15T_ECFX 0
-#endif
 #ifndef Q15T_DRONEKILL
 #define Q15T_DRONEKILL 0
 #endif
@@ -136,20 +128,11 @@
 NEVR_DECLARE_SUPPORTED_BUILD_IDS(Q15T_BUILD_ID);
 
 // What this binary was compiled with, as one string in .rodata: `just build-quest-q15t` reads it back from the built library and
-// refuses a build whose defaults are not the shipped ones (a stale CMake cache once built a library with the ec words empty).
-#ifdef Q15T_EC_DEFAULT_WORDS
-#define Q15T_MARK_EC_WORDS Q15T_EC_DEFAULT_WORDS
-#else
-#define Q15T_MARK_EC_WORDS ""
-#endif
-#ifndef Q15T_ECFX_DEFAULT_ON
-#define Q15T_ECFX_DEFAULT_ON 0
-#endif
+// refuses a build whose defaults are not the shipped ones.
 #define Q15T_MARK_STR2(x) #x
 #define Q15T_MARK_STR(x) Q15T_MARK_STR2(x)
 extern "C" __attribute__((used, retain, visibility("hidden"))) const char q15t_config_marker[] =
-    "q15t-config ec_words=[" Q15T_MARK_EC_WORDS "] ecfx_default_on=" Q15T_MARK_STR(Q15T_ECFX_DEFAULT_ON)
-    " levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " build_id=" Q15T_BUILD_ID;
+    "q15t-config levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " build_id=" Q15T_BUILD_ID;
 
 namespace {
 
@@ -195,12 +178,6 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_IMPACTSND
     "impactsnd "
-#endif
-#if Q15T_EC
-    "ec "
-#endif
-#if Q15T_ECFX
-    "ecfx "
 #endif
 #if Q15T_DRONEKILL
     "dronekill "
@@ -313,7 +290,7 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   if (Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
   // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), impactsnd (sound ids), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and
-  // shieldgamma (what is drawn), ecfx (rides ec).
+  // shieldgamma (what is drawn).
   if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_DRONEKILL) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
@@ -324,7 +301,6 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   if (Q15T_BVH) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;       // walls block line of sight, bullets and AI
   if (Q15T_WALLFIRE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // no shot through a wall
   if (Q15T_LEVELNAME) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the full-size global_mp loads
-  if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;  // EC network datagrams; tac-mod list; drone kill feed
   return caps;
 }
 
@@ -349,8 +325,8 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   [[maybe_unused]] const bool levelname_on = Q15T_LEVELNAME != 0 && !ModuleSwitchPresent("levelname.off");
   bool want_tick = false;
   [[maybe_unused]] const std::uintptr_t base = ctx->base_addr;
-  // The modules, in an order the docs fix: wallfire after bvh; ecfx, powerboost's net tick and dronekill's kill feed after ec;
-  // dronemuzzle after dronekill. Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
+  // The modules, in an order the docs fix: wallfire after bvh; dronemuzzle after dronekill (ec and ecfx are the runtime's,
+  // src/quest/combat/ec.h). Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
   // ReportModule puts its name and result in the init record. Nothing here changes what InitEx returns (see the end).
 #if Q15T_FXTRAIL
   ReportModule("fxtrail", InstallFxTrail(base));
@@ -383,17 +359,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #if Q15T_IMPACTSND
   ReportModule("impactsnd", InstallImpactSnd(base));
   AddModuleTick("impactsnd", &ImpactSndTick, &want_tick);  // the tick does nothing when the install was refused
-#endif
-  [[maybe_unused]] bool ec_on = false;
-#if Q15T_EC
-  {
-    const InstallResult r = InstallEc(base);
-    ReportModule("ec", r);
-    ec_on = r.status == SwapStatus::kOk;
-  }
-#endif
-#if Q15T_ECFX
-  ReportModule("ecfx", InstallEcfx(base));
 #endif
 #if Q15T_DRONEKILL
   {

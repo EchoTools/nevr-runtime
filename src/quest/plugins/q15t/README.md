@@ -24,14 +24,14 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, meshstep (`Q15T_MESHSTEP`, #1555), gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, shaderstep (#1553), instmodel, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), ec, ecfx, droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
+- On: fxtrail, voipdrop, custctx, meshstep (`Q15T_MESHSTEP`, #1555), gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, shaderstep (#1553), instmodel, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
   (`Q15T_T26`), and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
 - The three headset gates (party permissions, bot body, menu link) are not this plugin's: the runtime owns them
   (`src/quest/combat/headset_gates.h`). Their switches are the `combat:` keys `gate_perm`, `gate_bots`, `gate_link`, `gate_link_libs` in
   `config.yaml`; no kill file or data file switches any of the three gates. The bot-body gate acts only where this plugin's levelname is installed
   (it reads the game's LoadLevelName slot).
-- `ec` is on with the words `types=VPTO equip hide` (`Q15T_EC_DEFAULT_WORDS`), and `ecfx` is on (`Q15T_ECFX_DEFAULT_ON`),
-  with no switch file. A switch file in the plugin data directory still overrides the words.
+- `ec` and `ecfx` (the EC network client and NEUTRON effects) are the runtime's (`src/quest/combat/ec.h`), with the `combat:` keys `ec`,
+  `ec_words` and `ecfx` in `config.yaml`; the plugin's `ec.on`, `ec.off`, `ec_preset*.on` and `neutronfx.on` files are no longer read.
 - Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).
 - The refresh-rate rule (90 Hz, 72 on a Quest 2, on combat maps and in the lobby) and the clock levels are not this plugin's: the runtime
   owns them (`src/quest/combat/refresh_rate.h`, `src/quest/sentinel/clock_levels_hook.h`). The rule's switches are the `combat:` keys

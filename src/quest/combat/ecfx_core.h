@@ -1,12 +1,13 @@
-// The platform-free half of the `ecfx` module (docs/quest/q15t/modules/ec.md): EC 1.1.7's NEUTRON effects deferral over the queue on
-// re33_ec_page. A port of the source build's ecfx_core (upstream WallFxDue / SoundAgain).
-// Nothing here calls the game; the caller runs the planned entries.
+/* The platform-free half of the NEUTRON effects deferral (ecfx.h, docs/quest/combat/ec.md): EC 1.1.7's queue on re33_ec_page. A port of the
+ * reference build's `afk_ecfx_core.h`, whose rules are EchoCombat's DroneFix WallFxDue / SoundAgain (EchoCombat `c14c3e0a`
+ * `plugin/dronefix.cpp`; docs/quest/combat/ec.md cites the lines). Nothing here calls the game; the caller runs the planned entries.
+ * Built with -fno-exceptions, like every combat translation unit.
+ */
 #pragma once
 
 #include <cstdint>
 
-namespace q15t {
-namespace ecfx {
+namespace nevr_quest::combat::ecfx::core {
 
 // page offsets (PC rva 0x2104000 base): veil_fx FX_QUEUE_RVA 0x2104DA0 (6 x { u64 ctx, u64 word }), FX_DEFER_RVA 0x2104E20
 constexpr std::uint32_t kQueueOff = 0xda0, kGateOff = 0xe20;
@@ -116,5 +117,4 @@ struct Drain {
   }
 };
 
-}  // namespace ecfx
-}  // namespace q15t
+}  // namespace nevr_quest::combat::ecfx::core

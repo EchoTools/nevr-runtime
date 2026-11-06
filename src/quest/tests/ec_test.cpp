@@ -1,10 +1,24 @@
-// Host test of the `ec` module (src/quest/plugins/q15t/src/ec.cpp, src/quest/plugins/q15t/src/ec_core.h) against a fake libr15 image (an anonymous mapping holding the GOT words,
-// the WriteLog body and the tac-mod list pointer at the pinned vaddrs), a fake libc (scripted datagrams) and a fake clock. Real
-// SafeRead, real SwapWord, real InstallImportHook, real wrappers called THROUGH the swapped slot words as the game would.
+// Host test of the EC client (src/quest/combat/ec.cpp, ec_core.h, ec_targets.h; #2187) against a libr15 image built in memory (the relocations
+// of the five slots, the WriteLog body and its PLT stub at their pinned addresses, the tac-mod list word), the two platform libraries' images
+// (libpnsovr.so, libpnsrad.so: their WriteLogV slot, body and stub), a fake libc (scripted datagrams), a fake clock and a fake CR15Game (the
+// levels combat_level reads). Real GotHook, real thunks, the real handlers called THROUGH the slots as the game calls them.
+//
+// Moved from the q15t plugin's ec_test: the pure rules, the list hide, the wrappers, the net tick, the step, the hide and the selection keep
+// their assertions. What changed, necessarily: the fixture (an ELF image and the manager's install, not a slot swap; a slot's original is what
+// it held before the install, so the fakes are in the slots first), the lines (sentinel JSON records, `combat_ec_*`), the switch (`combat.ec` and
+// `combat.ec_words`, not files: the plugin's files are warned about), recvfrom / sendto refused for an implausible word (the manager checks a
+// libc slot for plausibility; a word inside libc that is not recvfrom is not caught, as before), WriteLogV's slot hooked in place of
+// WriteLog's (ec_targets.h says why: the game's WriteLog body is what calls the hook here, through a va_list), the platform libraries pinned
+// and hooked from the module-loaded observer, and the by-name lookup's own tests gone with it. New: the scope (arena: nothing consumed,
+// counted or ticked; the arena lobbies; the 250 ms cadence), the refusals' tokens, the observer install, a library mapped again.
+//
+// Built and run by `just test-quest-combat ec`.
 #include <dlfcn.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -16,13 +30,22 @@
 #include <string>
 #include <vector>
 
-#include "ec.h"
-#include "ec_core.h"
-#include "nevr/plugin_interface.h"
-#include "plugin_log.h"
+#include "nevr/symbol_hash.h"
+#include "quest/combat/combat_tick.h"
+#include "quest/combat/ec.h"
+#include "quest/combat/ec_core.h"
+#include "quest/combat/legacy_switch.h"
+#include "quest/integration/post_load.h"
+#include "quest/sentinel/ec_page.h"
+#include "quest/sentinel/hook_log.h"
+#include "quest/tests/combat_libr15_image.h"
 
-using namespace q15t;
-using namespace q15t::ecc;
+using namespace nevr_quest::combat::ec;
+using namespace nevr_quest::combat::ec::core;
+namespace pinned = sentinel::pinned;
+using combat_test::Image;
+using sentinel::LogLevel;
+using nevr_quest::combat::ModuleResult;
 
 static int g_fail = 0;
 #define CHECK(cond, ...)                                \
@@ -35,19 +58,18 @@ static int g_fail = 0;
     }                                                   \
   } while (0)
 
+// ---- the lines ----
 struct Line {
-  uint32_t level;
+  LogLevel level;
   std::string text;
 };
 static std::vector<Line> g_lines;
-static void FakeLog(const char* id, uint32_t level, const char* msg, const NevrLogField* f, uint32_t n) {
-  std::string t = std::string("plugin=") + id + " " + msg;
-  for (uint32_t i = 0; i < n; ++i) t += std::string(" ") + f[i].key + "=" + f[i].value;
-  g_lines.push_back({level, t});
-}
+static void Capture(LogLevel level, const char* line) { g_lines.push_back({level, line}); }
+// `needle` anywhere in a line (an event is `"event":"combat_ec_x"`); level -1: any, 1 Info, 2 Warning, 3 Error (the plugin test's numbers).
 static bool HasLine(const char* needle, int level = -1) {
+  const LogLevel want = level == 1 ? LogLevel::kInfo : level == 2 ? LogLevel::kWarn : LogLevel::kError;
   for (const auto& l : g_lines)
-    if (l.text.find(needle) != std::string::npos && (level < 0 || (int)l.level == level)) return true;
+    if (l.text.find(needle) != std::string::npos && (level < 0 || l.level == want)) return true;
   return false;
 }
 
@@ -55,32 +77,48 @@ static bool HasLine(const char* needle, int level = -1) {
 static uint64_t g_now100 = 1000ull * 10000;  // 1000 ms
 static uint64_t Clock() { return g_now100; }
 static void AdvanceMs(uint64_t ms) { g_now100 += ms * 10000; }
+static uint8_t* EcPage() { return sentinel::EcPage(); }
 
-// ---- the fake libr15 image ----
-constexpr uintptr_t kImgLo = 0xf88000, kImgHi = 0x37b0000;
-static uint8_t* g_img = nullptr;
-static uintptr_t g_base = 0;
-static uint64_t* W(uintptr_t vaddr) { return reinterpret_cast<uint64_t*>(g_img + (vaddr - kImgLo)); }
-
+// ---- the fakes the slots hold ----
 static std::uintptr_t FakeWriteLogVRet = 0x1234;
 static int g_v_level = -1;
 static unsigned long long g_v_flags = 0;
 static char g_v_text[512];
 static int g_v_calls = 0;
-static std::uintptr_t FakeWriteLogV(int level, unsigned long long flags, const char* fmt, va_list ap) {
+static int g_v_lib = -1;
+static std::uintptr_t LogVInto(int lib, int level, unsigned long long flags, const char* fmt, va_list ap) {
   ++g_v_calls;
+  g_v_lib = lib;
   g_v_level = level;
   g_v_flags = flags;
   vsnprintf(g_v_text, sizeof g_v_text, fmt, ap);
   return FakeWriteLogVRet;
 }
+static std::uintptr_t FakeWriteLogV(int level, unsigned long long flags, const char* fmt, va_list ap) { return LogVInto(0, level, flags, fmt, ap); }
+static std::uintptr_t FakeWriteLogVOvr(int level, unsigned long long flags, const char* fmt, va_list ap) { return LogVInto(1, level, flags, fmt, ap); }
+static std::uintptr_t FakeWriteLogVRad(int level, unsigned long long flags, const char* fmt, va_list ap) { return LogVInto(2, level, flags, fmt, ap); }
+
+// ---- the images ----
+static Image g_image, g_ovr, g_rad;
+static uintptr_t g_base = 0;
+static Pins g_pins = kPins;
+static LogLib g_libs[kLogLibs] = {kLogLib[0], kLogLib[1], kLogLib[2]};
+static uint64_t* W(uint64_t vaddr) { return reinterpret_cast<uint64_t*>(g_image.Slot(vaddr)); }
+static bool Lookup(const char* module, sentinel::ElfImage* out) {
+  Image* const img = std::strcmp(module, pinned::kLibR15) == 0 ? &g_image : std::strcmp(module, pinned::kPnsovr) == 0 ? &g_ovr
+                     : std::strcmp(module, pinned::kPnsrad) == 0 ? &g_rad : nullptr;
+  if (img == nullptr || !img->Present()) return false;
+  *out = img->Elf();
+  return true;
+}
+
 static int g_reload_calls = 0, g_unload_calls = 0;
 static uint32_t g_gen_seen_in_reload = 0;
 static void RealReload() {
   ++g_reload_calls;
-  g_gen_seen_in_reload = EcGearGenForTest();
+  g_gen_seen_in_reload = GearGenForTest();
   // re-entry through the gate on the same thread (a Reload that reaches Unload again) must not hang
-  if (g_reload_calls == 1) reinterpret_cast<void (*)()>(*W(kEcSlotUnloadEquip))();
+  if (g_reload_calls == 1) reinterpret_cast<void (*)()>(*W(kPins.unloadSlot))();
 }
 static void RealUnload() { ++g_unload_calls; }
 
@@ -181,32 +219,48 @@ static Dgram Plain(size_t n, uint32_t addr = 0x0a000001, uint16_t port = 6792) {
   return d;
 }
 
-static void DropImage() {
-  if (g_img != nullptr) munmap(g_img, kImgHi - kImgLo);
-  g_img = nullptr;
+// One log library's words: the 25-word WriteLog body (its own `bl`) and the PLT stub (`bad_body`: one word changed; `bad_stub`: the stub's ldr).
+static void PutLogWords(Image& img, const LogLib& lib, bool bad_body, bool bad_stub) {
+  for (std::size_t i = 0; i < kWriteLogWords; ++i)
+    img.Put<uint32_t>(lib.writeLogFn + 4 * i, i == kWriteLogBlIndex ? static_cast<uint32_t>(lib.blWord) : kWriteLogBody[i]);
+  if (bad_body) img.Put<uint32_t>(lib.writeLogFn + 4 * 7, kWriteLogBody[7] ^ 1);
+  for (std::size_t i = 0; i < 4; ++i) img.Put<uint32_t>(lib.stubAt + 4 * i, lib.stub[i]);
+  if (bad_stub) img.Put<uint32_t>(lib.stubAt + 4, lib.stub[1] ^ 0x400);
 }
-// bad: which slot value to corrupt (a bitmask of 1 recv, 2 send, 4 writelog body, 8 writelogv slot, 16 reload, 32 unload, 64 writelog slot)
+
+// A platform library's image: its WriteLogV JUMP_SLOT holding its own WriteLogV (the fake), the body and the stub.
+static void BuildPlatform(int i, unsigned bad = 0) {
+  Image& img = i == 1 ? g_ovr : g_rad;
+  LogLib& lib = g_libs[i];
+  img.Build({{kWriteLogVSymbol, lib.slot, false, false, kLogLib[i].fn}}, lib.buildId, true, lib.module, 0x600000);
+  const uintptr_t fake = reinterpret_cast<uintptr_t>(i == 1 ? &FakeWriteLogVOvr : &FakeWriteLogVRad);
+  lib.fn = fake - img.Base();
+  img.Put<uint64_t>(lib.slot, (bad & 1) ? 0x1234 : fake);
+  PutLogWords(img, lib, (bad & 2) != 0, false);
+}
+
+// bad: which word to corrupt (1 recv implausible, 2 send implausible, 4 writelog body, 8 writelogv slot, 16 reload, 32 unload, 64 the stub)
 static void BuildImage(unsigned bad = 0) {
-  DropImage();
-  void* m = mmap(nullptr, kImgHi - kImgLo, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-  if (m == MAP_FAILED) {
-    std::printf("mmap failed\n");
-    std::exit(2);
-  }
-  g_img = static_cast<uint8_t*>(m);
-  g_base = reinterpret_cast<uintptr_t>(g_img) - kImgLo;
-  *W(kEcSlotRecvfrom) = reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "recvfrom")) + ((bad & 1) ? 8 : 0);
-  *W(kEcSlotSendto) = reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "sendto")) + ((bad & 2) ? 8 : 0);
-  *W(kEcSlotWriteLog) = g_base + kEcFnWriteLog + ((bad & 64) ? 4 : 0);
-  *W(kEcSlotWriteLogV) = g_base + kEcFnWriteLogV + ((bad & 8) ? 4 : 0);
-  *W(kEcSlotReloadEquip) = g_base + kEcFnReloadEquip + ((bad & 16) ? 4 : 0);
-  *W(kEcSlotUnloadEquip) = g_base + kEcFnUnloadEquip + ((bad & 32) ? 4 : 0);
-  uint32_t* body = reinterpret_cast<uint32_t*>(W(kEcFnWriteLog));
-  for (int i = 0; i < 25; ++i) body[i] = kWriteLogBody[i];
-  body[21] = 0x97fd7a47;  // the real bl word (disassembly 1088c74: 477afd97 little-endian): any target
-  if (bad & 4) body[7] ^= 1;
+  g_image.Build({{kRecvfromSymbol, kPins.recvfromSlot, false, false, 0},
+                 {kSendtoSymbol, kPins.sendtoSlot, false, false, 0},
+                 {kWriteLogVSymbol, kLogLib[0].slot, false, false, kLogLib[0].fn},
+                 {kReloadSymbol, kPins.reloadSlot, false, false, kPins.reloadFn},
+                 {kUnloadSymbol, kPins.unloadSlot, false, false, kPins.unloadFn}});
+  g_base = g_image.Base();
+  g_pins = kPins;
+  g_pins.reloadFn = reinterpret_cast<uintptr_t>(&RealReload) - g_base;
+  g_pins.unloadFn = reinterpret_cast<uintptr_t>(&RealUnload) - g_base;
+  g_libs[0] = kLogLib[0];
+  g_libs[0].fn = reinterpret_cast<uintptr_t>(&FakeWriteLogV) - g_base;
+  *W(kPins.recvfromSlot) = (bad & 1) ? 0x1234 : reinterpret_cast<uintptr_t>(&FRecv);
+  *W(kPins.sendtoSlot) = (bad & 2) ? 0x1234 : reinterpret_cast<uintptr_t>(&FSend);
+  *W(kLogLib[0].slot) = reinterpret_cast<uintptr_t>(&FakeWriteLogV) + ((bad & 8) ? 4 : 0);
+  *W(kPins.reloadSlot) = reinterpret_cast<uintptr_t>(&RealReload) + ((bad & 16) ? 4 : 0);
+  *W(kPins.unloadSlot) = reinterpret_cast<uintptr_t>(&RealUnload) + ((bad & 32) ? 4 : 0);
+  PutLogWords(g_image, g_libs[0], (bad & 4) != 0, (bad & 64) != 0);
   BuildList(7, true);
-  *W(kEcTacModList) = reinterpret_cast<uintptr_t>(&g_list);
+  *W(kPins.tacModList) = reinterpret_cast<uintptr_t>(&g_list);
+  SetPinsForTest(&g_pins, g_libs);
 }
 
 static void ResetAll(unsigned bad = 0, const char* words = "types=VPTO equip hide") {
@@ -218,24 +272,36 @@ static void ResetAll(unsigned bad = 0, const char* words = "types=VPTO equip hid
   g_reload_calls = g_unload_calls = 0;
   g_v_calls = 0;
   g_now100 = 1000ull * 10000;
-  EcResetForTest();
-  SetEcNoThreadForTest(true);
-  SetEcClockForTest(&Clock);
-  SetEcDirForTest("");
+  ResetForTest();
+  nevr_quest::combat::tick::ResetForTest();
+  nevr_quest::integration::ClearModuleLoadedObserversForTest();
+  SetNoThreadForTest(true);
+  SetClockForTest(&Clock);
+  SetImageLookupForTest(&Lookup);
+  ForceScopeForTest(1);
+  g_ovr.Drop();
+  g_rad.Drop();
+  for (int i = 1; i < static_cast<int>(kLogLibs); ++i) g_libs[i] = kLogLib[i];
   BuildImage(bad);
   (void)words;
 }
+static ModuleResult InstallWords(const char* words) {
+  Switches sw;
+  sw.words = words;
+  const ModuleResult r = Install(sw);
+  RefreshScope(g_now100 / 10000);
+  return r;
+}
 static void InstallOk(const char* words = "types=VPTO equip hide") {
-  const InstallResult r = InstallEcWithWords(g_base, words);
-  CHECK(r.status == SwapStatus::kOk, "install failed: %s %s", StatusName(r.status), r.reason);
-  SetEcLibcForTest(&FRecv, &FSend);
-  SetEcLogVForTest(0, reinterpret_cast<uintptr_t>(&FakeWriteLogV));
-  SetEcGearRealForTest(0, &RealReload);
-  SetEcGearRealForTest(1, &RealUnload);
+  const ModuleResult r = InstallWords(words);
+  CHECK(r.installed, "install failed: %s", r.status);
 }
 
+using RecvFn = ssize_t (*)(int, void*, size_t, int, sockaddr*, socklen_t*);
+using SendFn = ssize_t (*)(int, const void*, size_t, int, const sockaddr*, socklen_t);
+using WriteLogVFn = std::uintptr_t (*)(int, unsigned long long, const char*, va_list);
 static ssize_t GameRecv(int fd, void* buf, size_t len, int flags, sockaddr* from, socklen_t* fl) {
-  auto fn = reinterpret_cast<EcRecvfromFn>(*W(kEcSlotRecvfrom));
+  auto fn = reinterpret_cast<RecvFn>(*W(kPins.recvfromSlot));
   return fn(fd, buf, len, flags, from, fl);
 }
 static ssize_t GameSend(int fd, const void* buf, size_t len, uint32_t addr, uint16_t port) {
@@ -243,13 +309,19 @@ static ssize_t GameSend(int fd, const void* buf, size_t len, uint32_t addr, uint
   a.sin_family = AF_INET;
   a.sin_addr.s_addr = addr;
   a.sin_port = port;
-  auto fn = reinterpret_cast<EcSendtoFn>(*W(kEcSlotSendto));
+  auto fn = reinterpret_cast<SendFn>(*W(kPins.sendtoSlot));
   return fn(fd, buf, len, 0, reinterpret_cast<sockaddr*>(&a), sizeof a);
 }
-typedef std::uintptr_t (*WriteLogFn)(int, unsigned long long, const char*, ...);
-static std::uintptr_t GameWriteLog(int level, const char* fmt, const char* arg) {
-  return reinterpret_cast<WriteLogFn>(*W(kEcSlotWriteLog))(level, 7ull, fmt, arg);
+// What the game's WriteLog body does (ec_targets.h): va_start over the arguments and WriteLogV through the library's slot, with the result
+// passed back.
+static std::uintptr_t CallWriteLog(uint64_t* slot, int level, unsigned long long flags, const char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  const std::uintptr_t r = reinterpret_cast<WriteLogVFn>(*slot)(level, flags, fmt, ap);
+  va_end(ap);
+  return r;
 }
+static std::uintptr_t GameWriteLog(int level, const char* fmt, const char* arg) { return CallWriteLog(W(kLogLib[0].slot), level, 7ull, fmt, arg); }
 
 static uint32_t Server() { return 0x0a000001; }
 static uint16_t SPort() { return 6792; }
@@ -260,11 +332,37 @@ static void GameTalks(int fd = 7) {
 }
 
 static int g_tick_calls = 0;
-static void NetTick() { ++g_tick_calls; }
+static void NetTick() noexcept { ++g_tick_calls; }
 static std::vector<uint32_t> g_kills;
-static void OnKill(uint32_t i) { g_kills.push_back(i); }
+static void OnKill(uint32_t i) noexcept { g_kills.push_back(i); }
 
-// ===================== pure rules (ec_core.h) =====================
+// ---- the game's levels (combat_level.cpp's offsets, spelled here) ----
+constexpr std::size_t kTable0 = 0x1f48, kCount0 = 0x1f78, kGamespaceOwner = 0x8, kGamespaceLevel = 0x58;
+struct Gamespace {
+  std::uintptr_t words[0x60 / 8 + 1] = {};
+};
+struct Game {
+  std::uintptr_t words[0x2000 / 8] = {};
+  std::uintptr_t table0[8][2] = {};
+  Gamespace spaces[8];
+};
+static Game g_game;
+static std::uintptr_t GameAddress() { return reinterpret_cast<std::uintptr_t>(g_game.words); }
+static void LoadLevels(std::initializer_list<const char*> names) {
+  g_game = Game{};
+  int row = 0;
+  for (const char* name : names) {
+    Gamespace& gs = g_game.spaces[row];
+    gs.words[kGamespaceOwner / 8] = GameAddress();
+    gs.words[kGamespaceLevel / 8] = static_cast<std::uintptr_t>(EchoVR::CSymbol64Hash(name));
+    g_game.table0[row][0] = 0x5555;
+    g_game.table0[row][1] = reinterpret_cast<std::uintptr_t>(&gs);
+    ++row;
+  }
+  g_game.words[kTable0 / 8] = reinterpret_cast<std::uintptr_t>(g_game.table0);
+  g_game.words[kCount0 / 8] = static_cast<std::uintptr_t>(row);
+}
+
 static void CoreTests() {
   // the packet
   Packet p = {kMagic, 'T', {0, 0, 0}, 5, kMagic2};
@@ -408,72 +506,6 @@ static void CoreTests() {
   *reinterpret_cast<uint32_t*>(pg + kOcUse) = 1;
   CHECK(WatchUses(s4, pg, seen4, 12, 1, 1002, uses) == 1 && uses[0].type == 'T', "uncarried types are seen but not sent");
 
-  // the WriteLog body words: the disassembly 0x1088c20..0x1088c80, little-endian bytes as read (docs/quest/q15t/modules/ec.md section 3)
-  static const char* const rv[25] = {"ff0304d1", "e8048092", "e9030091", "ea230291", "08f0dff2", "eb030491", "29010291", "4aa10091", "e8fb0ea9",
-                                      "eaa70da9", "eb6b00f9", "e00700ad", "e18346ad", "e39308a9", "e3c30291", "e59b09a9", "e75700f9", "e20f01ad",
-                                      "e41702ad", "e61f03ad", "e18305ad", "477afd97", "fe7b40f9", "ff030491", "c0035fd6"};
-  uint32_t w[25];
-  for (int i = 0; i < 25; ++i) {
-    uint32_t v32 = 0;
-    for (int b = 0; b < 4; ++b) v32 |= static_cast<uint32_t>(std::strtoul(std::string(rv[i]).substr(b * 2, 2).c_str(), nullptr, 16)) << (8 * b);
-    w[i] = v32;
-  }
-  CHECK(IsWriteLogWords(w), "the words the disassembly shows are not the body this port checks");
-  for (int i = 0; i < 25; ++i) {
-    uint32_t keep = w[i];
-    w[i] ^= 0x100;
-    if (i == 21) w[i] = 0x14000001;  // a `b`, not a `bl`
-    CHECK(!IsWriteLogWords(w), "word %d may change", i);
-    w[i] = keep;
-  }
-  w[21] = 0x94000123;
-  CHECK(IsWriteLogWords(w), "any bl target");
-  CHECK(!IsWriteLogBody(0x10), "unreadable address");
-
-  // the dynamic-table lookup: a synthetic ELF image (base + offsets), R_AARCH64_JUMP_SLOT = 1026
-  {
-    alignas(16) static uint8_t img[0x2000];
-    std::memset(img, 0, sizeof img);
-    const uintptr_t base = reinterpret_cast<uintptr_t>(img);
-    // strtab at 0x1000, symtab at 0x800, rela at 0x400, dyn at 0x100
-    const char names[] = "\0other\0_ZN10NRadEngine9NWriteLog8WriteLogENS0_9ELogLevelEyPKcz\0third";
-    std::memcpy(img + 0x1000, names, sizeof names);
-    ElfSym* sy = reinterpret_cast<ElfSym*>(img + 0x800);
-    sy[1].name = 1;  // other
-    sy[2].name = 7;  // the WriteLog name
-    sy[3].name = 7 + 57;
-    ElfRela* re = reinterpret_cast<ElfRela*>(img + 0x400);
-    re[0] = {0x1800, (1ull << 32) | 1026, 0};
-    re[1] = {0x1808, (2ull << 32) | 257, 0};  // an ABS64, same symbol: not a jump slot
-    re[2] = {0x1810, (2ull << 32) | 1026, 0};
-    ElfDyn* dy = reinterpret_cast<ElfDyn*>(img + 0x100);
-    int i = 0;
-    dy[i++] = {23, 0x400};
-    dy[i++] = {2, 3 * sizeof(ElfRela)};
-    dy[i++] = {20, 7};
-    dy[i++] = {6, 0x800};
-    dy[i++] = {5, 0x1000};
-    dy[i++] = {0, 0};
-    const uintptr_t dynp = reinterpret_cast<uintptr_t>(img + 0x100);
-    const char* wl = "_ZN10NRadEngine9NWriteLog8WriteLogENS0_9ELogLevelEyPKcz";
-    CHECK(JumpSlot(base, dynp, wl) == base + 0x1810, "jump slot found by name (skips the non-JUMP_SLOT reloc)");
-    CHECK(JumpSlot(base, dynp, "other") == base + 0x1800, "first slot by name");
-    CHECK(JumpSlot(base, dynp, "missing") == 0, "no such name");
-    dy[2].val = 8;  // DT_PLTREL = REL not RELA
-    CHECK(JumpSlot(base, dynp, "other") == 0, "REL tables refused");
-    dy[2].val = 7;
-    CHECK(JumpSlot(base, 0, "other") == 0, "null dyn");
-    // a name that ends at an unreadable page edge is still read
-    void* two = mmap(nullptr, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    munmap(static_cast<char*>(two) + 4096, 4096);
-    char* end = static_cast<char*>(two) + 4096 - 6;
-    std::memcpy(end, "abcde", 6);
-    char got[32];
-    CHECK(ReadCStr(reinterpret_cast<uintptr_t>(end), got, sizeof got) && !std::strcmp(got, "abcde"), "string at a page edge");
-    munmap(two, 4096);
-    CHECK(!ReadCStr(reinterpret_cast<uintptr_t>(end), got, sizeof got), "unmapped string");
-  }
-
   // the gate: recursive, gen counts rebuilds, the looker does not count
   {
     GearGate g;
@@ -488,7 +520,6 @@ static void CoreTests() {
   }
 }
 
-// ===================== the tac-mod list =====================
 static void ListTests() {
   TacList tl;
   uint64_t cnt = 0;
@@ -564,63 +595,6 @@ static void ListTests() {
   CHECK(!HideSettled(1999, 0) && HideSettled(2000, 0), "settle is exactly 2000 ms");
 }
 
-// ===================== install, wrappers, step =====================
-static void InstallTests() {
-  // 1. install: all slots swapped, each reported
-  ResetAll();
-  const uintptr_t recv0 = *W(kEcSlotRecvfrom), send0 = *W(kEcSlotSendto);
-  InstallOk();
-  CHECK(*W(kEcSlotRecvfrom) != recv0 && *W(kEcSlotSendto) != send0, "recvfrom / sendto not swapped");
-  CHECK(*W(kEcSlotWriteLog) == EcWriteLogWrapForTest(0), "WriteLog slot not the wrapper");
-  CHECK(*W(kEcSlotReloadEquip) == EcGearWrapForTest(0) && *W(kEcSlotUnloadEquip) == EcGearWrapForTest(1), "gear gate slots not swapped");
-  CHECK(HasLine("hook=recvfrom status=ok") && HasLine("hook=sendto status=ok"), "no per-hook record");
-  CHECK(HasLine("ec: on: recvfrom / sendto swapped", 1), "no install line");
-  EcStats s = EcStatsNow();
-  CHECK(s.list_on && s.hide_write && s.equip_store && s.types == 15, "words not applied: list %d hide %d equip %d types %u", s.list_on, s.hide_write, s.equip_store, s.types);
-  CHECK(HasLine("ec: page") && (HasLine("state=visible") || HasLine("state=invisible") || HasLine("state=other")), "no page line");
-  CHECK(InstallEcWithWords(g_base, "").reason == std::string("already_installed"), "a second install must refuse");
-
-  // 2. a slot with an unexpected original: refused, loud, nothing swapped, no thread, page zero
-  ResetAll(1);
-  InstallResult r = InstallEcWithWords(g_base, "types=T");
-  CHECK(r.status == SwapStatus::kUnexpectedOriginal, "recvfrom slot with another word: %s", StatusName(r.status));
-  CHECK(HasLine("ec: refused: no net hook", 3), "no ERROR for a refused net hook");
-  CHECK(*W(kEcSlotSendto) == reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "sendto")), "sendto swapped although recvfrom was refused");
-  CHECK(*W(kEcSlotWriteLog) == g_base + kEcFnWriteLog, "WriteLog swapped although the net hook was refused");
-
-  // 3. sendto refused after recvfrom was swapped: recvfrom is put back (both or none)
-  ResetAll(2);
-  const uintptr_t recv1 = *W(kEcSlotRecvfrom);
-  r = InstallEcWithWords(g_base, "types=T");
-  CHECK(r.status == SwapStatus::kUnexpectedOriginal, "sendto slot with another word: %s", StatusName(r.status));
-  CHECK(*W(kEcSlotRecvfrom) == recv1, "recvfrom not put back after the sendto refusal");
-
-  // 4. WriteLog body unknown: the selected-tac-mod arm refuses (loud), the net pair stays
-  ResetAll(4);
-  r = InstallEcWithWords(g_base, "types=T equip");
-  CHECK(r.status == SwapStatus::kOk, "net pair must stand when only WriteLog is refused");
-  CHECK(*W(kEcSlotWriteLog) == g_base + kEcFnWriteLog && HasLine("writelog_body_not_known", 3), "WriteLog swapped over an unknown body / not loud");
-  // WriteLogV slot not WriteLogV
-  ResetAll(8);
-  r = InstallEcWithWords(g_base, "types=T equip");
-  CHECK(r.status == SwapStatus::kOk && *W(kEcSlotWriteLog) == g_base + kEcFnWriteLog && HasLine("writelogv_slot_not_writelogv", 3), "WriteLogV owner not checked");
-  // WriteLog slot holding another function
-  ResetAll(64);
-  r = InstallEcWithWords(g_base, "types=T equip");
-  CHECK(r.status == SwapStatus::kOk && HasLine("status=unexpected_original", 3), "WriteLog slot with another word accepted");
-
-  // 5. gear gate: both or none
-  ResetAll(32);
-  const uintptr_t reload0 = *W(kEcSlotReloadEquip);
-  r = InstallEcWithWords(g_base, "types=T hide");
-  CHECK(r.status == SwapStatus::kOk && !EcStatsNow().list_on, "the hide must stay off when a gate word cannot be swapped");
-  CHECK(*W(kEcSlotReloadEquip) == reload0, "Reload word not put back after the Unload refusal");
-  CHECK(HasLine("gear gate not installed", 2), "no WARNING for the missing gate");
-  ResetAll(16);
-  r = InstallEcWithWords(g_base, "types=T hide");
-  CHECK(r.status == SwapStatus::kOk && !EcStatsNow().list_on && *W(kEcSlotUnloadEquip) == g_base + kEcFnUnloadEquip, "Reload refused: Unload must stay untouched");
-}
-
 static void WrapperTests() {
   // sendto: counts the destination, passes arguments and result through
   ResetAll();
@@ -630,15 +604,15 @@ static void WrapperTests() {
   CHECK(GameSend(7, b, sizeof b, Server(), SPort()) == 5, "sendto result not passed through");
   FakeSendRet = 0;
   CHECK(g_sent.size() == 1 && g_sent[0].fd == 7 && g_sent[0].len == 8 && g_sent[0].addr == Server() && g_sent[0].port == SPort(), "sendto arguments changed");
-  EcStats s = EcStatsNow();
-  CHECK(s.sends == 1 && s.have_server && s.server_addr == Server() && s.server_port == SPort() && s.server_fd == 7, "the destination was not learned");
+  Stats s = StatsNow();
+  CHECK(s.sends == 1 && s.haveServer && s.serverAddr == Server() && s.serverPort == SPort() && s.serverFd == 7, "the destination was not learned");
   // a non-IPv4 destination is not counted (and still sent)
   sockaddr_in6 a6{};
   a6.sin6_family = AF_INET6;
-  auto sendfn = reinterpret_cast<EcSendtoFn>(*W(kEcSlotSendto));
+  auto sendfn = reinterpret_cast<SendFn>(*W(kPins.sendtoSlot));
   for (int i = 0; i < 5; ++i) sendfn(9, b, 8, 0, reinterpret_cast<sockaddr*>(&a6), sizeof a6);
   sendfn(9, b, 8, 0, nullptr, 0);
-  s = EcStatsNow();
+  s = StatsNow();
   CHECK(s.sends == 7 && g_sent.size() == 7, "v6 / null destination not passed");
   // a short sockaddr is not read
   sockaddr_in sh{};
@@ -646,11 +620,11 @@ static void WrapperTests() {
   sh.sin_addr.s_addr = 0x01010101;
   sh.sin_port = 77;
   for (int i = 0; i < 6; ++i) sendfn(10, b, 8, 0, reinterpret_cast<sockaddr*>(&sh), sizeof sh - 4);
-  EcStep(g_now100);
+  Step(g_now100);
   AdvanceMs(1001);
-  EcStep(g_now100);
-  s = EcStatsNow();
-  CHECK(s.server_addr == Server() && s.server_fd == 7, "a v6 or truncated destination became the server (addr %x fd %d)", s.server_addr, s.server_fd);
+  Step(g_now100);
+  s = StatsNow();
+  CHECK(s.serverAddr == Server() && s.serverFd == 7, "a v6 or truncated destination became the server (addr %x fd %d)", s.serverAddr, s.serverFd);
 
   // recvfrom: a foreign datagram passes untouched
   ResetAll();
@@ -660,7 +634,7 @@ static void WrapperTests() {
   sockaddr_in from{};
   socklen_t fl = sizeof from;
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 40 && g_recv_calls == 1, "a foreign datagram not passed");
-  CHECK(EcStatsNow().passed == 1 && EcStatsNow().consumed == 0, "passed counter");
+  CHECK(StatsNow().passed == 1 && StatsNow().consumed == 0, "passed counter");
   // a 16-byte datagram that is not an EC network packet passes (wrong magic)
   g_in.clear();
   g_in_next = 0;
@@ -676,9 +650,9 @@ static void WrapperTests() {
   fl = sizeof from;
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 30 && g_recv_calls == 2, "ours not consumed / next datagram not returned: calls %d", g_recv_calls);
   CHECK(fl == sizeof from, "fromlen must be the real one of the returned datagram");
-  s = EcStatsNow();
+  s = StatsNow();
   CHECK(s.consumed == 1 && s.tokens == 1 && Load32(EcPage() + kLocTok) == 1, "T token not added");
-  CHECK(HasLine("ec: token received") && HasLine("type=T"), "no token record");
+  CHECK(HasLine("\"event\":\"combat_ec_token\"") && HasLine("\"type\":\"T\""), "no token record");
   // the same id again: consumed, no second token; EAGAIN passes through when nothing else is queued
   g_in.clear();
   g_in_next = 0;
@@ -686,14 +660,14 @@ static void WrapperTests() {
   errno = 0;
   fl = sizeof from;
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == -1 && errno == EAGAIN, "EAGAIN not passed after consuming ours");
-  CHECK(EcStatsNow().tokens == 1, "a repeated id added a token");
+  CHECK(StatsNow().tokens == 1, "a repeated id added a token");
   // MSG_PEEK: never consumed, passed as is
   g_in.clear();
   g_in_next = 0;
   g_in.push_back(Veil('T', 12));
   g_recv_calls = 0;
   fl = sizeof from;
-  CHECK(GameRecv(7, buf, sizeof buf, MSG_PEEK, reinterpret_cast<sockaddr*>(&from), &fl) == 16 && g_recv_calls == 1 && EcStatsNow().tokens == 1,
+  CHECK(GameRecv(7, buf, sizeof buf, MSG_PEEK, reinterpret_cast<sockaddr*>(&from), &fl) == 16 && g_recv_calls == 1 && StatsNow().tokens == 1,
         "a peeked datagram was consumed");
   CHECK(g_last_flags == MSG_PEEK, "flags changed");
   // a flood of ours: one call swallows at most 256 in a row, then the next passes through to the game
@@ -710,13 +684,13 @@ static void WrapperTests() {
   g_in.clear();
   g_in_next = 0;
   g_in.push_back(Veil('T', 13));
-  CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), nullptr) == 16 && EcStatsNow().tokens == 1, "from without fromlen was consumed");
+  CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), nullptr) == 16 && StatsNow().tokens == 1, "from without fromlen was consumed");
   // from == null: ours are still recognised (own storage)
   g_in.clear();
   g_in_next = 0;
   g_in.push_back(Veil('T', 14));
   g_in.push_back(Plain(20));
-  CHECK(GameRecv(7, buf, sizeof buf, 0, nullptr, nullptr) == 20 && EcStatsNow().tokens == 2, "from == null: ours not recognised");
+  CHECK(GameRecv(7, buf, sizeof buf, 0, nullptr, nullptr) == 20 && StatsNow().tokens == 2, "from == null: ours not recognised");
   // a call that asks for the real length (MSG_TRUNC) into a buffer shorter than a packet: the 16 bytes are not in the buffer
   g_in.clear();
   g_in_next = 0;
@@ -727,7 +701,7 @@ static void WrapperTests() {
   }
   fl = sizeof from;
   g_trunc_report = true;
-  CHECK(GameRecv(7, buf, 8, MSG_TRUNC, reinterpret_cast<sockaddr*>(&from), &fl) == 16 && EcStatsNow().tokens == 2, "a MSG_TRUNC read into a short buffer was consumed");
+  CHECK(GameRecv(7, buf, 8, MSG_TRUNC, reinterpret_cast<sockaddr*>(&from), &fl) == 16 && StatsNow().tokens == 2, "a MSG_TRUNC read into a short buffer was consumed");
   g_trunc_report = false;
   // the length the game gave is restored for every retry (a retry after the first datagram was consumed)
   g_in.clear();
@@ -745,14 +719,14 @@ static void WrapperTests() {
   g_in_next = 0;
   g_in.push_back(Veil('T', 15));
   fl = sizeof from;
-  const uint64_t tokens_before_short = EcStatsNow().tokens;
-  CHECK(GameRecv(7, buf, 8, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 8 && EcStatsNow().tokens == tokens_before_short, "a truncated read counted as ours");
+  const uint64_t tokens_before_short = StatsNow().tokens;
+  CHECK(GameRecv(7, buf, 8, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 8 && StatsNow().tokens == tokens_before_short, "a truncated read counted as ours");
   // an error passes through and is not counted as passed
   g_in.clear();
   g_in_next = 0;
-  const uint64_t passed0 = EcStatsNow().passed;
+  const uint64_t passed0 = StatsNow().passed;
   fl = sizeof from;
-  CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == -1 && EcStatsNow().passed == passed0, "an error counted as a datagram");
+  CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == -1 && StatsNow().passed == passed0, "an error counted as a datagram");
   // types this build does not carry: dropped
   ResetAll();
   InstallOk("types=T");
@@ -760,20 +734,20 @@ static void WrapperTests() {
   g_in.push_back(Plain(10));
   fl = sizeof from;
   GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
-  CHECK(EcStatsNow().dropped == 1 && EcStatsNow().tokens == 0 && Load32(EcPage() + kVeilTok) == 0, "an uncarried V was kept");
+  CHECK(StatsNow().dropped == 1 && StatsNow().tokens == 0 && Load32(EcPage() + kVeilTok) == 0, "an uncarried V was kept");
   // K: handed to the handler once (first time), not returned, and 'M' counted
   ResetAll();
   InstallOk();
   g_kills.clear();
-  EcOnDroneKilled(&OnKill);
+  OnDroneKilled(&OnKill);
   g_in.push_back(Veil('K', 0x00010007));
   g_in.push_back(Veil('K', 0x00010007));
   g_in.push_back(Veil('M', 3));
   g_in.push_back(Plain(10));
   fl = sizeof from;
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 10, "K / M datagrams reached the game");
-  CHECK(g_kills.size() == 1 && g_kills[0] == 7 && EcStatsNow().kills == 1 && EcStatsNow().medi == 1, "K not handed over once with its index");
-  CHECK(HasLine("ec: K drone killed on the server") && HasLine("handler=yes"), "no K record");
+  CHECK(g_kills.size() == 1 && g_kills[0] == 7 && StatsNow().kills == 1 && StatsNow().medi == 1, "K not handed over once with its index");
+  CHECK(HasLine("\"event\":\"combat_ec_kill\"") && HasLine("\"handler\":\"yes\""), "no K record");
   // a K without a handler is dropped and logged
   ResetAll();
   InstallOk();
@@ -781,18 +755,18 @@ static void WrapperTests() {
   g_in.push_back(Plain(10));
   fl = sizeof from;
   GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
-  CHECK(HasLine("handler=none (dropped)"), "a K without a handler is not reported");
+  CHECK(HasLine("\"handler\":\"none (dropped)\""), "a K without a handler is not reported");
   // 'A' only from the server: sets the page word at the step
   ResetAll();
   InstallOk();
   GameTalks();
-  EcStep(g_now100);
+  Step(g_now100);
   g_in.push_back(Veil('A', 0, 0x0a000009, 5));
   g_in.push_back(Plain(10));
   fl = sizeof from;
   GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
-  EcStep(g_now100);
-  CHECK(!EcStatsNow().answered && Load32(EcPage() + kQuestEcServer) == 0, "an A from a stranger counted");
+  Step(g_now100);
+  CHECK(!StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 0, "an A from a stranger counted");
   g_in.clear();
   g_in_next = 0;
   g_in.push_back(Veil('A', 0, Server(), SPort()));
@@ -800,12 +774,12 @@ static void WrapperTests() {
   fl = sizeof from;
   GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
   AdvanceMs(5);
-  EcStep(g_now100);
-  CHECK(EcStatsNow().answered && Load32(EcPage() + kQuestEcServer) == 1, "an A from the server not shown on the page");
+  Step(g_now100);
+  CHECK(StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 1, "an A from the server not shown on the page");
   CHECK(HasLine("ec: answer seen"), "no answer record");
   AdvanceMs(6100);
-  EcStep(g_now100);
-  CHECK(!EcStatsNow().answered && Load32(EcPage() + kQuestEcServer) == 0 && HasLine("ec: answer lost"), "the answer did not time out on the page");
+  Step(g_now100);
+  CHECK(!StatsNow().answered && Load32(EcPage() + kQuestEcServer) == 0 && HasLine("ec: answer lost"), "the answer did not time out on the page");
 }
 
 static void NetTickTests() {
@@ -813,7 +787,7 @@ static void NetTickTests() {
   ResetAll();
   InstallOk();
   g_tick_calls = 0;
-  CHECK(EcOnNetTick(&NetTick), "no tick slot");
+  CHECK(OnNetTick(&NetTick), "no tick slot");
   uint8_t buf[64];
   sockaddr_in from{};
   socklen_t fl = sizeof from;
@@ -821,7 +795,7 @@ static void NetTickTests() {
   GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
   CHECK(g_tick_calls == 0, "a tick before any server was picked");
   GameTalks(7);
-  EcStep(g_now100);
+  Step(g_now100);
   g_in.clear();
   g_in_next = 0;
   g_in.push_back(Plain(20, 0x0a0000aa, 99));  // another sender on the game socket: this thread is not (yet) the game thread
@@ -841,8 +815,8 @@ static void NetTickTests() {
   GameRecv(8, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);  // another fd (libevent's DNS)
   CHECK(g_tick_calls == 1, "ticked on another socket");
   // the registered ticks are called in registration order, at most four
-  CHECK(EcOnNetTick(&NetTick) && EcOnNetTick(&NetTick) && EcOnNetTick(&NetTick), "four slots");
-  CHECK(!EcOnNetTick(&NetTick), "a fifth tick must be refused");
+  CHECK(OnNetTick(&NetTick) && OnNetTick(&NetTick) && OnNetTick(&NetTick), "four slots");
+  CHECK(!OnNetTick(&NetTick), "a fifth tick must be refused");
   // another thread: the tid gate
   g_in.clear();
   g_in_next = 0;
@@ -867,26 +841,26 @@ static void NetTickTests() {
   pthread_join(th, nullptr);
   CHECK(g_tick_calls == 0, "another thread ticked");
   // the server is cleared: no tick
-  EcStats s = EcStatsNow();
-  CHECK(s.have_server, "server");
+  Stats s = StatsNow();
+  CHECK(s.haveServer, "server");
 }
 
 static void StepTests() {
   // use counters -> packets twice to the server, hello every 2 s, server line once
   ResetAll();
   InstallOk();
-  EcStep(g_now100);  // no server yet
+  Step(g_now100);  // no server yet
   uint8_t* page = EcPage();
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocUse), 1u, __ATOMIC_SEQ_CST);
   AdvanceMs(5);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_sent.empty(), "a use sent with no server");
-  CHECK(HasLine("sent=no (no server seen yet)"), "no record for a use without a server");
+  CHECK(HasLine("\"sent\":\"no (no server seen yet)\""), "no record for a use without a server");
   GameTalks(7);
   g_sent.clear();
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocUse), 2u, __ATOMIC_SEQ_CST);
   AdvanceMs(5);
-  EcStep(g_now100);
+  Step(g_now100);
   int t_pkts = 0, h_pkts = 0;
   for (auto& s : g_sent) {
     Packet p;
@@ -900,68 +874,68 @@ static void StepTests() {
   CHECK(h_pkts == 0, "the first hello waits for its 2 s slot (the slot is armed by the first pass): %d", h_pkts);
   g_sent.clear();
   AdvanceMs(2000);
-  EcStep(g_now100);
-  CHECK(g_sent.size() == 1 && g_sent[0].bytes[4] == 'H' && HasLine("ec: server (the game's own connection)") && HasLine("addr=1.0.0.10"), "hello + server line");
+  Step(g_now100);
+  CHECK(g_sent.size() == 1 && g_sent[0].bytes[4] == 'H' && HasLine("\"event\":\"combat_ec_server\"") && HasLine("\"addr\":\"1.0.0.10\""), "hello + server line");
   g_sent.clear();
   for (int i = 0; i < 19; ++i) {
     AdvanceMs(100);
-    EcStep(g_now100);
+    Step(g_now100);
   }
   CHECK(g_sent.empty(), "hello sent more than every 2 s: %zu in 1.9 s", g_sent.size());
   AdvanceMs(100);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_sent.size() == 1, "no hello after 2 s: %zu", g_sent.size());
   // a V use gives a local token and sends twice
   g_sent.clear();
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kVeilUse), 1u, __ATOMIC_SEQ_CST);
   AdvanceMs(5);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(Load32(page + kVeilTok) == 1, "a V use must make a local token");
   // the summary and the cap
   for (int i = 0; i < 3; ++i) {
     AdvanceMs(10000);
-    EcStep(g_now100);
+    Step(g_now100);
   }
-  CHECK(HasLine("ec: sum"), "no summary");
+  CHECK(HasLine("\"event\":\"combat_ec_sum\""), "no summary");
   // wall decided / shown / 221a steps
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kVeilTok + 0x10), 2u, __ATOMIC_SEQ_CST);
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocTok + 0x10), 3u, __ATOMIC_SEQ_CST);
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kDroneBlock + kDroneSteps), 4u, __ATOMIC_SEQ_CST);
   AdvanceMs(5);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(HasLine("ec: wall decided") && HasLine("ec: a translocator puck took a T token") && HasLine("ec: 221a prelude steps"), "page counters not reported");
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kDroneBlock + kDroneSteps), 5u, __ATOMIC_SEQ_CST);
   g_lines.clear();
   AdvanceMs(5);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(!HasLine("221a prelude steps"), "a non power of two step count was reported");
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kEquipSkips), 1u, __ATOMIC_SEQ_CST);
   AdvanceMs(5);
-  EcStep(g_now100);
-  CHECK(HasLine("ec: a tac mod that is not the selected one was used"), "equip skip not reported");
+  Step(g_now100);
+  CHECK(HasLine("a tac mod that is not the selected one was used"), "equip skip not reported");
 
   // loctoken TEST word: the first pass arms, then one LOC token every <s> seconds
   ResetAll();
   InstallOk("types=T loctoken=2");
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(Load32(EcPage() + kLocTok) == 0, "a loc token on the arming pass");
   AdvanceMs(1990);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(Load32(EcPage() + kLocTok) == 0, "loc token early");
   AdvanceMs(20);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(Load32(EcPage() + kLocTok) == 1 && HasLine("ec: TEST loctoken"), "loc token not added after the period");
   // 17th destination and the server pick once a second: the busiest destination becomes the server
   ResetAll();
   InstallOk();
   uint8_t b[8] = {};
   GameSend(7, b, 8, 0x0a000002, 53);
-  EcStep(g_now100);
+  Step(g_now100);
   for (int i = 0; i < 5; ++i) GameSend(8, b, 8, 0x0a000003, 6792);
   AdvanceMs(1001);
-  EcStep(g_now100);
-  EcStats s = EcStatsNow();
-  CHECK(s.server_addr == 0x0a000003 && s.server_fd == 8, "the busiest destination of the last second is not the server");
+  Step(g_now100);
+  Stats s = StatsNow();
+  CHECK(s.serverAddr == 0x0a000003 && s.serverFd == 8, "the busiest destination of the last second is not the server");
 }
 
 static void HideTests() {
@@ -969,12 +943,12 @@ static void HideTests() {
   ResetAll();
   InstallOk("types=VPTO equip hide");
   GameTalks();
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_list.count == 7, "cut before the settle time: %llu", (unsigned long long)g_list.count);
   AdvanceMs(2000);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_list.count == 4, "no hide after the selection settled: %llu", (unsigned long long)g_list.count);
-  CHECK(HasLine("ec: tac mods: smoke / buff / point") && HasLine("effect=hidden"), "no hide record");
+  CHECK(HasLine("ec: tac mods: smoke / buff / point") && HasLine("\"effect\":\"hidden\""), "no hide record");
   // an answer: shown again
   uint8_t buf[64];
   sockaddr_in from{};
@@ -983,69 +957,69 @@ static void HideTests() {
   g_in.push_back(Plain(10));
   GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
   AdvanceMs(300);
-  EcStep(g_now100);
-  CHECK(g_list.count == 7 && HasLine("effect=shown"), "the list was not put back on an answer: %llu", (unsigned long long)g_list.count);
+  Step(g_now100);
+  CHECK(g_list.count == 7 && HasLine("\"effect\":\"shown\""), "the list was not put back on an answer: %llu", (unsigned long long)g_list.count);
   // the server has EC: one of ours selected is nothing to keep (the list is whole anyway), and is not reported as kept
   *reinterpret_cast<uint64_t*>(EcPage() + kEquipSel) = 0xe32dc7c9d4804fb5ull;
   AdvanceMs(300);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_list.count == 7 && !HasLine("an EC tac mod is selected"), "keep-whole was reported while the server answers");
   // the answer is lost: hidden again; but with one of ours selected the list stays whole (keepWhole)
   AdvanceMs(7000);
-  EcStep(g_now100);
+  Step(g_now100);
   AdvanceMs(300);
-  EcStep(g_now100);
+  Step(g_now100);
   AdvanceMs(2300);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_list.count == 7 && HasLine("an EC tac mod is selected"), "the list was cut with one of ours selected: %llu", (unsigned long long)g_list.count);
   // deselect: the hide applies again after the settle
   *reinterpret_cast<uint64_t*>(EcPage() + kEquipSel) = 0;
   AdvanceMs(300);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_list.count == 7, "cut at once after deselecting (the settle is 2 s)");
   AdvanceMs(2300);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_list.count == 4 && HasLine("no EC tac mod kept"), "not cut after the settle: %llu", (unsigned long long)g_list.count);
   // without the hide word: logged only, nothing written
   ResetAll();
   InstallOk("types=VT equip");
   GameTalks();
-  EcStep(g_now100);
+  Step(g_now100);
   AdvanceMs(2500);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_list.count == 7 && HasLine("would be hidden (no hide word, nothing written)"), "the count was written without the hide word");
   *reinterpret_cast<uint64_t*>(EcPage() + kEquipSel) = 0xe32dc7c9d4804fb5ull;
   AdvanceMs(300);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(!HasLine("an EC tac mod is selected"), "keep-whole applied without the hide word");
   // the gate: the list pointer being read only under the gate; the Reload wrapper holds it and counts a rebuild
   ResetAll();
   InstallOk();
-  const uint32_t g0 = EcGearGenForTest();
-  reinterpret_cast<void (*)()>(*W(kEcSlotReloadEquip))();
+  const uint32_t g0 = GearGenForTest();
+  reinterpret_cast<void (*)()>(*W(kPins.reloadSlot))();
   CHECK(g_reload_calls == 1 && g_unload_calls == 1, "the real Reload / Unload were not called through the wrappers: %d %d", g_reload_calls, g_unload_calls);
-  CHECK(EcGearGenForTest() == g0 + 2 && g_gen_seen_in_reload == g0 + 1, "gen must count each rebuild / free (and Reload re-entering Unload must not hang)");
+  CHECK(GearGenForTest() == g0 + 2 && g_gen_seen_in_reload == g0 + 1, "gen must count each rebuild / free (and Reload re-entering Unload must not hang)");
   // a rebuilt list: after Reload the full count restarts (gen), so a shorter rebuilt list is not mistaken
   ResetAll();
   InstallOk();
   GameTalks();
-  EcStep(g_now100);
+  Step(g_now100);
   AdvanceMs(2300);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_list.count == 4, "setup");
   BuildList(5, true);  // same entries address, a shorter list (5 with ours last)
-  reinterpret_cast<void (*)()>(*W(kEcSlotReloadEquip))();
+  reinterpret_cast<void (*)()>(*W(kPins.reloadSlot))();
   AdvanceMs(300);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_list.count == 2, "a rebuilt list at the same address kept the old full count: %llu", (unsigned long long)g_list.count);
   // the list pointer unreadable: nothing happens
   ResetAll();
   InstallOk();
-  *W(kEcTacModList) = 0x20;
+  *W(kPins.tacModList) = 0x20;
   GameTalks();
-  EcStep(g_now100);
+  Step(g_now100);
   AdvanceMs(2500);
-  EcStep(g_now100);
+  Step(g_now100);
   CHECK(g_list.count == 7, "a bad list pointer was followed");
 }
 
@@ -1060,7 +1034,7 @@ static void SelectionTests() {
   CHECK(g_v_calls == 1 && g_v_level == 2 && g_v_flags == 7 && std::string(g_v_text) == "[NSUSER] sent profile update: {\"ability\":\"buff\",\"a\":1}",
         "WriteLogV not called with the same arguments: '%s'", g_v_text);
   CHECK(Load64(EcPage() + kEquipSel) == 0xc8c33e48386618b6ull, "the selected tac mod was not stored");
-  CHECK(HasLine("ec: sel") && HasLine("name=buff") && HasLine("result=stored at +e80"), "no sel record");
+  CHECK(HasLine("\"event\":\"combat_ec_sel\"") && HasLine("\"name\":\"buff\"") && HasLine("stored at +e80"), "no sel record");
   // another format: passed on, nothing stored, no scan
   *reinterpret_cast<uint64_t*>(EcPage() + kEquipSel) = 0;
   GameWriteLog(1, "other %s", "{\"ability\":\"smoke\"}");
@@ -1071,7 +1045,7 @@ static void SelectionTests() {
   // a profile update without a tac mod: nothing
   g_lines.clear();
   GameWriteLog(2, "[NSUSER] sent profile update: %s", "{\"name\":\"x\"}");
-  CHECK(!HasLine("ec: sel"), "a profile update without an ability was reported");
+  CHECK(!HasLine("\"event\":\"combat_ec_sel\""), "a profile update without an ability was reported");
   // noequip: logged only
   ResetAll();
   InstallOk("types=T noequip");
@@ -1088,198 +1062,227 @@ static void SelectionTests() {
   CHECK(Load32(EcPage() + kEquipReruns) == 0, "re-runs not cleared");
 }
 
-// ---- the platform libs by name (fakes for the lib lookup and dladdr; a synthetic dynamic table) ----
-alignas(16) static uint8_t g_lib_img[0x2000];
-alignas(16) static uint32_t g_fake_wl_body[25];
-static uintptr_t g_fake_vfn = 0;
-static bool g_lib_loaded = false;
-static bool g_named_ok = true;
-static uintptr_t g_slot_word_addr = 0;
-static bool FakeFind(const char* tail, uintptr_t addr, EcLibInfo* out) {
-  if (tail != nullptr) {
-    if (std::strcmp(tail, "/libpnsovr.so") != 0 || !g_lib_loaded) return false;
-  } else if (addr != reinterpret_cast<uintptr_t>(g_fake_wl_body)) {
-    return false;
-  }
-  out->base = reinterpret_cast<uintptr_t>(g_lib_img);
-  out->dyn = reinterpret_cast<uintptr_t>(g_lib_img + 0x100);
-  return true;
-}
-static bool FakeNamed(uintptr_t fn, const char* sym) {
-  if (!g_named_ok) return false;
-  if (!std::strcmp(sym, "_ZN10NRadEngine9NWriteLog8WriteLogENS0_9ELogLevelEyPKcz")) return fn == reinterpret_cast<uintptr_t>(g_fake_wl_body);
-  if (!std::strcmp(sym, "_ZN10NRadEngine9NWriteLog9WriteLogVENS0_9ELogLevelEyPKcSt9__va_list")) return fn == g_fake_vfn;
-  return false;
-}
-static void BuildLib(bool with_slot = true, bool with_vslot = true) {
-  std::memset(g_lib_img, 0, sizeof g_lib_img);
-  for (int i = 0; i < 25; ++i) g_fake_wl_body[i] = kWriteLogBody[i];
-  g_fake_wl_body[21] = 0x94000010;
-  g_fake_vfn = reinterpret_cast<uintptr_t>(&FakeWriteLogV);
-  // strtab 0x1000: \0 WriteLog \0 WriteLogV \0
-  const char* wl = "_ZN10NRadEngine9NWriteLog8WriteLogENS0_9ELogLevelEyPKcz";
-  const char* wv = "_ZN10NRadEngine9NWriteLog9WriteLogVENS0_9ELogLevelEyPKcSt9__va_list";
-  size_t o1 = 1, o2 = 1 + std::strlen(wl) + 1;
-  std::memcpy(g_lib_img + 0x1000 + o1, wl, std::strlen(wl) + 1);
-  std::memcpy(g_lib_img + 0x1000 + o2, wv, std::strlen(wv) + 1);
-  ElfSym* sy = reinterpret_cast<ElfSym*>(g_lib_img + 0x800);
-  sy[1].name = static_cast<uint32_t>(o1);
-  sy[2].name = static_cast<uint32_t>(o2);
-  ElfRela* re = reinterpret_cast<ElfRela*>(g_lib_img + 0x400);
-  int n = 0;
-  if (with_slot) re[n++] = {0x1800, (1ull << 32) | 1026, 0};
-  if (with_vslot) re[n++] = {0x1808, (2ull << 32) | 1026, 0};
-  ElfDyn* dy = reinterpret_cast<ElfDyn*>(g_lib_img + 0x100);
-  int i = 0;
-  dy[i++] = {23, 0x400};
-  dy[i++] = {2, static_cast<uint64_t>(n) * sizeof(ElfRela)};
-  dy[i++] = {20, 7};
-  dy[i++] = {6, 0x800};
-  dy[i++] = {5, 0x1000};
-  dy[i++] = {0, 0};
-  g_slot_word_addr = reinterpret_cast<uintptr_t>(g_lib_img + 0x1800);
-  *reinterpret_cast<uintptr_t*>(g_slot_word_addr) = reinterpret_cast<uintptr_t>(g_fake_wl_body);
-  *reinterpret_cast<uintptr_t*>(g_lib_img + 0x1808) = g_fake_vfn;
-  g_lib_loaded = true;
-  g_named_ok = true;
-}
-static void PlatformLibTests() {
-  EcSelEnv env;
-  env.find_lib = &FakeFind;
-  env.named_as = &FakeNamed;
+// ===================== install =====================
+static void InstallTests() {
+  // 1. install: all five libr15 slots hold the thunks, each reported, the words applied
   ResetAll();
+  const uint64_t recv0 = *W(kPins.recvfromSlot), send0 = *W(kPins.sendtoSlot), logv0 = *W(kLogLib[0].slot);
   InstallOk();
-  BuildLib();
-  g_lib_loaded = false;
-  SetEcSelEnvForTest(env);
-  EcStep(g_now100);
-  CHECK(!EcSelTriedForTest(1) && !EcSelTriedForTest(2), "a lib that is not loaded was counted as tried");
-  CHECK(*reinterpret_cast<uintptr_t*>(g_slot_word_addr) == reinterpret_cast<uintptr_t>(g_fake_wl_body), "slot touched before the lib loaded");
-  g_lib_loaded = true;
-  AdvanceMs(500);
-  EcStep(g_now100);
-  CHECK(!EcSelTriedForTest(1), "retried before a second passed");
-  AdvanceMs(600);
-  EcStep(g_now100);
-  CHECK(EcSelTriedForTest(1) && !EcSelTriedForTest(2), "libpnsovr tried, libpnsrad (not loaded) not");
-  CHECK(*reinterpret_cast<uintptr_t*>(g_slot_word_addr) == EcWriteLogWrapForTest(1), "the platform lib's WriteLog word not swapped");
-  CHECK(HasLine("ec: sel watching") && HasLine("lib=libpnsovr.so"), "no sel watching record");
-  // the wrapper works through the swapped word
-  auto fn = reinterpret_cast<WriteLogFn>(*reinterpret_cast<uintptr_t*>(g_slot_word_addr));
-  fn(2, 3ull, "[NSUSER] sent profile update: %s", "{\"ability\":\"point\"}");
-  CHECK(g_v_calls == 1 && Load64(EcPage() + kEquipSel) == 0xe32dc7cad6864aa4ull, "the platform lib wrapper did not forward / store");
-  const int calls_before = g_v_calls;
-  AdvanceMs(5000);
-  EcStep(g_now100);
-  CHECK(g_v_calls == calls_before && *reinterpret_cast<uintptr_t*>(g_slot_word_addr) == EcWriteLogWrapForTest(1), "a tried lib must not be swapped again");
-  CHECK(!HasLine("ec: sel refused"), "a lib that was swapped was looked at again (its word now holds our wrapper)");
-  // refusals: a lib is tried once, loud, its word untouched
-  struct Case {
-    const char* what;
-    bool slot, vslot, named, body_ok;
-  } cases[] = {{"no WriteLog jump slot", false, true, true, true},
-               {"the word is not a WriteLog of the known body", true, true, false, true},
-               {"the word is not a WriteLog of the known body", true, true, true, false},
-               {"the owner of its WriteLog has no WriteLogV word", true, false, true, true}};
-  for (const auto& c : cases) {
-    ResetAll();
-    InstallOk();
-    BuildLib(c.slot, c.vslot);
-    if (!c.body_ok) g_fake_wl_body[7] ^= 1;
-    g_named_ok = c.named;
-    SetEcSelEnvForTest(env);
-    EcStep(g_now100);
-    CHECK(EcSelTriedForTest(1), "%s: a refused lib must count as tried", c.what);
-    CHECK(HasLine("ec: sel refused", 2) && HasLine(c.what), "%s: no WARNING", c.what);
-    if (c.slot) CHECK(*reinterpret_cast<uintptr_t*>(g_slot_word_addr) == reinterpret_cast<uintptr_t>(g_fake_wl_body), "%s: the word was touched", c.what);
-  }
-  // the owner's WriteLogV word does not hold a WriteLogV
+  CHECK(*W(kPins.recvfromSlot) != recv0 && *W(kPins.sendtoSlot) != send0, "recvfrom / sendto not hooked");
+  CHECK(*W(kLogLib[0].slot) != logv0, "the WriteLogV slot not hooked");
+  CHECK(*W(kPins.reloadSlot) != reinterpret_cast<uintptr_t>(&RealReload) && *W(kPins.unloadSlot) != reinterpret_cast<uintptr_t>(&RealUnload), "gear gate slots not hooked");
+  CHECK(HasLine("\"hook\":\"recvfrom\"", 1) && HasLine("\"hook\":\"sendto\"", 1) && HasLine("\"hook\":\"writelogv\"", 1) &&
+            HasLine("\"hook\":\"reload_equipment_config\"", 1) && HasLine("\"hook\":\"unload_equipment_config\"", 1),
+        "no per-hook record");
+  CHECK(HasLine("\"event\":\"combat_ec_install\",\"result\":\"installed\"", 1), "no install line");
+  Stats s = StatsNow();
+  CHECK(s.listOn && s.hideWrite && s.equipStore && s.types == 15 && s.logLib[0], "words not applied: list %d hide %d equip %d types %u", s.listOn, s.hideWrite, s.equipStore, s.types);
+  CHECK(HasLine("\"event\":\"combat_ec_page\"") && (HasLine("\"state\":\"visible\"") || HasLine("\"state\":\"invisible\"") || HasLine("\"state\":\"other\"")), "no page line");
+  CHECK(Installed() && nevr_quest::combat::tick::Count() == 1, "the scope's tick callback not registered");
+  CHECK(std::string(InstallWords("").status) == "already_ran", "a second install must refuse");
+
+  // 2. recvfrom's slot holds no function: refused, loud, nothing hooked, page zero
+  ResetAll(1);
+  ModuleResult r = InstallWords("types=T");
+  CHECK(!r.installed && std::string(r.status) == "original_implausible", "recvfrom slot with no function: %s", r.status);
+  CHECK(HasLine("\"event\":\"combat_ec_install\",\"result\":\"refused\"", 3), "no Error for a refused net hook");
+  CHECK(*W(kPins.sendtoSlot) == reinterpret_cast<uintptr_t>(&FSend), "sendto hooked although recvfrom was refused");
+  CHECK(*W(kLogLib[0].slot) == reinterpret_cast<uintptr_t>(&FakeWriteLogV), "WriteLogV hooked although the net hook was refused");
+  CHECK(!Installed(), "a refused net pair reads as installed");
+
+  // 3. sendto refused after recvfrom was hooked: recvfrom is put back (both or none)
+  ResetAll(2);
+  r = InstallWords("types=T");
+  CHECK(!r.installed && std::string(r.status) == "original_implausible", "sendto slot with no function: %s", r.status);
+  CHECK(*W(kPins.recvfromSlot) == reinterpret_cast<uintptr_t>(&FRecv), "recvfrom not put back after the sendto refusal");
+
+  // 4. WriteLog's body unknown: the selected-tac-mod hook refuses (loud), the net pair stays
+  ResetAll(4);
+  r = InstallWords("types=T equip");
+  CHECK(r.installed && std::string(r.status) == "partial", "the net pair must stand when only WriteLogV is refused: %s", r.status);
+  CHECK(*W(kLogLib[0].slot) == reinterpret_cast<uintptr_t>(&FakeWriteLogV) && HasLine("writelog_body_not_known", 3), "WriteLogV hooked over an unknown body / not loud");
+  // the stub that calls through the slot is not the pinned one
+  ResetAll(64);
+  r = InstallWords("types=T equip");
+  CHECK(r.installed && *W(kLogLib[0].slot) == reinterpret_cast<uintptr_t>(&FakeWriteLogV) && HasLine("writelogv_stub_not_known", 3), "the stub not checked");
+  // WriteLogV's slot holding another function
+  ResetAll(8);
+  r = InstallWords("types=T equip");
+  CHECK(r.installed && HasLine("\"status\":\"original_mismatch\"", 3) && !StatsNow().logLib[0], "WriteLogV slot with another word accepted");
+
+  // 5. gear gate: both or none
+  ResetAll(32);
+  const uint64_t reload0 = *W(kPins.reloadSlot);
+  r = InstallWords("types=T hide");
+  CHECK(r.installed && !StatsNow().listOn, "the hide must stay off when a gate word cannot be hooked");
+  CHECK(*W(kPins.reloadSlot) == reload0, "Reload's word not put back after the Unload refusal");
+  CHECK(HasLine("\"gear_gate\":\"original_mismatch\""), "the install line does not name the gate's refusal");
+  ResetAll(16);
+  r = InstallWords("types=T hide");
+  CHECK(r.installed && !StatsNow().listOn && *W(kPins.unloadSlot) == reinterpret_cast<uintptr_t>(&RealUnload), "Reload refused: Unload must stay untouched");
+
+  // 6. the refusals before any slot: no libr15, another build, no tick slot
   ResetAll();
-  InstallOk();
-  BuildLib();
-  *reinterpret_cast<uintptr_t*>(g_lib_img + 0x1808) = 0x1234;
-  SetEcSelEnvForTest(env);
-  EcStep(g_now100);
-  CHECK(HasLine("ec: sel refused", 2) && *reinterpret_cast<uintptr_t*>(g_slot_word_addr) == reinterpret_cast<uintptr_t>(g_fake_wl_body), "WriteLogV word unchecked");
-  SetEcSelEnvForTest(EcSelEnv());
+  g_image.Drop();
+  CHECK(std::string(InstallWords("").status) == "module_not_loaded", "no libr15");
+  ResetAll();
+  g_image.Build({{kRecvfromSymbol, kPins.recvfromSlot, false, false, 0}}, "0123456789012345678901234567890123456789");
+  CHECK(std::string(InstallWords("").status) == "build_id_mismatch" && !HasLine("\"event\":\"combat_ec_hook\""), "another build: refused before any hook");
+  ResetAll();
+  for (std::size_t i = 0; i < nevr_quest::combat::tick::kMaxCallbacks; ++i)
+    nevr_quest::combat::tick::Add(&Tick);
+  const uint64_t recvBefore = *W(kPins.recvfromSlot);
+  CHECK(std::string(InstallWords("").status) == "tick_table_full" && *W(kPins.recvfromSlot) == recvBefore, "a full tick table must refuse before any slot");
 }
 
-static void SwitchTests() {
-  // no switch file: off, the page line is still logged, nothing installed
-  char tmpl[] = "/tmp/q15t-ec-XXXXXX";
+// ===================== the platform libraries =====================
+static void PlatformTests() {
+  // loaded before the install: hooked at the install
+  ResetAll();
+  BuildPlatform(1);
+  InstallOk();
+  CHECK(StatsNow().logLib[1] && !StatsNow().logLib[2], "libpnsovr loaded at install: not hooked (or libpnsrad, not loaded, hooked)");
+  CHECK(HasLine("\"event\":\"combat_ec_platform\",\"lib\":\"libpnsovr\",\"status\":\"installed\"", 1), "no platform line");
+  CHECK(!HasLine("\"lib\":\"libpnsrad\""), "a library that is not loaded yet was reported");
+  // the thunk works through the hooked word: the profile line of that library is seen and forwarded with its arguments
+  g_v_calls = 0;
+  const std::uintptr_t ret = CallWriteLog(reinterpret_cast<uint64_t*>(g_ovr.Slot(g_libs[1].slot)), 2, 0ull, "[NSUSER] sent profile update: %s",
+                                          "{\"ability\":\"point\"}");
+  CHECK(ret == FakeWriteLogVRet && g_v_calls == 1 && g_v_lib == 1 && Load64(EcPage() + kEquipSel) == 0xe32dc7cad6864aa4ull,
+        "the platform library's WriteLogV did not forward / store (lib %d calls %d)", g_v_lib, g_v_calls);
+  CHECK(HasLine("\"lib\":\"libpnsovr\"") && HasLine("\"event\":\"combat_ec_sel\""), "no sel record for the platform library");
+  // loaded later: the observer hooks it when that library is reported, and not at another library's load (each of the game's ~480 script
+  // library loads would look the two up)
+  BuildPlatform(2);
+  nevr_quest::integration::NotifyModuleLoaded("/data/app/x/lib/arm64/lib0123456789abcdef.so", &g_rad);
+  CHECK(!StatsNow().logLib[2], "another library's load hooked libpnsrad");
+  nevr_quest::integration::NotifyModuleLoaded("/data/app/x/lib/arm64/libpnsrad.so", &g_rad);
+  CHECK(StatsNow().logLib[2] && HasLine("\"lib\":\"libpnsrad\",\"status\":\"installed\""), "the observer did not hook libpnsrad");
+  // another library's load changes nothing; a second report of the same mapping hooks nothing again and logs nothing
+  const std::size_t lines = g_lines.size();
+  nevr_quest::integration::NotifyModuleLoaded("libfoo.so", &g_rad);
+  nevr_quest::integration::NotifyModuleLoaded("libpnsrad.so", &g_rad);
+  CHECK(g_lines.size() == lines, "a repeated report logged again");
+  // the library mapped again at another address: hooked again
+  g_rad.Drop();
+  BuildPlatform(2);
+  CHECK(*reinterpret_cast<uint64_t*>(g_rad.Slot(g_libs[2].slot)) == reinterpret_cast<uintptr_t>(&FakeWriteLogVRad), "setup");
+  nevr_quest::integration::NotifyModuleLoaded("libpnsrad.so", &g_rad);
+  CHECK(*reinterpret_cast<uint64_t*>(g_rad.Slot(g_libs[2].slot)) != reinterpret_cast<uintptr_t>(&FakeWriteLogVRad), "a library mapped again was not hooked again");
+  // a platform slot bound to libr15's WriteLogV (the loader may bind either) is accepted
+  ResetAll();
+  InstallOk();
+  BuildPlatform(1);
+  g_ovr.Put<uint64_t>(g_libs[1].slot, reinterpret_cast<uintptr_t>(&FakeWriteLogV));
+  nevr_quest::integration::NotifyModuleLoaded("libpnsovr.so", &g_ovr);
+  CHECK(StatsNow().logLib[1], "a slot that holds libr15's WriteLogV was refused");
+  // refusals: loud, the word untouched
+  struct Case {
+    unsigned bad;
+    const char* token;
+  } cases[] = {{1, "slot_not_writelogv"}, {2, "writelog_body_not_known"}};
+  for (const Case& c : cases) {
+    ResetAll();
+    InstallOk();
+    BuildPlatform(1, c.bad);
+    const uint64_t before = *reinterpret_cast<uint64_t*>(g_ovr.Slot(g_libs[1].slot));
+    nevr_quest::integration::NotifyModuleLoaded("libpnsovr.so", &g_ovr);
+    CHECK(!StatsNow().logLib[1] && HasLine(c.token, 2) && *reinterpret_cast<uint64_t*>(g_ovr.Slot(g_libs[1].slot)) == before, "%s: not refused loud", c.token);
+  }
+  // the observer is in the table only while ec is installed: before the install a report does nothing
+  ResetAll();
+  BuildPlatform(1);
+  OnModuleLoaded("libpnsovr.so", &g_ovr);
+  CHECK(!StatsNow().logLib[1] && !HasLine("\"event\":\"combat_ec_platform\""), "a platform library was looked at before ec was installed");
+}
+
+// ===================== the keys =====================
+static void ConfigTests() {
+  // combat.ec false: nothing hooked, the page line is still written, the install line says off
+  ResetAll();
+  Switches off;
+  off.on = false;
+  const ModuleResult r = Install(off);
+  CHECK(!r.installed && std::string(r.status) == "off" && *W(kPins.recvfromSlot) == reinterpret_cast<uintptr_t>(&FRecv), "combat.ec false installed something");
+  CHECK(HasLine("\"event\":\"combat_ec_page\"") && HasLine("\"result\":\"off\""), "no page or off line");
+  // no words: the default words; given words: those
+  ResetAll();
+  Install(Switches{});
+  CHECK(StatsNow().types == 15 && StatsNow().equipStore && StatsNow().hideWrite && HasLine("\"source\":\"default\""), "the default words are not types=VPTO equip hide");
+  ResetAll();
+  InstallOk("types=V noequip");
+  CHECK(StatsNow().types == 1 && !StatsNow().equipStore && !StatsNow().hideWrite && HasLine("\"source\":\"config\""), "the config's words not applied");
+  // the plugin's switch files are not read: one found is a Warning naming the key, and changes nothing
+  char tmpl[] = "/tmp/nevr-ec-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) std::exit(2);
-  ResetAll();
-  SetEcDirForTest(tmpl);
-  InstallResult r = InstallEc(g_base);
-#ifdef Q15T_EC_DEFAULT_WORDS
-  // a build with default words: a fresh install with NO switch file is on, with the build's words
-  CHECK(r.status == SwapStatus::kOk && EcStatsNow().types == 15 && EcStatsNow().hide_write && EcStatsNow().equip_store,
-        "default words, no file: must be on with types 15 (VPTO): status %s types %u", StatusName(r.status), EcStatsNow().types);
-  CHECK(HasLine("switch=build default") && !HasLine("ec: off"), "default words: no 'build default' record, or an 'ec: off' line");
-  CHECK(*W(kEcSlotRecvfrom) != reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "recvfrom")), "default words: recvfrom was not swapped");
-#else
-  CHECK(std::string(r.reason) == "off" && *W(kEcSlotRecvfrom) == reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "recvfrom")), "no switch: must install nothing");
-  CHECK(HasLine("ec: off") && HasLine("ec: page"), "no off / page record");
-#endif
-  // ec_preset1.on = the preset
   const std::string d = tmpl;
-  FILE* f = std::fopen((d + "/ec_preset1.on").c_str(), "w");
-  std::fclose(f);
+  for (const char* f : {"ec.off", "ec.on", "ec_preset1.on"}) {
+    FILE* fp = std::fopen((d + "/" + f).c_str(), "w");
+    if (fp != nullptr) std::fclose(fp);
+  }
+  nevr_quest::combat::legacy::SetDirectoryForTest(tmpl);
   ResetAll();
-  SetEcDirForTest(tmpl);
-  r = InstallEc(g_base);
-  CHECK(r.status == SwapStatus::kOk && EcStatsNow().types == 5 && EcStatsNow().hide_write && EcStatsNow().equip_store, "ec_preset1.on preset: types %u", EcStatsNow().types);
-  CHECK(HasLine("switch=ec_preset1.on"), "no switch record");
-  // ec_preset2.on / ec_preset3.on
-  unlink((d + "/ec_preset1.on").c_str());
-  f = std::fopen((d + "/ec_preset2.on").c_str(), "w");
-  std::fclose(f);
-  ResetAll();
-  SetEcDirForTest(tmpl);
-  InstallEc(g_base);
-  CHECK(EcStatsNow().types == 7, "ec_preset2 preset: %u", EcStatsNow().types);
-  unlink((d + "/ec_preset2.on").c_str());
-  f = std::fopen((d + "/ec_preset3.on").c_str(), "w");
-  std::fclose(f);
-  ResetAll();
-  SetEcDirForTest(tmpl);
-  InstallEc(g_base);
-  CHECK(EcStatsNow().types == 15, "ec_preset3 preset: %u", EcStatsNow().types);
-  unlink((d + "/ec_preset3.on").c_str());
-  // ec.on wins and carries its own words (first line)
-  f = std::fopen((d + "/ec.on").c_str(), "w");
-  std::fputs("types=V noequip\nhide\n", f);
-  std::fclose(f);
-  f = std::fopen((d + "/ec_preset1.on").c_str(), "w");
-  std::fclose(f);
-  ResetAll();
-  SetEcDirForTest(tmpl);
-  InstallEc(g_base);
-  EcStats s = EcStatsNow();
-  CHECK(s.types == 1 && !s.equip_store && !s.hide_write, "ec.on must win and only its first line counts: types %u equip %d hide %d", s.types, s.equip_store, s.hide_write);
-  CHECK(EcDataFileExists("ec.on") && !EcDataFileExists("nothere"), "EcDataFileExists");
-  // ec.off is a kill file: it beats ec.on, the presets and the build's default words, and installs nothing
-  f = std::fopen((d + "/ec.off").c_str(), "w");
-  std::fclose(f);
-  ResetAll();
-  SetEcDirForTest(tmpl);
-  r = InstallEc(g_base);
-  CHECK(std::string(r.reason) == "off" && *W(kEcSlotRecvfrom) == reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "recvfrom")) &&
-            *W(kEcSlotSendto) == reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "sendto")),
-        "ec.off with ec.on and a preset beside it: must install nothing: reason %s", r.reason);
-  CHECK(HasLine("kill_file=ec.off") && HasLine("ec: off") && !HasLine("ec: on"), "ec.off: no 'off' record naming the kill file, or an 'ec: on' line");
-  unlink((d + "/ec.off").c_str());
-  unlink((d + "/ec.on").c_str());
-  unlink((d + "/ec_preset1.on").c_str());
+  InstallOk();
+  CHECK(HasLine("\"event\":\"combat_ec_legacy_switch\",\"file\":\"ec.off\",\"replaced_by\":\"combat.ec: false\"", 2) &&
+            HasLine("\"file\":\"ec.on\",\"replaced_by\":\"combat.ec_words\"", 2) && HasLine("\"file\":\"ec_preset1.on\"", 2),
+        "the legacy files were not warned about");
+  CHECK(Installed(), "ec.off still switched ec off");
+  for (const char* f : {"ec.off", "ec.on", "ec_preset1.on"}) unlink((d + "/" + f).c_str());
   rmdir(tmpl);
-  // a data directory that does not exist: off, or the build's default words when it has them
+  nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
+}
+
+// ===================== arena (the scope) =====================
+static void ArenaTests() {
+  // An Echo Arena level: every datagram goes to the game as libc gave it, nothing is counted, no net tick, nothing is consumed
   ResetAll();
-  SetEcDirForTest("/nonexistent/q15t");
-#ifdef Q15T_EC_DEFAULT_WORDS
-  CHECK(InstallEc(g_base).status == SwapStatus::kOk, "default words: a missing data directory must still be on");
-#else
-  CHECK(std::string(InstallEc(g_base).reason) == "off", "a missing data directory must read as off");
-#endif
+  ForceScopeForTest(-1);
+  InstallOk();
+  Tick(GameAddress());
+  LoadLevels({"mpl_arena_a"});
+  AdvanceMs(300);
+  CHECK(!RefreshScope(g_now100 / 10000) && !InCombatScope(), "an Echo Arena level is in scope");
+  CHECK(HasLine("\"in_scope\":0,\"level_class\":\"echo_arena\""), "no scope line for arena");
+  OnNetTick(&NetTick);
+  g_tick_calls = 0;
+  GameTalks();
+  CHECK(StatsNow().sends == 0 && !StatsNow().haveServer, "a send in arena was counted");
+  uint8_t buf[64];
+  sockaddr_in from{};
+  socklen_t fl = sizeof from;
+  g_in.push_back(Veil('T', 99));
+  CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 16 && g_recv_calls == 1, "an EC datagram in arena was consumed");
+  CHECK(StatsNow().tokens == 0 && StatsNow().passed == 0 && StatsNow().consumed == 0 && g_tick_calls == 0, "arena: counted, tokened or ticked");
+  // the arena lobbies are no combat level either
+  for (const char* lobby : {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b_arena", "mpl_lobby_b_social"}) {
+    LoadLevels({lobby});
+    AdvanceMs(300);
+    CHECK(!RefreshScope(g_now100 / 10000), "%s is in scope", lobby);
+  }
+  // the combat lobby and a combat map are; the level is read at most every 250 ms
+  LoadLevels({"mpl_lobby_b_combat"});
+  AdvanceMs(300);
+  CHECK(RefreshScope(g_now100 / 10000) && InCombatScope(), "the combat lobby is not in scope");
+  LoadLevels({"mpl_arena_a"});
+  AdvanceMs(100);
+  CHECK(RefreshScope(g_now100 / 10000), "the level was read again before 250 ms");
+  AdvanceMs(150);
+  CHECK(!RefreshScope(g_now100 / 10000), "the level was not read again at 250 ms");
+  LoadLevels({"mpl_combat_dyson"});
+  AdvanceMs(250);
+  CHECK(RefreshScope(g_now100 / 10000), "a combat map is not in scope");
+  GameTalks();
+  CHECK(StatsNow().sends == 1 && StatsNow().haveServer, "in scope a send is not counted");
+  // leaving: the page's answer word is cleared and no server is kept for the net tick
+  Store32(EcPage() + kQuestEcServer, 1);
+  LoadLevels({"mpl_arena_a"});
+  AdvanceMs(250);
+  CHECK(!RefreshScope(g_now100 / 10000) && Load32(EcPage() + kQuestEcServer) == 0, "leaving the scope kept the answer word");
+  // no game seen yet: out of scope
+  ResetAll();
+  ForceScopeForTest(-1);
+  InstallOk();
+  CHECK(!InCombatScope() && HasLine("\"level_class\":\"no_game\""), "no game reads as in scope");
 }
 
 static void PageTests() {
@@ -1289,18 +1292,17 @@ static void PageTests() {
   bool zero = true;
   for (int i = 0; i < 4096; ++i) zero &= p[i] == 0;
   CHECK(zero, "page not zeroed");
-  CHECK(dlsym(RTLD_DEFAULT, "re33_ec_page") == p || dlsym(RTLD_DEFAULT, "re33_ec_page") == nullptr, "symbol resolves to the page");
-  const EcPageState st = PublishEcPage();
-  CHECK(st == EcPageState::kVisible, "the test executable exports the page (-rdynamic): state %d", (int)st);
-  CHECK(HasLine("ec: page published", 1), "no INFO for a published page");
+  CHECK(dlsym(RTLD_DEFAULT, "re33_ec_page") == p, "the exported symbol is not the page the sentinel writes");
+  bool reopened = false;
+  const void* seen = nullptr;
+  const sentinel::EcPageState st = sentinel::PublishEcPage(&reopened, &seen);
+  CHECK(st == sentinel::EcPageState::kVisible && seen == p, "the test executable exports the page (-rdynamic): state %d", static_cast<int>(st));
+  InstallOk();
+  CHECK(HasLine("ec: page published", 1), "no Info for a published page");
 }
 
 int main() {
-  NevrGameContext ctx{};
-  ctx.ctx_size = sizeof ctx;
-  ctx.plugin_id = "q15t";
-  ctx.log = &FakeLog;
-  SetLogContext(&ctx);
+  sentinel::SetLogSink(&Capture);
   CoreTests();
   ListTests();
   InstallTests();
@@ -1309,10 +1311,11 @@ int main() {
   StepTests();
   HideTests();
   SelectionTests();
-  PlatformLibTests();
-  SwitchTests();
+  PlatformTests();
+  ConfigTests();
+  ArenaTests();
   PageTests();
-  DropImage();
+  sentinel::SetLogSink(nullptr);
   if (g_fail == 0) std::printf("ec_test: all checks passed\n");
   return g_fail == 0 ? 0 : 1;
 }

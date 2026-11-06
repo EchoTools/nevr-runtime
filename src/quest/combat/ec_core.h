@@ -1,15 +1,17 @@
-// The platform-free half of the `ec` module (docs/quest/q15t/modules/ec.md): the EC spare page layout, the EC network packet, the
-// token / dedupe / server-pick rules, the tac-mod selection watcher, the tac-mod list hide and the ELF jump-slot lookup.
-// A port of the source build's ec_core (<source build>/the source build's ec_core, rules from
-// EC upstream 1.1.7). Differences, all deliberate:
-//   - no MD5 / libr15 file identity: the plugin's InitEx already gates on the pinned build id;
-//   - every read of game memory goes through SafeRead (the source dereferenced the game's lists and a lib's dynamic table
-//     directly); the one write into game memory, the tac-mod count, is a compare-and-swap against the count that was read;
-//   - the gear gate is a pthread recursive mutex with a static initializer (std::recursive_mutex has a non-constexpr
-//     constructor in libc++, which the repack's static-init check would refuse as a namespace-scope object).
-//
-// The page stands for echovr.exe RVAs [0x2104000, 0x2105000): the EC script libs take `re33_ec_page - 0x2104000` as the image
-// base, so every PC offset keeps its meaning. Clock = CLOCK_MONOTONIC / 100 ns (the clock the lifted bodies read).
+/* The platform-free half of the EC client (ec.h, docs/quest/combat/ec.md): the EC spare page layout, the EC network packet, the token /
+ * dedupe / server-pick rules, the tac-mod selection watcher and the tac-mod list hide. A port of the reference build's `afk_ec_core.h`, whose
+ * network rules are EchoCombat 1.1.7's VeilNet (EchoCombat `c14c3e0a`; docs/quest/combat/ec.md cites the lines). Differences, all deliberate:
+ *   - no MD5 / libr15 file identity: the install checks the pinned build ID;
+ *   - every read of game memory goes through SafeRead (combat/safe_read.h); the one write into game memory, the tac-mod count, is a
+ *     compare-and-swap against the count that was read;
+ *   - the gear gate is a pthread recursive mutex with a static initializer (std::recursive_mutex has a non-constexpr constructor in libc++,
+ *     which the static-init check refuses as a namespace-scope object).
+ *
+ * The page stands for echovr.exe RVAs [0x2104000, 0x2105000): the EC script libs take `re33_ec_page - 0x2104000` as the image base, so every
+ * PC offset keeps its meaning. Clock = CLOCK_MONOTONIC / 100 ns (the clock the lifted bodies read).
+ *
+ * Built with -fno-exceptions, like every combat translation unit.
+ */
 #pragma once
 
 #include <pthread.h>
@@ -19,10 +21,9 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "safe_read.h"
+#include "quest/combat/safe_read.h"
 
-namespace q15t {
-namespace ecc {
+namespace nevr_quest::combat::ec::core {
 
 constexpr std::uint32_t kPageRva = 0x2104000, kPageSize = 0x1000;
 // token blocks (+00 u32 count, +08 u64 expiry, +10 u32 shown) and use counters (u32), page offsets
@@ -227,89 +228,6 @@ inline void StoreSelected(std::uint8_t* page, std::uint64_t sym) {
   __atomic_store_n(reinterpret_cast<std::uint64_t*>(page + kEquipSel), sym, __ATOMIC_SEQ_CST);
 }
 
-// A loaded ELF64 lib's JUMP_SLOT word for one imported / interposable symbol, found by NAME in its own dynamic table (so no
-// per-build offset): `dyn` = its PT_DYNAMIC in memory, `base` = its load bias (bionic leaves the d_ptr values unrelocated).
-// Every read is a SafeRead. 0: no DT_JMPREL of RELA entries, or no R_AARCH64_JUMP_SLOT with that name.
-struct ElfDyn {
-  std::int64_t tag;
-  std::uint64_t val;
-};
-struct ElfRela {
-  std::uint64_t offset, info;
-  std::int64_t addend;
-};
-struct ElfSym {
-  std::uint32_t name;
-  std::uint8_t info, other;
-  std::uint16_t shndx;
-  std::uint64_t value, size;
-};
-// a NUL-terminated string at `addr`, at most n-1 bytes: reads in shrinking pieces so a string that ends at a page edge is read
-inline bool ReadCStr(std::uintptr_t addr, char* out, std::size_t n) {
-  std::size_t got = 0;
-  while (got + 1 < n) {
-    std::size_t want = n - 1 - got < 64 ? n - 1 - got : 64;
-    while (want > 0 && !SafeRead(addr + got, out + got, want)) want >>= 1;
-    if (want == 0) return false;
-    for (std::size_t i = 0; i < want; ++i)
-      if (out[got + i] == 0) return true;
-    got += want;
-  }
-  out[n - 1] = 0;
-  return true;
-}
-inline std::uintptr_t JumpSlot(std::uintptr_t base, std::uintptr_t dyn, const char* sym) {
-  std::uint64_t jmprel = 0, pltrelsz = 0, pltrel = 0, symtab = 0, strtab = 0;
-  bool ended = false;
-  for (int i = 0; i < 512 && dyn != 0; ++i) {
-    ElfDyn d{};
-    if (!SafeRead(dyn + static_cast<std::uintptr_t>(i) * sizeof d, &d, sizeof d)) return 0;
-    if (d.tag == 0) {
-      ended = true;
-      break;
-    }
-    if (d.tag == 23) jmprel = d.val;         // DT_JMPREL
-    else if (d.tag == 2) pltrelsz = d.val;   // DT_PLTRELSZ
-    else if (d.tag == 20) pltrel = d.val;    // DT_PLTREL
-    else if (d.tag == 6) symtab = d.val;     // DT_SYMTAB
-    else if (d.tag == 5) strtab = d.val;     // DT_STRTAB
-  }
-  if (!ended || !jmprel || !symtab || !strtab || pltrel != 7) return 0;  // 7 = DT_RELA
-  const std::uint64_t count = pltrelsz / sizeof(ElfRela);
-  constexpr std::uint64_t kChunk = 64;
-  for (std::uint64_t at = 0; at < count; at += kChunk) {
-    ElfRela r[kChunk];
-    const std::uint64_t n = count - at < kChunk ? count - at : kChunk;
-    if (!SafeRead(base + jmprel + at * sizeof(ElfRela), r, n * sizeof(ElfRela))) return 0;
-    for (std::uint64_t i = 0; i < n; ++i) {
-      if ((r[i].info & 0xffffffffu) != 1026) continue;  // R_AARCH64_JUMP_SLOT
-      ElfSym st{};
-      if (!SafeRead(base + symtab + (r[i].info >> 32) * sizeof st, &st, sizeof st)) continue;
-      char name[160];
-      if (!ReadCStr(base + strtab + st.name, name, sizeof name)) continue;
-      if (std::strcmp(name, sym) == 0) return base + static_cast<std::uintptr_t>(r[i].offset);
-    }
-  }
-  return 0;
-}
-
-// NRadEngine::NWriteLog::WriteLog(ELogLevel, unsigned long long, char const*, ...) of the pinned build: 25 instructions that
-// build a va_list and call WriteLogV(level, flags, fmt, va_list), nothing else. the disassembly 0x1088c20..0x1088c80 reads
-// exactly these words (docs/quest/q15t/modules/ec.md section 3); word 21 is the `bl WriteLogV@plt`, any target.
-constexpr std::uint32_t kWriteLogBody[25] = {0xd10403ff, 0x928004e8, 0x910003e9, 0x910223ea, 0xf2dff008, 0x910403eb, 0x91020129,
-                                             0x9100a14a, 0xa90efbe8, 0xa90da7ea, 0xf9006beb, 0xad0007e0, 0xad4683e1, 0xa90893e3,
-                                             0x9102c3e3, 0xa9099be5, 0xf90057e7, 0xad010fe2, 0xad0217e4, 0xad031fe6, 0xad0583e1,
-                                             0x94000000 /* bl, any target */, 0xf9407bfe, 0x910403ff, 0xd65f03c0};
-inline bool IsWriteLogWords(const std::uint32_t w[25]) {
-  for (int i = 0; i < 25; ++i)
-    if (i == 21 ? (w[i] & 0xfc000000u) != 0x94000000u : w[i] != kWriteLogBody[i]) return false;
-  return true;
-}
-inline bool IsWriteLogBody(std::uintptr_t fn) {
-  std::uint32_t w[25];
-  return SafeRead(fn, w, sizeof w) && IsWriteLogWords(w);
-}
-
 // The tac-mod list hide. The gear registry's tac-mod list is { allocator, entries, u64 count, u64 capacity },
 // entries of 0x88 bytes with the name (char[64]) first; EC's three are the table's last three, in this order. On a
 // server without EC the count is lowered by 3 (the entries stay), with it the full count is put back. A rebuilt list
@@ -365,9 +283,9 @@ inline int TacModsFor(TacList& st, std::uintptr_t list, bool serverHasIt, bool w
   }
   if (!list) return 0;
   bool ok = true;
-  const auto entries = Rd<std::uintptr_t>(list + 0x08, &ok);
-  const auto count_now = Rd<std::uint64_t>(list + 0x10, &ok);
-  const auto capacity = Rd<std::uint64_t>(list + 0x18, &ok);
+  const auto entries = SafeRead<std::uintptr_t>(list + 0x08, &ok);
+  const auto count_now = SafeRead<std::uint64_t>(list + 0x10, &ok);
+  const auto capacity = SafeRead<std::uint64_t>(list + 0x18, &ok);
   if (!ok || !entries) return 0;
   if (entries != st.entries) {  // a new list: its full count is the most it has had
     st.entries = entries;
@@ -422,5 +340,4 @@ inline int WatchUses(State& st, std::uint8_t* page, std::uint32_t seenUse[4], st
   return n;
 }
 
-}  // namespace ecc
-}  // namespace q15t
+}  // namespace nevr_quest::combat::ec::core

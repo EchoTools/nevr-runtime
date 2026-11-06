@@ -28,6 +28,7 @@
 #include "login_title_hook.h"
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/ec_targets.h"
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/memsys_targets.h"
@@ -432,6 +433,63 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
 }
 
+// The EC client's pins (src/quest/combat/ec_targets.h, #2187) against the real files: libr15's five JUMP_SLOTs resolve at their pins and the four
+// libr15 functions are defined where the pins say; in each of the three log libraries the WriteLogV JUMP_SLOT resolves at its pin, WriteLog and
+// WriteLogV are defined at the pinned addresses, WriteLog's 25 words are the pinned body with that library's own `bl`, the `bl` reaches the pinned
+// stub, and the stub's four words load the pinned slot.
+void CheckRealEc(const LoadedElf& r15, const LoadedElf& ovr, const LoadedElf& rad) {
+  namespace ec = nevr_quest::combat::ec;
+  CheckTarget(r15, GotTarget{pinned::kLibR15, ec::kRecvfromSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, ec::kPins.recvfromSlot},
+              "libr15 recvfrom JUMP_SLOT");
+  CheckTarget(r15, GotTarget{pinned::kLibR15, ec::kSendtoSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, ec::kPins.sendtoSlot},
+              "libr15 sendto JUMP_SLOT");
+  CheckTarget(r15, GotTarget{pinned::kLibR15, ec::kReloadSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, ec::kPins.reloadSlot},
+              "libr15 NR15::ReloadEquipmentConfig JUMP_SLOT");
+  CheckTarget(r15, GotTarget{pinned::kLibR15, ec::kUnloadSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, ec::kPins.unloadSlot},
+              "libr15 NR15::UnloadEquipmentConfig JUMP_SLOT");
+  CheckDefinedAt(r15, ec::kReloadSymbol, ec::kPins.reloadFn);
+  CheckDefinedAt(r15, ec::kUnloadSymbol, ec::kPins.unloadFn);
+  const LoadedElf* const elfs[ec::kLogLibs] = {&r15, &ovr, &rad};
+  const char* const stockIds[ec::kLogLibs] = {pinned::kLibR15StockBuildId, pinned::kPnsovrBuildId, pinned::kPnsradBuildId};
+  for (std::size_t i = 0; i < ec::kLogLibs; ++i) {
+    const ec::LogLib& lib = ec::kLogLib[i];
+    const LoadedElf& elf = *elfs[i];
+    CheckTarget(elf, GotTarget{lib.module, ec::kWriteLogVSymbol, RelocKind::kJumpSlot, stockIds[i], lib.slot}, lib.module);
+    CheckDefinedAt(elf, ec::kWriteLogVSymbol, lib.fn);
+    CheckDefinedAt(elf, ec::kWriteLogSymbol, lib.writeLogFn);
+    const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+    for (std::size_t w = 0; w < ec::kWriteLogWords; ++w) {
+      std::uint32_t have = 0;
+      std::memcpy(&have, mem + lib.writeLogFn + 4 * w, sizeof(have));
+      const std::uint32_t want = w == ec::kWriteLogBlIndex ? static_cast<std::uint32_t>(lib.blWord) : ec::kWriteLogBody[w];
+      if (have != want) {
+        std::fprintf(stderr, "%s WriteLog word %zu is %#x, pinned %#x\n", lib.module, w, have, want);
+        QCHECK(false);
+      }
+    }
+    // the `bl` (imm26, words) reaches the stub
+    const std::int64_t imm = static_cast<std::int64_t>(static_cast<std::int32_t>(static_cast<std::uint32_t>(lib.blWord) << 6) >> 6);
+    QCHECK(lib.writeLogFn + 4 * ec::kWriteLogBlIndex + static_cast<std::uint64_t>(imm * 4) == lib.stubAt);
+    for (std::size_t w = 0; w < 4; ++w) {
+      std::uint32_t have = 0;
+      std::memcpy(&have, mem + lib.stubAt + 4 * w, sizeof(have));
+      if (have != lib.stub[w]) {
+        std::fprintf(stderr, "%s WriteLogV stub word %zu is %#x, pinned %#x\n", lib.module, w, have, lib.stub[w]);
+        QCHECK(false);
+      }
+    }
+    // adrp x16 (immlo bits 29-30, immhi bits 5-23) + the ldr's imm12 * 8 is the slot
+    const std::uint32_t adrp = lib.stub[0], ldr = lib.stub[1];
+    const std::uint64_t page = ((static_cast<std::uint64_t>((adrp >> 5) & 0x7ffff) << 2) | ((adrp >> 29) & 3)) << 12;
+    const std::uint64_t slot = ((lib.stubAt & ~0xfffULL) + page) + (((ldr >> 10) & 0xfff) * 8);
+    if (slot != lib.slot) {
+      std::fprintf(stderr, "%s WriteLogV stub loads %#llx, the pinned slot is %#llx\n", lib.module, static_cast<unsigned long long>(slot),
+                   static_cast<unsigned long long>(lib.slot));
+      QCHECK(false);
+    }
+  }
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -639,6 +697,7 @@ int main(int argc, char** argv) {
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
   CheckRealHeadsetGates(r15);
+  CheckRealEc(r15, ovr, rad);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

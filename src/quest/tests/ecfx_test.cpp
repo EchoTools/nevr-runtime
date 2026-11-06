@@ -1,5 +1,7 @@
-// Host test of the `ecfx` module (src/quest/plugins/q15t/src/ecfx.cpp, src/quest/plugins/q15t/src/ecfx_core.h): the NEUTRON queue rules, and attach / tick / gate against a
-// stand-in wall lib that is really loaded (soname libac4e9374a146d3a4.so, src/quest/tests/q15t/ecfx_wall_stub.cpp).
+// Host test of NEUTRON effects (src/quest/combat/ecfx.cpp, ecfx_core.h; #2187): the queue rules, and attach / tick / gate against a stand-in
+// wall library that is really loaded (soname libac4e9374a146d3a4.so, src/quest/tests/ecfx_wall_stub.cpp). Moved from the q15t plugin's ecfx_test:
+// the assertions are the same; the lines are sentinel records (`combat_ecfx_*`), and the switch is `combat.ecfx` (the plugin's neutronfx.on is
+// warned about and changes nothing), with the refusal when ec is not installed.
 // usage: ecfx_test full|missing <path to the stand-in lib>
 #include <dlfcn.h>
 #include <unistd.h>
@@ -11,15 +13,17 @@
 #include <string>
 #include <vector>
 
-#include "ec.h"
-#include "ec_core.h"
-#include "ecfx.h"
-#include "ecfx_core.h"
-#include "nevr/plugin_interface.h"
-#include "plugin_log.h"
+#include "quest/combat/ec.h"
+#include "quest/combat/ecfx.h"
+#include "quest/combat/ecfx_core.h"
+#include "quest/combat/legacy_switch.h"
+#include "quest/sentinel/ec_page.h"
+#include "quest/sentinel/hook_log.h"
 
-using namespace q15t;
-using namespace q15t::ecfx;
+using namespace nevr_quest::combat;
+using namespace nevr_quest::combat::ecfx;
+using namespace nevr_quest::combat::ecfx::core;
+using sentinel::LogLevel;
 
 static int g_fail = 0;
 #define CHECK(cond, ...)                                \
@@ -33,20 +37,19 @@ static int g_fail = 0;
   } while (0)
 
 struct Line {
-  uint32_t level;
+  LogLevel level;
   std::string text;
 };
 static std::vector<Line> g_lines;
-static void FakeLog(const char* id, uint32_t level, const char* msg, const NevrLogField* f, uint32_t n) {
-  std::string t = std::string("plugin=") + id + " " + msg;
-  for (uint32_t i = 0; i < n; ++i) t += std::string(" ") + f[i].key + "=" + f[i].value;
-  g_lines.push_back({level, t});
-}
+static void Capture(LogLevel level, const char* line) { g_lines.push_back({level, line}); }
+// level -1: any, 1 Info, 2 Warning, 3 Error (the plugin test's numbers)
 static bool HasLine(const char* needle, int level = -1) {
+  const LogLevel want = level == 1 ? LogLevel::kInfo : level == 2 ? LogLevel::kWarn : LogLevel::kError;
   for (const auto& l : g_lines)
-    if (l.text.find(needle) != std::string::npos && (level < 0 || (int)l.level == level)) return true;
+    if (l.text.find(needle) != std::string::npos && (level < 0 || l.level == want)) return true;
   return false;
 }
+static uint8_t* EcPage() { return sentinel::EcPage(); }
 static int CountLines(const char* needle) {
   int n = 0;
   for (const auto& l : g_lines) n += l.text.find(needle) != std::string::npos;
@@ -202,7 +205,7 @@ static void RuleTests() {
 }
 
 // ---------- attach / tick / gate against the loaded stand-in ----------
-static void Dummy() {}
+static void Dummy() noexcept {}
 alignas(16) static uint8_t g_ctxobj[2][0x80];
 static std::vector<std::string> g_hook_notes;
 static uint64_t g_now = 10000;
@@ -217,7 +220,7 @@ static void Hook(void* tp, int kind) {
     if (q[2 * i] == reinterpret_cast<uint64_t>(tp) && q[2 * i + 1] != 0) ++g_hook_slot_ctx_nonzero;
   if (g_reenter) {
     const int before = g_calls[0] + g_calls[1] + g_calls[2] + g_calls[3];
-    EcfxTickForTest(g_now + 100);  // a re-entry from inside an entry
+    TickForTest(g_now + 100);  // a re-entry from inside an entry
     CHECK(g_calls[0] + g_calls[1] + g_calls[2] + g_calls[3] == before, "a re-entry ran an entry");
   }
   (void)kind;
@@ -231,14 +234,14 @@ static void QPut(int slot, uint64_t ctx, uint64_t word) {
 }
 static void Tick(uint64_t advance_ms = 10) {
   g_now += advance_ms;
-  EcfxTickForTest(g_now);
+  TickForTest(g_now);
 }
 
 static void FullTests(const char* path) {
-  EcResetForTest();
-  EcfxResetForTest();
-  SetEcNoThreadForTest(true);
-  SetEcfxNoThreadForTest(true);
+  ec::ResetForTest();
+  ecfx::ResetForTest();
+  ec::SetNoThreadForTest(true);
+  ecfx::SetNoThreadForTest(true);
   for (int i = 0; i < 2; ++i) {
     std::memset(g_ctxobj[i], 0, sizeof g_ctxobj[i]);
     *reinterpret_cast<uint64_t*>(g_ctxobj[i] + 0x68) = 0x7000 + static_cast<uint64_t>(i);  // the wall's script data
@@ -250,9 +253,9 @@ static void FullTests(const char* path) {
   const uint64_t ctx0 = reinterpret_cast<uint64_t>(&holder[0]), ctx1 = reinterpret_cast<uint64_t>(&holder[1]);
 
   // the lib is not loaded: waiting, once, gate stays 0, no tick slot used
-  CHECK(EcfxAttach() == EcfxStatus::kWaiting && EcfxAttach() == EcfxStatus::kWaiting, "not loaded: must wait");
-  CHECK(CountLines("neutronfx: waiting") == 1, "the waiting line must be logged once: %d", CountLines("neutronfx: waiting"));
-  CHECK(!EcfxGateOpenForTest(), "gate open without the lib");
+  CHECK(Attach() == Status::kWaiting && Attach() == Status::kWaiting, "not loaded: must wait");
+  CHECK(CountLines("\"event\":\"combat_ecfx_waiting\"") == 1, "the waiting line must be logged once: %d", CountLines("\"event\":\"combat_ecfx_waiting\""));
+  CHECK(!GateOpenForTest(), "gate open without the lib");
 
   void* lib = dlopen(path, RTLD_NOW);
   CHECK(lib != nullptr, "cannot load the stand-in lib: %s", dlerror());
@@ -269,18 +272,18 @@ static void FullTests(const char* path) {
   const uint64_t not_entry = reinterpret_cast<uint64_t>(dlsym(lib, "re33_not_an_entry"));
   CHECK(e0 && e1 && e2 && e3 && not_entry && !(e0 & 15) && !(e1 & 15) && !(e2 & 15) && !(e3 & 15), "stand-in entries");
 
-  CHECK(EcfxAttach() == EcfxStatus::kOn, "a loaded lib with all four entries must attach");
-  CHECK(HasLine("neutronfx: on", 1), "no INFO for attach");
-  CHECK(!EcfxGateOpenForTest(), "the gate must not open at attach: only after a drain ran on the tick");
+  CHECK(Attach() == Status::kOn, "a loaded lib with all four entries must attach");
+  CHECK(HasLine("\"event\":\"combat_ecfx_attach\",\"status\":\"on\"", 1), "no INFO for attach");
+  CHECK(!GateOpenForTest(), "the gate must not open at attach: only after a drain ran on the tick");
   // ecfx took one of the four net tick slots
   int free_slots = 0;
-  while (EcOnNetTick(&Dummy)) ++free_slots;
+  while (ec::OnNetTick(&Dummy)) ++free_slots;
   CHECK(free_slots == 3, "ecfx must hold exactly one net tick slot: %d free", free_slots);
-  CHECK(EcfxAttach() == EcfxStatus::kOn, "attach is idempotent");
+  CHECK(Attach() == Status::kOn, "attach is idempotent");
 
   // first tick: nothing queued, the gate opens
   Tick();
-  CHECK(EcfxGateOpenForTest() && HasLine("neutronfx: gate +e20 = 1", 1), "the gate must open at the first drain");
+  CHECK(GateOpenForTest() && HasLine("\"event\":\"combat_ecfx_gate\"", 1), "the gate must open at the first drain");
   CHECK(*reinterpret_cast<uint32_t*>(EcPage() + kGateOff) == 1, "the gate word on the page must be 1");
 
   // a charge entry runs once with its ctx; the slot is freed after it returned (Q-1)
@@ -291,7 +294,7 @@ static void FullTests(const char* path) {
   CHECK(calls[0] == 1 && last_tp[0] == reinterpret_cast<void*>(ctx0), "charge not run once with its ctx: %d", calls[0]);
   CHECK(g_hook_slot_ctx_nonzero == 1, "the slot must still be claimed while its entry runs");
   CHECK(Q()[0] == 0 && Q()[1] == 0, "the slot was not freed after the entry returned");
-  CHECK(HasLine("neutronfx: ran") && HasLine("kind=charge"), "no ran record");
+  CHECK(HasLine("\"event\":\"combat_ecfx_ran\"") && HasLine("\"kind\":\"charge\""), "no ran record");
 
   // cadence: a tick within 8 ms of the last drain does nothing
   QPut(0, ctx0, e0 | kCharge);
@@ -303,7 +306,7 @@ static void FullTests(const char* path) {
   // BOOM freed, never run
   QPut(0, ctx0, e2 | kBoom);
   Tick();
-  CHECK(calls[2] == 0 && Q()[0] == 0 && HasLine("neutronfx: drain") && HasLine("boom_freed=1"), "boom was run or not reported");
+  CHECK(calls[2] == 0 && Q()[0] == 0 && HasLine("\"event\":\"combat_ecfx_drain\"") && HasLine("\"boom_freed\":1"), "boom was run or not reported");
   // a foreign entry
   QPut(0, ctx0, not_entry | kCharge);
   Tick();
@@ -321,7 +324,7 @@ static void FullTests(const char* path) {
   CHECK(calls[3] == 1, "first sound");
   QPut(0, ctx1, e3 | kSound);
   Tick();
-  CHECK(calls[3] == 1 && HasLine("sound_repeats=1"), "a repeated sound was run");
+  CHECK(calls[3] == 1 && HasLine("\"sound_repeats\":1"), "a repeated sound was run");
   for (int i = 0; i < 7; ++i) Tick(400);  // idle drains (a gap over 500 ms is a stale queue)
   QPut(0, ctx1, e3 | kSound);
   Tick(210);
@@ -333,19 +336,19 @@ static void FullTests(const char* path) {
   // stale: no drain for > 500 ms frees what is queued, runs nothing
   QPut(0, ctx0, e0 | kCharge);
   Tick(600);
-  CHECK(calls[0] == 3 && Q()[0] == 0 && HasLine("stale_freed=1"), "a stale queue was run");
+  CHECK(calls[0] == 3 && Q()[0] == 0 && HasLine("\"stale_freed\":1"), "a stale queue was run");
   // the entry is not the lib's any more (dladdr): not run, freed, WARNING
-  EcfxSetEntryForTest(kBurst, reinterpret_cast<uint64_t>(&LocalEntry));
+  SetEntryForTest(kBurst, reinterpret_cast<uint64_t>(&LocalEntry));
   QPut(0, ctx0, reinterpret_cast<uint64_t>(&LocalEntry) | kBurst);
   Tick();
-  CHECK(calls[1] == 1 && Q()[0] == 0 && HasLine("entry is no longer the wall lib's", 2), "an address that is not the named entry was called");
-  EcfxSetEntryForTest(kBurst, e1);
+  CHECK(calls[1] == 1 && Q()[0] == 0 && HasLine("no longer the wall library's", 2), "an address that is not the named entry was called");
+  SetEntryForTest(kBurst, e1);
   // an address inside an entry, not its start: not the named entry (exact start), so not run
-  EcfxSetEntryForTest(kCharge, e0 + 16);
+  SetEntryForTest(kCharge, e0 + 16);
   QPut(0, ctx0, (e0 + 16) | kCharge);
   Tick();
-  CHECK(calls[0] == 3 && Q()[0] == 0 && HasLine("entry is no longer the wall lib's", 2), "an address inside the entry was called: %d", calls[0]);
-  EcfxSetEntryForTest(kCharge, e0);
+  CHECK(calls[0] == 3 && Q()[0] == 0 && HasLine("no longer the wall library's", 2), "an address inside the entry was called: %d", calls[0]);
+  SetEntryForTest(kCharge, e0);
   // re-entry from inside an entry returns at once
   g_reenter = 1;
   QPut(0, ctx0, e0 | kCharge);
@@ -360,65 +363,66 @@ static void FullTests(const char* path) {
 }
 
 static void MissingTests(const char* path) {
-  EcResetForTest();
-  EcfxResetForTest();
-  SetEcNoThreadForTest(true);
+  ec::ResetForTest();
+  ecfx::ResetForTest();
+  ec::SetNoThreadForTest(true);
   void* lib = dlopen(path, RTLD_NOW);
   CHECK(lib != nullptr, "cannot load the stand-in lib: %s", dlerror());
   if (lib == nullptr) return;
-  CHECK(EcfxAttach() == EcfxStatus::kNoEntry, "a lib without the burst entry must not attach");
-  CHECK(HasLine("neutronfx: OFF: the wall lib has no such entry", 3) && HasLine("entry=re33_ecent_ac4e93_17700"), "no ERROR for a missing entry");
-  CHECK(!EcfxGateOpenForTest(), "the gate must stay 0 when an entry is missing");
+  CHECK(Attach() == Status::kNoEntry, "a lib without the burst entry must not attach");
+  CHECK(HasLine("\"status\":\"no_entry\"", 3) && HasLine("\"entry\":\"re33_ecent_ac4e93_17700\""), "no ERROR for a missing entry");
+  CHECK(!GateOpenForTest(), "the gate must stay 0 when an entry is missing");
   int free_slots = 0;
-  while (EcOnNetTick(&Dummy)) ++free_slots;
+  while (ec::OnNetTick(&Dummy)) ++free_slots;
   CHECK(free_slots == 4, "no net tick slot may be taken by a failed attach: %d free", free_slots);
-  EcResetForTest();
+  ec::ResetForTest();
   // a failed attach is not "waiting": it is reported again on the next try (the lib is still loaded and still wrong)
-  CHECK(EcfxAttach() == EcfxStatus::kNoEntry, "still no entry");
+  CHECK(Attach() == Status::kNoEntry, "still no entry");
 }
 
 static void SlotsFullTest(const char* path) {
-  EcResetForTest();
-  EcfxResetForTest();
+  ec::ResetForTest();
+  ecfx::ResetForTest();
   void* lib = dlopen(path, RTLD_NOW);
   if (lib == nullptr) return;
-  for (int i = 0; i < 4; ++i) EcOnNetTick(&Dummy);
-  CHECK(EcfxAttach() == EcfxStatus::kNoTickSlot, "no free net tick slot: must stay off");
-  CHECK(HasLine("neutronfx: OFF: no free net tick slot", 3) && !EcfxGateOpenForTest(), "no ERROR / the gate opened");
+  for (int i = 0; i < 4; ++i) ec::OnNetTick(&Dummy);
+  CHECK(Attach() == Status::kNoTickSlot, "no free net tick slot: must stay off");
+  CHECK(HasLine("\"status\":\"no_tick_slot\"", 3) && !GateOpenForTest(), "no ERROR / the gate opened");
 }
 
-#ifndef Q15T_ECFX_DEFAULT_ON
-#define Q15T_ECFX_DEFAULT_ON 0
-#endif
-
+// combat.ecfx: on waits for the wall library, off is off, ec not installed refuses, the plugin's neutronfx.on is warned about and changes nothing.
 static void SwitchTest() {
-  char tmpl[] = "/tmp/q15t-ecfx-XXXXXX";
+  char tmpl[] = "/tmp/nevr-ecfx-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) std::exit(2);
-  EcResetForTest();
-  SetEcfxNoThreadForTest(true);
-  SetEcDirForTest(tmpl);
-  InstallResult r = InstallEcfx(0);
-#if Q15T_ECFX_DEFAULT_ON
-  CHECK(r.status == SwapStatus::kOk && std::string(r.reason) == "waiting", "default-on, no file: must wait for the lib, not be off: %s", r.reason);
-#else
-  CHECK(std::string(r.reason) == "off", "no neutronfx.on: must be off");
-#endif
+  ec::ResetForTest();
+  ecfx::ResetForTest();
+  ecfx::SetNoThreadForTest(true);
+  ModuleResult r = Install(true);
+  CHECK(!r.installed && std::string(r.status) == "needs_ec" && HasLine("\"result\":\"needs_ec\"", 3), "ec not installed: must refuse: %s", r.status);
+  ecfx::ResetForTest();
+  CHECK(std::string(Install(false).status) == "off", "combat.ecfx false: must be off");
+  ecfx::ResetForTest();
+  ec::SetInstalledForTest(true);
+  r = Install(true);
+  CHECK(r.installed && std::string(r.status) == "waiting", "ec installed, combat.ecfx true: must wait for the wall library: %s", r.status);
+  CHECK(std::string(Install(true).status) == "already_ran", "a second step must refuse");
+  ec::SetInstalledForTest(false);
   const std::string f = std::string(tmpl) + "/neutronfx.on";
   FILE* fp = std::fopen(f.c_str(), "w");
-  std::fclose(fp);
-  r = InstallEcfx(0);
-  CHECK(r.status == SwapStatus::kOk && std::string(r.reason) == "waiting", "neutronfx.on: must wait for the lib: %s", r.reason);
+  if (fp != nullptr) std::fclose(fp);
+  nevr_quest::combat::legacy::SetDirectoryForTest(tmpl);
+  ecfx::ResetForTest();
+  g_lines.clear();
+  r = Install(false);
+  CHECK(std::string(r.status) == "off" && HasLine("\"event\":\"combat_ecfx_legacy_switch\",\"file\":\"neutronfx.on\"", 2),
+        "neutronfx.on: must be warned about and change nothing: %s", r.status);
+  nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
   unlink(f.c_str());
   rmdir(tmpl);
-  SetEcDirForTest("");
 }
 
 int main(int argc, char** argv) {
-  NevrGameContext ctx{};
-  ctx.ctx_size = sizeof ctx;
-  ctx.plugin_id = "q15t";
-  ctx.log = &FakeLog;
-  SetLogContext(&ctx);
+  sentinel::SetLogSink(&Capture);
   if (argc < 3) {
     std::printf("usage: ecfx_test full|missing <lib>\n");
     return 2;

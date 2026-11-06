@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -34,8 +35,11 @@ class Image {
   static constexpr std::size_t kSize = 0x3800000;
   static constexpr std::uint64_t kRwStart = 0x3600000;
 
-  // `buildId` null: the patched libr15's (the one the running sentinel checks). `note` false: no PT_NOTE, so no build ID.
-  void Build(const std::vector<Reloc>& relocs, const char* buildId = nullptr, bool note = true) {
+  // `buildId` null: the patched libr15's (the one the running sentinel checks). `note` false: no PT_NOTE, so no build ID. `name` null: libr15.so
+  // (another library's image, such as libpnsovr.so, names itself). `rwStart`: where the writable segment starts (a smaller library's slots
+  // are below libr15's).
+  void Build(const std::vector<Reloc>& relocs, const char* buildId = nullptr, bool note = true, const char* name = nullptr,
+             std::uint64_t rwStart = kRwStart) {
     Drop();
     void* const mem = mmap(nullptr, kSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     QCHECK(mem != MAP_FAILED);
@@ -97,11 +101,11 @@ class Image {
     phdr_[0].p_type = PT_LOAD;
     phdr_[0].p_flags = PF_R | PF_X;
     phdr_[0].p_vaddr = 0;
-    phdr_[0].p_filesz = phdr_[0].p_memsz = kRwStart;
+    phdr_[0].p_filesz = phdr_[0].p_memsz = rwStart;
     phdr_[1].p_type = PT_LOAD;
     phdr_[1].p_flags = PF_R | PF_W;
-    phdr_[1].p_vaddr = kRwStart;
-    phdr_[1].p_filesz = phdr_[1].p_memsz = kSize - kRwStart;
+    phdr_[1].p_vaddr = rwStart;
+    phdr_[1].p_filesz = phdr_[1].p_memsz = kSize - rwStart;
     phdr_[2].p_type = PT_DYNAMIC;
     phdr_[2].p_flags = PF_R | PF_W;
     phdr_[2].p_vaddr = kDynamicAt;
@@ -112,7 +116,7 @@ class Image {
     image_.base = reinterpret_cast<std::uintptr_t>(mem_);
     image_.phdr = phdr_;
     image_.phnum = note ? 4 : 3;
-    std::strcpy(image_.name, sentinel::pinned::kLibR15);
+    std::snprintf(image_.name, sizeof(image_.name), "%s", name != nullptr ? name : sentinel::pinned::kLibR15);
     present_ = true;
   }
 
