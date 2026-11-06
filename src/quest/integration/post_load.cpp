@@ -43,7 +43,6 @@ std::atomic<ActionFn> g_combatFn{nullptr};
 std::atomic<bool> g_combatPending{false};
 std::atomic<bool> g_combatSettled{false};
 std::atomic<std::uint64_t> g_calls{0};
-std::atomic<ModuleLoadedFn> g_observer{nullptr};
 std::atomic<std::uint64_t> g_attempts{0};
 std::atomic<bool> g_sawPnsovr{false};
 std::atomic<bool> g_sawMatchmaking{false};
@@ -126,8 +125,6 @@ void SetPostLoadActions(const PostLoadActions& actions) {
   g_combatPending.store(actions.combat != nullptr, std::memory_order_release);
 }
 
-void SetModuleLoadedObserver(ModuleLoadedFn fn) noexcept { g_observer.store(fn, std::memory_order_release); }
-
 bool PostLoadPending() noexcept {
   return g_pending.load(std::memory_order_acquire) || g_pluginsPending.load(std::memory_order_acquire) ||
          g_combatPending.load(std::memory_order_acquire);
@@ -152,8 +149,7 @@ PostLoadStats PostLoadStatsView() noexcept {
 NEVR_OUTSIDE_GAME_CALL void AfterDlopen(const char* name, void* handle) noexcept {
   if (handle == nullptr) return;
   g_calls.fetch_add(1, std::memory_order_relaxed);
-  const ModuleLoadedFn observer = g_observer.load(std::memory_order_acquire);
-  if (observer != nullptr) observer(name, handle);
+  NotifyModuleLoaded(name, handle);
   // Stage lines (stage_log.h): the game mapped the libraries the later installs need. Once each.
   if (name != nullptr) {
     if (std::strstr(name, "pnsradmatchmaking") != nullptr) {

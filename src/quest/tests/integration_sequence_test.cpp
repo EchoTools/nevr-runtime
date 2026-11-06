@@ -1172,6 +1172,43 @@ void TestTheModuleLoadedObserverSeesEveryNonNullDlopenBeforeTheActions() {
   QCHECK(g_observed.size() == 1);
 }
 
+// The observer table (#2187): the first slot is SetModuleLoadedObserver's, AddModuleLoadedObserver fills the others; every observer sees every
+// non-null handle, in slot order, the first slot's first; adding one twice keeps one entry; a full table refuses; null is refused.
+std::vector<std::string> g_tableSeen;
+void TableObserverA(const char* name, void*) noexcept { g_tableSeen.push_back(std::string("A:") + name); }
+void TableObserverB(const char* name, void*) noexcept { g_tableSeen.push_back(std::string("B:") + name); }
+void TableObserverC(const char* name, void*) noexcept { g_tableSeen.push_back(std::string("C:") + name); }
+void TableObserverD(const char* name, void*) noexcept { g_tableSeen.push_back(std::string("D:") + name); }
+void TableObserverE(const char* name, void*) noexcept { g_tableSeen.push_back(std::string("E:") + name); }
+
+void TestTheModuleLoadedObserverTableCallsEveryObserverInSlotOrder() {
+  int dummy = 0;
+  ResetPostLoad(nullptr, nullptr, Settle::kDone, Settle::kDone);
+  ClearModuleLoadedObserversForTest();
+  g_tableSeen.clear();
+  QCHECK(!AddModuleLoadedObserver(nullptr));
+  QCHECK(AddModuleLoadedObserver(&TableObserverB));
+  QCHECK(AddModuleLoadedObserver(&TableObserverB));  // already there: one entry
+  SetModuleLoadedObserver(&TableObserverA);          // the first slot, set after an add: still called first
+  AfterDlopen("libpnsovr.so", &dummy);
+  QCHECK(g_tableSeen.size() == 2 && g_tableSeen[0] == "A:libpnsovr.so" && g_tableSeen[1] == "B:libpnsovr.so");
+  QCHECK(AddModuleLoadedObserver(&TableObserverC) && AddModuleLoadedObserver(&TableObserverD));
+  QCHECK(!AddModuleLoadedObserver(&TableObserverE));  // slots 1..3 are taken
+  g_tableSeen.clear();
+  AfterDlopen("libpnsrad.so", nullptr);  // a failed dlopen reaches none
+  AfterDlopen("libpnsrad.so", &dummy);
+  QCHECK(g_tableSeen.size() == 4 && g_tableSeen[0] == "A:libpnsrad.so" && g_tableSeen[1] == "B:libpnsrad.so" &&
+         g_tableSeen[2] == "C:libpnsrad.so" && g_tableSeen[3] == "D:libpnsrad.so");
+  SetModuleLoadedObserver(nullptr);  // clearing the first slot leaves the added ones
+  g_tableSeen.clear();
+  AfterDlopen("libx.so", &dummy);
+  QCHECK(g_tableSeen.size() == 3 && g_tableSeen[0] == "B:libx.so");
+  ClearModuleLoadedObserversForTest();
+  g_tableSeen.clear();
+  AfterDlopen("libx.so", &dummy);
+  QCHECK(g_tableSeen.empty());
+}
+
 // The login-failed page's title hook (#1137) waits for the script library like the matchmaking redirect waits for its own:
 // tried after every non-null dlopen until it settles, never again after, and its settling is reported.
 int g_titleRuns = 0;
@@ -2544,6 +2581,7 @@ int main() {
   TestPostLoadCountsEachDistinctMatchmakingImage();
   TestPostLoadRunsTheLoginTitleActionUntilItSettles();
   TestTheModuleLoadedObserverSeesEveryNonNullDlopenBeforeTheActions();
+  TestTheModuleLoadedObserverTableCallsEveryObserverInSlotOrder();
   TestMatchmakingReloadProbeWaitsForTheActionAndThenSpeaksOnce();
   TestMatchmakingReloadProbeFailsWhenTheActionGaveUp();
   TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender();
