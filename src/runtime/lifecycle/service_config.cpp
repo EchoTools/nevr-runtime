@@ -460,6 +460,19 @@ int NevrCfgFrameStatsMode(int* recognised) {
   return static_cast<int>(mode);
 }
 
+int NevrCfgUpdateEnabled() {
+  const std::optional<bool> enabled = NevrCfg().GetBool("update.enabled");
+  return enabled.has_value() ? (*enabled ? 1 : 0) : -1;
+}
+
+const char* NevrCfgUpdateChannel() {
+  return AccessorBoundary("NevrCfgUpdateChannel", [&]() -> const char* {
+    const std::optional<std::string> channel = NevrCfg().GetString("update.channel");
+    if (!channel || channel->empty()) return nullptr;
+    return InternCStr(*channel, "NevrCfgUpdateChannel");
+  });
+}
+
 const char* NevrCfgCaptureDevice() {
   return AccessorBoundary("NevrCfgCaptureDevice", [&]() -> const char* {
     const std::optional<std::string> device = NevrCfg().GetString("audio.capture_device");

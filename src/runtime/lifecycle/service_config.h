@@ -67,6 +67,13 @@ bool NevrCfgSocialFacadeEnabled();
 /// false or perf (the result is then 0). Only readable after the CLI is parsed, as every config.yaml read.
 int NevrCfgFrameStatsMode(int* recognised);
 
+/// `update.enabled` from config.yaml (#1200, ADR 0024 section 3): 1 when the key is true, 0 when it is false, -1 when it is absent or
+/// holds no boolean (updates stay on). Only readable after the CLI is parsed, as every config.yaml read.
+int NevrCfgUpdateEnabled();
+
+/// `update.channel` from config.yaml (#1200): the channel the player asked for, or null when the key is absent or empty. Interned.
+const char* NevrCfgUpdateChannel();
+
 /// The player's saved capture device (#412): `audio.capture_device` in config.yaml, an endpoint id or part of a
 /// friendly name. Null when the key is absent or empty, which means "use the default rule". Interned, like the
 /// other accessors: the pointer stays valid for the process lifetime.

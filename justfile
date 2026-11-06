@@ -1027,6 +1027,17 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
         fi
         run_test "$bin"
     done
+    # The runtime's half of PC self-update (ADR 0024, sections 3 and 6): the decisions, the check, the confirmation and the worker's
+    # threads against a fake core, and the Rust core linked into a MinGW binary and called from a worker thread.
+    cmake --build --preset {{ preset }} --target test_update_worker --target test_update_core_link
+    for name in test_update_worker test_update_core_link; do
+        bin="build/{{ preset }}/bin/$name.exe"
+        if [[ ! -f "$bin" ]]; then
+            echo "ERROR: GTest binary not found: $bin" >&2
+            exit 1
+        fi
+        run_test "$bin"
+    done
     # The two child-process harnesses (their own PASS/FAIL lines are the evidence): a deliberate
     # fault through the real createReport export for ten destination and runtime scenarios, and the
     # GameMainWrapper rendezvous with the NEVR_SetGameModule launcher contract.

@@ -47,6 +47,15 @@ set(PATCHES_SOURCES
     "lifecycle/game_image_guard.cpp"
     "lifecycle/runtime_entry.cpp"
     "lifecycle/runtime_exports.cpp"
+    # PC self-update, the runtime's half (ADR 0024, sections 3 and 6; #1200): the decisions, the check and the confirmation, the
+    # worker's threads, and the binding to the process (the core's C ABI, the verifier, the log). The names and the digest are the
+    # host's units, compiled into both DLLs as game_image_guard and the verifier are.
+    "lifecycle/update_policy.cpp"
+    "lifecycle/update_run.cpp"
+    "lifecycle/update_worker.cpp"
+    "lifecycle/update_process.cpp"
+    "host/update_names.cpp"
+    "host/file_digest.cpp"
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
     "lifecycle/boot.cpp"
@@ -354,6 +363,63 @@ find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile
 
 find_package(ZLIB REQUIRED)  # server/lobby_settings_relay.cpp inflates the game service's lobby settings frame (#905)
 target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd ZLIB::ZLIB CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32 crypt32 advapi32)
+
+# The core install method (installer/, ADR 0023), statically linked into nevr-runtime.dll for the update worker (ADR 0024, section 3: one
+# signed file, no extra DLL for the plugin gate to verify). Cargo builds the staticlib from the committed Cargo.lock, locked, for the
+# toolchain's own Windows target; the runtime links it and the system libraries rustc names for it (`--print native-static-libs`).
+# NEVR_UPDATE_CORE is ON when cargo is found and OFF when it is not (a configure-time warning says so); -DNEVR_UPDATE_CORE=ON makes a
+# missing cargo an error, -DNEVR_UPDATE_CORE=OFF skips the core. A runtime built without it ends every check in
+# `update check action=failed reason=core_open_failed`, one line per launch, and never updates.
+# KNOWN-WRONG #1200: build.yml's build job has no Rust toolchain, so a CI build links no core until the workflow builds it first.
+set(NEVR_UPDATE_CORE AUTO CACHE STRING "Link the Rust core install method into nevr-runtime.dll for PC self-update: ON, OFF or AUTO (on when cargo is found)")
+set_property(CACHE NEVR_UPDATE_CORE PROPERTY STRINGS AUTO ON OFF)
+set(NEVR_UPDATE_CORE_ENABLED OFF)
+if(NOT NEVR_UPDATE_CORE STREQUAL "OFF")
+  find_program(NEVR_CARGO cargo HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin")
+  if(NEVR_CARGO)
+    set(NEVR_UPDATE_CORE_ENABLED ON)
+  elseif(NEVR_UPDATE_CORE STREQUAL "ON")
+    message(FATAL_ERROR "NEVR_UPDATE_CORE=ON: nevr-runtime.dll links the Rust core install method (ADR 0024) and cargo was not found. "
+                        "Install a Rust toolchain with the x86_64-pc-windows-gnu target.")
+  else()
+    message(WARNING "cargo was not found: nevr-runtime.dll is built WITHOUT the core install method and will never update itself "
+                    "(ADR 0024). Install a Rust toolchain, or pass -DNEVR_UPDATE_CORE=OFF to silence this.")
+  endif()
+endif()
+if(NEVR_UPDATE_CORE_ENABLED)
+  if(MSVC)
+    set(NEVR_INSTALL_TARGET "x86_64-pc-windows-msvc")
+    set(NEVR_INSTALL_LIB_NAME "nevr_install.lib")
+  else()
+    set(NEVR_INSTALL_TARGET "x86_64-pc-windows-gnu")
+    set(NEVR_INSTALL_LIB_NAME "libnevr_install.a")
+  endif()
+  string(TOUPPER "${NEVR_INSTALL_TARGET}" NEVR_INSTALL_TARGET_UPPER)
+  string(REPLACE "-" "_" NEVR_INSTALL_TARGET_UPPER "${NEVR_INSTALL_TARGET_UPPER}")
+  set(NEVR_INSTALL_DIR "${CMAKE_BINARY_DIR}/installer-lib")
+  set(NEVR_INSTALL_LIB "${NEVR_INSTALL_DIR}/${NEVR_INSTALL_TARGET}/release/${NEVR_INSTALL_LIB_NAME}")
+  file(GLOB_RECURSE NEVR_INSTALL_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/installer/src/*.rs")
+  set(NEVR_INSTALL_ENV "")
+  if(NOT MSVC)
+    list(APPEND NEVR_INSTALL_ENV "CARGO_TARGET_${NEVR_INSTALL_TARGET_UPPER}_LINKER=${CMAKE_C_COMPILER}")
+  endif()
+  add_custom_command(
+    OUTPUT "${NEVR_INSTALL_LIB}"
+    COMMAND ${CMAKE_COMMAND} -E env ${NEVR_INSTALL_ENV}
+            "${NEVR_CARGO}" build --locked --release --target ${NEVR_INSTALL_TARGET} --lib
+            --manifest-path "${CMAKE_SOURCE_DIR}/installer/Cargo.toml" --target-dir "${NEVR_INSTALL_DIR}"
+    DEPENDS ${NEVR_INSTALL_SOURCES} "${CMAKE_SOURCE_DIR}/installer/Cargo.toml" "${CMAKE_SOURCE_DIR}/installer/Cargo.lock"
+            "${CMAKE_SOURCE_DIR}/installer/pinned-keys.txt"
+    COMMENT "Building the core install method (installer/) for nevr-runtime.dll"
+    VERBATIM)
+  add_custom_target(nevr_install_core DEPENDS "${NEVR_INSTALL_LIB}")
+  add_library(nevr_install STATIC IMPORTED GLOBAL)
+  set_target_properties(nevr_install PROPERTIES IMPORTED_LOCATION "${NEVR_INSTALL_LIB}"
+    INTERFACE_LINK_LIBRARIES "bcrypt;advapi32;kernel32;ntdll;userenv;ws2_32;dbghelp")
+  add_dependencies(nevr_install nevr_install_core)
+  target_link_libraries(nevr_runtime PRIVATE nevr_install)
+  target_compile_definitions(nevr_runtime PRIVATE NEVR_UPDATE_CORE_LINKED=1)
+endif()
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -1833,6 +1899,31 @@ if(BUILD_TESTING)
     target_link_libraries(test_plugin_tree PRIVATE
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
     gtest_discover_tests(test_plugin_tree DISCOVERY_MODE PRE_TEST)
+
+    # The runtime's half of PC self-update (ADR 0024, sections 3 and 6; #1200): the decisions, the check, the confirmation and
+    # the worker's threads, against a fake core in a temp nevr root. Compiles no game stub, no Log and no core (Rust).
+    add_executable(test_update_worker
+      tests/test_update_worker.cpp
+      lifecycle/update_policy.cpp
+      lifecycle/update_run.cpp
+      lifecycle/update_worker.cpp
+      host/update_names.cpp)
+    set_source_files_properties(tests/test_update_worker.cpp lifecycle/update_policy.cpp lifecycle/update_run.cpp
+      lifecycle/update_worker.cpp host/update_names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_update_worker PRIVATE -Werror)
+    target_include_directories(test_update_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_update_worker PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_update_worker DISCOVERY_MODE PRE_TEST)
+
+    # The Rust core linked into a MinGW C++ binary and called from a worker thread (ADR 0024, "What is not known"): the same staticlib and
+    # system libraries nevr-runtime.dll links.
+    if(NEVR_UPDATE_CORE_ENABLED)
+      add_executable(test_update_core_link tests/test_update_core_link.cpp)
+      set_source_files_properties(tests/test_update_core_link.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+      target_include_directories(test_update_core_link PRIVATE ${CMAKE_SOURCE_DIR})
+      target_link_libraries(test_update_core_link PRIVATE GTest::gtest GTest::gtest_main nevr_install)
+      gtest_discover_tests(test_update_core_link DISCOVERY_MODE PRE_TEST)
+    endif()
 
     # plugin_trust tests (ADR 0010, #741): the pinned root matches its digest, the policy is well formed.
     add_executable(test_plugin_trust
