@@ -165,6 +165,7 @@ class TelemetryStreamer {
   GetSymbolHashFn m_getSymbolHash{nullptr};
   GetFloatPropertyFn m_getFloatProperty{nullptr};
   GetIntPropertyFn m_getIntProperty{nullptr};
+  GetUserNameFn m_getUserName{nullptr};
   EntityLookupFn m_entityLookup{nullptr};
   ResolveEntityHandleFn m_resolveEntityHandle{nullptr};
   GetBoneDataFn m_getBoneData{nullptr};

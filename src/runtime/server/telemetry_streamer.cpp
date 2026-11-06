@@ -296,7 +296,7 @@ void TelemetryStreamer::RunDiagnostics() {
   // --- Players, by game slot (the same reader as SnapshotGameState) ---
   m_diagSnapshot.Clear();
   const nevr_telemetry_player::PlayerReadResult read =
-      nevr_telemetry_player::ReadPlayers(reinterpret_cast<const uint8_t*>(ngBase), &m_diagSnapshot);
+      nevr_telemetry_player::ReadPlayers(reinterpret_cast<const uint8_t*>(ngBase), &m_diagSnapshot, m_getUserName);
   Log(EchoVR::LogLevel::Debug,
       "[TELEMETRY.DIAG] players=%u not_players=%u slot_out_of_range=%u not_in_handle_table=%u no_identity=%u",
       m_diagSnapshot.playerCount, read.notPlayers, read.slotOutOfRange, read.notInHandleTable, read.noIdentity);
@@ -331,7 +331,7 @@ void TelemetryStreamer::RunDiagnostics() {
     logged++;
     const uint64_t accountId = info.accountId;
 
-    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Player slot=%u: name=%.20s, acct=%llu, flags=0x%04X, team=%u, ping=%u",
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Player slot=%u: name=%s, acct=%llu, flags=0x%04X, team=%u, ping=%u",
         slot, info.displayName, static_cast<unsigned long long>(accountId), info.flags, info.teamIndex, info.ping);
     if (accountId == 0) continue;
 
@@ -424,6 +424,7 @@ void TelemetryStreamer::ResolveFunctionPointers() {
   m_getSymbolHash = reinterpret_cast<GetSymbolHashFn>(base + nevr_game_func_addr::GET_SYMBOL_HASH);
   m_getFloatProperty = reinterpret_cast<GetFloatPropertyFn>(base + nevr_game_func_addr::GET_FLOAT_PROPERTY);
   m_getIntProperty = reinterpret_cast<GetIntPropertyFn>(base + nevr_game_func_addr::GET_INT_PROPERTY);
+  m_getUserName = reinterpret_cast<GetUserNameFn>(base + nevr_game_func_addr::GET_USER_NAME);
   m_entityLookup = reinterpret_cast<EntityLookupFn>(base + nevr_game_func_addr::ENTITY_LOOKUP);
   m_resolveEntityHandle = reinterpret_cast<ResolveEntityHandleFn>(base + nevr_game_func_addr::RESOLVE_ENTITY_HANDLE);
   m_getBoneData = reinterpret_cast<GetBoneDataFn>(base + nevr_game_func_addr::GET_BONE_DATA);
@@ -493,9 +494,10 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
 
   // --- Direct memory reads ---
 
-  // Players by game slot: identity from the lobby, stats from the slot's block (telemetry_player_read.h)
+  // Players by game slot: the name from the game's GetUserName, account id and ping from the lobby, stats
+  // from the slot's block (telemetry_player_read.h)
   const nevr_telemetry_player::PlayerReadResult read =
-      nevr_telemetry_player::ReadPlayers(reinterpret_cast<const uint8_t*>(netGameBase), snap);
+      nevr_telemetry_player::ReadPlayers(reinterpret_cast<const uint8_t*>(netGameBase), snap, m_getUserName);
   const unsigned leftOut = read.slotOutOfRange + read.notInHandleTable + read.noIdentity;
   if (leftOut != 0 && !m_leftOutWarned) {
     m_leftOutWarned = true;

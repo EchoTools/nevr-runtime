@@ -35,9 +35,10 @@ struct TelemetrySnapshot {
   // --- Direct memory reads ---
 
   // Indexed by game slot (the entrant word's low 5 bits), not by the net game's entrant array order.
-  // flags and teamIndex come from the net-game entrant; accountId, displayName and ping from the lobby
-  // entrant at the same slot (telemetry_player_read.h). present: a player (team 0 to 2) whose slot is below
-  // 16, whose slot's handle-table entry names it, and whose slot has an entry in the lobby's entrant table.
+  // flags and teamIndex come from the net-game entrant; displayName from the game's GetUserName for that
+  // entrant; accountId and ping from the lobby entrant at the same slot (telemetry_player_read.h). present: a
+  // player (team 0 to 2) whose slot is below 16, whose slot's handle-table entry names it, and whose slot has
+  // an entry in the lobby's entrant table.
   struct PlayerInfo {
     bool present;
     uint16_t flags;
@@ -118,6 +119,12 @@ constexpr uint64_t SLOT_HANDLE_GENERATION = 0x2;
 constexpr uint64_t SLOT_HANDLE_STRIDE = 4;
 constexpr uint16_t SLOT_HANDLE_NONE = 0xFFFF;
 
+// The net game's session-flags pointer. GetUserName (0x1401c98c0) loads it and reads the word it points to
+// with no null check (0x1401c9948 `mov rax, [rcx + 0x2da0]`, 0x1401c994f `mov ecx, [rax]`); the crash path's
+// table of session-flags null dereferences names GetUserName (crash_recovery_sites.h, N71). The reader calls
+// GetUserName only while this pointer is set.
+constexpr uint64_t SESSION_FLAGS_POINTER_OFFSET = 0x2DA0;
+
 // The lobby: the CNSLobby (EchoVR::Lobby) at *(CR15NetGame + 0x40) + 0x18 (echovr.exe 0x1401b3a94
 // `mov rcx, [rax + 0x40]`, 0x1401b3aa8 `add rcx, 0x18`; CR15NetGame hands the same object to LoadServerSupport,
 // 0x14015995b, which passes it to IServerLib::Initialize, 0x14060bcfa). Its entrant table is
@@ -179,6 +186,13 @@ using GetFloatPropertyFn = float(__fastcall*)(void* netGame, uint64_t propertyHa
 // FUN_140d05730(CR15NetGame, key) → int32_t (blue_score / red_score). The owner is the net game, not
 // the object at net game + GAME_STATE_DATA_OFFSET.
 using GetIntPropertyFn = int32_t(__fastcall*)(void* netGame, uint64_t propertyHash);
+
+// FUN_1401c98c0(CR15NetGame, entrant index) → the player's name, as /session writes it (0x1401b3b5b `call
+// 0x1401c98c0` with the loop's entrant index, copied at 0x1401b3b6d): the "displayname" of the entrant's state
+// data (*(ng + e*0x250 + 0x3c0), read by json path through 0x1405fe290) unless bit 27 of **(ng + 0x2da0) is
+// set; when that is empty the lobby's sfw name of the entrant's slot (0x140608310 flag 1); then "Unknown".
+// An index from the entrant count *(ng + 0xE2) up to *(ng + 0xDC) is named "Replayer %u". Never null.
+using GetUserNameFn = const char*(__fastcall*)(void* netGame, uint16_t entrantIndex);
 
 // FUN_1404f37a0(entityManager, handle) → entity*
 using EntityLookupFn = void*(__fastcall*)(void* entityManager, int64_t handle);
@@ -244,6 +258,7 @@ namespace nevr_game_func_addr {
 constexpr uint64_t GET_SYMBOL_HASH = 0xd5ced0;       // FUN_140d5ced0
 constexpr uint64_t GET_FLOAT_PROPERTY = 0xd36750;    // FUN_140d36750
 constexpr uint64_t GET_INT_PROPERTY = 0xd05730;      // FUN_140d05730
+constexpr uint64_t GET_USER_NAME = 0x1c98c0;         // FUN_1401c98c0(netGame, entrant index)
 constexpr uint64_t ENTITY_LOOKUP = 0x4f37a0;         // FUN_1404f37a0(entityMgr, handle)
 constexpr uint64_t RESOLVE_ENTITY_HANDLE = 0x363610;  // FUN_140363610(resolver, pair)
 constexpr uint64_t GET_BONE_DATA = 0x8f8090;          // FUN_1408f8090(entity, slot)

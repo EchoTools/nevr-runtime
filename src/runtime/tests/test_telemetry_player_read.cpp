@@ -11,7 +11,10 @@
 //     possession time is a float;
 //   - the lobby is *(netGame + 0x40) + 0x18; its entrant table (0xD8 per slot, by game slot) is at +0x360,
 //     its length at +0x368; id at +0x08, name at +0x60 (sfwDisplayName), ping at +0x8A. A player whose slot
-//     has no entry there is not sent.
+//     has no entry there is not sent;
+//   - the name is what the game's GetUserName (0x1401c98c0) returns for the net game and the entrant index, as
+//     /session writes it; without that function, or while the session-flags pointer at +0x2DA0 is null (the
+//     function reads through it unchecked), the lobby's sfw name.
 
 #include <gtest/gtest.h>
 
@@ -30,6 +33,7 @@ constexpr uint64_t kEntrantCount = 0xE2;
 constexpr uint64_t kHandleTable = 0x138;  // { u16 entrant, u16 generation } per slot, 4 bytes each
 constexpr uint16_t kNoHandle = 0xFFFF;
 constexpr uint64_t kLobbyPointer = 0x40;
+constexpr uint64_t kSessionFlagsPointer = 0x2DA0;
 constexpr uint64_t kSlotStride = 0x4D08;
 constexpr uint64_t kLobbyTable = 0x18 + 0x360;
 constexpr uint64_t kLobbyCount = 0x18 + 0x368;
@@ -50,6 +54,7 @@ class NetGame {
   // entrant holds that slot, as a game with one record per slot has it.
   NetGame() : bytes_(0x60000, 0), lobby_(0x18 + sizeof(EchoVR::Lobby), 0) {
     SetLobby(16);
+    Put<const uint32_t*>(bytes_, kSessionFlagsPointer, &sessionFlags_);
     for (uint8_t slot = 0; slot < 16; slot++) SetHandle(slot, kNoHandle, kNoHandle);
   }
 
@@ -111,16 +116,20 @@ class NetGame {
     Put<uint16_t>(table_, at + 0x8E, 7);  // the lobby's team word; the team comes from the net game
   }
 
+  void RemoveSessionFlags() { Put<const uint32_t*>(bytes_, kSessionFlagsPointer, nullptr); }
+
   const uint8_t* data() const { return bytes_.data(); }
+  uint32_t sessionFlags_ = 0;
   std::vector<uint8_t> bytes_;
   std::vector<uint8_t> lobby_;
   std::vector<uint8_t> table_;
 };
 
-TelemetrySnapshot Read(const NetGame& ng, nevr_telemetry_player::PlayerReadResult* result = nullptr) {
+TelemetrySnapshot Read(const NetGame& ng, nevr_telemetry_player::PlayerReadResult* result = nullptr,
+                       GetUserNameFn getUserName = nullptr) {
   TelemetrySnapshot snap;
   snap.Clear();
-  const auto r = nevr_telemetry_player::ReadPlayers(ng.data(), &snap);
+  const auto r = nevr_telemetry_player::ReadPlayers(ng.data(), &snap, getUserName);
   if (result) *result = r;
   return snap;
 }
@@ -366,6 +375,76 @@ TEST(TelemetryPlayerRead, AnEntrantTheTableDoesNotNameIsLeftOutEvenWithItsSlotFr
   EXPECT_FALSE(snap.playerInfo[3].present);
   EXPECT_EQ(snap.playerCount, 0);
   EXPECT_EQ(result.notInHandleTable, 1);
+}
+
+// A stand-in for the game's GetUserName: records each call and returns the name set for that entrant index.
+struct UserNameCall {
+  void* netGame;
+  uint16_t entrantIndex;
+};
+std::vector<UserNameCall> g_userNameCalls;
+std::vector<std::string> g_userNames;  // by entrant index
+
+const char* __fastcall FakeGetUserName(void* netGame, uint16_t entrantIndex) {
+  g_userNameCalls.push_back({netGame, entrantIndex});
+  return entrantIndex < g_userNames.size() ? g_userNames[entrantIndex].c_str() : "Unknown";
+}
+
+TEST(TelemetryPlayerName, TheGamesNameWinsOverTheLobbyName) {
+  NetGame ng;
+  ng.SetEntrants({Word(6, 0)});
+  ng.SetLobbyEntrant(6, 60, "lobby_six", 1);
+  g_userNameCalls.clear();
+  g_userNames = {"state_data_six"};
+  const TelemetrySnapshot snap = Read(ng, nullptr, &FakeGetUserName);
+  EXPECT_STREQ(snap.playerInfo[6].displayName, "state_data_six");
+  EXPECT_EQ(snap.playerInfo[6].accountId, 60u);  // the id still comes from the lobby
+}
+
+TEST(TelemetryPlayerName, ItIsAskedWithTheNetGameAndTheEntrantIndexNotTheSlot) {
+  NetGame ng;
+  ng.SetEntrants({Word(0, 4), Word(9, 1), Word(3, 0)});  // entrant 0 is the server, not a player
+  g_userNameCalls.clear();
+  g_userNames = {"server", "entrant_one", "entrant_two"};
+  const TelemetrySnapshot snap = Read(ng, nullptr, &FakeGetUserName);
+  ASSERT_EQ(g_userNameCalls.size(), 2u);
+  EXPECT_EQ(g_userNameCalls[0].netGame, static_cast<const void*>(ng.data()));
+  EXPECT_EQ(g_userNameCalls[0].entrantIndex, 1);
+  EXPECT_EQ(g_userNameCalls[1].netGame, static_cast<const void*>(ng.data()));
+  EXPECT_EQ(g_userNameCalls[1].entrantIndex, 2);
+  EXPECT_STREQ(snap.playerInfo[9].displayName, "entrant_one");
+  EXPECT_STREQ(snap.playerInfo[3].displayName, "entrant_two");
+}
+
+TEST(TelemetryPlayerName, TheGamesUnknownGoesOutAsItIs) {
+  NetGame ng;
+  ng.SetEntrants({Word(2, 1)});
+  ng.SetLobbyEntrant(2, 20, "lobby_two", 1);
+  g_userNameCalls.clear();
+  g_userNames = {"Unknown"};
+  const TelemetrySnapshot snap = Read(ng, nullptr, &FakeGetUserName);
+  EXPECT_STREQ(snap.playerInfo[2].displayName, "Unknown");
+}
+
+TEST(TelemetryPlayerName, WithNoSessionFlagsTheGameIsNotAskedAndTheLobbyNameIsSent) {
+  NetGame ng;
+  ng.SetEntrants({Word(8, 0)});
+  ng.SetLobbyEntrant(8, 80, "lobby_eight", 1);
+  ng.RemoveSessionFlags();  // GetUserName would read through this pointer unchecked
+  g_userNameCalls.clear();
+  g_userNames = {"state_data_eight"};
+  const TelemetrySnapshot snap = Read(ng, nullptr, &FakeGetUserName);
+  EXPECT_TRUE(g_userNameCalls.empty());
+  EXPECT_STREQ(snap.playerInfo[8].displayName, "lobby_eight");
+}
+
+TEST(TelemetryPlayerName, ALongNameFromTheGameIsCutAndEnded) {
+  NetGame ng;
+  ng.SetEntrants({Word(1, 0)});
+  g_userNameCalls.clear();
+  g_userNames = {std::string(35, 'g') + "past_the_cut"};
+  const TelemetrySnapshot snap = Read(ng, nullptr, &FakeGetUserName);
+  EXPECT_EQ(std::string(snap.playerInfo[1].displayName), std::string(35, 'g'));
 }
 
 }  // namespace
