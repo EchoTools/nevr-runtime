@@ -1,7 +1,7 @@
 # meshstep: the mesh-list tables grow by 1 in a combat match
 
 Files: `src/quest/combat/meshstep.{h,cpp}`, `meshstep_targets.h`, `src/quest/tests/meshstep_test.cpp`, `src/quest/combat/mutants.d/meshstep.sh`.
-Switch: `combat.meshstep` in `config.yaml` (default `false`: the plugin's copy never installed on a headset, so the reconstruction below has not run on one; `true` turns it on). The plugin's `meshstep.off` is not read; one found in its data directory is a Warning
+Switch: `combat.meshstep` in `config.yaml` (default `true`, as upstream's shipped build turns `--resource-table-step-1` on; the reconstruction below has not run on a headset, the plugin's copy having always refused). The plugin's `meshstep.off` is not read; one found in its data directory is a Warning
 (`combat_meshstep_legacy_switch`) that names the key. Runs in the `q15t` and `combat` APKs only (`combat::Active()`).
 
 ## What the stock code does (store libr15, build ID b243509c; ELF vaddr = disassembly VA - 0x100000)
@@ -83,4 +83,4 @@ Arena match: `combat_meshstep_stock` with `"scope":"other"` and no `combat_meshs
 Falsifiers: `combat_meshstep_pin` (the libr15 differs from the pins), `"reason":"vtable_unreadable"`, an `installed` line with no `built` line
 after a combat map loads (the constructor does not run through the slot, or runs before the install).
 
-Required for the headset row: `combat_meshstep_built` during a combat map load (with `combat.meshstep: true` in `config.yaml` for this row; the key defaults to false); `combat_meshstep_counts` lines at the level changes (`level_name` says which level ended), with `changed` above 0 for the combat level and `left_alone` for the arena one. The last level of a session has no line, because nothing ends it: load another level after the combat map to get its line.
+Required for the headset row: `combat_meshstep_built` during a combat map load (meshstep is on by default; the row requires its acting line because this module reconstructs the constructor where upstream patches one instruction); `combat_meshstep_counts` lines at the level changes (`level_name` says which level ended), with `changed` above 0 for the combat level and `left_alone` for the arena one. The last level of a session has no line, because nothing ends it: load another level after the combat map to get its line.

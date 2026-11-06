@@ -229,7 +229,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
   // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the four resource table steps in the plugin's order
   // (#2177), the headset gates (#2180) and, last, the pfx gate and the event-effect decision, which hook nothing (#2188). On the host no libr15 is
-  // loaded, so the tick, the table steps and the gates are refused and named (meshstep is off by default); the rule installs (it registers its callback
+  // loaded, so the tick, the table steps and the gates are refused and named ; the rule installs (it registers its callback
   // for a tick that may come later), and so do the two decisions.
   QCHECK(normal.ran && normal.modules == 9 && normal.installed == 3 && normal.failed == 6);
   const std::vector<Line> lines = Lines("combat_install");
@@ -240,7 +240,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
     QCHECK(Has(lines[1].text,
-               "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=off tablestep=module_not_loaded instmodel=module_not_loaded "
+               "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded tablestep=module_not_loaded instmodel=module_not_loaded "
                "shaderstep=module_not_loaded gates=module_not_loaded pfx=installed pfxtev=installed\""));
   }
   Done();
@@ -334,19 +334,19 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     QCHECK(Has(switches[0].text, "\"msg\":"));  // the line is not cut off: one sentinel line holds 768 bytes
   }
   // The four resource table steps (#2177): one `combat_config_switch` record each, generated from the registration table. instmodel, shaderstep and
-  // tablestep are on by default, meshstep is off by default (it never ran on a headset), each with its source; the file's word where it gave one.
+  // tablestep and meshstep are on by default, each with its source; the file's word where it gave one.
   g_lines.clear();
   nevr_quest::CombatConfig tables;
   combat::LogConfig(tables);
-  tables.meshstep = {true, nevr_quest::Source::kFile};
+  tables.meshstep = {false, nevr_quest::Source::kFile};
   tables.tablestep = {false, nevr_quest::Source::kFile};
   combat::LogConfig(tables);
   const std::vector<Line> records = Lines("combat_config_switch");
   QCHECK(records.size() == 8U);  // four per call, in the table's order
   const char* const order[] = {"meshstep", "tablestep", "instmodel", "shaderstep"};
-  const char* const wantFirst[] = {"\"on\":0,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
+  const char* const wantFirst[] = {"\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
                                    "\"on\":1,\"source\":\"default\""};
-  const char* const wantSecond[] = {"\"on\":1,\"source\":\"config\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
+  const char* const wantSecond[] = {"\"on\":0,\"source\":\"config\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
                                     "\"on\":1,\"source\":\"default\""};
   if (records.size() == 8U) {
     for (std::size_t i = 0; i < 4; ++i) {

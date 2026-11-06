@@ -129,3 +129,5 @@ runm lv_fiber_count_cap     $LV "s/  if (!ok || rows == 0 || count > kMaxGamespa
 runm lv_arena_wins_not      $LV "s/  if (IsEchoArenaLevel(current) \&\& !out.echoArena) {/  if (IsEchoArenaLevel(current) \&\& !out.echoArena \&\& !out.combatMap) {/"
 runm lv_name_dropped        $LV "s/    if (named.id == level) return named.name;/    if (named.id == level + 1) return named.name;/"
 runm ts_level_name_field    $TS "s/name != nullptr ? name : \"other\"/((void)name, \"other\")/"
+# the default of the switch (quest_config.h; the reader's fallback is quest_config_test's, mutated by hand in the PR body)
+runm ms_default_off         src/quest/sentinel/quest_config.h "s/  CombatSwitch meshstep;  /  CombatSwitch meshstep{false, Source::kAbsent};  /"

@@ -174,6 +174,12 @@ std::uint8_t* Construct(std::uint64_t (&init)[3]) {
 
 // ---- the tests ------------------------------------------------------------------------------------------------------------------
 
+// Every table step is on when the file says nothing: upstream's shipped build turns the same change on (--resource-table-step-1).
+void MeshstepIsOnByDefault() {
+  const nevr_quest::CombatConfig defaults;
+  QCHECK(defaults.meshstep.on && defaults.meshstep.source == nevr_quest::Source::kAbsent);
+}
+
 void ThePinsAreTheReadelfAndDisassemblyPins() {
   const ms::Pins& d = ms::kPins;
   QCHECK(d.ctor == 0x18677cc && d.slot == 0x36e5548 && d.current == 0xf28430 && d.listDataCtor == 0xef9c70);
@@ -605,6 +611,7 @@ void TheKillFileIsOnlyAWarning() {
 }  // namespace
 
 int main() {
+  MeshstepIsOnByDefault();
   ThePinsAreTheReadelfAndDisassemblyPins();
   ThePinnedWordsNameTheSlotTheVtablesAndTheFourHelpers();
   APinWordThatCannotBeReadIsAMismatch();

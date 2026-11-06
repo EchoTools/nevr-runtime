@@ -122,9 +122,13 @@ func TestThePluginHoldsNoneOfTheFourModulesAndTheirDocsMoved(t *testing.T) {
 	}
 }
 
-func TestMeshstepIsOffByDefaultInTheReaderToo(t *testing.T) {
-	if !strings.Contains(read(t, "src/quest/sentinel/quest_config.cpp"), "ReadCombatSwitch(cfg, kCombatMeshstepKey, r, /*fallback=*/false)") {
-		t.Error("the reader's fallback for combat.meshstep is not off")
+func TestEveryTableStepIsOnByDefaultInTheReaderToo(t *testing.T) {
+	reader := read(t, "src/quest/sentinel/quest_config.cpp")
+	for _, m := range tableStepModules {
+		key := "kCombat" + strings.ToUpper(m[:1]) + m[1:] + "Key"
+		if !strings.Contains(reader, "ReadCombatSwitch(cfg, "+key+", r);") {
+			t.Errorf("the reader's fallback for combat.%s is not on", m)
+		}
 	}
 }
 
@@ -158,9 +162,6 @@ func TestEachTableStepKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.
 			t.Errorf("the example config does not document %s", key)
 		}
 		want := "CombatSwitch " + key + ";"
-		if key == "meshstep" { // the plugin's meshstep never ran on a headset: off until a headset run shows the replacement work
-			want = "CombatSwitch meshstep{false, Source::kAbsent};"
-		}
 		if !strings.Contains(header, want) {
 			t.Errorf("CombatConfig lacks %q", want)
 		}

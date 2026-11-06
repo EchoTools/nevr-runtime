@@ -48,10 +48,9 @@
 // pool and System heap size (memsys) as the game has them. A value that is no boolean is true, with one Warning that names the key, never the
 // value. They only matter in the q15t and combat APKs, where the modules run.
 //
-// `combat.instmodel`, `combat.shaderstep` and `combat.tablestep` (#2177) are booleans in the same way, true when absent: `false` leaves the game's
-// table growth step of 32 for that resource class even in a combat match. `combat.meshstep` is a boolean that is FALSE when absent: the plugin's
-// meshstep never installed on a headset (its pins were wrong), so its replacement of the mesh-list constructor has not run on one, and the shipped
-// behaviour is the game's constructor; `true` turns it on.
+// `combat.meshstep`, `combat.instmodel`, `combat.shaderstep` and `combat.tablestep` (#2177) are booleans in the same way, true when absent: `false`
+// leaves the game's table growth step of 32 for that resource class even in a combat match. All four are on by default because the upstream build the
+// community combat port ships turns the same change on (`--resource-table-step-1`, in its wave-2 recipe).
 #pragma once
 
 #include <cstddef>
@@ -177,7 +176,7 @@ struct CombatConfig {
   CombatSwitch refreshRate{true, Source::kAbsent};            // `combat.refresh_rate`: the level rate rule (off: the game's rate always)
   CombatSwitch refreshRateLobby{false, Source::kAbsent};      // `combat.refresh_rate_lobby`: the combat lobby asks for the level rate too (default OFF: arena shares the lobby levels)
   CombatSwitch refreshRateQuest2At72{true, Source::kAbsent};  // `combat.refresh_rate_quest2_72`: a Quest 2's level rate is 72, not 90 (combat/refresh_rate.h)
-  CombatSwitch meshstep{false, Source::kAbsent};  // `combat.meshstep`: mesh-list tables grow by 1 in a combat match (combat/meshstep.h); default OFF, see below
+  CombatSwitch meshstep;    // `combat.meshstep`: mesh-list tables grow by 1 in a combat match (combat/meshstep.h)
   CombatSwitch instmodel;   // `combat.instmodel`: instanced-model tables grow by 1 in a combat match (combat/instmodel.h)
   CombatSwitch shaderstep;  // `combat.shaderstep`: shader-set tables built by ConstructInstance grow by 1 in a combat match (combat/shaderstep.h)
   CombatSwitch tablestep;   // `combat.tablestep`: shader-set tables built by CreateInstance grow by 1 in a combat match (combat/tablestep.h)

@@ -1161,12 +1161,11 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
   struct Key {
     const char* name;
     nevr_quest::CombatSwitch nevr_quest::CombatConfig::*member;
-    bool defaultOn = true;  // meshstep is off when absent (#2177)
   };
   const Key keys[] = {{"heaps", &nevr_quest::CombatConfig::heaps},
                       {"memsys", &nevr_quest::CombatConfig::memsys},
                       // the resource table steps (#2177)
-                      {"meshstep", &nevr_quest::CombatConfig::meshstep, false},
+                      {"meshstep", &nevr_quest::CombatConfig::meshstep},
                       {"instmodel", &nevr_quest::CombatConfig::instmodel},
                       {"shaderstep", &nevr_quest::CombatConfig::shaderstep},
                       {"tablestep", &nevr_quest::CombatConfig::tablestep}};
@@ -1175,11 +1174,11 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
     const std::string full = std::string("combat.") + key.name;
     {  // no file, an empty file, a section with no key: on, from the default, nothing said
       const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
-      CHECK((none.config.combat.*key.member).on == key.defaultOn && (none.config.combat.*key.member).source != Source::kFile);
+      CHECK((none.config.combat.*key.member).on && (none.config.combat.*key.member).source != Source::kFile);
       CHECK(!HasLevel(none, LogLevel::kWarn) && !HasLevel(none, LogLevel::kError));
       for (const char* text : {"", "combat: {}\n", "combat:\n", "combat:\n  force: true\n"}) {
         const LoadResult r = Load(Full(), text);
-        CHECK(!r.fileRejected && (r.config.combat.*key.member).on == key.defaultOn && (r.config.combat.*key.member).source != Source::kFile);
+        CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
       }
     }
     for (const char* word : {"true", "yes"}) {  // on, by the file's word
@@ -1195,18 +1194,18 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
       const bool other = key.member == &nevr_quest::CombatConfig::heaps ? r.config.combat.memsys.on : r.config.combat.heaps.on;
       CHECK(other);  // the other module's switch is its own
       for (const Key& each : keys) {
-        if (each.member != key.member) CHECK((r.config.combat.*each.member).on == each.defaultOn);  // and no other key moved
+        if (each.member != key.member) CHECK((r.config.combat.*each.member).on);  // and no other key moved
       }
     }
     for (const char* value : {"maybe", "2", "[true]", "{a: 1}", ""}) {  // a value nobody meant: the default, and the key is named
       const LoadResult r = Load(Full(), section + value + "\n");
-      CHECK(!r.fileRejected && (r.config.combat.*key.member).on == key.defaultOn && (r.config.combat.*key.member).source != Source::kFile);
+      CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
       CHECK(EventsWithAreAtLevel(r, ("config file key=" + full + " rejected reason=").c_str(), LogLevel::kWarn));
       CHECK(!EventsContain(r, "maybe") && !HasLevel(r, LogLevel::kError));
     }
     {  // a file rejected as a whole contributes nothing, this key included
       const LoadResult r = Load(Full(), section + "false\nnot_a_section: 1\n");
-      CHECK(r.fileRejected && (r.config.combat.*key.member).on == key.defaultOn && (r.config.combat.*key.member).source != Source::kFile);
+      CHECK(r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
     }
   }
   {  // both off in one file
