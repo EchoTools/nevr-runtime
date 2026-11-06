@@ -40,6 +40,8 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"combat/heaps.cpp", 4, 0},
     {"combat/match_tags.cpp", 2, 0},
     {"combat/memsys.cpp", 2, 0},
+    {"combat/music.cpp", 1, 0},
+    {"combat/sensorwd.cpp", 3, 0},
     {"diag/hwdump_install.cpp", 18, 0},
     {"integration/dlopen_hook.cpp", 1, 0},
     {"invite/wizard_metric_hook.cpp", 1, 0},

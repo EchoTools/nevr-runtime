@@ -24,12 +24,14 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, meshstep (`Q15T_MESHSTEP`, #1555), gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, shaderstep (#1553), instmodel, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), ec, ecfx, droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
+- On: fxtrail, voipdrop, custctx, meshstep (`Q15T_MESHSTEP`, #1555), gunconnect, aibots, bvh, wallfire, impactsnd, shaderstep (#1553), instmodel, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), ec, ecfx, droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
   (`Q15T_T26`), and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
 - The three headset gates (party permissions, bot body, menu link) are not this plugin's: the runtime owns them
   (`src/quest/combat/headset_gates.h`). Their switches are the `combat:` keys `gate_perm`, `gate_bots`, `gate_link`, `gate_link_libs` in
   `config.yaml`; no kill file or data file switches any of the three gates. The bot-body gate acts only where this plugin's levelname is installed
   (it reads the game's LoadLevelName slot).
+- Combat music and the scanner-sphere watchdog are not this plugin's either: the runtime owns them (`src/quest/combat/music.h`, `src/quest/combat/sensorwd.h`), switched by the
+  `combat:` keys `music` and `sensorwd` (both off by default) in `config.yaml`; no kill file switches either.
 - `ec` is on with the words `types=VPTO equip hide` (`Q15T_EC_DEFAULT_WORDS`), and `ecfx` is on (`Q15T_ECFX_DEFAULT_ON`),
   with no switch file. A switch file in the plugin data directory still overrides the words.
 - Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).

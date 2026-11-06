@@ -221,8 +221,9 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
   // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the headset gates (#2180) and, last, the pfx gate and
   // the event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick and the gates are refused and named; the rule
-  // installs (it registers its callback for a tick that may come later), and so do the two decisions.
-  QCHECK(normal.ran && normal.modules == 5 && normal.installed == 3 && normal.failed == 2);
+  // installs (it registers its callback for a tick that may come later), and so do the two decisions. The scanner-sphere watchdog and the combat music
+  // (#2184) come last and are on by default; with no libr15 loaded each is refused and named.
+  QCHECK(normal.ran && normal.modules == 7 && normal.installed == 3 && normal.failed == 4);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -230,7 +231,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed gates=module_not_loaded pfx=installed pfxtev=installed\""));
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed gates=module_not_loaded pfx=installed pfxtev=installed sensorwd=module_not_loaded music=module_not_loaded\""));
   }
   Done();
 }
@@ -458,6 +459,58 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   Done();
 }
 
+// The watchdog and the combat music (#2184) are ON unless the file turns them off: the config line is one `combat_config_switch` record each, the rows read
+// their own key, and a module that is on tries its install (here, with no libr15 loaded, it is refused and named).
+void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
+  Process(bv::Variant::kCombat);
+  sentinel::SetLogSink(&Capture);
+  nevr_quest::CombatConfig cfg;
+  QCHECK(cfg.music.on && cfg.sensorwd.on && cfg.music.source == nevr_quest::Source::kAbsent);
+  combat::LogConfig(cfg);
+  cfg.sensorwd = {false, nevr_quest::Source::kFile};
+  combat::LogConfig(cfg);
+  const std::vector<Line> sw = Lines("combat_config_switch");
+  QCHECK(sw.size() == 4U);
+  if (sw.size() == 4U) {
+    QCHECK(Has(sw[0].text, "\"module\":\"music\"") && Has(sw[0].text, "\"key\":\"combat.music\"") && Has(sw[0].text, "\"on\":1") &&
+           Has(sw[0].text, "\"source\":\"default\""));
+    QCHECK(Has(sw[1].text, "\"module\":\"sensorwd\"") && Has(sw[1].text, "\"key\":\"combat.sensorwd\"") && Has(sw[1].text, "\"on\":1") &&
+           Has(sw[1].text, "\"source\":\"default\""));
+    QCHECK(Has(sw[3].text, "\"module\":\"sensorwd\"") && Has(sw[3].text, "\"on\":0") && Has(sw[3].text, "\"source\":\"config\""));
+    QCHECK(sw[0].level == sentinel::LogLevel::kInfo);
+  }
+  Done();
+  // The rows: on by default (no libr15 here, so each is refused and named); music off alone, then sensorwd off alone, each reaching only its own module.
+  Process(bv::Variant::kCombat);
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "sensorwd=module_not_loaded music=module_not_loaded"));
+  QCHECK(Has(Lines("combat_music_install")[0].text, "\"reason\":\"module_not_loaded\""));
+  QCHECK(Has(Lines("combat_sensorwd_install")[0].text, "\"reason\":\"module_not_loaded\""));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig musicOff;
+  musicOff.music = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(musicOff);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "sensorwd=module_not_loaded music=off_config"));
+  QCHECK(Has(Lines("combat_music_install")[0].text, "\"reason\":\"off_config\""));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig sensorOff;
+  sensorOff.sensorwd = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(sensorOff);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "sensorwd=off_config music=module_not_loaded"));
+  QCHECK(Has(Lines("combat_sensorwd_install")[0].text, "\"reason\":\"off_config\""));
+  Done();
+  // A plain release installs neither and writes neither line.
+  Process(bv::Variant::kNone);
+  combat::InstallNormal();
+  QCHECK(Lines("combat_music_install").empty() && Lines("combat_sensorwd_install").empty());
+  Done();
+}
+
 }  // namespace
 
 int main() {
@@ -477,6 +530,7 @@ int main() {
   TheGatesKeysHaveALineOfTheirOwn();
   TheGatesRowReadsItsKeysFromTheResolvedSection();
   ThePfxRowsReadTheirKeysFromTheResolvedSection();
+  TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

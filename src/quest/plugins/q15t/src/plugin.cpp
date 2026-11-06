@@ -24,12 +24,10 @@
 #include "instmodel.h"
 #include "levelname.h"
 #include "boosterpool.h"
-#include "music.h"
 #include "peerclamp.h"
 #include "plugin_log.h"
 #include "powerboost.h"
 #include "script_redirect.h"
-#include "sensorwd.h"
 #include "shaderstep.h"
 #include "shieldgamma.h"
 #include "sendguard.h"
@@ -112,12 +110,6 @@
 #endif
 #ifndef Q15T_SHADERSTEP
 #define Q15T_SHADERSTEP 0
-#endif
-#ifndef Q15T_MUSIC
-#define Q15T_MUSIC 0
-#endif
-#ifndef Q15T_SENSORWD
-#define Q15T_SENSORWD 0
 #endif
 #ifndef Q15T_INSTMODEL  // CGInstancedModelResource's constructor with growth step 1 (instmodel.h)
 #define Q15T_INSTMODEL 0
@@ -227,12 +219,6 @@ constexpr char kCompiledModules[] =
     "levelname "
     "boosterpool "
 #endif
-#if Q15T_MUSIC
-    "music "
-#endif
-#if Q15T_SENSORWD
-    "sensorwd "
-#endif
 #if Q15T_INSTMODEL
     "instmodel "
 #endif
@@ -312,7 +298,7 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
   if (Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
-  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), impactsnd (sound ids), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and
+  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), impactsnd (sound ids), hudmeter and
   // shieldgamma (what is drawn), ecfx (rides ec).
   if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
@@ -461,10 +447,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
     ReportModule("boosterpool", off);
   }
 #endif
-#if Q15T_SENSORWD
-  ReportModule("sensorwd", InstallSensorWd(base));
-  AddModuleTick("sensorwd", &SensorWdTick, &want_tick);  // one bool test per frame when the install was refused
-#endif
 #if Q15T_INSTMODEL
   ReportModule("instmodel", InstallInstModel(base));  // no tick: the swapped constructor does its work when the object is built
 #endif
@@ -473,13 +455,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #endif
 #if Q15T_DECALS
   ReportModule("decals", InstallDecals(base));  // after impactsnd: its Shutdown wrapper chains on impactsnd's
-#endif
-#if Q15T_MUSIC
-  {
-    const InstallResult r = InstallMusic(base);
-    ReportModule("music", r);
-    if (r.status == SwapStatus::kOk) AddModuleTick("music", &MusicTick, &want_tick);
-  }
 #endif
 #if Q15T_GUNCONNECT
   InitGunConnect(base, GunConnectFns{});  // an all-null table: resolved from the loaded game library on the first tick

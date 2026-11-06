@@ -178,6 +178,8 @@ struct CombatConfig {
   CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
   CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
   CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
+  CombatSwitch music;     // `combat.music`: one combat music instance at a time, combat maps only (combat/music.h); on, as upstream's shipped build has it
+  CombatSwitch sensorwd;  // `combat.sensorwd`: a scanner sphere stuck on is turned off, combat maps only (combat/sensorwd.h); on, as upstream's shipped build has it
 };
 
 struct LogEvent {

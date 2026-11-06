@@ -29,6 +29,8 @@
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/combat_tick_targets.h"
 #include "quest/combat/headset_gates_targets.h"
+#include "quest/combat/music_targets.h"
+#include "quest/combat/sensorwd_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/memsys_targets.h"
 #include "pinned_targets.h"
@@ -432,6 +434,50 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
 }
 
+// The combat music's pins (src/quest/combat/music_targets.h) against the real libr15: the JUMP_SLOT resolves at its pin, PostSoundEvent is defined at the pinned
+// address, and the 29 code words are the file's.
+void CheckRealMusic(const LoadedElf& elf) {
+  namespace mu = nevr_quest::combat::music::targets;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, mu::kSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, mu::kSlotVaddr},
+              "libr15 CWwiseEngine::PostSoundEvent JUMP_SLOT");
+  CheckDefinedAt(elf, mu::kSymbol, mu::kStockVaddr);
+  QCHECK(mu::kWords[0].vaddr == mu::kStockVaddr);
+  for (const mu::Word& w : mu::kWords) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + w.vaddr, sizeof(have));
+    if (have != w.word) {
+      std::fprintf(stderr, "libr15 PostSoundEvent word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(w.vaddr), have, w.word);
+      QCHECK(false);
+    }
+  }
+}
+
+// The scanner-sphere watchdog's pins (src/quest/combat/sensorwd_targets.h) against the real libr15: the two vtable words are ABS64 relocations of the two
+// CModelCS functions at their pins, the event JUMP_SLOT resolves at its pin, the three functions are defined at the pinned addresses, and the 34 code words are
+// the file's.
+void CheckRealSensorwd(const LoadedElf& elf) {
+  namespace sd = nevr_quest::combat::sensorwd::targets;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, sd::kEnabledSymbol, RelocKind::kAbs64, pinned::kLibR15StockBuildId, sd::kPins.enabledSlot},
+              "libr15 CModelCS::OnComponentEnabled ABS64");
+  CheckTarget(elf, GotTarget{pinned::kLibR15, sd::kDisabledSymbol, RelocKind::kAbs64, pinned::kLibR15StockBuildId, sd::kPins.disabledSlot},
+              "libr15 CModelCS::OnComponentDisabled ABS64");
+  CheckTarget(elf, GotTarget{pinned::kLibR15, sd::kEventSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, sd::kPins.eventSlot},
+              "libr15 CncaGameSpace::SendComponentEventGlobal JUMP_SLOT");
+  CheckDefinedAt(elf, sd::kEnabledSymbol, sd::kPins.enabledFn);
+  CheckDefinedAt(elf, sd::kDisabledSymbol, sd::kPins.disabledFn);
+  CheckDefinedAt(elf, sd::kEventSymbol, sd::kPins.eventFn);
+  for (const sd::Word& w : sd::kWords) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + w.vaddr, sizeof(have));
+    if (have != w.word) {
+      std::fprintf(stderr, "libr15 sensorwd word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(w.vaddr), have, w.word);
+      QCHECK(false);
+    }
+  }
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -639,6 +685,8 @@ int main(int argc, char** argv) {
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
   CheckRealHeadsetGates(r15);
+  CheckRealMusic(r15);
+  CheckRealSensorwd(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

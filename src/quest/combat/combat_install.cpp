@@ -10,9 +10,11 @@
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/music.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/combat/sensorwd.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -41,6 +43,8 @@ ModuleResult GatesNormal() noexcept {
 }
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
+ModuleResult SensorwdNormal() noexcept { return sensorwd::Install(g_config.sensorwd.on); }
+ModuleResult MusicNormal() noexcept { return music::Install(g_config.music.on); }
 
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
@@ -58,6 +62,10 @@ constexpr std::array kModules{
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},
+    // sensorwd, then music (#2184): the plugin installed sensorwd after its levelname pair and music after decals, so both come after the modules that
+    // move before them; each registers a tick callback, which the tick row (above) lets them do before or after its install.
+    Module{"sensorwd", nullptr, &SensorwdNormal},
+    Module{"music", nullptr, &MusicNormal},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -148,6 +156,17 @@ void NoteNormalNotStarted(const char* reasonToken) noexcept {
                                "the game keeps its own behaviour"}});
 }
 
+namespace {
+
+// One record per module switch (docs: combat_config_switch): the module, its key, its value and where the value came from.
+void LogSwitch(const char* module, const char* key, const nevr_quest::CombatSwitch& choice) noexcept {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                      {{"module", module}, {"key", key}, {"on", choice.on ? 1 : 0},
+                       {"source", choice.source == nevr_quest::Source::kFile ? "config" : "default"}});
+}
+
+}  // namespace
+
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
   const auto source = [](const nevr_quest::Source s) { return s == nevr_quest::Source::kFile ? "config" : "default"; };
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config",
@@ -169,6 +188,9 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"gate_link", config.gateLink.on ? 1 : 0}, {"gate_link_source", source(config.gateLink.source)},
                        {"gate_link_libs_source", source(config.gateLinkLibs.source)},
                        {"msg", "the headset gates' keys (src/quest/combat/headset_gates.h); gate_link_libs is a text and is never logged, only where it came from"}});
+  // Combat music and the scanner-sphere watchdog (#2184), both off unless the file turns them on.
+  LogSwitch("music", "combat.music", config.music);
+  LogSwitch("sensorwd", "combat.sensorwd", config.sensorwd);
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }

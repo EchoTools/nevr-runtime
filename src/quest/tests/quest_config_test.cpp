@@ -1275,7 +1275,10 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"gate_link", &nevr_quest::CombatConfig::gateLink, true},
                       // The particle-renderer gate and the event-effect decision (#2188): on unless the file says false.
                       {"pfx", &nevr_quest::CombatConfig::pfx, true},
-                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true}};
+                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true},
+                      // Combat music and the scanner-sphere watchdog (#2184): on, as upstream's shipped build has them (UPSTREAM-DEFAULTS rows music, sensorwd).
+                      {"music", &nevr_quest::CombatConfig::music, true},
+                      {"sensorwd", &nevr_quest::CombatConfig::sensorwd, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);
