@@ -9,12 +9,16 @@
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/meshstep.h"
 #include "quest/combat/music.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
 #include "quest/combat/refresh_rate.h"
 #include "quest/combat/sensorwd.h"
+#include "quest/combat/shaderstep.h"
+#include "quest/combat/tablestep.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -32,6 +36,10 @@ ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on)
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
+ModuleResult MeshstepNormal() noexcept { return meshstep::Install(g_config.meshstep.on); }
+ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tablestep.on); }
+ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
+ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
 
 ModuleResult GatesNormal() noexcept {
   headset_gates::Switches switches;
@@ -57,7 +65,13 @@ constexpr std::array kModules{
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
-    // gates (#2180): the plugin installed them after its tick and its modules; they register the tick callback the bot gate reads the game from.
+    // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
+    // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.
+    Module{"meshstep", nullptr, &MeshstepNormal, "combat.meshstep", &nevr_quest::CombatConfig::meshstep},
+    Module{"tablestep", nullptr, &TablestepNormal, "combat.tablestep", &nevr_quest::CombatConfig::tablestep},
+    Module{"instmodel", nullptr, &InstmodelNormal, "combat.instmodel", &nevr_quest::CombatConfig::instmodel},
+    Module{"shaderstep", nullptr, &ShaderstepNormal, "combat.shaderstep", &nevr_quest::CombatConfig::shaderstep},
+    // gates (#2180): the plugin installed them after its tick and its modules (after the table steps above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
@@ -181,6 +195,13 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
+  // One record per module switch, from the registration table (combat_install.h).
+  for (const Module& module : kModules) {
+    if (module.switchMember == nullptr) continue;
+    const nevr_quest::CombatSwitch& sw = config.*module.switchMember;
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                        {{"module", module.name}, {"key", module.switchKey}, {"on", sw.on ? 1 : 0}, {"source", source(sw.source)}});
+  }
   // A log line is one fixed 768-byte buffer (sentinel/hook_log.cpp): the headset gates' keys are a line of their own, so no line is cut.
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_gates",
                       {{"gate_perm", config.gatePerm.on ? 1 : 0}, {"gate_perm_source", source(config.gatePerm.source)},

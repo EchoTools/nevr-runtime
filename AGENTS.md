@@ -713,8 +713,13 @@ your seat name, for example `claude-main` or `codex`.
   remove when <condition>"` and `git config branch.<branch>.description "<same>"`.
 - **Scratch is per agent.** Files you create by hand go under `~/src/nevr-runtime-work/<agent>/`;
   files the repo's own tools write at the work root stay where they are. When you are done,
-  delete the scripts, copies and build output you created, outright, not into the user's trash.
-  A run's logs and evidence are kept until their end (next bullet). Never delete by pattern across the shared directory.
+  delete what you created, not into the user's trash, in one of two ways: move each finished item, by its exact
+  path, into one holding directory (`<work root>/<seat>/to-delete/`), list it, then remove that directory with
+  `rm -r -- <holding dir>`, the one sanctioned recursive removal; or write one `rm` per exact absolute path into a
+  script (`set -eu`, no globs), read it back, check each path is yours under the work root, then run it. Never
+  another recursive removal (`rm -r`, `-R`, `-rf`, `-fr`, `find ... -delete`), including a chained last step: a
+  rerun removes whatever the path names then (#2270). Never delete a directory another agent may still be working
+  in. A run's logs and evidence are kept until their end (next bullet). Never delete by pattern across the shared directory.
 - **Everything in the work root has a named end.** The work root is `~/src/nevr-runtime-work`
   (`$NEVR_WORK_ROOT`): the default scratch location of every seat and every tool. Every file or directory a seat
   creates there has a named end when it is made: a game copy ends when its test ends; a run's output ends when the PR
@@ -730,7 +735,7 @@ your seat name, for example `claude-main` or `codex`.
   `origin/main` by ancestry or `git cherry`, or is on a remote; any run log you need is moved out
   of it first. Then `just remove-worktree <absolute path>` (see "Branch lifecycle"), which unlocks the
   worktree and makes the remaining proofs. Never `--force`, never `git submodule deinit`, never
-  `rm -rf` of a worktree's `modules` directory by hand. Afterwards delete the branch locally (and on
+  a recursive removal of a worktree's `modules` directory by hand. Afterwards delete the branch locally (and on
   origin once merged) and update the ledger row.
   **Join the steps of any cleanup (copy, check, delete) with `&&`, or run them under
   `set -e`; never `;`.** A failed copy or check stops every delete after it, and a delete is
@@ -858,15 +863,14 @@ your seat name, for example `claude-main` or `codex`.
     with `du -sh "$SRC"` (disk usage; apparent size under-reports the many small files of a Wine
     prefix) and compare it with `df -h /var/tmp`; free space must exceed twice the figure while a run is live
     (the pristine copy plus the run's own copy). A full disk truncates the file being copied.
-  - **Make it safe.** Remove what a run must not start with, list every sign-in file, then list every link that
+  - **Make it safe.** Move out what a run must not start with, list every sign-in file, then list every link that
     leaves the copy:
     ```sh
-    rm -f <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json
-    if [ -d <copy>/echovr/bin/win10/plugins ]; then find <copy>/echovr/bin/win10/plugins -mindepth 1 -delete; fi
-    for d in <copy>/echovr/.wineprefix/drive_c/users/*/AppData/Local/nevr/echovr/plugins; do if [ -d "$d" ]; then find "$d" -mindepth 1 -delete; fi; done
+    mkdir -p <copy>/to-delete   # move every path this block names into it, then rm -r -- <copy>/to-delete (Scratch is per agent)
+    mv <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json <copy>/to-delete/
+    for d in <copy>/echovr/bin/win10/plugins <copy>/echovr/.wineprefix/drive_c/users/*/AppData/Local/nevr/echovr/plugins; do if [ -d "$d" ]; then mv "$d" "<copy>/to-delete/$(echo "$d" | tr / _)"; fi; done
     find <copy>/echovr -name '.credentials.json*' ! -type d -print
-    find <copy>/echovr -name '.credentials.json*' ! -type d -delete
-    find <copy>/echovr -name '.credentials.json*' ! -type d -print
+    find <copy>/echovr -name '.credentials.json*' ! -type d -exec mv -t <copy>/to-delete {} +
     COPY=$(readlink -f <copy>) find <copy> -type l -exec sh -c 'for l; do t=$(readlink -f "$l"); case "$t" in "$COPY"/*) ;; *) echo "$l -> $t";; esac; done' sh {} +
     ```
     The first `find` lists the sign-in files: those in `_local` (with their `.bak` and `.prod-bak` backups) and the
