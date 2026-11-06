@@ -14,7 +14,9 @@
 # donor object), "libr15" (link the stock libr15.so) and "ldl" (add -ldl). No library is built unless LIBS.json names it.
 #
 # Outputs in the build directory: lib<hash16>.so per library, SHA256SUMS over them, stock/libr15.so (taken from the store APK).
-# Each library is checked by tools/check_quest_static_init.sh --plugin after it links.
+# Each library is checked by tools/check_quest_static_init.sh --plugin after it links, and a library with a donor object by
+# check_donor_got.cmake: every symbol the donor loads through the GOT has a GOT slot holding its own address (#2126).
+# The donor object is assembled from a wrapper that gen_donor_wrapper.cmake writes, not from the libsrc donor.s alone.
 #
 # A refusal is a FATAL_ERROR that names what is wrong. The libsrc directory and the store APK are checked before the compiler is
 # looked at, so a bad input is reported without an NDK.
@@ -215,7 +217,16 @@ foreach(nevr_hash IN LISTS nevr_hashes)
   set(nevr_target "combat_lib_${nevr_hash}")
   set(nevr_sources "${nevr_libsrc}/${nevr_hash}/${nevr_hash}.cpp")
   if(nevr_row_${nevr_hash}_asm)
-    list(APPEND nevr_sources "${nevr_libsrc}/${nevr_hash}/${nevr_hash}.donor.s")
+    # The donor object is assembled from a generated wrapper that includes the libsrc donor.s and makes every symbol the donor loads
+    # through the GOT global and hidden (gen_donor_wrapper.cmake says why); the libsrc file itself is never assembled alone.
+    set(nevr_donor "${nevr_libsrc}/${nevr_hash}/${nevr_hash}.donor.s")
+    set(nevr_wrapper "${CMAKE_BINARY_DIR}/donor_wrappers/${nevr_hash}.donor_got.s")
+    add_custom_command(OUTPUT "${nevr_wrapper}"
+      COMMAND "${CMAKE_COMMAND}" "-DNEVR_DONOR=${nevr_donor}" "-DNEVR_WRAPPER=${nevr_wrapper}" -P "${CMAKE_CURRENT_LIST_DIR}/gen_donor_wrapper.cmake"
+      DEPENDS "${nevr_donor}" "${CMAKE_CURRENT_LIST_DIR}/gen_donor_wrapper.cmake" "${CMAKE_CURRENT_LIST_DIR}/donor_got_operands.cmake"
+      COMMENT "donor wrapper: ${nevr_hash}"
+      VERBATIM)
+    list(APPEND nevr_sources "${nevr_wrapper}")
   endif()
   add_library(${nevr_target} SHARED ${nevr_sources})
   # The link is done by the C driver, not the C++ one: the C++ driver adds -lm to every link, and none of the store's script
@@ -234,9 +245,17 @@ foreach(nevr_hash IN LISTS nevr_hashes)
     target_link_libraries(${nevr_target} PRIVATE dl)
   endif()
   add_custom_command(TARGET ${nevr_target} POST_BUILD
-    COMMAND bash "${nevr_check_script}" --plugin "${nevr_llvm_bin}" "$<TARGET_FILE:${nevr_target}>"
+    # A library the check rejects is deleted: left in the build tree, a later link-only change would let ninja treat it as built.
+    COMMAND bash -c "bash \"$0\" --plugin \"$1\" \"$2\" || { rm -f \"$2\"; exit 1; }" "${nevr_check_script}" "${nevr_llvm_bin}" "$<TARGET_FILE:${nevr_target}>"
     COMMENT "static-init check: lib${nevr_hash}.so"
     VERBATIM)
+  if(nevr_row_${nevr_hash}_asm)
+    add_custom_command(TARGET ${nevr_target} POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" "-DNEVR_LLVM_BIN=${nevr_llvm_bin}" "-DNEVR_LIB=$<TARGET_FILE:${nevr_target}>" "-DNEVR_DONOR=${nevr_donor}"
+              -P "${CMAKE_CURRENT_LIST_DIR}/check_donor_got.cmake"
+      COMMENT "donor GOT check: lib${nevr_hash}.so"
+      VERBATIM)
+  endif()
   list(APPEND nevr_lib_targets ${nevr_target})
   list(APPEND nevr_lib_names "lib${nevr_hash}.so")
 endforeach()
