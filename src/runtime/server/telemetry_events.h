@@ -120,6 +120,14 @@ inline void DetectTelemetryEvents(const TelemetrySnapshot& curr, const Telemetry
   // player leave or join and every score rise from 0. The streamer keeps the last read snapshot as `prev`.
   if (!curr.gameRead || !prev.gameRead) return;
 
+  // The round count: the header sends the value of the session's first snapshot, and the game sets it later
+  // (measured live, echovr.exe 34.4.631547.1: net_total_round_count and /session's total_round_count are 0
+  // until the private match's pre_match, then 3). A change goes out as match_settings_changed with the new
+  // count. rules_changed_by and rules_changed_at are not read (nor sent in the header), so they stay empty.
+  if (curr.totalRoundCount != prev.totalRoundCount) {
+    frame->add_events()->mutable_match_settings_changed()->set_total_round_count(curr.totalRoundCount);
+  }
+
   // Game status: a change from the last known status, which starts as the previous snapshot's. The first
   // status seen in a session sets it and sends nothing.
   if (state.lastKnownStatus == telemetry::v2::GAME_STATUS_UNSPECIFIED) {

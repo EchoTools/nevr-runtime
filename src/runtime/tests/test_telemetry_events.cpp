@@ -387,6 +387,33 @@ TEST(TelemetryEvents, ARecordThatChangesDuringPlayIsNoGoal) {
   EXPECT_EQ(Count(frames[1], EchoEvent::kGoalScored), 0);
 }
 
+TEST(TelemetryEvents, ARoundCountTheGameSetsAfterTheHeaderGoesOutAsMatchSettingsChanged) {
+  TelemetrySnapshot a = Empty(), b = Empty(), c = Empty();
+  a.totalRoundCount = 0;  // the session's first snapshots (the header's)
+  b.totalRoundCount = 3;  // pre_match: the game sets the count
+  c.totalRoundCount = 3;
+  const auto frames = DetectOver({a, b, c});
+  ASSERT_EQ(Count(frames[0], EchoEvent::kMatchSettingsChanged), 1);
+  const auto& m = First(frames[0], EchoEvent::kMatchSettingsChanged)->match_settings_changed();
+  EXPECT_EQ(m.total_round_count(), 3);
+  EXPECT_TRUE(m.rules_changed_by().empty());
+  EXPECT_EQ(m.rules_changed_at(), 0u);
+  EXPECT_EQ(Count(frames[1], EchoEvent::kMatchSettingsChanged), 0);
+}
+
+TEST(TelemetryEvents, AnUnreadSnapshotIsNoRoundCountChange) {
+  TelemetrySnapshot a = Empty();
+  a.totalRoundCount = 3;
+  TelemetrySnapshot unread;
+  unread.Clear();
+  TelemetryEventState state;
+  EchoArenaFrame f1, f2;
+  DetectTelemetryEvents(unread, a, state, &f1);
+  DetectTelemetryEvents(a, a, state, &f2);
+  EXPECT_EQ(Count(f1, EchoEvent::kMatchSettingsChanged), 0);
+  EXPECT_EQ(Count(f2, EchoEvent::kMatchSettingsChanged), 0);
+}
+
 TEST(TelemetryEvents, AScoreThatFallsIsNoGoal) {
   TelemetrySnapshot a = Empty(), b = Empty();
   a.bluePoints = 4;
