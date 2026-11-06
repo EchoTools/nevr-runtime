@@ -14,6 +14,7 @@
 // Built and run by `just test-quest-combat`.
 
 #include "quest/combat/custctx.h"
+#include "quest/combat/legacy_switch.h"
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -199,7 +200,10 @@ void End() {
 
 ModuleResult InstallOn(bool on = true, const char* legacyDir = nullptr) {
   const cc::Fns fns = Fns();
-  return cc::InstallAt(&Lookup, g_pins, &fns, on, legacyDir);
+  nevr_quest::combat::legacy::SetDirectoryForTest(legacyDir);  // where the plugin's custctx.off would sit (nullptr: production)
+  const ModuleResult r = cc::InstallAt(&Lookup, g_pins, &fns, on);
+  nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
+  return r;
 }
 
 // A fresh world with the guards installed; the handlers are called through the slots.

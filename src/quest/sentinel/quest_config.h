@@ -170,6 +170,8 @@ struct CombatConfig {
   CombatSwitch droneguard;  // `combat.droneguard`: the drone's follow update is skipped while its target is null (combat/droneguard.h)
   CombatSwitch droneguardStage1{false, Source::kAbsent};  // `combat.droneguard_stage1`: also skip a stale cached player (default OFF; needs droneguard)
   CombatSwitch peerclamp;   // `combat.peerclamp`: a peer's last-received stamp above "now" is pulled down to "now" (combat/peerclamp.h)
+  CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
+  CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
 };
 
 struct LogEvent {

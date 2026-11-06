@@ -70,9 +70,9 @@ runm vd_resolve_one_wrong $F "s/find(context, kCurrentSymbol)/find(context, kCur
 # the switch and the legacy file
 runm vd_off_ignored     $F "s/  if (!on) {/  if (!on \&\& false) {/"
 runm vd_off_not_off     $F "s/    return {false, \"off_config\", true};/    return {false, \"off_config\", false};/"
-runm vd_legacy_not_told $F "s/  if (LegacySwitchFilePresent(legacyDir, \"voipdrop.off\")) {/  if (false \&\& LegacySwitchFilePresent(legacyDir, \"voipdrop.off\")) {/"
-runm vd_legacy_file     $F "s/LegacySwitchFilePresent(legacyDir, \"voipdrop.off\")/LegacySwitchFilePresent(legacyDir, \"voipdrop.on\")/"
-runm vd_legacy_turns_off $F "s/  if (!on) {/  if (!on || LegacySwitchFilePresent(legacyDir, \"voipdrop.off\")) {/"
+runm vd_legacy_not_told $F "s/  if (legacy::Present(\"voipdrop.off\")) {/  if (false \&\& legacy::Present(\"voipdrop.off\")) {/"
+runm vd_legacy_file     $F "s/legacy::Present(\"voipdrop.off\")/legacy::Present(\"voipdrop.on\")/"
+runm vd_legacy_turns_off $F "s/  if (!on) {/  if (!on || legacy::Present(\"voipdrop.off\")) {/"
 runm vd_legacy_quiet    $F "s/sentinel::LogLevel::kWarn, \"combat_voipdrop_legacy_switch\"/sentinel::LogLevel::kInfo, \"combat_voipdrop_legacy_switch\"/"
 runm vd_legacy_no_key   $F "s/{\"key\", \"combat.voipdrop\"}, //"
 # the pinned constants

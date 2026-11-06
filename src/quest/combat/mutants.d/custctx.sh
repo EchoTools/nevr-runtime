@@ -129,9 +129,9 @@ runm cc_no_build_id_ok     $F "s/  if (!sentinel::ReadBuildId(image, id, sizeof(
 # the switch and the legacy file
 runm cc_off_ignored        $F "s/  if (!on) {/  if (!on \&\& false) {/"
 runm cc_off_not_off        $F "s/    return {false, \"off_config\", true};/    return {false, \"off_config\", false};/"
-runm cc_legacy_not_told    $F "s/  if (LegacySwitchFilePresent(legacyDir, \"custctx.off\")) {/  if (false \&\& LegacySwitchFilePresent(legacyDir, \"custctx.off\")) {/"
-runm cc_legacy_wrong_file  $F "s/LegacySwitchFilePresent(legacyDir, \"custctx.off\")/LegacySwitchFilePresent(legacyDir, \"custctx.on\")/"
-runm cc_legacy_turns_off   $F "s/  if (!on) {/  if (!on || LegacySwitchFilePresent(legacyDir, \"custctx.off\")) {/"
+runm cc_legacy_not_told    $F "s/  if (legacy::Present(\"custctx.off\")) {/  if (false \&\& legacy::Present(\"custctx.off\")) {/"
+runm cc_legacy_wrong_file  $F "s/legacy::Present(\"custctx.off\")/legacy::Present(\"custctx.on\")/"
+runm cc_legacy_turns_off   $F "s/  if (!on) {/  if (!on || legacy::Present(\"custctx.off\")) {/"
 runm cc_legacy_quiet       $F "s/sentinel::LogLevel::kWarn, \"combat_custctx_legacy_switch\"/sentinel::LogLevel::kInfo, \"combat_custctx_legacy_switch\"/"
 runm cc_legacy_no_key      $F "s/{\"key\", \"combat.custctx\"}, //"
 # the stats

@@ -55,6 +55,8 @@ constexpr const char* kCombatCustctxKey = "combat.custctx";                // Qu
 constexpr const char* kCombatDroneguardKey = "combat.droneguard";          // Quest only (default true, #2178)
 constexpr const char* kCombatDroneguardStage1Key = "combat.droneguard_stage1";  // Quest only (default FALSE, #2178)
 constexpr const char* kCombatPeerclampKey = "combat.peerclamp";            // Quest only (default true, #2178)
+constexpr const char* kCombatPfxKey = "combat.pfx";                // Quest only (default true, #2188)
+constexpr const char* kCombatPfxtevKey = "combat.pfxtev";          // Quest only (default true, #2188)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
 // unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
@@ -370,6 +372,8 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.droneguard = ReadCombatSwitch(cfg, kCombatDroneguardKey, r);
   r.config.combat.droneguardStage1 = ReadCombatSwitch(cfg, kCombatDroneguardStage1Key, r, /*fallback=*/false);
   r.config.combat.peerclamp = ReadCombatSwitch(cfg, kCombatPeerclampKey, r);
+  r.config.combat.pfx = ReadCombatSwitch(cfg, kCombatPfxKey, r);
+  r.config.combat.pfxtev = ReadCombatSwitch(cfg, kCombatPfxtevKey, r);
   r.config.plugins = cfg.Plugins();
 }
 

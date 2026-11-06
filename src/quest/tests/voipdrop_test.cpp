@@ -11,6 +11,7 @@
 //
 // Built and run by `just test-quest-combat`.
 
+#include "quest/combat/legacy_switch.h"
 #include "quest/combat/voipdrop.h"
 
 #include <sys/mman.h>
@@ -152,7 +153,10 @@ void End() {
 }
 
 ModuleResult Install(bool on = true, const char* legacyDir = nullptr, const vd::Fns& fns = Fns()) {
-  return vd::InstallAt(&Lookup, g_pins, fns, on, legacyDir);
+  nevr_quest::combat::legacy::SetDirectoryForTest(legacyDir);  // where the plugin's voipdrop.off would sit (nullptr: production)
+  const ModuleResult r = vd::InstallAt(&Lookup, g_pins, fns, on);
+  nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
+  return r;
 }
 
 void* const kEvent = reinterpret_cast<void*>(0xe0e0);

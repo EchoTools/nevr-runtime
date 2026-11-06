@@ -79,9 +79,9 @@ struct Fns {
 bool ResizeMatches(std::uintptr_t base, const Pins& pins, const void* resize, Fns* out) noexcept;
 
 // Installs on the libr15 `lookup` finds. `fns` is Resize (nullptr: dlsym on the loaded libr15, checked by ResizeMatches; a Fns with no function is a
-// missing export). `on` is combat.custctx; `legacyDir` is where a `custctx.off` of the old plugin would sit (nullptr: not looked for). Logs one
+// missing export). `on` is combat.custctx; Logs one
 // combat_custctx_install line. A module that is off by its switch answers `off` (status "off_config").
-ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns* fns, bool on, const char* legacyDir) noexcept;
+ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns* fns, bool on) noexcept;
 
 // The table's row: InstallAt on the loaded libr15 with the production pins, the production Resize lookup and the plugin's data directory.
 ModuleResult Install(bool on) noexcept;

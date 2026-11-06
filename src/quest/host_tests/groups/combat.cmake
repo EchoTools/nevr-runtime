@@ -19,14 +19,13 @@ set(_cident o_combat_id_libr15_identity o_combat_id_libr15_patch_identity o_comb
 foreach(f got_hook hook_log hook_report)
   nevr_ht_obj(o_combat_${f} GROUP combat NOEXC INCS ${_csent} SRC src/quest/sentinel/${f}.cpp)
 endforeach()
-# The files folder, weakly (a test that names a folder of its own defines it and wins): the modules that moved from the q15t plugin name it.
-nevr_ht_obj(o_combat_files_dir GROUP combat NOEXC INCS ${_csent} SRC src/quest/tests/files_dir_stub.cpp)
-set(_ccore o_combat_got_hook o_combat_hook_log o_combat_hook_report o_combat_files_dir)
+set(_ccore o_combat_got_hook o_combat_hook_log o_combat_hook_report)
 set(_cf NOEXC PTHREAD DL INCS ${_csent})
 # The crash and timing guards (#2178) and the level scope they share: every program that links the registration table
 # (combat_install.cpp) links these, because the table names them (and the tick and the level answer, which the scope needs).
 set(_cguards src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp
-    src/quest/combat/peerclamp.cpp src/quest/combat/level_scope.cpp)
+    src/quest/combat/peerclamp.cpp src/quest/combat/level_scope.cpp
+    src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp)
 
 # The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
 # combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.
@@ -136,3 +135,13 @@ nevr_ht_test(peerclamp_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
   SRC src/quest/tests/peerclamp_test.cpp ${_cguards} src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
       src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp
       src/quest/combat/refresh_rate.cpp src/quest/sentinel/build_variant.cpp)
+
+# The particle-renderer gate (#2188, #1631; docs/adr/0046): the decision from `combat.pfx`, the gate that reads off until the install step has
+# decided, the install line, the plugin's `pfx.off` file not read and warned about, and the scope: open on a combat map only, shut on every Echo Arena
+# level, lobby and transition, against a fake CR15Game read by process_vm_readv. The module installs no hook and registers no tick.
+nevr_ht_test(pfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
+  SRC src/quest/tests/pfx_test.cpp src/quest/combat/pfx.cpp src/quest/combat/combat_level.cpp)
+# The event-effect decision (#2188, #1642; docs/adr/0046): the switch, the six ids, the non-event pass-through, one line per decision up to the cap,
+# the plugin's `pfxtev.off` file not read and warned about, and the scope: an event id is created on a combat map only.
+nevr_ht_test(pfxtev_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
+  SRC src/quest/tests/pfxtev_test.cpp src/quest/combat/pfxtev.cpp)

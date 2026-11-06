@@ -218,9 +218,9 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheGuard
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
   // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172) and the five crash and timing guards after that
-  // (#2178). On the host no libr15 is loaded, so the tick and each guard are refused and named; the rule installs (it registers its callback
+  // (#2178); the pfx gate and the event-effect decision, which hook nothing, install last (#2188). On the host no libr15 is loaded, so the tick and each guard are refused and named; the rule installs (it registers its callback
   // for a tick that may come later).
-  QCHECK(normal.ran && normal.modules == 7 && normal.installed == 1 && normal.failed == 6 && normal.off == 0);
+  QCHECK(normal.ran && normal.modules == 9 && normal.installed == 3 && normal.failed == 6 && normal.off == 0);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -230,7 +230,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheGuard
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
     QCHECK(Has(lines[1].text,
               "\"results\":\"tick=module_not_loaded refresh_rate=installed fxtrail=module_not_loaded voipdrop=module_not_loaded "
-              "custctx=module_not_loaded droneguard=module_not_loaded peerclamp=module_not_loaded\""));
+              "custctx=module_not_loaded droneguard=module_not_loaded peerclamp=module_not_loaded pfx=installed pfxtev=installed\""));
   }
   Done();
 }
@@ -239,10 +239,10 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheGuard
 void TheGuardRowsAreNormalPhaseRowsInThePluginsOrderEachWithAnEndStep() {
   std::size_t count = 0;
   const combat::Module* const table = combat::ShippedModules(&count);
-  const char* const want[] = {"heaps", "memsys", "tick", "refresh_rate", "fxtrail", "voipdrop", "custctx", "droneguard", "peerclamp"};
-  QCHECK(count == 9);
-  for (std::size_t i = 0; i < count && i < 9; ++i) QCHECK(std::strcmp(table[i].name, want[i]) == 0);
-  for (std::size_t i = 4; i < count && i < 9; ++i) QCHECK(table[i].early == nullptr && table[i].normal != nullptr && table[i].end != nullptr);
+  const char* const want[] = {"heaps", "memsys", "tick", "refresh_rate", "fxtrail", "voipdrop", "custctx", "droneguard", "peerclamp", "pfx", "pfxtev"};
+  QCHECK(count == 11);
+  for (std::size_t i = 0; i < count && i < 11; ++i) QCHECK(std::strcmp(table[i].name, want[i]) == 0);
+  for (std::size_t i = 4; i < 9; ++i) QCHECK(table[i].early == nullptr && table[i].normal != nullptr && table[i].end != nullptr);
 }
 
 // Each guard's row reads its own switch: a key set to false is counted off, named `off_config`, and no other guard moves.
@@ -389,6 +389,9 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     QCHECK(Has(lines[1].text, "\"force\":1") && Has(lines[1].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"refresh_rate_lobby\":0") && Has(lines[1].text, "\"refresh_rate_lobby_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"refresh_rate\":1"));
+    // The particle-renderer gate and the event-effect decision (#2188): on by default, from the default.
+    QCHECK(Has(lines[0].text, "\"pfx\":1") && Has(lines[0].text, "\"pfx_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"pfxtev\":1") && Has(lines[0].text, "\"pfxtev_source\":\"default\""));
     QCHECK(Has(lines[2].text, "\"force\":0") && Has(lines[2].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"msg\":"));
     // The module switches: on by default, each with its source.
@@ -437,6 +440,41 @@ void TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection() {
   Done();
 }
 
+// The pfx gate and the event-effect decision read their keys from the resolved section (#2188): on with the defaults, off by the file's word.
+void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
+  Process(bv::Variant::kCombat);
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "pfx=installed pfxtev=installed"));
+  QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"state\":\"on\""));
+  QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"state\":\"on\""));
+  Done();
+  // Each row reads its own key: pfx off alone, then pfxtev off alone.
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig pfxOff;
+  pfxOff.pfx = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(pfxOff);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "pfx=off_config pfxtev=installed"));
+  QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"reason\":\"off_config\""));
+  QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"state\":\"on\""));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig tevOff;
+  tevOff.pfxtev = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(tevOff);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "pfx=installed pfxtev=off_config"));
+  QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"state\":\"on\""));
+  QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"reason\":\"off_config\""));
+  Done();
+  // A plain release installs neither, and neither writes a line.
+  Process(bv::Variant::kNone);
+  combat::InstallNormal();
+  QCHECK(Lines("combat_pfx_install").empty() && Lines("combat_pfxtev_install").empty());
+  Done();
+}
+
 }  // namespace
 
 int main() {
@@ -457,6 +495,7 @@ int main() {
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();
   TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection();
+  ThePfxRowsReadTheirKeysFromTheResolvedSection();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

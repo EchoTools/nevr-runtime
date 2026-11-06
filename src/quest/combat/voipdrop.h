@@ -84,9 +84,8 @@ Fns ResolveFnsWith(void* context, FindSymbolFn find) noexcept;
 // dlsym on the loaded game library (RTLD_NOLOAD). Any member null when its export is missing (or the library is not loaded).
 Fns ResolveFns() noexcept;
 
-// Installs on the libr15 `lookup` finds. `on` is combat.voipdrop; `legacyDir` is where a `voipdrop.off` of the old plugin would sit (nullptr: not looked
-// for). Logs one combat_voipdrop_install line. A module that is off by its switch answers `off` (status "off_config").
-ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns& fns, bool on, const char* legacyDir) noexcept;
+// Installs on the libr15 `lookup` finds. `on` is combat.voipdrop; Logs one combat_voipdrop_install line. A module that is off by its switch answers `off` (status "off_config").
+ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns& fns, bool on) noexcept;
 
 // The table's row: InstallAt on the loaded libr15 with the production pins, the dlsym'd exports and the plugin's data directory.
 ModuleResult Install(bool on) noexcept;

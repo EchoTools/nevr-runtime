@@ -73,6 +73,8 @@ PROGRAMS = {
         "match_tag_default_test",
         "memsys_test",
         "peerclamp_test",
+        "pfx_test",
+        "pfxtev_test",
         "refresh_rate_test",
         "voipdrop_test",
     ),

@@ -67,10 +67,9 @@ struct Pins {
 };
 inline constexpr Pins kPins = {kEffectTimeSlotVaddr, kEffectTimeVaddr};
 
-// Installs on the libr15 `lookup` finds. `on` is combat.fxtrail; `legacyDir` is where a `fxtrail.off` of the old plugin would sit (nullptr: not
-// looked for). Logs one combat_fxtrail_install line. A module that is off by its switch answers `off` (status "off_config"): nothing is wrong
+// Installs on the libr15 `lookup` finds. `on` is combat.fxtrail; Logs one combat_fxtrail_install line. A module that is off by its switch answers `off` (status "off_config"): nothing is wrong
 // and nothing was done.
-ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on, const char* legacyDir) noexcept;
+ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) noexcept;
 
 // The table's row: InstallAt on the loaded libr15 with the production pins and the plugin's data directory.
 ModuleResult Install(bool on) noexcept;

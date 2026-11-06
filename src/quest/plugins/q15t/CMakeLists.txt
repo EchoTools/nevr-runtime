@@ -25,7 +25,7 @@ option(Q15T_IMPACTSND "impactsnd (R12-R15): the impact table gets its Wwise ids.
 # EC and ECFX: compiled in by default and inert until the source build's own switch file exists in the plugin data directory (ec.on,
 # ec_preset1.on, ec_preset2.on, ec_preset3.on; neutronfx.on for ecfx), or Q15T_EC_DEFAULT_WORDS names words. The doc states no option default; the
 # source build gates them by those files, so ON with no switch file installs no word (it publishes the zeroed re33_ec_page and logs "ec: off").
-# Kill file ec.off in the data directory keeps ec off whatever else is set (module_switch.h convention, as decals.off / pfx.off).
+# Kill file ec.off in the data directory keeps ec off whatever else is set (module_switch.h convention, as decals.off).
 option(Q15T_EC "ec (R43...): the EC network client, EC token page, tac-mod store/hide. Switch files in the data directory; kill file ec.off" ON)
 option(Q15T_ECFX "ecfx: NEUTRON wall-effect queue drain on ec's net tick; needs Q15T_EC. Switch file neutronfx.on" ON)
 set(Q15T_EC_DEFAULT_WORDS "types=VPTO equip hide" CACHE STRING "ec: the words used when no ec switch file exists (empty: ec stays off without a file). Default = the source build's latest on-list preset ec_preset3 (ec_preset3.on)")
@@ -43,9 +43,6 @@ option(Q15T_SENSORWD "sensorwd (T-07): a scanner sphere still enabled 6 s after 
 option(Q15T_SHADERSTEP "shaderstep (#1553): CGShaderSetResource table growth step 32 -> 1 in the factory constructor (vtable wrapper, no code write)" ON)
 option(Q15T_LEVELNAME "levelname (R04, G7) with boosterpool: global_mp keeps its plain name, so the full-size global_mp in the pack loads. Source combat build: on. Kill file levelname.off" ON)
 option(Q15T_INSTMODEL "instmodel (disassembly 0x1a078dc): CGInstancedModelResource's constructor with the growth step of its CTableXT members at 1, not 32 (the word row this replaces: a code write). Source: default ON; no tick" ON)
-# pfx (issue #1631): the particle-effect renderer's gate, read by every pfx* module. Kill file pfx.off in the data directory. The working build has
-# the renderer on, so ON here; the source build's On() is off unless pfx.on exists (the renderer itself is not ported yet: docs/quest/q15t/modules/pfx.md).
-option(Q15T_PFX "pfx (#1631): the particle-effect renderer's gate, the switch every pfx* module reads. Working build: on. Kill file pfx.off" ON)
 # shieldgamma: a bitmask, 1 = gamma (a TEST switch, off in the source), 2 = tube mirror (the ship form, on in the source).
 set(Q15T_SHIELDGAMMA 2 CACHE STRING "shieldgamma (R58) bitmask: 1 gamma, 2 tube mirror, 0 not built. Source default: mirror on, gamma off")
 set_property(CACHE Q15T_SHIELDGAMMA PROPERTY STRINGS 0 1 2 3)
@@ -60,9 +57,6 @@ option(Q15T_SENDGUARD "sendguard: a script send to a game space that is not load
 # decals (issue #1619): the combat levels' static decals, which the Quest renderer cannot draw, as quads in dynamic-mesh nodes from the
 # content pack's decals.bin. ON, and inert (one INFO line, reason "off") when no decals.bin is found. Off file: decals.off. Needs impactsnd's
 # Shutdown wrapper to be installed first when Q15T_IMPACTSND is on (plugin.cpp installs it in that order; the wrapper chains on it).
-# pfxtev (issue #1642): the six event-effect ids may be created. The decision only: the renderer that calls it is pfx (#1631), not in
-# this tree yet. Kill file pfxtev.off in the plugin data directory.
-option(Q15T_PFXTEV "pfxtev (#1642): the event-effect id decision (PfxTevAllows); no caller until the pfx renderer (#1631) lands. Source: ON" ON)
 option(Q15T_DECALS "decals (#1619): the level decals of decals.bin drawn as dynamic-mesh quads on the bullet system's update, torn down on its Shutdown" ON)
 
 if(Q15T_WALLFIRE AND NOT Q15T_BVH)
@@ -88,7 +82,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/script_redirect.cpp src/import_hook.cpp src/combat_map.cpp src/game_tick.cpp src/safe_read.cpp src/headset_gates.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
-foreach(m MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL DECALS PFX PFXTEV)
+foreach(m MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL DECALS)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -134,8 +128,7 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
   Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
   Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}> Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
-  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}> Q15T_PFX=$<BOOL:${Q15T_PFX}>
-  Q15T_PFXTEV=$<BOOL:${Q15T_PFXTEV}>)
+  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}>)
 if(NOT "${Q15T_EC_DEFAULT_WORDS}" STREQUAL "")
   target_compile_definitions(nevr_q15t PRIVATE "Q15T_EC_DEFAULT_WORDS=\"${Q15T_EC_DEFAULT_WORDS}\"")
 endif()

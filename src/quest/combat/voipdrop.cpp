@@ -130,9 +130,9 @@ Fns ResolveFns() noexcept {
   return f;
 }
 
-ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns& fns, bool on, const char* legacyDir) noexcept {
+ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns& fns, bool on) noexcept {
   // The old plugin's switch file changes nothing now; one that is there is told so.
-  if (LegacySwitchFilePresent(legacyDir, "voipdrop.off")) {
+  if (legacy::Present("voipdrop.off")) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_voipdrop_legacy_switch",
                         {{"key", "combat.voipdrop"}, {"file", "voipdrop.off"},
                          {"consequence", "the file is no longer read; set combat.voipdrop: false in config.yaml to turn the module off"}});
@@ -175,10 +175,8 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns
 }
 
 ModuleResult Install(bool on) noexcept {
-  char dir[320];
   const sentinel::ImageLookup lookup = g_lookup.load(std::memory_order_acquire);
-  return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, kPins, on ? ResolveFns() : Fns{}, on,
-                   LegacySwitchDir(dir, sizeof(dir)) ? dir : nullptr);
+  return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, kPins, on ? ResolveFns() : Fns{}, on);
 }
 
 void NoteEnd() noexcept {

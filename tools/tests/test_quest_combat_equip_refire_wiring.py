@@ -250,6 +250,8 @@ class TheGroupTheRecipeAndTheVerifyEntryExist(unittest.TestCase):
             "droneguard",
             "droneguard_stage1",
             "peerclamp",
+            "pfx",
+            "pfxtev",
         ):
             self.assertIn('"%s"' % key, section)
         self.assertRegex(read("docs/reference/example-config.yaml"), r"\ncombat:\n")

@@ -211,6 +211,18 @@ combat:
   # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
   # refresh_rate_quest2_72: false
 
+  # Quest only. A boolean. The particle-renderer gate (src/quest/combat/pfx.h): the switch the particle renderer reads, open in combat maps only and
+  # shut in an Echo Arena level, in every lobby and everywhere else. The renderer itself is not in the runtime yet, so `true` changes nothing in the
+  # game today; the sentinel log line `combat_pfx_install` says what was read. `false` keeps the gate shut. A value that is not a boolean keeps the
+  # default, with a warning in the sentinel log that names the key. Read once at launch. Default (absent): true.
+  # pfx: false
+
+  # Quest only. A boolean. The event-effect decision of the particle renderer (src/quest/combat/pfxtev.h): its six event effects may be created in
+  # combat maps only. Nothing asks until the renderer is in the runtime, so `true` changes nothing in the game today; the sentinel log line
+  # `combat_pfxtev_install` says what was read. `false` refuses the six. A value that is not a boolean keeps the default, with a warning that names the
+  # key. Read once at launch. Default (absent): true.
+  # pfxtev: false
+
   # The crash and timing guards of the combat modules (src/quest/combat/fxtrail.h, voipdrop.h, custctx.h, droneguard.h, peerclamp.h). Quest only;
   # each runs where the combat modules run (see `force`), and each is on unless it says `false`. Booleans, read once at launch; a value that is not a
   # boolean keeps the default, with a warning in the sentinel log that names the key. The plugin's `fxtrail.off`, `voipdrop.off` and `custctx.off`

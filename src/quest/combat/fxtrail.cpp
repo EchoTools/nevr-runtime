@@ -76,9 +76,9 @@ ModuleResult Refused(const char* token, const char* pin = nullptr, const char* f
 
 }  // namespace
 
-ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on, const char* legacyDir) noexcept {
+ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) noexcept {
   // The old plugin's switch file changes nothing now; one that is there is told so.
-  if (LegacySwitchFilePresent(legacyDir, "fxtrail.off")) {
+  if (legacy::Present("fxtrail.off")) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_fxtrail_legacy_switch",
                         {{"key", "combat.fxtrail"}, {"file", "fxtrail.off"},
                          {"consequence", "the file is no longer read; set combat.fxtrail: false in config.yaml to turn the module off"}});
@@ -119,9 +119,8 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on, 
 }
 
 ModuleResult Install(bool on) noexcept {
-  char dir[320];
   const sentinel::ImageLookup lookup = g_lookup.load(std::memory_order_acquire);
-  return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, kPins, on, LegacySwitchDir(dir, sizeof(dir)) ? dir : nullptr);
+  return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, kPins, on);
 }
 
 void NoteEnd() noexcept {

@@ -13,6 +13,8 @@
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/peerclamp.h"
+#include "quest/combat/pfx.h"
+#include "quest/combat/pfxtev.h"
 #include "quest/combat/refresh_rate.h"
 #include "quest/combat/voipdrop.h"
 #include "quest/sentinel/hook_log.h"
@@ -33,6 +35,8 @@ ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
 
+ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
+ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
 ModuleResult FxtrailNormal() noexcept { return fxtrail::Install(g_config.fxtrail.on); }
 ModuleResult VoipdropNormal() noexcept { return voipdrop::Install(g_config.voipdrop.on); }
 ModuleResult CustctxNormal() noexcept { return custctx::Install(g_config.custctx.on); }
@@ -57,6 +61,9 @@ constexpr std::array kModules{
     Module{"custctx", nullptr, &CustctxNormal, &custctx::NoteEnd},
     Module{"droneguard", nullptr, &DroneguardNormal, &droneguard::NoteEnd},
     Module{"peerclamp", nullptr, &PeerclampNormal, &peerclamp::NoteEnd},
+    // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
+    Module{"pfx", nullptr, &PfxNormal},
+    Module{"pfxtev", nullptr, &PfxtevNormal},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -175,6 +182,8 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"refresh_rate_lobby", config.refreshRateLobby.on ? 1 : 0}, {"refresh_rate_lobby_source", source(config.refreshRateLobby.source)},
                        {"refresh_rate_quest2_72", config.refreshRateQuest2At72.on ? 1 : 0},
                        {"refresh_rate_quest2_72_source", source(config.refreshRateQuest2At72.source)},
+                       {"pfx", config.pfx.on ? 1 : 0}, {"pfx_source", source(config.pfx.source)},
+                       {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
   // The crash and timing guards' keys are their own line: the sentinel's line buffer is fixed (hook_log.cpp, kLineCapacity), and one line for every

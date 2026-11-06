@@ -131,7 +131,12 @@ void End() {
   combat_test::StopCapture();
 }
 
-ModuleResult Install(bool on = true, const char* legacyDir = nullptr) { return fx::InstallAt(&Lookup, g_pins, on, legacyDir); }
+ModuleResult Install(bool on = true, const char* legacyDir = nullptr) {
+  nevr_quest::combat::legacy::SetDirectoryForTest(legacyDir);  // where the plugin's fxtrail.off would sit (nullptr: production, which finds none on the host)
+  const ModuleResult r = fx::InstallAt(&Lookup, g_pins, on);
+  nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
+  return r;
+}
 
 // Installs on a fresh world and loads the named levels.
 void InstalledIn(std::initializer_list<const char*> levels) {
@@ -348,15 +353,6 @@ void TheLegacySwitchFileIsOnlyToldAbout() {
   rmdir(dir.c_str());
 }
 
-// The production directory the plugin's switch files were in: the sentinel's files folder and `q15t`; a buffer that is too small is no directory.
-void TheLegacyDirectoryIsTheFilesFolderAndQ15t() {
-  char dir[320];
-  QCHECK(nevr_quest::combat::LegacySwitchDir(dir, sizeof(dir)) && std::strcmp(dir, "/nonexistent/nevr-files-for-host-tests/q15t") == 0);
-  char small[8];
-  QCHECK(!nevr_quest::combat::LegacySwitchDir(small, sizeof(small)));
-  QCHECK(!nevr_quest::combat::LegacySwitchFilePresent(nullptr, "fxtrail.off") && !nevr_quest::combat::LegacySwitchFilePresent(dir, nullptr));
-}
-
 // 7. combat.fxtrail: false installs nothing and says so.
 void TheSwitchOffInstallsNothingAndSaysSo() {
   Begin();
@@ -461,7 +457,6 @@ int main() {
   TheGuardFollowsTheLoadedLevelAtTheNextLook();
   ASlotThatDoesNotHoldEffectTimeIsRefusedAndLeftAlone();
   TheLegacySwitchFileIsOnlyToldAbout();
-  TheLegacyDirectoryIsTheFilesFolderAndQ15t();
   TheSwitchOffInstallsNothingAndSaysSo();
   AMissingOrOtherImageInstallsNothing();
   EveryPinnedWordGatesTheInstall();

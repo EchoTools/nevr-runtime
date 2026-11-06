@@ -54,9 +54,9 @@ runm fx_install_level      $F "s/sentinel::LogFields(installed ? sentinel::LogLe
 runm fx_off_ignored        $F "s/  if (!on) {/  if (!on \&\& false) {/"
 runm fx_off_not_off        $F "s/    return {false, \"off_config\", true};/    return {false, \"off_config\", false};/"
 runm fx_off_installs_tick  $F "s/    return {false, \"off_config\", true};/    scope::Start(); return {false, \"off_config\", true};/"
-runm fx_legacy_not_told    $F "s/  if (LegacySwitchFilePresent(legacyDir, \"fxtrail.off\")) {/  if (LegacySwitchFilePresent(legacyDir, \"fxtrail.off\") \&\& false) {/"
-runm fx_legacy_wrong_file  $F "s/LegacySwitchFilePresent(legacyDir, \"fxtrail.off\")/LegacySwitchFilePresent(legacyDir, \"fxtrail.on\")/"
-runm fx_legacy_turns_off   $F "s/  if (!on) {/  if (!on || LegacySwitchFilePresent(legacyDir, \"fxtrail.off\")) {/"
+runm fx_legacy_not_told    $F "s/  if (legacy::Present(\"fxtrail.off\")) {/  if (legacy::Present(\"fxtrail.off\") \&\& false) {/"
+runm fx_legacy_wrong_file  $F "s/legacy::Present(\"fxtrail.off\")/legacy::Present(\"fxtrail.on\")/"
+runm fx_legacy_turns_off   $F "s/  if (!on) {/  if (!on || legacy::Present(\"fxtrail.off\")) {/"
 runm fx_legacy_quiet       $F "s/sentinel::LogLevel::kWarn, \"combat_fxtrail_legacy_switch\"/sentinel::LogLevel::kInfo, \"combat_fxtrail_legacy_switch\"/"
 runm fx_legacy_no_key      $F "s/{\"key\", \"combat.fxtrail\"}, //"
 # the table row (combat_install.cpp): the switch is read, in the normal phase, with an end step
@@ -77,10 +77,6 @@ runm sh_pw_unreadable_ok   $PW "s/    if (!ok || word != pins\[i\].word) {/    i
 runm sh_pw_readable_flag   $PW "s/      \*readable = ok;/      *readable = true;/"
 runm sh_pw_index_off_by_one $PW "s/      return i;/      return i + 1;/"
 runm sh_pw_count_ignored   $PW "s/  for (std::size_t i = 0; i < count; ++i) {/  for (std::size_t i = 0; i + 1 < count; ++i) {/"
-LS=src/quest/combat/legacy_switch.h
-runm sh_ls_always_absent   $LS "s/  return wrote >= 0 /  return false \&\& wrote >= 0 /"
-runm sh_ls_no_access       $LS "s/ \&\& access(path, F_OK) == 0;/;/"
-runm sh_ls_dir_subdir      $LS "s/kLegacySwitchSubdir = \"q15t\";/kLegacySwitchSubdir = \"q15x\";/"
 # the level scope each scoped guard asks is covered by level_scope.sh; the guards' keys line and the shipped table by combat_install_test
 runm sh_ci_guards_line_key $CI "s/{\"voipdrop\", config.voipdrop.on ? 1 : 0}, {\"voipdrop_source\", source(config.voipdrop.source)},/{\"voipdrop\", 1}, {\"voipdrop_source\", source(config.voipdrop.source)},/" quest-host-combat combat_install_test
 runm sh_ci_guards_line_src $CI "s/{\"peerclamp_source\", source(config.peerclamp.source)}/{\"peerclamp_source\", \"default\"}/" quest-host-combat combat_install_test
