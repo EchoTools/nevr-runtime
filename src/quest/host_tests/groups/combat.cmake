@@ -115,7 +115,12 @@ nevr_ht_test(voipdrop_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cid
       src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp
       src/quest/combat/refresh_rate.cpp src/quest/sentinel/build_variant.cpp)
 
-# custctx (#2178): its test program is added here by its own commit.
+# custctx (#2178): the three real handlers through their thunks, installed into the three JUMP_SLOTs of a libr15 image built in memory, against
+# models of LoadMeshData, DestroyContext, Grow, Resize, a draw table and the layout pool; acts in every level (arena shares the code it guards).
+nevr_ht_test(custctx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/custctx_test.cpp ${_cguards} src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
+      src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp
+      src/quest/combat/refresh_rate.cpp src/quest/sentinel/build_variant.cpp)
 
 # droneguard (#2178): the real handler through the thunk, installed into the JUMP_SLOT of a libr15 image built in memory, against a model of
 # CR15NetFollowPlayerCS and fake RefreshCache / IsComponentValid; stage 0 (the null target) and stage 1 (the cache), the switch, the pins, the stats.
