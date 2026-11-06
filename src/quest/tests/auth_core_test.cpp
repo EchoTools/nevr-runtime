@@ -467,9 +467,8 @@ TEST(flow_says_code_shown_when_the_platform_never_opens_a_browser) {
   CHECK(r.verified);
   const std::string log = rig.log.All();
   CHECK(log.find("Device authorization started; code shown") != std::string::npos);
-  CHECK(log.find("code shown url=https://x/device?code=<13 chars masked> open_result=33 (shown)") != std::string::npos);
+  CHECK(log.find("code shown url=https://x/device?code=SECRETCODE123 open_result=33 (shown)") != std::string::npos);
   CHECK(log.find("browser") == std::string::npos);
-  CHECK(log.find("SECRETCODE123") == std::string::npos);
 }
 
 TEST(flow_says_the_code_was_not_shown_when_the_platform_could_not_show_it) {
@@ -480,7 +479,7 @@ TEST(flow_says_the_code_was_not_shown_when_the_platform_could_not_show_it) {
   const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
   CHECK(!r.verified);
   const std::string log = rig.log.All();
-  CHECK(log.find("code shown url=https://x/device?code=<13 chars masked> open_result=0 (not shown)") != std::string::npos);
+  CHECK(log.find("code shown url=https://x/device?code=SECRETCODE123 open_result=0 (not shown)") != std::string::npos);
   CHECK(log.find("device authorization stopped because the code could not be shown") != std::string::npos);
   CHECK(log.find("browser") == std::string::npos);
   CHECK(log.find("(failed)") == std::string::npos);
@@ -493,7 +492,7 @@ TEST(flow_keeps_the_browser_failure_wording_where_a_browser_is_opened) {
   const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
   CHECK(!r.verified);
   const std::string log = rig.log.All();
-  CHECK(log.find("browser open requested url=https://x/device?code=<13 chars masked> open_result=0 (failed)") !=
+  CHECK(log.find("browser open requested url=https://x/device?code=SECRETCODE123 open_result=0 (failed)") !=
         std::string::npos);
   CHECK(log.find("device authorization stopped because the browser could not be opened") != std::string::npos);
   CHECK(log.find("code shown") == std::string::npos);
@@ -506,12 +505,12 @@ TEST(flow_keeps_the_browser_wording_where_a_browser_is_opened) {
   CHECK(r.verified);
   const std::string log = rig.log.All();
   CHECK(log.find("Device authorization started; browser opening requested") != std::string::npos);
-  CHECK(log.find("browser open requested url=https://x/device?code=<13 chars masked> open_result=33 (accepted)") !=
+  CHECK(log.find("browser open requested url=https://x/device?code=SECRETCODE123 open_result=33 (accepted)") !=
         std::string::npos);
   CHECK(log.find("code shown") == std::string::npos);
 }
 
-TEST(flow_returns_the_verified_response_after_pending_polls_and_masks_the_code) {
+TEST(flow_returns_the_verified_response_after_pending_polls_and_logs_the_code) {
   FlowRig rig;
   rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Pending), Poll(nevr_token_auth::DevicePollStatus::Pending),
                Poll(nevr_token_auth::DevicePollStatus::Verified)};
@@ -520,7 +519,7 @@ TEST(flow_returns_the_verified_response_after_pending_polls_and_masks_the_code) 
   CHECK_EQ(r.response.refresh_token, std::string("refresh"));
   CHECK_EQ(rig.sleeps, 3);
   CHECK_EQ(rig.opened_url, std::string("https://x/login?code=SECRETCODE123"));
-  CHECK(rig.log.All().find("SECRETCODE123") == std::string::npos);
+  CHECK(rig.log.All().find("?code=SECRETCODE123") != std::string::npos);
 }
 
 TEST(flow_gives_up_at_the_five_minute_deadline) {
@@ -650,7 +649,7 @@ TEST(session_device_login_succeeds_publishes_the_token_and_persists_only_the_ref
   CHECK(presenter.cleared.load() >= 1);
   CHECK_EQ(http.Count("poll"), 3);
   const std::string all = log.All();
-  CHECK(all.find("DEVCODE") == std::string::npos);
+  CHECK(all.find("?code=DEVCODE") != std::string::npos);  // the code is in the log; the tokens are not
   CHECK(all.find("rt-dev") == std::string::npos);
   CHECK(all.find("eyJ") == std::string::npos);
   CHECK(all.find("http_key") == std::string::npos);
@@ -684,7 +683,7 @@ TEST(session_poll_line_reports_a_server_error_status_and_no_unknown_status_warni
   const std::string all = log.All();
   CHECK(all.find("poll #1 http=503 status=pending") != std::string::npos);
   CHECK(all.find("unknown status") == std::string::npos);
-  CHECK(all.find("DEVCODE") == std::string::npos);
+  CHECK(all.find("?code=DEVCODE") != std::string::npos);
   s.Stop();
 }
 
@@ -1107,7 +1106,7 @@ TEST(a_four_character_dashless_code_is_shown_whole) {
   CHECK(text.find("K7RX-") == std::string::npos);  // no dash appended
 }
 
-TEST(session_device_login_with_a_four_character_code_presents_it_and_never_logs_it) {
+TEST(session_device_login_with_a_four_character_code_presents_it_and_logs_it_in_full) {
   FakeClock clock;
   FakeHttp http;
   FakeStore store;
@@ -1121,8 +1120,8 @@ TEST(session_device_login_with_a_four_character_code_presents_it_and_never_logs_
   CHECK_EQ(presenter.presented.load(), 1);
   CHECK_EQ(presenter.last_url, std::string("https://login.test/device?code=K7RX"));
   const std::string all = log.All();
-  CHECK(all.find("K7RX") == std::string::npos);
-  CHECK(all.find("<4 chars masked>") != std::string::npos);
+  CHECK(all.find("?code=K7RX") != std::string::npos);
+  CHECK(all.find("masked") == std::string::npos);
   s.Stop();
 }
 
@@ -1270,8 +1269,8 @@ TEST(while_the_player_is_asked_to_sign_in_the_game_text_holds_the_current_code_a
   CHECK(mode == prompt_board::Mode::kNotice);
   CHECK_EQ(BoardTitle(), std::string(kSignedInTitle));
   CHECK(!std::filesystem::exists(JoinPath(dir, "device_login.txt")));
-  CHECK(log.All().find("FIRSTCODE") == std::string::npos);
-  CHECK(log.All().find("SECONDCODE") == std::string::npos);
+  CHECK(log.All().find("FIRSTCODE") != std::string::npos);
+  CHECK(log.All().find("SECONDCODE") != std::string::npos);
   CHECK_EQ(log.Count(LogLevel::Info, R"("what":"code")"), size_t(2));
   CHECK_EQ(log.Count(LogLevel::Info, R"("what":"signed_in")"), size_t(1));
   CHECK_EQ(log.Count(LogLevel::Info, R"("mechanism":"file","path")"), size_t(2));
@@ -1768,8 +1767,8 @@ TEST(session_an_expired_device_code_is_replaced_and_the_prompt_stays_up_until_th
   CHECK_EQ(clock.Sleeps(), 3);
   CHECK_EQ(log.Count(LogLevel::Info, "the device code ran out without a sign-in; requesting a new one (code 2 of 6)"),
            size_t(1));
-  CHECK(log.All().find("FIRSTCODE") == std::string::npos);
-  CHECK(log.All().find("SECONDCODE") == std::string::npos);
+  CHECK(log.All().find("FIRSTCODE") != std::string::npos);
+  CHECK(log.All().find("SECONDCODE") != std::string::npos);
   s.Stop();
 }
 

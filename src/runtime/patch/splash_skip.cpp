@@ -161,7 +161,7 @@ void* ResolveValidated(std::uint64_t va, const std::uint8_t* expected, std::size
   const bool ok = nevr::ValidatePrologue(target, expected, size) &&
                   (extra == nullptr || nevr::ValidatePrologue(static_cast<std::uint8_t*>(target) + extraOffset, extra, extraSize));
   if (ok) return target;
-  nevr_boot_log_tee::TeeFprintf("[NEVR.SPLASH] splash skip not installed: %s va=0x%llx reason=bytes_mismatch\n", name,
+  nevr_boot_log_tee::TeeFprintf("[NEVR.SPLASH] warn; splash skip not installed: %s va=0x%llx reason=bytes_mismatch\n", name,
                                 static_cast<unsigned long long>(va));
   return nullptr;
 }
@@ -179,7 +179,7 @@ void Install(std::uintptr_t gameBase) {
   g_buttonEdge = reinterpret_cast<ButtonFn>(edge);
   g_originalUpdate = reinterpret_cast<WidgetUpdateFn>(update);
   if (PatchDetour(&g_originalUpdate, reinterpret_cast<PVOID>(&WidgetUpdateHook), "CR15VRMenuWidgetCS::Update")) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.SPLASH] splash skip hook installed va=0x%llx min_live_ms=%llu\n",
+    nevr_boot_log_tee::TeeFprintf("[NEVR.SPLASH] info; splash skip hook installed va=0x%llx min_live_ms=%llu\n",
                                   static_cast<unsigned long long>(kWidgetUpdateVA), static_cast<unsigned long long>(kMinPresentMs));
   }
 }

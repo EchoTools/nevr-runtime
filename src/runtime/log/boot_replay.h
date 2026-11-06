@@ -40,7 +40,7 @@ inline std::vector<Line> ParseRun(std::string_view contents, std::string_view ru
     if (run == record.end() || !run->is_string() || run->get<std::string>() != runId) continue;
     if (ts == record.end() || !ts->is_string() || msg == record.end() || !msg->is_string()) continue;
     const auto level = record.find("level");
-    lines.push_back({ts->get<std::string>(), level != record.end() && level->is_string() ? level->get<std::string>() : "info",
+    lines.push_back({ts->get<std::string>(), level != record.end() && level->is_string() ? level->get<std::string>() : "unknown",
                      msg->get<std::string>()});
   }
   return lines;

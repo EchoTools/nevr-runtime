@@ -568,9 +568,9 @@ TEST(MicProviderPolicy, ServerProvidesNoCaptureAndAClientDoes) {
 }
 
 TEST(MicProviderPolicy, BootLineNamesTheDecisionAndNeverClaimsAProviderThatIsNotInstalled) {
-  EXPECT_STREQ(nevr_mic_policy::BootLine(true, /*isWine=*/true), "[NEVR.MIC] provider installed: Wine\n");
-  EXPECT_STREQ(nevr_mic_policy::BootLine(true, /*isWine=*/false), "[NEVR.MIC] provider installed: native Windows\n");
-  EXPECT_STREQ(nevr_mic_policy::BootLine(false, /*isWine=*/false), "[NEVR.MIC] provider not installed\n");
+  EXPECT_STREQ(nevr_mic_policy::BootLine(true, /*isWine=*/true), "[NEVR.MIC] info; provider installed: Wine\n");
+  EXPECT_STREQ(nevr_mic_policy::BootLine(true, /*isWine=*/false), "[NEVR.MIC] info; provider installed: native Windows\n");
+  EXPECT_STREQ(nevr_mic_policy::BootLine(false, /*isWine=*/false), "[NEVR.MIC] info; provider not installed\n");
 }
 
 // Which capture endpoint the provider opens (mic_device_choice.h): LibOVR's headset mic, then a headset name,

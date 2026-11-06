@@ -9,6 +9,7 @@
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "globals.h"
+#include "core/log_level.h"
 #include "run_id.h"
 
 // ISO 8601 timestamp in UTC, with milliseconds (the NEVR.STOP line in runtime/lifecycle/cli_reject.cpp carries it).
@@ -45,20 +46,9 @@ const CHAR* GetRunId() {
   return s_runId;
 }
 
-// Convert LogLevel enum to string
+// The level's name by the one mapping (core/log_level.h, #2245); "unknown" for a level it has no name for.
 const char* GetLogLevelString(EchoVR::LogLevel level) {
-  switch (level) {
-    case EchoVR::LogLevel::Debug:
-      return "debug";
-    case EchoVR::LogLevel::Info:
-      return "info";
-    case EchoVR::LogLevel::Warning:
-      return "warn";
-    case EchoVR::LogLevel::Error:
-      return "error";
-    default:
-      return "info";
-  }
+  return nevr_log_level::NameOrUnknown(static_cast<std::uint32_t>(level));
 }
 
 // Log filtering, timestamps, and noise suppression are handled by the

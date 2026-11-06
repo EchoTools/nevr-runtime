@@ -714,7 +714,7 @@ size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_by
             break;
         }
     }
-    Log(EchoVR::LogLevel::Info,
+    Log(refused == 0 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
         "[NEVR.RESOURCE] cache init dir=%s entries=%zu loaded=%zu refused=%zu missing=%zu",
         dirUtf8.c_str(), index.entries.size(), loaded, refused, missing);
 
@@ -796,7 +796,7 @@ void InstallResourceOverride() {
         EnsureHookInstalled();
     }
 
-    Log(EchoVR::LogLevel::Info,
+    Log(overridesFailed == 0 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
         "[NEVR.RESOURCE] init complete overrides_registered=%zu overrides_failed=%zu",
         registered, overridesFailed);
 }
