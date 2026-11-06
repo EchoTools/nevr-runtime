@@ -2438,6 +2438,35 @@ TEST_F(HostUpdateRollbackRefusals, APreviousFileTheHostCannotReadRefusesTheRollb
   ExpectRolledBack();
 }
 
+// A cleanup from a journal that carries no sha256 (an older one) reads the files, and a file it cannot read leaves the
+// cleanup for the next start: it writes no pending record that says "no previous" or names no release.
+TEST_F(HostUpdateRollbackRefusals, ACleanupFromAJournalWithoutShasDoesNotWritePendingFromAFileItCannotRead) {
+  SwappedIn();
+  DeleteFileW((update_ + L"\\pending.json").c_str());
+  Put(L"update\\swap.json", Journal("done"));
+  {
+    Held held(update_ + L"\\previous\\7.7.7\\nevr-runtime.dll", 0);
+    ASSERT_TRUE(held.ok());
+    RunStart();
+    EXPECT_FALSE(Exists(update_ + L"\\pending.json")) << "not written from a previous runtime that only looked missing";
+    EXPECT_TRUE(Exists(update_ + L"\\swap.json")) << "the next start finishes it";
+  }
+  RunStart();
+  EXPECT_FALSE(Exists(update_ + L"\\swap.json"));
+  EXPECT_TRUE(Pending()["from"].is_object()) << Pending().dump();
+  EXPECT_EQ(Pending()["to"].value("sha256", ""), Sha256Hex(new_runtime_));
+}
+
+TEST_F(HostUpdateRollbackRefusals, ACleanupFromAJournalWithoutShasWritesNoPendingRecordForARuntimeThatIsNotThere) {
+  SwappedIn();
+  DeleteFileW((update_ + L"\\pending.json").c_str());
+  DeleteFileW(runtime_path_.c_str());
+  Put(L"update\\swap.json", Journal("done"));
+  RunStart();
+  EXPECT_FALSE(Exists(update_ + L"\\pending.json")) << "a record that cannot name its release is not written";
+  EXPECT_TRUE(Exists(update_ + L"\\swap.json"));
+}
+
 TEST_F(HostUpdateRollbackRefusals, ALockAnotherStartHoldsStopsTheInProcessRollbackAndTheMarkWithTheCause) {
   PendingReleaseThatTheVerifierRefuses();
   nevr_host::SetUpdateLockTimingForTest(60, 10);
