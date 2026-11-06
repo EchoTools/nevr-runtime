@@ -95,18 +95,30 @@
  *          continuation) loads it at every call with an acquire load (`ldar`) and never caches it, and loads every other
  *          word the install publishes (a call-site word) the same way. The manager publishes the next word with a release
  *          store before the slot changes, and again whenever the hook it calls leaves the chain (Remove or Forget). The
- *          sensor fails a plain load the entry makes from anything but its own stack, and a `br` through a register that
- *          an acquire load did not set;
+ *          sensor fails any load the entry makes from anything but its own stack that is not ldar or ldapr (or a sized form
+ *          of either) (compare-and-swap and swap count as loads), and a `br` through a register that an acquire load set on every
+ *          path that reaches the `br` and that no call has overwritten since (a `bl` overwrites x0..x18 and x30);
  *        - a call the entry does not act on goes on untouched: the entry jumps (`br`) to the word with every argument
  *          register (x0..x7, x8, v0..v7), x30 and sp as the caller left them, using x16 only, so the hook it calls sees the
  *          game as the caller. A call it acts on gets a frame, a `bl` to the continuation and a return. An entry that acts
  *          on every call (it passes the caller's sp and x30 to its continuation and branches there, `b`, with x30
  *          unchanged) has no pass-through path. The only function the entry branches to is its record's continuation, by
- *          a direct `bl` or `b`, which the sensor checks;
+ *          a direct `bl` or `b`, which the sensor checks; a `bl` to a label inside the entry is refused. Whatever leaves the
+ *          entry for good (`ret`, `br`, a `b` or a conditional branch out) leaves with sp where the caller had it and x30 the
+ *          caller's return address, which the sensor checks along every path. `blr`, `braa` and the other branches it does not
+ *          model are refused, and every instruction must be able to reach a way out (a loop with none holds the game thread);
  *        - it carries CFI (`.cfi_startproc`, `.cfi_def_cfa_offset`, `.cfi_offset`, `.cfi_endproc`) that describes its
  *          frame, so it has an FDE under the personality-free "zR" CIE and a game exception can unwind through it. The
- *          sensor fails an entry with no FDE, and at each `bl` it follows sp and the slot x30 is saved in through the
- *          entry's text and fails a row whose CFA or return-address rule does not match them;
+ *          sensor fails an entry with no FDE. It follows sp, the frame pointer and where the caller's x30 is kept through the
+ *          entry's text along every path, and at each instruction it fails a row whose CFA does not match them. x30 is kept,
+ *          before any `bl`, in a stack slot that is below the incoming sp and at or above the current sp (a continuation's
+ *          frame overwrites anything below sp), or in a callee-saved register (x19..x28) with `.cfi_register 30, <reg>`; a pop
+ *          that reloads x30 makes it the caller's again and the slot it came from is dead for good. Any write to memory that may
+ *          overlap that slot (through sp, through x29 once it is set, or through any other base) destroys the save. At each
+ *          `bl` the row's return-address column names that place. A callee-saved register (x19..x29) the entry writes is
+ *          stored in the frame while it still holds the caller's value, reloaded from that slot before the entry leaves, and
+ *          named by the row at each `bl` (`.cfi_offset`); the sensor fails an exit with one still holding another value. The
+ *          FDE's range covers the whole entry;
  *        - the continuation and what it calls are rule 1 and rule 5 code. The entry's record is the sensor's root.
  *      An entry acts on the game's call site, so it must be the newest handler on its slot: a hook above it would call it
  *      from the hook's own frame, and it would pass every call through. The manager refuses a later handler on its slot
