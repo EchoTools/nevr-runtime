@@ -11,6 +11,7 @@
 #include "nevr/pc/nevr_common.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/patching.h"
+#include "runtime/log/error_dialog_depth.h"
 
 namespace nevr_error_dialog {
 namespace {
@@ -24,13 +25,8 @@ constexpr std::array<std::uint8_t, 16> kPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08
 
 ErrorDialogFn g_original = nullptr;
 
-// A count, not a flag: the dialog does not call itself, but a count stays right if it ever does.
-thread_local int t_depth = 0;
-
 void ErrorDialogHook(HWND owner, const char* message, const char* title) {
-  ++t_depth;
-  g_original(owner, message, title);
-  --t_depth;
+  Run([&] { g_original(owner, message, title); });
 }
 
 std::string Hex(const void* address, std::size_t count) {
@@ -44,8 +40,6 @@ std::string Hex(const void* address, std::size_t count) {
 }
 
 }  // namespace
-
-bool Inside() { return t_depth > 0; }
 
 void Install(std::uintptr_t gameBase) {
   const unsigned long long va = 0x140000000ULL + nevr_patch_addresses::GAME_ERROR_DIALOG;
