@@ -1,11 +1,11 @@
 // #2163: the [NEVR.MATCH] records for a lobby session success and the join it queues.
 //
 // Two layers. The rules (queued_join_log_rules.h) are tested as functions. The hooks (patch/queued_join_log.cpp) are the
-// production code, installed under MinHook into a fake game image: the three game functions sit at their real RVAs with
+// production code, installed under MinHook into a fake game image: the four game functions sit at their real RVAs with
 // their real prologue bytes, followed by code that undoes the prologue's stack effect and jumps to a C++ stand-in for the
 // game's behaviour. The stand-ins read and write the lobby the way the disassembly does (status at +0x448, the queue
 // buffer at +0x6e0 aligned to 8 with the id at +8, the lobby client at [netGame+0x40]). Install, PatchDetour,
-// ValidatePrologue and the three detours are the production code; only the game is stood in for.
+// ValidatePrologue and the four detours are the production code; only the game is stood in for.
 //
 // NOT shown by these tests: that echovr.exe has these bytes and this layout on a live process. That is the run on a game
 // copy.
@@ -45,7 +45,7 @@ constexpr std::size_t kImageBytes = 0x2200000;  // covers kInvalidIdVa + 16 (RVA
 constexpr std::size_t kPageBytes = 0x1000;
 constexpr std::size_t kLobbyBytes = 0x1000;
 
-// The three real prologues, then the undo of their stack effect, then `movabs rax, imm64; jmp rax`.
+// The four real prologues, then the undo of their stack effect, then `movabs rax, imm64; jmp rax`.
 constexpr std::array<std::uint8_t, 12> kSuccessPrologue = {0x4C, 0x8B, 0xDC, 0x55, 0x57, 0x48,
                                                            0x81, 0xEC, 0x88, 0x00, 0x00, 0x00};
 constexpr std::array<std::uint8_t, 9> kSuccessUndo = {0x48, 0x81, 0xC4, 0x88, 0x00, 0x00, 0x00, 0x5F, 0x5D};
@@ -309,9 +309,17 @@ TEST(QueuedJoinRules, TheLeaveLineSaysWhatHappenedToTheJoin) {
   EXPECT_EQ(FormatLeaveLine(LeaveResult::NotStarted, kSession, 7, 0),
             std::string("[NEVR.MATCH] queued join acted on session=") + kSessionText +
                 " result=not_started status_before=7 status_after=0 (the game left its session but sent no join "
-                "request; the queued join is gone)");
+                "request; the queued id stays in the buffer and a later Leave For Match could still send it)");
   EXPECT_NE(FormatLeaveLine(LeaveResult::StartedNothingQueued, Guid{}, 5, 8).find("a join request was sent with no queued id"),
             std::string::npos);
+}
+
+// A drop writes nothing to the queue buffer (only a started join overwrites the id), so the line says the id stays there.
+TEST(QueuedJoinRules, TheDropLineSaysTheQueuedIdStaysInTheBuffer) {
+  EXPECT_EQ(FormatDropLine(kSession, 0, "End"),
+            std::string("[NEVR.MATCH] queued join dropped session=") + kSessionText +
+                " status_to=0 by=End (no join request was sent for the queued session; its id stays in the buffer and a "
+                "later Leave For Match could still send it)");
 }
 
 TEST(QueuedJoinRules, ADropIsLeavingSevenForAnythingButEight) {
@@ -410,7 +418,7 @@ TEST_F(QueuedJoinLogHooks, LeavingForAMatchThatTheGameHoldsBackIsLoggedAsNotStar
   EXPECT_EQ(CountContaining(std::string("queued join acted on session=") + kSessionText +
                             " result=not_started status_before=7 status_after=0"),
             1);
-  EXPECT_EQ(CountContaining("still queued"), 0) << "End has already taken the status to 0, so nothing is queued any more";
+  EXPECT_EQ(CountContaining("still queued"), 0) << "End has already taken the status to 0, so the join is no longer waiting at status 7";
   EXPECT_EQ(g_endCalls, 1) << "LeaveGame ran the lobby's End before the game's conditions were checked";
 }
 
