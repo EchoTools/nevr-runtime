@@ -1775,6 +1775,16 @@ if(BUILD_TESTING)
     add_dependencies(test_dll_load_hook nevr_export_trace_fixture)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
 
+    # The combat module's write gate (runtime/combat/write_gate.h): a write that overlaps a range the runtime hooked
+    # (HookGuard) or wrote (ProcessMemcpy) is refused. Links the real guard and the real Log().
+    add_executable(test_combat_write_gate tests/test_combat_write_gate.cpp combat/write_gate.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_combat_write_gate.cpp combat/write_gate.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_combat_write_gate PRIVATE NEVR_TEST_HOOKS)
+    target_include_directories(test_combat_write_gate PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_write_gate PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_combat_write_gate DISCOVERY_MODE PRE_TEST)
+
     # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
     add_executable(test_boot_log_routing tests/test_boot_log_routing.cpp log/boot_log_tee.cpp)
     set_source_files_properties(tests/test_boot_log_routing.cpp log/boot_log_tee.cpp
