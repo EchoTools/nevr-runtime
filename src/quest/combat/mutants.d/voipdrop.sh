@@ -81,3 +81,12 @@ runm vd_real_const      $T "s/kReceiveVoipVaddr = 0x21c3238ULL/kReceiveVoipVaddr
 runm vd_word_changed    $T "s/{0x2316504, 0xb9406661}/{0x2316504, 0xb9406660}/"
 runm vd_word_dropped    $T "s/    {0x23165a8, 0xb9005269},  \/\/ str w9,\[x19,#0x50\] (the free head)//"
 # The table row (combat_install.cpp) and the key (quest_config.cpp, nevr_config.cpp) are shared files, run against combat_install_test and quest_config_test.
+CI=src/quest/combat/combat_install.cpp
+runm vd_row_ignores_switch $CI "s/voipdrop::Install(g_config.voipdrop.on)/voipdrop::Install(true)/" quest-host-combat combat_install_test
+runm vd_row_end_null       $CI "s/\&VoipdropNormal, \&voipdrop::NoteEnd}/\&VoipdropNormal, nullptr}/" quest-host-combat combat_install_test
+runm vd_row_early          $CI "s/Module{\"voipdrop\", nullptr, \&VoipdropNormal,/Module{\"voipdrop\", \&VoipdropNormal, nullptr,/" quest-host-combat combat_install_test
+QC=src/quest/sentinel/quest_config.cpp
+runm vd_qc_default_off     $QC "s/  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r);/  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r, false);/" quest-host-shared quest_config_test
+runm vd_qc_key_typo        $QC "s/kCombatVoipdropKey = \"combat.voipdrop\";/kCombatVoipdropKey = \"combat.voipdrops\";/" quest-host-shared quest_config_test
+runm vd_qc_not_assigned    $QC "s/  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r);/  (void)ReadCombatSwitch(cfg, kCombatVoipdropKey, r);/" quest-host-shared quest_config_test
+runm vd_nc_known_key       src/core/nevr_config.cpp "s/\"fxtrail\", \"voipdrop\", /\"fxtrail\", /" quest-host-shared quest_config_test

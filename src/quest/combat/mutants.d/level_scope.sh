@@ -1,0 +1,26 @@
+# level_scope: each rule of src/quest/combat/level_scope.cpp removed or bent once; src/quest/tests/level_scope_test.cpp must fail on every one.
+# Sourced by ../mutants.sh, which defines `runm <name> <file> <sed> [<build dir> <test target>]`.
+F=src/quest/combat/level_scope.cpp
+H=src/quest/combat/level_scope.h
+runm ls_map_ignores_scan     $F "s/  g_map.store(loaded.combatMap \&\& !loaded.echoArena, std::memory_order_relaxed);/  g_map.store(true, std::memory_order_relaxed);/"
+runm ls_map_no_arena_wins    $F "s/  g_map.store(loaded.combatMap \&\& !loaded.echoArena, std::memory_order_relaxed);/  g_map.store(loaded.combatMap, std::memory_order_relaxed);/"
+runm ls_map_takes_lobby      $F "s/  g_map.store(loaded.combatMap \&\& !loaded.echoArena, std::memory_order_relaxed);/  g_map.store((loaded.combatMap || loaded.combatLobby) \&\& !loaded.echoArena, std::memory_order_relaxed);/"
+runm ls_both_no_arena_wins   $F "s/  g_mapOrLobby.store((loaded.combatMap || loaded.combatLobby) \&\& !loaded.echoArena, std::memory_order_relaxed);/  g_mapOrLobby.store(loaded.combatMap || loaded.combatLobby, std::memory_order_relaxed);/"
+runm ls_both_no_lobby        $F "s/  g_mapOrLobby.store((loaded.combatMap || loaded.combatLobby) \&\& !loaded.echoArena, std::memory_order_relaxed);/  g_mapOrLobby.store(loaded.combatMap \&\& !loaded.echoArena, std::memory_order_relaxed);/"
+runm ls_both_no_map          $F "s/  g_mapOrLobby.store((loaded.combatMap || loaded.combatLobby) \&\& !loaded.echoArena, std::memory_order_relaxed);/  g_mapOrLobby.store(loaded.combatLobby \&\& !loaded.echoArena, std::memory_order_relaxed);/"
+runm ls_looks_not_counted    $F "s/  g_looks.fetch_add(1, std::memory_order_relaxed);//"
+runm ls_no_schedule          $F "s/  if (now < g_nextLook) return;/  (void)g_nextLook;/"
+runm ls_schedule_never_set   $F "s/  g_nextLook = now + kLookEverySeconds;/  g_nextLook = 0.0;/"
+runm ls_schedule_too_long    $F "s/  g_nextLook = now + kLookEverySeconds;/  g_nextLook = now + 2 * kLookEverySeconds;/"
+runm ls_schedule_every_frame $F "s/  if (now < g_nextLook) return;/  if (now < g_nextLook \&\& g_looks.load() > 1000000) return;/"
+runm ls_look_period          $H "s/kLookEverySeconds = 0.5;/kLookEverySeconds = 0.25;/"
+runm ls_start_twice          $F "s/  if (g_started.exchange(true, std::memory_order_acq_rel)) return g_registered.load(std::memory_order_acquire);//"
+runm ls_start_forgets_full   $F "s/  g_registered.store(added, std::memory_order_release);/  g_registered.store(true, std::memory_order_release);/"
+runm ls_start_not_added      $F "s/  const bool added = tick::Add(\&Tick);/  const bool added = true;/"
+runm ls_start_returns_added  $F "s/  return added;/  return true;/"
+runm ls_start_repeat_answer  $F "s/return g_registered.load(std::memory_order_acquire);/return true;/"
+runm ls_reset_keeps_map      $F "s/  g_map.store(false);/  (void)g_map;/"
+runm ls_reset_keeps_both     $F "s/  g_mapOrLobby.store(false);/  (void)g_mapOrLobby;/"
+runm ls_reset_keeps_looks    $F "s/  g_looks.store(0);/  (void)g_looks;/"
+runm ls_reset_keeps_started  $F "s/  g_started.store(false);/  (void)g_started;/"
+runm ls_reset_keeps_schedule $F "s/^  g_nextLook = 0.0;$//"
