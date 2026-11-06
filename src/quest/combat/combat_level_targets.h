@@ -7,6 +7,12 @@
  *   (rows 0), `ldr x9,[x20,#0x1f48]`, `ldr x1,[x20,#0x1fb8]` (count 1) and `ldr x0,[x20,#0x1f88]` (rows 1).
  *   CncaGameSpace::Initialize @ 0x17f51c0 stores the game at gs+0x8: `stp x1, x2, [x0]` (allocator at +0, game at +8).
  *   CncaGameSpace::LoadLevel @ 0x17e5484 stores the level at gs+0x58: `str x22, [x19, #0x58]` at 0x17e54ec.
+ *   CncaGame::CreateGameSpace @ 0x17f4a00 inserts the new CGameSpaceInitFiber into the in-flight table at game+0x1ed8 (`mov w8,#0x1ed8` at
+ *   0x17f50a4); CncaGame::UpdateGameSpaceInit @ 0x17ecc7c reads that table (`ldr x9,[x8,x23,lsl #3]` at 0x17ece30) and its count (`ldr x8,[x19,#0x1f08]`
+ *   at 0x17ed484); CGameSpaceInitFiber::Run @ 0x17e4d34 reads the fiber's gamespace at fiber+0x30 (`ldr x0,[x0,#0x30]` at 0x17e4d44). A gamespace
+ *   enters the two tables above only when its init fiber is done (UpdateGameSpaceInit inserts it at 0x17ed480, on the path taken when the fiber's
+ *   done bit, set at 0x17e4d6c after CncaGameSpace::LoadLevel returns, is set), and LoadLevel stores the level at gs+0x58 early (0x17e54ec) and then
+ *   builds the level's resources, so while a level's resources are built only the in-flight table holds its gamespace.
  *   CR15Game's vtable (`_ZTVN10NRadEngine8NRadGame8CR15GameE` at 0x362ed20) holds its first virtual at +0x10, which is the value an object's first
  *   word carries (combat_tick_targets.h kGameVptrVaddr = 0x362ed30).
  */
@@ -38,6 +44,9 @@ inline constexpr std::uintptr_t kTable0Rows = 0x1f48, kTable0Count = 0x1f78, kTa
 inline constexpr std::uintptr_t kGamespaceOwnerOffset = 0x8;   // gs+0x8: the game
 inline constexpr std::uintptr_t kGamespaceLevelOffset = 0x58;  // gs+0x58: the level
 
+// The in-flight init fibers: rows of 8-byte CGameSpaceInitFiber* at game+0x1ed8, count at game+0x1f08, the fiber's gamespace at fiber+0x30.
+inline constexpr std::uintptr_t kFiberRows = 0x1ed8, kFiberCount = 0x1f08, kFiberGamespace = 0x30;
+
 constexpr std::uintptr_t LdrStrOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff) * 8; }
 
 inline constexpr PinnedWord kOffsetWords[] = {
@@ -48,6 +57,10 @@ inline constexpr PinnedWord kOffsetWords[] = {
     {"LoadedGameSpace: rows 1 at +0x1f88", 0x17f8b60ULL, 0xf94fc680U},   // ldr x0, [x20, #0x1f88]
     {"Initialize: the game at gs+0x8", 0x17f51d8ULL, 0xa9000801U},       // stp x1, x2, [x0]
     {"LoadLevel: the level at gs+0x58", 0x17e54ecULL, 0xf9002e76U},      // str x22, [x19, #0x58]
+    {"CreateGameSpace: the fiber rows at game+0x1ed8", 0x17f50a4ULL, 0x5283db08U},  // mov w8, #0x1ed8
+    {"UpdateGameSpaceInit: the fiber count at game+0x1f08", 0x17ed484ULL, 0xf94f8668U},  // ldr x8, [x19, #0x1f08]
+    {"CGameSpaceInitFiber::Run: the gamespace at fiber+0x30", 0x17e4d44ULL, 0xf9401800U},  // ldr x0, [x0, #0x30]
+    {"UpdateGameSpaceInit: a fiber is a pointer in the rows", 0x17ece30ULL, 0xf8777909U},  // ldr x9, [x8, x23, lsl #3]
 };
 
 static_assert(LdrStrOffset(kOffsetWords[0].word) == kTable0Count, "the pinned word that loads count 0 does not carry kTable0Count");
@@ -58,5 +71,10 @@ static_assert(LdrStrOffset(kOffsetWords[4].word) == kTable1Rows, "the pinned wor
 static_assert(kOffsetWords[5].word == 0xa9000801U && kGamespaceOwnerOffset == sizeof(void*),
               "`stp x1, x2, [x0]` stores the game at +8: kGamespaceOwnerOffset must be 8");
 static_assert(LdrStrOffset(kOffsetWords[6].word) == kGamespaceLevelOffset, "the pinned store of the level does not carry kGamespaceLevelOffset");
+static_assert(((kOffsetWords[7].word >> 5) & 0xffffU) == kFiberRows && (kOffsetWords[7].word & 0xffe00000U) == 0x52800000U,
+              "the pinned `mov w8, #imm` does not carry kFiberRows");
+static_assert(LdrStrOffset(kOffsetWords[8].word) == kFiberCount, "the pinned load of the fiber count does not carry kFiberCount");
+static_assert(LdrStrOffset(kOffsetWords[9].word) == kFiberGamespace, "the pinned load of the fiber's gamespace does not carry kFiberGamespace");
+static_assert((kOffsetWords[10].word & 0xffe0fc00U) == 0xf8607800U, "the pinned load is not `ldr x, [x, x, lsl #3]` (8-byte rows)");
 
 }  // namespace nevr_quest::combat::level::targets
