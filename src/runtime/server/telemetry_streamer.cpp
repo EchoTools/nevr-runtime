@@ -16,9 +16,11 @@
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/server/telemetry_events.h"
+#include "runtime/server/telemetry_frame.h"
 #include "runtime/server/telemetry_game_status.h"
 #include "runtime/server/telemetry_game_type.h"
 #include "runtime/server/telemetry_player_read.h"
+#include "runtime/server/telemetry_session_read.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
@@ -416,6 +418,9 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
   snap->bluePoints = props.bluePoints;
   snap->orangePoints = props.orangePoints;
 
+  // The level name and the round count, as /session reads them (telemetry_session_read.h)
+  nevr_telemetry_session::ReadSessionState({m_getIntProperty}, m_netGame, snap);
+
   // --- Direct memory reads ---
 
   // Players by game slot: the name from the game's GetUserName, account id and ping from the lobby, stats
@@ -722,28 +727,8 @@ bool TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
 
   // The engine's game-type symbol for the session, from the settings JSON (#996).
   nevr_telemetry_header::SetCaptureGameType(header, m_gameType);
-  auto* ah = header->mutable_echo_arena();
-  ah->set_session_id(m_sessionId);
-  ah->set_client_name("nevr-runtime");
-  ah->set_map_name("mpl_arena_a");
-  ah->set_total_round_count(3);
-
-  // Skeleton layout (fixed for EchoVR: 23 bones)
-  auto* skel = ah->mutable_skeleton();
-  skel->set_bone_count(23);
-  skel->set_transform_stride(12);    // 3 x float32
-  skel->set_orientation_stride(16);  // 4 x float32
-
-  // Initial roster from snapshot
-  for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {  // i is the game slot
-    const auto& pi = snap.playerInfo[i];
-    if (!pi.present) continue;
-    auto* entry = ah->add_initial_roster();
-    entry->set_slot(i);
-    entry->set_account_number(pi.accountId);
-    entry->set_display_name(pi.displayName);
-    entry->set_role(nevr_telemetry_player::RoleFromTeam(pi.teamIndex));
-  }
+  // The session, its level and round count, the skeleton layout and the roster (telemetry_frame.h)
+  nevr_telemetry_frame::BuildArenaHeader(snap, m_sessionId, header->mutable_echo_arena());
 
   std::string serialized;
   if (envelope.SerializeToString(&serialized)) {

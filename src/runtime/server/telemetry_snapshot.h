@@ -11,6 +11,10 @@ struct TelemetrySnapshot {
   // cleared, with this false, and event detection skips it (telemetry_events.h).
   bool gameRead;
 
+  // --- The session, for the capture header (telemetry_session_read.h) ---
+  char mapName[64];         // the level's name, as /session's map_name; cut at 63 bytes
+  int32_t totalRoundCount;  // net_total_round_count, as /session's total_round_count
+
   // --- Game function results (game thread only) ---
   float gameClock;
   uint64_t gameStatusHash;  // raw symbol hash from property lookup
@@ -144,6 +148,11 @@ constexpr uint64_t SESSION_FLAGS_POINTER_OFFSET = 0x2DA0;
 // `movzx eax, word ptr [rax + rdx + 0x8a]`) there.
 constexpr uint64_t LOBBY_POINTER_OFFSET = 0x40;
 constexpr uint64_t LOBBY_SUBOBJECT_OFFSET = 0x18;
+// The session's level name: a `const char*` at *(CR15NetGame + 0x40) + 0x470, which /session writes as
+// map_name (0x1401b30b9 `mov rax, [r15 + 0x18]`, 0x1401b30bd `mov rcx, [rax + 0x40]`, 0x1401b30c6
+// `mov rbx, [rcx + 0x470]`, 0x1401b30d0 'map_name'; an empty string when *(CR15NetGame + 0x40) is null) and the
+// game's game_info writer (0x1401aee50) as [game_info][level] (0x1401aef32 `mov r14, [rax + 0x470]`).
+constexpr uint64_t SESSION_LEVEL_NAME_OFFSET = 0x470;
 
 // Player stats: one block per game slot at CR15NetGame + slot * 0x4D08 (0x1401565ab `imul rcx, rax,
 // 0x4d08`); each stat is an entry { u32 type, value, u32 count } at the offset below (the `lea rax,
@@ -213,6 +222,9 @@ constexpr uint64_t GAME_STATUS = 0xB2996AD399FDC0FF;    // "game_state"
 constexpr uint64_t GAME_CLOCK = 0xB2996AD484F1D1E8;     // "game_timer"
 constexpr uint64_t BLUE_POINTS = 0x1C97052A21E09F11;    // "blue_score"
 constexpr uint64_t ORANGE_POINTS = 0x2ED07B1C8C27548D;  // "red_score"
+// /session's total_round_count: the int getter on the net game (0x1401b31c0 `mov rcx, [r15 + 0x18]`,
+// 0x1401b31d2 `call 0x140d05730`, key at 0x1416e50a8).
+constexpr uint64_t TOTAL_ROUND_COUNT = 0x9042518ADE2D74B2;  // "net_total_round_count"
 }  // namespace nevr_property_hash
 
 // The game's three property getters, resolved from nevr_game_func_addr (a test passes fakes).
