@@ -1354,9 +1354,11 @@ GotStatus GotDataSlot::Write(const GotTarget& target, const void* expected, void
   }
   void** const slot = prepared.resolution.slot;
   void* const wanted = const_cast<void*>(expected);  // compared and stored over, never written through
-  // A slot whose relocation names a function holds a code pointer. The symbol decides, not the address `expected` lies at: libr15's
-  // .rodata is inside its executable segment, so every data object there has an address in an executable segment.
-  if (prepared.resolution.symbolType == STT_FUNC || prepared.resolution.symbolType == STT_GNU_IFUNC) {
+  // Only a slot whose relocation names a data object is data. The symbol decides, not the address `expected` lies at: libr15's
+  // .rodata is inside its executable segment, so every data object there has an address in an executable segment. A function holds
+  // a code pointer, and so does a NOTYPE symbol: the linker types a weak reference nothing defined (libr15's `getentropy`) that
+  // way, and the loader fills its slot with libc's function. Every other data slot of the game libraries names an OBJECT.
+  if (prepared.resolution.symbolType != STT_OBJECT) {
     LogInstallRefusal(target, GotStatus::kExecutableMapping, "symbol_type", 0, slot, prepared.resolution.slotVaddr,
                       prepared.image.base, wanted, nullptr, kOp);
     return GotStatus::kExecutableMapping;

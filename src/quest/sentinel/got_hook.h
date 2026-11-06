@@ -232,7 +232,7 @@ struct SlotResolution {
   void** slot = nullptr;            // runtime address (base applied)
   bool restoreReadOnly = false;     // slot page is RELRO: protect read-only after a write
   bool inExecutableSegment = false; // the slot's PT_LOAD is executable as well as writable (a data write refuses it)
-  std::uint8_t symbolType = 0;      // ELF64_ST_TYPE of the symbol the slot's relocation names (STT_FUNC: the slot holds a code pointer)
+  std::uint8_t symbolType = 0;      // ELF64_ST_TYPE of the symbol the slot's relocation names (a data write needs STT_OBJECT)
 };
 
 // Resolves a target to its slot inside `image` without reading or writing the
@@ -367,10 +367,11 @@ class GotHook {
 // `expected` argument of Write is the check) and takes one registry entry, a normal one unless the target is Critical(). The kind
 // is kGlobDat: a slot that holds the address of a data symbol (ADR 0046 rule 2); any other kind is kBadArgument. Write stores only
 // over `expected`, under the process-wide lock, and refuses:
-//   - a slot whose relocation names a function (STT_FUNC or STT_GNU_IFUNC): it holds a code pointer, which is a hook's business,
-//     installed with InstallThunk so the chain sees it (kExecutableMapping, stage `symbol_type`). The symbol decides, not the
-//     address: libr15's .rodata lies inside its executable segment, so a data object's address is an address in an executable
-//     segment, and the heap descriptors the first user writes over are such objects;
+//   - a slot whose relocation does not name a data object (anything but STT_OBJECT: a function, an ifunc, or a symbol with no type
+//     such as a weak reference nothing defined, which the loader fills with a function): it holds a code pointer, which is a
+//     hook's business, installed with InstallThunk so the chain sees it (kExecutableMapping, stage `symbol_type`). The symbol
+//     decides, not the address: libr15's .rodata lies inside its executable segment, so a data object's address is an address in
+//     an executable segment, and the heap descriptors the first user writes over are such objects;
 //   - a `value` that is an address in an executable segment of a loaded module: a code pointer stored here would skip the chain
 //     (kExecutableMapping, stage `new_value`). `value` is therefore writable storage of the caller's, not a const object the
 //     linker places in an R E segment;

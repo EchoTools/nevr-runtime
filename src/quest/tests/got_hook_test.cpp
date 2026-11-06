@@ -2005,8 +2005,9 @@ std::size_t TotalLines() {
   return Captured().size();
 }
 
-SynthSpec DataSpec() {  // two GLOB_DAT slots: beta's in RELRO, alpha's plain
+SynthSpec DataSpec() {  // two GLOB_DAT slots naming data objects: beta's in RELRO, alpha's plain
   SynthSpec s;
+  s.symType = STT_OBJECT;  // every real data slot names an OBJECT; NOTYPE is how a weak function reference reads
   s.rels.push_back({false, kRelroSlot, s.nums.globDat, 2, 0});
   s.rels.push_back({false, kPlainSlot, s.nums.globDat, 1, 0});
   return s;
@@ -2082,8 +2083,10 @@ void DataSlotRefusesWhatIsNotData() {
   Prepare();
   const std::size_t used = RegistrySnapshot().used;
   void* const code = reinterpret_cast<void*>(&AddImpl);
-  for (const std::uint8_t type : {STT_FUNC, STT_GNU_IFUNC}) {
-    // A slot whose relocation names a function holds a code pointer (a hook), whatever the value says.
+  for (const std::uint8_t type : {STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_TLS}) {
+    // Only a slot whose relocation names an OBJECT is data. A function holds a code pointer (a hook), and so does a NOTYPE symbol:
+    // that is how the linker types a weak reference nothing defined (libr15's `getentropy`), which the loader fills with libc's
+    // function. Whatever the value says.
     SynthSpec spec = DataSpec();
     spec.symType = type;
     SynthImage img;
@@ -2174,22 +2177,19 @@ void DataSlotAcceptsADataObjectWhoseAddressIsInAnExecutableSegment() {
   Prepare();
   const std::size_t used = RegistrySnapshot().used;
   void* const inExecutableSegment = reinterpret_cast<void*>(&AddImpl);
-  for (const std::uint8_t type : {STT_OBJECT, STT_NOTYPE}) {
-    SynthSpec spec = DataSpec();
-    spec.symType = type;
-    SynthImage img;
-    Build(spec, inExecutableSegment, &img);
-    g_synth = &img;
-    QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
-    void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
-    GotDataSlot slot;
-    Captured().clear();
-    QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), inExecutableSegment, &g_dataB, SynthLookup), GotStatus::kOk);
-    QCHECK(slot.written() && *relro == &g_dataB && Errors() == 0 && Count(LogLevel::kWarn, "\"op\":\"data_write\"") == 0);
-    QCHECK_STATUS(slot.Restore(), GotStatus::kOk);
-    QCHECK(*relro == inExecutableSegment && RegistrySnapshot().used == used);
-    g_synth = nullptr;
-  }
+  SynthSpec spec = DataSpec();
+  SynthImage img;
+  Build(spec, inExecutableSegment, &img);
+  g_synth = &img;
+  QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
+  void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+  GotDataSlot slot;
+  Captured().clear();
+  QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), inExecutableSegment, &g_dataB, SynthLookup), GotStatus::kOk);
+  QCHECK(slot.written() && *relro == &g_dataB && Errors() == 0 && Count(LogLevel::kWarn, "\"op\":\"data_write\"") == 0);
+  QCHECK_STATUS(slot.Restore(), GotStatus::kOk);
+  QCHECK(*relro == inExecutableSegment && RegistrySnapshot().used == used);
+  g_synth = nullptr;
 }
 
 int g_protectCalls = 0;

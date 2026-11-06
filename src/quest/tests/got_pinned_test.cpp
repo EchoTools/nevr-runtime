@@ -215,6 +215,31 @@ void CheckRealDataSlotWrite(const LoadedElf& elf, const RealDataSlot& d) {
   SetRelocNumbers(previousRelocs);
 }
 
+// libr15's one GLOB_DAT that names a NOTYPE symbol is `getentropy` (a weak reference nothing defines at link time): the loader fills
+// its slot with libc's function, so it holds a code pointer although its symbol has no type. Write refuses it: only an OBJECT is
+// data. (libpnsrad, libpnsradmatchmaking and libpnsovr each have the same one.)
+void CheckRealNotypeSlotIsRefused(const LoadedElf& elf) {
+  constexpr std::uint64_t kGetentropySlot = 0x370abf0;
+  Elf64_Sym sym;
+  QCHECK(DynamicSymbol(elf, "getentropy", &sym));
+  QCHECK(ELF64_ST_TYPE(sym.st_info) == STT_NOTYPE && sym.st_shndx == SHN_UNDEF);
+  const GotTarget target{pinned::kLibR15, "getentropy", RelocKind::kGlobDat, pinned::kLibR15StockBuildId, kGetentropySlot};
+  const SlotResolution at = ResolveSlot(elf.image, target, kAarch64Relocs);
+  QCHECK_STATUS(at.status, GotStatus::kOk);
+  QCHECK(at.symbolType == STT_NOTYPE);
+  void** const slot = reinterpret_cast<void**>(elf.image.base + kGetentropySlot);
+  void* const libcFunction = reinterpret_cast<void*>(0x7f0000001230ULL);  // what the loader stores: an address in libc
+  *slot = libcFunction;
+  g_dataSlotElf = &elf;
+  const RelocNumbers* const previousRelocs = SetRelocNumbers(&kAarch64Relocs);
+  const LogSink previous = SetLogSink(&QuietSink);
+  GotDataSlot data;
+  QCHECK_STATUS(data.Write(target, libcFunction, &g_ourHeapValue, &DataSlotLookup), GotStatus::kExecutableMapping);
+  QCHECK(!data.written() && *slot == libcFunction);
+  SetLogSink(previous);
+  SetRelocNumbers(previousRelocs);
+}
+
 void CheckRealAbs64Words(const LoadedElf& elf) {
   for (const RealAbs64Word& w : kRealAbs64Words) {
     const GotTarget pinned{pinned::kLibR15, w.symbol, RelocKind::kAbs64, pinned::kLibR15StockBuildId, w.vaddr};
@@ -470,6 +495,7 @@ int main(int argc, char** argv) {
     }
   }
   CheckRealAbs64Words(r15);
+  CheckRealNotypeSlotIsRefused(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
