@@ -14,7 +14,13 @@
 //     has no entry there is not sent;
 //   - the name is what the game's GetUserName (0x1401c98c0) returns for the net game and the entrant index, as
 //     /session writes it; without that function, or while the session-flags pointer at +0x2DA0 is null (the
-//     function reads through it unchecked), the lobby's sfw name.
+//     function reads through it unchecked), the lobby's sfw name;
+//   - level is the stat entry at +0x2FB4 (type 5 averaged, 0x1401b38c9-0x1401b38fb); the jersey number the u16
+//     at netGame + slot * 0x40 + 0x51458 (0x1401b3c0e-0x1401b3c1e);
+//   - the packet-loss ratio (0x1401b3e18-0x1401b3e98): for an entrant index below the u16 at +0xE0 the float at
+//     +0x54150; otherwise by the first byte of the session-flags word: bit 1 set, or bit 2 clear and bit 6 set,
+//     the float at slot * 0xE78 + 0x54200, else the one at slot * 0x70 + 0x62980;
+//   - a player's handle generation is the generation of its slot's entry in the handle table.
 
 #include <gtest/gtest.h>
 
@@ -38,6 +44,12 @@ constexpr uint64_t kSlotStride = 0x4D08;
 constexpr uint64_t kLobbyTable = 0x18 + 0x360;
 constexpr uint64_t kLobbyCount = 0x18 + 0x368;
 constexpr uint64_t kLobbyEntrantSize = 0xD8;
+constexpr uint64_t kLevel = 0x2FB4;
+constexpr uint64_t kJersey = 0x51458, kJerseyStride = 0x40;
+constexpr uint64_t kLocalEntrantEnd = 0xE0;
+constexpr uint64_t kLossLocal = 0x54150;
+constexpr uint64_t kLossWide = 0x54200, kLossWideStride = 0xE78;
+constexpr uint64_t kLossNarrow = 0x62980, kLossNarrowStride = 0x70;
 
 // /session's stat offsets (0x1401565b2-0x140156785).
 constexpr uint64_t kStuns = 0x7184, kBlocks = 0x71b4, kPoints = 0x72a4, kGoals = 0x72d4, kSteals = 0x7394,
@@ -52,7 +64,7 @@ class NetGame {
   // through; its table holds 16 entrants unless a test says otherwise.
   // The handle table starts empty (0xffff); setting an entrant names it in its slot's entry unless an earlier
   // entrant holds that slot, as a game with one record per slot has it.
-  NetGame() : bytes_(0x60000, 0), lobby_(0x18 + sizeof(EchoVR::Lobby), 0) {
+  NetGame() : bytes_(0x64000, 0), lobby_(0x18 + sizeof(EchoVR::Lobby), 0) {
     SetLobby(16);
     Put<const uint32_t*>(bytes_, kSessionFlagsPointer, &sessionFlags_);
     for (uint8_t slot = 0; slot < 16; slot++) SetHandle(slot, kNoHandle, kNoHandle);
@@ -115,6 +127,10 @@ class NetGame {
     Put<uint16_t>(table_, at + 0x8A, ping);
     Put<uint16_t>(table_, at + 0x8E, 7);  // the lobby's team word; the team comes from the net game
   }
+
+  void SetJersey(uint8_t slot, uint16_t number) { Put<uint16_t>(bytes_, kJersey + slot * kJerseyStride, number); }
+  void SetLocalEntrantEnd(uint16_t end) { Put<uint16_t>(bytes_, kLocalEntrantEnd, end); }
+  void SetLoss(uint64_t at, float ratio) { Put<float>(bytes_, at, ratio); }
 
   void RemoveSessionFlags() { Put<const uint32_t*>(bytes_, kSessionFlagsPointer, nullptr); }
 
@@ -457,6 +473,81 @@ TEST(TelemetryPlayerName, ALongNameFromTheGameIsCutAndEnded) {
   g_userNames = {std::string(35, 'g') + "past_the_cut"};
   const TelemetrySnapshot snap = Read(ng, nullptr, &FakeGetUserName);
   EXPECT_EQ(std::string(snap.playerInfo[1].displayName), std::string(35, 'g'));
+}
+
+TEST(TelemetryPlayerRead, TheJerseyNumberIsTheOneAtTheSlot) {
+  NetGame ng;
+  ng.SetEntrants({Word(0, 1), Word(3, 0)});
+  ng.SetJersey(0, 11);
+  ng.SetJersey(1, 99);  // entrant index 1, not a slot anyone holds
+  ng.SetJersey(3, 23);
+  const TelemetrySnapshot snap = Read(ng);
+  EXPECT_EQ(snap.playerInfo[0].jerseyNumber, 11);
+  EXPECT_EQ(snap.playerInfo[3].jerseyNumber, 23);
+}
+
+TEST(TelemetryPlayerRead, TheLevelIsTheSlotsLevelEntry) {
+  NetGame ng;
+  ng.SetEntrants({Word(2, 0), Word(7, 1)});
+  ng.SetStat(2, kLevel, 1, 30, 1);
+  ng.SetStat(7, kLevel, 5, 30, 4);  // averaged: 30 / 4 = 7
+  ng.SetStat(0, kLevel, 1, 999, 1);
+  const TelemetrySnapshot snap = Read(ng);
+  EXPECT_EQ(snap.playerInfo[2].level, 30u);
+  EXPECT_EQ(snap.playerInfo[7].level, 7u);
+}
+
+TEST(TelemetryPlayerRead, ALocalEntrantsPacketLossIsTheNetGamesOwn) {
+  NetGame ng;
+  ng.SetEntrants({Word(4, 0), Word(5, 1)});
+  ng.SetLocalEntrantEnd(1);  // entrant 0 is this machine's
+  ng.SetLoss(kLossLocal, 0.25f);
+  ng.SetLoss(kLossNarrow + 4 * kLossNarrowStride, 0.9f);
+  ng.SetLoss(kLossNarrow + 5 * kLossNarrowStride, 0.5f);
+  const TelemetrySnapshot snap = Read(ng);
+  EXPECT_FLOAT_EQ(snap.playerInfo[4].packetLossRatio, 0.25f);
+  EXPECT_FLOAT_EQ(snap.playerInfo[5].packetLossRatio, 0.5f);
+}
+
+TEST(TelemetryPlayerRead, ARemoteEntrantsPacketLossTableIsChosenByTheSessionFlags) {
+  NetGame ng;
+  ng.SetEntrants({Word(6, 0)});
+  ng.SetLoss(kLossWide + 6 * kLossWideStride, 0.75f);
+  ng.SetLoss(kLossNarrow + 6 * kLossNarrowStride, 0.125f);
+  struct Case {
+    uint32_t flags;
+    float expected;
+  } cases[] = {
+      {0x00, 0.125f},                // no bit: narrow
+      {0x02, 0.75f},                 // bit 1: wide
+      {0x02 | 0x04, 0.75f},          // bit 1 wins over bit 2
+      {0x04, 0.125f},                // bit 2 alone: narrow
+      {0x40, 0.75f},                 // bit 6 with bit 2 clear: wide
+      {0x04 | 0x40, 0.125f},         // bit 6 with bit 2 set: narrow
+      {0x100 | 0x40, 0.75f},         // only the first byte counts
+  };
+  for (const auto& c : cases) {
+    ng.sessionFlags_ = c.flags;
+    EXPECT_FLOAT_EQ(Read(ng).playerInfo[6].packetLossRatio, c.expected) << "flags 0x" << std::hex << c.flags;
+  }
+}
+
+TEST(TelemetryPlayerRead, WithNoSessionFlagsARemoteEntrantsPacketLossIsZero) {
+  NetGame ng;
+  ng.SetEntrants({Word(6, 0)});
+  ng.SetLoss(kLossNarrow + 6 * kLossNarrowStride, 0.125f);
+  ng.RemoveSessionFlags();
+  EXPECT_FLOAT_EQ(Read(ng).playerInfo[6].packetLossRatio, 0.0f);
+}
+
+TEST(TelemetryPlayerRead, EachPlayerKeepsItsSlotsHandleGeneration) {
+  NetGame ng;
+  ng.SetEntrants({Word(3, 0), Word(8, 1)});
+  ng.SetHandle(3, 0, 7);
+  ng.SetHandle(8, 1, 0x1234);
+  const TelemetrySnapshot snap = Read(ng);
+  EXPECT_EQ(snap.playerInfo[3].handleGeneration, 7);
+  EXPECT_EQ(snap.playerInfo[8].handleGeneration, 0x1234);
 }
 
 }  // namespace

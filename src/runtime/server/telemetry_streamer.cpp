@@ -363,6 +363,7 @@ void TelemetryStreamer::ResolveFunctionPointers() {
   m_getSymbolHash = reinterpret_cast<GetSymbolHashFn>(base + nevr_game_func_addr::GET_SYMBOL_HASH);
   m_getFloatProperty = reinterpret_cast<GetFloatPropertyFn>(base + nevr_game_func_addr::GET_FLOAT_PROPERTY);
   m_getIntProperty = reinterpret_cast<GetIntPropertyFn>(base + nevr_game_func_addr::GET_INT_PROPERTY);
+  m_getBoolProperty = reinterpret_cast<GetBoolPropertyFn>(base + nevr_game_func_addr::GET_BOOL_PROPERTY);
   m_getUserName = reinterpret_cast<GetUserNameFn>(base + nevr_game_func_addr::GET_USER_NAME);
   namespace pose = nevr_telemetry_pose;
   namespace addr = nevr_game_func_addr;
@@ -418,8 +419,9 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
   snap->bluePoints = props.bluePoints;
   snap->orangePoints = props.orangePoints;
 
-  // The level name and the round count, as /session reads them (telemetry_session_read.h)
-  nevr_telemetry_session::ReadSessionState({m_getIntProperty}, m_netGame, snap);
+  // The level, rounds, pause, restart requests and disc owner, as /session reads them (telemetry_session_read.h)
+  nevr_telemetry_session::ReadSessionState({m_getIntProperty, m_getSymbolHash, m_getFloatProperty, m_getBoolProperty},
+                                           m_netGame, snap);
 
   // --- Direct memory reads ---
 
@@ -559,95 +561,8 @@ void TelemetryStreamer::BuildAndSendFrame(const TelemetrySnapshot& snap) {
       static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()));
 
   auto* arena = frame->mutable_echo_arena();
-
-  // Game state
-  arena->set_game_status(static_cast<telemetry::v2::GameStatus>(MapGameStatus(snap.gameStatusHash)));
-  arena->set_game_clock(snap.gameClock);
-  arena->set_blue_points(snap.bluePoints);
-  arena->set_orange_points(snap.orangePoints);
-
-  // Disc
-  auto* disc = arena->mutable_disc();
-  auto* discPose = disc->mutable_pose();
-  auto* discPos = discPose->mutable_position();
-  discPos->set_x(snap.discPos[0]);
-  discPos->set_y(snap.discPos[1]);
-  discPos->set_z(snap.discPos[2]);
-  auto* discOri = discPose->mutable_orientation();
-  discOri->set_x(snap.discOrient[0]);
-  discOri->set_y(snap.discOrient[1]);
-  discOri->set_z(snap.discOrient[2]);
-  discOri->set_w(snap.discOrient[3]);
-  auto* discVel = disc->mutable_velocity();
-  discVel->set_x(snap.discVel[0]);
-  discVel->set_y(snap.discVel[1]);
-  discVel->set_z(snap.discVel[2]);
-  disc->set_bounce_count(static_cast<uint32_t>(snap.discBounceCount));
-
-  // Players
-  for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {  // i is the game slot
-    const auto& pi = snap.playerInfo[i];
-    if (!pi.present) continue;
-
-    auto* ps = arena->add_players();
-    ps->set_slot(i);
-    ps->set_flags(pi.flags);
-    ps->set_ping(pi.ping);
-
-    // Poses, as the game's readers gave them (telemetry_player_pose.h); a part not read is zero
-    const auto& pt = snap.players[i];
-
-    auto* head = ps->mutable_head();
-    auto* headPos = head->mutable_position();
-    headPos->set_x(pt.headPos[0]);
-    headPos->set_y(pt.headPos[1]);
-    headPos->set_z(pt.headPos[2]);
-    auto* headOri = head->mutable_orientation();
-    headOri->set_x(pt.headRot[0]);
-    headOri->set_y(pt.headRot[1]);
-    headOri->set_z(pt.headRot[2]);
-    headOri->set_w(pt.headRot[3]);
-
-    auto* body = ps->mutable_body();
-    auto* bodyPos = body->mutable_position();
-    bodyPos->set_x(pt.bodyPos[0]);
-    bodyPos->set_y(pt.bodyPos[1]);
-    bodyPos->set_z(pt.bodyPos[2]);
-    auto* bodyOri = body->mutable_orientation();
-    bodyOri->set_x(pt.bodyRot[0]);
-    bodyOri->set_y(pt.bodyRot[1]);
-    bodyOri->set_z(pt.bodyRot[2]);
-    bodyOri->set_w(pt.bodyRot[3]);
-
-    auto* lh = ps->mutable_left_hand();
-    auto* lhPos = lh->mutable_position();
-    lhPos->set_x(pt.leftHandPos[0]);
-    lhPos->set_y(pt.leftHandPos[1]);
-    lhPos->set_z(pt.leftHandPos[2]);
-    auto* lhOri = lh->mutable_orientation();
-    lhOri->set_x(pt.leftHandRot[0]);
-    lhOri->set_y(pt.leftHandRot[1]);
-    lhOri->set_z(pt.leftHandRot[2]);
-    lhOri->set_w(pt.leftHandRot[3]);
-
-    auto* rh = ps->mutable_right_hand();
-    auto* rhPos = rh->mutable_position();
-    rhPos->set_x(pt.rightHandPos[0]);
-    rhPos->set_y(pt.rightHandPos[1]);
-    rhPos->set_z(pt.rightHandPos[2]);
-    auto* rhOri = rh->mutable_orientation();
-    rhOri->set_x(pt.rightHandRot[0]);
-    rhOri->set_y(pt.rightHandRot[1]);
-    rhOri->set_z(pt.rightHandRot[2]);
-    rhOri->set_w(pt.rightHandRot[3]);
-
-    auto* vel = ps->mutable_velocity();
-    vel->set_x(pt.velocity[0]);
-    vel->set_y(pt.velocity[1]);
-    vel->set_z(pt.velocity[2]);
-
-    // No player_bones: the snapshot holds no bone data (telemetry_snapshot.h).
-  }
+  // The frame's state (telemetry_frame.h: game state, disc, players)
+  nevr_telemetry_frame::BuildArenaFrame(snap, arena);
 
   // Drain events from ring buffer (broadcaster-pushed events)
   TelemetryEvent event;

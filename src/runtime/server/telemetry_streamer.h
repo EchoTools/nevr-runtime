@@ -165,6 +165,7 @@ class TelemetryStreamer {
   GetSymbolHashFn m_getSymbolHash{nullptr};
   GetFloatPropertyFn m_getFloatProperty{nullptr};
   GetIntPropertyFn m_getIntProperty{nullptr};
+  GetBoolPropertyFn m_getBoolProperty{nullptr};
   GetUserNameFn m_getUserName{nullptr};
   nevr_telemetry_pose::PoseFunctions m_poseFunctions;
 

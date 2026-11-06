@@ -21,6 +21,15 @@ struct TelemetrySnapshot {
   int32_t bluePoints;
   int32_t orangePoints;
 
+  // Replicated variables of the net game, read through the game's getters as /session reads them
+  // (telemetry_session_read.h).
+  int32_t roundNumber;           // round_counter, the game's [game_info][round_number]
+  uint64_t pauseStateSymbol;     // net_game_paused_state: unpaused, paused, pause_requested or another symbol
+  float pauseTime;               // net_game_pause_time: above 0 while an unpause counts down
+  bool blueRestartRequest;       // blue_team_restart_request
+  bool orangeRestartRequest;     // orange_team_restart_request
+  uint32_t discOwnerHandle;      // the low 32 bits of game_frisbee_ownerid: { u16 slot, u16 generation }
+
   // Per-player poses, indexed by game slot like playerInfo: read through the game's own component readers on
   // the game thread, as /session reads them (telemetry_player_pose.h). Rotations are quaternions x, y, z, w.
   struct PlayerTransform {
@@ -43,14 +52,20 @@ struct TelemetrySnapshot {
   // from the lobby entrant at the same slot (telemetry_player_read.h). present: a
   // player (team 0 to 2) whose slot is below 16, whose slot's handle-table entry names it, and whose slot has
   // an entry in the lobby's entrant table.
+  // handleGeneration is the slot's handle-table generation (the player's handle is { slot, generation });
+  // jerseyNumber, level and packetLossRatio as /session reads them (telemetry_player_read.h).
   struct PlayerInfo {
     bool present;
     uint16_t flags;
     uint16_t entrantIndex;
+    uint16_t handleGeneration;
     uint64_t accountId;
     char displayName[36];
     uint16_t ping;
     uint16_t teamIndex;  // 0 blue, 1 orange, 2 spectator
+    uint16_t jerseyNumber;
+    uint32_t level;
+    float packetLossRatio;
   } playerInfo[16];
   uint16_t playerCount;  // players read (present slots)
 
@@ -176,6 +191,33 @@ constexpr uint64_t SLOT_STAT_PASSES = 0x74B4;
 constexpr uint64_t SLOT_STAT_CATCHES = 0x74E4;
 constexpr uint64_t SLOT_STAT_INTERCEPTIONS = 0x7544;
 constexpr uint64_t SLOT_STAT_POSSESSION_TIME = 0x75A4;
+// A player's level: the slot's entry at 0x2FB4, read like the stats above (/session player writer
+// 0x1401b2ea0: 0x1401b38c9 `lea r12, [rdx + 0x2fb8]`, 0x1401b38d0 `lea r13, [rdx + 0x2fb4]`, 0x1401b38e2
+// `imul rcx, rax, 0x4d08`, 0x1401b38e9 count at +0x2fbc; type 5 averaged at 0x1401b3cb5-0x1401b3cd7; written
+// as level at 0x1401b3c40).
+constexpr uint64_t SLOT_STAT_LEVEL = 0x2FB4;
+
+// A player's jersey number: a u16 at CR15NetGame + slot * 0x40 + 0x51458, read while the entrant index is
+// below the entrant count, else 0 (0x1401b3c05 `cmp ax, [rcx + 0xe2]`, 0x1401b3c1a `shl rax, 6`,
+// 0x1401b3c1e `movzx edx, word ptr [rax + rcx + 0x51458]`, 0x1401b3c28; written as number at 0x1401b3b75).
+constexpr uint64_t JERSEY_NUMBER_OFFSET = 0x51458;
+constexpr uint64_t JERSEY_NUMBER_STRIDE = 0x40;
+
+// A player's packet-loss ratio, a float (0x1401b3e18-0x1401b3e98, written as packetlossratio at 0x1401b3da3):
+// 0 for an entrant index at or past the entrant count (0x1401b3e23); for one below *(u16*)(CR15NetGame + 0xE0)
+// (this machine's entrants, REMOTE_ENTRANT_FIRST_OFFSET) the one at + 0x54150 (0x1401b3e3b); otherwise by the
+// first byte of the session-flags word **(CR15NetGame + 0x2DA0) (0x1401b3e45 `mov rax, [rcx + 0x2da0]`,
+// 0x1401b3e4c `mov rdx, [rax]`, read with no null check): bit 1 set, or bit 2 clear and bit 6 set, the one at
+// + slot * 0xE78 + 0x54200 (0x1401b3e85-0x1401b3e98), else the one at + slot * 0x70 + 0x62980
+// (0x1401b3e6a-0x1401b3e7a).
+constexpr uint64_t PACKET_LOSS_LOCAL_OFFSET = 0x54150;
+constexpr uint64_t PACKET_LOSS_WIDE_OFFSET = 0x54200;
+constexpr uint64_t PACKET_LOSS_WIDE_STRIDE = 0xE78;
+constexpr uint64_t PACKET_LOSS_NARROW_OFFSET = 0x62980;
+constexpr uint64_t PACKET_LOSS_NARROW_STRIDE = 0x70;
+constexpr uint8_t SESSION_FLAG_BIT1 = 1u << 1;
+constexpr uint8_t SESSION_FLAG_BIT2 = 1u << 2;
+constexpr uint8_t SESSION_FLAG_BIT6 = 1u << 6;
 
 // Disc: GameStateData offsets
 constexpr uint64_t DISC_ORIENT_OFFSET = 0xE4;   // float[4] quaternion
@@ -206,6 +248,11 @@ using GetFloatPropertyFn = float(__fastcall*)(void* netGame, uint64_t propertyHa
 // the object at net game + GAME_STATE_DATA_OFFSET.
 using GetIntPropertyFn = int32_t(__fastcall*)(void* netGame, uint64_t propertyHash);
 
+// FUN_140ce4460(CR15NetGame, key) → bool: the getter /session reads the restart requests with
+// (0x140155d3f `mov rcx, [r15 + 0x18]`, 0x140155d51 `call 0x140ce4460`). Its lookup is the int getter's; the
+// value it returns is the found entry's low byte (0x140ce4390, 0x140ce442c `movzx eax, al`), 0 when absent.
+using GetBoolPropertyFn = bool(__fastcall*)(void* netGame, uint64_t propertyHash);
+
 // FUN_1401c98c0(CR15NetGame, entrant index) → the player's name, as /session writes it (0x1401b3b5b `call
 // 0x1401c98c0` with the loop's entrant index, copied at 0x1401b3b6d): the "displayname" of the entrant's state
 // data (*(ng + e*0x250 + 0x3c0), read by json path through 0x1405fe290) unless bit 27 of **(ng + 0x2da0) is
@@ -225,7 +272,29 @@ constexpr uint64_t ORANGE_POINTS = 0x2ED07B1C8C27548D;  // "red_score"
 // /session's total_round_count: the int getter on the net game (0x1401b31c0 `mov rcx, [r15 + 0x18]`,
 // 0x1401b31d2 `call 0x140d05730`, key at 0x1416e50a8).
 constexpr uint64_t TOTAL_ROUND_COUNT = 0x9042518ADE2D74B2;  // "net_total_round_count"
+// The game's round number: the int getter on the net game, as the game_info writer 0x1401aee50 reads it for
+// [game_info][round_number] (0x1401af253-0x1401af28a, key at 0x1416e2580). /session writes no round number.
+constexpr uint64_t ROUND_COUNTER = 0x4EB3E1B152A1BA7A;  // "round_counter"
+// The disc's owner: a symbol variable read with the symbol getter on the net game before /session's player loop
+// (0x140155d1d `mov rdx, [r15 + 0x18]`, 0x140155d3a `call 0x140d5ced0`, key at 0x1416e1fd8).
+constexpr uint64_t DISC_OWNER = 0x1B10BDC962B47FCC;  // "game_frisbee_ownerid"
+// The restart requests: the bool getter on the net game (0x140155d3f-0x140155d90, keys at 0x1416e4930 and
+// 0x1416e4960).
+constexpr uint64_t BLUE_RESTART_REQUEST = 0xEF31E81D7CCF9310;    // "blue_team_restart_request"
+constexpr uint64_t ORANGE_RESTART_REQUEST = 0xD5FC00B1EC025BEE;  // "orange_team_restart_request"
+// The pause: a symbol variable and a float, both on the net game (0x1401b3245-0x1401b325e symbol getter, key at
+// 0x1416e5148; 0x1401b32b4-0x1401b32c9 float getter, key at 0x1416e51f0).
+constexpr uint64_t PAUSED_STATE = 0x02FE0AA4F2637309;  // "net_game_paused_state"
+constexpr uint64_t PAUSE_TIME = 0x994659A65CFA75D3;    // "net_game_pause_time"
 }  // namespace nevr_property_hash
+
+// The values of net_game_paused_state /session names (0x1401b32d8-0x1401b3329): unpaused, paused and
+// pause_requested; any other value is "none".
+namespace nevr_pause_symbol {
+constexpr uint64_t UNPAUSED = 0x23E384163CEC8162;         // "unpaused", key at 0x1416e5218
+constexpr uint64_t PAUSED = 0x41D2D73C0F30021A;           // "paused", 0x1416e5248
+constexpr uint64_t PAUSE_REQUESTED = 0xB24C4239E89E103E;  // "pause_requested", 0x1416e5268
+}  // namespace nevr_pause_symbol
 
 // The game's three property getters, resolved from nevr_game_func_addr (a test passes fakes).
 struct GamePropertyGetters {
@@ -267,6 +336,7 @@ namespace nevr_game_func_addr {
 constexpr uint64_t GET_SYMBOL_HASH = 0xd5ced0;       // FUN_140d5ced0
 constexpr uint64_t GET_FLOAT_PROPERTY = 0xd36750;    // FUN_140d36750
 constexpr uint64_t GET_INT_PROPERTY = 0xd05730;      // FUN_140d05730
+constexpr uint64_t GET_BOOL_PROPERTY = 0xce4460;     // FUN_140ce4460(netGame, key)
 constexpr uint64_t GET_USER_NAME = 0x1c98c0;         // FUN_1401c98c0(netGame, entrant index)
 constexpr uint64_t ENTITY_LOOKUP = 0x4f37a0;         // FUN_1404f37a0(entity system, id)
 constexpr uint64_t RESOLVE_ENTITY_HANDLE = 0x363610;  // FUN_140363610(resolver, handle)

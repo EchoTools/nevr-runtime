@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <string>
 
+#include "runtime/server/telemetry_game_status.h"
 #include "runtime/server/telemetry_player_read.h"
+#include "runtime/server/telemetry_session_read.h"
 #include "runtime/server/telemetry_snapshot.h"
 #include "telemetry/v2/echo_arena.pb.h"
 
@@ -35,6 +37,87 @@ inline void BuildArenaHeader(const TelemetrySnapshot& snap, const std::string& s
     entry->set_account_number(pi.accountId);
     entry->set_display_name(pi.displayName);
     entry->set_role(nevr_telemetry_player::RoleFromTeam(pi.teamIndex));
+    entry->set_jersey_number(pi.jerseyNumber);
+    entry->set_level(static_cast<int32_t>(pi.level));
+  }
+}
+
+// The game slot of the player holding the disc, or -1: the present player whose handle { slot, generation }
+// is the disc owner's, the comparison /session makes for each player's possession (0x140156939-0x14015697c,
+// `cmp edx, ebx`; and possession[0] / [1] at 0x140157222-0x14015726a).
+inline int DiscHolderSlot(const TelemetrySnapshot& snap) {
+  for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {
+    const auto& pi = snap.playerInfo[i];
+    if (!pi.present) continue;
+    const uint32_t handle = static_cast<uint32_t>(i) | (static_cast<uint32_t>(pi.handleGeneration) << 16);
+    if (handle == snap.discOwnerHandle) return i;
+  }
+  return -1;
+}
+
+inline void SetPose(spatial::v1::Pose* pose, const float (&pos)[3], const float (&rot)[4]) {
+  auto* p = pose->mutable_position();
+  p->set_x(pos[0]);
+  p->set_y(pos[1]);
+  p->set_z(pos[2]);
+  auto* o = pose->mutable_orientation();
+  o->set_x(rot[0]);
+  o->set_y(rot[1]);
+  o->set_z(rot[2]);
+  o->set_w(rot[3]);
+}
+
+// The arena frame's state from the snapshot: game status, clock, scores, round, pause, restart requests, the
+// disc and its holder, and each present player. Events are not built here (telemetry_events.h). The fields a
+// game read gives (round, pause, restart requests, holder) are set only for a snapshot the game thread read.
+inline void BuildArenaFrame(const TelemetrySnapshot& snap, telemetry::v2::EchoArenaFrame* arena) {
+  // Game state
+  arena->set_game_status(GameStatusFromSymbol(snap.gameStatusHash));
+  arena->set_game_clock(snap.gameClock);
+  arena->set_blue_points(snap.bluePoints);
+  arena->set_orange_points(snap.orangePoints);
+  if (snap.gameRead) {
+    arena->set_round_number(snap.roundNumber);
+    arena->set_pause_state(nevr_telemetry_session::PauseStateFromGame(snap.pauseStateSymbol, snap.pauseTime));
+    arena->set_blue_team_restart_request(snap.blueRestartRequest ? 1 : 0);
+    arena->set_orange_team_restart_request(snap.orangeRestartRequest ? 1 : 0);
+    const int holder = DiscHolderSlot(snap);
+    if (holder >= 0) arena->set_disc_holder_slot(holder);
+  }
+
+  // Disc
+  auto* disc = arena->mutable_disc();
+  SetPose(disc->mutable_pose(), snap.discPos, snap.discOrient);
+  auto* discVel = disc->mutable_velocity();
+  discVel->set_x(snap.discVel[0]);
+  discVel->set_y(snap.discVel[1]);
+  discVel->set_z(snap.discVel[2]);
+  disc->set_bounce_count(static_cast<uint32_t>(snap.discBounceCount));
+
+  // Players
+  for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {  // i is the game slot
+    const auto& pi = snap.playerInfo[i];
+    if (!pi.present) continue;
+
+    auto* ps = arena->add_players();
+    ps->set_slot(i);
+    ps->set_flags(pi.flags);
+    ps->set_ping(pi.ping);
+    ps->set_packet_loss_ratio(pi.packetLossRatio);
+    ps->set_possession_time(snap.stats[i].possessionTime);
+
+    // Poses, as the game's readers gave them (telemetry_player_pose.h); a part not read is zero
+    const auto& pt = snap.players[i];
+    SetPose(ps->mutable_head(), pt.headPos, pt.headRot);
+    SetPose(ps->mutable_body(), pt.bodyPos, pt.bodyRot);
+    SetPose(ps->mutable_left_hand(), pt.leftHandPos, pt.leftHandRot);
+    SetPose(ps->mutable_right_hand(), pt.rightHandPos, pt.rightHandRot);
+    auto* vel = ps->mutable_velocity();
+    vel->set_x(pt.velocity[0]);
+    vel->set_y(pt.velocity[1]);
+    vel->set_z(pt.velocity[2]);
+
+    // No player_bones: the snapshot holds no bone data (telemetry_snapshot.h).
   }
 }
 

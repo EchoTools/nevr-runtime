@@ -84,6 +84,31 @@ inline TelemetrySnapshot::PlayerStats ReadPlayerStats(const uint8_t* netGame, ui
   return s;
 }
 
+// A player's jersey number, at the slot (the entrant index is below the entrant count in ReadPlayers' loop,
+// so /session's 0 for a later index is not reached there).
+inline uint16_t ReadJerseyNumber(const uint8_t* netGame, uint8_t slot) {
+  namespace off = nevr_game_offsets;
+  return ReadAt<uint16_t>(netGame, off::JERSEY_NUMBER_OFFSET + slot * off::JERSEY_NUMBER_STRIDE);
+}
+
+// A player's packet-loss ratio, by entrant index and slot, read where /session reads it (PACKET_LOSS_*). The
+// session-flags word is read through *(netGame + 0x2DA0), which /session dereferences unchecked; while that
+// pointer is null this gives 0 for the entrants whose ratio depends on it.
+inline float ReadPacketLossRatio(const uint8_t* netGame, uint16_t entrantIndex, uint8_t slot) {
+  namespace off = nevr_game_offsets;
+  if (entrantIndex >= ReadAt<uint16_t>(netGame, off::PLAYER_COUNT_OFFSET)) return 0.0f;
+  if (entrantIndex < ReadAt<uint16_t>(netGame, off::REMOTE_ENTRANT_FIRST_OFFSET)) {
+    return ReadAt<float>(netGame, off::PACKET_LOSS_LOCAL_OFFSET);
+  }
+  const uint8_t* flags = ReadAt<const uint8_t*>(netGame, off::SESSION_FLAGS_POINTER_OFFSET);
+  if (!flags) return 0.0f;
+  const uint8_t first = flags[0];
+  const bool wide = (first & off::SESSION_FLAG_BIT1) != 0 ||
+                    ((first & off::SESSION_FLAG_BIT2) == 0 && (first & off::SESSION_FLAG_BIT6) != 0);
+  if (wide) return ReadAt<float>(netGame, off::PACKET_LOSS_WIDE_OFFSET + slot * off::PACKET_LOSS_WIDE_STRIDE);
+  return ReadAt<float>(netGame, off::PACKET_LOSS_NARROW_OFFSET + slot * off::PACKET_LOSS_NARROW_STRIDE);
+}
+
 // The lobby's entrant table, indexed by game slot: EchoVR::Lobby::entrantData of the CNSLobby at
 // *(netGame + LOBBY_POINTER_OFFSET) + LOBBY_SUBOBJECT_OFFSET, the object IServerLib::Initialize is given and
 // ServerContext::GetEntrant reads.
@@ -100,6 +125,14 @@ inline LobbyEntrants LobbyEntrantsOf(const uint8_t* netGame) {
   entrants.items = lobby->entrantData.items;
   entrants.count = entrants.items ? lobby->entrantData.count : 0;
   return entrants;
+}
+
+// The generation in the handle table's entry for a game slot (below kMaxSlots); with the slot it is the
+// player's handle (0x140156537), which /session compares with the disc owner's.
+inline uint16_t HandleTableGeneration(const uint8_t* netGame, uint8_t slot) {
+  namespace off = nevr_game_offsets;
+  return ReadAt<uint16_t>(netGame, off::SLOT_HANDLE_TABLE_OFFSET + slot * off::SLOT_HANDLE_STRIDE +
+                                       off::SLOT_HANDLE_GENERATION);
 }
 
 // The entrant the net game's handle table names for a game slot (below kMaxSlots), or SLOT_HANDLE_NONE when
@@ -139,7 +172,8 @@ inline void CopyName(char (&dest)[36], const char* name) {
 // getUserName (the game's GetUserName, game thread only) returns for entrant i, which is /session's name.
 // Without it (a test, or a caller that has not resolved it), or while the net game's session-flags pointer is
 // null (GetUserName would dereference it), the name is the lobby entrant's sfw name, the fallback the game
-// itself takes when the entrant's state data has no "displayname".
+// itself takes when the entrant's state data has no "displayname". Each player also gets its handle's
+// generation, its jersey number, level and packet-loss ratio.
 inline PlayerReadResult ReadPlayers(const uint8_t* netGame, TelemetrySnapshot* snap,
                                     GetUserNameFn getUserName = nullptr) {
   namespace off = nevr_game_offsets;
@@ -175,12 +209,16 @@ inline PlayerReadResult ReadPlayers(const uint8_t* netGame, TelemetrySnapshot* s
     info.present = true;
     info.flags = word;
     info.entrantIndex = i;
+    info.handleGeneration = HandleTableGeneration(netGame, slot);
     info.teamIndex = team;
     const EchoVR::Lobby::EntrantData& entrant = lobby.items[slot];
     info.accountId = entrant.userId.accountId;
     // The game function takes a mutable net game; it is the caller's own, so dropping const is safe.
     CopyName(info.displayName, getUserName ? getUserName(const_cast<uint8_t*>(netGame), i) : entrant.sfwDisplayName);
     info.ping = entrant.ping;
+    info.jerseyNumber = ReadJerseyNumber(netGame, slot);
+    info.level = ReadCountStat(netGame, slot, off::SLOT_STAT_LEVEL);
+    info.packetLossRatio = ReadPacketLossRatio(netGame, i, slot);
     snap->stats[slot] = ReadPlayerStats(netGame, slot);
     snap->playerCount++;
   }
