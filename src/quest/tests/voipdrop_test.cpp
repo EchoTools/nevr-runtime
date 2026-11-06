@@ -426,7 +426,7 @@ void TheSwitchOffInstallsNothingAndSaysSo() {
 // The image: not loaded, no build ID, another build.
 void AMissingOrOtherImageInstallsNothing() {
   Begin();
-  QCHECK(std::strcmp(vd::InstallAt(nullptr, g_pins, Fns(), true, nullptr).status, "module_not_loaded") == 0);
+  QCHECK(std::strcmp(vd::InstallAt(nullptr, g_pins, Fns(), true).status, "module_not_loaded") == 0);
   g_image.Drop();
   QCHECK(std::strcmp(Install().status, "module_not_loaded") == 0);
   Build();

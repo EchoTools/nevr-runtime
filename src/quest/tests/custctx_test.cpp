@@ -689,13 +689,13 @@ void ASpareThatCannotBeAllocatedInstallsNothing() {
 void ANeverFoundResizeInstallsNothing() {
   Begin();
   const cc::Fns none{};
-  const ModuleResult r = cc::InstallAt(&Lookup, g_pins, &none, true, nullptr);
+  const ModuleResult r = cc::InstallAt(&Lookup, g_pins, &none, true);
   QCHECK(!r.installed && std::strcmp(r.status, "export_missing") == 0 && SlotsAreTheGames());
   std::vector<Line> install = Lines("combat_custctx_install");
   QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"reason\":\"export_missing\""));
   End();
   Begin();
-  const ModuleResult p = cc::InstallAt(&Lookup, g_pins, nullptr, true, nullptr);  // the pins pass, then dlsym finds no libr15
+  const ModuleResult p = cc::InstallAt(&Lookup, g_pins, nullptr, true);  // the pins pass, then dlsym finds no libr15
   QCHECK(!p.installed && std::strcmp(p.status, "export_missing") == 0 && SlotsAreTheGames());
   QCHECK(Lines("combat_custctx_install").size() == 1U);
   End();
@@ -712,12 +712,12 @@ void TheInstallsOwnLookupOfResizeAcceptsOnlyThePinnedAddress() {
   Begin();
   cc::SetSymbolLookupForTest(&SymbolLookup);
   g_symbolAnswer = reinterpret_cast<const void*>(g_image.Base() + g_pins.fnResize + 4);  // another function: refused
-  QCHECK(std::strcmp(cc::InstallAt(&Lookup, g_pins, nullptr, true, nullptr).status, "export_missing") == 0);
+  QCHECK(std::strcmp(cc::InstallAt(&Lookup, g_pins, nullptr, true).status, "export_missing") == 0);
   QCHECK(g_symbolAsked != nullptr && std::strcmp(g_symbolAsked, cc::kResizeSymbol) == 0 && SlotsAreTheGames());
   g_symbolAnswer = nullptr;  // not exported
-  QCHECK(std::strcmp(cc::InstallAt(&Lookup, g_pins, nullptr, true, nullptr).status, "export_missing") == 0 && SlotsAreTheGames());
+  QCHECK(std::strcmp(cc::InstallAt(&Lookup, g_pins, nullptr, true).status, "export_missing") == 0 && SlotsAreTheGames());
   g_symbolAnswer = reinterpret_cast<const void*>(g_image.Base() + g_pins.fnResize);  // exactly the pinned address: installed
-  QCHECK(cc::InstallAt(&Lookup, g_pins, nullptr, true, nullptr).installed && !SlotsAreTheGames());
+  QCHECK(cc::InstallAt(&Lookup, g_pins, nullptr, true).installed && !SlotsAreTheGames());
   End();
 }
 
@@ -779,7 +779,7 @@ void TheSwitchOffInstallsNothingAndSaysSo() {
 void AMissingOrOtherImageInstallsNothing() {
   Begin();
   const cc::Fns fns = Fns();
-  QCHECK(std::strcmp(cc::InstallAt(nullptr, g_pins, &fns, true, nullptr).status, "module_not_loaded") == 0);
+  QCHECK(std::strcmp(cc::InstallAt(nullptr, g_pins, &fns, true).status, "module_not_loaded") == 0);
   g_image.Drop();
   QCHECK(std::strcmp(InstallOn().status, "module_not_loaded") == 0);
   Build();
