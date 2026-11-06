@@ -18,6 +18,7 @@
 #include "dronekill_log.h"
 #include "got_swap.h"
 #include "safe_read.h"
+#include "thread_word.h"
 
 namespace q15t {
 
@@ -80,11 +81,20 @@ std::atomic<std::uintptr_t> g_vt[kVtCache] = {};      // vtables whose Component
 std::atomic<std::uintptr_t> g_vt_dis[kVtCache] = {};  // the same for slot +0x210 DisableComponent
 std::atomic<std::uintptr_t> g_vt_en[kVtCache] = {};   // the same for slot +0x208 EnableComponent
 
-thread_local Capture* t_cap = nullptr;  // set only while a drone Enter runs on this thread
-thread_local DkC3 t_shot;
-thread_local std::uint32_t t_remote = 0;
-thread_local bool t_in_shot = false;
-thread_local bool t_in_tick = false;
+// The per-thread state of the wrappers. Each is a ThreadWord (a pthread key), not thread_local: the API 26 toolchain emulates
+// thread_local and allocates on a thread's first use, which a hooked call must not do. A pointer word points at a frame on the stack
+// of the wrapper that set it (0: none), so a nested call restores its caller's frame when it returns.
+ThreadWord g_t_cap;      // the Capture of the drone Enter running on this thread; set only while it runs
+ThreadWord g_t_shot;     // the ShotFrame of the FireBulletLocal running on this thread
+ThreadWord g_t_in_tick;  // 1 while this thread runs TickBody
+struct ShotFrame {
+  DkC3 velocity;
+  std::uint32_t remote;
+};
+ShotFrame g_test_shot;  // what SetDroneKillShotForTest points this thread's word at (a test seam: one frame for the process)
+
+Capture* CurrentCapture() { return reinterpret_cast<Capture*>(g_t_cap.Get()); }
+void SetCapture(Capture* c) { g_t_cap.Set(reinterpret_cast<std::uintptr_t>(c)); }
 
 std::atomic<int> g_lines{0}, g_notes{0}, g_off_lines{0}, g_k_lines{0}, g_f357_lines{0}, g_chase_lines{0};
 std::atomic<std::uint32_t> g_enter_drone{0}, g_enter_other{0}, g_fires{0}, g_attacks{0}, g_ticks{0}, g_due_runs{0};
@@ -212,7 +222,7 @@ std::uint32_t ActorWrap(const void* thread, const void* space, std::uint64_t act
   const auto real = reinterpret_cast<ActorFn>(g_actor_real.load(std::memory_order_acquire));
   if (real == nullptr) return 0;
   const std::uint32_t r = real(thread, space, actor_sym, space_out, actor_out, flag_out);
-  Capture* const c = t_cap;
+  Capture* const c = CurrentCapture();
   // Enter passes [data+0] = the drone actor's symbol in x2: an Actor call for another actor that re-enters this slot inside the real
   // Actor returns first and must not be taken for Enter's own
   if (c != nullptr && !c->have && actor_sym == kDroneActor) {
@@ -262,10 +272,10 @@ void EnterWrap(void* node, const NodeData* data) {
   }
   g_enter_drone.fetch_add(1, std::memory_order_relaxed);
   Capture cap;
-  Capture* const outer = t_cap;  // a drone Enter inside a drone Enter keeps its own capture
-  t_cap = &cap;
+  Capture* const outer = CurrentCapture();  // a drone Enter inside a drone Enter keeps its own capture
+  SetCapture(&cap);
   real(node, data);  // DK-3: the game's own work first, arguments untouched
-  t_cap = outer;
+  SetCapture(outer);
   const std::uint32_t tid = Tid();
   if (!cap.have || !cap.ok || cap.space == nullptr) {
     Note(d, tid, "no actor (Enter found none, or Actor was not called)");
@@ -319,8 +329,8 @@ void EnterWrap(void* node, const NodeData* data) {
     if (d.component == kGun) g_guns.Set(cap.actor, d.enable);
     else known = g_guns.Shown(cap.actor, &shown);
     pthread_mutex_unlock(&g_mu);
-    Capture* const saved = t_cap;  // ActorWrap only passes through for our own extra Enters (M1)
-    t_cap = nullptr;
+    Capture* const saved = CurrentCapture();  // ActorWrap only passes through for our own extra Enters (M1)
+    SetCapture(nullptr);
     if (d.component == kGun) {
       for (const std::uint64_t sym : {kSatellite, kPort}) {
         if ((static_cast<std::uint32_t>(CallComponent(component, system, cap.actor, sym)) & 0xffff) == 0xffff) {  // M3
@@ -338,7 +348,7 @@ void EnterWrap(void* node, const NodeData* data) {
       real(node, &copy);
       F357_LOG("dronekill: port follows the gun", .S("script", d.enable ? "shown" : "hidden").S("gun", shown ? "shown" : "hidden").U("tid", tid));
     }
-    t_cap = saved;
+    SetCapture(saved);
   }
   Joined j{0, 0, false, false};
   if (d.enable) {
@@ -460,16 +470,11 @@ void FireWrap(void* cs, std::uint32_t handle, DkC3 velocity, std::uint32_t remot
   if (real == nullptr) return;
   g_fires.fetch_add(1, std::memory_order_relaxed);
   if (g_lockon) LockedOn(handle);
-  const DkC3 saved_shot = t_shot;  // a shot inside a shot keeps the outer one's after it returns
-  const std::uint32_t saved_remote = t_remote;
-  const bool saved_in = t_in_shot;
-  t_shot = velocity;
-  t_remote = remote;
-  t_in_shot = true;
+  const std::uintptr_t outer = g_t_shot.Get();  // a shot inside a shot keeps the outer one's after it returns
+  ShotFrame frame{velocity, remote};
+  g_t_shot.Set(reinterpret_cast<std::uintptr_t>(&frame));
   real(cs, handle, velocity, remote);
-  t_shot = saved_shot;
-  t_remote = saved_remote;
-  t_in_shot = saved_in;
+  g_t_shot.Set(outer);
 }
 
 // F7 C3: true = the drone's R14NetPhysics is locally controlled, or the drone has no R14NetPhysics component (not replicated:
@@ -655,8 +660,8 @@ void ChaseTick(std::uint64_t now) {
 // The source's net tick body (source-build ec called it at the end of each recvfrom on the game's own socket); here once per frame on the
 // game thread. Nothing but one atomic load while nothing is due.
 void TickBody() {
-  if (!g_any_due.load(std::memory_order_acquire) || t_in_tick) return;
-  t_in_tick = true;
+  if (!g_any_due.load(std::memory_order_acquire) || g_t_in_tick.Get() != 0) return;
+  g_t_in_tick.Set(1);
   g_due_runs.fetch_add(1, std::memory_order_relaxed);
   Due due[kGroupComps * 2];
   const std::uint64_t now = NowMs();
@@ -692,7 +697,7 @@ void TickBody() {
     LogKv().U("tid", tid).U("off", static_cast<unsigned long long>(off)).U("skipped", static_cast<unsigned long long>(skipped))
         .U("waiting_invoke_immediate_0", static_cast<unsigned long long>(waiting)).U("expired", expired).U("due_after_ms", kDueMs)
         .Emit(NEVR_LOG_WARNING, "dronekill: tick");
-  t_in_tick = false;
+  g_t_in_tick.Set(0);
 }
 
 struct FnSpec {
@@ -800,7 +805,16 @@ DroneKillInstall InstallDroneKill(std::uintptr_t base, const DroneKillWords& wor
     LogSwap(hooks[i].name, *hooks[i].result);
     return refuse("a slot does not hold the pinned function");
   }
-  // swap order: Actor first (its wrapper alone only passes through; t_cap is set by EnterWrap only), then Enter, FireBulletLocal, AttackTarget
+  // every check is done: the wrappers' per-thread state is three pthread keys, made now so that a module refused above holds none
+  int key_error = g_t_cap.Create();
+  if (key_error == 0) key_error = g_t_shot.Create();
+  if (key_error == 0) key_error = g_t_in_tick.Create();
+  if (key_error != 0) {
+    LogKv().S("why", "no pthread key for the wrappers' per-thread state").U("error", static_cast<unsigned long long>(key_error))
+        .Emit(NEVR_LOG_ERROR, "dronekill: OFF, nothing changed");
+    return out;
+  }
+  // swap order: Actor first (its wrapper alone only passes through; g_t_cap is set by EnterWrap only), then Enter, FireBulletLocal, AttackTarget
   for (int i = 0; i < 4; ++i) {
     if (!use[i]) continue;
     *hooks[i].result = InstallImportHook(hooks[i].name, base, hooks[i].slot, hooks[i].wrapper, hooks[i].real, hooks[i].fn);
@@ -863,9 +877,10 @@ void DroneKillOnKilled(std::uint32_t index) {
 }
 
 const float* DroneKillShotVelocity(int* remote) {
-  if (!t_in_shot) return nullptr;
-  if (remote != nullptr) *remote = static_cast<int>(t_remote);
-  return &t_shot.x;
+  const auto* frame = reinterpret_cast<const ShotFrame*>(g_t_shot.Get());  // valid while the FireBulletLocal that set it runs
+  if (frame == nullptr) return nullptr;
+  if (remote != nullptr) *remote = static_cast<int>(frame->remote);
+  return &frame->velocity.x;
 }
 
 bool DroneKillShotActive() { return g_shot_swapped.load(std::memory_order_acquire); }
@@ -877,9 +892,13 @@ DroneKillStats GetDroneKillStats() {
 void SetDroneKillCallsForTest(const DroneKillCalls* calls) { g_test_calls = calls; }
 void SetDroneKillClockForTest(std::uint64_t (*now_ms)()) { g_clock_ms = now_ms; }
 void SetDroneKillShotForTest(const float* v3, int remote) {
-  t_in_shot = v3 != nullptr;
-  if (v3 != nullptr) t_shot = DkC3{v3[0], v3[1], v3[2]};
-  t_remote = static_cast<std::uint32_t>(remote);
+  g_t_shot.Create();  // a test that drives the accessor without installing has no key yet
+  if (v3 == nullptr) {
+    g_t_shot.Set(0);
+    return;
+  }
+  g_test_shot = ShotFrame{DkC3{v3[0], v3[1], v3[2]}, static_cast<std::uint32_t>(remote)};
+  g_t_shot.Set(reinterpret_cast<std::uintptr_t>(&g_test_shot));
 }
 
 void SetDroneKillShotActiveForTest(bool active) { g_shot_swapped.store(active); }
@@ -905,9 +924,9 @@ void ResetDroneKillForTest() {
   for (auto& c : g_vt) c.store(0);
   for (auto& c : g_vt_dis) c.store(0);
   for (auto& c : g_vt_en) c.store(0);
-  t_cap = nullptr;
-  t_in_shot = t_in_tick = false;
-  t_remote = 0;
+  SetCapture(nullptr);
+  g_t_shot.Set(0);
+  g_t_in_tick.Set(0);
   g_lines.store(0);
   g_notes.store(0);
   g_off_lines.store(0);

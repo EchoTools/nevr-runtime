@@ -32,8 +32,8 @@ runm powerboost pb_queued_ignores_flag src/powerboost.cpp 's/if (!g_swallow.load
 runm powerboost pb_hold_forever     src/powerboost.cpp 's/h.cs == cs \&\& NowMs() - h.ms < kHoldMs/h.cs == cs/'
 runm powerboost pb_hold_long        src/powerboost.cpp 's/kHoldMs = 2000, kPendingMs = 2000/kHoldMs = 20000, kPendingMs = 2000/'
 runm powerboost pb_hold_other_cs    src/powerboost.cpp 's/if (h.cs == cs \&\& NowMs()/if (NowMs()/'
-runm powerboost pb_direct_any_kind  src/powerboost.cpp 's/if (t_in_node \&\& m.kind == 1) {/if (t_in_node) {/'
-runm powerboost pb_relayed_held     src/powerboost.cpp 's/if (t_in_node \&\& m.kind == 1) {/if (m.kind == 1) {/'
+runm powerboost pb_direct_any_kind  src/powerboost.cpp 's/if (in_node \&\& m.kind == 1) {/if (in_node) {/'
+runm powerboost pb_relayed_held     src/powerboost.cpp 's/if (in_node \&\& m.kind == 1) {/if (m.kind == 1) {/'
 runm powerboost pb_queued_sends_all src/powerboost.cpp 's/if (m.kind == 1) Send(cs, handle, amount, "queued node heal");/if (m.kind != 0) Send(cs, handle, amount, "queued node heal");/'
 runm powerboost pb_send_sign        src/powerboost.cpp 's/g_fns.send(cs, handle, -amount, 0, 0);/g_fns.send(cs, handle, amount, 0, 0);/'
 runm powerboost pb_send_args        src/powerboost.cpp 's/g_fns.send(cs, handle, -amount, 0, 0);/g_fns.send(cs, handle, -amount, 1, 0);/'
@@ -82,3 +82,7 @@ runm powerboost pb_thunk_call_real  src/powerboost_thunk.inc 's/"br x16\\n"/"blr
 runm powerboost pb_thunk_x1         src/powerboost_thunk.inc 's/add x1, sp, #16/add x1, sp, #0/'
 runm powerboost pb_thunk_x2         src/powerboost_thunk.inc 's/mov x2, x24/mov x2, x25/'
 runm powerboost pb_thunk_lr         src/powerboost_thunk.inc 's/"ldp x29, x30, \[sp\], #16\\n"/"ldp x29, x29, [sp], #16\\n"/'
+runm powerboost pb_node_shared_word src/powerboost.cpp "s/^ThreadWord g_t_in_node;.*/$SHARED_WORD g_t_in_node;/"
+runm powerboost pb_node_not_restored src/powerboost.cpp 's/^  g_t_in_node.Set(depth);$/  (void)depth;/'
+runm powerboost pb_key_failure_ignored src/powerboost.cpp 's/g_t_in_node.Create(); key_error != 0) {/g_t_in_node.Create(); key_error != 0 \&\& false) {/'
+runm powerboost pb_key_error_unlogged src/powerboost.cpp 's/.I("error", key_error)//'

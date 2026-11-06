@@ -21,6 +21,7 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "quest/combat/equip_refire.h"
 #include "quest/combat/match_tags.h"
 #include "quest/invite/frame_dispatch.h"
 #include "main_level.h"
@@ -181,6 +182,10 @@ bool InstallPermissionWaitHook() noexcept {
     // stock default gets bit 13; a saved choice still wins, because LoadSettings runs after the constructor. Its
     // combat_match_tags_install line says whether it went in; a refused install leaves the game's constructor as it is.
     nevr_quest::combat::match_tags::Install();
+    // The equipment change event the scripts dropped is sent again (#2121): the six words that hold CR15NetPlayerEquipmentCS's three
+    // setters, a word that holds anything but the setter refused on its own, and a frame work on the game thread. Its
+    // combat_equip_refire_install line says which words went in; a refused install leaves the game's calls as they are.
+    nevr_quest::combat::equip_refire::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     nevr_quest::permission_wait::SetStorageNeeded(&nevr_quest::data_wiring::StorageNeeded);
     return nevr_quest::permission_wait::Install();

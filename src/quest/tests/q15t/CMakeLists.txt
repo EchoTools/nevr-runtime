@@ -32,7 +32,7 @@ set(Q15T_ARM64_OPTIONS -O2 -fno-exceptions -fno-rtti -fvisibility=hidden -Wall -
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
   set(Q15T_ARM64 TRUE)
   get_filename_component(Q15T_NDK_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
-  foreach(tool llvm-readelf llvm-objdump)
+  foreach(tool llvm-readelf llvm-objdump llvm-nm)
     if(NOT EXISTS "${Q15T_NDK_BIN}/${tool}")
       message(FATAL_ERROR "q15t: ${tool} is not beside the NDK clang (${Q15T_NDK_BIN}); Q15T_NDK must be an Android NDK r26d install")
     endif()
@@ -108,7 +108,9 @@ function(q15t_extra_run name program)
 endfunction()
 
 # q15t_arm64_object(<src name>...): src/<name>.cpp compiled for arm64 with the NDK clang, with the plugin's own warning flags, and
-# the test that the object has no static initializer section (.init_array / .ctors: the repack refuses a plugin with one).
+# two tests: the object has no static initializer section (.init_array / .ctors: the repack refuses a plugin with one), and it defines
+# no emulated thread-local variable (__emutls_v.*: the API 26 toolchain emulates thread_local and allocates on a thread's first use,
+# which a hooked call must not do; the sentinel's TestNoEmulatedTLSInHookPath holds the same line for its own library).
 function(q15t_arm64_object)
   if(NOT Q15T_ARM64)
     return()
@@ -121,6 +123,9 @@ function(q15t_arm64_object)
     add_test(NAME ${Q15T_MODULE}.arm64_${m}
              COMMAND "${Q15T_TESTS_DIR}/check/arm64_no_static_init.sh" "${Q15T_NDK_BIN}/llvm-readelf" "$<TARGET_OBJECTS:nevr_q15t_arm64_${m}>" ${m})
     set_tests_properties(${Q15T_MODULE}.arm64_${m} PROPERTIES LABELS ${Q15T_MODULE})
+    add_test(NAME ${Q15T_MODULE}.arm64_no_emutls_${m}
+             COMMAND "${Q15T_TESTS_DIR}/check/no_emutls.sh" "${Q15T_NDK_BIN}/llvm-nm" "$<TARGET_OBJECTS:nevr_q15t_arm64_${m}>" ${m})
+    set_tests_properties(${Q15T_MODULE}.arm64_no_emutls_${m} PROPERTIES LABELS ${Q15T_MODULE})
   endforeach()
 endfunction()
 

@@ -49,8 +49,21 @@ native library directory only, so a plugin that is not in the APK is not loaded.
 
 - No code page is written: a hook is one GOT word on a data page (`src/quest/plugins/q15t/src/got_swap.cpp` refuses an executable page), because the
   headset's OS denies `execmod` on the game's code pages.
+- No `thread_local` in code a hooked game call reaches: the Quest build targets API 26, where the compiler emulates it and the
+  first use on a thread allocates. Per-thread state is a `ThreadWord` (`src/quest/plugins/q15t/src/thread_word.h`): a pthread key made at
+  the module's install after its other checks, whose value lives in the thread's own TLS block, so a hooked call never allocates. A
+  module whose key cannot be made refuses to install and logs `error=<code>`. `src/quest/tests/q15t/check/no_emutls.sh` fails on an
+  `__emutls_v.*` symbol (libc++abi's `eh_globals` excepted, by its exact name) in each arm64 module object a `mod/<module>.cmake`
+  registers with `q15t_arm64_object` (`just test-quest-q15t`) and in each built library (`just build-quest-q15t`).
 - It refuses any libr15 build id other than the one it declares (the NEVR build-id note, and again at `InitEx`), before it
   touches memory.
 - No game binary, asset or table is in this tree. The game-derived values are virtual addresses and the single instruction words a
   module pins before it hooks (`src/quest/plugins/q15t/src/word_pins.h` and the per-module pin tables): a pin that does not read back
   refuses the module with one ERROR line.
+- Every read of game memory goes through `SafeRead` (`src/quest/plugins/q15t/src/safe_read.h`), so a stale or half-built table is a skipped
+  entry, never a fault.
+- A wrapper never faults the game: on any doubt it calls the real function.
+- A wrapper on a high-fan-in function keeps counters and logs nothing per call.
+- Every address, offset and layout is a cited line of the reference build's source or a quoted disassembly word, and anything unread is
+  labelled unverified in the module's note (`docs/quest/q15t/modules/`). The audit record `docs/audits/2026-11-05-q15t-origin-citations.md`
+  names the source file, line and commit of the citations the plugin's notes and comments carried as `afk_<file>`, `vn`, `pb` and `df` line numbers.

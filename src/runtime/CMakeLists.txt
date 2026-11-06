@@ -128,6 +128,8 @@ set(PATCHES_SOURCES
     # #1774 P13: the dedicated lobby's allow_incoming bit, forced by a hook on CBroadcaster::Initialize (pure rule in server/broadcaster_config.h).
     "patch/broadcaster_allow_incoming.cpp"
     "patch/lobby_full_backoff.cpp"
+    # #2163: [NEVR.MATCH] records for a lobby session success and the join it queues (pure rules in queued_join_log_rules.h).
+    "patch/queued_join_log.cpp"
     # The game's deadlock monitor thread (CDeadlockMonitor::Main): whole-function hook, stall check removed (pure loop in deadlock_monitor_loop.h).
     "patch/deadlock_monitor.cpp"
     "patch/noovr_arglookup.cpp"
@@ -139,6 +141,8 @@ set(PATCHES_SOURCES
     # #1420: the netgun bullet ids of the four unfinished weapons (pure logic in netgun_bullet_ids.h).
     "patch/netgun_bullet_ids.cpp"
     "patch/splash_skip.cpp"
+    # #2121: the equipment change the game drops is applied again (pure logic in equipment_refire_rules.h).
+    "patch/equipment_refire.cpp"
     # #896, #906: the UI text writer (pure logic in ui_text.h).
     "patch/ui_text.cpp"
     "patch/ui_texture_mips.cpp"
@@ -1645,6 +1649,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_lobby_full_backoff PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_lobby_full_backoff DISCOVERY_MODE PRE_TEST)
 
+    # test_queued_join_log.cpp (#2163): the [NEVR.MATCH] rules, and the four hooks under MinHook against a fake game image.
+    add_executable(test_queued_join_log tests/test_queued_join_log.cpp patch/queued_join_log.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_queued_join_log.cpp patch/queued_join_log.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_queued_join_log PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_queued_join_log PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_queued_join_log PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_queued_join_log DISCOVERY_MODE PRE_TEST)
+
     # test_deadlock_monitor.cpp: the monitor thread loop (patch/deadlock_monitor_loop.h), the one the hook runs.
     add_executable(test_deadlock_monitor tests/test_deadlock_monitor.cpp)
     target_include_directories(test_deadlock_monitor PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -1678,6 +1692,13 @@ if(BUILD_TESTING)
     target_include_directories(test_menu_version_label PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_menu_version_label PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_menu_version_label DISCOVERY_MODE PRE_TEST)
+
+    # test_equipment_refire.cpp (#2121, header-only patch/equipment_refire_rules.h; the Quest host test compiles the same header).
+    add_executable(test_equipment_refire tests/test_equipment_refire.cpp)
+    set_source_files_properties(tests/test_equipment_refire.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_equipment_refire PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_equipment_refire PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_equipment_refire DISCOVERY_MODE PRE_TEST)
 
     # test_splash_skip.cpp (#962, header-only patch/splash_skip_rules.h).
     add_executable(test_splash_skip tests/test_splash_skip.cpp)

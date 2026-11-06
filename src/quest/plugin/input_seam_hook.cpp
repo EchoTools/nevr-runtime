@@ -121,15 +121,16 @@ std::int32_t RegisterRelease(const char* pluginId, NevrQuestInputFilterFn filter
 
 // The host API is one struct, and this file owns its initializers. The script redirect (script_redirect.h) is offered in
 // both builds: it registers a combat unit's library names. The hook service (slot_hook.h, #2001) is offered in the
-// development build only. The release API offers no slot hook service until q15t moves onto it (#2002): both members are
-// null there, and a plugin checks each one is not null as well as that struct_size covers it.
+// development build only. The release API offers no slot hook service (docs/adr/0046-combat-is-part-of-the-quest-runtime.md: the
+// plugin that would have used it is folded into the runtime): both members are null there, and a plugin checks each one is not
+// null as well as that struct_size covers it.
 std::int32_t RegisterScriptRedirect(const char* pluginId, const std::uint64_t* hashes, std::uint32_t count) {
   return static_cast<std::int32_t>(script_redirect::Register(pluginId, hashes, count));
 }
 
 const NevrQuestHostApi kDevApi{sizeof(NevrQuestHostApi), &RegisterDev, &RegisterScriptRedirect,
                               &slot_hook::RegisterSlotHook, &slot_hook::UnregisterSlotHook};
-// The release API offers no slot hook service until q15t moves onto it (#2002).
+// The release API offers no slot hook service (ADR 0046): both members are null.
 const NevrQuestHostApi kReleaseApi{sizeof(NevrQuestHostApi), &RegisterRelease, &RegisterScriptRedirect, nullptr,
                                    nullptr};
 

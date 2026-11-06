@@ -23,6 +23,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/credits_text.cpp",
     "patch/deadlock_monitor.cpp",
     "patch/early_quit_lockout.cpp",
+    "patch/equipment_refire.cpp",
     "patch/evrp_package.cpp",
     "patch/gpu_score.cpp",
     "patch/headless_graphics.cpp",
@@ -44,6 +45,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/plugin_assets.cpp",
     "patch/pnsrad_enabler.cpp",
     "patch/provider_name_redirect.cpp",
+    "patch/queued_join_log.cpp",
     "patch/render_config.cpp",
     "patch/render_config_hook.cpp",
     "patch/resource_override.cpp",
@@ -101,7 +103,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("patch-source-inventory: OK count=43", result.stdout)
+        self.assertIn("patch-source-inventory: OK count=45", result.stdout)
 
     def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
         scenarios = (

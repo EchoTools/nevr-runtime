@@ -116,10 +116,11 @@
       "section": "projects",
       "headings": ["code-contributions"],
       "link": "https://github.com/heisthecat31/EchoCombat",
-      "what": "he_is_the_cat's new and fixed Echo Combat gear (DOT FIELD, DRONE, UMBRAL VEIL, OVERCHARGE, NEUTRON, TRANSLOCATOR) as nevr-runtime plugins and a content pack.",
+      "what": "he_is_the_cat's new and fixed Echo Combat gear (DOT FIELD, DRONE, UMBRAL VEIL, OVERCHARGE, NEUTRON, TRANSLOCATOR) as nevr-runtime plugins and a content pack. The equip_guard script of he_is_the_cat found that the game drops an equipment change made while the previous one is still being handled and measured how long that takes; the runtime's re-fire of the change (#2121) follows that diagnosis.",
       "sources": [
         "https://github.com/heisthecat31/EchoCombat",
-        "named by the project owner"
+        "named by the project owner",
+        "#2121"
       ]
     },
     {
