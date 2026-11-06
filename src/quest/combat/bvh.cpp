@@ -337,7 +337,6 @@ struct Planned {
 
 void Undo(int doneCount, const int* doneIndexes) noexcept {
   for (int i = doneCount - 1; i >= 0; --i) g_hooks[doneIndexes[i]].Remove();
-  g_installed.store(false, std::memory_order_release);
   g_gateOn.store(false, std::memory_order_release);
   g_allowedCount.store(0, std::memory_order_release);
 }
@@ -494,7 +493,6 @@ void LookAtLevels(std::uintptr_t game) noexcept {
 void Tick(std::uintptr_t game) noexcept {
   if (!g_installed.load(std::memory_order_acquire)) return;
   const double now = NowSeconds();
-  if (g_nextSummary == 0) g_nextSummary = now + kSummaryEverySeconds;
   if (now >= g_nextLook) {
     g_nextLook = now + kLookEverySeconds;
     LookAtLevels(game);

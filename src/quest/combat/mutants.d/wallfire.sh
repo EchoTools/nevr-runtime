@@ -3,8 +3,8 @@
 runm wf_off_ignored       src/quest/combat/wallfire.cpp "s/  if (!on) {/  if (false) {/"
 runm wf_off_reason        src/quest/combat/wallfire.cpp "s/return {false, \"off_config\"};/return {false, \"off\"};/"
 runm wf_off_line          src/quest/combat/wallfire.cpp "s/{{\"result\", \"off\"}, {\"reason\", \"off_config\"},/{{\"result\", \"skipped\"}, {\"reason\", \"off_config\"},/"
-runm wf_switch_unlogged   src/quest/combat/wallfire.cpp "s/^  LogSwitch(\"wallfire\", \"combat.wallfire\", on, fromConfig);//"
-runm wf_switch_source     src/quest/combat/wallfire.cpp "s/  LogSwitch(\"wallfire\", \"combat.wallfire\", on, fromConfig);/  LogSwitch(\"wallfire\", \"combat.wallfire\", on, false);/"
+runm wf_switch_unlogged   src/quest/combat/wallfire.cpp "s/^  LogSwitch(\"wallfire\", \"combat.wallfire\", on, fromConfig);/  (void)fromConfig;/"
+runm wf_switch_source     src/quest/combat/wallfire.cpp "s/  LogSwitch(\"wallfire\", \"combat.wallfire\", on, fromConfig);/  (void)fromConfig; LogSwitch(\"wallfire\", \"combat.wallfire\", on, false);/"
 runm wf_legacy_unchecked  src/quest/combat/wallfire.cpp "s/  if (legacy::Present(\"wallfire.off\")) {/  if (false) {/"
 runm wf_legacy_key        src/quest/combat/wallfire.cpp "s/{\"replaced_by\", \"combat.wallfire: false\"}/{\"replaced_by\", \"combat.bvh: false\"}/"
 runm wf_legacy_level      src/quest/combat/wallfire.cpp "s/sentinel::LogFields(sentinel::LogLevel::kWarn, \"combat_wallfire_legacy_switch\"/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_wallfire_legacy_switch\"/"
@@ -42,10 +42,10 @@ runm wf_finite            src/quest/combat/wallfire.cpp "s/finite = std::isfinit
 runm wf_finite_all        src/quest/combat/wallfire.cpp "s/k < kReqSegFloats; ++k) finite/k < 3; ++k) finite/"
 runm wf_finite_unchecked  src/quest/combat/wallfire.cpp "s/  if (!finite) {/  if (false) {/"
 runm wf_nan_count         src/quest/combat/wallfire.cpp "s/    g_nan.fetch_add(1, std::memory_order_relaxed);/    (void)0;/"
-runm wf_game_check        src/quest/combat/wallfire.cpp "s/  if (!GameIsPinned(gs)) {/  if (false) {/"
+runm wf_game_check        src/quest/combat/wallfire.cpp "s/  if (!GameIsPinned(gs)) {/  if (false \&\& !GameIsPinned(gs)) {/"
 runm wf_game_count        src/quest/combat/wallfire.cpp "s/    g_game.fetch_add(1, std::memory_order_relaxed);/    (void)0;/"
 runm wf_game_warn_once    src/quest/combat/wallfire.cpp "s/    if (!g_warnedGame.exchange(true, std::memory_order_relaxed)) LogSkippedGame();/    LogSkippedGame();/"
-runm wf_game_warn_never   src/quest/combat/wallfire.cpp "s/    if (!g_warnedGame.exchange(true, std::memory_order_relaxed)) LogSkippedGame();/    (void)0;/"
+runm wf_game_warn_never   src/quest/combat/wallfire.cpp "s/    if (!g_warnedGame.exchange(true, std::memory_order_relaxed)) LogSkippedGame();/    if (false \&\& !g_warnedGame.exchange(true, std::memory_order_relaxed)) LogSkippedGame();/"
 runm wf_checked_count     src/quest/combat/wallfire.cpp "s/  g_checked.fetch_add(1, std::memory_order_relaxed);/  (void)0;/"
 runm wf_occ_args          src/quest/combat/wallfire.cpp "s/(gs, seg, seg + 3)) return r;/(gs, seg, seg + 2)) return r;/"
 runm wf_occ_args_swap     src/quest/combat/wallfire.cpp "s/(gs, seg, seg + 3)) return r;/(gs, seg + 3, seg)) return r;/"
@@ -69,7 +69,7 @@ runm wf_gs_off            src/quest/combat/wallfire_targets.h "s/kGsGame = 0x8;/
 runm wf_vtbl_off          src/quest/combat/wallfire_targets.h "s/kGameVtblSlot = 0x278;/kGameVtblSlot = 0x270;/"
 runm wf_seg_floats        src/quest/combat/wallfire_targets.h "s/kReqSegFloats = 6;/kReqSegFloats = 5;/"
 runm wf_symbol            src/quest/combat/wallfire_targets.h "s/QueryCollisionERNS_24/QueryCollisioNERNS_24/"
-runm wf_target_expected   src/quest/combat/wallfire_targets.h "s/  target.expectedOriginal = reinterpret_cast<const void\*>(base + pins.queryFn);//"
+runm wf_target_expected   src/quest/combat/wallfire_targets.h "s/target.expectedOriginal = reinterpret_cast<const void\*>(base + pins.queryFn);/target.expectedOriginal = nullptr; (void)base; (void)pins;/"
 # -- the module's row and key elsewhere
 runm wf_row_missing       src/quest/combat/combat_install.cpp "s/Module{\"wallfire\", nullptr, \&WallfireNormal},/Module{\"wallfire\", \&WallfireNormal, nullptr},/" quest-host-combat combat_install_test
 runm wf_row_switch        src/quest/combat/combat_install.cpp "s/  return wallfire::Install(g_config.wallfire.on, g_config.wallfire.source == nevr_quest::Source::kFile);/  return wallfire::Install(true, false);/" quest-host-combat combat_install_test

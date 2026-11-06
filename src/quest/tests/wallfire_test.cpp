@@ -329,10 +329,13 @@ void TheSwitchAndItsLines() {
     Build(g_siteWord, g_siteAbs);
     InstallBvhAndTree();
     g_lines.clear();
-    QCHECK(wf::Install(true, false).installed);
+    const nevr_quest::combat::ModuleResult first = wf::Install(true, false);
+    QCHECK(first.installed && std::strcmp(first.status, "installed") == 0);
     QCHECK(Count("\"key\":\"combat.wallfire\",\"on\":1,\"source\":\"default\"") == 1);
     QCHECK(Count("\"result\":\"installed\",\"reason\":\"ok\"", kInfo) == 1);
-    QCHECK(!wf::Install(true, false).installed);  // a second step installs nothing
+    const nevr_quest::combat::ModuleResult again = wf::Install(true, false);  // a second step installs nothing
+    QCHECK(!again.installed && std::strcmp(again.status, "already_ran") == 0);
+    QCHECK(std::strcmp(wf::Install(true, false).status, "already_ran") == 0);
     End();
   }
   {  // the plugin's kill file is a warning and changes nothing
@@ -381,6 +384,17 @@ void ShotsFromTheSiteAreCheckedOnACombatMap() {
   QCHECK(CallQuerySite(gs, Req(0, 0, 0, 6, 0, 0), 0xffffffff));
   QCHECK(CallQuerySite(gs, Req(3, 1, 0, 3, 7, 0), 0xffffffff));
   QCHECK(Count(Event("combat_wallfire_blocked"), kInfo) == 3);
+  {  // the first line counts from 1 and the segment is written start then end
+    std::vector<std::string> blocked;
+    for (const Line& l : g_lines) {
+      if (Has(l.text, Event("combat_wallfire_blocked"))) blocked.push_back(l.text);
+    }
+    QCHECK(blocked.size() == 3U);
+    if (blocked.size() == 3U) {
+      QCHECK(Has(blocked[0], "\"blocked\":1,") && Has(blocked[2], "\"blocked\":3,"));
+      QCHECK(Has(blocked[2], "\"segment\":\"3.00 1.00 0.00 -> 3.00 7.00 0.00\""));
+    }
+  }
   // other callers of QueryCollision get the stock answer, whatever the segment
   QCHECK(!CallQueryOther(gs, Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));
   // a null gamespace and a non-finite segment: the stock answer

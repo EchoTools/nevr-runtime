@@ -75,6 +75,7 @@ void* g_cbvhSelf = nullptr;  // the CBVHTree CncaGame::StaticRaycast would pass 
 bool g_nested = false, g_spawn = false;
 int g_spawnResult = -1;
 bool g_stockGateRanWithArgs = false;
+int g_nestedResult = -1;
 
 IntersectFn IntersectSlot() { return reinterpret_cast<IntersectFn>(*g_image.Slot(g_pins.intersect.slot)); }
 OccludedFn OccludedSlot() { return reinterpret_cast<OccludedFn>(*g_image.Slot(g_pins.occluded.slot)); }
@@ -117,7 +118,7 @@ extern "C" __attribute__((noinline)) bool StockGate(const void* self, const void
     g_nested = false;
     void* dummy = nullptr;
     std::uint8_t scratch[0x44];
-    CallGateOtherSite(self, ray, scratch, &dummy);
+    g_nestedResult = CallGateOtherSite(self, ray, scratch, &dummy) ? 1 : 0;
   }
   if (g_spawn) {  // another thread casts directly while this thread is inside an allowed cast
     g_spawn = false;
@@ -286,6 +287,11 @@ void ThePinsAreTheReadelfPins() {
   QCHECK(p.touch.slot == 0x36f37d8 && p.touch.fn == 0x20cf414);
   QCHECK(p.allowedCount == 3 && p.allowed[0] == 0x12b2b4c && p.allowed[1] == 0x12b2bc4 && p.allowed[2] == 0x12c0a54);
   QCHECK(std::strcmp(bvh::kInitSymbol, "_ZN10NRadEngine8CBVHTree10InitializeERKNS_12SBVHTreeDataE") == 0);
+  QCHECK(std::strcmp(bvh::kShutSymbol, "_ZN10NRadEngine8CBVHTree8ShutdownEv") == 0);
+  QCHECK(std::strcmp(bvh::kIntersectSymbol, "_ZNK10NRadEngine8CBVHTree9IntersectERKNS_4CRayERNS_7SBVHHitE") == 0);
+  QCHECK(std::strcmp(bvh::kOccludedSymbol, "_ZNK10NRadEngine8CBVHTree8OccludedERKNS_8C3VectorES3_") == 0);
+  QCHECK(std::strcmp(bvh::kTouchSymbol,
+                     "_ZN10NRadEngine8NRadGame22CR15TouchInteractQuery14RayQueryStaticEPKNS_15CncaGameSpaceMTERKNS_4CRayERNS0_8SMeshHitERf") == 0);
   QCHECK(std::strcmp(bvh::kGateSymbol, "_ZNK10NRadEngine13CncaGameSpace13StaticRaycastERKNS_4CRayERNS_7SBVHHitERPNS_15CncaGameSpaceMTE") == 0);
 }
 
@@ -327,6 +333,17 @@ void TheInstallSwapsTheSlotsAndStatesItOnce() {
   QCHECK(Count("\"module\":\"bvh\",\"key\":\"combat.bvh\",\"on\":1,\"source\":\"default\"") == 1);
   QCHECK(Count("\"key\":\"combat.bvh_gate\",\"on\":1,\"source\":\"default\"") == 1 && Count("\"key\":\"combat.bvh_touch\",\"on\":1,\"source\":\"default\"") == 1);
   QCHECK(nevr_quest::combat::tick::Count() == 1);  // the scope's refresh rides the combat tick
+  {  // the gate goes in first: until its hook is in no cast is marked, so a tree installed a moment later answers none
+    std::size_t gateAt = 0, initAt = 0;
+    for (std::size_t i = 0; i < g_lines.size(); ++i) {
+      if (Has(g_lines[i].text, Event("got_hook")) && Has(g_lines[i].text, "\"op\":\"install\"")) {
+        if (Has(g_lines[i].text, bvh::kGateSymbol)) gateAt = i + 1;
+        if (Has(g_lines[i].text, bvh::kInitSymbol)) initAt = i + 1;
+      }
+    }
+    QCHECK(gateAt != 0 && initAt != 0 && gateAt < initAt);
+  }
+  QCHECK(Count(Event("combat_bvh_legacy_switch")) == 0);  // no kill file in the plugin's data directory: nothing to warn about
   // a second step installs nothing
   const nevr_quest::combat::ModuleResult again = bvh::Install(On());
   QCHECK(!again.installed && std::strcmp(again.status, "already_ran") == 0);
@@ -399,14 +416,14 @@ void ALegacySwitchFileIsAWarningAndChangesNothing() {
   Begin();
   Build();
   nevr_quest::combat::legacy::SetDirectoryForTest(g_dir.c_str());
-  for (const char* f : {"bvh.off", "bvhgate.off", "bvhtouch.keep"}) {
+  for (const char* f : {"bvh.off", "bvhtouch.keep"}) {  // only two of the three are there: only those two are named
     FILE* file = std::fopen((g_dir + "/" + f).c_str(), "w");
     if (file != nullptr) std::fclose(file);
   }
-  QCHECK(Installed(On()));  // no file turns the module off or its gate off
-  QCHECK(Count(Event("combat_bvh_legacy_switch"), kWarn) == 3);
+  QCHECK(Installed(On()));  // no file turns the module off or its touch hook off
+  QCHECK(Count(Event("combat_bvh_legacy_switch"), kWarn) == 2);
+  QCHECK(Count("\"file\":\"bvhgate.off\"") == 0);
   QCHECK(Count("\"file\":\"bvh.off\",\"replaced_by\":\"combat.bvh: false\"") == 1);
-  QCHECK(Count("\"file\":\"bvhgate.off\",\"replaced_by\":\"combat.bvh_gate: false\"") == 1);
   QCHECK(Count("\"file\":\"bvhtouch.keep\",\"replaced_by\":\"combat.bvh_touch: false\"") == 1);
   QCHECK(Count("\"hooks\":6,\"gate\":1,\"touch\":1") == 1);
   for (const char* f : {"bvh.off", "bvhgate.off", "bvhtouch.keep"}) unlink((g_dir + "/" + f).c_str());
@@ -420,7 +437,9 @@ void ACombatMapGetsTheTreesAnswers() {
   QCHECK(Installed(Gateless()));
   EnterCombat();
   QCHECK(bvh::InCombatMap());
-  QCHECK(Count(Event("combat_bvh_scope")) == 1 && Count("\"from\":0,\"to\":1") == 1);
+  QCHECK(Count(Event("combat_bvh_scope"), kInfo) == 1 && Count("\"from\":0,\"to\":1") == 1);
+  Look();  // the same answer again: no second line
+  QCHECK(Count(Event("combat_bvh_scope")) == 1);
 
   bt::Resource res = RoomResource(true);
   std::uint64_t cbvh = 0xdeadbeef;  // the stock constructor zeroes it; a garbage value must not matter
@@ -446,6 +465,30 @@ void ACombatMapGetsTheTreesAnswers() {
   std::memcpy(&t, hit + 0x10, 4);
   std::memcpy(n, hit + 0x38, 12);
   QCHECK(id0 == 102 && id1 >= 0 && t > 4.99f && t < 5.01f);
+  {  // every field is what the core answers for the same tree and ray
+    bvh::Tree tree;
+    bvh::Blocks blocks;
+    const char* why = "";
+    QCHECK(bvh::Parse(res.bytes.data(), reinterpret_cast<std::uintptr_t>(res.bytes.data()), &tree, &blocks, &why));
+    bvh::Hit want;
+    QCHECK(bvh::Trace(tree, bvh::Ray(kDown, kDown + 3, 0.0f, INFINITY), false, &want));
+    QCHECK(id0 == want.id0 && id1 == want.id1 && u == want.u && v == want.v && t == want.t);
+    QCHECK(n[0] == want.n[0] && n[1] == want.n[1] && n[2] == want.n[2]);
+    // and for a ray off the diagonal, where u and v differ, so a swapped pair shows
+    const float off[6] = {1.7f, 0, 0.4f, 0, -1, 0};
+    bvh::Hit want2;
+    QCHECK(bvh::Trace(tree, bvh::Ray(off, off + 3, 0.0f, INFINITY), false, &want2));
+    QCHECK(want2.u != want2.v);
+    std::uint8_t hit2[0x44] = {};
+    QCHECK(CallInt(&cbvh, off, hit2));
+    float u2, v2;
+    std::int32_t a0, a1;
+    std::memcpy(&a0, hit2 + 0, 4);
+    std::memcpy(&a1, hit2 + 4, 4);
+    std::memcpy(&u2, hit2 + 8, 4);
+    std::memcpy(&v2, hit2 + 12, 4);
+    QCHECK(a0 == want2.id0 && a1 == want2.id1 && u2 == want2.u && v2 == want2.v);
+  }
   QCHECK(u >= 0 && v >= 0 && u + v <= 1.0001f);
   QCHECK(n[1] > 0.99f && n[0] * n[0] + n[1] * n[1] + n[2] * n[2] > 0.99f);
   bool untouched = true;
@@ -473,7 +516,7 @@ void ACombatMapGetsTheTreesAnswers() {
   const float a3[3] = {0, 0, 3}, out2[3] = {0, 0, 5.5f};  // blocked going +z, but not if the direction were reversed
   QCHECK(OccludedSlot()(&cbvh, a3, out2));
   bvh::Counters c = bvh::GetCounters();
-  QCHECK(c.intersect == 3 && c.intersectHit == 2 && c.occluded == 4 && c.occludedBlocked == 3 && c.treesBuilt == 1 && c.stock == 0);
+  QCHECK(c.intersect == 4 && c.intersectHit == 3 && c.occluded == 4 && c.occludedBlocked == 3 && c.treesBuilt == 1 && c.stock == 0);
 
   // the file-form resource (both header pointers 0: the blocks follow the header) and a root that is not node 0
   bt::Resource fileForm = RoomResource(false, 2, 5);
@@ -544,6 +587,7 @@ void WithoutACombatMapEveryHookCallsTheGamesFunction() {
     QCHECK(g_stockInt == int0 + 2 && g_stockOcc == occ0 + 1 && g_stockTouch == touch0 + 1 && g_stockGate == gate0 + 1);  // the gate's own stock cast reaches Intersect too
     const bvh::Counters c = bvh::GetCounters();
     QCHECK(c.intersect == 0 && c.occluded == 0 && c.touch == 0 && c.gated == 0 && c.stock == 0);
+    QCHECK(bvh::LastGateReturnForTest() == 0);  // the gate did nothing at all
   };
   QCHECK(!bvh::InCombatMap());  // no look yet: nothing is combat
   allStock();
@@ -736,8 +780,10 @@ void TheCallersGateAnswersTheListedCastsOnly() {
     QCHECK(!CallInt(&cbvh, kDown, hit));  // the mark is restored when the allowed cast returns
     // nested: an unlisted cast inside an allowed one is gated, and the allowed one still is allowed afterwards
     g_nested = true;
+    g_nestedResult = -1;
     std::memset(hit, 0, sizeof(hit));
     QCHECK(CallGateAllowedSite(reinterpret_cast<const void*>(0x77), kDown, hit, &gs));
+    QCHECK(g_nestedResult == 0);  // the unlisted cast inside the allowed one was gated
     QCHECK(!CallInt(&cbvh, kDown, hit));  // and the mark did not leak after the nested casts
     // another thread casting directly during an allowed cast is gated: the mark is per thread
     g_spawn = true;
@@ -884,12 +930,14 @@ void TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved() {
   InitSlot()(&cbvh, res.bytes.data());
   std::uint8_t hit[0x44] = {};
   CallInt(&cbvh, kDown, hit);
+  const float upOut[6] = {0, 20, 0, 0, 1, 0};
+  CallInt(&cbvh, upOut, hit);  // a miss: two casts, one hit
   g_now = 105.0;
   bvh::Tick(GameAddress());
   QCHECK(Count(Event("combat_bvh_summary")) == 0);  // inside the window
   g_now = 112.0;
   bvh::Tick(GameAddress());
-  QCHECK(Count(Event("combat_bvh_summary"), kInfo) == 1 && Count("\"intersect\":1,\"intersect_hit\":1") == 1);
+  QCHECK(Count(Event("combat_bvh_summary"), kInfo) == 1 && Count("\"intersect\":2,\"intersect_hit\":1") == 1);
   g_now = 125.0;
   bvh::Tick(GameAddress());
   QCHECK(Count(Event("combat_bvh_summary")) == 1);  // nothing moved: no line
@@ -906,6 +954,7 @@ void TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved() {
 }  // namespace
 
 int main() {
+  QCHECK(!bvh::InCombatMap());  // before anything: no combat map is known, so the hooks would call the game's functions
   char tmpl[] = "/tmp/combat-bvh-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) return 2;
   g_dir = tmpl;
