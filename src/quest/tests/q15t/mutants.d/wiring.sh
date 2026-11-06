@@ -45,7 +45,6 @@ runm wiring wire_drop_sensorwd_tick src/plugin.cpp "s/^  AddModuleTick(\"sensorw
 runm wiring wire_drop_levelname    src/plugin.cpp "s/^  ReportModule(\"levelname\", InstallLevelName(base));//"
 runm wiring wire_drop_gc_tick      src/plugin.cpp "s/^  ReportModuleTick(\"gunconnect\", AddGameTick(\&GunConnectTick), \&want_tick);//"
 runm wiring wire_drop_ai_tick      src/plugin.cpp "s/^  ReportModuleTick(\"aibots\", AddGameTick(\&AiBotsTick), \&want_tick);//"
-runm wiring wire_drop_hz_tick      src/plugin.cpp "s/^  AddModuleTick(\"refresh_rate\", \&RefreshMatchTick, \&want_tick);//"
 runm wiring wire_tick_early        src/plugin.cpp "s/^  if (want_tick) {\$/  if (false) {/"
 # the tick table (tests/game_tick_test.cpp)
 runm game_tick tick_max_8          src/game_tick.h   "s/inline constexpr int kMaxGameTicks = 16;/inline constexpr int kMaxGameTicks = 8;/"

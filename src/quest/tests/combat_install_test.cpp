@@ -207,20 +207,25 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
 
 // The real steps, with the table as it ships: no module has moved in yet, so each phase writes its one line with no modules, and says
 // that nothing of combat's is installed in it.
-void TheShippedTableIsEmptyAndEachStepSaysSo() {
+void TheShippedTableHasTheTickThenTheRefreshRateAndEachStepSaysSo() {
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
-  QCHECK(early.ran && early.modules == 0 && normal.ran && normal.modules == 0);
+  QCHECK(early.ran && normal.ran);
+  // The normal step runs the tick (combat_tick.h) first and the refresh-rate rule after it (#2172). On the host no libr15 is loaded,
+  // so the tick is refused and named; the rule installs (it registers its callback for a tick that may come later).
+  QCHECK(normal.modules >= 2 && normal.installed >= 1);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
     QCHECK(Has(lines[0].text, "\"phase\":\"early\"") && Has(lines[1].text, "\"phase\":\"normal\""));
-    for (const Line& l : lines) {
-      QCHECK(l.level == sentinel::LogLevel::kInfo);
-      QCHECK(Has(l.text, "\"modules\":0") && Has(l.text, "\"results\":\"\""));
-      QCHECK(Has(l.text, "no combat module has a step in this phase yet; nothing of combat's is installed"));
-    }
+    const std::string& results = lines[1].text;
+    const std::size_t tickAt = results.find("tick=");
+    const std::size_t rateAt = results.find("refresh_rate=");
+    QCHECK(tickAt != std::string::npos && rateAt != std::string::npos && tickAt < rateAt);
+    QCHECK(Has(results, "refresh_rate=installed"));
+    QCHECK(Has(results, "tick=module_not_loaded"));
+    QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
   }
   Done();
 }
@@ -274,6 +279,7 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   nevr_quest::CombatConfig cfg;
   combat::LogConfig(cfg);
   cfg.force = {true, nevr_quest::Source::kFile};
+  cfg.refreshRateLobby = {false, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
   cfg.force = {false, nevr_quest::Source::kFile};  // the file said false: not asked, but the source is the file's
   combat::LogConfig(cfg);
@@ -282,11 +288,31 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   if (lines.size() == 3U) {
     QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Has(lines[0].text, "\"force\":0") && Has(lines[0].text, "\"force_source\":\"default\""));
+    // The refresh-rate rule's three keys: on by default, from the default; the file's word where it gave one.
+    QCHECK(Has(lines[0].text, "\"refresh_rate\":1") && Has(lines[0].text, "\"refresh_rate_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"refresh_rate_lobby\":1") && Has(lines[0].text, "\"refresh_rate_lobby_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"refresh_rate_quest2_72\":1") && Has(lines[0].text, "\"refresh_rate_quest2_72_source\":\"default\""));
     QCHECK(Has(lines[1].text, "\"force\":1") && Has(lines[1].text, "\"force_source\":\"config\""));
+    QCHECK(Has(lines[1].text, "\"refresh_rate_lobby\":0") && Has(lines[1].text, "\"refresh_rate_lobby_source\":\"config\""));
+    QCHECK(Has(lines[1].text, "\"refresh_rate\":1"));
     QCHECK(Has(lines[2].text, "\"force\":0") && Has(lines[2].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"msg\":"));
   }
   Done();
+}
+
+// The `combat:` keys the modules read at their install: the shipped defaults until the configuration step sets them, then what it set.
+void ModulesReadTheResolvedSectionAndTheDefaultsBeforeIt() {
+  combat::ResetInstallForTest();
+  QCHECK(!combat::Config().force.on);
+  QCHECK(combat::Config().refreshRate.on && combat::Config().refreshRateLobby.on && combat::Config().refreshRateQuest2At72.on);
+  nevr_quest::CombatConfig cfg;
+  cfg.refreshRate = {false, nevr_quest::Source::kFile};
+  cfg.refreshRateQuest2At72 = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(cfg);
+  QCHECK(!combat::Config().refreshRate.on && combat::Config().refreshRateLobby.on && !combat::Config().refreshRateQuest2At72.on);
+  combat::ResetInstallForTest();
+  QCHECK(combat::Config().refreshRate.on);
 }
 
 }  // namespace
@@ -300,10 +326,11 @@ int main() {
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
-  TheShippedTableIsEmptyAndEachStepSaysSo();
+  TheShippedTableHasTheTickThenTheRefreshRateAndEachStepSaysSo();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();
+  ModulesReadTheResolvedSectionAndTheDefaultsBeforeIt();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

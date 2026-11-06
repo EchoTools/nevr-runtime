@@ -12,7 +12,7 @@
 #include <fcntl.h>
 
 #include "plugin_log.h"
-#include "refresh_rate.h"
+#include "combat_map.h"
 #include "safe_read.h"
 
 namespace q15t {
@@ -204,7 +204,7 @@ void Look(std::uintptr_t game, double now) {
   g_f.enable(reinterpret_cast<void*>(scen), scenario);
   const bool has = Rd<std::uintptr_t>(scen + kScenCurrent, &ok) != 0;
   // context for the headset run: the engine's own server test (EnableScenario 0x133c2d4-0x133c2ec: flags & 2, or
-  // (flags & 0x44) == 0x40, takes the host path) and whether a combat map is loaded (refresh_rate.cpp's CombatMapLoaded)
+  // (flags & 0x44) == 0x40, takes the host path) and whether a combat map is loaded (combat_map.cpp's CombatMapLoaded)
   bool ok2 = true;
   const auto flags = Rd<std::uint64_t>(Rd<std::uintptr_t>(net + kNetFlagsPtr, &ok2), &ok2);
   std::uint64_t level = 0;

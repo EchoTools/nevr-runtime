@@ -34,9 +34,8 @@ PRINTED = re.compile(r"""\b(echo|printf)\s+("([^"\\]|\\.)*"|'[^']*')""")
 
 HOST_TESTS = frozenset(
     [
-        "core.host_test_0_0",
-        "core.host_test_1_0",
-        "core.host_test_0_1",
+        "core.host_test_0",
+        "core.host_test_1",
         "core.gates_test",
         "core.library_name_test",
         "aibots.aibots_test",

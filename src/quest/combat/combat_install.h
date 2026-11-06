@@ -27,7 +27,8 @@
  * `"state":"not_started","reason":"post_load_hook_unavailable|game_exited_first"` once, Warning, and never runs afterwards.
  *
  * The config line (`combat_config`, ADR 0046 rule 4): one Info line with each `combat:` key's value and where it came from, written by
- * the constructor's configuration step. Today the one key is `force`; each module adds its switch here.
+ * the constructor's configuration step. The keys are `force` and the refresh-rate rule's three (`refresh_rate`, `refresh_rate_lobby`,
+ * `refresh_rate_quest2_72`); each module adds its switch here.
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */
@@ -83,6 +84,11 @@ void NoteNormalNotStarted(const char* reason) noexcept;
 
 // Writes the `combat_config` line for `config`.
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept;
+
+// The `combat:` keys a module reads at its install. SetConfig is called once by the constructor's configuration step with the resolved
+// section (before any phase runs); until then Config() is the shipped defaults.
+void SetConfig(const nevr_quest::CombatConfig& config) noexcept;
+const nevr_quest::CombatConfig& Config() noexcept;
 
 // ---- test support ------------------------------------------------------------------------------------------------------
 

@@ -46,8 +46,7 @@ The two mechanisms do not compose. The sentinel installs its render-configuratio
 (`PluginsAction`, `src/quest/integration/production_steps.cpp`), so the sentinel takes `vrapi_SetDisplayRefreshRate` and
 `vrapi_SetClockLevels` first. q15t's `InstallImportHook`, given no expected address, looks the function up with `dlsym`
 and refuses a slot that holds anything else (`src/quest/plugins/q15t/src/import_hook.cpp`), so it refuses both
-(`src/quest/plugins/q15t/src/refresh_rate.cpp`, `src/quest/plugins/q15t/src/clock_levels.cpp`; #2000 is that case, by
-code); were the lookup to find nothing, it would accept any executable word outside libr15 and chain without a line. In the other order, a `GotHook` with no expected original takes the slot's current value as its original
+(the plugin's refresh-rate and clock-level modules; #2000 is that case, by code; the modules no longer exist, ADR 0046); were the lookup to find nothing, it would accept any executable word outside libr15 and chain without a line. In the other order, a `GotHook` with no expected original takes the slot's current value as its original
 (`Prepare` in `src/quest/sentinel/got_hook.cpp`), and the sentinel's handlers call their original first
 (`src/quest/sentinel/render_config_hook.cpp`), so both would run, the sentinel's outermost, in an order set by which
 installed first, and no line would say so.

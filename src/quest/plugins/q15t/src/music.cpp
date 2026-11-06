@@ -6,7 +6,7 @@
 
 #include "module_switch.h"
 #include "plugin_log.h"
-#include "refresh_rate.h"
+#include "combat_map.h"
 #include "safe_read.h"
 
 namespace q15t {

@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip and combat.force. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip and the combat keys (combat.force and the three refresh-rate keys). Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -185,6 +185,18 @@ combat:
   # the variant, the build kind, the answer, why, and what became of this key (`force`: not_asked, honoured, redundant or refused).
   # Default (absent): false.
   # force: true
+
+  # The refresh-rate rule of the combat modules (src/quest/combat/refresh_rate.h): 90 Hz while a combat map or the social lobby is loaded
+  # (72 Hz on a Quest 2), the game's own rate (120 on a Quest) in an Echo Arena level and everywhere else. Quest only; it runs where the
+  # combat modules run (see `force`). Booleans, read once at launch; a value that is not a boolean keeps the default, with a warning in
+  # the sentinel log that names the key. The sentinel log lines `combat_config`, `combat_refresh_rate_install` and
+  # `combat_refresh_rate_switch` say what was read and what was sent.
+  # refresh_rate: false turns the rule off: the game's own rate always (every request is still logged). Default (absent): true.
+  # refresh_rate: false
+  # refresh_rate_lobby: false keeps the rule to combat maps: the social lobby keeps the game's rate. Default (absent): true.
+  # refresh_rate_lobby: false
+  # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
+  # refresh_rate_quest2_72: false
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints

@@ -75,7 +75,11 @@ class TheRuleIsTheSharedHeaders(unittest.TestCase):
 class TheModuleIsWired(unittest.TestCase):
     def test_the_combat_target_builds_it(self):
         cmake = read("src/quest/combat/CMakeLists.txt")
-        self.assertRegex(cmake, r"add_library\(nevr_quest_combat STATIC\s+combat_active\.cpp\s+combat_install\.cpp\s+equip_refire\.cpp\s+match_tags\.cpp\)")
+        block = re.search(r"add_library\(nevr_quest_combat STATIC([^)]*)\)", cmake)
+        self.assertIsNotNone(block)
+        # The list grows with each module that moves in (a unit adds its own files), so each file is checked, not the whole list.
+        for name in ("combat_active.cpp", "combat_install.cpp", "equip_refire.cpp", "match_tags.cpp"):
+            self.assertIn(name, block.group(1).split())
 
     def test_the_budget_has_its_six_handles(self):
         self.assertIn('{"combat/equip_refire.cpp", 6, 0}', read("src/quest/sentinel/hook_budget.h"))
@@ -186,7 +190,11 @@ class TheProductionStepsReachTheRealCombatSteps(unittest.TestCase):
         body = extract_braced_function(self.steps, "const nevr_quest::ResolvedConfig& ResolveConfig() override {")
         self.assertEqual(body.count("LogCombatConfig("), 1)
         self.assertLess(body.index("LogCombatConfig(cfg.combat)"), body.index("ResolveCombatActive("))
-        self.assertIn("void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept { nevr_quest::combat::LogConfig(config); }", self.entry)
+        self.assertRegex(
+            self.entry,
+            r"void LogCombatConfig\(const nevr_quest::CombatConfig& config\) noexcept \{\s*"
+            r"nevr_quest::combat::SetConfig\(config\);\s*nevr_quest::combat::LogConfig\(config\);\s*\}",
+        )
 
     def test_the_configuration_logs_no_second_line_for_the_same_key(self):
         config = strip_comments(read("src/quest/sentinel/quest_config.cpp"))
@@ -230,7 +238,9 @@ class TheGroupTheRecipeAndTheVerifyEntryExist(unittest.TestCase):
         self.assertRegex(justfile, r"\ntest-quest-combat module=\"\":")
 
     def test_the_config_section_has_its_key_and_the_example_config_shows_it(self):
-        self.assertIn('{"combat", {"force"}}', read("src/core/nevr_config.cpp"))
+        self.assertIn(
+            '{"combat", {"force", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72"}}', read("src/core/nevr_config.cpp")
+        )
         self.assertRegex(read("docs/reference/example-config.yaml"), r"\ncombat:\n")
 
 

@@ -1,5 +1,5 @@
 // Host test of plugin.cpp's module wiring (every module option ON, Q15T_POWERBOOST=3, Q15T_SHIELDGAMMA=2) against a fake game image in
-// which only the clock/refresh/tick slots and levelname's four vtable words are the pinned ones: every other module must refuse, loudly
+// which only the tick slot and levelname's four vtable words are the pinned ones: every other module must refuse, loudly
 // and by name, and InitEx must still return 0 with hooks swapped. Real code, real mprotect, real /proc/self/maps.
 // Also the capability matrix: built with -DWIRING_CAPS_ONLY it only checks NevrPluginGetCapabilities against -DEXPECT_ALTERS / -DEXPECT_NETWORK.
 #include <sys/mman.h>
@@ -34,7 +34,7 @@ static int g_fail = 0;
   } while (0)
 
 #if defined(WIRING_BVH_ONLY)
-// only Q15T_BVH on (no refresh tick, no T-26): the bvh tick alone must register and make InitEx install the game tick
+// only Q15T_BVH on (no T-26): the bvh tick alone must register and make InitEx install the game tick
 extern "C" __attribute__((noinline, visibility("default"))) void FakeExclusiveUpdateGame(void*) {}
 extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetClockLevels(void*, int32_t, int32_t) { return 0; }
 extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetDisplayRefreshRate(void*, float) { return 0; }
@@ -243,8 +243,10 @@ int main() {
 
   const int rc = NevrPluginInitEx(&ctx, "");
   CHECK(rc == 0, "InitEx returned %d with hooks swapped and modules refusing; the loader would dlclose a live plugin", rc);
-  const uintptr_t clock_now = w[2];
-  CHECK(clock_now != reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels), "the clock slot was not swapped: the run proves nothing");
+  // the runtime owns the clock levels and the refresh rate (#2000): the plugin leaves both slots alone
+  CHECK(w[2] == reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels), "the plugin wrote the clock slot");
+  CHECK(w[3] == reinterpret_cast<uintptr_t>(&vrapi_SetDisplayRefreshRate), "the plugin wrote the refresh-rate slot");
+  CHECK(CountLines("vrapi_SetClockLevels") == 0 && CountLines("vrapi_SetDisplayRefreshRate") == 0, "the plugin names a vrapi slot it does not install");
 
   // every compiled module is named in the init record
   const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
@@ -311,9 +313,9 @@ int main() {
     if (g_lines[i].text.find("module install module=ecfx ") != std::string::npos) at_ecfx = i;
   CHECK(at_ecfx > at_ec, "ecfx (line %zu) must be installed after ec (line %zu)", at_ecfx, at_ec);
 
-  // the tick table: hz (the refresh tick), gunconnect, aibots, impactsnd, sensorwd and bvh register; dronekill, dronemuzzle, powerboost and
+  // the tick table: gunconnect, aibots, impactsnd, sensorwd and bvh register; dronekill, dronemuzzle, powerboost and
   // weapon_arm did not install here, so they register nothing. The tick is installed once, after every registration.
-  CHECK(CountLines("game tick callbacks registered=6 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
+  CHECK(CountLines("game tick callbacks registered=5 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
   CHECK(CountLines("hook install hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok", 1) == 1, "the game tick was not installed ok");
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
   CHECK(CountLines("game tick callbacks") == 1, "more than one tick install record");

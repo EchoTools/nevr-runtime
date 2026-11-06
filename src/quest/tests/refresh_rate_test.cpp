@@ -1,0 +1,511 @@
+// Host test for the combat refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3, docs/adr/0039): src/quest/combat/refresh_rate.cpp,
+// built without exceptions as the sentinel builds it. The rule moved here from the q15t plugin (refresh_rate.cpp), whose host test cases
+// are these: the level rate (90, 72 on a Quest 2), a combat or lobby level asks for it, an Echo Arena level keeps the session rate, a
+// request above the level rate while a level is loaded is kept at it, the tick re-asks on a change of level only, and the three keys
+// switch the parts. What is new is the owner's shape: with `combat::Active()` false the answer is the game's own rate and nothing is
+// logged or registered (the release case), and the tick's re-ask goes through the function now in the slot, which the render-configuration
+// handler (render_config_hook_test.cpp) sees and does not take for a request of the game's.
+//
+// The game is a model: CR15Game's two gamespace tables and a gamespace's level, laid out where the rule reads them (the offsets are
+// spelled in this file, not taken from the header), read by process_vm_readv as in production.
+//
+// Built and run by `just test-quest-combat`.
+
+#include "quest/combat/refresh_rate.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include "hook_log.h"
+#include "nevr/symbol_hash.h"
+#include "quest/combat/combat_active.h"
+#include "quest/combat/combat_install.h"
+#include "quest/combat/combat_tick.h"
+#include "quest/tests/test_check.h"
+
+namespace {
+
+namespace bv = nevr_quest::build_variant;
+namespace combat = nevr_quest::combat;
+namespace rr = nevr_quest::combat::refresh_rate;
+using EchoVR::CSymbol64Hash;
+
+// ---- the log ------------------------------------------------------------------------------------------------------------------
+
+struct Line {
+  sentinel::LogLevel level;
+  std::string text;
+};
+std::vector<Line> g_lines;
+void Capture(sentinel::LogLevel level, const char* line) { g_lines.push_back({level, line}); }
+
+bool Has(const std::string& text, const std::string& needle) { return text.find(needle) != std::string::npos; }
+std::vector<Line> Lines(const char* event) {
+  std::vector<Line> out;
+  const std::string key = std::string("\"event\":\"") + event + "\"";
+  for (const Line& l : g_lines) {
+    if (Has(l.text, key)) out.push_back(l);
+  }
+  return out;
+}
+
+// ---- the game, as this test spells it -----------------------------------------------------------------------------------------
+
+constexpr std::size_t kTable0 = 0x1f48, kCount0 = 0x1f78, kTable1 = 0x1f88, kCount1 = 0x1fb8;  // CR15Game
+constexpr std::size_t kRowSize = 16, kRowGamespace = 8;                                        // a table row {sym, gs*}
+constexpr std::size_t kGamespaceOwner = 0x8, kGamespaceLevel = 0x58;                            // a gamespace
+
+struct Gamespace {
+  std::uintptr_t words[0x60 / 8 + 1] = {};
+};
+struct Game {
+  std::uintptr_t words[0x2000 / 8] = {};
+  std::uintptr_t table0[8][2] = {};
+  std::uintptr_t table1[8][2] = {};
+  Gamespace spaces[8];
+};
+Game g_game;
+
+std::uintptr_t GameAddress() { return reinterpret_cast<std::uintptr_t>(g_game.words); }
+
+void ClearGame() { g_game = Game{}; }
+
+// Puts a gamespace holding `level` in table `table` (0 or 1) at row `row`, owned by the game unless `owner` says another.
+void PutLevel(int table, int row, std::uint64_t level, std::uintptr_t owner = 0) {
+  Gamespace& gs = g_game.spaces[table * 4 + row];
+  gs.words[kGamespaceOwner / 8] = owner != 0 ? owner : GameAddress();
+  gs.words[kGamespaceLevel / 8] = static_cast<std::uintptr_t>(level);
+  std::uintptr_t(*rows)[2] = table == 0 ? g_game.table0 : g_game.table1;
+  rows[row][0] = 0x5555;
+  rows[row][1] = reinterpret_cast<std::uintptr_t>(&gs);
+  g_game.words[(table == 0 ? kTable0 : kTable1) / 8] = reinterpret_cast<std::uintptr_t>(rows);
+  std::uintptr_t& count = g_game.words[(table == 0 ? kCount0 : kCount1) / 8];
+  if (static_cast<std::uintptr_t>(row) + 1 > count) count = static_cast<std::uintptr_t>(row) + 1;
+}
+
+// ---- the world the rule runs in ------------------------------------------------------------------------------------------------
+
+struct Ask {
+  void* ovr;
+  float hz;
+};
+std::vector<Ask> g_asks;
+int g_askResult = 0;
+bool g_askThroughHandler = true;  // the re-ask goes through the render-configuration handler: Choose, then Note
+
+double g_now = 100.0;
+double Clock() noexcept { return g_now; }
+
+int FakeAsk(void* ovr, float hz) noexcept {
+  g_asks.push_back({ovr, hz});
+  if (g_askThroughHandler) {  // what the render-configuration handler does with a call that reaches it
+    const float sent = rr::Choose(ovr, hz);
+    rr::Note(hz, sent, g_askResult);
+  }
+  return g_askResult;
+}
+
+void* const kOvr = reinterpret_cast<void*>(0x1234);
+
+// A process of this variant, the rule's seams at the test's, and the keys as given.
+void World(bv::Variant variant, const nevr_quest::CombatConfig& config = nevr_quest::CombatConfig{}, int quest2 = 0) {
+  combat::tick::ResetForTest();
+  combat::ResetForTest();
+  combat::ResetInstallForTest();
+  rr::ResetForTest();
+  g_lines.clear();
+  g_asks.clear();
+  g_askResult = 0;
+  g_askThroughHandler = true;
+  g_now = 100.0;
+  ClearGame();
+  combat::SetVariant(variant);
+  sentinel::SetLogSink(&Capture);
+  combat::Resolve(/*devBuild=*/false, /*forceAsked=*/false);
+  combat::SetConfig(config);
+  rr::SetAskForTest(&FakeAsk);
+  rr::SetQuest2ForTest(quest2);
+  rr::SetClockForTest(&Clock);
+  g_lines.clear();  // the combat_active line is combat_active_test's
+}
+void Done() {
+  rr::SetAskForTest(nullptr);
+  rr::SetQuest2ForTest(-1);
+  rr::SetClockForTest(nullptr);
+  combat::tick::ResetForTest();
+  sentinel::SetLogSink(nullptr);
+}
+
+nevr_quest::CombatConfig Keys(bool rule, bool lobby, bool quest2At72) {
+  nevr_quest::CombatConfig c;
+  c.refreshRate.on = rule;
+  c.refreshRateLobby.on = lobby;
+  c.refreshRateQuest2At72.on = quest2At72;
+  return c;
+}
+
+// The game asks, through the render-configuration handler: what is sent comes back.
+float GameAsks(float hz) {
+  const float sent = rr::Choose(kOvr, hz);
+  rr::Note(hz, sent, 0);
+  return sent;
+}
+// One frame of the tick, `seconds` after the last look.
+void Frame(double seconds = 1.0) {
+  g_now += seconds;
+  rr::Tick(GameAddress());
+}
+
+// ---- the pure rule ------------------------------------------------------------------------------------------------------------
+
+void TheRuleFollowsItsThreeKeysAndTheHeadset() {
+  struct Row {
+    bool rule, lobby, at72, quest2;
+    bool wantOn, wantLobby;
+    float wantHz;
+  };
+  const Row rows[] = {
+      {true, true, true, false, true, true, 90.0f},     // a Quest 3, everything on: 90, the lobby too
+      {true, true, true, true, true, true, 72.0f},      // a Quest 2: 72
+      {true, true, false, true, true, true, 90.0f},     // refresh_rate_quest2_72 off: a Quest 2 asks 90 too
+      {true, false, true, false, true, false, 90.0f},   // refresh_rate_lobby off: combat maps only
+      {true, false, true, true, true, false, 72.0f},
+      {false, true, true, false, false, false, 90.0f},  // refresh_rate off: the game's rate always (witness)
+      {false, true, true, true, false, false, 90.0f},   // off, so no 72 either
+  };
+  for (const Row& r : rows) {
+    rr::Inputs in;
+    in.rule = r.rule;
+    in.lobby = r.lobby;
+    in.quest2At72 = r.at72;
+    in.quest2 = r.quest2;
+    const rr::Rule rule = rr::Decide(in);
+    QCHECK(rule.on == r.wantOn);
+    QCHECK(rule.lobby == r.wantLobby);
+    QCHECK(rule.levelHz == r.wantHz);
+  }
+  QCHECK(rr::kLevelHz == 90.0f && rr::kQuest2LevelHz == 72.0f);
+}
+
+void ARequestAboveTheLevelRateInALevelIsKept() {
+  rr::Rule on;
+  on.on = true;
+  on.lobby = true;
+  on.levelHz = 90.0f;
+  QCHECK(rr::RateFor(on, true, 120.0f) == 90.0f);   // above, in a level: kept at the level rate
+  QCHECK(rr::RateFor(on, true, 90.0f) == 90.0f);    // at it: as asked
+  QCHECK(rr::RateFor(on, true, 72.0f) == 72.0f);    // below it: never raised
+  QCHECK(rr::RateFor(on, false, 120.0f) == 120.0f); // no level: as asked
+  rr::Rule off = on;
+  off.on = false;
+  QCHECK(rr::RateFor(off, true, 120.0f) == 120.0f); // the rule off: as asked
+  rr::Rule q2 = on;
+  q2.levelHz = 72.0f;
+  QCHECK(rr::RateFor(q2, true, 90.0f) == 72.0f);
+}
+
+// ---- the levels ---------------------------------------------------------------------------------------------------------------
+
+void EveryLevelIdIsTheCSymbol64OfItsName() {
+  const char* lobbies[] = {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b2_lowspec", "mpl_lobby_b_combat", "mpl_lobby_b_arena", "mpl_lobby_b_social"};
+  const char* combats[] = {"mpl_combat_dyson", "mpl_combat_combustion", "mpl_combat_fission", "mpl_combat_gauss"};
+  const char* arenas[] = {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a"};
+  std::uint64_t level = 0;
+  for (const char* name : lobbies) {
+    ClearGame();
+    PutLevel(0, 0, CSymbol64Hash(name));
+    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kCombatOrLobby && level == CSymbol64Hash(name));
+    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), false, &level) == rr::LevelKind::kNone);  // the lobby rule off: not a level of the rule
+  }
+  for (const char* name : combats) {
+    ClearGame();
+    PutLevel(0, 0, CSymbol64Hash(name));
+    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), false, &level) == rr::LevelKind::kCombatOrLobby && level == CSymbol64Hash(name));
+    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kCombatOrLobby);
+  }
+  for (const char* name : arenas) {
+    ClearGame();
+    PutLevel(0, 0, CSymbol64Hash(name));
+    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kEchoArena && level == CSymbol64Hash(name));
+    QCHECK(rr::ClassifyLoadedLevels(GameAddress(), false, &level) == rr::LevelKind::kNone);  // decides only under the lobby rule
+  }
+}
+
+void AnEchoArenaLevelWinsOverALobbyLevelAndTheGamespaceMustBeTheGames() {
+  std::uint64_t level = 0;
+  ClearGame();
+  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_social"));
+  PutLevel(1, 0, CSymbol64Hash("mpl_arena_a"));  // in the second table
+  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kEchoArena);
+  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), false, &level) == rr::LevelKind::kNone);  // no lobby rule: the lobby level does not count
+  // A gamespace some other game owns is not this game's level.
+  ClearGame();
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"), /*owner=*/0xdead0000);
+  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kNone && level == 0);
+  // An unknown level, an empty game and an absurd count are no level.
+  ClearGame();
+  PutLevel(0, 0, CSymbol64Hash("mpl_somewhere_else"));
+  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kNone);
+  ClearGame();
+  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kNone);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  g_game.words[kCount0 / 8] = 65;  // more than the 64 the rule trusts
+  QCHECK(rr::ClassifyLoadedLevels(GameAddress(), true, &level) == rr::LevelKind::kNone);
+  // An unreadable game is no level (fail closed): the read never faults.
+  QCHECK(rr::ClassifyLoadedLevels(0x1000, true, &level) == rr::LevelKind::kNone);
+  QCHECK(rr::ClassifyLoadedLevels(0, true, &level) == rr::LevelKind::kNone);
+}
+
+// ---- the owner, release and variants ------------------------------------------------------------------------------------------
+
+// The release case: combat does not run here, so the answer is the game's own rate whatever is loaded and nothing is logged, kept or
+// registered.
+void ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched() {
+  for (const bv::Variant variant : {bv::Variant::kNone, bv::Variant::kPerfProbe}) {
+    World(variant);
+    PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+    QCHECK(!combat::Active());
+    QCHECK(rr::Choose(kOvr, 120.0f) == 120.0f);
+    QCHECK(rr::Choose(kOvr, 72.0f) == 72.0f);
+    rr::Note(120.0f, 120.0f, 0);
+    QCHECK(Lines("combat_refresh_rate_request").empty());
+    QCHECK(rr::CurrentStats().requests == 0);
+    Frame();
+    QCHECK(g_asks.empty());  // the tick never asks: the game's rate stays
+    // Even a step that is reached anyway installs nothing and registers no tick.
+    const combat::ModuleResult r = rr::InstallNormal();
+    QCHECK(!r.installed);
+    QCHECK(combat::tick::Count() == 0);
+    QCHECK(Lines("combat_refresh_rate_install").empty());
+    Done();
+  }
+}
+
+// On a q15t or combat APK this module is the one owner: it registers its tick, decides the rate and names every input on its line.
+void AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined() {
+  for (const bv::Variant variant : {bv::Variant::kQ15t, bv::Variant::kCombat}) {
+    World(variant);
+    const combat::ModuleResult r = rr::InstallNormal();
+    QCHECK(r.installed && std::strcmp(r.status, "installed") == 0);
+    QCHECK(combat::tick::Count() == 1);
+    const std::vector<Line> lines = Lines("combat_refresh_rate_install");
+    QCHECK(lines.size() == 1U);
+    if (lines.size() == 1U) {
+      QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
+      QCHECK(Has(lines[0].text, "\"mode\":\"lobby\""));
+      QCHECK(Has(lines[0].text, "\"refresh_rate\":1") && Has(lines[0].text, "\"refresh_rate_lobby\":1") &&
+             Has(lines[0].text, "\"refresh_rate_quest2_72\":1"));
+      QCHECK(Has(lines[0].text, "\"quest2\":0") && Has(lines[0].text, "\"level_hz\":\"90\""));
+      QCHECK(Has(lines[0].text, "\"tick\":\"registered\""));
+      QCHECK(Has(lines[0].text, "\"msg\":"));
+    }
+    Done();
+  }
+}
+
+void TheInstallLineFollowsTheKeysAndTheHeadset() {
+  World(bv::Variant::kCombat, Keys(true, true, true), /*quest2=*/1);
+  rr::InstallNormal();
+  std::vector<Line> l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && Has(l[0].text, "\"quest2\":1") && Has(l[0].text, "\"level_hz\":\"72\""));
+  Done();
+
+  World(bv::Variant::kCombat, Keys(true, true, false), /*quest2=*/1);
+  rr::InstallNormal();
+  l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && Has(l[0].text, "\"level_hz\":\"90\"") && Has(l[0].text, "\"refresh_rate_quest2_72\":0"));
+  Done();
+
+  World(bv::Variant::kCombat, Keys(true, false, true), 0);
+  rr::InstallNormal();
+  l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && Has(l[0].text, "\"mode\":\"match\"") && Has(l[0].text, "\"refresh_rate_lobby\":0"));
+  Done();
+
+  // The rule off: the witness only, which registers no tick and still reports it installed.
+  World(bv::Variant::kCombat, Keys(false, true, true), 0);
+  const combat::ModuleResult r = rr::InstallNormal();
+  QCHECK(r.installed && std::strcmp(r.status, "witness") == 0);
+  QCHECK(combat::tick::Count() == 0);
+  l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && Has(l[0].text, "\"mode\":\"witness\"") && Has(l[0].text, "\"tick\":\"not_needed\"") &&
+         Has(l[0].text, "\"refresh_rate\":0"));
+  Done();
+}
+
+void AFullTickTableIsNamedAndTheModuleSaysItDidNotInstall() {
+  World(bv::Variant::kCombat);
+  for (std::size_t i = 0; i < combat::tick::kMaxCallbacks; ++i) {
+    QCHECK(combat::tick::Add([](std::uintptr_t) noexcept {}));
+  }
+  const combat::ModuleResult r = rr::InstallNormal();
+  QCHECK(!r.installed && std::strcmp(r.status, "tick_table_full") == 0);
+  const std::vector<Line> l = Lines("combat_refresh_rate_install");
+  QCHECK(l.size() == 1U && l[0].level == sentinel::LogLevel::kWarn && Has(l[0].text, "\"tick\":\"full\""));
+  Done();
+}
+
+// ---- a session ----------------------------------------------------------------------------------------------------------------
+
+// Echo Arena (120 asked, nothing loaded): untouched. A combat map loads: the tick re-asks 90 once. The game asks 120 again during it:
+// kept at 90. The map unloads: the tick re-asks the session rate once.
+void AComSessionFromArenaToCombatAndBack() {
+  World(bv::Variant::kCombat);
+  rr::InstallNormal();
+  g_lines.clear();
+  Frame();  // before the game's first request there is nothing to lower
+  QCHECK(g_asks.empty());
+
+  QCHECK(GameAsks(120.0f) == 120.0f);  // the first request, with no level loaded
+  std::vector<Line> req = Lines("combat_refresh_rate_request");
+  QCHECK(req.size() == 1U);
+  if (req.size() == 1U) {
+    QCHECK(Has(req[0].text, "\"asked_hz\":\"120.0\"") && Has(req[0].text, "\"sent_hz\":\"120.0\"") && Has(req[0].text, "\"n\":1"));
+    QCHECK(Has(req[0].text, "\"why\":\"game request\"") && Has(req[0].text, "\"mode\":\"lobby\"") && Has(req[0].text, "\"quest2\":0"));
+  }
+  Frame();
+  QCHECK(g_asks.empty());  // an Echo Arena level or none: the game's rate
+
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  Frame(0.1);  // the tick looks every 0.5 s
+  QCHECK(g_asks.empty());
+  Frame(1.0);
+  QCHECK(g_asks.size() == 1U && g_asks[0].hz == 90.0f && g_asks[0].ovr == kOvr);  // entering a combat map asks 90 with the game's own ovr
+  std::vector<Line> sw = Lines("combat_refresh_rate_switch");
+  QCHECK(sw.size() == 1U);
+  if (sw.size() == 1U) {
+    QCHECK(sw[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Has(sw[0].text, "\"asked_hz\":\"120.0\"") && Has(sw[0].text, "\"sent_hz\":\"90.0\"") && Has(sw[0].text, "\"n\":1"));
+    char level[40];
+    std::snprintf(level, sizeof level, "\"level\":\"%016llx\"", static_cast<unsigned long long>(CSymbol64Hash("mpl_combat_gauss")));
+    QCHECK(Has(sw[0].text, level));
+    QCHECK(Has(sw[0].text, "\"why\":\"combat or lobby level loaded\"") && Has(sw[0].text, "\"mode\":\"lobby\""));
+  }
+  // The re-ask passed through the handler (FakeAsk calls Choose and Note) and was not taken for a request of the game's.
+  QCHECK(rr::CurrentStats().requests == 1);
+  QCHECK(Lines("combat_refresh_rate_request").size() == 1U);
+
+  Frame();
+  QCHECK(g_asks.size() == 1U);  // no change, no re-ask
+
+  QCHECK(GameAsks(120.0f) == 90.0f);  // the game asks again during the match: kept at the level rate
+  req = Lines("combat_refresh_rate_request");
+  QCHECK(req.size() == 2U);
+  if (req.size() == 2U) {
+    QCHECK(Has(req[1].text, "\"asked_hz\":\"120.0\"") && Has(req[1].text, "\"sent_hz\":\"90.0\""));
+    QCHECK(Has(req[1].text, "kept at the level rate"));
+  }
+  QCHECK(rr::CurrentStats().requests == 2);
+
+  // A lobby level after a combat map is still the level rate: no re-ask.
+  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_social"));
+  Frame();
+  QCHECK(g_asks.size() == 1U);
+  // An Echo Arena level loaded beside it wins: the session rate comes back.
+  PutLevel(1, 0, CSymbol64Hash("mpl_arena_a"));
+  Frame();
+  QCHECK(g_asks.size() == 2U && g_asks[1].hz == 120.0f);
+  sw = Lines("combat_refresh_rate_switch");
+  QCHECK(sw.size() == 2U && Has(sw[1].text, "echo arena level loaded: session rate") && Has(sw[1].text, "\"sent_hz\":\"120.0\""));
+  // The arena unloads, the lobby is still loaded: 90 again. Then every level goes: the session rate.
+  ClearGame();
+  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_social"));
+  Frame();
+  QCHECK(g_asks.size() == 3U && g_asks[2].hz == 90.0f);
+  ClearGame();
+  Frame();
+  QCHECK(g_asks.size() == 4U && g_asks[3].hz == 120.0f);
+  sw = Lines("combat_refresh_rate_switch");
+  QCHECK(sw.size() == 4U && Has(sw[3].text, "no combat or lobby level: session rate"));
+  QCHECK(rr::CurrentStats().switches == 4);
+  Done();
+}
+
+void TheTickLooksTwiceASecondAtMost() {
+  World(bv::Variant::kCombat);
+  rr::InstallNormal();
+  GameAsks(120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame(0.2);  // the first look happens at once (the schedule starts empty) but a level change within 0.5 s of a look waits
+  const std::size_t first = g_asks.size();
+  ClearGame();
+  Frame(0.2);
+  Frame(0.2);
+  QCHECK(g_asks.size() == first);  // 0.4 s after the look: not looked at yet
+  Frame(0.2);
+  QCHECK(g_asks.size() == first + 1);  // 0.6 s: the level left, the session rate comes back
+  Done();
+}
+
+void NothingIsAskedWhileTheGamesRateIsAtOrBelowTheLevelRate() {
+  World(bv::Variant::kCombat);
+  rr::InstallNormal();
+  GameAsks(90.0f);  // the game asks for 90 already (a headset that offers no more)
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame();
+  QCHECK(g_asks.empty());
+  QCHECK(GameAsks(90.0f) == 90.0f);
+  Done();
+
+  World(bv::Variant::kCombat, Keys(true, true, true), /*quest2=*/1);  // a Quest 2: level rate 72, the game asks 90
+  rr::InstallNormal();
+  QCHECK(GameAsks(90.0f) == 90.0f);  // no level: as asked
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame();
+  QCHECK(g_asks.size() == 1U && g_asks[0].hz == 72.0f);
+  QCHECK(GameAsks(90.0f) == 72.0f);
+  Done();
+}
+
+void TheRuleOffNeverChangesARateAndLogsTheWitness() {
+  World(bv::Variant::kCombat, Keys(false, true, true), 0);
+  rr::InstallNormal();
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  QCHECK(GameAsks(120.0f) == 120.0f);
+  Frame();
+  QCHECK(g_asks.empty());
+  QCHECK(Lines("combat_refresh_rate_request").size() == 1U);  // the witness: every request of the game is still logged
+  QCHECK(Lines("combat_refresh_rate_switch").empty());
+  Done();
+}
+
+void TheCombatOnlyModeDoesNotCountTheLobby() {
+  World(bv::Variant::kCombat, Keys(true, false, true), 0);
+  rr::InstallNormal();
+  GameAsks(120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_social"));
+  Frame();
+  QCHECK(g_asks.empty());  // a lobby level asks for nothing with refresh_rate_lobby off
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_fission"));
+  Frame();
+  QCHECK(g_asks.size() == 1U && g_asks[0].hz == 90.0f);
+  Done();
+}
+
+}  // namespace
+
+int main() {
+  TheRuleFollowsItsThreeKeysAndTheHeadset();
+  ARequestAboveTheLevelRateInALevelIsKept();
+  EveryLevelIdIsTheCSymbol64OfItsName();
+  AnEchoArenaLevelWinsOverALobbyLevelAndTheGamespaceMustBeTheGames();
+  ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched();
+  AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined();
+  TheInstallLineFollowsTheKeysAndTheHeadset();
+  AFullTickTableIsNamedAndTheModuleSaysItDidNotInstall();
+  AComSessionFromArenaToCombatAndBack();
+  TheTickLooksTwiceASecondAtMost();
+  NothingIsAskedWhileTheGamesRateIsAtOrBelowTheLevelRate();
+  TheRuleOffNeverChangesARateAndLogsTheWitness();
+  TheCombatOnlyModeDoesNotCountTheLobby();
+  if (quest_test::Failures() != 0) {
+    std::fprintf(stderr, "refresh_rate_test: %d check(s) failed\n", quest_test::Failures());
+    return 1;
+  }
+  std::puts("refresh_rate_test: all checks passed");
+  return 0;
+}

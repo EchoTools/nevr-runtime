@@ -762,7 +762,8 @@ TEST(NevrConfig, KnownPathsCoverEveryKeyTheQuestReads) {
       "services.socket_uri", "auth.http_uri",          "auth.http_key",          "auth.server_key",
       "social.facade",       "social.send_presence_to_meta", "diagnostics.hardware_dump",
       "diagnostics.ui_event_probe", "diagnostics.pnsrad_provider", "diagnostics.clock_levels_override",
-      "graphics.texture_quality", "graphics.hand_flip", "combat.force"};
+      "graphics.texture_quality", "graphics.hand_flip", "combat.force", "combat.refresh_rate",
+      "combat.refresh_rate_lobby", "combat.refresh_rate_quest2_72"};
   for (const std::string& path : questReads) {
     EXPECT_NE(std::find(known.begin(), known.end(), path), known.end()) << path << " is read but not on the schema";
   }

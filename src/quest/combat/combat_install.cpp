@@ -6,16 +6,21 @@
 #include <cstring>
 
 #include "quest/combat/combat_active.h"
+#include "quest/combat/combat_tick.h"
+#include "quest/combat/refresh_rate.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
 
 namespace {
 
-// The registration table, in install order (combat_install.h, "The table"). Empty until a module moves in; each module's unit replaces
-// this line with `constexpr std::array kModules{Module{...}, ...}` (the count is deduced) and adds its row at the position the q15t plugin
-// installed it, and nowhere else.
-constexpr std::array<Module, 0> kModules{};
+// The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t plugin
+// installed it, and nowhere else. `tick` is first: it installs the game-thread tick (combat_tick.h), and every module that has a per-frame
+// callback registers it from its own step, which may come before or after the tick's install.
+constexpr std::array kModules{
+    Module{"tick", nullptr, &tick::InstallNormal},
+    Module{"refresh_rate", nullptr, &refresh_rate::InstallNormal},
+};
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
 // thread, the normal step on the thread that returned from the game's first dlopen, and the process end on a helper thread.
@@ -25,6 +30,10 @@ constexpr int kDone = 1;
 constexpr int kEnded = 2;
 // A process where combat does not run says so once, whichever phase asks first.
 std::atomic<bool> g_inactiveSaid{false};
+
+// The `combat:` section the constructor's configuration step resolved (SetConfig). Written once on the constructor's thread before any
+// phase runs; a phase reads it on the thread that runs it, which starts after the constructor returned.
+nevr_quest::CombatConfig g_config;
 
 std::atomic<int>& StateOf(Phase phase) { return g_phaseState[phase == Phase::kEarly ? 0 : 1]; }
 
@@ -106,13 +115,24 @@ void NoteNormalNotStarted(const char* reasonToken) noexcept {
 }
 
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
+  const auto source = [](const nevr_quest::Source s) { return s == nevr_quest::Source::kFile ? "config" : "default"; };
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config",
-                      {{"force", config.force.on ? 1 : 0}, {"force_source", config.force.source == nevr_quest::Source::kFile ? "config" : "default"},
+                      {{"force", config.force.on ? 1 : 0}, {"force_source", source(config.force.source)},
+                       {"refresh_rate", config.refreshRate.on ? 1 : 0}, {"refresh_rate_source", source(config.refreshRate.source)},
+                       {"refresh_rate_lobby", config.refreshRateLobby.on ? 1 : 0},
+                       {"refresh_rate_lobby_source", source(config.refreshRateLobby.source)},
+                       {"refresh_rate_quest2_72", config.refreshRateQuest2At72.on ? 1 : 0},
+                       {"refresh_rate_quest2_72_source", source(config.refreshRateQuest2At72.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
-                               "honours it (see combat_active)"}});
+                               "honours it (see combat_active); the refresh_rate keys switch the refresh-rate rule's parts, all on by default"}});
 }
 
+void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }
+
+const nevr_quest::CombatConfig& Config() noexcept { return g_config; }
+
 void ResetInstallForTest() noexcept {
+  g_config = nevr_quest::CombatConfig{};
   StateOf(Phase::kEarly).store(kNotYet, std::memory_order_release);
   StateOf(Phase::kNormal).store(kNotYet, std::memory_order_release);
   g_inactiveSaid.store(false, std::memory_order_release);

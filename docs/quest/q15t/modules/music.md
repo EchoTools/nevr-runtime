@@ -21,7 +21,7 @@ note has no R-id; the unit is the source build's `the source build's music` ("th
   The module does **not** register its tick itself. A tick registered although the install was refused is harmless (it only acts after a
   Play seen by the wrapper), but the line above registers it only on success. One more entry in the 16-slot tick table.
 - `CMakeLists.txt`: add `src/quest/plugins/q15t/src/music.cpp` to the plugin sources, `option(Q15T_MUSIC ... ON)`, `MUSIC` in the `foreach(m ...)` list and
-  `Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}>` in the definitions. `music.cpp` calls `CombatMapLoaded` from `src/quest/plugins/q15t/src/refresh_rate.cpp` (already in
+  `Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}>` in the definitions. `music.cpp` calls `CombatMapLoaded` from `src/quest/plugins/q15t/src/combat_map.cpp` (already in
   the plugin) and uses the header-only `module_switch.h`; no other new dependency.
 - Capability: not `ALTERS_GAMEPLAY` (it only posts audio events; my judgement, same class as `impactsnd` in the comment in plugin.cpp).
 - `Report()` string: `music`. The kill file makes the module report a non-ok status with reason `off_file`.

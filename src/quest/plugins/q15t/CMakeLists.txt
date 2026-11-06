@@ -13,9 +13,6 @@ option(Q15T_GATE_PERM "Gameplay (G1): the party-permissions expression stops ref
 option(Q15T_GATE_LINK "Menu gate: the headset-type expression is told a Link headset (the PC build's kind 4, not the Quest kind), so the menu scripts stop locking combat cards to a Quest (a caller-range answer, no code write)" ON)
 option(Q15T_GATE_BOTS "Gameplay (G6): the bot-body chooser stops picking the arena bot for a Quest headset. Installed only with levelname (the combat bot body is in the full global_mp). Source combat build: on. Kill file gate_bots.off" ON)
 option(Q15T_T26 "T-26: a new profile starts with the gun on the right hand, once per user id (plugin behaviour)" ON)
-option(Q15T_HZ_MATCH90 "Hz level rule: 90 Hz (72 on a Quest 2) while a combat map or the social lobby is loaded, the game's own rate in Echo Arena and elsewhere (q15t hzlobby90 + hz72q2, on in its shipped list). Kill files hzlevel.off, hzlobby90.off, hz72q2.off" ON)
-set(Q15T_CPU_LEVEL 4 CACHE STRING "CPU level the clock raise (args {clock: raise}) asks for at least")
-set(Q15T_GPU_LEVEL 4 CACHE STRING "GPU level the clock raise (args {clock: raise}) asks for at least")
 
 # ---- Gameplay and fix modules (src/<m>.{h,cpp}; docs/quest/q15t/modules/<m>.md). Defaults are each doc's own, i.e. the source build's. ----
 # ON: the source build installs it unless switched off (a runtime off-file in the plugin data directory is kept where the doc keeps it).
@@ -103,7 +100,7 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/script_redirect.cpp src/import_hook.cpp src/clock_levels.cpp src/plugin_args.cpp src/refresh_rate.cpp src/game_tick.cpp src/safe_read.cpp src/headset_gates.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
+set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/script_redirect.cpp src/import_hook.cpp src/combat_map.cpp src/game_tick.cpp src/safe_read.cpp src/headset_gates.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
 foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL DECALS PFX PFXTEV)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
@@ -143,7 +140,7 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_BUILD_ID="${nevr_pinned_build_id}"
   "Q15T_LINK_GATE_LIBS=\"${Q15T_LINK_GATE_LIBS}\""
   Q15T_GATE_LINK=$<BOOL:${Q15T_GATE_LINK}> Q15T_GATE_PERM=$<BOOL:${Q15T_GATE_PERM}> Q15T_GATE_BOTS=$<BOOL:${Q15T_GATE_BOTS}>
-  Q15T_HZ_MATCH90=$<BOOL:${Q15T_HZ_MATCH90}> Q15T_T26=$<BOOL:${Q15T_T26}> Q15T_CPU_LEVEL=${Q15T_CPU_LEVEL} Q15T_GPU_LEVEL=${Q15T_GPU_LEVEL}
+  Q15T_T26=$<BOOL:${Q15T_T26}>
   Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}> Q15T_MESHSTEP=$<BOOL:${Q15T_MESHSTEP}>
   Q15T_GUNCONNECT=$<BOOL:${Q15T_GUNCONNECT}> Q15T_AIBOTS=$<BOOL:${Q15T_AIBOTS}> Q15T_BVH=$<BOOL:${Q15T_BVH}>
   Q15T_WALLFIRE=$<BOOL:${Q15T_WALLFIRE}> Q15T_IMPACTSND=$<BOOL:${Q15T_IMPACTSND}> Q15T_EC=$<BOOL:${Q15T_EC}> Q15T_ECFX=$<BOOL:${Q15T_ECFX}>
