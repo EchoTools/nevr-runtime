@@ -226,6 +226,18 @@ combat:
   # a test switch in the reference build. Default (absent): false.
   # shieldgamma_gamma: true
 
+  # Quest only. A boolean. The particle-renderer gate (src/quest/combat/pfx.h): the switch the particle renderer reads, open in combat maps only and
+  # shut in an Echo Arena level, in every lobby and everywhere else. The renderer itself is not in the runtime yet, so `true` changes nothing in the
+  # game today; the sentinel log line `combat_pfx_install` says what was read. `false` keeps the gate shut. A value that is not a boolean keeps the
+  # default, with a warning in the sentinel log that names the key. Read once at launch. Default (absent): true.
+  # pfx: false
+
+  # Quest only. A boolean. The event-effect decision of the particle renderer (src/quest/combat/pfxtev.h): its six event effects may be created in
+  # combat maps only. Nothing asks until the renderer is in the runtime, so `true` changes nothing in the game today; the sentinel log line
+  # `combat_pfxtev_install` says what was read. `false` refuses the six. A value that is not a boolean keeps the default, with a warning that names the
+  # key. Read once at launch. Default (absent): true.
+  # pfxtev: false
+
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
 #

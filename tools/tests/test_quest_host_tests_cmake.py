@@ -71,6 +71,8 @@ PROGRAMS = {
         "match_tag_default_test",
         "memsys_test",
         "refresh_rate_test",
+        "pfx_test",
+        "pfxtev_test",
         "shieldgamma_test",
     ),
     "data": (

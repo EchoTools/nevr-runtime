@@ -236,7 +236,7 @@ class TheGroupTheRecipeAndTheVerifyEntryExist(unittest.TestCase):
 
     def test_the_config_section_has_its_key_and_the_example_config_shows_it(self):
         self.assertIn(
-            '{"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "hudmeter", "shieldgamma_gamma", "shieldgamma_tube_mirror"}}',
+            '{"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "pfx", "pfxtev", "hudmeter", "shieldgamma_gamma", "shieldgamma_tube_mirror"}}',
             read("src/core/nevr_config.cpp"),
         )
         self.assertRegex(read("docs/reference/example-config.yaml"), r"\ncombat:\n")

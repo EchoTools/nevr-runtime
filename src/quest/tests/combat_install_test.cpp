@@ -218,9 +218,10 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
   // The normal step runs the tick (combat_tick.h) first, then the combat level answer's refresh (#2186), the refresh-rate rule (#2172), the wrist
-  // HUD and the shield colour (#2186). On the host no libr15 is loaded, so the tick is refused and named; the refresh cannot register without it
-  // and the two hooks, which read the answer, refuse in turn; the rule installs (it registers its callback for a tick that may come later).
-  QCHECK(normal.ran && normal.modules == 5 && normal.installed == 1 && normal.failed == 4);
+  // HUD and the shield colour (#2186), then the pfx gate and the event-effect decision (#2188). On the host no libr15 is loaded, so the tick is
+  // refused and named; the refresh cannot register without it and the two hooks, which read the answer, refuse in turn; the rule installs (it
+  // registers its callback for a tick that may come later), and the pfx gate and the event-effect decision, which hook nothing, install after it.
+  QCHECK(normal.ran && normal.modules == 7 && normal.installed == 3 && normal.failed == 4);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -228,7 +229,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded scope=tick_not_installed refresh_rate=installed hudmeter=scope_not_live shieldgamma=scope_not_live\""));
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded scope=tick_not_installed refresh_rate=installed hudmeter=scope_not_live shieldgamma=scope_not_live pfx=installed pfxtev=installed\""));
   }
   Done();
 }
@@ -298,6 +299,9 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     QCHECK(Has(lines[1].text, "\"force\":1") && Has(lines[1].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"refresh_rate_lobby\":0") && Has(lines[1].text, "\"refresh_rate_lobby_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"refresh_rate\":1"));
+    // The particle-renderer gate and the event-effect decision (#2188): on by default, from the default.
+    QCHECK(Has(lines[0].text, "\"pfx\":1") && Has(lines[0].text, "\"pfx_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"pfxtev\":1") && Has(lines[0].text, "\"pfxtev_source\":\"default\""));
     QCHECK(Has(lines[2].text, "\"force\":0") && Has(lines[2].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"msg\":"));
     // The module switches: on by default, each with its source.
@@ -385,6 +389,39 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   combat::SetConfig(gammaOnly);
   combat::InstallNormal();
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"gamma\":1,\"tube_mirror\":0"));
+
+// The pfx gate and the event-effect decision read their keys from the resolved section (#2188): on with the defaults, off by the file's word.
+void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
+  Process(bv::Variant::kCombat);
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "pfx=installed pfxtev=installed"));
+  QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"state\":\"on\""));
+  QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"state\":\"on\""));
+  Done();
+  // Each row reads its own key: pfx off alone, then pfxtev off alone.
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig pfxOff;
+  pfxOff.pfx = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(pfxOff);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "pfx=off_config pfxtev=installed"));
+  QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"reason\":\"off_config\""));
+  QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"state\":\"on\""));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig tevOff;
+  tevOff.pfxtev = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(tevOff);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "pfx=installed pfxtev=off_config"));
+  QCHECK(Has(Lines("combat_pfx_install")[0].text, "\"state\":\"on\""));
+  QCHECK(Has(Lines("combat_pfxtev_install")[0].text, "\"reason\":\"off_config\""));
+  Done();
+  // A plain release installs neither, and neither writes a line.
+  Process(bv::Variant::kNone);
+  combat::InstallNormal();
+  QCHECK(Lines("combat_pfx_install").empty() && Lines("combat_pfxtev_install").empty());
   Done();
 }
 
@@ -405,6 +442,7 @@ int main() {
   TheConfigLineNamesEachKeyItsValueAndItsSource();
   TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection();
   TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection();
+  ThePfxRowsReadTheirKeysFromTheResolvedSection();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

@@ -18,6 +18,8 @@ add_library(nevr_quest_combat STATIC
   hudmeter.cpp
   match_tags.cpp
   memsys.cpp
+  pfx.cpp
+  pfxtev.cpp
   refresh_rate.cpp
   shieldgamma.cpp)
 target_include_directories(nevr_quest_combat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")

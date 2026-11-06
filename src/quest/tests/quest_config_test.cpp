@@ -1265,7 +1265,11 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       // #2186: shieldgamma_gamma is OFF by default (a test switch upstream), the other two are on
                       {"hudmeter", &nevr_quest::CombatConfig::hudmeter, true},
                       {"shieldgamma_gamma", &nevr_quest::CombatConfig::shieldgammaGamma, false},
-                      {"shieldgamma_tube_mirror", &nevr_quest::CombatConfig::shieldgammaTubeMirror, true}};
+                      {"shieldgamma_tube_mirror", &nevr_quest::CombatConfig::shieldgammaTubeMirror, true},
+
+                      // The particle-renderer gate and the event-effect decision (#2188): on unless the file says false.
+                      {"pfx", &nevr_quest::CombatConfig::pfx, true},
+                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);

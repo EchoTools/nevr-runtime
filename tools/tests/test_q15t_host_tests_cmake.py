@@ -65,8 +65,6 @@ HOST_TESTS = frozenset(
         "meshstep.meshstep_test",
         "music.music_test",
         "peerclamp.peerclamp_test",
-        "pfx.pfx_test",
-        "pfxtev.pfxtev_test",
         "powerboost.powerboost_test",
         "script_redirect.script_redirect_test",
         "sensorwd.sensorwd_test",
@@ -112,7 +110,7 @@ HOST_TESTS = frozenset(
 # q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack
 # checks and one for each module that keeps per-thread state (bvh, dronekill, impactsnd, powerboost, sensorwd)
 ARM64_OBJECTS = frozenset(
-    "bvh decals dronekill dronemuzzle impactsnd instmodel music pfx pfxtev powerboost sensorwd shaderstep tablestep".split()
+    "bvh decals dronekill dronemuzzle impactsnd instmodel music powerboost sensorwd shaderstep tablestep".split()
 )
 # the checks that read an object or run a freestanding program, registered by hand in a module file
 NDK_CHECKS = {

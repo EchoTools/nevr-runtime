@@ -11,6 +11,8 @@
 #include "quest/combat/heaps.h"
 #include "quest/combat/hudmeter.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/pfx.h"
+#include "quest/combat/pfxtev.h"
 #include "quest/combat/refresh_rate.h"
 #include "quest/combat/shieldgamma.h"
 #include "quest/sentinel/hook_log.h"
@@ -35,6 +37,9 @@ ModuleResult ShieldgammaNormal() noexcept {
   return shieldgamma::Install(g_config.shieldgammaGamma.on, g_config.shieldgammaTubeMirror.on);
 }
 
+ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
+ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
+
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
 //   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
@@ -52,6 +57,9 @@ constexpr std::array kModules{
     // hudmeter, then shieldgamma (#2186): both read the combat level answer.
     Module{"hudmeter", nullptr, &HudmeterNormal},
     Module{"shieldgamma", nullptr, &ShieldgammaNormal},
+    // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
+    Module{"pfx", nullptr, &PfxNormal},
+    Module{"pfxtev", nullptr, &PfxtevNormal},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -156,6 +164,8 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"shieldgamma_gamma", config.shieldgammaGamma.on ? 1 : 0}, {"shieldgamma_gamma_source", source(config.shieldgammaGamma.source)},
                        {"shieldgamma_tube_mirror", config.shieldgammaTubeMirror.on ? 1 : 0},
                        {"shieldgamma_tube_mirror_source", source(config.shieldgammaTubeMirror.source)},
+                       {"pfx", config.pfx.on ? 1 : 0}, {"pfx_source", source(config.pfx.source)},
+                       {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
 }
