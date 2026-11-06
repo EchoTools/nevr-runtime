@@ -450,6 +450,73 @@ class RecipesRun(unittest.TestCase):
         self.assertNotIn("repack ", "\n".join(self.calls_made()))
 
 
+class BuildQuestQ15t(unittest.TestCase):
+    """The real body of `build-quest-q15t` (after its cmake build), run in a scratch tree with stand-in checks: a library that a
+    check refuses is never copied to build/quest-q15t, the path the repacks read, and a library left there by an earlier build is
+    removed before the checks run."""
+
+    ID = "0123456789abcdef0123456789abcdef01234567"
+    MARKER = ("q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 "
+              "hz_level=1 build_id={id}")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = pathlib.Path(self.tmp.name)
+        text = recipe("build-quest-q15t")
+        body = text.split("#!/usr/bin/env bash\n", 1)[1]
+        script = "".join(line[4:] if line.startswith("    ") else line for line in body.splitlines(keepends=True))
+        script = script.replace('cmake --build build/android-arm64 --target nevr_q15t nevr_q15t_early -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"',
+                                "true  # the build itself is not under test")
+        self.assertIn("true  # the build", script)
+        (self.root / "recipe.sh").write_text("#!/usr/bin/env bash\n" + script)
+        for rel, content in (("tools/check_quest_static_init.sh", '#!/bin/sh\n[ -z "${FAIL_STATIC_INIT:-}" ] || { echo static-init refused >&2; exit 1; }\n'),
+                             ("src/quest/tests/q15t/check/no_emutls.sh", "#!/bin/sh\nexit 0\n")):
+            path = self.root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+            path.chmod(0o755)
+        header = self.root / "src/quest/sentinel/pinned_targets.h"
+        header.parent.mkdir(parents=True)
+        header.write_text(f'constexpr const char* kLibR15StockBuildId = "{self.ID}";\n')
+        self.built = self.root / "build/android-arm64/integration/q15t"
+        self.built.mkdir(parents=True)
+        self.out = self.root / "build/quest-q15t"
+
+    def build(self, marker=None, **env):
+        marker = self.MARKER.format(id=self.ID) if marker is None else marker
+        (self.built / "libq15t.so").write_bytes(b"\0lib\0" + marker.encode() + b"\0" + self.ID.encode())
+        (self.built / "libq15t_early.so").write_bytes(b"\0early\0" + self.ID.encode())
+        return subprocess.run(["bash", str(self.root / "recipe.sh")], cwd=self.root, capture_output=True, text=True,
+                              env={**os.environ, "ANDROID_NDK_HOME": str(self.root / "ndk"), **env})
+
+    def test_a_library_that_passes_every_check_is_copied_and_hashed(self):
+        result = self.build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), ["libq15t.so", "libq15t_early.so"])
+        self.assertIn("libq15t.so", result.stdout)
+
+    def test_a_library_a_check_refuses_never_sits_where_the_repack_reads(self):
+        result = self.build(FAIL_STATIC_INIT="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("static-init refused", result.stderr)
+        self.assertEqual(list(self.out.glob("*.so")), [], "no library in build/quest-q15t after a refusal")
+
+    def test_a_library_without_the_shipped_defaults_is_refused_and_not_copied(self):
+        result = self.build(marker=self.MARKER.format(id=self.ID).replace(" gate_perm=1", ""))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not carry the shipped defaults", result.stderr)
+        self.assertEqual(list(self.out.glob("*.so")), [])
+
+    def test_a_library_an_earlier_build_left_is_removed_before_the_checks(self):
+        self.out.mkdir(parents=True)
+        (self.out / "libq15t.so").write_bytes(b"an earlier build")
+        (self.out / "libq15t_early.so").write_bytes(b"an earlier build")
+        result = self.build(FAIL_STATIC_INIT="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list(self.out.glob("*.so")), [], "a refused build leaves nothing for the repack to take")
+
+
 class RecipeText(unittest.TestCase):
     def test_the_variant_recipe_sits_beside_the_release_recipe_and_takes_a_tag_and_no_plugins(self):
         self.assertIn("release-quest-variant-apk tag store_apk", recipe("release-quest-variant-apk").splitlines()[0])

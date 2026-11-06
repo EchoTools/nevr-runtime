@@ -25,6 +25,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from collections.abc import Callable
 from unittest import mock
 
@@ -47,6 +48,8 @@ STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "worktree"
          "cleanup"]
 CARRIED = {"name": "echovr-data-fc2eedeacc50.zip", "kind": "game-data", "platform": "android-arm64", "size": 937395400}
 PC_DATA = {"name": "echovr-data-win10-0123456789ab.zip", "kind": "game-data", "platform": "windows-x86_64", "size": 5120}
+NDK_PROPERTIES = "Pkg.Desc = Android NDK\nPkg.Revision = 26.3.11579264\n"  # r26d
+APK_LIBRARY_ENTRY = "lib/arm64-v8a/libq15t.so"  # where android-repack-apk puts a plugin library in the APK
 HEAD = "c0ffee" + "0" * 34
 # name -> (object, peeled commit or None): the tags the checkout holds, and the same tags on origin
 TAGS = {"v5.16.1": ("1" * 40, None), "v5.17.0": ("2" * 40, "3" * 40)}
@@ -77,6 +80,10 @@ class Fake:
         self.remote_tags: dict = dict(TAGS)  # what origin holds
         self.library: bytes | None = None  # what the variant build writes to build/quest-q15t/libq15t.so (None: the default library)
         self.writes_library = True  # False: the variant build exits 0 and writes nothing
+        self.apk_library: bytes | None = None  # what the APK the recipe wrote carries as libq15t.so (None: the build's library)
+        self.apk_entry = APK_LIBRARY_ENTRY  # the entry name the library is under in that APK
+        self.writes_apk = True  # False: the recipe exits 0 and writes no APK
+        self.apk_bytes: bytes | None = None  # the file the recipe writes instead of an APK
     def step_of(self, argv: list[str]) -> str:
         joined = " ".join(argv)
         repo = f"{self.root}/repo"
@@ -110,7 +117,17 @@ class Fake:
         if step == "variant_build" and self.writes_library and cwd:
             built = pathlib.Path(cwd) / "build" / "quest-q15t"
             built.mkdir(parents=True, exist_ok=True)
-            (built / "libq15t.so").write_bytes(library_bytes("libq15t.so") if self.library is None else self.library)
+            data = library_bytes("libq15t.so") if self.library is None else self.library
+            (built / "libq15t.so").write_bytes(data)
+            if self.writes_apk:
+                tag = argv[-1]  # `just release-quest-variant-apk <tag>`
+                out = pathlib.Path(cwd) / "build" / "quest-release" / tag / "variant"
+                out.mkdir(parents=True, exist_ok=True)
+                if self.apk_bytes is not None:
+                    (out / f"nevr-runtime-{tag}-q15t-quest.apk").write_bytes(self.apk_bytes)
+                else:
+                    with zipfile.ZipFile(out / f"nevr-runtime-{tag}-q15t-quest.apk", "w") as apk:
+                        apk.writestr(self.apk_entry, data if self.apk_library is None else self.apk_library)
         if step in self.overrides:
             return self.overrides[step](argv)
         if step == "checkout.status":
@@ -186,7 +203,8 @@ class TimerCase(unittest.TestCase):
         self.env = {**SECRETS, "RELEASE_PUBLIC_BASE": "https://release.invalid", "GH_BIN": "gh-fake",
                     "XDG_STATE_HOME": str(self.root / "state"), "QUEST_RELEASE_WORK_ROOT": str(self.root / "work"),
                     "QUEST_RELEASE_REPO": str(self.root / "repo"), "QUEST_RELEASE_SIGNER_REPO": str(self.root / "signer"),
-                    "NEVR_QUEST_REFERENCE_APK": str(self.root / "reference.apk"), "PATH": "/usr/bin",
+                    "NEVR_QUEST_REFERENCE_APK": str(self.root / "reference.apk"), "NEVR_STORE_APK": str(self.root / "store.apk"),
+                    "PATH": "/usr/bin",
                     "ANDROID_NDK_HOME": str(self.root / "ndk"), "VCPKG_ROOT": str(self.root / "vcpkg")}
         # The build inputs of the Quest libraries (BuildInputs): an NDK, a vcpkg checkout, and the public defaults the build embeds.
         for directory, file in (("ndk", "build/cmake/android.toolchain.cmake"), ("ndk", "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"),
@@ -194,6 +212,8 @@ class TimerCase(unittest.TestCase):
             path = self.root / directory / file
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("")
+        (self.root / "store.apk").write_bytes(b"store apk")  # NEVR_STORE_APK: the variant recipe repacks it (a file, not a directory)
+        (self.root / "ndk" / "source.properties").write_text(NDK_PROPERTIES)
         self.log = self.root / "state" / "nevr-runtime" / "quest-release-timer.jsonl"
         self.sleeps: list[float] = []
 
@@ -1600,6 +1620,51 @@ class VariantLibraries(VariantCase):
                 self.assertEqual(self.libraries(), [])
                 self.assertNotIn("variant_publish", fake.steps())
 
+    def test_the_record_is_of_the_library_in_the_apk_that_is_published(self) -> None:
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        [record] = self.libraries()
+        self.assertEqual(record["source"], f"{VARIANT_APK}:{APK_LIBRARY_ENTRY}")
+
+    def test_a_library_in_the_apk_that_is_not_the_one_the_build_wrote_is_a_failure_of_the_build_step(self) -> None:
+        fake = Fake(self.root)
+        fake.apk_library = library_bytes("a stale library")
+        code, stderr = self.run_captured(fake)
+        self.assertEqual(code, 1)
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_build")
+        self.assertIn(f"{APK_LIBRARY_ENTRY} in {VARIANT_APK} is not the library the build wrote", failure["error"])
+        self.assertIn(hashlib.sha256(library_bytes("libq15t.so")).hexdigest(), failure["error"])
+        self.assertIn(hashlib.sha256(library_bytes("a stale library")).hexdigest(), failure["error"])
+        self.assertEqual(self.libraries(), [])
+        self.assertNotIn("variant_publish", fake.steps(), "an APK that does not carry the build's library is not published")
+
+    def test_an_apk_without_the_library_entry_is_a_failure_of_the_build_step(self) -> None:
+        fake = Fake(self.root)
+        fake.apk_entry = "lib/arm64-v8a/libother.so"
+        self.assertEqual(self.run_timer(fake), 1)
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_build")
+        self.assertIn(f"{VARIANT_APK} has no {APK_LIBRARY_ENTRY}", failure["error"])
+        self.assertNotIn("variant_publish", fake.steps())
+
+    def test_a_recipe_that_wrote_no_apk_is_a_failure_of_the_build_step(self) -> None:
+        fake = Fake(self.root)
+        fake.writes_apk = False
+        self.assertEqual(self.run_timer(fake), 1)
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_build")
+        self.assertIn(f"{VARIANT_APK} is not in build/quest-release/{TAG}/variant after the build", failure["error"])
+        self.assertNotIn("variant_publish", fake.steps())
+
+    def test_a_file_that_is_not_a_zip_is_a_failure_of_the_build_step(self) -> None:
+        fake = Fake(self.root)
+        fake.apk_bytes = b"not a zip"
+        self.assertEqual(self.run_timer(fake), 1)
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_build")
+        self.assertIn(f"{VARIANT_APK} cannot be read as an APK", failure["error"])
+
     def test_a_failed_build_records_no_library_even_when_an_old_file_is_there(self) -> None:
         fake = Fake(self.root, fail="variant_build")
         self.assertEqual(self.run_timer(fake), 1)
@@ -2549,6 +2614,42 @@ class BuildInputs(TimerCase):
             self.assertIn(want, stderr)
         self.assertEqual(sorted(record["missing"]), sorted(["R2_BUCKET", "ANDROID_NDK_HOME", "VCPKG_ROOT", self.DEFAULTS]))
 
+    def test_an_unset_store_apk_is_named_before_any_step_runs(self) -> None:
+        stderr, record = self.refused({k: v for k, v in self.env.items() if k != "NEVR_STORE_APK"})
+        self.assertIn("refused: set NEVR_STORE_APK", stderr)
+        self.assertEqual((record["missing"], record["part"]), (["NEVR_STORE_APK"], "main"))
+
+    def test_a_store_apk_that_is_not_a_file_is_refused_naming_the_variable(self) -> None:
+        for name, value in (("a directory", str(self.root / "ndk")), ("absent", str(self.root / "no-such.apk"))):
+            with self.subTest(name):
+                self.log.unlink(missing_ok=True)
+                stderr, record = self.refused({**self.env, "NEVR_STORE_APK": value})
+                self.assertIn("NEVR_STORE_APK is not a file", stderr)
+                self.assertEqual(record["missing"], ["NEVR_STORE_APK"])
+                self.assertNotIn(value, stderr, "the sentence names the variable, never its value")
+
+    def test_an_ndk_of_another_revision_is_refused_though_it_has_the_files(self) -> None:
+        for revision in ("21.1.6352462", "25.2.9519653", "27.0.12077973"):
+            with self.subTest(revision):
+                self.log.unlink(missing_ok=True)
+                (self.root / "ndk" / "source.properties").write_text(f"Pkg.Revision = {revision}\n")
+                stderr, record = self.refused(self.env)
+                self.assertIn("ANDROID_NDK_HOME is not an Android NDK r26d directory", stderr)
+                self.assertIn(revision, stderr, "the line says which revision it found")
+                self.assertEqual(record["missing"], ["ANDROID_NDK_HOME"])
+
+    def test_an_ndk_with_no_source_properties_is_refused(self) -> None:
+        (self.root / "ndk" / "source.properties").unlink()
+        stderr, record = self.refused(self.env)
+        self.assertIn("source.properties", stderr)
+        self.assertEqual(record["missing"], ["ANDROID_NDK_HOME"])
+
+    def test_every_r26_revision_is_accepted(self) -> None:
+        for revision in ("26.3.11579264", "26.3.99999999"):
+            with self.subTest(revision):
+                (self.root / "ndk" / "source.properties").write_text(f"Pkg.Desc = Android NDK\nPkg.Revision = {revision}\n")
+                self.assertEqual(timer.build_input_problems(self.env), [])
+
     def test_a_refusal_is_not_counted_toward_the_three_tries(self) -> None:
         env = {k: v for k, v in self.env.items() if k != "VCPKG_ROOT"}
         for _ in range(4):
@@ -2569,7 +2670,7 @@ class BuildInputs(TimerCase):
 
 
 FAKE_TOOL = r'''#!PYTHON
-import hashlib, json, os, pathlib, shutil, sys, tarfile
+import hashlib, json, os, pathlib, shutil, sys, tarfile, zipfile
 
 name = os.path.basename(sys.argv[0])
 args = sys.argv[1:]
@@ -2610,12 +2711,12 @@ elif name == "just":
         built = pathlib.Path("build/quest-q15t")
         built.mkdir(parents=True)
         (built / "libq15t.so").write_bytes(bytes.fromhex(os.environ["FAKE_LIBRARY"]))
-        digests = hashlib.sha256((built / "libq15t.so").read_bytes()).digest()
         out = pathlib.Path("build/quest-release") / args[1] / "variant"
         out.mkdir(parents=True)
-        apk = b"a stand-in for the variant APK " + digests
         file = f"nevr-runtime-{args[1]}-q15t-quest.apk"
-        (out / file).write_bytes(apk)
+        with zipfile.ZipFile(out / file, "w") as archive:
+            archive.writestr("lib/arm64-v8a/libq15t.so", (built / "libq15t.so").read_bytes())
+        apk = (out / file).read_bytes()
         (out / f"{file}.sha256").write_text(f"{hashlib.sha256(apk).hexdigest()}  {file}\n")
     elif args[0] == "remove-worktree":
         shutil.rmtree(args[1])
@@ -2680,7 +2781,8 @@ class VariantRealProcess(TimerCase):
         apk = (self.served / "nevr-runtime" / TAG / VARIANT_APK).read_bytes()
         self.assertEqual((self.served / "nevr-runtime" / TAG / f"{VARIANT_APK}.sha256").read_text(),
                          f"{hashlib.sha256(apk).hexdigest()}  {VARIANT_APK}\n")
-        self.assertTrue(apk.endswith(hashlib.sha256(data).digest()), "the APK carries the library the build wrote")
+        with zipfile.ZipFile(io.BytesIO(apk)) as archive:
+            self.assertEqual(archive.read("lib/arm64-v8a/libq15t.so"), data, "the APK carries the library the build wrote")
         signer = [c["args"] for c in self.tool_calls() if c["tool"] == "signer"]
         self.assertEqual(signer, [["verify-manifest", "--live"]], "the signer only reads the manifest: no claim, no put")
         just = [c["args"][0] for c in self.tool_calls() if c["tool"] == "just"]

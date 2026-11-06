@@ -69,8 +69,9 @@ a failure, and that log is the record of each run. A failed step exits 1 and nam
 nothing else; only the failures after the newest one count toward the three. The R2 credential goes only to publish_apk and
 variant_publish, and the GitHub token only to publish_apk and the dispatch: every other command gets an environment without them. The environment is
 the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY), NEVR_RCLONE_REMOTE, RELEASE_PUBLIC_BASE,
-NEVR_QUEST_REFERENCE_APK (the reference build `just release-quest-apk` repacks, #1994), ANDROID_NDK_HOME and VCPKG_ROOT (the Quest
-build); a missing one, an ANDROID_NDK_HOME that is not an NDK, a VCPKG_ROOT that is not a vcpkg checkout, and a checkout without
+NEVR_QUEST_REFERENCE_APK (the reference build `just release-quest-apk` repacks, #1994), NEVR_STORE_APK (the store APK the variant is
+repacked from, a file), ANDROID_NDK_HOME and VCPKG_ROOT (the Quest
+build); a missing one, an ANDROID_NDK_HOME that is not an NDK r26d (its source.properties says another revision), a VCPKG_ROOT that is not a vcpkg checkout, and a checkout without
 config/public-defaults.env are refusals that name it. No value is printed or logged: every value read from the environment, and the GitHub token, is
 replaced by <redacted> in anything written.
 """
@@ -91,6 +92,8 @@ import time
 import traceback
 import urllib.error
 import urllib.request
+import zipfile
+import zlib
 from collections.abc import Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -99,17 +102,21 @@ from release_preflight import commit_of, parse_ls_remote  # noqa: E402 - the pre
 
 # QUEST_RELEASE_SIGNER_REPO is the path of a local clone of the release-signer repository (build_signer builds from its main).
 # NEVR_QUEST_REFERENCE_APK is the reference build the release APK is repacked from (`just release-quest-apk`, #1994).
+# NEVR_STORE_APK is the store APK the variant is repacked from (`just release-quest-variant-apk`); it is read after the main release
+# is published, so a run without it is refused before that, as for the build inputs below.
 # ANDROID_NDK_HOME and VCPKG_ROOT are the Quest build's inputs (`just configure-android`, `just build-quest-q15t`): the variant is built
 # from the tag, so a run without them is refused before the main release is published, not after.
 REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE",
-                "NEVR_RCLONE_REMOTE", "QUEST_RELEASE_SIGNER_REPO", "NEVR_QUEST_REFERENCE_APK", "ANDROID_NDK_HOME", "VCPKG_ROOT")
+                "NEVR_RCLONE_REMOTE", "QUEST_RELEASE_SIGNER_REPO", "NEVR_QUEST_REFERENCE_APK", "NEVR_STORE_APK", "ANDROID_NDK_HOME", "VCPKG_ROOT")
 SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "NEVR_RCLONE_REMOTE")
 # What a set ANDROID_NDK_HOME / VCPKG_ROOT must hold for the Quest build to find it (src/quest/CMakePresets.json, the justfile's recipes).
+NDK_REVISION = re.compile(r"26\.3\.[0-9]+")  # r26d's Pkg.Revision in the NDK's source.properties (the revision is 26.3.x, never r26a-c)
 NDK_FILES = ("build/cmake/android.toolchain.cmake", "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm")
 VCPKG_FILE = "scripts/buildsystems/vcpkg.cmake"
 PUBLIC_DEFAULTS = "config/public-defaults.env"  # in the checkout the timer runs from: `just worktree-setup` copies it into the tag's worktree
 VARIANT = "q15t"
 VARIANT_LIBRARIES = ("libq15t.so",)  # what the variant APK carries; libq15t_early.so is built and not packaged there
+APK_LIBRARY_DIR = "lib/arm64-v8a/"  # where android-repack-apk puts a plugin library in the APK
 # The marker the build puts in libq15t.so (src/quest/plugins/q15t/src/plugin.cpp, read back by `just build-quest-q15t`): the libr15 build ID.
 LIBRARY_MARKER = re.compile(rb"q15t-config [^\x00]*?build_id=([0-9a-f]{16,64})")
 MANIFEST_PATH = "nevr-runtime/manifest.json"
@@ -151,19 +158,38 @@ def repo_path(env: dict[str, str]) -> pathlib.Path:
     return pathlib.Path(env.get("QUEST_RELEASE_REPO") or pathlib.Path(__file__).resolve().parents[1])
 
 
+def ndk_revision(ndk: pathlib.Path) -> str | None:
+    """The `Pkg.Revision` of an NDK directory's source.properties, None when the file or the key is absent or unreadable."""
+    try:
+        text = (ndk / "source.properties").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    found = re.search(r"^Pkg\.Revision[ \t]*=[ \t]*(\S+)[ \t]*$", text, re.MULTILINE)
+    return found.group(1) if found else None
+
+
 def build_input_problems(env: dict[str, str]) -> list[tuple[str, str]]:
-    """What the Quest build cannot find, as (name, sentence) pairs: an ANDROID_NDK_HOME that is not an NDK, a VCPKG_ROOT that is not
-    a vcpkg checkout, and a checkout without config/public-defaults.env. An unset variable is not reported here (REQUIRED_ENV
+    """What the Quest build cannot find, as (name, sentence) pairs: an ANDROID_NDK_HOME that is not an NDK r26d (its source.properties says another revision), a VCPKG_ROOT that is not
+    a vcpkg checkout, a NEVR_STORE_APK that is not a file, and a checkout without config/public-defaults.env. An unset variable is not reported here (REQUIRED_ENV
     names it). The sentence names what is missing relative to the variable, never the variable's value."""
     problems = []
     ndk = env.get("ANDROID_NDK_HOME")
     if ndk:
         lacking = [name for name in NDK_FILES if not (pathlib.Path(ndk) / name).is_file()]
+        revision = ndk_revision(pathlib.Path(ndk))
+        if revision is None:
+            lacking.append("source.properties with a Pkg.Revision")
         if lacking:
             problems.append(("ANDROID_NDK_HOME", f"ANDROID_NDK_HOME is not an Android NDK r26d directory (it lacks {', '.join(lacking)})"))
+        elif not NDK_REVISION.fullmatch(revision):
+            problems.append(("ANDROID_NDK_HOME", f"ANDROID_NDK_HOME is not an Android NDK r26d directory (its source.properties says "
+                                                 f"Pkg.Revision {revision}, r26d is 26.3.x)"))
     vcpkg = env.get("VCPKG_ROOT")
     if vcpkg and not (pathlib.Path(vcpkg) / VCPKG_FILE).is_file():
         problems.append(("VCPKG_ROOT", f"VCPKG_ROOT is not a vcpkg checkout (it lacks {VCPKG_FILE})"))
+    store = env.get("NEVR_STORE_APK")
+    if store and not pathlib.Path(store).is_file():
+        problems.append(("NEVR_STORE_APK", "NEVR_STORE_APK is not a file (the variant is repacked from the store APK)"))
     if not (repo_path(env) / PUBLIC_DEFAULTS).is_file():
         problems.append((PUBLIC_DEFAULTS, f"{PUBLIC_DEFAULTS} is missing from the checkout the timer runs from "
                                           "(copy config/public-defaults.env.example and fill in the four public values)"))
@@ -634,7 +660,7 @@ class Timer:
         # The recipe builds the q15t library from the tag (`just build-quest-q15t`) and packages it: no library is handed in.
         self.cmd("variant_build", [*slice_command, "just", "release-quest-variant-apk", tag], worktree, build_env,
                  output_file=self.variant_build_log(tag))
-        self.record_libraries(worktree)
+        self.record_libraries(tag, worktree)
         self.ok("variant_build", apk=self.variant_apk_name(tag))
         # Only the R2 credential: the variant has no signer and no manifest claim. The publish tool's own log has its reasons.
         self.cmd("variant_publish", ["python3", "tools/publish_quest_apk.py", tag, "--variant", VARIANT], worktree, dict(self.r2),
@@ -642,12 +668,16 @@ class Timer:
         self.ok("variant_publish", apk=self.variant_apk_name(tag))
         self.forget_build_log(tag)
 
-    def record_libraries(self, worktree: pathlib.Path) -> None:
-        """One `variant_library` record per packaged library, read from the file the build wrote in the tag's worktree: its size,
-        its sha256 and the libr15 build ID in its config marker, so the published APK can be held to the build. A library that
-        is missing or carries no marker fails the build step (nothing is published from an APK whose library cannot be named)."""
+    def record_libraries(self, tag: str, worktree: pathlib.Path) -> None:
+        """One `variant_library` record per packaged library, read out of the signed APK the recipe wrote (the file that is
+        published) and held to the library the build wrote in the tag's worktree: a library in the APK that is not that file
+        fails the build step, so the record is of what is published. The record carries the APK library's size, sha256 and the
+        libr15 build ID in its config marker. A library or APK that is missing, unreadable or without the marker fails the
+        step too (nothing is published from an APK whose library cannot be named)."""
         step = "variant_build"
         built = worktree / "build" / "quest-q15t"
+        apk_name = self.variant_apk_name(tag)
+        apk_path = worktree / "build" / "quest-release" / tag / "variant" / apk_name
         records = []
         for name in VARIANT_LIBRARIES:
             try:
@@ -656,10 +686,25 @@ class Timer:
                 raise StepFailure(step, f"{name} is not in build/quest-q15t after the build") from error
             except OSError as error:
                 raise StepFailure(step, f"{name} cannot be read: {error.strerror}") from error
-            found = LIBRARY_MARKER.search(data)
+            entry = APK_LIBRARY_DIR + name
+            try:
+                with zipfile.ZipFile(apk_path) as apk:
+                    try:
+                        published = apk.read(entry)
+                    except KeyError as error:
+                        raise StepFailure(step, f"{apk_name} has no {entry}") from error
+            except FileNotFoundError as error:
+                raise StepFailure(step, f"{apk_name} is not in build/quest-release/{tag}/variant after the build") from error
+            except (OSError, zipfile.BadZipFile, zlib.error, NotImplementedError, RuntimeError) as error:
+                raise StepFailure(step, f"{apk_name} cannot be read as an APK: {type(error).__name__}") from error
+            built_digest, published_digest = hashlib.sha256(data).hexdigest(), hashlib.sha256(published).hexdigest()
+            if built_digest != published_digest:
+                raise StepFailure(step, f"{entry} in {apk_name} is not the library the build wrote: the APK has sha256 "
+                                        f"{published_digest}, build/quest-q15t/{name} has {built_digest}")
+            found = LIBRARY_MARKER.search(published)
             if not found:
                 raise StepFailure(step, f"{name} carries no q15t-config marker with a build_id")
-            records.append({"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+            records.append({"name": name, "source": f"{apk_name}:{entry}", "size": len(published), "sha256": published_digest,
                             "libr15_build_id": found.group(1).decode("ascii")})
         for record in records:
             self.log.event("variant_library", **record)

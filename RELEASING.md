@@ -264,7 +264,7 @@ and is not in the variant: packaged as an ordinary plugin it would load after `a
 The combat APK, `just release-quest-combat-apk vX.Y.Z`, runs the same build and packages both libraries, `libq15t_early.so` as an early plugin.
 No library is an argument to either recipe; a path in the place of the store APK is refused. The build needs an Android NDK r26d
 (`ANDROID_NDK_HOME`), a vcpkg checkout (`VCPKG_ROOT`; the configure installs the arm64-android ports of `src/quest/vcpkg.json`) and
-`config/public-defaults.env`, as `just build-android` does. The variant is published with
+`config/public-defaults.env`, as `just build-android` does, and the store APK it repacks (`NEVR_STORE_APK`, a file). The variant is published with
 `tools/publish_quest_apk.py vX.Y.Z --variant q15t`, with no signer call and no manifest entry. Neither APK is in the manifest through this document's flow.
 
 ## The Quest half of a release
@@ -305,7 +305,7 @@ Stable stays an owner step (`approve-stable`); the timer only publishes beta. A 
 the R2 credential to `publish_apk` and `variant_publish`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
-cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (the stdout of `curl`, `gh` and the signer is remote content and is left out), the inputs come from the environment of the run: the R2 credential (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), `RELEASE_PUBLIC_BASE`, `QUEST_RELEASE_SIGNER_REPO`, a local clone of the release-signer repository (`build_signer` builds from its `main`; there is no default), and the Quest build's inputs: `ANDROID_NDK_HOME` (an NDK r26d directory, the one that holds `toolchains/llvm`), `VCPKG_ROOT` (a vcpkg checkout) and `config/public-defaults.env` in the clone the timer runs from. A missing one, a directory that is no NDK or no vcpkg checkout, or a clone without the defaults file is a `refused` record that names it, before any step runs (the main release cannot be taken back, so the variant's inputs are checked before it is published), and the run exits 1. The R2 credential is never written into the log or into a command.
+cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (the stdout of `curl`, `gh` and the signer is remote content and is left out), the inputs come from the environment of the run: the R2 credential (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), `RELEASE_PUBLIC_BASE`, `QUEST_RELEASE_SIGNER_REPO`, a local clone of the release-signer repository (`build_signer` builds from its `main`; there is no default), `NEVR_QUEST_REFERENCE_APK` (the reference build the main APK is repacked from), `NEVR_STORE_APK` (a file: the store APK the variant is repacked from), and the Quest build's inputs: `ANDROID_NDK_HOME` (an NDK r26d directory, the one that holds `toolchains/llvm`; its `source.properties` must say `Pkg.Revision` 26.3.x), `VCPKG_ROOT` (a vcpkg checkout) and `config/public-defaults.env` in the clone the timer runs from. A missing one, a `NEVR_STORE_APK` that is not a file, a directory that is no r26d NDK or no vcpkg checkout, or a clone without the defaults file is a `refused` record that names it, before any step runs (the main release cannot be taken back, so the variant's inputs are checked before it is published), and the run exits 1. The R2 credential is never written into the log or into a command.
 
 **The variant APK.** Each release also gets an unlisted second APK, `nevr-runtime-vX.Y.Z-q15t-quest.apk` with its `.sha256`,
 published under the same `nevr-runtime/vX.Y.Z/` prefix and never listed in the manifest. It is the same repack as the main APK
@@ -319,8 +319,9 @@ in the same run as the main APK, after the main release is complete (published, 
   which runs `just build-quest-q15t` and packages its `libq15t.so`. Its whole output
   goes to `variant-vX.Y.Z-build.log` in the timer's work directory, a file that is 0600 from the moment it is opened, kept when
   the step fails and removed when the variant is done. After the build the run writes one `variant_library` record for the
-  packaged library: its name, size, sha256 and the libr15 build ID in its `q15t-config` marker, read from the file the build wrote.
-  A library the build did not write, or one without that marker, fails this step, and nothing is published;
+  packaged library: its name, size, sha256 and the libr15 build ID in its `q15t-config` marker, read from the library inside the signed
+  APK the recipe wrote (the file that is published) and compared with the file the build wrote. An APK whose library is not the build's,
+  an APK without the library, or a library without that marker fails this step, and nothing is published;
 - `variant_publish` runs `tools/publish_quest_apk.py vX.Y.Z --variant q15t`: `rclone copyto --ignore-existing` for the APK and
   its `.sha256`, then the same fetch-back by size and sha256 from the public host. There is no signer call and no manifest
   claim, an object already on the host is never replaced, and only the R2 credential is in its environment.

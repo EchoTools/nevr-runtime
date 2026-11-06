@@ -550,10 +550,11 @@ quest-autopilot-apk store_apk=env("NEVR_STORE_APK"): build-android
 
 # The q15t plugin libraries (#1546, src/quest/plugins/q15t/README.md): libq15t.so and libq15t_early.so, built with the android-arm64
 # preset, each through the plugin static-init check (tools/check_quest_static_init.sh --plugin) and the emulated-TLS check
-# (src/quest/tests/q15t/check/no_emutls.sh: thread_local allocates on a thread's first use under API 26). Copies them to build/quest-q15t/,
-# checks that each names the pinned libr15 build id and that libq15t.so carries the shipped defaults (the config marker in plugin.cpp),
-# and prints the sha256 of each. No release or package-dev APK carries them; the variant and combat recipes (release-quest-variant-apk,
-# release-quest-combat-apk) run this recipe in the tag's checkout and package its output, so these checks guard what ships.
+# (src/quest/tests/q15t/check/no_emutls.sh: thread_local allocates on a thread's first use under API 26), checks that each names the
+# pinned libr15 build id and that libq15t.so carries the shipped defaults (the config marker in plugin.cpp), all on the build tree's
+# files, and only then copies them to build/quest-q15t/ (a refused build leaves nothing there) and prints the sha256 of each.
+# No release or package-dev APK carries them; the variant and combat recipes (release-quest-variant-apk, release-quest-combat-apk)
+# run this recipe in the tag's checkout and package its output, so these checks guard what ships.
 build-quest-q15t: configure-android
     #!/usr/bin/env bash
     set -euo pipefail
@@ -561,17 +562,20 @@ build-quest-q15t: configure-android
     built=build/android-arm64/integration/q15t
     out=build/quest-q15t
     mkdir -p "$out"
+    # Nothing an earlier build left may sit where the repacks read while this build's libraries are checked.
+    rm -f "$out/libq15t.so" "$out/libq15t_early.so"
     id=$(sed -n 's/.*kLibR15StockBuildId = "\([0-9a-f]*\)".*/\1/p' src/quest/sentinel/pinned_targets.h)
     [ -n "$id" ] || { echo "build-quest-q15t: no kLibR15StockBuildId in src/quest/sentinel/pinned_targets.h" >&2; exit 1; }
+    # Every check runs on the build tree's file; the libraries are copied to $out only after all of them pass.
     for lib in libq15t.so libq15t_early.so; do
         [ -f "$built/$lib" ] || { echo "build-quest-q15t: $built/$lib was not built" >&2; exit 1; }
-        cp "$built/$lib" "$out/$lib"
-        tools/check_quest_static_init.sh --plugin "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" "$out/$lib"
-        src/quest/tests/q15t/check/no_emutls.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" "$out/$lib" "$lib"
-        grep -qaF "$id" "$out/$lib" || { echo "build-quest-q15t: $lib does not name libr15 build id $id" >&2; exit 1; }
+        tools/check_quest_static_init.sh --plugin "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" "$built/$lib"
+        src/quest/tests/q15t/check/no_emutls.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" "$built/$lib" "$lib"
+        grep -qaF "$id" "$built/$lib" || { echo "build-quest-q15t: $lib does not name libr15 build id $id" >&2; exit 1; }
     done
-    grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 hz_level=1 build_id=$id" "$out/libq15t.so" \
+    grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 hz_level=1 build_id=$id" "$built/libq15t.so" \
         || { echo "build-quest-q15t: libq15t.so does not carry the shipped defaults (q15t-config marker)" >&2; exit 1; }
+    cp "$built/libq15t.so" "$built/libq15t_early.so" "$out/"
     (cd "$out" && sha256sum libq15t.so libq15t_early.so)
 
 # The game's NDK, r21b (tools/game_ndk.pin; evidence in docs/reference/quest-game-ndk.md). The store APK's Quest binaries were built
