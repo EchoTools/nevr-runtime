@@ -341,7 +341,7 @@ class RecipesRun(unittest.TestCase):
     def test_a_variant_and_a_combat_apk_carry_the_libraries_their_own_tag_builds(self):
         """The falsifier of #2169: the library in the APK is the tag's `just build-quest-q15t` output, not a file passed in."""
         self.use_pack_stub()
-        for name, run, want in (("variant", self.variant, BUILT), ("combat", self.combat, f"{BUILT}:{BUILT_EARLY}")):
+        for name, run, want in (("variant", self.variant, BUILT), ("combat", self.combat, BUILT)):
             with self.subTest(name=name):
                 self.calls.unlink(missing_ok=True)
                 result = run()
@@ -463,7 +463,7 @@ class RecipesRun(unittest.TestCase):
         (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK_LIBS + "\n" + STUB_Q15T_BUILD, encoding="utf-8")
         result = self.combat("v1.2.3", "", "", "/p/libs")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"repack apk={self.store} plugin={BUILT}:{BUILT_EARLY} version=1.2.3 pack= pack_meta= libs=/p/libs",
+        self.assertIn(f"repack apk={self.store} plugin={BUILT} version=1.2.3 pack= pack_meta= libs=/p/libs",
                       self.calls_made())
 
     def test_a_release_apk_or_a_variant_never_takes_script_libraries(self):
