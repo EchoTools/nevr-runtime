@@ -91,8 +91,8 @@ a source-build script docstring).
 
 ## Hooks
 
-Three hooks through the manager, none a code write and none a thunk-less word: `CModelCS::OnComponentEnabled` and `OnComponentDisabled` (ABS64 vtable words `0x36495c8` and `0x36495d0`, each
-the only relocation that names its function) and `CncaGameSpace::SendComponentEventGlobal` (JUMP_SLOT `0x36fcae8`). The install is all three or none: the event word first, then enabled, then
+Three hooks through the manager, each a typed thunk and none a code write: `CModelCS::OnComponentEnabled` and `OnComponentDisabled` (ABS64 vtable words `0x36495c8` and `0x36495d0`, each
+one of the two ABS64 words in the file that name its function, so each target pins its word) and `CncaGameSpace::SendComponentEventGlobal` (JUMP_SLOT `0x36fcae8`). The install is all three or none: the event word first, then enabled, then
 disabled, then the tick; a word that does not hold the game's function, or a full tick table, puts back what was done (`ARefusedInstallChangesNothing`). The registers: the functions take integers
 in `x0..x4` only (no stack argument, no float, no `x8` result pointer; the bodies end in a tail call), so each thunk is typed with exactly those and hands the result back whole.
 

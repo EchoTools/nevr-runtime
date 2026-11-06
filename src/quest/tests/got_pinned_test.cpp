@@ -505,15 +505,11 @@ void CheckRealMusic(const LoadedElf& elf) {
 }
 
 // The scanner-sphere watchdog's pins (src/quest/combat/sensorwd_targets.h) against the real libr15: the two vtable words are ABS64 relocations of the two
-// CModelCS functions at their pins, the event JUMP_SLOT resolves at its pin, the three functions are defined at the pinned addresses, and the 34 code words are
+// CModelCS functions at their pins (kRealAbs64Words checks them: two words name each function, so a target pins its word), the event JUMP_SLOT resolves at its pin, the three functions are defined at the pinned addresses, and the 34 code words are
 // the file's.
 void CheckRealSensorwd(const LoadedElf& elf) {
   namespace sd = nevr_quest::combat::sensorwd::targets;
   const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
-  CheckTarget(elf, GotTarget{pinned::kLibR15, sd::kEnabledSymbol, RelocKind::kAbs64, pinned::kLibR15StockBuildId, sd::kPins.enabledSlot},
-              "libr15 CModelCS::OnComponentEnabled ABS64");
-  CheckTarget(elf, GotTarget{pinned::kLibR15, sd::kDisabledSymbol, RelocKind::kAbs64, pinned::kLibR15StockBuildId, sd::kPins.disabledSlot},
-              "libr15 CModelCS::OnComponentDisabled ABS64");
   CheckTarget(elf, GotTarget{pinned::kLibR15, sd::kEventSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, sd::kPins.eventSlot},
               "libr15 CncaGameSpace::SendComponentEventGlobal JUMP_SLOT");
   CheckDefinedAt(elf, sd::kEnabledSymbol, sd::kPins.enabledFn);
