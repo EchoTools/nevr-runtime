@@ -2852,11 +2852,10 @@ class PluginResourceSetTest : public PluginLoaderDiagnosticTest {
     g_testPluginLoadPlan.push_back({"levels", "test_plugin_resources.dll", false, "", args});
   }
   // The mount as the game runs it: armed after the plugin pass, then run by the tick on the game's own thread once the
-  // game's record count has held still for a second.
+  // resolver has seen the game's first request.
   void Mount() {
     nevr_resource_sets::MountWhenReady();
-    nevr_resource_sets::OnFrame(true);
-    g_resourceNow += 1000;
+    nevr_resource_sets::NoteRequest();
     nevr_resource_sets::OnFrame(true);
   }
 };
@@ -2969,25 +2968,26 @@ TEST_F(PluginResourceSetTest, ARegistrationFromOutsideThePluginsInitIsRefused) {
   EXPECT_TRUE(TestLogContains("reason=not_in_init"));
 }
 
-TEST_F(PluginResourceSetTest, AMountWaitsForTheGamesRecordCountToHoldStillForASecond) {
+TEST_F(PluginResourceSetTest, AMountWaitsForTheGamesFirstRequestAndARecordInItsManifest) {
   nevr_resource_sets::SetStockForTest(&ResourceStockHas, 0);
   Plan();
   LoadPlugins();
   nevr_resource_sets::MountWhenReady();
   EXPECT_TRUE(TestLogContains("[NEVR.RESOURCE] resource sets wait for the game's manifest sets=1"));
+  nevr_resource_sets::NoteRequest();
   nevr_resource_sets::OnFrame(true);
   EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr) << "no manifest yet";
-  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);  // the first boot set is in
-  nevr_resource_sets::OnFrame(true);
-  g_resourceNow += 500;
-  nevr_resource_sets::OnFrame(true);
-  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69694);  // the second one arrives
-  nevr_resource_sets::OnFrame(true);
-  g_resourceNow += 999;
+  nevr_resource_sets::ResetForTest();  // again, the manifest first and the request after
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69694);
+  nevr_resource_sets::SetClockForTest(&ResourceNow);
+  UnloadPlugins();
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::MountWhenReady();
   nevr_resource_sets::OnFrame(true);
   EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr)
-      << "the count changed 999 ms ago";
-  g_resourceNow += 1;
+      << "the game has asked for nothing yet: its boot sets may not all be read";
+  nevr_resource_sets::NoteRequest();
   nevr_resource_sets::OnFrame(true);
   EXPECT_NE(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
   EXPECT_TRUE(TestLogContains("stock_records=69694"));
@@ -2997,6 +2997,7 @@ TEST_F(PluginResourceSetTest, AMountRunsOnlyOnTheGamesThreadAndSaysSoAfterAMinut
   Plan();
   LoadPlugins();
   nevr_resource_sets::MountWhenReady();
+  nevr_resource_sets::NoteRequest();
   for (int i = 0; i < 3; ++i) {
     nevr_resource_sets::OnFrame(false);
     g_resourceNow += 1000;
@@ -3007,9 +3008,7 @@ TEST_F(PluginResourceSetTest, AMountRunsOnlyOnTheGamesThreadAndSaysSoAfterAMinut
   nevr_resource_sets::OnFrame(false);
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
                                      "resource sets still not mounted after 60 s sets=1 stock_records=69651 "
-                                     "on_game_thread=false"));
-  nevr_resource_sets::OnFrame(true);
-  g_resourceNow += 1000;
+                                     "first_request_seen=true on_game_thread=false"));
   nevr_resource_sets::OnFrame(true);
   EXPECT_NE(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
 }

@@ -21,10 +21,13 @@ void EndPluginInit(const char* pluginId, bool succeeded);
 // ctx->register_resources (NevrGameContext, v9). Returns a NevrResourcesStatus.
 int32_t HostRegisterResources(const char* pluginId, const NevrResourcesDesc* desc);
 
-// Called once after the normal plugin pass: ends registration and arms the mount, which the per-frame tick runs on the
-// game's own thread once the game's record count has held still for a second (OnFrame). With no set held it ends
-// registration and nothing more.
+// Called once after the normal plugin pass: ends registration, installs the resolver hook and arms the mount, which the
+// per-frame tick runs on the game's own thread once the game has asked the resolver for its first resource (OnFrame).
+// With no set held it ends registration and nothing more.
 void MountWhenReady();
+
+// The resolver hook's note of each request: the first one tells the mount the game's boot package sets are all read.
+void NoteRequest();
 
 // Per frame, any thread; `onLoopThread` is true on the thread that runs the game's main wrapper (GameLoopThreadId).
 // Runs an armed mount when it can, and writes one summary line per mounted set for each window in which the game read

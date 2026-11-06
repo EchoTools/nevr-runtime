@@ -231,6 +231,7 @@ uint64_t __cdecl Hook_Request(void* manager, uint64_t typeKey, uint64_t nameKey,
     // #2161: a key a plugin's resource set holds, and the game's manifests do not, is filled from the resource sets'
     // shadow manifest: the game's own function fills the request from it, and the game's own reader reads the
     // plugin's file. Every other key goes to the game's manifest unchanged.
+    nevr_resource_sets::NoteRequest();
     if (const void* shadowManager = nevr_resource_sets::ManagerFor(manager, typeKey, nameKey)) {
         return g_origRequest(const_cast<void*>(shadowManager), typeKey, nameKey, a4, a5, resource, index, request);
     }

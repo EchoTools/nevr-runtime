@@ -88,10 +88,12 @@ reason=<reason> detail="..."`.
 
 - Call it from `NevrPluginInit` / `NevrPluginInitEx`, either pass. An init that returns nonzero drops what it
   registered.
-- The runtime mounts every set once. The mount runs from the per-frame tick on the game's own thread, after the plugin
-  pass, once the game's record count is above 0 and has not changed for a second: the game adds its two boot package
-  sets one after the other (echovr.exe `0x141548da0`), and a tick can run between them. A mount still waiting a minute
-  after the plugin pass writes one Warning that says why.
+- The runtime mounts every set once. After the plugin pass it installs the resolver hook; the mount then runs from the
+  per-frame tick on the game's own thread once the game has asked the resolver for its first resource. The game adds
+  its two boot package sets one after the other (echovr.exe `0x141548da0`, `CResourceManager::AddPackage` at
+  `0x14154973c` and `0x1415497a7`), and a tick can run between them, but it starts the streaming reader that serves
+  requests only after both (`CStreamingIOProcessor::Initialize`, `0x141549902`). A mount still waiting a minute after
+  the plugin pass writes one Warning that says why.
 - At the mount it refuses a set that holds a key the game's manifests hold (a set adds resources, it does not replace
   them). It also refuses a set holding a level whose archive, or any archive that archive depends on through the sets,
   lists a resource or names an archive that neither the game, this set nor an earlier set serves; an archive the game

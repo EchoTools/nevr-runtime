@@ -4,9 +4,10 @@
  * A plugin hands register_resources the bytes of a resource set as its own image maps them. This file checks that
  * those bytes are file bytes of a read-only section of that plugin's image (image_file_range.h), opens the plugin's
  * file read-only and deny-write for the life of the process, checks the file holds the same bytes, and hands the set
- * to the registry (resource_set_registry.h). After the plugin pass, on the game's own thread once the game's manifest
- * has stopped growing, it mounts the sets against that manifest, read with the game's own FindEntry
- * (plugin_assets.cpp), publishes the shadow the resolver hook asks about, and registers the mounted sets' overrides.
+ * to the registry (resource_set_registry.h). After the plugin pass it installs the resolver hook; on the game's own
+ * thread, once the game has asked the resolver for its first resource (its boot package sets are all read by then), it
+ * mounts the sets against the game's manifest, read with the game's own FindEntry (plugin_assets.cpp), publishes the
+ * shadow the resolver hook asks about, and registers the mounted sets' overrides.
  *
  * Containment: nothing here writes a file. The plugin's file is opened GENERIC_READ with FILE_SHARE_READ only, and
  * the game's packages and manifests are never touched.
@@ -55,11 +56,6 @@ struct Published {
   std::atomic<std::uint32_t> firstWinUser{0};
 };
 
-// How long the game's record count must hold still before the mount reads the manifest: the game adds its boot
-// package sets one after the other in one function (echovr.exe 0x141548da0 calls CResourceManager::AddPackage at
-// 0x14154973c and 0x1415497a7), and a tick can run between the two. Measured: both were in place within 0.39 s of the
-// plugin pass (server runs, 2026-11-05).
-constexpr std::uint64_t kStableMs = 1000;
 // When a mount is still waiting this long after the plugin pass, one Warning says why.
 constexpr std::uint64_t kLateMs = 60000;
 // A label: what a plugin calls its set, written into log lines and the login's JSON.
@@ -72,8 +68,11 @@ std::atomic<bool> g_mountDeferred{false};
 bool g_deferSaid = false;
 bool g_lateSaid = false;
 std::uint64_t g_armedAtMs = 0;
-std::uint64_t g_lastCount = 0;
-std::uint64_t g_countSinceMs = 0;
+// Set by the resolver hook on the game's first request. The game adds its boot package sets in one function
+// (echovr.exe 0x141548da0 calls CResourceManager::AddPackage at 0x14154973c and 0x1415497a7) and only then initialises
+// the streaming reader that serves requests (CStreamingIOProcessor::Initialize, call at 0x141549902), so by the first
+// request the game's manifest holds both sets. A tick can run between the two AddPackage calls.
+std::atomic<bool> g_requestSeen{false};
 std::atomic<std::uint64_t> g_lastSummaryMs{0};
 std::atomic<bool> g_stockWinSaid{false};
 
@@ -351,24 +350,12 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
 
 // The mount itself, under g_mutex, once TryMount found the manifest ready. Fills `report`, `mounted` and
 // `abandoned` for the lines written after the lock is released.
-void MountLocked(std::uint64_t stockRecords, MountReport* report, std::vector<const Set*>* mounted,
-                 std::vector<std::int64_t>* abandoned, std::vector<std::string>* abandonedPlugins) {
-  bool hooked = true;
-#ifdef NEVR_TEST_HOOKS
-  if (g_testStockHas == nullptr) hooked = nevr::assets::EnsureResolverHook();
-#else
-  hooked = nevr::assets::EnsureResolverHook();
-#endif
-  if (!hooked) {
-    for (const Set* set : g_registry.HeldSets()) abandonedPlugins->push_back(set->plugin);
-    *abandoned = g_registry.Abandon();
-  } else {
-    *report = g_registry.Mount(StockView{&StockHasThunk, nullptr, stockRecords});
-    *mounted = g_registry.MountedSets();
-    if (const nevr_shadow::Shadow* shadow = g_registry.shadow()) {
-      g_lastSummaryMs.store(NowMs());  // the first read window starts at the mount
-      g_published.store(new Published(shadow, mounted->size()), std::memory_order_release);
-    }
+void MountLocked(std::uint64_t stockRecords, MountReport* report, std::vector<const Set*>* mounted) {
+  *report = g_registry.Mount(StockView{&StockHasThunk, nullptr, stockRecords});
+  *mounted = g_registry.MountedSets();
+  if (const nevr_shadow::Shadow* shadow = g_registry.shadow()) {
+    g_lastSummaryMs.store(NowMs());  // the first read window starts at the mount
+    g_published.store(new Published(shadow, mounted->size()), std::memory_order_release);
   }
   g_mountDeferred.store(false);
 }
@@ -419,12 +406,10 @@ void WriteMountLines(std::uint64_t startedMs, const MountReport& report, const s
       static_cast<unsigned long long>(NowMs() - startedMs));
 }
 
-// A deferred mount's attempt: on the game's own thread, once the game's record count is above 0 and has not changed
-// for kStableMs (the game adds its boot sets one after another, and a tick can run between them).
+// A deferred mount's attempt: on the game's own thread, once the game has asked for its first resource and its
+// manifest holds records.
 void TryMount(bool onLoopThread) {
   MountReport report;
-  std::vector<std::int64_t> abandoned;
-  std::vector<std::string> abandonedPlugins;
   std::vector<const Set*> mounted;
   const std::uint64_t now = NowMs();
   {
@@ -435,21 +420,16 @@ void TryMount(bool onLoopThread) {
       g_lateSaid = true;
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.RESOURCE] resource sets still not mounted after %llu s sets=%zu stock_records=%llu "
-          "on_game_thread=%s (no plugin level or resource is served until the mount; it waits for the game's manifest "
-          "on the game's own thread)",
+          "first_request_seen=%s on_game_thread=%s (no plugin level or resource is served until the mount; it waits "
+          "for the game's first resource request, on the game's own thread)",
           static_cast<unsigned long long>((now - g_armedAtMs) / 1000), g_registry.held(),
-          static_cast<unsigned long long>(count), onLoopThread ? "true" : "false");
+          static_cast<unsigned long long>(count), g_requestSeen.load() ? "true" : "false",
+          onLoopThread ? "true" : "false");
     }
-    if (!onLoopThread) return;
-    if (count == 0 || count != g_lastCount) {
-      g_lastCount = count;
-      g_countSinceMs = now;
-      return;
-    }
-    if (now - g_countSinceMs < kStableMs) return;
-    MountLocked(count, &report, &mounted, &abandoned, &abandonedPlugins);
+    if (!onLoopThread || count == 0 || !g_requestSeen.load()) return;
+    MountLocked(count, &report, &mounted);
   }
-  WriteMountLines(now, report, mounted, abandoned, abandonedPlugins);
+  WriteMountLines(now, report, mounted, {}, {});
 }
 
 }  // namespace
@@ -501,24 +481,43 @@ int32_t HostRegisterResources(const char* pluginId, const NevrResourcesDesc* des
 }
 
 void MountWhenReady() {
-  std::lock_guard<std::mutex> lock(g_mutex);
-  if (g_registry.mounted()) return;
-  if (g_registry.held() == 0) {
-    // Nothing to mount: close registration for the run without a line (no plugin carries resources).
-    g_registry.Mount(StockView{&StockHasThunk, nullptr, 0});
-    return;
+  std::vector<std::int64_t> abandoned;
+  std::vector<std::string> abandonedPlugins;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_registry.mounted()) return;
+    if (g_registry.held() == 0) {
+      // Nothing to mount: close registration for the run without a line (no plugin carries resources).
+      g_registry.Mount(StockView{&StockHasThunk, nullptr, 0});
+      return;
+    }
+    // The resolver hook goes in now, so it sees the game's first request (which the mount waits for).
+    bool hooked = true;
+#ifdef NEVR_TEST_HOOKS
+    if (g_testStockHas == nullptr) hooked = nevr::assets::EnsureResolverHook();
+#else
+    hooked = nevr::assets::EnsureResolverHook();
+#endif
+    if (!hooked) {
+      for (const Set* set : g_registry.HeldSets()) abandonedPlugins.push_back(set->plugin);
+      abandoned = g_registry.Abandon();
+    } else {
+      g_armedAtMs = NowMs();
+      if (!g_deferSaid) {
+        g_deferSaid = true;
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] resource sets wait for the game's manifest sets=%zu (they are mounted on the game's own "
+            "thread once the game has asked for its first resource: its boot package sets are all read by then)",
+            g_registry.held());
+      }
+      g_mountDeferred.store(true);
+    }
   }
-  g_armedAtMs = NowMs();
-  g_lastCount = 0;
-  g_countSinceMs = g_armedAtMs;
-  if (!g_deferSaid) {
-    g_deferSaid = true;
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOURCE] resource sets wait for the game's manifest sets=%zu (they are mounted on the game's own thread "
-        "once its record count has held still for %llu ms)",
-        g_registry.held(), static_cast<unsigned long long>(kStableMs));
-  }
-  g_mountDeferred.store(true);
+  if (!abandoned.empty()) WriteMountLines(NowMs(), MountReport{}, {}, abandoned, abandonedPlugins);
+}
+
+void NoteRequest() {
+  if (!g_requestSeen.load(std::memory_order_relaxed)) g_requestSeen.store(true, std::memory_order_relaxed);
 }
 
 void OnFrame(bool onLoopThread) {
@@ -610,8 +609,7 @@ void ResetForTest() {
   g_deferSaid = false;
   g_lateSaid = false;
   g_armedAtMs = 0;
-  g_lastCount = 0;
-  g_countSinceMs = 0;
+  g_requestSeen.store(false);
   g_lastSummaryMs.store(0);
   g_stockWinSaid.store(false);
   g_init = InitState{};
