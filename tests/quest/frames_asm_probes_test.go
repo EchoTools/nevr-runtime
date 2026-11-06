@@ -30,8 +30,17 @@ func TestFramesAsmProbesWrongEntriesFail(t *testing.T) {
 		{"below_sp", "x30 stored below sp", []string{"stores x30 at CFA-8, below the sp (CFA+0) it leaves"}},
 		{"local_bl", "a bl to a label inside the entry", []string{"calls", "inside the entry"}},
 		{"path_br", "a br register set by a mov on one path", []string{"jumps through x16, last set by `mov x16, x1`", "which is not an acquire load"}},
-		{"ldadd_ret", "a relaxed ldadd as the call-site load", []string{"ldadd xzr, x17, [x16]", "is not an acquire load of a published word"}},
+		{"ldadd_ret", "a relaxed ldadd as the call-site load", []string{"ldadd xzr, x17, [x16]", "reads a word from outside the entry's stack, and it is not ldar or ldapr"}},
 		{"cfi_only_at_bl", "unwind rows right at the bl and wrong before it", []string{"gives CFA=sp+0 (want sp+16)"}},
+		{"cas_load", "the call-site word read with a relaxed cas", []string{"cas x17, x17, [x16]", "it is not ldar or ldapr"}},
+		{"x19_unsaved", "x30 kept in x19 and the caller's x19 never saved", []string{"leaves the entry with callee-saved x19 not the caller's value"}},
+		{"x29_not_restored", "the epilogue reloads x30 and leaves x29 in the dead frame", []string{"leaves the entry with callee-saved x29 not the caller's value"}},
+		{"bl_clobbers_br", "a br through a caller-saved register the bl overwrote", []string{"jumps through x9, last set by `bl ", "which is not an acquire load"}},
+		{"slot_overwrite", "a spill over the slot x30 was saved in", []string{"overwrites x30, which the entry has not saved", "leaves the entry with x30 not the caller's return address"}},
+		{"slot_revived", "a second bl relying on a slot sp has passed", []string{"the bl at ", "overwrites x30, which the entry has not saved"}},
+		{"fde_short", ".cfi_endproc before the bl", []string{"no unwind row covers the bl", "the unwind table ends at"}},
+		{"ret_reg", "ret x1", []string{"returns through x1, not x30"}},
+		{"remember_no_restore", "the second path runs under the early return's rows", []string{"gives CFA=sp+0 (want sp+16)", "x29 no longer holds the caller's value, saved at CFA-16"}},
 	} {
 		t.Run(c.variant, func(t *testing.T) {
 			errs, violations, _ := asmProbeText(t, c.variant)
@@ -62,6 +71,24 @@ func TestFramesAsmProbeX30InCalleeSavedRegisterPasses(t *testing.T) {
 	}
 }
 
+// Correct entries of other shapes pass: a different frame size, sub sp before the stp, only x30 saved, a loop, the pass-through
+// last, the CFA on x29, two returns under .cfi_remember_state, x30 kept in x20, and three functions copied from NDK clang's
+// -O2 -funwind-tables output.
+func TestFramesAsmProbesCorrectEntriesPass(t *testing.T) {
+	for _, variant := range []string{"x30_in_x20_str", "clang_fp", "clang_h", "clang_k", "fp_cfa", "frame32_slot", "loop", "passthrough_last",
+		"str_x30_only", "sub_then_stp", "two_exits_remember"} {
+		t.Run(variant, func(t *testing.T) {
+			errs, violations, a := asmProbeText(t, variant)
+			if len(violations) != 0 || len(errs) != 0 {
+				t.Fatalf("frames_asm_probe_%s: walk violations %v, entry errors %v; want none", variant, violations, errs)
+			}
+			if got := recordEntryErrors(a.graph.names, map[uint64]bool{}, a.recordEntries, []*regexp.Regexp{probeAsmEntryRe}); len(got) != 0 {
+				t.Errorf("frames_asm_probe_%s: record errors %v", variant, got)
+			}
+		})
+	}
+}
+
 var q15tEntryRes = []*regexp.Regexp{
 	regexp.MustCompile(`^q15t_dm_tp_thunk$`), regexp.MustCompile(`^q15t_dm_fire_thunk$`),
 	regexp.MustCompile(`^q15t_pb_resolve_thunk$`), regexp.MustCompile(`^q15t_headset_tramp$`),
@@ -88,7 +115,7 @@ func TestFramesAsmProbeRealPowerboostPlainLoadFails(t *testing.T) {
 		t.Fatalf("frames_asm_probe_real_moved_pbldr: the walk must pass it, got %v", violations)
 	}
 	got := strings.Join(errs, "\n")
-	if strings.Count(got, "is not an acquire load of a published word") != 2 || !strings.Contains(got, "which is not an acquire load (the next word") {
+	if strings.Count(got, "reads a word from outside the entry's stack, and it is not ldar or ldapr") != 2 || !strings.Contains(got, "which is not an acquire load (the next word") {
 		t.Fatalf("frames_asm_probe_real_moved_pbldr: both ldr and the br through one must be reported, got:\n%s", got)
 	}
 	for _, e := range errs {

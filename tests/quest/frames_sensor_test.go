@@ -313,11 +313,17 @@ var (
 
 // The unwind rows of the FDEs starting at `starts`, from readelf's interpreted table. An FDE with no instructions has no table
 // of its own: its one row is its CIE's initial rule, at the FDE's start. An address in `starts` with no FDE is absent.
-func cfiRowsOf(t *testing.T, path string, starts map[uint64]bool) map[uint64][]cfiRow {
+// An FDE's unwind table and the address its range ends at.
+type fdeTable struct {
+	rows []cfiRow
+	end  uint64
+}
+
+func cfiRowsOf(t *testing.T, path string, starts map[uint64]bool) map[uint64]fdeTable {
 	t.Helper()
 	cieRow := map[string]cfiRow{}
 	cieOf := map[uint64]string{}
-	out := map[uint64][]cfiRow{}
+	out := map[uint64]fdeTable{}
 	var cols []string
 	cie := ""                      // the CIE whose table is being read
 	fde, inFDE := uint64(0), false // the FDE whose table is being read
@@ -332,6 +338,9 @@ func cfiRowsOf(t *testing.T, path string, starts map[uint64]bool) map[uint64][]c
 			if starts[start] {
 				fde, inFDE = start, true
 				cieOf[start] = m[1]
+				tab := out[start]
+				tab.end, _ = strconv.ParseUint(m[3], 16, 64)
+				out[start] = tab
 			}
 			continue
 		}
@@ -343,12 +352,22 @@ func cfiRowsOf(t *testing.T, path string, starts map[uint64]bool) map[uint64][]c
 		if m == nil || cols == nil {
 			continue
 		}
-		vals := append([]string{m[1], m[2]}, strings.Fields(m[3])...)
-		row := cfiRow{cfa: vals[1], ra: "u"}
+		// readelf follows a register rule with the register's name in parentheses ("r19 (x19)"): not a column.
+		vals := []string{m[1], m[2]}
+		for _, f := range strings.Fields(m[3]) {
+			if !strings.HasPrefix(f, "(") {
+				vals = append(vals, f)
+			}
+		}
+		row := cfiRow{cfa: vals[1], ra: "u", regs: map[string]string{}}
 		row.loc, _ = strconv.ParseUint(vals[0], 16, 64)
 		for i, c := range cols {
-			if c == "ra" && i < len(vals) {
+			switch {
+			case i >= len(vals) || c == "LOC" || c == "CFA":
+			case c == "ra":
 				row.ra = vals[i]
+			default:
+				row.regs[c] = vals[i]
 			}
 		}
 		switch {
@@ -357,13 +376,17 @@ func cfiRowsOf(t *testing.T, path string, starts map[uint64]bool) map[uint64][]c
 				cieRow[cie] = row
 			}
 		case inFDE:
-			out[fde] = append(out[fde], row)
+			tab := out[fde]
+			tab.rows = append(tab.rows, row)
+			out[fde] = tab
 		}
 	}
 	for start, c := range cieOf {
-		if len(out[start]) == 0 {
+		if len(out[start].rows) == 0 {
 			if initial, ok := cieRow[c]; ok {
-				out[start] = []cfiRow{{loc: start, cfa: initial.cfa, ra: initial.ra}}
+				tab := out[start]
+				tab.rows = []cfiRow{{loc: start, cfa: initial.cfa, ra: initial.ra, regs: initial.regs}}
+				out[start] = tab
 			} else {
 				t.Fatalf("FDE at %#x names CIE %s, whose initial rule was not read: the parser is blind", start, c)
 			}
@@ -400,7 +423,7 @@ func asmEntryErrors(t *testing.T, path string, a builtArtifact, thunkEntries map
 	for i := range entries {
 		e := &entries[i]
 		if r, ok := rows[e.start]; ok {
-			e.rows = r
+			e.rows, e.fdeEnd = r.rows, r.end
 		}
 		dis := run(t, "llvm-objdump", "-d", "--no-show-raw-insn", fmt.Sprintf("--start-address=%#x", e.start), fmt.Sprintf("--stop-address=%#x", e.end), path)
 		for _, line := range strings.Split(dis, "\n") {
@@ -719,7 +742,7 @@ func TestFramesProbeAsmEntryPlainLoadFails(t *testing.T) {
 	a, _ := probeAsm(t, "ldr")
 	errs := asmEntryErrors(t, probeExe(t, "frames_asm_probe_ldr"), a, nil)
 	got := strings.Join(errs, "\n")
-	if strings.Count(got, "is not an acquire load of a published word") != 2 || !strings.Contains(got, "which is not an acquire load") {
+	if strings.Count(got, "reads a word from outside the entry's stack, and it is not ldar or ldapr") != 2 || !strings.Contains(got, "which is not an acquire load") {
 		t.Fatalf("frames_asm_probe_ldr: both plain loads and the br through one must be reported, got:\n%s", got)
 	}
 	if strings.Contains(got, "CFA=") || strings.Contains(got, "ra=") {

@@ -25,6 +25,7 @@ type asmInsn struct {
 type cfiRow struct {
 	loc     uint64
 	cfa, ra string
+	regs    map[string]string // the rule of every other register the table names ("x19": "c-16"); nil: the fixture gives none, and none is checked
 }
 
 // An entry and what the sensor reads of it: its text, the rows of its FDE (nil: no FDE; the walk reports that too) and the
@@ -34,6 +35,7 @@ type asmEntryText struct {
 	start, end uint64
 	insns      []asmInsn
 	rows       []cfiRow
+	fdeEnd     uint64 // where the FDE's range ends (0: not given, and the rows cover the whole entry)
 	cont       uint64
 	contName   string
 }
@@ -53,6 +55,36 @@ var (
 // The loads that order a read after the release store that published the word (ldar, and the RCpc ldapr, in their sized forms).
 // Every other load of a word the entry does not own is refused by its exact opcode: ldadd and ldxr begin with the same letters.
 var acquireLoads = map[string]bool{"ldar": true, "ldarb": true, "ldarh": true, "ldapr": true, "ldaprb": true, "ldaprh": true}
+
+// Branches the sensor does not follow, so it does not take their destination, or their fall-through, for granted.
+var unfollowable = map[string]bool{"braa": true, "braaz": true, "brab": true, "brabz": true, "blraa": true, "blraaz": true, "blrab": true,
+	"blrabz": true, "retaa": true, "retab": true, "eret": true, "eretaa": true, "eretab": true, "drps": true}
+
+// Instructions that read a word of memory into a register other than the ld* loads: the compare-and-swap and swap families.
+func readsMemory(mnem string) bool {
+	return strings.HasPrefix(mnem, "ld") || strings.HasPrefix(mnem, "cas") || strings.HasPrefix(mnem, "swp")
+}
+
+// Instructions that write memory: stores, and the swap, compare-and-swap and read-modify-write families.
+func writesMemory(mnem string) bool {
+	if strings.HasPrefix(mnem, "st") || strings.HasPrefix(mnem, "cas") || strings.HasPrefix(mnem, "swp") {
+		return true
+	}
+	for _, p := range rmwPrefixes {
+		if strings.HasPrefix(mnem, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// The atomic read-modify-write loads (ldadd, ldclr, ...): the old value goes to the second operand.
+var rmwPrefixes = []string{"ldadd", "ldclr", "ldeor", "ldset", "ldsmax", "ldsmin", "ldumax", "ldumin"}
+
+// A store-exclusive writes a status register as its first operand.
+func statusFirst(mnem string) bool {
+	return strings.HasPrefix(mnem, "stxr") || strings.HasPrefix(mnem, "stlxr") || strings.HasPrefix(mnem, "stxp") || strings.HasPrefix(mnem, "stlxp")
+}
 
 func isDirectBranch(mnem string) bool {
 	switch mnem {
@@ -88,29 +120,47 @@ func calleeSaved(reg string) bool {
 // destination.
 func writesFirstOperand(mnem string) bool {
 	switch {
-	case strings.HasPrefix(mnem, "st"), mnem == "cmp", mnem == "cmn", mnem == "tst", mnem == "ccmp", mnem == "ccmn",
+	case strings.HasPrefix(mnem, "st") && !statusFirst(mnem), mnem == "cmp", mnem == "cmn", mnem == "tst", mnem == "ccmp", mnem == "ccmn",
 		mnem == "bti", mnem == "br", mnem == "ret", isDirectBranch(mnem):
 		return false
 	}
 	return true
 }
 
-// The general registers an instruction writes: its first operand (a load pair writes two), and x30 for a call.
+// The registers a call overwrites besides x30: everything the callee may use freely (AAPCS64 x0..x18).
+func callerSaved() []string {
+	var out []string
+	for r := 0; r <= 18; r++ {
+		out = append(out, fmt.Sprintf("x%d", r))
+	}
+	return out
+}
+
+// The general registers an instruction writes: its first operand (a load pair writes two, a read-modify-write or swap its
+// second, a store-exclusive its status register), and x30 and every caller-saved register for a call.
 func regsWritten(in asmInsn) []string {
 	if in.mnem == "bl" || in.mnem == "blr" {
-		return []string{"x30"}
+		return append([]string{"x30"}, callerSaved()...)
 	}
 	if !writesFirstOperand(in.mnem) {
 		return nil
 	}
 	ops := strings.Split(in.ops, ",")
-	n := 1
-	switch in.mnem {
-	case "ldp", "ldnp", "ldpsw", "ldxp", "ldaxp":
+	first, n := 0, 1
+	switch {
+	case in.mnem == "ldp", in.mnem == "ldnp", in.mnem == "ldpsw", in.mnem == "ldxp", in.mnem == "ldaxp":
 		n = 2
+	case strings.HasPrefix(in.mnem, "swp"):
+		first = 1
+	default:
+		for _, p := range rmwPrefixes {
+			if strings.HasPrefix(in.mnem, p) {
+				first = 1
+			}
+		}
 	}
 	var out []string
-	for i := 0; i < n && i < len(ops); i++ {
+	for i := first; i < first+n && i < len(ops); i++ {
 		if r := gpReg(ops[i]); r != "" {
 			out = append(out, r)
 		}
@@ -118,19 +168,72 @@ func regsWritten(in asmInsn) []string {
 	return out
 }
 
-// The position of `reg` among the register operands that come before the memory operand (0 for the first of a pair), or -1.
-func operandIndex(ops, reg string) int {
-	for i, tok := range strings.Split(ops, ",") {
+// The register operands of a load or store that come before its memory operand, as written, without a store-exclusive's status
+// register: the data registers.
+func dataOperands(in asmInsn) []string {
+	var out []string
+	for i, tok := range strings.Split(in.ops, ",") {
 		tok = strings.TrimSpace(tok)
 		if strings.Contains(tok, "[") {
-			return -1
+			break
 		}
+		if i == 0 && statusFirst(in.mnem) {
+			continue
+		}
+		out = append(out, tok)
+	}
+	return out
+}
+
+// The position of `reg` among the data registers (0 for the first of a pair), or -1.
+func operandIndex(in asmInsn, reg string) int {
+	for i, tok := range dataOperands(in) {
 		if tok == reg {
 			return i
 		}
 	}
 	return -1
 }
+
+// How many bytes a store writes through its memory operand, from the width of its data registers.
+func storeBytes(in asmInsn) int64 {
+	var n int64
+	for _, tok := range dataOperands(in) {
+		w := int64(16)
+		if tok != "" {
+			switch tok[0] {
+			case 'x', 'd':
+				w = 8
+			case 'w', 's':
+				w = 4
+			case 'h':
+				w = 2
+			case 'b':
+				w = 1
+			}
+		}
+		n += w
+	}
+	if n == 0 {
+		n = 8
+	}
+	return n
+}
+
+var fpOffRe = regexp.MustCompile(`\[x29(?:, #(-?(?:0x)?[0-9a-f]+))?\]$`)
+
+// Where a memory write lands, as an offset from the entry's sp, when the base is sp or a frame pointer the sensor knows.
+func memoryTarget(in asmInsn, s asmState) (int64, bool) {
+	if addr, _, ok := stackOperand(in.ops, s); ok {
+		return addr, true
+	}
+	if m := fpOffRe.FindStringSubmatch(in.ops); m != nil && s.fpKnown {
+		return s.fp + imm(m[1]), true
+	}
+	return 0, false
+}
+
+func overlaps(addr, size, slot int64) bool { return addr < slot+8 && slot < addr+size }
 
 // What the entry holds a register to be. `acq` is set when the register was last loaded by an acquire load on every path that
 // reaches the instruction; `by` is the instruction that last set it on a path where it was not (empty: never set).
@@ -146,8 +249,11 @@ type asmState struct {
 	x30Orig          bool   // x30 holds the return address the caller gave the entry
 	slot             int64  // that address is also in the stack slot CFA+slot ...
 	slotSaved        bool   // ... when this is set (the slot is live while it is at or above sp)
+	slotDead         bool   // sp has been above the slot: it is not the entry's to rely on again
 	raReg            string // ... or in this callee-saved register (empty: in none)
 	regs             map[string]regSrc
+	csWritten        map[string]bool  // callee-saved registers (x19..x29) that no longer hold the caller's value
+	csSlot           map[string]int64 // the stack slot each was stored in while it still held the caller's value
 }
 
 func (s asmState) clone() asmState {
@@ -155,6 +261,13 @@ func (s asmState) clone() asmState {
 	n.regs = make(map[string]regSrc, len(s.regs))
 	for k, v := range s.regs {
 		n.regs[k] = v
+	}
+	n.csWritten, n.csSlot = map[string]bool{}, map[string]int64{}
+	for k, v := range s.csWritten {
+		n.csWritten[k] = v
+	}
+	for k, v := range s.csSlot {
+		n.csSlot[k] = v
 	}
 	return n
 }
@@ -165,14 +278,15 @@ func (s asmState) key() string {
 		regs = append(regs, fmt.Sprintf("%s=%t/%s", k, v.acq, v.by))
 	}
 	sort.Strings(regs)
-	return fmt.Sprintf("%d/%t %d/%t %t %d/%t %s %v", s.sp, s.spKnown, s.fp, s.fpKnown, s.x30Orig, s.slot, s.slotSaved, s.raReg, regs)
+	return fmt.Sprintf("%d/%t %d/%t %t %d/%t/%t %s %v %v %v", s.sp, s.spKnown, s.fp, s.fpKnown, s.x30Orig, s.slot, s.slotSaved, s.slotDead,
+		s.raReg, regs, s.csWritten, s.csSlot)
 }
 
 // The places the caller's return address is kept at this point, as the unwind table names them: the live stack slot ("c-8") and
 // the register ("r19").
 func (s asmState) savedLocs() []string {
 	var out []string
-	if s.slotSaved && s.spKnown && s.slot >= s.sp {
+	if s.slotSaved && !s.slotDead && s.spKnown {
 		out = append(out, fmt.Sprintf("c%+d", s.slot))
 	}
 	if s.raReg != "" {
@@ -182,7 +296,18 @@ func (s asmState) savedLocs() []string {
 }
 
 func joinStates(a, b asmState) asmState {
-	n := asmState{regs: map[string]regSrc{}}
+	n := asmState{regs: map[string]regSrc{}, csWritten: map[string]bool{}, csSlot: map[string]int64{}}
+	for r := range a.csWritten {
+		n.csWritten[r] = true
+	}
+	for r := range b.csWritten {
+		n.csWritten[r] = true
+	}
+	for r, v := range a.csSlot {
+		if w, ok := b.csSlot[r]; ok && w == v {
+			n.csSlot[r] = v
+		}
+	}
 	if a.spKnown && b.spKnown && a.sp == b.sp {
 		n.sp, n.spKnown = a.sp, true
 	}
@@ -191,7 +316,7 @@ func joinStates(a, b asmState) asmState {
 	}
 	n.x30Orig = a.x30Orig && b.x30Orig
 	if a.slotSaved && b.slotSaved && a.slot == b.slot {
-		n.slot, n.slotSaved = a.slot, true
+		n.slot, n.slotSaved, n.slotDead = a.slot, true, a.slotDead || b.slotDead
 	}
 	if a.raReg == b.raReg {
 		n.raReg = a.raReg
@@ -256,18 +381,39 @@ func transfer(in asmInsn, s asmState) asmState {
 		return false
 	}
 
-	// x30 stored on the stack: the slot it lands in, if it holds the caller's address.
-	if strings.HasPrefix(m, "st") && onStack && s.x30Orig {
-		if idx := operandIndex(in.ops, "x30"); idx >= 0 {
-			n.slot, n.slotSaved = addr+int64(8*idx), true
+	// A write to memory that may land on a slot the entry saved a caller value in destroys that save. A write through a base the
+	// sensor cannot follow may land anywhere.
+	if writesMemory(m) {
+		at, known := memoryTarget(in, s)
+		size := storeBytes(in)
+		if s.slotSaved && (!known || overlaps(at, size, s.slot)) {
+			n.slotSaved = false
+		}
+		for r, sl := range s.csSlot {
+			if !known || overlaps(at, size, sl) {
+				delete(n.csSlot, r)
+			}
+		}
+	}
+	// x30 stored on the stack: the slot it lands in, if it holds the caller's address. So is each callee-saved register stored
+	// while it still holds the caller's value.
+	if strings.HasPrefix(m, "st") && onStack {
+		for idx, tok := range dataOperands(in) {
+			slot := addr + int64(8*idx)
+			switch r := gpReg(tok); {
+			case tok == "x30" && s.x30Orig:
+				n.slot, n.slotSaved, n.slotDead = slot, true, false
+			case tok != "" && tok[0] == 'x' && (calleeSaved(r) || r == "x29") && !s.csWritten[r]:
+				n.csSlot[r] = slot
+			}
 		}
 	}
 	// x30 written.
 	if writes("x30") {
 		switch {
 		case strings.HasPrefix(m, "ld"):
-			idx := operandIndex(in.ops, "x30")
-			n.x30Orig = onStack && idx >= 0 && s.slotSaved && s.slot >= s.sp && addr+int64(8*idx) == s.slot
+			idx := operandIndex(in, "x30")
+			n.x30Orig = onStack && idx >= 0 && s.slotSaved && !s.slotDead && addr+int64(8*idx) == s.slot
 		case m == "mov":
 			ops := strings.Split(in.ops, ",")
 			n.x30Orig = len(ops) == 2 && gpReg(ops[1]) != "" && gpReg(ops[1]) == s.raReg
@@ -285,6 +431,15 @@ func transfer(in asmInsn, s asmState) asmState {
 			src.acq = true
 		}
 		n.regs[w] = src
+		// A callee-saved register is the caller's again after a load from the slot it was saved in.
+		if calleeSaved(w) || w == "x29" {
+			idx := operandIndex(in, w)
+			if sl, ok := s.csSlot[w]; ok && onStack && idx >= 0 && sl == addr+int64(8*idx) {
+				delete(n.csWritten, w)
+			} else {
+				n.csWritten[w] = true
+			}
+		}
 	}
 	if m == "mov" && s.x30Orig && strings.HasSuffix(in.ops, ", x30") {
 		if r := gpReg(strings.Split(in.ops, ",")[0]); calleeSaved(r) {
@@ -322,7 +477,25 @@ func transfer(in asmInsn, s asmState) asmState {
 			n.fpKnown = false
 		}
 	}
+	// Once sp is above a slot the entry saved in, the slot is not the entry's to rely on again, whatever moves sp back below it.
+	if n.spKnown {
+		if n.slotSaved && n.slot < n.sp {
+			n.slotDead = true
+		}
+		for r, sl := range n.csSlot {
+			if sl < n.sp {
+				delete(n.csSlot, r)
+			}
+		}
+	}
 	return n
+}
+
+func orU(rule string) string {
+	if rule == "" {
+		return "u"
+	}
+	return rule
 }
 
 func whereRA(s asmState) string {
@@ -383,7 +556,7 @@ func asmEntryTextErrors(e asmEntryText) []string {
 
 	// Published words are read with an acquire load, wherever the load is.
 	for _, in := range e.insns {
-		if !strings.HasPrefix(in.mnem, "ld") || acquireLoads[in.mnem] {
+		if !readsMemory(in.mnem) || acquireLoads[in.mnem] {
 			continue
 		}
 		base := "pc"
@@ -391,13 +564,15 @@ func asmEntryTextErrors(e asmEntryText) []string {
 			base = m[1]
 		}
 		if base != "sp" {
-			fail("%s %s at %#x is not an acquire load of a published word: an entry reads every such word with ldar (or ldapr)", in.mnem, in.ops, in.addr)
+			fail("%s %s at %#x reads a word from outside the entry's stack, and it is not ldar or ldapr (or a byte or halfword form of either): an entry reads every published word with one of them", in.mnem, in.ops, in.addr)
 		}
 	}
 
 	// The states, to a fixed point.
 	states := make([]*asmState, len(e.insns))
 	var queue []int
+	succ := make([][]int, len(e.insns)) // the flow between instructions, for the exits every reached instruction must be able to reach
+	exits := make([]bool, len(e.insns))
 	flow := func(i int, s asmState) {
 		if i < 0 || i >= len(e.insns) {
 			return
@@ -423,30 +598,64 @@ func asmEntryTextErrors(e asmEntryText) []string {
 		return i, ok
 	}
 	if len(e.insns) > 0 {
-		flow(0, asmState{spKnown: true, x30Orig: true, regs: map[string]regSrc{}})
+		flow(0, asmState{spKnown: true, x30Orig: true, regs: map[string]regSrc{}, csWritten: map[string]bool{}, csSlot: map[string]int64{}})
 	}
 	for len(queue) > 0 {
 		i := queue[0]
 		queue = queue[1:]
 		in, s := e.insns[i], *states[i]
 		next := transfer(in, s)
+		to := func(j int) {
+			if j >= 0 && j < len(e.insns) {
+				succ[i] = append(succ[i], j)
+			}
+			flow(j, next)
+		}
 		switch {
 		case in.mnem == "br" || in.mnem == "ret":
+			exits[i] = true
+		case unfollowable[in.mnem]:
+			exits[i] = true
 		case in.mnem == "b":
 			if t, ok := local(in); ok {
-				flow(t, next)
+				to(t)
+			} else {
+				exits[i] = true
 			}
 		case isDirectBranch(in.mnem) && in.mnem != "bl":
 			if t, ok := local(in); ok {
-				flow(t, next)
+				to(t)
+			} else {
+				exits[i] = true
 			}
-			flow(i+1, next)
+			to(i + 1)
 		default:
-			flow(i+1, next)
+			to(i + 1)
+		}
+	}
+	// Every instruction the entry reaches must be able to reach a way out of it: a ret, a br or a branch out. A loop with none
+	// holds the game thread forever.
+	canExit := make([]bool, len(e.insns))
+	for changed := true; changed; {
+		changed = false
+		for i := range e.insns {
+			if canExit[i] || states[i] == nil {
+				continue
+			}
+			ok := exits[i]
+			for _, j := range succ[i] {
+				ok = ok || canExit[j]
+			}
+			if ok {
+				canExit[i], changed = true, true
+			}
 		}
 	}
 
 	rowAt := func(addr uint64) *cfiRow {
+		if e.fdeEnd != 0 && addr >= e.fdeEnd {
+			return nil // the FDE's range ends before this instruction
+		}
 		var row *cfiRow
 		for k := range e.rows {
 			if e.rows[k].loc <= addr {
@@ -465,6 +674,14 @@ func asmEntryTextErrors(e asmEntryText) []string {
 		if !s.x30Orig {
 			fail("the %s at %#x leaves the entry with x30 not the caller's return address: a call overwrote it and nothing reloaded it", what, in.addr)
 		}
+		var cs []string
+		for r := range s.csWritten {
+			cs = append(cs, r)
+		}
+		sort.Strings(cs)
+		if len(cs) > 0 {
+			fail("the %s at %#x leaves the entry with callee-saved %s not the caller's value: the entry saves each one it writes in its frame and reloads it from there", what, in.addr, strings.Join(cs, ", "))
+		}
 	}
 	branchesToCont := 0
 	for i, in := range e.insns {
@@ -478,6 +695,8 @@ func asmEntryTextErrors(e asmEntryText) []string {
 		if row := rowAt(in.addr); row == nil {
 			if in.mnem == "bl" {
 				fail("no unwind row covers the bl at %#x", in.addr)
+			} else if len(e.rows) > 0 {
+				failOnce("fdeend", "the unwind table ends at %#x, before the %s at %#x that the entry reaches", e.fdeEnd, in.mnem, in.addr)
 			}
 		} else if s.spKnown {
 			want := fmt.Sprintf("sp+%d", -s.sp)
@@ -514,7 +733,12 @@ func asmEntryTextErrors(e asmEntryText) []string {
 				fail("the br at %#x jumps through %s, last set by `%s` on a path that reaches it, which is not an acquire load (the next word is read with ldar)", in.addr, reg, src.by)
 			}
 			leaves(in, s, "br")
+		case unfollowable[in.mnem]:
+			fail("the %s at %#x is not followed by the sensor: an entry branches with br, bl, b and ret", in.mnem, in.addr)
 		case in.mnem == "ret":
+			if r := strings.TrimSpace(in.ops); r != "" && r != "x30" {
+				fail("the ret at %#x returns through %s, not x30", in.addr, r)
+			}
 			leaves(in, s, "ret")
 		case in.mnem == "blr":
 			fail("the blr at %#x calls through a register: an entry calls its record's continuation directly, so the sensor can see it", in.addr)
@@ -540,6 +764,20 @@ func asmEntryTextErrors(e asmEntryText) []string {
 				case len(s.savedLocs()) == 0:
 					fail("the bl at %#x overwrites x30, which the entry has not saved (in a live stack slot at or above sp, or in a callee-saved register)", in.addr)
 				}
+				// A callee-saved register the entry has overwritten comes back out of the continuation's frame only through the
+				// row: the unwinder restores it from the slot the row names.
+				if row := rowAt(in.addr); row != nil && row.regs != nil {
+					regs := make([]string, 0, len(s.csWritten))
+					for r := range s.csWritten {
+						regs = append(regs, r)
+					}
+					sort.Strings(regs)
+					for _, r := range regs {
+						if sl, ok := s.csSlot[r]; ok && row.regs[r] != fmt.Sprintf("c%+d", sl) {
+							failOnce(fmt.Sprintf("cs/%x/%s", row.loc, r), "at the bl at %#x %s no longer holds the caller's value, saved at CFA%+d, but the unwind row there gives %s=%s (want c%+d): an unwinder walking out of the continuation would not restore it", in.addr, r, sl, r, orU(row.regs[r]), sl)
+						}
+					}
+				}
 			case !inside(in.target):
 				leaves(in, s, in.mnem) // a branch out of the entry ends the entry's own frame
 			}
@@ -547,7 +785,7 @@ func asmEntryTextErrors(e asmEntryText) []string {
 
 		// x30 stored below the sp it leaves: the continuation's own frame overwrites the slot.
 		if addr, _, ok := stackOperand(in.ops, s); ok && strings.HasPrefix(in.mnem, "st") {
-			if idx := operandIndex(in.ops, "x30"); idx >= 0 {
+			if idx := operandIndex(in, "x30"); idx >= 0 {
 				slot := addr + int64(8*idx)
 				switch {
 				case slot < next.sp:
@@ -560,6 +798,11 @@ func asmEntryTextErrors(e asmEntryText) []string {
 		// Control falls out of the last instruction.
 		if i == len(e.insns)-1 && in.mnem != "b" && in.mnem != "br" && in.mnem != "ret" {
 			fail("the entry's last instruction, the %s at %#x, falls through to whatever follows it", in.mnem, in.addr)
+		}
+	}
+	for i, in := range e.insns {
+		if states[i] != nil && !canExit[i] {
+			failOnce("noexit", "the instruction at %#x can never reach a ret, a br or a branch out of the entry: the game's thread would not come back", in.addr)
 		}
 	}
 	if branchesToCont == 0 {
@@ -701,7 +944,7 @@ func TestAsmEntryTextRejectsWhatItCannotFollow(t *testing.T) {
 		{"a cbnz out of the entry", []string{"cbnz x0, 0x3000 <other>"}, "the cbnz at 0x1000 branches to 0x3000"},
 		{"a tbz out of the entry", []string{"tbz w0, #0x3, 0x3000 <other>"}, "the tbz at 0x1000 branches to 0x3000"},
 		{"a tbnz out of the entry", []string{"tbnz w0, #0x3, 0x3000 <other>"}, "the tbnz at 0x1000 branches to 0x3000"},
-		{"a plain load through the pc", []string{"ldr x16, 0x4000 <word>", "b 0x2000 <cont>"}, "ldr x16, 0x4000 <word> at 0x1000 is not an acquire load"},
+		{"a plain load through the pc", []string{"ldr x16, 0x4000 <word>", "b 0x2000 <cont>"}, "ldr x16, 0x4000 <word> at 0x1000 reads a word from outside the entry's stack, and it is not ldar"},
 		{"an entry that never reaches the continuation", []string{"ret"}, "never branches to its record's continuation cont (0x2000)"},
 		{"a branch into the middle of an instruction", []string{"b 0x1002 <e+0x2>", "b 0x2000 <cont>"}, "not an instruction of the entry"},
 		{"control falling out of the last instruction", []string{"bl 0x2000 <cont>"}, "falls through"},
@@ -820,7 +1063,7 @@ func TestAsmEntryTextMatchesAcquireLoadsByExactOpcode(t *testing.T) {
 		{"ldaxr", "x16, [x16]"}, {"ldr", "x16, [x16]"}, {"ldur", "x16, [x16, #-8]"}, {"ldp", "x16, x17, [x16]"}, {"ldrb", "w16, [x16]"},
 		{"ldursw", "x16, [x16]"}, {"ldapur", "x16, [x16]"},
 	} {
-		mustFail(t, c.mnem+" "+c.ops, entryOf(rows, c.mnem+" "+c.ops, "b 0x2000 <cont>"), c.mnem+" "+c.ops+" at 0x1000 is not an acquire load of a published word")
+		mustFail(t, c.mnem+" "+c.ops, entryOf(rows, c.mnem+" "+c.ops, "b 0x2000 <cont>"), c.mnem+" "+c.ops+" at 0x1000 reads a word from outside the entry's stack, and it is not ldar or ldapr")
 	}
 	// Loads from the stack are the entry's own.
 	for _, ops := range []string{"x16, [sp]", "x16, [sp, #0x8]", "x16, [sp], #0x10", "x16, [sp, #-0x10]!"} {
@@ -897,4 +1140,181 @@ func TestAsmEntryTextKeepsX30OnlyInACalleeSavedRegister(t *testing.T) {
 			t.Errorf("x30 in %s: kept=%t, want %t; errors:\n%s", c.reg, saved, c.keep, got)
 		}
 	}
+}
+
+// ---- callee-saved registers, clobbered registers, overwritten slots, branches the sensor does not follow ------------------
+
+// A callee-saved register the entry writes is saved in its frame first and reloaded from there before the entry leaves; the row
+// names the slot while the continuation runs.
+func TestAsmEntryTextRestoresTheCalleeSavedRegistersItWrites(t *testing.T) {
+	regRows := func(slot string) []cfiRow {
+		return []cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u", regs: map[string]string{}},
+			{loc: 0x1004, cfa: "sp+16", ra: "c-8", regs: map[string]string{"x19": slot}}, {loc: 0x1010, cfa: "sp+0", ra: "u", regs: map[string]string{}}}
+	}
+	frame := func(mid string, pop string) []string {
+		return []string{"stp x19, x30, [sp, #-0x10]!", mid, "bl 0x2000 <cont>", pop, "ret"}
+	}
+	mustPass(t, "x19 saved, written, reloaded", entryOf(regRows("c-16"), frame("mov x19, x0", "ldp x19, x30, [sp], #0x10")...))
+	mustPass(t, "x19 written through its w name, then reloaded", entryOf(regRows("c-16"), frame("mov w19, w0", "ldp x19, x30, [sp], #0x10")...))
+	mustPass(t, "x19 saved and never written", entryOf(regRows("u"), frame("mov x1, x0", "ldp x19, x30, [sp], #0x10")...))
+	mustFail(t, "x19 written and never saved", entryOf(framedRows, "stp x29, x30, [sp, #-0x10]!", "mov x19, x0", "bl 0x2000 <cont>",
+		"ldp x29, x30, [sp], #0x10", "ret"), "the ret at 0x1010 leaves the entry with callee-saved x19 not the caller's value")
+	mustFail(t, "x19 written, saved after the write", entryOf(nil, "mov x19, x0", "stp x19, x30, [sp, #-0x10]!", "ldp x19, x30, [sp], #0x10", "ret"),
+		"callee-saved x19 not the caller's value")
+	mustFail(t, "x19 reloaded from another slot", entryOf(regRows("c-16"), frame("mov x19, x0", "ldp x30, x19, [sp], #0x10")...),
+		"callee-saved x19 not the caller's value")
+	mustFail(t, "x29 set from sp and never restored", entryOf(framedRows, "stp x29, x30, [sp, #-0x10]!", "mov x29, sp", "bl 0x2000 <cont>",
+		"ldr x30, [sp, #8]", "add sp, sp, #0x10", "ret"), "callee-saved x29 not the caller's value")
+	mustFail(t, "a write on one path only", entryOf(nil, "stp x19, x30, [sp, #-0x10]!", "cbz x0, 0x100c <e+0xc>", "mov x19, x1", "ldp x30, xzr, [sp], #0x10", "ret"),
+		"callee-saved x19 not the caller's value")
+	// At the bl the row says where the caller's value of a written register is.
+	mustFail(t, "no rule for x19 at the bl", entryOf(regRows("u"), frame("mov x19, x0", "ldp x19, x30, [sp], #0x10")...),
+		"x19 no longer holds the caller's value, saved at CFA-16, but the unwind row there gives x19=u (want c-16)")
+	mustFail(t, "the wrong slot for x19 at the bl", entryOf(regRows("c-8"), frame("mov x19, x0", "ldp x19, x30, [sp], #0x10")...),
+		"gives x19=c-8 (want c-16)")
+}
+
+// A call overwrites x0..x18; what the entry loaded into one of them before it is not an acquire load's result after it.
+func TestAsmEntryTextACallOverwritesTheCallerSavedRegisters(t *testing.T) {
+	call := func(reg, callIns string) string {
+		return errorsOf(entryOf(framedRowsPoppedAt(0x1018), "ldar "+reg+", [x16]", "stp x29, x30, [sp, #-0x10]!", "mov x29, sp", callIns,
+			"ldp x29, x30, [sp], #0x10", "br "+reg))
+	}
+	if got := call("x9", "bl 0x2000 <cont>"); !strings.Contains(got, "the br at 0x1014 jumps through x9, last set by `bl 0x2000 <cont>`") {
+		t.Errorf("a br through x9 after a bl must fail, got:\n%s", got)
+	}
+	if got := call("x18", "bl 0x2000 <cont>"); !strings.Contains(got, "jumps through x18") {
+		t.Errorf("a br through x18 after a bl must fail, got:\n%s", got)
+	}
+	if got := call("x19", "bl 0x2000 <cont>"); strings.Contains(got, "jumps through") {
+		t.Errorf("x19 survives a call, got:\n%s", got)
+	}
+	if got := call("x9", "blr x8"); !strings.Contains(got, "jumps through x9, last set by `blr x8`") {
+		t.Errorf("a br through x9 after a blr must fail, got:\n%s", got)
+	}
+}
+
+// A write to memory that overlaps the slot a caller value was saved in destroys the save, and a later reload from the slot does
+// not make the register the caller's.
+func TestAsmEntryTextAStoreOverASaveSlotDestroysIt(t *testing.T) {
+	rows := []cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}, {loc: 0x1004, cfa: "sp+32", ra: "c-24"}, {loc: 0x1014, cfa: "sp+0", ra: "u"}}
+	body := func(store string) asmEntryText {
+		return entryOf(rows, "stp x29, x30, [sp, #-0x20]!", "mov x29, sp", store, "bl 0x2000 <cont>", "ldp x29, x30, [sp], #0x20", "ret")
+	}
+	for _, c := range []struct{ what, store, want string }{
+		{"a pair over the slot", "stp x0, x1, [sp, #8]", "overwrites x30, which the entry has not saved"},
+		{"a word half over the slot", "str w0, [sp, #12]", "overwrites x30, which the entry has not saved"},
+		{"a vector over the slot", "str q0, [sp, #8]", "overwrites x30, which the entry has not saved"},
+		{"a store through the frame pointer", "str xzr, [x29, #8]", "overwrites x30, which the entry has not saved"},
+		{"a store through a register that may point anywhere", "str x0, [x1]", "overwrites x30, which the entry has not saved"},
+		{"a swap over the slot", "swp x0, x1, [sp, #8]", "overwrites x30, which the entry has not saved"},
+		{"a store-exclusive over the slot", "stxr w2, x0, [sp, #8]", "overwrites x30, which the entry has not saved"},
+		{"a store over x29's slot", "str x0, [sp]", "callee-saved x29 not the caller's value"},
+		{"a compare-and-swap over the slot", "casal x0, x1, [sp, #8]", "overwrites x30, which the entry has not saved"},
+		{"an atomic add over the slot", "ldadd x0, x1, [sp, #8]", "overwrites x30, which the entry has not saved"},
+	} {
+		mustFail(t, c.what, body(c.store), c.want)
+	}
+	for _, store := range []string{"str x0, [sp, #16]", "stp x0, x1, [sp, #16]", "str w0, [sp, #20]", "str x0, [x29, #16]", "str xzr, [x29, #24]"} {
+		mustPass(t, store+" beside the slots", body(store))
+	}
+	// A store is as wide as its data register: a halfword or a byte just below the slot does not reach it.
+	narrow := []cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}, {loc: 0x1004, cfa: "sp+16", ra: "u"}, {loc: 0x1008, cfa: "sp+16", ra: "c-8"}, {loc: 0x1018, cfa: "sp+0", ra: "u"}}
+	for _, store := range []string{"str h0, [sp, #6]", "str b0, [sp, #7]", "str w0, [sp, #4]"} {
+		mustPass(t, store+" below the slot", entryOf(narrow, "sub sp, sp, #0x10", "stur x30, [sp, #8]", store, "bl 0x2000 <cont>", "ldur x30, [sp, #8]",
+			"add sp, sp, #0x10", "ret"))
+	}
+	for _, store := range []string{"str x0, [sp, #4]", "str q0, [sp]", "str d0, [sp, #4]"} {
+		mustFail(t, store+" reaching into the slot", entryOf(narrow, "sub sp, sp, #0x10", "stur x30, [sp, #8]", store, "bl 0x2000 <cont>", "ldur x30, [sp, #8]",
+			"add sp, sp, #0x10", "ret"), "overwrites x30, which the entry has not saved")
+	}
+	mustFail(t, "a halfword inside the slot", entryOf(narrow, "sub sp, sp, #0x10", "stur x30, [sp, #8]", "str h0, [sp, #10]", "bl 0x2000 <cont>",
+		"ldur x30, [sp, #8]", "add sp, sp, #0x10", "ret"), "overwrites x30, which the entry has not saved")
+	// A callee-saved register is the caller's again only by a reload from the slot, which sp must not have passed.
+	mustFail(t, "x19 reloaded from a slot sp passed", entryOf(nil, "stp x19, x30, [sp, #-0x10]!", "mov x19, x0", "bl 0x2000 <cont>",
+		"ldp xzr, x30, [sp], #0x10", "sub sp, sp, #0x10", "ldr x19, [sp]", "add sp, sp, #0x10", "ret"), "callee-saved x19 not the caller's value")
+	// The slot of a pop is dead, and moving sp back below it does not bring it back.
+	mustFail(t, "a second bl under a frame pushed again", entryOf(nil, "stp x29, x30, [sp, #-0x10]!", "mov x29, sp", "bl 0x2000 <cont>",
+		"ldp x29, x30, [sp], #0x10", "sub sp, sp, #0x10", "bl 0x2000 <cont>", "ldr x30, [sp, #8]", "add sp, sp, #0x10", "ret"),
+		"the bl at 0x1014 overwrites x30, which the entry has not saved")
+}
+
+// Branches whose destination or fall-through the sensor does not model are refused, and so is a way in with no way out.
+func TestAsmEntryTextRefusesWhatItDoesNotFollowOrCannotLeave(t *testing.T) {
+	rows := []cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}}
+	for _, ins := range []string{"braa x16, x17", "brab x16, x17", "blraa x16, x17", "retaa", "eret"} {
+		mustFail(t, ins, entryOf(rows, ins, "b 0x2000 <cont>"), "is not followed by the sensor")
+	}
+	mustFail(t, "a loop with no way out", entryOf(rows, "cbz x0, 0x1008 <e+0x8>", "ret", "b 0x1008 <e+0x8>"),
+		"the instruction at 0x1008 can never reach a ret, a br or a branch out of the entry")
+	mustFail(t, "a self loop", entryOf(rows, "b 0x1000 <e>"), "the instruction at 0x1000 can never reach")
+	mustPass(t, "a loop with a way out", entryOf(framedRowsPoppedAt(0x1014), "stp x29, x30, [sp, #-0x10]!", "mov x29, sp", "bl 0x2000 <cont>",
+		"cbnz x0, 0x1008 <e+0x8>", "ldp x29, x30, [sp], #0x10", "ret"))
+}
+
+func TestAsmEntryTextRetReturnsThroughX30(t *testing.T) {
+	mustFail(t, "ret x1", entryOf(framedRows, append(append([]string{}, framedLines[:4]...), "ret x1")...), "the ret at 0x1010 returns through x1, not x30")
+	mustPass(t, "ret x30", entryOf(framedRows, append(append([]string{}, framedLines[:4]...), "ret x30")...))
+}
+
+// The memory-reading families that are not ld*: compare-and-swap and swap read the word, so they are judged as loads, and the
+// register they write is the one the instruction names for the old value.
+func TestAsmEntryTextJudgesAtomicsAsLoadsAndTracksTheRegisterTheyWrite(t *testing.T) {
+	rows := []cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}}
+	for _, ins := range []string{"cas x17, x17, [x16]", "casa x17, x17, [x16]", "casal x17, x17, [x16]", "swp xzr, x17, [x16]", "swpal xzr, x17, [x16]"} {
+		mustFail(t, ins, entryOf(rows, ins, "b 0x2000 <cont>"), ins+" at 0x1000 reads a word from outside the entry's stack, and it is not ldar or ldapr")
+	}
+	// The old value of a swap or an atomic add goes to its second operand; the first is the value written or added.
+	mustFail(t, "swp over the br register", entryOf(rows, "ldar x16, [x17]", "swp xzr, x16, [x17]", "br x16"), "last set by `swp xzr, x16, [x17]`")
+	mustFail(t, "ldadd over the br register", entryOf(rows, "ldar x16, [x17]", "ldadd xzr, x16, [x17]", "br x16"), "last set by `ldadd xzr, x16, [x17]`")
+	got := errorsOf(entryOf(rows, "ldar x16, [x17]", "ldadd x16, x17, [x16]", "br x16"))
+	if strings.Contains(got, "jumps through") {
+		t.Errorf("ldadd x16, x17 writes x17 and only reads x16, got:\n%s", got)
+	}
+	// A store-exclusive writes its status register, in all four forms.
+	for _, ins := range []string{"stlxr w16, x0, [x1]", "stxp w16, x0, x2, [x1]", "stlxp w16, x0, x2, [x1]"} {
+		mustFail(t, ins+" over the br register", entryOf(rows, "ldar x16, [x17]", ins, "br x16"), "last set by `"+ins+"`")
+	}
+	mustFail(t, "stxr status in the br register", entryOf(rows, "ldar x16, [x17]", "stxr w16, x0, [x1]", "br x16"), "last set by `stxr w16, x0, [x1]`")
+	mustFail(t, "stxr status in x30", entryOf(rows, "stxr w30, x0, [x1]", "ret"), "the ret at 0x1004 leaves the entry with x30 not the caller's return address")
+	// The status is not a data register: x30 stored by a store-exclusive is saved at the address, not one slot above it.
+	mustPass(t, "x30 saved by a store-exclusive", entryOf(
+		[]cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}, {loc: 0x1004, cfa: "sp+16", ra: "u"}, {loc: 0x1008, cfa: "sp+16", ra: "c-16"}, {loc: 0x1014, cfa: "sp+0", ra: "u"}},
+		"sub sp, sp, #0x10", "stxr w2, x30, [sp]", "bl 0x2000 <cont>", "ldr x30, [sp]", "add sp, sp, #0x10", "ret"))
+}
+
+// The FDE's range ends where the entry's unwind table ends: an instruction after it has no row, and an exception raised under it
+// finds no FDE.
+func TestAsmEntryTextReadsTheFDERange(t *testing.T) {
+	e := entryOf(framedRows, framedLines...)
+	e.fdeEnd = 0x1008
+	mustFail(t, "an FDE that ends before the bl", e, "no unwind row covers the bl at 0x1008", "the unwind table ends at 0x1008, before the ldp at 0x100c")
+	e.fdeEnd = 0x1014
+	mustPass(t, "an FDE that ends after the last instruction", e)
+}
+
+func TestAsmEntryTextExitsAreWaysOut(t *testing.T) {
+	rows := []cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}}
+	// A branch the sensor refuses is still a way out of the entry, so it is reported once, as what it is.
+	for _, ins := range []string{"eret", "retaa", "braa x16, x17"} {
+		if got := errorsOf(entryOf(rows, ins)); strings.Contains(got, "can never reach") {
+			t.Errorf("%s leaves the entry, got:\n%s", ins, got)
+		}
+	}
+	// A loop whose only way out is a conditional branch out of the entry has one.
+	if got := errorsOf(entryOf(rows, "cbz x0, 0x2000 <cont>", "b 0x1000 <e>")); strings.Contains(got, "can never reach") {
+		t.Errorf("a conditional branch out is a way out, got:\n%s", got)
+	}
+}
+
+// Where paths meet, a slot that sp passed on one of them is dead, and a callee-saved register saved on one of them only has no
+// save to reload from.
+func TestAsmEntryTextJoinsSavesAndDeadSlots(t *testing.T) {
+	mustFail(t, "a slot dead on one path", entryOf(nil, "stp x29, x30, [sp, #-0x10]!", "mov x29, sp", "cbz x0, 0x1018 <e+0x18>",
+		"ldp x29, x30, [sp], #0x10", "sub sp, sp, #0x10", "nop", "bl 0x2000 <cont>", "ret"), "the bl at 0x1018 overwrites x30, which the entry has not saved")
+	mustFail(t, "x19 saved on one path only", entryOf(nil, "sub sp, sp, #0x10", "cbnz x0, 0x100c <e+0xc>", "b 0x1010 <e+0x10>", "str x19, [sp]", "mov x19, x0",
+		"ldr x19, [sp]", "add sp, sp, #0x10", "ret"), "callee-saved x19 not the caller's value")
+	// Only a full register is a save: the low half of x19 is not x19.
+	mustFail(t, "x19 saved as w19", entryOf(nil, "str w19, [sp, #-0x10]!", "mov x19, x0", "ldr x19, [sp], #0x10", "ret"),
+		"callee-saved x19 not the caller's value")
 }
