@@ -376,8 +376,9 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
   Log(EchoVR::LogLevel::Info,
       "[NEVR.RESOURCE] resource set registered plugin=%s label=\"%s\" records=%u chunks=%u levels=%zu overrides=%u "
       "bytes=%llu file_offset=%llu (held until the plugin's init returns, then mounted after the plugin pass)",
-      Printable(pluginId).c_str(), label.c_str(), view.record_count(), view.chunk_count(), levels, view.override_count(),
-      static_cast<unsigned long long>(desc->size), static_cast<unsigned long long>(range.file_offset));
+      Printable(pluginId).c_str(), label.c_str(), view.record_count(), view.chunk_count(), levels,
+      view.override_count(), static_cast<unsigned long long>(desc->size),
+      static_cast<unsigned long long>(range.file_offset));
   return NEVR_RESOURCES_OK;
 }
 
@@ -632,8 +633,8 @@ void SummarizeReads() {
     const std::string plugin =
         user != 0 && user - 1 < sets.size() ? Printable(sets[user - 1]->plugin.c_str()) : std::string("unknown");
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.RESOURCE] resource set keys answered by the game's manifest count=%llu first=%s plugin=%s (a package set "
-        "added after the mount holds keys a plugin's set holds; the game's bytes are served for them)",
+        "[NEVR.RESOURCE] resource set keys answered by the game's manifest count=%llu first=%s plugin=%s (a package "
+        "set added after the mount holds keys a plugin's set holds; the game's bytes are served for them)",
         static_cast<unsigned long long>(stockWins),
         KeyText(published->firstWinType.load(), published->firstWinName.load()).c_str(), plugin.c_str());
   }
