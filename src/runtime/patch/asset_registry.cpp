@@ -120,8 +120,9 @@ std::string Registry::ReportJson() const {
         j["bytes"] = a.size;
         out.push_back(std::move(j));
     }
-    // `replace`: a label comes from plugin code; dump() throws on invalid UTF-8 by default and the login must
-    // not fail over a label.
+    // Labels pass the label rule (resource_label.h) before they are stored, so they are valid ASCII here. `replace` is
+    // defense in case a future path stores one that does not: dump() throws on invalid UTF-8 by default and the login
+    // must not fail over a label.
     return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
