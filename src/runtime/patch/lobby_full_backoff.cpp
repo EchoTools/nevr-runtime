@@ -268,7 +268,7 @@ void FailureCbHook(void* lobbyClient, void* msg) {
     refusal = g_policy.OnLobbyFull(now);
   }
   if (refusal.gaveUp) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.LOBBY] full lobby: refused %d times, giving up for %llu ms",
+    Log(EchoVR::LogLevel::Warning, "[NEVR.LOBBY] full lobby: refused %d times, giving up for %llu ms",
         refusal.count, static_cast<unsigned long long>(refusal.delayMs));
   } else {
     Log(EchoVR::LogLevel::Info, "[NEVR.LOBBY] full lobby: refused %d of %d, next join in %llu ms", refusal.count,
@@ -281,13 +281,13 @@ void HookChecked(std::uint64_t va, const std::array<std::uint8_t, Size>& prologu
                  const char* name) {
   void* target = nevr::ResolveVA_Checked(g_gameBase, va);
   if (!nevr::ValidatePrologue(target, prologue.data(), prologue.size())) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.LOBBY] %s hook skipped va=0x%llx reason=prologue_mismatch\n", name,
+    nevr_boot_log_tee::TeeFprintf("[NEVR.LOBBY] warn; %s hook skipped va=0x%llx reason=prologue_mismatch\n", name,
                                   static_cast<unsigned long long>(va));
     return;
   }
   original = reinterpret_cast<Fn>(target);
   if (PatchDetour(&original, detour, name))
-    nevr_boot_log_tee::TeeFprintf("[NEVR.LOBBY] %s hook installed va=0x%llx\n", name, static_cast<unsigned long long>(va));
+    nevr_boot_log_tee::TeeFprintf("[NEVR.LOBBY] info; %s hook installed va=0x%llx\n", name, static_cast<unsigned long long>(va));
 }
 
 }  // namespace
@@ -298,7 +298,7 @@ void Install(std::uintptr_t gameBase) {
   if (nevr::ValidatePrologue(getPartyLobbyId, kGetPartyLobbyIdPrologue.data(), kGetPartyLobbyIdPrologue.size())) {
     g_getPartyLobbyId = reinterpret_cast<GetPartyLobbyIdFn>(getPartyLobbyId);
   } else {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.WS] party follow dedup off reason=prologue_mismatch va=0x%llx\n",
+    nevr_boot_log_tee::TeeFprintf("[NEVR.WS] warn; party follow dedup off reason=prologue_mismatch va=0x%llx\n",
                                   static_cast<unsigned long long>(kGetPartyLobbyIdVA));
   }
   HookChecked(kJoinPartyLobbyVA, kJoinPartyLobbyPrologue, g_originalJoinPartyLobby,

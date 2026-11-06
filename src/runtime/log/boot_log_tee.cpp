@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "core/json_escape.h"
+#include "core/log_level.h"
 #include "core/logging.h"  // GetRunId (N80), SetBootLogSink, GetLogLevelString
 #include "runtime/log/boot_lines.h"
 #include "runtime/log/run_log_writer.h"
@@ -25,11 +26,16 @@ static std::atomic<bool> g_boot_active{false};  // Init() to Close(), the boot p
 // when there is no tag.
 static void ReportBootLog(EchoVR::LogLevel level, const CHAR* msg) {
     const char* const lvl = GetLogLevelString(level);
+    // #2245: a level with no name is written "unknown" with the number it came with, never as info.
+    char raw[32] = "";
+    if (nevr_log_level::Name(static_cast<std::uint32_t>(level)) == nullptr) {
+        std::snprintf(raw, sizeof(raw), "level_raw=%d ", static_cast<int>(level));
+    }
     const char* const tagEnd = msg[0] == '[' ? std::strchr(msg, ']') : nullptr;
     if (tagEnd != nullptr && tagEnd[1] == ' ') {
-        nevr_boot_log_tee::TeeFprintf("%.*s %s; %s\n", static_cast<int>(tagEnd + 1 - msg), msg, lvl, tagEnd + 2);
+        nevr_boot_log_tee::TeeFprintf("%.*s %s; %s%s\n", static_cast<int>(tagEnd + 1 - msg), msg, lvl, raw, tagEnd + 2);
     } else {
-        nevr_boot_log_tee::TeeFprintf("%s; %s\n", lvl, msg);
+        nevr_boot_log_tee::TeeFprintf("%s; %s%s\n", lvl, raw, msg);
     }
 }
 
@@ -44,7 +50,7 @@ void nevr_boot_log_tee::Init() {
     // the filter and the host write to; there is no separate boot file. The writer makes the file on the first record.
     // A run that cannot open it says so on standard error and the boot lines stay on stderr (the writer is loud, never silent).
     // The line's own text keeps "boot log opened run=" (tests/smoke/score-log.sh reads it).
-    TeeFprintf("[NEVR.PATCH] boot log opened run=%s path=%s\n", GetRunId(), nevr_run_log_writer::Path());
+    TeeFprintf("[NEVR.PATCH] info; boot log opened run=%s path=%s\n", GetRunId(), nevr_run_log_writer::Path());
 }
 
 void nevr_boot_log_tee::TeeFprintf(const char* fmt, ...) {

@@ -34,11 +34,11 @@ inline bool IsNevrImageName(const char* name) {
 // The line initialize.cpp writes before CLI parsing. A Wine process may later become a server.
 inline const char* BootLine(InstallResult result) {
   switch (result) {
-    case InstallResult::Installed: return "[NEVR.CRASH] veh installed\n";
-    case InstallResult::DeferredWine: return "[NEVR.CRASH] veh deferred reason=wine_cli_unknown\n";
-    case InstallResult::Failed: return "[NEVR.CRASH] veh install failed\n";
+    case InstallResult::Installed: return "[NEVR.CRASH] info; veh installed\n";
+    case InstallResult::DeferredWine: return "[NEVR.CRASH] info; veh deferred reason=wine_cli_unknown\n";
+    case InstallResult::Failed: return "[NEVR.CRASH] warn; veh install failed\n";
   }
-  return "[NEVR.CRASH] veh install failed\n";
+  return "[NEVR.CRASH] warn; veh install failed\n";
 }
 
 }  // namespace nevr_veh_policy
