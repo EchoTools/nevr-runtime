@@ -205,6 +205,16 @@ built in a fixed buffer (`JsonLine`, no heap, no lock) and written with one `Wri
 |         | diagnostics. The individual boot-step lines (`[NEVR.BOOT] installing X`)    |            |
 |         | live here; INFO gets the summary (`boot complete: N hooks`).                |            |
 
+**The level a record carries.** A record's `level` is the level its line was given, mapped in one place,
+`src/core/log_level.h` (`nevr_log_level`): the game's CLog levels and `EchoVR::LogLevel` are one numbering (1 debug,
+2 info, 4 warning, 8 error; echovr.exe `CLog::DefaultHandler` 0x1400eba20), written `debug`, `info`, `warn`, `error`.
+A level with no name is written `unknown` with the number beside it (`level_raw` in the filter's record,
+`log/run_log_record.h`; `unknown; level_raw=<n>` after the tag of a boot line); it is never written `info`, and
+`min_level` never drops it. A boot line states its level after its tag (Rule 12); one that states none is recorded
+`unknown`. The game's error dialog (echovr.exe 0x1400ea730, the box that says the game cannot start) logs its title
+and message at info; the runtime hooks it (`log/error_dialog_level.h`), and a line logged while it runs is recorded at
+`error` with `game_level` keeping the level the game gave it.
+
 **Anti-patterns by level:**
 
 - **ERROR used for routine failures:** A login rejection with a

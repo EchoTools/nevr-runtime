@@ -35,8 +35,8 @@ std::string FormatUrlDiagnostic(std::string_view prefix, std::string_view url, s
 }
 
 std::string FormatUrlPairDiagnostic(std::string_view prefix, std::string_view firstUrl,
-                                            std::string_view separator, std::string_view secondUrl,
-                                            std::string_view suffix) {
+                                    std::string_view separator, std::string_view secondUrl,
+                                    std::string_view suffix) {
   std::string message;
   message.reserve(prefix.size() + firstUrl.size() + separator.size() + secondUrl.size() + suffix.size());
   message.append(prefix);

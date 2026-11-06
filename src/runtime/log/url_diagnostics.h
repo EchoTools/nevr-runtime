@@ -11,10 +11,9 @@ std::string UrlForDiagnostics(std::string_view url);
 
 // Format complete log messages from fixed labels and endpoint values.
 // Callers emit the result with Log(level, "%s", message.c_str()).
-std::string FormatUrlDiagnostic(std::string_view prefix, std::string_view url,
-                                        std::string_view suffix = {});
+std::string FormatUrlDiagnostic(std::string_view prefix, std::string_view url, std::string_view suffix = {});
 std::string FormatUrlPairDiagnostic(std::string_view prefix, std::string_view firstUrl,
-                                            std::string_view separator, std::string_view secondUrl,
-                                            std::string_view suffix = {});
+                                    std::string_view separator, std::string_view secondUrl,
+                                    std::string_view suffix = {});
 
 }  // namespace nevr_log_diagnostics
