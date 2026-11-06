@@ -13,6 +13,8 @@
 
 #include "quest/combat/refresh_rate.h"
 
+#include <sys/mman.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -22,6 +24,7 @@
 
 #include "hook_log.h"
 #include "nevr/symbol_hash.h"
+#include "pinned_targets.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_install.h"
 #include "quest/combat/combat_tick.h"
@@ -486,6 +489,83 @@ void TheCombatOnlyModeDoesNotCountTheLobby() {
   Done();
 }
 
+// The production re-ask: it reads the word now in vrapi_SetDisplayRefreshRate's slot of libr15 at every ask and calls it, so a hook installed on
+// the slot after the module installed (the render-configuration thunk) sees the call. A missing image or an empty word asks nothing and
+// answers -1.
+struct SlotFixture {
+  alignas(16) unsigned char mem[0x4000] = {};
+  sentinel::ElfImage image{};
+};
+SlotFixture* g_slotFixture = nullptr;
+std::vector<float> g_slotCalls;
+int g_firstWordCalls = 0;
+int FirstWord(void*, float hz) noexcept {
+  ++g_firstWordCalls;
+  g_slotCalls.push_back(hz);
+  return 11;
+}
+int SecondWord(void*, float hz) noexcept {
+  g_slotCalls.push_back(hz + 1000.0f);
+  return 22;
+}
+bool FixtureLookup(const char* module, sentinel::ElfImage* out) {
+  if (g_slotFixture == nullptr || std::strcmp(module, "libr15.so") != 0) return false;
+  *out = g_slotFixture->image;
+  return true;
+}
+// The pinned slot's offset from the image base: far beyond a small fixture, so the base is chosen to put the slot inside it.
+void** SlotIn(SlotFixture& f) {
+  const std::uint64_t slot = *sentinel::pinned::LibR15SetDisplayRefreshRate().slotVaddr;
+  return reinterpret_cast<void**>(f.image.base + slot);
+}
+
+void TheProductionReaskCallsTheWordNowInTheSlot() {
+  // A block big enough to hold the pinned slot: the slot's vaddr is 0x36ec5f0, so map that much (sparse, untouched pages are free).
+  const std::size_t size = 0x3800000;
+  void* const block = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  QCHECK(block != MAP_FAILED);
+  static SlotFixture fixture;
+  fixture.image.base = reinterpret_cast<std::uintptr_t>(block);
+  g_slotFixture = &fixture;
+  g_slotCalls.clear();
+  g_firstWordCalls = 0;
+
+  World(bv::Variant::kCombat);
+  rr::SetAskForTest(nullptr);  // the production ask
+  rr::SetImageLookupForTest(&FixtureLookup);
+  rr::InstallNormal();
+  GameAsks(120.0f);  // the session rate and the ovr pointer
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+
+  *SlotIn(fixture) = reinterpret_cast<void*>(&FirstWord);
+  Frame();
+  QCHECK(g_slotCalls.size() == 1U && g_slotCalls[0] == 90.0f && g_firstWordCalls == 1);
+
+  // A word put in the slot afterwards (a hook installed later) is the one the next re-ask reaches, not the word the slot held before.
+  *SlotIn(fixture) = reinterpret_cast<void*>(&SecondWord);
+  ClearGame();
+  Frame();
+  QCHECK(g_slotCalls.size() == 2U && g_slotCalls[1] == 1120.0f && g_firstWordCalls == 1);
+  QCHECK(Lines("combat_refresh_rate_switch").size() == 2U && Has(Lines("combat_refresh_rate_switch")[1].text, "\"rc\":22"));
+
+  // An empty word: nothing is called, and the switch line says the answer was -1.
+  *SlotIn(fixture) = nullptr;
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame();
+  QCHECK(g_slotCalls.size() == 2U);
+  const std::vector<Line> sw = Lines("combat_refresh_rate_switch");
+  QCHECK(sw.size() == 3U && Has(sw[2].text, "\"rc\":-1"));
+
+  // No libr15: the same.
+  g_slotFixture = nullptr;
+  ClearGame();
+  Frame();
+  QCHECK(g_slotCalls.size() == 2U && Lines("combat_refresh_rate_switch").size() == 4U);
+  rr::SetImageLookupForTest(nullptr);
+  Done();
+  munmap(block, size);
+}
+
 }  // namespace
 
 int main() {
@@ -502,6 +582,7 @@ int main() {
   NothingIsAskedWhileTheGamesRateIsAtOrBelowTheLevelRate();
   TheRuleOffNeverChangesARateAndLogsTheWitness();
   TheCombatOnlyModeDoesNotCountTheLobby();
+  TheProductionReaskCallsTheWordNowInTheSlot();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "refresh_rate_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

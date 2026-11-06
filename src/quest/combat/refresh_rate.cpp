@@ -61,6 +61,7 @@ std::atomic<long> g_reaskThread{0};
 
 std::atomic<AskFn> g_ask{nullptr};
 std::atomic<int> g_quest2Override{-1};
+std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<double (*)() noexcept> g_clock{nullptr};
 
 long ThisThread() noexcept { return static_cast<long>(syscall(SYS_gettid)); }
@@ -113,7 +114,9 @@ Rule PublishedRule() noexcept {
 // when that hook is not installed), so the call goes through the manager's chain as the game's own call does.
 int AskThroughTheSlot(void* ovr, float hz) noexcept {
   sentinel::ElfImage image{};
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return -1;
+  sentinel::ImageLookup lookup = g_lookup.load(std::memory_order_acquire);
+  if (lookup == nullptr) lookup = &sentinel::FindLoadedImage;
+  if (!lookup(sentinel::pinned::kLibR15, &image)) return -1;
   const sentinel::GotTarget target = sentinel::pinned::LibR15SetDisplayRefreshRate();
   if (!target.slotVaddr.has_value()) return -1;
   void** const slot = reinterpret_cast<void**>(image.base + *target.slotVaddr);
@@ -277,6 +280,7 @@ Stats CurrentStats() noexcept {
 }
 
 void SetAskForTest(AskFn fn) noexcept { g_ask.store(fn, std::memory_order_release); }
+void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept { g_lookup.store(lookup, std::memory_order_release); }
 void SetQuest2ForTest(int quest2) noexcept { g_quest2Override.store(quest2, std::memory_order_relaxed); }
 void SetClockForTest(double (*clock)() noexcept) noexcept { g_clock.store(clock, std::memory_order_release); }
 
@@ -294,6 +298,7 @@ void ResetForTest() noexcept {
   g_sent.store(-1.0f);
   g_nextLook = 0.0;
   g_reaskThread.store(0);
+  g_lookup.store(nullptr);
 }
 
 }  // namespace nevr_quest::combat::refresh_rate

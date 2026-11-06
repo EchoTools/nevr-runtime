@@ -49,6 +49,7 @@
 #include <cstdint>
 
 #include "quest/combat/combat_install.h"
+#include "quest/sentinel/got_hook.h"
 
 namespace nevr_quest::combat::refresh_rate {
 
@@ -107,6 +108,9 @@ Stats CurrentStats() noexcept;
 // restores production.
 using AskFn = int (*)(void* ovr, float hz) noexcept;
 void SetAskForTest(AskFn fn) noexcept;
+// How the re-ask finds libr15 (production: the loaded image). The re-ask reads vrapi_SetDisplayRefreshRate's slot in the image this finds
+// each time it asks, so a test with a word of its own in a block of memory drives the production path. nullptr restores production.
+void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept;
 // Whether the headset is a Quest 2 (production: ro.product.device is "hollywood"). -1 restores production.
 void SetQuest2ForTest(int quest2) noexcept;
 // The monotonic clock in seconds (nullptr restores CLOCK_MONOTONIC).

@@ -17,6 +17,8 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <sys/mman.h>
+
 #include <thread>
 #include <vector>
 
@@ -290,8 +292,31 @@ struct FakeGame {
 FakeGame g_fakeGame;
 double g_fakeNow = 100.0;
 double FakeClock() noexcept { return g_fakeNow; }
-// The tick's re-ask, through the thunk entry the slot holds: the render-configuration handler.
-int AskThroughTheThunk(void* ovr, float hz) noexcept { return Entry<RefreshT>()(static_cast<OvrMobileOpaque*>(ovr), hz); }
+// libr15 as the rule's production re-ask finds it: a block of memory whose vrapi_SetDisplayRefreshRate slot holds the render-configuration
+// thunk's entry, so the re-ask is the game's own call through the slot and reaches the handler.
+constexpr std::size_t kLibr15Block = 0x3800000;
+unsigned char* g_libr15Block = nullptr;
+sentinel::ElfImage g_libr15Image;
+bool Libr15Lookup(const char* module, sentinel::ElfImage* out) {
+  if (g_libr15Block == nullptr || std::strcmp(module, pinned::kLibR15) != 0) return false;
+  *out = g_libr15Image;
+  return true;
+}
+void PutLibr15() {
+  void* const block = mmap(nullptr, kLibr15Block, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  QCHECK(block != MAP_FAILED);
+  g_libr15Block = static_cast<unsigned char*>(block);
+  g_libr15Image = sentinel::ElfImage{};
+  g_libr15Image.base = reinterpret_cast<std::uintptr_t>(block);
+  void** const slot = reinterpret_cast<void**>(g_libr15Image.base + *pinned::LibR15SetDisplayRefreshRate().slotVaddr);
+  *slot = RefreshT::EntryAddress();  // what the render-configuration install leaves in the slot
+  rr::SetImageLookupForTest(&Libr15Lookup);
+}
+void DropLibr15() {
+  rr::SetImageLookupForTest(nullptr);
+  if (g_libr15Block != nullptr) munmap(g_libr15Block, kLibr15Block);
+  g_libr15Block = nullptr;
+}
 
 void ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer() {
   Capture capture;
@@ -299,7 +324,7 @@ void ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer() {
   combat::SetVariant(nevr_quest::build_variant::Variant::kCombat);
   combat::Resolve(/*devBuild=*/false, /*forceAsked=*/false);
   rr::SetQuest2ForTest(0);
-  rr::SetAskForTest(&AskThroughTheThunk);
+  PutLibr15();
   rr::SetClockForTest(&FakeClock);
   g_fakeGame = FakeGame{};
   QCHECK(rr::InstallNormal().installed);
@@ -335,7 +360,7 @@ void ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer() {
   g_fakeNow += 1.0;
   rr::Tick(g_fakeGame.Address());
   QCHECK(g_refreshCalls == 4 && g_refreshSeen == 120.0f);
-  rr::SetAskForTest(nullptr);
+  DropLibr15();
   rr::SetQuest2ForTest(-1);
   rr::SetClockForTest(nullptr);
   combat::tick::ResetForTest();
@@ -346,7 +371,7 @@ void ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer() {
 void AReleaseApkKeepsTheGamesOwnRateWhateverIsLoaded() {
   Capture capture;
   ResetAll();
-  rr::SetAskForTest(&AskThroughTheThunk);
+  PutLibr15();
   rr::SetClockForTest(&FakeClock);
   g_fakeGame = FakeGame{};
   g_fakeGame.Load(EchoVR::CSymbol64Hash("mpl_combat_fission"));
@@ -363,7 +388,7 @@ void AReleaseApkKeepsTheGamesOwnRateWhateverIsLoaded() {
   QCHECK(rc::PollOnce(kFake));
   const std::vector<std::string> lines = Lines("render_config");
   QCHECK(lines.size() == 1 && Field(lines[0], "refresh_requested_hz") == "120.0");
-  rr::SetAskForTest(nullptr);
+  DropLibr15();
   rr::SetClockForTest(nullptr);
 }
 
