@@ -6935,7 +6935,7 @@ TEST(XpidPatchBoot, AMismatchRecordsSiteExpectedAndActualBytesInTheBootLogNotLog
     }
     char expected[160];
     snprintf(expected, sizeof(expected),
-             "[NEVR.XPID] dash prefix mismatch rva=0x%X expected=50534e2d actual=58595a2d",
+             "[NEVR.XPID] warn; dash prefix mismatch rva=0x%X expected=50534e2d actual=58595a2d",
              static_cast<unsigned>(nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX));
     EXPECT_NE(written.find(expected), std::string::npos) << "boot log was:\n" << written;
     EXPECT_FALSE(TestLogContains("[NEVR.XPID]")) << "the XPID boot path must not call Log()";
