@@ -29,6 +29,7 @@ NEVR_ROOT_RELATIVE = pathlib.Path("echovr/.wineprefix/drive_c/users") / getpass.
 LOCATIONS = {
     "local": pathlib.Path("echovr/_local/.credentials.json"),
     "local-backup": pathlib.Path("echovr/_local/.credentials.json.prod-bak"),
+    "local-bak": pathlib.Path("echovr/_local/.credentials.json.bak"),
     "nevr-root": NEVR_ROOT_RELATIVE / ".credentials.json",
 }
 SCRIPTS = ("launch-client.sh", "launch-server.sh", "verify-server.sh")
@@ -184,27 +185,22 @@ class CopyCredentialsGuardTest(unittest.TestCase):
         return "\n".join(ln.strip() for ln in lines[opening + 1:closing])
 
     def test_the_make_it_safe_block_lists_moves_and_removes_every_sign_in_file(self):
-        # The "Make it safe" block of AGENTS.md, run as written on a fake copy: every sign-in file is listed, moved into
-        # the holding directory, and the holding directory is removed (the block names that removal in its comment).
+        # The "Make it safe" block of AGENTS.md, run as written on a fake copy, removal included: every sign-in file
+        # is listed, moved into the holding directory, and the block's own last line removes that directory. The
+        # end state is checked, not a comment: no sign-in file anywhere in the copy, the holding directory gone.
         # Two sign-in files share a name (`.credentials.json` in _local and in the nevr root), so the move must keep
         # each file's own path, or one stays in the copy.
         block = self.recipe_block()
-        self.assertIn("rm -r -- <copy>/to-delete", block, "the block does not name the removal of the holding directory")
         planted = [self.plant(where) for where in LOCATIONS]
         keep = self.game_root / "echovr/_local/keep.json"
         keep.write_text("{}")
-        holding = self.game_root / "to-delete"
         done = subprocess.run(["bash", "-c", block.replace("<copy>", str(self.game_root))], cwd=self.tmp,
                               capture_output=True, text=True, timeout=60)
         self.assertEqual(sorted(done.stdout.splitlines()), sorted(str(path) for path in planted),
                          "the listing does not name every sign-in file " + done.stderr)
-        self.assertEqual(sorted(p.name for p in holding.iterdir()),
-                         sorted(str(path).replace("/", "_") for path in planted),
-                         "a sign-in file was not moved into the holding directory " + done.stderr)
-        self.assertFalse(any(path.exists() for path in planted), "a sign-in file was left in the copy")
-        shutil.rmtree(holding)  # the removal the block names: rm -r -- <copy>/to-delete
-        self.assertFalse(holding.exists())
-        self.assertEqual(list(self.game_root.rglob(".credentials.json*")), [])
+        self.assertFalse((self.game_root / "to-delete").exists(), "the block did not remove its holding directory")
+        self.assertEqual(list(self.game_root.rglob(".credentials.json*")), [],
+                         "a sign-in file is still in the copy " + done.stderr)
         self.assertTrue(keep.exists(), "an unrelated file was removed")
 
     def test_every_script_that_finds_the_install_goes_through_the_one_guard(self):
