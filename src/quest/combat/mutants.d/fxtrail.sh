@@ -82,3 +82,10 @@ runm sh_ci_guards_line_key $CI "s/{\"voipdrop\", config.voipdrop.on ? 1 : 0}, {\
 runm sh_ci_guards_line_src $CI "s/{\"peerclamp_source\", source(config.peerclamp.source)}/{\"peerclamp_source\", \"default\"}/" quest-host-combat combat_install_test
 runm sh_ci_guards_line_stage1 $CI "s/{\"droneguard_stage1\", config.droneguardStage1.on ? 1 : 0}/{\"droneguard_stage1\", 0}/" quest-host-combat combat_install_test
 runm sh_ci_order           $CI "s/    Module{\"fxtrail\", nullptr, \&FxtrailNormal, \&fxtrail::NoteEnd},/    Module{\"fxtrail\", nullptr, \&FxtrailNormal, \&fxtrail::NoteEnd}, Module{\"fxtrail\", nullptr, \&FxtrailNormal, \&fxtrail::NoteEnd},/" quest-host-combat combat_install_test
+# the guards' switches are one combat_config_switch record each, generated from the registration table (review B3)
+runm sh_ci_switch_none     $CI "s/      if (sw.key == nullptr || sw.member == nullptr) continue;/      continue;/" quest-host-combat combat_install_test
+runm sh_ci_switch_on       $CI "s/{\"on\", value.on ? 1 : 0}, {\"source\", source(value.source)}/{\"on\", 1}, {\"source\", source(value.source)}/" quest-host-combat combat_install_test
+runm sh_ci_switch_source   $CI "s/{\"on\", value.on ? 1 : 0}, {\"source\", source(value.source)}/{\"on\", value.on ? 1 : 0}, {\"source\", \"default\"}/" quest-host-combat combat_install_test
+runm sh_ci_switch_second   $CI "s/{module.switchKey2, module.switchMember2}/{nullptr, nullptr}/" quest-host-combat combat_install_test
+runm sh_ci_row_member      $CI "s/\"combat.fxtrail\", \&nevr_quest::CombatConfig::fxtrail}/\"combat.fxtrail\", \&nevr_quest::CombatConfig::voipdrop}/" quest-host-combat combat_install_test
+runm sh_ci_row_key         $CI "s/\"combat.peerclamp\", \&nevr_quest::CombatConfig::peerclamp}/\"combat.peerclamps\", \&nevr_quest::CombatConfig::peerclamp}/" quest-host-combat combat_install_test

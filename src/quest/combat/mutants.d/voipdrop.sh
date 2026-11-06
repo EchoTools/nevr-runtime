@@ -90,3 +90,6 @@ runm vd_qc_default_off     $QC "s/  r.config.combat.voipdrop = ReadCombatSwitch(
 runm vd_qc_key_typo        $QC "s/kCombatVoipdropKey = \"combat.voipdrop\";/kCombatVoipdropKey = \"combat.voipdrops\";/" quest-host-shared quest_config_test
 runm vd_qc_not_assigned    $QC "s/  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r);/  (void)ReadCombatSwitch(cfg, kCombatVoipdropKey, r);/" quest-host-shared quest_config_test
 runm vd_nc_known_key       src/core/nevr_config.cpp "s/\"fxtrail\", \"voipdrop\",/\"fxtrail\",/" quest-host-shared quest_config_test
+# the free head is a plain load; a null receiver goes to the game's function untouched
+runm vd_plain_null_unchecked $F "s/  const std::int32_t head = self != nullptr ? \*reinterpret_cast<const volatile std::int32_t\*>(cs + kFreeHead) : 0;/  const std::int32_t head = *reinterpret_cast<const volatile std::int32_t*>(cs + kFreeHead);/"
+runm vd_plain_load_wrong_off $F "s/\*reinterpret_cast<const volatile std::int32_t\*>(cs + kFreeHead)/*reinterpret_cast<const volatile std::int32_t*>(cs + kFreeHead + 4)/"

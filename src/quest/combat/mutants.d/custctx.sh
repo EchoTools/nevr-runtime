@@ -151,3 +151,9 @@ QC=src/quest/sentinel/quest_config.cpp
 runm cc_qc_default_off     $QC "s/  r.config.combat.custctx = ReadCombatSwitch(cfg, kCombatCustctxKey, r);/  r.config.combat.custctx = ReadCombatSwitch(cfg, kCombatCustctxKey, r, false);/" quest-host-shared quest_config_test
 runm cc_qc_key_typo        $QC "s/kCombatCustctxKey = \"combat.custctx\";/kCombatCustctxKey = \"combat.custctxs\";/" quest-host-shared quest_config_test
 runm cc_qc_not_assigned    $QC "s/  r.config.combat.custctx = ReadCombatSwitch(cfg, kCombatCustctxKey, r);/  (void)ReadCombatSwitch(cfg, kCombatCustctxKey, r);/" quest-host-shared quest_config_test
+# the pool refusal is scoped to a combat map or lobby (review B2); the scope's tick is asked for at install
+runm cc_scope_ignored      $F "s/scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/RtLow(\&used, \&cap);/"
+runm cc_scope_inverted     $F "s/scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/!scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/"
+runm cc_scope_map_only     $F "s/scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/scope::InCombatMap() ? RtLow(\&used, \&cap) : false;/"
+runm cc_start_not_asked    $F "s/  const bool scoped = scope::Start();/  const bool scoped = true;/"
+runm cc_start_always_off   $F "s/{\"pool_refusal\", scoped ? \"combat_map_or_lobby\" : \"off_no_tick\"}/{\"pool_refusal\", \"combat_map_or_lobby\"}/"

@@ -106,3 +106,6 @@ runm dg_qc_key_typo       $QC "s/kCombatDroneguardKey = \"combat.droneguard\";/k
 runm dg_qc_stage1_typo    $QC "s/kCombatDroneguardStage1Key = \"combat.droneguard_stage1\";/kCombatDroneguardStage1Key = \"combat.droneguard_stage\";/" quest-host-shared quest_config_test
 runm dg_qc_not_assigned   $QC "s/  r.config.combat.droneguard = ReadCombatSwitch(cfg, kCombatDroneguardKey, r);/  (void)ReadCombatSwitch(cfg, kCombatDroneguardKey, r);/" quest-host-shared quest_config_test
 runm dg_nc_known_key      src/core/nevr_config.cpp "s/\"droneguard\", \"droneguard_stage1\", /\"droneguard_stage1\", /" quest-host-shared quest_config_test
+# the fast path is plain loads; a null component goes to the game's function untouched
+runm dg_plain_null_unchecked $F "s/  if (cs == 0) return false;//"
+runm dg_plain_flags_wrong    $F "s/\*reinterpret_cast<const volatile std::uint8_t\*>(cs + kOffHandleFlags)/*reinterpret_cast<const volatile std::uint8_t*>(cs + kOffHandleFlags + 1)/"
