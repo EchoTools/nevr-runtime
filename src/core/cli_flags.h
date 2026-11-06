@@ -37,6 +37,7 @@ inline constexpr FlagSpec kFlags[] = {
     {L"-upnp", nullptr},
     {L"-timestep", nullptr},
     {L"-require-signed-plugins", nullptr},
+    {L"-no-update", nullptr},
     // The game's own tokens that NEVR reads as well (it registers them so the game's parser accepts them).
     {L"-region", nullptr},
     {L"-serverregion", nullptr},

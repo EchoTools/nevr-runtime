@@ -318,6 +318,23 @@ pub unsafe extern "C" fn NevrPcStage(s: *mut NevrSession, root_dir: *const c_cha
     })
 }
 
+/// Records that the runtime refused the staged release (`version`, whose runtime has `runtime_sha256`) after its own Authenticode check:
+/// the next `NevrPcStage` answers `none` with reason `discarded` for that release and fetches nothing. `reason` is a lowercase word.
+///
+/// # Safety
+/// String arguments are NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn NevrPcDiscard(s: *mut NevrSession, root_dir: *const c_char, version: *const c_char, runtime_sha256: *const c_char, reason: *const c_char) -> i32 {
+    let (root_dir, version, sha, reason) = match (cstr(root_dir), cstr(version), cstr(runtime_sha256), cstr(reason)) {
+        (Ok(a), Ok(b), Ok(c), Ok(d)) => (a.to_string(), b.to_string(), c.to_string(), d.to_string()),
+        _ => return NEVR_BAD_ARGUMENT,
+    };
+    with_session(s, |s| {
+        s.pc_discard(std::path::Path::new(&root_dir), &version, &sha, &reason)?;
+        Ok(NEVR_OK)
+    })
+}
+
 /// Ends the run: writes `run_end`. `state` is one of installed, unchanged, restored, needs-user.
 ///
 /// # Safety
