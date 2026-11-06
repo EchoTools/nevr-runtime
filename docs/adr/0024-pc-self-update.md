@@ -336,6 +336,18 @@ its journal), `RuntimeLoader::LoadAtStart` (`runtime_load.cpp`: the swap, the lo
   `init_failed` (the runtime stays mapped) `MarkPendingFailed` writes `failed_reason` into `pending.json` (the first
   failure stays), logs `update_rollback mode=next_start outcome=scheduled`, and the stop notice says NEVR was updated,
   could not start, and will be put back at the next start (`RuntimeLoadResult::update_failed`).
+- **A record is built from what the host verified.** The swap's journal carries the sha256 of every file that moves in
+  (`in_sha256`) and of the runtime that moves out (`from_sha256`), and the rollback's carries the sha256 of every file that
+  comes back, read before anything moves (`previous_unreadable` refuses the rollback when one cannot be read). The cleanup
+  at `done` writes `owned`, `current` and `pending.json` from those, never from a re-read that can fail on a file another
+  program holds: a file that is gone is skipped, one that is only held is still recorded. A journal without them (an
+  older one) falls back to reading, and a file that cannot be read leaves the cleanup for the next start.
+- **Every start on a pending release says so** (`update_trial`): `counted` with the new `boot_attempts`, or `not_counted`
+  with why (a runtime in use, a swap's cleanup finished, a runtime the host cannot open for write, a count that could
+  not be written).
+- **When the previous release cannot be restored in the same start**, the failed release stays in the root and is marked
+  (`failed_reason`; the first failure stays), so the next start tries again; the `update_rollback` record of a runtime in use
+  says whether the mark was made (`marked`).
 - **A rollback that is interrupted is completed**, never undone: the next start reads the journal by `kind` and `phase`
   (`update_swap outcome=recovered kind=rollback`). Every step can be run again, because a file moves only when it is still
   where the journal says it was.
@@ -345,7 +357,7 @@ its journal), `RuntimeLoader::LoadAtStart` (`runtime_load.cpp`: the swap, the lo
   `crash_marker` record (`outcome` `written` or `failed` with `win32_error`). A crash with no `pending.json` makes no
   folder and no file.
 - **What the open questions settled.** Q1: the host skips the swap while a release is pending (above); the runtime should
-  not publish `staged.json` while one is pending either (step 3). Q2: the swap writes `owned` at `done`, and the rollback
+  not publish `staged.json` while one is pending either (step 4). Q2: the swap writes `owned` at `done`, and the rollback
   rewrites it. Q3: a root runtime with no `NEVR-BUILD` version blocks the swap (section 4, item 9). Q4: a rollback
   deferred because the runtime is in use increments nothing. Q5: a start that "stops" stops the game (`update_blocked`).
 
@@ -381,6 +393,7 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | runtime | `update published` | `version`, `files` |
 | host | `update_swap` | `outcome` (`swapped`, `deferred`, `blocked`, `discarded`, `recovered`), `reason`, `from`, `to`, `files` (path, sha256), `elapsed_ms` |
 | host | `update_rollback` | `mode` (`in_process`, `next_start`), `reason`, `from` (the failed release), `to` (the restored one), `outcome` (`rolled_back`, `scheduled`, `deferred`, `failed`, `blocked`, `discarded`), `boot_attempts`, `files`, `elapsed_ms` |
+| host | `update_trial` | one per start on a pending release: `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`), `release`, `boot_attempts` (after the start), `elapsed_ms` |
 | host | `crash_marker` | `outcome` (`written`, `failed`), `win32_error`, `path`, `thread` |
 | runtime | `update confirmed` | `version`, `after_ms`, `role` (`client`, `server`) |
 
@@ -510,9 +523,14 @@ Each step is its own pull request with its own issue under #1200, mergeable and 
 2. The host: the swap, the journal, recovery, the pending record, the crash marker, the capability word and rollback. Needs
    the runtime in the root (#855); the plugin half needs #856. The capability word is an appended field of `NevrHostContext`
    and moves `kMinor` (shared by both descriptors) to 2; the size pin of the context in `runtime_abi.h` moves with it.
-3. The runtime: the worker, the config keys and flag, the confirmation, the static link of the core. After steps 1 and 2.
-4. The installer: `pc install` writes the update state and clears the folders (after the installer front ends, #1149, and the
-   root layout in the core, after #855).
+3. The installer: `pc install` writes the update state and clears the folders (after the installer front ends, #1149, and the
+   root layout in the core, after #855). It comes before the runtime's worker, because the first release a player can
+   receive is the first one that can fail to start, and the stop text of a failed update tells the player to reinstall:
+   until the installer clears `update\`, a reinstall of the same release leaves `pending.json` and the journal in place
+   and the start stops again (`no_previous`).
+4. The runtime: the worker, the config keys and flag, the confirmation, the static link of the core. After steps 1, 2 and
+   3. The host sets the capability bit from step 2 on, but nothing stages a release until this step, so no player reaches
+   `update_blocked` before the installer can clear it.
 5. A first release that carries a swapping host: players move to it with the installer once; from then on self-update runs.
 6. Later: a periodic check for a long-running server, per-role confirmation, an in-game notice, signed plugins from the
    release pipeline, and the Quest counterpart (ADR 0023 section 7).

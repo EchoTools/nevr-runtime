@@ -141,6 +141,9 @@ JsonRead ReadJsonFile(const std::wstring& path, json* out, DWORD* error) {
 // The bytes, sha256 and NEVR-BUILD version of a file in the root. Empty fields when it cannot be read.
 struct FileFacts {
   bool present = false;
+  // The file is there (or may be) and could not be read: another program holds it, access is denied. Never the same as
+  // absent, and never written into a record as if it were (ADR 0024, section 4.9).
+  bool unreadable = false;
   std::string sha256;
   std::string version;
 };
@@ -149,12 +152,18 @@ FileFacts FactsOf(const std::wstring& path) {
   FileFacts facts;
   const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                   FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) return facts;
+  if (file == INVALID_HANDLE_VALUE) {
+    const DWORD error = GetLastError();
+    facts.unreadable = error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND;
+    return facts;
+  }
   facts.present = true;
   std::vector<unsigned char> bytes;
   if (ReadWholeFile(file, &bytes)) {
     facts.sha256 = Sha256Hex(bytes);
     facts.version = BuildVersion(bytes);
+  } else {
+    facts.unreadable = true;
   }
   CloseHandle(file);
   return facts;
@@ -226,6 +235,11 @@ struct Journal {
   std::vector<names::Member> in;
   std::string failed_sha256;
   std::string reason;
+  // What the host verified before it moved anything, so the cleanup at `done` writes records from facts it has and not
+  // from a re-read that can fail: the sha256 of every file that moves in, by member path, and for a swap the sha256 of the
+  // runtime that moved out. A journal without them (an older one) falls back to reading the files.
+  std::map<std::string, std::string> in_sha256;
+  std::string from_sha256;
 };
 
 bool ParseMembers(const json& list, std::vector<names::Member>* out) {
@@ -268,6 +282,19 @@ bool ParseJournal(const json& doc, Journal* out) {
     out->reason = doc["reason"].get<std::string>();
     if (!IsSha256Hex(out->failed_sha256) || !IsReasonToken(out->reason)) return false;
   }
+  if (doc.contains("from_sha256")) {
+    if (!doc["from_sha256"].is_string()) return false;
+    out->from_sha256 = doc["from_sha256"].get<std::string>();
+    if (!IsSha256Hex(out->from_sha256)) return false;
+  }
+  if (doc.contains("in_sha256")) {
+    if (!doc["in_sha256"].is_object()) return false;
+    for (const auto& [path, sha] : doc["in_sha256"].items()) {
+      names::Member member;
+      if (!names::ParseMember(path, &member) || !sha.is_string() || !IsSha256Hex(sha.get<std::string>())) return false;
+      out->in_sha256[path] = sha.get<std::string>();
+    }
+  }
   return doc.contains("out") && doc.contains("in") && ParseMembers(doc["out"], &out->out) && ParseMembers(doc["in"], &out->in);
 }
 
@@ -280,6 +307,12 @@ json JournalJson(const Journal& journal) {
   if (journal.kind == "rollback") {
     doc["failed_sha256"] = journal.failed_sha256;
     doc["reason"] = journal.reason;
+  }
+  if (!journal.from_sha256.empty()) doc["from_sha256"] = journal.from_sha256;
+  if (!journal.in_sha256.empty()) {
+    json shas = json::object();
+    for (const auto& [path, sha] : journal.in_sha256) shas[path] = sha;
+    doc["in_sha256"] = shas;
   }
   return doc;
 }
@@ -431,12 +464,16 @@ class SwapRun {
   UpdateResult Discard(const Staged& staged, const std::string& why);
   DWORD RuntimeWriteError() const;
   bool ClearGenerations(const wchar_t* folder, std::string* linked);
-  UpdateResult Swap(const Staged& staged, const std::string& from, const std::vector<names::Member>& out);
+  UpdateResult Swap(const Staged& staged, const std::string& from, const std::string& from_sha256,
+                    const std::vector<names::Member>& out);
 
   // The pending release (ADR 0024, section 6).
   enum class PendingStep { kNone, kTrial, kHold, kStop };
   enum class RollbackEnd { kDone, kBlocked, kStop };
   void RecordRollback(const char* outcome, const char* reason, json fields = json::object());
+  void RecordTrial(const char* outcome, const char* reason, const Pending& pending, std::uint64_t boot_attempts,
+                   json fields = json::object());
+  bool MarkInRecord(const json& doc, const std::string& reason);
   std::vector<names::Member> OwnedMembers() const;
   std::vector<names::Member> MembersIn(const std::wstring& dir) const;
   std::string VerifyRuntimeAt(const std::wstring& path) const;
@@ -757,20 +794,37 @@ bool SwapRun::StagedNames(const std::string& version) const {
 // went before pending.json was written), and a staged.json that names another release is the next swap's.
 bool SwapRun::FinishDone(const Journal& journal) {
   json owned = json::array();
+  std::string to_sha256;
   for (const names::Member& member : journal.in) {
-    // A file that is not in the root now (removed since the swap) is not owned: a path with no sha256 is not valid state.
-    const FileFacts facts = FactsOf(InRoot(member));
-    if (facts.sha256.empty()) continue;
-    owned.push_back({{"path", names::MemberPath(member)}, {"sha256", facts.sha256}});
+    const std::string path = names::MemberPath(member);
+    const auto known = journal.in_sha256.find(path);
+    std::string sha256;
+    if (known != journal.in_sha256.end()) {
+      if (Exists(InRoot(member))) sha256 = known->second;  // a file removed since the swap is not owned
+    } else {
+      const FileFacts facts = FactsOf(InRoot(member));
+      if (facts.unreadable) return false;  // not gone, only held: the next start finishes this
+      sha256 = facts.sha256;
+    }
+    if (member.runtime) to_sha256 = known != journal.in_sha256.end() ? known->second : sha256;
+    if (sha256.empty()) continue;
+    owned.push_back({{"path", path}, {"sha256", sha256}});
   }
   state_["owned"] = owned;
   if (!WriteJson(UpdateFile(names::kStateJson), state_)) return false;
-  const FileFacts to = FactsOf(Join(root_, names::kRuntimeFile));
-  if (!PendingNames(journal.to, to.sha256)) {
+  if (to_sha256.empty()) return false;  // a pending record that cannot name its release is not written
+  if (!PendingNames(journal.to, to_sha256)) {
     if (!Remove(UpdateFile(names::kCrashedFile))) return false;
-    const FileFacts from = FactsOf(Join(PreviousDir(journal.from), names::kRuntimeFile));
-    const json pending = {{"to", {{"version", journal.to}, {"sha256", to.sha256}}},
-                          {"from", from.present ? json{{"version", journal.from}, {"sha256", from.sha256}} : json()},
+    json from = nullptr;
+    if (!journal.from_sha256.empty()) {
+      from = {{"version", journal.from}, {"sha256", journal.from_sha256}};
+    } else {
+      const FileFacts previous = FactsOf(Join(PreviousDir(journal.from), names::kRuntimeFile));
+      if (previous.unreadable) return false;
+      if (previous.present && !previous.sha256.empty()) from = {{"version", journal.from}, {"sha256", previous.sha256}};
+    }
+    const json pending = {{"to", {{"version", journal.to}, {"sha256", to_sha256}}},
+                          {"from", from},
                           {"boot_attempts", 1},
                           {"failed_reason", nullptr}};
     if (!WriteJson(UpdateFile(names::kPendingJson), pending)) return false;
@@ -936,7 +990,7 @@ UpdateResult SwapRun::SwapStaged() {
       return Load();
     }
   }
-  return Swap(staged, runtime.version, out);
+  return Swap(staged, runtime.version, runtime.sha256, out);
 }
 
 // The older generation in update\<folder>\ (previous, failed) goes before a new one moves in (section 4.5). Only names
@@ -985,15 +1039,18 @@ bool SwapRun::ClearGenerations(const wchar_t* folder, std::string* linked) {
 }
 
 // Journal, out, in, done (section 4.5). A failed move or journal write is undone to the last whole state.
-UpdateResult SwapRun::Swap(const Staged& staged, const std::string& from, const std::vector<names::Member>& out) {
+UpdateResult SwapRun::Swap(const Staged& staged, const std::string& from, const std::string& from_sha256,
+                           const std::vector<names::Member>& out) {
   json files = json::array();
   Journal journal;
   journal.from = from;
   journal.to = staged.version;
   journal.phase = "out";
   journal.out = out;
+  journal.from_sha256 = from_sha256;
   for (const StagedFile& file : staged.files) {
     journal.in.push_back(file.member);
+    journal.in_sha256[names::MemberPath(file.member)] = file.sha256;
     files.push_back({{"path", names::MemberPath(file.member)}, {"sha256", file.sha256}});
   }
   const json identity = {{"from", from}, {"to", staged.version}};
@@ -1058,6 +1115,29 @@ void SwapRun::RecordRollback(const char* outcome, const char* reason, json field
   if (reason != nullptr) record["reason"] = reason;
   record["elapsed_ms"] = GetTickCount64() - started_;
   diagnostics_.Emit(record);
+}
+
+// One start on a release that is pending says which try it is, or why it is not one (ADR 0024, requirement 4).
+void SwapRun::RecordTrial(const char* outcome, const char* reason, const Pending& pending, std::uint64_t boot_attempts,
+                          json fields) {
+  if (killed_) return;
+  json record = std::move(fields);
+  record["event"] = "update_trial";
+  record["outcome"] = outcome;
+  record["reason"] = reason;
+  record["release"] = pending.to_version;
+  record["boot_attempts"] = boot_attempts;
+  record["elapsed_ms"] = GetTickCount64() - started_;
+  diagnostics_.Emit(record);
+}
+
+// Writes `failed_reason` into the pending record `doc` was read from, unless it already names a failure (the first one
+// stays). True when the record names a failure afterwards. `last_error_` holds the error of a write that failed.
+bool SwapRun::MarkInRecord(const json& doc, const std::string& reason) {
+  if (doc.contains("failed_reason") && doc["failed_reason"].is_string()) return true;
+  json marked = doc;
+  marked["failed_reason"] = reason;
+  return WriteJson(UpdateFile(names::kPendingJson), marked);
 }
 
 std::string AsciiName(const wchar_t* name) {
@@ -1147,15 +1227,24 @@ bool SwapRun::CompleteRollback(Journal* journal) {
 // generation folder and the journal. Every step can be run again.
 bool SwapRun::FinishRollback(const Journal& journal) {
   json owned = json::array();
+  std::string runtime_sha256;
   for (const names::Member& member : journal.in) {
-    // A file that is not in the root now (someone removed it since the journal was written) is not owned.
-    const FileFacts facts = FactsOf(InRoot(member));
-    if (facts.sha256.empty()) continue;
-    owned.push_back({{"path", names::MemberPath(member)}, {"sha256", facts.sha256}});
+    const std::string path = names::MemberPath(member);
+    const auto known = journal.in_sha256.find(path);
+    std::string sha256;
+    if (known != journal.in_sha256.end()) {
+      if (Exists(InRoot(member))) sha256 = known->second;  // a file removed since is not owned
+    } else {
+      const FileFacts facts = FactsOf(InRoot(member));
+      if (facts.unreadable) return false;  // held, not gone: the next start finishes this
+      sha256 = facts.sha256;
+    }
+    if (member.runtime) runtime_sha256 = sha256;
+    if (sha256.empty()) continue;
+    owned.push_back({{"path", path}, {"sha256", sha256}});
   }
   state_["owned"] = owned;
-  const FileFacts runtime = FactsOf(Join(root_, names::kRuntimeFile));
-  if (!runtime.sha256.empty()) state_["current"] = {{"version", journal.to}, {"runtime_sha256", runtime.sha256}};
+  if (!runtime_sha256.empty()) state_["current"] = {{"version", journal.to}, {"runtime_sha256", runtime_sha256}};
   if (!IsQuarantined(journal.from, journal.failed_sha256)) {
     if (!state_.contains("quarantine") || !state_["quarantine"].is_array()) state_["quarantine"] = json::array();
     state_["quarantine"].push_back(
@@ -1226,6 +1315,14 @@ SwapRun::RollbackEnd SwapRun::DoRollback(const Pending& pending, const std::stri
   journal.in = MembersIn(previous);
   journal.failed_sha256 = pending.to_sha256;
   journal.reason = reason;
+  // The sha256 of every file that comes back, read before anything moves, so the cleanup at done needs no re-read.
+  for (const names::Member& member : journal.in) {
+    const FileFacts facts = FactsOf(In(previous, member));
+    if (facts.unreadable || facts.sha256.empty()) {
+      return fail("previous_unreadable", RollbackEnd::kBlocked, {{"path", names::MemberPath(member)}});
+    }
+    journal.in_sha256[names::MemberPath(member)] = facts.sha256;
+  }
   // A file that is not the failed release's sits where a restored plugin goes: it is not replaced (section 4.7).
   for (const names::Member& member : journal.in) {
     if (!member.runtime && Exists(InRoot(member)) && !HasMember(journal.out, member)) {
@@ -1310,13 +1407,22 @@ SwapRun::PendingStep SwapRun::DecidePending(UpdateResult* stop) {
     return end == RollbackEnd::kDone ? PendingStep::kNone : PendingStep::kTrial;
   }
   // One more try. A start beside a running one is not a try (the first one's trial is the trial), and neither is the
-  // load that follows a swap whose cleanup this start finished: the swap's own start never got to load.
-  if (write_error == 0 && !finished_swap_) {
+  // load that follows a swap whose cleanup this start finished: the swap's own start never got to load. Each says so.
+  if (write_error == ERROR_SHARING_VIOLATION) {
+    RecordTrial("not_counted", "runtime_in_use", pending, pending.boot_attempts);
+  } else if (write_error != 0) {
+    RecordTrial("not_counted", "runtime_not_writable", pending, pending.boot_attempts, {{"win32_error", write_error}});
+  } else if (finished_swap_) {
+    RecordTrial("not_counted", "swap_finished", pending, pending.boot_attempts);
+  } else {
     json counted = doc;
     counted["boot_attempts"] = pending.boot_attempts + 1;
-    if (!WriteJson(UpdateFile(names::kPendingJson), counted)) {
+    if (WriteJson(UpdateFile(names::kPendingJson), counted)) {
+      RecordTrial("counted", "try", pending, pending.boot_attempts + 1);
+    } else {
       if (killed_) return PendingStep::kHold;
       RecordRollback("blocked", "pending_write_failed", {{"win32_error", last_error_}});
+      RecordTrial("not_counted", "pending_write_failed", pending, pending.boot_attempts, {{"win32_error", last_error_}});
     }
   }
   return PendingStep::kTrial;
@@ -1394,17 +1500,19 @@ UpdateResult SwapRun::RollBackNow(const char* reason) {
   const DWORD write_error = RuntimeWriteError();
   if (write_error != 0) {
     // The failed runtime cannot be moved now; the next start puts it back.
-    RecordRollback("failed", write_error == ERROR_SHARING_VIOLATION ? "runtime_in_use" : "runtime_not_writable",
-                   {{"mode", "in_process"}, {"from", pending.to_version}, {"win32_error", write_error}});
-    json marked = doc;
-    marked["failed_reason"] = reason;
-    WriteJson(UpdateFile(names::kPendingJson), marked);
+    const bool marked = MarkInRecord(doc, reason);
+    json fields = {{"mode", "in_process"}, {"from", pending.to_version}, {"win32_error", write_error}, {"marked", marked}};
+    if (!marked) fields["mark_win32_error"] = last_error_;
+    RecordRollback("failed", write_error == ERROR_SHARING_VIOLATION ? "runtime_in_use" : "runtime_not_writable", fields);
     return Stop(write_error == ERROR_SHARING_VIOLATION ? "runtime_in_use" : "runtime_not_writable");
   }
   UpdateResult stop;
   const RollbackEnd end = DoRollback(pending, reason, "in_process", &stop);
   if (killed_) return Load();
   if (end == RollbackEnd::kDone) return Load();  // the lock stays held for the load that follows
+  // The failed release stays in the root: it is marked, so the next start tries again (the first failure stays).
+  const bool marked = MarkInRecord(doc, reason);
+  if (!marked) RecordRollback("failed", "pending_write_failed", {{"mode", "in_process"}, {"win32_error", last_error_}});
   if (end == RollbackEnd::kStop) return stop;
   return Stop("rollback_blocked");
 }

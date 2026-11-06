@@ -78,7 +78,7 @@ enum class UpdateAction {
 struct UpdateResult {
   UpdateAction action = UpdateAction::kNoUpdateFolder;
   /// For kStop: lock_timeout, bad_journal, journal_unreadable, reparse_point, move_failed, internal_error, no_previous,
-  /// previous_unverified or runtime_not_writable.
+  /// previous_unverified, runtime_in_use, runtime_not_writable, rollback_blocked, state_unreadable or pending_unreadable.
   const char* reason = nullptr;
   /// For kLoad: the release in the root is pending (just swapped in, or still on its trial). A load of it that fails is
   /// the host's to handle (RollBackInProcess, MarkPendingFailed).
@@ -92,12 +92,15 @@ UpdateResult RunUpdateAtStart(const wchar_t* runtime_path, BootstrapDiagnostics&
 
 /// R1 (ADR 0024, section 6): the pending release's runtime never ran (refused, absent, not loadable), so the previous
 /// release is put back and the same start loads it. Takes the lock again (the load released it) and keeps it on kLoad,
-/// for the load that follows to release once the runtime is mapped. `reason` is the load outcome's name. kStop: nothing
-/// that can be verified is left to load (no_previous, previous_unverified) or the root could not be put back whole;
-/// the failed release is then marked, so the next start tries again. Never throws.
+/// for the load that follows to release once the runtime is mapped. `reason` is the load outcome's name.
+/// kStop: the start cannot go on, with the cause in `reason`. These leave the failed release in the root, and then it
+/// is marked (`failed_reason` in pending.json, the first failure stays) so the next start tries again: no_previous,
+/// previous_unverified, rollback_blocked (a link, a stranger's file, an unreadable previous file), runtime_in_use,
+/// runtime_not_writable, and a rollback that could not move a file (move_failed; its journal is completed first).
+/// Not marked, because there is nothing to try again: lock_timeout, reparse_point on update\, state_unreadable and
+/// pending_unreadable (the record cannot be read or written). Never throws.
 UpdateResult RollBackInProcess(const wchar_t* runtime_path, BootstrapDiagnostics& diagnostics, UpdateLock& lock,
                                const char* reason) noexcept;
-
 /// R1 for a runtime that was mapped and then failed (missing entry, null descriptor, ABI rejected, initialize failed):
 /// it stays mapped (production never frees it), so the rollback is the next start's. Writes `failed_reason` into
 /// update\pending.json under the lock. True when it was written. Never throws.
