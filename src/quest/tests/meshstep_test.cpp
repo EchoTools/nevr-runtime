@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "quest/combat/combat_level.h"
 #include "quest/tests/table_step_fixture.h"
 
 namespace {
@@ -360,7 +361,7 @@ void AMapThatIsStillLoadingIsACombatMatchAndAnArenaLevelThatIsLoadingIsNot() {
     QCHECK(g_stockCalls == 1 && ms::CurrentStats().built == 0);
     End1();
   }
-  for (const Where where : {Where::kArenaLoadingAfterCombat, Where::kArenaAndCombatLoading}) {
+  for (const Where where : {Where::kArenaLoadingAfterCombat, Where::kArenaAndCombatLoading, Where::kLobbyLoadingAfterCombat}) {
     Begin1();
     Build();
     SetWhere(where);
@@ -374,6 +375,26 @@ void AMapThatIsStillLoadingIsACombatMatchAndAnArenaLevelThatIsLoadingIsNot() {
     std::free(obj);
     End1();
   }
+}
+
+// A combat map whose gamespace finishes loading between the scope's two reads (the game inserts it into the loaded table before it removes the
+// fiber) is still combat: the fiber table is read first. combat_level_test has the same case on the scan itself.
+void FinishTheCombatMap() {
+  g_game.words[kFiberCount / 8] = 0;
+  PutLevel(1, 0, Level("mpl_combat_gauss"));
+}
+void AMapThatFinishesWhileTheScopeIsReadIsStillCombat() {
+  Begin1();
+  Build();
+  ClearGame();
+  PutInFlight(0, Level("mpl_combat_gauss"));
+  QCHECK(ms::InstallAt(&Lookup, g_pins, &g_fns, true).installed);
+  nevr_quest::combat::level::SetScanSeamForTest(&FinishTheCombatMap);
+  std::uint64_t init[3] = {0, 1, 2};
+  std::free(Construct(init));
+  nevr_quest::combat::level::SetScanSeamForTest(nullptr);
+  QCHECK(g_stockCalls == 0 && ms::CurrentStats().built == 1);
+  End1();
 }
 
 // Each change of the loaded level writes one counts line per module with what the level that ended cost: the objects left as the game made them
@@ -618,6 +639,7 @@ int main() {
   ACombatMatchBuildsTheMeshListInTheStockOrderWithStepOne();
   EveryOtherScopeIsTheGamesOwnConstructor();
   AMapThatIsStillLoadingIsACombatMatchAndAnArenaLevelThatIsLoadingIsNot();
+  AMapThatFinishesWhileTheScopeIsReadIsStillCombat();
   ALevelChangeWritesTheCountsOfTheLevelThatEnded();
   WhatWasBuiltBeforeAnyGameWasKnownIsReportedWhenOneIs();
   ARegistrationIsKeptOnce();

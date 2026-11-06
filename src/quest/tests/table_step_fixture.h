@@ -87,6 +87,7 @@ enum class Where {
   kCombatMapLoadingAfterCombatLobby,  // the same with the combat lobby loaded
   kArenaLoadingAfterCombat,  // an arena level is loading while a combat map is still loaded: the arena level wins
   kArenaAndCombatLoading,    // both loading: the arena level wins
+  kLobbyLoadingAfterCombat,  // a lobby arena players use is loading while a combat map is still loaded: not combat
 };
 inline void SetWhere(Where where) {
   ClearGame();
@@ -111,6 +112,10 @@ inline void SetWhere(Where where) {
     case Where::kArenaLoadingAfterCombat:
       PutLevel(0, 0, Level("mpl_combat_gauss"));
       PutInFlight(0, Level("mpl_arena_a"));
+      break;
+    case Where::kLobbyLoadingAfterCombat:
+      PutLevel(0, 0, Level("mpl_combat_gauss"));
+      PutInFlight(0, Level("mpl_lobby_b"));
       break;
     case Where::kArenaAndCombatLoading:
       PutInFlight(0, Level("mpl_combat_gauss"));

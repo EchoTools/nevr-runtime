@@ -30,7 +30,7 @@
  * functions are separate constructors of the same class and a resource is built by one of them.
  *
  * Origin. The game's own code, read in the disassembly (docs/quest/combat/shaderstep.md), and the reference build's upstream patch: `tools/re3/res_heap_patch.py`
- * with `--table-step-1` (RE-10's padding finding, wave 8, commit 35bba9f) writes `mov wN,#1` over the `mov wN,#0x20` that gives the CTableXT growth step
+ * with `--table-step-1` (RE-10's padding finding, wave 8; commit 35bba9f of kotorvr/echoquest-combat) writes `mov wN,#1` over the `mov wN,#0x20` that gives the CTableXT growth step
  * its 32 in the CGShaderSetResource, CGInstancedModelResource and CGMeshListResource constructors, at these addresses less 0x100000. This module does
  * the same change as a hook on the constructor's slot, in a combat match only (docs/quest/combat/heaps.md section 3 cites the patch). It came with the q15t
  * plugin (#1594), whose host-test harness and checked-pin style it follows.

@@ -253,7 +253,7 @@ void AMapThatIsStillLoadingIsACombatMatchAndAnArenaLevelThatIsLoadingIsNot() {
     QCHECK(im::CurrentStats().objects == 1 && im::CurrentStats().stock == 0);
     End1();
   }
-  for (const Where where : {Where::kArenaLoadingAfterCombat, Where::kArenaAndCombatLoading}) {
+  for (const Where where : {Where::kArenaLoadingAfterCombat, Where::kArenaAndCombatLoading, Where::kLobbyLoadingAfterCombat}) {
     Begin1();
     Build();
     SetWhere(where);

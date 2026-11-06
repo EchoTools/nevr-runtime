@@ -1,5 +1,7 @@
 #include "quest/combat/combat_level.h"
 
+#include <atomic>
+
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/safe_read.h"
 
@@ -52,6 +54,12 @@ const char* LevelName(std::uint64_t level) noexcept {
 
 namespace {
 
+std::atomic<void (*)()> g_seam{nullptr};
+
+void Between() noexcept {
+  if (const auto seam = g_seam.load(std::memory_order_acquire)) seam();
+}
+
 void Note(Loaded& out, std::uint64_t current) noexcept {
   if (IsEchoArenaLevel(current) && !out.echoArena) {
     out.echoArena = true;
@@ -79,14 +87,19 @@ void ScanInFlight(Loaded& out, std::uintptr_t game) noexcept {
     if (!rowOk || gamespace == 0) continue;  // the fiber table is this game's own, so there is no owner to check
     const auto current = SafeRead<std::uint64_t>(gamespace + kGamespaceLevel, &rowOk);
     if (!rowOk) continue;
+    ++out.loading;
+    if (IsCombatMap(current) && !out.loadingCombatMap) {
+      out.loadingCombatMap = true;
+      out.loadingCombatMapLevel = current;
+    } else if (IsCombatLobby(current) && !out.loadingCombatLobby) {
+      out.loadingCombatLobby = true;
+      out.loadingCombatLobbyLevel = current;
+    }
     Note(out, current);
   }
 }
 
-}  // namespace
-
-Loaded Scan(std::uintptr_t game, bool inFlight) noexcept {
-  Loaded out;
+void ScanLoaded(Loaded& out, std::uintptr_t game) noexcept {
   for (const auto& table : kTables) {
     bool ok = true;
     const auto rows = SafeRead<std::uintptr_t>(game + table[0], &ok);
@@ -102,7 +115,17 @@ Loaded Scan(std::uintptr_t game, bool inFlight) noexcept {
       Note(out, current);
     }
   }
+}
+
+}  // namespace
+
+void SetScanSeamForTest(void (*seam)()) noexcept { g_seam.store(seam, std::memory_order_release); }
+
+Loaded Scan(std::uintptr_t game, bool inFlight) noexcept {
+  Loaded out;
   if (inFlight) ScanInFlight(out, game);
+  Between();
+  ScanLoaded(out, game);
   return out;
 }
 
@@ -111,6 +134,18 @@ Kind Classify(std::uintptr_t game, bool lobby, std::uint64_t* level, bool inFlig
   if (loaded.echoArena) {  // an Echo Arena level wins, whatever else is loaded and whether or not the lobby rule is on
     *level = loaded.echoArenaLevel;
     return Kind::kEchoArena;
+  }
+  if (inFlight && loaded.loading > 0) {  // what is loading decides: the resources being built are its own
+    if (loaded.loadingCombatMap) {
+      *level = loaded.loadingCombatMapLevel;
+      return Kind::kCombatOrLobby;
+    }
+    if (lobby && loaded.loadingCombatLobby) {
+      *level = loaded.loadingCombatLobbyLevel;
+      return Kind::kCombatOrLobby;
+    }
+    *level = 0;
+    return Kind::kNone;
   }
   if (loaded.combatMap) {
     *level = loaded.combatMapLevel;

@@ -131,3 +131,8 @@ runm lv_name_dropped        $LV "s/    if (named.id == level) return named.name;
 runm ts_level_name_field    $TS "s/name != nullptr ? name : \"other\"/((void)name, \"other\")/"
 # the default of the switch (quest_config.h; the reader's fallback is quest_config_test's, mutated by hand in the PR body)
 runm ms_default_off         src/quest/sentinel/quest_config.h "s/  CombatSwitch meshstep;  /  CombatSwitch meshstep{false, Source::kAbsent};  /"
+# what is loading decides, and the fiber table is read before the loaded tables (a finishing gamespace is in at least one)
+runm lv_loading_not_deciding $LV "s/  if (inFlight \&\& loaded.loading > 0) {/  if (false) {/"
+runm lv_order_swapped       $LV "/^  if (inFlight) ScanInFlight(out, game);\$/{s/.*/  ScanLoaded(out, game);/;b};/^  ScanLoaded(out, game);\$/s/.*/  if (inFlight) ScanInFlight(out, game);/"
+# not listed: lv_lobby_loading_combat (the lobby rule while a combat lobby loads) is not asked by the table steps (lobby=false); combat_level_test kills it
+runm lv_loading_counted_not $LV "s/^    ++out.loading;\$//"

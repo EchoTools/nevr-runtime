@@ -230,6 +230,66 @@ void TheFiberTableIsReadWithTheSameCareAsTheOthers() {
   QCHECK(lv::Classify(0, false, &level, true) == lv::Kind::kNone);
 }
 
+// A lobby arena players use that is loading while a combat map is still loaded: the resources being built are the lobby's, so it is not combat.
+void WhatIsLoadingDecidesBetweenCombatAndTheRest() {
+  std::uint64_t level = 0;
+  for (const char* lobby : {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b2_lowspec", "mpl_lobby_b_arena", "mpl_lobby_b_social"}) {
+    ClearGame();
+    PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+    PutInFlight(0, CSymbol64Hash(lobby));
+    QCHECK(lv::Classify(GameAddress(), false, &level, true) == lv::Kind::kNone && level == 0);
+    QCHECK(lv::Classify(GameAddress(), true, &level, true) == lv::Kind::kNone);
+    // not asked: a combat map is loaded, as it always read
+    QCHECK(lv::Classify(GameAddress(), false, &level) == lv::Kind::kCombatOrLobby && level == CSymbol64Hash("mpl_combat_gauss"));
+    const lv::Loaded loaded = lv::Scan(GameAddress(), true);
+    QCHECK(loaded.loading == 1 && !loaded.loadingCombatMap && !loaded.loadingCombatLobby);
+  }
+  ClearGame();  // a level whose name is not stored yet (0) is loading too
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  PutInFlight(0, 0);
+  QCHECK(lv::Classify(GameAddress(), false, &level, true) == lv::Kind::kNone);
+  ClearGame();  // the combat lobby loading after a combat map: combat only under the lobby rule
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  PutInFlight(0, CSymbol64Hash("mpl_lobby_b_combat"));
+  QCHECK(lv::Classify(GameAddress(), false, &level, true) == lv::Kind::kNone);
+  QCHECK(lv::Classify(GameAddress(), true, &level, true) == lv::Kind::kCombatOrLobby && level == CSymbol64Hash("mpl_lobby_b_combat"));
+  ClearGame();  // a combat map loading after another: combat; the one loaded does not matter
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  PutInFlight(0, CSymbol64Hash("mpl_combat_fission"));
+  QCHECK(lv::Classify(GameAddress(), false, &level, true) == lv::Kind::kCombatOrLobby && level == CSymbol64Hash("mpl_combat_fission"));
+  ClearGame();  // an Echo Arena level that is loaded still wins over what is loading
+  PutLevel(1, 0, CSymbol64Hash("mpl_arena_a"));
+  PutInFlight(0, CSymbol64Hash("mpl_lobby_b"));
+  QCHECK(lv::Classify(GameAddress(), false, &level, true) == lv::Kind::kEchoArena);
+  ClearGame();  // nothing loading: the loaded levels decide, as before
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  QCHECK(lv::Classify(GameAddress(), false, &level, true) == lv::Kind::kCombatOrLobby);
+}
+
+// When an init fiber finishes, the game inserts its gamespace into the loaded table before it removes the fiber. A scan that reads the loaded tables
+// first and the fiber table second can miss it in both; the fiber table is read first. The seam moves the gamespace between the two reads.
+void MoveTheLoadingGamespaceToTheLoadedTable() {
+  g_game.words[kFiberCount / 8] = 0;  // the fiber is removed ...
+  PutLevel(1, 0, CSymbol64Hash("mpl_combat_gauss"));  // ... after its gamespace was inserted into the loaded table
+}
+void AGamespaceThatFinishesBetweenTheTwoReadsIsStillSeen() {
+  std::uint64_t level = 0;
+  ClearGame();
+  PutInFlight(0, CSymbol64Hash("mpl_combat_gauss"));
+  lv::SetScanSeamForTest(&MoveTheLoadingGamespaceToTheLoadedTable);
+  QCHECK(lv::Classify(GameAddress(), false, &level, true) == lv::Kind::kCombatOrLobby && level == CSymbol64Hash("mpl_combat_gauss"));
+  lv::SetScanSeamForTest(nullptr);
+  ClearGame();  // and an arena level that finishes between them is seen too
+  PutInFlight(0, CSymbol64Hash("mpl_arena_a"));
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  lv::SetScanSeamForTest(+[]() {
+    g_game.words[kFiberCount / 8] = 0;
+    PutLevel(1, 0, CSymbol64Hash("mpl_arena_a"));
+  });
+  QCHECK(lv::Classify(GameAddress(), false, &level, true) == lv::Kind::kEchoArena);
+  lv::SetScanSeamForTest(nullptr);
+}
+
 void EveryKnownLevelHasItsNameAndOthersHaveNone() {
   for (const char* name : {"mpl_combat_dyson", "mpl_combat_combustion", "mpl_combat_fission", "mpl_combat_gauss", "mpl_lobby_b_combat", "mpl_arena_a",
                            "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a", "mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b2_lowspec",
@@ -249,6 +309,8 @@ int main() {
   AMapThatIsOnlyInTheFiberTableIsSeenOnlyWhenAsked();
   AnEchoArenaLevelThatIsLoadingWinsAsOneThatIsLoadedDoes();
   TheFiberTableIsReadWithTheSameCareAsTheOthers();
+  WhatIsLoadingDecidesBetweenCombatAndTheRest();
+  AGamespaceThatFinishesBetweenTheTwoReadsIsStillSeen();
   EveryKnownLevelHasItsNameAndOthersHaveNone();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_level_test: %d check(s) failed\n", quest_test::Failures());
