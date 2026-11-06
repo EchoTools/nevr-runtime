@@ -957,7 +957,7 @@ class ReleaseStagesTest(PackageFixture):
         paths = set(re.findall(r"\b((?:services|auth)\.[a-z_]+)\b", prose)) - {"auth.server_key"}
         mapped = set(re.findall(r'\{"[a-z_]+", "([a-z_]+\.[a-z_]+)"\}',
                                 (REPO / "src/runtime/lifecycle/service_map.cpp").read_text(encoding="utf-8")))
-        self.assertEqual(paths - mapped - {"services.allow_offline_server"}, set(),
+        self.assertEqual(paths - mapped, set(),
                          "the README names a key service_map.cpp does not map")
         self.assertNotRegex(prose, r"(wss?|https?)://\S*[?&@]", "no credential rides in a service address")
 

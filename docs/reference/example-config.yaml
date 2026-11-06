@@ -410,7 +410,8 @@ network:
 # identity — server identity fields sent during ServerDB registration
 #
 # These identify the server instance to the community infrastructure.
-# All keys are optional but a server without them will fail to register.
+# All keys are optional. A server that signs in by device code takes its identity from the
+# access token and needs none of them.
 #
 # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration),
 #         src/runtime/compat/ws_bridge.cpp
@@ -418,10 +419,11 @@ network:
 
 identity:
   # Discord user ID of the server owner. Sent as a query parameter in the
-  # ServerDB WebSocket URI. Required for server registration.
+  # ServerDB WebSocket URI on the legacy (URL-parameter) registration route only; a device-code server
+  # does not use it.
   # Absent: the server registers through services.serverdb_uri, and with neither it stops at registration.
   # Not a secret, but personally identifying — do not commit to public repos.
-  # discord_id: "${NEVR_DISCORD_ID:?discord_id is required for server registration}"
+  # discord_id: "<the Discord id of the server owner>"
 
 # ---------------------------------------------------------------------------
 # auth — authentication and API endpoint configuration
