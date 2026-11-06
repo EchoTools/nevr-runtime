@@ -216,6 +216,18 @@ TEST(TelemetryPlayerRead, PlayersAreKeptByGameSlotNotByArrayOrder) {
   EXPECT_EQ(snap.stats[2].stuns, 8u);
 }
 
+TEST(TelemetryPlayerRead, EachSlotKeepsTheIndexOfTheEntrantItWasReadFrom) {
+  // The pose read finds a player's entity from the entrant record (telemetry_player_pose.h), so each slot keeps
+  // the index of the entrant the handle table named for it, not the slot.
+  NetGame ng;
+  ng.SetEntrants({Word(5, 1), Word(2, 0), Word(9, 2)});
+
+  const TelemetrySnapshot snap = Read(ng);
+  EXPECT_EQ(snap.playerInfo[5].entrantIndex, 0);
+  EXPECT_EQ(snap.playerInfo[2].entrantIndex, 1);
+  EXPECT_EQ(snap.playerInfo[9].entrantIndex, 2);
+}
+
 TEST(TelemetryPlayerRead, AnEntrantOfATeamAboveTwoIsNotAPlayer) {
   NetGame ng;
   ng.SetEntrants({Word(0, 4), Word(4, 2), Word(6, 3)});

@@ -17,7 +17,8 @@ struct TelemetrySnapshot {
   int32_t bluePoints;
   int32_t orangePoints;
 
-  // Per-player transforms (from entity system, game thread)
+  // Per-player poses, indexed by game slot like playerInfo: read through the game's own component readers on
+  // the game thread, as /session reads them (telemetry_player_pose.h). Rotations are quaternions x, y, z, w.
   struct PlayerTransform {
     float bodyPos[3], bodyRot[4];
     float headPos[3], headRot[4];
@@ -26,22 +27,22 @@ struct TelemetrySnapshot {
     float velocity[3];
   } players[16];
 
-  // Per-player bone data (from entity/animation system, game thread)
-  struct PlayerBoneData {
-    float bones[23][7];  // 23 bones x (4 orient + 3 translate)
-    bool valid;
-  } playerBones[16];
+  // The snapshot holds no bone data and the stream sends no player_bones: /session reads no bones, and
+  // 0x1408f8090 takes a component and an instance index (it reads the component's index table at +0xC8 and a
+  // row of 0x3F70 bytes), not an entity and a bone slot.
 
   // --- Direct memory reads ---
 
   // Indexed by game slot (the entrant word's low 5 bits), not by the net game's entrant array order.
-  // flags and teamIndex come from the net-game entrant; displayName from the game's GetUserName for that
-  // entrant; accountId and ping from the lobby entrant at the same slot (telemetry_player_read.h). present: a
+  // flags and teamIndex come from the net-game entrant, entrantIndex is that entrant's index (the pose read
+  // finds its entity from it); displayName from the game's GetUserName for that entrant; accountId and ping
+  // from the lobby entrant at the same slot (telemetry_player_read.h). present: a
   // player (team 0 to 2) whose slot is below 16, whose slot's handle-table entry names it, and whose slot has
   // an entry in the lobby's entrant table.
   struct PlayerInfo {
     bool present;
     uint16_t flags;
+    uint16_t entrantIndex;
     uint64_t accountId;
     char displayName[36];
     uint16_t ping;
@@ -84,10 +85,19 @@ constexpr uint64_t GAME_CONTEXT_OFFSET = 0x20a0478;  // DAT_1420a0478 (global ga
 constexpr uint64_t NETGAME_OFFSET = 0x8518;           // GetNetGameFromContext: *(context + 0x8518)
 constexpr uint64_t GAME_STATE_DATA_OFFSET = 0x2AA8;
 
-// Entity system access (from CR15NetGame)
-constexpr uint64_t ENTITY_HANDLE_RESOLVER_OFFSET = 0x08;  // *(CR15NetGame + 8) → handle resolver
-constexpr uint64_t WORLD_OBJECT_OFFSET = 0x2B08;          // *(CR15NetGame + 0x2B08) → world/scene
-constexpr uint64_t ENTITY_MANAGER_OFFSET = 0x08;          // *(world + 8) → entity manager
+// The entity of a net-game entrant, as the /session player writer (0x1401b2ea0) finds it: the 16 bytes at the
+// entrant record + 0x08 (0x1401b3eb8 `movups xmm0, [r15 + rcx + 0x180]`, r15 = i * 0x250) go to the handle
+// resolver *(CR15NetGame + 0x08) (0x1401b3ec5, 0x1401b3ec9 `call 0x140363610`), and the first 8 bytes then to
+// the entity lookup on the same object (0x1401b3ed2 `mov rcx, [rdi + 0x10]`, which the caller filled with
+// *(CR15NetGame + 0x08) at 0x140163d44; 0x1401b3ed6 `call 0x1404f37a0`).
+constexpr uint64_t ENTITY_SYSTEM_OFFSET = 0x08;
+constexpr uint64_t ENTRANT_ENTITY_HANDLE_OFFSET = 0x08;  // within the entrant record
+// /session reads the hands and the velocity of entrant i through R14RemotePlayer when
+// *(u16*)(CR15NetGame + 0xE0) <= i < *(u16*)(CR15NetGame + 0xDC) (0x1401b5003 `movzx ecx, word ptr [rax + 0xe0]`,
+// 0x1401b500a `cmp cx, dx; ja`, 0x1401b5013 `cmp dx, word ptr [rax + 0xdc]; jae`): the entrants that are not
+// this machine's.
+constexpr uint64_t REMOTE_ENTRANT_FIRST_OFFSET = 0xE0;
+constexpr uint64_t REMOTE_ENTRANT_END_OFFSET = 0xDC;
 
 // Net-game entrants: CR15NetGame + 0x178, stride 0x250, count u16 at + 0xE2 (echovr.exe 0x1401563c7
 // `movzx ecx, word ptr [rax + 0xe2]`, 0x14015642a `imul r12, rax, 0x250`, 0x140156435
@@ -194,20 +204,7 @@ using GetIntPropertyFn = int32_t(__fastcall*)(void* netGame, uint64_t propertyHa
 // An index from the entrant count *(ng + 0xE2) up to *(ng + 0xDC) is named "Replayer %u". Never null.
 using GetUserNameFn = const char*(__fastcall*)(void* netGame, uint16_t entrantIndex);
 
-// FUN_1404f37a0(entityManager, handle) → entity*
-using EntityLookupFn = void*(__fastcall*)(void* entityManager, int64_t handle);
-
-// FUN_140363610(handleResolver, accountIdPair) → bool (modifies pair[0] to transform handle)
-using ResolveEntityHandleFn = int(__fastcall*)(void* handleResolver, int64_t* accountIdPair);
-
-// FUN_1408f8090(entity, boneSlot) → bone data ptr
-using GetBoneDataFn = void*(__fastcall*)(void* entity, uint16_t boneSlot);
-
-// FUN_1408f8080(entity) → uint32_t bone count (always 0x17=23)
-using GetBoneCountFn = uint32_t(__fastcall*)(void* entity);
-
-// FUN_14042d690(entity, slot) → transform component ptr (returns ptr+0xa0 into component data)
-using GetTransformComponentFn = void*(__fastcall*)(void* entity, uint16_t slot);
+// The entity and pose functions' types are in telemetry_player_pose.h.
 
 // Property keys for game function calls: each is the CSymbol64 of the replicated variable's name
 // (test_telemetry_game_properties pins each to its name).
@@ -259,11 +256,17 @@ constexpr uint64_t GET_SYMBOL_HASH = 0xd5ced0;       // FUN_140d5ced0
 constexpr uint64_t GET_FLOAT_PROPERTY = 0xd36750;    // FUN_140d36750
 constexpr uint64_t GET_INT_PROPERTY = 0xd05730;      // FUN_140d05730
 constexpr uint64_t GET_USER_NAME = 0x1c98c0;         // FUN_1401c98c0(netGame, entrant index)
-constexpr uint64_t ENTITY_LOOKUP = 0x4f37a0;         // FUN_1404f37a0(entityMgr, handle)
-constexpr uint64_t RESOLVE_ENTITY_HANDLE = 0x363610;  // FUN_140363610(resolver, pair)
-constexpr uint64_t GET_BONE_DATA = 0x8f8090;          // FUN_1408f8090(entity, slot)
-constexpr uint64_t GET_BONE_COUNT = 0x8f8080;         // FUN_1408f8080() → 0x17
-constexpr uint64_t GET_TRANSFORM_COMPONENT = 0x42d690; // FUN_14042d690(entity, slot)
+constexpr uint64_t ENTITY_LOOKUP = 0x4f37a0;         // FUN_1404f37a0(entity system, id)
+constexpr uint64_t RESOLVE_ENTITY_HANDLE = 0x363610;  // FUN_140363610(resolver, handle)
+constexpr uint64_t GET_HEAD_COMPONENT = 0x168420;     // GetComponent<ncaTransform>(out, entity, handle[1], -1)
+constexpr uint64_t GET_BODY_COMPONENT = 0x167620;     // GetComponent<R14Body>
+constexpr uint64_t GET_REMOTE_PLAYER_COMPONENT = 0x168260;  // GetComponent<R14RemotePlayer>
+constexpr uint64_t READ_HEAD_TRANSFORM = 0x3c4280;    // FUN_1403c4280(component, out, index)
+constexpr uint64_t READ_BODY_TRANSFORM = 0x8fc9b0;    // FUN_1408fc9b0(component, index)
+constexpr uint64_t READ_LEFT_HAND_POSITION = 0x179a40;   // FUN_140179a40(component, out, index)
+constexpr uint64_t READ_RIGHT_HAND_POSITION = 0x1a4dc0;  // FUN_1401a4dc0(component, out, index)
+constexpr uint64_t READ_LOCAL_VELOCITY = 0x449570;    // FUN_140449570(system, out, handle)
+constexpr uint64_t READ_WORLD_TRANSFORM = 0x3c4910;   // FUN_1403c4910(system, out, handle)
 }  // namespace nevr_game_func_addr
 
 // Game status symbol hash → proto enum mapping

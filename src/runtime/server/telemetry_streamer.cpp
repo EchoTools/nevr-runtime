@@ -1,5 +1,4 @@
 #include "runtime/server/telemetry_streamer.h"
-#include "core/hex_dump.h"
 
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
@@ -209,7 +208,6 @@ void TelemetryStreamer::SnapshotIfDue() {
     m_lastSnapshotTime = now;
     snapshot.Clear();
     SnapshotGameState(&snapshot);
-    SnapshotPlayerBones(&snapshot);
     return true;
   });
 }
@@ -269,17 +267,10 @@ void TelemetryStreamer::RunDiagnostics() {
   Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameStateData=%p (ng+0x%X)", gsd,
       (unsigned)nevr_game_offsets::GAME_STATE_DATA_OFFSET);
 
-  // Entity system pointers
-  void* handleResolver = *reinterpret_cast<void**>(ngBase + nevr_game_offsets::ENTITY_HANDLE_RESOLVER_OFFSET);
-  void* worldObj = *reinterpret_cast<void**>(ngBase + nevr_game_offsets::WORLD_OBJECT_OFFSET);
-  void* entityMgr = nullptr;
-  if (worldObj) {
-    entityMgr = *reinterpret_cast<void**>(reinterpret_cast<CHAR*>(worldObj) + nevr_game_offsets::ENTITY_MANAGER_OFFSET);
-  }
-  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] HandleResolver=%p (ng+0x%X), World=%p (ng+0x%X), EntityMgr=%p (world+0x%X)",
-      handleResolver, (unsigned)nevr_game_offsets::ENTITY_HANDLE_RESOLVER_OFFSET,
-      worldObj, (unsigned)nevr_game_offsets::WORLD_OBJECT_OFFSET,
-      entityMgr, (unsigned)nevr_game_offsets::ENTITY_MANAGER_OFFSET);
+  // The entity system: the handle resolver and the entity lookup's object (telemetry_player_pose.h)
+  void* entitySystem = *reinterpret_cast<void**>(ngBase + nevr_game_offsets::ENTITY_SYSTEM_OFFSET);
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] EntitySystem=%p (ng+0x%X)", entitySystem,
+      (unsigned)nevr_game_offsets::ENTITY_SYSTEM_OFFSET);
 
   // --- Game function calls ---
   if (!m_getSymbolHash) {
@@ -333,70 +324,16 @@ void TelemetryStreamer::RunDiagnostics() {
 
     Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Player slot=%u: name=%s, acct=%llu, flags=0x%04X, team=%u, ping=%u",
         slot, info.displayName, static_cast<unsigned long long>(accountId), info.flags, info.teamIndex, info.ping);
-    if (accountId == 0) continue;
-
-    // Try entity resolution
-    if (handleResolver && entityMgr && m_resolveEntityHandle && m_entityLookup) {
-      int64_t pair[2] = {static_cast<int64_t>(accountId), 0};
-      int resolved = m_resolveEntityHandle(handleResolver, pair);
-      Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   ResolveHandle: result=%d, handle=0x%llX",
-          resolved, (unsigned long long)pair[0]);
-
-      if (resolved != 0 && pair[0] != -1) {
-        void* entity = m_entityLookup(entityMgr, pair[0]);
-        Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Entity=%p", entity);
-
-        if (entity && m_getBoneData) {
-          // Try reading bone 0 (root/body)
-          void* bone0 = m_getBoneData(entity, 0);
-          Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Bone[0] ptr=%p", bone0);
-
-          if (bone0) {
-            // Try reading at offset 0x18 (our assumed bone data offset)
-            float* b = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(bone0) + 0x18);
-            Log(EchoVR::LogLevel::Info,
-                "[TELEMETRY.DIAG]   Bone[0]+0x18: orient=(%.3f, %.3f, %.3f, %.3f) pos=(%.3f, %.3f, %.3f)",
-                b[0], b[1], b[2], b[3], b[4], b[5], b[6]);
-
-            // Also try at offset 0x00 in case data is there instead
-            float* b0 = reinterpret_cast<float*>(bone0);
-            Log(EchoVR::LogLevel::Info,
-                "[TELEMETRY.DIAG]   Bone[0]+0x00: (%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f)",
-                b0[0], b0[1], b0[2], b0[3], b0[4], b0[5], b0[6]);
-
-            // Hex dump first 64 bytes of bone data for manual inspection
-            uint8_t* raw = reinterpret_cast<uint8_t*>(bone0);
-            for (const std::string& hex : nevr::HexDumpLines(raw, 64, 64, 64)) {
-              Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Bone[0] raw: %s", hex.c_str());
-            }
-          }
-
-          // Try bone 4 (assumed head)
-          void* bone4 = m_getBoneData(entity, 4);
-          if (bone4) {
-            float* b = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(bone4) + 0x18);
-            Log(EchoVR::LogLevel::Info,
-                "[TELEMETRY.DIAG]   Bone[4/head]+0x18: orient=(%.3f, %.3f, %.3f, %.3f) pos=(%.3f, %.3f, %.3f)",
-                b[0], b[1], b[2], b[3], b[4], b[5], b[6]);
-          }
-        }
-
-        // Try transform component
-        if (entity && m_getTransformComponent) {
-          void* xform = m_getTransformComponent(entity, 0);
-          Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   TransformComponent[0]=%p", xform);
-          if (xform) {
-            float* f = reinterpret_cast<float*>(xform);
-            Log(EchoVR::LogLevel::Info,
-                "[TELEMETRY.DIAG]   Transform+0x00: (%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f)",
-                f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
-          }
-        }
-      }
-    } else {
-      Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG]   Entity resolution unavailable: resolver=%p mgr=%p fn=%p/%p",
-          handleResolver, entityMgr, (void*)m_resolveEntityHandle, (void*)m_entityLookup);
-    }
+    // The pose, through the same reader as SnapshotGameState
+    TelemetrySnapshot::PlayerTransform pose{};
+    const nevr_telemetry_pose::PoseResult poseRead = nevr_telemetry_pose::ReadPlayerPose(
+        reinterpret_cast<const uint8_t*>(ngBase), info.entrantIndex, m_poseFunctions, &pose);
+    Log(EchoVR::LogLevel::Debug,
+        "[TELEMETRY.DIAG]   Pose: entrant=%u entity=%d head=%d body=%d hands=%d head_pos=(%.3f, %.3f, %.3f) "
+        "body_pos=(%.3f, %.3f, %.3f) velocity=(%.3f, %.3f, %.3f)",
+        info.entrantIndex, poseRead.entity, poseRead.head, poseRead.body, poseRead.hands, pose.headPos[0],
+        pose.headPos[1], pose.headPos[2], pose.bodyPos[0], pose.bodyPos[1], pose.bodyPos[2], pose.velocity[0],
+        pose.velocity[1], pose.velocity[2]);
 
     // Stats
     const auto& stats = m_diagSnapshot.stats[slot];
@@ -425,10 +362,21 @@ void TelemetryStreamer::ResolveFunctionPointers() {
   m_getFloatProperty = reinterpret_cast<GetFloatPropertyFn>(base + nevr_game_func_addr::GET_FLOAT_PROPERTY);
   m_getIntProperty = reinterpret_cast<GetIntPropertyFn>(base + nevr_game_func_addr::GET_INT_PROPERTY);
   m_getUserName = reinterpret_cast<GetUserNameFn>(base + nevr_game_func_addr::GET_USER_NAME);
-  m_entityLookup = reinterpret_cast<EntityLookupFn>(base + nevr_game_func_addr::ENTITY_LOOKUP);
-  m_resolveEntityHandle = reinterpret_cast<ResolveEntityHandleFn>(base + nevr_game_func_addr::RESOLVE_ENTITY_HANDLE);
-  m_getBoneData = reinterpret_cast<GetBoneDataFn>(base + nevr_game_func_addr::GET_BONE_DATA);
-  m_getTransformComponent = reinterpret_cast<GetTransformComponentFn>(base + nevr_game_func_addr::GET_TRANSFORM_COMPONENT);
+  namespace pose = nevr_telemetry_pose;
+  namespace addr = nevr_game_func_addr;
+  m_poseFunctions.resolveHandle = reinterpret_cast<pose::ResolveEntityHandleFn>(base + addr::RESOLVE_ENTITY_HANDLE);
+  m_poseFunctions.lookupEntity = reinterpret_cast<pose::EntityLookupFn>(base + addr::ENTITY_LOOKUP);
+  m_poseFunctions.headComponent = reinterpret_cast<pose::GetComponentFn>(base + addr::GET_HEAD_COMPONENT);
+  m_poseFunctions.bodyComponent = reinterpret_cast<pose::GetComponentFn>(base + addr::GET_BODY_COMPONENT);
+  m_poseFunctions.remotePlayerComponent =
+      reinterpret_cast<pose::GetComponentFn>(base + addr::GET_REMOTE_PLAYER_COMPONENT);
+  m_poseFunctions.readHead = reinterpret_cast<pose::ReadHeadTransformFn>(base + addr::READ_HEAD_TRANSFORM);
+  m_poseFunctions.readBody = reinterpret_cast<pose::ReadBodyTransformFn>(base + addr::READ_BODY_TRANSFORM);
+  m_poseFunctions.readLeftHand = reinterpret_cast<pose::ReadHandPositionFn>(base + addr::READ_LEFT_HAND_POSITION);
+  m_poseFunctions.readRightHand = reinterpret_cast<pose::ReadHandPositionFn>(base + addr::READ_RIGHT_HAND_POSITION);
+  m_poseFunctions.readLocalVelocity = reinterpret_cast<pose::ReadLocalVelocityFn>(base + addr::READ_LOCAL_VELOCITY);
+  m_poseFunctions.readWorldTransform =
+      reinterpret_cast<pose::ReadWorldTransformFn>(base + addr::READ_WORLD_TRANSFORM);
 
   m_funcPtrsResolved = true;
   Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Game function pointers resolved");
@@ -448,31 +396,7 @@ bool TelemetryStreamer::ResolveGamePointers() {
 
   CHAR* netGameBase = reinterpret_cast<CHAR*>(m_netGame);
   m_gameStateData = *reinterpret_cast<void**>(netGameBase + nevr_game_offsets::GAME_STATE_DATA_OFFSET);
-
-  // Entity system pointers
-  m_handleResolver = *reinterpret_cast<void**>(netGameBase + nevr_game_offsets::ENTITY_HANDLE_RESOLVER_OFFSET);
-  void* worldObj = *reinterpret_cast<void**>(netGameBase + nevr_game_offsets::WORLD_OBJECT_OFFSET);
-  if (worldObj) {
-    m_entityManager = *reinterpret_cast<void**>(reinterpret_cast<CHAR*>(worldObj) + nevr_game_offsets::ENTITY_MANAGER_OFFSET);
-  } else {
-    m_entityManager = nullptr;
-  }
-
   return m_gameStateData != nullptr;
-}
-
-void* TelemetryStreamer::ResolvePlayerEntity(uint64_t accountId) {
-  if (!m_resolveEntityHandle || !m_entityLookup || !m_handleResolver || !m_entityManager) return nullptr;
-
-  // FUN_140363610 expects a pair: [accountId, extra_data]
-  // It modifies pair[0] to the transform handle on success
-  int64_t pair[2] = {static_cast<int64_t>(accountId), 0};
-  int result = m_resolveEntityHandle(m_handleResolver, pair);
-  if (result == 0 || pair[0] == -1) return nullptr;
-
-  // Look up entity by the resolved handle
-  void* entity = m_entityLookup(m_entityManager, pair[0]);
-  return entity;
 }
 
 void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
@@ -524,114 +448,8 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
   snap->lastScore.assistPacked = *reinterpret_cast<uint32_t*>(gsdBase + nevr_game_offsets::LAST_SCORE_ASSIST_PACKED_OFFSET);
   snap->lastScore.scorerPacked = *reinterpret_cast<uint32_t*>(gsdBase + nevr_game_offsets::LAST_SCORE_SCORER_PACKED_OFFSET);
 
-  // Player transforms via entity system
-  // For each player, resolve their entity and read transform component data.
-  // The transform component (FUN_14042d690) returns a pointer to transform data
-  // containing position and orientation. We read bone 0 (root) for body position.
-  for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {
-    if (!snap->playerInfo[i].present || snap->playerInfo[i].accountId == 0) continue;
-
-    void* entity = ResolvePlayerEntity(snap->playerInfo[i].accountId);
-    if (!entity) continue;
-
-    // Get transform component for body pose
-    // FUN_14042d690 returns ptr to transform data (position at +0x00, orientation at +0x0C or similar)
-    if (m_getTransformComponent) {
-      // Bone slot 0 = root/body transform
-      void* transformData = m_getTransformComponent(entity, 0);
-      if (transformData) {
-        // Transform data layout: position float[3] at +0x00, orientation quat float[4] at +0x0C
-        float* fdata = reinterpret_cast<float*>(transformData);
-        snap->players[i].bodyPos[0] = fdata[0];
-        snap->players[i].bodyPos[1] = fdata[1];
-        snap->players[i].bodyPos[2] = fdata[2];
-        snap->players[i].bodyRot[0] = fdata[3];
-        snap->players[i].bodyRot[1] = fdata[4];
-        snap->players[i].bodyRot[2] = fdata[5];
-        snap->players[i].bodyRot[3] = fdata[6];
-      }
-    }
-
-    // Read head/hand positions from bone data (more reliable than transform component)
-    // Bone layout per FUN_1408f8090: returns ptr, bone data at various offsets
-    if (m_getBoneData) {
-      // Head bone (bone 4 in Echo VR skeleton)
-      void* headBone = m_getBoneData(entity, 4);
-      if (headBone) {
-        // Bone data: orientation quat float[4] then position float[3]
-        // Offset 0x18 from bone base is where the spectator stream reads from
-        float* boneFloats = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(headBone) + 0x18);
-        snap->players[i].headRot[0] = boneFloats[0];
-        snap->players[i].headRot[1] = boneFloats[1];
-        snap->players[i].headRot[2] = boneFloats[2];
-        snap->players[i].headRot[3] = boneFloats[3];
-        snap->players[i].headPos[0] = boneFloats[4];
-        snap->players[i].headPos[1] = boneFloats[5];
-        snap->players[i].headPos[2] = boneFloats[6];
-      }
-
-      // Left hand bone (bone 10)
-      void* lhBone = m_getBoneData(entity, 10);
-      if (lhBone) {
-        float* boneFloats = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(lhBone) + 0x18);
-        snap->players[i].leftHandRot[0] = boneFloats[0];
-        snap->players[i].leftHandRot[1] = boneFloats[1];
-        snap->players[i].leftHandRot[2] = boneFloats[2];
-        snap->players[i].leftHandRot[3] = boneFloats[3];
-        snap->players[i].leftHandPos[0] = boneFloats[4];
-        snap->players[i].leftHandPos[1] = boneFloats[5];
-        snap->players[i].leftHandPos[2] = boneFloats[6];
-      }
-
-      // Right hand bone (bone 16)
-      void* rhBone = m_getBoneData(entity, 16);
-      if (rhBone) {
-        float* boneFloats = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(rhBone) + 0x18);
-        snap->players[i].rightHandRot[0] = boneFloats[0];
-        snap->players[i].rightHandRot[1] = boneFloats[1];
-        snap->players[i].rightHandRot[2] = boneFloats[2];
-        snap->players[i].rightHandRot[3] = boneFloats[3];
-        snap->players[i].rightHandPos[0] = boneFloats[4];
-        snap->players[i].rightHandPos[1] = boneFloats[5];
-        snap->players[i].rightHandPos[2] = boneFloats[6];
-      }
-    }
-  }
-}
-
-void TelemetryStreamer::SnapshotPlayerBones(TelemetrySnapshot* snap) {
-  if (!m_getBoneData || !m_entityManager) return;
-
-  for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {
-    if (!snap->playerInfo[i].present || snap->playerInfo[i].accountId == 0) continue;
-
-    void* entity = ResolvePlayerEntity(snap->playerInfo[i].accountId);
-    if (!entity) continue;
-
-    auto& boneData = snap->playerBones[i];
-
-    // Read all 23 bones
-    bool allValid = true;
-    for (uint32_t b = 0; b < 23; b++) {
-      void* bone = m_getBoneData(entity, static_cast<uint16_t>(b));
-      if (!bone) {
-        allValid = false;
-        break;
-      }
-
-      // Bone data at offset 0x18: [orient_x, orient_y, orient_z, orient_w, pos_x, pos_y, pos_z]
-      float* boneFloats = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(bone) + 0x18);
-      boneData.bones[b][0] = boneFloats[0];  // orient x
-      boneData.bones[b][1] = boneFloats[1];  // orient y
-      boneData.bones[b][2] = boneFloats[2];  // orient z
-      boneData.bones[b][3] = boneFloats[3];  // orient w
-      boneData.bones[b][4] = boneFloats[4];  // pos x
-      boneData.bones[b][5] = boneFloats[5];  // pos y
-      boneData.bones[b][6] = boneFloats[6];  // pos z
-    }
-
-    boneData.valid = allValid;
-  }
+  // Player poses through the game's own component readers, as /session reads them (telemetry_player_pose.h)
+  nevr_telemetry_pose::ReadPlayerPoses(reinterpret_cast<const uint8_t*>(netGameBase), snap, m_poseFunctions);
 }
 
 // ============================================================================
@@ -771,7 +589,7 @@ void TelemetryStreamer::BuildAndSendFrame(const TelemetrySnapshot& snap) {
     ps->set_flags(pi.flags);
     ps->set_ping(pi.ping);
 
-    // Transforms (zeroed for Phase 1, populated in Phase 2)
+    // Poses, as the game's readers gave them (telemetry_player_pose.h); a part not read is zero
     const auto& pt = snap.players[i];
 
     auto* head = ps->mutable_head();
@@ -823,26 +641,7 @@ void TelemetryStreamer::BuildAndSendFrame(const TelemetrySnapshot& snap) {
     vel->set_y(pt.velocity[1]);
     vel->set_z(pt.velocity[2]);
 
-    // Bones
-    const auto& bones = snap.playerBones[i];
-    if (bones.valid) {
-      auto* pb = arena->add_player_bones();
-      pb->set_slot(i);
-
-      // Pack transforms (23 bones × 3 floats = 276 bytes)
-      std::string transforms(23 * 3 * sizeof(float), '\0');
-      // Pack orientations (23 bones × 4 floats = 368 bytes)
-      std::string orientations(23 * 4 * sizeof(float), '\0');
-
-      for (int b = 0; b < 23; b++) {
-        // bones[b] = [orient_x, orient_y, orient_z, orient_w, pos_x, pos_y, pos_z]
-        std::memcpy(&orientations[b * 4 * sizeof(float)], &bones.bones[b][0], 4 * sizeof(float));
-        std::memcpy(&transforms[b * 3 * sizeof(float)], &bones.bones[b][4], 3 * sizeof(float));
-      }
-
-      pb->set_transforms(std::move(transforms));
-      pb->set_orientations(std::move(orientations));
-    }
+    // No player_bones: the snapshot holds no bone data (telemetry_snapshot.h).
   }
 
   // Drain events from ring buffer (broadcaster-pushed events)

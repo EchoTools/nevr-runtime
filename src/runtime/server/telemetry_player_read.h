@@ -134,7 +134,7 @@ inline void CopyName(char (&dest)[36], const char* name) {
 
 // Fills a cleared snapshot's playerInfo and stats by game slot (an absent slot keeps present == false) and
 // counts the players read in snap->playerCount. Entrant i is read only when its slot's handle-table entry
-// names i, as the /session writer reads the entrant the table names. The account id and ping are the lobby
+// names i, as the /session writer reads the entrant the table names, and i is kept as the slot's entrantIndex. The account id and ping are the lobby
 // entrant's at the same slot; a player whose slot is past the lobby's table is left out. The name is what
 // getUserName (the game's GetUserName, game thread only) returns for entrant i, which is /session's name.
 // Without it (a test, or a caller that has not resolved it), or while the net game's session-flags pointer is
@@ -174,6 +174,7 @@ inline PlayerReadResult ReadPlayers(const uint8_t* netGame, TelemetrySnapshot* s
     auto& info = snap->playerInfo[slot];
     info.present = true;
     info.flags = word;
+    info.entrantIndex = i;
     info.teamIndex = team;
     const EchoVR::Lobby::EntrantData& entrant = lobby.items[slot];
     info.accountId = entrant.userId.accountId;

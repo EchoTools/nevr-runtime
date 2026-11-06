@@ -10,6 +10,7 @@
 #include "runtime/server/bearer_reconnect_auth.h"
 #include "runtime/server/event_ring_buffer.h"
 #include "runtime/server/telemetry_events.h"
+#include "runtime/server/telemetry_player_pose.h"
 #include "runtime/server/telemetry_snapshot.h"
 #include "runtime/server/telemetry_snapshot_store.h"
 
@@ -90,7 +91,6 @@ class TelemetryStreamer {
 
   // Game thread: snapshot all game state into the write buffer
   void SnapshotGameState(TelemetrySnapshot* snap);
-  void SnapshotPlayerBones(TelemetrySnapshot* snap);
 
   // Telemetry thread: build protobuf frame from snapshot
   void BuildAndSendFrame(const TelemetrySnapshot& snap);
@@ -166,20 +166,12 @@ class TelemetryStreamer {
   GetFloatPropertyFn m_getFloatProperty{nullptr};
   GetIntPropertyFn m_getIntProperty{nullptr};
   GetUserNameFn m_getUserName{nullptr};
-  EntityLookupFn m_entityLookup{nullptr};
-  ResolveEntityHandleFn m_resolveEntityHandle{nullptr};
-  GetBoneDataFn m_getBoneData{nullptr};
-  GetTransformComponentFn m_getTransformComponent{nullptr};
+  nevr_telemetry_pose::PoseFunctions m_poseFunctions;
 
   // Cached game pointers (resolved per snapshot)
   void* m_netGame{nullptr};
   void* m_gameStateData{nullptr};
-  void* m_entityManager{nullptr};
-  void* m_handleResolver{nullptr};
 
   void ResolveFunctionPointers();
   bool ResolveGamePointers();
-
-  // Resolve entity for a player by account ID, returns entity pointer or nullptr
-  void* ResolvePlayerEntity(uint64_t accountId);
 };
