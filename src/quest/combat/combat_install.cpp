@@ -11,6 +11,8 @@
 #include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/meshstep.h"
+#include "quest/combat/pfx.h"
+#include "quest/combat/pfxtev.h"
 #include "quest/combat/refresh_rate.h"
 #include "quest/combat/shaderstep.h"
 #include "quest/combat/tablestep.h"
@@ -36,6 +38,9 @@ ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tab
 ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
 ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
 
+ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
+ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
+
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
 //   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
@@ -53,6 +58,9 @@ constexpr std::array kModules{
     Module{"tablestep", nullptr, &TablestepNormal},
     Module{"instmodel", nullptr, &InstmodelNormal},
     Module{"shaderstep", nullptr, &ShaderstepNormal},
+    // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
+    Module{"pfx", nullptr, &PfxNormal},
+    Module{"pfxtev", nullptr, &PfxtevNormal},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -157,6 +165,8 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"instmodel", config.instmodel.on ? 1 : 0}, {"instmodel_source", source(config.instmodel.source)},
                        {"shaderstep", config.shaderstep.on ? 1 : 0}, {"shaderstep_source", source(config.shaderstep.source)},
                        {"tablestep", config.tablestep.on ? 1 : 0}, {"tablestep_source", source(config.tablestep.source)},
+                       {"pfx", config.pfx.on ? 1 : 0}, {"pfx_source", source(config.pfx.source)},
+                       {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
 }

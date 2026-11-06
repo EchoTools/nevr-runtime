@@ -74,6 +74,8 @@ PROGRAMS = {
         "shaderstep_tablestep_test",
         "shaderstep_test",
         "tablestep_test",
+        "pfx_test",
+        "pfxtev_test",
     ),
     "data": (
         "data_step_test",

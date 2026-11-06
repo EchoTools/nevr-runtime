@@ -171,6 +171,8 @@ struct CombatConfig {
   CombatSwitch instmodel;   // `combat.instmodel`: instanced-model tables grow by 1 in a combat match (combat/instmodel.h)
   CombatSwitch shaderstep;  // `combat.shaderstep`: shader-set tables built by ConstructInstance grow by 1 in a combat match (combat/shaderstep.h)
   CombatSwitch tablestep;   // `combat.tablestep`: shader-set tables built by CreateInstance grow by 1 in a combat match (combat/tablestep.h)
+  CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
+  CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
 };
 
 struct LogEvent {
