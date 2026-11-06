@@ -1446,7 +1446,7 @@ static void HandleRemoteOpen(ProxyPair* pair, int connIdx, uint64_t discordId, c
     std::lock_guard<std::mutex> lk(g_pairsMutex);
     if (!PairRegisteredLocked(pair)) return;
     remote = pair->remoteWs;
-    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
         "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): ",
         g_remoteUri);
     Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
@@ -1673,7 +1673,7 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
   // middle/trailing/sole position correctly; see its own tests.
   if (role == nevr_socket_role::Role::Matchmaker) {
     remoteUrl = nevr_serverdb_uri::RemoveQueryParam(remoteUrl, "format=evr");
-    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
         "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
     Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
   }
@@ -2493,7 +2493,7 @@ void InstallWebSocketBridge() {
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s)", connIdx,
                 ConnLabel(connIdx));
             const std::string remoteDiagnostic =
-                nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
+                nevr_log_diagnostics::FormatUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
             Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
             break;
           }
@@ -2559,7 +2559,7 @@ void InstallWebSocketBridge() {
   g_bridgeEnabled = true;
 
   const std::string localUri = "ws://127.0.0.1:" + std::to_string(g_proxyPort);
-  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+  const std::string diagnostic = nevr_log_diagnostics::FormatUrlPairDiagnostic(
       "[NEVR.WS] Proxy listening on ", localUri, " -> ", g_remoteUri);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 

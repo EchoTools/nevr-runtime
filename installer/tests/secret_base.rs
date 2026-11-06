@@ -1,6 +1,6 @@
-//! The success lines of the runs that fetch from a base carrying a query (#1353). The base is a `file://` address whose
-//! folder name ends in `?token=...`, so the run reads its release from disk. Every line it writes that names the base
-//! must show the address without its query. A failure test cannot reach these success lines, so they are tested here.
+//! The success lines of the runs that fetch from a base carrying a query. The base is a `file://` address whose folder
+//! name ends in `?token=...`, so the run reads its release from disk. Every line it writes that names the base shows
+//! the address whole, query included (#2244). A failure test cannot reach these success lines, so they are tested here.
 
 mod common;
 use common::*;
@@ -16,7 +16,7 @@ use std::process::{Command, Output};
 const HOST: &[u8] = b"new host NEVR-BUILD 9.9.9";
 const RT: &[u8] = b"new runtime";
 const GAME: &[u8] = b"the game's BugSplat64.dll";
-/// The value of the base's query. No output of any run may show it.
+/// The value of the base's query. The logged address carries it.
 const TOKEN: &str = "tok-9f3ab1";
 const ZIP_PATH: &str = "v1.0.0/nevr-runtime-v1.0.0-windows.zip";
 
@@ -73,15 +73,13 @@ fn record<'a>(lines: &'a [Value], name: &str) -> &'a Value {
     lines.iter().find(|r| r["event"] == name).unwrap_or_else(|| panic!("no {name} record in the log: {lines:?}"))
 }
 
-/// Nothing a run writes may show the query's value: its stdout, its stderr and its log text.
-fn assert_no_token(texts: &[&str]) {
-    for t in texts {
-        assert!(!t.contains(TOKEN), "the base's query was written down: {t}");
-    }
+/// The log text names the base with its query.
+fn assert_token_logged(log: &str) {
+    assert!(log.contains(&format!("base?token={TOKEN}")), "the base's query is missing from the log: {log}");
 }
 
 #[test]
-fn a_manifest_fetched_from_a_base_with_a_query_is_logged_without_it() {
+fn a_manifest_fetched_from_a_base_with_a_query_is_logged_with_it() {
     let keys = tempfile::tempdir().unwrap();
     let (base, pins) = file_release(keys.path());
     let root = tempfile::tempdir().unwrap();
@@ -96,12 +94,12 @@ fn a_manifest_fetched_from_a_base_with_a_query_is_logged_without_it() {
     let m = record(&fetched, "manifest_fetch");
     assert_eq!(m["status"], 200, "the success line is the one under test: {m}");
     let url = m["url"].as_str().unwrap();
-    assert!(url.starts_with("file://") && url.ends_with("/base"), "the logged address is not the redacted base: {url}");
-    assert_no_token(&[&stdout, &stderr, &log]);
+    assert!(url.starts_with("file://") && url.contains(&format!("/base?token={TOKEN}/")), "the logged address is not the whole base: {url}");
+    assert_token_logged(&log);
 }
 
 #[test]
-fn an_artifact_installed_from_a_base_with_a_query_is_logged_without_it() {
+fn an_artifact_installed_from_a_base_with_a_query_is_logged_with_it() {
     let keys = tempfile::tempdir().unwrap();
     let (base, pins) = file_release(keys.path());
     let game = tempfile::tempdir().unwrap();
@@ -116,11 +114,11 @@ fn an_artifact_installed_from_a_base_with_a_query_is_logged_without_it() {
     let log = std::fs::read_to_string(root.path().join("logs/nevr-install.jsonl")).unwrap();
     let a = record(&log_lines(&root.path().join("logs/nevr-install.jsonl")), "artifact_fetch").clone();
     assert_eq!(a["ok"], true, "the success line is the one under test: {a}");
-    assert_no_token(&[&stdout, &stderr, &log]);
+    assert_token_logged(&log);
 }
 
 #[test]
-fn an_artifact_staged_from_a_base_with_a_query_is_logged_without_it() {
+fn an_artifact_staged_from_a_base_with_a_query_is_logged_with_it() {
     let keys = tempfile::tempdir().unwrap();
     let (base, pins) = file_release(keys.path());
     let root = tempfile::tempdir().unwrap();
@@ -136,11 +134,11 @@ fn an_artifact_staged_from_a_base_with_a_query_is_logged_without_it() {
     let log = std::fs::read_to_string(nevr.path().join("logs/nevr-update.jsonl")).unwrap();
     let a = record(&log_lines(&nevr.path().join("logs/nevr-update.jsonl")), "artifact_fetch").clone();
     assert_eq!(a["ok"], true, "the success line is the one under test: {a}");
-    assert_no_token(&[&stdout, &stderr, &log]);
+    assert_token_logged(&log);
 }
 
 #[test]
-fn an_artifact_fetched_over_the_c_abi_from_a_base_with_a_query_is_logged_without_it() {
+fn an_artifact_fetched_over_the_c_abi_from_a_base_with_a_query_is_logged_with_it() {
     let keys = tempfile::tempdir().unwrap();
     let (base, pins) = file_release(keys.path());
     let pins_text = std::fs::read_to_string(&pins).unwrap();
@@ -160,11 +158,11 @@ fn an_artifact_fetched_over_the_c_abi_from_a_base_with_a_query_is_logged_without
     let text = std::fs::read_to_string(&log).unwrap();
     let a = record(&log_lines(&log), "artifact_fetch").clone();
     assert_eq!(a["ok"], true, "the success line is the one under test: {a}");
-    assert_no_token(&[&text]);
+    assert_token_logged(&text);
 }
 
 #[test]
-fn a_read_that_fails_on_a_file_base_names_the_base_without_its_query() {
+fn a_read_that_fails_on_a_file_base_names_the_base_with_its_query() {
     // A folder opens as a file on Linux, and reading it fails: the failure is the one a read of a file base reports.
     let d = tempfile::tempdir().unwrap();
     let folder = d.path().join(format!("file?token={TOKEN}"));
@@ -172,7 +170,7 @@ fn a_read_that_fails_on_a_file_base_names_the_base_without_its_query() {
     let url = format!("file://{}", folder.display());
     let mut sink: Vec<u8> = Vec::new();
     match fetch_capped(&url, 0, 1024, &mut sink) {
-        Err(Failure::Interrupted(m)) => assert!(!m.contains(TOKEN), "the failed read named the query: {m}"),
+        Err(Failure::Interrupted(m)) => assert!(m.contains(TOKEN), "the failed read left out the query: {m}"),
         Err(_) => panic!("the read did not fail as an interrupted read"),
         Ok(n) => panic!("a folder was read as {n} bytes"),
     }

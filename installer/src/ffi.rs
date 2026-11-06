@@ -225,7 +225,7 @@ pub unsafe extern "C" fn NevrArtifactFetch(s: *mut NevrSession, version: *const 
         let art = manifest::find(&m, &version, &kind, platform.as_deref())?;
         let url = format!("{}/{}", s.cfg.base, art.path);
         let f = crate::artifact::download(&url, &art, std::path::Path::new(&out_path))?;
-        s.log.info("artifact_fetch", 8, json!({"kind": kind, "url": crate::util::redact_url(&url), "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
+        s.log.info("artifact_fetch", 8, json!({"kind": kind, "url": url, "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
         Ok(NEVR_OK)
     })
 }
