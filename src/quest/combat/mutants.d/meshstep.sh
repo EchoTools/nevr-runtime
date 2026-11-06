@@ -20,7 +20,7 @@ runm ms_stock_not_counted   $S "s/g_stock.fetch_add(1, std::memory_order_relaxed
 runm ms_built_not_counted   $S "s/g_built.fetch_add(1, std::memory_order_relaxed);/g_built.fetch_add(0, std::memory_order_relaxed);/"
 runm ms_built_said_always   $S "s/  if (g_saidBuilt.exchange(true, std::memory_order_relaxed)) return;/  (void)g_saidBuilt;/"
 runm ms_stock_said_always   $S "s/  if (g_saidStock.exchange(true, std::memory_order_relaxed)) return;/  (void)g_saidStock;/"
-runm ms_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/table_step::ScopeName(table_step::Scope::kCombat)/"
+runm ms_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/table_step::ScopeName(scope == scope ? table_step::Scope::kCombat : scope)/"
 runm ms_built_step_text     $S "s/{\"growth_step\", kGrowStep}, {\"stock_growth_step\", kStockGrowStep},/{\"growth_step\", kStockGrowStep}, {\"stock_growth_step\", kGrowStep},/"
 runm ms_built_level_debug   $S "s/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_meshstep_built\"/sentinel::LogFields(sentinel::LogLevel::kDebug, \"combat_meshstep_built\"/"
 # the growth step
@@ -55,8 +55,7 @@ runm ms_block_step_slot     $S "s/Put64(self, off + 0x20, kGrowStep);/Put64(self
 runm ms_block_step_dropped  $S "s/^    Put64(self, off + 0x20, kGrowStep);\$//"
 runm ms_block_28_dropped    $S "s/^    Put64(self, off + 0x28, 0);\$//"
 runm ms_block_30_dropped    $S "s/^    Put64(self, off + 0x30, 0);\$//"
-runm ms_block_after_step    $S "s/^    Put64(self, off + 0x20, kGrowStep);\$//;s/^    g_fns.memblockCtor(self + off, 0, 0, g_fns.currentPtr());\$/    Put64(self, off + 0x20, kGrowStep);
-    g_fns.memblockCtor(self + off, 0, 0, g_fns.currentPtr());/"
+runm ms_block_after_step    $S "s/^    Put64(self, off + 0x20, kGrowStep);\$//;s/^    g_fns.memblockCtor(self + off, 0, 0, g_fns.currentPtr());\$/    Put64(self, off + 0x20, kGrowStep);\n    g_fns.memblockCtor(self + off, 0, 0, g_fns.currentPtr());/"
 # the vtable words are read as the stock code reads them, plus 0x10
 runm ms_presence_plus_zero  $S "s/g_vtPresence = vp + 0x10;/g_vtPresence = vp;/"
 runm ms_mesh_plus_zero      $S "s/g_vtMesh = vm + 0x10;/g_vtMesh = vm;/"

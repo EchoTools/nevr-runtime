@@ -155,7 +155,10 @@ void ANullResultIsReturnedAsItIs() {
   QCHECK(tbs::InstallAt(&Lookup, g_pins, true).installed);
   g_returnNull = true;
   QCHECK(SlotFn()(nullptr, nullptr) == nullptr);
-  QCHECK(g_stockCalls == 1 && tbs::CurrentStats().rewritten == 0 && tbs::CurrentStats().unexpected == 0);
+  QCHECK(g_stockCalls == 1 && tbs::CurrentStats().rewritten == 0 && tbs::CurrentStats().unexpected == 0 && tbs::CurrentStats().stock == 0);
+  SetWhere(Where::kArena);  // and out of a combat match the null result is returned, not counted as an object left to the game
+  QCHECK(SlotFn()(nullptr, nullptr) == nullptr);
+  QCHECK(g_stockCalls == 2 && tbs::CurrentStats().stock == 0 && Lines("combat_tablestep_stock").empty());
   End1();
 }
 

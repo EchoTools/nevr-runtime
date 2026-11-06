@@ -8,12 +8,12 @@ runm tbs_always_corrects    $S "s/  if (scope != table_step::Scope::kCombat) {/ 
 runm tbs_never_corrects     $S "s/  if (scope != table_step::Scope::kCombat) {/  if (true) {/"
 runm tbs_scope_not_read     $S "s/  const table_step::Scope scope = table_step::CurrentScope();/  const table_step::Scope scope = table_step::Scope::kCombat;/"
 # the game's function runs once, with the game's arguments; its null result and its object are returned as they are
-runm tbs_original_dropped   $S "s/  void\* const obj = original(unused, init);/  (void)original; void* const obj = nullptr;/"
-runm tbs_original_args      $S "s/  void\* const obj = original(unused, init);/  void* const obj = original(init, unused);/"
+runm tbs_original_dropped   $S "s/  void\* const obj = original(unused, init);/  (void)original; (void)unused; (void)init; void* const obj = nullptr;/"
+runm tbs_original_args      $S "s/  void\* const obj = original(unused, init);/  void* const obj = original(unused, unused);/"
 runm tbs_null_unchecked     $S "s/^  if (obj == nullptr) return obj;  \/\/ the game's own result, unchanged\$//"
 runm tbs_stock_not_counted  $S "s/g_stock.fetch_add(1, std::memory_order_relaxed);/g_stock.fetch_add(0, std::memory_order_relaxed);/"
 runm tbs_stock_said_always  $S "s/  if (g_saidStock.exchange(true, std::memory_order_relaxed)) return;/  (void)g_saidStock;/"
-runm tbs_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/table_step::ScopeName(table_step::Scope::kCombat)/"
+runm tbs_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/table_step::ScopeName(scope == scope ? table_step::Scope::kCombat : scope)/"
 # the correction's counts and lines
 runm tbs_rewritten_count    $S "s/g_rewritten.fetch_add(1, std::memory_order_relaxed);/g_rewritten.fetch_add(0, std::memory_order_relaxed);/"
 runm tbs_unexpected_count   $S "s/g_unexpected.fetch_add(1, std::memory_order_relaxed);/g_unexpected.fetch_add(0, std::memory_order_relaxed);/"

@@ -33,13 +33,15 @@ constexpr unsigned long kObjSize = 0x240;
 
 alignas(16) unsigned char g_obj[kObjSize];
 int g_stockCalls = 0;
+const void* g_stockInit = nullptr;
 // What the stock constructor leaves in the fields this module reads.
 unsigned long g_stockStepValue = 0x20;
 unsigned long g_stockStepIndex = ~0UL;  // when not ~0UL, that step gets g_stockStepOverride instead
 unsigned long g_stockStepOverride = 0x21;
 
-extern "C" __attribute__((noinline)) void FakeStockCtor(void* self, const void*) {
+extern "C" __attribute__((noinline)) void FakeStockCtor(void* self, const void* init) {
   ++g_stockCalls;
+  g_stockInit = init;
   if (self == nullptr) return;  // the stand-in for the game's own handling of a null object
   unsigned char* o = static_cast<unsigned char*>(self);
   std::memset(o, 0xAB, kObjSize);
@@ -98,7 +100,8 @@ void StockObject(unsigned char* out) {
   FakeStockCtor(out, nullptr);
   g_stockCalls = calls;
 }
-void Construct() { SlotFn()(g_obj, nullptr); }
+const int kInitMarker = 0;
+void Construct() { SlotFn()(g_obj, &kInitMarker); }
 
 void ThePinsAreTheReadelfAndDisassemblyPins() {
   QCHECK(im::kPins.ctor == 0x19078dc && im::kPins.slot == 0x36c5c68 && im::kPins.stepWord == 0x1907958);
@@ -121,7 +124,7 @@ void ACombatMatchSetsTheEightStepsAndNothingElse() {
     std::memcpy(expect + s, &one, sizeof one);
   }
   Construct();
-  QCHECK(g_stockCalls == 1);  // the stock constructor runs exactly once
+  QCHECK(g_stockCalls == 1 && g_stockInit == &kInitMarker);  // the stock constructor runs exactly once, with the game's init
   for (unsigned long s : kSteps) QCHECK(Read(s) == 1);
   QCHECK(std::memcmp(g_obj, expect, kObjSize) == 0);  // the stock object with the eight steps set to 1, nothing else
   for (unsigned long m : kMembers) QCHECK(Read(m + 0x28) == 0);  // the capacities the constructor zeroes stay zero
@@ -231,6 +234,9 @@ void TheStepLinesAreCappedAtSixteen() {
   const std::vector<Line> cap = Lines("combat_instmodel_log_cap");
   QCHECK(cap.size() == 1U && cap[0].level == sentinel::LogLevel::kWarn && Has(cap[0].text, "\"cap\":16"));
   QCHECK(im::CurrentStats().objects == 40 && im::CurrentStats().stepsSet == 320);
+  g_stockStepIndex = 0;  // and a step that does not hold 0x20 in each of the next 40: the Warnings stop at 16 too
+  for (int i = 0; i < 40; ++i) Construct();
+  QCHECK(Lines("combat_instmodel_mismatch").size() == 16U && im::CurrentStats().mismatch == 40);
   End1();
 }
 
