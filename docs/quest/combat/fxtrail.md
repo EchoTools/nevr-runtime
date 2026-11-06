@@ -6,7 +6,7 @@ scoped by), `src/quest/tests/fxtrail_test.cpp`, `src/quest/combat/mutants.d/fxtr
 `combat.fxtrail` (default true). The q15t plugin's `fxtrail.off` file is no longer read; one found in the files folder's `q15t` directory is a Warning
 (`combat_fxtrail_legacy_switch`) that names the key.
 
-Origin: Ducky's echoquest-combat reference build, `afk_fxtrail.cpp` (the rule at :1-24, the install at :60-77; docs/audits/2026-11-05-q15t-origin-citations.md
+Origin: Ducky's echoquest-combat reference build, afk_fxtrail.cpp (the rule at :1-24, the install at :60-77; docs/audits/2026-11-05-q15t-origin-citations.md
 rows 63-68 and 212-213), reconstructed in the q15t plugin (imported in #1591) and moved here. The plugin's 11 code-word pins were an addition to the source's;
 the level scope is an addition made in the move.
 

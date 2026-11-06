@@ -5,7 +5,7 @@ Files: `src/quest/combat/voipdrop.{h,cpp}`, `src/quest/combat/voipdrop_targets.h
 the `q15t` and `combat` APKs and in no other. Switch in `config.yaml` (docs/adr/0046 rule 4): `combat.voipdrop` (default true). The q15t plugin's
 `voipdrop.off` file is no longer read; one found in the files folder's `q15t` directory is a Warning (`combat_voipdrop_legacy_switch`) that names the key.
 
-Origin: Ducky's echoquest-combat reference build, `afk_voipdrop.cpp` (the rule at :1, the constants at :42-43 and :51, the pinned words at :55-64, the
+Origin: Ducky's echoquest-combat reference build, afk_voipdrop.cpp (the rule at :1, the constants at :42-43 and :51, the pinned words at :55-64, the
 probe at :82-94, the hook at :96-112 and the switch at :114-130; docs/audits/2026-11-05-q15t-origin-citations.md rows 133-136 and 279-280), reconstructed in the
 q15t plugin (imported in #1591) and moved here. The plugin's doubt rule (every unreadable field runs the game's function) and its code-word pins are
 additions to the source's.

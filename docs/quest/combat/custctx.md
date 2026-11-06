@@ -6,7 +6,7 @@ runs in the `q15t` and `combat` APKs and in no other. Switch in `config.yaml` (d
 plugin's `custctx.off` file is no longer read; one found in the files folder's `q15t` directory is a Warning (`combat_custctx_legacy_switch`) that names
 the key.
 
-Origin: Ducky's echoquest-combat reference build, `afk_custctx.cpp` (docs/audits/2026-11-05-q15t-origin-citations.md rows 29-33 and 148:
+Origin: Ducky's echoquest-combat reference build, afk_custctx.cpp (docs/audits/2026-11-05-q15t-origin-citations.md rows 29-33 and 148:
 afk_custctx.cpp:1,63-65,73-95,100-101,168-285; afk_tap.cpp:174), reconstructed in the q15t plugin (imported in #1591) and moved here. The plugin's
 v4 layout-pool refusal and its 34 code-word pins were additions to the source's.
 

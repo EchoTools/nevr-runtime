@@ -5,7 +5,7 @@ Files: `src/quest/combat/droneguard.{h,cpp}`, `src/quest/combat/droneguard_targe
 `q15t` and `combat` APKs and in no other. Switches in `config.yaml` (docs/adr/0046 rule 4): `combat.droneguard` (default true) and `combat.droneguard_stage1`
 (default false; read only when the first is on). The plugin had no switch file; its build option for the second stage is gone.
 
-Origin: Ducky's echoquest-combat reference build, `afk_droneguard.cpp` (the rule at :1, the constants at :42-48, :66-80, `IdxSkip` :86-99, `StateLine` :108-124,
+Origin: Ducky's echoquest-combat reference build, afk_droneguard.cpp (the rule at :1, the constants at :42-48, :66-80, `IdxSkip` :86-99, `StateLine` :108-124,
 `FollowHook` :126-146; docs/audits/2026-11-05-q15t-origin-citations.md rows 34-36 and 149-150), reconstructed in the q15t plugin (imported in #1591) and moved
 here. The reference build marks the module "TEST ONLY"; its wave19a on-list turns it on, and so does the default here. The word pins are the plugin's addition to
 the source's.

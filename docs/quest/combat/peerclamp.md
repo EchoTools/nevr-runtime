@@ -5,7 +5,7 @@ scoped by), `src/quest/tests/peerclamp_test.cpp`, `src/quest/combat/mutants.d/pe
 (`src/quest/combat/combat_install.h`): it runs in the `q15t` and `combat` APKs and in no other. Switch in `config.yaml` (docs/adr/0046 rule 4):
 `combat.peerclamp` (default true). The q15t plugin had no switch file for it.
 
-Origin: Ducky's echoquest-combat reference build, `afk_peerclamp.cpp` (the rule at :1, the constants at :39-44, the 26 pinned words at :50-62, the clamp at
+Origin: Ducky's echoquest-combat reference build, afk_peerclamp.cpp (the rule at :1, the constants at :39-44, the 26 pinned words at :50-62, the clamp at
 :83-116; docs/audits/2026-11-05-q15t-origin-citations.md rows 99-101 and 241-242), reconstructed in the q15t plugin (imported in #1591) and moved here. Upstream
 it was test only; the plugin built it on (#1625). The level scope is an addition made in the move.
 
