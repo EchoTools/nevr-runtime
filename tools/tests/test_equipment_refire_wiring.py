@@ -101,6 +101,28 @@ class Wiring(unittest.TestCase):
         frame = " ".join(text[text.index("void OnFrame()") :].split())
         self.assertEqual(frame, "void OnFrame() { if (!g_installed) return; PcEnv env; FireDue(env, g_tracker); } }")
 
+    def test_the_pc_adapter_methods_are_pinned_whole(self):
+        # PcEnv holds no decision, but three of its lines carry the build's facts: which handler a slot calls, what the lookup answered
+        # and which clock the debounce reads. A mutant of any of them compiles and passes every header test, so each is pinned verbatim.
+        text = " ".join(strip_comments(GLUE.read_text()).split())
+        for want in (
+            "std::uint32_t SlotOf(std::uintptr_t game, const std::uint64_t key[2]) { std::uint64_t k[2] = {key[0], key[1]}; "
+            "std::uint32_t found = 0xffffffffU; g_findSlot(reinterpret_cast<void*>(game), &found, k); return found; }",
+            "void CallHandler(Slot slot, std::uintptr_t owner, std::uint32_t handle) { "
+            "g_handler[static_cast<std::size_t>(slot)](reinterpret_cast<void*>(owner), handle); }",
+            "std::uint64_t NowMs() { return GetTickCount64(); }",
+            "std::uintptr_t NetGame(std::uintptr_t arg) { return reinterpret_cast<std::uintptr_t>(g_netGame(reinterpret_cast<void*>(arg))); }",
+        ):
+            self.assertIn(want, text)
+        # the lock is a plain mutex around the Tracker; a no-op lock is a race only ThreadSanitizer can show (named in the PR body)
+        self.assertIn("void Lock() { g_lock.lock(); }", text)
+        self.assertIn("void Unlock() { g_lock.unlock(); }", text)
+
+    def test_the_handlers_are_resolved_in_slot_order(self):
+        text = strip_comments(GLUE.read_text())
+        self.assertIn("g_handler[i] = reinterpret_cast<HandlerFn>(nevr::ResolveVA_Checked(gameBase, kRows[i].handlerVa));", text)
+        self.assertEqual([r[0] for r in rows()], ["kWeapon", "kTacMod", "kOrdnance"])
+
     def test_the_net_game_getters_field_is_the_displacement_of_its_pinned_body(self):
         text = strip_comments(GLUE.read_text())
         field = re.search(r"kNetGameField = (0x[0-9a-fA-F]+);", text)
@@ -122,6 +144,7 @@ class Wiring(unittest.TestCase):
     def test_a_mismatch_names_the_bytes_and_the_handler(self):
         text = strip_comments(GLUE.read_text())
         self.assertIn("expected=%s actual=%s", text)
+        self.assertIn("window_start=%zu", text)
         self.assertIn("row.handlerName", text)
         self.assertIn("hooks: 0 of %zu installed", text)
 

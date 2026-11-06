@@ -156,20 +156,22 @@ bool Matches(std::uintptr_t gameBase, std::uint64_t va, const std::uint8_t* expe
   void* target = nevr::ResolveVA_Checked(gameBase, va);
   if (target != nullptr && nevr::ValidatePrologue(target, expected, size)) return true;
   std::size_t differs = 0;
+  std::size_t start = 0;  // the bytes shown begin 8 before the first difference (or at 0), so a late difference is still in the window
   char want[40] = "";
   char have[40] = "unreadable";
   if (target != nullptr && IsReadableMemory(target, size)) {
     const auto* actual = static_cast<const std::uint8_t*>(target);
     while (differs < size && actual[differs] == expected[differs]) ++differs;
-    HexBytes(actual + (differs < 8 ? 0 : differs - 8), size - (differs < 8 ? 0 : differs - 8), have, sizeof have);
-    HexBytes(expected + (differs < 8 ? 0 : differs - 8), size - (differs < 8 ? 0 : differs - 8), want, sizeof want);
+    start = differs < 8 ? 0 : differs - 8;
+    HexBytes(actual + start, size - start, have, sizeof have);
+    HexBytes(expected + start, size - start, want, sizeof want);
   } else {
     HexBytes(expected, size, want, sizeof want);
   }
   nevr_boot_log_tee::TeeFprintf(
-      "[NEVR.EQUIP] warn; equipment re-fire hook not installed: %s va=0x%llx reason=bytes_mismatch first_difference=%zu expected=%s actual=%s "
+      "[NEVR.EQUIP] warn; equipment re-fire hook not installed: %s va=0x%llx reason=bytes_mismatch first_difference=%zu window_start=%zu expected=%s actual=%s "
       "(the game build is not the one this was written against, so the equipment change is left as the game makes it)\n",
-      name, static_cast<unsigned long long>(va), differs, want, have);
+      name, static_cast<unsigned long long>(va), differs, start, want, have);
   return false;
 }
 
