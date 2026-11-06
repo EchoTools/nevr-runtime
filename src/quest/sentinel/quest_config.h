@@ -144,11 +144,19 @@ struct CombatForceChoice {
   Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, not asked
 };
 
-// The `combat:` section (docs/adr/0046 rule 4): one member per key, each defaulting to the shipped behaviour. Today the one key is
-// `force`; each folded module adds its switch here, with the row in KnownSections (src/core/nevr_config.cpp), the example config and the
-// `combat_config` line (combat/combat_install.h).
+// A folded combat module's switch (docs/adr/0046 rule 4), after the file and the default have spoken.
+struct CombatSwitchChoice {
+  bool on = true;                   // each module's default is the shipped behaviour, which is on
+  Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default
+};
+
+// The `combat:` section (docs/adr/0046 rule 4): one member per key, each defaulting to the shipped behaviour. `force` and one switch
+// for each folded module (`sendguard`: a send to a game space that is not loaded is dropped, not faulted, #2179); each module adds its
+// switch here, with the row in KnownSections (src/core/nevr_config.cpp), the example config and the `combat_config` line
+// (combat/combat_install.h).
 struct CombatConfig {
   CombatForceChoice force;
+  CombatSwitchChoice sendguard;
 };
 
 struct LogEvent {

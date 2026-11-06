@@ -205,22 +205,23 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
   Done();
 }
 
-// The real steps, with the table as it ships: no module has moved in yet, so each phase writes its one line with no modules, and says
-// that nothing of combat's is installed in it.
-void TheShippedTableIsEmptyAndEachStepSaysSo() {
+// The shipped table: sendguard has a step in the normal phase and none in the early one (#2179). On the host there is no libr15 to hook,
+// so its row reports the refusal, and the line says so at Warning.
+void TheShippedTableHoldsSendguardInTheNormalPhase() {
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
-  QCHECK(early.ran && early.modules == 0 && normal.ran && normal.modules == 0);
+  QCHECK(early.ran && early.modules == 0 && normal.ran && normal.modules == 1);
+  QCHECK(normal.installed == 0 && normal.failed == 1);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
     QCHECK(Has(lines[0].text, "\"phase\":\"early\"") && Has(lines[1].text, "\"phase\":\"normal\""));
-    for (const Line& l : lines) {
-      QCHECK(l.level == sentinel::LogLevel::kInfo);
-      QCHECK(Has(l.text, "\"modules\":0") && Has(l.text, "\"results\":\"\""));
-      QCHECK(Has(l.text, "no combat module has a step in this phase yet; nothing of combat's is installed"));
-    }
+    QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Has(lines[0].text, "\"modules\":0") && Has(lines[0].text, "\"results\":\"\""));
+    QCHECK(Has(lines[0].text, "no combat module has a step in this phase yet; nothing of combat's is installed"));
+    QCHECK(lines[1].level == sentinel::LogLevel::kWarn);
+    QCHECK(Has(lines[1].text, "\"modules\":1") && Has(lines[1].text, "\"results\":\"sendguard=module_not_loaded\""));
   }
   Done();
 }
@@ -276,16 +277,23 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   cfg.force = {true, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
   cfg.force = {false, nevr_quest::Source::kFile};  // the file said false: not asked, but the source is the file's
+  cfg.sendguard = {false, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
   const std::vector<Line> lines = Lines("combat_config");
   QCHECK(lines.size() == 3U);
   if (lines.size() == 3U) {
     QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Has(lines[0].text, "\"force\":0") && Has(lines[0].text, "\"force_source\":\"default\""));
+    // sendguard: on by default, from the default; a file's word, either way, is the file's
+    QCHECK(Has(lines[0].text, "\"sendguard\":1") && Has(lines[0].text, "\"sendguard_source\":\"default\""));
     QCHECK(Has(lines[1].text, "\"force\":1") && Has(lines[1].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[2].text, "\"force\":0") && Has(lines[2].text, "\"force_source\":\"config\""));
+    QCHECK(Has(lines[2].text, "\"sendguard\":0") && Has(lines[2].text, "\"sendguard_source\":\"config\""));
+    QCHECK(combat::Config().sendguard.on == false && combat::Config().force.on == false);  // LogConfig kept it for the modules
     QCHECK(Has(lines[1].text, "\"msg\":"));
   }
+  combat::ResetInstallForTest();
+  QCHECK(combat::Config().sendguard.on && !combat::Config().force.on);  // forgotten: the shipped defaults, every switch on
   Done();
 }
 
@@ -300,7 +308,7 @@ int main() {
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
-  TheShippedTableIsEmptyAndEachStepSaysSo();
+  TheShippedTableHoldsSendguardInTheNormalPhase();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();

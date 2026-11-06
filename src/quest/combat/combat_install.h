@@ -27,7 +27,8 @@
  * `"state":"not_started","reason":"post_load_hook_unavailable|game_exited_first"` once, Warning, and never runs afterwards.
  *
  * The config line (`combat_config`, ADR 0046 rule 4): one Info line with each `combat:` key's value and where it came from, written by
- * the constructor's configuration step. Today the one key is `force`; each module adds its switch here.
+ * the constructor's configuration step. The keys are `force` and one switch for each module that has moved in (`sendguard`); each module
+ * adds its switch here. LogConfig also keeps the configuration, which a module's install function reads through Config().
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */
@@ -81,8 +82,11 @@ inline constexpr const char* kGameExitedFirst = "game_exited_first";            
 // in this process, when the normal step already ran, or when it was already ended.
 void NoteNormalNotStarted(const char* reason) noexcept;
 
-// Writes the `combat_config` line for `config`.
+// Writes the `combat_config` line for `config` and keeps `config` for Config().
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept;
+
+// The `combat:` configuration the last LogConfig kept: the shipped defaults (every switch on) before one was.
+const nevr_quest::CombatConfig& Config() noexcept;
 
 // ---- test support ------------------------------------------------------------------------------------------------------
 

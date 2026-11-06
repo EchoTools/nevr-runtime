@@ -44,6 +44,7 @@ constexpr const char* kTextureQualityName = "texture_quality";  // a key `graphi
 constexpr const char* kHandFlipKey = "graphics.hand_flip";       // Quest only (default false, #2082)
 constexpr const char* kHandFlipName = "hand_flip";               // the other key `graphics` has
 constexpr const char* kCombatForceKey = "combat.force";           // Quest only (default false, #2170)
+constexpr const char* kCombatSendguardKey = "combat.sendguard";   // Quest only (default true, #2179)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
 // unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
@@ -293,6 +294,18 @@ void ReadCombatForce(const nevr::NevrConfig& cfg, LoadResult& r) {
   r.config.combat.force = {on, given ? Source::kFile : Source::kAbsent};
 }
 
+// A combat module's switch (combat.<module>, docs/adr/0046 rule 4). Absent: the shipped behaviour (on), from the default. A boolean: that
+// value, from the file. Anything else: the default stays, with ReadBool's one Warning that names the key.
+CombatSwitchChoice ReadCombatSwitch(const nevr::NevrConfig& cfg, const char* key, LoadResult& r) {
+  const bool given = cfg.GetBool(key).has_value();
+  // The getters give nullopt for an absent key and for a node that is not a scalar alike; the kind tells them apart.
+  if (!cfg.GetString(key) && cfg.Kind(key) != nevr::NodeKind::kAbsent) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_a_boolean (default stays)");
+  }
+  const bool on = ReadBool(cfg, key, true, r);
+  return {on, given ? Source::kFile : Source::kAbsent};
+}
+
 // Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
 void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& path) {
   if (!cfg.UnsetBareVars().empty()) {
@@ -337,6 +350,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   ReadTextureQuality(cfg, r);
   ReadHandFlip(cfg, r);
   ReadCombatForce(cfg, r);
+  r.config.combat.sendguard = ReadCombatSwitch(cfg, kCombatSendguardKey, r);
   r.config.plugins = cfg.Plugins();
 }
 

@@ -6,16 +6,18 @@
 #include <cstring>
 
 #include "quest/combat/combat_active.h"
+#include "quest/combat/sendguard.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
 
 namespace {
 
-// The registration table, in install order (combat_install.h, "The table"). Empty until a module moves in; each module's unit replaces
-// this line with `constexpr std::array kModules{Module{...}, ...}` (the count is deduced) and adds its row at the position the q15t plugin
-// installed it, and nowhere else.
-constexpr std::array<Module, 0> kModules{};
+// The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
+// plugin installed it, and nowhere else. The count is deduced.
+constexpr std::array kModules{
+    Module{"sendguard", nullptr, &sendguard::Install},
+};
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
 // thread, the normal step on the thread that returned from the game's first dlopen, and the process end on a helper thread.
@@ -105,14 +107,26 @@ void NoteNormalNotStarted(const char* reasonToken) noexcept {
                                "the game keeps its own behaviour"}});
 }
 
+// The configuration the sequence resolved, kept for the modules' install functions. Written once by the constructor's configuration step,
+// on the constructor's thread, before any install step reads it; a struct of two bools and two enums, constant-initialised.
+namespace {
+nevr_quest::CombatConfig g_config;
+}  // namespace
+
+const nevr_quest::CombatConfig& Config() noexcept { return g_config; }
+
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
+  g_config = config;
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config",
                       {{"force", config.force.on ? 1 : 0}, {"force_source", config.force.source == nevr_quest::Source::kFile ? "config" : "default"},
+                       {"sendguard", config.sendguard.on ? 1 : 0},
+                       {"sendguard_source", config.sendguard.source == nevr_quest::Source::kFile ? "config" : "default"},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
-                               "honours it (see combat_active)"}});
+                               "honours it (see combat_active); a module's own key (sendguard) turns that module off"}});
 }
 
 void ResetInstallForTest() noexcept {
+  g_config = nevr_quest::CombatConfig{};
   StateOf(Phase::kEarly).store(kNotYet, std::memory_order_release);
   StateOf(Phase::kNormal).store(kNotYet, std::memory_order_release);
   g_inactiveSaid.store(false, std::memory_order_release);

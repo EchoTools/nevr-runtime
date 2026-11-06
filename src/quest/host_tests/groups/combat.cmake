@@ -29,9 +29,19 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # The two install steps (#2171, docs/adr/0046 rule 6): one registration table per phase in its own order, only when combat::Active() says
 # combat runs in this process, one `combat_install` line per phase, a plain release that installs nothing and says so once, the
 # not_started record, and the `combat_config` line.
-nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
+nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
-      src/quest/sentinel/build_variant.cpp)
+      src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp)
+# Sendguard (#2179): the real wrapper through the thunk's entry into the one JUMP_SLOT of a libr15 image built in memory, against models of
+# CSendEventNode::Enter and the GameSpaceMT lookup and the node's context. A send to a game space that is not loaded dropped and the
+# stock function not called, a loaded one passed with its own arguments, no level and each null link left to the stock function, the drop
+# line cap and the exact count, each of the 13 pinned words refusing the module before the slot is touched, a foreign word and the
+# other refusals, the one changed word (no other byte of the image, the unwind record the plugin took for a slot included), the off key
+# and the old switch file's Warning, and the table's row reading the resolved configuration. got_pinned_test resolves the relocation
+# and the pins in the real libr15.
+nevr_ht_test(sendguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/sendguard_test.cpp src/quest/combat/sendguard.cpp src/quest/combat/combat_install.cpp
+      src/quest/combat/combat_active.cpp src/quest/sentinel/build_variant.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
 # CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
 # 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
