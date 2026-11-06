@@ -117,6 +117,11 @@ nevr_ht_test(voipdrop_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cid
 
 # custctx (#2178): its test program is added here by its own commit.
 
-# droneguard (#2178): its test program is added here by its own commit.
+# droneguard (#2178): the real handler through the thunk, installed into the JUMP_SLOT of a libr15 image built in memory, against a model of
+# CR15NetFollowPlayerCS and fake RefreshCache / IsComponentValid; stage 0 (the null target) and stage 1 (the cache), the switch, the pins, the stats.
+nevr_ht_test(droneguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/droneguard_test.cpp ${_cguards} src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
+      src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp
+      src/quest/combat/refresh_rate.cpp src/quest/sentinel/build_variant.cpp)
 
 # peerclamp (#2178): its test program is added here by its own commit.
