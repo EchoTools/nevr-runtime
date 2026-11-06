@@ -43,6 +43,10 @@
 // variant. Absent, it is not asked (from the default). A value that is no boolean (a word, a number, a list, a mapping, a key with no
 // value, an unset ${VAR}) is not asked, with one Warning that names the key, never the value. Only a development build honours it
 // (combat::Decide); a release build refuses it with a Warning of its own. The configuration reads the request, nothing more; the `combat_config` line reports it (combat/combat_install.h).
+//
+// `combat.heaps` and `combat.memsys` (#2175) are booleans, true when absent: `false` leaves the game's heap sizes (heaps) or its render-target
+// pool and System heap size (memsys) as the game has them. A value that is no boolean is true, with one Warning that names the key, never the
+// value. They only matter in the q15t and combat APKs, where the modules run.
 #pragma once
 
 #include <cstddef>
@@ -144,19 +148,20 @@ struct CombatForceChoice {
   Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, not asked
 };
 
-// A folded combat module's switch (docs/adr/0046 rule 4), after the file and the default have spoken.
-struct CombatSwitchChoice {
-  bool on = true;                   // each module's default is the shipped behaviour, which is on
-  Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default
+// A folded combat module's switch (docs/adr/0046 rule 4): `combat.<module>`, a boolean that is on unless the file says false.
+struct CombatSwitch {
+  bool on = true;
+  Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, on
 };
 
-// The `combat:` section (docs/adr/0046 rule 4): one member per key, each defaulting to the shipped behaviour. `force` and one switch
-// for each folded module (`sendguard`: a send to a game space that is not loaded is dropped, not faulted, #2179); each module adds its
-// switch here, with the row in KnownSections (src/core/nevr_config.cpp), the example config and the `combat_config` line
-// (combat/combat_install.h).
+// The `combat:` section (docs/adr/0046 rule 4): one member per key, each defaulting to the shipped behaviour. The keys are `force` and, for
+// each folded module, its switch; a module's unit adds its member here, with the row in KnownSections (src/core/nevr_config.cpp), the
+// example config and the `combat_config` line (combat/combat_install.h).
 struct CombatConfig {
   CombatForceChoice force;
-  CombatSwitchChoice sendguard;
+  CombatSwitch heaps;   // `combat.heaps`: the four heap sizes (combat/heaps.h)
+  CombatSwitch memsys;  // `combat.memsys`: the render-target pool and, with it, the System heap size (combat/memsys.h)
+  CombatSwitch sendguard;  // `combat.sendguard`: a send to a game space that is not loaded is dropped, not faulted (combat/sendguard.h)
 };
 
 struct LogEvent {

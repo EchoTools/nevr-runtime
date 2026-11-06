@@ -6,6 +6,8 @@
 #include <cstring>
 
 #include "quest/combat/combat_active.h"
+#include "quest/combat/heaps.h"
+#include "quest/combat/memsys.h"
 #include "quest/combat/sendguard.h"
 #include "quest/sentinel/hook_log.h"
 
@@ -13,10 +15,25 @@ namespace nevr_quest::combat {
 
 namespace {
 
+// The configuration the rows read their switch from (SetConfig). A plain object: it is written once on the constructor's thread before
+// either step runs, and the normal step's thread is ordered after it by the post-load action's atomics.
+nevr_quest::CombatConfig g_config;
+
+// A row's install function reads its module's switch here, so a module's own code takes the switch as an argument and a host test
+// drives it without a configuration.
+ModuleResult HeapsEarly() noexcept { return heaps::Install(g_config.heaps.on, g_config.memsys.on); }
+ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on); }
+ModuleResult SendguardNormal() noexcept { return sendguard::Install(g_config.sendguard.on); }
+
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
-// plugin installed it, and nowhere else. The count is deduced.
+// plugin installed it, and nowhere else; the count is deduced.
+//   sendguard is the only normal-phase row so far, installed where the plugin installed it (after tablestep, before levelname).
+//   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
+//   before android_main reads the sizes.
 constexpr std::array kModules{
-    Module{"sendguard", nullptr, &sendguard::Install, &sendguard::NoteEnd},
+    Module{"heaps", &HeapsEarly, nullptr},
+    Module{"memsys", &MemsysEarly, nullptr},
+    Module{"sendguard", nullptr, &SendguardNormal, &sendguard::NoteEnd},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -125,23 +142,18 @@ void NoteNormalNotStarted(const char* reasonToken) noexcept {
                                "the game keeps its own behaviour"}});
 }
 
-// The configuration the sequence resolved, kept for the modules' install functions. Written once by the constructor's configuration step,
-// on the constructor's thread, before any install step reads it; a struct of two bools and two enums, constant-initialised.
-namespace {
-nevr_quest::CombatConfig g_config;
-}  // namespace
-
-const nevr_quest::CombatConfig& Config() noexcept { return g_config; }
-
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
-  g_config = config;
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config",
                       {{"force", config.force.on ? 1 : 0}, {"force_source", config.force.source == nevr_quest::Source::kFile ? "config" : "default"},
+                       {"heaps", config.heaps.on ? 1 : 0}, {"heaps_source", config.heaps.source == nevr_quest::Source::kFile ? "config" : "default"},
+                       {"memsys", config.memsys.on ? 1 : 0}, {"memsys_source", config.memsys.source == nevr_quest::Source::kFile ? "config" : "default"},
                        {"sendguard", config.sendguard.on ? 1 : 0},
                        {"sendguard_source", config.sendguard.source == nevr_quest::Source::kFile ? "config" : "default"},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
-                               "honours it (see combat_active); a module's own key (sendguard) turns that module off"}});
+                               "honours it (see combat_active); a module's own key set to false turns that module off"}});
 }
+
+void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }
 
 void ResetInstallForTest() noexcept {
   g_config = nevr_quest::CombatConfig{};

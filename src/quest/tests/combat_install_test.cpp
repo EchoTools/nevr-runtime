@@ -16,6 +16,8 @@
 
 #include "hook_log.h"
 #include "quest/combat/combat_active.h"
+#include "quest/combat/heaps.h"
+#include "quest/combat/memsys.h"
 #include "quest/tests/test_check.h"
 
 // sendguard's table row reads the sentinel's files folder (the plugin's old switch file); the test names a folder that does not exist.
@@ -256,50 +258,65 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
   Done();
 }
 
-// The shipped table's rows: sendguard installs in the normal phase only and has an end-of-process step.
+// The shipped table's rows: heaps then memsys in the early phase, sendguard in the normal phase with an end-of-process step.
 void TheShippedTableRowsAreWiredToTheirSteps() {
   std::size_t count = 0;
   const combat::Module* table = combat::ShippedModules(&count);
-  QCHECK(count == 1);
-  if (count == 1) {
-    QCHECK(std::strcmp(table[0].name, "sendguard") == 0);
-    QCHECK(table[0].early == nullptr && table[0].normal != nullptr && table[0].end != nullptr);
+  QCHECK(count == 3);
+  if (count == 3) {
+    QCHECK(std::strcmp(table[0].name, "heaps") == 0 && table[0].early != nullptr && table[0].normal == nullptr);
+    QCHECK(std::strcmp(table[1].name, "memsys") == 0 && table[1].early != nullptr && table[1].normal == nullptr);
+    QCHECK(std::strcmp(table[2].name, "sendguard") == 0);
+    QCHECK(table[2].early == nullptr && table[2].normal != nullptr && table[2].end != nullptr);
   }
 }
 
-// The shipped table: sendguard has a step in the normal phase and none in the early one (#2179). On the host there is no libr15 to hook,
-// so its row reports the refusal, and the line says so at Warning.
-void TheShippedTableHoldsSendguardInTheNormalPhase() {
+// The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and sendguard a normal one. No libr15 is
+// loaded in this process, so each module refuses with its fixed token and the line names it.
+void TheShippedTableRunsHeapsThenMemsysEarlyAndSendguardNormal() {
+  nevr_quest::combat::heaps::ResetForTest();
+  nevr_quest::combat::memsys::ResetForTest();
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
-  QCHECK(early.ran && early.modules == 0 && normal.ran && normal.modules == 1);
-  QCHECK(normal.installed == 0 && normal.failed == 1);
+  QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2 && early.off == 0);
+  QCHECK(normal.ran && normal.modules == 1 && normal.installed == 0 && normal.failed == 1 && normal.off == 0);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
     QCHECK(Has(lines[0].text, "\"phase\":\"early\"") && Has(lines[1].text, "\"phase\":\"normal\""));
-    QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
-    QCHECK(Has(lines[0].text, "\"modules\":0") && Has(lines[0].text, "\"results\":\"\""));
-    QCHECK(Has(lines[0].text, "no combat module has a step in this phase yet; nothing of combat's is installed"));
+    QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
+    QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[1].text, "\"modules\":1") && Has(lines[1].text, "\"results\":\"sendguard=module_not_loaded\""));
   }
   Done();
 }
 
-// The shipped table with combat.sendguard false: the row answers off, and the phase line counts it apart (0 installed, 0 failed, 1 off).
-void TheShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
+// The shipped rows switched off by the configuration the constructor's step handed over: each answers off, and the phase line counts it
+// apart (neither installed nor failed), at Info, with the message saying so. heaps off and memsys on: heaps is off, memsys (no libr15 here)
+// fails; sendguard off in the normal phase is the only module there, so the line says 0 of 1 with 1 off.
+void AShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
+  nevr_quest::combat::heaps::ResetForTest();
+  nevr_quest::combat::memsys::ResetForTest();
   Process(bv::Variant::kCombat);
   nevr_quest::CombatConfig cfg;
+  cfg.heaps = {false, nevr_quest::Source::kFile};
   cfg.sendguard = {false, nevr_quest::Source::kFile};
-  combat::LogConfig(cfg);
-  g_lines.clear();
+  combat::SetConfig(cfg);
+  const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
-  QCHECK(normal.ran && normal.modules == 1 && normal.installed == 0 && normal.failed == 0 && normal.off == 1);
+  QCHECK(early.modules == 2 && early.installed == 0 && early.failed == 1 && early.off == 1);
+  QCHECK(normal.modules == 1 && normal.installed == 0 && normal.failed == 0 && normal.off == 1);
   const std::vector<Line> lines = Lines("combat_install");
-  QCHECK(lines.size() == 1U && lines[0].level == sentinel::LogLevel::kInfo);
-  if (lines.size() == 1U) QCHECK(Has(lines[0].text, "\"results\":\"sendguard=off_config\""));
+  QCHECK(lines.size() == 2U);
+  if (lines.size() == 2U) {
+    QCHECK(Has(lines[0].text, "\"results\":\"heaps=off memsys=module_not_loaded\"") && Has(lines[0].text, "\"off\":1"));
+    QCHECK(Has(lines[0].text, "0 of 2 combat modules installed in this phase; 1 off by its config key; the others keep"));
+    QCHECK(lines[1].level == sentinel::LogLevel::kInfo);
+    QCHECK(Has(lines[1].text, "\"results\":\"sendguard=off_config\""));
+    QCHECK(Has(lines[1].text, "\"msg\":\"0 of 1 combat modules installed in this phase; 1 off by its config key\""));
+  }
   Done();
 }
 
@@ -369,11 +386,21 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     QCHECK(Has(lines[1].text, "\"force\":1") && Has(lines[1].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[2].text, "\"force\":0") && Has(lines[2].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[2].text, "\"sendguard\":0") && Has(lines[2].text, "\"sendguard_source\":\"config\""));
-    QCHECK(combat::Config().sendguard.on == false && combat::Config().force.on == false);  // LogConfig kept it for the modules
     QCHECK(Has(lines[1].text, "\"msg\":"));
+    // The module switches: on by default, each with its source.
+    QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
   }
-  combat::ResetInstallForTest();
-  QCHECK(combat::Config().sendguard.on && !combat::Config().force.on);  // forgotten: the shipped defaults, every switch on
+  g_lines.clear();
+  cfg.heaps = {false, nevr_quest::Source::kFile};
+  cfg.memsys = {true, nevr_quest::Source::kFile};
+  combat::LogConfig(cfg);
+  const std::vector<Line> switches = Lines("combat_config");
+  QCHECK(switches.size() == 1U);
+  if (switches.size() == 1U) {
+    QCHECK(Has(switches[0].text, "\"heaps\":0") && Has(switches[0].text, "\"heaps_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
+  }
   Done();
 }
 
@@ -391,8 +418,8 @@ int main() {
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
   TheShippedTableRowsAreWiredToTheirSteps();
-  TheShippedTableHoldsSendguardInTheNormalPhase();
-  TheShippedRowSwitchedOffByTheConfigIsCountedAsOff();
+  TheShippedTableRunsHeapsThenMemsysEarlyAndSendguardNormal();
+  AShippedRowSwitchedOffByTheConfigIsCountedAsOff();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();

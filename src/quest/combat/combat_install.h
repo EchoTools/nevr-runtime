@@ -29,8 +29,9 @@
  * `"state":"not_started","reason":"post_load_hook_unavailable|game_exited_first"` once, Warning, and never runs afterwards.
  *
  * The config line (`combat_config`, ADR 0046 rule 4): one Info line with each `combat:` key's value and where it came from, written by
- * the constructor's configuration step. The keys are `force` and one switch for each module that has moved in (`sendguard`); each module
- * adds its switch here. LogConfig also keeps the configuration, which a module's install function reads through Config().
+ * the constructor's configuration step: `force`, and each module's switch (`heaps`, `memsys`, ...) as `<module>` and `<module>_source`
+ * (`config` when the file gave it, `default` otherwise). The step also hands the configuration to SetConfig, which the registration table's
+ * rows read for their module's switch.
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */
@@ -101,15 +102,16 @@ void RunEnd(const Module* table, std::size_t count) noexcept;
 // in this process, when the normal step already ran, or when it was already ended.
 void NoteNormalNotStarted(const char* reason) noexcept;
 
-// Writes the `combat_config` line for `config` and keeps `config` for Config().
+// Writes the `combat_config` line for `config`.
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept;
 
-// The `combat:` configuration the last LogConfig kept: the shipped defaults (every switch on) before one was.
-const nevr_quest::CombatConfig& Config() noexcept;
+// The configuration the modules' switches are read from (their rows in the registration table): set once, by the constructor's
+// configuration step, before either install step runs. Until it is set every switch has its default.
+void SetConfig(const nevr_quest::CombatConfig& config) noexcept;
 
 // ---- test support ------------------------------------------------------------------------------------------------------
 
-// Forgets which phases ran or ended, so the next call runs and logs again.
+// Forgets which phases ran or ended, so the next call runs and logs again, and the configuration SetConfig was given.
 void ResetInstallForTest() noexcept;
 
 }  // namespace nevr_quest::combat

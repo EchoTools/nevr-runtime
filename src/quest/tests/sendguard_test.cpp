@@ -544,20 +544,15 @@ void TheOldSwitchFileChangesNothingAndIsToldSo() {
   rmdir(dir.c_str());
 }
 
-// The table's row asks the configuration the sequence resolved: a default configuration installs (here: finds no libr15 on the host and
-// says so), and combat.sendguard false turns it off.
-void TheTablesRowReadsTheResolvedConfiguration() {
+// The table's row: on, it installs (here: finds no libr15 on the host and says so); off, it answers off. The table reading the resolved
+// switch is combat_install_test's.
+void TheTablesRowFollowsItsSwitch() {
   Reset();
-  combat::ResetInstallForTest();
-  combat::ModuleResult r = sg::Install();
-  QCHECK(!r.installed && std::strcmp(r.status, "module_not_loaded") == 0);  // default: on, and the host has no libr15
+  combat::ModuleResult r = sg::Install(true);
+  QCHECK(!r.installed && !r.off && std::strcmp(r.status, "module_not_loaded") == 0);
   g_lines.clear();
-  nevr_quest::CombatConfig cfg;
-  cfg.sendguard = {false, nevr_quest::Source::kFile};
-  combat::LogConfig(cfg);
-  r = sg::Install();
+  r = sg::Install(false);
   QCHECK(r.off && !r.installed && std::strcmp(r.status, "off_config") == 0);
-  combat::ResetInstallForTest();
   Finish();
 }
 
@@ -609,14 +604,14 @@ void TheProductionPathLooksWhereThePluginKeptItsSwitchFile() {
   QCHECK(mkdir(sub.c_str(), 0700) == 0);
   Reset();
   combat::ResetInstallForTest();
-  combat::ModuleResult r = sg::Install();
+  combat::ModuleResult r = sg::Install(true);
   QCHECK(!r.installed && LinesOf("combat_sendguard_legacy_switch").empty());  // no file: no Warning
   const std::string file = sub + "/sendguard.off";
   FILE* f = std::fopen(file.c_str(), "w");
   QCHECK(f != nullptr);
   if (f != nullptr) std::fclose(f);
   g_lines.clear();
-  r = sg::Install();
+  r = sg::Install(true);
   QCHECK(LinesOf("combat_sendguard_legacy_switch").size() == 1);
   QCHECK(LinesOf("combat_sendguard_legacy_switch")[0].level == sentinel::LogLevel::kWarn);
   unlink(file.c_str());
@@ -642,7 +637,7 @@ int main() {
   TheOtherRefusalsSayWhy();
   TheSwitchTurnsTheModuleOff();
   TheOldSwitchFileChangesNothingAndIsToldSo();
-  TheTablesRowReadsTheResolvedConfiguration();
+  TheTablesRowFollowsItsSwitch();
   TheCountsAreWrittenSoAHeadsetRunGivesTheRate();
   TheProductionPathLooksWhereThePluginKeptItsSwitchFile();
   if (quest_test::Failures() != 0) {

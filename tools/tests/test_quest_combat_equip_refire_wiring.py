@@ -189,7 +189,8 @@ class TheProductionStepsReachTheRealCombatSteps(unittest.TestCase):
         body = extract_braced_function(self.steps, "const nevr_quest::ResolvedConfig& ResolveConfig() override {")
         self.assertEqual(body.count("LogCombatConfig("), 1)
         self.assertLess(body.index("LogCombatConfig(cfg.combat)"), body.index("ResolveCombatActive("))
-        self.assertIn("void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept { nevr_quest::combat::LogConfig(config); }", self.entry)
+        self.assertIn("void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept {", self.entry)
+        self.assertIn("nevr_quest::combat::LogConfig(config);", self.entry)
 
     def test_the_configuration_logs_no_second_line_for_the_same_key(self):
         config = strip_comments(read("src/quest/sentinel/quest_config.cpp"))

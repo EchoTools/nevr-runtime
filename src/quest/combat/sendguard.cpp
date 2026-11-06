@@ -163,11 +163,11 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool enabled, const char* l
   return {installed, installed ? "installed" : sentinel::GotStatusName(status)};
 }
 
-ModuleResult Install() noexcept {
+ModuleResult Install(bool enabled) noexcept {
   char dir[320];
   const int wrote = std::snprintf(dir, sizeof(dir), "%s/%s", sentinel::FilesDir(), kLegacySwitchSubdir);
   const bool fits = wrote >= 0 && static_cast<std::size_t>(wrote) < sizeof(dir);
-  return InstallAt(&sentinel::FindLoadedImage, combat::Config().sendguard.on, fits ? dir : nullptr);
+  return InstallAt(&sentinel::FindLoadedImage, enabled, fits ? dir : nullptr);
 }
 
 void NoteEnd() noexcept {

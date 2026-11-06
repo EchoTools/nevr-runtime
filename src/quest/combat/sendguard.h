@@ -93,8 +93,9 @@ inline constexpr const char* kLegacySwitchSubdir = "q15t";
 // was done, and the phase line counts it apart from the installed ones.
 ModuleResult InstallAt(sentinel::ImageLookup lookup, bool enabled, const char* legacySwitchDir) noexcept;
 
-// The table's row: InstallAt on the loaded libr15, with combat.sendguard from the `combat_config` the sequence resolved.
-ModuleResult Install() noexcept;
+// The table's row: InstallAt on the loaded libr15, with `enabled` the value of combat.sendguard (the registration table reads it from the
+// configuration the constructor's step handed to SetConfig).
+ModuleResult Install(bool enabled) noexcept;
 
 struct Stats {
   unsigned dropped;  // sends dropped because the named game space is not loaded

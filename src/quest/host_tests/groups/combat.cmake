@@ -31,7 +31,7 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # not_started record, and the `combat_config` line.
 nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
-      src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp)
+      src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp)
 # Sendguard (#2179): the real wrapper through the thunk's entry into the one JUMP_SLOT of a libr15 image built in memory, against models of
 # CSendEventNode::Enter and the GameSpaceMT lookup and the node's context. A send to a game space that is not loaded dropped and the
 # stock function not called, a loaded one passed with its own arguments, no level and each null link left to the stock function, the drop
@@ -41,7 +41,7 @@ nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} 
 # and the pins in the real libr15.
 nevr_ht_test(sendguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/sendguard_test.cpp src/quest/combat/sendguard.cpp src/quest/combat/combat_install.cpp
-      src/quest/combat/combat_active.cpp src/quest/sentinel/build_variant.cpp)
+      src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
 # CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
 # 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
@@ -56,3 +56,20 @@ nevr_ht_test(match_tag_default_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccor
 # relocations and the code pins in the real libr15.
 nevr_ht_test(equip_refire_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/equip_refire_test.cpp src/quest/combat/equip_refire.cpp src/quest/invite/frame_dispatch.cpp)
+# The four heap sizes (#2175): the real module writing through the real GotDataSlot into the four GLOB_DAT words of a libr15 image built in
+# memory, against a model of the reader (`ldr x8,[slot]; ldr x1,[x8]`). All four slots, the Quest 2's System heap, each refusal alone, the two
+# switches, once, the golden lines. got_pinned_test resolves the four relocations, their symbol types and the words in the real libr15.
+nevr_ht_test(heaps_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/heaps_test.cpp src/quest/combat/heaps.cpp)
+# The render-target pool and the android_main witness (#2175): the real wrappers through the two kCaller thunks, installed by the real GotHook
+# into the two JUMP_SLOTs of a libr15 image built in memory, called through the slot against a fake Alloc, InitCommon's inline fill and a fake
+# CSysJava::Init. The pool is 0..1023 exactly once, the wrong caller and capacity pass through, each unrecognised layout leaves the stock 512,
+# the witness once with the System heap the game will read, each refusal alone, the switch, once, the golden lines.
+nevr_ht_test(memsys_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/memsys_test.cpp src/quest/combat/memsys.cpp)
+# The heap step as the sentinel runs it (#2175): the shipped early table on a libr15 image built in memory against a model of the start of
+# android_main. Before the first allocation it governs (the witness precedes the model's heap reads; a late run is the control), once, only in
+# the variants the gate allows (and a development build forced on), and each shipped row reads its switch.
+nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+      src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp)

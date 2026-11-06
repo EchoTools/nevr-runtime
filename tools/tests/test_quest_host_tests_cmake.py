@@ -62,7 +62,10 @@ PROGRAMS = {
         "combat_active_test",
         "combat_install_test",
         "equip_refire_test",
+        "heap_step_test",
+        "heaps_test",
         "match_tag_default_test",
+        "memsys_test",
         "sendguard_test",
     ),
     "data": (

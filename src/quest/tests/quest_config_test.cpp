@@ -1147,6 +1147,60 @@ void InviteCodesNeedsLoginAndAServiceAddress() {
   CHECK(r.fileRejected && !r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
 }
 
+// combat.heaps, combat.memsys and combat.sendguard (#2175, #2179, docs/adr/0046 rule 4): a folded module's switch is on unless the file says false. Absent is on, from
+// the default; a boolean is the file's word; anything else is on, with one Warning that names the key and not the value. Each is
+// independent, and a file rejected as a whole contributes nothing.
+void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
+  struct Key {
+    const char* name;
+    nevr_quest::CombatSwitch nevr_quest::CombatConfig::*member;
+  };
+  const Key keys[] = {{"heaps", &nevr_quest::CombatConfig::heaps},
+                      {"memsys", &nevr_quest::CombatConfig::memsys},
+                      {"sendguard", &nevr_quest::CombatConfig::sendguard}};
+  for (const Key& key : keys) {
+    const std::string section = std::string("combat:\n  ") + key.name + ": ";
+    const std::string full = std::string("combat.") + key.name;
+    {  // no file, an empty file, a section with no key: on, from the default, nothing said
+      const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+      CHECK((none.config.combat.*key.member).on && (none.config.combat.*key.member).source != Source::kFile);
+      CHECK(!HasLevel(none, LogLevel::kWarn) && !HasLevel(none, LogLevel::kError));
+      for (const char* text : {"", "combat: {}\n", "combat:\n", "combat:\n  force: true\n"}) {
+        const LoadResult r = Load(Full(), text);
+        CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
+      }
+    }
+    for (const char* word : {"true", "yes"}) {  // on, by the file's word
+      const LoadResult r = Load(Full(), section + word + "\n");
+      CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source == Source::kFile);
+      CHECK(!HasLevel(r, LogLevel::kWarn) && !EventsContain(r, "unknown_nested="));
+    }
+    for (const char* word : {"false", "no", "False"}) {  // off, by the file's word
+      const LoadResult r = Load(Full(), section + word + "\n");
+      CHECK(!r.fileRejected && !(r.config.combat.*key.member).on && (r.config.combat.*key.member).source == Source::kFile);
+      CHECK(!HasLevel(r, LogLevel::kWarn) && !EventsContain(r, "unknown_nested="));
+      CHECK(!r.config.combat.force.on);  // no other key moved
+      for (const Key& untouched : keys) {
+        if (untouched.member != key.member) CHECK((r.config.combat.*untouched.member).on);  // each other module's switch is its own
+      }
+    }
+    for (const char* value : {"maybe", "2", "[true]", "{a: 1}", ""}) {  // a value nobody meant: on, and the key is named
+      const LoadResult r = Load(Full(), section + value + "\n");
+      CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
+      CHECK(EventsWithAreAtLevel(r, ("config file key=" + full + " rejected reason=").c_str(), LogLevel::kWarn));
+      CHECK(!EventsContain(r, "maybe") && !HasLevel(r, LogLevel::kError));
+    }
+    {  // a file rejected as a whole contributes nothing, this key included
+      const LoadResult r = Load(Full(), section + "false\nnot_a_section: 1\n");
+      CHECK(r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
+    }
+  }
+  {  // both off in one file
+    const LoadResult r = Load(Full(), "combat:\n  heaps: false\n  memsys: false\n");
+    CHECK(!r.config.combat.heaps.on && !r.config.combat.memsys.on);
+  }
+}
+
 // combat.force (#2170, docs/adr/0046 rule 5): a request to run the folded combat modules whatever the APK's variant. The configuration
 // only reads it; whether a build may honour it is combat::Decide's rule (combat_active_test). Absent is not asked, and from the default;
 // a boolean is the file's word; anything else is not asked, with one Warning that names the key and not the value.
@@ -1199,53 +1253,6 @@ void CombatForceIsNotAskedUnlessTheFileSaysTrue() {
   }
 }
 
-// combat.sendguard (#2179, docs/adr/0046 rule 4): the switch of the sendguard module, on unless the file says false. Absent is on, from the
-// default; a boolean is the file's word (either way); anything else leaves it on, with one Warning that names the key and not the value.
-void CombatSendguardIsOnUnlessTheFileSaysFalse() {
-  {  // no file, an empty file, a section with no key: on, from the default, nothing said
-    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
-    CHECK(none.config.combat.sendguard.on && none.config.combat.sendguard.source != Source::kFile);
-    CHECK(!HasLevel(none, LogLevel::kWarn) && !HasLevel(none, LogLevel::kError));
-    for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n", "combat:\n  force: true\n"}) {
-      const LoadResult r = Load(Full(), text);
-      CHECK(!r.fileRejected);
-      CHECK(r.config.combat.sendguard.on && r.config.combat.sendguard.source != Source::kFile);
-      CHECK(!HasLevel(r, LogLevel::kWarn));
-    }
-  }
-  for (const char* word : {"false", "no", "False"}) {  // off, by the file; the key is on the schema, so the file is not rejected
-    const LoadResult r = Load(Full(), std::string("combat:\n  sendguard: ") + word + "\n");
-    CHECK(!r.fileRejected);
-    CHECK(!r.config.combat.sendguard.on && r.config.combat.sendguard.source == Source::kFile);
-    CHECK(!r.config.combat.force.on);  // the other key is its own
-    CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
-    CHECK(!EventsContain(r, "unknown_nested=") && !EventsContain(r, "rejected"));
-  }
-  for (const char* word : {"true", "yes"}) {  // on, and the file said so
-    const LoadResult r = Load(Full(), std::string("combat:\n  sendguard: ") + word + "\n");
-    CHECK(r.config.combat.sendguard.on && r.config.combat.sendguard.source == Source::kFile);
-    CHECK(!HasLevel(r, LogLevel::kWarn));
-  }
-  for (const char* text : {"combat:\n  sendguard: maybe\n", "combat:\n  sendguard: 2\n", "combat:\n  sendguard: [false]\n",
-                           "combat:\n  sendguard: {a: 1}\n", "combat:\n  sendguard:\n"}) {  // a value nobody meant: stays on
-    const LoadResult r = Load(Full(), text);
-    CHECK(!r.fileRejected);
-    CHECK(r.config.combat.sendguard.on && r.config.combat.sendguard.source != Source::kFile);
-    CHECK(EventsWithAreAtLevel(r, "config file key=combat.sendguard rejected reason=", LogLevel::kWarn));
-    CHECK(!EventsContain(r, "maybe") && !HasLevel(r, LogLevel::kError));
-  }
-  {  // an unset ${VAR} is named by its reason
-    const LoadResult r = Load(Full(), "combat:\n  sendguard: ${NEVR_QUEST_TEST_UNSET_COMBAT_SENDGUARD}\n");
-    CHECK(r.config.combat.sendguard.on && r.config.combat.sendguard.source != Source::kFile);
-    CHECK(EventsWithAreAtLevel(r, "config file key=combat.sendguard rejected reason=unset_variable", LogLevel::kWarn));
-  }
-  {  // a file rejected as a whole contributes nothing, this key included
-    const LoadResult r = Load(Full(), "combat:\n  sendguard: false\nnot_a_section: 1\n");
-    CHECK(r.fileRejected);
-    CHECK(r.config.combat.sendguard.on && r.config.combat.sendguard.source != Source::kFile);
-  }
-}
-
 int main() {
   InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
   InviteCodesNeedsLoginAndAServiceAddress();
@@ -1270,7 +1277,7 @@ int main() {
   AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey();
   HandFlipIsOffUnlessTheFileSaysTrue();
   CombatForceIsNotAskedUnlessTheFileSaysTrue();
-  CombatSendguardIsOnUnlessTheFileSaysFalse();
+  CombatModuleSwitchesAreOnUnlessTheFileSaysFalse();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   ClockLevelsOverrideIsOffUnlessTheDiagnosticsKeyIsTrue();
