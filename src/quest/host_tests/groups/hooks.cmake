@@ -237,6 +237,14 @@ nevr_ht_test(hand_pose_log_hook_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_
 # the real libr15.
 nevr_ht_test(match_tag_default_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/match_tag_default_test.cpp src/quest/combat/match_tags.cpp)
+# The variant stamp the sentinel reads beside its own library before its first line (#2170, build_variant.h): each word, the empty file,
+# a missing file, an unknown or padded word, a file too long, a link and a directory, read from a temporary directory.
+nevr_ht_test(build_variant_test GROUP hooks ${_hf} TIMEOUT 120
+  SRC src/quest/tests/build_variant_test.cpp src/quest/sentinel/build_variant.cpp)
+# The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
+# combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.
+nevr_ht_test(combat_active_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core}
+  SRC src/quest/tests/combat_active_test.cpp src/quest/combat/combat_active.cpp src/quest/sentinel/build_variant.cpp)
 # The equipment re-fire (#2121): the real wrappers through the six thunks, installed by the real GotHook into the six words of a libr15
 # image built in memory (JUMP_SLOT and GLOB_DAT of the three setters), against models of the setters, the change handlers, NetGameMT,
 # CR15NetGame::UserId and the component. The shared rule is the header's GTest; here are the words hooked, each word's own original

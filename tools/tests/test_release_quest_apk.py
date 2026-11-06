@@ -10,6 +10,7 @@ import hashlib
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -64,6 +65,22 @@ class ReleaseQuestApk(unittest.TestCase):
         self.assertIn('version=""', body.splitlines()[0])
         self.assertIn('--version "$version"', body)
 
+    def test_the_repack_names_its_variant_as_its_last_parameter(self):
+        self.assertTrue(recipe("android-repack-apk").splitlines()[0].split(":")[0].rstrip().endswith('variant=""'))
+
+    def test_every_recipe_that_repacks_an_apk_passes_a_variant_word(self):
+        """#2170: the repack has 13 parameters before `variant` and every call in the justfile gives all 14, so none leaves the word
+        to a default it did not choose."""
+        calls = []
+        for number, line in enumerate(JUSTFILE.splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("just android-repack-apk "):
+                calls.append((number, shlex.split(stripped)[2:]))
+        self.assertGreaterEqual(len(calls), 4, "package-dev's _quest-apk, the autopilot APK, the store variant and the release body")
+        for number, args in calls:
+            self.assertEqual(len(args), 14, f"justfile:{number} passes {len(args)} of the repack's 14 arguments: {args}")
+            self.assertIn(args[13], ("", "$variant"), f"justfile:{number} passes the variant word {args[13]!r}")
+
     def test_package_dev_and_the_release_share_one_quest_build(self):
         self.assertIn('just _quest-apk "{{ store_apk }}"', recipe("package-dev"))
         self.assertNotIn("just android-repack-apk", recipe("package-dev"))
@@ -105,18 +122,20 @@ if a[0] == "prepare":
     out.write_bytes(b"reference base")
 """
 # The repack recipe with the same parameters as the real one, writing a "signed APK" that shows what it was given.
-STUB_REPACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="":
+STUB_REPACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{ workdir }}"
+    echo "{{ variant }}" >> "$VARIANTS"
     echo "repack apk={{ apk }} shim={{ shim }} workdir={{ workdir }} plugin={{ plugin }} version={{ version }}" >> "$CALLS"
     printf 'signed plugin=[%s] version=%s' "{{ plugin }}" "{{ version }}" > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
 """
 # The same recipe with the parameters the real one has since the bundled pack (docs/adr/0029-quest-bundled-content-pack.md).
-STUB_REPACK_PACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="":
+STUB_REPACK_PACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{ workdir }}"
+    echo "{{ variant }}" >> "$VARIANTS"
     echo "repack apk={{ apk }} plugin={{ plugin }} version={{ version }} others=[{{ extra_rows }}|{{ patcher }}|{{ json_include }}|{{ plugin_early }}|{{ plugin_off }}] pack={{ pack }} pack_meta={{ pack_meta }}" >> "$CALLS"
     printf 'signed' > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
 """
@@ -138,10 +157,11 @@ BUILT_EARLY = "build/quest-q15t/libq15t_early.so"
 # The old call shape, `<tag> <plugins> <store>`: a plugin library passed in.
 PLUGINS = "/priv/libq15t.so:/priv/libq15t_early.so"
 # The repack with the script-library parameter (M5): it records the library directory it was given.
-STUB_REPACK_LIBS = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="":
+STUB_REPACK_LIBS = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{ workdir }}"
+    echo "{{ variant }}" >> "$VARIANTS"
     echo "repack apk={{ apk }} plugin={{ plugin }} version={{ version }} pack={{ pack }} pack_meta={{ pack_meta }} libs={{ extra_libs }}" >> "$CALLS"
     printf 'signed' > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
 """
@@ -157,6 +177,7 @@ class RecipesRun(unittest.TestCase):
         self.dir = pathlib.Path(self.tmp.name) / "repo"
         (self.dir / "tools").mkdir(parents=True)
         self.calls = pathlib.Path(self.tmp.name) / "calls.log"
+        self.variants = pathlib.Path(self.tmp.name) / "variants.log"  # the variant word each repack was given, one line each
         self.store = pathlib.Path(self.tmp.name) / "store.apk"
         self.store.write_bytes(b"store")
         texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "release-quest-combat-apk", "_release-quest-apk")]
@@ -175,8 +196,11 @@ class RecipesRun(unittest.TestCase):
         self.head = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
 
     def just(self, *args, **extra_env):
-        env = {**os.environ, "CALLS": str(self.calls), **extra_env}
+        env = {**os.environ, "CALLS": str(self.calls), "VARIANTS": str(self.variants), **extra_env}
         return subprocess.run(["just", *args], cwd=self.dir, capture_output=True, text=True, env=env)
+
+    def variants_given(self):
+        return self.variants.read_text().splitlines() if self.variants.exists() else []
 
     def calls_made(self):
         return self.calls.read_text().splitlines() if self.calls.exists() else []
@@ -300,6 +324,15 @@ class RecipesRun(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("release-quest-variant-apk: not a release tag (vX.Y.Z): v1.2", result.stderr)
         self.assertEqual(self.calls_made(), [])
+
+    def test_each_recipe_names_its_variant_to_the_repack(self):
+        """The release APK is a plain release (the empty word); the variant recipe's is `q15t`; the combat recipe's is `combat`."""
+        for name, run, want in (("release", self.release, ""), ("variant", self.variant, "q15t"), ("combat", self.combat, "combat")):
+            with self.subTest(name=name):
+                self.variants.unlink(missing_ok=True)
+                result = run()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.variants_given(), [want])
 
     def test_the_release_apk_never_carries_a_plugin_and_never_builds_the_q15t_libraries(self):
         self.assertEqual(self.release().returncode, 0)

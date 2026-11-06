@@ -1147,6 +1147,64 @@ void InviteCodesNeedsLoginAndAServiceAddress() {
   CHECK(r.fileRejected && !r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
 }
 
+// combat.force (#2170, docs/adr/0046 rule 5): a request to run the folded combat modules whatever the APK's variant. The configuration
+// only reads it; whether a build may honour it is combat::Decide's rule (combat_active_test). Absent is not asked, and from the default;
+// a boolean is the file's word; anything else is not asked, with one Warning that names the key and not the value.
+void CombatForceIsNotAskedUnlessTheFileSaysTrue() {
+  {  // no file, an empty file, a section with no key: not asked, from the default, nothing said
+    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+    CHECK(!none.config.combatForce.on && none.config.combatForce.source != Source::kFile);
+    CHECK(EventsContain(none, "config key=combat.force force=0 source=default"));
+    CHECK(!HasLevel(none, LogLevel::kWarn) && !HasLevel(none, LogLevel::kError));
+    for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n"}) {
+      const LoadResult r = Load(Full(), text);
+      CHECK(!r.fileRejected);
+      CHECK(!r.config.combatForce.on && r.config.combatForce.source != Source::kFile);
+      CHECK(EventsContain(r, "config key=combat.force force=0 source=default"));
+      CHECK(!HasLevel(r, LogLevel::kWarn));
+    }
+  }
+  for (const char* word : {"true", "yes", "True"}) {  // asked, by the file; `combat` is a known section, so the file is not rejected
+    const LoadResult r = Load(Full(), std::string("combat:\n  force: ") + word + "\n");
+    CHECK(!r.fileRejected);
+    CHECK(r.config.combatForce.on && r.config.combatForce.source == Source::kFile);
+    CHECK(EventsContain(r, "config key=combat.force force=1 source=config"));
+    CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
+    CHECK(!EventsContain(r, "unknown_nested=") && !EventsContain(r, "rejected"));
+    CHECK(DefaultsOnly(r.config.requested) && DefaultsOnly(r.config.effective));  // no feature moves
+  }
+  for (const char* word : {"false", "no"}) {  // not asked, but the file said so
+    const LoadResult r = Load(Full(), std::string("combat:\n  force: ") + word + "\n");
+    CHECK(!r.config.combatForce.on && r.config.combatForce.source == Source::kFile);
+    CHECK(EventsContain(r, "config key=combat.force force=0 source=config"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  for (const char* text : {"combat:\n  force: maybe\n", "combat:\n  force: 2\n", "combat:\n  force: [true]\n",
+                           "combat:\n  force: {a: 1}\n", "combat:\n  force:\n"}) {  // a value nobody meant: not asked
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected);
+    CHECK(!r.config.combatForce.on && r.config.combatForce.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=combat.force rejected reason=", LogLevel::kWarn));
+    CHECK(EventsContain(r, "config key=combat.force force=0 source=default"));
+    CHECK(!EventsContain(r, "maybe") && !HasLevel(r, LogLevel::kError));
+  }
+  {  // an unset ${VAR} is named by its reason
+    const LoadResult r = Load(Full(), "combat:\n  force: ${NEVR_QUEST_TEST_UNSET_COMBAT_FORCE}\n");
+    CHECK(!r.config.combatForce.on && r.config.combatForce.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=combat.force rejected reason=unset_variable", LogLevel::kWarn));
+  }
+  {  // a file rejected as a whole contributes nothing, this key included
+    const LoadResult r = Load(Full(), "combat:\n  force: true\nnot_a_section: 1\n");
+    CHECK(r.fileRejected);
+    CHECK(!r.config.combatForce.on && r.config.combatForce.source != Source::kFile);
+    CHECK(EventsContain(r, "config key=combat.force force=0 source=default"));
+  }
+  {  // the section is not a mapping: not asked
+    const LoadResult r = Load(Full(), "combat: true\n");
+    CHECK(!r.config.combatForce.on && r.config.combatForce.source != Source::kFile);
+  }
+}
+
 int main() {
   InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
   InviteCodesNeedsLoginAndAServiceAddress();
@@ -1170,6 +1228,7 @@ int main() {
   AGraphicsSectionThatIsNotAMappingFallsBackToStock();
   AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey();
   HandFlipIsOffUnlessTheFileSaysTrue();
+  CombatForceIsNotAskedUnlessTheFileSaysTrue();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   ClockLevelsOverrideIsOffUnlessTheDiagnosticsKeyIsTrue();

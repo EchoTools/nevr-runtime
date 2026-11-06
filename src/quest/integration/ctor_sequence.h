@@ -145,6 +145,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "quest/sentinel/build_variant.h"
 #include "quest/sentinel/quest_config.h"
 
 namespace nevr_quest::integration {
@@ -334,8 +335,11 @@ class Steps {
 ConstructorReport RunConstructorSequence(Steps& steps) noexcept;
 
 // The begin record of the constructor (#1391): one sentinel_ctor line, action=begin, with the version and the commit of this
-// build, and its kind ("dev" or "release", ADR 0040). entry.cpp passes nevr_build::kVersion, nevr_build::kCommit and
-// nevr_build::kIsDev from its generated build header. Never throws.
-void LogConstructorBegin(const char* version, const char* commit, const char* kind) noexcept;
+// build, its kind ("dev" or "release", ADR 0040) and its variant (`variant`, the word the APK's stamp holds, or "none"; `variant_source`,
+// where that came from: stamp, absent, unreadable or invalid; #2170). entry.cpp passes nevr_build::kVersion, nevr_build::kCommit and
+// nevr_build::kIsDev from its generated build header, and the stamp read beside the sentinel's library (sentinel/build_variant.h).
+// A stamp that is not a variant's (missing, unreadable or wrong) adds one `build_variant` line right after the begin record, with the
+// reason and what follows from it (the begin record stays the first line). Never throws.
+void LogConstructorBegin(const char* version, const char* commit, const char* kind, const build_variant::Stamp& stamp) noexcept;
 
 }  // namespace nevr_quest::integration

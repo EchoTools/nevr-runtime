@@ -21,8 +21,11 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "core/crash_report.h"
+#include "quest/combat/combat_active.h"
 #include "quest/combat/equip_refire.h"
 #include "quest/combat/match_tags.h"
+#include "build_variant.h"
 #include "quest/invite/frame_dispatch.h"
 #include "main_level.h"
 #include "menu_cards_hook.h"
@@ -268,6 +271,10 @@ bool InstallWizardMetricHook() noexcept {
 // by main_level::Install, and the plugins then keep the level they were given at init.
 bool InstallPluginMainLevel() noexcept { return nevr_quest::main_level::Install(); }
 
+// The gate on the folded combat modules (#2170, combat/combat_active.h): the answer is made here, once the configuration is resolved, from
+// the variant the constructor recorded, this build's kind and the configuration's combat.force. entry.cpp holds nevr_build::kIsDev.
+void ResolveCombatActive(bool forceAsked) noexcept { nevr_quest::combat::Resolve(nevr_build::kIsDev, forceAsked); }
+
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
 bool InstallLoginPromptHook(bool countersRegistered) noexcept {
@@ -299,8 +306,18 @@ static void nevr_sentinel_ctor() {
     // The crash handlers first (#1689): a crash anywhere below, the begin record and the UI looper capture included, leaves a
     // report the next start sends. Arm is idempotent: the sequence's first step calls it again after setting the log sink.
     sentinel::Arm();
+    // The variant the repack stamped beside this library (#2170, build_variant.h), read before the first line so that line names it. A
+    // stamp that is missing, unreadable or wrong is no variant; the begin record says which. The combat gate takes the word now and
+    // makes its answer when the configuration is resolved (ResolveCombatActive).
+    const nevr_quest::build_variant::Stamp variant = nevr_quest::build_variant::ReadOwnStamp();
+    nevr_quest::combat::SetVariant(variant.variant);
+    // The crash report names the build too (core/crash_report.h, ADR 0040 rule 2): its `build:` line is set now, so a crash anywhere below carries it.
+    char buildText[nevr_crash::kBuildBytes];
+    std::snprintf(buildText, sizeof(buildText), "version=%s kind=%s variant=%s", nevr_build::kVersion,
+                  nevr_build::kIsDev ? "dev" : "release", nevr_quest::build_variant::VariantName(variant.variant));
+    nevr_crash::SetBuild(buildText);
     nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit,
-                                                      nevr_build::kIsDev ? "dev" : "release");
+                                                      nevr_build::kIsDev ? "dev" : "release", variant);
     // The login_host fallback carries this build's tuple (login_fallback.h): set before the sequence installs the redirect.
     nevr_quest::redirect::SetLoginIdentity(
         {"nevr_quest", nevr_build::kIsDev ? "dev" : "release", nevr_build::kVersion, nevr_build::kCommit});
