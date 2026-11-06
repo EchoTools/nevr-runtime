@@ -63,6 +63,9 @@ struct Link {
   // A data write (GotDataSlot), not a hook: `hookFn` is the value stored, `original` the value it replaced, `originalOut` null. It
   // is the only entry its slot holds.
   bool data = false;
+  // A reviewed assembly entry (callback_thunk.h rule 7): it acts on the game's own call site, so it is the newest entry of its
+  // slot for as long as it is there, and JoinLocked refuses any later one.
+  bool entry = false;
 };
 Link g_links[kRegistryCapacity] = {};
 std::size_t g_linkCount = 0;
@@ -542,6 +545,7 @@ const char* GotStatusName(GotStatus status) {
     case GotStatus::kPinRequired:          return "pin_required";
     case GotStatus::kSlotClaimed:          return "slot_claimed";
     case GotStatus::kExecutableMapping:    return "executable_mapping";
+    case GotStatus::kSlotHeldByEntry:      return "slot_held_by_entry";
   }
   return "unknown";
 }
@@ -818,6 +822,8 @@ const char* RefusalReason(GotStatus status) {
       return "the slot already holds a registry entry, and a data write holds its slot alone";
     case GotStatus::kExecutableMapping:
       return "a data write may not touch an executable mapping or a code pointer; a code pointer is a hook";
+    case GotStatus::kSlotHeldByEntry:
+      return "the newest hook on this slot is an assembly entry, which acts on the game's call site and must stay the newest";
     case GotStatus::kBuildIdMismatch:
       return "the module's build ID is not the one the target expects";
     default:
@@ -836,8 +842,8 @@ long long DescribeChain(void** slot, char* out, std::size_t capacity) {
     if (g_links[i].slot != slot) continue;
     if (used + 1 >= capacity) break;
     const char* const separator = count == 0 ? "" : ">";
-    const int wrote = std::snprintf(out + used, capacity - used, "%s%s%s", separator, g_links[i].owner,
-                                    g_links[i].poisoned ? "(poisoned)" : "");
+    const int wrote = std::snprintf(out + used, capacity - used, "%s%s%s%s", separator, g_links[i].owner,
+                                    g_links[i].entry ? "(asm_entry)" : "", g_links[i].poisoned ? "(poisoned)" : "");
     if (wrote > 0) {
       const std::size_t n = static_cast<std::size_t>(wrote);
       used += n < capacity - used ? n : capacity - used - 1;
@@ -978,12 +984,17 @@ GotStatus Resolve(const GotTarget& target, ImageLookup lookup, Prepared* out) {
 // registers its entry. On kOk, `*expectedSlot` is the value the store must find (the game's value for a first handler,
 // the chain's newest hook otherwise), `*newOriginal` is the value the new hook calls, and the entry is registered; the
 // caller publishes `*newOriginal` through `originalOut` before it stores.
-GotStatus JoinLocked(const Prepared& p, const GotTarget& target, void* hookFn, void** originalOut,
+GotStatus JoinLocked(const Prepared& p, const GotTarget& target, void* hookFn, void** originalOut, bool asmEntry,
                      void** expectedSlot, void** newOriginal, Joined* joined) {
   void** const slot = p.resolution.slot;
   if (AnyDataOn(slot)) return GotStatus::kSlotClaimed;  // a data write holds the slot alone
   if (AnyPoisonedOn(slot)) return GotStatus::kSlotPoisoned;
   if (FindLink(slot, hookFn) != kNone) return GotStatus::kAlreadyInstalled;
+  // An assembly entry is the newest hook on its slot or it passes every call through (callback_thunk.h rule 7): nothing joins
+  // above it.
+  if (const std::size_t newestIndex = NewestOn(slot); newestIndex != kNone && g_links[newestIndex].entry) {
+    return GotStatus::kSlotHeldByEntry;
+  }
   const std::size_t oldest = OldestOn(slot);
   if (oldest == kNone) {
     // A first handler: the game's value must still be in the slot, as it was when the module was resolved.
@@ -1024,6 +1035,7 @@ GotStatus JoinLocked(const Prepared& p, const GotTarget& target, void* hookFn, v
   entry.hookFn = hookFn;
   entry.original = *newOriginal;
   entry.originalOut = originalOut;
+  entry.entry = asmEntry;
   CopyOwner(entry.owner, target.owner);
   if (g_linkCount > g_highWater) g_highWater = g_linkCount;
   joined->position = onSlot + 1;
@@ -1141,6 +1153,15 @@ StoreObserver SetStoreObserver(StoreObserver observer) {
 
 GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** originalOut,
                            ImageLookup lookup) {
+  return InstallImpl(target, hookFn, originalOut, lookup, /*asmEntry=*/false);
+}
+
+GotStatus GotHook::InstallEntry(const GotTarget& target, void* entryFn, void** nextOut, ImageLookup lookup) {
+  return InstallImpl(target, entryFn, nextOut, lookup, /*asmEntry=*/true);
+}
+
+GotStatus GotHook::InstallImpl(const GotTarget& target, void* hookFn, void** originalOut, ImageLookup lookup,
+                               bool asmEntry) {
   if (target.module == nullptr || target.symbol == nullptr || hookFn == nullptr ||
       originalOut == nullptr || lookup == nullptr) {
     LogInstallRefusal(target, GotStatus::kBadArgument, "arguments", 0, nullptr, 0, 0, nullptr, nullptr);
@@ -1174,7 +1195,7 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
     stage = nevr::hook::AttachPublished(
         originalOut,
         [&](void** original) {
-          status = JoinLocked(prepared, target, hookFn, originalOut, &expected, &newOriginal, &joined);
+          status = JoinLocked(prepared, target, hookFn, originalOut, asmEntry, &expected, &newOriginal, &joined);
           if (status != GotStatus::kOk) return false;
           *original = newOriginal;
           return true;
@@ -1235,7 +1256,8 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
              {"chain_length", static_cast<long long>(joined.length)},
              first ? LogField("original_offset",
                               HexString(originalOffset, reinterpret_cast<std::uintptr_t>(newOriginal) - image_.base))
-                   : LogField("next_owner", joined.nextOwner)});
+                   : LogField("next_owner", joined.nextOwner),
+             LogField("kind", asmEntry ? "asm_entry" : "handler")});
   return GotStatus::kOk;
 }
 

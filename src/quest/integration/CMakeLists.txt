@@ -182,6 +182,28 @@ foreach(variant ok bad)
   target_compile_options(frames_probe_${variant} PRIVATE -Wall -Wextra -Werror)
 endforeach()
 
+# The same controls for a reviewed assembly entry (sentinel/callback_thunk.h rule 7): the entry's record names the entry and the
+# C++ continuation the sensor walks. In ok the entry carries CFI and the helper is annotated; in bad the helper is live across the
+# call; in nocfi the entry has no FDE.
+foreach(variant ok bad nocfi)
+  set(_helper ${variant})
+  if(variant STREQUAL "nocfi")
+    set(_helper ok)
+  endif()
+  add_executable(frames_probe_asm_${variant}
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_asm.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_helper_${_helper}.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_asm.cpp"
+                              PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+  if(variant STREQUAL "nocfi")
+    target_compile_definitions(frames_probe_asm_nocfi PRIVATE PROBE_NO_CFI=1)
+  endif()
+  target_include_directories(frames_probe_asm_${variant} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel" "${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+  target_link_libraries(frames_probe_asm_${variant} PRIVATE nevr_quest_got_hook)
+  target_compile_options(frames_probe_asm_${variant} PRIVATE -Wall -Wextra -Werror)
+endforeach()
+
 # The sentinel links the integration, and with it every library package. (Defined here because the
 # integration is the first place all of them exist; CMake resolves the target name at generate time.)
 target_link_libraries(ovrplatformloader PRIVATE nevr_quest_integration)

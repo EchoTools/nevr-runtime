@@ -29,6 +29,13 @@ import (
 // personality fails however it is marked in a comment or a name: only the section exempts, and the
 // controls below (frames_probe_bad, frames_probe_ok, the synthetic graphs) pin that.
 //
+// A reviewed assembly entry (callback_thunk.h rule 7) is the one hook that is not a CallbackThunk. Its record,
+// NEVR_ASM_ENTRY_RECORD, is {entry, continuation} in the same section: the sensor roots the walk at both, so the
+// continuation and everything it calls directly are checked like a handler's, and the entry itself must have an FDE
+// under "zR" (a naked function with no CFI has none, and a game exception could not unwind through it). A record
+// whose entry is neither a thunk Entry nor in reviewedAsmEntries fails, so adding an entry is a reviewed change
+// to the list below, and the list names an entry only while the library carries its record.
+//
 // Not exempted by the annotation, and so not entered either way: the cold, noreturn tail of libc++ and
 // libc++abi (a length or range error, terminate, the exception allocator). Direct container operations
 // reach them but they do not run during a normal call, and when one does run it raises a sentinel
@@ -44,6 +51,52 @@ var libcxxThrowTail = regexp.MustCompile(`^(__cxa_|_ZSt9terminatev|_ZSt11__termi
 var linkerErratumVeneer = regexp.MustCompile(`^__CortexA53843419_[0-9A-F]+$`)
 
 const outsideSection = "nevr_outside_game_call"
+
+// The assembly entries the sentinel may carry, by symbol name: each is reviewed for callback_thunk.h rule 7 (the ldar of its
+// next word, the br with the caller's registers untouched, CFI, a personality-free continuation). The combat modules that
+// need one add its name here, in the change that moves them.
+var reviewedAsmEntries = []*regexp.Regexp{}
+
+// What is wrong with the library's hook records, as messages. `names` maps a function start to its symbol, `thunkEntries`
+// holds the CallbackThunk Entry functions, `recordEntries` counts the records that name each entry.
+//   - a thunk Entry has exactly one record;
+//   - any other record entry is a reviewed assembly entry (matched by name), and has exactly one record;
+//   - every reviewed pattern matches exactly one record entry, so a name cannot outlive its entry.
+func recordEntryErrors(names map[uint64]string, thunkEntries map[uint64]bool, recordEntries map[uint64]int, reviewed []*regexp.Regexp) []string {
+	var errs []string
+	for a := range thunkEntries {
+		if recordEntries[a] != 1 {
+			errs = append(errs, fmt.Sprintf("thunk entry %s has %d hook records, want exactly 1 (define the hook with NEVR_HOOK_RECORD)", names[a], recordEntries[a]))
+		}
+	}
+	matched := make([]int, len(reviewed))
+	for a, n := range recordEntries {
+		if thunkEntries[a] {
+			continue
+		}
+		hit := -1
+		for i, re := range reviewed {
+			if re.MatchString(names[a]) {
+				hit = i
+			}
+		}
+		if hit < 0 {
+			errs = append(errs, fmt.Sprintf("hook record names %#x (%s, x%d), which is neither a CallbackThunk Entry nor a reviewed assembly entry (add the entry to reviewedAsmEntries in the change that adds it)", a, names[a], n))
+			continue
+		}
+		matched[hit]++
+		if n != 1 {
+			errs = append(errs, fmt.Sprintf("assembly entry %s has %d hook records, want exactly 1 (declare it once with NEVR_ASM_ENTRY_RECORD)", names[a], n))
+		}
+	}
+	for i, re := range reviewed {
+		if matched[i] != 1 {
+			errs = append(errs, fmt.Sprintf("reviewed assembly entry %s matches %d record entries, want exactly 1: the entry or its record is gone", re, matched[i]))
+		}
+	}
+	sort.Strings(errs)
+	return errs
+}
 
 // frameGraph is everything the verdict needs, so the verdict is a pure function that the controls can
 // feed synthetic graphs.
@@ -387,5 +440,112 @@ func TestSensorDoesNotExemptAnonymousNamespaceFunctions(t *testing.T) {
 	v := walkHookFrames(g)
 	if !strings.Contains(strings.Join(v.violations, "\n"), "ProbeHandler") {
 		t.Fatalf("an anonymous-namespace function under a personality must fail, got %v", v.violations)
+	}
+}
+
+// ---- the assembly entry's record ----------------------------------------------------------------------
+
+func TestRecordEntryErrorsAcceptsThunksAndReviewedAsmEntries(t *testing.T) {
+	names := map[uint64]string{0x100: "ThunkEntry", 0x200: "q15t_fire_thunk"}
+	reviewed := []*regexp.Regexp{regexp.MustCompile(`^q15t_fire_thunk$`)}
+	if errs := recordEntryErrors(names, map[uint64]bool{0x100: true}, map[uint64]int{0x100: 1, 0x200: 1}, reviewed); len(errs) != 0 {
+		t.Fatalf("a thunk entry and a reviewed assembly entry, one record each, must pass, got %v", errs)
+	}
+}
+
+// A record whose entry is not a thunk Entry and not reviewed is how an unreviewed assembly entry would reach a build.
+func TestRecordEntryErrorsRejectsAnUnreviewedEntry(t *testing.T) {
+	names := map[uint64]string{0x100: "ThunkEntry", 0x200: "some_naked_function"}
+	errs := recordEntryErrors(names, map[uint64]bool{0x100: true}, map[uint64]int{0x100: 1, 0x200: 1}, nil)
+	if len(errs) != 1 || !strings.Contains(errs[0], "some_naked_function") || !strings.Contains(errs[0], "reviewed assembly entry") {
+		t.Fatalf("an unreviewed record entry must fail naming it, got %v", errs)
+	}
+}
+
+func TestRecordEntryErrorsRejectsADoubledOrStaleEntry(t *testing.T) {
+	names := map[uint64]string{0x200: "q15t_fire_thunk"}
+	reviewed := []*regexp.Regexp{regexp.MustCompile(`^q15t_fire_thunk$`), regexp.MustCompile(`^q15t_gone_thunk$`)}
+	errs := recordEntryErrors(names, nil, map[uint64]int{0x200: 2}, reviewed)
+	joined := strings.Join(errs, "\n")
+	if !strings.Contains(joined, "has 2 hook records") || !strings.Contains(joined, "q15t_gone_thunk") {
+		t.Fatalf("a doubled record and a reviewed name with no record must both fail, got %v", errs)
+	}
+}
+
+func TestRecordEntryErrorsStillRequiresOneRecordPerThunk(t *testing.T) {
+	names := map[uint64]string{0x100: "ThunkEntry"}
+	errs := recordEntryErrors(names, map[uint64]bool{0x100: true}, map[uint64]int{}, nil)
+	if len(errs) != 1 || !strings.Contains(errs[0], "has 0 hook records") {
+		t.Fatalf("a thunk entry without a record must fail, got %v", errs)
+	}
+}
+
+var probeAsmEntryRe = regexp.MustCompile(`^probe_asm_entry$`)
+
+func probeAsm(t *testing.T, variant string) (builtArtifact, frameVerdict) {
+	t.Helper()
+	a := loadFrameGraph(t, probeExe(t, "frames_probe_asm_"+variant))
+	return a, walkHookFrames(a.graph)
+}
+
+func addrOf(a builtArtifact, name string) uint64 {
+	for addr, n := range a.graph.names {
+		if n == name {
+			return addr
+		}
+	}
+	return 0
+}
+
+// On a real linked executable: the record names the entry and its continuation, both are roots, the entry has an FDE under
+// "zR", and the entry's bl to the continuation is an edge. The record passes the entry check as a reviewed entry.
+func TestFramesProbeAsmEntryIsReadAsARecord(t *testing.T) {
+	a, v := probeAsm(t, "ok")
+	entry, cont := addrOf(a, "probe_asm_entry"), addrOf(a, "probe_asm_continuation")
+	if entry == 0 || cont == 0 {
+		t.Fatalf("probe_asm_entry %#x or probe_asm_continuation %#x is not a function symbol of frames_probe_asm_ok", entry, cont)
+	}
+	if a.recordEntries[entry] != 1 || len(a.recordEntries) != 1 {
+		t.Errorf("want exactly one record, naming the entry; got %v", a.recordEntries)
+	}
+	roots := map[uint64]bool{}
+	for _, r := range a.graph.roots {
+		roots[r] = true
+	}
+	if !roots[entry] || !roots[cont] {
+		t.Errorf("the entry %#x and its continuation %#x must both be roots, roots=%v", entry, cont, a.graph.roots)
+	}
+	if a.graph.aug[entry] != `"zR"` {
+		t.Errorf("the entry sits under CIE augmentation %q, want \"zR\"", a.graph.aug[entry])
+	}
+	found := false
+	for _, callee := range a.graph.edges[entry] {
+		found = found || callee == cont
+	}
+	if !found {
+		t.Errorf("no direct edge from the entry to its continuation: the entry's bl was not read (edges %v)", a.graph.edges[entry])
+	}
+	errs := recordEntryErrors(a.graph.names, map[uint64]bool{}, a.recordEntries, []*regexp.Regexp{probeAsmEntryRe})
+	if len(errs) != 0 || len(v.violations) != 0 {
+		t.Errorf("frames_probe_asm_ok: record errors %v, frame violations %v", errs, v.violations)
+	}
+	if !anyMatches(v.annotatedReached, regexp.MustCompile(`LiveHelper`)) {
+		t.Errorf("the continuation's helper must be listed as an annotated function reached, got %v", v.annotatedReached)
+	}
+}
+
+// The continuation calls an unannotated helper with a personality across the game call: the walk from the record must find it.
+func TestFramesProbeAsmEntryContinuationIsWalked(t *testing.T) {
+	_, v := probeAsm(t, "bad")
+	if !strings.Contains(strings.Join(v.violations, "\n"), "LiveHelper") {
+		t.Fatalf("frames_probe_asm_bad: the unannotated personality helper behind the continuation must be reported, got %v", v.violations)
+	}
+}
+
+// An entry with no CFI has no FDE, so a game exception could not unwind through it: the sensor fails the entry itself.
+func TestFramesProbeAsmEntryWithoutCFIFails(t *testing.T) {
+	_, v := probeAsm(t, "nocfi")
+	if !strings.Contains(strings.Join(v.violations, "\n"), "probe_asm_entry") || !strings.Contains(strings.Join(v.violations, "\n"), "no FDE") {
+		t.Fatalf("frames_probe_asm_nocfi: the entry with no FDE must be reported, got %v", v.violations)
 	}
 }

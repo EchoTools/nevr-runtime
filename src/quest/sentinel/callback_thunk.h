@@ -63,9 +63,9 @@
  *      sentinel-only frames that are not live across a call into game code (a helper that does
  *      its throwing work, catches, and returns before the handler touches the game).
  *   4. A hook is installed only through InstallThunk<Thunk> (hook_install.h). The raw
- *      GotHook::Install taking an arbitrary function pointer is private. Two callers reach it: the
- *      test access class (tests/), which TestRawInstallOnlyInTests pins, and the plugin hook service's
- *      install (got_hook.h; #2001, ADR 0034). A plugin's handler is a plain
+ *      GotHook::Install taking an arbitrary function pointer is private. Three callers reach it: the
+ *      test access class (tests/), which TestRawInstallOnlyInTests pins, the plugin hook service's
+ *      install (got_hook.h; #2001, ADR 0034) and the assembly-entry installer of rule 7. A plugin's handler is a plain
  *      function built outside this sensor's build, so the service installs it as one, and
  *      plugin_interface.h (register_slot_hook) states that rule for plugins.
  *   5. Helpers. A function a handler calls directly and that can be on the stack across the
@@ -75,9 +75,31 @@
  *      not a check.
  *   6. tests/quest TestHookFramesCarryNoPersonality enforces rule 1 on the built artifact: it
  *      requires exactly one record per thunk Entry (an Entry without a record fails), starts
- *      from every record's entry and handler, follows direct bl/b edges through the sentinel
- *      and fails on any reachable function under a personality-bearing CIE. There is no
+ *      from every record's entry and handler (or, for an assembly entry, its continuation), follows direct bl/b edges
+ *      through the sentinel and fails on any reachable function under a personality-bearing CIE. There is no
  *      allowlist: a hook does not log, so no logging code is reachable from it.
+ *   7. An assembly entry is the one hook that is not a CallbackThunk. A few game functions are hooked by code that needs
+ *      what a thunk's handler cannot see: the caller's return address as it is in x30, its sp, or a callee-saved register
+ *      (the entry acts only when x30 is a given call site of the game, and passes every other call on untouched). Such an
+ *      entry is a naked arm64 function declared by a record, NEVR_ASM_ENTRY_RECORD(name, entry, continuation), which names
+ *      the entry and the C++ function it calls. It is installed through InstallAsmEntry (hook_install.h) and nothing else;
+ *      the installer, AsmEntryInstaller, is the manager's fourth friend, and TestRawInstallOnlyInTests lets only
+ *      src/quest/combat/ name it. What an entry owes, which the sensor and the manager enforce where they can and a
+ *      reviewer enforces where they cannot:
+ *        - its next word is a pointer-sized object that the install is given (the nextOut argument) and that holds the
+ *          function to call in place of the game's. The entry, or its continuation, loads it with acquire semantics (`ldar`
+ *          in assembly) at every call and never caches it. The manager publishes the word with a release store before the
+ *          slot changes, and again whenever the hook it calls leaves the chain (Remove or Forget);
+ *        - a call the entry does not act on goes on untouched: the entry jumps (`br`) to the word with x0..x7, x30 and sp as
+ *          the caller left them, using x16 only, so the hook it calls sees the game as the caller. A call it acts on gets a
+ *          frame, a `bl` to the continuation and a return. An entry that acts on every call (it passes the caller's sp and
+ *          x30 to its continuation and continues there with x30 unchanged) has no pass-through path;
+ *        - it carries CFI (`.cfi_startproc`, `.cfi_def_cfa_offset`, `.cfi_offset`, `.cfi_endproc`), so it has an FDE under
+ *          the personality-free "zR" CIE and a game exception can unwind through it (the sensor fails an entry with no FDE);
+ *        - the continuation and what it calls are rule 1 and rule 5 code. The entry's record is the sensor's root.
+ *      An entry acts on the game's call site, so it must be the newest handler on its slot: a hook above it would call it
+ *      from the hook's own frame, and it would pass every call through. The manager refuses a later handler on its slot
+ *      (kSlotHeldByEntry, a Warning that names the chain with the entry in it); the entry itself may install above handlers.
  *
  * Limits, stated so nobody mistakes the checks for a proof. The sensor exists to catch an honest
  * mistake in a package that uses this API; it is not a barrier against someone working around it
@@ -96,6 +118,7 @@
 #endif
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
@@ -114,6 +137,12 @@
 #define NEVR_HOOK_RECORD(name, Thunk, handlerFn)                                        \
   NEVR_HOOK_RECORD_ATTRS constexpr ::sentinel::HookRecord<Thunk> name =                  \
       ::sentinel::HookRecordAccess::Make<Thunk>(Thunk::EntryFn(), handlerFn)
+
+// Declares a reviewed assembly entry (rule 7): records {entry, continuation} in the same section, so the frame sensor starts
+// from both. `entryFn` is the naked entry's name, `continuationFn` the C++ function it calls. The record is what
+// InstallAsmEntry takes.
+#define NEVR_ASM_ENTRY_RECORD(name, entryFn, continuationFn)                                              \
+  NEVR_HOOK_RECORD_ATTRS constexpr auto name = ::sentinel::HookRecordAccess::MakeAsmEntry(&(entryFn), &(continuationFn))
 
 // The bounds of the nevr_hook_records section, provided by the linker for a section whose
 // name is a C identifier. Weak: absent when the program defines no record.
@@ -151,20 +180,58 @@ class HookRecord {
   friend struct HookRecordAccess;
 };
 
+// The two function pointers that make an assembly entry (rule 7): the entry itself and the C++ function it calls for a call it
+// acts on. Same shape as HookRecord, so the frame sensor reads both kinds from the one section. It cannot be constructed
+// outside NEVR_ASM_ENTRY_RECORD (private constructor, HookRecordAccess is the friend).
+template <typename Entry, typename Continuation>
+class AsmEntryRecord {
+ public:
+  Entry entry;
+  Continuation continuation;
+
+ private:
+  constexpr AsmEntryRecord(Entry e, Continuation c) : entry(e), continuation(c) {}
+  friend struct HookRecordAccess;
+};
+
 struct HookRecordAccess {
   template <typename Thunk>
   static constexpr HookRecord<Thunk> Make(typename Thunk::Fn entry, typename Thunk::Handler handler) {
     return HookRecord<Thunk>(entry, handler);
   }
+
+  template <typename Entry, typename Continuation>
+  static constexpr AsmEntryRecord<Entry, Continuation> MakeAsmEntry(Entry entry, Continuation continuation) {
+    static_assert(std::is_pointer_v<Entry> && std::is_function_v<std::remove_pointer_t<Entry>>,
+                  "an assembly entry is a function");
+    static_assert(std::is_pointer_v<Continuation> && std::is_function_v<std::remove_pointer_t<Continuation>>,
+                  "an assembly entry's continuation is a function");
+    static_assert(sizeof(AsmEntryRecord<Entry, Continuation>) == 2 * sizeof(void*),
+                  "the frame sensor reads the section in records of two pointers");
+    return AsmEntryRecord<Entry, Continuation>(entry, continuation);
+  }
 };
+
+namespace detail {
+// True when the object of `size` bytes at `object` lies inside the nevr_hook_records section.
+inline bool InRecordSection(const void* object, std::size_t size) noexcept {
+  const char* const p = static_cast<const char*>(object);
+  return &__start_nevr_hook_records != nullptr && &__stop_nevr_hook_records != nullptr &&
+         p >= __start_nevr_hook_records && p + size <= __stop_nevr_hook_records;
+}
+}  // namespace detail
 
 // True when `record` lies inside the nevr_hook_records section, i.e. it was defined with
 // NEVR_HOOK_RECORD and is visible to the build-time frame sensor.
 template <typename Thunk>
 bool IsRecordedHook(const HookRecord<Thunk>& record) noexcept {
-  const char* const p = reinterpret_cast<const char*>(&record);
-  return &__start_nevr_hook_records != nullptr && &__stop_nevr_hook_records != nullptr &&
-         p >= __start_nevr_hook_records && p + sizeof(record) <= __stop_nevr_hook_records;
+  return detail::InRecordSection(&record, sizeof(record));
+}
+
+// The same for an assembly entry's record (NEVR_ASM_ENTRY_RECORD).
+template <typename Entry, typename Continuation>
+bool IsRecordedAsmEntry(const AsmEntryRecord<Entry, Continuation>& record) noexcept {
+  return detail::InRecordSection(&record, sizeof(record));
 }
 
 template <typename Tag, typename Ret, typename... Args, bool kCaller>

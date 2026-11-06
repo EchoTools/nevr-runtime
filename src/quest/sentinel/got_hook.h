@@ -57,6 +57,14 @@
  * (below) stores a value of ours over it and puts the game's value back, through the same lock and
  * registry.
  *
+ * Assembly entries. A few hooks cannot be a CallbackThunk because they read what the thunk's handler cannot see: the caller's
+ * x30, sp or a callee-saved register. Such a hook is a reviewed naked entry (callback_thunk.h rule 7) installed through
+ * InstallAsmEntry (hook_install.h) and the friend AsmEntryInstaller. It joins the chain like any hook (it may sit above the
+ * handlers already on its slot, and it calls the newest of them), reads the word it calls with acquire semantics at every
+ * call, and the manager publishes that word before the slot changes and again when the hook it calls leaves. It acts on the game's own call
+ * site, so it must stay the newest hook on its slot: a later install on that slot, a handler's or another entry's, is refused
+ * with kSlotHeldByEntry, a Warning that names the chain with the entry marked (asm_entry). The rule ends with the entry's Remove.
+ *
  * Install and Remove log exactly one structured line (hook_log.h) and return a
  * status; a failed Install leaves the slot and its page protection as they were
  * and the caller's original pointer at its entry value, with one exception: if the
@@ -129,6 +137,7 @@ enum class GotStatus : std::uint8_t {
   kPinRequired,            // an ABS64 target names its slot by a pinned link-time address, and this one has none
   kSlotClaimed,            // the slot already holds a registry entry a data write may not share, or a data write holds it
   kExecutableMapping,      // a data write's slot names a function or is in an executable mapping, or its new value is a code address (a code pointer is a hook)
+  kSlotHeldByEntry,        // the slot's newest hook is an assembly entry, which must stay the newest (see "Assembly entries" above GotHook)
 };
 
 // Stable tokens for log lines and tests.
@@ -341,12 +350,18 @@ class GotHook {
   // previous slot value, or the chain's newest hook); on failure it is restored to its entry value (see
   // the notes at the top of this file for the one exception). Private on purpose: production code
   // installs a CallbackThunk through InstallThunk (hook_install.h), which keeps every hook inside the frame
-  // sensor's reach; tests use GotHookTestAccess, and the plugin service uses PluginHandlerInstaller.
+  // sensor's reach; tests use GotHookTestAccess, the plugin service uses PluginHandlerInstaller and a reviewed assembly entry
+  // uses AsmEntryInstaller (hook_install.h; callback_thunk.h rule 7).
   friend struct ThunkInstaller;
   friend struct GotHookTestAccess;
   friend struct PluginHandlerInstaller;
+  friend struct AsmEntryInstaller;
   GotStatus Install(const GotTarget& target, void* hookFn, void** originalOut,
                     ImageLookup lookup = FindLoadedImage);
+  // Install for an assembly entry: the same chain join, with the entry marked so that no later hook joins above it.
+  // `nextOut` is the word the entry (or its continuation) loads with acquire semantics at every call.
+  GotStatus InstallEntry(const GotTarget& target, void* entryFn, void** nextOut, ImageLookup lookup);
+  GotStatus InstallImpl(const GotTarget& target, void* hookFn, void** originalOut, ImageLookup lookup, bool asmEntry);
 
   bool installed_ = false;
   bool mayBeLive_ = false;
