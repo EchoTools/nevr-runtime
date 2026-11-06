@@ -267,7 +267,7 @@ Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket connected uri=%s conn_i
 
 // AFTER, structured (ADR 0027): the event, the tag and each field are JSON keys
 Log(Level::Info, Tag::GameServer, "websocket_connected",
-    {Str("uri", RedactUrlForDiagnostics(uri)), Int("conn_id", connIndex)});
+    {Str("uri", UrlForDiagnostics(uri)), Int("conn_id", connIndex)});
 ```
 
 **Where:** This rule applies to every `Log()` call site.
@@ -341,8 +341,9 @@ HTTP response bodies, JSON parser exception text, protobuf error messages,
 WebSocket close/error reasons, and callback exception text can echo secrets or
 user supplied content. Do not log these values, even at Debug. Keep the
 operational signal by logging numeric status/error codes, bounded byte counts,
-retry counts, and stable event markers. URL diagnostics must use the redacted
-formatters and omit query and fragment data. Preserve the original response
+retry counts, and stable event markers. A URL is logged whole, through
+`UrlForDiagnostics` (userinfo, query and fragment included; control characters
+are written as %XX so one URL is one line). Preserve the original response
 and request bytes for protocol handling; this rule changes diagnostics only.
 
 ### Rule 5: Noise is a defect
@@ -538,11 +539,11 @@ Log(EchoVR::LogLevel::Error,
 
 Every config decision that affects runtime behavior SHALL be logged at
 INFO level when it is loaded. Log the key and a safe summary, not secret
-values or unredacted URLs. This includes:
+values. This includes:
 
 - CLI flags (`-server`, `-headless`, `-timestep`, `-telemetry`).
-- Config-file overrides (arena round time, mercy score, and redacted service URLs).
-- Service redirects (each key and redacted source/destination URL).
+- Config-file overrides (arena round time, mercy score, and service URLs).
+- Service redirects (each key and its source and destination URL).
 - Module/plugin load decisions (loaded, skipped, failed).
 
 The log is the only record of what configuration decisions the process is
@@ -756,7 +757,7 @@ structured call (ADR 0027) writes as its own key.
 | Login success | `"[NEVR.WS] LOGIN SUCCESS"` | `"[NEVR.WS] login success xpid=%s conn=%d session=%s"` |
 | Login failure | `"[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s"` | `"[NEVR.WS] login failed status=%llu message_bytes=%zu"` |
 | Hook failure | `"[wave0] FAILED to hook fcn.0x%llX"` | `"[NEVR.PATCH] hook failed name=%s va=0x%llX expected=%s actual=%s"` |
-| Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` (URLs redacted) |
+| Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` |
 | Module loaded | `"[NEVR.MODULE] Loaded: %s"` | `"[NEVR.MODULE] loaded name=%s path=%s"` |
 | Plugin loaded | `"[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)"` | Already compliant — carries name, version, API version |
 | Plugin line | `fprintf(stderr, "[my_plugin] hook failed %d", rc)` | `PluginLogFields(NEVR_LOG_WARNING, "hook failed", {{"error", "5"}})` -> `"[NEVR.PLUGIN] plugin=my_plugin hook failed error=5"` |
