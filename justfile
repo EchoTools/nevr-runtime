@@ -805,11 +805,12 @@ test-winvm *ARGS:
 # One social scenario, end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md):
 # builds the mingw-scenario DLL (test-only control endpoint), launches the client the
 # launch-client.sh way, runs tools/scenario/scenarios/NAME.yaml and prints a PASS/FAIL table.
+[positional-arguments]
 scenario NAME *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/{{NAME}}.yaml" {{ARGS}}
+    python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/$1.yaml" "${@:2}"
 
 # The scheduled smoke: one client boot proving the three things every scenario assumes (in game,
 # control endpoint listening, a fire drives the game), with a non-zero record and an alarm on
@@ -818,11 +819,12 @@ smoke *ARGS:
     tools/scenario/smoke.sh {{ARGS}}
 
 # ARGS pass to run_all.py: --config <dir>/config.json runs the suite with that directory's config.yaml.
+[positional-arguments]
 scenario-all *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    python3 tools/scenario/run_all.py {{ARGS}}
+    python3 tools/scenario/run_all.py "$@"
 
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:
