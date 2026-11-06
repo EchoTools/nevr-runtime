@@ -1,0 +1,1 @@
+On the Quest combat build, the lobbies arena players use now stay at the game's own refresh rate instead of dropping to 90 Hz (72 on a Quest 2); combat maps still run at 90.
