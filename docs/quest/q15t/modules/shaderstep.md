@@ -9,7 +9,7 @@ Option: `Q15T_SHADERSTEP` (default ON). Off switch: `shaderstep.off` in the q15t
   and, on its common tail, stores the table growth step: `0x1a07000 mov w8,#0x20` then `0x1a07004 str x8,[x19,#0x98]`
   (from the disassembly, the tail is shared by both branches of the `cbz x2`).
 - The table is the CTableXT at object+0x78: CMemBlock first, step at table+0x20 (= object+0x98), capacity at +0x28. The layout
-  is the one custctx reads for `CTableXT<SR15NetCustomDrawData>` (`src/quest/plugins/q15t/src/custctx.cpp`, `DrawTable`).
+  is the one custctx reads for `CTableXT<SR15NetCustomDrawData>` (`src/quest/combat/custctx.cpp`, `DrawTable`).
 - The factory's vtable: the destructor `~CFactory` (disassembly 0x1a06ef0) stores `_ZTV+0x10` into the object. Its GOT load at
   0x1a06ef8 (`ldr x8,[x8,#0xcb8]`) then `add x8,x8,#0x10` gives the address point disassembly 0x375ddc0. Entries there (xrefs to each
   function VA): 0x375ddc0 -> 0x1a06ef0 (slot 0, `~CFactory`), 0x375ddc8 -> 0x1a06f4c (slot 1, `ConstructInstance`),

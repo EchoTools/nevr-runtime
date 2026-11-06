@@ -14,7 +14,6 @@
 
 #include "bvh.h"
 #include "nevr/plugin_interface.h"
-#include "fxtrail.h"
 #include "wallfire.h"
 
 extern "C" {
@@ -210,8 +209,6 @@ int main() {
   for (uintptr_t s : kLevelNameSlots) *reinterpret_cast<uintptr_t*>(base + s) = base + 0x1202ecc;
   // boosterpool: the GOT word of the AllocatePooledActor import holds its pinned function (ELF 0x18037c4)
   *reinterpret_cast<uintptr_t*>(base + 0x36cd1f8) = base + 0x18037c4;
-  // fxtrail: its eleven code words are the pinned ones, so its off switch (set below) is what stops it
-  for (const auto& pin : q15t::kFxTrailWordPins) *reinterpret_cast<uint32_t*>(base + pin.va) = pin.want;
   // bvh: its six slots hold their pinned functions. wallfire (installed after it): the query slot, the occluded slot, the site word.
   const q15t::BvhPins& bp = q15t::kBvhPinned;
   for (const q15t::BvhHookSlot* h : {&bp.init, &bp.shutdown, &bp.intersect, &bp.occluded, &bp.touch, &bp.gate})
@@ -222,12 +219,13 @@ int main() {
   *reinterpret_cast<uint32_t*>(base + wp.site) = wp.site_word;
   mprotect(p, kImage, PROT_READ);
 
-  // fxtrail's own off switch (fxtrail.off in the data directory): a choice, so INFO status=off, not an ERROR
+  // music's own off switch (music.off in the data directory): a choice, so INFO status=off, not an ERROR (the reason `off_file` is what
+  // ReportModule tells a choice from a failure by)
   char dir[] = "/tmp/q15t_wiring_XXXXXX";
   if (mkdtemp(dir) == nullptr) std::abort();
-  const std::string off_file = std::string(dir) + "/fxtrail.off";
+  const std::string off_file = std::string(dir) + "/music.off";
   if (FILE* f = std::fopen(off_file.c_str(), "w")) std::fclose(f);
-  q15t::SetFxTrailDirForTest(dir);
+  q15t::SetModuleSwitchDirForTest(dir);
 
   NevrGameContext ctx{};
   ctx.base_addr = base;
@@ -249,7 +247,7 @@ int main() {
   CHECK(CountLines("vrapi_SetClockLevels") == 0 && CountLines("vrapi_SetDisplayRefreshRate") == 0, "the plugin names a vrapi slot it does not install");
 
   // every compiled module is named in the init record
-  const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
+  const char* kAll[] = {"gunconnect", "aibots",
                         "bvh",      "wallfire",   "impactsnd", "ec",         "ecfx",       "dronekill",  "dronemuzzle",
                         "powerboost", "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
   const std::string init = FindLine("q15t init");
@@ -263,13 +261,12 @@ int main() {
   // what must have installed, been switched off, or refused, on this image
   const char* kInstalled[] = {"bvh", "wallfire", "levelname", "boosterpool"};
   const char* kArmed[] = {"gunconnect", "aibots"};
-  const char* kOff[] = {"ec", "ecfx", "fxtrail"};
+  const char* kOff[] = {"ec", "ecfx", "music"};
   struct Refusal {
     const char* module;
     const char* reason;  // the reason token the record must carry
   };
-  const Refusal kRefused[] = {{"voipdrop", "word_pin_mismatch"}, {"custctx", "word_pin_mismatch"},  {"droneguard", "word_pin_mismatch"},
-                              {"peerclamp", "word_pin_mismatch"}, {"music", "word_pin_mismatch"}, {"sensorwd", "word_pin_mismatch"}, {"impactsnd", "hit_code_word_mismatch"}, {"dronekill", "engine_export_missing"},
+  const Refusal kRefused[] = {{"sensorwd", "word_pin_mismatch"}, {"impactsnd", "hit_code_word_mismatch"}, {"dronekill", "engine_export_missing"},
                               {"dronemuzzle", "needs_dronekill_shot"}, {"powerboost", "hook_failed"}, {"hudmeter", "unexpected_original"},
                               {"shieldgamma", "unexpected_original"}};
   for (const char* m : kInstalled)
@@ -289,7 +286,6 @@ int main() {
   CHECK(FindLine("shieldgamma: OFF").find("gamma=0 tube_mirror=1") != std::string::npos, "shieldgamma bitmask 2 must mean mirror only: %s",
         FindLine("shieldgamma: OFF").c_str());
   // what the installs did to the image
-  CHECK(w_slot(base, q15t::kFxTrailSlot) == 0, "fxtrail was off: its slot must be untouched");
   CHECK(w_slot(base, bp.init.slot) != base + bp.init.fn && w_slot(base, bp.gate.slot) != base + bp.gate.fn, "bvh: its slots were not swapped");
   CHECK(w_slot(base, wp.query_slot) != base + wp.query_fn, "wallfire (after bvh) did not swap its slot");
   CHECK(w_slot(base, 0x362ef90) != base + 0x1202ecc, "levelname: its slot was not swapped");
@@ -319,7 +315,7 @@ int main() {
   CHECK(CountLines("hook install hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok", 1) == 1, "the game tick was not installed ok");
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
   CHECK(CountLines("game tick callbacks") == 1, "more than one tick install record");
-  CHECK(CountLines("module install FAILED") == 12, "%d FAILED lines, want 12", CountLines("module install FAILED"));
+  CHECK(CountLines("module install FAILED") == 7, "%d FAILED lines, want 7", CountLines("module install FAILED"));
 
   // one frame through the swapped tick slot, as CncaGame::Render calls it: the registered callbacks of gunconnect and aibots run
   // (each starts, finds no game library on the host and says so once, at ERROR)
@@ -331,7 +327,7 @@ int main() {
 
   std::remove(off_file.c_str());
   rmdir(dir);
-  if (g_fail == 0) std::printf("wiring_test: all checks pass (21 modules named, 4 installed, 3 off, 12 refusals at ERROR, InitEx returned 0)\n");
+  if (g_fail == 0) std::printf("wiring_test: all checks pass (16 modules named, 4 installed, 3 off, 7 refusals at ERROR, InitEx returned 0)\n");
   else {
     for (const auto& l : g_lines) std::printf("  [%u] %s\n", l.level, l.text.c_str());
     std::printf("wiring_test: %d failure(s)\n", g_fail);

@@ -50,7 +50,7 @@ Wrapper on libr15's JUMP_SLOT for `CWwiseEngine::PostSoundEvent`:
   `game+0x1f48/0x1f78` and `game+0x1f88/0x1fb8`, `gs+0x8 == game`, 4 level hashes `:60-62`; compared by reading both, not by a diff).
 - The line budget of the source (`kMaxLines = 4000` per process, `:59`) is kept, with one addition: the line that crosses it logs one
   WARNING (`music: line budget used up ...`), so a silenced log is never silent. Counters keep counting.
-- Kill file: `<plugin data dir>/music.off` (`ModuleSwitchPresent`, `module_switch.h`, same directory as `fxtrail.off`) present at install:
+- Kill file: `<plugin data dir>/music.off` (`ModuleSwitchPresent`, `module_switch.h`, same directory as every plugin kill file) present at install:
   refused with reason `off_file` and one INFO line `music off`; posts are untouched. The source's `setprop debug.<app>.music 0` is
   dropped.
 

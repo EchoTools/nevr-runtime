@@ -36,7 +36,7 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # combat runs in this process, one `combat_install` line per phase, a plain release that installs nothing and says so once, the
 # not_started record, and the `combat_config` line.
 nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} ${_cident}
-  SRC src/quest/tests/combat_install_test.cpp ${_cguards} src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp ${_cguards} src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the

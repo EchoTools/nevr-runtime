@@ -7,16 +7,13 @@
 
 #include "aibots.h"
 #include "bvh.h"
-#include "custctx.h"
 #include "decals.h"
 #include "meshstep.h"
-#include "droneguard.h"
 #include "dronekill.h"
 #include "dronemuzzle.h"
 #include "ec.h"
 #include "ecfx.h"
 #include "nevr/plugin_interface.h"
-#include "fxtrail.h"
 #include "game_tick.h"
 #include "gunconnect.h"
 #include "headset_gates.h"
@@ -26,7 +23,6 @@
 #include "levelname.h"
 #include "boosterpool.h"
 #include "music.h"
-#include "peerclamp.h"
 #include "pfx.h"
 #include "plugin_log.h"
 #include "powerboost.h"
@@ -37,7 +33,6 @@
 #include "sendguard.h"
 #include "tablestep.h"
 #include "combat_gates.h"
-#include "voipdrop.h"
 #include "wallfire.h"
 #include "weapon_arm.h"
 
@@ -91,21 +86,6 @@
 // reason, from the module's doc); like Q15T_T26, the default HERE is 0, so a build that names no option installs none of them and the
 // perf arms and the host-test arms stay unchanged. heaps and memsys are not modules of this plugin: they are the sentinel's early combat
 // step (src/quest/combat/heaps.h, memsys.h).
-#ifndef Q15T_FXTRAIL
-#define Q15T_FXTRAIL 0
-#endif
-#ifndef Q15T_VOIPDROP
-#define Q15T_VOIPDROP 0
-#endif
-#ifndef Q15T_CUSTCTX
-#define Q15T_CUSTCTX 0
-#endif
-#ifndef Q15T_DRONEGUARD
-#define Q15T_DRONEGUARD 0  // Q15T_DRONEGUARD_IDX (the second stage) is read by droneguard.cpp itself
-#endif
-#ifndef Q15T_PEERCLAMP
-#define Q15T_PEERCLAMP 0
-#endif
 #ifndef Q15T_GUNCONNECT
 #define Q15T_GUNCONNECT 0
 #endif
@@ -208,21 +188,6 @@ bool Covers(const NevrGameContext* ctx, std::size_t end_of_field) { return ctx->
 
 // Every compiled-in module, by name, for the init line.
 constexpr char kCompiledModules[] =
-#if Q15T_FXTRAIL
-    "fxtrail "
-#endif
-#if Q15T_VOIPDROP
-    "voipdrop "
-#endif
-#if Q15T_CUSTCTX
-    "custctx "
-#endif
-#if Q15T_DRONEGUARD
-    "droneguard "
-#endif
-#if Q15T_PEERCLAMP
-    "peerclamp "
-#endif
 #if Q15T_GUNCONNECT
     "gunconnect "
 #endif
@@ -356,11 +321,9 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_
 NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
   if (Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
-  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), impactsnd (sound ids), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and
-  // shieldgamma (what is drawn), ecfx (rides ec).
-  if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
+  // Modules that change what a player experiences or what the game computes (per their docs, the others skip, add or answer game
+  // logic). Not here: impactsnd (sound ids), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and shieldgamma (what is
+  // drawn), ecfx (rides ec). The crash and timing guards (fxtrail, voipdrop, custctx, droneguard, peerclamp) are the runtime's now.
   if (Q15T_DRONEKILL) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_DRONEMUZZLE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_POWERBOOST > 0) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
@@ -408,23 +371,8 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   // The modules, in an order the docs fix: wallfire after bvh; ecfx, powerboost's net tick and dronekill's kill feed after ec;
   // dronemuzzle after dronekill. Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
   // ReportModule puts its name and result in the init record. Nothing here changes what InitEx returns (see the end).
-#if Q15T_FXTRAIL
-  ReportModule("fxtrail", InstallFxTrail(base));
-#endif
-#if Q15T_VOIPDROP
-  ReportModule("voipdrop", InstallVoipDrop(base));
-#endif
-#if Q15T_CUSTCTX
-  ReportModule("custctx", InstallCustCtx(base));
-#endif
 #if Q15T_MESHSTEP
   ReportModule("meshstep", InstallMeshStep(base));
-#endif
-#if Q15T_DRONEGUARD
-  ReportModule("droneguard", InstallDroneGuard(base));
-#endif
-#if Q15T_PEERCLAMP
-  ReportModule("peerclamp", InstallPeerClamp(base));
 #endif
 #if Q15T_BVH
   {

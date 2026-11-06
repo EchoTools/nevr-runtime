@@ -13,6 +13,8 @@ nevr_ht_obj(o_hooks_id_libr15_identity GROUP hooks NOEXC INCS ${_sent} SRC src/q
 nevr_ht_obj(o_hooks_id_libr15_patch_identity GROUP hooks NOEXC INCS ${_sent} SRC src/quest/patch/libr15_patch_identity.cpp)
 nevr_ht_obj(o_hooks_id_sha256 GROUP hooks NOEXC INCS ${_sent} SRC src/quest/data/sha256.cpp)
 set(_ident o_hooks_id_libr15_identity o_hooks_id_libr15_patch_identity o_hooks_id_sha256)
+# The files folder, weakly (tests/files_dir_stub.cpp): the combat modules that moved from the q15t plugin name it, and the test that links the install table links them.
+nevr_ht_obj(o_hooks_files_dir GROUP hooks NOEXC INCS ${_sent} SRC src/quest/tests/files_dir_stub.cpp)
 # The hook backend, which almost every test links.
 foreach(f got_hook hook_log hook_report)
   nevr_ht_obj(o_hooks_${f} GROUP hooks NOEXC INCS ${_sent} SRC src/quest/sentinel/${f}.cpp)
@@ -286,11 +288,13 @@ nevr_ht_test(hwdump_share_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_i
 # The render-configuration log (#1139): the five real handlers through the thunk entries against stand-ins for the VrApi
 # functions, the line at the first frame and on each forced change, the globals read only from the proved image, the poller, and the
 # refresh-rate rule the refresh handler asks (#2172: the original gets the combat rule's answer; the tick's re-ask reaches the line).
-nevr_ht_test(render_config_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+nevr_ht_test(render_config_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident} o_hooks_files_dir
   SRC src/quest/tests/render_config_hook_test.cpp src/quest/sentinel/render_config_hook.cpp
       src/quest/sentinel/texture_quality_hook.cpp src/quest/sentinel/clock_levels_hook.cpp
       src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_tick.cpp src/quest/combat/combat_install.cpp
-      src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp)
+      src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp
+      src/quest/combat/peerclamp.cpp src/quest/combat/level_scope.cpp)
 # The log-only resource request hook (#871): the real handler through the thunk entry against a stand-in for
 # FillResourceFileRequest that fills a request the way the pinned function does.
 nevr_ht_test(resource_request_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}

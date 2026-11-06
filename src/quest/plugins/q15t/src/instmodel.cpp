@@ -22,7 +22,7 @@ constexpr std::uint32_t kStockCtorFirstWord = 0xf81e0ff4;  // str x20,[sp,#-0x20
 constexpr std::uint32_t kStockStepWord = 0x52800414;       // mov w20,#0x20
 
 // The eight CTableXT members, by the offset of their CMemBlock inside the object. Each member's growth step is at member + 0x20 and
-// its capacity at member + 0x28 (the same layout custctx.cpp's DrawTable reads). disassembly 0x1a078dc stores the step at
+// its capacity at member + 0x28 (the same layout src/quest/combat/custctx.cpp's DrawTable reads). disassembly 0x1a078dc stores the step at
 // 0x98, 0xd0, 0x108, 0x140, 0x178, 0x1b0, 0x1e8 and 0x220 (each of its CMemBlock constructions is at 0x78, 0xb0, ... 0x200).
 constexpr std::uintptr_t kMembers[] = {0x78, 0xb0, 0xe8, 0x120, 0x158, 0x190, 0x1c8, 0x200};
 constexpr std::uintptr_t kStepOffset = 0x20;

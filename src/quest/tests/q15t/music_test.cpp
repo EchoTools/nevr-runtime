@@ -473,11 +473,11 @@ int main() {
     CHECK(CountLines("music off", 1) == 1 && CountLines("music on") == 0, "no INFO off line");
     // another module's switch file does not turn this one off
     unlink((dir + "/music.off").c_str());
-    m = std::fopen((dir + "/fxtrail.off").c_str(), "w");
+    m = std::fopen((dir + "/bvh.off").c_str(), "w");
     std::fclose(m);
     const auto rk = q15t::InstallMusicAt(off.base, 0x20, Addr(&FakeReal) - off.base);
     CHECK(rk.status == q15t::SwapStatus::kOk, "another module's off file refused music: %s", q15t::StatusName(rk.status));
-    unlink((dir + "/fxtrail.off").c_str());
+    unlink((dir + "/bvh.off").c_str());
   }
 
   // ---- 12. the real installer on a fake game image: gate order, no write when refused ----

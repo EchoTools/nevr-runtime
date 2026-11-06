@@ -437,12 +437,12 @@ static void TestRefusals() {
     const std::string dir = tmpl;
     q15t::SetModuleSwitchDirForTest(dir.c_str());
     // other modules' kill files do not switch this one off
-    FILE* o = std::fopen((dir + "/fxtrail.off").c_str(), "w");
+    FILE* o = std::fopen((dir + "/bvh.off").c_str(), "w");
     std::fclose(o);
     Fresh(kPinned);
     q15t::InstallResult r = q15t::InstallSensorWd(g_base);
     CHECK(r.status == q15t::SwapStatus::kOk, "another module's kill file switched sensorwd off: %s", r.reason);
-    unlink((dir + "/fxtrail.off").c_str());
+    unlink((dir + "/bvh.off").c_str());
     // sensorwd.off: refused, nothing written, one INFO line, no ERROR
     FILE* m = std::fopen((dir + "/sensorwd.off").c_str(), "w");
     std::fclose(m);

@@ -24,7 +24,7 @@ namespace {
 //     obj->table.step = 0x20;                                    // 0x1a07130 mov w8,#0x20; 0x1a07138 str x8,[x19,#0x98]
 //     return obj;
 //   }
-// The table is CTableXT, laid out as custctx's DrawTable: step at +0x20 of the table, so +0x98 of the object. The growth step
+// The table is CTableXT, laid out as src/quest/combat/custctx.cpp's DrawTable: step at +0x20 of the table, so +0x98 of the object. The growth step
 // is the only field this module changes.
 //
 // The module does not reimplement the allocation, the constructors or the guard. It wraps the stock function: it calls it, and
