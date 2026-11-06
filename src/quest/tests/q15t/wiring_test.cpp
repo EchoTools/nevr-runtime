@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "bvh.h"
+#include "module_switch.h"
 #include "nevr/plugin_interface.h"
 #include "wallfire.h"
 
