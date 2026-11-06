@@ -1,5 +1,5 @@
 // When the equipment change the game dropped is applied again (patch/equipment_refire_rules.h, #2121). The hook that feeds the
-// rule is patch/equipment_refire.cpp (PC) and q15t/equiprefire.cpp (Quest); the game's setters, handlers and the local-player
+// rule is patch/equipment_refire.cpp (PC) and quest/combat/equip_refire.cpp (Quest); the game's setters, handlers and the local-player
 // check need the game and are proven by a live run. The Quest host test compiles this same header.
 #include <gtest/gtest.h>
 

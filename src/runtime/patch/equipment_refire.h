@@ -2,7 +2,7 @@
 // The equipment change the game drops is applied again (#2121). Hooks the three setters of CR15NetPlayerEquipmentCS (weapon
 // 0x140d498e0, tac mod 0x140d43f00, ordnance 0x140d45990); after the local player's last change of a slot, once the slot has been
 // still for nevr_equipment_refire::kSettleMs, the slot's change handler (0x140cec740 / 0x140ceaaa0 / 0x140ceb720) runs once more.
-// Decisions: equipment_refire_rules.h. The Quest twin is quest/plugins/q15t/src/equiprefire.cpp.
+// Decisions: equipment_refire_rules.h. The Quest twin is quest/combat/equip_refire.cpp.
 
 #include <cstdint>
 
