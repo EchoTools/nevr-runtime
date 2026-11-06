@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
 )
@@ -715,7 +716,15 @@ func TestServableProblemsAreTheRuntimesRegistryRules(t *testing.T) {
 			[]string{"script record 0x991421b41de58370:0x0000000000000005: the game loads a script as a DLL by name"}},
 		{"a texture and its payload", set(map[uint64][]byte{L: archiveBytes(nil, nil)}, key{textureType, 6}, key{textureGpuType, 6}), nil},
 	} {
-		got := servableProblems(c.sv, stockHas)
+		// A walk that does not end (a cycle it does not stop) fails here by name, not by running out of memory.
+		done := make(chan []string, 1)
+		go func() { done <- servableProblems(c.sv, stockHas) }()
+		var got []string
+		select {
+		case got = <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: the walk did not end within 5 s", c.name)
+		}
 		if strings.Join(got, "|") != strings.Join(c.want, "|") {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
