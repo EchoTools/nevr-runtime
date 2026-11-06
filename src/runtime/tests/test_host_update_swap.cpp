@@ -2393,6 +2393,60 @@ TEST_F(HostUpdateRollbackRefusals, ACountThatCannotBeWrittenIsRecordedWithTheErr
     }
   }
   EXPECT_TRUE(saw);
+  // The start also says it was not a try, and why.
+  bool trial = false;
+  for (const nlohmann::json& record : start.records) {
+    if (record.value("event", "") == "update_trial") {
+      trial = true;
+      EXPECT_EQ(record.value("outcome", ""), "not_counted") << record.dump();
+      EXPECT_EQ(record.value("reason", ""), "pending_write_failed") << record.dump();
+      EXPECT_GT(record.value("win32_error", 0u), 0u) << record.dump();
+      EXPECT_EQ(record.value("boot_attempts", 0), 1) << record.dump();
+    }
+  }
+  EXPECT_TRUE(trial) << "a count that could not be written is reported as a trial that was not counted";
+}
+
+// A start whose pending release needs no rollback, with a runtime the host cannot open for write, is not a try either, and
+// says why.
+TEST_F(HostUpdateRollbackRefusals, AStartWhoseRuntimeCannotBeOpenedForWriteIsNotCountedAndSaysWhy) {
+  SwappedIn();
+  ASSERT_NE(SetFileAttributesW(runtime_path_.c_str(), FILE_ATTRIBUTE_READONLY), FALSE);
+  const Start start = RunStart();
+  SetFileAttributesW(runtime_path_.c_str(), FILE_ATTRIBUTE_NORMAL);
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(start.result.pending);
+  EXPECT_EQ(Pending().value("boot_attempts", 0), 1) << "not counted";
+  std::vector<nlohmann::json> trials;
+  for (const nlohmann::json& record : start.records) {
+    if (record.value("event", "") == "update_trial") trials.push_back(record);
+  }
+  ASSERT_EQ(trials.size(), 1u);
+  EXPECT_EQ(trials[0].value("outcome", ""), "not_counted");
+  EXPECT_EQ(trials[0].value("reason", ""), "runtime_not_writable");
+  EXPECT_GT(trials[0].value("win32_error", 0u), 0u);
+  EXPECT_EQ(trials[0].value("boot_attempts", 0), 1);
+}
+
+// The mark of a failure that stays in the root cannot be written: the in-process rollback says so (the stop is the same).
+TEST_F(HostUpdateRollbackRefusals, AnInProcessStopWhoseMarkCannotBeWrittenSaysSo) {
+  PendingReleaseThatTheVerifierRefuses();
+  DeleteFileW((update_ + L"\\previous\\7.7.7\\nevr-runtime.dll").c_str());
+  MakeDirs(update_ + L"\\pending.json.tmp-" + std::to_wstring(GetCurrentProcessId()));  // every write of pending.json fails
+  const LoadedStart run = LoadAtStart(ValidContext());
+  ASSERT_EQ(run.result.outcome, nevr_host::RuntimeLoadOutcome::kUpdateBlocked);
+  ASSERT_NE(run.result.update_reason, nullptr);
+  EXPECT_STREQ(run.result.update_reason, "no_previous");
+  EXPECT_TRUE(Pending()["failed_reason"].is_null()) << "the mark was not made";
+  bool saw = false;
+  for (const nlohmann::json& record : RollbackRecords(run.records)) {
+    if (record.value("mode", "") == "in_process" && record.value("reason", "") == "pending_write_failed") {
+      saw = true;
+      EXPECT_EQ(record.value("outcome", ""), "failed");
+      EXPECT_GT(record.value("win32_error", 0u), 0u);
+    }
+  }
+  EXPECT_TRUE(saw) << "the failed mark is in the log";
 }
 
 TEST_F(HostUpdateRollbackRefusals, ARuntimeTheHostCannotOpenForWriteRefusesTheRollbackWithTheError) {
