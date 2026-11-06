@@ -7,7 +7,7 @@
  * each holding one or more resources back to back, the way the game's own package files hold them. The runtime
  * serves a record by pointing the game's resolver at the chunk in the plugin's file, and the game's own reader reads
  * and decompresses it. Its overrides are whole replacement bytes for resources the game already has, which a plugin
- * registers with NEVR_RegisterResourceOverride (nevr/pc/plugin_resources.h).
+ * the runtime registers when it mounts the set.
  *
  * Layout, little endian, offsets from the start of the set:
  *
@@ -26,12 +26,12 @@
  *   override u64 on-disk type, u64 name, u32 offset of the bytes, u32 size
  *
  * The rules Parse checks are the conditions the game's reader needs (docs/engine/asset-system.md, "Reading it"):
- * every table and every frame inside the set; a frame starts with the zstd magic; a record lies inside its chunk's
- * decompressed bytes; a record of at most kBlockLimit bytes sits in a chunk of at most kBlockLimit decompressed bytes
- * (the reader's 8-slot block cache, 0x1415255a0); a larger record is alone in its chunk, at offset 0 and the chunk's
- * whole size (the reader decompresses such a chunk straight into the resource's buffer, 0x141525310); an alignment
- * is a power of two; no two records, and no two overrides, share a key, and no override shares a record's key.
- * Record order is free: the runtime sorts.
+ * every table and every frame inside the set; a chunk's reserved word is 0; a frame starts with the zstd magic; a
+ * record lies inside its chunk's decompressed bytes; a record of at most kBlockLimit bytes sits in a chunk of at most
+ * kBlockLimit decompressed bytes (the reader's 8-slot block cache, 0x1415255a0); a larger record is the only record in
+ * its chunk, at offset 0 and the chunk's whole size (the reader decompresses such a chunk straight into the resource's
+ * buffer, 0x141525310); an alignment is a power of two of at most kMaxAlignment; no two records, and no two
+ * overrides, share a key, and no override shares a record's key. Record order is free: the runtime sorts.
  *
  * Header-only and platform-free: the runtime (PC and Quest) and the plugin SDK read the same definition.
  */
@@ -53,6 +53,9 @@ inline constexpr std::uint32_t kOverrideBytes = 0x18;
 // The reader's block cache serves a resource of at most this many bytes from a cached decompressed chunk.
 inline constexpr std::uint32_t kBlockLimit = 0x80000;
 inline constexpr std::uint32_t kZstdMagic = 0xFD2FB528u;
+// The largest alignment a record may ask for. The game's manifests use 4, 16, 2048 and 4096 (r14netclient 48037dc70b0ecab2:
+// 1,016 / 51,377 / 32 / 17,226 records); the reader sets up its buffer at the record's alignment.
+inline constexpr std::uint32_t kMaxAlignment = 0x1000;
 
 struct Record {
     std::uint64_t type = 0;
@@ -90,13 +93,14 @@ enum class Problem {
     kRecordChunk,        // a record names a chunk the table does not have
     kRecordRange,        // a record that runs past its chunk's decompressed bytes (a record of 0 bytes is allowed:
                          //   the game's own manifest holds 2,515 of them)
-    kRecordAlignment,    // an alignment that is 0 or not a power of two
+    kRecordAlignment,    // an alignment that is 0, not a power of two, or over kMaxAlignment
     kRecordInLargeChunk, // a record of at most kBlockLimit bytes in a chunk larger than kBlockLimit
-    kRecordNotAlone,     // a record larger than kBlockLimit that is not alone in its chunk
+    kRecordNotAlone,     // a record larger than kBlockLimit that is not the only record in its chunk, at its whole size
     kDuplicate,          // two records with one key
     kOverrideRange,      // an override of 0 bytes, or one that runs past the end of the set
     kOverrideDuplicate,  // two overrides with one key
     kOverrideIsRecord,   // an override with a record's key
+    kChunkReserved,      // a chunk whose reserved word is not 0
 };
 
 inline const char* ProblemName(Problem problem) {
@@ -119,6 +123,7 @@ inline const char* ProblemName(Problem problem) {
         case Problem::kOverrideRange: return "override_range";
         case Problem::kOverrideDuplicate: return "override_duplicate";
         case Problem::kOverrideIsRecord: return "override_is_record";
+        case Problem::kChunkReserved: return "chunk_reserved";
     }
     return "unknown";
 }
@@ -137,6 +142,8 @@ inline bool Inside(std::uint64_t offset, std::uint64_t length, std::uint64_t tot
 }
 
 inline bool PowerOfTwo(std::uint32_t v) { return v != 0 && (v & (v - 1)) == 0; }
+
+inline bool AlignmentOk(std::uint32_t v) { return PowerOfTwo(v) && v <= kMaxAlignment; }
 
 }  // namespace detail
 
@@ -224,24 +231,36 @@ struct Parser {
         }
         for (std::uint32_t i = 0; i < v.chunks_; ++i) {
             const Chunk c = v.ChunkAt(i);
+            if (c.reserved != 0) return {Problem::kChunkReserved, i};
             if (c.compressed < 4 || !detail::Inside(c.offset, c.compressed, size)) return {Problem::kChunkRange, i};
             if (detail::Load<std::uint32_t>(data, c.offset) != kZstdMagic) return {Problem::kChunkNotZstd, i};
             if (c.decompressed == 0) return {Problem::kChunkSize, i};
         }
         std::vector<std::pair<std::uint64_t, std::uint64_t>> keys;
         keys.reserve(v.records_);
+        // Per chunk: how many records it holds, and whether one of them is larger than kBlockLimit.
+        std::vector<std::uint32_t> inChunk(v.chunks_, 0);
+        std::vector<std::uint8_t> holdsLarge(v.chunks_, 0);
         for (std::uint32_t i = 0; i < v.records_; ++i) {
             const Record r = v.RecordAt(i);
             if (r.chunk >= v.chunks_) return {Problem::kRecordChunk, i};
             const Chunk c = v.ChunkAt(r.chunk);
             if (!detail::Inside(r.offset_in_chunk, r.size, c.decompressed)) return {Problem::kRecordRange, i};
-            if (!detail::PowerOfTwo(r.alignment)) return {Problem::kRecordAlignment, i};
+            if (!detail::AlignmentOk(r.alignment)) return {Problem::kRecordAlignment, i};
             if (r.size <= kBlockLimit) {
                 if (c.decompressed > kBlockLimit) return {Problem::kRecordInLargeChunk, i};
             } else if (r.offset_in_chunk != 0 || r.size != c.decompressed) {
                 return {Problem::kRecordNotAlone, i};
+            } else {
+                holdsLarge[r.chunk] = 1;
             }
+            ++inChunk[r.chunk];
             keys.emplace_back(r.type, r.name);
+        }
+        // A large record is the only record in its chunk: a second one there (of any size) would alias its buffer.
+        for (std::uint32_t i = 0; i < v.records_; ++i) {
+            const Record r = v.RecordAt(i);
+            if (holdsLarge[r.chunk] != 0 && inChunk[r.chunk] > 1) return {Problem::kRecordNotAlone, i};
         }
         std::vector<std::uint32_t> order(keys.size());
         for (std::uint32_t i = 0; i < order.size(); ++i) order[i] = i;

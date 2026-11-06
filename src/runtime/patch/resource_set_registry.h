@@ -7,8 +7,9 @@
 //
 // The life of a set: Add (parsed and checked, held for its plugin), then Commit when the plugin's init returns 0, or
 // Drop when it fails; then one Mount for the run, which refuses a set that names a key the game already has or a level
-// whose archive lists a resource nothing serves, and builds the shadow from the rest. A set registered after the
-// mount is refused (kTooLate).
+// whose archives (its own and every archive it depends on, through the sets and down to the game's) list a resource
+// nothing serves, and builds the shadow from the rest. A set registered after the mount is refused (kTooLate). A set's
+// overrides are held with it and handed to the override registry by the caller for mounted sets only.
 
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +39,8 @@ enum class Refusal {
   kTooLate,         // the run's sets are already mounted
   kStockKey,        // (mount) a key the game's manifests already hold
   kUnresolved,      // (mount) a level's archive lists a resource, or names an archive, that nothing serves
+  kIndexSpace,      // the sets held so far and this one need more chunk indices than the shadow has
+  kFileOffset,      // a chunk ends past the file offsets the game's u32 chunk record can hold
 };
 
 const char* RefusalName(Refusal refusal);
@@ -56,12 +59,25 @@ struct StockView {
   std::uint64_t records = 0;
 };
 
-// One level a set carries: its name and what its archive lists (docs/engine/asset-system.md, "Archives").
-struct Level {
+// One archive a set carries: its name and what it lists (docs/engine/asset-system.md, "Archives"). A level is the
+// archive that has a level root of the same name.
+struct Archive {
   std::uint64_t name = 0;
   std::vector<std::uint64_t> dependencies;                        // dependent archive names
   std::vector<std::pair<std::uint64_t, std::uint64_t>> entries;   // (on-disk type, name)
 };
+
+// An override a set carries: replacement bytes for a resource the game has, in the plugin's image.
+struct OverrideRef {
+  std::uint64_t type = 0;
+  std::uint64_t name = 0;
+  const unsigned char* data = nullptr;
+  std::uint32_t size = 0;
+};
+
+// The largest archive record a set may carry: an archive sits in a block-cache chunk (the game's largest is 66,256
+// bytes, in a chunk of 524,260), so its chunk decompresses to at most kBlockLimit and reading it allocates no more.
+inline constexpr std::uint32_t kMaxArchiveBytes = 0x80000;
 
 // A set as the registry holds it. Chunk offsets are offsets in the plugin's file; `package` is filled at the mount.
 struct Set {
@@ -71,9 +87,10 @@ struct Set {
   std::uint64_t bytes = 0;
   std::vector<nevr_shadow::Record> records;
   std::vector<nevr_shadow::Chunk> chunks;
-  std::vector<Level> levels;
+  std::vector<Archive> archives;        // every archive record of the set, parsed, sorted by name
+  std::vector<std::uint64_t> levels;    // the names of the set's level roots, each with its archive in `archives`
+  std::vector<OverrideRef> overrides;
   bool committed = false;
-  bool mounted = false;
 };
 
 struct MountReport {
@@ -95,6 +112,10 @@ struct MountReport {
 
 class Registry {
  public:
+  // `indexSpace`: how many chunk indices the shadow can give out (from kFirstChunkIndex to kChunkIndexLimit).
+  explicit Registry(std::uint64_t indexSpace = nevr_shadow::kChunkIndexLimit - nevr_shadow::kFirstChunkIndex)
+      : indexSpace_(indexSpace) {}
+
   // Parses and checks a set of `size` bytes at `bytes` (the plugin's mapped image) whose first byte is at
   // `fileOffset` in the plugin's file, open as `handle`. On success the set is held for `plugin` until Commit or
   // Drop; on a refusal nothing is held and the caller keeps the handle.
@@ -119,8 +140,12 @@ class Registry {
   const nevr_shadow::Shadow* shadow() const { return shadow_.get(); }
   // The level names of the mounted sets, in set order.
   std::vector<std::uint64_t> MountedLevels() const;
+  // True when a held set (committed or not, mounted or not) holds (type, name).
+  bool Holds(std::uint64_t type, std::uint64_t name) const;
   // The mounted sets, for the log and the login report.
   std::vector<const Set*> MountedSets() const;
+  // Every set held, committed or not, in the order registered.
+  std::vector<const Set*> HeldSets() const;
   // The set a shadow record's user tag names, or null.
   const Set* SetForUser(std::uint32_t user) const;
 
@@ -128,6 +153,8 @@ class Registry {
   std::vector<std::unique_ptr<Set>> sets_;
   std::unique_ptr<nevr_shadow::Shadow> shadow_;
   std::vector<const Set*> mountedOrder_;
+  std::uint64_t indexSpace_;
+  std::uint64_t heldChunks_ = 0;  // the chunks of the held sets, against the shadow's index space
   bool mounted_ = false;
 };
 
@@ -136,6 +163,6 @@ std::string KeyText(std::uint64_t type, std::uint64_t name);
 
 // Parses an archive's body (docs/engine/asset-system.md, "Archives"): u32 D, D x u64 dependencies, u32 N, N x (u64
 // type, u64 name), then the type table and a closing 0, which this does not read. False when it runs past `size`.
-bool ParseArchive(const unsigned char* data, std::size_t size, Level* out);
+bool ParseArchive(const unsigned char* data, std::size_t size, Archive* out);
 
 }  // namespace nevr_resource_sets

@@ -19,8 +19,8 @@ The streaming reader then reads that file at that offset and decompresses the ch
 `CGameLevelResourceWin10` root (`docs/engine/asset-system.md`, "The level").
 
 The runtime's hook on that function (`src/runtime/patch/plugin_assets.cpp`, `Hook_Request`) asks the resource sets
-first. When a mounted set holds the key and the game's manifests do not, it calls the game's own function with the
-sets' shadow manifest (`src/core/resource_shadow.h`): a manager and manifest in the engine's own layout, whose package
+first. When a mounted set holds the key and the manifest of the manager the request was made to does not, it calls the
+game's own function with the sets' shadow manifest (`src/core/resource_shadow.h`): a manager and manifest in the engine's own layout, whose package
 handle is the plugin's file. The game fills the request itself and its own reader reads the chunk from the plugin. Every
 other key goes to the game's manifest unchanged.
 
@@ -35,10 +35,15 @@ A resource set is one block of bytes, `"NEVRRES1"` and a 48-byte header, then th
 - **overrides**: whole replacement bytes for resources the game already has (see "Overrides").
 
 `nevr_resource_set::Parse` enforces the conditions the game's reader needs: every table and frame lies inside the set;
-a frame starts with the zstd magic; a record lies inside its chunk (a record of 0 bytes is allowed, as in the game's own
-manifest); a record of at most `0x80000` bytes sits in a chunk
-of at most `0x80000` decompressed bytes (the reader's block cache); a larger record is alone in its chunk; alignments are
-powers of two; and no two records, and no two overrides, share a key. Record order is free.
+a chunk's reserved word is 0; a frame starts with the zstd magic; a record lies inside its chunk (a record of 0 bytes is
+allowed, as in the game's own manifest); a record of at most `0x80000` bytes sits in a chunk of at most `0x80000`
+decompressed bytes (the reader's block cache); a larger record is the only record in its chunk, at its whole size;
+alignments are powers of two of at most 4096 (the game's manifests use 4, 16, 2048 and 4096); and no two records, and
+no two overrides, share a key. Record order is free.
+
+The registry adds what it needs to serve a set: an archive record is at most `0x80000` bytes (the game's largest is
+66,256), so reading one never decompresses more than a block-cache chunk; and a set's chunks fit the shadow's chunk
+indices beside the sets already held, and end below 4 GiB in the plugin's file.
 
 ## Embedding and registering
 
@@ -55,44 +60,57 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* arg
 }
 ```
 
-The bytes must be file bytes of the plugin's own image: in one section's raw data, with no base relocation in them. The
-section `.nevrres` that `NEVR_RESOURCE_SET_SECTION` names is initialised read-only data. The runtime checks this
+The bytes must be file bytes of the plugin's own image: in one read-only section's raw data, with no base relocation in
+them. The section `.nevrres` that `NEVR_RESOURCE_SET_SECTION` names is initialised read-only data. The runtime checks this
 (`src/runtime/patch/image_file_range.h`) and compares the mapped bytes with the file's. `#embed` is C23 and C++26; GCC
 15 and Clang 19 accept it in C++ as an extension. The MinGW assembler has no `.pushsection` or `.previous` for PE, so an
 `.incbin` in a top-level asm statement cannot return to the section the compiler was in. A 1 GiB set builds in about two
 minutes.
+
+The label is 1 to 64 bytes of printable ASCII with no double quote or backslash: it is written into log lines (quoted)
+and into the login's JSON.
 
 `register_resources` returns:
 
 | Value | Name | Meaning |
 | --- | --- | --- |
 | 0 | `NEVR_RESOURCES_OK` | Registered; held until the init returns. |
-| 1 | `NEVR_RESOURCES_BAD_ARGUMENT` | A null pointer, a short `struct_size`, nonzero `flags`, or a call from outside this plugin's init on its thread. |
-| 2 | `NEVR_RESOURCES_NOT_IN_FILE` | The bytes are not file bytes of the plugin's image, or the file does not hold them. |
-| 3 | `NEVR_RESOURCES_BAD_FORMAT` | Not a resource set, or a set the runtime cannot serve: a `CScriptResource` record (a script is a DLL found by name), a texture descriptor without its payload record, a level root without its archive, an archive that does not parse. |
-| 4 | `NEVR_RESOURCES_COLLIDES` | A key another set of this process holds. The first set keeps it. |
+| 1 | `NEVR_RESOURCES_BAD_ARGUMENT` | A null pointer, a short `struct_size`, nonzero `flags`, a label outside the rule above, or a call from outside this plugin's init on its thread. |
+| 2 | `NEVR_RESOURCES_NOT_IN_FILE` | The bytes are not file bytes of a read-only section of the plugin's image, the file does not hold them, or a chunk ends past 4 GiB in the file. |
+| 3 | `NEVR_RESOURCES_BAD_FORMAT` | Not a resource set, or a set the runtime cannot serve: a `CScriptResource` record (a script is a DLL found by name), a texture descriptor without its payload record, a level root without its archive, an archive that is over `0x80000` bytes or does not read, more chunks than the shadow has indices left. Also the answer when the host failed inside the call (out of memory). |
+| 4 | `NEVR_RESOURCES_COLLIDES` | A key another set of this process holds, or a plugin asset (`NEVR_RegisterAsset`) holds. The first holder keeps it, and a plugin asset with a key a set holds is refused in turn. |
 | 5 | `NEVR_RESOURCES_TOO_LATE` | The run's sets are already mounted. |
 
-Every refusal is also a Warning: `[NEVR.RESOURCE] resource set refused plugin=<id> label=<label> status=<n>
+Every refusal is also a Warning: `[NEVR.RESOURCE] resource set refused plugin=<id> label="<label>" status=<n>
 reason=<reason> detail="..."`.
 
 ## Order and lifetime
 
 - Call it from `NevrPluginInit` / `NevrPluginInitEx`, either pass. An init that returns nonzero drops what it
   registered.
-- The runtime mounts every set once, after the normal plugin pass, when the game's manifest exists. If the manifest
-  does not exist yet, the per-frame tick runs the mount once it does. At the mount it refuses a set that holds a key the
-  game's manifests hold (a set adds resources, it does not replace them). It also refuses a set holding a level whose
-  archive lists a resource, or names a dependent archive, that neither the game, this set nor an earlier set serves.
-  The Warning names the key.
-- The runtime holds the plugin's file open, read-only and deny-write, for the life of the process. It never keeps a
-  pointer into the plugin's image. There is no deregistration: a set is served for the rest of the process.
+- The runtime mounts every set once. The mount runs from the per-frame tick on the game's own thread, after the plugin
+  pass, once the game's record count is above 0 and has not changed for a second: the game adds its two boot package
+  sets one after the other (echovr.exe `0x141548da0`), and a tick can run between them. A mount still waiting a minute
+  after the plugin pass writes one Warning that says why.
+- At the mount it refuses a set that holds a key the game's manifests hold (a set adds resources, it does not replace
+  them). It also refuses a set holding a level whose archive, or any archive that archive depends on through the sets,
+  lists a resource or names an archive that neither the game, this set nor an earlier set serves; an archive the game
+  has ends the walk there. The Warning names the archive and the key.
+- The runtime holds the plugin's file open, read-only and deny-write, for the life of the process. The overrides it
+  registers point into the plugin's image, which stays loaded: a plugin whose init fails registers none. There is no
+  deregistration: a set is served for the rest of the process.
+- A key a set holds that the game's manifest gains after the mount (a package set added later) is the game's: the
+  resolver asks the manifest of the manager each request is made to, and the first such key is named in one Warning.
 
 ## Overrides
 
 A set's overrides replace resources the game already has. Precedence is the game's manifests first, then resource
-sets, so they cannot be records. `NevrRegisterEmbeddedResources` registers each one with
-`NEVR_RegisterResourceOverride` (`nevr/pc/resource_registry.h`): buffer 0 for a `Win10` type, at any size.
+sets, so they cannot be records. The runtime registers a mounted set's overrides itself, at the mount, with the
+override registry (`src/runtime/patch/resource_override.h`): an override whose key the game's manifest does not hold
+replaces nothing and is counted as unmatched. An override is keyed by on-disk type: buffer 0 for a `Win10` type, at any
+size; buffer 1 for a `Win10GPU` type, served only when it is no larger than the game's. Overrides apply where the game
+reads a resource through `AsyncResourceIOCallback` (`src/runtime/patch/resource_override.cpp`); an archive and a
+streamed texture mip are read on other paths and are not replaced.
 
 ## What the game service sees
 
@@ -106,10 +124,13 @@ sets, so they cannot be records. `NevrRegisterEmbeddedResources` registers each 
 
 ## Logs (`[NEVR.RESOURCE]`)
 
-`resource set registered` (Info), `resource set refused` (Warning), `resource sets dropped` (Info, an init that
-failed), `resource sets wait for the game's manifest` (Info, once), `resource set refused at mount` (Warning),
-`resource set mounted` and `resource sets mounted` (Info), and `resource set reads ... served=<n> window_s=10` (Info,
-once per 10 s window in which the game read from a set). No line is written per request.
+`resource set registered` (Info), `resource set refused` (Warning; Error for `out_of_memory` or `exception`, a failure
+inside the host), `resource sets dropped` (Info, an init that failed), `resource sets wait for the game's manifest`
+(Info, once), `resource sets still not mounted` (Warning, a minute after the plugin pass), `resource set refused at
+mount` (Warning), `resource set mounted ... levels=<n> level_names=<list> overrides=<n> overrides_unmatched=<n>` and
+`resource sets mounted` (Info), `resource set reads ... served=<n> window_ms=<n>` (Info, at most once per 10 s, for a
+window in which the game read from a set) and `resource set keys answered by the game's manifest count=<n>
+first=<key> plugin=<id>` (Warning, once). No line is written per request.
 
 ## Not covered
 

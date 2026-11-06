@@ -10,18 +10,19 @@
  *   #embed "levels.nevrres"
  *   };
  *
- * The section `.nevrres` is initialised, read-only data with no relocation in it: the runtime refuses a set whose
- * bytes a relocation touches (NEVR_RESOURCES_NOT_IN_FILE). The MinGW assembler cannot switch sections and back from a
- * top-level asm statement on PE (it has no .pushsection or .previous), so #embed is the one way; a 1 GiB set builds in
- * about two minutes.
+ * The section `.nevrres` is initialised, read-only data with no relocation in it: the runtime refuses a set in a
+ * writable section or one whose bytes a relocation touches (NEVR_RESOURCES_NOT_IN_FILE). The MinGW assembler cannot
+ * switch sections and back from a top-level asm statement on PE (it has no .pushsection or .previous), so #embed is the
+ * one way; a 1 GiB set builds in about two minutes.
  *
  * Then, from NevrPluginInit / NevrPluginInitEx:
  *
  *   NevrRegisterEmbeddedResources(ctx, levels_data, sizeof(levels_data), "my levels");
  *
- * It registers the set with ctx->register_resources, then each of the set's overrides (replacement bytes for
- * resources the game already has) with NEVR_RegisterResourceOverride (nevr/pc/resource_registry.h). It returns the
- * set's NevrResourcesStatus; an override the host cannot take is counted in `overrides_failed`.
+ * It registers the set with ctx->register_resources and returns its NevrResourcesStatus. The label is 1 to 64 bytes
+ * of printable ASCII with no double quote or backslash. The set's overrides (replacement bytes for resources the game
+ * already has) are registered by the runtime when it mounts the set, and only then: a set that is refused, or whose
+ * plugin's init fails, replaces nothing.
  */
 #pragma once
 
@@ -29,8 +30,6 @@
 #include <cstdint>
 
 #include "nevr/plugin_interface.h"
-#include "nevr/pc/resource_registry.h"
-#include "nevr/resource_set.h"
 
 #if defined(__GNUC__) || defined(__clang__)
 #define NEVR_RESOURCE_SET_SECTION __attribute__((section(".nevrres"), used))
@@ -38,11 +37,9 @@
 
 struct NevrEmbeddedResourcesResult {
     int32_t status = NEVR_RESOURCES_BAD_ARGUMENT;  // the set's NevrResourcesStatus, or -1 when the host has no v9 entry
-    uint32_t overrides_registered = 0;
-    uint32_t overrides_failed = 0;
 };
 
-// Registers the set at `data` (`size` bytes, inside this plugin's image) and then its overrides. Call from init.
+// Registers the set at `data` (`size` bytes, inside this plugin's image). Call from init.
 inline NevrEmbeddedResourcesResult NevrRegisterEmbeddedResources(const NevrGameContext* ctx, const void* data,
                                                                   uint64_t size, const char* label) {
     NevrEmbeddedResourcesResult result;
@@ -57,17 +54,5 @@ inline NevrEmbeddedResourcesResult NevrRegisterEmbeddedResources(const NevrGameC
     desc.size = size;
     desc.label = label;
     result.status = ctx->register_resources(ctx->plugin_id, &desc);
-    if (result.status != NEVR_RESOURCES_OK) return result;
-    nevr_resource_set::View view;
-    if (!nevr_resource_set::Parse(data, size, &view).ok()) return result;  // the host accepted it, so it parses
-    for (uint32_t i = 0; i < view.override_count(); ++i) {
-        const nevr_resource_set::Override o = view.OverrideAt(i);
-        const unsigned char* bytes = static_cast<const unsigned char*>(data) + o.offset;
-        if (nevr::RegisterResourceOverride(o.type, o.name, bytes, o.size, label)) {
-            ++result.overrides_registered;
-        } else {
-            ++result.overrides_failed;
-        }
-    }
     return result;
 }

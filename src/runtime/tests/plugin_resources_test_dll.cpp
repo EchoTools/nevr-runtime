@@ -3,9 +3,13 @@
 // the way nevr/pc/plugin_resources.h embeds one: a level (kLevel) with its root, its archive and one mesh, in one
 // chunk that is a zstd frame of one raw block.
 //
-// The init registers the set, then tries two refusals the host must make: the same set again (a key the first holds:
-// NEVR_RESOURCES_COLLIDES) and a block of writable data with a relocated pointer in it (NEVR_RESOURCES_NOT_IN_FILE).
-// The statuses are exported for the test to read.
+// The set also carries one override (kOverrideType:kOverrideName, 8 bytes of 0x55), which the host registers when it
+// mounts the set.
+//
+// The init registers the set, then tries four refusals the host must make: the same set again (a key the first holds:
+// NEVR_RESOURCES_COLLIDES), a block of writable data (NEVR_RESOURCES_NOT_IN_FILE, writable_section), a read-only block
+// with a relocated pointer in it (NEVR_RESOURCES_NOT_IN_FILE, relocated) and the set under a label with a newline
+// (NEVR_RESOURCES_BAD_ARGUMENT, bad_label). The statuses are exported for the test to read.
 
 #include <windows.h>
 
@@ -23,14 +27,18 @@ constexpr std::uint64_t kMeshType = 0x1111111111111111ULL;
 constexpr std::uint64_t kMesh = 0x2222222222222222ULL;
 constexpr std::uint64_t kArchiveType = 0x2a41cf1c1d9e5d32ULL;
 constexpr std::uint64_t kLevelRootType = 0xe8e38d7781a338a6ULL;
+constexpr std::uint64_t kOverrideType = 0x5555555555555555ULL;
+constexpr std::uint64_t kOverrideName = 0x6666666666666666ULL;
 
 // The chunk, decompressed: the root (16 bytes of 0x11) at 0, the archive at 16 (no dependencies, two entries, an empty
 // type table, a closing 0: 48 bytes), the mesh (16 bytes of 0x22) at 64.
 constexpr std::size_t kPlain = 80;
 constexpr std::size_t kFrame = 4 + 1 + 4 + 3 + kPlain;
 constexpr std::size_t kHeader = 48, kRecords = 3, kTable = kHeader + kRecords * 0x20;  // chunk table at 144
-constexpr std::size_t kFrameAt = kTable + 0x10;                                       // no overrides: frame at 160
-constexpr std::size_t kSize = kFrameAt + kFrame;
+constexpr std::size_t kOverrideTable = kTable + 0x10;                                 // one override at 160
+constexpr std::size_t kFrameAt = kOverrideTable + 0x18;                               // frame at 184
+constexpr std::size_t kOverrideAt = kFrameAt + kFrame;                                // the override's 8 bytes
+constexpr std::size_t kSize = kOverrideAt + 8;
 
 constexpr void Put(std::array<unsigned char, kSize>& a, std::size_t at, std::uint64_t v, int bytes) {
   for (int i = 0; i < bytes; ++i) a[at + i] = static_cast<unsigned char>(v >> (8 * i));
@@ -43,10 +51,15 @@ constexpr std::array<unsigned char, kSize> BuildSet() {
   Put(a, 0x08, kHeader, 4);
   Put(a, 0x0c, kRecords, 4);
   Put(a, 0x10, 1, 4);
-  Put(a, 0x14, 0, 4);
+  Put(a, 0x14, 1, 4);
   Put(a, 0x18, kHeader, 8);
   Put(a, 0x20, kTable, 8);
-  Put(a, 0x28, kFrameAt, 8);
+  Put(a, 0x28, kOverrideTable, 8);
+  Put(a, kOverrideTable, kOverrideType, 8);
+  Put(a, kOverrideTable + 8, kOverrideName, 8);
+  Put(a, kOverrideTable + 0x10, kOverrideAt, 4);
+  Put(a, kOverrideTable + 0x14, 8, 4);
+  for (std::size_t i = 0; i < 8; ++i) a[kOverrideAt + i] = 0x55;
   const std::uint64_t types[3] = {kLevelRootType, kArchiveType, kMeshType};
   const std::uint64_t names[3] = {kLevel, kLevel, kMesh};
   const std::uint32_t offsets[3] = {0, 16, 64};
@@ -86,14 +99,18 @@ constexpr std::array<unsigned char, kSize> BuildSet() {
 
 NEVR_RESOURCE_SET_SECTION const std::array<unsigned char, kSize> kSet = BuildSet();
 
-// Writable data holding a pointer: the loader relocates it, so its file bytes differ from the mapped ones.
+// Data holding a pointer: the loader relocates it, so its file bytes differ from the mapped ones. One copy is writable
+// (.data), one read-only, in the set's own section.
 struct WithPointer {
   const void* self;
   unsigned char pad[56];
 };
 WithPointer g_withPointer = {&g_withPointer, {}};
+extern const WithPointer kRelocated;
+NEVR_RESOURCE_SET_SECTION const WithPointer kRelocated = {&kRelocated, {}};
 
-int32_t g_status[3] = {-99, -99, -99};
+constexpr int kRegistrations = 5;
+int32_t g_status[kRegistrations] = {-99, -99, -99, -99, -99};
 
 }  // namespace
 
@@ -107,14 +124,17 @@ extern "C" __declspec(dllexport) uint32_t NevrPluginGetApiVersion() { return NEV
 extern "C" __declspec(dllexport) int NevrPluginInitEx(const NevrGameContext* ctx, const char* args) {
   g_status[0] = NevrRegisterEmbeddedResources(ctx, kSet.data(), kSet.size(), "fixture levels").status;
   g_status[1] = NevrRegisterEmbeddedResources(ctx, kSet.data(), kSet.size(), "the same set again").status;
-  g_status[2] = NevrRegisterEmbeddedResources(ctx, &g_withPointer, sizeof(g_withPointer), "relocated").status;
+  g_status[2] = NevrRegisterEmbeddedResources(ctx, &g_withPointer, sizeof(g_withPointer), "writable").status;
+  g_status[3] = NevrRegisterEmbeddedResources(ctx, &kRelocated, sizeof(kRelocated), "relocated").status;
+  g_status[4] = NevrRegisterEmbeddedResources(ctx, kSet.data(), kSet.size(), "two\nlines").status;
   const bool fail = args != nullptr && std::strstr(args, "\"fail\":\"1\"") != nullptr;
   return fail ? 1 : 0;
 }
 
-// Test reads: the status of registration `which` (0 the set, 1 the repeat, 2 the relocated block), and the set's bytes.
+// Test reads: the status of registration `which` (0 the set, 1 the repeat, 2 the writable block, 3 the relocated
+// block, 4 the bad label), and the set's bytes.
 extern "C" __declspec(dllexport) int32_t NevrTestPluginResourcesStatus(uint32_t which) {
-  return which < 3 ? g_status[which] : -98;
+  return which < static_cast<uint32_t>(kRegistrations) ? g_status[which] : -98;
 }
 extern "C" __declspec(dllexport) const unsigned char* NevrTestPluginResourcesSet(uint64_t* size) {
   *size = kSet.size();

@@ -115,6 +115,10 @@ TEST(ResourceSetFormat, EachRuleTheReaderNeedsIsARefusal) {
       {"record range", Problem::kRecordRange,
        [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(2) + 0x18, 100000); }},
       {"alignment", Problem::kRecordAlignment, [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(2) + 0x1c, 12); }},
+      {"alignment over 4096", Problem::kRecordAlignment,
+       [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(2) + 0x1c, 8192); }},
+      {"chunk reserved", Problem::kChunkReserved, [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.ChunkAt(0), 1); }},
+      {"chunk under 4 bytes", Problem::kChunkRange, [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.ChunkAt(0) + 8, 3); }},
       {"duplicate", Problem::kDuplicate,
        [](SetBuilder& b, std::vector<unsigned char>& v) {
          std::memcpy(v.data() + b.RecordAt(2), v.data() + b.RecordAt(0), 16);
@@ -127,6 +131,12 @@ TEST(ResourceSetFormat, EachRuleTheReaderNeedsIsARefusal) {
     c.mutate(b, bytes);
     EXPECT_EQ(ParseProblem(bytes), c.expected) << c.name << ": got " << nevr_resource_set::ProblemName(ParseProblem(bytes));
   }
+}
+
+TEST(ResourceSetFormat, TheLargestAlignmentTheGameUsesIsAccepted) {
+  SetBuilder b = LevelSet();
+  b.AddRecord(kMeshType, 0x7778ULL, Bytes(8, 1), 0, 4096);  // the game's manifests use 4, 16, 2048 and 4096
+  EXPECT_EQ(ParseProblem(b.Build()), Problem::kNone);
 }
 
 TEST(ResourceSetFormat, ARecordOfZeroBytesIsAccepted) {
@@ -150,12 +160,25 @@ TEST(ResourceSetFormat, ASmallRecordInALargeChunkIsRefusedAndALargeRecordMustBeA
   alone.AddRecord(kMeshType, 3, Bytes(0x90000, 3), big);
   EXPECT_EQ(ParseProblem(alone.Build()), Problem::kNone);
 
-  SetBuilder notAlone;
-  const std::uint32_t shared = notAlone.AddChunk();
-  notAlone.AddRecord(kMeshType, 4, Bytes(32, 4), shared, 16);
-  notAlone.AddRecord(kMeshType, 5, Bytes(0x90000, 5), shared, 16);
-  const Problem p = ParseProblem(notAlone.Build());
-  EXPECT_TRUE(p == Problem::kRecordNotAlone || p == Problem::kRecordInLargeChunk) << nevr_resource_set::ProblemName(p);
+  // A large record that is not the chunk's whole size (a second record follows it in the chunk).
+  SetBuilder notWhole;
+  const std::uint32_t shared = notWhole.AddChunk();
+  notWhole.AddRecord(kMeshType, 5, Bytes(0x90000, 5), shared, 16);
+  notWhole.AddRecord(kMeshType, 4, Bytes(32, 4), shared, 16);
+  EXPECT_EQ(ParseProblem(notWhole.Build()), Problem::kRecordNotAlone);
+
+  // Two large records that both claim one chunk's whole bytes: the second would alias the first's buffer.
+  SetBuilder twice;
+  const std::uint32_t one = twice.AddChunk();
+  twice.AddRecord(kMeshType, 6, Bytes(0x90000, 6), one);
+  const std::uint32_t other = twice.AddChunk();
+  twice.AddRecord(kMeshType, 7, Bytes(16, 7), other);
+  std::vector<unsigned char> v = twice.Build();
+  ASSERT_EQ(ParseProblem(v), Problem::kNone);
+  SetU32(&v, twice.RecordAt(1) + 0x10, one);         // the second record names the large chunk
+  SetU32(&v, twice.RecordAt(1) + 0x14, 0);
+  SetU32(&v, twice.RecordAt(1) + 0x18, 0x90000);
+  EXPECT_EQ(ParseProblem(v), Problem::kRecordNotAlone);
 }
 
 TEST(ResourceSetFormat, OverridesAreCheckedForRangeDuplicatesAndRecordKeys) {
@@ -325,7 +348,7 @@ TEST(ResourceSetRegistry, ALevelWhoseArchiveListsWhatNothingServesIsRefusedNamin
   EXPECT_EQ(registry.MountedLevels().size(), 0u);
 }
 
-TEST(ResourceSetRegistry, AnArchiveDependencyResolvesInStockOrAnEarlierSetAndNowhereElseIsRefused) {
+TEST(ResourceSetRegistry, AnArchiveDependencyResolvesInAnEarlierSetAndOneNothingHasIsRefused) {
   // The first set carries an archive the second level depends on; the third depends on one nothing has.
   SetBuilder shared;
   const std::uint32_t c0 = shared.AddChunk();
@@ -369,8 +392,123 @@ TEST(ResourceSetRegistry, AChunkWhoseFileOffsetDoesNotFitTheGamesU32IsRefused) {
   const std::vector<unsigned char> bytes = LevelSet().Build();
   Registry registry;
   const nevr_resource_sets::Outcome o = registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0xFFFFFF00ULL);
-  EXPECT_EQ(o.refusal, Refusal::kFormat);
-  EXPECT_NE(o.detail.find("file_offset_range"), std::string::npos);
+  EXPECT_EQ(o.refusal, Refusal::kFileOffset);
+  EXPECT_STREQ(nevr_resource_sets::RefusalName(o.refusal), "file_offset_range");
+  EXPECT_NE(o.detail.find("chunk 0 ends at byte"), std::string::npos) << o.detail;
+  EXPECT_FALSE(registry.Holds(kLevelRootType, kLevel));
+}
+
+TEST(ResourceSetRegistry, AnArchiveLargerThanTheReadersBlockIsRefusedBeforeItIsRead) {
+  // An archive sits in a block-cache chunk (the game's largest is 66,256 bytes); a larger one would make the registry
+  // decompress a chunk of any size the set declares.
+  SetBuilder b;
+  const std::uint32_t root = b.AddChunk();
+  b.AddRecord(kLevelRootType, kLevel, Bytes(64, 1), root);
+  std::vector<unsigned char> archive = Archive({}, {});
+  archive.resize(0x80001, 0);
+  const std::uint32_t big = b.AddChunk();
+  b.AddRecord(kArchiveType, kLevel, archive, big);
+  const std::vector<unsigned char> bytes = b.Build();
+  ASSERT_EQ(ParseProblem(bytes), Problem::kNone);
+  Registry registry;
+  const nevr_resource_sets::Outcome o = registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0);
+  EXPECT_EQ(o.refusal, Refusal::kArchive);
+  EXPECT_NE(o.detail.find("an archive of 524289 bytes"), std::string::npos) << o.detail;
+}
+
+TEST(ResourceSetRegistry, AnArchiveWhoseChunkDoesNotDecompressToItsSizeIsRefused) {
+  SetBuilder b = LevelSet();
+  std::vector<unsigned char> v = b.Build();
+  std::uint32_t decompressed = 0;
+  std::memcpy(&decompressed, v.data() + b.ChunkAt(0) + 12, 4);
+  SetU32(&v, b.ChunkAt(0) + 12, decompressed + 16);  // the frame holds 16 bytes fewer than the chunk says
+  ASSERT_EQ(ParseProblem(v), Problem::kNone);
+  Registry registry;
+  const nevr_resource_sets::Outcome o = registry.Add("p", "l", v.data(), v.size(), 1, 0);
+  EXPECT_EQ(o.refusal, Refusal::kArchive);
+  EXPECT_NE(o.detail.find("does not decompress"), std::string::npos) << o.detail;
+}
+
+TEST(ResourceSetRegistry, ASetThatWouldRunTheShadowOutOfChunkIndicesIsRefusedAloneAtRegistration) {
+  SetBuilder two;
+  two.AddChunk();
+  two.AddChunk();
+  two.AddRecord(kMeshType, 1, Bytes(8, 1), 0);
+  two.AddRecord(kMeshType, 2, Bytes(8, 2), 1);
+  SetBuilder twoMore;
+  twoMore.AddChunk();
+  twoMore.AddChunk();
+  twoMore.AddRecord(kMeshType, 3, Bytes(8, 3), 0);
+  twoMore.AddRecord(kMeshType, 4, Bytes(8, 4), 1);
+  const std::vector<unsigned char> a = two.Build(), b = twoMore.Build();
+  Registry registry(3);  // three indices to give out
+  ASSERT_TRUE(registry.Add("a", "a", a.data(), a.size(), 1, 0).ok());
+  const nevr_resource_sets::Outcome o = registry.Add("b", "b", b.data(), b.size(), 2, 0);
+  EXPECT_EQ(o.refusal, Refusal::kIndexSpace);
+  EXPECT_EQ(o.detail, "2 chunks, 1 left");
+  EXPECT_EQ(registry.Drop("a"), std::vector<std::int64_t>{1});
+  EXPECT_TRUE(registry.Add("b", "b", b.data(), b.size(), 2, 0).ok()) << "a dropped set gives its indices back";
+}
+
+TEST(ResourceSetRegistry, ASetsOverridesAreHeldWithItPointingIntoItsBytes) {
+  SetBuilder b = LevelSet();
+  b.AddOverride(0x4444444444444444ULL, 0x5555ULL, Bytes(10, 0x33));
+  const std::vector<unsigned char> bytes = b.Build();
+  Registry registry;
+  ASSERT_TRUE(registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0).ok());
+  ASSERT_EQ(registry.HeldSets().size(), 1u);
+  const std::vector<nevr_resource_sets::OverrideRef>& overrides = registry.HeldSets()[0]->overrides;
+  ASSERT_EQ(overrides.size(), 1u);
+  EXPECT_EQ(overrides[0].type, 0x4444444444444444ULL);
+  EXPECT_EQ(overrides[0].size, 10u);
+  EXPECT_EQ(overrides[0].data, bytes.data() + bytes.size() - 10);
+  EXPECT_TRUE(registry.Holds(kMeshType, 0x3333333333333333ULL));
+  EXPECT_FALSE(registry.Holds(0x4444444444444444ULL, 0x5555ULL)) << "an override is not a record the set serves";
+}
+
+TEST(ResourceSetRegistry, ADependencyArchiveInASetMustListOnlyWhatResolves) {
+  // The first set carries an archive (no level root) that lists a mesh nothing has; the second set's level depends on
+  // it. The second is refused naming the dependency's entry; the first (no level of its own) mounts.
+  SetBuilder shared;
+  const std::uint32_t c0 = shared.AddChunk();
+  shared.AddRecord(kArchiveType, 0x5151ULL, Archive({}, {{kMeshType, 0x4343ULL}}), c0);
+  SetBuilder dependent;
+  const std::uint32_t c1 = dependent.AddChunk();
+  dependent.AddRecord(kLevelRootType, 0x6161ULL, Bytes(8, 1), c1);
+  dependent.AddRecord(kArchiveType, 0x6161ULL, Archive({0x5151ULL}, {}), c1);
+  const std::vector<unsigned char> a = shared.Build(), b = dependent.Build();
+  Registry registry;
+  ASSERT_TRUE(registry.Add("shared", "s", a.data(), a.size(), 1, 0).ok());
+  ASSERT_TRUE(registry.Add("dependent", "d", b.data(), b.size(), 2, 0).ok());
+  registry.Commit("shared");
+  registry.Commit("dependent");
+  FakeStock stock;
+  const nevr_resource_sets::MountReport report = registry.Mount(stock.View());
+  ASSERT_EQ(report.refusals.size(), 1u);
+  EXPECT_EQ(report.refusals[0].plugin, "dependent");
+  EXPECT_NE(report.refusals[0].outcome.detail.find("archive " + nevr_resource_sets::KeyText(kArchiveType, 0x5151ULL) +
+                                                   " lists " + nevr_resource_sets::KeyText(kMeshType, 0x4343ULL)),
+            std::string::npos)
+      << report.refusals[0].outcome.detail;
+}
+
+TEST(ResourceSetRegistry, AStockArchiveEndsTheWalkAndACycleOfArchivesEnds) {
+  // The level depends on an archive the game has (its contents are the game's) and on one of its own that depends back
+  // on the level's archive: the walk visits each archive once and the set mounts.
+  SetBuilder b;
+  const std::uint32_t c = b.AddChunk();
+  b.AddRecord(kLevelRootType, kLevel, Bytes(8, 1), c);
+  b.AddRecord(kArchiveType, kLevel, Archive({0xA0A0ULL, 0xB0B0ULL}, {}), c);
+  b.AddRecord(kArchiveType, 0xB0B0ULL, Archive({kLevel}, {{kMeshType, kStockMesh}}), c);
+  const std::vector<unsigned char> bytes = b.Build();
+  Registry registry;
+  ASSERT_TRUE(registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0).ok());
+  registry.Commit("p");
+  FakeStock stock;
+  stock.keys.insert({kArchiveType, 0xA0A0ULL});
+  const nevr_resource_sets::MountReport report = registry.Mount(stock.View());
+  EXPECT_EQ(report.sets, 1u);
+  EXPECT_TRUE(report.refusals.empty()) << report.refusals[0].outcome.detail;
 }
 
 TEST(ResourceSetRegistry, TwoMountedSetsGetTheirOwnPackageHandleAndChunkRange) {
@@ -399,7 +537,7 @@ TEST(ResourceSetRegistry, TwoMountedSetsGetTheirOwnPackageHandleAndChunkRange) {
 
 // A minimal mapped PE32+ image: one section at 0x1000 (virtual size 0x3000, raw size 0x2000 at file 0x400), and a
 // base relocation directory at 0x5000 with one DIR64 entry at 0x1800.
-std::vector<unsigned char> Image(bool withRelocation) {
+std::vector<unsigned char> Image(bool withRelocation, bool writable = false) {
   std::vector<unsigned char> img(0x6000, 0);
   img[0] = 'M';
   img[1] = 'Z';
@@ -428,6 +566,7 @@ std::vector<unsigned char> Image(bool withRelocation) {
   SetU32(&img, section + 12, 0x1000);  // VirtualAddress
   SetU32(&img, section + 16, 0x2000);  // SizeOfRawData
   SetU32(&img, section + 20, 0x400);   // PointerToRawData
+  SetU32(&img, section + 36, writable ? 0xC0000040u : 0x40000040u);  // initialised data, read (and write)
   return img;
 }
 
@@ -448,6 +587,8 @@ TEST(ImageFileRange, EachRangeTheFileDoesNotHoldAsMappedIsRefused) {
   EXPECT_EQ(nevr_image_range::FileOffsetOf(relocated.data(), 0x1700, 0x200).problem,
             nevr_image_range::Problem::kRelocated);
   EXPECT_TRUE(nevr_image_range::FileOffsetOf(relocated.data(), 0x1900, 0x200).ok());
+  const std::vector<unsigned char> writable = Image(false, true);
+  EXPECT_EQ(nevr_image_range::FileOffsetOf(writable.data(), 0x1100, 0x200).problem, nevr_image_range::Problem::kWritable);
   std::vector<unsigned char> broken = plain;
   broken[0] = 'X';
   EXPECT_EQ(nevr_image_range::FileOffsetOf(broken.data(), 0x1100, 0x10).problem, nevr_image_range::Problem::kHeaders);

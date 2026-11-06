@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #include "runtime/patch/asset_registry.h"
 
@@ -31,6 +32,11 @@ bool EnsureResolverHook();
 // (0x140f9eee0). StockRecordCount is 0 before the manifest exists; StockHas is false then.
 uint64_t StockRecordCount();
 bool StockHas(uint64_t type, uint64_t name);
+// #2161: the same question of the manifest of `manager` (a CResourceManager, *(manager + 8)), the manager a request
+// was made to. False for a null manager or manifest.
+bool ManagerHas(const void* manager, uint64_t type, uint64_t name);
+// #2161: true when a plugin asset holds (type, name); its label goes to `label`.
+bool AssetHeld(uint64_t type, uint64_t name, std::string* label);
 
 #ifdef NEVR_TEST_HOOKS
 // Test-only: installs one hook the way the engine hooks are installed, through PatchDetour, so HookGuard records it
@@ -38,6 +44,11 @@ bool StockHas(uint64_t type, uint64_t name);
 bool InstallHookForTest(void* target, void* detour, void** original, const char* name);
 // Test-only: retires one engine hook the way ShutdownPluginAssets does (PatchRetire, with the same status handling).
 void RetireHookForTest(void* target, const char* what);
+// Test-only (#2161): the resolver hook's own body, with `original` standing in for the game's FillResourceFileRequest
+// (null restores the installed one).
+using RequestFnForTest = uint64_t(__cdecl*)(void*, uint64_t, uint64_t, uint64_t, uint64_t, void*, uint64_t, void*);
+void SetRequestOriginalForTest(RequestFnForTest original);
+uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name);
 #endif
 
 }  // namespace nevr::assets

@@ -3,8 +3,9 @@
 // Where a range of a mapped PE image lies in the image's file (#2161). A plugin hands the runtime a pointer to its
 // resource set as its image maps it; the game's reader reads the set's chunks from the plugin's file, so the runtime
 // needs the file offset, and it needs the file to hold the same bytes there. That holds when the range lies in one
-// section, inside the part of the section the file backs (SizeOfRawData; past it the loader fills zeroes), and no
-// base relocation writes into it (the loader patches those bytes in memory only).
+// section, inside the part of the section the file backs (SizeOfRawData; past it the loader fills zeroes), the section
+// is not writable (a plugin could change the bytes after the check), and no base relocation writes into it (the loader
+// patches those bytes in memory only).
 //
 // Pure: it reads the PE32+ headers from the mapped image (the loader maps them at the image base), with every read
 // bounded by the image's SizeOfImage. Layout: Microsoft PE format, "Optional Header Data Directories", "Section
@@ -23,6 +24,7 @@ enum class Problem {
   kCrossesSection,   // the range runs past the end of the section it starts in
   kPastRawData,      // the range runs past the bytes the file backs in its section
   kRelocated,        // a base relocation writes into the range
+  kWritable,         // the section the range lies in is writable (IMAGE_SCN_MEM_WRITE)
 };
 
 inline const char* ProblemName(Problem problem) {
@@ -33,6 +35,7 @@ inline const char* ProblemName(Problem problem) {
     case Problem::kCrossesSection: return "crosses_section";
     case Problem::kPastRawData: return "past_raw_data";
     case Problem::kRelocated: return "relocated";
+    case Problem::kWritable: return "writable_section";
   }
   return "unknown";
 }
@@ -97,16 +100,18 @@ inline Result FileOffsetOf(const unsigned char* image, std::uint64_t rva, std::u
   bool found = false;
   for (std::uint16_t i = 0; i < sections; ++i) {
     const std::uint64_t at = sectionTable + std::uint64_t{i} * 40;
-    std::uint32_t virtualSize = 0, virtualAddress = 0, rawSize = 0, rawPointer = 0;
+    std::uint32_t virtualSize = 0, virtualAddress = 0, rawSize = 0, rawPointer = 0, characteristics = 0;
     img.Get(at + 8, &virtualSize);
     img.Get(at + 12, &virtualAddress);
     img.Get(at + 16, &rawSize);
     img.Get(at + 20, &rawPointer);
+    img.Get(at + 36, &characteristics);
     const std::uint64_t mapped = virtualSize != 0 ? virtualSize : rawSize;
     if (rva < virtualAddress || rva >= std::uint64_t{virtualAddress} + mapped) continue;
     found = true;
     if (size > std::uint64_t{virtualAddress} + mapped - rva) return {Problem::kCrossesSection, 0};
     if (rva + size > std::uint64_t{virtualAddress} + rawSize) return {Problem::kPastRawData, 0};
+    if ((characteristics & 0x80000000u) != 0) return {Problem::kWritable, 0};  // IMAGE_SCN_MEM_WRITE
     result.file_offset = std::uint64_t{rawPointer} + (rva - virtualAddress);
     break;
   }

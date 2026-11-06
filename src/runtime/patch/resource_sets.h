@@ -21,17 +21,23 @@ void EndPluginInit(const char* pluginId, bool succeeded);
 // ctx->register_resources (NevrGameContext, v9). Returns a NevrResourcesStatus.
 int32_t HostRegisterResources(const char* pluginId, const NevrResourcesDesc* desc);
 
-// Mounts the committed sets once the game's manifest exists. Called after the normal plugin pass; when the manifest is
-// not built yet, the per-frame tick calls it again until it is.
+// Called once after the normal plugin pass: ends registration and arms the mount, which the per-frame tick runs on the
+// game's own thread once the game's record count has held still for a second (OnFrame). With no set held it ends
+// registration and nothing more.
 void MountWhenReady();
 
-// Per frame, any thread: a deferred mount, and one summary line per mounted set for each 10 s window in which the
-// game read from it.
-void OnFrame();
+// Per frame, any thread; `onLoopThread` is true on the thread that runs the game's main wrapper (GameLoopThreadId).
+// Runs an armed mount when it can, and writes one summary line per mounted set for each window in which the game read
+// from it.
+void OnFrame(bool onLoopThread);
 
-// The resolver's question for one request: the shadow manager to fill it from when a mounted set holds (type, name) and
-// the game's manifests do not, else null (the game's own manifest answers). No lock, no allocation, no log line.
-const void* ManagerFor(std::uint64_t type, std::uint64_t name);
+// The resolver's question for one request made to `manager`: the shadow manager to fill it from when a mounted set
+// holds (type, name) and `manager`'s manifest does not, else null (the game's own manifest answers). No lock, no
+// allocation, no log line.
+const void* ManagerFor(const void* manager, std::uint64_t type, std::uint64_t name);
+
+// True when a set registered this run holds (type, name): a plugin asset may not take that key.
+bool HoldsKey(std::uint64_t type, std::uint64_t name);
 
 // The level names of the mounted sets, for the server registration's installed_levels.
 std::vector<std::uint64_t> MountedLevelNames();
@@ -44,6 +50,10 @@ std::string ReportJson();
 void ResetForTest();
 using StockHasFn = bool (*)(std::uint64_t type, std::uint64_t name);
 void SetStockForTest(StockHasFn has, std::uint64_t records);
+// The millisecond clock the mount's wait reads (null: GetTickCount64).
+void SetClockForTest(std::uint64_t (*now)());
+// Makes the next registrations throw std::bad_alloc inside the host, before any check.
+void SetThrowForTest(bool on);
 #endif
 
 }  // namespace nevr_resource_sets

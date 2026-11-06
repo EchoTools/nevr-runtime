@@ -2,10 +2,11 @@
  * resource_sets.cpp - plugin resource sets on PC (plugin API v9, #2161; docs/reference/plugin-resources.md).
  *
  * A plugin hands register_resources the bytes of a resource set as its own image maps them. This file checks that
- * those bytes are file bytes of that plugin's image (image_file_range.h), opens the plugin's file read-only and
- * deny-write for the life of the process, checks the file holds the same bytes, and hands the set to the registry
- * (resource_set_registry.h). After the plugin pass it mounts the sets against the game's live manifest, read with
- * the game's own FindEntry (plugin_assets.cpp), and publishes the shadow the resolver hook asks about.
+ * those bytes are file bytes of a read-only section of that plugin's image (image_file_range.h), opens the plugin's
+ * file read-only and deny-write for the life of the process, checks the file holds the same bytes, and hands the set
+ * to the registry (resource_set_registry.h). After the plugin pass, on the game's own thread once the game's manifest
+ * has stopped growing, it mounts the sets against that manifest, read with the game's own FindEntry
+ * (plugin_assets.cpp), publishes the shadow the resolver hook asks about, and registers the mounted sets' overrides.
  *
  * Containment: nothing here writes a file. The plugin's file is opened GENERIC_READ with FILE_SHARE_READ only, and
  * the game's packages and manifests are never touched.
@@ -17,8 +18,10 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -32,6 +35,7 @@
 #include "nevr/resource_set.h"
 #include "runtime/patch/image_file_range.h"
 #include "runtime/patch/plugin_assets.h"
+#include "runtime/patch/resource_override.h"
 #include "runtime/patch/resource_set_registry.h"
 
 namespace nevr_resource_sets {
@@ -45,13 +49,31 @@ struct Published {
   const nevr_shadow::Shadow* shadow;
   std::vector<std::atomic<std::uint64_t>> served;
   std::atomic<std::uint64_t> stockWins{0};
+  // The first key the game's manifest answered instead of a set, and that set's index (+1; 0 until one).
+  std::atomic<std::uint64_t> firstWinType{0};
+  std::atomic<std::uint64_t> firstWinName{0};
+  std::atomic<std::uint32_t> firstWinUser{0};
 };
+
+// How long the game's record count must hold still before the mount reads the manifest: the game adds its boot
+// package sets one after the other in one function (echovr.exe 0x141548da0 calls CResourceManager::AddPackage at
+// 0x14154973c and 0x1415497a7), and a tick can run between the two. Measured: both were in place within 0.39 s of the
+// plugin pass (server runs, 2026-11-05).
+constexpr std::uint64_t kStableMs = 1000;
+// When a mount is still waiting this long after the plugin pass, one Warning says why.
+constexpr std::uint64_t kLateMs = 60000;
+// A label: what a plugin calls its set, written into log lines and the login's JSON.
+constexpr std::size_t kMaxLabel = 64;
 
 std::mutex g_mutex;  // the registry, the init state and the mount
 Registry g_registry;
 std::atomic<Published*> g_published{nullptr};
 std::atomic<bool> g_mountDeferred{false};
 bool g_deferSaid = false;
+bool g_lateSaid = false;
+std::uint64_t g_armedAtMs = 0;
+std::uint64_t g_lastCount = 0;
+std::uint64_t g_countSinceMs = 0;
 std::atomic<std::uint64_t> g_lastSummaryMs{0};
 std::atomic<bool> g_stockWinSaid{false};
 
@@ -66,13 +88,31 @@ InitState g_init;
 #ifdef NEVR_TEST_HOOKS
 StockHasFn g_testStockHas = nullptr;
 std::uint64_t g_testStockRecords = 0;
+std::uint64_t (*g_testNow)() = nullptr;
+bool g_testThrow = false;
 #endif
 
+std::uint64_t NowMs() {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testNow != nullptr) return g_testNow();
+#endif
+  return GetTickCount64();
+}
+
+// The game's live manifest (the mount's view of it).
 bool StockHasNow(std::uint64_t type, std::uint64_t name) {
 #ifdef NEVR_TEST_HOOKS
   if (g_testStockHas != nullptr) return g_testStockHas(type, name);
 #endif
   return nevr::assets::StockHas(type, name);
+}
+
+// The manifest of the manager a request was made to (the resolver's view of it).
+bool ManagerHasNow(const void* manager, std::uint64_t type, std::uint64_t name) {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testStockHas != nullptr) return g_testStockHas(type, name);
+#endif
+  return nevr::assets::ManagerHas(manager, type, name);
 }
 
 bool StockHasThunk(void*, std::uint64_t type, std::uint64_t name) { return StockHasNow(type, name); }
@@ -90,19 +130,64 @@ void CloseHandles(const std::vector<std::int64_t>& handles) {
   }
 }
 
+// The plugin's file, open read-only; closed unless released to the registry.
+class FileHandle {
+ public:
+  explicit FileHandle(HANDLE h) : h_(h) {}
+  FileHandle(const FileHandle&) = delete;
+  FileHandle& operator=(const FileHandle&) = delete;
+  ~FileHandle() {
+    if (h_ != INVALID_HANDLE_VALUE) CloseHandle(h_);
+  }
+  HANDLE get() const { return h_; }
+  HANDLE release() {
+    const HANDLE h = h_;
+    h_ = INVALID_HANDLE_VALUE;
+    return h;
+  }
+
+ private:
+  HANDLE h_;
+};
+
+// A label is 1 to kMaxLabel bytes of printable ASCII, with no double quote or backslash: it is written into log lines
+// (quoted) and into the login's JSON, so it can neither start a line nor break either.
+bool LabelOk(const char* label) {
+  if (label == nullptr) return false;
+  const std::size_t n = std::strlen(label);
+  if (n == 0 || n > kMaxLabel) return false;
+  for (std::size_t i = 0; i < n; ++i) {
+    const unsigned char c = static_cast<unsigned char>(label[i]);
+    if (c < 0x20 || c > 0x7e || c == '"' || c == '\\') return false;
+  }
+  return true;
+}
+
+// Text from outside (a label not yet checked, another registry's label) made safe for a quoted log field.
+std::string Printable(const char* text) {
+  std::string out;
+  if (text == nullptr) return out;
+  for (std::size_t i = 0; text[i] != '\0' && out.size() < kMaxLabel; ++i) {
+    const unsigned char c = static_cast<unsigned char>(text[i]);
+    out += (c < 0x20 || c > 0x7e || c == '"' || c == '\\') ? '?' : static_cast<char>(c);
+  }
+  return out;
+}
+
 std::string LevelList(const Set& set) {
   std::string list;
   char hex[24];
-  for (const Level& level : set.levels) {
-    std::snprintf(hex, sizeof(hex), "0x%016llx", static_cast<unsigned long long>(level.name));
+  for (const std::uint64_t level : set.levels) {
+    std::snprintf(hex, sizeof(hex), "0x%016llx", static_cast<unsigned long long>(level));
     if (!list.empty()) list += ',';
     list += hex;
   }
   return list.empty() ? std::string("none") : list;
 }
 
-// Reads `length` bytes at `offset` of `file` into `out`; false when the read comes up short.
-bool ReadFileAt(HANDLE file, std::uint64_t offset, std::size_t length, std::vector<unsigned char>* out) {
+// Reads `length` bytes at `offset` of `file` into `out`. False when a read fails or comes up short; `error` is the
+// read's GetLastError, or 0 for a short read (end of file).
+bool ReadFileAt(HANDLE file, std::uint64_t offset, std::size_t length, std::vector<unsigned char>* out, DWORD* error) {
   out->assign(length, 0);
   std::size_t done = 0;
   while (done < length) {
@@ -111,27 +196,40 @@ bool ReadFileAt(HANDLE file, std::uint64_t offset, std::size_t length, std::vect
     at.OffsetHigh = static_cast<DWORD>((offset + done) >> 32);
     DWORD got = 0;
     const DWORD want = static_cast<DWORD>(std::min<std::size_t>(length - done, 1u << 20));
-    if (!ReadFile(file, out->data() + done, want, &got, &at) || got == 0) return false;
+    if (!ReadFile(file, out->data() + done, want, &got, &at)) {
+      *error = GetLastError();
+      return false;
+    }
+    if (got == 0) {
+      *error = 0;
+      return false;
+    }
     done += got;
   }
   return true;
 }
 
+enum class FileCheck { kSame, kReadFailed, kDiffers };
+
 // The set's first and last MiB, read from the file at the offset the image's headers name, equal the mapped bytes.
-bool FileHoldsMappedBytes(HANDLE file, std::uint64_t fileOffset, const unsigned char* mapped, std::uint64_t size) {
+FileCheck FileHoldsMappedBytes(HANDLE file, std::uint64_t fileOffset, const unsigned char* mapped, std::uint64_t size,
+                               DWORD* error) {
   const std::size_t span = static_cast<std::size_t>(std::min<std::uint64_t>(size, 1u << 20));
   std::vector<unsigned char> read;
-  if (!ReadFileAt(file, fileOffset, span, &read) || std::memcmp(read.data(), mapped, span) != 0) return false;
+  if (!ReadFileAt(file, fileOffset, span, &read, error)) return FileCheck::kReadFailed;
+  if (std::memcmp(read.data(), mapped, span) != 0) return FileCheck::kDiffers;
   const std::uint64_t tail = size - span;
-  if (!ReadFileAt(file, fileOffset + tail, span, &read) || std::memcmp(read.data(), mapped + tail, span) != 0) return false;
-  return true;
+  if (!ReadFileAt(file, fileOffset + tail, span, &read, error)) return FileCheck::kReadFailed;
+  if (std::memcmp(read.data(), mapped + tail, span) != 0) return FileCheck::kDiffers;
+  return FileCheck::kSame;
 }
 
-int32_t Refused(const char* pluginId, const char* label, int32_t status, const char* reason, const std::string& detail,
-                const char* consequence) {
+int32_t Refused(const char* pluginId, const std::string& label, int32_t status, const char* reason,
+                const std::string& detail) {
   Log(EchoVR::LogLevel::Warning,
-      "[NEVR.RESOURCE] resource set refused plugin=%s label=%s status=%d reason=%s detail=\"%s\" (%s)",
-      pluginId != nullptr ? pluginId : "", label != nullptr ? label : "", status, reason, detail.c_str(), consequence);
+      "[NEVR.RESOURCE] resource set refused plugin=%s label=\"%s\" status=%d reason=%s detail=\"%s\" (nothing was "
+      "registered, so none of its levels or resources is served)",
+      Printable(pluginId).c_str(), label.c_str(), status, reason, detail.c_str());
   return status;
 }
 
@@ -139,8 +237,219 @@ int32_t StatusFor(Refusal refusal) {
   switch (refusal) {
     case Refusal::kCollides: return NEVR_RESOURCES_COLLIDES;
     case Refusal::kTooLate: return NEVR_RESOURCES_TOO_LATE;
+    case Refusal::kFileOffset: return NEVR_RESOURCES_NOT_IN_FILE;
     default: return NEVR_RESOURCES_BAD_FORMAT;
   }
+}
+
+int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testThrow) throw std::bad_alloc();
+#endif
+  const bool sized = desc != nullptr && desc->struct_size >= sizeof(NevrResourcesDesc);
+  const std::string shown = sized ? Printable(desc->label) : std::string();
+  if (pluginId == nullptr || !sized || desc->flags != 0 || desc->data == nullptr || desc->size == 0) {
+    return Refused(pluginId, shown, NEVR_RESOURCES_BAD_ARGUMENT, "bad_argument",
+                   "a null pointer, a short struct_size, nonzero flags or an empty set");
+  }
+  if (!LabelOk(desc->label)) {
+    return Refused(pluginId, shown, NEVR_RESOURCES_BAD_ARGUMENT, "bad_label",
+                   "a label is 1 to 64 bytes of printable ASCII with no double quote or backslash");
+  }
+  const std::string label = desc->label;
+  HMODULE module = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_init.active || g_init.thread != GetCurrentThreadId() || g_init.id != pluginId) {
+      return Refused(pluginId, label, NEVR_RESOURCES_BAD_ARGUMENT, "not_in_init",
+                     "register_resources is called from the plugin's own init, with ctx->plugin_id");
+    }
+    module = g_init.module;
+  }
+
+  HMODULE owner = nullptr;
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          static_cast<LPCWSTR>(desc->data), &owner) ||
+      owner != module) {
+    return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "not_in_image",
+                   "the bytes are not in the image of the plugin whose init is running");
+  }
+  const auto* image = reinterpret_cast<const unsigned char*>(module);
+  const auto* bytes = static_cast<const unsigned char*>(desc->data);
+  const std::uint64_t rva = static_cast<std::uint64_t>(bytes - image);
+  const nevr_image_range::Result range = nevr_image_range::FileOffsetOf(image, rva, desc->size);
+  if (!range.ok()) {
+    return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, nevr_image_range::ProblemName(range.problem),
+                   "the set must lie in one read-only section's raw data with no base relocation in it (#embed into "
+                   "NEVR_RESOURCE_SET_SECTION)");
+  }
+
+  nevr_resource_set::View view;
+  const nevr_resource_set::Result parsed = nevr_resource_set::Parse(bytes, desc->size, &view);
+  if (!parsed.ok()) {
+    return Refused(pluginId, label, NEVR_RESOURCES_BAD_FORMAT, RefusalName(Refusal::kFormat),
+                   std::string(nevr_resource_set::ProblemName(parsed.problem)) + " at index " +
+                       std::to_string(parsed.index));
+  }
+  // A key a plugin asset (NEVR_RegisterAsset) holds: the asset hook would serve one and the resolver the other.
+  for (std::uint32_t i = 0; i < view.record_count(); ++i) {
+    const nevr_resource_set::Record r = view.RecordAt(i);
+    std::string assetLabel;
+    if (nevr::assets::AssetHeld(r.type, r.name, &assetLabel)) {
+      return Refused(pluginId, label, NEVR_RESOURCES_COLLIDES, RefusalName(Refusal::kCollides),
+                     KeyText(r.type, r.name) + " owner=asset:" + Printable(assetLabel.c_str()));
+    }
+  }
+
+  std::wstring path(32768, L'\0');
+  const DWORD pathLength = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
+  if (pathLength == 0 || pathLength >= path.size()) {
+    return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "no_module_path",
+                   "GetModuleFileNameW error " + std::to_string(GetLastError()));
+  }
+  path.resize(pathLength);
+  // Read-only, and deny-write: the file the game's reader reads cannot change under the running game.
+  FileHandle file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr));
+  if (file.get() == INVALID_HANDLE_VALUE) {
+    return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "file_open",
+                   "CreateFileW error " + std::to_string(GetLastError()));
+  }
+  DWORD readError = 0;
+  switch (FileHoldsMappedBytes(file.get(), range.file_offset, bytes, desc->size, &readError)) {
+    case FileCheck::kSame:
+      break;
+    case FileCheck::kReadFailed:
+      return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "file_read",
+                     "ReadFile error " + std::to_string(readError) + " (0: the file ends before the set)");
+    case FileCheck::kDiffers:
+      return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "file_differs",
+                     "the plugin's file does not hold the mapped bytes at the offset its headers name");
+  }
+
+  Outcome outcome;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    outcome = g_registry.Add(pluginId, label, bytes, desc->size,
+                             static_cast<std::int64_t>(reinterpret_cast<intptr_t>(file.get())), range.file_offset);
+    if (outcome.ok()) file.release();  // the registry holds it now
+  }
+  if (!outcome.ok()) {
+    return Refused(pluginId, label, StatusFor(outcome.refusal), RefusalName(outcome.refusal), outcome.detail);
+  }
+  std::size_t levels = 0;
+  for (std::uint32_t i = 0; i < view.record_count(); ++i) {
+    if (view.RecordAt(i).type == kLevelRootType) ++levels;
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.RESOURCE] resource set registered plugin=%s label=\"%s\" records=%u chunks=%u levels=%zu overrides=%u "
+      "bytes=%llu file_offset=%llu (held until the plugin's init returns, then mounted after the plugin pass)",
+      pluginId, label.c_str(), view.record_count(), view.chunk_count(), levels, view.override_count(),
+      static_cast<unsigned long long>(desc->size), static_cast<unsigned long long>(range.file_offset));
+  return NEVR_RESOURCES_OK;
+}
+
+// The mount itself, under g_mutex, once TryMount found the manifest ready. Fills `report`, `mounted` and
+// `abandoned` for the lines written after the lock is released.
+void MountLocked(std::uint64_t stockRecords, MountReport* report, std::vector<const Set*>* mounted,
+                 std::vector<std::int64_t>* abandoned, std::vector<std::string>* abandonedPlugins) {
+  bool hooked = true;
+#ifdef NEVR_TEST_HOOKS
+  if (g_testStockHas == nullptr) hooked = nevr::assets::EnsureResolverHook();
+#else
+  hooked = nevr::assets::EnsureResolverHook();
+#endif
+  if (!hooked) {
+    for (const Set* set : g_registry.HeldSets()) abandonedPlugins->push_back(set->plugin);
+    *abandoned = g_registry.Abandon();
+  } else {
+    *report = g_registry.Mount(StockView{&StockHasThunk, nullptr, stockRecords});
+    *mounted = g_registry.MountedSets();
+    if (const nevr_shadow::Shadow* shadow = g_registry.shadow()) {
+      g_lastSummaryMs.store(NowMs());  // the first read window starts at the mount
+      g_published.store(new Published(shadow, mounted->size()), std::memory_order_release);
+    }
+  }
+  g_mountDeferred.store(false);
+}
+
+void WriteMountLines(std::uint64_t startedMs, const MountReport& report, const std::vector<const Set*>& mounted,
+                     const std::vector<std::int64_t>& abandoned, const std::vector<std::string>& abandonedPlugins) {
+  if (!abandoned.empty()) {
+    CloseHandles(abandoned);
+    std::string plugins;
+    for (const std::string& p : abandonedPlugins) plugins += (plugins.empty() ? "" : ",") + p;
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.RESOURCE] resource sets not mounted sets=%zu plugins=%s reason=no_resolver_hook (the resolver hook at "
+        "0x140fa1fe0 is not installed, so no plugin level or resource is served)",
+        abandoned.size(), plugins.c_str());
+    return;
+  }
+  for (const MountReport::Refused& refused : report.refusals) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.RESOURCE] resource set refused at mount plugin=%s label=\"%s\" reason=%s detail=\"%s\" (its levels are "
+        "neither served nor listed as installed)",
+        refused.plugin.c_str(), refused.label.c_str(), RefusalName(refused.outcome.refusal),
+        refused.outcome.detail.c_str());
+  }
+  CloseHandles(report.handles_to_close);
+  for (const Set* set : mounted) {
+    // A set's overrides replace resources the game has; one whose key the game does not hold would replace nothing.
+    std::uint32_t registered = 0;
+    std::uint32_t unmatched = 0;
+    for (const OverrideRef& o : set->overrides) {
+      if (!StockHasNow(o.type, o.name)) {
+        ++unmatched;
+        continue;
+      }
+      RegisterResourceOverride(o.type, o.name, o.data, o.size, set->label.c_str());
+      ++registered;
+    }
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] resource set mounted plugin=%s label=\"%s\" records=%zu levels=%zu level_names=%s "
+        "overrides=%u overrides_unmatched=%u",
+        set->plugin.c_str(), set->label.c_str(), set->records.size(), set->levels.size(), LevelList(*set).c_str(),
+        registered, unmatched);
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.RESOURCE] resource sets mounted sets=%zu refused=%zu records=%zu levels=%zu chunk_base=0x%08x "
+      "stock_records=%llu duration_ms=%llu",
+      report.sets, report.refused, report.records, report.levels, report.chunk_base,
+      static_cast<unsigned long long>(report.stock_records),
+      static_cast<unsigned long long>(NowMs() - startedMs));
+}
+
+// A deferred mount's attempt: on the game's own thread, once the game's record count is above 0 and has not changed
+// for kStableMs (the game adds its boot sets one after another, and a tick can run between them).
+void TryMount(bool onLoopThread) {
+  MountReport report;
+  std::vector<std::int64_t> abandoned;
+  std::vector<std::string> abandonedPlugins;
+  std::vector<const Set*> mounted;
+  const std::uint64_t now = NowMs();
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_mountDeferred.load() || g_registry.mounted()) return;
+    const std::uint64_t count = StockRecordsNow();
+    if (!g_lateSaid && now - g_armedAtMs >= kLateMs) {
+      g_lateSaid = true;
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.RESOURCE] resource sets still not mounted after %llu s sets=%zu stock_records=%llu "
+          "on_game_thread=%s (no plugin level or resource is served until the mount; it waits for the game's manifest "
+          "on the game's own thread)",
+          static_cast<unsigned long long>((now - g_armedAtMs) / 1000), g_registry.held(),
+          static_cast<unsigned long long>(count), onLoopThread ? "true" : "false");
+    }
+    if (!onLoopThread) return;
+    if (count == 0 || count != g_lastCount) {
+      g_lastCount = count;
+      g_countSinceMs = now;
+      return;
+    }
+    if (now - g_countSinceMs < kStableMs) return;
+    MountLocked(count, &report, &mounted, &abandoned, &abandonedPlugins);
+  }
+  WriteMountLines(now, report, mounted, abandoned, abandonedPlugins);
 }
 
 }  // namespace
@@ -168,174 +477,55 @@ void EndPluginInit(const char* pluginId, bool succeeded) {
   if (!dropped.empty()) {
     CloseHandles(dropped);
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOURCE] resource sets dropped plugin=%s count=%zu (its init failed, so nothing it registered is served)",
-        pluginId != nullptr ? pluginId : "", dropped.size());
+        "[NEVR.RESOURCE] resource sets dropped plugin=%s count=%zu (its init failed, so nothing it registered is "
+        "served, and none of its overrides is registered)",
+        Printable(pluginId).c_str(), dropped.size());
   }
 }
 
+// The plugin ABI entry: nothing it does may throw back into the plugin's init.
 int32_t HostRegisterResources(const char* pluginId, const NevrResourcesDesc* desc) {
-  const char* label = desc != nullptr && desc->struct_size >= sizeof(NevrResourcesDesc) && desc->label != nullptr
-                          ? desc->label
-                          : "";
-  if (pluginId == nullptr || desc == nullptr || desc->struct_size < sizeof(NevrResourcesDesc) || desc->flags != 0 ||
-      desc->data == nullptr || desc->size == 0) {
-    return Refused(pluginId, label, NEVR_RESOURCES_BAD_ARGUMENT, "bad_argument",
-                   "a null pointer, a short struct_size, nonzero flags or an empty set", "nothing was registered");
+  try {
+    return RegisterOne(pluginId, desc);
+  } catch (const std::bad_alloc&) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.RESOURCE] resource set refused plugin=%s reason=out_of_memory (registration ran out of memory; nothing "
+        "was registered)",
+        Printable(pluginId).c_str());
+  } catch (const std::exception&) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.RESOURCE] resource set refused plugin=%s reason=exception (registration threw; nothing was registered)",
+        Printable(pluginId).c_str());
   }
-  HMODULE module = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_init.active || g_init.thread != GetCurrentThreadId() || g_init.id != pluginId) {
-      return Refused(pluginId, label, NEVR_RESOURCES_BAD_ARGUMENT, "not_in_init",
-                     "register_resources is called from the plugin's own init, with ctx->plugin_id",
-                     "nothing was registered");
-    }
-    module = g_init.module;
-  }
-
-  HMODULE owner = nullptr;
-  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                          static_cast<LPCWSTR>(desc->data), &owner) ||
-      owner != module) {
-    return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "not_in_image",
-                   "the bytes are not in the image of the plugin whose init is running", "nothing was registered");
-  }
-  const auto* image = reinterpret_cast<const unsigned char*>(module);
-  const auto* bytes = static_cast<const unsigned char*>(desc->data);
-  const std::uint64_t rva = static_cast<std::uint64_t>(bytes - image);
-  const nevr_image_range::Result range = nevr_image_range::FileOffsetOf(image, rva, desc->size);
-  if (!range.ok()) {
-    return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, nevr_image_range::ProblemName(range.problem),
-                   "the set must lie in one section's raw data with no base relocation in it (an .incbin into a "
-                   "read-only section)",
-                   "nothing was registered");
-  }
-
-  std::wstring path(32768, L'\0');
-  const DWORD pathLength = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
-  if (pathLength == 0 || pathLength >= path.size()) {
-    return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "no_module_path",
-                   "GetModuleFileNameW error " + std::to_string(GetLastError()), "nothing was registered");
-  }
-  path.resize(pathLength);
-  // Read-only, and deny-write: the file the game's reader reads cannot change under the running game.
-  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-                            nullptr);
-  if (file == INVALID_HANDLE_VALUE) {
-    return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "file_open",
-                   "CreateFileW error " + std::to_string(GetLastError()), "nothing was registered");
-  }
-  if (!FileHoldsMappedBytes(file, range.file_offset, bytes, desc->size)) {
-    CloseHandle(file);
-    return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "file_differs",
-                   "the plugin's file does not hold the mapped bytes at the offset its headers name",
-                   "nothing was registered");
-  }
-
-  nevr_resource_set::View view;
-  nevr_resource_set::Parse(bytes, desc->size, &view);
-  Outcome outcome;
-  std::size_t levels = 0;
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    outcome = g_registry.Add(pluginId, label, bytes, desc->size,
-                             static_cast<std::int64_t>(reinterpret_cast<intptr_t>(file)), range.file_offset);
-  }
-  if (!outcome.ok()) {
-    CloseHandle(file);
-    return Refused(pluginId, label, StatusFor(outcome.refusal), RefusalName(outcome.refusal), outcome.detail,
-                   "nothing was registered");
-  }
-  for (std::uint32_t i = 0; i < view.record_count(); ++i) {
-    if (view.RecordAt(i).type == kLevelRootType) ++levels;
-  }
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.RESOURCE] resource set registered plugin=%s label=%s records=%u chunks=%u levels=%zu bytes=%llu "
-      "file_offset=0x%llx (held until the plugin's init returns, then mounted after the plugin pass)",
-      pluginId, label, view.record_count(), view.chunk_count(), levels, static_cast<unsigned long long>(desc->size),
-      static_cast<unsigned long long>(range.file_offset));
-  return NEVR_RESOURCES_OK;
+  return NEVR_RESOURCES_BAD_FORMAT;
 }
 
 void MountWhenReady() {
-  MountReport report;
-  std::vector<std::int64_t> abandoned;
-  std::vector<const Set*> mounted;
-  const ULONGLONG started = GetTickCount64();
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_registry.mounted()) {
-      g_mountDeferred.store(false);
-      return;
-    }
-    if (g_registry.held() == 0) {
-      // Nothing to mount: close registration for the run without a line (no plugin carries resources).
-      report = g_registry.Mount(StockView{&StockHasThunk, nullptr, 0});
-      g_mountDeferred.store(false);
-      return;
-    }
-    const std::uint64_t stockRecords = StockRecordsNow();
-    if (stockRecords == 0) {
-      if (!g_deferSaid) {
-        g_deferSaid = true;
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.RESOURCE] resource sets wait for the game's manifest sets=%zu (the mount retries each frame until "
-            "the game has read its package manifests)",
-            g_registry.held());
-      }
-      g_mountDeferred.store(true);
-      return;
-    }
-    bool hooked = true;
-#ifdef NEVR_TEST_HOOKS
-    if (g_testStockHas == nullptr) hooked = nevr::assets::EnsureResolverHook();
-#else
-    hooked = nevr::assets::EnsureResolverHook();
-#endif
-    if (!hooked) {
-      abandoned = g_registry.Abandon();
-    } else {
-      report = g_registry.Mount(StockView{&StockHasThunk, nullptr, stockRecords});
-      mounted = g_registry.MountedSets();
-      if (const nevr_shadow::Shadow* shadow = g_registry.shadow()) {
-        g_published.store(new Published(shadow, mounted.size()), std::memory_order_release);
-      }
-    }
-    g_mountDeferred.store(false);
-  }
-  if (!abandoned.empty()) {
-    CloseHandles(abandoned);
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.RESOURCE] resource sets not mounted sets=%zu reason=no_resolver_hook (the resolver hook at 0x140fa1fe0 "
-        "is not installed, so no plugin level or resource is served)",
-        abandoned.size());
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_registry.mounted()) return;
+  if (g_registry.held() == 0) {
+    // Nothing to mount: close registration for the run without a line (no plugin carries resources).
+    g_registry.Mount(StockView{&StockHasThunk, nullptr, 0});
     return;
   }
-  for (const MountReport::Refused& refused : report.refusals) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.RESOURCE] resource set refused at mount plugin=%s label=%s reason=%s detail=\"%s\" (its levels are "
-        "neither served nor listed as installed)",
-        refused.plugin.c_str(), refused.label.c_str(), RefusalName(refused.outcome.refusal),
-        refused.outcome.detail.c_str());
+  g_armedAtMs = NowMs();
+  g_lastCount = 0;
+  g_countSinceMs = g_armedAtMs;
+  if (!g_deferSaid) {
+    g_deferSaid = true;
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] resource sets wait for the game's manifest sets=%zu (they are mounted on the game's own thread "
+        "once its record count has held still for %llu ms)",
+        g_registry.held(), static_cast<unsigned long long>(kStableMs));
   }
-  CloseHandles(report.handles_to_close);
-  for (const Set* set : mounted) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.RESOURCE] resource set mounted plugin=%s label=%s records=%zu levels=%s",
-        set->plugin.c_str(), set->label.c_str(), set->records.size(), LevelList(*set).c_str());
-  }
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.RESOURCE] resource sets mounted sets=%zu refused=%zu records=%zu levels=%zu chunk_base=0x%08x "
-      "stock_records=%llu duration_ms=%llu",
-      report.sets, report.refused, report.records, report.levels, report.chunk_base,
-      static_cast<unsigned long long>(report.stock_records),
-      static_cast<unsigned long long>(GetTickCount64() - started));
+  g_mountDeferred.store(true);
 }
 
-void OnFrame() {
-  if (g_mountDeferred.load(std::memory_order_relaxed)) MountWhenReady();
+void OnFrame(bool onLoopThread) {
+  if (g_mountDeferred.load(std::memory_order_relaxed)) TryMount(onLoopThread);
   Published* published = g_published.load(std::memory_order_acquire);
   if (published == nullptr) return;
-  const std::uint64_t now = GetTickCount64();
+  const std::uint64_t now = NowMs();
   std::uint64_t last = g_lastSummaryMs.load(std::memory_order_relaxed);
   if (now - last < 10000 || !g_lastSummaryMs.compare_exchange_strong(last, now)) return;
   std::vector<const Set*> sets;
@@ -347,30 +537,43 @@ void OnFrame() {
     const std::uint64_t served = published->served[i].exchange(0, std::memory_order_relaxed);
     if (served == 0) continue;
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOURCE] resource set reads plugin=%s label=%s served=%llu window_s=10 (the game read these "
+        "[NEVR.RESOURCE] resource set reads plugin=%s label=\"%s\" served=%llu window_ms=%llu (the game read these "
         "records from the plugin's file)",
-        sets[i]->plugin.c_str(), sets[i]->label.c_str(), static_cast<unsigned long long>(served));
+        sets[i]->plugin.c_str(), sets[i]->label.c_str(), static_cast<unsigned long long>(served),
+        static_cast<unsigned long long>(now - last));
   }
   const std::uint64_t stockWins = published->stockWins.load(std::memory_order_relaxed);
   if (stockWins != 0 && !g_stockWinSaid.exchange(true)) {
+    const std::uint32_t user = published->firstWinUser.load();
+    const std::string plugin = user != 0 && user - 1 < sets.size() ? sets[user - 1]->plugin : std::string("unknown");
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.RESOURCE] resource set keys answered by the game's manifest count=%llu (a package set added after the "
-        "mount holds keys a plugin's set holds; the game's bytes are served for them)",
-        static_cast<unsigned long long>(stockWins));
+        "[NEVR.RESOURCE] resource set keys answered by the game's manifest count=%llu first=%s plugin=%s (a package set "
+        "added after the mount holds keys a plugin's set holds; the game's bytes are served for them)",
+        static_cast<unsigned long long>(stockWins),
+        KeyText(published->firstWinType.load(), published->firstWinName.load()).c_str(), plugin.c_str());
   }
 }
 
-const void* ManagerFor(std::uint64_t type, std::uint64_t name) {
+const void* ManagerFor(const void* manager, std::uint64_t type, std::uint64_t name) {
   Published* published = g_published.load(std::memory_order_acquire);
   if (published == nullptr) return nullptr;
   std::uint32_t user = 0;
   if (!published->shadow->Find(type, name, nullptr, &user)) return nullptr;
-  if (StockHasNow(type, name)) {
-    published->stockWins.fetch_add(1, std::memory_order_relaxed);
+  if (ManagerHasNow(manager, type, name)) {
+    if (published->stockWins.fetch_add(1, std::memory_order_relaxed) == 0) {
+      published->firstWinType.store(type);
+      published->firstWinName.store(name);
+      published->firstWinUser.store(user + 1);
+    }
     return nullptr;
   }
   if (user < published->served.size()) published->served[user].fetch_add(1, std::memory_order_relaxed);
   return published->shadow->manager();
+}
+
+bool HoldsKey(std::uint64_t type, std::uint64_t name) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_registry.Holds(type, name);
 }
 
 std::vector<std::uint64_t> MountedLevelNames() {
@@ -384,8 +587,8 @@ std::string ReportJson() {
   for (const Set* set : g_registry.MountedSets()) {
     nlohmann::json levels = nlohmann::json::array();
     char hex[24];
-    for (const Level& level : set->levels) {
-      std::snprintf(hex, sizeof(hex), "0x%016llx", static_cast<unsigned long long>(level.name));
+    for (const std::uint64_t level : set->levels) {
+      std::snprintf(hex, sizeof(hex), "0x%016llx", static_cast<unsigned long long>(level));
       levels.push_back(hex);
     }
     sets.push_back({{"plugin", set->plugin},
@@ -394,7 +597,8 @@ std::string ReportJson() {
                     {"records", set->records.size()},
                     {"bytes", set->bytes}});
   }
-  return sets.dump();
+  // `replace`: a plugin's id and label come from outside; the login must not fail over them.
+  return sets.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 #ifdef NEVR_TEST_HOOKS
@@ -404,11 +608,17 @@ void ResetForTest() {
   g_published.store(nullptr);
   g_mountDeferred.store(false);
   g_deferSaid = false;
+  g_lateSaid = false;
+  g_armedAtMs = 0;
+  g_lastCount = 0;
+  g_countSinceMs = 0;
   g_lastSummaryMs.store(0);
   g_stockWinSaid.store(false);
   g_init = InitState{};
   g_testStockHas = nullptr;
   g_testStockRecords = 0;
+  g_testNow = nullptr;
+  g_testThrow = false;
 }
 
 void SetStockForTest(StockHasFn has, std::uint64_t records) {
@@ -416,6 +626,13 @@ void SetStockForTest(StockHasFn has, std::uint64_t records) {
   g_testStockHas = has;
   g_testStockRecords = records;
 }
+
+void SetClockForTest(std::uint64_t (*now)()) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_testNow = now;
+}
+
+void SetThrowForTest(bool on) { g_testThrow = on; }
 #endif
 
 }  // namespace nevr_resource_sets

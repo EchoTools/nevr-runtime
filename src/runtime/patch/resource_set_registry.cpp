@@ -36,10 +36,23 @@ std::vector<Key> SortedKeys(const Set& set) {
 
 Outcome Refuse(Refusal refusal, std::string detail) { return Outcome{refusal, std::move(detail)}; }
 
-// The archive of `levelName` in `view`: decompressed from its chunk and parsed. The parse has already checked that
-// the record lies inside its chunk's decompressed bytes and that the frame lies inside the set.
-Outcome ReadLevel(const nevr_resource_set::View& view, const nevr_resource_set::Record& archive, Level* out) {
+const Archive* FindArchive(const Set& set, std::uint64_t name) {
+  const auto it = std::lower_bound(set.archives.begin(), set.archives.end(), name,
+                                   [](const Archive& a, std::uint64_t n) { return a.name < n; });
+  return it != set.archives.end() && it->name == name ? &*it : nullptr;
+}
+
+// One archive record of `view`: decompressed from its chunk and parsed. The parse has already checked that the record
+// lies inside its chunk's decompressed bytes and that the frame lies inside the set; an archive record of at most
+// kMaxArchiveBytes sits in a chunk of at most kBlockLimit decompressed bytes (Parse), so the buffer is bounded.
+Outcome ReadArchive(const nevr_resource_set::View& view, const nevr_resource_set::Record& archive, Archive* out) {
   const nevr_resource_set::Chunk chunk = view.ChunkAt(archive.chunk);
+  if (archive.size > kMaxArchiveBytes || chunk.decompressed > nevr_resource_set::kBlockLimit) {
+    return Refuse(Refusal::kArchive, KeyText(archive.type, archive.name) + " (an archive of " +
+                                         std::to_string(archive.size) + " bytes in a chunk of " +
+                                         std::to_string(chunk.decompressed) + "; an archive sits in a chunk of at most " +
+                                         std::to_string(nevr_resource_set::kBlockLimit) + ")");
+  }
   std::vector<unsigned char> plain(chunk.decompressed);
   const std::size_t got = ZSTD_decompress(plain.data(), plain.size(), view.data() + chunk.offset, chunk.compressed);
   const std::string key = KeyText(archive.type, archive.name);
@@ -68,6 +81,8 @@ const char* RefusalName(Refusal refusal) {
     case Refusal::kTooLate: return "too_late";
     case Refusal::kStockKey: return "stock_key";
     case Refusal::kUnresolved: return "unresolved";
+    case Refusal::kIndexSpace: return "index_space";
+    case Refusal::kFileOffset: return "file_offset_range";
   }
   return "unknown";
 }
@@ -79,7 +94,7 @@ std::string KeyText(std::uint64_t type, std::uint64_t name) {
   return text;
 }
 
-bool ParseArchive(const unsigned char* data, std::size_t size, Level* out) {
+bool ParseArchive(const unsigned char* data, std::size_t size, Archive* out) {
   out->dependencies.clear();
   out->entries.clear();
   std::size_t at = 0;
@@ -128,17 +143,21 @@ Outcome Registry::Add(const std::string& plugin, const std::string& label, const
     if (r.type == kTextureType && !SortedHas(sorted, Key{kTextureGpuType, r.name})) {
       return Refuse(Refusal::kTexturePayload, KeyText(r.type, r.name));
     }
-    if (r.type != kLevelRootType) continue;
-    std::uint32_t archiveIndex = view.record_count();
-    for (std::uint32_t j = 0; j < view.record_count(); ++j) {
-      if (keys[j] == Key{kArchiveType, r.name}) archiveIndex = j;
+    if (r.type == kArchiveType) {
+      Archive archive;
+      const Outcome read = ReadArchive(view, r, &archive);
+      if (!read.ok()) return read;
+      set->archives.push_back(std::move(archive));
     }
-    if (archiveIndex == view.record_count()) return Refuse(Refusal::kLevelIncomplete, KeyText(kArchiveType, r.name));
-    Level level;
-    const Outcome read = ReadLevel(view, view.RecordAt(archiveIndex), &level);
-    if (!read.ok()) return read;
-    set->levels.push_back(std::move(level));
+    if (r.type == kLevelRootType) {
+      if (!SortedHas(sorted, Key{kArchiveType, r.name})) {
+        return Refuse(Refusal::kLevelIncomplete, KeyText(kArchiveType, r.name));
+      }
+      set->levels.push_back(r.name);
+    }
   }
+  std::sort(set->archives.begin(), set->archives.end(),
+            [](const Archive& a, const Archive& b) { return a.name < b.name; });
 
   for (const std::unique_ptr<Set>& other : sets_) {
     const std::vector<Key> otherKeys = SortedKeys(*other);
@@ -149,12 +168,20 @@ Outcome Registry::Add(const std::string& plugin, const std::string& label, const
     }
   }
 
+  // The shadow gives every mounted chunk an index from kFirstChunkIndex to kChunkIndexLimit; a set whose chunks do not
+  // fit beside the ones already held is refused here, alone, rather than every set at the mount.
+  if (heldChunks_ + view.chunk_count() > indexSpace_) {
+    return Refuse(Refusal::kIndexSpace, std::to_string(view.chunk_count()) + " chunks, " +
+                                            std::to_string(indexSpace_ - std::min(heldChunks_, indexSpace_)) + " left");
+  }
+
   for (std::uint32_t i = 0; i < view.chunk_count(); ++i) {
     const nevr_resource_set::Chunk c = view.ChunkAt(i);
     const std::uint64_t at = fileOffset + c.offset;
     // The game's chunk record holds the file offset as a u32 (docs/engine/asset-system.md, "Manifest").
     if (at + c.compressed > 0xFFFFFFFFULL) {
-      return Refuse(Refusal::kFormat, "file_offset_range at index " + std::to_string(i));
+      return Refuse(Refusal::kFileOffset, "chunk " + std::to_string(i) + " ends at byte " +
+                                              std::to_string(at + c.compressed) + " of the plugin's file");
     }
     nevr_shadow::Chunk chunk;
     chunk.file_offset = static_cast<std::uint32_t>(at);
@@ -173,6 +200,11 @@ Outcome Registry::Add(const std::string& plugin, const std::string& label, const
     record.alignment = r.alignment;
     set->records.push_back(record);
   }
+  for (std::uint32_t i = 0; i < view.override_count(); ++i) {
+    const nevr_resource_set::Override o = view.OverrideAt(i);
+    set->overrides.push_back(OverrideRef{o.type, o.name, view.data() + o.offset, o.size});
+  }
+  heldChunks_ += view.chunk_count();
   sets_.push_back(std::move(set));
   return Outcome{};
 }
@@ -189,6 +221,7 @@ std::vector<std::int64_t> Registry::Drop(const std::string& plugin) {
   for (auto it = sets_.begin(); it != sets_.end(); ++it) {
     if ((*it)->plugin == plugin && !(*it)->committed) {
       handles.push_back((*it)->handle);
+      heldChunks_ -= (*it)->chunks.size();
     } else {
       if (keep != it) *keep = std::move(*it);
       ++keep;
@@ -205,6 +238,7 @@ MountReport Registry::Mount(const StockView& stock) {
   mounted_ = true;
 
   std::vector<Key> served;  // the keys of the sets mounted so far, sorted
+  std::vector<const Set*> servedSets;
   for (const std::unique_ptr<Set>& owned : sets_) {
     Set& set = *owned;
     if (!set.committed) {
@@ -222,21 +256,41 @@ MountReport Registry::Mount(const StockView& stock) {
     auto resolves = [&](const Key& key) {
       return SortedHas(own, key) || SortedHas(served, key) || stock.has(stock.ctx, key.first, key.second);
     };
-    for (const Level& level : set.levels) {
-      if (!outcome.ok()) break;
-      for (std::uint64_t dependency : level.dependencies) {
-        if (!resolves(Key{kArchiveType, dependency})) {
-          outcome = Refuse(Refusal::kUnresolved, "level " + KeyText(kArchiveType, level.name) + " depends on " +
-                                                     KeyText(kArchiveType, dependency));
-          break;
-        }
+    // An archive a set (this one or one mounted before it) carries, or null: the game's archives are the game's.
+    auto archiveOf = [&](std::uint64_t name) -> const Archive* {
+      for (const Set* holder : servedSets) {
+        if (const Archive* a = FindArchive(*holder, name)) return a;
       }
-      for (const Key& entry : level.entries) {
-        if (!outcome.ok()) break;
-        if (!resolves(entry)) {
-          outcome = Refuse(Refusal::kUnresolved,
-                           "level " + KeyText(kArchiveType, level.name) + " lists " + KeyText(entry.first, entry.second));
+      return FindArchive(set, name);
+    };
+    // Each level: its archive and every archive it depends on, through the sets, must list only what resolves. An
+    // archive the game has ends the walk there: the game's own archives resolve in the game's packages.
+    for (const std::uint64_t level : set.levels) {
+      if (!outcome.ok()) break;
+      std::vector<std::uint64_t> pending{level};
+      std::vector<std::uint64_t> seen;
+      while (!pending.empty() && outcome.ok()) {
+        const std::uint64_t name = pending.back();
+        pending.pop_back();
+        if (std::find(seen.begin(), seen.end(), name) != seen.end()) continue;
+        seen.push_back(name);
+        const Archive* archive = archiveOf(name);
+        if (archive == nullptr) {
+          if (!stock.has(stock.ctx, kArchiveType, name)) {
+            outcome = Refuse(Refusal::kUnresolved, "level " + KeyText(kArchiveType, level) + " depends on " +
+                                                       KeyText(kArchiveType, name));
+          }
+          continue;
         }
+        for (const Key& entry : archive->entries) {
+          if (!resolves(entry)) {
+            outcome = Refuse(Refusal::kUnresolved, "level " + KeyText(kArchiveType, level) + ": archive " +
+                                                       KeyText(kArchiveType, name) + " lists " +
+                                                       KeyText(entry.first, entry.second));
+            break;
+          }
+        }
+        for (std::uint64_t dependency : archive->dependencies) pending.push_back(dependency);
       }
     }
     if (!outcome.ok()) {
@@ -245,8 +299,8 @@ MountReport Registry::Mount(const StockView& stock) {
       ++report.refused;
       continue;
     }
-    set.mounted = true;
     mountedOrder_.push_back(&set);
+    servedSets.push_back(&set);
     served.insert(served.end(), own.begin(), own.end());
     std::sort(served.begin(), served.end());
   }
@@ -292,19 +346,33 @@ std::vector<std::int64_t> Registry::Abandon() {
   sets_.clear();
   mountedOrder_.clear();
   shadow_.reset();
+  heldChunks_ = 0;
   mounted_ = true;
   return handles;
 }
 
 std::vector<std::uint64_t> Registry::MountedLevels() const {
   std::vector<std::uint64_t> names;
-  for (const Set* set : mountedOrder_) {
-    for (const Level& level : set->levels) names.push_back(level.name);
-  }
+  for (const Set* set : mountedOrder_) names.insert(names.end(), set->levels.begin(), set->levels.end());
   return names;
 }
 
+bool Registry::Holds(std::uint64_t type, std::uint64_t name) const {
+  for (const std::unique_ptr<Set>& set : sets_) {
+    for (const nevr_shadow::Record& r : set->records) {
+      if (r.type == type && r.name == name) return true;
+    }
+  }
+  return false;
+}
+
 std::vector<const Set*> Registry::MountedSets() const { return mountedOrder_; }
+
+std::vector<const Set*> Registry::HeldSets() const {
+  std::vector<const Set*> held;
+  for (const std::unique_ptr<Set>& set : sets_) held.push_back(set.get());
+  return held;
+}
 
 const Set* Registry::SetForUser(std::uint32_t user) const {
   return user < mountedOrder_.size() ? mountedOrder_[user] : nullptr;

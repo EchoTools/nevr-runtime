@@ -231,7 +231,7 @@ uint64_t __cdecl Hook_Request(void* manager, uint64_t typeKey, uint64_t nameKey,
     // #2161: a key a plugin's resource set holds, and the game's manifests do not, is filled from the resource sets'
     // shadow manifest: the game's own function fills the request from it, and the game's own reader reads the
     // plugin's file. Every other key goes to the game's manifest unchanged.
-    if (const void* shadowManager = nevr_resource_sets::ManagerFor(typeKey, nameKey)) {
+    if (const void* shadowManager = nevr_resource_sets::ManagerFor(manager, typeKey, nameKey)) {
         return g_origRequest(const_cast<void*>(shadowManager), typeKey, nameKey, a4, a5, resource, index, request);
     }
     if (!Global().Empty()) {
@@ -322,8 +322,7 @@ uint64_t StockRecordCount() {
     return count;
 }
 
-bool StockHas(uint64_t type, uint64_t name) {
-    const void* manifest = LiveManifest();
+static bool ManifestHas(const void* manifest, uint64_t type, uint64_t name) {
     if (manifest == nullptr) return false;
     const uint64_t key[2] = {type, name};
     uint64_t index = 0;
@@ -331,18 +330,47 @@ bool StockHas(uint64_t type, uint64_t name) {
     return findEntry(manifest, key, &index) != 0;
 }
 
+bool StockHas(uint64_t type, uint64_t name) { return ManifestHas(LiveManifest(), type, name); }
+
+bool ManagerHas(const void* manager, uint64_t type, uint64_t name) {
+    if (manager == nullptr) return false;
+    const void* manifest = nullptr;
+    std::memcpy(&manifest, static_cast<const uint8_t*>(manager) + kManagerManifest, sizeof(manifest));
+    return ManifestHas(manifest, type, name);
+}
+
+bool AssetHeld(uint64_t type, uint64_t name, std::string* label) {
+    Asset asset;
+    if (!Global().Find(type, name, &asset)) return false;
+    if (label != nullptr) *label = asset.label;
+    return true;
+}
+
 #ifdef NEVR_TEST_HOOKS
 bool InstallHookForTest(void* target, void* detour, void** original, const char* name) {
     return InstallOne(target, detour, original, name);
 }
 void RetireHookForTest(void* target, const char* what) { RetireEngineHook(target, what); }
+void SetRequestOriginalForTest(RequestFnForTest original) { g_origRequest = original; }
+uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name) {
+    return Hook_Request(manager, type, name, 0, 0, nullptr, 0, nullptr);
+}
 #endif
 
 RegisterStatus RegisterPluginAsset(uint64_t type, uint64_t name, const void* data, uint64_t size,
                                    const char* label) {
     Global().SetLoadedProbe(&EngineHasLoaded);
-    const RegisterStatus status = Global().Register(type, name, data, size, label);
     const char* shown = label ? label : "";
+    // #2161: a key a plugin's resource set holds is the set's; the two would be served by different hooks.
+    if (nevr_resource_sets::HoldsKey(type, name)) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.ASSET] register refused label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s (a plugin's "
+            "resource set holds this key)",
+            shown, static_cast<unsigned long long>(type), static_cast<unsigned long long>(name),
+            static_cast<unsigned long long>(size), ToString(RegisterStatus::Duplicate));
+        return RegisterStatus::Duplicate;
+    }
+    const RegisterStatus status = Global().Register(type, name, data, size, label);
     if (status != RegisterStatus::Ok) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.ASSET] register refused label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s", shown,

@@ -193,22 +193,31 @@ struct NevrQuestHostApi {
  * one Warning that names it. */
 enum NevrResourcesStatus : int32_t {
     NEVR_RESOURCES_OK           = 0,
-    NEVR_RESOURCES_BAD_ARGUMENT = 1, /* a null pointer, a struct_size smaller than this version's, a nonzero flags, or a
-                                      *   plugin_id that is not the plugin whose init is running on this thread */
-    NEVR_RESOURCES_NOT_IN_FILE  = 2, /* the bytes are not file bytes of the calling plugin's own image: outside it, across
-                                      *   a section boundary, past a section's raw data, or touched by a base relocation;
-                                      *   or the file does not hold the same bytes there */
-    NEVR_RESOURCES_BAD_FORMAT   = 3, /* not a resource set (nevr/resource_set.h); the Warning names the rule */
-    NEVR_RESOURCES_COLLIDES     = 4, /* a record names a key another resource set of this process already holds; the
-                                      *   Warning names the key and the plugin that holds it */
+    NEVR_RESOURCES_BAD_ARGUMENT = 1, /* a null pointer, a struct_size smaller than this version's, a nonzero flags, a
+                                      *   label that is not 1 to 64 bytes of printable ASCII without a double quote or
+                                      *   backslash, or a plugin_id that is not the plugin whose init is running on this
+                                      *   thread */
+    NEVR_RESOURCES_NOT_IN_FILE  = 2, /* the bytes are not file bytes of a read-only section of the calling plugin's own
+                                      *   image: outside it, across a section boundary, past a section's raw data, in a
+                                      *   writable section or touched by a base relocation; or the file does not hold
+                                      *   the same bytes there; or a chunk ends past the file offsets the game's reader
+                                      *   can address (4 GiB) */
+    NEVR_RESOURCES_BAD_FORMAT   = 3, /* not a resource set (nevr/resource_set.h), or a set the runtime will not serve (a
+                                      *   script record, a texture without its payload, a level without its archive, an
+                                      *   archive that does not read); the Warning names the rule. Also the answer when
+                                      *   the host failed inside the call (out of memory) */
+    NEVR_RESOURCES_COLLIDES     = 4, /* a record names a key another resource set, or a plugin asset (NEVR_RegisterAsset),
+                                      *   of this process already holds; the Warning names the key and its holder */
     NEVR_RESOURCES_TOO_LATE     = 5, /* the host has already mounted the resource sets of this run */
 };
 
 /* A resource set the plugin carries in its own file. `data` and `size` are the set's bytes as the plugin's image maps
- * them: they must lie in one section's raw data with no base relocation in them (an .incbin into a read-only section,
- * nevr/pc/plugin_resources.h). The host reads the set's tables during the call and never keeps a pointer into the
- * image; the game's reader reads the chunks from the plugin's file, which the host holds open, read-only and
- * deny-write, for the life of the process. `label` names the set in logs and in the login report; it is copied. */
+ * them: they must lie in one read-only section's raw data with no base relocation in them (#embed into
+ * NEVR_RESOURCE_SET_SECTION, nevr/pc/plugin_resources.h). The game's reader reads the chunks from the plugin's file,
+ * which the host holds open, read-only and deny-write, for the life of the process. When the host mounts the set it
+ * registers the set's overrides, pointing into the plugin's image, which stays loaded: an init that fails, or a set
+ * the mount refuses, registers none. `label` names the set in logs and in the login report (1 to 64 bytes of
+ * printable ASCII, no double quote or backslash); it is copied. */
 struct NevrResourcesDesc {
     uint32_t    struct_size;  /* sizeof(NevrResourcesDesc) */
     uint32_t    flags;        /* 0; no flag is defined */
