@@ -22,6 +22,8 @@ runm ln_log_unbounded    $L "s/  if (n > kLogFirstKept) return;/  (void)kLogFirs
 runm ln_no_kept_log      $L "s/  if (n > kLogFirstKept) return;/  if (n > 0) return;/"
 runm ln_kept_level       $L "s/sentinel::LogLevel::kInfo, \"combat_levelname_kept\"/sentinel::LogLevel::kDebug, \"combat_levelname_kept\"/"
 runm ln_slot0            $T "s/kSlots\[kSlotCount\] = {0x362ef90, /kSlots[kSlotCount] = {0x362ef98, /"
+runm ln_slot0_gate       $T "s/kSlots\[kSlotCount\] = {0x362ef90, /kSlots[kSlotCount] = {0x362ef98, /" quest-host-combat headset_gates_test
+runm ln_stock_gate       $T "s/kFnVaddr = 0x1202ecc;/kFnVaddr = 0x1202ec8;/" quest-host-combat headset_gates_test
 runm ln_slot1            $T "s/0x362ef90, 0x3630e58, /0x362ef90, 0x3630e50, /"
 runm ln_slot2            $T "s/0x3630e58, 0x3631278, /0x3630e58, 0x3631270, /"
 runm ln_slot3            $T "s/0x3631278, 0x36316f8}/0x3631278, 0x36316f0}/"

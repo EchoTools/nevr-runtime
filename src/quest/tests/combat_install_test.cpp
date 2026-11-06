@@ -390,6 +390,8 @@ void TheLevelNameRowsReadTheirSwitchAndTheBoosterNeedsLevelname() {
   combat::InstallNormal();
   QCHECK(Has(Lines("combat_install")[0].text, "levelname=module_not_loaded boosterpool=needs_levelname"));
   QCHECK(Has(Lines("combat_boosterpool_install")[0].text, "\"reason\":\"needs_levelname\""));
+  Done();
+}
 
 // The headset gates' keys have a line of their own (a log line is one 768-byte buffer): the defaults, each from the default; a key the file gave.
 void TheGatesKeysHaveALineOfTheirOwn() {

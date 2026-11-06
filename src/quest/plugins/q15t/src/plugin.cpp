@@ -144,6 +144,7 @@ NEVR_DECLARE_SUPPORTED_BUILD_IDS(Q15T_BUILD_ID);
 #define Q15T_MARK_STR(x) Q15T_MARK_STR2(x)
 extern "C" __attribute__((used, retain, visibility("hidden"))) const char q15t_config_marker[] =
     "q15t-config ec_words=[" Q15T_MARK_EC_WORDS "] ecfx_default_on=" Q15T_MARK_STR(Q15T_ECFX_DEFAULT_ON)
+    " build_id=" Q15T_BUILD_ID;
 
 namespace {
 
@@ -333,7 +334,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   }
   RegisterScriptRedirect(ctx);  // the combat libraries (#1737): all or nothing; plugin init runs after the first hooked dlopen
                                // returns a handle (script_redirect.h, Register), so loads before that are not redirected
-    " build_id=" Q15T_BUILD_ID;
   bool want_tick = false;
   [[maybe_unused]] const std::uintptr_t base = ctx->base_addr;
   // The modules, in an order the docs fix: wallfire after bvh; ecfx, powerboost's net tick and dronekill's kill feed after ec;
