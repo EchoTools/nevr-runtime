@@ -276,6 +276,25 @@ class NoEmulatedTls(unittest.TestCase):
         done = self.run_script("0000000000007b5c0 d __emutls_v._ZZN10__cxxabiv112_GLOBAL__N_19__globalsEvE10eh_globals")
         self.assertEqual(done.returncode, 0, done.stdout)
 
+    def test_another_variable_of_the_cxxabiv1_namespace_fails(self):
+        # only libc++abi's eh_globals is allowed, by its exact symbol: a name that merely contains __cxxabiv1 is a variable like any other
+        done = self.run_script("0000000000000000 D __emutls_v._ZN10__cxxabiv116t_not_eh_globalsE\n0 t main")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertIn("__emutls_v._ZN10__cxxabiv116t_not_eh_globalsE", done.stdout)
+
+    def test_a_file_with_no_symbols_is_a_failure(self):
+        # a stripped file lists nothing, so nothing was checked
+        for listing in ("", "libx.so: no symbols"):
+            with self.subTest(listing=listing):
+                done = self.run_script(listing)
+                self.assertEqual(done.returncode, 1, done.stdout)
+                self.assertIn("no symbols", done.stdout)
+
+    def test_an_object_that_only_refers_to_symbols_is_checked(self):
+        # undefined symbols are listed with two fields; they count as listed, and an emulated variable among them is not a definition
+        done = self.run_script("                 U memcpy")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
     def test_the_runtime_support_functions_are_not_a_variable_of_q15t(self):
         done = self.run_script("000000000006b00c t __emutls_get_address\n0000000000088ac4 b emutls_pthread_key")
         self.assertEqual(done.returncode, 0, done.stdout)

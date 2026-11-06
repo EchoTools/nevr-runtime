@@ -770,7 +770,6 @@ DroneKillInstall InstallDroneKill(std::uintptr_t base, const DroneKillWords& wor
   if (base == 0) return refuse("no base address");
   if (g_installed) return refuse("already installed");
   if (fns.find == nullptr) return refuse("FindComponentSystemMT is not resolved");
-  if (!g_t_cap.Create() || !g_t_shot.Create() || !g_t_in_tick.Create()) return refuse("no pthread key for the wrappers' per-thread state");
   g_base = base;
   g_cmp_plt = slots.cmp_plt;
   g_fns = fns;
@@ -805,6 +804,15 @@ DroneKillInstall InstallDroneKill(std::uintptr_t base, const DroneKillWords& wor
     hooks[i].result->reason = kUnexpectedSlot;
     LogSwap(hooks[i].name, *hooks[i].result);
     return refuse("a slot does not hold the pinned function");
+  }
+  // every check is done: the wrappers' per-thread state is three pthread keys, made now so that a module refused above holds none
+  int key_error = g_t_cap.Create();
+  if (key_error == 0) key_error = g_t_shot.Create();
+  if (key_error == 0) key_error = g_t_in_tick.Create();
+  if (key_error != 0) {
+    LogKv().S("why", "no pthread key for the wrappers' per-thread state").U("error", static_cast<unsigned long long>(key_error))
+        .Emit(NEVR_LOG_ERROR, "dronekill: OFF, nothing changed");
+    return out;
   }
   // swap order: Actor first (its wrapper alone only passes through; g_t_cap is set by EnterWrap only), then Enter, FireBulletLocal, AttackTarget
   for (int i = 0; i < 4; ++i) {

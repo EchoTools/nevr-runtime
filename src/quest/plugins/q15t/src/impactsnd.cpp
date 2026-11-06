@@ -639,12 +639,6 @@ InstallResult InstallImpactSnd(std::uintptr_t base) {
   out.status = SwapStatus::kUnexpectedOriginal;
   g_base = base;
   g_t0 = Now();
-  // The Shutdown wrapper keeps its depth per thread in a pthread key (not thread_local: that allocates in a hooked call).
-  if (!g_t_shutdown_depth.Create()) {
-    Refuse("no pthread key for the Shutdown wrapper's per-thread depth", 0, 0, 0);
-    out.reason = "no_thread_key";
-    return out;
-  }
   // R15: the hit code the module's reasoning is about. A word that differs = not the pinned build: nothing is written.
   for (std::size_t i = 0; i < 4; ++i) {
     std::uint32_t have = 0;
@@ -678,6 +672,18 @@ InstallResult InstallImpactSnd(std::uintptr_t base) {
       out.reason = "default_symbol_page_not_rw";
       return out;
     }
+  }
+  // Every check is done: the Shutdown wrapper keeps its depth per thread in a pthread key (not thread_local: that allocates in a
+  // hooked call), made now so that a module refused above holds no key. No key: nothing is written.
+  if (const int key_error = g_t_shutdown_depth.Create(); key_error != 0) {
+    char e[16];
+    std::snprintf(e, sizeof e, "%d", key_error);
+    const NevrLogField f[] = {{"reason", "no pthread key for the Shutdown wrapper's per-thread depth"}, {"error", e}, {"written", "0"}};
+    Log(NEVR_LOG_ERROR, "impactsnd OFF: nothing written", f, 3);
+    out.reason = "no_thread_key";
+    return out;
+  }
+  if (write) {
     __atomic_store_n(reinterpret_cast<std::uint64_t*>(base + kDefaultSymVa), kDefaultSym, __ATOMIC_RELEASE);
     Hook(3);
     if (!SafeRead(base + kDefaultSymVa, &back, sizeof back) || back != kDefaultSym) action = "wrote, READ-BACK DIFFERS";

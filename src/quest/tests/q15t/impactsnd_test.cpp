@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <mutex>
 #include <thread>
@@ -359,12 +360,18 @@ static void TestNowriteBuild() {
 // No pthread key left for the Shutdown wrapper's per-thread depth: the install refuses before it writes anything. Runs before any
 // successful install, because a key made by one stays for the process.
 static void TestNoThreadKey() {
+  // a module refused for a word that is not the pinned one has made no key: the install below, with no key left, must still be refused
+  Fresh();
+  *reinterpret_cast<uint32_t*>(g_base + kCodeVa[0]) = kCodeWord[0] ^ 0x1;
+  CHECK(std::strcmp(Install().reason, "hit_code_word_mismatch") == 0, "the pin mismatch was not refused");
   Fresh();
   KeyHog hog;
   const q15t::InstallResult r = Install();
   CHECK(r.status != q15t::SwapStatus::kOk && std::strcmp(r.reason, "no_thread_key") == 0, "no key: %s %s", q15t::StatusName(r.status), r.reason);
   CHECK(R64(kDefaultVa) == 0 && R64(kSlotVa) == g_base + kFnVa && R64(kShutSlotVa) == g_base + kShutFnVa, "no key: D written or a slot swapped");
-  CHECK(HasLine("impactsnd OFF: nothing written", 3) && HasLine("no pthread key"), "no key: not loud");
+  const std::string code = "error=" + std::to_string(EAGAIN);  // what pthread_key_create answers when the process has no key left
+  CHECK(HasLine("impactsnd OFF: nothing written", 3) && HasLine("no pthread key") && HasLine(code.c_str()), "no key: not loud, or no error code");
+  CHECK(!HasLine("vaddr=") && !HasLine("pinned="), "no key: the line carries address fields that mean nothing here");
   SetTable(All(), kStock, false);
   Publish();
   Polls(8);

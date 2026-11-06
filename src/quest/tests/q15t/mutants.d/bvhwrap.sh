@@ -60,7 +60,7 @@ runm bvh bvh_g_no_mark          src/bvh.cpp "s/^  g_t_allowed.Set(allowed ? 1 : 
 runm bvh bvh_g_no_restore       src/bvh.cpp "s/^  g_t_allowed.Set(outer);\$/  g_t_allowed.Set(0);/"
 runm bvh bvh_g_leaks            src/bvh.cpp "s/^  g_t_allowed.Set(outer);\$/  (void)outer;/"
 runm bvh bvh_g_shared_word      src/bvh.cpp "s/^ThreadWord g_t_allowed;.*/$SHARED_WORD g_t_allowed;/"
-runm bvh bvh_g_key_failure_ignored src/bvh.cpp "s/if (!g_t_allowed.Create()) return Refuse(/if (!g_t_allowed.Create() \&\& false) return Refuse(/"
+runm bvh bvh_g_key_failure_ignored src/bvh.cpp 's/g_t_allowed.Create(); key_error != 0) {/g_t_allowed.Create(); key_error != 0 \&\& false) {/'
 runm bvh bvh_g_no_real          src/bvh.cpp "s/  if (real == nullptr) return false;/  (void)real;/"
 runm bvh bvh_g_args             src/bvh.cpp "s/const bool got = real(self, ray, hit, gs);/const bool got = real(self, ray, hit, nullptr);/"
 runm bvh bvh_g_record_ret       src/bvh.cpp "s/  g_last_gate_ret.store(ret, std::memory_order_relaxed);/  (void)ret;/"
@@ -99,3 +99,5 @@ runm bvh bvh_s_window_len       src/bvh.cpp "s/  g_next_summary = now + 10.0;/  
 runm bvh bvh_s_arm              src/bvh.cpp "s/  if (g_next_summary == 0) g_next_summary = now + 10.0;/  (void)now;/"
 runm bvh bvh_s_idle             src/bvh.cpp "s/  if (!ni \&\& !no \&\& !nt \&\& !ng \&\& !ns) return;/  (void)ns;/"
 runm bvh bvh_s_resets           src/bvh.cpp "s/const std::uint64_t ni = g_int.exchange(0), nih = g_int_hit.exchange(0)/const std::uint64_t ni = g_int.load(), nih = g_int_hit.exchange(0)/"
+runm bvh bvh_g_key_error_unlogged src/bvh.cpp 's/{"reason", "no_thread_key"}, {"error", e}/{"reason", "no_thread_key"}, {"x", e}/'
+runm bvh bvh_g_key_status_logged src/bvh.cpp 's/{"error", e}};/{"error", e}, {"status", "null_slot"}};/;s/"bvh refused: nothing changed", f, 2)/"bvh refused: nothing changed", f, 3)/'

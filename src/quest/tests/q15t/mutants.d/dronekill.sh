@@ -62,4 +62,6 @@ runm dronekill dk_touch_space src/dronekill.cpp "s/    c.space = reinterpret_cas
 runm dronekill dk_touch_owner src/dronekill.cpp "s/    c.owner = owner;//"
 runm dronekill dk_lock_due src/dronekill.cpp "s/  if (slot >= 0) g_any_due.store(true, std::memory_order_release);\n  pthread_mutex_unlock(\&g_mu);\n}/XX/;/^void LockedOn/,/^}/s/  if (slot >= 0) g_any_due.store(true, std::memory_order_release);//"
 runm dronekill dk_cap_shared_word src/dronekill.cpp "s/^ThreadWord g_t_cap;.*/$SHARED_WORD g_t_cap;/"
-runm dronekill dk_key_failure_ignored src/dronekill.cpp "s/!g_t_in_tick.Create()) return refuse(/!g_t_in_tick.Create() \&\& false) return refuse(/"
+runm dronekill dk_key_failure_ignored src/dronekill.cpp "s/^  if (key_error != 0) {\$/  if (key_error != 0 \&\& false) {/"
+runm dronekill dk_key_before_checks src/dronekill.cpp "/^DroneKillInstall InstallDroneKill/,/^}/s/^  g_base = base;\$/  g_base = base;\n  g_t_cap.Create(); g_t_shot.Create(); g_t_in_tick.Create();/"
+runm dronekill dk_key_error_unlogged src/dronekill.cpp "s/.U(\"error\", static_cast<unsigned long long>(key_error))//"

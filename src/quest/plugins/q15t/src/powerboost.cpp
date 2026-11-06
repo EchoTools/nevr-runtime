@@ -453,8 +453,8 @@ InstallResult InstallPowerboost(std::uintptr_t base, int stage, bool net_tick, c
     return out;
   }
   if (stage > kPowerboostCone) stage = kPowerboostCone;
-  if (!g_t_in_node.Create()) {  // the node mark is per thread, in a pthread key
-    Rec().S("why", "no pthread key for the per-thread node mark").Emit(NEVR_LOG_ERROR, "powerboost: OFF; nothing installed");
+  if (const int key_error = g_t_in_node.Create(); key_error != 0) {  // the node mark is per thread, in a pthread key
+    Rec().S("why", "no pthread key for the per-thread node mark").I("error", key_error).Emit(NEVR_LOG_ERROR, "powerboost: OFF; nothing installed");
     out.reason = "no_thread_key";
     return out;
   }

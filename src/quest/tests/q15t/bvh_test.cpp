@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -245,7 +246,9 @@ int main() {
     CHECK(r.status != q15t::SwapStatus::kOk && std::strcmp(r.reason, "no_thread_key") == 0 && !q15t::BvhTreeInstalled(), "no key: %s %s",
           q15t::StatusName(r.status), r.reason);
     for (int i = 0; i < 6; ++i) CHECK(g_page[0x20 / 8 + i] == before[i], "no key: slot %d was swapped", i);
-    CHECK(Count("bvh refused: nothing changed", 3) == 1 && Count("reason=no_thread_key") == 1, "no key: the refusal is not logged");
+    const std::string code = "error=" + std::to_string(EAGAIN);  // what pthread_key_create answers when the process has no key left
+    CHECK(Count("bvh refused: nothing changed", 3) == 1 && Count("reason=no_thread_key") == 1 && Count(code.c_str()) == 1, "no key: the refusal is not logged with its error code");
+    CHECK(Count("status=") == 0, "no key: the refusal names a swap status (%d)", Count("status="));
   }
 
   // ---------------------------------------------------------------- 1. install: six slots, one line each, stock words kept

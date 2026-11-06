@@ -349,7 +349,15 @@ InstallResult InstallBvhAt(std::uintptr_t base, const BvhPins& pins) {
     if (word != base + check[i]->s.fn) return Refuse("slot_mismatch", check[i]->name, SwapStatus::kUnexpectedOriginal);
   }
 
-  if (!g_t_allowed.Create()) return Refuse("no_thread_key", "pthread_key_create failed", SwapStatus::kNullSlot);
+  if (const int key_error = g_t_allowed.Create(); key_error != 0) {  // the allowed mark is per thread, in a pthread key
+    char e[16];
+    std::snprintf(e, sizeof e, "%d", key_error);
+    const NevrLogField f[] = {{"reason", "no_thread_key"}, {"error", e}};
+    Log(NEVR_LOG_ERROR, "bvh refused: nothing changed", f, 2);
+    InstallResult r;
+    r.reason = "no_thread_key";
+    return r;
+  }
   g_base = base;
   g_pins = pins;
   // the gate first: until its wrapper is in, no cast is marked, so a tree installed a moment later answers none

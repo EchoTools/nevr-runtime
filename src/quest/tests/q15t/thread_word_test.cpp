@@ -2,6 +2,7 @@
 // Each thread sees only its own value; a new thread starts at 0; before Create the word reads 0 and ignores Set; Create is idempotent.
 #include <pthread.h>
 
+#include <cerrno>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -35,8 +36,8 @@ int main() {
   CHECK(g_a.Get() == 0, "a word that was never created answered %lu", static_cast<unsigned long>(g_a.Get()));
   CHECK(pthread_getspecific(0) == key0_before, "Set on a word that was never created changed key 0");
 
-  CHECK(g_a.Create() && g_b.Create(), "Create failed");
-  CHECK(g_a.Create(), "a second Create failed");
+  CHECK(g_a.Create() == 0 && g_b.Create() == 0, "Create failed");
+  CHECK(g_a.Create() == 0, "a second Create failed");
   CHECK(g_a.Get() == 0, "a created word starts at %lu, want 0", static_cast<unsigned long>(g_a.Get()));
   g_a.Set(0x1234);
   CHECK(g_a.Get() == 0x1234, "Set then Get on one thread: %lu", static_cast<unsigned long>(g_a.Get()));
@@ -90,11 +91,12 @@ int main() {
   // no key left: Create says so, the word stays inert (reads 0, ignores Set), and a later Create, once a key is free, works
   {
     KeyHog hog;
-    CHECK(!g_late.Create(), "Create succeeded with no pthread key left");
+    const int none_left = g_late.Create();
+    CHECK(none_left == EAGAIN, "Create with no pthread key left answered %d, want EAGAIN (%d)", none_left, EAGAIN);
     g_late.Set(9);
     CHECK(g_late.Get() == 0, "a word whose Create failed answered %lu", static_cast<unsigned long>(g_late.Get()));
   }
-  CHECK(g_late.Create(), "Create failed once keys were free again");
+  CHECK(g_late.Create() == 0, "Create failed once keys were free again");
   g_late.Set(9);
   CHECK(g_late.Get() == 9, "a word created after a failed Create does not keep a value");
   if (g_fail == 0) std::printf("thread_word_test: all checks pass\n");

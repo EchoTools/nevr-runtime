@@ -107,7 +107,9 @@ struct DroneKillCalls {
 };
 void SetDroneKillCallsForTest(const DroneKillCalls* calls);  // null = the real calls
 void SetDroneKillClockForTest(std::uint64_t (*now_ms)());
-// Makes DroneKillShotVelocity answer `v3` (3 floats) on this thread, as inside a FireBulletLocal call; null clears it.
+// Makes DroneKillShotVelocity answer `v3` (3 floats) on this thread, as inside a FireBulletLocal call; null clears it. Which thread
+// answers is per thread, but the values are one frame for the process: two threads using the seam share them (a test that needs two
+// shots on two threads drives the FireBulletLocal wrapper).
 void SetDroneKillShotForTest(const float* v3, int remote);
 void SetDroneKillShotActiveForTest(bool active);  // what DroneKillShotActive answers (the FireBulletLocal word swapped)
 void ResetDroneKillForTest();

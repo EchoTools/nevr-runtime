@@ -84,4 +84,5 @@ runm powerboost pb_thunk_x2         src/powerboost_thunk.inc 's/mov x2, x24/mov 
 runm powerboost pb_thunk_lr         src/powerboost_thunk.inc 's/"ldp x29, x30, \[sp\], #16\\n"/"ldp x29, x29, [sp], #16\\n"/'
 runm powerboost pb_node_shared_word src/powerboost.cpp "s/^ThreadWord g_t_in_node;.*/$SHARED_WORD g_t_in_node;/"
 runm powerboost pb_node_not_restored src/powerboost.cpp 's/^  g_t_in_node.Set(depth);$/  (void)depth;/'
-runm powerboost pb_key_failure_ignored src/powerboost.cpp 's/if (!g_t_in_node.Create()) {/if (!g_t_in_node.Create() \&\& false) {/'
+runm powerboost pb_key_failure_ignored src/powerboost.cpp 's/g_t_in_node.Create(); key_error != 0) {/g_t_in_node.Create(); key_error != 0 \&\& false) {/'
+runm powerboost pb_key_error_unlogged src/powerboost.cpp 's/.I("error", key_error)//'

@@ -5,6 +5,7 @@
 #include <sys/mman.h>
 
 #include <atomic>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -280,7 +281,8 @@ int main() {
     const InstallResult none = InstallPowerboost(img.base, kPowerboostRead, false, &fns);
     CHECK(none.status != SwapStatus::kOk && std::strcmp(none.reason, "no_thread_key") == 0, "no key: %s %s", StatusName(none.status), none.reason);
     CHECK(Slot(img, kSlotNode) == img.base + kFnNode && Slot(img, kSlotHeal) == img.base + kFnHeal && Slot(img, kSlotLink) == img.base + kFnLink, "no key: a slot was swapped");
-    CHECK(Count("powerboost: OFF; nothing installed", 3) == 1 && Count("no pthread key") == 1, "no key: the refusal is not logged");
+    const std::string code = "error=" + std::to_string(EAGAIN);  // what pthread_key_create answers when the process has no key left
+    CHECK(Count("powerboost: OFF; nothing installed", 3) == 1 && Count("no pthread key") == 1 && Count(code.c_str()) == 1, "no key: the refusal is not logged with its error code");
     CHECK(GetPowerboostStats().stage == 0, "no key: stage %d", GetPowerboostStats().stage);
   }
   Fresh(img);

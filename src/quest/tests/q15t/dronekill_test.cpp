@@ -5,6 +5,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -871,13 +872,22 @@ static DroneKillWords Only(bool kill, bool lockon, bool gun, bool chase, bool sh
 // No pthread key left for the wrappers' per-thread state: the install refuses before it swaps anything. Runs before any successful
 // install, because a key made by one stays for the process.
 static void TestNoThreadKey() {
+  // a module refused for a slot that does not hold the pinned function has made no key: the install below, with no key left, must still
+  // be refused for the key
+  Reset(DroneKillWords{}, false);
+  mprotect(g_w, 4096, PROT_READ | PROT_WRITE);
+  g_w[0x38 / 8] = 0x4242420;
+  mprotect(g_w, 4096, PROT_READ);
+  CHECK(!InstallDroneKill(g_base, DroneKillWords{}, Fns(), Slots()).ok && HasLine("a slot does not hold the pinned function"),
+        "the slot mismatch was not refused");
   KeyHog hog;
   const DroneKillInstall r = Reset(Only(true, true, true, true, true));
   CHECK(!r.ok, "installed with no pthread key");
   CHECK(g_w[0x20 / 8] == reinterpret_cast<uintptr_t>(&FakeActor) && g_w[0x28 / 8] == reinterpret_cast<uintptr_t>(&FakeEnter) &&
             g_w[g_fire_slot / 8] == reinterpret_cast<uintptr_t>(&FakeFire) && g_w[0x38 / 8] == reinterpret_cast<uintptr_t>(&FakeAttack),
         "no key: a word was swapped");
-  CHECK(HasLine("dronekill: OFF, nothing changed", 3) && HasLine("no pthread key"), "no key: the refusal is not loud");
+  const std::string code = "error=" + std::to_string(EAGAIN);  // what pthread_key_create answers when the process has no key left
+  CHECK(HasLine("dronekill: OFF, nothing changed", 3) && HasLine("no pthread key") && HasLine(code.c_str()), "no key: the refusal is not loud, or carries no error code");
   CHECK(!DroneKillShotActive(), "no key: shot active");
 }
 

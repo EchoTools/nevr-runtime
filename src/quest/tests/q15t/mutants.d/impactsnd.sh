@@ -127,4 +127,6 @@ runm impactsnd thread_logged_each_call src/impactsnd.cpp 's/ == tid) return;/ ==
 runm impactsnd thread_cap_value     src/impactsnd.cpp 's/kThreadLines = 24;/kThreadLines = 1000;/'
 runm impactsnd depth_shared_word    src/impactsnd.cpp "s/^ThreadWord g_t_shutdown_depth;.*/$SHARED_WORD g_t_shutdown_depth;/"
 runm impactsnd depth_not_restored   src/impactsnd.cpp 's/^  g_t_shutdown_depth.Set(depth);$/  (void)depth;/'
-runm impactsnd key_failure_ignored  src/impactsnd.cpp 's/if (!g_t_shutdown_depth.Create()) {/if (!g_t_shutdown_depth.Create() \&\& false) {/'
+runm impactsnd key_failure_ignored  src/impactsnd.cpp 's/g_t_shutdown_depth.Create(); key_error != 0) {/g_t_shutdown_depth.Create(); key_error != 0 \&\& false) {/'
+runm impactsnd key_before_checks    src/impactsnd.cpp 's/^  g_t0 = Now();$/  g_t0 = Now();\n  g_t_shutdown_depth.Create();/'
+runm impactsnd key_error_unlogged   src/impactsnd.cpp 's/{"error", e}, {"written", "0"}/{"written", "0"}, {"x", e}/'
