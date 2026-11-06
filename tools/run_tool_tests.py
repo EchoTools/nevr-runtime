@@ -53,32 +53,37 @@ with replacements; the log keeps it as read.
 
 The plugins. pytest is started with plugin autoload off (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`: every pytest plugin
 installed on the machine would otherwise load, about 5 s per pytest start) and with the two the suite uses named,
-`-p xdist -p randomly`. With pytest-xdist the suite runs on `-n <workers>` processes: $NEVR_TEST_WORKERS is `logical` (the
-default: the smaller of one per hardware thread and what the memory of the run's cgroup holds, see "The memory"), `auto`
-(one per physical core) or a whole number, 0 for serial. Without pytest-xdist
-the suite runs serially, with one `WARN` line on stderr. Both records and the log's header carry `mode` (`parallel` or
-`serial`), `workers` and `serial_reason`. A `-n` in the arguments replaces $NEVR_TEST_WORKERS and is what the
-records name (`-n 0` is serial); `-p no:xdist` in the arguments makes the run serial.
+`-p xdist -p randomly`. With pytest-xdist the suite runs on `-n <workers>` processes. Unset, $NEVR_TEST_WORKERS gives
+one worker per hardware thread and at most 8 (DEFAULT_WORKER_CEILING: the suite takes 302 s on 8 workers and 313 s on
+16, and 1137 s on 1). Set, it is `logical` (one per hardware thread, no ceiling), `auto` (one per physical core) or a
+whole number, 0 for serial. Without pytest-xdist the suite runs serially, with one `WARN` line on stderr. Both
+records and the log's header carry `mode` (`parallel` or `serial`), `workers` and `serial_reason`, and `workers_source`
+(`default`, `NEVR_TEST_WORKERS` or `-n in the arguments`); for the default, `workers_basis` names the CPUs, the ceiling
+and which bound the count. A `-n` in the arguments replaces $NEVR_TEST_WORKERS and is what the records name (`-n 0` is
+serial); `-p no:xdist` in the arguments makes the run serial.
 
 The memory (#2195). The run reads the cgroup it runs in (`/proc/self/cgroup`; the root is $NEVR_TEST_CGROUP_ROOT, else
-/sys/fs/cgroup). With no worker count given, the count is the smaller of the CPUs and (headroom - MEMORY_BASE_BYTES) //
-MEMORY_PER_WORKER_BYTES, at least 1, where the headroom is the least `memory.max` - used among the run's cgroup and
-every ancestor (used: `memory.current` less the inactive file cache); the constants are the peaks measured at 1, 8, 16
-and 32 workers. `NEVR_TEST_WORKERS` and `-n` still win. Both records carry `workers_source` (`default`,
-`NEVR_TEST_WORKERS` or `-n in the arguments`) and, for the default, `workers_basis` (the CPUs, the headroom, the cgroup
-that binds, the count each allows, and which bound it). The end record carries `memory`: the cgroup's `memory.peak`, its
-`oom_kill` events during the run, the limiting cgroup's peak and events, and `oom_killed` with `oom_killed_in`, true
-when the run's own cgroup saw an oom_kill, or when the limiting cgroup saw one and a signal stopped the run or killed
-pytest (the SIGTERM systemd sends the other processes of a scope the kernel killed in is then that, not an interrupt).
-A `test-tools: memory ...` line precedes the end line in the log, and `oom_killed=<cgroup>` follows the end line's
-`rc`.
+/sys/fs/cgroup), that cgroup alone: the kernel counts a kill in the cgroup of the process it killed and in every cgroup
+above it, so a slice counts every scope's kills and says nothing about this run. The end record carries `memory`: the
+cgroup's `memory.peak` read through a descriptor reset when the run starts (`peak_since` is `run start`; where the
+kernel refuses the reset it is `cgroup creation`, the lifetime peak, which a fresh scope makes the run's), the cgroup's
+`oom` and `oom_kill` events counted over the run (`memory.events.local`, `memory.events` where a tree has no such
+file), and `oom_killed` with `oom_killed_in`: true when the run's own cgroup saw an oom_kill. The SIGTERM that systemd
+sends the rest of a scope the kernel killed in is then that, not an interrupt. A `test-tools: memory ...` line precedes
+the end line in the log, and `oom_killed=<cgroup>` follows the end line's `rc`.
 
-The lock. One run at a time per log directory: an exclusive flock on <log dir>/run.lock, taken before the start record
-and held until the run ends. The default log directory is the same for every checkout on a machine, so the lock is
-machine-wide; a run with a log directory of its own has a lock of its own. A run that finds it held says who holds it
-(pid and checkout) on stderr and waits up to $NEVR_TEST_LOCK_WAIT_S (default 5400); both records carry `lock`
-(`state`, `contended`, `wait_s`, `deadline_s`). Past the deadline the run does not start: exit 75, a
-`lock_timeout` record in runs.jsonl.
+The lock. A run of the whole suite (no arguments, or none naming a test path other than tools/tests itself) is one at a
+time per log directory: an exclusive flock on <log dir>/run.lock, taken before the start record and held until the run
+ends. A run given test paths (a subset) is small and does not wait behind a whole suite: it takes no lock and its
+records say `lock: {"taken": false, "reason": "subset"}`. The default log directory is the same for every checkout on a machine, so the lock is
+machine-wide; a run with a log directory of its own has a lock of its own. The file names the holder (pid, checkout,
+start) while it runs. A run that finds it held says who holds it on stderr and waits up to $NEVR_TEST_LOCK_WAIT_S
+(default 5400); both records carry `lock` (`taken`, `state`, `contended`, `holder`, `wait_s`, `deadline_s`, `handoff`). Past the
+deadline the run does not start: exit 75 and a `lock_timeout` record that names the holder then. A SIGINT, SIGTERM or
+SIGHUP during the wait stops it the same way: exit 128 + the signal and a `lock_wait_interrupted` record. A caller that
+holds the lock itself and runs more after the runner (a wrapper) sets $NEVR_TEST_LOCK_HELD to the lock file: the run
+does not take it again and records `state` `held_by_caller`; a variable that names another file is ignored, and one
+that names a lock nobody holds is taken here, each with a `WARN` line and a note in `handoff`.
 
 The environment. pytest is started with a fixed one, so a run gives the same answer for whoever starts it:
 `HERMETIC_SET` (no user or system git configuration, a fixed identity, no commit or tag signing, `main` as the
@@ -89,6 +94,7 @@ holds the two equal.
 
 Exit code: pytest's. Exceptions, each loud on stderr:
 - 75 when the lock was not free within $NEVR_TEST_LOCK_WAIT_S: no pytest ran;
+- 128 + n when signal n came while the run waited for the lock: no pytest ran;
 - 2 before pytest runs, when the log directory, the log or the start record cannot be written, the
   echo threads cannot start, `--junitxml` is passed (the run owns its XML path), a wait above is
   not a positive number of seconds, the lock file cannot be opened, or $NEVR_TEST_WORKERS is not `auto`, `logical` or a whole number: a run whose record cannot be kept is refused, never run
@@ -157,15 +163,13 @@ def seconds_from_env(name: str, default: float):
 
 # The plugins the suite uses, as (name for `-p`, module that provides it); pytest starts with autoload off and these.
 SUITE_PLUGINS = (("xdist", "xdist"), ("randomly", "pytest_randomly"))
-# $NEVR_TEST_WORKERS when it is unset: one worker per hardware thread, or fewer when the cgroup's memory holds fewer.
+# $NEVR_TEST_WORKERS when it is unset (a setting of that word is refused: only a count, `auto` or `logical` is one).
 DEFAULT_WORKERS = "default"
-# What a run costs in memory, from the `memory.peak` of the run's scope for the whole suite at each worker count (#2195):
-# 1 worker 1.40 GiB, 8 workers 3.20 GiB (2.73 GiB with a build running beside it), 16 workers 3.06 GiB, and 32 workers
-# more than 4.39 GiB (the scope's 4500M cap killed it). The peak does not grow past about 8 workers (the wall time
-# does not fall either: 1137 s, 302 s, 313 s), so a fit of the first two points over-states 16 and 32, which is the
-# safe side. The controller and the tests that run outside a worker cost the base; each worker costs the rest.
-MEMORY_BASE_BYTES = 1280 * 1024 ** 2
-MEMORY_PER_WORKER_BYTES = 256 * 1024 ** 2
+# The worker count of a run that is given none: one per hardware thread, at most this many. Measured on the whole suite
+# (#2195): 1 worker took 1137 s, 8 workers 302 s, 16 workers 313 s, so more than 8 buys no time; the run's cgroup peaked
+# at 1.40 GiB with 1 worker, 3.20 GiB with 8 (2.73 GiB with a build beside it), 3.06 GiB with 16, and above 4.39 GiB with
+# 32 (a 4500M cap killed that run). Eight is the fastest count and the one that fits a 6 GiB slice beside a build.
+DEFAULT_WORKER_CEILING = 8
 CGROUP_ROOT = "/sys/fs/cgroup"
 LOCK_NAME = "run.lock"
 EXIT_LOCK_TIMEOUT = 75
@@ -311,10 +315,12 @@ def plugin_names(tokens: list) -> list:
 
 
 def workers_setting(environ):
-    """$NEVR_TEST_WORKERS as `auto`, `logical` or a whole number, `default` when it is unset; None when it is none of
-    them."""
-    raw = environ.get("NEVR_TEST_WORKERS") or DEFAULT_WORKERS
-    if raw in ("auto", "logical", DEFAULT_WORKERS):
+    """$NEVR_TEST_WORKERS as `auto`, `logical` or a whole number, `default` when it is unset or empty; None when it is
+    none of them."""
+    raw = environ.get("NEVR_TEST_WORKERS")
+    if not raw:
+        return DEFAULT_WORKERS
+    if raw in ("auto", "logical"):
         return raw
     return int(raw) if raw.isascii() and raw.isdigit() else None
 
@@ -331,6 +337,19 @@ def given_workers(args: list):
         elif tok.startswith("-n") and len(tok) > 2 and not tok.startswith("--"):
             given = tok[2:]
     return given
+
+
+SUITE_DIR = pathlib.Path(__file__).resolve().parent / "tests"
+
+
+def is_subset(args: list) -> bool:
+    """True when the arguments name test paths and not the whole suite: a file or directory that exists (a `::` node id
+    is cut off), none of them `tools/tests` itself. Such a run is small and does not take the lock. No path (the
+    default run, or only options) is the whole suite. An option's value that happens to be an existing path
+    (`--rootdir .`) counts as a path: that run does not lock, which costs nothing but the serialization."""
+    paths = [pathlib.Path(tok.split("::", 1)[0]).resolve() for tok in args
+             if not tok.startswith("-") and tok.split("::", 1)[0] and os.path.exists(tok.split("::", 1)[0])]
+    return bool(paths) and SUITE_DIR not in paths
 
 
 def logical_cpus() -> int:
@@ -388,101 +407,97 @@ def cgroup_dir(root, cgroup: str) -> pathlib.Path:
     return pathlib.Path(root) / cgroup.lstrip("/")
 
 
-def cgroup_chain(cgroup: str) -> list:
-    """`cgroup` and each of its ancestors, the cgroup first: "/a/b" gives ["/a/b", "/a", "/"]."""
-    chain = []
-    path = pathlib.PurePosixPath(cgroup)
-    while True:
-        chain.append(str(path))
-        if path.parent == path:
-            return chain
-        path = path.parent
-
-
-def memory_limit(root, cgroup):
-    """The cgroup, `cgroup` or one above it, that has the least memory left before its `memory.max`, as
-    {"cgroup", "max_bytes", "used_bytes", "headroom_bytes"}; None when none of them has a limit or none can be read.
-
-    Used is `memory.current` less the inactive file cache (`memory.stat`): the kernel gives that back before it kills
-    anything. An ancestor counts as well as the cgroup itself, since the kernel kills at the first one that is full:
-    the scope a run starts in is capped at 8 GiB in the usual command, and the slice above it at 6."""
-    if cgroup is None:
-        return None
-    tightest = None
-    for path in cgroup_chain(cgroup):
-        directory = cgroup_dir(root, path)
-        limit, current = read_value(directory / "memory.max"), read_value(directory / "memory.current")
-        if limit is None or current is None:
-            continue
-        stat = read_keys(directory / "memory.stat") or {}
-        used = max(0, current - stat.get("inactive_file", 0))
-        found = {"cgroup": path, "max_bytes": limit, "used_bytes": used, "headroom_bytes": limit - used}
-        if tightest is None or found["headroom_bytes"] < tightest["headroom_bytes"]:
-            tightest = found
-    return tightest
-
-
-def fit_workers(cpus: int, limit, base: int = None, per_worker: int = None) -> dict:
-    """The worker count of a run that is given no count: the smaller of the CPUs and what the memory holds.
-
-    `limit` is `memory_limit`'s answer. The memory holds (headroom - base) // per_worker workers, and at least one.
-    The returned dict is the basis the records keep: the count, what bound it (`cpu` or `memory`), and the numbers."""
-    base = MEMORY_BASE_BYTES if base is None else base
-    per_worker = MEMORY_PER_WORKER_BYTES if per_worker is None else per_worker
-    cpus = max(1, cpus)
-    basis = {"workers": cpus, "limited_by": "cpu", "cpus": cpus, "base_bytes": base, "per_worker_bytes": per_worker,
-             "limit_cgroup": None, "memory": "no memory limit found in the run's cgroups"}
-    if limit is None:
-        return basis
-    memory_workers = max(1, (limit["headroom_bytes"] - base) // per_worker)
-    basis.update(workers=min(cpus, memory_workers), limited_by="memory" if memory_workers < cpus else "cpu",
-                 memory_workers=memory_workers, limit_cgroup=limit["cgroup"], limit_bytes=limit["max_bytes"],
-                 used_bytes=limit["used_bytes"], headroom_bytes=limit["headroom_bytes"],
-                 memory="the headroom of the tightest memory.max above the run")
-    return basis
-
-
 class MemoryWatch:
-    """What the run's cgroup and the cgroup that limits it say about memory, at the start and at the end.
+    """What the run's own cgroup says about memory: its peak, and the kernel's OOM kills of processes in it.
 
-    The events are counted from the start (a shared cgroup keeps the counts of every run before this one)."""
+    Only the run's own cgroup is read. The kernel counts a kill in the cgroup of the process it killed and in every
+    cgroup above it, so a slice's `memory.events` counts every scope's kills, and a kill in another scope says nothing
+    about this run. The kills are `memory.events.local` (those of processes directly in this cgroup; `memory.events`
+    where a tree has no such file), counted from the start: a shared cgroup keeps the counts of every run before this
+    one. The peak is read through a descriptor opened, and reset by a write, at the start (kernel 6.12 and later: the
+    reset is per descriptor), so it is the run's peak and not the cgroup's lifetime peak; where the reset is refused
+    (`peak_since` says `cgroup creation`), it is the lifetime peak, which a fresh scope makes the run's."""
 
     def __init__(self, root, cgroup):
-        self.root = root
         self.cgroup = cgroup
-        limit = memory_limit(root, cgroup)
-        self.limit_cgroup = limit["cgroup"] if limit else None
-        self.own_events = self.events(cgroup)
-        self.limit_events = self.events(self.limit_cgroup)
+        self.directory = cgroup_dir(root, cgroup) if cgroup is not None else None
+        self.events_at_start = self.events()
+        self.peak_fd, self.peak_reset = self.open_peak()
 
-    def events(self, cgroup):
-        return read_keys(cgroup_dir(self.root, cgroup) / "memory.events") if cgroup is not None else None
+    def events(self):
+        if self.directory is None:
+            return None
+        local = read_keys(self.directory / "memory.events.local")
+        return local if local is not None else read_keys(self.directory / "memory.events")
+
+    def open_peak(self) -> tuple:
+        """(a descriptor on memory.peak or None, whether its peak was reset to this moment)."""
+        if self.directory is None:
+            return None, False
+        path = self.directory / "memory.peak"
+        try:
+            fd = os.open(path, os.O_RDWR)
+        except OSError:
+            try:
+                return os.open(path, os.O_RDONLY), False
+            except OSError:
+                return None, False
+        try:
+            os.write(fd, b"0")
+            return fd, True
+        except OSError:
+            return fd, False
+
+    def peak(self):
+        if self.peak_fd is None:
+            return None
+        try:
+            text = os.pread(self.peak_fd, 64, 0).decode("ascii", errors="replace").strip()
+        except OSError:
+            return None
+        return int(text) if text.isascii() and text.isdigit() else None
 
     @staticmethod
     def delta(before, after, name: str) -> int:
         return max(0, after.get(name, 0) - before.get(name, 0)) if before is not None and after is not None else 0
 
-    def report(self, interrupted: bool) -> dict:
-        """The end record's `memory`. `interrupted` is true when a signal stopped the run or the kernel's SIGKILL
-        killed pytest: an OOM kill in the limiting cgroup (another scope's process) then explains it, and `oom_killed`
-        is true. An OOM kill in the run's own cgroup is always the run's."""
-        own_now = self.events(self.cgroup)
+    def report(self) -> dict:
+        """The end record's `memory`; closes the peak descriptor."""
+        now = self.events()
+        peak = self.peak()
+        if self.peak_fd is not None:
+            os.close(self.peak_fd)
+            self.peak_fd = None
         if self.cgroup is None:
             state = "no cgroup v2"
-        elif own_now is None and self.peak(self.cgroup) is None:
+        elif now is None and peak is None:
             state = "unreadable"
         else:
             state = "ok"
-        own = self.delta(self.own_events, own_now, "oom_kill")
-        limit = self.delta(self.limit_events, self.events(self.limit_cgroup), "oom_kill")
-        killed_in = self.cgroup if own > 0 else self.limit_cgroup if interrupted and limit > 0 else None
-        return {"state": state, "cgroup": self.cgroup, "peak_bytes": self.peak(self.cgroup),
-                "oom": self.delta(self.own_events, own_now, "oom"), "oom_kill": own,
-                "limit_cgroup": self.limit_cgroup, "limit_peak_bytes": self.peak(self.limit_cgroup),
-                "limit_oom_kill": limit, "oom_killed": killed_in is not None, "oom_killed_in": killed_in}
+        kills = self.delta(self.events_at_start, now, "oom_kill")
+        return {"state": state, "cgroup": self.cgroup, "peak_bytes": peak,
+                "peak_since": "run start" if self.peak_reset else "cgroup creation",
+                "oom": self.delta(self.events_at_start, now, "oom"), "oom_kill": kills,
+                "oom_killed": kills > 0, "oom_killed_in": self.cgroup if kills > 0 else None}
 
-    def peak(self, cgroup):
-        return read_value(cgroup_dir(self.root, cgroup) / "memory.peak") if cgroup is not None else None
+
+class LockInterrupted(Exception):
+    """A signal arrived while the run waited for the lock."""
+
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def lock_holder(path: pathlib.Path):
+    """Who the lock file says holds the lock: its JSON ({"pid", "checkout", "start"}), else its text, else None."""
+    text = (read_text(path) or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
 
 
 class MachineLock:
@@ -490,31 +505,57 @@ class MachineLock:
     record until the run ends (or the process does: a killed run frees it). Every seat on a machine shares the default
     log directory, so the lock is machine-wide; a test that keeps its records in a directory of its own has a lock of
     its own, so a run a test starts never waits for the run that started the test. The file holds the holder's pid and
-    checkout while it runs, for the line a waiting run prints."""
+    checkout while it runs, for the line a waiting run prints and the record of one that gives up.
+
+    A caller that already holds the lock (a wrapper that goes on to run something else after the runner) says so with
+    $NEVR_TEST_LOCK_HELD=<the lock file>: the runner then does not take it again, and records it as held by its caller.
+    The claim is checked: a lock nobody holds is taken here, and the record says the claim was wrong."""
 
     def __init__(self):
         self.fd = None
         self.info = None
 
-    def acquire(self, log_dir: pathlib.Path, deadline_s: float) -> dict:
-        """Take the lock, waiting up to `deadline_s`; {"path", "state": acquired or timeout, "contended" (another run
-        held it when this one asked), "wait_s", "deadline_s"}.
-        A lock file that cannot be opened raises OSError."""
+    def acquire(self, log_dir: pathlib.Path, deadline_s: float, handoff=None) -> dict:
+        """Take the lock, waiting up to `deadline_s`. Returns {"path", "state", "contended" (another run held it when
+        this one asked), "holder" (who held it then), "wait_s", "deadline_s", "handoff", "signal"}; `state` is
+        `acquired`, `held_by_caller`, `timeout` or `interrupted` (a SIGINT, SIGTERM or SIGHUP came while it waited, named
+        by `signal`). A lock file that cannot be opened raises OSError."""
         path = log_dir / LOCK_NAME
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)  # close-on-exec: pytest does not inherit it
         started = time.monotonic()
-        info = {"path": str(path), "state": "acquired", "contended": False, "wait_s": 0.0, "deadline_s": deadline_s}
+        info = {"taken": True, "path": str(path), "state": "acquired", "contended": False, "holder": None, "wait_s": 0.0,
+                "deadline_s": deadline_s, "handoff": None, "signal": None}
+        claimed = bool(handoff) and os.path.realpath(handoff) == os.path.realpath(path)
+        if handoff and not claimed:
+            info["handoff"] = f"ignored: $NEVR_TEST_LOCK_HELD names {handoff}, not {path}"
+        previous = self.catch_signals()
+        keep = False
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            info["contended"] = True
-            holder = read_text(path) or "unknown holder"
-            report(f"test-tools: waiting for the machine-wide test lock {path} (holder: {holder.strip()}); "
-                   f"giving up after {deadline_s:g} s")
-            if not self.block(fd, deadline_s):
-                info["state"] = "timeout"
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                keep = True
+                if claimed:
+                    info["handoff"] = "wrong: $NEVR_TEST_LOCK_HELD names this lock but nobody held it; taken here"
+            except BlockingIOError:
+                info["holder"] = lock_holder(path)
+                if claimed:
+                    info["state"], info["handoff"] = "held_by_caller", "held by the caller"
+                else:
+                    info["contended"] = True
+                    report(f"test-tools: waiting for the machine-wide test lock {path} (holder: "
+                           f"{json.dumps(info['holder'])}); giving up after {deadline_s:g} s")
+                    if self.block(fd, deadline_s):
+                        keep = True
+                    else:
+                        info["state"], info["holder"] = "timeout", lock_holder(path)
+        except LockInterrupted as exc:
+            info["state"], info["signal"], info["holder"] = "interrupted", signal_name(exc.signum), lock_holder(path)
+            keep = False
+        finally:
+            for s, handler in previous.items():
+                signal.signal(s, handler)
         info["wait_s"] = round(time.monotonic() - started, 6)
-        if info["state"] == "timeout":
+        if not keep:
             os.close(fd)
             self.info = info
             return info
@@ -523,6 +564,15 @@ class MachineLock:
                                   "start": datetime.datetime.now(datetime.timezone.utc).isoformat()}).encode(), 0)
         self.fd, self.info = fd, info
         return info
+
+    @staticmethod
+    def catch_signals() -> dict:
+        """Make SIGINT, SIGTERM and SIGHUP raise LockInterrupted until the caller puts back what this returns (a signal
+        this process inherited as ignored stays ignored)."""
+        def interrupted(signum, frame):
+            raise LockInterrupted(signum)
+
+        return {s: signal.signal(s, interrupted) for s in HANDLED_SIGNALS if signal.getsignal(s) is not signal.SIG_IGN}
 
     @staticmethod
     def block(fd: int, deadline_s: float) -> bool:
@@ -852,20 +902,28 @@ def run_locked(argv: list, lock: MachineLock) -> int:
         print(f"test-tools: FAIL cannot write the run record to {log_dir}: {exc}", file=sys.stderr)
         return 2
 
-    try:
-        lock_info = lock.acquire(log_dir, LOCK_WAIT_S)
-    except OSError as exc:
-        print(f"test-tools: FAIL cannot take the machine-wide test lock in {log_dir}: {exc}", file=sys.stderr)
-        return 2
-    if lock_info["state"] == "timeout":
-        print(f"test-tools: FAIL the machine-wide test lock {lock_info['path']} was not free after "
-              f"{lock_info['wait_s']:g} s (the deadline is $NEVR_TEST_LOCK_WAIT_S, {LOCK_WAIT_S:g} s): another run "
-              "holds it, so this one did not start", file=sys.stderr)
-        append_record(log_dir / "runs.jsonl", {"event": "lock_timeout", "time": datetime.datetime.now(
-            datetime.timezone.utc).isoformat(), "checkout": git("rev-parse", "--show-toplevel"), "cwd": cwd(),
-            "user": user(), "lock": lock_info})
-        return EXIT_LOCK_TIMEOUT
-
+    if is_subset(argv):
+        lock_info = {"taken": False, "reason": "subset"}
+    else:
+        try:
+            lock_info = lock.acquire(log_dir, LOCK_WAIT_S, os.environ.get("NEVR_TEST_LOCK_HELD"))
+        except OSError as exc:
+            print(f"test-tools: FAIL cannot take the machine-wide test lock in {log_dir}: {exc}", file=sys.stderr)
+            return 2
+    if lock_info.get("handoff") is not None and lock_info["handoff"].startswith(("wrong", "ignored")):
+        report(f"test-tools: WARN {lock_info['handoff']}")
+    if lock_info.get("state") in ("timeout", "interrupted"):
+        stopped = (f"the machine-wide test lock {lock_info['path']} was not free after {lock_info['wait_s']:g} s (the "
+                   f"deadline is $NEVR_TEST_LOCK_WAIT_S, {LOCK_WAIT_S:g} s)" if lock_info["state"] == "timeout" else
+                   f"{lock_info['signal']} stopped this run after {lock_info['wait_s']:g} s of waiting for the "
+                   f"machine-wide test lock {lock_info['path']}")
+        print(f"test-tools: FAIL {stopped}; it is held by {json.dumps(lock_info['holder'])}, so this run did not start",
+              file=sys.stderr)
+        append_record(log_dir / "runs.jsonl", {
+            "event": "lock_timeout" if lock_info["state"] == "timeout" else "lock_wait_interrupted",
+            "time": datetime.datetime.now(datetime.timezone.utc).isoformat(), "checkout": git("rev-parse", "--show-toplevel"),
+            "cwd": cwd(), "user": user(), "lock": lock_info})
+        return EXIT_LOCK_TIMEOUT if lock_info["state"] == "timeout" else 128 + signal.Signals[lock_info["signal"]].value
     head = git("rev-parse", "HEAD") or "unknown"
     status = git("status", "--porcelain")
     tree = "unknown" if status is None else "DIRTY" if status else "clean"
@@ -884,8 +942,10 @@ def run_locked(argv: list, lock: MachineLock) -> int:
         workers_source = "NEVR_TEST_WORKERS"
     else:
         workers_source = "default"
-        workers_basis = fit_workers(logical_cpus(), memory_limit(cgroup_root, watch.cgroup))
-        workers = workers_basis["workers"]
+        cpus = logical_cpus()
+        workers = min(cpus, DEFAULT_WORKER_CEILING)
+        workers_basis = {"cpus": cpus, "ceiling": DEFAULT_WORKER_CEILING, "workers": workers,
+                         "limited_by": "ceiling" if cpus > DEFAULT_WORKER_CEILING else "cpu"}
     # The plugins and workers come before the arguments, so an argument (`-n 2`, `-p no:xdist`) wins.
     plan = plugin_plan(args, os.environ, workers)
     child_env, env_removed = hermetic_environment(os.environ)
@@ -936,8 +996,9 @@ def run_locked(argv: list, lock: MachineLock) -> int:
                      + (f": {plan['serial_reason']}" if plan["serial_reason"] else "") + ")",
                      f"test-tools: worker basis source={workers_source} "
                      + (json.dumps(workers_basis, sort_keys=True) if workers_basis else "given"),
-                     f"test-tools: lock {lock_info['path']} {lock_info['state']} after {lock_info['wait_s']:g} s "
-                     f"(deadline {lock_info['deadline_s']:g} s)",
+                     (f"test-tools: lock {lock_info['path']} {lock_info['state']} after {lock_info['wait_s']:g} s "
+                      f"(deadline {lock_info['deadline_s']:g} s)" if lock_info["taken"] else
+                      f"test-tools: lock not taken ({lock_info['reason']}: the arguments name test paths)"),
                      f"test-tools: env set {' '.join(f'{k}={v}' for k, v in HERMETIC_SET.items())}",
                      f"test-tools: env removed {' '.join(env_removed) or 'none'}", f"test-tools: cmd {' '.join(cmd)}"):
             run.emit(line + "\n")
@@ -968,10 +1029,10 @@ def run_locked(argv: list, lock: MachineLock) -> int:
         else:
             rc = pytest_rc
         end = datetime.datetime.now(datetime.timezone.utc)
-        memory = watch.report(interrupted or (pytest_rc is not None and pytest_rc < 0))
-        run.emit(f"test-tools: memory peak={memory['peak_bytes']} cgroup={memory['cgroup']} state={memory['state']} "
-                 f"oom_kill={memory['oom_kill']} limit_cgroup={memory['limit_cgroup']} "
-                 f"limit_peak={memory['limit_peak_bytes']} limit_oom_kill={memory['limit_oom_kill']}\n")
+        memory = watch.report()
+        run.emit(f"test-tools: memory peak={memory['peak_bytes']} since={memory['peak_since']!r} "
+                 f"cgroup={memory['cgroup']} state={memory['state']} oom={memory['oom']} "
+                 f"oom_kill={memory['oom_kill']}\n")
         if memory["oom_killed"]:
             report(f"test-tools: FAIL the kernel's OOM killer stopped this run: {memory['oom_killed_in']} "
                    f"saw an oom_kill while it ran (peak {memory['peak_bytes']} bytes); the signal in the record "

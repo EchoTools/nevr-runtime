@@ -234,10 +234,7 @@ class RunToolTestsRecord(unittest.TestCase):
         """The environment of a run of the script: the caller's, with the log directory, a serial pytest (a
         suite of two tests does not need workers) and none of the variables that change which plugins load or
         what they add (a test sets the ones it means to test); an `extra` value of None removes the variable."""
-        # No cgroup tree to read: the default worker count then does not depend on the memory of the machine the
-        # test runs on (tools/tests/test_run_tool_tests_memory.py tests the count from a fake tree).
-        env = dict(os.environ, NEVR_TEST_LOG_DIR=str(log_dir), NEVR_TEST_WORKERS="0",
-                   NEVR_TEST_CGROUP_ROOT=str(self.root / "no-cgroup"))
+        env = dict(os.environ, NEVR_TEST_LOG_DIR=str(log_dir), NEVR_TEST_WORKERS="0")
         env.pop("PYTEST_ADDOPTS", None)
         env.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD", None)
         env.pop("PYTEST_XDIST_AUTO_NUM_WORKERS", None)
@@ -601,7 +598,7 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("test-tools: FAIL cannot append the start record", result.stderr)
         self.assertNotIn("passed", result.stdout)
-        self.assertEqual(sorted(p.name for p in self.logs.iterdir()), ["run.lock", "runs.jsonl"])
+        self.assertEqual(sorted(p.name for p in self.logs.iterdir()), ["runs.jsonl"])
 
     def start_slow(self, body: str = SLOW_SUITE, *extra_args: str, preexec_fn=None, merge_stderr=False,
                    prelude: str = "", **extra_env: str):
@@ -1473,9 +1470,7 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("test-tools: FAIL cannot start the run", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
-        # The lock file stays (it is the lock, not a record of the run).
-        self.assertEqual([p.name for p in self.logs.iterdir() if not p.name.startswith(".") and p.name != "run.lock"],
-                         [])
+        self.assertEqual([p.name for p in self.logs.iterdir() if not p.name.startswith(".")], [])
 
     def env_dump_run(self, **caller: str):
         """Run the script over ENV_SUITE with `caller` added to the caller's environment; (the child's environment, the start record)."""
