@@ -190,18 +190,18 @@ foreach(variant ok bad nocfi)
   if(variant STREQUAL "nocfi")
     set(_helper ok)
   endif()
-  add_executable(frames_probe_asm_${variant}
+  add_executable(frames_asm_probe_${variant}
     "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_asm.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_helper_${_helper}.cpp")
   set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_asm.cpp"
                               PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
   if(variant STREQUAL "nocfi")
-    target_compile_definitions(frames_probe_asm_nocfi PRIVATE PROBE_NO_CFI=1)
+    target_compile_definitions(frames_asm_probe_nocfi PRIVATE PROBE_NO_CFI=1)
   endif()
-  target_include_directories(frames_probe_asm_${variant} PRIVATE
+  target_include_directories(frames_asm_probe_${variant} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel" "${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_SOURCE_DIR}/../..")
-  target_link_libraries(frames_probe_asm_${variant} PRIVATE nevr_quest_got_hook)
-  target_compile_options(frames_probe_asm_${variant} PRIVATE -Wall -Wextra -Werror)
+  target_link_libraries(frames_asm_probe_${variant} PRIVATE nevr_quest_got_hook)
+  target_compile_options(frames_asm_probe_${variant} PRIVATE -Wall -Wextra -Werror)
 endforeach()
 
 # The sentinel links the integration, and with it every library package. (Defined here because the

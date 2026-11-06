@@ -484,7 +484,7 @@ var probeAsmEntryRe = regexp.MustCompile(`^probe_asm_entry$`)
 
 func probeAsm(t *testing.T, variant string) (builtArtifact, frameVerdict) {
 	t.Helper()
-	a := loadFrameGraph(t, probeExe(t, "frames_probe_asm_"+variant))
+	a := loadFrameGraph(t, probeExe(t, "frames_asm_probe_"+variant))
 	return a, walkHookFrames(a.graph)
 }
 
@@ -503,7 +503,7 @@ func TestFramesProbeAsmEntryIsReadAsARecord(t *testing.T) {
 	a, v := probeAsm(t, "ok")
 	entry, cont := addrOf(a, "probe_asm_entry"), addrOf(a, "probe_asm_continuation")
 	if entry == 0 || cont == 0 {
-		t.Fatalf("probe_asm_entry %#x or probe_asm_continuation %#x is not a function symbol of frames_probe_asm_ok", entry, cont)
+		t.Fatalf("probe_asm_entry %#x or probe_asm_continuation %#x is not a function symbol of frames_asm_probe_ok", entry, cont)
 	}
 	if a.recordEntries[entry] != 1 || len(a.recordEntries) != 1 {
 		t.Errorf("want exactly one record, naming the entry; got %v", a.recordEntries)
@@ -527,7 +527,7 @@ func TestFramesProbeAsmEntryIsReadAsARecord(t *testing.T) {
 	}
 	errs := recordEntryErrors(a.graph.names, map[uint64]bool{}, a.recordEntries, []*regexp.Regexp{probeAsmEntryRe})
 	if len(errs) != 0 || len(v.violations) != 0 {
-		t.Errorf("frames_probe_asm_ok: record errors %v, frame violations %v", errs, v.violations)
+		t.Errorf("frames_asm_probe_ok: record errors %v, frame violations %v", errs, v.violations)
 	}
 	if !anyMatches(v.annotatedReached, regexp.MustCompile(`LiveHelper`)) {
 		t.Errorf("the continuation's helper must be listed as an annotated function reached, got %v", v.annotatedReached)
@@ -538,7 +538,7 @@ func TestFramesProbeAsmEntryIsReadAsARecord(t *testing.T) {
 func TestFramesProbeAsmEntryContinuationIsWalked(t *testing.T) {
 	_, v := probeAsm(t, "bad")
 	if !strings.Contains(strings.Join(v.violations, "\n"), "LiveHelper") {
-		t.Fatalf("frames_probe_asm_bad: the unannotated personality helper behind the continuation must be reported, got %v", v.violations)
+		t.Fatalf("frames_asm_probe_bad: the unannotated personality helper behind the continuation must be reported, got %v", v.violations)
 	}
 }
 
@@ -546,6 +546,6 @@ func TestFramesProbeAsmEntryContinuationIsWalked(t *testing.T) {
 func TestFramesProbeAsmEntryWithoutCFIFails(t *testing.T) {
 	_, v := probeAsm(t, "nocfi")
 	if !strings.Contains(strings.Join(v.violations, "\n"), "probe_asm_entry") || !strings.Contains(strings.Join(v.violations, "\n"), "no FDE") {
-		t.Fatalf("frames_probe_asm_nocfi: the entry with no FDE must be reported, got %v", v.violations)
+		t.Fatalf("frames_asm_probe_nocfi: the entry with no FDE must be reported, got %v", v.violations)
 	}
 }

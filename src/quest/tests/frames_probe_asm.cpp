@@ -2,9 +2,9 @@
 // personality directly, across the call into the "game": the frame sensor's controls for the entry kind
 // (tests/quest frames_sensor_test.go). Never run: the sensor reads the linked executable.
 //
-//   frames_probe_asm_bad     the helper is NOT annotated: it is live across the call, so the sensor MUST fail it
-//   frames_probe_asm_ok      the helper is annotated NEVR_OUTSIDE_GAME_CALL and the entry carries CFI: the sensor MUST pass it
-//   frames_probe_asm_nocfi   the entry has no CFI, so no FDE and a game exception cannot unwind through it: the sensor MUST fail it
+//   frames_asm_probe_bad     the helper is NOT annotated: it is live across the call, so the sensor MUST fail it
+//   frames_asm_probe_ok      the helper is annotated NEVR_OUTSIDE_GAME_CALL and the entry carries CFI: the sensor MUST pass it
+//   frames_asm_probe_nocfi   the entry has no CFI, so no FDE and a game exception cannot unwind through it: the sensor MUST fail it
 //
 // The entry has the shape of the plugin's (dronemuzzle): act only when x30 is the game's call site, else jump to the next word
 // with the caller's registers untouched.
