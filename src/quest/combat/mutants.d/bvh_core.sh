@@ -29,7 +29,6 @@ runm bvh_ray_range_order src/quest/combat/bvh_core.h "s/ \&\& tmax_ >= tmin_;/;/
 runm bvh_box_swap src/quest/combat/bvh_core.h "s/    if (a > z) {/    if (false) {/" quest-host-combat bvh_core_test
 runm bvh_box_open src/quest/combat/bvh_core.h "s/return t0 <= t1 ? t0 : -1.0f;/return t0 < t1 ? t0 : -1.0f;/" quest-host-combat bvh_core_test
 runm bvh_box_never_miss src/quest/combat/bvh_core.h "s/return t0 <= t1 ? t0 : -1.0f;/return t0;/" quest-host-combat bvh_core_test
-runm bvh_box_tmax src/quest/combat/bvh_core.h "s/float t0 = r.tmin, t1 = tmax;/float t0 = r.tmin, t1 = r.tmax;/" quest-host-combat bvh_core_test
 runm bvh_tri_u_lo src/quest/combat/bvh_core.h "s/if (u < 0.0f) return false;/if (false) return false;/" quest-host-combat bvh_core_test
 runm bvh_tri_v_lo src/quest/combat/bvh_core.h "s/if (v < 0.0f || u + v > 1.0f) return false;/if (u + v > 1.0f) return false;/" quest-host-combat bvh_core_test
 runm bvh_tri_uv_sum src/quest/combat/bvh_core.h "s/if (v < 0.0f || u + v > 1.0f) return false;/if (v < 0.0f) return false;/" quest-host-combat bvh_core_test
@@ -52,18 +51,20 @@ runm bvh_trace_empty_lane src/quest/combat/bvh_core.h "s/if (q.id0\[l\] == -1) c
 runm bvh_trace_leaf_shift src/quest/combat/bvh_core.h "s/\& 0x7fffffffu) >> 5, cnt/\& 0x7fffffffu) >> 4, cnt/" quest-host-combat bvh_core_test
 runm bvh_trace_leaf_count src/quest/combat/bvh_core.h "s/cnt = static_cast<uint32_t>(id) \& 31u;/cnt = static_cast<uint32_t>(id) \& 15u;/" quest-host-combat bvh_core_test
 runm bvh_trace_inner_shift src/quest/combat/bvh_core.h "s/static_cast<uint32_t>(id) >> 3;/static_cast<uint32_t>(id) >> 2;/" quest-host-combat bvh_core_test
-runm bvh_trace_entry_prune src/quest/combat/bvh_core.h "s/if (entry\[sp\] > best) continue;/\/\*x\*\//" quest-host-combat bvh_core_test
-runm bvh_trace_any_stops src/quest/combat/bvh_core.h "s/if (any) goto done;/\/\*x\*\//" quest-host-combat bvh_core_test
+runm bvh_trace_any_stops src/quest/combat/bvh_core.h "s/if (any) goto done;/if (any \&\& false) goto done;/" quest-host-combat bvh_core_test
 runm bvh_trace_near_first src/quest/combat/bvh_core.h "s/(e1 < 0 || e0 <= e1)/(e1 < 0 || e0 >= e1)/" quest-host-combat bvh_core_test
 runm bvh_trace_best_closer src/quest/combat/bvh_core.h "s/        best = t;/        best = r.tmax;/" quest-host-combat bvh_core_test
 runm bvh_trace_tmax src/quest/combat/bvh_core.h "s/float best = r.tmax;/float best = 1e30f;/" quest-host-combat bvh_core_test
 runm bvh_trace_root src/quest/combat/bvh_core.h "s/stack\[sp\] = static_cast<uint32_t>(tree.root);/stack[sp] = 0;/" quest-host-combat bvh_core_test
 runm bvh_trace_id1 src/quest/combat/bvh_core.h "s/out->id1 = bq->id1\[bl\];/out->id1 = bq->id0[bl];/" quest-host-combat bvh_core_test
 runm bvh_trace_id0 src/quest/combat/bvh_core.h "s/out->id0 = bq->id0\[bl\];/out->id0 = bq->id1[bl];/" quest-host-combat bvh_core_test
-runm bvh_trace_u src/quest/combat/bvh_core.h "s/out->u = bu;/out->u = bv;/" quest-host-combat bvh_core_test
-runm bvh_trace_v src/quest/combat/bvh_core.h "s/out->v = bv;/out->v = bu;/" quest-host-combat bvh_core_test
-runm bvh_trace_normal src/quest/combat/bvh_core.h "s/out->n\[k\] = len > 0 ? g\[k\] \/ len : 0.0f;/out->n[k] = g[k];/" quest-host-combat bvh_core_test
+runm bvh_trace_u src/quest/combat/bvh_core.h "s/out->u = bu;/out->u = bv; (void)bu;/" quest-host-combat bvh_core_test
+runm bvh_trace_v src/quest/combat/bvh_core.h "s/out->v = bv;/out->v = bu; (void)bv;/" quest-host-combat bvh_core_test
+runm bvh_trace_normal src/quest/combat/bvh_core.h "s/out->n\[k\] = len > 0 ? g\[k\] \/ len : 0.0f;/out->n[k] = len > 0 ? g[k] : 0.0f;/" quest-host-combat bvh_core_test
 runm bvh_trace_normal_zero src/quest/combat/bvh_core.h "s/out->n\[k\] = len > 0 ? g\[k\] \/ len : 0.0f;/out->n[k] = g[k] \/ len;/" quest-host-combat bvh_core_test
 runm bvh_trace_hit_t src/quest/combat/bvh_core.h "s/out->t = best;/out->t = r.tmax;/" quest-host-combat bvh_core_test
 # Not listed, because the rule is redundant by construction and no test can tell it apart: the `det == 0 || !isfinite(det)` guard in
 # TriHit (IEEE division already ends in a miss), `u > 1` (u + v > 1 with v >= 0), the NaN-range compare (tmax >= tmin is false for NaN),
+
+# Each of the two prunes alone is redundant (a box behind a known hit is refused by either), so only both removed together change the work; the pop counter shows it.
+runm bvh_prune_both src/quest/combat/bvh_core.h "s/float t0 = r.tmin, t1 = tmax;/float t0 = r.tmin, t1 = r.tmax; (void)tmax;/;s/if (entry\[sp\] > best) continue;/if (false \&\& entry[sp] > best) continue;/" quest-host-combat bvh_core_test

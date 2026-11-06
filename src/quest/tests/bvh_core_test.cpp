@@ -267,6 +267,30 @@ static void TestNearestVsFirst() {
 
 // ---------------------------------------------------------------------------------------------------------------------
 // independent double-precision reference (shares no code with TriHit)
+// The traversal's two early exits change no answer, only the work: a far subtree is not entered once a nearer hit is known, and an any-hit
+// query stops at the first hit. The pop counter is what tells them apart from a traversal that does neither.
+static void TestPruning() {
+  std::vector<bt::TriIn> in;
+  for (int k = 0; k < 32; ++k) {
+    const float z = 3.0f * static_cast<float>(k);
+    const float a[3] = {-5, -5, z}, b[3] = {5, -5, z}, c[3] = {0, 5, z};
+    in.push_back(Tri(a, b, c, 100 + k, 0));
+  }
+  const bt::Built built = bt::Builder(in, 1).Build();
+  const Tree t = TreeOf(built);
+  const float o[3] = {0, 0, -10}, d[3] = {0, 0, 1};
+  Hit h;
+  uint32_t nearest = 0, any = 0, all = 0;
+  CHECK(Trace(t, Ray(o, d, 0, INFINITY), false, &h, &nearest) && h.id0 == 100, "pruning: nearest sheet id0 %d", h.id0);
+  CHECK(Trace(t, Ray(o, d, 0, INFINITY), true, nullptr, &any), "pruning: any-hit missed");
+  CHECK(!Trace(t, Ray(o, d, 0, 0.5f), false, &h, &all), "pruning: a short ray hit");
+  // 32 sheets, 63 nodes and leaves: the nearest sheet is found in 11 pops, because a box behind a known hit is not entered; an any-hit query stops at
+  // the first hit, 5 pops sooner; a ray too short to reach the first sheet pops the root and nothing else.
+  CHECK(nearest <= 12, "pruning: the nearest hit took %u pops", nearest);
+  CHECK(any + 3 <= nearest, "pruning: any-hit took %u pops, nearest %u", any, nearest);
+  CHECK(all == 1, "pruning: a short ray took %u pops", all);
+}
+
 static bool RefHit(const bt::TriIn& tr, const float* o, const float* d, double tmax, double* t) {
   double v0[3], e1[3], e2[3];
   for (int k = 0; k < 3; ++k) {
@@ -606,6 +630,7 @@ int main() {
   TestSingleTriangle();
   for (int leaf : {1, 2, 4, 31 * 4}) TestRoom(leaf);
   TestNearestVsFirst();
+  TestPruning();
   TestSoup();
   TestDegenerate();
   TestRootAndMalformed();
