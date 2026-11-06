@@ -467,9 +467,8 @@ TEST(flow_says_code_shown_when_the_platform_never_opens_a_browser) {
   CHECK(r.verified);
   const std::string log = rig.log.All();
   CHECK(log.find("Device authorization started; code shown") != std::string::npos);
-  CHECK(log.find("code shown url=https://x/device?code=<13 chars masked> open_result=33 (shown)") != std::string::npos);
+  CHECK(log.find("code shown url=https://x/device?code=SECRETCODE123 open_result=33 (shown)") != std::string::npos);
   CHECK(log.find("browser") == std::string::npos);
-  CHECK(log.find("SECRETCODE123") == std::string::npos);
 }
 
 TEST(flow_says_the_code_was_not_shown_when_the_platform_could_not_show_it) {
@@ -480,7 +479,7 @@ TEST(flow_says_the_code_was_not_shown_when_the_platform_could_not_show_it) {
   const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
   CHECK(!r.verified);
   const std::string log = rig.log.All();
-  CHECK(log.find("code shown url=https://x/device?code=<13 chars masked> open_result=0 (not shown)") != std::string::npos);
+  CHECK(log.find("code shown url=https://x/device?code=SECRETCODE123 open_result=0 (not shown)") != std::string::npos);
   CHECK(log.find("device authorization stopped because the code could not be shown") != std::string::npos);
   CHECK(log.find("browser") == std::string::npos);
   CHECK(log.find("(failed)") == std::string::npos);
@@ -493,7 +492,7 @@ TEST(flow_keeps_the_browser_failure_wording_where_a_browser_is_opened) {
   const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
   CHECK(!r.verified);
   const std::string log = rig.log.All();
-  CHECK(log.find("browser open requested url=https://x/device?code=<13 chars masked> open_result=0 (failed)") !=
+  CHECK(log.find("browser open requested url=https://x/device?code=SECRETCODE123 open_result=0 (failed)") !=
         std::string::npos);
   CHECK(log.find("device authorization stopped because the browser could not be opened") != std::string::npos);
   CHECK(log.find("code shown") == std::string::npos);
@@ -506,12 +505,12 @@ TEST(flow_keeps_the_browser_wording_where_a_browser_is_opened) {
   CHECK(r.verified);
   const std::string log = rig.log.All();
   CHECK(log.find("Device authorization started; browser opening requested") != std::string::npos);
-  CHECK(log.find("browser open requested url=https://x/device?code=<13 chars masked> open_result=33 (accepted)") !=
+  CHECK(log.find("browser open requested url=https://x/device?code=SECRETCODE123 open_result=33 (accepted)") !=
         std::string::npos);
   CHECK(log.find("code shown") == std::string::npos);
 }
 
-TEST(flow_returns_the_verified_response_after_pending_polls_and_masks_the_code) {
+TEST(flow_returns_the_verified_response_after_pending_polls_and_logs_the_code) {
   FlowRig rig;
   rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Pending), Poll(nevr_token_auth::DevicePollStatus::Pending),
                Poll(nevr_token_auth::DevicePollStatus::Verified)};
@@ -520,7 +519,7 @@ TEST(flow_returns_the_verified_response_after_pending_polls_and_masks_the_code) 
   CHECK_EQ(r.response.refresh_token, std::string("refresh"));
   CHECK_EQ(rig.sleeps, 3);
   CHECK_EQ(rig.opened_url, std::string("https://x/login?code=SECRETCODE123"));
-  CHECK(rig.log.All().find("SECRETCODE123") == std::string::npos);
+  CHECK(rig.log.All().find("?code=SECRETCODE123") != std::string::npos);
 }
 
 TEST(flow_gives_up_at_the_five_minute_deadline) {

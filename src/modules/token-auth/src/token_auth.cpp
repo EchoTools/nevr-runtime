@@ -421,7 +421,7 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
         if (ops.log) ops.log(level, message);
     };
     if (is_server && !ops.serverSignIn) {
-        log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Server mode disables device-code authentication");
+        log(EchoVR::LogLevel::Info, nevr_token_auth::ServerFlowRefusedLine());
         return false;
     }
     if (!m_configured) {
@@ -487,6 +487,7 @@ void DeviceAuth::SetStateForTest(const nevr_token_auth::test_hook::DeviceAuthSta
 static nevr_token_auth::AuthSnapshotStore s_snapshotStore;
 static DeviceAuth* s_auth = nullptr;
 static bool s_authAttempted = false;
+static bool s_serverPasswordSignIn = false;  // a server with auth.password: the sign-in is the password, no device code
 static std::thread* s_refreshThread = nullptr;
 static std::atomic<bool> s_refreshRunning{false};
 static std::mutex s_tokenMutex;
@@ -1165,6 +1166,22 @@ static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth, bool is_server
 // Public API
 // ---------------------------------------------------------------------------
 
+std::string nevr_token_auth::ServerPasswordSignInLine() {
+    return "[NEVR.AUTH] server signs in with auth.password from config.yaml; no device code needed";
+}
+
+std::string nevr_token_auth::ServerFlowRefusedLine() {
+    return "[NEVR.AUTH] device flow not run: it was called in server mode without server sign-in enabled in its "
+           "operations (a caller that builds its own operations; the server start-up never does)";
+}
+
+const char* nevr_token_auth::TokenAuthReadiness(bool is_server, bool has_device_auth, bool server_password_sign_in,
+                                                bool auth_ok) {
+    if (is_server && server_password_sign_in) return "password";
+    if (is_server && !has_device_auth) return "n/a";
+    return auth_ok ? "ok" : "failed";
+}
+
 std::string nevr_token_auth::ServerSignInPromptLine(const std::string& code, const std::string& loginUrl) {
     const std::string page = loginUrl + "?code=" + code;
     nlohmann::json line;
@@ -1207,7 +1224,8 @@ void nevr_token_auth::Init(uintptr_t /*base_addr*/, bool is_server) {
     const char* configuredPassword = s_configGet ? s_configGet("nevr_password") : nullptr;
     const bool serverSignsInByDeviceCode = is_server && (configuredPassword == nullptr || configuredPassword[0] == '\0');
     if (is_server && !serverSignsInByDeviceCode) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Server mode disables device-code authentication");
+        Log(EchoVR::LogLevel::Info, "%s", ServerPasswordSignInLine().c_str());
+        s_serverPasswordSignIn = true;
         (void)PublishAuthSnapshot(nullptr, AuthReadiness::Disabled);
         s_authAttempted = true;
         return;
@@ -1310,11 +1328,11 @@ NEVR_MODULE_API int token_auth_Init(const NevrModuleContext* ctx) {
 
     // Carry the real outcome, matching the richer sibling pattern in
     // platform_compat_Init (tls=%s createdir=%s msxml6=%s). Servers skip
-    // token auth entirely (early return in nevr_token_auth::Init), hence "n/a".
+    // device-code auth (early return in nevr_token_auth::Init): "password" when auth.password is the sign-in, else "n/a".
     const bool authOk = !nevr_token_auth::GetToken().empty();
     Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized mode=%s auth=%s",
         is_server ? "server" : "client",
-        (is_server && s_auth == nullptr) ? "n/a" : (authOk ? "ok" : "failed"));
+        nevr_token_auth::TokenAuthReadiness(is_server, s_auth != nullptr, s_serverPasswordSignIn, authOk));
     return 0;
 }
 
