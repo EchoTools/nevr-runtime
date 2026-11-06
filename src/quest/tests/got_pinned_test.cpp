@@ -27,10 +27,14 @@
 #include "hook_log.h"
 #include "login_title_hook.h"
 #include "quest/combat/combat_level_targets.h"
+#include "quest/combat/aibots_targets.h"
 #include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/gunconnect_targets.h"
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/memsys_targets.h"
+#include "quest/combat/netgame_targets.h"
+#include "quest/combat/weapon_arm_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/game_login_failures.h"
@@ -432,6 +436,51 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
 }
 
+// The pins of gun connect, practice AI bots and the new-profile gun hand (#2185: gunconnect_targets.h, aibots_targets.h, weapon_arm_targets.h and the
+// net game step they share, netgame_targets.h) against the real libr15: every function and object the modules call or read is defined at its pinned
+// address (the vtables the gun and equipment systems carry as their first word included), and every pinned code word is the one in the file.
+void CheckRealGunsAndBots(const LoadedElf& elf) {
+  namespace gt = nevr_quest::combat::gunconnect::targets;
+  namespace at = nevr_quest::combat::aibots::targets;
+  namespace wt = nevr_quest::combat::weapon_arm::targets;
+  namespace ng = nevr_quest::combat::netgame;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckDefinedAt(elf, gt::kConnectSymbol, gt::kConnectVaddr);
+  CheckDefinedAt(elf, gt::kHasTagSymbol, gt::kHasTagVaddr);
+  CheckDefinedAt(elf, gt::kTagCombatSymbol, gt::kTagCombatVaddr);
+  CheckDefinedAt(elf, gt::kGunCsVtableSymbol, gt::kGunCsVtableVaddr);
+  CheckDefinedAt(elf, ng::kNetGameMTSymbol, ng::kNetGameMTVaddr);
+  CheckDefinedAt(elf, ng::kUserActorSymbol, ng::kUserActorVaddr);
+  CheckDefinedAt(elf, at::kEnableSymbol, at::kEnableVaddr);
+  CheckDefinedAt(elf, at::kScenariosSymbol, at::kScenariosVaddr);
+  CheckDefinedAt(elf, at::kConnectBotSymbol, at::kConnectBotVaddr);
+  CheckDefinedAt(elf, at::kUpdateExpressionSymbol, at::kUpdateExpressionVaddr);
+  for (const auto* pin : {&wt::kClientProfile, &wt::kTString, &wt::kJsonInt, &wt::kIsValid, &wt::kGetArm, &wt::kSetArm, &wt::kInvoke, &wt::kQueue}) {
+    CheckDefinedAt(elf, pin->symbol, pin->vaddr);
+  }
+  CheckDefinedAt(elf, wt::kEquipCsVtableSymbol, wt::kEquipCsVtableVaddr);
+  QCHECK(gt::kGunCsVptrVaddr == 0x3696050 && wt::kEquipCsVptrVaddr == 0x3698200);  // the values an object's first word carries in the reference build
+  const struct {
+    const char* what;
+    const nevr_quest::combat::pinned::Word* words;
+    std::size_t count;
+  } lists[] = {{"gunconnect", gt::kWords, sizeof(gt::kWords) / sizeof(gt::kWords[0])},
+               {"aibots", at::kWords, sizeof(at::kWords) / sizeof(at::kWords[0])},
+               {"netgame", ng::kWords, sizeof(ng::kWords) / sizeof(ng::kWords[0])}};
+  for (const auto& list : lists) {
+    for (std::size_t i = 0; i < list.count; ++i) {
+      std::uint32_t have = 0;
+      std::memcpy(&have, mem + list.words[i].vaddr, sizeof(have));
+      if (have != list.words[i].word) {
+        std::fprintf(stderr, "libr15 %s: %s at %#llx is %#x, pinned %#x\n", list.what, list.words[i].what, static_cast<unsigned long long>(list.words[i].vaddr), have,
+                     list.words[i].word);
+        QCHECK(false);
+      }
+    }
+  }
+  QCHECK(at::kEnableFirstWord == at::kWords[0].word);
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -639,6 +688,7 @@ int main(int argc, char** argv) {
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
   CheckRealHeadsetGates(r15);
+  CheckRealGunsAndBots(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

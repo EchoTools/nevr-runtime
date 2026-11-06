@@ -17,15 +17,17 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 - `src/` the plugin (`src/<module>.{h,cpp}`, `plugin.cpp` installs them in the order the module docs fix).
 - `tests/` host tests: a CMake project, `src/quest/tests/q15t/CMakeLists.txt` (`just test-quest-q15t`, or `just test-quest-q15t <module>`), one `tests/mod/<module>.cmake` per module,
   `src/quest/tests/q15t/mutants.sh` and `src/quest/tests/q15t/mutants.d/` (the mutation run, about an hour, one at a time, not part of the gate).
-- `docs/quest/q15t/modules/<module>.md`, `docs/quest/q15t/adr/`: one document per module and the two plugin decisions.
+- `docs/quest/q15t/modules/<module>.md`: one document per module.
 - `CMakeLists.txt`: the options (defaults and the reason for each are in it), added by `src/quest/integration/CMakeLists.txt`.
 
 ## Defaults
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, meshstep (`Q15T_MESHSTEP`, #1555), gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, shaderstep (#1553), instmodel, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), ec, ecfx, droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
-  (`Q15T_T26`), and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
+- On: fxtrail, voipdrop, custctx, meshstep (`Q15T_MESHSTEP`, #1555), bvh, wallfire, impactsnd, music, sensorwd, shaderstep (#1553), instmodel, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), ec, ecfx, droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), `Q15T_SHIELDGAMMA=2`, and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
+- Gun connect, the practice AI bots and the new-profile gun hand are not this plugin's: the runtime owns them (`src/quest/combat/gunconnect.h`, `aibots.h`,
+  `weapon_arm.h`). Their switches are the `combat:` keys `gunconnect`, `aibots`, `aibots_scenario` and `weapon_arm` in `config.yaml`, each on by default; no kill file
+  or data file switches any of them. The marker files of the gun hand stay in this plugin's data directory, `files/q15t` (player state).
 - The three headset gates (party permissions, bot body, menu link) are not this plugin's: the runtime owns them
   (`src/quest/combat/headset_gates.h`). Their switches are the `combat:` keys `gate_perm`, `gate_bots`, `gate_link`, `gate_link_libs` in
   `config.yaml`; no kill file or data file switches any of the three gates. The bot-body gate acts only where this plugin's levelname is installed

@@ -1275,7 +1275,11 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"gate_link", &nevr_quest::CombatConfig::gateLink, true},
                       // The particle-renderer gate and the event-effect decision (#2188): on unless the file says false.
                       {"pfx", &nevr_quest::CombatConfig::pfx, true},
-                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true}};
+                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true},
+                      // Gun connect, practice AI bots and the new-profile gun hand (#2185): on unless the file says false.
+                      {"gunconnect", &nevr_quest::CombatConfig::gunconnect, true},
+                      {"aibots", &nevr_quest::CombatConfig::aibots, true},
+                      {"weapon_arm", &nevr_quest::CombatConfig::weaponArm, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);
@@ -1355,6 +1359,27 @@ void CombatGateLinkLibsIsATextThatTheFileGivesWhole() {
   }
 }
 
+// combat.aibots_scenario (#2185): a text like gate_link_libs. Absent, or not a string: no text from the file (RandomAttack stands). A string is the file's word, kept whole.
+void CombatAibotsScenarioIsATextThatTheFileGivesWhole() {
+  const std::string key = "combat.aibots_scenario";
+  for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  aibots: false\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.aibotsScenario.source != Source::kFile && r.config.combat.aibotsScenario.text[0] == '\0');
+  }
+  for (const char* word : {"patrol", "randomattack", "6", "off"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  aibots_scenario: ") + word + "\n");
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn) && !EventsContain(r, "unknown_nested=") && r.config.combat.aibotsScenario.source == Source::kFile);
+    CHECK(std::string(r.config.combat.aibotsScenario.text) == word);
+    CHECK(r.config.combat.aibots.on && r.config.combat.aibots.source != Source::kFile);  // the scenario key is not the switch
+  }
+  for (const char* value : {"[a, b]", "{a: 1}"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  aibots_scenario: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.aibotsScenario.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=not_a_string", LogLevel::kWarn));
+  }
+}
+
 int main() {
   InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
   InviteCodesNeedsLoginAndAServiceAddress();
@@ -1382,6 +1407,7 @@ int main() {
   CombatModuleSwitchesAreOnUnlessTheFileSaysFalse();
   CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides();
   CombatGateLinkLibsIsATextThatTheFileGivesWhole();
+  CombatAibotsScenarioIsATextThatTheFileGivesWhole();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   ClockLevelsOverrideIsOffUnlessTheDiagnosticsKeyIsTrue();

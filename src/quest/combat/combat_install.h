@@ -20,18 +20,19 @@
  *
  * The line (sentinel log), one per phase per process (N17: each module's outcome by name, and one aggregate):
  *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe","active":1,
- *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"results":"<name>=<status> ...","results_truncated":0,"msg":"..."}
+ *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"off":<n>,"results":"<name>=<status> ...","results_truncated":0,"msg":"..."}
  * `active`, `results_truncated` and `force` are 1 or 0, as in the sentinel's `config_loaded` line.
  * Info when every module installed (and when none is registered), Warning when one did not. A process where combat does not run writes
  * `"state":"skipped","active":0` once, Info, whichever phase asks first. A normal step that never got its moment writes
  * `"state":"not_started","reason":"post_load_hook_unavailable|game_exited_first"` once, Warning, and never runs afterwards.
  *
- * The config line (`combat_config`, ADR 0046 rule 4): one Info line with each `combat:` key's value and where it came from, written by
- * the constructor's configuration step: `force`, and each module's switch (`heaps`, `memsys`, ...) as `<module>` and `<module>_source`
- * (`config` when the file gave it, `default` otherwise). The step also hands the configuration to SetConfig, which the registration table's
- * rows read for their module's switch. A log line is one fixed 768-byte buffer (sentinel/hook_log.cpp), so a module whose keys do not fit the line
- * reports them on a line of its own, next to it: `combat_config_gates` (the headset gates, with the same `<key>` and `<key>_source`
- * fields; `gate_link_libs` is a text and is never logged, only its source).
+ * The config lines (ADR 0046 rule 4), written by the constructor's configuration step. `combat_config` is one Info line with the section-wide keys
+ * and, for the modules that predate the next record, their switches as `<module>` and `<module>_source` (`config` when the file gave it,
+ * `default` otherwise); `combat_config_gates` carries the headset gates' keys (`gate_link_libs` is a text and is never logged, only its source). A
+ * module whose table row names a switch (`Module::switchKey`) is reported by one `combat_config_switch` record of its own, generated from the table:
+ *   {"event":"combat_config_switch","module":"gunconnect","key":"combat.gunconnect","on":0|1,"source":"config|default"}
+ * so a unit adds a row, never a key on a line that one sentinel line (768 bytes) cannot hold. The step also hands the configuration to SetConfig,
+ * which the registration table's rows read for their module's switch.
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */
@@ -47,17 +48,23 @@ enum class Phase { kEarly, kNormal };
 const char* PhaseName(Phase phase) noexcept;  // "early", "normal"
 
 // What one module's install function answers: whether it installed, and a fixed token for the line (never a value).
+// `off` is a module that is switched off by its `combat:` key: nothing was installed and nothing is wrong, so it is neither installed nor
+// failed (`installed` is false) and the phase line counts it apart.
 struct ModuleResult {
   bool installed;
   const char* status;
+  bool off = false;
 };
 using InstallFn = ModuleResult (*)() noexcept;
 
 // One row of the registration table: the module's name (its `combat_<module>_*` events) and its step in each phase, null for none.
+// A module whose switch is reported as its own `combat_config_switch` record names its `config.yaml` key and the member that holds it.
 struct Module {
   const char* name;
   InstallFn early;
   InstallFn normal;
+  const char* switchKey = nullptr;                                          // e.g. "combat.gunconnect"; null: reported on the `combat_config` line
+  nevr_quest::CombatSwitch nevr_quest::CombatConfig::* switchMember = nullptr;
 };
 
 // What a phase did. `ran` is false when it did not run (combat is off in this process, or the phase already ran or was ended).
@@ -66,6 +73,7 @@ struct Outcome {
   std::size_t modules = 0;    // the modules that have a step in this phase
   std::size_t installed = 0;
   std::size_t failed = 0;
+  std::size_t off = 0;        // switched off by their `combat:` key: not installed, not failed
 };
 
 // The two steps, over the shipped table. Each runs at most once per process.

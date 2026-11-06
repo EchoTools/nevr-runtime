@@ -193,7 +193,7 @@ int main() {
   CHECK(CountLines("vrapi_SetClockLevels") == 0 && CountLines("vrapi_SetDisplayRefreshRate") == 0, "the plugin names a vrapi slot it does not install");
 
   // every compiled module is named in the init record
-  const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
+  const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",
                         "bvh",      "wallfire",   "impactsnd", "ec",         "ecfx",       "dronekill",  "dronemuzzle",
                         "powerboost", "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
   const std::string init = FindLine("q15t init");
@@ -206,7 +206,6 @@ int main() {
 
   // what must have installed, been switched off, or refused, on this image
   const char* kInstalled[] = {"bvh", "wallfire", "levelname", "boosterpool"};
-  const char* kArmed[] = {"gunconnect", "aibots"};
   const char* kOff[] = {"ec", "ecfx", "fxtrail"};
   struct Refusal {
     const char* module;
@@ -218,8 +217,6 @@ int main() {
                               {"shieldgamma", "unexpected_original"}};
   for (const char* m : kInstalled)
     CHECK(CountLines(std::string("module install module=") + m + " status=ok", 1) == 1, "module %s did not report status=ok at INFO", m);
-  for (const char* m : kArmed)
-    CHECK(CountLines(std::string("module install module=") + m + " status=tick_registered", 1) == 1, "module %s: no tick_registered INFO", m);
   for (const char* m : kOff)
     CHECK(CountLines(std::string("module install module=") + m + " status=off", 1) == 1, "module %s: a deliberate off must be INFO status=off", m);
   for (const Refusal& r : kRefused) {
@@ -257,25 +254,21 @@ int main() {
     if (g_lines[i].text.find("module install module=ecfx ") != std::string::npos) at_ecfx = i;
   CHECK(at_ecfx > at_ec, "ecfx (line %zu) must be installed after ec (line %zu)", at_ecfx, at_ec);
 
-  // the tick table: gunconnect, aibots, impactsnd, sensorwd and bvh register; dronekill, dronemuzzle, powerboost and
-  // weapon_arm did not install here, so they register nothing. The tick is installed once, after every registration.
-  CHECK(CountLines("game tick callbacks registered=5 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
+  // the tick table: impactsnd, sensorwd and bvh register; dronekill, dronemuzzle and powerboost did not install here, so they register nothing. The tick is installed once, after every registration.
+  CHECK(CountLines("game tick callbacks registered=3 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
   CHECK(CountLines("hook install hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok", 1) == 1, "the game tick was not installed ok");
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
   CHECK(CountLines("game tick callbacks") == 1, "more than one tick install record");
   CHECK(CountLines("module install FAILED") == 12, "%d FAILED lines, want 12", CountLines("module install FAILED"));
 
-  // one frame through the swapped tick slot, as CncaGame::Render calls it: the registered callbacks of gunconnect and aibots run
-  // (each starts, finds no game library on the host and says so once, at ERROR)
+  // one frame through the swapped tick slot, as CncaGame::Render calls it: the registered callbacks run without a fault
   static uintptr_t game[0x2000 / 8] = {};
   game[0] = base + Q15T_GAME_VPTR;
   reinterpret_cast<void (*)(void*)>(w[4])(game);
-  CHECK(CountLines("gunconnect off", 3) == 1 && CountLines("aibots off", 3) == 1, "gunconnect / aibots ticks did not run: gunconnect %d, aibots %d",
-        CountLines("gunconnect off", 3), CountLines("aibots off", 3));
 
   std::remove(off_file.c_str());
   rmdir(dir);
-  if (g_fail == 0) std::printf("wiring_test: all checks pass (21 modules named, 4 installed, 3 off, 12 refusals at ERROR, InitEx returned 0)\n");
+  if (g_fail == 0) std::printf("wiring_test: all checks pass (19 modules named, 4 installed, 3 off, 12 refusals at ERROR, InitEx returned 0)\n");
   else {
     for (const auto& l : g_lines) std::printf("  [%u] %s\n", l.level, l.text.c_str());
     std::printf("wiring_test: %d failure(s)\n", g_fail);

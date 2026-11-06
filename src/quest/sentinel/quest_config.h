@@ -178,6 +178,12 @@ struct CombatConfig {
   CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
   CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
   CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
+  // The three modules of #2185, each on unless the file says false (upstream's shipped build has all three on): gun connect, practice AI bots and
+  // the new-profile gun hand.
+  CombatSwitch gunconnect;    // `combat.gunconnect`: Connect(local user) for local practice guns the game left unconnected (combat/gunconnect.h)
+  CombatSwitch aibots;        // `combat.aibots`: EnableScenario once the bots of a combat match are in game (combat/aibots.h)
+  CombatText aibotsScenario;  // `combat.aibots_scenario`: 0-6 or a name or off; unset: RandomAttack
+  CombatSwitch weaponArm;     // `combat.weapon_arm`: a new profile starts with the gun in the right hand (combat/weapon_arm.h)
 };
 
 struct LogEvent {

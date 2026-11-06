@@ -5,14 +5,17 @@
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/aibots.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/gunconnect.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/combat/weapon_arm.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -30,6 +33,17 @@ ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on)
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
+
+// The three modules of #2185. Each is off unless its key says true; aibots also takes its scenario text and whether this is a development build.
+ModuleResult GunconnectNormal() noexcept { return gunconnect::Install(g_config.gunconnect.on); }
+ModuleResult AibotsNormal() noexcept {
+  aibots::Switches switches;
+  switches.on = g_config.aibots.on;
+  switches.scenario = g_config.aibotsScenario.source == nevr_quest::Source::kFile ? g_config.aibotsScenario.text : nullptr;
+  switches.devBuild = DevBuild();
+  return aibots::Install(switches);
+}
+ModuleResult WeaponArmNormal() noexcept { return weapon_arm::Install(g_config.weaponArm.on); }
 
 ModuleResult GatesNormal() noexcept {
   headset_gates::Switches switches;
@@ -53,6 +67,11 @@ constexpr std::array kModules{
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
+    // gunconnect, aibots, weapon_arm (#2185), in the plugin's order: they register tick callbacks, so they come after the tick's row, and before the
+    // gates, which the plugin installed after all its modules.
+    Module{"gunconnect", nullptr, &GunconnectNormal, "combat.gunconnect", &nevr_quest::CombatConfig::gunconnect},
+    Module{"aibots", nullptr, &AibotsNormal, "combat.aibots", &nevr_quest::CombatConfig::aibots},
+    Module{"weapon_arm", nullptr, &WeaponArmNormal, "combat.weapon_arm", &nevr_quest::CombatConfig::weaponArm},
     // gates (#2180): the plugin installed them after its tick and its modules; they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
@@ -102,7 +121,9 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     if (fn == nullptr) continue;
     const ModuleResult result = fn();
     ++outcome.modules;
-    if (result.installed) {
+    if (result.off) {
+      ++outcome.off;
+    } else if (result.installed) {
       ++outcome.installed;
     } else {
       ++outcome.failed;
@@ -121,13 +142,15 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
   if (outcome.modules == 0) {
     std::snprintf(msg, sizeof(msg), "no combat module has a step in this phase yet; nothing of combat's is installed");
   } else {
-    std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s", outcome.installed, outcome.modules,
+    char off[64] = "";
+    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off by %s config key", outcome.off, outcome.off == 1 ? "its" : "their");
+    std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s%s", outcome.installed, outcome.modules, off,
                   outcome.failed == 0 ? "" : "; the others keep the game's own behaviour");
   }
   sentinel::LogFields(outcome.failed == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install",
                       {{"phase", PhaseName(phase)}, {"state", "ran"}, {"variant", build_variant::VariantName(RecordedVariant())},
                        {"active", 1}, {"active_reason", ReasonName(ActiveReason())}, {"modules", outcome.modules},
-                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"results", results},
+                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"results", results},
                        {"results_truncated", truncated ? 1 : 0}, {"msg", msg}});
   return outcome;
 }
@@ -169,6 +192,14 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"gate_link", config.gateLink.on ? 1 : 0}, {"gate_link_source", source(config.gateLink.source)},
                        {"gate_link_libs_source", source(config.gateLinkLibs.source)},
                        {"msg", "the headset gates' keys (src/quest/combat/headset_gates.h); gate_link_libs is a text and is never logged, only where it came from"}});
+  // One record per module switch, generated from the registration table (combat_install.h): a unit adds a row, never a key on a line that one
+  // sentinel line (768 bytes) cannot hold.
+  for (const Module& module : kModules) {
+    if (module.switchMember == nullptr) continue;
+    const nevr_quest::CombatSwitch& sw = config.*module.switchMember;
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                        {{"module", module.name}, {"key", module.switchKey}, {"on", sw.on ? 1 : 0}, {"source", source(sw.source)}});
+  }
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }

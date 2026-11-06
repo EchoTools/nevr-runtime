@@ -6,6 +6,7 @@
 # in that header), with hidden visibility (nothing here may become an export, tests/quest TestExportAllowlist) and the
 # warnings-as-errors flags its siblings use. The sentinel links this target; --exclude-libs keeps it out of the export set.
 add_library(nevr_quest_combat STATIC
+  aibots.cpp
   combat_active.cpp
   combat_install.cpp
   combat_level.cpp
@@ -13,13 +14,16 @@ add_library(nevr_quest_combat STATIC
   combat_level.cpp
   combat_tick.cpp
   equip_refire.cpp
+  gamespace.cpp
+  gunconnect.cpp
   headset_gates.cpp
   heaps.cpp
   match_tags.cpp
   memsys.cpp
   pfx.cpp
   pfxtev.cpp
-  refresh_rate.cpp)
+  refresh_rate.cpp
+  weapon_arm.cpp)
 target_include_directories(nevr_quest_combat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_compile_options(nevr_quest_combat PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
