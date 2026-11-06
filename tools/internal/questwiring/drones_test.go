@@ -87,7 +87,7 @@ func TestDronekillHooksOnlyThroughTheManager(t *testing.T) {
 
 func TestTheDroneRowsAreInTheNormalStepInThePluginsOrderAndThePluginCarriesNeither(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
-	order := []string{`Module{"refresh_rate"`, `Module{"dronekill", nullptr, &DronekillNormal}`, `Module{"dronemuzzle", nullptr, &DronemuzzleNormal}`, `Module{"gates"`}
+	order := []string{`Module{"refresh_rate"`, `Module{"dronekill", nullptr, &DronekillNormal, "combat.dronekill"`, `Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle"`, `Module{"gates"`}
 	last := -1
 	for _, row := range order {
 		at := strings.Index(table, row)
