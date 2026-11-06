@@ -227,7 +227,7 @@ TEST(TelemetryPlayerRead, PlayersAreKeptByGameSlotNotByArrayOrder) {
   EXPECT_EQ(snap.playerInfo[5].teamIndex, 1);
   EXPECT_EQ(snap.playerInfo[2].teamIndex, 0);
   EXPECT_EQ(snap.playerInfo[9].teamIndex, 2);
-  EXPECT_EQ(snap.playerInfo[5].flags, Word(5, 1));
+  EXPECT_EQ(snap.playerInfo[5].entrantWord, Word(5, 1));
   EXPECT_EQ(snap.stats[5].stuns, 3u);
   EXPECT_EQ(snap.stats[2].stuns, 8u);
 }
@@ -353,7 +353,7 @@ TEST(TelemetryPlayerRead, OfTwoEntrantsWithOneSlotTheOneTheHandleTableNamesIsRea
   TelemetrySnapshot snap = Read(ng, &result);
   EXPECT_TRUE(snap.playerInfo[4].present);
   EXPECT_EQ(snap.playerInfo[4].teamIndex, 0);
-  EXPECT_EQ(snap.playerInfo[4].flags, Word(4, 0));
+  EXPECT_EQ(snap.playerInfo[4].entrantWord, Word(4, 0));
   EXPECT_EQ(snap.playerInfo[4].accountId, 40u);
   EXPECT_TRUE(snap.playerInfo[6].present);
   EXPECT_EQ(snap.playerCount, 2);
@@ -364,7 +364,7 @@ TEST(TelemetryPlayerRead, OfTwoEntrantsWithOneSlotTheOneTheHandleTableNamesIsRea
   snap = Read(ng, &result);
   EXPECT_TRUE(snap.playerInfo[4].present);
   EXPECT_EQ(snap.playerInfo[4].teamIndex, 1);
-  EXPECT_EQ(snap.playerInfo[4].flags, Word(4, 1));
+  EXPECT_EQ(snap.playerInfo[4].entrantWord, Word(4, 1));
   EXPECT_EQ(snap.playerInfo[4].accountId, 40u);
   EXPECT_EQ(snap.stats[4].stuns, 2u);
   EXPECT_EQ(snap.playerCount, 2);

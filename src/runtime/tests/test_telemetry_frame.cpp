@@ -312,6 +312,108 @@ TEST(TelemetryFrame, EachPlayerCarriesItsPossessionTimeAndPacketLoss) {
   EXPECT_FLOAT_EQ(frame.players(1).head().position().y(), 1.75f);
 }
 
+// PlayerState.flags as the pin packs it (telemetry/v2/echo_arena.proto, PlayerState.flags; #2269): bit 0
+// stunned, 1 invulnerable, 2 blocking, 3 possession, 4 is_emote_playing, bits 5-6 the team index (0 blue,
+// 1 orange, 2 spectator), bits 7-31 reserved. Written out here, not taken from telemetry_frame.h.
+constexpr uint32_t kStunned = 0x01;
+constexpr uint32_t kInvulnerable = 0x02;
+constexpr uint32_t kBlocking = 0x04;
+constexpr uint32_t kPossession = 0x08;
+constexpr uint32_t kEmote = 0x10;
+constexpr uint32_t kTeamOrange = 0x20;
+constexpr uint32_t kTeamSpectator = 0x40;
+
+TelemetrySnapshot::PlayerInfo Info(uint16_t team) {
+  TelemetrySnapshot::PlayerInfo pi{};
+  pi.present = true;
+  pi.teamIndex = team;
+  return pi;
+}
+
+TEST(TelemetryPlayerFlags, TheTeamIsInBitsFiveAndSix) {
+  using nevr_telemetry_frame::PackPlayerFlags;
+  EXPECT_EQ(PackPlayerFlags(Info(0), false), 0u);
+  EXPECT_EQ(PackPlayerFlags(Info(1), false), kTeamOrange);
+  EXPECT_EQ(PackPlayerFlags(Info(2), false), kTeamSpectator);
+}
+
+TEST(TelemetryPlayerFlags, EachStateHasTheBitThePinGivesIt) {
+  using nevr_telemetry_frame::PackPlayerFlags;
+  auto pi = Info(0);
+  pi.stunned = true;
+  EXPECT_EQ(PackPlayerFlags(pi, false), kStunned);
+  pi = Info(0);
+  pi.invulnerable = true;
+  EXPECT_EQ(PackPlayerFlags(pi, false), kInvulnerable);
+  pi = Info(0);
+  pi.blocking = true;
+  EXPECT_EQ(PackPlayerFlags(pi, false), kBlocking);
+  EXPECT_EQ(PackPlayerFlags(Info(0), true), kPossession);
+  pi = Info(0);
+  pi.emotePlaying = true;
+  EXPECT_EQ(PackPlayerFlags(pi, false), kEmote);
+}
+
+TEST(TelemetryPlayerFlags, NothingIsSetAboveBitSix) {
+  using nevr_telemetry_frame::PackPlayerFlags;
+  auto pi = Info(2);
+  pi.stunned = pi.invulnerable = pi.blocking = pi.emotePlaying = true;
+  pi.entrantWord = 0xFFFF;  // the entrant word is not the flags, whatever it holds
+  EXPECT_EQ(PackPlayerFlags(pi, true), 0x5Fu);
+  for (uint16_t team = 3; team <= 7; team++) {  // not a player's team: no team bits
+    EXPECT_EQ(PackPlayerFlags(Info(team), false), 0u) << "team " << team;
+  }
+}
+
+// A player in slot 9 (entrant word 0b01001 in bits 0-4, team 1 in bits 10-12) is sent as an orange player who
+// is not stunned and does not hold the disc; the holder, in slot 2, is sent with the possession bit.
+TEST(TelemetryFrame, ASlotNinePlayerIsNotStunnedOrHoldingTheDisc) {
+  TelemetrySnapshot snap = WithPlayer(WithPlayer(Cleared(), 2, 1), 9, 3);
+  snap.gameRead = true;
+  snap.playerInfo[9].entrantWord = static_cast<uint16_t>(9 | (1 << 10));
+  snap.playerInfo[9].teamIndex = 1;
+  snap.playerInfo[2].entrantWord = 2;
+  snap.playerInfo[2].teamIndex = 0;
+  snap.discOwnerHandle = 0x00010002u;  // slot 2, generation 1
+  telemetry::v2::EchoArenaFrame frame;
+  nevr_telemetry_frame::BuildArenaFrame(snap, &frame);
+  ASSERT_EQ(frame.players_size(), 2);
+  EXPECT_EQ(frame.players(0).slot(), 2);
+  EXPECT_EQ(frame.players(0).flags(), kPossession);
+  EXPECT_EQ(frame.players(1).slot(), 9);
+  EXPECT_EQ(frame.players(1).flags(), kTeamOrange);
+  EXPECT_EQ(frame.players(1).flags() & kStunned, 0u);
+  EXPECT_EQ(frame.players(1).flags() & kPossession, 0u);
+}
+
+TEST(TelemetryFrame, EachPlayersFlagsCarryItsStateAndTeam) {
+  TelemetrySnapshot snap = WithPlayer(WithPlayer(Cleared(), 4, 1), 9, 3);
+  snap.gameRead = true;
+  snap.playerInfo[4].teamIndex = 1;
+  snap.playerInfo[4].stunned = true;
+  snap.playerInfo[4].emotePlaying = true;
+  snap.playerInfo[9].teamIndex = 2;
+  snap.playerInfo[9].invulnerable = true;
+  snap.playerInfo[9].blocking = true;
+  snap.discOwnerHandle = 0x00030009u;  // slot 9, generation 3
+  telemetry::v2::EchoArenaFrame frame;
+  nevr_telemetry_frame::BuildArenaFrame(snap, &frame);
+  ASSERT_EQ(frame.players_size(), 2);
+  EXPECT_EQ(frame.players(0).flags(), kTeamOrange | kStunned | kEmote);
+  EXPECT_EQ(frame.players(1).flags(), kTeamSpectator | kInvulnerable | kBlocking | kPossession);
+}
+
+TEST(TelemetryFrame, ASnapshotTheGameDidNotReadSetsNoPossessionBit) {
+  TelemetrySnapshot snap = WithPlayer(Cleared(), 6, 2);
+  snap.gameRead = false;
+  snap.playerInfo[6].teamIndex = 1;
+  snap.discOwnerHandle = 0x00020006u;
+  telemetry::v2::EchoArenaFrame frame;
+  nevr_telemetry_frame::BuildArenaFrame(snap, &frame);
+  ASSERT_EQ(frame.players_size(), 1);
+  EXPECT_EQ(frame.players(0).flags(), kTeamOrange);
+}
+
 TEST(TelemetryFrame, TheStatusClockScoresAndDiscAreTheSnapshots) {
   TelemetrySnapshot snap = Cleared();
   snap.gameStatusHash = nevr_game_status_hash::PLAYING_1;

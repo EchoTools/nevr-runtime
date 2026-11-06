@@ -324,8 +324,9 @@ void TelemetryStreamer::RunDiagnostics() {
     logged++;
     const uint64_t accountId = info.accountId;
 
-    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Player slot=%u: name=%s, acct=%llu, flags=0x%04X, team=%u, ping=%u",
-        slot, info.displayName, static_cast<unsigned long long>(accountId), info.flags, info.teamIndex, info.ping);
+    Log(EchoVR::LogLevel::Debug,
+        "[TELEMETRY.DIAG] Player slot=%u: name=%s, acct=%llu, entrant_word=0x%04X, team=%u, ping=%u",
+        slot, info.displayName, static_cast<unsigned long long>(accountId), info.entrantWord, info.teamIndex, info.ping);
     // The pose, through the same reader as SnapshotGameState
     TelemetrySnapshot::PlayerTransform pose{};
     const nevr_telemetry_pose::PoseResult poseRead = nevr_telemetry_pose::ReadPlayerPose(
@@ -380,6 +381,13 @@ void TelemetryStreamer::ResolveFunctionPointers() {
   m_poseFunctions.readLocalVelocity = reinterpret_cast<pose::ReadLocalVelocityFn>(base + addr::READ_LOCAL_VELOCITY);
   m_poseFunctions.readWorldTransform =
       reinterpret_cast<pose::ReadWorldTransformFn>(base + addr::READ_WORLD_TRANSFORM);
+  namespace state = nevr_telemetry_state;
+  m_stateFunctions.resolveHandle = m_poseFunctions.resolveHandle;
+  m_stateFunctions.lookupEntity = m_poseFunctions.lookupEntity;
+  m_stateFunctions.punchableComponent = reinterpret_cast<pose::GetComponentFn>(base + addr::GET_PUNCHABLE_COMPONENT);
+  m_stateFunctions.customizationComponent =
+      reinterpret_cast<pose::GetComponentFn>(base + addr::GET_CUSTOMIZATION_COMPONENT);
+  m_stateFunctions.emotePlaying = reinterpret_cast<state::EmotePlayingFn>(base + addr::READ_EMOTE_PLAYING);
 
   m_funcPtrsResolved = true;
   Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Game function pointers resolved");
@@ -457,6 +465,10 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
 
   // Player poses through the game's own component readers, as /session reads them (telemetry_player_pose.h)
   nevr_telemetry_pose::ReadPlayerPoses(reinterpret_cast<const uint8_t*>(netGameBase), snap, m_poseFunctions);
+
+  // Stunned, invulnerable, blocking and emote, from the components /session reads them from
+  // (telemetry_player_state.h)
+  nevr_telemetry_state::ReadPlayerStates(reinterpret_cast<const uint8_t*>(netGameBase), snap, m_stateFunctions);
 }
 
 // ============================================================================

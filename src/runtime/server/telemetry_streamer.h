@@ -11,6 +11,7 @@
 #include "runtime/server/event_ring_buffer.h"
 #include "runtime/server/telemetry_events.h"
 #include "runtime/server/telemetry_player_pose.h"
+#include "runtime/server/telemetry_player_state.h"
 #include "runtime/server/telemetry_snapshot.h"
 #include "runtime/server/telemetry_snapshot_store.h"
 
@@ -168,6 +169,7 @@ class TelemetryStreamer {
   GetBoolPropertyFn m_getBoolProperty{nullptr};
   GetUserNameFn m_getUserName{nullptr};
   nevr_telemetry_pose::PoseFunctions m_poseFunctions;
+  nevr_telemetry_state::StateFunctions m_stateFunctions;
 
   // Cached game pointers (resolved per snapshot)
   void* m_netGame{nullptr};

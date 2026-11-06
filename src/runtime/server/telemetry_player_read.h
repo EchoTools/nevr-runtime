@@ -207,7 +207,7 @@ inline PlayerReadResult ReadPlayers(const uint8_t* netGame, TelemetrySnapshot* s
 
     auto& info = snap->playerInfo[slot];
     info.present = true;
-    info.flags = word;
+    info.entrantWord = word;
     info.entrantIndex = i;
     info.handleGeneration = HandleTableGeneration(netGame, slot);
     info.teamIndex = team;

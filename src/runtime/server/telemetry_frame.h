@@ -55,6 +55,31 @@ inline int DiscHolderSlot(const TelemetrySnapshot& snap) {
   return -1;
 }
 
+// PlayerState.flags as telemetry v2 packs it (`echo_arena.proto` at the pin, `PlayerState.flags`): bit 0
+// stunned, bit 1 invulnerable, bit 2 blocking, bit 3 possession, bit 4 is_emote_playing, bits 5-6 the team
+// index (0 blue, 1 orange, 2 spectator), bits 7-31 reserved and zero. The team is the entrant word's bits
+// 10-12 (PlayerInfo::teamIndex), never the word itself; a team past 2 is not a player's and sets no bit.
+// `possession` is whether this player holds the disc (DiscHolderSlot).
+constexpr uint32_t kPlayerFlagStunned = 1u << 0;
+constexpr uint32_t kPlayerFlagInvulnerable = 1u << 1;
+constexpr uint32_t kPlayerFlagBlocking = 1u << 2;
+constexpr uint32_t kPlayerFlagPossession = 1u << 3;
+constexpr uint32_t kPlayerFlagEmotePlaying = 1u << 4;
+constexpr uint32_t kPlayerFlagTeamShift = 5;
+
+inline uint32_t PackPlayerFlags(const TelemetrySnapshot::PlayerInfo& pi, bool possession) {
+  uint32_t flags = 0;
+  if (pi.stunned) flags |= kPlayerFlagStunned;
+  if (pi.invulnerable) flags |= kPlayerFlagInvulnerable;
+  if (pi.blocking) flags |= kPlayerFlagBlocking;
+  if (possession) flags |= kPlayerFlagPossession;
+  if (pi.emotePlaying) flags |= kPlayerFlagEmotePlaying;
+  if (pi.teamIndex <= nevr_game_offsets::ENTRANT_TEAM_LAST_PLAYER) {
+    flags |= static_cast<uint32_t>(pi.teamIndex) << kPlayerFlagTeamShift;
+  }
+  return flags;
+}
+
 inline void SetPose(spatial::v1::Pose* pose, const float (&pos)[3], const float (&rot)[4]) {
   auto* p = pose->mutable_position();
   p->set_x(pos[0]);
@@ -69,8 +94,10 @@ inline void SetPose(spatial::v1::Pose* pose, const float (&pos)[3], const float 
 
 // The arena frame's state from the snapshot: game status, clock, scores, round, pause, restart requests, the
 // disc and its holder, and each present player. Events are not built here (telemetry_events.h). The fields a
-// game read gives (round, pause, restart requests, holder) are set only for a snapshot the game thread read.
+// game read gives (round, pause, restart requests, holder, a player's possession bit) are set only for a
+// snapshot the game thread read.
 inline void BuildArenaFrame(const TelemetrySnapshot& snap, telemetry::v2::EchoArenaFrame* arena) {
+  const int holder = snap.gameRead ? DiscHolderSlot(snap) : -1;
   // Game state
   arena->set_game_status(GameStatusFromSymbol(snap.gameStatusHash));
   arena->set_game_clock(snap.gameClock);
@@ -81,7 +108,6 @@ inline void BuildArenaFrame(const TelemetrySnapshot& snap, telemetry::v2::EchoAr
     arena->set_pause_state(nevr_telemetry_session::PauseStateFromGame(snap.pauseStateSymbol, snap.pauseTime));
     arena->set_blue_team_restart_request(snap.blueRestartRequest ? 1 : 0);
     arena->set_orange_team_restart_request(snap.orangeRestartRequest ? 1 : 0);
-    const int holder = DiscHolderSlot(snap);
     if (holder >= 0) arena->set_disc_holder_slot(holder);
   }
 
@@ -101,7 +127,7 @@ inline void BuildArenaFrame(const TelemetrySnapshot& snap, telemetry::v2::EchoAr
 
     auto* ps = arena->add_players();
     ps->set_slot(i);
-    ps->set_flags(pi.flags);
+    ps->set_flags(PackPlayerFlags(pi, holder == i));
     ps->set_ping(pi.ping);
     ps->set_packet_loss_ratio(pi.packetLossRatio);
     ps->set_possession_time(snap.stats[i].possessionTime);

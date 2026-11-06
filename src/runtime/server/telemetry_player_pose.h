@@ -139,26 +139,46 @@ struct PoseResult {
   bool hands = false;
 };
 
-// Reads entrant `entrantIndex`'s pose into *out, on the game thread. The checks /session makes are kept at
-// the addresses above; the ones it does not make are this reader's own: a null entity system (0x140363610
-// checks it, 0x1404f37a0 does not), a null body transform, and null R14RemotePlayer tables and systems.
-inline PoseResult ReadPlayerPose(const uint8_t* netGame, uint16_t entrantIndex, const PoseFunctions& fn,
-                                 TelemetrySnapshot::PlayerTransform* out) {
+// Entrant `entrantIndex`'s entity and the second half of its handle as the resolver left it, the one
+// GetComponent<T> takes; entity null when there is none. Both /session writers resolve it this way: the
+// player writer (0x1401b3eb0-0x1401b3ee1) and the game-state writer (0x14015727a-0x1401572b2). A null entity
+// system is this reader's own check (0x140363610 checks it, 0x1404f37a0 does not).
+struct PlayerEntity {
+  void* entity = nullptr;
+  int64_t handleExtra = 0;
+};
+
+inline PlayerEntity ResolvePlayerEntity(const uint8_t* netGame, uint16_t entrantIndex,
+                                        ResolveEntityHandleFn resolveHandle, EntityLookupFn lookupEntity) {
   namespace off = nevr_game_offsets;
-  PoseResult result;
-  if (!fn.Complete()) return result;
+  PlayerEntity found;
+  if (!resolveHandle || !lookupEntity) return found;
   void* entitySystem = ReadAt<void*>(netGame, off::ENTITY_SYSTEM_OFFSET);
-  if (entitySystem == nullptr) return result;
+  if (entitySystem == nullptr) return found;
 
   int64_t handle[2];
   std::memcpy(handle,
               netGame + off::PLAYER_ARRAY_OFFSET + entrantIndex * off::PLAYER_STRIDE + off::ENTRANT_ENTITY_HANDLE_OFFSET,
               sizeof(handle));
-  (void)fn.resolveHandle(entitySystem, handle);  // /session reads handle[0] whatever it returns (0x1401b3ece)
-  void* entity = fn.lookupEntity(entitySystem, handle[0]);
+  (void)resolveHandle(entitySystem, handle);  // /session reads handle[0] whatever it returns (0x1401b3ece)
+  found.entity = lookupEntity(entitySystem, handle[0]);
+  found.handleExtra = handle[1];
+  return found;
+}
+
+// Reads entrant `entrantIndex`'s pose into *out, on the game thread. The checks /session makes are kept at
+// the addresses above; the ones it does not make are this reader's own: a null entity system (see
+// ResolvePlayerEntity), a null body transform, and null R14RemotePlayer tables and systems.
+inline PoseResult ReadPlayerPose(const uint8_t* netGame, uint16_t entrantIndex, const PoseFunctions& fn,
+                                 TelemetrySnapshot::PlayerTransform* out) {
+  namespace off = nevr_game_offsets;
+  PoseResult result;
+  if (!fn.Complete()) return result;
+  const PlayerEntity player = ResolvePlayerEntity(netGame, entrantIndex, fn.resolveHandle, fn.lookupEntity);
+  void* entity = player.entity;
   if (entity == nullptr) return result;
   result.entity = true;
-  const int64_t handleExtra = handle[1];
+  const int64_t handleExtra = player.handleExtra;
 
   const ComponentRef head = FindComponent(fn.headComponent, entity, handleExtra);
   if (head.component) {

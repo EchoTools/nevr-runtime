@@ -1282,9 +1282,10 @@ if(BUILD_TESTING)
     # them, and the events found between two snapshots; the header and frames built from a snapshot and the
     # session values it takes from the game (#2100).
     add_executable(test_telemetry_player_read tests/test_telemetry_player_read.cpp tests/test_telemetry_events.cpp
-      tests/test_telemetry_player_pose.cpp tests/test_telemetry_frame.cpp)
+      tests/test_telemetry_player_pose.cpp tests/test_telemetry_player_state.cpp tests/test_telemetry_frame.cpp)
     set_source_files_properties(tests/test_telemetry_player_read.cpp tests/test_telemetry_events.cpp
-      tests/test_telemetry_player_pose.cpp tests/test_telemetry_frame.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+      tests/test_telemetry_player_pose.cpp tests/test_telemetry_player_state.cpp tests/test_telemetry_frame.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_telemetry_player_read PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_telemetry_player_read PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main nevr_api)
     gtest_discover_tests(test_telemetry_player_read DISCOVERY_MODE PRE_TEST)

@@ -47,7 +47,7 @@ struct TelemetrySnapshot {
   // --- Direct memory reads ---
 
   // Indexed by game slot (the entrant word's low 5 bits), not by the net game's entrant array order.
-  // flags and teamIndex come from the net-game entrant, entrantIndex is that entrant's index (the pose read
+  // entrantWord and teamIndex come from the net-game entrant, entrantIndex is that entrant's index (the pose read
   // finds its entity from it); displayName from the game's GetUserName for that entrant; accountId and ping
   // from the lobby entrant at the same slot (telemetry_player_read.h). present: a
   // player (team 0 to 2) whose slot is below 16, whose slot's handle-table entry names it, and whose slot has
@@ -56,7 +56,7 @@ struct TelemetrySnapshot {
   // jerseyNumber, level and packetLossRatio as /session reads them (telemetry_player_read.h).
   struct PlayerInfo {
     bool present;
-    uint16_t flags;
+    uint16_t entrantWord;  // the entrant record's first u16: slot in bits 0-4, team in bits 10-12
     uint16_t entrantIndex;
     uint16_t handleGeneration;
     uint64_t accountId;
@@ -66,6 +66,12 @@ struct TelemetrySnapshot {
     uint16_t jerseyNumber;
     uint32_t level;
     float packetLossRatio;
+    // The game's state of the player's entity, as /session writes it (telemetry_player_state.h): stunned,
+    // invulnerable and blocking from R14NetPunchable, emote from R15NetCustomization. False when not read.
+    bool stunned;
+    bool invulnerable;
+    bool blocking;
+    bool emotePlaying;
   } playerInfo[16];
   uint16_t playerCount;  // players read (present slots)
 
@@ -349,6 +355,9 @@ constexpr uint64_t READ_LEFT_HAND_POSITION = 0x179a40;   // FUN_140179a40(compon
 constexpr uint64_t READ_RIGHT_HAND_POSITION = 0x1a4dc0;  // FUN_1401a4dc0(component, out, index)
 constexpr uint64_t READ_LOCAL_VELOCITY = 0x449570;    // FUN_140449570(system, out, handle)
 constexpr uint64_t READ_WORLD_TRANSFORM = 0x3c4910;   // FUN_1403c4910(system, out, handle)
+constexpr uint64_t GET_PUNCHABLE_COMPONENT = 0x167fc0;      // GetComponent<R14NetPunchable>
+constexpr uint64_t GET_CUSTOMIZATION_COMPONENT = 0x1679a0;  // GetComponent<R15NetCustomization>
+constexpr uint64_t READ_EMOTE_PLAYING = 0xd08d00;           // FUN_140d08d00(component, index)
 }  // namespace nevr_game_func_addr
 
 // Game status symbol hash → proto enum mapping
