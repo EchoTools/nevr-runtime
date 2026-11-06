@@ -299,6 +299,7 @@ void EachGateAnswersItsOwnCallerAndNoOther() {
   CombatMapLoaded();
   const nevr_quest::combat::ModuleResult r = hg::Install(AllLibs());
   QCHECK(r.installed && std::strcmp(r.status, "installed") == 0);
+  QCHECK(nevr_quest::combat::tick::Count() == 1);  // the bot gate registered the callback that tells it the game
   const PartyFn party = PartySlot();
   const HeadFn head = HeadSlot();
   QCHECK(party != &PartyReal && head != &HeadsetReal);  // both slots replaced
@@ -356,6 +357,7 @@ void AnEmptyRangeGatesNothing() {
     QCHECK(HeadCallerLink(head) == hg::kLinkHeadset);
     QCHECK(HeadCallerBots(head) == kRealKind && HeadCallerOut(head) == kRealKind);  // the empty bot range must gate nothing, not everything
     QCHECK(PartySlot() == &PartyReal);  // gate_perm off: its slot is not touched
+    QCHECK(nevr_quest::combat::tick::Count() == 0);  // gate_bots off: no tick callback is registered
     End();
   }
   {

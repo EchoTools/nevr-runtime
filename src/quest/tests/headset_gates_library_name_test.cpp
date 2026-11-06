@@ -43,6 +43,7 @@ int main() {
     char out[256] = "";
     const bool known = hg::LibraryName(reinterpret_cast<std::uintptr_t>(&hg::LibraryName), out, sizeof out);
     QCHECK(known && out[0] != '\0');
+    QCHECK(std::strchr(out, '/') == nullptr);  // the file name, not the path
   }
   // a null address is never named
   {
