@@ -393,8 +393,8 @@ ActionResult PluginsAction() noexcept {
 // The combat area's normal install step (#2171): the body of the post-load action that runs after the plugin pass has returned. The step
 // writes its own `combat_install` line and each module its own; the action settles whatever it did.
 ActionResult CombatAction() noexcept {
-  nevr_quest::integration::InstallCombatNormal();
-  return {Settle::kDone, "ran"};
+  // `ended`: the step was already ended as not_started (the process end got there first), so nothing ran and the line says so.
+  return {Settle::kDone, nevr_quest::integration::InstallCombatNormal() ? "ran" : "ended"};
 }
 
 // The invite service's stop, for the noexcept teardown paths below: an exception escaping a noexcept function ends the

@@ -165,13 +165,13 @@ class TheProductionStepsReachTheRealCombatSteps(unittest.TestCase):
 
     def test_the_post_load_action_runs_the_normal_step_and_the_dlopen_install_sets_it_only_when_asked(self):
         action = extract_braced_function(self.steps, "ActionResult CombatAction() noexcept {")
-        self.assertIn("nevr_quest::integration::InstallCombatNormal();", action)
+        self.assertIn('InstallCombatNormal() ? "ran" : "ended"', action)
         install = extract_braced_function(
             self.steps, "bool InstallDlopenHook(bool login, bool matchmaking, bool plugins, bool combat) override {"
         )
         self.assertIn("if (combat) actions.combat = &CombatAction;", install)
-        normal = extract_braced_function(self.entry, "void InstallCombatNormal() noexcept {")
-        self.assertIn("nevr_quest::combat::InstallNormal();", normal)
+        normal = extract_braced_function(self.entry, "bool InstallCombatNormal() noexcept {")
+        self.assertIn("return nevr_quest::combat::InstallNormal().ran;", normal)
 
     def test_a_normal_step_that_never_ran_is_recorded_when_the_hook_is_not_live_and_when_the_process_ends(self):
         self.assertIn("void FinishCombat(const char* reason) override { nevr_quest::integration::NoteCombatNotStarted(reason); }", self.steps)

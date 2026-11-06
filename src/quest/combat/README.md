@@ -43,3 +43,5 @@ Both steps ask `combat::Active()` and install nothing when it is false. A plain 
    every module unit edits are shared and merge in sequence: the registration table, the `combat:` key set, `hook_budget.h`,
    `CMakeLists.txt`, `host_tests/groups/combat.cmake`, and the plugin's module list while it exists.
 7. A module's host test is a program in the `combat` group with the module's name in its own, so `just test-quest-combat <module>` finds it.
+8. An early function does not touch a slot that `libq15t.so` installs at its normal pass. The early step runs before the plugin's hooks are in,
+   so it would take the slot first and q15t would refuse it (the #2000 shape); such a module installs in the normal step, after the plugin pass.

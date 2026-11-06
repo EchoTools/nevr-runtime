@@ -280,7 +280,7 @@ void ResolveCombatActive(bool forceAsked) noexcept { nevr_quest::combat::Resolve
 // where combat does not run installs nothing and says so once.
 bool CombatActive() noexcept { return nevr_quest::combat::Active(); }
 bool InstallCombatEarly() noexcept { return nevr_quest::combat::InstallEarly().ran; }
-void InstallCombatNormal() noexcept { nevr_quest::combat::InstallNormal(); }
+bool InstallCombatNormal() noexcept { return nevr_quest::combat::InstallNormal().ran; }
 void NoteCombatNotStarted(const char* reason) noexcept { nevr_quest::combat::NoteNormalNotStarted(reason); }
 void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept { nevr_quest::combat::LogConfig(config); }
 

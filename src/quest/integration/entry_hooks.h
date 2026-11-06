@@ -112,7 +112,7 @@ void ResolveCombatActive(bool forceAsked) noexcept;
 // `not_started` record of a normal step that never got its moment, and the `combat_config` line.
 bool CombatActive() noexcept;
 bool InstallCombatEarly() noexcept;
-void InstallCombatNormal() noexcept;
+bool InstallCombatNormal() noexcept;  // true when the step ran (false: combat is off here, or the step was already ended)
 void NoteCombatNotStarted(const char* reason) noexcept;
 void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept;
 

@@ -33,7 +33,7 @@ const char* const kInactiveMessage = "folded combat modules do not install in th
 void WriteSkipped(Phase phase) {
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_install",
                       {{"phase", PhaseName(phase)}, {"state", "skipped"}, {"variant", build_variant::VariantName(RecordedVariant())},
-                       {"active", "false"}, {"active_reason", ReasonName(ActiveReason())}, {"modules", 0}, {"installed", 0},
+                       {"active", 0}, {"active_reason", ReasonName(ActiveReason())}, {"modules", 0}, {"installed", 0},
                        {"failed", 0}, {"msg", kInactiveMessage}});
 }
 
@@ -83,9 +83,9 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
   }
   sentinel::LogFields(outcome.failed == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install",
                       {{"phase", PhaseName(phase)}, {"state", "ran"}, {"variant", build_variant::VariantName(RecordedVariant())},
-                       {"active", "true"}, {"active_reason", ReasonName(ActiveReason())}, {"modules", outcome.modules},
+                       {"active", 1}, {"active_reason", ReasonName(ActiveReason())}, {"modules", outcome.modules},
                        {"installed", outcome.installed}, {"failed", outcome.failed}, {"results", results},
-                       {"results_truncated", truncated ? "true" : "false"}, {"msg", msg}});
+                       {"results_truncated", truncated ? 1 : 0}, {"msg", msg}});
   return outcome;
 }
 
@@ -99,7 +99,7 @@ void NoteNormalNotStarted(const char* reasonToken) noexcept {
   if (!StateOf(Phase::kNormal).compare_exchange_strong(expected, kEnded, std::memory_order_acq_rel)) return;  // ran, or already ended
   sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_install",
                       {{"phase", "normal"}, {"state", "not_started"}, {"reason", reasonToken != nullptr ? reasonToken : "unset"},
-                       {"variant", build_variant::VariantName(RecordedVariant())}, {"active", "true"},
+                       {"variant", build_variant::VariantName(RecordedVariant())}, {"active", 1},
                        {"active_reason", ReasonName(ActiveReason())}, {"modules", 0}, {"installed", 0}, {"failed", 0},
                        {"msg", "the combat modules' post-load step had no moment to run in, so none of them is installed; "
                                "the game keeps its own behaviour"}});
@@ -107,7 +107,7 @@ void NoteNormalNotStarted(const char* reasonToken) noexcept {
 
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config",
-                      {{"force", config.force.on ? "true" : "false"}, {"force_source", config.force.source == nevr_quest::Source::kFile ? "config" : "default"},
+                      {{"force", config.force.on ? 1 : 0}, {"force_source", config.force.source == nevr_quest::Source::kFile ? "config" : "default"},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active)"}});
 }

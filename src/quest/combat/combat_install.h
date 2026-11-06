@@ -19,10 +19,11 @@
  * itself (`combat_<module>_*`).
  *
  * The line (sentinel log), one per phase per process (N17: each module's outcome by name, and one aggregate):
- *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe","active":"true",
- *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"results":"<name>=<status> ...","msg":"..."}
+ *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe","active":1,
+ *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"results":"<name>=<status> ...","results_truncated":0,"msg":"..."}
+ * `active`, `results_truncated` and `force` are 1 or 0, as in the sentinel's `config_loaded` line.
  * Info when every module installed (and when none is registered), Warning when one did not. A process where combat does not run writes
- * `"state":"skipped","active":"false"` once, Info, whichever phase asks first. A normal step that never got its moment writes
+ * `"state":"skipped","active":0` once, Info, whichever phase asks first. A normal step that never got its moment writes
  * `"state":"not_started","reason":"post_load_hook_unavailable|game_exited_first"` once, Warning, and never runs afterwards.
  *
  * The config line (`combat_config`, ADR 0046 rule 4): one Info line with each `combat:` key's value and where it came from, written by

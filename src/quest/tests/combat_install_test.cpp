@@ -104,7 +104,7 @@ void EachPhaseWritesOneAggregateLine() {
     QCHECK(Has(l.text, "\"phase\":\"normal\""));
     QCHECK(Has(l.text, "\"state\":\"ran\""));
     QCHECK(Has(l.text, "\"variant\":\"q15t\""));
-    QCHECK(Has(l.text, "\"active\":\"true\""));
+    QCHECK(Has(l.text, "\"active\":1"));
     QCHECK(Has(l.text, "\"active_reason\":\"variant\""));
     QCHECK(Has(l.text, "\"modules\":3"));
     QCHECK(Has(l.text, "\"installed\":3"));
@@ -148,7 +148,7 @@ void APlainReleaseInstallsNothingAndSaysSoOnce() {
     QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Has(lines[0].text, "\"state\":\"skipped\""));
     QCHECK(Has(lines[0].text, "\"variant\":\"none\""));
-    QCHECK(Has(lines[0].text, "\"active\":\"false\""));
+    QCHECK(Has(lines[0].text, "\"active\":0"));
     QCHECK(Has(lines[0].text, "\"active_reason\":\"not_a_combat_variant\""));
     QCHECK(Has(lines[0].text, "\"modules\":0"));
     QCHECK(Has(lines[0].text, "folded combat modules do not install in this run; the game keeps its own behaviour"));
@@ -199,7 +199,7 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
   QCHECK(lines.size() == 1U);
   if (lines.size() == 1U) {
     QCHECK(Has(lines[0].text, "\"modules\":14") && Has(lines[0].text, "\"installed\":14"));
-    QCHECK(Has(lines[0].text, "\"results_truncated\":\"true\""));
+    QCHECK(Has(lines[0].text, "\"results_truncated\":1"));
     QCHECK(Has(lines[0].text, "module_with_a_long_name_01=installed"));
   }
   Done();
@@ -247,7 +247,7 @@ void ANormalStepThatNeverRanIsRecordedAsNotStartedOnce() {
     QCHECK(Has(lines[0].text, "\"phase\":\"normal\""));
     QCHECK(Has(lines[0].text, "\"state\":\"not_started\""));
     QCHECK(Has(lines[0].text, "\"reason\":\"post_load_hook_unavailable\""));
-    QCHECK(Has(lines[0].text, "\"variant\":\"combat\"") && Has(lines[0].text, "\"active\":\"true\""));
+    QCHECK(Has(lines[0].text, "\"variant\":\"combat\"") && Has(lines[0].text, "\"active\":1"));
     QCHECK(Has(lines[0].text, "the game keeps its own behaviour"));
   }
   // The normal step that already ran is not "not started" when the process ends.
@@ -275,12 +275,15 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   combat::LogConfig(cfg);
   cfg.force = {true, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
+  cfg.force = {false, nevr_quest::Source::kFile};  // the file said false: not asked, but the source is the file's
+  combat::LogConfig(cfg);
   const std::vector<Line> lines = Lines("combat_config");
-  QCHECK(lines.size() == 2U);
-  if (lines.size() == 2U) {
+  QCHECK(lines.size() == 3U);
+  if (lines.size() == 3U) {
     QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
-    QCHECK(Has(lines[0].text, "\"force\":\"false\"") && Has(lines[0].text, "\"force_source\":\"default\""));
-    QCHECK(Has(lines[1].text, "\"force\":\"true\"") && Has(lines[1].text, "\"force_source\":\"config\""));
+    QCHECK(Has(lines[0].text, "\"force\":0") && Has(lines[0].text, "\"force_source\":\"default\""));
+    QCHECK(Has(lines[1].text, "\"force\":1") && Has(lines[1].text, "\"force_source\":\"config\""));
+    QCHECK(Has(lines[2].text, "\"force\":0") && Has(lines[2].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"msg\":"));
   }
   Done();

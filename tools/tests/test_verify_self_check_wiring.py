@@ -165,6 +165,21 @@ class SelfCheckWiringGateTest(unittest.TestCase):
             root = self.tree()
             self.edit(root, "src/quest/integration/production_steps.cpp", old, "}" if old.endswith("}") else "")
             self.assertEqual(run(root).returncode, 1, old)
+    def test_a_process_end_report_moved_out_of_the_callback_fails(self):
+        # The report sits within the pattern's window of the plugin finish but outside the callback's body: the match must not leave it.
+        root = self.tree()
+        path = root / "src/quest/integration/production_steps.cpp"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("  ReportAndroidMainReturned();\n}", text)
+        text = text.replace("  ReportAndroidMainReturned();\n}", "}\nvoid Elsewhere() noexcept { ReportAndroidMainReturned(); }", 1)
+        path.write_text(text, encoding="utf-8")
+        self.assertEqual(run(root).returncode, 1)
+
+    def test_a_process_end_report_commented_out_in_the_callback_fails(self):
+        root = self.tree()
+        self.edit(root, "src/quest/integration/production_steps.cpp", "  ReportAndroidMainReturned();\n}", "  // ReportAndroidMainReturned();\n}")
+        self.assertEqual(run(root).returncode, 1)
+
     def test_a_credential_cache_check_that_is_not_fed_or_registered_fails(self):
         for rel, old in (
             ("src/runtime/compat/ws_bridge.cpp",
