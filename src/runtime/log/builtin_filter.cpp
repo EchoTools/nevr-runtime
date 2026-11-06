@@ -21,6 +21,7 @@
 #include "runtime/hook/hook_guard.h"
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/log/run_log_writer.h"
+#include "runtime/log/run_log_record.h"
 #include "runtime/log/bridge_line.h"
 #include "runtime/log/game_line_format.h"
 #include "runtime/log/gpu_hung_notice.h"
@@ -559,17 +560,10 @@ static void RotateIfNeeded() {
     PruneOldLogs();
 }
 
-/* One record in the main log. */
-static void WriteFileRecord(const char* ts, const char* lvl, const char* message, int len) {
-    std::string line = "{\"ts\":\"";
-    nevr_json_escape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
-    line += "\",\"run\":\"";   /* N80 */
-    line += GetRunId();
-    line += "\",\"level\":\"";
-    nevr_json_escape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
-    line += "\",\"msg\":\"";
-    nevr_json_escape::AppendTo(line, message, len);
-    line += "\"}\n";
+/* One record in the main log (run_log_record.h). */
+static void WriteFileRecord(const char* ts, uint32_t level, bool insideErrorDialog, const char* message, int len) {
+    std::string line;
+    nevr_run_log_record::Build(line, ts, GetRunId(), level, insideErrorDialog, message, len);
     nevr_run_log_writer::Append(line.data(), line.size());
 }
 
@@ -740,7 +734,7 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     if (g_config.file_enabled) {
         std::lock_guard<std::mutex> lock(g_file_mutex);
         if (g_log_file_open) {
-            WriteFileRecord(ts, lvl, message, len);
+            WriteFileRecord(ts, level, false, message, len);
             RotateIfNeeded();
         }
     }
