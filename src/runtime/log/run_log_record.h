@@ -13,30 +13,30 @@
 #include <string>
 
 #include "core/json_escape.h"
+#include "core/log_level.h"
 
 namespace nevr_run_log_record {
 
-inline const char* LevelName(std::uint32_t level) {
-  switch (level) {
-    case 1: return "debug";
-    case 2: return "info";
-    case 4: return "warn";
-    case 8: return "error";
-    default: return "info";
-  }
-}
-
 inline void Build(std::string& line, const char* ts, const char* runId, std::uint32_t gameLevel, bool insideErrorDialog,
                   const char* message, int len) {
-  (void)insideErrorDialog;
-  const char* const lvl = LevelName(gameLevel);
+  const std::uint32_t level = nevr_log_level::Effective(gameLevel, insideErrorDialog);
+  const char* const name = nevr_log_level::Name(level);
   line = "{\"ts\":\"";
   nevr_json_escape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
   line += "\",\"run\":\"";  // N80
   line += runId;
   line += "\",\"level\":\"";
-  nevr_json_escape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
-  line += "\",\"msg\":\"";
+  line += name != nullptr ? name : "unknown";
+  line += '"';
+  if (name == nullptr) {
+    line += ",\"level_raw\":";
+    line += std::to_string(level);
+  }
+  if (level != gameLevel) {
+    line += ",\"game_level\":";
+    line += std::to_string(gameLevel);
+  }
+  line += ",\"msg\":\"";
   nevr_json_escape::AppendTo(line, message, len);
   line += "\"}\n";
 }

@@ -22,6 +22,8 @@
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/log/run_log_writer.h"
 #include "runtime/log/run_log_record.h"
+#include "runtime/log/error_dialog_level.h"
+#include "core/log_level.h"
 #include "runtime/log/bridge_line.h"
 #include "runtime/log/game_line_format.h"
 #include "runtime/log/gpu_hung_notice.h"
@@ -64,7 +66,6 @@ static constexpr uint32_t LOG_LEVEL_DEBUG   = 1;
 static constexpr uint32_t LOG_LEVEL_INFO    = 2;
 static constexpr uint32_t LOG_LEVEL_WARNING = 4;
 static constexpr uint32_t LOG_LEVEL_ERROR   = 8;
-static constexpr uint32_t LOG_LEVEL_RAW     = 1000;
 
 /* ------------------------------------------------------------------ */
 /* Config types                                                        */
@@ -589,14 +590,10 @@ static void ShutdownFileLogging() {
 /* Filtering logic                                                     */
 /* ------------------------------------------------------------------ */
 
+/* The console's name for a level: the one mapping (core/log_level.h), "unknown" for a level it has no name for. The
+ * record carries the raw value beside it (run_log_record.h). */
 static const char* LevelStr(uint32_t level) {
-    switch (level) {
-        case LOG_LEVEL_DEBUG:   return "debug";
-        case LOG_LEVEL_INFO:    return "info";
-        case LOG_LEVEL_WARNING: return "warn";
-        case LOG_LEVEL_ERROR:   return "error";
-        default:                return "info";
-    }
+    return nevr_log_level::NameOrUnknown(level);
 }
 
 /* N77: a line NEVR emitted, identified by its subsystem tag. docs/standards/logging.md requires
@@ -626,7 +623,8 @@ static bool ShouldSuppress(const char* message, uint32_t level, const char** ent
     *entry = nullptr;
     if (!g_config.valid) return false;
 
-    if (level < g_config.min_level && level != LOG_LEVEL_RAW) return true;
+    /* #2245: a level with no name is never dropped by min_level, so a line the mapping does not know stays visible. */
+    if (nevr_log_level::Name(level) != nullptr && level < g_config.min_level) return true;
 
     /* #2214: a deletion by a list entry names the entry, so the limiter counts it under that entry. */
     for (const auto& ch : g_config.suppress_channels) {
@@ -704,7 +702,10 @@ static const char* ColorDim() {
 /* Emit                                                                */
 /* ------------------------------------------------------------------ */
 
-static void EmitLine(uint32_t level, const char* message, int len) {
+/* `gameLevel` is the level the line was logged at; `insideErrorDialog` says the game's error dialog logged it, which
+ * records it at error (core/log_level.h, Effective). */
+static void EmitLine(uint32_t gameLevel, bool insideErrorDialog, const char* message, int len) {
+    const uint32_t level = nevr_log_level::Effective(gameLevel, insideErrorDialog);
     /* The crash report (#1605) prints the last 50 of these. A lock-free ring: nothing here waits on g_file_mutex. */
     if (len > 0) nevr_crash::RecordLogLine(message, static_cast<std::size_t>(len));
     char ts[32] = {};
@@ -734,12 +735,16 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     if (g_config.file_enabled) {
         std::lock_guard<std::mutex> lock(g_file_mutex);
         if (g_log_file_open) {
-            WriteFileRecord(ts, level, false, message, len);
+            WriteFileRecord(ts, gameLevel, insideErrorDialog, message, len);
             RotateIfNeeded();
         }
     }
 
     g_emitted_count++;
+}
+
+static void EmitLine(uint32_t level, const char* message, int len) {
+    EmitLine(level, false, message, len);
 }
 
 /* ------------------------------------------------------------------ */
@@ -771,6 +776,7 @@ static std::atomic<bool> g_first_health_done{false};
 static std::atomic<uint64_t> g_last_health_report{0};
 
 static void EmitLine(uint32_t level, const char* message, int len);  /* fwd */
+static void EmitLine(uint32_t gameLevel, bool insideErrorDialog, const char* message, int len);  /* fwd */
 
 /* N78: a burst that goes quiet is reported by the same summary line a later repeat would have produced.
  * Nothing else reads a slot once no line lands on it, so the health tick (`all` false: the windows that
@@ -953,8 +959,12 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
      * game lines only (a line the runtime writes is never demoted here, N77). */
     if (nevr_bridge_line::IsBridgeConnectionLine(buf)) level = LOG_LEVEL_DEBUG;
 
+    /* #2245: the game's error dialog logs its title and message at info; they are recorded at error. */
+    const bool insideErrorDialog = nevr_error_dialog::Inside();
+    const uint32_t effective = nevr_log_level::Effective(level, insideErrorDialog);
+
     const char* entry = nullptr;
-    if (ShouldSuppress(buf, level, &entry)) {
+    if (ShouldSuppress(buf, effective, &entry)) {
         g_suppressed_count++;
         if (entry != nullptr) {
             /* #2214: counted under its list entry; the summary is the N78 limiter's, written when the window closes. */
@@ -981,7 +991,7 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
         return;
     }
 
-    EmitLine(level, buf, emit_len);
+    EmitLine(level, insideErrorDialog, buf, emit_len);
 
     if (g_config.passthrough_to_engine && orig_PrintfImpl && varargs != nullptr) {
         /* N89: max_line_length must apply to the console too, not ONLY to our
@@ -1108,7 +1118,7 @@ void nevr_builtin_log_filter::Init(uintptr_t base_addr, bool is_server) {
             // Init() runs from InitializeAfterGameImageGuard, in the boot phase (N36): the
             // record goes to the boot tee.
             nevr_boot_log_tee::TeeFprintf(
-                "[NEVR.PATCH] CLog::PrintfImpl failed-hook cleanup status=%s\n",
+                "[NEVR.PATCH] warn; CLog::PrintfImpl failed-hook cleanup status=%s\n",
                 MH_StatusToString(cleanup));
         }
         g_hook_target = nullptr;
@@ -1126,6 +1136,9 @@ void nevr_builtin_log_filter::Init(uintptr_t base_addr, bool is_server) {
     // taking this address is then named by the "hook overwritten" error and by
     // the zero-game-lines health warning instead of being guessed at.
     nevr_hook_guard::Record(g_hook_target, "CLog::PrintfImpl");
+
+    /* #2245: only once the CLog hook is in place do the dialog's lines reach the filter at all. */
+    nevr_error_dialog::Install(base_addr);
 }
 
 void nevr_builtin_log_filter::Shutdown() {

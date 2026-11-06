@@ -6561,16 +6561,16 @@ TEST(HostEnvironmentLine, NamesTheWineVersionHostOsAndWindowsBuild) {
     host.wine_host_os = "Linux";
     host.os_build = 19045;
     EXPECT_EQ(nevr_host_environment::BootLine(host),
-              "[NEVR.BOOT] host environment: wine=10.0 host_os=Linux os_build=19045\n");
+              "[NEVR.BOOT] info; host environment: wine=10.0 host_os=Linux os_build=19045\n");
 }
 
 TEST(HostEnvironmentLine, ANativeWindowsHostSaysNoneAndAnUnmeasuredBuildSaysUnknown) {
     nevr_system_info::Host host;  // nothing measured: native Windows with no build
     EXPECT_EQ(nevr_host_environment::BootLine(host),
-              "[NEVR.BOOT] host environment: wine=none host_os=none os_build=unknown\n");
+              "[NEVR.BOOT] info; host environment: wine=none host_os=none os_build=unknown\n");
     host.os_build = 22631;
     EXPECT_EQ(nevr_host_environment::BootLine(host),
-              "[NEVR.BOOT] host environment: wine=none host_os=none os_build=22631\n");
+              "[NEVR.BOOT] info; host environment: wine=none host_os=none os_build=22631\n");
 }
 
 TEST(SystemInfo, WineDetectionIsTheVersionString) {

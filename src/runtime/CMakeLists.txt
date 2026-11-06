@@ -149,6 +149,8 @@ set(PATCHES_SOURCES
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
     "log/builtin_filter.cpp"
+    # #2245: the game's error dialog; the lines it logs are recorded at error.
+    "log/error_dialog_level.cpp"
     "log/symcache.cpp"
     "log/symcache_data.cpp"
     "log/url_diagnostics.cpp"
