@@ -7,6 +7,8 @@
 #include <cstring>
 #include <mutex>
 
+#include "runtime/log/collapse_format_rules.h"
+
 /* N78 — the rate limiter behind the built-in log filter's counted summaries.
  *
  * A line repeating more than kThreshold times in a kWindowSec window is collapsed: the first
@@ -14,7 +16,8 @@
  * `[NEVR.LOGFILTER] repeated count=<n> window_s=<t> msg="<sample>"` line instead of being deleted.
  *
  * Identity is a digit-insensitive hash: "ExitProcess(3) ... (call #41)" and "(call #42)" collapse
- * together. Fixed-size table, no heap, its own mutex (never the file mutex: a fault raised while that
+ * together. A line of a format in collapse_format_rules.h (a value printed in hex, letters included) has the format's own identity
+ * instead, so its values collapse together too. Fixed-size table, no heap, its own mutex (never the file mutex: a fault raised while that
  * lock was held would deadlock the crash path, see N70). The caller passes the time, so a test can
  * move it.
  *
@@ -36,7 +39,8 @@ class RateLimiter {
    * lines, `out_summary` is filled with the summary to emit (empty otherwise). */
   RateVerdict Check(const char* msg, int len, uint64_t now, char* out_summary, size_t summary_cap) {
     out_summary[0] = '\0';
-    const uint64_t h = NormalizedHash(msg, len);
+    const char* format = nevr_collapse_format::Match(msg, len);
+    const uint64_t h = format != nullptr ? FormatHash(format) : NormalizedHash(msg, len);
 
     std::lock_guard<std::mutex> lock(mutex_);
     Entry& e = table_[h % kTableSize];
@@ -106,6 +110,16 @@ class RateLimiter {
         in_digits = false;
       }
       h ^= c;
+      h *= 1099511628211ULL;
+    }
+    return h;
+  }
+
+  /* The identity of a collapse_format_rules.h rule: FNV-1a over the rule's name. */
+  static uint64_t FormatHash(const char* name) {
+    uint64_t h = 1469598103934665603ULL;
+    for (; *name != '\0'; name++) {
+      h ^= static_cast<unsigned char>(*name);
       h *= 1099511628211ULL;
     }
     return h;

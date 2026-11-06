@@ -280,6 +280,7 @@ set(PATCHES_HEADERS
     "log/builtin_filter.h"
     "log/bridge_line.h"
     "log/rate_limiter.h"
+    "log/collapse_format_rules.h"
     "log/symcache.h"
     "log/url_diagnostics.h"
     "log/security_diagnostics.h"
