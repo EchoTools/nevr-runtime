@@ -651,8 +651,8 @@ TEST(session_device_login_succeeds_publishes_the_token_and_persists_only_the_ref
   CHECK_EQ(http.Count("poll"), 3);
   const std::string all = log.All();
   CHECK(all.find("DEVCODE") == std::string::npos);
-  CHECK(all.find("rt-dev") == std::string::npos);
-  CHECK(all.find("eyJ") == std::string::npos);
+  CHECK(all.find("rt-dev") != std::string::npos);  // the verified poll body is logged as the server sent it (#2244)
+  CHECK(all.find("eyJ") != std::string::npos);
   CHECK(all.find("http_key") == std::string::npos);
   // The per-poll line says what the server answered (#397): HTTP code, parsed status, never "none".
   CHECK(all.find("poll #1 http=200 status=pending server_status=\"pending\"") != std::string::npos);

@@ -833,16 +833,16 @@ TEST(DeviceAuthFlow, NoCodeIsReportedAndAServerShowsNothing) {
 
 // The wait used to be silent while the server answered "pending": a loop that polls and is told pending
 // could not be told from one that does not run (#397).
-TEST(DeviceAuthFlow, EveryPollIsOneInfoLineWithHttpCodeStatusAndAMaskedBody) {
+TEST(DeviceAuthFlow, EveryPollIsOneInfoLineWithHttpCodeStatusAndTheBody) {
   FakeDeviceAuthFlow fake;
   nevr_token_auth::DevicePollResponse pending =
       nevr_token_auth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}");
   pending.http_code = 200;
-  pending.body_prefix = nevr_token_auth::PollBodyPrefix("{\"status\":\"authorization_pending\"}", fake.code);
+  pending.body_prefix = nevr_token_auth::PollBodyPrefix("{\"status\":\"authorization_pending\"}");
   nevr_token_auth::DevicePollResponse expired = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"expired\"}");
   expired.http_code = 200;
   expired.body_prefix = "{\"status\":\"expired\",\"code\":\"" + fake.code + "\"}";
-  expired.body_prefix = nevr_token_auth::PollBodyPrefix(expired.body_prefix, fake.code);
+  expired.body_prefix = nevr_token_auth::PollBodyPrefix(expired.body_prefix);
   fake.poll_sequence = {pending, pending, expired};
   (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
 
@@ -852,11 +852,7 @@ TEST(DeviceAuthFlow, EveryPollIsOneInfoLineWithHttpCodeStatusAndAMaskedBody) {
   EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "poll #2 http=200 status=pending"));
   EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info,
                      "poll #3 http=200 status=expired server_status=\"expired\" "
-                     "body=\"{\"status\":\"expired\",\"code\":\"<code>\"}\""));
-  for (const auto& [level, message] : fake.logs) {
-    (void)level;
-    EXPECT_EQ(message.find(fake.code), std::string::npos) << message;
-  }
+                     "body=\"{\"status\":\"expired\",\"code\":\"" + fake.code + "\"}\""));
   EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Warning, "unknown status"));
 }
 
@@ -911,20 +907,18 @@ TEST(DeviceAuthFlow, ATransportFailureIsLoggedAsHttpNoneNotSilence) {
   EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Warning, "unknown status")) << "an error is not an unknown status";
 }
 
-TEST(PollBodyPrefix, MasksTheCodeCapsTheLengthAndNeverEchoesTokens) {
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"code\":\"SECRET-1\",\"status\":\"x\"}", "SECRET-1"),
-            "{\"code\":\"<code>\",\"status\":\"x\"}");
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(500, 'a'), "zzz").size(), 120U);
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(500, 'a'), "zzz", 10).size(), 10U);
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("a\nb\x01", ""), "a.b.");
+// #2244: the poll body is logged as the server sent it, the code and any tokens included. Control characters become '.'
+// so one body is one line; the cap is the log line's own.
+TEST(PollBodyPrefix, IsTheBodyAsSentCappedAtTheLineLength) {
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"code\":\"SECRET-1\",\"status\":\"x\"}"),
+            "{\"code\":\"SECRET-1\",\"status\":\"x\"}");
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(5000, 'a')).size(), 1024U);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(500, 'a'), 10).size(), 10U);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("a\nb\x01"), "a.b.");
   const std::string verified =
       "{\"status\":\"verified\",\"access_token\":\"eyJhbGciOiJIUzI1NiJ9.payload.sig\",\"refresh_token\":\"r\"}";
-  const std::string described = nevr_token_auth::PollBodyPrefix(verified, "SECRET-1");
-  EXPECT_EQ(described.find("eyJ"), std::string::npos);
-  EXPECT_EQ(described.find("access_token"), std::string::npos);
-  EXPECT_NE(described.find(std::to_string(verified.size())), std::string::npos);
-  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"token\":\"legacy-secret\"}", "").find("legacy-secret"),
-            std::string::npos);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(verified), verified);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"token\":\"legacy-secret\"}"), "{\"token\":\"legacy-secret\"}");
 }
 
 TEST(DeviceAuthFlow, BrowserResultBoundaryUsesTransientUiOnlyForZeroAndThirtyTwo) {
