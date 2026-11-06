@@ -20,7 +20,7 @@ foreach(f got_hook hook_log hook_report)
   nevr_ht_obj(o_combat_${f} GROUP combat NOEXC INCS ${_csent} SRC src/quest/sentinel/${f}.cpp)
 endforeach()
 set(_ccore o_combat_got_hook o_combat_hook_log o_combat_hook_report)
-set(_cf NOEXC PTHREAD DL INCS ${_csent})
+set(_cf NOEXC PTHREAD DL INCS ${_csent} DEFS NEVR_COMBAT_READ_COUNTERS)
 # The EC client and what it brings into a program that links the registration table (#2187): its NEUTRON effects, the sentinel's page and
 # the module-loaded observer table it registers with.
 set(_cec src/quest/combat/ec.cpp src/quest/combat/ecfx.cpp src/quest/sentinel/ec_page.cpp src/quest/integration/module_observers.cpp)

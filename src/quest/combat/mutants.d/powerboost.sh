@@ -109,3 +109,6 @@ runm pb_key_error_unlogged $P 's/{"reason", "no_thread_key"}, {"error", keyError
 runm pb_cfg_default        $Q 's/ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 3, 3, r)/ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 3, 0, r)/' quest-host-shared quest_config_test
 runm pb_cfg_range          $Q 's/ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 3, 3, r)/ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 9, 3, r)/' quest-host-shared quest_config_test
 runm pb_cfg_quiet          $Q 's/" rejected reason=out_of_range (default stays)");/" ok");/' quest-host-shared quest_config_test
+# arena pays nothing, by count (the arena path of the node handler reads game memory / the heal handlers scan the levels before the scope test)
+runm pb_arena_reads_before_scope $P 's/^  if (!Scoped()) return original(node, data);/  { bool ok_ = true; (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(data) + 0x20, \&ok_); }\n  if (!Scoped()) return original(node, data);/'
+runm pb_arena_scans_before_scope $P 's/^  if (!Scoped()) return original(cs, handle, amount, user);/  (void)level::Scan(0);\n  if (!Scoped()) return original(cs, handle, amount, user);/'

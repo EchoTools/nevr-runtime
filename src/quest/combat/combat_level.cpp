@@ -27,11 +27,25 @@ bool In(std::uint64_t level, const std::uint64_t (&set)[N]) noexcept {
 
 }  // namespace
 
+#if defined(NEVR_COMBAT_READ_COUNTERS)
+namespace {
+std::atomic<std::uint64_t> g_scanCalls{0};
+}
+#endif
+
 bool IsCombatMap(std::uint64_t level) noexcept { return In(level, kCombatLevels); }
 bool IsCombatLobby(std::uint64_t level) noexcept { return level == kCombatLobby; }
 bool IsEchoArenaLevel(std::uint64_t level) noexcept { return In(level, kEchoArenaLevels); }
 
+#if defined(NEVR_COMBAT_READ_COUNTERS)
+std::uint64_t ScanCallsForTest() noexcept { return g_scanCalls.load(std::memory_order_relaxed); }
+void ResetScanCallsForTest() noexcept { g_scanCalls.store(0, std::memory_order_relaxed); }
+#endif
+
 Loaded Scan(std::uintptr_t game) noexcept {
+#if defined(NEVR_COMBAT_READ_COUNTERS)
+  g_scanCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
   Loaded out;
   for (const auto& table : kTables) {
     bool ok = true;

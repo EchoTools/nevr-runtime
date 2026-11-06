@@ -9,12 +9,26 @@
 
 #include <cstddef>
 #include <cstdint>
+#if defined(NEVR_COMBAT_READ_COUNTERS)
+#include <atomic>
+#endif
 
 namespace nevr_quest::combat {
+
+#if defined(NEVR_COMBAT_READ_COUNTERS)
+// Host tests only (the combat group defines the macro; the sentinel never does): how many reads were asked, so an arena test can assert that a
+// module read nothing before its scope test (docs/adr/0046; "Prove arena pays nothing, by count"). A read that fails still counts.
+inline std::atomic<std::uint64_t> g_safeReadCalls{0};
+inline std::uint64_t SafeReadCallsForTest() noexcept { return g_safeReadCalls.load(std::memory_order_relaxed); }
+inline void ResetSafeReadCallsForTest() noexcept { g_safeReadCalls.store(0, std::memory_order_relaxed); }
+#endif
 
 // Copies `length` bytes at `address` into `out`. False when any byte could not be read (nothing is promised about `out` then), for a
 // zero or implausible address, and for a range that wraps.
 inline bool SafeRead(std::uintptr_t address, void* out, std::size_t length) noexcept {
+#if defined(NEVR_COMBAT_READ_COUNTERS)
+  g_safeReadCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
   if (length == 0) return true;
   if (address < 0x10000 || address > 0x0000ffffffffffffULL - length) return false;
   iovec local{out, length};

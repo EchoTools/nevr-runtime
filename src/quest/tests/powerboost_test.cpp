@@ -25,7 +25,9 @@
 #include <vector>
 
 #include "nevr/symbol_hash.h"
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/safe_read.h"
 #include "quest/combat/powerboost_core.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/tests/combat_libr15_image.h"
@@ -35,6 +37,8 @@
 namespace {
 
 namespace pb = nevr_quest::combat::powerboost;
+namespace cb = nevr_quest::combat;
+namespace level = nevr_quest::combat::level;
 using pb::PhTarget;
 using combat_test::Image;
 using EchoVR::CSymbol64Hash;
@@ -955,6 +959,8 @@ int main() {
     CHECK(!pb::InScope(), "arena (%s): in scope", level != nullptr ? level : "no game");
     g_lines.clear();
     const pb::Stats before = pb::CurrentStats();
+    cb::ResetSafeReadCallsForTest();  // what follows is the arena path: no read of game memory, no scan of the levels (count, not only the game's view)
+    level::ResetScanCallsForTest();
     g_node_heals = true;
     NodeData d = Data(1250030.0f, 5);
     NodeSlot()(node, d.b);  // the node's direct heal goes on to Heal with the marker
@@ -969,6 +975,9 @@ int main() {
     const PhTarget ta{{1, 0, 0}};
     const uint8_t* body = pb::ConeAtForTest(&ta, g_frame, reinterpret_cast<uintptr_t>(g_dcs));
     pb::NetTick();
+    CHECK(cb::SafeReadCallsForTest() == 0 && level::ScanCallsForTest() == 0, "arena (%s): %llu reads and %llu scans on the arena path",
+          level != nullptr ? level : "no game", static_cast<unsigned long long>(cb::SafeReadCallsForTest()),
+          static_cast<unsigned long long>(level::ScanCallsForTest()));
     CHECK(g_heals.size() == 3 && g_heals[0].amount == 1250030.0f && g_heals[1].amount == 1250030.0f && g_heals[2].amount == 1250030.0f,
           "arena (%s): a heal was swallowed or changed (%zu heals)", level != nullptr ? level : "no game", g_heals.size());
     CHECK(g_node_calls == 1 && g_link_calls == 1 && body == g_body_a && g_sends.empty(), "arena (%s): a call was changed or something was sent",
