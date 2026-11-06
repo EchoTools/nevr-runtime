@@ -2993,6 +2993,19 @@ TEST_F(PluginResourceSetTest, AMountWaitsForTheGamesFirstRequestAndARecordInItsM
   EXPECT_TRUE(TestLogContains("stock_records=69694"));
 }
 
+TEST_F(PluginResourceSetTest, TheResolverHooksFirstRequestIsWhatReleasesTheMount) {
+  Plan();
+  LoadPlugins();
+  nevr_resource_sets::MountWhenReady();
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  nevr::assets::SetRequestOriginalForTest(&RecordingRequest);
+  int callers = 0;
+  nevr::assets::CallRequestHookForTest(&callers, 0x9999ULL, 0x9999ULL);  // the game's first request, of any key
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_NE(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+}
+
 TEST_F(PluginResourceSetTest, AMountRunsOnlyOnTheGamesThreadAndSaysSoAfterAMinuteOfWaiting) {
   Plan();
   LoadPlugins();
