@@ -31,10 +31,12 @@
 #include <vector>
 
 #include "nevr/symbol_hash.h"
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ec_core.h"
 #include "quest/combat/legacy_switch.h"
+#include "quest/combat/safe_read.h"
 #include "quest/integration/post_load.h"
 #include "quest/sentinel/ec_page.h"
 #include "quest/sentinel/hook_log.h"
@@ -1245,6 +1247,8 @@ static void ArenaTests() {
   CHECK(HasLine("\"in_scope\":0,\"level_class\":\"echo_arena\""), "no scope line for arena");
   OnNetTick(&NetTick);
   g_tick_calls = 0;
+  nevr_quest::combat::ResetSafeReadCallsForTest();  // the arena path from here: no read of game memory, no scan of the levels (the count, not only what the game gets)
+  nevr_quest::combat::level::ResetScanCallsForTest();
   GameTalks();
   CHECK(StatsNow().sends == 0 && !StatsNow().haveServer, "a send in arena was counted");
   uint8_t buf[64];
@@ -1253,6 +1257,8 @@ static void ArenaTests() {
   g_in.push_back(Veil('T', 99));
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 16 && g_recv_calls == 1, "an EC datagram in arena was consumed");
   CHECK(StatsNow().tokens == 0 && StatsNow().passed == 0 && StatsNow().consumed == 0 && g_tick_calls == 0, "arena: counted, tokened or ticked");
+  CHECK(nevr_quest::combat::SafeReadCallsForTest() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0, "arena: %llu reads and %llu scans on the arena path",
+        static_cast<unsigned long long>(nevr_quest::combat::SafeReadCallsForTest()), static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
   // the arena lobbies are no combat level either
   for (const char* lobby : {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b_arena", "mpl_lobby_b_social"}) {
     LoadLevels({lobby});
