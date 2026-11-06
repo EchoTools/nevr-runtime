@@ -29,10 +29,24 @@ Shown:
 - Each slot is checked before it is written: the write stores only over `base + <rodata address>` (a slot the loader has not relocated holds 0 and is
   refused, `original_mismatch`, with a line that names the row), so a step that ran too early writes nothing and says so.
 
-Not shown (needs a headset): that the slots are relocated when the sentinel's constructor runs on a device (the sentinel's other constructor-installed
-hooks on libr15's JUMP_SLOTs are; a GLOB_DAT word is relocated in the same pass), and that the game runs with the raised heaps. The headset run reads, in the
+Relocation: bionic links the whole dependency group of a `dlopen` (`find_libraries`, every library's `link_image`) before it runs any constructor
+(`do_dlopen` calls `call_constructors` after `find_library` returns, children first), and one `relocate` call applies the GLOB_DAT words
+(`.rela.dyn`) before the JUMP_SLOTs (`.rela.plt`, bound eagerly, no lazy binding). The sentinel is a DT_NEEDED child of libr15, so its constructor runs
+after libr15's GLOB_DATs are applied. A headset has shown the same order: the sentinel's constructor-installed hooks on libr15's JUMP_SLOTs (the
+match-tags default, `combat_match_tags_install` `installed` on a Quest 2) install from a later step of the same sequence, and a slot accepts
+a hook only once it holds a mapped address. A slot that were not relocated would hold 0 and be refused (`original_mismatch`), writing nothing.
+
+Not shown (needs a headset): that the game runs with the raised heaps, and the witness on a device. The headset run reads, in the
 sentinel log, `combat_heaps_install result=installed` with `resource_mib` 320, `system_mib` 640 (512 on a Quest 2), `gpu_mib` 512 and
 `game_space_mib` 128, then `combat_memsys_witness` with `system_heap` `raised`; a combat match plays.
+
+## 1b. What an arena match on the combat APK gets
+
+The sizes are read once at the start of the process and cannot be scoped by level, so an arena match on a q15t or combat APK runs with them too: heap
+sizes totalling 1600 MiB against 806 MiB stock (+794 MiB; +666 MiB on a Quest 2), and a 1024-slot layout pool (`docs/quest/combat/memsys.md`). Both wrappers run about
+once per process: libr15 has one call through each PLT stub (Alloc from InitCommon at 0x19818c8, `CSysJava::Init` from `android_main` at 0x10784e4). The cost
+of the sizes is unmeasured: whether the allocator commits or only reserves the memory, and the headroom on a Quest 2, are open. The headset row
+measures it: an arena match on the combat APK on a Quest 2, PSS and frame time with `combat.heaps: true` against `false`. A plain release is untouched (the step does not run).
 
 ## 2. Mechanism (no code write)
 

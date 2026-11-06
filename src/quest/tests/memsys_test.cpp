@@ -373,6 +373,18 @@ void TheWitnessIsWrittenOnceAtAndroidMainsCall() {
   const std::vector<Line> stock = Lines("combat_memsys_witness");
   QCHECK(stock.size() == 1U && Has(stock[0].text, "\"system_heap_mib_next_read\":400") && Has(stock[0].text, "\"system_heap\":\"stock\""));
   End();
+  // A System heap word of zero is not a size the game could use: the witness says so, as a string, not as a number.
+  Begin();
+  Build(/*systemMiB=*/0);
+  QCHECK(memsys::InstallAt(&Lookup, g_pins, true).installed);
+  const Sites u = Learn();
+  memsys::SetSitesForTest(0, u.initA);
+  g_lines.clear();
+  InitSiteA(InitSlot(), nullptr);
+  const std::vector<Line> zero = Lines("combat_memsys_witness");
+  QCHECK(zero.size() == 1U && Has(zero[0].text, "\"system_heap_mib_next_read\":\"unreadable\"") &&
+         Has(zero[0].text, "\"system_heap\":\"unreadable\""));
+  End();
 }
 
 // A pinned code word that differs refuses its own row only.
@@ -387,7 +399,8 @@ void APinnedWordThatDiffersRefusesItsRowAlone() {
   std::vector<Line> hooks = Lines("combat_memsys_hook");
   bool found = false;
   for (const Line& l : hooks) {
-    if (Has(l.text, "\"row\":\"R37\"")) found = l.level == sentinel::LogLevel::kWarn && Has(l.text, "\"status\":\"pinned_word_mismatch\"") && Has(l.text, "\"vaddr\":\"0x00000000018818e8\"");
+    if (Has(l.text, "\"row\":\"R37\"")) found = l.level == sentinel::LogLevel::kWarn && Has(l.text, "\"status\":\"pinned_word_mismatch\"") && Has(l.text, "\"vaddr\":\"0x00000000018818e8\"") &&
+            Has(l.text, "\"have\":\"0x0000000091080129\",\"want\":\"0x0000000091080169\"");
   }
   QCHECK(found);
   End();

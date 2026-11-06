@@ -191,7 +191,8 @@ void ANonStockRodataWordRefusesItsRow() {
   bool found = false;
   for (const Line& l : Lines("combat_heaps_row")) {
     if (Has(l.text, "\"row\":\"R09\"")) {
-      found = l.level == sentinel::LogLevel::kWarn && Has(l.text, "\"why\":\"rodata_not_stock\"");
+      found = l.level == sentinel::LogLevel::kWarn && Has(l.text, "\"why\":\"rodata_not_stock\"") &&
+              Has(l.text, "\"have\":\"0x0000000008000000\",\"want\":\"0x0000000002800000\"");  // 128 MiB read, 40 MiB wanted
     }
   }
   QCHECK(found);
@@ -208,7 +209,10 @@ void AReaderThatIsNotTheStockLoadRefusesItsRow() {
   QCHECK(SlotIsStock(0));
   bool found = false;
   for (const Line& l : Lines("combat_heaps_row")) {
-    if (Has(l.text, "\"row\":\"R06\"")) found = l.level == sentinel::LogLevel::kWarn && Has(l.text, "\"why\":\"reader_word_not_stock\"");
+    if (Has(l.text, "\"row\":\"R06\"")) {
+      found = l.level == sentinel::LogLevel::kWarn && Has(l.text, "\"why\":\"reader_word_not_stock\"") &&
+              Has(l.text, "\"have\":\"0x00000000d503201f\",\"want\":\"0x00000000f9400101\"");
+    }
   }
   QCHECK(found);
   QCHECK(GameRead(1) == 640 * kMiB);

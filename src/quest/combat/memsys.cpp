@@ -111,10 +111,12 @@ void Witness() noexcept {
   const bool ok = ReadGame(slot, &word) && ReadGame(word, &bytes);
   char slotText[19];
   const std::uint64_t mib = bytes >> 20;
+  const bool known = ok && mib != 0;  // a zero size is not a heap the game could be about to use
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_memsys_witness",
                       {{"msg", "android_main reached CSysJava::Init"},
-                       {"system_heap_mib_next_read", mib},
-                       {"system_heap", !ok ? "unreadable" : (mib == kStockSystemMiB ? "stock" : "raised")},
+                       known ? sentinel::LogField{"system_heap_mib_next_read", mib}
+                             : sentinel::LogField{"system_heap_mib_next_read", "unreadable"},
+                       {"system_heap", !known ? "unreadable" : (mib == kStockSystemMiB ? "stock" : "raised")},
                        {"system_slot_vaddr", sentinel::HexString(slotText, g_systemSlotOffset.load(std::memory_order_acquire))}});
 }
 
@@ -129,12 +131,13 @@ std::uint64_t InitHandler(InitThunk::Fn original, const void* caller, void* app)
 NEVR_HOOK_RECORD(kAllocRecord, AllocThunk, &AllocHandler);
 NEVR_HOOK_RECORD(kInitRecord, InitThunk, &InitHandler);
 
-// The first pin whose word is not the live image's, for `row`; nullptr when every word of the row holds.
-const Word* FirstWordMismatch(std::uintptr_t base, int row) noexcept {
+// The first pin whose word is not the live image's, for `row`; nullptr when every word of the row holds. `have` and `readable` say what was read.
+const Word* FirstWordMismatch(std::uintptr_t base, int row, std::uint32_t* have, bool* readable) noexcept {
   for (const Word& pin : kWords) {
     if (pin.row != row) continue;
-    std::uint32_t have = 0;
-    if (!ReadGame(base + pin.vaddr, &have) || have != pin.word) return &pin;
+    *have = 0;
+    *readable = ReadGame(base + pin.vaddr, have);
+    if (!*readable || *have != pin.word) return &pin;
   }
   return nullptr;
 }
@@ -144,11 +147,17 @@ template <typename Thunk, typename Record>
 const char* InstallRow(const char* row, const char* symbol, int rowNumber, std::uintptr_t base, sentinel::GotHook& hook,
                        const sentinel::GotTarget& target, const Record& record, sentinel::ImageLookup lookup) noexcept {
   const char* status = nullptr;
-  if (const Word* const mismatch = FirstWordMismatch(base, rowNumber)) {
+  std::uint32_t have = 0;
+  bool readable = false;
+  if (const Word* const mismatch = FirstWordMismatch(base, rowNumber, &have, &readable)) {
     char at[19];
+    char haveText[19];
+    char wantText[19];
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_memsys_hook",
                         {{"row", row}, {"symbol", symbol}, {"status", "pinned_word_mismatch"},
                          {"vaddr", sentinel::HexString(at, mismatch->vaddr)},
+                         {"have", readable ? sentinel::HexString(haveText, have) : "unreadable"},
+                         {"want", sentinel::HexString(wantText, mismatch->word)},
                          {"consequence", "the row is not installed: its pinned code is not the pinned build's"}});
     return "pinned_word_mismatch";
   }

@@ -63,6 +63,19 @@ void LogRow(sentinel::LogLevel level, const RowPin& row, const char* status, con
                        {"value_mib", valueBytes / kMiB}, {"observed_mib", observedMiB}, {"device", device}});
 }
 
+// A refusal because a pinned word is not the stock one (logging.md Rule 6): the word read and the word wanted, `have` "unreadable" when the
+// read failed.
+void LogWordRefusal(const RowPin& row, const char* why, bool readable, std::uint64_t have, std::uint64_t want, std::uint64_t valueBytes,
+                    const char* device) noexcept {
+  char slot[19];
+  char haveText[19];
+  char wantText[19];
+  sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_heaps_row",
+                      {{"row", row.id}, {"status", "refused"}, {"why", why}, {"slot_vaddr", sentinel::HexString(slot, row.slot)},
+                       {"have", readable ? sentinel::HexString(haveText, have) : "unreadable"},
+                       {"want", sentinel::HexString(wantText, want)}, {"value_mib", valueBytes / kMiB}, {"device", device}});
+}
+
 struct Counts {
   std::size_t swapped = 0;
   std::size_t refused = 0;
@@ -75,13 +88,15 @@ bool SwapRow(const sentinel::ElfImage& image, sentinel::ImageLookup lookup, std:
              const char* device) noexcept {
   const RowPin& pin = kRows[row];
   std::uint32_t readerWord = 0;
-  if (!ReadGame(image.base + pin.reader, &readerWord) || readerWord != pin.readerWord) {
-    LogRow(sentinel::LogLevel::kWarn, pin, "refused", "reader_word_not_stock", valueBytes, 0, device);
+  const bool readerRead = ReadGame(image.base + pin.reader, &readerWord);
+  if (!readerRead || readerWord != pin.readerWord) {
+    LogWordRefusal(pin, "reader_word_not_stock", readerRead, readerWord, pin.readerWord, valueBytes, device);
     return false;
   }
   std::uint64_t stockBytes = 0;
-  if (!ReadGame(image.base + pin.ro, &stockBytes) || stockBytes != pin.stock) {
-    LogRow(sentinel::LogLevel::kWarn, pin, "refused", "rodata_not_stock", valueBytes, 0, device);
+  const bool stockRead = ReadGame(image.base + pin.ro, &stockBytes);
+  if (!stockRead || stockBytes != pin.stock) {
+    LogWordRefusal(pin, "rodata_not_stock", stockRead, stockBytes, pin.stock, valueBytes, device);
     return false;
   }
   g_value[row] = valueBytes;  // published before the slot points at it

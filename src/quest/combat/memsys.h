@@ -36,7 +36,8 @@
  * Owner (ADR 0039). This file owns the layout pool's slot count. The reference runtime's pool change is not in this repository's APKs.
  *
  * Lines (sentinel log):
- *   hook     {"event":"combat_memsys_hook","row":"R37|R38","symbol":"..","status":"<GotStatus>|pinned_word_mismatch"}  Info when installed
+ *   hook     {"event":"combat_memsys_hook","row":"R37|R38","symbol":"..","status":"<GotStatus>|pinned_word_mismatch"}  Info when installed;
+ *            a pinned word that differs is a Warning that adds `vaddr`, `have` (the word read, or "unreadable") and `want`
  *   install  {"event":"combat_memsys_install","result":"installed|partial|refused|off","reason":"ok|row_refused|<token>|combat.memsys",
  *             "r37":"..","r38":"..","consequence":".."}
  *   pool     {"event":"combat_memsys_pool","result":"raised|not_raised","slots":1024,"pre_pushed":512,"cap_read_back":<n>}  once, after Alloc

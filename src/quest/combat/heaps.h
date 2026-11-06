@@ -33,8 +33,10 @@
  * Owner (ADR 0039). This file owns the four sizes. The reference runtime's own heap rows are not in this repository's APKs.
  *
  * Lines (sentinel log):
- *   row      {"event":"combat_heaps_row","row":"R06","status":"swapped|refused","why":"..","slot_vaddr":"0x..","value_mib":<n>,
- *             "observed_mib":<n>,"device":".."}   Debug for a swapped row, Warning for a refused one
+ *   row      {"event":"combat_heaps_row","row":"R06","status":"swapped|refused|left","why":"..","slot_vaddr":"0x..","value_mib":<n>,
+ *             "observed_mib":<n>,"device":".."}   Debug for a swapped row, Error for a refused write, Info for a row left alone
+ *            a pinned word that differs (why `reader_word_not_stock` or `rodata_not_stock`) is a Warning with `have` (the word read, or
+ *            "unreadable"), `want` and no `observed_mib`
  *   install  {"event":"combat_heaps_install","result":"installed|partial|refused|off","reason":"ok|row_refused|<status token>|combat.heaps","swapped":<n>,"refused":<n>,"left":<n>,
  *             "resource_mib":<n>,"system_mib":<n>,"gpu_mib":<n>,"game_space_mib":<n>,"device":"..","consequence":".."}
  *            `*_mib` is the size the game reads through the slot after the step (0 when it could not be read).
