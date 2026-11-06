@@ -8,11 +8,12 @@
 // The set also carries one override (kOverrideType:kOverrideName, 8 bytes of 0x55), which the host registers when it
 // mounts the set.
 //
-// The init registers the set, then tries five refusals the host must make: the same set again (a key the first holds:
+// The init registers the set, then tries six refusals the host must make: the same set again (a key the first holds:
 // NEVR_RESOURCES_COLLIDES), a block of writable data (NEVR_RESOURCES_NOT_IN_FILE, writable_section), a read-only block
 // with a relocated pointer in it (NEVR_RESOURCES_NOT_IN_FILE, relocated), the set under a label with a newline
-// (NEVR_RESOURCES_BAD_ARGUMENT, bad_label) and bytes of another module's image (NEVR_RESOURCES_NOT_IN_FILE,
-// not_in_image). The statuses are exported for the test to read.
+// (NEVR_RESOURCES_BAD_ARGUMENT, bad_label), bytes of another module's image (NEVR_RESOURCES_NOT_IN_FILE,
+// not_in_image) and the set under a label with a byte above 0x7e (bad_label). The statuses are exported for the test
+// to read.
 
 #include <windows.h>
 
@@ -114,8 +115,8 @@ WithPointer g_withPointer = {&g_withPointer, {}};
 extern const WithPointer kRelocated;
 NEVR_RESOURCE_SET_SECTION const WithPointer kRelocated = {&kRelocated, {}};
 
-constexpr int kRegistrations = 6;
-int32_t g_status[kRegistrations] = {-99, -99, -99, -99, -99, -99};
+constexpr int kRegistrations = 7;
+int32_t g_status[kRegistrations] = {-99, -99, -99, -99, -99, -99, -99};
 
 }  // namespace
 
@@ -135,6 +136,7 @@ extern "C" __declspec(dllexport) int NevrPluginInitEx(const NevrGameContext* ctx
   // Bytes in another module's image (kernel32's): never the plugin's own file.
   const auto* elsewhere = reinterpret_cast<const unsigned char*>(GetModuleHandleA("kernel32.dll"));
   g_status[5] = NevrRegisterEmbeddedResources(ctx, elsewhere + 0x1000, 64, "elsewhere").status;
+  g_status[6] = NevrRegisterEmbeddedResources(ctx, kSet.data(), kSet.size(), "caf\x80").status;  // not ASCII
   const bool fail = args != nullptr && std::strstr(args, "\"fail\":\"1\"") != nullptr;
   return fail ? 1 : 0;
 }
@@ -144,7 +146,7 @@ extern "C" __declspec(dllexport) int NevrPluginInitEx(const NevrGameContext* ctx
 extern "C" __declspec(dllexport) void NevrPluginShutdown() {}
 
 // Test reads: the status of registration `which` (0 the set, 1 the repeat, 2 the writable block, 3 the relocated
-// block, 4 the bad label, 5 another module's bytes), and the set's bytes.
+// block, 4 the label with a newline, 5 another module's bytes, 6 the label with a byte above 0x7e), and the set's bytes.
 extern "C" __declspec(dllexport) int32_t NevrTestPluginResourcesStatus(uint32_t which) {
   return which < static_cast<uint32_t>(kRegistrations) ? g_status[which] : -98;
 }

@@ -152,7 +152,7 @@ bool ServeFromPlugin(void* resource, const Asset& asset) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.ASSET] not served label=%s type=0x%016llx name=0x%016llx reason=buffer_mask_0x%x "
                 "(only single-buffer resources are carried)",
-                asset.label.c_str(), static_cast<unsigned long long>(asset.type),
+                nevr_resource_sets::Printable(asset.label.c_str()).c_str(), static_cast<unsigned long long>(asset.type),
                 static_cast<unsigned long long>(asset.name), mask);
         }
         return false;
@@ -164,7 +164,7 @@ bool ServeFromPlugin(void* resource, const Asset& asset) {
         if (FirstWarningFor(asset.type, asset.name)) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.ASSET] not served label=%s type=0x%016llx name=0x%016llx reason=no_task_scheduler",
-                asset.label.c_str(), static_cast<unsigned long long>(asset.type),
+                nevr_resource_sets::Printable(asset.label.c_str()).c_str(), static_cast<unsigned long long>(asset.type),
                 static_cast<unsigned long long>(asset.name));
         }
         return false;
@@ -182,7 +182,7 @@ bool ServeFromPlugin(void* resource, const Asset& asset) {
         if (FirstWarningFor(asset.type, asset.name)) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.ASSET] not served label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s",
-                asset.label.c_str(), static_cast<unsigned long long>(asset.type),
+                nevr_resource_sets::Printable(asset.label.c_str()).c_str(), static_cast<unsigned long long>(asset.type),
                 static_cast<unsigned long long>(asset.name), static_cast<unsigned long long>(asset.size),
                 nevr_game_buffer::CopyName(copied));
         }
@@ -206,7 +206,7 @@ bool ServeFromPlugin(void* resource, const Asset& asset) {
 
     Log(EchoVR::LogLevel::Info,
         "[NEVR.ASSET] served from plugin label=%s type=0x%016llx name=0x%016llx bytes=%llu buffers=1",
-        asset.label.c_str(), static_cast<unsigned long long>(asset.type),
+        nevr_resource_sets::Printable(asset.label.c_str()).c_str(), static_cast<unsigned long long>(asset.type),
         static_cast<unsigned long long>(asset.name), static_cast<unsigned long long>(asset.size));
     return true;
 }
@@ -243,7 +243,7 @@ uint64_t __cdecl Hook_Request(void* manager, uint64_t typeKey, uint64_t nameKey,
                 "[NEVR.ASSET] registered asset requested through a loader path that reads packages "
                 "label=%s type=0x%016llx name=0x%016llx index=%llu (texture mip or archive load); the "
                 "engine will fail this read",
-                asset.label.c_str(), static_cast<unsigned long long>(typeKey),
+                nevr_resource_sets::Printable(asset.label.c_str()).c_str(), static_cast<unsigned long long>(typeKey),
                 static_cast<unsigned long long>(nameKey), static_cast<unsigned long long>(index));
         }
     }
@@ -281,22 +281,25 @@ void EnsureHooksInstalled() {
         return;
     }
 
+    // Each hook is installed on its own, and either works without the other: the submit hook serves plugin assets, the
+    // request hook (the resolver, 0x140fa1fe0) serves resource sets (#2161) and names an asset read through a path
+    // that reads packages. PatchDetour's own Warning names a hook that failed.
     g_submitTarget = reinterpret_cast<void*>(Base() + kRvaSubmit);
     if (!InstallOne(g_submitTarget, reinterpret_cast<void*>(Hook_Submit),
                     reinterpret_cast<void**>(&g_origSubmit), "plugin_assets submit")) {
         g_submitTarget = nullptr;
-        g_hookAttemptFailed = true;
-        return;
     }
     g_requestTarget = reinterpret_cast<void*>(Base() + kRvaRequest);
     if (!InstallOne(g_requestTarget, reinterpret_cast<void*>(Hook_Request),
                     reinterpret_cast<void**>(&g_origRequest), "plugin_assets request")) {
-        // The submit hook alone serves loads; only the named diagnosis for the direct paths is missing.
         g_requestTarget = nullptr;
     }
     g_hooksInstalled = true;
-    Log(EchoVR::LogLevel::Info, "[NEVR.ASSET] hooks installed submit=%p request=%p", g_submitTarget,
-        g_requestTarget);
+    const bool both = g_submitTarget != nullptr && g_requestTarget != nullptr;
+    Log(both ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+        "[NEVR.ASSET] hooks installed submit=%s request=%s%s%s", g_submitTarget ? "yes" : "no",
+        g_requestTarget ? "yes" : "no", g_submitTarget ? "" : " (plugin assets are not served)",
+        g_requestTarget ? "" : " (resource sets are not served)");
 }
 
 }  // namespace
@@ -366,7 +369,8 @@ uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name) {
 RegisterStatus RegisterPluginAsset(uint64_t type, uint64_t name, const void* data, uint64_t size,
                                    const char* label) {
     Global().SetLoadedProbe(&EngineHasLoaded);
-    const char* shown = label ? label : "";
+    const std::string printable = nevr_resource_sets::Printable(label);  // the label as the log lines carry it
+    const char* shown = printable.c_str();
     // #2161: a key a plugin's resource set holds is the set's; the two would be served by different hooks.
     if (nevr_resource_sets::HoldsKey(type, name)) {
         Log(EchoVR::LogLevel::Warning,
@@ -400,7 +404,7 @@ size_t DeregisterPluginAssets(const void* start, const void* end) {
     const size_t count = Global().Deregister(start, end, &removed);
     for (const Asset& a : removed) {
         Log(EchoVR::LogLevel::Info, "[NEVR.ASSET] deregistered label=%s type=0x%016llx name=0x%016llx",
-            a.label.c_str(), static_cast<unsigned long long>(a.type),
+            nevr_resource_sets::Printable(a.label.c_str()).c_str(), static_cast<unsigned long long>(a.type),
             static_cast<unsigned long long>(a.name));
     }
     return count;

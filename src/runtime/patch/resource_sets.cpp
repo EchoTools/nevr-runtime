@@ -55,6 +55,7 @@ struct Published {
   std::atomic<std::uint64_t> firstWinType{0};
   std::atomic<std::uint64_t> firstWinName{0};
   std::atomic<std::uint32_t> firstWinUser{0};
+  std::atomic<bool> firstWinReady{false};  // stored after the three above, so a reader that sees it sees them
 };
 
 // When a mount is still waiting this long after the plugin pass, one Warning says why.
@@ -67,8 +68,11 @@ Registry g_registry;
 std::atomic<Published*> g_published{nullptr};
 std::atomic<bool> g_mountDeferred{false};
 bool g_deferSaid = false;
-bool g_lateSaid = false;
-std::uint64_t g_armedAtMs = 0;
+// Read without g_mutex by TryMount's check before it takes the lock.
+std::atomic<bool> g_lateSaid{false};
+std::atomic<std::uint64_t> g_armedAtMs{0};
+// True once TryMount has run on the game-loop thread: the late warning says whether the game's thread reaches it.
+std::atomic<bool> g_gameThreadSeen{false};
 // Set by the resolver hook on the game's first request. The game adds its boot package sets in one function
 // (echovr.exe 0x141548da0 calls CResourceManager::AddPackage at 0x14154973c and 0x1415497a7) and only then initialises
 // the streaming reader that serves requests (CStreamingIOProcessor::Initialize, call at 0x141549902), so by the first
@@ -76,6 +80,8 @@ std::uint64_t g_armedAtMs = 0;
 std::atomic<bool> g_requestSeen{false};
 std::atomic<std::uint64_t> g_lastSummaryMs{0};
 std::atomic<bool> g_stockWinSaid{false};
+std::atomic<bool> g_mountFailedSaid{false};
+std::atomic<bool> g_summaryFailedSaid{false};
 
 struct InitState {
   std::string id;
@@ -90,6 +96,9 @@ StockHasFn g_testStockHas = nullptr;
 std::uint64_t g_testStockRecords = 0;
 std::uint64_t (*g_testNow)() = nullptr;
 bool g_testThrow = false;
+MountThrowAt g_testMountThrow = MountThrowAt::kNowhere;
+bool g_testNoResolverHook = false;
+bool g_testThrowAfterOpen = false;
 std::wstring g_testFilePath;  // non-empty: the file registration opens instead of the plugin's own
 #endif
 
@@ -164,16 +173,27 @@ bool LabelOk(const char* label) {
   return true;
 }
 
-// Text from outside (a label not yet checked, another registry's label) made safe for a quoted log field.
-std::string Printable(const char* text) {
-  std::string out;
-  if (text == nullptr) return out;
-  for (std::size_t i = 0; text[i] != '\0' && out.size() < kMaxLabel; ++i) {
-    const unsigned char c = static_cast<unsigned char>(text[i]);
-    out += (c < 0x20 || c > 0x7e || c == '"' || c == '\\') ? '?' : static_cast<char>(c);
+// Text from outside (a plugin id, a label not yet checked, another registry's label) made safe for a quoted log
+// field: printable ASCII but '"' and '\\', every other byte as '?', at most kMaxLabel bytes. It is written into `out`,
+// so a line on an out-of-memory path, where nothing may allocate, shows the text as every other line does.
+const char* PrintableInto(const char* text, char (&out)[kMaxLabel + 1]) {
+  std::size_t n = 0;
+  for (; text != nullptr && text[n] != '\0' && n < kMaxLabel; ++n) {
+    const unsigned char c = static_cast<unsigned char>(text[n]);
+    out[n] = (c < 0x20 || c > 0x7e || c == '"' || c == '\\') ? '?' : static_cast<char>(c);
   }
+  out[n] = '\0';
   return out;
 }
+
+}  // namespace
+
+std::string Printable(const char* text) {
+  char out[kMaxLabel + 1];
+  return PrintableInto(text, out);
+}
+
+namespace {
 
 std::string LevelList(const Set& set) {
   std::string list;
@@ -322,6 +342,9 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
     return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "file_open",
                    "CreateFileW error " + std::to_string(GetLastError()));
   }
+#ifdef NEVR_TEST_HOOKS
+  if (g_testThrowAfterOpen) throw std::bad_alloc();
+#endif
   DWORD readError = 0;
   switch (FileHoldsMappedBytes(file.get(), range.file_offset, bytes, desc->size, &readError)) {
     case FileCheck::kSame:
@@ -353,7 +376,7 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
   Log(EchoVR::LogLevel::Info,
       "[NEVR.RESOURCE] resource set registered plugin=%s label=\"%s\" records=%u chunks=%u levels=%zu overrides=%u "
       "bytes=%llu file_offset=%llu (held until the plugin's init returns, then mounted after the plugin pass)",
-      pluginId, label.c_str(), view.record_count(), view.chunk_count(), levels, view.override_count(),
+      Printable(pluginId).c_str(), label.c_str(), view.record_count(), view.chunk_count(), levels, view.override_count(),
       static_cast<unsigned long long>(desc->size), static_cast<unsigned long long>(range.file_offset));
   return NEVR_RESOURCES_OK;
 }
@@ -361,6 +384,9 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
 // The mount itself, under g_mutex, once TryMount found the manifest ready. Fills `report`, `mounted` and
 // `abandoned` for the lines written after the lock is released.
 void MountLocked(std::uint64_t stockRecords, MountReport* report, std::vector<const Set*>* mounted) {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testMountThrow == MountThrowAt::kBeforeMount) throw std::bad_alloc();
+#endif
   *report = g_registry.Mount(StockView{&StockHasThunk, nullptr, stockRecords});
   *mounted = g_registry.MountedSets();
   if (const nevr_shadow::Shadow* shadow = g_registry.shadow()) {
@@ -372,8 +398,13 @@ void MountLocked(std::uint64_t stockRecords, MountReport* report, std::vector<co
   g_mountDeferred.store(false);
 }
 
+// `waitedMs`: from the plugin pass to the mount.
 void WriteMountLines(std::uint64_t startedMs, const MountReport& report, const std::vector<const Set*>& mounted,
-                     const std::vector<std::int64_t>& abandoned, const std::vector<std::string>& abandonedPlugins) {
+                     const std::vector<std::int64_t>& abandoned, const std::vector<std::string>& abandonedPlugins,
+                     std::uint64_t waitedMs) {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testMountThrow == MountThrowAt::kMountLines) throw std::bad_alloc();
+#endif
   if (!abandoned.empty()) {
     CloseHandles(abandoned);
     std::string plugins;
@@ -388,7 +419,7 @@ void WriteMountLines(std::uint64_t startedMs, const MountReport& report, const s
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.RESOURCE] resource set refused at mount plugin=%s label=\"%s\" reason=%s detail=\"%s\" (its levels are "
         "neither served nor listed as installed)",
-        refused.plugin.c_str(), refused.label.c_str(), RefusalName(refused.outcome.refusal),
+        Printable(refused.plugin.c_str()).c_str(), refused.label.c_str(), RefusalName(refused.outcome.refusal),
         refused.outcome.detail.c_str());
   }
   CloseHandles(report.handles_to_close);
@@ -407,41 +438,61 @@ void WriteMountLines(std::uint64_t startedMs, const MountReport& report, const s
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] resource set mounted plugin=%s label=\"%s\" records=%zu levels=%zu level_names=%s "
         "overrides=%u overrides_unmatched=%u",
-        set->plugin.c_str(), set->label.c_str(), set->records.size(), set->levels.size(), LevelList(*set).c_str(),
+        Printable(set->plugin.c_str()).c_str(), set->label.c_str(), set->records.size(), set->levels.size(),
+        LevelList(*set).c_str(),
         registered, unmatched);
   }
   Log(EchoVR::LogLevel::Info,
       "[NEVR.RESOURCE] resource sets mounted sets=%zu refused=%zu records=%zu levels=%zu chunk_base=0x%08x "
-      "stock_records=%llu duration_ms=%llu",
+      "stock_records=%llu waited_ms=%llu duration_ms=%llu",
       report.sets, report.refused, report.records, report.levels, report.chunk_base,
-      static_cast<unsigned long long>(report.stock_records),
+      static_cast<unsigned long long>(report.stock_records), static_cast<unsigned long long>(waitedMs),
       static_cast<unsigned long long>(NowMs() - startedMs));
+}
+
+// A mount that threw (it runs inside the game's frame, or from the plugin loader): it is not tried again, and one
+// line says whether the sets were published before the throw. It builds no string of its own; g_mutex is not held (the
+// throw left the scope that held it).
+void MountFailed(const char* reason) {
+  g_mountDeferred.store(false);
+  if (g_mountFailedSaid.exchange(true)) return;
+  const bool served = g_published.load(std::memory_order_acquire) != nullptr;
+  Log(EchoVR::LogLevel::Error,
+      "[NEVR.RESOURCE] resource sets mount failed reason=%s served=%s (%s)", reason, served ? "true" : "false",
+      served ? "the sets are served, but the mount's lines and its overrides may be incomplete"
+             : "no plugin level or resource is served, and the mount is not tried again");
 }
 
 // A deferred mount's attempt: on the game's own thread, once the game has asked for its first resource and its
 // manifest holds records.
 void TryMount(bool onLoopThread) {
+  const std::uint64_t now = NowMs();
+  if (onLoopThread && !g_gameThreadSeen.load(std::memory_order_relaxed)) g_gameThreadSeen.store(true);
+  // Every tick while the mount waits: with no lock, nothing to do until the game's thread runs this after the first
+  // request, except the one late warning.
+  const bool ready = onLoopThread && g_requestSeen.load(std::memory_order_relaxed);
+  const std::uint64_t armed = g_armedAtMs.load(std::memory_order_relaxed);
+  if (!ready && (g_lateSaid.load(std::memory_order_relaxed) || now - armed < kLateMs)) return;
   MountReport report;
   std::vector<const Set*> mounted;
-  const std::uint64_t now = NowMs();
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_mountDeferred.load() || g_registry.mounted()) return;
     const std::uint64_t count = StockRecordsNow();
-    if (!g_lateSaid && now - g_armedAtMs >= kLateMs) {
-      g_lateSaid = true;
+    if (!g_lateSaid.load() && now - armed >= kLateMs) {
+      g_lateSaid.store(true);
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.RESOURCE] resource sets still not mounted after %llu s sets=%zu stock_records=%llu "
-          "first_request_seen=%s on_game_thread=%s (no plugin level or resource is served until the mount; it waits "
+          "first_request_seen=%s game_thread_seen=%s (no plugin level or resource is served until the mount; it waits "
           "for the game's first resource request, on the game's own thread)",
-          static_cast<unsigned long long>((now - g_armedAtMs) / 1000), g_registry.held(),
+          static_cast<unsigned long long>((now - armed) / 1000), g_registry.held(),
           static_cast<unsigned long long>(count), g_requestSeen.load() ? "true" : "false",
-          onLoopThread ? "true" : "false");
+          g_gameThreadSeen.load() ? "true" : "false");
     }
-    if (!onLoopThread || count == 0 || !g_requestSeen.load()) return;
+    if (!ready || count == 0) return;
     MountLocked(count, &report, &mounted);
   }
-  WriteMountLines(now, report, mounted, {}, {});
+  WriteMountLines(now, report, mounted, {}, {}, now - armed);
 }
 
 }  // namespace
@@ -477,22 +528,24 @@ void EndPluginInit(const char* pluginId, bool succeeded) {
 
 // The plugin ABI entry: nothing it does may throw back into the plugin's init.
 int32_t HostRegisterResources(const char* pluginId, const NevrResourcesDesc* desc) {
+  char id[kMaxLabel + 1];  // the catches below allocate nothing
   try {
     return RegisterOne(pluginId, desc);
   } catch (const std::bad_alloc&) {
     Log(EchoVR::LogLevel::Error,
         "[NEVR.RESOURCE] resource set refused plugin=%s reason=out_of_memory (registration ran out of memory; nothing "
         "was registered)",
-        Printable(pluginId).c_str());
+        PrintableInto(pluginId, id));
   } catch (const std::exception&) {
     Log(EchoVR::LogLevel::Error,
         "[NEVR.RESOURCE] resource set refused plugin=%s reason=exception (registration threw; nothing was registered)",
-        Printable(pluginId).c_str());
+        PrintableInto(pluginId, id));
   }
   return NEVR_RESOURCES_BAD_FORMAT;
 }
 
-void MountWhenReady() {
+namespace {
+void MountWhenReadyUnguarded() {
   std::vector<std::int64_t> abandoned;
   std::vector<std::string> abandonedPlugins;
   {
@@ -506,12 +559,16 @@ void MountWhenReady() {
     // The resolver hook goes in now, so it sees the game's first request (which the mount waits for).
     bool hooked = true;
 #ifdef NEVR_TEST_HOOKS
-    if (g_testStockHas == nullptr) hooked = nevr::assets::EnsureResolverHook();
+    if (g_testNoResolverHook) {
+      hooked = false;
+    } else if (g_testStockHas == nullptr) {
+      hooked = nevr::assets::EnsureResolverHook();
+    }
 #else
     hooked = nevr::assets::EnsureResolverHook();
 #endif
     if (!hooked) {
-      for (const Set* set : g_registry.HeldSets()) abandonedPlugins.push_back(set->plugin);
+      for (const Set* set : g_registry.HeldSets()) abandonedPlugins.push_back(Printable(set->plugin.c_str()));
       abandoned = g_registry.Abandon();
     } else {
       g_armedAtMs = NowMs();
@@ -525,15 +582,31 @@ void MountWhenReady() {
       g_mountDeferred.store(true);
     }
   }
-  if (!abandoned.empty()) WriteMountLines(NowMs(), MountReport{}, {}, abandoned, abandonedPlugins);
+  if (!abandoned.empty()) WriteMountLines(NowMs(), MountReport{}, {}, abandoned, abandonedPlugins, 0);
+}
+}  // namespace
+
+void MountWhenReady() {
+  try {
+    MountWhenReadyUnguarded();
+  } catch (const std::bad_alloc&) {
+    MountFailed("out_of_memory");
+  } catch (const std::exception&) {
+    MountFailed("exception");
+  }
 }
 
 void NoteRequest() {
   if (!g_requestSeen.load(std::memory_order_relaxed)) g_requestSeen.store(true, std::memory_order_relaxed);
 }
 
-void OnFrame(bool onLoopThread) {
-  if (g_mountDeferred.load(std::memory_order_relaxed)) TryMount(onLoopThread);
+namespace {
+// The reads served in the last window, one line per set that served any, every 10 s; and the first key the game's
+// manifest answered for a set.
+void SummarizeReads() {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testMountThrow == MountThrowAt::kReadSummary) throw std::bad_alloc();
+#endif
   Published* published = g_published.load(std::memory_order_acquire);
   if (published == nullptr) return;
   const std::uint64_t now = NowMs();
@@ -550,18 +623,47 @@ void OnFrame(bool onLoopThread) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] resource set reads plugin=%s label=\"%s\" served=%llu window_ms=%llu (the game read these "
         "records from the plugin's file)",
-        sets[i]->plugin.c_str(), sets[i]->label.c_str(), static_cast<unsigned long long>(served),
+        Printable(sets[i]->plugin.c_str()).c_str(), sets[i]->label.c_str(), static_cast<unsigned long long>(served),
         static_cast<unsigned long long>(now - last));
   }
-  const std::uint64_t stockWins = published->stockWins.load(std::memory_order_relaxed);
-  if (stockWins != 0 && !g_stockWinSaid.exchange(true)) {
+  if (published->firstWinReady.load(std::memory_order_acquire) && !g_stockWinSaid.exchange(true)) {
+    const std::uint64_t stockWins = published->stockWins.load(std::memory_order_relaxed);
     const std::uint32_t user = published->firstWinUser.load();
-    const std::string plugin = user != 0 && user - 1 < sets.size() ? sets[user - 1]->plugin : std::string("unknown");
+    const std::string plugin =
+        user != 0 && user - 1 < sets.size() ? Printable(sets[user - 1]->plugin.c_str()) : std::string("unknown");
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.RESOURCE] resource set keys answered by the game's manifest count=%llu first=%s plugin=%s (a package set "
         "added after the mount holds keys a plugin's set holds; the game's bytes are served for them)",
         static_cast<unsigned long long>(stockWins),
         KeyText(published->firstWinType.load(), published->firstWinName.load()).c_str(), plugin.c_str());
+  }
+}
+}  // namespace
+
+// Per frame, inside the game's own hook (DispatchPerFrameWork): nothing here may throw into the game.
+void OnFrame(bool onLoopThread) {
+  if (g_mountDeferred.load(std::memory_order_relaxed)) {
+    try {
+      TryMount(onLoopThread);
+    } catch (const std::bad_alloc&) {
+      MountFailed("out_of_memory");
+    } catch (const std::exception&) {
+      MountFailed("exception");
+    }
+  }
+  const char* summaryFailed = nullptr;
+  try {
+    SummarizeReads();
+  } catch (const std::bad_alloc&) {
+    summaryFailed = "out_of_memory";
+  } catch (const std::exception&) {
+    summaryFailed = "exception";
+  }
+  if (summaryFailed != nullptr && !g_summaryFailedSaid.exchange(true)) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.RESOURCE] resource set read summary skipped reason=%s (the sets are still served; the summary is tried "
+        "again next window, and this line is written once a run)",
+        summaryFailed);
   }
 }
 
@@ -575,6 +677,7 @@ const void* ManagerFor(const void* manager, std::uint64_t type, std::uint64_t na
       published->firstWinType.store(type);
       published->firstWinName.store(name);
       published->firstWinUser.store(user + 1);
+      published->firstWinReady.store(true, std::memory_order_release);
     }
     return nullptr;
   }
@@ -616,20 +719,29 @@ std::string ReportJson() {
 #ifdef NEVR_TEST_HOOKS
 void ResetForTest() {
   std::lock_guard<std::mutex> lock(g_mutex);
+  std::vector<std::int64_t> handles;
+  for (const Set* set : g_registry.HeldSets()) handles.push_back(set->handle);
+  CloseHandles(handles);  // the files the registry holds; the callers closed the refused and dropped sets' files
   g_registry = Registry();
   g_published.store(nullptr);
   g_mountDeferred.store(false);
   g_deferSaid = false;
   g_lateSaid = false;
   g_armedAtMs = 0;
+  g_gameThreadSeen.store(false);
   g_requestSeen.store(false);
   g_lastSummaryMs.store(0);
   g_stockWinSaid.store(false);
+  g_mountFailedSaid.store(false);
+  g_summaryFailedSaid.store(false);
   g_init = InitState{};
   g_testStockHas = nullptr;
   g_testStockRecords = 0;
   g_testNow = nullptr;
   g_testThrow = false;
+  g_testMountThrow = MountThrowAt::kNowhere;
+  g_testNoResolverHook = false;
+  g_testThrowAfterOpen = false;
   g_testFilePath.clear();
 }
 
@@ -645,6 +757,12 @@ void SetClockForTest(std::uint64_t (*now)()) {
 }
 
 void SetThrowForTest(bool on) { g_testThrow = on; }
+
+void SetMountThrowForTest(MountThrowAt where) { g_testMountThrow = where; }
+
+void SetNoResolverHookForTest(bool on) { g_testNoResolverHook = on; }
+
+void SetThrowAfterOpenForTest(bool on) { g_testThrowAfterOpen = on; }
 
 void SetFilePathForTest(const wchar_t* path) { g_testFilePath = path != nullptr ? path : L""; }
 #endif

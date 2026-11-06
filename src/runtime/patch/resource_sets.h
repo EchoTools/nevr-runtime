@@ -44,6 +44,10 @@ const void* ManagerFor(const void* manager, std::uint64_t type, std::uint64_t na
 // plugin asset may not take it.
 bool HoldsKey(std::uint64_t type, std::uint64_t name);
 
+// Text from outside (a plugin id from config.yaml, a plugin's label) as a log line carries it: printable ASCII but '"'
+// and '\\', every other byte as '?', at most 64 bytes.
+std::string Printable(const char* text);
+
 // The level names of the mounted sets, for the server registration's installed_levels.
 std::vector<std::uint64_t> MountedLevelNames();
 
@@ -59,6 +63,13 @@ void SetStockForTest(StockHasFn has, std::uint64_t records);
 void SetClockForTest(std::uint64_t (*now)());
 // Makes the next registrations throw std::bad_alloc inside the host, before any check.
 void SetThrowForTest(bool on);
+// Makes the mount, or the read summary, throw std::bad_alloc at one place.
+enum class MountThrowAt { kNowhere, kBeforeMount, kMountLines, kReadSummary };
+void SetMountThrowForTest(MountThrowAt where);
+// Makes MountWhenReady find the resolver hook not installed.
+void SetNoResolverHookForTest(bool on);
+// Makes the next registrations throw std::bad_alloc once the plugin's file is open.
+void SetThrowAfterOpenForTest(bool on);
 // The file registration opens and compares instead of the plugin's own (null: the plugin's own).
 void SetFilePathForTest(const wchar_t* path);
 #endif

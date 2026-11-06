@@ -53,8 +53,9 @@ std::vector<AssetManifestKey> AssetManifestKeys();
 bool InstallHookForTest(void* target, void* detour, void** original, const char* name);
 // Test-only: retires one engine hook the way ShutdownPluginAssets does (PatchRetire, with the same status handling).
 void RetireHookForTest(void* target, const char* what);
-// Test-only (#2161): the resolver hook's own body, with `original` standing in for the game's FillResourceFileRequest
-// (null restores the installed one).
+// Test-only (#2161): the resolver hook's own body, with `original` standing in for the game's FillResourceFileRequest.
+// It replaces the trampoline the hook calls: null leaves the hook with nothing to call, so a test that sets one puts
+// null back when it ends and installs no real hook meanwhile.
 using RequestFnForTest = uint64_t(__cdecl*)(void*, uint64_t, uint64_t, uint64_t, uint64_t, void*, uint64_t, void*);
 void SetRequestOriginalForTest(RequestFnForTest original);
 uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name);

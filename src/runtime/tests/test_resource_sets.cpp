@@ -385,6 +385,30 @@ TEST(ResourceSetRegistry, ASetThatNamesAKeyTheGameHasIsRefusedAtTheMount) {
   EXPECT_EQ(registry.MountedLevels(), std::vector<std::uint64_t>{0xABCULL});
 }
 
+TEST(ResourceSetRegistry, AfterTheMountOnlyTheMountedSetsAreHeld) {
+  const std::vector<unsigned char> clash = LevelSet(kLevel, kStockMesh).Build();
+  const std::vector<unsigned char> fine = LevelSet(0xABCULL, 0xDEFULL).Build();
+  const std::vector<unsigned char> loose = LevelSet(0x123ULL, 0x456ULL).Build();
+  Registry registry;
+  ASSERT_TRUE(registry.Add("clash", "c", clash.data(), clash.size(), 1, 0).ok());
+  ASSERT_TRUE(registry.Add("fine", "f", fine.data(), fine.size(), 2, 0).ok());
+  ASSERT_TRUE(registry.Add("loose", "l", loose.data(), loose.size(), 3, 0).ok());  // never committed
+  registry.Commit("clash");
+  registry.Commit("fine");
+  ASSERT_TRUE(registry.Holds(kLevelRootType, kLevel));
+  ASSERT_TRUE(registry.Holds(kLevelRootType, 0x123ULL));
+  FakeStock stock;
+  const nevr_resource_sets::MountReport report = registry.Mount(stock.View());
+  EXPECT_EQ(report.handles_to_close, (std::vector<std::int64_t>{1, 3}));
+  // The refused set and the uncommitted one serve nothing, so their keys are free; the mounted set's are held.
+  EXPECT_FALSE(registry.Holds(kLevelRootType, kLevel));
+  EXPECT_FALSE(registry.Holds(kLevelRootType, 0x123ULL));
+  EXPECT_TRUE(registry.Holds(kLevelRootType, 0xABCULL));
+  ASSERT_EQ(registry.HeldSets().size(), 1u);
+  EXPECT_EQ(registry.HeldSets()[0]->plugin, "fine");
+  EXPECT_EQ(registry.MountedSets(), registry.HeldSets());
+}
+
 TEST(ResourceSetRegistry, ALevelWhoseArchiveListsWhatNothingServesIsRefusedNamingTheEntry) {
   SetBuilder b;
   const std::uint32_t c = b.AddChunk();

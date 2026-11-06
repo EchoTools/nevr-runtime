@@ -34,6 +34,7 @@
 #include "runtime/ext/plugin_trust.h"           // #741: what the runtime pins, and whether this build enforces it
 #include "runtime/patch/asset_registry.h"      // #432: assets a plugin carries leave with its image
 #include "runtime/patch/resource_sets.h"       // #2161: the resource sets a plugin registers from its init
+#include "runtime/patch/resource_override.h"   // #2161: a mounted set's overrides leave with its image
 
 struct LoadedPlugin {
   HMODULE                     hModule;
@@ -1499,7 +1500,8 @@ void LoadPlugins(PluginPhase phase) {
 
 // Assets a plugin registered point into its image; drop them before the image goes so the engine can never be
 // handed a pointer into freed memory. A well-behaved plugin deregisters its own in shutdown; this is the host's
-// guarantee for one that does not.
+// guarantee for one that does not. The same holds for resource overrides whose bytes are in the image: the host
+// registers a mounted resource set's overrides itself (#2161), and a plugin may register its own.
 static void ReleaseAssetsOf(HMODULE module) {
   if (module == nullptr) return;
   const auto* base = reinterpret_cast<const uint8_t*>(module);
@@ -1513,6 +1515,7 @@ static void ReleaseAssetsOf(HMODULE module) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.ASSET] released %zu asset(s) still registered by a plugin at unload", released);
   }
+  DeregisterResourceOverrides(base, base + nt->OptionalHeader.SizeOfImage);
 }
 
 void UnloadPlugins() {

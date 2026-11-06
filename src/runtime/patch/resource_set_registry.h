@@ -127,7 +127,9 @@ class Registry {
   // The plugin's init failed: its held sets are dropped; returns their handles for the caller to close.
   std::vector<std::int64_t> Drop(const std::string& plugin);
 
-  // Mounts every committed set once. A refused set is dropped with its reason. Builds the one shadow from the rest.
+  // Mounts every committed set once. A refused set, and one not committed, is dropped with its reason, and its handle
+  // goes to the report for the caller to close: after the mount the registry holds the mounted sets only, so a key of
+  // a refused set is free (Holds). Builds the one shadow from the rest.
   MountReport Mount(const StockView& stock);
   // Ends the run's registration without serving anything (the resolver hook could not be installed): every held set
   // is dropped, later Adds are kTooLate. Returns the sets' handles for the caller to close.
@@ -140,16 +142,20 @@ class Registry {
   const nevr_shadow::Shadow* shadow() const { return shadow_.get(); }
   // The level names of the mounted sets, in set order.
   std::vector<std::uint64_t> MountedLevels() const;
-  // True when a held set (committed or not, mounted or not) holds (type, name).
+  // True when a held set holds (type, name): before the mount any set registered (committed or not), after it a
+  // mounted set.
   bool Holds(std::uint64_t type, std::uint64_t name) const;
   // The mounted sets, for the log and the login report.
   std::vector<const Set*> MountedSets() const;
-  // Every set held, committed or not, in the order registered.
+  // Every set held, in the order registered: before the mount committed or not, after it the mounted ones.
   std::vector<const Set*> HeldSets() const;
   // The set a shadow record's user tag names, or null.
   const Set* SetForUser(std::uint32_t user) const;
 
  private:
+  // Drops every set the mount did not mount (its handle is already in the report).
+  void KeepOnlyMounted();
+
   std::vector<std::unique_ptr<Set>> sets_;
   std::unique_ptr<nevr_shadow::Shadow> shadow_;
   std::vector<const Set*> mountedOrder_;

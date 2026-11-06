@@ -204,8 +204,8 @@ Outcome Registry::Add(const std::string& plugin, const std::string& label, const
     const nevr_resource_set::Override o = view.OverrideAt(i);
     set->overrides.push_back(OverrideRef{o.type, o.name, view.data() + o.offset, o.size});
   }
-  heldChunks_ += view.chunk_count();
   sets_.push_back(std::move(set));
+  heldChunks_ += view.chunk_count();  // after the push, which can throw: a set not held takes no indices
   return Outcome{};
 }
 
@@ -320,7 +320,10 @@ MountReport Registry::Mount(const StockView& stock) {
       input.records.push_back(record);
     }
   }
-  if (input.records.empty()) return report;
+  if (input.records.empty()) {
+    KeepOnlyMounted();
+    return report;
+  }
   report.shadow_status = nevr_shadow::Shadow::Build(input, &shadow_);
   if (report.shadow_status != nevr_shadow::Status::kOk) {
     for (const Set* set : mountedOrder_) {
@@ -331,13 +334,27 @@ MountReport Registry::Mount(const StockView& stock) {
       ++report.refused;
     }
     mountedOrder_.clear();
+    KeepOnlyMounted();
     return report;
   }
+  KeepOnlyMounted();
   report.sets = mountedOrder_.size();
   report.records = input.records.size();
   for (const Set* set : mountedOrder_) report.levels += set->levels.size();
   report.chunk_base = shadow_->chunk_base();
   return report;
+}
+
+void Registry::KeepOnlyMounted() {
+  std::vector<std::unique_ptr<Set>> kept;
+  std::uint64_t chunks = 0;
+  for (std::unique_ptr<Set>& set : sets_) {
+    if (std::find(mountedOrder_.begin(), mountedOrder_.end(), set.get()) == mountedOrder_.end()) continue;
+    chunks += set->chunks.size();
+    kept.push_back(std::move(set));  // the Set itself does not move: mountedOrder_'s pointers stay good
+  }
+  sets_ = std::move(kept);
+  heldChunks_ = chunks;
 }
 
 std::vector<std::int64_t> Registry::Abandon() {
