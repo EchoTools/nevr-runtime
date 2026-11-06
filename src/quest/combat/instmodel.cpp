@@ -59,14 +59,16 @@ unsigned ApplySteps(unsigned char* self, unsigned* mismatch) noexcept {
   return set;
 }
 
+table_step::Counts CountsOf() noexcept { return {g_stock.load(std::memory_order_relaxed), g_objects.load(std::memory_order_relaxed)}; }
+
 void Say(unsigned set, unsigned mismatch) noexcept {
   const unsigned n = g_stepLines.fetch_add(1, std::memory_order_relaxed) + 1;
   if (n == kLogLines + 1) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_instmodel_log_cap",
-                        {{"cap", kLogLines}, {"msg", "further growth steps are set but not logged; the counts are in the hook report"}});
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_instmodel_log_cap",
+                        {{"cap", kLogLines}, {"msg", "further growth steps are set but not logged; combat_instmodel_counts holds the totals for each level"}});
   }
   if (n > kLogLines) return;
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_instmodel_steps",
+  sentinel::LogFields(sentinel::LogLevel::kDebug, "combat_instmodel_steps",
                       {{"steps_set", set}, {"steps_mismatch", mismatch}, {"step", kNewStep},
                        {"msg", "an instanced-model resource built in a combat match has the table growth step 1"}});
 }
@@ -129,6 +131,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) 
                          {"msg", "a code word the module rests on is not the pinned build's; the module is not installed"}});
     return Done("refused", "pinned_word_mismatch", "pinned_word_mismatch", pins, kStockConsequence, false);
   }
+  table_step::RegisterCounts("combat_instmodel_counts", &CountsOf);
   Thunk::Arm(kRecord);
   const sentinel::GotStatus got = sentinel::InstallThunk<Thunk>(g_hook, Target(image.base, pins), lookup);
   if (got != sentinel::GotStatus::kOk) {

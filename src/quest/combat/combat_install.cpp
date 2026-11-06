@@ -54,10 +54,10 @@ constexpr std::array kModules{
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
     // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
     // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.
-    Module{"meshstep", nullptr, &MeshstepNormal},
-    Module{"tablestep", nullptr, &TablestepNormal},
-    Module{"instmodel", nullptr, &InstmodelNormal},
-    Module{"shaderstep", nullptr, &ShaderstepNormal},
+    Module{"meshstep", nullptr, &MeshstepNormal, "combat.meshstep", &nevr_quest::CombatConfig::meshstep},
+    Module{"tablestep", nullptr, &TablestepNormal, "combat.tablestep", &nevr_quest::CombatConfig::tablestep},
+    Module{"instmodel", nullptr, &InstmodelNormal, "combat.instmodel", &nevr_quest::CombatConfig::instmodel},
+    Module{"shaderstep", nullptr, &ShaderstepNormal, "combat.shaderstep", &nevr_quest::CombatConfig::shaderstep},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},
@@ -165,18 +165,13 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
-}
-
-// The resource table steps' four switches (#2177) are a line of their own: one sentinel line holds 768 bytes (hook_log.cpp kLineCapacity), and the
-// combat_config line is full, so a key added to it cuts its msg off.
-void LogTableStepConfig(const nevr_quest::CombatConfig& config) noexcept {
-  const auto source = [](const nevr_quest::Source s) { return s == nevr_quest::Source::kFile ? "config" : "default"; };
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_table_steps",
-                      {{"meshstep", config.meshstep.on ? 1 : 0}, {"meshstep_source", source(config.meshstep.source)},
-                       {"instmodel", config.instmodel.on ? 1 : 0}, {"instmodel_source", source(config.instmodel.source)},
-                       {"shaderstep", config.shaderstep.on ? 1 : 0}, {"shaderstep_source", source(config.shaderstep.source)},
-                       {"tablestep", config.tablestep.on ? 1 : 0}, {"tablestep_source", source(config.tablestep.source)},
-                       {"msg", "a table-step key set to false leaves the game's growth step of 32 for that resource class even in a combat match"}});
+  // One record per module switch, from the registration table (combat_install.h).
+  for (const Module& module : kModules) {
+    if (module.switchMember == nullptr) continue;
+    const nevr_quest::CombatSwitch& sw = config.*module.switchMember;
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                        {{"module", module.name}, {"key", module.switchKey}, {"on", sw.on ? 1 : 0}, {"source", source(sw.source)}});
+  }
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }

@@ -12,8 +12,8 @@
  * Arena (docs/adr/0046). Arena and combat run on the same APK. What changes for an arena match: nothing the player sees or the game
  * computes; the object is the game's. What it costs there: each construction asks the loaded levels once (`table_step::CurrentScope`, seven process_vm_readv calls
  * with one gamespace loaded: four for the two tables, three for each gamespace) and then runs the game's constructor; it runs once per instanced-model resource the game builds, on a loading
- * thread, never per frame. The number of constructions in an arena match has not been
- * counted on a headset.
+ * thread, never per frame. The constructions an arena level costs are counted per level change
+ * (`combat_instmodel_counts`); not yet read on a headset.
  *
  * When. The normal step (combat_install.h), after the plugin pass. The slot must hold base + the constructor; a slot another hook took first
  * joins the manager's chain (got_hook.h), and the handler calls it through its original.
@@ -41,10 +41,12 @@
  *   install  {"event":"combat_instmodel_install","result":"installed|refused|off","reason":"ok|off_config|<token>","status":"<GotStatus>|..",
  *             "slot_vaddr":"0x..","consequence":".."}   Error for a refusal, Info otherwise. A pinned word that differs is a Warning
  *             `combat_instmodel_pin` with `vaddr`, `have` and `want` first.
- *   steps    {"event":"combat_instmodel_steps","steps_set":<n>,"steps_mismatch":<n>,"step":1,"msg":".."}   Info, the first 16
+ *   steps    {"event":"combat_instmodel_steps","steps_set":<n>,"steps_mismatch":<n>,"step":1,"msg":".."}   Debug, the first 16
  *   mismatch {"event":"combat_instmodel_mismatch","offset":"0x..","found":"0x..","expected":"0x20","msg":".."}   Warning, the first 16
- *   cap      {"event":"combat_instmodel_log_cap","cap":16,"msg":".."}   Warning, once
+ *   cap      {"event":"combat_instmodel_log_cap","cap":16,"msg":".."}   Info, once
  *   stock    {"event":"combat_instmodel_stock","scope":"other|unknown","msg":".."}   Info, once: the game's object was left as it is
+ *   counts   {"event":"combat_instmodel_counts","level":"0x..","scope":"combat|other|unknown","left_alone":<n>,"changed":<n>,"msg":".."}   Info, one per level
+ *            change when there is anything to report: the objects built under the level that ended (table_step.h RegisterCounts)
  *   legacy   {"event":"combat_instmodel_legacy_switch","file":"instmodel.off","replaced_by":"combat.instmodel: false","msg":".."}   Warning
  *
  * Built with -fno-exceptions, like every combat translation unit.

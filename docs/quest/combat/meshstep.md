@@ -1,7 +1,7 @@
 # meshstep: the mesh-list tables grow by 1 in a combat match
 
 Files: `src/quest/combat/meshstep.{h,cpp}`, `meshstep_targets.h`, `src/quest/tests/meshstep_test.cpp`, `src/quest/combat/mutants.d/meshstep.sh`.
-Switch: `combat.meshstep` in `config.yaml` (default `true`). The plugin's `meshstep.off` is not read; one found in its data directory is a Warning
+Switch: `combat.meshstep` in `config.yaml` (default `false`: the plugin's copy never installed on a headset, so the reconstruction below has not run on one; `true` turns it on). The plugin's `meshstep.off` is not read; one found in its data directory is a Warning
 (`combat_meshstep_legacy_switch`) that names the key. Runs in the `q15t` and `combat` APKs only (`combat::Active()`).
 
 ## What the stock code does (store libr15, build ID b243509c; ELF vaddr = disassembly VA - 0x100000)
@@ -37,7 +37,7 @@ the game's constructor runs. The scope is read at each construction and never ca
 
 For an arena match on the combat APK: the player sees nothing different and the game computes the same, since the constructor is the game's.
 The added work is one scope read per mesh list built (seven `process_vm_readv` calls with one gamespace loaded) on a loading thread, never per
-frame. The number of mesh lists an arena match builds has not been counted on a headset.
+frame. What an arena level costs is counted per level change (`combat_meshstep_counts`); it has not been read on a headset yet.
 
 ## Refusals (all loud, nothing hooked)
 
@@ -54,7 +54,8 @@ the store libr15.
 ## Logging
 
 `combat_meshstep_install` (Info; Error for a refusal) with `result`, `reason`, `status`, `slot_vaddr`, `consequence`;
-`combat_meshstep_built` (Info, once, `growth_step` 1, `stock_growth_step` 32); `combat_meshstep_stock` (Info, once, `scope`).
+`combat_meshstep_built` (Info, once, `growth_step` 1, `stock_growth_step` 32); `combat_meshstep_stock` (Info, once, `scope`);
+`combat_meshstep_counts` (Info, one per change of the loaded level, `level`, `scope`, `left_alone`, `changed`: what the level that ended cost).
 
 ## Tests
 
@@ -64,9 +65,20 @@ byte for byte, each refusal, the kill file, the golden lines. `src/quest/combat/
 (`src/quest/combat/mutants.sh meshstep`). The slot, the function and every pinned word are checked against the real file by `got_pinned_test`
 (`just test-quest-hooks-pinned`, which needs the store APK).
 
+## When the level is stored
+
+`CncaGameSpace::LoadLevel` (ELF 0x17e5484) stores the level at gamespace + 0x58 (`str x22,[x19,#0x58]` at 0x17e54ec) before it calls
+`CResourceInstance::LoadAndInit` (0x17e55d4) and `CArchiveLoader::LoadArchiveAsync` (0x17e56a4), which are where the level's resources come from
+[INFERENCE from the call order in this one function; the constructors of those resources were not followed]. Not shown: that the gamespace is
+already in CR15Game's tables (which the scope reads) when the store happens, and that no resource of the level is built earlier. If either is
+false the modules do nothing in combat with every line green, which is why the headset row below requires `built`/`first`/`steps` lines during a
+combat map load.
+
 ## Headset check (log only)
 
 On a combat APK, entering a combat map: `combat_meshstep_install` with `"result":"installed"` once, then `combat_meshstep_built`. In an Echo
 Arena match: `combat_meshstep_stock` with `"scope":"other"` and no `combat_meshstep_built`.
 Falsifiers: `combat_meshstep_pin` (the libr15 differs from the pins), `"reason":"vtable_unreadable"`, an `installed` line with no `built` line
 after a combat map loads (the constructor does not run through the slot, or runs before the install).
+
+Required for the headset row: `combat_meshstep_built` during a combat map load (with `combat.meshstep: true` in `config.yaml` for this row; the key defaults to false); `combat_meshstep_counts` lines at the level changes, with `changed` above 0 for the combat level and `left_alone` for the arena one.

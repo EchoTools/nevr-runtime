@@ -76,6 +76,20 @@ inline void SetWhere(Where where) {
   }
 }
 
+// The `level` field of a counts line: "0x" and 16 hex digits.
+inline std::string LevelHex(const char* name) {
+  char text[19];
+  std::snprintf(text, sizeof(text), "0x%016llx", static_cast<unsigned long long>(Level(name)));
+  return text;
+}
+
+// The text of a `combat_<m>_counts` line after its timestamp.
+inline std::string CountsText(const char* event, const std::string& level, const char* scope, unsigned leftAlone, unsigned changed) {
+  return std::string("\"event\":\"") + event + "\",\"level\":\"" + level + "\",\"scope\":\"" + scope + "\",\"left_alone\":" + std::to_string(leftAlone) +
+         ",\"changed\":" + std::to_string(changed) +
+         ",\"msg\":\"objects built since the last level change, by the scope that was then loaded: left as the game made them, and changed\"}";
+}
+
 // ---- the log --------------------------------------------------------------------------------------------------------------------
 
 struct Line {

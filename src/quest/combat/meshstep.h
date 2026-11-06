@@ -14,15 +14,15 @@
  * Arena (docs/adr/0046). Arena and combat run on the same APK. What changes for an arena match: nothing the player sees or the game
  * computes; the constructor is the game's own. What it costs there: each construction of a mesh list asks the loaded levels once
  * (`table_step::CurrentScope`, seven process_vm_readv calls with one gamespace loaded: four for the two tables, three for each gamespace) and calls the game's constructor; it runs once per mesh list the game
- * builds, on a loading thread, never per frame. The number of constructions in an arena
- * match has not been counted on a headset.
+ * builds, on a loading thread, never per frame. The constructions an arena level costs are counted per level
+ * change (`combat_meshstep_counts`); not yet read on a headset.
  *
  * When. The normal step (combat_install.h), after the plugin pass. The JUMP_SLOT of a BIND_NOW image is filled before any constructor runs and
  * must hold base + the constructor; a slot another hook took first joins the manager's chain (got_hook.h).
  *
  * Which APKs. The q15t and combat variants (combat::Active()); every other APK keeps the game's constructor.
  *
- * Switch. `combat.meshstep` (default true) in config.yaml (docs/adr/0046 rule 4). The plugin's `meshstep.off` is not read; one found in the
+ * Switch. `combat.meshstep` (default FALSE: the plugin's copy never installed on a headset, so this replacement of the constructor has not run on one; `true` turns it on) in config.yaml (docs/adr/0046 rule 4). The plugin's `meshstep.off` is not read; one found in the
  * plugin's data directory is a Warning naming the key.
  *
  * Pinned code. Before the thunk goes in, the 33 code words of meshstep_targets.h are read and compared; a difference refuses the module with
@@ -46,6 +46,8 @@
  *             `combat_meshstep_pin` with `vaddr`, `have` and `want` first.
  *   built    {"event":"combat_meshstep_built","scope":"combat","growth_step":1,"stock_growth_step":32,"msg":".."}   Info, once
  *   stock    {"event":"combat_meshstep_stock","scope":"other|unknown","msg":".."}   Info, once: the game's own constructor ran
+ *   counts   {"event":"combat_meshstep_counts","level":"0x..","scope":"combat|other|unknown","left_alone":<n>,"changed":<n>,"msg":".."}   Info, one per level
+ *            change when there is anything to report: the objects built under the level that ended (table_step.h RegisterCounts)
  *   legacy   {"event":"combat_meshstep_legacy_switch","file":"meshstep.off","replaced_by":"combat.meshstep: false","msg":".."}   Warning
  *
  * Built with -fno-exceptions, like every combat translation unit.

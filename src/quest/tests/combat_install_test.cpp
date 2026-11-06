@@ -237,7 +237,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
     QCHECK(Has(lines[1].text,
-               "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded tablestep=module_not_loaded "
+               "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=off tablestep=module_not_loaded "
                "instmodel=module_not_loaded shaderstep=module_not_loaded pfx=installed pfxtev=installed\""));
   }
   Done();
@@ -316,7 +316,7 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     // The module switches: on by default, each with its source.
     QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
-    // The four resource table steps (#2177) are on the line of their own, not on this full one.
+    // The four resource table steps (#2177) are records of their own (combat_config_switch), not keys of this full line.
     QCHECK(!Has(lines[0].text, "meshstep") && !Has(lines[0].text, "tablestep"));
   }
   g_lines.clear();
@@ -330,24 +330,31 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
     QCHECK(Has(switches[0].text, "\"msg\":"));  // the line is not cut off: one sentinel line holds 768 bytes
   }
-  // The four resource table steps (#2177): on by default with their source, and the file's word where it gave one.
+  // The four resource table steps (#2177): one `combat_config_switch` record each, generated from the registration table. instmodel, shaderstep and
+  // tablestep are on by default, meshstep is off by default (it never ran on a headset), each with its source; the file's word where it gave one.
   g_lines.clear();
   nevr_quest::CombatConfig tables;
-  combat::LogTableStepConfig(tables);
-  tables.meshstep = {false, nevr_quest::Source::kFile};
-  tables.tablestep = {true, nevr_quest::Source::kFile};
-  combat::LogTableStepConfig(tables);
-  const std::vector<Line> steps = Lines("combat_config_table_steps");
-  QCHECK(steps.size() == 2U);
-  if (steps.size() == 2U) {
-    QCHECK(steps[0].level == sentinel::LogLevel::kInfo);
-    for (const char* key : {"meshstep", "instmodel", "shaderstep", "tablestep"}) {
-      QCHECK(Has(steps[0].text, std::string("\"") + key + "\":1") && Has(steps[0].text, std::string("\"") + key + "_source\":\"default\""));
+  combat::LogConfig(tables);
+  tables.meshstep = {true, nevr_quest::Source::kFile};
+  tables.tablestep = {false, nevr_quest::Source::kFile};
+  combat::LogConfig(tables);
+  const std::vector<Line> records = Lines("combat_config_switch");
+  QCHECK(records.size() == 8U);  // four per call, in the table's order
+  const char* const order[] = {"meshstep", "tablestep", "instmodel", "shaderstep"};
+  const char* const wantFirst[] = {"\"on\":0,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
+                                   "\"on\":1,\"source\":\"default\""};
+  const char* const wantSecond[] = {"\"on\":1,\"source\":\"config\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
+                                    "\"on\":1,\"source\":\"default\""};
+  if (records.size() == 8U) {
+    for (std::size_t i = 0; i < 4; ++i) {
+      for (std::size_t call = 0; call < 2; ++call) {
+        const Line& line = records[call * 4 + i];
+        QCHECK(line.level == sentinel::LogLevel::kInfo);
+        QCHECK(line.text.substr(line.text.find("\"event\"")) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + order[i] + "\",\"key\":\"combat." + order[i] +
+                                        "\"," + (call == 0 ? wantFirst[i] : wantSecond[i]) + "}");
+        QCHECK(line.text.size() < 200);
+      }
     }
-    QCHECK(Has(steps[1].text, "\"meshstep\":0") && Has(steps[1].text, "\"meshstep_source\":\"config\""));
-    QCHECK(Has(steps[1].text, "\"tablestep\":1") && Has(steps[1].text, "\"tablestep_source\":\"config\""));
-    QCHECK(Has(steps[1].text, "\"instmodel\":1") && Has(steps[1].text, "\"instmodel_source\":\"default\""));
-    QCHECK(Has(steps[1].text, "\"msg\":"));
   }
   Done();
 }

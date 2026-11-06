@@ -182,6 +182,10 @@ void EveryOtherScopeLeavesTheGamesObjectAlone() {
     QCHECK(ts::ScopeReadsForTest() - readsBefore == 1U);
     QCHECK(built == obj && g_stockCalls == 1);
     QCHECK(ReadWord(obj, kStepOff) == 0x20);  // the game's step
+    alignas(8) std::uint8_t ref[kObjBytes] = {};
+    FakeConstruct(nullptr, ref, nullptr);  // what the game's function makes alone
+    g_stockCalls = 1;
+    QCHECK(std::memcmp(obj, ref, kObjBytes) == 0);  // byte for byte the game's, all of it
     SlotFn()(nullptr, obj, nullptr);          // a second one: counted, and the line is still written once
     QCHECK(ss::CurrentStats().constructed == 0 && ss::CurrentStats().stock == 2);
     const std::vector<Line> stock = Lines("combat_shaderstep_stock");
@@ -196,8 +200,39 @@ void EveryOtherScopeLeavesTheGamesObjectAlone() {
   alignas(8) std::uint8_t obj[kObjBytes] = {};
   SlotFn()(nullptr, obj, nullptr);
   QCHECK(ts::ScopeReadsForTest() == 0U && ReadWord(obj, kStepOff) == 0x20);
+  alignas(8) std::uint8_t ref[kObjBytes] = {};
+  FakeConstruct(nullptr, ref, nullptr);
+  QCHECK(std::memcmp(obj, ref, kObjBytes) == 0);  // byte for byte the game's, with no game known too
   const std::vector<Line> stock = Lines("combat_shaderstep_stock");
   QCHECK(stock.size() == 1U && Has(stock[0].text, "\"scope\":\"unknown\""));
+  End1();
+}
+
+// Each change of the loaded level writes one counts line with what the level that ended cost (see meshstep_test).
+void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
+  Begin1();
+  Build();
+  SetWhere(Where::kCombatMap);
+  QCHECK(ss::InstallAt(&Lookup, g_pins, true).installed);
+  alignas(8) std::uint8_t o[kObjBytes] = {};
+  SlotFn()(nullptr, o, nullptr);
+  SlotFn()(nullptr, o, nullptr);
+  QCHECK(Lines("combat_shaderstep_counts").empty());
+  SetWhere(Where::kArena);
+  SlotFn()(nullptr, o, nullptr);
+  std::vector<Line> counts = Lines("combat_shaderstep_counts");
+  QCHECK(counts.size() == 1U);
+  if (counts.size() == 1U) {
+    QCHECK(counts[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Golden(counts[0].text) == CountsText("combat_shaderstep_counts", LevelHex("mpl_combat_gauss"), "combat", 0, 2));
+  }
+  SlotFn()(nullptr, o, nullptr);
+  SlotFn()(nullptr, o, nullptr);
+  SetWhere(Where::kNothingLoaded);
+  SlotFn()(nullptr, o, nullptr);
+  counts = Lines("combat_shaderstep_counts");
+  QCHECK(counts.size() == 2U);
+  if (counts.size() == 2U) QCHECK(Golden(counts[1].text) == CountsText("combat_shaderstep_counts", LevelHex("mpl_arena_a"), "other", 3, 0));
   End1();
 }
 
@@ -296,6 +331,7 @@ int main() {
   ACombatMatchSetsTheStepOfTheObjectTheGameBuilt();
   AStepThatIsNotTheStockValueIsLeftAloneAndCounted();
   EveryOtherScopeLeavesTheGamesObjectAlone();
+  ALevelChangeWritesTheCountsOfTheLevelThatEnded();
   AnInstallRefusalLeavesTheWordAlone();
   TheSwitchAndASecondStepInstallNothing();
   TheKillFileIsOnlyAWarning();

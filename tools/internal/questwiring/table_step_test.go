@@ -15,10 +15,10 @@ var tableStepModules = []string{"meshstep", "instmodel", "shaderstep", "tableste
 
 func TestTheTableStepsRegisterInTheNormalPhaseInThePluginsOrderAfterTheTick(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
-	before(t, table, `Module{"tick", nullptr, &tick::InstallNormal}`, `Module{"meshstep", nullptr, &MeshstepNormal}`)
-	before(t, table, `Module{"meshstep", nullptr, &MeshstepNormal}`, `Module{"tablestep", nullptr, &TablestepNormal}`)
-	before(t, table, `Module{"tablestep", nullptr, &TablestepNormal}`, `Module{"instmodel", nullptr, &InstmodelNormal}`)
-	before(t, table, `Module{"instmodel", nullptr, &InstmodelNormal}`, `Module{"shaderstep", nullptr, &ShaderstepNormal}`)
+	before(t, table, `Module{"tick", nullptr, &tick::InstallNormal}`, `Module{"meshstep", nullptr, &MeshstepNormal,`)
+	before(t, table, `Module{"meshstep", nullptr, &MeshstepNormal,`, `Module{"tablestep", nullptr, &TablestepNormal,`)
+	before(t, table, `Module{"tablestep", nullptr, &TablestepNormal,`, `Module{"instmodel", nullptr, &InstmodelNormal,`)
+	before(t, table, `Module{"instmodel", nullptr, &InstmodelNormal,`, `Module{"shaderstep", nullptr, &ShaderstepNormal,`)
 	for _, m := range tableStepModules {
 		if strings.Contains(table, `Module{"`+m+`", &`) {
 			t.Errorf("%s has an early step: it reads the game the tick verifies, which exists only after the early phase", m)
@@ -122,6 +122,28 @@ func TestThePluginHoldsNoneOfTheFourModulesAndTheirDocsMoved(t *testing.T) {
 	}
 }
 
+func TestMeshstepIsOffByDefaultInTheReaderToo(t *testing.T) {
+	if !strings.Contains(read(t, "src/quest/sentinel/quest_config.cpp"), "ReadCombatSwitch(cfg, kCombatMeshstepKey, r, /*fallback=*/false)") {
+		t.Error("the reader's fallback for combat.meshstep is not off")
+	}
+}
+
+func TestEachTableStepSwitchIsReportedByARecordGeneratedFromTheTable(t *testing.T) {
+	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
+	for _, m := range tableStepModules {
+		if !strings.Contains(table, `"combat.`+m+`", &nevr_quest::CombatConfig::`+m+`}`) {
+			t.Errorf("the %s row names no switch key and member", m)
+		}
+	}
+	b := body(t, table, "void LogConfig(")
+	if !strings.Contains(b, `"combat_config_switch"`) || !strings.Contains(b, "module.switchMember") {
+		t.Error("LogConfig does not write the per-module switch records from the table")
+	}
+	if strings.Contains(table, "combat_config_table_steps") {
+		t.Error("the table steps still have a line of their own")
+	}
+}
+
 func TestEachTableStepKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.T) {
 	reader, schema := read(t, "src/quest/sentinel/quest_config.cpp"), read(t, "src/core/nevr_config.cpp")
 	line, example := read(t, "src/quest/combat/combat_install.cpp"), read(t, "docs/reference/example-config.yaml")
@@ -132,11 +154,15 @@ func TestEachTableStepKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.
 				t.Errorf("%s does not name %s", what, key)
 			}
 		}
-		if !strings.Contains(example, "\n  # "+key+": false") {
+		if !regexp.MustCompile(`\n  # `+key+`: (false|true)\n`).MatchString(example) {
 			t.Errorf("the example config does not document %s", key)
 		}
-		if !strings.Contains(header, "CombatSwitch "+key+";") {
-			t.Errorf("CombatConfig has no default-on member for %s", key)
+		want := "CombatSwitch " + key + ";"
+		if key == "meshstep" { // the plugin's meshstep never ran on a headset: off until a headset run shows the replacement work
+			want = "CombatSwitch meshstep{false, Source::kAbsent};"
+		}
+		if !strings.Contains(header, want) {
+			t.Errorf("CombatConfig lacks %q", want)
 		}
 	}
 }

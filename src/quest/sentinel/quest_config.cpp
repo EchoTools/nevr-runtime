@@ -49,7 +49,7 @@ constexpr const char* kCombatMemsysKey = "combat.memsys";         // Quest only 
 constexpr const char* kCombatRefreshRateKey = "combat.refresh_rate";                  // Quest only (default true, #2172)
 constexpr const char* kCombatRefreshRateLobbyKey = "combat.refresh_rate_lobby";        // Quest only (default FALSE, #2172: arena shares the lobby)
 constexpr const char* kCombatRefreshRateQuest2Key = "combat.refresh_rate_quest2_72";   // Quest only (default true, #2172)
-constexpr const char* kCombatMeshstepKey = "combat.meshstep";      // Quest only (default true, #2177)
+constexpr const char* kCombatMeshstepKey = "combat.meshstep";      // Quest only (default FALSE, #2177: the plugin's meshstep never ran on a headset)
 constexpr const char* kCombatInstmodelKey = "combat.instmodel";    // Quest only (default true, #2177)
 constexpr const char* kCombatShaderstepKey = "combat.shaderstep";  // Quest only (default true, #2177)
 constexpr const char* kCombatTablestepKey = "combat.tablestep";    // Quest only (default true, #2177)
@@ -364,7 +364,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.refreshRate = ReadCombatSwitch(cfg, kCombatRefreshRateKey, r);
   r.config.combat.refreshRateLobby = ReadCombatSwitch(cfg, kCombatRefreshRateLobbyKey, r, /*fallback=*/false);
   r.config.combat.refreshRateQuest2At72 = ReadCombatSwitch(cfg, kCombatRefreshRateQuest2Key, r);
-  r.config.combat.meshstep = ReadCombatSwitch(cfg, kCombatMeshstepKey, r);
+  r.config.combat.meshstep = ReadCombatSwitch(cfg, kCombatMeshstepKey, r, /*fallback=*/false);
   r.config.combat.instmodel = ReadCombatSwitch(cfg, kCombatInstmodelKey, r);
   r.config.combat.shaderstep = ReadCombatSwitch(cfg, kCombatShaderstepKey, r);
   r.config.combat.tablestep = ReadCombatSwitch(cfg, kCombatTablestepKey, r);

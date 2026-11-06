@@ -44,6 +44,20 @@ enum class Scope {
 };
 const char* ScopeName(Scope scope) noexcept;
 
+// The counts a module keeps, as the summary line reads them: cumulative since the process started. `leftAlone` is the objects the module let the
+// game build as it did (any scope but a combat match, and a combat object whose step was not the stock value), `changed` the objects it changed.
+struct Counts {
+  std::uint32_t leftAlone;
+  std::uint32_t changed;
+};
+using CountsFn = Counts (*)() noexcept;
+// Registers a module's counters under its summary event (`combat_<module>_counts`; the string must outlive the process). On each change of the
+// loaded level, CurrentScope writes one Info line per registered module with the counts since the previous line, so a headset log says how many
+// objects an arena level cost and how many a combat level changed (ADR 0038). A module with nothing to report since the last line writes none.
+// Fields: `level` (CSymbol64 of the level that ended, 0 when none), `scope` (its scope), `left_alone`, `changed`. At most kMaxCounted modules.
+inline constexpr std::size_t kMaxCounted = 8;
+void RegisterCounts(const char* event, CountsFn fn) noexcept;
+
 // What the loaded levels say right now. Reads the game's gamespace tables (a few process_vm_readv calls); never cached.
 Scope CurrentScope() noexcept;
 

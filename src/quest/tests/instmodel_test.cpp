@@ -132,7 +132,7 @@ void ACombatMatchSetsTheEightStepsAndNothingElse() {
   const std::vector<Line> steps = Lines("combat_instmodel_steps");
   QCHECK(steps.size() == 1U && Lines("combat_instmodel_stock").empty() && Lines("combat_instmodel_mismatch").empty());
   if (steps.size() == 1U) {
-    QCHECK(steps[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(steps[0].level == sentinel::LogLevel::kDebug);  // per-item detail is Debug; combat_instmodel_counts is the Info summary
     QCHECK(Golden(steps[0].text) ==
            "\"event\":\"combat_instmodel_steps\",\"steps_set\":8,\"steps_mismatch\":0,\"step\":1,"
            "\"msg\":\"an instanced-model resource built in a combat match has the table growth step 1\"}");
@@ -232,11 +232,38 @@ void TheStepLinesAreCappedAtSixteen() {
   for (int i = 0; i < 40; ++i) Construct();
   QCHECK(Lines("combat_instmodel_steps").size() == 16U);
   const std::vector<Line> cap = Lines("combat_instmodel_log_cap");
-  QCHECK(cap.size() == 1U && cap[0].level == sentinel::LogLevel::kWarn && Has(cap[0].text, "\"cap\":16"));
+  QCHECK(cap.size() == 1U && cap[0].level == sentinel::LogLevel::kInfo && Has(cap[0].text, "\"cap\":16"));
   QCHECK(im::CurrentStats().objects == 40 && im::CurrentStats().stepsSet == 320);
   g_stockStepIndex = 0;  // and a step that does not hold 0x20 in each of the next 40: the Warnings stop at 16 too
   for (int i = 0; i < 40; ++i) Construct();
   QCHECK(Lines("combat_instmodel_mismatch").size() == 16U && im::CurrentStats().mismatch == 40);
+  End1();
+}
+
+// Each change of the loaded level writes one counts line with what the level that ended cost (see meshstep_test).
+void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
+  Begin1();
+  Build();
+  SetWhere(Where::kCombatMap);
+  QCHECK(im::InstallAt(&Lookup, g_pins, true).installed);
+  Construct();
+  Construct();
+  QCHECK(Lines("combat_instmodel_counts").empty());
+  SetWhere(Where::kArena);
+  Construct();
+  std::vector<Line> counts = Lines("combat_instmodel_counts");
+  QCHECK(counts.size() == 1U);
+  if (counts.size() == 1U) {
+    QCHECK(counts[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Golden(counts[0].text) == CountsText("combat_instmodel_counts", LevelHex("mpl_combat_gauss"), "combat", 0, 2));
+  }
+  Construct();
+  Construct();
+  SetWhere(Where::kNothingLoaded);
+  Construct();
+  counts = Lines("combat_instmodel_counts");
+  QCHECK(counts.size() == 2U);
+  if (counts.size() == 2U) QCHECK(Golden(counts[1].text) == CountsText("combat_instmodel_counts", LevelHex("mpl_arena_a"), "other", 3, 0));
   End1();
 }
 
@@ -338,6 +365,7 @@ int main() {
   AStepThatDoesNotHoldTheStockValueIsLeftAlone();
   NoStepHoldingTheStockValueChangesNothing();
   EveryOtherScopeLeavesTheGamesObjectAlone();
+  ALevelChangeWritesTheCountsOfTheLevelThatEnded();
   ANullObjectGoesStraightToTheGame();
   TheStepLinesAreCappedAtSixteen();
   AnInstallRefusalLeavesTheSlotAndTheConstructorAlone();

@@ -72,6 +72,8 @@ void BuildMeshList(std::uint8_t* self, const std::uint8_t* init) {
   }
 }
 
+table_step::Counts CountsOf() noexcept { return {g_stock.load(std::memory_order_relaxed), g_built.load(std::memory_order_relaxed)}; }
+
 void SayBuilt() noexcept {
   if (g_saidBuilt.exchange(true, std::memory_order_relaxed)) return;
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_meshstep_built",
@@ -165,6 +167,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns
   g_vtPresence = vp + 0x10;
   g_vtMesh = vm + 0x10;
   g_ready.store(true, std::memory_order_release);  // published before the slot can reach the handler
+  table_step::RegisterCounts("combat_meshstep_counts", &CountsOf);
   Thunk::Arm(kRecord);
   const sentinel::GotStatus got = sentinel::InstallThunk<Thunk>(g_hook, Target(image.base, pins), lookup);
   if (got != sentinel::GotStatus::kOk) {

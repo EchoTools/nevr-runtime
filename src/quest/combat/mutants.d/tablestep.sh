@@ -44,3 +44,8 @@ runm tbs_legacy_key_name    $S "s/\"tablestep.off\", \"combat.tablestep: false\"
 runm tbs_refusal_not_error  $S "s/refused ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo/refused ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kInfo/"
 runm tbs_install_slot_text  $S "s/sentinel::HexString(slot, pins.slot)/sentinel::HexString(slot, pins.fn)/"
 runm tbs_installed_status   $S "s/return Done(\"installed\", \"ok\", \"installed\",/return Done(\"installed\", \"ok\", \"ok\",/"
+# the arena path writes nothing to the game's object (the test compares the whole object with the game's own)
+runm tbs_stray_write_low    $S "s/^    SayStock(scope);\$/    SayStock(scope);\n    static_cast<std::uint8_t*>(obj)[0x10] = 1;/"
+runm tbs_stray_write_step   $S "s/^    SayStock(scope);\$/    SayStock(scope);\n    static_cast<std::uint8_t*>(obj)[0x90] = 1;/"
+runm tbs_counts_not_registered $S "s/^  table_step::RegisterCounts(.*\$//"
+runm tbs_counts_swapped     $S "s/return {g_stock.load(std::memory_order_relaxed) + g_unexpected.load(std::memory_order_relaxed), g_rewritten.load(std::memory_order_relaxed)};/return {g_rewritten.load(std::memory_order_relaxed), g_stock.load(std::memory_order_relaxed) + g_unexpected.load(std::memory_order_relaxed)};/"

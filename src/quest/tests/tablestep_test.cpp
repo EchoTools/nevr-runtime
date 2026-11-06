@@ -176,6 +176,10 @@ void EveryOtherScopeLeavesTheGamesObjectAlone() {
     QCHECK(obj != nullptr && g_stockCalls == 1);
     if (obj != nullptr) {
       QCHECK(StepOf(obj) == 0x20);  // the game's step
+      void* const ref = FakeCreate(nullptr, nullptr);  // what the game's function makes alone
+      g_stockCalls = 1;
+      QCHECK(ref != nullptr && std::memcmp(obj, ref, kObjSize) == 0);  // byte for byte the game's, all of it
+      std::free(ref);
       std::free(obj);
     }
     std::free(SlotFn()(nullptr, nullptr));  // a second one: counted, and the line is still written once
@@ -191,9 +195,40 @@ void EveryOtherScopeLeavesTheGamesObjectAlone() {
   QCHECK(tbs::InstallAt(&Lookup, g_pins, true).installed);
   void* const obj = SlotFn()(nullptr, nullptr);
   QCHECK(ts::ScopeReadsForTest() == 0U && obj != nullptr && StepOf(obj) == 0x20);
+  void* const ref = FakeCreate(nullptr, nullptr);
+  QCHECK(obj != nullptr && ref != nullptr && std::memcmp(obj, ref, kObjSize) == 0);  // byte for byte the game's, with no game known too
+  std::free(ref);
   std::free(obj);
   const std::vector<Line> stock = Lines("combat_tablestep_stock");
   QCHECK(stock.size() == 1U && Has(stock[0].text, "\"scope\":\"unknown\""));
+  End1();
+}
+
+// Each change of the loaded level writes one counts line with what the level that ended cost (see meshstep_test).
+void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
+  Begin1();
+  Build();
+  SetWhere(Where::kCombatMap);
+  QCHECK(tbs::InstallAt(&Lookup, g_pins, true).installed);
+  
+  std::free(SlotFn()(nullptr, nullptr));
+  std::free(SlotFn()(nullptr, nullptr));
+  QCHECK(Lines("combat_tablestep_counts").empty());
+  SetWhere(Where::kArena);
+  std::free(SlotFn()(nullptr, nullptr));
+  std::vector<Line> counts = Lines("combat_tablestep_counts");
+  QCHECK(counts.size() == 1U);
+  if (counts.size() == 1U) {
+    QCHECK(counts[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Golden(counts[0].text) == CountsText("combat_tablestep_counts", LevelHex("mpl_combat_gauss"), "combat", 0, 2));
+  }
+  std::free(SlotFn()(nullptr, nullptr));
+  std::free(SlotFn()(nullptr, nullptr));
+  SetWhere(Where::kNothingLoaded);
+  std::free(SlotFn()(nullptr, nullptr));
+  counts = Lines("combat_tablestep_counts");
+  QCHECK(counts.size() == 2U);
+  if (counts.size() == 2U) QCHECK(Golden(counts[1].text) == CountsText("combat_tablestep_counts", LevelHex("mpl_arena_a"), "other", 3, 0));
   End1();
 }
 
@@ -297,6 +332,7 @@ int main() {
   AStepThatIsNotTheStockValueIsLeftAloneAndWarnedAboutOnce();
   ANullResultIsReturnedAsItIs();
   EveryOtherScopeLeavesTheGamesObjectAlone();
+  ALevelChangeWritesTheCountsOfTheLevelThatEnded();
   AnInstallRefusalLeavesTheWordAlone();
   TheSwitchAndASecondStepInstallNothing();
   TheKillFileIsOnlyAWarning();

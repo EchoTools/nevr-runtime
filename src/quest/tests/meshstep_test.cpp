@@ -105,6 +105,18 @@ void ResetFakes() {
   g_vptrAtCurrent = g_vptrAtListData = 0;
 }
 
+// The object the game's constructor makes alone, from the same uninitialised-memory pattern Construct() uses: what a stray write must not change.
+std::uint8_t* ReferenceObject(const std::uint64_t (&init)[3]) {
+  auto* ref = static_cast<std::uint8_t*>(std::malloc(kObjectBytes));
+  QCHECK(ref != nullptr);
+  if (ref == nullptr) return nullptr;
+  std::memset(ref, 0xA5, kObjectBytes);
+  const unsigned calls = g_stockCalls;
+  FakeStockCtor(ref, init);
+  g_stockCalls = calls;
+  return ref;
+}
+
 // ---- the image ------------------------------------------------------------------------------------------------------------------
 
 ms::Pins g_pins = ms::kPins;
@@ -302,7 +314,9 @@ void EveryOtherScopeIsTheGamesOwnConstructor() {
       QCHECK(g_stockCalls == 1 && g_stockSelf == obj && g_stockInit == init);  // the game's constructor, once, with the game's arguments
       QCHECK(g_listCalls == 0 && g_blockCalls == 0);                             // none of the reconstruction's helper calls
       for (const std::uintptr_t off : kTableOffsets) QCHECK(Word64(obj, off + 0x20) == 32);  // the stock step
-      QCHECK(obj[0x10] == 0x5a && obj[kObjectBytes - 1] == 0x5a);                // the object is what the game made, byte for byte
+      std::uint8_t* const ref = ReferenceObject(init);
+      QCHECK(ref != nullptr && std::memcmp(obj, ref, kObjectBytes) == 0);        // the object is what the game made, byte for byte, all of it
+      std::free(ref);
       std::free(obj);
     }
     std::free(Construct(init));  // a second one: counted, and the line is still written once
@@ -316,6 +330,35 @@ void EveryOtherScopeIsTheGamesOwnConstructor() {
   }
 }
 
+// Each change of the loaded level writes one counts line per module with what the level that ended cost: the objects left as the game made them
+// and the objects changed. Nothing is written for a level that built nothing, and none before the level changes (the arena cost is measurable).
+void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
+  Begin1();
+  Build();
+  SetWhere(Where::kCombatMap);
+  QCHECK(ms::InstallAt(&Lookup, g_pins, &g_fns, true).installed);
+  std::uint64_t init[3] = {0, 1, 2};
+  std::free(Construct(init));
+  std::free(Construct(init));
+  QCHECK(Lines("combat_meshstep_counts").empty());  // the level has not changed, and before the first game there was nothing to report
+  SetWhere(Where::kArena);
+  std::free(Construct(init));  // the first of the arena level: the combat level ends before it is counted
+  std::vector<Line> counts = Lines("combat_meshstep_counts");
+  QCHECK(counts.size() == 1U);
+  if (counts.size() == 1U) {
+    QCHECK(counts[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Golden(counts[0].text) == CountsText("combat_meshstep_counts", LevelHex("mpl_combat_gauss"), "combat", 0, 2));
+  }
+  std::free(Construct(init));
+  std::free(Construct(init));
+  SetWhere(Where::kNothingLoaded);
+  std::free(Construct(init));
+  counts = Lines("combat_meshstep_counts");
+  QCHECK(counts.size() == 2U);
+  if (counts.size() == 2U) QCHECK(Golden(counts[1].text) == CountsText("combat_meshstep_counts", LevelHex("mpl_arena_a"), "other", 3, 0));
+  End1();
+}
+
 // No game known yet (the combat tick has not verified one): the game's constructor, and no read of any level.
 void WithNoGameKnownTheGameBuildsItsOwnObject() {
   Begin1();
@@ -325,6 +368,9 @@ void WithNoGameKnownTheGameBuildsItsOwnObject() {
   std::uint64_t init[3] = {0, 1, 2};
   std::uint8_t* obj = Construct(init);
   QCHECK(ts::ScopeReadsForTest() == 0U && g_stockCalls == 1 && g_blockCalls == 0);
+  std::uint8_t* const ref = ReferenceObject(init);
+  QCHECK(obj != nullptr && ref != nullptr && std::memcmp(obj, ref, kObjectBytes) == 0);  // byte for byte the game's, with no game known too
+  std::free(ref);
   std::free(obj);
   const std::vector<Line> stock = Lines("combat_meshstep_stock");
   QCHECK(stock.size() == 1U && Has(stock[0].text, "\"scope\":\"unknown\""));
@@ -476,6 +522,7 @@ int main() {
   APinWordThatCannotBeReadIsAMismatch();
   ACombatMatchBuildsTheMeshListInTheStockOrderWithStepOne();
   EveryOtherScopeIsTheGamesOwnConstructor();
+  ALevelChangeWritesTheCountsOfTheLevelThatEnded();
   WithNoGameKnownTheGameBuildsItsOwnObject();
   ANullObjectOrInitGoesToTheGame();
   AnInstallRefusalLeavesTheSlotAndTheConstructorAlone();

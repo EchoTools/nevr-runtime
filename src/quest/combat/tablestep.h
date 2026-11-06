@@ -14,8 +14,8 @@
  * computes; the object is the game's. What it costs there: each CreateInstance asks the loaded levels once (`table_step::CurrentScope`, a
  * seven process_vm_readv calls with one gamespace loaded: four for the
  * two tables, three for each gamespace) and runs the game's function; it runs once per shader set the game creates, on a loading thread, never
- * per frame. The number of creations in an arena match has not been counted on a
- * headset.
+ * per frame. The creations an arena level costs are counted per level change (`combat_tablestep_counts`);
+ * not yet read on a headset.
  *
  * When. The normal step (combat_install.h), after the plugin pass. A resource the game creates before the step is stock; the step cannot
  * correct it. Whether shader sets are created before the normal step has not been measured on a headset.
@@ -43,8 +43,10 @@
  *              "slot_vaddr":"0x..","consequence":".."}   Error for a refusal, Info otherwise. A pinned word that differs is a Warning
  *              `combat_tablestep_pin` with `vaddr`, `have` and `want` first.
  *   first     {"event":"combat_tablestep_first","from":32,"to":1,"msg":".."}   Info, once
- *   not_stock {"event":"combat_tablestep_not_stock","found":"0x..","expected":"0x20","msg":".."}   Warning, once
+ *   not_stock {"event":"combat_tablestep_not_stock","found":"0x..","expected":"0x20","msg":".."}   Info, once
  *   stock     {"event":"combat_tablestep_stock","scope":"other|unknown","msg":".."}   Info, once: the game's object was left as it is
+ *   counts   {"event":"combat_tablestep_counts","level":"0x..","scope":"combat|other|unknown","left_alone":<n>,"changed":<n>,"msg":".."}   Info, one per level
+ *            change when there is anything to report: the objects built under the level that ended (table_step.h RegisterCounts)
  *   legacy    {"event":"combat_tablestep_legacy_switch","file":"tablestep.off","replaced_by":"combat.tablestep: false","msg":".."}   Warning
  *
  * Built with -fno-exceptions, like every combat translation unit.

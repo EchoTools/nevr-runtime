@@ -23,6 +23,10 @@ std::atomic<bool> g_saidStock{false};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<const Pins*> g_pinsOverride{nullptr};
 
+table_step::Counts CountsOf() noexcept {
+  return {g_stock.load(std::memory_order_relaxed) + g_notStock.load(std::memory_order_relaxed), g_stepped.load(std::memory_order_relaxed)};
+}
+
 void SayStock(table_step::Scope scope) noexcept {
   if (g_saidStock.exchange(true, std::memory_order_relaxed)) return;
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_shaderstep_stock",
@@ -87,6 +91,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) 
   if (g_ran.exchange(true, std::memory_order_acq_rel)) return Done("refused", "already_ran", "already_ran", pins, "a second step installs nothing", false);
   sentinel::ElfImage image;
   if (const char* const token = table_step::FindPinnedLibR15(lookup, &image)) return Done("refused", token, token, pins, kStockConsequence, false);
+  table_step::RegisterCounts("combat_shaderstep_counts", &CountsOf);
   Thunk::Arm(kRecord);
   const sentinel::GotStatus got = sentinel::InstallThunk<Thunk>(g_hook, Target(image.base, pins), lookup);
   if (got != sentinel::GotStatus::kOk) {

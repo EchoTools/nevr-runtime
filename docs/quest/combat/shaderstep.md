@@ -33,8 +33,8 @@ loaded during a transition. In every other scope, and with no game verified yet,
 each construction and never cached.
 
 For an arena match on the combat APK: the player sees nothing different and the game computes the same. The added work is one scope read per
-shader set constructed (seven `process_vm_readv` calls with one gamespace loaded) on a loading thread, never per frame. The number of shader sets
-an arena match builds has not been counted on a headset.
+shader set constructed (seven `process_vm_readv` calls with one gamespace loaded) on a loading thread, never per frame. What an arena level costs is counted per
+level change (`combat_shaderstep_counts`); it has not been read on a headset yet.
 
 ## Not shown
 
@@ -57,9 +57,20 @@ unchanged, a word that is not 0x20, every other scope, each refusal, the kill fi
 factory words in one image. `src/quest/combat/mutants.d/shaderstep.sh` is the mutant list. The relocation and the function are checked against the real
 file by `got_pinned_test`.
 
+## When the level is stored
+
+`CncaGameSpace::LoadLevel` (ELF 0x17e5484) stores the level at gamespace + 0x58 (`str x22,[x19,#0x58]` at 0x17e54ec) before it calls
+`CResourceInstance::LoadAndInit` (0x17e55d4) and `CArchiveLoader::LoadArchiveAsync` (0x17e56a4), which are where the level's resources come from
+[INFERENCE from the call order in this one function; the constructors of those resources were not followed]. Not shown: that the gamespace is
+already in CR15Game's tables (which the scope reads) when the store happens, and that no resource of the level is built earlier. If either is
+false the modules do nothing in combat with every line green, which is why the headset row below requires `built`/`first`/`steps` lines during a
+combat map load.
+
 ## Headset check (log only)
 
 On a combat APK: `combat_shaderstep_install` with `"result":"installed"` once; entering a combat map, `combat_shaderstep_first`. In an Echo Arena
 match: `combat_shaderstep_stock` with `"scope":"other"` and no `first` line. Falsifiers: `"reason":"original_mismatch"` (the word is not the
 function, so the vtable reading is wrong); an `installed` line with no `first` line in a session that loads shader sets (the function does not run
 through this word, or runs before the install); `combat_shaderstep_not_stock` (the constructor is not the one this module reads).
+
+Required for the headset row: `combat_shaderstep_first` during a combat map load; `combat_shaderstep_counts` lines at the level changes, with `changed` above 0 for the combat level and `left_alone` for the arena one.

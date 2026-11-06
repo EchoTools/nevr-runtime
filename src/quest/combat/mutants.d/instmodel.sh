@@ -43,7 +43,7 @@ runm im_log_uncapped        $S "s/  if (n > kLogLines) return;/  (void)kLogLines
 runm im_mismatch_uncapped   $S "s/g_mismatchLines.fetch_add(1, std::memory_order_relaxed) < kLogLines/true/"
 runm im_mismatch_offset     $S "s/{\"offset\", sentinel::HexString(off, at)}/{\"offset\", sentinel::HexString(off, member)}/"
 runm im_mismatch_found      $S "s/{\"found\", sentinel::HexString(found, have)}/{\"found\", sentinel::HexString(found, kStockStep)}/"
-runm im_steps_level_debug   $S "s/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_instmodel_steps\"/sentinel::LogFields(sentinel::LogLevel::kDebug, \"combat_instmodel_steps\"/"
+runm im_steps_level_debug   $S "s/sentinel::LogFields(sentinel::LogLevel::kDebug, \"combat_instmodel_steps\"/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_instmodel_steps\"/"
 runm im_mismatch_level_info $S "s/sentinel::LogFields(sentinel::LogLevel::kWarn, \"combat_instmodel_mismatch\"/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_instmodel_mismatch\"/"
 runm im_steps_text          $S "s/{\"steps_set\", set}, {\"steps_mismatch\", mismatch}/{\"steps_set\", mismatch}, {\"steps_mismatch\", set}/"
 # the install: the pins, the build, the switch, once, the slot
@@ -66,3 +66,9 @@ runm im_legacy_key_name     $S "s/\"instmodel.off\", \"combat.instmodel: false\"
 runm im_refusal_not_error   $S "s/refused ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo/refused ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kInfo/"
 runm im_install_slot_text   $S "s/sentinel::HexString(slot, pins.slot)/sentinel::HexString(slot, pins.ctor)/"
 runm im_installed_status    $S "s/return Done(\"installed\", \"ok\", \"installed\",/return Done(\"installed\", \"ok\", \"ok\",/"
+# the arena path writes nothing to the game's object (the test compares the whole object with the game's own)
+runm im_stray_write_low     $S "s/^    SayStock(scope);\$/    SayStock(scope);\n    static_cast<unsigned char*>(self)[0x10] = 1;/"
+runm im_stray_write_step    $S "s/^    SayStock(scope);\$/    SayStock(scope);\n    static_cast<unsigned char*>(self)[0x98] = 1;/"
+runm im_counts_not_registered $S "s/^  table_step::RegisterCounts(.*\$//"
+runm im_counts_swapped      $S "s/return {g_stock.load(std::memory_order_relaxed), g_objects.load(std::memory_order_relaxed)};/return {g_objects.load(std::memory_order_relaxed), g_stock.load(std::memory_order_relaxed)};/"
+runm im_cap_line_level      $S "s/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_instmodel_log_cap\"/sentinel::LogFields(sentinel::LogLevel::kDebug, \"combat_instmodel_log_cap\"/"
