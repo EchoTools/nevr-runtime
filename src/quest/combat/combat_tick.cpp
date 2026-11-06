@@ -17,6 +17,7 @@ using Thunk = targets::Thunk;
 sentinel::GotHook g_hook;
 std::atomic<TickFn> g_ticks[kMaxCallbacks] = {};
 std::atomic<std::size_t> g_count{0};
+std::atomic<bool> g_installed{false};
 std::atomic<std::uint32_t> g_calls{0};
 std::atomic<std::uint32_t> g_objectMisses{0};
 // The one object that passed the vptr check: the game calls with the same CR15Game every frame, so the check (a process_vm_readv) is made again
@@ -98,6 +99,7 @@ sentinel::GotStatus InstallStatusAt(sentinel::ImageLookup lookup) noexcept {
     status = sentinel::InstallThunk<Thunk>(g_hook, targets::Target(), lookup);
   }
   const bool ok = status == sentinel::GotStatus::kOk;
+  g_installed.store(ok, std::memory_order_release);
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "combat_tick_install",
                       {{"result", ok ? "installed" : "refused"},
                        {"status", sentinel::GotStatusName(status)},
@@ -117,6 +119,8 @@ ModuleResult InstallNormal() noexcept {
   return {ok, ok ? "installed" : sentinel::GotStatusName(status)};
 }
 
+bool Installed() noexcept { return g_installed.load(std::memory_order_acquire); }
+
 std::uint32_t Calls() noexcept { return g_calls.load(std::memory_order_relaxed); }
 
 std::uint32_t VptrReads() noexcept { return g_vptrReads.load(std::memory_order_relaxed); }
@@ -124,6 +128,7 @@ std::uint32_t VptrReads() noexcept { return g_vptrReads.load(std::memory_order_r
 void ResetForTest() noexcept {
   g_hook.Forget();
   Thunk::Reset();
+  g_installed.store(false, std::memory_order_release);
   for (std::atomic<TickFn>& slot : g_ticks) slot.store(nullptr, std::memory_order_release);
   g_count.store(0, std::memory_order_release);
   g_calls.store(0, std::memory_order_relaxed);

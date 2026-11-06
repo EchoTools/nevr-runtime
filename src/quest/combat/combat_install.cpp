@@ -6,12 +6,15 @@
 #include <cstring>
 
 #include "quest/combat/combat_active.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/hudmeter.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/combat/shieldgamma.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -29,6 +32,10 @@ ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on)
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
+ModuleResult HudmeterNormal() noexcept { return hudmeter::Install(g_config.hudmeter.on); }
+ModuleResult ShieldgammaNormal() noexcept {
+  return shieldgamma::Install(g_config.shieldgammaGamma.on, g_config.shieldgammaTubeMirror.on);
+}
 
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
@@ -43,7 +50,13 @@ constexpr std::array kModules{
     // tick, then refresh_rate (#2172): the game-thread tick installs first (combat_tick.h), and every module with a per-frame callback registers
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
+    // scope (#2186): the combat level answer (combat_scope.h) is refreshed from the tick, so it comes after the tick's install and before every
+    // module that reads it.
+    Module{"scope", nullptr, &scope::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
+    // hudmeter, then shieldgamma (#2186): both read the combat level answer.
+    Module{"hudmeter", nullptr, &HudmeterNormal},
+    Module{"shieldgamma", nullptr, &ShieldgammaNormal},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},
@@ -151,6 +164,14 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
+  // The sentinel's log line holds 768 bytes (hook_log.cpp) and the line above is at that limit, so the keys of the modules that came after it are
+  // a second record, `combat_config_modules`: the wrist HUD and the shield colour (#2186).
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_modules",
+                      {{"hudmeter", config.hudmeter.on ? 1 : 0}, {"hudmeter_source", source(config.hudmeter.source)},
+                       {"shieldgamma_gamma", config.shieldgammaGamma.on ? 1 : 0}, {"shieldgamma_gamma_source", source(config.shieldgammaGamma.source)},
+                       {"shieldgamma_tube_mirror", config.shieldgammaTubeMirror.on ? 1 : 0},
+                       {"shieldgamma_tube_mirror_source", source(config.shieldgammaTubeMirror.source)},
+                       {"msg", "each key is the module's switch (true: the module is installed) and where its value came from; combat_config holds the others"}});
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }

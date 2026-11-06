@@ -11,6 +11,7 @@ that they ship to every APK (`match_tags`, `equip_refire`).
 | --- | --- |
 | `combat_active.{h,cpp}` | The gate: `combat::Active()`, from the APK's variant and `combat.force` (a development build only). |
 | `combat_install.{h,cpp}` | The two install steps, `InstallEarly()` and `InstallNormal()`, the registration table they run, the `combat_install` line each writes, and the `combat_config` line. |
+| `combat_scope.{h,cpp}` | Whether a combat level is loaded, kept fresh from the game-thread tick and read as one relaxed load and a test: what a hook on a slot arena also uses asks (rule 9). |
 | `<module>.{h,cpp}` | One module: namespace `nevr_quest::combat::<module>`, log events `combat_<module>_*`. |
 | `<module>_targets.h` | The module's pinned slots, each checked by the module's own pinned test (`src/quest/tests/<module>_pinned_test.cpp`, run by `just test-quest-hooks-pinned`-style recipes against the store APK). |
 | `check/<module>.sh` | The module's arm64 checks (the NDK, and qemu where a thunk is run). `just test-quest-combat` runs them after the host tests. |
@@ -45,3 +46,10 @@ Both steps ask `combat::Active()` and install nothing when it is false. A plain 
 7. A module's host test is a program in the `combat` group with the module's name in its own, so `just test-quest-combat <module>` finds it.
 8. An early function does not touch a slot that `libq15t.so` installs at its normal pass. The early step runs before the plugin's hooks are in,
    so it would take the slot first and q15t would refuse it (the #2000 shape); such a module installs in the normal step, after the plugin pass.
+9. A hook on a slot that arena's scripts also call tests `scope::SeenCombatOrLobby()` or `scope::SeenCombatMap()` (`combat_scope.h`) first and, outside a combat
+   level, calls the game's function with the same arguments and does nothing else: no read of the game's data, no write, no counter, no line. The handler is
+   that test and a tail call to the game's function or to a `[[gnu::noinline]]` body for the combat case, so it has no frame (check the arm64 object with
+   `llvm-objdump -d`); the body starts with `scope::LookIsFresh()`, because a true answer older than `kStaleAfterMs` is not believed (the tick stopped).
+   The refresh is registered by the `scope` row of the install table, after the `tick` row; a module does not register it, it asks `scope::Live()` from its
+   install function, before it hooks anything, and refuses (`scope_not_live`) when the answer cannot change. The module's host test pins the arena path with data
+   pointers nobody could read. Arena and combat run on the same APK, so `combat::Active()` does not do this.

@@ -1,5 +1,5 @@
 // A structured log record with up to 8 fields, numbers formatted into the record's own buffers (no heap, no constructor
-// at namespace scope). Used by the powerboost, hudmeter and shieldgamma modules.
+// at namespace scope). Used by the powerboost, sendguard, shaderstep and tablestep modules.
 #pragma once
 
 #include <cstdint>

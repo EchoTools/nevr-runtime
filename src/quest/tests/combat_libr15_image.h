@@ -139,6 +139,20 @@ class Image {
   }
   void** Slot(std::uint64_t vaddr) { return reinterpret_cast<void**>(mem_ + vaddr); }
 
+  // A callable "real function of the game" at `vaddr`, implemented by `fn`: a 12-byte x86-64 trampoline (movabs rax, fn; jmp rax) on a page made
+  // executable, so a slot that holds base + vaddr (the pinned original) can be called through. Host tests run on x86-64 only.
+  void Real(std::uint64_t vaddr, void* fn) {
+    const std::uintptr_t page = (Base() + vaddr) & ~static_cast<std::uintptr_t>(4095);
+    QCHECK(mprotect(reinterpret_cast<void*>(page), 4096, PROT_READ | PROT_WRITE | PROT_EXEC) == 0);
+    unsigned char* const t = mem_ + vaddr;
+    t[0] = 0x48;
+    t[1] = 0xb8;
+    const std::uint64_t target = reinterpret_cast<std::uint64_t>(fn);
+    std::memcpy(t + 2, &target, sizeof(target));
+    t[10] = 0xff;
+    t[11] = 0xe0;
+  }
+
  private:
   static constexpr std::uint64_t kNoteAt = 0x100;
   static constexpr std::uint64_t kDynstrAt = 0x400;

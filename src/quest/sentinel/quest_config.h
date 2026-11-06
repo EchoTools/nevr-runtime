@@ -166,6 +166,9 @@ struct CombatConfig {
   CombatSwitch refreshRateQuest2At72{true, Source::kAbsent};  // `combat.refresh_rate_quest2_72`: a Quest 2's level rate is 72, not 90 (combat/refresh_rate.h)
   CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
   CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
+  CombatSwitch hudmeter{true, Source::kAbsent};               // `combat.hudmeter`: the wrist HUD's weapon-slot heat fill (combat/hudmeter.h)
+  CombatSwitch shieldgammaGamma{false, Source::kAbsent};      // `combat.shieldgamma_gamma`: the spawn shield / barrier colour decoded as the PC does (combat/shieldgamma.h; default OFF, a test switch upstream)
+  CombatSwitch shieldgammaTubeMirror{true, Source::kAbsent};  // `combat.shieldgamma_tube_mirror`: the launch-tube windows show the team colour (combat/shieldgamma.h)
 };
 
 struct LogEvent {

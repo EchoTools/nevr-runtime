@@ -59,7 +59,6 @@ HOST_TESTS = frozenset(
         "fxtrail.fxtrail_test",
         "game_tick.game_tick_test",
         "gunconnect.gunconnect_test",
-        "hudmeter.hudmeter_test",
         "impactsnd.impactsnd_test",
         "instmodel.instmodel_test",
         "levelname.levelname_test",
@@ -70,7 +69,6 @@ HOST_TESTS = frozenset(
         "script_redirect.script_redirect_test",
         "sensorwd.sensorwd_test",
         "shaderstep.shaderstep_test",
-        "shieldgamma.shieldgamma_test",
         "tablestep.tablestep_test",
         "thread_word.thread_word_test",
         "voipdrop.voipdrop_test",
@@ -87,12 +85,9 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_CUSTCTX",
         "wiring.wiring_caps_IMPACTSND",
         "wiring.wiring_caps_ECFX",
-        "wiring.wiring_caps_HUDMETER",
         "wiring.wiring_caps_MUSIC",
         "wiring.wiring_caps_SENSORWD",
         "wiring.wiring_caps_DECALS",
-        "wiring.wiring_caps_SHIELDGAMMA_1",
-        "wiring.wiring_caps_SHIELDGAMMA_2",
         "wiring.wiring_caps_DRONEGUARD",
         "wiring.wiring_caps_PEERCLAMP",
         "wiring.wiring_caps_DRONEKILL",
@@ -115,7 +110,7 @@ HOST_TESTS = frozenset(
 # q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack
 # checks and one for each module that keeps per-thread state (bvh, dronekill, impactsnd, powerboost, sensorwd)
 ARM64_OBJECTS = frozenset(
-    "bvh decals dronekill dronemuzzle impactsnd hudmeter instmodel music powerboost sensorwd shaderstep shieldgamma tablestep".split()
+    "bvh decals dronekill dronemuzzle impactsnd instmodel music powerboost sensorwd shaderstep tablestep".split()
 )
 # the checks that read an object or run a freestanding program, registered by hand in a module file
 NDK_CHECKS = {

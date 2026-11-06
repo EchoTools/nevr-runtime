@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys and the three combat.refresh_rate keys. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.hudmeter and the two combat.shieldgamma keys. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -210,6 +210,21 @@ combat:
   # refresh_rate_lobby: true
   # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
   # refresh_rate_quest2_72: false
+
+  # Quest only. A boolean. The wrist HUD's weapon-slot heat fill stops being 0 x 0 (src/quest/combat/hudmeter.h). It acts only while a combat
+  # map or the combat lobby is loaded; in an Echo Arena level, in the lobbies arena players use and everywhere else the game's own call
+  # goes through untouched. `false` leaves the game's fill. Read once at launch; the sentinel log lines `combat_hudmeter_install` and
+  # `combat_scope_change` say what was installed and when a combat level was entered. Default (absent): true.
+  # hudmeter: false
+
+  # Quest only. Booleans. The spawn-tube and barrier colours (src/quest/combat/shieldgamma.h). Both act only while a combat map or the combat
+  # lobby is loaded; in an Echo Arena level the game's own write goes through untouched. A value that is not a boolean keeps the default,
+  # with a warning that names the key. Read once at launch; the sentinel log line `combat_shieldgamma_install` says what was installed.
+  # shieldgamma_tube_mirror: false stops the launch-tube windows from showing the team colour. Default (absent): true.
+  # shieldgamma_tube_mirror: false
+  # shieldgamma_gamma: true decodes the shield and barrier colour as the PC's pixel shader does (red-orange instead of yellow-orange). It was
+  # a test switch in the reference build. Default (absent): false.
+  # shieldgamma_gamma: true
 
   # Quest only. A boolean. The particle-renderer gate (src/quest/combat/pfx.h): the switch the particle renderer reads, open in combat maps only and
   # shut in an Echo Arena level, in every lobby and everywhere else. The renderer itself is not in the runtime yet, so `true` changes nothing in the
