@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0009-quest-permission-wait.md
+audience: all
+---
+
 # ADR 0009: the game waits for the storage permission it just asked for
 
 Status: accepted, implemented (`src/quest/sentinel/permission_wait_hook.{h,cpp}`, #640). On in every Quest build, with no feature flag.

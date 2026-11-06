@@ -18,10 +18,12 @@
 #include <vector>
 #include <windows.h>
 
+#include "core/globals.h"
 #include "core/logging.h"
 #include "runtime/patch/asset_cache.h"
 #include "runtime/patch/game_buffer.h"
 #include "runtime/patch/netgun_bullets.h"
+#include "runtime/patch/plugin_assets.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/tests/netgun_bullets_fixture.h"
 #include "runtime/lifecycle/cli.h"
@@ -30,6 +32,7 @@
 bool TestLogContains(const std::string& needle);
 bool TestLogContainsAtLevel(EchoVR::LogLevel level, const std::string& needle);
 void ClearTestLogs();
+std::vector<std::string> TestLogLinesContaining(const std::string& needle);
 
 namespace {
 
@@ -265,6 +268,137 @@ void RunCallbackFor(std::uint64_t name) {
   std::memcpy(resource.data() + 0x38, &name, sizeof(name));
   std::memcpy(callback.data() + 0x08, &resourcePtr, sizeof(resourcePtr));
   TestHook_RunResourceCallback(callback.data());
+}
+
+// #2215: a label comes from a plugin and is written into log lines, so one outside the label rule (1 to 64 bytes of
+// printable ASCII, no double quote or backslash) is refused where it enters, and no line carries its bytes.
+namespace {
+
+bool TransformNeverCalled(const void*, std::uint64_t, const void**, std::uint64_t*, void*) { return false; }
+
+struct BadLabel {
+  const char* what;
+  std::string label;
+};
+
+std::vector<BadLabel> BadLabels() {
+  return {
+      {"newline", "lbl-a\nb"},
+      {"carriage return", "lbl-a\rb"},
+      {"control byte", std::string("lbl-a\x01") + "b"},
+      {"DEL", "lbl-a\x7f" "b"},
+      {"non-ASCII", "lbl-caf\xc3\xa9"},
+      {"invalid UTF-8", "lbl-\xff\xc3("},
+      {"double quote", "lbl-a\"b"},
+      {"backslash", "lbl-a\\b"},
+      {"empty", ""},
+      {"65 bytes", std::string(65, 'q')},
+  };
+}
+
+}  // namespace
+
+TEST(ResourceOverride, ALabelOutsideTheRuleIsRefusedAtEveryEntryAndNoLineCarriesItsBytes) {
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  ClearTestLogs();
+  static char bytes[] = "hostile";
+  std::uint64_t name = kName;
+  for (const BadLabel& bad : BadLabels()) {
+    SCOPED_TRACE(bad.what);
+    const std::size_t before = TestLogLinesContaining("[NEVR.RESOURCE]").size();
+    RegisterResourceOverride(kType, name++, bytes, sizeof(bytes), bad.label.c_str());
+    EXPECT_FALSE(RegisterResourceTransform(kType, name++, &TransformNeverCalled, nullptr, bad.label.c_str()));
+    EXPECT_GE(TestLogLinesContaining("[NEVR.RESOURCE]").size(), before + 2u) << "a refusal is logged";
+  }
+  // A null label is outside the rule too.
+  RegisterResourceOverride(kType, name++, bytes, sizeof(bytes), nullptr);
+  EXPECT_FALSE(RegisterResourceTransform(kType, name++, &TransformNeverCalled, nullptr, nullptr));
+
+  const std::size_t refusals = TestLogLinesContaining("reason=bad_label").size();
+  EXPECT_EQ(refusals, 2u * BadLabels().size() + 2u) << "one Warning per refused registration";
+  for (const std::string& line : TestLogLinesContaining("reason=bad_label")) {
+    EXPECT_NE(line.find("status=1"), std::string::npos) << line;
+    EXPECT_NE(line.find("1 to 64 bytes of printable ASCII"), std::string::npos) << "names the rule: " << line;
+    EXPECT_NE(line.find("label_bytes="), std::string::npos) << "gives the length: " << line;
+  }
+  EXPECT_TRUE(TestLogLinesContaining("lbl-").empty()) << "a refused label's bytes reached a line";
+  EXPECT_TRUE(TestLogLinesContaining(std::string(65, 'q')).empty());
+
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 0u) << "nothing was registered";
+  TestHook_SetOriginal(nullptr);
+  TestHook_CloseResourceOverrides();
+}
+
+// #2225: the asset registry's entry (NEVR_RegisterAsset) follows the same rule as the override registry above.
+TEST(PluginAssetLabel, ALabelOutsideTheRuleIsRefusedAndNoLineCarriesItsBytes) {
+  ClearTestLogs();
+  // With no game base a registration that is accepted cannot install the engine hooks (EnsureHooksInstalled warns and
+  // returns), so a label the rule fails to refuse shows as a failed assertion here, not as a fault in the hook install.
+  // RegisterPluginAsset installs the engine's loaded-resource probe on the process-wide registry; take it out again so a
+  // later test that registers into that registry does not read the stand-in game image.
+  struct Restore {
+    CHAR* base = EchoVR::g_GameBaseAddress;
+    ~Restore() {
+      EchoVR::g_GameBaseAddress = base;
+      nevr::assets::Global().SetLoadedProbe(nullptr);
+    }
+  } restore;
+  EchoVR::g_GameBaseAddress = nullptr;
+  static const unsigned char bytes[8] = {1, 2, 3};
+  const std::size_t registeredBefore = nevr::assets::Global().Count();
+  std::uint64_t name = 0x7a5e700000000001ULL;
+  for (const BadLabel& bad : BadLabels()) {
+    SCOPED_TRACE(bad.what);
+    EXPECT_EQ(nevr::assets::RegisterPluginAsset(kType, name++, bytes, sizeof(bytes), bad.label.c_str()),
+              nevr::assets::RegisterStatus::BadArgument);
+  }
+  EXPECT_EQ(nevr::assets::RegisterPluginAsset(kType, name++, bytes, sizeof(bytes), nullptr),
+            nevr::assets::RegisterStatus::BadArgument)
+      << "a null label";
+
+  const std::vector<std::string> refusals = TestLogLinesContaining("[NEVR.ASSET] register refused");
+  EXPECT_EQ(refusals.size(), BadLabels().size() + 1u) << "one Warning per refused registration";
+  for (const std::string& line : refusals) {
+    EXPECT_NE(line.find("reason=bad_label"), std::string::npos) << line;
+    EXPECT_NE(line.find("label_bytes="), std::string::npos) << "gives the length: " << line;
+    EXPECT_NE(line.find("1 to 64 bytes of printable ASCII"), std::string::npos) << "names the rule: " << line;
+  }
+  EXPECT_TRUE(TestLogLinesContaining("lbl-").empty()) << "a refused label's bytes reached a line";
+  EXPECT_TRUE(TestLogLinesContaining(std::string(65, 'q')).empty());
+  EXPECT_TRUE(TestLogLinesContaining("[NEVR.ASSET] registered").empty()) << "nothing was registered";
+  EXPECT_EQ(nevr::assets::Global().Count(), registeredBefore);
+}
+
+TEST(ResourceOverride, AFileOverrideWithALabelOutsideTheRuleIsRefusedAndItsFileIsNotLoaded) {
+  char directory[MAX_PATH] = {};
+  char path[MAX_PATH] = {};
+  ASSERT_NE(GetTempPathA(MAX_PATH, directory), 0u);
+  ASSERT_NE(GetTempFileNameA(directory, "nvr", 0, path), 0u);
+  {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file << "owned";
+  }
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  ClearTestLogs();
+  RegisterResourceOverrideFromFile(kType, kName, path, "lbl-a\nb");
+  EXPECT_FALSE(TestLogLinesContaining("reason=bad_label").empty());
+  EXPECT_TRUE(TestLogLinesContaining("lbl-").empty());
+  EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
+  TestHook_SetOriginal(nullptr);
+  TestHook_CloseResourceOverrides();
+  DeleteFileA(path);
+}
+
+TEST(ResourceOverride, ALabelInsideTheRuleIsAccepted) {
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  static char bytes[] = "ok";
+  RegisterResourceOverride(kType, kName, bytes, sizeof(bytes), "my levels-1.0 (b)");
+  RegisterResourceOverride(kType, kName + 1, bytes, sizeof(bytes), std::string(64, 'x').c_str());
+  EXPECT_TRUE(RegisterResourceTransform(kType, kName + 2, &TransformNeverCalled, nullptr, "t"));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 3u);
+  TestHook_SetOriginal(nullptr);
+  TestHook_CloseResourceOverrides();
 }
 
 TEST(ResourceOverride, ShutdownReportsEveryOverrideTheGameNeverRequested) {
@@ -515,6 +649,46 @@ TEST_F(CachedOverrides, AOneByteFlippedCachedFileIsRefusedLoggedAndNeverDelivere
   GameFinishesReading(kSplashType, kSplashName, original, sizeof(original));
   EXPECT_EQ(g_seenBuffer, static_cast<const void*>(original));
   EXPECT_FALSE(TestLogContains("override applied"));
+}
+
+// #2215: a cache index entry whose label is outside the label rule is refused, counted, and its bytes are in no line.
+TEST_F(CachedOverrides, AnIndexEntryWithALabelOutsideTheRuleIsRefusedAndItsBytesAreInNoLine) {
+  const std::string sha = Cache(Image(64, 3), kSplashType, kSplashName, "lbl-a\nb\xc3\xa9");
+  EXPECT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 0u);
+  EXPECT_TRUE(TestLogContains("entries=1 loaded=0 refused=1 missing=0"));
+  EXPECT_FALSE(TestLogLinesContaining("cache refused entry=cache status=1 reason=bad_label label_bytes=").empty());
+  EXPECT_TRUE(TestLogLinesContaining("lbl-").empty()) << "the label's bytes reached a line";
+  EXPECT_TRUE(TestLogLinesContaining("cache hit").empty());
+  EXPECT_EQ(ShutdownResourceOverride().registered, 0u) << "nothing is registered";
+  EXPECT_FALSE(sha.empty());
+}
+
+// The _overrides/ scan labels a file by its parsed hashes, so a player's file is never refused over its name.
+TEST(ResourceOverride, AnOverrideFileWithALongOrNonAsciiNameStillInstalls) {
+  char tmp[MAX_PATH] = {};
+  ASSERT_NE(GetTempPathA(MAX_PATH, tmp), 0u);
+  const std::string dir = std::string(tmp) + "nevr-override-files-" + std::to_string(GetCurrentProcessId());
+  CreateDirectoryA(dir.c_str(), nullptr);
+  const std::vector<std::string> names = {
+      "0x00000000000000aa.0x00000000000000bb.caf\xc3\xa9" + std::string(70, 'n') + ".bin",  // long and non-ASCII
+      "0x00000000000000cc.bin",                                                               // plain
+  };
+  for (const std::string& name : names) {
+    std::ofstream file(dir + "\\" + name, std::ios::binary);
+    file << "bytes";
+    ASSERT_TRUE(file.good()) << name;
+  }
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  ClearTestLogs();
+  EXPECT_EQ(TestHook_RegisterOverrideFilesIn(dir.c_str()), 0u) << "no file is refused over its name";
+  EXPECT_TRUE(TestLogLinesContaining("reason=bad_label").empty());
+  EXPECT_TRUE(TestLogContains("Registered file override: file:0x00000000000000aa.0x00000000000000bb"));
+  EXPECT_TRUE(TestLogContains("Registered file override: file:0x0000000000000000.0x00000000000000cc"));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 2u);
+  TestHook_SetOriginal(nullptr);
+  TestHook_CloseResourceOverrides();
+  for (const std::string& name : names) DeleteFileA((dir + "\\" + name).c_str());
+  RemoveDirectoryA(dir.c_str());
 }
 
 TEST_F(CachedOverrides, AnIndexedBlobThatIsNotInTheCacheIsReportedMissing) {

@@ -32,7 +32,7 @@ set(Q15T_ARM64_OPTIONS -O2 -fno-exceptions -fno-rtti -fvisibility=hidden -Wall -
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
   set(Q15T_ARM64 TRUE)
   get_filename_component(Q15T_NDK_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
-  foreach(tool llvm-readelf llvm-objdump)
+  foreach(tool llvm-readelf llvm-objdump llvm-nm)
     if(NOT EXISTS "${Q15T_NDK_BIN}/${tool}")
       message(FATAL_ERROR "q15t: ${tool} is not beside the NDK clang (${Q15T_NDK_BIN}); Q15T_NDK must be an Android NDK r26d install")
     endif()
@@ -108,7 +108,9 @@ function(q15t_extra_run name program)
 endfunction()
 
 # q15t_arm64_object(<src name>...): src/<name>.cpp compiled for arm64 with the NDK clang, with the plugin's own warning flags, and
-# the test that the object has no static initializer section (.init_array / .ctors: the repack refuses a plugin with one).
+# two tests: the object has no static initializer section (.init_array / .ctors: the repack refuses a plugin with one), and it defines
+# no emulated thread-local variable (__emutls_v.*: the API 26 toolchain emulates thread_local and allocates on a thread's first use,
+# which a hooked call must not do; the sentinel's TestNoEmulatedTLSInHookPath holds the same line for its own library).
 function(q15t_arm64_object)
   if(NOT Q15T_ARM64)
     return()
@@ -121,20 +123,20 @@ function(q15t_arm64_object)
     add_test(NAME ${Q15T_MODULE}.arm64_${m}
              COMMAND "${Q15T_TESTS_DIR}/check/arm64_no_static_init.sh" "${Q15T_NDK_BIN}/llvm-readelf" "$<TARGET_OBJECTS:nevr_q15t_arm64_${m}>" ${m})
     set_tests_properties(${Q15T_MODULE}.arm64_${m} PROPERTIES LABELS ${Q15T_MODULE})
+    add_test(NAME ${Q15T_MODULE}.arm64_no_emutls_${m}
+             COMMAND "${Q15T_TESTS_DIR}/check/no_emutls.sh" "${Q15T_NDK_BIN}/llvm-nm" "$<TARGET_OBJECTS:nevr_q15t_arm64_${m}>" ${m})
+    set_tests_properties(${Q15T_MODULE}.arm64_no_emutls_${m} PROPERTIES LABELS ${Q15T_MODULE})
   endforeach()
 endfunction()
 
-# ---- the core programs: the plugin's wiring and its headset gates (label core) ----
+# ---- the core programs: the plugin's entry per arm and its headset gates (label core) ----
 set(Q15T_MODULE core)
 add_custom_target(mod_core)
-foreach(arm "0 0" "1 0" "0 1")
-  string(REPLACE " " ";" arm "${arm}")
-  list(GET arm 0 cap)
-  list(GET arm 1 t26)
-  q15t_host_test(host_test_${cap}_${t26} TEST host_test.cpp
-    SRC plugin plugin_log script_redirect import_hook clock_levels plugin_args refresh_rate game_tick safe_read headset_gates got_swap weapon_arm gamespace
+foreach(t26 0 1)
+  q15t_host_test(host_test_${t26} TEST host_test.cpp
+    SRC plugin plugin_log script_redirect import_hook combat_map game_tick safe_read headset_gates got_swap weapon_arm gamespace
     OPTS "SHELL:-include ${Q15T_TESTS_DIR}/host_overrides.h"
-    DEFS Q15T_HZ_MATCH90=${cap} Q15T_T26=${t26} Q15T_SLOT_SETCLOCKLEVELS=0x10 Q15T_SLOT_SETDISPLAYREFRESHRATE=0x18
+    DEFS Q15T_T26=${t26}
          "Q15T_BUILD_ID_FOR_TEST=\"${Q15T_BUILD_ID_FOR_TEST}\""
     LINK_OPTS -rdynamic LIBS dl)
 endforeach()

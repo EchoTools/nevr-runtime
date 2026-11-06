@@ -15,7 +15,7 @@ nevr_ht_test(integration_sequence_test GROUP integration ${_on} PTHREAD TIMEOUT 
       src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp
       src/quest/integration/identity_source.cpp src/quest/integration/stage_log.cpp src/quest/integration/bridge_uri.cpp
       src/quest/net/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp
-      src/quest/integration/self_check_wiring.cpp src/runtime/compat/self_check.cpp)
+      src/quest/integration/self_check_wiring.cpp src/runtime/compat/self_check.cpp src/quest/sentinel/build_variant.cpp)
 
 # 2. the hook translation units and the counter budget
 foreach(f got_hook hook_report)
@@ -68,7 +68,7 @@ nevr_ht_test(integration_hooks_test GROUP integration ${_on} DL PTHREAD TIMEOUT 
   SRC src/quest/tests/integration_hooks_test.cpp src/quest/integration/post_load.cpp src/quest/integration/ctor_sequence.cpp
       src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp
       src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/runtime/lifecycle/service_redirect.cpp
-      src/runtime/lifecycle/stable_string_pool.cpp)
+      src/runtime/lifecycle/stable_string_pool.cpp src/quest/sentinel/build_variant.cpp)
 add_dependencies(host-tests-integration o_integ_quit_hook)
 
 # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it builds when none is injected)

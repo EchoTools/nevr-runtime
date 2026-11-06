@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0012-static-install-root.md
+audience: all
+---
+
 # ADR 0012: the install folder is static; nEVR's runtime, plugins and state live in `%LOCALAPPDATA%\nevr\echovr`
 
 Status: proposed (#575, tracking issue #799). Of the "Order of work", steps 2 (the target split), 3 (the host verifies the runtime and stops the game without it) and 4 (the runtime and the plugins load from the root; the installer and `NEVR_ROOT`) are built, and of step 5 the root, the one-time move (of the sign-in cache, the nEVR logs, the cosmetic packages and the plugins) and the resolution of the sign-in cache, `logs\`, `crashes\` and the caches (`core/nevr_root.h`, `lifecycle/nevr_root_move.cpp`); nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and

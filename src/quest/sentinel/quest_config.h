@@ -32,6 +32,21 @@
 // `graphics` other than `texture_quality` (a misspelling, another case) is one Warning that names it, and changes nothing else.
 // `stock` leaves the headset runtime's own eye-buffer size. The key is also where a choice made in the Texture Resolution control is
 // kept (texture_menu_hook.h): the sentinel writes it through NevrConfig::Set, so the next launch reads the player's last choice here.
+//
+// `graphics.hand_flip` (#2082) is the Controller Hand Flip choice (hand_flip.h): a boolean, `true` is On; absent, it is Off (nothing is
+// written for a default). A value that is no boolean (a word, a number, a list, a mapping, a key with no value, an unset ${VAR}) is Off
+// with one Warning that names the key, never the value. It is also where a choice made in the menu is kept: the sentinel writes it
+// through NevrConfig::Set (hand_flip.h), so the next launch reads the player's last choice here. A file rejected as a whole says
+// nothing about it: Off, from the default.
+//
+// `combat.force` (#2170, docs/adr/0046 rule 5) is a boolean: `true` asks for the folded combat modules to run whatever the APK's
+// variant. Absent, it is not asked (from the default). A value that is no boolean (a word, a number, a list, a mapping, a key with no
+// value, an unset ${VAR}) is not asked, with one Warning that names the key, never the value. Only a development build honours it
+// (combat::Decide); a release build refuses it with a Warning of its own. The configuration reads the request, nothing more; the `combat_config` line reports it (combat/combat_install.h).
+//
+// `combat.heaps` and `combat.memsys` (#2175) are booleans, true when absent: `false` leaves the game's heap sizes (heaps) or its render-target
+// pool and System heap size (memsys) as the game has them. A value that is no boolean is true, with one Warning that names the key, never the
+// value. They only matter in the q15t and combat APKs, where the modules run.
 #pragma once
 
 #include <cstddef>
@@ -120,6 +135,37 @@ struct TextureChoice {
   Source source = Source::kAbsent;  // kFile: the file gave the level; anything else: the default did, or a mistake fell back
 };
 
+// The Controller Hand Flip setting (#2082), after the file and the default have spoken.
+struct HandFlipChoice {
+  bool on = false;
+  Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, Off
+};
+
+// The combat.force request (#2170, docs/adr/0046 rule 5), after the file and the default have spoken: the file asks for the folded
+// combat modules to run whatever the APK's variant. Whether it is honoured is combat::Decide's rule (combat/combat_active.h).
+struct CombatForceChoice {
+  bool on = false;
+  Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, not asked
+};
+
+// A folded combat module's switch (docs/adr/0046 rule 4): `combat.<module>`, a boolean that is on unless the file says false.
+struct CombatSwitch {
+  bool on = true;
+  Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, on
+};
+
+// The `combat:` section (docs/adr/0046 rule 4): one member per key, each defaulting to the shipped behaviour. The keys are `force` and, for
+// each folded module, its switch; a module's unit adds its member here, with the row in KnownSections (src/core/nevr_config.cpp), the
+// example config and the `combat_config` line (combat/combat_install.h).
+struct CombatConfig {
+  CombatForceChoice force;
+  CombatSwitch heaps;   // `combat.heaps`: the four heap sizes (combat/heaps.h)
+  CombatSwitch memsys;  // `combat.memsys`: the render-target pool and, with it, the System heap size (combat/memsys.h)
+  CombatSwitch refreshRate{true, Source::kAbsent};            // `combat.refresh_rate`: the level rate rule (off: the game's rate always)
+  CombatSwitch refreshRateLobby{false, Source::kAbsent};      // `combat.refresh_rate_lobby`: the combat lobby asks for the level rate too (default OFF: arena shares the lobby levels)
+  CombatSwitch refreshRateQuest2At72{true, Source::kAbsent};  // `combat.refresh_rate_quest2_72`: a Quest 2's level rate is 72, not 90 (combat/refresh_rate.h)
+};
+
 struct LogEvent {
   LogLevel level;
   std::string message;  // never contains a configured value, only key and feature names; the one exception is a rejected
@@ -134,6 +180,8 @@ struct ResolvedConfig {
   Features requested;  // what the file and the defaults ask for
   Features effective;  // requested, after prerequisite checks
   TextureChoice textureQuality;
+  HandFlipChoice handFlip;
+  CombatConfig combat;
   // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
   // plans from it (quest/plugin/plugin_runtime.h).
   std::vector<nevr::PluginSpec> plugins;
@@ -162,6 +210,8 @@ const char* FeatureName(Feature feature);
 const char* SourceName(Source source);
 // "config" when the file gave the texture level, else "default": the words the install log line and the config report use.
 const char* TextureSourceName(const TextureChoice& choice);
+// "config" when the file gave the hand flip value, else "default".
+const char* HandFlipSourceName(const HandFlipChoice& choice);
 
 // The shared redirect policy (runtime/lifecycle/service_redirect) gated by the redirect and bridge
 // features. nullopt leaves the game's original value untouched.

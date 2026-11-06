@@ -132,7 +132,7 @@ class TheProviderLibrariesAreHookedWhenTheyLoad(unittest.TestCase):
         post_load = code("integration/post_load.cpp")
         after = body(post_load, "void AfterDlopen(")
         self.assertLess(after.index("observer(name, handle)"), after.index("RunSlot("))
-        self.assertLess(after.index("observer(name, handle)"), after.index("RunPlugins("))
+        self.assertLess(after.index("observer(name, handle)"), after.index("RunPluginsAndCombat("))
 
     def test_the_crash_first_step_arms_the_observer_and_makes_sure_the_dlopen_hook_is_live(self):
         step = body(code("sentinel/entry.cpp"), "bool InstallCrashFirstHook() noexcept")

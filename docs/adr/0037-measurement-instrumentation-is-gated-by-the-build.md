@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0037-measurement-instrumentation-is-gated-by-the-build.md
+audience: all
+---
+
 # ADR 0037: measurement instrumentation is gated by the build, and no release carries it
 
 Status: proposed. Applies to the PC and Quest builds.

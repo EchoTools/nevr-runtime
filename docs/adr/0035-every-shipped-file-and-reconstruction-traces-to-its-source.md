@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0035-every-shipped-file-and-reconstruction-traces-to-its-source.md
+audience: all
+---
+
 # ADR 0035: every file we ship and every reconstruction we make traces to its source
 
 Status: proposed. Applies to every artifact a release or a dev build ships (the Quest APK, the Windows zip) and to every

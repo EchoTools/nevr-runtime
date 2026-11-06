@@ -4,9 +4,12 @@
 //
 // Built and run by `just test-quest-shared`.
 
+#include <pthread.h>
+#include <sched.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -195,6 +198,111 @@ void ATextThatIsNotAPlainWordIsRefusedAndNothingIsWritten() {
   }
 }
 
+// Two threads each set their own key of one config.yaml, many times at once, each through a config object of its own (the way the
+// sentinel's texture poller and hand pose poller do). Neither key may be lost, every call must succeed, and each key ends at the
+// last value its thread set. The same cases run on PC in src/runtime/tests/test_nevr_config_set.cpp (NevrConfigSetConcurrent).
+constexpr int kSetsPerThread = 120;
+const char* const kWords[] = {"low", "medium", "high", "very_high"};
+
+struct Job {
+  std::string file;
+  bool flipper = false;
+  std::atomic<int>* failures = nullptr;
+  std::atomic<bool>* go = nullptr;
+};
+
+void* RunJob(void* arg) {
+  const Job* job = static_cast<const Job*>(arg);
+  while (!job->go->load()) sched_yield();
+  for (int i = 0; i < kSetsPerThread; ++i) {
+    nevr::NevrConfig cfg;
+    cfg.BindFile(job->file);
+    const nevr::ConfigSetResult r = job->flipper ? cfg.Set("graphics.hand_flip", i % 2 == 0)
+                                                 : cfg.Set("graphics.texture_quality", std::string(kWords[i % 4]));
+    if (!r.ok) ++*job->failures;
+  }
+  return nullptr;
+}
+
+void TwoThreadsEachSettingTheirOwnKeyNeverLoseEachOther(bool secondSpelledAnotherWay) {
+  for (int round = 0; round < 6; ++round) {
+    Dir dir;
+    Write(dir.File(), "social:\n  facade: true\n");
+    const std::string base = dir.root.substr(dir.root.rfind('/') + 1);
+    std::atomic<int> failures{0};
+    std::atomic<bool> go{false};
+    Job flipper{dir.File(), true, &failures, &go};
+    Job leveller{secondSpelledAnotherWay ? dir.root + "/../" + base + "/config.yaml" : dir.File(), false, &failures, &go};
+    pthread_t a, b;
+    QCHECK(pthread_create(&a, nullptr, &RunJob, &flipper) == 0);
+    QCHECK(pthread_create(&b, nullptr, &RunJob, &leveller) == 0);
+    go.store(true);
+    pthread_join(a, nullptr);
+    pthread_join(b, nullptr);
+    QCHECK(failures.load() == 0);
+    try {
+      const nevr::NevrConfig loaded = nevr::NevrConfig::LoadFromFile(dir.File());
+      QCHECK(loaded.GetBool("graphics.hand_flip").has_value() && *loaded.GetBool("graphics.hand_flip") == ((kSetsPerThread - 1) % 2 == 0));
+      QCHECK(loaded.GetString("graphics.texture_quality").value_or("") == kWords[(kSetsPerThread - 1) % 4]);
+    } catch (const nevr::NevrConfigError&) {
+      QCHECK(false);  // the file the two writers left does not parse
+    }
+    QCHECK(!Exists(dir.Tmp()));
+  }
+}
+
+// The lock is held through the in-memory update (the same case as the PC test TheLockIsHeldThroughTheObjectUpdate): the first Set is held
+// at the seam after its object update; a second Set of the same key on the same object must wait for it, and the object ends with the
+// file's value.
+std::atomic<int> g_hookCalls{0};
+std::atomic<bool> g_firstIsHeld{false};
+std::atomic<bool> g_secondDone{false};
+std::atomic<bool> g_firstReturned{false};
+std::atomic<bool> g_secondBeforeFirstReturned{false};
+void HoldTheFirstSet() {
+  if (g_hookCalls.fetch_add(1) != 0) return;
+  g_firstIsHeld.store(true);
+  for (int i = 0; i < 400 && !g_secondDone.load(); ++i) usleep(1000);
+}
+struct SharedJob {
+  nevr::NevrConfig* cfg;
+  bool value;
+};
+void* FirstSet(void* arg) {
+  SharedJob* job = static_cast<SharedJob*>(arg);
+  QCHECK(job->cfg->Set("graphics.hand_flip", job->value).ok);
+  g_firstReturned.store(true);
+  return nullptr;
+}
+void* SecondSet(void* arg) {
+  SharedJob* job = static_cast<SharedJob*>(arg);
+  QCHECK(job->cfg->Set("graphics.hand_flip", job->value).ok);
+  g_secondBeforeFirstReturned.store(!g_firstReturned.load());
+  g_secondDone.store(true);
+  return nullptr;
+}
+
+void TheLockIsHeldThroughTheObjectUpdate() {
+  Dir dir;
+  Write(dir.File(), "graphics:\n  hand_flip: false\n");
+  nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFile(dir.File());
+  nevr::config_testing::SetAfterMemoryUpdateForTest(&HoldTheFirstSet);
+  SharedJob first{&cfg, true};
+  SharedJob second{&cfg, false};
+  pthread_t a, b;
+  QCHECK(pthread_create(&a, nullptr, &FirstSet, &first) == 0);
+  while (!g_firstIsHeld.load()) sched_yield();
+  QCHECK(pthread_create(&b, nullptr, &SecondSet, &second) == 0);
+  pthread_join(a, nullptr);
+  pthread_join(b, nullptr);
+  nevr::config_testing::SetAfterMemoryUpdateForTest(nullptr);
+  QCHECK(!g_secondBeforeFirstReturned.load());
+  const nevr::NevrConfig onDisk = nevr::NevrConfig::LoadFromFile(dir.File());
+  QCHECK(onDisk.GetBool("graphics.hand_flip").has_value() && cfg.GetBool("graphics.hand_flip").has_value());
+  QCHECK(*cfg.GetBool("graphics.hand_flip") == *onDisk.GetBool("graphics.hand_flip"));
+  QCHECK(!*onDisk.GetBool("graphics.hand_flip"));
+}
+
 }  // namespace
 
 int main() {
@@ -208,6 +316,9 @@ int main() {
   AWordReplacesTheOldOneInPlaceAndGoesBack();
   AWordThatIsAlreadyThereIsNotRewrittenAndQuotesStay();
   ATextThatIsNotAPlainWordIsRefusedAndNothingIsWritten();
+  TwoThreadsEachSettingTheirOwnKeyNeverLoseEachOther(false);
+  TwoThreadsEachSettingTheirOwnKeyNeverLoseEachOther(true);
+  TheLockIsHeldThroughTheObjectUpdate();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "nevr_config_set_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

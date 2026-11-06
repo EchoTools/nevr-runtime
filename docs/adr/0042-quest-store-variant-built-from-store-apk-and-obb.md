@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0042-quest-store-variant-built-from-store-apk-and-obb.md
+audience: all
+---
+
 # ADR 0042: the Quest store variant is built from the store APK and the store OBB
 
 Status: proposed. Tracked by #2081. Builds on ADR 0007 (the game mounts an OBB), ADR 0021 (`libr15.so` is patched on the host) and

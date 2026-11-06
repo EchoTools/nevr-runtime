@@ -22,6 +22,10 @@
 //                                    counters
 //      RunEarlyPlugins               the `early` plugin entries (#438): after Attach, before the clock hook;
 //                                    skipped when the plan has none
+//      InstallCombatEarly            the combat area's early install step (#2171, combat/combat_install.h): after the early
+//                                    plugin pass (a slot both touch is the plugin's first, docs/adr/0046 rule 7) and before the
+//                                    clock hook; skipped, with the reason `combat_inactive`, unless combat::Active() (a plain release
+//                                    installs nothing of combat's). No counters
 //   5  InstallClockHook              the always-on proof hook
 //      InstallFrameDispatch          the frame dispatcher (#966 S7): the Update slot (CR15NetGame::Update), on every launch,
 //                                    right after the clock hook; no counters. The login prompt's own Update logic is switched
@@ -34,7 +38,9 @@
 //   9  InstallRedirect               CJson::TString thunks on libr15
 //  10  InstallSocial                 the NEVR social facade on libr15's CNSProvider::Social slot
 //  11  InstallDlopenHook             the post-load installs: login hook (and with it the login
-//                                    prerequisites), matchmaking redirect, and the normal plugin pass (#438)
+//                                    prerequisites), matchmaking redirect, the normal plugin pass (#438) and, in a process where
+//                                    combat::Active(), the combat area's normal install step (#2171), which runs after the plugin
+//                                    pass has returned
 //      InstallObbSkip                the OBB-mount skip (#319, #866): three libr15 slots (AStorageManager_mountObb,
 //                                    AStorageManager_getMountedObbPath, CSysInfo::GetDataRootDir); on every launch, whatever the
 //                                    configuration says, right after the clock hook so it is in place before
@@ -95,6 +101,12 @@
 //                                    on every launch, right after the credits step; its counters are registered with the
 //                                    others (step 3). The switch (`diagnostics.clock_levels_override`, default off)
 //                                    decides whether the (2, 2) the game asks for is rewritten to (4, 4).
+//      InstallIrradianceDefault      the default irradiance texture is grey, not black (#2091, #1737 U25): one GOT hook on
+//                                    CGEngineResources::Initialize (JUMP_SLOT 0x36fba08) and the row `irradiance_default.upload`
+//                                    of the patched libr15 (ADR 0021), on every launch, right after the clock-level
+//                                    arming; no counters. Initialize runs after the constructor, so the hooks are in place before the
+//                                    texture is uploaded. Refused (the step reports failure) unless Attach verified libr15;
+//                                    the game then uploads its own black texel.
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   Attach not verified     -> NOTHING is gated on it by the sequence: AttachLibR15 reports failure with the reason token
@@ -111,7 +123,10 @@
 //   redirect counters fail  -> redirect (and the matchmaking install) is not installed
 //   dlopen counters fail    -> the dlopen hook, and so the login and matchmaking installs, are not installed
 //   dlopen hook not live    -> the plugin entries still pending (the normal pass has no moment to run in) end as
-//                              `not_started` with reason post_load_hook_unavailable (Steps::FinishPlugins)
+//                              `not_started` with reason post_load_hook_unavailable (Steps::FinishPlugins), and so does the
+//                              combat area's normal step (one `combat_install` record, Steps::FinishCombat)
+//   combat not active       -> no combat step is set: the early step is skipped (`combat_inactive`), the dlopen hook is not
+//                              wanted for combat, and nothing is ended when it is not live (combat::Active(), combat_active.h)
 //   login counters fail     -> the login hook is not installed (the matchmaking install is unaffected)
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
@@ -139,6 +154,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "quest/sentinel/build_variant.h"
 #include "quest/sentinel/quest_config.h"
 
 namespace nevr_quest::integration {
@@ -170,6 +186,7 @@ enum class StepId : std::uint8_t {
   kStartReporter,
   kAttachLibR15,
   kRunEarlyPlugins,
+  kInstallCombatEarly,
   kInstallClockHook,
   kInstallFrameDispatch,
   kInstallObbSkip,
@@ -185,6 +202,7 @@ enum class StepId : std::uint8_t {
   kInstallMenuCards,
   kInstallWizardMetric,
   kArmClockLevels,
+  kInstallIrradianceDefault,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -254,6 +272,14 @@ class Steps {
   virtual bool RunEarlyPlugins() = 0;
   // Ends every plugin entry still pending as `not_started` with `reason` (a plugin_plan.h reason token).
   virtual void FinishPlugins(const char* reason) = 0;
+  // Whether the folded combat modules run in this process: combat::Active() (combat/combat_active.h). Asked after the configuration is
+  // resolved (which makes the answer). A question that throws is answered false.
+  virtual bool CombatActive() = 0;
+  // The combat area's early install step (#2171, combat/combat_install.h InstallEarly): asked only when CombatActive(). True when the step ran.
+  virtual bool InstallCombatEarly() = 0;
+  // Ends the combat area's normal step as `not_started` with `reason` (a combat/combat_install.h reason token): one record, and the step
+  // never runs. Asked only when CombatActive() and the post-load hook cannot be live.
+  virtual void FinishCombat(const char* reason) = 0;
 
   virtual bool InstallClockHook() = 0;
   // The frame dispatcher (#966 S7): the Update slot, on every launch, whatever the login prompt does. True when the slot
@@ -291,6 +317,9 @@ class Steps {
   // The CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot (the streaming reader's read-finished
   // callback), on every launch, no counters.
   virtual bool InstallMenuCards() = 0;
+  // The grey default irradiance texture (#2091): the GOT hook on CGEngineResources::Initialize and the row of the patched libr15
+  // that holds the upload helper, on every launch, no counters. True when both are live.
+  virtual bool InstallIrradianceDefault() = 0;
   // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2). Asked before its step runs; the step is skipped when false.
   virtual bool WizardMetricWanted() = 0;
   virtual bool InstallWizardMetric() = 0;
@@ -305,8 +334,9 @@ class Steps {
   virtual bool StartBridge() = 0;
   virtual bool InstallRedirect() = 0;
   virtual bool InstallSocial() = 0;
-  // `login` / `matchmaking` / `plugins`: which post-load installs the dlopen hook is for (`plugins`: the normal plugin pass).
-  virtual bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) = 0;
+  // `login` / `matchmaking` / `plugins` / `combat`: which post-load installs the dlopen hook is for (`plugins`: the normal plugin pass;
+  // `combat`: the combat area's normal install step, which runs after the plugin pass has returned).
+  virtual bool InstallDlopenHook(bool login, bool matchmaking, bool plugins, bool combat) = 0;
   // The hardware/environment dump (#335): its libr15 hooks and its thread. No reporter counters.
   virtual bool StartHwDump() = 0;
   // The rad provider in pnsovr's place (#1220): four libr15 slots (CNSProvider::Create, Destroy, ProviderID,
@@ -324,8 +354,11 @@ class Steps {
 ConstructorReport RunConstructorSequence(Steps& steps) noexcept;
 
 // The begin record of the constructor (#1391): one sentinel_ctor line, action=begin, with the version and the commit of this
-// build, and its kind ("dev" or "release", ADR 0040). entry.cpp passes nevr_build::kVersion, nevr_build::kCommit and
-// nevr_build::kIsDev from its generated build header. Never throws.
-void LogConstructorBegin(const char* version, const char* commit, const char* kind) noexcept;
+// build, its kind ("dev" or "release", ADR 0040) and its variant (`variant`, the word the APK's stamp holds, or "none"; `variant_source`,
+// where that came from: stamp, absent, unreadable or invalid; #2170). entry.cpp passes nevr_build::kVersion, nevr_build::kCommit and
+// nevr_build::kIsDev from its generated build header, and the stamp read beside the sentinel's library (sentinel/build_variant.h).
+// A stamp that is not a variant's (missing, unreadable or wrong) adds one `build_variant` line right after the begin record, with the
+// reason and what follows from it (the begin record stays the first line). Never throws.
+void LogConstructorBegin(const char* version, const char* commit, const char* kind, const build_variant::Stamp& stamp) noexcept;
 
 }  // namespace nevr_quest::integration

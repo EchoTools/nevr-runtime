@@ -27,7 +27,7 @@
  *   {"event":"hand_flip_device","device":<id>,"type":4,"caps_read":"yes|no","caps":"0x%08x","button_caps":"0x%08x",
  *    "touch_caps":"0x%08x","reserved4":"0x%08x","reserved5":"0x%08x","hand":"left|right|unknown","model":"<ro.product.model>"}
  *   {"event":"hand_flip_pose","device":<id>,"hand":"left|right|unknown","status":"0x%08x","qx":"%.6f","qy":..,"qz":..,"qw":..}
- * The device line also carries "flip" (the toggle's value when the line is written) and "by" (what set it: default, player_marker
+ * The device line also carries "flip" (the toggle's value when the line is written) and "by" (what set it: default, config
  * or menu). The pose line is the raw orientation, taken before the roll. The poller also writes hand_flip.h's own lines.
  * `caps` is ControllerCapabilities; `hand` is the LeftHand / RightHand bit (input_seam.h HandFromCaps); a floating-point value
  * is a string with six decimals.

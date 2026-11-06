@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +22,7 @@
 #include <vector>
 
 #include "core/nevr_config.h"
+#include "core/nevr_config_testing.h"
 #include "hand_flip.h"
 #include "hook_log.h"
 #include "hook_report.h"
@@ -1094,34 +1096,20 @@ void FakeApplyFlags(const unsigned char* settings, void*, std::uint32_t) {
   if (settings != nullptr) g_applySawFlags = GetFlags(settings);
 }
 
-void WriteHandFlipFile(const std::string& root, const char* text) {
-  std::FILE* f = std::fopen((root + "/RAD/LoneEcho/" + hf::kFileName).c_str(), "w");
-  if (f == nullptr) return;
-  std::fputs(text, f);
-  std::fclose(f);
-}
-std::string ReadHandFlipFile(const std::string& root) {
-  std::FILE* f = std::fopen((root + "/RAD/LoneEcho/" + hf::kFileName).c_str(), "r");
-  if (f == nullptr) return "";
-  char buffer[256] = {};
-  const std::size_t n = std::fread(buffer, 1, sizeof(buffer) - 1, f);
-  std::fclose(f);
-  return std::string(buffer, n);
-}
-void RemoveHandFlipFile(const std::string& root) {
-  std::remove((root + "/RAD/LoneEcho/" + hf::kFileName).c_str());
-  std::remove((root + "/RAD/LoneEcho/" + hf::kFileName + ".tmp").c_str());
-}
+// What the Quest's start hands over before the hooks exist (entry.cpp, from the resolved configuration): config.yaml's path and what the
+// reader found under graphics.hand_flip. Called after Reset, which clears it.
+void ConfigureHandFlip(const std::string& dir, bool fromConfig, bool flip) { hf::Configure(ConfigPath(dir).c_str(), fromConfig, flip); }
 
 // The game's own value of the carrier bit is 1, and that is Off. The first delivery is the load: with no stored choice the bit is
 // the default (Off), which is the value the game holds, so nothing is written to it and the poller says so once
 // (hand_flip_carrier before=1 after=1). A later delivery with another bit is the player's choice, and the flag the tracking handler
-// reads takes it at once: no restart, no re-enumeration, no poll. The choice is written by the poller, as the versioned file, and the
-// texture level is not saved (config.yaml is not touched). A redelivery of the same bit is no choice.
+// reads takes it at once: no restart, no re-enumeration, no poll. The choice is written by the poller, as the key graphics.hand_flip
+// of config.yaml, and the texture level is not saved. A redelivery of the same bit is no choice.
 void AMenuChangeOfTheHandFlipRowAppliesLiveAndIsRemembered() {
   const std::string dir = MakeSettingsDirectory(nullptr);
   QCHECK(!dir.empty());
   Reset(tq::Level::kLow);
+  ConfigureHandFlip(dir, false, false);
   Capture log;
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
   g_appDataDir = dir;
@@ -1140,8 +1128,9 @@ void AMenuChangeOfTheHandFlipRowAppliesLiveAndIsRemembered() {
   Deliver(settings);
   QCHECK(hf::Enabled() && hf::CurrentBy() == hf::kByMenu);   // live, before any poll
   QCHECK(GetFlags(settings) == 0x4 && g_applySawFlags == 0x4);  // the game's own function sees what the menu holds
+  QCHECK(ReadConfig(dir).empty());  // the start and the load wrote nothing
   QCHECK(hf::Poll() == 1);
-  QCHECK(ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":1})");
+  QCHECK(ReadConfig(dir) == "graphics:\n  hand_flip: true\n");
   QCHECK(tm::CurrentTotals().saveWrites == 0 && tm::CurrentTotals().saveFailures == 0);  // the texture level is not saved
   Deliver(settings);                                         // redelivered unchanged
   QCHECK(hf::Enabled() && hf::Poll() == 0);
@@ -1149,9 +1138,9 @@ void AMenuChangeOfTheHandFlipRowAppliesLiveAndIsRemembered() {
   SetFlags(settings, GetFlags(settings) | hf::kCarrierBit);  // and Off again: the bit is set
   Deliver(settings);
   QCHECK(!hf::Enabled());
-  QCHECK(hf::Poll() == 1 && ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":0})");
+  QCHECK(hf::Poll() == 1 && ReadConfig(dir) == "graphics:\n  hand_flip: false\n");
   QCHECK(tq::RequestedLevelValue() == static_cast<int>(tq::Level::kLow));  // and the texture control did not move
-  RemoveHandFlipFile(dir);
+  QCHECK(access((dir + "/RAD/LoneEcho/nevr_hand_flip.json").c_str(), F_OK) != 0);  // no file of the earlier build is written
   RemoveSettingsDirectory(dir);
 }
 
@@ -1161,6 +1150,7 @@ void ADefaultStartPutsAClearedBitBackToTheGamesValue() {
   const std::string dir = MakeSettingsDirectory(nullptr);
   QCHECK(!dir.empty());
   Reset(tq::Level::kLow);
+  ConfigureHandFlip(dir, false, false);
   Capture log;
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
   g_appDataDir = dir;
@@ -1172,7 +1162,7 @@ void ADefaultStartPutsAClearedBitBackToTheGamesValue() {
   QCHECK(!hf::Enabled() && GetFlags(settings) == 0x5 && g_applySawFlags == 0x5);
   QCHECK(hf::Poll() == 2);
   QCHECK(LineWith("hand_flip_carrier").find("\"before\":0,\"after\":1,") != std::string::npos);
-  QCHECK(!hf::Enabled() && ReadHandFlipFile(dir).empty());  // a default is never saved
+  QCHECK(!hf::Enabled() && ReadConfig(dir).empty());  // a default is never saved
   RemoveSettingsDirectory(dir);
 }
 
@@ -1180,10 +1170,10 @@ void ADefaultStartPutsAClearedBitBackToTheGamesValue() {
 // back). The stock bit is 1, which is Off: a restore after On reads as the player turning it Off, is saved once, and a further
 // delivery of the same bit is no change.
 void AStockRestoreAfterOnReadsAsOffAndIsSavedOnce() {
-  const std::string dir = MakeSettingsDirectory(nullptr);
+  const std::string dir = MakeSettingsDirectory(nullptr, "graphics:\n  hand_flip: true\n");
   QCHECK(!dir.empty());
-  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
   ResetDocuments();
+  ConfigureHandFlip(dir, true, true);
   Capture log;
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
   g_appDataDir = dir;
@@ -1198,25 +1188,24 @@ void AStockRestoreAfterOnReadsAsOffAndIsSavedOnce() {
   SetFlags(settings, 0x5);  // the game restores its stock flags
   Deliver(settings);
   QCHECK(!hf::Enabled() && hf::CurrentBy() == hf::kByMenu);
-  QCHECK(hf::Poll() == 1 && ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":0})");
+  QCHECK(hf::Poll() == 1 && ReadConfig(dir) == "graphics:\n  hand_flip: false\n");
   Deliver(settings);  // and delivers it again
   QCHECK(!hf::Enabled() && hf::Poll() == 0);
-  RemoveHandFlipFile(dir);
   RemoveSettingsDirectory(dir);
 }
 
-// The next launch: the stored choice is resolved on the first eye-size query, the menu document starts the row on it, and the
-// first delivery puts the carrier bit on it whatever the game's own file held; restoring it is not choosing it.
+// The next launch: the configured choice (graphics.hand_flip: true) is resolved on the first eye-size query, the menu document starts
+// the row on it, and the first delivery puts the carrier bit on it whatever the game's own file held; restoring it is not choosing it.
 void AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain() {
-  const std::string dir = MakeSettingsDirectory(nullptr);
+  const std::string dir = MakeSettingsDirectory(nullptr, "graphics:\n  hand_flip: true\n");
   QCHECK(!dir.empty());
-  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
   ResetDocuments();
+  ConfigureHandFlip(dir, true, true);
   Capture log;
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
   g_appDataDir = dir;
   Eye();  // the start is resolved here, before the menu document is read
-  QCHECK(hf::Started() && hf::Enabled() && hf::CurrentBy() == hf::kByPlayerMarker);
+  QCHECK(hf::Started() && hf::Enabled() && hf::CurrentBy() == hf::kByConfig);
   Read("/d/json/r14/config/uisettings/menu_settings.json", kMenuDocument);
   QCHECK(g_parsed.size() == 1);
   QCHECK(g_parsed[0].find(R"("path":"graphics|fullscreen","name":"Controller Hand Flip","value":false,"type":"NAMED FLAG","truestr":"Off","falsestr":"On")") !=
@@ -1227,8 +1216,7 @@ void AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain() {
   Deliver(settings);
   QCHECK(GetFlags(settings) == 0 && g_applySawFlags == 0 && hf::Enabled());
   QCHECK(hf::Poll() == 2);  // the start line and the carrier line, and nothing saved
-  QCHECK(ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":1})");
-  RemoveHandFlipFile(dir);
+  QCHECK(ReadConfig(dir) == "graphics:\n  hand_flip: true\n");
   RemoveSettingsDirectory(dir);
 }
 
@@ -1266,7 +1254,6 @@ void AReReadOfTheMenuServesTheCurrentHandFlipChoice() {
   QCHECK(g_parsed.size() == 7 && g_parsed[6] == g_parsed[5] && tm::CurrentTotals().jsonRewrites == rewritten);
   hf::SetFromMenu(0);
   hf::Poll();
-  RemoveHandFlipFile(dir);
   RemoveSettingsDirectory(dir);
 }
 
@@ -1280,7 +1267,7 @@ void RaceSeam() noexcept {
   for (int i = 0; i < 10000 && g_raceSeamReleased.load() == 0; ++i) usleep(1000);
 }
 void* RaceStartThread(void*) {
-  hf::EnsureStarted();  // the tracking handler's first call: the provider reads the stored choice, then the seam holds it
+  hf::EnsureStarted();  // the tracking handler's first call: it resolves the configured choice, then the seam holds it
   return nullptr;
 }
 void* RaceDeliverThread(void*) {
@@ -1296,10 +1283,10 @@ bool RaceWaitFor(const std::atomic<int>& word, int want) {
 // arrives: the delivery waits for the start and then writes the bit from On (cleared), where an unsynchronised delivery would have
 // read Off and written the game's value over the stored choice.
 void AFirstDeliveryWaitsForAStartAnotherThreadIsResolving() {
-  const std::string dir = MakeSettingsDirectory(nullptr);
+  const std::string dir = MakeSettingsDirectory(nullptr, "graphics:\n  hand_flip: true\n");
   QCHECK(!dir.empty());
-  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
   ResetDocuments();
+  ConfigureHandFlip(dir, true, true);
   Capture log;
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
   g_appDataDir = dir;
@@ -1323,16 +1310,15 @@ void AFirstDeliveryWaitsForAStartAnotherThreadIsResolving() {
   QCHECK(hf::Enabled() && GetFlags(g_raceSettings) == 0x4 && g_applySawFlags == 0x4);  // On: the bit cleared
   QCHECK(hf::Poll() == 2);
   QCHECK(LineWith("hand_flip_carrier").find("\"before\":1,\"after\":0,") != std::string::npos);
-  RemoveHandFlipFile(dir);
   RemoveSettingsDirectory(dir);
 }
 
 // A delivery that gives up waiting touches nothing and leaves the load to the next delivery.
 void AFirstDeliveryThatTimesOutLeavesTheLoadToTheNextOne() {
-  const std::string dir = MakeSettingsDirectory(nullptr);
+  const std::string dir = MakeSettingsDirectory(nullptr, "graphics:\n  hand_flip: true\n");
   QCHECK(!dir.empty());
-  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
   ResetDocuments();
+  ConfigureHandFlip(dir, true, true);
   Capture log;
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
   g_appDataDir = dir;
@@ -1355,7 +1341,6 @@ void AFirstDeliveryThatTimesOutLeavesTheLoadToTheNextOne() {
   QCHECK(hf::Enabled() && GetFlags(g_raceSettings) == 0x4 && g_applySawFlags == 0x4);
   QCHECK(hf::Poll() == 3);  // the start line, the timeout line, the carrier line
   QCHECK(LineWith("hand_flip_start_wait").find("\"level\":\"warn\"") != std::string::npos);
-  RemoveHandFlipFile(dir);
   RemoveSettingsDirectory(dir);
 }
 
@@ -1364,19 +1349,19 @@ const char* const kSettingsWithFullscreen =
       {"path": "graphics|fullscreen", "value": true, "operator": "remove"}], "pages": ["GRAPHICS (1/3)"]}})json";
 
 // With the hand pose hooks not installed the row is not offered: the menu has none, the settings document keeps the stock hiding
-// entry, the saved choice is ignored, the game's bit is never written (not at the load, not on a change), nothing is saved, and the
-// texture poller says so once.
+// entry, the configured choice is ignored, the game's bit is never written (not at the load, not on a change), nothing is saved, and
+// the texture poller says so once.
 void ARowThatIsNotOfferedIsNotInTheMenuAndTheBitIsLeftAlone() {
-  const std::string dir = MakeSettingsDirectory(nullptr);
+  const std::string dir = MakeSettingsDirectory(nullptr, "graphics:\n  hand_flip: true\n");
   QCHECK(!dir.empty());
-  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
   ResetDocuments();
+  ConfigureHandFlip(dir, true, true);
   hf::SetOffered(false);
   Capture log;
   *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
   g_appDataDir = dir;
   Eye();
-  QCHECK(hf::Started() && !hf::Enabled() && hf::CurrentBy() == hf::kByDefault);  // the saved On is not read
+  QCHECK(hf::Started() && !hf::Enabled() && hf::CurrentBy() == hf::kByDefault);  // the configured On is not used
   Read("/d/json/r14/config/uisettings/menu_settings.json", kMenuDocument);
   Read("/d/json/r14/config/gamesettings_config.json", kSettingsWithFullscreen);
   QCHECK(g_parsed.size() == 2);
@@ -1392,26 +1377,82 @@ void ARowThatIsNotOfferedIsNotInTheMenuAndTheBitIsLeftAlone() {
   QCHECK(!hf::Enabled() && hf::CurrentBy() == hf::kByDefault);
   hf::Poll();  // (the start line, if the poller runs)
   QCHECK(LineWith("hand_flip_carrier").empty() && LineWith("hand_flip_saved").empty());  // no carrier write, no save
-  QCHECK(ReadHandFlipFile(dir) == R"({"version":1,"hand_flip":1})");
+  QCHECK(ReadConfig(dir) == "graphics:\n  hand_flip: true\n");  // the file is as it was
   tm::PollOnceForTest();
   tm::PollOnceForTest();
   QCHECK(CountLines("\"event\":\"hand_flip_row\"") == 1);
   QCHECK(LineWith("\"document\":\"menu_settings\"").find("\"hand_flip_rows\":0}") != std::string::npos);
-  RemoveHandFlipFile(dir);
   RemoveSettingsDirectory(dir);
 }
 
-// The tracking handler can need the flag before the eye-size query has resolved it: the provider the control registers reads the
-// same file.
-void TheTrackingSideCanResolveTheStartThroughTheControl() {
-  const std::string dir = MakeSettingsDirectory(nullptr);
-  WriteHandFlipFile(dir, R"({"version":1,"hand_flip":1})");
+// The tracking handler can need the flag before the eye-size query has resolved it: it resolves the start itself, from the same
+// configuration, with no game call and no file read.
+void TheTrackingSideResolvesTheStartFromTheConfiguration() {
+  const std::string dir = MakeSettingsDirectory(nullptr, "graphics:\n  hand_flip: true\n");
   Reset(tq::Level::kLow);
+  ConfigureHandFlip(dir, true, true);
   g_appDataDir = dir;
   QCHECK(!hf::Started());
   hf::EnsureStarted();
-  QCHECK(hf::Started() && hf::Enabled() && hf::CurrentBy() == hf::kByPlayerMarker);
-  RemoveHandFlipFile(dir);
+  QCHECK(hf::Started() && hf::Enabled() && hf::CurrentBy() == hf::kByConfig);
+  RemoveSettingsDirectory(dir);
+}
+
+// The texture poller and the hand pose poller both edit config.yaml (NevrConfig::Set reads the file, splices and replaces it through
+// one temporary file): they take turns. While one is inside the rename that publishes its edit the other has not started its own, and
+// afterwards the file holds both keys (a second writer that read the file before the first published would have dropped the first's).
+std::atomic<int> g_renames{0};
+std::atomic<int> g_renameRelease{0};
+int BlockingRename(const char* from, const char* to) {
+  if (g_renames.fetch_add(1) == 0) {
+    for (int i = 0; i < 10000 && g_renameRelease.load() == 0; ++i) usleep(1000);
+  }
+  return std::rename(from, to) == 0 ? 0 : errno;
+}
+void* HandFlipPollThread(void*) {
+  hf::Poll();
+  return nullptr;
+}
+void* TexturePollThread(void*) {
+  tm::PollOnceForTest();
+  return nullptr;
+}
+
+void TheTwoPollersNeverEditConfigYamlAtTheSameTime() {
+  const std::string dir = MakeSettingsDirectory(nullptr, "graphics:\n  texture_quality: low\n");
+  QCHECK(!dir.empty());
+  Reset(tq::Level::kLow);
+  ConfigureHandFlip(dir, false, false);
+  tm::SetConfigFile(ConfigPath(dir).c_str());
+  Capture log;
+  *ApplyThunk::OriginalOut() = reinterpret_cast<void*>(&FakeApplyFlags);
+  g_appDataDir = dir;
+  Eye();
+  alignas(8) unsigned char settings[kSettingsBytes] = {};
+  SetMsaa(settings, 1);
+  SetFlags(settings, 0x5);
+  Deliver(settings);  // the load
+  hf::Poll();
+  SetMsaa(settings, 4);                                       // the player picks Very High ...
+  SetFlags(settings, GetFlags(settings) & ~hf::kCarrierBit);  // ... and the hand flip On, in the same delivery
+  Deliver(settings);
+  QCHECK(hf::Enabled());
+  g_renames.store(0);
+  g_renameRelease.store(0);
+  nevr::config_testing::SetRenameForTest(&BlockingRename);
+  pthread_t first, second;
+  QCHECK(pthread_create(&first, nullptr, &HandFlipPollThread, nullptr) == 0);
+  QCHECK(RaceWaitFor(g_renames, 1));  // the hand pose poller is inside its rename
+  QCHECK(pthread_create(&second, nullptr, &TexturePollThread, nullptr) == 0);
+  usleep(300 * 1000);                 // the texture poller has had time to reach its own rename, were it let
+  QCHECK(g_renames.load() == 1);
+  g_renameRelease.store(1);
+  pthread_join(first, nullptr);
+  pthread_join(second, nullptr);
+  nevr::config_testing::SetRenameForTest(nullptr);
+  QCHECK(g_renames.load() == 2);
+  QCHECK(ReadConfig(dir) == "graphics:\n  texture_quality: very_high\n  hand_flip: true\n");
+  QCHECK(access((ConfigPath(dir) + ".tmp").c_str(), F_OK) != 0);
   RemoveSettingsDirectory(dir);
 }
 
@@ -1477,8 +1518,9 @@ int main() {
   AFirstDeliveryThatTimesOutLeavesTheLoadToTheNextOne();
   ARowThatIsNotOfferedIsNotInTheMenuAndTheBitIsLeftAlone();
   AStoredChoiceStartsTheRowAndTheFlagAndIsNotSavedAgain();
-  TheTrackingSideCanResolveTheStartThroughTheControl();
+  TheTrackingSideResolvesTheStartFromTheConfiguration();
   TheSettingsDocumentStopsHidingTheHandFlipSetting();
+  TheTwoPollersNeverEditConfigYamlAtTheSameTime();
   TheStockInputNeverUsesTheReferenceRule();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "texture_menu_hook_test: %d check(s) failed\n", quest_test::Failures());

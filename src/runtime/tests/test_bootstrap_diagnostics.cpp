@@ -930,8 +930,11 @@ TEST(BootstrapDiagnostics, AnAppendBeforeAttachCreatesNoLogMutex) {
   EXPECT_EQ(CountLines(ReadAll(nevr_test::HostLogPath(local))).lines, 1u);
 }
 
-// One crash writes up to four records. With a holder that never releases, the first record waits and
-// the lock is then marked unreliable: the rest write at once, so the whole crash costs one wait.
+// One crash writes up to four records. With a holder that never releases, the first record waits and the lock is then
+// marked unreliable: the other three find the mark and write without waiting. The test counts waits, not time. Each
+// AppendLine makes at most one AppendTo call, and one here: the main log, its one destination, is ready. AppendTo is
+// the one place an append waits on the log mutex; with the mutex present a call waits once or skips the wait and adds
+// one to UnlockedWritesForTest. With all four records in the file, three skips means one wait; four waits leave zero.
 TEST(BootstrapDiagnostics, ACrashOfFourRecordsPaysOneLockWaitWhenAHolderNeverReleases) {
   ScopedLogMutexName scoped(UniqueMutexName(L"four"));
   const std::wstring local = MakeTempDir(L"local");
@@ -942,10 +945,12 @@ TEST(BootstrapDiagnostics, ACrashOfFourRecordsPaysOneLockWaitWhenAHolderNeverRel
   ASSERT_NE(holder, nullptr);
   ASSERT_EQ(WaitForSingleObject(handles[0], 5000), WAIT_OBJECT_0);
 
+  const unsigned long long skipped_before = BootstrapDiagnostics::UnlockedWritesForTest();
   const auto start = std::chrono::steady_clock::now();
   const char line[] = "{\"event\":\"crash_dump\"}\n";
   for (int record = 0; record < 4; ++record) diagnostics.AppendLine(line, sizeof(line) - 1);
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+  const unsigned long long skipped = BootstrapDiagnostics::UnlockedWritesForTest() - skipped_before;
   const bool unreliable = BootstrapDiagnostics::LogLockUnreliableForTest();
   SetEvent(handles[1]);
   WaitForSingleObject(holder, 10000);
@@ -954,8 +959,8 @@ TEST(BootstrapDiagnostics, ACrashOfFourRecordsPaysOneLockWaitWhenAHolderNeverRel
   CloseHandle(handles[1]);
 
   EXPECT_TRUE(unreliable);
-  EXPECT_GE(elapsed.count(), 300);  // the first record did wait
-  EXPECT_LT(elapsed.count(), 900);  // four waits would be about 2000
+  EXPECT_EQ(skipped, 3u) << "the first record waits and marks the lock; the other three skip the wait";
+  EXPECT_GE(elapsed.count(), 300);  // the first record did wait: kBootstrapLogLockWaitMs is 500
   EXPECT_EQ(CountLines(ReadAll(nevr_test::HostLogPath(local))).lines, 5u);  // four records and the one host_log_lock record
 }
 

@@ -39,8 +39,7 @@ JOBS = {"guard": "Only this repo, only main", "copy": "Copy the release files to
         "record": "Commit the manifest record", "upload": "Publish to R2", "outcome": "A run that published nothing is red"}
 
 # One module behind two shims (gh, the signer) and the build tools. Each call is appended to calls.jsonl
-# with the credentials that reached it; config.json says what to break; state files hold the variable, the units and the
-# manifest the host serves.
+# with the credentials that reached it; config.json says what to break; state files hold the manifest the host serves.
 FAKES = r'''
 import hashlib, json, os, pathlib, shutil, sys
 
@@ -112,23 +111,18 @@ def gh(a):
     key = " ".join(a[:2])
     record("gh", a)
     maybe_fail(key)
-    vars_path = D / "vars.json"
-    if key == "variable set":
-        if not CFG.get("variable_stuck"):
-            vars_path.write_text(json.dumps({a[2]: a[a.index("--body") + 1]}))
-        if CFG.get("change_target_on_pause"):
+    if key == "run list":
+        # The live checks (the signer's runs) are the last gh call before the recheck: what changes here is what the
+        # recheck has to find.
+        if CFG.get("change_target_during_checks"):
             m = manifest()
             m["releases"]["5.17.0"]["artifacts"][1]["sha256"] = "1" * 64
             save(m)
-        if CFG.get("move_beta_on_pause"):
+        if CFG.get("move_beta_during_checks"):
             m = manifest()
             m["releases"]["5.19.0"] = m["releases"]["5.18.0"]
             m["channels"]["beta"] = "5.19.0"
             save(m)
-    elif key == "variable list":
-        v = json.loads(vars_path.read_text())
-        print(CFG["variable_list_raw"] if "variable_list_raw" in CFG else json.dumps([{"name": k, "value": x} for k, x in v.items()]))
-    elif key == "run list":
         print(CFG["signer_runs_raw"] if "signer_runs_raw" in CFG else json.dumps(CFG.get("signer_runs", [])))
     elif key == "run download":
         dest = pathlib.Path(a[a.index("-D") + 1])
@@ -257,12 +251,11 @@ class RollbackCase(unittest.TestCase):
         self.set_manifest(manifest("5.18.0"))
         self.config: dict = {}
         self.write_config()
-        (self.fake / "vars.json").write_text(json.dumps({"RELEASE_TRAIN": "true"}))
         self.timer_work = self.base / "timer-work"
         self.timer_work.mkdir()
         Host.directory, Host.mode = self.fake, "plain"
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Host)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         self.base_url = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -278,7 +271,6 @@ class RollbackCase(unittest.TestCase):
     def reset_world(self) -> None:
         """The state a test starts from, for the subtests that run the tool more than once."""
         self.set_manifest(manifest("5.18.0"))
-        (self.fake / "vars.json").write_text(json.dumps({"RELEASE_TRAIN": "true"}))
         for leftover in ("calls.jsonl", "dispatch.json"):
             (self.fake / leftover).unlink(missing_ok=True)
         self.log.unlink(missing_ok=True)
@@ -336,8 +328,8 @@ class RollbackCase(unittest.TestCase):
         return [c["argv"] for c in self.calls() if c["who"] == "gh" and c["argv"][:len(words)] == list(words)]
 
     def changes(self) -> list[dict]:
-        """Every call that changes the train or the manifest: a variable set or a dispatch."""
-        return [c for c in self.calls() if c["who"] == "gh" and c["argv"][:2] in (["variable", "set"], ["workflow", "run"])]
+        """Every call that changes the manifest: a dispatch."""
+        return [c for c in self.calls() if c["who"] == "gh" and c["argv"][:2] == ["workflow", "run"]]
 
     def records(self) -> list[dict]:
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -450,7 +442,7 @@ class Refusals(RollbackCase):
         self.configure(claims=[{"name": "nevr-runtime-v5.17.0-gamedata.zip", "sha256": hashlib.sha256(b"nevr-runtime-v5.17.0-gamedata.zip").hexdigest(), "size": 1}])
         proc = self.run_tool("v5.17.0", "--live", "--yes")
         self.assertRefused(proc, "claims", "missing ['nevr-runtime-v5.17.0-quest.apk']")
-        self.assertEqual(self.gh_calls("variable"), [])
+        self.assertEqual(self.gh_calls("workflow", "run"), [])
 
     def test_a_claim_for_an_artifact_github_holds_is_refused(self) -> None:
         zip_name = "nevr-runtime-v5.17.0-windows.zip"
@@ -514,8 +506,6 @@ class DryRun(RollbackCase):
         dispatch = self.gh_calls("workflow", "run")[0]
         self.assertEqual(dispatch[:6], ["workflow", "run", "sign-manifest.yml", "-R", "thesprockee/release-signer", "--ref"])
         self.assertEqual(dispatch[6], "main")
-        self.assertEqual(self.gh_calls("variable", "set"), [])
-        self.assertEqual(json.loads((self.fake / "vars.json").read_text()), {"RELEASE_TRAIN": "true"})
 
     def test_a_dry_run_prints_the_plan_the_run_and_the_result(self) -> None:
         proc = self.run_tool("v5.17.0", "--dry-run")
@@ -525,7 +515,6 @@ class DryRun(RollbackCase):
         self.assertIn("manifest_version 7", out)
         for a in artifacts("5.17.0"):
             self.assertIn(f"{a['name']} kind={a['kind']} size={a['size']}", out)
-        self.assertIn("not touched (dry run)", out)
         self.assertIn("run 4242", out)
         self.assertRegex(out, r"elapsed \d+ s")
         self.assertIn("dry run ok", out)
@@ -564,78 +553,48 @@ class LiveRun(RollbackCase):
                 return i
         self.fail(f"no {who} call starting {words}: {self.calls()}")
 
-    def test_a_live_rollback_pauses_the_train_before_it_dispatches(self) -> None:
+    def test_a_live_rollback_dispatches_watches_and_verifies_in_order(self) -> None:
         proc = self.run_tool("v5.17.0", "--live", "--yes")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        paused = self.position("gh", "variable", "set")
-        self.assertEqual(self.gh_calls("variable", "set"), [["variable", "set", "RELEASE_TRAIN", "--body", "false", "-R", "EchoTools/nevr-runtime"]])
         dispatched = self.position("gh", "workflow", "run")
         watched = self.position("gh", "run", "watch")
         viewed = self.position("gh", "run", "view")
         last_verify = max(i for i, c in enumerate(self.calls()) if c["who"] == "signer" and c["argv"][0] == "verify-manifest")
-        self.assertLess(paused, dispatched)
         self.assertLess(dispatched, watched)
         self.assertLess(watched, viewed)
         self.assertLess(viewed, last_verify)
         inputs = self.dispatch_inputs()
         self.assertEqual((inputs["dry_run"], inputs["override"], inputs["tag"], inputs["channel"]), ("false", "true", "v5.17.0", "beta"))
         self.assertEqual(json.loads((self.fake / "manifest.json").read_text())["channels"]["beta"], "5.17.0")
-        self.assertEqual(json.loads((self.fake / "vars.json").read_text()), {"RELEASE_TRAIN": "false"})
 
-    def test_a_live_rollback_never_resumes_the_train_and_says_how(self) -> None:
+    def test_a_live_rollback_says_how_the_fix_ships_and_what_a_false_alarm_runs(self) -> None:
         proc = self.run_tool("v5.17.0", "--live", "--yes")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(self.gh_calls("variable", "set")[-1][3:5], ["--body", "false"])
         out = proc.stdout
         self.assertIn("v5.17.0", out)
         self.assertIn("manifest_version 8", out)
         self.assertRegex(out, r"elapsed \d+ s")
-        self.assertIn("variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime", out)
-        self.assertIn("start again whatever schedules tools/quest_release_timer.py", out)
-        self.assertIn("STILL PAUSED", out)
-        # The fix ships through the train; the command that re-targets the bad release is labelled for a false alarm only.
+        # The fix ships as a new release a person cuts; the command that re-targets the bad release is labelled for a false
+        # alarm only. Nothing here names a train, a guard, a scheduler or a repository variable.
         self.assertIn("cannot target a tag the manifest does not list", out)
-        self.assertIn("to ship the fix, resume the train", out)
+        self.assertIn("a new release that a person cuts when it is ready (RELEASING.md)", out)
+        self.assertIn("run by hand with --tag", out)
         self.assertIn("forward move that needs no override", out)
+        for gone in ("train", "TRAIN", "guard", "schedul", "PAUSED", "variable set"):
+            self.assertNotIn(gone, out)
         false_alarm = [line for line in out.splitlines() if "rollback_beta.py v5.18.0" in line]
         self.assertEqual(len(false_alarm), 1, out)
         self.assertIn("false alarm only", false_alarm[0])
         self.assertIn("python3 tools/rollback_beta.py v5.18.0 --live --forward --yes", false_alarm[0])
-        self.assertLess(out.index("to ship the fix, resume the train"), out.index("false alarm only"))
-
-    def test_keep_train_touches_no_variable(self) -> None:
-        proc = self.run_tool("v5.17.0", "--live", "--yes", "--keep-train")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(self.gh_calls("variable"), [])
-        self.assertIn("not touched (--keep-train)", proc.stdout)
-        self.assertNotIn("STILL PAUSED", proc.stdout)
-        self.assertEqual(json.loads((self.fake / "manifest.json").read_text())["channels"]["beta"], "5.17.0")
-
-    def test_a_failed_variable_set_stops_before_the_dispatch(self) -> None:
-        self.configure(rc={"variable set": 1})
-        proc = self.run_tool("v5.17.0", "--live", "--yes")
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("pause_variable", proc.stderr)
-        self.assertIn("NOT done", proc.stderr)
-        self.assertEqual(self.gh_calls("workflow", "run"), [])
-
-    def test_a_variable_that_did_not_change_is_a_failure_before_the_dispatch(self) -> None:
-        self.configure(variable_stuck=True)
-        proc = self.run_tool("v5.17.0", "--live", "--yes")
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("pause_variable", proc.stderr)
-        self.assertIn("RELEASE_TRAIN", proc.stderr)
-        self.assertEqual(self.gh_calls("workflow", "run"), [])
+        self.assertLess(out.index("forward move that needs no override"), out.index("false alarm only"))
 
     def test_a_quest_release_in_progress_stops_before_the_dispatch(self) -> None:
-        for extra in ((), ("--keep-train",)):
-            with self.subTest(extra=extra), self.timer_lock_held():
-                self.reset_world()
-                proc = self.run_tool("v5.17.0", "--live", "--yes", *extra)
-                self.assertNotEqual(proc.returncode, 0)
-                self.assertIn("check_timer", proc.stderr)
-                self.assertIn("holds its lock", proc.stderr)
-                self.assertEqual(self.gh_calls("workflow", "run"), [])
+        with self.timer_lock_held():
+            proc = self.run_tool("v5.17.0", "--live", "--yes")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("check_timer", proc.stderr)
+        self.assertIn("holds its lock", proc.stderr)
+        self.assertEqual(self.gh_calls("workflow", "run"), [])
 
     def test_no_quest_release_run_holding_the_lock_lets_the_run_through(self) -> None:
         proc = self.run_tool("v5.17.0", "--live", "--yes")
@@ -671,31 +630,25 @@ class LiveRun(RollbackCase):
                 self.assertIn("check_signer_runs", proc.stderr)
                 self.assertEqual(self.gh_calls("workflow", "run"), [])
 
-    def test_the_guards_run_after_the_pause_and_before_the_dispatch(self) -> None:
+    def test_the_guards_and_the_recheck_run_before_the_dispatch(self) -> None:
         self.run_tool("v5.17.0", "--live", "--yes")
-        paused = self.position("gh", "variable", "set")
         listed = self.position("gh", "run", "list")
         dispatched = self.position("gh", "workflow", "run")
-        self.assertLess(paused, listed)
+        rechecked = [i for i, c in enumerate(self.calls())
+                     if c["who"] == "signer" and c["argv"][0] == "verify-manifest" and listed < i < dispatched]
         self.assertLess(listed, dispatched)
+        self.assertTrue(rechecked, "no manifest read between the signer-run check and the dispatch: the recheck did not run")
 
-    def test_keep_train_still_refuses_while_a_quest_release_runs(self) -> None:
-        with self.timer_lock_held():
-            proc = self.run_tool("v5.17.0", "--live", "--yes", "--keep-train")
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("check_timer", proc.stderr)
-        self.assertEqual(self.gh_calls("workflow", "run"), [])
-
-    def test_a_beta_that_moved_while_pausing_stops_before_the_dispatch(self) -> None:
-        self.configure(move_beta_on_pause=True)
+    def test_a_beta_that_moved_during_the_live_checks_stops_before_the_dispatch(self) -> None:
+        self.configure(move_beta_during_checks=True)
         proc = self.run_tool("v5.17.0", "--live", "--yes")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("recheck", proc.stderr)
-        self.assertIn("5.19.0", proc.stderr)
+        self.assertIn("beta moved while the live checks ran: it was v5.18.0, it is now v5.19.0", proc.stderr)
         self.assertEqual(self.gh_calls("workflow", "run"), [])
 
-    def test_a_target_whose_bytes_changed_while_pausing_stops_before_the_dispatch(self) -> None:
-        self.configure(change_target_on_pause=True)
+    def test_a_target_whose_bytes_changed_during_the_live_checks_stops_before_the_dispatch(self) -> None:
+        self.configure(change_target_during_checks=True)
         proc = self.run_tool("v5.17.0", "--live", "--yes")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("recheck", proc.stderr)
@@ -708,7 +661,7 @@ class LiveRun(RollbackCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("watch", proc.stderr)
         self.assertIn("4242", proc.stderr)
-        self.assertIn("RELEASE_TRAIN is false", proc.stderr)
+        self.assertIn("publish run 4242 was dispatched", proc.stderr)
 
     def test_a_dispatch_that_prints_no_run_url_fails_the_run(self) -> None:
         self.configure(no_url=True)
@@ -717,7 +670,6 @@ class LiveRun(RollbackCase):
         self.assertIn("gh exited 0 but printed no run URL: a publish MAY have been dispatched: list the runs on the signer repo "
                       "before dispatching again", proc.stderr)
         self.assertNotIn("no publish was dispatched", proc.stderr)
-        self.assertIn("RELEASE_TRAIN is false", proc.stderr)
         self.assertEqual(self.gh_calls("run", "watch"), [])
 
     def test_a_failed_dispatch_fails_the_run(self) -> None:
@@ -785,7 +737,6 @@ class DryRunRehearsal(RollbackCase):
         proc = self.run_tool("v5.17.0", "--dry-run")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         out = proc.stdout
-        self.assertIn("plan: RELEASE_TRAIN is 'true'", out)
         self.assertIn("plan: a run of the Quest release timer does not hold its lock", out)
         self.assertIn("runs in progress on thesprockee/release-signer: none", out)
         self.assertIn("a live run would not be refused", out)
@@ -806,12 +757,11 @@ class DryRunRehearsal(RollbackCase):
         self.assertIn("77 (in_progress)", proc.stdout)
 
     def test_a_dry_run_says_what_it_could_not_read_and_still_runs(self) -> None:
-        self.configure(variable_list_raw="null", signer_runs_raw="null")
+        self.configure(signer_runs_raw="null")
         (self.timer_work / "timer.lock").symlink_to(self.base / "nowhere")  # a lock that cannot be opened
         proc = self.run_tool("v5.17.0", "--dry-run")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        for what in ("the variable could not be read", "the Quest release timer's lock could not be read",
-                     "the signer runs could not be read"):
+        for what in ("the Quest release timer's lock could not be read", "the signer runs could not be read"):
             self.assertIn(what, proc.stdout)
         self.assertEqual(len(self.gh_calls("workflow", "run")), 1)
 
@@ -861,7 +811,7 @@ class DryRunRehearsal(RollbackCase):
 
 
 class FailurePaths(RollbackCase):
-    """Every way out of a run reports what is paused and what was dispatched."""
+    """Every way out of a run reports what was dispatched."""
 
     def test_a_crash_after_the_dispatch_reports_the_state_and_the_run(self) -> None:
         def boom(argv):  # noqa: ANN001, ANN202
@@ -873,8 +823,6 @@ class FailurePaths(RollbackCase):
         self.assertIn("crashed: RuntimeError: boom <redacted>", err)
         self.assertNotIn(SECRETS["GH_TOKEN"], err)
         self.assertIn("publish run 4242 was dispatched (its outcome is not confirmed)", err)
-        self.assertIn("RELEASE_TRAIN is false", err)
-        self.assertIn("variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime", err)
         last = self.records()[-1]
         self.assertEqual((last["event"], last["outcome"], last["step"]), ("finish", "crashed", "check_jobs"))
 
@@ -887,7 +835,6 @@ class FailurePaths(RollbackCase):
         self.assertEqual(code, 130)
         self.assertIn("interrupted (Ctrl-C)", err)
         self.assertIn("publish run 4242 was dispatched", err)
-        self.assertIn("RELEASE_TRAIN is false", err)
         last = self.records()[-1]
         self.assertEqual((last["event"], last["outcome"], last["step"]), ("finish", "interrupted", "watch"))
 
@@ -916,12 +863,13 @@ class FailurePaths(RollbackCase):
 
     def test_ctrl_c_before_the_dispatch_still_says_no_publish_was_dispatched(self) -> None:
         def interrupt(argv):  # noqa: ANN001, ANN202
-            if argv[1:3] == ["variable", "set"]:
+            if argv[1:3] == ["run", "list"]:
                 raise KeyboardInterrupt
 
         code, out, err = self.run_inproc("v5.17.0", "--live", "--yes", on_call=interrupt)
         self.assertEqual(code, 130)
-        self.assertIn("no publish was dispatched", err)
+        self.assertIn("state: no publish was dispatched", err)
+        self.assertIn("NOT done: the publish", err)
         self.assertNotIn("MAY have been dispatched", err)
 
     def test_a_crash_once_the_run_id_is_known_names_the_run_and_not_a_maybe(self) -> None:
@@ -945,7 +893,6 @@ class FailurePaths(RollbackCase):
         self.assertNotEqual(code, 0)
         self.assertIn("run 4242 dispatched", out)
         self.assertIn("publish run 4242 was dispatched", err)
-        self.assertIn("RELEASE_TRAIN is false", err)
         self.assertIn("cannot write the log", err)
 
     def test_a_log_that_fails_every_record_still_gets_the_report_out_without_raising(self) -> None:
@@ -996,26 +943,11 @@ class FailurePaths(RollbackCase):
         self.assertIn("cleanup_failed", [r["event"] for r in self.records()])
         self.assertEqual(self.records()[-1]["outcome"], "ok")
 
-    def test_keep_train_does_not_hide_a_dispatch_from_the_state_report(self) -> None:
-        self.configure(rc={"run watch": 1})
-        proc = self.run_tool("v5.17.0", "--live", "--yes", "--keep-train")
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("publish run 4242 was dispatched (its outcome is not confirmed)", proc.stderr)
-        self.assertNotIn("RELEASE_TRAIN", proc.stderr)
-
     def test_a_dry_run_that_fails_after_the_dispatch_says_the_run_publishes_nothing(self) -> None:
         self.configure(jobs={"upload": "failure"})
         proc = self.run_tool("v5.17.0", "--dry-run")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("publish run 4242 was dispatched (a dry run: it publishes nothing)", proc.stderr)
-
-    def test_a_null_variable_list_is_a_step_failure_not_a_traceback(self) -> None:
-        self.configure(variable_list_raw="null")
-        proc = self.run_tool("v5.17.0", "--live", "--yes")
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("pause_variable: the variable list is unreadable", proc.stderr)
-        self.assertNotIn("Traceback", proc.stderr)
-        self.assertEqual(self.gh_calls("workflow", "run"), [])
 
 
 class Runbook(unittest.TestCase):
@@ -1035,17 +967,17 @@ class Runbook(unittest.TestCase):
         self.assertIn("docs/reference/verifying-a-release.md", lines[0])
         self.assertTrue((ROOT / "docs" / "reference" / "verifying-a-release.md").is_file())
 
-    def test_the_commands_name_the_account_through_gh_bin_and_never_hardcode_one(self) -> None:
+    def test_the_commands_hardcode_no_account_and_set_no_repository_variable(self) -> None:
         blocks = self.blocks()
         self.assertNotIn("gh-spritz", blocks)
         self.assertNotIn("systemctl", blocks)
-        self.assertEqual(blocks.count("$GH_BIN variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime"), 1)
+        self.assertNotIn("variable set", blocks)
+        self.assertNotIn("RELEASE_TRAIN", self.section())
 
     def test_the_prose_says_what_an_operator_has_to_know_before_pasting(self) -> None:
         prose = self.section()
         self.assertIn("refuses loudly if it is empty", prose)
-        self.assertIn("since the tool does not stop it", prose)
-        self.assertIn("When `GH_BIN` is unset the tool uses `gh`", prose)
+        self.assertNotIn("train", prose.lower())
 
 class Timeouts(RollbackCase):
     def test_every_command_has_a_timeout_and_the_slow_ones_a_longer_one(self) -> None:
@@ -1076,13 +1008,12 @@ class Timeouts(RollbackCase):
 
 
 class Defaults(RollbackCase):
-    def test_gh_defaults_to_gh_and_the_resume_commands_name_it(self) -> None:
+    def test_gh_defaults_to_gh(self) -> None:
         env = {k: v for k, v in self.env.items() if k != "GH_BIN"}
         proc = self.run_tool("v5.17.0", "--live", "--yes", env=env)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         progs = {c["prog"] for c in self.calls() if c["who"] == "gh"}
         self.assertEqual(progs, {"gh"})
-        self.assertIn("gh variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime", proc.stdout)
 
     def test_an_error_that_carries_the_host_is_redacted_in_the_output_and_the_log(self) -> None:
         Host.mode = "error500"
@@ -1095,7 +1026,7 @@ class Defaults(RollbackCase):
         self.assertIn("<redacted>", self.records()[-1]["error"])
 
     def test_a_bare_host_name_in_an_error_is_redacted(self) -> None:
-        self.configure(rc={"variable set": 1}, leak_stderr="connect to 127.0.0.1 port refused")
+        self.configure(rc={"run list": 1}, leak_stderr="connect to 127.0.0.1 port refused")
         proc = self.run_tool("v5.17.0", "--live", "--yes")
         self.assertNotEqual(proc.returncode, 0)
         said = self.everything_said(proc)
@@ -1116,7 +1047,7 @@ class Ordering(RollbackCase):
 
 class Records(RollbackCase):
     def test_a_credential_or_the_host_in_a_command_error_never_reaches_the_output_or_the_log(self) -> None:
-        self.configure(rc={"variable set": 1}, leak_stderr=f"saw {SECRETS['GH_TOKEN']} and {SECRETS['R2_SECRET_ACCESS_KEY']} "
+        self.configure(rc={"run list": 1}, leak_stderr=f"saw {SECRETS['GH_TOKEN']} and {SECRETS['R2_SECRET_ACCESS_KEY']} "
                                                            f"at {self.base_url}/nevr-runtime/manifest.json")
         proc = self.run_tool("v5.17.0", "--live", "--yes")
         self.assertNotEqual(proc.returncode, 0)
@@ -1130,7 +1061,7 @@ class Records(RollbackCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         records = self.records()
         steps = [r["step"] for r in records if r["event"] == "step" and r["outcome"] == "ok"]
-        self.assertEqual(steps, ["read_live", "check_target", "claims", "plan", "pause_variable", "check_timer",
+        self.assertEqual(steps, ["read_live", "check_target", "claims", "plan", "check_timer",
                                  "check_signer_runs", "recheck", "dispatch", "watch", "check_jobs", "verify_live"])
         self.assertEqual(len({r["run"] for r in records}), 1)
         for r in records:

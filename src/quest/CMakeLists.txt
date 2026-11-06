@@ -265,6 +265,12 @@ if(NEVR_QUEST_BUILD_SENTINEL AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sentinel/CM
   add_subdirectory(sentinel)
 endif()
 
+# Combat behaviour (#1737 plan 6a Q3): hooks that change how the game plays a combat match, in their own area; the sentinel links it.
+# After the sentinel, because it hooks through the sentinel's GOT backend.
+if(TARGET nevr_quest_got_hook)
+  add_subdirectory(combat)
+endif()
+
 # The login hook links the shared GOT backend target built by the sentinel (a second copy of
 # the backend source would carry its own write lock and slot registry).
 if(TARGET nevr_quest_got_hook)

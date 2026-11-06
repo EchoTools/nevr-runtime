@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0001-serverdb-token-auth.md
+audience: all
+---
+
 # ADR 0001: Game-server ServerDB registration authenticates with a JWT
 
 Status: accepted, live.

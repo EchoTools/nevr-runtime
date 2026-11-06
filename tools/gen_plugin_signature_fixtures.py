@@ -375,7 +375,7 @@ def main():
                         help="the directory CMake wrote the unsigned fixture DLLs to (<build>/bin/sigfix)")
     parser.add_argument("--now", type=int, default=int(time.time()))
     parser.add_argument("--plugin-dll", action="append", default=[],
-                        help="a real plugin DLL: also written signed by the good signer (<stem>.signed.dll), signed "
+                        help="a real plugin DLL, as PATH or NAME=PATH (NAME is the stem of its fixtures): also written signed by the good signer (<stem>.signed.dll), signed "
                              "with another signer's EKU (<stem>.wrong_eku.dll) and unsigned (<stem>.unsigned.dll)")
     args = parser.parse_args()
     for tool in ("openssl", "osslsigncode"):
@@ -441,8 +441,9 @@ def main():
     make("tsa_untrusted", good, pinned_chain, now, tsa_=tsa_foreign)   # stamped by an authority the pinned root did not issue
 
     plugins = {}
-    for source in args.plugin_dll:
-        stem = Path(source).stem
+    for spec in args.plugin_dll:
+        # PATH, or NAME=PATH to give the fixtures another stem than the file's (two runtimes share the file name).
+        stem, _, source = spec.partition("=") if "=" in spec else (Path(spec).stem, "", spec)
         for kind, leaf_ in (("signed", good), ("wrong_eku", wrong_eku)):
             name = f"{stem}.{kind}"
             sign(Path(source), out / f"{name}.dll", leaf_, pinned_chain, tsa, now)

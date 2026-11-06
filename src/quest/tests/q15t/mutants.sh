@@ -26,6 +26,8 @@ trap 'rm -rf -- "${scratch:?}"' EXIT
 only="${Q15T_MUTANTS_ONLY:-}"
 wanted() { [ -z "${Q15T_MUTANTS_NAME:-}" ] || [[ "$1" =~ $Q15T_MUTANTS_NAME ]]; }
 survived=0
+# What a per-thread word becomes in a "shared across threads" mutant: one value for every thread, same interface as q15t::ThreadWord.
+SHARED_WORD='struct SharedWord { bool Create() { return true; } std::uintptr_t Get() const { return v; } void Set(std::uintptr_t x) { v = x; } std::uintptr_t v = 0; }'
 # judge <dir> <module>: configure, build and run the host tests of the scratch copy <dir> ({src,q15t}); with a module, only that module's.
 # Succeeds when every test passes, so a SURVIVED mutant is a success here. A runaway dies alone under the address-space cap.
 judge() {
@@ -63,34 +65,6 @@ run no_exec_check   src/got_swap.cpp     "s/if (m.perms\[2\] == 'x') {/if (false
 run no_expected     src/got_swap.cpp     "s/if (r.original != expected) {/if (false) {/;s/const bool swapped = word->compare_exchange_strong(want, replacement, std::memory_order_acq_rel);/word->store(replacement); const bool swapped = true; (void)want;/"
 run no_restore      src/got_swap.cpp     "s/mprotect(reinterpret_cast<void\*>(base), page, PROT_READ) != 0/false/"
 run no_build_check  src/plugin.cpp       "s/|| std::strcmp(id, Q15T_BUILD_ID) != 0//"
-run y_never_raises  src/clock_levels.cpp "s/send_cpu = Raised(cpu, Q15T_CPU_LEVEL);/send_cpu = cpu;/"
-run y_lowers        src/clock_levels.cpp "s/return asked < floor ? floor : asked;/return floor;/"
-run x_raises        src/clock_levels.cpp "s/std::int32_t send_cpu = cpu, send_gpu = gpu;/std::int32_t send_cpu = 4, send_gpu = 4;/"
-# the clock switch (args {clock: raise}), one binary for both arms
-run raise_always    src/clock_levels.cpp "s/const bool raise = g_raise.load(std::memory_order_relaxed);/const bool raise = true;/"
-run raise_never     src/clock_levels.cpp "s/const bool raise = g_raise.load(std::memory_order_relaxed);/const bool raise = false;/"
-run raise_log_wrong src/clock_levels.cpp "s/{\"candidate\", raise ? 1 : 0}/{\"candidate\", 0}/"
-run init_no_set     src/plugin.cpp       "s/^  SetClockRaise(raise);$//"
-run init_raise_any  src/plugin.cpp       "s/const bool raise = has_clock_arg \&\& std::strcmp(clock_arg, \"raise\") == 0;/const bool raise = has_clock_arg;/"
-run init_raise_pfx  src/plugin.cpp       "s/std::strcmp(clock_arg, \"raise\") == 0;/std::strncmp(clock_arg, \"raise\", 5) == 0;/"
-run init_no_warn    src/plugin.cpp       "s/if (has_clock_arg \&\& !raise \&\& std::strcmp(clock_arg, \"log\") != 0) {/if (false) {/"
-run init_warn_log   src/plugin.cpp       "s/ \&\& std::strcmp(clock_arg, \"log\") != 0) {/) {/"
-run init_arg_unlogged src/plugin.cpp     "s/{\"clock_arg\", clock_arg}/{\"clock_arg\", \"\"}/"
-run args_key_prefix src/plugin_args.cpp  "s/std::strcmp(k, key) == 0;/std::strncmp(k, key, std::strlen(key)) == 0;/"
-run args_any_key    src/plugin_args.cpp  "s/const bool match = std::strcmp(k, key) == 0;/const bool match = true;/"
-run args_value_cut  src/plugin_args.cpp  "s/      if (!vfits) {/      if (false) {/"
-run args_no_comma   src/plugin_args.cpp  "s/    if (args_json\[i\] == ',') {/    if (true) {/"
-run args_no_colon   src/plugin_args.cpp  "s/    if (args_json\[i\] != ':') return false;/    if (false) return false;/"
-run args_escape     src/plugin_args.cpp  "s#    if (c == '..') {#    if (false) {#"
-run args_escape_dflt src/plugin_args.cpp "s#default: c = e; break;#default: c = '?'; break;#"
-run hz_never_switch src/refresh_rate.cpp "s/const bool in = kind == HzLevelKind::kCombatOrLobby;/const bool in = false;/"
-run hz_any_level    src/refresh_rate.cpp "s/if (lv == c) {/if (lv != 0) {/"
-run hz_req_ignored  src/refresh_rate.cpp "s/if (g_rule.load(std::memory_order_acquire) \&\& hz > low \&\& g_in_match.load(std::memory_order_acquire)) {/if (false) {/"
-run hz_no_lobby     src/refresh_rate.cpp "s/(lobby \&\& In(lv, kLobbyLevels))/(false)/"
-run hz_arena_loses  src/refresh_rate.cpp "s/if (lobby \&\& In(lv, kEchoArenaLevels)) {/if (false) {/"
-run hz_no_quest2    src/refresh_rate.cpp "s/r.quest2 = std::strcmp(device, \"hollywood\") == 0;/r.quest2 = false;/"
-run hz_q2off_ignored src/refresh_rate.cpp "s/ \&\& !r.q2_off ? kQuest2Hz/ ? kQuest2Hz/"
-run hz_leveloff_ignored src/refresh_rate.cpp "s/r.on = r.compiled \&\& !r.level_off;/r.on = r.compiled;/"
 run tick_no_vptr    src/game_tick.cpp    "s/if (vptr != g_vptr.load(std::memory_order_relaxed) || !ok) {/if (!ok) {/"
 run gate_everywhere src/headset_gates.cpp "s/if (Within(ret, g_party_lo, g_party_hi)) {/if (true) {/"
 run gate_never      src/headset_gates.cpp "s/if (Within(ret, g_head_lo, g_head_hi)) {/if (false) {/"

@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0031-headset-identity-and-settings-profiles.md
+audience: all
+---
+
 # ADR 0031: one step names the headset, and one table holds the settings each headset gets
 
 Status: proposed. Applies to the Quest build (`src/quest` and its plugins) and the PC client (`src/runtime`). Works with
@@ -13,7 +20,7 @@ The tree picks per-headset values in several places, each from its own signal:
 
 - `src/quest/sentinel/texture_quality.h` (`HeadsetForStockSize`) guesses from the runtime's suggested eye width: 1680 or
   more is a Quest 3, anything else a Quest 2. Any other headset is put into one of the two.
-- `src/quest/plugins/q15t/src/heaps.cpp` and `src/quest/plugins/q15t/src/refresh_rate.cpp` treat
+- `src/quest/combat/heaps.cpp` and `src/quest/combat/refresh_rate.cpp` (KNOWN-WRONG #2037) treat
   `ro.product.device == "hollywood"` as a Quest 2 (512 MiB system heap, 72 Hz) and every other value as the Quest 3 case.
 - `src/quest/sentinel/render_config_hook.cpp`, `src/quest/sentinel/hand_pose_log_hook.cpp` and
   `src/quest/integration/crash_send_step.cpp` read `ro.product.model` for their log lines.
@@ -83,11 +90,11 @@ per-headset values lists; a search alone cannot tell an inference or a hard-code
 
 - Steam Frame, Quest 3S and Quest Pro each become one rule and one row, not a new branch in every consumer.
 - `texture_quality.h`'s width split goes; its size table becomes the rows' per-level sizes.
-- q15t's two `hollywood` checks become rows when the module track moves those modules into the runtime.
+- The two `hollywood` checks (the heaps' and the refresh-rate rule's) become rows when the module track moves those modules into the runtime; the refresh-rate rule is in the runtime (`src/quest/combat/refresh_rate.cpp`) and reads the property itself until #2037.
 
 ## Not claimed
 
-The identity values of any headset other than a Quest 2 (`hollywood`, `src/quest/plugins/q15t/src/heaps.cpp`). Whether
+The identity values of any headset other than a Quest 2 (`hollywood`, `src/quest/combat/heaps.cpp`). Whether
 the Quest step can wait for the OpenXR system and still run before the first setting is read; until a run shows it can,
 Quest rules match on the Android properties. Which
 property or file tells a Lepton container apart from a headset's own Android is not measured here; the first Steam

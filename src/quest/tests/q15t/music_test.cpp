@@ -186,7 +186,7 @@ static Image MakeImage(bool good_text, uintptr_t slot_word_vaddr) {
 }
 
 int main() {
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.ctx_size = sizeof ctx;
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;

@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0032-workarounds-test-the-condition.md
+audience: all
+---
+
 # ADR 0032: a workaround turns on when the condition it fixes is present, never because a headset's name matches
 
 Status: proposed. Applies to every fix this repo makes for something that breaks: a crash, a missing feature, a driver's

@@ -67,7 +67,6 @@ class BuildDistributionTest(unittest.TestCase):
         (self.stage / "echovr_server.exe").write_bytes(valid_pe())
         self.destination = self.root / "dist" / "runtime"
         self.tar_path = self.root / "dist" / "runtime.tar.zst"
-        self.zip_path = self.root / "dist" / "runtime.zip"
         self.dist = self.root / "dist"
         self.dist.mkdir(exist_ok=True)
         self.fake_tools = self.root / "fake-tools"
@@ -117,7 +116,7 @@ class BuildDistributionTest(unittest.TestCase):
         command = [
             "python3", str(REPO / "tools/build_distribution.py"),
             "--package", str(self.stage), "--destination", str(self.destination),
-            "--tar", str(self.tar_path), "--zip", str(self.zip_path),
+            "--tar", str(self.tar_path),
         ]
         if required:
             command.append("--required-signing")
@@ -185,13 +184,11 @@ class BuildDistributionTest(unittest.TestCase):
         old_package = self.destination / "old-marker"
         old_package.write_bytes(b"old package")
         self.tar_path.write_bytes(b"old tar")
-        self.zip_path.write_bytes(b"old zip")
         originals = {path.name: path.read_bytes() for path in self.stage.iterdir()}
         result = self.run_driver(required=True, env=dict(self.env, FAKE_FAIL_NAME="echovr_server.exe"))
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(old_package.read_bytes(), b"old package")
         self.assertEqual(self.tar_path.read_bytes(), b"old tar")
-        self.assertEqual(self.zip_path.read_bytes(), b"old zip")
         self.assertEqual({path.name: path.read_bytes() for path in self.stage.iterdir()}, originals)
 
     def test_archive_failure_preserves_existing_outputs_and_success_publishes_both(self):
@@ -199,7 +196,6 @@ class BuildDistributionTest(unittest.TestCase):
         old = self.destination / "old-marker"
         old.write_bytes(b"old")
         self.tar_path.write_bytes(b"previous tar")
-        self.zip_path.write_bytes(b"previous zip")
         failing_bin = self.root / "failing-bin"
         failing_bin.mkdir()
         fake_tar = failing_bin / "tar"
@@ -211,15 +207,20 @@ class BuildDistributionTest(unittest.TestCase):
         self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
         self.assertEqual(old.read_bytes(), b"old")
         self.assertEqual(self.tar_path.read_bytes(), b"previous tar")
-        self.assertEqual(self.zip_path.read_bytes(), b"previous zip")
 
         succeeded = self.run_driver(env={"PATH": os.environ["PATH"],
                                          "NEVR_CODESIGN_TEMP": str(self.root)})
         self.assertEqual(succeeded.returncode, 0, succeeded.stdout + succeeded.stderr)
         self.assertTrue((self.destination / "BugSplat64.dll").is_file())
         self.assertGreater(self.tar_path.stat().st_size, 0)
-        self.assertGreater(self.zip_path.stat().st_size, 0)
-        build_distribution.verify_archives(self.tar_path, self.zip_path, self.destination, None)
+        build_distribution.verify_archives(self.tar_path, self.destination, None)
+
+    def test_publish_writes_the_tar_and_no_zip(self):
+        env = {"PATH": os.environ["PATH"], "NEVR_CODESIGN_TEMP": str(self.root)}
+        result = self.run_driver(env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertGreater(self.tar_path.stat().st_size, 0)
+        self.assertEqual(sorted(path.name for path in self.dist.iterdir()), ["runtime", "runtime.tar.zst"])
 
     def test_missing_required_runtime_pe_is_rejected(self):
         for missing in ("echovr_server.exe", "BugSplat64.dll", "nevr-runtime.dll"):

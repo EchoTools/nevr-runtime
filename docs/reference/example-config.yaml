@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override and graphics.texture_quality. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys and the three combat.refresh_rate keys. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -152,10 +152,64 @@ graphics:
   # control shows `stock` as Low.
   # Read once at launch. Any mistake (a value that is not one of the seven words, a mapping or a list, a key with no value,
   # a `graphics` that is not a mapping, an unset ${VAR}, a file rejected as a whole) gives `stock`, with a warning in the
-  # sentinel log that names the key. Any other key under `graphics` (a misspelling such as `texture_qualty`, or
-  # `Texture_Quality`) is ignored with a warning that names it.
+  # sentinel log that names the key. Any other key under `graphics` than `texture_quality` and `hand_flip` (a misspelling such as
+  # `texture_qualty`, or `Texture_Quality`) is ignored with a warning that names it.
   # Default (absent): stock. The log line `texture_quality` in the sentinel log names the level, its source and the size.
   # texture_quality: high
+
+  # Quest only. Controller Hand Flip: a boolean. true turns the controllers' orientation by 180 degrees about their local Z axis,
+  # for players on a Quest 2 whose Touch Pro or Touch Plus controllers show their hands rolled backwards; false (and absent) leaves
+  # every pose as the headset runtime reports it. The settings menu has the same setting, a "Controller Hand Flip" row under
+  # Texture Resolution on the NEVR page; a change there takes effect on the next frame, and the sentinel writes it here as `true` (On)
+  # or `false` (Off) within about a second, so the next launch starts with the player's last choice. It is the choice at launch
+  # only; the menu's choice wins while the game runs. Read once at launch. A value that is not a boolean (a word such as `maybe`, a
+  # number, a mapping or a list, a key with no value, an unset ${VAR}) is Off, with a warning in the sentinel log that names the
+  # key. The sentinel log line `hand_flip_start` names the value and its source (`config` when this file gave it, `default`
+  # when it did not), and `hand_flip_saved` names each write of this key.
+  # Default (absent): false.
+  # hand_flip: true
+
+# ---------------------------------------------------------------------------
+# combat — the combat modules built into the Quest runtime
+#
+# Reader: src/quest/sentinel/quest_config.cpp (Quest), gated by src/quest/combat/combat_active.h. The PC accepts the section and reads
+# nothing from it.
+# ---------------------------------------------------------------------------
+
+combat:
+  # Quest only. A boolean. The combat modules built into the runtime run in the q15t and combat APKs (the variant the APK's build
+  # names in the first line of the sentinel log, `variant`) and in no other. `true` asks for them to run whatever the APK's variant,
+  # which a development build honours and a release build does not: a release build logs one warning that says the key is ignored.
+  # A value that is not a boolean (a word such as `maybe`, a number, a mapping or a list, a key with no value, an unset ${VAR}) asks for
+  # nothing, with a warning in the sentinel log that names the key. Read once at launch. The sentinel log line `combat_active` names
+  # the variant, the build kind, the answer, why, and what became of this key (`force`: not_asked, honoured, redundant or refused).
+  # Default (absent): false.
+  # force: true
+
+  # Quest only. A boolean. The four heap sizes (the game's resource, System, GPU and game-space heaps) are raised before the game allocates them,
+  # in the q15t and combat APKs (the sizes: 320, 640 (512 on a Quest 2), 512 and 128 MiB). `false` leaves the game's own sizes. A value that is not a
+  # boolean is ignored with a warning in the sentinel log that names the key. Read once at launch; the sentinel log line `combat_heaps_install` says
+  # what the game reads after the step. Default (absent): true.
+  # heaps: false
+
+  # Quest only. A boolean. The render-target layout pool is made with 1024 slots instead of 512 and a log line says whether android_main started after
+  # the sizes were set, in the q15t and combat APKs. `false` leaves the game's pool and also leaves the System heap size (see `heaps`) as the game
+  # has it, because the heap and the pool are one memory change. A value that is not a boolean is ignored with a warning that names the key. Read once at
+  # launch; the sentinel log lines `combat_memsys_install` and `combat_memsys_witness` report it. Default (absent): true.
+  # memsys: false
+
+  # The refresh-rate rule of the combat modules (src/quest/combat/refresh_rate.h): 90 Hz (72 Hz on a Quest 2) while a combat map is loaded
+  # (and, with refresh_rate_lobby, the combat lobby), the game's own rate (120 on a Quest) in an Echo Arena level, in every other lobby and
+  # everywhere else. Quest only; it runs where the combat modules run (see `force`). Booleans, read once at launch; a value that is not a
+  # boolean keeps the default, with a warning in the sentinel log that names the key. The sentinel log lines `combat_config`,
+  # `combat_refresh_rate_install` and `combat_refresh_rate_switch` say what was read and what was sent.
+  # refresh_rate: false turns the rule off: the game's own rate always (every request is still logged). Default (absent): true.
+  # refresh_rate: false
+  # refresh_rate_lobby: true makes the combat lobby (`mpl_lobby_b_combat`) ask for the level rate too; the lobbies arena players use never
+  # change. Default (absent): false.
+  # refresh_rate_lobby: true
+  # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
+  # refresh_rate_quest2_72: false
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
@@ -468,11 +522,7 @@ telemetry:
 
 arena:
   # Round time in seconds. Overrides the game's "round_time" config value.
-  # Absent: game default (typically 180.0), except on a server, where a public Arena
-  # session uses 480.0 (8:00). The session's game type is stored from the session
-  # create and from the session start frame the game starts from, so the order the
-  # service sends them in does not matter. Other game types, private Arena and reads
-  # before any session keep the game default (#982).
+  # Absent: game default (typically 180.0).
   # Not a secret.
   # round_time: 300.0
 
@@ -519,16 +569,16 @@ arena:
 # plugins — plugin loading and configuration
 #
 # Plugins are optional DLLs loaded from plugins\ in the nEVR root
-# (%LOCALAPPDATA%\nevr\echovr, ADR 0012), never from the game folder. Each plugin exports the NvrPluginInterface lifecycle:
+# (%LOCALAPPDATA%\nevr\echovr, ADR 0012), never from the game folder. Each plugin exports the NevrPluginInterface lifecycle:
 #
-#   NvrPluginGetInfo()      — returns name, version, description (REQUIRED)
-#   NvrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
-#   NvrPluginInit(ctx)      — called once at load time (optional)
-#   NvrPluginOnFrame(ctx)   — called each game frame (optional)
-#   NvrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
-#   NvrPluginShutdown()     — called at unload time (optional)
+#   NevrPluginGetInfo()      — returns name, version, description (REQUIRED)
+#   NevrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
+#   NevrPluginInit(ctx)      — called once at load time (optional)
+#   NevrPluginOnFrame(ctx)   — called each game frame (optional)
+#   NevrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
+#   NevrPluginShutdown()     — called at unload time (optional)
 #
-# InitEx contract (NvrPluginInitEx, optional, API v4): a plugin that exports it
+# InitEx contract (NevrPluginInitEx, optional, API v4): a plugin that exports it
 # is called with (ctx, args_json), where args_json is the entry's `args` as a
 # flat JSON object string ("{}" when the entry has none, never null). The
 # plugin extracts the keys it understands, ignores the rest, and uses sensible

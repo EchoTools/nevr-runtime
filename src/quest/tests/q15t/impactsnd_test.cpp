@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <mutex>
 #include <thread>
@@ -23,6 +24,7 @@
 #include "nevr/symbol_hash.h"
 #include "nevr/plugin_interface.h"
 #include "impactsnd.h"
+#include "key_hog.h"
 #include "plugin_log.h"
 
 static int g_fail = 0;
@@ -353,6 +355,27 @@ static void TestNowriteBuild() {
   CallLoader();
   CHECK(CountRight() == 0 && g_loader_calls == 1 && g_n == 15, "nowrite wrapper: ids written / loader not called");
   CHECK(CountLines("impactsnd ids (nowrite build") == 1 && HasLine("when=load/unsorted"), "nowrite wrapper: no read line");
+}
+
+// No pthread key left for the Shutdown wrapper's per-thread depth: the install refuses before it writes anything. Runs before any
+// successful install, because a key made by one stays for the process.
+static void TestNoThreadKey() {
+  // a module refused for a word that is not the pinned one has made no key: the install below, with no key left, must still be refused
+  Fresh();
+  *reinterpret_cast<uint32_t*>(g_base + kCodeVa[0]) = kCodeWord[0] ^ 0x1;
+  CHECK(std::strcmp(Install().reason, "hit_code_word_mismatch") == 0, "the pin mismatch was not refused");
+  Fresh();
+  KeyHog hog;
+  const q15t::InstallResult r = Install();
+  CHECK(r.status != q15t::SwapStatus::kOk && std::strcmp(r.reason, "no_thread_key") == 0, "no key: %s %s", q15t::StatusName(r.status), r.reason);
+  CHECK(R64(kDefaultVa) == 0 && R64(kSlotVa) == g_base + kFnVa && R64(kShutSlotVa) == g_base + kShutFnVa, "no key: D written or a slot swapped");
+  const std::string code = "error=" + std::to_string(EAGAIN);  // what pthread_key_create answers when the process has no key left
+  CHECK(HasLine("impactsnd OFF: nothing written", 3) && HasLine("no pthread key") && HasLine(code.c_str()), "no key: not loud, or no error code");
+  CHECK(!HasLine("vaddr=") && !HasLine("pinned="), "no key: the line carries address fields that mean nothing here");
+  SetTable(All(), kStock, false);
+  Publish();
+  Polls(8);
+  CHECK(q15t::GetImpactSndStats().polls == 0 && !q15t::GetImpactSndStats().on && CountRight() == 0, "no key: the tick ran");
 }
 
 static void TestRefusals() {
@@ -1003,6 +1026,32 @@ static void TestShutdownNested() {
   CHECK(CountRight() == 15, "the lock stayed held after a nested Shutdown (%zu)", CountRight());
 }
 
+// The depth that tells a nested Shutdown from a first one is per thread, and a Shutdown that returned leaves none behind: after one
+// Shutdown has completed on a thread, that thread's next one takes the lock and holds it, and a Shutdown on a second thread is a first
+// one there. It waits for the holder; it does not run beside it.
+static void TestShutdownDepthIsPerThread() {
+  Setup();
+  std::thread holder([] {
+    CallShutdown(0x44);  // completes (kShutFree), call 1
+    g_shut_mode = kShutHold;
+    CallShutdown(0x55);  // call 2: holds the lock until released
+  });
+  for (int i = 0; i < 400 && !g_in_shutdown; ++i) usleep(2000);
+  CHECK(g_in_shutdown, "the holding Shutdown never started");
+  g_shut_mode = kShutFree;  // the second thread's Shutdown frees the table at once if it gets in
+  std::atomic<bool> second_done{false};
+  std::thread second([&] {
+    CallShutdown(0x66);
+    second_done = true;
+  });
+  for (int i = 0; i < 60 && g_shut_calls == 2; ++i) usleep(2000);  // an event with a deadline: the second Shutdown reaching the game
+  CHECK(g_shut_calls == 2 && !second_done, "a Shutdown on a second thread ran beside the first, which held the lock (%d calls)", g_shut_calls.load());
+  g_hold_release = true;
+  holder.join();
+  second.join();
+  CHECK(g_shut_calls == 3 && second_done, "the second Shutdown never ran once the lock was free (%d calls)", g_shut_calls.load());
+}
+
 static void TestShutdownSlotRefused() {
   Fresh();
   mprotect(reinterpret_cast<void*>((g_base + kShutSlotVa) & ~0xfffull), 0x1000, PROT_READ | PROT_WRITE);
@@ -1068,12 +1117,13 @@ int main() {
     std::printf("FAIL: impactsnd_test watchdog: 60 s without finishing (hang)\n");
     std::_Exit(2);
   }).detach();
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.ctx_size = sizeof ctx;
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;
   q15t::SetLogContext(&ctx);
 
+  TestNoThreadKey();
   TestConstants();
   TestInstallWritesD();
   TestNowriteBuild();
@@ -1107,6 +1157,7 @@ int main() {
   TestBetweenValidationAndLock();
   TestLockBusy();
   TestShutdownNested();
+  TestShutdownDepthIsPerThread();
   TestShutdownSlotRefused();
   TestThreadLines();
 

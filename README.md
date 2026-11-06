@@ -27,7 +27,7 @@ nEVR is a community project, built on other people's work and tested by the peop
 - **[Crafter](https://github.com/Crafter-1)**: [Quest-EchoVR-Installer](https://github.com/Crafter-1/Quest-EchoVR-Installer), a 3D Quest installer for Echo VR built in Unity. Reported #621, the game sending a Quest 3 player back to Home at launch, with a full logcat. Tested nevr-runtime in #nevr-runtime-testing.
 - **Ducky**: The reverse engineer behind the Echo Combat Quest port. The Quest combat work here reconstructs the behavior of Ducky's reference combat build.
 - **[babs](https://github.com/nmdurkee)**: Echo Frenzy, a community game mode for Echo VR that paved the way for others making game modes; the pipeline for editing Echo's in-game screens (Doom on Echo is built on it); EchoCraft; and the moderator tablet for kicking players from lobbies. Has been there every step of the way, before and since Echo's shutdown.
-- **[EchoCombat](https://github.com/heisthecat31/EchoCombat)**: he_is_the_cat's new and fixed Echo Combat gear (DOT FIELD, DRONE, UMBRAL VEIL, OVERCHARGE, NEUTRON, TRANSLOCATOR) as nevr-runtime plugins and a content pack.
+- **[EchoCombat](https://github.com/heisthecat31/EchoCombat)**: he_is_the_cat's new and fixed Echo Combat gear (DOT FIELD, DRONE, UMBRAL VEIL, OVERCHARGE, NEUTRON, TRANSLOCATOR) as nevr-runtime plugins and a content pack. The equip_guard script of he_is_the_cat found that the game drops an equipment change made while the previous one is still being handled and measured how long that takes; the runtime's re-fire of the change (#2121) follows that diagnosis.
 
 ### People
 
@@ -278,7 +278,7 @@ Arguments the runtime reads from the game's command line (`--name` works as well
 
 The `platform_compat` and `token_auth` modules are statically linked into
 `nevr-runtime.dll`; there are no separate module DLLs to deploy. They use
-`NvrModuleContext`, not the plugin interface.
+`NevrModuleContext`, not the plugin interface.
 
 | Module | Linked into | Purpose |
 | ------ | ----------- | ------- |
@@ -290,7 +290,7 @@ speaks plaintext to a local proxy, and the proxy terminates TLS outbound.
 
 ### Plugins
 
-Optional, loaded from `plugins\` in the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012) via the `NvrPluginInterface` lifecycle.
+Optional, loaded from `plugins\` in the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012) via the `NevrPluginInterface` lifecycle.
 A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored
 (`LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`). A `plugins\` folder left beside `echovr.exe` by an earlier release is moved into the root on the first run.
 

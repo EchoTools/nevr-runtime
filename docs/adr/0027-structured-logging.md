@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0027-structured-logging.md
+audience: all
+---
+
 # ADR 0027: structured logging: a record names its event, and each field is its own JSON key
 
 Status: proposed. Tracking issue: #841. Nothing in this record is built when it is written. It supersedes the sub-section
@@ -478,7 +485,7 @@ which), with the PC main log's header (`ts`, `run`, `level`, `tag`); a size rota
 ## Open questions for the owner
 
 1. **A plugin's event.** Recommended: `plugin_line` with the message as `msg`, as section 8 says, and later a tail member
-   of `NvrGameContext` (a capability bump to v9, as v5, v6 and v8 were) that takes an event name and typed fields. The
+   of `NevrGameContext` (a capability bump to v9, as v5, v6 and v8 were) that takes an event name and typed fields. The
    alternative, reading a message that looks like an identifier (the Quest autopilot sends `route_start`) as the event,
    changes what a plugin's text means without its author's knowledge.
 2. **One `run` per process.** The host stamps its own 16-hex-digit token (pid, creation time and the performance counter,

@@ -1,7 +1,6 @@
 #include "sensorwd.h"
 
 #include <pthread.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -102,9 +101,7 @@ bool Budget(std::atomic<unsigned>* used, unsigned cap, const char* what) {
 // naming the last thread seen in each role, so one headset run shows which threads call what.
 enum Role { kRoleTick = 0, kRoleEnable = 1, kRoleDisable = 2, kRoleEvent = 3 };
 void NoteThread(Role role) {
-  static thread_local long t_tid = 0;
-  if (t_tid == 0) t_tid = static_cast<long>(syscall(SYS_gettid));
-  const long tid = t_tid;
+  const long tid = static_cast<long>(gettid());  // the thread asks for its id each time: a per-thread cache would be thread_local state
   if (g_tid[role].exchange(tid, std::memory_order_relaxed) == tid) return;
   if (!Budget(&g_thread_lines, kThreadLines, "threads")) return;
   static const char* const kNames[4] = {"tick", "enable", "disable", "event"};

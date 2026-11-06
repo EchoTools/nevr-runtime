@@ -16,6 +16,7 @@
 #include "credits_text.h"
 #include "hook_log.h"
 #include "hook_report.h"
+#include "irradiance_default.h"
 #include "path_rewrite_hook.h"
 #include "sentinel.h"
 #include "sentinel_log.h"
@@ -389,6 +390,13 @@ ActionResult PluginsAction() noexcept {
   return {Settle::kDone, "ran"};
 }
 
+// The combat area's normal install step (#2171): the body of the post-load action that runs after the plugin pass has returned. The step
+// writes its own `combat_install` line and each module its own; the action settles whatever it did.
+ActionResult CombatAction() noexcept {
+  // `ended`: the step was already ended as not_started (the process end got there first), so nothing ran and the line says so.
+  return {Settle::kDone, nevr_quest::integration::InstallCombatNormal() ? "ran" : "ended"};
+}
+
 // The invite service's stop, for the noexcept teardown paths below: an exception escaping a noexcept function ends the
 // process, so a failure is logged here and the teardown goes on.
 void InviteShutdown() noexcept {
@@ -408,6 +416,7 @@ void OnGameProcessEnd() noexcept {
   nevr_quest::integration::FlushLoginPromptCountersAtExit();
   InviteShutdown();  // a request in flight returns at once; the worker is joined before the report
   nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
+  nevr_quest::integration::NoteCombatNotStarted(nevr_quest::plugin::reason::kGameExitedFirst);  // writes nothing unless combat runs here and its step never ran
   ReportAndroidMainReturned();
 }
 
@@ -436,6 +445,10 @@ class ProductionSteps final : public Steps {
                          {"http_key", nevr_quest::SourceName(cfg.httpKey.source)},
                          {"server_key", nevr_quest::SourceName(cfg.serverKey.source)}});
     R().socialWanted = cfg.effective.social;
+    // The combat section is reported once, as read (#2171), then the gate (#2170) makes its answer: the folded combat modules run in the
+    // q15t and combat variants only; `combat.force` is read here.
+    nevr_quest::integration::LogCombatConfig(cfg.combat);
+    nevr_quest::integration::ResolveCombatActive(cfg.combat.force.on);
     return cfg;
   }
 
@@ -454,6 +467,10 @@ class ProductionSteps final : public Steps {
   }
 
   void FinishPlugins(const char* reason) override { nevr_quest::plugin::FinishPlugins(reason); }
+
+  bool CombatActive() override { return nevr_quest::integration::CombatActive(); }
+  bool InstallCombatEarly() override { return nevr_quest::integration::InstallCombatEarly(); }
+  void FinishCombat(const char* reason) override { nevr_quest::integration::NoteCombatNotStarted(reason); }
 
   bool RegisterClockCounters() override { return nevr_quest::integration::RegisterClockCounters(); }
   bool RegisterRedirectCounters() override { return nevr_quest::redirect::RegisterRedirectCounters(); }
@@ -610,6 +627,14 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallIrradianceDefault() override {
+    // A GOT hook on CGEngineResources::Initialize and an inline row of the patched libr15 (ADR 0021). The install logs its own
+    // `irradiance_default` lines, with the status when it refuses (not_verified on a file Attach did not verify).
+    const bool ok = nevr_quest::irradiance_default::Install();
+    detail_ = ok ? "ok" : "refused";
+    return ok;
+  }
+
   // The observer is wanted when the invite switch is on (network.invite_codes, ADR 0017 slice S1: off by default, and it needs
   // login and a service address). Off, the step is skipped and nothing is hooked.
   bool WizardMetricWanted() override { return sentinel::FeatureEnabled(nevr_quest::Feature::kInviteCodes); }
@@ -745,12 +770,13 @@ class ProductionSteps final : public Steps {
   bool InstallPnsProvider() override { return nevr_quest::integration::InstallPnsProviderHook(); }
   bool PnsProviderAllowed() override { return nevr_quest::integration::PnsProviderEnabled(); }
 
-  bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) override {
+  bool InstallDlopenHook(bool login, bool matchmaking, bool plugins, bool combat) override {
     PostLoadActions actions;
     if (login) actions.login = &LoginAction;
     if (matchmaking) actions.matchmaking = &MatchmakingAction;
     if (login) actions.loginTitle = &LoginTitleAction;  // the title is the prompt's second half: wanted with the login
     if (plugins) actions.plugins = &PluginsAction;
+    if (combat) actions.combat = &CombatAction;  // after the plugin pass has returned, on the thread that ran it (post_load.h)
     SetPostLoadActions(actions);
     sentinel::GotStatus status = sentinel::GotStatus::kNotInstalled;
     const bool ok = nevr_quest::integration::InstallDlopenHook(&status) == DlopenInstall::kOk;

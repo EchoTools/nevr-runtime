@@ -22,7 +22,7 @@ nevr_ht_test(quest_config_test GROUP shared HOST LIBS ${NEVR_YAML_LIB}
   SRC src/runtime/lifecycle/service_redirect.cpp src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp
       src/quest/tests/quest_config_test.cpp)
 # NevrConfig::Set (#2060), the first config.yaml writer: the same nevr_config.cpp the PC compiles, tested through its interface.
-nevr_ht_test(nevr_config_set_test GROUP shared HOST LIBS ${NEVR_YAML_LIB} TIMEOUT 120
+nevr_ht_test(nevr_config_set_test GROUP shared HOST PTHREAD LIBS ${NEVR_YAML_LIB} TIMEOUT 120
   SRC src/core/nevr_config.cpp src/quest/tests/nevr_config_set_test.cpp)
 
 # The hardware dump (#335): field schema, procfs/sysfs readers against a fake root, the os section's never-omitted fields, and

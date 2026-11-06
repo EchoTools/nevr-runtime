@@ -50,6 +50,7 @@
 #include "core/logging.h"
 #include "runtime/patch/game_buffer.h"
 #include "runtime/patch/resource_buffer_key.h"
+#include "runtime/patch/resource_label.h"
 
 /* Embedded assets */
 #include "runtime/lifecycle/cli.h"
@@ -490,6 +491,17 @@ static void EnsureHookInstalled() {
     Log(EchoVR::LogLevel::Debug, "[NEVR.RESOURCE] hook installed target=%p", hookTarget);
 }
 
+/* A label outside the rule (resource_label.h) is refused where it enters the registry, so no later line can carry bytes a
+ * plugin chose. The Warning gives the length and the rule, never the label (#2215). */
+static void LogLabelRefused(const char* entry, uint64_t type_hash, uint64_t name_hash, const char* label) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.RESOURCE] override refused entry=%s status=%d reason=%s label_bytes=%zu type=0x%016llx name=0x%016llx "
+        "rule=\"%s\" - nothing is registered",
+        entry, nevr_resource_label::kBadArgumentStatus, nevr_resource_label::kReason, nevr_resource_label::Bytes(label),
+        static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+        nevr_resource_label::kRule);
+}
+
 } // anonymous namespace
 
 /* ── Public API ───────────────────────────────────────────────────── */
@@ -497,13 +509,17 @@ static void EnsureHookInstalled() {
 void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
                               const void* data, uint64_t size,
                               const char* label) {
+    if (!nevr_resource_label::Ok(label)) {
+        LogLabelRefused("override", type_hash, name_hash, label);
+        return;
+    }
     auto ovr = std::make_shared<ResourceOverride>();
     ovr->type_hash = type_hash;
     ovr->name_hash = name_hash;
     ovr->data = data;
     ovr->size = size;
     ovr->owned = false;
-    ovr->label = label ? label : "(null)";
+    ovr->label = label;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) return;
@@ -535,13 +551,17 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
 bool RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
                                const char* label) {
     if (transform == nullptr) return false;
+    if (!nevr_resource_label::Ok(label)) {
+        LogLabelRefused("transform", type_hash, name_hash, label);
+        return false;
+    }
     auto ovr = std::make_shared<ResourceOverride>();
     ovr->type_hash = type_hash;
     ovr->name_hash = name_hash;
     ovr->data = nullptr;
     ovr->size = 0;
     ovr->owned = false;
-    ovr->label = label ? label : "(null)";
+    ovr->label = label;
     ovr->transform = transform;
     ovr->user = user;
     {
@@ -563,6 +583,10 @@ static bool RegisterResourceOverrideFromFileImpl(uint64_t type_hash, uint64_t na
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) return false;
     }
+    if (!nevr_resource_label::Ok(label)) {
+        LogLabelRefused("file", type_hash, name_hash, label);
+        return false;
+    }
     uint64_t size = 0;
     DWORD err = 0;
     void* data = LoadFileFromDisk(file_path, &size, &err);
@@ -577,7 +601,7 @@ static bool RegisterResourceOverrideFromFileImpl(uint64_t type_hash, uint64_t na
     ovr->data = data;
     ovr->size = size;
     ovr->owned = true;
-    ovr->label = label ? label : "(null)";
+    ovr->label = label;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) {
@@ -649,6 +673,15 @@ size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_by
     for (const nevr_asset_cache::IndexEntry& entry : index.entries) {
         referenced.insert(entry.sha256);
         const std::string label = entry.label.empty() ? "cache:" + entry.sha256.substr(0, 12) : entry.label;
+        if (!nevr_resource_label::Ok(label.c_str())) {
+            ++refused;
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.RESOURCE] cache refused entry=cache status=%d reason=%s label_bytes=%zu sha256=%s rule=\"%s\" - "
+                "nothing is registered",
+                nevr_resource_label::kBadArgumentStatus, nevr_resource_label::kReason, label.size(),
+                entry.sha256.c_str(), nevr_resource_label::kRule);
+            continue;
+        }
         const std::string blob = WideToUtf8(nevr_asset_cache::BlobPath(dir, entry.sha256));
         nevr_asset_cache::LoadResult r = nevr_asset_cache::Load(dir, entry.sha256);
         switch (r.status) {
@@ -700,6 +733,34 @@ static void RegisterInitialOverrides(const wchar_t* cache_dir) {
     RegisterCachedResourceOverrides(cache_dir);
 }
 
+/* Registers every file of `overrideDir` whose name parses as 0x<name> or 0x<type>.0x<name> (ParseOverrideFileName). The
+ * label is built from the parsed hashes, never from the file's name: a player's file name may be long or not ASCII, and
+ * the label rule (resource_label.h) must not refuse a file over its name. Returns the number that failed to register. */
+static size_t RegisterOverrideFilesIn(const char* overrideDir) {
+    size_t failed = 0;
+    WIN32_FIND_DATAA fd;
+    char searchPattern[MAX_PATH];
+    snprintf(searchPattern, sizeof(searchPattern), "%s\\*", overrideDir);
+    HANDLE hFind = FindFirstFileA(searchPattern, &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        const char* name = fd.cFileName;
+
+        uint64_t type_h = 0, name_h = 0;
+        if (!ParseOverrideFileName(name, &type_h, &name_h)) continue;
+
+        char filePath[MAX_PATH];
+        snprintf(filePath, sizeof(filePath), "%s\\%s", overrideDir, name);
+        char label[64];
+        snprintf(label, sizeof(label), "file:0x%016llx.0x%016llx", static_cast<unsigned long long>(type_h),
+                 static_cast<unsigned long long>(name_h));
+        if (!RegisterResourceOverrideFromFileImpl(type_h, name_h, filePath, label)) failed++;
+    } while (FindNextFileA(hFind, &fd));
+    FindClose(hFind);
+    return failed;
+}
+
 void InstallResourceOverride() {
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
@@ -722,26 +783,7 @@ void InstallResourceOverride() {
     char overrideDir[MAX_PATH];
     snprintf(overrideDir, sizeof(overrideDir), "%s_overrides", moduleDir);
 
-    WIN32_FIND_DATAA fd;
-    char searchPattern[MAX_PATH];
-    snprintf(searchPattern, sizeof(searchPattern), "%s\\*", overrideDir);
-    HANDLE hFind = FindFirstFileA(searchPattern, &fd);
-    if (hFind != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-            const char* name = fd.cFileName;
-
-            uint64_t type_h = 0, name_h = 0;
-            if (!ParseOverrideFileName(name, &type_h, &name_h)) continue;
-
-            char filePath[MAX_PATH];
-            snprintf(filePath, sizeof(filePath), "%s\\%s", overrideDir, name);
-            if (!RegisterResourceOverrideFromFileImpl(type_h, name_h, filePath, name)) {
-                overridesFailed++;
-            }
-        } while (FindNextFileA(hFind, &fd));
-        FindClose(hFind);
-    }
+    overridesFailed += RegisterOverrideFilesIn(overrideDir);
 
     /* Install hook if overrides exist; otherwise keep g_overrides alive
      * for plugins that register overrides later via the exported API. */
@@ -959,6 +1001,7 @@ void TestHook_InitResourceOverrides(void (*original)(void*)) {
 }
 
 void TestHook_RegisterInitialOverrides(const wchar_t* cache_dir) { RegisterInitialOverrides(cache_dir); }
+size_t TestHook_RegisterOverrideFilesIn(const char* override_dir) { return RegisterOverrideFilesIn(override_dir); }
 void TestHook_SetDeregisterWaitMs(unsigned ms) { g_deregister_wait_ms = ms; }
 unsigned long long TestHook_DeregisterTimeouts() { return g_deregister_timeouts; }
 

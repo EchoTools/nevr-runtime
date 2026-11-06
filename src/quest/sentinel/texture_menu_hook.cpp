@@ -217,7 +217,7 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   pthread_mutex_lock(&g_keptMutex);
   const Kept kept = g_kept[document];
   pthread_mutex_unlock(&g_keptMutex);
-  // The Controller Hand Flip row starts on the stored choice when the start was resolved before the menu was read (it is resolved
+  // The Controller Hand Flip row starts on the configured choice when the start was resolved before the menu was read (it is resolved
   // on the first eye-size query, earlier than the menu document), else on Off. Its index 0 is "On" (hand_flip::MenuIndexFor).
   // KNOWN-WRONG #2043 the toggle is the interim.
   // With the hand pose hooks not installed there is no row (kNoHandFlipRow), and the settings document keeps its stock entry.
@@ -303,21 +303,15 @@ const char* LocalDirectory(char* fixedString, std::size_t size) noexcept {
   return fixedString[0] == '\0' ? nullptr : fixedString;
 }
 
-// KNOWN-WRONG #2043 What the tracking handler calls when it needs the Controller Hand Flip start before the eye-size query has
-// resolved it (hand_flip.h).
-void ProvideHandFlipStart() noexcept {
-  alignas(8) char fixedString[1024];
-  hand_flip::StartFromDirectory(LocalDirectory(fixedString, sizeof(fixedString)));
-}
-
-// The start: the texture level comes from config.yaml (the latched configuration) or the reference rule; the Controller Hand Flip
-// start is read from its own file in the same directory (KNOWN-WRONG #2043, hand_flip.h).
+// The start: the texture level comes from config.yaml (the latched configuration) or the reference rule. The Controller Hand Flip
+// start (KNOWN-WRONG #2043, hand_flip.h) is the configuration's graphics.hand_flip, handed to hand_flip.h before any hook is
+// installed; it is resolved here too, on the first eye-size query, so it is in place before the menu document is read (the row
+// starts on it), and the tracking handler resolves it when it needs it first. It does no file input or output.
 int ResolveStart() noexcept {
   g_startSource.store(kStartConfig, std::memory_order_release);
+  hand_flip::EnsureStarted();
   alignas(8) char fixedString[1024];
-  const char* const directoryPath = LocalDirectory(fixedString, sizeof(fixedString));
-  hand_flip::StartFromDirectory(directoryPath);
-  return ResolveReference(directoryPath);
+  return ResolveReference(LocalDirectory(fixedString, sizeof(fixedString)));
 }
 
 // ---- the five handlers --------------------------------------------------------------------------------------------------
@@ -592,6 +586,7 @@ int SaveChoice() noexcept {
   const Level level = tq::LevelForMenuIndex(index);
   nevr::NevrConfig config;
   config.BindFile(g_configFile);
+  // The hand pose poller edits the same file: NevrConfig::Set holds one lock per file across its read, splice and rename.
   const nevr::ConfigSetResult set = config.Set("graphics.texture_quality", std::string(tq::LevelName(level)));
   if (!set.ok) {
     g_saveFailures.fetch_add(1, std::memory_order_relaxed);
@@ -952,8 +947,6 @@ void ArmForTest(const Game& game, tq::Level configLevel, bool fromConfig, Proper
   g_property.store(property, std::memory_order_release);
   g_defaultIndex.store(tq::MenuIndexForLevel(configLevel), std::memory_order_release);
   tq::SetStartResolver(&ResolveStart);
-  // KNOWN-WRONG #2043 the Controller Hand Flip start is resolved from the same directory as the texture reference file.
-  hand_flip::SetStartProvider(&ProvideHandFlipStart);
   FileThunk::Arm(kFileHook);
   TextThunk::Arm(kTextHook);
   ValidateThunk::Arm(kValidateHook);

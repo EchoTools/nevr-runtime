@@ -43,6 +43,7 @@
 #include "runtime/lifecycle/crash_recovery.h"  // EnsureStackReserve
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/log/builtin_filter.h"
+#include "runtime/patch/equipment_refire.h"
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
@@ -148,16 +149,16 @@ void DispatchPerFrameWork(uint64_t nowUs) {
         }
     }
 
-    NvrGameContext gctx = {};
+    NevrGameContext gctx = {};
     gctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     gctx.flags = g_isServer ? NEVR_HOST_IS_SERVER : NEVR_HOST_IS_CLIENT;
     if (g_isHeadless) gctx.flags |= NEVR_HOST_IS_HEADLESS;
-    gctx.ctx_size = sizeof(NvrGameContext);
+    gctx.ctx_size = sizeof(NevrGameContext);
     gctx.get_plugin_count = GetLoadedPluginCount;
     gctx.get_plugin_info = GetLoadedPluginInfo;
     TickPlugins(&gctx);
 
-    NvrModuleContext mctx = {};
+    NevrModuleContext mctx = {};
     mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     mctx.flags = gctx.flags;
     TickModules(&mctx);
@@ -170,6 +171,8 @@ void DispatchPerFrameWork(uint64_t nowUs) {
         // #1278: the invite answers become texts first, so the writer below can write them in the same frame.
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_invite_apply::OnFrame();
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_ui_text::OnFrame();
+        // #2121: the equipment change handlers send events into the game's scripts, so they run on the loop's thread too.
+        if (loop != 0 && loop == GetCurrentThreadId()) nevr_equipment_refire::OnFrame();
     }
 
 #ifdef NEVR_SCENARIO_CONTROL

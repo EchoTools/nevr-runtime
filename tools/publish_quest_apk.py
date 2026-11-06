@@ -142,7 +142,7 @@ def sha256_file(path: pathlib.Path) -> tuple[str, int]:
 def local_files(directory: pathlib.Path, tag: str,
                 variant: str | None = None) -> tuple[str, pathlib.Path, pathlib.Path, str, int, bytes]:
     name = apk_name(tag, variant)
-    recipe = f"release-quest-apk {tag}" if variant is None else f"release-quest-variant-apk {tag} <plugins>"
+    recipe = f"release-quest-apk {tag}" if variant is None else f"release-quest-variant-apk {tag}"
     apk, sidecar = directory / name, directory / f"{name}.sha256"
     if not apk.is_file():
         raise Failure(f"{apk} does not exist; run `just {recipe}` first")

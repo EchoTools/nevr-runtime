@@ -154,6 +154,16 @@ bool TestLogContains(const std::string& needle) {
                      });
 }
 
+// Every captured line that holds `needle`, whole, for a test that asserts what a single line looks like (#2215).
+std::vector<std::string> TestLogLinesContaining(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  std::vector<std::string> lines;
+  for (const std::string& message : g_testLogMessages) {
+    if (message.find(needle) != std::string::npos) lines.push_back(message);
+  }
+  return lines;
+}
+
 // Every line with the level it was logged at, for tests that pin the level (#598).
 std::vector<std::pair<EchoVR::LogLevel, std::string>> g_testLogLeveled;
 
@@ -334,12 +344,12 @@ static uint32_t s_stateChangeOld = 0;
 static uint32_t s_stateChangeNew = 0;
 static int s_stateChangeCount = 0;
 
-static void N68_PluginOnFrame(const NvrGameContext*) { s_pluginFrameCount++; }
-static void N68_PluginOnStateChange(const NvrGameContext*, uint32_t oldState, uint32_t newState) {
+static void N68_PluginOnFrame(const NevrGameContext*) { s_pluginFrameCount++; }
+static void N68_PluginOnStateChange(const NevrGameContext*, uint32_t oldState, uint32_t newState) {
   s_stateChangeOld = oldState; s_stateChangeNew = newState; s_stateChangeCount++;
 }
-static void N68_ModuleOnFrame(const NvrModuleContext*) { s_moduleFrameCount++; }
-static void N68_ModuleOnStateChange(const NvrModuleContext*, uint32_t oldState, uint32_t newState) {
+static void N68_ModuleOnFrame(const NevrModuleContext*) { s_moduleFrameCount++; }
+static void N68_ModuleOnStateChange(const NevrModuleContext*, uint32_t oldState, uint32_t newState) {
   s_stateChangeOld = oldState; s_stateChangeNew = newState; s_stateChangeCount++;
 }
 
@@ -1199,7 +1209,7 @@ TEST_F(PluginDependencyGateTest, ALinkRepointedBetweenTheCheckAndTheLoadDoesNotC
 // #1177: a late load the filter accepted is made by the hook with the caller's own text. The filter held the file it
 // checked; a link in that text, pointed somewhere else after the check, leads the real load to a file that was
 // never checked. The load has to be of the file that was checked. late_link.dll names the signed late_real.dll;
-// after the check the link is pointed at the unsigned late_evil.dll, which is no plugin (no NvrPluginGetInfo).
+// after the check the link is pointed at the unsigned late_evil.dll, which is no plugin (no NevrPluginGetInfo).
 std::wstring g_lateLink;
 std::wstring g_lateLinkTarget;
 
@@ -1266,7 +1276,7 @@ TEST_F(PluginLateLoadTest, ALinkRepointedAfterTheLateCheckDoesNotChangeTheFileTh
     const HMODULE m = LoadLibraryW(g_lateLink.c_str());
     TestHook_SetAfterLateLoadAccepted(nullptr);
     ASSERT_NE(m, nullptr) << GetLastError();
-    EXPECT_NE(GetProcAddress(m, "NvrPluginGetInfo"), nullptr)
+    EXPECT_NE(GetProcAddress(m, "NevrPluginGetInfo"), nullptr)
         << "the file behind the link at the load was not the file that was checked";
     EXPECT_TRUE(TestLogContains("loads the file it checked")) << "a load that leads somewhere else than its name is not said";
   });
@@ -1282,7 +1292,7 @@ TEST_F(PluginLateLoadTest, AFileAlreadyCheckedIsLoadedAsCheckedWhenItsLinkIsRepo
     const HMODULE second = LoadLibraryW(g_lateLink.c_str());  // the remembered file is accepted again
     TestHook_SetAfterLateLoadAccepted(nullptr);
     ASSERT_NE(second, nullptr) << GetLastError();
-    EXPECT_NE(GetProcAddress(second, "NvrPluginGetInfo"), nullptr)
+    EXPECT_NE(GetProcAddress(second, "NevrPluginGetInfo"), nullptr)
         << "a remembered file's second load went to the file behind the link";
   });
 }
@@ -1294,7 +1304,7 @@ TEST_F(PluginLateLoadTest, TheAnsiLoadsAreLoadedAsCheckedToo) {
     const HMODULE m = LoadLibraryExA(link_.c_str(), nullptr, 0);
     TestHook_SetAfterLateLoadAccepted(nullptr);
     ASSERT_NE(m, nullptr) << GetLastError();
-    EXPECT_NE(GetProcAddress(m, "NvrPluginGetInfo"), nullptr) << "LoadLibraryExA loaded the file behind the link";
+    EXPECT_NE(GetProcAddress(m, "NevrPluginGetInfo"), nullptr) << "LoadLibraryExA loaded the file behind the link";
     ASSERT_TRUE(FreeLibrary(m));
     DeleteFileW(g_lateLink.c_str());  // the link is back at the signed file for the next variant
     g_lateLinkTarget.assign(pluginsDir_.begin(), pluginsDir_.end());
@@ -1305,7 +1315,7 @@ TEST_F(PluginLateLoadTest, TheAnsiLoadsAreLoadedAsCheckedToo) {
     const HMODULE a = LoadLibraryA(link_.c_str());
     TestHook_SetAfterLateLoadAccepted(nullptr);
     ASSERT_NE(a, nullptr) << GetLastError();
-    EXPECT_NE(GetProcAddress(a, "NvrPluginGetInfo"), nullptr) << "LoadLibraryA loaded the file behind the link";
+    EXPECT_NE(GetProcAddress(a, "NevrPluginGetInfo"), nullptr) << "LoadLibraryA loaded the file behind the link";
   });
 }
 
@@ -1315,7 +1325,7 @@ TEST_F(PluginLateLoadTest, ASignedLateLoadWithNoLinkLoadsAsBefore) {
     const std::string real = pluginsDir_ + "late_real.dll";
     const HMODULE m = LoadLibraryA(real.c_str());
     ASSERT_NE(m, nullptr) << GetLastError();
-    EXPECT_NE(GetProcAddress(m, "NvrPluginGetInfo"), nullptr);
+    EXPECT_NE(GetProcAddress(m, "NevrPluginGetInfo"), nullptr);
     EXPECT_FALSE(TestLogContains("loads the file it checked")) << "a load whose name is its file was said to be rewritten";
   });
 }
@@ -1328,7 +1338,7 @@ TEST_F(PluginLateLoadTest, AnUnsignedAllowedRunLoadsWhatTheCallerNamed) {
     const HMODULE m = LoadLibraryW(g_lateLink.c_str());
     TestHook_SetAfterLateLoadAccepted(nullptr);
     ASSERT_NE(m, nullptr) << GetLastError();
-    EXPECT_EQ(GetProcAddress(m, "NvrPluginGetInfo"), nullptr) << "a run that allows unsigned plugins rewrote a load";
+    EXPECT_EQ(GetProcAddress(m, "NevrPluginGetInfo"), nullptr) << "a run that allows unsigned plugins rewrote a load";
   });
 }
 
@@ -2083,20 +2093,92 @@ TEST_F(PluginLoaderDiagnosticTest, RealLoadedPluginOnFrameHasObservableSideEffec
   const HMODULE plugin = GetModuleHandleA("test_plugin_onframe.dll");
   ASSERT_NE(plugin, nullptr);
   const auto getFrameCount = reinterpret_cast<uint32_t (*)(void)>(
-      GetProcAddress(plugin, "NvrTestPluginGetFrameCount"));
+      GetProcAddress(plugin, "NevrTestPluginGetFrameCount"));
   ASSERT_NE(getFrameCount, nullptr);
   EXPECT_EQ(getFrameCount(), 0u);
 
-  NvrGameContext ctx = {};
+  NevrGameContext ctx = {};
   ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   ctx.flags = NEVR_HOST_IS_SERVER;
-  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.get_plugin_count = GetLoadedPluginCount;
   ctx.get_plugin_info = GetLoadedPluginInfo;
   TickPlugins(&ctx);
   TickPlugins(&ctx);
 
   EXPECT_EQ(getFrameCount(), 2u);
+}
+
+// The entry-point prefix is Nevr, and a plugin built before that exports Nvr. The loader resolves each entry
+// point under its Nevr name first and falls back to the Nvr name, so both kinds load and run every entry point;
+// a plugin that loaded through the deprecated names says so once, at Info.
+static uint32_t ExportsFixtureCount(const char* dll, const char* exportName, uint32_t which) {
+  const HMODULE plugin = GetModuleHandleA(dll);
+  if (plugin == nullptr) return 0xFFFFFFFEu;
+  const auto get = reinterpret_cast<uint32_t (*)(uint32_t)>(GetProcAddress(plugin, exportName));
+  return get != nullptr ? get(which) : 0xFFFFFFFEu;
+}
+
+static void DriveLoadedPluginOnce() {
+  NevrGameContext ctx = {};
+  ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
+  ctx.flags = NEVR_HOST_IS_SERVER;
+  ctx.ctx_size = sizeof(NevrGameContext);
+  ctx.get_plugin_count = GetLoadedPluginCount;
+  ctx.get_plugin_info = GetLoadedPluginInfo;
+  TickPlugins(&ctx);
+  NotifyPluginsStateChange(&ctx, 1u, 2u);
+}
+
+TEST_F(PluginLoaderDiagnosticTest, PluginExportingOnlyNevrNamesLoadsAndRunsEveryEntryPoint) {
+  g_testPluginLoadPlan.push_back(
+      {"nevr-exports", "test_plugin_nevr_exports.dll", false, "", "{\"probe\":\"1\"}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("Loaded: test-plugin-nevr-exports"));
+  EXPECT_TRUE(TestLogContains("caps=0x01"));  // NevrPluginGetCapabilities was resolved
+  EXPECT_FALSE(TestLogContains("deprecated Nvr exports"));
+  const char* const kCount = "NevrTestPluginExportsGetCount";
+  const char* const kDll = "test_plugin_nevr_exports.dll";
+  EXPECT_EQ(ExportsFixtureCount(kDll, kCount, 0), 1u);  // NevrPluginInitEx ran
+  EXPECT_EQ(ExportsFixtureCount(kDll, kCount, 3), 1u);  // with the configured args
+  DriveLoadedPluginOnce();
+  EXPECT_EQ(ExportsFixtureCount(kDll, kCount, 1), 1u);  // NevrPluginOnFrame
+  EXPECT_EQ(ExportsFixtureCount(kDll, kCount, 2), 1u);  // NevrPluginOnGameStateChange
+  UnloadPlugins();
+  EXPECT_EQ(GetModuleHandleA(kDll), nullptr);
+}
+
+TEST_F(PluginLoaderDiagnosticTest, PluginExportingOnlyDeprecatedNvrNamesStillLoadsAndLogsItOnce) {
+  g_testPluginLoadPlan.push_back(
+      {"deprecated-exports", "test_plugin_deprecated_exports.dll", false, "", "{\"probe\":\"1\"}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("Loaded: test-plugin-deprecated-exports"));
+  EXPECT_TRUE(TestLogContains("caps=0x01"));  // NvrPluginGetCapabilities was resolved
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info, "plugin=deprecated-exports file=test_plugin_deprecated_exports.dll loaded with deprecated Nvr exports"));
+  EXPECT_FALSE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "deprecated Nvr exports"));
+  {
+    std::lock_guard<std::mutex> lock(g_testLogMutex);
+    EXPECT_EQ(std::count_if(g_testLogMessages.begin(), g_testLogMessages.end(),
+                            [](const std::string& m) { return m.find("deprecated Nvr exports") != std::string::npos; }),
+              1)
+        << "one line per plugin, not one per export";
+  }
+  const char* const kCount = "NvrTestPluginExportsGetCount";
+  const char* const kDll = "test_plugin_deprecated_exports.dll";
+  EXPECT_EQ(ExportsFixtureCount(kDll, kCount, 0), 1u);
+  EXPECT_EQ(ExportsFixtureCount(kDll, kCount, 3), 1u);
+  DriveLoadedPluginOnce();
+  EXPECT_EQ(ExportsFixtureCount(kDll, kCount, 1), 1u);
+  EXPECT_EQ(ExportsFixtureCount(kDll, kCount, 2), 1u);
+  UnloadPlugins();
+  EXPECT_EQ(GetModuleHandleA(kDll), nullptr);
 }
 
 TEST_F(PluginLoaderDiagnosticTest, ExplicitUnloadInvokesShutdownAndReleasesPluginReference) {
@@ -2125,16 +2207,16 @@ static long OnFrameFixtureInitCount() {
   const HMODULE plugin = GetModuleHandleA("test_plugin_onframe.dll");
   if (plugin == nullptr) return -1;
   const auto getInitCount = reinterpret_cast<uint32_t (*)(void)>(
-      GetProcAddress(plugin, "NvrTestPluginGetInitCount"));
+      GetProcAddress(plugin, "NevrTestPluginGetInitCount"));
   if (getInitCount == nullptr) return -1;
   return static_cast<long>(getInitCount());
 }
 
 static void TickLoadedPluginsOnce() {
-  NvrGameContext ctx = {};
+  NevrGameContext ctx = {};
   ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   ctx.flags = NEVR_HOST_IS_SERVER;
-  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.get_plugin_count = GetLoadedPluginCount;
   ctx.get_plugin_info = GetLoadedPluginInfo;
   TickPlugins(&ctx);
@@ -2144,7 +2226,7 @@ static uint32_t OnFrameFixtureFrameCount() {
   const HMODULE plugin = GetModuleHandleA("test_plugin_onframe.dll");
   if (plugin == nullptr) return 0xFFFFFFFFu;
   const auto getFrameCount = reinterpret_cast<uint32_t (*)(void)>(
-      GetProcAddress(plugin, "NvrTestPluginGetFrameCount"));
+      GetProcAddress(plugin, "NevrTestPluginGetFrameCount"));
   return getFrameCount != nullptr ? getFrameCount() : 0xFFFFFFFFu;
 }
 
@@ -2340,10 +2422,10 @@ TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysVa
   ASSERT_EQ(GetLoadedPluginCount(), 2);
   const HMODULE keeper = GetModuleHandleA("test_plugin_info_keeper.dll");
   ASSERT_NE(keeper, nullptr);
-  const auto getKept = reinterpret_cast<const NvrLoadedPluginInfo* (*)(void)>(
-      GetProcAddress(keeper, "NvrTestPluginGetKeptInfo"));
+  const auto getKept = reinterpret_cast<const NevrLoadedPluginInfo* (*)(void)>(
+      GetProcAddress(keeper, "NevrTestPluginGetKeptInfo"));
   ASSERT_NE(getKept, nullptr);
-  const NvrLoadedPluginInfo* kept = getKept();
+  const NevrLoadedPluginInfo* kept = getKept();
   ASSERT_NE(kept, nullptr);
   EXPECT_EQ(kept, GetLoadedPluginInfo(0)) << "the pointer a plugin kept was invalidated by a later load";
   EXPECT_STREQ(kept->name, "test-plugin-onframe");
@@ -2377,11 +2459,11 @@ TEST_F(PluginLoaderDiagnosticTest, UnloadReleasesAssetsRegisteredInsideThePlugin
 // #596: the address GetLoadedPluginInfo hands out belongs to the storage, not to a prediction of how
 // many plugins a later pass adds. Registering plugins the loader never planned for (the test hook
 // appends exactly as a load does) must not move the first one's entry.
-static void NoOpPluginFrame(const NvrGameContext*) {}
+static void NoOpPluginFrame(const NevrGameContext*) {}
 
 TEST_F(PluginLoaderDiagnosticTest, InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan) {
   TestHook_RegisterPluginOnFrame(NoOpPluginFrame);
-  const NvrLoadedPluginInfo* first = GetLoadedPluginInfo(0);
+  const NevrLoadedPluginInfo* first = GetLoadedPluginInfo(0);
   ASSERT_NE(first, nullptr);
 
   for (int i = 0; i < 256; ++i) TestHook_RegisterPluginOnFrame(NoOpPluginFrame);
@@ -2486,17 +2568,17 @@ TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptInTheEarlyPassStaysValidAfterT
 
   const HMODULE keeper = GetModuleHandleA("test_plugin_info_keeper.dll");
   ASSERT_NE(keeper, nullptr);
-  const auto getKept = reinterpret_cast<const NvrLoadedPluginInfo* (*)(void)>(
-      GetProcAddress(keeper, "NvrTestPluginGetKeptInfo"));
+  const auto getKept = reinterpret_cast<const NevrLoadedPluginInfo* (*)(void)>(
+      GetProcAddress(keeper, "NevrTestPluginGetKeptInfo"));
   ASSERT_NE(getKept, nullptr);
-  const NvrLoadedPluginInfo* kept = getKept();
+  const NevrLoadedPluginInfo* kept = getKept();
   ASSERT_NE(kept, nullptr);
   EXPECT_EQ(kept, GetLoadedPluginInfo(0)) << "the normal pass moved what an early plugin kept";
   EXPECT_STREQ(kept->name, "test-plugin-onframe");
 }
 
 // get_plugin_info reports each plugin's own API version and capabilities. Casting
-// NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo would make
+// NevrPluginInfo (padded to 32 bytes) as NevrLoadedPluginInfo would make
 // api_version read the padding and capabilities read the API version: a v5
 // plugin declaring no capabilities would show as caps 5.
 TEST_F(PluginLoaderDiagnosticTest, LoadedPluginInfoReportsApiVersionAndCapabilities) {
@@ -2506,8 +2588,8 @@ TEST_F(PluginLoaderDiagnosticTest, LoadedPluginInfoReportsApiVersionAndCapabilit
   LoadPlugins();
 
   ASSERT_EQ(GetLoadedPluginCount(), 2);
-  const NvrLoadedPluginInfo* first = GetLoadedPluginInfo(0);
-  const NvrLoadedPluginInfo* second = GetLoadedPluginInfo(1);
+  const NevrLoadedPluginInfo* first = GetLoadedPluginInfo(0);
+  const NevrLoadedPluginInfo* second = GetLoadedPluginInfo(1);
   ASSERT_NE(first, nullptr);
   ASSERT_NE(second, nullptr);
   // Both declare no capabilities: same priority band, config order kept.
@@ -2535,10 +2617,10 @@ static uint32_t LoggingFixtureBoundAtInit(const char* dll) {
 
 TEST(PluginLogApi, ContextCarriesALogFunctionAndTheVersionSaysSo) {
   EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 8u);
-  NvrGameContext ctx = {};
-  ctx.ctx_size = sizeof(NvrGameContext);
-  EXPECT_GE(ctx.ctx_size, offsetof(NvrGameContext, log) + sizeof(NevrLogFn));
-  EXPECT_GT(offsetof(NvrGameContext, plugin_id), offsetof(NvrGameContext, get_plugin_info))
+  NevrGameContext ctx = {};
+  ctx.ctx_size = sizeof(NevrGameContext);
+  EXPECT_GE(ctx.ctx_size, offsetof(NevrGameContext, log) + sizeof(NevrLogFn));
+  EXPECT_GT(offsetof(NevrGameContext, plugin_id), offsetof(NevrGameContext, get_plugin_info))
       << "the v6 fields extend the tail; a v5 plugin still reads the v5 fields at the same offsets";
 }
 
@@ -2562,8 +2644,8 @@ TEST_F(PluginLoaderDiagnosticTest, EachPluginsFrameAndStateLinesCarryItsOwnName)
   ClearTestLogs();
 
   TickLoadedPluginsOnce();
-  NvrGameContext ctx = {};
-  ctx.ctx_size = sizeof(NvrGameContext);
+  NevrGameContext ctx = {};
+  ctx.ctx_size = sizeof(NevrGameContext);
   NotifyPluginsStateChange(&ctx, 3, 5);
 
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Debug, "[NEVR.PLUGIN] plugin=logger-a frame n=1"));
@@ -2653,8 +2735,8 @@ class PluginLevelTest : public PluginLoaderDiagnosticTest {
     PluginLoaderDiagnosticTest::TearDown();
   }
   static void StateChange(uint32_t from, uint32_t to) {
-    NvrGameContext ctx = {};
-    ctx.ctx_size = sizeof(NvrGameContext);
+    NevrGameContext ctx = {};
+    ctx.ctx_size = sizeof(NevrGameContext);
     NotifyPluginsStateChange(&ctx, from, to);
   }
 };
@@ -2876,10 +2958,10 @@ TEST_F(PluginLoaderDiagnosticTest, LoginCarriesLoadedFailedAndDisabledPlugins) {
 
 TEST_F(N68_PluginTickTest, OnFrame_Fires_When_Registered) {
   TestHook_RegisterPluginOnFrame(N68_PluginOnFrame);
-  NvrGameContext ctx = {};
+  NevrGameContext ctx = {};
   ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   ctx.flags = NEVR_HOST_IS_SERVER;
-  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.get_plugin_count = GetLoadedPluginCount;
   ctx.get_plugin_info = GetLoadedPluginInfo;
   TickPlugins(&ctx);
@@ -2890,7 +2972,7 @@ TEST_F(N68_PluginTickTest, OnFrame_Fires_When_Registered) {
 
 TEST_F(N68_PluginTickTest, OnFrame_Skips_When_Null) {
   TestHook_RegisterPluginOnStateChange(N68_PluginOnStateChange);
-  NvrGameContext ctx = {};
+  NevrGameContext ctx = {};
   ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   ctx.flags = NEVR_HOST_IS_SERVER;
   s_pluginFrameCount = 0;
@@ -2900,10 +2982,10 @@ TEST_F(N68_PluginTickTest, OnFrame_Skips_When_Null) {
 
 TEST_F(N68_PluginTickTest, OnStateChange_Fires_When_Registered) {
   TestHook_RegisterPluginOnStateChange(N68_PluginOnStateChange);
-  NvrGameContext ctx = {};
+  NevrGameContext ctx = {};
   ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   ctx.flags = NEVR_HOST_IS_SERVER;
-  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.get_plugin_count = GetLoadedPluginCount;
   ctx.get_plugin_info = GetLoadedPluginInfo;
   NotifyPluginsStateChange(&ctx, 3, 5);
@@ -2915,7 +2997,7 @@ TEST_F(N68_PluginTickTest, OnStateChange_Fires_When_Registered) {
 TEST_F(N68_PluginTickTest, OnStateChange_Fires_For_All_Registered) {
   TestHook_RegisterPluginOnStateChange(N68_PluginOnStateChange);
   TestHook_RegisterPluginOnStateChange(N68_PluginOnStateChange);
-  NvrGameContext ctx = {};
+  NevrGameContext ctx = {};
   ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   ctx.flags = NEVR_HOST_IS_SERVER;
   s_stateChangeCount = 0;
@@ -2931,7 +3013,7 @@ class N68_ModuleTickTest : public ::testing::Test {
 
 TEST_F(N68_ModuleTickTest, OnFrame_Fires_When_Registered) {
   TestHook_RegisterModuleOnFrame(N68_ModuleOnFrame);
-  NvrModuleContext mctx = {};
+  NevrModuleContext mctx = {};
   mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   mctx.flags = NEVR_MODULE_HOST_IS_SERVER;
   TickModules(&mctx);
@@ -2942,7 +3024,7 @@ TEST_F(N68_ModuleTickTest, OnFrame_Fires_When_Registered) {
 
 TEST_F(N68_ModuleTickTest, OnStateChange_Fires_When_Registered) {
   TestHook_RegisterModuleOnStateChange(N68_ModuleOnStateChange);
-  NvrModuleContext mctx = {};
+  NevrModuleContext mctx = {};
   mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   mctx.flags = NEVR_MODULE_HOST_IS_SERVER;
   NotifyModulesStateChange(&mctx, 3, 5);
@@ -2954,29 +3036,29 @@ TEST_F(N68_ModuleTickTest, OnStateChange_Fires_When_Registered) {
 // ============================================================================
 // N133 S5 — module API version gate. The host refuses a module whose reported
 // version exceeds its own (boot.cpp, N120). The refusal RULE is the header-only
-// predicate NvrModuleApiVersionSupported, which boot.cpp and these tests share.
+// predicate NevrModuleApiVersionSupported, which boot.cpp and these tests share.
 // Verifying the predicate verifies the mismatch decision without spawning a
 // process.
 // ============================================================================
 
 TEST(N133_ModuleApiVersion, HostVersionIsTwo) {
   // The bump this change makes: implicit v1 (pre-versioning) -> explicit v2 (adds
-  // config_get to NvrModuleContext).
+  // config_get to NevrModuleContext).
   EXPECT_EQ(static_cast<uint32_t>(NEVR_MODULE_API_VERSION), 2u);
 }
 
 TEST(N133_ModuleApiVersion, AcceptsEqualAndOlder) {
   // v1 (absent export) and v2 (our modules) both load — appended context fields an
   // older module does not know about are simply unused.
-  EXPECT_TRUE(NvrModuleApiVersionSupported(1u));
-  EXPECT_TRUE(NvrModuleApiVersionSupported(2u));
+  EXPECT_TRUE(NevrModuleApiVersionSupported(1u));
+  EXPECT_TRUE(NevrModuleApiVersionSupported(2u));
 }
 
 TEST(N133_ModuleApiVersion, RefusesNewer) {
   // A module built against a newer ABI expects context fields this host does not
   // set -> refused (the loader turns this false into a FatalError).
-  EXPECT_FALSE(NvrModuleApiVersionSupported(3u));
-  EXPECT_FALSE(NvrModuleApiVersionSupported(999u));
+  EXPECT_FALSE(NevrModuleApiVersionSupported(3u));
+  EXPECT_FALSE(NevrModuleApiVersionSupported(999u));
 }
 
 // ============================================================================
@@ -6584,12 +6666,12 @@ TEST(BuildIdentity, MenuVersionLabelIsNevrAndTheProjectVersion) {
 // ============================================================================
 
 TEST(S8_PluginQueryApi, CtxSizeMatchesActualStruct) {
-    // If someone adds a field to NvrGameContext without bumping ctx_size
+    // If someone adds a field to NevrGameContext without bumping ctx_size
     // (which is sizeof at each construction site), a v5+ plugin checking
     // ctx->ctx_size would see a stale value. This locks the two together.
-    NvrGameContext ctx = {};
-    ctx.ctx_size = sizeof(NvrGameContext);
-    EXPECT_GE(ctx.ctx_size, sizeof(NvrGameContext));
+    NevrGameContext ctx = {};
+    ctx.ctx_size = sizeof(NevrGameContext);
+    EXPECT_GE(ctx.ctx_size, sizeof(NevrGameContext));
     // The struct must have grown from its v4 size (4 fields, minimal padding).
     EXPECT_GT(ctx.ctx_size, 20u);  // base_addr(8) + net_game(8) + game_state(4) + flags(4) = 24, plus v5 fields
 }
@@ -6605,10 +6687,10 @@ TEST(S8_PluginQueryApi, InfoNullForAnyIndexOnEmptyRegistry) {
 }
 
 TEST(S8_PluginQueryApi, FunctionPointersSetInContext) {
-    NvrGameContext ctx = {};
+    NevrGameContext ctx = {};
     ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     ctx.flags = NEVR_HOST_IS_SERVER;
-    ctx.ctx_size = sizeof(NvrGameContext);
+    ctx.ctx_size = sizeof(NevrGameContext);
     ctx.get_plugin_count = GetLoadedPluginCount;
     ctx.get_plugin_info = GetLoadedPluginInfo;
 

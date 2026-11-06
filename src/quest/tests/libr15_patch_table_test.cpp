@@ -26,10 +26,10 @@ const Row* Find(const char* id) {
   return nullptr;
 }
 
-TEST(TheTableHasTheSixRowsOfTheAdrInOrder) {
+TEST(TheTableHasItsSevenRowsInOrder) {
   const char* ids[] = {"lobby_full.join", "lobby_full.failure", "lobby_full.success", "ui_texture.attach",
-                       "splash_skip.widget_update", "credits.pairs"};
-  CHECK_EQ(kRowCount, static_cast<std::size_t>(6));
+                       "splash_skip.widget_update", "irradiance_default.upload", "credits.pairs"};
+  CHECK_EQ(kRowCount, static_cast<std::size_t>(7));
   for (std::size_t i = 0; i < kRowCount && i < sizeof(ids) / sizeof(ids[0]); ++i) {  // a wrong count fails above, it does not read past ids
     CHECK(std::strcmp(kRows[i].id, ids[i]) == 0);
     CHECK_EQ(kRows[i].slot, i);
@@ -55,6 +55,7 @@ TEST(TheVaddrIsTheDisassemblyAddressMinusTheBiasInCode) {
       {"lobby_full.join", 0x1340ba8, 0x1240ba8},          {"lobby_full.failure", 0x1340cc8, 0x1240cc8},
       {"lobby_full.success", 0x134024c, 0x124024c},       {"ui_texture.attach", 0x19e75c4, 0x18e75c4},
       {"splash_skip.widget_update", 0x209a7a0, 0x1f9a7a0},
+      {"irradiance_default.upload", 0x19daf90, 0x18daf90},
   };
   for (const Expect& e : expects) {
     const Row* row = Find(e.id);
@@ -78,13 +79,30 @@ TEST(TheVaddrIsTheDisassemblyAddressMinusTheBiasInCode) {
   CHECK_EQ(kDisasmBias, static_cast<std::uint64_t>(0x100000));
 }
 
+// The upload helper (#2091): the three words the store file holds at vaddr 0x18daf90 (read with objdump on the store libr15,
+// sha-256 8dd9a961...: `sub sp, sp, #0x180`; `stp x28, x27, [sp, #0x120]`; `stp x26, x25, [sp, #0x130]`). None is PC-relative, so the
+// trampoline runs them unchanged.
+TEST(TheUploadHelperRowHoldsTheStoreFilesWords) {
+  const Row* row = Find("irradiance_default.upload");
+  CHECK(row != nullptr);
+  if (row == nullptr) return;
+  CHECK(row->kind == RowKind::kInlineHook);
+  CHECK(std::strcmp(row->handler, "OnUpload") == 0);
+  CHECK_EQ(row->siteCount, static_cast<std::uint8_t>(1));
+  CHECK_EQ(row->sites[0].words[0], 0xd10603ffu);
+  CHECK_EQ(row->sites[0].words[1], 0xa9126ffcu);
+  CHECK_EQ(row->sites[0].words[2], 0xa91367fau);
+  CHECK(row == &kRows[kRowCount - 2]);  // before the credits row, which stays last
+}
+
 TEST(TheSlotAreaIsSectionFourOfTheAdr) {
   CHECK_EQ(kStockImageEnd, static_cast<std::uint64_t>(0x37d2538));
   CHECK_EQ(kSlotAreaGap, static_cast<std::uint64_t>(0x100));
   CHECK_EQ(kSlotAreaVaddr, static_cast<std::uint64_t>(0x37d2640));
-  CHECK_EQ(kSlotAreaVaddr + kSlotBytes * kRowCount, static_cast<std::uint64_t>(0x37d2670));
+  CHECK_EQ(kSlotAreaVaddr + kSlotBytes * kRowCount, static_cast<std::uint64_t>(0x37d2678));
   CHECK_EQ(kRows[0].SlotVaddr(), static_cast<std::uint64_t>(0x37d2640));
-  CHECK_EQ(kRows[5].SlotVaddr(), static_cast<std::uint64_t>(0x37d2668));
+  CHECK_EQ(kRows[5].SlotVaddr(), static_cast<std::uint64_t>(0x37d2668));  // irradiance_default.upload
+  CHECK_EQ(kRows[6].SlotVaddr(), static_cast<std::uint64_t>(0x37d2670));  // credits.pairs, the last row
   CHECK_EQ(SlotAreaFor(0x37d2538, 0), static_cast<std::uint64_t>(0x37d2540));  // no gap: the next 64-byte boundary
   CHECK_EQ(SlotAreaFor(0x37d2538, 0x100), static_cast<std::uint64_t>(0x37d2640));
   CHECK_EQ(SlotAreaFor(0x37d2540, 0), static_cast<std::uint64_t>(0x37d2540));  // an end already on the boundary stays
@@ -181,7 +199,7 @@ TEST(ThePatchedIdIsAPureFunctionOfTheTableAndTheStockId) {
 TEST(ThePublicIdIsPinnedSoATableChangeIsAConsciousOne) {
   // Any change to a public row, a stock word, a slot or the layout moves this value. Update it in the commit that
   // changes the table, with the reason.
-  CHECK_EQ(PatchedBuildId(), std::string("fe49d0fe5a0555e3d718bc4271d8602dde81a30e"));
+  CHECK_EQ(PatchedBuildId(), std::string("0e15bb2e1139bd3bc7605ce1e2181ec662d94d52"));
 }
 
 TEST(AnyChangeToAFactTheFileDependsOnMovesTheId) {
@@ -280,13 +298,13 @@ TEST(TheIdOfThreeInventedExtraRowsIsPinnedToTheByte) {
   const WordPatchRow late{"x.late", 0x1500040, {Edit(0, {0x11, 0x22, 0x33, 0x44}, {0x55, 0x66, 0x77, 0x88}), Edit(8, {0x99, 0xaa, 0xbb, 0xcc}, {0xdd, 0xee, 0xff, 0x00})}};
   const WordPatchRow tieB{"x.tie_b", 0x1500020, {Edit(4, {0x0a, 0x0b, 0x0c, 0x0d}, {0x01, 0x02, 0x03, 0x04})}};
   const WordPatchRow tieA{"x.tie_a", 0x1500020, {Edit(0x104, {0x0f, 0x0e, 0x0d, 0x0c}, {0x04, 0x03, 0x02, 0x01})}};
-  const std::string pinned = "52399370d512b4a300f50f6a1e152eeacc140110";
+  const std::string pinned = "3513a0b74fd0acc69345b766964f5bc3c529cb61";
   CHECK_EQ(PatchedBuildId({late, tieB, tieA}), pinned);
   CHECK_EQ(PatchedBuildId({tieA, late, tieB}), pinned);
   CHECK_EQ(PatchedBuildId({tieB, tieA, late}), pinned);
   // Each part of the pinned value, so a change to one serialisation rule is seen in its own value.
-  CHECK_EQ(PatchedBuildId({late}), std::string("031eff10c53855e859be7b0f1c71845e1517ace8"));
-  CHECK_EQ(PatchedBuildId({tieB, tieA}), std::string("8b205b21e7841a8ae201e99fbd65355e12959c34"));
+  CHECK_EQ(PatchedBuildId({late}), std::string("7c0a1f3e4bb69cb6173af5fa8dd3c69a637bd270"));
+  CHECK_EQ(PatchedBuildId({tieB, tieA}), std::string("845f69c85e14ec7e1d9ced055948750773aa8d11"));
 }
 
 }  // namespace

@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0026-quest-without-pnsovr.md
+audience: all
+---
+
 # ADR 0026: The Quest build never loads libpnsovr; the game runs on the rad provider, as on PC
 
 Status: proposed (#944). Not implemented. "Prediction" is what the first headset run must show; "What this does not

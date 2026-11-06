@@ -32,12 +32,16 @@ State& S() {
   return *state;
 }
 std::atomic<bool> g_pending{false};
-// The plugin pass is outside the lock above: its slot is a plain atomic, and `running` keeps a dlopen made by a plugin
-// (which comes back through AfterDlopen on the same thread) from starting it a second time.
+// The plugin pass and the combat step are outside the lock above: their slots are plain atomics, and one `running` flag keeps a dlopen made
+// by a plugin or by the combat step (which comes back through AfterDlopen on the same thread) from starting either a second time, and a
+// second thread from entering while the first is inside. The combat step runs inside the same runner, after the plugin pass has returned.
 std::atomic<ActionFn> g_pluginsFn{nullptr};
 std::atomic<bool> g_pluginsPending{false};
-std::atomic<bool> g_pluginsRunning{false};
+std::atomic<bool> g_runnerBusy{false};
 std::atomic<bool> g_pluginsSettled{false};
+std::atomic<ActionFn> g_combatFn{nullptr};
+std::atomic<bool> g_combatPending{false};
+std::atomic<bool> g_combatSettled{false};
 std::atomic<std::uint64_t> g_calls{0};
 std::atomic<ModuleLoadedFn> g_observer{nullptr};
 std::atomic<std::uint64_t> g_attempts{0};
@@ -68,21 +72,30 @@ void RunSlot(Slot& slot, const char* module) {
   }
 }
 
-void RunPlugins(const char* module) {
-  if (!g_pluginsPending.load(std::memory_order_acquire)) return;
-  if (g_pluginsRunning.exchange(true, std::memory_order_acq_rel)) return;
-  const ActionFn fn = g_pluginsFn.load(std::memory_order_acquire);
-  if (fn == nullptr) {
-    g_pluginsRunning.store(false, std::memory_order_release);
-    return;
+// The plugin pass, then the combat step, on the thread that got in. A pass that is not planned is not run; the combat step does not wait
+// for the plugin pass to be planned, only for it to have returned.
+void RunPluginsAndCombat(const char* module) {
+  if (!g_pluginsPending.load(std::memory_order_acquire) && !g_combatPending.load(std::memory_order_acquire)) return;
+  if (g_runnerBusy.exchange(true, std::memory_order_acq_rel)) return;
+  const ActionFn plugins = g_pluginsPending.load(std::memory_order_acquire) ? g_pluginsFn.load(std::memory_order_acquire) : nullptr;
+  if (plugins != nullptr) {
+    g_attempts.fetch_add(1, std::memory_order_relaxed);
+    const ActionResult result = plugins();
+    g_pluginsSettled.store(true, std::memory_order_release);
+    g_pluginsPending.store(false, std::memory_order_release);
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "post_load",
+                        {{"action", "plugins"}, {"status", result.status}, {"settle", "done"}, {"after_module", module}});
   }
-  g_attempts.fetch_add(1, std::memory_order_relaxed);
-  const ActionResult result = fn();
-  g_pluginsSettled.store(true, std::memory_order_release);
-  g_pluginsPending.store(false, std::memory_order_release);
-  g_pluginsRunning.store(false, std::memory_order_release);
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "post_load",
-                      {{"action", "plugins"}, {"status", result.status}, {"settle", "done"}, {"after_module", module}});
+  const ActionFn combat = g_combatPending.load(std::memory_order_acquire) ? g_combatFn.load(std::memory_order_acquire) : nullptr;
+  if (combat != nullptr) {
+    g_attempts.fetch_add(1, std::memory_order_relaxed);
+    const ActionResult result = combat();
+    g_combatSettled.store(true, std::memory_order_release);
+    g_combatPending.store(false, std::memory_order_release);
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "post_load",
+                        {{"action", "combat"}, {"status", result.status}, {"settle", "done"}, {"after_module", module}});
+  }
+  g_runnerBusy.store(false, std::memory_order_release);
 }
 
 bool AnyUnsettled() {
@@ -106,14 +119,18 @@ void SetPostLoadActions(const PostLoadActions& actions) {
   g_pending.store(AnyUnsettled(), std::memory_order_release);
   g_pluginsFn.store(actions.plugins, std::memory_order_release);
   g_pluginsSettled.store(false);
-  g_pluginsRunning.store(false);
+  g_combatFn.store(actions.combat, std::memory_order_release);
+  g_combatSettled.store(false);
+  g_runnerBusy.store(false);
   g_pluginsPending.store(actions.plugins != nullptr, std::memory_order_release);
+  g_combatPending.store(actions.combat != nullptr, std::memory_order_release);
 }
 
 void SetModuleLoadedObserver(ModuleLoadedFn fn) noexcept { g_observer.store(fn, std::memory_order_release); }
 
 bool PostLoadPending() noexcept {
-  return g_pending.load(std::memory_order_acquire) || g_pluginsPending.load(std::memory_order_acquire);
+  return g_pending.load(std::memory_order_acquire) || g_pluginsPending.load(std::memory_order_acquire) ||
+         g_combatPending.load(std::memory_order_acquire);
 }
 
 std::uint64_t MatchmakingImages() noexcept { return g_matchmakingImages.load(std::memory_order_acquire); }
@@ -127,6 +144,7 @@ PostLoadStats PostLoadStatsView() noexcept {
   s.matchmakingSettled = S().matchmaking.settled ? 1 : 0;
   s.loginTitleSettled = S().loginTitle.settled ? 1 : 0;
   s.pluginsSettled = g_pluginsSettled.load(std::memory_order_acquire) ? 1 : 0;
+  s.combatSettled = g_combatSettled.load(std::memory_order_acquire) ? 1 : 0;
   return s;
 }
 
@@ -166,8 +184,9 @@ NEVR_OUTSIDE_GAME_CALL void AfterDlopen(const char* name, void* handle) noexcept
       sentinel::LogFields(sentinel::LogLevel::kError, "post_load", {{"status", "exception"}});
     }
   }
-  // After the installs above, on the same thread, with no lock held: no sentinel frame is live while a plugin runs.
-  RunPlugins(module);
+  // After the installs above, on the same thread, with no lock held: no sentinel frame is live while a plugin runs. The combat step
+  // follows the plugin pass inside the same runner.
+  RunPluginsAndCombat(module);
 }
 
 }  // namespace nevr_quest::integration

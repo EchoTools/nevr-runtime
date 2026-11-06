@@ -1,9 +1,11 @@
 """verify_quest_sentinel_link.py: which Quest sentinel link graphs it accepts and which it rejects.
 
-Each case is a small tree under build/test-scratch/ (inside the repo's ignored build directory):
+Each case is a small tree under a temporary directory made for the module and removed after it:
 src/quest/**/CMakeLists.txt and tests/quest/elf_groundtruth_test.go, as the tool reads them.
 """
 import importlib.util
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,7 +14,7 @@ SPEC = importlib.util.spec_from_file_location("verify_quest_sentinel_link", ROOT
 TOOL = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(TOOL)
 
-SCRATCH = ROOT / "build" / "test-scratch" / "quest-sentinel-link"
+SCRATCH = None  # the module's temporary directory, made in setUpModule
 
 SENTINEL_CMAKE = """\
 add_library(ovrplatformloader SHARED entry.cpp)
@@ -21,6 +23,15 @@ target_link_libraries(ovrplatformloader PRIVATE {libs})
 """
 FLAG = "target_link_options(ovrplatformloader PRIVATE -Wl,--exclude-libs,ALL)"
 GO_OK = "package quest\n\nfunc TestExportAllowlist(t *testing.T) {\n\tcheck()\n}\n"
+
+
+def setUpModule():
+    global SCRATCH
+    SCRATCH = Path(tempfile.mkdtemp(prefix="quest-sentinel-link-"))
+
+
+def tearDownModule():
+    shutil.rmtree(SCRATCH, ignore_errors=True)
 
 
 class Tree:

@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0034-one-hook-manager-per-process.md
+audience: all
+---
+
 # ADR 0034: one hook manager per process owns every hooked slot, and plugins hook through it
 
 Status: proposed. Applies to the Quest build and the PC client. Supersedes the parts of ADR 0019 that refuse a second
@@ -31,14 +38,15 @@ So the q15t plugin carries a second mechanism, with its own page-protection call
 (`src/quest/plugins/q15t/src/got_swap.cpp`) and its own install helpers (`InstallImportHook`, `InstallChainedImportHook` in
 `src/quest/plugins/q15t/src/import_hook.h`). Most of its modules install through those helpers, outside the sentinel's
 registry. N151 names `got_swap.cpp` as an allowed page-protection site.
+ADR 0046 (`docs/adr/0046-combat-is-part-of-the-quest-runtime.md`) decides to end this: the plugin's modules move into the runtime, one
+unit at a time, and install through the manager.
 
 The two mechanisms do not compose. The sentinel installs its render-configuration hooks from its constructor
 (`kInstallRenderConfig`, `src/quest/integration/ctor_sequence.cpp`) and q15t installs at the first call after load
 (`PluginsAction`, `src/quest/integration/production_steps.cpp`), so the sentinel takes `vrapi_SetDisplayRefreshRate` and
 `vrapi_SetClockLevels` first. q15t's `InstallImportHook`, given no expected address, looks the function up with `dlsym`
 and refuses a slot that holds anything else (`src/quest/plugins/q15t/src/import_hook.cpp`), so it refuses both
-(`src/quest/plugins/q15t/src/refresh_rate.cpp`, `src/quest/plugins/q15t/src/clock_levels.cpp`; #2000 is that case, by
-code); were the lookup to find nothing, it would accept any executable word outside libr15 and chain without a line. In the other order, a `GotHook` with no expected original takes the slot's current value as its original
+(the plugin's refresh-rate and clock-level modules; #2000 is that case, by code; the modules no longer exist, ADR 0046); were the lookup to find nothing, it would accept any executable word outside libr15 and chain without a line. In the other order, a `GotHook` with no expected original takes the slot's current value as its original
 (`Prepare` in `src/quest/sentinel/got_hook.cpp`), and the sentinel's handlers call their original first
 (`src/quest/sentinel/render_config_hook.cpp`), so both would run, the sentinel's outermost, in an order set by which
 installed first, and no line would say so.
@@ -56,9 +64,7 @@ G6A-094 names those modules' source: the `afkxr` modules of Ducky's reference co
 `src/runtime/patch/social_facade.cpp`, `src/runtime/hook/dll_load_hook.cpp`). Some install directly and are recorded
 nowhere: the `BuildCmdLineSyntaxDefinitions` and `PreprocessCommandLine` hooks of `src/runtime/lifecycle/initialize.cpp`
 (`Hooking::Attach`), `src/runtime/patch/asset_cdn.cpp` (`Hooking::Attach`), the four hooks of
-`src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/plugin_assets.cpp` (`MH_CreateHook`) and
-`src/runtime/patch/arena_public_clock.cpp`, which says why: HookGuard has no retire, so a hook per reload of a script DLL
-would fill its table. A plugin that installs its own
+`src/modules/platform-compat/src/platform_compat.cpp` and `src/runtime/patch/plugin_assets.cpp` (`MH_CreateHook`). A plugin that installs its own
 detours declares `NEVR_PLUGIN_CAP_HOOKS_ENGINE`, whose comment says "a second MinHook instance does not share the host's
 hook table" (`sdk/include/nevr/plugin_interface.h`); the SDK's `nevr/pc/hook_manager.h` is a scoped MinHook lifecycle the
 plugin supplies itself.

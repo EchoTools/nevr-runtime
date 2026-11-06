@@ -103,3 +103,4 @@ runm dronemuzzle dc_ret_true      src/dronemuzzle_core.h "s/    return true;/   
 runm dronemuzzle dc_guard_ret     src/dronemuzzle_core.h "s/if (!(len >= 1e-4f)) return false;/if (!(len >= 1e-4f)) return true;/"
 runm dronemuzzle dc_x1_const      src/dronemuzzle_core.h "s/: 1.0f, 0.0f, xl > 1e-4f/: 1.0f, 0.5f, xl > 1e-4f/"
 runm dronemuzzle dc_loop_bound    src/dronemuzzle_core.h "s/for (int i = 0; i < 3; ++i) {/for (int i = 0; i < 2; ++i) {/"
+runm dronemuzzle dk_seam_no_create src/dronekill.cpp "s/^  g_t_shot.Create();.*\$//"

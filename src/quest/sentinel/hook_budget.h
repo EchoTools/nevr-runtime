@@ -1,6 +1,6 @@
-/* The hook registry's budget: every GotHook handle the Quest source declares, per file.
+/* The hook registry's budget: every GotHook and GotDataSlot handle the Quest source declares, per file.
  *
- * A handle reserves one entry of the registry (got_hook.h, kRegistryCapacity) when it installs, so the handles declared in
+ * A handle reserves one entry of the registry (got_hook.h, kRegistryCapacity) when it installs or writes, so the handles declared in
  * the source are an upper bound on what the build can hold at once. The registry was 64 entries and nothing summed the
  * hooks against it: the crash handler's provider-library hooks (#1618) were the ones that no longer fitted, and the entry
  * they took was the matchmaking redirect's. Now the sum is a compile-time fact:
@@ -26,7 +26,7 @@ namespace sentinel {
 
 struct HookBudgetRow {
   const char* file;       // relative to src/quest
-  std::size_t handles;    // GotHook objects the file declares (an array counts its size, a macro its uses)
+  std::size_t handles;    // GotHook and GotDataSlot objects the file declares (an array counts its size, a macro its uses)
   std::size_t critical;   // of those, how many install with HookPriority::kCritical
 };
 
@@ -34,6 +34,11 @@ struct HookBudgetRow {
 inline constexpr std::size_t kGrowthHeadroom = 32;
 
 inline constexpr HookBudgetRow kHookBudget[] = {
+    {"combat/combat_tick.cpp", 1, 0},
+    {"combat/equip_refire.cpp", 6, 0},
+    {"combat/heaps.cpp", 4, 0},
+    {"combat/match_tags.cpp", 2, 0},
+    {"combat/memsys.cpp", 2, 0},
     {"diag/hwdump_install.cpp", 18, 0},
     {"integration/dlopen_hook.cpp", 1, 0},
     {"invite/wizard_metric_hook.cpp", 1, 0},
@@ -45,6 +50,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"sentinel/crash_first_hook.cpp", 8, 0},
     {"sentinel/entry.cpp", 1, 0},
     {"sentinel/hand_pose_log_hook.cpp", 2, 0},
+    {"sentinel/irradiance_default_hook.cpp", 1, 0},
     {"sentinel/login_prompt_hook.cpp", 3, 0},
     {"sentinel/login_title_hook.cpp", 1, 0},
     {"sentinel/menu_cards_hook.cpp", 1, 0},

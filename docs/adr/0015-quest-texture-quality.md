@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0015-quest-texture-quality.md
+audience: all
+---
+
 # ADR 0015: Quest texture quality is a config key and an in-game control, applied by GOT hooks
 
 Status: accepted, implemented (`src/quest/sentinel/texture_quality.h`, `texture_quality_hook.{h,cpp}`, `sysprop_int_share.h`, #943; the in-game control and the live apply: `texture_menu.{h,cpp}`, `texture_menu_hook.{h,cpp}`, #1012, #1186). On in every Quest build; the default level is `stock`, which serves the runtime's own size.
@@ -55,7 +62,7 @@ What the apply waits for and what it refuses. It waits for the engine's ready fl
 
 Logging. Nothing on the game's call path logs. A poller thread writes `texture_quality_start` (the start level and where it came from), `texture_menu_json` (each document: rewritten, not JSON or a shape mismatch, with the counts), `texture_quality_request` (each request, its source), `texture_quality_applied` (each change of the applied level, with the size and the engine's result) and the two error lines `texture_quality_apply_refused` and `texture_quality_apply_failed`, each with its consequence. Thirteen counters (`gfx_check_calls`, `gfx_live_applies`, `gfx_menu_deliveries` and the rest) carry the rest.
 
-Any mistake in the key gives `stock`, never the default and never `high`, with one Warning that names the key (`quest_config.cpp`, `config file key=graphics.texture_quality rejected reason=<why> (falls back to stock; ...)`). The reasons: `unknown_level` (a word that is not one of the six: wrong case, a number, empty; the word is named when it is short printable ASCII), `not_a_word` (a mapping, a list, or the key with no value), `graphics_not_a_mapping` (`graphics: ultra`, `graphics: [ultra]`), `unset_variable` (a bare `${VAR}` that is not set) and `file_rejected` (the file is unusable as a whole, so it says nothing about this key). The fall back is separate from the default so that raising the default cannot turn a typo into the level that costs the most. A key under `graphics` other than `texture_quality` (`texture_qualty`, `Texture_Quality`) is one Warning that names it (`reason=unknown_key name=<key>`; the first eight, then one line counting the rest) and changes nothing else: the level is the default, as for an absent key, so a misspelling is heard instead of silently giving the default.
+Any mistake in the key gives `stock`, never the default and never `high`, with one Warning that names the key (`quest_config.cpp`, `config file key=graphics.texture_quality rejected reason=<why> (falls back to stock; ...)`). The reasons: `unknown_level` (a word that is not one of the six: wrong case, a number, empty; the word is named when it is short printable ASCII), `not_a_word` (a mapping, a list, or the key with no value), `graphics_not_a_mapping` (`graphics: ultra`, `graphics: [ultra]`), `unset_variable` (a bare `${VAR}` that is not set) and `file_rejected` (the file is unusable as a whole, so it says nothing about this key). The fall back is separate from the default so that raising the default cannot turn a typo into the level that costs the most. A key under `graphics` other than `texture_quality` and `hand_flip` (`texture_qualty`, `Texture_Quality`) is one Warning that names it (`reason=unknown_key name=<key>`; the first eight, then one line counting the rest) and changes nothing else: the level is the default, as for an absent key, so a misspelling is heard instead of silently giving the default.
 
 ### Known path: a stored size skips the query
 

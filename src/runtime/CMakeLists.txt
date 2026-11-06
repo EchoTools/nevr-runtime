@@ -17,6 +17,7 @@ set(NEVR_HOST_UNITS
     "host/crash_report_host.cpp"
     "host/crash_send_host.cpp"
     "host/crash_send_winhttp.cpp"
+    "host/file_digest.cpp"
     "host/host_entry.cpp"
     "host/host_identity.cpp"
     "host/minidmp_sender_exports.cpp"
@@ -24,6 +25,10 @@ set(NEVR_HOST_UNITS
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
     "host/stop_line.cpp"
+    # Self-update's swap at start (ADR 0024, section 4).
+    "host/update_names.cpp"
+    "host/update_seams.cpp"
+    "host/update_swap.cpp"
     # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).
     "ext/plugin_pins.cpp"
     "ext/plugin_signature.cpp"
@@ -120,10 +125,11 @@ set(PATCHES_SOURCES
     # #1419, docs/adr/0022: the GPU score the auto-selector reads, filled when the game's own rating is zero (pure rule).
     "patch/gpu_score.cpp"
     "patch/early_quit_lockout.cpp"
-    "patch/arena_public_clock.cpp"
     # #1774 P13: the dedicated lobby's allow_incoming bit, forced by a hook on CBroadcaster::Initialize (pure rule in server/broadcaster_config.h).
     "patch/broadcaster_allow_incoming.cpp"
     "patch/lobby_full_backoff.cpp"
+    # #2163: [NEVR.MATCH] records for a lobby session success and the join it queues (pure rules in queued_join_log_rules.h).
+    "patch/queued_join_log.cpp"
     # The game's deadlock monitor thread (CDeadlockMonitor::Main): whole-function hook, stall check removed (pure loop in deadlock_monitor_loop.h).
     "patch/deadlock_monitor.cpp"
     "patch/noovr_arglookup.cpp"
@@ -135,6 +141,8 @@ set(PATCHES_SOURCES
     # #1420: the netgun bullet ids of the four unfinished weapons (pure logic in netgun_bullet_ids.h).
     "patch/netgun_bullet_ids.cpp"
     "patch/splash_skip.cpp"
+    # #2121: the equipment change the game drops is applied again (pure logic in equipment_refire_rules.h).
+    "patch/equipment_refire.cpp"
     # #896, #906: the UI text writer (pure logic in ui_text.h).
     "patch/ui_text.cpp"
     "patch/ui_texture_mips.cpp"
@@ -197,8 +205,6 @@ set(PATCHES_HEADERS
     "patch/loading_tips.h"
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
-    "patch/arena_public_clock.h"
-    "patch/arena_public_clock_rules.h"
     "patch/broadcaster_allow_incoming.h"
     "patch/render_config.h"
     "patch/render_config_hook.h"
@@ -274,6 +280,7 @@ set(PATCHES_HEADERS
     "log/builtin_filter.h"
     "log/bridge_line.h"
     "log/rate_limiter.h"
+    "log/collapse_format_rules.h"
     "log/symcache.h"
     "log/url_diagnostics.h"
     "log/security_diagnostics.h"
@@ -706,6 +713,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_host_runtime_verify PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_runtime_verify DISCOVERY_MODE PRE_TEST)
 
+    # Self-update's swap at start (ADR 0024, section 4; #2104): the lock, the vocabulary, the journal and its recovery,
+    # over real files in a temporary nevr root and the signed fixtures of NEVR_SIGFIX_DIR.
+    add_executable(test_host_update_swap tests/test_host_update_swap.cpp)
+    target_compile_options(test_host_update_swap PRIVATE -Werror)
+    target_link_libraries(test_host_update_swap PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_update_swap DISCOVERY_MODE PRE_TEST)
+
     # The host's sixteen export thunks: the shipped file (host/runtime_exports.cpp) is one of the host units the
     # library holds, and the test pulls it from there.
     add_executable(test_host_exports tests/test_host_exports.cpp)
@@ -976,7 +990,7 @@ if(BUILD_TESTING)
       nevr::plugin_sdk nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_telemetry_game_type DISCOVERY_MODE PRE_TEST)
 
-    # #982: the public Arena round default applies only to a stored public Arena session (arena_round_time.cpp).
+    # The session game type store: each store returns the type it replaces (lifecycle/arena_round_time.cpp).
     add_executable(test_arena_round_time tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp)
     set_source_files_properties(tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -985,8 +999,8 @@ if(BUILD_TESTING)
     target_link_libraries(test_arena_round_time PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_arena_round_time DISCOVERY_MODE PRE_TEST)
 
-    # #982: the CJson_GetFloat detour answers round_time with 480 s for a public Arena session, whatever the order of
-    # the game's reads and the session's messages (lifecycle/arena_rules_hook.cpp).
+    # The CJson_GetFloat detour answers round_time with the game's own value for every session, unless config.yaml
+    # sets arena.round_time (lifecycle/arena_rules_hook.cpp).
     add_executable(test_arena_rules_hook tests/test_arena_rules_hook.cpp lifecycle/arena_rules_hook.cpp
       lifecycle/arena_round_time.cpp)
     set_source_files_properties(tests/test_arena_rules_hook.cpp lifecycle/arena_rules_hook.cpp
@@ -1010,26 +1024,6 @@ if(BUILD_TESTING)
     target_include_directories(test_server_team_size PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_server_team_size PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_server_team_size DISCOVERY_MODE PRE_TEST)
-
-    # #982: the public Arena match clock keeps counting through goals (patch/arena_public_clock_rules.h).
-    add_executable(test_arena_public_clock tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp)
-    set_source_files_properties(tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_arena_public_clock PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_arena_public_clock PRIVATE GTest::gtest GTest::gtest_main)
-    gtest_discover_tests(test_arena_public_clock DISCOVERY_MODE PRE_TEST)
-
-    # #982: the hook on the real stock Arena script DLLs under MinHook (needs NEVR_SCRIPT_DLL_DIR; skips without it).
-    add_executable(test_arena_public_clock_hook tests/test_arena_public_clock_hook.cpp patch/arena_public_clock.cpp
-      lifecycle/arena_round_time.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
-    set_source_files_properties(tests/test_arena_public_clock_hook.cpp patch/arena_public_clock.cpp
-      lifecycle/arena_round_time.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_compile_definitions(test_arena_public_clock_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING
-      NEVR_TEST_HOOKS NEVR_ARENA_PUBLIC_CLOCK_TESTING)
-    target_include_directories(test_arena_public_clock_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_arena_public_clock_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
-    gtest_discover_tests(test_arena_public_clock_hook DISCOVERY_MODE PRE_TEST)
 
     # #1774 P13: the allow_incoming detour on CBroadcaster::Initialize, under MinHook on a 15-parameter stand-in.
     add_executable(test_broadcaster_allow_incoming tests/test_broadcaster_allow_incoming.cpp
@@ -1665,6 +1659,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_lobby_full_backoff PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_lobby_full_backoff DISCOVERY_MODE PRE_TEST)
 
+    # test_queued_join_log.cpp (#2163): the [NEVR.MATCH] rules, and the four hooks under MinHook against a fake game image.
+    add_executable(test_queued_join_log tests/test_queued_join_log.cpp patch/queued_join_log.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_queued_join_log.cpp patch/queued_join_log.cpp hook/hook_guard.cpp
+      log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_queued_join_log PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_queued_join_log PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_queued_join_log PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_queued_join_log DISCOVERY_MODE PRE_TEST)
+
     # test_deadlock_monitor.cpp: the monitor thread loop (patch/deadlock_monitor_loop.h), the one the hook runs.
     add_executable(test_deadlock_monitor tests/test_deadlock_monitor.cpp)
     target_include_directories(test_deadlock_monitor PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -1698,6 +1702,13 @@ if(BUILD_TESTING)
     target_include_directories(test_menu_version_label PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_menu_version_label PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_menu_version_label DISCOVERY_MODE PRE_TEST)
+
+    # test_equipment_refire.cpp (#2121, header-only patch/equipment_refire_rules.h; the Quest host test compiles the same header).
+    add_executable(test_equipment_refire tests/test_equipment_refire.cpp)
+    set_source_files_properties(tests/test_equipment_refire.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_equipment_refire PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_equipment_refire PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_equipment_refire DISCOVERY_MODE PRE_TEST)
 
     # test_splash_skip.cpp (#962, header-only patch/splash_skip_rules.h).
     add_executable(test_splash_skip tests/test_splash_skip.cpp)
@@ -2063,9 +2074,21 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_info_keeper"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    # The entry-point prefix is Nevr; a plugin built before that exports Nvr. One fixture of each.
+    foreach(_exports_fixture nevr deprecated)
+      add_library(test_plugin_${_exports_fixture}_exports SHARED
+        tests/plugin_${_exports_fixture}_exports_test_dll.cpp)
+      target_compile_definitions(test_plugin_${_exports_fixture}_exports PRIVATE NEVR_PLUGIN_EXPORTS)
+      target_link_libraries(test_plugin_${_exports_fixture}_exports PRIVATE nevr::plugin_sdk)
+      set_target_properties(test_plugin_${_exports_fixture}_exports PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_${_exports_fixture}_exports"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    endforeach()
     add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail
       test_plugin_partial_init_fail test_plugin_info_keeper test_plugin_logging_a test_plugin_logging_b
-      test_plugin_level)
+      test_plugin_level
+      test_plugin_nevr_exports test_plugin_deprecated_exports)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 

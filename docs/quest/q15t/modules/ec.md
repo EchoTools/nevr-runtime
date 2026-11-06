@@ -47,7 +47,7 @@ leans "no, not as the loader loads it".**
 - The proper fix, outside this repo and outside my remit: the host (`plugin_platform.cpp:71`) opens a plugin that declares it
   needs it with `RTLD_GLOBAL`, or the sentinel (`ovrplatformloader`, DT_NEEDED of libr15, therefore global) exports the page.
   That is an nevr-runtime change; I made none.
-- Two traps for the main seat: (1) a non-zero `NvrPluginInitEx` return makes the loader `dlclose` the plugin
+- Two traps for the main seat: (1) a non-zero `NevrPluginInitEx` return makes the loader `dlclose` the plugin
   (`plugin_loader.cpp:201-204`, `end()` -> `close()` at :127-133) which would unmap the page and every wrapper a swapped GOT word
   points at: once any hook is installed the init must return 0 (the q15t `InitEx` already always returns 0 after installs).
   (2) If another provider already exports `re33_ec_page` (the source build's own `libvrapi.so` on a device that still carries it),

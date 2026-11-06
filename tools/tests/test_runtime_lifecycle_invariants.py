@@ -181,7 +181,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")
 
         self.assertNotRegex(body, r"\bUnloadPlugins\s*\(")
-        self.assertNotIn("NvrPluginShutdown", body)
+        self.assertNotIn("NevrPluginShutdown", body)
+        self.assertNotIn("NvrPluginShutdown", body)  # the deprecated export spelling
 
     def test_dllmain_frees_the_real_dbgcore_only_on_dynamic_unload(self):
         # Issue #40: FreeLibrary(g_realDbgCore) ran on process termination too (lpReserved != NULL).

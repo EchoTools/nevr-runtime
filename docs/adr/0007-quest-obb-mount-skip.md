@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0007-quest-obb-mount-skip.md
+audience: all
+---
+
 # ADR 0007: Quest OBB mount skip
 
 Status: accepted, implemented (`src/quest/sentinel/obb_skip_hook.{h,cpp}`, #319). On in every Quest build, with no feature

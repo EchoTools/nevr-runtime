@@ -24,7 +24,12 @@
 #include <vector>
 
 #include "got_hook.h"
+#include "hook_log.h"
 #include "login_title_hook.h"
+#include "quest/combat/combat_level_targets.h"
+#include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/heaps_targets.h"
+#include "quest/combat/memsys_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/game_login_failures.h"
@@ -105,12 +110,44 @@ void CheckTarget(const LoadedElf& elf, const GotTarget& pinnedTarget, const char
   QCHECK_STATUS(ResolveSlot(elf.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
 }
 
-// The value .dynsym gives `symbol` (its link-time address), or 0 when absent.
-std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
+// The vtable and factory words the folded combat modules hook (docs/adr/0046 rule 2) are R_AARCH64_ABS64 relocations that name a
+// symbol, and a symbol a vtable lists has a word in every vtable that lists it: a target pins its word. `words` is how many ABS64
+// words name the symbol in the file (`readelf -rW`); it decides whether the symbol alone is ambiguous (several) or just unpinned (one).
+struct RealAbs64Word {
+  const char* symbol;
+  std::uint64_t vaddr;
+  std::size_t words;
+};
+constexpr RealAbs64Word kRealAbs64Words[] = {
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x362ef90, 4},
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x3630e58, 4},
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x3631278, 4},
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x36316f8, 4},
+    {"_ZN10NRadEngine8CModelCS18OnComponentEnabledENS_18SCompactPoolHandleE", 0x36495c8, 2},
+    {"_ZN10NRadEngine8CModelCS19OnComponentDisabledENS_18SCompactPoolHandleE", 0x36495d0, 2},
+    {"_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE17ConstructInstanceEPvPNS_13CPresenceInitE", 0x365ddc8, 1},
+    {"_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE14CreateInstanceEPNS_13CPresenceInitE", 0x365ddd0, 1},
+    {"_ZN10NRadEngine8NRadGame15CR15NetBulletCS8ShutdownEv", 0x36933e8, 1},
+};
+
+// The data pointers heaps points at its own values (docs/adr/0046): GLOB_DAT slots, one per symbol, no addend.
+struct RealDataSlot {
+  const char* symbol;
+  std::uint64_t vaddr;
+};
+constexpr RealDataSlot kRealDataSlots[] = {
+    {"_ZN10NRadEngine22kResourceMemoryAndroidE", 0x370b720},
+    {"_ZN10NRadEngine20kSystemMemoryAndroidE", 0x371d020},
+    {"_ZN10NRadEngine17kGpuMemoryAndroidE", 0x3710188},
+    {"_ZN10NRadEngine24kR15GameSpaceMemoryQuestE", 0x3715198},
+};
+
+// The .dynsym entry of `symbol`, or false when absent.
+bool DynamicSymbol(const LoadedElf& elf, const char* symbol, Elf64_Sym* out) {
   const std::vector<char>& b = elf.bytes;
   Elf64_Ehdr eh;
   std::memcpy(&eh, b.data(), sizeof(eh));
-  if (eh.e_shoff == 0 || eh.e_shoff + eh.e_shnum * sizeof(Elf64_Shdr) > b.size()) return 0;
+  if (eh.e_shoff == 0 || eh.e_shoff + eh.e_shnum * sizeof(Elf64_Shdr) > b.size()) return false;
   std::vector<Elf64_Shdr> sh(eh.e_shnum);
   std::memcpy(sh.data(), b.data() + eh.e_shoff, eh.e_shnum * sizeof(Elf64_Shdr));
   for (const Elf64_Shdr& s : sh) {
@@ -120,11 +157,123 @@ std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
       Elf64_Sym sym;
       std::memcpy(&sym, b.data() + s.sh_offset + off, sizeof(sym));
       if (sym.st_name < str.sh_size && std::strcmp(b.data() + str.sh_offset + sym.st_name, symbol) == 0) {
-        return sym.st_value;
+        *out = sym;
+        return true;
       }
     }
   }
-  return 0;
+  return false;
+}
+
+// The value .dynsym gives `symbol` (its link-time address), or 0 when absent.
+std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
+  Elf64_Sym sym;
+  return DynamicSymbol(elf, symbol, &sym) ? sym.st_value : 0;
+}
+
+const LoadedElf* g_dataSlotElf = nullptr;
+bool DataSlotLookup(const char*, ElfImage* out) {
+  *out = g_dataSlotElf->image;
+  return true;
+}
+void QuietSink(LogLevel, const char*) {}
+std::uint64_t g_ourHeapValue = 0;
+
+// The heap descriptors the first data-slot user writes over are DATA objects, and the file puts them inside its executable
+// PT_LOAD (.rodata is in the first segment, which is R E): an address cannot tell them from code, the symbol the relocation names
+// can. The slot's value is the symbol's address, as the loader's GLOB_DAT relocation stores it. The write runs on the private copy
+// this test laid out in memory (nothing is written to the host file): the whole of GotDataSlot::Write against the real layout, its
+// build-ID check, the symbol type, the segment, the registry and the compare-and-swap, then Restore.
+void CheckRealDataSlotWrite(const LoadedElf& elf, const RealDataSlot& d) {
+  Elf64_Sym sym;
+  if (!DynamicSymbol(elf, d.symbol, &sym)) {
+    std::fprintf(stderr, "libr15 %s: not in .dynsym\n", d.symbol);
+    QCHECK(false);
+    return;
+  }
+  QCHECK(ELF64_ST_TYPE(sym.st_info) == STT_OBJECT);
+  bool inExecutableLoad = false;
+  for (const Elf64_Phdr& ph : elf.phdrs) {
+    if (ph.p_type == PT_LOAD && (ph.p_flags & PF_X) != 0 && sym.st_value >= ph.p_vaddr && sym.st_value - ph.p_vaddr < ph.p_memsz) {
+      inExecutableLoad = true;
+    }
+  }
+  QCHECK(inExecutableLoad);
+  const GotTarget target{pinned::kLibR15, d.symbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, d.vaddr};
+  const SlotResolution at = ResolveSlot(elf.image, target, kAarch64Relocs);
+  QCHECK_STATUS(at.status, GotStatus::kOk);
+  QCHECK(at.symbolType == STT_OBJECT && !at.inExecutableSegment);
+
+  void* const gameValue = reinterpret_cast<void*>(elf.image.base + sym.st_value);
+  void** const slot = reinterpret_cast<void**>(elf.image.base + d.vaddr);
+  *slot = gameValue;  // what the loader stores for a GLOB_DAT relocation
+  g_dataSlotElf = &elf;
+  const RelocNumbers* const previousRelocs = SetRelocNumbers(&kAarch64Relocs);  // the image is AArch64, the host is not
+  const LogSink previous = SetLogSink(&QuietSink);
+  GotDataSlot data;
+  QCHECK_STATUS(data.Write(target, gameValue, &g_ourHeapValue, &DataSlotLookup), GotStatus::kOk);
+  QCHECK(*slot == &g_ourHeapValue);
+  QCHECK_STATUS(data.Restore(), GotStatus::kOk);
+  QCHECK(*slot == gameValue);
+  SetLogSink(previous);
+  SetRelocNumbers(previousRelocs);
+}
+
+// libr15's one GLOB_DAT that names a NOTYPE symbol is `getentropy` (a weak reference nothing defines at link time): the loader fills
+// its slot with libc's function, so it holds a code pointer although its symbol has no type. Write refuses it: only an OBJECT is
+// data. (libpnsrad, libpnsradmatchmaking and libpnsovr each have the same one.)
+void CheckRealNotypeSlotIsRefused(const LoadedElf& elf) {
+  constexpr std::uint64_t kGetentropySlot = 0x370abf0;
+  Elf64_Sym sym;
+  QCHECK(DynamicSymbol(elf, "getentropy", &sym));
+  QCHECK(ELF64_ST_TYPE(sym.st_info) == STT_NOTYPE && sym.st_shndx == SHN_UNDEF);
+  const GotTarget target{pinned::kLibR15, "getentropy", RelocKind::kGlobDat, pinned::kLibR15StockBuildId, kGetentropySlot};
+  const SlotResolution at = ResolveSlot(elf.image, target, kAarch64Relocs);
+  QCHECK_STATUS(at.status, GotStatus::kOk);
+  QCHECK(at.symbolType == STT_NOTYPE);
+  void** const slot = reinterpret_cast<void**>(elf.image.base + kGetentropySlot);
+  void* const libcFunction = reinterpret_cast<void*>(0x7f0000001230ULL);  // what the loader stores: an address in libc
+  *slot = libcFunction;
+  g_dataSlotElf = &elf;
+  const RelocNumbers* const previousRelocs = SetRelocNumbers(&kAarch64Relocs);
+  const LogSink previous = SetLogSink(&QuietSink);
+  GotDataSlot data;
+  QCHECK_STATUS(data.Write(target, libcFunction, &g_ourHeapValue, &DataSlotLookup), GotStatus::kExecutableMapping);
+  QCHECK(!data.written() && *slot == libcFunction);
+  SetLogSink(previous);
+  SetRelocNumbers(previousRelocs);
+}
+
+void CheckRealAbs64Words(const LoadedElf& elf) {
+  for (const RealAbs64Word& w : kRealAbs64Words) {
+    const GotTarget pinned{pinned::kLibR15, w.symbol, RelocKind::kAbs64, pinned::kLibR15StockBuildId, w.vaddr};
+    const SlotResolution at = ResolveSlot(elf.image, pinned, kAarch64Relocs);
+    if (at.status != GotStatus::kOk) std::fprintf(stderr, "target: libr15 ABS64 word %#llx of %s\n", static_cast<unsigned long long>(w.vaddr), w.symbol);
+    QCHECK_STATUS(at.status, GotStatus::kOk);
+    QCHECK(at.slotVaddr == w.vaddr);
+    QCHECK(at.restoreReadOnly);  // vtables and factory tables are in PT_GNU_RELRO
+
+    // The symbol alone does not name a word: several are ambiguous, one still needs the pin.
+    GotTarget unpinned = pinned;
+    unpinned.slotVaddr = std::nullopt;
+    QCHECK_STATUS(ResolveSlot(elf.image, unpinned, kAarch64Relocs).status,
+                  w.words > 1 ? GotStatus::kAmbiguousRelocation : GotStatus::kPinRequired);
+
+    // A pin one slot over, and a pin on each other symbol's word, are refused: neither is a relocation that names this symbol.
+    GotTarget shifted = pinned;
+    shifted.slotVaddr = w.vaddr + 8;
+    QCHECK_STATUS(ResolveSlot(elf.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+    for (const RealAbs64Word& other : kRealAbs64Words) {
+      if (std::strcmp(other.symbol, w.symbol) == 0) continue;
+      GotTarget onOther = pinned;
+      onOther.slotVaddr = other.vaddr;
+      QCHECK_STATUS(ResolveSlot(elf.image, onOther, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+    }
+  }
+  for (const RealDataSlot& d : kRealDataSlots) {
+    CheckTarget(elf, GotTarget{pinned::kLibR15, d.symbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, d.vaddr}, d.symbol);
+    CheckRealDataSlotWrite(elf, d);
+  }
 }
 
 // True when a NOBITS section (.bss) of the file holds [vaddr, vaddr + size).
@@ -192,6 +341,59 @@ void CheckDefinedAt(const LoadedElf& elf, const char* symbol, std::uint64_t vadd
   }
 }
 
+// The heap-size and render-target-pool modules' pins (src/quest/combat/heaps_targets.h, memsys_targets.h) against the real libr15: each heap
+// row's GLOB_DAT slot resolves at its pin and names a data object defined at the row's .rodata address, the .rodata word is the stock size
+// and the reader word is the stock load; the pool's and Init's JUMP_SLOTs resolve at their pins, name the functions at the pinned addresses,
+// and every pinned code word (the return-address sites among them) is the one in the file.
+void CheckRealHeapsAndMemsys(const LoadedElf& elf) {
+  namespace heaps = nevr_quest::combat::heaps;
+  namespace memsys = nevr_quest::combat::memsys;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  for (const heaps::RowPin& row : heaps::kRows) {
+    Elf64_Sym sym;
+    if (!DynamicSymbol(elf, row.symbol, &sym)) {
+      std::fprintf(stderr, "libr15 %s: not in .dynsym\n", row.symbol);
+      QCHECK(false);
+      continue;
+    }
+    QCHECK(ELF64_ST_TYPE(sym.st_info) == STT_OBJECT && sym.st_value == row.ro);
+    const GotTarget target{pinned::kLibR15, row.symbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, row.slot};
+    const SlotResolution at = ResolveSlot(elf.image, target, kAarch64Relocs);
+    QCHECK_STATUS(at.status, GotStatus::kOk);
+    QCHECK(at.slotVaddr == row.slot && at.symbolType == STT_OBJECT);
+    std::uint64_t stock = 0;
+    std::memcpy(&stock, mem + row.ro, sizeof(stock));
+    std::uint32_t reader = 0;
+    std::memcpy(&reader, mem + row.reader, sizeof(reader));
+    if (stock != row.stock || reader != row.readerWord) {
+      std::fprintf(stderr, "libr15 heap row %s: .rodata word %#llx (want %#llx), reader word %#x (want %#x)\n", row.id,
+                   static_cast<unsigned long long>(stock), static_cast<unsigned long long>(row.stock), reader, row.readerWord);
+      QCHECK(false);
+    }
+  }
+  CheckTarget(elf, GotTarget{pinned::kLibR15, memsys::kAllocSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, memsys::kPins.allocSlot},
+              "libr15 CSimplePool<SGRenderTargetLayout>::Alloc JUMP_SLOT");
+  CheckTarget(elf, GotTarget{pinned::kLibR15, memsys::kInitSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, memsys::kPins.initSlot},
+              "libr15 CSysJava::Init JUMP_SLOT");
+  CheckDefinedAt(elf, memsys::kAllocSymbol, memsys::kPins.allocFn);
+  CheckDefinedAt(elf, memsys::kInitSymbol, memsys::kPins.initFn);
+  QCHECK(memsys::kPins.systemSlot == heaps::kRows[heaps::kSystemRow].slot);
+  bool allocSiteIsPinned = false;
+  bool initSiteIsPinned = false;
+  for (const memsys::Word& w : memsys::kWords) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + w.vaddr, sizeof(have));
+    if (have != w.word) {
+      std::fprintf(stderr, "libr15 memsys word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(w.vaddr), have, w.word);
+      QCHECK(false);
+    }
+    allocSiteIsPinned = allocSiteIsPinned || w.vaddr == memsys::kPins.allocSite;
+    initSiteIsPinned = initSiteIsPinned || w.vaddr == memsys::kPins.initSite;
+  }
+  QCHECK(allocSiteIsPinned && initSiteIsPinned);  // the instruction at each return address is among the pinned words
+}
+
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -231,6 +433,35 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15ConfigRequestSend(), "libr15 SNSConfigRequestv24Send JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15SetDelimitedErrorMessage(), "libr15 CR15NetGame::SetDelimitedErrorMessage JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15NetGameUpdate(), "libr15 CR15NetGame::Update JUMP_SLOT");
+  // The grey default irradiance texture (#2091): Initialize's slot, where the symbol is defined, that nothing reaches the function
+  // but the PLT stub (no `b`/`bl` in the executable segments names it, so the slot sees every call), and the words that make
+  // `this + 0x1458` the default 3D texture's destination, its texel and its format.
+  CheckTarget(r15, pinned::LibR15CGEngineResourcesInitialize(), "libr15 CGEngineResources::Initialize JUMP_SLOT");
+  CheckDefinedAt(r15, pinned::kCGEngineResourcesInitializeSymbol, pinned::kCGEngineResourcesInitializeVaddr);
+  for (const Elf64_Phdr& ph : r15.phdrs) {
+    if (ph.p_type != PT_LOAD || (ph.p_flags & PF_X) == 0) continue;
+    for (std::uint64_t at = ph.p_vaddr; at + 4 <= ph.p_vaddr + ph.p_filesz; at += 4) {
+      std::uint32_t word = 0;
+      std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + at, sizeof(word));
+      if ((word & 0x7c000000U) != 0x14000000U) continue;  // b or bl
+      std::int64_t imm = static_cast<std::int64_t>(word & 0x03ffffffU);
+      if ((imm & 0x02000000) != 0) imm -= 0x04000000;
+      if (at + static_cast<std::uint64_t>(imm * 4) == pinned::kCGEngineResourcesInitializeVaddr) {
+        std::fprintf(stderr, "libr15 CGEngineResources::Initialize: a direct branch at %#llx reaches it, past the slot\n",
+                     static_cast<unsigned long long>(at));
+        QCHECK(false);
+      }
+    }
+  }
+  for (const pinned::PinnedCode* block : {&pinned::kDefault3dTextureOffset, &pinned::kDefault3dTextureAddress,
+                                          &pinned::kDefault3dTextureTexel, &pinned::kDefault3dTextureFormat,
+                                          &pinned::kDefault3dTextureCall}) {
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block->vaddr, block->code, block->words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the word at %#llx differs from the pinned one\n", block->name,
+                   static_cast<unsigned long long>(block->vaddr));
+      QCHECK(false);
+    }
+  }
   CheckTarget(r15, pinned::LibR15AndroidMain(), "libr15 android_main JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15EnablePageNodeEnter(), "libr15 CR15UIPage2EnablePageNode::Enter JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15RequestPermissions(), "libr15 CSysInfo::RequestPermissions JUMP_SLOT");
@@ -288,6 +519,63 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15GetInputDeviceCapabilities(), "libr15 vrapi_GetInputDeviceCapabilities JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15EnumerateInputDevices(), "libr15 vrapi_EnumerateInputDevices JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetInputTrackingState(), "libr15 vrapi_GetInputTrackingState JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15CR15GameC1(), "libr15 CR15Game::CR15Game (C1) JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15CR15GameC2(), "libr15 CR15Game::CR15Game (C2) JUMP_SLOT");
+  // The equipment re-fire (#2121, combat/equip_refire.h): each of the three setters is held by both a JUMP_SLOT and a GLOB_DAT word, so
+  // the symbol alone names a slot of each kind (CheckTarget would expect the other kind to be absent). Each word resolves at its pin
+  // and alone, a pin off by one slot is refused, the setter is the symbol the .dynsym defines at its address, and the code the wrappers'
+  // reads and the two lookups rest on (and the three change handlers' entries) is the pinned words.
+  for (std::size_t slot = 0; slot < 3; ++slot) {
+    for (const RelocKind kind : {RelocKind::kJumpSlot, RelocKind::kGlobDat}) {
+      const GotTarget target = pinned::LibR15EquipmentSetter(slot, kind);
+      const SlotResolution at = ResolveSlot(r15.image, target, kAarch64Relocs);
+      if (at.status != GotStatus::kOk) std::fprintf(stderr, "target: libr15 equipment setter %zu %s\n", slot, RelocKindName(kind));
+      QCHECK_STATUS(at.status, GotStatus::kOk);
+      QCHECK(at.slotVaddr == *target.slotVaddr);
+      GotTarget alone = target;
+      alone.slotVaddr = std::nullopt;
+      const SlotResolution only = ResolveSlot(r15.image, alone, kAarch64Relocs);
+      QCHECK_STATUS(only.status, GotStatus::kOk);
+      QCHECK(only.slotVaddr == at.slotVaddr);
+      GotTarget shifted = target;
+      shifted.slotVaddr = *target.slotVaddr + 8;
+      QCHECK_STATUS(ResolveSlot(r15.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+    }
+    CheckDefinedAt(r15, pinned::kEquipmentSetters[slot].symbol, pinned::kEquipmentSetters[slot].vaddr);
+  }
+  for (std::size_t i = 0; i < pinned::kEquipmentRefireCodeCount; ++i) {
+    const pinned::PinnedCode& block = pinned::kEquipmentRefireCode[i];
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block.vaddr, block.code, block.words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the words at %#llx differ from the pinned ones\n", block.name,
+                   static_cast<unsigned long long>(block.vaddr));
+      QCHECK(false);
+    }
+  }
+  // The combat tick (#2172, combat_tick_targets.h): the JUMP_SLOT of CncaGame::ExclusiveUpdateGame at its pinned address, the symbol defined at the
+  // stock address the slot holds, and CR15Game's first word's value (the vtable's first virtual).
+  CheckTarget(r15, nevr_quest::combat::tick::targets::Target(), "libr15 CncaGame::ExclusiveUpdateGame JUMP_SLOT");
+  CheckDefinedAt(r15, nevr_quest::combat::tick::targets::kSymbol, nevr_quest::combat::tick::targets::kStockVaddr);
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kCR15GameVtableSymbol, nevr_quest::combat::level::targets::kCR15GameVtableVaddr);
+  if (nevr_quest::combat::level::targets::kCR15GameVtableVaddr + 0x10 != nevr_quest::combat::tick::targets::kGameVptrVaddr) {
+    std::fprintf(stderr, "libr15 CR15Game: the vtable's first virtual is not the pinned object vptr\n");
+    QCHECK(false);
+  }
+  // The combat level answer (#2172, combat_level_targets.h): the functions that read or store the offsets the module uses, and the words that do.
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kLoadedGameSpaceSymbol, nevr_quest::combat::level::targets::kLoadedGameSpaceVaddr);
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kInitializeSymbol, nevr_quest::combat::level::targets::kInitializeVaddr);
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kLoadLevelSymbol, nevr_quest::combat::level::targets::kLoadLevelVaddr);
+  for (const auto& pin : nevr_quest::combat::level::targets::kOffsetWords) {
+    std::uint32_t word = 0;
+    std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + pin.vaddr, sizeof(word));
+    if (word != pin.word) {
+      std::fprintf(stderr, "libr15 %s: the word at %#llx is %#x, not the pinned %#x\n", pin.what, static_cast<unsigned long long>(pin.vaddr), word,
+                   pin.word);
+      QCHECK(false);
+    }
+  }
+  CheckRealAbs64Words(r15);
+  CheckRealNotypeSlotIsRefused(r15);
+  CheckRealHeapsAndMemsys(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
@@ -610,6 +898,11 @@ int main(int argc, char** argv) {
          std::vector<std::uint64_t>(std::begin(pinned::kProviderDestroyCallSites),
                                     std::end(pinned::kProviderDestroyCallSites)),
          std::size(pinned::kProviderDestroyCallSites)},
+        {"libr15 CGEngineResources::Initialize", pinned::kCGEngineResourcesInitializeStub,
+         *pinned::LibR15CGEngineResourcesInitialize().slotVaddr,
+         std::vector<std::uint64_t>(std::begin(pinned::kCGEngineResourcesInitializeCallSites),
+                                    std::end(pinned::kCGEngineResourcesInitializeCallSites)),
+         std::size(pinned::kCGEngineResourcesInitializeCallSites)},
         {"libr15 CNSProvider::ProviderID", pinned::kProviderIdStub, *pinned::LibR15ProviderId().slotVaddr, {},
          pinned::kProviderIdCallers},
         {"libr15 CNSProvider::UserProviderID", pinned::kUserProviderIdStub, *pinned::LibR15UserProviderId().slotVaddr, {},
@@ -665,6 +958,82 @@ int main(int argc, char** argv) {
                    static_cast<unsigned long long>(pinned::kShowSystemUICallSite));
       for (const std::uint64_t at : callers) std::fprintf(stderr, "  caller %#llx\n", static_cast<unsigned long long>(at));
       QCHECK(false);
+    }
+  }
+
+  // The combat name tags default (#2090): both CR15Game constructor symbols are defined at the one address pinned_targets.h says, each
+  // PLT stub loads its hooked slot and has exactly the callers it lists in the executable segments, the two literals hold the
+  // stock settings, and the constructor's own code stores them at the offsets combat/match_tags.h writes (x27 = this + 0x7b08,
+  // so this+0x8c04 and this+0x8ce4: the flags words at +0x8c08 and +0x8ce4).
+  for (const char* symbol : {pinned::kCR15GameC1Symbol, pinned::kCR15GameC2Symbol}) {
+    if (DynamicSymbolValue(r15, symbol) != pinned::kCR15GameVaddr) {
+      std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", symbol, static_cast<unsigned long long>(pinned::kCR15GameVaddr));
+      QCHECK(false);
+    }
+  }
+  {
+    struct Constructor {
+      const char* name;
+      std::uint64_t stub;
+      std::uint64_t slot;
+      std::vector<std::uint64_t> callSites;
+    };
+    const Constructor constructors[] = {
+        {"C1", pinned::kCR15GameC1Stub, pinned::LibR15CR15GameC1().slotVaddr.value_or(0), {pinned::kCR15GameC1CallSite}},
+        {"C2", pinned::kCR15GameC2Stub, pinned::LibR15CR15GameC2().slotVaddr.value_or(0),
+         std::vector<std::uint64_t>(std::begin(pinned::kCR15GameC2CallSites), std::end(pinned::kCR15GameC2CallSites))},
+    };
+    for (const Constructor& c : constructors) {
+      std::uint32_t stub[4] = {};
+      std::memcpy(stub, static_cast<const unsigned char*>(r15.mem) + c.stub, sizeof(stub));
+      const std::uint64_t immlo = (stub[0] >> 29) & 0x3U;
+      const std::uint64_t immhi = (stub[0] >> 5) & 0x7FFFFU;
+      const std::uint64_t adrpPage = (c.stub & ~0xFFFULL) + (((immhi << 2) | immlo) << 12);
+      const std::uint64_t ldrOffset = ((stub[1] >> 10) & 0xFFFU) * 8;
+      if ((stub[0] & 0x9F00001FU) != 0x90000010U || adrpPage != (c.slot & ~0xFFFULL) || (stub[1] & 0xFFC003FFU) != 0xF9400211U ||
+          ldrOffset != (c.slot & 0xFFFU) || stub[3] != 0xD61F0220U) {
+        std::fprintf(stderr, "libr15 CR15Game %s PLT stub at %#llx does not load the slot %#llx\n", c.name,
+                     static_cast<unsigned long long>(c.stub), static_cast<unsigned long long>(c.slot));
+        QCHECK(false);
+      }
+      std::vector<std::uint64_t> callers;
+      for (const Elf64_Phdr& ph : r15.phdrs) {
+        if (ph.p_type != PT_LOAD || (ph.p_flags & PF_X) == 0) continue;
+        for (std::uint64_t at = ph.p_vaddr; at + 4 <= ph.p_vaddr + ph.p_filesz; at += 4) {
+          std::uint32_t word = 0;
+          std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + at, sizeof(word));
+          if ((word & 0x7c000000U) != 0x14000000U) continue;  // b or bl
+          std::int64_t imm = static_cast<std::int64_t>(word & 0x03ffffffU);
+          if ((imm & 0x02000000) != 0) imm -= 0x04000000;
+          if (at + static_cast<std::uint64_t>(imm * 4) == c.stub) callers.push_back(at);
+        }
+      }
+      if (callers != c.callSites) {
+        std::fprintf(stderr, "libr15 CR15Game %s stub has %zu b/bl callers, not the %zu pinned\n", c.name, callers.size(),
+                     c.callSites.size());
+        for (const std::uint64_t at : callers) std::fprintf(stderr, "  caller %#llx\n", static_cast<unsigned long long>(at));
+        QCHECK(false);
+      }
+    }
+    std::uint32_t current[4] = {};
+    std::uint32_t pending[4] = {};
+    std::memcpy(current, static_cast<const unsigned char*>(r15.mem) + pinned::kCR15GameCurrentLiteral, sizeof(current));
+    std::memcpy(pending, static_cast<const unsigned char*>(r15.mem) + pinned::kCR15GamePendingLiteral, sizeof(pending));
+    if (std::memcmp(current, pinned::kCR15GameCurrentLiteralWords, sizeof(current)) != 0 ||
+        std::memcmp(pending, pinned::kCR15GamePendingLiteralWords, sizeof(pending)) != 0) {
+      std::fprintf(stderr, "libr15 CR15Game settings literals at %#llx and %#llx are not the stock {0, 0x1003, 1, 0} and {0x1003, 1, 0, 0xa}\n",
+                   static_cast<unsigned long long>(pinned::kCR15GameCurrentLiteral),
+                   static_cast<unsigned long long>(pinned::kCR15GamePendingLiteral));
+      QCHECK(false);
+    }
+    for (const pinned::CR15GameWord& w : pinned::kCR15GameSettingsCode) {
+      std::uint32_t word = 0;
+      std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + w.vaddr, sizeof(word));
+      if (word != w.word) {
+        std::fprintf(stderr, "libr15 CR15Game constructor word at %#llx is %#x, not the pinned %#x\n",
+                     static_cast<unsigned long long>(w.vaddr), word, w.word);
+        QCHECK(false);
+      }
     }
   }
 

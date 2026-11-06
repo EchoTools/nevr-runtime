@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0036-predict-before-every-headset-run.md
+audience: all
+---
+
 # ADR 0036: a headset or client run is checked against a row written before it
 
 Status: proposed. Applies to every run on a headset or a game client that is meant to show a change works or a defect

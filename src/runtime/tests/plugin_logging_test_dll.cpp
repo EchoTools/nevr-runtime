@@ -12,7 +12,7 @@
 
 namespace {
 
-constexpr NvrPluginInfo kInfo = {
+constexpr NevrPluginInfo kInfo = {
     TEST_PLUGIN_NAME,
     "Hermetic plugin-loader fixture that logs through the host",
     1u,
@@ -26,22 +26,22 @@ NevrLogFn g_log = nullptr;
 uint32_t g_frames = 0u;
 bool g_boundAtInit = false;
 
-bool CtxCoversLog(const NvrGameContext* ctx) {
-  return ctx != nullptr && ctx->ctx_size >= offsetof(NvrGameContext, log) + sizeof(NevrLogFn) &&
+bool CtxCoversLog(const NevrGameContext* ctx) {
+  return ctx != nullptr && ctx->ctx_size >= offsetof(NevrGameContext, log) + sizeof(NevrLogFn) &&
          ctx->plugin_id != nullptr && ctx->log != nullptr;
 }
 
 }  // namespace
 
-NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) {
+NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
   return kInfo;
 }
 
-NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
+NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) {
   return NEVR_PLUGIN_API_VERSION;
 }
 
-NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char*) {
+NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char*) {
   g_frames = 0u;
   g_boundAtInit = CtxCoversLog(ctx);
   if (!g_boundAtInit) return 0;
@@ -52,7 +52,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char*) {
   return 0;
 }
 
-NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext* ctx) {
+NEVR_PLUGIN_API void NevrPluginOnFrame(const NevrGameContext* ctx) {
   ++g_frames;
   if (!CtxCoversLog(ctx)) return;
   char n[16];
@@ -61,7 +61,7 @@ NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext* ctx) {
   ctx->log(ctx->plugin_id, NEVR_LOG_DEBUG, "frame", fields, 1);
 }
 
-NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx, uint32_t oldState, uint32_t newState) {
+NEVR_PLUGIN_API void NevrPluginOnGameStateChange(const NevrGameContext* ctx, uint32_t oldState, uint32_t newState) {
   if (!CtxCoversLog(ctx)) return;
   char from[16];
   char to[16];
@@ -71,7 +71,7 @@ NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx, uint3
   ctx->log(ctx->plugin_id, NEVR_LOG_INFO, "state change", fields, 2);
 }
 
-NEVR_PLUGIN_API void NvrPluginShutdown(void) {
+NEVR_PLUGIN_API void NevrPluginShutdown(void) {
   if (g_log != nullptr) g_log(g_id, NEVR_LOG_ERROR, "shutdown bye", nullptr, 0);
 }
 

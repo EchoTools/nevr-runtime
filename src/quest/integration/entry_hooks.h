@@ -102,6 +102,20 @@ bool InstallPluginMainLevel() noexcept;
 bool PnsProviderEnabled() noexcept;
 bool InstallPnsProviderHook() noexcept;
 
+// The gate on the folded combat modules (#2170, combat/combat_active.h): called once the configuration is resolved, with the
+// configuration's `combat.force`. It asks nevr_build::kIsDev, which entry.cpp holds (it includes the generated nevr_build_info.h),
+// makes the answer from the variant the constructor read from the APK's stamp, and logs one combat_active line.
+void ResolveCombatActive(bool forceAsked) noexcept;
+
+// The combat area's steps (#2171, combat/combat_install.h), defined in entry.cpp beside ResolveCombatActive: whether the folded combat
+// modules run in this process (combat::Active()), the early install step, the normal install step (the post-load action's body), the
+// `not_started` record of a normal step that never got its moment, and the `combat_config` line.
+bool CombatActive() noexcept;
+bool InstallCombatEarly() noexcept;
+bool InstallCombatNormal() noexcept;  // true when the step ran (false: combat is off here, or the step was already ended)
+void NoteCombatNotStarted(const char* reason) noexcept;
+void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept;
+
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.
 void RunSentinelConstructor() noexcept;

@@ -8,7 +8,7 @@ when, they appear in all capitals, as shown here.
 **Required reading** for anyone adding a name to this repository. It covers how the project name is
 spelled inside a name, and which spellings already in the tree are not models. It does not set case
 rules for locals, members, enumerators or macros other than the project prefix: the tree has no single
-convention for them to codify.
+convention for them to codify. It also fixes the opening lines of an ADR, its read contract.
 
 The identifier rules below are for **new** names. The tree contains older names that break them; the section
 "Names in the tree that are not models" lists the kinds, so nobody copies one.
@@ -24,7 +24,8 @@ One family, three cases:
 | `nevr` | files, directories, CMake targets, namespaces, flat config keys the runtime owns | `src/core/nevr_config.h`, `nevr_core`, `namespace nevr`, `nevr_socket_uri` |
 
 - Those three are the only spellings of the project name in an identifier. `Nvr` (no `e`) and every
-  other mixed case (`nEVR`, `NeVR`, `NEvR`, `NevR`, ...) are anti-patterns in an identifier. In prose the
+  other mixed case (`nEVR`, `NeVR`, `NEvR`, `NevR`, ...) are anti-patterns in an identifier; the one
+  place `Nvr` remains is the deprecated alias of the plugin and module C ABI (below). In prose the
   project brand is spelled `nEVR`.
 - A name states the project once. Inside `namespace nevr`, a type is `Config`, not `NevrConfig`.
 - A log tag is `[NEVR.<AREA>]` with an upper-case area. The areas in use are the `[NEVR.` tags in
@@ -43,7 +44,7 @@ One family, three cases:
 | Macro, environment variable | `NEVR_<NAME>` |
 | Log tag | `[NEVR.<AREA>]` |
 | DLL export | `NEVR_<Verb><Noun>` |
-| Published C ABI (new interface) | `Nevr*` types and functions, `NEVR_*` macros; never `Nvr*` |
+| Published C ABI (plugins and modules) | `Nevr*` types, typedefs, functions and exports, `NEVR_*` macros; never `Nvr*` |
 | Flat config key | `nevr_<snake_case>` |
 | Runtime DLL file | `nevr-runtime.dll` (the file `nevr_host::ResolveRuntimePath` names, `kRuntimeFileName` in `src/runtime/host/runtime_load.cpp`; the file name is hyphenated, a CMake target is still `nevr_<name>`; `tools/tests/test_runtime_dll_name.py` forbids the one-word spelling) |
 | Git branch | use the branch format in `AGENTS.md` under "Branch lifecycle" |
@@ -58,19 +59,59 @@ exact name (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGEL
 the like) and the date prefixes and ADR numbers already in the tree. A heading is a descriptive phrase in
 sentence case, as in `docs/standards/` and `docs/adr/` (an ADR's H1 is `ADR NNNN: <phrase>`).
 
-## The frozen exception: the `Nvr*` plugin and module C ABI
+## The read contract at the top of an ADR
 
-`sdk/include/nevr/plugin_interface.h` and `src/extension/module_interface.h` publish the C ABI that
-third-party DLLs compile against, and the names there spell the prefix `Nvr`: `NvrPluginInfo`,
-`NvrGameContext`, `NvrPluginInit`, `NvrPluginInitEx`, `NvrModuleContext`, and the rest. The host
-resolves the eight plugin entry points with `GetProcAddress` (`src/runtime/ext/plugin_loader.cpp`), so
-renaming one stops every already-built plugin from loading; the module names are the typedefs and
-context structs statically linked modules compile against.
+Every file in `docs/adr/` opens with the same six lines, then a blank line, then its `# ADR NNNN: <phrase>` heading:
 
-That set is frozen: it does not grow, and a new published surface uses `Nevr`/`NEVR_`. The set is
-written out in `tools/tests/test_naming.py` (`FROZEN_NVR`), so adding or renaming a name is an edit
-to that file. Whether the existing set is migrated (with a compatibility shim) or stays as a permanent
-separate namespace is an open ABI decision, issue #130.
+```
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/<this file's own name>
+audience: all
+---
+```
+
+The block says how the document is to be read before anyone acts on it. An ADR states a decision in one section, the
+alternatives in another and the consequences in a third, and cites other ADRs by file and line, so a reader who takes one
+section can act on a decision whose limits are in a part they did not read. The block makes the whole read a stated rule
+of the document. `atwd` ("all the way down") is the maintainers' name for this convention, in which each document of a
+body of rules declares its own extent and audience. The heading line is a YAML comment that marks the block, and the
+three keys are:
+
+| Key | Meaning | Value in an ADR |
+| --- | --- | --- |
+| `read` | How much of the document is to be read before acting on it. `whole` is every line, as one read: no `head`, `tail`, `sed -n`, `grep` or offset and limit. The convention also has `head` (the first lines are required, the rest is read on demand) and `query` (the document is read only through a query tool). | `whole` |
+| `read_via` | The command that reads the document the way `read` requires, run from the repository root. | `cat docs/adr/<own file name>` |
+| `audience` | Whom the contract binds. `all` is every reader of the repository, a person or an agent, not one role or project. The convention also has narrower values (roles, seats, a project's seats). | `all` |
+
+A new ADR carries the block, with `read_via` naming its own file. Nothing in this repository enforces it: no test or
+check reads the block, and the hook that warns on a partial read of a file that declares one runs on one maintainer's
+machine, outside the repository. For a reader without that hook, this section is the whole rule: read the ADR to its
+last line, with the `read_via` command, before relying on any part of it.
+
+## The plugin and module C ABI prefix: `Nevr`, with `Nvr` deprecated
+
+`sdk/include/nevr/plugin_interface.h` and `src/extension/module_interface.h` publish the C ABI that third-party DLLs
+compile against. Its prefix is `Nevr`: `NevrPluginInfo`, `NevrGameContext`, `NevrPluginInit`, `NevrPluginInitEx`,
+`NevrModuleContext` and the rest, and a plugin exports `NevrPluginGetInfo`, `NevrPluginGetApiVersion`,
+`NevrPluginGetCapabilities`, `NevrPluginInit`, `NevrPluginInitEx`, `NevrPluginOnFrame`, `NevrPluginOnGameStateChange` and
+`NevrPluginShutdown`. A new published type, function or export is `Nevr*`; its macros are `NEVR_*`.
+
+`Nvr*` is deprecated, not gone, so that a plugin already built keeps loading:
+
+- The two headers declare each old type name as a `[[deprecated("use Nevr...")]]` alias of the new one, and
+  `NvrModuleApiVersionSupported` as a deprecated wrapper. Source written against the old names compiles with a warning.
+- Both plugin loaders (`src/runtime/ext/plugin_loader.cpp`, `src/quest/plugin/plugin_loader.cpp`) resolve each entry
+  point's `Nevr*` export first and the `Nvr*` export when the plugin has no other, and log one Info line per plugin that
+  loaded through a deprecated export (`loaded with deprecated Nvr exports`).
+- Nothing else in the tree is spelled `Nvr`. `tools/tests/test_naming.py` allows it in the two alias headers
+  and in the places written out in `DEPRECATED_NVR_USES` (the fixtures that prove an old plugin loads, and the loaders'
+  messages), and nowhere else.
+
+The aliases and the fallback go when no plugin that ships still exports `Nvr*`: when the Info line above has not been logged
+for a plugin the project distributes or knows of. `docs/adr/0043-nevr-is-the-plugin-abi-prefix.md` records the decision and
+the alternatives.
 
 ## Names in the tree that are not models
 
@@ -96,7 +137,7 @@ separate namespace is an open ABI decision, issue #130.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
-`tools/tests/test_naming.py` enforces the machine-checkable rules: no `Nvr` identifier outside the frozen set,
+`tools/tests/test_naming.py` enforces the machine-checkable rules: `Nvr` only as the deprecated aliases of the plugin and module C ABI,
 no non-canonical spelling of the project name in a file (or token) that does not already carry one
 (`LEGACY_SPELLINGS`, which only shrinks, and `BRAND_PROSE_SPELLINGS`, the documents whose prose spells the brand
 `nEVR`), one spelling of the lifecycle namespace (`nevr::lifecycle`), the brand spelling `nEVR` in the

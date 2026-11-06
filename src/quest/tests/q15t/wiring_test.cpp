@@ -1,7 +1,7 @@
 // Host test of plugin.cpp's module wiring (every module option ON, Q15T_POWERBOOST=3, Q15T_SHIELDGAMMA=2) against a fake game image in
-// which only the clock/refresh/tick slots and levelname's four vtable words are the pinned ones: every other module must refuse, loudly
+// which only the tick slot and levelname's four vtable words are the pinned ones: every other module must refuse, loudly
 // and by name, and InitEx must still return 0 with hooks swapped. Real code, real mprotect, real /proc/self/maps.
-// Also the capability matrix: built with -DWIRING_CAPS_ONLY it only checks NvrPluginGetCapabilities against -DEXPECT_ALTERS / -DEXPECT_NETWORK.
+// Also the capability matrix: built with -DWIRING_CAPS_ONLY it only checks NevrPluginGetCapabilities against -DEXPECT_ALTERS / -DEXPECT_NETWORK.
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -18,8 +18,8 @@
 #include "wallfire.h"
 
 extern "C" {
-NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext*, const char*);
-NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void);
+NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext*, const char*);
+NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void);
 }
 
 static int g_fail = 0;
@@ -34,7 +34,7 @@ static int g_fail = 0;
   } while (0)
 
 #if defined(WIRING_BVH_ONLY)
-// only Q15T_BVH on (no refresh tick, no T-26): the bvh tick alone must register and make InitEx install the game tick
+// only Q15T_BVH on (no T-26): the bvh tick alone must register and make InitEx install the game tick
 extern "C" __attribute__((noinline, visibility("default"))) void FakeExclusiveUpdateGame(void*) {}
 extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetClockLevels(void*, int32_t, int32_t) { return 0; }
 extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetDisplayRefreshRate(void*, float) { return 0; }
@@ -67,20 +67,20 @@ int main() {
   for (const q15t::BvhHookSlot* h : {&bp.init, &bp.shutdown, &bp.intersect, &bp.occluded, &bp.touch, &bp.gate})
     *reinterpret_cast<uintptr_t*>(base + h->slot) = base + h->fn;
   mprotect(p, kImage, PROT_READ);
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.base_addr = base;
   ctx.flags = NEVR_HOST_IS_CLIENT | NEVR_HOST_PLATFORM_QUEST;
-  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.plugin_id = "q15t";
   ctx.log = &BLog;
   const NevrQuestHostApi quest{sizeof(NevrQuestHostApi), nullptr, &FakeRegisterScriptRedirect, nullptr, nullptr};
   ctx.quest = &quest;
   // Not the pinned build: InitEx refuses before it installs anything, so it registers no redirect either.
   ctx.game_build_id = "0000000000000000000000000000000000000000";
-  CHECK(NvrPluginInitEx(&ctx, "") == 0, "InitEx must return 0 on a build it refuses");
+  CHECK(NevrPluginInitEx(&ctx, "") == 0, "InitEx must return 0 on a build it refuses");
   CHECK(g_redirectCalls == 0, "a refused build must not register the script redirect (calls=%d)", g_redirectCalls);
   ctx.game_build_id = Q15T_BUILD_ID_FOR_TEST;
-  CHECK(NvrPluginInitEx(&ctx, "") == 0, "InitEx must return 0");
+  CHECK(NevrPluginInitEx(&ctx, "") == 0, "InitEx must return 0");
   CHECK(g_redirectCalls == 1 && g_redirectId == "q15t" && g_redirectCount == 9,
         "InitEx must register the nine script libraries once (calls=%d id=%s count=%u)", g_redirectCalls, g_redirectId.c_str(),
         g_redirectCount);
@@ -114,10 +114,10 @@ int main() {
   w[4] = reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame);
   *reinterpret_cast<uintptr_t*>(base + 0x36f9fd8) = base + 0x1a6f164;  // the CVR::HeadsetType slot holds the pinned function
   mprotect(p, kImage, PROT_READ);
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.base_addr = base;
   ctx.flags = NEVR_HOST_IS_CLIENT | NEVR_HOST_PLATFORM_QUEST;
-  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.plugin_id = "q15t";
   ctx.log = &GLog;
   ctx.game_build_id = Q15T_BUILD_ID_FOR_TEST;
@@ -128,7 +128,7 @@ int main() {
   if (FILE* f = std::fopen((std::string(dir) + "/levelname.off").c_str(), "w")) std::fclose(f);
   q15t::SetModuleSwitchDirForTest(dir);
 #endif
-  CHECK(NvrPluginInitEx(&ctx, "") == 0, "InitEx must return 0");
+  CHECK(NevrPluginInitEx(&ctx, "") == 0, "InitEx must return 0");
   CHECK(*reinterpret_cast<uintptr_t*>(base + 0x36f9fd8) != base + 0x1a6f164, "the CVR::HeadsetType slot was not swapped");
   const q15t::HeadsetGateRanges r = q15t::GetHeadsetGateRangesForTest();
   CHECK(r.link_lo == base + 0x202ba74 && r.link_hi == base + 0x202bac8, "link range %llx..%llx, want the Bind (ELF 0x202ba74..0x202bac8)",
@@ -153,7 +153,7 @@ int main() {
 #elif defined(WIRING_CAPS_ONLY)
 extern "C" __attribute__((noinline, visibility("default"))) void FakeExclusiveUpdateGame(void*) {}  // host_overrides.h names it
 int main() {
-  const uint32_t caps = NvrPluginGetCapabilities();
+  const uint32_t caps = NevrPluginGetCapabilities();
   const bool gameplay = (caps & NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY) != 0, network = (caps & NEVR_PLUGIN_CAP_NETWORK) != 0;
   CHECK((caps & NEVR_PLUGIN_CAP_HOOKS_ENGINE) != 0, "caps 0x%x lack HOOKS_ENGINE", caps);
   CHECK(gameplay == (EXPECT_ALTERS != 0), "caps 0x%x: ALTERS_GAMEPLAY is %d, want %d", caps, gameplay, EXPECT_ALTERS);
@@ -229,22 +229,24 @@ int main() {
   if (FILE* f = std::fopen(off_file.c_str(), "w")) std::fclose(f);
   q15t::SetFxTrailDirForTest(dir);
 
-  NvrGameContext ctx{};
+  NevrGameContext ctx{};
   ctx.base_addr = base;
   ctx.flags = NEVR_HOST_IS_CLIENT | NEVR_HOST_PLATFORM_QUEST;
-  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.ctx_size = sizeof(NevrGameContext);
   ctx.plugin_id = "q15t";
   ctx.log = &FakeLog;
   ctx.game_build_id = Q15T_BUILD_ID_FOR_TEST;
 
-  const uint32_t caps = NvrPluginGetCapabilities();
+  const uint32_t caps = NevrPluginGetCapabilities();
   CHECK((caps & NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY) != 0, "caps 0x%x: ALTERS_GAMEPLAY missing with every module on", caps);
   CHECK((caps & NEVR_PLUGIN_CAP_NETWORK) != 0, "caps 0x%x: NETWORK missing with ec on", caps);
 
-  const int rc = NvrPluginInitEx(&ctx, "");
+  const int rc = NevrPluginInitEx(&ctx, "");
   CHECK(rc == 0, "InitEx returned %d with hooks swapped and modules refusing; the loader would dlclose a live plugin", rc);
-  const uintptr_t clock_now = w[2];
-  CHECK(clock_now != reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels), "the clock slot was not swapped: the run proves nothing");
+  // the runtime owns the clock levels and the refresh rate (#2000): the plugin leaves both slots alone
+  CHECK(w[2] == reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels), "the plugin wrote the clock slot");
+  CHECK(w[3] == reinterpret_cast<uintptr_t>(&vrapi_SetDisplayRefreshRate), "the plugin wrote the refresh-rate slot");
+  CHECK(CountLines("vrapi_SetClockLevels") == 0 && CountLines("vrapi_SetDisplayRefreshRate") == 0, "the plugin names a vrapi slot it does not install");
 
   // every compiled module is named in the init record
   const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
@@ -311,9 +313,9 @@ int main() {
     if (g_lines[i].text.find("module install module=ecfx ") != std::string::npos) at_ecfx = i;
   CHECK(at_ecfx > at_ec, "ecfx (line %zu) must be installed after ec (line %zu)", at_ecfx, at_ec);
 
-  // the tick table: hz (the refresh tick), gunconnect, aibots, impactsnd, sensorwd and bvh register; dronekill, dronemuzzle, powerboost and
+  // the tick table: gunconnect, aibots, impactsnd, sensorwd and bvh register; dronekill, dronemuzzle, powerboost and
   // weapon_arm did not install here, so they register nothing. The tick is installed once, after every registration.
-  CHECK(CountLines("game tick callbacks registered=6 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
+  CHECK(CountLines("game tick callbacks registered=5 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
   CHECK(CountLines("hook install hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok", 1) == 1, "the game tick was not installed ok");
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
   CHECK(CountLines("game tick callbacks") == 1, "more than one tick install record");

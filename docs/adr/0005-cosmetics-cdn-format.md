@@ -1,3 +1,10 @@
+---
+# atwd read contract
+read: whole
+read_via: cat docs/adr/0005-cosmetics-cdn-format.md
+audience: all
+---
+
 # ADR 0005: Cosmetics arrive as `.evrp` packages listed in a JSON manifest on a CDN
 
 Status: accepted, implemented (`src/runtime/patch/asset_cdn.cpp`, `src/runtime/patch/evrp_package.cpp`).

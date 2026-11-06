@@ -59,19 +59,12 @@ using namespace nevr_game_server;
 
 namespace {
 
-/// Stores the session's game type for the public Arena round default (#982) and says so, with the type it replaces and
-/// how many round_time reads found no type since the last session, so one server run shows the order of the session
-/// messages and the game's reads. A public Arena session whose type arrived after such a read is a Warning: those
-/// reads kept the game's own round length.
+/// Stores the session's game type and says so, with the type it replaces, so one server run shows the order of the
+/// session messages; the session's step follows the type.
 void StoreSessionGameType(const std::string& gameType, const char* source, const std::string& sessionId) {
   const std::optional<std::string> previous = nevr_arena_round_time::SetSessionGameType(gameType);
-  const std::uint32_t readsWithoutType = nevr_arena_round_time::TakeReadsWithoutType();
-  const bool missed = readsWithoutType > 0 && nevr_arena_round_time::DecideRoundTimeDefault(gameType).applied;
-  Log(missed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
-      "[NEVR.GAMESERVER] session game type stored game_type=%s source=%s session=%s previous=%s "
-      "round_time_reads_without_type=%u%s",
-      gameType.c_str(), source, sessionId.c_str(), previous ? previous->c_str() : "none", readsWithoutType,
-      missed ? " (the game read round_time before this type was known; those reads kept the game's own value)" : "");
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] session game type stored game_type=%s source=%s session=%s previous=%s",
+      gameType.c_str(), source, sessionId.c_str(), previous ? previous->c_str() : "none");
   // #1785: the step follows the type (Combat's physics is tuned for 30 a second, not the Arena rate).
   ApplySessionTimestep(gameType, sessionId);
 }
@@ -162,7 +155,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
       self->CancelEndedSessionWatchdog();
 
       // The game type is the engine's symbol from the settings JSON; the lobby type is only the fallback (#996).
-      // It is stored for every session, telemetry or not: the public Arena round default reads it (#982).
+      // It is stored for every session, telemetry or not: the session's step follows it (#1785).
       const auto gameType = nevr_telemetry_header::GameTypeForSession(sessionCreate.settings_json(),
                                                                       sessionCreate.lobby_type() == 1);
       StoreSessionGameType(gameType.gameType, "session_create", sessionCreate.lobby_session_id());
@@ -870,9 +863,9 @@ void GameServerLib::RegisterTcpCallbacks() {
       // message does. Once we move to nevr-server-rs with a proper protobuf protocol,
       // this passthrough goes away — the protobuf should carry everything.
       auto* broadcaster = GetContext().GetBroadcaster();
-      // #982: this frame is what the game starts the session from, so its game type is stored before the game sees
-      // it. The protobuf session create normally arrives first and stores the same type; a service that sends the
-      // frame alone, or in the other order, no longer leaves the game reading the previous session's type or none.
+      // This frame is what the game starts the session from, so its game type is stored, and the session's step set
+      // (#1785), before the game sees it. The protobuf session create normally arrives first and stores the same type;
+      // a service that sends the frame alone, or in the other order, does not leave the session on the previous step.
       if (const auto frameType =
               nevr_game_type_table::GameTypeOfSessionStart(static_cast<const uint8_t*>(data), size)) {
         StoreSessionGameType(*frameType, "legacy_session_start", nevr_server_bots::SessionIdOf(

@@ -12,6 +12,7 @@
 
 #include "core/runtime_abi.h"
 #include "runtime/host/bootstrap_diagnostics.h"
+#include "runtime/host/update_swap.h"
 #include "runtime/ext/plugin_signature.h"
 
 #include <windows.h>
@@ -33,6 +34,7 @@ enum class RuntimeLoadOutcome : std::uint32_t {
   kAbiRejected = 7,          // ValidateRuntimeApi rejected (see abi_status)
   kInitFailed = 8,           // initialize() returned nonzero
   kRuntimeRefused = 9,       // the verifier refused nevr-runtime.dll, or it could not be read: never loaded (#854)
+  kUpdateBlocked = 10,       // a self-update left the root unfinished and could not finish it: nothing loaded (ADR 0024)
 };
 
 /// Where the root of the runtime came from (docs/adr/0012-static-install-root.md, "Where state resolves").
@@ -88,11 +90,25 @@ struct RuntimeLoadResult {
   // The CERT_CHAIN_ENGINE_CONFIG cbSize the verifier made its chain engine with: 88, or 80 on a Wine before 11.5 (#1262).
   // 0 when the file was not accepted by a check.
   std::uint32_t verify_engine_cbsize = 0;
+  // For kUpdateBlocked: why the start stopped before any load (update_swap.h, UpdateResult::reason).
+  const char* update_reason = nullptr;
+  // True when the runtime is a release the host swapped in that was mapped and failed: the host marked it, and the
+  // next start puts the previous release back (ADR 0024, section 6). The stop notice says so.
+  bool update_failed = false;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
   const char* OutcomeName() const;
   const char* DegradedAction() const;
 };
+
+/// What a failed load of the pending release asks of the host (ADR 0024, section 6).
+enum class PendingFailure : std::uint8_t {
+  kNone,      ///< loaded, or a stop that is not the release's doing
+  kNeverRan,  ///< refused, absent, or not loadable: no line of the runtime ran, so the previous one is put back at once
+  kMapped,    ///< mapped and then failed: it stays mapped, so the next start puts the previous one back
+};
+
+PendingFailure ClassifyPendingFailure(RuntimeLoadOutcome outcome) noexcept;
 
 /// What the host found when it looked for nevr-runtime.dll at the path ResolveRuntimePath returned.
 enum class RuntimeFile : std::uint8_t {
@@ -171,10 +187,17 @@ void SetVerifyPolicyForTest(const nevr_plugin_signature::Policy* policy) noexcep
 void SetDevBuildForTest(int mode) noexcept;
 // Test seam: called once with the path just before the load, while the verified file is still held.
 void SetBeforeLoadHookForTest(void (*hook)(const wchar_t* path)) noexcept;
+// Test seam: called once with the path right after the update lock was released, before the runtime's entry is looked
+// up and its initialize runs (ADR 0024, section 4.1).
+void SetAfterMapHookForTest(void (*hook)(const wchar_t* path)) noexcept;
 // Test seam: the folder the runtime is looked for in, instead of the nevr root. Null: the production rule. The string
 // must outlive the loads; a harness that stages a runtime beside its host stand-in passes that folder.
 void SetRuntimeDirForTest(const wchar_t* directory) noexcept;
 #endif
+
+/// The policy the host verifies a file against: nevr_plugin_pins::PinnedPolicy(), or a test target's own
+/// (SetVerifyPolicyForTest). The swap's check of a staged file uses it too (ADR 0024, section 4.3).
+const nevr_plugin_signature::Policy& HostVerifyPolicy() noexcept;
 
 class RuntimeLoader {
  public:
@@ -183,8 +206,24 @@ class RuntimeLoader {
 
   // Run the state machine against the prepared path. Emits a diagnostic on every
   // outcome. The failed runtime is left mapped (it may already have
-  // patched something); it is never FreeLibrary'd.
-  RuntimeLoadResult Load(const NevrHostContext& host, BootstrapDiagnostics& diagnostics);
+  // patched something); it is never FreeLibrary'd. `update_lock`, when not null, is the self-update lock the start
+  // holds (update_swap.h): it is released once LoadLibraryExW has returned, or once the verdict says the file is not
+  // loaded, and always before the runtime's entry is looked up and its initialize runs (ADR 0024, section 4.1).
+  RuntimeLoadResult Load(const NevrHostContext& host, BootstrapDiagnostics& diagnostics,
+                         UpdateLock* update_lock = nullptr);
+
+  /// The start's whole load (ADR 0024, section 4 and 6): self-update's swap and pending decision, the load, and for a
+  /// pending release that fails to load, the rollback in this start (R1, never ran) or the mark for the next one
+  /// (R1, mapped). Emits the same records as Load, once per load: a start that falls back writes two `versions` and two
+  /// `runtime_load` records with `update_rollback` between them.
+  RuntimeLoadResult LoadAtStart(const NevrHostContext& host, BootstrapDiagnostics& diagnostics);
+
+  /// The start stopped before any load because a self-update left the root unfinished (UpdateAction::kStop):
+  /// the result is kUpdateBlocked with `reason`, and nothing is loaded.
+  void RecordStopForUpdate(const char* reason);
+
+  /// The prepared runtime path, or null when none could be formed.
+  const wchar_t* Path() const { return path_ok_ ? path_ : nullptr; }
 
   /// Call api->initialize(&host). Returns its result; an exception of any type that escapes it is caught here
   /// (exceptions must not cross the DLL boundary), sets *threw and returns kInitThrewCode.
