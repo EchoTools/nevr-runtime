@@ -54,7 +54,6 @@ constexpr const char* kCombatGatePermKey = "combat.gate_perm";            // Que
 constexpr const char* kCombatGateBotsKey = "combat.gate_bots";            // Quest only (default true, #2180)
 constexpr const char* kCombatGateLinkKey = "combat.gate_link";            // Quest only (default true, #2180)
 constexpr const char* kCombatGateLinkLibsKey = "combat.gate_link_libs";   // Quest only (default: the 21 libraries of the combat entries, #2180)
-constexpr const char* kCombatLevelnameKey = "combat.levelname";           // Quest only (default true, #2180)
 constexpr const char* kCombatPfxKey = "combat.pfx";                // Quest only (default true, #2188)
 constexpr const char* kCombatPfxtevKey = "combat.pfxtev";          // Quest only (default true, #2188)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
@@ -390,7 +389,6 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.gatePerm = ReadCombatSwitch(cfg, kCombatGatePermKey, r);
   r.config.combat.gateBots = ReadCombatSwitch(cfg, kCombatGateBotsKey, r);
   r.config.combat.gateLink = ReadCombatSwitch(cfg, kCombatGateLinkKey, r);
-  r.config.combat.levelname = ReadCombatSwitch(cfg, kCombatLevelnameKey, r);
   r.config.combat.gateLinkLibs = ReadCombatText(cfg, kCombatGateLinkLibsKey, r);
   r.config.combat.pfx = ReadCombatSwitch(cfg, kCombatPfxKey, r);
   r.config.combat.pfxtev = ReadCombatSwitch(cfg, kCombatPfxtevKey, r);

@@ -11,6 +11,7 @@
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
+#include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/mapping_perms.h"
@@ -42,6 +43,8 @@ void* g_headsetNext = nullptr;
 std::atomic<bool> g_ran{false};
 std::atomic<std::uintptr_t> g_permLo{0}, g_permHi{0}, g_botsLo{0}, g_botsHi{0}, g_linkLo{0}, g_linkHi{0};
 std::atomic<std::uintptr_t> g_game{0};
+// Where the game keeps LoadLevelName (CR15Game vtable word) and what stock holds there: absolute, published by the install; 0 when the bot gate is off.
+std::atomic<std::uintptr_t> g_levelNameSlot{0}, g_levelNameStock{0};
 std::atomic<std::uint32_t> g_partyCalls{0}, g_partyGated{0}, g_headsetCalls{0}, g_botsGated{0}, g_botsScopedOut{0}, g_linkGated{0};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<const Pins*> g_pinsOverride{nullptr};
@@ -66,8 +69,7 @@ std::uint32_t g_seenCount = 0;
 std::atomic<std::uint32_t> g_seenPublished{0};
 
 bool Within(std::uintptr_t addr, const std::atomic<std::uintptr_t>& lo, const std::atomic<std::uintptr_t>& hi) noexcept {
-  const std::uintptr_t l = lo.load(std::memory_order_acquire);
-  return addr - l < hi.load(std::memory_order_acquire) - l;
+  return InRange(addr, lo.load(std::memory_order_acquire), hi.load(std::memory_order_acquire));
 }
 
 void LogAnswered(const char* gate, std::uint32_t n, std::uintptr_t ret, std::int32_t realAnswer) noexcept {
@@ -79,8 +81,23 @@ void LogAnswered(const char* gate, std::uint32_t n, std::uintptr_t ret, std::int
 
 const char* ScopeReason(level::Kind kind) noexcept { return kind == level::Kind::kEchoArena ? "echo_arena" : "other_level"; }
 
-// Whether a combat map or the combat lobby is loaded in the game the tick saw, and why not (a token for the line).
+// Whether levelname's hook is on the game's LoadLevelName slot (the full-size global_mp loads): the word is anything but the stock function. An
+// unreadable word, or a gate whose slot is unpublished, is "not installed".
+bool LevelNameInstalled() noexcept {
+  const std::uintptr_t slot = g_levelNameSlot.load(std::memory_order_acquire);
+  if (slot == 0) return false;
+  bool ok = true;
+  const auto word = SafeRead<std::uintptr_t>(slot, &ok);
+  return ok && word != 0 && word != g_levelNameStock.load(std::memory_order_acquire);
+}
+
+// Whether the combat bot can be the answer: levelname is installed, and a combat map or the combat lobby is loaded in the game the tick saw. The
+// reason is a token for the line when not.
 bool BotsInScope(const char** reason) noexcept {
+  if (!LevelNameInstalled()) {
+    *reason = "levelname_not_installed";
+    return false;
+  }
   const std::uintptr_t game = g_game.load(std::memory_order_acquire);
   if (game == 0) {
     *reason = "no_game";
@@ -95,7 +112,7 @@ bool BotsInScope(const char** reason) noexcept {
 void LogScopedOut(std::uint32_t n, const char* reason) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_gates_scoped_out",
                       {{"gate", "bots"}, {"n", n}, {"reason", reason},
-                       {"msg", "the bot-body gate left the real answer: no combat map or combat lobby is loaded, so the game picks the bot body itself"}});
+                       {"msg", "the bot-body gate left the real answer: levelname is not installed or no combat map or combat lobby is loaded, so the game picks the bot body itself"}});
 }
 
 // The Bind (BindExpression<CR15HeadsetTypeExpression>) opens with `sub sp,sp,#0x20; stp x19,x30,[sp,#0x10]` and calls CVR::HeadsetType from that
@@ -263,6 +280,8 @@ ModuleResult Refused(const char* token) noexcept {
 
 }  // namespace
 
+bool InRange(std::uintptr_t addr, std::uintptr_t lo, std::uintptr_t hi) noexcept { return addr - lo < hi - lo; }
+
 bool LibraryName(std::uintptr_t addr, char* out, std::size_t n) noexcept {
   Dl_info di;
   if (addr == 0 || dladdr(reinterpret_cast<void*>(addr), &di) == 0 || di.dli_fname == nullptr) return false;
@@ -304,7 +323,7 @@ void Tick(std::uintptr_t game) noexcept {
 }
 
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Switches& switches) noexcept {
-  const gates::Choice choice = gates::Decide({switches.perm, switches.bots, switches.link, switches.levelname});
+  const gates::Choice choice = gates::Decide({switches.perm, switches.bots, switches.link});
   if (!choice.perm && !choice.bots && !choice.link) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_gates_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"gate_perm", choice.permReason}, {"gate_bots", choice.botsReason},
@@ -371,6 +390,8 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
   }
   if (bots || link) {
     if (bots) {
+      g_levelNameStock.store(base + pins.levelNameStock, std::memory_order_release);
+      g_levelNameSlot.store(base + pins.levelNameSlot, std::memory_order_release);
       g_botsLo.store(base + pins.botsLo, std::memory_order_release);
       g_botsHi.store(base + pins.botsHi, std::memory_order_release);
     }
@@ -384,6 +405,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Swi
     if (got != sentinel::GotStatus::kOk) {
       g_botsLo.store(0, std::memory_order_release);
       g_botsHi.store(0, std::memory_order_release);
+      g_levelNameSlot.store(0, std::memory_order_release);
       g_linkLo.store(0, std::memory_order_release);
       g_linkHi.store(0, std::memory_order_release);
     }
@@ -432,7 +454,7 @@ void ResetForTest() noexcept {
   __atomic_store_n(&g_partyNext, static_cast<void*>(nullptr), __ATOMIC_RELEASE);
   __atomic_store_n(&g_headsetNext, static_cast<void*>(nullptr), __ATOMIC_RELEASE);
   g_ran.store(false);
-  for (std::atomic<std::uintptr_t>* word : {&g_permLo, &g_permHi, &g_botsLo, &g_botsHi, &g_linkLo, &g_linkHi, &g_game}) word->store(0);
+  for (std::atomic<std::uintptr_t>* word : {&g_permLo, &g_permHi, &g_botsLo, &g_botsHi, &g_linkLo, &g_linkHi, &g_game, &g_levelNameSlot, &g_levelNameStock}) word->store(0);
   for (std::atomic<std::uint32_t>* counter :
        {&g_partyCalls, &g_partyGated, &g_headsetCalls, &g_botsGated, &g_botsScopedOut, &g_linkGated, &g_seenPublished}) {
     counter->store(0);

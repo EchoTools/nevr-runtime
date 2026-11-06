@@ -2,7 +2,7 @@
 # The headset gates' arm64 checks (docs/adr/0046 rule 2; src/quest/combat/headset_gates.h). Run by `just test-quest-combat headset_gates` after the host
 # tests. Needs ANDROID_NDK_HOME (NDK r26d) and qemu-aarch64; each stops with its own message when it is missing, and Q15T_SKIP_QEMU=1 skips the run (and says so).
 #   1. the two entries (src/quest/combat/headset_gates_entry.inc) compiled for arm64 are exactly the expected instructions, in this order;
-#   2. the continuations, compiled for arm64 (-O2, as the sentinel is), read the two words the manager publishes with an acquire load (ldar or ldapr);
+#   2. each continuation, compiled for arm64 (-O2, as the sentinel is), loads the word the manager publishes with ldar or ldapr (a relaxed load fails);
 #   3. the freestanding program src/quest/tests/headset_gates_qemu.cpp, which includes that very text, runs under qemu-aarch64.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -42,17 +42,35 @@ if ! diff -u "$want" "$got"; then
 fi
 echo "headset_gates: the two entries are exactly the expected instructions"
 
-# The continuations (headset_gates.cpp) read the published next words with __atomic_load_n(..., __ATOMIC_ACQUIRE): the object must hold at least two acquire
-# loads, and no plain load of either word (the `ldr` forms are what #2216 found in an entry that read its word plainly).
+# The continuations (headset_gates.cpp) read the published next word with __atomic_load_n(..., __ATOMIC_ACQUIRE), and rule 7 of callback_thunk.h
+# requires an acquire load of it at every call. Each continuation is checked on its own: the register its first `blr` calls through must have
+# been loaded by ldar (or ldapr), not by a plain ldr (the shape #2216 found in an entry that read its word plainly). A relaxed load in either one fails.
 object="$scratch/headset_gates.o"
 "$cxx" -std=c++17 -O2 -fno-exceptions -fvisibility=hidden -Wall -Wextra -Werror -I "$root/src" -I "$root/src/quest/sentinel" -I "$root/sdk/include" \
   -c "$root/src/quest/combat/headset_gates.cpp" -o "$object"
-acquire=$("$objdump" -d "$object" | grep -c -E '\s(ldar|ldapr)[a-z]*\s' || true)
-if [ "$acquire" -lt 2 ]; then
-  echo "FAIL: headset_gates.o has $acquire acquire loads (ldar/ldapr); the continuations must read both next words with one"
-  exit 1
-fi
-echo "headset_gates: the continuations hold $acquire acquire load(s) of the published words"
+for fn in nevr_combat_party_dispatch nevr_combat_headset_dispatch; do
+  "$objdump" -d --no-show-raw-insn --disassemble-symbols="$fn" "$object" | python3 -I -c '
+import re, sys
+fn = sys.argv[1]
+lines = [l.split("\t", 1)[1].strip() for l in sys.stdin if re.match(r"^\s+[0-9a-f]+:\s", l)]
+for n, ins in enumerate(lines):
+    m = re.match(r"blr\s+(x\d+)$", ins)
+    if not m:
+        continue
+    reg = m.group(1)
+    for prev in reversed(lines[:n]):
+        if re.match(r"(ldar|ldapr)\s+" + reg + r",", prev):
+            print(fn + ": the next word reaches " + reg + " by " + prev.split()[0])
+            sys.exit(0)
+        if re.match(r"(?!cbn?z|tbn?z|cmp|cmn|tst|str|stp|stlr)[a-z0-9.]+\s+" + reg + r",", prev) or re.match(r"ldp\s+(\w+, )?" + reg + r",", prev):
+            print("FAIL: " + fn + ": the register the first blr calls through (" + reg + ") was last set by `" + prev + "`, not by ldar/ldapr")
+            sys.exit(1)
+    print("FAIL: " + fn + ": no instruction sets " + reg + " before its blr")
+    sys.exit(1)
+print("FAIL: " + fn + " has no blr to follow")
+sys.exit(1)
+' "$fn" || exit 1
+done
 
 if command -v qemu-aarch64 >/dev/null 2>&1; then
   qemu-aarch64 "$program" || { echo "FAIL: headset_gates_qemu"; exit 1; }

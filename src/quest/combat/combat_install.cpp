@@ -36,7 +36,6 @@ ModuleResult GatesNormal() noexcept {
   switches.perm = g_config.gatePerm.on;
   switches.bots = g_config.gateBots.on;
   switches.link = g_config.gateLink.on;
-  switches.levelname = g_config.levelname.on;
   switches.linkLibs = g_config.gateLinkLibs.source == nevr_quest::Source::kFile ? g_config.gateLinkLibs.text : nullptr;
   return headset_gates::Install(switches);
 }
@@ -169,7 +168,6 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"gate_bots", config.gateBots.on ? 1 : 0}, {"gate_bots_source", source(config.gateBots.source)},
                        {"gate_link", config.gateLink.on ? 1 : 0}, {"gate_link_source", source(config.gateLink.source)},
                        {"gate_link_libs_source", source(config.gateLinkLibs.source)},
-                       {"levelname", config.levelname.on ? 1 : 0}, {"levelname_source", source(config.levelname.source)},
                        {"msg", "the headset gates' keys (src/quest/combat/headset_gates.h); gate_link_libs is a text and is never logged, only where it came from"}});
 }
 

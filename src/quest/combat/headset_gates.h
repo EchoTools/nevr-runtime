@@ -5,7 +5,7 @@
  *   gate_perm  CR15NetPartyPermissionsExpression::operator() asks PartyMemberHeadsetType for each member of the party and clears the combat
  *              permission flag of a member whose kind is 3 (the Quest kind). The gate answers "not a Quest" (0) to that call.
  *   gate_bots  CR15NetGame::BotActorId asks HeadsetType and sends a Quest to bot body 0, the arena bot. The gate answers 0 to that call, so a
- *              combat match picks the combat bot (body 1) by the bot's symbol. Needs levelname: only the full-size global_mp carries body 1.
+ *              combat match picks the combat bot (body 1) by the bot's symbol. Only where levelname is installed (see "The bot gate").
  *   gate_link  BindExpression<CR15HeadsetTypeExpression> turns HeadsetType's answer into the four flags the menu scripts read. The gate answers the
  *              PC build's Link kind (4), which sets the link flag and not the Quest flag, to the Bind when the script library that holds the
  *              Bind is in the policy (`combat.gate_link_libs`: by default the 21 libraries of the combat entries, kDefaultLinkLibs).
@@ -21,6 +21,14 @@
  * Another handler on a slot. A gate acts on the game's own call site, so its entry stays the newest hook on its slot: the manager refuses a hook
  * that asks to join above it (`slot_held_by_entry`, a Warning naming both owners), and the entry installs above any handler already there and calls
  * it (kSlotHeldByEntry, #2219). `headset_gates_test` runs both orders.
+ *
+ * The bot gate. The combat bot (body 1) exists only in the full-size global_mp, which loads only where levelname's hook is on the game's
+ * LoadLevelName slot (CR15Game's vtable word at +0x260, kPins.levelNameSlot: the stock function is `base + kPins.levelNameStock`, and a word that
+ * is anything else, a hook, means levelname is on). The gate reads that word at each bot call (a data read with process_vm_readv, which never faults;
+ * an unreadable word is "not installed") and answers the real value otherwise (`levelname_not_installed`). So it depends on no levelname switch, in
+ * the plugin or the runtime, and holds when levelname moves. Not the loaded level: the level table holds the name the game was asked for
+ * (`global_mp`) before LoadLevelName appends `_lowspec`, so the table cannot tell the two apart (CncaGameSpace::LoadLevel stores its argument at gs+0x58
+ * and then calls the virtual).
  *
  * Arena (same APK). Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in:
  *   - gate_bots acts only while a combat map or the combat lobby is loaded (combat_level.h); in an Echo Arena level, and in every other level, it
@@ -89,7 +97,6 @@ struct Switches {
   bool perm = true;       // combat.gate_perm
   bool bots = true;       // combat.gate_bots
   bool link = true;       // combat.gate_link
-  bool levelname = true;  // combat.levelname (the bot gate needs it, combat_gates.h)
   const char* linkLibs = nullptr;  // combat.gate_link_libs; null: kDefaultLinkLibs
 };
 
@@ -121,6 +128,9 @@ struct Stats {
 Stats CurrentStats() noexcept;
 
 // ---- test support ------------------------------------------------------------------------------------------------------
+
+// Whether `addr` is in [lo, hi): the range compare of every gate, with the upper edge exclusive (the instruction at `hi` is not the caller).
+bool InRange(std::uintptr_t addr, std::uintptr_t lo, std::uintptr_t hi) noexcept;
 
 // The caller ranges the install published, as absolute addresses (an empty range, lo == hi, gates nothing): the host cannot call the production
 // ranges, so a test compares them with the pins.

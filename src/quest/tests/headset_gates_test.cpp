@@ -149,6 +149,11 @@ int Errors() {
   return n;
 }
 
+// CR15Game's LoadLevelName vtable word: levelname's hook (any word but the stock function) or the stock function.
+void SetLevelname(bool installed) {
+  g_image.Put<std::uintptr_t>(hg::kPins.levelNameSlot, g_image.Base() + (installed ? 0x1234560 : hg::kPins.levelNameStock));
+}
+
 // A libr15 holding the pinned words and both slots holding the game's functions (the stand-ins); the gates' ranges are the test's sections.
 void Build() {
   g_pins = hg::kPins;
@@ -167,6 +172,7 @@ void Build() {
   for (const hg::Word& w : hg::kWords) g_image.Put<std::uint32_t>(w.vaddr, w.word);
   *g_image.Slot(g_pins.partySlot) = reinterpret_cast<void*>(&PartyReal);
   *g_image.Slot(g_pins.headsetSlot) = reinterpret_cast<void*>(&HeadsetReal);
+  SetLevelname(true);
   hg::SetImageLookupForTest(&Lookup);
   hg::SetPinsForTest(&g_pins);
 }
@@ -217,6 +223,7 @@ void ThePinsAreTheReadelfAndDisassemblyPins() {
   QCHECK(d.partySlot == 0x36fd880 && d.partyFn == 0x129b168 && d.headsetSlot == 0x36f9fd8 && d.headsetFn == 0x1a6f164);
   QCHECK(d.permLo == 0x232c794 && d.permHi == 0x232c854 && d.botsLo == 0x124dd38 && d.botsHi == 0x124e004);
   QCHECK(d.linkLo == 0x202ba74 && d.linkHi == 0x202bac8);
+  QCHECK(d.levelNameSlot == 0x362ef90 && d.levelNameStock == 0x1202ecc);  // levelname.cpp kSlots[0], kFnVaddr; got_pinned_test checks the slot names CR15Game::LoadLevelName
   QCHECK(hg::kBindSavedLrOffset == 0x18);
   // Each call site's return address is inside its range, and the range's first word is the function's first instruction.
   QCHECK(0x232c814 >= d.permLo && 0x232c814 < d.permHi);
@@ -455,6 +462,14 @@ std::int32_t LaterHeadHandler(LaterHead::Fn original) noexcept {
   return original();
 }
 NEVR_HOOK_RECORD(kLaterHead, LaterHead, &LaterHeadHandler);
+struct LaterPartyTag {};
+using LaterParty = sentinel::CallbackThunk<LaterPartyTag, std::int32_t(void*, std::uint32_t)>;
+std::int32_t g_laterPartyCalls = 0;
+std::int32_t LaterPartyHandler(LaterParty::Fn original, void* self, std::uint32_t index) noexcept {
+  ++g_laterPartyCalls;
+  return original(self, index);
+}
+NEVR_HOOK_RECORD(kLaterParty, LaterParty, &LaterPartyHandler);
 
 void AGateInstalledAboveAnOlderHandlerKeepsAnswering() {
   Begin();
@@ -511,8 +526,28 @@ void ALaterHandlerCannotJoinAboveAGateAndTheGateKeepsAnswering() {
   const HeadFn head = HeadSlot();
   QCHECK(HeadCallerBots(head) == hg::kNotQuest && HeadCallerLink(head) == hg::kLinkHeadset && HeadCallerOut(head) == kRealKind);
   QCHECK(g_laterCalls == 0);
+
+  // The party slot's entry holds its slot the same way (#2180 review): a later handler is refused, one Warning names it and the chain with the entry.
+  LaterParty::Reset();
+  g_laterPartyCalls = 0;
+  LaterParty::Arm(kLaterParty);
+  sentinel::GotHook laterParty;
+  g_lines.clear();
+  QCHECK_STATUS(sentinel::InstallThunk<LaterParty>(laterParty, hg::PartyTarget(g_image.Base(), g_pins).Owned("later_party_module"), &Lookup),
+                sentinel::GotStatus::kSlotHeldByEntry);
+  QCHECK(!laterParty.installed());
+  int partyRefusals = 0;
+  for (const Line& l : g_lines) {
+    if (l.level == sentinel::LogLevel::kWarn && Has(l.text, "\"status\":\"slot_held_by_entry\"")) {
+      ++partyRefusals;
+      QCHECK(Has(l.text, "\"owner\":\"later_party_module\"") && Has(l.text, "combat_gates(asm_entry)"));
+    }
+  }
+  QCHECK(partyRefusals == 1);
+  QCHECK(PartyCallerPerm(PartySlot()) == hg::kNotQuest && PartyCallerOut(PartySlot()) == kRealKind && g_laterPartyCalls == 0);
   End();
   LaterHead::Reset();
+  LaterParty::Reset();
 }
 
 // A slot that does not hold the pinned function is refused and left alone, and the other slot's gate goes in.
@@ -617,25 +652,6 @@ void TheInstallLineNamesEachGateAndWhy() {
     QCHECK(Lines("combat_gates_link_policy").empty());  // no menu gate, no policy to state
     End();
   }
-  {  // the dependency: levelname off takes the bot gate with it, the others go in
-    Begin();
-    Build();
-    hg::Switches sw;
-    sw.levelname = false;
-    sw.linkLibs = "all";
-    QCHECK(Installed(sw));
-    const std::vector<Line> install = Lines("combat_gates_install");
-    QCHECK(install.size() == 1U);
-    if (install.size() == 1U) {
-      QCHECK(Has(install[0].text, "\"gate_bots\":\"needs_levelname\"") && Has(install[0].text, "\"gate_perm\":\"installed\"") &&
-             Has(install[0].text, "\"gate_link\":\"installed\""));
-    }
-    LoadLevels({"mpl_combat_dyson"});
-    hg::Tick(GameAddress());
-    QCHECK(HeadCallerBots(HeadSlot()) == kRealKind);  // the bot range is empty: a combat map does not make the gate act
-    QCHECK(HeadCallerLink(HeadSlot()) == hg::kLinkHeadset);
-    End();
-  }
   {  // nothing asked: one Info line, no slot touched, and no libr15 needed
     Begin();
     hg::Switches sw;
@@ -650,6 +666,39 @@ void TheInstallLineNamesEachGateAndWhy() {
     }
     End();
   }
+}
+
+// The bot gate depends on the game, not on a switch (#2180 review B1): the combat bot (body 1) exists only in the full-size global_mp, which loads only
+// where levelname's hook is on the game's LoadLevelName slot. With the stock function in that slot (levelname off, anywhere, by any switch) the gate
+// answers the real value on a combat map; with a hook there it answers. The slot is read at each call, so a levelname that installs later is seen.
+void TheBotGateNeedsLevelnameInstalledInTheGame() {
+  Begin();
+  Build();
+  CombatMapLoaded();
+  QCHECK(Installed(AllLibs()));
+  const HeadFn head = HeadSlot();
+  QCHECK(HeadCallerBots(head) == hg::kNotQuest);  // a hook on the slot
+  SetLevelname(false);                            // the stock function: global_mp_lowspec loads
+  QCHECK(HeadCallerBots(head) == kRealKind);
+  QCHECK(HeadCallerLink(head) == hg::kLinkHeadset && PartyCallerPerm(PartySlot()) == hg::kNotQuest);  // the other gates do not depend on it
+  SetLevelname(true);                             // levelname installs after the gates
+  QCHECK(HeadCallerBots(head) == hg::kNotQuest);
+  g_image.Put<std::uintptr_t>(hg::kPins.levelNameSlot, 0);  // an unreadable or empty word is "not installed"
+  QCHECK(HeadCallerBots(head) == kRealKind);
+  const std::vector<Line> scoped = Lines("combat_gates_scoped_out");
+  QCHECK(!scoped.empty() && Has(scoped[0].text, "\"reason\":\"levelname_not_installed\""));
+  const hg::Stats s = hg::CurrentStats();
+  QCHECK(s.botsGated == 2 && s.botsScopedOut == 2);
+  End();
+}
+
+// The range compare's edges (#2180 review M06): the first instruction of the range is in, the last is in, the one after it is not, and the one before is not.
+void TheRangeIsHalfOpen() {
+  QCHECK(!hg::InRange(0xfff, 0x1000, 0x1100));
+  QCHECK(hg::InRange(0x1000, 0x1000, 0x1100));
+  QCHECK(hg::InRange(0x10fc, 0x1000, 0x1100));
+  QCHECK(!hg::InRange(0x1100, 0x1000, 0x1100));  // the upper edge is the next instruction, not the caller
+  QCHECK(!hg::InRange(0x1000, 0, 0) && !hg::InRange(0, 0, 0) && !hg::InRange(0x1000, 0x1000, 0x1000));  // an empty range gates nothing
 }
 
 // The policy text from `combat.gate_link_libs` replaces the default, and the line says where it came from.
@@ -769,6 +818,8 @@ int main() {
   TheLibraryPolicyDecidesWhoGetsTheLinkAnswer();
   AnEmptyRangeGatesNothing();
   TheBotGateActsOnlyWhereACombatMapOrLobbyIsLoaded();
+  TheBotGateNeedsLevelnameInstalledInTheGame();
+  TheRangeIsHalfOpen();
   AGateInstalledAboveAnOlderHandlerKeepsAnswering();
   ALaterHandlerCannotJoinAboveAGateAndTheGateKeepsAnswering();
   AForeignSlotWordIsRefusedAndLeftAlone();

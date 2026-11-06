@@ -170,10 +170,10 @@ graphics:
   # hand_flip: true
 
 # ---------------------------------------------------------------------------
-# combat — the combat modules built into the Quest runtime
+# combat — the combat modules built into the Quest runtime, and EchoCombat built into the PC runtime
 #
-# Reader: src/quest/sentinel/quest_config.cpp (Quest), gated by src/quest/combat/combat_active.h. The PC accepts the section and reads
-# nothing from it.
+# Reader: src/quest/sentinel/quest_config.cpp (Quest), gated by src/quest/combat/combat_active.h; on PC, src/runtime/combat/combat.cpp
+# reads the EchoCombat keys below (drone ... clean_exit, settings) and nothing else of the section.
 # ---------------------------------------------------------------------------
 
 combat:
@@ -218,15 +218,13 @@ combat:
   # gate_perm: false leaves the game's rule that a party member on a Quest may not use combat. Default (absent): true.
   # gate_perm: false
   # gate_bots: false leaves the game's rule that a Quest gets the arena bot. The gate acts only while a combat map or the combat lobby is loaded, and only
-  # with `levelname` on (the combat bot exists only in the full-size global_mp). Default (absent): true.
+  # where the full-size global_mp is in use (the combat bot exists only there; the gate checks the game's LoadLevelName slot). Default (absent): true.
   # gate_bots: false
   # gate_link: false leaves the combat menus telling the player this is a Quest (which locks the combat cards). Default (absent): true.
   # gate_link: false
   # gate_link_libs: which script libraries the menu gate answers: `all`, `none`, or file names (or fragments of them) separated by commas or spaces,
   # at most 639 characters. A library that is not named gets the game's own answer. Default (absent): the 21 libraries of the combat entries.
   # gate_link_libs: "none"
-  # levelname: false keeps the Quest's cut global_mp_lowspec, which has the arena bot only; it also turns the bot-body gate off. Default (absent): true.
-  # levelname: false
 
   # Quest only. A boolean. The particle-renderer gate (src/quest/combat/pfx.h): the switch the particle renderer reads, open in combat maps only and
   # shut in an Echo Arena level, in every lobby and everywhere else. The renderer itself is not in the runtime yet, so `true` changes nothing in the
@@ -239,6 +237,22 @@ combat:
   # `combat_pfxtev_install` says what was read. `false` refuses the six. A value that is not a boolean keeps the default, with a warning that names the
   # key. Read once at launch. Default (absent): true.
   # pfxtev: false
+
+  # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
+  # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard
+  # runs whatever these say. Party guns, payload speed, a client's own damage bonus and CombatBots are never on.
+  # drone: false            # DRONE. Default: true.
+  # overcharge: false       # OVERCHARGE. Default: true.
+  # medigun: true           # MEDIGUN (needs overcharge and veil; a client follows its server's answer). Default: false.
+  # veil: false             # UMBRAL VEIL and the combat net. Default: true.
+  # match_control: false    # RULES, LOADOUTS, SERIES-10, PAUSE, END MATCH, MAP SWITCH (needs veil). Default: true.
+  # balance: false          # Cat's weapon tuning merged into the stock mp_weapon_settings as it loads. Default: true.
+  # clean_exit: true        # Ends the process at the engine teardown instead of running it. Default: false.
+  # settings:               # Cat's PowerBoost.ini values, <section>.<key>, with his defaults when absent
+  #   buff:
+  #     self_damage: 2
+  #   cone:
+  #     link_window_ms: 500
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints

@@ -173,9 +173,8 @@ struct CombatConfig {
   CombatSwitch refreshRateLobby{false, Source::kAbsent};      // `combat.refresh_rate_lobby`: the combat lobby asks for the level rate too (default OFF: arena shares the lobby levels)
   CombatSwitch refreshRateQuest2At72{true, Source::kAbsent};  // `combat.refresh_rate_quest2_72`: a Quest 2's level rate is 72, not 90 (combat/refresh_rate.h)
   CombatSwitch gatePerm{true, Source::kAbsent};   // `combat.gate_perm`: a Quest in a party may use combat (combat/headset_gates.h)
-  CombatSwitch gateBots{true, Source::kAbsent};   // `combat.gate_bots`: a combat match picks the combat bot body (needs `levelname`)
+  CombatSwitch gateBots{true, Source::kAbsent};   // `combat.gate_bots`: a combat match picks the combat bot body (only where levelname is installed)
   CombatSwitch gateLink{true, Source::kAbsent};   // `combat.gate_link`: the combat menus are not told this is a Quest
-  CombatSwitch levelname{true, Source::kAbsent};  // `combat.levelname`: the full-size global_mp loads (the bot-body gate needs it)
   CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
   CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
   CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)

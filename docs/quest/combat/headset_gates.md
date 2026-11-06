@@ -5,7 +5,7 @@ arm64 entries), `src/quest/combat/combat_gates.h` (which gates a run installs), 
 `src/quest/tests/headset_gates_test.cpp`, `src/quest/tests/combat_gates_test.cpp`, `src/quest/tests/headset_gates_library_name_test.cpp`,
 `src/quest/tests/headset_gates_qemu.cpp`, `src/quest/tests/got_pinned_test.cpp`. The module is a step of the sentinel's normal combat step, registered last
 (`src/quest/combat/combat_install.cpp`): it runs in the `q15t` and `combat` APKs and in no other. Switches (`config.yaml`, `combat:`): `gate_perm`,
-`gate_bots`, `gate_link` (default true each), `gate_link_libs` (default the 21 libraries below) and `levelname` (default true; the bot gate needs it).
+`gate_bots`, `gate_link` (default true each) and `gate_link_libs` (default the 21 libraries below). No key names levelname: the bot gate asks the game (below).
 
 Origin: the q15t plugin's `headset_gates.cpp` and `combat_gates.h`, reconstructed on the hook manager. `docs/audits/2026-11-05-q15t-origin-citations.md`
 lists no reference-build file or EchoCombat line for the gates, so none is cited.
@@ -56,10 +56,10 @@ orders the gate keeps answering (`headset_gates_test`).
 
 Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in.
 
-- `gate_bots` acts only while a combat map or the combat lobby is loaded (`src/quest/combat/combat_level.h`). For a bot symbol `BotActorId` does not list, the game picks the
+- `gate_bots` acts only where levelname is installed (the game's LoadLevelName vtable word, `headset_gates_targets.h` `levelNameSlot`, is not the stock function: the full-size global_mp, which carries body 1, loads) and only while a combat map or the combat lobby is loaded (`src/quest/combat/combat_level.h`). For a bot symbol `BotActorId` does not list, the game picks the
   bot body at random, and body 1 (the combat bot) does not exist in an arena level, so the gate answering "not a Quest" in an arena match would hand arena bots a body
   that is not there. In an Echo Arena level, in every other lobby level and before the frame tick has seen the game, the gate answers the real value, and the first eight such calls are
-  logged with their reason (`combat_gates_scoped_out`: `echo_arena`, `other_level`, `no_game`). This is where the module differs from the plugin, which answered every call.
+  logged with their reason (`combat_gates_scoped_out`: `levelname_not_installed`, `echo_arena`, `other_level`, `no_game`). The level table cannot say whether the cut level is loaded: `CncaGameSpace::LoadLevel` stores the requested name (`global_mp`) at `gs+0x58` before the virtual LoadLevelName appends `_lowspec`, so the slot is the signal. This is where the module differs from the plugin, which answered every call.
 - `gate_perm` acts wherever the expression runs. It changes one flag of a party member's combat permission, for a Quest member who bought combat; it does not touch arena
   play, and a member who did not buy combat gets the game's own answer.
 - `gate_link` acts for the policy's libraries wherever they run. The lobby script is shared by the arena and combat lobbies, so an arena player in the combat APK has the

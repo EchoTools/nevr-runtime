@@ -38,9 +38,14 @@ struct Pins {
   std::uint64_t permLo, permHi;
   std::uint64_t botsLo, botsHi;
   std::uint64_t linkLo, linkHi;
+  std::uint64_t levelNameSlot, levelNameStock;  // CR15Game's LoadLevelName vtable word, and the stock function it holds (the bot gate's condition)
 };
 inline constexpr Pins kPins = {0x36fd880ULL, 0x129b168ULL, 0x36f9fd8ULL, 0x1a6f164ULL, 0x232c794ULL,
-                               0x232c854ULL, 0x124dd38ULL,  0x124e004ULL, 0x202ba74ULL, 0x202bac8ULL};
+                               0x232c854ULL, 0x124dd38ULL,  0x124e004ULL, 0x202ba74ULL, 0x202bac8ULL,
+                               0x362ef90ULL, 0x1202eccULL};
+
+// levelname's own pins (src/quest/plugins/q15t/src/levelname.cpp kSlots[0], kFnVaddr; got_pinned_test.cpp checks the slot's relocation names
+// CR15Game::LoadLevelName): the word is the stock function until levelname's hook replaces it.
 
 // The Bind's saved return address, from its entry sp: `stp x19,x30,[sp,#0x10]` after `sub sp,sp,#0x20` (the word pinned at 0x202ba80).
 inline constexpr std::uintptr_t kBindSavedLrOffset = 0x18;

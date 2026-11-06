@@ -108,7 +108,7 @@ func TestEveryGateKeyIsOnTheSchemaTheExampleAndTheConfigLine(t *testing.T) {
 	schema := read(t, "src/core/nevr_config.cpp")
 	example := read(t, "docs/reference/example-config.yaml")
 	line := read(t, "src/quest/combat/combat_install.cpp")
-	for _, key := range []string{"gate_perm", "gate_bots", "gate_link", "gate_link_libs", "levelname"} {
+	for _, key := range []string{"gate_perm", "gate_bots", "gate_link", "gate_link_libs"} {
 		if !strings.Contains(schema, `"`+key+`"`) {
 			t.Errorf("KnownSections must list combat.%s", key)
 		}

@@ -356,7 +356,7 @@ void TheGatesKeysHaveALineOfTheirOwn() {
   Process(bv::Variant::kCombat);
   sentinel::SetLogSink(&Capture);
   nevr_quest::CombatConfig cfg;
-  QCHECK(cfg.gatePerm.on && cfg.gateBots.on && cfg.gateLink.on && cfg.levelname.on && cfg.gateLinkLibs.source == nevr_quest::Source::kAbsent);
+  QCHECK(cfg.gatePerm.on && cfg.gateBots.on && cfg.gateLink.on && cfg.gateLinkLibs.source == nevr_quest::Source::kAbsent);
   combat::LogConfig(cfg);
   cfg.gateBots = {false, nevr_quest::Source::kFile};
   cfg.gateLinkLibs.source = nevr_quest::Source::kFile;
@@ -369,7 +369,6 @@ void TheGatesKeysHaveALineOfTheirOwn() {
     QCHECK(Has(lines[0].text, "\"gate_bots\":1") && Has(lines[0].text, "\"gate_bots_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"gate_link\":1") && Has(lines[0].text, "\"gate_link_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"gate_link_libs_source\":\"default\""));
-    QCHECK(Has(lines[0].text, "\"levelname\":1") && Has(lines[0].text, "\"levelname_source\":\"default\""));
     QCHECK(Has(lines[1].text, "\"gate_bots\":0") && Has(lines[1].text, "\"gate_bots_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"gate_link_libs_source\":\"config\""));
     QCHECK(Has(lines[0].text, "\"msg\":"));  // no line is cut: the last field is there
@@ -419,21 +418,6 @@ void TheGatesRowReadsItsKeysFromTheResolvedSection() {
   QCHECK(Has(Lines("combat_install")[0].text, "gates=installed"));
   hg::ResetForTest();
 
-  // combat.levelname false reaches the module: the bot-body gate is off for the dependency, the other two are on.
-  Process(bv::Variant::kCombat);
-  *image.Slot(hg::kPins.partySlot) = reinterpret_cast<void*>(image.Base() + hg::kPins.partyFn);
-  *image.Slot(hg::kPins.headsetSlot) = reinterpret_cast<void*>(image.Base() + hg::kPins.headsetFn);
-  hg::SetImageLookupForTest([](const char*, sentinel::ElfImage* out) {
-    *out = g_image->Elf();
-    return true;
-  });
-  nevr_quest::CombatConfig noLevelname;
-  noLevelname.levelname = {false, nevr_quest::Source::kFile};
-  combat::SetConfig(noLevelname);
-  combat::InstallNormal();
-  const std::vector<Line> gates = Lines("combat_gates_install");
-  QCHECK(gates.size() == 1U && Has(gates[0].text, "\"gate_bots\":\"needs_levelname\"") && Has(gates[0].text, "\"gate_perm\":\"installed\"") &&
-         Has(gates[0].text, "\"gate_link\":\"installed\""));
   hg::ResetForTest();
   image.Drop();
   Done();
