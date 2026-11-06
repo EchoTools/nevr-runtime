@@ -356,6 +356,54 @@ void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
   counts = Lines("combat_meshstep_counts");
   QCHECK(counts.size() == 2U);
   if (counts.size() == 2U) QCHECK(Golden(counts[1].text) == CountsText("combat_meshstep_counts", LevelHex("mpl_arena_a"), "other", 3, 0));
+  // The counts are since the previous line, not since the start: two more with nothing loaded, then the arena again.
+  std::free(Construct(init));
+  std::free(Construct(init));
+  SetWhere(Where::kArena);
+  std::free(Construct(init));
+  counts = Lines("combat_meshstep_counts");
+  QCHECK(counts.size() == 3U);
+  if (counts.size() == 3U) QCHECK(Golden(counts[2].text) == CountsText("combat_meshstep_counts", "0x0000000000000000", "other", 3, 0));
+  End1();
+}
+
+// What was built before any game was known is reported once the first level is: the scope changes while the level (none) does not.
+void WhatWasBuiltBeforeAnyGameWasKnownIsReportedWhenOneIs() {
+  Begin1();
+  Build();
+  ts::SetGameForTest(&NoModelGame);
+  QCHECK(ms::InstallAt(&Lookup, g_pins, &g_fns, true).installed);
+  std::uint64_t init[3] = {0, 1, 2};
+  std::free(Construct(init));
+  std::free(Construct(init));
+  QCHECK(Lines("combat_meshstep_counts").empty());
+  ts::SetGameForTest(&ModelGame);
+  SetWhere(Where::kNothingLoaded);
+  std::free(Construct(init));
+  const std::vector<Line> counts = Lines("combat_meshstep_counts");
+  QCHECK(counts.size() == 1U);
+  if (counts.size() == 1U) QCHECK(Golden(counts[0].text) == CountsText("combat_meshstep_counts", "0x0000000000000000", "unknown", 2, 0));
+  End1();
+}
+
+// A module registered twice keeps one row (a second install, or a test that installs again), and a row without an event or a function is refused.
+std::uint32_t g_fakeLeft = 0;
+ts::Counts FakeCounts() noexcept { return {g_fakeLeft, 0}; }
+void ARegistrationIsKeptOnce() {
+  Begin1();
+  ts::SetGameForTest(&ModelGame);
+  SetWhere(Where::kArena);
+  ts::RegisterCounts("combat_fake_counts", &FakeCounts);
+  ts::RegisterCounts("combat_fake_counts", &FakeCounts);
+  ts::RegisterCounts(nullptr, &FakeCounts);
+  ts::RegisterCounts("combat_other_counts", nullptr);
+  g_fakeLeft = 0;
+  (void)ts::CurrentScope();  // the arena level becomes the last one seen
+  g_fakeLeft = 4;
+  SetWhere(Where::kCombatMap);
+  (void)ts::CurrentScope();  // and ends
+  QCHECK(Lines("combat_fake_counts").size() == 1U && Lines("combat_other_counts").empty());
+  g_fakeLeft = 0;
   End1();
 }
 
@@ -523,6 +571,8 @@ int main() {
   ACombatMatchBuildsTheMeshListInTheStockOrderWithStepOne();
   EveryOtherScopeIsTheGamesOwnConstructor();
   ALevelChangeWritesTheCountsOfTheLevelThatEnded();
+  WhatWasBuiltBeforeAnyGameWasKnownIsReportedWhenOneIs();
+  ARegistrationIsKeptOnce();
   WithNoGameKnownTheGameBuildsItsOwnObject();
   ANullObjectOrInitGoesToTheGame();
   AnInstallRefusalLeavesTheSlotAndTheConstructorAlone();

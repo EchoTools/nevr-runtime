@@ -57,5 +57,5 @@ runm ss_installed_status    $S "s/return Done(\"installed\", \"ok\", \"installed
 # the arena path writes nothing to the game's object (the test compares the whole object with the game's own)
 runm ss_stray_write_low     $S "s/^    SayStock(scope);\$/    SayStock(scope);\n    static_cast<std::uint8_t*>(built)[0x10] = 1;/"
 runm ss_stray_write_end     $S "s/^    SayStock(scope);\$/    SayStock(scope);\n    static_cast<std::uint8_t*>(built)[0x90] = 1;/"
-runm ss_counts_not_registered $S "s/^  table_step::RegisterCounts(.*\$//"
+runm ss_counts_not_registered $S "s/^  table_step::RegisterCounts(.*\$/  (void)\&CountsOf;/"
 runm ss_counts_swapped      $S "s/return {g_stock.load(std::memory_order_relaxed) + g_notStock.load(std::memory_order_relaxed), g_stepped.load(std::memory_order_relaxed)};/return {g_stepped.load(std::memory_order_relaxed), g_stock.load(std::memory_order_relaxed) + g_notStock.load(std::memory_order_relaxed)};/"

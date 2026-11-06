@@ -69,6 +69,6 @@ runm im_installed_status    $S "s/return Done(\"installed\", \"ok\", \"installed
 # the arena path writes nothing to the game's object (the test compares the whole object with the game's own)
 runm im_stray_write_low     $S "s/^    SayStock(scope);\$/    SayStock(scope);\n    static_cast<unsigned char*>(self)[0x10] = 1;/"
 runm im_stray_write_step    $S "s/^    SayStock(scope);\$/    SayStock(scope);\n    static_cast<unsigned char*>(self)[0x98] = 1;/"
-runm im_counts_not_registered $S "s/^  table_step::RegisterCounts(.*\$//"
+runm im_counts_not_registered $S "s/^  table_step::RegisterCounts(.*\$/  (void)\&CountsOf;/"
 runm im_counts_swapped      $S "s/return {g_stock.load(std::memory_order_relaxed), g_objects.load(std::memory_order_relaxed)};/return {g_objects.load(std::memory_order_relaxed), g_stock.load(std::memory_order_relaxed)};/"
 runm im_cap_line_level      $S "s/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_instmodel_log_cap\"/sentinel::LogFields(sentinel::LogLevel::kDebug, \"combat_instmodel_log_cap\"/"
