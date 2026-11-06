@@ -412,11 +412,28 @@ void CheckRealDrones(const LoadedElf& elf) {
                {dk::kEnterSymbol, dk::kPins.enterSlot, dk::kPins.enterFn, "libr15 CEnableComponentNode::Enter JUMP_SLOT"},
                {dk::kFireSymbol, dk::kPins.fireSlot, dk::kPins.fireFn, "libr15 CR15NetAutoTargetCS::FireBulletLocal JUMP_SLOT"},
                {dk::kAttackSymbol, dk::kPins.attackSlot, dk::kPins.attackFn, "libr15 CR15NetAutoTargetCS::AttackTarget JUMP_SLOT"},
-               {dm::kTeleportSymbol, dm::kPins.teleportSlot, dm::kPins.teleportFn, "libr15 CncaGameSpace::WorldTeleport JUMP_SLOT"},
                {dm::kFireSymbol, dm::kPins.fireSlot, dm::kPins.fireFn, "libr15 CR15NetBulletCS::FireBullet JUMP_SLOT"}};
   for (const auto& s : slots) {
     CheckTarget(elf, GotTarget{pinned::kLibR15, s.symbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, s.slot}, s.what);
     CheckDefinedAt(elf, s.symbol, s.fn);
+  }
+  // WorldTeleport also has a GLOB_DAT word (0x370bcc0, its address taken for 15 reads elsewhere; the module does not touch it), so CheckTarget's
+  // "no relocation of the other type" does not hold for it: the JUMP_SLOT is checked at its pin, alone, and the GLOB_DAT is where it is.
+  {
+    const GotTarget jump{pinned::kLibR15, dm::kTeleportSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, dm::kPins.teleportSlot};
+    const SlotResolution at = ResolveSlot(elf.image, jump, kAarch64Relocs);
+    QCHECK_STATUS(at.status, GotStatus::kOk);
+    QCHECK(at.slotVaddr == dm::kPins.teleportSlot && at.restoreReadOnly);
+    GotTarget alone = jump;
+    alone.slotVaddr = std::nullopt;
+    const SlotResolution unpinned = ResolveSlot(elf.image, alone, kAarch64Relocs);
+    QCHECK_STATUS(unpinned.status, GotStatus::kOk);
+    QCHECK(unpinned.slotVaddr == dm::kPins.teleportSlot);
+    alone.kind = RelocKind::kGlobDat;
+    const SlotResolution glob = ResolveSlot(elf.image, alone, kAarch64Relocs);
+    QCHECK_STATUS(glob.status, GotStatus::kOk);
+    QCHECK(glob.slotVaddr == 0x370bcc0ULL);
+    CheckDefinedAt(elf, dm::kTeleportSymbol, dm::kPins.teleportFn);
   }
   CheckTarget(elf,
               GotTarget{pinned::kLibR15, "_ZZN10NRadEngine12BinarySearchINS_10CSimpleKeyItNS_12SComponentIDEEEPS3_S2_EEjRKT0_yRKT1_RyENKUlRS3_RKS2_E_clESC_SE_",

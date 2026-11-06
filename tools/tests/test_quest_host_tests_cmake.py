@@ -64,6 +64,8 @@ PROGRAMS = {
         "combat_install_test",
         "combat_level_test",
         "combat_tick_test",
+        "dronekill_test",
+        "dronemuzzle_test",
         "equip_refire_test",
         "headset_gates_library_name_test",
         "headset_gates_test",

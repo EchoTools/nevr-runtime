@@ -8,7 +8,7 @@ Files: `src/quest/combat/dronekill.{h,cpp}`, `dronekill_core.h` (the platform-fr
 (the per-thread words); tests `src/quest/tests/dronekill_test.cpp` (`just test-quest-combat dronekill`), the pins in `src/quest/tests/got_pinned_test.cpp`
 (`just test-quest-hooks-pinned`); mutants `src/quest/combat/mutants.d/dronekill{,_b,_c,_d,_e,_f}.sh`.
 
-Origin: the reference build's `runtime/native/afkxr/afk_dronekill.cpp` and `afk_dronekill_core.h` (kotorvr's q15t-upstream), which port EchoCombat
+Origin: the reference build's `runtime/native/afkxr/afk_dronekill.cpp` and afk_dronekill_core.h (kotorvr's q15t-upstream), which port EchoCombat
 `c14c3e0a` `plugin/dronefix.cpp` (LockedOn df 805-827, ChaseTarget df 1059-1095; the groups df 434-560, TouchLive df 778-793, the touch rule
 df 731-835, the gun table df 700-729, the chase table df 1037-1095).
 

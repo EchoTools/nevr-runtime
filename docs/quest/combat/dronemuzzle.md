@@ -7,7 +7,7 @@ Files: `src/quest/combat/dronemuzzle.{h,cpp}`, `dronemuzzle_core.h` (the spawn r
 (the two entries); tests `src/quest/tests/dronemuzzle_test.cpp` (`just test-quest-combat dronemuzzle`), `src/quest/combat/check/dronemuzzle.sh`
 with `src/quest/tests/dronemuzzle_qemu.cpp`, the pins in `src/quest/tests/got_pinned_test.cpp`; mutants `src/quest/combat/mutants.d/dronemuzzle.sh`.
 
-Origin: the reference build's `runtime/native/afkxr/afk_dronemuzzle.cpp` (its thunks at lines 145-182) and `afk_dronemuzzle_core.h` (kotorvr's
+Origin: the reference build's `runtime/native/afkxr/afk_dronemuzzle.cpp` (its thunks at lines 145-182) and afk_dronemuzzle_core.h (kotorvr's
 q15t-upstream), which port EchoCombat `c14c3e0a` `plugin/dronefix.cpp` rule for rule (the muzzle transform df 916-941, FireBullet df 943-1019,
 the frame time df 132-147, MUZZLE df 51, BACK_MAX df 52).
 
