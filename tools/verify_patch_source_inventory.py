@@ -52,6 +52,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/plugin_assets.cpp",
     "patch/pnsrad_enabler.cpp",
     "patch/provider_name_redirect.cpp",
+    "patch/queued_join_log.cpp",
     "patch/render_config.cpp",
     "patch/render_config_hook.cpp",
     "patch/resource_override.cpp",
@@ -65,7 +66,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 44
+EXPECTED_PATCH_SOURCE_COUNT = 45
 
 
 class InventoryError(Exception):
