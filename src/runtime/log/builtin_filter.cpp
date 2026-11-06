@@ -365,7 +365,6 @@ static LogFilterConfig MakeDefaultConfig() {
         "PlayEmoteCB for user",
         "ghosted False",
         "expecting peer connection",
-        "realdiv(",
         "VoIP Muted",
         "VoIP Deafened",
         "Is Placeholder",
@@ -389,6 +388,10 @@ static LogFilterConfig MakeDefaultConfig() {
         //       Game-native startup lines (graphics settings, engine init,
         //       battle-pass/store cosmetics, allocator stats) accounted for the
         //       remainder.
+
+        // Not suppressed (N78): "realdiv(". A script writes "realdiv(%x) divide by zero" at up to about 120 lines a second
+        // (STARBURST). A pattern here deleted every one, and the count with them; collapse_format_rules.h gives the format one
+        // identity, so the limiter writes three lines a window and one counted line.
 
         // Not suppressed (N77/N78): "ExitProcess(".
         // It is the #1 noise source (97.5% of sustained volume in the 2026-06-28 sample) — but it is a
