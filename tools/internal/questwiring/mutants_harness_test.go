@@ -40,13 +40,14 @@ func newHarness(t *testing.T, list string, failRebuild bool) *harness {
 	write(filepath.Join(dir, "build/quest-host-combat/build.ninja"), "", 0o644)
 	calls := filepath.Join(dir, "calls.txt")
 	// A cmake that records its arguments; the second and later builds fail when asked to (the final rebuild), printing an error line.
-	cmake := "#!/bin/sh\necho \"cmake $*\" >> " + calls + "\n"
+	cmake := "#!/bin/sh\necho \"cmake $*\" >> " + calls + "\nif [ -f " + dir + "/buildbroken ]; then echo 'x.cpp:1:1: error: boom'; exit 1; fi\n"
 	if failRebuild {
-		cmake += "if [ -f " + dir + "/mutated-once ]; then echo 'ld: undefined reference to unrelated' >&2; echo 'error: ld returned 1 exit status'; exit 1; fi\n"
+		cmake += "if [ -f " + dir + "/mutated-once ]; then echo 'g++ -Wall -Wextra -Werror -c unrelated.cpp'; echo 'ld: undefined reference to unrelated' >&2; echo 'x.cpp:3:1: error: expected unqualified-id'; exit 1; fi\n"
 	}
 	write(filepath.Join(dir, "bin/cmake"), cmake, 0o755)
-	// A ctest that fails every mutant (killed) and records itself.
-	write(filepath.Join(dir, "bin/ctest"), "#!/bin/sh\necho \"ctest $*\" >> "+calls+"\ntouch "+dir+"/mutated-once\nexit 1\n", 0o755)
+	// A ctest that passes on the unmutated source (fake.cpp holds "a = 1") and fails on a mutated one (killed); it records itself. A
+	// baseline that fails is made by a list whose first line is `broken`: the source is then unmutated but the test fails.
+	write(filepath.Join(dir, "bin/ctest"), "#!/bin/sh\necho \"ctest $*\" >> "+calls+"\n[ -f "+dir+"/broken ] && exit 1\ngrep -q 'a = 1' "+filepath.Join(dir, "src/quest/combat/fake.cpp")+" && exit 0\ntouch "+dir+"/mutated-once\nexit 1\n", 0o755)
 	// No systemd-run: the script falls back to a plain bash.
 	write(filepath.Join(dir, "bin/systemd-run"), "#!/bin/sh\nexit 1\n", 0o755)
 	return &harness{dir: dir, calls: calls, bin: filepath.Join(dir, "bin")}
@@ -55,7 +56,14 @@ func newHarness(t *testing.T, list string, failRebuild bool) *harness {
 func (h *harness) run(t *testing.T, jobs string, args ...string) (string, int) {
 	t.Helper()
 	cmd := exec.Command("bash", append([]string{filepath.Join(h.dir, "src/quest/combat/mutants.sh")}, args...)...)
-	cmd.Env = append(os.Environ(), "PATH="+h.bin+":"+os.Getenv("PATH"), "NEVR_WORK_ROOT="+h.dir)
+	// The test's own environment: the documented slice command sets CMAKE_BUILD_PARALLEL_LEVEL, which the default case must not inherit.
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "CMAKE_BUILD_PARALLEL_LEVEL=") && !strings.HasPrefix(kv, "PATH=") && !strings.HasPrefix(kv, "NEVR_WORK_ROOT=") {
+			env = append(env, kv)
+		}
+	}
+	cmd.Env = append(env, "PATH="+h.bin+":"+os.Getenv("PATH"), "NEVR_WORK_ROOT="+h.dir)
 	if jobs != "" {
 		cmd.Env = append(cmd.Env, "CMAKE_BUILD_PARALLEL_LEVEL="+jobs)
 	}
@@ -126,9 +134,9 @@ func TestTheFinalRebuildIsOfTheTargetsTheRunBuiltAlone(t *testing.T) {
 			}
 		}
 	}
-	// One build for the mutant, one for the rebuild after the run; both the module's own test program and nothing else.
-	if len(targets) != 2 || targets[0] != "fake_test" || targets[1] != "fake_test" {
-		t.Errorf("targets built = %v, want [fake_test fake_test]", targets)
+	// One build for the baseline, one for the mutant, one for the rebuild after the run; all the module's own test program and nothing else.
+	if len(targets) != 3 || targets[0] != "fake_test" || targets[1] != "fake_test" || targets[2] != "fake_test" {
+		t.Errorf("targets built = %v, want [fake_test fake_test fake_test]", targets)
 	}
 	if !strings.Contains(out, "rebuilt quest-host-combat fake_test") {
 		t.Errorf("the rebuild is not reported:\n%s", out)
@@ -144,8 +152,11 @@ func TestAFailedFinalRebuildKeepsItsLogPrintsItsErrorAndFailsTheRun(t *testing.T
 	if !strings.Contains(out, "the rebuild of quest-host-combat fake_test after the run failed") {
 		t.Errorf("the failure is not named:\n%s", out)
 	}
-	if !strings.Contains(out, "undefined reference to unrelated") || !strings.Contains(out, "error: ld returned 1 exit status") {
+	if !strings.Contains(out, "undefined reference to unrelated") || !strings.Contains(out, "error: expected unqualified-id") {
 		t.Errorf("the rebuild's error lines are not printed:\n%s", out)
+	}
+	if strings.Contains(out, "-Werror -c unrelated.cpp") {
+		t.Errorf("a compile line that carries -Werror is printed as an error:\n%s", out)
 	}
 }
 
@@ -157,5 +168,50 @@ func TestARunThatRanNoMutantFails(t *testing.T) {
 	}
 	if len(h.cmakeCalls(t)) != 0 {
 		t.Errorf("a run with no mutant built something")
+	}
+}
+
+func TestARunStopsBeforeJudgingAnyMutantWhenTheUnmutatedTreeFails(t *testing.T) {
+	h := newHarness(t, oneMutant+"runm m2 src/quest/combat/fake.cpp \"s/a = 1/a = 3/\"\n", false)
+	if err := os.WriteFile(filepath.Join(h.dir, "broken"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := h.run(t, "3", "fake")
+	if code != 2 {
+		t.Errorf("exit %d, want 2\n%s", code, out)
+	}
+	if strings.Contains(out, "MUTANT") {
+		t.Errorf("a mutant was judged against a tree whose test already fails:\n%s", out)
+	}
+	if !strings.Contains(out, "fails on the unmutated tree") {
+		t.Errorf("the baseline failure is not named:\n%s", out)
+	}
+}
+
+func TestTheUnmutatedTreeIsBuiltAndRunFirstOncePerProgram(t *testing.T) {
+	h := newHarness(t, oneMutant+"runm m2 src/quest/combat/fake.cpp \"s/a = 1/a = 3/\"\n", false)
+	out, code := h.run(t, "3", "fake")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "baseline quest-host-combat fake_test passes") || strings.Count(out, "baseline ") != 1 {
+		t.Errorf("want one baseline for the one program:\n%s", out)
+	}
+	if strings.Index(out, "baseline") > strings.Index(out, "MUTANT") {
+		t.Errorf("the baseline came after a mutant:\n%s", out)
+	}
+}
+
+func TestARunStopsBeforeJudgingAnyMutantWhenTheUnmutatedTreeDoesNotBuild(t *testing.T) {
+	h := newHarness(t, oneMutant, false)
+	if err := os.WriteFile(filepath.Join(h.dir, "buildbroken"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := h.run(t, "3", "fake")
+	if code != 2 || strings.Contains(out, "MUTANT") {
+		t.Errorf("exit %d, want 2 and no mutant judged\n%s", code, out)
+	}
+	if !strings.Contains(out, "the unmutated tree does not build: quest-host-combat fake_test") || !strings.Contains(out, "error: boom") {
+		t.Errorf("the baseline build failure is not named with its error:\n%s", out)
 	}
 }

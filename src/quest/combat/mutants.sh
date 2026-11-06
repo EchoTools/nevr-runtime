@@ -4,7 +4,8 @@
 # the build succeeds and the test fails. A mutant that does not compile is reported as NOT A KILL (the build, not the test, said no), and a
 # mutant the test passes SURVIVED. The file is put back from a copy taken before the run (and its modification time moved, so ninja
 # rebuilds it) after every mutant and when the script ends, however it ends. Exit status: 0 when every mutant was killed and at least one ran;
-# 1 when one survived, did not compile or the final rebuild failed; 2 when none ran (a filter that matches nothing, or an empty list).
+# 1 when one survived, did not compile or the final rebuild failed; 2 when none ran (a filter that matches nothing, or an empty list) or when
+# a program the run judges does not build or fails its tests on the unmutated tree (it is built and run first, and the run stops there).
 #
 # A line of the list is `runm <name> <file> <sed> [<build dir under build/> <test target>]`. The two last words name another host-test
 # build and program when the mutated file is shared (combat_install.cpp, quest_config.cpp: `quest-host-shared quest_config_test`); the
@@ -47,6 +48,8 @@ exit $rc'
     bash -c "$inner" _ "$root/build/$dir" "$target" "$jobs" "$log"
   fi
 }
+# The lines of a build log that are errors: a compiler's `error:`, ninja's `FAILED:`, the linker's. Not a compile line that carries -Werror.
+errpat='(^|[^[:alnum:]_-])error:|^FAILED:|undefined reference|ld returned|multiple definition'
 maxpeak=0
 note_peak() {
   local v
@@ -66,11 +69,17 @@ trap cleanup EXIT
 survived=0
 notkill=0
 killed=0
+phase=collect
+baseline=""
 # runm <name> <file relative to the repository root> <sed expression>
 runm() {
   local name="$1" file="$2" expr="$3" dir="${4:-quest-host-combat}" target="${5:-${module}_test}"
   local bdir="$root/build/$dir"
   if [ -n "$only" ] && ! [[ "$name" =~ $only ]]; then return 0; fi
+  if [ "$phase" = collect ]; then  # the first pass only names the programs the run will judge
+    case "$baseline" in *"|$dir $target|"*) ;; *) baseline="$baseline|$dir $target|" ;; esac
+    return 0
+  fi
   cp -p -- "$root/$file" "$backup/file"
   current="$file"
   sed -i -e "$expr" "$root/$file"
@@ -96,7 +105,27 @@ runm() {
   fi
   restore
 }
+# The unmutated tree first: every program the run will judge is built and run as it is. A program that fails here fails every mutant for
+# a reason that is not the mutant, so the run stops (exit 2) before any is counted.
 # shellcheck source=/dev/null
+source "$list"
+for pair in $(printf '%s' "$baseline" | tr '|' '\n' | tr ' ' ',' | grep ,); do
+  d="${pair%,*}"; t="${pair#*,}"
+  build_target "$d" "$t" "$backup/baseline.log"; brc=$?
+  note_peak "$backup/baseline.log"
+  if [ "$brc" -ne 0 ]; then
+    echo "mutants.sh $module: the unmutated tree does not build: $d $t; no mutant was judged" >&2
+    grep -E "$errpat" "$backup/baseline.log" | head -n 8 >&2
+    exit 2
+  fi
+  if ! ctest --test-dir "$root/build/$d" -R "^${t}\$" >"$backup/baseline.test.log" 2>&1; then
+    echo "mutants.sh $module: $t fails on the unmutated tree; no mutant was judged" >&2
+    tail -n 8 "$backup/baseline.test.log" >&2
+    exit 2
+  fi
+  echo "mutants.sh $module: baseline $d $t passes"
+done
+phase=run
 source "$list"
 # Rebuild the restored tree once, so the build directories are left as the checkout has it; a failure here is a failure of the run.
 rebuilt=0
@@ -108,7 +137,7 @@ for pair in $(printf '%s' "$touched" | tr '|' '\n' | tr ' ' ',' | grep ,); do
     echo "mutants.sh $module: rebuilt $d $t, $(grep -o 'peak_mib=.*' "$backup/rebuild.log" | tail -n 1)"
   else
     echo "mutants.sh $module: the rebuild of $d $t after the run failed, $(grep -o 'peak_mib=.*' "$backup/rebuild.log" | tail -n 1)" >&2
-    grep -E "error|FAILED|undefined reference" "$backup/rebuild.log" | head -n 8 >&2
+    grep -E "$errpat" "$backup/rebuild.log" | head -n 8 >&2
     rebuilt=1
   fi
 done

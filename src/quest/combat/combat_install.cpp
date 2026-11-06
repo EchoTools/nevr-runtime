@@ -37,7 +37,7 @@ ModuleResult SendguardNormal() noexcept { return sendguard::Install(g_config.sen
 
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
-//   sendguard is the only normal-phase row so far, installed where the plugin installed it (after tablestep, before levelname).
+//   sendguard is installed where the plugin installed it: in the normal phase after the modules that hook the tick, before the two decisions.
 //   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
 //   before android_main reads the sizes.
 constexpr std::array kModules{
