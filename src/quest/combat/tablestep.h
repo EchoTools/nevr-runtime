@@ -32,10 +32,11 @@
  *
  * Owner (ADR 0039). This file owns the growth step CreateInstance leaves. shaderstep.h owns the one ConstructInstance leaves.
  *
- * Origin. The game's own factory, read in the disassembly (docs/quest/combat/tablestep.md). The record of #2167
- * (docs/audits/2026-11-05-q15t-origin-citations.md) holds no reference-build (`afk_*`) or EchoCombat citation for this module; the reference
- * build's `res_heap_patch.py` writes the immediate at 0x1907130 (heaps.md cites it), and this module is a hook-level replacement of that
- * row. It came with the q15t plugin (#1593), whose host-test harness and checked-pin style it follows.
+ * Origin. The game's own code, read in the disassembly (docs/quest/combat/tablestep.md), and the reference build's upstream patch: `tools/re3/res_heap_patch.py`
+ * with `--table-step-1` (RE-10's padding finding, wave 8, commit 35bba9f) writes `mov wN,#1` over the `mov wN,#0x20` that gives the CTableXT growth step
+ * its 32 in the CGShaderSetResource, CGInstancedModelResource and CGMeshListResource constructors, at these addresses less 0x100000. This module does
+ * the same change as a hook on the constructor's slot, in a combat match only (docs/quest/combat/heaps.md section 3 cites the patch). It came with the q15t
+ * plugin (#1593), whose host-test harness and checked-pin style it follows.
  *
  * Lines (sentinel log):
  *   install   {"event":"combat_tablestep_install","result":"installed|refused|off","reason":"ok|off_config|<token>","status":"<GotStatus>|..",
