@@ -32,6 +32,14 @@ inline constexpr std::uint64_t kLoadLevelVaddr = 0x17e5484ULL;
 inline constexpr const char* kCR15GameVtableSymbol = "_ZTVN10NRadEngine8NRadGame8CR15GameE";
 inline constexpr std::uint64_t kCR15GameVtableVaddr = 0x362ed20ULL;
 
+// The offsets combat_level.cpp reads, in one place, tied to the pinned words below at compile time: an `ldr x, [x, #imm]` (64-bit, unsigned offset)
+// carries imm/8 in bits 10-21, a `stp x1, x2, [x0]` stores its second register at +8, so a changed offset or a changed word fails the build.
+inline constexpr std::uintptr_t kTable0Rows = 0x1f48, kTable0Count = 0x1f78, kTable1Rows = 0x1f88, kTable1Count = 0x1fb8;
+inline constexpr std::uintptr_t kGamespaceOwnerOffset = 0x8;   // gs+0x8: the game
+inline constexpr std::uintptr_t kGamespaceLevelOffset = 0x58;  // gs+0x58: the level
+
+constexpr std::uintptr_t LdrStrOffset(std::uint32_t word) { return static_cast<std::uintptr_t>((word >> 10) & 0xfff) * 8; }
+
 inline constexpr PinnedWord kOffsetWords[] = {
     {"LoadedGameSpace: count 0 at +0x1f78", 0x17f8ac4ULL, 0xf94fbc08U},  // ldr x8, [x0, #0x1f78]
     {"LoadedGameSpace: rows 0 at +0x1f48", 0x17f8ae0ULL, 0xf94fa680U},   // ldr x0, [x20, #0x1f48]
@@ -41,5 +49,14 @@ inline constexpr PinnedWord kOffsetWords[] = {
     {"Initialize: the game at gs+0x8", 0x17f51d8ULL, 0xa9000801U},       // stp x1, x2, [x0]
     {"LoadLevel: the level at gs+0x58", 0x17e54ecULL, 0xf9002e76U},      // str x22, [x19, #0x58]
 };
+
+static_assert(LdrStrOffset(kOffsetWords[0].word) == kTable0Count, "the pinned word that loads count 0 does not carry kTable0Count");
+static_assert(LdrStrOffset(kOffsetWords[1].word) == kTable0Rows, "the pinned word that loads rows 0 does not carry kTable0Rows");
+static_assert(LdrStrOffset(kOffsetWords[2].word) == kTable0Rows, "the second pinned load of rows 0 does not carry kTable0Rows");
+static_assert(LdrStrOffset(kOffsetWords[3].word) == kTable1Count, "the pinned word that loads count 1 does not carry kTable1Count");
+static_assert(LdrStrOffset(kOffsetWords[4].word) == kTable1Rows, "the pinned word that loads rows 1 does not carry kTable1Rows");
+static_assert(kOffsetWords[5].word == 0xa9000801U && kGamespaceOwnerOffset == sizeof(void*),
+              "`stp x1, x2, [x0]` stores the game at +8: kGamespaceOwnerOffset must be 8");
+static_assert(LdrStrOffset(kOffsetWords[6].word) == kGamespaceLevelOffset, "the pinned store of the level does not carry kGamespaceLevelOffset");
 
 }  // namespace nevr_quest::combat::level::targets

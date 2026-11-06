@@ -21,6 +21,10 @@ std::atomic<std::uint32_t> g_calls{0};
 std::atomic<std::uint32_t> g_objectMisses{0};
 // The one object that passed the vptr check: the game calls with the same CR15Game every frame, so the check (a process_vm_readv) is made again
 // only when the pointer changes. A failing object is never remembered, so a wrong object is read and refused every time.
+// The pointer alone is not proof for ever: a freed object's address can be reused by another object (the store libr15 has a second game class,
+// CRxGame), so the check is made again every kRecheckFrames frames too, which bounds how long a reused address keeps running callbacks.
+constexpr std::uint32_t kRecheckFrames = 256;
+std::atomic<std::uint32_t> g_sinceCheck{0};
 std::atomic<std::uintptr_t> g_verified{0};
 std::atomic<std::uint32_t> g_vptrReads{0};
 std::atomic<std::uintptr_t> g_vptr{0};  // the value CR15Game's first word holds in this process: libr15's base + the pinned vaddr
@@ -40,10 +44,13 @@ void OnTick(Thunk::Fn original, void* game) noexcept {
   original(game);
   g_calls.fetch_add(1, std::memory_order_relaxed);
   const std::uintptr_t object = reinterpret_cast<std::uintptr_t>(game);
-  if (object != 0 && object == g_verified.load(std::memory_order_relaxed)) {
+  if (object != 0 && object == g_verified.load(std::memory_order_relaxed) &&
+      g_sinceCheck.fetch_add(1, std::memory_order_relaxed) + 1 < kRecheckFrames) {
     RunCallbacks(object);
     return;
   }
+  g_sinceCheck.store(0, std::memory_order_relaxed);
+  g_verified.store(0, std::memory_order_relaxed);
   std::uintptr_t vptr = 0;
   g_vptrReads.fetch_add(1, std::memory_order_relaxed);
   const bool readable = SafeRead(object, &vptr, sizeof(vptr));
@@ -123,6 +130,7 @@ void ResetForTest() noexcept {
   g_objectMisses.store(0, std::memory_order_relaxed);
   g_vptr.store(0, std::memory_order_relaxed);
   g_verified.store(0, std::memory_order_relaxed);
+  g_sinceCheck.store(0, std::memory_order_relaxed);
   g_vptrReads.store(0, std::memory_order_relaxed);
 }
 

@@ -15,7 +15,7 @@
  * Which APKs (ADR 0046 rule 5). Installed by the normal step of the q15t and combat variants only.
  *
  * Frequency (ADR 0038). Once per rendered frame: the handler does a counter increment, a compare with the object that already passed the vptr check
- * (the read is made again only when the pointer changes) and a walk of the callbacks, and writes nothing to the log except one Error the first time the object is not the CR15Game.
+ * (the read is made again when the pointer changes and every 256 frames) and a walk of the callbacks, and writes nothing to the log except one Error the first time the object is not the CR15Game.
  *
  * Origin. The game-thread tick of the q15t plugin (`game_tick.cpp`, the reference build's `gunconnect` tick), reconstructed here; the
  * 16-callback table and the vptr check are its.
@@ -53,7 +53,7 @@ bool InstallAt(sentinel::ImageLookup lookup) noexcept;
 
 // How many frames the handler has run.
 std::uint32_t Calls() noexcept;
-// How many times the handler read the object's vptr: once for the object that passed (a later frame with the same pointer reads nothing), and
+// How many times the handler read the object's vptr: once for the object that passed, again when the pointer changes and every 256 frames, and
 // once per frame for an object that did not.
 std::uint32_t VptrReads() noexcept;
 

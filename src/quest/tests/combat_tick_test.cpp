@@ -304,21 +304,35 @@ void TheVptrIsReadOncePerObjectNotOncePerFrame() {
   QCHECK(tick::InstallAt(&Lookup));
   void* const game = Game(VptrValue());
   for (int frame = 0; frame < 1000; ++frame) CallSlot(game);
-  QCHECK(tick::Calls() == 1000 && tick::VptrReads() == 1);
+  QCHECK(tick::Calls() == 1000 && tick::VptrReads() == 4);  // once, then at frames 256, 512 and 768
   int ran = 0;
   for (const std::string& s : g_order) ran += s == "combat1" ? 1 : 0;
   QCHECK(ran == 1000);  // every frame still ran the callback
   static std::uintptr_t second[8] = {};
   second[0] = VptrValue();
   CallSlot(second);
-  QCHECK(tick::VptrReads() == 2);  // a new pointer: read again
+  QCHECK(tick::VptrReads() == 5);  // a new pointer: read again
   static std::uintptr_t wrong[8] = {};
   wrong[0] = 0x777;
   for (int frame = 0; frame < 3; ++frame) CallSlot(wrong);
-  QCHECK(tick::VptrReads() == 5);  // a refused object is read every frame
+  QCHECK(tick::VptrReads() == 8);  // a refused object is read every frame
   g_order.clear();
   CallSlot(second);  // the verified object is still the last one that passed
-  QCHECK(tick::VptrReads() == 5 && g_order.size() == 2U);
+  QCHECK(tick::VptrReads() == 9 && g_order.size() == 2U);  // `second` was forgotten by the refused frames: read again, then it runs
+  // A reused address: the object at the verified pointer stops being a CR15Game (a freed object's address taken by another class). Its callbacks
+  // stop within the re-check interval, and one Error line says so.
+  g_order.clear();
+  Game(VptrValue());
+  for (int frame = 0; frame < 10; ++frame) CallSlot(game);
+  g_gameWords[0] = 0x888;  // the same address, another class
+  int ranAfter = 0;
+  for (int frame = 0; frame < 300; ++frame) {
+    g_order.clear();
+    CallSlot(game);
+    ranAfter += g_order.size() > 1U ? 1 : 0;
+  }
+  QCHECK(ranAfter < 256);  // bounded by the interval, not for ever
+  QCHECK(Lines("combat_tick_object").size() == 1U);
   Done();
 }
 
