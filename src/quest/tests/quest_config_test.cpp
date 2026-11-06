@@ -1155,7 +1155,13 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
     const char* name;
     nevr_quest::CombatSwitch nevr_quest::CombatConfig::*member;
   };
-  const Key keys[] = {{"heaps", &nevr_quest::CombatConfig::heaps}, {"memsys", &nevr_quest::CombatConfig::memsys}};
+  const Key keys[] = {{"heaps", &nevr_quest::CombatConfig::heaps},
+                      {"memsys", &nevr_quest::CombatConfig::memsys},
+                      // the resource table steps (#2177)
+                      {"meshstep", &nevr_quest::CombatConfig::meshstep},
+                      {"instmodel", &nevr_quest::CombatConfig::instmodel},
+                      {"shaderstep", &nevr_quest::CombatConfig::shaderstep},
+                      {"tablestep", &nevr_quest::CombatConfig::tablestep}};
   for (const Key& key : keys) {
     const std::string section = std::string("combat:\n  ") + key.name + ": ";
     const std::string full = std::string("combat.") + key.name;
@@ -1180,6 +1186,9 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
       CHECK(!r.config.combat.force.on);  // no other key moved
       const bool other = key.member == &nevr_quest::CombatConfig::heaps ? r.config.combat.memsys.on : r.config.combat.heaps.on;
       CHECK(other);  // the other module's switch is its own
+      for (const Key& each : keys) {
+        if (each.member != key.member) CHECK((r.config.combat.*each.member).on);  // and no other key moved
+      }
     }
     for (const char* value : {"maybe", "2", "[true]", "{a: 1}", ""}) {  // a value nobody meant: on, and the key is named
       const LoadResult r = Load(Full(), section + value + "\n");
