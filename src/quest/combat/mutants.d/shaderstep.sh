@@ -10,12 +10,12 @@ runm ss_always_corrects     $S "s/  if (scope != table_step::Scope::kCombat) {/ 
 runm ss_never_corrects      $S "s/  if (scope != table_step::Scope::kCombat) {/  if (true) {/"
 runm ss_scope_not_read      $S "s/  const table_step::Scope scope = table_step::CurrentScope();/  const table_step::Scope scope = table_step::Scope::kCombat;/"
 # the game's function runs once, with the game's arguments, and its object is returned
-runm ss_original_dropped    $S "s/  void\* const built = original(self, obj, init);/  (void)original; (void)init; void* const built = obj;/"
-runm ss_original_args       $S "s/  void\* const built = original(self, obj, init);/  void* const built = original(self, obj, obj);/"
+runm ss_original_dropped    $S "s/  void\* const built = original(self, obj, init);/  (void)original; (void)self; (void)init; void* const built = obj;/"
+runm ss_original_args       $S "s/  void\* const built = original(self, obj, init);/  (void)init; void* const built = original(self, obj, obj);/"
 runm ss_other_object_back   $S "s/^  return built;\$/  return obj == built ? nullptr : built;/"
 runm ss_stock_not_counted   $S "s/g_stock.fetch_add(1, std::memory_order_relaxed);/g_stock.fetch_add(0, std::memory_order_relaxed);/"
 runm ss_stock_said_always   $S "s/  if (g_saidStock.exchange(true, std::memory_order_relaxed)) return;/  (void)g_saidStock;/"
-runm ss_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/table_step::ScopeName(scope == scope ? table_step::Scope::kCombat : scope)/"
+runm ss_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/(scope == table_step::Scope::kUnknown ? \"combat\" : \"other\")/"
 # the correction of the object it returned
 runm ss_constructed_count   $S "s/const std::uint32_t n = g_constructed.fetch_add(1, std::memory_order_relaxed) + 1;/const std::uint32_t n = g_constructed.fetch_add(0, std::memory_order_relaxed) + 1;/"
 runm ss_stepped_count       $S "s/g_stepped.fetch_add(1, std::memory_order_relaxed);/g_stepped.fetch_add(0, std::memory_order_relaxed);/"
@@ -37,8 +37,8 @@ runm ts_unreadable_ok       $TS "s/^  if (!ok) return StepFix::kUnreadable;\$//"
 runm ts_stock_unchecked     $TS "s/^  if (have != kShaderSetStockStep) return StepFix::kNotStock;\$//"
 runm ts_stock_inverted      $TS "s/  if (have != kShaderSetStockStep) return StepFix::kNotStock;/  if (have == kShaderSetStockStep) return StepFix::kNotStock;/"
 runm ts_found_not_reported  $TS "s/^  if (found != nullptr) \*found = have;\$/  (void)found;/"
-runm ts_write_dropped       $TS "s/^  std::memcpy(reinterpret_cast<void*>(at), \&one, sizeof one);\$/  (void)one;/"
-runm ts_readback_unchecked  $TS "s/  return backOk \&\& now == kShaderSetStep ? StepFix::kSet : StepFix::kUnreadable;/  (void)now; (void)backOk; return StepFix::kSet;/"
+runm ts_write_dropped       $TS "s/^  std::memcpy(reinterpret_cast<void\*>(at), \&one, sizeof one);\$/  (void)one;/"
+# ts_readback_unchecked is not listed: the read-back after a write to readable memory always equals the value written, so the check cannot be observed on the host
 runm ts_readback_value      $TS "s/  return backOk \&\& now == kShaderSetStep ? StepFix::kSet : StepFix::kUnreadable;/  return backOk \&\& now == kShaderSetStockStep ? StepFix::kSet : StepFix::kUnreadable;/"
 # the install: the build, the switch, once, the word
 runm ss_off_ignored         $S "s/^  if (!on) return Done(/  if (!on \&\& false) return Done(/"

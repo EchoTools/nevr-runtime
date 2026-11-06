@@ -10,10 +10,10 @@ runm im_scope_not_read      $S "s/self != nullptr ? table_step::CurrentScope() :
 runm im_null_self_is_read   $S "s/self != nullptr ? table_step::CurrentScope() : table_step::Scope::kUnknown;/table_step::CurrentScope();/"
 # the game's constructor runs once, for every call, before the steps are touched
 runm im_original_dropped    $S "s/^  original(self, init);\$/  (void)original; (void)init;/"
-runm im_original_args       $S "s/^  original(self, init);\$/  original(self, self);/"
+runm im_original_args       $S "s/^  original(self, init);\$/  (void)init; original(self, self);/"
 runm im_stock_not_counted   $S "s/g_stock.fetch_add(1, std::memory_order_relaxed);/g_stock.fetch_add(0, std::memory_order_relaxed);/"
 runm im_stock_said_always   $S "s/  if (g_saidStock.exchange(true, std::memory_order_relaxed)) return;/  (void)g_saidStock;/"
-runm im_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/table_step::ScopeName(scope == scope ? table_step::Scope::kCombat : scope)/"
+runm im_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/(scope == table_step::Scope::kUnknown ? \"combat\" : \"other\")/"
 # the eight steps
 runm im_new_step_two        $S "s/constexpr std::uint64_t kNewStep = 1;/constexpr std::uint64_t kNewStep = 2;/"
 runm im_stock_step_other    $S "s/constexpr std::uint64_t kStockStep = 0x20;/constexpr std::uint64_t kStockStep = 0x21;/"
