@@ -15,7 +15,7 @@ registrations) and #1997 (the release redesign).
 A tester's log or crash report has to say which build produced it, or a probe build's numbers and a release's are
 indistinguishable. What the tree has:
 
-- **Version.** It comes from git: `X.Y.Z` for a CI build of a tag, `X.Y.(Z+1)-dev.<N>+<sha>` for every other build,
+- **Version.** It comes from git: `X.Y.Z` for a CI build of a tag, `<next>-dev.<N>+<sha>` for every other build,
   "which sorts after the tag it descends from and before the next release" (AGENTS.md "Build Commands").
 - **Identity literal.** `NEVR-BUILD <version> <commit40>` binds the version to the commit. Its format is a cross-repo
   contract: the release signer and `tools/package_release.py` read it with a fixed pattern, and the plugin-trust literal
