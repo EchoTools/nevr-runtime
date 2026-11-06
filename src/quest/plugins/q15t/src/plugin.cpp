@@ -25,7 +25,6 @@
 #include "music.h"
 #include "peerclamp.h"
 #include "plugin_log.h"
-#include "powerboost.h"
 #include "script_redirect.h"
 #include "sensorwd.h"
 #include "shaderstep.h"
@@ -86,9 +85,6 @@
 #endif
 #ifndef Q15T_DRONEMUZZLE  // needs Q15T_DRONEKILL
 #define Q15T_DRONEMUZZLE 0
-#endif
-#ifndef Q15T_POWERBOOST  // 0 off, 1 read-only, 2 swallow, 3 cone (cone sends from ec's net tick: needs Q15T_EC)
-#define Q15T_POWERBOOST 0
 #endif
 #ifndef Q15T_HUDMETER
 #define Q15T_HUDMETER 0
@@ -184,9 +180,6 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_DRONEMUZZLE
     "dronemuzzle "
-#endif
-#if Q15T_POWERBOOST
-    "powerboost "
 #endif
 #if Q15T_HUDMETER
     "hudmeter "
@@ -295,7 +288,6 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_DRONEKILL) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_DRONEMUZZLE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_POWERBOOST > 0) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_AIBOTS) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_GUNCONNECT) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_BVH) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;       // walls block line of sight, bullets and AI
@@ -388,19 +380,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
     const InstallResult hooks[] = {dm.teleport, dm.fire};
     ReportModule("dronemuzzle", FirstFailure(dm.ok, hooks, 2));
     if (dm.ok) AddModuleTick("dronemuzzle", &DroneMuzzleTick, &want_tick);
-  }
-#endif
-#if Q15T_POWERBOOST > 0
-  {
-    bool net_tick = false;
-#if Q15T_POWERBOOST >= 3 && Q15T_EC
-    net_tick = ec_on && EcOnNetTick(&PowerboostNetTick);  // stage 3 sends from ec's recvfrom wrapper; without it the stage is refused
-#endif
-    const InstallResult r = InstallPowerboost(base, Q15T_POWERBOOST, net_tick);
-    ReportModule("powerboost", r);
-#if Q15T_POWERBOOST >= 3
-    if (r.status == SwapStatus::kOk) AddModuleTick("powerboost", &PowerboostGameTick, &want_tick);
-#endif
   }
 #endif
 #if Q15T_HUDMETER

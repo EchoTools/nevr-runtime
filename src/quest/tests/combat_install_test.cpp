@@ -221,11 +221,11 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the headset gates (#2180) and, last, the pfx gate and
-  // the event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick and the gates are refused and named; the rule
-  // installs (it registers its callback for a tick that may come later), and so do the two decisions. The EC client (#2187) is refused like the
-  // gates (no libr15), and its NEUTRON effects refuse without it.
-  QCHECK(normal.ran && normal.modules == 7 && normal.installed == 3 && normal.failed == 4);
+  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the EC client and POWER BOOST (#2187), the headset
+  // gates (#2180) and, last, the pfx gate and the event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick, the
+  // EC client, POWER BOOST (at its default stage 3) and the gates are refused and named (NEUTRON effects refuse without the client); the rule installs
+  // (it registers its callback for a tick that may come later), and so do the two decisions.
+  QCHECK(normal.ran && normal.modules == 8 && normal.installed == 3 && normal.failed == 5);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -233,8 +233,8 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed ec=module_not_loaded ecfx=needs_ec gates=module_not_loaded pfx=installed "
-                                "pfxtev=installed\""));
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed ec=module_not_loaded ecfx=needs_ec powerboost=module_not_loaded "
+                                "gates=module_not_loaded pfx=installed pfxtev=installed\""));
   }
   Done();
 }

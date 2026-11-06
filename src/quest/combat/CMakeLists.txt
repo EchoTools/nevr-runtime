@@ -21,6 +21,7 @@ add_library(nevr_quest_combat STATIC
   memsys.cpp
   pfx.cpp
   pfxtev.cpp
+  powerboost.cpp
   refresh_rate.cpp)
 target_include_directories(nevr_quest_combat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_compile_options(nevr_quest_combat PRIVATE

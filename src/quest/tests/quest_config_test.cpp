@@ -1376,7 +1376,34 @@ void CombatGateLinkLibsIsATextThatTheFileGivesWhole() {
   }
 }
 
+// combat.powerboost_stage (#2187): an integer 0..3. Absent: 3 (swallow and cone), not from the file. An integer in the range: that stage, from the
+// file. A value that is not an integer, or one outside 0..3, keeps 3 with a Warning that names the key.
+void CombatPowerboostStageIsAnIntegerFromZeroToThree() {
+  const std::string key = "combat.powerboost_stage";
+  for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n  gate_link: false\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.powerboostStage.value == 3 && r.config.combat.powerboostStage.source != Source::kFile);
+  }
+  for (int stage = 0; stage <= 3; ++stage) {
+    const LoadResult r = Load(Full(), "combat:\n  powerboost_stage: " + std::to_string(stage) + "\n");
+    CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+    CHECK(r.config.combat.powerboostStage.value == stage && r.config.combat.powerboostStage.source == Source::kFile);
+  }
+  for (const char* value : {"4", "-1", "99"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  powerboost_stage: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.powerboostStage.value == 3 && r.config.combat.powerboostStage.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=out_of_range", LogLevel::kWarn));
+  }
+  for (const char* value : {"two", "2.5", "true", "[1, 2]", "{a: 1}"}) {
+    const LoadResult r = Load(Full(), std::string("combat:\n  powerboost_stage: ") + value + "\n");
+    CHECK(!r.fileRejected && r.config.combat.powerboostStage.value == 3 && r.config.combat.powerboostStage.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=not_an_integer", LogLevel::kWarn));
+  }
+}
+
 int main() {
+  CombatPowerboostStageIsAnIntegerFromZeroToThree();
   InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
   InviteCodesNeedsLoginAndAServiceAddress();
   DefaultsWithoutFile();

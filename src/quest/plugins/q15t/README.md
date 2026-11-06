@@ -32,6 +32,8 @@ The build defaults are the shipped behaviour; none of them depends on a config o
   (it reads the game's LoadLevelName slot).
 - `ec` and `ecfx` (the EC network client and NEUTRON effects) are the runtime's (`src/quest/combat/ec.h`), with the `combat:` keys `ec`,
   `ec_words` and `ecfx` in `config.yaml`; the plugin's `ec.on`, `ec.off`, `ec_preset*.on` and `neutronfx.on` files are no longer read.
+- POWER BOOST is not this plugin's: the runtime owns its five words (`src/quest/combat/powerboost.h`). Its switch is the `combat:` key
+  `powerboost_stage` (0 to 3, default 3: swallow and cone) in `config.yaml`.
 - Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).
 - The refresh-rate rule (90 Hz, 72 on a Quest 2, on combat maps and in the lobby) and the clock levels are not this plugin's: the runtime
   owns them (`src/quest/combat/refresh_rate.h`, `src/quest/sentinel/clock_levels_hook.h`). The rule's switches are the `combat:` keys

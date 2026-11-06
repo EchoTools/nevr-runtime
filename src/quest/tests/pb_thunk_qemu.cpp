@@ -1,20 +1,19 @@
-// Runs the plugin's one naked arm64 function (src/quest/plugins/q15t/src/powerboost_thunk.inc, the very text src/quest/plugins/q15t/src/powerboost.cpp includes) under
-// qemu-aarch64. Freestanding: no libc, no plugin code; only the thunk, the two words it reads and a recording stand-in for
-// q15t_pb_cone_at. Build: the q15t-ndk-checks preset (NDK r26d clang++ -static -nostdlib; src/quest/tests/q15t/mod/powerboost.cmake).
+// Runs POWER BOOST's assembly entry (src/quest/combat/powerboost_thunk.inc, the very text src/quest/combat/powerboost.cpp includes) under
+// qemu-aarch64. Freestanding: no libc, no sentinel code; only the entry, the two words it reads and a recording stand-in for its
+// continuation, nevr_combat_pb_cone_at. Built and run by src/quest/combat/check/powerboost_thunk.sh (NDK r26d clang++ -static -nostdlib).
 //
 // What is checked, by running it:
-//   - a call whose return address is not q15t_pb_cone_ret reaches the real function with x0, x1, x2 and x30 as the caller
-//     left them (the real function returns straight to the caller), q15t_pb_cone_at is not called, and no callee-saved
+//   - a call whose return address is not nevr_combat_pb_cone_ret reaches the next word's function with x0, x1, x2 and x30 as the caller
+//     left them (the real function returns straight to the caller), the continuation is not called, and no callee-saved
 //     register (x19, x20, x24, x25) and no stack word of the caller is disturbed;
-//   - the call whose return address equals q15t_pb_cone_ret goes to q15t_pb_cone_at with x0 = the target, x1 = the caller's
+//   - the call whose return address equals nevr_combat_pb_cone_ret goes to the continuation with x0 = the target, x1 = the caller's
 //     sp at the call, x2 = the caller's x24, returns what it returns, and the real function is not called;
 //   - the compare is exact: a return address one instruction off is an ordinary call.
-#include <atomic>
 #include <cstdint>
 
 extern "C" {
-__attribute__((visibility("hidden"))) std::atomic<std::uintptr_t> q15t_pb_cone_ret{0};
-__attribute__((visibility("hidden"))) std::atomic<std::uintptr_t> q15t_pb_resolve_real{0};
+__attribute__((visibility("hidden"))) std::uintptr_t nevr_combat_pb_cone_ret = 0;
+__attribute__((visibility("hidden"))) void* nevr_combat_pb_next = nullptr;
 
 static std::uintptr_t g_cone_target, g_cone_frame, g_cone_dcs;
 static int g_cone_calls;
@@ -22,7 +21,7 @@ static std::uintptr_t g_real_x0, g_real_x1, g_real_x2, g_real_lr;
 static int g_real_calls;
 static const std::uintptr_t kConeResult = 0xc0de0001;
 
-__attribute__((visibility("hidden"), used, noinline)) const std::uint8_t* q15t_pb_cone_at(const void* target, const std::uint8_t* frame,
+__attribute__((visibility("hidden"), used, noinline)) const std::uint8_t* nevr_combat_pb_cone_at(const void* target, const std::uint8_t* frame,
                                                                                         std::uintptr_t dcs) {
   ++g_cone_calls;
   g_cone_target = reinterpret_cast<std::uintptr_t>(target);
@@ -31,7 +30,8 @@ __attribute__((visibility("hidden"), used, noinline)) const std::uint8_t* q15t_p
   return reinterpret_cast<const std::uint8_t*>(kConeResult);
 }
 
-#include "../../plugins/q15t/src/powerboost_thunk.inc"
+void nevr_combat_pb_resolve_entry();
+#include "quest/combat/powerboost_thunk.inc"
 
 __attribute__((noinline)) std::uintptr_t real_resolve(std::uintptr_t x0, std::uintptr_t x1, std::uintptr_t x2) {
   ++g_real_calls;
@@ -65,8 +65,8 @@ pbt_call:
     adr x17, 1f
     str x17, [x19, #8]
     cbz x4, 2f
-    adrp x5, q15t_pb_cone_ret
-    add x5, x5, :lo12:q15t_pb_cone_ret
+    adrp x5, nevr_combat_pb_cone_ret
+    add x5, x5, :lo12:nevr_combat_pb_cone_ret
     str x17, [x5]
 2:
     mov x6, sp
@@ -110,34 +110,34 @@ static void Check(bool ok, const char* what) {
 
 extern "C" [[noreturn]] void _start() {
   std::uint64_t out[6];
-  const std::uintptr_t thunk = reinterpret_cast<std::uintptr_t>(&q15t_pb_resolve_thunk);
+  const std::uintptr_t thunk = reinterpret_cast<std::uintptr_t>(&nevr_combat_pb_resolve_entry);
   const std::uintptr_t kTarget = 0x1234560, kDcs = 0xd0d0d0d0;
-  q15t_pb_resolve_real.store(reinterpret_cast<std::uintptr_t>(&real_resolve));
+  __atomic_store_n(&nevr_combat_pb_next, reinterpret_cast<void*>(&real_resolve), __ATOMIC_RELEASE);
 
   // 1. an ordinary caller (cone return address not armed): straight on to the real function
-  q15t_pb_cone_ret.store(0);
+  __atomic_store_n(&nevr_combat_pb_cone_ret, std::uintptr_t{0}, __ATOMIC_RELEASE);
   std::uintptr_t r = pbt_call(thunk, kTarget, kDcs, out, 0);
   const std::uintptr_t label = out[1];
   Check(r == kTarget + 0x1000, "ordinary call: the real function's result is not returned");
-  Check(g_real_calls == 1 && g_cone_calls == 0, "ordinary call: real not called once / cone_at called");
+  Check(g_real_calls == 1 && g_cone_calls == 0, "ordinary call: real not called once / continuation called");
   Check(g_real_x0 == kTarget && g_real_x1 == 0x1111 && g_real_x2 == 0x2222, "ordinary call: x0 / x1 / x2 changed on the way to the real function");
   Check(g_real_lr == label, "ordinary call: the real function did not see the caller's return address (x30 changed)");
   Check(out[2] == kDcs && out[3] == 0xa5a5 && out[4] == 0x5a5a && out[5] == reinterpret_cast<std::uintptr_t>(out), "ordinary call: x24 / x20 / x25 / x19 changed");
 
-  // 2. the armed return address: the cone function runs, the real one does not
+  // 2. the armed return address: the continuation runs, the real one does not
   g_real_calls = 0;
   r = pbt_call(thunk, kTarget, kDcs, out, 1);
-  Check(q15t_pb_cone_ret.load() == label, "the test did not arm the return address it meant to");
-  Check(g_cone_calls == 1 && g_real_calls == 0, "cone call: cone_at not called once / real called");
-  Check(r == kConeResult, "cone call: cone_at's result is not returned to the caller");
-  Check(g_cone_target == kTarget, "cone call: x0 (the target) not handed to cone_at");
+  Check(__atomic_load_n(&nevr_combat_pb_cone_ret, __ATOMIC_ACQUIRE) == label, "the test did not arm the return address it meant to");
+  Check(g_cone_calls == 1 && g_real_calls == 0, "cone call: continuation not called once / real called");
+  Check(r == kConeResult, "cone call: the continuation's result is not returned to the caller");
+  Check(g_cone_target == kTarget, "cone call: x0 (the target) not handed to the continuation");
   Check(g_cone_frame == out[0], "cone call: x1 is not the caller's sp at the call");
   Check(g_cone_dcs == kDcs, "cone call: x2 is not the caller's x24");
   Check(out[2] == kDcs && out[3] == 0xa5a5 && out[4] == 0x5a5a && out[5] == reinterpret_cast<std::uintptr_t>(out), "cone call: x24 / x20 / x25 / x19 changed");
 
   // 3. the compare is exact: one instruction off in either direction is an ordinary call
   for (int delta = -4; delta <= 4; delta += 8) {
-    q15t_pb_cone_ret.store(label + static_cast<std::uintptr_t>(static_cast<long>(delta)));
+    __atomic_store_n(&nevr_combat_pb_cone_ret, label + static_cast<std::uintptr_t>(static_cast<long>(delta)), __ATOMIC_RELEASE);
     g_cone_calls = g_real_calls = 0;
     r = pbt_call(thunk, kTarget, kDcs, out, 0);
     Check(r == kTarget + 0x1000 && g_real_calls == 1 && g_cone_calls == 0, "a return address one instruction off was treated as the cone call");

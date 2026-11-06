@@ -162,6 +162,13 @@ struct CombatText {
   Source source = Source::kAbsent;
 };
 
+// A folded combat module's integer (`combat.powerboost_stage`). `source` is kFile when the file gave an integer in the module's range; otherwise
+// `value` is the module's default.
+struct CombatInt {
+  int value = 0;
+  Source source = Source::kAbsent;
+};
+
 // The `combat:` section (docs/adr/0046 rule 4): one member per key, each defaulting to the shipped behaviour. The keys are `force` and, for
 // each folded module, its switch; a module's unit adds its member here, with the row in KnownSections (src/core/nevr_config.cpp), the
 // example config and the `combat_config` line (combat/combat_install.h).
@@ -181,6 +188,7 @@ struct CombatConfig {
   CombatSwitch ec;      // `combat.ec`: the EC network client and the writer of re33_ec_page (combat/ec.h)
   CombatText ecWords;   // `combat.ec_words`: the EC client's words; unset: `types=VPTO equip hide` (combat/ec.h)
   CombatSwitch ecfx;    // `combat.ecfx`: the NEUTRON effects drain on the EC client's net tick (combat/ecfx.h)
+  CombatInt powerboostStage{3, Source::kAbsent};  // `combat.powerboost_stage`: POWER BOOST's stage, 0 off .. 3 swallow + cone (combat/powerboost.h)
 };
 
 struct LogEvent {

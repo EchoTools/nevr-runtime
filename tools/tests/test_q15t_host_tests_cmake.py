@@ -55,7 +55,6 @@ HOST_TESTS = frozenset(
         "meshstep.meshstep_test",
         "music.music_test",
         "peerclamp.peerclamp_test",
-        "powerboost.powerboost_test",
         "script_redirect.script_redirect_test",
         "sensorwd.sensorwd_test",
         "shaderstep.shaderstep_test",
@@ -88,20 +87,16 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_WALLFIRE",
         "wiring.wiring_caps_LEVELNAME",
         "wiring.wiring_caps_T26",
-        "wiring.wiring_caps_POWERBOOST_1",
-        "wiring.wiring_caps_POWERBOOST_2",
-        "wiring.wiring_caps_POWERBOOST_3",
     ]
 )
 # q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack
-# checks and one for each module that keeps per-thread state (bvh, dronekill, impactsnd, powerboost, sensorwd)
+# checks and one for each module that keeps per-thread state (bvh, dronekill, impactsnd, sensorwd)
 ARM64_OBJECTS = frozenset(
-    "bvh decals dronekill dronemuzzle impactsnd hudmeter instmodel music powerboost sensorwd shaderstep shieldgamma tablestep".split()
+    "bvh decals dronekill dronemuzzle impactsnd hudmeter instmodel music sensorwd shaderstep shieldgamma tablestep".split()
 )
 # the checks that read an object or run a freestanding program, registered by hand in a module file
 NDK_CHECKS = {
     "mod/dronemuzzle.cmake": ["dronemuzzle.arm64_thunks"],
-    "mod/powerboost.cmake": ["powerboost.arm64_thunk_disassembly", "powerboost.pb_thunk_qemu"],
 }
 
 
@@ -205,12 +200,8 @@ class HostTestsAreTargets(unittest.TestCase):
 
         database = json.loads((self.build / "compile_commands.json").read_text(encoding="utf-8"))
         compiled = {Path(entry["file"]).name for entry in database if Path(entry["file"]).parent == Q15T}
-        # compiled only in the NDK configure: the freestanding thunk program
-        ndk_only = {"pb_thunk_qemu.cpp"}
         sources = {p.name for p in Q15T.glob("*.cpp")}
-        self.assertEqual(sorted(sources - compiled - ndk_only), [], "a .cpp here no target compiles")
-        text = (Q15T / "mod/powerboost.cmake").read_text(encoding="utf-8")
-        self.assertIn("pb_thunk_qemu.cpp", text)
+        self.assertEqual(sorted(sources - compiled), [], "a .cpp here no target compiles")
 
     def test_a_label_per_module_file(self):
         labels = {t.split(".")[0] for t in self.tests}
