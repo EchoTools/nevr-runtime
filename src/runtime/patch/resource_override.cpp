@@ -47,6 +47,7 @@
 #include "runtime/patch/asset_cache.h"
 
 #include "core/globals.h"
+#include "core/log_text.h"
 #include "core/logging.h"
 #include "runtime/patch/game_buffer.h"
 #include "runtime/patch/resource_buffer_key.h"
@@ -398,7 +399,7 @@ static bool RegisterOwnedCopy(uint64_t type_hash, uint64_t name_hash, const uint
     ovr->data = data;
     ovr->size = size;
     ovr->owned = true;
-    ovr->label = label;
+    ovr->label = label;  /* already SafeText: its one caller cleans the index entry's label before any line is written */
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) {
@@ -503,7 +504,7 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
     ovr->data = data;
     ovr->size = size;
     ovr->owned = false;
-    ovr->label = label ? label : "(null)";
+    ovr->label = nevr_log_text::SafeText(label ? label : "(null)");
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) return;
@@ -541,7 +542,7 @@ bool RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceT
     ovr->data = nullptr;
     ovr->size = 0;
     ovr->owned = false;
-    ovr->label = label ? label : "(null)";
+    ovr->label = nevr_log_text::SafeText(label ? label : "(null)");
     ovr->transform = transform;
     ovr->user = user;
     {
@@ -577,7 +578,7 @@ static bool RegisterResourceOverrideFromFileImpl(uint64_t type_hash, uint64_t na
     ovr->data = data;
     ovr->size = size;
     ovr->owned = true;
-    ovr->label = label ? label : "(null)";
+    ovr->label = nevr_log_text::SafeText(label ? label : "(null)");
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) {
@@ -648,7 +649,8 @@ size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_by
     std::set<std::string> referenced;
     for (const nevr_asset_cache::IndexEntry& entry : index.entries) {
         referenced.insert(entry.sha256);
-        const std::string label = entry.label.empty() ? "cache:" + entry.sha256.substr(0, 12) : entry.label;
+        const std::string label =
+            nevr_log_text::SafeText(entry.label.empty() ? "cache:" + entry.sha256.substr(0, 12) : entry.label);
         const std::string blob = WideToUtf8(nevr_asset_cache::BlobPath(dir, entry.sha256));
         nevr_asset_cache::LoadResult r = nevr_asset_cache::Load(dir, entry.sha256);
         switch (r.status) {

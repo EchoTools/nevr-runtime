@@ -333,6 +333,10 @@ retry counts, and stable event markers. URL diagnostics must use the redacted
 formatters and omit query and fragment data. Preserve the original response
 and request bytes for protocol handling; this rule changes diagnostics only.
 
+Text that a plugin, a file name or a config file supplies (a resource override's label, #2215) is written through
+`nevr_log_text::SafeText` (`src/core/log_text.h`): one line of ASCII and well-formed UTF-8, with every control byte and
+every byte that is not UTF-8 shown as a `\xNN` escape, cleaned once where the text enters, so every later line is safe.
+
 ### Rule 5: Noise is a defect
 
 echovr-native log lines are noisy. The built-in log filter exists to suppress

@@ -18,6 +18,7 @@
 #include <vector>
 #include <windows.h>
 
+#include "core/log_text.h"
 #include "core/logging.h"
 #include "runtime/patch/asset_cache.h"
 #include "runtime/patch/game_buffer.h"
@@ -30,6 +31,7 @@
 bool TestLogContains(const std::string& needle);
 bool TestLogContainsAtLevel(EchoVR::LogLevel level, const std::string& needle);
 void ClearTestLogs();
+std::vector<std::string> TestLogLinesContaining(const std::string& needle);
 
 namespace {
 
@@ -265,6 +267,96 @@ void RunCallbackFor(std::uint64_t name) {
   std::memcpy(resource.data() + 0x38, &name, sizeof(name));
   std::memcpy(callback.data() + 0x08, &resourcePtr, sizeof(resourcePtr));
   TestHook_RunResourceCallback(callback.data());
+}
+
+// #2215: a label comes from a plugin. Whatever bytes it holds, every line the runtime writes about the override is one
+// line of valid UTF-8, with the bytes that would split or corrupt it written as visible escapes.
+namespace {
+
+bool IsValidUtf8(const std::string& text) {
+  std::size_t i = 0;
+  while (i < text.size()) {
+    const unsigned char c = static_cast<unsigned char>(text[i]);
+    std::size_t extra = 0;
+    if (c < 0x80) {
+      extra = 0;
+    } else if (c >= 0xC2 && c <= 0xDF) {
+      extra = 1;
+    } else if (c >= 0xE0 && c <= 0xEF) {
+      extra = 2;
+    } else if (c >= 0xF0 && c <= 0xF4) {
+      extra = 3;
+    } else {
+      return false;
+    }
+    if (i + extra >= text.size() && extra != 0) return false;
+    for (std::size_t k = 1; k <= extra; ++k) {
+      if ((static_cast<unsigned char>(text[i + k]) & 0xC0) != 0x80) return false;
+    }
+    i += extra + 1;
+  }
+  return true;
+}
+
+bool HasControlByte(const std::string& text) {
+  for (const char c : text) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    if (u < 0x20 || u == 0x7f) return true;
+  }
+  return false;
+}
+
+bool TransformNeverCalled(const void*, std::uint64_t, const void**, std::uint64_t*, void*) { return false; }
+
+}  // namespace
+
+TEST(ResourceOverride, AHostileLabelIsOneLineOfValidUtf8InEveryLineItAppearsIn) {
+  // newline, CR, a control byte, DEL, a lone 0xFF, a truncated sequence (0xC3 then '('), a valid "e acute", a backslash.
+  const std::string label = std::string("lbl-a\nb\r") + "c\x01" + "d\x7f" + "e\xff" + "f\xc3(" + "g\xc3\xa9" + "h\\i";
+  const std::string expected = "lbl-a\\nb\\rc\\x01d\\x7fe\\xfff\\xc3(g\xc3\xa9h\\\\i";
+
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  ClearTestLogs();
+  static char bytes[] = "hostile";
+  RegisterResourceOverride(kType, kName, bytes, sizeof(bytes), label.c_str());
+  ASSERT_TRUE(RegisterResourceTransform(kType, kName + 1, &TransformNeverCalled, nullptr, label.c_str()));
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 2u);
+  DeregisterResourceOverrides(bytes, bytes + sizeof(bytes));
+
+  const std::vector<std::string> lines = TestLogLinesContaining("lbl-");
+  // registered, transform registered, never applied, transform not served (Debug), deregistered.
+  ASSERT_GE(lines.size(), 5u);
+  for (const std::string& line : lines) {
+    EXPECT_EQ(line.find_first_of("\n\r"), std::string::npos) << "the line was split: " << line;
+    EXPECT_FALSE(HasControlByte(line)) << "a control byte reached the line";
+    EXPECT_TRUE(IsValidUtf8(line)) << "the line is not valid UTF-8";
+    EXPECT_NE(line.find(expected), std::string::npos) << "the bad bytes are not shown as escapes: " << line;
+  }
+  TestHook_SetOriginal(nullptr);
+  TestHook_CloseResourceOverrides();
+}
+
+TEST(LogText, ShowsEveryChangedByteAndKeepsWellFormedUtf8) {
+  using nevr_log_text::SafeText;
+  EXPECT_EQ(SafeText("plain label-1.0"), "plain label-1.0");
+  EXPECT_EQ(SafeText("a\nb\r\tc"), "a\\nb\\r\\tc");
+  EXPECT_EQ(SafeText(std::string("x\0y", 3)), "x\\x00y");
+  EXPECT_EQ(SafeText("a\\b"), "a\\\\b");
+  EXPECT_EQ(SafeText("\x7f"), "\\x7f");
+  EXPECT_EQ(SafeText("caf\xc3\xa9 \xe2\x80\x94 \xf0\x9f\x98\x80"), "caf\xc3\xa9 \xe2\x80\x94 \xf0\x9f\x98\x80");
+  EXPECT_EQ(SafeText("\xff"), "\\xff");
+  EXPECT_EQ(SafeText("\xc3("), "\\xc3(") << "a lead byte with no continuation";
+  EXPECT_EQ(SafeText("\xc0\x80"), "\\xc0\\x80") << "an overlong NUL";
+  EXPECT_EQ(SafeText("\xed\xa0\x80"), "\\xed\\xa0\\x80") << "a surrogate";
+  EXPECT_EQ(SafeText("\xf4\x90\x80\x80"), "\\xf4\\x90\\x80\\x80") << "above U+10FFFF";
+  EXPECT_EQ(SafeText("\xe2\x80"), "\\xe2\\x80") << "a sequence cut short by the end";
+  EXPECT_EQ(SafeText(""), "");
+}
+
+TEST(LogText, ALongTextIsCutAndMarked) {
+  const std::string out = nevr_log_text::SafeText(std::string(nevr_log_text::kMaxInputBytes + 50, 'q'));
+  EXPECT_EQ(out, std::string(nevr_log_text::kMaxInputBytes, 'q') + "...");
 }
 
 TEST(ResourceOverride, ShutdownReportsEveryOverrideTheGameNeverRequested) {
