@@ -5,6 +5,7 @@
 
 #include "runtime/server/telemetry_game_status.h"
 #include "runtime/server/telemetry_player_read.h"
+#include "runtime/server/telemetry_session_read.h"
 #include "runtime/server/telemetry_snapshot.h"
 #include "telemetry/v2/echo_arena.pb.h"
 
@@ -119,14 +120,26 @@ inline void DetectTelemetryEvents(const TelemetrySnapshot& curr, const Telemetry
   if (currStatus != telemetry::v2::GAME_STATUS_UNSPECIFIED) {
     if (currStatus != state.lastKnownStatus && state.lastKnownStatus != telemetry::v2::GAME_STATUS_UNSPECIFIED) {
       if (currStatus == telemetry::v2::GAME_STATUS_ROUND_START) {
-        frame->add_events()->mutable_round_started();
+        frame->add_events()->mutable_round_started()->set_round_number(curr.roundNumber);
       } else if (currStatus == telemetry::v2::GAME_STATUS_ROUND_OVER) {
-        frame->add_events()->mutable_round_ended();
+        frame->add_events()->mutable_round_ended()->set_round_number(curr.roundNumber);
       } else if (currStatus == telemetry::v2::GAME_STATUS_POST_MATCH) {
         frame->add_events()->mutable_match_ended();
       }
     }
     state.lastKnownStatus = currStatus;
+  }
+
+  // Pause: round_paused when the game's pause state becomes paused, round_unpaused (with the state it went to)
+  // when it leaves paused; the state is named as /session names it (PauseStateFromGame).
+  const telemetry::v2::PauseState prevPause =
+      nevr_telemetry_session::PauseStateFromGame(prev.pauseStateSymbol, prev.pauseTime);
+  const telemetry::v2::PauseState currPause =
+      nevr_telemetry_session::PauseStateFromGame(curr.pauseStateSymbol, curr.pauseTime);
+  if (currPause == telemetry::v2::PAUSE_STATE_PAUSED && prevPause != telemetry::v2::PAUSE_STATE_PAUSED) {
+    frame->add_events()->mutable_round_paused()->set_pause_state(currPause);
+  } else if (prevPause == telemetry::v2::PAUSE_STATE_PAUSED && currPause != telemetry::v2::PAUSE_STATE_PAUSED) {
+    frame->add_events()->mutable_round_unpaused()->set_pause_state(currPause);
   }
 
   // Score changes
@@ -140,7 +153,7 @@ inline void DetectTelemetryEvents(const TelemetrySnapshot& curr, const Telemetry
   // fields keep changing during play and its scorer stays the same when one player scores twice.
   DetectGoals(curr, prev, state, frame);
 
-  // Player join/leave, team switches and stat rises, each on the game slot. A slot that another account took
+  // Player join/leave, team switches, jersey or level changes and stat rises, each on the game slot. A slot that another account took
   // between the snapshots is a leave of the old player and a join of the new one, and their stats are not
   // compared. A stat that falls (a new match) sends nothing.
   for (uint8_t i = 0; i < nevr_telemetry_player::kMaxSlots; i++) {
@@ -157,8 +170,17 @@ inline void DetectTelemetryEvents(const TelemetrySnapshot& curr, const Telemetry
       pj->set_role(nevr_telemetry_player::RoleFromTeam(cp.teamIndex));
       pj->set_account_number(cp.accountId);
       pj->set_display_name(cp.displayName);
+      pj->set_jersey_number(cp.jerseyNumber);
+      pj->set_level(static_cast<int32_t>(cp.level));
     }
     if (!samePlayer) continue;
+
+    if (cp.jerseyNumber != pp.jerseyNumber || cp.level != pp.level) {
+      auto* up = frame->add_events()->mutable_player_info_updated();
+      up->set_player_slot(i);
+      up->set_jersey_number(cp.jerseyNumber);
+      up->set_level(static_cast<int32_t>(cp.level));
+    }
 
     if (cp.teamIndex != pp.teamIndex) {
       auto* sw = frame->add_events()->mutable_player_switched_team();

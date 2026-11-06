@@ -9,6 +9,8 @@
 // game names no state for (its state-to-string function 0x14016d510 returns "" between a score and the next
 // round start), joins, leaves, switches and stat rises on the game slot (a slot another account took is a
 // leave and a join; a stat that falls is no event), and nothing for a snapshot the game thread could not read.
+// Round starts and ends carry the game's round_counter, a pause or unpause the pause state as /session names it
+// (#2100), and a join the player's jersey number and level; a change of either is a player_info_updated.
 
 #include <gtest/gtest.h>
 
@@ -16,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "nevr/symbol_hash.h"
 #include "runtime/server/telemetry_events.h"
 
 namespace {
@@ -110,6 +113,53 @@ TEST(TelemetryEvents, RoundOverAndPostMatchAfterAnUnnamedStateAreSent) {
   EXPECT_EQ(Count(frames[1], EchoEvent::kRoundEnded), 1);
   EXPECT_EQ(Count(frames[3], EchoEvent::kMatchEnded), 1);
   EXPECT_EQ(Count(frames[1], EchoEvent::kRoundStarted), 0);
+}
+
+TEST(TelemetryEvents, ARoundStartAndEndCarryTheGamesRoundNumber) {
+  TelemetrySnapshot a = WithStatus(kPlaying), b = WithStatus(kRoundStart), c = WithStatus(kPlaying),
+                    d = WithStatus(kRoundOver);
+  b.roundNumber = 2;
+  d.roundNumber = 3;
+  const auto frames = DetectOver({a, b, c, d});
+  ASSERT_NE(First(frames[0], EchoEvent::kRoundStarted), nullptr);
+  EXPECT_EQ(First(frames[0], EchoEvent::kRoundStarted)->round_started().round_number(), 2);
+  ASSERT_NE(First(frames[2], EchoEvent::kRoundEnded), nullptr);
+  EXPECT_EQ(First(frames[2], EchoEvent::kRoundEnded)->round_ended().round_number(), 3);
+}
+
+TelemetrySnapshot WithPause(const char* state, float time) {
+  TelemetrySnapshot s = WithStatus(kPlaying);
+  s.pauseStateSymbol = EchoVR::CSymbol64Hash(state);
+  s.pauseTime = time;
+  return s;
+}
+
+TEST(TelemetryEvents, APauseIsSentWhenTheGameBecomesPausedAndAnUnpauseWhenItLeaves) {
+  const auto frames = DetectOver({WithPause("unpaused", 0.0f), WithPause("pause_requested", 0.0f),
+                                  WithPause("paused", 0.0f), WithPause("paused", 2.0f),
+                                  WithPause("unpaused", 1.5f), WithPause("unpaused", 0.0f)});
+  EXPECT_EQ(Count(frames[0], EchoEvent::kRoundPaused), 0);  // a request is not a pause
+  ASSERT_NE(First(frames[1], EchoEvent::kRoundPaused), nullptr);
+  EXPECT_EQ(First(frames[1], EchoEvent::kRoundPaused)->round_paused().pause_state(), telemetry::v2::PAUSE_STATE_PAUSED);
+  EXPECT_EQ(frames[2].events_size(), 0);  // still paused
+  ASSERT_NE(First(frames[3], EchoEvent::kRoundUnpaused), nullptr);
+  EXPECT_EQ(First(frames[3], EchoEvent::kRoundUnpaused)->round_unpaused().pause_state(),
+            telemetry::v2::PAUSE_STATE_UNPAUSING);
+  EXPECT_EQ(frames[4].events_size(), 0);  // unpausing to not paused is neither
+  int pauses = 0, unpauses = 0;
+  for (const auto& f : frames) {
+    pauses += Count(f, EchoEvent::kRoundPaused);
+    unpauses += Count(f, EchoEvent::kRoundUnpaused);
+  }
+  EXPECT_EQ(pauses, 1);
+  EXPECT_EQ(unpauses, 1);
+}
+
+TEST(TelemetryEvents, AnUnpauseStraightToUnpausedCarriesNotPaused) {
+  const auto frames = DetectOver({WithPause("paused", 0.0f), WithPause("unpaused", 0.0f)});
+  ASSERT_NE(First(frames[0], EchoEvent::kRoundUnpaused), nullptr);
+  EXPECT_EQ(First(frames[0], EchoEvent::kRoundUnpaused)->round_unpaused().pause_state(),
+            telemetry::v2::PAUSE_STATE_NOT_PAUSED);
 }
 
 TEST(TelemetryEvents, AGoalsTeamIsBlueForZeroAndOrangeOtherwise) {
@@ -338,6 +388,47 @@ TEST(TelemetryEvents, AJoinCarriesTheSlotRoleIdAndName) {
   EXPECT_EQ(j.role(), telemetry::v2::ROLE_ORANGE_TEAM);
   EXPECT_EQ(j.account_number(), 0xABCDEFu);
   EXPECT_EQ(j.display_name(), "orange_nine");
+}
+
+TEST(TelemetryEvents, AJoinCarriesTheJerseyNumberAndLevel) {
+  TelemetrySnapshot b = WithPlayer(9, 1, 0xABCDEF, "orange_nine");
+  b.playerInfo[9].jerseyNumber = 21;
+  b.playerInfo[9].level = 40;
+  const auto frames = DetectOver({Empty(), b});
+  ASSERT_NE(First(frames[0], EchoEvent::kPlayerJoined), nullptr);
+  EXPECT_EQ(First(frames[0], EchoEvent::kPlayerJoined)->player_joined().jersey_number(), 21);
+  EXPECT_EQ(First(frames[0], EchoEvent::kPlayerJoined)->player_joined().level(), 40);
+  EXPECT_EQ(Count(frames[0], EchoEvent::kPlayerInfoUpdated), 0);
+}
+
+TEST(TelemetryEvents, AJerseyOrLevelChangeOfTheSamePlayerIsAnInfoUpdate) {
+  TelemetrySnapshot a = WithPlayer(5, 0, 7, "blue5"), b = a, c = a, d = a;
+  a.playerInfo[5].jerseyNumber = 3;
+  a.playerInfo[5].level = 10;
+  b.playerInfo[5].jerseyNumber = 4;  // jersey changes
+  b.playerInfo[5].level = 10;
+  c.playerInfo[5].jerseyNumber = 4;
+  c.playerInfo[5].level = 11;  // level changes
+  d.playerInfo[5].jerseyNumber = 4;
+  d.playerInfo[5].level = 11;  // nothing changes
+  const auto frames = DetectOver({a, b, c, d});
+  ASSERT_NE(First(frames[0], EchoEvent::kPlayerInfoUpdated), nullptr);
+  const auto& u0 = First(frames[0], EchoEvent::kPlayerInfoUpdated)->player_info_updated();
+  EXPECT_EQ(u0.player_slot(), 5);
+  EXPECT_EQ(u0.jersey_number(), 4);
+  EXPECT_EQ(u0.level(), 10);
+  ASSERT_NE(First(frames[1], EchoEvent::kPlayerInfoUpdated), nullptr);
+  EXPECT_EQ(First(frames[1], EchoEvent::kPlayerInfoUpdated)->player_info_updated().level(), 11);
+  EXPECT_EQ(Count(frames[2], EchoEvent::kPlayerInfoUpdated), 0);
+}
+
+TEST(TelemetryEvents, ASlotTakenByAnotherAccountWithAnotherJerseyIsNoInfoUpdate) {
+  TelemetrySnapshot a = WithPlayer(5, 0, 7, "blue5"), b = WithPlayer(5, 0, 8, "other");
+  a.playerInfo[5].jerseyNumber = 3;
+  b.playerInfo[5].jerseyNumber = 9;
+  const auto frames = DetectOver({a, b});
+  EXPECT_EQ(Count(frames[0], EchoEvent::kPlayerInfoUpdated), 0);
+  EXPECT_EQ(Count(frames[0], EchoEvent::kPlayerJoined), 1);
 }
 
 TEST(TelemetryEvents, ALeaveCarriesTheSlot) {
