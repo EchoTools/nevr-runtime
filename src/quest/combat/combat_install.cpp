@@ -161,14 +161,22 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"refresh_rate_lobby", config.refreshRateLobby.on ? 1 : 0}, {"refresh_rate_lobby_source", source(config.refreshRateLobby.source)},
                        {"refresh_rate_quest2_72", config.refreshRateQuest2At72.on ? 1 : 0},
                        {"refresh_rate_quest2_72_source", source(config.refreshRateQuest2At72.source)},
-                       {"meshstep", config.meshstep.on ? 1 : 0}, {"meshstep_source", source(config.meshstep.source)},
-                       {"instmodel", config.instmodel.on ? 1 : 0}, {"instmodel_source", source(config.instmodel.source)},
-                       {"shaderstep", config.shaderstep.on ? 1 : 0}, {"shaderstep_source", source(config.shaderstep.source)},
-                       {"tablestep", config.tablestep.on ? 1 : 0}, {"tablestep_source", source(config.tablestep.source)},
                        {"pfx", config.pfx.on ? 1 : 0}, {"pfx_source", source(config.pfx.source)},
                        {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
+}
+
+// The resource table steps' four switches (#2177) are a line of their own: one sentinel line holds 768 bytes (hook_log.cpp kLineCapacity), and the
+// combat_config line is full, so a key added to it cuts its msg off.
+void LogTableStepConfig(const nevr_quest::CombatConfig& config) noexcept {
+  const auto source = [](const nevr_quest::Source s) { return s == nevr_quest::Source::kFile ? "config" : "default"; };
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_table_steps",
+                      {{"meshstep", config.meshstep.on ? 1 : 0}, {"meshstep_source", source(config.meshstep.source)},
+                       {"instmodel", config.instmodel.on ? 1 : 0}, {"instmodel_source", source(config.instmodel.source)},
+                       {"shaderstep", config.shaderstep.on ? 1 : 0}, {"shaderstep_source", source(config.shaderstep.source)},
+                       {"tablestep", config.tablestep.on ? 1 : 0}, {"tablestep_source", source(config.tablestep.source)},
+                       {"msg", "a table-step key set to false leaves the game's growth step of 32 for that resource class even in a combat match"}});
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }

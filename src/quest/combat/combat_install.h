@@ -86,6 +86,9 @@ void NoteNormalNotStarted(const char* reason) noexcept;
 // Writes the `combat_config` line for `config`.
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept;
 
+// Writes the `combat_config_table_steps` line for `config`: the four resource table-step switches, each with its value and source.
+void LogTableStepConfig(const nevr_quest::CombatConfig& config) noexcept;
+
 // The configuration the modules' switches are read from (their rows in the registration table): set once, by the constructor's
 // configuration step, before either install step runs. Until it is set every switch has its default.
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept;

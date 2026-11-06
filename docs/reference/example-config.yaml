@@ -215,7 +215,7 @@ combat:
   # mesh-list, instanced-model and shader-set resources grow by 1 entry, not the game's 32, while a combat map is loaded, in the q15t and combat APKs;
   # in an Echo Arena level, in the lobbies arena players use and before the game is known the resources are the game's own. `false` leaves the game's
   # step of 32 for that resource class even in a combat match. A value that is not a boolean is ignored with a warning in the sentinel log that names
-  # the key. Read once at launch; the sentinel log lines `combat_meshstep_install`, `combat_instmodel_install`, `combat_shaderstep_install` and
+  # the key. Read once at launch; the sentinel log lines `combat_config_table_steps`, `combat_meshstep_install`, `combat_instmodel_install`, `combat_shaderstep_install` and
   # `combat_tablestep_install` report each. Default (absent): true.
   # meshstep: false
   # instmodel: false

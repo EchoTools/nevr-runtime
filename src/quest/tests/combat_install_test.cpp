@@ -316,25 +316,38 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     // The module switches: on by default, each with its source.
     QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
-    // The four resource table steps (#2177): on by default, each with its source.
-    for (const char* key : {"meshstep", "instmodel", "shaderstep", "tablestep"}) {
-      QCHECK(Has(lines[0].text, std::string("\"") + key + "\":1") && Has(lines[0].text, std::string("\"") + key + "_source\":\"default\""));
-    }
+    // The four resource table steps (#2177) are on the line of their own, not on this full one.
+    QCHECK(!Has(lines[0].text, "meshstep") && !Has(lines[0].text, "tablestep"));
   }
   g_lines.clear();
   cfg.heaps = {false, nevr_quest::Source::kFile};
   cfg.memsys = {true, nevr_quest::Source::kFile};
-  cfg.meshstep = {false, nevr_quest::Source::kFile};
-  cfg.tablestep = {true, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
   const std::vector<Line> switches = Lines("combat_config");
   QCHECK(switches.size() == 1U);
   if (switches.size() == 1U) {
     QCHECK(Has(switches[0].text, "\"heaps\":0") && Has(switches[0].text, "\"heaps_source\":\"config\""));
     QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
-    QCHECK(Has(switches[0].text, "\"meshstep\":0") && Has(switches[0].text, "\"meshstep_source\":\"config\""));
-    QCHECK(Has(switches[0].text, "\"tablestep\":1") && Has(switches[0].text, "\"tablestep_source\":\"config\""));
-    QCHECK(Has(switches[0].text, "\"instmodel\":1") && Has(switches[0].text, "\"instmodel_source\":\"default\""));
+    QCHECK(Has(switches[0].text, "\"msg\":"));  // the line is not cut off: one sentinel line holds 768 bytes
+  }
+  // The four resource table steps (#2177): on by default with their source, and the file's word where it gave one.
+  g_lines.clear();
+  nevr_quest::CombatConfig tables;
+  combat::LogTableStepConfig(tables);
+  tables.meshstep = {false, nevr_quest::Source::kFile};
+  tables.tablestep = {true, nevr_quest::Source::kFile};
+  combat::LogTableStepConfig(tables);
+  const std::vector<Line> steps = Lines("combat_config_table_steps");
+  QCHECK(steps.size() == 2U);
+  if (steps.size() == 2U) {
+    QCHECK(steps[0].level == sentinel::LogLevel::kInfo);
+    for (const char* key : {"meshstep", "instmodel", "shaderstep", "tablestep"}) {
+      QCHECK(Has(steps[0].text, std::string("\"") + key + "\":1") && Has(steps[0].text, std::string("\"") + key + "_source\":\"default\""));
+    }
+    QCHECK(Has(steps[1].text, "\"meshstep\":0") && Has(steps[1].text, "\"meshstep_source\":\"config\""));
+    QCHECK(Has(steps[1].text, "\"tablestep\":1") && Has(steps[1].text, "\"tablestep_source\":\"config\""));
+    QCHECK(Has(steps[1].text, "\"instmodel\":1") && Has(steps[1].text, "\"instmodel_source\":\"default\""));
+    QCHECK(Has(steps[1].text, "\"msg\":"));
   }
   Done();
 }

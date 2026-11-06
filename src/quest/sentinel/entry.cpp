@@ -285,6 +285,7 @@ void NoteCombatNotStarted(const char* reason) noexcept { nevr_quest::combat::Not
 void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept {
   nevr_quest::combat::SetConfig(config);  // the modules' switches, read by the install steps that follow
   nevr_quest::combat::LogConfig(config);
+  nevr_quest::combat::LogTableStepConfig(config);
 }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
