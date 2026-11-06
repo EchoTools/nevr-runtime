@@ -13,6 +13,8 @@ that they ship to every APK (`match_tags`, `equip_refire`).
 | `combat_install.{h,cpp}` | The two install steps, `InstallEarly()` and `InstallNormal()`, the registration table they run, the `combat_install` line each writes, and the `combat_config` line. |
 | `<module>.{h,cpp}` | One module: namespace `nevr_quest::combat::<module>`, log events `combat_<module>_*`. |
 | `<module>_targets.h` | The module's pinned slots, each checked by the module's own pinned test (`src/quest/tests/<module>_pinned_test.cpp`, run by `just test-quest-hooks-pinned`-style recipes against the store APK). |
+| `mutants.sh`, `mutants.d/<module>.sh` | The module's mutation run: `src/quest/combat/mutants.sh <module>` applies each `runm <name> <file> <sed>` line of the module's list to the checkout, builds `<module>_test` and runs it; a mutant is killed when the test fails, a mutant that does not compile is not a kill, and the file is put back after each. Not part of `just test-quest-combat`. |
+| `table_step.{h,cpp}` | What the four resource table-step modules (`meshstep`, `instmodel`, `shaderstep`, `tablestep`) share: the scope they act in (`CurrentScope`: a combat map is loaded and no Echo Arena level is), the code-word pin check, the libr15 identity check, the correction of a shader-set step and the warning for a plugin kill file. |
 | `check/<module>.sh` | The module's arm64 checks (the NDK, and qemu where a thunk is run). `just test-quest-combat` runs them after the host tests. |
 
 ## When a module installs

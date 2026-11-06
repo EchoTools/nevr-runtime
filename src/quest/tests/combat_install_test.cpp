@@ -17,7 +17,11 @@
 #include "hook_log.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/meshstep.h"
+#include "quest/combat/shaderstep.h"
+#include "quest/combat/tablestep.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -210,16 +214,21 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
 // The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and nothing has a normal one yet. No
 // libr15 is loaded in this process, so each module refuses with its fixed token and the line names both; the normal phase writes its one
 // line with no modules.
-void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal() {
+void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal() {
   nevr_quest::combat::heaps::ResetForTest();
   nevr_quest::combat::memsys::ResetForTest();
+  nevr_quest::combat::meshstep::ResetForTest();
+  nevr_quest::combat::tablestep::ResetForTest();
+  nevr_quest::combat::instmodel::ResetForTest();
+  nevr_quest::combat::shaderstep::ResetForTest();
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  // The normal step runs the tick (combat_tick.h) first and the refresh-rate rule after it (#2172). On the host no libr15 is loaded, so the
-  // tick is refused and named; the rule installs (it registers its callback for a tick that may come later).
-  QCHECK(normal.ran && normal.modules == 2 && normal.installed == 1 && normal.failed == 1);
+  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172) and then the four resource table steps, in the
+  // plugin's order (#2177). On the host no libr15 is loaded, so the tick and the four table steps are refused and named; the rule installs (it
+  // registers its callback for a tick that may come later).
+  QCHECK(normal.ran && normal.modules == 6 && normal.installed == 1 && normal.failed == 5);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -227,7 +236,9 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed\""));
+    QCHECK(Has(lines[1].text,
+               "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded tablestep=module_not_loaded "
+               "instmodel=module_not_loaded shaderstep=module_not_loaded\""));
   }
   Done();
 }
@@ -302,16 +313,25 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     // The module switches: on by default, each with its source.
     QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
+    // The four resource table steps (#2177): on by default, each with its source.
+    for (const char* key : {"meshstep", "instmodel", "shaderstep", "tablestep"}) {
+      QCHECK(Has(lines[0].text, std::string("\"") + key + "\":1") && Has(lines[0].text, std::string("\"") + key + "_source\":\"default\""));
+    }
   }
   g_lines.clear();
   cfg.heaps = {false, nevr_quest::Source::kFile};
   cfg.memsys = {true, nevr_quest::Source::kFile};
+  cfg.meshstep = {false, nevr_quest::Source::kFile};
+  cfg.tablestep = {true, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
   const std::vector<Line> switches = Lines("combat_config");
   QCHECK(switches.size() == 1U);
   if (switches.size() == 1U) {
     QCHECK(Has(switches[0].text, "\"heaps\":0") && Has(switches[0].text, "\"heaps_source\":\"config\""));
     QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"meshstep\":0") && Has(switches[0].text, "\"meshstep_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"tablestep\":1") && Has(switches[0].text, "\"tablestep_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"instmodel\":1") && Has(switches[0].text, "\"instmodel_source\":\"default\""));
   }
   Done();
 }
@@ -356,7 +376,7 @@ int main() {
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
-  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal();
+  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();

@@ -8,8 +8,12 @@
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/meshstep.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/combat/shaderstep.h"
+#include "quest/combat/tablestep.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -27,6 +31,10 @@ ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on)
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
+ModuleResult MeshstepNormal() noexcept { return meshstep::Install(g_config.meshstep.on); }
+ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tablestep.on); }
+ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
+ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
 
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
@@ -39,6 +47,12 @@ constexpr std::array kModules{
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
+    // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
+    // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.
+    Module{"meshstep", nullptr, &MeshstepNormal},
+    Module{"tablestep", nullptr, &TablestepNormal},
+    Module{"instmodel", nullptr, &InstmodelNormal},
+    Module{"shaderstep", nullptr, &ShaderstepNormal},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -139,6 +153,10 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"refresh_rate_lobby", config.refreshRateLobby.on ? 1 : 0}, {"refresh_rate_lobby_source", source(config.refreshRateLobby.source)},
                        {"refresh_rate_quest2_72", config.refreshRateQuest2At72.on ? 1 : 0},
                        {"refresh_rate_quest2_72_source", source(config.refreshRateQuest2At72.source)},
+                       {"meshstep", config.meshstep.on ? 1 : 0}, {"meshstep_source", source(config.meshstep.source)},
+                       {"instmodel", config.instmodel.on ? 1 : 0}, {"instmodel_source", source(config.instmodel.source)},
+                       {"shaderstep", config.shaderstep.on ? 1 : 0}, {"shaderstep_source", source(config.shaderstep.source)},
+                       {"tablestep", config.tablestep.on ? 1 : 0}, {"tablestep_source", source(config.tablestep.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
 }
