@@ -1,64 +1,25 @@
 #!/usr/bin/env python3
 """Regression tests for the runtime patch-source inventory verifier."""
 
+import contextlib
+import io
 import pathlib
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
+import verify_patch_source_inventory as verifier  # noqa: E402
 import work_root  # noqa: E402
 VERIFIER = REPO / "tools" / "verify_patch_source_inventory.py"
-EXPECTED_PATCH_SOURCES = (
-    "patch/asset_cache.cpp",
-    "patch/asset_cdn.cpp",
-    "patch/asset_registry.cpp",
-    "patch/binary_bug_fixes.cpp",
-    "patch/broadcaster_allow_incoming.cpp",
-    "patch/broadcaster_guard.cpp",
-    "patch/coop_ai_trace.cpp",
-    "patch/credits_text.cpp",
-    "patch/deadlock_monitor.cpp",
-    "patch/early_quit_lockout.cpp",
-    "patch/equipment_refire.cpp",
-    "patch/evrp_package.cpp",
-    "patch/gpu_score.cpp",
-    "patch/headless_graphics.cpp",
-    "patch/invite_answer_apply.cpp",
-    "patch/invite_choice_hook.cpp",
-    "patch/invite_join_game.cpp",
-    "patch/invite_service.cpp",
-    "patch/invite_transport_curl.cpp",
-    "patch/invite_wizard_hook.cpp",
-    "patch/loading_tips.cpp",
-    "patch/lobby_full_backoff.cpp",
-    "patch/menu_cards.cpp",
-    "patch/menu_version_label.cpp",
-    "patch/mic_provider.cpp",
-    "patch/mode_patches.cpp",
-    "patch/netgun_bullets.cpp",
-    "patch/netgun_bullet_ids.cpp",
-    "patch/noovr_arglookup.cpp",
-    "patch/plugin_assets.cpp",
-    "patch/pnsrad_enabler.cpp",
-    "patch/provider_name_redirect.cpp",
-    "patch/queued_join_log.cpp",
-    "patch/render_config.cpp",
-    "patch/render_config_hook.cpp",
-    "patch/resource_override.cpp",
-    "patch/server_bots.cpp",
-    "patch/server_team_size.cpp",
-    "patch/party_invite_gate.cpp",
-    "patch/social_facade.cpp",
-    "patch/social_facade_object.cpp",
-    "patch/splash_skip.cpp",
-    "patch/ui_text.cpp",
-    "patch/ui_texture_mips.cpp",
-    "patch/xpid_patch.cpp",
-)
+
+
+def accepted_fixture_sources() -> tuple[str, ...]:
+    return verifier.EXPECTED_PATCH_SOURCES
 
 
 class VerifyPatchSourceInventoryTest(unittest.TestCase):
@@ -99,35 +60,72 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             prefix="patch-source-inventory-", dir=work_root.test_scratch()
         ) as temp_dir:
             result = self.run_verifier(
-                self.make_fixture(pathlib.Path(temp_dir), EXPECTED_PATCH_SOURCES)
+                self.make_fixture(pathlib.Path(temp_dir), accepted_fixture_sources())
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("patch-source-inventory: OK count=44", result.stdout)
+        self.assertIn(f"patch-source-inventory: OK count={len(accepted_fixture_sources())}", result.stdout)
+
+    def test_the_acceptance_fixture_takes_the_checkers_list(self):
+        # A PR that adds a source edits the checker's list and PATCHES_SOURCES, and nothing else. The fixture the
+        # acceptance tests build must follow the checker's list: a copy of the list here is a third place to edit.
+        added = "patch/added_by_one_pr.cpp"
+        with mock.patch.object(verifier, "EXPECTED_PATCH_SOURCES", verifier.EXPECTED_PATCH_SOURCES + (added,)):
+            self.assertIn(added, accepted_fixture_sources())
+
+    def test_a_source_added_to_both_lists_passes_with_no_count_to_edit(self):
+        # Two PRs that each add one source each add it to the checker's EXPECTED_PATCH_SOURCES and to PATCHES_SOURCES. A count
+        # typed beside the list made their two identical count edits merge into one, and main failed (#2207).
+        sources = accepted_fixture_sources() + ("patch/added_by_one_pr.cpp",)
+        self.assertEqual(len(sources), len(accepted_fixture_sources()) + 1)
+        with tempfile.TemporaryDirectory(
+            prefix="patch-source-inventory-", dir=work_root.test_scratch()
+        ) as temp_dir:
+            cmake = self.make_fixture(pathlib.Path(temp_dir), sources)
+            with mock.patch.object(verifier, "EXPECTED_PATCH_SOURCES", sources):
+                errors = verifier.verify(cmake)
+
+        self.assertEqual(errors, [])
+
+    def test_the_ok_line_counts_the_list_it_checked(self):
+        sources = accepted_fixture_sources() + ("patch/added_by_one_pr.cpp",)
+        self.assertEqual(len(sources), len(accepted_fixture_sources()) + 1)
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory(
+            prefix="patch-source-inventory-", dir=work_root.test_scratch()
+        ) as temp_dir:
+            cmake = self.make_fixture(pathlib.Path(temp_dir), sources)
+            with mock.patch.object(verifier, "EXPECTED_PATCH_SOURCES", sources), mock.patch.object(
+                sys, "argv", ["verify_patch_source_inventory.py", "--cmake", str(cmake)]
+            ), contextlib.redirect_stdout(stdout):
+                status = verifier.main()
+
+        self.assertEqual(status, 0)
+        self.assertIn(f"patch-source-inventory: OK count={len(sources)}", stdout.getvalue())
 
     def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
         scenarios = (
             (
                 "missing",
-                tuple(source for source in EXPECTED_PATCH_SOURCES if source != "patch/xpid_patch.cpp"),
+                tuple(source for source in accepted_fixture_sources() if source != "patch/xpid_patch.cpp"),
                 (),
                 "expected patch source absent from PATCHES_SOURCES: patch/xpid_patch.cpp",
             ),
             (
                 "duplicate",
-                EXPECTED_PATCH_SOURCES + ("patch/asset_cdn.cpp",),
+                accepted_fixture_sources() + ("patch/asset_cdn.cpp",),
                 (),
                 "duplicate PATCHES_SOURCES patch entry: patch/asset_cdn.cpp",
             ),
             (
                 "unexpected",
-                EXPECTED_PATCH_SOURCES + ("patch/new_runtime_patch.cpp",),
+                accepted_fixture_sources() + ("patch/new_runtime_patch.cpp",),
                 (),
                 "unexpected PATCHES_SOURCES patch source: patch/new_runtime_patch.cpp",
             ),
             (
                 "missing-on-disk",
-                EXPECTED_PATCH_SOURCES,
+                accepted_fixture_sources(),
                 ("patch/pnsrad_enabler.cpp",),
                 "PATCHES_SOURCES patch source is missing from disk: patch/pnsrad_enabler.cpp",
             ),

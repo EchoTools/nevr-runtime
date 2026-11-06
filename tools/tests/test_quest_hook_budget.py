@@ -1,7 +1,7 @@
-"""The hook registry's budget (hook_budget.h) matches the GotHook handles the Quest source declares.
+"""The hook registry's budget (hook_budget.h) matches the GotHook and GotDataSlot handles the Quest source declares.
 
-A GotHook handle reserves one registry entry when it installs, so the handles declared in the source are an upper bound on
-the entries the build can hold. hook_budget.h lists them per file and a static_assert keeps the sum, plus headroom, inside
+A GotHook handle reserves one registry entry when it installs, and so does a GotDataSlot handle when it writes (a data word the
+game reads, got_hook.h), so the handles declared in the source are an upper bound on the entries the build can hold. hook_budget.h lists them per file and a static_assert keeps the sum, plus headroom, inside
 the registry (got_hook.h, kRegistryCapacity). This test is the other half: it counts the declarations in the source and
 fails when the table and the source differ in either direction, so a hook added without a budget row cannot reach a build
 (the hook that would be refused for want of room is the one added last, and the first sign of it would be a game that
@@ -37,8 +37,8 @@ def constants(text: str) -> dict:
 
 
 def declarators(text: str):
-    """Yield (name, size) for each handle declared by `GotHook a, b[3];`-shaped statements in `text`."""
-    for match in re.finditer(r"\bGotHook\s+(?![&*])([^;(){}]*);", text):
+    """Yield (name, size) for each handle declared by `GotHook a, b[3];`-shaped statements in `text` (`GotDataSlot` too)."""
+    for match in re.finditer(r"\b(?:GotHook|GotDataSlot)\s+(?![&*])([^;(){}]*);", text):
         for part in re.split(r",(?![^\[]*\])", match.group(1)):
             part = part.strip()
             if not part:
@@ -99,6 +99,12 @@ class HookBudgetMatchesTheSource(unittest.TestCase):
         self.assertEqual(counts["sentinel/crash_first_hook.cpp"], 8)  # 2 + the macro's 2, used three times
         self.assertEqual(counts["login/login_prerequisites_install.cpp"], 22)  # arrays of 4, 8, 4, 4 and singles
         self.assertEqual(counts["diag/hwdump_install.cpp"], 18)  # g_hooks[kHookCount]
+
+    def test_a_data_slot_handle_is_counted_like_a_hook_handle(self):
+        # No file declares a GotDataSlot yet (the combat modules that write data slots arrive one unit at a time), so the
+        # reader is shown on text: the same shapes as a GotHook, and a reference or pointer is not a declaration.
+        text = "sentinel::GotDataSlot g_one; GotDataSlot g_a, g_many[3]; void F(GotDataSlot& ref); GotHook g_hook;"
+        self.assertEqual(sorted(declarators(text)), [("g_a", None), ("g_hook", None), ("g_many", "3"), ("g_one", None)])
 
     def test_critical_hooks_are_exactly_the_login_and_the_matchmaking_redirect(self):
         critical = {rel for rel, (_, n) in budget().items() if n}

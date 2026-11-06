@@ -276,6 +276,26 @@ TEST(HostRendezvousInstall, ReadsTheHookBytesAfterEnableAndMarksThemValid) {
   EXPECT_FALSE(Step(records, "hook_install")->contains("hook_bytes"));
 }
 
+// ADR 0024, section 3: this host swaps a staged release in and rolls back one that does not start (#2104, #2105), so
+// the context it hands the runtime says so, in a context whose size covers the word.
+TEST(HostRendezvousInstall, TheContextTellsTheRuntimeThisHostSwapsAndRollsBack) {
+  RendezvousSandbox sandbox;
+  const std::wstring local = MakeTempDir();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr);
+  ExecutableTarget target;
+  ASSERT_NE(target.code(), nullptr);
+  RuntimeRendezvous rendezvous;
+  rendezvous.Prepare(GetModuleHandleW(nullptr), GetModuleHandleW(nullptr), diagnostics);
+  ASSERT_NE(rendezvous.Install(target.code()), nullptr);
+
+  const NevrHostContext& context = rendezvous.Context();
+  EXPECT_EQ(context.header.struct_size, nevr_runtime_abi::kHostContextV1_2Size);
+  EXPECT_EQ(context.header.abi_minor, 2u);
+  EXPECT_EQ(context.capabilities, nevr_runtime_abi::kHostCapabilitySwap);
+  EXPECT_TRUE(nevr_runtime_abi::HostCanSwap(&context));
+}
+
 TEST(HostRendezvousInstall, AFailedBytesReadIsOnTheInstallRecordAndTheContextSaysUnread) {
   RendezvousSandbox sandbox;
   RuntimeRendezvous::Seams().fail_hook_bytes_read = true;

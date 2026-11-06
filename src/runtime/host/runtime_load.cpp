@@ -180,6 +180,23 @@ const char* RuntimeLoadResult::OutcomeName() const {
   return "unknown";
 }
 
+PendingFailure ClassifyPendingFailure(RuntimeLoadOutcome outcome) noexcept {
+  switch (outcome) {
+    case RuntimeLoadOutcome::kRuntimeRefused:
+    case RuntimeLoadOutcome::kRuntimeAbsent:
+    case RuntimeLoadOutcome::kLoadFailed:
+    case RuntimeLoadOutcome::kDependencyLoadFailed: return PendingFailure::kNeverRan;
+    case RuntimeLoadOutcome::kMissingEntry:
+    case RuntimeLoadOutcome::kNullDescriptor:
+    case RuntimeLoadOutcome::kAbiRejected:
+    case RuntimeLoadOutcome::kInitFailed: return PendingFailure::kMapped;
+    case RuntimeLoadOutcome::kLoaded:
+    case RuntimeLoadOutcome::kNoPath:
+    case RuntimeLoadOutcome::kUpdateBlocked: return PendingFailure::kNone;
+  }
+  return PendingFailure::kNone;
+}
+
 const char* RuntimeLoadResult::DegradedAction() const {
   return Loaded() ? "dispatch" : "stop_game";
 }
@@ -365,6 +382,7 @@ void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
     AddStopFacts(record, text.facts);
     if (notice != nullptr) record["notice"] = notice;
     if (result.update_reason != nullptr) record["update_reason"] = result.update_reason;
+    if (result.update_failed) record["update_rollback"] = "next_start";
     // The path searched: the one thing a player or support needs for a missing file.
     if (result.path_ok) record["runtime_path"] = ToUtf8(result.path);
     if (result.win32_error != 0) record["win32_error"] = result.win32_error;
@@ -532,6 +550,40 @@ std::int32_t RuntimeLoader::CallInitialize(const NevrRuntimeApi* api, const Nevr
     *threw = true;
     return kInitThrewCode;
   }
+}
+
+RuntimeLoadResult RuntimeLoader::LoadAtStart(const NevrHostContext& host, BootstrapDiagnostics& diagnostics) {
+  // Self-update's swap and pending decision (ADR 0024, sections 4 and 6): before the load probes the runtime path, a
+  // staged release is put in place and a pending one is judged. The lock it takes is held through the mapping and
+  // released by the load. A root it cannot leave whole loads nothing.
+  UpdateLock update_lock;
+  const wchar_t* runtime_path = Path();
+  const UpdateResult update =
+      runtime_path == nullptr ? UpdateResult{} : RunUpdateAtStart(runtime_path, diagnostics, update_lock);
+  if (update.action == UpdateAction::kStop) {
+    RecordStopForUpdate(update.reason);
+    return result_;
+  }
+  RuntimeLoadResult result = Load(host, diagnostics, &update_lock);
+  if (!update.pending || result.Loaded()) return result;
+  switch (ClassifyPendingFailure(result.outcome)) {
+    case PendingFailure::kNeverRan: {
+      // R1: no line of the pending runtime ran. The previous release is put back and loaded in this start.
+      const UpdateResult restored = RollBackInProcess(runtime_path, diagnostics, update_lock, result.OutcomeName());
+      if (restored.action == UpdateAction::kStop) {
+        RecordStopForUpdate(restored.reason);
+        return result_;
+      }
+      return Load(host, diagnostics, &update_lock);
+    }
+    case PendingFailure::kMapped:
+      // R1: mapped, so it stays mapped (production never frees a runtime). The start ends as it does today, and the
+      // next one puts the previous release back.
+      if (MarkPendingFailed(runtime_path, diagnostics, update_lock, result.OutcomeName())) result_.update_failed = true;
+      return result_;
+    case PendingFailure::kNone: break;
+  }
+  return result;
 }
 
 RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host, BootstrapDiagnostics& diagnostics,

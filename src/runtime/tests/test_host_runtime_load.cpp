@@ -211,7 +211,7 @@ TEST(HostRuntimeLoad, EmitLoadDiagnosticWritesAParseableRecord) {
   EXPECT_EQ(record.at("outcome"), "abi_rejected");
   EXPECT_EQ(record.at("degraded_action"), "stop_game");
   EXPECT_EQ(record.at("path"), "C:\\games\\nevr-runtime.dll");
-  EXPECT_EQ(record.at("expected_abi"), "1.1");
+  EXPECT_EQ(record.at("expected_abi"), "1.2");
   EXPECT_EQ(record.at("actual_abi"), "2.0");
   EXPECT_EQ(record.at("abi_status"), "major_mismatch");
 }
@@ -251,7 +251,7 @@ TEST(HostRuntimeLoad, EmitLoadDiagnosticOmitsAbiFieldsWhenNoDescriptorWasRead) {
   EXPECT_EQ(record.at("outcome"), "runtime_absent");
   EXPECT_EQ(record.at("degraded_action"), "stop_game");
   EXPECT_EQ(record.at("path"), "C:\\games\\nevr-runtime.dll");
-  EXPECT_EQ(record.at("expected_abi"), "1.1");
+  EXPECT_EQ(record.at("expected_abi"), "1.2");
   EXPECT_EQ(record.at("win32_error").get<int>(), static_cast<int>(kFileNotFound));
   EXPECT_FALSE(record.contains("abi_status"));
   EXPECT_FALSE(record.contains("actual_abi"));
@@ -278,8 +278,8 @@ TEST(HostRuntimeLoad, ALoadedRuntimeIsRecordedToo) {
   EXPECT_EQ(record.at("outcome"), "loaded");
   EXPECT_EQ(record.at("degraded_action"), "dispatch");
   EXPECT_EQ(record.at("path"), "C:\\games\\nevr-runtime.dll");
-  EXPECT_EQ(record.at("expected_abi"), "1.1");
-  EXPECT_EQ(record.at("actual_abi"), "1.1");
+  EXPECT_EQ(record.at("expected_abi"), "1.2");
+  EXPECT_EQ(record.at("actual_abi"), "1.2");
   EXPECT_EQ(record.at("abi_status"), "ok");
   EXPECT_EQ(record.at("init_code"), 0);
   EXPECT_FALSE(record.contains("win32_error"));

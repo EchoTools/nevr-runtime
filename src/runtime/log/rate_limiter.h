@@ -7,6 +7,8 @@
 #include <cstring>
 #include <mutex>
 
+#include "runtime/log/collapse_format_rules.h"
+
 /* N78 — the rate limiter behind the built-in log filter's counted summaries.
  *
  * A line repeating more than kThreshold times in a kWindowSec window is collapsed: the first
@@ -14,9 +16,13 @@
  * `[NEVR.LOGFILTER] repeated count=<n> window_s=<t> msg="<sample>"` line instead of being deleted.
  *
  * Identity is a digit-insensitive hash: "ExitProcess(3) ... (call #41)" and "(call #42)" collapse
- * together. Fixed-size table, no heap, its own mutex (never the file mutex: a fault raised while that
+ * together. A line of a format in collapse_format_rules.h (a value printed in hex, letters included) has the format's own identity
+ * instead, so its values collapse together too. Fixed-size table, no heap, its own mutex (never the file mutex: a fault raised while that
  * lock was held would deadlock the crash path, see N70). The caller passes the time, so a test can
  * move it.
+ *
+ * A line the default suppress list deletes is counted in the same table under its list entry (CountSuppressed), so no
+ * deletion is uncounted.
  *
  * A summary leaves the table two ways: Check() closes out a slot when a later line lands on it
  * (the window expired, or another line hashes there), and TakePending() closes out the slots no later
@@ -35,33 +41,21 @@ class RateLimiter {
   /* Decides whether this line is emitted or folded into a counter. When a window closes with folded
    * lines, `out_summary` is filled with the summary to emit (empty otherwise). */
   RateVerdict Check(const char* msg, int len, uint64_t now, char* out_summary, size_t summary_cap) {
-    out_summary[0] = '\0';
-    const uint64_t h = NormalizedHash(msg, len);
+    const char* format = nevr_collapse_format::Match(msg, len);
+    const uint64_t h = format != nullptr ? FormatHash(format) : NormalizedHash(msg, len);
+    return Admit(h, msg, len, kThreshold, false, now, out_summary, summary_cap);
+  }
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    Entry& e = table_[h % kTableSize];
-
-    /* Different line hashing to this slot, or the window has expired: close out the
-     * previous occupant first (emitting its summary if it collapsed anything). */
-    if (e.hash != h || now - e.window_start >= kWindowSec) {
-      if (e.hash != 0 && e.seen > e.emitted) {
-        FormatSummary(e, now - e.window_start, out_summary, summary_cap);
-      }
-      e.hash = h;
-      e.window_start = now;
-      e.seen = 0;
-      e.emitted = 0;
-      int copy = len < static_cast<int>(sizeof(e.sample)) - 1 ? len : static_cast<int>(sizeof(e.sample)) - 1;
-      std::memcpy(e.sample, msg, static_cast<size_t>(copy));
-      e.sample[copy] = '\0';
-    }
-
-    e.seen++;
-    if (e.emitted < kThreshold) {
-      e.emitted++;
-      return RateVerdict::Emit;
-    }
-    return RateVerdict::Collapse;
+  /* A line the default suppress list deletes (#2214): never emitted, counted under `entry`, the list entry that matched it. The
+   * entry is the identity, so a flood of one entry is one counter whatever its lines say, and it reaches the same TakePending and
+   * summary path as a collapsed line, written `[NEVR.LOGFILTER] suppressed count=<n> window_s=<t> entry="<entry>"`. Returns
+   * Collapse always. */
+  RateVerdict CountSuppressed(const char* entry, const char* msg, int len, uint64_t now, char* out_summary,
+                              size_t summary_cap) {
+    (void)msg;
+    (void)len;
+    const int n = static_cast<int>(std::strlen(entry));
+    return Admit(FormatHash(entry) ^ kSuppressedSalt, entry, n, 0, true, now, out_summary, summary_cap);
   }
 
   /* Closes out one slot that has collapsed lines nobody reported: fills `out_summary`, clears the
@@ -83,12 +77,45 @@ class RateLimiter {
   }
 
  private:
+  static constexpr uint64_t kSuppressedSalt = 0x5355505052455353ULL; /* a suppress entry never shares a slot identity with a line */
+
+  RateVerdict Admit(uint64_t h, const char* sample, int len, uint32_t budget, bool suppressed, uint64_t now,
+                    char* out_summary, size_t summary_cap) {
+    out_summary[0] = '\0';
+    std::lock_guard<std::mutex> lock(mutex_);
+    Entry& e = table_[h % kTableSize];
+
+    /* Different line hashing to this slot, or the window has expired: close out the
+     * previous occupant first (emitting its summary if it collapsed anything). */
+    if (e.hash != h || now - e.window_start >= kWindowSec) {
+      if (e.hash != 0 && e.seen > e.emitted) {
+        FormatSummary(e, now - e.window_start, out_summary, summary_cap);
+      }
+      e.hash = h;
+      e.window_start = now;
+      e.seen = 0;
+      e.emitted = 0;
+      e.suppressed = suppressed;
+      int copy = len < static_cast<int>(sizeof(e.sample)) - 1 ? len : static_cast<int>(sizeof(e.sample)) - 1;
+      std::memcpy(e.sample, sample, static_cast<size_t>(copy));
+      e.sample[copy] = '\0';
+    }
+
+    e.seen++;
+    if (e.emitted < budget) {
+      e.emitted++;
+      return RateVerdict::Emit;
+    }
+    return RateVerdict::Collapse;
+  }
+
   struct Entry {
     uint64_t hash = 0;
     uint64_t window_start = 0;
     uint32_t seen = 0;    /* total occurrences this window */
     uint32_t emitted = 0; /* how many we let through this window */
-    char sample[128] = {};
+    bool suppressed = false; /* counts a suppress-list entry, not a line */
+    char sample[128] = {};   /* the first line, or the suppress entry's text */
   };
 
   /* FNV-1a over the message with digit runs folded to a single 0x01 sentinel, so
@@ -111,7 +138,22 @@ class RateLimiter {
     return h;
   }
 
+  /* The identity of a collapse_format_rules.h rule: FNV-1a over the rule's name. */
+  static uint64_t FormatHash(const char* name) {
+    uint64_t h = 1469598103934665603ULL;
+    for (; *name != '\0'; name++) {
+      h ^= static_cast<unsigned char>(*name);
+      h *= 1099511628211ULL;
+    }
+    return h;
+  }
+
   static void FormatSummary(const Entry& e, uint64_t window_s, char* out, size_t cap) {
+    if (e.suppressed) {
+      std::snprintf(out, cap, "[NEVR.LOGFILTER] suppressed count=%u window_s=%llu entry=\"%s\"", e.seen - e.emitted,
+                    static_cast<unsigned long long>(window_s), e.sample);
+      return;
+    }
     std::snprintf(out, cap, "[NEVR.LOGFILTER] repeated count=%u window_s=%llu msg=\"%s\"", e.seen - e.emitted,
                   static_cast<unsigned long long>(window_s), e.sample);
   }

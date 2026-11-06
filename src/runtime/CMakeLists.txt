@@ -280,6 +280,7 @@ set(PATCHES_HEADERS
     "log/builtin_filter.h"
     "log/bridge_line.h"
     "log/rate_limiter.h"
+    "log/collapse_format_rules.h"
     "log/symcache.h"
     "log/url_diagnostics.h"
     "log/security_diagnostics.h"
@@ -1649,7 +1650,7 @@ if(BUILD_TESTING)
     target_link_libraries(test_lobby_full_backoff PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_lobby_full_backoff DISCOVERY_MODE PRE_TEST)
 
-    # test_queued_join_log.cpp (#2163): the [NEVR.MATCH] rules, and the three hooks under MinHook against a fake game image.
+    # test_queued_join_log.cpp (#2163): the [NEVR.MATCH] rules, and the four hooks under MinHook against a fake game image.
     add_executable(test_queued_join_log tests/test_queued_join_log.cpp patch/queued_join_log.cpp hook/hook_guard.cpp
       log/boot_log_tee.cpp)
     set_source_files_properties(tests/test_queued_join_log.cpp patch/queued_join_log.cpp hook/hook_guard.cpp

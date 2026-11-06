@@ -144,6 +144,44 @@ TEST(HostStopNoticeText, EachCauseSaysWhatIsWrongAndWhatToDo) {
   }
 }
 
+// A runtime that was swapped in and mapped, and then failed, is put back at the next start (ADR 0024, section 6): the
+// player is told in plain words that nEVR was updated, could not start, and what happens next. Only the failures that
+// leave the runtime mapped say it; a refused file never ran and is put back in the same start.
+TEST(HostStopNoticeText, AFailedUpdateSaysItWasUpdatedCouldNotStartAndWillBePutBack) {
+  const std::wstring text = StopNoticeTextFor(RuntimeLoadOutcome::kInitFailed, Reason::Accepted, true);
+  EXPECT_NE(text.find(L"updated"), std::wstring::npos) << "it says nEVR was updated";
+  EXPECT_NE(text.find(L"couldn't start"), std::wstring::npos);
+  EXPECT_NE(text.find(L"put back"), std::wstring::npos) << "it says the previous version comes back";
+  EXPECT_NE(text.find(L"start nEVR again"), std::wstring::npos) << "and what to do";
+  for (const RuntimeLoadOutcome outcome : {RuntimeLoadOutcome::kMissingEntry, RuntimeLoadOutcome::kNullDescriptor,
+                                           RuntimeLoadOutcome::kAbiRejected, RuntimeLoadOutcome::kInitFailed}) {
+    EXPECT_EQ(StopNoticeTextFor(outcome, Reason::Accepted, true), text);
+    EXPECT_EQ(StopNoticeTextFor(outcome, Reason::Accepted, false), std::wstring(nevr_host::kStopNoticeText))
+        << "without a scheduled rollback the general words stand";
+  }
+}
+
+// The host decides what a failed load of a release that is still pending asks of it (ADR 0024, section 6): a runtime that
+// never ran is put back in the same start; one that was mapped is marked, and the next start puts it back.
+TEST(HostPendingFailure, TheOutcomeDecidesWhetherTheRuntimeNeverRanOrWasMapped) {
+  using nevr_host::ClassifyPendingFailure;
+  using nevr_host::PendingFailure;
+  for (const RuntimeLoadOutcome outcome :
+       {RuntimeLoadOutcome::kRuntimeRefused, RuntimeLoadOutcome::kRuntimeAbsent, RuntimeLoadOutcome::kLoadFailed,
+        RuntimeLoadOutcome::kDependencyLoadFailed}) {
+    EXPECT_EQ(ClassifyPendingFailure(outcome), PendingFailure::kNeverRan);
+  }
+  for (const RuntimeLoadOutcome outcome :
+       {RuntimeLoadOutcome::kMissingEntry, RuntimeLoadOutcome::kNullDescriptor, RuntimeLoadOutcome::kAbiRejected,
+        RuntimeLoadOutcome::kInitFailed}) {
+    EXPECT_EQ(ClassifyPendingFailure(outcome), PendingFailure::kMapped);
+  }
+  for (const RuntimeLoadOutcome outcome :
+       {RuntimeLoadOutcome::kLoaded, RuntimeLoadOutcome::kNoPath, RuntimeLoadOutcome::kUpdateBlocked}) {
+    EXPECT_EQ(ClassifyPendingFailure(outcome), PendingFailure::kNone);
+  }
+}
+
 // ---- 2. the detour over a staged file --------------------------------------------------------------------------
 
 std::vector<std::string> g_events;
