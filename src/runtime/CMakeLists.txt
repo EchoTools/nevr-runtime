@@ -370,20 +370,28 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 # NEVR_UPDATE_CORE is ON when cargo is found and OFF when it is not (a configure-time warning says so); -DNEVR_UPDATE_CORE=ON makes a
 # missing cargo an error, -DNEVR_UPDATE_CORE=OFF skips the core. A runtime built without it ends every check in
 # `update check action=failed reason=core_open_failed`, one line per launch, and never updates.
-# KNOWN-WRONG #1200: build.yml's build job has no Rust toolchain, so a CI build links no core until the workflow builds it first.
+# A version run of build.yml links a prebuilt library (NEVR_INSTALL_LIB) the core-library job builds; the build job has no Rust toolchain.
 set(NEVR_UPDATE_CORE AUTO CACHE STRING "Link the Rust core install method into nevr-runtime.dll for PC self-update: ON, OFF or AUTO (on when cargo is found)")
 set_property(CACHE NEVR_UPDATE_CORE PROPERTY STRINGS AUTO ON OFF)
+set(NEVR_INSTALL_LIB "" CACHE FILEPATH "A prebuilt core library to link instead of building it with cargo (build.yml's core-library job hands one over)")
 set(NEVR_UPDATE_CORE_ENABLED OFF)
 if(NOT NEVR_UPDATE_CORE STREQUAL "OFF")
-  find_program(NEVR_CARGO cargo HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin")
-  if(NEVR_CARGO)
+  if(NEVR_INSTALL_LIB)
+    if(NOT EXISTS "${NEVR_INSTALL_LIB}")
+      message(FATAL_ERROR "NEVR_INSTALL_LIB names ${NEVR_INSTALL_LIB}, which does not exist")
+    endif()
     set(NEVR_UPDATE_CORE_ENABLED ON)
-  elseif(NEVR_UPDATE_CORE STREQUAL "ON")
-    message(FATAL_ERROR "NEVR_UPDATE_CORE=ON: nevr-runtime.dll links the Rust core install method (ADR 0024) and cargo was not found. "
-                        "Install a Rust toolchain with the x86_64-pc-windows-gnu target.")
   else()
-    message(WARNING "cargo was not found: nevr-runtime.dll is built WITHOUT the core install method and will never update itself "
-                    "(ADR 0024). Install a Rust toolchain, or pass -DNEVR_UPDATE_CORE=OFF to silence this.")
+    find_program(NEVR_CARGO cargo HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin")
+    if(NEVR_CARGO)
+      set(NEVR_UPDATE_CORE_ENABLED ON)
+    elseif(NEVR_UPDATE_CORE STREQUAL "ON")
+      message(FATAL_ERROR "NEVR_UPDATE_CORE=ON: nevr-runtime.dll links the Rust core install method (ADR 0024) and neither cargo nor NEVR_INSTALL_LIB was given. "
+                          "Install a Rust toolchain with the x86_64-pc-windows-gnu target.")
+    else()
+      message(WARNING "cargo was not found: nevr-runtime.dll is built WITHOUT the core install method and will never update itself "
+                      "(ADR 0024). Install a Rust toolchain, or pass -DNEVR_UPDATE_CORE=OFF to silence this.")
+    endif()
   endif()
 endif()
 if(NEVR_UPDATE_CORE_ENABLED)
@@ -394,6 +402,7 @@ if(NEVR_UPDATE_CORE_ENABLED)
     set(NEVR_INSTALL_TARGET "x86_64-pc-windows-gnu")
     set(NEVR_INSTALL_LIB_NAME "libnevr_install.a")
   endif()
+  if(NOT NEVR_INSTALL_LIB)
   string(TOUPPER "${NEVR_INSTALL_TARGET}" NEVR_INSTALL_TARGET_UPPER)
   string(REPLACE "-" "_" NEVR_INSTALL_TARGET_UPPER "${NEVR_INSTALL_TARGET_UPPER}")
   set(NEVR_INSTALL_DIR "${CMAKE_BINARY_DIR}/installer-lib")
@@ -413,10 +422,13 @@ if(NEVR_UPDATE_CORE_ENABLED)
     COMMENT "Building the core install method (installer/) for nevr-runtime.dll"
     VERBATIM)
   add_custom_target(nevr_install_core DEPENDS "${NEVR_INSTALL_LIB}")
+  endif()
   add_library(nevr_install STATIC IMPORTED GLOBAL)
   set_target_properties(nevr_install PROPERTIES IMPORTED_LOCATION "${NEVR_INSTALL_LIB}"
     INTERFACE_LINK_LIBRARIES "bcrypt;advapi32;kernel32;ntdll;userenv;ws2_32;dbghelp")
-  add_dependencies(nevr_install nevr_install_core)
+  if(TARGET nevr_install_core)
+    add_dependencies(nevr_install nevr_install_core)
+  endif()
   target_link_libraries(nevr_runtime PRIVATE nevr_install)
   target_compile_definitions(nevr_runtime PRIVATE NEVR_UPDATE_CORE_LINKED=1)
 endif()

@@ -233,7 +233,7 @@ func TestTheRuntimeLinksTheCoreAndTheUnitRecipeRunsTheTests(t *testing.T) {
 		"target_link_libraries(nevr_runtime PRIVATE nevr_install)",
 		"NEVR_UPDATE_CORE_LINKED=1",
 		"build --locked --release --target ${NEVR_INSTALL_TARGET} --lib",
-		"KNOWN-WRONG #1200: build.yml's build job has no Rust toolchain",
+		`set(NEVR_INSTALL_LIB "" CACHE FILEPATH`,
 	} {
 		if !strings.Contains(cmake, want) {
 			t.Errorf("src/runtime/CMakeLists.txt: no %q", want)
@@ -244,5 +244,28 @@ func TestTheRuntimeLinksTheCoreAndTheUnitRecipeRunsTheTests(t *testing.T) {
 		if !strings.Contains(just, want) {
 			t.Errorf("justfile: no %q", want)
 		}
+	}
+}
+
+// The build job has no Rust (test_build_workflow_installer_job.py); a version run links the library the core-library job built.
+func TestAVersionRunLinksTheLibraryTheCoreLibraryJobBuilt(t *testing.T) {
+	wf := read(t, ".github/workflows/build.yml")
+	job := regexp.MustCompile(`(?s)\n  core-library:\n.*?\n  build:\n`).FindString(wf)
+	if job == "" {
+		t.Fatal("build.yml has no core-library job before the build job")
+	}
+	for _, want := range []string{"--lib --manifest-path installer/Cargo.toml", "name: core-library", "libnevr_install.a"} {
+		if !strings.Contains(job, want) {
+			t.Errorf("core-library job: no %q", want)
+		}
+	}
+	build := regexp.MustCompile(`(?s)\n  build:\n.*?\n  quest:\n`).FindString(wf)
+	if strings.Contains(build, "rustup-init") || strings.Contains(build, "cargo") && !strings.Contains(build, "core-library") {
+		t.Error("the build job installs or calls Rust; the library must come from the core-library job")
+	}
+	before(t, build, "- name: Wait for the core library job", "- name: Download the core library", "download after the wait")
+	before(t, build, "- name: Download the core library", "- name: Configure CMake", "the library must be there when CMake configures")
+	if !strings.Contains(build, `-DNEVR_UPDATE_CORE=ON "-DNEVR_INSTALL_LIB=$GITHUB_WORKSPACE/core-library/libnevr_install.a"`) {
+		t.Error("the configure step does not pass the prebuilt library with NEVR_UPDATE_CORE=ON on a version run")
 	}
 }

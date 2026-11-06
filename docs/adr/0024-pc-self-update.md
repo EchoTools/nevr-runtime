@@ -110,7 +110,7 @@ flowchart TD
     E -->|no| F[core: fetch windows-zip, step 8 on it and every member]
     F -->|any check fails| X4[staging removed, nothing published]
     F --> G[runtime: Authenticode on each staged file, production policy with denylist]
-    G -->|fails| X5[staging removed, version quarantined]
+    G -->|fails| X5[staging removed, discard counted in the core's stage state]
     G --> H[runtime: publish staged.json, last]
 ```
 
@@ -179,11 +179,15 @@ units (`host/update_names.cpp`, `host/file_digest.cpp`), compiled into both DLLs
   text names `FAIL step N`), `stage_failed`, `timeout`, `bad_result`, `lock_unavailable`, `publish_failed`,
   `root_unconvertible`, `running_runtime_unreadable`, `internal_error`. The core's own error text is never a log field (logging
   Rule 4); it is in `logs\nevr-update.jsonl`.
-- **F5.** A staged file that fails Authenticode removes the staging and publishes nothing; the runtime writes nothing to
-  `state.json` for it (section 8, item 8 names the host, the runtime's confirmation and the installer as its only writers), so the
-  discard is not counted and the next launch stages the same release again.
+- **F5.** A staged file that fails Authenticode is a discard, not a quarantine: the flowchart and F5 say the same thing. The discard
+  is counted in the core's stage state (`pc stage` records it and does not stage that release again), and the runtime still writes only
+  `UpdateConfirm`'s keys to `state.json` (section 8, item 8). KNOWN-WRONG #1200: the core has no discard record and `NevrPcStage` no way
+  to be told of one, so today the runtime removes the staging, publishes nothing and writes nothing, and the same release is staged
+  again at the next launch.
 - **The core is linked.** `NEVR_UPDATE_CORE` in `src/runtime/CMakeLists.txt` builds `installer/` as a static library with cargo and
-  links it, with the system libraries rustc names. `test_update_core_link` calls it from a worker thread under Wine.
+  links it, with the system libraries rustc names. `test_update_core_link` calls it from a worker thread under Wine. A version run of
+  `build.yml` links a library the `core-library` job builds and hands over as an artifact (`NEVR_INSTALL_LIB`); the build job has no Rust
+  toolchain and waits for that job before it configures.
 
 ### 4. The swap
 
