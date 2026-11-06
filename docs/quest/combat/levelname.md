@@ -142,8 +142,9 @@ Arena and combat run on the same APK, so every combat module is installed while 
   actor) resident, where a plain release loads the cut one. The handler does nothing for any other level, and nothing for a game whose lowspec bit is clear
   (that game already loads the full level). What the full level costs a Quest in arena (memory, load time) was not measured; the headset row below measures
   it. `combat.levelname: false` leaves the game's cut level (and the booster pool with it). The bot-body gate (`headset_gates.md`) follows the key
-  without reading it: it acts only where the game's LoadLevelName vtable word is not the stock function, which is levelname's hook (a host test installs
-  levelname through `combat::InstallNormal` and asks the gate, with the key on and off).
+  without reading it: it acts only where the game's LoadLevelName vtable word is not the stock function, which is levelname's hook (`headset_gates_test`,
+  `TheBotGateSeesTheRuntimesLevelname`, installs the real levelname on the gates' image: the gate answers with it in and keeps the game's choice with the key
+  off or the hook out).
 - **boosterpool is right in arena.** It changes nothing for a name other than the suffixed booster actor. With the full level loaded, an arena call for that name
   would find no actor (only the cut level has it), so the substitution is what keeps arena from the same null component; scoping it to combat maps would leave
   that call exposed. It installs only with levelname, so a game that keeps the cut level keeps its own allocations.
