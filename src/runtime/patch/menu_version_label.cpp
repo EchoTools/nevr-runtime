@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <string>
+#include <type_traits>
 
 #include "core/build_identity.h"
 #include "core/logging.h"
@@ -20,13 +21,16 @@ namespace {
 
 constexpr std::uint64_t kSetTextVA = nevr_canvas_set_text::kSetTextVA;
 constexpr const auto& kSetTextPrologue = nevr_canvas_set_text::kSetTextPrologue;
-using SetTextFn = nevr_canvas_set_text::SetTextFn;
+static_assert(std::is_same_v<SetTextFn, nevr_canvas_set_text::SetTextFn>, "one SetText signature");
 
 SetTextFn g_originalSetText = nullptr;
+bool g_hooked = false;
+std::atomic<TextFilter> g_filter{nullptr};
 std::string g_label;  // fitted, set once at Install and read-only afterwards
 std::atomic<unsigned> g_replaced{0};
 
 std::uint64_t SetTextHook(void* canvas, std::uint32_t handle, std::uint64_t item, const char* text) {
+  if (const TextFilter filter = g_filter.load(std::memory_order_acquire)) text = filter(canvas, handle, item, text);
   // Every SetText call passes through here (the credits page sets text each frame), so the common case is one compare.
   if (item != kLobbyVersionItem) return g_originalSetText(canvas, handle, item, text);
   const char* replacement = ReplacementFor(item, text, g_label);
@@ -50,9 +54,16 @@ void Install(std::uintptr_t gameBase) {
   g_label = FitLabel(full);
   g_originalSetText = reinterpret_cast<SetTextFn>(target);
   if (PatchDetour(&g_originalSetText, reinterpret_cast<PVOID>(&SetTextHook), "CCanvasUICS::SetText")) {
+    g_hooked = true;
     nevr_boot_log_tee::TeeFprintf("[NEVR.MENU] CCanvasUICS::SetText hook installed va=0x%llx label=%s full_label=%s\n",
                                   static_cast<unsigned long long>(kSetTextVA), g_label.c_str(), full.c_str());
   }
+}
+
+SetTextFn SetTextFilter(TextFilter filter) {
+  if (!g_hooked) return nullptr;
+  g_filter.store(filter, std::memory_order_release);
+  return g_originalSetText;
 }
 
 }  // namespace nevr_menu_version_label

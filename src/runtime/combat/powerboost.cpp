@@ -1,3 +1,9 @@
+// nEVR port: he_is_the_cat's plugin/powerboost.cpp from heisthecat31/EchoCombat (branch nevr-pack, c3ff4b54), compiled into
+// nevr-runtime.dll as part of the combat module (runtime/combat/combat.cpp) nearly as he wrote it. Every change to his
+// text is marked "nEVR port:". cat_compat.h maps Detours, EC_TRY/__except, his .ini reads and his logger onto the
+// runtime; every write to the game passes runtime/combat/write_gate.h first. __try, __except and
+// GetExceptionCode are spelled EC_TRY, EC_EXCEPT and EC_EXCEPTION_CODE (cat_compat.h).
+
 // PowerBoost: the engine side of POWER BOOST (the cut `buff` tac mod).
 //
 // ability_properties.buff gives a linked teammate `dr` damage reduction for
@@ -74,6 +80,9 @@
 // tagged plugin=PowerBoost; the per-hit, per-tick and per-cone lines are Debug, and the extra
 // diagnostic lines are built with ECHOCOMBAT_LOG. Settings: PowerBoost.ini next to the DLL.
 
+#include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
+#include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
+#include "runtime/combat/write_gate.h"  // nEVR port
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -81,11 +90,10 @@
 #include <math.h>
 #include <intrin.h>
 #include <stdarg.h>
-#include "detours.h"
-#include "nevr_plugin.h"
-#include "nevr/plugin_logger.h"
 
 // Lines go to nEVR's host log, tagged plugin=<config.yaml name> (docs/standards/logging.md, Rule 15).
+namespace nevr_combat::powerboost {  // nEVR port: one namespace per file
+constexpr const char *kCatModule = "powerboost";  // nEVR port
 NEVR_DEFINE_PLUGIN_LOG("[PowerBoost]")
 
 constexpr const char *kLogName = "PowerBoost";   // names the plugin in its log-cap Warning
@@ -185,10 +193,10 @@ Boost g_boosts[MAX_BOOSTS];
 uint8_t *Record(void *cs, uint32_t index);
 
 // A damageable's own player slot (+0Ch), or ~0 if its record can't be read (stale system).
-uint32_t PlayerSlot(void *cs, uint16_t index) {
-    __try {
+[[maybe_unused]] uint32_t PlayerSlot(void *cs, uint16_t index) {  // nEVR port: unused here
+    EC_TRY {
         return *(uint32_t *)(Record(cs, index) + 0x0c);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return 0xffffffffu;
     }
 }
@@ -198,12 +206,12 @@ void Log(const char *fmt, ...);
 // The damageable's actor id, through its system's virtual +1E0h (cs, &out, handle) -- the
 // same call component systems use to name their entity for WorldTeleport.
 uint64_t ActorId(void *cs, uint32_t handle) {
-    __try {
+    EC_TRY {
         using actor_of_fn = uint64_t *(__fastcall *)(void *cs, uint64_t *out, uint32_t handle);
         uint64_t out = ~0ull;
         uint64_t *a = ((actor_of_fn)(*(void ***)cs)[0x1e0 / 8])(cs, &out, handle);
         return a ? *a : ~0ull;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return ~0ull;
     }
 }
@@ -211,7 +219,7 @@ uint64_t ActorId(void *cs, uint32_t handle) {
 // The damageable handle of the player in `slot` (index | generation << 16), or ~0.
 uint32_t SlotDamageable(void *dcs, uint32_t slot) {
     if (!SlotActorFn || !g_player_symbol) return 0xffffffffu;
-    __try {
+    EC_TRY {
         uint8_t *game = *(uint8_t **)((uint8_t *)dcs + 0xb8);
         uint32_t idx = slot & 0xffff, gen = slot >> 16;
         if (!game || idx >= 16 || gen == 0xffff || *(uint16_t *)(game + 0x13a + idx * 4) != gen) return 0xffffffffu;
@@ -224,7 +232,7 @@ uint32_t SlotDamageable(void *dcs, uint32_t slot) {
         using find_fn = uint32_t *(__fastcall *)(void *dcs, void *out, void *key);
         uint32_t *h = ((find_fn)(*(void ***)dcs)[0x1b0 / 8])(dcs, out, key);
         return h ? *h : 0xffffffffu;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return 0xffffffffu;
     }
 }
@@ -258,7 +266,7 @@ Buff g_buffs[MAX_BUFFS];
 SRWLOCK g_lock = SRWLOCK_INIT;
 
 char g_ini_path[MAX_PATH];                // PowerBoost.ini, next to the DLL
-HMODULE g_self = nullptr;
+[[maybe_unused]] HMODULE g_self = nullptr;  // nEVR port: no DllMain sets it
 
 // One line through nEVR's host log. Debug and Info are counted apart, so a burst of Debug lines
 // never takes Info's room: Debug stops after kDebugCap lines and Info after kInfoCap, and the
@@ -484,9 +492,9 @@ void __fastcall Hooked_Damage(void *cs, uint32_t index, float damage, void *info
         uint32_t shooter = 0xffffffffu;
         int part = t_part;
         if (t_in_apply && ShooterSlotFn && t_shooter != ~0ull) {
-            __try {
+            EC_TRY {
                 ShooterSlotFn(*(void **)((uint8_t *)cs + 0xb8), &shooter, t_shooter);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
                 shooter = 0xffffffffu;
             }
         }
@@ -624,7 +632,7 @@ void SelfDamageTick(ULONGLONG now) {
         s.next += g_self_tick_ms;
         if (s.next <= now) s.next = now + g_self_tick_ms;      // (after a hitch: no burst)
         float damage = g_self_damage;
-        __try {
+        EC_TRY {
             const uint8_t *rec = Record(s.cs, s.index);
             if (rec[2] & 4) { s.cs = nullptr; continue; }       // dead: the cost ends with the use
             if (!g_self_lethal && WouldKill(rec, damage)) damage = Survivable(rec, damage);
@@ -633,7 +641,7 @@ void SelfDamageTick(ULONGLONG now) {
             t_self_damage = true;
             Real_Apply(s.cs, s.index, damage, ~0ull, (uint64_t)pos, (uint64_t)dir, 0, 0, 0, 0);
             t_self_damage = false;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             t_self_damage = false;
             s.cs = nullptr;
             LogWarning("OVERCHARGE cost: damaging the user faulted, stopped");
@@ -844,6 +852,12 @@ bool InstallCone(uint8_t *base) {
         LogWarning("radius check bytes changed before patching at +0x%llx -- cone not patched", (unsigned long long)RADIUS_RVA);
         return false;
     }
+    // nEVR port: the patch and its stub pass the write gate, or nothing is written.
+    if (!::nevr_combat::GateWrite(site, sizeof(jump), "PowerBoost cone jump (heal bubble radius check)") ||
+        !::nevr_combat::GateWrite(stub, sizeof(code), "PowerBoost cone stub")) {
+        LogWarning("cone patch refused at +0x%llx: it overlaps a range the runtime owns", (unsigned long long)RADIUS_RVA);
+        return false;
+    }
     DWORD old;
     if (!VirtualProtect(site, sizeof(jump), PAGE_EXECUTE_READWRITE, &old)) {
         LogWarning("VirtualProtect failed (error %lu) at +0x%llx -- cone not patched", GetLastError(),
@@ -982,7 +996,7 @@ void UpdateMedigunAllowed(ULONGLONG now) {
     using allowed_fn = int(__cdecl *)();
     static allowed_fn allowed = nullptr;
     if (!allowed)
-        if (HMODULE vn = GetModuleHandleW(L"VeilNet.dll")) allowed = (allowed_fn)GetProcAddress(vn, "VeilNet_MedigunAllowed");
+        if (::nevr_combat::veilnet::Started()) allowed = &::nevr_combat::veilnet::MedigunAllowed;   // nEVR port
     bool a = allowed && allowed() != 0;
     if (a != g_medi_allowed) {
         g_medi_allowed = a;
@@ -1030,7 +1044,7 @@ uint16_t KeyOf(uint64_t actor) { return (uint16_t)(actor ^ actor >> 16 ^ actor >
 // (cs, &out, actor, component id) -> &handle; +1C8h: valid).
 uint32_t SlotBubble(void *cs, int slot) {
     if (!SlotActorFn || slot < 0 || slot >= 16) return 0xffffffffu;
-    __try {
+    EC_TRY {
         uint8_t *space = *(uint8_t **)((uint8_t *)cs + 0x80);
         uint8_t *game = *(uint8_t **)(*(uint8_t **)(space + 8) + 0x8518);
         if (!game) return 0xffffffffu;
@@ -1046,7 +1060,7 @@ uint32_t SlotBubble(void *cs, int slot) {
         if (!h || *h == 0xffffffffu) return 0xffffffffu;
         using valid_fn = int(__fastcall *)(void *cs, uint32_t handle);
         return ((valid_fn)(*(void ***)cs)[0x1c8 / 8])(cs, *h) ? *h : 0xffffffffu;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return 0xffffffffu;
     }
 }
@@ -1068,12 +1082,12 @@ uint8_t *BubbleRecord(void *cs, uint32_t handle) {
 // A component's actor reference (virtual +1E0h: the value the game's own network messages name
 // an actor by) and component id (virtual +1F0h), both read from its descriptor (+1D0h).
 uint64_t DescField(void *cs, uint32_t handle, int slot) {
-    __try {
+    EC_TRY {
         using get_fn = uint64_t *(__fastcall *)(void *cs, uint64_t *out, uint32_t handle);
         alignas(16) uint64_t buf[4] = { ~0ull, ~0ull, ~0ull, ~0ull };
         uint64_t *a = ((get_fn)(*(void ***)cs)[slot / 8])(cs, buf, handle);
         return a ? a[0] : ~0ull;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return ~0ull;
     }
 }
@@ -1083,7 +1097,7 @@ uint64_t ComponentId(void *cs, uint32_t handle) { return DescField(cs, handle, 0
 // The handle of `actor`'s component `id` among the heal bubble system's records, or ~0:
 // slot i's handle is (u16 [cs+D8h][i]) | its generation (u16 at [cs+C8h] + index * 4 + 2) << 16.
 uint32_t FindBubble(void *cs, uint64_t actor, uint64_t id) {
-    __try {
+    EC_TRY {
         uint8_t *c = (uint8_t *)cs;
         uint16_t count = *(uint16_t *)(c + 0xf4);
         uint16_t *index = *(uint16_t **)(c + 0xd8);
@@ -1093,7 +1107,7 @@ uint32_t FindBubble(void *cs, uint64_t actor, uint64_t id) {
             uint32_t h = idx | (uint32_t)table[idx * 2 + 1] << 16;
             if (ComponentActor(cs, h) == actor && ComponentId(cs, h) == id) return h;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
     return 0xffffffffu;
 }
@@ -1101,7 +1115,7 @@ uint32_t FindBubble(void *cs, uint64_t actor, uint64_t id) {
 uint64_t *__fastcall Hooked_Slot(void *cs, uint64_t *out, uint32_t handle) {
     uint64_t *r = Real_Slot(cs, out, handle);
     g_equip_cs = cs;
-    __try {
+    EC_TRY {
         uint8_t *rec = *(uint8_t **)((uint8_t *)cs + 0xf8) +
                        (*(uint16_t **)((uint8_t *)cs + 0xc8))[(handle & 0xffff) * 2] * 0x58ull;
         if (*(uint32_t *)(rec + 0x10)) {                   // this machine's player
@@ -1120,7 +1134,7 @@ uint64_t *__fastcall Hooked_Slot(void *cs, uint64_t *out, uint32_t handle) {
             g_local_arm = arm;
             g_local_actor = actor;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
 #ifdef ECHOCOMBAT_LOG
     // Which code reads a MEDIGUN slot, and which hand each MEDIGUN player has here (a left-handed
@@ -1132,7 +1146,7 @@ uint64_t *__fastcall Hooked_Slot(void *cs, uint64_t *out, uint32_t handle) {
         bool known = false;
         for (int i = 0; i < n; ++i) known |= seen[i] == ret;
         if (!known && n < 16) { seen[n++] = ret; LogDebug("MEDIGUN slot read from echovr+%llx", (unsigned long long)ret); }
-        __try {
+        EC_TRY {
             uint8_t *rec = *(uint8_t **)((uint8_t *)cs + 0xf8) +
                            (*(uint16_t **)((uint8_t *)cs + 0xc8))[(handle & 0xffff) * 2] * 0x58ull;
             static uint64_t arms[16];                       // actor -> arm + 1, as logged
@@ -1145,7 +1159,7 @@ uint64_t *__fastcall Hooked_Slot(void *cs, uint64_t *out, uint32_t handle) {
                     *(uint32_t *)(rec + 0x10) ? "this machine's player" : "another player",
                     (unsigned long long)*(uint64_t *)(rec + 0x40));
             }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         }
     }
 #endif
@@ -1163,7 +1177,7 @@ void SendMedigun(bool on) {
     using send_fn2 = void(__cdecl *)(uint32_t);
     static send_fn2 send = nullptr;
     if (!send)
-        if (HMODULE veilnet = GetModuleHandleW(L"VeilNet.dll")) send = (send_fn2)GetProcAddress(veilnet, "VeilNet_Medigun");
+        if (::nevr_combat::veilnet::Started()) send = &::nevr_combat::veilnet::Medigun;   // nEVR port
     if (send) send(id);
     AcquireSRWLockExclusive(&g_medi_lock);
     MediOwner *slot = &g_owners[0];
@@ -1188,10 +1202,10 @@ bool OwnerOn(uint16_t key, ULONGLONG now) {
 // A MEDIGUN bubble's record now, or null when its handle no longer names a MEDIGUN bubble.
 uint8_t *MediRecord(const MediBubble &b) {
     if (!b.cs) return nullptr;
-    __try {
+    EC_TRY {
         if (ComponentId(b.cs, b.handle) != MEDI_BUBBLE) return nullptr;
         return BubbleRecord(b.cs, b.handle);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return nullptr;
     }
 }
@@ -1233,14 +1247,14 @@ net_activate_fn Real_NetActivate = nullptr;
 void __fastcall Hooked_NetActivate(void *cs, void *msg) {
     static volatile LONG told = 0;
     if (InterlockedIncrement(&told) <= 60) {
-        __try {
+        EC_TRY {
             uint8_t *payload = *(uint8_t **)((uint8_t *)msg + 0x10);
             uint64_t here = *(uint64_t *)(*(uint8_t **)((uint8_t *)cs + 0x80) + 0x58);
             LogDebug("heal bubble activation from the network: space %016llx (this system's %016llx%s), component %016llx, "
                 "slot %u gen %u, kind %d", (unsigned long long)*(uint64_t *)payload, (unsigned long long)here,
                 here == *(uint64_t *)payload ? "" : ", NOT THIS ONE", (unsigned long long)*(uint64_t *)(payload + 8),
                 *(uint16_t *)(payload + 0x10), *(uint16_t *)(payload + 0x12), *(int *)(payload + 0x14));
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         }
     }
     Real_NetActivate(cs, msg);
@@ -1248,7 +1262,7 @@ void __fastcall Hooked_NetActivate(void *cs, void *msg) {
 
 void __fastcall Hooked_ActivateLocal(void *cs, uint32_t handle) {
     g_bubble_cs = cs;
-    __try {
+    EC_TRY {
         uint64_t actor = ComponentActor(cs, handle);
         static volatile LONG told = 0;
         if (InterlockedIncrement(&told) <= 60)
@@ -1274,7 +1288,7 @@ void __fastcall Hooked_ActivateLocal(void *cs, uint32_t handle) {
             ReleaseSRWLockExclusive(&g_medi_lock);
             Log("MEDIGUN bubble of %016llx (player slot %d) activated here", (unsigned long long)actor, owner_slot);
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
     Real_ActivateLocal(cs, handle);
 }
@@ -1314,7 +1328,7 @@ bool FindComet(void *heal_cs, ULONGLONG now) {
     g_comet_cs = nullptr;
     if (!SystemsFind || now - g_comet_search < 500) return false;
     g_comet_search = now;
-    __try {
+    EC_TRY {
         void *space = *(void **)((uint8_t *)heal_cs + 0x80);
         if (space && SpaceById && g_weapon_actor[0] != ~0ull) space = SpaceById(space, g_weapon_actor[0]);
         uint64_t *list = space ? SystemsFind(space, NCA_SCRIPT) : nullptr;
@@ -1350,7 +1364,7 @@ bool FindComet(void *heal_cs, ULONGLONG now) {
                 }
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         LogWarning("MEDIGUN: looking for COMET's script faulted");
     }
     return false;
@@ -1369,7 +1383,7 @@ transform_get_fn TransformGet = nullptr;
 bool FindGunTransform(uint64_t owner, void **tcs, uint32_t *th) {
     void *equip = g_equip_cs, *heal = g_bubble_cs;
     if (!equip || !heal || !SpaceById || !SystemsFind) return false;
-    __try {
+    EC_TRY {
         uint8_t *c = (uint8_t *)equip;
         uint16_t count = *(uint16_t *)(c + 0xf4);
         uint16_t *index = *(uint16_t **)(c + 0xd8);
@@ -1389,7 +1403,7 @@ bool FindGunTransform(uint64_t owner, void **tcs, uint32_t *th) {
             }
             return false;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
     return false;
 }
@@ -1409,7 +1423,7 @@ void DiagGunSpace(uint8_t *bubble, const float *hp, const float *hq) {
     uint64_t space_id, gun;
     int arm = -1;
     if (owner == ~0ull || !GunOf(owner, &space_id, &gun, nullptr, &arm)) return;
-    __try {
+    EC_TRY {
         void *space = SpaceById(*(void **)((uint8_t *)g_bubble_cs + 0x80), space_id);
         uint64_t *list = space ? SystemsFind(space, NCA_TRANSFORM) : nullptr;
         if (!list) return;
@@ -1436,7 +1450,7 @@ void DiagGunSpace(uint8_t *bubble, const float *hp, const float *hq) {
                     DescField(c, h, 0x1e0) == gun ? " (the equipment's gun)" : "");
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         LogDebug("gun space survey faulted");
     }
 }
@@ -1462,14 +1476,14 @@ bool GunPose(uint8_t *bubble, float pos[3], float q[4]) {
         }
     }
     if (!b->tcs) return false;
-    __try {
+    EC_TRY {
         Pose p;
         Pose *r = TransformGet(b->tcs, &p, b->th);
         if (!r) return false;
         memcpy(q, r->q, sizeof(float) * 4);
         memcpy(pos, r->p, sizeof(float) * 3);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         b->tcs = nullptr;
         return false;
     }
@@ -1494,7 +1508,7 @@ bool OwnerGunPose(uint8_t *bubble, float pos[3], float q[4]) {
     if (now - a->looked >= 1000) {
         a->looked = now;
         a->tcs = nullptr;
-        __try {
+        EC_TRY {
             uint8_t *c = (uint8_t *)cs;
             uint16_t count = *(uint16_t *)(c + 0xf4);
             uint16_t *index = *(uint16_t **)(c + 0xd8);
@@ -1503,7 +1517,7 @@ bool OwnerGunPose(uint8_t *bubble, float pos[3], float q[4]) {
                 uint32_t h = index[i] | (uint32_t)table[index[i] * 2 + 1] << 16;
                 if (BubbleRecord(cs, h) == bubble) { a->owner = ComponentActor(cs, h); break; }
             }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             a->owner = ~0ull;
         }
         void *tcs;
@@ -1517,14 +1531,14 @@ bool OwnerGunPose(uint8_t *bubble, float pos[3], float q[4]) {
         }
     }
     if (!a->tcs) return false;
-    __try {
+    EC_TRY {
         Pose p;
         Pose *r = TransformGet(a->tcs, &p, a->th);
         if (!r) return false;
         memcpy(q, r->q, sizeof(float) * 4);
         memcpy(pos, r->p, sizeof(float) * 3);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         a->tcs = nullptr;
         return false;
     }
@@ -1542,10 +1556,10 @@ get_real_fn GetScriptReal = nullptr;
 void UpdateGunOut() {
     if (!GetScriptReal || !g_comet_cs) { g_gun_out = true; return; }
     float holstered = 0, retracted = 0;
-    __try {
+    EC_TRY {
         holstered = GetScriptReal(g_comet_cs, g_comet_handle, HOLSTERED_CURRENT);
         retracted = GetScriptReal(g_comet_cs, g_comet_handle, RETRACTED_CURRENT);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         g_gun_out = true;
         return;
     }
@@ -1574,7 +1588,7 @@ void ShowHeat(void *heal_cs, ULONGLONG now) {
     static float written = -1.0f;
     static ULONGLONG written_at = 0;
     static int faults = 0;
-    __try {
+    EC_TRY {
         if (GetScriptReal) {
             float m = GetScriptReal(g_comet_cs, g_comet_handle, HEAT_MAX);
             if (m > 1.0f && m < 10000.0f) heat_max = m;
@@ -1596,8 +1610,8 @@ void ShowHeat(void *heal_cs, ULONGLONG now) {
         }
         written = g_heat * heat_max;
         SetScriptReal(g_comet_cs, g_comet_handle, HEAT_CURRENT, written);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        if (faults++ < 5) LogWarning("MEDIGUN: setting COMET's heat faulted (%08x)", GetExceptionCode());
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        if (faults++ < 5) LogWarning("MEDIGUN: setting COMET's heat faulted (%08x)", EC_EXCEPTION_CODE());
         g_comet_cs = nullptr;
         return;
     }
@@ -1637,7 +1651,7 @@ bool PartyShooter(uint64_t shooter) {
 bool GunOf(uint64_t player, uint64_t *space_id, uint64_t *gun, uint64_t *weapon, int *arm) {
     void *equip = g_equip_cs;
     if (!equip) return false;
-    __try {
+    EC_TRY {
         uint8_t *c = (uint8_t *)equip;
         uint16_t count = *(uint16_t *)(c + 0xf4);
         uint16_t *index = *(uint16_t **)(c + 0xd8);
@@ -1653,7 +1667,7 @@ bool GunOf(uint64_t player, uint64_t *space_id, uint64_t *gun, uint64_t *weapon,
             if (arm) *arm = *(int *)(rec + 0x30);
             return *gun != ~0ull && *space_id != ~0ull;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
     return false;
 }
@@ -1730,7 +1744,7 @@ uint64_t ArmBone(int arm) { return arm == 1 ? TOOL_R1 : TOOL_L1; }
 bool BoneOffset(uint8_t *data, uint64_t bone, float local[3]) {
     if (!AttachPose) return false;
     uint64_t joint = *(uint64_t *)(data + 0x60);
-    __try {
+    EC_TRY {
         alignas(16) Pose at = {}, to = {};
         Pose *j = AttachPose(data + 0x230, &at, data);
         *(uint64_t *)(data + 0x60) = bone;
@@ -1741,7 +1755,7 @@ bool BoneOffset(uint8_t *data, uint64_t bone, float local[3]) {
         float inv[4] = { -j->q[0], -j->q[1], -j->q[2], j->q[3] };
         Rotate(inv, d, local);
         return local[0] * local[0] + local[1] * local[1] + local[2] * local[2] < 4.0f;   // (hands under 2 m apart)
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         *(uint64_t *)(data + 0x60) = joint;
         return false;
     }
@@ -1754,7 +1768,7 @@ uint64_t PartyWeaponOfGun(uint64_t gun, bool *local) {
     *local = false;
     uint8_t *c = (uint8_t *)g_equip_cs;
     if (!c || gun == ~0ull) return 0;
-    __try {
+    EC_TRY {
         uint16_t count = *(uint16_t *)(c + 0xf4);
         uint16_t *index = *(uint16_t **)(c + 0xd8);
         uint16_t *table = *(uint16_t **)(c + 0xc8);
@@ -1767,7 +1781,7 @@ uint64_t PartyWeaponOfGun(uint64_t gun, bool *local) {
             *local = *(uint32_t *)(rec + 0x10) != 0;
             return PartyGun(w) ? w : 0;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
     return 0;
 }
@@ -1775,7 +1789,7 @@ uint64_t PartyWeaponOfGun(uint64_t gun, bool *local) {
 // The muzzle flash's team tint (the gun script hands it each team's pair): more blue than red = blue.
 // Its place in the node data is looked for once: a colour triple (r, g, b) in [0, 1.5] whose
 // largest part is 1, as both teams' stock tints are.
-bool BlueTint(const uint8_t *data, bool *known) {
+[[maybe_unused]] bool BlueTint(const uint8_t *data, bool *known) {  // nEVR port: unused here
     *known = false;
     for (int o = 0x60; o + 12 <= 0x230; o += 4) {
         const float *f = (const float *)(data + o);
@@ -1801,7 +1815,7 @@ constexpr ULONGLONG PARTY_BURST_MS = 2000;
 struct BurstAt { uint64_t gun; ULONGLONG at; };
 BurstAt g_burst_at[32];
 uint64_t __fastcall PartyEffect(uint64_t gun, uint64_t stock, const uint8_t *inst) {
-    __try {
+    EC_TRY {
         bool local = false;
         uint64_t weapon = PartyWeaponOfGun(gun, &local);
         static volatile LONG asked = 0;
@@ -1828,7 +1842,7 @@ uint64_t __fastcall PartyEffect(uint64_t gun, uint64_t stock, const uint8_t *ins
             Log("PARTY GUN: %016llx's shot -> %s confetti (%s, tint %.2f %.2f %.2f)", (unsigned long long)gun,
                 blue ? "blue" : "orange", local ? "local" : "remote", tint[0], tint[1], tint[2]);
         return blue ? CONFETTI_BLUE : CONFETTI_ORANGE;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return stock;
     }
 }
@@ -1838,7 +1852,7 @@ uint64_t __fastcall PartyEffect(uint64_t gun, uint64_t stock, const uint8_t *ins
 struct GunCache { uint64_t gun; ULONGLONG at; bool party; };
 GunCache g_gun_cache[32];
 int __fastcall PartyGunActor(uint64_t gun) {
-    __try {
+    EC_TRY {
         ULONGLONG now = GetTickCount64();
         GunCache *c = &g_gun_cache[(gun ^ (gun >> 16)) & 31];
         if (c->gun != gun || now - c->at > 100) {
@@ -1846,7 +1860,7 @@ int __fastcall PartyGunActor(uint64_t gun) {
             *c = { gun, now, PartyWeaponOfGun(gun, &local) != 0 };
         }
         return c->party;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
 }
@@ -1911,19 +1925,19 @@ constexpr uintptr_t CREATE_PFX_RVA = 0xdda7f0;
 constexpr uint8_t CREATE_PFX_BYTES[] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7c };
 pfx_node_fn Real_CreatePfx = nullptr;
 uint64_t __fastcall Hooked_CreatePfx(int64_t *thread) {
-    __try {
+    EC_TRY {
         PartySwap(thread);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
     return Real_CreatePfx(thread);
 }
 
 uint64_t __fastcall Hooked_PfxNode(int64_t *thread) {
-    __try {
+    EC_TRY {
         PartySwap(thread);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
-    __try {
+    EC_TRY {
         uint8_t *data = (uint8_t *)thread[0x16];
         int64_t state = thread[3];
         if ((state == 1 || state == 2) && data && (*(uint64_t *)data == HEAL_BEAM || *(uint64_t *)data == BLUE_BEAM) &&
@@ -1964,7 +1978,7 @@ uint64_t __fastcall Hooked_PfxNode(int64_t *thread) {
                 local[2] = l[2];
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
     return Real_PfxNode(thread);
 }
@@ -2066,7 +2080,7 @@ LiveBeam g_live[4];
 void PlaceBeams(ULONGLONG now) {
     for (LiveBeam &b : g_live) {
         if (!b.data) continue;
-        __try {
+        EC_TRY {
             uint8_t *inst = *(uint8_t **)(b.data + 0x240);
             if (*(uint64_t *)b.data != BLUE_BEAM || !inst || inst != b.inst) { b.data = nullptr; continue; }
             const volatile float *o = b.right ? g_hand_offset : g_hand_offset_left;
@@ -2076,7 +2090,7 @@ void PlaceBeams(ULONGLONG now) {
                 b.told = now;
                 LogDebug("MEDIGUN beam %p at %.3f %.3f %.3f from its bone", b.data, local[0], local[1], local[2]);
             }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             b.data = nullptr;
         }
     }
@@ -2087,7 +2101,7 @@ void __fastcall Hooked_Resolve(void *node, uint8_t *data) {
     // +58h component (ncaModel), +60h joint (the off hand: EXP_L1_Hand1, picked at run time),
     // +70h attach type (2 joint). Attaching to the gun itself fails (it lives in another game space,
     // the beam shows nowhere), so the beam moves to the gun hand's joint on the same model.
-    __try {
+    EC_TRY {
         if (*(uint64_t *)data == HEAL_BEAM && *(uint64_t *)(data + 0x58) == NCA_MODEL) {
             uint64_t player = *(uint64_t *)(data + 0x48), joint = *(uint64_t *)(data + 0x60);
             bool medigun = MedigunPlayer(player);
@@ -2124,10 +2138,10 @@ void __fastcall Hooked_Resolve(void *node, uint8_t *data) {
                     (unsigned long long)player, arm, arm == 1 ? "EXP_R1_ToolAttach1 (right)" :
                     arm == 0 ? "EXP_L1_ToolAttach1 (left)" : "hand not known here, left alone");
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
     Real_Resolve(node, data);
-    __try {                                                  // a MEDIGUN beam: placed at the muzzle each frame
+    EC_TRY {                                                  // a MEDIGUN beam: placed at the muzzle each frame
         uint64_t joint = *(uint64_t *)(data + 0x60);
         uint8_t *inst = *(uint8_t **)(data + 0x240);
         bool right = false, mine = false;
@@ -2144,7 +2158,7 @@ void __fastcall Hooked_Resolve(void *node, uint8_t *data) {
             *slot = { data, inst, right, 0 };
             Log("MEDIGUN beam %p attached (instance %p, %s hand)", data, inst, right ? "right" : "left");
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
 }
 
@@ -2210,7 +2224,7 @@ void MedigunTick(void *cs, ULONGLONG now) {
             }
             return;
         }
-        __try {
+        EC_TRY {
             uint8_t *rec = BubbleRecord(cs, h);
             *(float *)(rec + 0x30) = g_medi.heal_per_second * g_medi.beam_seconds;   // heal over duration
             *(float *)(rec + 0x34) = g_medi.beam_seconds;
@@ -2226,7 +2240,7 @@ void MedigunTick(void *cs, ULONGLONG now) {
             Log("MEDIGUN: activating bubble %08x in space %016llx", h,
                 (unsigned long long)*(uint64_t *)(*(uint8_t **)((uint8_t *)cs + 0x80) + 0x58));
             ActivateBubble(cs, h);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             LogWarning("MEDIGUN: activating the bubble faulted");
             return;
         }
@@ -2269,7 +2283,7 @@ void ActivateRemote(void *cs, ULONGLONG now) {
     for (PendingOn &p : g_pending) {
         if (!p.at) continue;
         if (now - p.at > 3000) { p.at = 0; continue; }
-        __try {
+        EC_TRY {
             uint32_t h = SlotBubble(cs, p.key);
             if (h != 0xffffffffu && !(!g_server && p.key == g_local_slot)) {
                 WriteMediTuning(BubbleRecord(cs, h));
@@ -2277,7 +2291,7 @@ void ActivateRemote(void *cs, ULONGLONG now) {
                 Hooked_ActivateLocal(cs, h);
                 p.at = 0;
             }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             p.at = 0;
         }
     }
@@ -2305,10 +2319,10 @@ void __fastcall Hooked_BubbleUpdate(void *cs) {
         if (!b.cs || OwnerOn(b.key, now)) continue;
         uint8_t *rec = MediRecord(b);
         if (!rec) continue;
-        __try {
+        EC_TRY {
             float duration = *(float *)(rec + 0x34);
             if (*(float *)(rec + 0x50) < duration) *(float *)(rec + 0x50) = duration;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         }
     }
     Real_BubbleUpdate(cs);
@@ -2439,6 +2453,7 @@ int __cdecl Hooked_Input(void *session, unsigned type, void *state) {
 }
 
 void AttachTracked(PVOID *real, PVOID hook);
+template <typename F> void AttachTracked(PVOID *real, F *hook) { AttachTracked(real, (PVOID)hook); }  // nEVR port
 
 DWORD WINAPI HookOvr(LPVOID) {
     for (int i = 0; i < 600; ++i) {                        // LibOVR loads with the headset, a little later
@@ -2505,6 +2520,9 @@ void AttachTracked(PVOID *real, PVOID hook) {
     if (i < 32) g_tracked[i] = { real, hook };
 }
 
+bool g_medigun_on = false;          // nEVR port: combat.medigun; off: none of MEDIGUN's own hooks
+constexpr bool kPartyGuns = false;  // nEVR port: party guns are unfinished (Cat hides them): never on
+
 void InstallMedigun(uint8_t *base) {
     g_base = base;
     if (!Check(base + SLOT_RVA, SLOT_BYTES, sizeof(SLOT_BYTES), "GetWeaponSlot") ||
@@ -2513,7 +2531,7 @@ void InstallMedigun(uint8_t *base) {
         !Check(base + ACTIVATE_LOCAL_RVA, ACTIVATE_LOCAL_BYTES, sizeof(ACTIVATE_LOCAL_BYTES), "ActivateHealBubbleLocally") ||
         !Check(base + ACTIVATE_RVA, ACTIVATE_BYTES, sizeof(ACTIVATE_BYTES), "ActivateHealBubble"))
         return;
-    if (Check(base + GUN_FIRE_RVA, GUN_FIRE_BYTES, sizeof(GUN_FIRE_BYTES), "FireIntegratedGunLocal")) {
+    if (g_medigun_on && Check(base + GUN_FIRE_RVA, GUN_FIRE_BYTES, sizeof(GUN_FIRE_BYTES), "FireIntegratedGunLocal")) {  // nEVR port
         Real_GunFire = (fire_fn)(base + GUN_FIRE_RVA);
         AttachTracked(&(PVOID &)Real_GunFire, Hooked_GunFire);
         if (base[BULLET_SPAWN_RVA] == 0xe9 ||               // DroneFix's hook already there: chain on it
@@ -2522,7 +2540,7 @@ void InstallMedigun(uint8_t *base) {
             AttachTracked(&(PVOID &)Real_BulletSpawn, Hooked_BulletSpawn);
         }
     }
-    ReadMedigunIni(g_ini_path);
+    if (g_medigun_on) ReadMedigunIni(g_ini_path);  // nEVR port
     if (Check(base + SYSTEMS_FIND_RVA, SYSTEMS_FIND_BYTES, sizeof(SYSTEMS_FIND_BYTES), "systems by name") &&
         Check(base + SET_REAL_RVA, SET_REAL_BYTES, sizeof(SET_REAL_BYTES), "script SetReal")) {
         SystemsFind = (systems_fn)(base + SYSTEMS_FIND_RVA);
@@ -2541,11 +2559,11 @@ void InstallMedigun(uint8_t *base) {
     Real_ActivateLocal = (activate_fn)(base + ACTIVATE_LOCAL_RVA);
     ActivateBubble = (activate_fn)(base + ACTIVATE_RVA);
     AttachTracked(&(PVOID &)Real_Slot, Hooked_Slot);
-    if (Check(base + PURCHASED_RVA, PURCHASED_BYTES, sizeof(PURCHASED_BYTES), "item purchased status")) {
+    if (kPartyGuns && Check(base + PURCHASED_RVA, PURCHASED_BYTES, sizeof(PURCHASED_BYTES), "item purchased status")) {  // nEVR port
         Real_Purchased = (item_fn)(base + PURCHASED_RVA);
         AttachTracked(&(PVOID &)Real_Purchased, Hooked_Purchased);
     }
-    {
+    if (kPartyGuns) {                                      // nEVR port: party guns
         item_fn hooks[3] = { Hooked_Unlock0, Hooked_Unlock1, Hooked_Unlock2 };
         for (int k = 0; k < 3; ++k)
             if (Check(base + UNLOCK_RVAS[k], UNLOCK_BYTES, sizeof(UNLOCK_BYTES), "item unlock level")) {
@@ -2557,8 +2575,8 @@ void InstallMedigun(uint8_t *base) {
     AttachTracked(&(PVOID &)Real_ActivateLocal, Hooked_ActivateLocal);
     if (Check(base + RESOLVE_ATTACH_RVA, RESOLVE_ATTACH_BYTES, sizeof(RESOLVE_ATTACH_BYTES), "particle effect attachment")) {
         Real_Resolve = (resolve_fn)(base + RESOLVE_ATTACH_RVA);
-        AttachTracked(&(PVOID &)Real_Resolve, Hooked_Resolve);
-        if (Check(base + PFX_NODE_RVA, PFX_NODE_BYTES, sizeof(PFX_NODE_BYTES), "particle effect node")) {
+        if (g_medigun_on) AttachTracked(&(PVOID &)Real_Resolve, Hooked_Resolve);   // nEVR port: MEDIGUN's beam
+        if (g_medigun_on && Check(base + PFX_NODE_RVA, PFX_NODE_BYTES, sizeof(PFX_NODE_BYTES), "particle effect node")) {  // nEVR port
             Real_PfxNode = (pfx_node_fn)(base + PFX_NODE_RVA);
             AttachTracked(&(PVOID &)Real_PfxNode, Hooked_PfxNode);
             if (Check(base + CREATE_PFX_RVA, CREATE_PFX_BYTES, sizeof(CREATE_PFX_BYTES), "CreateParticleEffect node")) {
@@ -2570,16 +2588,16 @@ void InstallMedigun(uint8_t *base) {
             }
         }
     }
-    if (uint32_t mb = RulesMailboxRva(base)) {             // the Pulsar script asks PartyEffect / PartyGun
+    if (uint32_t mb = kPartyGuns ? RulesMailboxRva(base) : 0) {   // the Pulsar script asks PartyEffect / PartyGun (nEVR port: party guns)
         *(void *volatile *)(base + mb + PARTY_FN) = (void *)PartyEffect;
         *(void *volatile *)(base + mb + PARTY_GUN_FN) = (void *)PartyGunActor;
         Log("PARTY GUN: PartyEffect / PartyGunActor at RULES mailbox +%#x / +%#x", PARTY_FN, PARTY_GUN_FN);
     }
-    if (Check(base + NET_ACTIVATE_RVA, NET_ACTIVATE_BYTES, sizeof(NET_ACTIVATE_BYTES), "heal bubble network activation")) {
+    if (g_medigun_on && Check(base + NET_ACTIVATE_RVA, NET_ACTIVATE_BYTES, sizeof(NET_ACTIVATE_BYTES), "heal bubble network activation")) {  // nEVR port
         Real_NetActivate = (net_activate_fn)(base + NET_ACTIVATE_RVA);
         AttachTracked(&(PVOID &)Real_NetActivate, Hooked_NetActivate);
     }
-    if (!g_server)
+    if (!g_server && g_medigun_on)                         // nEVR port: MEDIGUN's trigger
         if (HANDLE t = CreateThread(nullptr, 0, HookOvr, nullptr, 0, nullptr)) CloseHandle(t);
 }
 
@@ -2594,8 +2612,8 @@ void ReadIni() {
     g_rez_window_ms = GetPrivateProfileIntA("rez", "seconds", 5, ini) * 1000u;
     g_link_window_ms = GetPrivateProfileIntA("cone", "link_window_ms", 500, ini);
     char bonus[32];
-    GetPrivateProfileStringA("buff", "damage_bonus", "0", bonus, sizeof(bonus), ini);
-    g_damage_bonus = (float)atof(bonus);
+    // nEVR port: a client multiplying its own outgoing damage is never on (unsafe); buff.damage_bonus is not read.
+    g_damage_bonus = 0.0f;
     GetPrivateProfileStringA("buff", "body_bonus", "1", bonus, sizeof(bonus), ini);
     g_body_bonus = (float)atof(bonus);
     GetPrivateProfileStringA("buff", "head_bonus", "2", bonus, sizeof(bonus), ini);
@@ -2695,7 +2713,7 @@ void Uninstall() {
 } // namespace
 
 // VeilNet.dll hands over each MEDIGUN 'M' packet: the owner key (low 16 bits), on (bit 16).
-extern "C" __declspec(dllexport) void PowerBoost_MedigunRemote(uint32_t id) {
+void PowerBoost_MedigunRemote(uint32_t id) {
     uint16_t key = (uint16_t)id;
     bool on = (id >> 16 & 1) != 0;
     ULONGLONG now = GetTickCount64();
@@ -2720,35 +2738,23 @@ extern "C" __declspec(dllexport) void PowerBoost_MedigunRemote(uint32_t id) {
 }
 
 // CombatBots.dll finds the damageable system here (dead / respawn of its bots).
-extern "C" __declspec(dllexport) void *PowerBoost_DamageableCS() { return g_damage_cs; }
+void *PowerBoost_DamageableCS() { return g_damage_cs; }
 
 // VeilNet.dll: this player's weapon slot (MEDIGUN stays in the list while it is selected).
-extern "C" __declspec(dllexport) uint64_t PowerBoost_LocalWeapon() { return g_local_weapon; }
+uint64_t PowerBoost_LocalWeapon() { return g_local_weapon; }
 
-ECHOCOMBAT_EXPORT NvrPluginInfo NvrPluginGetInfo(void) {
-    return EchoCombatPluginInfo("power_boost", "EchoCombat: OVERCHARGE (links, damage reduction, cheat death, damage bonus)");
+// nEVR port: the plugin's exports and DllMain are replaced by these, which runtime/combat/combat.cpp calls.
+bool Start(bool is_server, bool medigun_on) {
+    g_medigun_on = medigun_on;
+    return Install(is_server);
 }
 
-ECHOCOMBAT_EXPORT uint32_t NvrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
+bool Started() { return g_hooked; }
 
-ECHOCOMBAT_EXPORT uint32_t NvrPluginGetCapabilities(void) {
-    return NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_HOOKS_ENGINE;
-}
+void Stop() { Uninstall(); }
 
-ECHOCOMBAT_EXPORT int NvrPluginInitEx(const NvrGameContext *ctx, const char *) {
-    PluginLogBind(ctx);
-    EchoCombatBesideDll(g_self, g_ini_path, sizeof(g_ini_path), "PowerBoost.ini");
-    return Install(EchoCombatIsServer(ctx)) ? 0 : 1;
-}
+void MedigunRemote(uint32_t id) { PowerBoost_MedigunRemote(id); }
 
-ECHOCOMBAT_EXPORT int NvrPluginInit(const NvrGameContext *ctx) { return NvrPluginInitEx(ctx, "{}"); }
+uint64_t LocalWeapon() { return PowerBoost_LocalWeapon(); }
 
-ECHOCOMBAT_EXPORT void NvrPluginShutdown(void) { Uninstall(); }
-
-BOOL APIENTRY DllMain(HMODULE self, DWORD reason, LPVOID) {
-    if (reason == DLL_PROCESS_ATTACH) {
-        DisableThreadLibraryCalls(self);
-        g_self = self;
-    }
-    return TRUE;
-}
+}  // namespace nevr_combat::powerboost

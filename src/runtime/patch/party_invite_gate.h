@@ -28,6 +28,16 @@ inline std::uint32_t BooleanResult(const char* path, std::uint32_t original) {
 /// Installs the CJson::Boolean override and the event-dispatch trace.
 void Install(std::uintptr_t gameBase);
 
+/// An observer of every event the game sends its session through DispatchEventToSession (echovr.exe 0x1401a9fe0): it is
+/// called before the game handles the event and changes nothing. The combat module is the one user (runtime/combat): one
+/// owner per function, so it rides this detour instead of detouring the function a second time. Installs the detour alone
+/// when Install has not (the social facade is off), without the invite gate or the trace, and returns the game's function
+/// behind it for a caller that raises events itself, or null when the detour could not be installed (the observer is then
+/// not set).
+using DispatchObserver = void (*)(void* netGame, std::uint64_t eventId);
+using DispatchEventFn = void (*)(void* netGame, std::uint64_t eventId);
+DispatchEventFn InstallDispatchObserver(std::uintptr_t gameBase, DispatchObserver observer);
+
 /// True once the friend invite handler (0x14018aa90) was prologue-validated and detoured for tracing.
 /// Its first bytes are then our jump, so a caller that validates the prologue itself must accept this.
 bool InviteHandlerTraced();

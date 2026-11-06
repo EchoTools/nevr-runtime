@@ -1,3 +1,9 @@
+// nEVR port: he_is_the_cat's plugin/veilnet.cpp from heisthecat31/EchoCombat (branch nevr-pack, c3ff4b54), compiled into
+// nevr-runtime.dll as part of the combat module (runtime/combat/combat.cpp) nearly as he wrote it. Every change to his
+// text is marked "nEVR port:". cat_compat.h maps Detours, EC_TRY/__except, his .ini reads and his logger onto the
+// runtime; every write to the game passes runtime/combat/write_gate.h first. __try, __except and
+// GetExceptionCode are spelled EC_TRY, EC_EXCEPT and EC_EXCEPTION_CODE (cat_compat.h).
+
 // VeilNet: carries UMBRAL VEIL (and POINT) to every machine.
 //
 // The veil (the smoke tac mod) runs its script only on the client that used it. The
@@ -55,6 +61,9 @@
 // machine, the server too, hands it to PowerBoost_MedigunRemote, which ends that owner's
 // heal bubble when the beam goes off.
 
+#include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
+#include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
+#include "runtime/combat/write_gate.h"  // nEVR port
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -64,14 +73,17 @@
 #include <stdarg.h>
 #include <algorithm>
 #include <iterator>
-#include "detours.h"
-#include "nevr_plugin.h"
-#include "nevr/plugin_logger.h"
-#include "station_icon_keys.h"
+#include "runtime/combat/station_icon_keys.h"  // nEVR port: path from src/
+#include "runtime/patch/equipment_refire.h"     // nEVR port: the slot setters' owner
+#include "runtime/patch/invite_choice_hook.h"   // nEVR port: SendComponentEvent's owner
+#include "runtime/patch/menu_version_label.h"   // nEVR port: SetText's owner
+#include "runtime/patch/party_invite_gate.h"    // nEVR port: DispatchEventToSession's owner
 
 #pragma comment(lib, "ws2_32.lib")
 
 // Lines go to nEVR's host log, tagged plugin=<config.yaml name> (docs/standards/logging.md, Rule 15).
+namespace nevr_combat::veilnet {  // nEVR port: one namespace per file
+constexpr const char *kCatModule = "veilnet";  // nEVR port
 NEVR_DEFINE_PLUGIN_LOG("[VeilNet]")
 
 constexpr const char *kLogName = "VeilNet";   // names the plugin in its log-cap Warning
@@ -107,7 +119,9 @@ constexpr ULONGLONG SERVER_TIMEOUT = 6000;      // ms without an answer to the h
 //: ordnances, tac mods; each filled by +0xc4e410 from InitAndLoadGearTables).
 constexpr uintptr_t WEAPON_LIST_RVA = 0x20d3420;
 constexpr uint32_t ANSWER_MEDIGUN = 1;
-bool g_medigun_on_server = false;               // server: [server] medigun
+bool g_medigun_on_server = false;               // server: [server] medigun (nEVR port: combat.medigun)
+bool g_match_control = false;                   // nEVR port: combat.match_control
+bool g_quick_exit = false;                      // nEVR port: the clean exit is in place
 
 struct Shared {
     volatile LONG tokens;
@@ -184,7 +198,7 @@ void LogWarning(const char *fmt, ...) {
     va_end(args);
 }
 
-void LogError(const char *fmt, ...) {
+[[maybe_unused]] void LogError(const char *fmt, ...) {  // nEVR port: unused here
     va_list args;
     va_start(args, fmt);
     LogLine(NEVR_LOG_ERROR, fmt, args);
@@ -352,7 +366,7 @@ int Relay(const sockaddr_in &from, uint8_t type, uint32_t id) {
 // DroneFix.dll on the server, when a drone's health runs out: every client shuts that drone
 // down too ('K', the drone's damageable index in the low 16 bits of the id).
 volatile LONG g_kills = 0;
-extern "C" __declspec(dllexport) void __cdecl VeilNet_DroneKilled(uint32_t index) {
+void __cdecl VeilNet_DroneKilled(uint32_t index) {
     if (!g_server) return;
     uint32_t id = ((uint32_t)InterlockedIncrement(&g_kills) << 16) | (index & 0xffff);
     FirstTime(id);
@@ -362,7 +376,7 @@ extern "C" __declspec(dllexport) void __cdecl VeilNet_DroneKilled(uint32_t index
 }
 
 // PowerBoost.dll on the client with a MEDIGUN: its beam on / off, to the server and on to everyone.
-extern "C" __declspec(dllexport) void __cdecl VeilNet_Medigun(uint32_t id) {
+void __cdecl VeilNet_Medigun(uint32_t id) {
     if (g_server) return;
     FirstTime(id);
     SendToServer('M', id);
@@ -373,8 +387,8 @@ void MedigunHere(uint32_t id) {
     using remote_fn = void(__cdecl *)(uint32_t);
     static remote_fn remote = nullptr;
     if (!remote)
-        if (HMODULE pb = GetModuleHandleW(L"PowerBoost.dll"))
-            remote = (remote_fn)GetProcAddress(pb, "PowerBoost_MedigunRemote");
+        if (::nevr_combat::powerboost::Started())             // nEVR port: was GetProcAddress(PowerBoost.dll)
+            remote = &::nevr_combat::powerboost::MedigunRemote;
     if (remote) remote(id);
 }
 
@@ -698,11 +712,11 @@ void MapSwitchEvent(uint64_t event) {
 
 // The capture point script's data: "capturepoint" at +100h, plausible points at +F0 / +F8 / +FC.
 bool LooksLikePoint(const uint8_t *d) {
-    __try {
+    EC_TRY {
         if (*(const uint64_t *)(d + 0x100) != SYM_CAPTUREPOINT) return false;
         float o = *(const float *)(d + 0xF0), b = *(const float *)(d + 0xF8), r = *(const float *)(d + 0xFC);
         return o >= 0 && o <= 100000 && b >= 0 && b <= 100000 && r >= 10 && r <= 1000;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
@@ -713,11 +727,11 @@ uint8_t *FindPointData() {
         uint8_t *base = (uint8_t *)mbi.BaseAddress;
         size_t size = mbi.RegionSize;
         if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE && (mbi.Protect == PAGE_READWRITE)) {
-            __try {
+            EC_TRY {
                 for (size_t o = 0x100; o + 8 <= size; o += 8)
                     if (*(const uint64_t *)(base + o) == SYM_CAPTUREPOINT && LooksLikePoint(base + o - 0x100))
                         return base + o - 0x100;
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             }
         }
         addr = base + size;
@@ -758,6 +772,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
     char buf[48];
     if (g_server) {
         Remember(s, from);
+        if (p.type == 'C' && !g_match_control) return;   // nEVR port: match control off (combat.match_control)
         if (p.type == 'H') {
             Send(s, from, 'A', g_medigun_on_server ? ANSWER_MEDIGUN : 0);   // "this server has EchoCombat"
             uint32_t total = g_rules_total ? *(volatile uint32_t *)g_rules_total : 0;
@@ -916,8 +931,8 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         using killed_fn = void(__cdecl *)(uint32_t);
         static killed_fn killed = nullptr;
         if (!killed)
-            if (HMODULE dronefix = GetModuleHandleW(L"DroneFix.dll"))
-                killed = (killed_fn)GetProcAddress(dronefix, "DroneFix_Killed");
+            if (::nevr_combat::dronefix::Started())           // nEVR port: was GetProcAddress(DroneFix.dll)
+                killed = &::nevr_combat::dronefix::Killed;
         if (killed) killed(p.id & 0xffff);
         if (killed)
             LogDebug("drone %u killed on the server: shut down here", p.id & 0xffff);
@@ -995,7 +1010,7 @@ bool OurSelected() {
 // (+0xC4EBA0) fills once, with the counts the lists had then. So a trimmed list still showed
 // every item there. StationView sets a list's row to `count` items, from item `skip` on: with a
 // skip, the row points at a header of our own (the list's, entries moved on by `skip`); the
-// list itself is untouched. Called under the callers' __try.
+// list itself is untouched. Called under the callers' EC_TRY.
 constexpr uintptr_t GEAR_TYPE_TABLE_RVA = 0x20d3440;
 constexpr size_t GEAR_TYPE_ENTRY = 0x98;
 struct GearListHeader { uint64_t allocator; uint8_t *entries; uint64_t count, capacity; };
@@ -1016,10 +1031,11 @@ volatile ULONGLONG g_station_changed = 0;      // when a row last changed (0: no
 constexpr ULONGLONG STATION_SETTLE_MS = 400;    // one redraw, once the rows have stopped changing
 
 void GameOverSeen(uint64_t event);
-void __fastcall HookedDispatch(uint64_t netgame, uint64_t event) {
-    g_netgame = netgame;
+// nEVR port: DispatchEventToSession is the runtime's detour (patch/party_invite_gate.h); this observes it, then the game
+// handles the event, as HookedDispatch did before calling through.
+void ObserveDispatch(void *netgame, uint64_t event) {
+    g_netgame = (uint64_t)netgame;
     GameOverSeen(event);
-    g_real_dispatch(netgame, event);
 }
 
 // Each station grid cell holds one icon element per item (and a lock); the script only shows
@@ -1059,9 +1075,9 @@ void PlainGearShown(uint64_t cs, uint32_t index, uint64_t key, float alpha, int 
         if (g.cs == cs && g.index == index && g.kind == kind && (g.key == key || alpha > 0.0f)) {
             if (g.key != key) {
                 Log("gear icon %016llx hidden in %llx/%u: %016llx shown there", g.key, cs, index & 0xffff, key);
-                __try {
+                EC_TRY {
                     g_real_setalpha(g.cs, g.index, g.key, 0.0f);
-                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
                 }
             }
             g = g_shown_gear[--g_shown_gear_count];
@@ -1096,9 +1112,9 @@ void HideStationIcons() {
     int n = g_shown_count;
     g_shown_count = 0;
     for (int k = 0; k < n; ++k) {
-        __try {
+        EC_TRY {
             g_real_setalpha(g_shown[k].cs, g_shown[k].index, g_shown[k].key, 0.0f);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         }
     }
 }
@@ -1123,7 +1139,10 @@ int g_ready_label_count = 0;
 const char *g_ready_shown = "TEAM READY";
 volatile LONG g_settext_own = 0;
 
-uint64_t __fastcall HookedSetText(uint64_t cs, uint32_t handle, uint64_t element, const char *text) {
+// nEVR port: SetText is the runtime's detour (patch/menu_version_label.h); this is its filter: it returns the text the
+// call draws, where HookedSetText called through with it.
+const char *FilterSetText(void *canvas, uint32_t handle, uint64_t element, const char *text) {
+    const uint64_t cs = (uint64_t)canvas;
 #ifdef ECHOCOMBAT_LOG_EVENTS
     if (text && !g_settext_own) {                    // MAP TERMINAL research: who writes which label
         static uint64_t seen[1024];
@@ -1146,7 +1165,7 @@ uint64_t __fastcall HookedSetText(uint64_t cs, uint32_t handle, uint64_t element
         }
         if (strcmp(g_ready_shown, "TEAM READY")) text = g_ready_shown;   // the podium put it back
     }
-    return g_real_settext(cs, handle, element, text);
+    return text;   // nEVR port: the runtime's hook draws it
 }
 
 // Capture point neutral again: what the script's R15NetCaptureVolumeResetNode defers,
@@ -1228,7 +1247,7 @@ void ForEachCapturePoint(bool reset_it, bool announce) {
     auto dispatch = DceFn();
     bool can_announce = dispatch != nullptr;
     auto reset = (capture_reset_fn)(g_base + CAPTURE_RESET_RVA);
-    __try {
+    EC_TRY {
         auto ref = *(component_ref_fn *)(*(uint64_t *)cs + 0x1D8);
         uint16_t n = *(uint16_t *)(cs + 0xFC);
         uint16_t *dense_to_sparse = *(uint16_t **)(cs + 0xE0);
@@ -1246,7 +1265,7 @@ void ForEachCapturePoint(bool reset_it, bool announce) {
             Log("PAUSE: capture point %u (cs %llx, handle %08x):%s%s", i, cs, handle,
                 reset_it ? " reset" : "", announce && can_announce ? " possession change raised" : "");
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         Log("PAUSE: capture point reset failed (cs %llx)", cs);
     }
 }
@@ -1268,7 +1287,7 @@ void TraceCapture() {
     uint64_t cs = g_capture_tick.cs;
     char line[512];
     int n = 0;
-    __try {
+    EC_TRY {
         float t = g_rules_total ? *(volatile float *)g_rules_total : -1.0f;
         float c = g_capture_time ? *(volatile float *)g_capture_time : -1.0f;
         n += sprintf_s(line + n, sizeof(line) - n, "T %.0f cap %.3f ticking %d", t, c, CaptureTicking() ? 1 : 0);
@@ -1287,7 +1306,7 @@ void TraceCapture() {
                                    *(float *)(teams + 4), *(float *)(teams + 12));
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         n += sprintf_s(line + n, sizeof(line) - n, " (read failed)");
     }
     if (strcmp(line, last)) {
@@ -1314,7 +1333,7 @@ void EndMatchCapture() {
         if (now - said > 3000) { said = now; Log("END MATCH: DispatchComponentEvent not callable (unexpected build)"); }
         return;
     }
-    __try {
+    EC_TRY {
         auto ref = *(component_ref_fn *)(*(uint64_t *)cs + 0x1D8);
         uint16_t n = *(uint16_t *)(cs + 0xFC);
         uint8_t *volumes = *(uint8_t **)(cs + 0x100);
@@ -1355,7 +1374,7 @@ void EndMatchCapture() {
             announced = now;
             Log("END MATCH: blue captured capture point %u", i);
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         Log("END MATCH: capture failed (cs %llx)", cs);
     }
 }
@@ -1380,7 +1399,7 @@ void EndMatchStep() {
             g_end_point ? (void *)g_end_point : (void *)"");
         if (!g_end_point) return;
     }
-    __try {
+    EC_TRY {
         *(volatile float *)(g_end_point + 0xF8) = END_POINTS;
         if (InterlockedIncrement(&g_end_written) % 20 == 1) Log("END MATCH: blue at 9999 points (%ld)", (long)g_end_written);
         // The point's unlock countdown (+DCh = lock time - (now - start +F4h), worked out every
@@ -1391,7 +1410,7 @@ void EndMatchStep() {
             *(volatile float *)(g_end_point + 0xF4) -= left;
             Log("END MATCH: point unlock countdown %.1f s cut to 0", left);
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         g_end_point = nullptr;
     }
 }
@@ -1414,8 +1433,8 @@ constexpr uint64_t kCheckpointEvents[] = {
     0xba83a3cc7939f10aull,   // nevt_all_major_checkpoint_2_reached
 };
 ULONGLONG g_last_checkpoint_event = 0;
-uint64_t g_events_logged[512];
-int g_events_logged_count = 0;
+[[maybe_unused]] uint64_t g_events_logged[512];  // nEVR port: used only with ECHOCOMBAT_LOG
+[[maybe_unused]] int g_events_logged_count = 0;
 
 // A checkpoint reached (once per 5 s, whatever said so): test 2 showed the payload's PAUSED flag
 // (the script's checkpoint hold) is the reliable sign; the script's events did not show up here.
@@ -1491,9 +1510,10 @@ uint64_t __fastcall HookedDceInner(uint64_t space, uint64_t *ev, uint32_t flags)
     if (ev) WatchEvent(space, ev[0], ev[2], ev[3]);
     return g_real_dce_inner(space, ev, flags);
 }
-uint64_t __fastcall HookedDceInner2(uint64_t space, uint64_t *ev, uint32_t flags) {
+// nEVR port: SendComponentEvent (+0x50FB60) is the runtime's detour (patch/invite_choice_hook.h); this observes it, as
+// HookedDceInner2 did before calling through.
+void ObserveComponentEvent(uint64_t space, const uint64_t *ev) {
     if (ev) WatchEvent(space, ev[0], ev[2], ev[3]);
-    return g_real_dce_inner2(space, ev, flags);
 }
 
 void __fastcall HookedDCE(uint64_t space, uint64_t event, uint64_t link, uint64_t param, uint32_t flags) {
@@ -1543,7 +1563,7 @@ void ApplyMapSwitch() {
     }
     if (!g_netgame || !MapSwitchCallable()) return;
     ULONGLONG now = GetTickCount64();
-    __try {
+    EC_TRY {
         uint64_t lobby = NetLobby(g_netgame);
         if (!lobby) return;
         if (g_server && g_map_want) {                     // step 1: the clients leave the game
@@ -1623,8 +1643,10 @@ void ApplyMapSwitch() {
                 g_real_dispatch(g_netgame, EVT_NETGAME_LOADING_MP);
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        g_map_want = g_map_announce = g_map_target = 0;
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        g_map_want = 0;                              // nEVR port: one store each (a chained volatile store is deprecated)
+        g_map_announce = 0;
+        g_map_target = 0;
         g_map_client_unload_at = 0;
         g_map_popup_at = 0;
         Log("MAP SWITCH: failed");
@@ -1648,7 +1670,7 @@ void ApplyPause() {
     if (paused != g_pause_applied && g_real_dispatch && g_netgame) {
         LONG was = g_pause_applied;
         g_pause_applied = paused;
-        __try {
+        EC_TRY {
             if (g_server) {
                 if ((was == PAUSE_OFF) != (paused == PAUSE_OFF)) {
                     g_own_cease = 1;
@@ -1667,7 +1689,7 @@ void ApplyPause() {
             // the client's point script hears the neutral point once the server's reset is here
             if (!g_server && paused != PAUSE_OFF) g_possession_poke_at = GetTickCount64() + 600;
             Log("PAUSE %d -> %d (%s)", (int)was, (int)paused, g_server ? "server" : "client");
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             g_netgame = 0;
         }
     }
@@ -1675,10 +1697,10 @@ void ApplyPause() {
     if (!g_server && paused == PAUSE_ON && g_respawn_sent < RESPAWN_TRIES && g_real_dispatch && g_netgame &&
         GetTickCount64() - g_respawn_started >= RESPAWN_AGAIN_MS[g_respawn_sent]) {
         ++g_respawn_sent;
-        __try {
+        EC_TRY {
             g_real_dispatch(g_netgame, EVT_FORCE_RESPAWN);
             Log("PAUSE: back to the war room (again, %d)", g_respawn_sent);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             g_netgame = 0;
         }
     }
@@ -1691,9 +1713,9 @@ void ApplyPause() {
         int left = 5 - (int)((GetTickCount64() - g_countdown_start) / 1000);
         if (left >= 1 && left < g_countdown_said) {
             g_countdown_said = left;
-            __try {
+            EC_TRY {
                 g_real_dispatch(g_netgame, EVT_VO_COUNTDOWN[left]);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
                 g_netgame = 0;
             }
         }
@@ -1706,10 +1728,10 @@ void ApplyPause() {
         uint8_t want_ok = g_live_since && now - g_live_since >= PAUSE_OK_DELAY_MS;
         if (want_ok != ok) {
             g_rules[PAUSE_OK] = want_ok;
-            __try {
+            EC_TRY {
                 g_real_dispatch(g_netgame, EVT_ALL_UPDATE_STATE);
                 g_real_dispatch(g_netgame, EVT_ALIGNMENT_CHANGED);  // the podium's UpdateAll: TEAM READY / PAUSE grey
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
                 g_netgame = 0;
             }
             Log("PAUSE: TEAM READY %s", want_ok ? "becomes PAUSE (1 s after the match went live)" : "is TEAM READY again");
@@ -1722,9 +1744,9 @@ void ApplyPause() {
     g_ready_shown = want;
     g_settext_own = 1;
     for (int k = 0; k < g_ready_label_count; ++k) {
-        __try {
+        EC_TRY {
             g_real_settext(g_ready_labels[k].cs, g_ready_labels[k].handle, g_ready_labels[k].element, want);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         }
     }
     g_settext_own = 0;
@@ -1734,12 +1756,12 @@ bool HookDispatch() {
     if (memcmp(g_base + SET_ALPHA_RVA, kSetAlphaHead, sizeof(kSetAlphaHead)) ||
         memcmp(g_base + SET_TEXT_RVA, kSetTextHead, sizeof(kSetTextHead))) return false;
     if (memcmp(g_base + DISPATCH_EVENT_RVA, kDispatchHead, sizeof(kDispatchHead))) return false;
-    g_real_dispatch = (dispatch_fn)(g_base + DISPATCH_EVENT_RVA);
+    // nEVR port: the runtime owns DispatchEventToSession; its function behind the detour raises events from here.
+    g_real_dispatch = (dispatch_fn)nevr_party_invite_gate::InstallDispatchObserver((std::uintptr_t)g_base, &ObserveDispatch);
+    if (!g_real_dispatch) { LogWarning("DispatchEventToSession observer not installed: the runtime's detour is not in place"); return false; }
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     g_real_setalpha = (setalpha_fn)(g_base + SET_ALPHA_RVA);
-    g_real_settext = (settext_fn)(g_base + SET_TEXT_RVA);
-    DetourAttach(&(PVOID &)g_real_dispatch, (PVOID)HookedDispatch);
     if (!memcmp(g_base + DISPATCH_COMPONENT_RVA, kDispatchComponentHead, sizeof(kDispatchComponentHead))) {
         g_real_dce = (dispatch_component_fn)(g_base + DISPATCH_COMPONENT_RVA);
         DetourAttach(&(PVOID &)g_real_dce, (PVOID)HookedDCE);
@@ -1748,13 +1770,22 @@ bool HookDispatch() {
     if (inner_hooks && !memcmp(g_base + DCE_INNER_RVA, kDceInnerHead, sizeof(kDceInnerHead)) &&
         !memcmp(g_base + DCE_INNER2_RVA, kDceInner2Head, sizeof(kDceInner2Head))) {
         g_real_dce_inner = (dce_inner_fn)(g_base + DCE_INNER_RVA);
-        g_real_dce_inner2 = (dce_inner_fn)(g_base + DCE_INNER2_RVA);
         DetourAttach(&(PVOID &)g_real_dce_inner, (PVOID)HookedDceInner);
-        DetourAttach(&(PVOID &)g_real_dce_inner2, (PVOID)HookedDceInner2);
+        // nEVR port: +0x50FB60 is the runtime's SendComponentEvent detour: observed, not detoured again.
+        if (!nevr_invite_choice_hook::InstallEventObserver((std::uintptr_t)g_base, &ObserveComponentEvent))
+            LogWarning("SendComponentEvent observer not installed: the runtime's detour is not in place");
     }
     if (!g_server) DetourAttach(&(PVOID &)g_real_setalpha, (PVOID)HookedSetAlpha);
-    if (!g_server) DetourAttach(&(PVOID &)g_real_settext, (PVOID)HookedSetText);
-    if (DetourTransactionCommit() != NO_ERROR) { g_real_dispatch = nullptr; g_real_setalpha = nullptr; g_real_settext = nullptr; return false; }
+    if (!g_server) {                                 // nEVR port: SetText is the runtime's detour: a filter on it
+        g_real_settext = (settext_fn)nevr_menu_version_label::SetTextFilter(&FilterSetText);
+        if (!g_real_settext) LogWarning("SetText filter not installed: the runtime's detour is not in place");
+    }
+    if (DetourTransactionCommit() != NO_ERROR) {
+        nevr_party_invite_gate::InstallDispatchObserver((std::uintptr_t)g_base, nullptr);   // nEVR port
+        nevr_invite_choice_hook::InstallEventObserver((std::uintptr_t)g_base, nullptr);
+        nevr_menu_version_label::SetTextFilter(nullptr);
+        g_real_dispatch = nullptr; g_real_setalpha = nullptr; g_real_settext = nullptr; return false;
+    }
     return true;
 }
 
@@ -1766,10 +1797,10 @@ void RefreshStations() {
     if (!changed || GetTickCount64() - changed < STATION_SETTLE_MS || !g_real_dispatch || !g_netgame) return;
     g_station_changed = 0;
     HideStationIcons();                              // the redraw shows the right ones again
-    __try {
+    EC_TRY {
         g_real_dispatch(g_netgame, EVT_LOBBY_SETTINGS_RECEIVED);
         Log("LOADOUTS: equipment stations told to redraw");
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         g_netgame = 0;
     }
 }
@@ -1818,7 +1849,7 @@ void StationView(uint8_t *list, uint8_t *entries, uint64_t count, uint64_t skip)
 // The list is rebuilt (and its old one freed) on the game's thread: everything here is
 // guarded. 0: unchanged, 1: shown, 2: hidden.
 int TacModsGuarded(bool server_has_it, uint64_t *now_count) {
-    __try {
+    EC_TRY {
         uint8_t *list = *(uint8_t *volatile *)(g_base + TACMOD_LIST_RVA);
         if (!list) return 0;
         uint8_t *entries = *(uint8_t *volatile *)(list + 0x08);
@@ -1844,7 +1875,7 @@ int TacModsGuarded(bool server_has_it, uint64_t *now_count) {
         *count = want;
         *now_count = want;
         return server_has_it ? 1 : 2;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
 }
@@ -1859,12 +1890,12 @@ bool MedigunSelected() {
     using weapon_fn = uint64_t(__cdecl *)();
     static weapon_fn weapon = nullptr;
     if (!weapon)
-        if (HMODULE pb = GetModuleHandleW(L"PowerBoost.dll")) weapon = (weapon_fn)GetProcAddress(pb, "PowerBoost_LocalWeapon");
+        if (::nevr_combat::powerboost::Started()) weapon = &::nevr_combat::powerboost::LocalWeapon;   // nEVR port
     return weapon && weapon() == 0x2fda8a9b57734284ull;     // CSymbol64("medigun")
 }
 
 int MedigunListGuarded(bool allowed, uint64_t *now_count) {
-    __try {
+    EC_TRY {
         uint8_t *list = *(uint8_t *volatile *)(g_base + WEAPON_LIST_RVA);
         if (!list) return 0;
         uint8_t *entries = *(uint8_t *volatile *)(list + 0x08);
@@ -1890,7 +1921,7 @@ int MedigunListGuarded(bool allowed, uint64_t *now_count) {
         *count = want;
         *now_count = want;
         return want == full ? 1 : 2;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
 }
@@ -2009,7 +2040,7 @@ bool LocalEntry(uint64_t cs, uint32_t *index, uint8_t **entry) {
 // kept, to give back), or the kept one given back once allowed. On the game's thread.
 void EnforceLocal(const char *why) {
     uint64_t cs = g_equip_cs;
-    __try {
+    EC_TRY {
         uint32_t idx;
         uint8_t *entry;
         if (!LocalEntry(cs, &idx, &entry)) return;
@@ -2024,21 +2055,23 @@ void EnforceLocal(const char *why) {
             g_real_slot[k](cs, idx, target);
             Log("LOADOUTS %s (%s): slot %d %016llx -> %016llx (%s)", LoadoutName(LoadoutMode()), why, k, cur, target, what);
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         Log("LOADOUTS (%s): the equipment system is gone", why);
         g_equip_cs = 0;
     }
 }
 
-template <int I> void __fastcall HookedSlot(uint64_t sys, uint32_t idx, uint64_t item) {
+// nEVR port: the three slot setters are the runtime's detours (patch/equipment_refire.h, #2121); this is their filter: it
+// returns the item the setter is called with, where HookedSlot<I> called through with it.
+uint64_t FilterSlot(int I, void *component, uint32_t idx, uint64_t item) {
+    const uint64_t sys = (uint64_t)component;
     const char *what = nullptr;
     uint64_t swap = ClassicSwap(I, item, &what);
     if (sys == g_equip_cs && (idx & 0xffff) == (*(volatile uint32_t *)(sys + 0x130) & 0xffff))
         g_asked[I] = swap ? item : 0;              // the local player's own pick
     if (swap) Log("slot %d of component %u set to %016llx: %s", I, idx & 0xffff, item, what);
-    g_real_slot[I](sys, idx, swap ? swap : item);
+    return swap ? swap : item;
 }
-const setslot_fn kHookedSlot[3] = {HookedSlot<0>, HookedSlot<1>, HookedSlot<2>};
 
 uint64_t __fastcall HookedEquipInit(uint64_t cs, uint64_t entry, uint64_t data, uint64_t *ref, uint32_t index) {
     uint64_t r = g_real_equip_init(cs, entry, data, ref, index);
@@ -2163,10 +2196,10 @@ void ApplyChassisRule() {
     g_chassis_replay = 1;
     for (int k = 0; k < n; ++k) {
         ChassisCall c = g_chassis_calls[k];
-        __try {
+        EC_TRY {
             g_real_load_apply(c.cs, c.player, on ? SYM_CHASSIS_S10 : c.item, c.slot, c.flag);
             ++done;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         }
     }
     g_chassis_replay = 0;
@@ -2187,16 +2220,18 @@ bool HookApplyItem() {
 }
 
 bool HookClassicSlots() {
-    for (uintptr_t rva : kSetSlotRva)
-        if (memcmp(g_base + rva, kSetSlotHead, sizeof(kSetSlotHead))) return false;
+    // nEVR port: the setters are the runtime's detours, which checked their whole bodies (equipment_refire.cpp); their
+    // first bytes are its jump now, so kSetSlotHead is not compared here. LOADOUTS rides them as a filter.
     if (memcmp(g_base + EQUIP_INIT_RVA, kEquipInitHead, sizeof(kEquipInitHead))) return false;
-    for (int i = 0; i < 3; ++i) g_real_slot[i] = (setslot_fn)(g_base + kSetSlotRva[i]);
+    for (int i = 0; i < 3; ++i) {
+        g_real_slot[i] = (setslot_fn)nevr_equipment_refire::OriginalSetter(i);
+        if (!g_real_slot[i]) { for (auto &f : g_real_slot) f = nullptr; return false; }
+    }
     g_real_equip_init = (equipinit_fn)(g_base + EQUIP_INIT_RVA);
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
-    for (int i = 0; i < 3; ++i) DetourAttach(&(PVOID &)g_real_slot[i], (PVOID)kHookedSlot[i]);
     DetourAttach(&(PVOID &)g_real_equip_init, (PVOID)HookedEquipInit);
-    if (DetourTransactionCommit() != NO_ERROR) {
+    if (DetourTransactionCommit() != NO_ERROR || !nevr_equipment_refire::SetSlotFilter(&FilterSlot)) {
         for (auto &f : g_real_slot) f = nullptr;
         g_real_equip_init = nullptr;
         return false;
@@ -2208,7 +2243,7 @@ bool HookClassicSlots() {
 uint8_t *g_ord_entries;
 uint64_t g_ord_full;
 void OrdnanceListFor() {
-    __try {
+    EC_TRY {
         uint8_t *list = *(uint8_t *volatile *)(g_base + ORDNANCE_LIST_RVA);
         if (!list) return;
         uint8_t *entries = *(uint8_t *volatile *)(list + 0x08);
@@ -2224,7 +2259,7 @@ void OrdnanceListFor() {
         uint64_t want = LoadoutMode() == LOADOUT_CLASSIC && g_ord_full > CLASSIC_ITEMS ? CLASSIC_ITEMS : g_ord_full;
         if (*count != want) *count = want;
         StationView(list, entries, want, 0);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
 }
 
@@ -2303,14 +2338,14 @@ DWORD WINAPI Tick(LPVOID) {
                 next_tacmods = now + 250;
                 UpdateGearLists();
             }
-            if (g_rules && g_rules[CLASSIC_REQUESTS] != seen_classic_requests) {   // the podium asks
+            if (g_match_control && g_rules && g_rules[CLASSIC_REQUESTS] != seen_classic_requests) {   // the podium asks (nEVR port: match control)
                 seen_classic_requests = g_rules[CLASSIC_REQUESTS];
                 uint8_t asked = g_rules[CLASSIC_WANT];
                 bool payload = g_rules[PAYLOAD_MAP] != 0;
                 uint32_t want = asked & WANT_CHASSIS ? WANT_CHASSIS | (asked & 1)
                               : asked & WANT_RATE    ? WANT_RATE | RateStep(g_rules[payload ? PSPEED_SHOWN : RATE_SHOWN], asked & 1) << 8
                               : asked & WANT_PAUSE   ? WANT_PAUSE | (asked & 1)
-                              : asked <= LOADOUT_NEW ? asked : LOADOUT_ALL;
+                              : asked <= LOADOUT_NEW ? (uint32_t)asked : (uint32_t)LOADOUT_ALL;   // nEVR port: one type
                 if ((asked & 0xF0) == WANT_CHECKPOINT) continue;               // row 4 (CHECKPOINT USED) was dropped
                 SendToServer('C', want);
                 SendToServer('C', want);                                     // once more, against loss
@@ -2319,7 +2354,7 @@ DWORD WINAPI Tick(LPVOID) {
                 else if (want & WANT_CHASSIS) Log("RULES page 2: SERIES-10 ONLY %s asked of the server", want & 1 ? "on" : "off");
                 else Log("RULES page 2: LOADOUTS %s asked of the server", LoadoutName(want));
             }
-            bool f8 = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+            bool f8 = g_match_control && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;   // nEVR port: match control
             if (f8 && !f8_was) {
                 DWORD pid = 0;
                 GetWindowThreadProcessId(GetForegroundWindow(), &pid);
@@ -2407,10 +2442,10 @@ void SawLog(const char *fmt, va_list args) {
     if (fmt && g_server && !strncmp(fmt, kSessionFmt, sizeof(kSessionFmt) - 1)) {
         va_list copy = args;
         const char *gametype = va_arg(copy, const char *);
-        __try {
+        EC_TRY {
             g_private_match = gametype && strstr(gametype, "private") ? 1 : 0;
             Log("session gametype %s: %s match", gametype ? gametype : "?", g_private_match ? "private" : "public");
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             g_private_match = -1;
         }
         return;
@@ -2577,8 +2612,18 @@ void InstallCaptureTime() {
     uint8_t jump[19] = {0xff, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90};
     uint64_t to = (uint64_t)stub;                       // jmp [rip+0] -> stub
     memcpy(jump + 6, &to, 8);
+    // nEVR port: the patch and its stub pass the write gate, or nothing is written.
+    if (!::nevr_combat::GateWrite(site, sizeof(jump), "VeilNet capture time jump (capture volume frame time)") ||
+        !::nevr_combat::GateWrite(stub, sizeof(code), "VeilNet capture time stub")) {
+        LogWarning("capture time patch refused at +0x%llx: it overlaps a range the runtime owns", (unsigned long long)CAPTURE_DT_RVA);
+        return;
+    }
     DWORD old;
-    if (!VirtualProtect(site, sizeof(jump), PAGE_EXECUTE_READWRITE, &old)) return;
+    if (!VirtualProtect(site, sizeof(jump), PAGE_EXECUTE_READWRITE, &old)) {
+        LogWarning("capture time: VirtualProtect failed (error %lu) at +0x%llx, not patched", GetLastError(),   // nEVR port
+            (unsigned long long)CAPTURE_DT_RVA);
+        return;
+    }
     memcpy(site, jump, sizeof(jump));
     VirtualProtect(site, sizeof(jump), old, &old);
     FlushInstructionCache(GetCurrentProcess(), site, sizeof(jump));
@@ -2643,7 +2688,7 @@ uint8_t *AllocNear(uint8_t *base, size_t size) {
     return nullptr;
 }
 
-void InstallPayloadSpeed() {
+[[maybe_unused]] void InstallPayloadSpeed() {  // nEVR port: never called (payload speed is parked)
     uint8_t *site = g_base + PAYLOAD_SPEED_RVA;
     if (memcmp(site, kPayloadSpeedSite, sizeof(kPayloadSpeedSite))) { Log("payload speed: unexpected echovr.exe build, not hooked"); return; }
     uint8_t *stub = AllocNear(g_base, 256);
@@ -2734,8 +2779,8 @@ bool Install(bool server) {
     g_base = (uint8_t *)GetModuleHandleW(nullptr);
     if (uint32_t mb = RulesMailboxRva(g_base)) g_rules = g_base + mb;
     RateText(g_rules ? g_rules[RATE_SHOWN] : 0);         // the POINT RATE row's text (1.0x until told)
-    InstallCaptureTime();
-    InstallPayloadSpeed();
+    if (g_match_control) InstallCaptureTime();         // nEVR port: RULES capture time and PAUSE are match control
+    // nEVR port: InstallPayloadSpeed() is never called: Cat parked the payload rule (unfinished).
     g_shared = (Shared *)(g_base + TOKEN_RVA);
     g_point = (Shared *)(g_base + POINT_TOKEN_RVA);
     g_loc = (Shared *)(g_base + LOC_TOKEN_RVA);
@@ -2751,12 +2796,13 @@ bool Install(bool server) {
     g_hooked = true;
     Log(g_server ? "server: relaying UMBRAL VEIL over the game's own connection"
                  : "client: UMBRAL VEIL goes over the game's own connection");
-    if (!g_server) Log(HookApplyItem() ? "SERIES-10 ONLY: LoadAndApplyItem / ApplyItem hooked"
+    if (!g_server && g_match_control) Log(HookApplyItem() ? "SERIES-10 ONLY: LoadAndApplyItem / ApplyItem hooked"
                                        : "SERIES-10 ONLY: unexpected echovr.exe build, chassis not swapped");
     Log(HookDispatch() ? "LOADOUTS / PAUSE: event dispatch hooked"
                                       : "LOADOUTS: unexpected echovr.exe build, stations not redrawn");
-    Log(HookClassicSlots() ? "LOADOUTS: equipment slot setters hooked"
-                           : "LOADOUTS: unexpected echovr.exe build, equipment not enforced");
+    if (g_match_control)                                // nEVR port: LOADOUTS is match control
+    Log(HookClassicSlots() ? "LOADOUTS: equipment slot setters filtered (the runtime's hooks)"
+                           : "LOADOUTS: the runtime's slot setter hooks are not in place, equipment not enforced");
     g_stop = false;
     g_tick = CreateThread(nullptr, 0, Tick, nullptr, 0, nullptr);
     return true;
@@ -2777,16 +2823,16 @@ void Uninstall() {
     }
     for (int i = 0; i < kLogHooks; ++i)
         if (g_real_log[i]) DetourDetach(&(PVOID &)g_real_log[i], (PVOID)kHookedLog[i]);
-    if (g_real_dispatch) DetourDetach(&(PVOID &)g_real_dispatch, (PVOID)HookedDispatch);
+    if (g_real_dispatch) nevr_party_invite_gate::InstallDispatchObserver((std::uintptr_t)g_base, nullptr);   // nEVR port
     if (g_real_dce) DetourDetach(&(PVOID &)g_real_dce, (PVOID)HookedDCE);
     if (g_real_dce_inner) DetourDetach(&(PVOID &)g_real_dce_inner, (PVOID)HookedDceInner);
-    if (g_real_dce_inner2) DetourDetach(&(PVOID &)g_real_dce_inner2, (PVOID)HookedDceInner2);
+    nevr_invite_choice_hook::InstallEventObserver((std::uintptr_t)g_base, nullptr);   // nEVR port
     if (!g_server && g_real_dispatch && g_real_setalpha) DetourDetach(&(PVOID &)g_real_setalpha, (PVOID)HookedSetAlpha);
-    if (!g_server && g_real_dispatch && g_real_settext) DetourDetach(&(PVOID &)g_real_settext, (PVOID)HookedSetText);
+    if (!g_server && g_real_dispatch && g_real_settext) nevr_menu_version_label::SetTextFilter(nullptr);   // nEVR port
     if (g_real_apply_item) DetourDetach(&(PVOID &)g_real_apply_item, (PVOID)HookedApplyItem);
     if (g_real_load_apply) DetourDetach(&(PVOID &)g_real_load_apply, (PVOID)HookedLoadApply);
     if (g_real_slot[0]) {
-        for (int i = 0; i < 3; ++i) DetourDetach(&(PVOID &)g_real_slot[i], (PVOID)kHookedSlot[i]);
+        nevr_equipment_refire::SetSlotFilter(nullptr);   // nEVR port
         if (g_real_equip_init) DetourDetach(&(PVOID &)g_real_equip_init, (PVOID)HookedEquipInit);
     }
     DetourTransactionCommit();
@@ -2847,53 +2893,63 @@ void InstallQuickExit() {
         0xff, 0xe0,                                       // jmp rax
     };
     uint64_t fn = (uint64_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "TerminateProcess");
-    if (!fn) return;
+    if (!fn) { LogWarning("clean exit: TerminateProcess not found, the game exits as stock"); return; }   // nEVR port
     memcpy(code + 11, &fn, 8);
     memcpy(stub, code, sizeof code);
     int32_t rel = (int32_t)(stub - (call + 5));
+    // nEVR port: the patch and its stub pass the write gate, or nothing is written.
+    if (!::nevr_combat::GateWrite(call + 1, 4, "VeilNet clean exit call rel32 (CR15Game shutdown teardown call)") ||
+        !::nevr_combat::GateWrite(stub, sizeof code, "VeilNet clean exit stub")) {
+        LogWarning("clean exit refused at +0x%llx: it overlaps a range the runtime owns; the game exits as stock",
+            (unsigned long long)TEARDOWN_CALL_RVA);
+        return;
+    }
     DWORD old;
-    if (!VirtualProtect(call, 5, PAGE_EXECUTE_READWRITE, &old)) return;
+    if (!VirtualProtect(call, 5, PAGE_EXECUTE_READWRITE, &old)) {
+        LogWarning("clean exit: VirtualProtect failed (error %lu), the game exits as stock", GetLastError());   // nEVR port
+        return;
+    }
     memcpy(call + 1, &rel, 4);
     VirtualProtect(call, 5, old, &old);
     FlushInstructionCache(GetCurrentProcess(), call, 5);
     done = true;
-    Log("clean exit: the engine's teardown is skipped once the game has shut down");
+    g_quick_exit = true;                                  // nEVR port
+    Log("clean exit: the engine's teardown is skipped once the game has shut down (+0x%llx)", (unsigned long long)TEARDOWN_CALL_RVA);
 }
 
 } // namespace
 
 // PowerBoost.dll (client): may this player's MEDIGUN work here? Only on a server that allows it.
-extern "C" __declspec(dllexport) int __cdecl VeilNet_MedigunAllowed() {
+int __cdecl VeilNet_MedigunAllowed() {
     return g_server ? (g_medigun_on_server ? 1 : 0) : (MedigunAllowedNow() ? 1 : 0);
 }
 
-ECHOCOMBAT_EXPORT NvrPluginInfo NvrPluginGetInfo(void) {
-    return EchoCombatPluginInfo("veil_net", "EchoCombat: UMBRAL VEIL, POINT, TRANSLOCATOR and OVERCHARGE between players");
+// nEVR port: the plugin's exports and DllMain are replaced by these, which runtime/combat/combat.cpp calls. The server's
+// MEDIGUN answer is combat.medigun, not PowerBoost.ini [server] medigun; the clean exit is installed only when
+// combat.clean_exit is on, where Cat installed it on every start.
+bool Start(bool is_server, bool match_control, bool medigun_server) {
+    g_match_control = match_control;
+    g_medigun_on_server = medigun_server;
+    return Install(is_server);
 }
 
-ECHOCOMBAT_EXPORT uint32_t NvrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
-
-ECHOCOMBAT_EXPORT uint32_t NvrPluginGetCapabilities(void) {
-    return NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK | NEVR_PLUGIN_CAP_HOOKS_ENGINE;
-}
-
-ECHOCOMBAT_EXPORT int NvrPluginInitEx(const NvrGameContext *ctx, const char *) {
-    PluginLogBind(ctx);
-    HMODULE self = nullptr;                              // MEDIGUN: PowerBoost.ini [server] medigun, beside the DLLs
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                       (LPCWSTR)&NvrPluginInitEx, &self);
-    char ini[MAX_PATH];
-    EchoCombatBesideDll(self, ini, sizeof(ini), "PowerBoost.ini");
-    g_medigun_on_server = GetPrivateProfileIntA("server", "medigun", 0, ini) != 0;
+bool StartCleanExit() {
     InstallQuickExit();
-    return Install(EchoCombatIsServer(ctx)) ? 0 : 1;
+    return g_quick_exit;
 }
 
-ECHOCOMBAT_EXPORT int NvrPluginInit(const NvrGameContext *ctx) { return NvrPluginInitEx(ctx, "{}"); }
+bool Started() { return g_hooked; }
 
-ECHOCOMBAT_EXPORT void NvrPluginShutdown(void) { Uninstall(); }
+bool MatchControlStarted() { return g_hooked && g_match_control; }
 
-BOOL APIENTRY DllMain(HMODULE self, DWORD reason, LPVOID) {
-    if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(self);
-    return TRUE;
-}
+bool CleanExitInstalled() { return g_quick_exit; }
+
+void Stop() { Uninstall(); }
+
+void DroneKilled(uint32_t index) { VeilNet_DroneKilled(index); }
+
+void Medigun(uint32_t id) { VeilNet_Medigun(id); }
+
+int MedigunAllowed() { return VeilNet_MedigunAllowed(); }
+
+}  // namespace nevr_combat::veilnet

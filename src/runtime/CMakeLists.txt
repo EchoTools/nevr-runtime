@@ -74,6 +74,13 @@ set(PATCHES_SOURCES
     "lifecycle/crash_report_win_common.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
+    # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
+    "combat/combat.cpp"
+    "combat/cat_compat.cpp"
+    "combat/write_gate.cpp"
+    "combat/dronefix.cpp"
+    "combat/powerboost.cpp"
+    "combat/veilnet.cpp"
     "hook/export_trace_thunk.cpp"
     "hook/export_tracer.cpp"
     "lifecycle/state_machine.cpp"
@@ -315,6 +322,13 @@ set(PATCHES_HEADERS
 )
 
 add_library(nevr_runtime SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS})
+# he_is_the_cat's three EchoCombat files (runtime/combat/combat.h), ported nearly as he wrote them. Their MSVC
+# __try/__except blocks are EC_TRY/EC_EXCEPT (cat_compat.h): a setjmp, so GCC warns (-Wclobbered) for every local that
+# is live across it. A local is stale after a fault only if the block wrote it before the fault and code after the
+# block reads it; that is not audited block by block here, and replacing EC_TRY with checked reads is listed as debt
+# for the careful path in the PR that adds this. Every other warning stays an error for these files.
+set_source_files_properties(combat/dronefix.cpp combat/powerboost.cpp combat/veilnet.cpp
+  PROPERTIES COMPILE_OPTIONS "-Wno-clobbered")
 
 target_compile_definitions(nevr_runtime PRIVATE NEVR_USE_MINHOOK PROTOBUF_STATIC_LIB)
 
@@ -1784,6 +1798,13 @@ if(BUILD_TESTING)
     target_include_directories(test_combat_write_gate PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_combat_write_gate PRIVATE GTest::gtest GTest::gtest_main nevr_core)
     gtest_discover_tests(test_combat_write_gate DISCOVERY_MODE PRE_TEST)
+
+    # The combat module's group defaults and the balance transform's merge (runtime/combat): pure headers.
+    add_executable(test_combat_settings tests/test_combat_settings.cpp)
+    set_source_files_properties(tests/test_combat_settings.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_combat_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_settings PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_combat_settings DISCOVERY_MODE PRE_TEST)
 
     # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
     add_executable(test_boot_log_routing tests/test_boot_log_routing.cpp log/boot_log_tee.cpp)

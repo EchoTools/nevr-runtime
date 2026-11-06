@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstring>
 #include <exception>
+#include <mutex>
 #include <string>
 
 #include "core/logging.h"
@@ -30,6 +31,8 @@ constexpr std::array<std::uint8_t, 35> kSendComponentEventPrologue = {
 using SendComponentEventFn = std::uint64_t (*)(std::uint64_t, std::uint64_t, std::uint64_t);
 
 SendComponentEventFn g_original = nullptr;
+std::atomic<bool> g_choicesOn{false};                 // Install ran: the wizard observer reads the events
+std::atomic<EventObserver> g_eventObserver{nullptr};
 nevr_invite_choices::State g_choices;
 std::atomic<std::uint64_t> g_seen{0};          // every call: the hook's call rate
 std::atomic<std::uint64_t> g_unresolved{0};    // wizard symbols whose sender did not resolve to a wizard page
@@ -67,6 +70,11 @@ void Observe(std::uint64_t space, std::uint64_t eventAddress) {
 
 std::uint64_t SendComponentEventHook(std::uint64_t space, std::uint64_t event, std::uint64_t flags) {
   if (event != 0) {
+    if (const EventObserver observer = g_eventObserver.load(std::memory_order_acquire)) {
+      observer(space, reinterpret_cast<const std::uint64_t*>(event));
+    }
+  }
+  if (event != 0 && g_choicesOn.load(std::memory_order_acquire)) {
     try {
       Observe(space, event);
     } catch (const std::exception& error) {
@@ -76,9 +84,42 @@ std::uint64_t SendComponentEventHook(std::uint64_t space, std::uint64_t event, s
   return g_original(space, event, flags);
 }
 
+// The one detour on SendComponentEvent, made once whichever caller asks first (Install or InstallEventObserver).
+std::once_flag g_hookOnce;
+bool g_hooked = false;
+
+// For InstallEventObserver: the detour alone (a server, where Install is not called). Returns whether it is in place.
+bool EnsureHook(std::uintptr_t gameBase) {
+  std::call_once(g_hookOnce, [gameBase] {
+    void* target = nevr::ResolveVA_Checked(gameBase, kSendComponentEventVA);
+    if (!nevr::ValidatePrologue(target, kSendComponentEventPrologue.data(), kSendComponentEventPrologue.size())) {
+      // Rule 6: the hook's name, its address, the pinned bytes and the bytes found there. An unreadable target is not read.
+      const std::string expected =
+          nevr_invite::HexBytes(kSendComponentEventPrologue.data(), kSendComponentEventPrologue.size());
+      const std::string actual = nevr_crash_recovery::IsReadableMemory(target, kSendComponentEventPrologue.size())
+                                     ? nevr_invite::HexBytes(static_cast<const std::uint8_t*>(target),
+                                                             kSendComponentEventPrologue.size())
+                                     : std::string("unreadable");
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.INVITE] SendComponentEvent hook not installed reason=prologue_mismatch va=0x%llx expected=%s actual=%s",
+          static_cast<unsigned long long>(kSendComponentEventVA), expected.c_str(), actual.c_str());
+      return;
+    }
+    g_original = reinterpret_cast<SendComponentEventFn>(target);
+    g_hooked = PatchDetour(&g_original, reinterpret_cast<PVOID>(&SendComponentEventHook), "SendComponentEvent") != FALSE;
+  });
+  return g_hooked;
+}
+
 }  // namespace
 
 nevr_invite_choices::State& Choices() { return g_choices; }
+
+bool InstallEventObserver(std::uintptr_t gameBase, EventObserver observer) {
+  if (!EnsureHook(gameBase)) return false;
+  g_eventObserver.store(observer, std::memory_order_release);
+  return true;
+}
 
 bool Install(std::uintptr_t gameBase) {
   void* target = nevr::ResolveVA_Checked(gameBase, kSendComponentEventVA);
@@ -94,8 +135,12 @@ bool Install(std::uintptr_t gameBase) {
         static_cast<unsigned long long>(kSendComponentEventVA), expected.c_str(), actual.c_str());
     return false;
   }
-  g_original = reinterpret_cast<SendComponentEventFn>(target);
-  PatchDetour(&g_original, reinterpret_cast<PVOID>(&SendComponentEventHook), "SendComponentEvent");
+  std::call_once(g_hookOnce, [target] {  // the same once as EnsureHook: one detour whoever asks first
+    g_original = reinterpret_cast<SendComponentEventFn>(target);
+    g_hooked = PatchDetour(&g_original, reinterpret_cast<PVOID>(&SendComponentEventHook), "SendComponentEvent") != FALSE;
+  });
+  if (!g_hooked) return false;
+  g_choicesOn.store(true, std::memory_order_release);
   Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] choice observer installed va=0x%llx",
       static_cast<unsigned long long>(kSendComponentEventVA));
   return true;

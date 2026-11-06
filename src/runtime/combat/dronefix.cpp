@@ -1,3 +1,9 @@
+// nEVR port: he_is_the_cat's plugin/dronefix.cpp from heisthecat31/EchoCombat (branch nevr-pack, c3ff4b54), compiled into
+// nevr-runtime.dll as part of the combat module (runtime/combat/combat.cpp) nearly as he wrote it. Every change to his
+// text is marked "nEVR port:". cat_compat.h maps Detours, EC_TRY/__except, his .ini reads and his logger onto the
+// runtime; every write to the game passes runtime/combat/write_gate.h first. __try, __except and
+// GetExceptionCode are spelled EC_TRY, EC_EXCEPT and EC_EXCEPTION_CODE (cat_compat.h).
+
 // DroneFix: keeps the cut DRONE ordnance from crashing Echo VR.
 //
 // The drone's actor carries a CR15NetFollowPlayerCS component (it orbits its owner). That system
@@ -30,17 +36,19 @@
 // the clients' shots go through it. Each bullet starts a frame's travel (at most BACK_MAX) behind the muzzle,
 // so it is first drawn there (see TickFrame). The first SHOT_LOG shots are logged.
 
+#include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
+#include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
+#include "runtime/combat/write_gate.h"  // nEVR port
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
 #include <stdarg.h>
-#include "detours.h"
-#include "nevr_plugin.h"
-#include "nevr/plugin_logger.h"
 
 // Lines go to nEVR's host log, tagged plugin=<config.yaml name> (docs/standards/logging.md, Rule 15).
+namespace nevr_combat::dronefix {  // nEVR port: one namespace per file
+constexpr const char *kCatModule = "dronefix";  // nEVR port
 NEVR_DEFINE_PLUGIN_LOG("[DroneFix]")
 
 constexpr const char *kLogName = "DroneFix";   // names the plugin in its log-cap Warning
@@ -167,10 +175,10 @@ void LogError(const char *fmt, ...) {
 }
 
 bool CallGuarded(uintptr_t cs) {
-    __try {
+    EC_TRY {
         Real_FollowUpdate(cs);
         return true;
-    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+    } EC_EXCEPT(EC_EXCEPTION_CODE() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
         return false;
     }
 }
@@ -240,11 +248,11 @@ volatile LONG g_ctx_misses = 0;
 
 void *DroneCtx(void *node, bool quiet = false) {
     void *instance = nullptr, *last = nullptr, *last_instance = nullptr;
-    __try {
+    EC_TRY {
         instance = *(void **)node;
         last = *(void *volatile *)((uint8_t *)GetModuleHandleW(nullptr) + DEATH_TOKEN_RVA + 0x20);
         if (last) last_instance = *(void **)last;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return nullptr;
     }
     if (!instance) return nullptr;
@@ -266,11 +274,11 @@ void *DroneCtx(void *node, bool quiet = false) {
 #ifdef ECHOCOMBAT_LOG
     static volatile LONG dumps = 0;
     if (!quiet && last && InterlockedIncrement(&dumps) <= 6)
-        __try {                                                // which field of a context names its drone?
+        EC_TRY {                                                // which field of a context names its drone?
             const uint64_t *c = (const uint64_t *)last, *n = (const uint64_t *)node;
             LogDebug("[test] node %p: %llx %llx %llx %llx | slot ctx %p: %llx %llx %llx %llx %llx %llx %llx %llx",
                 node, n[0], n[1], n[2], n[3], last, c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         }
 #endif
     if (!quiet && ctx != last && InterlockedIncrement(&g_ctx_misses) <= 10)
@@ -283,12 +291,12 @@ void *DroneCtx(void *node, bool quiet = false) {
 // actor's handle). A drone runs two scripts (the shared magazine script and its own), each
 // its own instance, so its parts are told apart by their actor, not by the node's script.
 uint64_t ActorOf(void *system, uint32_t index) {
-    __try {
+    EC_TRY {
         using fn = uint64_t *(__fastcall *)(void *, uint64_t *, uint32_t);
         uint64_t out[2] = {};
         fn get = (*(fn **)system)[0x1e0 / 8];
         return *get(system, out, index);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
 }
@@ -326,6 +334,7 @@ void *CtxOfActor(uint64_t actor) {
     return ctx;
 }
 bool g_is_server = false;
+bool g_drone_on = false;  // nEVR port: combat.drone; off leaves only the follow crash guard
 struct Comp { void *system; uint32_t index; };
 
 // Explosions due, run on the follow update (the game thread, outside any script node: run
@@ -363,14 +372,14 @@ void SpawnDeathFx(void *ctx) {
     using stub_fn = void(__fastcall *)(void *);
     auto slots = (stub_fn volatile *)((uint8_t *)GetModuleHandleW(nullptr) + DEATH_TOKEN_RVA + 0x28);
     if (!slots[0]) { LogWarning("drone explosion: no spawn stub (drone script unpatched?)"); return; }
-    __try {
+    EC_TRY {
         auto state = (uint64_t *)((uint8_t *)ctx + 0x18);
         uint64_t saved = *state;
         for (int i = 0; i < 2; ++i)
             if (stub_fn stub = slots[i]) { *state = 0; stub(ctx); }
         *state = saved;
         Log("drone explosion spawned (ctx %p)", ctx);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         LogWarning("drone explosion faulted and was contained (ctx %p)", ctx);
     }
 }
@@ -391,7 +400,7 @@ struct WallSound { uintptr_t wall; ULONGLONG at; };
 WallSound g_wall_sounds[8];
 
 uintptr_t WallOf(void *ctx) {                                     // the wall's script data: [[ctx]+68h]
-    __try { return *(uintptr_t *)(*(uint8_t **)ctx + 0x68); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    EC_TRY { return *(uintptr_t *)(*(uint8_t **)ctx + 0x68); } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
 bool SoundAgain(uintptr_t wall, ULONGLONG now) {                 // this wall's sound already played
@@ -406,13 +415,13 @@ bool SoundAgain(uintptr_t wall, ULONGLONG now) {                 // this wall's 
 
 void RunWallFx(void *ctx, uintptr_t stub) {
     using stub_fn = void(__fastcall *)(void *);
-    __try {
+    EC_TRY {
         auto state = (uint64_t *)((uint8_t *)ctx + 0x18);
         uint64_t saved = *state;
         *state = 0;
         ((stub_fn)stub)(ctx);
         *state = saved;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         LogWarning("NEUTRON effect faulted and was contained (ctx %p)", ctx);
     }
 }
@@ -493,13 +502,13 @@ uint8_t *DamageRecord(uint8_t *cs, uint32_t index) {
 }
 
 void Revive(uint8_t *cs, uint32_t index) {                        // health back to full, not dead
-    __try {
+    EC_TRY {
         uint8_t *rec = DamageRecord(cs, index);
         uint8_t *cd = **(uint8_t ***)(cs + 0xc0) + *(uint16_t *)rec * 0x38ull;
         *(float *)(rec + 0x20) = *(float *)(cd + 0x24);
         rec[2] &= ~4;
         Log("drone %u deployed: health %.0f", index & 0xffff, *(float *)(rec + 0x20));
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         LogWarning("drone %u deployed: its damageable record is unreadable", index & 0xffff);
     }
 }
@@ -684,14 +693,14 @@ void __fastcall Hooked_Death(void *cs, uint32_t index) {
         using killed_fn = void(__cdecl *)(uint32_t);
         static killed_fn tell = nullptr;
         if (!tell)
-            if (HMODULE veilnet = GetModuleHandleW(L"VeilNet.dll"))
-                tell = (killed_fn)GetProcAddress(veilnet, "VeilNet_DroneKilled");
+            if (::nevr_combat::veilnet::Started())                // nEVR port: was GetProcAddress(VeilNet.dll)
+                tell = &::nevr_combat::veilnet::DroneKilled;
         if (tell) tell(index & 0xffff);
         else LogWarning("drone %u: no VeilNet.dll, the clients won't see it go", index & 0xffff);
     }
 }
 
-extern "C" __declspec(dllexport) void __cdecl DroneFix_Killed(uint32_t index) {   // VeilNet: the server says
+void __cdecl DroneFix_Killed(uint32_t index) {   // VeilNet: the server says
     if (Real_Disable) Shutdown(nullptr, index, "destroyed on the server");
 }
 
@@ -709,14 +718,14 @@ void KillTestDue() {                                              // (test) kill
         }
     ReleaseSRWLockExclusive(&g_drones_lock);
     if (!cs) return;
-    __try {
+    EC_TRY {
         uint8_t *rec = DamageRecord(cs, index);
         if (rec[2] & 4) return;
         *(float *)(rec + 0x20) = 0.0f;
         rec[2] |= 4;
         Log("[test] drone %u: health 0, killing it", index & 0xffff);
         Death(cs, index);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         LogWarning("[test] killing drone %u faulted", index & 0xffff);
     }
 }
@@ -726,6 +735,7 @@ void GrabKeyDue();
 void DroneHitsDue();
 
 void __fastcall Hooked_FollowUpdate(uintptr_t cs) {
+    if (g_drone_on) {                                             // nEVR port: the drone's per-frame work, with DRONE on
     TickFrame();
     WatchDue();
     GrabKeyDue();
@@ -733,6 +743,7 @@ void __fastcall Hooked_FollowUpdate(uintptr_t cs) {
     KillTestDue();
     DeathFxDue();
     WallFxDue();
+    }
     if (*(uintptr_t *)(cs + TARGET_BODY_SYSTEM) == 0) {
         if (InterlockedIncrement(&g_skipped) == 1)
             Log("follow update skipped: no orbit target set yet (cs %p)", (void *)cs);
@@ -839,10 +850,10 @@ bool TouchLive(void *system, uint32_t index) {
 }
 
 bool SafeDisable(void *system, uint32_t index) {
-    __try {
+    EC_TRY {
         Real_Disable(system, index, 1);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
@@ -1023,7 +1034,7 @@ void WatchDue() {
     for (auto &w : g_watch) {
         if (!w.sys) continue;
         ULONGLONG age = GetTickCount64() - w.since;
-        __try {
+        EC_TRY {
             uint16_t slot = *(uint16_t *)(*(uint8_t **)(w.sys + 0xc8) + (w.index & 0xffff) * 4);
             uint8_t *rec = *(uint8_t **)(w.sys + 0xf8) + (size_t)slot * 0x298;
             Pose p;
@@ -1033,7 +1044,7 @@ void WatchDue() {
                 "hits %llu shooter (%.2f %.2f %.2f)", w.n, w.index & 0xffff, slot, age, p.p[0], p.p[1], p.p[2],
                 *(uint32_t *)(rec + 0xb4), *(float *)(rec + 0xd0), dir[0], dir[1], dir[2],
                 *(unsigned long long *)(rec + 0xd8), sp[0], sp[1], sp[2]);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             LogDebug("  bullet %d: record gone", w.n);
             w.sys = nullptr;
         }
@@ -1051,7 +1062,7 @@ void __fastcall Hooked_BulletSpawn(uint8_t *sys, uint64_t index, void *ref, floa
     Real_BulletSpawn(sys, index, ref, speed, pose, velocity, remote, flags);
     g_bullet_cs = sys;
     if (!t_velocity || !pose) return;
-    __try {
+    EC_TRY {
         uint16_t slot = *(uint16_t *)(*(uint8_t **)(sys + 0xc8) + (index & 0xffff) * 4);
         float *rec = (float *)(*(uint8_t **)(sys + 0xf8) + (size_t)slot * 0x298);
         float *shooter_vel = (float *)((uint8_t *)rec + 0x11c), *shooter_pos = (float *)((uint8_t *)rec + 0x128);
@@ -1060,7 +1071,7 @@ void __fastcall Hooked_BulletSpawn(uint8_t *sys, uint64_t index, void *ref, floa
         if (InterlockedIncrement(&g_tracers) <= 3)
             LogDebug("drone bullet tracer starts at the drone (%.2f %.2f %.2f)", pose->p[0], pose->p[1], pose->p[2]);
         WatchBullet(sys, (uint32_t)index);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
 }
 
@@ -1143,9 +1154,9 @@ void ChaseTarget(uint8_t *cs, uint32_t handle) {
 void __fastcall Hooked_Attack(uint8_t *cs, uint32_t handle) {
     g_at_cs = cs;
     Real_Attack(cs, handle);
-    __try {
+    EC_TRY {
         ChaseTarget(cs, handle);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
 }
 
@@ -1175,7 +1186,7 @@ void NoteDronePos(uint8_t *cs, uint16_t index, const float *p) {
 }
 
 void __fastcall Hooked_Impact(uint8_t *sys, uint32_t index, uint8_t *hit) {
-    __try {
+    EC_TRY {
         uint16_t slot = *(uint16_t *)(*(uint8_t **)(sys + 0xc8) + (index & 0xffff) * 4);
         uint8_t *rec = *(uint8_t **)(sys + 0xf8) + (size_t)slot * 0x298;
         Pose p;
@@ -1190,7 +1201,7 @@ void __fastcall Hooked_Impact(uint8_t *sys, uint32_t index, uint8_t *hit) {
                     dist, d.index, p.p[0], p.p[1], p.p[2], hit ? *(void **)(hit + 0x40) : nullptr,
                     hit ? *(uint16_t *)(hit + 0x48) : 0xffff, *(uint32_t *)(rec + 0xb4));
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
     Real_Impact(sys, index, hit);
 }
@@ -1200,12 +1211,12 @@ void __fastcall Hooked_WeaponHit(uint8_t *cs, uint32_t index, void *a, void *b, 
     AcquireSRWLockShared(&g_drones_lock);
     for (auto &g : g_drones) if (g.dcs == cs && (g.didx & 0xffff) == (index & 0xffff)) drone = true;
     ReleaseSRWLockShared(&g_drones_lock);
-    __try {
+    EC_TRY {
         float hp = *(float *)(DamageRecord(cs, index) + 0x20);
         // the drone, or another ordnance (they all sit near 9999: how much an arc mine takes)
         if ((drone || hp > 9000.0f) && InterlockedIncrement(&g_hit_logs) <= 120)
             LogDebug("weapon hit on %s %u: health %.1f", drone ? "drone" : "ordnance", index & 0xffff, hp);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
     Real_WeaponHit(cs, index, a, b, c, d);
 }
@@ -1276,12 +1287,12 @@ void GrabKeyDue() {                                            // (once a frame)
 int __fastcall Hooked_InZone(void *cs, uint32_t index, uint32_t hand) {
     if (t_in_pouch && g_grab_stage && hand == GRAB_HAND) {
         if (InterlockedIncrement(&g_grab_zone) == 1) {
-            __try {                                            // the pouch record: +10 magazine, +70 flags
+            EC_TRY {                                            // the pouch record: +10 magazine, +70 flags
                 uint8_t *rec = *(uint8_t **)((uint8_t *)cs + 0x100)
                                + *(uint16_t *)(*(uint8_t **)((uint8_t *)cs + 0xd0) + (index & 0xffff) * 4) * 0x180ull;
                 LogDebug("[test] pouch %u: +10 %llx, flags +70 %x, magazine system %p", index & 0xffff,
                     *(unsigned long long *)(rec + 0x10), *(uint32_t *)(rec + 0x70), *(void **)((uint8_t *)cs + 0x188));
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             }
         }
         return 1;
@@ -1307,7 +1318,7 @@ void __fastcall Hooked_PouchUpdate(void *cs) {
     if (g_grab_stage) {
         InterlockedIncrement(&g_grab_pouches);
         if (g_grab_pouches == 1)
-            __try {
+            EC_TRY {
                 auto c = (uint8_t *)cs;
                 uint8_t *rec = *(uint8_t **)(c + 0x100);                     // the first pouch
                 uint8_t *net = *(uint8_t **)(c + 0xb8);
@@ -1316,7 +1327,7 @@ void __fastcall Hooked_PouchUpdate(void *cs) {
                     "(bit 4 skips); global +7ae0 %x (bit 0x100000 skips)", *(uint16_t *)(c + 0xfc),
                     *(uint32_t *)(rec + 0x70), *(unsigned long long *)(rec + 0x10),
                     **(unsigned long long **)(net + 0x2da0), g ? *(uint32_t *)(g + 0x7ae0) : 0xffffffffu);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
                 LogDebug("[test] pouch update: unreadable");
             }
     }
@@ -1324,14 +1335,14 @@ void __fastcall Hooked_PouchUpdate(void *cs) {
     // update then skips every hand: off for the two forced updates, back after
     uint32_t *flags = nullptr, saved = 0;
     if (g_grab_stage)
-        __try {
+        EC_TRY {
             uint8_t *g = *(uint8_t **)((uint8_t *)GetModuleHandleW(nullptr) + NO_HANDS_RVA);
             if (g && (*(uint32_t *)(g + 0x7ae0) & NO_HANDS_BIT)) {
                 flags = (uint32_t *)(g + 0x7ae0);
                 saved = *flags;
                 *flags = saved & ~NO_HANDS_BIT;
             }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             flags = nullptr;
         }
     Real_PouchUpdate(cs);
@@ -1454,7 +1465,7 @@ void DroneHitsDue() {                                           // (server, once
     struct Target { float c[3]; uint8_t *dcs; uint32_t didx; uint32_t team; };
     Target targets[8];
     int nt = 0;
-    __try {
+    EC_TRY {
         // the drones' auto-target components: not enabled on the server (its list is empty
         // there), so each live drone's own (a component of its group on the auto-target system)
         uint8_t *team_sys = nullptr;
@@ -1499,7 +1510,7 @@ void DroneHitsDue() {                                           // (server, once
             memcpy(g_hd.c, targets[nt - 1].c, sizeof g_hd.c);
 #endif
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
 #ifdef ECHOCOMBAT_LOG
@@ -1514,7 +1525,7 @@ void DroneHitsDue() {                                           // (server, once
         g_hd.closest = 1e9f;
     }
 #endif
-    __try {
+    EC_TRY {
         uint16_t n = *(uint16_t *)(bs + 0xf4);
 #ifdef ECHOCOMBAT_LOG
         g_hd.bullets = n;
@@ -1566,7 +1577,7 @@ void DroneHitsDue() {                                           // (server, once
                 break;
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     }
 }
 
@@ -1647,6 +1658,13 @@ void InstallMuzzle(uintptr_t base) {
     // writable, or nothing is written.
     if (!EchoCombatBytesMatch(site, FIRE_GET_CALL_BYTES, sizeof(FIRE_GET_CALL_BYTES))) {
         LogWarning("muzzle call site changed before patching at +0x%llx -- not patched, bullets stay at the root",
+            (unsigned long long)FIRE_GET_CALL_RVA);
+        return;
+    }
+    // nEVR port: the patch and its stub pass the write gate, or nothing is written.
+    if (!::nevr_combat::GateWrite(site + 1, 4, "DroneFix muzzle call rel32 (FireBulletLocal +0x293)") ||
+        !::nevr_combat::GateWrite(stub, 16, "DroneFix muzzle stub")) {
+        LogWarning("muzzle patch refused at +0x%llx: it overlaps a range the runtime owns -- bullets stay at the root",
             (unsigned long long)FIRE_GET_CALL_RVA);
         return;
     }
@@ -1734,6 +1752,7 @@ void InstallDeathRule(uintptr_t base) {
 bool Install() {
     if (g_hooked) return true;
     auto base = (uintptr_t)GetModuleHandleW(nullptr);
+    if (g_drone_on) {                                             // nEVR port: DRONE (combat.drone)
     InstallDeathRule(base);
     InstallMuzzle(base);
     InstallChase(base);
@@ -1741,6 +1760,7 @@ bool Install() {
     InstallGrabKey(base);
     InstallEnableMirror(base);
     InstallGrabRule(base);
+    }
     auto target = (uint8_t *)(base + FOLLOW_UPDATE_RVA);
     if (memcmp(target, FOLLOW_UPDATE_BYTES, sizeof(FOLLOW_UPDATE_BYTES)) != 0) {
         LogError("prologue mismatch at +0x%llx -- wrong echovr build, not hooking", (unsigned long long)FOLLOW_UPDATE_RVA);
@@ -1756,7 +1776,7 @@ bool Install() {
         Log("hooked CR15NetFollowPlayerCS update (+0x%llx)", (unsigned long long)FOLLOW_UPDATE_RVA);
     else
         LogError("hook failed (+0x%llx)", (unsigned long long)FOLLOW_UPDATE_RVA);
-    if (rc == NO_ERROR && !g_is_server) {                         // NEUTRON's effects come here now
+    if (rc == NO_ERROR && !g_is_server && g_drone_on) {          // NEUTRON's effects come here now (nEVR port: DRONE on)
         *(volatile LONG *)(base + FX_DEFER_RVA) = 1;
         Log("NEUTRON's effects run on the follow update, not inside its wall's node");
     }
@@ -1766,24 +1786,17 @@ bool Install() {
 
 } // namespace
 
-ECHOCOMBAT_EXPORT NvrPluginInfo NvrPluginGetInfo(void) {
-    return EchoCombatPluginInfo("drone_fix", "EchoCombat: keeps the DRONE from crashing Echo VR");
+// nEVR port: the plugin's exports and DllMain are replaced by these, which runtime/combat/combat.cpp calls.
+bool Start(bool drone_on) {
+    g_drone_on = drone_on;
+    return Install();
 }
 
-ECHOCOMBAT_EXPORT uint32_t NvrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
+bool Started() { return g_hooked; }
 
-ECHOCOMBAT_EXPORT uint32_t NvrPluginGetCapabilities(void) {
-    return NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_HOOKS_ENGINE;
-}
+void Killed(uint32_t index) { DroneFix_Killed(index); }
 
-ECHOCOMBAT_EXPORT int NvrPluginInitEx(const NvrGameContext *ctx, const char *) {
-    PluginLogBind(ctx);
-    return Install() ? 0 : 1;
-}
-
-ECHOCOMBAT_EXPORT int NvrPluginInit(const NvrGameContext *ctx) { return NvrPluginInitEx(ctx, "{}"); }
-
-ECHOCOMBAT_EXPORT void NvrPluginShutdown(void) {
+void Stop() {
     if (g_fire_site) {                                      // the call back to CTransformCS::get
         DWORD old;
         VirtualProtect(g_fire_site + 1, 4, PAGE_EXECUTE_READWRITE, &old);
@@ -1811,7 +1824,4 @@ ECHOCOMBAT_EXPORT void NvrPluginShutdown(void) {
     Log("unhooked (%ld updates skipped, %ld faults contained)", g_skipped, g_faults);
 }
 
-BOOL APIENTRY DllMain(HMODULE self, DWORD reason, LPVOID) {
-    if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(self);
-    return TRUE;
-}
+}  // namespace nevr_combat::dronefix

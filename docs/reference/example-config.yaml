@@ -170,10 +170,10 @@ graphics:
   # hand_flip: true
 
 # ---------------------------------------------------------------------------
-# combat — the combat modules built into the Quest runtime
+# combat — the combat modules built into the Quest runtime, and EchoCombat built into the PC runtime
 #
-# Reader: src/quest/sentinel/quest_config.cpp (Quest), gated by src/quest/combat/combat_active.h. The PC accepts the section and reads
-# nothing from it.
+# Reader: src/quest/sentinel/quest_config.cpp (Quest), gated by src/quest/combat/combat_active.h; on PC, src/runtime/combat/combat.cpp
+# reads the EchoCombat keys below (drone ... clean_exit, settings) and nothing else of the section.
 # ---------------------------------------------------------------------------
 
 combat:
@@ -210,6 +210,22 @@ combat:
   # refresh_rate_lobby: true
   # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
   # refresh_rate_quest2_72: false
+
+  # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
+  # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard
+  # runs whatever these say. Party guns, payload speed, a client's own damage bonus and CombatBots are never on.
+  # drone: false            # DRONE. Default: true.
+  # overcharge: false       # OVERCHARGE. Default: true.
+  # medigun: true           # MEDIGUN (needs overcharge and veil; a client follows its server's answer). Default: false.
+  # veil: false             # UMBRAL VEIL and the combat net. Default: true.
+  # match_control: false    # RULES, LOADOUTS, SERIES-10, PAUSE, END MATCH, MAP SWITCH (needs veil). Default: true.
+  # balance: false          # Cat's weapon tuning merged into the stock mp_weapon_settings as it loads. Default: true.
+  # clean_exit: true        # Ends the process at the engine teardown instead of running it. Default: false.
+  # settings:               # Cat's PowerBoost.ini values, <section>.<key>, with his defaults when absent
+  #   buff:
+  #     self_damage: 2
+  #   cone:
+  #     link_window_ms: 500
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
