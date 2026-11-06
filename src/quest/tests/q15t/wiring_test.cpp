@@ -220,11 +220,11 @@ int main() {
   *reinterpret_cast<uint32_t*>(base + wp.site) = wp.site_word;
   mprotect(p, kImage, PROT_READ);
 
-  // music's own off switch (music.off in the data directory): a choice, so INFO status=off, not an ERROR (the reason `off_file` is what
+  // sensorwd's own off switch (sensorwd.off in the data directory): a choice, so INFO status=off, not an ERROR (the reason `off_file` is what
   // ReportModule tells a choice from a failure by)
   char dir[] = "/tmp/q15t_wiring_XXXXXX";
   if (mkdtemp(dir) == nullptr) std::abort();
-  const std::string off_file = std::string(dir) + "/music.off";
+  const std::string off_file = std::string(dir) + "/sensorwd.off";
   if (FILE* f = std::fopen(off_file.c_str(), "w")) std::fclose(f);
   q15t::SetModuleSwitchDirForTest(dir);
 
@@ -262,12 +262,12 @@ int main() {
   // what must have installed, been switched off, or refused, on this image
   const char* kInstalled[] = {"bvh", "wallfire", "levelname", "boosterpool"};
   const char* kArmed[] = {"gunconnect", "aibots"};
-  const char* kOff[] = {"ec", "ecfx", "music"};
+  const char* kOff[] = {"ec", "ecfx", "sensorwd"};
   struct Refusal {
     const char* module;
     const char* reason;  // the reason token the record must carry
   };
-  const Refusal kRefused[] = {{"sensorwd", "word_pin_mismatch"}, {"impactsnd", "hit_code_word_mismatch"}, {"dronekill", "engine_export_missing"},
+  const Refusal kRefused[] = {{"music", "word_pin_mismatch"}, {"impactsnd", "hit_code_word_mismatch"}, {"dronekill", "engine_export_missing"},
                               {"dronemuzzle", "needs_dronekill_shot"}, {"powerboost", "hook_failed"}, {"hudmeter", "unexpected_original"},
                               {"shieldgamma", "unexpected_original"}};
   for (const char* m : kInstalled)
