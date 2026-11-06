@@ -41,7 +41,6 @@ option(Q15T_DECALS "decals (#1619): the level decals of decals.bin drawn as dyna
 if(Q15T_WALLFIRE AND NOT Q15T_BVH)
   message(FATAL_ERROR "Q15T_WALLFIRE needs Q15T_BVH (wallfire refuses without the static BVH answering Occluded)")
 endif()
-endif()
 if(Q15T_DRONEGUARD_IDX AND NOT Q15T_DRONEGUARD)
   message(FATAL_ERROR "Q15T_DRONEGUARD_IDX needs Q15T_DRONEGUARD")
 endif()
