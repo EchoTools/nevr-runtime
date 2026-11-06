@@ -43,7 +43,7 @@ runm im_refusal_quiet        $C 's/sentinel::LogFields(LogLevel::kError, "combat
 # the scope
 runm im_scope_ignored        $C 's/^  if (scope != Scope::kCombat) {$/  if (false) {/'
 runm im_scope_inverted       $C 's/^  if (scope != Scope::kCombat) {$/  if (scope == Scope::kCombat) {/'
-runm im_scope_lobby_off      $C 's/level::Classify(game, \/\*lobby=\*\/true, \&level)/level::Classify(game, false, \&level)/'
+runm im_scope_lobby_off      $C 's/level::Classify(game, \/\*lobby=\*\/true, \&level, \/\*inFlight=\*\/true)/level::Classify(game, false, \&level, true)/'
 runm im_scope_arena_lobby    $C 's/== level::Kind::kCombatOrLobby ? Scope::kCombat : Scope::kOtherLevel;/!= level::Kind::kNone ? Scope::kCombat : Scope::kOtherLevel;/'
 runm im_scope_no_game_ok     $C 's/^  if (game == 0) return Scope::kNoGame;$//'
 runm im_scope_game_not_used  $C 's/const std::uintptr_t game = g_game.load(std::memory_order_acquire);/const std::uintptr_t game = 0x1000;/'
