@@ -414,6 +414,23 @@ void TheGatesRowReadsItsKeysFromTheResolvedSection() {
   QCHECK(policy.size() == 1U && Has(policy[0].text, "\"libs\":\"0e4384a5 1703a89b\"") && Has(policy[0].text, "\"source\":\"config\""));
   QCHECK(Has(Lines("combat_install")[0].text, "gates=installed"));
   hg::ResetForTest();
+
+  // combat.levelname false reaches the module: the bot-body gate is off for the dependency, the other two are on.
+  Process(bv::Variant::kCombat);
+  *image.Slot(hg::kPins.partySlot) = reinterpret_cast<void*>(image.Base() + hg::kPins.partyFn);
+  *image.Slot(hg::kPins.headsetSlot) = reinterpret_cast<void*>(image.Base() + hg::kPins.headsetFn);
+  hg::SetImageLookupForTest([](const char*, sentinel::ElfImage* out) {
+    *out = g_image->Elf();
+    return true;
+  });
+  nevr_quest::CombatConfig noLevelname;
+  noLevelname.levelname = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(noLevelname);
+  combat::InstallNormal();
+  const std::vector<Line> gates = Lines("combat_gates_install");
+  QCHECK(gates.size() == 1U && Has(gates[0].text, "\"gate_bots\":\"needs_levelname\"") && Has(gates[0].text, "\"gate_perm\":\"installed\"") &&
+         Has(gates[0].text, "\"gate_link\":\"installed\""));
+  hg::ResetForTest();
   image.Drop();
   Done();
 }
