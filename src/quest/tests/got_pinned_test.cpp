@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "got_hook.h"
+#include "hook_log.h"
 #include "login_title_hook.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
@@ -105,12 +106,44 @@ void CheckTarget(const LoadedElf& elf, const GotTarget& pinnedTarget, const char
   QCHECK_STATUS(ResolveSlot(elf.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
 }
 
-// The value .dynsym gives `symbol` (its link-time address), or 0 when absent.
-std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
+// The vtable and factory words the folded combat modules hook (docs/adr/0046 rule 2) are R_AARCH64_ABS64 relocations that name a
+// symbol, and a symbol a vtable lists has a word in every vtable that lists it: a target pins its word. `words` is how many ABS64
+// words name the symbol in the file (`readelf -rW`); it decides whether the symbol alone is ambiguous (several) or just unpinned (one).
+struct RealAbs64Word {
+  const char* symbol;
+  std::uint64_t vaddr;
+  std::size_t words;
+};
+constexpr RealAbs64Word kRealAbs64Words[] = {
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x362ef90, 4},
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x3630e58, 4},
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x3631278, 4},
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x36316f8, 4},
+    {"_ZN10NRadEngine8CModelCS18OnComponentEnabledENS_18SCompactPoolHandleE", 0x36495c8, 2},
+    {"_ZN10NRadEngine8CModelCS19OnComponentDisabledENS_18SCompactPoolHandleE", 0x36495d0, 2},
+    {"_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE17ConstructInstanceEPvPNS_13CPresenceInitE", 0x365ddc8, 1},
+    {"_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE14CreateInstanceEPNS_13CPresenceInitE", 0x365ddd0, 1},
+    {"_ZN10NRadEngine8NRadGame15CR15NetBulletCS8ShutdownEv", 0x36933e8, 1},
+};
+
+// The data pointers heaps points at its own values (docs/adr/0046): GLOB_DAT slots, one per symbol, no addend.
+struct RealDataSlot {
+  const char* symbol;
+  std::uint64_t vaddr;
+};
+constexpr RealDataSlot kRealDataSlots[] = {
+    {"_ZN10NRadEngine22kResourceMemoryAndroidE", 0x370b720},
+    {"_ZN10NRadEngine20kSystemMemoryAndroidE", 0x371d020},
+    {"_ZN10NRadEngine17kGpuMemoryAndroidE", 0x3710188},
+    {"_ZN10NRadEngine24kR15GameSpaceMemoryQuestE", 0x3715198},
+};
+
+// The .dynsym entry of `symbol`, or false when absent.
+bool DynamicSymbol(const LoadedElf& elf, const char* symbol, Elf64_Sym* out) {
   const std::vector<char>& b = elf.bytes;
   Elf64_Ehdr eh;
   std::memcpy(&eh, b.data(), sizeof(eh));
-  if (eh.e_shoff == 0 || eh.e_shoff + eh.e_shnum * sizeof(Elf64_Shdr) > b.size()) return 0;
+  if (eh.e_shoff == 0 || eh.e_shoff + eh.e_shnum * sizeof(Elf64_Shdr) > b.size()) return false;
   std::vector<Elf64_Shdr> sh(eh.e_shnum);
   std::memcpy(sh.data(), b.data() + eh.e_shoff, eh.e_shnum * sizeof(Elf64_Shdr));
   for (const Elf64_Shdr& s : sh) {
@@ -120,11 +153,123 @@ std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
       Elf64_Sym sym;
       std::memcpy(&sym, b.data() + s.sh_offset + off, sizeof(sym));
       if (sym.st_name < str.sh_size && std::strcmp(b.data() + str.sh_offset + sym.st_name, symbol) == 0) {
-        return sym.st_value;
+        *out = sym;
+        return true;
       }
     }
   }
-  return 0;
+  return false;
+}
+
+// The value .dynsym gives `symbol` (its link-time address), or 0 when absent.
+std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
+  Elf64_Sym sym;
+  return DynamicSymbol(elf, symbol, &sym) ? sym.st_value : 0;
+}
+
+const LoadedElf* g_dataSlotElf = nullptr;
+bool DataSlotLookup(const char*, ElfImage* out) {
+  *out = g_dataSlotElf->image;
+  return true;
+}
+void QuietSink(LogLevel, const char*) {}
+std::uint64_t g_ourHeapValue = 0;
+
+// The heap descriptors the first data-slot user writes over are DATA objects, and the file puts them inside its executable
+// PT_LOAD (.rodata is in the first segment, which is R E): an address cannot tell them from code, the symbol the relocation names
+// can. The slot's value is the symbol's address, as the loader's GLOB_DAT relocation stores it. The write runs on the private copy
+// this test laid out in memory (nothing is written to the host file): the whole of GotDataSlot::Write against the real layout, its
+// build-ID check, the symbol type, the segment, the registry and the compare-and-swap, then Restore.
+void CheckRealDataSlotWrite(const LoadedElf& elf, const RealDataSlot& d) {
+  Elf64_Sym sym;
+  if (!DynamicSymbol(elf, d.symbol, &sym)) {
+    std::fprintf(stderr, "libr15 %s: not in .dynsym\n", d.symbol);
+    QCHECK(false);
+    return;
+  }
+  QCHECK(ELF64_ST_TYPE(sym.st_info) == STT_OBJECT);
+  bool inExecutableLoad = false;
+  for (const Elf64_Phdr& ph : elf.phdrs) {
+    if (ph.p_type == PT_LOAD && (ph.p_flags & PF_X) != 0 && sym.st_value >= ph.p_vaddr && sym.st_value - ph.p_vaddr < ph.p_memsz) {
+      inExecutableLoad = true;
+    }
+  }
+  QCHECK(inExecutableLoad);
+  const GotTarget target{pinned::kLibR15, d.symbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, d.vaddr};
+  const SlotResolution at = ResolveSlot(elf.image, target, kAarch64Relocs);
+  QCHECK_STATUS(at.status, GotStatus::kOk);
+  QCHECK(at.symbolType == STT_OBJECT && !at.inExecutableSegment);
+
+  void* const gameValue = reinterpret_cast<void*>(elf.image.base + sym.st_value);
+  void** const slot = reinterpret_cast<void**>(elf.image.base + d.vaddr);
+  *slot = gameValue;  // what the loader stores for a GLOB_DAT relocation
+  g_dataSlotElf = &elf;
+  const RelocNumbers* const previousRelocs = SetRelocNumbers(&kAarch64Relocs);  // the image is AArch64, the host is not
+  const LogSink previous = SetLogSink(&QuietSink);
+  GotDataSlot data;
+  QCHECK_STATUS(data.Write(target, gameValue, &g_ourHeapValue, &DataSlotLookup), GotStatus::kOk);
+  QCHECK(*slot == &g_ourHeapValue);
+  QCHECK_STATUS(data.Restore(), GotStatus::kOk);
+  QCHECK(*slot == gameValue);
+  SetLogSink(previous);
+  SetRelocNumbers(previousRelocs);
+}
+
+// libr15's one GLOB_DAT that names a NOTYPE symbol is `getentropy` (a weak reference nothing defines at link time): the loader fills
+// its slot with libc's function, so it holds a code pointer although its symbol has no type. Write refuses it: only an OBJECT is
+// data. (libpnsrad, libpnsradmatchmaking and libpnsovr each have the same one.)
+void CheckRealNotypeSlotIsRefused(const LoadedElf& elf) {
+  constexpr std::uint64_t kGetentropySlot = 0x370abf0;
+  Elf64_Sym sym;
+  QCHECK(DynamicSymbol(elf, "getentropy", &sym));
+  QCHECK(ELF64_ST_TYPE(sym.st_info) == STT_NOTYPE && sym.st_shndx == SHN_UNDEF);
+  const GotTarget target{pinned::kLibR15, "getentropy", RelocKind::kGlobDat, pinned::kLibR15StockBuildId, kGetentropySlot};
+  const SlotResolution at = ResolveSlot(elf.image, target, kAarch64Relocs);
+  QCHECK_STATUS(at.status, GotStatus::kOk);
+  QCHECK(at.symbolType == STT_NOTYPE);
+  void** const slot = reinterpret_cast<void**>(elf.image.base + kGetentropySlot);
+  void* const libcFunction = reinterpret_cast<void*>(0x7f0000001230ULL);  // what the loader stores: an address in libc
+  *slot = libcFunction;
+  g_dataSlotElf = &elf;
+  const RelocNumbers* const previousRelocs = SetRelocNumbers(&kAarch64Relocs);
+  const LogSink previous = SetLogSink(&QuietSink);
+  GotDataSlot data;
+  QCHECK_STATUS(data.Write(target, libcFunction, &g_ourHeapValue, &DataSlotLookup), GotStatus::kExecutableMapping);
+  QCHECK(!data.written() && *slot == libcFunction);
+  SetLogSink(previous);
+  SetRelocNumbers(previousRelocs);
+}
+
+void CheckRealAbs64Words(const LoadedElf& elf) {
+  for (const RealAbs64Word& w : kRealAbs64Words) {
+    const GotTarget pinned{pinned::kLibR15, w.symbol, RelocKind::kAbs64, pinned::kLibR15StockBuildId, w.vaddr};
+    const SlotResolution at = ResolveSlot(elf.image, pinned, kAarch64Relocs);
+    if (at.status != GotStatus::kOk) std::fprintf(stderr, "target: libr15 ABS64 word %#llx of %s\n", static_cast<unsigned long long>(w.vaddr), w.symbol);
+    QCHECK_STATUS(at.status, GotStatus::kOk);
+    QCHECK(at.slotVaddr == w.vaddr);
+    QCHECK(at.restoreReadOnly);  // vtables and factory tables are in PT_GNU_RELRO
+
+    // The symbol alone does not name a word: several are ambiguous, one still needs the pin.
+    GotTarget unpinned = pinned;
+    unpinned.slotVaddr = std::nullopt;
+    QCHECK_STATUS(ResolveSlot(elf.image, unpinned, kAarch64Relocs).status,
+                  w.words > 1 ? GotStatus::kAmbiguousRelocation : GotStatus::kPinRequired);
+
+    // A pin one slot over, and a pin on each other symbol's word, are refused: neither is a relocation that names this symbol.
+    GotTarget shifted = pinned;
+    shifted.slotVaddr = w.vaddr + 8;
+    QCHECK_STATUS(ResolveSlot(elf.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+    for (const RealAbs64Word& other : kRealAbs64Words) {
+      if (std::strcmp(other.symbol, w.symbol) == 0) continue;
+      GotTarget onOther = pinned;
+      onOther.slotVaddr = other.vaddr;
+      QCHECK_STATUS(ResolveSlot(elf.image, onOther, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+    }
+  }
+  for (const RealDataSlot& d : kRealDataSlots) {
+    CheckTarget(elf, GotTarget{pinned::kLibR15, d.symbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, d.vaddr}, d.symbol);
+    CheckRealDataSlotWrite(elf, d);
+  }
 }
 
 // True when a NOBITS section (.bss) of the file holds [vaddr, vaddr + size).
@@ -349,6 +494,8 @@ int main(int argc, char** argv) {
       QCHECK(false);
     }
   }
+  CheckRealAbs64Words(r15);
+  CheckRealNotypeSlotIsRefused(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
