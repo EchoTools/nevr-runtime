@@ -228,3 +228,65 @@ TEST(CollapseFormatRules, ALineThatIsNotTheFormatHasNoRule) {
   const std::string cut = "realdiv(1a) divide by zero";
   EXPECT_EQ(Match(cut.c_str(), static_cast<int>(cut.size()) - 1), nullptr) << "the tail must be inside len";
 }
+
+/* #2214: a line the default suppress list deletes is still counted, under the entry that matched it. The filter hands the limiter the
+ * entry's text and never lets the line through, so a flood under one entry reads as that entry in the summary. */
+namespace {
+
+int CountFlood(RateLimiter& rl, const char* entry, int n, uint64_t now, std::string& summaries) {
+  int passed = 0;
+  char summary[256];
+  for (int i = 0; i < n; i++) {
+    const std::string line = std::string("[EVR] ") + entry + " " + std::to_string(i);
+    if (rl.CountSuppressed(entry, line.c_str(), static_cast<int>(line.size()), now, summary, sizeof(summary)) ==
+        RateVerdict::Emit) {
+      passed++;
+    }
+    summaries += summary;
+  }
+  return passed;
+}
+
+}  // namespace
+
+TEST(RateLimiterSuppressed, AFloodUnderOneEntryIsReportedByThatEntryAndNothingPasses) {
+  RateLimiter rl;
+  char summary[256];
+  std::string during;
+  EXPECT_EQ(CountFlood(rl, "Is Bot", 500, 100, during), 0) << "a suppressed line is never let through";
+  EXPECT_EQ(during, "");
+  ASSERT_TRUE(rl.TakePending(106, false, summary, sizeof(summary)));
+  EXPECT_STREQ(summary, "[NEVR.LOGFILTER] suppressed count=500 window_s=6 entry=\"Is Bot\"");
+  EXPECT_FALSE(rl.TakePending(106, false, summary, sizeof(summary)));
+}
+
+TEST(RateLimiterSuppressed, EachEntryHasItsOwnCount) {
+  RateLimiter rl;
+  std::string ignored;
+  CountFlood(rl, "Is Bot", 40, 100, ignored);
+  CountFlood(rl, "Is Ghost", 7, 100, ignored);
+  char summary[256];
+  std::string all;
+  while (rl.TakePending(110, false, summary, sizeof(summary))) all += std::string(summary) + "\n";
+  EXPECT_NE(all.find("suppressed count=40 window_s=10 entry=\"Is Bot\""), std::string::npos) << all;
+  EXPECT_NE(all.find("suppressed count=7 window_s=10 entry=\"Is Ghost\""), std::string::npos) << all;
+}
+
+TEST(RateLimiterSuppressed, ASuppressedEntryDoesNotUseUpAPassedLinesBudget) {
+  RateLimiter rl;
+  std::string ignored;
+  CountFlood(rl, "Is Bot", 100, 100, ignored);
+  char summary[256];
+  const std::string same = "[EVR] Is Bot 1";
+  EXPECT_EQ(rl.Check(same.c_str(), static_cast<int>(same.size()), 100, summary, sizeof(summary)), RateVerdict::Emit);
+}
+
+TEST(RateLimiterSuppressed, AWindowThatClosesOnALaterCountReportsTheOldOne) {
+  RateLimiter rl;
+  char summary[256];
+  std::string ignored;
+  CountFlood(rl, "Is Bot", 9, 100, ignored);
+  const std::string line = "[EVR] Is Bot again";
+  rl.CountSuppressed("Is Bot", line.c_str(), static_cast<int>(line.size()), 106, summary, sizeof(summary));
+  EXPECT_STREQ(summary, "[NEVR.LOGFILTER] suppressed count=9 window_s=6 entry=\"Is Bot\"");
+}

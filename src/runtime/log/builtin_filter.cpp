@@ -628,19 +628,21 @@ static bool IsNevrLine(const char* message) {
  *
  * min_level and suppress_channels still apply to NEVR lines — those are level and
  * emitter decisions, not content guesses. */
-static bool ShouldSuppress(const char* message, uint32_t level) {
+static bool ShouldSuppress(const char* message, uint32_t level, const char** entry) {
+    *entry = nullptr;
     if (!g_config.valid) return false;
 
     if (level < g_config.min_level && level != LOG_LEVEL_RAW) return true;
 
+    /* #2214: a deletion by a list entry names the entry, so the limiter counts it under that entry. */
     for (const auto& ch : g_config.suppress_channels) {
-        if (std::strncmp(message, ch.c_str(), ch.size()) == 0) return true;
+        if (std::strncmp(message, ch.c_str(), ch.size()) == 0) { *entry = ch.c_str(); return true; }
     }
 
     if (IsNevrLine(message)) return false;  // N77
 
     for (const auto& pat : g_config.suppress_patterns) {
-        if (std::strstr(message, pat.c_str()) != nullptr) return true;
+        if (std::strstr(message, pat.c_str()) != nullptr) { *entry = pat.c_str(); return true; }
     }
 
     return false;
@@ -957,8 +959,17 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
      * game lines only (a line the runtime writes is never demoted here, N77). */
     if (nevr_bridge_line::IsBridgeConnectionLine(buf)) level = LOG_LEVEL_DEBUG;
 
-    if (ShouldSuppress(buf, level)) {
+    const char* entry = nullptr;
+    if (ShouldSuppress(buf, level, &entry)) {
         g_suppressed_count++;
+        if (entry != nullptr) {
+            /* #2214: counted under its list entry; the summary is the N78 limiter's, written when the window closes. */
+            char summary[256];
+            g_rate.CountSuppressed(entry, buf, len, GetEpochSeconds(), summary, sizeof(summary));
+            if (summary[0] != '\0') {
+                EmitLine(LOG_LEVEL_INFO, summary, static_cast<int>(std::strlen(summary)));
+            }
+        }
         return;
     }
 
