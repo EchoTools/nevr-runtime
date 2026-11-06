@@ -630,7 +630,10 @@ void FMemSet(void* a) { E.mem_sets.push_back(a); }
 
 
 // The game's functions the slots hold
-__attribute__((noinline)) void FakeUpdateMovement(uintptr_t) { ++E.real_updates; }
+__attribute__((noinline)) void FakeUpdateMovement(uintptr_t) {
+  ++E.real_updates;
+  E.calls.push_back("real_update");
+}
 __attribute__((noinline)) uint64_t FakeShutdown(uint64_t self) {
   ++E.real_shutdowns;
   E.calls.push_back("real_shutdown");
@@ -782,6 +785,8 @@ void TestInstall(const std::string& dir) {
   MakeSys(&s1, kDyson);
   update(s1.addr());
   CHECK(E.real_updates == 1, "the real update ran");
+  CHECK(Index("real_update") == 0 && Index("alloc") > Index("real_update"), "the game's update runs first, the nodes are made after it");
+  CHECK(kInertRecheckMs == 1000, "a game space that does not act has its level read once a second");
   CHECK(E.nodes_used == 2, "one node for the dyson group, one for the war room group: %d", E.nodes_used);
   CHECK(E.init_max_vtx == 4 && E.init_max_idx == 12 && E.init_index_type == 2 && E.init_material == 0x2222,
         "Initialize of the last node: material %llx vtx %llu idx %llu type %u (the 1-quad war room group)",
@@ -957,10 +962,24 @@ void TestInstall(const std::string& dir) {
   std::remove((dir + "/decals.off").c_str());
   std::remove((dir + "/decalflipu.on").c_str());
   std::remove((dir + "/decalflipv.on").c_str());
-  // the keys flip the uv
+  // the keys flip the uv: the last group drawn is the war room's one quad (MakeQuad(50): corner i has u = 53 + 10 i, v = 54 + 10 i)
   Fresh();
   Install(table.c_str(), &api, true, true, true);
   CHECK(CountLines("flip_u=1") == 1 && CountLines("flip_v=1") == 1, "the flip keys are in the table line");
+  Sys sf;
+  MakeSys(&sf, kDyson);
+  UpdateSlot()(sf.addr());
+  CHECK(E.vbuf[0].uv[0] == 73.0f && E.vbuf[0].uv[1] == 74.0f, "u and v flipped: corner 0 holds corner 2's uv, got %f %f", E.vbuf[0].uv[0], E.vbuf[0].uv[1]);
+  Fresh();
+  Install(table.c_str(), &api, true, true, false);
+  MakeSys(&sf, kDyson);
+  UpdateSlot()(sf.addr());
+  CHECK(E.vbuf[0].uv[0] == 63.0f && E.vbuf[0].uv[1] == 64.0f, "u flipped: corner 0 holds corner 1's uv, got %f %f", E.vbuf[0].uv[0], E.vbuf[0].uv[1]);
+  Fresh();
+  Install(table.c_str(), &api, true, false, true);
+  MakeSys(&sf, kDyson);
+  UpdateSlot()(sf.addr());
+  CHECK(E.vbuf[0].uv[0] == 83.0f && E.vbuf[0].uv[1] == 84.0f, "v flipped: corner 0 holds corner 3's uv, got %f %f", E.vbuf[0].uv[0], E.vbuf[0].uv[1]);
   dc::ResetForTest();
 }
 

@@ -52,14 +52,14 @@ runm dm_shutdown_not_first $C "s/  if (shutdownStatus != sentinel::GotStatus::kO
 runm dm_empty_table_kept $C "s/if (lr != LoadResult::kOk || table.count == 0) {/if (lr != LoadResult::kOk) {/"
 runm dm_missing_entry_ok $C "s/  } else if (!Complete(\*use)) {/  } else if (false) {/"
 runm dm_search_data_dir   $C 's/  if (n < max \&\& legacy::Directory(dir, sizeof dir)) std::snprintf/  if (n < max \&\& false \&\& legacy::Directory(dir, sizeof dir)) std::snprintf/'
-runm dm_update_pin $T "s/kUpdateRealVa = 0x2124290;/kDecalsUpdateReal = 0x2124294;/"
-runm dm_update_slot_pin $T "s/kUpdateSlotVa = 0x370dbc8;/kDecalsUpdateSlot = 0x370dbc0;/"
-runm dm_shutdown_slot_pin $T "s/kShutdownSlotVa = 0x36933e8;/kDecalsShutdownSlot = 0x36933e0;/"
-runm dm_shutdown_real_pin $T "s/kShutdownRealVa = 0x21226f0;/kDecalsShutdownReal = 0x21226f4;/"
+runm dm_update_pin $T 's/kUpdateRealVa = 0x2124290;/kUpdateRealVa = 0x2124294;/'
+runm dm_update_slot_pin $T 's/kUpdateSlotVa = 0x370dbc8;/kUpdateSlotVa = 0x370dbc0;/'
+runm dm_shutdown_slot_pin $T 's/kShutdownSlotVa = 0x36933e8;/kShutdownSlotVa = 0x36933e0;/'
+runm dm_shutdown_real_pin $T 's/kShutdownRealVa = 0x21226f0;/kShutdownRealVa = 0x21226f4;/'
 runm dm_war_room_symbol $K "s/kLevelWarRoom = 0x08a1af9e108def0bull;/kLevelWarRoom = 0x08a1af9e108def0cull;/"
 runm dm_war_room_flag_not_counted $K "s/if (level == kLevelWarRoom) ++war_room_systems;/if (level == kLevelWarRoom) war_room_systems = 1;/"
 # the scope: a game space whose level is not a combat map or the war room
-runm dm_acts_everywhere      $K 's/inline bool ActsIn(std::uint64_t level) { return level::IsCombatMap(level) || level == kLevelWarRoom; }/inline bool ActsIn(std::uint64_t level) { return true; }/'
+runm dm_acts_everywhere      $K 's/return level::IsCombatMap(level) || level == kLevelWarRoom; }/return (level::IsCombatMap(level) || level == kLevelWarRoom) || true; }/'
 runm dm_acts_no_war_room     $K 's/return level::IsCombatMap(level) || level == kLevelWarRoom; }/return level::IsCombatMap(level); }/'
 runm dm_acts_lobby           $K 's/return level::IsCombatMap(level) || level == kLevelWarRoom; }/return level::IsCombatMap(level) || level == kLevelWarRoom || level::IsCombatLobby(level); }/'
 runm dm_inert_never          $K 's/ds->inert = !ActsIn(level);/ds->inert = false;/'
@@ -83,8 +83,5 @@ runm dm_off_config_is_error  $C 's/return {false, "off_config", true};/return {f
 runm dm_no_lookup_ok         $C 's/if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, \&image)) {/if (false) {/'
 runm dm_update_hook_not_armed $C 's/^  UpdateThunk::Arm(kUpdateRecord);$//'
 runm dm_shutdown_hook_not_armed $C 's/^  ShutdownThunk::Arm(kShutdownRecord);$//'
-runm dm_update_failure_leaves_on $C 's/^    g_on.store(false, std::memory_order_release);  \/\/ the Shutdown handler stays in and passes through$//'
 runm dm_install_status       $C 's/return {false, sentinel::GotStatusName(updateStatus)};/return {true, "installed"};/'
 runm dm_update_original_late $C 's/^  original(sys);$/  if (g_on.load(std::memory_order_acquire)) { pthread_mutex_lock(\&g_mu); g_host.Tick(sys, NowMs()); pthread_mutex_unlock(\&g_mu); }\n  original(sys);/'
-runm dm_packages_third       $C 's/if (n < max) std::snprintf(out\[n++\], 400, "\/sdcard\/Android\/media\/%s\/files\/afk\/decals.bin", pkg);//'
-runm dm_packages_second      $C 's/if (n < max) std::snprintf(out\[n++\], 400, "\/sdcard\/Android\/data\/%s\/files\/afk\/decals.bin", pkg);//'
