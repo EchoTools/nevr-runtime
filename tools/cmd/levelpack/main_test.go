@@ -559,6 +559,68 @@ func TestASetTheRuntimesRegistryWouldRefuseIsNotKeptAndItsProblemsAreListed(t *t
 	}
 }
 
+func TestMovedStockRecordsAreReadWithOneDecodePerChunk(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	w.addChunk(stockA, stockB) // both moved into one chunk of the export; the game holds both in one chunk
+	w.addChunk(levelRoot, archive)
+	r := w.run()
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	// Each moved record is read from the export's chunk and then the game's: two chunks, each decoded once.
+	if r.rep.StockCopiesDropped != 2 || r.rep.PackageFramesDecoded != 2 {
+		t.Errorf("stock_copies_dropped = %d, package_frames_decoded = %d, want 2 and 2", r.rep.StockCopiesDropped,
+			r.rep.PackageFramesDecoded)
+	}
+}
+
+func TestTheReaderKeepsTheChunksItReadLast(t *testing.T) {
+	t.Parallel()
+	var pkg []byte
+	var cs []chunk
+	for i := 0; i <= keptChunks; i++ {
+		plain := fill(16, byte('a'+i))
+		frame := rawFrame(plain)
+		cs = append(cs, chunk{Package: 0, FileOffset: uint32(len(pkg)), Compressed: uint32(len(frame)), Decompressed: uint32(len(plain))})
+		pkg = append(pkg, frame...)
+	}
+	path := filepath.Join(t.TempDir(), "package_0")
+	if err := os.WriteFile(path, pkg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dec, err := newDecoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dec.Close()
+	rd := &reader{dec: dec, files: map[string]*os.File{}}
+	defer func() {
+		for _, f := range rd.files {
+			f.Close()
+		}
+	}()
+	// Fill the reader, read the first chunk again, then one it does not hold: the first was read last, so another
+	// chunk makes room, and the first is still held.
+	order := []int{}
+	for i := 0; i < keptChunks; i++ {
+		order = append(order, i)
+	}
+	order = append(order, 0, keptChunks, 0)
+	for _, i := range order {
+		p, err := rd.plain(path, cs[i])
+		if err != nil || len(p) != 16 || p[0] != byte('a'+i) {
+			t.Fatalf("chunk %d: %v %q", i, err, p)
+		}
+	}
+	if rd.decodes != keptChunks+1 {
+		t.Errorf("decodes = %d, want %d (each chunk once)", rd.decodes, keptChunks+1)
+	}
+	if len(rd.kept) != keptChunks {
+		t.Errorf("the reader holds %d decoded chunks, want at most %d", len(rd.kept), keptChunks)
+	}
+}
+
 func TestAnOverrideOfAnArchiveIsRefused(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)

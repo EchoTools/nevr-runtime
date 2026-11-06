@@ -168,6 +168,7 @@ type report struct {
 	ChunksCopied         int      `json:"chunks_copied"`
 	ChunksRepacked       int      `json:"chunks_repacked"`
 	Overrides            int      `json:"overrides"`
+	PackageFramesDecoded int      `json:"package_frames_decoded"`
 	FramesDecoded        int      `json:"frames_decoded"`
 	RecordsCompared      int      `json:"records_compared"`
 	StockUnchanged       int      `json:"stock_unchanged"`
@@ -178,13 +179,24 @@ type report struct {
 	Problems             []string `json:"problems,omitempty"`
 }
 
+// decoded is one chunk of a package, decompressed.
+type decoded struct {
+	path  string
+	c     chunk
+	plain []byte
+}
+
+// keptChunks is how many decoded chunks the reader keeps. A moved stock record is read from the export's package and
+// then from the game's, and moved records come chunk after chunk, several in one: the two chunks they alternate
+// between both stay decoded.
+const keptChunks = 4
+
 type reader struct {
 	dec   *zstd.Decoder
 	files map[string]*os.File
-	// The last chunk decoded: a repack's moved stock records come chunk after chunk, several in one.
-	lastPath  string
-	lastChunk chunk
-	lastPlain []byte
+	kept  []decoded // most recently used first, at most keptChunks
+	// decodes counts the package frames decoded, for the report.
+	decodes int
 }
 
 func (r *reader) open(path string) (*os.File, error) {
@@ -201,8 +213,12 @@ func (r *reader) open(path string) (*os.File, error) {
 
 // plain returns chunk c of the package at path, decompressed.
 func (r *reader) plain(path string, c chunk) ([]byte, error) {
-	if r.lastPlain != nil && r.lastPath == path && r.lastChunk == c {
-		return r.lastPlain, nil
+	for i, d := range r.kept {
+		if d.path == path && d.c == c {
+			copy(r.kept[1:i+1], r.kept[:i])
+			r.kept[0] = d
+			return d.plain, nil
+		}
 	}
 	f, err := r.open(path)
 	if err != nil {
@@ -219,7 +235,11 @@ func (r *reader) plain(path string, c chunk) ([]byte, error) {
 	if uint32(len(out)) != c.Decompressed {
 		return nil, fmt.Errorf("%s at %d: the frame decodes to %d bytes, the manifest says %d", path, c.FileOffset, len(out), c.Decompressed)
 	}
-	r.lastPath, r.lastChunk, r.lastPlain = path, c, out
+	r.decodes++
+	r.kept = append([]decoded{{path, c, out}}, r.kept...)
+	if len(r.kept) > keptChunks {
+		r.kept = r.kept[:keptChunks]
+	}
 	return out, nil
 }
 
@@ -469,6 +489,7 @@ func pack(o options, log *slog.Logger) (*report, error) {
 	rep.Records = len(plan.Records)
 	rep.Chunks = len(plan.Chunks)
 	rep.Overrides = len(plan.Overrides)
+	rep.PackageFramesDecoded = rd.decodes
 	rep.FramesDecoded = frames
 	rep.RecordsCompared = compared
 	js, _ := json.MarshalIndent(rep, "", "  ")
