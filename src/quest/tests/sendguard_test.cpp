@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "quest/combat/combat_install.h"
+#include "quest/combat/combat_active.h"
 #include "quest/combat/sendguard.h"
 #include "quest/tests/test_check.h"
 
@@ -595,6 +596,37 @@ void TheCountsAreWrittenSoAHeadsetRunGivesTheRate() {
   Finish();
 }
 
+// The process end as the sentinel reaches it: combat::NoteProcessEnd over the shipped table writes the final line once when the wrapper is
+// installed and the normal step ran, and nothing before the normal step ran or in a plain release.
+void TheShippedProcessEndWritesTheFinalLineOnce() {
+  QCHECK(InstallFresh().installed);
+  const std::uint64_t pass[3] = {kNoLevel, 1, 2};
+  CallThroughSlot(g_ctx, pass);
+  combat::ResetForTest();
+  combat::ResetInstallForTest();
+  combat::SetVariant(nevr_quest::build_variant::Variant::kCombat);
+  combat::Resolve(/*devBuild=*/false, /*forceAsked=*/false);
+  g_lines.clear();
+  combat::NoteProcessEnd();
+  QCHECK(LinesOf("combat_sendguard_stats").empty());  // the normal step has not run
+  combat::InstallNormal();                           // the host has no libr15: the row refuses, the hook installed above stays
+  g_lines.clear();
+  combat::NoteProcessEnd();
+  QCHECK(LinesOf("combat_sendguard_stats").size() == 1);
+  QCHECK(Has(LinesOf("combat_sendguard_stats")[0].text, "\"passed\":1,\"dropped\":0,\"final\":1"));
+  combat::ResetForTest();
+  combat::ResetInstallForTest();
+  combat::SetVariant(nevr_quest::build_variant::Variant::kNone);
+  combat::Resolve(false, false);
+  combat::InstallNormal();
+  g_lines.clear();
+  combat::NoteProcessEnd();
+  QCHECK(LinesOf("combat_sendguard_stats").empty());  // a plain release
+  combat::ResetForTest();
+  combat::ResetInstallForTest();
+  Finish();
+}
+
 // The table's row finds the old switch file where the plugin kept it: below the sentinel's files folder, in q15t.
 void TheProductionPathLooksWhereThePluginKeptItsSwitchFile() {
   char tmpl[] = "/tmp/nevr-sendguard-files-XXXXXX";
@@ -640,6 +672,7 @@ int main() {
   TheTablesRowFollowsItsSwitch();
   TheCountsAreWrittenSoAHeadsetRunGivesTheRate();
   TheProductionPathLooksWhereThePluginKeptItsSwitchFile();
+  TheShippedProcessEndWritesTheFinalLineOnce();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "sendguard_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

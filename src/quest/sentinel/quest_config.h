@@ -161,6 +161,11 @@ struct CombatConfig {
   CombatForceChoice force;
   CombatSwitch heaps;   // `combat.heaps`: the four heap sizes (combat/heaps.h)
   CombatSwitch memsys;  // `combat.memsys`: the render-target pool and, with it, the System heap size (combat/memsys.h)
+  CombatSwitch refreshRate{true, Source::kAbsent};            // `combat.refresh_rate`: the level rate rule (off: the game's rate always)
+  CombatSwitch refreshRateLobby{false, Source::kAbsent};      // `combat.refresh_rate_lobby`: the combat lobby asks for the level rate too (default OFF: arena shares the lobby levels)
+  CombatSwitch refreshRateQuest2At72{true, Source::kAbsent};  // `combat.refresh_rate_quest2_72`: a Quest 2's level rate is 72, not 90 (combat/refresh_rate.h)
+  CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
+  CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
   CombatSwitch sendguard;  // `combat.sendguard`: a send to a game space that is not loaded is dropped, not faulted (combat/sendguard.h)
 };
 

@@ -7,7 +7,6 @@
 
 #include "aibots.h"
 #include "bvh.h"
-#include "clock_levels.h"
 #include "custctx.h"
 #include "decals.h"
 #include "meshstep.h"
@@ -28,11 +27,8 @@
 #include "boosterpool.h"
 #include "music.h"
 #include "peerclamp.h"
-#include "pfx.h"
-#include "plugin_args.h"
 #include "plugin_log.h"
 #include "powerboost.h"
-#include "refresh_rate.h"
 #include "script_redirect.h"
 #include "sensorwd.h"
 #include "shaderstep.h"
@@ -45,13 +41,6 @@
 
 #ifndef Q15T_BUILD_ID
 #define Q15T_BUILD_ID "b243509c08ce677aeb95fa348016949b3fc45230"
-#endif
-// ELF vaddr of the game library's JUMP_SLOT for vrapi_SetClockLevels (readelf -rW of the pinned build).
-#ifndef Q15T_SLOT_SETCLOCKLEVELS
-#define Q15T_SLOT_SETCLOCKLEVELS 0x36c75f0ULL
-#endif
-#ifndef Q15T_SLOT_SETDISPLAYREFRESHRATE
-#define Q15T_SLOT_SETDISPLAYREFRESHRATE 0x36ec5f0ULL
 #endif
 // Gameplay gates (off in the perf arms): the party-permissions expression and the bot-body chooser stop treating the
 // Quest headset as a reason to refuse combat / pick the arena bot. ELF vaddrs of the pinned build (readelf -rW, disassembly).
@@ -91,9 +80,6 @@
 #ifndef Q15T_BOTS_FN_LO
 #define Q15T_BOTS_FN_LO 0x124dd38ULL
 #define Q15T_BOTS_FN_HI 0x124e004ULL
-#endif
-#ifndef Q15T_HZ_MATCH90
-#define Q15T_HZ_MATCH90 0
 #endif
 // T-26: a new profile starts with the gun on the right hand, once per user id (weapon_arm.h). Plugin behaviour.
 #ifndef Q15T_T26
@@ -172,9 +158,6 @@
 #ifndef Q15T_DECALS  // the level decals of decals.bin as dynamic-mesh quads (decals.h); after impactsnd: it chains on the Shutdown wrapper
 #define Q15T_DECALS 0
 #endif
-#ifndef Q15T_PFX  // the particle-effect renderer's gate, read by the pfx* modules (pfx.h, issue #1631)
-#define Q15T_PFX 0
-#endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
 #ifndef Q15T_SLOT_EXCLUSIVEUPDATEGAME
@@ -200,7 +183,7 @@ NEVR_DECLARE_SUPPORTED_BUILD_IDS(Q15T_BUILD_ID);
 extern "C" __attribute__((used, retain, visibility("hidden"))) const char q15t_config_marker[] =
     "q15t-config ec_words=[" Q15T_MARK_EC_WORDS "] ecfx_default_on=" Q15T_MARK_STR(Q15T_ECFX_DEFAULT_ON)
     " gate_link=" Q15T_MARK_STR(Q15T_GATE_LINK) " gate_perm=" Q15T_MARK_STR(Q15T_GATE_PERM) " gate_bots=" Q15T_MARK_STR(Q15T_GATE_BOTS)
-    " levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " hz_level=" Q15T_MARK_STR(Q15T_HZ_MATCH90) " build_id=" Q15T_BUILD_ID;
+    " levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " build_id=" Q15T_BUILD_ID;
 
 namespace {
 
@@ -290,9 +273,6 @@ constexpr char kCompiledModules[] =
 #if Q15T_DECALS
     "decals "
 #endif
-#if Q15T_PFX
-    "pfx "
-#endif
     "";
 
 // One structured line per module install: INFO when it installed, INFO when its own off switch kept it out (reason "off" or
@@ -356,14 +336,12 @@ constexpr char kCompiledModules[] =
 }  // namespace
 
 NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
-  return {"q15t", "display clock and refresh-rate witnesses and candidates", 0, 2, 0};
+  return {"q15t", "combat gameplay modules", 0, 2, 0};
 }
 NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
 NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
-  // The clock raise (args {clock: raise}) is a runtime switch the loader cannot see here, and it is not gameplay: it asks the headset
-  // for higher CPU/GPU levels (performance and heat, no physics, weapons, movement or rules). It is not part of the declaration.
-  if (Q15T_HZ_MATCH90 || Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
+  if (Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
   // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), impactsnd (sound ids), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and
   // shieldgamma (what is drawn), ecfx (rides ec).
@@ -383,35 +361,22 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   return caps;
 }
 
-NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* args_json) {
+NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*args_json*/) {
   if (ctx == nullptr) return 1;
   using namespace q15t;
   if (Covers(ctx, offsetof(NevrGameContext, log) + sizeof(ctx->log))) SetLogContext(ctx);
   const bool covers_id = Covers(ctx, offsetof(NevrGameContext, game_build_id) + sizeof(ctx->game_build_id));
   const bool quest = (ctx->flags & NEVR_HOST_PLATFORM_QUEST) != 0;
   const char* id = covers_id && ctx->game_build_id != nullptr ? ctx->game_build_id : "";
-  // args {clock: raise} turns the clock raise on; absent or "log" keeps the log-only default; anything else stays log-only, loudly.
-  char clock_arg[24];
-  const bool has_clock_arg = ArgString(args_json, "clock", clock_arg, sizeof(clock_arg));
-  const bool raise = has_clock_arg && std::strcmp(clock_arg, "raise") == 0;
-  SetClockRaise(raise);
-  const NevrLogField start[] = {{"game_build_id", id}, {"pinned", Q15T_BUILD_ID},
-                                {"clock_candidate", raise ? "1" : "0"}, {"clock_arg", clock_arg},
-                                {"hz_mode", Q15T_HZ_MATCH90 ? "level" : "witness"}, {"t26", Q15T_T26 ? "1" : "0"},
+  const NevrLogField start[] = {{"game_build_id", id}, {"pinned", Q15T_BUILD_ID}, {"t26", Q15T_T26 ? "1" : "0"},
                                 {"modules", kCompiledModules}};
-  Log(NEVR_LOG_INFO, "q15t init", start, 7);
-  if (has_clock_arg && !raise && std::strcmp(clock_arg, "log") != 0) {
-    const NevrLogField bad[] = {{"key", "clock"}, {"value", clock_arg}, {"effective", "log"}};
-    Log(NEVR_LOG_WARNING, "unknown clock arg: staying log-only (use raise or log)", bad, 3);
-  }
+  Log(NEVR_LOG_INFO, "q15t init", start, 4);
   if (!quest || !covers_id || std::strcmp(id, Q15T_BUILD_ID) != 0) {
-    Log(NEVR_LOG_WARNING, "refused: not the pinned game build", start, 7);
+    Log(NEVR_LOG_WARNING, "refused: not the pinned game build", start, 4);
     return 0;  // loaded, nothing installed
   }
   RegisterScriptRedirect(ctx);  // the combat libraries (#1737): all or nothing; plugin init runs after the first hooked dlopen
                                // returns a handle (script_redirect.h, Register), so loads before that are not redirected
-  Report("vrapi_SetClockLevels", InstallClockLevels(ctx->base_addr, Q15T_SLOT_SETCLOCKLEVELS));
-  Report("vrapi_SetDisplayRefreshRate", InstallRefreshRate(ctx->base_addr, Q15T_SLOT_SETDISPLAYREFRESHRATE));
   // The three combat gates (combat_gates.h): what is built, less what a kill file turns off; the bot-body gate only with levelname.
   [[maybe_unused]] const CombatGatesChoice gates =
       DecideCombatGates({Q15T_GATE_PERM != 0, Q15T_GATE_BOTS != 0, Q15T_LEVELNAME != 0}, ReadCombatGatesOffFiles());
@@ -421,9 +386,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* arg
                               {"levelname", gates.levelname ? "on" : "off"},   {"levelname_reason", gates.levelname ? "installing" : gates.levelname_reason}};
     Log(NEVR_LOG_INFO, "q15t_combat_gates_install: which combat gates this run installs (a Quest gets combat permission, the combat bot body, the full global_mp)", f, 6);
   }
-#if Q15T_PFX
-  InitPfxGate();  // the gate every pfx* module reads; logs its own "pfx gate" line (pfx.h)
-#endif
   bool want_tick = false;
   [[maybe_unused]] const std::uintptr_t base = ctx->base_addr;
   // The modules, in an order the docs fix: wallfire after bvh; ecfx, powerboost's net tick and dronekill's kill feed after ec;
@@ -562,9 +524,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* arg
 #if Q15T_AIBOTS
   InitAiBots(base, AiBotsFns{});
   ReportModuleTick("aibots", AddGameTick(&AiBotsTick), &want_tick);
-#endif
-#if Q15T_HZ_MATCH90
-  AddModuleTick("refresh_rate", &RefreshMatchTick, &want_tick);
 #endif
 #if Q15T_T26
   {

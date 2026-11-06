@@ -13,6 +13,10 @@
  * The original's result is returned as it came, and the render_config line reports the levels applied (cpu_level, gpu_level)
  * and VrApi's answer (clock_result), so a run says whether the headset granted what was asked.
  *
+ * Owner (ADR 0039). This file owns the clock levels: no other module hooks vrapi_SetClockLevels or changes the levels (the q15t
+ * plugin's clock raise is `diagnostics.clock_levels_override: true`, ADR 0046 rule 3). Its inputs are the game's request and that switch,
+ * both named on the `clock_levels_arm` line and the render_config line.
+ *
  * Choose() is lock-free and does not log, allocate or throw: it runs inside a hook (callback_thunk.h). Arm() logs one
  * `clock_levels_arm` line with the switch value, whatever it is; the switch is `diagnostics.clock_levels_override` in
  * config.yaml and defaults to off.

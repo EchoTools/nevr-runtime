@@ -1280,7 +1280,7 @@ def library_bytes(name: str) -> bytes:
     """A synthetic library as the build writes it: random bytes, the same on every run, and the config marker the real library
     carries (src/quest/plugins/q15t/src/plugin.cpp) with the libr15 build ID it was built for."""
     marker = (f"q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 "
-              f"hz_level=1 build_id={BUILD_ID}").encode()
+              f"build_id={BUILD_ID}").encode()
     return random.Random(name).randbytes(4096) + b"\0" + marker + b"\0"
 
 

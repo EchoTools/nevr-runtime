@@ -90,12 +90,15 @@ runm ci_row_end_null       $CI "s/&SendguardNormal, \&sendguard::NoteEnd}/\&Send
 runm ci_row_early          $CI "s/Module{\"sendguard\", nullptr, \&SendguardNormal,/Module{\"sendguard\", \&SendguardNormal, nullptr,/" quest-host-combat combat_install_test
 runm ci_config_line_value  $CI "s/{\"sendguard\", config.sendguard.on ? 1 : 0},/{\"sendguard\", 1},/" quest-host-combat combat_install_test
 QC=src/quest/sentinel/quest_config.cpp
-runm qc_default_off        $QC "s/const bool on = ReadBool(cfg, key, true, r);/const bool on = ReadBool(cfg, key, false, r);/" quest-host-shared quest_config_test
+runm qc_default_off        $QC "s/const bool on = ReadBool(cfg, key, fallback, r);/const bool on = ReadBool(cfg, key, !fallback, r);/" quest-host-shared quest_config_test
 runm qc_key_typo           $QC "s/kCombatSendguardKey = \"combat.sendguard\";/kCombatSendguardKey = \"combat.sendguards\";/" quest-host-shared quest_config_test
 runm qc_not_assigned       $QC "s/  r.config.combat.sendguard = ReadCombatSwitch(cfg, kCombatSendguardKey, r);/  (void)ReadCombatSwitch(cfg, kCombatSendguardKey, r);/" quest-host-shared quest_config_test
 runm qc_source_absent      $QC "s/return {on, given ? Source::kFile : Source::kAbsent};/return {on, given ? Source::kAbsent : Source::kAbsent};/" quest-host-shared quest_config_test
 runm qc_no_kind_warn       $QC "s/  if (!cfg.GetString(key) \&\& cfg.Kind(key) != nevr::NodeKind::kAbsent) {/  if (false) {/" quest-host-shared quest_config_test
-runm nc_known_key          src/core/nevr_config.cpp "s/{\"combat\", {\"force\", \"heaps\", \"memsys\", \"sendguard\"}},/{\"combat\", {\"force\", \"heaps\", \"memsys\"}},/" quest-host-shared quest_config_test
+runm nc_known_key          src/core/nevr_config.cpp "s/{\"combat\", {\"force\", \"heaps\", \"memsys\", \"sendguard\", /{\"combat\", {\"force\", \"heaps\", \"memsys\", /" quest-host-shared quest_config_test
 runm ci_row_ignores_switch  $CI "s/sendguard::Install(g_config.sendguard.on)/sendguard::Install(true)/" quest-host-combat combat_install_test
 runm ci_off_counts_heaps    src/quest/combat/heaps.cpp "s/    return {false, \"off\", true};/    return {false, \"off\", false};/" quest-host-combat combat_install_test
 runm ci_off_counts_memsys   src/quest/combat/memsys.cpp "s/    return {false, \"off\", true};/    return {false, \"off\", false};/" quest-host-combat heap_step_test
+# the process end over the shipped table: called, and called once
+runm ci_end_call_dropped   $CI "s/^void NoteProcessEnd() noexcept { RunEnd(kModules.data(), kModules.size()); }/void NoteProcessEnd() noexcept {}/" quest-host-combat sendguard_test
+runm ci_end_call_twice     $CI "s/^void NoteProcessEnd() noexcept { RunEnd(kModules.data(), kModules.size()); }/void NoteProcessEnd() noexcept { RunEnd(kModules.data(), kModules.size()); RunEnd(kModules.data(), kModules.size()); }/" quest-host-combat sendguard_test

@@ -10,6 +10,11 @@
 # build and program when the mutated file is shared (combat_install.cpp, quest_config.cpp: `quest-host-shared quest_config_test`); the
 # default is this group's build and `<module>_test`.
 #
+# Build jobs. Every build the script starts is capped at CMAKE_BUILD_PARALLEL_LEVEL jobs (default 4; ninja's own default is the core count
+# plus two, and a full-tree compile at that width was oom-killed in the 6 GiB build slice). The final rebuild covers only the targets the
+# run built (not the whole tree), and each build prints its peak memory (`peak_mib`, the build's own cgroup `memory.peak`, or `n/a` when
+# the host exposes none), so a run shows what it cost.
+#
 # Run it in the build slice, from the repository root's checkout, after `just test-quest-combat` has configured the tree:
 #   systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G src/quest/combat/mutants.sh sendguard
 set -uo pipefail
@@ -22,8 +27,32 @@ list="$here/mutants.d/$module.sh"
 build="$root/build/quest-host-combat"
 [ -f "$build/build.ninja" ] || { echo "mutants.sh: $build is not configured; run 'just test-quest-combat $module' first" >&2; exit 2; }
 backup="$(mktemp -d "${NEVR_WORK_ROOT:-$HOME/src/nevr-runtime-work}/combat-mutants.XXXXXX")" || exit 2
-restored=1
 current=""
+jobs="${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+case "$jobs" in ''|*[!0-9]*|0) jobs=4 ;; esac
+touched=""  # the "<dir> <target>" pairs this run built, one per line
+# build_target <dir under build/> <target> <log>: a capped build in a scope of its own, so its memory is measured on its own. Prints the
+# build's peak memory on stdout as `peak_mib=<n>` (`n/a` without a memory.peak file) and returns the build's status.
+build_target() {
+  local dir="$1" target="$2" log="$3"
+  local inner='cmake --build "$1" --target "$2" -j "$3" >"$4" 2>&1; rc=$?
+cg=/sys/fs/cgroup$(sed -n "s/^0:://p" /proc/self/cgroup)/memory.peak
+if [ -r "$cg" ]; then echo "peak_mib=$(( $(cat "$cg") / 1048576 ))" >>"$4"; else echo "peak_mib=n/a" >>"$4"; fi
+exit $rc'
+  if command -v systemd-run >/dev/null 2>&1 && systemd-run --user --scope --quiet -p MemoryAccounting=yes -- true 2>/dev/null; then
+    systemd-run --user --scope --quiet --slice=nevr-builds.slice -p MemoryAccounting=yes -- bash -c "$inner" _ "$root/build/$dir" "$target" "$jobs" "$log"
+  else
+    bash -c "$inner" _ "$root/build/$dir" "$target" "$jobs" "$log"
+  fi
+}
+maxpeak=0
+note_peak() {
+  local v
+  v="$(grep -o 'peak_mib=[0-9]*' "$1" | tail -n 1 | cut -d= -f2)"
+  [ -n "$v" ] && [ "$v" -gt "$maxpeak" ] && maxpeak="$v"
+  return 0
+}
+note_touched() { case "$touched" in *"|$1 $2|"*) ;; *) touched="$touched|$1 $2|" ;; esac; }
 restore() {
   if [ -n "$current" ] && [ -f "$backup/file" ]; then
     cp -p -- "$backup/file" "$root/$current" && touch -- "$root/$current"
@@ -50,7 +79,10 @@ runm() {
     return 0
   fi
   touch -- "$root/$file"
-  if ! cmake --build "$bdir" --target "$target" >"$backup/build.log" 2>&1; then
+  note_touched "$dir" "$target"
+  build_target "$dir" "$target" "$backup/build.log"; build_rc=$?
+  note_peak "$backup/build.log"
+  if [ "$build_rc" -ne 0 ]; then
     echo "MUTANT $name: NOT A KILL, it does not compile"
     notkill=$((notkill + 1))
   elif ctest --test-dir "$bdir" -R "^${target}\$" >"$backup/test.log" 2>&1; then
@@ -66,11 +98,18 @@ runm() {
 source "$list"
 # Rebuild the restored tree once, so the build directories are left as the checkout has it; a failure here is a failure of the run.
 rebuilt=0
-for d in quest-host-combat quest-host-shared; do
-  [ -f "$root/build/$d/build.ninja" ] || continue
-  cmake --build "$root/build/$d" >/dev/null 2>&1 || { echo "mutants.sh $module: the rebuild of $d after the run failed" >&2; rebuilt=1; }
+for pair in $(printf '%s' "$touched" | tr '|' '\n' | tr ' ' ',' | grep ,); do
+  d="${pair%,*}"; t="${pair#*,}"
+  build_target "$d" "$t" "$backup/rebuild.log"; rb=$?
+  note_peak "$backup/rebuild.log"
+  if [ "$rb" -eq 0 ]; then
+    echo "mutants.sh $module: rebuilt $d $t, $(grep -o 'peak_mib=.*' "$backup/rebuild.log" | tail -n 1)"
+  else
+    echo "mutants.sh $module: the rebuild of $d $t after the run failed, $(grep -o 'peak_mib=.*' "$backup/rebuild.log" | tail -n 1)" >&2
+    rebuilt=1
+  fi
 done
-echo "mutants.sh $module: $killed killed, $survived survived, $notkill not a kill"
+echo "mutants.sh $module: $killed killed, $survived survived, $notkill not a kill; build jobs $jobs, largest build peak ${maxpeak} MiB"
 if [ $((killed + survived + notkill)) -eq 0 ]; then
   echo "mutants.sh $module: no mutant ran (the filter '${only}' matches none, or the list is empty)" >&2
   exit 2

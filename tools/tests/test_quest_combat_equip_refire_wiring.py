@@ -75,10 +75,11 @@ class TheRuleIsTheSharedHeaders(unittest.TestCase):
 class TheModuleIsWired(unittest.TestCase):
     def test_the_combat_target_builds_it(self):
         cmake = read("src/quest/combat/CMakeLists.txt")
-        library = re.search(r"add_library\(nevr_quest_combat STATIC([^)]*)\)", cmake)
-        self.assertIsNotNone(library)
-        sources = set(library.group(1).split())
-        self.assertLessEqual({"combat_active.cpp", "combat_install.cpp", "equip_refire.cpp", "match_tags.cpp"}, sources)
+        block = re.search(r"add_library\(nevr_quest_combat STATIC([^)]*)\)", cmake)
+        self.assertIsNotNone(block)
+        # The list grows with each module that moves in, so each file is checked, not the whole list.
+        for name in ("combat_active.cpp", "combat_install.cpp", "equip_refire.cpp", "match_tags.cpp"):
+            self.assertIn(name, block.group(1).split())
 
     def test_the_budget_has_its_six_handles(self):
         self.assertIn('{"combat/equip_refire.cpp", 6, 0}', read("src/quest/sentinel/hook_budget.h"))

@@ -385,8 +385,6 @@ Every branch an agent creates has a documented deletion point from the moment it
 
 ## Build Commands
 
-Heavy recipes (`verify`, the full builds and full test suites; the list is in `tools/tests/test_heavy_guard.py`) do not run from a Claude session: run the one test you changed instead.
-
 ```sh
 just                    # Show available recipes
 just configure          # Configure CMake only
@@ -406,8 +404,6 @@ just generate-certs     # Generate CA hierarchy for code signing
 ```
 
 ### Quest APK
-
-Run these from your own shell. `tools/heavy_guard.py` refuses them inside a Claude Code session.
 
 Set these in the shell, never as arguments (a passphrase on the command line shows in `ps`):
 
@@ -1297,44 +1293,6 @@ All dependencies declared in one file at the project root:
 - The OpenXR loader is a system dependency or vendored, not from vcpkg.
 - Oculus SDK headers are replicated from the target binary — not a
   vcpkg dependency.
-
----
-
-## Justfile
-
-Every project MUST have a `justfile` with at minimum:
-
-```makefile
-default_preset := if os() == "linux" { "mingw-release" } else { "release" }
-preset := env("PRESET", default_preset)
-
-default:
-    @just --list
-
-configure: _vcpkg-mingw
-    @cmake --preset {{ preset }}
-
-build: configure
-    @cmake --build --preset {{ preset }}
-
-verbose-build: configure
-    cmake --build --preset {{ preset }}
-
-dist: build
-    @cmake --build --preset {{ preset }} --target dist
-
-clean:
-    rm -rf build/ dist/
-
-_vcpkg-mingw:
-    #!/usr/bin/env bash
-    if [[ "{{ preset }}" == mingw-* ]]; then
-        cd "$VCPKG_ROOT"
-        ./vcpkg install --triplet=x64-mingw-static \
-            --x-manifest-root="{{ justfile_directory() }}" \
-            --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed"
-    fi
-```
 
 ---
 

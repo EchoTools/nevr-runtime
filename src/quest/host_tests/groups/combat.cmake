@@ -31,7 +31,8 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # not_started record, and the `combat_config` line.
 nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
-      src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp)
+      src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp)
 # Sendguard (#2179): the real wrapper through the thunk's entry into the one JUMP_SLOT of a libr15 image built in memory, against models of
 # CSendEventNode::Enter and the GameSpaceMT lookup and the node's context. A send to a game space that is not loaded dropped and the
 # stock function not called, a loaded one passed with its own arguments, no level and each null link left to the stock function, the drop
@@ -40,8 +41,9 @@ nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} 
 # and the old switch file's Warning, and the table's row reading the resolved configuration. got_pinned_test resolves the relocation
 # and the pins in the real libr15.
 nevr_ht_test(sendguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/sendguard_test.cpp src/quest/combat/sendguard.cpp src/quest/combat/combat_install.cpp
-      src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp)
+  SRC src/quest/tests/sendguard_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+      src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
 # CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
 # 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
@@ -72,4 +74,38 @@ nevr_ht_test(memsys_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ciden
 # the variants the gate allows (and a development build forced on), and each shipped row reads its switch.
 nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
-      src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp)
+      src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
+      src/quest/combat/sendguard.cpp)
+# The game-thread tick (#2172, docs/adr/0046; docs/adr/0039): the real thunk and GotHook against the JUMP_SLOT of a libr15 image built in
+# memory. The callback table, the vptr check (read once per object, not once per frame), and who owns the slot on each variant (plain release,
+# combat, q15t) in both orders against the q15t plugin's own tick code (game_tick.cpp, import_hook.cpp, got_swap.cpp, linked from the plugin):
+# the plugin first and then the runner's normal step leaves nothing to refuse (`unexpected_original` is never logged); the reverse order is the
+# plugin's refusal.
+nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  INCS src/quest/plugins/q15t/src
+  SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+      src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
+      src/quest/combat/sendguard.cpp src/quest/plugins/q15t/src/game_tick.cpp src/quest/plugins/q15t/src/import_hook.cpp src/quest/plugins/q15t/src/got_swap.cpp
+      src/quest/plugins/q15t/src/safe_read.cpp src/quest/plugins/q15t/src/plugin_log.cpp)
+# The refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3): the decision, the keys, the session from the arena to a combat map and back
+# through the tick, the lobbies arena players use, the legacy kill files, the release case (the game's own rate, nothing logged or registered).
+nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
+      src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp
+      src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp)
+# What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
+# combat lobby and an Echo Arena level, each id checked against the CSymbol64 of its name; the lobbies arena players use are no class; an arena
+# level wins; a gamespace of another game, an absurd count and an unreadable game are no level.
+nevr_ht_test(combat_level_test GROUP combat ${_cf} TIMEOUT 120
+  SRC src/quest/tests/combat_level_test.cpp src/quest/combat/combat_level.cpp)
+# The particle-renderer gate (#2188, #1631; docs/adr/0046): the decision from `combat.pfx`, the gate that reads off until the install step has
+# decided, the install line, the plugin's `pfx.off` file not read and warned about, and the scope: open on a combat map only, shut on every Echo Arena
+# level, lobby and transition, against a fake CR15Game read by process_vm_readv. The module installs no hook and registers no tick.
+nevr_ht_test(pfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
+  SRC src/quest/tests/pfx_test.cpp src/quest/combat/pfx.cpp src/quest/combat/combat_level.cpp)
+# The event-effect decision (#2188, #1642; docs/adr/0046): the switch, the six ids, the non-event pass-through, one line per decision up to the cap,
+# the plugin's `pfxtev.off` file not read and warned about, and the scope: an event id is created on a combat map only.
+nevr_ht_test(pfxtev_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
+  SRC src/quest/tests/pfxtev_test.cpp src/quest/combat/pfxtev.cpp)
