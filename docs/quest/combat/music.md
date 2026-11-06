@@ -94,7 +94,7 @@ the last three and the arena music plays as stock.
   Source kotorvr's echoquest-combat music:51-52: `kGotPostSoundEvent = 0x36d76e8`, `kFnPostSoundEvent = 0x2549264`.
 - Disassembly (read-only query): `functions`: `2649264 | PostSoundEvent | 564` (ELF 0x2549264 = VA - 0x100000).
 - Bank ids: copied as literals from the source `:54-58` (2 Play `0x2f22c384 0xb1b06cfb`, 2 Stop `0xde586538 0x2acba759`, 20 SetState
-  `0x045d3c23 ... 0xffae8834`); a script compared the 24 values in `src/quest/plugins/q15t/src/music.h` with those source lines: equal (24 = 24, same order).
+  `0x045d3c23 ... 0xffae8834`); a script compared the 24 values in `src/quest/combat/music.h` with those source lines: equal (24 = 24, same order).
   The test restates them independently.
 - Argument layout, instructions of `PostSoundEvent` as read from the disassembly (VA, word):
 ```

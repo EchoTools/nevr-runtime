@@ -122,7 +122,7 @@ On a combat APK built at a tag after this unit, or a development APK repacked wi
 
 ## Code-word pins (34, all read in the disassembly)
 
-`kSensorWdWordPins` in `src/quest/plugins/q15t/src/sensorwd.h`: 11 words of `OnComponentEnabled` (`0x15b127c..0x15b12a4`), 11 of `OnComponentDisabled`
+`kWords` in `src/quest/combat/sensorwd_targets.h`: 11 words of `OnComponentEnabled` (`0x15b127c..0x15b12a4`), 11 of `OnComponentDisabled`
 (`0x15b12a8..0x15b12d0`), the first 12 of `SendComponentEventGlobal` (`0x180735c..0x1807388`). The source pins none; these are an addition, the code the
 wrappers' reads and argument handling were derived from. Checked with `CheckWordPins` (SafeRead at `base + vaddr`) before any word is swapped. A
 pin that fails refuses the module with one ERROR line `sensorwd refused: code word pin mismatch, nothing changed pin=0x<ELF vaddr> found=0x<word or

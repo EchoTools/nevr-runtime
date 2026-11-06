@@ -65,6 +65,8 @@ runm mu_install_line_level $S "s/  LogInstall(sentinel::LogLevel::kInfo, \"on\",
 runm mu_refusal_level   $S "s/    LogInstall(sentinel::LogLevel::kError, \"refused\", reason, status, kRefusedMsg);/    LogInstall(sentinel::LogLevel::kInfo, \"refused\", reason, status, kRefusedMsg);/"
 # the switch's key and row (shared files)
 runm mu_ci_row_ignores_key $CI "s/music::Install(g_config.music.on)/music::Install(true)/" quest-host-combat combat_install_test
-runm mu_ci_switch_line_on $CI "s/{{\"module\", module}, {\"key\", key}, {\"on\", choice.on ? 1 : 0},/{{\"module\", module}, {\"key\", key}, {\"on\", 1},/" quest-host-combat combat_install_test
 runm mu_qc_default_off  src/quest/sentinel/quest_config.cpp "s/  r.config.combat.music = ReadCombatSwitch(cfg, kCombatMusicKey, r);/  r.config.combat.music = ReadCombatSwitch(cfg, kCombatMusicKey, r, false);/" quest-host-shared quest_config_test
 runm mu_qc_not_read     src/quest/sentinel/quest_config.cpp "s/  r.config.combat.music = ReadCombatSwitch(cfg, kCombatMusicKey, r);/  r.config.combat.music = CombatSwitch{};/" quest-host-shared quest_config_test
+
+runm mu_ci_row_key       $CI "s/\"combat.music\", \&nevr_quest::CombatConfig::music}/\"combat.musik\", \&nevr_quest::CombatConfig::music}/" quest-host-combat combat_install_test
+runm mu_ci_row_member    $CI "s/\"combat.music\", \&nevr_quest::CombatConfig::music}/\"combat.music\", \&nevr_quest::CombatConfig::sensorwd}/" quest-host-combat combat_install_test

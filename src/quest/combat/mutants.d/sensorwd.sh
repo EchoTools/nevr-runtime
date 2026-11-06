@@ -83,3 +83,4 @@ runm sd_lock_across_game $S "s/  const Seen seen = TrackModel(true, reinterpret_
 runm sd_ci_row_ignores_key $CI "s/sensorwd::Install(g_config.sensorwd.on)/sensorwd::Install(true)/" quest-host-combat combat_install_test
 runm sd_qc_default_off  src/quest/sentinel/quest_config.cpp "s/  r.config.combat.sensorwd = ReadCombatSwitch(cfg, kCombatSensorwdKey, r);/  r.config.combat.sensorwd = ReadCombatSwitch(cfg, kCombatSensorwdKey, r, false);/" quest-host-shared quest_config_test
 runm sd_qc_not_read     src/quest/sentinel/quest_config.cpp "s/  r.config.combat.sensorwd = ReadCombatSwitch(cfg, kCombatSensorwdKey, r);/  r.config.combat.sensorwd = CombatSwitch{};/" quest-host-shared quest_config_test
+runm sd_ci_row_key       $CI "s/\"combat.sensorwd\", \&nevr_quest::CombatConfig::sensorwd}/\"combat.sensorwdd\", \&nevr_quest::CombatConfig::sensorwd}/" quest-host-combat combat_install_test

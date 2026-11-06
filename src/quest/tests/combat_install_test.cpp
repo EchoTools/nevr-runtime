@@ -343,16 +343,16 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   tables.tablestep = {false, nevr_quest::Source::kFile};
   combat::LogConfig(tables);
   const std::vector<Line> records = Lines("combat_config_switch");
-  QCHECK(records.size() == 8U);  // four per call, in the table's order
-  const char* const order[] = {"meshstep", "tablestep", "instmodel", "shaderstep"};
+  QCHECK(records.size() == 12U);  // six per call, in the table's order (the watchdog and the combat music, #2184, last)
+  const char* const order[] = {"meshstep", "tablestep", "instmodel", "shaderstep", "sensorwd", "music"};
   const char* const wantFirst[] = {"\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
-                                   "\"on\":1,\"source\":\"default\""};
+                                   "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\""};
   const char* const wantSecond[] = {"\"on\":0,\"source\":\"config\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
-                                    "\"on\":1,\"source\":\"default\""};
-  if (records.size() == 8U) {
-    for (std::size_t i = 0; i < 4; ++i) {
+                                    "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\""};
+  if (records.size() == 12U) {
+    for (std::size_t i = 0; i < 6; ++i) {
       for (std::size_t call = 0; call < 2; ++call) {
-        const Line& line = records[call * 4 + i];
+        const Line& line = records[call * 6 + i];
         QCHECK(line.level == sentinel::LogLevel::kInfo);
         QCHECK(line.text.substr(line.text.find("\"event\"")) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + order[i] + "\",\"key\":\"combat." + order[i] +
                                         "\"," + (call == 0 ? wantFirst[i] : wantSecond[i]) + "}");
@@ -509,14 +509,18 @@ void TheMusicAndSensorwdSwitchesAreOnByDefaultAndTheRowsReadThem() {
   combat::LogConfig(cfg);
   cfg.sensorwd = {false, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
-  const std::vector<Line> sw = Lines("combat_config_switch");
+  std::vector<Line> sw;  // the watchdog's and the music's records of the two calls, in the table's order
+  for (const Line& l : Lines("combat_config_switch")) {
+    if (Has(l.text, "\"module\":\"sensorwd\"") || Has(l.text, "\"module\":\"music\"")) sw.push_back(l);
+  }
   QCHECK(sw.size() == 4U);
   if (sw.size() == 4U) {
-    QCHECK(Has(sw[0].text, "\"module\":\"music\"") && Has(sw[0].text, "\"key\":\"combat.music\"") && Has(sw[0].text, "\"on\":1") &&
+    QCHECK(Has(sw[0].text, "\"module\":\"sensorwd\"") && Has(sw[0].text, "\"key\":\"combat.sensorwd\"") && Has(sw[0].text, "\"on\":1") &&
            Has(sw[0].text, "\"source\":\"default\""));
-    QCHECK(Has(sw[1].text, "\"module\":\"sensorwd\"") && Has(sw[1].text, "\"key\":\"combat.sensorwd\"") && Has(sw[1].text, "\"on\":1") &&
+    QCHECK(Has(sw[1].text, "\"module\":\"music\"") && Has(sw[1].text, "\"key\":\"combat.music\"") && Has(sw[1].text, "\"on\":1") &&
            Has(sw[1].text, "\"source\":\"default\""));
-    QCHECK(Has(sw[3].text, "\"module\":\"sensorwd\"") && Has(sw[3].text, "\"on\":0") && Has(sw[3].text, "\"source\":\"config\""));
+    QCHECK(Has(sw[2].text, "\"module\":\"sensorwd\"") && Has(sw[2].text, "\"on\":0") && Has(sw[2].text, "\"source\":\"config\""));
+    QCHECK(Has(sw[3].text, "\"module\":\"music\"") && Has(sw[3].text, "\"on\":1") && Has(sw[3].text, "\"source\":\"default\""));
     QCHECK(sw[0].level == sentinel::LogLevel::kInfo);
   }
   Done();
