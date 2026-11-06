@@ -116,8 +116,20 @@ class Root {
 
 struct Lines {
   std::vector<std::string> all;
+  std::vector<int> levels;  // the level each line was written at, in step with `all`
   LogFn Fn() {
-    return [this](int, const std::string& line) { all.push_back(line); };
+    return [this](int level, const std::string& line) {
+      all.push_back(line);
+      levels.push_back(level);
+    };
+  }
+  /// The level of the line Find would return, or -1 when there is none.
+  int LevelOf(const std::string& event, const std::vector<std::string>& fields = {}) const {
+    const std::string line = Find(event, fields);
+    for (std::size_t i = 0; i < all.size(); ++i) {
+      if (all[i] == line) return levels[i];
+    }
+    return -1;
   }
   /// The first line that starts with `[NEVR.UPDATE] <event>` and holds every `key=value` word in `fields`.
   std::string Find(const std::string& event, const std::vector<std::string>& fields = {}) const {
@@ -153,7 +165,9 @@ struct FakeCore {
   std::string version = "5.99.0";
   std::string reason;
   std::string runtime_bytes = "NEW-RUNTIME";
-  int open_calls = 0, manifest_calls = 0, stage_calls = 0, end_calls = 0, close_calls = 0;
+  bool discard_ok = true;
+  int open_calls = 0, manifest_calls = 0, stage_calls = 0, end_calls = 0, close_calls = 0, discard_calls = 0;
+  std::string discard_version, discard_sha, discard_reason;
   std::string open_config, current_json, end_state, end_reason;
   const Root* root = nullptr;
   std::function<void()> during_stage;  // runs inside stage(), for a clock that moves
@@ -192,6 +206,14 @@ struct FakeCore {
       end_state = state;
       end_reason = why;
     };
+    c.discard = [this](const std::string&, const std::string& version, const std::string& sha, const std::string& why, std::string* error) {
+      ++discard_calls;
+      discard_version = version;
+      discard_sha = sha;
+      discard_reason = why;
+      if (!discard_ok) *error = "cannot write";
+      return discard_ok;
+    };
     c.close = [this] { ++close_calls; };
     return c;
   }
@@ -210,6 +232,7 @@ CheckEnv MakeEnv(const Root& root, FakeCore& core, Lines& lines) {
     s << in.rdbuf();
     VerifyOutcome v;
     v.ok = s.str().find("BAD") == std::string::npos;
+    v.refused = !v.ok && s.str().find("UNREADABLE") == std::string::npos;  // a file the verifier could not read is not a refusal
     v.reason = v.ok ? "accepted" : "Unsigned: no embedded signature";
     return v;
   };
@@ -237,6 +260,14 @@ TEST(UpdatePolicy, DecideNamesTheFirstReasonInTheLogsOrder) {
   EXPECT_EQ(Decide(s), Disabled::kDevBuild) << "a developer's runtime is never replaced, whatever else is set";
   s.host_can_swap = false;
   EXPECT_EQ(Decide(s), Disabled::kDevBuild);
+  Switches no_root;
+  no_root.host_can_swap = true;
+  no_root.no_root = true;
+  no_root.flag_no_update = true;
+  EXPECT_EQ(Decide(no_root), Disabled::kNoRoot) << "no root stops the confirmation too, so it outranks the switches";
+  no_root.dev_build = true;
+  EXPECT_EQ(Decide(no_root), Disabled::kDevBuild);
+  EXPECT_STREQ(DisabledWord(Disabled::kNoRoot), "no_root");
   Switches old_host;  // everything else on, no capability bit
   EXPECT_EQ(Decide(old_host), Disabled::kHostCannotSwap) << "F16: a host that cannot swap gets no download";
   EXPECT_STREQ(DisabledWord(Disabled::kDevBuild), "dev_build");
@@ -379,6 +410,9 @@ TEST(UpdateCheck, AVerifiedReleaseIsPublishedLastAndEveryDecisionIsALine) {
 
   EXPECT_NE(lines.Find("update verify", {"path=nevr-runtime.dll", "ok=true"}), "") << lines.Dump();
   EXPECT_NE(lines.Find("update published", {"version=5.99.0", "files=1"}), "") << lines.Dump();
+  EXPECT_EQ(lines.LevelOf("update verify", {"ok=true"}), kInfo);
+  EXPECT_EQ(lines.LevelOf("update published"), kInfo);
+  EXPECT_EQ(lines.LevelOf("update check", {"action=staged"}), kInfo);
   EXPECT_NE(lines.Find("update check", {"action=staged", "target=5.99.0", "current=5.16.1", "direction=upgrade",
                                         "channel_source=default"}), "") << lines.Dump();
   EXPECT_NE(lines.Find("update check")  .find("elapsed_ms="), std::string::npos);
@@ -425,6 +459,14 @@ TEST(UpdateCheck, AFileTheVerifierRefusesIsNeverPublished) {
   EXPECT_FALSE(root.Exists(L"update\\staged.json")) << "falsifier: a staged file that fails its signature must not be offered to the host";
   EXPECT_FALSE(root.Exists(L"update\\staging\\5.99.0")) << "staging removed";
   EXPECT_NE(lines.Find("update verify", {"path=nevr-runtime.dll", "ok=false"}), "") << lines.Dump();
+  EXPECT_EQ(lines.LevelOf("update verify", {"ok=false"}), kWarning);
+  EXPECT_EQ(lines.LevelOf("update check", {"action=blocked"}), kInfo);
+  EXPECT_EQ(core.discard_calls, 1) << "the verifier refused these bytes: the core is told";
+  EXPECT_EQ(core.discard_version, "5.99.0");
+  EXPECT_EQ(core.discard_sha, kNewSha);
+  EXPECT_EQ(core.discard_reason, "verify_failed");
+  EXPECT_NE(lines.Find("update discard", {"version=5.99.0", "recorded=true"}), "") << lines.Dump();
+  EXPECT_EQ(lines.LevelOf("update discard"), kInfo);
   EXPECT_NE(lines.Find("update check", {"action=blocked", "reason=verify_failed"}), "") << lines.Dump();
   EXPECT_EQ(lines.Count("update published"), 0);
 }
@@ -440,6 +482,8 @@ TEST(UpdateCheck, ACutOffDownloadPublishesNothing) {
   EXPECT_EQ(out.reason, "stage_failed");
   EXPECT_FALSE(root.Exists(L"update\\staged.json"));
   EXPECT_NE(lines.Find("update check", {"action=failed", "reason=stage_failed"}), "") << lines.Dump();
+  EXPECT_EQ(lines.LevelOf("update check", {"action=failed"}), kWarning);
+  EXPECT_EQ(core.discard_calls, 0) << "a download that failed is not a refused release";
   EXPECT_EQ(core.end_calls, 1) << "the core's run is ended on a failure too";
   EXPECT_EQ(core.close_calls, 1);
   EXPECT_EQ(lines.Dump().find("cut off"), std::string::npos) << "the core's own text is not a log field (logging Rule 4)";
@@ -521,7 +565,53 @@ TEST(UpdateCheck, AResultThatArrivesAfterTheBudgetIsNotPublished) {
   EXPECT_EQ(out.reason, "timeout");
   EXPECT_FALSE(root.Exists(L"update\\staged.json")) << "bounded: 120 s for the whole stage";
   EXPECT_EQ(lines.Count("update verify"), 0) << "a late result is not even verified";
+  EXPECT_FALSE(root.Exists(L"update\\staging\\5.99.0")) << "what a late stage wrote is removed, not left on disk";
+  EXPECT_EQ(core.discard_calls, 0) << "a late result is not a refused one";
   EXPECT_NE(lines.Find("update check", {"action=failed", "reason=timeout"}), "") << lines.Dump();
+}
+
+TEST(UpdateCheck, AReleaseThatTurnsLateWhileItIsBeingVerifiedIsRemovedToo) {
+  Root root;
+  Lines lines;
+  FakeCore core;
+  CheckEnv env = MakeEnv(root, core, lines);
+  auto clock = std::make_shared<std::uint64_t>(1000);
+  env.now_ms = [clock] { return *clock; };
+  const auto verify = env.verify;
+  env.verify = [clock, verify](const std::wstring& path) {
+    *clock += 121000;  // the verification itself runs past the budget
+    return verify(path);
+  };
+  const CheckOutcome out = RunCheck(env);
+  EXPECT_EQ(out.reason, "timeout");
+  EXPECT_FALSE(root.Exists(L"update\\staged.json"));
+  EXPECT_FALSE(root.Exists(L"update\\staging\\5.99.0")) << "staging removed on the second budget check as on the first";
+  EXPECT_EQ(core.discard_calls, 0);
+}
+
+TEST(UpdateCheck, AFileThatCouldNotBeReadIsNotDiscardedAndAFailedRecordIsAWarning) {
+  {
+    Root root;
+    Lines lines;
+    FakeCore core;
+    core.runtime_bytes = "BAD-UNREADABLE";
+    CheckEnv env = MakeEnv(root, core, lines);
+    EXPECT_EQ(RunCheck(env).reason, "verify_failed");
+    EXPECT_EQ(core.discard_calls, 0) << "a scanner's lock is not a verdict: the next launch tries again";
+    EXPECT_FALSE(root.Exists(L"update\\staging\\5.99.0"));
+    EXPECT_EQ(lines.Count("update discard"), 0);
+  }
+  {
+    Root root;
+    Lines lines;
+    FakeCore core;
+    core.runtime_bytes = "BAD";
+    core.discard_ok = false;
+    CheckEnv env = MakeEnv(root, core, lines);
+    EXPECT_EQ(RunCheck(env).reason, "verify_failed");
+    EXPECT_NE(lines.Find("update discard", {"recorded=false"}), "") << lines.Dump();
+    EXPECT_EQ(lines.LevelOf("update discard"), kWarning);
+  }
 }
 
 TEST(UpdateCheck, TheChannelAndItsSourceReachTheCoreAndTheLine) {
@@ -600,6 +690,7 @@ TEST(UpdateConfirm, TheMatchingReleaseIsConfirmedAndThePendingRecordGoes) {
   EXPECT_EQ(state["current"]["runtime_sha256"], kNewSha);
   EXPECT_EQ(state["channel"], "beta");
   EXPECT_NE(lines.Find("update confirmed", {"version=5.99.0", "after_ms=10042", "role=server"}), "") << lines.Dump();
+  EXPECT_EQ(lines.LevelOf("update confirmed"), kInfo);
   EXPECT_FALSE(root.Exists(L"update\\lock"));
 }
 
@@ -617,6 +708,7 @@ TEST(UpdateConfirm, ARuntimeThatIsNotThePendingOneConfirmsNothing) {
   EXPECT_EQ(root.Read(L"update\\state.json"), "{}");
   EXPECT_EQ(lines.Count("update confirmed"), 0);
   EXPECT_NE(lines.Find("update confirm skipped", {"reason=not_the_pending_release"}), "") << lines.Dump();
+  EXPECT_EQ(lines.LevelOf("update confirm skipped"), kInfo);
 }
 
 TEST(UpdateConfirm, NoPendingRecordMeansNothingToConfirm) {
@@ -628,6 +720,7 @@ TEST(UpdateConfirm, NoPendingRecordMeansNothingToConfirm) {
   env.log = lines.Fn();
   EXPECT_EQ(UpdateConfirm(env, 10000), ConfirmResult::kNotPending);
   EXPECT_NE(lines.Find("update confirm skipped", {"reason=no_pending"}), "") << lines.Dump();
+  EXPECT_EQ(lines.LevelOf("update confirm skipped", {"reason=no_pending"}), kDebug);
   EXPECT_TRUE(root.List().empty()) << "a run with no update folder makes none";
 }
 
@@ -665,7 +758,7 @@ struct WorkerFixture {
       return true;
     };
     deps.core = core.Make();
-    deps.verify = [](const std::wstring&) { return VerifyOutcome{true, "accepted"}; };
+    deps.verify = [](const std::wstring&) { return VerifyOutcome{true, false, "accepted"}; };
     deps.log = lines.Fn();
     deps.now_ms = [this] { return clock.load(); };
   }
@@ -680,6 +773,7 @@ TEST(UpdateWorker, ADevBuildNeverChecksAndSaysSo) {
   w.Stop(3000);  // joins the threads there are: a thread that was wrongly started has run by now
   EXPECT_EQ(f.core.open_calls, 0);
   EXPECT_NE(f.lines.Find("update disabled", {"reason=dev_build"}), "") << f.lines.Dump();
+  EXPECT_EQ(f.lines.LevelOf("update disabled"), kInfo);
   EXPECT_TRUE(f.root.List().empty());
 }
 
@@ -702,6 +796,29 @@ TEST(UpdateWorker, TheFlagAndTheConfigKeyStopTheCheckAndEachSaysWhich) {
     EXPECT_EQ(f.core.open_calls, 0);
     EXPECT_NE(f.lines.Find("update disabled", {"reason=config"}), "") << f.lines.Dump();
   }
+}
+
+TEST(UpdateWorker, WithNoNevrRootNothingStartsAndTheLineIsAWarning) {
+  WorkerFixture f;
+  f.deps.root.clear();
+  f.deps.switches.flag_no_update = true;  // even with checks off the confirmation must not look for the update folder at the root of a drive
+  Worker w(f.deps);
+  EXPECT_EQ(w.Start(), Disabled::kNoRoot);
+  w.OnFrame(1000);
+  w.OnFrame(20000);
+  w.Stop(3000);
+  EXPECT_EQ(f.core.open_calls, 0);
+  EXPECT_NE(f.lines.Find("update disabled", {"reason=no_root"}), "") << f.lines.Dump();
+  EXPECT_EQ(f.lines.LevelOf("update disabled"), kWarning) << "a launch that cannot update at all is not a routine switch";
+  EXPECT_EQ(f.lines.Count("update confirm skipped"), 0) << "no thread ran";
+}
+
+TEST(UpdateLevels, TheGamesLogLevelBitsAreTheOnesTheLinesAreWrittenAt) {
+  EXPECT_EQ(EchoLevelBits(kDebug), 0x1);
+  EXPECT_EQ(EchoLevelBits(kInfo), 0x2);
+  EXPECT_EQ(EchoLevelBits(kWarning), 0x4);
+  EXPECT_EQ(EchoLevelBits(kError), 0x8);
+  EXPECT_EQ(EchoLevelBits(42), 0x2) << "an unknown level is Info";
 }
 
 TEST(UpdateWorker, AHostThatCannotSwapGetsNoDownloadAndNoConfirmation) {

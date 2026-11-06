@@ -97,11 +97,13 @@ Worker::~Worker() { Stop(500); }
 Disabled Worker::Start() {
   Shared& s = *shared_;
   if (s.started.exchange(true)) return s.decision;
-  s.decision = Decide(s.deps.switches);
+  Switches switches = s.deps.switches;
+  if (s.deps.root.empty()) switches.no_root = true;  // an empty root would put the update folder at the root of a drive
+  s.decision = Decide(switches);
   if (s.decision != Disabled::kNone) {
-    s.Say(kInfo, std::string("[NEVR.UPDATE] update disabled reason=") + DisabledWord(s.decision));
+    s.Say(s.decision == Disabled::kNoRoot ? kWarning : kInfo, std::string("[NEVR.UPDATE] update disabled reason=") + DisabledWord(s.decision));
   }
-  const bool can_confirm = s.decision != Disabled::kDevBuild && s.decision != Disabled::kHostCannotSwap;
+  const bool can_confirm = s.decision != Disabled::kDevBuild && s.decision != Disabled::kNoRoot && s.decision != Disabled::kHostCannotSwap;
   if (s.decision != Disabled::kNone) SetEvent(s.check_done);
   if (!can_confirm) SetEvent(s.confirm_done);
   s.threads_run = can_confirm;

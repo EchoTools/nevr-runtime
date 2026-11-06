@@ -281,28 +281,38 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
     }
 
     std::string result_text;
-    if (!env.core.stage || !env.core.stage(root_utf8,
-                                           BuildCurrentJson(env.version, env.runtime_sha256, quarantine), &result_text, &error)) {
+    if (!env.core.stage || !env.core.stage(root_utf8, BuildCurrentJson(env.version, env.runtime_sha256, quarantine), &result_text, &error)) {
       run.Finish("unchanged", "stage_failed");
       return done(CheckAction::kFailed, "stage_failed", "", "");
     }
-    run.Finish("unchanged", "checked");
-
-    // The whole stage's budget: a result that arrives after it is not published, whatever it holds.
-    const auto over_budget = [&] { return env.now_ms && env.now_ms() - started > env.budget_ms; };
-    if (over_budget()) return done(CheckAction::kFailed, "timeout", "", "");
 
     StageResult staged;
-    if (!ParseStageResult(result_text, &staged, &error)) return done(CheckAction::kFailed, "bad_result", "", "");
+    if (!ParseStageResult(result_text, &staged, &error)) {
+      run.Finish("unchanged", "bad_result");
+      return done(CheckAction::kFailed, "bad_result", "", "");
+    }
+    const std::wstring folder = StagingDir(env.root) + L"\\" + ToWide(staged.version);  // the version passed the vocabulary
+    // The whole stage's budget: a result that arrives after it is not published, whatever it holds, and what it staged is removed.
+    const auto over_budget = [&] { return env.now_ms && env.now_ms() - started > env.budget_ms; };
+    const auto late = [&]() -> CheckOutcome& {
+      if (staged.action == "staged" && !IsReparsePoint(folder)) RemoveTree(folder);
+      run.Finish("unchanged", "timeout");
+      return done(CheckAction::kFailed, "timeout", staged.version, staged.direction);
+    };
+    if (over_budget()) return late();
     if (staged.action != "staged") {
+      run.Finish("unchanged", staged.reason.empty() ? "checked" : staged.reason);
       return done(staged.action == "none" ? CheckAction::kNone : CheckAction::kBlocked, staged.reason, staged.version, staged.direction);
     }
 
     // The core checked every byte against the signed manifest. The Authenticode check sits between that and the publish: it is
     // this runtime's, with the production policy (ADR 0024, section 3).
-    const std::wstring folder = StagingDir(env.root) + L"\\" + ToWide(staged.version);
-    if (IsReparsePoint(folder)) return done(CheckAction::kBlocked, "reparse_point", staged.version, staged.direction);
+    if (IsReparsePoint(folder)) {
+      run.Finish("unchanged", "reparse_point");
+      return done(CheckAction::kBlocked, "reparse_point", staged.version, staged.direction);
+    }
     bool all_ok = true;
+    bool refused = false;
     for (const StagedFile& file : staged.files) {
       names::Member member;
       names::ParseMember(file.path, &member);  // parsed once already (ParseStageResult)
@@ -313,12 +323,27 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
            {{"path", file.path}, {"version", staged.version}, {"ok", v.ok ? "true" : "false"},
             {"reason", v.ok ? std::string("accepted") : v.reason}});
       all_ok = all_ok && v.ok;
+      refused = refused || (!v.ok && v.refused);
     }
     if (!all_ok) {
       RemoveTree(folder);  // staging removed; nothing was published
+      if (refused) {
+        // The verifier refused these bytes: the core records the release, and the next stage does not fetch it again. A file that
+        // could not be read is not a refusal (a scanner's lock): nothing is recorded, and the next launch tries again.
+        std::string runtime_sha;
+        for (const StagedFile& f : staged.files) {
+          if (f.path == names::kRuntimeMember) runtime_sha = f.sha256;
+        }
+        std::string discard_error;
+        const bool recorded = env.core.discard && env.core.discard(root_utf8, staged.version, runtime_sha, "verify_failed", &discard_error);
+        Emit(env.log, recorded ? kInfo : kWarning, "update discard",
+             {{"version", staged.version}, {"recorded", recorded ? "true" : "false"}, {"reason", "verify_failed"}});
+      }
+      run.Finish("unchanged", "verify_failed");
       return done(CheckAction::kBlocked, "verify_failed", staged.version, staged.direction);
     }
-    if (over_budget()) return done(CheckAction::kFailed, "timeout", staged.version, staged.direction);
+    if (over_budget()) return late();
+    run.Finish("unchanged", "checked");
 
     UpdateFileLock lock;
     DWORD lock_error = 0;

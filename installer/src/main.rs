@@ -14,6 +14,7 @@ const USAGE: &str = "usage: install-nevr-runtime <command> [options]
   pc plan|install --dir <folder with echovr.exe> [--nevr-root DIR] [--launcher-dir DIR] [--allow-downgrade] [--version V] [--package-dir DIR]
   pc launch-check --dir <folder> [--nevr-root DIR] [--bootstrap-log FILE] [--version V]
   pc stage --root <nevr root> [--current-json JSON] [--version V]
+  pc discard --root <nevr root> --version V --runtime-sha256 HEX --reason WORD   records a staged release the runtime refused; fetches nothing
   pc uninstall --dir <folder with echovr.exe> [--nevr-root DIR] [--dev-nevr-root]  restores the recorded original; fetches nothing, reads no stdin
 options: --root DIR  --base URL  --channel NAME  --log FILE  --state-dir DIR  --work-dir DIR  --pins FILE  --now UTC
 --artifact-dir installs a local tester APK (one .apk and its .sha256 sidecar) in place of the release's, and logs every step
@@ -102,7 +103,7 @@ fn main() -> ExitCode {
     let (platform, cmd) = match words.as_slice() {
         ["manifest", "verify"] => ("pc", "manifest"),
         ["quest", c @ ("plan" | "install")] => ("quest", *c),
-        ["pc", c @ ("plan" | "install" | "launch-check" | "stage" | "uninstall")] => ("pc", *c),
+        ["pc", c @ ("plan" | "install" | "launch-check" | "stage" | "discard" | "uninstall")] => ("pc", *c),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(1);
@@ -123,10 +124,10 @@ fn main() -> ExitCode {
         }
     });
     cfg.allow_downgrade = args.flag("--allow-downgrade");
-    if cmd == "stage" {
+    if cmd == "stage" || cmd == "discard" {
         // `--root` is the nevr root here (ADR 0024), not the installer's: the updater keeps its state, log and downloads in it.
         if args.val("--root").is_none() {
-            eprintln!("FAIL step 0: pc stage needs --root <the nevr root>");
+            eprintln!("FAIL step 0: pc {cmd} needs --root <the nevr root>");
             return ExitCode::from(1);
         }
         (cfg.state_dir, cfg.log_path, cfg.work_dir) = nevr_install::stage::paths(&root);
@@ -248,6 +249,11 @@ fn main() -> ExitCode {
                     sess.manifest()?;
                 }
                 let (end, report) = sess.pc_stage(version.as_deref(), &root, &cur)?;
+                Ok((end, Some(report)))
+            }
+            ("pc", "discard") => {
+                let need = |k: &str| args.val(k).ok_or_else(|| nevr_install::error::Error::new(9, format!("{k} is required")));
+                let (end, report) = sess.pc_discard(&root, &need("--version")?, &need("--runtime-sha256")?, &need("--reason")?)?;
                 Ok((end, Some(report)))
             }
             // No manifest is fetched and no stdin is read: the record and the files are the whole input (#1497).

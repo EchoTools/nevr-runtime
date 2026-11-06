@@ -78,6 +78,25 @@ TEST(UpdateCoreLink, TheCoreAnswersFromAWorkerThread) {
   });
   worker.join();
 
+  // NevrPcDiscard: the call the runtime makes when the verifier refuses a staged release; the core records it under the root.
+  int discard = -1, bad_discard = -1;
+  std::thread discarder([&] {
+    const std::string cfg = "{\"platform\":\"pc\",\"nevr_root\":\"" + Escape(Utf8(root)) + "\"}";
+    NevrSession* s = nullptr;
+    if (NevrInstallOpen(cfg.c_str(), &s) == NEVR_OK && s != nullptr) {
+      const std::string rootUtf8 = Utf8(root);
+      const std::string sha(64, 'a');
+      discard = NevrPcDiscard(s, rootUtf8.c_str(), "5.99.0", sha.c_str(), "verify_failed");
+      bad_discard = NevrPcDiscard(s, rootUtf8.c_str(), "../x", sha.c_str(), "verify_failed");
+      NevrRunEnd(s, "unchanged", "test");
+      NevrClose(s);
+    }
+  });
+  discarder.join();
+  EXPECT_EQ(discard, NEVR_OK);
+  EXPECT_EQ(bad_discard, NEVR_FAILED) << "a version outside the vocabulary is refused";
+  EXPECT_NE(GetFileAttributesW((root + L"\\update\\manifest\\discards.json").c_str()), INVALID_FILE_ATTRIBUTES);
+
   EXPECT_FALSE(version.empty());
   EXPECT_EQ(bad_config, NEVR_FAILED) << "a configuration that is not JSON is refused with a status";
   EXPECT_EQ(file_fetch, NEVR_FAILED) << "an empty base has no manifest: " << file_error;

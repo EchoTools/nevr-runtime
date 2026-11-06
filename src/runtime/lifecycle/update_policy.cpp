@@ -39,6 +39,7 @@ const char* DisabledWord(Disabled reason) {
   switch (reason) {
     case Disabled::kNone: return "none";
     case Disabled::kDevBuild: return "dev_build";
+    case Disabled::kNoRoot: return "no_root";
     case Disabled::kFlag: return "flag";
     case Disabled::kConfig: return "config";
     case Disabled::kHostCannotSwap: return "host_cannot_swap";
@@ -48,6 +49,7 @@ const char* DisabledWord(Disabled reason) {
 
 Disabled Decide(const Switches& s) {
   if (s.dev_build) return Disabled::kDevBuild;
+  if (s.no_root) return Disabled::kNoRoot;
   if (s.flag_no_update) return Disabled::kFlag;
   if (s.config_enabled.has_value() && !*s.config_enabled) return Disabled::kConfig;
   if (!s.host_can_swap) return Disabled::kHostCannotSwap;

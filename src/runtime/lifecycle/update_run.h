@@ -24,6 +24,12 @@ namespace nevr_update {
 using LogFn = std::function<void(int level, const std::string& line)>;
 inline constexpr int kDebug = 0, kInfo = 1, kWarning = 2, kError = 3;
 
+/// The game's LogLevel bit (abi/echovr.h: Debug 1, Info 2, Warning 4, Error 8) for a level above; an unknown level is Info.
+/// update_process.cpp static_asserts these against the enum, so the mapping is tested here and cannot drift from it.
+constexpr int EchoLevelBits(int level) noexcept {
+  return level == kDebug ? 0x1 : level == kWarning ? 0x4 : level == kError ? 0x8 : 0x2;
+}
+
 /// The core's C ABI as the worker uses it (installer/include/nevr_install.h). update_core_ffi.cpp binds the real one; a
 /// test supplies its own. Each function reports a failure through `error` (the core's NevrLastError text).
 struct Core {
@@ -34,11 +40,18 @@ struct Core {
       stage;
   /// `state` is one of installed, unchanged, restored, needs-user.
   std::function<void(const std::string& state, const std::string& reason)> run_end;
+  /// NevrPcDiscard: the staged release was refused after the stage; the next stage does not fetch it again.
+  std::function<bool(const std::string& root_dir, const std::string& version, const std::string& runtime_sha256,
+                     const std::string& reason, std::string* error)>
+      discard;
   std::function<void()> close;
 };
 
 struct VerifyOutcome {
   bool ok = false;
+  /// The verifier ran and refused the file. False for a file that could not be opened or read: that may be a scanner's lock, and a
+  /// release is discarded only for a verdict, never for a read.
+  bool refused = false;
   std::string reason;  ///< the verifier's text (`Verdict::Describe`)
 };
 

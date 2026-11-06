@@ -18,9 +18,9 @@
 namespace nevr_update {
 
 /// Why no check runs (ADR 0024, section 8: the `update disabled` line's `reason`). kNone means a check may run.
-enum class Disabled { kNone, kDevBuild, kFlag, kConfig, kHostCannotSwap };
+enum class Disabled { kNone, kDevBuild, kNoRoot, kFlag, kConfig, kHostCannotSwap };
 
-/// The word the log line carries: dev_build, flag, config, host_cannot_swap; "none" for kNone.
+/// The word the log line carries: dev_build, no_root, flag, config, host_cannot_swap; "none" for kNone.
 const char* DisabledWord(Disabled reason);
 
 struct Switches {
@@ -28,10 +28,11 @@ struct Switches {
   bool flag_no_update = false;             ///< `-no-update` on the command line
   std::optional<bool> config_enabled;      ///< `update.enabled` in config.yaml; unset means on
   bool host_can_swap = false;              ///< NevrHostContext::capabilities bit 0 (nevr_runtime_abi::HostCanSwap)
+  bool no_root = false;                    ///< %LOCALAPPDATA% is not set or does not fit: there is no nevr root to stage into or confirm in
 };
 
-/// The first reason that applies, in this order: dev build, flag, config, host. The order is the log's: a dev build says
-/// dev_build even when the flag is also given.
+/// The first reason that applies, in this order: dev build, no root, flag, config, host. The order is the log's: a dev build says
+/// dev_build even when the flag is also given. No root comes before the switches because it stops the confirmation too.
 Disabled Decide(const Switches& switches);
 
 enum class ChannelSource { kConfig, kState, kDefault };

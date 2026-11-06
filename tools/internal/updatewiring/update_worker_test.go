@@ -117,8 +117,11 @@ func TestTheOneSourceOfTheRootIsTheNevrRoot(t *testing.T) {
 		t.Errorf("update_process.cpp reads the nevr root %d times, want 1", n)
 	}
 	mustMatch(t, `deps\.root\s*=\s*nevr_root::RootW\(\);`, src, "update_process.cpp")
-	if !strings.Contains(src, "deps.root.empty()") {
-		t.Error("update_process.cpp: no %LOCALAPPDATA% must not start the worker with an empty root")
+	if !strings.Contains(src, "deps.switches.no_root = deps.root.empty();") {
+		t.Error("update_process.cpp: no %LOCALAPPDATA% must stop the worker (switches.no_root)")
+	}
+	if !strings.Contains(code(t, "src/runtime/lifecycle/update_worker.cpp"), "if (s.deps.root.empty()) switches.no_root = true;") {
+		t.Error("update_worker.cpp: an empty root must stop the worker even when the caller forgot to say so")
 	}
 }
 
@@ -195,7 +198,7 @@ func TestTheTwoConfigKeysAreReadThroughTheAccessorsAndDocumented(t *testing.T) {
 
 func TestOnlyADevBuildAndAHostThatCannotSwapSkipTheConfirmation(t *testing.T) {
 	b := body(t, "src/runtime/lifecycle/update_worker.cpp", "Disabled Worker::Start()")
-	mustMatch(t, `const bool can_confirm = s\.decision != Disabled::kDevBuild && s\.decision != Disabled::kHostCannotSwap;`, b, "update_worker.cpp")
+	mustMatch(t, `const bool can_confirm = s\.decision != Disabled::kDevBuild && s\.decision != Disabled::kNoRoot && s\.decision != Disabled::kHostCannotSwap;`, b, "update_worker.cpp")
 	for _, off := range []string{"kFlag", "kConfig"} {
 		if strings.Contains(b, off) {
 			t.Errorf("Worker::Start names %s: a flag or a config key must not stop the confirmation (a swapped release would be rolled back)", off)
@@ -206,7 +209,7 @@ func TestOnlyADevBuildAndAHostThatCannotSwapSkipTheConfirmation(t *testing.T) {
 func TestTheDecisionOrderIsDevFlagConfigHost(t *testing.T) {
 	b := body(t, "src/runtime/lifecycle/update_policy.cpp", "Disabled Decide(")
 	last := -1
-	for _, w := range []string{"s.dev_build", "s.flag_no_update", "s.config_enabled", "s.host_can_swap"} {
+	for _, w := range []string{"s.dev_build", "s.no_root", "s.flag_no_update", "s.config_enabled", "s.host_can_swap"} {
 		at := strings.Index(b, w)
 		if at < 0 || at < last {
 			t.Fatalf("Decide: %s is missing or out of the logged order", w)
@@ -267,5 +270,21 @@ func TestAVersionRunLinksTheLibraryTheCoreLibraryJobBuilt(t *testing.T) {
 	before(t, build, "- name: Download the core library", "- name: Configure CMake", "the library must be there when CMake configures")
 	if !strings.Contains(build, `-DNEVR_UPDATE_CORE=ON "-DNEVR_INSTALL_LIB=$GITHUB_WORKSPACE/core-library/libnevr_install.a"`) {
 		t.Error("the configure step does not pass the prebuilt library with NEVR_UPDATE_CORE=ON on a version run")
+	}
+}
+
+// F5 (ADR 0024): a release the verifier refused is recorded by the core, so the next launch does not fetch it again.
+func TestARefusedReleaseIsRecordedByTheCore(t *testing.T) {
+	run := code(t, "src/runtime/lifecycle/update_run.cpp")
+	mustMatch(t, `env\.core\.discard\s*&&\s*env\.core\.discard\(root_utf8, staged\.version, runtime_sha, "verify_failed"`, run, "update_run.cpp")
+	before(t, run, "env.core.discard", "run.Finish(\"unchanged\", \"verify_failed\")", "the discard is recorded while the core session is still open")
+	proc := code(t, "src/runtime/lifecycle/update_process.cpp")
+	mustMatch(t, `NevrPcDiscard\(\*session,`, proc, "update_process.cpp")
+	mustMatch(t, `out\.refused\s*=\s*!out\.ok;`, proc, "update_process.cpp: only a verdict is a refusal")
+	if !strings.Contains(read(t, "installer/include/nevr_install.h"), "int NevrPcDiscard(") {
+		t.Error("nevr_install.h does not declare NevrPcDiscard")
+	}
+	if strings.Contains(read(t, "docs/adr/0024-pc-self-update.md"), "KNOWN"+"-WRONG") {
+		t.Error("ADR 0024 marks F5 as a known-wrong state again")
 	}
 }

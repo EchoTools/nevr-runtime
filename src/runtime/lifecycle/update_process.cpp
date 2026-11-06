@@ -22,6 +22,11 @@
 namespace nevr_update {
 namespace {
 
+static_assert(EchoLevelBits(kDebug) == static_cast<int>(EchoVR::LogLevel::Debug));
+static_assert(EchoLevelBits(kInfo) == static_cast<int>(EchoVR::LogLevel::Info));
+static_assert(EchoLevelBits(kWarning) == static_cast<int>(EchoVR::LogLevel::Warning));
+static_assert(EchoLevelBits(kError) == static_cast<int>(EchoVR::LogLevel::Error));
+
 // The core's C ABI (installer/include/nevr_install.h), statically linked into this DLL (ADR 0024, section 3: one signed file, no
 // extra DLL for the plugin gate to verify). One session per check. The session is used from one thread at a time: the check thread.
 #ifdef NEVR_UPDATE_CORE_LINKED
@@ -57,6 +62,12 @@ Core MakeFfiCore() {
   };
   core.run_end = [session](const std::string& state, const std::string& reason) {
     if (*session != nullptr) NevrRunEnd(*session, state.c_str(), reason.c_str());
+  };
+  core.discard = [session](const std::string& root_dir, const std::string& version, const std::string& sha256, const std::string& reason,
+                           std::string* error) {
+    if (*session != nullptr && NevrPcDiscard(*session, root_dir.c_str(), version.c_str(), sha256.c_str(), reason.c_str()) == NEVR_OK) return true;
+    if (error != nullptr && *session != nullptr) *error = NevrLastError(*session);
+    return false;
   };
   core.close = [session] {
     if (*session != nullptr) NevrClose(*session);
@@ -129,6 +140,7 @@ VerifyOutcome VerifyStaged(const std::wstring& path) {
   const nevr_plugin_signature::Verdict verdict = nevr_plugin_signature::VerifyPluginFile(file, nevr_plugin_trust::ProductionPolicy(), now_unix);
   CloseHandle(file);
   out.ok = verdict.accepted();
+  out.refused = !out.ok;
   out.reason = verdict.Describe();
   return out;
 }
@@ -155,18 +167,10 @@ void StartProcessWorker(bool host_can_swap, bool flag_no_update, bool server) {
   deps.core = MakeFfiCore();
   deps.verify = &VerifyStaged;
   deps.log = [](int level, const std::string& line) {
-    const EchoVR::LogLevel l = level >= kError ? EchoVR::LogLevel::Error
-                               : level == kWarning ? EchoVR::LogLevel::Warning
-                               : level == kDebug ? EchoVR::LogLevel::Debug
-                                                 : EchoVR::LogLevel::Info;
-    Log(l, "%s", line.c_str());
+    Log(static_cast<EchoVR::LogLevel>(EchoLevelBits(level)), "%s", line.c_str());
   };
   deps.now_ms = [] { return static_cast<std::uint64_t>(GetTickCount64()); };
-  if (deps.root.empty()) {
-    // No %LOCALAPPDATA%: nothing can be staged or confirmed, and nothing is written anywhere else.
-    Log(EchoVR::LogLevel::Warning, "[NEVR.UPDATE] update disabled reason=no_root (LOCALAPPDATA is not set or does not fit)");
-    return;
-  }
+  deps.switches.no_root = deps.root.empty();  // the worker says so and starts no thread: nothing is staged or confirmed without a root
   Worker* worker = new Worker(std::move(deps));  // NOLINT: never destroyed, see g_worker_for_frames
   worker->Start();
   g_worker_for_frames.store(worker, std::memory_order_release);

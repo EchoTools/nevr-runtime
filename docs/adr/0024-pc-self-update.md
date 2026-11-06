@@ -179,11 +179,16 @@ units (`host/update_names.cpp`, `host/file_digest.cpp`), compiled into both DLLs
   text names `FAIL step N`), `stage_failed`, `timeout`, `bad_result`, `lock_unavailable`, `publish_failed`,
   `root_unconvertible`, `running_runtime_unreadable`, `internal_error`. The core's own error text is never a log field (logging
   Rule 4); it is in `logs\nevr-update.jsonl`.
-- **F5.** A staged file that fails Authenticode is a discard, not a quarantine: the flowchart and F5 say the same thing. The discard
-  is counted in the core's stage state (`pc stage` records it and does not stage that release again), and the runtime still writes only
-  `UpdateConfirm`'s keys to `state.json` (section 8, item 8). KNOWN-WRONG #1200: the core has no discard record and `NevrPcStage` no way
-  to be told of one, so today the runtime removes the staging, publishes nothing and writes nothing, and the same release is staged
-  again at the next launch.
+- **F5.** A staged file that fails Authenticode is a discard, not a quarantine: the flowchart and F5 say the same thing. When the
+  verifier refuses a file, the staging is removed and the runtime tells the core (`NevrPcDiscard`, `install-nevr-runtime pc discard`):
+  the core records the release's version and runtime sha256 in `update\manifest\discards.json`, and the next `NevrPcStage` answers `none`
+  with the reason `discarded` and fetches nothing, until the channel names other bytes. A file that could not be read (a scanner's lock)
+  is not a verdict and records nothing: the next launch tries again. The runtime still writes only `UpdateConfirm`'s keys to
+  `state.json` (section 8, item 8). Lines: `update discard` with `version` and `recorded`.
+- **Late results.** A result that arrives after the 120 s, or turns late while it is verified, removes its staging folder as well as
+  publishing nothing.
+- **No root.** Without `%LOCALAPPDATA%` the worker starts no thread and says `update disabled reason=no_root` at Warning: neither the check
+  nor the confirmation may look for the update folder at the root of a drive.
 - **The core is linked.** `NEVR_UPDATE_CORE` in `src/runtime/CMakeLists.txt` builds `installer/` as a static library with cargo and
   links it, with the system libraries rustc names. `test_update_core_link` calls it from a worker thread under Wine. A version run of
   `build.yml` links a library the `core-library` job builds and hands over as an artifact (`NEVR_INSTALL_LIB`); the build job has no Rust
@@ -438,7 +443,8 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 
 | Where | Event | Fields |
 | --- | --- | --- |
-| runtime | `update disabled` | `reason` (`dev_build`, `flag`, `config`, `host_cannot_swap`, and `no_root` when `%LOCALAPPDATA%` is not set) |
+| runtime | `update disabled` | `reason` (`dev_build`, `no_root` when `%LOCALAPPDATA%` is not set, `flag`, `config`, `host_cannot_swap`; `no_root` is a Warning, the rest Info) |
+| runtime | `update discard` | `version`, `recorded`, `reason` (`verify_failed`): the verifier refused a staged release and the core was told (Warning when it could not be recorded) |
 | runtime | `update check` | `channel` (`core_default` when none was named), `channel_source` (`config`, `state`, `default`), `current`, `target`, `direction`, `action` (`none`, `staged`, `blocked`, `failed`), `reason`, `config_channel_rejected` when `update.channel` is not a channel name, `elapsed_ms` |
 | core | `manifest_check`, `release_selected`, `artifact_fetch` | as ADR 0023 section 5; a cut-off download is `artifact_fetch ok=false reason=short_body bytes=<n> size=<n>` |
 | core | `stage_member` | `path`, `size`, `sha256`, `ok`, `reason` |
