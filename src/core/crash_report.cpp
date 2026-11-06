@@ -86,6 +86,8 @@ std::atomic<std::uint64_t> g_next{0};
 std::atomic<bool> g_busy{false};
 char g_report[kReportCapacity];
 char g_summary[kSummaryCapacity];
+// The `build:` line's text (SetBuild). Written once at start; the crash path only reads it, like the platform pointer.
+char g_build[kBuildBytes];
 
 // Zeroes `location`, asks the platform, and makes every field a NUL-terminated string whatever the resolver did.
 bool Resolve(ResolveFn resolve, std::uint64_t address, Location* location) {
@@ -186,6 +188,18 @@ void CopyText(char* destination, std::size_t capacity, const char* source) {
   destination[length] = '\0';
 }
 
+void SetBuild(const char* text) {
+  std::size_t length = 0;
+  if (text != nullptr) {
+    while (text[length] != '\0' && length + 1 < sizeof(g_build)) {
+      const char c = text[length];
+      g_build[length] = (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) ? ' ' : c;  // never a second line
+      ++length;
+    }
+  }
+  g_build[length] = '\0';
+}
+
 void HexText(char* destination, std::size_t capacity, const std::uint8_t* bytes, std::size_t count) {
   if (destination == nullptr || capacity == 0) return;
   std::size_t length = 0;
@@ -250,6 +264,11 @@ std::size_t FormatReport(const Report& report, ResolveFn resolve, const char* re
   out.Str("summary: ");
   out.Str(summary);
   out.Char('\n');
+  if (g_build[0] != '\0') {
+    out.Str("build: ");
+    out.Str(g_build);
+    out.Char('\n');
+  }
 
   out.Str("signal: ");
   AppendSignal(out, report);
@@ -400,6 +419,7 @@ void ResetForTest() {
   g_platform.store(nullptr, std::memory_order_relaxed);
   g_written.store(false, std::memory_order_relaxed);
   g_last[0] = '\0';
+  g_build[0] = '\0';
   g_busy.store(false, std::memory_order_relaxed);
 }
 

@@ -69,7 +69,9 @@ PROGRAMS = {
     ),
     "hooks": (
         "arm64_reloc_test",
+        "build_variant_test",
         "clock_levels_hook_test",
+        "combat_active_test",
         "crash_first_hook_test",
         "credits_text_test",
         "embedding_check",

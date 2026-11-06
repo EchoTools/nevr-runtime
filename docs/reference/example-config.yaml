@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality and graphics.hand_flip. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip and combat.force. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -168,6 +168,23 @@ graphics:
   # when it did not), and `hand_flip_saved` names each write of this key.
   # Default (absent): false.
   # hand_flip: true
+
+# ---------------------------------------------------------------------------
+# combat — the combat modules built into the Quest runtime
+#
+# Reader: src/quest/sentinel/quest_config.cpp (Quest), gated by src/quest/combat/combat_active.h. The PC accepts the section and reads
+# nothing from it.
+# ---------------------------------------------------------------------------
+
+combat:
+  # Quest only. A boolean. The combat modules built into the runtime run in the q15t and combat APKs (the variant the APK's build
+  # names in the first line of the sentinel log, `variant`) and in no other. `true` asks for them to run whatever the APK's variant,
+  # which a development build honours and a release build does not: a release build logs one warning that says the key is ignored.
+  # A value that is not a boolean (a word such as `maybe`, a number, a mapping or a list, a key with no value, an unset ${VAR}) asks for
+  # nothing, with a warning in the sentinel log that names the key. Read once at launch. The sentinel log line `combat_active` names
+  # the variant, the build kind, the answer, why, and what became of this key (`force`: not_asked, honoured, redundant or refused).
+  # Default (absent): false.
+  # force: true
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints

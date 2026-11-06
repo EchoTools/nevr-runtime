@@ -39,6 +39,9 @@
  * already replaced, is refused on its own and logged by GotHook with its chain); a slot that is refused leaves the game's call through
  * it as it is. A pin that differs refuses the module and changes nothing.
  *
+ * Which APKs (docs/adr/0046 rule 5). This ships to every APK, the release APK and the variants alike, and is not gated by combat::Active()
+ * (combat_active.h): it installs on every launch (entry.cpp, InstallPermissionWaitHook) whatever the variant stamp says.
+ *
  * Frequency (ADR 0038). The setters run once per loadout event (a station button press, a bot cycling its gun, the game restoring a
  * loadout), reached from script nodes and the deferred queue, never per frame (the callers were read in ReVault; calls per frame were not
  * measured). A wrapper's cost is at most 21 reads (6 for an unchanged value), each a scan of /proc/self/maps (mapping_perms.h), and a lock per

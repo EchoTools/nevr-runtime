@@ -437,6 +437,8 @@ class ProductionSteps final : public Steps {
                          {"http_key", nevr_quest::SourceName(cfg.httpKey.source)},
                          {"server_key", nevr_quest::SourceName(cfg.serverKey.source)}});
     R().socialWanted = cfg.effective.social;
+    // The combat gate (#2170): the folded combat modules run in the q15t and combat variants only; `combat.force` is read here.
+    nevr_quest::integration::ResolveCombatActive(cfg.combatForce.on);
     return cfg;
   }
 

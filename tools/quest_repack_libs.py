@@ -47,6 +47,14 @@ named like a game library would silently take that library's place and the signe
       Refuses (exit 1) a staged manifest whose sha-256 for a plugin is not the staged file's, and a staged plugin the
       manifest does not list. Run by verify-signed, before anything is signed.
 
+  check-build-variant --variant WORD
+  write-build-variant --stage STAGE_DIR --variant WORD
+      The variant stamp (docs/adr/0040-every-build-names-its-variant.md rule 1): `lib/arm64-v8a/libnevr_build_variant.so`,
+      whose bytes are the word and nothing else (empty for a plain release). The sentinel reads it beside its own library before
+      its first log line and the folded combat modules run only for `q15t` and `combat` (docs/adr/0046 rule 5). The words are
+      VARIANT_WORDS; any other word, a differently cased or padded one included, is refused (exit 1) and nothing is written.
+      check-build-variant runs first in the recipe, so a refused word stops it before anything is staged.
+
   stage-pack --pack-zip PACK_ZIP --meta META_JSON --stage STAGE_DIR --store-apk STORE_APK [--plan-header FILE]
       Stages a bundled content pack (docs/adr/0029-quest-bundled-content-pack.md) as APK assets under STAGE_DIR:
       `assets/nevr-pack/files/<path>` for each file of the zip and `assets/nevr-pack/pack.json` describing them. META_JSON holds
@@ -97,8 +105,17 @@ ABI_DIR = "lib/arm64-v8a"
 MANIFEST_NAME = "libnevr_plugin_manifest.so"
 MANIFEST_ENTRY = f"{ABI_DIR}/{MANIFEST_NAME}"
 MANIFEST_SCHEMA = 1
-# The libraries the recipe stages itself (the shim under the loader's name, the store's loader renamed, and the manifest).
-STAGED_BY_RECIPE = ("libovrplatformloader.so", "libovrplatformloader_orig.so", MANIFEST_NAME)
+# The stamp that names the APK's variant (docs/adr/0040-every-build-names-its-variant.md rule 1, docs/adr/0046): the word as the file's
+# exact bytes, empty for a plain release. Written for every APK; the sentinel reads it beside its own library
+# (src/quest/sentinel/build_variant.h kStampFile, which this name must equal) before its first log line. It is a lib*.so name so the
+# installer extracts it beside the sentinel, like the manifest, and is never loaded as a library.
+VARIANT_STAMP_NAME = "libnevr_build_variant.so"
+VARIANT_ENTRY = f"{ABI_DIR}/{VARIANT_STAMP_NAME}"
+# The variant words: one for each variant or option a recipe adds. `q15t` and `combat` are the APKs that carry the q15t libraries
+# (docs/adr/0046 rule 5); `perf-probe` is the measurement build (ADR 0037). Every other word is refused; the empty word is a plain release.
+VARIANT_WORDS = ("q15t", "combat", "perf-probe")
+# The libraries the recipe stages itself (the shim under the loader's name, the store's loader renamed, the manifest and the stamp).
+STAGED_BY_RECIPE = ("libovrplatformloader.so", "libovrplatformloader_orig.so", MANIFEST_NAME, VARIANT_STAMP_NAME)
 # The one store entry the recipe replaces on purpose: the shim takes the loader's name.
 REPLACED_ON_PURPOSE = f"{ABI_DIR}/libovrplatformloader.so"
 # The other one: the patcher's output takes libr15's place (docs/adr/0021 section 9). It is compared with that output,
@@ -267,6 +284,25 @@ def write_plugin_manifest(stage: pathlib.Path, plugins: list[pathlib.Path], earl
             "early": plugin.name in early,
         })
     (stage / ABI_DIR / MANIFEST_NAME).write_bytes(manifest_bytes(entries))
+    return []
+
+
+def build_variant_problems(word: str) -> list[str]:
+    """The problems with a variant word: empty for a plain release or one of VARIANT_WORDS (compared exactly: no case folding,
+    no trimming, so a word that differs by a space or a newline is refused, not silently corrected)."""
+    if word == "" or word in VARIANT_WORDS:
+        return []
+    return [f"variant {word!r} is not a variant word (the words are {', '.join(VARIANT_WORDS)}; empty is a plain release)"]
+
+
+def write_build_variant(stage: pathlib.Path, word: str) -> list[str]:
+    """Writes the variant stamp under `stage`; returns the problems, and writes nothing when there are any."""
+    problems = build_variant_problems(word)
+    if problems:
+        return problems
+    target = stage / ABI_DIR
+    target.mkdir(parents=True, exist_ok=True)
+    (target / VARIANT_STAMP_NAME).write_bytes(word.encode("ascii"))
     return []
 
 
@@ -899,6 +935,11 @@ def main(argv: list[str]) -> int:
     manifest.add_argument("--plugin", type=pathlib.Path, nargs="+", required=True)
     manifest.add_argument("--early", action="append", default=[])
     manifest.add_argument("--off", action="append", default=[])
+    variant_check = sub.add_parser("check-build-variant")
+    variant_check.add_argument("--variant", required=True)
+    variant_write = sub.add_parser("write-build-variant")
+    variant_write.add_argument("--stage", type=pathlib.Path, required=True)
+    variant_write.add_argument("--variant", required=True)
     pack = sub.add_parser("stage-pack")
     pack.add_argument("--pack-zip", type=pathlib.Path, required=True)
     pack.add_argument("--meta", type=pathlib.Path, required=True)
@@ -932,6 +973,10 @@ def main(argv: list[str]) -> int:
         problems = write_plugin_manifest(args.stage, args.plugin, args.early, args.off)
     elif args.command == "check-plugin-manifest":
         problems = plugin_manifest_problems(args.stage)
+    elif args.command == "check-build-variant":
+        problems = build_variant_problems(args.variant)
+    elif args.command == "write-build-variant":
+        problems = write_build_variant(args.stage, args.variant)
     elif args.command == "stage-pack":
         problems = stage_pack(args.pack_zip, args.meta, args.stage, args.store_apk, args.plan_header)
     elif args.command == "stage-libs":

@@ -120,6 +120,43 @@ void ReportCarriesEveryFactTheIssueNames() {
   CHECK(Contains(text, "end of report\n"));
 }
 
+// The build line (#2170, docs/adr/0040 rule 2): a crash report names the version, the build kind and the variant of the build that
+// crashed, as the platform set them at start. With none set the report has no such line (the PC runtime sets none yet).
+void ReportNamesTheBuildWhenOneIsSet() {
+  nevr_crash::ResetForTest();
+  nevr_crash::SetBuild("version=6.0.1 kind=release variant=combat");
+  const nevr_crash::Report report = SampleReport();
+  static char buffer[nevr_crash::kReportCapacity];
+  nevr_crash::FormatReport(report, &FakeResolve, "/crashes/a.report.txt", buffer, sizeof(buffer));
+  const std::string text = buffer;
+  CHECK(Contains(text, "\nbuild: version=6.0.1 kind=release variant=combat\n"));
+  // right after the summary, before the signal: a reader finds it without scrolling to the log
+  CHECK(text.find("summary: ") < text.find("build: "));
+  CHECK(text.find("build: ") < text.find("signal: "));
+}
+
+void ReportWithNoBuildSetHasNoBuildLine() {
+  nevr_crash::ResetForTest();
+  const nevr_crash::Report report = SampleReport();
+  static char buffer[nevr_crash::kReportCapacity];
+  nevr_crash::FormatReport(report, &FakeResolve, "p", buffer, sizeof(buffer));
+  CHECK(!Contains(buffer, "build: "));
+}
+
+void ABuildTextCannotStartASecondLineAndIsCut() {
+  nevr_crash::ResetForTest();
+  nevr_crash::SetBuild("version=1\nsignal: forged\tvariant=x\x01");
+  const nevr_crash::Report report = SampleReport();
+  static char buffer[nevr_crash::kReportCapacity];
+  nevr_crash::FormatReport(report, &FakeResolve, "p", buffer, sizeof(buffer));
+  CHECK(Contains(buffer, "\nbuild: version=1 signal: forged variant=x \n"));
+  nevr_crash::ResetForTest();
+  nevr_crash::SetBuild(std::string(nevr_crash::kBuildBytes + 100, 'b').c_str());
+  nevr_crash::FormatReport(report, &FakeResolve, "p", buffer, sizeof(buffer));
+  const std::string cut = "\nbuild: " + std::string(nevr_crash::kBuildBytes - 1, 'b') + "\n";
+  CHECK(Contains(buffer, cut.c_str()));
+}
+
 void ALogLineCannotStartASecondLine() {
   nevr_crash::ResetForTest();
   const char line[] = "first\nsecond\tthird\x01";
@@ -279,6 +316,9 @@ int main() {
   SummaryWithoutAModuleKeepsTheAddress();
   SummaryOfAFailedWriteSaysSoAndNamesThePath();
   ReportCarriesEveryFactTheIssueNames();
+  ReportNamesTheBuildWhenOneIsSet();
+  ReportWithNoBuildSetHasNoBuildLine();
+  ABuildTextCannotStartASecondLineAndIsCut();
   ALogLineCannotStartASecondLine();
   ALogLineLongerThanTheSlotIsCut();
   AReportThatDoesNotFitEndsOnAMarkerAndStaysTerminated();

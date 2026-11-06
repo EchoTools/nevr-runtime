@@ -70,7 +70,7 @@ class TheRuleIsTheSharedHeaders(unittest.TestCase):
 class TheModuleIsWired(unittest.TestCase):
     def test_the_combat_target_builds_it(self):
         cmake = read("src/quest/combat/CMakeLists.txt")
-        self.assertRegex(cmake, r"add_library\(nevr_quest_combat STATIC\s+equip_refire\.cpp\s+match_tags\.cpp\)")
+        self.assertRegex(cmake, r"add_library\(nevr_quest_combat STATIC\s+combat_active\.cpp\s+equip_refire\.cpp\s+match_tags\.cpp\)")
 
     def test_the_budget_has_its_six_handles(self):
         self.assertIn('{"combat/equip_refire.cpp", 6, 0}', read("src/quest/sentinel/hook_budget.h"))

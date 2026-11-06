@@ -2049,9 +2049,14 @@ void TestRouterLinesClassify() {
   QCHECK(!c("[router] game=1 conn=0 (config)"));
 }
 
-// The constructor's begin record names the build (#1391): the version and the commit, as fields of one sentinel_ctor line.
+// The constructor's begin record names the build (#1391, #2170): the version, the commit, the build kind and the variant, as fields of
+// one sentinel_ctor line (ADR 0040 rule 2).
 std::vector<std::string> g_beginLines;
-void CaptureBeginLine(sentinel::LogLevel, const char* line) { g_beginLines.emplace_back(line); }
+std::vector<sentinel::LogLevel> g_beginLevels;
+void CaptureBeginLine(sentinel::LogLevel level, const char* line) {
+  g_beginLines.emplace_back(line);
+  g_beginLevels.push_back(level);
+}
 
 std::size_t CountEventKeys(const std::string& text) {
   const std::string needle = "\"event\":";
@@ -2062,29 +2067,111 @@ std::size_t CountEventKeys(const std::string& text) {
   return count;
 }
 
-void TestConstructorBeginNamesTheBuild() {
-  constexpr const char* kVersion = "6.0.1-dev.2+0123456789abcdef0123456789abcdef01234567";
-  constexpr const char* kCommit = "0123456789abcdef0123456789abcdef01234567";
+constexpr const char* kBeginVersion = "6.0.1-dev.2+0123456789abcdef0123456789abcdef01234567";
+constexpr const char* kBeginCommit = "0123456789abcdef0123456789abcdef01234567";
+
+void LogBegin(const char* kind, const nevr_quest::build_variant::Stamp& stamp) {
   g_beginLines.clear();
+  g_beginLevels.clear();
   const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureBeginLine);
-  nevr_quest::integration::LogConstructorBegin(kVersion, kCommit, "dev");
+  nevr_quest::integration::LogConstructorBegin(kBeginVersion, kBeginCommit, kind, stamp);
   sentinel::SetLogSink(previous);
+}
+
+void TestConstructorBeginNamesTheBuild() {
+  using nevr_quest::build_variant::StampSource;
+  using nevr_quest::build_variant::Variant;
+  nevr_quest::build_variant::Stamp stamp;
+  stamp.variant = Variant::kNone;
+  stamp.source = StampSource::kStamp;
+  LogBegin("dev", stamp);
   QCHECK(g_beginLines.size() == 1U);
   if (g_beginLines.size() != 1U) return;
   const std::string& line = g_beginLines[0];
   const nlohmann::json j = nlohmann::json::parse(line);
   QCHECK(j.value("event", "") == "sentinel_ctor");
   QCHECK(j.value("action", "") == "begin");
-  QCHECK(j.value("version", "") == std::string(kVersion));
-  QCHECK(j.value("commit", "") == std::string(kCommit));
+  QCHECK(j.value("version", "") == std::string(kBeginVersion));
+  QCHECK(j.value("commit", "") == std::string(kBeginCommit));
   QCHECK(j.value("kind", "") == "dev");  // ADR 0040 rule 2: the first record names the build kind
+  QCHECK(j.value("variant", "?") == "none");  // ... and the variant: a plain release stamp names none
+  QCHECK(j.value("variant_source", "") == "stamp");
   QCHECK(CountEventKeys(line) == 1U);
+}
+
+// The begin record names the variant the stamp holds, each word as itself, in a release build and in a development build.
+void TestConstructorBeginNamesEachVariant() {
+  using nevr_quest::build_variant::StampSource;
+  using nevr_quest::build_variant::Variant;
+  struct Case {
+    Variant variant;
+    const char* word;
+  };
+  for (const Case& c : {Case{Variant::kQ15t, "q15t"}, Case{Variant::kCombat, "combat"}, Case{Variant::kPerfProbe, "perf-probe"}}) {
+    for (const char* kind : {"dev", "release"}) {
+      nevr_quest::build_variant::Stamp stamp;
+      stamp.variant = c.variant;
+      stamp.source = StampSource::kStamp;
+      LogBegin(kind, stamp);
+      QCHECK(g_beginLines.size() == 1U);  // a good stamp adds no second line
+      if (g_beginLines.empty()) continue;
+      const nlohmann::json j = nlohmann::json::parse(g_beginLines[0]);
+      QCHECK(j.value("event", "") == "sentinel_ctor");
+      QCHECK(j.value("variant", "") == c.word);
+      QCHECK(j.value("variant_source", "") == "stamp");
+      QCHECK(j.value("kind", "") == kind);
+    }
+  }
+}
+
+// A stamp that is missing, unreadable or wrong is no variant, and one more line says so with the reason and what follows from it,
+// after the begin record (which stays the first line).
+void TestAStampThatIsNotAVariantsIsNamedOnceAfterTheBeginRecord() {
+  using nevr_quest::build_variant::StampSource;
+  using nevr_quest::build_variant::Variant;
+  struct Case {
+    StampSource source;
+    const char* sourceName;
+    const char* why;
+    sentinel::LogLevel level;
+  };
+  const Case cases[] = {
+      {StampSource::kAbsent, "absent", "no_file", sentinel::LogLevel::kWarn},
+      {StampSource::kUnreadable, "unreadable", "symlink", sentinel::LogLevel::kWarn},
+      {StampSource::kInvalid, "invalid", "unknown_word", sentinel::LogLevel::kWarn},
+  };
+  for (const Case& c : cases) {
+    nevr_quest::build_variant::Stamp stamp;
+    stamp.variant = Variant::kNone;
+    stamp.source = c.source;
+    stamp.why = c.why;
+    LogBegin("release", stamp);
+    QCHECK(g_beginLines.size() == 2U);
+    if (g_beginLines.size() != 2U) continue;
+    const nlohmann::json begin = nlohmann::json::parse(g_beginLines[0]);
+    QCHECK(begin.value("event", "") == "sentinel_ctor");  // still the first line
+    QCHECK(begin.value("variant", "") == "none");
+    QCHECK(begin.value("variant_source", "") == c.sourceName);
+    const nlohmann::json note = nlohmann::json::parse(g_beginLines[1]);
+    QCHECK(note.value("event", "") == "build_variant");
+    QCHECK(note.value("source", "") == c.sourceName);
+    QCHECK(note.value("reason", "?") == c.why);
+    QCHECK(note.value("msg", "").find("no variant") != std::string::npos);
+    QCHECK(note.value("msg", "").find("folded combat modules do not install") != std::string::npos);
+    QCHECK(!note.value("reason", "").empty());  // an empty field reads as a missing value (logging.md Category H)
+    // every APK this sentinel ships in is stamped by the repack, so a missing stamp is a packaging or install fault and says so
+    if (c.source == StampSource::kAbsent) QCHECK(note.value("msg", "").find("packaging or install fault") != std::string::npos);
+    QCHECK(g_beginLevels[0] == sentinel::LogLevel::kInfo);
+    QCHECK(g_beginLevels[1] == c.level);
+  }
 }
 
 }  // namespace
 
 int main() {
   TestConstructorBeginNamesTheBuild();
+  TestConstructorBeginNamesEachVariant();
+  TestAStampThatIsNotAVariantsIsNamedOnceAfterTheBeginRecord();
   TestBareBridgeUriBecomesTheTokenedOne();
   TestStageNamesAreStable();
   TestAttachRunsOnceOnEveryLaunchBeforeEveryLibr15Step();

@@ -43,6 +43,7 @@ constexpr const char* kTextureQualitySection = "graphics";
 constexpr const char* kTextureQualityName = "texture_quality";  // a key `graphics` has
 constexpr const char* kHandFlipKey = "graphics.hand_flip";       // Quest only (default false, #2082)
 constexpr const char* kHandFlipName = "hand_flip";               // the other key `graphics` has
+constexpr const char* kCombatForceKey = "combat.force";           // Quest only (default false, #2170)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
 // unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
@@ -279,6 +280,19 @@ void ReadHandFlip(const nevr::NevrConfig& cfg, LoadResult& r) {
   r.config.handFlip = {on, given ? Source::kFile : Source::kAbsent};
 }
 
+// combat.force (#2170). Absent: not asked, from the default. A boolean: that value, from the file (false is the file's word too, so the
+// log line says `config`). Anything else: not asked, from the default, and ReadBool's one Warning that names the key.
+void ReadCombatForce(const nevr::NevrConfig& cfg, LoadResult& r) {
+  const bool given = cfg.GetBool(kCombatForceKey).has_value();
+  // The getters give nullopt for an absent key and for a node that is not a scalar alike (a mapping, a list, a key with no value);
+  // the kind tells them apart, and the second is a mistake.
+  if (!cfg.GetString(kCombatForceKey) && cfg.Kind(kCombatForceKey) != nevr::NodeKind::kAbsent) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kCombatForceKey + " rejected reason=not_a_boolean (default stays)");
+  }
+  const bool on = ReadBool(cfg, kCombatForceKey, false, r);
+  r.config.combatForce = {on, given ? Source::kFile : Source::kAbsent};
+}
+
 // Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
 void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& path) {
   if (!cfg.UnsetBareVars().empty()) {
@@ -322,6 +336,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   want.inviteCodes = ReadInviteCodes(cfg, r);
   ReadTextureQuality(cfg, r);
   ReadHandFlip(cfg, r);
+  ReadCombatForce(cfg, r);
   r.config.plugins = cfg.Plugins();
 }
 
@@ -426,6 +441,9 @@ void ReportState(LoadResult& r) {
   Add(r, LogLevel::kInfo,
       std::string("config key=") + kHandFlipKey + " flip=" + (r.config.handFlip.on ? "1" : "0") +
           " source=" + HandFlipSourceName(r.config.handFlip));
+  Add(r, LogLevel::kInfo,
+      std::string("config key=") + kCombatForceKey + " force=" + (r.config.combatForce.on ? "1" : "0") +
+          " source=" + CombatForceSourceName(r.config.combatForce));
   for (const FeatureSpec& f : kFeatures) {
     Add(r, LogLevel::kInfo,
         std::string("feature=") + f.name + " requested=" + (r.config.requested.*f.flag ? "on" : "off") +
@@ -495,6 +513,8 @@ const char* SourceName(Source source) {
 const char* TextureSourceName(const TextureChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
 
 const char* HandFlipSourceName(const HandFlipChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
+
+const char* CombatForceSourceName(const CombatForceChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
 
 std::optional<std::string> ResolveQuestRedirect(const ResolvedConfig& config, const std::string& url,
                                            bool bridgeReady, unsigned bridgePort) {

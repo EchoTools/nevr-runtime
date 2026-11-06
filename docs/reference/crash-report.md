@@ -10,6 +10,7 @@ One text file, one fact per line, readable without a tool:
 | Line | Content |
 | --- | --- |
 | `summary:` | the one logged line (below) |
+| `build:` | `version=<version> kind=<dev\|release> variant=<word\|none>`: the build that crashed (ADR 0040 rule 2). Set at start through `nevr_crash::SetBuild`; the Quest sentinel sets it; a report with none has no such line (KNOWN-WRONG #2231: the PC sets none) |
 | `signal:` | signal name and number, `code=` (`si_code` on Quest, the access kind on PC), `fault_addr=` |
 | `thread:` | thread name and id |
 | `pc:`, `lr:` | `module+offset`, `build_id=`, `symbol=<nearest exported symbol>+offset` (`lr` on Quest only) |

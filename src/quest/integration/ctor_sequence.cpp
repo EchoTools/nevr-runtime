@@ -7,11 +7,24 @@
 
 namespace nevr_quest::integration {
 
-// The begin record (#1391): the build's version, commit and kind are fields of the line, so a log names the build that ran
-// (ADR 0040 rule 2; the variant name has no source yet, so it is not a field).
-void LogConstructorBegin(const char* version, const char* commit, const char* kind) noexcept {
+// The begin record (#1391): the build's version, commit, kind and variant are fields of the line, so a log names the build that ran
+// (ADR 0040 rule 2). The variant is the APK's stamp (#2170); a stamp that is no variant's is named once more, with its reason.
+void LogConstructorBegin(const char* version, const char* commit, const char* kind, const build_variant::Stamp& stamp) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor",
-                      {{"action", "begin"}, {"version", version}, {"commit", commit}, {"kind", kind}});
+                      {{"action", "begin"}, {"version", version}, {"commit", commit}, {"kind", kind},
+                       {"variant", build_variant::VariantName(stamp.variant)},
+                       {"variant_source", build_variant::SourceName(stamp.source)}});
+  if (stamp.source == build_variant::StampSource::kStamp) return;
+  const bool absent = stamp.source == build_variant::StampSource::kAbsent;
+  // Every APK that carries this sentinel is stamped by the repack, so a stamp that is not a variant's is a packaging or install fault
+  // (a Warning, whichever way it is not): the run has no variant, and in a combat APK that means combat is off.
+  sentinel::LogFields(
+      sentinel::LogLevel::kWarn, "build_variant",
+      {{"source", build_variant::SourceName(stamp.source)}, {"reason", stamp.why}, {"file", build_variant::kStampFile},
+       {"msg", absent ? "no variant stamp beside the sentinel: every APK is stamped by the repack, so this is a packaging or install fault; "
+                        "this run has no variant, so folded combat modules do not install unless a development build sets combat.force"
+                      : "the variant stamp beside the sentinel cannot be used, so this run has no variant; folded combat modules do "
+                        "not install unless a development build sets combat.force"}});
 }
 
 const char* StepStateName(StepState state) {

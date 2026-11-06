@@ -226,20 +226,27 @@ quest-reference-base apk out label="Echo VR":
 # private tmpfs file for the signing command only and is never generated here.
 # `extra_libs` is a directory of lib<hash16>.so script libraries and their SHA256SUMS only (tools/quest_repack_libs.py stage-libs):
 # `build/quest-combat-libs/libs`, which `just build-quest-combat-libs` writes.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="":
+# `variant` (the last parameter; docs/adr/0040-every-build-names-its-variant.md rule 1) is the word that names the APK's variant: `q15t`,
+# `combat` or `perf-probe`, or empty for a plain release or a development build of the tree. The repack stamps it as
+# lib/arm64-v8a/libnevr_build_variant.so (tools/quest_repack_libs.py write-build-variant), which the sentinel reads before its first log
+# line; the folded combat modules run only for `q15t` and `combat` (docs/adr/0046 rule 5). Any other word is refused before anything is
+# staged. Every recipe that repacks an APK passes it, the empty word included, as its last argument.
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"; version="{{ version }}"
     extra_rows="{{ extra_rows }}"; patcher="{{ patcher }}"; json_include="{{ json_include }}"
     plugin_early="{{ plugin_early }}"; plugin_off="{{ plugin_off }}"
-    pack="{{ pack }}"; pack_meta="{{ pack_meta }}"; extra_libs="{{ extra_libs }}"
+    pack="{{ pack }}"; pack_meta="{{ pack_meta }}"; extra_libs="{{ extra_libs }}"; variant="{{ variant }}"
     work="$root/{{ workdir }}"
     # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
     rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
     for t in unzip patchelf zip zipalign apksigner aapt2 readelf nm keytool python3; do
         command -v "$t" >/dev/null || { echo "MISSING required tool: $t" >&2; exit 1; }
     done
+    # The variant word is checked first of all: an unknown word stops the recipe before the patcher or any staging runs.
+    python3 -I tools/quest_repack_libs.py check-build-variant --variant "$variant"
     [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
     [ -f "$shim" ] || { echo "shim not found (build it: just build-android): $shim" >&2; exit 1; }
     if [ -n "$pack" ]; then
@@ -391,6 +398,9 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
             ${early_args[@]+"${early_args[@]}"} ${off_args[@]+"${off_args[@]}"}
         stage_libs+=("lib/arm64-v8a/libnevr_plugin_manifest.so")
     fi
+    # 3d'. the variant stamp, every APK: the word as the file's bytes, empty for a plain release (tools/quest_repack_libs.py).
+    python3 -I tools/quest_repack_libs.py write-build-variant --stage "$work/stage" --variant "$variant"
+    stage_libs+=("lib/arm64-v8a/libnevr_build_variant.so")
     # 3e. script libraries (lib<hash16>.so, each checked and listed in SHA256SUMS; tools/quest_repack_libs.py stage-libs), staged
     # as STORED entries beside the plugins. A store library one of them replaces is named in the directory's REPLACE file.
     combat_libs=()
@@ -538,7 +548,7 @@ _quest-apk store_apk *args: (_heavy-guard "_quest-apk" args) _build-guard _requi
     cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
-    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
+    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack "" "" "" "" "" "" "" "" "" "" ""
 
 # The development APK for an autopilot run on a Quest (#1202, docs/adr/0025-quest-autopilot-route.md): the local
 # android-arm64 sentinel (a development build: the input seam refuses a release) with libnevr_autopilot.so beside it,
@@ -546,7 +556,7 @@ _quest-apk store_apk *args: (_heavy-guard "_quest-apk" args) _build-guard _requi
 # nevr_autopilot turns it on. Writes build/android-arm64/repack/r15_nevr-sentinel_signed.apk, the path test-quest-hooks-pinned
 # reads. No release or package-dev APK carries the plugin.
 quest-autopilot-apk store_apk=env("NEVR_STORE_APK"): build-android
-    just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so "" "" "" "" "" libnevr_autopilot.so
+    just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so "" "" "" "" "" libnevr_autopilot.so "" "" "" ""
 
 # The q15t plugin libraries (#1546, src/quest/plugins/q15t/README.md): libq15t.so and libq15t_early.so, built with the android-arm64
 # preset, each through the plugin static-init check (tools/check_quest_static_init.sh --plugin) and the emulated-TLS check
@@ -742,11 +752,8 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
             early="libq15t_early.so"
         fi
     fi
-    if [ -n "$pack" ] || [ -n "$early" ] || [ -n "$libs" ]; then
-        just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "$early" "" "$pack" "$pack_meta" "$libs"
-    else
-        just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver"
-    fi
+    # The variant word names the APK to the sentinel (stamped by the repack, docs/adr/0040 rule 1): empty for the release APK.
+    just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "$early" "" "$pack" "$pack_meta" "$libs" "$variant"
     python3 -I tools/quest_release_loader.py verify-apk --apk "$out/repack/r15_nevr-sentinel_signed.apk" --sha256 "$loader_sha"
     if [ -z "$variant" ]; then
         python3 -I tools/quest_release_base.py check-release --apk "$out/repack/r15_nevr-sentinel_signed.apk" --base "$base" >&2
@@ -1614,7 +1621,7 @@ quest-store-build: (_quest-store-require "apk" "obb" "keystore") quest-stock-dat
     python3 -I tools/quest_store_build.py check || status=$?
     [ "$status" -ne 0 ] || exit 0
     [ "$status" -eq 3 ] || exit "$status"
-    just android-repack-apk "$NEVR_STORE_APK" build/android-arm64/sentinel/libovrplatformloader.so build/quest-store/repack
+    just android-repack-apk "$NEVR_STORE_APK" build/android-arm64/sentinel/libovrplatformloader.so build/quest-store/repack "" "" "" "" "" "" "" "" "" "" ""
     python3 -I tools/quest_store_build.py collect
 
 # Put the store build on the one attached headset: `adb install -r` of the APK, then the stock `_data` replaces the headset's
