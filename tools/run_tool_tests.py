@@ -76,7 +76,8 @@ The lock. A run of the whole suite is one at a time per log directory: an exclus
 taken before the start record and held until the run ends. A run is a subset, and takes no lock, when its positional
 arguments name between one and SUBSET_MAX_FILES test paths and none is tools/tests or a directory above it (`is_subset`:
 options and the values of the options that take one are not paths, so `--deselect X`, `--ignore X`, `--rootdir .`,
-`tools`, `.` and a list of every test file all run the whole suite); its records say
+`tools`, `.` and a list of every test file all run the whole suite, and so does anything that hides what pytest will
+collect: an unknown option, an `@file` argument, `-c`, `-o addopts=...`, a path in $PYTEST_ADDOPTS); its records say
 `lock: {"taken": false, "reason": "subset"}`. The default log directory is the same for every checkout on a machine, so
 the lock is machine-wide; a run with a log directory of its own has a lock of its own. The file names the holder (pid,
 checkout, start) while it runs. A run that finds it held says who holds it on stderr and waits up to
@@ -372,42 +373,73 @@ FLAG_OPTIONS = frozenset((
 SUBSET_MAX_FILES = 20
 
 
-def is_subset(args: list) -> bool:
+# The options that bring in a config file, whose `addopts` can name any path (`-c`), and that set `addopts` itself
+# (`-o addopts=...`).
+CONFIG_OPTIONS = frozenset(("-c", "--config-file"))
+OVERRIDE_INI_OPTIONS = frozenset(("-o", "--override-ini"))
+
+
+def is_subset(args: list, environ) -> bool:
     """True when the arguments name a few test paths and so run a small part of the suite; such a run takes no lock.
 
-    Only the positional arguments count: the options are skipped, and so is the value of an option that takes one (the
-    next argument unless it is an option). A positional argument names a path when what precedes any `::` exists. The
-    run is the whole suite when no positional argument names a path (the default run, or only options such as
+    The tokens are $PYTEST_ADDOPTS (split as pytest splits it) followed by the arguments, as pytest reads them. Only
+    the positional arguments name what is collected: the options are skipped, and so is the value of an option that
+    takes one (the next argument unless it is an option). A positional argument names a path when what precedes any
+    `::` exists. A path outside the repository, as a temporary suite is, makes a subset.
+
+    The run is the whole suite when no positional argument names a path (the default run, or only options such as
     `--deselect` and `--ignore`, which collect from the root), when one is `tools/tests` or a directory above it
-    (`tools`, `.`), when more than SUBSET_MAX_FILES are named (the suite file by file), and when an option is not one
-    pytest is known to have (VALUE_OPTIONS, FLAG_OPTIONS): the value of an option the classifier does not know could be
-    a path that is not a test path. A path outside the repository, as a temporary suite is, makes a subset. When in
-    doubt a run is the whole suite: the lock is the safe side."""
+    (`tools`, `.`), or when more than SUBSET_MAX_FILES are named (the suite file by file). It is also the whole suite
+    whenever the classifier cannot see what pytest will collect: an option that is not one pytest is known to have
+    (VALUE_OPTIONS, FLAG_OPTIONS), whose value could be a path; any token that starts with `@` (argparse reads the file
+    it names as more arguments, wherever the token stands); a config file (`-c`, `--config-file`) or an `addopts`
+    override (`-o addopts=...`), either of which can name any path; a positional argument in $PYTEST_ADDOPTS; and a
+    $PYTEST_ADDOPTS that cannot be split. Anything in doubt locks."""
+    try:
+        addopts = shlex.split(environ.get("PYTEST_ADDOPTS", ""))
+    except ValueError:
+        return False  # pytest refuses it; what the run would collect is not known
+    tokens = addopts + list(args)
     paths = []
-    skip = False
+    skip = None  # the option whose value is the next token
     options_end = False
-    for tok in args:
+    for index, tok in enumerate(tokens):
+        if tok.startswith("@"):
+            return False
         if skip:
-            skip = False
+            option, skip = skip, None
             if not tok.startswith("-"):
+                if option in OVERRIDE_INI_OPTIONS and tok.startswith("addopts"):
+                    return False
                 continue
         if options_end or not tok.startswith("-"):
+            if index < len(addopts):
+                return False
             target = tok.split("::", 1)[0]
             if target and os.path.exists(target):
                 paths.append(pathlib.Path(target).resolve())
         elif tok == "--":
             options_end = True
         elif tok.startswith("--"):
-            name, attached, _ = tok.partition("=")
+            name, attached, value = tok.partition("=")
+            if name in CONFIG_OPTIONS:
+                return False
             if name in VALUE_OPTIONS:
-                skip = not attached
+                if name in OVERRIDE_INI_OPTIONS and value.startswith("addopts"):
+                    return False
+                skip = None if attached else name
             elif name not in FLAG_OPTIONS:
                 return False
         else:  # -x, -xyz (flags, the last of which may take the next argument), -kEXPR (a value attached)
             for i, letter in enumerate(tok[1:]):
                 option = "-" + letter
+                if option in CONFIG_OPTIONS:
+                    return False
                 if option in VALUE_OPTIONS:
-                    skip = i == len(tok) - 2
+                    value = tok[i + 2:]
+                    if option in OVERRIDE_INI_OPTIONS and value.startswith("addopts"):
+                        return False
+                    skip = None if value else option
                     break
                 if option not in FLAG_OPTIONS:
                     return False
@@ -955,7 +987,7 @@ def run_locked(argv: list, lock: MachineLock) -> int:
         print(f"test-tools: FAIL cannot write the run record to {log_dir}: {exc}", file=sys.stderr)
         return 2
 
-    if is_subset(argv):
+    if is_subset(argv, os.environ):
         lock_info = {"taken": False, "reason": "subset"}
     else:
         try:

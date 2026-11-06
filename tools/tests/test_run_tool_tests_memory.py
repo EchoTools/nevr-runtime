@@ -150,9 +150,12 @@ class SubsetTest(Tmp):
                      [str(self.file), str(self.module.SUITE_DIR / "test_run_tool_tests.py")],
                      files[:self.module.SUBSET_MAX_FILES], ["-vv", one], ["-qk", "expr", one], ["-kexpr", one],
                      ["--tb=short", one], ["--", one], ["--log-file", str(self.file), one],
-                     ["--debug", "-q", one]):
+                     ["--debug", "-q", one],
+                     # an ini override other than addopts changes no path that is collected
+                     ["-o", "cache_dir=x", one], ["--override-ini", "cache_dir=x", one], ["--override-ini=cache_dir=x", one],
+                     ["-ocache_dir=x", one], ["-qo", "cache_dir=x", one]):
             with self.subTest(args=args[:3]):
-                self.assertTrue(self.module.is_subset(args))
+                self.assertTrue(self.module.is_subset(args, {}))
 
     def test_every_command_line_that_runs_the_whole_suite_takes_the_lock(self):
         files = sorted(str(p) for p in self.module.SUITE_DIR.glob("test_*.py"))
@@ -170,10 +173,48 @@ class SubsetTest(Tmp):
                      # an option the classifier does not know could take a path: the lock is the safe side
                      ["--made-up-option", str(self.file)], ["--made-up=1", "tools/tests/test_run_tool_tests.py"],
                      ["--made-up-option", "tools/tests/test_run_tool_tests.py"], ["-Z", "tools/tests/test_run_tool_tests.py"],
-                     ["-qZ", "tools/tests/test_run_tool_tests.py"],
+                     ["-qZ", "tools/tests/test_run_tool_tests.py"], ["-k", str(self.file)], ["-qk", str(self.file)],
                      ["--debug", "--made-up", "tools/tests/test_run_tool_tests.py"]):
             with self.subTest(args=args[:3]):
-                self.assertFalse(self.module.is_subset(args))
+                self.assertFalse(self.module.is_subset(args, {}))
+
+
+    def test_an_argument_file_runs_the_whole_suite(self):
+        # argparse (pytest's `fromfile_prefix_chars="@"`) reads `@FILE` as the arguments in FILE wherever it stands,
+        # as a positional argument, as an option's value or after `--`.
+        argfile = self.root / "args.txt"
+        argfile.write_text("tools/tests\n")
+        one = "tools/tests/test_run_tool_tests.py"
+        for args in (["@" + str(argfile), one], [one, "@" + str(argfile)], ["-k", "@" + str(argfile), one],
+                     ["--", one, "@" + str(argfile)], ["@absent.txt", one]):
+            with self.subTest(args=args):
+                self.assertFalse(self.module.is_subset(args, {}))
+
+    def test_a_config_file_or_an_addopts_override_runs_the_whole_suite(self):
+        # A config file's addopts, or addopts set on the command line, can name any path.
+        one = "tools/tests/test_run_tool_tests.py"
+        ini = str(self.file)
+        for args in (["-c", ini, one], [f"-c{ini}", one], ["-qc", ini, one], ["--config-file", ini, one],
+                     [f"--config-file={ini}", one],
+                     ["-o", "addopts=tools/tests", one], ["-qo", "addopts=tools/tests", one],
+                     ["-oaddopts=tools/tests", one], ["-qoaddopts=tools/tests", one],
+                     ["--override-ini", "addopts=tools/tests", one], ["--override-ini=addopts=tools/tests", one]):
+            with self.subTest(args=args):
+                self.assertFalse(self.module.is_subset(args, {}))
+
+    def test_a_positional_argument_in_pytest_addopts_runs_the_whole_suite(self):
+        # pytest puts $PYTEST_ADDOPTS before the arguments; a path there is collected whatever the arguments name.
+        one = "tools/tests/test_run_tool_tests.py"
+        for addopts in ("tools/tests", "-q tools/tests", "-k expr tools", one, str(self.file), "'unclosed",
+                        "--made-up", "-c x", "-o addopts=tools/tests", "@args.txt"):
+            with self.subTest(addopts=addopts):
+                self.assertFalse(self.module.is_subset([one], {"PYTEST_ADDOPTS": addopts}))
+        for addopts in ("", "-p no:randomly", "-pno:randomly", "-q -p no:cacheprovider", "-k expr", "-o cache_dir=x"):
+            with self.subTest(addopts=addopts):
+                self.assertTrue(self.module.is_subset([one], {"PYTEST_ADDOPTS": addopts}))
+        # an option at the end of $PYTEST_ADDOPTS takes the first argument as its value, as pytest reads it
+        self.assertTrue(self.module.is_subset(["expr", one], {"PYTEST_ADDOPTS": "-k"}))
+        self.assertFalse(self.module.is_subset([one], {"PYTEST_ADDOPTS": "--deselect"}))
 
 
 class SubsetOptionsTest(Tmp):
@@ -182,8 +223,8 @@ class SubsetOptionsTest(Tmp):
         before = os.getcwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, before)
-        self.assertTrue(self.module.is_subset(["--", "-t.py"]))
-        self.assertFalse(self.module.is_subset(["-t.py"]))  # -t is no option pytest has
+        self.assertTrue(self.module.is_subset(["--", "-t.py"], {}))
+        self.assertFalse(self.module.is_subset(["-t.py"], {}))  # -t is no option pytest has
 
     @unittest.skipIf(importlib.util.find_spec("pytest") is None, "pytest is not installed")
     def test_the_option_lists_are_pytests_own(self):
@@ -427,8 +468,8 @@ class RunnerTest(unittest.TestCase):
                               env=self.env(**extra), timeout=120)
 
     def run_whole(self, suite: Path = None, **extra) -> subprocess.CompletedProcess:
-        """A run of the whole suite as the runner sees it (no argument names a test path); pytest is pointed at the
-        test suite by $PYTEST_ADDOPTS, which the runner does not read for that."""
+        """A run of the whole suite as the runner sees it: no argument names a test path, and pytest is pointed at the
+        test suite by a path in $PYTEST_ADDOPTS, which makes any run the whole suite."""
         return subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider"], capture_output=True,
                               text=True, cwd=REPO, timeout=120,
                               env=self.env(PYTEST_ADDOPTS=str(suite or self.suite), **extra))
@@ -614,6 +655,13 @@ class RunnerTest(unittest.TestCase):
             self.assertEqual(record["lock"], {"taken": False, "reason": "subset"})
         self.assertIn("test-tools: lock not taken (subset", Path(self.records()[0]["log"]).read_text())
         self.assertEqual((self.logs / "run.lock").read_text(), before)
+
+    def test_a_path_in_pytest_addopts_makes_a_run_given_test_paths_wait_for_the_lock(self):
+        self.hold_lock({"pid": 4242, "checkout": "/the/other/checkout"})
+        other = self.write_suite("other", PASS_SUITE)
+        result = self.run_script(NEVR_TEST_LOCK_WAIT_S="0.5", PYTEST_ADDOPTS=str(other))  # the arguments name a suite
+        self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
+        self.assertEqual(self.records("lock_timeout")[0]["lock"]["holder"], {"pid": 4242, "checkout": "/the/other/checkout"})
 
     def test_a_run_of_the_whole_suite_waits_for_the_lock_a_subset_leaves_alone(self):
         self.hold_lock({"pid": 4242, "checkout": "/the/other/checkout"})
