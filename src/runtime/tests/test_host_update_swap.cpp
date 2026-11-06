@@ -1318,6 +1318,20 @@ TEST_F(HostUpdateSwap, F7_ALeftoverDoneJournalKeepsANewerStagedReleaseForTheSwap
   EXPECT_FALSE(Exists(update_ + L"\\staged.json"));
 }
 
+// A swapped-in file that is gone when an interrupted swap's cleanup runs is not recorded as owned (a path with no sha256
+// would make state.json unusable and have it rebuilt, losing the channel).
+TEST_F(HostUpdateSwap, F7_ALeftoverDoneJournalOwnsOnlyTheSwappedFilesThatAreStillInTheRoot) {
+  OldReleaseInTheRootAndANewOneStaged();
+  ASSERT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"swapped"});
+  DeleteFileW((root_ + L"\\plugins\\example.dll").c_str());
+  Put(L"update\\swap.json", Journal("done"));
+  EXPECT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"recovered"});
+  const nlohmann::json state = ReadJson(update_ + L"\\state.json");
+  EXPECT_EQ(state["owned"], nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"sha256", Sha256Hex(new_runtime_)}}}))
+      << state.dump();
+  EXPECT_EQ(state.value("channel", ""), "beta") << "the state was not rebuilt";
+}
+
 TEST_F(HostUpdateSwap, F7_ALeftoverDoneJournalKeepsThePendingRecordAndACrashMarkerMadeSince) {
   OldReleaseInTheRootAndANewOneStaged();
   ASSERT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"swapped"});

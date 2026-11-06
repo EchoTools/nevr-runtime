@@ -758,7 +758,10 @@ bool SwapRun::StagedNames(const std::string& version) const {
 bool SwapRun::FinishDone(const Journal& journal) {
   json owned = json::array();
   for (const names::Member& member : journal.in) {
-    owned.push_back({{"path", names::MemberPath(member)}, {"sha256", FactsOf(InRoot(member)).sha256}});
+    // A file that is not in the root now (removed since the swap) is not owned: a path with no sha256 is not valid state.
+    const FileFacts facts = FactsOf(InRoot(member));
+    if (facts.sha256.empty()) continue;
+    owned.push_back({{"path", names::MemberPath(member)}, {"sha256", facts.sha256}});
   }
   state_["owned"] = owned;
   if (!WriteJson(UpdateFile(names::kStateJson), state_)) return false;
