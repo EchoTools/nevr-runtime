@@ -45,21 +45,44 @@ var Stays = []Stay{
 //go:embed python_to_port.txt
 var portFile string
 
-// ToPort returns the Python files under tools/ that are to be ported, sorted. The list only shrinks.
-func ToPort() []string { return parseList(portFile) }
+// Entry is a line of python_to_port.txt: a Python file under tools/ that is still to be ported, and why it is still
+// Python.
+type Entry struct{ Path, Reason string }
 
-func parseList(text string) []string {
-	var out []string
+// MinReasonLen is the shortest reason that counts as one.
+const MinReasonLen = 10
+
+// PortEntries returns the Python files under tools/ that are to be ported, with their reasons, in file order.
+func PortEntries() []Entry { return parseEntries(portFile) }
+
+// ToPort returns the paths of PortEntries, sorted as the file keeps them.
+func ToPort() []string { return paths(PortEntries()) }
+
+func paths(entries []Entry) []string {
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.Path
+	}
+	return out
+}
+
+// parseEntries reads "path<TAB>reason" lines; blank lines and lines that start with # are skipped, and a line without a
+// tab has an empty reason.
+func parseEntries(text string) []Entry {
+	var out []Entry
 	sc := bufio.NewScanner(strings.NewReader(text))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		out = append(out, line)
+		path, reason, _ := strings.Cut(line, "\t")
+		out = append(out, Entry{strings.TrimSpace(path), strings.TrimSpace(reason)})
 	}
 	return out
 }
+
+func parseList(text string) []string { return paths(parseEntries(text)) }
 
 // StayFor reports the Stays entry that covers path.
 func StayFor(path string) (Stay, bool) {
@@ -123,16 +146,21 @@ func Stale(tracked []string) []string {
 	return out
 }
 
-// Grown returns the entries of now that old did not have: what a change added to a list that only shrinks.
-func Grown(old, now []string) []string {
+// Added splits the entries of now whose path old did not have into those that carry a reason and those that do not: a
+// file may be added to the port list when the change says why it is still Python.
+func Added(old []string, now []Entry) (withReason, withoutReason []Entry) {
 	had := toSet(old)
-	var out []string
-	for _, f := range now {
-		if !had[f] {
-			out = append(out, f)
+	for _, e := range now {
+		if had[e.Path] {
+			continue
+		}
+		if len(strings.TrimSpace(e.Reason)) >= MinReasonLen {
+			withReason = append(withReason, e)
+		} else {
+			withoutReason = append(withoutReason, e)
 		}
 	}
-	return out
+	return withReason, withoutReason
 }
 
 func toSet(list []string) map[string]bool {

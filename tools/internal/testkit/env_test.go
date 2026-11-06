@@ -280,7 +280,7 @@ func TestEnvTakesTheGoCachesFromTheCallersVariablesWhenTheyAreSet(t *testing.T) 
 func TestEnvAtMakesItsDirectoriesBelowTheRootItIsGiven(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	env, err := EnvAt(root, "FOO=bar")
+	env, err := EnvAt(root, func(string) string { return "" }, "", "FOO=bar")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,12 +294,62 @@ func TestEnvAtMakesItsDirectoriesBelowTheRootItIsGiven(t *testing.T) {
 	if got, _ := lookup(env, "GIT_CONFIG_GLOBAL"); got != "/dev/null" {
 		t.Errorf("GIT_CONFIG_GLOBAL = %q", got)
 	}
-	if _, err := EnvAt(root, "NOEQUALS"); err == nil {
+	if _, err := EnvAt(root, func(string) string { return "" }, "", "NOEQUALS"); err == nil {
 		t.Error("EnvAt accepted an addition with no '='")
 	}
 	blocker := filepath.Join(t.TempDir(), "file")
 	os.WriteFile(blocker, nil, 0o600)
-	if _, err := EnvAt(filepath.Join(blocker, "sub")); err == nil {
+	if _, err := EnvAt(filepath.Join(blocker, "sub"), func(string) string { return "" }, ""); err == nil {
 		t.Error("EnvAt made directories below a file")
+	}
+}
+
+func TestEnvAtTakesPathAndTheCachesFromTheGetenvItIsGivenNotFromTheProcess(t *testing.T) {
+	t.Parallel()
+	vars := map[string]string{"PATH": "/tool/path", "GOCACHE": "/given/gocache", "GOMODCACHE": "/given/modcache", "DISPLAY": ":0"}
+	env, err := EnvAt(t.TempDir(), func(k string) string { return vars[k] }, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"PATH": "/tool/path", "GOCACHE": "/given/gocache", "GOMODCACHE": "/given/modcache"} {
+		if got, _ := lookup(env, key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if _, ok := lookup(env, "DISPLAY"); ok {
+		t.Error("DISPLAY passed through")
+	}
+	empty, _ := EnvAt(t.TempDir(), func(string) string { return "" }, "")
+	for _, key := range []string{"PATH", "GOCACHE", "GOMODCACHE"} {
+		if v, ok := lookup(empty, key); ok {
+			t.Errorf("%s = %q from nowhere: EnvAt read the process's environment", key, v)
+		}
+	}
+}
+
+func TestEnvAtAsksTheGoItIsGivenForCachesTheCallerDoesNotSet(t *testing.T) {
+	t.Parallel()
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := EnvAt(t.TempDir(), func(string) string { return "" }, goBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"GOCACHE", "GOMODCACHE"} {
+		if got, _ := lookup(env, key); got == "" || got != goEnv(t, key) {
+			t.Errorf("%s = %q, want go env's %q", key, got, goEnv(t, key))
+		}
+	}
+}
+
+// go test's result cache is keyed by a test's inputs it can see, not by the files a child process reads; the shared
+// GOCACHE would serve a stale pass to a go test started through the kit.
+func TestEnvSetsGOFLAGSSoGoTestNeverServesACachedResult(t *testing.T) {
+	t.Parallel()
+	env := Env(t)
+	if got, _ := lookup(env, "GOFLAGS"); got != "-count=1" {
+		t.Errorf("GOFLAGS = %q, want -count=1", got)
 	}
 }

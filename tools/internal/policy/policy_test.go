@@ -1,14 +1,12 @@
 package policy
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
@@ -116,29 +114,61 @@ func TestEveryStayHasAReasonAndAnEnd(t *testing.T) {
 	}
 }
 
-// ---- the list only shrinks ----
+// ---- the list grows only with a reason ----
 
-func TestGrownNamesWhatTheNewListAdds(t *testing.T) {
+func TestAddedSplitsNewEntriesByWhetherTheyCarryAReason(t *testing.T) {
 	t.Parallel()
-	old := []string{"tools/a.py", "tools/b.py", "tools/c.py"}
-	for _, tc := range []struct {
-		name string
-		now  []string
-		want string
-	}{
-		{"same", old, ""},
-		{"smaller", []string{"tools/a.py", "tools/c.py"}, ""},
-		{"empty", nil, ""},
-		{"one added", []string{"tools/a.py", "tools/b.py", "tools/c.py", "tools/d.py"}, "tools/d.py"},
-		{"one swapped", []string{"tools/a.py", "tools/b.py", "tools/z.py"}, "tools/z.py"},
-	} {
-		if got := strings.Join(Grown(old, tc.now), ","); got != tc.want {
-			t.Errorf("%s: Grown = %q, want %q", tc.name, got, tc.want)
+	old := []string{"tools/a.py", "tools/b.py"}
+	now := []Entry{
+		{"tools/a.py", ""}, // already there: its reason is the Every-entry test's business
+		{"tools/b.py", "ported by its unit"},
+		{"tools/c.py", "extends an existing Python test pattern; port with the G-units"},
+		{"tools/d.py", ""},
+		{"tools/e.py", "   "},
+		{"tools/f.py", "short"},
+	}
+	with, without := Added(old, now)
+	paths := func(es []Entry) string {
+		var out []string
+		for _, e := range es {
+			out = append(out, e.Path)
+		}
+		return strings.Join(out, ",")
+	}
+	if paths(with) != "tools/c.py" || paths(without) != "tools/d.py,tools/e.py,tools/f.py" {
+		t.Errorf("with %q, without %q", paths(with), paths(without))
+	}
+	if with, without := Added(old, now[:2]); len(with)+len(without) != 0 {
+		t.Errorf("an unchanged or shrunk list added %v %v", with, without)
+	}
+	if with, without := Added(nil, now[2:3]); len(with) != 1 || len(without) != 0 {
+		t.Errorf("against an empty baseline: %v %v", with, without)
+	}
+}
+
+func TestEveryPortListEntryHasAReason(t *testing.T) {
+	t.Parallel()
+	entries := PortEntries()
+	if len(entries) < 100 {
+		t.Fatalf("%d entries: the list is read from the wrong place", len(entries))
+	}
+	for _, e := range entries {
+		if len(strings.TrimSpace(e.Reason)) < MinReasonLen {
+			t.Errorf("%s has no reason on tools/internal/policy/python_to_port.txt (path, a tab, then why it is still Python and what ends it)", e.Path)
 		}
 	}
 }
 
-func TestThePortListIsNotLargerThanAtTheMergeBaseWithOriginMain(t *testing.T) {
+func TestParseEntriesReadsPathTabReasonAndSkipsComments(t *testing.T) {
+	t.Parallel()
+	got := parseEntries("# c\n\ntools/a.py\twhy a\ntools/b.py\n  tools/c.py \t  why c  \n")
+	want := []Entry{{"tools/a.py", "why a"}, {"tools/b.py", ""}, {"tools/c.py", "why c"}}
+	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestEntriesAddedToThePortListSinceTheMergeBaseCarryAReason(t *testing.T) {
 	t.Parallel()
 	old, skipped, err := BaselineList(repoRoot(t), testkit.Env(t))
 	if err != nil {
@@ -147,9 +177,12 @@ func TestThePortListIsNotLargerThanAtTheMergeBaseWithOriginMain(t *testing.T) {
 	if skipped != "" {
 		t.Skip(skipped)
 	}
-	if added := Grown(old, ToPort()); len(added) > 0 {
-		t.Errorf("the port list grew since the merge-base; it only shrinks (a file that is not on it is Go, or has a recorded reason):\n  %s",
-			strings.Join(added, "\n  "))
+	with, without := Added(old, PortEntries())
+	for _, e := range without {
+		t.Errorf("%s was added to the port list without a reason (a Python file needs one, ADR 0044 rule 2: path, a tab, why)", e.Path)
+	}
+	for _, e := range with {
+		t.Logf("added to the port list with a reason: %s: %s", e.Path, e.Reason)
 	}
 }
 
@@ -479,37 +512,17 @@ func TestEveryServeForeverInTheTestFilesSetsAShortPollInterval(t *testing.T) {
 
 // ---- the recipes run both halves (B1) ----
 
-var (
-	buildOnce sync.Once
-	builtBin  string
-	buildErr  error
-)
-
-// testGoToolsBinary builds cmd/test-go-tools once for this test process.
+// testGoToolsBinary builds cmd/test-go-tools into the test's own directory (go's build cache makes it fast), so nothing
+// is left behind when the test ends.
 func testGoToolsBinary(t *testing.T) string {
 	t.Helper()
-	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "policy-test-go-tools-")
-		if err != nil {
-			buildErr = err
-			return
-		}
-		builtBin = filepath.Join(dir, "test-go-tools")
-		env, err := testkit.EnvAt(filepath.Join(dir, "env"))
-		if err != nil {
-			buildErr = err
-			return
-		}
-		cmd := exec.Command("go", "-C", filepath.Join(repoRoot(t), "tools"), "build", "-o", builtBin, "./cmd/test-go-tools")
-		cmd.Env = env
-		if out, err := cmd.CombinedOutput(); err != nil {
-			buildErr = fmt.Errorf("go build: %v\n%s", err, out)
-		}
-	})
-	if buildErr != nil {
-		t.Fatal(buildErr)
+	bin := filepath.Join(t.TempDir(), "test-go-tools")
+	cmd := exec.CommandContext(t.Context(), "go", "-C", filepath.Join(repoRoot(t), "tools"), "build", "-o", bin, "./cmd/test-go-tools")
+	cmd.Env = testkit.Env(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
 	}
-	return builtBin
+	return bin
 }
 
 // halves is a project directory laid out as the recipes expect (build/go-tools/test-go-tools, the real tool), with a
@@ -531,6 +544,12 @@ func newHalves(t *testing.T) *halves {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(bin, filepath.Join(h.dir, "build", "go-tools", "test-go-tools")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(h.logs, 0o755); err != nil { // the Python runner's log, which its "test-tools: log" line names
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.logs, "20261105T120000.123456Z-1-0123456789abcdef-aabbccddeeff.log"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.py, h.goBin = testkit.Fake(t, "python3"), testkit.Fake(t, "go")

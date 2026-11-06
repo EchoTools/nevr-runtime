@@ -35,28 +35,37 @@ var gitConfig = [][2]string{
 // result has each key once). Each call makes new directories.
 func Env(t T, extra ...string) []string {
 	t.Helper()
-	env, err := EnvAt(filepath.Join(t.TempDir(), "env"), extra...)
+	goBin, _ := exec.LookPath("go")
+	env, err := EnvAt(filepath.Join(t.TempDir(), "env"), os.Getenv, goBin, extra...)
 	if err != nil {
 		t.Fatalf("testkit.Env: %v", err)
 	}
 	return env
 }
 
-// EnvAt is Env for a caller that has no test: the directories are made below root, which the caller removes. A tool
-// that runs a test suite for people (cmd/test-go-tools) gives the suite the same environment its tests give their
-// commands.
-func EnvAt(root string, extra ...string) ([]string, error) {
+// EnvAt is Env for a caller that has no test (cmd/test-go-tools, which runs a test suite for people), and it reads
+// nothing from the process's environment: PATH and the Go caches come from getenv, and when getenv has no GOCACHE or
+// GOMODCACHE they come from `goBin env` (goBin "" means there is none to ask, and the variable is left out). The
+// directories are made below root, which the caller removes. It also sets GOFLAGS=-count=1: go test's result cache
+// lives in the shared GOCACHE and cannot see the files a child process reads, so a kit-started go test never takes a
+// cached pass.
+func EnvAt(root string, getenv func(string) string, goBin string, extra ...string) ([]string, error) {
 	dirs := [][2]string{
 		{"HOME", "home"}, {"XDG_CONFIG_HOME", "config"}, {"XDG_DATA_HOME", "data"}, {"XDG_STATE_HOME", "state"},
 		{"XDG_CACHE_HOME", "cache"}, {"NEVR_WORK_ROOT", "work"}, {"TMPDIR", "tmp"},
 	}
 	var e envList
-	if path, ok := os.LookupEnv("PATH"); ok {
+	if path := getenv("PATH"); path != "" {
 		e.set("PATH", path)
 	}
-	for key, value := range goCaches() {
-		e.set(key, value)
+	for _, k := range []string{"GOCACHE", "GOMODCACHE"} {
+		if v := getenv(k); v != "" {
+			e.set(k, v)
+		} else if v := goDefaults(goBin)[k]; v != "" {
+			e.set(k, v)
+		}
 	}
+	e.set("GOFLAGS", "-count=1")
 	e.set("GIT_CONFIG_GLOBAL", "/dev/null")
 	e.set("GIT_CONFIG_NOSYSTEM", "1")
 	e.set("GIT_TERMINAL_PROMPT", "0")
@@ -83,42 +92,31 @@ func EnvAt(root string, extra ...string) ([]string, error) {
 }
 
 var (
-	goDefaultsOnce  sync.Once
-	goDefaultsValue map[string]string
+	goDefaultsMu    sync.Mutex
+	goDefaultsCache = map[string]map[string]string{}
 )
 
-// goCaches returns GOCACHE and GOMODCACHE: the caller's variables when set, else what `go env` says (it knows the
-// defaults and the user's `go env -w` settings; looked up once per process). A key with no value is left out.
-func goCaches() map[string]string {
-	out := map[string]string{}
-	for _, k := range []string{"GOCACHE", "GOMODCACHE"} {
-		if v := os.Getenv(k); v != "" {
-			out[k] = v
-		} else if v := goDefaults()[k]; v != "" {
-			out[k] = v
-		}
+// goDefaults is what `goBin env GOCACHE GOMODCACHE` prints (it knows the defaults and the user's `go env -w`
+// settings), looked up once per go binary. Empty when goBin is "" or the command fails.
+func goDefaults(goBin string) map[string]string {
+	if goBin == "" {
+		return nil
 	}
-	return out
-}
-
-func goDefaults() map[string]string {
-	goDefaultsOnce.Do(func() {
-		goDefaultsValue = map[string]string{}
-		goBin, err := exec.LookPath("go")
-		if err != nil {
-			return
-		}
-		keys := []string{"GOCACHE", "GOMODCACHE"}
-		out, err := exec.Command(goBin, append([]string{"env"}, keys...)...).Output()
-		if err != nil {
-			return
-		}
+	goDefaultsMu.Lock()
+	defer goDefaultsMu.Unlock()
+	if got, ok := goDefaultsCache[goBin]; ok {
+		return got
+	}
+	got := map[string]string{}
+	keys := []string{"GOCACHE", "GOMODCACHE"}
+	if out, err := exec.Command(goBin, append([]string{"env"}, keys...)...).Output(); err == nil {
 		lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
 		for i := range min(len(keys), len(lines)) {
-			goDefaultsValue[keys[i]] = lines[i]
+			got[keys[i]] = lines[i]
 		}
-	})
-	return goDefaultsValue
+	}
+	goDefaultsCache[goBin] = got
+	return got
 }
 
 // WithPath returns env with dirs put first on its PATH, in the order given (a PATH that env lacks becomes just dirs).

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
@@ -21,6 +24,27 @@ import (
 // The fake `go`: prints the file "stdout" beside it to standard output and "stderr" to standard error, and exits with
 // the number in "exit" (0 when there is none). A test writes those files before it runs the tool.
 func scripted(c *testkit.Call) int {
+	if _, err := os.Stat(filepath.Join(c.FakeDir, "leave-process")); err == nil {
+		// Exit 0 leaving a child that holds our standard output and error open.
+		child := exec.Command("sleep", "60")
+		child.Stdout, child.Stderr = c.Stdout, c.Stderr
+		if err := child.Start(); err != nil {
+			return 99
+		}
+		os.WriteFile(filepath.Join(c.FakeDir, "child.pid"), []byte(strconv.Itoa(child.Process.Pid)), 0o644)
+		fmt.Fprintln(c.Stdout, "py done")
+		return 0
+	}
+	if _, err := os.Stat(filepath.Join(c.FakeDir, "ignore-sigint")); err == nil {
+		signal.Ignore(syscall.SIGINT)
+		never := make(chan os.Signal, 1)
+		signal.Notify(never, syscall.SIGUSR2) // a signal handler keeps the runtime from calling this a deadlock
+		os.WriteFile(filepath.Join(c.FakeDir, "ready"), nil, 0o644)
+		<-never // until killed
+	}
+	if _, err := os.Stat(filepath.Join(c.FakeDir, "die-by-signal")); err == nil {
+		syscall.Kill(os.Getpid(), syscall.SIGKILL)
+	}
 	if _, err := os.Stat(filepath.Join(c.FakeDir, "wait-sigint")); err == nil {
 		ch := make(chan os.Signal, 1)
 		signal.Notify(ch, syscall.SIGINT)
@@ -67,7 +91,7 @@ func newRig(t *testing.T, stdout string, exit int) *rig {
 
 func newRigExit(t *testing.T, stdout, exit string) *rig {
 	t.Helper()
-	f := testkit.Fake(t, "go", "DISPLAY", "GNUPGHOME", "GH_TOKEN", "GIT_CONFIG_GLOBAL", "HOME", "GOCACHE", "GIT_CONFIG_PARAMETERS")
+	f := testkit.Fake(t, "go", "DISPLAY", "GNUPGHOME", "GH_TOKEN", "GIT_CONFIG_GLOBAL", "HOME", "GOCACHE", "GIT_CONFIG_PARAMETERS", "GOFLAGS")
 	py := testkit.Fake(t, "python3")
 	r := &rig{t: t, fake: f, py: py}
 	r.script(f, "stdout", stdout)
@@ -87,8 +111,13 @@ func (r *rig) script(f *testkit.FakeCommand, name, content string) {
 
 func (r *rig) run(args ...string) (code int, stdout, stderr string) {
 	r.t.Helper()
+	return r.runWith(defaultOptions, args...)
+}
+
+func (r *rig) runWith(opts options, args ...string) (code int, stdout, stderr string) {
+	r.t.Helper()
 	var out, errb bytes.Buffer
-	code = run(r.t.Context(), args, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
+	code = runWith(opts, r.t.Context(), args, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
 	return code, out.String(), errb.String()
 }
 
@@ -474,21 +503,35 @@ func TestBothHalvesPassingExitsZeroWithNoFailLine(t *testing.T) {
 	}
 }
 
-func TestAnInterruptedPythonHalfEndsTheRunWithoutTheGoHalf(t *testing.T) {
+// Only a signal the tool itself received is an interrupt. A Python half that was killed or exits 130 on its own (an OOM
+// kill, timeout -k, a signal sent to the runner alone) still gets the Go half, and both are named.
+func TestAPythonHalfEndedBySomethingElseStillGetsTheGoHalf(t *testing.T) {
 	t.Parallel()
-	for _, rc := range []string{"130", "143", "129"} {
+	for _, rc := range []string{"130", "143", "129", "137"} {
 		r := newRig(t, passingStream(), 0)
 		code, stdout, _ := r.both(rc, "")
 		if n, _ := strconv.Atoi(rc); code != n {
 			t.Errorf("rc %s: exit %d", rc, code)
 		}
-		if n := len(r.fake.Calls(t)); n != 0 {
-			t.Errorf("rc %s: go ran %d times after an interrupt", rc, n)
+		if n := len(r.fake.Calls(t)); n != 1 {
+			t.Errorf("rc %s: go ran %d times, want once", rc, n)
 		}
-		if !strings.Contains(stdout, "interrupted") || !strings.Contains(stdout, "go half not run") {
-			t.Errorf("rc %s: stdout does not say so:\n%s", rc, stdout)
+		mustHave(t, stdout, "FAIL: python half exit "+rc)
+		if strings.Contains(stdout, "interrupted") {
+			t.Errorf("rc %s: called an interrupt although no signal reached the tool:\n%s", rc, stdout)
 		}
 	}
+}
+
+func TestAPythonHalfKilledBySIGKILLReportsExit137AndGoStillRuns(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.script(r.py, "die-by-signal", "")
+	code, stdout, _ := r.run("--", "python3")
+	if code != 137 || len(r.fake.Calls(t)) != 1 {
+		t.Errorf("exit %d, go calls %d", code, len(r.fake.Calls(t)))
+	}
+	mustHave(t, stdout, "FAIL: python half exit 137")
 }
 
 func TestAPythonHalfThatCannotStartFailsAndTheGoHalfStillRuns(t *testing.T) {
@@ -534,6 +577,7 @@ func TestTheStreamTakesThePythonRunsStemAndRunsJSONLRecordsTheGoHalf(t *testing.
 	t.Parallel()
 	const stem = "20261105T120000.123456Z-4242-0123456789abcdef-aabbccddeeff"
 	r := newRig(t, ev("fail", pkg, "TestB")+ev("fail", pkg, ""), 1)
+	r.pythonLog(stem)
 	code, stdout, _ := r.both("1", "noise\ntest-tools: log "+filepath.Join(r.logDir, stem+".log")+"\n")
 	if code == 0 {
 		t.Fatal("exit 0")
@@ -606,15 +650,12 @@ func TestGoTestGetsATimeoutSoAHungTestEndsTheRunWithAName(t *testing.T) {
 	}
 }
 
-// Not parallel: it sets variables of the test process, as a person's shell has them.
 func TestGoTestDoesNotSeeTheCallersCredentialsDisplayOrGitConfigButKeepsItsGoCache(t *testing.T) {
-	t.Setenv("GH_TOKEN", "secret-token")
-	t.Setenv("DISPLAY", ":0")
-	t.Setenv("GNUPGHOME", "/nonexistent/gnupg")
-	t.Setenv("GIT_CONFIG_PARAMETERS", "'user.signingkey=owner'")
-	t.Setenv("GOCACHE", "/caller/gocache")
-	realHome := os.Getenv("HOME")
+	t.Parallel()
 	r := newRig(t, passingStream(), 0)
+	// The caller's environment, as a person's shell has it.
+	r.env = append(r.env, "GH_TOKEN=secret-token", "DISPLAY=:0", "GNUPGHOME=/nonexistent/gnupg",
+		"GIT_CONFIG_PARAMETERS='user.signingkey=owner'", "GOCACHE=/caller/gocache", "HOME=/caller/home")
 	r.run()
 	calls := r.fake.Calls(t)
 	if len(calls) != 1 {
@@ -629,11 +670,20 @@ func TestGoTestDoesNotSeeTheCallersCredentialsDisplayOrGitConfigButKeepsItsGoCac
 	if env["GIT_CONFIG_GLOBAL"] != "/dev/null" {
 		t.Errorf("GIT_CONFIG_GLOBAL = %q", env["GIT_CONFIG_GLOBAL"])
 	}
-	if env["HOME"] == "" || env["HOME"] == realHome {
-		t.Errorf("HOME = %q, want a directory of its own, not %q", env["HOME"], realHome)
+	if env["HOME"] == "" || env["HOME"] == "/caller/home" {
+		t.Errorf("HOME = %q, want a directory of its own, not the caller's", env["HOME"])
 	}
 	if env["GOCACHE"] != "/caller/gocache" {
 		t.Errorf("GOCACHE = %q, want the caller's", env["GOCACHE"])
+	}
+}
+
+func TestGoTestGetsTheCallersPathFromTheGetenvItWasGivenAndGOFLAGSCount1(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.run()
+	if got := r.fake.Calls(t)[0].Env["GOFLAGS"]; got != "-count=1" {
+		t.Errorf("GOFLAGS = %q", got)
 	}
 }
 
@@ -795,6 +845,7 @@ func TestAStreamThatAlreadyExistsIsNotOverwritten(t *testing.T) {
 	if err := os.WriteFile(existing, []byte("the earlier run\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	r.pythonLog(stem)
 	code, _, stderr := r.both("0", "test-tools: log "+filepath.Join(r.logDir, stem+".log")+"\n")
 	if code != 2 || !strings.Contains(stderr, stem) {
 		t.Errorf("exit %d, stderr %q", code, stderr)
@@ -839,5 +890,192 @@ func TestMinusCDoesNotMoveThePythonHalf(t *testing.T) {
 	here, _ := os.Getwd()
 	if calls := r.py.Calls(t); len(calls) != 1 || calls[0].Dir != here {
 		t.Errorf("python call %+v, want it run where the recipe runs (%s), not in %s", calls, here, mod)
+	}
+}
+
+// pythonLog makes the file the Python runner would have written, in the log directory.
+func (r *rig) pythonLog(stem string) {
+	r.t.Helper()
+	if err := os.MkdirAll(r.logDir, 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.logDir, stem+".log"), []byte("log\n"), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// The log line is trusted only when it names a file of the log directory: a line a test printed (the captured output of a
+// nested runner) must not name the stream.
+func TestALogLineThatDoesNotNameARealFileInTheLogDirectoryIsIgnored(t *testing.T) {
+	t.Parallel()
+	const stem = "20261105T120000.123456Z-4242-0123456789abcdef-aabbccddeeff"
+	elsewhere := t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, stem+".log"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, line := range map[string]string{
+		"another directory":  "test-tools: log " + filepath.Join(elsewhere, stem+".log"),
+		"a missing file":     "test-tools: log " + filepath.Join("LOGDIR", "missing.log"),
+		"a nested directory": "test-tools: log " + filepath.Join("LOGDIR", "sub", stem+".log"),
+		"not a .log":         "test-tools: log " + filepath.Join("LOGDIR", stem+".txt"),
+		"a parent step":      "test-tools: log " + filepath.Join("LOGDIR", "..", stem+".log"),
+		"a directory":        "test-tools: log " + filepath.Join("LOGDIR", "adir.log"),
+	} {
+		r := newRig(t, passingStream(), 0)
+		r.pythonLog(stem)
+		os.WriteFile(filepath.Join(r.logDir, stem+".txt"), nil, 0o644)
+		os.MkdirAll(filepath.Join(r.logDir, "sub"), 0o755)
+		os.MkdirAll(filepath.Join(r.logDir, "adir.log"), 0o755)
+		os.WriteFile(filepath.Join(r.logDir, "sub", stem+".log"), nil, 0o644)
+		os.WriteFile(filepath.Join(filepath.Dir(r.logDir), stem+".log"), nil, 0o644)
+		code, _, stderr := r.both("0", strings.ReplaceAll(line, "LOGDIR", r.logDir)+"\n")
+		if code != 0 {
+			t.Errorf("%s: exit %d", name, code)
+		}
+		files := r.streams()
+		if len(files) != 1 || strings.Contains(filepath.Base(files[0]), stem) {
+			t.Errorf("%s: streams = %v, want one with a stem of its own", name, files)
+		}
+		mustHave(t, stderr, "ignoring")
+		if recs := r.records(); recs[1]["paired"] != false {
+			t.Errorf("%s: paired = %v", name, recs[1]["paired"])
+		}
+	}
+}
+
+// ---- a Python half that exits 0 and leaves a process holding its output (R2-B3) ----
+
+func TestAPythonHalfThatLeavesAProcessHoldingItsOutputKeepsItsRealExitStatusAndNamesTheProcess(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.script(r.py, "leave-process", "")
+	t.Cleanup(func() { // the leftover is the test's to remove
+		if raw, err := os.ReadFile(filepath.Join(r.py.Dir(), "child.pid")); err == nil {
+			if pid, err := strconv.Atoi(string(raw)); err == nil {
+				syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	opts := defaultOptions
+	opts.leftoverDelay = 300 * time.Millisecond
+	start := time.Now()
+	code, stdout, stderr := r.runWith(opts, "--", "python3")
+	if code != 0 {
+		t.Errorf("exit %d, want the Python half's real status 0 (stderr %q)", code, stderr)
+	}
+	if len(r.fake.Calls(t)) != 1 {
+		t.Error("the Go half did not run")
+	}
+	if strings.Contains(stderr, "cannot start") || strings.Contains(stdout, "FAIL") {
+		t.Errorf("a finished Python half was reported as failed:\nstdout %s\nstderr %s", stdout, stderr)
+	}
+	raw, _ := os.ReadFile(filepath.Join(r.py.Dir(), "child.pid"))
+	mustHave(t, stderr, "still holds its output", "pid "+string(raw), "sleep")
+	if d := time.Since(start); d > 20*time.Second {
+		t.Errorf("took %v", d)
+	}
+	if left, _ := r.records()[1]["leftover"].([]any); len(left) != 1 || !strings.Contains(left[0].(string), "sleep") {
+		t.Errorf("go_end leftover = %v", r.records()[1]["leftover"])
+	}
+}
+
+// ---- cancelling during the Go half interrupts go, not kills it ----
+
+func TestCancellingDuringTheGoHalfInterruptsGoWithSIGINT(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, "", 0)
+	r.script(r.fake, "wait-sigint", "")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan int, 1)
+	var out, errb bytes.Buffer
+	go func() {
+		done <- runWith(defaultOptions, ctx, nil, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
+	}()
+	testkit.WaitFor(t, "the go fake to wait for SIGINT", func() bool {
+		_, err := os.Stat(filepath.Join(r.fake.Dir(), "ready"))
+		return err == nil
+	})
+	cancel()
+	select {
+	case code := <-done:
+		if code != 130 || !strings.Contains(out.String(), "go half exit 130") {
+			t.Errorf("exit %d (want 130: SIGINT, not a kill's 137), stdout %q", code, out.String())
+		}
+	case <-t.Context().Done():
+		t.Fatal("the run did not end after the cancel")
+	}
+}
+
+// The runner's own interrupt path (its grace, then its drains) is longer than the leftover delay; a kill comes only after
+// the interrupt grace.
+func TestTheInterruptGraceIsLongerThanTheRunnersOwnInterruptPath(t *testing.T) {
+	t.Parallel()
+	const runnerGrace, runnerDrains = 30 * time.Second, 2 * 10 * time.Second // NEVR_TEST_INTERRUPT_GRACE_S and NEVR_TEST_DRAIN_S
+	if defaultOptions.interruptGrace <= runnerGrace+runnerDrains {
+		t.Errorf("interruptGrace %v does not outlast the runner's %v", defaultOptions.interruptGrace, runnerGrace+runnerDrains)
+	}
+}
+
+func TestAPythonHalfStillRunningAfterTheInterruptGraceIsKilled(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.script(r.py, "ignore-sigint", "")
+	opts := defaultOptions
+	opts.interruptGrace = 300 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan int, 1)
+	var out, errb bytes.Buffer
+	go func() {
+		done <- runWith(opts, ctx, []string{"--", "python3"}, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
+	}()
+	testkit.WaitFor(t, "the python fake to be running", func() bool {
+		_, err := os.Stat(filepath.Join(r.py.Dir(), "ready"))
+		return err == nil
+	})
+	cancel()
+	select {
+	case code := <-done:
+		if code != 137 {
+			t.Errorf("exit %d, want 137 (killed after the grace)", code)
+		}
+	case <-t.Context().Done():
+		t.Fatal("the run did not end")
+	}
+}
+
+func TestTheDefaultWaitsAreThePinnedOnes(t *testing.T) {
+	t.Parallel()
+	if defaultOptions.leftoverDelay != 10*time.Second || defaultOptions.goGrace != 30*time.Second || defaultOptions.interruptGrace != 90*time.Second {
+		t.Errorf("defaultOptions = %+v", defaultOptions)
+	}
+}
+
+func TestGoStillRunningAfterItsGraceIsKilled(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, "", 0)
+	r.script(r.fake, "ignore-sigint", "")
+	opts := defaultOptions
+	opts.goGrace = 300 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan int, 1)
+	var out, errb bytes.Buffer
+	go func() {
+		done <- runWith(opts, ctx, nil, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
+	}()
+	testkit.WaitFor(t, "the go fake to be running", func() bool {
+		_, err := os.Stat(filepath.Join(r.fake.Dir(), "ready"))
+		return err == nil
+	})
+	cancel()
+	select {
+	case code := <-done:
+		if code != 137 {
+			t.Errorf("exit %d, want 137 (killed after the grace)", code)
+		}
+	case <-t.Context().Done():
+		t.Fatal("the run did not end")
 	}
 }

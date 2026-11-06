@@ -87,7 +87,7 @@ func TestEachEventIsOneJSONLineWrittenAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	l.Logger.Info("started", "pid", 42, "args", []string{"a", "b"})
+	l.Logger.Info("started", "count", 42, "args", []string{"a", "b"})
 	// Read before Close: the line is on disk when Info returns.
 	if fi, err := os.Stat(filepath.Join(state, "nevr-runtime", "my-tool.jsonl")); err != nil || fi.Mode().Perm()&0o600 != 0o600 {
 		t.Errorf("the log file's mode is %v (%v), want it readable and writable by its owner", fi, err)
@@ -97,7 +97,7 @@ func TestEachEventIsOneJSONLineWrittenAtOnce(t *testing.T) {
 		t.Fatalf("%d lines after one event, want 1: %v", len(lines), lines)
 	}
 	got := lines[0]
-	if got["event"] != "started" || got["level"] != "info" || got["pid"] != float64(42) {
+	if got["event"] != "started" || got["level"] != "info" || got["count"] != float64(42) {
 		t.Errorf("line = %v", got)
 	}
 	if args, _ := got["args"].([]any); len(args) != 2 {
@@ -373,5 +373,73 @@ func TestLevelsAreLowerCaseNames(t *testing.T) {
 	// Debug is not written: the log is for what an operator reads (docs/standards/logging.md, level guidelines).
 	if strings.Join(got, ",") != "info,warn,error" {
 		t.Errorf("levels = %v", got)
+	}
+}
+
+// A caller's field may be named like a header key (a port keeps the Python tool's field names, and some of them are
+// `level` and `time`): it is written under a prefix, never as a second header and never as a panic.
+func TestAFieldNamedLikeAHeaderKeyIsPrefixedAndNeverBreaksTheRecord(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"ts", "level", "event", "tool", "run", "pid", "msg", "time"} {
+		state := t.TempDir()
+		l, err := Open("my-tool", env(map[string]string{"XDG_STATE_HOME": state}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.Logger.Info("step", key, "caller value")
+		if err := l.Close(); err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		raw, _ := os.ReadFile(filepath.Join(state, "nevr-runtime", "my-tool.jsonl"))
+		rec := readLines(t, filepath.Join(state, "nevr-runtime", "my-tool.jsonl"))[0]
+		if rec["event"] != "step" || rec["field_"+key] != "caller value" {
+			t.Errorf("%s: record = %s", key, raw)
+		}
+		for _, header := range []string{`"ts"`, `"event"`, `"level"`, `"tool"`, `"run"`, `"pid"`} {
+			if strings.Count(string(raw), header+":") != 1 {
+				t.Errorf("%s: key %s appears %d times in %s", key, header, strings.Count(string(raw), header+":"), raw)
+			}
+		}
+		if strings.Contains(string(raw), `"msg"`) || strings.Contains(string(raw), `"time"`) {
+			t.Errorf("%s: slog's own keys leaked: %s", key, raw)
+		}
+	}
+}
+
+func TestATimeAndALevelValueOfTheRightKindIsAlsoPrefixed(t *testing.T) {
+	t.Parallel()
+	state := t.TempDir()
+	l, _ := Open("my-tool", env(map[string]string{"XDG_STATE_HOME": state}))
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	l.Logger.Info("step", "time", when, "level", slog.LevelWarn)
+	l.Close()
+	rec := readLines(t, filepath.Join(state, "nevr-runtime", "my-tool.jsonl"))[0]
+	if rec["field_time"] != "2026-01-02T03:04:05Z" || rec["field_level"] == nil || rec["level"] != "info" {
+		t.Errorf("record = %v", rec)
+	}
+}
+
+func TestFieldsAddedWithWithAreRenamedToo(t *testing.T) {
+	t.Parallel()
+	state := t.TempDir()
+	l, _ := Open("my-tool", env(map[string]string{"XDG_STATE_HOME": state}))
+	l.Logger.With("level", "high").Info("step")
+	l.Close()
+	rec := readLines(t, filepath.Join(state, "nevr-runtime", "my-tool.jsonl"))[0]
+	if rec["field_level"] != "high" || rec["level"] != "info" {
+		t.Errorf("record = %v", rec)
+	}
+}
+
+func TestAFieldInsideAGroupKeepsItsName(t *testing.T) {
+	t.Parallel()
+	state := t.TempDir()
+	l, _ := Open("my-tool", env(map[string]string{"XDG_STATE_HOME": state}))
+	l.Logger.Info("step", slog.Group("detail", "level", "high", "msg", "m"))
+	l.Close()
+	rec := readLines(t, filepath.Join(state, "nevr-runtime", "my-tool.jsonl"))[0]
+	detail, _ := rec["detail"].(map[string]any)
+	if detail["level"] != "high" || detail["msg"] != "m" {
+		t.Errorf("record = %v", rec)
 	}
 }

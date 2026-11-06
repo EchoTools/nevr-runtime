@@ -38,6 +38,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -54,8 +55,27 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runWith(defaultOptions, ctx, args, getenv, stdin, stdout, stderr)
+}
+
+// options are the waits and limits of a run; a test gives shorter ones.
+type options struct {
+	// leftoverDelay is how long a Python half that has exited may leave a process holding its output before the tool
+	// stops reading it, keeps the exit status and names the process.
+	leftoverDelay time.Duration
+	// interruptGrace is how long the Python half has to end after SIGINT before it is killed. It outlasts the Python
+	// runner's own interrupt path (NEVR_TEST_INTERRUPT_GRACE_S 30 s, then up to two NEVR_TEST_DRAIN_S 10 s waits) so the
+	// runner's end record is not lost to a kill.
+	interruptGrace time.Duration
+	// goGrace is the same for go test.
+	goGrace time.Duration
+}
+
+var defaultOptions = options{leftoverDelay: 10 * time.Second, interruptGrace: 90 * time.Second, goGrace: 30 * time.Second}
+
+func runWith(opts options, ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return runlog.Run("test-go-tools", getenv, stderr, func(log *slog.Logger) int {
-		return testTools(ctx, args, getenv, stdin, stdout, stderr, log)
+		return testTools(opts, ctx, args, getenv, stdin, stdout, stderr, log)
 	})
 }
 
@@ -66,11 +86,9 @@ const (
 	goTestTimeout = 5 * time.Minute
 	// pythonLogPrefix starts the line in which the Python runner names its log (tools/run_tool_tests.py).
 	pythonLogPrefix = "test-tools: log "
-	// interruptedAbove: the Python runner exits 128 plus the signal after an interrupt.
-	interruptedAbove = 128
 )
 
-func testTools(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer, log *slog.Logger) int {
+func testTools(opts options, ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer, log *slog.Logger) int {
 	patterns, pyCmd, hasPy := splitArgs(args)
 	moduleDir := ""
 	if len(patterns) > 0 && patterns[0] == "-C" {
@@ -100,13 +118,16 @@ func testTools(ctx context.Context, args []string, getenv func(string) string, s
 		return exitSetup
 	}
 
-	pyRC, stem := -1, ""
+	pyRC, stem, leftover := -1, "", []string(nil)
 	if hasPy {
-		pyRC, stem = runPython(ctx, pyCmd, getenv, stdin, stdout, stderr)
-		log.Info("python half", "cmd", pyCmd, "exit", pyRC, "stem", stem)
-		if pyRC > interruptedAbove || ctx.Err() != nil {
+		pyRC, stem, leftover = runPython(opts, ctx, pyCmd, getenv, dir, stdin, stdout, stderr)
+		log.Info("python half", "cmd", pyCmd, "exit", pyRC, "stem", stem, "leftover", leftover)
+		// An interrupt is a signal this tool itself received (a terminal's CTRL+C reaches it as well as the runner). A
+		// Python half that ended by a signal it was not sent (an OOM kill, timeout -k) is a failure like any other, and
+		// the Go half still runs.
+		if ctx.Err() != nil {
 			fmt.Fprintf(stdout, "test-tools: python half exited %d (interrupted): go half not run\n", pyRC)
-			if pyRC <= interruptedAbove {
+			if pyRC <= 128 {
 				return 130
 			}
 			return pyRC
@@ -132,7 +153,7 @@ func testTools(ctx context.Context, args []string, getenv func(string) string, s
 		return exitSetup
 	}
 	defer os.RemoveAll(scratch)
-	env, err := testkit.EnvAt(scratch)
+	env, err := testkit.EnvAt(scratch, getenv, goPath)
 	if err != nil {
 		stream.Close()
 		fmt.Fprintf(stderr, "test-tools: FAIL cannot make go test's environment: %v\n", err)
@@ -145,6 +166,9 @@ func testTools(ctx context.Context, args []string, getenv func(string) string, s
 		rec["stem"], rec["paired"], rec["stream"] = stem, paired, stream.Name()
 		if pyRC >= 0 {
 			rec["python_rc"] = pyRC
+		}
+		if len(leftover) > 0 {
+			rec["leftover"] = leftover
 		}
 		if err := appendRecord(filepath.Join(dir, "runs.jsonl"), rec); err != nil {
 			recorded = false
@@ -160,6 +184,8 @@ func testTools(ctx context.Context, args []string, getenv func(string) string, s
 	cmd := exec.CommandContext(ctx, goPath, goArgs...)
 	cmd.Dir = moduleDir
 	cmd.Env = env
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGINT) } // go test stops its test binaries on SIGINT
+	cmd.WaitDelay = opts.goGrace
 	cmd.Stdout = io.MultiWriter(stream, col)
 	cmd.Stderr = stderr
 	runErr := cmd.Run()
@@ -221,39 +247,119 @@ func splitArgs(args []string) (patterns, pyCmd []string, hasPy bool) {
 
 // runPython runs the Python half: its standard output passes through and is read for the line that names its log; its
 // standard error and input pass through. It returns the exit code (127 when the command could not be started, 128 plus
-// the signal when it was killed by one) and the stem of the log it named, "" when it named none.
-func runPython(ctx context.Context, argv []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) (rc int, stem string) {
+// the signal when it was killed by one), the stem of the log it named ("" when it named none, or named a file that is not
+// in the log directory), and, when the command exited but a process it started still holds its output after
+// opts.leftoverDelay, that process (the exit status is kept and the tool stops reading).
+//
+// The command runs in a process group of its own, so the processes it leaves can be found; the tool forwards SIGINT when
+// it receives one, which a terminal would otherwise have sent to the group directly.
+func runPython(opts options, ctx context.Context, argv []string, getenv func(string) string, logDir string, stdin io.Reader, stdout, stderr io.Writer) (rc int, stem string, leftover []string) {
 	path := argv[0]
 	if !strings.ContainsRune(path, '/') {
 		var err error
 		if path, err = lookPath(argv[0], getenv("PATH")); err != nil {
 			fmt.Fprintf(stderr, "test-tools: FAIL cannot start the python half %q: %v\n", argv[0], err)
-			return 127, ""
+			return 127, "", nil
 		}
 	}
 	scan := &lineScan{prefix: pythonLogPrefix}
-	cmd := exec.CommandContext(ctx, path, argv[1:]...)
+	cmd := exec.Command(path, argv[1:]...)
 	cmd.Stdin = stdin
 	cmd.Stdout = io.MultiWriter(stdout, scan)
 	cmd.Stderr = stderr
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGINT) } // the runner turns it into its own clean end
-	cmd.WaitDelay = 30 * time.Second
-	err := cmd.Run()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = opts.leftoverDelay
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(stderr, "test-tools: FAIL cannot start the python half %q: %v\n", argv[0], err)
+		return 127, "", nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		cmd.Process.Signal(syscall.SIGINT) // the runner turns it into its own clean end
+		select {
+		case err = <-done:
+		case <-time.After(opts.interruptGrace):
+			cmd.Process.Kill()
+			err = <-done
+		}
+	}
 	scan.flush()
 	var exitErr *exec.ExitError
 	switch {
 	case err == nil:
 		rc = 0
+	case errors.Is(err, exec.ErrWaitDelay):
+		// The command exited (cmd.ProcessState has its status) and a process it started still holds the output.
+		rc = cmd.ProcessState.ExitCode() // the command exited by itself: ErrWaitDelay is only returned for a success
+		leftover = processesInGroup(cmd.Process.Pid)
+		fmt.Fprintf(stderr, "test-tools: python half exited %d, but a process it started still holds its output after %s and was left running: %s\n",
+			rc, opts.leftoverDelay, strings.Join(leftover, "; "))
 	case errors.As(err, &exitErr):
 		rc = exitCode(exitErr)
 	default:
-		fmt.Fprintf(stderr, "test-tools: FAIL cannot start the python half %q: %v\n", argv[0], err)
-		return 127, ""
+		fmt.Fprintf(stderr, "test-tools: FAIL the python half %q: %v\n", argv[0], err)
+		return 127, "", nil
 	}
 	if scan.value != "" {
-		stem = strings.TrimSuffix(filepath.Base(scan.value), ".log")
+		stem = stemOf(scan.value, logDir, stderr)
 	}
-	return rc, stem
+	return rc, stem, leftover
+}
+
+// stemOf is the stem of the log file the Python runner named, when the file is in the log directory; "" otherwise.
+func stemOf(named, logDir string, stderr io.Writer) string {
+	clean, dir := filepath.Clean(named), filepath.Clean(logDir)
+	if abs, err := filepath.Abs(clean); err == nil {
+		clean = abs
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	fi, err := os.Stat(clean)
+	if filepath.Dir(clean) != dir || !strings.HasSuffix(clean, ".log") || err != nil || !fi.Mode().IsRegular() {
+		fmt.Fprintf(stderr, "test-tools: ignoring the python half's log line %q: it is not an existing .log file in %s\n", named, logDir)
+		return ""
+	}
+	return strings.TrimSuffix(filepath.Base(clean), ".log")
+}
+
+// processesInGroup lists the processes of a process group as "pid N command", from /proc.
+func processesInGroup(pgid int) []string {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		stat, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		// pid (comm) state ppid pgrp ...: comm may hold spaces and parentheses, so split after the last ')'.
+		text := string(stat)
+		rest := strings.Fields(text[strings.LastIndexByte(text, ')')+1:])
+		if len(rest) < 3 {
+			continue
+		}
+		if g, err := strconv.Atoi(rest[2]); err != nil || g != pgid {
+			continue
+		}
+		cmdline, _ := os.ReadFile("/proc/" + e.Name() + "/cmdline")
+		name := strings.TrimSpace(strings.ReplaceAll(string(cmdline), "\x00", " "))
+		if name == "" {
+			name = text[strings.IndexByte(text, '(')+1 : strings.LastIndexByte(text, ')')]
+		}
+		out = append(out, fmt.Sprintf("pid %d %s", pid, name))
+	}
+	return out
 }
 
 // exitCode is the process's exit code, 128 plus the signal when a signal ended it.

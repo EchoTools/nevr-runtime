@@ -68,6 +68,11 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
      file changes.
 
    "It works", "it is quicker to write in Python" and "the tests are already Python" are not reasons.
+
+   A Python file that is to be ported is on the port list (`tools/internal/policy/python_to_port.txt`: its path, a tab,
+   and why it is still Python). A file added after this ADR goes on the list in the change that adds it, with that
+   reason, and the policy test fails an added file with no entry and an entry with no reason. The reason for a file that
+   extends an existing Python test pattern is that it is ported with the units of #2132 that own that pattern.
 3. **Ports follow the units of #2132.** A Python tool not in the table is ported by its unit. Until then a fix may stay
    Python, and so may a change to a test's setup that adds no behaviour to a tool (an argument, an environment
    variable); a pull request that adds behaviour to a Python tool (a new option, step or output) ports it first.
@@ -104,7 +109,7 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
    Go itself), and such a generator imports only the standard library, so a CMake build needs no network.
 8. **Tests are `go test`, standard library only.** Each test calls `t.Parallel()` or says in a comment why it cannot.
    State lives under `t.TempDir()`. A tool reads its environment through the `getenv` it is given, never from
-   `os.Getenv` below `main`, so no test needs `t.Setenv`, which forbids `t.Parallel()`.
+   `os.Getenv` below `main` (`testkit.EnvAt` takes it as a parameter), so no test needs `t.Setenv`, which forbids `t.Parallel()`.
 9. **No sleeping to wait.** A test never calls `time.Sleep` to wait for something to happen. A timeout, poll interval
    or delay a tool uses is a parameter whose default is the production value. A test that a timeout fires, or does not
    fire, runs under `testing/synctest` against the fake clock. A test that waits for an event outside the test process
@@ -161,9 +166,11 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
 ## Finding a violation
 
 - `git ls-files 'tools/*.py'` (git's pathspec `*` crosses directories): every file not in the table above is either on
-  the port list of #2132 or a violation. `tools/internal/policy` holds that list (`python_to_port.txt`) and its test
-  fails on a `.py` file that is neither on it nor in the table, on a listed file that is no longer tracked, and on a
-  list longer than the one at the merge-base with `origin/main`: the list only shrinks.
+  the port list of #2132 or a violation. `tools/internal/policy` holds that list (`python_to_port.txt`, each entry with
+  its reason) and its test fails on a `.py` file that is neither on it nor in the table, on a listed file that is no
+  longer tracked, on an entry with no reason, and on an entry added since the merge-base with `origin/main` that has
+  none. The check fails, rather than skips, when `origin/main` exists but shares no history with HEAD (a shallow clone:
+  fetch more history), and names its skip when there is no `origin/main`.
 - `git grep -nE 'time\.Sleep\(' -- 'tools/*.go'`: a hit in a `_test.go` file is a violation unless it is inside a
   `synctest.Test` bubble; a hit in a tool is a violation unless its duration is a parameter. The policy test makes the
   same check on the syntax tree.
@@ -184,7 +191,10 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
 
 - `just test-tools` and `just verify` run both halves, the Python one and the Go one, whatever the first did, and end
   with one line naming each failed half (`build/go-tools/test-go-tools`; a red Python test never hides the Go tests and
-  these checks). The Go half runs `go test` with a timeout and reports each skipped test with its reason.
+  these checks). The Go half runs `go test` with a timeout and reports each skipped test with its reason. Only a
+  signal the tool itself received (a terminal's CTRL+C, a SIGTERM) is an interrupt that skips the Go half; a Python half
+  that dies by another signal, or exits 130 by itself, still gets the Go half and both are named. A Python half that
+  exits and leaves a process holding its output keeps its real exit status, and the process is named.
 - One language and one runner for the tool suite; pytest and pytest-xdist leave the quick check when the last unit
   lands, and `just verify` runs `go test` over `tools/`.
 - A contributor needs Go 1.25 or later (for `testing/synctest`). Go is already needed to build: `configure` depends on
@@ -195,8 +205,8 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
   on the pull requests that change its inputs.
 - A regression a gated test would catch, made by a file not in its inputs, is found at the next `--all` run (the
   release cut), not on its pull request. Inputs are therefore declared wide (directories, not single files).
-- Pull requests open when this ADR merges keep their Python tests; a Python file they add after it needs a row in the
-  table or a line on the port list from a maintainer, which the policy test makes visible.
+- Pull requests open when this ADR merges keep their Python tests; a Python file one adds goes on the port list with
+  its reason, which the policy test requires and a reviewer reads.
 
 ## Not claimed
 

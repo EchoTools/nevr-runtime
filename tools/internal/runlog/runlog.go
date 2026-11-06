@@ -19,6 +19,7 @@
 package runlog
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -91,9 +92,10 @@ func OpenAt(path string) (*Log, error) {
 		return nil, fmt.Errorf("run log %s: %w", path, err)
 	}
 	w := &failureWriter{w: f}
-	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: replaceAttr})
-	logger := slog.New(handler).With("tool", toolOf(path), "run", run, "pid", os.Getpid())
-	return &Log{Logger: logger, run: run, path: path, file: f, w: w}, nil
+	inner := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: replaceAttr})
+	// The header fields go on the inner handler, before the guard that renames the caller's fields.
+	header := inner.WithAttrs([]slog.Attr{slog.String("tool", toolOf(path)), slog.String("run", run), slog.Int("pid", os.Getpid())})
+	return &Log{Logger: slog.New(guard{header}), run: run, path: path, file: f, w: w}, nil
 }
 
 // toolOf is the tool name a log file at path belongs to: the file name without ".jsonl".
@@ -109,8 +111,48 @@ func newRunID(now time.Time) (string, error) {
 	return fmt.Sprintf("%s-%d-%s", now.UTC().Format("20060102T150405.000000Z"), os.Getpid(), hex.EncodeToString(salt[:])), nil
 }
 
-// replaceAttr renames slog's keys to the repository's: time becomes ts in UTC, msg becomes event, and the level is a
-// lower-case name.
+// reserved are the keys of a record's header, and slog's own names for three of them. A field of the caller's with one of
+// these names is written as field_<name>, so it can neither be mistaken for the header nor break the renaming below.
+var reserved = map[string]bool{"ts": true, "level": true, "event": true, "tool": true, "run": true, "pid": true, "msg": true, "time": true}
+
+func fieldKey(key string) string {
+	if reserved[key] {
+		return "field_" + key
+	}
+	return key
+}
+
+func fieldAttr(a slog.Attr) slog.Attr {
+	a.Key = fieldKey(a.Key)
+	return a
+}
+
+// guard renames the caller's top-level fields that collide with the header (fields inside a group keep their names:
+// they are below their group's key).
+type guard struct{ slog.Handler }
+
+func (g guard) Handle(ctx context.Context, r slog.Record) error {
+	renamed := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		renamed.AddAttrs(fieldAttr(a))
+		return true
+	})
+	return g.Handler.Handle(ctx, renamed)
+}
+
+func (g guard) WithAttrs(attrs []slog.Attr) slog.Handler {
+	renamed := make([]slog.Attr, len(attrs))
+	for i, a := range attrs {
+		renamed[i] = fieldAttr(a)
+	}
+	return guard{g.Handler.WithAttrs(renamed)}
+}
+
+func (g guard) WithGroup(name string) slog.Handler { return guard{g.Handler.WithGroup(name)} }
+
+// replaceAttr renames slog's own keys to the repository's: time becomes ts in UTC, msg becomes event, and the level is a
+// lower-case name. By the time it runs the caller's fields no longer use those names (guard), so the three keys are
+// slog's.
 func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) > 0 {
 		return a
