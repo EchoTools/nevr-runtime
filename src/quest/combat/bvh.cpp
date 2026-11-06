@@ -47,6 +47,7 @@ std::atomic<std::uintptr_t> g_lastGateReturn{0};
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<const Pins*> g_pinsOverride{nullptr};
 std::atomic<double (*)() noexcept> g_clock{nullptr};
+std::atomic<int> g_lastSwitches{0};  // bit 0 bvh, 1 gate, 2 touch: what the last Install was given (a test seam)
 
 std::atomic<std::uint64_t> g_built{0}, g_refused{0}, g_int{0}, g_intHit{0}, g_occ{0}, g_occHit{0}, g_gated{0}, g_touch{0}, g_stock{0};
 std::atomic<std::uint64_t> g_ns{0}, g_maxNs{0};
@@ -343,6 +344,7 @@ void Undo(int doneCount, const int* doneIndexes) noexcept {
 }  // namespace
 
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Switches& switches) noexcept {
+  g_lastSwitches.store((switches.bvh ? 1 : 0) | (switches.gate ? 2 : 0) | (switches.touch ? 4 : 0), std::memory_order_relaxed);
   WarnLegacySwitches();
   if (!switches.bvh) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_install",
@@ -502,6 +504,14 @@ void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept { g_lookup.sto
 void SetPinsForTest(const Pins* pins) noexcept { g_pinsOverride.store(pins, std::memory_order_release); }
 void SetClockForTest(double (*clock)() noexcept) noexcept { g_clock.store(clock, std::memory_order_release); }
 std::uintptr_t LastGateReturnForTest() noexcept { return g_lastGateReturn.load(std::memory_order_relaxed); }
+Switches LastSwitchesForTest() noexcept {
+  const int bits = g_lastSwitches.load(std::memory_order_relaxed);
+  Switches s;
+  s.bvh = (bits & 1) != 0;
+  s.gate = (bits & 2) != 0;
+  s.touch = (bits & 4) != 0;
+  return s;
+}
 
 void ResetForTest() noexcept {
   for (sentinel::GotHook& hook : g_hooks) hook.Forget();
@@ -521,6 +531,7 @@ void ResetForTest() noexcept {
   g_base.store(0);
   g_allowedCount.store(0);
   g_lastGateReturn.store(0);
+  g_lastSwitches.store(0);
   g_lookup.store(nullptr);
   g_pinsOverride.store(nullptr);
   g_clock.store(nullptr);

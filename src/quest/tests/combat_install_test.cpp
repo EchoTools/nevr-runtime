@@ -524,6 +524,20 @@ void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
   combat::InstallNormal();
   QCHECK(Has(Lines("combat_install")[0].text, "bvh=off_config wallfire=off_config"));
   Done();
+  // The row hands the module each of its three keys as the file gave it: bvh on, its gate off, its touch hook off.
+  nevr_quest::combat::bvh::ResetForTest();
+  nevr_quest::combat::wallfire::ResetForTest();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig split;
+  split.bvhGate = {false, nevr_quest::Source::kFile};
+  split.bvhTouch = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(split);
+  combat::InstallNormal();
+  {
+    const nevr_quest::combat::bvh::Switches given = nevr_quest::combat::bvh::LastSwitchesForTest();
+    QCHECK(given.bvh && !given.gate && !given.touch);
+  }
+  Done();
   // The records: the defaults, then what the file gave.
   Process(bv::Variant::kCombat);
   combat::LogConfig(nevr_quest::CombatConfig{});
@@ -539,6 +553,24 @@ void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
     return "";
   };
   const char* const modules[] = {"bvh", "bvh_gate", "bvh_touch", "wallfire"};
+  // and four switches that differ in value and source, so a record read from another row's member shows
+  nevr_quest::CombatConfig mixed;
+  mixed.bvh = {false, nevr_quest::Source::kFile};
+  mixed.bvhGate = {true, nevr_quest::Source::kFile};
+  mixed.bvhTouch = {false, nevr_quest::Source::kAbsent};
+  mixed.wallfire = {true, nevr_quest::Source::kAbsent};
+  g_lines.clear();
+  combat::LogConfig(mixed);
+  const std::vector<Line> all = Lines("combat_config_switch");
+  const char* const want[4] = {"\"module\":\"bvh\",\"key\":\"combat.bvh\",\"on\":0,\"source\":\"config\"",
+                               "\"module\":\"bvh_gate\",\"key\":\"combat.bvh_gate\",\"on\":1,\"source\":\"config\"",
+                               "\"module\":\"bvh_touch\",\"key\":\"combat.bvh_touch\",\"on\":0,\"source\":\"default\"",
+                               "\"module\":\"wallfire\",\"key\":\"combat.wallfire\",\"on\":1,\"source\":\"default\""};
+  for (const char* w : want) {
+    std::size_t hits = 0;
+    for (std::size_t i = 0; i < all.size(); ++i) hits += Has(all[i].text, w) ? 1 : 0;
+    QCHECK(hits == 1);
+  }
   for (const char* m : modules) {
     QCHECK(find(m, 0) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + m + "\",\"key\":\"combat." + m + "\",\"on\":1,\"source\":\"default\"}");
     QCHECK(find(m, 1) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + m + "\",\"key\":\"combat." + m + "\",\"on\":0,\"source\":\"config\"}");

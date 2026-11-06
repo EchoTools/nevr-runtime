@@ -118,6 +118,8 @@ void SetPinsForTest(const Pins* pins) noexcept;
 void SetClockForTest(double (*clock)() noexcept) noexcept;
 // The return address (an ELF vaddr) of the last StaticRaycast the gate saw while a combat map was loaded.
 std::uintptr_t LastGateReturnForTest() noexcept;
+// The switches the last Install was given (the registration table's row reads them from the configuration).
+Switches LastSwitchesForTest() noexcept;
 // Forgets the hooks, the thunks, the trees, the flags and the counters.
 void ResetForTest() noexcept;
 
