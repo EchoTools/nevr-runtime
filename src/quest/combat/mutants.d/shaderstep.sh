@@ -15,7 +15,7 @@ runm ss_original_args       $S "s/  void\* const built = original(self, obj, ini
 runm ss_other_object_back   $S "s/^  return built;\$/  return obj == built ? nullptr : built;/"
 runm ss_stock_not_counted   $S "s/g_stock.fetch_add(1, std::memory_order_relaxed);/g_stock.fetch_add(0, std::memory_order_relaxed);/"
 runm ss_stock_said_always   $S "s/  if (g_saidStock.exchange(true, std::memory_order_relaxed)) return;/  (void)g_saidStock;/"
-runm ss_stock_scope_unnamed $S "s/{\"scope\", table_step::ScopeName(scope)},/{\"scope\", \"other\"},/"
+runm ss_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/table_step::ScopeName(table_step::Scope::kCombat)/"
 # the correction of the object it returned
 runm ss_constructed_count   $S "s/const std::uint32_t n = g_constructed.fetch_add(1, std::memory_order_relaxed) + 1;/const std::uint32_t n = g_constructed.fetch_add(0, std::memory_order_relaxed) + 1;/"
 runm ss_stepped_count       $S "s/g_stepped.fetch_add(1, std::memory_order_relaxed);/g_stepped.fetch_add(0, std::memory_order_relaxed);/"
@@ -42,9 +42,9 @@ runm ts_write_dropped       $TS "s/^  std::memcpy(reinterpret_cast<void\*>(at), 
 runm ts_readback_unchecked  $TS "s/  return backOk \&\& now == kShaderSetStep ? StepFix::kSet : StepFix::kUnreadable;/  return StepFix::kSet;/"
 runm ts_readback_value      $TS "s/  return backOk \&\& now == kShaderSetStep ? StepFix::kSet : StepFix::kUnreadable;/  return backOk \&\& now == kShaderSetStockStep ? StepFix::kSet : StepFix::kUnreadable;/"
 # the install: the build, the switch, once, the word
-runm ss_off_ignored         $S "s/^  if (!on) return Done(/  if (false) return Done(/"
+runm ss_off_ignored         $S "s/^  if (!on) return Done(/  if (!on \&\& false) return Done(/"
 runm ss_second_step_runs    $S "s/  if (g_ran.exchange(true, std::memory_order_acq_rel)) return/  if (false) return/"
-runm ss_no_expected_fn      $T "s/^  target.expectedOriginal = .*\$//"
+runm ss_no_expected_fn      $T "s/^  target.expectedOriginal = .*\$/  (void)base;/"
 runm ss_expected_wrong      $T "s/base + pins.fn);/base + pins.fn + 4);/"
 runm ss_slot_pin_off        $T "s/sentinel::pinned::LibR15PatchedBuildId(), pins.slot);/sentinel::pinned::LibR15PatchedBuildId(), pins.slot + 8);/"
 runm ss_kind_jump_slot      $T "s/sentinel::RelocKind::kAbs64, sentinel::pinned::LibR15PatchedBuildId()/sentinel::RelocKind::kJumpSlot, sentinel::pinned::LibR15PatchedBuildId()/"

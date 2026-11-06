@@ -219,6 +219,21 @@ void ThePinnedWordsNameTheSlotTheVtablesAndTheFourHelpers() {
   QCHECK(current == 1 && listData == 1 && currentPtr == 11 && memblock == 11 && other == 0);
 }
 
+// A pin the process cannot read is a mismatch (a word that is not there is not the pinned build's), and says it could not be read.
+void APinWordThatCannotBeReadIsAMismatch() {
+  Begin1();
+  Build();
+  const ts::PinWord pins[] = {{0xf1bcc0, 0xd0013e50}, {0x7fffffff00000000ULL, 0x1}};
+  std::uint32_t have = 7;
+  bool readable = true;
+  const ts::PinWord* const bad = ts::FirstPinMismatch(g_image.Base(), pins, 2, &have, &readable);
+  QCHECK(bad == &pins[1] && !readable && have == 0);
+  const ts::PinWord wrong[] = {{0xf1bcc0, 0xd0013e51}};
+  QCHECK(ts::FirstPinMismatch(g_image.Base(), wrong, 1, &have, &readable) == &wrong[0] && readable && have == 0xd0013e50);
+  QCHECK(ts::FirstPinMismatch(g_image.Base(), pins, 1, &have, &readable) == nullptr);
+  End1();
+}
+
 // In a combat match the object is the reconstruction's, in the stock order, with step 1; the game's constructor is not called.
 void ACombatMatchBuildsTheMeshListInTheStockOrderWithStepOne() {
   Begin1();
@@ -458,6 +473,7 @@ void TheKillFileIsOnlyAWarning() {
 int main() {
   ThePinsAreTheReadelfAndDisassemblyPins();
   ThePinnedWordsNameTheSlotTheVtablesAndTheFourHelpers();
+  APinWordThatCannotBeReadIsAMismatch();
   ACombatMatchBuildsTheMeshListInTheStockOrderWithStepOne();
   EveryOtherScopeIsTheGamesOwnConstructor();
   WithNoGameKnownTheGameBuildsItsOwnObject();
