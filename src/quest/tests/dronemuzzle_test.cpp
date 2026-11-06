@@ -23,10 +23,12 @@
 #include <string>
 #include <vector>
 
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/dronekill.h"
 #include "quest/combat/dronemuzzle.h"
 #include "quest/combat/dronemuzzle_core.h"
+#include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
@@ -652,6 +654,29 @@ static void TestFrameTickOutOfScope() {
   NoShot();
 }
 
+// Arena (no combat map, so dronekill makes no shot frame): every WorldTeleport and FireBullet call, from FireBulletLocal's call site or any other,
+// and the frame tick read no game memory and scan no level, counted; each call reaches the game's function unchanged.
+static void TestArenaPaysNothing() {
+  Setup();
+  BuildBullet();
+  NoShot();
+  dk::SetScopeForTest(false);
+  SetPose(1, 2, 3);
+  g_tp.clear();
+  g_fire.clear();
+  nevr_quest::combat::ResetSafeReadCallsForTest();
+  nevr_quest::combat::level::ResetScanCallsForTest();
+  CHECK(TpIn(TpSlot(), g_pose) == 0x1234 && TpOut(TpSlot(), g_pose) == 0x1234 && FireIn(FireSlot()) == 0x5678 && FireOut(FireSlot()) == 0x5678, "results");
+  for (int i = 0; i < 10; ++i) Tick(0);
+  CHECK(nevr_quest::combat::SafeReadCallsForTest() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0, "arena: %llu reads and %llu scans",
+        static_cast<unsigned long long>(nevr_quest::combat::SafeReadCallsForTest()), static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
+  CHECK(g_tp.size() == 2 && g_tp[0].pose == g_pose && g_tp[1].pose == g_pose && g_fire.size() == 2, "arena: a call was changed");
+  float v3[3];
+  memcpy(v3, Rec() + 0x11c, 12);
+  CHECK(v3[0] == 1 && v3[1] == 2 && v3[2] == 3, "arena: the bullet record was written");
+  CHECK(CurrentStats().shots == 0 && CurrentStats().tracers == 0, "arena: a shot or tracer was counted");
+}
+
 static void TestFire() {
   Setup();
   BuildBullet();
@@ -762,6 +787,7 @@ int main() {
   TestTeleport();
   TestFrameTick();
   TestFrameTickOutOfScope();
+  TestArenaPaysNothing();
   TestFire();
   TestTracerCap();
   Dump("tracer cap scenario");

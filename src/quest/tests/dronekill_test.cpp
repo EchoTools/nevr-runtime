@@ -23,9 +23,11 @@
 #include <vector>
 
 #include "nevr/symbol_hash.h"
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/dronekill.h"
 #include "quest/combat/dronekill_core.h"
+#include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/ec_stub.h"
@@ -2137,6 +2139,9 @@ static void ExpectInert(const char* where) {
   g_setvels.clear();
   g_find_calls = g_comp_calls = 0;
   const Stats before = CurrentStats();
+  // what follows is the arena path: no read of game memory and no scan of the levels on any hook (the scope was refreshed before this), counted
+  nevr_quest::combat::ResetSafeReadCallsForTest();
+  nevr_quest::combat::level::ResetScanCallsForTest();
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&d);
   ND touch = Drone(dk::kR14Touch, dk::kR14Touch, 0);
@@ -2154,7 +2159,17 @@ static void ExpectInert(const char* where) {
   CallAttack(g_cs, kAtHandle);
   CHECK(g_attacks.size() == 1, "%s: the game's AttackTarget was not called", where);
   OnKilled(0x11);
+  CHECK(nevr_quest::combat::SafeReadCallsForTest() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0,
+        "%s: %llu reads and %llu scans on the arena path of the hooks", where,
+        static_cast<unsigned long long>(nevr_quest::combat::SafeReadCallsForTest()),
+        static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
+  const uint32_t ticksBefore = CurrentStats().ticks;
+  nevr_quest::combat::level::ResetScanCallsForTest();
   for (uint32_t i = 0; i < 2 * kScopeFrames + 1; ++i) Tick(GameAddress());  // two more asks of the level: the same answer says nothing
+  uint64_t asks = 0;  // the tick scans only on its own cadence: one level ask per kScopeFrames frames, nothing else
+  for (uint32_t n = ticksBefore; n < ticksBefore + 2 * kScopeFrames + 1; ++n) asks += n % kScopeFrames == 0 ? 1 : 0;
+  CHECK(nevr_quest::combat::level::ScanCallsForTest() == asks, "%s: the tick scanned %llu times in %u frames, want %llu", where,
+        static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()), 2 * kScopeFrames + 1, static_cast<unsigned long long>(asks));
   const Stats after = CurrentStats();
   CHECK(after.enter_drone == before.enter_drone && after.enter_other == before.enter_other && after.fires == before.fires &&
             after.attacks == before.attacks && after.due_runs == before.due_runs,

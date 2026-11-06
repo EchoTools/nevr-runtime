@@ -44,4 +44,11 @@ Kind Classify(std::uintptr_t game, bool lobby, std::uint64_t* level) noexcept;
 // True when one of the game's gamespaces holds a combat map (never a lobby or arena level); `level` gets it (0 when none).
 bool CombatMapLoaded(std::uintptr_t game, std::uint64_t* level) noexcept;
 
+#if defined(NEVR_COMBAT_READ_COUNTERS)
+// Host tests only: how many times `Scan` ran (Classify and CombatMapLoaded count, they scan), so an arena test asserts a module scanned nothing before
+// its scope test.
+std::uint64_t ScanCallsForTest() noexcept;
+void ResetScanCallsForTest() noexcept;
+#endif
+
 }  // namespace nevr_quest::combat::level

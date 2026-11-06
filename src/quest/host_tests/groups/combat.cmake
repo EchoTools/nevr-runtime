@@ -20,7 +20,7 @@ foreach(f got_hook hook_log hook_report)
   nevr_ht_obj(o_combat_${f} GROUP combat NOEXC INCS ${_csent} SRC src/quest/sentinel/${f}.cpp)
 endforeach()
 set(_ccore o_combat_got_hook o_combat_hook_log o_combat_hook_report)
-set(_cf NOEXC PTHREAD DL INCS ${_csent})
+set(_cf NOEXC PTHREAD DL INCS ${_csent} DEFS NEVR_COMBAT_READ_COUNTERS)
 
 # The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
 # combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.

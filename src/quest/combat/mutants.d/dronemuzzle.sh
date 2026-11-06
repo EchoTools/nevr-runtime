@@ -115,3 +115,6 @@ runm dm_host_fire_site src/quest/combat/dronemuzzle.cpp "s/  if (ret == __atomic
 runm dm_target_expected src/quest/combat/dronemuzzle_targets.h "s/  target.expectedOriginal = reinterpret_cast<const void\*>(base + fn);/  (void)fn;/;$NOWARN"
 runm dm_tick_scope src/quest/combat/dronemuzzle.cpp "s/  if (!dronekill::InCombatScope()) {/  if (false) {/"
 runm dm_tick_forget src/quest/combat/dronemuzzle.cpp "s/    g_last_frame_ns.store(0, std::memory_order_relaxed);/    (void)0;/"
+# "Prove arena pays nothing, by count": a read or a scan before the shot test must be seen by the arena test
+runm dm_arena_reads_before_scope src/quest/combat/dronemuzzle.cpp "s/^  const float\* v = dronekill::ShotVelocity(\&remote);\$/  { std::uint8_t probe[4]; (void)SafeRead(reinterpret_cast<std::uintptr_t>(pose), probe, sizeof probe); }\n&/"
+runm dm_arena_scans_before_scope src/quest/combat/dronemuzzle.cpp "s/^  if (!dronekill::InCombatScope()) {\$/  { std::uint64_t lv = 0; (void)nevr_quest::combat::level::Classify(0, false, \&lv); }\n&/;1i #include \"quest\/combat\/combat_level.h\""

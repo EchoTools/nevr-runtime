@@ -102,3 +102,7 @@ runm dk_enter_inscope src/quest/combat/dronekill.cpp "s/^  EnterInScope(real, no
 runm dk_fire_inscope src/quest/combat/dronekill.cpp "s/^  FireInScope(real, cs, handle, velocity, remote);\$/  (void)0;/;$NOWARN"
 runm dk_atk_inscope src/quest/combat/dronekill.cpp "s/^  AttackInScope(cs, handle);\$/  (void)0;/;$NOWARN"
 runm dk_stats_capturing src/quest/combat/dronekill.cpp "s/          static_cast<std::uint32_t>(g_capturing.load())};/          1};/"
+# "Prove arena pays nothing, by count": a read or a scan before the scope test must be seen by the arena test
+runm dk_arena_reads_before_scope src/quest/combat/dronekill.cpp "s/^  if (!g_inScope.load(std::memory_order_relaxed)) return real(node, data);\$/  { std::uint64_t probe = 0; SafeRead(reinterpret_cast<std::uintptr_t>(data), \&probe, sizeof probe); }\n&/"
+runm dk_arena_scans_before_scope src/quest/combat/dronekill.cpp "s/^  if (!g_inScope.load(std::memory_order_relaxed)) return real(cs, handle, velocity, remote);\$/  { std::uint64_t lv = 0; (void)level::Classify(0, false, \&lv); }\n&/"
+runm dk_arena_tick_scans src/quest/combat/dronekill.cpp "s/^  if (n % kScopeFrames == 0) RefreshScope(game);\$/  if (n % kScopeFrames == 0 || n % 7 == 0) RefreshScope(game);/"
