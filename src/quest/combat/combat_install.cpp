@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "quest/combat/combat_active.h"
+#include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/hudmeter.h"
@@ -44,8 +45,11 @@ constexpr std::array kModules{
     // tick, then refresh_rate (#2172): the game-thread tick installs first (combat_tick.h), and every module with a per-frame callback registers
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
+    // scope (#2186): the combat level answer (combat_scope.h) is refreshed from the tick, so it comes after the tick's install and before every
+    // module that reads it.
+    Module{"scope", nullptr, &scope::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
-    // hudmeter, then shieldgamma (#2186): both read the combat level answer (combat_scope.h), which they enrol with the tick themselves.
+    // hudmeter, then shieldgamma (#2186): both read the combat level answer.
     Module{"hudmeter", nullptr, &HudmeterNormal},
     Module{"shieldgamma", nullptr, &ShieldgammaNormal},
 };

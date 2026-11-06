@@ -217,10 +217,10 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  // The normal step runs the tick (combat_tick.h) first, then the refresh-rate rule (#2172), then the wrist HUD and the shield colour (#2186).
-  // On the host no libr15 is loaded, so the tick and the two hooks are refused and named; the rule installs (it registers its callback for a
-  // tick that may come later).
-  QCHECK(normal.ran && normal.modules == 4 && normal.installed == 1 && normal.failed == 3);
+  // The normal step runs the tick (combat_tick.h) first, then the combat level answer's refresh (#2186), the refresh-rate rule (#2172), the wrist
+  // HUD and the shield colour (#2186). On the host no libr15 is loaded, so the tick is refused and named; the refresh cannot register without it
+  // and the two hooks, which read the answer, refuse in turn; the rule installs (it registers its callback for a tick that may come later).
+  QCHECK(normal.ran && normal.modules == 5 && normal.installed == 1 && normal.failed == 4);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -228,7 +228,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed hudmeter=module_not_loaded shieldgamma=module_not_loaded\""));
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded scope=tick_not_installed refresh_rate=installed hudmeter=scope_not_live shieldgamma=scope_not_live\""));
   }
   Done();
 }
@@ -364,7 +364,7 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   QCHECK(defaults.hudmeter.on && !defaults.shieldgammaGamma.on && defaults.shieldgammaTubeMirror.on);
   combat::SetConfig(defaults);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "hudmeter=module_not_loaded shieldgamma=module_not_loaded"));
+  QCHECK(Has(Lines("combat_install")[0].text, "hudmeter=scope_not_live shieldgamma=scope_not_live"));
   QCHECK(Lines("combat_hudmeter_install").size() == 1U && Has(Lines("combat_hudmeter_install")[0].text, "\"result\":\"refused\""));
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"gamma\":0,\"tube_mirror\":1"));
   Done();

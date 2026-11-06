@@ -41,11 +41,10 @@ __attribute__((noinline, cold)) void LogDecode(const char* event, unsigned n, st
                        {"msg", "a team colour written to the shield material was decoded as the PC's pixel shader does"}});
 }
 
-// Per update while the duration runs; returns the game's own result.
-std::uint64_t OnUpdate(Thunk::Fn original, void* node, const void* data) noexcept {
-  // Outside a combat level (an Echo Arena level, a lobby arena players use, anywhere else) the game's function with the same arguments, and
-  // nothing else: no read of the data, no write, no counter.
-  if (!scope::InCombat()) return original(node, data);
+// The call in a combat level; returns the game's own result. Not inlined into the handler: its stack buffers and its log calls would give the
+// handler a frame, a stack canary and saved registers on the path of an arena match, which must be a load, a test and a tail call.
+[[gnu::noinline]] std::uint64_t ActInCombat(Thunk::Fn original, void* node, const void* data) noexcept {
+  if (!scope::LookIsFresh()) return original(node, data);  // the tick stopped: the answer is not believed (combat_scope.h)
   std::uint8_t d[kDataSize];
   if (!SafeRead(reinterpret_cast<std::uintptr_t>(data), d, sizeof d)) {  // on any doubt the real function, untouched
     g_unreadable.fetch_add(1, std::memory_order_relaxed);
@@ -78,11 +77,19 @@ std::uint64_t OnUpdate(Thunk::Fn original, void* node, const void* data) noexcep
   return result;
 }
 
+// Per update while the duration runs.
+std::uint64_t OnUpdate(Thunk::Fn original, void* node, const void* data) noexcept {
+  // Outside a combat level (an Echo Arena level, a lobby arena players use, anywhere else) the game's function with the same arguments, and
+  // nothing else: no read of the data, no write, no counter, no second call.
+  if (!scope::SeenCombatOrLobby()) return original(node, data);
+  return ActInCombat(original, node, data);
+}
+
 NEVR_HOOK_RECORD(kShieldGammaHook, Thunk, &OnUpdate);
 
-ModuleResult Refused(const char* token, const char* consequence) noexcept {
+ModuleResult Refused(const char* token, const char* consequence, bool gamma, bool tubeMirror) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kError, "combat_shieldgamma_install",
-                      {{"result", "refused"}, {"reason", token}, {"msg", consequence}});
+                      {{"result", "refused"}, {"reason", token}, {"gamma", gamma ? 1 : 0}, {"tube_mirror", tubeMirror ? 1 : 0}, {"msg", consequence}});
   return {false, token};
 }
 
@@ -95,7 +102,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool gamma, bool tubeMirror
                          {"msg", "combat.shieldgamma_gamma and combat.shieldgamma_tube_mirror are both false: nothing is installed and the game's colours stand"}});
     return {false, "off"};
   }
-  if (!scope::Enroll()) return Refused("scope_unavailable", "the combat level answer cannot be refreshed, so the module is not installed");
+  if (!scope::Live()) return Refused("scope_not_live", "the combat level answer cannot change (the tick or its refresh is not installed), so the module is not installed", gamma, tubeMirror);
   g_gamma.store(gamma, std::memory_order_relaxed);  // before the thunk is installed, never changed after it
   g_mirror.store(tubeMirror, std::memory_order_relaxed);
   Thunk::Arm(kShieldGammaHook);

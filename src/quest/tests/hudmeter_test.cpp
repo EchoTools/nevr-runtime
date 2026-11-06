@@ -21,6 +21,7 @@
 
 #include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/combat_tick_targets.h"
 #include "quest/combat/hudmeter_targets.h"
 #include "quest/tests/combat_game_model.h"
 #include "quest/tests/combat_libr15_image.h"
@@ -106,12 +107,16 @@ EnterFn Slot() { return reinterpret_cast<EnterFn>(*g_image.Slot(hud::kSlotVaddr)
 bool Hooked() { return *g_image.Slot(hud::kSlotVaddr) == hud::Thunk::EntryAddress(); }
 
 // A libr15 whose slot holds the game's function (the stand-in), and a game in which no level is loaded.
+void FakeTickFrame(void*) {}
 void Build() {
-  g_image.Build({{hud::kSymbol, hud::kSlotVaddr, false, false, hud::kFnVaddr}});
+  namespace tt = nevr_quest::combat::tick::targets;
+  g_image.Build({{hud::kSymbol, hud::kSlotVaddr, false, false, hud::kFnVaddr}, {tt::kSymbol, tt::kSlotVaddr, false, false, tt::kStockVaddr}});
+  *g_image.Slot(tt::kSlotVaddr) = reinterpret_cast<void*>(&FakeTickFrame);  // the game's function: any address in an executable mapping
   g_image.Real(hud::kFnVaddr, reinterpret_cast<void*>(&FakeEnter));
   *g_image.Slot(hud::kSlotVaddr) = reinterpret_cast<void*>(g_image.Base() + hud::kFnVaddr);
 }
-void Begin() {
+// `scopeLive`: the combat tick is installed on the image and the `scope` row has registered the refresh (what the shipped table does before this module).
+void Begin(bool scopeLive = true) {
   g_lines.clear();
   g_realCalls = 0;
   g_realNode = g_realData = nullptr;
@@ -124,6 +129,11 @@ void Begin() {
   hud::ResetForTest();
   sentinel::SetLogSink(&Capture);
   Build();
+  if (scopeLive) {
+    QCHECK(tick::InstallAt(&Lookup));
+    QCHECK(scope::InstallNormal().installed && scope::Live());
+    g_lines.clear();
+  }
 }
 void End() {
   hud::ResetForTest();
@@ -166,9 +176,9 @@ void TheModuleActsInACombatLevelAsThePluginDid() {
   QCHECK(ir.installed && std::strcmp(ir.status, "installed") == 0);
   QCHECK(Hooked());
   QCHECK(Count("combat_hudmeter_install", "\"result\":\"installed\"", kInfo) == 1);
-  QCHECK(tick::Count() == 1);
+  QCHECK(tick::Count() == 1);  // the scope row registered the refresh, the module did not add one
   EnterCombat();
-  QCHECK(scope::InCombat());
+  QCHECK(scope::InCombatOrLobby());
   const EnterFn enter = Slot();
 
   // 2. a 0 x 0 write to weapon_meter on the lobby helmet's canvas: the real Enter sees 86 x 88, the node's value is put back
@@ -321,7 +331,7 @@ void OutsideACombatLevelTheCallPassesThroughUntouched() {
                         {"nothing loaded", nullptr, nullptr}};
   for (const Case& c : cases) {
     if (std::strcmp(c.what, "before the first look") != 0) LevelsOf(c.first, c.second);
-    QCHECK(!scope::InCombat());
+    QCHECK(!scope::InCombatOrLobby());
     Data d = MakeData(kComp, kItem, 1, 0.0f, 0.0f);  // the write the module fixes in combat
     g_realCalls = 0;
     const std::uint64_t r = enter(node, &d);
@@ -363,35 +373,55 @@ void TheModuleFollowsTheLevelBothWays() {
   QCHECK(!fixed());
   Levels({"mpl_combat_dyson", "mpl_arena_a"});  // a transition holding both: arena wins
   QCHECK(!fixed());
+  // The tick stops: a combat answer older than kStaleAfterMs is not believed, and the next look brings it back.
+  EnterCombat();
+  QCHECK(fixed());
+  g_nowMs += scope::kStaleAfterMs + 1;
+  QCHECK(!fixed());
+  const unsigned writes = hud::CurrentStats().fullWrites;
+  QCHECK(!fixed() && hud::CurrentStats().fullWrites == writes);  // nothing counted, nothing written while the answer is stale
+  g_nowMs += scope::kLookEveryMs;
+  scope::Refresh(g_model.Address());
+  QCHECK(fixed());
   End();
 }
 
 void TheSwitchOffInstallsNothing() {
-  Begin();
+  Begin(/*scopeLive=*/false);
   const nevr_quest::combat::ModuleResult r = hud::InstallAt(&Lookup, false);
   QCHECK(!r.installed && std::strcmp(r.status, "off") == 0);
   QCHECK(!Hooked() && *g_image.Slot(hud::kSlotVaddr) == reinterpret_cast<void*>(g_image.Base() + hud::kFnVaddr));
-  QCHECK(tick::Count() == 0);  // nothing enrolled for a module that is off
+  QCHECK(tick::Count() == 0 && !scope::Live());  // a module that is off asks nothing of the scope
   QCHECK(Count("combat_hudmeter_install", "\"result\":\"off\",\"reason\":\"off_config\"", kInfo) == 1);
   QCHECK(g_lines.size() == 1U);
   End();
 }
 
-void ALibraryThatIsNotLoadedOrATickThatCannotRunRefusesBeforeAnyWrite() {
+void ALibraryThatIsNotLoadedOrAScopeThatCannotChangeRefusesBeforeAnyWrite() {
+  // the library is not loaded (the scope is live: the tick was installed before it went)
   Begin();
   g_image.Drop();
   nevr_quest::combat::ModuleResult r = hud::InstallAt(&Lookup, true);
   QCHECK(!r.installed && std::strcmp(r.status, sentinel::GotStatusName(sentinel::GotStatus::kModuleNotLoaded)) == 0);
   QCHECK(Count("combat_hudmeter_install", "\"result\":\"refused\"", kError) == 1);
-  Build();
-  for (std::size_t i = 0; i < tick::kMaxCallbacks; ++i) tick::Add([](std::uintptr_t) noexcept {});
-  scope::ResetForTest();
-  scope::SetClockForTest(&Clock);
+  End();
+  // the tick was never installed: the scope row refuses and so does the module, before it looks for the library
+  Begin(/*scopeLive=*/false);
+  QCHECK(!scope::InstallNormal().installed && !scope::Live());
   g_lines.clear();
   r = hud::InstallAt(&Lookup, true);
-  QCHECK(!r.installed && std::strcmp(r.status, "scope_unavailable") == 0);
-  QCHECK(!Hooked());
-  QCHECK(Count("combat_hudmeter_install", "scope_unavailable", kError) == 1);
+  QCHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && !Hooked());
+  QCHECK(Count("combat_hudmeter_install", "scope_not_live", kError) == 1);
+  End();
+  // the tick is installed and its callback table is full: the row cannot register the refresh
+  Begin(/*scopeLive=*/false);
+  QCHECK(tick::InstallAt(&Lookup));
+  for (std::size_t i = 0; i < tick::kMaxCallbacks; ++i) tick::Add([](std::uintptr_t) noexcept {});
+  QCHECK(!scope::InstallNormal().installed && !scope::Live());
+  g_lines.clear();
+  r = hud::InstallAt(&Lookup, true);
+  QCHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && !Hooked());
+  QCHECK(Count("combat_hudmeter_install", "scope_not_live", kError) == 1);
   End();
 }
 
@@ -404,7 +434,7 @@ int main() {
   OutsideACombatLevelTheCallPassesThroughUntouched();
   TheModuleFollowsTheLevelBothWays();
   TheSwitchOffInstallsNothing();
-  ALibraryThatIsNotLoadedOrATickThatCannotRunRefusesBeforeAnyWrite();
+  ALibraryThatIsNotLoadedOrAScopeThatCannotChangeRefusesBeforeAnyWrite();
   if (quest_test::Failures() == 0) std::printf("hudmeter_test: all checks passed\n");
   return quest_test::Failures() == 0 ? 0 : 1;
 }

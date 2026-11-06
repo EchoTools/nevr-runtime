@@ -20,6 +20,7 @@
 
 #include "quest/combat/combat_scope.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/combat_tick_targets.h"
 #include "quest/combat/shieldgamma_targets.h"
 #include "quest/tests/combat_game_model.h"
 #include "quest/tests/combat_libr15_image.h"
@@ -103,12 +104,16 @@ bool Lookup(const char* module, sentinel::ElfImage* out) {
 UpdateFn Slot() { return reinterpret_cast<UpdateFn>(*g_image.Slot(sg::kSlotVaddr)); }
 bool Hooked() { return *g_image.Slot(sg::kSlotVaddr) == sg::Thunk::EntryAddress(); }
 
+void FakeTickFrame(void*) {}
 void Build() {
-  g_image.Build({{sg::kSymbol, sg::kSlotVaddr, false, false, sg::kFnVaddr}});
+  namespace tt = nevr_quest::combat::tick::targets;
+  g_image.Build({{sg::kSymbol, sg::kSlotVaddr, false, false, sg::kFnVaddr}, {tt::kSymbol, tt::kSlotVaddr, false, false, tt::kStockVaddr}});
+  *g_image.Slot(tt::kSlotVaddr) = reinterpret_cast<void*>(&FakeTickFrame);  // the game's function: any address in an executable mapping
   g_image.Real(sg::kFnVaddr, reinterpret_cast<void*>(&FakeUpdate));
   *g_image.Slot(sg::kSlotVaddr) = reinterpret_cast<void*>(g_image.Base() + sg::kFnVaddr);
 }
-void Begin() {
+// `scopeLive`: the combat tick is installed on the image and the `scope` row has registered the refresh (what the shipped table does before this module).
+void Begin(bool scopeLive = true) {
   g_lines.clear();
   g_calls.clear();
   g_reads = true;
@@ -120,6 +125,11 @@ void Begin() {
   sg::ResetForTest();
   sentinel::SetLogSink(&Capture);
   Build();
+  if (scopeLive) {
+    QCHECK(tick::InstallAt(&Lookup));
+    QCHECK(scope::InstallNormal().installed && scope::Live());
+    g_lines.clear();
+  }
 }
 void End() {
   sg::ResetForTest();
@@ -295,12 +305,12 @@ void TheModuleActsInACombatLevelAsThePluginDid() {
 
 // 9. both off: nothing installed, one Info line (and nothing enrolled)
 void BothSwitchesOffInstallNothing() {
-  Begin();
+  Begin(/*scopeLive=*/false);
   const nevr_quest::combat::ModuleResult r = sg::InstallAt(&Lookup, false, false);
   QCHECK(!r.installed && std::strcmp(r.status, "off") == 0);
   QCHECK(!Hooked() && *g_image.Slot(sg::kSlotVaddr) == reinterpret_cast<void*>(g_image.Base() + sg::kFnVaddr));
   QCHECK(Count("combat_shieldgamma_install", "\"result\":\"off\",\"reason\":\"off_config\"", kInfo) == 1 && g_lines.size() == 1U);
-  QCHECK(tick::Count() == 0);
+  QCHECK(tick::Count() == 0 && !scope::Live());
   End();
 }
 
@@ -338,7 +348,7 @@ void OutsideACombatLevelTheCallPassesThroughUntouched() {
                         {"nothing loaded", nullptr, nullptr}};
   for (const Case& c : cases) {
     if (std::strcmp(c.what, "before the first look") != 0) LevelsOf(c.first, c.second);
-    QCHECK(!scope::InCombat());
+    QCHECK(!scope::InCombatOrLobby());
     g_calls.clear();
     Data d = MakeData(kMat, kRing, 1, 0.941f, 0.466f, 0.054f, 0.25f, 0);  // the write both parts act on in combat
     const std::uint64_t r = update(node, &d);
@@ -379,23 +389,44 @@ void TheModuleFollowsTheLevelBothWays() {
   QCHECK(mirrored());
   Levels({"mpl_lobby_b"});
   QCHECK(!mirrored());
+  // The tick stops: a combat answer older than kStaleAfterMs is not believed, and the next look brings it back.
+  EnterCombat();
+  QCHECK(mirrored());
+  g_nowMs += scope::kStaleAfterMs + 1;
+  QCHECK(!mirrored());
+  const unsigned mirroredBefore = sg::CurrentStats().mirrored;
+  QCHECK(!mirrored() && sg::CurrentStats().mirrored == mirroredBefore);  // nothing counted, no second call while the answer is stale
+  g_nowMs += scope::kLookEveryMs;
+  scope::Refresh(g_model.Address());
+  QCHECK(mirrored());
   End();
 }
 
-void ALibraryThatIsNotLoadedOrATickThatCannotRunRefusesBeforeAnyWrite() {
+void ALibraryThatIsNotLoadedOrAScopeThatCannotChangeRefusesBeforeAnyWrite() {
+  // the library is not loaded (the scope is live: the tick was installed before it went)
   Begin();
   g_image.Drop();
   nevr_quest::combat::ModuleResult r = sg::InstallAt(&Lookup, true, true);
   QCHECK(!r.installed && std::strcmp(r.status, sentinel::GotStatusName(sentinel::GotStatus::kModuleNotLoaded)) == 0);
   QCHECK(Count("combat_shieldgamma_install", "\"result\":\"refused\"", kError) == 1);
-  Build();
-  for (std::size_t i = 0; i < tick::kMaxCallbacks; ++i) tick::Add([](std::uintptr_t) noexcept {});
-  scope::ResetForTest();
-  scope::SetClockForTest(&Clock);
+  End();
+  // the tick was never installed: the scope row refuses and so does the module, before it looks for the library
+  Begin(/*scopeLive=*/false);
+  QCHECK(!scope::InstallNormal().installed && !scope::Live());
   g_lines.clear();
   r = sg::InstallAt(&Lookup, true, true);
-  QCHECK(!r.installed && std::strcmp(r.status, "scope_unavailable") == 0 && !Hooked());
-  QCHECK(Count("combat_shieldgamma_install", "scope_unavailable", kError) == 1);
+  QCHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && !Hooked());
+  QCHECK(Count("combat_shieldgamma_install", "scope_not_live", kError) == 1);
+  End();
+  // the tick is installed and its callback table is full: the row cannot register the refresh
+  Begin(/*scopeLive=*/false);
+  QCHECK(tick::InstallAt(&Lookup));
+  for (std::size_t i = 0; i < tick::kMaxCallbacks; ++i) tick::Add([](std::uintptr_t) noexcept {});
+  QCHECK(!scope::InstallNormal().installed && !scope::Live());
+  g_lines.clear();
+  r = sg::InstallAt(&Lookup, true, true);
+  QCHECK(!r.installed && std::strcmp(r.status, "scope_not_live") == 0 && !Hooked());
+  QCHECK(Count("combat_shieldgamma_install", "scope_not_live", kError) == 1);
   End();
 }
 
@@ -408,7 +439,7 @@ int main() {
   AForeignSlotWordIsRefusedAndLeftAlone();
   OutsideACombatLevelTheCallPassesThroughUntouched();
   TheModuleFollowsTheLevelBothWays();
-  ALibraryThatIsNotLoadedOrATickThatCannotRunRefusesBeforeAnyWrite();
+  ALibraryThatIsNotLoadedOrAScopeThatCannotChangeRefusesBeforeAnyWrite();
   if (quest_test::Failures() == 0) std::printf("shieldgamma_test: all checks passed\n");
   return quest_test::Failures() == 0 ? 0 : 1;
 }

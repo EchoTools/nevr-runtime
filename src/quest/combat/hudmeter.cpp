@@ -71,10 +71,10 @@ __attribute__((noinline, cold)) void LogPass(float x, float y) noexcept {  // th
                        {"msg", "the full size was read, so the heat fill is live"}});
 }
 
-std::uint64_t OnEnter(Thunk::Fn original, void* node, const void* data) noexcept {
-  // Outside a combat level (an Echo Arena level, a lobby arena players use, anywhere else) the game's function with the same arguments, and
-  // nothing else: no read of the data, no write, no counter.
-  if (!scope::InCombat()) return original(node, data);
+// The call in a combat level. Not inlined into the handler: its stack buffer and its log calls would give the handler a frame, a stack canary and
+// saved registers on the path of an arena match, which must be a load, a test and a tail call.
+[[gnu::noinline]] std::uint64_t ActInCombat(Thunk::Fn original, void* node, const void* data) noexcept {
+  if (!scope::LookIsFresh()) return original(node, data);  // the tick stopped: the answer is not believed (combat_scope.h)
   std::uint8_t d[kDataPrefix];
   if (!SafeRead(reinterpret_cast<std::uintptr_t>(data), d, sizeof d)) {  // on any doubt the real function, untouched
     g_unreadable.fetch_add(1, std::memory_order_relaxed);
@@ -104,6 +104,13 @@ std::uint64_t OnEnter(Thunk::Fn original, void* node, const void* data) noexcept
   return result;
 }
 
+std::uint64_t OnEnter(Thunk::Fn original, void* node, const void* data) noexcept {
+  // Outside a combat level (an Echo Arena level, a lobby arena players use, anywhere else) the game's function with the same arguments, and
+  // nothing else: no read of the data, no write, no counter.
+  if (!scope::SeenCombatOrLobby()) return original(node, data);
+  return ActInCombat(original, node, data);
+}
+
 NEVR_HOOK_RECORD(kHudmeterHook, Thunk, &OnEnter);
 
 ModuleResult Refused(const char* token, const char* consequence) noexcept {
@@ -121,7 +128,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool on) noexcept {
                          {"msg", "combat.hudmeter is false: the wrist HUD's heat fill is the game's own (0 x 0 on the Quest)"}});
     return {false, "off"};
   }
-  if (!scope::Enroll()) return Refused("scope_unavailable", "the combat level answer cannot be refreshed, so the module is not installed");
+  if (!scope::Live()) return Refused("scope_not_live", "the combat level answer cannot change (the tick or its refresh is not installed), so the module is not installed");
   Thunk::Arm(kHudmeterHook);
   sentinel::ElfImage image{};
   sentinel::GotStatus status = lookup != nullptr && lookup(sentinel::pinned::kLibR15, &image) ? sentinel::GotStatus::kOk

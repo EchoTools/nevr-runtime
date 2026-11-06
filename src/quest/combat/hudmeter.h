@@ -9,11 +9,16 @@
  * call goes to the game's function with its own arguments. Any canvas component is guarded, not only the lobby helmet's: the first other one is
  * named once.
  *
- * Arena (same APK). Arena and combat run on the same APK, and Enter is a generic script node that arena's scripts call too. The handler asks
- * `scope::InCombat()` first (combat_scope.h: a combat map or the combat lobby is loaded, no Echo Arena level is), and outside it calls the
- * game's function with the same arguments and does nothing else: no read of the data, no write, no counter, no line. So an arena match on the
- * combat APK costs this hook its call through the thunk and one relaxed load per call, where the q15t plugin it replaces read 0x40 bytes of
- * the data with process_vm_readv on every call, in every level.
+ * Arena (same APK). Arena and combat run on the same APK, and Enter is a generic script node that arena's scripts call too. The handler tests
+ * `scope::SeenCombatOrLobby()` first (combat_scope.h: a combat map or the combat lobby was loaded at the last look, no Echo Arena level), and outside
+ * it calls the game's function with the same arguments and does nothing else: no read of the data, no write, no counter, no line. The combat body
+ * is another function (`ActInCombat`, not inlined), which first checks that the look is fresh (`scope::LookIsFresh()`: a tick that stopped makes a
+ * true answer false after kStaleAfterMs). So an arena match on the combat APK costs this hook its call through the thunk and, in the handler, this
+ * (arm64, from the object file):
+ *   adrp x8, g_bits; mov x3, x0; ldr w8, [x8]; tbnz w8, #2, pass; and w8, w8, #3; cbz w8, pass; mov x0, x3; b ActInCombat
+ *   pass: mov x0, x1; mov x1, x2; br x3
+ * (NDK r26d clang -O2: no frame, no stack canary, no call; the arena path is the tbnz or the cbz, then the `br`.)
+ * where the q15t plugin it replaces read 0x40 bytes of the data with process_vm_readv on every call, in every level.
  *
  * Owner (ADR 0039). This file owns the size of `weapon_meter` the game's Enter is called with; the q15t plugin no longer hooks this slot.
  *
@@ -24,7 +29,7 @@
  *
  * Frequency (ADR 0038). Enter runs once per script update of a canvas-attribute node: its rate per frame is NOT measured (no headset run; the
  * reference build's lobby log says the weapon_meter writes are a few per second while the HUD fills, and no count of the other nodes). The handler's
- * cost on a call that is not a combat level's is the thunk plus one relaxed load. In combat it adds one process_vm_readv of 0x40 bytes per call,
+ * cost on a call that is not a combat level's is the thunk plus the instructions above. In combat it adds one process_vm_readv of 0x40 bytes per call,
  * which is the cost the plugin had in every level.
  *
  * Origin. The q15t plugin's `hudmeter.cpp`, which is our implementation of the reference build's `runtime/native/afkxr/afk_hudmeter.cpp` (see

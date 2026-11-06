@@ -14,10 +14,15 @@
  *     gamma switch says. The original call's result is the one returned. The tube windows' own pack row (an asset change) is not this module's.
  *
  * Arena (same APK). Arena and combat run on the same APK, and Update is a generic script node that arena's scripts call too, every update while a
- * duration runs. The handler asks `scope::InCombat()` first (combat_scope.h: a combat map or the combat lobby is loaded, no Echo Arena level
- * is), and outside it calls the game's function with the same arguments and does nothing else: no read of the data, no write, no counter, no
- * line. An arena match on the combat APK costs this hook the call through the thunk and one relaxed load, where the q15t plugin it replaces
- * read 0x58 bytes with process_vm_readv on every call.
+ * duration runs. The handler tests `scope::SeenCombatOrLobby()` first (combat_scope.h: a combat map or the combat lobby was loaded at the last look,
+ * no Echo Arena level), and outside it calls the game's function with the same arguments and does nothing else: no read of the data, no write, no
+ * second call, no counter, no line. The combat body is another function (`ActInCombat`, not inlined), which first checks that the look is fresh
+ * (`scope::LookIsFresh()`: a tick that stopped makes a true answer false after kStaleAfterMs). An arena match on the combat APK costs this hook the
+ * call through the thunk and, in the handler, this (arm64, from the object file):
+ *   adrp x8, g_bits; mov x3, x0; ldr w8, [x8]; tbnz w8, #2, pass; and w8, w8, #3; cbz w8, pass; mov x0, x3; b ActInCombat
+ *   pass: mov x0, x1; mov x1, x2; br x3
+ * (NDK r26d clang -O2: no frame, no stack canary, no call; the arena path is the tbnz or the cbz, then the `br`.)
+ * where the q15t plugin it replaces read 0x58 bytes with process_vm_readv on every call.
  *
  * Owner (ADR 0039). This file owns the colour the game's Update is called with for the shield material and the second write to the tube
  * window material; the q15t plugin no longer hooks this slot.
@@ -28,7 +33,7 @@
  * `reason: off_config`, nothing installed. The q15t plugin's build bitmask `Q15T_SHIELDGAMMA` is gone; the switch files its header named are not read.
  *
  * Frequency (ADR 0038). Update runs once per update of a material-property node, every update while its duration runs; its rate per frame is NOT
- * measured (no headset run). The handler's cost on a call that is not a combat level's is the thunk plus one relaxed load. In combat each call adds
+ * measured (no headset run). The handler's cost on a call that is not a combat level's is the thunk plus the instructions above. In combat each call adds
  * one process_vm_readv of 0x58 bytes, as the plugin's did in every level.
  *
  * Origin. The q15t plugin's `shieldgamma.cpp`, our implementation of the reference build's `runtime/native/afkxr/afk_shieldgamma.cpp` (see

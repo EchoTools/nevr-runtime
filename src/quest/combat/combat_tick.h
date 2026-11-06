@@ -51,6 +51,9 @@ ModuleResult InstallNormal() noexcept;
 // The install on the libr15 the lookup finds (the host test supplies an image built in memory).
 bool InstallAt(sentinel::ImageLookup lookup) noexcept;
 
+// Whether the thunk is on the game's slot: the install returned ok and nothing since forgot it. A module whose callback only the tick runs
+// (combat_scope.h) asks it before it relies on the callback.
+bool Installed() noexcept;
 // How many frames the handler has run.
 std::uint32_t Calls() noexcept;
 // How many times the handler read the object's vptr: once for the object that passed, again when the pointer changes and every 256 frames, and

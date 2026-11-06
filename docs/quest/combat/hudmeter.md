@@ -33,14 +33,16 @@ the authored full size 86 x 88 for that one call.
 
 ## Scope: a combat level, and nothing else
 
-Enter is a generic script node and arena's scripts call it too, on the same APK. The handler asks `scope::InCombat()` first (`combat_scope.h`: a combat map or the
-combat lobby `mpl_lobby_b_combat` is loaded and no Echo Arena level is, kept fresh four times a second by the game-thread tick). Outside a combat level it calls the
+Enter is a generic script node and arena's scripts call it too, on the same APK. The handler tests `scope::SeenCombatOrLobby()` first (`combat_scope.h`: a combat
+map or the combat lobby `mpl_lobby_b_combat` was loaded at the last look and no Echo Arena level was, the look made four times a second by the game-thread tick). Outside a combat level it calls the
 game's function with the same arguments and does nothing else: no read of the data, no write, no counter, no line. `hudmeter_test` pins that with data
 pointers nobody could read, a 0 x 0 write that stays 0 x 0, and zero counters, in each arena level, the lobbies arena players use, a combat-to-arena transition and
-before the first look.
+before the first look. The combat body is a separate `noinline` function, `ActInCombat`, that first asks `scope::LookIsFresh()`: when the tick has stopped for more than
+a second, a true answer is not believed and the call passes through (pinned by `TheModuleFollowsTheLevelBothWays`).
 
 The plugin copy this replaces read the first 0x40 bytes of the data with `process_vm_readv` on every call, in every level. In an arena match the module now costs
-the call through the thunk and one relaxed load; in combat it costs what the plugin cost. How often Enter runs per frame is not measured (no headset run);
+the call through the thunk and, in the handler, eight instructions with no frame, no stack canary and no call (NDK r26d clang -O2, `llvm-objdump -d`):
+`adrp x8; mov x3, x0; ldr w8, [x8]; tbnz w8, #2; and w8, w8, #3; cbz w8; mov x0, x1; mov x1, x2; br x3`; in combat it costs what the plugin cost plus a clock read. How often Enter runs per frame is not measured (no headset run);
 the arena cost per call is measured on the host (see the pull request that moved the module).
 
 ## Mechanism

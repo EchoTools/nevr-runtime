@@ -11,57 +11,80 @@ import (
 // (hudmeter_test, shieldgamma_test, combat_scope_test) drive the behaviour; these pin what they cannot see: the order inside a handler and an
 // install function, the registration table's order, and what the plugin no longer holds.
 
-func TestEachHandlerAsksTheLevelAnswerBeforeItReadsAnything(t *testing.T) {
-	for _, h := range []struct{ file, sig string }{
-		{"src/quest/combat/hudmeter.cpp", "std::uint64_t OnEnter("},
-		{"src/quest/combat/shieldgamma.cpp", "std::uint64_t OnUpdate("},
+func TestEachHandlerIsTheTestAndATailCallAndTheBodyChecksTheLookIsFresh(t *testing.T) {
+	for _, h := range []struct{ file, sig, body string }{
+		{"src/quest/combat/hudmeter.cpp", "std::uint64_t OnEnter(", "std::uint64_t ActInCombat("},
+		{"src/quest/combat/shieldgamma.cpp", "std::uint64_t OnUpdate(", "std::uint64_t ActInCombat("},
 	} {
 		code := stripComments(read(t, h.file))
-		b := body(t, code, h.sig)
-		// the first statement is the arena path: the game's function with the very same arguments
+		handler := body(t, code, h.sig)
+		// the handler is the arena path: the test, then the game's function with the very same arguments, or the combat body
+		inner := strings.Join(strings.Fields(handler[strings.Index(handler, "{")+1:strings.LastIndex(handler, "}")]), " ")
+		want := "if (!scope::SeenCombatOrLobby()) return original(node, data); return ActInCombat(original, node, data);"
+		if inner != want {
+			t.Errorf("%s: the handler is not just the scope test and the two tail calls: %q", h.file, inner)
+		}
+		// the combat body is a function of its own that no compiler folds back into the handler, and starts with the staleness test
+		if !strings.Contains(read(t, h.file), "[[gnu::noinline]] "+h.body) {
+			t.Errorf("%s: the combat body is not [[gnu::noinline]]", h.file)
+		}
+		b := body(t, code, h.body)
 		first := strings.TrimSpace(b[strings.Index(b, "{")+1:])
-		if !strings.HasPrefix(first, "if (!scope::InCombat()) return original(node, data);") {
-			t.Errorf("%s: the handler's first statement is not the scope check that passes the call through", h.file)
+		if !strings.HasPrefix(first, "if (!scope::LookIsFresh()) return original(node, data);") {
+			t.Errorf("%s: the combat body does not start with the staleness test", h.file)
 		}
 		for _, later := range []string{"SafeRead(", "g_unreadable", "fetch_add", "memcpy"} {
-			before(t, b, "scope::InCombat()", later)
+			before(t, b, "scope::LookIsFresh()", later)
+		}
+		if strings.Contains(handler, "SafeRead(") || strings.Contains(handler, "LookIsFresh") {
+			t.Errorf("%s: the handler reads the game or the clock", h.file)
 		}
 	}
 }
 
-func TestEachModuleEnrolsTheLevelAnswerBeforeItHooksAnything(t *testing.T) {
+func TestEachModuleAsksTheScopeIsLiveBeforeItHooksAnything(t *testing.T) {
 	for _, m := range []struct{ file, sig string }{
 		{"src/quest/combat/hudmeter.cpp", "ModuleResult InstallAt("},
 		{"src/quest/combat/shieldgamma.cpp", "ModuleResult InstallAt("},
 	} {
-		b := body(t, stripComments(read(t, m.file)), m.sig)
-		before(t, b, "scope::Enroll()", "sentinel::InstallThunk<Thunk>(")
-		before(t, b, "scope_unavailable", "sentinel::InstallThunk<Thunk>(")
+		code := stripComments(read(t, m.file))
+		b := body(t, code, m.sig)
+		before(t, b, "scope::Live()", "sentinel::InstallThunk<Thunk>(")
+		before(t, b, "scope_not_live", "sentinel::InstallThunk<Thunk>(")
 		if !strings.Contains(b, "off_config") {
 			t.Errorf("%s: an off module does not say off_config", m.file)
 		}
-		before(t, b, "off_config", "scope::Enroll()") // a module that is off enrols nothing
+		before(t, b, "off_config", "scope::Live()") // a module that is off asks nothing of the scope
+		if strings.Contains(code, "scope::Enroll") {
+			t.Errorf("%s: a module registers the refresh itself; the scope row does", m.file)
+		}
 	}
 }
 
-func TestTheScopeRefreshIsTheTicksCallbackAndLooksAtTheGameSeldom(t *testing.T) {
+func TestTheScopeRefreshIsTheTicksCallbackRegisteredByItsOwnRowAndLooksAtTheGameSeldom(t *testing.T) {
 	code := stripComments(read(t, "src/quest/combat/combat_scope.cpp"))
 	if !strings.Contains(code, "tick::Add(&Refresh)") {
 		t.Error("the level answer is not refreshed from the combat tick")
 	}
 	b := body(t, code, "void Refresh(")
-	before(t, b, "NowMs()", "level::Classify(")
-	before(t, b, "g_nextLookMs", "level::Classify(")
-	if !strings.Contains(b, "level::Classify(game, true, &levelId)") {
-		t.Error("the combat lobby is not counted as a combat level")
-	}
+	before(t, b, "NowMs()", "level::Scan(")
+	before(t, b, "g_nextLookMs", "level::Scan(")
+	before(t, b, "g_lookedAtMs.store(now", "g_bits.store(bits")
+	in := body(t, code, "ModuleResult InstallNormal(")
+	before(t, in, "tick::Installed()", "tick::Add(&Refresh)")
 	if strings.Contains(stripComments(read(t, "src/quest/combat/combat_scope.h")), "SafeRead") {
 		t.Error("the cache's header reads the game")
+	}
+	header := stripComments(read(t, "src/quest/combat/combat_scope.h"))
+	if !strings.Contains(header, "inline std::atomic<std::uint32_t> g_bits{0};") {
+		t.Error("the answer is not an inline atomic word in the header")
 	}
 }
 
 func TestTheRowsInstallAfterTheRefreshRateInThePluginsOrder(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
+	before(t, table, `Module{"tick", nullptr, &tick::InstallNormal}`, `Module{"scope", nullptr, &scope::InstallNormal}`)
+	before(t, table, `Module{"scope", nullptr, &scope::InstallNormal}`, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`)
 	before(t, table, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`, `Module{"hudmeter", nullptr, &HudmeterNormal}`)
 	before(t, table, `Module{"hudmeter", nullptr, &HudmeterNormal}`, `Module{"shieldgamma", nullptr, &ShieldgammaNormal}`)
 	for _, want := range []string{
