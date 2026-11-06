@@ -597,6 +597,13 @@ def lock_holder(path: pathlib.Path):
         return text
 
 
+def held_by_parent(holder) -> bool:
+    """True when the lock file names this process's parent, a test-go-tools run, as its holder. The caller has just found
+    the lock held, so the file is not left over from a run that ended."""
+    return (isinstance(holder, dict) and holder.get("tool") == "test-go-tools" and isinstance(holder.get("pid"), int)
+            and holder["pid"] == os.getppid())
+
+
 class MachineLock:
     """One run at a time per log directory: an exclusive `flock` on <log dir>/run.lock, held from before the start
     record until the run ends (or the process does: a killed run frees it). Every seat on a machine shares the default
@@ -625,8 +632,15 @@ class MachineLock:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 keep = True
             except BlockingIOError:
-                info["contended"] = True
                 info["holder"] = lock_holder(path)
+                if held_by_parent(info["holder"]):
+                    # test-go-tools holds the lock across both halves of `just test-tools` (ADR 0044) and started this
+                    # run: the lock is this run's already, and asking for it again would wait on the process that waits for us.
+                    info.update(state="inherited", reason=f"held by test-go-tools (pid {os.getppid()}) across both halves")
+                    os.close(fd)
+                    self.info = info
+                    return info
+                info["contended"] = True
                 report(f"test-tools: waiting for the machine-wide test lock {path} (holder: "
                        f"{json.dumps(info['holder'])}); giving up after {deadline_s:g} s")
                 if self.block(fd, deadline_s):
@@ -1082,6 +1096,8 @@ def run_locked(argv: list, lock: MachineLock) -> int:
                      + (json.dumps(workers_basis, sort_keys=True) if workers_basis else "given"),
                      (f"test-tools: lock {lock_info['path']} {lock_info['state']} after {lock_info['wait_s']:g} s "
                       f"(deadline {lock_info['deadline_s']:g} s)" if lock_info["taken"] else
+                      f"test-tools: lock {lock_info['path']} not taken here ({lock_info['reason']})"
+                      if lock_info.get("state") == "inherited" else
                       f"test-tools: lock not taken ({lock_info['reason']}: the arguments name test paths)"),
                      f"test-tools: env set {' '.join(f'{k}={v}' for k, v in HERMETIC_SET.items())}",
                      f"test-tools: env removed {' '.join(env_removed) or 'none'}", f"test-tools: cmd {' '.join(cmd)}"):

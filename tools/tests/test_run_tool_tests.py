@@ -1451,14 +1451,19 @@ class RunToolTestsRecord(unittest.TestCase):
 
     def test_the_grace_period_runs_from_the_first_signal_not_the_last(self):
         # Repeats every 0.6 s never escalate; pytest, which ignores SIGINT, is still killed once
-        # the grace period has passed since the first signal.
-        proc = self.start_slow(STUBBORN_SUITE, NEVR_TEST_INTERRUPT_GRACE_S="3")
+        # the grace period has passed since the first signal. The repeats stop well inside the grace
+        # period: a signal that arrives after the wrapper has put back the default handlers, as it
+        # finishes, kills the wrapper itself (exit -2 instead of 130).
+        grace = 3
+        proc = self.start_slow(STUBBORN_SUITE, NEVR_TEST_INTERRUPT_GRACE_S=str(grace))
         started = time.monotonic()
-        while proc.poll() is None and time.monotonic() - started < 10:
+        while proc.poll() is None and time.monotonic() - started < grace - 1:
             os.kill(proc.pid, signal.SIGINT)
             time.sleep(0.6)
         proc.communicate(timeout=60)
-        self.assertLess(time.monotonic() - started, 6, "the grace period restarted with each repeat")
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 6, "the grace period restarted with each repeat")
+        self.assertGreaterEqual(elapsed, grace, "a repeat escalated before the grace period ended")
         self.assertEqual(proc.returncode, 130)
         self.assertEqual(self.records()[0]["pytest_rc"], -signal.SIGKILL)
 
