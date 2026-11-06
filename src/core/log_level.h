@@ -34,6 +34,12 @@ inline const char* NameOrUnknown(std::uint32_t level) {
   return name != nullptr ? name : "unknown";
 }
 
+/// Whether the built-in filter's `min_level` drops a line at `level`. A level with no name is never dropped, so a line
+/// whose level the mapping does not know stays visible (#2245); a named level below `minLevel` is.
+inline bool DroppedByMinLevel(std::uint32_t level, std::uint32_t minLevel) {
+  return Name(level) != nullptr && level < minLevel;
+}
+
 /// The level a line is recorded at. The game's error dialog (echovr.exe 0x1400ea730, the box that tells the player the
 /// game cannot start) logs its title and message at info (LEA ECX,[RDX+2] at 0x1400ea778 and 0x1400ea791) before it
 /// shows the box: a line logged from inside it is an error whatever level the game gave it, so it is recorded as one.

@@ -624,7 +624,7 @@ static bool ShouldSuppress(const char* message, uint32_t level, const char** ent
     if (!g_config.valid) return false;
 
     /* #2245: a level with no name is never dropped by min_level, so a line the mapping does not know stays visible. */
-    if (nevr_log_level::Name(level) != nullptr && level < g_config.min_level) return true;
+    if (nevr_log_level::DroppedByMinLevel(level, g_config.min_level)) return true;
 
     /* #2214: a deletion by a list entry names the entry, so the limiter counts it under that entry. */
     for (const auto& ch : g_config.suppress_channels) {
