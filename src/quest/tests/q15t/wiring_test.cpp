@@ -1,5 +1,5 @@
 // Host test of plugin.cpp's module wiring (every module option ON, Q15T_POWERBOOST=3, Q15T_SHIELDGAMMA=2) against a fake game image in
-// which only the tick slot and levelname's four vtable words are the pinned ones: every other module must refuse, loudly
+// which the pinned words are the ones the test sets (the tick slot, bvh's and wallfire's): every other module must refuse, loudly
 // and by name, and InitEx must still return 0 with hooks swapped. Real code, real mprotect, real /proc/self/maps.
 // Also the capability matrix: built with -DWIRING_CAPS_ONLY it only checks NevrPluginGetCapabilities against -DEXPECT_ALTERS / -DEXPECT_NETWORK.
 #include <sys/mman.h>
@@ -122,7 +122,8 @@ int main() {
   ctx.log = &GLog;
   ctx.game_build_id = Q15T_BUILD_ID_FOR_TEST;
 #ifdef WIRING_LEVELNAME_OFF
-  // levelname.off in the data directory: the bot-body gate must follow levelname off (combat_gates.h, needs_levelname)
+  // levelname.off in the data directory is no switch any more (levelname is the runtime's, `combat.levelname`; the file is not read here): the bot-body
+  // gate is installed all the same (combat_gates.h, KNOWN-WRONG #2180)
   char dir[] = "/tmp/q15t_wiring_ln_XXXXXX";
   if (mkdtemp(dir) == nullptr) std::abort();
   if (FILE* f = std::fopen((std::string(dir) + "/levelname.off").c_str(), "w")) std::fclose(f);
@@ -134,7 +135,7 @@ int main() {
   CHECK(r.link_lo == base + 0x202ba74 && r.link_hi == base + 0x202bac8, "link range %llx..%llx, want the Bind (ELF 0x202ba74..0x202bac8)",
         (unsigned long long)(r.link_lo - base), (unsigned long long)(r.link_hi - base));
   CHECK(r.link_answer == 4, "link answer %d: want the link kind (4), a kind the Bind has a case for and not the Quest kind (3)", r.link_answer);
-#if defined(EXPECT_BOTS) && !defined(WIRING_LEVELNAME_OFF)
+#if defined(EXPECT_BOTS)
   CHECK(r.bots_lo == base + 0x124dd38 && r.bots_hi == base + 0x124e004, "bots range %llx..%llx", (unsigned long long)(r.bots_lo - base),
         (unsigned long long)(r.bots_hi - base));
 #else
@@ -196,8 +197,8 @@ extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetDis
 extern "C" __attribute__((noinline, visibility("default"))) void FakeExclusiveUpdateGame(void*) {}
 
 int main() {
-  // The image: a sparse anonymous mapping whose offsets are the pinned build's ELF vaddrs (levelname's four vtable words live at
-  // 0x362ef90.. and hold base + 0x1202ecc), so the production addresses are used as they are. Everything else reads zero.
+  // The image: a sparse anonymous mapping whose offsets are the pinned build's ELF vaddrs, so the production addresses are used as they are.
+  // Everything else reads zero.
   const size_t kImage = 0x3a00000;
   void* p = mmap(nullptr, kImage, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
   if (p == MAP_FAILED) std::abort();
@@ -206,10 +207,6 @@ int main() {
   w[2] = reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels);       // 0x10
   w[3] = reinterpret_cast<uintptr_t>(&vrapi_SetDisplayRefreshRate);  // 0x18
   w[4] = reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame);    // 0x20
-  const uintptr_t kLevelNameSlots[4] = {0x362ef90, 0x3630e58, 0x3631278, 0x36316f8};
-  for (uintptr_t s : kLevelNameSlots) *reinterpret_cast<uintptr_t*>(base + s) = base + 0x1202ecc;
-  // boosterpool: the GOT word of the AllocatePooledActor import holds its pinned function (ELF 0x18037c4)
-  *reinterpret_cast<uintptr_t*>(base + 0x36cd1f8) = base + 0x18037c4;
   // fxtrail: its eleven code words are the pinned ones, so its off switch (set below) is what stops it
   for (const auto& pin : q15t::kFxTrailWordPins) *reinterpret_cast<uint32_t*>(base + pin.va) = pin.want;
   // bvh: its six slots hold their pinned functions. wallfire (installed after it): the query slot, the occluded slot, the site word.
@@ -251,7 +248,7 @@ int main() {
   // every compiled module is named in the init record
   const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
                         "bvh",      "wallfire",   "impactsnd", "ec",         "ecfx",       "dronekill",  "dronemuzzle",
-                        "powerboost", "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
+                        "powerboost", "hudmeter", "shieldgamma", "music", "sensorwd"};
   const std::string init = FindLine("q15t init");
   for (const char* m : kAll) {
     CHECK(init.find(std::string(m) + " ") != std::string::npos, "q15t init line does not list module %s: %s", m, init.c_str());
@@ -261,7 +258,7 @@ int main() {
   }
 
   // what must have installed, been switched off, or refused, on this image
-  const char* kInstalled[] = {"bvh", "wallfire", "levelname", "boosterpool"};
+  const char* kInstalled[] = {"bvh", "wallfire"};
   const char* kArmed[] = {"gunconnect", "aibots"};
   const char* kOff[] = {"ec", "ecfx", "fxtrail"};
   struct Refusal {
@@ -292,8 +289,8 @@ int main() {
   CHECK(w_slot(base, q15t::kFxTrailSlot) == 0, "fxtrail was off: its slot must be untouched");
   CHECK(w_slot(base, bp.init.slot) != base + bp.init.fn && w_slot(base, bp.gate.slot) != base + bp.gate.fn, "bvh: its slots were not swapped");
   CHECK(w_slot(base, wp.query_slot) != base + wp.query_fn, "wallfire (after bvh) did not swap its slot");
-  CHECK(w_slot(base, 0x362ef90) != base + 0x1202ecc, "levelname: its slot was not swapped");
-  CHECK(w_slot(base, 0x36cd1f8) != base + 0x18037c4, "boosterpool: its GOT slot was not swapped");
+  // levelname and boosterpool are the runtime's (src/quest/combat/): the plugin names neither
+  CHECK(init.find("levelname") == std::string::npos && init.find("boosterpool") == std::string::npos, "the init record names a module the runtime owns: %s", init.c_str());
   CHECK(CountLines("wallfire on:") == 1 && CountLines("bvh on:") == 1, "bvh and wallfire did not both log 'on'");
   // order: wallfire is installed after bvh (it refuses as bvh_not_installed otherwise), and the tick comes after every module
   size_t at_bvh = 0, at_wall = 0, at_tick = 0, at_ec = 0, at_mod_last = 0;

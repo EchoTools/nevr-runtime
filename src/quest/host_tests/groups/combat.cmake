@@ -30,7 +30,7 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # combat runs in this process, one `combat_install` line per phase, a plain release that installs nothing and says so once, the
 # not_started record, and the `combat_config` line.
 nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} ${_cident}
-  SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
@@ -62,7 +62,7 @@ nevr_ht_test(memsys_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ciden
 # android_main. Before the first allocation it governs (the witness precedes the model's heap reads; a late run is the control), once, only in
 # the variants the gate allows (and a development build forced on), and each shipped row reads its switch.
 nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp)
 # The game-thread tick (#2172, docs/adr/0046; docs/adr/0039): the real thunk and GotHook against the JUMP_SLOT of a libr15 image built in
@@ -72,7 +72,7 @@ nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
 # plugin's refusal.
 nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   INCS src/quest/plugins/q15t/src
-  SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
       src/quest/plugins/q15t/src/game_tick.cpp src/quest/plugins/q15t/src/import_hook.cpp src/quest/plugins/q15t/src/got_swap.cpp
@@ -81,10 +81,22 @@ nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
 # through the tick, the lobbies arena players use, the legacy kill files, the release case (the game's own rate, nothing logged or registered).
 nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
-      src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp
+      src/quest/combat/combat_install.cpp src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp
       src/quest/sentinel/build_variant.cpp)
 # What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
 # combat lobby and an Echo Arena level, each id checked against the CSymbol64 of its name; the lobbies arena players use are no class; an arena
 # level wins; a gamespace of another game, an absurd count and an unreadable game are no level.
 nevr_ht_test(combat_level_test GROUP combat ${_cf} TIMEOUT 120
   SRC src/quest/tests/combat_level_test.cpp src/quest/combat/combat_level.cpp)
+# The global_mp level name (#2181, docs/adr/0046; docs/quest/combat/levelname.md): the real handlers through four thunks, installed by the real
+# GotHook into the four ABS64 vtable words of a libr15 image built in memory, against a model of the stock function, the plain function and the
+# game object's lowspec flag. Each word holds its thunk and calls its own original; global_mp with bit 31 gets the plain function and nothing else
+# does; an unreadable game never faults; the counter and the first sixteen lines; all four words or none; the refusals; the switch; the legacy kill
+# file as a warning only; a read-only vtable page. got_pinned_test resolves the four relocations, the stub and the code words in the real libr15.
+nevr_ht_test(levelname_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/levelname_test.cpp src/quest/combat/levelname.cpp)
+# The booster pool's actor (#2181): the real handler through the thunk, installed into the JUMP_SLOT of AllocatePooledActor in a libr15 image built in
+# memory, against a model of the function, CSymbol64::Append and the plain name. The suffixed name is asked as the plain one and nothing else changes;
+# the names are computed once; an unreadable plain name passes through; the refusals; it installs only with levelname.
+nevr_ht_test(boosterpool_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/boosterpool_test.cpp src/quest/combat/boosterpool.cpp)

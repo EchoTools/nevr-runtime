@@ -6,6 +6,7 @@
 # in that header), with hidden visibility (nothing here may become an export, tests/quest TestExportAllowlist) and the
 # warnings-as-errors flags its siblings use. The sentinel links this target; --exclude-libs keeps it out of the export set.
 add_library(nevr_quest_combat STATIC
+  boosterpool.cpp
   combat_active.cpp
   combat_install.cpp
   combat_level.cpp
@@ -14,6 +15,7 @@ add_library(nevr_quest_combat STATIC
   combat_tick.cpp
   equip_refire.cpp
   heaps.cpp
+  levelname.cpp
   match_tags.cpp
   memsys.cpp
   refresh_rate.cpp)

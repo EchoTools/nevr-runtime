@@ -1,7 +1,7 @@
 # plugin.cpp's wiring of the modules, judged by mod/wiring.cmake (tests/wiring_test.cpp); the tick table, judged by mod/game_tick.cmake.
 # Not mutated: InitGunConnect / InitAiBots (they only store the base, which the host cannot observe: no libr15 is loaded), and the
 # success branches of dronekill, dronemuzzle and powerboost (they need the real libr15 to resolve their engine functions).
-for _m in DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE AIBOTS GUNCONNECT BVH WALLFIRE LEVELNAME; do
+for _m in DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE AIBOTS GUNCONNECT BVH WALLFIRE; do
   runm wiring "wire_caps_$(echo "$_m" | tr 'A-Z' 'a-z')" src/plugin.cpp "s/if (Q15T_$_m) caps |=/if (false) caps |=/"
 done
 runm wiring wire_caps_powerboost1  src/plugin.cpp "s/if (Q15T_POWERBOOST > 0) caps/if (Q15T_POWERBOOST > 1) caps/"
@@ -42,7 +42,8 @@ runm wiring wire_drop_music        src/plugin.cpp "s/const InstallResult r = Ins
 runm wiring wire_music_tick_always src/plugin.cpp "s/    if (r.status == SwapStatus::kOk) AddModuleTick(\"music\", \&MusicTick, \&want_tick);/    AddModuleTick(\"music\", \&MusicTick, \&want_tick);/"
 runm wiring wire_drop_sensorwd     src/plugin.cpp "s/^  ReportModule(\"sensorwd\", InstallSensorWd(base));//"
 runm wiring wire_drop_sensorwd_tick src/plugin.cpp "s/^  AddModuleTick(\"sensorwd\", \&SensorWdTick, \&want_tick);.*//"
-runm wiring wire_drop_levelname    src/plugin.cpp "s/^  ReportModule(\"levelname\", InstallLevelName(base));//"
+runm wiring wire_levelname_file_read src/plugin.cpp "s/^  gateOff.levelname = false;/  (void)gateOff;/"
+runm wiring wire_bots_without_levelname src/plugin.cpp "s|/\*levelname=\*/true|/*levelname=*/false|"
 runm wiring wire_drop_gc_tick      src/plugin.cpp "s/^  ReportModuleTick(\"gunconnect\", AddGameTick(\&GunConnectTick), \&want_tick);//"
 runm wiring wire_drop_ai_tick      src/plugin.cpp "s/^  ReportModuleTick(\"aibots\", AddGameTick(\&AiBotsTick), \&want_tick);//"
 runm wiring wire_tick_early        src/plugin.cpp "s/^  if (want_tick) {\$/  if (false) {/"

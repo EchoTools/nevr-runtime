@@ -15,8 +15,10 @@
 #include <vector>
 
 #include "hook_log.h"
+#include "quest/combat/boosterpool.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/levelname.h"
 #include "quest/combat/memsys.h"
 #include "quest/tests/test_check.h"
 
@@ -213,13 +215,16 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
 void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal() {
   nevr_quest::combat::heaps::ResetForTest();
   nevr_quest::combat::memsys::ResetForTest();
+  nevr_quest::combat::levelname::ResetForTest();
+  nevr_quest::combat::boosterpool::ResetForTest();
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  // The normal step runs the tick (combat_tick.h) first and the refresh-rate rule after it (#2172). On the host no libr15 is loaded, so the
-  // tick is refused and named; the rule installs (it registers its callback for a tick that may come later).
-  QCHECK(normal.ran && normal.modules == 2 && normal.installed == 1 && normal.failed == 1);
+  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), then levelname and the booster pool (#2181). On
+  // the host no libr15 is loaded, so the tick and levelname are refused and named, and the booster pool (which needs levelname) says so; the rule
+  // installs (it registers its callback for a tick that may come later).
+  QCHECK(normal.ran && normal.modules == 4 && normal.installed == 1 && normal.failed == 3);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -227,7 +232,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed\""));
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed levelname=module_not_loaded boosterpool=needs_levelname\""));
   }
   Done();
 }
@@ -302,16 +307,19 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     // The module switches: on by default, each with its source.
     QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"levelname\":1") && Has(lines[0].text, "\"levelname_source\":\"default\""));
   }
   g_lines.clear();
   cfg.heaps = {false, nevr_quest::Source::kFile};
   cfg.memsys = {true, nevr_quest::Source::kFile};
+  cfg.levelname = {false, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
   const std::vector<Line> switches = Lines("combat_config");
   QCHECK(switches.size() == 1U);
   if (switches.size() == 1U) {
     QCHECK(Has(switches[0].text, "\"heaps\":0") && Has(switches[0].text, "\"heaps_source\":\"config\""));
     QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"levelname\":0") && Has(switches[0].text, "\"levelname_source\":\"config\""));
   }
   Done();
 }
@@ -345,6 +353,29 @@ void TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection() {
   Done();
 }
 
+// levelname and the booster pool (#2181) are one feature behind `combat.levelname`: with the key off (the file's word) both are off and say so; with it
+// on, the booster pool installs only when levelname did, and says `needs_levelname` when it did not.
+void TheLevelNameRowsReadTheirSwitchAndTheBoosterNeedsLevelname() {
+  nevr_quest::combat::levelname::ResetForTest();
+  nevr_quest::combat::boosterpool::ResetForTest();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig off;
+  off.levelname = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(off);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "levelname=off boosterpool=off"));
+  QCHECK(Has(Lines("combat_levelname_install")[0].text, "\"reason\":\"off_config\""));
+  QCHECK(Has(Lines("combat_boosterpool_install")[0].text, "\"reason\":\"off_config\""));
+  Done();
+  // On (the default): no libr15 here, so levelname is refused and the booster pool does not try.
+  Process(bv::Variant::kCombat);
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "levelname=module_not_loaded boosterpool=needs_levelname"));
+  QCHECK(Has(Lines("combat_boosterpool_install")[0].text, "\"reason\":\"needs_levelname\""));
+  Done();
+}
+
 }  // namespace
 
 int main() {
@@ -358,6 +389,7 @@ int main() {
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
   TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal();
   TheRealStepsConsultTheGate();
+  TheLevelNameRowsReadTheirSwitchAndTheBoosterNeedsLevelname();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();
   TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection();

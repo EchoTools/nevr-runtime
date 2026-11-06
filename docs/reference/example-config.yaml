@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys and the three combat.refresh_rate keys. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys and combat.levelname. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -210,6 +210,15 @@ combat:
   # refresh_rate_lobby: true
   # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
   # refresh_rate_quest2_72: false
+
+  # Quest only. A boolean. The game's global level, global_mp, loads at full size in the q15t and combat APKs instead of the cut
+  # `global_mp_lowspec` a Quest gets (src/quest/combat/levelname.h), together with the booster pool's companion (boosterpool.h): the combat bot body
+  # exists only in the full level. The global level loads once after login, before any lobby, so it cannot be limited to combat: an arena match on
+  # such an APK runs with the full global level too. `false` leaves the game's cut level (the q15t plugin's bot-body gate, which needs the full
+  # level, does not follow this key yet: KNOWN-WRONG #2180). A value that is not a boolean is ignored with a warning in the sentinel log that
+  # names the key. Read once at launch; the sentinel log lines `combat_levelname_install` and `combat_boosterpool_install` report it. Default
+  # (absent): true. The plugin's kill file `levelname.off` is not read; one found is a warning that names this key.
+  # levelname: false
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints

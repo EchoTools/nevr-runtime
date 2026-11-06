@@ -25,11 +25,12 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
 - On: fxtrail, voipdrop, custctx, meshstep (`Q15T_MESHSTEP`, #1555), gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, shaderstep (#1553), instmodel, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), ec, ecfx, droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, powerboost (`Q15T_POWERBOOST=3`: swallow and cone; #1625), the menu gate
-  (`Q15T_GATE_LINK`), `Q15T_SHIELDGAMMA=2`, the new-profile gun hand (`Q15T_T26`), and the three combat gates
-  (`src/quest/plugins/q15t/src/combat_gates.h`): the party-permissions gate (`Q15T_GATE_PERM`, kill file `gate_perm.off`), levelname with boosterpool
-  (`Q15T_LEVELNAME`, kill file `levelname.off`) and the bot-body gate (`Q15T_GATE_BOTS`, kill file `gate_bots.off`). The bot-body
-  gate is installed only while levelname is: the combat bot body exists only in the full-size global_mp level. One
-  `q15t_combat_gates_install` line per run states which of the three are on and why.
+  (`Q15T_GATE_LINK`), `Q15T_SHIELDGAMMA=2`, the new-profile gun hand (`Q15T_T26`), and the two combat gates
+  (`src/quest/plugins/q15t/src/combat_gates.h`): the party-permissions gate (`Q15T_GATE_PERM`, kill file `gate_perm.off`) and the bot-body
+  gate (`Q15T_GATE_BOTS`, kill file `gate_bots.off`). The bot-body gate needs the full-size global_mp level, which levelname loads: levelname and the
+  booster pool are the runtime's (`src/quest/combat/levelname.h`, `combat.levelname`), so the plugin takes that dependency as met (KNOWN-WRONG
+  #2180: it does not follow `combat.levelname: false` until the gate moves into the runtime). One `q15t_combat_gates_install` line per run states
+  which of the two are on and why.
 - `ec` is on with the words `types=VPTO equip hide` (`Q15T_EC_DEFAULT_WORDS`), and `ecfx` is on (`Q15T_ECFX_DEFAULT_ON`),
   with no switch file. A switch file in the plugin data directory still overrides the words.
 - Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).

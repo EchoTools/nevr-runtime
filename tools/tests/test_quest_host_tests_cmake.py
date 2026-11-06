@@ -59,6 +59,7 @@ PROGRAMS = {
         "autopilot_run_test",
     ),
     "combat": (
+        "boosterpool_test",
         "combat_active_test",
         "combat_install_test",
         "combat_level_test",
@@ -66,6 +67,7 @@ PROGRAMS = {
         "equip_refire_test",
         "heap_step_test",
         "heaps_test",
+        "levelname_test",
         "match_tag_default_test",
         "memsys_test",
         "refresh_rate_test",
