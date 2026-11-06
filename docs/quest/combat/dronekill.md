@@ -96,7 +96,7 @@ on top of the game's own function; the thunk entry is `CallbackThunk::Entry`, sh
 | `SComponentNodeUtils::Actor` | 35 + the counter | 24: a frame, the game's call, one relaxed `ldr` of the in-flight count, `cbz`, the return | 59 + the counter | once per node that looks an actor up (Enter's among them) |
 | `CR15NetAutoTargetCS::FireBulletLocal` | 37 + the counter | 8: as Enter's, a tail call | 45 + the counter | once per auto-target shot (drones; none in arena as far as read) |
 | `CR15NetAutoTargetCS::AttackTarget` | 23 + the counter | 15: a frame, the game's call, `ldrb`, `tbnz`, the return | 38 + the counter | once per frame per auto-target with a target |
-| the frame tick (`combat_tick.h`) | | one counter, a modulo, one `ldrb`: the level is asked every 32 frames (combat_level `Classify`: reads by `process_vm_readv`) | | once per frame |
+| the frame tick (`combat_tick.h`) | | 23 instructions + the counter's `__aarch64_ldadd8_relax` on 31 frames of 32; on the 32nd also `RefreshScope` (combat_level `Classify`: reads by `process_vm_readv`) | | once per frame |
 
 No system call, lock, allocation or log line on any hook path out of scope. Not measured on a headset: how often arena's scripts run Enter and
 Actor (the `combat_dronekill_scope` line carries the counts of each scope when it ends).

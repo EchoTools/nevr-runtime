@@ -64,7 +64,8 @@ calls the next function unchanged. Every other WorldTeleport and FireBullet call
 A non-drone call (every WorldTeleport and FireBullet call in an arena level) runs ten instructions of the entry before the game's function, counted
 in the arm64 object and pinned by `check/dronemuzzle.sh`: `bti c`; `adrp`, `add`, `ldar` (the call-site word); `cmp x30, x16`; `b.eq` (not taken);
 `adrp`, `add`, `ldar` (the next word); `br x16`. No call, no stack, no lock. How often: WorldTeleport has 25 callers in libr15 (respawns, teleports;
-a headset count is not measured), FireBullet 2. The frame tick costs one clock read (`clock_gettime`) and a float average per frame.
+a headset count is not measured), FireBullet 2. Out of dronekill's scope the frame tick reads no clock: 13 instructions and `dronekill::InCombatScope` (4), per frame; in scope it reads the
+clock (`clock_gettime`) and updates a float average.
 
 
 ## Lines (sentinel log)

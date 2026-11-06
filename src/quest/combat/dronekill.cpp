@@ -722,7 +722,7 @@ void ChaseTick(std::uint64_t now) noexcept {
 
 // The due work (the reference build ran it at the end of each recvfrom on the game's own socket); here once per frame on the game thread.
 // Nothing but one atomic load while nothing is due.
-void TickBody() noexcept {
+__attribute__((noinline)) void TickBody() noexcept {
   if (!g_any_due.load(std::memory_order_acquire) || g_t_in_tick.Get() != 0) return;
   g_t_in_tick.Set(1);
   g_due_runs.fetch_add(1, std::memory_order_relaxed);
@@ -779,7 +779,7 @@ void CallCounts(std::uint64_t (&out)[kHookCount]) noexcept {
 
 // The scope, asked of combat_level (a combat map, never a lobby: the drones are a combat map's). A change is one line, with each hook's calls over
 // the scope that ended; leaving the scope empties the tables, so nothing is due outside a combat map.
-void RefreshScope(std::uintptr_t game) noexcept {
+__attribute__((noinline)) void RefreshScope(std::uintptr_t game) noexcept {
   std::uint64_t level_id = 0;
   const bool in = level::Classify(game, /*lobby=*/false, &level_id) == level::Kind::kCombatOrLobby;  // an unreadable game (0 included) is no level
   if (in == g_inScope.load(std::memory_order_relaxed)) return;
