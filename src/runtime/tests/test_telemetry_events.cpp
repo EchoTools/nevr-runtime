@@ -1,9 +1,11 @@
 /* SYNTHESIS -- custom tool code, not from binary */
 
-// The events the telemetry stream finds between two snapshots (#2099): the goal's team from the game's
-// last_score.team (0 blue, anything else orange: echovr.exe 0x140155f43), a goal for every rise of a team's
-// score (a scorer who scores twice in a row included; the record's distance and assist fields change during
-// play, so a change of the record is no goal), a round start after the frames the
+// The events the telemetry stream finds between two snapshots (#2099): a goal for every rise of a team's
+// score, with that team and the rise as its points (a scorer who scores twice in a row included; the record's
+// distance and assist fields change during play, so a change of the record is no goal); the scorer, assist,
+// disc speed and distance from the last-score record only when the record names that team (last_score.team:
+// 0 blue, anything else orange, echovr.exe 0x140155f43) and is not the record an earlier goal took, else the
+// goal waits up to 3 read frames for it and goes out without them; a round start after the frames the
 // game names no state for (its state-to-string function 0x14016d510 returns "" between a score and the next
 // round start), joins, leaves, switches and stat rises on the game slot (a slot another account took is a
 // leave and a join; a stat that falls is no event), and nothing for a snapshot the game thread could not read.
@@ -149,7 +151,8 @@ TEST(TelemetryEvents, TwoGoalsInARowByTheSamePlayerAreTwoEvents) {
   b.lastScore = Goal(0, 0x0405, 19.8f);  // scorer slot 5
   c = b;                                  // nothing new
   d.bluePoints = 4;
-  d.lastScore = b.lastScore;              // slot 5 again: the same scorer, team and points
+  d.lastScore = b.lastScore;              // slot 5 again: the same scorer, team and points,
+  d.lastScore.discSpeed = 13.25f;         // in a record of its own
   const auto frames = DetectOver({a, b, c, d});
   EXPECT_EQ(Count(frames[0], EchoEvent::kGoalScored), 1);
   EXPECT_EQ(Count(frames[1], EchoEvent::kGoalScored), 0);
@@ -157,6 +160,126 @@ TEST(TelemetryEvents, TwoGoalsInARowByTheSamePlayerAreTwoEvents) {
   const auto& g = First(frames[2], EchoEvent::kGoalScored)->goal_scored();
   EXPECT_EQ(g.scorer_slot(), 5);
   EXPECT_FALSE(g.has_assist_slot());
+  EXPECT_FLOAT_EQ(g.disc_speed(), 13.25f);
+  EXPECT_EQ(g.point_amount(), 2);
+}
+
+// The goal events of a frame, in order.
+std::vector<telemetry::v2::GoalScored> Goals(const EchoArenaFrame& f) {
+  std::vector<telemetry::v2::GoalScored> goals;
+  for (const auto& e : f.events()) {
+    if (e.event_case() == EchoEvent::kGoalScored) goals.push_back(e.goal_scored());
+  }
+  return goals;
+}
+
+// A goal sent without the record: its team and points, and no scorer, assist, speed or distance.
+void ExpectNoRecordFields(const telemetry::v2::GoalScored& g) {
+  EXPECT_EQ(g.scorer_slot(), 0);
+  EXPECT_FALSE(g.has_assist_slot());
+  EXPECT_EQ(g.disc_speed(), 0.0f);
+  EXPECT_EQ(g.distance_thrown(), 0.0f);
+}
+
+TEST(TelemetryEvents, AGoalWaitsWhileTheRecordNamesTheOtherTeamAndGoesOutWhenItCatchesUp) {
+  TelemetrySnapshot a = Empty();
+  a.bluePoints = 2;
+  a.lastScore = Goal(0, 0x0403, 7.0f);  // the last goal was blue's
+  TelemetrySnapshot b = a;
+  b.orangePoints = 3;                   // orange scores; the record is still blue's
+  TelemetrySnapshot c = b;
+  c.lastScore = Goal(1, 0x0409, 21.5f);  // the record catches up: orange, slot 9
+  c.lastScore.pointAmount = 3;
+  const auto frames = DetectOver({a, b, c, c});
+  EXPECT_EQ(Count(frames[0], EchoEvent::kGoalScored), 0);
+  EXPECT_EQ(Count(frames[0], EchoEvent::kScoreboardUpdated), 1);
+  const auto goals = Goals(frames[1]);
+  ASSERT_EQ(goals.size(), 1u);
+  EXPECT_EQ(goals[0].team(), telemetry::v2::ROLE_ORANGE_TEAM);
+  EXPECT_EQ(goals[0].point_amount(), 3);
+  EXPECT_EQ(goals[0].scorer_slot(), 9);
+  EXPECT_FLOAT_EQ(goals[0].distance_thrown(), 21.5f);
+  EXPECT_EQ(Count(frames[2], EchoEvent::kGoalScored), 0);
+}
+
+TEST(TelemetryEvents, AGoalWhoseRecordNeverComesGoesOutAfterThreeFramesWithoutItsFields) {
+  TelemetrySnapshot a = Empty();
+  a.lastScore = Goal(0, 0x0403, 7.0f);  // blue's
+  TelemetrySnapshot b = a;
+  b.orangePoints = 2;
+  const auto frames = DetectOver({a, b, b, b, b, b});
+  EXPECT_EQ(Count(frames[0], EchoEvent::kGoalScored), 0);
+  EXPECT_EQ(Count(frames[1], EchoEvent::kGoalScored), 0);
+  EXPECT_EQ(Count(frames[2], EchoEvent::kGoalScored), 0);
+  const auto goals = Goals(frames[3]);
+  ASSERT_EQ(goals.size(), 1u);
+  EXPECT_EQ(goals[0].team(), telemetry::v2::ROLE_ORANGE_TEAM);
+  EXPECT_EQ(goals[0].point_amount(), 2);
+  ExpectNoRecordFields(goals[0]);
+  EXPECT_EQ(Count(frames[4], EchoEvent::kGoalScored), 0);
+}
+
+TEST(TelemetryEvents, BothScoresRisingInOneSnapshotAreTwoGoalsAndOnlyTheRecordsTeamGetsItsFields) {
+  TelemetrySnapshot a = Empty(), b = Empty();
+  b.bluePoints = 2;
+  b.orangePoints = 3;
+  b.lastScore = Goal(1, 0x0406, 15.0f);  // the record is orange's
+  const auto frames = DetectOver({a, b, b, b, b});
+  auto goals = Goals(frames[0]);
+  ASSERT_EQ(goals.size(), 1u);
+  EXPECT_EQ(goals[0].team(), telemetry::v2::ROLE_ORANGE_TEAM);
+  EXPECT_EQ(goals[0].point_amount(), 3);
+  EXPECT_EQ(goals[0].scorer_slot(), 6);
+  EXPECT_FLOAT_EQ(goals[0].distance_thrown(), 15.0f);
+  EXPECT_EQ(Count(frames[1], EchoEvent::kGoalScored), 0);
+  EXPECT_EQ(Count(frames[2], EchoEvent::kGoalScored), 0);
+  goals = Goals(frames[3]);  // blue's never got a record of its own
+  ASSERT_EQ(goals.size(), 1u);
+  EXPECT_EQ(goals[0].team(), telemetry::v2::ROLE_BLUE_TEAM);
+  EXPECT_EQ(goals[0].point_amount(), 2);
+  ExpectNoRecordFields(goals[0]);
+}
+
+TEST(TelemetryEvents, ASecondRiseWithTheFirstGoalsRecordUnchangedWaits) {
+  TelemetrySnapshot a = Empty(), b = Empty();
+  b.bluePoints = 2;
+  b.lastScore = Goal(0, 0x0405, 19.8f);
+  TelemetrySnapshot c = b;
+  c.bluePoints = 4;                      // blue again; the record is still the first goal's
+  TelemetrySnapshot d = c;
+  d.lastScore.discSpeed = 9.75f;         // its own record arrives
+  d.lastScore.distanceThrown = 3.0f;
+  const auto frames = DetectOver({a, b, c, d});
+  EXPECT_EQ(Count(frames[0], EchoEvent::kGoalScored), 1);
+  EXPECT_EQ(Count(frames[1], EchoEvent::kGoalScored), 0);
+  const auto goals = Goals(frames[2]);
+  ASSERT_EQ(goals.size(), 1u);
+  EXPECT_EQ(goals[0].team(), telemetry::v2::ROLE_BLUE_TEAM);
+  EXPECT_EQ(goals[0].point_amount(), 2);
+  EXPECT_FLOAT_EQ(goals[0].disc_speed(), 9.75f);
+  EXPECT_FLOAT_EQ(goals[0].distance_thrown(), 3.0f);
+}
+
+TEST(TelemetryEvents, AFrameThatWasNotReadIsNotAFrameAGoalWaited) {
+  TelemetrySnapshot a = Empty();
+  a.lastScore = Goal(0, 0x0403, 7.0f);
+  TelemetrySnapshot b = a;
+  b.orangePoints = 2;
+  TelemetrySnapshot unread;
+  unread.Clear();
+  // As the streamer calls it: an unread snapshot against the last read one, which stays `prev`.
+  TelemetryEventState state;
+  std::vector<EchoArenaFrame> frames(6);
+  DetectTelemetryEvents(b, a, state, &frames[0]);       // the rise
+  DetectTelemetryEvents(unread, b, state, &frames[1]);
+  DetectTelemetryEvents(unread, b, state, &frames[2]);
+  DetectTelemetryEvents(unread, b, state, &frames[3]);
+  DetectTelemetryEvents(b, b, state, &frames[4]);        // read frames 1 and 2 after the rise
+  DetectTelemetryEvents(b, b, state, &frames[5]);
+  for (const auto& f : frames) EXPECT_EQ(Count(f, EchoEvent::kGoalScored), 0);
+  EchoArenaFrame third;
+  DetectTelemetryEvents(b, b, state, &third);
+  EXPECT_EQ(Count(third, EchoEvent::kGoalScored), 1);
 }
 
 TEST(TelemetryEvents, ARecordThatChangesDuringPlayIsNoGoal) {
