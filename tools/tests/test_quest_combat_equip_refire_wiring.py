@@ -235,7 +235,10 @@ class TheGroupTheRecipeAndTheVerifyEntryExist(unittest.TestCase):
         self.assertRegex(justfile, r"\ntest-quest-combat module=\"\":")
 
     def test_the_config_section_has_its_key_and_the_example_config_shows_it(self):
-        self.assertRegex(read("src/core/nevr_config.cpp"), r'\{"combat", \{[^}]*"force"[^}]*\}\}')
+        self.assertRegex(
+            read("src/core/nevr_config.cpp"),
+            r'\{"combat", \{"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72",',
+        )
         self.assertRegex(read("docs/reference/example-config.yaml"), r"\ncombat:\n")
 
 

@@ -577,7 +577,7 @@ build-quest-q15t: configure-android
         src/quest/tests/q15t/check/no_emutls.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" "$built/$lib" "$lib"
         grep -qaF "$id" "$built/$lib" || { echo "build-quest-q15t: $lib does not name libr15 build id $id" >&2; exit 1; }
     done
-    grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 build_id=$id" "$built/libq15t.so" \
+    grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 levelname=1 build_id=$id" "$built/libq15t.so" \
         || { echo "build-quest-q15t: libq15t.so does not carry the shipped defaults (q15t-config marker)" >&2; exit 1; }
     cp "$built/libq15t.so" "$out/"
     (cd "$out" && sha256sum libq15t.so)

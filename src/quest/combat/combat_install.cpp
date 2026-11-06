@@ -7,6 +7,7 @@
 
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/pfx.h"
@@ -31,6 +32,14 @@ ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
 
+ModuleResult GatesNormal() noexcept {
+  headset_gates::Switches switches;
+  switches.perm = g_config.gatePerm.on;
+  switches.bots = g_config.gateBots.on;
+  switches.link = g_config.gateLink.on;
+  switches.linkLibs = g_config.gateLinkLibs.source == nevr_quest::Source::kFile ? g_config.gateLinkLibs.text : nullptr;
+  return headset_gates::Install(switches);
+}
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
 ModuleResult SendguardNormal() noexcept { return sendguard::Install(g_config.sendguard.on); }
@@ -47,6 +56,8 @@ constexpr std::array kModules{
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
+    // gates (#2180): the plugin installed them after its tick and its modules; they register the tick callback the bot gate reads the game from.
+    Module{"gates", nullptr, &GatesNormal},
     // sendguard: the script-event guard, installed after the modules that hook the tick and before the decisions (#2179).
     Module{"sendguard", nullptr, &SendguardNormal, &sendguard::NoteEnd},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
@@ -176,6 +187,13 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"sendguard_source", config.sendguard.source == nevr_quest::Source::kFile ? "config" : "default"},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
+  // A log line is one fixed 768-byte buffer (sentinel/hook_log.cpp): the headset gates' keys are a line of their own, so no line is cut.
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_gates",
+                      {{"gate_perm", config.gatePerm.on ? 1 : 0}, {"gate_perm_source", source(config.gatePerm.source)},
+                       {"gate_bots", config.gateBots.on ? 1 : 0}, {"gate_bots_source", source(config.gateBots.source)},
+                       {"gate_link", config.gateLink.on ? 1 : 0}, {"gate_link_source", source(config.gateLink.source)},
+                       {"gate_link_libs_source", source(config.gateLinkLibs.source)},
+                       {"msg", "the headset gates' keys (src/quest/combat/headset_gates.h); gate_link_libs is a text and is never logged, only where it came from"}});
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }
