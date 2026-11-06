@@ -10,7 +10,6 @@
 
 #include "quest/combat/bvh_core.h"
 #include "quest/combat/combat_level.h"
-#include "quest/combat/combat_switch_log.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/safe_read.h"
@@ -345,9 +344,6 @@ void Undo(int doneCount, const int* doneIndexes) noexcept {
 
 ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Switches& switches) noexcept {
   WarnLegacySwitches();
-  LogSwitch("bvh", "combat.bvh", switches.bvh, switches.bvhFromConfig);
-  LogSwitch("bvh", "combat.bvh_gate", switches.gate, switches.gateFromConfig);
-  LogSwitch("bvh", "combat.bvh_touch", switches.touch, switches.touchFromConfig);
   if (!switches.bvh) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"hooks", 0}, {"gate", 0}, {"touch", 0}, {"allowed_casts", 0},

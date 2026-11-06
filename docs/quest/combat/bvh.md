@@ -56,7 +56,7 @@ Per hook:
   Gate's stub (`0x21cf454 bl 0x00fd1740`, then `cbz w0, 0x021cf5c0`), so with the gate on its cast is already a miss (its return site is not in the allowed
   list); Touch matters when the gate is off.
 
-Install (`InstallAt`): the legacy switch files are warned about; the three switches are logged (`combat_config_switch`); off is one Info line
+Install (`InstallAt`): the legacy switch files are warned about; the three switches are reported by the configuration step, one generated `combat_config_switch` record each (the table rows `bvh`, `bvh_gate`, `bvh_touch`); off is one Info line
 (`combat_bvh_install` `off_config`) and nothing is touched. Otherwise **all or none**: the gate goes in first (until its hook is in, no cast is marked, so a tree
 installed a moment later answers none), then Initialize, Shutdown, Intersect, Occluded; the first the manager refuses (a slot that does not hold the pinned
 function, a different libr15, a slot outside the writable segments) removes the ones already hooked and is one Error line that names the hook and the

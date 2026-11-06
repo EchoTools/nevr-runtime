@@ -43,7 +43,8 @@
  * module is Ducky's: every address here is in upstream's afk_bvh.cpp.
  *
  * Lines (sentinel log):
- *   switch    {"event":"combat_config_switch","module":"bvh","key":"combat.bvh|combat.bvh_gate|combat.bvh_touch","on":0|1,"source":"default|config"}
+ *   switch    one {"event":"combat_config_switch","module":"bvh|bvh_gate|bvh_touch","key":"combat.bvh|..","on":0|1,"source":"default|config"} per key, generated from the
+ *             registration table by the configuration step (combat_install.h); the module writes none
  *   install   {"event":"combat_bvh_install","result":"installed|off|refused","reason":"..","hooks":<n>,"gate":0|1,"touch":0|1,"allowed_casts":<n>,"msg":".."}
  *             Info for installed and off (`reason` `off_config`), Error for a refusal (`reason` is the cause, `hook` the one that stopped it).
  *   tree      {"event":"combat_bvh_tree","result":"built|none|refused","why":"..","data":"0x..","triangle4":<n>,"nodes":<n>,"root_ref":"0x.."}
@@ -74,14 +75,11 @@ inline std::atomic<bool> g_inCombatMap{false};
 // True while a combat map is loaded and no Echo Arena level is. One relaxed load.
 inline bool InCombatMap() noexcept { return detail::g_inCombatMap.load(std::memory_order_relaxed); }
 
-// The `combat:` keys the step reads, and whether the file gave each (otherwise it is the default).
+// The `combat:` keys the step reads.
 struct Switches {
   bool bvh = true;  // combat.bvh
   bool gate = true;  // combat.bvh_gate
   bool touch = true;  // combat.bvh_touch
-  bool bvhFromConfig = false;
-  bool gateFromConfig = false;
-  bool touchFromConfig = false;
 };
 
 // The step on the loaded libr15. Fixed status tokens: "installed", "off_config", "already_ran", "module_not_loaded", "no_thread_key",

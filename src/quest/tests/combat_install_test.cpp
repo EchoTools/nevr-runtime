@@ -19,8 +19,12 @@
 #include "quest/combat/combat_active.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/wallfire.h"
+#include "quest/combat/meshstep.h"
+#include "quest/combat/shaderstep.h"
+#include "quest/combat/tablestep.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
@@ -214,17 +218,22 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
 // The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and nothing has a normal one yet. No
 // libr15 is loaded in this process, so each module refuses with its fixed token and the line names both; the normal phase writes its one
 // line with no modules.
-void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal() {
+void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal() {
   nevr_quest::combat::heaps::ResetForTest();
   nevr_quest::combat::memsys::ResetForTest();
+  nevr_quest::combat::meshstep::ResetForTest();
+  nevr_quest::combat::tablestep::ResetForTest();
+  nevr_quest::combat::instmodel::ResetForTest();
+  nevr_quest::combat::shaderstep::ResetForTest();
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the headset gates (#2180), the static BVH and the wall-fire check (#2182: the BVH is refused for want of a libr15, and the wall-fire check for want of the BVH) and, last, the pfx gate and
-  // the event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick and the gates are refused and named; the rule
-  // installs (it registers its callback for a tick that may come later), and so do the two decisions.
-  QCHECK(normal.ran && normal.modules == 7 && normal.installed == 3 && normal.failed == 4);
+  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the four resource table steps in the plugin's order
+  // (#2177), the headset gates (#2180), the static BVH and the wall-fire check (#2182: the BVH is refused for want of a libr15, and the wall-fire check for want of the BVH) and, last, the pfx gate and the event-effect decision, which hook nothing (#2188). On the host no libr15 is
+  // loaded, so the tick, the table steps and the gates are refused and named ; the rule installs (it registers its callback
+  // for a tick that may come later), and so do the two decisions.
+  QCHECK(normal.ran && normal.modules == 11 && normal.installed == 3 && normal.failed == 8);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -232,7 +241,9 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed gates=module_not_loaded bvh=module_not_loaded wallfire=bvh_not_installed pfx=installed pfxtev=installed\""));
+    QCHECK(Has(lines[1].text,
+               "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded tablestep=module_not_loaded instmodel=module_not_loaded "
+               "shaderstep=module_not_loaded gates=module_not_loaded bvh=module_not_loaded wallfire=bvh_not_installed pfx=installed pfxtev=installed\""));
   }
   Done();
 }
@@ -310,6 +321,8 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     // The module switches: on by default, each with its source.
     QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
+    // The four resource table steps (#2177) are records of their own (combat_config_switch), not keys of this full line.
+    QCHECK(!Has(lines[0].text, "meshstep") && !Has(lines[0].text, "tablestep"));
   }
   g_lines.clear();
   cfg.heaps = {false, nevr_quest::Source::kFile};
@@ -320,6 +333,33 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   if (switches.size() == 1U) {
     QCHECK(Has(switches[0].text, "\"heaps\":0") && Has(switches[0].text, "\"heaps_source\":\"config\""));
     QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"msg\":"));  // the line is not cut off: one sentinel line holds 768 bytes
+  }
+  // The four resource table steps (#2177): one `combat_config_switch` record each, generated from the registration table. instmodel, shaderstep and
+  // tablestep and meshstep are on by default, each with its source; the file's word where it gave one.
+  g_lines.clear();
+  nevr_quest::CombatConfig tables;
+  combat::LogConfig(tables);
+  tables.meshstep = {false, nevr_quest::Source::kFile};
+  tables.tablestep = {false, nevr_quest::Source::kFile};
+  combat::LogConfig(tables);
+  const std::vector<Line> records = Lines("combat_config_switch");
+  QCHECK(records.size() == 16U);  // eight per call (the four table steps, then bvh's three switches and wallfire's), in the table's order
+  const char* const order[] = {"meshstep", "tablestep", "instmodel", "shaderstep"};
+  const char* const wantFirst[] = {"\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
+                                   "\"on\":1,\"source\":\"default\""};
+  const char* const wantSecond[] = {"\"on\":0,\"source\":\"config\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
+                                    "\"on\":1,\"source\":\"default\""};
+  if (records.size() == 16U) {
+    for (std::size_t i = 0; i < 4; ++i) {
+      for (std::size_t call = 0; call < 2; ++call) {
+        const Line& line = records[call * 8 + i];
+        QCHECK(line.level == sentinel::LogLevel::kInfo);
+        QCHECK(line.text.substr(line.text.find("\"event\"")) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + order[i] + "\",\"key\":\"combat." + order[i] +
+                                        "\"," + (call == 0 ? wantFirst[i] : wantSecond[i]) + "}");
+        QCHECK(line.text.size() < 200);
+      }
+    }
   }
   Done();
 }
@@ -462,8 +502,8 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
 
 }  // namespace
 
-// The static BVH's and the wall-fire check's rows read their four keys from the resolved section (#2182): each key the file turned off reaches its module
-// (the module logs the value it was handed before it looks for a libr15, so the host sees it), and the default is on.
+// The static BVH's and the wall-fire check's rows read their keys from the resolved section (#2182): each switch the file turned off reaches its module, and each
+// is one generated `combat_config_switch` record (bvh_gate and bvh_touch are rows with no step of their own). The default is on, as q15t-upstream has it.
 void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
   nevr_quest::combat::bvh::ResetForTest();
   nevr_quest::combat::wallfire::ResetForTest();
@@ -471,8 +511,6 @@ void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
   combat::SetConfig(nevr_quest::CombatConfig{});
   combat::InstallNormal();
   QCHECK(Has(Lines("combat_install")[0].text, "bvh=module_not_loaded wallfire=bvh_not_installed"));
-  QCHECK(Has(Lines("combat_config_switch")[0].text, "\"key\":\"combat.bvh\",\"on\":1,\"source\":\"default\""));
-  QCHECK(Lines("combat_config_switch").size() == 4U);
   Done();
   nevr_quest::combat::bvh::ResetForTest();
   nevr_quest::combat::wallfire::ResetForTest();
@@ -484,15 +522,27 @@ void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
   off.wallfire = {false, nevr_quest::Source::kFile};
   combat::SetConfig(off);
   combat::InstallNormal();
-  const std::vector<Line> keys = Lines("combat_config_switch");
-  QCHECK(keys.size() == 4U);
-  if (keys.size() == 4U) {
-    QCHECK(Has(keys[0].text, "\"key\":\"combat.bvh\",\"on\":0,\"source\":\"config\""));
-    QCHECK(Has(keys[1].text, "\"key\":\"combat.bvh_gate\",\"on\":0,\"source\":\"config\""));
-    QCHECK(Has(keys[2].text, "\"key\":\"combat.bvh_touch\",\"on\":0,\"source\":\"config\""));
-    QCHECK(Has(keys[3].text, "\"key\":\"combat.wallfire\",\"on\":0,\"source\":\"config\""));
-  }
   QCHECK(Has(Lines("combat_install")[0].text, "bvh=off_config wallfire=off_config"));
+  Done();
+  // The records: the defaults, then what the file gave.
+  Process(bv::Variant::kCombat);
+  combat::LogConfig(nevr_quest::CombatConfig{});
+  combat::LogConfig(off);
+  const std::vector<Line> records = Lines("combat_config_switch");
+  const auto find = [&](const char* module, std::size_t call) -> std::string {
+    std::size_t seen = 0;
+    for (const Line& l : records) {
+      if (Has(l.text, std::string("\"module\":\"") + module + "\"")) {
+        if (seen++ == call) return l.text.substr(l.text.find("\"event\""));
+      }
+    }
+    return "";
+  };
+  const char* const modules[] = {"bvh", "bvh_gate", "bvh_touch", "wallfire"};
+  for (const char* m : modules) {
+    QCHECK(find(m, 0) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + m + "\",\"key\":\"combat." + m + "\",\"on\":1,\"source\":\"default\"}");
+    QCHECK(find(m, 1) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + m + "\",\"key\":\"combat." + m + "\",\"on\":0,\"source\":\"config\"}");
+  }
   Done();
 }
 
@@ -505,7 +555,7 @@ int main() {
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
-  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal();
+  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();

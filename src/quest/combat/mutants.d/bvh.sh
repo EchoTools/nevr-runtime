@@ -4,11 +4,6 @@
 runm bvh_off_ignored      src/quest/combat/bvh.cpp "s/  if (!switches.bvh) {/  if (false) {/"
 runm bvh_off_reason       src/quest/combat/bvh.cpp "s/return {false, \"off_config\"};/return {false, \"off\"};/"
 runm bvh_off_line         src/quest/combat/bvh.cpp "s/{{\"result\", \"off\"}, {\"reason\", \"off_config\"}/{{\"result\", \"skipped\"}, {\"reason\", \"off_config\"}/"
-runm bvh_switch_unlogged  src/quest/combat/bvh.cpp "s/^  LogSwitch(\"bvh\", \"combat.bvh\", switches.bvh, switches.bvhFromConfig);//"
-runm bvh_switch_gate_log  src/quest/combat/bvh.cpp "s/^  LogSwitch(\"bvh\", \"combat.bvh_gate\", switches.gate, switches.gateFromConfig);//"
-runm bvh_switch_touch_log src/quest/combat/bvh.cpp "s/^  LogSwitch(\"bvh\", \"combat.bvh_touch\", switches.touch, switches.touchFromConfig);//"
-runm bvh_switch_source    src/quest/combat/bvh.cpp "s/LogSwitch(\"bvh\", \"combat.bvh\", switches.bvh, switches.bvhFromConfig);/LogSwitch(\"bvh\", \"combat.bvh\", switches.bvh, false);/"
-runm bvh_switch_value     src/quest/combat/bvh.cpp "s/LogSwitch(\"bvh\", \"combat.bvh_gate\", switches.gate, switches.gateFromConfig);/LogSwitch(\"bvh\", \"combat.bvh_gate\", true, switches.gateFromConfig);/"
 runm bvh_legacy_unchecked src/quest/combat/bvh.cpp "s/    if (!legacy::Present(l.file)) continue;/    if (false) continue;/"
 runm bvh_legacy_key       src/quest/combat/bvh.cpp "s/{\"bvhgate.off\", \"combat.bvh_gate: false\"}/{\"bvhgate.off\", \"combat.bvh: false\"}/"
 runm bvh_legacy_level     src/quest/combat/bvh.cpp "s/sentinel::LogFields(sentinel::LogLevel::kWarn, \"combat_bvh_legacy_switch\"/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_bvh_legacy_switch\"/"
@@ -136,10 +131,18 @@ runm bvh_pin_allowed_n    src/quest/combat/bvh_targets.h "s/    3};/    2};/"
 runm bvh_pin_symbol       src/quest/combat/bvh_targets.h "s/CBVHTree8ShutdownEv/CBVHTree8ShutdowNEv/"
 runm bvh_target_expected src/quest/combat/bvh_targets.h "s/target.expectedOriginal = reinterpret_cast<const void\*>(base + slot.fn);/target.expectedOriginal = nullptr; (void)base; (void)slot;/"
 # -- the module's row and its keys elsewhere
-runm bvh_row_missing      src/quest/combat/combat_install.cpp "s/Module{\"bvh\", nullptr, \&BvhNormal},/Module{\"bvh\", \&BvhNormal, nullptr},/" quest-host-combat combat_install_test
+runm bvh_row_missing      src/quest/combat/combat_install.cpp "s/Module{\"bvh\", nullptr, \&BvhNormal, /Module{\"bvh\", \&BvhNormal, nullptr, /" quest-host-combat combat_install_test
 runm bvh_row_switch_gate  src/quest/combat/combat_install.cpp "s/  switches.gate = g_config.bvhGate.on;/  switches.gate = true;/" quest-host-combat combat_install_test
 runm bvh_default_off      src/quest/sentinel/quest_config.h "s/  CombatSwitch bvh{true, Source::kAbsent};/  CombatSwitch bvh{false, Source::kAbsent};/" quest-host-shared quest_config_test
 runm bvh_gate_default_off src/quest/sentinel/quest_config.h "s/  CombatSwitch bvhGate{true, Source::kAbsent};/  CombatSwitch bvhGate{false, Source::kAbsent};/" quest-host-shared quest_config_test
 runm bvh_touch_default    src/quest/sentinel/quest_config.h "s/  CombatSwitch bvhTouch{true, Source::kAbsent};/  CombatSwitch bvhTouch{false, Source::kAbsent};/" quest-host-shared quest_config_test
 runm bvh_key_name         src/quest/sentinel/quest_config.cpp "s/kCombatBvhGateKey = \"combat.bvh_gate\"/kCombatBvhGateKey = \"combat.bvh_gat\"/" quest-host-shared quest_config_test
 runm bvh_key_read         src/quest/sentinel/quest_config.cpp "s/  r.config.combat.bvhTouch = ReadCombatSwitch(cfg, kCombatBvhTouchKey, r);//" quest-host-shared quest_config_test
+# -- the generated switch records (the rows' keys and members)
+runm bvh_row_key          src/quest/combat/combat_install.cpp "s/\"combat.bvh\", \&nevr_quest::CombatConfig::bvh}/\"combat.bvh_\", \&nevr_quest::CombatConfig::bvh}/" quest-host-combat combat_install_test
+runm bvh_row_member       src/quest/combat/combat_install.cpp "s/\"combat.bvh\", \&nevr_quest::CombatConfig::bvh}/\"combat.bvh\", \&nevr_quest::CombatConfig::bvhGate}/" quest-host-combat combat_install_test
+runm bvh_gate_row_key     src/quest/combat/combat_install.cpp "s/\"combat.bvh_gate\", \&nevr_quest::CombatConfig::bvhGate}/\"combat.bvh_gat\", \&nevr_quest::CombatConfig::bvhGate}/" quest-host-combat combat_install_test
+runm bvh_gate_row_member  src/quest/combat/combat_install.cpp "s/\"combat.bvh_gate\", \&nevr_quest::CombatConfig::bvhGate}/\"combat.bvh_gate\", \&nevr_quest::CombatConfig::bvhTouch}/" quest-host-combat combat_install_test
+runm bvh_touch_row_key    src/quest/combat/combat_install.cpp "s/\"combat.bvh_touch\", \&nevr_quest::CombatConfig::bvhTouch}/\"combat.bvh_touc\", \&nevr_quest::CombatConfig::bvhTouch}/" quest-host-combat combat_install_test
+runm bvh_touch_row_member src/quest/combat/combat_install.cpp "s/\"combat.bvh_touch\", \&nevr_quest::CombatConfig::bvhTouch}/\"combat.bvh_touch\", \&nevr_quest::CombatConfig::bvh}/" quest-host-combat combat_install_test
+runm bvh_gate_row_missing src/quest/combat/combat_install.cpp "s/    Module{\"bvh_gate\", nullptr, nullptr, \"combat.bvh_gate\", \&nevr_quest::CombatConfig::bvhGate},/    Module{\"bvh_gate\", nullptr, nullptr},/" quest-host-combat combat_install_test

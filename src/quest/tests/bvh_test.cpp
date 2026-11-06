@@ -7,7 +7,7 @@
 // touch answer). What changed is the fixture (the plugin's fake slot page is a libr15 image and the manager's install, not a slot swap; the
 // plugin's kill files are `combat:` switches) and three deliberate behaviours: every answer is scoped to a combat map (the arena path calls the
 // game's function), the arguments of a cast are read with plain loads (the unreadable-argument assertions went with the system call), and a
-// thunk with no original answers a miss without calling the handler. New here: the scope, the switches and their lines, the legacy switch files.
+// thunk with no original answers a miss without calling the handler. New here: the scope, the switches, the legacy switch files.
 //
 // Built and run by `just test-quest-combat`.
 #include "quest/combat/bvh.h"
@@ -329,9 +329,6 @@ void TheInstallSwapsTheSlotsAndStatesItOnce() {
   const std::string install = Event("combat_bvh_install");
   QCHECK(Count(install) == 1 && Count(install, kInfo) == 1);
   QCHECK(Count("\"result\":\"installed\",\"reason\":\"ok\",\"hooks\":6,\"gate\":1,\"touch\":1,\"allowed_casts\":0") == 1);
-  QCHECK(Count(Event("combat_config_switch")) == 3);
-  QCHECK(Count("\"module\":\"bvh\",\"key\":\"combat.bvh\",\"on\":1,\"source\":\"default\"") == 1);
-  QCHECK(Count("\"key\":\"combat.bvh_gate\",\"on\":1,\"source\":\"default\"") == 1 && Count("\"key\":\"combat.bvh_touch\",\"on\":1,\"source\":\"default\"") == 1);
   QCHECK(nevr_quest::combat::tick::Count() == 1);  // the scope's refresh rides the combat tick
   {  // the gate goes in first: until its hook is in no cast is marked, so a tree installed a moment later answers none
     std::size_t gateAt = 0, initAt = 0;
@@ -350,19 +347,17 @@ void TheInstallSwapsTheSlotsAndStatesItOnce() {
   End();
 }
 
-void SwitchesDecideAndTheSourceIsLogged() {
+void SwitchesDecideWhatIsInstalled() {
   {  // off: one Info line, no slot touched, no tick registered
     Begin();
     Build();
     const std::uintptr_t before = SlotWord(g_pins.intersect.slot);
     bvh::Switches sw;
     sw.bvh = false;
-    sw.bvhFromConfig = true;  // bvh is true by default; here the file says false
     const nevr_quest::combat::ModuleResult r = bvh::Install(sw);
     QCHECK(!r.installed && std::strcmp(r.status, "off_config") == 0 && !bvh::TreeInstalled());
     QCHECK(SlotWord(g_pins.intersect.slot) == before && nevr_quest::combat::tick::Count() == 0);
     QCHECK(Count("\"result\":\"off\",\"reason\":\"off_config\"", kInfo) == 1);
-    QCHECK(Count("\"key\":\"combat.bvh\",\"on\":0,\"source\":\"config\"") == 1);
     QCHECK(Count(std::string("\"level\":\"error\"")) == 0);
     End();
   }
@@ -379,11 +374,9 @@ void SwitchesDecideAndTheSourceIsLogged() {
     Build();
     const std::uintptr_t gateBefore = SlotWord(g_pins.gate.slot);
     bvh::Switches sw = Gateless();
-    sw.gateFromConfig = true;
     QCHECK(Installed(sw));
     QCHECK(SlotWord(g_pins.gate.slot) == gateBefore);
     QCHECK(Count("\"hooks\":5,\"gate\":0,\"touch\":1") == 1);
-    QCHECK(Count("\"key\":\"combat.bvh_gate\",\"on\":0,\"source\":\"config\"") == 1);
     End();
   }
   {  // touch rays kept: the touch slot is the game's
@@ -392,7 +385,6 @@ void SwitchesDecideAndTheSourceIsLogged() {
     const std::uintptr_t touchBefore = SlotWord(g_pins.touch.slot);
     bvh::Switches sw = On();
     sw.touch = false;
-    sw.touchFromConfig = true;
     QCHECK(Installed(sw));
     QCHECK(SlotWord(g_pins.touch.slot) == touchBefore);
     QCHECK(Count("\"hooks\":5,\"gate\":1,\"touch\":0") == 1);
@@ -961,7 +953,7 @@ int main() {
   ThePinsAreTheReadelfPins();
   NoThreadKeyRefusesAndChangesNothing();
   TheInstallSwapsTheSlotsAndStatesItOnce();
-  SwitchesDecideAndTheSourceIsLogged();
+  SwitchesDecideWhatIsInstalled();
   ARefusedTouchHookDoesNotStopTheTree();
   ALegacySwitchFileIsAWarningAndChangesNothing();
   ACombatMapGetsTheTreesAnswers();

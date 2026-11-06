@@ -6,7 +6,6 @@
 #include <cstring>
 
 #include "quest/combat/bvh.h"
-#include "quest/combat/combat_switch_log.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
@@ -96,13 +95,12 @@ void Refused(const char* reason, const char* detail, const char* status, sentine
 
 }  // namespace
 
-ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on, bool fromConfig) noexcept {
+ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) noexcept {
   if (legacy::Present("wallfire.off")) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_wallfire_legacy_switch",
                         {{"file", "wallfire.off"}, {"replaced_by", "combat.wallfire: false"},
                          {"msg", "the plugin's kill file is no longer read and changes nothing; set the combat key in config.yaml instead"}});
   }
-  LogSwitch("wallfire", "combat.wallfire", on, fromConfig);
   if (!on) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_wallfire_install",
                         {{"result", "off"}, {"reason", "off_config"},
@@ -160,10 +158,10 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on, 
   return {true, "installed"};
 }
 
-ModuleResult Install(bool on, bool fromConfig) noexcept {
+ModuleResult Install(bool on) noexcept {
   const sentinel::ImageLookup lookup = g_lookup.load(std::memory_order_acquire);
   const Pins* const pins = g_pinsOverride.load(std::memory_order_acquire);
-  return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, pins != nullptr ? *pins : kPins, on, fromConfig);
+  return InstallAt(lookup != nullptr ? lookup : &sentinel::FindLoadedImage, pins != nullptr ? *pins : kPins, on);
 }
 
 Counters GetCounters() noexcept {

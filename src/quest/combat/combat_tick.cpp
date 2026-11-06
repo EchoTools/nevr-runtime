@@ -27,6 +27,7 @@ constexpr std::uint32_t kRecheckFrames = 256;
 std::atomic<std::uint32_t> g_sinceCheck{0};
 std::atomic<std::uintptr_t> g_verified{0};
 std::atomic<std::uint32_t> g_vptrReads{0};
+std::atomic<std::uintptr_t> g_game{0};  // the last object that passed the vptr check (Game())
 std::atomic<std::uintptr_t> g_vptr{0};  // the value CR15Game's first word holds in this process: libr15's base + the pinned vaddr
 
 void RunCallbacks(std::uintptr_t object) noexcept {
@@ -65,6 +66,7 @@ void OnTick(Thunk::Fn original, void* game) noexcept {
     return;
   }
   g_verified.store(object, std::memory_order_relaxed);
+  g_game.store(object, std::memory_order_release);
   RunCallbacks(object);
 }
 
@@ -117,6 +119,8 @@ ModuleResult InstallNormal() noexcept {
   return {ok, ok ? "installed" : sentinel::GotStatusName(status)};
 }
 
+std::uintptr_t Game() noexcept { return g_game.load(std::memory_order_acquire); }
+
 std::uint32_t Calls() noexcept { return g_calls.load(std::memory_order_relaxed); }
 
 std::uint32_t VptrReads() noexcept { return g_vptrReads.load(std::memory_order_relaxed); }
@@ -129,6 +133,7 @@ void ResetForTest() noexcept {
   g_calls.store(0, std::memory_order_relaxed);
   g_objectMisses.store(0, std::memory_order_relaxed);
   g_vptr.store(0, std::memory_order_relaxed);
+  g_game.store(0, std::memory_order_relaxed);
   g_verified.store(0, std::memory_order_relaxed);
   g_sinceCheck.store(0, std::memory_order_relaxed);
   g_vptrReads.store(0, std::memory_order_relaxed);

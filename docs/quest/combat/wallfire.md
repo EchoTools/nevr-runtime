@@ -64,7 +64,7 @@ so the query ends in `CBVHTree::Occluded(tree, a', b')` where a', b' are the two
 The extra check (ours, `GameIsPinned`): `*(gs + 8)` is the CncaGame, `*game` its vtable pointer, and `[vtable + 0x278]` must equal `base + 0x17f2614`. A null
 game or vtable pointer is the stock answer. The three loads are plain: the stub called next reads the same three words. Nothing is remembered between shots.
 
-Install (`InstallAt`): the legacy `wallfire.off` file is warned about; the switch is logged (`combat_config_switch`); off is one Info line
+Install (`InstallAt`): the legacy `wallfire.off` file is warned about; the switch is reported by the configuration step, one generated `combat_config_switch` record (the table row `wallfire`); off is one Info line
 (`combat_wallfire_install` `off_config`); `bvh` installed; the word at the R27 site reads `0x3941b3e8` (`site_word` Error otherwise); the R28 slot holds
 `base + 0x18066f4` (`occluded_slot` Error otherwise); then the manager hooks the R26 slot (it must hold `base + 0x1806784`: an unexpected word or a slot outside
 the writable segments is refused and nothing is hooked). Lines: `combat_wallfire_install` (Info installed or off, Error refused, Warning for the bvh

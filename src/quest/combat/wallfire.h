@@ -28,7 +28,8 @@
  * (`GameIsPinned`) is ours.
  *
  * Lines (sentinel log):
- *   switch    {"event":"combat_config_switch","module":"wallfire","key":"combat.wallfire","on":0|1,"source":"default|config"}
+ *   switch    one {"event":"combat_config_switch","module":"wallfire","key":"combat.wallfire","on":0|1,"source":"default|config"}, generated from the registration table
+ *             by the configuration step (combat_install.h); the module writes none
  *   install   {"event":"combat_wallfire_install","result":"installed|off|refused","reason":"..","msg":".."}   Info for installed and off, Error for a refusal
  *   blocked   {"event":"combat_wallfire_blocked","blocked":<n>,"checked":<n>,"segment":"x y z -> x y z"}   the first 16, then at powers of two
  *   skipped   {"event":"combat_wallfire_skipped","reason":"game_chain",..}   Warning, once: CncaGame's virtual +0x278 is not the pinned function
@@ -48,8 +49,8 @@ namespace nevr_quest::combat::wallfire {
 
 // The step on the loaded libr15. Fixed status tokens: "installed", "off_config", "already_ran", "bvh_not_installed", "module_not_loaded",
 // "site_unreadable", "site_word", "occluded_unreadable", "occluded_slot", or the manager's status name of the hook that was refused.
-ModuleResult Install(bool on, bool fromConfig) noexcept;
-ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on, bool fromConfig) noexcept;
+ModuleResult Install(bool on) noexcept;
+ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on) noexcept;
 
 struct Counters {
   std::uint64_t atSite;        // QueryCollision calls from FireGunLocal's site whose stock answer was "nothing"

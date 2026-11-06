@@ -3,8 +3,6 @@
 runm wf_off_ignored       src/quest/combat/wallfire.cpp "s/  if (!on) {/  if (false) {/"
 runm wf_off_reason        src/quest/combat/wallfire.cpp "s/return {false, \"off_config\"};/return {false, \"off\"};/"
 runm wf_off_line          src/quest/combat/wallfire.cpp "s/{{\"result\", \"off\"}, {\"reason\", \"off_config\"},/{{\"result\", \"skipped\"}, {\"reason\", \"off_config\"},/"
-runm wf_switch_unlogged   src/quest/combat/wallfire.cpp "s/^  LogSwitch(\"wallfire\", \"combat.wallfire\", on, fromConfig);/  (void)fromConfig;/"
-runm wf_switch_source     src/quest/combat/wallfire.cpp "s/  LogSwitch(\"wallfire\", \"combat.wallfire\", on, fromConfig);/  (void)fromConfig; LogSwitch(\"wallfire\", \"combat.wallfire\", on, false);/"
 runm wf_legacy_unchecked  src/quest/combat/wallfire.cpp "s/  if (legacy::Present(\"wallfire.off\")) {/  if (false) {/"
 runm wf_legacy_key        src/quest/combat/wallfire.cpp "s/{\"replaced_by\", \"combat.wallfire: false\"}/{\"replaced_by\", \"combat.bvh: false\"}/"
 runm wf_legacy_level      src/quest/combat/wallfire.cpp "s/sentinel::LogFields(sentinel::LogLevel::kWarn, \"combat_wallfire_legacy_switch\"/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_wallfire_legacy_switch\"/"
@@ -71,7 +69,9 @@ runm wf_seg_floats        src/quest/combat/wallfire_targets.h "s/kReqSegFloats =
 runm wf_symbol            src/quest/combat/wallfire_targets.h "s/QueryCollisionERNS_24/QueryCollisioNERNS_24/"
 runm wf_target_expected   src/quest/combat/wallfire_targets.h "s/target.expectedOriginal = reinterpret_cast<const void\*>(base + pins.queryFn);/target.expectedOriginal = nullptr; (void)base; (void)pins;/"
 # -- the module's row and key elsewhere
-runm wf_row_missing       src/quest/combat/combat_install.cpp "s/Module{\"wallfire\", nullptr, \&WallfireNormal},/Module{\"wallfire\", \&WallfireNormal, nullptr},/" quest-host-combat combat_install_test
-runm wf_row_switch        src/quest/combat/combat_install.cpp "s/  return wallfire::Install(g_config.wallfire.on, g_config.wallfire.source == nevr_quest::Source::kFile);/  return wallfire::Install(true, false);/" quest-host-combat combat_install_test
+runm wf_row_missing       src/quest/combat/combat_install.cpp "s/Module{\"wallfire\", nullptr, \&WallfireNormal, /Module{\"wallfire\", \&WallfireNormal, nullptr, /" quest-host-combat combat_install_test
+runm wf_row_switch        src/quest/combat/combat_install.cpp "s/  return wallfire::Install(g_config.wallfire.on);/  return wallfire::Install(true);/" quest-host-combat combat_install_test
 runm wf_default_off       src/quest/sentinel/quest_config.h "s/  CombatSwitch wallfire{true, Source::kAbsent};/  CombatSwitch wallfire{false, Source::kAbsent};/" quest-host-shared quest_config_test
 runm wf_key_name          src/quest/sentinel/quest_config.cpp "s/kCombatWallfireKey = \"combat.wallfire\"/kCombatWallfireKey = \"combat.wallfir\"/" quest-host-shared quest_config_test
+runm wf_row_key           src/quest/combat/combat_install.cpp "s/\"combat.wallfire\", \&nevr_quest::CombatConfig::wallfire}/\"combat.wallfir\", \&nevr_quest::CombatConfig::wallfire}/" quest-host-combat combat_install_test
+runm wf_row_member        src/quest/combat/combat_install.cpp "s/\"combat.wallfire\", \&nevr_quest::CombatConfig::wallfire}/\"combat.wallfire\", \&nevr_quest::CombatConfig::bvh}/" quest-host-combat combat_install_test

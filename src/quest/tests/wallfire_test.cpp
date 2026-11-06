@@ -267,7 +267,7 @@ std::uintptr_t Req(float a0, float a1, float a2, float b0, float b1, float b2) {
 
 wf::Counters C() { return wf::GetCounters(); }
 bool InstalledWallfire() {
-  const nevr_quest::combat::ModuleResult r = wf::Install(true, false);
+  const nevr_quest::combat::ModuleResult r = wf::Install(true);
   if (!r.installed) {
     for (const Line& l : g_lines) std::fprintf(stderr, "  line: %s\n", l.text.c_str());
   }
@@ -306,7 +306,7 @@ void WithoutBvhNothingIsInstalled() {
   Begin();
   Build(g_siteWord, g_siteAbs);
   const std::uintptr_t before = SlotWord(g_pins.querySlot);
-  const nevr_quest::combat::ModuleResult r = wf::Install(true, false);
+  const nevr_quest::combat::ModuleResult r = wf::Install(true);
   QCHECK(!r.installed && std::strcmp(r.status, "bvh_not_installed") == 0);
   QCHECK(SlotWord(g_pins.querySlot) == before && Count(Event("combat_wallfire_install"), kWarn) == 1 && Count("\"reason\":\"bvh_not_installed\"") == 1);
   End();
@@ -318,10 +318,9 @@ void TheSwitchAndItsLines() {
     Build(g_siteWord, g_siteAbs);
     InstallBvhAndTree();
     const std::uintptr_t before = SlotWord(g_pins.querySlot);
-    const nevr_quest::combat::ModuleResult r = wf::Install(false, true);
+    const nevr_quest::combat::ModuleResult r = wf::Install(false);
     QCHECK(!r.installed && std::strcmp(r.status, "off_config") == 0 && SlotWord(g_pins.querySlot) == before);
     QCHECK(Count("\"result\":\"off\",\"reason\":\"off_config\"", kInfo) == 1);
-    QCHECK(Count("\"module\":\"wallfire\",\"key\":\"combat.wallfire\",\"on\":0,\"source\":\"config\"") == 1);
     End();
   }
   {  // on, from the default
@@ -329,13 +328,12 @@ void TheSwitchAndItsLines() {
     Build(g_siteWord, g_siteAbs);
     InstallBvhAndTree();
     g_lines.clear();
-    const nevr_quest::combat::ModuleResult first = wf::Install(true, false);
+    const nevr_quest::combat::ModuleResult first = wf::Install(true);
     QCHECK(first.installed && std::strcmp(first.status, "installed") == 0);
-    QCHECK(Count("\"key\":\"combat.wallfire\",\"on\":1,\"source\":\"default\"") == 1);
     QCHECK(Count("\"result\":\"installed\",\"reason\":\"ok\"", kInfo) == 1);
-    const nevr_quest::combat::ModuleResult again = wf::Install(true, false);  // a second step installs nothing
+    const nevr_quest::combat::ModuleResult again = wf::Install(true);  // a second step installs nothing
     QCHECK(!again.installed && std::strcmp(again.status, "already_ran") == 0);
-    QCHECK(std::strcmp(wf::Install(true, false).status, "already_ran") == 0);
+    QCHECK(std::strcmp(wf::Install(true).status, "already_ran") == 0);
     End();
   }
   {  // the plugin's kill file is a warning and changes nothing
@@ -347,7 +345,7 @@ void TheSwitchAndItsLines() {
     mkdir(dir.c_str(), 0700);
     nevr_quest::combat::legacy::SetDirectoryForTest(dir.c_str());
     if (FILE* f = std::fopen((dir + "/wallfire.off").c_str(), "w")) std::fclose(f);
-    QCHECK(wf::Install(true, false).installed);
+    QCHECK(wf::Install(true).installed);
     QCHECK(Count(Event("combat_wallfire_legacy_switch"), kWarn) == 1 && Count("\"replaced_by\":\"combat.wallfire: false\"") == 1);
     unlink((dir + "/wallfire.off").c_str());
     rmdir(dir.c_str());
@@ -476,7 +474,7 @@ void ARefusedInstallChangesNothingAndSaysWhy() {
     Build(g_siteWord ^ 1U, g_siteAbs);
     InstallBvhAndTree();
     const std::uintptr_t before = SlotWord(g_pins.querySlot);
-    const nevr_quest::combat::ModuleResult r = wf::Install(true, false);
+    const nevr_quest::combat::ModuleResult r = wf::Install(true);
     QCHECK(!r.installed && std::strcmp(r.status, "site_word") == 0 && SlotWord(g_pins.querySlot) == before);
     QCHECK(Count(Event("combat_wallfire_install"), kError) == 1 && Count("\"reason\":\"site_word\"") == 1);
     End();
@@ -487,7 +485,7 @@ void ARefusedInstallChangesNothingAndSaysWhy() {
     InstallBvhAndTree();
     const std::uintptr_t before = SlotWord(g_pins.querySlot);
     *g_image.Slot(g_pins.occludedSlot) = reinterpret_cast<void*>(0x4242420);
-    const nevr_quest::combat::ModuleResult r = wf::Install(true, false);
+    const nevr_quest::combat::ModuleResult r = wf::Install(true);
     QCHECK(!r.installed && std::strcmp(r.status, "occluded_slot") == 0 && SlotWord(g_pins.querySlot) == before);
     End();
   }
@@ -496,7 +494,7 @@ void ARefusedInstallChangesNothingAndSaysWhy() {
     Build(g_siteWord, g_siteAbs);
     InstallBvhAndTree();
     *g_image.Slot(g_pins.querySlot) = reinterpret_cast<void*>(0x4242420);
-    const nevr_quest::combat::ModuleResult r = wf::Install(true, false);
+    const nevr_quest::combat::ModuleResult r = wf::Install(true);
     QCHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0 && SlotWord(g_pins.querySlot) == 0x4242420);
     QCHECK(Count("\"reason\":\"hook_refused\"", kError) == 1);
     End();
@@ -506,7 +504,7 @@ void ARefusedInstallChangesNothingAndSaysWhy() {
     Build(g_siteWord, g_siteAbs);
     InstallBvhAndTree();
     *g_image.Slot(g_pins.querySlot) = reinterpret_cast<void*>(&StockInit);
-    const nevr_quest::combat::ModuleResult r = wf::Install(true, false);
+    const nevr_quest::combat::ModuleResult r = wf::Install(true);
     QCHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0 && SlotWord(g_pins.querySlot) == reinterpret_cast<std::uintptr_t>(&StockInit));
     End();
   }
@@ -515,7 +513,7 @@ void ARefusedInstallChangesNothingAndSaysWhy() {
     Build(g_siteWord, g_siteAbs);
     InstallBvhAndTree();
     g_image.Drop();
-    const nevr_quest::combat::ModuleResult r = wf::Install(true, false);
+    const nevr_quest::combat::ModuleResult r = wf::Install(true);
     QCHECK(!r.installed && std::strcmp(r.status, "module_not_loaded") == 0);
     End();
   }
