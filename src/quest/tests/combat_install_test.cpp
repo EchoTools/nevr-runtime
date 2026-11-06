@@ -307,10 +307,16 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     // The module switches: on by default, each with its source.
     QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
-    // The wrist HUD and the shield colour (#2186): the HUD and the tube mirror on, the gamma off, each from the default.
-    QCHECK(Has(lines[0].text, "\"hudmeter\":1") && Has(lines[0].text, "\"hudmeter_source\":\"default\""));
-    QCHECK(Has(lines[0].text, "\"shieldgamma_gamma\":0") && Has(lines[0].text, "\"shieldgamma_gamma_source\":\"default\""));
-    QCHECK(Has(lines[0].text, "\"shieldgamma_tube_mirror\":1") && Has(lines[0].text, "\"shieldgamma_tube_mirror_source\":\"default\""));
+  }
+  // The wrist HUD and the shield colour (#2186) are the second record: the HUD and the tube mirror on, the gamma off, each from the default.
+  const std::vector<Line> modules = Lines("combat_config_modules");
+  QCHECK(modules.size() == 3U);
+  if (modules.size() == 3U) {
+    QCHECK(modules[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Has(modules[0].text, "\"hudmeter\":1") && Has(modules[0].text, "\"hudmeter_source\":\"default\""));
+    QCHECK(Has(modules[0].text, "\"shieldgamma_gamma\":0") && Has(modules[0].text, "\"shieldgamma_gamma_source\":\"default\""));
+    QCHECK(Has(modules[0].text, "\"shieldgamma_tube_mirror\":1") && Has(modules[0].text, "\"shieldgamma_tube_mirror_source\":\"default\""));
+    QCHECK(Has(modules[0].text, "\"msg\":") && !Has(modules[0].text, "truncated"));
   }
   g_lines.clear();
   cfg.heaps = {false, nevr_quest::Source::kFile};
@@ -324,9 +330,14 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   if (switches.size() == 1U) {
     QCHECK(Has(switches[0].text, "\"heaps\":0") && Has(switches[0].text, "\"heaps_source\":\"config\""));
     QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
-    QCHECK(Has(switches[0].text, "\"hudmeter\":0") && Has(switches[0].text, "\"hudmeter_source\":\"config\""));
-    QCHECK(Has(switches[0].text, "\"shieldgamma_gamma\":1") && Has(switches[0].text, "\"shieldgamma_gamma_source\":\"config\""));
-    QCHECK(Has(switches[0].text, "\"shieldgamma_tube_mirror\":0") && Has(switches[0].text, "\"shieldgamma_tube_mirror_source\":\"config\""));
+    QCHECK(!Has(switches[0].text, "truncated") && Has(switches[0].text, "\"msg\":"));  // the 768-byte line still holds its message
+  }
+  const std::vector<Line> moduleSwitches = Lines("combat_config_modules");
+  QCHECK(moduleSwitches.size() == 1U);
+  if (moduleSwitches.size() == 1U) {
+    QCHECK(Has(moduleSwitches[0].text, "\"hudmeter\":0") && Has(moduleSwitches[0].text, "\"hudmeter_source\":\"config\""));
+    QCHECK(Has(moduleSwitches[0].text, "\"shieldgamma_gamma\":1") && Has(moduleSwitches[0].text, "\"shieldgamma_gamma_source\":\"config\""));
+    QCHECK(Has(moduleSwitches[0].text, "\"shieldgamma_tube_mirror\":0") && Has(moduleSwitches[0].text, "\"shieldgamma_tube_mirror_source\":\"config\""));
   }
   Done();
 }
@@ -389,6 +400,8 @@ void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
   combat::SetConfig(gammaOnly);
   combat::InstallNormal();
   QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"gamma\":1,\"tube_mirror\":0"));
+  Done();
+}
 
 // The pfx gate and the event-effect decision read their keys from the resolved section (#2188): on with the defaults, off by the file's word.
 void ThePfxRowsReadTheirKeysFromTheResolvedSection() {

@@ -160,14 +160,18 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"refresh_rate_lobby", config.refreshRateLobby.on ? 1 : 0}, {"refresh_rate_lobby_source", source(config.refreshRateLobby.source)},
                        {"refresh_rate_quest2_72", config.refreshRateQuest2At72.on ? 1 : 0},
                        {"refresh_rate_quest2_72_source", source(config.refreshRateQuest2At72.source)},
-                       {"hudmeter", config.hudmeter.on ? 1 : 0}, {"hudmeter_source", source(config.hudmeter.source)},
-                       {"shieldgamma_gamma", config.shieldgammaGamma.on ? 1 : 0}, {"shieldgamma_gamma_source", source(config.shieldgammaGamma.source)},
-                       {"shieldgamma_tube_mirror", config.shieldgammaTubeMirror.on ? 1 : 0},
-                       {"shieldgamma_tube_mirror_source", source(config.shieldgammaTubeMirror.source)},
                        {"pfx", config.pfx.on ? 1 : 0}, {"pfx_source", source(config.pfx.source)},
                        {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
+  // The sentinel's log line holds 768 bytes (hook_log.cpp) and the line above is at that limit, so the keys of the modules that came after it are
+  // a second record, `combat_config_modules`: the wrist HUD and the shield colour (#2186).
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_modules",
+                      {{"hudmeter", config.hudmeter.on ? 1 : 0}, {"hudmeter_source", source(config.hudmeter.source)},
+                       {"shieldgamma_gamma", config.shieldgammaGamma.on ? 1 : 0}, {"shieldgamma_gamma_source", source(config.shieldgammaGamma.source)},
+                       {"shieldgamma_tube_mirror", config.shieldgammaTubeMirror.on ? 1 : 0},
+                       {"shieldgamma_tube_mirror_source", source(config.shieldgammaTubeMirror.source)},
+                       {"msg", "each key is the module's switch (true: the module is installed) and where its value came from; combat_config holds the others"}});
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }
