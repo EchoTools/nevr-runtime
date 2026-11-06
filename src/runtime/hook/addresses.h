@@ -60,6 +60,14 @@ constexpr size_t LOGGING_SUBJECT_SIZE = 2;
 /// Prologue: 48 8B C4 48 89 58 10 4C 89 48 20 (MOV RAX,RSP; MOV [RAX+0x10],RBX; MOV [RAX+0x20],R9).
 constexpr uintptr_t BROADCASTER_INITIALIZE = 0xF7FE50;
 
+/// Address: the game's error dialog (0x1400EA730, 274 bytes; void(HWND owner, const char* message, const char* title)).
+/// Called by the init-error handler 0x140511B00 with the text it looked up for the error (the table at 0x142020100,
+/// "Unknown error while loading the game." is its default entry). It logs a rule line, the title and the message at
+/// level 2 (LEA ECX,[RDX+2] at 0x1400EA75F, 0x1400EA778, 0x1400EA791, 0x1400EA7A2), then calls MessageBoxW.
+/// Hooked (#2245): lines logged while it runs are recorded at error (runtime/log/error_dialog_level.h).
+/// Prologue: 48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 (saves RBX, RBP, RSI; PUSH RDI).
+constexpr uintptr_t GAME_ERROR_DIALOG = 0xEA730;
+
 /// Address: FUN_140116720 + 0x81D (Within PreprocessCommandLine)
 /// Reference: String "-spectatorstream" at 0x1416d27b8
 /// -spectatorstream IS a registered CLI argument in BuildCmdLineSyntaxDefinitions.

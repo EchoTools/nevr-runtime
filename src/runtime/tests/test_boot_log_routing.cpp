@@ -145,7 +145,7 @@ class BootLogRouting : public ::testing::Test {
 TEST_F(BootLogRouting, TheOpeningLineEndsInANewlineOnStderr) {
   const std::string err = CaptureStderr([] { nevr_boot_log_tee::Init(); });
   nevr_boot_log_tee::Close();
-  const std::string::size_type at = err.find("[NEVR.PATCH] boot log opened run=");
+  const std::string::size_type at = err.find("[NEVR.PATCH] info; boot log opened run=");
   ASSERT_NE(at, std::string::npos) << "stderr was:\n" << err;
   const std::string::size_type end = err.find('\n', at);
   ASSERT_NE(end, std::string::npos) << "the opening line has no newline; stderr was:\n" << err;
@@ -170,6 +170,31 @@ TEST_F(BootLogRouting, ALogCallDuringBootReachesTheTeeNotClog) {
   // Rule 12: a boot line carries its level after the subsystem tag.
   EXPECT_NE(written.find("[NEVR.HEADLESS] warn; boot routing probe id=593"), std::string::npos)
       << "boot log was:\n" << written;
+}
+
+// #2245: during boot a Log() level with no name is written "unknown" with its raw value, never as info; error and warn
+// keep their names.
+TEST_F(BootLogRouting, ALevelWithNoNameIsUnknownWithItsRawValueAndErrorStaysError) {
+  RecordingClogScope clog;
+  nevr_boot_log_tee::Init();
+  const std::string path = nevr_boot_log_tee::Path();
+  ASSERT_FALSE(path.empty()) << "the boot tee could not resolve the main log";
+  const std::streamoff start = FileSize(path);
+
+  Log(static_cast<EchoVR::LogLevel>(3), "[NEVR.HEADLESS] odd level probe id=%d", 2245);
+  Log(EchoVR::LogLevel::Error, "[NEVR.HEADLESS] error level probe id=%d", 2245);
+
+  const std::string written = ReadFrom(path, start);
+  nevr_boot_log_tee::Close();
+  std::vector<nlohmann::json> records;
+  for (std::string::size_type at = 0, nl; (nl = written.find('\n', at)) != std::string::npos; at = nl + 1) {
+    records.push_back(nlohmann::json::parse(written.substr(at, nl - at)));
+  }
+  ASSERT_EQ(records.size(), 2U) << "boot log was:\n" << written;
+  EXPECT_EQ(records[0].at("level"), "unknown");
+  EXPECT_EQ(records[0].at("msg"), "[NEVR.HEADLESS] unknown; level_raw=3 odd level probe id=2245\n");
+  EXPECT_EQ(records[1].at("level"), "error");
+  EXPECT_EQ(records[1].at("msg"), "[NEVR.HEADLESS] error; error level probe id=2245\n");
 }
 
 TEST_F(BootLogRouting, ALogCallAfterBootReachesClogNotTheTee) {

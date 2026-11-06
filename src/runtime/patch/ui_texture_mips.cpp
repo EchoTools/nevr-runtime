@@ -105,7 +105,7 @@ std::uint64_t AttachHook(void* texture, void* stream) {
 bool Validated(std::uint64_t va, const std::uint8_t* bytes, std::size_t size, const char* name, void** target) {
   *target = nevr::ResolveVA_Checked(g_gameBase, va);
   if (nevr::ValidatePrologue(*target, bytes, size)) return true;
-  nevr_boot_log_tee::TeeFprintf("[NEVR.UITEXTURE] %s hook skipped va=0x%llx reason=prologue_mismatch\n", name,
+  nevr_boot_log_tee::TeeFprintf("[NEVR.UITEXTURE] warn; %s hook skipped va=0x%llx reason=prologue_mismatch\n", name,
                                 static_cast<unsigned long long>(va));
   return false;
 }
@@ -123,7 +123,7 @@ void Install(std::uintptr_t gameBase) {
   g_forceLoadAllMips = reinterpret_cast<ForceLoadAllMipsFn>(force);
   g_originalAttach = reinterpret_cast<AttachFn>(attach);
   if (PatchDetour(&g_originalAttach, reinterpret_cast<PVOID>(&AttachHook), "CGTextureResource::Attach")) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.UITEXTURE] CGTextureResource::Attach hook installed va=0x%llx ui_prefixes=%zu\n",
+    nevr_boot_log_tee::TeeFprintf("[NEVR.UITEXTURE] info; CGTextureResource::Attach hook installed va=0x%llx ui_prefixes=%zu\n",
                                   static_cast<unsigned long long>(kAttachVA), sizeof(kUiPrefixes) / sizeof(kUiPrefixes[0]));
   }
 }
