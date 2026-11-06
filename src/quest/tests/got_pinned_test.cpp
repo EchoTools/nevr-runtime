@@ -105,6 +105,69 @@ void CheckTarget(const LoadedElf& elf, const GotTarget& pinnedTarget, const char
   QCHECK_STATUS(ResolveSlot(elf.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
 }
 
+// The vtable and factory words the folded combat modules hook (docs/adr/0046 rule 2) are R_AARCH64_ABS64 relocations that name a
+// symbol, and a symbol a vtable lists has a word in every vtable that lists it: a target pins its word. `words` is how many ABS64
+// words name the symbol in the file (`readelf -rW`); it decides whether the symbol alone is ambiguous (several) or just unpinned (one).
+struct RealAbs64Word {
+  const char* symbol;
+  std::uint64_t vaddr;
+  std::size_t words;
+};
+constexpr RealAbs64Word kRealAbs64Words[] = {
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x362ef90, 4},
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x3630e58, 4},
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x3631278, 4},
+    {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x36316f8, 4},
+    {"_ZN10NRadEngine8CModelCS18OnComponentEnabledENS_18SCompactPoolHandleE", 0x36495c8, 2},
+    {"_ZN10NRadEngine8CModelCS19OnComponentDisabledENS_18SCompactPoolHandleE", 0x36495d0, 2},
+    {"_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE17ConstructInstanceEPvPNS_13CPresenceInitE", 0x365ddc8, 1},
+    {"_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE14CreateInstanceEPNS_13CPresenceInitE", 0x365ddd0, 1},
+    {"_ZN10NRadEngine8NRadGame15CR15NetBulletCS8ShutdownEv", 0x36933e8, 1},
+};
+
+// The data pointers heaps points at its own values (docs/adr/0046): GLOB_DAT slots, one per symbol, no addend.
+struct RealDataSlot {
+  const char* symbol;
+  std::uint64_t vaddr;
+};
+constexpr RealDataSlot kRealDataSlots[] = {
+    {"_ZN10NRadEngine22kResourceMemoryAndroidE", 0x370b720},
+    {"_ZN10NRadEngine20kSystemMemoryAndroidE", 0x371d020},
+    {"_ZN10NRadEngine17kGpuMemoryAndroidE", 0x3710188},
+    {"_ZN10NRadEngine24kR15GameSpaceMemoryQuestE", 0x3715198},
+};
+
+void CheckRealAbs64Words(const LoadedElf& elf) {
+  for (const RealAbs64Word& w : kRealAbs64Words) {
+    const GotTarget pinned{pinned::kLibR15, w.symbol, RelocKind::kAbs64, pinned::kLibR15StockBuildId, w.vaddr};
+    const SlotResolution at = ResolveSlot(elf.image, pinned, kAarch64Relocs);
+    if (at.status != GotStatus::kOk) std::fprintf(stderr, "target: libr15 ABS64 word %#llx of %s\n", static_cast<unsigned long long>(w.vaddr), w.symbol);
+    QCHECK_STATUS(at.status, GotStatus::kOk);
+    QCHECK(at.slotVaddr == w.vaddr);
+    QCHECK(at.restoreReadOnly);  // vtables and factory tables are in PT_GNU_RELRO
+
+    // The symbol alone does not name a word: several are ambiguous, one still needs the pin.
+    GotTarget unpinned = pinned;
+    unpinned.slotVaddr = std::nullopt;
+    QCHECK_STATUS(ResolveSlot(elf.image, unpinned, kAarch64Relocs).status,
+                  w.words > 1 ? GotStatus::kAmbiguousRelocation : GotStatus::kPinRequired);
+
+    // A pin one slot over, and a pin on each other symbol's word, are refused: neither is a relocation that names this symbol.
+    GotTarget shifted = pinned;
+    shifted.slotVaddr = w.vaddr + 8;
+    QCHECK_STATUS(ResolveSlot(elf.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+    for (const RealAbs64Word& other : kRealAbs64Words) {
+      if (std::strcmp(other.symbol, w.symbol) == 0) continue;
+      GotTarget onOther = pinned;
+      onOther.slotVaddr = other.vaddr;
+      QCHECK_STATUS(ResolveSlot(elf.image, onOther, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+    }
+  }
+  for (const RealDataSlot& d : kRealDataSlots) {
+    CheckTarget(elf, GotTarget{pinned::kLibR15, d.symbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, d.vaddr}, d.symbol);
+  }
+}
+
 // The value .dynsym gives `symbol` (its link-time address), or 0 when absent.
 std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
   const std::vector<char>& b = elf.bytes;
@@ -349,6 +412,7 @@ int main(int argc, char** argv) {
       QCHECK(false);
     }
   }
+  CheckRealAbs64Words(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
