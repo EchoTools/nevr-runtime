@@ -11,6 +11,8 @@
 #include "runtime/lifecycle/return_to_lobby_hold.h"
 #include "runtime/lifecycle/initialize.h"
 #include "runtime/lifecycle/state_machine.h"
+#include "runtime/lifecycle/runtime_entry.h"
+#include "runtime/lifecycle/update_worker.h"
 #include "runtime/patch/mode_patches.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
@@ -520,6 +522,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       g_telemetryDiag = TRUE;
     } else if (lstrcmpW(flag, L"-timestamps") == 0) {
       g_timestampLogs = TRUE;
+    } else if (lstrcmpW(flag, L"-no-update") == 0) {
+      // Read here, ahead of StartProcessWorker (the end of this function), which logs `update disabled reason=flag`.
+      g_noUpdate = TRUE;
     } else if (lstrcmpW(flag, L"-upnp") == 0) {
       g_upnpEnabled = TRUE;
     } else if (lstrcmpW(flag, L"-config") == 0) {
@@ -910,6 +915,12 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       "[NEVR.BOOT] runtime bootstrap complete early_config=%s bridge=%s port=%u",
       g_earlyConfigPtr != nullptr ? "true" : "false", IsWebSocketBridgeActive() ? "true" : "false",
       static_cast<unsigned>(GetWebSocketBridgePort()));
+
+  // #1200, ADR 0024 section 3: PC self-update. The bootstrap is done (a client: the graphics device exists; a server: the first original
+  // call has returned), so the worker starts here, never earlier, and never on the game's thread: it decides once per launch (a dev
+  // build, -no-update, update.enabled: false and a host that cannot swap each end in one `update disabled` line), then checks on its own
+  // thread and confirms a swapped release once the per-frame dispatcher has run for 10 s (frame/tick.cpp).
+  nevr_update::StartProcessWorker(nevr_runtime_entry::HostCanSwap(), g_noUpdate != FALSE, g_isServer != FALSE);
 
 #ifdef NEVR_SCENARIO_CONTROL
   nevr_scenario_control::Start();  // test builds only (mingw-scenario preset)

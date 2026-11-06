@@ -938,26 +938,27 @@ class ReleaseStagesTest(PackageFixture):
         self.assertIn('AddArgSyntax(pArgSyntax, "-require-signed-plugins"', cli)
 
     def test_the_zip_readme_tells_an_operator_how_to_start_a_server_and_its_config_uses_keys_the_runtime_reads(self):
-        import yaml
         sealed = self.seal_to(self.make_tree())
         with zipfile.ZipFile(sealed / "nevr-runtime-v5.0.0-windows.zip") as z:
             readme = z.read("README.txt").decode()
         section = readme.split("Running a dedicated server\n", 1)[1].split("\nUpdate\n", 1)[0]
         prose = " ".join(section.split())  # the README wraps lines; a phrase may break across one
         for needle in (r".\echovr_server.exe", "-server -headless -no-console", r"%LOCALAPPDATA%\nevr\echovr\config.yaml",
-                       "services.socket_uri", "issue #843", "auth.password", "The password goes in auth.password",
-                       "refresh token", "requested game server registration", "Received registration success",
+                       "services.socket_uri", "issue #843", "signs in by device code", "no username or password",
+                       "requested game server registration", "Received registration success",
                        "Graceful shutdown initiated",
                        "services.allow_offline_server"):
             self.assertIn(needle, prose, needle)
-        block = [l for l in section.splitlines() if l.startswith("       ") and not l.startswith("       .\\")]
-        config = yaml.safe_load("\n".join(l[7:] for l in block))
-        paths = {f"{top}.{key}" for top, body in config.items() for key in body}
-        # #843 / #1035: the service addresses and key come from the build, so the smallest config is the account only.
-        self.assertEqual(paths, {"auth.password", "identity.discord_id"})
+        # A server signs in by device code: no instruction to set a password, and no config block to copy.
+        self.assertNotIn("auth.password", prose)
+        self.assertNotRegex(prose, r"(?i)nevr_password|discord_id")
+        # #843 / #1035: the service addresses and key come from the build; the keys the README names for another
+        # service are keys the runtime maps.
+        paths = set(re.findall(r"\b((?:services|auth)\.[a-z_]+)\b", prose)) - {"auth.server_key"}
         mapped = set(re.findall(r'\{"[a-z_]+", "([a-z_]+\.[a-z_]+)"\}',
                                 (REPO / "src/runtime/lifecycle/service_map.cpp").read_text(encoding="utf-8")))
-        self.assertEqual(paths - mapped, set(), "the README config names a key service_map.cpp does not map")
+        self.assertEqual(paths - mapped, set(),
+                         "the README names a key service_map.cpp does not map")
         self.assertNotRegex(prose, r"(wss?|https?)://\S*[?&@]", "no credential rides in a service address")
 
     def test_the_repository_readme_that_ships_in_the_dist_zips_makes_no_signing_fact(self):

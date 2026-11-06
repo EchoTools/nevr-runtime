@@ -144,7 +144,7 @@ void DeviceAuth::Configure(const std::string& url, const std::string& httpKey, c
     m_serverKey = serverKey;
     m_configured = true;
     const std::string diagnostic =
-        nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.AUTH] Configured: url=", url);
+        nevr_log_diagnostics::FormatUrlDiagnostic("[NEVR.AUTH] Configured: url=", url);
     Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 }
 
@@ -269,7 +269,7 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+        const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic(
             "[NEVR.AUTH] POST ", url, " failed");
         Log(EchoVR::LogLevel::Warning, "%s curl_code=%d", diagnostic.c_str(), static_cast<int>(res));
         return "";
@@ -313,7 +313,7 @@ nevr_token_auth::DevicePollResponse DeviceAuth::PollDeviceCode(const std::string
     }
     nevr_token_auth::DevicePollResponse parsed = nevr_token_auth::ParseDevicePollResponse(response);
     parsed.http_code = httpCode;
-    parsed.body_prefix = nevr_token_auth::PollBodyPrefix(response, code);
+    parsed.body_prefix = nevr_token_auth::PollBodyPrefix(response);
     return parsed;
 }
 

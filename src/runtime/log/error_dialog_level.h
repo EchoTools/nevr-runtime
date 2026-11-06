@@ -7,14 +7,13 @@
 
 #include <cstdint>
 
+#include "runtime/log/error_dialog_depth.h"  // Inside()
+
 namespace nevr_error_dialog {
 
 /// Installs the hook through PatchDetour (HookGuard, N84) after checking the function's first 16 bytes. A mismatch or
 /// a failed hook is a Warning with the address and the bytes (logging.md Rule 6); the game's lines then keep the
 /// level the game gave them. Called once, from the built-in filter's Init, in the boot phase.
 void Install(std::uintptr_t gameBase);
-
-/// True on a thread that is inside the game's error dialog.
-bool Inside();
 
 }  // namespace nevr_error_dialog

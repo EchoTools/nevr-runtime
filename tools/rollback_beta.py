@@ -38,9 +38,8 @@ JSON line (ts, run, event, step, tag, direction, outcome, error) to $XDG_STATE_H
 that cannot be written is a failure. A failed, interrupted or crashed run exits non-zero and names the step; after it began
 to dispatch it says what was dispatched (with the run id when known) and what was not done. A rollback
 that was verified but whose scratch could not be removed exits 0 and says so: the outcome the command exists for is done and
-verified, and a non-zero exit would invite a second run. No token, credential or hosting URL is printed or logged: every
-value read from the environment for a credential or the host is replaced by <redacted>, and the stdout of gh and the signer
-(remote content) is never put in an error.
+verified, and a non-zero exit would invite a second run. Nothing a command prints is masked; the stdout of gh and the signer
+(remote content) is not put in an error.
 """
 
 import argparse
@@ -54,7 +53,6 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.parse
 import uuid
 from collections.abc import Callable
 
@@ -143,11 +141,6 @@ class Rollback:
         self.tag = args.tag
         self.version = args.tag[1:]
         self.gh = env.get("GH_BIN") or DEFAULT_GH
-        base = env.get("RELEASE_PUBLIC_BASE", "")
-        redacted = [env[name] for name in SECRET_ENV if env.get(name)]
-        if base:
-            redacted += [base.rstrip("/"), urllib.parse.urlsplit(base).hostname or ""]
-        self.secrets = sorted({s for s in redacted if s}, key=len, reverse=True)
         self.child = {k: v for k, v in env.items() if k not in SECRET_ENV}  # the signer and git get no credential
         self.gh_env = {k: v for k, v in env.items() if k not in R2_ENV}  # gh keeps its own token and never sees R2
         self.dispatched: str | None = None
@@ -160,13 +153,8 @@ class Rollback:
 
     # ---- plumbing -------------------------------------------------------------------------------------------------
 
-    def redact(self, text: str) -> str:
-        for secret in self.secrets:
-            text = text.replace(secret, "<redacted>")
-        return text
-
     def say(self, line: str) -> None:
-        print(self.redact(line), flush=True)
+        print(line, flush=True)
 
     def ok(self, step: str, **fields: object) -> None:
         self.current = step
@@ -189,7 +177,7 @@ class Rollback:
     def tails(self, program: str, result: subprocess.CompletedProcess) -> str:
         parts = []
         for label, text in (("stderr", result.stderr), ("stdout", result.stdout if program in LOCAL_OUTPUT else "")):
-            tail = self.redact(text or "")[-TAIL:].strip()
+            tail = (text or "")[-TAIL:].strip()
             if tail:
                 parts.append(f"{label}: {tail}")
         return (" " + " | ".join(parts)) if parts else ""
@@ -649,8 +637,8 @@ def execute(args: argparse.Namespace, env: dict[str, str], runner: Runner, held:
         rollback.run()
         problem = rollback.cleanup()
         if problem:
-            sys.stderr.write(f"rollback-beta: {rollback.redact(rollback.outcome)}; {rollback.redact(problem)}\n")
-            log.event("cleanup_failed", step="cleanup", outcome="failed", error=rollback.redact(problem))
+            sys.stderr.write(f"rollback-beta: {rollback.outcome}; {problem}\n")
+            log.event("cleanup_failed", step="cleanup", outcome="failed", error=problem)
         log.event("finish", step="done", outcome="ok", error="")
         return 0
     except StepFailure as failure:
@@ -675,7 +663,7 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
     if rollback is not None:
         leftover = rollback.cleanup()
         if leftover:
-            sys.stderr.write(f"rollback-beta: {rollback.redact(leftover)}\n")
+            sys.stderr.write(f"rollback-beta: {leftover}\n")
     if log is not None:
         try:
             log.close()
@@ -687,16 +675,15 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
 
 def fail(held: dict, step: str, message: str, outcome: str, code: int = 1) -> int:
     rollback, log = held.get("rollback"), held.get("log")
-    redact = rollback.redact if rollback is not None else (lambda text: text)
-    sys.stderr.write(f"rollback-beta: {step}: {redact(message)}\n")
+    sys.stderr.write(f"rollback-beta: {step}: {message}\n")
     if rollback is not None:
         for line in rollback.state_report():
-            sys.stderr.write(redact(line) + "\n")
+            sys.stderr.write(line + "\n")
     if log is not None:
         try:
-            log.event("finish", step=step, outcome=outcome, error=redact(message))
+            log.event("finish", step=step, outcome=outcome, error=message)
         except Exception as log_failure:  # noqa: BLE001 - the report above is out; a log that cannot take this is said, not raised
-            sys.stderr.write(f"rollback-beta: {redact(str(log_failure))}\n")
+            sys.stderr.write(f"rollback-beta: {log_failure}\n")
     return code
 
 
