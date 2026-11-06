@@ -48,6 +48,10 @@ DEPRECATED_NVR_USES = {
         "NvrGameContext", "NvrModuleApiVersionSupported", "NvrModuleContext", "NvrPluginInfo", "NvrPluginInit",
     },
     "tools/tests/test_runtime_lifecycle_invariants.py": {"NvrPluginShutdown"},
+    # he_is_the_cat's EchoCombat plugins, ported nearly as he wrote them (#2242): his comments name the plugin entry points.
+    "src/runtime/combat/dronefix.cpp": {"NvrPluginInitEx", "NvrPluginShutdown"},
+    "src/runtime/combat/powerboost.cpp": {"NvrPluginInitEx", "NvrPluginShutdown"},
+    "src/runtime/combat/veilnet.cpp": {"NvrPluginInitEx", "NvrPluginShutdown"},
 }
 # `using NvrX [[deprecated("use NevrX")]] = NevrX;` and the one deprecated function.
 ALIAS_DECL = re.compile(r"using\s+(Nvr\w+)\s*\[\[deprecated\(\"use (Nevr\w+)\"\)\]\]\s*=\s*(Nevr\w+)\s*;")
@@ -80,6 +84,10 @@ BRAND_PROSE_SPELLINGS = {
     "RELEASING.md": {"nEVR"},
     "tools/package-release/RELEASE-BODY.template.md": {"nEVR"},
     "tools/tests/test_package_release.py": {"nEVR"},
+    # he_is_the_cat's EchoCombat plugins, ported nearly as he wrote them (#2242): his comments and the port's markers are prose.
+    "src/runtime/combat/dronefix.cpp": {"nEVR"},
+    "src/runtime/combat/powerboost.cpp": {"nEVR"},
+    "src/runtime/combat/veilnet.cpp": {"nEVR"},
     "docs/engine/asset-system.md": {"nEVR"},
     "docs/adr/0003-quest-networking-port.md": {"nEVR"},
     "docs/adr/0004-quest-verification-regime.md": {"nEVR"},

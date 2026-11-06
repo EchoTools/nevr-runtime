@@ -79,6 +79,11 @@ const char* NevrCfgUpdateChannel();
 /// other accessors: the pointer stays valid for the process lifetime.
 const char* NevrCfgCaptureDevice();
 
+/// A scalar under config.yaml's `combat` section, for the combat module (runtime/combat): `path` is relative to the
+/// section ("drone", "settings.buff.self_damage"). Null when it is absent or is not a scalar; may be "". Interned, like
+/// the other accessors. Only readable after the CLI is parsed, as every config.yaml read.
+const char* NevrCfgCombatValue(const char* path);
+
 /// Boot logs, once, the built-in defaults this run uses (names only): the keys config.yaml and the
 /// environment leave unset that take an embedded value (#843). Reads config.yaml, so call it after it loads.
 void NevrCfgLogBuiltinDefaultsTaken();
