@@ -334,7 +334,7 @@ its journal), `RuntimeLoader::LoadAtStart` (`runtime_load.cpp`: the swap, the lo
   rolls back with `mode=in_process`, keeps the lock and the same start loads the restored runtime: two `versions` and two
   `runtime_load` records with `update_rollback` between them. For `missing_entry`, `null_descriptor`, `abi_rejected` and
   `init_failed` (the runtime stays mapped) `MarkPendingFailed` writes `failed_reason` into `pending.json` (the first
-  failure stays), logs `update_rollback mode=next_start outcome=scheduled`, and the stop notice says nEVR was updated,
+  failure stays), logs `update_rollback mode=next_start outcome=scheduled`, and the stop notice says NEVR was updated,
   could not start, and will be put back at the next start (`RuntimeLoadResult::update_failed`).
 - **A rollback that is interrupted is completed**, never undone: the next start reads the journal by `kind` and `phase`
   (`update_swap outcome=recovered kind=rollback`). Every step can be run again, because a file moves only when it is still
