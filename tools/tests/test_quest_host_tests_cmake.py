@@ -59,6 +59,8 @@ PROGRAMS = {
         "autopilot_run_test",
     ),
     "combat": (
+        "bvh_core_test",
+        "bvh_test",
         "combat_active_test",
         "combat_gates_test",
         "combat_install_test",
@@ -74,6 +76,7 @@ PROGRAMS = {
         "refresh_rate_test",
         "pfx_test",
         "pfxtev_test",
+        "wallfire_test",
     ),
     "data": (
         "data_step_test",
