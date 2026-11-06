@@ -78,7 +78,7 @@ and into the login's JSON.
 | 1 | `NEVR_RESOURCES_BAD_ARGUMENT` | A null pointer, a short `struct_size`, nonzero `flags`, a label outside the rule above, or a call from outside this plugin's init on its thread. |
 | 2 | `NEVR_RESOURCES_NOT_IN_FILE` | The bytes are not file bytes of a read-only section of the plugin's image, the file does not hold them, or a chunk ends past 4 GiB in the file. |
 | 3 | `NEVR_RESOURCES_BAD_FORMAT` | Not a resource set, or a set the runtime cannot serve: a `CScriptResource` record (a script is a DLL found by name), a texture descriptor without its payload record, a level root without its archive, an archive that is over `0x80000` bytes or does not read, more chunks than the shadow has indices left. Also the answer when the host failed inside the call (out of memory). |
-| 4 | `NEVR_RESOURCES_COLLIDES` | A key another set of this process holds, or a plugin asset (`NEVR_RegisterAsset`) holds. The first holder keeps it, and a plugin asset with a key a set holds is refused in turn. |
+| 4 | `NEVR_RESOURCES_COLLIDES` | A key another set of this process holds, or a resource a plugin asset (`NEVR_RegisterAsset`) is. An asset is keyed by its logical type and a record by an on-disk type, so an asset of type T and name N is the records (T, N), (`Make(T, "Win10")`, N) and (`Make(T, "Win10GPU")`, N). The first holder keeps it, and a plugin asset that is a resource a set holds is refused in turn. |
 | 5 | `NEVR_RESOURCES_TOO_LATE` | The run's sets are already mounted. |
 
 Every refusal is also a Warning: `[NEVR.RESOURCE] resource set refused plugin=<id> label="<label>" status=<n>
@@ -94,13 +94,20 @@ reason=<reason> detail="..."`.
   `0x14154973c` and `0x1415497a7`), and a tick can run between them, but it starts the streaming reader that serves
   requests only after both (`CStreamingIOProcessor::Initialize`, `0x141549902`). A mount still waiting a minute after
   the plugin pass writes one Warning that says why.
+- Until the mount the game's manifests answer every request: a resource the game reads before it is not read from a
+  set, and a set's overrides apply from the mount on (a resource read before it keeps the game's bytes). A client's
+  login or a server's registration made before the mount carries none of the sets (no `nevr_resources`, and only the
+  game's levels in `installed_levels`).
 - At the mount it refuses a set that holds a key the game's manifests hold (a set adds resources, it does not replace
   them). It also refuses a set holding a level whose archive, or any archive that archive depends on through the sets,
   lists a resource or names an archive that neither the game, this set nor an earlier set serves; an archive the game
-  has ends the walk there. The Warning names the archive and the key.
+  has ends the walk there. The Warning names the archive and the key. After the mount only the mounted sets hold their
+  keys: a refused set's keys are free for a plugin asset.
+- A mount that throws (out of memory) is not tried again; its Error says whether the sets were published before the
+  throw (`served=`). Without the resolver hook nothing is mounted, and a Warning names the plugins.
 - The runtime holds the plugin's file open, read-only and deny-write, for the life of the process. The overrides it
-  registers point into the plugin's image, which stays loaded: a plugin whose init fails registers none. There is no
-  deregistration: a set is served for the rest of the process.
+  registers point into the plugin's image, which stays loaded: a plugin whose init fails registers none, and a plugin
+  the host unloads takes the overrides in its image with it. A set is served for the rest of the process.
 - A key a set holds that the game's manifest gains after the mount (a package set added later) is the game's: the
   resolver asks the manifest of the manager each request is made to, and the first such key is named in one Warning.
 
@@ -116,9 +123,10 @@ streamed texture mip are read on other paths and are not replaced.
 
 ## What the game service sees
 
-- A dedicated server lists every level of a mounted set in its registration's `installed_levels`
-  (`src/runtime/server/registration_metadata.cpp`), beside the levels of the game's own manifests.
-- A game client reports the mounted sets at login, beside `nevr_plugins`. The key is absent when there are none:
+- A dedicated server lists every level of a mounted set in a registration made after the mount, in its
+  `installed_levels` (`src/runtime/server/registration_metadata.cpp`), beside the levels of the game's own manifests.
+- A game client reports the mounted sets at a login made after the mount, beside `nevr_plugins`. The key is absent when
+  there are none:
 
 ```json
 "nevr_resources": [ { "plugin": "levels", "label": "my levels", "levels": ["0xdb69545ff59c76d0"], "records": 90, "bytes": 1048576 } ]
@@ -128,11 +136,15 @@ streamed texture mip are read on other paths and are not replaced.
 
 `resource set registered` (Info), `resource set refused` (Warning; Error for `out_of_memory` or `exception`, a failure
 inside the host), `resource sets dropped` (Info, an init that failed), `resource sets wait for the game's manifest`
-(Info, once), `resource sets still not mounted` (Warning, a minute after the plugin pass), `resource set refused at
-mount` (Warning), `resource set mounted ... levels=<n> level_names=<list> overrides=<n> overrides_unmatched=<n>` and
-`resource sets mounted` (Info), `resource set reads ... served=<n> window_ms=<n>` (Info, at most once per 10 s, for a
-window in which the game read from a set) and `resource set keys answered by the game's manifest count=<n>
-first=<key> plugin=<id>` (Warning, once). No line is written per request.
+(Info, once), `resource sets still not mounted ... first_request_seen=<bool> game_thread_seen=<bool>` (Warning, a
+minute after the plugin pass), `resource sets not mounted ... plugins=<ids> reason=no_resolver_hook` (Warning),
+`resource set refused at mount` (Warning), `resource set mounted ... levels=<n> level_names=<list> overrides=<n>
+overrides_unmatched=<n>` and `resource sets mounted ... waited_ms=<n> duration_ms=<n>` (Info), `resource sets mount
+failed reason=<reason> served=<bool>` (Error), `resource set reads ... served=<n> window_ms=<n>` (Info, at most once
+per 10 s, for a window in which the game read from a set), `resource set read summary skipped` (Warning, once) and
+`resource set keys answered by the game's manifest count=<n> first=<key> plugin=<id>` (Warning, once). No line is
+written per request. A plugin id is written as printable ASCII, any other byte as `?`. The hooks' own line is
+`[NEVR.ASSET] hooks installed submit=<yes|no> request=<yes|no>`, a Warning when either is missing.
 
 ## Not covered
 
