@@ -8,15 +8,16 @@
  *
  * What this does. The handler reads the table's free head ([cs+0x1b8], int32). When it is -1 the next packet needs a page: it asks the same allocator the
  * same way (CMemoryContext::SetCurrent(CMemBlock::Allocator(cs+0x180)), vtable +0x10 with [cs+0x1cc] bytes), gives the block straight back (vtable +0x38) and
- * restores the memory context; a failed request drops the packet (the game's function is not called). Every other packet, and every doubt (self null or
- * unreadable, a field or the vtable unreadable or missing an entry), goes to the game's function with the same arguments. The probe is not a reservation:
+ * restores the memory context; a failed request drops the packet (the game's function is not called). Every other packet, and every doubt (self null, the page size or the vtable unreadable or missing an entry), goes to the game's function with the same arguments. The probe is not a reservation:
  * it narrows the crash to a race, it does not close it.
  *
  * Arena (same APK). It acts in EVERY level, on purpose: it is a guard against a crash in voice code that arena and combat share, and a level scope would leave
  * the crash in place (and could lag a level change). It changes what the game does only where the game would otherwise fault: that packet is dropped. Every
  * other packet reaches the stock function with the same arguments, so an arena match with free memory sees no change. Cost in arena: per voice packet received,
- * one process_vm_readv (the free-head read) and two relaxed atomic increments in the common case (plus the thunk's own counter); the allocator probe (a second
- * read, three game calls and the restore) only when the head is -1. The host cost of the common path is in docs/quest/combat/voipdrop.md; not measured on a
+ * one plain 4-byte load of the free head (about 3 ns added on the host; the game dereferences the receiver on every path that reaches the table, so the load is as safe as
+ * the stock call) and two relaxed atomic increments in the common case (plus the thunk's own counter); the allocator probe (a never-faulting read of the page size,
+ * three game calls and the restore) only when the head is -1. When the head stays -1 (the live speakers fill every page exactly) each packet pays one allocate and one
+ * free on the allocator: `probed` against `packets` in `combat_voipdrop_stats` shows whether that is a steady state. The host cost of the common path is in docs/quest/combat/voipdrop.md; not measured on a
  * headset, and the packet rate is not known: `combat_voipdrop_stats` counts it.
  *
  * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switch is `combat.voipdrop` in config.yaml

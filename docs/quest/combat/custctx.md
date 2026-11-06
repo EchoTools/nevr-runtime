@@ -69,12 +69,14 @@ All three guards are `CallbackThunk` handlers installed by the hook manager on t
 
 ## Arena cost and arena behaviour (arena and combat share the APK)
 
-- **Behaviour.** It acts in every level, on purpose, and does not use `level_scope.h`. custctx guards the lobby cosmetics renderer, code arena shares, and its
-  three faults are crashes (a destroy racing a load, a draw table written through NULL, a trap on a full layout pool). A scope by level would leave the lobby,
-  where cosmetics load, unguarded. It changes arena's result in one place: LoadMeshData is refused, and that player's cosmetics are skipped, when the
-  layout pool has fewer than 64 free slots, up to 63 slots before the game's own function would trap; in arena that happens only in a state where a nearby
-  load would crash the process. Every other call passes the game's own arguments to the game's own function, and a destroy is dropped only when the game
-  would destroy a context it is not tracking, or one whose load or destroy is running.
+- **Behaviour.** The destroy and Grow guards act in every level, on purpose: custctx guards the lobby cosmetics renderer, code arena shares, and those faults are crashes
+  (a destroy racing a load, a draw table written through NULL); a scope by level would leave the lobby, where cosmetics load, unguarded. A destroy is dropped only when the game
+  would destroy a context it is not tracking, or one whose load or destroy is running. The pool refusal changes what `LoadMeshData` returns, so it is scoped (`level_scope.h`,
+  `InCombatMapOrLobby()`): in an arena match, in a lobby arena players use, with no level loaded and before the scope's first look, a load goes to the game's function unchanged
+  (the trap included) and no pool word is read. `custctx_test` runs 1, 63 and 0 free slots in each of those levels. **Which gate I chose:** the level gate, not a count of the
+  slots a load needs: the number of layouts one load registers is not readable from the game, and the trap fires only when no slot is free as a layout registers
+  (`RegisterRTLayout` 0x19829bc: `ldr w3,[x8,#0x84]`, `ldr x9,[x8,#0x30]`, `sub x10,x3,x9`, `cmp x10,x3`, `b.cc` ok, else `brk`). In a combat map or lobby the margin of 64 free
+  slots stays; it is a margin and is not read from the binary.
 - **Cost.** Per cosmetic load (per player join or lobby change): one mutex lock and unlock pair around a scan of the 256-entry table, three never-faulting
   reads for the pool state, one counter. Per destroy: the same lock and scan. Per draw-table Grow: one read of the table header. The call rates are not known:
   `combat_custctx_stats` counts loads, refused loads, dropped destroys and Grow failures, Debug at every 1024th load and Info at the end of the process, so
@@ -121,5 +123,8 @@ missing until the next load.
 
 - On a headset: that the install succeeds on a combat APK, the call rates of the three functions (`combat_custctx_stats`), the cost per call, and that the crashes are gone.
 - `SR15NetCustomDrawData` size 0x9718 beyond Grow's `mov w9,#0x9718`; that `CMemBlock::Resize` leaves `data` NULL on failure (the reference build's claim); that CreateContext
-  checks LoadMeshData's non-zero result and returns NULL (the reference build's claim, not re-read); the mesh-entry-per-layout assumption behind the margin of 64. The
+  checks LoadMeshData's non-zero result and returns NULL (read in the disassembly: `CreateContext` 0x1349460 calls it through the PLT at 0x1349644, passes the answer to `OutputError`
+  (0x12d1b38: 0 and -1 return 0, anything else logs an error and returns nonzero) and on nonzero calls `DestroyContext` and returns NULL, so a refusal also writes a game error line);
+  that a load registers about one layout per mesh entry (the basis of the margin of 64, which is not read from the binary), and whether a stock arena lobby ever comes within 63 slots
+  of the cap (nothing measures it, which is why the refusal is not in arena). The
   bodies read here are Grow's and RegisterRTLayout's words, the PLT stubs and the function sizes, not LoadMeshData's or DestroyContext's bodies.

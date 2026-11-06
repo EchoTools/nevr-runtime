@@ -79,10 +79,13 @@ void LogDrop(std::uint32_t pageBytes, std::uint64_t n) noexcept {
 
 void ReceiveHandler(ReceiveVoipThunk::Fn original, void* self, std::uint64_t handle, const void* event, const void* data, std::uint32_t bytes) noexcept {
   const std::uint64_t seen = g_packets.fetch_add(1, std::memory_order_relaxed) + 1;
-  const auto cs = reinterpret_cast<std::uintptr_t>(self);  // null or unreadable: the reads fail and the game's function runs
-  bool ok = true;
-  const auto head = SafeRead<std::int32_t>(cs + kFreeHead, &ok);
-  if (ok && head == -1) {  // the next packet needs a fresh page
+  // The free head is one plain 4-byte load from the receiver: the game dereferences the same object on every path that reaches the table
+  // (ReceiveVoip loads [self+0xb8] right after its first early return), so this load is as safe as the stock call and costs a few ns, not a
+  // system call. A null receiver goes to the game's function untouched. The rare page-size read and the allocator probe keep the never-faulting read.
+  const auto cs = reinterpret_cast<std::uintptr_t>(self);
+  const std::int32_t head = self != nullptr ? *reinterpret_cast<const volatile std::int32_t*>(cs + kFreeHead) : 0;
+  if (head == -1) {  // the next packet needs a fresh page
+    bool ok = true;
     const auto page = SafeRead<std::uint32_t>(cs + kPageBytes, &ok);
     if (ok) {
       g_probed.fetch_add(1, std::memory_order_relaxed);

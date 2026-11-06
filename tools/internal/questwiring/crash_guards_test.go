@@ -22,15 +22,15 @@ type guard struct {
 
 var guards = []guard{
 	{"fxtrail", []string{"CParticleEffectCS10EffectTime"}, []string{"0x36e7b98"}, "scope::InCombatMap()", 1,
-		`Module{"fxtrail", nullptr, &FxtrailNormal, &fxtrail::NoteEnd}`},
+		`Module{"fxtrail", nullptr, &FxtrailNormal, &fxtrail::NoteEnd,`},
 	{"voipdrop", []string{"CR15NetVoipReceiverCS11ReceiveVoip"}, []string{"0x36c5d80"}, "", 1,
-		`Module{"voipdrop", nullptr, &VoipdropNormal, &voipdrop::NoteEnd}`},
+		`Module{"voipdrop", nullptr, &VoipdropNormal, &voipdrop::NoteEnd,`},
 	{"custctx", []string{"CR15NetCustomizationRenderer12LoadMeshData", "CR15NetCustomizationRenderer14DestroyContext", "SR15NetCustomDrawDataEE4GrowEv"},
-		[]string{"0x36cf6f0", "0x36c22f8", "0x36ed7f0"}, "", 3, `Module{"custctx", nullptr, &CustctxNormal, &custctx::NoteEnd}`},
+		[]string{"0x36cf6f0", "0x36c22f8", "0x36ed7f0"}, "scope::InCombatMapOrLobby()", 3, `Module{"custctx", nullptr, &CustctxNormal, &custctx::NoteEnd,`},
 	{"droneguard", []string{"CR15NetFollowPlayerCS6Follow"}, []string{"0x36f1218"}, "", 1,
-		`Module{"droneguard", nullptr, &DroneguardNormal, &droneguard::NoteEnd}`},
+		`Module{"droneguard", nullptr, &DroneguardNormal, &droneguard::NoteEnd,`},
 	{"peerclamp", []string{"SBroadcasterData12CleanupPeers"}, []string{"0x36efad8"}, "scope::InCombatMapOrLobby()", 1,
-		`Module{"peerclamp", nullptr, &PeerclampNormal, &peerclamp::NoteEnd}`},
+		`Module{"peerclamp", nullptr, &PeerclampNormal, &peerclamp::NoteEnd,`},
 }
 
 func TestTheGuardsAreNormalPhaseRowsInThePluginsOrderAfterTheRefreshRate(t *testing.T) {
@@ -164,4 +164,16 @@ func TestEachGuardHasItsHookBudgetRowAndNoSwitchFileIsRead(t *testing.T) {
 			}
 		}
 	}
+}
+
+// custctx's destroy and Grow guards stop crashes and act in every level; only its pool refusal (a changed result of LoadMeshData) is scoped.
+func TestCustctxScopesTheRefusalAndNotTheDestroyAndGrowGuards(t *testing.T) {
+	code := stripComments(read(t, "src/quest/combat/custctx.cpp"))
+	for _, sig := range []string{"std::uint64_t DestroyHandler(", "GrowHandler("} {
+		if b := body(t, code, sig); strings.Contains(b, "scope::") {
+			t.Errorf("%s asks the level scope: that guard acts in every level", sig)
+		}
+	}
+	load := body(t, code, "std::uint64_t LoadHandler(")
+	before(t, load, "scope::InCombatMapOrLobby()", "RtLow(")
 }

@@ -15,6 +15,8 @@
 
 #include "quest/combat/custctx.h"
 #include "quest/combat/legacy_switch.h"
+#include "quest/combat/combat_tick.h"
+#include "quest/combat/level_scope.h"
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -27,6 +29,7 @@
 #include <string>
 #include <vector>
 
+#include "quest/tests/combat_game_model.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/combat_log_capture.h"
 #include "quest/tests/combat_pin_check.h"
@@ -189,11 +192,17 @@ void ResetWorld() {
 void Begin() {
   combat_test::StartCapture();
   cc::ResetForTest();
+  nevr_quest::combat::scope::ResetForTest();
+  nevr_quest::combat::tick::ResetForTest();
+  combat_test::game_model::ClearGame();
+  combat_test::game_model::Now() = 0.0;
   ResetWorld();
   Build();
 }
 void End() {
   cc::ResetForTest();
+  nevr_quest::combat::scope::ResetForTest();
+  nevr_quest::combat::tick::ResetForTest();
   g_image.Drop();
   combat_test::StopCapture();
 }
@@ -282,7 +291,7 @@ void TheThunksTakeTheSlotsAndTheLineSaysSo() {
     QCHECK(install[0].level == sentinel::LogLevel::kInfo);
     QCHECK(combat_test::Golden(install[0].text) ==
            "\"event\":\"combat_custctx_install\",\"result\":\"installed\",\"reason\":\"ok\",\"load\":\"ok\",\"destroy\":\"ok\",\"grow\":\"ok\","
-           "\"layout_margin\":64,\"consequence\":\"loads are refused on a nearly full layout pool, a destroy runs only for a live context with no load "
+           "\"pool_refusal\":\"combat_map_or_lobby\",\"layout_margin\":64,\"consequence\":\"in a combat map or lobby loads are refused on a nearly full layout pool, a destroy runs only for a live context with no load "
            "in flight, and a draw table that cannot grow is made empty\"}");
   }
   End();
@@ -405,6 +414,7 @@ void TheDropLinesAreCapped() {
 // R31 v4: the render-target layout pool.
 void ALoadOnANearlyFullLayoutPoolIsRefused() {
   Installed();
+  combat_test::game_model::SetLevels({"mpl_combat_dyson"});
   g_loadRet = 7;
   SetPool(100);
   QCHECK(hLoad(nullptr, Ctx(1), nullptr) == 7 && g_loadCalls == 1);  // a roomy pool: passed through
@@ -443,8 +453,70 @@ void ALoadOnANearlyFullLayoutPoolIsRefused() {
   End();
 }
 
+// The refusal is scoped (B2): in an arena match, in a lobby arena players use, with no level and before the scope's first look, a nearly full or empty
+// pool still goes to the game's function (its answer comes back, no refusal line, no refusal counted, no pool word read); the combat lobby and a
+// combat map refuse. An arena level that is loaded wins over a combat map still loaded.
+void TheRefusalIsScopedToACombatMapOrLobby() {
+  struct Case {
+    const char* what;
+    std::initializer_list<const char*> levels;
+    bool refuses;
+  };
+  const Case cases[] = {{"an Echo Arena level", {"mpl_arena_a"}, false},
+                        {"the lowspec arena level", {"mpl_arena_a_lowspec"}, false},
+                        {"the tutorial", {"mpl_tutorial_a"}, false},
+                        {"the lobby arena players use", {"mpl_lobby_b2"}, false},
+                        {"nothing loaded", {}, false},
+                        {"a combat map with an arena level loaded", {"mpl_combat_dyson", "mpl_arena_b"}, false},
+                        {"a combat map", {"mpl_combat_fission"}, true},
+                        {"the combat lobby", {"mpl_lobby_b_combat"}, true}};
+  for (const Case& c : cases) {
+    for (std::uint64_t freeSlots : {63ULL, 1ULL, 0ULL}) {
+      Installed();
+      g_loadRet = 7;
+      combat_test::game_model::SetLevels(c.levels);
+      SetPool(freeSlots);
+      const std::uint64_t r = hLoad(nullptr, Ctx(1), nullptr);
+      if ((r == 1) != c.refuses) std::fprintf(stderr, "custctx scope: %s with %llu free\n", c.what, static_cast<unsigned long long>(freeSlots));
+      QCHECK((r == 1) == c.refuses && (r == 7) == !c.refuses && g_loadCalls == (c.refuses ? 0 : 1));
+      QCHECK(cc::CurrentStats().loadsRefused == (c.refuses ? 1U : 0U) && Lines("combat_custctx_load_refused").size() == (c.refuses ? 1U : 0U));
+      End();
+    }
+  }
+  {  // before the scope's first look: no refusal
+    Installed();
+    g_loadRet = 7;
+    SetPool(0);
+    QCHECK(hLoad(nullptr, Ctx(1), nullptr) == 7 && cc::CurrentStats().loadsRefused == 0);
+    End();
+  }
+  {  // the destroy and Grow guards stay everywhere: in an arena level a stale second destroy is still dropped
+    Installed();
+    combat_test::game_model::SetLevels({"mpl_arena_a"});
+    hDestroy(nullptr, Ctx(5));
+    QCHECK(g_destroyCalls == 0 && cc::CurrentStats().destroysDropped == 1);
+    End();
+  }
+}
+
+// Without the scope's tick (the table is full) the refusal never acts and the destroy and Grow guards are installed all the same, and the line says so.
+void WithNoRoomForTheScopesTickTheRefusalIsOffAndTheRestInstalls() {
+  Begin();
+  for (std::size_t i = 0; i < nevr_quest::combat::tick::kMaxCallbacks; ++i) QCHECK(nevr_quest::combat::tick::Add([](std::uintptr_t) noexcept {}));
+  QCHECK(InstallOn().installed);
+  const std::vector<Line> install = Lines("combat_custctx_install");
+  QCHECK(install.size() == 1U && Has(install[0].text, "\"pool_refusal\":\"off_no_tick\"") && install[0].level == sentinel::LogLevel::kInfo);
+  hLoad = reinterpret_cast<LoadF>(*g_image.Slot(g_pins.slotLoad));
+  g_loadRet = 7;
+  SetPool(0);
+  QCHECK(nevr_quest::combat::scope::Looks() == 0);  // nothing registered the tick, so no look is ever made and the refusal never acts
+  QCHECK(hLoad(nullptr, Ctx(1), nullptr) == 7);
+  End();
+}
+
 void TheLoadsLineIsWrittenEvery32ndLoad() {
   Installed();
+  combat_test::game_model::SetLevels({"mpl_combat_gauss"});
   SetPool(100);
   for (int i = 0; i < 33 * 32; ++i) hLoad(nullptr, Ctx(1), nullptr);
   QCHECK(CountLines("combat_custctx_loads") == 32);  // every 32nd load, at most 32
@@ -628,6 +700,7 @@ void AForeignWordInAnySlotRefusesAllThreeAndNothingStaysSwapped() {
       QCHECK(SlotWord(g_pins.slotLoad) == c.load && SlotWord(g_pins.slotDestroy) == c.destroy && SlotWord(g_pins.slotGrow) == c.grow);
       g_loadRet = 7;
       SetPool(10);
+      combat_test::game_model::SetLevels({"mpl_combat_dyson"});
       if (cc::LoadThunk::Original() != nullptr) {
         reinterpret_cast<LoadF>(cc::LoadThunk::EntryAddress())(nullptr, Ctx(1), nullptr);
         QCHECK(g_loadCalls == 1);  // the pool is nearly full, yet the entry went straight to the original: it is disarmed
@@ -850,6 +923,8 @@ int main() {
   MoreThan256LiveContextsGetTheGamesBehaviour();
   TheDropLinesAreCapped();
   ALoadOnANearlyFullLayoutPoolIsRefused();
+  TheRefusalIsScopedToACombatMapOrLobby();
+  WithNoRoomForTheScopesTickTheRefusalIsOffAndTheRestInstalls();
   TheLoadsLineIsWrittenEvery32ndLoad();
   GrowResizesWhenThereIsNoRoomAndChecksIt();
   WhenTheAllocationFailsTheInstallTimeSparesAreUsed();

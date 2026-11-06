@@ -2,13 +2,16 @@
  *
  * What the game does and what each guard does (store libr15; custctx_targets.h has the addresses).
  *  R31 LoadMeshData: loads one player's cosmetics into a context. The guard marks the context live and "load in flight" (under one mutex) before the
- *      game's function runs. It refuses a load, answering 1 (the stock failure value: CreateContext then destroys the empty context and answers NULL),
- *      when the render-target layout pool has fewer than kLayoutMargin (64) free slots, because a full pool is a deliberate trap (brk) in
- *      CGRenderTargetState::Initialize on the load's new mesh entries. An unreadable or null pool pointer never refuses.
+ *      game's function runs. While a combat map or the combat lobby is loaded (level_scope.h) it refuses a load, answering 1
+ *      (the stock failure value: CreateContext passes it to OutputError and, on a nonzero answer, destroys the empty context and answers NULL; the
+ *      refusal also writes a game error line), when the render-target layout pool has fewer than kLayoutMargin (64) free slots. The game traps
+ *      (brk, in RegisterRTLayout 0x19829bc) only when no slot is free as a layout registers; 64 is a margin for the layouts one load registers and is not
+ *      read from the game. In an arena match the load goes to the game's function unchanged, trap included. An unreadable or null pool pointer never refuses.
  *  R32 DestroyContext: the guard runs the game's destroy only for a live context with no load in flight and no destroy already running. Every other
  *      destroy is dropped (answer 0): the destroy of a context being loaded, being destroyed on another thread, or at an address no live context holds
  *      (a stale second destroy). A null context goes to the game's function, which returns at once. More than kMax (256) contexts at once: the
- *      overflow is untracked and gets the game's behaviour, one Warning.
+ *      overflow is untracked, so its load goes to the game's function but its destroy is dropped as "no context holds this address", one
+ *      Warning once.
  *  R33 CTableXT<SR15NetCustomDrawData>::Grow: the guard does Grow's resize itself (CMemBlock::Resize, called by its exported address, keep 1) and checks
  *      it. A table that would be written through NULL (the resize failed, an add of 0, or room left but the data NULL) is made a consistent empty one and
  *      Grow is given a spare element that is in no table: that player's cosmetics are not drawn. The spare is a fresh 64-aligned element, or, when that
@@ -20,13 +23,12 @@
  * Which APKs (docs/adr/0046 rule 5). It runs where combat::Active() is true: the q15t and combat variants. Its switch is `combat.custctx` in config.yaml
  * (default true). The plugin's `custctx.off` file is no longer read; one found in the files folder's q15t directory is a Warning that names the key.
  *
- * Arena (same APK). It acts in EVERY level, on purpose: it does not use level_scope.h. It guards code arena shares (the lobby, where cosmetics load),
- * and its three faults are crashes (a destroy racing a load, a draw table written through NULL, a trap on a full layout pool); a scope by level would
- * leave the lobby unguarded. It changes arena's result in one place: LoadMeshData is refused, and that player's cosmetics are skipped, when the
- * layout pool has fewer than 64 free slots, up to 63 slots before the game's own function would trap; in arena that happens only in a state where a
- * nearby load would crash the process. Everything else passes the game's own arguments to the game's own function. Cost in arena: per cosmetic load (per
- * player join or lobby change): one mutex lock and unlock pair around a scan of the 256-entry table, three never-faulting reads for the pool state;
- * per destroy: the same lock and scan; per draw-table Grow: one read of the table header. The rates are not known: `combat_custctx_stats` counts them
+ * Arena (same APK). The destroy and Grow guards act in EVERY level, on purpose: they guard code arena shares (the lobby, where cosmetics load) and act
+ * only where the game would otherwise crash or destroy a context it is not tracking (a destroy racing a load, a draw table written through NULL); a
+ * scope by level would leave the lobby unguarded. The pool refusal changes what a load returns, so it is scoped (above): in an arena match it never acts.
+ * Everything else passes the game's own arguments to the game's own function. Cost in arena: per cosmetic load (per player join or lobby change): one
+ * mutex lock and unlock pair around a scan of the 256-entry table and one atomic load; per destroy: the same lock and scan; per draw-table Grow: one
+ * read of the table header. In a combat map or lobby a load also pays three never-faulting reads for the pool state. The rates are not known: `combat_custctx_stats` counts them
  * (ADR 0038); host numbers per call are in docs/quest/combat/custctx.md. Not measured on a headset.
  *
  * Install. The patched build ID, then the code words (custctx_targets.h), then the Resize export (looked up with dlsym on the loaded libr15 and accepted

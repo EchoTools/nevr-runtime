@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "quest/combat/legacy_switch.h"
+#include "quest/combat/level_scope.h"
 #include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
@@ -59,7 +60,7 @@ struct Entry {
 Entry g_tab[kMax];  // under g_mu; ctx == nullptr = free
 
 constexpr const char* kInstalledConsequence =
-    "loads are refused on a nearly full layout pool, a destroy runs only for a live context with no load in flight, and a draw table that "
+    "in a combat map or lobby loads are refused on a nearly full layout pool, a destroy runs only for a live context with no load in flight, and a draw table that "
     "cannot grow is made empty";
 constexpr const char* kRefusedConsequence =
     "the cosmetics renderer runs as the game wrote it: a destroy racing a load, a draw table that cannot grow and a full layout pool can crash the game";
@@ -135,7 +136,9 @@ std::uint64_t LoadHandler(LoadThunk::Fn original, void* self, void* ctx, void* m
   if (!tracked) Full();
   std::uint64_t used = 0;
   std::uint32_t cap = 0;
-  const bool low = RtLow(&used, &cap);
+  // The pool refusal acts only while a combat map or the combat lobby is loaded; in an arena match the load reaches the game's function as it is,
+  // and no pool word is read. (The trap fires only when no slot is free; the margin below is not read from the game.)
+  const bool low = scope::InCombatMapOrLobby() ? RtLow(&used, &cap) : false;
   const unsigned loads = g_loads.fetch_add(1, std::memory_order_relaxed) + 1;
   if (loads % kLoadsEvery == 0 && g_loadsLines.fetch_add(1, std::memory_order_relaxed) < kLoadsLines) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_custctx_loads",
@@ -381,9 +384,11 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, const Fns
     const sentinel::GotStatus backLoad = RemoveOne<LoadThunk>(g_loadHook);
     return RefuseSlot("Grow", status, backDestroy != sentinel::GotStatus::kOk ? sentinel::GotStatusName(backDestroy) : sentinel::GotStatusName(backLoad));
   }
+  // The refusal needs the level scope; without its tick (the table is full) the refusal never acts and the two other guards still do.
+  const bool scoped = scope::Start();
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_custctx_install",
                       {{"result", "installed"}, {"reason", "ok"}, {"load", "ok"}, {"destroy", "ok"}, {"grow", "ok"},
-                       {"layout_margin", kLayoutMargin}, {"consequence", kInstalledConsequence}});
+                       {"pool_refusal", scoped ? "combat_map_or_lobby" : "off_no_tick"}, {"layout_margin", kLayoutMargin}, {"consequence", kInstalledConsequence}});
   return {true, "installed"};
 }
 

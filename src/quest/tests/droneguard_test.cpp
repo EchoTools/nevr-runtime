@@ -272,20 +272,13 @@ void TheStateLineFollowsTheCacheAndIsCapped() {
   End();
 }
 
-// 5. Doubt: an unreadable system goes to Follow, and the guard reads nothing else.
-void AnUnreadableSystemGoesToFollow() {
+// 5. Doubt: a null component goes to Follow, and the guard reads nothing else. (An unreadable non-null component faults in Follow's own first
+// instruction, `ldr x8,[x0,#0xc8]`, with or without the guard.)
+void ANullSystemGoesToFollow() {
   const FollowFn hook = Installed(true);
   World(kTarget);
-  hook(reinterpret_cast<void*>(0x20), 9);
-  QCHECK(g_realCalls == 1 && g_refreshCalls == 0);
-  {  // a system that ends before +0x194 is unreadable as a whole
-    auto* two = static_cast<std::uint8_t*>(mmap(nullptr, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
-    mprotect(two + 4096, 4096, PROT_NONE);
-    g_realCalls = 0;
-    hook(two + 4096 - 0x150, 9);
-    QCHECK(g_realCalls == 1);
-    munmap(two, 8192);
-  }
+  hook(nullptr, 9);
+  QCHECK(g_realCalls == 1 && g_refreshCalls == 0 && dg::CurrentStats().skips == 0);
   End();
 }
 
@@ -614,7 +607,7 @@ int main() {
   ANullTargetIsNeverFollowedAndIsCounted();
   TheTargetArrivingEndsTheRunOfSkips();
   TheStateLineFollowsTheCacheAndIsCapped();
-  AnUnreadableSystemGoesToFollow();
+  ANullSystemGoesToFollow();
   AHealthyPlayerIsRefreshedThenChecked();
   TheCacheTheRefreshWroteDecides();
   ARefusedIndexIsSkippedUntilThePlayerResolves();

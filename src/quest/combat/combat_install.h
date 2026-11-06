@@ -65,6 +65,12 @@ struct Module {
   InstallFn early;
   InstallFn normal;
   EndFn end = nullptr;
+  // The row's `config.yaml` switch, reported as one `combat_config_switch` record each (see LogConfig): the key and the member that holds it. A
+  // module with a second key (droneguard's stage 1) names it too. Null: the module's switch is on the `combat_config` line.
+  const char* switchKey = nullptr;
+  nevr_quest::CombatSwitch nevr_quest::CombatConfig::* switchMember = nullptr;
+  const char* switchKey2 = nullptr;
+  nevr_quest::CombatSwitch nevr_quest::CombatConfig::* switchMember2 = nullptr;
 };
 
 // What a phase did. `ran` is false when it did not run (combat is off in this process, or the phase already ran or was ended).

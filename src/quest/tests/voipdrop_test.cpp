@@ -261,13 +261,13 @@ void NoAllocatorDropsThePacket() {
   End();
 }
 
-// 5. Doubt: self null or unreadable, vtable unreadable or without the two entries: the game's function runs.
+// 5. Doubt: self null, vtable unreadable or without the two entries: the game's function runs. (An unreadable non-null self is not a doubt the guard
+// handles: the game dereferences the receiver on every path that reaches the table, so it faults with or without the guard.)
 void EveryDoubtRunsTheGamesFunction() {
   Installed();
   World(-1, 0x80000);
   Slot()(nullptr, 1, kEvent, kData, 1);
-  Slot()(reinterpret_cast<void*>(0x20), 1, kEvent, kData, 1);
-  QCHECK(g_realCalls == 2 && g_probeAllocs == 0);
+  QCHECK(g_realCalls == 1 && g_probeAllocs == 0);
   World(-1, 0x80000);
   g_allocObj[0] = reinterpret_cast<void*>(0x30);  // vtable pointer unreadable
   g_allocOk = false;

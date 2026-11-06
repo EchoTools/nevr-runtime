@@ -38,6 +38,18 @@ std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 constexpr const char* kConsequence = "the drone's follow update is skipped while its target is null instead of crashing the game, in every level";
 constexpr const char* kRefusedConsequence = "a drone with no orbit target faults the game's Follow";
 
+// The fast path: four plain loads from the follow component. Follow loads [cs+0xc8] as its first data access, so the game dereferences the same
+// object on every call and these loads are as safe as the stock call; a null component goes to the game's function. No system call.
+bool ReadSnapPlain(std::uintptr_t cs, Snap* out) noexcept {
+  if (cs == 0) return false;
+  out->target = *reinterpret_cast<const volatile std::uintptr_t*>(cs + kOffTarget);
+  out->sys = *reinterpret_cast<const volatile std::uintptr_t*>(cs + kOffHandleSys);
+  out->idx = *reinterpret_cast<const volatile std::uint32_t*>(cs + kOffHandleIdx);
+  out->flags = *reinterpret_cast<const volatile std::uint8_t*>(cs + kOffHandleFlags);
+  return true;
+}
+
+// The stage-1 read after the engine's own refresh: the never-faulting read (that cache can be torn down under it), and stage 1 is off by default.
 bool ReadSnap(std::uintptr_t cs, Snap* out) noexcept {
   std::uint8_t buf[kSpan];
   if (!SafeRead(cs + kOffTarget, buf, sizeof(buf))) return false;
@@ -118,7 +130,7 @@ void FollowHandler(FollowThunk::Fn original, void* self, std::uint64_t handle) n
   if ((calls & (kStatsEvery - 1)) == 0) LogStats(false);
   const auto cs = reinterpret_cast<std::uintptr_t>(self);
   Snap s{};
-  if (!ReadSnap(cs, &s)) {  // doubt: Follow decides (it would fault on a bad pointer with or without us)
+  if (!ReadSnapPlain(cs, &s)) {  // a null component: Follow decides
     original(self, handle);
     return;
   }

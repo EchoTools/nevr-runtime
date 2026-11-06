@@ -233,7 +233,8 @@ combat:
   # voipdrop: a voice packet whose receiver table needs a page that cannot be allocated is dropped instead of crashing the game. Acts in every level.
   # voipdrop: false
   # custctx: three guards on the lobby cosmetics renderer (a destroy of a context that is being loaded, a draw table that cannot grow, a load on
-  # a nearly full render-target layout pool). Acts in every level.
+  # a nearly full render-target layout pool). The destroy and draw-table guards act in every level; the pool refusal acts only while a combat map or
+  # the combat lobby is loaded.
   # custctx: false
   # droneguard: the drone's follow update is skipped while its target is null instead of crashing the game. Acts in every level.
   # droneguard: false

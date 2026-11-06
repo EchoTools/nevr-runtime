@@ -65,6 +65,11 @@ void Process(bv::Variant variant) {
   g_lines.clear();  // the combat_active line is combat_active_test's
 }
 
+std::string Golden(const std::string& line) {
+  const std::size_t at = line.find("\"event\"");
+  return at == std::string::npos ? line : line.substr(at);
+}
+
 void Done() { sentinel::SetLogSink(nullptr); }
 
 const combat::Module kTable[] = {
@@ -291,8 +296,8 @@ void TheEndOfTheProcessWritesNoStatsForAGuardThatIsNotInstalled() {
   Done();
 }
 
-// The guards' keys are their own `combat_config_guards` line (the sentinel's line buffer is fixed): each value with its source, whole.
-void TheGuardKeysAreLoggedOnTheirOwnLineWithTheirSources() {
+// Each guard's switch is one `combat_config_switch` record, generated from the table: module, key, value and source (droneguard has two).
+void TheGuardKeysAreLoggedAsOneSwitchRecordEachWithTheirSources() {
   Process(bv::Variant::kCombat);
   nevr_quest::CombatConfig cfg;
   cfg.fxtrail = {false, nevr_quest::Source::kFile};
@@ -303,24 +308,27 @@ void TheGuardKeysAreLoggedOnTheirOwnLineWithTheirSources() {
   cfg.peerclamp = {false, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
   combat::LogConfig(nevr_quest::CombatConfig{});
-  const std::vector<Line> lines = Lines("combat_config_guards");
-  QCHECK(lines.size() == 2U);
-  if (lines.size() == 2U) {
-    const std::string& t = lines[0].text;
-    QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
-    QCHECK(Has(t, "\"fxtrail\":0,\"fxtrail_source\":\"config\""));
-    QCHECK(Has(t, "\"voipdrop\":0,\"voipdrop_source\":\"config\""));
-    QCHECK(Has(t, "\"custctx\":0,\"custctx_source\":\"config\""));
-    QCHECK(Has(t, "\"droneguard\":0,\"droneguard_source\":\"config\""));
-    QCHECK(Has(t, "\"droneguard_stage1\":1,\"droneguard_stage1_source\":\"config\""));
-    QCHECK(Has(t, "\"peerclamp\":0,\"peerclamp_source\":\"config\""));
-    QCHECK(Has(t, "\"msg\":") && t.back() == '}');  // not cut by the line buffer
-    const std::string& d = lines[1].text;  // and the defaults: on, the second stage off, every source the default
-    QCHECK(Has(d, "\"fxtrail\":1,\"fxtrail_source\":\"default\"") && Has(d, "\"voipdrop\":1,\"voipdrop_source\":\"default\""));
-    QCHECK(Has(d, "\"custctx\":1,\"custctx_source\":\"default\"") && Has(d, "\"droneguard\":1,\"droneguard_source\":\"default\""));
-    QCHECK(Has(d, "\"droneguard_stage1\":0,\"droneguard_stage1_source\":\"default\""));
-    QCHECK(Has(d, "\"peerclamp\":1,\"peerclamp_source\":\"default\""));
+  const std::vector<Line> lines = Lines("combat_config_switch");
+  QCHECK(lines.size() == 12U);
+  struct Want {
+    const char* module;
+    const char* key;
+    int on;
+    const char* source;
+  };
+  const Want first[] = {{"fxtrail", "combat.fxtrail", 0, "config"},         {"voipdrop", "combat.voipdrop", 0, "config"},
+                        {"custctx", "combat.custctx", 0, "config"},         {"droneguard", "combat.droneguard", 0, "config"},
+                        {"droneguard", "combat.droneguard_stage1", 1, "config"}, {"peerclamp", "combat.peerclamp", 0, "config"}};
+  const Want second[] = {{"fxtrail", "combat.fxtrail", 1, "default"},         {"voipdrop", "combat.voipdrop", 1, "default"},
+                         {"custctx", "combat.custctx", 1, "default"},         {"droneguard", "combat.droneguard", 1, "default"},
+                         {"droneguard", "combat.droneguard_stage1", 0, "default"}, {"peerclamp", "combat.peerclamp", 1, "default"}};
+  for (std::size_t i = 0; i < 12U && lines.size() == 12U; ++i) {
+    const Want& w = i < 6 ? first[i] : second[i - 6];
+    QCHECK(lines[i].level == sentinel::LogLevel::kInfo);
+    QCHECK(Golden(lines[i].text) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + w.module + "\",\"key\":\"" + w.key +
+                                        "\",\"on\":" + std::to_string(w.on) + ",\"source\":\"" + w.source + "\"}");
   }
+  QCHECK(Lines("combat_config_guards").empty());
   Done();
 }
 
@@ -490,7 +498,7 @@ int main() {
   TheGuardRowsAreNormalPhaseRowsInThePluginsOrderEachWithAnEndStep();
   EachGuardRowReadsItsOwnSwitch();
   TheEndOfTheProcessWritesNoStatsForAGuardThatIsNotInstalled();
-  TheGuardKeysAreLoggedOnTheirOwnLineWithTheirSources();
+  TheGuardKeysAreLoggedAsOneSwitchRecordEachWithTheirSources();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();

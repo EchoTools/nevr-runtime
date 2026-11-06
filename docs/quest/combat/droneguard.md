@@ -32,11 +32,11 @@ its one caller is `Update`, through the PLT stub. The words (ELF vaddr, word):
 The crash (reference build :1-14): the drone's actor carries a follow component enabled by the shared magazine script before any orbit target exists; `Follow`
 loads `[cs+0x140]` (a `CR15PlayerNavCS*`) and passes it as `this` to `FinalTransform` unchecked.
 
-- **Stage 0 (the null half).** The handler (a `CallbackThunk` on the slot, installed by the hook manager) reads the span `[cs+0x140, cs+0x194)` with one never-faulting
-  read. Target null: the game's `Follow` is not called, the skip is counted, and `combat_droneguard_skip` is written for the first skip of a run (then a total every 600th skip, at
+- **Stage 0 (the null half).** The handler (a `CallbackThunk` on the slot, installed by the hook manager) reads the four fields it needs (`[cs+0x140]`, `+0x188`, `+0x190`, `+0x16c`) with plain loads: `Follow` loads `[cs+0xc8]` as its first data access (0x2149784,
+  disassembly), so the game dereferences the same object on every call and the loads are as safe as the stock call. Target null: the game's `Follow` is not called, the skip is counted, and `combat_droneguard_skip` is written for the first skip of a run (then a total every 600th skip, at
   most 8). Target set: if a run of skips was in progress one `combat_droneguard_target_set`, then the game's function with the same two arguments. Every call also feeds the
-  read-only `combat_droneguard_state` line: the first call and each change of (raw index word, flag byte at +0x16c, target null, handle system null), at most 16 lines. An
-  unreadable `cs` goes to the game's function.
+  read-only `combat_droneguard_state` line: the first call and each change of (raw index word, flag byte at +0x16c, target null, handle system null), at most 16 lines. A
+  null `cs` goes to the game's function (an unreadable non-null one faults in `Follow` itself, with or without the guard).
 - **Stage 1 (the idx guard, `combat.droneguard_stage1`).** After the null test: `RefreshCache(cs+0x148)`, read the cache again, then skip when the u16 `[cs+0x190]` is 0xffff
   (`idx ffff`), the cached system `[cs+0x188]` is 0 (`handle-sys 0`), or `IsComponentValid(target, idx)` refuses (`refused but cached`); `combat_droneguard_idx_skip` for the first
   skip of a run, `combat_droneguard_idx_resolved` when a call goes through again, a total every 600th at most 8 times. A cache unreadable after the refresh: Follow runs. It needs its own three
@@ -50,10 +50,12 @@ loads `[cs+0x140]` (a `CR15PlayerNavCS*`) and passes it as `this` to `FinalTrans
   a stale cache (stage 1): that component's follow update is skipped for that frame. Every other call reaches the game's `Follow` with the same two arguments
   (`droneguard_test`: set target, healthy player, argument mutants). `TheGuardHasNoLevelScope` runs a null target with no level look ever made and sees it skipped. Whether the arena has
   `CR15NetFollowPlayerCS` components at all is not established here; `combat_droneguard_stats` gives the call count on a headset. Stage 1 is off unless asked for.
-- **Cost.** Per `Follow` call: the thunk's counter, one `process_vm_readv` of the 0x54-byte span, the state-key compare and a branch; stage 1 adds a `RefreshCache` call (the game's), a second read and, for
+- **Cost.** Per `Follow` call: the thunk's counter, four plain loads, the state-key compare and a branch; stage 1 adds a `RefreshCache` call (the game's), a never-faulting read of the refreshed cache and, for
   a resolved player, an `IsComponentValid` call. `Follow` runs once per enabled follow component per frame. Host numbers (x86-64, -O2, 2,000,000 calls through the installed thunk on a libr15 image built in memory, a stand-in `Follow`, a scratch benchmark that is not committed):
-  an unhooked slot 2.8 ns per call; stage 0 with a target set 912 ns; stage 0 skipping a null target 909 ns; stage 1 with a healthy player and stub engine functions 1,891 ns. The `process_vm_readv`
-  of the span is the cost. At that figure the guard stays inside ADR 0038's 10 microseconds per hook up to about 10 `Follow` calls per frame (stage 0); the call rate is not known (`combat_droneguard_stats`). Not measured on a headset.
+  before the change to plain loads (one `process_vm_readv` of the span): an unhooked slot 1.6 ns per call; stage 0 with a target set 423 ns; skipping a null target 434 ns; stage 1 with a healthy
+  player 839 ns (the same machine, one session). After: an unhooked slot 1.5 ns; stage 0 with a target set 6.1 ns; skipping a null target 8.0 ns; stage 1 with a healthy player 427 ns (the
+  never-faulting read of the refreshed cache is what is left of it). At 8 ns the guard stays inside ADR 0038's 10 us per hook up to about 1,000 `Follow` calls per frame (stage 0); the call rate is
+  not known (`combat_droneguard_stats`). Not measured on a headset.
 
 ## Gate: no file hash
 

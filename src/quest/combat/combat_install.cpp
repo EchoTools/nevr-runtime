@@ -56,11 +56,12 @@ constexpr std::array kModules{
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
     // the crash and timing guards (#2178), in the plugin's order: fxtrail, voipdrop, custctx, (meshstep: F10), droneguard, peerclamp. Each writes its
     // counts at the end of the process.
-    Module{"fxtrail", nullptr, &FxtrailNormal, &fxtrail::NoteEnd},
-    Module{"voipdrop", nullptr, &VoipdropNormal, &voipdrop::NoteEnd},
-    Module{"custctx", nullptr, &CustctxNormal, &custctx::NoteEnd},
-    Module{"droneguard", nullptr, &DroneguardNormal, &droneguard::NoteEnd},
-    Module{"peerclamp", nullptr, &PeerclampNormal, &peerclamp::NoteEnd},
+    Module{"fxtrail", nullptr, &FxtrailNormal, &fxtrail::NoteEnd, "combat.fxtrail", &nevr_quest::CombatConfig::fxtrail},
+    Module{"voipdrop", nullptr, &VoipdropNormal, &voipdrop::NoteEnd, "combat.voipdrop", &nevr_quest::CombatConfig::voipdrop},
+    Module{"custctx", nullptr, &CustctxNormal, &custctx::NoteEnd, "combat.custctx", &nevr_quest::CombatConfig::custctx},
+    Module{"droneguard", nullptr, &DroneguardNormal, &droneguard::NoteEnd, "combat.droneguard", &nevr_quest::CombatConfig::droneguard,
+           "combat.droneguard_stage1", &nevr_quest::CombatConfig::droneguardStage1},
+    Module{"peerclamp", nullptr, &PeerclampNormal, &peerclamp::NoteEnd, "combat.peerclamp", &nevr_quest::CombatConfig::peerclamp},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},
@@ -186,16 +187,20 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
-  // The crash and timing guards' keys are their own line: the sentinel's line buffer is fixed (hook_log.cpp, kLineCapacity), and one line for every
-  // key would cut its tail.
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_guards",
-                      {{"fxtrail", config.fxtrail.on ? 1 : 0}, {"fxtrail_source", source(config.fxtrail.source)},
-                       {"voipdrop", config.voipdrop.on ? 1 : 0}, {"voipdrop_source", source(config.voipdrop.source)},
-                       {"custctx", config.custctx.on ? 1 : 0}, {"custctx_source", source(config.custctx.source)},
-                       {"droneguard", config.droneguard.on ? 1 : 0}, {"droneguard_source", source(config.droneguard.source)},
-                       {"droneguard_stage1", config.droneguardStage1.on ? 1 : 0}, {"droneguard_stage1_source", source(config.droneguardStage1.source)},
-                       {"peerclamp", config.peerclamp.on ? 1 : 0}, {"peerclamp_source", source(config.peerclamp.source)},
-                       {"msg", "a guard's own key set to false turns that guard off; the guards run where the combat modules run"}});
+  // One record per module switch, generated from the registration table (combat_install.h): a unit adds a row, never a key on a line that one
+  // sentinel line (768 bytes) cannot hold.
+  for (const Module& module : kModules) {
+    const struct {
+      const char* key;
+      nevr_quest::CombatSwitch nevr_quest::CombatConfig::* member;
+    } switches[] = {{module.switchKey, module.switchMember}, {module.switchKey2, module.switchMember2}};
+    for (const auto& sw : switches) {
+      if (sw.key == nullptr || sw.member == nullptr) continue;
+      const nevr_quest::CombatSwitch& value = config.*sw.member;
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                          {{"module", module.name}, {"key", sw.key}, {"on", value.on ? 1 : 0}, {"source", source(value.source)}});
+    }
+  }
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }

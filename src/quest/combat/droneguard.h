@@ -26,8 +26,9 @@
  * the loaded game library, each at exactly its pinned address) must all hold, else the null half stays alone and one Error `combat_droneguard_stage1`
  * line names why. It registers in combat::InstallNormal()'s table at the position the plugin installed it (after custctx, before peerclamp).
  *
- * Frequency (ADR 0038). Follow runs once per enabled follow component per frame. Every call pays the thunk's counter, one process_vm_readv of the 0x54-byte
- * span and a compare of the state key; stage 1 adds a RefreshCache call, a second read and, for a resolved player, an IsComponentValid call. Host numbers are
+ * Frequency (ADR 0038). Follow runs once per enabled follow component per frame. Every call pays the thunk's counter, four plain loads from the component (Follow loads [cs+0xc8] as its first data access, so the
+ * game dereferences the same object on every call; a null component goes to the game's function) and a compare of the state key; stage 1 adds a RefreshCache call, a
+ * never-faulting read of the refreshed cache and, for a resolved player, an IsComponentValid call. Host numbers are
  * in docs/quest/combat/droneguard.md; not measured on a headset.
  *
  * Owner (ADR 0039). This file owns whether Follow runs for a component whose target is null (stage 0) or whose cache is stale (stage 1).
