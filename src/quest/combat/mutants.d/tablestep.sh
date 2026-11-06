@@ -1,0 +1,51 @@
+# tablestep: each rule of src/quest/combat/tablestep.cpp and tablestep_targets.h removed or bent once; src/quest/tests/tablestep_test.cpp must
+# fail on every one. The step correction itself is shaderstep's list (it is shared). Sourced by ../mutants.sh, which defines `runm <name> <file> <sed>`.
+S=src/quest/combat/tablestep.cpp
+T=src/quest/combat/tablestep_targets.h
+# the scope: the correction only in a combat match
+runm tbs_scope_inverted     $S "s/  if (scope != table_step::Scope::kCombat) {/  if (scope == table_step::Scope::kCombat) {/"
+runm tbs_always_corrects    $S "s/  if (scope != table_step::Scope::kCombat) {/  if (false) {/"
+runm tbs_never_corrects     $S "s/  if (scope != table_step::Scope::kCombat) {/  if (true) {/"
+runm tbs_scope_not_read     $S "s/  const table_step::Scope scope = table_step::CurrentScope();/  const table_step::Scope scope = table_step::Scope::kCombat;/"
+# the game's function runs once, with the game's arguments; its null result and its object are returned as they are
+runm tbs_original_dropped   $S "s/  void\* const obj = original(unused, init);/  (void)original; (void)unused; (void)init; void* const obj = nullptr;/"
+runm tbs_original_args      $S "s/  void\* const obj = original(unused, init);/  (void)init; void* const obj = original(unused, unused);/"
+runm tbs_null_unchecked     $S "s/^  if (obj == nullptr) return obj;  \/\/ the game's own result, unchanged\$//"
+runm tbs_stock_not_counted  $S "s/g_stock.fetch_add(1, std::memory_order_relaxed);/g_stock.fetch_add(0, std::memory_order_relaxed);/"
+runm tbs_stock_said_always  $S "s/  if (g_saidStock.exchange(true, std::memory_order_relaxed)) return;/  (void)g_saidStock;/"
+runm tbs_stock_scope_unnamed $S "s/table_step::ScopeName(scope)/(scope == table_step::Scope::kUnknown ? \"combat\" : \"other\")/"
+# the correction's counts and lines
+runm tbs_rewritten_count    $S "s/g_rewritten.fetch_add(1, std::memory_order_relaxed);/g_rewritten.fetch_add(0, std::memory_order_relaxed);/"
+runm tbs_unexpected_count   $S "s/g_unexpected.fetch_add(1, std::memory_order_relaxed);/g_unexpected.fetch_add(0, std::memory_order_relaxed);/"
+runm tbs_first_said_always  $S "s/      if (!g_saidFirst.exchange(true, std::memory_order_relaxed)) {/      if (true) {/"
+runm tbs_first_never        $S "s/      if (!g_saidFirst.exchange(true, std::memory_order_relaxed)) {/      if (false) {/"
+runm tbs_unexpected_always  $S "s/      if (!g_saidUnexpected.exchange(true, std::memory_order_relaxed)) {/      if (true) {/"
+runm tbs_first_from_to      $S "s/{\"from\", table_step::kShaderSetStockStep}, {\"to\", table_step::kShaderSetStep},/{\"from\", table_step::kShaderSetStep}, {\"to\", table_step::kShaderSetStockStep},/"
+runm tbs_not_stock_found    $S "s/{\"found\", sentinel::HexString(word, found)}/{\"found\", sentinel::HexString(word, table_step::kShaderSetStockStep)}/"
+runm tbs_not_stock_level    $S "s/sentinel::LogFields(sentinel::LogLevel::kWarn, \"combat_tablestep_not_stock\"/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_tablestep_not_stock\"/"
+runm tbs_first_level_debug  $S "s/sentinel::LogFields(sentinel::LogLevel::kInfo, \"combat_tablestep_first\"/sentinel::LogFields(sentinel::LogLevel::kDebug, \"combat_tablestep_first\"/"
+# the install: the pin, the build, the switch, once, the word
+runm tbs_pins_skipped       $S "s/if (const table_step::PinWord\* const bad = table_step::FirstPinMismatch(image.base, kWords, kWordCount, \&have, \&readable)) {/if (const table_step::PinWord* const bad = (table_step::FirstPinMismatch(image.base, kWords, kWordCount, \&have, \&readable), nullptr)) {/"
+runm tbs_pin_count_zero     $S "s/FirstPinMismatch(image.base, kWords, kWordCount,/FirstPinMismatch(image.base, kWords, kWordCount - 1,/"
+runm tbs_pin_word           $T "s/inline constexpr std::uint32_t kStockStepWord = 0x52800408;/inline constexpr std::uint32_t kStockStepWord = 0x52800409;/"
+runm tbs_pin_address        $T "s/inline constexpr Pins kPins = {0x190707c, 0x365ddd0, 0x1907130};/inline constexpr Pins kPins = {0x190707c, 0x365ddd0, 0x1907134};/"
+runm tbs_pin_line_vaddr     $S "s/{\"vaddr\", sentinel::HexString(at, bad->vaddr)},/{\"vaddr\", sentinel::HexString(at, bad->word)},/"
+runm tbs_pin_line_have      $S "s/readable ? sentinel::HexString(haveText, have)/readable ? sentinel::HexString(haveText, bad->word)/"
+runm tbs_off_ignored        $S "s/^  if (!on) return Done(/  if (!on \&\& false) return Done(/"
+runm tbs_second_step_runs   $S "s/  if (g_ran.exchange(true, std::memory_order_acq_rel)) return/  if (false) return/"
+runm tbs_no_expected_fn     $T "s/^  target.expectedOriginal = .*\$/  (void)base;/"
+runm tbs_expected_wrong     $T "s/base + pins.fn);/base + pins.fn + 4);/"
+runm tbs_slot_pin_off       $T "s/sentinel::pinned::LibR15PatchedBuildId(), pins.slot);/sentinel::pinned::LibR15PatchedBuildId(), pins.slot + 8);/"
+runm tbs_kind_jump_slot     $T "s/sentinel::RelocKind::kAbs64, sentinel::pinned::LibR15PatchedBuildId()/sentinel::RelocKind::kJumpSlot, sentinel::pinned::LibR15PatchedBuildId()/"
+runm tbs_slot_is_the_other  $T "s/inline constexpr Pins kPins = {0x190707c, 0x365ddd0, 0x1907130};/inline constexpr Pins kPins = {0x190707c, 0x365ddc8, 0x1907130};/"
+runm tbs_legacy_not_warned  $S "s/^  table_step::WarnLegacySwitch(.*\$//"
+runm tbs_legacy_file_name   $S "s/\"tablestep.off\", \"combat.tablestep: false\"/\"tablestep.of\", \"combat.tablestep: false\"/"
+runm tbs_legacy_key_name    $S "s/\"tablestep.off\", \"combat.tablestep: false\"/\"tablestep.off\", \"combat.tablestep: true\"/"
+runm tbs_refusal_not_error  $S "s/refused ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo/refused ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kInfo/"
+runm tbs_install_slot_text  $S "s/sentinel::HexString(slot, pins.slot)/sentinel::HexString(slot, pins.fn)/"
+runm tbs_installed_status   $S "s/return Done(\"installed\", \"ok\", \"installed\",/return Done(\"installed\", \"ok\", \"ok\",/"
+# the arena path writes nothing to the game's object (the test compares the whole object with the game's own)
+runm tbs_stray_write_low    $S "s/^    SayStock(scope);\$/    SayStock(scope);\n    static_cast<std::uint8_t*>(obj)[0x10] = 1;/"
+runm tbs_stray_write_step   $S "s/^    SayStock(scope);\$/    SayStock(scope);\n    static_cast<std::uint8_t*>(obj)[0x90] = 1;/"
+runm tbs_counts_not_registered $S "s/^  table_step::RegisterCounts(.*\$/  (void)\&CountsOf;/"
+runm tbs_counts_swapped     $S "s/return {g_stock.load(std::memory_order_relaxed) + g_unexpected.load(std::memory_order_relaxed), g_rewritten.load(std::memory_order_relaxed)};/return {g_rewritten.load(std::memory_order_relaxed), g_stock.load(std::memory_order_relaxed) + g_unexpected.load(std::memory_order_relaxed)};/"

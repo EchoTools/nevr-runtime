@@ -27,12 +27,13 @@
  * `"state":"not_started","reason":"post_load_hook_unavailable|game_exited_first"` once, Warning, and never runs afterwards.
  *
  * The config lines (ADR 0046 rule 4), written by the constructor's configuration step. `combat_config` is one Info line with the section-wide keys
- * and, for the modules that predate the next record, their switches as `<module>` and `<module>_source` (`config` when the file gave it,
- * `default` otherwise); `combat_config_gates` carries the headset gates' keys (`gate_link_libs` is a text and is never logged, only its source). A
- * module whose table row names a switch (`Module::switchKey`) is reported by one `combat_config_switch` record of its own, generated from the table:
- *   {"event":"combat_config_switch","module":"gunconnect","key":"combat.gunconnect","on":0|1,"source":"config|default"}
+ * and, for the modules that predate the next record, their switches as `<module>` and `<module>_source`. A module whose table row names a
+ * switch (`Module::switchKey`) is reported by one `combat_config_switch` record of its own, generated from the table:
+ *   {"event":"combat_config_switch","module":"meshstep","key":"combat.meshstep","on":0|1,"source":"config|default"}
  * so a unit adds a row, never a key on a line that one sentinel line (768 bytes) cannot hold. The step also hands the configuration to SetConfig,
  * which the registration table's rows read for their module's switch.
+ * A module whose keys do not fit that line and that predates the record reports them on a line of its own beside it: `combat_config_gates` (the headset gates,
+ * with the same `<key>` and `<key>_source` fields; `gate_link_libs` is a text and is never logged, only its source).
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */
@@ -63,7 +64,7 @@ struct Module {
   const char* name;
   InstallFn early;
   InstallFn normal;
-  const char* switchKey = nullptr;                                          // e.g. "combat.gunconnect"; null: reported on the `combat_config` line
+  const char* switchKey = nullptr;                                          // e.g. "combat.meshstep"; null: reported on the `combat_config` line
   nevr_quest::CombatSwitch nevr_quest::CombatConfig::* switchMember = nullptr;
 };
 

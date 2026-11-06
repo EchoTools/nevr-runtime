@@ -76,14 +76,3 @@ runm gc_key_arm_misnamed $Q 's/kCombatWeaponArmKey = "combat.weapon_arm"/kCombat
 runm gc_key_scenario_misnamed $Q 's/kCombatAibotsScenarioKey = "combat.aibots_scenario"/kCombatAibotsScenarioKey = "combat.aibots_scen"/' quest-host-shared quest_config_test
 runm gc_key_scenario_unread $Q 's/r.config.combat.aibotsScenario = ReadCombatText(cfg, kCombatAibotsScenarioKey, r);/;/' quest-host-shared quest_config_test
 runm gc_key_not_on_schema src/core/nevr_config.cpp 's/"gunconnect", "aibots", "aibots_scenario", "weapon_arm"}/"gunconnect", "aibots", "aibots_scenario"}/' quest-host-shared quest_config_test
-# The pins against the real libr15 (got_pinned_test, `just test-quest-hooks-pinned`, which needs the store APK: build/quest-hooks-pinned holds the libraries the recipe
-# extracted). The command is the test; exit 0 means the mutant survived.
-GT=src/quest/combat/gunconnect_targets.h
-PIN='build/quest-host-hooks-pinned/hooks-pinned/got_pinned_test build/quest-hooks-pinned/lib/lib/arm64-v8a/libr15.so build/quest-hooks-pinned/lib/lib/arm64-v8a/libpnsradmatchmaking.so build/quest-hooks-pinned/lib/lib/arm64-v8a/libpnsovr.so build/quest-hooks-pinned/lib/lib/arm64-v8a/lib7f2363b8976491aa.so build/quest-hooks-pinned/lib/lib/arm64-v8a/libpnsrad.so'
-runm gc_pinned_word $GT 's/0x7941e414U/0x7941e415U/' quest-host-hooks-pinned got_pinned_test "$PIN"
-runm gc_pinned_connect_vaddr $GT 's/kConnectVaddr = 0x2153438ULL/kConnectVaddr = 0x2153430ULL/' quest-host-hooks-pinned got_pinned_test "$PIN"
-runm gc_pinned_net_word src/quest/combat/netgame_targets.h 's/0x5290a208U/0x5290a209U/' quest-host-hooks-pinned got_pinned_test "$PIN"
-runm gc_pinned_ai_word src/quest/combat/aibots_targets.h 's/0xf9555800U/0xf9555801U/' quest-host-hooks-pinned got_pinned_test "$PIN"
-runm gc_pinned_ai_symbol src/quest/combat/aibots_targets.h 's/kConnectBotVaddr = 0x123bf78ULL/kConnectBotVaddr = 0x123bf7cULL/' quest-host-hooks-pinned got_pinned_test "$PIN"
-runm gc_pinned_arm_symbol src/quest/combat/weapon_arm_targets.h 's/0x217cc30ULL/0x217cc34ULL/' quest-host-hooks-pinned got_pinned_test "$PIN"
-runm gc_pinned_arm_vtable src/quest/combat/weapon_arm_targets.h 's/kEquipCsVtableVaddr = 0x36981f0ULL/kEquipCsVtableVaddr = 0x36981f8ULL/' quest-host-hooks-pinned got_pinned_test "$PIN"

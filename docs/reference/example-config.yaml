@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, the combat.gate_* keys, combat.pfx, combat.pfxtev and combat.gunconnect, combat.aibots, combat.aibots_scenario and combat.weapon_arm. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys and combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev and combat.gunconnect, combat.aibots, combat.aibots_scenario and combat.weapon_arm. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -210,6 +210,17 @@ combat:
   # refresh_rate_lobby: true
   # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
   # refresh_rate_quest2_72: false
+
+  # Quest only. Booleans. The resource table-step modules (src/quest/combat/meshstep.h, instmodel.h, shaderstep.h, tablestep.h): the tables of the
+  # mesh-list, instanced-model and shader-set resources grow by 1 entry, not the game's 32, while a combat map is loaded, in the q15t and combat APKs;
+  # in an Echo Arena level, in the lobbies arena players use and before the game is known the resources are the game's own. `false` leaves the game's
+  # step of 32 for that resource class even in a combat match. A value that is not a boolean is ignored with a warning in the sentinel log that names
+  # the key. Read once at launch; the sentinel log records `combat_config_switch`, `combat_meshstep_install`, `combat_instmodel_install`, `combat_shaderstep_install`
+  # and `combat_tablestep_install` report each. Default (absent): true.
+  # meshstep: false
+  # instmodel: false
+  # shaderstep: false
+  # tablestep: false
 
   # The three headset gates of the combat modules (src/quest/combat/headset_gates.h): the game branches on "this is a Quest headset" in three places that
   # a Quest running combat has to skip. Quest only; they run where the combat modules run (see `force`). Booleans, read once at launch; a value that
