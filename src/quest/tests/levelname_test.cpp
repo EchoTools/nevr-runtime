@@ -24,6 +24,8 @@
 #include <string>
 #include <vector>
 
+#include "quest/combat/combat_level.h"
+#include "quest/combat/safe_read.h"
 #include "quest/sentinel/mapping_perms.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
@@ -271,6 +273,25 @@ void AnUnreadableGameNeverFaults() {
   End();
 }
 
+// An arena match pays nothing, by count (docs/adr/0046; FOLD-MOVE "Prove arena pays nothing, by count"): a level that is not global_mp, from any of the
+// four words, makes no read of game memory and no scan of the levels. Arena and combat run on the same APK, so this is what an arena player's level
+// loads cost the module: the handler compares the name and calls the original. (global_mp itself, which an arena player loads once after login, reads
+// the flags word once: TheCounterAndTheFirstSixteenLines.)
+void AnArenaLevelLoadMakesNoReadAndNoScan() {
+  Begin();
+  QCHECK(InstallWithFakes().installed);
+  nevr_quest::combat::ResetSafeReadCallCount();
+  nevr_quest::combat::level::ResetScanCallCountForTest();
+  for (const std::uint64_t arena : {0x576ed3f8428ebc4bULL, 0x7691d78d414c5701ULL, 0x576ed3f8428ebc48ULL, 0x3f20b99c97955721ULL}) {  // mpl_arena_a, _a_lowspec, _b, mpl_tutorial_a
+    for (std::size_t slot = 0; slot < 4; ++slot) QCHECK(CallSlot(slot, g_game, arena) == (arena ^ 0xa5a5ULL));  // the original's answer, untouched
+  }
+  QCHECK(nevr_quest::combat::SafeReadCallCount() == 0);
+  QCHECK(nevr_quest::combat::level::ScanCallCountForTest() == 0);
+  CallSlot(0, g_game, kGlobalMp);  // the control: global_mp does read (the flags word, once), so the counter can move
+  QCHECK(nevr_quest::combat::SafeReadCallCount() == 1);
+  End();
+}
+
 // One Info line per global_mp substitution (the first 16), none for other levels, and the counter keeps counting.
 void TheCounterAndTheFirstSixteenLines() {
   Begin();
@@ -467,6 +488,7 @@ int main() {
   ANullPlainFunctionPassesTheCallThrough();
   AnUnreadableGameNeverFaults();
   TheCounterAndTheFirstSixteenLines();
+  AnArenaLevelLoadMakesNoReadAndNoScan();
   AWordThatIsNotTheFunctionRefusesAllFourAndPutsBackTheRest();
   ARollbackThatCannotPutAWordBackSaysSo();
   TheOtherRefusalsSayWhy();

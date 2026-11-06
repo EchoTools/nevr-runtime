@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+#include "quest/combat/combat_level.h"
+#include "quest/combat/safe_read.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
@@ -205,6 +207,23 @@ void AnyOtherNameIsUntouched() {
   End();
 }
 
+// An arena match pays nothing, by count (docs/adr/0046; FOLD-MOVE "Prove arena pays nothing, by count"). The module is not scoped by level (the
+// substitution is right in arena, docs/quest/combat/levelname.md), so its first call reads the plain name once and builds the suffixed one; every later
+// call, of any name, makes no read and no scan, and no scan is ever made.
+void AnArenaCallMakesNoReadAfterTheFirstAndNoScan() {
+  Begin();
+  QCHECK(InstallWithFakes().installed);
+  nevr_quest::combat::ResetSafeReadCallCount();
+  nevr_quest::combat::level::ResetScanCallCountForTest();
+  CallSlot(kSt, kPlain ^ 1);
+  QCHECK(nevr_quest::combat::SafeReadCallCount() == 1);  // the plain name, once
+  nevr_quest::combat::ResetSafeReadCallCount();
+  for (int i = 0; i < 1000; ++i) CallSlot(kSt, 0x1000 + static_cast<std::uint64_t>(i));
+  QCHECK(nevr_quest::combat::SafeReadCallCount() == 0);
+  QCHECK(nevr_quest::combat::level::ScanCallCountForTest() == 0);
+  End();
+}
+
 // The names are computed once: the first call asks Append, a later one does not, and the answer is the same.
 void TheNamesAreComputedOnce() {
   Begin();
@@ -322,6 +341,7 @@ int main() {
   ThePlainNameIsPassedThrough();
   TheSuffixedNameIsAskedAsThePlainOne();
   AnyOtherNameIsUntouched();
+  AnArenaCallMakesNoReadAfterTheFirstAndNoScan();
   TheNamesAreComputedOnce();
   AnUnreadablePlainNamePassesTheCallThrough();
   ANullAppendPassesTheCallThrough();

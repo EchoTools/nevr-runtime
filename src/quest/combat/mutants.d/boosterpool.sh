@@ -7,6 +7,9 @@ runm bp_always_substitute $B "s/  if (name != suffixed) return original(st, name
 runm bp_plain_ignored    $B "s/  \*suffixed = append(\*plain, pin::kSuffix, 1, 1);/  *suffixed = append(0, pin::kSuffix, 1, 1);/"
 runm bp_append_flags     $B "s/append(\*plain, pin::kSuffix, 1, 1)/append(*plain, pin::kSuffix, 1, 0)/"
 runm bp_suffix           $T "s/kSuffix\[\] = \"_lowspec\";/kSuffix[] = \"_lowspeC\";/"
+# arena pays nothing, by count (AnArenaCallMakesNoReadAfterTheFirstAndNoScan): the names read again on every call, and a scan before the name is compared
+runm bp_arena_read_every_call $B "s/  if (suffixed != 0) {/  if (false) {/"
+runm bp_arena_scan_first $B "s|^  std::uint64_t suffixed = g_suffixedName.load(std::memory_order_acquire);|  (void)nevr_quest::combat::level::Scan(0);\n&|;s|^#include \"quest/combat/boosterpool.h\"|&\n#include \"quest/combat/combat_level.h\"|"
 runm bp_no_unreadable_guard $B "s/  if (!SafeRead(g_plainAddress.load(std::memory_order_acquire), plain, sizeof(\*plain))) {/  if (false) {/"
 runm bp_unreadable_uncounted $B "s/    g_unreadable.fetch_add(1, std::memory_order_relaxed);/    (void)0;/"
 runm bp_no_append_guard  $B "s/  if (append == nullptr) return false;/  (void)0;/"

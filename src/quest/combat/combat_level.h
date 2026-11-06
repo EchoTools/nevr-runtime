@@ -61,6 +61,11 @@ Kind Classify(std::uintptr_t game, bool lobby, std::uint64_t* level, bool inFlig
 // finish between them. nullptr (production) calls nothing.
 void SetScanSeamForTest(void (*seam)()) noexcept;
 
+// Test seam: the calls of Scan since the last reset (Classify and CombatMapLoaded scan through it). The arena tests of the modules that must not scan in
+// an Echo Arena level assert it stays 0.
+std::uint64_t ScanCallCountForTest() noexcept;
+void ResetScanCallCountForTest() noexcept;
+
 // The name of a level this file knows (a combat map, the combat lobby, an Echo Arena level, the other lobbies), or nullptr.
 const char* LevelName(std::uint64_t level) noexcept;
 

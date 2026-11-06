@@ -10,6 +10,9 @@ runm ln_any_bit          $L "s/(flags \& pin::kLowspecMask) != 0/flags != 0/"
 runm ln_flag_offset      $L "s/reinterpret_cast<std::uintptr_t>(game) + pin::kFlagOffset, \&ok)/reinterpret_cast<std::uintptr_t>(game) + pin::kFlagOffset + 4, \&ok)/"
 runm ln_unsafe_read      $L "s/const auto flags = SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(game) + pin::kFlagOffset, \&ok);/const auto flags = *reinterpret_cast<const std::uint32_t*>(reinterpret_cast<std::uintptr_t>(game) + pin::kFlagOffset);/"
 # not listed: `if (ok && (flags & mask) != 0)` without the `ok` is the same program, because a read that failed leaves the flags 0 (combat/safe_read.h)
+# arena pays nothing, by count (AnArenaLevelLoadMakesNoReadAndNoScan): a read, or a scan, before the name is compared
+runm ln_arena_read_first $L "s|^  if (name == pin::kGlobalMp) {|  bool earlyOk = true;\n  (void)SafeRead<std::uint32_t>(reinterpret_cast<std::uintptr_t>(game) + pin::kFlagOffset, \&earlyOk);\n  if (name == pin::kGlobalMp) {|"
+runm ln_arena_scan_first $L "s|^  if (name == pin::kGlobalMp) {|  (void)nevr_quest::combat::level::Scan(reinterpret_cast<std::uintptr_t>(game));\n  if (name == pin::kGlobalMp) {|;s|^#include \"quest/combat/levelname.h\"|&\n#include \"quest/combat/combat_level.h\"|"
 runm ln_plain_stub       $L "s/image.base + pin::kPlainStubVaddr/image.base + pin::kPlainStubVaddr + 0x10/"
 runm ln_fn_vaddr         $L "s/image.base + pin::kFnVaddr/image.base + pin::kFnVaddr + 4/"
 runm ln_plain_args       $L "s/plain(game, name);/plain(game, 0);/"

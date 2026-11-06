@@ -123,12 +123,12 @@ nevr_ht_test(shaderstep_tablestep_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_c
 # does; an unreadable game never faults; the counter and the first sixteen lines; all four words or none; the refusals; the switch; the legacy kill
 # file as a warning only; a read-only vtable page. got_pinned_test resolves the four relocations, the stub and the code words in the real libr15.
 nevr_ht_test(levelname_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/levelname_test.cpp src/quest/combat/levelname.cpp)
+  SRC src/quest/tests/levelname_test.cpp src/quest/combat/levelname.cpp src/quest/combat/combat_level.cpp)
 # The booster pool's actor (#2181): the real handler through the thunk, installed into the JUMP_SLOT of AllocatePooledActor in a libr15 image built in
 # memory, against a model of the function, CSymbol64::Append and the plain name. The suffixed name is asked as the plain one and nothing else changes;
 # the names are computed once; an unreadable plain name passes through; the refusals; it installs only with levelname.
 nevr_ht_test(boosterpool_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/boosterpool_test.cpp src/quest/combat/boosterpool.cpp)
+  SRC src/quest/tests/boosterpool_test.cpp src/quest/combat/boosterpool.cpp src/quest/combat/combat_level.cpp)
 # The three headset gates (#2180, docs/adr/0046; docs/adr/0034 for the chain): the real entries through the real GotHook into the two JUMP_SLOTs of a
 # libr15 image built in memory, called through the slot from functions the gates' ranges name. Each gate answers its caller and no other; the bot gate
 # only while a combat map or the combat lobby is loaded (arena shares the APK); an entry above a handler that was on the slot first keeps answering and
