@@ -66,6 +66,14 @@ const Row kTable[] = {
     {bv::Variant::kPerfProbe, true, true, true, R::kForced, F::kHonoured},
 };
 
+// The state of the process before anything has been set or reset: nothing is active and the reason is "unresolved". In production this
+// rests on the initial values alone (a hook that asks before the configuration step must read combat as off in every APK), so this
+// runs first in main(), before any ResetForTest().
+void NothingIsActiveAtProcessStart() {
+  QCHECK(!combat::Active());
+  QCHECK(combat::ActiveReason() == R::kUnresolved);
+}
+
 void TheTableCoversEveryVariantBuildKindAndForceAnswer() {
   QCHECK(sizeof(kTable) / sizeof(kTable[0]) == 4U * 2U * 2U);
   for (const Row& row : kTable) {
@@ -171,6 +179,7 @@ void NoVariantSetIsAPlainRelease() {
 }  // namespace
 
 int main() {
+  NothingIsActiveAtProcessStart();  // first: before any ResetForTest()
   TheTableCoversEveryVariantBuildKindAndForceAnswer();
   AReleaseBuildNeverHonoursForce();
   WithoutForceOnlyTheVariantDecides();

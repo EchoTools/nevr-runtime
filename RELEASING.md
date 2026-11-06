@@ -264,7 +264,7 @@ and is not in the variant: packaged as an ordinary plugin it would load after `a
 The combat APK, `just release-quest-combat-apk vX.Y.Z`, runs the same build and packages both libraries, `libq15t_early.so` as an early plugin.
 Each APK names its variant to the sentinel: the repack stamps `lib/arm64-v8a/libnevr_build_variant.so` with the word (`q15t` for the variant APK,
 `combat` for the combat APK, empty for the release APK and every development APK), refuses any other word, and the sentinel's first log line
-(`sentinel_ctor`, field `variant`) reads it back. The runtime's combat modules run in the `q15t` and `combat` APKs only.
+(`sentinel_ctor`, field `variant`) reads it back. The folded combat modules run in the `q15t` and `combat` APKs only (`match_tags` and `equip_refire` run in every APK).
 No library is an argument to either recipe; a path in the place of the store APK is refused. The build needs an Android NDK r26d
 (`ANDROID_NDK_HOME`), a vcpkg checkout (`VCPKG_ROOT`; the configure installs the arm64-android ports of `src/quest/vcpkg.json`) and
 `config/public-defaults.env`, as `just build-android` does, and the store APK it repacks (`NEVR_STORE_APK`, a file). The variant is published with

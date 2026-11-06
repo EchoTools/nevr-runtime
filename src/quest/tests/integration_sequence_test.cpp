@@ -2136,7 +2136,7 @@ void TestAStampThatIsNotAVariantsIsNamedOnceAfterTheBeginRecord() {
     sentinel::LogLevel level;
   };
   const Case cases[] = {
-      {StampSource::kAbsent, "absent", "", sentinel::LogLevel::kInfo},
+      {StampSource::kAbsent, "absent", "no_file", sentinel::LogLevel::kWarn},
       {StampSource::kUnreadable, "unreadable", "symlink", sentinel::LogLevel::kWarn},
       {StampSource::kInvalid, "invalid", "unknown_word", sentinel::LogLevel::kWarn},
   };
@@ -2158,6 +2158,9 @@ void TestAStampThatIsNotAVariantsIsNamedOnceAfterTheBeginRecord() {
     QCHECK(note.value("reason", "?") == c.why);
     QCHECK(note.value("msg", "").find("no variant") != std::string::npos);
     QCHECK(note.value("msg", "").find("folded combat modules do not install") != std::string::npos);
+    QCHECK(!note.value("reason", "").empty());  // an empty field reads as a missing value (logging.md Category H)
+    // every APK this sentinel ships in is stamped by the repack, so a missing stamp is a packaging or install fault and says so
+    if (c.source == StampSource::kAbsent) QCHECK(note.value("msg", "").find("packaging or install fault") != std::string::npos);
     QCHECK(g_beginLevels[0] == sentinel::LogLevel::kInfo);
     QCHECK(g_beginLevels[1] == c.level);
   }

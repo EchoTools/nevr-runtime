@@ -102,7 +102,7 @@ void TheFileIsReadBesideTheLibrary() {
   if (dir.empty()) return;
   const std::string stamp = dir + "/" + bv::kStampFile;
 
-  QCHECK(Is(bv::ReadStamp(dir.c_str()), bv::Variant::kNone, bv::StampSource::kAbsent));  // no file: an APK the recipe did not stamp
+  QCHECK(Is(bv::ReadStamp(dir.c_str()), bv::Variant::kNone, bv::StampSource::kAbsent, "no_file"));  // no file: the stamp did not reach the library directory
 
   for (const char* word : {"q15t", "combat", "perf-probe"}) {
     Write(stamp, word);
@@ -138,6 +138,19 @@ void TheFileIsReadBesideTheLibrary() {
   QCHECK(Is(bv::ReadStamp(""), bv::Variant::kNone, bv::StampSource::kUnreadable, "no_library_dir"));
 }
 
+// The directory the stamp is read from, from the path the loader gives for the sentinel (dladdr's dli_fname). Only an extracted library
+// has one: a sentinel mapped straight from the APK (`<apk>!/lib/<abi>/<file>`) is named distinctly, never read as an absent file.
+void TheLibraryDirectoryIsThatOfTheExtractedFile() {
+  char dir[64];
+  QCHECK(bv::LibraryDirectoryOf("/data/app/x/lib/arm64/libovrplatformloader.so", dir, sizeof(dir)) == nullptr);
+  QCHECK(std::strcmp(dir, "/data/app/x/lib/arm64") == 0);
+  QCHECK(std::strcmp(bv::LibraryDirectoryOf("/data/app/x/base.apk!/lib/arm64-v8a/libovrplatformloader.so", dir, sizeof(dir)),
+                     "mapped_from_apk") == 0);
+  QCHECK(std::strcmp(bv::LibraryDirectoryOf("libovrplatformloader.so", dir, sizeof(dir)), "no_library_dir") == 0);
+  QCHECK(std::strcmp(bv::LibraryDirectoryOf(nullptr, dir, sizeof(dir)), "no_library_dir") == 0);
+  QCHECK(std::strcmp(bv::LibraryDirectoryOf("/a/b/libx.so", dir, 3), "no_library_dir") == 0);  // a directory that does not fit
+}
+
 }  // namespace
 
 int main() {
@@ -148,6 +161,7 @@ int main() {
   TheNamesAreTheWordsAndNoneForNoVariant();
   OnlyTheQ15tAndCombatVariantsRunFoldedCombat();
   TheFileIsReadBesideTheLibrary();
+  TheLibraryDirectoryIsThatOfTheExtractedFile();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "build_variant_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

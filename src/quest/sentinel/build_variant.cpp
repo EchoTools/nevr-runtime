@@ -73,7 +73,7 @@ Stamp ReadStamp(const char* directory) noexcept {
   }
   const int fd = ::open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
   if (fd < 0) {
-    if (errno == ENOENT) return Make(Variant::kNone, StampSource::kAbsent, "");
+    if (errno == ENOENT) return Make(Variant::kNone, StampSource::kAbsent, "no_file");
     return Make(Variant::kNone, StampSource::kUnreadable, errno == ELOOP ? "symlink" : "open_failed");  // O_NOFOLLOW makes a link ELOOP
   }
   struct stat st {};
@@ -102,18 +102,27 @@ Stamp ReadStamp(const char* directory) noexcept {
   return ParseStamp(bytes, have);
 }
 
+const char* LibraryDirectoryOf(const char* path, char* dir, std::size_t cap) noexcept {
+  if (path == nullptr || dir == nullptr || cap == 0) return "no_library_dir";
+  if (std::strstr(path, "!/") != nullptr) return "mapped_from_apk";
+  const char* slash = std::strrchr(path, '/');
+  if (slash == nullptr) return "no_library_dir";
+  const std::size_t length = static_cast<std::size_t>(slash - path);
+  if (length + 1 > cap) return "no_library_dir";
+  std::memcpy(dir, path, length);
+  dir[length] = '\0';
+  return nullptr;
+}
+
 Stamp ReadOwnStamp() noexcept {
   Dl_info info{};
   if (dladdr(reinterpret_cast<const void*>(&ReadOwnStamp), &info) == 0 || info.dli_fname == nullptr) {
     return Make(Variant::kNone, StampSource::kUnreadable, "no_library_dir");
   }
-  const char* slash = std::strrchr(info.dli_fname, '/');
-  if (slash == nullptr) return Make(Variant::kNone, StampSource::kUnreadable, "no_library_dir");
   char directory[kPathBytes];
-  const std::size_t length = static_cast<std::size_t>(slash - info.dli_fname);
-  if (length >= sizeof(directory)) return Make(Variant::kNone, StampSource::kUnreadable, "no_library_dir");
-  std::memcpy(directory, info.dli_fname, length);
-  directory[length] = '\0';
+  if (const char* const why = LibraryDirectoryOf(info.dli_fname, directory, sizeof(directory))) {
+    return Make(Variant::kNone, StampSource::kUnreadable, why);
+  }
   return ReadStamp(directory);
 }
 

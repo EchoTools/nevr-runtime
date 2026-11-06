@@ -16,11 +16,13 @@ void LogConstructorBegin(const char* version, const char* commit, const char* ki
                        {"variant_source", build_variant::SourceName(stamp.source)}});
   if (stamp.source == build_variant::StampSource::kStamp) return;
   const bool absent = stamp.source == build_variant::StampSource::kAbsent;
+  // Every APK that carries this sentinel is stamped by the repack, so a stamp that is not a variant's is a packaging or install fault
+  // (a Warning, whichever way it is not): the run has no variant, and in a combat APK that means combat is off.
   sentinel::LogFields(
-      absent ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "build_variant",
+      sentinel::LogLevel::kWarn, "build_variant",
       {{"source", build_variant::SourceName(stamp.source)}, {"reason", stamp.why}, {"file", build_variant::kStampFile},
-       {"msg", absent ? "no variant stamp beside the sentinel, so this run has no variant; folded combat modules do not install "
-                        "unless a development build sets combat.force"
+       {"msg", absent ? "no variant stamp beside the sentinel: every APK is stamped by the repack, so this is a packaging or install fault; "
+                        "this run has no variant, so folded combat modules do not install unless a development build sets combat.force"
                       : "the variant stamp beside the sentinel cannot be used, so this run has no variant; folded combat modules do "
                         "not install unless a development build sets combat.force"}});
 }
