@@ -301,9 +301,9 @@ void TheGuardKeysAreLoggedAsOneSwitchRecordEachWithTheirSources() {
   Process(bv::Variant::kCombat);
   nevr_quest::CombatConfig cfg;
   cfg.fxtrail = {false, nevr_quest::Source::kFile};
-  cfg.voipdrop = {false, nevr_quest::Source::kFile};
-  cfg.custctx = {false, nevr_quest::Source::kFile};
-  cfg.droneguard = {false, nevr_quest::Source::kFile};
+  cfg.voipdrop = {true, nevr_quest::Source::kFile};  // each key a different value or source than its neighbours, so a row naming a neighbour's member is seen
+  cfg.custctx = {false, nevr_quest::Source::kAbsent};
+  cfg.droneguard = {true, nevr_quest::Source::kAbsent};
   cfg.droneguardStage1 = {true, nevr_quest::Source::kFile};
   cfg.peerclamp = {false, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
@@ -316,8 +316,8 @@ void TheGuardKeysAreLoggedAsOneSwitchRecordEachWithTheirSources() {
     int on;
     const char* source;
   };
-  const Want first[] = {{"fxtrail", "combat.fxtrail", 0, "config"},         {"voipdrop", "combat.voipdrop", 0, "config"},
-                        {"custctx", "combat.custctx", 0, "config"},         {"droneguard", "combat.droneguard", 0, "config"},
+  const Want first[] = {{"fxtrail", "combat.fxtrail", 0, "config"},         {"voipdrop", "combat.voipdrop", 1, "config"},
+                        {"custctx", "combat.custctx", 0, "default"},        {"droneguard", "combat.droneguard", 1, "default"},
                         {"droneguard", "combat.droneguard_stage1", 1, "config"}, {"peerclamp", "combat.peerclamp", 0, "config"}};
   const Want second[] = {{"fxtrail", "combat.fxtrail", 1, "default"},         {"voipdrop", "combat.voipdrop", 1, "default"},
                          {"custctx", "combat.custctx", 1, "default"},         {"droneguard", "combat.droneguard", 1, "default"},

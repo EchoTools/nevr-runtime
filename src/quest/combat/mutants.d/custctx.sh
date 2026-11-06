@@ -156,4 +156,4 @@ runm cc_scope_ignored      $F "s/scope::InCombatMapOrLobby() ? RtLow(\&used, \&c
 runm cc_scope_inverted     $F "s/scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/!scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/"
 runm cc_scope_map_only     $F "s/scope::InCombatMapOrLobby() ? RtLow(\&used, \&cap) : false;/scope::InCombatMap() ? RtLow(\&used, \&cap) : false;/"
 runm cc_start_not_asked    $F "s/  const bool scoped = scope::Start();/  const bool scoped = true;/"
-runm cc_start_always_off   $F "s/{\"pool_refusal\", scoped ? \"combat_map_or_lobby\" : \"off_no_tick\"}/{\"pool_refusal\", \"combat_map_or_lobby\"}/"
+runm cc_start_always_off   $F "s/{\"pool_refusal\", scoped ? \"combat_map_or_lobby\" : \"off_no_tick\"}/{\"pool_refusal\", scoped ? \"combat_map_or_lobby\" : \"combat_map_or_lobby\"}/"
