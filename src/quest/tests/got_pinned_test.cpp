@@ -500,6 +500,17 @@ int main(int argc, char** argv) {
       QCHECK(false);
     }
   }
+  // The two arrays Allocate appends to: the words that load their bases and append, and the block array in .bss.
+  for (const pinned::PinnedCode* block :
+       {&pinned::kVkAllocTableAdrp, &pinned::kVkAllocTableAdd, &pinned::kVkAllocFreeAppend, &pinned::kVkAllocBlockAppend}) {
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block->vaddr, block->code, block->words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the words at %#llx differ from the pinned ones\n", block->name,
+                   static_cast<unsigned long long>(block->vaddr));
+      QCHECK(false);
+    }
+  }
+  QCHECK(NobitsHolds(r15, pinned::vk_block_layout::kTableVaddr,
+                     pinned::vk_block_layout::kCountVaddr + sizeof(std::uint32_t) - pinned::vk_block_layout::kTableVaddr));
   // The array and its count lie in .bss, and the count follows the last of 512 entries.
   QCHECK(NobitsHolds(r15, pinned::vk_hole_layout::kTableVaddr,
                      pinned::vk_hole_layout::kCountVaddr + sizeof(std::uint32_t) - pinned::vk_hole_layout::kTableVaddr));

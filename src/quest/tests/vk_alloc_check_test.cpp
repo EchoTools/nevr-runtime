@@ -37,7 +37,7 @@ unsigned g_lastArgs[4] = {};
 
 constexpr std::uint64_t kHandle = 0x7f00c0de0000ULL;
 constexpr std::uint64_t kOffset = 0x40000;
-constexpr std::uint64_t kGameError = 0x5151;  // the error record the game's error maker returns
+constexpr int kGameError = 0x5151;  // the error id the game's error maker returns
 
 // The game's Allocate, by the words at 0x188813c..0x18886a4 of the pinned image.
 std::uint64_t ModelAllocate(const check::MemoryRequirements* reqs, unsigned desired, unsigned minimal, unsigned pooled, unsigned pool,
@@ -60,8 +60,8 @@ std::uint64_t ModelAllocate(const check::MemoryRequirements* reqs, unsigned desi
 int g_errorCalls = 0;
 std::uint64_t g_lastErrorCode = 0;
 std::string g_lastErrorMessage;
-std::uint64_t g_errorReturns = kGameError;
-std::uint64_t ModelCreateAndAddError(const char* /*file*/, unsigned /*line*/, std::uint64_t code, const char* message, ...) {
+int g_errorReturns = kGameError;
+int ModelCreateAndAddError(const char* /*file*/, unsigned /*line*/, std::uint64_t code, const char* message, ...) {
   ++g_errorCalls;
   g_lastErrorCode = code;
   g_lastErrorMessage = message != nullptr ? message : "";
@@ -92,6 +92,7 @@ int NullBinds() {
   return n;
 }
 
+volatile std::uint32_t g_blockCount = 0;
 volatile std::uint32_t g_tableCount = 0;
 
 void Reset() {
@@ -104,10 +105,11 @@ void Reset() {
   g_errorCalls = 0;
   g_errorReturns = kGameError;
   g_binds.clear();
+  g_blockCount = 0;
   g_tableCount = 0;
 }
 
-void Arm() { check::ArmForTest(&ModelCreateAndAddError, &g_tableCount); }
+void Arm() { check::ArmForTest(&ModelCreateAndAddError, &g_blockCount, &g_tableCount); }
 
 // The crash, with the check absent: an out-of-memory device makes the game's Allocate report success, and its caller binds null.
 void WithoutTheCheckAnOutOfMemoryDeviceIsBoundAsNull() {
@@ -191,12 +193,14 @@ void TheLogSaysWhatWasRefusedAndHowFullTheTableWas() {
   g_lines.clear();
   sentinel::SetLogSink(&CaptureLine);
   Arm();
-  g_tableCount = 509;
+  g_blockCount = 300;
+  g_tableCount = 450;
   g_device = Device::kOutOfMemory;
   for (int i = 0; i < 600; ++i) ModelCreateDeviceResource(0x155000);
   QCHECK(CountLines("\"event\":\"vk_alloc_refused\"") == 3);  // the 1st, the 256th and the 512th
   QCHECK(CountLinesWithBoth("\"event\":\"vk_alloc_refused\"", "\"size\":1396736") == 3);
-  QCHECK(CountLines("\"table_count\":509") == 3);
+  QCHECK(CountLines("\"table_count\":450") == 3);
+  QCHECK(CountLines("\"block_count\":300") == 3);
   QCHECK(CountLines("\"guard_leaked\":") == 3);
   QCHECK(CountLines("\"guard_high_water\":") == 3);
   QCHECK(CountLines("\"refused\":1,") == 1 && CountLines("\"refused\":256") == 1 && CountLines("\"refused\":512") == 1);
@@ -221,6 +225,104 @@ void AZeroErrorCodeIsLoudEveryTime() {
   sentinel::SetLogSink(&CaptureLine);
 }
 
+// ---- the bound ----------------------------------------------------------------------------------------------------------------
+
+// A refusal leaves its null block in libr15's arrays, which have no bound check: one entry below the block bound it is refused,
+// at the bound the game gets its null result, crashes where it did before the hook, and the decision is logged once.
+void TheBlockArrayBoundDecidesBetweenARefusalAndTheGamesCrash() {
+  Reset();
+  g_lines.clear();
+  sentinel::SetLogSink(&CaptureLine);
+  Arm();
+  g_device = Device::kOutOfMemory;
+  g_tableCount = 100;
+  g_blockCount = check::kBlockRefuseBelow - 1;
+  QCHECK(ModelCreateDeviceResource(0x1000) == kGameError);
+  QCHECK(NullBinds() == 0);
+  QCHECK(check::CurrentCounts().refused == 1);
+  g_blockCount = check::kBlockRefuseBelow;
+  QCHECK(ModelCreateDeviceResource(0x1000) == 0);
+  QCHECK(NullBinds() == 1);  // the game's own crash, where it always was
+  g_blockCount = check::kBlockCapacity;
+  ModelCreateDeviceResource(0x1000);
+  QCHECK(NullBinds() == 2);
+  QCHECK(check::CurrentCounts().refused == 1);
+  QCHECK(check::CurrentCounts().let_through == 2);
+  QCHECK(CountLines("\"event\":\"vk_alloc_let_through\"") == 1);
+  QCHECK(CountLinesWithBoth("\"event\":\"vk_alloc_let_through\"", "\"block_count\":496") == 1);
+  QCHECK(CountLinesWithBoth("\"event\":\"vk_alloc_let_through\"", "\"block_refuse_below\":496") == 1);
+  sentinel::SetLogSink(&CaptureLine);
+}
+
+// The free-range array's bound is the free guard's: below it a refusal, at it the game's result.
+void TheFreeRangeArrayBoundDecidesToo() {
+  Reset();
+  Arm();
+  g_device = Device::kOutOfMemory;
+  g_blockCount = 10;
+  g_tableCount = nevr_quest::vk_hole::kGuardFrom - 1;
+  QCHECK(ModelCreateDeviceResource(0x1000) == kGameError);
+  QCHECK(NullBinds() == 0);
+  g_tableCount = nevr_quest::vk_hole::kGuardFrom;
+  QCHECK(ModelCreateDeviceResource(0x1000) == 0);
+  QCHECK(NullBinds() == 1);
+  QCHECK(check::CurrentCounts().refused == 1 && check::CurrentCounts().let_through == 1);
+}
+
+// A count that cannot be read is not room: the game's result goes through.
+void AnUnreadableCountLetsTheGamesResultThrough() {
+  Reset();
+  check::ArmForTest(&ModelCreateAndAddError, nullptr, &g_tableCount);
+  g_device = Device::kOutOfMemory;
+  QCHECK(ModelCreateDeviceResource(0x1000) == 0);
+  QCHECK(NullBinds() == 1);
+  QCHECK(check::CurrentCounts().refused == 0 && check::CurrentCounts().let_through == 1);
+}
+
+// The margin is the one the header gives: 16 entries, twice the free guard's headroom.
+void TheMarginIsTwiceTheFreeGuardsHeadroom() {
+  QCHECK(check::kBlockHeadroom == 2 * nevr_quest::vk_hole::kHeadroom);
+  QCHECK(check::kBlockRefuseBelow == 496);
+  QCHECK(check::kBlockCapacity == pinned::vk_block_layout::kCapacity);
+  QCHECK(pinned::vk_block_layout::kCountVaddr - pinned::vk_block_layout::kTableVaddr ==
+         static_cast<std::uint64_t>(pinned::vk_block_layout::kCapacity) * pinned::vk_block_layout::kEntryBytes);
+  // `ldr w12, [x23, #0x3000]` in the pinned block append: the count is 0x3000 past the base.
+  QCHECK(((pinned::kVkAllocBlockAppend.code[0] >> 10) & 0xfff) * 4 == 0x3000);
+}
+
+// ---- 32-bit results -----------------------------------------------------------------------------------------------------------
+
+// Allocate's callers test w0, so a status whose low word is 0 is a success to them, whatever x0's high word holds.
+std::uint64_t g_wideStatus = 0;
+std::uint64_t ModelAllocateWide(const check::MemoryRequirements* reqs, unsigned, unsigned, unsigned, unsigned, check::AllocatedBase* out) {
+  ++g_gameCalls;
+  std::memset(out, 0, sizeof(*out));
+  out->end = reqs->size;
+  return g_wideStatus;
+}
+
+void ALowWordOfZeroIsASuccessToTheCallers() {
+  Reset();
+  *check::Thunk::OriginalOut() = reinterpret_cast<void*>(&ModelAllocateWide);
+  Arm();
+  g_wideStatus = 0xdead00000000ULL;  // w0 is 0: the caller binds
+  QCHECK(ModelCreateDeviceResource(0x1000) == kGameError);
+  QCHECK(NullBinds() == 0);
+  QCHECK(check::CurrentCounts().refused == 1);
+}
+
+// The error maker returns an int; the handler returns it zero-extended, as the game's own error return leaves w0.
+void TheErrorIdIsReturnedAsAThirtyTwoBitValue() {
+  Reset();
+  Arm();
+  g_device = Device::kOutOfMemory;
+  g_errorReturns = -2;
+  const check::MemoryRequirements reqs = {0x1000, 0x100, 1};
+  check::AllocatedBase base = {};
+  QCHECK(Entry()(&reqs, 1, 1, 1, 0, &base) == 0xfffffffeULL);
+  QCHECK(check::CurrentCounts().zero_code == 0);
+}
+
 // ---- the install ------------------------------------------------------------------------------------------------------------
 
 // An image with the pinned words where the check reads them.
@@ -231,6 +333,10 @@ unsigned char* MakeImage() {
   auto* image = static_cast<unsigned char*>(mem);
   for (const pinned::PinnedFunction* f : {&pinned::kVkAllocate, &pinned::kErrMsgCreateAndAddError}) {
     std::memcpy(image + f->vaddr, f->code, f->words * sizeof(std::uint32_t));
+  }
+  for (const pinned::PinnedCode* b :
+       {&pinned::kVkAllocTableAdrp, &pinned::kVkAllocTableAdd, &pinned::kVkAllocFreeAppend, &pinned::kVkAllocBlockAppend}) {
+    std::memcpy(image + b->vaddr, b->code, b->words * sizeof(std::uint32_t));
   }
   const std::uint64_t code = pinned::kVkAllocErrorCode;
   std::memcpy(image + pinned::kVkAllocErrorCodeVaddr, &code, sizeof(code));
@@ -263,6 +369,10 @@ void APinnedWordThatDiffersRefusesTheInstall() {
   };
   const Case cases[] = {{pinned::kVkAllocate.vaddr + 4, pinned::kVkAllocate.name},
                         {pinned::kErrMsgCreateAndAddError.vaddr + 12, pinned::kErrMsgCreateAndAddError.name},
+                        {pinned::kVkAllocTableAdrp.vaddr + 4, pinned::kVkAllocTableAdrp.name},
+                        {pinned::kVkAllocTableAdd.vaddr, pinned::kVkAllocTableAdd.name},
+                        {pinned::kVkAllocFreeAppend.vaddr + 8, pinned::kVkAllocFreeAppend.name},
+                        {pinned::kVkAllocBlockAppend.vaddr + 20, pinned::kVkAllocBlockAppend.name},
                         {pinned::kVkAllocErrorCodeVaddr + 7, "CGRawInterfaceVK::Allocate error symbol"}};
   for (const Case& c : cases) {
     Reset();
@@ -298,6 +408,12 @@ int main() {
   TheGamesOwnErrorPassesThrough();
   TheLogSaysWhatWasRefusedAndHowFullTheTableWas();
   AZeroErrorCodeIsLoudEveryTime();
+  TheBlockArrayBoundDecidesBetweenARefusalAndTheGamesCrash();
+  TheFreeRangeArrayBoundDecidesToo();
+  AnUnreadableCountLetsTheGamesResultThrough();
+  TheMarginIsTwiceTheFreeGuardsHeadroom();
+  ALowWordOfZeroIsASuccessToTheCallers();
+  TheErrorIdIsReturnedAsAThirtyTwoBitValue();
   AnInstallWhoseSlotDoesNotResolveLeavesTheGamesAllocate();
   APinnedWordThatDiffersRefusesTheInstall();
   if (quest_test::Failures() != 0) {

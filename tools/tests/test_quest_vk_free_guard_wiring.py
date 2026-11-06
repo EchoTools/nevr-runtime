@@ -110,6 +110,23 @@ class TheAllocationCheckIsWired(unittest.TestCase):
         self.assertIn("&pinned::kVkAllocate,", text)
         self.assertIn("&pinned::kErrMsgCreateAndAddError,", text)
         self.assertIn("pinned::kVkAllocErrorCodeVaddr", text)
+        for block in ("kVkAllocTableAdrp", "kVkAllocTableAdd", "kVkAllocFreeAppend", "kVkAllocBlockAppend"):
+            self.assertIn(f"&pinned::{block}", text)
+        self.assertIn("NobitsHolds(r15, pinned::vk_block_layout::kTableVaddr", text)
+
+    def test_the_block_bound_is_the_words_it_was_read_from(self):
+        pins = read("src/quest/sentinel/pinned_targets.h")
+        block = re.search(r"namespace vk_block_layout \{(.*?)\}  // namespace vk_block_layout", pins, re.S).group(1)
+        table = int(re.search(r"kTableVaddr = (0x[0-9a-f]+)ULL", block).group(1), 16)
+        count = int(re.search(r"kCountVaddr = (0x[0-9a-f]+)ULL", block).group(1), 16)
+        stride = int(re.search(r"kEntryBytes = (0x[0-9a-f]+);", block).group(1), 16)
+        self.assertEqual((count - table) // stride, 512)
+        words = re.search(r"kVkAllocBlockAppend = \{[^{]*\{([^}]*)\}", pins).group(1)
+        ldr = [int(w, 16) for w in re.findall(r"0x[0-9a-f]+", words)][0]
+        # ldr w12, [x23, #imm]: imm12 at bits 21:10, scaled by 4; Rn x23, Rt w12.
+        self.assertEqual(((ldr >> 10) & 0xFFF) * 4, count - table)
+        self.assertEqual((ldr >> 5) & 0x1F, 23)
+        self.assertEqual(ldr & 0x1F, 12)
 
 
 if __name__ == "__main__":

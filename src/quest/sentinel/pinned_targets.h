@@ -1243,11 +1243,37 @@ inline constexpr PinnedFunction kVkAllocate = {
 // x3 the message text, then `bl` to its PLT stub). Called at its link address plus the image base, never written.
 inline constexpr PinnedFunction kErrMsgCreateAndAddError = {"_ZN10NRadEngine7CErrMsg17CreateAndAddErrorEPKcjNS_9CSymbol64ES2_z",
                                                             0x11ce4dc, {0xa9bd5bfc, 0xa90153f5, 0xa9027bf3, 0xd13c83ff}, 4};
-using ErrMsgCreateAndAddErrorFn = std::uint64_t (*)(const char* file, unsigned line, std::uint64_t code, const char* message, ...);
+// It returns an int (the error id); its callers test w0, never x0.
+using ErrMsgCreateAndAddErrorFn = int (*)(const char* file, unsigned line, std::uint64_t code, const char* message, ...);
 // The error symbol Allocate passes (the .rodata word its `adrp x8, 0x2b2f000; add x8, x8, #0x1f2; and x8, x8, #~7; ldr x2, [x8]`
 // loads).
 inline constexpr std::uint64_t kVkAllocErrorCodeVaddr = 0x2b2f1f0ULL;
 inline constexpr std::uint64_t kVkAllocErrorCode = 0xe8cc523d0fc9e5feULL;
+// The two arrays a pooled Allocate appends to, neither with a bound check (#2262). Its first words load both bases:
+//   0x1888294: adrp x22, 0x3791000; adrp x23, 0x378e000      0x18882b0: add x22, x22, #0x688; add x23, x23, #0x680
+// x22 is the free-range array (vk_hole_layout); x23 is the array of VkDeviceMemory blocks the device holds: 512 entries of 0x18
+// bytes, then its 32-bit count (at x23 + 0x3000, the word 8 bytes before free-range entry 0). A new block, including one whose
+// vkAllocateMemory failed, appends to both:
+//   0x1888448: mov w13, #0x5000; ldr w9, [x22, x13]; ldur q0; ldur q1; ldr x10; add w12, w9, #1     the free-range count
+//   0x1888464: ldr w12, [x23, #0x3000]; mov w13, #0x28; madd x9, x9, x13, x22; str x10, [x9, #32]; stp q1, q0, [x9];
+//              add w9, w12, #1                                                  the block count, stored at 0x1888484
+// A dedicated allocation (pooled == 0) appends to the block array only. Nothing compares either count with 512.
+inline constexpr PinnedCode kVkAllocTableAdrp = {"CGRawInterfaceVK::Allocate table bases (adrp)", 0x1888294ULL,
+                                                 {0xb000f856, 0xd000f837}, 2};
+inline constexpr PinnedCode kVkAllocTableAdd = {"CGRawInterfaceVK::Allocate table bases (add)", 0x18882b0ULL,
+                                                {0x911a22d6, 0x911a02f7}, 2};
+inline constexpr PinnedCode kVkAllocFreeAppend = {"CGRawInterfaceVK::Allocate free-range append", 0x1888448ULL,
+                                                  {0x528a000d, 0xb86d6ac9, 0x3cc483e0, 0x3cc383e1, 0xf9402fea, 0x1100052c}, 6};
+inline constexpr PinnedCode kVkAllocBlockAppend = {"CGRawInterfaceVK::Allocate block append", 0x1888464ULL,
+                                                   {0xb97002ec, 0x5280050d, 0x9b0d5929, 0xf900112a, 0xad000121, 0x11000589}, 6};
+namespace vk_block_layout {
+inline constexpr std::uint64_t kTableVaddr = 0x378e680ULL;  // entry 0
+inline constexpr std::uint64_t kCountVaddr = 0x3791680ULL;  // a 32-bit count, directly after entry 511
+inline constexpr std::uint32_t kEntryBytes = 0x18;
+inline constexpr std::uint32_t kCapacity = 512;
+static_assert(kTableVaddr + static_cast<std::uint64_t>(kEntryBytes) * kCapacity == kCountVaddr, "the count follows the last entry");
+static_assert(kCountVaddr + 8 == vk_hole_layout::kTableVaddr, "free-range entry 0 follows the block count");
+}  // namespace vk_block_layout
 
 // The default irradiance texture (#2091, irradiance_default_hook.h). NRadEngine::CGEngineResources::Initialize (libr15 0x183e52c
 // pinned; disassembly 0x193e52c; 8,580 bytes, exported) builds the engine's default GPU resources. libr15 reaches it only through
