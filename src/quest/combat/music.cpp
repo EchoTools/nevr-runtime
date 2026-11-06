@@ -95,11 +95,15 @@ std::uint32_t PostBothStops(tgt::Thunk::Fn original, void* self, std::uint32_t o
   return 2;
 }
 
+// Not combat_scope (F19, #2186; PR #2246): that answer is cached from the loaded tables, and this ask is made once per Play with the init-fiber table
+// read as well, which is the point (a map still building). When combat_scope is on main this stays a direct ask.
 bool InCombatMapNow() noexcept {
   const std::uintptr_t game = g_game.load(std::memory_order_acquire);
   if (game == 0) return false;  // no frame has run yet: the level is unknown, so the Play goes through untouched
   std::uint64_t levelId = 0;
-  return level::Classify(game, /*lobby=*/false, &levelId) == level::Kind::kCombatOrLobby;
+  // inFlight: a Play posted while its combat map is still building (it is in the init-fiber table, not yet in the loaded tables) is the map's Play, also in a
+  // map-to-map change, where the previous map is still loaded and the unload tick has not fired (upstream posts the Stops on every Play, so it has no such window).
+  return level::Classify(game, /*lobby=*/false, &levelId, /*inFlight=*/true) == level::Kind::kCombatOrLobby;
 }
 
 const char* KindName(Kind kind) noexcept { return kind == Kind::kPlay ? "play" : kind == Kind::kStop ? "stop" : "state"; }

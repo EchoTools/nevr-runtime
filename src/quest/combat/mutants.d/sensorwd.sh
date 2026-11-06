@@ -84,3 +84,7 @@ runm sd_ci_row_ignores_key $CI "s/sensorwd::Install(g_config.sensorwd.on)/sensor
 runm sd_qc_default_off  src/quest/sentinel/quest_config.cpp "s/  r.config.combat.sensorwd = ReadCombatSwitch(cfg, kCombatSensorwdKey, r);/  r.config.combat.sensorwd = ReadCombatSwitch(cfg, kCombatSensorwdKey, r, false);/" quest-host-shared quest_config_test
 runm sd_qc_not_read     src/quest/sentinel/quest_config.cpp "s/  r.config.combat.sensorwd = ReadCombatSwitch(cfg, kCombatSensorwdKey, r);/  r.config.combat.sensorwd = CombatSwitch{};/" quest-host-shared quest_config_test
 runm sd_ci_row_key       $CI "s/\"combat.sensorwd\", \&nevr_quest::CombatConfig::sensorwd}/\"combat.sensorwdd\", \&nevr_quest::CombatConfig::sensorwd}/" quest-host-combat combat_install_test
+# arena pays nothing, by count (#2277 review): the sphere check (five reads) before the scope test, in each handler
+runm sd_read_before_scope_enabled $S "/^std::uint64_t OnEnabled/{n;s/^/  (void)IsSphere(reinterpret_cast<std::uintptr_t>(component), handle);\n/}"
+runm sd_read_before_scope_disabled $S "/^std::uint64_t OnDisabled/{n;s/^/  (void)IsSphere(reinterpret_cast<std::uintptr_t>(component), handle);\n/}"
+runm sd_scan_in_event_handler $S "/^std::uint64_t OnEvent/{n;s/^/  (void)level::Classify(0, false, nullptr);\n/}"

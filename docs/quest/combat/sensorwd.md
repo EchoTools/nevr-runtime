@@ -30,6 +30,8 @@ Yes, by construction, so it is scoped. Evidence:
   `run-quest2-sheet7`, an arena lobby session). Whether an arena match gives a player the ability, and so a sphere, is **not** shown by the binaries or by any log here.
 - kotorvr found the plugin's sphere hooks live in every level, Echo Arena included, and gated them to combat maps (`afk_fx.cpp:127-137`, "ARENA-ISO1 T-143": "sensorwd and olnoteam in a combat map").
 
+KNOWN-WRONG #2186: the scope's own 250 ms look is a second level answer next to `combat_scope` (F19, PR #2246); when that is on main, `InScope()` reads it, and the table clear on leaving a combat map moves into this module's tick (`combat_scope` has no change callback).
+
 So the watchdog could turn off an arena player's scanner sphere that stays up for 6 s (a change to arena), and it would read game memory on every model enable in arena. Here both are closed:
 every handler is a pass-through unless the last look found a combat map and no Echo Arena level, and the look is at most 250 ms old (a look older than 1 s is not believed).
 
@@ -38,7 +40,7 @@ every handler is a pass-through unless the last look found a combat map and no E
 1. Behaviour. Outside the scope each handler calls the game's function with the same arguments and does nothing else: no read of game memory, no lock, no counter of its own, no line. The tick
    empties the table when the scope ends. `sensorwd_test` `OutsideACombatMapEveryHandlerIsAPassThrough` runs 20 rounds of ping, enable, disable and frame on seven level states (an arena level,
    the low-spec arena level, the tutorial, an arena lobby, the combat lobby, no level, a combat map beside an arena level): the game sees exactly its own 60 calls, every counter is zero, and no
-   line is written. `AStaleOrMissingAnswerPassesEverythingThrough` shows no look and a look older than a second pass through. `LeavingTheScopeEmptiesTheTable` shows the table emptied.
+   line is written. `AStaleOrMissingAnswerPassesEverythingThrough` shows no look and a look older than a second pass through. `LeavingTheScopeEmptiesTheTable` shows the table emptied. `OutsideACombatMapEveryHandlerIsAPassThrough` also counts what the three handlers ask: zero `SafeReadCalls()` and zero `level::ScanCalls()` over the stream (the sphere check is five reads; `InACombatMapTheSphereCheckReads` shows a combat map does read, so zero is the scope's doing).
 2. Cost (ADR 0038), host microbenchmark, x86-64 -O2 (`sensorwd_test` built by hand at -O2; the combat group builds at -O0; best of 7; machine load ~15; NOT a Quest number): on an Echo Arena
    level `OnComponentEnabled` through the thunk costs +3.1 ns over a direct call of 0.3 ns, `SendComponentEventGlobal` +3.4 ns; the tick callback is 3.7 ns a frame between looks, plus a
    real `clock_gettime` of 23 ns, and a frame that looks at the levels (every 250 ms, one gamespace) is 3.3 us. The plugin paid up to five `process_vm_readv` reads on every model enable in every level.

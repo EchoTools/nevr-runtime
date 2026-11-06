@@ -7,14 +7,21 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
 namespace nevr_quest::combat {
 
+// How many reads have been asked of SafeRead in this process, so a host test can show that a path reads nothing ("arena pays nothing, by count", docs/adr/0046).
+// One relaxed add per read, next to a system call.
+inline std::atomic<std::uint64_t> g_safeReadCalls{0};
+inline std::uint64_t SafeReadCalls() noexcept { return g_safeReadCalls.load(std::memory_order_relaxed); }
+
 // Copies `length` bytes at `address` into `out`. False when any byte could not be read (nothing is promised about `out` then), for a
 // zero or implausible address, and for a range that wraps.
 inline bool SafeRead(std::uintptr_t address, void* out, std::size_t length) noexcept {
+  g_safeReadCalls.fetch_add(1, std::memory_order_relaxed);
   if (length == 0) return true;
   if (address < 0x10000 || address > 0x0000ffffffffffffULL - length) return false;
   iovec local{out, length};

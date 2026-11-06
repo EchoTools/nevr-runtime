@@ -30,7 +30,9 @@
 #include <vector>
 
 #include "nevr/symbol_hash.h"
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
@@ -600,13 +602,20 @@ void OutsideACombatMapEveryHandlerIsAPassThrough() {
     g_lines.clear();
     g_calls.clear();
     const std::uint64_t h = Make(0, true);
+    std::uint64_t reads = 0, scans = 0;  // what the three handlers asked of the game and of the level, over the whole stream (a frame's own look is not counted)
     for (int i = 0; i < 20; ++i) {
+      const std::uint64_t reads0 = nevr_quest::combat::SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
       Ping(0x11, 0x22);
       EnabledWord()(Cs(0), h);
       DisabledWord()(Cs(0), h);
+      reads += nevr_quest::combat::SafeReadCalls() - reads0;
+      scans += nevr_quest::combat::level::ScanCalls() - scans0;
       g_nowMs += 700;
       Frame();
     }
+    // ARENA PAYS NOTHING, BY COUNT: no read of game memory (the sphere check is five reads) and no level scan on the path of any of the three words.
+    if (reads != 0 || scans != 0) std::fprintf(stderr, "  %s: the handlers made %llu read(s) and %llu scan(s)\n", c.what, static_cast<unsigned long long>(reads), static_cast<unsigned long long>(scans));
+    QCHECK(reads == 0 && scans == 0);
     const sw::Stats s = sw::CurrentStats();
     if (s.enables != 0 || s.disables != 0 || s.pings != 0 || s.tracked != 0 || s.wdOff != 0 || !g_lines.empty()) std::fprintf(stderr, "  not a pass-through on %s\n", c.what);
     QCHECK(s.enables == 0 && s.disables == 0 && s.pings == 0 && s.finished == 0 && s.tracked == 0 && s.wdOff == 0 && !s.inScope);
@@ -614,6 +623,19 @@ void OutsideACombatMapEveryHandlerIsAPassThrough() {
     QCHECK(Count(kEvent) == 20 && Count(kEnabled) == 20 && Count(kDisabled) == 20 && g_calls.size() == 60U);  // the game's calls, and no other
     End();
   }
+}
+
+// The count is meaningful: the same three calls in a combat map do read (the sphere check), so zero outside it is the scope's doing.
+void InACombatMapTheSphereCheckReads() {
+  Begin();
+  Build();
+  QCHECK(InstallOn().installed);
+  Combat();
+  const std::uint64_t h = Make(0, true);
+  const std::uint64_t reads0 = nevr_quest::combat::SafeReadCalls();
+  EnabledWord()(Cs(0), h);
+  QCHECK(nevr_quest::combat::SafeReadCalls() - reads0 >= 5);
+  End();
 }
 
 // No frame yet, or a tick that has stopped: the answer is not believed (it fails closed).
@@ -872,6 +894,7 @@ int main() {
   TheLimitsAreCountedAndSaid();
   ADeadSphereIsDropped();
   OutsideACombatMapEveryHandlerIsAPassThrough();
+  InACombatMapTheSphereCheckReads();
   AStaleOrMissingAnswerPassesEverythingThrough();
   LeavingTheScopeEmptiesTheTable();
   ARefusedInstallChangesNothing();

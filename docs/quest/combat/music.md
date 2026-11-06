@@ -56,11 +56,13 @@ Arena has its own music (`mp_arena_music`), which stays exactly as stock. PostSo
 1. The handler's first step is a binary search of the 24 bank ids (`Classify`). Any other event, which is every sound arena plays, goes to the game's function with the same
    registers; nothing is counted, posted or logged.
 2. A bank event reaches code that changes anything only for the two Play ids, and only while the loaded levels hold a combat map and no Echo Arena level (`combat_level.h`,
-   `Classify` with the lobby off; an arena level wins). The handler asks the level once per Play, not per post. No frame yet, an arena level, any lobby and no level
+   `Classify` with the lobby off; an arena level wins). The ask reads the init-fiber table too (`inFlight`): a Play posted while its combat map is still building, in a map-to-map change
+   where the previous map is still loaded and the unload tick has not fired, is the map's Play and posts the Stops (upstream posts them on every Play and has no such window; an arena level
+   or a lobby building while a combat map is still loaded is not a combat Play). The handler asks the level once per Play, not per post. No frame yet, an arena level, any lobby and no level
    pass the Play through and count it (`plays_out_of_scope`).
 3. The unload tick looks at the levels only from an acted Play until the music is stopped; before that it is a published pointer and one load.
 
-`music_test` `ArenaMusicIsExactlyStock` runs one stream (all 24 bank ids, forty ids of arena music's kind, and the odd registers) directly and through the installed module on an
+`music_test` `ArenaPaysNothingByCount` counts what the arena path asks (`SafeReadCalls()`, `level::ScanCalls()`): 2,000 sounds outside the bank and the 22 other bank ids ask nothing, a Play asks the level once, a long arena match with no acted Play makes the tick ask nothing. `APlayWhileItsMapIsStillBuildingPostsTheStops` runs the map-to-map states. `music_test` `ArenaMusicIsExactlyStock` runs one stream (all 24 bank ids, forty ids of arena music's kind, and the odd registers) directly and through the installed module on an
 arena level, the arena lobby, the social lobby and no level: the game sees the same calls in the same order with the same registers, answers the same, and no extra Stop is
 posted by a Play or by the tick. `APlayOutsideACombatMapIsTheGamesCallAndNothingElse` does the same for the Play alone on ten level states.
 
@@ -83,7 +85,7 @@ writes every line after the game's function has returned. The plugin's per-post 
 
 ## Headset row (owed)
 
-On a combat APK built at a tag after this unit, or a development APK repacked with the `combat` variant word, one lobby, combat match, lobby round: the sentinel log holds
+On a combat APK built at a tag after this unit, or a development APK repacked with the `combat` variant word, one lobby, combat match, lobby round, and then a combat match straight into a different combat map (map to map, with no lobby between: the Play of the second map is posted while its map is still building): the sentinel log holds
 `combat_music_install` with `"state":"on"`, `combat_music_first`, `combat_music_play` with `"in_combat_map":1` and `"stops_posted":2` at each match start (`"prev_object"` the
 previous Play's object on the second match), and `combat_music_unload` once within about half a second of the combat map unloading. An arena match on the same APK holds none of
 the last three and the arena music plays as stock.

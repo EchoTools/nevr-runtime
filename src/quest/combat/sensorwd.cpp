@@ -344,6 +344,9 @@ void Sweep() noexcept {
                        {"msg", "tracked spheres whose component no longer reads as the sphere were dropped"}});
 }
 
+// KNOWN-WRONG #2186: this look is a second level answer next to combat_scope (F19, #2186; PR #2246), which asks the same question every 250 ms with the same
+// staleness rule. When combat_scope is on main, InScope() reads combat_scope::InCombatMap() and this look, g_scope and g_lookedAtMs go. combat_scope has no
+// change callback, so the ClearTable on the 1 to 0 edge below moves into this tick: it keeps the previous answer and detects the edge itself.
 // One look at the loaded levels: the scope is a combat map with no Echo Arena level. Leaving the scope empties the table, so nothing stale survives into
 // the next match.
 void Look(std::uintptr_t game, std::int64_t now) noexcept {

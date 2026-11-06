@@ -130,8 +130,8 @@ constexpr RealAbs64Word kRealAbs64Words[] = {
     {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x3630e58, 4},
     {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x3631278, 4},
     {"_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", 0x36316f8, 4},
-    {"_ZN10NRadEngine8CModelCS18OnComponentEnabledENS_18SCompactPoolHandleE", 0x36495c8, 2},
-    {"_ZN10NRadEngine8CModelCS19OnComponentDisabledENS_18SCompactPoolHandleE", 0x36495d0, 2},
+    {"_ZN10NRadEngine8CModelCS18OnComponentEnabledENS_18SCompactPoolHandleE", nevr_quest::combat::sensorwd::targets::kPins.enabledSlot, 2},
+    {"_ZN10NRadEngine8CModelCS19OnComponentDisabledENS_18SCompactPoolHandleE", nevr_quest::combat::sensorwd::targets::kPins.disabledSlot, 2},
     {"_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE17ConstructInstanceEPvPNS_13CPresenceInitE", 0x365ddc8, 1},
     {"_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE14CreateInstanceEPNS_13CPresenceInitE", 0x365ddd0, 1},
     {"_ZN10NRadEngine8NRadGame15CR15NetBulletCS8ShutdownEv", 0x36933e8, 1},
@@ -512,6 +512,23 @@ void CheckRealSensorwd(const LoadedElf& elf) {
   const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
   CheckTarget(elf, GotTarget{pinned::kLibR15, sd::kEventSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, sd::kPins.eventSlot},
               "libr15 CncaGameSpace::SendComponentEventGlobal JUMP_SLOT");
+  // The two ABS64 words are in CModelCS's vtable, not its sibling's (CTestModelCS lists the same two functions at the same offsets): the object symbol
+  // _ZTVN10NRadEngine8CModelCSE holds both slots, and the sibling's vtable does not.
+  Elf64_Sym vtable;
+  if (!DynamicSymbol(elf, "_ZTVN10NRadEngine8CModelCSE", &vtable)) {
+    std::fprintf(stderr, "libr15: _ZTVN10NRadEngine8CModelCSE is not in .dynsym\n");
+    QCHECK(false);
+  } else {
+    QCHECK(ELF64_ST_TYPE(vtable.st_info) == STT_OBJECT);
+    QCHECK(sd::kPins.enabledSlot >= vtable.st_value && sd::kPins.enabledSlot + 8 <= vtable.st_value + vtable.st_size);
+    QCHECK(sd::kPins.disabledSlot >= vtable.st_value && sd::kPins.disabledSlot + 8 <= vtable.st_value + vtable.st_size);
+    QCHECK(sd::kPins.enabledSlot - vtable.st_value == 0x68 && sd::kPins.disabledSlot - vtable.st_value == 0x70);
+  }
+  Elf64_Sym sibling;
+  if (DynamicSymbol(elf, "_ZTVN10NRadEngine12CTestModelCSE", &sibling)) {
+    QCHECK(!(sd::kPins.enabledSlot >= sibling.st_value && sd::kPins.enabledSlot < sibling.st_value + sibling.st_size));
+    QCHECK(!(sd::kPins.disabledSlot >= sibling.st_value && sd::kPins.disabledSlot < sibling.st_value + sibling.st_size));
+  }
   CheckDefinedAt(elf, sd::kEnabledSymbol, sd::kPins.enabledFn);
   CheckDefinedAt(elf, sd::kDisabledSymbol, sd::kPins.disabledFn);
   CheckDefinedAt(elf, sd::kEventSymbol, sd::kPins.eventFn);

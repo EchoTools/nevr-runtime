@@ -70,3 +70,7 @@ runm mu_qc_not_read     src/quest/sentinel/quest_config.cpp "s/  r.config.combat
 
 runm mu_ci_row_key       $CI "s/\"combat.music\", \&nevr_quest::CombatConfig::music}/\"combat.musik\", \&nevr_quest::CombatConfig::music}/" quest-host-combat combat_install_test
 runm mu_ci_row_member    $CI "s/\"combat.music\", \&nevr_quest::CombatConfig::music}/\"combat.music\", \&nevr_quest::CombatConfig::sensorwd}/" quest-host-combat combat_install_test
+# arena pays nothing, by count (#2277 review): a level scan on every post outside the bank, a scan on every bank post, and the map-to-map ask without the init-fiber table
+runm mu_scan_on_every_post $S "s/^  if (kind == Kind::kNone) return original(/  (void)InCombatMapNow();\n&/"
+runm mu_scan_on_every_bank_post $S "s/^  g_bankPosts.fetch_add(1, std::memory_order_relaxed);/&\n  (void)InCombatMapNow();/"
+runm mu_ask_not_in_flight $S "s/\/\*inFlight=\*\/true/\/*inFlight=*\/false/"

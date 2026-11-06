@@ -20,7 +20,9 @@
  * event of every level, so the handler first tests the event against the 24 ids of the combat music bank (a binary search of a constant table); any other
  * event, which is every sound arena plays, goes straight to the game's function. The two Play ids start a combat tree only: the handler asks the level
  * (combat_level.h Classify, a few process_vm_readv reads) once per Play, never per post, and acts only when the loaded levels hold a combat map and no
- * Echo Arena level. A Play with no combat map loaded is counted and passed through.
+ * Echo Arena level. The ask reads the init-fiber table too (`inFlight`), so a Play posted while its combat map is still building, in a map-to-map change where the
+ * previous map is still loaded, posts the Stops (upstream posts them on every Play). A Play with no combat map loaded is counted and passed through. The arena
+ * path is proved by count: music_test `ArenaPaysNothingByCount` asserts zero `SafeReadCalls()` and zero `level::ScanCalls()` for every sound outside the bank.
  *
  * Frequency (ADR 0038). PostSoundEvent runs for every sound the game posts, on the audio-posting threads, many times per frame in a busy scene (not measured on
  * a headset). The added work on a post that is not in the bank is the thunk's counter and loads plus 5 compares; a bank post (24 ids, 10-20 a match) adds

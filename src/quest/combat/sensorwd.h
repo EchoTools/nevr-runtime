@@ -24,6 +24,8 @@
  * is, as of the last look (at most 250 ms old, and not older than 1 s, else shut). In any other state the handler calls the game's function with the same
  * arguments and does nothing else: no read of game memory, no lock, no counter of its own, no line. The tick leaves the table empty outside the scope.
  *
+ * KNOWN-WRONG #2186: the scope's own look is a second level answer next to combat_scope (F19; PR #2246); see Look in sensorwd.cpp for what moves when it lands.
+ *
  * Frequency (ADR 0038). OnComponentEnabled and OnComponentDisabled run for every model component enable and disable of every level (not measured on a headset);
  * SendComponentEventGlobal runs for every component event of every level. The added work on those paths in arena is the thunk's counter and loads plus one
  * relaxed load of the scope. In a combat map the plugin's cost stays: a model enable or disable reads up to five words of game memory (process_vm_readv) to

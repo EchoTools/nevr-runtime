@@ -24,11 +24,13 @@
 #include <initializer_list>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "nevr/symbol_hash.h"
 #include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
@@ -69,10 +71,15 @@ constexpr std::size_t kTable0 = 0x1f48, kCount0 = 0x1f78, kGamespaceOwner = 0x8,
 struct Gamespace {
   std::uintptr_t words[0x60 / 8 + 1] = {};
 };
+// The gamespaces still loading: init fibers (the gamespace at fiber + 0x30) in a table of pointers at game + 0x1ed8, counted at + 0x1f08 (spelled here, as combat_level_test does).
+constexpr std::size_t kFiberRows = 0x1ed8, kFiberCount = 0x1f08, kFiberGamespace = 0x30;
 struct Game {
   std::uintptr_t words[0x2000 / 8] = {};
   std::uintptr_t table0[8][2] = {};
   Gamespace spaces[8];
+  std::uintptr_t fiberRows[4] = {};
+  std::uintptr_t fibers[4][8] = {};
+  Gamespace flight[4];
 };
 Game g_game;
 std::uintptr_t GameAddress() { return reinterpret_cast<std::uintptr_t>(g_game.words); }
@@ -89,6 +96,18 @@ void LoadLevels(std::initializer_list<const char*> names) {
   }
   g_game.words[kTable0 / 8] = reinterpret_cast<std::uintptr_t>(g_game.table0);
   g_game.words[kCount0 / 8] = static_cast<std::uintptr_t>(row);
+}
+
+// A gamespace still loading that holds `name`: in the init-fiber table, in neither of the two loaded tables.
+void AddInFlight(const char* name) {
+  const std::uintptr_t row = g_game.words[kFiberCount / 8];
+  Gamespace& gs = g_game.flight[row];
+  gs.words[kGamespaceOwner / 8] = GameAddress();
+  gs.words[kGamespaceLevel / 8] = static_cast<std::uintptr_t>(CSymbol64Hash(name));
+  g_game.fibers[row][kFiberGamespace / 8] = reinterpret_cast<std::uintptr_t>(&gs);
+  g_game.fiberRows[row] = reinterpret_cast<std::uintptr_t>(g_game.fibers[row]);
+  g_game.words[kFiberRows / 8] = reinterpret_cast<std::uintptr_t>(g_game.fiberRows);
+  g_game.words[kFiberCount / 8] = row + 1;
 }
 
 // ---- the image, the clock, the lines -------------------------------------------------------------------------------------------------------
@@ -647,6 +666,77 @@ void ArenaMusicIsExactlyStock() {
   }
 }
 
+// ARENA PAYS NOTHING, BY COUNT. A post that is not in the bank reads no game memory and asks no level; a Stop or a SetState asks nothing either; a Play asks the
+// level once (a few reads), never per post. A scan on every sound, or a read before the bank test, passes the stream test above and fails here.
+void ArenaPaysNothingByCount() {
+  Begin();
+  Build();
+  QCHECK(InstallOn().installed);
+  LoadLevels({"mpl_arena_a"});
+  Frame();
+  sentinel::SetLogSink(nullptr);
+  const auto counts = [] { return std::make_pair(nevr_quest::combat::SafeReadCalls(), nevr_quest::combat::level::ScanCalls()); };
+  const auto before = counts();
+  for (std::uint32_t i = 0; i < 2000; ++i) Post(0x12345678U + i * 7919U, i);  // none of them is in the bank
+  const auto afterOthers = counts();
+  QCHECK(afterOthers.first == before.first && afterOthers.second == before.second);
+  for (const std::uint32_t id : mu::kStop) Post(id, 3);
+  for (const std::uint32_t id : mu::kState) Post(id, 3);
+  const auto afterBank = counts();
+  QCHECK(afterBank.first == before.first && afterBank.second == before.second);
+  for (const std::uint32_t id : mu::kPlay) Post(id, 3);
+  const auto afterPlays = counts();
+  QCHECK(afterPlays.second - before.second == 2);  // one ask per Play
+  // and the tick, with no acted Play, asks nothing in a long arena match
+  for (int i = 0; i < 10; ++i) {
+    g_nowMs += 600;
+    Frame();
+  }
+  QCHECK(nevr_quest::combat::level::ScanCalls() == afterPlays.second);
+  End();
+}
+
+// MAP TO MAP: a Play posted while its combat map is still building (its gamespace is in the init-fiber table, not yet in the loaded tables) is the map's Play,
+// whether the lobby or the previous combat map is the one still loaded. Upstream posts the Stops on every Play; here the ask is made with the init-fiber table
+// read, so the Stops are posted in these states and not in the states where the new level is arena's.
+void APlayWhileItsMapIsStillBuildingPostsTheStops() {
+  struct Case {
+    const char* what;
+    const char* loaded;
+    const char* loading;
+    bool acts;
+  };
+  const Case cases[] = {{"a combat map building after the lobby", "mpl_lobby_b", "mpl_combat_gauss", true},
+                        {"a combat map building after the combat lobby", "mpl_lobby_b_combat", "mpl_combat_dyson", true},
+                        {"the next combat map building while the previous one is still loaded", "mpl_combat_dyson", "mpl_combat_fission", true},
+                        {"an arena level building while a combat map is still loaded", "mpl_combat_dyson", "mpl_arena_a", false},
+                        {"a lobby building while a combat map is still loaded", "mpl_combat_dyson", "mpl_lobby_b", false}};
+  for (const Case& c : cases) {
+    Begin();
+    Build();
+    QCHECK(InstallOn().installed);
+    LoadLevels({c.loaded});
+    AddInFlight(c.loading);
+    Frame();
+    g_calls.clear();
+    QCHECK(Post(kPlayCapture, 8) == kResult);
+    if (c.acts != (g_calls.size() == 3U)) std::fprintf(stderr, "  map to map: %s\n", c.what);
+    QCHECK(g_calls.size() == (c.acts ? 3U : 1U));
+    QCHECK(mu::CurrentStats().playsActed == (c.acts ? 1U : 0U));
+    End();
+  }
+  // and a map that is not loading, with nothing loaded, is still not a combat match
+  Begin();
+  Build();
+  QCHECK(InstallOn().installed);
+  LoadLevels({"mpl_lobby_b"});
+  Frame();
+  g_calls.clear();
+  Post(kPlayCapture, 8);
+  QCHECK(g_calls.size() == 1U);
+  End();
+}
+
 // The cost of a post that is not in the bank, with the module installed on an arena level (what an arena player's every sound pays), against a direct call
 // of the same function. Printed, not asserted: it is a host number, not a Quest one.
 void TheCostOfAPostOutsideTheBank() {
@@ -708,6 +798,8 @@ int main() {
   TheSwitchAndTheLegacyKillFile();
   PlayLinesAreCapped();
   ArenaMusicIsExactlyStock();
+  ArenaPaysNothingByCount();
+  APlayWhileItsMapIsStillBuildingPostsTheStops();
   TheCostOfAPostOutsideTheBank();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "music_test: %d check(s) failed\n", quest_test::Failures());
