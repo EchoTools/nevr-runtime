@@ -154,6 +154,16 @@ bool TestLogContains(const std::string& needle) {
                      });
 }
 
+// Every captured line that holds `needle`, whole, for a test that asserts what a single line looks like (#2215).
+std::vector<std::string> TestLogLinesContaining(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  std::vector<std::string> lines;
+  for (const std::string& message : g_testLogMessages) {
+    if (message.find(needle) != std::string::npos) lines.push_back(message);
+  }
+  return lines;
+}
+
 // Every line with the level it was logged at, for tests that pin the level (#598).
 std::vector<std::pair<EchoVR::LogLevel, std::string>> g_testLogLeveled;
 

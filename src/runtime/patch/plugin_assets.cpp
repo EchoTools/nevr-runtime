@@ -33,6 +33,7 @@
 #include "runtime/hook/patching.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/patch/game_buffer.h"
+#include "runtime/patch/resource_label.h"
 
 namespace nevr::assets {
 
@@ -297,8 +298,19 @@ void RetireHookForTest(void* target, const char* what) { RetireEngineHook(target
 RegisterStatus RegisterPluginAsset(uint64_t type, uint64_t name, const void* data, uint64_t size,
                                    const char* label) {
     Global().SetLoadedProbe(&EngineHasLoaded);
+    // A label outside the rule is refused before any line is written: no line carries a plugin's bytes, only their length
+    // and the rule (#2225). Registry::Register applies the same rule itself, so it cannot be skipped by another caller.
+    if (!nevr_resource_label::Ok(label)) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.ASSET] register refused status=%d reason=%s label_bytes=%zu type=0x%016llx name=0x%016llx bytes=%llu "
+            "rule=\"%s\" - nothing is registered",
+            static_cast<int>(RegisterStatus::BadArgument), nevr_resource_label::kReason,
+            nevr_resource_label::Bytes(label), static_cast<unsigned long long>(type),
+            static_cast<unsigned long long>(name), static_cast<unsigned long long>(size), nevr_resource_label::kRule);
+        return RegisterStatus::BadArgument;
+    }
     const RegisterStatus status = Global().Register(type, name, data, size, label);
-    const char* shown = label ? label : "";
+    const char* shown = label;  // follows the rule, so it is safe to write
     if (status != RegisterStatus::Ok) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.ASSET] register refused label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s", shown,
