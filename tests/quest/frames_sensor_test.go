@@ -64,6 +64,8 @@ const outsideSection = "nevr_outside_game_call"
 var reviewedAsmEntries = []*regexp.Regexp{
 	regexp.MustCompile(`^nevr_combat_headset_tramp$`), // src/quest/combat/headset_gates_entry.inc: CVR::HeadsetType (bot-body and menu gates)
 	regexp.MustCompile(`^nevr_combat_party_tramp$`),   // src/quest/combat/headset_gates_entry.inc: PartyMemberHeadsetType (party-permissions gate)
+	regexp.MustCompile(`^nevr_combat_dm_tp_entry$`),   // src/quest/combat/dronemuzzle_entry.inc: CncaGameSpace::WorldTeleport (drone muzzle, F4)
+	regexp.MustCompile(`^nevr_combat_dm_fire_entry$`), // src/quest/combat/dronemuzzle_entry.inc: CR15NetBulletCS::FireBullet (drone muzzle, F6)
 }
 
 // What is wrong with the library's hook records, as messages. `names` maps a function start to its symbol, `thunkEntries`
