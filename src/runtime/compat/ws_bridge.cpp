@@ -736,7 +736,7 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
           Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend name resolved account=%llu name_bytes=%zu",
               static_cast<unsigned long long>(replyFor), displayName.size());
         } else {
-          Log(EchoVR::LogLevel::Info,
+          Log(EchoVR::LogLevel::Warning,
               "[NEVR.SOCIAL] friend profile reply could not be read account=%llu reply_bytes=%zu",
               static_cast<unsigned long long>(replyFor), static_cast<size_t>(len));
         }
