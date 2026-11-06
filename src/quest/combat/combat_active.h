@@ -70,6 +70,9 @@ build_variant::Variant RecordedVariant() noexcept;
 
 // True when the folded combat modules run in this process. False until Resolve has been called.
 bool Active() noexcept;
+// True when Resolve was told this is a development build (`nevr_build::kIsDev`). False until Resolve has been called. A module that offers a
+// development-only aid (aibots' request file) asks here, so no module reads the build kind for itself.
+bool DevBuild() noexcept;
 // Why Active() is what it is; kUnresolved until Resolve has been called.
 Reason ActiveReason() noexcept;
 

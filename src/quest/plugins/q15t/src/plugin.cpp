@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <cstring>
 
-#include "aibots.h"
 #include "bvh.h"
 #include "custctx.h"
 #include "decals.h"
@@ -17,7 +16,6 @@
 #include "nevr/plugin_interface.h"
 #include "fxtrail.h"
 #include "game_tick.h"
-#include "gunconnect.h"
 #include "hudmeter.h"
 #include "impactsnd.h"
 #include "levelname.h"
@@ -33,7 +31,6 @@
 #include "module_switch.h"
 #include "voipdrop.h"
 #include "wallfire.h"
-#include "weapon_arm.h"
 
 #ifndef Q15T_BUILD_ID
 #define Q15T_BUILD_ID "b243509c08ce677aeb95fa348016949b3fc45230"
@@ -41,12 +38,8 @@
 #ifndef Q15T_LEVELNAME
 #define Q15T_LEVELNAME 0
 #endif
-// T-26: a new profile starts with the gun on the right hand, once per user id (weapon_arm.h). Plugin behaviour.
-#ifndef Q15T_T26
-#define Q15T_T26 0
-#endif
 // Gameplay and fix modules (src/<m>.{h,cpp}, docs/quest/q15t/modules/<m>.md). CMakeLists.txt owns the options and their defaults (each with the
-// reason, from the module's doc); like Q15T_T26, the default HERE is 0, so a build that names no option installs none of them and the
+// reason, from the module's doc); the default HERE is 0, so a build that names no option installs none of them and the
 // perf arms and the host-test arms stay unchanged. heaps and memsys are not modules of this plugin: they are the sentinel's early combat
 // step (src/quest/combat/heaps.h, memsys.h).
 #ifndef Q15T_FXTRAIL
@@ -63,12 +56,6 @@
 #endif
 #ifndef Q15T_PEERCLAMP
 #define Q15T_PEERCLAMP 0
-#endif
-#ifndef Q15T_GUNCONNECT
-#define Q15T_GUNCONNECT 0
-#endif
-#ifndef Q15T_AIBOTS
-#define Q15T_AIBOTS 0
 #endif
 #ifndef Q15T_BVH
 #define Q15T_BVH 0
@@ -167,12 +154,6 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_PEERCLAMP
     "peerclamp "
-#endif
-#if Q15T_GUNCONNECT
-    "gunconnect "
-#endif
-#if Q15T_AIBOTS
-    "aibots "
 #endif
 #if Q15T_BVH
     "bvh "
@@ -288,7 +269,6 @@ NEVR_PLUGIN_API NevrPluginInfo NevrPluginGetInfo(void) {
 NEVR_PLUGIN_API uint32_t NevrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
 NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
-  if (Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
   // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), impactsnd (sound ids), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and
   // shieldgamma (what is drawn), ecfx (rides ec).
@@ -297,8 +277,6 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   if (Q15T_DRONEKILL) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_DRONEMUZZLE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_POWERBOOST > 0) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_AIBOTS) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_GUNCONNECT) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_BVH) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;       // walls block line of sight, bullets and AI
   if (Q15T_WALLFIRE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // no shot through a wall
   if (Q15T_LEVELNAME) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the full-size global_mp loads
@@ -313,11 +291,10 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   const bool covers_id = Covers(ctx, offsetof(NevrGameContext, game_build_id) + sizeof(ctx->game_build_id));
   const bool quest = (ctx->flags & NEVR_HOST_PLATFORM_QUEST) != 0;
   const char* id = covers_id && ctx->game_build_id != nullptr ? ctx->game_build_id : "";
-  const NevrLogField start[] = {{"game_build_id", id}, {"pinned", Q15T_BUILD_ID}, {"t26", Q15T_T26 ? "1" : "0"},
-                                {"modules", kCompiledModules}};
-  Log(NEVR_LOG_INFO, "q15t init", start, 4);
+  const NevrLogField start[] = {{"game_build_id", id}, {"pinned", Q15T_BUILD_ID}, {"modules", kCompiledModules}};
+  Log(NEVR_LOG_INFO, "q15t init", start, 3);
   if (!quest || !covers_id || std::strcmp(id, Q15T_BUILD_ID) != 0) {
-    Log(NEVR_LOG_WARNING, "refused: not the pinned game build", start, 4);
+    Log(NEVR_LOG_WARNING, "refused: not the pinned game build", start, 3);
     return 0;  // loaded, nothing installed
   }
   RegisterScriptRedirect(ctx);  // the combat libraries (#1737): all or nothing; plugin init runs after the first hooked dlopen
@@ -445,25 +422,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
     const InstallResult r = InstallMusic(base);
     ReportModule("music", r);
     if (r.status == SwapStatus::kOk) AddModuleTick("music", &MusicTick, &want_tick);
-  }
-#endif
-#if Q15T_GUNCONNECT
-  InitGunConnect(base, GunConnectFns{});  // an all-null table: resolved from the loaded game library on the first tick
-  ReportModuleTick("gunconnect", AddGameTick(&GunConnectTick), &want_tick);
-#endif
-#if Q15T_AIBOTS
-  InitAiBots(base, AiBotsFns{});
-  ReportModuleTick("aibots", AddGameTick(&AiBotsTick), &want_tick);
-#endif
-#if Q15T_T26
-  {
-    WeaponArmFns arm_fns{};
-    if (ResolveWeaponArmFns(&arm_fns)) {
-      InitWeaponArm(ctx->base_addr, arm_fns);
-      AddModuleTick("weapon_arm", &WeaponArmTick, &want_tick);
-    } else {
-      Log(NEVR_LOG_ERROR, "t26 not installed: an engine export is missing (not the pinned build?)");
-    }
   }
 #endif
   if (want_tick) {

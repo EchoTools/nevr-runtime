@@ -20,7 +20,7 @@
  *
  * The line (sentinel log), one per phase per process (N17: each module's outcome by name, and one aggregate):
  *   {"event":"combat_install","phase":"early|normal","state":"ran","variant":"none|q15t|combat|perf-probe","active":1,
- *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"results":"<name>=<status> ...","results_truncated":0,"msg":"..."}
+ *    "active_reason":"variant|forced|...","modules":<n>,"installed":<n>,"failed":<n>,"off":<n>,"results":"<name>=<status> ...","results_truncated":0,"msg":"..."}
  * `active`, `results_truncated` and `force` are 1 or 0, as in the sentinel's `config_loaded` line.
  * Info when every module installed (and when none is registered), Warning when one did not. A process where combat does not run writes
  * `"state":"skipped","active":0` once, Info, whichever phase asks first. A normal step that never got its moment writes
@@ -49,9 +49,12 @@ enum class Phase { kEarly, kNormal };
 const char* PhaseName(Phase phase) noexcept;  // "early", "normal"
 
 // What one module's install function answers: whether it installed, and a fixed token for the line (never a value).
+// `off` is a module that is switched off by its `combat:` key: nothing was installed and nothing is wrong, so it is neither installed nor
+// failed (`installed` is false) and the phase line counts it apart.
 struct ModuleResult {
   bool installed;
   const char* status;
+  bool off = false;
 };
 using InstallFn = ModuleResult (*)() noexcept;
 
@@ -71,6 +74,7 @@ struct Outcome {
   std::size_t modules = 0;    // the modules that have a step in this phase
   std::size_t installed = 0;
   std::size_t failed = 0;
+  std::size_t off = 0;        // switched off by their `combat:` key: not installed, not failed
 };
 
 // The two steps, over the shipped table. Each runs at most once per process.

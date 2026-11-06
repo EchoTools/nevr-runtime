@@ -5,8 +5,10 @@
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/aibots.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/gunconnect.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/instmodel.h"
@@ -17,6 +19,7 @@
 #include "quest/combat/refresh_rate.h"
 #include "quest/combat/shaderstep.h"
 #include "quest/combat/tablestep.h"
+#include "quest/combat/weapon_arm.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -38,6 +41,17 @@ ModuleResult MeshstepNormal() noexcept { return meshstep::Install(g_config.meshs
 ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tablestep.on); }
 ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
 ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
+
+// The three modules of #2185. Each is off unless its key says true; aibots also takes its scenario text and whether this is a development build.
+ModuleResult GunconnectNormal() noexcept { return gunconnect::Install(g_config.gunconnect.on); }
+ModuleResult AibotsNormal() noexcept {
+  aibots::Switches switches;
+  switches.on = g_config.aibots.on;
+  switches.scenario = g_config.aibotsScenario.source == nevr_quest::Source::kFile ? g_config.aibotsScenario.text : nullptr;
+  switches.devBuild = DevBuild();
+  return aibots::Install(switches);
+}
+ModuleResult WeaponArmNormal() noexcept { return weapon_arm::Install(g_config.weaponArm.on); }
 
 ModuleResult GatesNormal() noexcept {
   headset_gates::Switches switches;
@@ -67,6 +81,11 @@ constexpr std::array kModules{
     Module{"tablestep", nullptr, &TablestepNormal, "combat.tablestep", &nevr_quest::CombatConfig::tablestep},
     Module{"instmodel", nullptr, &InstmodelNormal, "combat.instmodel", &nevr_quest::CombatConfig::instmodel},
     Module{"shaderstep", nullptr, &ShaderstepNormal, "combat.shaderstep", &nevr_quest::CombatConfig::shaderstep},
+    // gunconnect, aibots, weapon_arm (#2185), in the plugin's order: after the table steps, which the plugin installed earlier in its list, they register tick
+    // callbacks, so they come after the tick's row; before the gates, which the plugin installed after all its modules.
+    Module{"gunconnect", nullptr, &GunconnectNormal, "combat.gunconnect", &nevr_quest::CombatConfig::gunconnect},
+    Module{"aibots", nullptr, &AibotsNormal, "combat.aibots", &nevr_quest::CombatConfig::aibots},
+    Module{"weapon_arm", nullptr, &WeaponArmNormal, "combat.weapon_arm", &nevr_quest::CombatConfig::weaponArm},
     // gates (#2180): the plugin installed them after its tick and its modules (after the table steps above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
@@ -116,7 +135,9 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     if (fn == nullptr) continue;
     const ModuleResult result = fn();
     ++outcome.modules;
-    if (result.installed) {
+    if (result.off) {
+      ++outcome.off;
+    } else if (result.installed) {
       ++outcome.installed;
     } else {
       ++outcome.failed;
@@ -135,13 +156,15 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
   if (outcome.modules == 0) {
     std::snprintf(msg, sizeof(msg), "no combat module has a step in this phase yet; nothing of combat's is installed");
   } else {
-    std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s", outcome.installed, outcome.modules,
+    char off[64] = "";
+    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off by %s config key", outcome.off, outcome.off == 1 ? "its" : "their");
+    std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s%s", outcome.installed, outcome.modules, off,
                   outcome.failed == 0 ? "" : "; the others keep the game's own behaviour");
   }
   sentinel::LogFields(outcome.failed == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install",
                       {{"phase", PhaseName(phase)}, {"state", "ran"}, {"variant", build_variant::VariantName(RecordedVariant())},
                        {"active", 1}, {"active_reason", ReasonName(ActiveReason())}, {"modules", outcome.modules},
-                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"results", results},
+                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"results", results},
                        {"results_truncated", truncated ? 1 : 0}, {"msg", msg}});
   return outcome;
 }

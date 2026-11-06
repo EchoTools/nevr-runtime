@@ -59,12 +59,14 @@ PROGRAMS = {
         "autopilot_run_test",
     ),
     "combat": (
+        "aibots_test",
         "combat_active_test",
         "combat_gates_test",
         "combat_install_test",
         "combat_level_test",
         "combat_tick_test",
         "equip_refire_test",
+        "gunconnect_test",
         "headset_gates_library_name_test",
         "headset_gates_test",
         "heap_step_test",
@@ -79,6 +81,7 @@ PROGRAMS = {
         "tablestep_test",
         "pfx_test",
         "pfxtev_test",
+        "weapon_arm_test",
     ),
     "data": (
         "data_step_test",

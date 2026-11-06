@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys and combat.meshstep, combat.instmodel, combat.shaderstep and combat.tablestep. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys and combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev and combat.gunconnect, combat.aibots, combat.aibots_scenario and combat.weapon_arm. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -248,6 +248,25 @@ combat:
   # `combat_pfxtev_install` says what was read. `false` refuses the six. A value that is not a boolean keeps the default, with a warning that names the
   # key. Read once at launch. Default (absent): true.
   # pfxtev: false
+
+  # Quest only. Booleans. Three small combat modules that act on the game, each on unless the file says `false` (the q15t build of the combat mod has all three on).
+  # They run where the combat modules run (see `force`), read once at launch; a value that is not a boolean keeps the default, with a warning in the sentinel
+  # log that names the key. The sentinel log lines `combat_gunconnect_install`, `combat_aibots_install` and `combat_weapon_arm_install` say what was read, and
+  # each module's acting lines (`combat_gunconnect_connect`, `combat_aibots_enable`, `combat_weapon_arm_set`) say what it did. None of them acts in an Echo
+  # Arena level.
+  # gunconnect: false leaves the local player's guns as the game has them. Otherwise the game's gun connect is called for them in a combat level when the game
+  # left them unconnected (offline practice), so they fire. Default (absent): true.
+  # gunconnect: false
+  # aibots: false leaves the practice bots standing still, as the game has them. Otherwise the game's AI scenario is started for the bots of a practice match
+  # in a combat level. Default (absent): true.
+  # aibots: false
+  # aibots_scenario: which scenario `aibots` starts: a number 0-6 or one of patrol, randomattack, weaponattack, spike, aithrowtest, aionevone, aibdebugarena;
+  # `off` turns the bots off. A word that is none of these keeps RandomAttack, with a warning that does not name it. Default (absent): randomattack.
+  # aibots_scenario: randomattack
+  # weapon_arm: false leaves the gun hand of a new profile as the game has it. Otherwise the gun of a profile the module has not handled before is put in the
+  # right hand, once per profile, the first time it is in a combat level. The profile's marker file stays under `files/q15t` of the app's external files
+  # directory. Default (absent): true.
+  # weapon_arm: false
 
   # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
   # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard
