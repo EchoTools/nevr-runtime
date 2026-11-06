@@ -20,7 +20,6 @@
 #include "game_tick.h"
 #include "gunconnect.h"
 #include "headset_gates.h"
-#include "hudmeter.h"
 #include "impactsnd.h"
 #include "instmodel.h"
 #include "levelname.h"
@@ -33,7 +32,6 @@
 #include "script_redirect.h"
 #include "sensorwd.h"
 #include "shaderstep.h"
-#include "shieldgamma.h"
 #include "sendguard.h"
 #include "tablestep.h"
 #include "combat_gates.h"
@@ -136,17 +134,11 @@
 #ifndef Q15T_POWERBOOST  // 0 off, 1 read-only, 2 swallow, 3 cone (cone sends from ec's net tick: needs Q15T_EC)
 #define Q15T_POWERBOOST 0
 #endif
-#ifndef Q15T_HUDMETER
-#define Q15T_HUDMETER 0
-#endif
 #ifndef Q15T_TABLESTEP  // issue #1552: shader-set table growth step 32 -> 1 (tablestep.cpp)
 #define Q15T_TABLESTEP 0
 #endif
 #ifndef Q15T_SENDGUARD  // script send to a game space that is not loaded: dropped, not faulted (sendguard.cpp)
 #define Q15T_SENDGUARD 0
-#endif
-#ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
-#define Q15T_SHIELDGAMMA 0
 #endif
 #ifndef Q15T_SHADERSTEP
 #define Q15T_SHADERSTEP 0
@@ -253,12 +245,6 @@ constexpr char kCompiledModules[] =
 #if Q15T_POWERBOOST
     "powerboost "
 #endif
-#if Q15T_HUDMETER
-    "hudmeter "
-#endif
-#if Q15T_SHIELDGAMMA
-    "shieldgamma "
-#endif
 #if Q15T_TABLESTEP
     "tablestep "
 #endif
@@ -357,8 +343,7 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
   if (Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
-  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), impactsnd (sound ids), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and
-  // shieldgamma (what is drawn), ecfx (rides ec).
+  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), impactsnd (sound ids), music (audio events), sensorwd (a stuck scanner sphere), ecfx (rides ec).
   if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_DRONEKILL) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
@@ -493,12 +478,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
     if (r.status == SwapStatus::kOk) AddModuleTick("powerboost", &PowerboostGameTick, &want_tick);
 #endif
   }
-#endif
-#if Q15T_HUDMETER
-  ReportModule("hudmeter", InstallHudmeter(base));
-#endif
-#if Q15T_SHIELDGAMMA
-  ReportModule("shieldgamma", InstallShieldGamma(base, (Q15T_SHIELDGAMMA & 1) != 0, (Q15T_SHIELDGAMMA & 2) != 0));
 #endif
 #if Q15T_TABLESTEP
   ReportModule("tablestep", InstallTableStep(base));

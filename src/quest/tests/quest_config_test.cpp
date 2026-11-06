@@ -1261,7 +1261,11 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
   };
   const Key keys[] = {{"refresh_rate", &nevr_quest::CombatConfig::refreshRate, true},
                       {"refresh_rate_lobby", &nevr_quest::CombatConfig::refreshRateLobby, false},
-                      {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true}};
+                      {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true},
+                      // #2186: shieldgamma_gamma is OFF by default (a test switch upstream), the other two are on
+                      {"hudmeter", &nevr_quest::CombatConfig::hudmeter, true},
+                      {"shieldgamma_gamma", &nevr_quest::CombatConfig::shieldgammaGamma, false},
+                      {"shieldgamma_tube_mirror", &nevr_quest::CombatConfig::shieldgammaTubeMirror, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);

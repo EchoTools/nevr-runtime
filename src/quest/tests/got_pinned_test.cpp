@@ -29,7 +29,9 @@
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/combat_tick_targets.h"
 #include "quest/combat/heaps_targets.h"
+#include "quest/combat/hudmeter_targets.h"
 #include "quest/combat/memsys_targets.h"
+#include "quest/combat/shieldgamma_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/game_login_failures.h"
@@ -393,6 +395,31 @@ void CheckRealHeapsAndMemsys(const LoadedElf& elf) {
   QCHECK(allocSiteIsPinned && initSiteIsPinned);  // the instruction at each return address is among the pinned words
 }
 
+// The wrist HUD and shield colour modules' pins (src/quest/combat/hudmeter_targets.h, shieldgamma_targets.h, #2186) against the real libr15: each
+// JUMP_SLOT resolves at its pin and names the function defined at the pinned address, and every pinned code word (Enter's and Update's first
+// instruction, and the instructions that load the data layout the handlers read) is the one in the file.
+void CheckRealWristHudAndShieldColour(const LoadedElf& elf) {
+  namespace hud = nevr_quest::combat::hudmeter;
+  namespace sg = nevr_quest::combat::shieldgamma;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, hud::kSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, hud::kSlotVaddr},
+              "libr15 CSetCanvasElementAttributesNode::Enter JUMP_SLOT");
+  CheckDefinedAt(elf, hud::kSymbol, hud::kFnVaddr);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, sg::kSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, sg::kSlotVaddr},
+              "libr15 CSetMaterialPropertyNode::Update JUMP_SLOT");
+  CheckDefinedAt(elf, sg::kSymbol, sg::kFnVaddr);
+  const auto check = [mem](const char* what, std::uint64_t vaddr, std::uint32_t pinnedWord) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + vaddr, sizeof(have));
+    if (have != pinnedWord) {
+      std::fprintf(stderr, "libr15 %s: the word at %#llx is %#x, not the pinned %#x\n", what, static_cast<unsigned long long>(vaddr), have, pinnedWord);
+      QCHECK(false);
+    }
+  };
+  for (const auto& w : hud::kWords) check(w.what, w.vaddr, w.word);
+  for (const auto& w : sg::kWords) check(w.what, w.vaddr, w.word);
+  QCHECK(hud::kWords[0].vaddr == hud::kFnVaddr && sg::kWords[0].vaddr == sg::kFnVaddr);  // the first word of each is the function's own first instruction
+}
 
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
@@ -576,6 +603,7 @@ int main(int argc, char** argv) {
   CheckRealAbs64Words(r15);
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
+  CheckRealWristHudAndShieldColour(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

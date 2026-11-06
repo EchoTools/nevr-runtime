@@ -8,8 +8,10 @@
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/hudmeter.h"
 #include "quest/combat/memsys.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/combat/shieldgamma.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -27,6 +29,10 @@ ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on)
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
+ModuleResult HudmeterNormal() noexcept { return hudmeter::Install(g_config.hudmeter.on); }
+ModuleResult ShieldgammaNormal() noexcept {
+  return shieldgamma::Install(g_config.shieldgammaGamma.on, g_config.shieldgammaTubeMirror.on);
+}
 
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
@@ -39,6 +45,9 @@ constexpr std::array kModules{
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
+    // hudmeter, then shieldgamma (#2186): both read the combat level answer (combat_scope.h), which they enrol with the tick themselves.
+    Module{"hudmeter", nullptr, &HudmeterNormal},
+    Module{"shieldgamma", nullptr, &ShieldgammaNormal},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -139,6 +148,10 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"refresh_rate_lobby", config.refreshRateLobby.on ? 1 : 0}, {"refresh_rate_lobby_source", source(config.refreshRateLobby.source)},
                        {"refresh_rate_quest2_72", config.refreshRateQuest2At72.on ? 1 : 0},
                        {"refresh_rate_quest2_72_source", source(config.refreshRateQuest2At72.source)},
+                       {"hudmeter", config.hudmeter.on ? 1 : 0}, {"hudmeter_source", source(config.hudmeter.source)},
+                       {"shieldgamma_gamma", config.shieldgammaGamma.on ? 1 : 0}, {"shieldgamma_gamma_source", source(config.shieldgammaGamma.source)},
+                       {"shieldgamma_tube_mirror", config.shieldgammaTubeMirror.on ? 1 : 0},
+                       {"shieldgamma_tube_mirror_source", source(config.shieldgammaTubeMirror.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
 }

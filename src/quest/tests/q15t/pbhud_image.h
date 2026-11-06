@@ -1,4 +1,4 @@
-// A fake game-library image for the powerboost / hudmeter / shieldgamma host tests: one lazily committed anonymous mapping
+// A fake game-library image for the host tests of the q15t modules that hook a pinned slot (powerboost, tablestep): one lazily committed anonymous mapping
 // so that `base + ELF vaddr` of the pinned build is a real, readable, writable address. Slot words (JUMP_SLOT / GLOB_DAT) are
 // written at their real ELF vaddrs, the slot pages are made read-only as RELRO is, and a "real function" at an ELF vaddr is a
 // 12-byte x86-64 trampoline (movabs rax, fn; jmp rax) on its own RWX page. x86-64 host only.

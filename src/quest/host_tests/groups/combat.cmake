@@ -31,7 +31,7 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # not_started record, and the `combat_config` line.
 nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} ${_cident}
   SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
-      src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/heaps.cpp src/quest/combat/hudmeter.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
 # CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
@@ -63,7 +63,7 @@ nevr_ht_test(memsys_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ciden
 # the variants the gate allows (and a development build forced on), and each shipped row reads its switch.
 nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
-      src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/heaps.cpp src/quest/combat/hudmeter.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp)
 # The game-thread tick (#2172, docs/adr/0046; docs/adr/0039): the real thunk and GotHook against the JUMP_SLOT of a libr15 image built in
 # memory. The callback table, the vptr check (read once per object, not once per frame), and who owns the slot on each variant (plain release,
@@ -73,7 +73,7 @@ nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
 nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   INCS src/quest/plugins/q15t/src
   SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
-      src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/heaps.cpp src/quest/combat/hudmeter.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
       src/quest/plugins/q15t/src/game_tick.cpp src/quest/plugins/q15t/src/import_hook.cpp src/quest/plugins/q15t/src/got_swap.cpp
       src/quest/plugins/q15t/src/safe_read.cpp src/quest/plugins/q15t/src/plugin_log.cpp)
@@ -81,10 +81,26 @@ nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
 # through the tick, the lobbies arena players use, the legacy kill files, the release case (the game's own rate, nothing logged or registered).
 nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
-      src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp
+      src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/hudmeter.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp src/quest/combat/memsys.cpp
       src/quest/sentinel/build_variant.cpp)
 # What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
 # combat lobby and an Echo Arena level, each id checked against the CSymbol64 of its name; the lobbies arena players use are no class; an arena
 # level wins; a gamespace of another game, an absurd count and an unreadable game are no level.
 nevr_ht_test(combat_level_test GROUP combat ${_cf} TIMEOUT 120
   SRC src/quest/tests/combat_level_test.cpp src/quest/combat/combat_level.cpp)
+# Whether a combat level is loaded, as a cache the hooks on shared slots read for free (#2186): the production refresh against a model of the
+# gamespace tables and a fake clock. Fails closed, the combat map and the combat lobby are combat, every Echo Arena level and every lobby arena
+# players use is not, an arena level wins, one look per spacing and not per frame, one Info line per change and none for an arena match.
+nevr_ht_test(combat_scope_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/combat_scope_test.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+# The wrist HUD's heat fill (#2186): the real handler through the thunk, installed by the real GotHook into the JUMP_SLOT of a libr15 image built in
+# memory, called through the slot. The plugin's checks, moved with the same assertions, and the arena path: outside a combat level the game's
+# function with the same arguments, no read of the data, no write, no line. got_pinned_test resolves the relocation and the code words in the real libr15.
+nevr_ht_test(hudmeter_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/hudmeter_test.cpp src/quest/combat/hudmeter.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp
+      src/quest/combat/combat_tick.cpp)
+# The shield colour and the tube mirror (#2186): the same shape of test for CSetMaterialPropertyNode::Update, including the second call on a copy of
+# the data, and the arena path with both switches on.
+nevr_ht_test(shieldgamma_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/shieldgamma_test.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp
+      src/quest/combat/combat_tick.cpp)

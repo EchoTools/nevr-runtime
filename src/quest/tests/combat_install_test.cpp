@@ -217,9 +217,10 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  // The normal step runs the tick (combat_tick.h) first and the refresh-rate rule after it (#2172). On the host no libr15 is loaded, so the
-  // tick is refused and named; the rule installs (it registers its callback for a tick that may come later).
-  QCHECK(normal.ran && normal.modules == 2 && normal.installed == 1 && normal.failed == 1);
+  // The normal step runs the tick (combat_tick.h) first, then the refresh-rate rule (#2172), then the wrist HUD and the shield colour (#2186).
+  // On the host no libr15 is loaded, so the tick and the two hooks are refused and named; the rule installs (it registers its callback for a
+  // tick that may come later).
+  QCHECK(normal.ran && normal.modules == 4 && normal.installed == 1 && normal.failed == 3);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -227,7 +228,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed\""));
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed hudmeter=module_not_loaded shieldgamma=module_not_loaded\""));
   }
   Done();
 }
@@ -302,16 +303,26 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     // The module switches: on by default, each with its source.
     QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
+    // The wrist HUD and the shield colour (#2186): the HUD and the tube mirror on, the gamma off, each from the default.
+    QCHECK(Has(lines[0].text, "\"hudmeter\":1") && Has(lines[0].text, "\"hudmeter_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"shieldgamma_gamma\":0") && Has(lines[0].text, "\"shieldgamma_gamma_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"shieldgamma_tube_mirror\":1") && Has(lines[0].text, "\"shieldgamma_tube_mirror_source\":\"default\""));
   }
   g_lines.clear();
   cfg.heaps = {false, nevr_quest::Source::kFile};
   cfg.memsys = {true, nevr_quest::Source::kFile};
+  cfg.hudmeter = {false, nevr_quest::Source::kFile};
+  cfg.shieldgammaGamma = {true, nevr_quest::Source::kFile};
+  cfg.shieldgammaTubeMirror = {false, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
   const std::vector<Line> switches = Lines("combat_config");
   QCHECK(switches.size() == 1U);
   if (switches.size() == 1U) {
     QCHECK(Has(switches[0].text, "\"heaps\":0") && Has(switches[0].text, "\"heaps_source\":\"config\""));
     QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"hudmeter\":0") && Has(switches[0].text, "\"hudmeter_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"shieldgamma_gamma\":1") && Has(switches[0].text, "\"shieldgamma_gamma_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"shieldgamma_tube_mirror\":0") && Has(switches[0].text, "\"shieldgamma_tube_mirror_source\":\"config\""));
   }
   Done();
 }
@@ -345,6 +356,38 @@ void TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection() {
   Done();
 }
 
+// The wrist HUD and shield colour rows read their keys from the resolved section (#2186): with the defaults each attempts its install (and, with
+// no libr15 on the host, names the refusal); the file's word reaches the row, and the shield colour with both its switches false is off.
+void TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection() {
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig defaults;
+  QCHECK(defaults.hudmeter.on && !defaults.shieldgammaGamma.on && defaults.shieldgammaTubeMirror.on);
+  combat::SetConfig(defaults);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "hudmeter=module_not_loaded shieldgamma=module_not_loaded"));
+  QCHECK(Lines("combat_hudmeter_install").size() == 1U && Has(Lines("combat_hudmeter_install")[0].text, "\"result\":\"refused\""));
+  QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"gamma\":0,\"tube_mirror\":1"));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig off;
+  off.hudmeter = {false, nevr_quest::Source::kFile};
+  off.shieldgammaTubeMirror = {false, nevr_quest::Source::kFile};  // the gamma is off too: both false
+  combat::SetConfig(off);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "hudmeter=off shieldgamma=off"));
+  QCHECK(Has(Lines("combat_hudmeter_install")[0].text, "\"reason\":\"off_config\""));
+  QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"reason\":\"off_config\""));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig gammaOnly;
+  gammaOnly.shieldgammaGamma = {true, nevr_quest::Source::kFile};
+  gammaOnly.shieldgammaTubeMirror = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(gammaOnly);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_shieldgamma_install")[0].text, "\"gamma\":1,\"tube_mirror\":0"));
+  Done();
+}
+
 }  // namespace
 
 int main() {
@@ -361,6 +404,7 @@ int main() {
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();
   TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection();
+  TheHudmeterAndShieldgammaRowsReadTheirKeysFromTheResolvedSection();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

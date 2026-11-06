@@ -33,7 +33,7 @@ option(Q15T_EC "ec (R43...): the EC network client, EC token page, tac-mod store
 option(Q15T_ECFX "ecfx: NEUTRON wall-effect queue drain on ec's net tick; needs Q15T_EC. Switch file neutronfx.on" ON)
 set(Q15T_EC_DEFAULT_WORDS "types=VPTO equip hide" CACHE STRING "ec: the words used when no ec switch file exists (empty: ec stays off without a file). Default = the source build's latest on-list preset ec_preset3 (ec_preset3.on)")
 option(Q15T_ECFX_DEFAULT_ON "ecfx: on with no neutronfx.on file (the source build's on-list ships neutronfx.on)" ON)
-# TEST ONLY in the source build, but on in its wave19a on-list (droneguard, peerclamp, dronekill, dronemuzzle, hudmeter, powerboost): ON here.
+# TEST ONLY in the source build, but on in its wave19a on-list (droneguard, peerclamp, dronekill, dronemuzzle, powerboost): ON here.
 # Droneguard's second stage, the levelname pair and the gate options below stay OFF (not in the on-list, or they need content in the pack).
 option(Q15T_DRONEGUARD "droneguard (R35): skip a per-frame Follow call. Source: TEST ONLY; on in the wave19a on-list" ON)
 option(Q15T_DRONEGUARD_IDX "droneguard stage 1 (needs Q15T_DRONEGUARD). Source: TEST ONLY" OFF)
@@ -42,7 +42,6 @@ option(Q15T_DRONEKILL "dronekill (R45,R47,R48): drone kill / lock-on / gun / cha
 option(Q15T_DRONEMUZZLE "dronemuzzle (R49,R50): a drone's bullets leave its gun; needs Q15T_DRONEKILL. Source: TEST ONLY; on in the wave19a on-list; tick" ON)
 set(Q15T_POWERBOOST 3 CACHE STRING "powerboost (R51-R56) stage: 0 off, 1 read-only, 2 swallow, 3 cone (cone needs Q15T_EC; tick). Source: TEST ONLY; the wave19a on-list ships an empty powerboost.on = swallow + cone = 3")
 set_property(CACHE Q15T_POWERBOOST PROPERTY STRINGS 0 1 2 3)
-option(Q15T_HUDMETER "hudmeter (R57): the wrist HUD's weapon-slot heat fill stops being 0 x 0. Source: hudmeter.on; on in the wave19a on-list" ON)
 option(Q15T_MUSIC "music (T-48): the combat music is stopped when a match ends or a new one starts, so instances do not stack. Source: default ON; tick" ON)
 option(Q15T_SENSORWD "sensorwd (T-07): a scanner sphere still enabled 6 s after its enable is turned off again. Source: default ON (on-list); tick" ON)
 # shaderstep (issue #1553): the CGShaderSetResource table growth step is 1, set when the factory constructs the object. Off: shaderstep.off.
@@ -52,9 +51,6 @@ option(Q15T_INSTMODEL "instmodel (disassembly 0x1a078dc): CGInstancedModelResour
 # pfx (issue #1631): the particle-effect renderer's gate, read by every pfx* module. Kill file pfx.off in the data directory. The working build has
 # the renderer on, so ON here; the source build's On() is off unless pfx.on exists (the renderer itself is not ported yet: docs/quest/q15t/modules/pfx.md).
 option(Q15T_PFX "pfx (#1631): the particle-effect renderer's gate, the switch every pfx* module reads. Working build: on. Kill file pfx.off" ON)
-# shieldgamma: a bitmask, 1 = gamma (a TEST switch, off in the source), 2 = tube mirror (the ship form, on in the source).
-set(Q15T_SHIELDGAMMA 2 CACHE STRING "shieldgamma (R58) bitmask: 1 gamma, 2 tube mirror, 0 not built. Source default: mirror on, gamma off")
-set_property(CACHE Q15T_SHIELDGAMMA PROPERTY STRINGS 0 1 2 3)
 option(Q15T_IMPACTSND_NOWRITE "impactsnd: read and log only, no row is written" OFF)
 # tablestep (issue #1552): the shader-set resource table's growth step 32 -> 1 (CFactory<CGShaderSetResource>::CreateInstance, disassembly
 # libr15 0x1a0707c, a wrapper on its three data slots). Source: the shipped variant's word row (extra_rows: 0) is not in the APK, so
@@ -86,9 +82,6 @@ endif()
 if(NOT Q15T_POWERBOOST MATCHES "^[0-3]$")
   message(FATAL_ERROR "Q15T_POWERBOOST must be 0, 1, 2 or 3 (got '${Q15T_POWERBOOST}')")
 endif()
-if(NOT Q15T_SHIELDGAMMA MATCHES "^[0-3]$")
-  message(FATAL_ERROR "Q15T_SHIELDGAMMA must be 0, 1, 2 or 3 (got '${Q15T_SHIELDGAMMA}')")
-endif()
 if(Q15T_POWERBOOST EQUAL 3 AND NOT Q15T_EC)
   message(WARNING "Q15T_POWERBOOST=3 without Q15T_EC: there is no net tick, the cone stage is refused at run time and stage 2 stays")
 endif()
@@ -97,7 +90,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/script_redirect.cpp src/import_hook.cpp src/combat_map.cpp src/game_tick.cpp src/safe_read.cpp src/headset_gates.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
-foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL DECALS PFX PFXTEV)
+foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE LEVELNAME MUSIC SENSORWD INSTMODEL DECALS PFX PFXTEV)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -105,9 +98,6 @@ foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPAC
 endforeach()
 if(Q15T_POWERBOOST GREATER 0)
   list(APPEND Q15T_SOURCES src/powerboost.cpp)
-endif()
-if(Q15T_SHIELDGAMMA GREATER 0)
-  list(APPEND Q15T_SOURCES src/shieldgamma.cpp)
 endif()
 if(Q15T_TABLESTEP)
   list(APPEND Q15T_SOURCES src/tablestep.cpp)
@@ -142,7 +132,7 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_WALLFIRE=$<BOOL:${Q15T_WALLFIRE}> Q15T_IMPACTSND=$<BOOL:${Q15T_IMPACTSND}> Q15T_EC=$<BOOL:${Q15T_EC}> Q15T_ECFX=$<BOOL:${Q15T_ECFX}>
   Q15T_DRONEGUARD=$<BOOL:${Q15T_DRONEGUARD}> Q15T_DRONEGUARD_IDX=$<BOOL:${Q15T_DRONEGUARD_IDX}> Q15T_PEERCLAMP=$<BOOL:${Q15T_PEERCLAMP}>
   Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
-  Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
+  Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}>
   Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}> Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
   Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}> Q15T_PFX=$<BOOL:${Q15T_PFX}>
   Q15T_PFXTEV=$<BOOL:${Q15T_PFXTEV}>)
