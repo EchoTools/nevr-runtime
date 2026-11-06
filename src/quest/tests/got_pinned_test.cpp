@@ -30,7 +30,11 @@
 #include "quest/combat/combat_tick_targets.h"
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
+#include "quest/combat/instmodel_targets.h"
 #include "quest/combat/memsys_targets.h"
+#include "quest/combat/meshstep_targets.h"
+#include "quest/combat/shaderstep_targets.h"
+#include "quest/combat/tablestep_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/combat/sendguard_targets.h"
@@ -395,6 +399,53 @@ void CheckRealHeapsAndMemsys(const LoadedElf& elf) {
   QCHECK(allocSiteIsPinned && initSiteIsPinned);  // the instruction at each return address is among the pinned words
 }
 
+// The four resource table-step modules' pins (src/quest/combat/{meshstep,instmodel,shaderstep,tablestep}_targets.h, #2177) against the real libr15:
+// the two JUMP_SLOTs resolve at their pins and name the constructors defined at the pinned addresses, the two factory words (ABS64, checked in
+// CheckRealAbs64Words) name the two factory functions defined at the pinned addresses, and every pinned code word is the one in the file.
+void CheckRealTableSteps(const LoadedElf& elf) {
+  namespace ms = nevr_quest::combat::meshstep;
+  namespace im = nevr_quest::combat::instmodel;
+  namespace ss = nevr_quest::combat::shaderstep;
+  namespace tbs = nevr_quest::combat::tablestep;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, ms::kSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, ms::kPins.slot},
+              "libr15 CGMeshListResource constructor JUMP_SLOT");
+  CheckTarget(elf, GotTarget{pinned::kLibR15, im::kSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, im::kPins.slot},
+              "libr15 CGInstancedModelResource constructor JUMP_SLOT");
+  CheckDefinedAt(elf, ms::kSymbol, ms::kPins.ctor);
+  CheckDefinedAt(elf, im::kSymbol, im::kPins.ctor);
+  CheckDefinedAt(elf, ss::kSymbol, ss::kPins.fn);
+  CheckDefinedAt(elf, tbs::kSymbol, tbs::kPins.fn);
+  // The factory words are the two the ABS64 table pins, and the slots the targets name.
+  bool shaderWord = false;
+  bool tableWord = false;
+  for (const RealAbs64Word& w : kRealAbs64Words) {
+    shaderWord = shaderWord || (std::strcmp(w.symbol, ss::kSymbol) == 0 && w.vaddr == ss::kPins.slot);
+    tableWord = tableWord || (std::strcmp(w.symbol, tbs::kSymbol) == 0 && w.vaddr == tbs::kPins.slot);
+  }
+  QCHECK(shaderWord && tableWord);
+  const auto checkWords = [&mem](const char* module, const nevr_quest::combat::table_step::PinWord* words, std::size_t count) {
+    for (std::size_t i = 0; i < count; ++i) {
+      std::uint32_t have = 0;
+      std::memcpy(&have, mem + words[i].vaddr, sizeof(have));
+      if (have != words[i].word) {
+        std::fprintf(stderr, "libr15 %s word at %#llx is %#x, pinned %#x\n", module, static_cast<unsigned long long>(words[i].vaddr), have,
+                     words[i].word);
+        QCHECK(false);
+      }
+    }
+  };
+  checkWords("meshstep", ms::kWords, ms::kWordCount);
+  checkWords("instmodel", im::kWords, im::kWordCount);
+  checkWords("tablestep", tbs::kWords, tbs::kWordCount);
+  // The two data words the reconstruction reads its vtables from are the GLOB_DAT words of the two vtable symbols (a pin on any other word reads
+  // another object's address: 0x36fc7d8 is a JUMP_SLOT of an unrelated function).
+  CheckTarget(elf, GotTarget{pinned::kLibR15, ms::kVtblPresenceSymbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, ms::kPins.vtblPresence},
+              "libr15 CPresence vtable GLOB_DAT");
+  CheckTarget(elf, GotTarget{pinned::kLibR15, ms::kVtblMeshSymbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, ms::kPins.vtblMesh},
+              "libr15 CGMeshListResource vtable GLOB_DAT");
+}
+
 // The headset gates' pins (src/quest/combat/headset_gates_targets.h) against the real libr15: both JUMP_SLOTs resolve at their pins, the symbols are the
 // functions the pins call real (defined at the pinned addresses), each caller range's return-address site is inside its range and among the pinned
 // words, and every pinned word is the one in the file.
@@ -666,6 +717,7 @@ int main(int argc, char** argv) {
   CheckRealAbs64Words(r15);
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
+  CheckRealTableSteps(r15);
   CheckRealHeadsetGates(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");

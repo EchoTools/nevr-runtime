@@ -18,7 +18,11 @@
 #include "quest/combat/combat_active.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/meshstep.h"
+#include "quest/combat/shaderstep.h"
+#include "quest/combat/tablestep.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
@@ -155,7 +159,7 @@ void AModuleSwitchedOffByItsKeyIsCountedApart() {
 // The end of the process: each module's end step runs in table order, once combat runs here and its normal step ran; never before the step
 // ran, and never in a plain release.
 void TheEndOfTheProcessRunsEachModulesEndStep() {
-  const combat::Module table[] = {{"a", nullptr, &NormalA, &EndA}, {"none", nullptr, &NormalDecals}, {"b", nullptr, &NormalImpact, &EndB}};
+  const combat::Module table[] = {{"a", nullptr, &NormalA, nullptr, nullptr, &EndA}, {"none", nullptr, &NormalDecals}, {"b", nullptr, &NormalImpact, nullptr, nullptr, &EndB}};
   Process(bv::Variant::kCombat);
   combat::RunEnd(table, 3);
   QCHECK(g_calls.empty());  // the normal step has not run
@@ -260,48 +264,56 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
   Done();
 }
 
-// The shipped table's rows: heaps then memsys in the early phase; tick, refresh_rate, sendguard, pfx and pfxtev in the normal phase, sendguard with an end-of-process step.
+// The shipped table's rows: heaps then memsys in the early phase; the tick, the rule, the four table steps, the gates, sendguard, pfx and pfxtev in the normal phase, sendguard with an end-of-process step and a `combat_config_switch` record.
 void TheShippedTableRowsAreWiredToTheirSteps() {
   std::size_t count = 0;
   const combat::Module* table = combat::ShippedModules(&count);
-  QCHECK(count == 8);
-  if (count == 8) {
+  QCHECK(count == 12);
+  if (count == 12) {
     QCHECK(std::strcmp(table[0].name, "heaps") == 0 && table[0].early != nullptr && table[0].normal == nullptr);
     QCHECK(std::strcmp(table[1].name, "memsys") == 0 && table[1].early != nullptr && table[1].normal == nullptr);
-    QCHECK(std::strcmp(table[5].name, "sendguard") == 0);
-    QCHECK(table[5].early == nullptr && table[5].normal != nullptr && table[5].end != nullptr);
+    QCHECK(std::strcmp(table[9].name, "sendguard") == 0);
+    QCHECK(table[9].switchKey != nullptr && std::strcmp(table[9].switchKey, "combat.sendguard") == 0 && table[9].switchMember == &nevr_quest::CombatConfig::sendguard);
+    QCHECK(table[9].early == nullptr && table[9].normal != nullptr && table[9].end != nullptr);
   }
 }
 
-// The real steps, with the table as it ships: heaps and memsys have an early step, in that order. The normal step runs the tick (combat_tick.h)
-// first and the refresh-rate rule after it (#2172), then sendguard (#2179), then the pfx gate and the event-effect decision (#2188), which hook
-// nothing. On the host no libr15 is loaded, so the tick and sendguard are refused and named; the rule and the two decisions install.
-void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal() {
+// The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and nothing has a normal one yet. No
+// libr15 is loaded in this process, so each module refuses with its fixed token and the line names both; the normal phase writes its one
+// line with no modules.
+void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal() {
   nevr_quest::combat::heaps::ResetForTest();
   nevr_quest::combat::memsys::ResetForTest();
+  nevr_quest::combat::meshstep::ResetForTest();
+  nevr_quest::combat::tablestep::ResetForTest();
+  nevr_quest::combat::instmodel::ResetForTest();
+  nevr_quest::combat::shaderstep::ResetForTest();
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2 && early.off == 0);
-  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the headset gates (#2180), sendguard (#2179) and,
-  // last, the pfx gate and the event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick, the gates and
-  // sendguard are refused and named; the rule installs (it registers its callback for a tick that may come later), and so do the two decisions.
-  QCHECK(normal.ran && normal.modules == 6 && normal.installed == 3 && normal.failed == 3 && normal.off == 0);
+  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the four resource table steps in the plugin's order
+  // (#2177), the headset gates (#2180), sendguard (#2179) and, last, the pfx gate and the event-effect decision, which hook nothing (#2188). On the host no libr15 is
+  // loaded, so the tick, the table steps, the gates and sendguard are refused and named ; the rule installs (it registers its callback
+  // for a tick that may come later), and so do the two decisions.
+  QCHECK(normal.ran && normal.modules == 10 && normal.installed == 3 && normal.failed == 7 && normal.off == 0);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
     QCHECK(Has(lines[0].text, "\"phase\":\"early\"") && Has(lines[1].text, "\"phase\":\"normal\""));
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
-    QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick, gates and sendguard make the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed gates=module_not_loaded sendguard=module_not_loaded pfx=installed pfxtev=installed\""));
+    QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
+    QCHECK(Has(lines[1].text,
+               "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded tablestep=module_not_loaded instmodel=module_not_loaded "
+               "shaderstep=module_not_loaded gates=module_not_loaded sendguard=module_not_loaded pfx=installed pfxtev=installed\""));
   }
   Done();
 }
 
 // The shipped rows switched off by the configuration the constructor's step handed over: each answers off, and the phase line counts it
 // apart (neither installed nor failed), at Info, with the message saying so. heaps off and memsys on: heaps is off, memsys (no libr15 here)
-// fails; sendguard off in the normal phase: the tick and the gates still fail (no libr15), and the rule, pfx and pfxtev install.
+// fails; sendguard off in the normal phase: the tick, the table steps and the gates still fail (no libr15), and the rule, pfx and pfxtev install.
 void AShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
   nevr_quest::combat::heaps::ResetForTest();
   nevr_quest::combat::memsys::ResetForTest();
@@ -313,16 +325,16 @@ void AShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.modules == 2 && early.installed == 0 && early.failed == 1 && early.off == 1);
-  QCHECK(normal.modules == 6 && normal.installed == 3 && normal.failed == 2 && normal.off == 1);
+  QCHECK(normal.modules == 10 && normal.installed == 3 && normal.failed == 6 && normal.off == 1);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=off memsys=module_not_loaded\"") && Has(lines[0].text, "\"off\":1"));
     QCHECK(Has(lines[0].text, "0 of 2 combat modules installed in this phase; 1 off by its config key; the others keep"));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick
-    QCHECK(Has(lines[1].text, "tick=module_not_loaded refresh_rate=installed gates=already_ran sendguard=off_config pfx=installed pfxtev=installed"));
+    QCHECK(Has(lines[1].text, "sendguard=off_config pfx=installed pfxtev=installed"));
     QCHECK(Has(lines[1].text, "\"off\":1"));
-    QCHECK(Has(lines[1].text, "3 of 6 combat modules installed in this phase; 1 off by its config key; the others keep"));
+    QCHECK(Has(lines[1].text, "3 of 10 combat modules installed in this phase; 1 off by its config key; the others keep"));
   }
   Done();
 }
@@ -393,8 +405,6 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     QCHECK(Has(lines[0].text, "\"refresh_rate\":1") && Has(lines[0].text, "\"refresh_rate_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"refresh_rate_lobby\":0") && Has(lines[0].text, "\"refresh_rate_lobby_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"refresh_rate_quest2_72\":1") && Has(lines[0].text, "\"refresh_rate_quest2_72_source\":\"default\""));
-    // sendguard: on by default, from the default; a file's word, either way, is the file's
-    QCHECK(Has(lines[0].text, "\"sendguard\":1") && Has(lines[0].text, "\"sendguard_source\":\"default\""));
     QCHECK(Has(lines[1].text, "\"force\":1") && Has(lines[1].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"refresh_rate_lobby\":0") && Has(lines[1].text, "\"refresh_rate_lobby_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"refresh_rate\":1"));
@@ -402,11 +412,12 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     QCHECK(Has(lines[0].text, "\"pfx\":1") && Has(lines[0].text, "\"pfx_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"pfxtev\":1") && Has(lines[0].text, "\"pfxtev_source\":\"default\""));
     QCHECK(Has(lines[2].text, "\"force\":0") && Has(lines[2].text, "\"force_source\":\"config\""));
-    QCHECK(Has(lines[2].text, "\"sendguard\":0") && Has(lines[2].text, "\"sendguard_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"msg\":"));
     // The module switches: on by default, each with its source.
     QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
+    // The four resource table steps (#2177) are records of their own (combat_config_switch), not keys of this full line.
+    QCHECK(!Has(lines[0].text, "meshstep") && !Has(lines[0].text, "tablestep") && !Has(lines[0].text, "sendguard"));
   }
   g_lines.clear();
   cfg.heaps = {false, nevr_quest::Source::kFile};
@@ -417,6 +428,34 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   if (switches.size() == 1U) {
     QCHECK(Has(switches[0].text, "\"heaps\":0") && Has(switches[0].text, "\"heaps_source\":\"config\""));
     QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"msg\":"));  // the line is not cut off: one sentinel line holds 768 bytes
+  }
+  // The four resource table steps (#2177): one `combat_config_switch` record each, generated from the registration table. instmodel, shaderstep and
+  // tablestep and meshstep are on by default, each with its source; the file's word where it gave one.
+  g_lines.clear();
+  nevr_quest::CombatConfig tables;
+  combat::LogConfig(tables);
+  tables.meshstep = {false, nevr_quest::Source::kFile};
+  tables.tablestep = {false, nevr_quest::Source::kFile};
+  tables.sendguard = {false, nevr_quest::Source::kFile};  // sendguard's record (#2179) is generated from its table row like the four
+  combat::LogConfig(tables);
+  const std::vector<Line> records = Lines("combat_config_switch");
+  QCHECK(records.size() == 10U);  // five per call, in the table's order
+  const char* const order[] = {"meshstep", "tablestep", "instmodel", "shaderstep", "sendguard"};
+  const char* const wantFirst[] = {"\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
+                                   "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\""};
+  const char* const wantSecond[] = {"\"on\":0,\"source\":\"config\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
+                                    "\"on\":1,\"source\":\"default\"", "\"on\":0,\"source\":\"config\""};
+  if (records.size() == 10U) {
+    for (std::size_t i = 0; i < 5; ++i) {
+      for (std::size_t call = 0; call < 2; ++call) {
+        const Line& line = records[call * 5 + i];
+        QCHECK(line.level == sentinel::LogLevel::kInfo);
+        QCHECK(line.text.substr(line.text.find("\"event\"")) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + order[i] + "\",\"key\":\"combat." + order[i] +
+                                        "\"," + (call == 0 ? wantFirst[i] : wantSecond[i]) + "}");
+        QCHECK(line.text.size() < 200);
+      }
+    }
   }
   Done();
 }
@@ -571,7 +610,7 @@ int main() {
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
   TheShippedTableRowsAreWiredToTheirSteps();
-  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal();
+  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal();
   AShippedRowSwitchedOffByTheConfigIsCountedAsOff();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();

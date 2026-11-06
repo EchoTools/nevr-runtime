@@ -86,9 +86,10 @@ runm ci_off_no_message     $CI "s/    if (outcome.off != 0) std::snprintf/    if
 runm ci_end_before_step    $CI "s/ || StateOf(Phase::kNormal).load(std::memory_order_acquire) != kDone) return;  \/\/ nothing was installed/) return;/" quest-host-combat combat_install_test
 runm ci_end_when_inactive  $CI "s/  if (!Active() || StateOf(Phase::kNormal)/  if (StateOf(Phase::kNormal)/" quest-host-combat combat_install_test
 runm ci_end_not_called     $CI "s/    if (table\[i\].end != nullptr) table\[i\].end();/    (void)table;/" quest-host-combat combat_install_test
-runm ci_row_end_null       $CI "s/&SendguardNormal, \&sendguard::NoteEnd}/\&SendguardNormal, nullptr}/" quest-host-combat combat_install_test
+runm ci_row_end_null       $CI "s/&nevr_quest::CombatConfig::sendguard, \&sendguard::NoteEnd}/\&nevr_quest::CombatConfig::sendguard, nullptr}/" quest-host-combat combat_install_test
 runm ci_row_early          $CI "s/Module{\"sendguard\", nullptr, \&SendguardNormal,/Module{\"sendguard\", \&SendguardNormal, nullptr,/" quest-host-combat combat_install_test
-runm ci_config_line_value  $CI "s/{\"sendguard\", config.sendguard.on ? 1 : 0},/{\"sendguard\", 1},/" quest-host-combat combat_install_test
+runm ci_row_key_typo       $CI "s/\"combat.sendguard\", \&nevr_quest::CombatConfig::sendguard/\"combat.sendguards\", \&nevr_quest::CombatConfig::sendguard/" quest-host-combat combat_install_test
+runm ci_row_no_record      $CI "s/\"combat.sendguard\", \&nevr_quest::CombatConfig::sendguard, /nullptr, nullptr, /" quest-host-combat combat_install_test
 QC=src/quest/sentinel/quest_config.cpp
 runm qc_default_off        $QC "s/const bool on = ReadBool(cfg, key, fallback, r);/const bool on = ReadBool(cfg, key, !fallback, r);/" quest-host-shared quest_config_test
 runm qc_key_typo           $QC "s/kCombatSendguardKey = \"combat.sendguard\";/kCombatSendguardKey = \"combat.sendguards\";/" quest-host-shared quest_config_test

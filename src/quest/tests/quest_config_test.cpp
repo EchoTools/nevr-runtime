@@ -1164,6 +1164,11 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
   };
   const Key keys[] = {{"heaps", &nevr_quest::CombatConfig::heaps},
                       {"memsys", &nevr_quest::CombatConfig::memsys},
+                      // the resource table steps (#2177)
+                      {"meshstep", &nevr_quest::CombatConfig::meshstep},
+                      {"instmodel", &nevr_quest::CombatConfig::instmodel},
+                      {"shaderstep", &nevr_quest::CombatConfig::shaderstep},
+                      {"tablestep", &nevr_quest::CombatConfig::tablestep},
                       {"sendguard", &nevr_quest::CombatConfig::sendguard}};
   for (const Key& key : keys) {
     const std::string section = std::string("combat:\n  ") + key.name + ": ";
@@ -1187,11 +1192,13 @@ void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
       CHECK(!r.fileRejected && !(r.config.combat.*key.member).on && (r.config.combat.*key.member).source == Source::kFile);
       CHECK(!HasLevel(r, LogLevel::kWarn) && !EventsContain(r, "unknown_nested="));
       CHECK(!r.config.combat.force.on);  // no other key moved
-      for (const Key& untouched : keys) {
-        if (untouched.member != key.member) CHECK((r.config.combat.*untouched.member).on);  // each other module's switch is its own
+      const bool other = key.member == &nevr_quest::CombatConfig::heaps ? r.config.combat.memsys.on : r.config.combat.heaps.on;
+      CHECK(other);  // the other module's switch is its own
+      for (const Key& each : keys) {
+        if (each.member != key.member) CHECK((r.config.combat.*each.member).on);  // and no other key moved
       }
     }
-    for (const char* value : {"maybe", "2", "[true]", "{a: 1}", ""}) {  // a value nobody meant: on, and the key is named
+    for (const char* value : {"maybe", "2", "[true]", "{a: 1}", ""}) {  // a value nobody meant: the default, and the key is named
       const LoadResult r = Load(Full(), section + value + "\n");
       CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
       CHECK(EventsWithAreAtLevel(r, ("config file key=" + full + " rejected reason=").c_str(), LogLevel::kWarn));
