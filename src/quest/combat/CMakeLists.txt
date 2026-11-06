@@ -13,6 +13,7 @@ add_library(nevr_quest_combat STATIC
   combat_level.cpp
   combat_tick.cpp
   equip_refire.cpp
+  headset_gates.cpp
   heaps.cpp
   instmodel.cpp
   match_tags.cpp

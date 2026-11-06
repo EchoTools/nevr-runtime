@@ -5,6 +5,7 @@
 #include "runtime/patch/invite_config.h"
 
 #include <array>
+#include <cstring>
 #include <exception>
 #include <optional>
 #include <string_view>
@@ -53,6 +54,10 @@ constexpr const char* kCombatMeshstepKey = "combat.meshstep";      // Quest only
 constexpr const char* kCombatInstmodelKey = "combat.instmodel";    // Quest only (default true, #2177)
 constexpr const char* kCombatShaderstepKey = "combat.shaderstep";  // Quest only (default true, #2177)
 constexpr const char* kCombatTablestepKey = "combat.tablestep";    // Quest only (default true, #2177)
+constexpr const char* kCombatGatePermKey = "combat.gate_perm";            // Quest only (default true, #2180)
+constexpr const char* kCombatGateBotsKey = "combat.gate_bots";            // Quest only (default true, #2180)
+constexpr const char* kCombatGateLinkKey = "combat.gate_link";            // Quest only (default true, #2180)
+constexpr const char* kCombatGateLinkLibsKey = "combat.gate_link_libs";   // Quest only (default: the 21 libraries of the combat entries, #2180)
 constexpr const char* kCombatPfxKey = "combat.pfx";                // Quest only (default true, #2188)
 constexpr const char* kCombatPfxtevKey = "combat.pfxtev";          // Quest only (default true, #2188)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
@@ -315,6 +320,27 @@ CombatSwitch ReadCombatSwitch(const nevr::NevrConfig& cfg, const char* key, Load
   return {on, given ? Source::kFile : Source::kAbsent};
 }
 
+// A folded combat module's text value (#2180). A string: that text, from the file (an empty one is kept: the module reads it as "none"). A text
+// longer than the buffer, or a value that is not a string, keeps the module's default with a Warning that names the key. The text is never logged.
+CombatText ReadCombatText(const nevr::NevrConfig& cfg, const char* key, LoadResult& r) {
+  CombatText out;
+  const std::optional<std::string> value = cfg.GetString(key);
+  if (!value) {
+    if (cfg.Kind(key) != nevr::NodeKind::kAbsent) {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_a_string (default stays)");
+    }
+    return out;
+  }
+  if (value->size() >= kCombatTextMax) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=too_long (default stays)");
+    return out;
+  }
+  std::memcpy(out.text, value->data(), value->size());
+  out.text[value->size()] = '\0';
+  out.source = Source::kFile;
+  return out;
+}
+
 // Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
 void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& path) {
   if (!cfg.UnsetBareVars().empty()) {
@@ -324,11 +350,14 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
             " (the text is kept as written; a key that uses one counts as unset)");
   }
   if (cfg.DuplicateKeyCount() != 0 || cfg.UnknownKeyCount() != 0) {
-    // Counts only (#583): the first value of a duplicate is the one read, and an unknown key is ignored.
+    // The counts and the key names (#583, #2244), never a value: the first value of a duplicate is the one read, and an
+    // unknown key is ignored.
     Add(r, LogLevel::kWarn,
         "config file=" + path + " duplicates=" + std::to_string(cfg.DuplicateKeyCount()) +
             " unknown_nested=" + std::to_string(cfg.UnknownKeyCount()) +
-            " (a duplicate key's first value is read; an unknown key is ignored; no names or values are logged)");
+            " (a duplicate key's first value is read; an unknown key is ignored) duplicate_keys=" +
+            nevr::JoinKeyNamesForLog(cfg.DuplicateKeyNames()) +
+            " unknown_keys=" + nevr::JoinKeyNamesForLog(cfg.UnknownKeyNames()));
   }
   for (const KeySpec& k : kKeys) {
     bool unsetBare = false;
@@ -368,6 +397,10 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.instmodel = ReadCombatSwitch(cfg, kCombatInstmodelKey, r);
   r.config.combat.shaderstep = ReadCombatSwitch(cfg, kCombatShaderstepKey, r);
   r.config.combat.tablestep = ReadCombatSwitch(cfg, kCombatTablestepKey, r);
+  r.config.combat.gatePerm = ReadCombatSwitch(cfg, kCombatGatePermKey, r);
+  r.config.combat.gateBots = ReadCombatSwitch(cfg, kCombatGateBotsKey, r);
+  r.config.combat.gateLink = ReadCombatSwitch(cfg, kCombatGateLinkKey, r);
+  r.config.combat.gateLinkLibs = ReadCombatText(cfg, kCombatGateLinkLibsKey, r);
   r.config.combat.pfx = ReadCombatSwitch(cfg, kCombatPfxKey, r);
   r.config.combat.pfxtev = ReadCombatSwitch(cfg, kCombatPfxtevKey, r);
   r.config.plugins = cfg.Plugins();

@@ -32,6 +32,8 @@
  *   {"event":"combat_config_switch","module":"meshstep","key":"combat.meshstep","on":0|1,"source":"config|default"}
  * so a unit adds a row, never a key on a line that one sentinel line (768 bytes) cannot hold. The step also hands the configuration to SetConfig,
  * which the registration table's rows read for their module's switch.
+ * A module whose keys do not fit that line and that predates the record reports them on a line of its own beside it: `combat_config_gates` (the headset gates,
+ * with the same `<key>` and `<key>_source` fields; `gate_link_libs` is a text and is never logged, only its source).
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */

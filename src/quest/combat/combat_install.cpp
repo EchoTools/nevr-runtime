@@ -7,6 +7,7 @@
 
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
@@ -38,6 +39,14 @@ ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tab
 ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
 ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
 
+ModuleResult GatesNormal() noexcept {
+  headset_gates::Switches switches;
+  switches.perm = g_config.gatePerm.on;
+  switches.bots = g_config.gateBots.on;
+  switches.link = g_config.gateLink.on;
+  switches.linkLibs = g_config.gateLinkLibs.source == nevr_quest::Source::kFile ? g_config.gateLinkLibs.text : nullptr;
+  return headset_gates::Install(switches);
+}
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
 
@@ -58,6 +67,8 @@ constexpr std::array kModules{
     Module{"tablestep", nullptr, &TablestepNormal, "combat.tablestep", &nevr_quest::CombatConfig::tablestep},
     Module{"instmodel", nullptr, &InstmodelNormal, "combat.instmodel", &nevr_quest::CombatConfig::instmodel},
     Module{"shaderstep", nullptr, &ShaderstepNormal, "combat.shaderstep", &nevr_quest::CombatConfig::shaderstep},
+    // gates (#2180): the plugin installed them after its tick and its modules (after the table steps above); they register the tick callback the bot gate reads the game from.
+    Module{"gates", nullptr, &GatesNormal},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},
@@ -172,6 +183,13 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
                         {{"module", module.name}, {"key", module.switchKey}, {"on", sw.on ? 1 : 0}, {"source", source(sw.source)}});
   }
+  // A log line is one fixed 768-byte buffer (sentinel/hook_log.cpp): the headset gates' keys are a line of their own, so no line is cut.
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_gates",
+                      {{"gate_perm", config.gatePerm.on ? 1 : 0}, {"gate_perm_source", source(config.gatePerm.source)},
+                       {"gate_bots", config.gateBots.on ? 1 : 0}, {"gate_bots_source", source(config.gateBots.source)},
+                       {"gate_link", config.gateLink.on ? 1 : 0}, {"gate_link_source", source(config.gateLink.source)},
+                       {"gate_link_libs_source", source(config.gateLinkLibs.source)},
+                       {"msg", "the headset gates' keys (src/quest/combat/headset_gates.h); gate_link_libs is a text and is never logged, only where it came from"}});
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }

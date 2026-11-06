@@ -36,6 +36,7 @@ inline constexpr std::size_t kGrowthHeadroom = 32;
 inline constexpr HookBudgetRow kHookBudget[] = {
     {"combat/combat_tick.cpp", 1, 0},
     {"combat/equip_refire.cpp", 6, 0},
+    {"combat/headset_gates.cpp", 2, 0},
     {"combat/heaps.cpp", 4, 0},
     {"combat/instmodel.cpp", 1, 0},
     {"combat/match_tags.cpp", 2, 0},
@@ -70,6 +71,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"sentinel/texture_menu_hook.cpp", 5, 0},
     {"sentinel/texture_quality_hook.cpp", 2, 0},
     {"sentinel/vk_ext_window.cpp", 2, 0},
+    {"sentinel/vk_alloc_check.cpp", 1, 0},
     {"sentinel/vk_free_guard.cpp", 1, 0},
     {"social/menu_version_label.cpp", 1, 0},
     {"social/social_install.cpp", 2, 0},

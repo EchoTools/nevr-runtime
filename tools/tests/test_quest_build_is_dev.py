@@ -33,6 +33,8 @@ class KIsDevFollowsTheTag(unittest.TestCase):
         (self.repo / "cmake").mkdir()
         for name in FILES:
             shutil.copy(ROOT / "cmake" / name, self.repo / "cmake" / name)
+        (self.repo / "tools").mkdir()
+        shutil.copy(ROOT / "tools" / "next_release_version.py", self.repo / "tools" / "next_release_version.py")
         (self.repo / "gen.cmake").write_text(
             "include(${CMAKE_SOURCE_DIR}/cmake/nevr_build_info.cmake)\nnevr_generate_build_info(${CMAKE_SOURCE_DIR})\n"
         )

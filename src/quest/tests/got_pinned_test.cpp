@@ -28,6 +28,7 @@
 #include "login_title_hook.h"
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/instmodel_targets.h"
 #include "quest/combat/memsys_targets.h"
@@ -444,6 +445,44 @@ void CheckRealTableSteps(const LoadedElf& elf) {
               "libr15 CGMeshListResource vtable GLOB_DAT");
 }
 
+// The headset gates' pins (src/quest/combat/headset_gates_targets.h) against the real libr15: both JUMP_SLOTs resolve at their pins, the symbols are the
+// functions the pins call real (defined at the pinned addresses), each caller range's return-address site is inside its range and among the pinned
+// words, and every pinned word is the one in the file.
+void CheckRealHeadsetGates(const LoadedElf& elf) {
+  namespace hg = nevr_quest::combat::headset_gates;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, hg::kPartySymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, hg::kPins.partySlot},
+              "libr15 CR15NetGame::PartyMemberHeadsetType JUMP_SLOT");
+  CheckTarget(elf, GotTarget{pinned::kLibR15, hg::kHeadsetSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, hg::kPins.headsetSlot},
+              "libr15 CVR::HeadsetType JUMP_SLOT");
+  CheckDefinedAt(elf, hg::kPartySymbol, hg::kPins.partyFn);
+  CheckDefinedAt(elf, hg::kHeadsetSymbol, hg::kPins.headsetFn);
+  for (const hg::Word& w : hg::kWords) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + w.vaddr, sizeof(have));
+    if (have != w.word) {
+      std::fprintf(stderr, "libr15 headset gate word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(w.vaddr), have, w.word);
+      QCHECK(false);
+    }
+  }
+  // The bot gate's condition: the LoadLevelName vtable word is the slot levelname's own table pins as an ABS64 relocation of CR15Game::LoadLevelName, and
+  // the stock function is levelname's kFnVaddr. kRealAbs64Words above is what checks the slot; these are its values, and the symbol is defined at the stock address.
+  QCHECK(hg::kPins.levelNameSlot == 0x362ef90 && hg::kPins.levelNameStock == 0x1202ecc);
+  CheckDefinedAt(elf, "_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", hg::kPins.levelNameStock);  // the stock function the slot holds
+  // The call sites: the return address of each gate's call is in its range, and the instruction there is pinned.
+  const struct {
+    std::uint64_t site, lo, hi;
+  } sites[] = {{0x232c814, hg::kPins.permLo, hg::kPins.permHi}, {0x124dd44, hg::kPins.botsLo, hg::kPins.botsHi}, {0x202baa4, hg::kPins.linkLo, hg::kPins.linkHi}};
+  for (const auto& site : sites) {
+    QCHECK(site.site >= site.lo && site.site < site.hi);
+    bool pinnedWord = false;
+    for (const hg::Word& w : hg::kWords) pinnedWord = pinnedWord || w.vaddr == site.site;
+    QCHECK(pinnedWord);
+  }
+  // The Bind's frame: `stp x19, x30, [sp, #0x10]` after `sub sp, sp, #0x20` puts the caller's address at sp + 0x18.
+  QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -538,12 +577,36 @@ int main(int argc, char** argv) {
       QCHECK(false);
     }
   }
+  // The allocation of GPU memory (#2262): Allocate's slot, and the error word it passes to the error maker.
+  CheckTarget(r15, pinned::LibR15VkAllocate(), "libr15 CGRawInterfaceVK::Allocate(VkMemoryRequirements, ...) JUMP_SLOT");
+  {
+    std::uint64_t code = 0;
+    std::memcpy(&code, static_cast<const unsigned char*>(r15.mem) + pinned::kVkAllocErrorCodeVaddr, sizeof(code));
+    if (code != pinned::kVkAllocErrorCode) {
+      std::fprintf(stderr, "libr15 Allocate error symbol at %#llx is %#llx, pinned %#llx\n",
+                   static_cast<unsigned long long>(pinned::kVkAllocErrorCodeVaddr), static_cast<unsigned long long>(code),
+                   static_cast<unsigned long long>(pinned::kVkAllocErrorCode));
+      QCHECK(false);
+    }
+  }
+  // The two arrays Allocate appends to: the words that load their bases and append, and the block array in .bss.
+  for (const pinned::PinnedCode* block :
+       {&pinned::kVkAllocTableAdrp, &pinned::kVkAllocTableAdd, &pinned::kVkAllocFreeAppend, &pinned::kVkAllocBlockAppend}) {
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block->vaddr, block->code, block->words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the words at %#llx differ from the pinned ones\n", block->name,
+                   static_cast<unsigned long long>(block->vaddr));
+      QCHECK(false);
+    }
+  }
+  QCHECK(NobitsHolds(r15, pinned::vk_block_layout::kTableVaddr,
+                     pinned::vk_block_layout::kCountVaddr + sizeof(std::uint32_t) - pinned::vk_block_layout::kTableVaddr));
   // The array and its count lie in .bss, and the count follows the last of 512 entries.
   QCHECK(NobitsHolds(r15, pinned::vk_hole_layout::kTableVaddr,
                      pinned::vk_hole_layout::kCountVaddr + sizeof(std::uint32_t) - pinned::vk_hole_layout::kTableVaddr));
   for (const pinned::PinnedFunction* f :
        {&pinned::kRefreshRTSize, &pinned::kEngineResize, &pinned::kVrInitialized, &pinned::kVrGraphicsInitialized,
-        &pinned::kVrDisplayLost, &pinned::kLocalAppDataDirectory, &pinned::kVkFree}) {
+        &pinned::kVrDisplayLost, &pinned::kLocalAppDataDirectory, &pinned::kVkAllocate, &pinned::kErrMsgCreateAndAddError,
+        &pinned::kVkFree}) {
     if (DynamicSymbolValue(r15, f->name) != f->vaddr) {
       std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", f->name, static_cast<unsigned long long>(f->vaddr));
       QCHECK(false);
@@ -627,6 +690,7 @@ int main(int argc, char** argv) {
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
   CheckRealTableSteps(r15);
+  CheckRealHeadsetGates(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

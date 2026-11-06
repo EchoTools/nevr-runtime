@@ -9,7 +9,7 @@ name: Build
 #
 # A release is a plain semver tag vX.Y.Z plus GitHub's pre-release flag. The version is exactly the tag
 # (cmake/set_project_version_from_git.cmake): a CI build exactly on the tag stamps X.Y.Z, any other build
-# stamps X.Y.(Z+1)-dev.<N>+<sha>. Every release event goes through one packaging path: the build asserts
+# stamps <next>-dev.<N>+<sha>. Every release event goes through one packaging path: the build asserts
 # the DLL's identity literal (tools/package_release.py stamp), gates it and assembles the package tree
 # (tools/package_release.py tree), and seals it (seal): the Windows
 # zip, attested and published with the Quest library (the .tar.zst archives stay a workflow artifact; the
@@ -178,6 +178,55 @@ jobs:
       with:
         name: core-installer-unstripped
         path: build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+        if-no-files-found: error
+        retention-days: 1
+
+  # The core install method as a static library for nevr-runtime.dll (ADR 0024, section 3: one signed file). The builder image has no
+  # Rust, and the build job must not install it, so this job builds the library the way the installer job builds the exe and hands it
+  # over as an artifact; the build job waits for it before it configures and passes the file to CMake (NEVR_INSTALL_LIB).
+  core-library:
+    needs: guard
+    timeout-minutes: 20
+    if: ${{ !cancelled() && needs.guard.result == 'success' && needs.guard.outputs.built != 'true' && (github.event_name == 'release' || github.ref_type == 'tag') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/echotools/nevr-runtime-builder:256b66be91d7   # the same tag as the build job
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Install the Rust toolchain for the core library
+      shell: bash
+      run: |
+        set -euo pipefail
+        export RUSTUP_HOME="$RUNNER_TEMP/rustup" CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_INIT_SKIP_SUDO_CHECK=yes
+        curl --proto '=https' --tlsv1.2 -fsSL -o rustup-init https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init
+        echo "20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  rustup-init" | sha256sum -c -
+        chmod +x rustup-init
+        ./rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.99.1 --target x86_64-pc-windows-gnu
+        rm rustup-init
+        echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+        echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+
+    - name: Build the core library for Windows
+      shell: bash
+      env:
+        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+      run: |
+        set -euo pipefail
+        "$CARGO_HOME/bin/cargo" build --locked --release --target x86_64-pc-windows-gnu --lib --manifest-path installer/Cargo.toml --target-dir build/installer-lib
+        test -s build/installer-lib/x86_64-pc-windows-gnu/release/libnevr_install.a
+
+    - name: Upload the core library
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: core-library
+        path: build/installer-lib/x86_64-pc-windows-gnu/release/libnevr_install.a
         if-no-files-found: error
         retention-days: 1
 
@@ -397,13 +446,47 @@ jobs:
         restore-keys: |
           ccache-mingw-release-v1-${{ steps.vcpkg.outputs.gcc }}-4.14.2-
 
+    # A version run (a tag or a release) links the core into nevr-runtime.dll: the core-library job builds the static library and this job
+    # waits for it here, before it configures, the way it waits for the installer job later. A run with no version (a branch) has no such
+    # job and links no core (NEVR_UPDATE_CORE=AUTO finds no cargo and says so at configure time).
+    - name: Wait for the core library job
+      if: steps.release.outputs.version != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        deadline=$((SECONDS + 900))
+        while :; do
+          c=$(curl -fsS --retry 3 --retry-all-errors -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            | python3 -c 'import json,sys; j=[x for x in json.load(sys.stdin)["jobs"] if x["name"]=="core-library"]; print((j[0]["conclusion"] or "running") if j else "absent")') || c=unreadable
+          echo "core-library job: $c"
+          case "$c" in success) break;; running|absent|unreadable) ;; *) echo "core-library job ended: $c" >&2; exit 1;; esac
+          [ "$SECONDS" -lt "$deadline" ] || { echo "core-library job still $c after 900 s" >&2; exit 1; }
+          sleep 10
+        done
+
+    - name: Download the core library
+      if: steps.release.outputs.version != ''
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      with:
+        name: core-library
+        path: core-library
+
     - name: Configure CMake
       # Never signs here, and nothing in this workflow signs: the release signer signs the draft's files
       # afterwards (RELEASING.md).
       # The private-CA path (NEVR_CODESIGN_REQUIRED, `just sign`) is for local development builds only.
       run: |
         set -euo pipefail
-        cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF \
+        # A version run links the prebuilt core library, and must: ON makes a missing file an error, not a runtime that never updates.
+        core=()
+        if [ -n "${{ steps.release.outputs.version }}" ]; then
+          test -s core-library/libnevr_install.a
+          core=(-DNEVR_UPDATE_CORE=ON "-DNEVR_INSTALL_LIB=$GITHUB_WORKSPACE/core-library/libnevr_install.a")
+        fi
+        cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF "${core[@]}" \
           -DCMAKE_C_COMPILER_LAUNCHER="$RUNNER_TEMP/ccache/ccache" -DCMAKE_CXX_COMPILER_LAUNCHER="$RUNNER_TEMP/ccache/ccache"
 
     - name: Build

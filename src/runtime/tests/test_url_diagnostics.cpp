@@ -4,77 +4,62 @@
 
 #include <string>
 
-namespace {
-constexpr char kMalformed[] = "[redacted malformed URL]";
-}
+// A logged URL is whole (#2244): userinfo, password, query, fragment and every repeated parameter stay. Nothing in a
+// log is masked.
 
-TEST(UrlDiagnostics, RemovesCredentialsRepeatedQueryAndFragmentButKeepsEndpoint) {
+TEST(UrlDiagnostics, KeepsUserinfoPasswordQueryAndFragment) {
   const std::string input =
       "wss://alice%40example:pa%3Ass@db.example:7443/serverdb?http_key=first&HTTP_KEY=second&"
-      "%68%74%74%70%5F%6B%65%79=third&x=1&x=2#frag-secret";
-  const std::string redacted = nevr_log_diagnostics::RedactUrlForDiagnostics(input);
-  EXPECT_EQ(redacted, "wss://db.example:7443/serverdb");
-  EXPECT_EQ(redacted.find("alice"), std::string::npos);
-  EXPECT_EQ(redacted.find("pa%3Ass"), std::string::npos);
-  EXPECT_EQ(redacted.find("http_key"), std::string::npos);
-  EXPECT_EQ(redacted.find("HTTP_KEY"), std::string::npos);
-  EXPECT_EQ(redacted.find("frag-secret"), std::string::npos);
-  EXPECT_EQ(redacted.find('?'), std::string::npos);
-  EXPECT_EQ(redacted.find('#'), std::string::npos);
+      "%68%74%74%70%5F%6B%65%79=third&x=1&x=2&password=in-query#frag-detail";
+  EXPECT_EQ(nevr_log_diagnostics::UrlForDiagnostics(input), input);
 }
 
-TEST(UrlDiagnostics, RemovesExistingQueryAndFragmentEvenWhenEmpty) {
-  const std::string redacted = nevr_log_diagnostics::RedactUrlForDiagnostics("https://service.example/path?existing=1#section");
-  EXPECT_EQ(redacted, "https://service.example/path");
-  EXPECT_EQ(nevr_log_diagnostics::RedactUrlForDiagnostics("https://service.example/path?#"),
-            "https://service.example/path");
+TEST(UrlDiagnostics, KeepsAnEmptyQueryAndFragment) {
+  EXPECT_EQ(nevr_log_diagnostics::UrlForDiagnostics("https://service.example/path?#"),
+            "https://service.example/path?#");
 }
 
-TEST(UrlDiagnostics, SafeEndpointWithoutSecretsIsRetained) {
-  EXPECT_EQ(nevr_log_diagnostics::RedactUrlForDiagnostics("https://service.example:8443/v2/match"),
-            "https://service.example:8443/v2/match");
+TEST(UrlDiagnostics, EveryShapeOfUserinfoIsKept) {
+  using nevr_log_diagnostics::UrlForDiagnostics;
+  for (const char* url : {"https://user:pw@h.example/p", "https://user@h.example/p", "https://user:@h.example/p",
+                          "https://:pw@h.example/p", "https://u:p@ss@h.example/p", "wss://user:pass@",
+                          "https://h.example/a@b:c?e=x@y:z#f@g:h", "https://service.example:8443/v2/match"}) {
+    EXPECT_EQ(UrlForDiagnostics(url), url);
+  }
 }
 
-TEST(UrlDiagnostics, FormattedDiagnosticRedactsSecretsAndKeepsUsefulEndpoint) {
-  const std::string message = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
-      "[NEVR.SERVERDB] Connecting to ServerDB at ",
-      "wss://user-sentinel:password-sentinel@db.example:7443/serverdb?http_key=query-sentinel&x=2#fragment-sentinel");
-  EXPECT_EQ(message, "[NEVR.SERVERDB] Connecting to ServerDB at wss://db.example:7443/serverdb");
-  EXPECT_EQ(message.find("user-sentinel"), std::string::npos);
-  EXPECT_EQ(message.find("password-sentinel"), std::string::npos);
-  EXPECT_EQ(message.find("query-sentinel"), std::string::npos);
-  EXPECT_EQ(message.find("fragment-sentinel"), std::string::npos);
+TEST(UrlDiagnostics, FormattedDiagnosticIsTheWholeUrl) {
+  const std::string url =
+      "wss://user-detail:password-detail@db.example:7443/serverdb?http_key=query-detail&x=2#fragment-detail";
+  EXPECT_EQ(nevr_log_diagnostics::FormatUrlDiagnostic("[NEVR.SERVERDB] Connecting to ServerDB at ", url),
+            "[NEVR.SERVERDB] Connecting to ServerDB at " + url);
 }
 
-TEST(UrlDiagnostics, FormattedRedirectDiagnosticRedactsBothUrlsAndKeepsKey) {
-  const std::string message = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
-      "[NEVR.PATCH] service redirect key=auth from=",
-      "https://user:pass@source.example:8443/auth?http_key=source-secret#source-fragment",
-      " to=",
-      "https://relay.example:9443/auth?ticket=relay-secret#relay-fragment");
-  EXPECT_EQ(message,
-            "[NEVR.PATCH] service redirect key=auth from=https://source.example:8443/auth "
-            "to=https://relay.example:9443/auth");
-  EXPECT_EQ(message.find("source-secret"), std::string::npos);
-  EXPECT_EQ(message.find("relay-secret"), std::string::npos);
-  EXPECT_EQ(message.find("source-fragment"), std::string::npos);
-  EXPECT_EQ(message.find("relay-fragment"), std::string::npos);
-  EXPECT_NE(message.find("key=auth"), std::string::npos);
-  EXPECT_NE(message.find("source.example:8443/auth"), std::string::npos);
-  EXPECT_NE(message.find("relay.example:9443/auth"), std::string::npos);
+TEST(UrlDiagnostics, FormattedRedirectDiagnosticKeepsBothUrlsWhole) {
+  const std::string from = "https://user:pass@source.example:8443/auth?http_key=source-detail#source-fragment";
+  const std::string to = "https://relay.example:9443/auth?ticket=relay-detail#relay-fragment";
+  EXPECT_EQ(nevr_log_diagnostics::FormatUrlPairDiagnostic("[NEVR.PATCH] service redirect key=auth from=", from,
+                                                                  " to=", to),
+            "[NEVR.PATCH] service redirect key=auth from=" + from + " to=" + to);
 }
 
-TEST(UrlDiagnostics, MalformedEscapesUrlsControlsAndUnsupportedSchemesFailClosed) {
-  EXPECT_EQ(nevr_log_diagnostics::RedactUrlForDiagnostics("wss://host.example/path?key=%Q1"), kMalformed);
-  EXPECT_EQ(nevr_log_diagnostics::RedactUrlForDiagnostics("https://host/%"), kMalformed);
-  EXPECT_EQ(nevr_log_diagnostics::RedactUrlForDiagnostics("wss://user:pass@"), kMalformed);
-  EXPECT_EQ(nevr_log_diagnostics::RedactUrlForDiagnostics(std::string("https://host/\0secret", 20)), kMalformed);
-  EXPECT_EQ(nevr_log_diagnostics::RedactUrlForDiagnostics("https://host/\nsecret"), kMalformed);
-  EXPECT_EQ(nevr_log_diagnostics::RedactUrlForDiagnostics("https://host/\x7fsecret"), kMalformed);
-  EXPECT_EQ(nevr_log_diagnostics::RedactUrlForDiagnostics("file://host/path"), kMalformed);
+TEST(UrlDiagnostics, AnUnusualUrlIsLoggedAsGivenNotHidden) {
+  using nevr_log_diagnostics::UrlForDiagnostics;
+  EXPECT_EQ(UrlForDiagnostics("wss://host.example/path?key=%Q1"), "wss://host.example/path?key=%Q1");
+  EXPECT_EQ(UrlForDiagnostics("https://host/%"), "https://host/%");
+  EXPECT_EQ(UrlForDiagnostics("file://host/path"), "file://host/path");
+  EXPECT_EQ(UrlForDiagnostics("not a url"), "not a url");
+  EXPECT_EQ(UrlForDiagnostics(""), "");
 }
 
-TEST(UrlDiagnostics, OversizedInputFailsClosed) {
-  const std::string oversized = "https://host.example/" + std::string(8192, 'x');
-  EXPECT_EQ(nevr_log_diagnostics::RedactUrlForDiagnostics(oversized), kMalformed);
+TEST(UrlDiagnostics, ControlCharactersAreEscapedSoOneUrlIsOneLine) {
+  using nevr_log_diagnostics::UrlForDiagnostics;
+  EXPECT_EQ(UrlForDiagnostics("https://host/\nsecond line"), "https://host/%0Asecond line");
+  EXPECT_EQ(UrlForDiagnostics(std::string("https://host/a\0b", 16)), "https://host/a%00b");
+  EXPECT_EQ(UrlForDiagnostics("https://host/\x7f"), "https://host/%7F");
+}
+
+TEST(UrlDiagnostics, ALongUrlIsLoggedWhole) {
+  const std::string longUrl = "https://host.example/" + std::string(9000, 'x');
+  EXPECT_EQ(nevr_log_diagnostics::UrlForDiagnostics(longUrl), longUrl);
 }

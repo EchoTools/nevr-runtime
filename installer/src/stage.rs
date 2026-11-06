@@ -86,6 +86,29 @@ fn members_intact(dir: &Path, wanted: &[&Content]) -> bool {
 }
 
 impl Session {
+    /// Records that the runtime refused the staged release `version` whose runtime has `runtime_sha256` (its Authenticode check failed after
+    /// the stage verified every byte against the manifest): the next stage answers `none: discarded` for that release and fetches nothing.
+    /// The record is keyed by version and runtime hash, so a rebuilt release under the same version is staged again.
+    pub fn pc_discard(&self, root: &Path, version: &str, runtime_sha256: &str, reason: &str) -> Result<(Ended, Value)> {
+        if !version_name(version) || !sha256_name(runtime_sha256) || !reason_word(reason) {
+            return Err(Error::new(9, "discard needs a version, a lowercase sha256 and a reason word"));
+        }
+        let mut all = read_discards(root);
+        if !all.iter().any(|(v, h)| v == version && h == runtime_sha256) {
+            all.push((version.to_string(), runtime_sha256.to_string()));
+        }
+        let doc = json!({"discards": all.iter().map(|(v, h)| json!({"version": v, "runtime_sha256": h})).collect::<Vec<_>>()});
+        let path = discards_path(root);
+        let io = |e: std::io::Error| Error::new(8, format!("{}: {e}", path.display()));
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(io)?;
+        }
+        crate::util::write_atomic(&path, doc.to_string().as_bytes()).map_err(io)?;
+        self.log.info("stage_discard", 8, json!({"version": version, "runtime_sha256": runtime_sha256, "reason": reason, "recorded": all.len()}))?;
+        let report = json!({"action": "discarded", "version": version, "reason": reason});
+        Ok((self.end("unchanged", &format!("discarded {version}: {reason}"))?, report))
+    }
+
     /// Stages the release the channel names, unless it is the running one or a failed one. Returns the run's end and the
     /// report `{"action": "none"|"staged"|"blocked", "version", "direction", "files": [...], "reason"}`.
     pub fn pc_stage(&self, version: Option<&str>, root: &Path, cur: &Current) -> Result<(Ended, Value)> {
@@ -110,6 +133,9 @@ impl Session {
         let Some(runtime) = art.contents.iter().find(|c| c.path == RUNTIME) else { return none("blocked", "no_runtime_member") };
         if cur.quarantine.iter().any(|(qv, qs)| *qv == v && *qs == runtime.sha256) {
             return none("none", "quarantined");
+        }
+        if read_discards(root).iter().any(|(dv, ds)| *dv == v && *ds == runtime.sha256) {
+            return none("none", "discarded");
         }
         if cur.version == v && cur.runtime_sha256 == runtime.sha256 {
             return none("none", "current");
@@ -138,12 +164,12 @@ impl Session {
         let fetched = match artifact::download(&url, &art, &zip_path) {
             Ok(f) => f,
             Err(e) => {
-                self.log.error("artifact_fetch", 8, json!({"kind": "windows-zip", "url": crate::util::redact_url(&url), "size": art.size, "ok": false, "reason": e.msg}))?;
+                self.log.error("artifact_fetch", 8, json!({"kind": "windows-zip", "url": url, "size": art.size, "ok": false, "reason": e.msg}))?;
                 self.log.error("stage_end", 8, json!({"version": v, "ok": false, "reason": e.msg, "direction": dir}))?;
                 return Err(e);
             }
         };
-        self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": crate::util::redact_url(&url), "size": art.size, "bytes": fetched.bytes, "sha256": fetched.sha256, "ok": true, "resumed_from": fetched.resumed_from}))?;
+        self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": url, "size": art.size, "bytes": fetched.bytes, "sha256": fetched.sha256, "ok": true, "resumed_from": fetched.resumed_from}))?;
         let staged = (|| -> Result<()> {
             artifact::verify_zip(&zip_path, &art, false)?;
             let partial = stage_root.join(format!("{v}.partial-{}", std::process::id()));
@@ -175,6 +201,34 @@ impl Session {
             }
         }
     }
+}
+
+/// Where the stage records the releases the runtime refused after staging them (`NevrPcDiscard`): in the core's own state folder, so the
+/// next stage does not fetch them again. A file the core cannot read is an empty record: a stage is never blocked by damage.
+pub fn discards_path(root: &Path) -> PathBuf {
+    root.join("update").join("manifest").join("discards.json")
+}
+
+/// The releases recorded in `discards.json`, as (version, runtime sha256).
+pub fn read_discards(root: &Path) -> Vec<(String, String)> {
+    let Ok(text) = fs::read_to_string(discards_path(root)) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else { return Vec::new() };
+    v["discards"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|e| Some((e["version"].as_str()?.to_string(), e["runtime_sha256"].as_str()?.to_string()))).collect())
+        .unwrap_or_default()
+}
+
+fn version_name(v: &str) -> bool {
+    !v.is_empty() && v.len() <= 64 && v.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-')) && !v.starts_with('.') && !v.ends_with('.')
+}
+
+fn sha256_name(h: &str) -> bool {
+    h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn reason_word(r: &str) -> bool {
+    !r.is_empty() && r.len() <= 64 && r.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// The folders `pc stage` uses under a nevr root.

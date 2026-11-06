@@ -360,15 +360,15 @@ class ConfigureBeforeTheBuild(TimerCase):
         self.assertNotIn("publish_apk", fake.steps())
 
 
-class NoSecretInTheLog(TimerCase):
-    def test_no_secret_reaches_the_log_even_when_a_command_prints_one(self) -> None:
+class TheLogIsNotMasked(TimerCase):
+    def test_what_a_command_prints_is_logged_as_printed(self) -> None:
         leak = {"publish_apk": lambda argv: completed(argv, 1, "", f"boom {SECRETS['R2_SECRET_ACCESS_KEY']} {TOKEN}")}
         fake = Fake(self.root, overrides=leak)
         self.assertEqual(self.run_timer(fake), 1)
         text = self.log.read_text()
-        for secret in [*SECRETS.values(), TOKEN]:
-            self.assertNotIn(secret, text)
-        self.assertIn("<redacted>", text)
+        for secret in (SECRETS["R2_SECRET_ACCESS_KEY"], TOKEN):
+            self.assertIn(secret, text)
+        self.assertNotIn("<redacted>", text)
 
 
 class FailsLoud(TimerCase):
@@ -743,7 +743,7 @@ class RefusalIsNotAFailure(TimerCase):
 
 
 class FailureKeepsBothStreams(TimerCase):
-    """A failing command's record holds the tail of stderr and of stdout, each bounded and redacted: a tool such as the
+    """A failing command's record holds the tail of stderr and of stdout, each bounded: a tool such as the
     release preflight prints its PROBLEM lines on stdout, and a record without them names no cause."""
 
     def make(self, rc: int = 3, out: str = "", err: str = "") -> tuple[timer.Timer, Fake]:
@@ -851,26 +851,17 @@ class FailureKeepsBothStreams(TimerCase):
         self.assertIn("HTTP 502", failed["error"])
         self.assertNotIn("REMOTE BODY", self.log.read_text())
 
-    def test_a_secret_on_stdout_is_redacted_in_the_message_and_the_log(self) -> None:
+    def test_a_value_on_stdout_is_in_the_message_and_the_log_as_printed(self) -> None:
         leak = {"publish_apk": lambda argv: completed(argv, 1, f"out {SECRETS['R2_SECRET_ACCESS_KEY']} {TOKEN}", "")}
         fake = Fake(self.root, overrides=leak)
         self.assertEqual(self.run_timer(fake), 1)
         failed = next(e for e in self.events() if e["event"] == "failed")
-        self.assertIn("stdout: out <redacted> <redacted>", failed["error"])
-        for secret in [*SECRETS.values(), TOKEN]:
-            self.assertNotIn(secret, self.log.read_text())
+        self.assertIn(f"stdout: out {SECRETS['R2_SECRET_ACCESS_KEY']} {TOKEN}", failed["error"])
+        self.assertIn(TOKEN, self.log.read_text())
 
-    def test_a_secret_on_stderr_is_still_redacted(self) -> None:
+    def test_a_value_on_stderr_is_in_the_message_as_printed(self) -> None:
         text = self.message(1, "", f"boom {SECRETS['R2_ACCESS_KEY_ID']}")
-        self.assertEqual(text, "git exited 1: stderr: boom <redacted>")
-
-    def test_a_secret_cut_by_the_tail_leaves_no_fragment(self) -> None:
-        secret = SECRETS["R2_SECRET_ACCESS_KEY"]
-        for stream in ("out", "err"):
-            with self.subTest(stream=stream):
-                body = secret + "B" * (timer.TAIL - 4)
-                text = self.message(1, body if stream == "out" else "", body if stream == "err" else "")
-                self.assertNotIn(secret[-4:], text, "the end of a secret the tail cut survived redaction")
+        self.assertEqual(text, f"git exited 1: stderr: boom {SECRETS['R2_ACCESS_KEY_ID']}")
 
 
 class TagsStep(TimerCase):
@@ -1255,7 +1246,7 @@ class RealProcess(TimerCase):
         self.start({**self.env, "GH_BIN": str(gh)})
         self.assertIn("checkout", [e["step"] for e in self.events() if e["event"] == "step_ok"])
 
-    def test_a_failing_first_command_is_logged_with_its_step_and_no_secret(self) -> None:
+    def test_a_failing_first_command_is_logged_with_its_step_and_what_it_printed(self) -> None:
         self.real_checkout()
         gh = self.root / "gh-fake"
         gh.write_text(f"#!{sys.executable}\nimport sys\nsys.stderr.write('denied {SECRETS['R2_SECRET_ACCESS_KEY']}')\nsys.exit(4)\n")
@@ -1264,8 +1255,8 @@ class RealProcess(TimerCase):
         self.assertEqual(result.returncode, 1)
         failed = [e for e in self.events() if e["event"] == "failed"]
         self.assertEqual([e["step"] for e in failed], ["token"])
-        self.assertNotIn(SECRETS["R2_SECRET_ACCESS_KEY"], self.log.read_text())
-        self.assertNotIn(SECRETS["R2_SECRET_ACCESS_KEY"], result.stderr)
+        self.assertIn(SECRETS["R2_SECRET_ACCESS_KEY"], self.log.read_text())
+        self.assertIn(SECRETS["R2_SECRET_ACCESS_KEY"], result.stderr)
 
 
 VARIANT = "q15t"
@@ -1279,7 +1270,7 @@ MAIN_STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "work
 def library_bytes(name: str) -> bytes:
     """A synthetic library as the build writes it: random bytes, the same on every run, and the config marker the real library
     carries (src/quest/plugins/q15t/src/plugin.cpp) with the libr15 build ID it was built for."""
-    marker = (f"q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 "
+    marker = (f"q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 levelname=1 "
               f"build_id={BUILD_ID}").encode()
     return random.Random(name).randbytes(4096) + b"\0" + marker + b"\0"
 
@@ -1608,7 +1599,7 @@ class VariantLibraries(VariantCase):
 
     def test_a_library_with_no_config_marker_or_no_build_id_is_a_failure_of_the_build_step(self) -> None:
         for name, data in (("no marker", b"\x7fELF" + b"x" * 100),
-                           ("no build id", b"q15t-config ec_words=[types=VPTO] gate_link=1\0")):
+                           ("no build id", b"q15t-config ec_words=[types=VPTO] levelname=1\0")):
             with self.subTest(name):
                 self.log.unlink(missing_ok=True)
                 fake = Fake(self.root)
@@ -1672,7 +1663,7 @@ class VariantLibraries(VariantCase):
 
     def test_a_library_in_the_marker_of_a_prefix_of_the_id_is_read_whole(self) -> None:
         fake = Fake(self.root)
-        fake.library = b"\0q15t-config ec_words=[types=VPTO equip hide] gate_link=1 build_id=" + BUILD_ID.encode() + b"\0rest"
+        fake.library = b"\0q15t-config ec_words=[types=VPTO equip hide] levelname=1 build_id=" + BUILD_ID.encode() + b"\0rest"
         self.assertEqual(self.run_timer(fake), 0)
         [record] = self.libraries()
         self.assertEqual(record["libr15_build_id"], BUILD_ID)
@@ -1986,10 +1977,10 @@ class VariantBuildOutput(VariantCase):
         self.assertEqual(self.run_timer(Fake(self.root, overrides={"variant_build": self.noisy()})), 1)
         self.assertEqual(stat.S_IMODE(self.build_log().stat().st_mode), 0o600)
 
-    def test_a_secret_in_the_build_output_is_redacted_in_the_file_too(self) -> None:
+    def test_a_value_in_the_build_output_is_in_the_file_as_printed(self) -> None:
         secret = SECRETS["R2_SECRET_ACCESS_KEY"]
         self.assertEqual(self.run_timer(Fake(self.root, overrides={"variant_build": self.noisy(err=f"key {secret}")})), 1)
-        self.assertNotIn(secret, self.build_log().read_text())
+        self.assertIn(secret, self.build_log().read_text())
 
     def test_a_failing_variant_publish_carries_only_the_program_and_the_exit_code(self) -> None:
         fake = Fake(self.root, overrides={"variant_publish": self.noisy(out="PUBOUT-1", err="PUBERR-2", rc=4)})

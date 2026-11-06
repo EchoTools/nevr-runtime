@@ -2,7 +2,7 @@
 
 Files: `src/levelname.{h,cpp}`, `src/quest/tests/q15t/levelname_test.cpp`, `src/quest/tests/q15t/mod/levelname.cmake`, `src/quest/tests/q15t/mutants.d/levelname.sh`.
 Option macro: `Q15T_LEVELNAME`, default **ON** (the source combat build applies it); kill file `levelname.off` in the plugin data
-directory turns levelname and boosterpool off together, and the bot-body gate with them (`src/quest/plugins/q15t/src/combat_gates.h`). It needs a
+directory turns levelname and boosterpool off together. The bot-body gate (`docs/quest/combat/headset_gates.md`) needs levelname and reads the game's LoadLevelName slot for it, so it follows this file's switch without reading it. It needs a
 full-size global_mp level in the pack. API: `InstallResult InstallLevelName(std::uintptr_t base)`; no tick.
 
 ## Row covered

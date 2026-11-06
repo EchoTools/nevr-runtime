@@ -75,8 +75,8 @@ func TestEachHandlerAsksTheScopeBeforeItActsAndTheGamesObjectIsTheDefault(t *tes
 
 func TestTheScopeIsTheSharedLevelAnswerAndArenaWinsOverACombatMapLoadedDuringATransition(t *testing.T) {
 	ts := stripComments(read(t, "src/quest/combat/table_step.cpp"))
-	if !regexp.MustCompile(`level::Classify\(game,\s*false,\s*&level\)\s*==\s*level::Kind::kCombatOrLobby`).MatchString(ts) {
-		t.Error("the scope is not combat_level.h's Classify with the lobby rule off")
+	if !regexp.MustCompile(`level::Classify\(game,\s*false,\s*&level,\s*true\)\s*==\s*level::Kind::kCombatOrLobby`).MatchString(ts) {
+		t.Error("the scope is not combat_level.h's Classify with the lobby rule off and the gamespaces still loading included")
 	}
 	if !strings.Contains(ts, "tick::Game()") {
 		t.Error("the scope does not read the game the combat tick verified")
@@ -154,7 +154,7 @@ func TestEachTableStepKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.
 				t.Errorf("%s does not name %s", what, key)
 			}
 		}
-		if !regexp.MustCompile(`\n  # `+key+`: (false|true)\n`).MatchString(example) {
+		if !regexp.MustCompile(`\n  # ` + key + `: (false|true)\n`).MatchString(example) {
 			t.Errorf("the example config does not document %s", key)
 		}
 		want := "CombatSwitch " + key + ";"
@@ -164,5 +164,19 @@ func TestEachTableStepKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.
 		if !strings.Contains(header, want) {
 			t.Errorf("CombatConfig lacks %q", want)
 		}
+	}
+}
+
+// combat_level's in-flight source is for the callers that act while resources are built; refresh_rate and pfx decide per frame on a level that is up
+// and keep what they always read.
+func TestOnlyTheTableStepsAskForTheGamespacesStillLoading(t *testing.T) {
+	asked := regexp.MustCompile(`(?:Classify|Scan)\([^;]*\btrue\)`)
+	for _, f := range []string{"src/quest/combat/refresh_rate.cpp", "src/quest/combat/pfx.cpp", "src/quest/combat/headset_gates.cpp"} {
+		if asked.MatchString(stripComments(read(t, f))) {
+			t.Errorf("%s asks for the gamespaces still loading", f)
+		}
+	}
+	if !asked.MatchString(stripComments(read(t, "src/quest/combat/table_step.cpp"))) {
+		t.Error("the table steps' scope does not ask for the gamespaces still loading")
 	}
 }
