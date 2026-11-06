@@ -3192,6 +3192,62 @@ TEST_F(PluginResourceSetTest, WithNoResolverHookNoSetIsMountedAndTheLineNamesThe
                                      "resource sets mount failed reason=out_of_memory served=false"));
 }
 
+// A plugin id comes from config.yaml and an asset's label from the plugin: every line that names one writes it as
+// printable ASCII, any other byte (and a quote) as '?'.
+TEST_F(PluginResourceSetTest, EveryLineWritesAnOddPluginIdOrAssetLabelPrintable) {
+  const char* const kOddId = "odd\x01\"id";
+  const std::string shown = "odd??id";
+  auto planOdd = [&] { g_testPluginLoadPlan.push_back({kOddId, "test_plugin_resources.dll", false, "", "{}"}); };
+  planOdd();
+  LoadPlugins();
+  ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  Mount();
+  ASSERT_NE(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);  // one read
+  g_resourceNow += 10000;
+  nevr_resource_sets::OnFrame(true);
+  g_resourceStock.insert({kFixtureMeshType, kFixtureMesh});  // the game's manifest gains a set's key
+  EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
+  g_resourceNow += 10000;
+  nevr_resource_sets::OnFrame(true);
+  for (const std::string& line : {"resource set registered plugin=" + shown, "resource set mounted plugin=" + shown,
+                                  "resource set reads plugin=" + shown, "first=0x50d40e361b19a95b:0x2222222222222222 plugin=" + shown}) {
+    EXPECT_TRUE(TestLogContains(line)) << line << "\n" << TestLogLinesWith("NEVR.RESOURCE");
+  }
+
+  // The asset lines: a refusal (the set holds the key) and a deregistration.
+  CHAR* const base = EchoVR::g_GameBaseAddress;
+  EchoVR::g_GameBaseAddress = nullptr;
+  static const unsigned char assetBytes[16] = {};
+  EXPECT_EQ(nevr::assets::RegisterPluginAsset(kFixtureMeshLogicalType, kFixtureMesh, assetBytes, 16, "a\x01\"label"),
+            nevr::assets::RegisterStatus::Duplicate);
+  EXPECT_TRUE(TestLogContains("register refused label=a??label")) << TestLogLinesWith("NEVR.ASSET");
+  ASSERT_EQ(nevr::assets::Global().Register(0x7777ULL, 0x8888ULL, assetBytes, 16, "a\x01\"label"),
+            nevr::assets::RegisterStatus::Ok);
+  nevr::assets::DeregisterPluginAssets(assetBytes, assetBytes + 16);
+  EXPECT_TRUE(TestLogContains("deregistered label=a??label")) << TestLogLinesWith("NEVR.ASSET");
+  EchoVR::g_GameBaseAddress = base;
+  UnloadPlugins();
+  nevr_resource_sets::ResetForTest();
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+
+  // A set refused at the mount.
+  planOdd();
+  LoadPlugins();
+  Mount();
+  EXPECT_TRUE(TestLogContains("resource set refused at mount plugin=" + shown)) << TestLogLinesWith("refused at mount");
+  UnloadPlugins();
+  nevr_resource_sets::ResetForTest();
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+  g_resourceStock.clear();
+
+  // No resolver hook.
+  nevr_resource_sets::SetNoResolverHookForTest(true);
+  planOdd();
+  LoadPlugins();
+  Mount();
+  EXPECT_TRUE(TestLogContains("plugins=" + shown + " reason=no_resolver_hook")) << TestLogLinesWith("not mounted");
+}
+
 TEST_F(PluginResourceSetTest, ASetRefusedAtTheMountHoldsNoKeyAPluginAssetMayTake) {
   g_resourceStock.insert({kFixtureMeshType, kFixtureMesh});  // the set carries a key the game has: stock_key
   Plan();
