@@ -10,7 +10,7 @@ The commit that adds this file credits the work that `ef714347` (#1591) imported
 | Subject | Fixed at |
 |---|---|
 | the old q15t plugin repository | its last commit `8b24d663e46c6c2612ff2e7dcea46e36190e7df7` |
-| this tree | `origin/main` = `c0aaac1ad9525bd192c1d154dfc54218b6472d10` |
+| this tree | `origin/main` = `bcff66eb79cacd9c360311477b6946cc91ff1212` |
 | the reference build's source (16 commits, 2026-10-26 to 2026-11-04) | `35bba9f` to `c5a67e8`; newest `c5a67e81fb7834524fb547f5d6740d6e43ece179` |
 | EchoCombat upstream | `c14c3e0a5af6274177df72571dfb288932b9ca1c` (2026-10-15), and the earlier commits that touched `plugin/veilnet.cpp`, `plugin/powerboost.cpp` and `plugin/dronefix.cpp` |
 
@@ -34,19 +34,24 @@ python3 -I render.py rows.json <old repository> <source checkout> <nevr-runtime 
 python3 -I check.py record.md <old repository> <source checkout> <EchoCombat files> <nevr-runtime checkout>
 python3 -I variants.py <public base> <scratch directory> v6.6.0 ... v6.16.5 > variants.jsonl
 python3 -I control.py <public base> v6.6.0 ... v6.16.5 > control.txt
+python3 -I copy_libs.py <a copy the release host's cleanup kept> > copy_libs.jsonl
 ```
 
 | Script | sha256 |
 |---|---|
-| `scan.py` | `c5e12a7a497ed9c6f863e7582bdda72eb3e6b0f372f6f747882c365d90e0f030` |
-| `overrides.py` | `03874ec5502e9b805f02d06a2fed99c0330166d1835101a2a4c2d54e1d5d63f2` |
-| `render.py` | `b33543f3f5a8bd860e79b4ea4df75cc22c4310305c1feaf26cc81bd2fc5ba8fd` |
-| `check.py` | `2af586a72e5c7bbe697c71f43ec19d242895e36336de8417dbc759c4c2224ee7` |
+| `scan.py` | `609c4f3576f24a789f131a2518e92f147c33a4a44e8eb091afbe342d09f18efc` |
+| `overrides.py` | `2493a5bd4cb0ebd57a0062d9bc3a3a847fbb167724b19ee09435fb9c9ad4a09b` |
+| `render.py` | `91fce797de64d418fc517f85914b16ff7fad4b7635c96fbd2766622af5ea97fa` |
+| `check.py` | `5792a5fd2e4ae0314282a2c35ffa8e7691411e4062f958578c6e1fd240878231` |
 | `variants.py` | `f6b9bee5c2efa2aa84db09942944a4213e568b8bb79df5a80282d53824aef9ba` |
 | `control.py` | `a8a73c453597ee60586263ca31f62ef6bcea487a0838d6db887b85851a38d060` |
+| `copy_libs.py` | `83ec0c13ca593278145b20308ab1ced11f0655410ccf2bb8a4c9afcb242fdd04` |
 
-`scan.py` takes every tracked file of the old repository's last commit and finds the lines that match any of `afk_<name>.(cpp|h|py)`,
-`c14c3e0a`, `vn L<digit>`, `pb L<digit>`, `df <digit>`, `afkxr`, `43dd2ad`, `dbea67e`: **267 lines in 77 files**. For each, `git blame` names the old commit; the line's citations are read; the pin is searched; the line of the tree at `origin/main` that carries the same text is found by aligning the old file with its tree counterpart. The EchoCombat files at each commit are fetched with `gh api repos/<EchoCombat>/contents/plugin/<file>.cpp?ref=<commit>`.
+`scan.py` takes every tracked file of the old repository's last commit and finds the lines that match any of the issue's eight tokens, `afk_<name>.(cpp|h|py)`,
+`c14c3e0a`, `vn L<digit>`, `pb L<digit>`, `df <digit>`, `afkxr`, `43dd2ad`, `dbea67e`: **267 lines in 77 files**. The old text cites the same EchoCombat files by line number in three more
+spellings that the eight miss: a bare `pb <digit>`, `vn c14 L<digit>` and `df L<digit>`: **25 more lines**. All 292 lines have a row. For each, `git blame` names the old commit; the line's citations are read; the pin is searched;
+the line of the tree at `origin/main` that carries the same text is found by aligning the old file with its tree counterpart. The EchoCombat files at each commit are fetched with
+`gh api repos/<EchoCombat>/contents/plugin/<file>.cpp?ref=<commit>`.
 `check.py` reads only this record and re-derives every claim in it from the repositories (section 10 gives its result).
 
 **How to read section 4.** One row per line, in the order of the old paths.
@@ -67,20 +72,22 @@ python3 -I control.py <public base> v6.6.0 ... v6.16.5 > control.txt
 
 | | Rows |
 |---|---|
-| origin-token lines at the old repository's last commit | 267 (every one has a row; none is left out) |
-| pinned on the cited text at the cited lines (`lines`) | 191 |
+| lines with one of the issue's eight origin tokens at the old repository's last commit | 267 (every one has a row; none is left out) |
+| lines with one of three more spellings of an EchoCombat line citation (`pb <n>`, `vn c14 L<n>`, `df L<n>`) | 25 (every one has a row, marked in section 3) |
+| rows | 292 |
+| pinned on the cited text at the cited lines (`lines`) | 216 |
 | pinned on the file or on a commit the line names (`file`, `named`, `group`; no checkable line text) | 71 |
-| unpinned | 5 (rows 1, 11, 144, 209, 255) |
-| tree line found, text rewritten | 249 |
-| tree line found, text identical | 2 |
+| unpinned | 5 (rows 1, 11, 144, 212, 279) |
+| tree line found, text rewritten | 272 |
+| tree line found, text identical | 3 |
 | not carried, the file is not in the tree | 4 |
-| not carried, the line is gone from a file the tree has | 12 |
+| not carried, the line is gone from a file the tree has | 13 |
 
-Citations, counted by kind: ec group: 3, ec lines: 52, src file: 64, src lines: 140, src named: 5, src none: 5 (`src` = the reference build's source, `ec` = EchoCombat; a row with two citations counts twice).
+Citations, counted by kind: ec group: 3, ec lines: 78, src file: 64, src lines: 140, src named: 5, src none: 5 (`src` = the reference build's source, `ec` = EchoCombat; a row with two citations counts twice).
 
-Old commit of the rows: `a1b3818` 197, `9f8b01a` 23, `bd4c6ba` 18, `a34ebda` 15, `d78d0da` 8, `1215eb7` 3, `42f7aba` 2, `46e027f` 1.
+Old commit of the rows: `a1b3818` 222, `9f8b01a` 23, `bd4c6ba` 18, `a34ebda` 15, `d78d0da` 8, `1215eb7` 3, `42f7aba` 2, `46e027f` 1.
 
-At the import (`ef714347`, measured with `git show ef714347:<path>`): 3 of the 267 lines are identical to the old text (rows 46, 47, 48), 4 are in files the import did not carry (rows 1, 141, 142, 143), and 260 differ: 258 rewritten, and the 2 lines of `tests/mod/dronemuzzle.sh` that read the source's `afk_dronemuzzle.cpp`, which the carried copy no longer has.
+At the import (`ef714347`, measured with `git show ef714347:<path>`): 3 of the issue's 267 lines are identical to the old text (rows 46, 47, 48), 4 are in files the import did not carry (rows 1, 141, 142, 143), and 260 differ: 258 rewritten, and the 2 lines of `tests/mod/dronemuzzle.sh` that read the source's `afk_dronemuzzle.cpp`, which the carried copy no longer has.
 
 ## 3. What the rows show that the issue did not know
 
@@ -91,18 +98,22 @@ At the import (`ef714347`, measured with `git show ef714347:<path>`): 3 of the 2
    are exactly the register block, `struct Packet` and the selected-tac-mod store. Of the versions of the file up to `c14c3e0a`, `b0e850fd` is the only one at which every
    `lines` row of `veilnet.cpp` holds (`check.py` recomputes this). So the `vn` rows are pinned `b0e850fd` (basis `lines`, or `group` for a row that names
    the file and no lines); the `df` rows and the `pb` rows hold at `c14c3e0a`.
-2. **Five citations do not resolve, and stay unpinned (rows 1, 11, 144, 209, 255).** Row 1 names a directory, no file. Rows 11 and 144 cite
+   The old text marks the other numbering itself: rows 207 and 208 cite `vn c14 L402-405` and `vn c14 L377-381`, and those lines hold at `c14c3e0a` (`OurSelected()` at 377-381, the keep-whole test at 405), not at `b0e850fd`. So the old text mixes two
+   numberings of `veilnet.cpp`: `vn L<n>` is `b0e850fd`'s, `vn c14 L<n>` is `c14c3e0a`'s. The two `vn c14` rows are pinned `c14c3e0a` and are left out of the version `check.py` agrees on.
+2. **Five citations do not resolve, and stay unpinned (rows 1, 11, 144, 212, 279).** Row 1 names a directory, no file. Rows 11 and 144 cite
    `afk_aibots.cpp` :43 for `kEnableFirstWord` and :42-52 for the constants; the file has one version in all 16 commits, with `kEnableFirstWord` at :61 and :273, :42-46 are `#include` lines
-   and the constants start at :52. Row 209 cites `afk_fxtrail.cpp:48` for the instruction words behind `kCsData`, `kDataStride` and `kDataInst`; those constants are at :43 and :48 is blank.
-   Row 255 cites `afk_voipdrop.cpp:51` for the voice hash table at +0x168; `kTable = 0x168` is at :43 and :51 is the MD5 table. **Inference:** the old text read a copy of these files whose lines differ from every committed one.
+   and the constants start at :52. Row 212 cites `afk_fxtrail.cpp:48` for the instruction words behind `kCsData`, `kDataStride` and `kDataInst`; those constants are at :43 and :48 is blank.
+   Row 279 cites `afk_voipdrop.cpp:51` for the voice hash table at +0x168; `kTable = 0x168` is at :43 and :51 is the MD5 table. **Inference:** the old text read a copy of these files whose lines differ from every committed one.
 3. **`afk_pfx.cpp:9856-9860` (row 7) is pinned `5f4da6b`, older than the commit the same ADR names (row 2).** The ADR 0001 text says "Source tree at dbea67e", but the game-clock
    witness it cites is at 9858 only in `5f4da6b`, `2e57cec` and `35bba9f`; at `dbea67e` those lines hold other code and the witness is at 9885 and 9897. The row is pinned on the cited text, as the rule says.
 4. **The import's split differs from the issue's.** See the line below the counts in section 2: the issue's 258 rewritten, 3 unchanged and 6 in files the import did not carry become 260, 3 and 4 when measured, because the 2 lines of
    `tests/mod/dronemuzzle.sh` are in a file the import did carry. The *tree* column is measured at `origin/main`, not at the import.
-5. **Lines that are not rows.** The scan finds 48 lines at the last commit that name a local path and carry no origin token (14 in `HANDOFF.md`, 24 in `docs/`, 4 in `rows/`, 3 in `src/`, one each in `PROVENANCE.md`,
+5. **Three more spellings, 25 more rows.** The old text cites EchoCombat by line number in three spellings the issue's token set does not match: a bare `pb <n>` (22 lines, in `src/powerboost_core.h`, `src/powerboost.cpp` and `tests/powerboost_test.cpp`), `vn c14 L<a>-<b>` (2 lines, `src/ec_core.h`) and `df L<a>-<b>` (1 line, `src/dronekill_core.h`).
+   The tree kept none of them. `scan.py` and `check.py` match them as tokens now, so every one has a row (rows 161, 207, 208, 247, 248, 249, 250, 251, 252, 253, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 292), and all hold at `c14c3e0a`.
+6. **Lines that are not rows.** The scan finds 48 lines at the last commit that name a local path and carry no origin token (14 in `HANDOFF.md`, 24 in `docs/`, 4 in `rows/`, 3 in `src/`, one each in `PROVENANCE.md`,
    `README.md` and `tests/`). The paths are the old repository's scratch directories, the Android NDK, a game APK, a worktree, the location of the source checkout and a mailbox tool: none is a file of a source, so none cites an origin, and they are left out.
-   One row (`tests/memsys_test.cpp:190`) shares its line with such a path; the row quotes the token only. Some lines after a row carry a bare `:<n>` or `lines <a>-<b>` spec and no token
-   (for example `docs/adr/0001-match-refresh-rate.md:19`, `docs/modules/droneguard.md:6`); they continue the citation of the row above them, share its file and pin, and the tree keeps their numbers.
+   One row (`tests/memsys_test.cpp:190`) shares its line with such a path; the row quotes the token only. Some lines after a row carry a bare `:<n>`, `L<a>-<b>` or `lines <a>-<b>` spec and no token
+   (for example `docs/adr/0001-match-refresh-rate.md:19` and `docs/modules/droneguard.md:6`, and `src/ecfx_core.h:3`, `L352-359`, the `SoundAgain` range of the row for `src/ecfx_core.h:2`); they continue the citation of the row above them, share its file and pin, and the tree keeps their numbers.
    They are not rows and are not checked one by one. Section 5 lists the references to source files by `tools/...` path.
 
 ## 4. The rows
@@ -269,113 +280,138 @@ At the import (`ef714347`, measured with `git show ef714347:<path>`): 3 of the 2
 | 158 | `src/dronekill_core.h:19` | `a1b3818` | `afk_dronekill.py` | source `tests/test_afk_dronekill.py` | `1357409` file |  | `src/quest/plugins/q15t/src/dronekill_core.h:19` rewritten |
 | 159 | `src/dronekill_core.h:59` | `a1b3818` | `afk_dronekill.py` | source `tests/test_afk_dronekill.py` | `1357409` file |  | `src/quest/plugins/q15t/src/dronekill_core.h:59` rewritten |
 | 160 | `src/dronekill_core.h:118` | `a1b3818` | `dronefix.cpp L434-560` | EchoCombat `plugin/dronefix.cpp`:434-560 | EC `c14c3e0a` lines | `struct DroneGroup`* `AcquireSRWLockExclusive(&g_drones_lock)`* | `src/quest/plugins/q15t/src/dronekill_core.h:118` rewritten |
-| 161 | `src/dronekill_core.h:290` | `a1b3818` | `df 778-793` | EchoCombat `plugin/dronefix.cpp`:778-793 | EC `c14c3e0a` lines | `TouchLive` | `src/quest/plugins/q15t/src/dronekill_core.h:290` rewritten |
-| 162 | `src/dronekill_core.h:308` | `a1b3818` | `df 731-835` | EchoCombat `plugin/dronefix.cpp`:731-835 | EC `c14c3e0a` lines | `the drone stays grabbable until it locks on`* | `src/quest/plugins/q15t/src/dronekill_core.h:308` rewritten |
-| 163 | `src/dronekill_core.h:322` | `a1b3818` | `df 772` | EchoCombat `plugin/dronefix.cpp`:772 | EC `c14c3e0a` lines | `g_touch[slot] = { system, index, 0, GetTickCount64(), false };`* | `src/quest/plugins/q15t/src/dronekill_core.h:322` rewritten |
-| 164 | `src/dronekill_core.h:337` | `a1b3818` | `df 810-826` | EchoCombat `plugin/dronefix.cpp`:810-826 | EC `c14c3e0a` lines | `int mine = -1, newest = -1;`* | `src/quest/plugins/q15t/src/dronekill_core.h:337` rewritten |
-| 165 | `src/dronekill_core.h:372` | `a1b3818` | `df 700-729` | EchoCombat `plugin/dronefix.cpp`:700-729 | EC `c14c3e0a` lines | `Each drone's last gun state (by actor)`* | `src/quest/plugins/q15t/src/dronekill_core.h:372` rewritten |
-| 166 | `src/dronekill_core.h:396` | `a1b3818` | `df 1037-1095` | EchoCombat `plugin/dronefix.cpp`:1037-1095 | EC `c14c3e0a` lines | `CHASE_SPEED`* | `src/quest/plugins/q15t/src/dronekill_core.h:396` rewritten |
-| 167 | `src/dronekill_core.h:433` | `a1b3818` | `df 1077-1082` | EchoCombat `plugin/dronefix.cpp`:1077-1082 | EC `c14c3e0a` lines | `{ c = &e; break; }`* | `src/quest/plugins/q15t/src/dronekill_core.h:433` rewritten |
-| 168 | `src/dronemuzzle.cpp:1` | `a1b3818` | `afk_dronemuzzle.cpp` | source `runtime/native/afkxr/afk_dronemuzzle.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/dronemuzzle.cpp:1` rewritten |
-| 169 | `src/dronemuzzle.cpp:32` | `a1b3818` | `df 56` `df 1014` | EchoCombat `plugin/dronefix.cpp`:56 ; EchoCombat `plugin/dronefix.cpp`:1014 | EC `c14c3e0a` lines ; EC `c14c3e0a` lines | `SHOT_LOG` `g_tracers`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:32` rewritten |
-| 170 | `src/dronemuzzle.cpp:41` | `a1b3818` | `df 136` | EchoCombat `plugin/dronefix.cpp`:136 | EC `c14c3e0a` lines | `g_frame_dt = 1.0f / 90.0f`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:41` rewritten |
-| 171 | `src/dronemuzzle.cpp:64` | `a1b3818` | `df 916-941` | EchoCombat `plugin/dronefix.cpp`:916-941 | EC `c14c3e0a` lines | `MuzzleTransform`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:64` rewritten |
-| 172 | `src/dronemuzzle.cpp:78` | `a1b3818` | `df 921` | EchoCombat `plugin/dronefix.cpp`:921 | EC `c14c3e0a` lines | `len < 1e-4f`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:78` rewritten |
-| 173 | `src/dronemuzzle.cpp:89` | `a1b3818` | `df 943-1019` | EchoCombat `plugin/dronefix.cpp`:943-1019 | EC `c14c3e0a` lines | `FireBulletLocal` | `src/quest/plugins/q15t/src/dronemuzzle.cpp:89` rewritten |
-| 174 | `src/dronemuzzle.cpp:115` | `a1b3818` | `df 1012` | EchoCombat `plugin/dronefix.cpp`:1012 | EC `c14c3e0a` lines | `shooter_vel[i] = 0.0f`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:115` rewritten |
-| 175 | `src/dronemuzzle.cpp:237` | `a1b3818` | `df 138-147` | EchoCombat `plugin/dronefix.cpp`:138-147 | EC `c14c3e0a` lines | `void TickFrame()`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:237` rewritten |
-| 176 | `src/dronemuzzle.h:2` | `a1b3818` | `afk_dronemuzzle.cpp` | source `runtime/native/afkxr/afk_dronemuzzle.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/dronemuzzle.h:2` rewritten |
-| 177 | `src/dronemuzzle.h:37` | `a1b3818` | `df 132-147` | EchoCombat `plugin/dronefix.cpp`:132-147 | EC `c14c3e0a` lines | `g_frame_dt`* | `src/quest/plugins/q15t/src/dronemuzzle.h:37` rewritten |
-| 178 | `src/dronemuzzle_core.h:1` | `a1b3818` | `afk_dronemuzzle_core.h` | source `runtime/native/afkxr/afk_dronemuzzle_core.h` | `1357409` file |  | not carried: the line is gone from `src/quest/plugins/q15t/src/dronemuzzle_core.h` |
-| 179 | `src/dronemuzzle_core.h:2` | `a1b3818` | `c14c3e0a` | EchoCombat `plugin/dronefix.cpp` | EC `c14c3e0a` group |  | not carried: the line is gone from `src/quest/plugins/q15t/src/dronemuzzle_core.h` |
-| 180 | `src/dronemuzzle_core.h:10` | `a1b3818` | `df 51` | EchoCombat `plugin/dronefix.cpp`:51 | EC `c14c3e0a` lines | `MUZZLE[3] = { 0.000024f, 0.075634f, 0.147283f }`* | `src/quest/plugins/q15t/src/dronemuzzle_core.h:67` rewritten |
-| 181 | `src/dronemuzzle_core.h:11` | `a1b3818` | `df 52` | EchoCombat `plugin/dronefix.cpp`:52 | EC `c14c3e0a` lines | `BACK_MAX = 0.25f`* | `src/quest/plugins/q15t/src/dronemuzzle_core.h:68` rewritten |
-| 182 | `src/dronemuzzle_core.h:13` | `a1b3818` | `df 143-144` | EchoCombat `plugin/dronefix.cpp`:143-144 | EC `c14c3e0a` lines | `if (dt > 1.0f / 240.0f && dt < 0.1f)`* `g_frame_dt = g_frame_dt * 0.9f + dt * 0.1f`* | `src/quest/plugins/q15t/src/dronemuzzle_core.h:70` rewritten |
-| 183 | `src/dronemuzzle_core.h:16` | `a1b3818` | `df 928-929` | EchoCombat `plugin/dronefix.cpp`:928-929 | EC `c14c3e0a` lines | `float dt = g_frame_dt;`* | `src/quest/plugins/q15t/src/dronemuzzle_core.h:3` rewritten |
-| 184 | `src/dronemuzzle_core.h:19` | `a1b3818` | `df 916-934` | EchoCombat `plugin/dronefix.cpp`:916-934 | EC `c14c3e0a` lines | `AttackTarget` | `src/quest/plugins/q15t/src/dronemuzzle_core.h:76` rewritten |
-| 185 | `src/dronemuzzle_core.h:20` | `a1b3818` | `df 921` | EchoCombat `plugin/dronefix.cpp`:921 | EC `c14c3e0a` lines | `len < 1e-4f`* | not carried: the line is gone from `src/quest/plugins/q15t/src/dronemuzzle_core.h` |
-| 186 | `src/dronemuzzle_core.h:30` | `a1b3818` | `df 933-934` | EchoCombat `plugin/dronefix.cpp`:933-934 | EC `c14c3e0a` lines | `p[i] += ...` | `src/quest/plugins/q15t/src/dronemuzzle_core.h:87` rewritten |
-| 187 | `src/ec.h:2` | `a1b3818` | `afk_ec.cpp` | source `runtime/native/afkxr/afk_ec.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/ec.h:2` rewritten |
-| 188 | `src/ec_core.h:3` | `bd4c6ba` | `afk_ec_core.h` | source `runtime/native/afkxr/afk_ec_core.h` | `1357409` file |  | `src/quest/plugins/q15t/src/ec_core.h:3` rewritten |
-| 189 | `src/ec_core.h:4` | `a1b3818` | `c14c3e0a` | EchoCombat `plugin/veilnet.cpp` | EC `b0e850fd` group |  | `src/quest/plugins/q15t/src/ec_core.h:4` rewritten |
-| 190 | `src/ec_core.h:28` | `a1b3818` | `vn L65-74` | EchoCombat `plugin/veilnet.cpp`:65-74 | EC `b0e850fd` lines | `TOKEN_RVA = 0x2104cc0`* `POINT_FIRED_RVA = 0x2104d44`* | `src/quest/plugins/q15t/src/ec_core.h:28` rewritten |
-| 191 | `src/ec_core.h:38` | `a1b3818` | `vn L75` | EchoCombat `plugin/veilnet.cpp`:75 | EC `b0e850fd` lines | `TOKEN_LIFE = 15000000`* | `src/quest/plugins/q15t/src/ec_core.h:38` rewritten |
-| 192 | `src/ec_core.h:39` | `a1b3818` | `vn L76-77` | EchoCombat `plugin/veilnet.cpp`:76-77 | EC `b0e850fd` lines | `ECVL` `VEIL` `0x4c564345` `0x4c494556` | `src/quest/plugins/q15t/src/ec_core.h:39` rewritten |
-| 193 | `src/ec_core.h:40` | `a1b3818` | `vn L85` | EchoCombat `plugin/veilnet.cpp`:85 | EC `b0e850fd` lines | `SERVER_TIMEOUT = 6000`* | `src/quest/plugins/q15t/src/ec_core.h:40` rewritten |
-| 194 | `src/ec_core.h:42` | `a1b3818` | `vn L94-100` | EchoCombat `plugin/veilnet.cpp`:94-100 | EC `b0e850fd` lines | `struct Packet {` `uint32_t magic2;`* | `src/quest/plugins/q15t/src/ec_core.h:42` rewritten |
-| 195 | `src/ec_core.h:51` | `a1b3818` | `vn L159` | EchoCombat `plugin/veilnet.cpp`:159 | EC `b0e850fd` lines | `bool Carried(uint8_t type)`* | `src/quest/plugins/q15t/src/ec_core.h:51` rewritten |
-| 196 | `src/ec_core.h:60` | `a1b3818` | `vn L146-151` | EchoCombat `plugin/veilnet.cpp`:146-151 | EC `b0e850fd` lines | `void AddToken(Shared *t)`* | `src/quest/plugins/q15t/src/ec_core.h:60` rewritten |
-| 197 | `src/ec_core.h:78` | `a1b3818` | `vn L175` | EchoCombat `plugin/veilnet.cpp`:175 | EC `b0e850fd` lines | `uint32_t g_seen[32];`* | `src/quest/plugins/q15t/src/ec_core.h:78` rewritten |
-| 198 | `src/ec_core.h:92` | `a1b3818` | `vn L178-185` | EchoCombat `plugin/veilnet.cpp`:178-185 | EC `b0e850fd` lines | `FirstTime` | `src/quest/plugins/q15t/src/ec_core.h:92` rewritten |
-| 199 | `src/ec_core.h:98` | `a1b3818` | `vn L219-237` | EchoCombat `plugin/veilnet.cpp`:219-237 | EC `b0e850fd` lines | `SawSend` | `src/quest/plugins/q15t/src/ec_core.h:98` rewritten |
-| 200 | `src/ec_core.h:113` | `a1b3818` | `vn L207-217` | EchoCombat `plugin/veilnet.cpp`:207-217 | EC `b0e850fd` lines | `PickServer` | `src/quest/plugins/q15t/src/ec_core.h:113` rewritten |
-| 201 | `src/ec_core.h:130` | `a1b3818` | `vn L316-330` | EchoCombat `plugin/veilnet.cpp`:316-330 | EC `b0e850fd` lines | `p.type == 'A'`* `FirstTime(p.id)`* | `src/quest/plugins/q15t/src/ec_core.h:130` rewritten |
-| 202 | `src/ec_core.h:193` | `a1b3818` | `vn L508-545` | EchoCombat `plugin/veilnet.cpp`:508-545 | EC `b0e850fd` lines | `The tac mod the player selected`* | `src/quest/plugins/q15t/src/ec_core.h:193` rewritten |
-| 203 | `src/ec_core.h:194` | `a1b3818` | `vn L522-530` | EchoCombat `plugin/veilnet.cpp`:522-530 | EC `b0e850fd` lines | `AbilitySymbol(const char *name, size_t n)`* | `src/quest/plugins/q15t/src/ec_core.h:194` rewritten |
-| 204 | `src/ec_core.h:224` | `a1b3818` | `vn L542-543` | EchoCombat `plugin/veilnet.cpp`:542-543 | EC `b0e850fd` lines | `EQUIP_RVA + 0x20`* `EQUIP_RVA) = sym;`* | `src/quest/plugins/q15t/src/ec_core.h:224` rewritten |
-| 205 | `src/ec_core.h:313` | `a1b3818` | `vn L363-409` | EchoCombat `plugin/veilnet.cpp`:363-409 | EC `b0e850fd` lines | `The tac mod list as the server allows`* | `src/quest/plugins/q15t/src/ec_core.h:313` rewritten |
-| 206 | `src/ec_core.h:398` | `a1b3818` | `vn L440-456` | EchoCombat `plugin/veilnet.cpp`:440-456 | EC `b0e850fd` lines | `"VPTO"[k]`* | `src/quest/plugins/q15t/src/ec_core.h:398` rewritten |
-| 207 | `src/ecfx.h:2` | `a1b3818` | `afk_ecfx.cpp` | source `runtime/native/afkxr/afk_ecfx.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/ecfx.h:2` rewritten |
-| 208 | `src/ecfx_core.h:2` | `a1b3818` | `afk_ecfx_core.h` `dronefix.cpp WallFxDue L374-409` | source `runtime/native/afkxr/afk_ecfx_core.h` ; EchoCombat `plugin/dronefix.cpp`:374-409 | `1357409` file ; EC `c14c3e0a` lines | `WallFxDue` `SoundAgain` | `src/quest/plugins/q15t/src/ecfx_core.h:2` rewritten |
-| 209 | `src/fxtrail.cpp:17` | `a1b3818` | `afk_fxtrail.cpp` | source `runtime/native/afkxr/afk_fxtrail.cpp`:48 | unpinned | tried `kCsData = 0xf8, kDataStride = 0x18, kDataInst = 0x10`: at :43 of the newest candidate, cited :48 | `src/quest/plugins/q15t/src/fxtrail.cpp:17` rewritten |
-| 210 | `src/fxtrail.h:1` | `a1b3818` | `afk_fxtrail.cpp` | source `runtime/native/afkxr/afk_fxtrail.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/fxtrail.h:1` rewritten |
-| 211 | `src/gamespace.h:2` | `1215eb7` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp` | `a3d0ffd` file |  | `src/quest/plugins/q15t/src/gamespace.h:2` rewritten |
-| 212 | `src/gunconnect.cpp:19` | `bd4c6ba` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp`:91-92 | `1357409` lines | `UserActor` | `src/quest/plugins/q15t/src/gunconnect.cpp:19` rewritten |
-| 213 | `src/gunconnect.cpp:136` | `a1b3818` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp`:222-240 | `1357409` lines | `ReadLocal` | `src/quest/plugins/q15t/src/gunconnect.cpp:136` rewritten |
-| 214 | `src/gunconnect.h:1` | `a1b3818` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/gunconnect.h:1` rewritten |
-| 215 | `src/heaps.cpp:33` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp`:253 | `1357409` lines | `hollywood` | `src/quest/plugins/q15t/src/heaps.cpp:33` rewritten |
-| 216 | `src/heaps.h:6` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/heaps.h:6` rewritten |
-| 217 | `src/hudmeter.h:1` | `a1b3818` | `afk_hudmeter.cpp` | source `runtime/native/afkxr/afk_hudmeter.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/hudmeter.h:1` rewritten |
-| 218 | `src/impactsnd.cpp:25` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:74 | `1357409` lines | `0x37af8d0` `kDefaultSymVa` | `src/quest/plugins/q15t/src/impactsnd.cpp:28` rewritten |
-| 219 | `src/impactsnd.cpp:26` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:75 | `1357409` lines | `0x37af6a0` `kSoundSettingsVa` `kSoundSettings` | `src/quest/plugins/q15t/src/impactsnd.cpp:29` rewritten |
-| 220 | `src/impactsnd.cpp:29` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:86 | `1357409` lines | `0x2121d04` `LoadSoundSettings` | `src/quest/plugins/q15t/src/impactsnd.cpp:32` rewritten |
-| 221 | `src/impactsnd.cpp:33` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:77 | `1357409` lines | `kMapCount` | `src/quest/plugins/q15t/src/impactsnd.cpp:36` rewritten |
-| 222 | `src/impactsnd.cpp:34` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:100 | `1357409` lines | `kMapFlags` | `src/quest/plugins/q15t/src/impactsnd.cpp:37` rewritten |
-| 223 | `src/impactsnd.cpp:36` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:78-80 | `1357409` lines | `kCodeCountVa = 0x21208b4`* `kCodeCount = 0xf9401ac1`* | `src/quest/plugins/q15t/src/impactsnd.cpp:79` rewritten |
-| 224 | `src/impactsnd.cpp:48` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:81 | `1357409` lines | `kWaitS` | `src/quest/plugins/q15t/src/impactsnd.cpp:91` rewritten |
-| 225 | `src/impactsnd.cpp:53` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:101 | `1357409` lines | `kStockId` `CalculateSymbolValue` | `src/quest/plugins/q15t/src/impactsnd.cpp:96` rewritten |
-| 226 | `src/impactsnd.cpp:59` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:103-119 | `1357409` lines | `kIds[] = {`* `play_bullet_impact_player`* | `src/quest/plugins/q15t/src/impactsnd.cpp:102` rewritten |
-| 227 | `src/impactsnd.h:1` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/impactsnd.h:1` rewritten |
-| 228 | `src/memsys.cpp:22` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp`:65-77 | `1357409` lines | `kWords`* | `src/quest/plugins/q15t/src/memsys.cpp:22` rewritten |
-| 229 | `src/memsys.h:2` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/memsys.h:2` rewritten |
-| 230 | `src/memsys.h:16` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp`:65-77 | `1357409` lines | `kWords[] = {`* | `src/quest/plugins/q15t/src/memsys.h:16` rewritten |
-| 231 | `src/music.cpp:15` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:52 | `43dd2ad` lines | `kFnPostSoundEvent = 0x2549264`* | `src/quest/plugins/q15t/src/music.cpp:15` rewritten |
-| 232 | `src/music.cpp:17` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:67,98 | `43dd2ad` lines | `0xFFFFFFFF` | `src/quest/plugins/q15t/src/music.cpp:17` rewritten |
-| 233 | `src/music.cpp:18` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:59 | `43dd2ad` lines | `kMaxLines` | `src/quest/plugins/q15t/src/music.cpp:18` rewritten |
-| 234 | `src/music.cpp:19` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:157 | `43dd2ad` lines | `g_nextLook = now + 0.5`* | `src/quest/plugins/q15t/src/music.cpp:19` rewritten |
-| 235 | `src/music.cpp:22` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:83 | `43dd2ad` lines | `PostSoundEvent(self, event w1`* | `src/quest/plugins/q15t/src/music.cpp:22` rewritten |
-| 236 | `src/music.h:1` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp` | `43dd2ad` file |  | `src/quest/plugins/q15t/src/music.h:1` rewritten |
-| 237 | `src/music.h:61` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:54-58 | `43dd2ad` lines | `SetState` | `src/quest/plugins/q15t/src/music.h:61` rewritten |
-| 238 | `src/peerclamp.cpp:13` | `a1b3818` | `afk_peerclamp.cpp` | source `runtime/native/afkxr/afk_peerclamp.cpp`:55-57 | `1357409` lines | `ldr w8,[x19,#0x560]`* `ldr x24,[x19,#0x478]`* | `src/quest/plugins/q15t/src/peerclamp.cpp:13` rewritten |
-| 239 | `src/peerclamp.h:1` | `a1b3818` | `afk_peerclamp.cpp` | source `runtime/native/afkxr/afk_peerclamp.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/peerclamp.h:1` rewritten |
-| 240 | `src/plugin.cpp:152` | `d78d0da` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp` | `dbea67e` file |  | `src/quest/plugins/q15t/src/plugin.cpp:183` rewritten |
-| 241 | `src/powerboost.cpp:1` | `a1b3818` | `afk_powerboost.cpp` | source `runtime/native/afkxr/afk_powerboost.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/powerboost.cpp:1` rewritten |
-| 242 | `src/powerboost.cpp:51` | `a1b3818` | `afk_flowdiag.cpp` | source `runtime/native/afkxr/afk_flowdiag.cpp`:91 | `1357409` lines | `0xc9dc08cfc2f5920f` `kDamageableKey` | `src/quest/plugins/q15t/src/powerboost.cpp:51` rewritten |
-| 243 | `src/powerboost.cpp:52` | `a1b3818` | `afk_flowdiag.cpp` | source `runtime/native/afkxr/afk_flowdiag.cpp`:93 | `1357409` lines | `0x3693ea0` `kDamageableVptr` | `src/quest/plugins/q15t/src/powerboost.cpp:52` rewritten |
-| 244 | `src/powerboost.h:1` | `a1b3818` | `afk_powerboost.cpp` | source `runtime/native/afkxr/afk_powerboost.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/powerboost.h:1` rewritten |
-| 245 | `src/powerboost_core.h:2` | `bd4c6ba` | `afk_powerboost_core.h` | source `runtime/native/afkxr/afk_powerboost_core.h` | `1357409` file |  | not carried: the line is gone from `src/quest/plugins/q15t/src/powerboost_core.h` |
-| 246 | `src/powerboost_core.h:16` | `a1b3818` | `pb L111-112, L330-333` | EchoCombat `plugin/powerboost.cpp`:111-112,330-333 | EC `c14c3e0a` lines | `this one left my cone` | `src/quest/plugins/q15t/src/powerboost_core.h:16` rewritten |
-| 247 | `src/powerboost_core.h:17` | `a1b3818` | `pb L501-502` | EchoCombat `plugin/powerboost.cpp`:501-502 | EC `c14c3e0a` lines | `UNLINK_BASE`* | `src/quest/plugins/q15t/src/powerboost_core.h:17` rewritten |
-| 248 | `src/powerboost_core.h:61` | `a1b3818` | `c14c3e0a` | EchoCombat `plugin/powerboost.cpp` | EC `c14c3e0a` group |  | `src/quest/plugins/q15t/src/powerboost_core.h:61` rewritten |
-| 249 | `src/powerboost_thunk.inc:1` | `a1b3818` | `afk_powerboost.cpp` | source `runtime/native/afkxr/afk_powerboost.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/powerboost_thunk.inc:1` rewritten |
-| 250 | `src/refresh_rate.cpp:20` | `d78d0da` | `afk_hz.cpp` | source `runtime/native/afkxr/afk_hz.cpp` | `dbea67e` file |  | `src/quest/plugins/q15t/src/refresh_rate.cpp:30` rewritten |
-| 251 | `src/refresh_rate.cpp:23` | `d78d0da` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp` | `dbea67e` file |  | `src/quest/plugins/q15t/src/refresh_rate.cpp:41` rewritten |
-| 252 | `src/sensorwd.cpp:19` | `9f8b01a` | `afk_fx.cpp` `43dd2ad` | source `runtime/native/afkxr/afk_fx.cpp` ; source commit `43dd2ad` | `43dd2ad` named |  | `src/quest/plugins/q15t/src/sensorwd.cpp:19` rewritten |
-| 253 | `src/sensorwd.h:1` | `9f8b01a` | `afk_fx.cpp` | source `runtime/native/afkxr/afk_fx.cpp` | `43dd2ad` file |  | `src/quest/plugins/q15t/src/sensorwd.h:1` rewritten |
-| 254 | `src/shieldgamma.h:2` | `a1b3818` | `afk_shieldgamma.cpp` | source `runtime/native/afkxr/afk_shieldgamma.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/shieldgamma.h:2` rewritten |
-| 255 | `src/voipdrop.cpp:16` | `a1b3818` | `afk_voipdrop.cpp` | source `runtime/native/afkxr/afk_voipdrop.cpp`:51 | unpinned | tried `kTable = 0x168`: at :43 of the newest candidate, cited :51 | `src/quest/plugins/q15t/src/voipdrop.cpp:16` rewritten |
-| 256 | `src/voipdrop.h:1` | `a1b3818` | `afk_voipdrop.cpp` | source `runtime/native/afkxr/afk_voipdrop.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/voipdrop.h:1` rewritten |
-| 257 | `src/wallfire.h:1` | `a1b3818` | `afk_wallfire.cpp` | source `runtime/native/afkxr/afk_wallfire.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/wallfire.h:1` rewritten |
-| 258 | `src/weapon_arm.h:1` | `1215eb7` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp` | `a3d0ffd` file |  | `src/quest/plugins/q15t/src/weapon_arm.h:1` rewritten |
-| 259 | `tests/dronekill_test.cpp:376` | `a1b3818` | `afk_dronekill_core.h` | source `runtime/native/afkxr/afk_dronekill_core.h` | `1357409` file |  | `src/quest/tests/q15t/dronekill_test.cpp:376` rewritten |
-| 260 | `tests/dronemuzzle_test.cpp:62` | `a1b3818` | `plugin/dronefix.cpp 132-147 / 916-934` | EchoCombat `plugin/dronefix.cpp`:132-147,916-934 | EC `c14c3e0a` lines | `void TickFrame()`* `Pose *__fastcall MuzzleTransform`* | not carried: the line is gone from `src/quest/tests/q15t/dronemuzzle_test.cpp` |
-| 261 | `tests/ecfx_wall_stub.cpp:2` | `a1b3818` | `afk_ecfx.cpp` | source `runtime/native/afkxr/afk_ecfx.cpp` | `1357409` file |  | `src/quest/tests/q15t/ecfx_wall_stub.cpp:2` rewritten |
-| 262 | `tests/memsys_test.cpp:190` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp`:56-58 | `1357409` lines | `kGotSys = 0x371d020`* `kGotAlloc = 0x36e9b48`* `kGotInit = 0x36de5c0`* | `src/quest/tests/q15t/memsys_test.cpp:190` rewritten |
-| 263 | `tests/mod/dronemuzzle.sh:24` | `bd4c6ba` | `afk_dronemuzzle.cpp` | source `runtime/native/afkxr/afk_dronemuzzle.cpp` | `1357409` file |  | not carried: the line is gone from `src/quest/tests/q15t/mod/dronemuzzle.cmake` |
-| 264 | `tests/mod/dronemuzzle.sh:25` | `a1b3818` | `afk_dronemuzzle.cpp` | source `runtime/native/afkxr/afk_dronemuzzle.cpp` | `1357409` file |  | not carried: the line is gone from `src/quest/tests/q15t/mod/dronemuzzle.cmake` |
-| 265 | `tests/music_test.cpp:49` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:54-58 | `43dd2ad` lines | `kPlay[] = {0x2f22c384, 0xb1b06cfb}`* `kStop[] = {0xde586538, 0x2acba759}`* | `src/quest/tests/q15t/music_test.cpp:49` rewritten |
-| 266 | `tests/music_test.cpp:55` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:61-62 | `43dd2ad` lines | `0x43e2da7914642604` `0x43e2da7a0c623a19` | `src/quest/tests/q15t/music_test.cpp:55` rewritten |
-| 267 | `tests/music_test.cpp:303` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:102 | `43dd2ad` lines | `if (target == 0xFFFFFFFF) continue;`* | `src/quest/tests/q15t/music_test.cpp:303` rewritten |
+| 161 | `src/dronekill_core.h:171` | `a1b3818` | `df L461-468` | EchoCombat `plugin/dronefix.cpp`:461-468 | EC `c14c3e0a` lines | `DroneGroup *Newest(uint64_t actor)`* | `src/quest/plugins/q15t/src/dronekill_core.h:171` rewritten |
+| 162 | `src/dronekill_core.h:290` | `a1b3818` | `df 778-793` | EchoCombat `plugin/dronefix.cpp`:778-793 | EC `c14c3e0a` lines | `TouchLive` | `src/quest/plugins/q15t/src/dronekill_core.h:290` rewritten |
+| 163 | `src/dronekill_core.h:308` | `a1b3818` | `df 731-835` | EchoCombat `plugin/dronefix.cpp`:731-835 | EC `c14c3e0a` lines | `the drone stays grabbable until it locks on`* | `src/quest/plugins/q15t/src/dronekill_core.h:308` rewritten |
+| 164 | `src/dronekill_core.h:322` | `a1b3818` | `df 772` | EchoCombat `plugin/dronefix.cpp`:772 | EC `c14c3e0a` lines | `g_touch[slot] = { system, index, 0, GetTickCount64(), false };`* | `src/quest/plugins/q15t/src/dronekill_core.h:322` rewritten |
+| 165 | `src/dronekill_core.h:337` | `a1b3818` | `df 810-826` | EchoCombat `plugin/dronefix.cpp`:810-826 | EC `c14c3e0a` lines | `int mine = -1, newest = -1;`* | `src/quest/plugins/q15t/src/dronekill_core.h:337` rewritten |
+| 166 | `src/dronekill_core.h:372` | `a1b3818` | `df 700-729` | EchoCombat `plugin/dronefix.cpp`:700-729 | EC `c14c3e0a` lines | `Each drone's last gun state (by actor)`* | `src/quest/plugins/q15t/src/dronekill_core.h:372` rewritten |
+| 167 | `src/dronekill_core.h:396` | `a1b3818` | `df 1037-1095` | EchoCombat `plugin/dronefix.cpp`:1037-1095 | EC `c14c3e0a` lines | `CHASE_SPEED`* | `src/quest/plugins/q15t/src/dronekill_core.h:396` rewritten |
+| 168 | `src/dronekill_core.h:433` | `a1b3818` | `df 1077-1082` | EchoCombat `plugin/dronefix.cpp`:1077-1082 | EC `c14c3e0a` lines | `{ c = &e; break; }`* | `src/quest/plugins/q15t/src/dronekill_core.h:433` rewritten |
+| 169 | `src/dronemuzzle.cpp:1` | `a1b3818` | `afk_dronemuzzle.cpp` | source `runtime/native/afkxr/afk_dronemuzzle.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/dronemuzzle.cpp:1` rewritten |
+| 170 | `src/dronemuzzle.cpp:32` | `a1b3818` | `df 56` `df 1014` | EchoCombat `plugin/dronefix.cpp`:56 ; EchoCombat `plugin/dronefix.cpp`:1014 | EC `c14c3e0a` lines ; EC `c14c3e0a` lines | `SHOT_LOG` `g_tracers`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:32` rewritten |
+| 171 | `src/dronemuzzle.cpp:41` | `a1b3818` | `df 136` | EchoCombat `plugin/dronefix.cpp`:136 | EC `c14c3e0a` lines | `g_frame_dt = 1.0f / 90.0f`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:41` rewritten |
+| 172 | `src/dronemuzzle.cpp:64` | `a1b3818` | `df 916-941` | EchoCombat `plugin/dronefix.cpp`:916-941 | EC `c14c3e0a` lines | `MuzzleTransform`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:64` rewritten |
+| 173 | `src/dronemuzzle.cpp:78` | `a1b3818` | `df 921` | EchoCombat `plugin/dronefix.cpp`:921 | EC `c14c3e0a` lines | `len < 1e-4f`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:78` rewritten |
+| 174 | `src/dronemuzzle.cpp:89` | `a1b3818` | `df 943-1019` | EchoCombat `plugin/dronefix.cpp`:943-1019 | EC `c14c3e0a` lines | `FireBulletLocal` | `src/quest/plugins/q15t/src/dronemuzzle.cpp:89` rewritten |
+| 175 | `src/dronemuzzle.cpp:115` | `a1b3818` | `df 1012` | EchoCombat `plugin/dronefix.cpp`:1012 | EC `c14c3e0a` lines | `shooter_vel[i] = 0.0f`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:115` rewritten |
+| 176 | `src/dronemuzzle.cpp:237` | `a1b3818` | `df 138-147` | EchoCombat `plugin/dronefix.cpp`:138-147 | EC `c14c3e0a` lines | `void TickFrame()`* | `src/quest/plugins/q15t/src/dronemuzzle.cpp:237` rewritten |
+| 177 | `src/dronemuzzle.h:2` | `a1b3818` | `afk_dronemuzzle.cpp` | source `runtime/native/afkxr/afk_dronemuzzle.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/dronemuzzle.h:2` rewritten |
+| 178 | `src/dronemuzzle.h:37` | `a1b3818` | `df 132-147` | EchoCombat `plugin/dronefix.cpp`:132-147 | EC `c14c3e0a` lines | `g_frame_dt`* | `src/quest/plugins/q15t/src/dronemuzzle.h:37` rewritten |
+| 179 | `src/dronemuzzle_core.h:1` | `a1b3818` | `afk_dronemuzzle_core.h` | source `runtime/native/afkxr/afk_dronemuzzle_core.h` | `1357409` file |  | not carried: the line is gone from `src/quest/plugins/q15t/src/dronemuzzle_core.h` |
+| 180 | `src/dronemuzzle_core.h:2` | `a1b3818` | `c14c3e0a` | EchoCombat `plugin/dronefix.cpp` | EC `c14c3e0a` group |  | not carried: the line is gone from `src/quest/plugins/q15t/src/dronemuzzle_core.h` |
+| 181 | `src/dronemuzzle_core.h:10` | `a1b3818` | `df 51` | EchoCombat `plugin/dronefix.cpp`:51 | EC `c14c3e0a` lines | `MUZZLE[3] = { 0.000024f, 0.075634f, 0.147283f }`* | `src/quest/plugins/q15t/src/dronemuzzle_core.h:67` rewritten |
+| 182 | `src/dronemuzzle_core.h:11` | `a1b3818` | `df 52` | EchoCombat `plugin/dronefix.cpp`:52 | EC `c14c3e0a` lines | `BACK_MAX = 0.25f`* | `src/quest/plugins/q15t/src/dronemuzzle_core.h:68` rewritten |
+| 183 | `src/dronemuzzle_core.h:13` | `a1b3818` | `df 143-144` | EchoCombat `plugin/dronefix.cpp`:143-144 | EC `c14c3e0a` lines | `if (dt > 1.0f / 240.0f && dt < 0.1f)`* `g_frame_dt = g_frame_dt * 0.9f + dt * 0.1f`* | `src/quest/plugins/q15t/src/dronemuzzle_core.h:70` rewritten |
+| 184 | `src/dronemuzzle_core.h:16` | `a1b3818` | `df 928-929` | EchoCombat `plugin/dronefix.cpp`:928-929 | EC `c14c3e0a` lines | `float dt = g_frame_dt;`* | `src/quest/plugins/q15t/src/dronemuzzle_core.h:3` rewritten |
+| 185 | `src/dronemuzzle_core.h:19` | `a1b3818` | `df 916-934` | EchoCombat `plugin/dronefix.cpp`:916-934 | EC `c14c3e0a` lines | `AttackTarget` | `src/quest/plugins/q15t/src/dronemuzzle_core.h:76` rewritten |
+| 186 | `src/dronemuzzle_core.h:20` | `a1b3818` | `df 921` | EchoCombat `plugin/dronefix.cpp`:921 | EC `c14c3e0a` lines | `len < 1e-4f`* | not carried: the line is gone from `src/quest/plugins/q15t/src/dronemuzzle_core.h` |
+| 187 | `src/dronemuzzle_core.h:30` | `a1b3818` | `df 933-934` | EchoCombat `plugin/dronefix.cpp`:933-934 | EC `c14c3e0a` lines | `p[i] += ...` | `src/quest/plugins/q15t/src/dronemuzzle_core.h:87` rewritten |
+| 188 | `src/ec.h:2` | `a1b3818` | `afk_ec.cpp` | source `runtime/native/afkxr/afk_ec.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/ec.h:2` rewritten |
+| 189 | `src/ec_core.h:3` | `bd4c6ba` | `afk_ec_core.h` | source `runtime/native/afkxr/afk_ec_core.h` | `1357409` file |  | `src/quest/plugins/q15t/src/ec_core.h:3` rewritten |
+| 190 | `src/ec_core.h:4` | `a1b3818` | `c14c3e0a` | EchoCombat `plugin/veilnet.cpp` | EC `b0e850fd` group |  | `src/quest/plugins/q15t/src/ec_core.h:4` rewritten |
+| 191 | `src/ec_core.h:28` | `a1b3818` | `vn L65-74` | EchoCombat `plugin/veilnet.cpp`:65-74 | EC `b0e850fd` lines | `TOKEN_RVA = 0x2104cc0`* `POINT_FIRED_RVA = 0x2104d44`* | `src/quest/plugins/q15t/src/ec_core.h:28` rewritten |
+| 192 | `src/ec_core.h:38` | `a1b3818` | `vn L75` | EchoCombat `plugin/veilnet.cpp`:75 | EC `b0e850fd` lines | `TOKEN_LIFE = 15000000`* | `src/quest/plugins/q15t/src/ec_core.h:38` rewritten |
+| 193 | `src/ec_core.h:39` | `a1b3818` | `vn L76-77` | EchoCombat `plugin/veilnet.cpp`:76-77 | EC `b0e850fd` lines | `ECVL` `VEIL` `0x4c564345` `0x4c494556` | `src/quest/plugins/q15t/src/ec_core.h:39` rewritten |
+| 194 | `src/ec_core.h:40` | `a1b3818` | `vn L85` | EchoCombat `plugin/veilnet.cpp`:85 | EC `b0e850fd` lines | `SERVER_TIMEOUT = 6000`* | `src/quest/plugins/q15t/src/ec_core.h:40` rewritten |
+| 195 | `src/ec_core.h:42` | `a1b3818` | `vn L94-100` | EchoCombat `plugin/veilnet.cpp`:94-100 | EC `b0e850fd` lines | `struct Packet {` `uint32_t magic2;`* | `src/quest/plugins/q15t/src/ec_core.h:42` rewritten |
+| 196 | `src/ec_core.h:51` | `a1b3818` | `vn L159` | EchoCombat `plugin/veilnet.cpp`:159 | EC `b0e850fd` lines | `bool Carried(uint8_t type)`* | `src/quest/plugins/q15t/src/ec_core.h:51` rewritten |
+| 197 | `src/ec_core.h:60` | `a1b3818` | `vn L146-151` | EchoCombat `plugin/veilnet.cpp`:146-151 | EC `b0e850fd` lines | `void AddToken(Shared *t)`* | `src/quest/plugins/q15t/src/ec_core.h:60` rewritten |
+| 198 | `src/ec_core.h:78` | `a1b3818` | `vn L175` | EchoCombat `plugin/veilnet.cpp`:175 | EC `b0e850fd` lines | `uint32_t g_seen[32];`* | `src/quest/plugins/q15t/src/ec_core.h:78` rewritten |
+| 199 | `src/ec_core.h:92` | `a1b3818` | `vn L178-185` | EchoCombat `plugin/veilnet.cpp`:178-185 | EC `b0e850fd` lines | `FirstTime` | `src/quest/plugins/q15t/src/ec_core.h:92` rewritten |
+| 200 | `src/ec_core.h:98` | `a1b3818` | `vn L219-237` | EchoCombat `plugin/veilnet.cpp`:219-237 | EC `b0e850fd` lines | `SawSend` | `src/quest/plugins/q15t/src/ec_core.h:98` rewritten |
+| 201 | `src/ec_core.h:113` | `a1b3818` | `vn L207-217` | EchoCombat `plugin/veilnet.cpp`:207-217 | EC `b0e850fd` lines | `PickServer` | `src/quest/plugins/q15t/src/ec_core.h:113` rewritten |
+| 202 | `src/ec_core.h:130` | `a1b3818` | `vn L316-330` | EchoCombat `plugin/veilnet.cpp`:316-330 | EC `b0e850fd` lines | `p.type == 'A'`* `FirstTime(p.id)`* | `src/quest/plugins/q15t/src/ec_core.h:130` rewritten |
+| 203 | `src/ec_core.h:193` | `a1b3818` | `vn L508-545` | EchoCombat `plugin/veilnet.cpp`:508-545 | EC `b0e850fd` lines | `The tac mod the player selected`* | `src/quest/plugins/q15t/src/ec_core.h:193` rewritten |
+| 204 | `src/ec_core.h:194` | `a1b3818` | `vn L522-530` | EchoCombat `plugin/veilnet.cpp`:522-530 | EC `b0e850fd` lines | `AbilitySymbol(const char *name, size_t n)`* | `src/quest/plugins/q15t/src/ec_core.h:194` rewritten |
+| 205 | `src/ec_core.h:224` | `a1b3818` | `vn L542-543` | EchoCombat `plugin/veilnet.cpp`:542-543 | EC `b0e850fd` lines | `EQUIP_RVA + 0x20`* `EQUIP_RVA) = sym;`* | `src/quest/plugins/q15t/src/ec_core.h:224` rewritten |
+| 206 | `src/ec_core.h:313` | `a1b3818` | `vn L363-409` | EchoCombat `plugin/veilnet.cpp`:363-409 | EC `b0e850fd` lines | `The tac mod list as the server allows`* | `src/quest/plugins/q15t/src/ec_core.h:313` rewritten |
+| 207 | `src/ec_core.h:318` | `a1b3818` | `vn c14 L402-405` | EchoCombat `plugin/veilnet.cpp`:402-405 | EC `c14c3e0a` lines | `if (!server_has_it && OurSelected()) want = full;`* | `src/quest/plugins/q15t/src/ec_core.h:318` rewritten |
+| 208 | `src/ec_core.h:350` | `a1b3818` | `vn c14 L377-381` | EchoCombat `plugin/veilnet.cpp`:377-381 | EC `c14c3e0a` lines | `OurSelected()`* | `src/quest/plugins/q15t/src/ec_core.h:350` rewritten |
+| 209 | `src/ec_core.h:398` | `a1b3818` | `vn L440-456` | EchoCombat `plugin/veilnet.cpp`:440-456 | EC `b0e850fd` lines | `"VPTO"[k]`* | `src/quest/plugins/q15t/src/ec_core.h:398` rewritten |
+| 210 | `src/ecfx.h:2` | `a1b3818` | `afk_ecfx.cpp` | source `runtime/native/afkxr/afk_ecfx.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/ecfx.h:2` rewritten |
+| 211 | `src/ecfx_core.h:2` | `a1b3818` | `afk_ecfx_core.h` `dronefix.cpp WallFxDue L374-409` | source `runtime/native/afkxr/afk_ecfx_core.h` ; EchoCombat `plugin/dronefix.cpp`:374-409 | `1357409` file ; EC `c14c3e0a` lines | `WallFxDue` `SoundAgain` | `src/quest/plugins/q15t/src/ecfx_core.h:2` rewritten |
+| 212 | `src/fxtrail.cpp:17` | `a1b3818` | `afk_fxtrail.cpp` | source `runtime/native/afkxr/afk_fxtrail.cpp`:48 | unpinned | tried `kCsData = 0xf8, kDataStride = 0x18, kDataInst = 0x10`: at :43 of the newest candidate, cited :48 | `src/quest/plugins/q15t/src/fxtrail.cpp:17` rewritten |
+| 213 | `src/fxtrail.h:1` | `a1b3818` | `afk_fxtrail.cpp` | source `runtime/native/afkxr/afk_fxtrail.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/fxtrail.h:1` rewritten |
+| 214 | `src/gamespace.h:2` | `1215eb7` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp` | `a3d0ffd` file |  | `src/quest/plugins/q15t/src/gamespace.h:2` rewritten |
+| 215 | `src/gunconnect.cpp:19` | `bd4c6ba` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp`:91-92 | `1357409` lines | `UserActor` | `src/quest/plugins/q15t/src/gunconnect.cpp:19` rewritten |
+| 216 | `src/gunconnect.cpp:136` | `a1b3818` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp`:222-240 | `1357409` lines | `ReadLocal` | `src/quest/plugins/q15t/src/gunconnect.cpp:136` rewritten |
+| 217 | `src/gunconnect.h:1` | `a1b3818` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/gunconnect.h:1` rewritten |
+| 218 | `src/heaps.cpp:33` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp`:253 | `1357409` lines | `hollywood` | `src/quest/plugins/q15t/src/heaps.cpp:33` rewritten |
+| 219 | `src/heaps.h:6` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/heaps.h:6` rewritten |
+| 220 | `src/hudmeter.h:1` | `a1b3818` | `afk_hudmeter.cpp` | source `runtime/native/afkxr/afk_hudmeter.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/hudmeter.h:1` rewritten |
+| 221 | `src/impactsnd.cpp:25` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:74 | `1357409` lines | `0x37af8d0` `kDefaultSymVa` | `src/quest/plugins/q15t/src/impactsnd.cpp:28` rewritten |
+| 222 | `src/impactsnd.cpp:26` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:75 | `1357409` lines | `0x37af6a0` `kSoundSettingsVa` `kSoundSettings` | `src/quest/plugins/q15t/src/impactsnd.cpp:29` rewritten |
+| 223 | `src/impactsnd.cpp:29` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:86 | `1357409` lines | `0x2121d04` `LoadSoundSettings` | `src/quest/plugins/q15t/src/impactsnd.cpp:32` rewritten |
+| 224 | `src/impactsnd.cpp:33` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:77 | `1357409` lines | `kMapCount` | `src/quest/plugins/q15t/src/impactsnd.cpp:36` rewritten |
+| 225 | `src/impactsnd.cpp:34` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:100 | `1357409` lines | `kMapFlags` | `src/quest/plugins/q15t/src/impactsnd.cpp:37` rewritten |
+| 226 | `src/impactsnd.cpp:36` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:78-80 | `1357409` lines | `kCodeCountVa = 0x21208b4`* `kCodeCount = 0xf9401ac1`* | `src/quest/plugins/q15t/src/impactsnd.cpp:79` rewritten |
+| 227 | `src/impactsnd.cpp:48` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:81 | `1357409` lines | `kWaitS` | `src/quest/plugins/q15t/src/impactsnd.cpp:91` rewritten |
+| 228 | `src/impactsnd.cpp:53` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:101 | `1357409` lines | `kStockId` `CalculateSymbolValue` | `src/quest/plugins/q15t/src/impactsnd.cpp:96` rewritten |
+| 229 | `src/impactsnd.cpp:59` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp`:103-119 | `1357409` lines | `kIds[] = {`* `play_bullet_impact_player`* | `src/quest/plugins/q15t/src/impactsnd.cpp:102` rewritten |
+| 230 | `src/impactsnd.h:1` | `a1b3818` | `afk_impactsnd.cpp` | source `runtime/native/afkxr/afk_impactsnd.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/impactsnd.h:1` rewritten |
+| 231 | `src/memsys.cpp:22` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp`:65-77 | `1357409` lines | `kWords`* | `src/quest/plugins/q15t/src/memsys.cpp:22` rewritten |
+| 232 | `src/memsys.h:2` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/memsys.h:2` rewritten |
+| 233 | `src/memsys.h:16` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp`:65-77 | `1357409` lines | `kWords[] = {`* | `src/quest/plugins/q15t/src/memsys.h:16` rewritten |
+| 234 | `src/music.cpp:15` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:52 | `43dd2ad` lines | `kFnPostSoundEvent = 0x2549264`* | `src/quest/plugins/q15t/src/music.cpp:15` rewritten |
+| 235 | `src/music.cpp:17` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:67,98 | `43dd2ad` lines | `0xFFFFFFFF` | `src/quest/plugins/q15t/src/music.cpp:17` rewritten |
+| 236 | `src/music.cpp:18` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:59 | `43dd2ad` lines | `kMaxLines` | `src/quest/plugins/q15t/src/music.cpp:18` rewritten |
+| 237 | `src/music.cpp:19` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:157 | `43dd2ad` lines | `g_nextLook = now + 0.5`* | `src/quest/plugins/q15t/src/music.cpp:19` rewritten |
+| 238 | `src/music.cpp:22` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:83 | `43dd2ad` lines | `PostSoundEvent(self, event w1`* | `src/quest/plugins/q15t/src/music.cpp:22` rewritten |
+| 239 | `src/music.h:1` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp` | `43dd2ad` file |  | `src/quest/plugins/q15t/src/music.h:1` rewritten |
+| 240 | `src/music.h:61` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:54-58 | `43dd2ad` lines | `SetState` | `src/quest/plugins/q15t/src/music.h:61` rewritten |
+| 241 | `src/peerclamp.cpp:13` | `a1b3818` | `afk_peerclamp.cpp` | source `runtime/native/afkxr/afk_peerclamp.cpp`:55-57 | `1357409` lines | `ldr w8,[x19,#0x560]`* `ldr x24,[x19,#0x478]`* | `src/quest/plugins/q15t/src/peerclamp.cpp:13` rewritten |
+| 242 | `src/peerclamp.h:1` | `a1b3818` | `afk_peerclamp.cpp` | source `runtime/native/afkxr/afk_peerclamp.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/peerclamp.h:1` rewritten |
+| 243 | `src/plugin.cpp:152` | `d78d0da` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp` | `dbea67e` file |  | `src/quest/plugins/q15t/src/plugin.cpp:183` rewritten |
+| 244 | `src/powerboost.cpp:1` | `a1b3818` | `afk_powerboost.cpp` | source `runtime/native/afkxr/afk_powerboost.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/powerboost.cpp:1` rewritten |
+| 245 | `src/powerboost.cpp:51` | `a1b3818` | `afk_flowdiag.cpp` | source `runtime/native/afkxr/afk_flowdiag.cpp`:91 | `1357409` lines | `0xc9dc08cfc2f5920f` `kDamageableKey` | `src/quest/plugins/q15t/src/powerboost.cpp:51` rewritten |
+| 246 | `src/powerboost.cpp:52` | `a1b3818` | `afk_flowdiag.cpp` | source `runtime/native/afkxr/afk_flowdiag.cpp`:93 | `1357409` lines | `0x3693ea0` `kDamageableVptr` | `src/quest/plugins/q15t/src/powerboost.cpp:52` rewritten |
+| 247 | `src/powerboost.cpp:281` | `a1b3818` | `pb 574-623` `pb 487-505` | EchoCombat `plugin/powerboost.cpp`:574-623 ; EchoCombat `plugin/powerboost.cpp`:487-505 | EC `c14c3e0a` lines ; EC `c14c3e0a` lines | `int __fastcall ConeFilter(uint8_t *bubble`* `angle > 180`* `void LinkState(void *dcs, uint32_t index, bool linked)`* | `src/quest/plugins/q15t/src/powerboost.cpp:281` rewritten |
+| 248 | `src/powerboost.cpp:302` | `a1b3818` | `pb 577` | EchoCombat `plugin/powerboost.cpp`:577 | EC `c14c3e0a` lines | `angle > 180` | `src/quest/plugins/q15t/src/powerboost.cpp:302` rewritten |
+| 249 | `src/powerboost.cpp:318` | `a1b3818` | `pb 585` | EchoCombat `plugin/powerboost.cpp`:585 | EC `c14c3e0a` lines | `if (dist < 0.3f) return 0;`* | `src/quest/plugins/q15t/src/powerboost.cpp:318` rewritten |
+| 250 | `src/powerboost.cpp:319` | `a1b3818` | `pb 224` | EchoCombat `plugin/powerboost.cpp`:224 | EC `c14c3e0a` lines | `float g_axis[3] = { 0, 0, 1 };`* | `src/quest/plugins/q15t/src/powerboost.cpp:319` rewritten |
+| 251 | `src/powerboost.cpp:337` | `a1b3818` | `pb 610-620` | EchoCombat `plugin/powerboost.cpp`:610-620 | EC `c14c3e0a` lines | `static ULONGLONG last;`* | `src/quest/plugins/q15t/src/powerboost.cpp:337` rewritten |
+| 252 | `src/powerboost.cpp:368` | `a1b3818` | `pb 500-504` | EchoCombat `plugin/powerboost.cpp`:500-504 | EC `c14c3e0a` lines | `now - g_used_at > 30000`* `SendDamageDealt(dcs, index, -marker, 0, 0);`* | `src/quest/plugins/q15t/src/powerboost.cpp:368` rewritten |
+| 253 | `src/powerboost.cpp:393` | `a1b3818` | `pb 500` | EchoCombat `plugin/powerboost.cpp`:500 | EC `c14c3e0a` lines | `now - g_used_at > 30000`* | `src/quest/plugins/q15t/src/powerboost.cpp:393` same |
+| 254 | `src/powerboost.h:1` | `a1b3818` | `afk_powerboost.cpp` | source `runtime/native/afkxr/afk_powerboost.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/powerboost.h:1` rewritten |
+| 255 | `src/powerboost_core.h:2` | `bd4c6ba` | `afk_powerboost_core.h` | source `runtime/native/afkxr/afk_powerboost_core.h` | `1357409` file |  | not carried: the line is gone from `src/quest/plugins/q15t/src/powerboost_core.h` |
+| 256 | `src/powerboost_core.h:16` | `a1b3818` | `pb L111-112, L330-333` | EchoCombat `plugin/powerboost.cpp`:111-112,330-333 | EC `c14c3e0a` lines | `this one left my cone` | `src/quest/plugins/q15t/src/powerboost_core.h:16` rewritten |
+| 257 | `src/powerboost_core.h:17` | `a1b3818` | `pb L501-502` | EchoCombat `plugin/powerboost.cpp`:501-502 | EC `c14c3e0a` lines | `UNLINK_BASE`* | `src/quest/plugins/q15t/src/powerboost_core.h:17` rewritten |
+| 258 | `src/powerboost_core.h:61` | `a1b3818` | `c14c3e0a` | EchoCombat `plugin/powerboost.cpp` | EC `c14c3e0a` group |  | `src/quest/plugins/q15t/src/powerboost_core.h:61` rewritten |
+| 259 | `src/powerboost_core.h:64` | `a1b3818` | `pb 466-471` | EchoCombat `plugin/powerboost.cpp`:466-471 | EC `c14c3e0a` lines | `void Rotate(const float *q, const float *v, float *out)`* | `src/quest/plugins/q15t/src/powerboost_core.h:64` rewritten |
+| 260 | `src/powerboost_core.h:72` | `a1b3818` | `pb 473-479` | EchoCombat `plugin/powerboost.cpp`:473-479 | EC `c14c3e0a` lines | `float AngleTo(const float *q`* | `src/quest/plugins/q15t/src/powerboost_core.h:72` rewritten |
+| 261 | `src/powerboost_core.h:81` | `a1b3818` | `pb 575-577` | EchoCombat `plugin/powerboost.cpp`:575-577 | EC `c14c3e0a` lines | `float radius = *(float *)(bubble + 0x38)`* `angle > 180`* | `src/quest/plugins/q15t/src/powerboost_core.h:81` rewritten |
+| 262 | `src/powerboost_core.h:85` | `a1b3818` | `pb 551` | EchoCombat `plugin/powerboost.cpp`:551 | EC `c14c3e0a` lines | `CONE_SLACK_DEG = 5.0f`* | `src/quest/plugins/q15t/src/powerboost_core.h:85` rewritten |
+| 263 | `src/powerboost_core.h:86` | `a1b3818` | `pb 552` | EchoCombat `plugin/powerboost.cpp`:552 | EC `c14c3e0a` lines | `LINK_MIN_MS = 250`* | `src/quest/plugins/q15t/src/powerboost_core.h:86` rewritten |
+| 264 | `src/powerboost_core.h:87` | `a1b3818` | `pb 565` | EchoCombat `plugin/powerboost.cpp`:565 | EC `c14c3e0a` lines | `now - b.last < 2000`* | `src/quest/plugins/q15t/src/powerboost_core.h:87` rewritten |
+| 265 | `src/powerboost_core.h:88` | `a1b3818` | `pb 585` | EchoCombat `plugin/powerboost.cpp`:585 | EC `c14c3e0a` lines | `if (dist < 0.3f) return 0;`* | `src/quest/plugins/q15t/src/powerboost_core.h:88` rewritten |
+| 266 | `src/powerboost_core.h:89` | `a1b3818` | `pb 500` | EchoCombat `plugin/powerboost.cpp`:500 | EC `c14c3e0a` lines | `now - g_used_at > 30000`* | `src/quest/plugins/q15t/src/powerboost_core.h:89` rewritten |
+| 267 | `src/powerboost_core.h:90` | `a1b3818` | `pb 108, 111` | EchoCombat `plugin/powerboost.cpp`:108,111 | EC `c14c3e0a` lines | `LINK_BASE = 2000000.0f`* `UNLINK_BASE = 6000000.0f`* | `src/quest/plugins/q15t/src/powerboost_core.h:90` rewritten |
+| 268 | `src/powerboost_core.h:97` | `a1b3818` | `pb 561-572` | EchoCombat `plugin/powerboost.cpp`:561-572 | EC `c14c3e0a` lines | `BubbleLinks &BubbleFor(uint8_t *bubble, ULONGLONG now)`* | not carried: the line is gone from `src/quest/plugins/q15t/src/powerboost_core.h` |
+| 269 | `src/powerboost_core.h:113` | `a1b3818` | `pb 587-608` | EchoCombat `plugin/powerboost.cpp`:587-608 | EC `c14c3e0a` lines | `float range = floorf(radius);`* | `src/quest/plugins/q15t/src/powerboost_core.h:113` rewritten |
+| 270 | `src/powerboost_core.h:140` | `a1b3818` | `pb 338-345` | EchoCombat `plugin/powerboost.cpp`:338-345 | EC `c14c3e0a` lines | `g_dr = (v / 1000) / 1000.0f;`* | `src/quest/plugins/q15t/src/powerboost_core.h:140` rewritten |
+| 271 | `src/powerboost_core.h:143` | `a1b3818` | `pb 488-492` | EchoCombat `plugin/powerboost.cpp`:488-492 | EC `c14c3e0a` lines | `ULONGLONG now = GetTickCount64();`* `if (left < 1) left = 1;`* | `src/quest/plugins/q15t/src/powerboost_core.h:143` rewritten |
+| 272 | `src/powerboost_core.h:151` | `a1b3818` | `pb 500-502` | EchoCombat `plugin/powerboost.cpp`:500-502 | EC `c14c3e0a` lines | `now - g_used_at > 30000`* `UNLINK_BASE`* | `src/quest/plugins/q15t/src/powerboost_core.h:151` rewritten |
+| 273 | `src/powerboost_thunk.inc:1` | `a1b3818` | `afk_powerboost.cpp` | source `runtime/native/afkxr/afk_powerboost.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/powerboost_thunk.inc:1` rewritten |
+| 274 | `src/refresh_rate.cpp:20` | `d78d0da` | `afk_hz.cpp` | source `runtime/native/afkxr/afk_hz.cpp` | `dbea67e` file |  | `src/quest/plugins/q15t/src/refresh_rate.cpp:30` rewritten |
+| 275 | `src/refresh_rate.cpp:23` | `d78d0da` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp` | `dbea67e` file |  | `src/quest/plugins/q15t/src/refresh_rate.cpp:41` rewritten |
+| 276 | `src/sensorwd.cpp:19` | `9f8b01a` | `afk_fx.cpp` `43dd2ad` | source `runtime/native/afkxr/afk_fx.cpp` ; source commit `43dd2ad` | `43dd2ad` named |  | `src/quest/plugins/q15t/src/sensorwd.cpp:19` rewritten |
+| 277 | `src/sensorwd.h:1` | `9f8b01a` | `afk_fx.cpp` | source `runtime/native/afkxr/afk_fx.cpp` | `43dd2ad` file |  | `src/quest/plugins/q15t/src/sensorwd.h:1` rewritten |
+| 278 | `src/shieldgamma.h:2` | `a1b3818` | `afk_shieldgamma.cpp` | source `runtime/native/afkxr/afk_shieldgamma.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/shieldgamma.h:2` rewritten |
+| 279 | `src/voipdrop.cpp:16` | `a1b3818` | `afk_voipdrop.cpp` | source `runtime/native/afkxr/afk_voipdrop.cpp`:51 | unpinned | tried `kTable = 0x168`: at :43 of the newest candidate, cited :51 | `src/quest/plugins/q15t/src/voipdrop.cpp:16` rewritten |
+| 280 | `src/voipdrop.h:1` | `a1b3818` | `afk_voipdrop.cpp` | source `runtime/native/afkxr/afk_voipdrop.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/voipdrop.h:1` rewritten |
+| 281 | `src/wallfire.h:1` | `a1b3818` | `afk_wallfire.cpp` | source `runtime/native/afkxr/afk_wallfire.cpp` | `1357409` file |  | `src/quest/plugins/q15t/src/wallfire.h:1` rewritten |
+| 282 | `src/weapon_arm.h:1` | `1215eb7` | `afk_gunconnect.cpp` | source `runtime/native/afkxr/afk_gunconnect.cpp` | `a3d0ffd` file |  | `src/quest/plugins/q15t/src/weapon_arm.h:1` rewritten |
+| 283 | `tests/dronekill_test.cpp:376` | `a1b3818` | `afk_dronekill_core.h` | source `runtime/native/afkxr/afk_dronekill_core.h` | `1357409` file |  | `src/quest/tests/q15t/dronekill_test.cpp:376` rewritten |
+| 284 | `tests/dronemuzzle_test.cpp:62` | `a1b3818` | `plugin/dronefix.cpp 132-147 / 916-934` | EchoCombat `plugin/dronefix.cpp`:132-147,916-934 | EC `c14c3e0a` lines | `void TickFrame()`* `Pose *__fastcall MuzzleTransform`* | not carried: the line is gone from `src/quest/tests/q15t/dronemuzzle_test.cpp` |
+| 285 | `tests/ecfx_wall_stub.cpp:2` | `a1b3818` | `afk_ecfx.cpp` | source `runtime/native/afkxr/afk_ecfx.cpp` | `1357409` file |  | `src/quest/tests/q15t/ecfx_wall_stub.cpp:2` rewritten |
+| 286 | `tests/memsys_test.cpp:190` | `a1b3818` | `afk_memsys.cpp` | source `runtime/native/afkxr/afk_memsys.cpp`:56-58 | `1357409` lines | `kGotSys = 0x371d020`* `kGotAlloc = 0x36e9b48`* `kGotInit = 0x36de5c0`* | `src/quest/tests/q15t/memsys_test.cpp:190` rewritten |
+| 287 | `tests/mod/dronemuzzle.sh:24` | `bd4c6ba` | `afk_dronemuzzle.cpp` | source `runtime/native/afkxr/afk_dronemuzzle.cpp` | `1357409` file |  | not carried: the line is gone from `src/quest/tests/q15t/mod/dronemuzzle.cmake` |
+| 288 | `tests/mod/dronemuzzle.sh:25` | `a1b3818` | `afk_dronemuzzle.cpp` | source `runtime/native/afkxr/afk_dronemuzzle.cpp` | `1357409` file |  | not carried: the line is gone from `src/quest/tests/q15t/mod/dronemuzzle.cmake` |
+| 289 | `tests/music_test.cpp:49` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:54-58 | `43dd2ad` lines | `kPlay[] = {0x2f22c384, 0xb1b06cfb}`* `kStop[] = {0xde586538, 0x2acba759}`* | `src/quest/tests/q15t/music_test.cpp:49` rewritten |
+| 290 | `tests/music_test.cpp:55` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:61-62 | `43dd2ad` lines | `0x43e2da7914642604` `0x43e2da7a0c623a19` | `src/quest/tests/q15t/music_test.cpp:55` rewritten |
+| 291 | `tests/music_test.cpp:303` | `a34ebda` | `afk_music.cpp` | source `runtime/native/afkxr/afk_music.cpp`:102 | `43dd2ad` lines | `if (target == 0xFFFFFFFF) continue;`* | `src/quest/tests/q15t/music_test.cpp:303` rewritten |
+| 292 | `tests/powerboost_test.cpp:773` | `a1b3818` | `pb 551-552` | EchoCombat `plugin/powerboost.cpp`:551-552 | EC `c14c3e0a` lines | `CONE_SLACK_DEG = 5.0f`* `LINK_MIN_MS = 250`* | `src/quest/tests/q15t/powerboost_test.cpp:773` rewritten |
 
 ## 5. Other references to the source's files
 
@@ -493,22 +529,39 @@ of `<public base>/nevr-runtime/<tag>/nevr-runtime-<tag>-q15t-quest.apk` and, if 
 | v6.16.4 | 404 | 404 | 200 |
 | v6.16.5 | 404 | 404 | 200 |
 
-**Result: the host has no variant APK for any of the 15 tags (404 for each), so there is no variant APK on the host whose digest or libraries could be read.** The host also answers 404 for the release's own APK of every tag before v6.16.2, so a 404 for a variant of those tags does not say that none was served when it was published.
+**Result: the host has no variant APK for any of the 15 tags (404 for each).** The host also answers 404 for the release's own APK of every tag before v6.16.2, so a 404 for a variant of those tags does not by itself say that none was served;
+the copy below says that three were, and that they were deleted by the host's cleanup of 2026-11-02.
 
 **What the timer's log holds.** The timer's JSONL log (749 records) has no `variant_build`, `variant_publish` or `variant_library` record: the timer never
 built a variant. Its variant records are `variant_exists` with `listed: false` and `variant_pins` failures, for v6.11.0 to v6.14.0, from
 2026-10-30T18:40:57Z to 2026-10-31T07:00:10Z. Each failure's text says the same: the library found has sha256
 `1b5fbdc38b866b1d00a3ea825f0e3167cd2507c779f24624c4301878324bc271`, the pin is `a2932a7c8fb38a313dda3b1da6a9c142f110573eded60ac6c93c5a7ee300cd65`.
 
-**What the old repository and its local scratch record.** Hand-built variants, as the old repository's `HANDOFF.md` (lines 24-25, 28, 35, 37, 44) records them,
-with the digests read from the files:
+**A copy the release host's cleanup kept.** The cleanup of 2026-11-02 deleted the variant APKs and their `.sha256` files from the host; a copy of the objects it deleted exists. `copy_libs.py` reads it (read-only): the APK's sha256, the sha256 of each
+`lib/arm64-v8a/libq15t*.so` in the archive, the sidecar, and the modification time the cleanup's host listing gave the object. Of the 30 APKs in the copy, these carry q15t libraries:
 
-| Tag | variant APK sha256 | libraries (sha256) | the old commit whose build they are |
-|---|---|---|---|
-| v6.1.1-dev.3 (a development build of 2026-10-29, built from nevr-runtime `152d9684`; not a release tag) | `3611376667390b602fb853d0aa5717543fc009bd4fac8a4d3685970dde5821fc` (`HANDOFF.md` line 24) | `libq15t.so` `a2932a7c...` and `libq15t_early.so` `387b7aff...` (`HANDOFF.md` line 25: eight hex digits each). **Inference:** the two files of the v6.6.0 row, whose digests start the same | the default preset (`HANDOFF.md` line 28), not tied to an old commit there |
-| v6.6.0 | `b83770c75739193de7e5f54fa9956517e83dc201f0b8c7b69aeef3bdda2582bc` (the `.sha256` left by the repack; `HANDOFF.md` says it was serving) | `libq15t.so` `a2932a7c8fb38a313dda3b1da6a9c142f110573eded60ac6c93c5a7ee300cd65`; `libq15t_early.so` `387b7aff7539f88c015785e5a5d904e0662d4ce2c4a1175a29afa14540de38bf` (the two files the repack used) | `9f8b01a`, the default preset (the old `HANDOFF.md`'s statement; the libraries were not rebuilt for this record) |
-| v6.7.0 | `52166b82c58e795d78343610d2f99686052a70f1a76b0d0a0fcff8b43dec7a98` (`HANDOFF.md`: serving from 2026-10-30 09:25Z); a later local repack left the `.sha256` `b6eb58acac3139d91097470be6afc7df730602bd12a8dbbc32ccee1e262c8699` (file time 2026-10-30 07:17 -0500), whether it was uploaded is not established | not established: `HANDOFF.md` records no library for it, and the repack log names the libraries' paths, not their digests | not established |
-| v6.8.0 to v6.16.5 | none found: no record of a hand-built variant, none on the host | | |
+| APK | APK sha256 | sidecar agrees | host listing time (UTC) | `libq15t.so` sha256 | `libq15t_early.so` sha256 |
+|---|---|---|---|---|---|
+| `nevr-runtime-v6.1.1-dev.3-quest.apk` | `3611376667390b602fb853d0aa5717543fc009bd4fac8a4d3685970dde5821fc` | yes | 2026-10-29T15:35:58Z | `a2932a7c8fb38a313dda3b1da6a9c142f110573eded60ac6c93c5a7ee300cd65` | `387b7aff7539f88c015785e5a5d904e0662d4ce2c4a1175a29afa14540de38bf` |
+| `nevr-runtime-v6.11.0-quest.apk` | `14add733daf322e0907efa64b706d08c0c7cf8332bb4a4d006cc6931342bce32` | yes | 2026-10-30T18:32:21Z | `af7130c1d1d0b6acac13f806e6784a4debee0c911bfbc68622c48baa0104d7fe` | `3b018bd87def861998324a57a7a84aa50ce41d24bfd99f7e7ceb6cd7f7190ef7` |
+| `nevr-runtime-v6.6.0-q15t-quest.apk` | `b83770c75739193de7e5f54fa9956517e83dc201f0b8c7b69aeef3bdda2582bc` | yes | 2026-10-30T08:50:49Z | `a2932a7c8fb38a313dda3b1da6a9c142f110573eded60ac6c93c5a7ee300cd65` | `387b7aff7539f88c015785e5a5d904e0662d4ce2c4a1175a29afa14540de38bf` |
+| `nevr-runtime-v6.7.0-q15t-quest.apk` | `b6eb58acac3139d91097470be6afc7df730602bd12a8dbbc32ccee1e262c8699` | yes | 2026-10-30T12:17:01Z | `440bf65c3f4d3c8ac920c179962aa2bc19e36ccf621e2f4634a0c9d636b080a5` | `2206efaf199f6f4d0086ca569b4f1c4650a57754365688cb5527f34d9e3ccb45` |
+| `nevr-runtime-v6.7.0-q15t.2-quest.apk` | `255a093b785fe43039f6d5b9645d91ea5814f29161f9f8e06476afaad0f497e0` | yes | 2026-10-30T13:16:26Z | `1b5fbdc38b866b1d00a3ea825f0e3167cd2507c779f24624c4301878324bc271` | `2206efaf199f6f4d0086ca569b4f1c4650a57754365688cb5527f34d9e3ccb45` |
+
+**The mapping, library by library** (the old commits are those of section 6; the old repository's notes are `HANDOFF.md` lines 24-25, 28, 35, 37 and 44):
+
+| Library sha256 | In | Old build it is |
+|---|---|---|
+| `libq15t.so` `a2932a7c8fb38a313dda3b1da6a9c142f110573eded60ac6c93c5a7ee300cd65` | the v6.6.0 variant and the v6.1.1-dev.3 development build (2026-10-29) | the default-preset build of `9f8b01a`, as `HANDOFF.md` lines 28 and 35 say; not rebuilt here |
+| `libq15t_early.so` `387b7aff7539f88c015785e5a5d904e0662d4ce2c4a1175a29afa14540de38bf` | the same two APKs | the same build of `9f8b01a` |
+| `libq15t.so` `1b5fbdc38b866b1d00a3ea825f0e3167cd2507c779f24624c4301878324bc271` | the v6.7.0 `q15t.2` variant | **the build of the tree committed as `8b24d66`**: it is the file in the old repository's ignored `build/android-arm64/`, built five minutes before that commit (below) |
+| `libq15t_early.so` `2206efaf199f6f4d0086ca569b4f1c4650a57754365688cb5527f34d9e3ccb45` | the v6.7.0 `q15t.2` variant and the v6.7.0 `q15t` variant | the file in the old repository's ignored `build/android-arm64/` (file time 2026-10-30T12:02Z) |
+| `libq15t.so` `440bf65c3f4d3c8ac920c179962aa2bc19e36ccf621e2f4634a0c9d636b080a5` | the v6.7.0 `q15t` variant | no old commit or note records this digest: not established |
+
+**v6.7.0 has two variants on the host before the cleanup.** `nevr-runtime-v6.7.0-q15t-quest.apk` (`b6eb58ac...`, listing time 2026-10-30T12:17:01Z) carries `libq15t.so` `440bf65c...` and the early library of the `8b24d66` build; `nevr-runtime-v6.7.0-q15t.2-quest.apk`
+(`255a093b...`, 2026-10-30T13:16:26Z) carries both libraries of the `8b24d66` build. The old `HANDOFF.md` line 44 records a v6.7.0 variant `52166b82c58e795d78343610d2f99686052a70f1a76b0d0a0fcff8b43dec7a98`, serving from 2026-10-30 09:25Z: the copy holds no APK of that digest,
+and the listing has one object under the `q15t` name, so **inference:** `52166b82...` was replaced under that name by the 12:17Z upload; its libraries are not established.
+The release's own APK of v6.11.0 (`14add733...`) also carries q15t libraries, `libq15t.so` `af7130c1d1d0b6acac13f806e6784a4debee0c911bfbc68622c48baa0104d7fe` and `libq15t_early.so` `3b018bd87def861998324a57a7a84aa50ce41d24bfd99f7e7ceb6cd7f7190ef7`; it is a release asset, not a variant, and no old build matches those digests.
 
 **The libraries in the old repository's ignored `build/`.** Read from the files (`sha256sum`, `stat`); these are the only plugin libraries left in the repository's folder:
 
@@ -522,7 +575,7 @@ with the digests read from the files:
 | `build/android-arm64/libq15t.so` | 1242896 | 2026-10-30T13:14:02Z | `1b5fbdc38b866b1d00a3ea825f0e3167cd2507c779f24624c4301878324bc271` |
 | `build/android-arm64/libq15t_early.so` | 173080 | 2026-10-30T12:02:50Z | `2206efaf199f6f4d0086ca569b4f1c4650a57754365688cb5527f34d9e3ccb45` |
 
-`build/android-arm64/libq15t.so` is the library of the timer's failures above (`1b5fbdc3...`), built 2026-10-30T13:14Z, five minutes before the commit `8b24d66` (2026-10-30T13:19:55Z).
+`build/android-arm64/libq15t.so` is the library of the timer's failures above (`1b5fbdc3...`) and of the v6.7.0 `q15t.2` variant, built 2026-10-30T13:14Z, five minutes before the commit `8b24d66` (2026-10-30T13:19:55Z); the variant was listed at 13:16Z.
 **Inference:** it is the build of the tree committed as `8b24d66`: the library carries a `q15t-config` marker with the four fields `src/plugin.cpp` writes at lines 173-175 of that commit
 (`ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 build_id=b243509c...`), and `git log -S q15t_config_marker` finds only `8b24d66`, the commit that added the marker.
 The other build trees (`android-arm64-x`, `-y`, `-hz`, `-gates`, `-t26`) hold the libraries of the 2026-10-28 test arms. They are not the plugins in the test APKs of section 9: the old `PROVENANCE.md` says an arm rebuilt
@@ -569,5 +622,5 @@ To be read with the commands of section 1.
    (sections 4 and 6), the commit log (section 6), the four rules (section 7 and the README), the variant provenance (section 8), and the credit trailers.
 4. `check.py` against this record: see the line below, which `check.py` prints and the commit message repeats.
 
-`check.py` on this record, run before this line was written: `check: 267 rows, 267 token lines at the old last commit, 22 other references; 0 failures`; counts: {'ec dronefix agree': 1, 'ec group': 3, 'ec lines': 52, 'ec powerboost agree': 1, 'ec veilnet agree': 1, 'named': 5, 'src file': 64, 'src lines': 140, 'tree gone': 12, 'tree nofile': 4, 'tree rewritten': 249, 'tree same': 2, 'unpinned': 5}
+`check.py` on this record, run before this line was written: `check: 292 rows, 292 token lines at the old last commit, 22 other references; 0 failures`; counts: {'ec dronefix agree': 1, 'ec group': 3, 'ec lines': 78, 'ec powerboost agree': 1, 'ec veilnet agree': 1, 'named': 5, 'src file': 64, 'src lines': 140, 'tree gone': 13, 'tree nofile': 4, 'tree rewritten': 272, 'tree same': 3, 'unpinned': 5}
 

@@ -60,4 +60,4 @@ native library directory only, so a plugin that is not in the APK is not loaded.
 - A wrapper on a high-fan-in function keeps counters and logs nothing per call.
 - Every address, offset and layout is a cited line of the reference build's source or a quoted disassembly word, and anything unread is
   labelled unverified in the module's note (`docs/quest/q15t/modules/`). The audit record `docs/audits/2026-11-05-q15t-origin-citations.md`
-  names the source file and commit of each citation the plugin's module notes and code comments cite.
+  names the source file, line and commit of the citations the plugin's notes and comments carried as `afk_<file>`, `vn`, `pb` and `df` line numbers.
