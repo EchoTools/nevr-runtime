@@ -47,10 +47,10 @@
 #include "runtime/patch/asset_cache.h"
 
 #include "core/globals.h"
-#include "core/log_text.h"
 #include "core/logging.h"
 #include "runtime/patch/game_buffer.h"
 #include "runtime/patch/resource_buffer_key.h"
+#include "runtime/patch/resource_label.h"
 
 /* Embedded assets */
 #include "runtime/lifecycle/cli.h"
@@ -399,7 +399,7 @@ static bool RegisterOwnedCopy(uint64_t type_hash, uint64_t name_hash, const uint
     ovr->data = data;
     ovr->size = size;
     ovr->owned = true;
-    ovr->label = label;  /* already SafeText: its one caller cleans the index entry's label before any line is written */
+    ovr->label = label;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) {
@@ -491,6 +491,17 @@ static void EnsureHookInstalled() {
     Log(EchoVR::LogLevel::Debug, "[NEVR.RESOURCE] hook installed target=%p", hookTarget);
 }
 
+/* A label outside the rule (resource_label.h) is refused where it enters the registry, so no later line can carry bytes a
+ * plugin chose. The Warning gives the length and the rule, never the label (#2215). */
+static void LogLabelRefused(const char* entry, uint64_t type_hash, uint64_t name_hash, const char* label) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.RESOURCE] override refused entry=%s status=%d reason=%s label_bytes=%zu type=0x%016llx name=0x%016llx "
+        "rule=\"%s\" - nothing is registered",
+        entry, nevr_resource_label::kBadArgumentStatus, nevr_resource_label::kReason, nevr_resource_label::Bytes(label),
+        static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+        nevr_resource_label::kRule);
+}
+
 } // anonymous namespace
 
 /* ── Public API ───────────────────────────────────────────────────── */
@@ -498,13 +509,17 @@ static void EnsureHookInstalled() {
 void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
                               const void* data, uint64_t size,
                               const char* label) {
+    if (!nevr_resource_label::Ok(label)) {
+        LogLabelRefused("override", type_hash, name_hash, label);
+        return;
+    }
     auto ovr = std::make_shared<ResourceOverride>();
     ovr->type_hash = type_hash;
     ovr->name_hash = name_hash;
     ovr->data = data;
     ovr->size = size;
     ovr->owned = false;
-    ovr->label = nevr_log_text::SafeText(label ? label : "(null)");
+    ovr->label = label;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) return;
@@ -536,13 +551,17 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
 bool RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
                                const char* label) {
     if (transform == nullptr) return false;
+    if (!nevr_resource_label::Ok(label)) {
+        LogLabelRefused("transform", type_hash, name_hash, label);
+        return false;
+    }
     auto ovr = std::make_shared<ResourceOverride>();
     ovr->type_hash = type_hash;
     ovr->name_hash = name_hash;
     ovr->data = nullptr;
     ovr->size = 0;
     ovr->owned = false;
-    ovr->label = nevr_log_text::SafeText(label ? label : "(null)");
+    ovr->label = label;
     ovr->transform = transform;
     ovr->user = user;
     {
@@ -564,6 +583,10 @@ static bool RegisterResourceOverrideFromFileImpl(uint64_t type_hash, uint64_t na
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) return false;
     }
+    if (!nevr_resource_label::Ok(label)) {
+        LogLabelRefused("file", type_hash, name_hash, label);
+        return false;
+    }
     uint64_t size = 0;
     DWORD err = 0;
     void* data = LoadFileFromDisk(file_path, &size, &err);
@@ -578,7 +601,7 @@ static bool RegisterResourceOverrideFromFileImpl(uint64_t type_hash, uint64_t na
     ovr->data = data;
     ovr->size = size;
     ovr->owned = true;
-    ovr->label = nevr_log_text::SafeText(label ? label : "(null)");
+    ovr->label = label;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         if (!g_overrides) {
@@ -649,8 +672,16 @@ size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_by
     std::set<std::string> referenced;
     for (const nevr_asset_cache::IndexEntry& entry : index.entries) {
         referenced.insert(entry.sha256);
-        const std::string label =
-            nevr_log_text::SafeText(entry.label.empty() ? "cache:" + entry.sha256.substr(0, 12) : entry.label);
+        const std::string label = entry.label.empty() ? "cache:" + entry.sha256.substr(0, 12) : entry.label;
+        if (!nevr_resource_label::Ok(label.c_str())) {
+            ++refused;
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.RESOURCE] cache refused entry=cache status=%d reason=%s label_bytes=%zu sha256=%s rule=\"%s\" - "
+                "nothing is registered",
+                nevr_resource_label::kBadArgumentStatus, nevr_resource_label::kReason, label.size(),
+                entry.sha256.c_str(), nevr_resource_label::kRule);
+            continue;
+        }
         const std::string blob = WideToUtf8(nevr_asset_cache::BlobPath(dir, entry.sha256));
         nevr_asset_cache::LoadResult r = nevr_asset_cache::Load(dir, entry.sha256);
         switch (r.status) {
