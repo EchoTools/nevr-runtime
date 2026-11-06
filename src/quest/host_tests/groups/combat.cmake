@@ -21,6 +21,9 @@ foreach(f got_hook hook_log hook_report)
 endforeach()
 set(_ccore o_combat_got_hook o_combat_hook_log o_combat_hook_report)
 set(_cf NOEXC PTHREAD DL INCS ${_csent})
+# The EC client and what it brings into a program that links the registration table (#2187): its NEUTRON effects, the sentinel's page and
+# the module-loaded observer table it registers with.
+set(_cec src/quest/combat/ec.cpp src/quest/combat/ecfx.cpp src/quest/sentinel/ec_page.cpp src/quest/integration/module_observers.cpp)
 
 # The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
 # combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.
@@ -33,7 +36,7 @@ nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} 
   SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
-      src/quest/combat/headset_gates.cpp)
+      src/quest/combat/headset_gates.cpp ${_cec})
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
 # CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
 # 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
@@ -66,7 +69,7 @@ nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
   SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
-      src/quest/combat/headset_gates.cpp)
+      src/quest/combat/headset_gates.cpp ${_cec})
 # The game-thread tick (#2172, docs/adr/0046; docs/adr/0039): the real thunk and GotHook against the JUMP_SLOT of a libr15 image built in
 # memory. The callback table, the vptr check (read once per object, not once per frame), and who owns the slot on each variant (plain release,
 # combat, q15t) in both orders against the q15t plugin's own tick code (game_tick.cpp, import_hook.cpp, got_swap.cpp, linked from the plugin):
@@ -77,14 +80,14 @@ nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
   SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
-      src/quest/combat/headset_gates.cpp
+      src/quest/combat/headset_gates.cpp ${_cec}
       src/quest/plugins/q15t/src/game_tick.cpp src/quest/plugins/q15t/src/import_hook.cpp src/quest/plugins/q15t/src/got_swap.cpp
       src/quest/plugins/q15t/src/safe_read.cpp src/quest/plugins/q15t/src/plugin_log.cpp)
 # The refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3): the decision, the keys, the session from the arena to a combat map and back
 # through the tick, the lobbies arena players use, the legacy kill files, the release case (the game's own rate, nothing logged or registered).
 nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
-      src/quest/combat/headset_gates.cpp
+      src/quest/combat/headset_gates.cpp ${_cec}
       src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp
       src/quest/sentinel/build_variant.cpp)
 # What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
@@ -115,3 +118,37 @@ nevr_ht_test(pfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # the plugin's `pfxtev.off` file not read and warned about, and the scope: an event id is created on a combat map only.
 nevr_ht_test(pfxtev_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
   SRC src/quest/tests/pfxtev_test.cpp src/quest/combat/pfxtev.cpp)
+# The EC client (#2187, docs/quest/combat/ec.md): the pure rules, the list hide, the real thunks installed by the real GotHook into the five slots of
+# a libr15 image built in memory and the WriteLogV slots of two platform-library images, called through the slots against a fake libc, the game's
+# WriteLog (a va_list through the WriteLogV slot) and a fake clock; the net tick, the step, the hide, the selection, the observer install, the
+# keys and the legacy files, and the scope (arena, the arena lobbies, the 250 ms cadence) against a fake CR15Game. got_pinned_test resolves every
+# relocation and word in the real files.
+nevr_ht_test(ec_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} LOPTS -rdynamic
+  SRC src/quest/tests/ec_test.cpp src/quest/combat/ec.cpp src/quest/sentinel/ec_page.cpp src/quest/integration/module_observers.cpp
+      src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+# The page as a symbol of the sentinel (#2187): ec_page.cpp built into a shared object with the sentinel's flags, loaded RTLD_LOCAL as a dependency
+# of a stand-in for libr15, asked by dlsym(RTLD_DEFAULT) from a third object before and after PublishEcPage, and with another object that already
+# exports re33_ec_page (the sentinel must still write its own storage). glibc; bionic is not covered (docs/quest/combat/ec.md (a)).
+nevr_ht_so(ec_page_sentinel GROUP combat NOEXC COPTS -fvisibility=hidden OUTPUT_NAME ec_page_sentinel
+  SRC src/quest/sentinel/ec_page.cpp src/quest/tests/ec_page_shim.cpp)
+nevr_ht_so(ec_page_libr15 GROUP combat NOEXC OUTPUT_NAME ec_page_libr15 SRC src/quest/tests/ec_page_libr15.cpp LIBS ec_page_sentinel)
+nevr_ht_so(ec_page_script GROUP combat NOEXC OUTPUT_NAME ec_page_script SRC src/quest/tests/ec_page_script.cpp LIBS dl)
+nevr_ht_so(ec_page_other GROUP combat NOEXC OUTPUT_NAME ec_page_other SRC src/quest/tests/ec_page_other.cpp)
+nevr_ht_test(ec_page_test GROUP combat NOEXC DL TIMEOUT 120 SRC src/quest/tests/ec_page_test.cpp
+  DEPENDS ec_page_sentinel ec_page_libr15 ec_page_script ec_page_other
+  ARGS $<TARGET_FILE:ec_page_libr15> $<TARGET_FILE:ec_page_script> $<TARGET_FILE:ec_page_sentinel>)
+nevr_ht_rerun(ec_page_test_other ec_page_test GROUP combat
+  ARGS $<TARGET_FILE:ec_page_libr15> $<TARGET_FILE:ec_page_script> $<TARGET_FILE:ec_page_sentinel> $<TARGET_FILE:ec_page_other>)
+# NEUTRON effects (#2187): the queue rules, and the attach / tick / gate against a stand-in wall library (soname libac4e9374a146d3a4.so) loaded for
+# real, in two runs: a complete library and one that lacks the burst entry; the key, the legacy file and the refusal without ec.
+nevr_ht_so(ecfx_stub_full GROUP combat OUTPUT_NAME ac4e9374a146d3a4 LOPTS -Wl,-soname,libac4e9374a146d3a4.so SRC src/quest/tests/ecfx_wall_stub.cpp)
+nevr_ht_so(ecfx_stub_missing GROUP combat OUTPUT_NAME ac4e9374a146d3a4 DEFS STUB_MISSING_BURST LOPTS -Wl,-soname,libac4e9374a146d3a4.so
+  SRC src/quest/tests/ecfx_wall_stub.cpp)
+# The file name is the soname (ecfx checks the entry's library by name): each variant in a directory of its own.
+set_target_properties(ecfx_stub_full PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/combat/ecfx_full")
+set_target_properties(ecfx_stub_missing PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/combat/ecfx_missing")
+nevr_ht_test(ecfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} LOPTS -rdynamic DEPENDS ecfx_stub_full ecfx_stub_missing
+  SRC src/quest/tests/ecfx_test.cpp src/quest/combat/ecfx.cpp src/quest/combat/ec.cpp src/quest/sentinel/ec_page.cpp
+      src/quest/integration/module_observers.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
+  ARGS full $<TARGET_FILE:ecfx_stub_full>)
+nevr_ht_rerun(ecfx_test_missing ecfx_test GROUP combat ARGS missing $<TARGET_FILE:ecfx_stub_missing>)

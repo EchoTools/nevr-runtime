@@ -486,8 +486,7 @@ class BuildQuestQ15t(unittest.TestCase):
     removed before the checks run."""
 
     ID = "0123456789abcdef0123456789abcdef01234567"
-    MARKER = ("q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 levelname=1 "
-              "build_id={id}")
+    MARKER = "q15t-config levelname=1 build_id={id}"
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

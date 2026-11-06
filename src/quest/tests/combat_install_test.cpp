@@ -16,6 +16,8 @@
 
 #include "hook_log.h"
 #include "quest/combat/combat_active.h"
+#include "quest/combat/ec.h"
+#include "quest/combat/ecfx.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
@@ -221,8 +223,9 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
   // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the headset gates (#2180) and, last, the pfx gate and
   // the event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick and the gates are refused and named; the rule
-  // installs (it registers its callback for a tick that may come later), and so do the two decisions.
-  QCHECK(normal.ran && normal.modules == 5 && normal.installed == 3 && normal.failed == 2);
+  // installs (it registers its callback for a tick that may come later), and so do the two decisions. The EC client (#2187) is refused like the
+  // gates (no libr15), and its NEUTRON effects refuse without it.
+  QCHECK(normal.ran && normal.modules == 7 && normal.installed == 3 && normal.failed == 4);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -230,7 +233,8 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed gates=module_not_loaded pfx=installed pfxtev=installed\""));
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed ec=module_not_loaded ecfx=needs_ec gates=module_not_loaded pfx=installed "
+                                "pfxtev=installed\""));
   }
   Done();
 }
@@ -458,6 +462,44 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   Done();
 }
 
+// The EC client's rows read their keys from the resolved section (#2187): each off by the file's word, and the words the file gave reach the module
+// (its words line says `config` and carries the mask; no libr15 is loaded, so the module refuses after reading them).
+void TheEcRowsReadTheirKeysFromTheResolvedSection() {
+  Process(bv::Variant::kCombat);
+  nevr_quest::combat::ec::ResetForTest();
+  nevr_quest::combat::ecfx::ResetForTest();
+  nevr_quest::CombatConfig off;
+  off.ec = {false, nevr_quest::Source::kFile};
+  off.ecfx = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(off);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "ec=off ecfx=off"));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::combat::ec::ResetForTest();
+  nevr_quest::combat::ecfx::ResetForTest();
+  nevr_quest::CombatConfig words;
+  std::strcpy(words.ecWords.text, "types=V noequip");
+  words.ecWords.source = nevr_quest::Source::kFile;
+  combat::SetConfig(words);
+  combat::InstallNormal();
+  const std::vector<Line> line = Lines("combat_ec_words");
+  QCHECK(line.size() == 1U && Has(line[0].text, "\"source\":\"config\"") && Has(line[0].text, "\"types_mask\":\"0x0000000000000001\"") &&
+         Has(line[0].text, "\"equip_store\":0"));
+  QCHECK(Has(Lines("combat_install")[0].text, "ec=module_not_loaded ecfx=needs_ec"));
+  Done();
+  // The defaults: the shipped words.
+  Process(bv::Variant::kCombat);
+  nevr_quest::combat::ec::ResetForTest();
+  nevr_quest::combat::ecfx::ResetForTest();
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_ec_words")[0].text, "\"source\":\"default\"") && Has(Lines("combat_ec_words")[0].text, "\"types_mask\":\"0x000000000000000f\""));
+  nevr_quest::combat::ec::ResetForTest();
+  nevr_quest::combat::ecfx::ResetForTest();
+  Done();
+}
+
 }  // namespace
 
 int main() {
@@ -477,6 +519,7 @@ int main() {
   TheGatesKeysHaveALineOfTheirOwn();
   TheGatesRowReadsItsKeysFromTheResolvedSection();
   ThePfxRowsReadTheirKeysFromTheResolvedSection();
+  TheEcRowsReadTheirKeysFromTheResolvedSection();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

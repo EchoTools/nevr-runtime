@@ -110,7 +110,11 @@ add_library(ovrplatformloader SHARED
   ../../core/crash_report.cpp
   activation.cpp
   credits_text.cpp
+  ec_page.cpp
   "${NEVR_QUEST_CREDITS_BLOCK_CPP}")
+
+# ec_page.cpp is on the hook path (the EC client's handlers reach the page through it): built without exceptions, as the combat code is.
+set_source_files_properties(ec_page.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # Emit libovrplatformloader.so (CMake adds the lib prefix + .so suffix).
 set_target_properties(ovrplatformloader PROPERTIES OUTPUT_NAME ovrplatformloader)
@@ -162,8 +166,8 @@ else()
   message(FATAL_ERROR "the NDK directory is unknown: android_glue_layout_check.cpp needs its native_app_glue header")
 endif()
 
-# Only nevr_sentinel_marker and JNI_OnLoad are exported (both carry explicit default
-# visibility); everything else, including the hook API and the test seams, is hidden.
+# Only nevr_sentinel_marker, JNI_OnLoad and re33_ec_page (the EC script libraries' page, ec_page.h) are exported (each carries
+# explicit default visibility); everything else, including the hook API and the test seams, is hidden.
 # tests/quest TestExportAllowlist pins the list.
 target_compile_options(ovrplatformloader PRIVATE
   -Wall -Wextra -Werror -fvisibility=hidden -fvisibility-inlines-hidden)

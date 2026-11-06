@@ -183,7 +183,7 @@ int main() {
 
   const uint32_t caps = NevrPluginGetCapabilities();
   CHECK((caps & NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY) != 0, "caps 0x%x: ALTERS_GAMEPLAY missing with every module on", caps);
-  CHECK((caps & NEVR_PLUGIN_CAP_NETWORK) != 0, "caps 0x%x: NETWORK missing with ec on", caps);
+  CHECK((caps & NEVR_PLUGIN_CAP_NETWORK) == 0, "caps 0x%x: NETWORK set, and no module of the plugin sends (the EC client is the runtime's)", caps);
 
   const int rc = NevrPluginInitEx(&ctx, "");
   CHECK(rc == 0, "InitEx returned %d with hooks swapped and modules refusing; the loader would dlclose a live plugin", rc);
@@ -194,7 +194,7 @@ int main() {
 
   // every compiled module is named in the init record
   const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
-                        "bvh",      "wallfire",   "impactsnd", "ec",         "ecfx",       "dronekill",  "dronemuzzle",
+                        "bvh",      "wallfire",   "impactsnd", "dronekill",  "dronemuzzle",
                         "powerboost", "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
   const std::string init = FindLine("q15t init");
   for (const char* m : kAll) {
@@ -207,7 +207,7 @@ int main() {
   // what must have installed, been switched off, or refused, on this image
   const char* kInstalled[] = {"bvh", "wallfire", "levelname", "boosterpool"};
   const char* kArmed[] = {"gunconnect", "aibots"};
-  const char* kOff[] = {"ec", "ecfx", "fxtrail"};
+  const char* kOff[] = {"fxtrail"};
   struct Refusal {
     const char* module;
     const char* reason;  // the reason token the record must carry
@@ -240,22 +240,16 @@ int main() {
   CHECK(w_slot(base, 0x36cd1f8) != base + 0x18037c4, "boosterpool: its GOT slot was not swapped");
   CHECK(CountLines("wallfire on:") == 1 && CountLines("bvh on:") == 1, "bvh and wallfire did not both log 'on'");
   // order: wallfire is installed after bvh (it refuses as bvh_not_installed otherwise), and the tick comes after every module
-  size_t at_bvh = 0, at_wall = 0, at_tick = 0, at_ec = 0, at_mod_last = 0;
+  size_t at_bvh = 0, at_wall = 0, at_tick = 0, at_mod_last = 0;
   for (size_t i = 0; i < g_lines.size(); ++i) {
     const std::string& t = g_lines[i].text;
     if (t.find("module install module=bvh ") != std::string::npos) at_bvh = i;
     if (t.find("module install module=wallfire ") != std::string::npos) at_wall = i;
-    if (t.find("module install module=ec ") != std::string::npos) at_ec = i;
     if (t.find("hook=CncaGame::ExclusiveUpdateGame") != std::string::npos) at_tick = i;
     if (t.find("module install") != std::string::npos) at_mod_last = i;
   }
   CHECK(at_bvh != 0 && at_wall > at_bvh, "wallfire (line %zu) must be installed after bvh (line %zu)", at_wall, at_bvh);
-  CHECK(at_ec != 0 && CountLines("module install module=ecfx ") == 1 && FindLine("module=ecfx ") != "", "ecfx record missing");
   CHECK(at_tick > at_mod_last, "the game tick (line %zu) must be installed after the last module (line %zu)", at_tick, at_mod_last);
-  size_t at_ecfx = 0;
-  for (size_t i = 0; i < g_lines.size(); ++i)
-    if (g_lines[i].text.find("module install module=ecfx ") != std::string::npos) at_ecfx = i;
-  CHECK(at_ecfx > at_ec, "ecfx (line %zu) must be installed after ec (line %zu)", at_ecfx, at_ec);
 
   // the tick table: gunconnect, aibots, impactsnd, sensorwd and bvh register; dronekill, dronemuzzle, powerboost and
   // weapon_arm did not install here, so they register nothing. The tick is installed once, after every registration.

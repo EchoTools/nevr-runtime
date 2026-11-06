@@ -238,6 +238,26 @@ combat:
   # key. Read once at launch. Default (absent): true.
   # pfxtev: false
 
+  # Quest only. A boolean. The EC network client (src/quest/combat/ec.h): on a combat map or the combat lobby it exchanges the EC network's
+  # 16-byte datagrams with the game server (the server needs EC), writes re33_ec_page for the EC script libraries, stores the selected tac mod
+  # and, with the `hide` word, hides EC's three tac mods on a server without EC. In every other level, arena included, it passes the game's
+  # traffic through and sends nothing. The sentinel log line `combat_ec_install` says what was installed. `false` installs nothing (the page
+  # stays zeroed: EC scripts decide as on a PC without the EC network client). A value that is not a boolean keeps the default, with a warning
+  # that names the key. Read once at launch. Default (absent): true.
+  # ec: false
+
+  # Quest only. A string: the EC client's words, space separated. `types=<letters of VPTO>` names the packet types it carries (veil, point,
+  # translocator, overcharge; no word, an empty list or another letter: translocator only); `equip` stores the selected tac mod, `noequip` only
+  # logs it; `hide` hides smoke, buff and point on a server without EC; `loctoken=<seconds>` (1 to 600) is a test word that adds a LOC token at
+  # that period. The sentinel log line `combat_ec_words` says what was read. Default (absent): "types=VPTO equip hide".
+  # ec_words: "types=VPTO equip hide"
+
+  # Quest only. A boolean. NEUTRON effects (src/quest/combat/ecfx.h): the EC wall library queues its NEUTRON effects and the EC client's net
+  # tick runs them, on a combat map or the combat lobby only. Needs `ec`. The sentinel log line `combat_ecfx_install` says what was read.
+  # `false` leaves the wall library running its effects in its own node. A value that is not a boolean keeps the default, with a warning that
+  # names the key. Read once at launch. Default (absent): true.
+  # ecfx: false
+
   # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
   # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard
   # runs whatever these say. Party guns, payload speed, a client's own damage bonus and CombatBots are never on.

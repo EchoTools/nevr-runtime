@@ -45,14 +45,6 @@ HOST_TESTS = frozenset(
         "droneguard.droneguard_test",
         "dronekill.dronekill_test",
         "dronemuzzle.dronemuzzle_test",
-        "ec.ec_test",
-        "ec.ec_page_symbol",
-        "ec.ec_page_test",
-        "ec.ec_page_test_other",
-        "ec.ec_test_defaults",
-        "ecfx.ecfx_test",
-        "ecfx.ecfx_test_missing",
-        "ecfx.ecfx_test_defaulton",
         "fxtrail.fxtrail_test",
         "game_tick.game_tick_test",
         "gunconnect.gunconnect_test",
@@ -80,7 +72,6 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_VOIPDROP",
         "wiring.wiring_caps_CUSTCTX",
         "wiring.wiring_caps_IMPACTSND",
-        "wiring.wiring_caps_ECFX",
         "wiring.wiring_caps_HUDMETER",
         "wiring.wiring_caps_MUSIC",
         "wiring.wiring_caps_SENSORWD",
@@ -100,7 +91,6 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_POWERBOOST_1",
         "wiring.wiring_caps_POWERBOOST_2",
         "wiring.wiring_caps_POWERBOOST_3",
-        "wiring.wiring_caps_EC",
     ]
 )
 # q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack

@@ -7,6 +7,8 @@
 
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/ec.h"
+#include "quest/combat/ecfx.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
@@ -31,6 +33,14 @@ ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
 
+ModuleResult EcNormal() noexcept {
+  ec::Switches switches;
+  switches.on = g_config.ec.on;
+  switches.words = g_config.ecWords.source == nevr_quest::Source::kFile ? g_config.ecWords.text : nullptr;
+  return ec::Install(switches);
+}
+ModuleResult EcfxNormal() noexcept { return ecfx::Install(g_config.ecfx.on); }
+
 ModuleResult GatesNormal() noexcept {
   headset_gates::Switches switches;
   switches.perm = g_config.gatePerm.on;
@@ -53,6 +63,9 @@ constexpr std::array kModules{
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
+    // ec, then ecfx (#2187): the EC client first, then the modules that ride its net tick; plugin.cpp's order.
+    Module{"ec", nullptr, &EcNormal},
+    Module{"ecfx", nullptr, &EcfxNormal},
     // gates (#2180): the plugin installed them after its tick and its modules; they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
