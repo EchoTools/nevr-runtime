@@ -420,7 +420,8 @@ typedef uint32_t (*NevrPluginGetCapabilities_fn)(void);
  * NEVR_RegisterResourceOverride takes). `data` must stay valid until the asset is deregistered: put it in the
  * plugin image (a const array or a resource section), never on the heap. `size` is in bytes, 1..0xFFFFFFFF.
  * `label` is a short name for logs and for the `nevr_assets` list the game client reports to the game service
- * at login; it is copied.
+ * at login; it is copied. It is 1 to 64 bytes of printable ASCII with no double quote or backslash; any other
+ * label (or a null one) is refused with NEVR_ASSET_BAD_ARGUMENT.
  *
  * Register before the engine first loads the resource (NevrPluginInit/InitEx is early enough). A name the
  * engine has already loaded is refused with NEVR_ASSET_ALREADY_LOADED, never silently ignored.

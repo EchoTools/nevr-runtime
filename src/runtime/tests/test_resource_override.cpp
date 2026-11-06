@@ -18,10 +18,12 @@
 #include <vector>
 #include <windows.h>
 
+#include "core/globals.h"
 #include "core/logging.h"
 #include "runtime/patch/asset_cache.h"
 #include "runtime/patch/game_buffer.h"
 #include "runtime/patch/netgun_bullets.h"
+#include "runtime/patch/plugin_assets.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/tests/netgun_bullets_fixture.h"
 #include "runtime/lifecycle/cli.h"
@@ -326,6 +328,46 @@ TEST(ResourceOverride, ALabelOutsideTheRuleIsRefusedAtEveryEntryAndNoLineCarries
   EXPECT_EQ(report.registered, 0u) << "nothing was registered";
   TestHook_SetOriginal(nullptr);
   TestHook_CloseResourceOverrides();
+}
+
+// #2225: the asset registry's entry (NEVR_RegisterAsset) follows the same rule as the override registry above.
+TEST(PluginAssetLabel, ALabelOutsideTheRuleIsRefusedAndNoLineCarriesItsBytes) {
+  ClearTestLogs();
+  // With no game base a registration that is accepted cannot install the engine hooks (EnsureHooksInstalled warns and
+  // returns), so a label the rule fails to refuse shows as a failed assertion here, not as a fault in the hook install.
+  // RegisterPluginAsset installs the engine's loaded-resource probe on the process-wide registry; take it out again so a
+  // later test that registers into that registry does not read the stand-in game image.
+  struct Restore {
+    CHAR* base = EchoVR::g_GameBaseAddress;
+    ~Restore() {
+      EchoVR::g_GameBaseAddress = base;
+      nevr::assets::Global().SetLoadedProbe(nullptr);
+    }
+  } restore;
+  EchoVR::g_GameBaseAddress = nullptr;
+  static const unsigned char bytes[8] = {1, 2, 3};
+  const std::size_t registeredBefore = nevr::assets::Global().Count();
+  std::uint64_t name = 0x7a5e700000000001ULL;
+  for (const BadLabel& bad : BadLabels()) {
+    SCOPED_TRACE(bad.what);
+    EXPECT_EQ(nevr::assets::RegisterPluginAsset(kType, name++, bytes, sizeof(bytes), bad.label.c_str()),
+              nevr::assets::RegisterStatus::BadArgument);
+  }
+  EXPECT_EQ(nevr::assets::RegisterPluginAsset(kType, name++, bytes, sizeof(bytes), nullptr),
+            nevr::assets::RegisterStatus::BadArgument)
+      << "a null label";
+
+  const std::vector<std::string> refusals = TestLogLinesContaining("[NEVR.ASSET] register refused");
+  EXPECT_EQ(refusals.size(), BadLabels().size() + 1u) << "one Warning per refused registration";
+  for (const std::string& line : refusals) {
+    EXPECT_NE(line.find("reason=bad_label"), std::string::npos) << line;
+    EXPECT_NE(line.find("label_bytes="), std::string::npos) << "gives the length: " << line;
+    EXPECT_NE(line.find("1 to 64 bytes of printable ASCII"), std::string::npos) << "names the rule: " << line;
+  }
+  EXPECT_TRUE(TestLogLinesContaining("lbl-").empty()) << "a refused label's bytes reached a line";
+  EXPECT_TRUE(TestLogLinesContaining(std::string(65, 'q')).empty());
+  EXPECT_TRUE(TestLogLinesContaining("[NEVR.ASSET] registered").empty()) << "nothing was registered";
+  EXPECT_EQ(nevr::assets::Global().Count(), registeredBefore);
 }
 
 TEST(ResourceOverride, AFileOverrideWithALabelOutsideTheRuleIsRefusedAndItsFileIsNotLoaded) {

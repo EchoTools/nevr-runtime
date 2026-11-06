@@ -23,18 +23,18 @@ void NEVR_DeregisterAssets(const void* data_start, const void* data_end);
 | `type_hash` | The engine's 64-bit symbol hash of the resource type. The same value `NEVR_RegisterResourceOverride` takes. |
 | `name_hash` | The 64-bit symbol hash of the resource name. A level's name is the hash of the level's name; give it a name no shipped level has. |
 | `data`, `size` | Bytes in the plugin image, `1..0xFFFFFFFF`. Must stay valid until deregistered: a `const` array or a resource section, never the heap. |
-| `label` | Short name for the log and for the login report. Copied. |
+| `label` | Short name for the log and for the login report. Copied. 1 to 64 bytes of printable ASCII (0x20 to 0x7e) with no double quote or backslash; any other label, and a null one, is refused as `NEVR_ASSET_BAD_ARGUMENT`. |
 
 `NEVR_RegisterAsset` returns an `NevrAssetStatus`:
 
 | Value | Name | Meaning |
 | --- | --- | --- |
 | 0 | `NEVR_ASSET_OK` | Registered. |
-| 1 | `NEVR_ASSET_BAD_ARGUMENT` | Null or empty data, a zero type or name, or a size above `0xFFFFFFFF`. |
+| 1 | `NEVR_ASSET_BAD_ARGUMENT` | Null or empty data, a zero type or name, a size above `0xFFFFFFFF`, or a label outside the rule above. |
 | 2 | `NEVR_ASSET_DUPLICATE` | That (type, name) is already registered. The first registration is kept. |
 | 3 | `NEVR_ASSET_ALREADY_LOADED` | The engine has already loaded that (type, name). Too late to change what it reads. |
 
-Every refusal is also a `Warning` in the log: `[NEVR.ASSET] register refused label=... reason=...`.
+Every refusal is also a `Warning` in the log: `[NEVR.ASSET] register refused label=... reason=...`. A refused label is never written: that line gives `reason=bad_label label_bytes=<length>` and the rule instead.
 
 ## Order and lifetime
 
