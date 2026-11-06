@@ -361,6 +361,9 @@ void MountLocked(std::uint64_t stockRecords, MountReport* report, std::vector<co
   *report = g_registry.Mount(StockView{&StockHasThunk, nullptr, stockRecords});
   *mounted = g_registry.MountedSets();
   if (const nevr_shadow::Shadow* shadow = g_registry.shadow()) {
+    // The first read window starts here, before the publish: a read the resolver serves on another thread between
+    // the publish and this frame's summary is then counted in a window that has a start.
+    g_lastSummaryMs.store(NowMs());
     g_published.store(new Published(shadow, mounted->size()), std::memory_order_release);
   }
   g_mountDeferred.store(false);
