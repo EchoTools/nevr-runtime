@@ -488,12 +488,36 @@ int main(int argc, char** argv) {
       QCHECK(false);
     }
   }
+  // The allocation of GPU memory (#2262): Allocate's slot, and the error word it passes to the error maker.
+  CheckTarget(r15, pinned::LibR15VkAllocate(), "libr15 CGRawInterfaceVK::Allocate(VkMemoryRequirements, ...) JUMP_SLOT");
+  {
+    std::uint64_t code = 0;
+    std::memcpy(&code, static_cast<const unsigned char*>(r15.mem) + pinned::kVkAllocErrorCodeVaddr, sizeof(code));
+    if (code != pinned::kVkAllocErrorCode) {
+      std::fprintf(stderr, "libr15 Allocate error symbol at %#llx is %#llx, pinned %#llx\n",
+                   static_cast<unsigned long long>(pinned::kVkAllocErrorCodeVaddr), static_cast<unsigned long long>(code),
+                   static_cast<unsigned long long>(pinned::kVkAllocErrorCode));
+      QCHECK(false);
+    }
+  }
+  // The two arrays Allocate appends to: the words that load their bases and append, and the block array in .bss.
+  for (const pinned::PinnedCode* block :
+       {&pinned::kVkAllocTableAdrp, &pinned::kVkAllocTableAdd, &pinned::kVkAllocFreeAppend, &pinned::kVkAllocBlockAppend}) {
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block->vaddr, block->code, block->words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the words at %#llx differ from the pinned ones\n", block->name,
+                   static_cast<unsigned long long>(block->vaddr));
+      QCHECK(false);
+    }
+  }
+  QCHECK(NobitsHolds(r15, pinned::vk_block_layout::kTableVaddr,
+                     pinned::vk_block_layout::kCountVaddr + sizeof(std::uint32_t) - pinned::vk_block_layout::kTableVaddr));
   // The array and its count lie in .bss, and the count follows the last of 512 entries.
   QCHECK(NobitsHolds(r15, pinned::vk_hole_layout::kTableVaddr,
                      pinned::vk_hole_layout::kCountVaddr + sizeof(std::uint32_t) - pinned::vk_hole_layout::kTableVaddr));
   for (const pinned::PinnedFunction* f :
        {&pinned::kRefreshRTSize, &pinned::kEngineResize, &pinned::kVrInitialized, &pinned::kVrGraphicsInitialized,
-        &pinned::kVrDisplayLost, &pinned::kLocalAppDataDirectory, &pinned::kVkFree}) {
+        &pinned::kVrDisplayLost, &pinned::kLocalAppDataDirectory, &pinned::kVkAllocate, &pinned::kErrMsgCreateAndAddError,
+        &pinned::kVkFree}) {
     if (DynamicSymbolValue(r15, f->name) != f->vaddr) {
       std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", f->name, static_cast<unsigned long long>(f->vaddr));
       QCHECK(false);
