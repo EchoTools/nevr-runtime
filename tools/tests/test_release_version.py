@@ -16,9 +16,12 @@ import re
 import shutil
 import subprocess
 import tempfile
+import sys
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+import release_preflight  # noqa: E402
 VERSION_CMAKE = REPO / "cmake" / "set_project_version_from_git.cmake"
 
 CMAKELISTS = f"""cmake_minimum_required(VERSION 3.20)
@@ -190,6 +193,29 @@ class ReleaseVersionTest(unittest.TestCase):
         self.assertIsNone(version)
         self.assertIn("v5.1.0 already exists", out)
 
+    def test_the_release_preflight_names_the_version_the_build_stamps(self):
+        """release_preflight checks the versionCode limits on the version it predicts; it must be cmake's."""
+        self.tag("v5.0.0")
+        for message in ("child", "fix: a fix", "feat: a feature", "feat!: a break"):
+            with self.subTest(message=message):
+                self.child(message)
+                self.assertEqual(release_preflight.next_build_version(str(self.src)), (self.version(), None))
+
+    def test_the_release_preflight_agrees_when_a_release_tag_is_on_another_branch(self):
+        self.tag("v5.0.0")
+        git(self.src, "checkout", "-q", "-b", "side")
+        self.child("fix: released from the side branch")
+        self.tag("v5.0.1")
+        git(self.src, "checkout", "-q", "main")
+        self.child("feat: on main")
+        stamped = self.version()
+        self.assertEqual(stamped, f"5.1.0-dev.1+{self.sha()}")
+        self.assertEqual(release_preflight.next_build_version(str(self.src)), (stamped, None))
+
+    def test_the_release_preflight_on_a_tag_names_the_release(self):
+        self.tag("v5.0.0")
+        self.assertEqual(release_preflight.next_build_version(str(self.src)), ("5.0.0", None))
+
     def test_the_next_tag_is_the_new_base(self):
         self.tag("v5.0.0")
         self.child()
@@ -226,7 +252,7 @@ class ReleaseVersionTest(unittest.TestCase):
         self.child()
         self.assertEqual(self.version(), f"3.3.1-dev.2+{self.sha()}")  # v4.0.0-rc.1 is ignored
 
-    def test_before_the_first_new_tag_a_dev_build_takes_the_nearest_release_tag(self):
+    def test_before_the_first_new_tag_a_dev_build_takes_the_highest_reachable_release_tag(self):
         self.tag("v3.3.0")
         self.child()
         self.child()

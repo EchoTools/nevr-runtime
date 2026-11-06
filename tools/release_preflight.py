@@ -28,12 +28,12 @@ pushing a v<x.y.z> release tag and before `gh release create`. It exits 0 and pr
 
 It also WARNS (a `release-preflight: WARNING:` line, exit status unchanged, recorded in the log) when a part of that
 version is close to its limit: development distance N above 900, minor or patch above 90. The version is the one
-cmake/set_project_version_from_git.cmake would write: the nearest release tag when HEAD is on it, else its next
-patch with `-dev.<commits since the tag>`.
+cmake/set_project_version_from_git.cmake would write: the highest reachable release tag when HEAD is on it, else the
+release the commits since it lead to (tools/next_release_version.py) with `-dev.<commits since the tag>`.
 
 It changes nothing in the clone (it appends one record to its own log). The git commands it runs, and nothing else:
   git rev-parse --show-toplevel          git config --get remote.origin.url   git rev-parse HEAD
-  git describe --tags --long --match "v[0-9]*" --exclude "v*-*"   (the nearest release tag and the distance to it)
+  git tag --merged HEAD --list "v*" / git log / git tag --list "v*"   (tools/next_release_version.py: the base tag and the next release)
   git status --porcelain=v1 --untracked-files=all
   git for-each-ref refs/tags --format=...  (local tags and their peeled commits)
   git ls-remote origin                   (origin's refs: the only network call; it reads, it writes nothing here)
@@ -59,6 +59,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import next_release_version  # noqa: E402
 import quest_apk_version  # noqa: E402
 
 MAX_PATHS = 20
@@ -141,17 +142,26 @@ def plural(n: int, word: str) -> str:
 
 
 def next_build_version(root: str) -> tuple:
-    """(version, None) the next build would stamp (cmake/set_project_version_from_git.cmake), or (None, why not)."""
-    out = git("describe", "--tags", "--long", "--match", "v[0-9]*", "--exclude", "v*-*", cwd=root)
-    if out.returncode != 0:
-        return None, failure(out, "git describe")
-    match = re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-([0-9]+)-g([0-9a-f]+)", out.stdout.strip())
-    if not match:
-        return None, f"git describe printed '{out.stdout.strip()[:60]}', not v<X>.<Y>.<Z>-<distance>-g<sha>"
-    major, minor, patch, distance, sha = match.groups()
-    if int(distance) == 0:
-        return f"{major}.{minor}.{patch}", None
-    return f"{major}.{minor}.{int(patch) + 1}-dev.{distance}+{sha}", None
+    """(version, None) the next build would stamp (cmake/set_project_version_from_git.cmake), or (None, why not).
+
+    The same rule as the build: tools/next_release_version.py names the base (the highest reachable release tag)
+    and the release the commits since it lead to."""
+    try:
+        tag, base, _, _, result = next_release_version.resolve(root, "HEAD")
+    except next_release_version.Failure as err:
+        return None, str(err)
+    count = git("rev-list", "--count", f"{tag}..HEAD", cwd=root)
+    short = git("rev-parse", "--short", "HEAD", cwd=root)
+    if count.returncode != 0 or short.returncode != 0:
+        bad = count if count.returncode != 0 else short
+        return None, failure(bad, "git rev-list --count / git rev-parse --short")
+    if not re.fullmatch(r"[0-9]+", count.stdout.strip()):
+        return None, f"git rev-list --count printed '{count.stdout.strip()[:60]}', not a number"
+    distance = int(count.stdout.strip())
+    if distance == 0:
+        return "%d.%d.%d" % base, None
+    nxt = tuple(int(part) for part in result[1:].split(".")) if result else (base[0], base[1], base[2] + 1)
+    return "%d.%d.%d-dev.%d+%s" % (*nxt, distance, short.stdout.strip()), None
 
 
 def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN, tag: str = None) -> tuple:
