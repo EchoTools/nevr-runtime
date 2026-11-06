@@ -1145,7 +1145,10 @@ bool SwapRun::CompleteRollback(Journal* journal) {
 bool SwapRun::FinishRollback(const Journal& journal) {
   json owned = json::array();
   for (const names::Member& member : journal.in) {
-    owned.push_back({{"path", names::MemberPath(member)}, {"sha256", FactsOf(InRoot(member)).sha256}});
+    // A file that is not in the root now (someone removed it since the journal was written) is not owned.
+    const FileFacts facts = FactsOf(InRoot(member));
+    if (facts.sha256.empty()) continue;
+    owned.push_back({{"path", names::MemberPath(member)}, {"sha256", facts.sha256}});
   }
   state_["owned"] = owned;
   const FileFacts runtime = FactsOf(Join(root_, names::kRuntimeFile));

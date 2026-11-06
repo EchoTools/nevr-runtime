@@ -1889,6 +1889,71 @@ TEST_F(HostUpdateRollback, APendingRecordTheHostCannotParseIsDroppedAndOneItCann
   EXPECT_EQ(Pending(), pending_before) << "and the record itself is as it was";
 }
 
+// A restored file that is gone again when the rollback is completed (a kill, then a player removing it) is skipped, not
+// a failed move, and is not recorded as owned (a path with no sha256 would make state.json unusable).
+TEST_F(HostUpdateRollback, ACompletedRollbackSkipsARestoredFileThatIsGoneAndOwnsOnlyWhatIsThere) {
+  SwappedIn();
+  nlohmann::json journal = {{"kind", "rollback"}, {"from", "1.2.3"}, {"to", "7.7.7"}, {"phase", "in"},
+                            {"out", {"nevr-runtime.dll", "plugins/example.dll"}},
+                            {"in", {"nevr-runtime.dll", "plugins/example.dll"}},
+                            {"failed_sha256", Sha256Hex(new_runtime_)}, {"reason", "crashed"}};
+  // The state a kill left after the failed files moved out and the runtime came back; the plugin is gone from both places.
+  Put(L"update\\failed\\1.2.3\\nevr-runtime.dll", new_runtime_);
+  Put(L"nevr-runtime.dll", old_runtime_);
+  DeleteFileW((root_ + L"\\plugins\\example.dll").c_str());
+  DeleteFileW((update_ + L"\\previous\\7.7.7\\plugins\\example.dll").c_str());
+  Put(L"update\\swap.json", journal.dump());
+  const Start next = RunStart();
+  EXPECT_EQ(next.result.action, UpdateAction::kLoad);
+  EXPECT_FALSE(Exists(update_ + L"\\swap.json"));
+  EXPECT_FALSE(Exists(update_ + L"\\pending.json"));
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), old_runtime_);
+  const nlohmann::json state = ReadJson(update_ + L"\\state.json");
+  EXPECT_EQ(state["owned"], nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"sha256", Sha256Hex(old_runtime_)}}}))
+      << state.dump();
+  ASSERT_EQ(state["quarantine"].size(), 1u) << state.dump();
+  EXPECT_EQ(Outcomes(next.records), std::vector<std::string>{"recovered"});
+}
+
+TEST_F(HostUpdateRollback, F22_ARollbackJournalWithoutItsFailedReleaseOrAReasonIsNotExecuted) {
+  SwappedIn();
+  const nlohmann::json whole = {{"kind", "rollback"}, {"from", "1.2.3"}, {"to", "7.7.7"}, {"phase", "out"},
+                                {"out", {"nevr-runtime.dll"}}, {"in", {"nevr-runtime.dll"}},
+                                {"failed_sha256", Sha256Hex(new_runtime_)}, {"reason", "crashed"}};
+  for (const char* broken : {"failed_sha256", "reason"}) {
+    SCOPED_TRACE(broken);
+    nlohmann::json journal = whole;
+    journal.erase(broken);
+    Put(L"update\\swap.json", journal.dump());
+    const auto before = Tree(root_);
+    const Start next = RunStart();
+    EXPECT_EQ(next.result.action, UpdateAction::kStop);
+    ASSERT_NE(next.result.reason, nullptr);
+    EXPECT_STREQ(next.result.reason, "bad_journal");
+    EXPECT_EQ(Tree(root_), before);
+  }
+  for (const nlohmann::json& bad : {nlohmann::json{{"reason", "Crashed Hard"}}, nlohmann::json{{"failed_sha256", "xyz"}}}) {
+    nlohmann::json journal = whole;
+    journal.update(bad);
+    Put(L"update\\swap.json", journal.dump());
+    EXPECT_EQ(RunStart().result.action, UpdateAction::kStop) << bad.dump();
+  }
+}
+
+// The first failure is the cause that stays: a second mark does not replace it.
+TEST_F(HostUpdateRollback, TheFirstFailureMarkedOnAPendingReleaseIsTheOneThatStays) {
+  SwappedIn();
+  BootstrapDiagnostics diagnostics;
+  const std::wstring host_dir = scratch_ + L"\\";
+  diagnostics.PrepareForTest(local_.c_str(), host_dir.c_str());
+  UpdateLock lock;
+  EXPECT_TRUE(nevr_host::MarkPendingFailed(runtime_path_.c_str(), diagnostics, lock, "abi_rejected"));
+  EXPECT_EQ(Pending().value("failed_reason", ""), "abi_rejected");
+  EXPECT_TRUE(nevr_host::MarkPendingFailed(runtime_path_.c_str(), diagnostics, lock, "init_failed"));
+  EXPECT_EQ(Pending().value("failed_reason", ""), "abi_rejected") << "the first cause stays";
+  EXPECT_FALSE(lock.Held()) << "the lock is not kept";
+}
+
 // ---- the loader: R1 in the same start, and the mark for the next ------------------------------------------------
 
 // F9: the new runtime never ran (the verifier refuses it): the previous one is put back and the game starts on it.
