@@ -121,6 +121,10 @@ void ResetSendGuardForTest() {
   g_passed = 0;
 }
 
+void SetGameSpaceLookupForTest(void* (*lookup)(void* space, std::uint64_t level)) {
+  g_lookup.store(reinterpret_cast<std::uintptr_t>(lookup), std::memory_order_release);
+}
+
 InstallResult InstallSendGuard(std::uintptr_t base) {
   InstallResult result;
   if (base == 0) {

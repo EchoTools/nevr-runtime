@@ -21,5 +21,7 @@ struct SendGuardStats {
 };
 SendGuardStats GetSendGuardStats();
 void ResetSendGuardForTest();
+// Replaces the module's GameSpaceMT lookup (set by the install to the game's stub) with `lookup`; tests only.
+void SetGameSpaceLookupForTest(void* (*lookup)(void* space, std::uint64_t level));
 
 }  // namespace q15t
