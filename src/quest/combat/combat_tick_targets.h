@@ -1,7 +1,7 @@
 /* The slot of the game-thread tick (combat_tick.h): `CncaGame::ExclusiveUpdateGame`, which `CncaGame::Render` calls once per frame on the
  * game thread with x0 = the CR15Game. Pinned to the store libr15 (build id in pinned_targets.h, `LibR15PatchedBuildId`), the addresses
  * the q15t plugin's tick wrapper has used since it was written (`plugin.cpp`: Q15T_SLOT_EXCLUSIVEUPDATEGAME, Q15T_REAL_EXCLUSIVEUPDATEGAME,
- * Q15T_GAME_VPTR); not yet checked against the file by a pinned test (needs the store APK).
+ * Q15T_GAME_VPTR), checked against the store file by got_pinned_test.cpp (`just test-quest-hooks-pinned`, which needs the store APK).
  */
 #pragma once
 

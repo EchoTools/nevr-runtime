@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip and the combat keys (combat.force and the three refresh-rate keys). Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps, combat.memsys and the three combat.refresh_rate keys. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -186,15 +186,28 @@ combat:
   # Default (absent): false.
   # force: true
 
-  # The refresh-rate rule of the combat modules (src/quest/combat/refresh_rate.h): 90 Hz while a combat map or the social lobby is loaded
-  # (72 Hz on a Quest 2), the game's own rate (120 on a Quest) in an Echo Arena level and everywhere else. Quest only; it runs where the
-  # combat modules run (see `force`). Booleans, read once at launch; a value that is not a boolean keeps the default, with a warning in
-  # the sentinel log that names the key. The sentinel log lines `combat_config`, `combat_refresh_rate_install` and
-  # `combat_refresh_rate_switch` say what was read and what was sent.
+  # Quest only. A boolean. The four heap sizes (the game's resource, System, GPU and game-space heaps) are raised before the game allocates them,
+  # in the q15t and combat APKs (the sizes: 320, 640 (512 on a Quest 2), 512 and 128 MiB). `false` leaves the game's own sizes. A value that is not a
+  # boolean is ignored with a warning in the sentinel log that names the key. Read once at launch; the sentinel log line `combat_heaps_install` says
+  # what the game reads after the step. Default (absent): true.
+  # heaps: false
+
+  # Quest only. A boolean. The render-target layout pool is made with 1024 slots instead of 512 and a log line says whether android_main started after
+  # the sizes were set, in the q15t and combat APKs. `false` leaves the game's pool and also leaves the System heap size (see `heaps`) as the game
+  # has it, because the heap and the pool are one memory change. A value that is not a boolean is ignored with a warning that names the key. Read once at
+  # launch; the sentinel log lines `combat_memsys_install` and `combat_memsys_witness` report it. Default (absent): true.
+  # memsys: false
+
+  # The refresh-rate rule of the combat modules (src/quest/combat/refresh_rate.h): 90 Hz (72 Hz on a Quest 2) while a combat map is loaded
+  # (and, with refresh_rate_lobby, the combat lobby), the game's own rate (120 on a Quest) in an Echo Arena level, in every other lobby and
+  # everywhere else. Quest only; it runs where the combat modules run (see `force`). Booleans, read once at launch; a value that is not a
+  # boolean keeps the default, with a warning in the sentinel log that names the key. The sentinel log lines `combat_config`,
+  # `combat_refresh_rate_install` and `combat_refresh_rate_switch` say what was read and what was sent.
   # refresh_rate: false turns the rule off: the game's own rate always (every request is still logged). Default (absent): true.
   # refresh_rate: false
-  # refresh_rate_lobby: false keeps the rule to combat maps: the social lobby keeps the game's rate. Default (absent): true.
-  # refresh_rate_lobby: false
+  # refresh_rate_lobby: true makes the combat lobby (`mpl_lobby_b_combat`) ask for the level rate too; the lobbies arena players use never
+  # change. Default (absent): false.
+  # refresh_rate_lobby: true
   # refresh_rate_quest2_72: false makes a Quest 2 ask 90 like any other headset instead of 72. Default (absent): true.
   # refresh_rate_quest2_72: false
 

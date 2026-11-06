@@ -1147,6 +1147,57 @@ void InviteCodesNeedsLoginAndAServiceAddress() {
   CHECK(r.fileRejected && !r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
 }
 
+// combat.heaps and combat.memsys (#2175, docs/adr/0046 rule 4): a folded module's switch is on unless the file says false. Absent is on, from
+// the default; a boolean is the file's word; anything else is on, with one Warning that names the key and not the value. The two are
+// independent, and a file rejected as a whole contributes nothing.
+void CombatModuleSwitchesAreOnUnlessTheFileSaysFalse() {
+  struct Key {
+    const char* name;
+    nevr_quest::CombatSwitch nevr_quest::CombatConfig::*member;
+  };
+  const Key keys[] = {{"heaps", &nevr_quest::CombatConfig::heaps}, {"memsys", &nevr_quest::CombatConfig::memsys}};
+  for (const Key& key : keys) {
+    const std::string section = std::string("combat:\n  ") + key.name + ": ";
+    const std::string full = std::string("combat.") + key.name;
+    {  // no file, an empty file, a section with no key: on, from the default, nothing said
+      const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+      CHECK((none.config.combat.*key.member).on && (none.config.combat.*key.member).source != Source::kFile);
+      CHECK(!HasLevel(none, LogLevel::kWarn) && !HasLevel(none, LogLevel::kError));
+      for (const char* text : {"", "combat: {}\n", "combat:\n", "combat:\n  force: true\n"}) {
+        const LoadResult r = Load(Full(), text);
+        CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
+      }
+    }
+    for (const char* word : {"true", "yes"}) {  // on, by the file's word
+      const LoadResult r = Load(Full(), section + word + "\n");
+      CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source == Source::kFile);
+      CHECK(!HasLevel(r, LogLevel::kWarn) && !EventsContain(r, "unknown_nested="));
+    }
+    for (const char* word : {"false", "no", "False"}) {  // off, by the file's word
+      const LoadResult r = Load(Full(), section + word + "\n");
+      CHECK(!r.fileRejected && !(r.config.combat.*key.member).on && (r.config.combat.*key.member).source == Source::kFile);
+      CHECK(!HasLevel(r, LogLevel::kWarn) && !EventsContain(r, "unknown_nested="));
+      CHECK(!r.config.combat.force.on);  // no other key moved
+      const bool other = key.member == &nevr_quest::CombatConfig::heaps ? r.config.combat.memsys.on : r.config.combat.heaps.on;
+      CHECK(other);  // the other module's switch is its own
+    }
+    for (const char* value : {"maybe", "2", "[true]", "{a: 1}", ""}) {  // a value nobody meant: on, and the key is named
+      const LoadResult r = Load(Full(), section + value + "\n");
+      CHECK(!r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
+      CHECK(EventsWithAreAtLevel(r, ("config file key=" + full + " rejected reason=").c_str(), LogLevel::kWarn));
+      CHECK(!EventsContain(r, "maybe") && !HasLevel(r, LogLevel::kError));
+    }
+    {  // a file rejected as a whole contributes nothing, this key included
+      const LoadResult r = Load(Full(), section + "false\nnot_a_section: 1\n");
+      CHECK(r.fileRejected && (r.config.combat.*key.member).on && (r.config.combat.*key.member).source != Source::kFile);
+    }
+  }
+  {  // both off in one file
+    const LoadResult r = Load(Full(), "combat:\n  heaps: false\n  memsys: false\n");
+    CHECK(!r.config.combat.heaps.on && !r.config.combat.memsys.on);
+  }
+}
+
 // combat.force (#2170, docs/adr/0046 rule 5): a request to run the folded combat modules whatever the APK's variant. The configuration
 // only reads it; whether a build may honour it is combat::Decide's rule (combat_active_test). Absent is not asked, and from the default;
 // a boolean is the file's word; anything else is not asked, with one Warning that names the key and not the value.
@@ -1202,31 +1253,32 @@ void CombatForceIsNotAskedUnlessTheFileSaysTrue() {
 // The refresh-rate rule's three keys (#2172, combat/refresh_rate.h): each on unless the file says false, so a launch with no file, an empty
 // section, or a value nobody meant keeps the rule running. A boolean is the file's word, whichever it is; anything else keeps on, from the
 // default, with one Warning that names the key and not the value. The keys are on the schema, so the file is not rejected for them.
-void CombatRefreshRateKeysAreOnUnlessTheFileSaysFalse() {
+void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
   struct Key {
     const char* name;
-    nevr_quest::CombatSwitchChoice nevr_quest::CombatConfig::*member;
+    nevr_quest::CombatSwitch nevr_quest::CombatConfig::*member;
+    bool defaultOn;  // refresh_rate_lobby is OFF by default: the lobby levels arena players use are not combat's
   };
-  const Key keys[] = {{"refresh_rate", &nevr_quest::CombatConfig::refreshRate},
-                      {"refresh_rate_lobby", &nevr_quest::CombatConfig::refreshRateLobby},
-                      {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72}};
-  {  // no file, an empty file, a section with no key: on, from the default, nothing said
+  const Key keys[] = {{"refresh_rate", &nevr_quest::CombatConfig::refreshRate, true},
+                      {"refresh_rate_lobby", &nevr_quest::CombatConfig::refreshRateLobby, false},
+                      {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true}};
+  {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
-    for (const Key& k : keys) CHECK((none.config.combat.*k.member).on && (none.config.combat.*k.member).source != Source::kFile);
+    for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);
     for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n", "combat:\n  force: true\n"}) {
       const LoadResult r = Load(Full(), text);
       CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
-      for (const Key& k : keys) CHECK((r.config.combat.*k.member).on && (r.config.combat.*k.member).source != Source::kFile);
+      for (const Key& k : keys) CHECK((r.config.combat.*k.member).on == k.defaultOn && (r.config.combat.*k.member).source != Source::kFile);
     }
   }
   for (const Key& k : keys) {
     const std::string key = std::string("combat.") + k.name;
-    for (const char* word : {"false", "no", "False"}) {  // off, by the file, and the other two keys keep their default
+    for (const char* word : {"false", "no", "False"}) {  // off, by the file
       const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": " + word + "\n");
       CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
       CHECK(!(r.config.combat.*k.member).on && (r.config.combat.*k.member).source == Source::kFile);
       for (const Key& other : keys) {
-        if (&other != &k) CHECK((r.config.combat.*other.member).on && (r.config.combat.*other.member).source != Source::kFile);
+        if (&other != &k) CHECK((r.config.combat.*other.member).on == other.defaultOn && (r.config.combat.*other.member).source != Source::kFile);
       }
       CHECK(!EventsContain(r, "unknown_nested="));
     }
@@ -1234,16 +1286,16 @@ void CombatRefreshRateKeysAreOnUnlessTheFileSaysFalse() {
       const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": " + word + "\n");
       CHECK((r.config.combat.*k.member).on && (r.config.combat.*k.member).source == Source::kFile && !HasLevel(r, LogLevel::kWarn));
     }
-    for (const char* value : {"maybe", "2", "[false]", "{a: 1}", ""}) {  // a value nobody meant: on, from the default
+    for (const char* value : {"maybe", "2", "[false]", "{a: 1}", ""}) {  // a value nobody meant: the default
       const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": " + value + "\n");
       CHECK(!r.fileRejected);
-      CHECK((r.config.combat.*k.member).on && (r.config.combat.*k.member).source != Source::kFile);
+      CHECK((r.config.combat.*k.member).on == k.defaultOn && (r.config.combat.*k.member).source != Source::kFile);
       CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=", LogLevel::kWarn));
       CHECK(!EventsContain(r, "maybe") && !HasLevel(r, LogLevel::kError));
     }
     {  // a file rejected as a whole contributes nothing
-      const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": false\nnot_a_section: 1\n");
-      CHECK(r.fileRejected && (r.config.combat.*k.member).on && (r.config.combat.*k.member).source != Source::kFile);
+      const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": " + (k.defaultOn ? "false" : "true") + "\nnot_a_section: 1\n");
+      CHECK(r.fileRejected && (r.config.combat.*k.member).on == k.defaultOn && (r.config.combat.*k.member).source != Source::kFile);
     }
   }
 }
@@ -1272,7 +1324,8 @@ int main() {
   AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey();
   HandFlipIsOffUnlessTheFileSaysTrue();
   CombatForceIsNotAskedUnlessTheFileSaysTrue();
-  CombatRefreshRateKeysAreOnUnlessTheFileSaysFalse();
+  CombatModuleSwitchesAreOnUnlessTheFileSaysFalse();
+  CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   ClockLevelsOverrideIsOffUnlessTheDiagnosticsKeyIsTrue();

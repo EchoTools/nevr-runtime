@@ -44,8 +44,10 @@ constexpr const char* kTextureQualityName = "texture_quality";  // a key `graphi
 constexpr const char* kHandFlipKey = "graphics.hand_flip";       // Quest only (default false, #2082)
 constexpr const char* kHandFlipName = "hand_flip";               // the other key `graphics` has
 constexpr const char* kCombatForceKey = "combat.force";           // Quest only (default false, #2170)
+constexpr const char* kCombatHeapsKey = "combat.heaps";           // Quest only (default true, #2175)
+constexpr const char* kCombatMemsysKey = "combat.memsys";         // Quest only (default true, #2175)
 constexpr const char* kCombatRefreshRateKey = "combat.refresh_rate";                  // Quest only (default true, #2172)
-constexpr const char* kCombatRefreshRateLobbyKey = "combat.refresh_rate_lobby";        // Quest only (default true, #2172)
+constexpr const char* kCombatRefreshRateLobbyKey = "combat.refresh_rate_lobby";        // Quest only (default FALSE, #2172: arena shares the lobby)
 constexpr const char* kCombatRefreshRateQuest2Key = "combat.refresh_rate_quest2_72";   // Quest only (default true, #2172)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
@@ -296,14 +298,14 @@ void ReadCombatForce(const nevr::NevrConfig& cfg, LoadResult& r) {
   r.config.combat.force = {on, given ? Source::kFile : Source::kAbsent};
 }
 
-// A folded module's switch under `combat:` (#2172): on unless the file says false. Absent: on, from the default. A boolean: that value, from
-// the file. Anything else: on, from the default, and ReadBool's one Warning that names the key.
-CombatSwitchChoice ReadCombatSwitch(const nevr::NevrConfig& cfg, const char* key, LoadResult& r) {
+// A folded combat module's switch (#2175). Absent: on, from the default. A boolean: that value, from the file. Anything else: on, from the
+// default, and ReadBool's one Warning that names the key.
+CombatSwitch ReadCombatSwitch(const nevr::NevrConfig& cfg, const char* key, LoadResult& r, bool fallback = true) {
   const bool given = cfg.GetBool(key).has_value();
   if (!cfg.GetString(key) && cfg.Kind(key) != nevr::NodeKind::kAbsent) {
     Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_a_boolean (default stays)");
   }
-  const bool on = ReadBool(cfg, key, true, r);
+  const bool on = ReadBool(cfg, key, fallback, r);
   return {on, given ? Source::kFile : Source::kAbsent};
 }
 
@@ -351,8 +353,10 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   ReadTextureQuality(cfg, r);
   ReadHandFlip(cfg, r);
   ReadCombatForce(cfg, r);
+  r.config.combat.heaps = ReadCombatSwitch(cfg, kCombatHeapsKey, r);
+  r.config.combat.memsys = ReadCombatSwitch(cfg, kCombatMemsysKey, r);
   r.config.combat.refreshRate = ReadCombatSwitch(cfg, kCombatRefreshRateKey, r);
-  r.config.combat.refreshRateLobby = ReadCombatSwitch(cfg, kCombatRefreshRateLobbyKey, r);
+  r.config.combat.refreshRateLobby = ReadCombatSwitch(cfg, kCombatRefreshRateLobbyKey, r, /*fallback=*/false);
   r.config.combat.refreshRateQuest2At72 = ReadCombatSwitch(cfg, kCombatRefreshRateQuest2Key, r);
   r.config.plugins = cfg.Plugins();
 }

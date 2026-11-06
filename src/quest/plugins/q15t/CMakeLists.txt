@@ -1,6 +1,6 @@
-# The q15t Quest plugin: libq15t.so (the modules) and libq15t_early.so (heaps and memsys, for the loader's early phase).
-# Added by src/quest/integration/CMakeLists.txt, which defines nevr::plugin_sdk and nevr_pinned_build_id. Neither library is in a
-# release or package-dev APK; the variant recipe packages them (src/quest/plugins/q15t/README.md). Paths are relative to this file.
+# The q15t Quest plugin: libq15t.so (the modules).
+# Added by src/quest/integration/CMakeLists.txt, which defines nevr::plugin_sdk and nevr_pinned_build_id. The library is in no
+# release or package-dev APK; the variant and combat recipes package it (src/quest/plugins/q15t/README.md). Paths are relative to this file.
 set(Q15T_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 # The 21 script libraries whose headset-type expression decides a combat entry on a Quest: the 20 of the combat menu (the combat
@@ -70,10 +70,6 @@ option(Q15T_SENDGUARD "sendguard: a script send to a game space that is not load
 # this tree yet. Kill file pfxtev.off in the plugin data directory.
 option(Q15T_PFXTEV "pfxtev (#1642): the event-effect id decision (PfxTevAllows); no caller until the pfx renderer (#1631) lands. Source: ON" ON)
 option(Q15T_DECALS "decals (#1619): the level decals of decals.bin drawn as dynamic-mesh quads on the bullet system's update, torn down on its Shutdown" ON)
-# heaps and memsys (docs/quest/q15t/modules/heaps.md section 1, memsys.md) need the loader's early phase (config.yaml `early: true`), and one plugin
-# entry is one phase, so they are a second library, libq15t_early.so (src/plugin_early.cpp), listed as its own early entry. Whether the
-# early phase runs on a headset is ADR 0019 P10; the loader refuses the entry loudly (early_unsupported) when it does not.
-option(Q15T_EARLY "libq15t_early.so: heaps and memsys, for the loader's early phase" ON)
 
 if(Q15T_WALLFIRE AND NOT Q15T_BVH)
   message(FATAL_ERROR "Q15T_WALLFIRE needs Q15T_BVH (wallfire refuses without the static BVH answering Occluded)")
@@ -154,15 +150,3 @@ if(NOT "${Q15T_EC_DEFAULT_WORDS}" STREQUAL "")
   target_compile_definitions(nevr_q15t PRIVATE "Q15T_EC_DEFAULT_WORDS=\"${Q15T_EC_DEFAULT_WORDS}\"")
 endif()
 target_link_options(nevr_q15t PRIVATE ${Q15T_COMMON_LINK})
-
-if(Q15T_EARLY)
-  add_library(nevr_q15t_early SHARED
-    "${Q15T_DIR}/src/plugin_early.cpp" "${Q15T_DIR}/src/plugin_log.cpp" "${Q15T_DIR}/src/got_swap.cpp" "${Q15T_DIR}/src/safe_read.cpp"
-    "${Q15T_DIR}/src/import_hook.cpp" "${Q15T_DIR}/src/heaps.cpp" "${Q15T_DIR}/src/memsys.cpp")
-  set_target_properties(nevr_q15t_early PROPERTIES OUTPUT_NAME q15t_early)
-  target_include_directories(nevr_q15t_early PRIVATE "${Q15T_DIR}/src")
-  target_link_libraries(nevr_q15t_early PRIVATE nevr::plugin_sdk dl)
-  target_compile_options(nevr_q15t_early PRIVATE ${Q15T_COMMON_OPTIONS})
-  target_compile_definitions(nevr_q15t_early PRIVATE Q15T_BUILD_ID="${nevr_pinned_build_id}")
-  target_link_options(nevr_q15t_early PRIVATE ${Q15T_COMMON_LINK})
-endif()

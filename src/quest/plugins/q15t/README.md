@@ -1,17 +1,16 @@
 # q15t
 
 A Quest plugin for the plugin loader (`docs/adr/0019-quest-plugin-loader.md`): gameplay and fix modules for the pinned libr15
-build (build id from `src/quest/sentinel/pinned_targets.h`, `kLibR15StockBuildId`). Two libraries:
+build (build id from `src/quest/sentinel/pinned_targets.h`, `kLibR15StockBuildId`). One library:
 
 - `libq15t.so` (`nevr_q15t`): the modules, loaded in the loader's normal phase.
-- `libq15t_early.so` (`nevr_q15t_early`, option `Q15T_EARLY`): `heaps` and `memsys`, which must act before `android_main`
-  reads the heap sizes, so they are their own library and, when packaged, an `early` plugin. Whether the early phase runs on a
-  headset is ADR 0019 P10 and P14; the loader refuses the entry loudly (`early_unsupported`) when it does not.
 
-Neither library is in a release or package-dev APK. `just build-quest-q15t` builds them. The unlisted variant APK
-(`release-quest-variant-apk`, RELEASING.md) packages `libq15t.so`, and the combat APK (`release-quest-combat-apk`) packages both
-libraries, `libq15t_early.so` as an early plugin; each recipe runs `build-quest-q15t` in the tag's checkout, so a packaged library
-is that tag's build output, behind that recipe's checks.
+The heap sizes and the render-target pool are not here: the sentinel sets them in its own early combat step before `android_main` reads
+them (`src/quest/combat/heaps.h`, `src/quest/combat/memsys.h`).
+
+The library is in no release or package-dev APK. `just build-quest-q15t` builds it. The unlisted variant APK
+(`release-quest-variant-apk`, RELEASING.md) and the combat APK (`release-quest-combat-apk`) package it; each recipe runs `build-quest-q15t` in the
+tag's checkout, so the packaged library is that tag's build output, behind that recipe's checks.
 
 ## Layout
 

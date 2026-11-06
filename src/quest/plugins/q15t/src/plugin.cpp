@@ -89,8 +89,8 @@
 #endif
 // Gameplay and fix modules (src/<m>.{h,cpp}, docs/quest/q15t/modules/<m>.md). CMakeLists.txt owns the options and their defaults (each with the
 // reason, from the module's doc); like Q15T_T26, the default HERE is 0, so a build that names no option installs none of them and the
-// perf arms and the host-test arms stay unchanged. heaps and memsys are not wired: they need the loader's early phase, which a plugin
-// that also needs the loaded game library cannot share (docs/quest/q15t/modules/heaps.md section 1; CMakeLists.txt).
+// perf arms and the host-test arms stay unchanged. heaps and memsys are not modules of this plugin: they are the sentinel's early combat
+// step (src/quest/combat/heaps.h, memsys.h).
 #ifndef Q15T_FXTRAIL
 #define Q15T_FXTRAIL 0
 #endif

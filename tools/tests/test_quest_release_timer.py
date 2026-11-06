@@ -1270,7 +1270,7 @@ class RealProcess(TimerCase):
 
 VARIANT = "q15t"
 VARIANT_APK = f"nevr-runtime-{TAG}-{VARIANT}-quest.apk"
-LIBRARIES = ("libq15t.so",)  # what the variant APK carries (libq15t_early.so is built and not packaged)
+LIBRARIES = ("libq15t.so",)  # what the variant APK carries: the one q15t plugin library
 BUILD_ID = "0123456789abcdef0123456789abcdef01234567"
 MAIN_STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "worktree", "build_slot", "configure",
               "build_apk", "publish_apk", "dispatch", "watch", "check_jobs", "verify_live"]
@@ -1577,7 +1577,7 @@ class VariantLibraries(VariantCase):
         data = library_bytes("libq15t.so")
         self.assertEqual([(e["name"], e["size"], e["sha256"], e["libr15_build_id"]) for e in self.libraries()],
                          [("libq15t.so", len(data), hashlib.sha256(data).hexdigest(), BUILD_ID)])
-        self.assertEqual([e["name"] for e in self.libraries()], list(LIBRARIES), "libq15t_early.so is not in the variant APK")
+        self.assertEqual([e["name"] for e in self.libraries()], list(LIBRARIES), "the variant APK carries the one q15t library")
 
     def test_the_record_is_of_the_file_the_build_wrote_not_of_a_fixed_one(self) -> None:
         other = library_bytes("another build") .replace(BUILD_ID.encode(), b"f" * 40)

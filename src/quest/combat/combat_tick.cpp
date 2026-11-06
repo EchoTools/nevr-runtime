@@ -19,7 +19,19 @@ std::atomic<TickFn> g_ticks[kMaxCallbacks] = {};
 std::atomic<std::size_t> g_count{0};
 std::atomic<std::uint32_t> g_calls{0};
 std::atomic<std::uint32_t> g_objectMisses{0};
+// The one object that passed the vptr check: the game calls with the same CR15Game every frame, so the check (a process_vm_readv) is made again
+// only when the pointer changes. A failing object is never remembered, so a wrong object is read and refused every time.
+std::atomic<std::uintptr_t> g_verified{0};
+std::atomic<std::uint32_t> g_vptrReads{0};
 std::atomic<std::uintptr_t> g_vptr{0};  // the value CR15Game's first word holds in this process: libr15's base + the pinned vaddr
+
+void RunCallbacks(std::uintptr_t object) noexcept {
+  const std::size_t n = g_count.load(std::memory_order_acquire);
+  for (std::size_t i = 0; i < n && i < kMaxCallbacks; ++i) {
+    const TickFn fn = g_ticks[i].load(std::memory_order_acquire);
+    if (fn != nullptr) fn(object);
+  }
+}
 
 // The game's function runs first (the slot's chain below this hook, the plugin's wrapper included); then the callbacks, on the game
 // thread, in registration order, for an object that is the CR15Game. The log line is written after the original returned, never while a
@@ -28,7 +40,12 @@ void OnTick(Thunk::Fn original, void* game) noexcept {
   original(game);
   g_calls.fetch_add(1, std::memory_order_relaxed);
   const std::uintptr_t object = reinterpret_cast<std::uintptr_t>(game);
+  if (object != 0 && object == g_verified.load(std::memory_order_relaxed)) {
+    RunCallbacks(object);
+    return;
+  }
   std::uintptr_t vptr = 0;
+  g_vptrReads.fetch_add(1, std::memory_order_relaxed);
   const bool readable = SafeRead(object, &vptr, sizeof(vptr));
   if (!readable || vptr != g_vptr.load(std::memory_order_relaxed)) {
     // Loud once: a wrong vptr means no callback ever runs and every module that asked for a tick silently does nothing.
@@ -40,11 +57,8 @@ void OnTick(Thunk::Fn original, void* game) noexcept {
     }
     return;
   }
-  const std::size_t n = g_count.load(std::memory_order_acquire);
-  for (std::size_t i = 0; i < n && i < kMaxCallbacks; ++i) {
-    const TickFn fn = g_ticks[i].load(std::memory_order_acquire);
-    if (fn != nullptr) fn(object);
-  }
+  g_verified.store(object, std::memory_order_relaxed);
+  RunCallbacks(object);
 }
 
 NEVR_HOOK_RECORD(kTickHook, Thunk, &OnTick);
@@ -98,6 +112,8 @@ ModuleResult InstallNormal() noexcept {
 
 std::uint32_t Calls() noexcept { return g_calls.load(std::memory_order_relaxed); }
 
+std::uint32_t VptrReads() noexcept { return g_vptrReads.load(std::memory_order_relaxed); }
+
 void ResetForTest() noexcept {
   g_hook.Forget();
   Thunk::Reset();
@@ -106,6 +122,8 @@ void ResetForTest() noexcept {
   g_calls.store(0, std::memory_order_relaxed);
   g_objectMisses.store(0, std::memory_order_relaxed);
   g_vptr.store(0, std::memory_order_relaxed);
+  g_verified.store(0, std::memory_order_relaxed);
+  g_vptrReads.store(0, std::memory_order_relaxed);
 }
 
 }  // namespace nevr_quest::combat::tick

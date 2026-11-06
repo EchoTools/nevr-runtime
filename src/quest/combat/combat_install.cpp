@@ -7,6 +7,8 @@
 
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/heaps.h"
+#include "quest/combat/memsys.h"
 #include "quest/combat/refresh_rate.h"
 #include "quest/sentinel/hook_log.h"
 
@@ -14,12 +16,29 @@ namespace nevr_quest::combat {
 
 namespace {
 
-// The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t plugin
-// installed it, and nowhere else. `tick` is first: it installs the game-thread tick (combat_tick.h), and every module that has a per-frame
-// callback registers it from its own step, which may come before or after the tick's install.
+// The configuration the rows read their switch from (SetConfig). A plain object: it is written once on the constructor's thread before
+// either step runs, and the normal step's thread is ordered after it by the post-load action's atomics.
+nevr_quest::CombatConfig g_config;
+
+// A row's install function reads its module's switch here, so a module's own code takes the switch as an argument and a host test
+// drives it without a configuration.
+ModuleResult HeapsEarly() noexcept { return heaps::Install(g_config.heaps.on, g_config.memsys.on); }
+ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on); }
+ModuleResult RefreshRateNormal() noexcept {
+  return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
+}
+
+// The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
+// plugin installed it, and nowhere else; the count is deduced.
+//   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
+//   before android_main reads the sizes.
 constexpr std::array kModules{
+    Module{"heaps", &HeapsEarly, nullptr},
+    Module{"memsys", &MemsysEarly, nullptr},
+    // tick, then refresh_rate (#2172): the game-thread tick installs first (combat_tick.h), and every module with a per-frame callback registers
+    // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
-    Module{"refresh_rate", nullptr, &refresh_rate::InstallNormal},
+    Module{"refresh_rate", nullptr, &RefreshRateNormal},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -30,10 +49,6 @@ constexpr int kDone = 1;
 constexpr int kEnded = 2;
 // A process where combat does not run says so once, whichever phase asks first.
 std::atomic<bool> g_inactiveSaid{false};
-
-// The `combat:` section the constructor's configuration step resolved (SetConfig). Written once on the constructor's thread before any
-// phase runs; a phase reads it on the thread that runs it, which starts after the constructor returned.
-nevr_quest::CombatConfig g_config;
 
 std::atomic<int>& StateOf(Phase phase) { return g_phaseState[phase == Phase::kEarly ? 0 : 1]; }
 
@@ -117,19 +132,18 @@ void NoteNormalNotStarted(const char* reasonToken) noexcept {
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
   const auto source = [](const nevr_quest::Source s) { return s == nevr_quest::Source::kFile ? "config" : "default"; };
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config",
-                      {{"force", config.force.on ? 1 : 0}, {"force_source", source(config.force.source)},
+                      {{"force", config.force.on ? 1 : 0}, {"force_source", config.force.source == nevr_quest::Source::kFile ? "config" : "default"},
+                       {"heaps", config.heaps.on ? 1 : 0}, {"heaps_source", config.heaps.source == nevr_quest::Source::kFile ? "config" : "default"},
+                       {"memsys", config.memsys.on ? 1 : 0}, {"memsys_source", config.memsys.source == nevr_quest::Source::kFile ? "config" : "default"},
                        {"refresh_rate", config.refreshRate.on ? 1 : 0}, {"refresh_rate_source", source(config.refreshRate.source)},
-                       {"refresh_rate_lobby", config.refreshRateLobby.on ? 1 : 0},
-                       {"refresh_rate_lobby_source", source(config.refreshRateLobby.source)},
+                       {"refresh_rate_lobby", config.refreshRateLobby.on ? 1 : 0}, {"refresh_rate_lobby_source", source(config.refreshRateLobby.source)},
                        {"refresh_rate_quest2_72", config.refreshRateQuest2At72.on ? 1 : 0},
                        {"refresh_rate_quest2_72_source", source(config.refreshRateQuest2At72.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
-                               "honours it (see combat_active); the refresh_rate keys switch the refresh-rate rule's parts, all on by default"}});
+                               "honours it (see combat_active); a module's own key set to false turns that module off"}});
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }
-
-const nevr_quest::CombatConfig& Config() noexcept { return g_config; }
 
 void ResetInstallForTest() noexcept {
   g_config = nevr_quest::CombatConfig{};

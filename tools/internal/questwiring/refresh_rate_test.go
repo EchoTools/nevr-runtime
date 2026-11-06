@@ -87,7 +87,7 @@ func TestTheRenderConfigHandlerAsksTheOwnerBeforeTheOriginalAndReportsAfter(t *t
 
 func TestTheTickInstallsBeforeTheRuleInTheNormalPhase(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
-	before(t, table, `Module{"tick", nullptr, &tick::InstallNormal}`, `Module{"refresh_rate", nullptr, &refresh_rate::InstallNormal}`)
+	before(t, table, `Module{"tick", nullptr, &tick::InstallNormal}`, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`)
 }
 
 func TestTheTickIsAThunkInstalledThroughTheManagerWithNoExpectedOriginal(t *testing.T) {
@@ -97,7 +97,7 @@ func TestTheTickIsAThunkInstalledThroughTheManagerWithNoExpectedOriginal(t *test
 			t.Errorf("combat_tick.cpp lacks %q", want)
 		}
 	}
-	before(t, body(t, code, "void OnTick("), "original(game);", "fn(object)")
+	before(t, body(t, code, "void OnTick("), "original(game);", "RunCallbacks(object)")
 	targets := stripComments(read(t, "src/quest/combat/combat_tick_targets.h"))
 	if regexp.MustCompile(`GotTarget\{[^}]*kStockVaddr`).MatchString(targets) {
 		t.Error("the tick pins the stock function: the plugin's wrapper in the slot would be refused")
@@ -156,11 +156,16 @@ func TestEachKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.T) {
 			t.Errorf("the example config does not document %s", key)
 		}
 	}
-	if !regexp.MustCompile(`struct CombatSwitchChoice \{\n  bool on = true;`).MatchString(read(t, "src/quest/sentinel/quest_config.h")) {
+	header := read(t, "src/quest/sentinel/quest_config.h")
+	if !regexp.MustCompile(`struct CombatSwitch \{\n  bool on = true;`).MatchString(header) {
 		t.Error("a combat switch does not default to on")
 	}
-	if !strings.Contains(reader, "ReadBool(cfg, key, true, r)") {
-		t.Error("the reader's fallback is not on")
+	// arena shares the lobby levels, so the lobby key is the one that defaults off, in the struct and in the reader
+	if !strings.Contains(header, "CombatSwitch refreshRateLobby{false, Source::kAbsent}") {
+		t.Error("combat.refresh_rate_lobby does not default to off")
+	}
+	if !strings.Contains(reader, "ReadCombatSwitch(cfg, kCombatRefreshRateLobbyKey, r, /*fallback=*/false)") {
+		t.Error("the reader's fallback for combat.refresh_rate_lobby is not off")
 	}
 }
 

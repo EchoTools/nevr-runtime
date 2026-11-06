@@ -52,8 +52,10 @@ section of `config.yaml`, the `combat` host-test group, `test-quest-combat`, and
 3. **One owner per behaviour.** The clock levels belong to the sentinel's `clock_levels`; q15t's clock module is deleted and its
    `args: {clock: raise}` is `diagnostics.clock_levels_override: true`. The refresh rate belongs to the combat refresh-rate rule, a
    decision the render-configuration handler asks, as it asks `clock_levels`; render_config logs the value applied. The handler runs in every APK, so
-   the rule answers with the game's own rate unless `combat::Active()` (rule 5). Headset facts come from the identity step (ADR 0031
-   decision 4), not from a module's own reads.
+   the rule answers with the game's own rate unless `combat::Active()` (rule 5). `combat::Active()` is per APK and arena runs on the same APK as
+   combat, so the decision also depends on the loaded level (`combat_level.h`): only a combat map (and, with `combat.refresh_rate_lobby`, the
+   combat lobby) asks for the level rate, and an Echo Arena level, and every lobby arena players use, always keeps the game's own rate. Headset
+   facts come from the identity step (ADR 0031 decision 4), not from a module's own reads.
 4. **Switches are `config.yaml` keys** under a `combat:` section, one per module and one per option, each defaulting to the shipped
    behaviour, parsed by `quest_config`, logged once with value and source (`combat_config`). A module's switch file stops being read in
    the change that moves the module, and a former switch file found is a Warning. Files that are player state (the new-profile gun-hand

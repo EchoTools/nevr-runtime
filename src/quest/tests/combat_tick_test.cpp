@@ -296,6 +296,32 @@ void TheHandlerRunsTheGamesFunctionThenTheCallbacksInOrder() {
   Done();
 }
 
+// The vptr is read once for the object that passed, not once per frame: the game calls with the same CR15Game every frame. A new pointer is read
+// again, and an object that failed is read (and refused) every time, never remembered.
+void TheVptrIsReadOncePerObjectNotOncePerFrame() {
+  World(bv::Variant::kCombat);
+  QCHECK(tick::Add(&CombatCallback<1>));
+  QCHECK(tick::InstallAt(&Lookup));
+  void* const game = Game(VptrValue());
+  for (int frame = 0; frame < 1000; ++frame) CallSlot(game);
+  QCHECK(tick::Calls() == 1000 && tick::VptrReads() == 1);
+  int ran = 0;
+  for (const std::string& s : g_order) ran += s == "combat1" ? 1 : 0;
+  QCHECK(ran == 1000);  // every frame still ran the callback
+  static std::uintptr_t second[8] = {};
+  second[0] = VptrValue();
+  CallSlot(second);
+  QCHECK(tick::VptrReads() == 2);  // a new pointer: read again
+  static std::uintptr_t wrong[8] = {};
+  wrong[0] = 0x777;
+  for (int frame = 0; frame < 3; ++frame) CallSlot(wrong);
+  QCHECK(tick::VptrReads() == 5);  // a refused object is read every frame
+  g_order.clear();
+  CallSlot(second);  // the verified object is still the last one that passed
+  QCHECK(tick::VptrReads() == 5 && g_order.size() == 2U);
+  Done();
+}
+
 // An object that is not the CR15Game runs the game's function and no callback, and says so once, loudly.
 void AnObjectThatIsNotTheGameRunsNoCallbackAndSaysSoOnce() {
   World(bv::Variant::kCombat);
@@ -419,6 +445,7 @@ int main() {
   ThePinnedSlotIsTheOneThePluginWrapped();
   TheHandlerRunsTheGamesFunctionThenTheCallbacksInOrder();
   AnObjectThatIsNotTheGameRunsNoCallbackAndSaysSoOnce();
+  TheVptrIsReadOncePerObjectNotOncePerFrame();
   ARefusedInstallLeavesTheSlotAloneAndSaysWhy();
   OnAPlainReleaseNothingInstallsAndTheGamesFunctionRunsAlone();
   OnAQ15tApkThePluginInstallsFirstAndTheRunnersOrderRefusesNothing();

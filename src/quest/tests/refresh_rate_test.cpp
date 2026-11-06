@@ -14,6 +14,7 @@
 #include "quest/combat/refresh_rate.h"
 
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -114,6 +115,9 @@ int FakeAsk(void* ovr, float hz) noexcept {
 
 void* const kOvr = reinterpret_cast<void*>(0x1234);
 
+nevr_quest::CombatConfig g_cfg;
+combat::ModuleResult InstallRule() { return rr::Install(g_cfg.refreshRate.on, g_cfg.refreshRateLobby.on, g_cfg.refreshRateQuest2At72.on); }
+
 // A process of this variant, the rule's seams at the test's, and the keys as given.
 void World(bv::Variant variant, const nevr_quest::CombatConfig& config = nevr_quest::CombatConfig{}, int quest2 = 0) {
   combat::tick::ResetForTest();
@@ -130,6 +134,7 @@ void World(bv::Variant variant, const nevr_quest::CombatConfig& config = nevr_qu
   sentinel::SetLogSink(&Capture);
   combat::Resolve(/*devBuild=*/false, /*forceAsked=*/false);
   combat::SetConfig(config);
+  g_cfg = config;
   rr::SetAskForTest(&FakeAsk);
   rr::SetQuest2ForTest(quest2);
   rr::SetClockForTest(&Clock);
@@ -232,7 +237,7 @@ void ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched() {
     Frame();
     QCHECK(g_asks.empty());  // the tick never asks: the game's rate stays
     // Even a step that is reached anyway installs nothing and registers no tick.
-    const combat::ModuleResult r = rr::InstallNormal();
+    const combat::ModuleResult r = InstallRule();
     QCHECK(!r.installed);
     QCHECK(combat::tick::Count() == 0);
     QCHECK(Lines("combat_refresh_rate_install").empty());
@@ -244,15 +249,15 @@ void ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched() {
 void AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined() {
   for (const bv::Variant variant : {bv::Variant::kQ15t, bv::Variant::kCombat}) {
     World(variant);
-    const combat::ModuleResult r = rr::InstallNormal();
+    const combat::ModuleResult r = InstallRule();
     QCHECK(r.installed && std::strcmp(r.status, "installed") == 0);
     QCHECK(combat::tick::Count() == 1);
     const std::vector<Line> lines = Lines("combat_refresh_rate_install");
     QCHECK(lines.size() == 1U);
     if (lines.size() == 1U) {
       QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
-      QCHECK(Has(lines[0].text, "\"mode\":\"lobby\""));
-      QCHECK(Has(lines[0].text, "\"refresh_rate\":1") && Has(lines[0].text, "\"refresh_rate_lobby\":1") &&
+      QCHECK(Has(lines[0].text, "\"mode\":\"match\""));
+      QCHECK(Has(lines[0].text, "\"refresh_rate\":1") && Has(lines[0].text, "\"refresh_rate_lobby\":0") &&
              Has(lines[0].text, "\"refresh_rate_quest2_72\":1"));
       QCHECK(Has(lines[0].text, "\"quest2\":0") && Has(lines[0].text, "\"level_hz\":\"90\""));
       QCHECK(Has(lines[0].text, "\"tick\":\"registered\""));
@@ -264,26 +269,26 @@ void AComboOrQ15tApkOwnsTheRuleAndSaysWhatItCombined() {
 
 void TheInstallLineFollowsTheKeysAndTheHeadset() {
   World(bv::Variant::kCombat, Keys(true, true, true), /*quest2=*/1);
-  rr::InstallNormal();
+  InstallRule();
   std::vector<Line> l = Lines("combat_refresh_rate_install");
   QCHECK(l.size() == 1U && Has(l[0].text, "\"quest2\":1") && Has(l[0].text, "\"level_hz\":\"72\""));
   Done();
 
   World(bv::Variant::kCombat, Keys(true, true, false), /*quest2=*/1);
-  rr::InstallNormal();
+  InstallRule();
   l = Lines("combat_refresh_rate_install");
   QCHECK(l.size() == 1U && Has(l[0].text, "\"level_hz\":\"90\"") && Has(l[0].text, "\"refresh_rate_quest2_72\":0"));
   Done();
 
   World(bv::Variant::kCombat, Keys(true, false, true), 0);
-  rr::InstallNormal();
+  InstallRule();
   l = Lines("combat_refresh_rate_install");
   QCHECK(l.size() == 1U && Has(l[0].text, "\"mode\":\"match\"") && Has(l[0].text, "\"refresh_rate_lobby\":0"));
   Done();
 
   // The rule off: the witness only, which registers no tick and still reports it installed.
   World(bv::Variant::kCombat, Keys(false, true, true), 0);
-  const combat::ModuleResult r = rr::InstallNormal();
+  const combat::ModuleResult r = InstallRule();
   QCHECK(r.installed && std::strcmp(r.status, "witness") == 0);
   QCHECK(combat::tick::Count() == 0);
   l = Lines("combat_refresh_rate_install");
@@ -297,7 +302,7 @@ void AFullTickTableIsNamedAndTheModuleSaysItDidNotInstall() {
   for (std::size_t i = 0; i < combat::tick::kMaxCallbacks; ++i) {
     QCHECK(combat::tick::Add([](std::uintptr_t) noexcept {}));
   }
-  const combat::ModuleResult r = rr::InstallNormal();
+  const combat::ModuleResult r = InstallRule();
   QCHECK(!r.installed && std::strcmp(r.status, "tick_table_full") == 0);
   const std::vector<Line> l = Lines("combat_refresh_rate_install");
   QCHECK(l.size() == 1U && l[0].level == sentinel::LogLevel::kWarn && Has(l[0].text, "\"tick\":\"full\""));
@@ -309,8 +314,8 @@ void AFullTickTableIsNamedAndTheModuleSaysItDidNotInstall() {
 // Echo Arena (120 asked, nothing loaded): untouched. A combat map loads: the tick re-asks 90 once. The game asks 120 again during it:
 // kept at 90. The map unloads: the tick re-asks the session rate once.
 void AComSessionFromArenaToCombatAndBack() {
-  World(bv::Variant::kCombat);
-  rr::InstallNormal();
+  World(bv::Variant::kCombat, Keys(true, true, true));
+  InstallRule();
   g_lines.clear();
   Frame();  // before the game's first request there is nothing to lower
   QCHECK(g_asks.empty());
@@ -357,7 +362,7 @@ void AComSessionFromArenaToCombatAndBack() {
   QCHECK(rr::CurrentStats().requests == 2);
 
   // A lobby level after a combat map is still the level rate: no re-ask.
-  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_social"));
+  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_combat"));
   Frame();
   QCHECK(g_asks.size() == 1U);
   // An Echo Arena level loaded beside it wins: the session rate comes back.
@@ -368,7 +373,7 @@ void AComSessionFromArenaToCombatAndBack() {
   QCHECK(sw.size() == 2U && Has(sw[1].text, "echo arena level loaded: session rate") && Has(sw[1].text, "\"sent_hz\":\"120.0\""));
   // The arena unloads, the lobby is still loaded: 90 again. Then every level goes: the session rate.
   ClearGame();
-  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_social"));
+  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_combat"));
   Frame();
   QCHECK(g_asks.size() == 3U && g_asks[2].hz == 90.0f);
   ClearGame();
@@ -382,7 +387,7 @@ void AComSessionFromArenaToCombatAndBack() {
 
 void TheTickLooksTwiceASecondAtMost() {
   World(bv::Variant::kCombat);
-  rr::InstallNormal();
+  InstallRule();
   GameAsks(120.0f);
   PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
   Frame(0.2);  // the first look happens at once (the schedule starts empty) but a level change within 0.5 s of a look waits
@@ -398,7 +403,7 @@ void TheTickLooksTwiceASecondAtMost() {
 
 void NothingIsAskedWhileTheGamesRateIsAtOrBelowTheLevelRate() {
   World(bv::Variant::kCombat);
-  rr::InstallNormal();
+  InstallRule();
   GameAsks(90.0f);  // the game asks for 90 already (a headset that offers no more)
   PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
   Frame();
@@ -407,7 +412,7 @@ void NothingIsAskedWhileTheGamesRateIsAtOrBelowTheLevelRate() {
   Done();
 
   World(bv::Variant::kCombat, Keys(true, true, true), /*quest2=*/1);  // a Quest 2: level rate 72, the game asks 90
-  rr::InstallNormal();
+  InstallRule();
   QCHECK(GameAsks(90.0f) == 90.0f);  // no level: as asked
   PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
   Frame();
@@ -418,7 +423,7 @@ void NothingIsAskedWhileTheGamesRateIsAtOrBelowTheLevelRate() {
 
 void TheRuleOffNeverChangesARateAndLogsTheWitness() {
   World(bv::Variant::kCombat, Keys(false, true, true), 0);
-  rr::InstallNormal();
+  InstallRule();
   PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
   QCHECK(GameAsks(120.0f) == 120.0f);
   Frame();
@@ -430,9 +435,9 @@ void TheRuleOffNeverChangesARateAndLogsTheWitness() {
 
 void TheCombatOnlyModeDoesNotCountTheLobby() {
   World(bv::Variant::kCombat, Keys(true, false, true), 0);
-  rr::InstallNormal();
+  InstallRule();
   GameAsks(120.0f);
-  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_social"));
+  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_combat"));
   Frame();
   QCHECK(g_asks.empty());  // a lobby level asks for nothing with refresh_rate_lobby off
   PutLevel(0, 0, CSymbol64Hash("mpl_combat_fission"));
@@ -446,7 +451,7 @@ void TheCombatOnlyModeDoesNotCountTheLobby() {
 void AnArenaMatchOnTheCombatApkKeepsTheGamesRate() {
   for (const bool lobby : {true, false}) {
     World(bv::Variant::kCombat, Keys(true, lobby, true), 0);
-    rr::InstallNormal();
+    InstallRule();
     PutLevel(0, 0, CSymbol64Hash("mpl_arena_a"));
     QCHECK(GameAsks(120.0f) == 120.0f);
     Frame();
@@ -468,11 +473,78 @@ void AnArenaMatchOnTheCombatApkKeepsTheGamesRate() {
   }
 }
 
+// The lobbies arena players use are not combat's: with the lobby key on or off, the game's own rate stays in each of them, and the combat lobby
+// asks for the level rate only with the key on.
+void TheLobbiesArenaPlayersUseKeepTheGamesRate() {
+  for (const bool lobby : {true, false}) {
+    for (const char* name : {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b2_lowspec", "mpl_lobby_b_arena", "mpl_lobby_b_social"}) {
+      World(bv::Variant::kCombat, Keys(true, lobby, true), 0);
+      InstallRule();
+      PutLevel(0, 0, CSymbol64Hash(name));
+      QCHECK(GameAsks(120.0f) == 120.0f);
+      Frame();
+      Frame();
+      QCHECK(g_asks.empty());
+      QCHECK(GameAsks(120.0f) == 120.0f);
+      QCHECK(!rr::CurrentStats().inLevel && rr::CurrentStats().switches == 0);
+      Done();
+    }
+    World(bv::Variant::kCombat, Keys(true, lobby, true), 0);
+    InstallRule();
+    PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_combat"));
+    GameAsks(120.0f);
+    Frame();
+    QCHECK(g_asks.size() == (lobby ? 1U : 0U));  // the combat lobby: only with the key on
+    QCHECK(GameAsks(120.0f) == (lobby ? 90.0f : 120.0f));
+    Done();
+  }
+}
+
+// The plugin's kill files are not read: a file found is a Warning that names the key replacing it, and the rule is what the keys say.
+void ALegacyKillFileIsWarnedAboutAndChangesNothing() {
+  char dir[] = "/tmp/refresh_rate_legacy_XXXXXX";
+  QCHECK(mkdtemp(dir) != nullptr);
+  const std::string base = dir;
+  World(bv::Variant::kCombat, Keys(true, true, true), 0);
+  rr::SetLegacyDirForTest(dir);
+  InstallRule();
+  QCHECK(Lines("combat_refresh_rate_legacy_switch").empty());  // no file, no line
+  Done();
+  struct Legacy {
+    const char* file;
+    const char* replacement;
+  };
+  for (const Legacy& legacy : {Legacy{"hzlevel.off", "combat.refresh_rate: false"}, Legacy{"hzlobby90.off", "combat.refresh_rate_lobby: false"},
+                               Legacy{"hz72q2.off", "combat.refresh_rate_quest2_72: false"}}) {
+    const std::string path = base + "/" + legacy.file;
+    std::FILE* f = std::fopen(path.c_str(), "w");
+    QCHECK(f != nullptr);
+    if (f != nullptr) std::fclose(f);
+    World(bv::Variant::kCombat, Keys(true, true, true), 0);
+    rr::SetLegacyDirForTest(dir);
+    const combat::ModuleResult r = InstallRule();
+    QCHECK(r.installed && std::strcmp(r.status, "installed") == 0);  // the file changed nothing: the rule is on
+    const std::vector<Line> w = Lines("combat_refresh_rate_legacy_switch");
+    QCHECK(w.size() == 1U);
+    if (w.size() == 1U) {
+      QCHECK(w[0].level == sentinel::LogLevel::kWarn);
+      QCHECK(Has(w[0].text, std::string("\"file\":\"") + legacy.file + "\""));
+      QCHECK(Has(w[0].text, std::string("\"replaced_by\":\"") + legacy.replacement));
+      QCHECK(Has(w[0].text, "\"msg\":"));
+    }
+    QCHECK(Has(Lines("combat_refresh_rate_install")[0].text, "\"mode\":\"lobby\""));
+    Done();
+    std::remove(path.c_str());
+  }
+  rr::SetLegacyDirForTest(nullptr);
+  rmdir(dir);
+}
+
 // The gate is the owner's first word, not only the release's absence of a published rule: with the rule published and a level loaded, a
 // process where combat is not active answers the game's own rate and writes nothing.
 void TheGateComesBeforeThePublishedRule() {
   World(bv::Variant::kCombat);
-  rr::InstallNormal();
+  InstallRule();
   GameAsks(120.0f);
   PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
   Frame();
@@ -533,7 +605,7 @@ void TheProductionReaskCallsTheWordNowInTheSlot() {
   World(bv::Variant::kCombat);
   rr::SetAskForTest(nullptr);  // the production ask
   rr::SetImageLookupForTest(&FixtureLookup);
-  rr::InstallNormal();
+  InstallRule();
   GameAsks(120.0f);  // the session rate and the ovr pointer
   PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
 
@@ -583,6 +655,8 @@ int main() {
   TheProductionReaskCallsTheWordNowInTheSlot();
   TheGateComesBeforeThePublishedRule();
   AnArenaMatchOnTheCombatApkKeepsTheGamesRate();
+  TheLobbiesArenaPlayersUseKeepTheGamesRate();
+  ALegacyKillFileIsWarnedAboutAndChangesNothing();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "refresh_rate_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

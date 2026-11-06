@@ -48,43 +48,79 @@ void PutLevel(int table, int row, std::uint64_t level, std::uintptr_t owner = 0)
 }
 
 void EveryLevelIdIsTheCSymbol64OfItsNameAndOfItsClass() {
-  const char* lobbies[] = {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b2_lowspec", "mpl_lobby_b_combat", "mpl_lobby_b_arena", "mpl_lobby_b_social"};
+  const char* otherLobbies[] = {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b2_lowspec", "mpl_lobby_b_arena", "mpl_lobby_b_social"};
   const char* combats[] = {"mpl_combat_dyson", "mpl_combat_combustion", "mpl_combat_fission", "mpl_combat_gauss"};
   const char* arenas[] = {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a"};
   std::uint64_t level = 0;
-  for (const char* name : lobbies) {
-    QCHECK(lv::IsLobbyLevel(CSymbol64Hash(name)) && !lv::IsCombatMap(CSymbol64Hash(name)) && !lv::IsEchoArenaLevel(CSymbol64Hash(name)));
+  // The lobbies arena players use are no class: not combat, not arena, whatever the lobby rule.
+  for (const char* name : otherLobbies) {
+    const std::uint64_t id = CSymbol64Hash(name);
+    QCHECK(!lv::IsCombatLobby(id) && !lv::IsCombatMap(id) && !lv::IsEchoArenaLevel(id));
     ClearGame();
-    PutLevel(0, 0, CSymbol64Hash(name));
-    QCHECK(lv::Classify(GameAddress(), true, &level) == lv::Kind::kCombatOrLobby && level == CSymbol64Hash(name));
-    QCHECK(lv::Classify(GameAddress(), false, &level) == lv::Kind::kNone);  // the lobby rule off: not a level of the rule
-    QCHECK(!lv::CombatMapLoaded(GameAddress(), &level) && level == 0);       // a lobby is not a combat map
+    PutLevel(0, 0, id);
+    QCHECK(lv::Classify(GameAddress(), true, &level) == lv::Kind::kNone && level == 0);
+    QCHECK(lv::Classify(GameAddress(), false, &level) == lv::Kind::kNone);
+    QCHECK(!lv::CombatMapLoaded(GameAddress(), &level));
+    const lv::Loaded loaded = lv::Scan(GameAddress());
+    QCHECK(!loaded.combatMap && !loaded.combatLobby && !loaded.echoArena);
+  }
+  {  // the combat lobby: a class of its own, counted only with the lobby rule, never a combat map
+    const std::uint64_t id = CSymbol64Hash("mpl_lobby_b_combat");
+    QCHECK(lv::IsCombatLobby(id) && !lv::IsCombatMap(id) && !lv::IsEchoArenaLevel(id));
+    ClearGame();
+    PutLevel(0, 0, id);
+    QCHECK(lv::Classify(GameAddress(), true, &level) == lv::Kind::kCombatOrLobby && level == id);
+    QCHECK(lv::Classify(GameAddress(), false, &level) == lv::Kind::kNone);
+    QCHECK(!lv::CombatMapLoaded(GameAddress(), &level) && level == 0);
+    const lv::Loaded loaded = lv::Scan(GameAddress());
+    QCHECK(loaded.combatLobby && loaded.combatLobbyLevel == id && !loaded.combatMap && !loaded.echoArena);
   }
   for (const char* name : combats) {
-    QCHECK(lv::IsCombatMap(CSymbol64Hash(name)) && !lv::IsLobbyLevel(CSymbol64Hash(name)) && !lv::IsEchoArenaLevel(CSymbol64Hash(name)));
+    const std::uint64_t id = CSymbol64Hash(name);
+    QCHECK(lv::IsCombatMap(id) && !lv::IsCombatLobby(id) && !lv::IsEchoArenaLevel(id));
     ClearGame();
-    PutLevel(0, 0, CSymbol64Hash(name));
-    QCHECK(lv::Classify(GameAddress(), false, &level) == lv::Kind::kCombatOrLobby && level == CSymbol64Hash(name));
+    PutLevel(0, 0, id);
+    QCHECK(lv::Classify(GameAddress(), false, &level) == lv::Kind::kCombatOrLobby && level == id);
     QCHECK(lv::Classify(GameAddress(), true, &level) == lv::Kind::kCombatOrLobby);
-    QCHECK(lv::CombatMapLoaded(GameAddress(), &level) && level == CSymbol64Hash(name));
+    QCHECK(lv::CombatMapLoaded(GameAddress(), &level) && level == id);
   }
   for (const char* name : arenas) {
-    QCHECK(lv::IsEchoArenaLevel(CSymbol64Hash(name)) && !lv::IsCombatMap(CSymbol64Hash(name)) && !lv::IsLobbyLevel(CSymbol64Hash(name)));
+    const std::uint64_t id = CSymbol64Hash(name);
+    QCHECK(lv::IsEchoArenaLevel(id) && !lv::IsCombatMap(id) && !lv::IsCombatLobby(id));
     ClearGame();
-    PutLevel(0, 0, CSymbol64Hash(name));
-    QCHECK(lv::Classify(GameAddress(), true, &level) == lv::Kind::kEchoArena && level == CSymbol64Hash(name));
-    QCHECK(lv::Classify(GameAddress(), false, &level) == lv::Kind::kNone);  // decides only under the lobby rule
-    QCHECK(!lv::CombatMapLoaded(GameAddress(), &level));                    // an arena level is never a combat map
+    PutLevel(0, 0, id);
+    // an arena level is an arena level whether or not the lobby rule is on
+    QCHECK(lv::Classify(GameAddress(), true, &level) == lv::Kind::kEchoArena && level == id);
+    QCHECK(lv::Classify(GameAddress(), false, &level) == lv::Kind::kEchoArena && level == id);
+    QCHECK(!lv::CombatMapLoaded(GameAddress(), &level));  // never a combat map
   }
 }
 
-void AnEchoArenaLevelWinsOverALobbyLevelAndTheGamespaceMustBeTheGames() {
+// Every class at once: a transition holds several levels, and Scan reports each class with its first level.
+void ScanReportsEveryLoadedClassAtOnce() {
+  ClearGame();
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  PutLevel(0, 1, CSymbol64Hash("mpl_lobby_b_combat"));
+  PutLevel(1, 0, CSymbol64Hash("mpl_arena_a"));
+  const lv::Loaded loaded = lv::Scan(GameAddress());
+  QCHECK(loaded.combatMap && loaded.combatMapLevel == CSymbol64Hash("mpl_combat_gauss"));
+  QCHECK(loaded.combatLobby && loaded.combatLobbyLevel == CSymbol64Hash("mpl_lobby_b_combat"));
+  QCHECK(loaded.echoArena && loaded.echoArenaLevel == CSymbol64Hash("mpl_arena_a"));
+  std::uint64_t level = 0;
+  QCHECK(lv::Classify(GameAddress(), true, &level) == lv::Kind::kEchoArena);  // the arena level wins over both
+  QCHECK(lv::CombatMapLoaded(GameAddress(), &level) && level == CSymbol64Hash("mpl_combat_gauss"));
+  ClearGame();
+  const lv::Loaded none = lv::Scan(GameAddress());
+  QCHECK(!none.combatMap && !none.combatLobby && !none.echoArena);
+}
+
+void AnEchoArenaLevelWinsAndTheGamespaceMustBeTheGames() {
   std::uint64_t level = 0;
   ClearGame();
-  PutLevel(0, 0, CSymbol64Hash("mpl_lobby_b_social"));
-  PutLevel(1, 0, CSymbol64Hash("mpl_arena_a"));  // in the second table
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  PutLevel(1, 0, CSymbol64Hash("mpl_arena_a"));  // in the second table: a combat map still loaded during a transition
   QCHECK(lv::Classify(GameAddress(), true, &level) == lv::Kind::kEchoArena);
-  QCHECK(lv::Classify(GameAddress(), false, &level) == lv::Kind::kNone);
+  QCHECK(lv::Classify(GameAddress(), false, &level) == lv::Kind::kEchoArena);
   ClearGame();  // a gamespace some other game owns is not this game's level
   PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"), /*owner=*/0xdead0000);
   QCHECK(lv::Classify(GameAddress(), true, &level) == lv::Kind::kNone && level == 0);
@@ -102,13 +138,16 @@ void AnEchoArenaLevelWinsOverALobbyLevelAndTheGamespaceMustBeTheGames() {
   QCHECK(lv::Classify(0x1000, true, &level) == lv::Kind::kNone);
   QCHECK(lv::Classify(0, true, &level) == lv::Kind::kNone);
   QCHECK(!lv::CombatMapLoaded(0, &level));
+  const lv::Loaded unreadable = lv::Scan(0);
+  QCHECK(!unreadable.combatMap && !unreadable.combatLobby && !unreadable.echoArena);
 }
 
 }  // namespace
 
 int main() {
   EveryLevelIdIsTheCSymbol64OfItsNameAndOfItsClass();
-  AnEchoArenaLevelWinsOverALobbyLevelAndTheGamespaceMustBeTheGames();
+  ScanReportsEveryLoadedClassAtOnce();
+  AnEchoArenaLevelWinsAndTheGamespaceMustBeTheGames();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_level_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

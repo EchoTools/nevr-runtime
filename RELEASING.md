@@ -259,9 +259,9 @@ certificate in the release-signer's `config/`; a new key needs that pin changed 
 The variant APK (`nevr-runtime-vX.Y.Z-q15t-quest.apk`) is built by `just release-quest-variant-apk vX.Y.Z` from the
 same loader asset plus the q15t plugin library the tag's own source builds: the recipe runs `just build-quest-q15t` in the checkout (HEAD is
 the tag's commit) and packages `build/quest-q15t/libq15t.so`, so the library in the APK is the tag's build output, behind that recipe's
-checks (static initializers, emulated thread-local storage, the pinned libr15 build ID, the shipped defaults). `libq15t_early.so` is built
-and is not in the variant: packaged as an ordinary plugin it would load after `android_main` has read the heap sizes it exists to set.
-The combat APK, `just release-quest-combat-apk vX.Y.Z`, runs the same build and packages both libraries, `libq15t_early.so` as an early plugin.
+checks (static initializers, emulated thread-local storage, the pinned libr15 build ID, the shipped defaults). The heap sizes and the render-target
+pool are not a library: the sentinel sets them in its own early combat step (`src/quest/combat/heaps.h`), before `android_main` reads them, so neither APK
+packages an early plugin. The combat APK, `just release-quest-combat-apk vX.Y.Z`, runs the same build and packages the same library.
 Each APK names its variant to the sentinel: the repack stamps `lib/arm64-v8a/libnevr_build_variant.so` with the word (`q15t` for the variant APK,
 `combat` for the combat APK, empty for the release APK and every development APK), refuses any other word, and the sentinel's first log line
 (`sentinel_ctor`, field `variant`) reads it back. The folded combat modules run in the `q15t` and `combat` APKs only (`match_tags` and `equip_refire` run in every APK).

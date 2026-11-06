@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -72,6 +73,51 @@ bool ReadDeviceIsQuest2() noexcept {
 #else
   return false;
 #endif
+}
+
+std::atomic<bool> g_legacyDirSet{false};
+char g_legacyDir[300] = "";  // tests only (SetLegacyDirForTest)
+
+// The plugin's data directory: /sdcard/Android/data/<package>/files/q15t, the package from /proc/self/cmdline (the plugin's own rule), or the
+// test's. False when none can be named.
+bool LegacyDir(char* out, std::size_t n) noexcept {
+  if (g_legacyDirSet.load(std::memory_order_acquire)) {
+    std::snprintf(out, n, "%s", g_legacyDir);
+    return true;
+  }
+  char cmd[256] = {};
+  std::FILE* f = std::fopen("/proc/self/cmdline", "re");
+  if (f == nullptr) return false;
+  const std::size_t got = std::fread(cmd, 1, sizeof(cmd) - 1, f);
+  std::fclose(f);
+  cmd[got] = '\0';
+  if (char* colon = std::strchr(cmd, ':')) *colon = '\0';
+  if (std::strchr(cmd, '.') == nullptr || std::strchr(cmd, '/') != nullptr || std::strlen(cmd) > 160) return false;
+  std::snprintf(out, n, "/sdcard/Android/data/%.160s/files/q15t", cmd);
+  return true;
+}
+
+// The plugin's kill files are not read: a file there turns nothing off (docs/adr/0046 C2). One found is a Warning that names the `combat:` key
+// that replaces it, so an operator who relied on it learns why the rule is running.
+void WarnLegacyKillFiles() noexcept {
+  struct Legacy {
+    const char* file;
+    const char* key;
+  };
+  static constexpr Legacy kLegacy[] = {{"hzlevel.off", "combat.refresh_rate: false"},
+                                       {"hzlobby90.off", "combat.refresh_rate_lobby: false (the default)"},
+                                       {"hz72q2.off", "combat.refresh_rate_quest2_72: false"}};
+  char dir[300] = {};
+  if (!LegacyDir(dir, sizeof(dir))) return;
+  for (const Legacy& legacy : kLegacy) {
+    char path[400];
+    std::snprintf(path, sizeof(path), "%s/%s", dir, legacy.file);
+    if (access(path, F_OK) != 0) continue;
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_refresh_rate_legacy_switch",
+                        {{"file", legacy.file},
+                         {"replaced_by", legacy.key},
+                         {"msg", "the plugin's kill file is no longer read and changes nothing; set the combat key in config.yaml instead"}});
+  }
 }
 
 const char* ModeName() noexcept {
@@ -159,24 +205,23 @@ void Note(float askedHz, float sentHz, int result) noexcept {
                        {"quest2", g_quest2.load(std::memory_order_relaxed) ? 1 : 0}});
 }
 
-ModuleResult InstallNormal() noexcept {
+ModuleResult Install(bool rule, bool lobby, bool quest2At72) noexcept {
   if (!Active()) return {false, "inactive"};
-  const nevr_quest::CombatConfig& config = Config();
   Inputs inputs;
-  inputs.rule = config.refreshRate.on;
-  inputs.lobby = config.refreshRateLobby.on;
-  inputs.quest2At72 = config.refreshRateQuest2At72.on;
+  inputs.rule = rule;
+  inputs.lobby = lobby;
+  inputs.quest2At72 = quest2At72;
   inputs.quest2 = ReadDeviceIsQuest2();
-  const Rule rule = Decide(inputs);
+  const Rule decided = Decide(inputs);
   g_quest2.store(inputs.quest2, std::memory_order_relaxed);
-  g_levelHz.store(rule.levelHz, std::memory_order_release);
-  g_lobby.store(rule.lobby, std::memory_order_release);
-  g_on.store(rule.on, std::memory_order_release);  // last: the handler reads the rule whole once it is on
+  g_levelHz.store(decided.levelHz, std::memory_order_release);
+  g_lobby.store(decided.lobby, std::memory_order_release);
+  g_on.store(decided.on, std::memory_order_release);  // last: the handler reads the rule whole once it is on
   const char* tickState = "not_needed";
-  if (rule.on) tickState = tick::Add(&Tick) ? "registered" : "full";
+  if (decided.on) tickState = tick::Add(&Tick) ? "registered" : "full";
   const bool full = std::strcmp(tickState, "full") == 0;
   char hz[16];
-  std::snprintf(hz, sizeof(hz), "%.0f", static_cast<double>(rule.levelHz));
+  std::snprintf(hz, sizeof(hz), "%.0f", static_cast<double>(decided.levelHz));
   sentinel::LogFields(full ? sentinel::LogLevel::kWarn : sentinel::LogLevel::kInfo, "combat_refresh_rate_install",
                       {{"mode", ModeName()},
                        {"refresh_rate", inputs.rule ? 1 : 0},
@@ -186,10 +231,11 @@ ModuleResult InstallNormal() noexcept {
                        {"level_hz", hz},
                        {"tick", tickState},
                        {"msg", full ? "the game-thread tick table is full, so the rule only lowers requests the game makes; it never re-asks on a level change"
-                           : !rule.on ? "refresh_rate is off: the game's own rate always, every request logged"
-                                      : "combat maps (and, in lobby mode, the social lobby) ask for the level rate; an Echo Arena level keeps the game's rate"}});
+                           : !decided.on ? "refresh_rate is off: the game's own rate always, every request logged"
+                                      : "combat maps (and, in lobby mode, the combat lobby) ask for the level rate; an Echo Arena level keeps the game's rate"}});
+  WarnLegacyKillFiles();
   if (full) return {false, "tick_table_full"};
-  return {true, rule.on ? "installed" : "witness"};
+  return {true, decided.on ? "installed" : "witness"};
 }
 
 void Tick(std::uintptr_t game) noexcept {
@@ -232,6 +278,10 @@ Stats CurrentStats() noexcept {
 }
 
 void SetAskForTest(AskFn fn) noexcept { g_ask.store(fn, std::memory_order_release); }
+void SetLegacyDirForTest(const char* dir) noexcept {
+  std::snprintf(g_legacyDir, sizeof(g_legacyDir), "%s", dir != nullptr ? dir : "");
+  g_legacyDirSet.store(dir != nullptr && dir[0] != '\0', std::memory_order_release);
+}
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept { g_lookup.store(lookup, std::memory_order_release); }
 void SetQuest2ForTest(int quest2) noexcept { g_quest2Override.store(quest2, std::memory_order_relaxed); }
 void SetClockForTest(double (*clock)() noexcept) noexcept { g_clock.store(clock, std::memory_order_release); }

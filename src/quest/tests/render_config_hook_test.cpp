@@ -327,7 +327,7 @@ void ACombatApkAsksTheRuleAndTheOriginalGetsItsAnswer() {
   PutLibr15();
   rr::SetClockForTest(&FakeClock);
   g_fakeGame = FakeGame{};
-  QCHECK(rr::InstallNormal().installed);
+  QCHECK(rr::Install(true, false, true).installed);
   Capture::Clear();
 
   QCHECK(Entry<RefreshT>()(kOvr, 120.0f) == 0);  // Echo Arena, or no level: the game's own rate
@@ -383,7 +383,7 @@ void AReleaseApkKeepsTheGamesOwnRateWhateverIsLoaded() {
   QCHECK(g_refreshCalls == 1);
   QCHECK(Entry<RefreshT>()(kOvr, 120.0f) == 0 && g_refreshSeen == 120.0f);
   QCHECK(Lines("combat_refresh_rate_request").empty() && Lines("combat_refresh_rate_switch").empty());
-  QCHECK(!rr::InstallNormal().installed && combat::tick::Count() == 0);
+  QCHECK(!rr::Install(true, false, true).installed && combat::tick::Count() == 0);
   QCHECK(Entry<SubmitT>()(kOvr, nullptr) == 0);
   QCHECK(rc::PollOnce(kFake));
   const std::vector<std::string> lines = Lines("render_config");

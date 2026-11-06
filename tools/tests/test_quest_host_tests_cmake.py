@@ -64,7 +64,10 @@ PROGRAMS = {
         "combat_level_test",
         "combat_tick_test",
         "equip_refire_test",
+        "heap_step_test",
+        "heaps_test",
         "match_tag_default_test",
+        "memsys_test",
         "refresh_rate_test",
     ),
     "data": (

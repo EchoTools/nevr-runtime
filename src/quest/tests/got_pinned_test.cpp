@@ -26,6 +26,10 @@
 #include "got_hook.h"
 #include "hook_log.h"
 #include "login_title_hook.h"
+#include "quest/combat/combat_level_targets.h"
+#include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/heaps_targets.h"
+#include "quest/combat/memsys_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/game_login_failures.h"
@@ -337,6 +341,59 @@ void CheckDefinedAt(const LoadedElf& elf, const char* symbol, std::uint64_t vadd
   }
 }
 
+// The heap-size and render-target-pool modules' pins (src/quest/combat/heaps_targets.h, memsys_targets.h) against the real libr15: each heap
+// row's GLOB_DAT slot resolves at its pin and names a data object defined at the row's .rodata address, the .rodata word is the stock size
+// and the reader word is the stock load; the pool's and Init's JUMP_SLOTs resolve at their pins, name the functions at the pinned addresses,
+// and every pinned code word (the return-address sites among them) is the one in the file.
+void CheckRealHeapsAndMemsys(const LoadedElf& elf) {
+  namespace heaps = nevr_quest::combat::heaps;
+  namespace memsys = nevr_quest::combat::memsys;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  for (const heaps::RowPin& row : heaps::kRows) {
+    Elf64_Sym sym;
+    if (!DynamicSymbol(elf, row.symbol, &sym)) {
+      std::fprintf(stderr, "libr15 %s: not in .dynsym\n", row.symbol);
+      QCHECK(false);
+      continue;
+    }
+    QCHECK(ELF64_ST_TYPE(sym.st_info) == STT_OBJECT && sym.st_value == row.ro);
+    const GotTarget target{pinned::kLibR15, row.symbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, row.slot};
+    const SlotResolution at = ResolveSlot(elf.image, target, kAarch64Relocs);
+    QCHECK_STATUS(at.status, GotStatus::kOk);
+    QCHECK(at.slotVaddr == row.slot && at.symbolType == STT_OBJECT);
+    std::uint64_t stock = 0;
+    std::memcpy(&stock, mem + row.ro, sizeof(stock));
+    std::uint32_t reader = 0;
+    std::memcpy(&reader, mem + row.reader, sizeof(reader));
+    if (stock != row.stock || reader != row.readerWord) {
+      std::fprintf(stderr, "libr15 heap row %s: .rodata word %#llx (want %#llx), reader word %#x (want %#x)\n", row.id,
+                   static_cast<unsigned long long>(stock), static_cast<unsigned long long>(row.stock), reader, row.readerWord);
+      QCHECK(false);
+    }
+  }
+  CheckTarget(elf, GotTarget{pinned::kLibR15, memsys::kAllocSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, memsys::kPins.allocSlot},
+              "libr15 CSimplePool<SGRenderTargetLayout>::Alloc JUMP_SLOT");
+  CheckTarget(elf, GotTarget{pinned::kLibR15, memsys::kInitSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, memsys::kPins.initSlot},
+              "libr15 CSysJava::Init JUMP_SLOT");
+  CheckDefinedAt(elf, memsys::kAllocSymbol, memsys::kPins.allocFn);
+  CheckDefinedAt(elf, memsys::kInitSymbol, memsys::kPins.initFn);
+  QCHECK(memsys::kPins.systemSlot == heaps::kRows[heaps::kSystemRow].slot);
+  bool allocSiteIsPinned = false;
+  bool initSiteIsPinned = false;
+  for (const memsys::Word& w : memsys::kWords) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + w.vaddr, sizeof(have));
+    if (have != w.word) {
+      std::fprintf(stderr, "libr15 memsys word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(w.vaddr), have, w.word);
+      QCHECK(false);
+    }
+    allocSiteIsPinned = allocSiteIsPinned || w.vaddr == memsys::kPins.allocSite;
+    initSiteIsPinned = initSiteIsPinned || w.vaddr == memsys::kPins.initSite;
+  }
+  QCHECK(allocSiteIsPinned && initSiteIsPinned);  // the instruction at each return address is among the pinned words
+}
+
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -494,8 +551,31 @@ int main(int argc, char** argv) {
       QCHECK(false);
     }
   }
+  // The combat tick (#2172, combat_tick_targets.h): the JUMP_SLOT of CncaGame::ExclusiveUpdateGame at its pinned address, the symbol defined at the
+  // stock address the slot holds, and CR15Game's first word's value (the vtable's first virtual).
+  CheckTarget(r15, nevr_quest::combat::tick::targets::Target(), "libr15 CncaGame::ExclusiveUpdateGame JUMP_SLOT");
+  CheckDefinedAt(r15, nevr_quest::combat::tick::targets::kSymbol, nevr_quest::combat::tick::targets::kStockVaddr);
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kCR15GameVtableSymbol, nevr_quest::combat::level::targets::kCR15GameVtableVaddr);
+  if (nevr_quest::combat::level::targets::kCR15GameVtableVaddr + 0x10 != nevr_quest::combat::tick::targets::kGameVptrVaddr) {
+    std::fprintf(stderr, "libr15 CR15Game: the vtable's first virtual is not the pinned object vptr\n");
+    QCHECK(false);
+  }
+  // The combat level answer (#2172, combat_level_targets.h): the functions that read or store the offsets the module uses, and the words that do.
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kLoadedGameSpaceSymbol, nevr_quest::combat::level::targets::kLoadedGameSpaceVaddr);
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kInitializeSymbol, nevr_quest::combat::level::targets::kInitializeVaddr);
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kLoadLevelSymbol, nevr_quest::combat::level::targets::kLoadLevelVaddr);
+  for (const auto& pin : nevr_quest::combat::level::targets::kOffsetWords) {
+    std::uint32_t word = 0;
+    std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + pin.vaddr, sizeof(word));
+    if (word != pin.word) {
+      std::fprintf(stderr, "libr15 %s: the word at %#llx is %#x, not the pinned %#x\n", pin.what, static_cast<unsigned long long>(pin.vaddr), word,
+                   pin.word);
+      QCHECK(false);
+    }
+  }
   CheckRealAbs64Words(r15);
   CheckRealNotypeSlotIsRefused(r15);
+  CheckRealHeapsAndMemsys(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
