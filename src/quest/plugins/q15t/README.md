@@ -3,7 +3,7 @@
 A Quest plugin for the plugin loader (`docs/adr/0019-quest-plugin-loader.md`): gameplay and fix modules for the pinned libr15
 build (build id from `src/quest/sentinel/pinned_targets.h`, `kLibR15StockBuildId`). One library:
 
-- `libq15t.so` (`nevr_q15t`): the modules and the clock hook, loaded in the loader's normal phase.
+- `libq15t.so` (`nevr_q15t`): the modules, loaded in the loader's normal phase.
 
 The heap sizes and the render-target pool are not here: the sentinel sets them in its own early combat step before `android_main` reads
 them (`src/quest/combat/heaps.h`, `src/quest/combat/memsys.h`).
@@ -29,7 +29,7 @@ The build defaults are the shipped behaviour; none of them depends on a config o
   (`src/quest/plugins/q15t/src/combat_gates.h`): the party-permissions gate (`Q15T_GATE_PERM`, kill file `gate_perm.off`), levelname with boosterpool
   (`Q15T_LEVELNAME`, kill file `levelname.off`) and the bot-body gate (`Q15T_GATE_BOTS`, kill file `gate_bots.off`). The bot-body
   gate is installed only while levelname is: the combat bot body exists only in the full-size global_mp level. One
-  `q15t_combat_gates_install` line per run states which of the three are on and why. The refresh-rate level rule (`Q15T_HZ_MATCH90`: 90 Hz, 72 on a Quest 2, on combat maps and in the lobby; kill files `hzlevel.off`, `hzlobby90.off`, `hz72q2.off`) is on too.
+  `q15t_combat_gates_install` line per run states which of the three are on and why.
 - `ec` is on with the words `types=VPTO equip hide` (`Q15T_EC_DEFAULT_WORDS`), and `ecfx` is on (`Q15T_ECFX_DEFAULT_ON`),
   with no switch file. A switch file in the plugin data directory still overrides the words.
 - Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).
@@ -37,8 +37,10 @@ The build defaults are the shipped behaviour; none of them depends on a config o
   (`Q15T_LINK_GATE_LIBS`): the 20 of the combat menu and the lobby script (`libf808c072bb49da47.so`, which loads the lobby's combat
   wing); the other 26 libraries that bind the headset-type expression get the real answer. Each library's first bind logs `headset bind lib=<file> answered=<real|not-a-Quest>`. A `gate_libs.txt` in the plugin data
   directory (first line: `all`, `none`, or comma/space separated library file names) replaces the list.
-- The clock hook logs the levels the game asks for and forwards them unchanged. `args: {clock: raise}` in a `plugins:` entry of
-  `config.yaml` raises the CPU and GPU levels to at least 4 (`src/quest/plugins/q15t/src/plugin_args.cpp` reads the flat JSON of string values).
+- The refresh-rate rule (90 Hz, 72 on a Quest 2, on combat maps and in the lobby) and the clock levels are not this plugin's: the runtime
+  owns them (`src/quest/combat/refresh_rate.h`, `src/quest/sentinel/clock_levels_hook.h`). The rule's switches are the `combat:` keys
+  `refresh_rate`, `refresh_rate_lobby` and `refresh_rate_quest2_72` in `config.yaml`, and the clock raise is
+  `diagnostics.clock_levels_override: true`; no kill file or plugin `args` entry switches either.
 
 ## Loading
 

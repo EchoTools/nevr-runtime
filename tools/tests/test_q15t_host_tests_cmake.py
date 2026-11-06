@@ -34,9 +34,8 @@ PRINTED = re.compile(r"""\b(echo|printf)\s+("([^"\\]|\\.)*"|'[^']*')""")
 
 HOST_TESTS = frozenset(
     [
-        "core.host_test_0_0",
-        "core.host_test_1_0",
-        "core.host_test_0_1",
+        "core.host_test_0",
+        "core.host_test_1",
         "core.gates_test",
         "core.library_name_test",
         "aibots.aibots_test",
@@ -106,7 +105,6 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_WALLFIRE",
         "wiring.wiring_caps_LEVELNAME",
         "wiring.wiring_caps_T26",
-        "wiring.wiring_caps_HZ_MATCH90",
         "wiring.wiring_caps_GATE_LINK",
         "wiring.wiring_caps_GATE_PERM",
         "wiring.wiring_caps_GATE_BOTS",

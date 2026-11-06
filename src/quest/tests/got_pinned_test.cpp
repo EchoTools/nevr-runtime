@@ -26,6 +26,8 @@
 #include "got_hook.h"
 #include "hook_log.h"
 #include "login_title_hook.h"
+#include "quest/combat/combat_level_targets.h"
+#include "quest/combat/combat_tick_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/memsys_targets.h"
 #include "pinned_targets.h"
@@ -546,6 +548,28 @@ int main(int argc, char** argv) {
     if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block.vaddr, block.code, block.words * sizeof(std::uint32_t)) != 0) {
       std::fprintf(stderr, "libr15 %s: the words at %#llx differ from the pinned ones\n", block.name,
                    static_cast<unsigned long long>(block.vaddr));
+      QCHECK(false);
+    }
+  }
+  // The combat tick (#2172, combat_tick_targets.h): the JUMP_SLOT of CncaGame::ExclusiveUpdateGame at its pinned address, the symbol defined at the
+  // stock address the slot holds, and CR15Game's first word's value (the vtable's first virtual).
+  CheckTarget(r15, nevr_quest::combat::tick::targets::Target(), "libr15 CncaGame::ExclusiveUpdateGame JUMP_SLOT");
+  CheckDefinedAt(r15, nevr_quest::combat::tick::targets::kSymbol, nevr_quest::combat::tick::targets::kStockVaddr);
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kCR15GameVtableSymbol, nevr_quest::combat::level::targets::kCR15GameVtableVaddr);
+  if (nevr_quest::combat::level::targets::kCR15GameVtableVaddr + 0x10 != nevr_quest::combat::tick::targets::kGameVptrVaddr) {
+    std::fprintf(stderr, "libr15 CR15Game: the vtable's first virtual is not the pinned object vptr\n");
+    QCHECK(false);
+  }
+  // The combat level answer (#2172, combat_level_targets.h): the functions that read or store the offsets the module uses, and the words that do.
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kLoadedGameSpaceSymbol, nevr_quest::combat::level::targets::kLoadedGameSpaceVaddr);
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kInitializeSymbol, nevr_quest::combat::level::targets::kInitializeVaddr);
+  CheckDefinedAt(r15, nevr_quest::combat::level::targets::kLoadLevelSymbol, nevr_quest::combat::level::targets::kLoadLevelVaddr);
+  for (const auto& pin : nevr_quest::combat::level::targets::kOffsetWords) {
+    std::uint32_t word = 0;
+    std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + pin.vaddr, sizeof(word));
+    if (word != pin.word) {
+      std::fprintf(stderr, "libr15 %s: the word at %#llx is %#x, not the pinned %#x\n", pin.what, static_cast<unsigned long long>(pin.vaddr), word,
+                   pin.word);
       QCHECK(false);
     }
   }

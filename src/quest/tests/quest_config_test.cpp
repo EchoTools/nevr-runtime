@@ -1250,6 +1250,56 @@ void CombatForceIsNotAskedUnlessTheFileSaysTrue() {
   }
 }
 
+// The refresh-rate rule's three keys (#2172, combat/refresh_rate.h): each on unless the file says false, so a launch with no file, an empty
+// section, or a value nobody meant keeps the rule running. A boolean is the file's word, whichever it is; anything else keeps on, from the
+// default, with one Warning that names the key and not the value. The keys are on the schema, so the file is not rejected for them.
+void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
+  struct Key {
+    const char* name;
+    nevr_quest::CombatSwitch nevr_quest::CombatConfig::*member;
+    bool defaultOn;  // refresh_rate_lobby is OFF by default: the lobby levels arena players use are not combat's
+  };
+  const Key keys[] = {{"refresh_rate", &nevr_quest::CombatConfig::refreshRate, true},
+                      {"refresh_rate_lobby", &nevr_quest::CombatConfig::refreshRateLobby, false},
+                      {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true}};
+  {  // no file, an empty file, a section with no key: the default, from the default, nothing said
+    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+    for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);
+    for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n", "combat:\n  force: true\n"}) {
+      const LoadResult r = Load(Full(), text);
+      CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn));
+      for (const Key& k : keys) CHECK((r.config.combat.*k.member).on == k.defaultOn && (r.config.combat.*k.member).source != Source::kFile);
+    }
+  }
+  for (const Key& k : keys) {
+    const std::string key = std::string("combat.") + k.name;
+    for (const char* word : {"false", "no", "False"}) {  // off, by the file
+      const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": " + word + "\n");
+      CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
+      CHECK(!(r.config.combat.*k.member).on && (r.config.combat.*k.member).source == Source::kFile);
+      for (const Key& other : keys) {
+        if (&other != &k) CHECK((r.config.combat.*other.member).on == other.defaultOn && (r.config.combat.*other.member).source != Source::kFile);
+      }
+      CHECK(!EventsContain(r, "unknown_nested="));
+    }
+    for (const char* word : {"true", "yes"}) {  // on, by the file
+      const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": " + word + "\n");
+      CHECK((r.config.combat.*k.member).on && (r.config.combat.*k.member).source == Source::kFile && !HasLevel(r, LogLevel::kWarn));
+    }
+    for (const char* value : {"maybe", "2", "[false]", "{a: 1}", ""}) {  // a value nobody meant: the default
+      const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": " + value + "\n");
+      CHECK(!r.fileRejected);
+      CHECK((r.config.combat.*k.member).on == k.defaultOn && (r.config.combat.*k.member).source != Source::kFile);
+      CHECK(EventsWithAreAtLevel(r, "config file key=" + key + " rejected reason=", LogLevel::kWarn));
+      CHECK(!EventsContain(r, "maybe") && !HasLevel(r, LogLevel::kError));
+    }
+    {  // a file rejected as a whole contributes nothing
+      const LoadResult r = Load(Full(), std::string("combat:\n  ") + k.name + ": " + (k.defaultOn ? "false" : "true") + "\nnot_a_section: 1\n");
+      CHECK(r.fileRejected && (r.config.combat.*k.member).on == k.defaultOn && (r.config.combat.*k.member).source != Source::kFile);
+    }
+  }
+}
+
 int main() {
   InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
   InviteCodesNeedsLoginAndAServiceAddress();
@@ -1275,6 +1325,7 @@ int main() {
   HandFlipIsOffUnlessTheFileSaysTrue();
   CombatForceIsNotAskedUnlessTheFileSaysTrue();
   CombatModuleSwitchesAreOnUnlessTheFileSaysFalse();
+  CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   ClockLevelsOverrideIsOffUnlessTheDiagnosticsKeyIsTrue();

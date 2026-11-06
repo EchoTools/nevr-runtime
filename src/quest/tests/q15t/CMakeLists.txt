@@ -129,17 +129,14 @@ function(q15t_arm64_object)
   endforeach()
 endfunction()
 
-# ---- the core programs: the plugin's wiring and its headset gates (label core) ----
+# ---- the core programs: the plugin's entry per arm and its headset gates (label core) ----
 set(Q15T_MODULE core)
 add_custom_target(mod_core)
-foreach(arm "0 0" "1 0" "0 1")
-  string(REPLACE " " ";" arm "${arm}")
-  list(GET arm 0 cap)
-  list(GET arm 1 t26)
-  q15t_host_test(host_test_${cap}_${t26} TEST host_test.cpp
-    SRC plugin plugin_log script_redirect import_hook clock_levels plugin_args refresh_rate game_tick safe_read headset_gates got_swap weapon_arm gamespace
+foreach(t26 0 1)
+  q15t_host_test(host_test_${t26} TEST host_test.cpp
+    SRC plugin plugin_log script_redirect import_hook combat_map game_tick safe_read headset_gates got_swap weapon_arm gamespace
     OPTS "SHELL:-include ${Q15T_TESTS_DIR}/host_overrides.h"
-    DEFS Q15T_HZ_MATCH90=${cap} Q15T_T26=${t26} Q15T_SLOT_SETCLOCKLEVELS=0x10 Q15T_SLOT_SETDISPLAYREFRESHRATE=0x18
+    DEFS Q15T_T26=${t26}
          "Q15T_BUILD_ID_FOR_TEST=\"${Q15T_BUILD_ID_FOR_TEST}\""
     LINK_OPTS -rdynamic LIBS dl)
 endforeach()

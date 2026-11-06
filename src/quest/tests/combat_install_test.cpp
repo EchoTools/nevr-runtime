@@ -210,23 +210,24 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
 // The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and nothing has a normal one yet. No
 // libr15 is loaded in this process, so each module refuses with its fixed token and the line names both; the normal phase writes its one
 // line with no modules.
-void TheShippedTableHoldsHeapsThenMemsysInTheEarlyPhase() {
+void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal() {
   nevr_quest::combat::heaps::ResetForTest();
   nevr_quest::combat::memsys::ResetForTest();
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  QCHECK(normal.ran && normal.modules == 0);
+  // The normal step runs the tick (combat_tick.h) first and the refresh-rate rule after it (#2172). On the host no libr15 is loaded, so the
+  // tick is refused and named; the rule installs (it registers its callback for a tick that may come later).
+  QCHECK(normal.ran && normal.modules == 2 && normal.installed == 1 && normal.failed == 1);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
     QCHECK(Has(lines[0].text, "\"phase\":\"early\"") && Has(lines[1].text, "\"phase\":\"normal\""));
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
-    QCHECK(lines[1].level == sentinel::LogLevel::kInfo);
-    QCHECK(Has(lines[1].text, "\"modules\":0") && Has(lines[1].text, "\"results\":\"\""));
-    QCHECK(Has(lines[1].text, "no combat module has a step in this phase yet; nothing of combat's is installed"));
+    QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed\""));
   }
   Done();
 }
@@ -280,6 +281,7 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   nevr_quest::CombatConfig cfg;
   combat::LogConfig(cfg);
   cfg.force = {true, nevr_quest::Source::kFile};
+  cfg.refreshRateLobby = {false, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
   cfg.force = {false, nevr_quest::Source::kFile};  // the file said false: not asked, but the source is the file's
   combat::LogConfig(cfg);
@@ -288,7 +290,13 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   if (lines.size() == 3U) {
     QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
     QCHECK(Has(lines[0].text, "\"force\":0") && Has(lines[0].text, "\"force_source\":\"default\""));
+    // The refresh-rate rule's three keys: on by default (the lobby's is off), from the default; the file's word where it gave one.
+    QCHECK(Has(lines[0].text, "\"refresh_rate\":1") && Has(lines[0].text, "\"refresh_rate_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"refresh_rate_lobby\":0") && Has(lines[0].text, "\"refresh_rate_lobby_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"refresh_rate_quest2_72\":1") && Has(lines[0].text, "\"refresh_rate_quest2_72_source\":\"default\""));
     QCHECK(Has(lines[1].text, "\"force\":1") && Has(lines[1].text, "\"force_source\":\"config\""));
+    QCHECK(Has(lines[1].text, "\"refresh_rate_lobby\":0") && Has(lines[1].text, "\"refresh_rate_lobby_source\":\"config\""));
+    QCHECK(Has(lines[1].text, "\"refresh_rate\":1"));
     QCHECK(Has(lines[2].text, "\"force\":0") && Has(lines[2].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"msg\":"));
     // The module switches: on by default, each with its source.
@@ -308,6 +316,35 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   Done();
 }
 
+// The `combat:` keys the modules read at their install: the shipped defaults until the configuration step sets them, then what it set.
+void TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection() {
+  // Defaults: the rule on (installed, registers its tick), the combat lobby off.
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig defaults;
+  QCHECK(defaults.refreshRate.on && !defaults.refreshRateLobby.on && defaults.refreshRateQuest2At72.on);
+  combat::SetConfig(defaults);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "refresh_rate=installed"));
+  QCHECK(Has(Lines("combat_refresh_rate_install")[0].text, "\"mode\":\"match\""));
+  Done();
+  // The file's word reaches the row: the rule off is the witness.
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig off;
+  off.refreshRate = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(off);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "refresh_rate=witness"));
+  Done();
+  // And the lobby key on: lobby mode.
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig lobby;
+  lobby.refreshRateLobby = {true, nevr_quest::Source::kFile};
+  combat::SetConfig(lobby);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_refresh_rate_install")[0].text, "\"mode\":\"lobby\""));
+  Done();
+}
+
 }  // namespace
 
 int main() {
@@ -319,10 +356,11 @@ int main() {
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
-  TheShippedTableHoldsHeapsThenMemsysInTheEarlyPhase();
+  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();
+  TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

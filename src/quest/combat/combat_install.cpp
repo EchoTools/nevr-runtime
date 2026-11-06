@@ -6,8 +6,10 @@
 #include <cstring>
 
 #include "quest/combat/combat_active.h"
+#include "quest/combat/combat_tick.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/refresh_rate.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -22,6 +24,9 @@ nevr_quest::CombatConfig g_config;
 // drives it without a configuration.
 ModuleResult HeapsEarly() noexcept { return heaps::Install(g_config.heaps.on, g_config.memsys.on); }
 ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on); }
+ModuleResult RefreshRateNormal() noexcept {
+  return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
+}
 
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
@@ -30,6 +35,10 @@ ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on)
 constexpr std::array kModules{
     Module{"heaps", &HeapsEarly, nullptr},
     Module{"memsys", &MemsysEarly, nullptr},
+    // tick, then refresh_rate (#2172): the game-thread tick installs first (combat_tick.h), and every module with a per-frame callback registers
+    // it from its own step, which may come before or after the tick's install.
+    Module{"tick", nullptr, &tick::InstallNormal},
+    Module{"refresh_rate", nullptr, &RefreshRateNormal},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -121,10 +130,15 @@ void NoteNormalNotStarted(const char* reasonToken) noexcept {
 }
 
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
+  const auto source = [](const nevr_quest::Source s) { return s == nevr_quest::Source::kFile ? "config" : "default"; };
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config",
                       {{"force", config.force.on ? 1 : 0}, {"force_source", config.force.source == nevr_quest::Source::kFile ? "config" : "default"},
                        {"heaps", config.heaps.on ? 1 : 0}, {"heaps_source", config.heaps.source == nevr_quest::Source::kFile ? "config" : "default"},
                        {"memsys", config.memsys.on ? 1 : 0}, {"memsys_source", config.memsys.source == nevr_quest::Source::kFile ? "config" : "default"},
+                       {"refresh_rate", config.refreshRate.on ? 1 : 0}, {"refresh_rate_source", source(config.refreshRate.source)},
+                       {"refresh_rate_lobby", config.refreshRateLobby.on ? 1 : 0}, {"refresh_rate_lobby_source", source(config.refreshRateLobby.source)},
+                       {"refresh_rate_quest2_72", config.refreshRateQuest2At72.on ? 1 : 0},
+                       {"refresh_rate_quest2_72_source", source(config.refreshRateQuest2At72.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
 }
