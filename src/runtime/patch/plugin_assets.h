@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "runtime/patch/asset_registry.h"
 
@@ -35,8 +36,16 @@ bool StockHas(uint64_t type, uint64_t name);
 // #2161: the same question of the manifest of `manager` (a CResourceManager, *(manager + 8)), the manager a request
 // was made to. False for a null manager or manifest.
 bool ManagerHas(const void* manager, uint64_t type, uint64_t name);
-// #2161: true when a plugin asset holds (type, name); its label goes to `label`.
-bool AssetHeld(uint64_t type, uint64_t name, std::string* label);
+// #2161: the keys a manifest names each plugin asset by, for a resource set's registration to refuse. An asset is
+// keyed by its logical type (the type at CResource + 0x28 its submit hook matches), a manifest record by the on-disk
+// type the game reads a buffer by (nevr_resource_key::OnDiskType, buffers 0 and 1), so each asset gives three keys:
+// its own and the two on-disk ones, each with the asset's label.
+struct AssetManifestKey {
+    uint64_t type = 0;
+    uint64_t name = 0;
+    std::string label;
+};
+std::vector<AssetManifestKey> AssetManifestKeys();
 
 #ifdef NEVR_TEST_HOOKS
 // Test-only: installs one hook the way the engine hooks are installed, through PatchDetour, so HookGuard records it

@@ -39,7 +39,9 @@ void OnFrame(bool onLoopThread);
 // allocation, no log line.
 const void* ManagerFor(const void* manager, std::uint64_t type, std::uint64_t name);
 
-// True when a set registered this run holds (type, name): a plugin asset may not take that key.
+// True when a set registered this run holds the resource a plugin asset keyed (type, name) would be: a set's record
+// carries that key or an on-disk key of the asset's logical type (nevr_resource_key::OnDiskType, buffer 0 or 1). A
+// plugin asset may not take it.
 bool HoldsKey(std::uint64_t type, std::uint64_t name);
 
 // The level names of the mounted sets, for the server registration's installed_levels.

@@ -33,6 +33,7 @@
 #include "runtime/hook/patching.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/patch/game_buffer.h"
+#include "runtime/patch/resource_buffer_key.h"
 #include "runtime/patch/resource_sets.h"
 
 namespace nevr::assets {
@@ -340,11 +341,15 @@ bool ManagerHas(const void* manager, uint64_t type, uint64_t name) {
     return ManifestHas(manifest, type, name);
 }
 
-bool AssetHeld(uint64_t type, uint64_t name, std::string* label) {
-    Asset asset;
-    if (!Global().Find(type, name, &asset)) return false;
-    if (label != nullptr) *label = asset.label;
-    return true;
+std::vector<AssetManifestKey> AssetManifestKeys() {
+    std::vector<AssetManifestKey> keys;
+    if (Global().Empty()) return keys;
+    for (const Asset& asset : Global().Snapshot()) {
+        keys.push_back({asset.type, asset.name, asset.label});
+        keys.push_back({nevr_resource_key::OnDiskType(asset.type, 0), asset.name, asset.label});
+        keys.push_back({nevr_resource_key::OnDiskType(asset.type, 1), asset.name, asset.label});
+    }
+    return keys;
 }
 
 #ifdef NEVR_TEST_HOOKS

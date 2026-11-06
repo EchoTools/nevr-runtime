@@ -1,15 +1,18 @@
 // #2161: a plugin that carries a resource set in its own file and registers it from its init, for test_behavioral's
 // PluginResourceSets tests. The set is built at compile time into the .nevrres section (constant data, no relocation),
 // the way nevr/pc/plugin_resources.h embeds one: a level (kLevel) with its root, its archive and one mesh, in one
-// chunk that is a zstd frame of one raw block.
+// chunk that is a zstd frame of one raw block. The records are keyed the way the game's manifests key them, by the
+// on-disk type a buffer is read by: the root by Make(CGameLevelResource, "Win10"), the mesh by
+// Make(kMeshLogicalType, "Win10GPU").
 //
 // The set also carries one override (kOverrideType:kOverrideName, 8 bytes of 0x55), which the host registers when it
 // mounts the set.
 //
-// The init registers the set, then tries four refusals the host must make: the same set again (a key the first holds:
+// The init registers the set, then tries five refusals the host must make: the same set again (a key the first holds:
 // NEVR_RESOURCES_COLLIDES), a block of writable data (NEVR_RESOURCES_NOT_IN_FILE, writable_section), a read-only block
-// with a relocated pointer in it (NEVR_RESOURCES_NOT_IN_FILE, relocated) and the set under a label with a newline
-// (NEVR_RESOURCES_BAD_ARGUMENT, bad_label). The statuses are exported for the test to read.
+// with a relocated pointer in it (NEVR_RESOURCES_NOT_IN_FILE, relocated), the set under a label with a newline
+// (NEVR_RESOURCES_BAD_ARGUMENT, bad_label) and bytes of another module's image (NEVR_RESOURCES_NOT_IN_FILE,
+// not_in_image). The statuses are exported for the test to read.
 
 #include <windows.h>
 
@@ -19,11 +22,13 @@
 
 #include "nevr/pc/plugin_resources.h"
 #include "nevr/plugin_interface.h"
+#include "nevr/symbol_hash.h"
 
 namespace {
 
 constexpr std::uint64_t kLevel = 0x0123456789abcdefULL;
-constexpr std::uint64_t kMeshType = 0x1111111111111111ULL;
+constexpr std::uint64_t kMeshLogicalType = 0x1111111111111111ULL;
+constexpr std::uint64_t kMeshType = EchoVR::CSymbol64Hash("Win10GPU", kMeshLogicalType);
 constexpr std::uint64_t kMesh = 0x2222222222222222ULL;
 constexpr std::uint64_t kArchiveType = 0x2a41cf1c1d9e5d32ULL;
 constexpr std::uint64_t kLevelRootType = 0xe8e38d7781a338a6ULL;

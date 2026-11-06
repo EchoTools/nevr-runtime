@@ -36,6 +36,7 @@
 #include "nevr/resource_set.h"
 #include "runtime/patch/image_file_range.h"
 #include "runtime/patch/plugin_assets.h"
+#include "runtime/patch/resource_buffer_key.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/resource_set_registry.h"
 
@@ -292,13 +293,15 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
                    std::string(nevr_resource_set::ProblemName(parsed.problem)) + " at index " +
                        std::to_string(parsed.index));
   }
-  // A key a plugin asset (NEVR_RegisterAsset) holds: the asset hook would serve one and the resolver the other.
-  for (std::uint32_t i = 0; i < view.record_count(); ++i) {
+  // A resource a plugin asset (NEVR_RegisterAsset) is: the asset hook would serve one and the resolver the other.
+  const std::vector<nevr::assets::AssetManifestKey> assetKeys = nevr::assets::AssetManifestKeys();
+  for (std::uint32_t i = 0; i < view.record_count() && !assetKeys.empty(); ++i) {
     const nevr_resource_set::Record r = view.RecordAt(i);
-    std::string assetLabel;
-    if (nevr::assets::AssetHeld(r.type, r.name, &assetLabel)) {
-      return Refused(pluginId, label, NEVR_RESOURCES_COLLIDES, RefusalName(Refusal::kCollides),
-                     KeyText(r.type, r.name) + " owner=asset:" + Printable(assetLabel.c_str()));
+    for (const nevr::assets::AssetManifestKey& key : assetKeys) {
+      if (key.type == r.type && key.name == r.name) {
+        return Refused(pluginId, label, NEVR_RESOURCES_COLLIDES, RefusalName(Refusal::kCollides),
+                       KeyText(r.type, r.name) + " owner=asset:" + Printable(key.label.c_str()));
+      }
     }
   }
 
@@ -581,7 +584,8 @@ const void* ManagerFor(const void* manager, std::uint64_t type, std::uint64_t na
 
 bool HoldsKey(std::uint64_t type, std::uint64_t name) {
   std::lock_guard<std::mutex> lock(g_mutex);
-  return g_registry.Holds(type, name);
+  return g_registry.Holds(type, name) || g_registry.Holds(nevr_resource_key::OnDiskType(type, 0), name) ||
+         g_registry.Holds(nevr_resource_key::OnDiskType(type, 1), name);
 }
 
 std::vector<std::uint64_t> MountedLevelNames() {

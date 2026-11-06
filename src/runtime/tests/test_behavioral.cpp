@@ -313,6 +313,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/patch/asset_registry.h"
+#include "runtime/patch/resource_buffer_key.h"  // #2161: the fixture's on-disk record types
 #include "runtime/patch/resource_override.h"  // #2161: a mounted set's overrides
 #include "runtime/patch/resource_sets.h"  // #2161
 #include <set>
@@ -2816,7 +2817,14 @@ TEST_F(PluginLevelTest, NoLevelAndNoGameObjectBothReadAsNoLevel) {
 namespace {
 
 constexpr uint64_t kFixtureLevel = 0x0123456789abcdefULL;
-constexpr uint64_t kFixtureMeshType = 0x1111111111111111ULL;
+constexpr uint64_t kFixtureMeshLogicalType = 0x1111111111111111ULL;
+// The fixture keys its records the way a manifest does, by on-disk type: the mesh by its buffer-1 type, the level
+// root by CGameLevelResource's buffer-0 type.
+constexpr uint64_t kFixtureMeshType = nevr_resource_key::OnDiskType(kFixtureMeshLogicalType, 1);
+constexpr uint64_t kLevelResourceType = 0xfd7c74d55c15302bULL;  // CGameLevelResource
+static_assert(kFixtureMeshType == 0x50d40e361b19a95bULL, "Make(0x1111111111111111, \"Win10GPU\")");
+static_assert(nevr_resource_key::OnDiskType(kLevelResourceType, 0) == 0xe8e38d7781a338a6ULL,
+              "the fixture's level root type is Make(CGameLevelResource, \"Win10\")");
 constexpr uint64_t kFixtureMesh = 0x2222222222222222ULL;
 constexpr uint64_t kFixtureOverrideType = 0x5555555555555555ULL;
 constexpr uint64_t kFixtureOverrideName = 0x6666666666666666ULL;
@@ -2845,6 +2853,9 @@ class PluginResourceSetTest : public PluginLoaderDiagnosticTest {
   void SetUp() override {
     PluginLoaderDiagnosticTest::SetUp();
     nevr_resource_sets::ResetForTest();
+    // RegisterPluginAsset installs the engine's "already loaded" probe on the process-wide asset registry, and this
+    // process has no engine to ask: a test's direct Register must not call it.
+    nevr::assets::Global().SetLoadedProbe(nullptr);
     g_resourceStock.clear();
     g_resourceNow = 1000000;
     nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
@@ -3126,7 +3137,7 @@ TEST_F(PluginResourceSetTest, TheResolverHookFillsASetsKeyFromTheShadowAndOtherK
   nevr_resource_sets::OnFrame(true);
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
                                      "keys answered by the game's manifest count=1 "
-                                     "first=0x1111111111111111:0x2222222222222222 plugin=levels"));
+                                     "first=0x50d40e361b19a95b:0x2222222222222222 plugin=levels"));
 }
 
 TEST_F(PluginResourceSetTest, TheLoginCarriesTheMountedSets) {
@@ -3166,6 +3177,50 @@ TEST_F(PluginResourceSetTest, APluginAssetAndAResourceSetNeverHoldOneKey) {
   EXPECT_EQ(nevr::assets::RegisterPluginAsset(kFixtureMeshType, kFixtureMesh, assetBytes, sizeof(assetBytes), "late"),
             nevr::assets::RegisterStatus::Duplicate);
   EXPECT_TRUE(TestLogContains("a plugin's resource set holds this key"));
+}
+
+// A plugin asset is keyed by its logical type (the submit hook matches CResource + 0x28) and a set's record by the
+// on-disk type the game reads a buffer by, so an asset and a record of one resource carry different keys: the
+// fixture's level root is the buffer-0 key of a CGameLevelResource, its mesh the buffer-1 key of its logical type.
+TEST_F(PluginResourceSetTest, APluginAssetAndAResourceSetNeverHoldOneResourceUnderItsLogicalAndOnDiskKeys) {
+  static const unsigned char levelBytes[16] = {};
+  static const unsigned char meshBytes[16] = {};
+  // An asset of either resource first: the set is refused, naming the asset.
+  const struct {
+    uint64_t type, name;
+    const unsigned char* bytes;
+    const char* label;
+  } assets[] = {{kLevelResourceType, kFixtureLevel, levelBytes, "asset level"},
+                {kFixtureMeshLogicalType, kFixtureMesh, meshBytes, "asset mesh payload"}};
+  for (const auto& asset : assets) {
+    ASSERT_EQ(nevr::assets::Global().Register(asset.type, asset.name, asset.bytes, 16, asset.label),
+              nevr::assets::RegisterStatus::Ok);
+    Plan();
+    LoadPlugins();
+    EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_COLLIDES) << asset.label;
+    EXPECT_TRUE(TestLogContains(std::string("owner=asset:") + asset.label)) << TestLogLinesWith("owner=asset");
+    UnloadPlugins();
+    nevr::assets::DeregisterPluginAssets(asset.bytes, asset.bytes + 16);
+    nevr_resource_sets::ResetForTest();
+    nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+    ClearTestLogs();
+  }
+
+  // The set first: an asset of either resource, by its logical type, is refused. With no game base the engine's
+  // "already loaded" probe answers no, so a registration the set's check let through would reach the registry.
+  Plan();
+  LoadPlugins();
+  ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  CHAR* const base = EchoVR::g_GameBaseAddress;
+  EchoVR::g_GameBaseAddress = nullptr;
+  for (const auto& asset : assets) {
+    EXPECT_EQ(nevr::assets::RegisterPluginAsset(asset.type, asset.name, asset.bytes, 16, asset.label),
+              nevr::assets::RegisterStatus::Duplicate)
+        << asset.label;
+  }
+  EchoVR::g_GameBaseAddress = base;
+  EXPECT_EQ(nevr::assets::Global().Count(), 0u);
+  for (const auto& asset : assets) nevr::assets::DeregisterPluginAssets(asset.bytes, asset.bytes + 16);
 }
 
 TEST_F(PluginResourceSetTest, AnExceptionInsideTheHostNeverReachesThePluginsInit) {
