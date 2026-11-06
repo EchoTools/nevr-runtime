@@ -44,6 +44,7 @@
 #include "runtime/patch/mic_provider.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/early_quit_lockout.h"
+#include "runtime/patch/equipment_refire.h"
 #include "runtime/patch/lobby_full_backoff.h"
 #include "runtime/patch/noovr_arglookup.h"
 #include "runtime/patch/menu_version_label.h"
@@ -407,6 +408,9 @@ static VOID InitializeAfterGameImageGuard() {
 
   // A button press skips the splash screen (splash_skip.h).
   nevr_splash_skip::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // The equipment change the game drops is applied again once the slot is still (#2121, equipment_refire.h).
+  nevr_equipment_refire::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // UI, splash and menu textures at their top mip (ui_texture_mips.h).
   nevr_ui_texture_mips::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));

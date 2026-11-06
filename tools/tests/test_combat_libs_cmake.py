@@ -7,6 +7,10 @@ real libsrc and no game file is used. Two groups of tests:
   before or right after `project()`.
 - Build: configure with the pinned NDK's own toolchain file, build the fixture, and check the outputs. This needs the NDK
   `just toolchain-r21b` installs; without it these tests are skipped and say so on stderr (a skip is never a pass).
+
+The donor GOT tests (#2126) use a donor of two statics and two functions that load their addresses through the GOT. Assembled
+and linked as it is, the pinned toolchain gives the two loads one GOT slot; the wrapper gen_donor_wrapper.cmake writes gives each
+its own, and check_donor_got.cmake is the check on the linked library.
 """
 
 from __future__ import annotations
@@ -82,6 +86,96 @@ class Fixture:
 def run(args: list[str], **kw) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if k not in ("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS")}
     return subprocess.run(args, capture_output=True, text=True, env=env, timeout=900, **kw)
+
+
+TWO_STATICS = (".text\n.globl load_a\n.type load_a,%function\nload_a:\n\tadrp\tx0, :got:_dd_a\n\tldr\tx0, [x0, :got_lo12:_dd_a]\n\tret\n"
+               ".globl load_b\n.type load_b,%function\nload_b:\n\tadrp\tx0, :got:_dd_b\n\tldr\tx0, [x0, :got_lo12:_dd_b]\n\tret\n"
+               ".bss\n.align 3\n_dd_a:\t.zero 8\n_dd_b:\t.zero 8\n"
+               # A data word that holds _dd_b's address: a relative relocation with _dd_b's address as its addend, outside .got.
+               # It must not count as a GOT slot for _dd_b.
+               ".data\n.globl ptr_b\nptr_b:\t.xword _dd_b\n")
+GEN = PROJECT / "gen_donor_wrapper.cmake"
+CHECK = PROJECT / "check_donor_got.cmake"
+
+
+class DonorWrapperGenerator(unittest.TestCase):
+    """gen_donor_wrapper.cmake: what it writes and what it refuses. It runs as `cmake -P`; no NDK is needed."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="donor-wrapper-")
+        self.addCleanup(self._tmp.cleanup)
+        self.root = pathlib.Path(self._tmp.name)
+        self.donor = self.root / "d.donor.s"
+        self.wrapper = self.root / "out" / "d.donor_got.s"
+
+    def generate(self, donor_text: str) -> subprocess.CompletedProcess:
+        self.donor.write_bytes(donor_text.encode())
+        self.wrapper.parent.mkdir(exist_ok=True)
+        return run(["cmake", f"-DNEVR_DONOR={self.donor}", f"-DNEVR_WRAPPER={self.wrapper}", "-P", str(GEN)])
+
+    def test_the_wrapper_includes_the_donor_and_makes_each_got_operand_global_and_hidden_once(self):
+        # CRLF, as the libsrc files are; a symbol named by two lines and by both halves of a load is declared once.
+        done = self.generate(TWO_STATICS.replace("\n", "\r\n") + "\tadrp\tx1, :got:_dd_a\r\n")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.wrapper.read_text(), f'\t.include\t"{self.donor}"\n'
+                         "\t.globl\t_dd_a\n\t.hidden\t_dd_a\n\t.globl\t_dd_b\n\t.hidden\t_dd_b\n")
+
+    def test_a_donor_with_no_got_load_gets_a_wrapper_that_only_includes_it(self):
+        done = self.generate(".text\nf:\n\tadrp\tx0, g\n\tadd\tx0, x0, :lo12:g\n\tret\n.bss\ng:\t.zero 8\n")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.wrapper.read_text(), f'\t.include\t"{self.donor}"\n')
+
+    def test_an_operand_that_is_not_a_label_of_the_file_is_refused_and_no_wrapper_is_written(self):
+        done = self.generate(TWO_STATICS.replace("_dd_b:\t.zero 8\n", ""))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("_dd_b is a :got: operand but not a label defined in the file", squash(done.stderr))
+        self.assertFalse(self.wrapper.exists())
+
+    def test_an_operand_the_file_already_declares_global_is_refused(self):
+        for directive in (".globl", ".global", ".weak"):
+            with self.subTest(directive=directive):
+                done = self.generate(TWO_STATICS + f"{directive} _dd_b\n")
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("_dd_b is a :got: operand and is already declared global or weak", squash(done.stderr))
+                self.assertFalse(self.wrapper.exists())
+
+    def test_a_got_operand_that_is_not_a_plain_symbol_is_refused(self):
+        for operand in ("_dd_a+8", "_dd_a@GOT", "(_dd_a)"):
+            with self.subTest(operand=operand):
+                done = self.generate(TWO_STATICS + f"\tadrp\tx2, :got:{operand}\n")
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("a :got: operand this tool does not read", squash(done.stderr))
+                self.assertFalse(self.wrapper.exists())
+
+    def test_an_upper_case_got_specifier_is_refused_not_skipped(self):
+        # r21b's assembler folds `:GOT:` like `:got:`; a reader that skipped it would declare nothing and the check would pass.
+        for upper in (TWO_STATICS.replace(":got:", ":GOT:"), TWO_STATICS.replace(":got_lo12:", ":GOT_LO12:"),
+                      TWO_STATICS.replace(":got:", ":Got:")):
+            with self.subTest(donor=upper[:60]):
+                done = self.generate(upper)
+                self.assertNotEqual(done.returncode, 0, done.stdout)
+                self.assertIn("a :got: operand this tool does not read", squash(done.stderr))
+                self.assertFalse(self.wrapper.exists())
+
+    def test_a_global_declaration_that_names_more_than_one_symbol_is_refused(self):
+        # `.hidden _dd_b` on a symbol the list exports would silently remove it from the dynamic symbol table.
+        for line in (".globl load_b2, _dd_b", ".global _dd_b,load_b2", ".weak _dd_b, other", ".globl load_b2 _dd_b"):
+            with self.subTest(line=line):
+                done = self.generate(TWO_STATICS + line + "\n")
+                self.assertNotEqual(done.returncode, 0, done.stdout)
+                self.assertIn("does not name exactly one symbol", squash(done.stderr))
+                self.assertFalse(self.wrapper.exists())
+
+    def test_a_global_declaration_with_a_trailing_comment_is_still_one_symbol(self):
+        for line in (".globl load_b2 # the entry", ".globl load_b2 // the entry", ".globl load_b2\r"):
+            with self.subTest(line=line):
+                done = self.generate(TWO_STATICS + line + "\n")
+                self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_the_tool_names_its_missing_inputs(self):
+        done = run(["cmake", "-P", str(GEN)])
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("pass -DNEVR_DONOR=<donor.s> and -DNEVR_WRAPPER=<out.s>", squash(done.stderr))
 
 
 class CombatLibsConfigure(unittest.TestCase):
@@ -383,7 +477,7 @@ class CombatLibsBuild(unittest.TestCase):
         obj1 = next(c["output"] for c in commands if c["file"].endswith(f"{H1}.cpp"))
         objsec = self.readelf("-S", "-W", str(out / obj1))
         self.assertNotIn(".debug_", objsec, "-g0 leaves no debug section in the compiled row")
-        obj2 = next(c["output"] for c in commands if c["file"].endswith(f"{H2}.donor.s"))
+        obj2 = next(c["output"] for c in commands if c["file"].endswith(f"{H2}.donor_got.s") and c["output"].endswith(".o"))
         self.assertNotIn(".debug_", self.readelf("-S", "-W", str(out / obj2)), "nor in the assembled donor object")
         self.assertGreater(cmd1.split().index("-U_FORTIFY_SOURCE"), cmd1.split().index("-D_FORTIFY_SOURCE=2"))
         self.assertGreater(cmd1.split().index("-g0"), cmd1.split().index("-g"))
@@ -475,6 +569,7 @@ class CombatLibsBuild(unittest.TestCase):
         self.assertIn("check_quest_static_init", text)
         self.assertIn(f"lib{H1}.so", text)
         self.assertFalse((self.fx.build / "SHA256SUMS").exists(), "no sums over a failed build")
+        self.assertFalse((self.fx.build / f"lib{H1}.so").exists(), "the library the static-init check rejected is deleted")
 
     def test_a_source_that_does_not_compile_names_the_library(self):
         self.make_stock()
@@ -484,6 +579,154 @@ class CombatLibsBuild(unittest.TestCase):
         built = self.build()
         self.assertNotEqual(built.returncode, 0)
         self.assertIn(f"{H2}.cpp", built.stdout + built.stderr)
+
+    # --- the donor GOT (#2126) ---
+
+    def clang(self, *args: str) -> subprocess.CompletedProcess:
+        return run([str(self.llvm / "aarch64-linux-android21-clang"), *args])
+
+    def got_slots(self, lib: pathlib.Path) -> tuple[dict[int, int], dict[str, int]]:
+        """The R_AARCH64_RELATIVE slots of .got as {slot address: content}, and the library's symbols as {name: address}."""
+        sections = self.readelf("-S", "-W", str(lib))
+        got = re.search(r"\]\s+\.got\s+PROGBITS\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)\s", sections)
+        self.assertIsNotNone(got, sections)
+        begin = int(got.group(1), 16)
+        end = begin + int(got.group(2), 16)
+        slots = {}
+        for line in self.readelf("-r", "-W", str(lib)).splitlines():
+            m = re.match(r"^([0-9a-f]+)\s+[0-9a-f]+\s+R_AARCH64_RELATIVE\s+([0-9a-f]+)$", line.strip())
+            if m and begin <= int(m.group(1), 16) < end:
+                slots[int(m.group(1), 16)] = int(m.group(2), 16)
+        nm = run([str(self.llvm / "llvm-nm"), str(lib)]).stdout
+        symbols = {m.group(2): int(m.group(1), 16) for m in re.finditer(r"^([0-9a-f]+) [a-zA-Z] (\S+)$", nm, re.M)}
+        return slots, symbols
+
+    def load_slot(self, lib: pathlib.Path, function: str) -> int:
+        """The address of the GOT slot the `adrp; ldr` pair at the start of `function` reads."""
+        dis = run([str(self.llvm / "llvm-objdump"), "-d", "--no-show-raw-insn", str(lib)]).stdout
+        body = re.search(rf"\b{function}:\n(.*?)(?:\n\n|\Z)", dis, re.S)
+        self.assertIsNotNone(body, f"{function} is in the library")
+        pair = re.search(r"([0-9a-f]+):\s+adrp\s+x0, #(-?\d+)\n\s+[0-9a-f]+:\s+ldr\s+x0, \[x0, #(\d+)\]", body.group(1))
+        self.assertIsNotNone(pair, body.group(1))
+        return (int(pair.group(1), 16) & ~0xFFF) + int(pair.group(2)) + int(pair.group(3))
+
+    def build_two_statics(self) -> pathlib.Path:
+        """The project build of one row whose donor object is TWO_STATICS; the library is returned."""
+        self.fx.write_libs({H2: link(asm=True)})
+        (self.fx.libsrc / H2 / f"{H2}.donor.s").write_bytes(TWO_STATICS.encode())
+        self.fx.write_store({"lib/arm64-v8a/libr15.so": b"unused: no row links it"})
+        conf = self.configure()
+        self.assertEqual(conf.returncode, 0, conf.stdout + conf.stderr)
+        built = self.build()
+        self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+        self.built_output = built.stdout + built.stderr
+        return self.fx.build / f"lib{H2}.so"
+
+    def unwrapped_two_statics(self) -> pathlib.Path:
+        """The same donor assembled and linked as it was before the wrapper: from the donor.s alone."""
+        src = self.fx.root / "raw.s"
+        src.write_bytes(TWO_STATICS.encode())
+        obj = self.fx.root / "raw.o"
+        lib = self.fx.root / "raw.so"
+        done = self.clang("-fPIC", "-O2", "-g0", "-c", str(src), "-o", str(obj))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        done = self.clang("-shared", "-nostdlib", "-Wl,--build-id=none", str(obj), "-o", str(lib))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return lib
+
+    def test_two_statics_loaded_through_the_got_share_one_slot_when_the_donor_is_assembled_alone(self):
+        # The fault #2126 names: the assembler relocates both loads against .bss plus an offset, and the linker makes one slot
+        # for the section and drops the offset. This test pins the toolchain's behaviour; it fails if the pin ever stops having it.
+        lib = self.unwrapped_two_statics()
+        slots, symbols = self.got_slots(lib)
+        self.assertEqual(len(slots), 1, slots)
+        self.assertEqual(self.load_slot(lib, "load_a"), self.load_slot(lib, "load_b"))
+        self.assertEqual(list(slots.values()), [symbols["_dd_a"]], "the one slot holds _dd_a: load_b gets load_a's address")
+
+    def test_two_statics_loaded_through_the_got_get_a_slot_each_and_neither_is_exported_with_the_wrapper(self):
+        lib = self.build_two_statics()
+        slots, symbols = self.got_slots(lib)
+        self.assertEqual(slots.get(self.load_slot(lib, "load_a")), symbols["_dd_a"])
+        self.assertEqual(slots.get(self.load_slot(lib, "load_b")), symbols["_dd_b"])
+        self.assertNotEqual(self.load_slot(lib, "load_a"), self.load_slot(lib, "load_b"))
+        exported = run([str(self.llvm / "llvm-nm"), "-D", "--defined-only", str(lib)]).stdout
+        self.assertNotIn("_dd_", exported, "the wrapper's .hidden keeps the donor's statics out of the dynamic symbol table")
+        self.assertRegex(exported, r"\bT load_a\b", "what the donor exports stays exported")
+        self.assertIn("donor GOT check: ", self.built_output)
+        self.assertIn(f"check_donor_got: OK lib{H2}.so: 2 of 2 symbols", self.built_output)
+
+    def check(self, lib: pathlib.Path, donor: pathlib.Path) -> subprocess.CompletedProcess:
+        return run(["cmake", f"-DNEVR_LLVM_BIN={self.llvm}", f"-DNEVR_LIB={lib}", f"-DNEVR_DONOR={donor}", "-P", str(CHECK)])
+
+    def test_the_check_passes_the_wrapped_library_and_refuses_the_one_linked_from_the_donor_alone(self):
+        wrapped = self.build_two_statics()
+        donor = self.fx.libsrc / H2 / f"{H2}.donor.s"
+        ok = self.check(wrapped, donor)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIn(f"OK lib{H2}.so: 2 of 2 symbols", ok.stdout + ok.stderr)
+        raw = self.unwrapped_two_statics()
+        bad = self.check(raw, self.fx.root / "raw.s")
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("raw.so: 1 of 2 symbols the donor loads through the GOT have no GOT slot that holds their address, first: "
+                      "_dd_b (at 0x", squash(bad.stderr))
+
+    def test_a_library_the_check_rejects_is_deleted(self):
+        # Left in the build tree, a later link-only change makes ninja treat the rejected file as built (and the sums hash it).
+        self.build_two_statics()
+        raw = self.unwrapped_two_statics()
+        self.assertTrue(raw.is_file())
+        bad = self.check(raw, self.fx.root / "raw.s")
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertFalse(raw.exists(), "the rejected library is removed")
+        raw = self.unwrapped_two_statics()
+        refused = self.check(raw, self.fx.root / "missing.s")
+        self.assertNotEqual(refused.returncode, 0)
+        other = self.fx.root / "other.s"
+        other.write_bytes(TWO_STATICS.replace(":got:", ":GOT:").encode())
+        self.assertTrue(raw.is_file(), "a missing donor is an input error, not a verdict on the library")
+        unreadable = self.check(raw, other)
+        self.assertNotEqual(unreadable.returncode, 0)
+        self.assertFalse(raw.exists(), "a donor the reader refuses also removes the library")
+        # No .got section at all, and a file the tools cannot read, are verdicts on the library too.
+        raw = self.unwrapped_two_statics()
+        done = run([str(self.llvm / "llvm-objcopy"), "--remove-section=.got", str(raw)])
+        self.assertEqual(done.returncode, 0, done.stderr)
+        no_got = self.check(raw, self.fx.root / "raw.s")
+        self.assertNotEqual(no_got.returncode, 0)
+        self.assertIn("no .got section, and the donor loads 2 addresses through the GOT", squash(no_got.stderr))
+        self.assertFalse(raw.exists(), "a library with no .got is removed")
+        raw.write_bytes(b"not an ELF file")
+        unreadable_lib = self.check(raw, self.fx.root / "raw.s")
+        self.assertNotEqual(unreadable_lib.returncode, 0)
+        self.assertIn("exited", squash(unreadable_lib.stderr))
+        self.assertFalse(raw.exists(), "a library the tools cannot read is removed")
+
+    def test_the_check_refuses_a_symbol_the_library_does_not_define_and_a_library_whose_got_holds_none_of_the_donors(self):
+        wrapped = self.build_two_statics()
+        other = self.fx.root / "other.s"
+        other.write_bytes(TWO_STATICS.replace("_dd_b", "_dd_missing").encode())
+        gone = self.check(wrapped, other)
+        self.assertNotEqual(gone.returncode, 0)
+        self.assertIn("_dd_missing (not in the symbol table)", squash(gone.stderr))
+        flat = self.fx.root / "flat.s"
+        flat.write_bytes(b".text\n.globl flat\nflat:\n\tret\n.bss\n_dd_a:\t.zero 8\n_dd_b:\t.zero 8\n")
+        flat_o = self.fx.root / "flat.o"
+        flat_so = self.fx.root / "flat.so"
+        self.assertEqual(self.clang("-fPIC", "-c", str(flat), "-o", str(flat_o)).returncode, 0)
+        self.assertEqual(self.clang("-shared", "-nostdlib", str(flat_o), "-o", str(flat_so)).returncode, 0)
+        empty = self.check(flat_so, self.fx.libsrc / H2 / f"{H2}.donor.s")
+        self.assertNotEqual(empty.returncode, 0)
+        self.assertIn("flat.so: 2 of 2 symbols the donor loads through the GOT have no GOT slot", squash(empty.stderr))
+
+    def test_a_donor_that_names_an_undefined_got_label_stops_the_build_and_names_it(self):
+        self.fx.write_libs({H2: link(asm=True)})
+        (self.fx.libsrc / H2 / f"{H2}.donor.s").write_bytes(TWO_STATICS.replace("_dd_b:\t.zero 8\n", "").encode())
+        self.fx.write_store({"lib/arm64-v8a/libr15.so": b"unused: no row links it"})
+        self.assertEqual(self.configure().returncode, 0)
+        built = self.build()
+        self.assertNotEqual(built.returncode, 0)
+        self.assertIn("_dd_b is a :got: operand but not a label defined in the file", squash(built.stdout + built.stderr))
+        self.assertFalse((self.fx.build / "SHA256SUMS").exists())
 
 
 if __name__ == "__main__":
