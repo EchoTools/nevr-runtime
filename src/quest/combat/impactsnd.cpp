@@ -361,9 +361,11 @@ std::uint32_t WwiseEventId(const char* name) noexcept {
   return h;
 }
 
+void* g_callee[7] = {};  // tests: a host function in place of the stock loader's stub at this index (RebuildIdx)
+
 template <typename Fn>
 Fn Callee(std::size_t idx) noexcept {
-  return reinterpret_cast<Fn>(g_base + kRebuildCallees[idx].elf);
+  return reinterpret_cast<Fn>(g_callee[idx] != nullptr ? reinterpret_cast<std::uintptr_t>(g_callee[idx]) : g_base + kRebuildCallees[idx].elf);
 }
 
 // The first callee whose stub is not the pinned one (its name), or nullptr when all of them are.
@@ -757,6 +759,9 @@ Stats GetStats() noexcept {
 
 void SetClockForTest(double (*clock)()) noexcept { g_clock = clock; }
 void SetGameForTest(std::uintptr_t game) noexcept { g_game.store(game, std::memory_order_release); }
+void SetCalleeForTest(std::size_t index, void* fn) noexcept {
+  if (index < sizeof g_callee / sizeof g_callee[0]) g_callee[index] = fn;
+}
 void SetScopedForTest(bool scoped) noexcept { g_scoped.store(scoped, std::memory_order_release); }
 void SetHookForTest(void (*hook)(int stage)) noexcept { g_hook = hook; }
 
@@ -771,6 +776,7 @@ void ResetForTest() noexcept {
   g_writersOk.store(false);
   g_rebuild.store(false);
   g_game.store(0);
+  std::memset(g_callee, 0, sizeof g_callee);
   g_scoped.store(false);
   g_loadHooked = false;
   g_nextScope = 0;

@@ -102,6 +102,9 @@ void SetClockForTest(double (*clock)()) noexcept;
 // The CR15Game the load handler asks the levels of, as the tick would hand it (0: none seen); and whether a table a combat level loaded is live, for
 // the tests of the tick's watch, which start from "a combat level loaded a table".
 void SetGameForTest(std::uintptr_t game) noexcept;
+// A host function in place of the stock loader's callee at `index` (0 CJson::CJson, 1 ~CJson, 2 LoadFromProjectSourceDb, 3 Next, 4 NameAt, 5 TString,
+// 6 CMemBlock::Resize) for the rebuilt loader; the pinned stub words are still read from the image.
+void SetCalleeForTest(std::size_t index, void* fn) noexcept;
 void SetScopedForTest(bool scoped) noexcept;
 void SetHookForTest(void (*hook)(int stage)) noexcept;
 void ResetForTest() noexcept;

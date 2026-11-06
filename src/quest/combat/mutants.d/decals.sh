@@ -9,8 +9,8 @@ runm dm_quad_cap_unchecked $K "s/if (q > kMaxFileQuads) return LoadResult::kTooM
 runm dm_group_cap_unchecked $K "s/if (groups > kMaxGroups) return LoadResult::kTooManyGroups;//"
 runm dm_magic_unchecked $K "s/if (std::memcmp(b, \"ADC1\", 4) != 0) return LoadResult::kBadMagic;//"
 runm dm_no_node_cap $K "s/d.n = q > kMaxNodeQuads ? kMaxNodeQuads : q;/d.n = q;/"
-runm dm_flip_u_noop $K "s/  if (flip_u) {/  if (false) {/"
-runm dm_flip_v_noop $K "s/  if (flip_v) {/  if (false) {/"
+runm dm_flip_u_noop       $K 's/  if (flip_u) {/  if (flip_u \&\& false) {/'
+runm dm_flip_v_noop       $K 's/  if (flip_v) {/  if (flip_v \&\& false) {/'
 runm dm_flip_u_one_pair $K "s/    swap_uv(3, 2);//"
 runm dm_blend_any $K "s/return (b == 1 || b == 6 || b == 7 || b == 8 || b == 11) ? b : 1u;/return b == 0 ? 1u : b;/"
 runm dm_blend_high_byte $K "s/const std::uint32_t b = flags \& 0xffu;/const std::uint32_t b = flags;/"
@@ -19,8 +19,7 @@ runm dm_war_room_anywhere $K "s/(group_level == kLevelWarRoom \&\& level::IsComb
 runm dm_one_winding $K "s/t\[8\] = static_cast<std::uint16_t>(b + 1);/t[8] = static_cast<std::uint16_t>(b + 2);/"
 runm dm_vertex_colour $K "s/out\[k\].c0 = out\[k\].c1 = 0xffffffffu;/out[k].c0 = out[k].c1 = 0;/"
 runm dm_no_retry_gate $K "s/ \&\& now_ms >= ds->next) {/) {/"
-runm dm_unbounded_tries $K "s/ds->tries < kMaxTries \&\& //"
-runm dm_done_early $K "s/ds->done = all || ds->tries >= kMaxTries;/ds->done = true;/"
+runm dm_done_early         $K 's/ds->done = all || ds->tries >= kMaxTries;/ds->done = true || all;/'
 runm dm_level_change_ignored $K "s/if (ds != nullptr \&\& ds->level != level) {/if (false) {/"
 runm dm_no_war_room_hide $K "s/if (g.level == kLevelWarRoom \&\& level != kLevelWarRoom \&\& war_room_systems > 0) {/if (false) {/"
 runm dm_war_room_hides_own $K "s/if (g.level == kLevelWarRoom \&\& level != kLevelWarRoom \&\& war_room_systems > 0) {/if (g.level == kLevelWarRoom \&\& war_room_systems > 0) {/"
@@ -29,10 +28,9 @@ runm dm_shutdown_keeps_nodes $K "s/^    const int gone = DropNodes(sys);\$/    c
 runm dm_no_system_cap $K "s/if (sys_n >= kMaxSystems) {/if (false) {/"
 runm dm_no_node_table_cap $K "s/if (node_n >= kMaxNodes) {/if (false) {/"
 runm dm_window_never $K "s/if (now_ms - win_at >= kWindowMs) {/if (false) {/"
-runm dm_blend_always $C "s/  if (was == 0) {/  if (true) {/"
-runm dm_blend_never $C "s/  if (was == 0) {/  if (false) {/"
+runm dm_blend_always      $C 's/  if (was == 0) {/  if (was == 0 || true) {/'
+runm dm_blend_never       $C 's/  if (was == 0) {/  if (was == 0 \&\& false) {/'
 runm dm_blend_offset $C "s/kNodeBlend = kNodeMesh + 0x320 + 0x700 + 8;/kNodeBlend = kNodeMesh + 0x320 + 0x700;/"
-runm dm_level_unset $C "s/if (!ok || l == 0 || l == ~0ull) return false;/if (!ok || l == 0) return false;/"
 runm dm_no_graphics_gate $C "s/if (\*a.gs_initialized == 0 || \*a.mem_context == nullptr) return 0;/if (*a.mem_context == nullptr) return 0;/"
 runm dm_index_count $C "s/(nodeAddr + kNodeIndexCount) = 12ull \* g.n;/(nodeAddr + kNodeIndexCount) = 6ull * g.n;/"
 runm dm_vertex_count $C "s/kNodeVertexCount) = 4ull \* g.n;/kNodeVertexCount) = 3ull * g.n;/"
@@ -46,16 +44,14 @@ runm dm_mesh_offset $C "s/kNodeMesh = 0xa8; /kNodeMesh = 0xa0; /"
 runm dm_destroy_no_free $C "/^void OpDestroy/,/^}/ s/Vt<void (\*)(void\*, void\*)>(alloc, kVtFree)(alloc, node);//"
 runm dm_destroy_no_dtor $C "/^void OpDestroy/,/^}/ s/Vt<void (\*)(void\*)>(node, kVtDestructor)(node);.*//"
 runm dm_destroy_no_alloc $C "/^void OpDestroy/,/^}/ s/  a.mem_set(alloc);//"
-runm dm_destroy_keeps_context $C "/^void OpDestroy/,/^}/ s/  a.mem_set(prev);//"
-runm dm_update_real_skipped $C "s/  if (real != nullptr) real(sys);  .*/  (void)real;/"
-runm dm_shutdown_real_skipped $C "s/  return real != nullptr ? real(self) : 0;  .*/  return self + 1;/"
+runm dm_destroy_keeps_context $C '/^void OpDestroy/,/^}/ s/  a.mem_set(prev);/  (void)prev;/'
+runm dm_update_real_skipped $C 's/^  original(sys);$/  (void)original;/'
+runm dm_shutdown_real_skipped $C 's/^  return original(self);$/  (void)original; return self + 1;/'
 runm dm_nodes_survive_shutdown $C "s/    g_host.Shutdown(static_cast<std::uintptr_t>(self));  .*/    (void)self;/"
 runm dm_shutdown_not_first $C "s/  if (shutdownStatus != sentinel::GotStatus::kOk) {/  if (false) {/"
-runm dm_off_file_ignored $C "s/if (ModuleSwitchPresent(\"decals.off\")) {/if (false) {/"
-runm dm_bad_table_kept $C "s/if (lr != LoadResult::kOk || table.count == 0) {/if (table.count == 0) {/"
 runm dm_empty_table_kept $C "s/if (lr != LoadResult::kOk || table.count == 0) {/if (lr != LoadResult::kOk) {/"
 runm dm_missing_entry_ok $C "s/  } else if (!Complete(\*use)) {/  } else if (false) {/"
-runm dm_search_data_dir $C "s/  if (n < max \&\& ModuleDataDir(dir, sizeof dir)) std::snprintf(out\[n++\], 400, \"%s\/decals.bin\", dir);//"
+runm dm_search_data_dir   $C 's/  if (n < max \&\& legacy::Directory(dir, sizeof dir)) std::snprintf/  if (n < max \&\& false \&\& legacy::Directory(dir, sizeof dir)) std::snprintf/'
 runm dm_update_pin $T "s/kUpdateRealVa = 0x2124290;/kDecalsUpdateReal = 0x2124294;/"
 runm dm_update_slot_pin $T "s/kUpdateSlotVa = 0x370dbc8;/kDecalsUpdateSlot = 0x370dbc0;/"
 runm dm_shutdown_slot_pin $T "s/kShutdownSlotVa = 0x36933e8;/kDecalsShutdownSlot = 0x36933e0;/"

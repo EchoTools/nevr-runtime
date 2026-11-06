@@ -559,7 +559,7 @@ static void TestSlotRefused() {
   CHECK(HasLine("impactsnd load wrapper") && HasLine("mode=tick_only", 3), "no ERROR for the refused load hook");
   // tick-only mode works: with no load handler to mark a combat level's table the tick asks the levels itself; sorted table, two stable polls
   SetTable(All(), kStock, false);
-  Publish();
+  PublishRaw();
   Polls(12);
   CHECK(AllRight(), "tick-only: ids not written (%zu right)", CountRight());
   // ... and an arena match in the same mode is left alone
@@ -580,7 +580,7 @@ static void TestShutdownSlotRefused() {
   const nevr_quest::combat::ModuleResult r = Install();
   CHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0, "foreign Shutdown slot: %s", r.status);
   CHECK(R64(kShutSlotVa) == 0x4242420, "foreign slot word changed");
-  CHECK(HasLine("impactsnd shutdown wrapper") && HasLine("row_writes=disabled", 3), "no ERROR for the refused Shutdown hook");
+  CHECK(CountLines("impactsnd shutdown wrapper", 3) == 1 && HasLine("row_writes=disabled", 3), "no ERROR for the refused Shutdown hook");
   CHECK(!impactsnd::GetStats().writersOk && R64(kDefaultVa) == kDefaultSym, "writersOk / D");
   // the module reads and logs, never writes: through the load handler and through the tick
   impactsnd::SetScopedForTest(true);
@@ -655,6 +655,190 @@ static void TestScopeFailsClosed() {
   CHECK(CountRight() == 0 && !impactsnd::GetStats().scoped && HasLine("scope=other_level") && g_loader_calls == 1, "an unreadable game was repaired");
 }
 
+
+// In tick-only mode (no load handler) the tick asks the levels once a second, not on every poll.
+static void TestTickOnlyAsksOnceASecond() {
+  Fresh();
+  LoadLevels({"mpl_arena_a"});
+  impactsnd::SetGameForTest(GameAddress());
+  W64(kSlotVa, 0x4242420);
+  Install();
+  SetTable(All(), kStock, false);
+  PublishRaw();
+  impactsnd::Tick(GameAddress());  // t = 100: asked, an arena level
+  LoadLevels({"mpl_combat_dyson"});
+  g_now = 100.25;
+  impactsnd::Tick(GameAddress());  // not asked again yet
+  CHECK(!impactsnd::GetStats().scoped, "the levels were asked twice inside the second");
+  g_now = 101.0;
+  impactsnd::Tick(GameAddress());
+  CHECK(impactsnd::GetStats().scoped, "the levels were not asked after the second");
+}
+
+// One scope line a load, up to the budget, then one Warning.
+static void TestScopeLineBudget() {
+  Fresh();
+  LoadLevels({"mpl_arena_a"});
+  Install();
+  for (int i = 0; i < 20; ++i) CallLoader();
+  CHECK(CountLines("\"event\":\"combat_impactsnd_scope\"") == 16, "%d scope lines (cap 16)", CountLines("\"event\":\"combat_impactsnd_scope\""));
+  CHECK(CountLines("log cap reached", 2) == 1 && HasLine("lines=scope"), "scope cap not announced once");
+}
+
+// ---- the rebuilt loader (R16): the callees are host functions here (the stock stubs are arm64 code); the pinned stub words are in the image ----
+alignas(16) static uint8_t g_bigMap[0x80];  // kSoundSettings' pointee: the impact table at +0 and the whizzby table at +0x40
+static uint8_t g_nodes[64];
+static const char* const kGuns[5] = {"assault", "scout", "rocket", "rifle", "smg"};
+static const char* const kMembers[3] = {"player", "barrier", "default"};
+static const char* const kWhiz[4] = {"whizzby_a", "whizzby_b", "whizzby_c", "whizzby_d"};
+static int g_jsonRc = 0;
+static int g_dtorCalls = 0, g_loadCalls = 0;
+// node layout: g_nodes[0..4] guns, [8 + 3 * g + m] members, [32 + w] whizzby
+static const void* Node(int i) { return &g_nodes[i]; }
+static int NodeOf(const void* p) { return p == nullptr ? -1 : static_cast<int>(static_cast<const uint8_t*>(p) - g_nodes); }
+static void JCtor(void*) {}
+static void JDtor(void*) { ++g_dtorCalls; }
+static int JLoad(void*, const char* path) {
+  ++g_loadCalls;
+  return std::strcmp(path, "/json/r14/config|mp_sound_settings.json") == 0 ? g_jsonRc : 99;
+}
+static void* JNext(void*, const char* name, const void* from) {
+  const int at = NodeOf(from);
+  if (std::strcmp(name, "bullet_impact") == 0) {
+    const int n = from == nullptr ? 0 : at + 1;
+    return n < 5 ? const_cast<void*>(Node(n)) : nullptr;
+  }
+  if (std::strcmp(name, "bullet_whizzby") == 0) {
+    const int n = from == nullptr ? 0 : at - 32 + 1;
+    return n < 4 ? const_cast<void*>(Node(32 + n)) : nullptr;
+  }
+  for (int g = 0; g < 5; ++g) {
+    char want[64];
+    std::snprintf(want, sizeof want, "bullet_impact|%s", kGuns[g]);
+    if (std::strcmp(name, want) != 0) continue;
+    const int n = from == nullptr ? 0 : at - (8 + 3 * g) + 1;
+    return n < 3 ? const_cast<void*>(Node(8 + 3 * g + n)) : nullptr;
+  }
+  return nullptr;
+}
+static const char* JNameAt(void*, const void* node) {
+  const int i = NodeOf(node);
+  if (i < 5) return kGuns[i];
+  if (i >= 32) return kWhiz[i - 32];
+  return kMembers[(i - 8) % 3];
+}
+static const char* JTString(void*, const void* node, const char*) {
+  static char buf[8][64];
+  static int k = 0;
+  const int i = NodeOf(node);
+  char* out = buf[k++ & 7];
+  if (i >= 32) {
+    std::snprintf(out, 64, "play_whizzby");
+    return out;
+  }
+  const int g = (i - 8) / 3, m = (i - 8) % 3;
+  std::snprintf(out, 64, "play_bullet_impact_%s%s", m == 0 ? "player" : m == 1 ? "shield" : "geo", g == 4 ? "_quark" : "");
+  return out;
+}
+static void JResize(void* table, uint32_t bytes, int) {
+  auto* w = static_cast<uint64_t*>(table);
+  uint8_t* fresh = static_cast<uint8_t*>(std::calloc(1, bytes));
+  if (w[0] != 0) std::memcpy(fresh, reinterpret_cast<void*>(w[0]), w[6] * 16);  // leaks the old block: a test
+  w[0] = reinterpret_cast<uint64_t>(fresh);
+}
+static std::vector<std::pair<uint64_t, uint32_t>> RowsOf(uintptr_t table) {
+  const auto* w = reinterpret_cast<const uint64_t*>(table);
+  std::vector<std::pair<uint64_t, uint32_t>> out;
+  for (uint64_t i = 0; i < w[6]; ++i) {
+    const uint8_t* row = reinterpret_cast<const uint8_t*>(w[0]) + 16 * i;
+    uint64_t k;
+    uint32_t id;
+    std::memcpy(&k, row, 8);
+    std::memcpy(&id, row + 8, 4);
+    out.emplace_back(k, id);
+  }
+  return out;
+}
+static void SetupRebuild() {
+  Fresh();
+  std::memset(g_bigMap, 0, sizeof g_bigMap);
+  auto* w = reinterpret_cast<uint64_t*>(g_bigMap);
+  w[4] = 4;  // growth
+  reinterpret_cast<uint64_t*>(g_bigMap + 0x40)[4] = 4;
+  g_jsonRc = 0;
+  g_dtorCalls = g_loadCalls = 0;
+  using nevr_quest::combat::impactsnd::kRebuildCallees;
+  for (const auto& c : kRebuildCallees) *reinterpret_cast<uint32_t*>(g_base + c.elf) = c.firstWord;
+  void* fns[7] = {reinterpret_cast<void*>(&JCtor), reinterpret_cast<void*>(&JDtor), reinterpret_cast<void*>(&JLoad), reinterpret_cast<void*>(&JNext),
+                  reinterpret_cast<void*>(&JNameAt), reinterpret_cast<void*>(&JTString), reinterpret_cast<void*>(&JResize)};
+  for (size_t i = 0; i < 7; ++i) impactsnd::SetCalleeForTest(i, fns[i]);
+}
+static void PublishBig() { W64(kSettingsVa, reinterpret_cast<uint64_t>(g_bigMap)); }
+
+// In a combat level the rebuilt loader runs in place of the game's: all 15 rows and the 4 whizzby rows, right ids, the scope marked.
+static void TestRebuiltLoaderInACombatLevel() {
+  SetupRebuild();
+  CHECK(Install().installed && HasLine("rebuild=reconstructed"), "the rebuild is not on with every stub pinned and the Shutdown handler in");
+  PublishBig();  // CR15NetBulletCS::Initialize stores the table before it calls the loader
+  const uint64_t rv = CallLoader();
+  CHECK(rv == 0 && g_loader_calls == 0, "the game's loader ran (%d) or the result %llx", g_loader_calls, (unsigned long long)rv);
+  const auto rows = RowsOf(reinterpret_cast<uintptr_t>(g_bigMap));
+  size_t n = 0;
+  const impactsnd::Row* known = Known(&n);
+  bool right = rows.size() == 15;
+  for (size_t i = 0; right && i < 15; ++i) {
+    right = false;
+    for (size_t j = 0; j < n; ++j) right = right || (known[j].key == rows[i].first && known[j].id == rows[i].second);
+    if (!right) break;
+    right = true;
+  }
+  CHECK(right, "the rebuilt table has the wrong rows (%zu)", rows.size());
+  CHECK(RowsOf(reinterpret_cast<uintptr_t>(g_bigMap) + 0x40).size() == 4, "the whizzby table has %zu rows", RowsOf(reinterpret_cast<uintptr_t>(g_bigMap) + 0x40).size());
+  CHECK(g_loadCalls == 1 && g_dtorCalls == 1, "the JSON was loaded %d times, destroyed %d", g_loadCalls, g_dtorCalls);
+  CHECK(impactsnd::GetStats().scoped && impactsnd::GetStats().scopedLoads == 1, "the scope was not marked by the rebuilt load");
+  CHECK(HasLine("\"event\":\"combat_impactsnd_rebuilt\"") && HasLine("rows=19") && HasLine("json_result=0") && HasLine("scope=combat") && HasLine("loader=rebuilt"),
+        "no rebuilt line");
+  // the JSON file missing: its result is the loader's result, no row is made
+  SetupRebuild();
+  Install();
+  PublishBig();
+  g_jsonRc = 7;
+  CHECK(CallLoader() == 7 && RowsOf(reinterpret_cast<uintptr_t>(g_bigMap)).empty() && g_dtorCalls == 1, "a missing JSON file");
+}
+
+// In every other level the game's own loader runs and the rebuilt one does not.
+static void TestRebuiltLoaderNotInArena() {
+  SetupRebuild();
+  LoadLevels({"mpl_arena_a"});
+  impactsnd::SetGameForTest(GameAddress());
+  Install();
+  PublishBig();
+  const uint64_t rv = CallLoader();
+  CHECK(rv == kLoaderReturn && g_loader_calls == 1 && g_loadCalls == 0, "arena: the game's loader %d, the JSON loads %d", g_loader_calls, g_loadCalls);
+  CHECK(RowsOf(reinterpret_cast<uintptr_t>(g_bigMap)).empty() || g_loader_calls == 1, "arena rows");
+  CHECK(!impactsnd::GetStats().scoped, "arena: scoped");
+}
+
+// The rebuild is off with the write switch off, without the Shutdown handler, and with a stub that is not the pinned one.
+static void TestRebuiltLoaderNeedsItsConditions() {
+  SetupRebuild();
+  Install(false);
+  CHECK(HasLine("rebuild=stock"), "write switch off: the rebuild is on");
+  CallLoader();
+  CHECK(g_loader_calls == 1 && g_loadCalls == 0, "write switch off: the rebuilt loader ran");
+  SetupRebuild();
+  W64(kShutSlotVa, 0x4242420);
+  Install();
+  CHECK(HasLine("rebuild=stock"), "no Shutdown handler: the rebuild is on");
+  CallLoader();
+  CHECK(g_loader_calls == 1 && g_loadCalls == 0, "no Shutdown handler: the rebuilt loader ran");
+  SetupRebuild();
+  *reinterpret_cast<uint32_t*>(g_base + nevr_quest::combat::impactsnd::kRebuildCallees[3].elf) ^= 1;
+  Install();
+  CHECK(HasLine("rebuild=stock") && HasLine("missing_callee=CJson::Next"), "a stub that is not pinned: the rebuild is on");
+  CallLoader();
+  CHECK(g_loader_calls == 1 && g_loadCalls == 0, "an unpinned stub: the rebuilt loader ran");
+}
 // The tick hands the module the game; the scope is marked by a combat load and cleared when the game frees the table.
 static void TestScopeFollowsTheTable() {
   Fresh();
@@ -1341,6 +1525,11 @@ int main() {
   TestCombatLevelsAreRepaired();
   TestScopeFailsClosed();
   TestScopeFollowsTheTable();
+  TestTickOnlyAsksOnceASecond();
+  TestScopeLineBudget();
+  TestRebuiltLoaderInACombatLevel();
+  TestRebuiltLoaderNotInArena();
+  TestRebuiltLoaderNeedsItsConditions();
   TestWrapperUnsorted15();
   TestWrapper5Rows();
   TestWrapperSortedAtLoad();
