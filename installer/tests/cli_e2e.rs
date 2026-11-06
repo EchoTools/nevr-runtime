@@ -1332,3 +1332,66 @@ fn an_update_lock_another_process_holds_makes_the_install_wait_and_the_line_says
     assert_eq!(line["ok"], true, "{line}");
     assert!(line["wait_ms"].as_u64().unwrap() >= 500, "the install waited for the holder: {line}");
 }
+
+#[test]
+fn a_state_json_the_host_refuses_for_a_discard_key_or_a_plugin_name_is_rebuilt() {
+    // Each of these parsed and passed the installer's checks before it shared the host's name rules (update_swap.cpp ValidState).
+    for (n, state) in [
+        ("device-named discard key", json!({"discards": {"CON": 1}, "quarantine": [{"version": "0.9.1"}]})),
+        ("trailing-dot discard key", json!({"discards": {"1.0.": 1}, "quarantine": [{"version": "0.9.1"}]})),
+        ("device-named plugin", json!({"owned": [{"path": "plugins/CON.dll", "sha256": "b".repeat(64)}], "quarantine": [{"version": "0.9.1"}]})),
+        ("leading-dot plugin", json!({"owned": [{"path": "plugins/.hidden.dll", "sha256": "b".repeat(64)}], "quarantine": [{"version": "0.9.1"}]})),
+    ] {
+        let w = world(false);
+        put_update(&w, "state.json", state.to_string().as_bytes());
+        let (code, out, err) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+        assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{n}: {out} {err}");
+        let line = &update_records(&w, "update_state")[0];
+        assert_eq!(line["state_before"], "rebuilt", "{n}: {line}");
+        assert!(state_json(&w).get("quarantine").is_none(), "{n}: a state the host refuses is not carried over");
+    }
+}
+
+#[test]
+fn a_lock_that_stays_held_ends_the_install_0_loudly_with_the_timeout_on_record() {
+    let w = world(false);
+    std::fs::create_dir_all(update_path(&w, "")).unwrap();
+    let holder = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(update_path(&w, "lock")).unwrap();
+    holder.lock().unwrap();
+    let started = std::time::Instant::now();
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+    drop(holder);
+    assert!(started.elapsed() >= std::time::Duration::from_secs(29), "the host's 30 s, not less: {:?}", started.elapsed());
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    assert!(out["reason"].as_str().unwrap().contains("WARNING: self-update is off until the next install") && err.contains("self-update is off"), "{out} {err}");
+    let lock = &update_records(&w, "update_lock")[0];
+    assert_eq!((lock["ok"].clone(), lock["reason"].clone(), lock["level"].clone()), (json!(false), json!("lock_timeout"), json!("ERROR")), "{lock}");
+    let state = &update_records(&w, "update_state")[0];
+    assert_eq!((state["ok"].clone(), state["reason"].clone()), (json!(false), json!("lock_timeout")), "{state}");
+    assert!(!update_path(&w, "state.json").exists(), "nothing was written without the lock");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_removal_that_fails_is_on_record_and_the_install_ends_0_loudly() {
+    use std::os::unix::fs::PermissionsExt;
+    let w = world(false);
+    // A folder that cannot be emptied: its inner folder is not writable.
+    put_update(&w, "previous/0.9.0/inner/nevr-runtime.dll", b"previous");
+    let inner = update_path(&w, "previous/0.9.0/inner");
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if std::fs::remove_file(inner.join("nevr-runtime.dll")).is_ok() {
+        // Running as a user the mode does not bind (root): the failure cannot be made.
+        return;
+    }
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    assert!(out["reason"].as_str().unwrap().contains("WARNING: self-update is off"), "{out}");
+    let failed: Vec<Value> = update_records(&w, "update_clear").into_iter().filter(|r| r["outcome"] == "failed").collect();
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!((failed[0]["name"].clone(), failed[0]["level"].clone()), (json!("previous"), json!("ERROR")), "{failed:?}");
+    let state = &update_records(&w, "update_state")[0];
+    assert_eq!((state["ok"].clone(), state["reason"].clone()), (json!(false), json!("clear_failed")), "{state}");
+    assert!(!update_path(&w, "state.json").exists(), "no baseline is recorded over a folder that could not be cleared");
+}

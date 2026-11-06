@@ -382,14 +382,14 @@ every `update check` line carries `channel_source`, so a player whose config dis
   already the package's: it is the baseline as much as a fresh install is, and a reinstall after a failed update must clear what
   the failure left, step 3 of "Order of work"). `pc plan` and `pc uninstall` never come here.
 - **The lock** is `update\lock` opened as the host opens it (share mode 0, delete on close; elsewhere an exclusive file lock),
-  retried every 100 ms for up to 30 s. The channel is the run's (`--channel`, else the core's default).
+  retried every 100 ms for up to 30 s on any failure to open it, as the host retries (a lock file another process has delete-pending answers access denied, not a sharing violation). The channel is the run's (`--channel`, else the core's default).
 - **Order.** The lock; `state.json` is read; then the removals (`swap.json`, `pending.json`, `crashed`, `staged.json`, `staging\`,
   `previous\`, `failed\`, in that order: the journal goes first, so a start never undoes a half swap over the new baseline);
   then `state.json` is written by a temporary file and a rename. `work\` and `manifest\` are the core's and stay.
 - **What `state.json` becomes.** `channel`; `current` (the release and its runtime sha256); `owned` (the runtime at its new
   sha256, then every plugin the earlier file listed: the installer does not touch `plugins\`); `discards` and `quarantine` as
   they were. A file the host would not use (not an object, nested deeper than 16, over 64 KiB, an `owned`, `discards` or
-  `quarantine` of the wrong shape, an `owned` path outside the member vocabulary) is replaced by one built from the baseline,
+  `quarantine` of the wrong shape, an `owned` path or a `discards` key outside the host's name rules (`update_names.cpp`: no leading or trailing `.`, no device name), the rules `ValidState` applies) is replaced by one built from the baseline,
   and its quarantine is lost with it (`state_before=rebuilt`). A file that is there and cannot be read is not written over.
 - **Links.** `update\` or `state.json` as a link stops the run (`reparse_point`); a link among the removals is removed and never
   followed (`outcome=link_removed`).

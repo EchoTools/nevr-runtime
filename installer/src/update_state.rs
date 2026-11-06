@@ -13,7 +13,6 @@
 //! the removals: a `swap.json` left beside a new baseline would be undone by the next start.
 
 use crate::log::Log;
-use crate::stage::staged_member;
 use crate::util::write_atomic;
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -85,12 +84,10 @@ pub struct UpdateLock {
 #[cfg(windows)]
 fn open_lock(path: &Path) -> std::io::Result<Option<fs::File>> {
     use std::os::windows::fs::OpenOptionsExt;
-    // Share mode 0 and delete on close: the host's open (`UpdateLock::Acquire`). A sharing violation is another holder.
-    match fs::OpenOptions::new().create(true).read(true).write(true).share_mode(0).custom_flags(0x0400_0000).open(path) {
-        Ok(f) => Ok(Some(f)),
-        Err(e) if matches!(e.raw_os_error(), Some(32) | Some(33)) => Ok(None),
-        Err(e) => Err(e),
-    }
+    // Share mode 0 and delete on close: the host's open (`UpdateLock::Acquire`, update_swap.cpp). Any failure is "not yet"
+    // (a sharing violation is another holder; access denied is a lock file another process has delete-pending), so the
+    // caller retries until its timeout, as the host does.
+    fs::OpenOptions::new().create(true).read(true).write(true).share_mode(0).custom_flags(0x0400_0000).open(path).map(Some)
 }
 
 #[cfg(not(windows))]
@@ -108,17 +105,51 @@ fn open_lock(path: &Path) -> std::io::Result<Option<fs::File>> {
 pub fn take_lock(update: &Path, timeout: Duration, step: Duration) -> Result<UpdateLock, Stop> {
     let path = update.join(LOCK);
     let start = Instant::now();
+    let mut last: Option<std::io::Error>;
     loop {
+        // Every failure to open is retried until the timeout, like the host (update_swap.cpp, `UpdateLock::Acquire`): a
+        // lock file that is delete-pending answers access denied, not a sharing violation.
         match open_lock(&path) {
             Ok(Some(file)) => return Ok(UpdateLock { _file: file, waited: start.elapsed() }),
-            Ok(None) => {}
-            Err(e) => return Err(Stop { reason: "lock_failed", detail: format!("{}: {e}", path.display()) }),
+            Ok(None) => last = None,
+            Err(e) => last = Some(e),
         }
         if start.elapsed() >= timeout {
-            return Err(Stop { reason: "lock_timeout", detail: format!("{} is held by another process (waited {} ms)", path.display(), start.elapsed().as_millis()) });
+            let why = match &last {
+                Some(e) => format!("the open failed: {e}"),
+                None => "it is held by another process".to_string(),
+            };
+            return Err(Stop { reason: "lock_timeout", detail: format!("{} could not be taken: {why} (waited {} ms)", path.display(), start.elapsed().as_millis()) });
         }
         std::thread::sleep(step);
     }
+}
+
+// The host's own name rules (src/runtime/host/update_names.cpp: IsName, IsDeviceName, IsVersionName, IsPluginName,
+// ParseMember), mirrored because C++ is out of reach of this crate. A name is 1 to 64 characters from its set, never starts
+// or ends with '.', and is not a Windows device name (CON PRN AUX NUL CONIN$ CONOUT$ COM0-9 LPT0-9, any case, compared on
+// the part before the first '.'). The tests below pin this copy to the host's table.
+fn is_device_name(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(&base.as_str())
+        || (base.len() == 4 && (base.starts_with("COM") || base.starts_with("LPT")) && base.as_bytes()[3].is_ascii_digit())
+}
+
+fn is_name(name: &str, allowed: impl Fn(u8) -> bool) -> bool {
+    !name.is_empty() && name.len() <= 64 && !name.starts_with('.') && !name.ends_with('.') && name.bytes().all(allowed) && !is_device_name(name)
+}
+
+/// update_names.cpp `IsVersionName`: [0-9A-Za-z.+-]{1,64}.
+pub fn is_version_name(v: &str) -> bool {
+    is_name(v, |c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'+' | b'-'))
+}
+
+/// update_names.cpp `ParseMember`: `nevr-runtime.dll`, or `plugins/<name>.dll` with `<name>` [A-Za-z0-9._-]{1,64}.
+pub fn is_member(path: &str) -> bool {
+    if path == crate::stage::RUNTIME {
+        return true;
+    }
+    path.strip_prefix("plugins/").and_then(|r| r.strip_suffix(".dll")).is_some_and(|n| is_name(n, |c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-')))
 }
 
 fn depth(v: &Value) -> usize {
@@ -139,15 +170,16 @@ fn damage(v: &Value) -> Option<String> {
     if let Some(owned) = o.get("owned") {
         let Some(list) = owned.as_array() else { return Some("owned is not a list".into()) };
         for e in list {
-            let ok = e["path"].as_str().is_some_and(staged_member) && e["sha256"].as_str().is_some_and(crate::util::is_sha256_hex);
+            let ok = e["path"].as_str().is_some_and(is_member) && e["sha256"].as_str().is_some_and(crate::util::is_sha256_hex);
             if !ok {
                 return Some("owned has an entry that is not a member path with a sha256".into());
             }
         }
     }
     if let Some(d) = o.get("discards") {
-        if !d.as_object().is_some_and(|m| m.values().all(Value::is_u64)) {
-            return Some("discards is not an object of counts".into());
+        // The host: every key IsVersionName, every value an unsigned number (update_swap.cpp, `ValidState`).
+        if !d.as_object().is_some_and(|m| m.iter().all(|(k, c)| is_version_name(k) && c.is_u64())) {
+            return Some("discards is not an object of version names and counts".into());
         }
     }
     if o.get("quarantine").is_some_and(|q| !q.is_array()) {
@@ -295,6 +327,46 @@ mod tests {
         assert_eq!(stop.reason, "lock_timeout", "{stop}");
         drop(held);
         assert!(take_lock(dir.path(), Duration::from_millis(300), Duration::from_millis(20)).is_ok(), "released, it can be taken again");
+    }
+
+    #[test]
+    fn an_open_that_fails_is_retried_until_the_timeout_not_only_a_sharing_violation() {
+        // A folder where the lock file goes: every open fails (not a sharing violation), as a delete-pending file's open does.
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join(LOCK)).unwrap();
+        let stop = take_lock(dir.path(), Duration::from_millis(250), Duration::from_millis(20)).err().expect("it never opens");
+        assert_eq!(stop.reason, "lock_timeout", "{stop}");
+        assert!(stop.detail.contains("the open failed") && stop.detail.contains("waited"), "the last error and the wait are named: {stop}");
+        // The cause clears while the install waits: the lock is then taken.
+        let path = dir.path().join(LOCK);
+        let clearer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            fs::remove_dir(path).unwrap();
+        });
+        let got = take_lock(dir.path(), Duration::from_secs(5), Duration::from_millis(20));
+        clearer.join().unwrap();
+        assert!(got.is_ok_and(|l| l.waited >= Duration::from_millis(250)), "retried past the early failures");
+    }
+
+    #[test]
+    fn the_name_rules_are_the_hosts() {
+        // The host's cases (update_names.cpp): what it takes and what it refuses.
+        for ok in ["1.2.3", "5.16.1-dev.4+abc", "a", &"a".repeat(64), "CONSOLE", "COM10", "COM"] {
+            assert!(is_version_name(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", ".1", "1.", "1/2", "1 2", "1_2", &"a".repeat(65), "CON", "con", "Nul.1", "aux", "COM1", "lpt9.x", "CONIN$", "CONOUT$.a", "PRN"] {
+            assert!(!is_version_name(bad), "{bad}");
+        }
+        for ok in ["nevr-runtime.dll", "plugins/a.dll", "plugins/a_b-c.d.dll", "plugins/CONSOLE.dll", "plugins/COM10.dll"] {
+            assert!(is_member(ok), "{ok}");
+        }
+        for bad in ["", "plugins/.dll", "plugins/.x.dll", "plugins/x..dll", "plugins/CON.dll", "plugins/nul.dll", "plugins/COM1.dll", "plugins/LPT0.x.dll", "plugins/CONIN$.dll", "plugins/a/b.dll", "plugins/../x.dll", "other/a.dll", "plugins/a.exe", "Nevr-Runtime.dll"] {
+            assert!(!is_member(bad), "{bad}");
+        }
+        let sha = "a".repeat(64);
+        for bad in [json!({"discards": {"CON": 1}}), json!({"discards": {"..": 1}}), json!({"discards": {"a b": 1}}), json!({"owned": [{"path": "plugins/CON.dll", "sha256": sha}]}), json!({"owned": [{"path": "plugins/.x.dll", "sha256": sha}]})] {
+            assert!(damage(&bad).is_some(), "the installer takes what the host refuses: {bad}");
+        }
     }
 
     #[test]
