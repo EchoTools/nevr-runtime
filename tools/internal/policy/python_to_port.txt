@@ -138,6 +138,7 @@ tools/tests/test_launch_client.py	ported by its unit of #2132
 tools/tests/test_loading_tips_wiring.py	ported by its unit of #2132
 tools/tests/test_loadout_entrant_wiring.py	ported by its unit of #2132
 tools/tests/test_lobby_settings_relay_wiring.py	ported by its unit of #2132
+tools/tests/test_log_collapse_format_wiring.py	ported by its unit of #2132 (a source-wiring check of the log collapse format; its port ends this entry)
 tools/tests/test_login_refusal_wiring.py	ported by its unit of #2132
 tools/tests/test_login_remote_pair_lifetime.py	ported by its unit of #2132
 tools/tests/test_minidmp_sender_exports.py	ported by its unit of #2132
@@ -238,6 +239,7 @@ tools/tests/test_return_to_lobby_queue_wiring.py	ported by its unit of #2132
 tools/tests/test_rollback_beta.py	ported by its unit of #2132
 tools/tests/test_run_scenario.py	ported by its unit of #2132
 tools/tests/test_run_tool_tests.py	ported by its unit of #2132
+tools/tests/test_run_tool_tests_memory.py	ported by its unit of #2132 (tests the Python runner tools/run_tool_tests.py memory record; G1a folds the runner into Go and ends this entry)
 tools/tests/test_runtime_dll_name.py	ported by its unit of #2132
 tools/tests/test_runtime_lifecycle_invariants.py	ported by its unit of #2132
 tools/tests/test_sample_config_sensor.py	ported by its unit of #2132

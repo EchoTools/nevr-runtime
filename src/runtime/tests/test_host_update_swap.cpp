@@ -7,6 +7,7 @@
 //
 // Each test names the ADR 0024 failure case it covers (F6 to F23).
 
+#include "core/runtime_abi.h"
 #include "runtime/host/runtime_load.h"
 #include "runtime/host/update_names.h"
 #include "runtime/host/update_swap.h"
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <functional>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -370,7 +372,7 @@ class HostUpdateSwap : public ::testing::Test {
   }
 
   // What the root holds after that release was swapped in.
-  void ExpectSwapped() {
+  void ExpectSwapped(int boot_attempts = 1) {
     EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_) << "the staged runtime is in the root";
     EXPECT_EQ(Get(L"plugins\\example.dll"), new_plugin_) << "the staged plugin is in the root";
     EXPECT_EQ(Get(L"update\\previous\\7.7.7\\nevr-runtime.dll"), old_runtime_) << "the old runtime is the previous one";
@@ -382,7 +384,7 @@ class HostUpdateSwap : public ::testing::Test {
     const nlohmann::json pending = ReadJson(update_ + L"\\pending.json");
     EXPECT_EQ(pending, nlohmann::json({{"to", {{"version", "1.2.3"}, {"sha256", Sha256Hex(new_runtime_)}}},
                                        {"from", {{"version", "7.7.7"}, {"sha256", Sha256Hex(old_runtime_)}}},
-                                       {"boot_attempts", 1},
+                                       {"boot_attempts", boot_attempts},
                                        {"failed_reason", nullptr}}))
         << pending.dump();
     const nlohmann::json state = ReadJson(update_ + L"\\state.json");
@@ -434,6 +436,11 @@ class HostUpdateSwap : public ::testing::Test {
     const nlohmann::json journal = ReadJson(update_ + L"\\swap.json");
     return journal.is_object() ? journal.value("phase", "") : std::string();
   }
+
+  // The tries the swapped release has had when the next start has run: a start that finds a complete swap (no journal,
+  // pending.json there) is another try, and one that finishes an interrupted swap's cleanup is not (that swap's start never
+  // got to load).
+  int AttemptsAfterTheNextStart() const { return Exists(update_ + L"\\swap.json") || !Exists(update_ + L"\\pending.json") ? 1 : 2; }
 
   static std::string Journal(const std::string& phase, const std::string& extra = "") {
     const std::string members = "[\"nevr-runtime.dll\", \"plugins/example.dll\"]";
@@ -608,9 +615,10 @@ TEST_F(HostUpdateSwap, F7_AKillAfterAnyStepIsRecoveredAndTheNextStartEndsWithOne
     g_kill_at.store(0);
     // Between the two starts the root holds the old release, the new one, or a journal that says which way to go.
     const bool journal = Exists(update_ + L"\\swap.json");
+    const int attempts = AttemptsAfterTheNextStart();
     const Start next = RunStart();
     EXPECT_EQ(next.result.action, UpdateAction::kLoad);
-    ExpectSwapped();
+    ExpectSwapped(attempts);
     const auto outcomes = Outcomes(next.records);
     if (journal) {
       ASSERT_FALSE(outcomes.empty());
@@ -715,7 +723,8 @@ TEST_F(HostUpdateSwap, F17_TwoStartsAtOnceSwapOnceAndTheSecondFindsTheWorkDone) 
   EXPECT_EQ(Outcomes(records), std::vector<std::string>{"swapped"}) << "one start swapped; the other found nothing to do";
   EXPECT_EQ(results[0].result.action, UpdateAction::kLoad);
   EXPECT_EQ(results[1].result.action, UpdateAction::kLoad);
-  ExpectSwapped();
+  // The first start's runtime is not mapped in this test, so the second start that finds the swap done is another try.
+  ExpectSwapped(2);
 }
 
 // ADR 0024, section 4.1: the lock is held from the first read of update\ until the runtime is mapped, and released
@@ -1295,12 +1304,33 @@ TEST_F(HostUpdateSwap, F7_ALeftoverDoneJournalKeepsANewerStagedReleaseForTheSwap
   Put(L"update\\swap.json", Journal("done"));
   Stage("2.0.0", {{"nevr-runtime.dll", new_runtime_}, {"plugins/example.dll", new_plugin_}});
   const Start start = RunStart();
-  EXPECT_EQ(Outcomes(start.records), (std::vector<std::string>{"recovered", "swapped"}));
-  const auto records = SwapRecords(start.records);
-  ASSERT_EQ(records.size(), 2u);
-  EXPECT_EQ(records[1].value("to", ""), "2.0.0");
+  // The cleanup keeps the newer staged.json. The first release is still pending, so the newer one waits for it to be
+  // confirmed (#2105, ADR 0024 section 6): swapping now would move the unconfirmed release over the last confirmed one.
+  EXPECT_EQ(Outcomes(start.records), (std::vector<std::string>{"recovered", "deferred"}));
+  EXPECT_TRUE(Exists(update_ + L"\\staged.json"));
+  EXPECT_EQ(ReadJson(update_ + L"\\pending.json")["to"].value("version", ""), "1.2.3");
+  DeleteFileW((update_ + L"\\pending.json").c_str());  // the runtime's UpdateConfirm
+  const Start next = RunStart();
+  EXPECT_EQ(Outcomes(next.records), std::vector<std::string>{"swapped"});
+  const auto records = SwapRecords(next.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("to", ""), "2.0.0");
   EXPECT_EQ(ReadJson(update_ + L"\\pending.json")["to"].value("version", ""), "2.0.0");
   EXPECT_FALSE(Exists(update_ + L"\\staged.json"));
+}
+
+// A swapped-in file that is gone when an interrupted swap's cleanup runs is not recorded as owned (a path with no sha256
+// would make state.json unusable and have it rebuilt, losing the channel).
+TEST_F(HostUpdateSwap, F7_ALeftoverDoneJournalOwnsOnlyTheSwappedFilesThatAreStillInTheRoot) {
+  OldReleaseInTheRootAndANewOneStaged();
+  ASSERT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"swapped"});
+  DeleteFileW((root_ + L"\\plugins\\example.dll").c_str());
+  Put(L"update\\swap.json", Journal("done"));
+  EXPECT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"recovered"});
+  const nlohmann::json state = ReadJson(update_ + L"\\state.json");
+  EXPECT_EQ(state["owned"], nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"sha256", Sha256Hex(new_runtime_)}}}))
+      << state.dump();
+  EXPECT_EQ(state.value("channel", ""), "beta") << "the state was not rebuilt";
 }
 
 TEST_F(HostUpdateSwap, F7_ALeftoverDoneJournalKeepsThePendingRecordAndACrashMarkerMadeSince) {
@@ -1312,6 +1342,10 @@ TEST_F(HostUpdateSwap, F7_ALeftoverDoneJournalKeepsThePendingRecordAndACrashMark
   pending["failed_reason"] = "init_failed";
   Put(L"update\\pending.json", pending.dump());
   Put(L"update\\crashed", "");
+  // The swapped runtime runs (it is mapped here), so the rollback these two records ask for waits (R2); what is under
+  // test is that the cleanup itself resets neither.
+  const HMODULE mapped = LoadLibraryExW(runtime_path_.c_str(), nullptr, 0);
+  ASSERT_NE(mapped, nullptr) << GetLastError();
   for (int start = 1; start <= 2; ++start) {
     SCOPED_TRACE(start);
     Put(L"update\\swap.json", Journal("done"));
@@ -1320,6 +1354,7 @@ TEST_F(HostUpdateSwap, F7_ALeftoverDoneJournalKeepsThePendingRecordAndACrashMark
     EXPECT_TRUE(Exists(update_ + L"\\crashed")) << "a crash of the swapped release is not forgotten";
     EXPECT_FALSE(Exists(update_ + L"\\swap.json"));
   }
+  FreeLibrary(mapped);
 }
 
 // Review note 4: a staged.json the host cannot remove (another program holds it without delete sharing) is offered
@@ -1343,7 +1378,8 @@ TEST_F(HostUpdateSwap, F6_AStagedJsonThatCannotBeRemovedIsQuarantinedOnceAndSays
   const nlohmann::json state = ReadJson(update_ + L"\\state.json");
   ASSERT_TRUE(state["quarantine"].is_array()) << state.dump();
   EXPECT_EQ(state["quarantine"].size(), 1u) << state.dump();
-  EXPECT_EQ(state["discards"].value("1.2.3", 0), 4);
+  // The third discard quarantined the release; the offer that follows is dropped as a quarantined one, not counted again.
+  EXPECT_EQ(state["discards"].value("1.2.3", 0), 3);
 }
 
 // The same for a bad staged.json the host cannot remove, and for a state.json it cannot write over (another program
@@ -1417,13 +1453,1120 @@ TEST_F(HostUpdateSwap, F7_AKillWhileRecoveringIsRecoveredInTurnByTheNextStart) {
       g_kill_at.store(0);
       if (g_last_step.load() < again) break;  // this start has fewer steps
       ++interrupted_recoveries;
+      const int attempts = AttemptsAfterTheNextStart();
       const Start last = RunStart();
       EXPECT_EQ(last.result.action, UpdateAction::kLoad);
-      ExpectSwapped();
+      ExpectSwapped(attempts);
     }
   }
   // Every kill but the last (the journal's removal) leaves a journal, and each such recovery has at least one step.
   EXPECT_GE(interrupted_recoveries, steps - 1);
+}
+
+// ---- the pending release: rollback, the crash marker's reader, boot_attempts (#2105, ADR 0024 section 6) ---------------
+//
+// A swapped release is pending (update\pending.json) until the runtime confirms it started. These tests start from the
+// usual swap done (SwappedIn) and change what happened to the release since: it crashed, failed, ran twice unconfirmed.
+
+NevrHostContext ValidContext() {
+  static unsigned char target[16] = {};
+  NevrHostContext host{};
+  host.header.struct_size = sizeof(NevrHostContext);
+  host.header.abi_major = nevr_runtime_abi::kMajor;
+  host.header.abi_minor = nevr_runtime_abi::kMinor;
+  host.host_module = GetModuleHandleW(nullptr);
+  host.game_module = GetModuleHandleW(nullptr);
+  host.original_game_main_wrapper = +[](std::int64_t command_line) { return command_line; };
+  host.wrapper_hook_target = target;
+  host.wrapper_hook_bytes_valid = 0;
+  host.capabilities = nevr_runtime_abi::kHostCapabilitySwap;
+  return host;
+}
+
+struct LoadedStart {
+  nevr_host::RuntimeLoadResult result;
+  std::vector<nlohmann::json> records;
+};
+
+std::vector<std::string> Events(const std::vector<nlohmann::json>& records) {
+  std::vector<std::string> out;
+  for (const nlohmann::json& record : records) out.push_back(record.value("event", ""));
+  return out;
+}
+
+std::vector<nlohmann::json> RollbackRecords(const std::vector<nlohmann::json>& records) {
+  std::vector<nlohmann::json> out;
+  for (const nlohmann::json& record : records) {
+    if (record.value("event", "") == "update_rollback") out.push_back(record);
+  }
+  return out;
+}
+
+class HostUpdateRollback : public HostUpdateSwap {
+ protected:
+  // Rolling back restores the previous release, and the restored runtime passes the same verifier as any runtime (ADR 0024,
+  // section 6): so here the release in the root before the swap is signed too. `old_runtime_` is a second signed runtime
+  // stand-in (the rendezvous probe built another way, NEVR-BUILD 7.7.7, signed by the same throwaway PKI) that is never
+  // loaded; `new_runtime_` is the one that loads; `bad_runtime_` is the one the verifier refuses.
+  void SetUp() override {
+    HostUpdateSwap::SetUp();
+    if (HasFatalFailure()) return;
+    ASSERT_TRUE(manifest_["files"].contains("nevr-runtime-b.signed")) << "the fixtures hold no second signed runtime";
+    old_runtime_ = Fixture("nevr-runtime-b.signed");
+    bad_runtime_ = Fixture("nevr-runtime.unsigned");
+    ASSERT_FALSE(old_runtime_.empty());
+    ASSERT_NE(old_runtime_, new_runtime_);
+    ASSERT_NE(bad_runtime_, new_runtime_);
+  }
+
+  std::string bad_runtime_;
+
+  // The usual swap, done: the new release is in the root, the old one in previous\7.7.7, pending.json says boot_attempts 1.
+  void SwappedIn() {
+    OldReleaseInTheRootAndANewOneStaged();
+    const Start start = RunStart();
+    ASSERT_EQ(Outcomes(start.records), std::vector<std::string>{"swapped"});
+    ASSERT_TRUE(Exists(update_ + L"\\pending.json"));
+    ASSERT_FALSE(Exists(update_ + L"\\crashed"));
+  }
+
+  nlohmann::json Pending() const { return ReadJson(update_ + L"\\pending.json"); }
+  void SetPending(const nlohmann::json& pending) { Put(L"update\\pending.json", pending.dump()); }
+  void MarkCrashed() { Put(L"update\\crashed", ""); }
+
+  // What the root holds after the swapped release was put back: the old release in place, the new one kept under
+  // failed\1.2.3, the pending record and the marker gone, state.json quarantining the failed release.
+  void ExpectRolledBack() {
+    EXPECT_EQ(Get(L"nevr-runtime.dll"), old_runtime_) << "the previous runtime is back";
+    EXPECT_EQ(Get(L"plugins\\example.dll"), old_plugin_) << "and its plugin";
+    EXPECT_EQ(Get(L"update\\failed\\1.2.3\\nevr-runtime.dll"), new_runtime_) << "the failed runtime is kept for the report";
+    EXPECT_EQ(Get(L"update\\failed\\1.2.3\\plugins\\example.dll"), new_plugin_);
+    EXPECT_FALSE(Exists(update_ + L"\\previous\\7.7.7")) << "the previous generation moved back, nothing is left";
+    EXPECT_FALSE(Exists(update_ + L"\\pending.json"));
+    EXPECT_FALSE(Exists(update_ + L"\\crashed"));
+    EXPECT_FALSE(Exists(update_ + L"\\swap.json"));
+    const nlohmann::json state = ReadJson(update_ + L"\\state.json");
+    EXPECT_EQ(state.value("channel", ""), "beta") << state.dump();
+    ASSERT_TRUE(state["quarantine"].is_array()) << state.dump();
+    ASSERT_EQ(state["quarantine"].size(), 1u) << state.dump();
+    EXPECT_EQ(state["quarantine"][0].value("version", ""), "1.2.3");
+    EXPECT_EQ(state["quarantine"][0].value("runtime_sha256", ""), Sha256Hex(new_runtime_));
+    EXPECT_FALSE(state["quarantine"][0].value("reason", "").empty());
+    EXPECT_FALSE(state["quarantine"][0].value("time", "").empty());
+    EXPECT_EQ(state["current"], nlohmann::json({{"version", "7.7.7"}, {"runtime_sha256", Sha256Hex(old_runtime_)}}))
+        << state.dump();
+    EXPECT_EQ(state["owned"], nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"sha256", Sha256Hex(old_runtime_)}},
+                                                     {{"path", "plugins/example.dll"}, {"sha256", Sha256Hex(old_plugin_)}}}))
+        << state.dump();
+  }
+
+  LoadedStart LoadAtStart(const NevrHostContext& context) {
+    {
+      std::lock_guard<std::mutex> lock(g_records_mutex);
+      g_records.clear();
+    }
+    nevr_host::SetRuntimeDirForTest(root_.c_str());
+    nevr_host::SetVerifyRuntimeForTest(true);
+    nevr_host::SetDevBuildForTest(0);
+    LoadedStart run;
+    {
+      BootstrapDiagnostics diagnostics;
+      const std::wstring host_dir = scratch_ + L"\\";
+      diagnostics.PrepareForTest(local_.c_str(), host_dir.c_str());
+      nevr_host::RuntimeLoader loader;
+      loader.Prepare();
+      run.result = loader.LoadAtStart(context, diagnostics);
+    }
+    nevr_host::SetRuntimeDirForTest(nullptr);
+    nevr_host::SetVerifyRuntimeForTest(false);
+    nevr_host::SetDevBuildForTest(-1);
+    std::lock_guard<std::mutex> lock(g_records_mutex);
+    run.records = g_records;
+    return run;
+  }
+
+  // A pending release whose runtime the verifier refuses (the unsigned stand-in), with the signed one that loads kept as
+  // the previous release: what the root holds after a swap whose new runtime turned out to be unusable.
+  void PendingReleaseThatTheVerifierRefuses() {
+    Put(L"nevr-runtime.dll", bad_runtime_);  // unsigned: refused
+    Put(L"plugins\\example.dll", old_plugin_);
+    Put(L"update\\previous\\7.7.7\\nevr-runtime.dll", new_runtime_);  // signed, and it loads
+    Put(L"update\\previous\\7.7.7\\plugins\\example.dll", new_plugin_);
+    WriteState({{"channel", "beta"},
+                {"owned", {{{"path", "nevr-runtime.dll"}, {"sha256", Sha256Hex(bad_runtime_)}},
+                           {{"path", "plugins/example.dll"}, {"sha256", Sha256Hex(old_plugin_)}}}}});
+    SetPending({{"to", {{"version", "1.2.3"}, {"sha256", Sha256Hex(bad_runtime_)}}},
+                {"from", {{"version", "7.7.7"}, {"sha256", Sha256Hex(new_runtime_)}}},
+                {"boot_attempts", 1},
+                {"failed_reason", nullptr}});
+  }
+};
+
+TEST_F(HostUpdateRollback, ASwapLeavesTheReleasePendingAndTellsTheLoaderSo) {
+  OldReleaseInTheRootAndANewOneStaged();
+  const Start start = RunStart();
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(start.result.pending) << "a load of the swapped-in release that fails is the host's to handle";
+  const Start quiet = [&] {
+    RemoveTree(root_);
+    CreateDirectoryW(root_.c_str(), nullptr);
+    Put(L"nevr-runtime.dll", old_runtime_);
+    MakeDirs(update_);
+    return RunStart();
+  }();
+  EXPECT_FALSE(quiet.result.pending) << "an update folder with nothing pending is not a trial";
+}
+
+// F12: a release gets two starts to reach the mark; the third rolls back.
+TEST_F(HostUpdateRollback, F12_AReleaseThatNeverReachesTheMarkInTwoStartsIsRolledBackAtTheThird) {
+  SwappedIn();
+  EXPECT_EQ(Pending().value("boot_attempts", 0), 1);
+
+  const Start second = RunStart();
+  EXPECT_EQ(second.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(second.result.pending);
+  EXPECT_EQ(Pending().value("boot_attempts", 0), 2) << "the second start is the release's second try";
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_) << "and it loads the pending release";
+  EXPECT_TRUE(RollbackRecords(second.records).empty());
+
+  const Start third = RunStart();
+  EXPECT_EQ(third.result.action, UpdateAction::kLoad);
+  EXPECT_FALSE(third.result.pending) << "the previous release is in the root; it is not on trial";
+  EXPECT_TRUE(third.lock_held);
+  ExpectRolledBack();
+  const auto records = RollbackRecords(third.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("mode", ""), "next_start");
+  EXPECT_EQ(records[0].value("reason", ""), "unconfirmed");
+  EXPECT_EQ(records[0].value("boot_attempts", 0), 2);
+  EXPECT_EQ(records[0].value("outcome", ""), "rolled_back");
+  EXPECT_EQ(records[0].value("from", ""), "1.2.3");
+  EXPECT_EQ(records[0].value("to", ""), "7.7.7");
+  EXPECT_TRUE(records[0].contains("elapsed_ms"));
+}
+
+// F11: the crash capture left update\crashed; the next start rolls back at once.
+TEST_F(HostUpdateRollback, F11_ACrashMarkerRollsTheReleaseBackAtTheNextStart) {
+  SwappedIn();
+  MarkCrashed();
+  const Start next = RunStart();
+  EXPECT_EQ(next.result.action, UpdateAction::kLoad);
+  ExpectRolledBack();
+  const auto records = RollbackRecords(next.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("reason", ""), "crashed");
+  EXPECT_EQ(records[0].value("outcome", ""), "rolled_back");
+}
+
+// F10: a runtime that was mapped and failed has its reason in pending.json; the next start rolls back with it.
+TEST_F(HostUpdateRollback, F10_AFailedReasonInPendingJsonRollsBackWithThatReasonAndBeatsTheOtherTwo) {
+  SwappedIn();
+  nlohmann::json pending = Pending();
+  pending["failed_reason"] = "abi_rejected";
+  pending["boot_attempts"] = 2;
+  SetPending(pending);
+  MarkCrashed();
+  const Start next = RunStart();
+  ExpectRolledBack();
+  const auto records = RollbackRecords(next.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("reason", ""), "abi_rejected") << "the release's own failure is named before a crash or a count";
+  EXPECT_EQ(ReadJson(update_ + L"\\state.json")["quarantine"][0].value("reason", ""), "abi_rejected");
+}
+
+// A second start inside the first one's trial must not condemn the release (ADR 0024, section 6, R2).
+TEST_F(HostUpdateRollback, ASecondStartInsideTheFirstOnesTrialDoesNotRollBackAndDoesNotCountAsATry) {
+  SwappedIn();
+  const HMODULE mapped = LoadLibraryExW(runtime_path_.c_str(), nullptr, 0);  // the first start's runtime, in its ten seconds
+  ASSERT_NE(mapped, nullptr) << GetLastError();
+  // Two reasons to roll back are present; the runtime is in use, so neither acts.
+  MarkCrashed();
+  nlohmann::json pending = Pending();
+  pending["boot_attempts"] = 2;
+  SetPending(pending);
+  const auto before = Tree(root_);
+  const Start inside = RunStart();
+  EXPECT_EQ(inside.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(inside.result.pending) << "it loads the pending release and decides at a later start";
+  EXPECT_EQ(Tree(root_), before) << "nothing moved, nothing was counted";
+  const auto records = RollbackRecords(inside.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("outcome", ""), "deferred");
+  EXPECT_EQ(records[0].value("reason", ""), "runtime_in_use");
+
+  // One try so far and a second process arrives while the first still runs: not a try either.
+  pending["boot_attempts"] = 1;
+  SetPending(pending);
+  DeleteFileW((update_ + L"\\crashed").c_str());
+  const Start overlapping = RunStart();
+  EXPECT_TRUE(overlapping.result.pending);
+  EXPECT_EQ(Pending().value("boot_attempts", 0), 1) << "a start beside a running one is not a second try";
+
+  FreeLibrary(mapped);
+  pending["boot_attempts"] = 2;
+  SetPending(pending);
+  RunStart();
+  ExpectRolledBack();
+}
+
+// F13: nothing to restore, or the restored file does not verify: nothing that cannot be verified is loaded.
+TEST_F(HostUpdateRollback, F13_ARollbackWithNothingToRestoreStopsAndLeavesTheRootAsItWas) {
+  for (const char* why : {"no_runtime", "no_pending_from", "unsigned"}) {
+    SCOPED_TRACE(why);
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    SwappedIn();
+    MarkCrashed();
+    if (std::string(why) == "no_runtime") DeleteFileW((update_ + L"\\previous\\7.7.7\\nevr-runtime.dll").c_str());
+    if (std::string(why) == "no_pending_from") {
+      nlohmann::json pending = Pending();
+      pending["from"] = nullptr;
+      SetPending(pending);
+    }
+    if (std::string(why) == "unsigned") Put(L"update\\previous\\7.7.7\\nevr-runtime.dll", bad_runtime_);
+    const auto before = Tree(root_);
+    const Start next = RunStart();
+    EXPECT_EQ(next.result.action, UpdateAction::kStop);
+    ASSERT_NE(next.result.reason, nullptr);
+    EXPECT_STREQ(next.result.reason, std::string(why) == "unsigned" ? "previous_unverified" : "no_previous");
+    EXPECT_EQ(Tree(root_), before) << "nothing moved";
+    const auto records = RollbackRecords(next.records);
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].value("outcome", ""), "failed");
+    EXPECT_EQ(records[0].value("reason", ""), next.result.reason);
+  }
+}
+
+// F20: a rollback is never undone; whichever step ends it, the next start completes it and the failed release stays out.
+TEST_F(HostUpdateRollback, F20_AnInterruptedRollbackIsCompletedByTheNextStartAndTheFailedReleaseDoesNotReturn) {
+  SwappedIn();
+  MarkCrashed();
+  g_last_step.store(0);
+  RunStart();
+  const int steps = g_last_step.load();
+  ASSERT_GE(steps, 10) << "the journal, four moves, the state, two removals and the cleanup";
+  ExpectRolledBack();
+  bool saw_a_journal = false;
+  for (int kill = 1; kill <= steps; ++kill) {
+    SCOPED_TRACE(kill);
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    SwappedIn();
+    MarkCrashed();
+    g_kill_at.store(kill);
+    RunStart();
+    g_kill_at.store(0);
+    const bool journal = Exists(update_ + L"\\swap.json");
+    const nlohmann::json written = ReadJson(update_ + L"\\swap.json");
+    if (journal) {
+      saw_a_journal = true;
+      EXPECT_EQ(written.value("kind", ""), "rollback");
+    }
+    const Start next = RunStart();
+    EXPECT_EQ(next.result.action, UpdateAction::kLoad);
+    EXPECT_FALSE(next.result.pending) << "the failed release does not come back as the pending one";
+    ExpectRolledBack();
+    if (journal) {
+      const auto outcomes = Outcomes(next.records);
+      ASSERT_FALSE(outcomes.empty());
+      EXPECT_EQ(outcomes.front(), "recovered");
+      EXPECT_EQ(SwapRecords(next.records).front().value("kind", ""), "rollback");
+    }
+    const Start after = RunStart();
+    EXPECT_TRUE(SwapRecords(after.records).empty() && RollbackRecords(after.records).empty())
+        << "the start after that finds nothing to do";
+  }
+  EXPECT_TRUE(saw_a_journal);
+}
+
+// A plugin set is rolled back with the runtime, and only the files the release owned.
+TEST_F(HostUpdateRollback, APluginSetIsRolledBackWithTheRuntimeAndAStrangersPluginStays) {
+  Put(L"nevr-runtime.dll", old_runtime_);
+  Put(L"plugins\\example.dll", old_plugin_);
+  Put(L"plugins\\mine.dll", "a player's own plugin");
+  WriteState({{"channel", "beta"}, {"owned", {{{"path", "plugins/example.dll"}, {"sha256", Sha256Hex(old_plugin_)}}}}});
+  Stage("1.2.3", {{"nevr-runtime.dll", new_runtime_},
+                  {"plugins/example.dll", new_plugin_},
+                  {"plugins/extra.dll", Fixture("good")}});
+  ASSERT_EQ(Outcomes(RunStart().records), std::vector<std::string>{"swapped"});
+  ASSERT_EQ(Get(L"plugins\\extra.dll"), Fixture("good"));
+  MarkCrashed();
+  const Start next = RunStart();
+  EXPECT_EQ(next.result.action, UpdateAction::kLoad);
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), old_runtime_);
+  EXPECT_EQ(Get(L"plugins\\example.dll"), old_plugin_);
+  EXPECT_FALSE(Exists(root_ + L"\\plugins\\extra.dll")) << "a plugin only the failed release had goes with it";
+  EXPECT_EQ(Get(L"update\\failed\\1.2.3\\plugins\\extra.dll"), Fixture("good"));
+  EXPECT_EQ(Get(L"update\\failed\\1.2.3\\plugins\\example.dll"), new_plugin_);
+  EXPECT_EQ(Get(L"plugins\\mine.dll"), "a player's own plugin") << "no stranger's file is moved";
+  EXPECT_EQ(ReadJson(update_ + L"\\state.json")["owned"],
+            nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"sha256", Sha256Hex(old_runtime_)}},
+                                   {{"path", "plugins/example.dll"}, {"sha256", Sha256Hex(old_plugin_)}}}));
+}
+
+TEST_F(HostUpdateRollback, AnOlderFailedGenerationIsReplacedAndAFileOfOursIsNotOverwritten) {
+  SwappedIn();
+  MarkCrashed();
+  Put(L"update\\failed\\0.0.9\\nevr-runtime.dll", "an older failed release");
+  RunStart();
+  ExpectRolledBack();
+  EXPECT_FALSE(Exists(update_ + L"\\failed\\0.0.9")) << "one failed generation is kept";
+}
+
+// Q1: a staged release waits while one is pending; it would move an unconfirmed release over the last confirmed one.
+TEST_F(HostUpdateRollback, Q1_AStagedReleaseWaitsWhileAReleaseIsPending) {
+  SwappedIn();
+  Stage("1.3.0", {{"nevr-runtime.dll", new_runtime_}});
+  const Start next = RunStart();
+  EXPECT_EQ(next.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(next.result.pending);
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_) << "the pending release stays";
+  EXPECT_EQ(Get(L"update\\previous\\7.7.7\\nevr-runtime.dll"), old_runtime_) << "the last confirmed release is not deleted";
+  EXPECT_TRUE(Exists(update_ + L"\\staged.json")) << "and the staged one stays for a later start";
+  bool deferred = false;
+  for (const nlohmann::json& record : SwapRecords(next.records)) {
+    if (record.value("outcome", "") == "deferred" && record.value("reason", "") == "release_pending") deferred = true;
+  }
+  EXPECT_TRUE(deferred);
+}
+
+// A release the host rolled back is not offered again: the same version and runtime staged anyway is dropped.
+TEST_F(HostUpdateRollback, AStagedReleaseThatWasQuarantinedIsDroppedAndNeverSwappedIn) {
+  OldReleaseInTheRootAndANewOneStaged();
+  nlohmann::json state = ReadJson(update_ + L"\\state.json");
+  state["quarantine"] = nlohmann::json::array(
+      {{{"version", "1.2.3"}, {"runtime_sha256", Sha256Hex(new_runtime_)}, {"reason", "crashed"}, {"time", "2026-11-05T00:00:00Z"}}});
+  WriteState(state);
+  const Start start = RunStart();
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  EXPECT_FALSE(start.result.pending);
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), old_runtime_);
+  EXPECT_FALSE(Exists(update_ + L"\\staged.json"));
+  EXPECT_FALSE(Exists(update_ + L"\\pending.json"));
+  const auto records = SwapRecords(start.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("outcome", ""), "discarded");
+  EXPECT_EQ(records[0].value("reason", ""), "quarantined");
+  EXPECT_FALSE(ReadJson(update_ + L"\\state.json").contains("discards")) << "a dropped release is not a discard";
+}
+
+// A pending.json that names a runtime other than the one in the root is stale: the host moves no file it did not place.
+TEST_F(HostUpdateRollback, APendingRecordForARuntimeThatIsNotInTheRootIsDroppedAndNothingMoves) {
+  SwappedIn();
+  MarkCrashed();
+  Put(L"nevr-runtime.dll", RuntimeNamed("9.9.9"));  // someone put another runtime there
+  const std::string other = Get(L"nevr-runtime.dll");
+  const Start next = RunStart();
+  EXPECT_EQ(next.result.action, UpdateAction::kLoad);
+  EXPECT_FALSE(next.result.pending);
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), other);
+  EXPECT_FALSE(Exists(update_ + L"\\pending.json"));
+  EXPECT_FALSE(Exists(update_ + L"\\crashed"));
+  EXPECT_EQ(Get(L"update\\previous\\7.7.7\\nevr-runtime.dll"), old_runtime_) << "the previous generation is left alone";
+  const auto records = RollbackRecords(next.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("outcome", ""), "discarded");
+  EXPECT_EQ(records[0].value("reason", ""), "pending_stale");
+}
+
+TEST_F(HostUpdateRollback, APendingRecordTheHostCannotParseIsDroppedAndOneItCannotReadIsLeftAlone) {
+  SwappedIn();
+  Put(L"update\\pending.json", "{\"to\": {\"version\": \"..\\\\..\\\\x\", \"sha256\": \"zz\"}}");
+  Start next = RunStart();
+  EXPECT_EQ(next.result.action, UpdateAction::kLoad);
+  EXPECT_FALSE(Exists(update_ + L"\\pending.json"));
+  auto records = RollbackRecords(next.records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].value("reason", ""), "bad_pending");
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_) << "nothing moved";
+
+  RemoveTree(root_);
+  ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+  SwappedIn();
+  MarkCrashed();
+  auto before = Tree(root_);
+  const nlohmann::json pending_before = Pending();
+  before.erase("update\\pending.json");  // the held file cannot be read by the comparison either; it is compared below
+  {
+    Held held(update_ + L"\\pending.json", 0);
+    ASSERT_TRUE(held.ok());
+    next = RunStart();
+    EXPECT_EQ(next.result.action, UpdateAction::kLoad);
+    auto after = Tree(root_);
+    after.erase("update\\pending.json");
+    EXPECT_EQ(after, before) << "a record another program holds is neither judged nor changed";
+    records = RollbackRecords(next.records);
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].value("outcome", ""), "deferred");
+    EXPECT_EQ(records[0].value("reason", ""), "pending_unreadable");
+    EXPECT_GT(records[0].value("win32_error", 0u), 0u);
+  }
+  EXPECT_EQ(Pending(), pending_before) << "and the record itself is as it was";
+}
+
+// A restored file that is gone again when the rollback is completed (a kill, then a player removing it) is skipped, not
+// a failed move, and is not recorded as owned (a path with no sha256 would make state.json unusable).
+TEST_F(HostUpdateRollback, ACompletedRollbackSkipsARestoredFileThatIsGoneAndOwnsOnlyWhatIsThere) {
+  SwappedIn();
+  nlohmann::json journal = {{"kind", "rollback"}, {"from", "1.2.3"}, {"to", "7.7.7"}, {"phase", "in"},
+                            {"out", {"nevr-runtime.dll", "plugins/example.dll"}},
+                            {"in", {"nevr-runtime.dll", "plugins/example.dll"}},
+                            {"failed_sha256", Sha256Hex(new_runtime_)}, {"reason", "crashed"}};
+  // The state a kill left after the failed files moved out and the runtime came back; the plugin is gone from both places.
+  Put(L"update\\failed\\1.2.3\\nevr-runtime.dll", new_runtime_);
+  Put(L"nevr-runtime.dll", old_runtime_);
+  DeleteFileW((root_ + L"\\plugins\\example.dll").c_str());
+  DeleteFileW((update_ + L"\\previous\\7.7.7\\plugins\\example.dll").c_str());
+  Put(L"update\\swap.json", journal.dump());
+  const Start next = RunStart();
+  EXPECT_EQ(next.result.action, UpdateAction::kLoad);
+  EXPECT_FALSE(Exists(update_ + L"\\swap.json"));
+  EXPECT_FALSE(Exists(update_ + L"\\pending.json"));
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), old_runtime_);
+  const nlohmann::json state = ReadJson(update_ + L"\\state.json");
+  EXPECT_EQ(state["owned"], nlohmann::json::array({{{"path", "nevr-runtime.dll"}, {"sha256", Sha256Hex(old_runtime_)}}}))
+      << state.dump();
+  ASSERT_EQ(state["quarantine"].size(), 1u) << state.dump();
+  EXPECT_EQ(Outcomes(next.records), std::vector<std::string>{"recovered"});
+}
+
+TEST_F(HostUpdateRollback, F22_ARollbackJournalWithoutItsFailedReleaseOrAReasonIsNotExecuted) {
+  SwappedIn();
+  const nlohmann::json whole = {{"kind", "rollback"}, {"from", "1.2.3"}, {"to", "7.7.7"}, {"phase", "out"},
+                                {"out", {"nevr-runtime.dll"}}, {"in", {"nevr-runtime.dll"}},
+                                {"failed_sha256", Sha256Hex(new_runtime_)}, {"reason", "crashed"}};
+  for (const char* broken : {"failed_sha256", "reason"}) {
+    SCOPED_TRACE(broken);
+    nlohmann::json journal = whole;
+    journal.erase(broken);
+    Put(L"update\\swap.json", journal.dump());
+    const auto before = Tree(root_);
+    const Start next = RunStart();
+    EXPECT_EQ(next.result.action, UpdateAction::kStop);
+    ASSERT_NE(next.result.reason, nullptr);
+    EXPECT_STREQ(next.result.reason, "bad_journal");
+    EXPECT_EQ(Tree(root_), before);
+  }
+  for (const nlohmann::json& bad : {nlohmann::json{{"reason", "Crashed Hard"}}, nlohmann::json{{"failed_sha256", "xyz"}}}) {
+    nlohmann::json journal = whole;
+    journal.update(bad);
+    Put(L"update\\swap.json", journal.dump());
+    EXPECT_EQ(RunStart().result.action, UpdateAction::kStop) << bad.dump();
+  }
+}
+
+// The first failure is the cause that stays: a second mark does not replace it.
+TEST_F(HostUpdateRollback, TheFirstFailureMarkedOnAPendingReleaseIsTheOneThatStays) {
+  SwappedIn();
+  BootstrapDiagnostics diagnostics;
+  const std::wstring host_dir = scratch_ + L"\\";
+  diagnostics.PrepareForTest(local_.c_str(), host_dir.c_str());
+  UpdateLock lock;
+  EXPECT_TRUE(nevr_host::MarkPendingFailed(runtime_path_.c_str(), diagnostics, lock, "abi_rejected"));
+  EXPECT_EQ(Pending().value("failed_reason", ""), "abi_rejected");
+  EXPECT_TRUE(nevr_host::MarkPendingFailed(runtime_path_.c_str(), diagnostics, lock, "init_failed"));
+  EXPECT_EQ(Pending().value("failed_reason", ""), "abi_rejected") << "the first cause stays";
+  EXPECT_FALSE(lock.Held()) << "the lock is not kept";
+}
+
+// ---- the loader: R1 in the same start, and the mark for the next ------------------------------------------------
+
+// F9: the new runtime never ran (the verifier refuses it): the previous one is put back and the game starts on it.
+TEST_F(HostUpdateRollback, F9_ARefusedPendingRuntimeIsReplacedByThePreviousOneInTheSameStart) {
+  PendingReleaseThatTheVerifierRefuses();
+  const LoadedStart run = LoadAtStart(ValidContext());
+  EXPECT_EQ(run.result.outcome, nevr_host::RuntimeLoadOutcome::kLoaded) << run.result.OutcomeName();
+  if (run.result.module != nullptr) FreeLibrary(run.result.module);
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_) << "the previous release is in the root and was loaded";
+  EXPECT_EQ(Get(L"plugins\\example.dll"), new_plugin_);
+  EXPECT_EQ(Get(L"update\\failed\\1.2.3\\nevr-runtime.dll"), bad_runtime_);
+  EXPECT_FALSE(Exists(update_ + L"\\pending.json"));
+  const nlohmann::json state = ReadJson(update_ + L"\\state.json");
+  ASSERT_EQ(state["quarantine"].size(), 1u) << state.dump();
+  EXPECT_EQ(state["quarantine"][0].value("runtime_sha256", ""), Sha256Hex(bad_runtime_));
+  EXPECT_EQ(state["quarantine"][0].value("reason", ""), "runtime_refused");
+  // The second verdict is its own versions record, with update_rollback between the two (ADR 0024, section 8).
+  EXPECT_EQ(Events(run.records), (std::vector<std::string>{"update_trial", "versions", "runtime_load", "update_rollback",
+                                                          "versions", "runtime_load"}));
+  const auto rollbacks = RollbackRecords(run.records);
+  ASSERT_EQ(rollbacks.size(), 1u);
+  EXPECT_EQ(rollbacks[0].value("mode", ""), "in_process");
+  EXPECT_EQ(rollbacks[0].value("reason", ""), "runtime_refused");
+  EXPECT_EQ(rollbacks[0].value("outcome", ""), "rolled_back");
+  EXPECT_EQ(run.records[0].value("outcome", ""), "counted") << "the start that loaded the pending release was its second try";
+  EXPECT_EQ(run.records[2].value("outcome", ""), "runtime_refused");
+  EXPECT_EQ(run.records[5].value("outcome", ""), "loaded");
+}
+
+TEST_F(HostUpdateRollback, F9_ARuntimeThatIsMissingFromThePendingReleaseIsReplacedToo) {
+  PendingReleaseThatTheVerifierRefuses();
+  DeleteFileW(runtime_path_.c_str());
+  const LoadedStart run = LoadAtStart(ValidContext());
+  if (run.result.module != nullptr) FreeLibrary(run.result.module);
+  EXPECT_EQ(run.result.outcome, nevr_host::RuntimeLoadOutcome::kLoaded) << run.result.OutcomeName();
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_);
+  const auto rollbacks = RollbackRecords(run.records);
+  ASSERT_EQ(rollbacks.size(), 1u);
+  EXPECT_EQ(rollbacks[0].value("reason", ""), "runtime_absent");
+}
+
+TEST_F(HostUpdateRollback, F13_AnInProcessRollbackWithNothingToRestoreStopsTheStartWithTheCause) {
+  PendingReleaseThatTheVerifierRefuses();
+  DeleteFileW((update_ + L"\\previous\\7.7.7\\nevr-runtime.dll").c_str());
+  const LoadedStart run = LoadAtStart(ValidContext());
+  EXPECT_EQ(run.result.outcome, nevr_host::RuntimeLoadOutcome::kUpdateBlocked);
+  ASSERT_NE(run.result.update_reason, nullptr);
+  EXPECT_STREQ(run.result.update_reason, "no_previous");
+  EXPECT_EQ(run.result.module, nullptr) << "nothing it cannot verify is loaded";
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), bad_runtime_) << "the root is as it was";
+  EXPECT_EQ(Outcomes(run.records), std::vector<std::string>{}) << "update_swap records only; the stop is the rollback's";
+  const auto rollbacks = RollbackRecords(run.records);
+  ASSERT_EQ(rollbacks.size(), 1u);
+  EXPECT_EQ(rollbacks[0].value("outcome", ""), "failed");
+  EXPECT_EQ(rollbacks[0].value("reason", ""), "no_previous");
+}
+
+// F10 end to end: the swapped runtime is mapped and its initialize refuses the host (a zeroed context stands in for an
+// ABI the runtime cannot take): the start fails as it does today, the release is marked, the next start puts it back.
+TEST_F(HostUpdateRollback, F10_AMappedRuntimeThatFailsIsMarkedAndTheNextStartPutsThePreviousOneBack) {
+  OldReleaseInTheRootAndANewOneStaged();
+  const NevrHostContext refused{};
+  const LoadedStart run = LoadAtStart(refused);
+  EXPECT_EQ(run.result.outcome, nevr_host::RuntimeLoadOutcome::kInitFailed);
+  EXPECT_TRUE(run.result.update_failed) << "the stop notice says the release was updated, failed, and comes back";
+  ASSERT_NE(run.result.module, nullptr);
+  EXPECT_EQ(Pending().value("failed_reason", ""), "init_failed");
+  EXPECT_EQ(Pending().value("boot_attempts", 0), 1);
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_) << "this start does not touch the mapped file";
+  const auto scheduled = RollbackRecords(run.records);
+  ASSERT_EQ(scheduled.size(), 1u);
+  EXPECT_EQ(scheduled[0].value("mode", ""), "next_start");
+  EXPECT_EQ(scheduled[0].value("outcome", ""), "scheduled");
+  EXPECT_EQ(scheduled[0].value("reason", ""), "init_failed");
+  EXPECT_FALSE(Exists(update_ + L"\\swap.json"));
+
+  FreeLibrary(run.result.module);  // the process that ends takes the mapping with it
+  const Start next = RunStart();
+  EXPECT_EQ(next.result.action, UpdateAction::kLoad);
+  ExpectRolledBack();
+  const auto done = RollbackRecords(next.records);
+  ASSERT_EQ(done.size(), 1u);
+  EXPECT_EQ(done[0].value("reason", ""), "init_failed");
+  EXPECT_EQ(done[0].value("outcome", ""), "rolled_back");
+}
+
+TEST_F(HostUpdateRollback, AReleaseThatStartsIsLeftPendingForTheRuntimeToConfirm) {
+  OldReleaseInTheRootAndANewOneStaged();
+  const LoadedStart run = LoadAtStart(ValidContext());
+  EXPECT_EQ(run.result.outcome, nevr_host::RuntimeLoadOutcome::kLoaded) << run.result.OutcomeName();
+  EXPECT_FALSE(run.result.update_failed);
+  if (run.result.module != nullptr) FreeLibrary(run.result.module);
+  EXPECT_TRUE(Exists(update_ + L"\\pending.json")) << "only the runtime's UpdateConfirm removes it";
+  EXPECT_TRUE(Pending()["failed_reason"].is_null());
+  EXPECT_TRUE(RollbackRecords(run.records).empty());
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_);
+}
+
+// ---- review of #2204: records that must survive a held file, refusals that must fire, records for every start ----------
+
+// A file another program holds open only while the swap finishes (a virus scanner, a backup tool): `HoldWhile` opens
+// `hold` with share mode 0 the first time the step seam is called with `when` there, and keeps it until Release.
+std::wstring g_hold_path;
+std::wstring g_hold_when;
+HANDLE g_hold_handle = INVALID_HANDLE_VALUE;
+
+bool HoldAt(int step) {
+  if (g_hold_handle == INVALID_HANDLE_VALUE && Exists(g_hold_when) && Exists(g_hold_path)) {
+    g_hold_handle = CreateFileW(g_hold_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  }
+  return KillAt(step);
+}
+
+// The same, once the journal at `g_hold_when` says the swap reached its cleanup.
+bool HoldAtDone(int step) {
+  if (g_hold_handle == INVALID_HANDLE_VALUE && ReadAll(g_hold_when).find("\"phase\":\"done\"") != std::string::npos &&
+      Exists(g_hold_path)) {
+    g_hold_handle = CreateFileW(g_hold_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  }
+  return KillAt(step);
+}
+
+bool ReleaseHold() {
+  const bool held = g_hold_handle != INVALID_HANDLE_VALUE;
+  if (held) CloseHandle(g_hold_handle);
+  g_hold_handle = INVALID_HANDLE_VALUE;
+  nevr_host::SetUpdateStepHookForTest(&KillAt);
+  return held;
+}
+
+// The pending record is built from facts the swap verified, not from a re-read that can fail: a previous runtime held
+// open while the swap finishes is still recorded, so the rollback finds it (review finding 1).
+TEST_F(HostUpdateRollback, APreviousRuntimeHeldWhileTheSwapFinishesIsStillPutBack) {
+  OldReleaseInTheRootAndANewOneStaged();
+  g_hold_path = update_ + L"\\previous\\7.7.7\\nevr-runtime.dll";
+  g_hold_when = runtime_path_;
+  nevr_host::SetUpdateStepHookForTest(&HoldAt);
+  const Start swap = RunStart();
+  ASSERT_TRUE(ReleaseHold()) << "the hold never took";
+  ASSERT_EQ(Outcomes(swap.records), std::vector<std::string>{"swapped"});
+  EXPECT_EQ(Get(L"update\\previous\\7.7.7\\nevr-runtime.dll"), old_runtime_);
+  EXPECT_TRUE(Pending()["from"].is_object()) << "pending.json: " << Pending().dump();
+  MarkCrashed();
+  const Start next = RunStart();
+  EXPECT_EQ(next.result.action, UpdateAction::kLoad) << (next.result.reason != nullptr ? next.result.reason : "");
+  ExpectRolledBack();
+}
+
+TEST_F(HostUpdateRollback, ARuntimeHeldWhileTheSwapFinishesIsStillOnTrialWithItsSha256) {
+  OldReleaseInTheRootAndANewOneStaged();
+  g_hold_path = runtime_path_;
+  g_hold_when = update_ + L"\\previous\\7.7.7\\nevr-runtime.dll";
+  nevr_host::SetUpdateStepHookForTest(&HoldAt);
+  const Start swap = RunStart();
+  ASSERT_TRUE(ReleaseHold()) << "the hold never took";
+  ASSERT_EQ(Outcomes(swap.records), std::vector<std::string>{"swapped"});
+  EXPECT_EQ(Pending()["to"].value("sha256", ""), Sha256Hex(new_runtime_)) << "pending.json: " << Pending().dump();
+  const Start second = RunStart();
+  EXPECT_EQ(second.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(Exists(update_ + L"\\pending.json"));
+  for (const nlohmann::json& record : RollbackRecords(second.records)) {
+    EXPECT_NE(record.value("reason", ""), "bad_pending") << record.dump();
+  }
+  MarkCrashed();
+  RunStart();
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), old_runtime_) << "a crash of the pending release is rolled back";
+}
+
+// A swapped-in file held open while the cleanup runs is not dropped from `owned` as if it were gone.
+TEST_F(HostUpdateRollback, APluginHeldWhileTheSwapFinishesIsStillOwned) {
+  OldReleaseInTheRootAndANewOneStaged();
+  g_hold_path = root_ + L"\\plugins\\example.dll";
+  g_hold_when = update_ + L"\\swap.json";
+  nevr_host::SetUpdateStepHookForTest(&HoldAtDone);
+  const Start swap = RunStart();
+  ASSERT_TRUE(ReleaseHold()) << "the hold never took";
+  ASSERT_EQ(Outcomes(swap.records), std::vector<std::string>{"swapped"});
+  const nlohmann::json state = ReadJson(update_ + L"\\state.json");
+  bool plugin_owned = false;
+  for (const nlohmann::json& entry : state["owned"]) {
+    if (entry.value("path", "") == "plugins/example.dll") plugin_owned = entry.value("sha256", "") == Sha256Hex(new_plugin_);
+  }
+  EXPECT_TRUE(plugin_owned) << state.dump();
+}
+
+// RollBackInProcess's doc says a stop that leaves the failed release in the root marks it, so the next start tries
+// again: every stop does (review finding 5).
+TEST_F(HostUpdateRollback, AnInProcessRollbackThatStopsMarksTheFailedRelease) {
+  for (const char* why : {"no_previous", "previous_unverified", "rollback_blocked"}) {
+    SCOPED_TRACE(why);
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    PendingReleaseThatTheVerifierRefuses();
+    if (std::string(why) == "no_previous") DeleteFileW((update_ + L"\\previous\\7.7.7\\nevr-runtime.dll").c_str());
+    if (std::string(why) == "previous_unverified") Put(L"update\\previous\\7.7.7\\nevr-runtime.dll", bad_runtime_);
+    if (std::string(why) == "rollback_blocked") {
+      ASSERT_FALSE(LinkAway(L"update\\previous\\7.7.7\\plugins").empty());
+    }
+    const LoadedStart run = LoadAtStart(ValidContext());
+    ASSERT_EQ(run.result.outcome, nevr_host::RuntimeLoadOutcome::kUpdateBlocked);
+    ASSERT_NE(run.result.update_reason, nullptr);
+    EXPECT_STREQ(run.result.update_reason, why);
+    EXPECT_EQ(Pending().value("failed_reason", nlohmann::json()), nlohmann::json("runtime_refused")) << Pending().dump();
+  }
+}
+
+// A start on a pending release says which try it is, or why it is not one (ADR 0024, requirement 4).
+TEST_F(HostUpdateRollback, ATrialStartSaysWhichTryItIsAndWhyAnotherIsNotOne) {
+  SwappedIn();
+  const Start second = RunStart();
+  ASSERT_EQ(Pending().value("boot_attempts", 0), 2);
+  std::vector<nlohmann::json> trials;
+  for (const nlohmann::json& record : second.records) {
+    if (record.value("event", "") == "update_trial") trials.push_back(record);
+  }
+  ASSERT_EQ(trials.size(), 1u) << "boot_attempts went 1 -> 2 on disk with no record";
+  EXPECT_EQ(trials[0].value("outcome", ""), "counted");
+  EXPECT_EQ(trials[0].value("boot_attempts", 0), 2);
+  EXPECT_EQ(trials[0].value("release", ""), "1.2.3");
+
+  const HMODULE mapped = LoadLibraryExW(runtime_path_.c_str(), nullptr, 0);
+  ASSERT_NE(mapped, nullptr) << GetLastError();
+  nlohmann::json pending = Pending();
+  pending["boot_attempts"] = 1;
+  SetPending(pending);
+  const Start beside = RunStart();
+  FreeLibrary(mapped);
+  std::vector<nlohmann::json> beside_trials;
+  for (const nlohmann::json& record : beside.records) {
+    if (record.value("event", "") == "update_trial") beside_trials.push_back(record);
+  }
+  ASSERT_EQ(beside_trials.size(), 1u);
+  EXPECT_EQ(beside_trials[0].value("outcome", ""), "not_counted");
+  EXPECT_EQ(beside_trials[0].value("reason", ""), "runtime_in_use");
+  EXPECT_EQ(beside_trials[0].value("boot_attempts", 0), 1);
+}
+
+TEST_F(HostUpdateRollback, TheStartThatFinishesASwapsCleanupSaysItIsNotATry) {
+  SwappedIn();
+  Put(L"update\\swap.json", Journal("done"));
+  const Start start = RunStart();
+  std::vector<nlohmann::json> trials;
+  for (const nlohmann::json& record : start.records) {
+    if (record.value("event", "") == "update_trial") trials.push_back(record);
+  }
+  ASSERT_EQ(trials.size(), 1u);
+  EXPECT_EQ(trials[0].value("outcome", ""), "not_counted");
+  EXPECT_EQ(trials[0].value("reason", ""), "swap_finished");
+  EXPECT_EQ(Pending().value("boot_attempts", 0), 1);
+}
+
+// The mark of a failure that cannot be moved reports whether it was made (review finding 4).
+TEST_F(HostUpdateRollback, AMarkThatCannotBeWrittenWhileTheRuntimeIsInUseIsReportedAsNotMade) {
+  PendingReleaseThatTheVerifierRefuses();
+  const HMODULE mapped = LoadLibraryExW((update_ + L"\\previous\\7.7.7\\nevr-runtime.dll").c_str(), nullptr, 0);
+  ASSERT_NE(mapped, nullptr);
+  Put(L"nevr-runtime.dll", bad_runtime_);
+  // The pending runtime is mapped by "another process" (this one): only a real image mapping refuses the write-open, so
+  // map the unsigned stand-in itself.
+  FreeLibrary(mapped);
+  const HMODULE runtime = LoadLibraryExW(runtime_path_.c_str(), nullptr, 0);
+  if (runtime == nullptr) GTEST_SKIP() << "the unsigned stand-in cannot be mapped: " << GetLastError();
+  Held held(update_ + L"\\pending.json", FILE_SHARE_READ);  // and the record cannot be rewritten while it is held
+  ASSERT_TRUE(held.ok());
+  BootstrapDiagnostics diagnostics;
+  const std::wstring host_dir = scratch_ + L"\\";
+  diagnostics.PrepareForTest(local_.c_str(), host_dir.c_str());
+  {
+    std::lock_guard<std::mutex> lock(g_records_mutex);
+    g_records.clear();
+  }
+  UpdateLock lock;
+  const UpdateResult stop = nevr_host::RollBackInProcess(runtime_path_.c_str(), diagnostics, lock, "runtime_refused");
+  FreeLibrary(runtime);
+  EXPECT_EQ(stop.action, UpdateAction::kStop);
+  std::lock_guard<std::mutex> guard(g_records_mutex);
+  bool saw = false;
+  for (const nlohmann::json& record : RollbackRecords(g_records)) {
+    if (record.value("reason", "") == "runtime_in_use") {
+      saw = true;
+      EXPECT_TRUE(record.contains("marked")) << record.dump();
+      EXPECT_FALSE(record.value("marked", true)) << record.dump();
+    }
+  }
+  EXPECT_TRUE(saw);
+}
+
+// ---- refusals that must fire (review finding 2) ------------------------------------------------------------------------
+
+class HostUpdateRollbackRefusals : public HostUpdateRollback {
+ protected:
+  std::vector<nlohmann::json> RecordsOfRollback(const Start& start) const { return RollbackRecords(start.records); }
+
+  // Runs one start of a root that needs a rollback and returns it; the root is as SwappedIn + MarkCrashed left it, with
+  // `setup` applied in between.
+  Start CrashedStartAfter(const std::function<void()>& setup) {
+    SwappedIn();
+    MarkCrashed();
+    setup();
+    return RunStart();
+  }
+
+  nlohmann::json OnlyRollbackRecord(const Start& start) {
+    const auto records = RollbackRecords(start.records);
+    EXPECT_EQ(records.size(), 1u);
+    return records.empty() ? nlohmann::json::object() : records[0];
+  }
+};
+
+// U1: a link where the rollback would move files to or from: nothing moves through it, and the pending release loads.
+TEST_F(HostUpdateRollbackRefusals, AFolderTheRollbackWorksInThatIsALinkRefusesTheRollbackAndMovesNothing) {
+  struct Case {
+    const char* label;
+    const wchar_t* link;
+    bool make_real_first;
+    const char* folder;
+  };
+  const Case cases[] = {{"previous version", L"update\\previous\\7.7.7", false, "update/previous/7.7.7"},
+                        {"previous plugins", L"update\\previous\\7.7.7\\plugins", false, "update/previous/7.7.7/plugins"},
+                        {"failed version", L"update\\failed\\1.2.3", true, "update/failed/1.2.3"},
+                        {"failed plugins", L"update\\failed\\1.2.3\\plugins", true, "update/failed/1.2.3/plugins"}};
+  for (const Case& c : cases) {
+    SCOPED_TRACE(c.label);
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    SwappedIn();
+    MarkCrashed();
+    if (c.make_real_first) {
+      Put(L"update\\failed\\1.2.3\\plugins\\keep.txt", "an earlier failed release");
+    }
+    ASSERT_FALSE(LinkAway(c.link).empty());
+    const auto before = Tree(root_);
+    const Start start = RunStart();
+    EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+    EXPECT_TRUE(start.result.pending) << "the pending release loads as it is";
+    EXPECT_EQ(Tree(root_), before) << "nothing moved through the link";
+    const nlohmann::json record = OnlyRollbackRecord(start);
+    EXPECT_EQ(record.value("outcome", ""), "failed");
+    EXPECT_EQ(record.value("reason", ""), "reparse_point");
+    EXPECT_EQ(record.value("folder", ""), c.folder);
+  }
+}
+
+// U2: a file that is not the failed release's where a restored plugin goes is not replaced.
+TEST_F(HostUpdateRollbackRefusals, AStrangersFileWhereARestoredPluginGoesRefusesTheRollbackAndMovesNothing) {
+  const Start start = CrashedStartAfter([this] { Put(L"plugins\\example.dll", "a plugin a player put over the release's"); });
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(start.result.pending);
+  EXPECT_EQ(Get(L"plugins\\example.dll"), "a plugin a player put over the release's");
+  EXPECT_EQ(Get(L"nevr-runtime.dll"), new_runtime_);
+  EXPECT_EQ(Get(L"update\\previous\\7.7.7\\plugins\\example.dll"), old_plugin_);
+  const nlohmann::json record = OnlyRollbackRecord(start);
+  EXPECT_EQ(record.value("outcome", ""), "failed");
+  EXPECT_EQ(record.value("reason", ""), "foreign_file");
+  EXPECT_EQ(record.value("path", ""), "plugins/example.dll");
+}
+
+// U3: an interrupted rollback whose folders became links is not completed through them; at done every file is in place.
+TEST_F(HostUpdateRollbackRefusals, AnInterruptedRollbackWhoseFolderBecameALinkIsNotCompletedThroughIt) {
+  for (const char* phase : {"out", "in", "done"}) {
+    SCOPED_TRACE(phase);
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    SwappedIn();
+    nlohmann::json journal = {{"kind", "rollback"}, {"from", "1.2.3"}, {"to", "7.7.7"}, {"phase", phase},
+                              {"out", {"nevr-runtime.dll", "plugins/example.dll"}},
+                              {"in", {"nevr-runtime.dll", "plugins/example.dll"}},
+                              {"failed_sha256", Sha256Hex(new_runtime_)}, {"reason", "crashed"}};
+    Put(L"update\\swap.json", journal.dump());
+    ASSERT_FALSE(LinkAway(L"update\\previous\\7.7.7").empty());
+    const auto before = Tree(root_);
+    const Start start = RunStart();
+    if (std::string(phase) == "done") {
+      EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+    } else {
+      EXPECT_EQ(start.result.action, UpdateAction::kStop);
+      ASSERT_NE(start.result.reason, nullptr);
+      EXPECT_STREQ(start.result.reason, "reparse_point");
+    }
+    EXPECT_EQ(Tree(root_), before) << "nothing moved through the link";
+    bool blocked = false;
+    for (const nlohmann::json& record : SwapRecords(start.records)) {
+      if (record.value("outcome", "") == "blocked" && record.value("reason", "") == "reparse_point") {
+        blocked = true;
+        EXPECT_EQ(record.value("kind", ""), "rollback");
+        EXPECT_EQ(record.value("folder", ""), "update/previous/7.7.7");
+      }
+    }
+    EXPECT_TRUE(blocked);
+  }
+}
+
+TEST_F(HostUpdateRollbackRefusals, AJournalThatCannotBeWrittenRefusesTheRollbackAndLeavesTheRootAsItWas) {
+  SwappedIn();
+  MarkCrashed();
+  // A directory where the journal's temporary file goes: the write fails with an error, not silently.
+  MakeDirs(update_ + L"\\swap.json.tmp-" + std::to_wstring(GetCurrentProcessId()));
+  const auto before = Tree(root_);
+  const Start start = RunStart();
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(start.result.pending);
+  EXPECT_EQ(Tree(root_), before);
+  const nlohmann::json record = OnlyRollbackRecord(start);
+  EXPECT_EQ(record.value("outcome", ""), "failed");
+  EXPECT_EQ(record.value("reason", ""), "journal_write_failed");
+  EXPECT_GT(record.value("win32_error", 0u), 0u);
+}
+
+TEST_F(HostUpdateRollbackRefusals, ACountThatCannotBeWrittenIsRecordedWithTheErrorAndTheReleaseStillLoads) {
+  SwappedIn();
+  MakeDirs(update_ + L"\\pending.json.tmp-" + std::to_wstring(GetCurrentProcessId()));
+  const Start start = RunStart();
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(start.result.pending);
+  EXPECT_EQ(Pending().value("boot_attempts", 0), 1) << "the count was not written";
+  bool saw = false;
+  for (const nlohmann::json& record : RollbackRecords(start.records)) {
+    if (record.value("reason", "") == "pending_write_failed") {
+      saw = true;
+      EXPECT_EQ(record.value("outcome", ""), "blocked");
+      EXPECT_GT(record.value("win32_error", 0u), 0u);
+    }
+  }
+  EXPECT_TRUE(saw);
+  // The start also says it was not a try, and why.
+  bool trial = false;
+  for (const nlohmann::json& record : start.records) {
+    if (record.value("event", "") == "update_trial") {
+      trial = true;
+      EXPECT_EQ(record.value("outcome", ""), "not_counted") << record.dump();
+      EXPECT_EQ(record.value("reason", ""), "pending_write_failed") << record.dump();
+      EXPECT_GT(record.value("win32_error", 0u), 0u) << record.dump();
+      EXPECT_EQ(record.value("boot_attempts", 0), 1) << record.dump();
+    }
+  }
+  EXPECT_TRUE(trial) << "a count that could not be written is reported as a trial that was not counted";
+}
+
+// A start whose pending release needs no rollback, with a runtime the host cannot open for write, is not a try either, and
+// says why.
+TEST_F(HostUpdateRollbackRefusals, AStartWhoseRuntimeCannotBeOpenedForWriteIsNotCountedAndSaysWhy) {
+  SwappedIn();
+  ASSERT_NE(SetFileAttributesW(runtime_path_.c_str(), FILE_ATTRIBUTE_READONLY), FALSE);
+  const Start start = RunStart();
+  SetFileAttributesW(runtime_path_.c_str(), FILE_ATTRIBUTE_NORMAL);
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(start.result.pending);
+  EXPECT_EQ(Pending().value("boot_attempts", 0), 1) << "not counted";
+  std::vector<nlohmann::json> trials;
+  for (const nlohmann::json& record : start.records) {
+    if (record.value("event", "") == "update_trial") trials.push_back(record);
+  }
+  ASSERT_EQ(trials.size(), 1u);
+  EXPECT_EQ(trials[0].value("outcome", ""), "not_counted");
+  EXPECT_EQ(trials[0].value("reason", ""), "runtime_not_writable");
+  EXPECT_GT(trials[0].value("win32_error", 0u), 0u);
+  EXPECT_EQ(trials[0].value("boot_attempts", 0), 1);
+}
+
+// The mark of a failure that stays in the root cannot be written: the in-process rollback says so (the stop is the same).
+TEST_F(HostUpdateRollbackRefusals, AnInProcessStopWhoseMarkCannotBeWrittenSaysSo) {
+  PendingReleaseThatTheVerifierRefuses();
+  DeleteFileW((update_ + L"\\previous\\7.7.7\\nevr-runtime.dll").c_str());
+  MakeDirs(update_ + L"\\pending.json.tmp-" + std::to_wstring(GetCurrentProcessId()));  // every write of pending.json fails
+  const LoadedStart run = LoadAtStart(ValidContext());
+  ASSERT_EQ(run.result.outcome, nevr_host::RuntimeLoadOutcome::kUpdateBlocked);
+  ASSERT_NE(run.result.update_reason, nullptr);
+  EXPECT_STREQ(run.result.update_reason, "no_previous");
+  EXPECT_TRUE(Pending()["failed_reason"].is_null()) << "the mark was not made";
+  bool saw = false;
+  for (const nlohmann::json& record : RollbackRecords(run.records)) {
+    if (record.value("mode", "") == "in_process" && record.value("reason", "") == "pending_write_failed") {
+      saw = true;
+      EXPECT_EQ(record.value("outcome", ""), "failed");
+      EXPECT_GT(record.value("win32_error", 0u), 0u);
+    }
+  }
+  EXPECT_TRUE(saw) << "the failed mark is in the log";
+}
+
+TEST_F(HostUpdateRollbackRefusals, ARuntimeTheHostCannotOpenForWriteRefusesTheRollbackWithTheError) {
+  SwappedIn();
+  MarkCrashed();
+  ASSERT_NE(SetFileAttributesW(runtime_path_.c_str(), FILE_ATTRIBUTE_READONLY), FALSE);
+  const auto before = Tree(root_);
+  const Start start = RunStart();
+  SetFileAttributesW(runtime_path_.c_str(), FILE_ATTRIBUTE_NORMAL);
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(start.result.pending);
+  EXPECT_EQ(Tree(root_), before);
+  const nlohmann::json record = OnlyRollbackRecord(start);
+  EXPECT_EQ(record.value("outcome", ""), "blocked");
+  EXPECT_EQ(record.value("reason", ""), "runtime_not_writable");
+  EXPECT_EQ(record.value("cause", ""), "crashed");
+  EXPECT_GT(record.value("win32_error", 0u), 0u);
+}
+
+// A previous file another program holds open cannot be read for the journal: nothing moves, and the pending release loads.
+TEST_F(HostUpdateRollbackRefusals, APreviousFileTheHostCannotReadRefusesTheRollbackBeforeAnythingMoves) {
+  SwappedIn();
+  MarkCrashed();
+  auto before = Tree(root_);
+  before.erase("update\\previous\\7.7.7\\plugins\\example.dll");  // the comparison cannot read the held file either
+  Start start;
+  {
+    Held held(update_ + L"\\previous\\7.7.7\\plugins\\example.dll", 0);
+    ASSERT_TRUE(held.ok());
+    start = RunStart();
+    auto after = Tree(root_);
+    after.erase("update\\previous\\7.7.7\\plugins\\example.dll");
+    EXPECT_EQ(after, before) << "nothing moved";
+  }
+  EXPECT_EQ(start.result.action, UpdateAction::kLoad);
+  EXPECT_TRUE(start.result.pending);
+  const nlohmann::json record = OnlyRollbackRecord(start);
+  EXPECT_EQ(record.value("outcome", ""), "failed");
+  EXPECT_EQ(record.value("reason", ""), "previous_unreadable");
+  EXPECT_EQ(record.value("path", ""), "plugins/example.dll");
+  // Released, the next start rolls back.
+  RunStart();
+  ExpectRolledBack();
+}
+
+// A cleanup from a journal that carries no sha256 (an older one) reads the files, and a file it cannot read leaves the
+// cleanup for the next start: it writes no pending record that says "no previous" or names no release.
+TEST_F(HostUpdateRollbackRefusals, ACleanupFromAJournalWithoutShasDoesNotWritePendingFromAFileItCannotRead) {
+  SwappedIn();
+  DeleteFileW((update_ + L"\\pending.json").c_str());
+  Put(L"update\\swap.json", Journal("done"));
+  {
+    Held held(update_ + L"\\previous\\7.7.7\\nevr-runtime.dll", 0);
+    ASSERT_TRUE(held.ok());
+    RunStart();
+    EXPECT_FALSE(Exists(update_ + L"\\pending.json")) << "not written from a previous runtime that only looked missing";
+    EXPECT_TRUE(Exists(update_ + L"\\swap.json")) << "the next start finishes it";
+  }
+  RunStart();
+  EXPECT_FALSE(Exists(update_ + L"\\swap.json"));
+  EXPECT_TRUE(Pending()["from"].is_object()) << Pending().dump();
+  EXPECT_EQ(Pending()["to"].value("sha256", ""), Sha256Hex(new_runtime_));
+}
+
+TEST_F(HostUpdateRollbackRefusals, ACleanupFromAJournalWithoutShasWritesNoPendingRecordForARuntimeThatIsNotThere) {
+  SwappedIn();
+  DeleteFileW((update_ + L"\\pending.json").c_str());
+  DeleteFileW(runtime_path_.c_str());
+  Put(L"update\\swap.json", Journal("done"));
+  RunStart();
+  EXPECT_FALSE(Exists(update_ + L"\\pending.json")) << "a record that cannot name its release is not written";
+  EXPECT_TRUE(Exists(update_ + L"\\swap.json"));
+}
+
+TEST_F(HostUpdateRollbackRefusals, ALockAnotherStartHoldsStopsTheInProcessRollbackAndTheMarkWithTheCause) {
+  PendingReleaseThatTheVerifierRefuses();
+  nevr_host::SetUpdateLockTimingForTest(60, 10);
+  UpdateLock other;
+  ASSERT_TRUE(other.Acquire(update_.c_str(), 1000, 10));
+  BootstrapDiagnostics diagnostics;
+  const std::wstring host_dir = scratch_ + L"\\";
+  diagnostics.PrepareForTest(local_.c_str(), host_dir.c_str());
+  {
+    std::lock_guard<std::mutex> guard(g_records_mutex);
+    g_records.clear();
+  }
+  UpdateLock mine;
+  const UpdateResult stop = nevr_host::RollBackInProcess(runtime_path_.c_str(), diagnostics, mine, "runtime_refused");
+  EXPECT_EQ(stop.action, UpdateAction::kStop);
+  ASSERT_NE(stop.reason, nullptr);
+  EXPECT_STREQ(stop.reason, "lock_timeout");
+  EXPECT_FALSE(nevr_host::MarkPendingFailed(runtime_path_.c_str(), diagnostics, mine, "init_failed"));
+  std::lock_guard<std::mutex> guard(g_records_mutex);
+  int timeouts = 0;
+  for (const nlohmann::json& record : RollbackRecords(g_records)) {
+    if (record.value("reason", "") == "lock_timeout") ++timeouts;
+  }
+  EXPECT_EQ(timeouts, 2) << "both say why they gave up";
+  EXPECT_TRUE(Pending()["failed_reason"].is_null()) << "nothing was written without the lock";
+}
+
+TEST_F(HostUpdateRollbackRefusals, AnInProcessRollbackThatCannotReadTheStateOrThePendingRecordStopsWithThatCause) {
+  for (const char* what : {"state.json", "pending.json"}) {
+    SCOPED_TRACE(what);
+    RemoveTree(root_);
+    ASSERT_NE(CreateDirectoryW(root_.c_str(), nullptr), FALSE);
+    PendingReleaseThatTheVerifierRefuses();
+    BootstrapDiagnostics diagnostics;
+    const std::wstring host_dir = scratch_ + L"\\";
+    diagnostics.PrepareForTest(local_.c_str(), host_dir.c_str());
+    Held held(update_ + L"\\" + Widen(what), 0);
+    ASSERT_TRUE(held.ok());
+    UpdateLock lock;
+    const UpdateResult stop = nevr_host::RollBackInProcess(runtime_path_.c_str(), diagnostics, lock, "runtime_refused");
+    EXPECT_EQ(stop.action, UpdateAction::kStop);
+    ASSERT_NE(stop.reason, nullptr);
+    EXPECT_STREQ(stop.reason, std::string(what) == "state.json" ? "state_unreadable" : "pending_unreadable");
+    held.Close();
+    EXPECT_EQ(Get(L"nevr-runtime.dll"), bad_runtime_) << "nothing moved";
+  }
 }
 
 }  // namespace

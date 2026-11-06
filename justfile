@@ -770,9 +770,11 @@ quest-install *args: build-installer
 
 # The Python tool suite, kept: full output, JUnit XML, the pytest-randomly seed, and a start and an end
 # record in runs.jsonl per run, under $NEVR_TEST_LOG_DIR (default test-runs/tools-tests in the work root, tools/work_root.py).
-# The end record names the failing tests. Exit code is pytest's, except 2 for a record that cannot be kept
-# and 128 + the signal for an interrupt, 130 for CTRL+C (tools/run_tool_tests.py). Args replace the
-# default `-q tools/tests` (#913).
+# The end record names the failing tests, the run's own memory peak and whether the kernel's OOM killer stopped it.
+# The whole suite runs one at a time (a lock in the log directory, waited for up to $NEVR_TEST_LOCK_WAIT_S; a run given
+# test paths takes none) on at most 8 workers by default (#2195). Exit code is pytest's, except 2 for a record that
+# cannot be kept, 75 for a lock not free in time, and 128 + the signal for an interrupt, 130 for CTRL+C
+# (tools/run_tool_tests.py). Args replace the default `-q tools/tests` (#913).
 # Then, whatever the Python run did, the Go tests of tools/ (ADR 0044): build/go-tools/test-go-tools runs the Python
 # command after `--`, then `go test -json` in tools/ (-C tools) with a hermetic environment, keeps its stream as <stem>-go.jsonl beside the
 # run's log, appends go_start and go_end to runs.jsonl, and ends with one line naming each failed half. ARGS go to the
@@ -926,7 +928,7 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     export NEVR_CONFIG_TEST_DIR="$sigfix/nevr-config-tests"
     # The unsigned DLLs the fixtures are made from are CMake targets (src/runtime/tests/sigfix, ADR 0041); the script signs and damages them.
     cmake --build --preset {{ preset }} --target sigfix_dlls
-    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --dll-dir "build/{{ preset }}/bin/sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll" --plugin-dll "build/{{ preset }}/bin/rendezvous/fixtures/good/nevr-runtime.dll"
+    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --dll-dir "build/{{ preset }}/bin/sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll" --plugin-dll "build/{{ preset }}/bin/rendezvous/fixtures/good/nevr-runtime.dll" --plugin-dll "nevr-runtime-b=build/{{ preset }}/bin/rendezvous/fixtures/reenter-init/nevr-runtime.dll"
     export NEVR_SIGFIX_DIR="$sigfix"
     # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept under build/: test_plugin_trust
     # verifies the production pins against it. A failed fetch or a digest that does not match fails the recipe, and

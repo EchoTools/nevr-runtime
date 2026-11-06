@@ -17,6 +17,8 @@
 //     writer's struct_size includes it.
 //       minor 1: NevrRuntimeApi::exports, the runtime's side of the 16 exports the host
 //                publishes under the names plugins resolve from BugSplat64.dll.
+//       minor 2: NevrHostContext::capabilities, what the host can do (bit 0: it performs the staged swap and
+//                rolls back a release that does not start, docs/adr/0024-pc-self-update.md).
 //   - struct_size: the writer's sizeof. It is read before anything past the
 //     16-byte header, so a smaller (older) descriptor is never over-read.
 //
@@ -64,6 +66,10 @@ struct NevrHostContext {
   /// nevr_runtime_abi::HookRecordUsable before registering the bytes with HookGuard.
   std::uint32_t wrapper_hook_bytes_valid;
   std::uint32_t reserved;
+  /// Minor 2. What this host can do, a bit per capability (nevr_runtime_abi::kHostCapabilitySwap). Absent from a
+  /// context whose struct_size ends at `reserved`; read it through nevr_runtime_abi::HostCapabilities, which proves
+  /// the context covers it.
+  std::uint64_t capabilities;
 };
 
 /// The runtime's implementation of the exports BugSplat64.dll publishes for the runtime (minor 1). The host
@@ -121,7 +127,7 @@ namespace nevr_runtime_abi {
 
 inline constexpr char kGetRuntimeApiExport[] = "NEVR_GetRuntimeApi";
 inline constexpr std::uint32_t kMajor = 1;
-inline constexpr std::uint32_t kMinor = 1;
+inline constexpr std::uint32_t kMinor = 2;
 
 /// Smallest struct_size a v1 writer may report: every v1 field present.
 inline constexpr std::uint32_t kRuntimeApiV1Size =
@@ -131,6 +137,13 @@ inline constexpr std::uint32_t kRuntimeApiV1_1Size =
     static_cast<std::uint32_t>(offsetof(NevrRuntimeApi, exports) + sizeof(NevrRuntimeExports));
 inline constexpr std::uint32_t kHostContextV1Size = static_cast<std::uint32_t>(
     offsetof(NevrHostContext, reserved) + sizeof(NevrHostContext::reserved));
+/// Size of a context that carries the capabilities word (minor 2).
+inline constexpr std::uint32_t kHostContextV1_2Size = static_cast<std::uint32_t>(
+    offsetof(NevrHostContext, capabilities) + sizeof(NevrHostContext::capabilities));
+
+/// NevrHostContext::capabilities bit 0: this host performs the staged swap and puts the previous release back when
+/// one does not start (docs/adr/0024-pc-self-update.md, sections 3 and 6). A runtime stages nothing without it.
+inline constexpr std::uint64_t kHostCapabilitySwap = std::uint64_t{1} << 0;
 
 /// Bytes of the host's hook recorded in NevrHostContext::wrapper_hook_bytes.
 inline constexpr std::size_t kHookBytesSize = sizeof(NevrHostContext::wrapper_hook_bytes);
@@ -148,7 +161,9 @@ static_assert(offsetof(NevrHostContext, wrapper_hook_bytes) == 48);
 static_assert(kHookBytesSize == 16);
 static_assert(offsetof(NevrHostContext, wrapper_hook_bytes_valid) == 64);
 static_assert(offsetof(NevrHostContext, reserved) == 68);
-static_assert(sizeof(NevrHostContext) == kHostContextV1Size && kHostContextV1Size == 72);
+static_assert(kHostContextV1Size == 72);
+static_assert(offsetof(NevrHostContext, capabilities) == 72);
+static_assert(sizeof(NevrHostContext) == kHostContextV1_2Size && kHostContextV1_2Size == 80);
 static_assert(offsetof(NevrRuntimeApi, initialize) == 16);
 static_assert(offsetof(NevrRuntimeApi, game_main) == 24);
 static_assert(offsetof(NevrRuntimeApi, exports) == 32);
@@ -222,6 +237,17 @@ inline Status ValidateHostContext(const NevrHostContext* host) noexcept {
   // HookGuard registration would take every runtime fix with it. It is not usable (below).
   if (host->wrapper_hook_bytes_valid > 1) return Status::kInvalidField;
   return Status::kOk;
+}
+
+/// The host's capabilities word, or 0 when the context is absent or its struct_size ends before the word (a host
+/// older than minor 2 can do nothing this word names). Call it on a context ValidateHostContext accepted.
+inline std::uint64_t HostCapabilities(const NevrHostContext* host) noexcept {
+  return host != nullptr && DescriptorCovers(&host->header, kHostContextV1_2Size) ? host->capabilities : 0;
+}
+
+/// True when the host says it performs the staged swap (ADR 0024, section 3).
+inline bool HostCanSwap(const NevrHostContext* host) noexcept {
+  return (HostCapabilities(host) & kHostCapabilitySwap) != 0;
 }
 
 /// True when the host's hook record may be registered with HookGuard: the writer's size covers

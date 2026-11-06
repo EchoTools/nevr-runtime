@@ -55,7 +55,9 @@ host validates the major version, the minimum `struct_size` and every required e
 before it calls anything, and hands the runtime a `NevrHostContext` that carries the game
 module, the trampoline of the original `GameMainWrapper`, and a record of the host's hook
 on it: the target address and the first 16 bytes found there after the host enabled the
-hook. Only C types cross. `test_runtime_abi` pins the
+hook. Minor 2 appends a `capabilities` word, which a reader uses only when the context's
+`struct_size` covers it (`HostCapabilities`); bit 0 says the host performs the staged swap and puts a release that
+does not start back (ADR 0024). Only C types cross. `test_runtime_abi` pins the
 layout and the rejections, including a descriptor shorter than the header, which the
 validator must not read past.
 

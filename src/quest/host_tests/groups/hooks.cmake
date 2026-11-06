@@ -28,6 +28,7 @@ set(_hf NOEXC PTHREAD DL INCS ${_sent})
 set(_cf src/quest/tests/compile_fail)
 nevr_ht_obj(o_hooks_cf_control GROUP hooks NOEXC INCS ${_sent} SRC ${_cf}/control.cpp)
 nevr_ht_obj(o_hooks_cf_row_control GROUP hooks NOEXC INCS ${_sent} SRC ${_cf}/row_control.cpp)
+nevr_ht_obj(o_hooks_cf_asm_entry_control GROUP hooks NOEXC INCS ${_sent} SRC ${_cf}/asm_entry_control.cpp)
 nevr_ht_compile_fail(cf_fake_thunk ${_cf}/fake_thunk.cpp "error: static assertion failed: InstallThunk requires a CallbackThunk"
   GROUP hooks NOEXC INCS ${_sent})
 nevr_ht_compile_fail(cf_row_fake_thunk ${_cf}/row_fake_thunk.cpp "error: static assertion failed: InstallRowThunk requires a CallbackThunk"
@@ -35,6 +36,10 @@ nevr_ht_compile_fail(cf_row_fake_thunk ${_cf}/row_fake_thunk.cpp "error: static 
 nevr_ht_compile_fail(cf_direct_record ${_cf}/direct_record.cpp "HookRecord.*is private within this context"
   GROUP hooks NOEXC INCS ${_sent})
 nevr_ht_compile_fail(cf_plain_handler ${_cf}/plain_handler.cpp "error: invalid conversion from .*::Handler"
+  GROUP hooks NOEXC INCS ${_sent})
+nevr_ht_compile_fail(cf_asm_entry_direct_record ${_cf}/asm_entry_direct_record.cpp "AsmEntryRecord.*is private within this context"
+  GROUP hooks NOEXC INCS ${_sent})
+nevr_ht_compile_fail(cf_asm_entry_raw_install ${_cf}/asm_entry_raw_install.cpp "InstallEntry.*is private within this context"
   GROUP hooks NOEXC INCS ${_sent})
 
 # ── The GOT hook backend ────────────────────────────────────────────────────────────────────────────────────────────────

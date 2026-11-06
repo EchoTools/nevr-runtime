@@ -12,8 +12,8 @@ Status: proposed. Tracking issue: #1200. Builds on ADR 0012 (the static install 
 `nevr-runtime.dll` is out of scope until there is a reason for one" no longer holds; "The root" gains the `update\` folder
 of "Layout". **It amends ADR 0008 in one place:** the host and the runtime that run together agree on the ABI's major, and
 are not always one release ("Relation to other records"). Of the "Order of work", step 1 (the core's `pc stage`, #1209) is
-built, and of step 2 the swap (#2104: section 4, everything but the pending decision); the rest of step 2 (rollback, the
-crash marker, the capability word) is #2105, and steps 3 to 5 are not built. The runtime and the plugins load from the
+built, and so is step 2: the swap (#2104: section 4) and the rest of the host's half (#2105: section 6, the rollback, the
+crash marker and the capability word). Steps 3 to 5 are not built. The runtime and the plugins load from the
 root (#855, #856). "What is not known" lists what no measurement covers.
 
 ## Requirement
@@ -129,8 +129,10 @@ flowchart TD
 - **Off switches.** `update.enabled: false` in `config.yaml` and the `-no-update` flag, both for operators and testers.
   They are two new config keys and one new flag; the flat key map count of N133 and the flag registry change with them.
 - **A host that cannot swap.** The host context gains a `capabilities` word (appended after `reserved`; `kMinor`
-  becomes 2; read only when `DescriptorCovers` proves it). Bit 0 means "this host performs the staged swap". A runtime started by an older
-  host sees no bit and stages nothing, so a 6.5 MB download that nothing would apply never happens.
+  becomes 2; read only when `DescriptorCovers` proves it). Bit 0 means "this host performs the staged swap and puts a release that does not start back". A runtime started by an
+  older host sees no bit and stages nothing, so a 6.5 MB download that nothing would apply never happens. The host
+  (`RuntimeRendezvous::Install`) sets the bit, and the context's `struct_size` is 80 (`kHostContextV1_2Size`);
+  `HostCapabilities` reads the word only from a context that covers it.
 
 **The C ABI addition** (ADR 0023 section 6 table gains a row): `NevrPcStage(session, root_dir, current_json, &result_json)`.
 `current_json` is the running runtime (version, sha256) and the quarantine list; `result_json` is
@@ -227,9 +229,11 @@ flowchart TD
    line carry the reason `update_blocked` and the swap's own reason in `update_reason`. A `staged.json` outside the
    vocabulary is removed without a discard counted (`update_swap outcome=discarded reason=bad_staged`); a `state.json`
    rebuilt says `outcome=recovered reason=state_rebuilt`, and records the root runtime as `current` only when its version
-   is a version name. A root runtime without a `NEVR-BUILD` version blocks the swap (`reason=no_from_version`) until
-   #2105 settles it; one whose version is outside the vocabulary blocks it (`reason=bad_from_version`): that version is
-   read from a file nothing has verified yet, so it is never a path and never logged.
+   is a version name. A root runtime without a `NEVR-BUILD` version (or no runtime at all) blocks the swap
+   (`reason=no_from_version`): `update\previous\<from>\` is named by that version, and a rollback needs a named release
+   to go back to, so a root the host cannot name is left to the installer. One whose version is outside the vocabulary
+   blocks it (`reason=bad_from_version`): that version is read from a file nothing has verified yet, so it is never a path
+   and never logged.
    - **A file that cannot be read is not a damaged file.** A file of `update\` that is there but cannot be opened or
      read (another program holds it, access is denied) is recorded with its `win32_error`: a journal stops the start
      (`journal_unreadable`); a `staged.json` stays and nothing is counted (`outcome=deferred reason=staged_unreadable`);
@@ -297,6 +301,67 @@ A swapped release is `pending` until the runtime says it started.
 - **No previous.** When `update\previous\<from>\` is missing or its runtime does not verify, the host does not load anything
   it cannot verify: it stops with the missing-runtime message of ADR 0012 (the installer is the recovery) and logs the cause.
 
+**As built (#2105).** The host's half of this section is `src/runtime/host/update_swap.cpp` (the decision, the rollback and
+its journal), `RuntimeLoader::LoadAtStart` (`runtime_load.cpp`: the swap, the load and R1) and `CrashCapture::MarkUpdateCrashed`
+(`crash_capture.cpp`).
+
+- **The order at a start** is: recover a journal, decide what to do with a pending release, and only when none is
+  pending, swap a staged one. A staged release waits while one is pending (`update_swap outcome=deferred
+  reason=release_pending`): swapping would move the unconfirmed release over the last confirmed one. A staged release
+  that `state.json` already quarantines (the same version and runtime sha256) is dropped and not counted
+  (`outcome=discarded reason=quarantined`).
+- **The decision** (`pending.json` is there). The reason to roll back is `failed_reason`, else `crashed`, else
+  `unconfirmed` (`boot_attempts` 2 or more); with none, the start is one more try (`boot_attempts` plus one) and the
+  pending release loads. While another process has the root's runtime mapped nothing is rolled back
+  (`update_rollback outcome=deferred reason=runtime_in_use`) and nothing is counted: a start beside a running one is not
+  a try, so the first one's trial is the trial. The start that finishes an interrupted swap's cleanup is not a try either
+  (that swap's start never got to load). A `pending.json` that names a runtime other than the one in the root is stale
+  and is dropped with its marker (`reason=pending_stale`), because the host moves no file it did not place; one the host
+  cannot parse is dropped (`reason=bad_pending`); one it cannot read is left alone and nothing is judged or swapped
+  (`outcome=deferred reason=pending_unreadable`).
+- **The rollback** checks first and moves nothing until the checks pass: `update\previous\<from>\nevr-runtime.dll`
+  exists (`no_previous`), passes the verifier (`previous_unverified`, with the verifier's words in `verify_reason`), no link
+  is on the way (`reparse_point`), and no file that is not the failed release's sits where a restored plugin goes
+  (`foreign_file`). Then the journal (`kind` `rollback`: `from` the failed release, `to` the restored one, `failed_sha256`,
+  `reason`), phase `out` (the failed release's owned files to `update\failed\<failed>\`; the older failed generation is
+  deleted first, one is kept), phase `in` (the previous release's files back), phase `done`: `owned` is the restored
+  files with their sha256, `current` the restored release, `quarantine` gains the failed release (version, runtime
+  sha256, reason, time), and only then `pending.json`, `crashed`, the emptied `previous\<to>\` and the journal go, so a
+  failed release is never offered again. `no_previous` and `previous_unverified` stop the start (`update_blocked`; the
+  notice is the missing-runtime one) and leave the root as it was; the other checks leave the pending release loading.
+- **R1** is `RuntimeLoader::LoadAtStart`. For `runtime_refused`, `runtime_absent`, `load_failed` and
+  `dependency_load_failed` (`ClassifyPendingFailure`: no line of the runtime ran) `RollBackInProcess` takes the lock again,
+  rolls back with `mode=in_process`, keeps the lock and the same start loads the restored runtime: two `versions` and two
+  `runtime_load` records with `update_rollback` between them. For `missing_entry`, `null_descriptor`, `abi_rejected` and
+  `init_failed` (the runtime stays mapped) `MarkPendingFailed` writes `failed_reason` into `pending.json` (the first
+  failure stays), logs `update_rollback mode=next_start outcome=scheduled`, and the stop notice says NEVR was updated,
+  could not start, and will be put back at the next start (`RuntimeLoadResult::update_failed`).
+- **A record is built from what the host verified.** The swap's journal carries the sha256 of every file that moves in
+  (`in_sha256`) and of the runtime that moves out (`from_sha256`), and the rollback's carries the sha256 of every file that
+  comes back, read before anything moves (`previous_unreadable` refuses the rollback when one cannot be read). The cleanup
+  at `done` writes `owned`, `current` and `pending.json` from those, never from a re-read that can fail on a file another
+  program holds: a file that is gone is skipped, one that is only held is still recorded. A journal without them (an
+  older one) falls back to reading, and a file that cannot be read leaves the cleanup for the next start.
+- **A start that loads a pending release without deciding a rollback says so** (`update_trial`): `counted` with the new
+  `boot_attempts`, or `not_counted` with why (a runtime in use, a swap's cleanup finished, a runtime the host cannot open
+  for write, a count that could not be written). A start that decides a rollback writes `update_rollback` instead
+  (`rolled_back`, `deferred`, `failed`, `blocked`), never both.
+- **When the previous release cannot be restored in the same start**, the failed release stays in the root and is marked
+  (`failed_reason`; the first failure stays), so the next start tries again; the `update_rollback` record of a runtime in use
+  says whether the mark was made (`marked`).
+- **A rollback that is interrupted is completed**, never undone: the next start reads the journal by `kind` and `phase`
+  (`update_swap outcome=recovered kind=rollback`). Every step can be run again, because a file moves only when it is still
+  where the journal says it was.
+- **The crash marker.** `CrashCapture::Prepare` builds the paths of `update\pending.json` and `update\crashed` from
+  `%LOCALAPPDATA%` at attach. `Capture` calls `MarkUpdateCrashed` before it writes the dump, whatever the dump does: one
+  `GetFileAttributesW` on `pending.json`, and only when it is there one `CreateFileW` of the empty `crashed`, then one
+  `crash_marker` record (`outcome` `written` or `failed` with `win32_error`). A crash with no `pending.json` makes no
+  folder and no file.
+- **What the open questions settled.** Q1: the host skips the swap while a release is pending (above); the runtime should
+  not publish `staged.json` while one is pending either (step 4). Q2: the swap writes `owned` at `done`, and the rollback
+  rewrites it. Q3: a root runtime with no `NEVR-BUILD` version blocks the swap (section 4, item 9). Q4: a rollback
+  deferred because the runtime is in use increments nothing. Q5: a start that "stops" stops the game (`update_blocked`).
+
 Limits stated here, not solved: a client and a server share one confirmation, so a release that starts on a client but fails
 on a server after the mark is not rolled back (the log line `update confirmed` carries the process's role, and a server
 operator has `update.enabled: false`); a withdrawn release that the channel replaces with an older one is rolled back and
@@ -328,7 +393,9 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | runtime | `update verify` | `path`, `ok`, `reason` (the verifier's text) |
 | runtime | `update published` | `version`, `files` |
 | host | `update_swap` | `outcome` (`swapped`, `deferred`, `blocked`, `discarded`, `recovered`), `reason`, `from`, `to`, `files` (path, sha256), `elapsed_ms` |
-| host | `update_rollback` | `mode` (`in_process`, `next_start`), `reason`, `from`, `to`, `outcome` |
+| host | `update_rollback` | `mode` (`in_process`, `next_start`), `reason`, `from` (the failed release), `to` (the restored one), `outcome` (`rolled_back`, `scheduled`, `deferred`, `failed`, `blocked`, `discarded`), `boot_attempts`, `files`, `elapsed_ms` |
+| host | `update_trial` | one per start that loads a pending release without deciding a rollback (a rollback decision writes `update_rollback`): `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`), `release`, `boot_attempts` (after the start), `elapsed_ms` |
+| host | `crash_marker` | `outcome` (`written`, `failed`), `win32_error`, `path`, `thread` |
 | runtime | `update confirmed` | `version`, `after_ms`, `role` (`client`, `server`) |
 
 The host's `versions` record (ADR 0012) already names what ran; a swapped start also carries `update_swap` ahead of it, so a
@@ -358,9 +425,9 @@ Each row is a test in "Tests, failing first", and a live run on a game copy wher
 | F8 | another process runs the root's runtime | the swap is left for a later start | unchanged; `staged.json` stays | `update_swap outcome=deferred reason=runtime_in_use` |
 | F9 | the new runtime is refused or will not load (the file never ran) | the host rolls back and loads the previous one in the same process | the game runs on the old release; the new one is quarantined | `update_rollback mode=in_process reason=runtime_refused`, then `runtime_load outcome=loaded` |
 | F10 | the new runtime is mapped and then fails (ABI rejected, no entry, `initialize` fails) | `failed_reason` is recorded; this start stops (exit 78) with the notice; the next start rolls back | the next start runs the old release | `update_rollback mode=next_start reason=abi_rejected` (or `init_failed`) |
-| F11 | the new runtime crashes during boot | the crash capture leaves `crashed` because `pending.json` exists; the next start rolls back | the next start runs the old release | `update_rollback mode=next_start reason=crashed` |
+| F11 | the new runtime crashes during boot | the crash capture leaves `crashed` because `pending.json` exists; the next start rolls back | the next start runs the old release | `crash_marker outcome=written`, then `update_rollback mode=next_start reason=crashed` |
 | F12 | the new runtime starts but never reaches the mark in two starts | the third start rolls back | the old release | `update_rollback mode=next_start reason=unconfirmed boot_attempts=2` |
-| F13 | the rollback has nothing to restore, or the restored file does not verify | the host loads nothing it cannot verify and stops | the installer is the recovery | `update_rollback outcome=failed reason=no_previous`, then `game_stop` |
+| F13 | the rollback has nothing to restore, or the restored file does not verify | the host loads nothing it cannot verify and stops | the installer is the recovery | `update_rollback outcome=failed reason=no_previous` (or `previous_unverified`), then `game_stop` |
 | F14 | the disk is full, or the root is not writable | the core cannot stage; nothing is published | unchanged | `stage_end ok=false reason=<io error>` |
 | F15 | the channel names a release that failed before | it is not staged again | unchanged until the channel names another | `update check action=none reason=quarantined` |
 | F16 | the host cannot swap (an older host) | no download | unchanged | `update disabled reason=host_cannot_swap` |
@@ -457,9 +524,14 @@ Each step is its own pull request with its own issue under #1200, mergeable and 
 2. The host: the swap, the journal, recovery, the pending record, the crash marker, the capability word and rollback. Needs
    the runtime in the root (#855); the plugin half needs #856. The capability word is an appended field of `NevrHostContext`
    and moves `kMinor` (shared by both descriptors) to 2; the size pin of the context in `runtime_abi.h` moves with it.
-3. The runtime: the worker, the config keys and flag, the confirmation, the static link of the core. After steps 1 and 2.
-4. The installer: `pc install` writes the update state and clears the folders (after the installer front ends, #1149, and the
-   root layout in the core, after #855).
+3. The installer: `pc install` writes the update state and clears the folders (after the installer front ends, #1149, and the
+   root layout in the core, after #855). It comes before the runtime's worker, because the first release a player can
+   receive is the first one that can fail to start, and the stop text of a failed update tells the player to reinstall:
+   until the installer clears `update\`, a reinstall of the same release leaves `pending.json` and the journal in place
+   and the start stops again (`no_previous`).
+4. The runtime: the worker, the config keys and flag, the confirmation, the static link of the core. After steps 1, 2 and
+   3. The host sets the capability bit from step 2 on, but nothing stages a release until this step, so no player reaches
+   `update_blocked` before the installer can clear it.
 5. A first release that carries a swapping host: players move to it with the installer once; from then on self-update runs.
 6. Later: a periodic check for a long-running server, per-role confirmation, an in-game notice, signed plugins from the
    release pipeline, and the Quest counterpart (ADR 0023 section 7).

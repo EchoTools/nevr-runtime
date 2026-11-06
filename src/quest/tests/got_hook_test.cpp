@@ -1158,6 +1158,8 @@ struct SynthSpec {
   std::uint64_t strsz = 16;
   std::uint64_t jmprelSizeAdjust = 0;
   bool readOnlyBacking = false;  // map the image from a read-only shared file mapping
+  bool executableData = false;   // the writable PT_LOAD is flagged R W X (the live mapping is not changed)
+  std::uint8_t symType = STT_NOTYPE;  // ELF64_ST_TYPE of alpha and beta (STT_OBJECT for a data symbol, STT_FUNC for a function)
 };
 
 struct SynthImage {
@@ -1186,6 +1188,8 @@ void Build(const SynthSpec& spec, void* originalValue, SynthImage* out) {
   Elf64_Sym syms[3] = {};
   syms[1].st_name = 1;
   syms[2].st_name = 7;
+  syms[1].st_info = ELF64_ST_INFO(STB_GLOBAL, spec.symType);
+  syms[2].st_info = ELF64_ST_INFO(STB_GLOBAL, spec.symType);
   put(kSymtab, syms, sizeof(syms));
 
   std::vector<Elf64_Rela> jmprel, rela;
@@ -1274,7 +1278,7 @@ void Build(const SynthSpec& spec, void* originalValue, SynthImage* out) {
   };
   out->phdrs.clear();
   out->phdrs.push_back(phdr(PT_LOAD, PF_R | PF_X, 0, kPage));
-  out->phdrs.push_back(phdr(PT_LOAD, PF_R | PF_W, kPage, 3 * kPage));
+  out->phdrs.push_back(phdr(PT_LOAD, PF_R | PF_W | (spec.executableData ? PF_X : 0u), kPage, 3 * kPage));
   if (spec.withDynamic) out->phdrs.push_back(phdr(PT_DYNAMIC, PF_R | PF_W, kDynamic, 0x100));
   out->phdrs.push_back(phdr(PT_GNU_RELRO, PF_R, kPage, 2 * kPage));
   out->image.base = reinterpret_cast<std::uintptr_t>(mem);
@@ -1873,6 +1877,644 @@ void CriticalTargetIsTheSameTargetWithAPriority() {
          critical.kind == RelocKind::kGlobDat && std::strcmp(critical.buildId, "abcd") == 0 &&
          critical.slotVaddr.value() == 0x1230ULL && critical.expectedOriginal == reinterpret_cast<const void*>(0x10));
   QCHECK(base.priority == HookPriority::kNormal);  // the original is untouched
+}
+
+// ---- ABS64 words and data slots (docs/adr/0046 rule 2) -----------------------------------------------------------------
+//
+// A vtable or factory word is filled by an R_AARCH64_ABS64 relocation that names the symbol, and a symbol that a vtable lists
+// has one such word in every vtable that lists it: the target pins the one it hooks. A data slot (GotDataSlot) is a word the
+// game reads as data, pointed at a value of ours.
+
+int MulImpl(int a, int b) { return a * b; }
+int g_dataA = 1;
+int g_dataB = 2;
+
+constexpr std::uint64_t kAlphaWordA = kRelroSlot, kAlphaWordB = kRelroSlot + 8, kBetaWord = kRelroSlot + 16;
+
+// alpha has two ABS64 words (a symbol two vtables list), beta has one.
+SynthSpec Abs64Spec(const RelocNumbers& nums) {
+  SynthSpec s;
+  s.nums = nums;
+  s.rels.push_back({false, kAlphaWordA, nums.abs64, 1, 0});
+  s.rels.push_back({false, kAlphaWordB, nums.abs64, 1, 0});
+  s.rels.push_back({false, kBetaWord, nums.abs64, 2, 0});
+  return s;
+}
+
+GotTarget Abs64Target(const char* symbol, std::optional<std::uint64_t> pin) {
+  GotTarget t = SynthTarget(RelocKind::kAbs64, symbol);
+  t.slotVaddr = pin;
+  return t;
+}
+
+void Abs64Resolution() {
+  for (const RelocNumbers& nums : {kAarch64Relocs, kNativeRelocs}) {
+    const SynthSpec s = Abs64Spec(nums);
+    // A pinned word resolves, whichever of the symbol's words it is.
+    for (const std::uint64_t word : {kAlphaWordA, kAlphaWordB}) {
+      const SlotResolution r = ResolveSynth(s, Abs64Target("alpha", word));
+      QCHECK_STATUS(r.status, GotStatus::kOk);
+      QCHECK(r.slotVaddr == word && r.restoreReadOnly);
+    }
+    QCHECK_STATUS(ResolveSynth(s, Abs64Target("beta", kBetaWord)).status, GotStatus::kOk);
+    // The symbol alone does not name a word: two words are ambiguous, and even one is not enough without the pin.
+    QCHECK_STATUS(ResolveSynth(s, Abs64Target("alpha", std::nullopt)).status, GotStatus::kAmbiguousRelocation);
+    QCHECK_STATUS(ResolveSynth(s, Abs64Target("beta", std::nullopt)).status, GotStatus::kPinRequired);
+    // A pin on another symbol's word, or on a word no relocation fills, is refused.
+    QCHECK_STATUS(ResolveSynth(s, Abs64Target("alpha", kBetaWord)).status, GotStatus::kSlotOffsetMismatch);
+    QCHECK_STATUS(ResolveSynth(s, Abs64Target("alpha", kBetaWord + 8)).status, GotStatus::kSlotOffsetMismatch);
+    // The relocation must be ABS64: a symbol that only a JUMP_SLOT names is the wrong type.
+    SynthSpec jump = Abs64Spec(nums);
+    jump.rels.push_back({true, kRelroSlot + 24, nums.jumpSlot, 2, 0});
+    jump.rels.erase(jump.rels.begin() + 2);  // beta now has a JUMP_SLOT and no ABS64 word
+    QCHECK_STATUS(ResolveSynth(jump, Abs64Target("beta", kRelroSlot + 24)).status, GotStatus::kWrongRelocationType);
+    SynthSpec glob = Abs64Spec(nums);
+    glob.rels.push_back({false, kRelroSlot + 32, nums.globDat, 2, 0});
+    glob.rels.erase(glob.rels.begin() + 2);  // beta now has a GLOB_DAT and no ABS64 word
+    QCHECK_STATUS(ResolveSynth(glob, Abs64Target("beta", kRelroSlot + 32)).status, GotStatus::kWrongRelocationType);
+    // A word with an addend is not a symbol's address.
+    SynthSpec addend = Abs64Spec(nums);
+    addend.rels[2].addend = 16;
+    QCHECK_STATUS(ResolveSynth(addend, Abs64Target("beta", kBetaWord)).status, GotStatus::kUnsupportedAddend);
+  }
+  {  // The other kinds do not see ABS64 words: alpha's one JUMP_SLOT is the only slot a JUMP_SLOT target finds, and a symbol
+     // only ABS64 words name is not found by it.
+    SynthSpec s = Abs64Spec(kAarch64Relocs);
+    s.rels.push_back({true, kRelroSlot + 24, kAarch64Relocs.jumpSlot, 1, 0});
+    const SlotResolution r = ResolveSynth(s, SynthTarget(RelocKind::kJumpSlot, "alpha"));
+    QCHECK_STATUS(r.status, GotStatus::kOk);
+    QCHECK(r.slotVaddr == kRelroSlot + 24);
+    QCHECK_STATUS(ResolveSynth(s, SynthTarget(RelocKind::kJumpSlot, "beta")).status, GotStatus::kSymbolNotFound);
+    QCHECK_STATUS(ResolveSynth(s, SynthTarget(RelocKind::kGlobDat, "beta")).status, GotStatus::kSymbolNotFound);
+  }
+  QCHECK(std::strcmp(RelocKindName(RelocKind::kAbs64), "abs64") == 0);
+}
+
+void Abs64WordsInstallPinnedAndChain() {
+  Prepare();
+  SynthImage img;
+  Build(Abs64Spec(kNativeRelocs), reinterpret_cast<void*>(&AddImpl), &img);
+  g_synth = &img;
+  QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);  // the loader makes RELRO read-only after relocation
+  auto word = [&img](std::uint64_t vaddr) { return reinterpret_cast<void**>(img.image.base + vaddr); };
+  const std::string perms = PagePerms(word(kAlphaWordB));
+  QCHECK(perms == "r--p");
+  void* const add = reinterpret_cast<void*>(&AddImpl);
+  void* const sub = reinterpret_cast<void*>(&SubImpl);
+  void* const mul = reinterpret_cast<void*>(&MulImpl);
+
+  // Unpinned, the target is refused and no word changes: the symbol has two words, then (for beta) one.
+  {
+    GotHook hook;
+    void* out = nullptr;
+    Captured().clear();
+    QCHECK_STATUS(Install(hook, Abs64Target("alpha", std::nullopt), sub, &out, SynthLookup), GotStatus::kAmbiguousRelocation);
+    QCHECK(Count(LogLevel::kWarn, "\"status\":\"ambiguous_relocation\"") == 1 && Count(LogLevel::kWarn, "\"reloc\":\"abs64\"") == 1);
+    QCHECK_STATUS(Install(hook, Abs64Target("beta", std::nullopt), sub, &out, SynthLookup), GotStatus::kPinRequired);
+    QCHECK(Count(LogLevel::kWarn, "\"status\":\"pin_required\"") == 1);
+    QCHECK(!hook.installed() && out == nullptr);
+    QCHECK(*word(kAlphaWordA) == add && *word(kAlphaWordB) == add && *word(kBetaWord) == add);
+  }
+
+  // Pinned, only the pinned word changes, and the page is read-only again.
+  GotTarget target = Abs64Target("alpha", kAlphaWordB);
+  target.expectedOriginal = add;
+  GotHook first, second;
+  void* firstOriginal = nullptr;
+  void* secondOriginal = nullptr;
+  Captured().clear();
+  QCHECK_STATUS(Install(first, target, sub, &firstOriginal, SynthLookup), GotStatus::kOk);
+  QCHECK(firstOriginal == add);
+  QCHECK(*word(kAlphaWordB) == sub && *word(kAlphaWordA) == add && *word(kBetaWord) == add);
+  QCHECK(PagePerms(word(kAlphaWordB)) == perms);
+  QCHECK(Count(LogLevel::kInfo, "\"op\":\"install\",\"status\":\"ok\",\"module\":\"synthetic.so\",\"symbol\":\"alpha\",\"reloc\":\"abs64\"") == 1);
+
+  // A second handler chains on the word: it calls the first, which calls the game's function.
+  QCHECK_STATUS(Install(second, target, mul, &secondOriginal, SynthLookup), GotStatus::kOk);
+  QCHECK(secondOriginal == sub && *word(kAlphaWordB) == mul);
+  QCHECK(*word(kAlphaWordA) == add);
+  QCHECK_STATUS(second.Remove(), GotStatus::kOk);
+  QCHECK(*word(kAlphaWordB) == sub);
+  QCHECK_STATUS(first.Remove(), GotStatus::kOk);
+  QCHECK(*word(kAlphaWordB) == add && PagePerms(word(kAlphaWordB)) == perms);
+  g_synth = nullptr;
+}
+
+std::size_t TotalLines() {
+  const std::lock_guard<std::mutex> guard(g_captureMutex);
+  return Captured().size();
+}
+
+SynthSpec DataSpec() {  // two GLOB_DAT slots naming data objects: beta's in RELRO, alpha's plain
+  SynthSpec s;
+  s.symType = STT_OBJECT;  // every real data slot names an OBJECT; NOTYPE is how a weak function reference reads
+  s.rels.push_back({false, kRelroSlot, s.nums.globDat, 2, 0});
+  s.rels.push_back({false, kPlainSlot, s.nums.globDat, 1, 0});
+  return s;
+}
+
+GotTarget DataTarget(const char* symbol, std::uint64_t vaddr) {
+  GotTarget t = SynthTarget(RelocKind::kGlobDat, symbol);
+  t.slotVaddr = vaddr;
+  return t;
+}
+
+void DataSlotStoresOnlyOverItsExpectedValueAndIsPutBack() {
+  Prepare();
+  const std::size_t used = RegistrySnapshot().used;
+  SynthImage img;
+  Build(DataSpec(), &g_dataA, &img);
+  g_synth = &img;
+  QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
+  void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+  const std::string perms = PagePerms(relro);
+  QCHECK(perms == "r--p");
+  const GotTarget target = DataTarget("beta", kRelroSlot);
+
+  // A slot that does not hold `expected` is not written, and holds no entry.
+  GotDataSlot slot;
+  Captured().clear();
+  QCHECK_STATUS(slot.Write(target, &g_dataB, &g_dataB, SynthLookup), GotStatus::kOriginalMismatch);
+  QCHECK(!slot.written() && *relro == &g_dataA && RegistrySnapshot().used == used);
+  QCHECK(Count(LogLevel::kWarn, "\"op\":\"data_write\",\"status\":\"original_mismatch\"") == 1);
+
+  // It stores over `expected`: one entry, one Debug line, the page protected as before.
+  Captured().clear();
+  QCHECK_STATUS(slot.Write(target, &g_dataA, &g_dataB, SynthLookup), GotStatus::kOk);
+  QCHECK(slot.written() && *relro == &g_dataB && PagePerms(relro) == perms);
+  QCHECK(RegistrySnapshot().used == used + 1);
+  QCHECK(TotalLines() == 1);
+  QCHECK(Count(LogLevel::kDebug, "\"op\":\"data_write\",\"status\":\"ok\",\"module\":\"synthetic.so\",\"symbol\":\"beta\",\"reloc\":\"glob_dat\"") == 1);
+
+  // The entry is held: a second data write on the slot and a hook on it are both refused, the slot is not touched, and the
+  // refusal is one Warning. (The second write's `expected` is what the slot holds now, so only the entry stops it.)
+  Captured().clear();
+  GotDataSlot rival;
+  QCHECK_STATUS(rival.Write(target, &g_dataB, &g_dataA, SynthLookup), GotStatus::kSlotClaimed);
+  QCHECK(!rival.written() && *relro == &g_dataB && RegistrySnapshot().used == used + 1);
+  QCHECK(Count(LogLevel::kWarn, "\"op\":\"data_write\",\"status\":\"slot_claimed\"") == 1);
+  GotHook hook;
+  void* out = nullptr;
+  GotTarget hookTarget = target;
+  hookTarget.expectedOriginal = &g_dataB;
+  QCHECK_STATUS(Install(hook, hookTarget, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup), GotStatus::kSlotClaimed);
+  QCHECK(!hook.installed() && out == nullptr && *relro == &g_dataB);
+  // One handle holds one slot.
+  QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kAlreadyInstalled);
+
+  // Restore puts the game's value back, the page protected as before, and gives the entry back.
+  Captured().clear();
+  QCHECK_STATUS(slot.Restore(), GotStatus::kOk);
+  QCHECK(!slot.written() && *relro == &g_dataA && PagePerms(relro) == perms && RegistrySnapshot().used == used);
+  QCHECK(TotalLines() == 1 && Count(LogLevel::kDebug, "\"op\":\"data_restore\",\"status\":\"ok\"") == 1);
+  QCHECK_STATUS(slot.Restore(), GotStatus::kNotInstalled);
+  // The slot is free again, the plain one too.
+  GotDataSlot plain;
+  void** const plainSlot = reinterpret_cast<void**>(img.image.base + kPlainSlot);
+  QCHECK_STATUS(plain.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kOk);
+  QCHECK(*plainSlot == &g_dataB && PagePerms(plainSlot) == "rw-p");
+  QCHECK_STATUS(plain.Restore(), GotStatus::kOk);
+  QCHECK(*plainSlot == &g_dataA && PagePerms(plainSlot) == "rw-p");
+  QCHECK(Errors() == 0);
+  g_synth = nullptr;
+}
+
+void DataSlotRefusesWhatIsNotData() {
+  Prepare();
+  const std::size_t used = RegistrySnapshot().used;
+  void* const code = reinterpret_cast<void*>(&AddImpl);
+  for (const std::uint8_t type : {STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_TLS}) {
+    // Only a slot whose relocation names an OBJECT is data. A function holds a code pointer (a hook), and so does a NOTYPE symbol:
+    // that is how the linker types a weak reference nothing defined (libr15's `getentropy`), which the loader fills with libc's
+    // function. Whatever the value says.
+    SynthSpec spec = DataSpec();
+    spec.symType = type;
+    SynthImage img;
+    Build(spec, code, &img);
+    g_synth = &img;
+    void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+    GotDataSlot slot;
+    Captured().clear();
+    QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), code, &g_dataB, SynthLookup), GotStatus::kExecutableMapping);
+    QCHECK(!slot.written() && *relro == code && RegistrySnapshot().used == used);
+    QCHECK(Count(LogLevel::kWarn, "\"op\":\"data_write\",\"status\":\"executable_mapping\",") == 1);
+    QCHECK(Count(LogLevel::kWarn, "\"stage\":\"symbol_type\"") == 1);
+    GotTarget unpinned = DataTarget("beta", kRelroSlot);  // the symbol alone names the slot: the type is read there too
+    unpinned.slotVaddr = std::nullopt;
+    QCHECK_STATUS(slot.Write(unpinned, code, &g_dataB, SynthLookup), GotStatus::kExecutableMapping);
+    QCHECK(!slot.written() && *relro == code && RegistrySnapshot().used == used);
+    g_synth = nullptr;
+  }
+  {  // a code address as the new value is a code pointer stored in a data slot
+    SynthImage img;
+    Build(DataSpec(), &g_dataA, &img);
+    g_synth = &img;
+    void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+    GotDataSlot slot;
+    Captured().clear();
+    QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), &g_dataA, code, SynthLookup), GotStatus::kExecutableMapping);
+    QCHECK(!slot.written() && *relro == &g_dataA && RegistrySnapshot().used == used);
+    QCHECK(Count(LogLevel::kWarn, "\"stage\":\"new_value\"") == 1);
+    g_synth = nullptr;
+  }
+  {  // only a data slot's kind: a JUMP_SLOT or ABS64 word is a hook's
+    SynthImage img;
+    Build(DataSpec(), &g_dataA, &img);
+    g_synth = &img;
+    GotDataSlot slot;
+    Captured().clear();
+    for (const RelocKind kind : {RelocKind::kJumpSlot, RelocKind::kAbs64}) {
+      GotTarget t = DataTarget("beta", kRelroSlot);
+      t.kind = kind;
+      QCHECK_STATUS(slot.Write(t, &g_dataA, &g_dataB, SynthLookup), GotStatus::kBadArgument);
+    }
+    QCHECK(Count(LogLevel::kWarn, "\"stage\":\"kind\"") == 2 && !slot.written() && RegistrySnapshot().used == used);
+    g_synth = nullptr;
+  }
+  {  // a slot in a mapping that is executable now
+    SynthImage img;
+    Build(DataSpec(), &g_dataA, &img);
+    g_synth = &img;
+    QCHECK(mprotect(static_cast<char*>(img.mem) + kPage, 3 * kPage, PROT_READ | PROT_WRITE | PROT_EXEC) == 0);
+    void** const plain = reinterpret_cast<void**>(img.image.base + kPlainSlot);
+    QCHECK(PagePerms(plain) == "rwxp");
+    GotDataSlot slot;
+    QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kExecutableMapping);
+    QCHECK(!slot.written() && *plain == &g_dataA && RegistrySnapshot().used == used && PagePerms(plain) == "rwxp");
+    g_synth = nullptr;
+  }
+  {  // a slot whose segment the program headers flag executable
+    SynthSpec spec = DataSpec();
+    spec.executableData = true;
+    SynthImage img;
+    Build(spec, &g_dataA, &img);
+    g_synth = &img;
+    void** const plain = reinterpret_cast<void**>(img.image.base + kPlainSlot);
+    QCHECK(PagePerms(plain) == "rw-p");
+    GotDataSlot slot;
+    QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kExecutableMapping);
+    QCHECK(!slot.written() && *plain == &g_dataA && RegistrySnapshot().used == used);
+    g_synth = nullptr;
+  }
+  {  // arguments: no expected value, no new value, no lookup, a module that is not loaded
+    SynthImage img;
+    Build(DataSpec(), &g_dataA, &img);
+    g_synth = &img;
+    GotDataSlot slot;
+    QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), nullptr, &g_dataB, SynthLookup), GotStatus::kBadArgument);
+    QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, nullptr, SynthLookup), GotStatus::kBadArgument);
+    QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, nullptr), GotStatus::kBadArgument);
+    g_synth = nullptr;
+    QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kModuleNotLoaded);
+    QCHECK(!slot.written() && RegistrySnapshot().used == used);
+  }
+}
+
+// libr15's .rodata lies inside its first, executable PT_LOAD, so the four heap descriptors (data objects the slots point at) have
+// addresses in an executable segment. The symbol the relocation names says data from code, not the address. The synthetic stand-in is
+// an OBJECT symbol whose slot holds an address that the loader lists as executable (a function of this test binary).
+void DataSlotAcceptsADataObjectWhoseAddressIsInAnExecutableSegment() {
+  Prepare();
+  const std::size_t used = RegistrySnapshot().used;
+  void* const inExecutableSegment = reinterpret_cast<void*>(&AddImpl);
+  SynthSpec spec = DataSpec();
+  SynthImage img;
+  Build(spec, inExecutableSegment, &img);
+  g_synth = &img;
+  QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
+  void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+  GotDataSlot slot;
+  Captured().clear();
+  QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), inExecutableSegment, &g_dataB, SynthLookup), GotStatus::kOk);
+  QCHECK(slot.written() && *relro == &g_dataB && Errors() == 0 && Count(LogLevel::kWarn, "\"op\":\"data_write\"") == 0);
+  QCHECK_STATUS(slot.Restore(), GotStatus::kOk);
+  QCHECK(*relro == inExecutableSegment && RegistrySnapshot().used == used);
+  g_synth = nullptr;
+}
+
+int g_protectCalls = 0;
+int CountingProtect(void* addr, std::size_t length, int prot) {
+  ++g_protectCalls;
+  return mprotect(addr, length, prot);
+}
+
+// A read-only executable page is refused before any protection change: the check comes first, so no page is made writable (losing
+// its x) and left that way (N151).
+void DataSlotRefusesAnExecutableReadOnlyPageBeforeChangingItsProtection() {
+  Prepare();
+  const std::size_t used = RegistrySnapshot().used;
+  SynthImage img;
+  Build(DataSpec(), &g_dataA, &img);
+  g_synth = &img;
+  QCHECK(mprotect(static_cast<char*>(img.mem) + kPage, 3 * kPage, PROT_READ | PROT_EXEC) == 0);
+  void** const plain = reinterpret_cast<void**>(img.image.base + kPlainSlot);
+  QCHECK(PagePerms(plain) == "r-xp");
+  g_protectCalls = 0;
+  const ProtectFn previous = SetProtectFunction(&CountingProtect);
+  GotDataSlot slot;
+  Captured().clear();
+  QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kExecutableMapping);
+  SetProtectFunction(previous);
+  QCHECK(g_protectCalls == 0);
+  QCHECK(!slot.written() && *plain == &g_dataA && PagePerms(plain) == "r-xp" && RegistrySnapshot().used == used);
+  QCHECK(Count(LogLevel::kWarn, "\"stage\":\"store\"") == 1);
+  g_synth = nullptr;
+}
+
+// A hook on a slot blocks a data write on it, as a data write blocks a hook (DataSlotStoresOnlyOverItsExpectedValueAndIsPutBack).
+void AHookOnASlotBlocksADataWriteOnIt() {
+  Prepare();
+  const std::size_t used = RegistrySnapshot().used;
+  SynthImage img;
+  Build(DataSpec(), reinterpret_cast<void*>(&AddImpl), &img);
+  g_synth = &img;
+  void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+  GotTarget hookTarget = DataTarget("beta", kRelroSlot);
+  hookTarget.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
+  GotHook hook;
+  void* original = nullptr;
+  QCHECK_STATUS(Install(hook, hookTarget, reinterpret_cast<void*>(&SubImpl), &original, SynthLookup), GotStatus::kOk);
+  GotDataSlot slot;
+  Captured().clear();
+  // `expected` is a value the slot does not hold, so only the entry can be what refuses it as claimed.
+  QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kSlotClaimed);
+  QCHECK(!slot.written() && *relro == reinterpret_cast<void*>(&SubImpl) && RegistrySnapshot().used == used + 1);
+  QCHECK(Count(LogLevel::kWarn, "\"op\":\"data_write\",\"status\":\"slot_claimed\"") == 1);
+  QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), reinterpret_cast<void*>(&AddImpl), &g_dataB, SynthLookup),
+                GotStatus::kOk);
+  QCHECK_STATUS(slot.Restore(), GotStatus::kOk);
+  QCHECK(*relro == reinterpret_cast<void*>(&AddImpl) && RegistrySnapshot().used == used);
+  g_synth = nullptr;
+}
+
+void DataSlotRestoreLeavesAChangedSlotAndAGoneModule() {
+  Prepare();
+  const std::size_t used = RegistrySnapshot().used;
+  SynthImage img;
+  Build(DataSpec(), &g_dataA, &img);
+  g_synth = &img;
+  void** const plain = reinterpret_cast<void**>(img.image.base + kPlainSlot);
+  GotDataSlot slot;
+  QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kOk);
+  // Someone else changed the word: Restore leaves it, the handle stays written, Forget gives the entry back without a write.
+  *plain = reinterpret_cast<void*>(0x5150);
+  Captured().clear();
+  QCHECK_STATUS(slot.Restore(), GotStatus::kSlotChanged);
+  QCHECK(slot.written() && *plain == reinterpret_cast<void*>(0x5150) && RegistrySnapshot().used == used + 1);
+  QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"op\":\"data_restore\",\"status\":\"slot_changed\"") == 1);
+  slot.Forget();
+  QCHECK(!slot.written() && RegistrySnapshot().used == used && *plain == reinterpret_cast<void*>(0x5150));
+  // The module is gone: no write into its old mapping, the entry is released and so is the handle.
+  *plain = &g_dataA;
+  QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kOk);
+  g_synth = nullptr;
+  Captured().clear();
+  QCHECK_STATUS(slot.Restore(), GotStatus::kModuleChanged);
+  QCHECK(!slot.written() && *plain == &g_dataB && RegistrySnapshot().used == used);
+  QCHECK(Count(LogLevel::kError, "\"op\":\"data_restore\",\"status\":\"module_changed\"") == 1);
+}
+
+void DataSlotsShareTheRegistryAndItsReserve() {
+  Prepare();
+  ResetRegistryCountersForTest();
+  const std::size_t held = RegistrySnapshot().used;
+  const std::size_t normalRoom = kRegistryCapacity - kCriticalReserve - held;
+  RegistryFixture fx(normalRoom);
+  for (std::size_t i = 0; i < normalRoom; ++i) QCHECK_STATUS(fx.InstallAt(i, HookPriority::kNormal), GotStatus::kOk);
+  SynthImage img;
+  Build(DataSpec(), &g_dataA, &img);
+  g_synth = &img;
+  void** const plain = reinterpret_cast<void**>(img.image.base + kPlainSlot);
+  // The normal limit is the reserve's edge for a data write too: refused, the slot untouched, and the ledger names it.
+  GotDataSlot normal;
+  Captured().clear();
+  QCHECK_STATUS(normal.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kRegistryFull);
+  QCHECK(!normal.written() && *plain == &g_dataA);
+  QCHECK(Count(LogLevel::kWarn, "\"op\":\"data_write\",\"status\":\"registry_full\"") == 1);
+  QCHECK(RegistrySnapshot().refused == 1);
+  // The reserve is for a critical target, a data write's included.
+  GotDataSlot critical;
+  QCHECK_STATUS(critical.Write(DataTarget("alpha", kPlainSlot).Critical(), &g_dataA, &g_dataB, SynthLookup), GotStatus::kOk);
+  QCHECK(*plain == &g_dataB && RegistrySnapshot().used == kRegistryCapacity - kCriticalReserve + 1);
+  QCHECK_STATUS(critical.Restore(), GotStatus::kOk);
+  QCHECK(*plain == &g_dataA);
+  g_synth = nullptr;
+}
+
+// ---- reviewed assembly entries (docs/adr/0046 rule 2) ---------------------------------------------------------------------
+
+// Stand-ins for a reviewed assembly entry. The real ones are arm64 functions in a top-level asm() block: they read their next pointer with an
+// acquire load (`ldar`) at every call, act on the caller's registers, and continue in a C++ function. These do the same in C++,
+// which is all the manager sees of an entry: an address, a word it publishes, and a record.
+void* g_entryNext = nullptr;
+void* g_entryNextTwo = nullptr;
+int EntryContinuation(int result) noexcept { return result + 1000; }
+int EntryFn(int a, int b) {
+  const auto next = reinterpret_cast<int (*)(int, int)>(__atomic_load_n(&g_entryNext, __ATOMIC_ACQUIRE));
+  return EntryContinuation(next(a, b));
+}
+int EntryFnTwo(int a, int b) {
+  const auto next = reinterpret_cast<int (*)(int, int)>(__atomic_load_n(&g_entryNextTwo, __ATOMIC_ACQUIRE));
+  return EntryContinuation(next(a, b));
+}
+NEVR_ASM_ENTRY_RECORD(kEntryRecord, EntryFn, EntryContinuation);
+NEVR_ASM_ENTRY_RECORD(kEntryRecordTwo, EntryFnTwo, EntryContinuation);
+
+GotStatus InstallEntry(GotHook& hook, const GotTarget& target, void** next = &g_entryNext) {
+  return InstallAsmEntry(hook, target, kEntryRecord, next);
+}
+
+GotTarget AddTarget(const char* so, const char* owner) {
+  return GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned(owner);
+}
+
+void* EntryAddress() { return reinterpret_cast<void*>(&EntryFn); }
+
+// An entry installs through its own path: the next word it reads holds the game's function before the slot changes, the slot
+// holds the entry, and the install is one record that says it is an assembly entry. Removing it puts the game's function back.
+void AnAsmEntryInstallsAndIsRemoved() {
+  Prepare();
+  g_entryNext = nullptr;
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  GotHook hook;
+  QCHECK_STATUS(InstallEntry(hook, AddTarget(so, "entry")), GotStatus::kOk);
+  QCHECK(hook.installed());
+  QCHECK(g_entryNext == m.realAdd);
+  QCHECK(*r.slot == EntryAddress());
+  QCHECK(m.callAdd(3, 4) == 1007);  // EntryContinuation(game(3, 4))
+  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"entry\",\"position\":1,\"chain_length\":1") == 1);
+  QCHECK(Count(LogLevel::kInfo, "\"kind\":\"asm_entry\"") == 1);
+  QCHECK(Errors() == 0);
+  Captured().clear();
+  QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  QCHECK(*r.slot == m.realAdd);
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(Errors() == 0);
+  // An ordinary hook's install record says it is not an entry.
+  AddThunk::Arm(kAddPlus100);
+  GotHook plain;
+  Captured().clear();
+  QCHECK_STATUS(Install(plain, AddTarget(so, "plain"), AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK(Count(LogLevel::kInfo, "\"kind\":\"handler\"") == 1 && Count(LogLevel::kInfo, "\"kind\":\"asm_entry\"") == 0);
+  QCHECK_STATUS(plain.Remove(), GotStatus::kOk);
+  dlclose(m.handle);
+}
+
+// An entry acts only when its caller is the game's own call site, so it stays the newest handler on its slot: a hook that asked
+// to join above it would call it from its own frame, and the entry would pass every call through. The refusal is a Warning
+// that names the chain with the entry in it, whichever install path asked; nothing is published and nothing is stored.
+void ALaterHandlerOnAnEntrysSlotIsRefusedNamingTheEntry() {
+  Prepare();
+  g_entryNext = nullptr;
+  g_entryNextTwo = nullptr;
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  TimesThunk::Arm(kTimesTwo);
+  GotHook entry;
+  QCHECK_STATUS(InstallEntry(entry, AddTarget(so, "entry")), GotStatus::kOk);
+
+  GotHook above;
+  void* out = nullptr;
+  Captured().clear();
+  QCHECK_STATUS(Install(above, AddTarget(so, "times"), TimesThunk::EntryAddress(), &out), GotStatus::kSlotHeldByEntry);
+  QCHECK(out == nullptr && !above.installed());
+  QCHECK(*r.slot == EntryAddress());
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"times\"") == 1);  // the hook that lost is named
+  QCHECK(Count(LogLevel::kWarn, "\"chain\":\"entry(asm_entry)\",\"chain_length\":1") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the newest hook on this slot is an assembly entry") == 1);
+  QCHECK(Errors() == 0);
+
+  // The plugin hook service's install is refused the same way.
+  GotHook plugin;
+  Captured().clear();
+  QCHECK_STATUS(PluginHandlerInstaller::Install(plugin, AddTarget(so, "plugin"), reinterpret_cast<void*>(&AddImpl), &out),
+                GotStatus::kSlotHeldByEntry);
+  QCHECK(out == nullptr && !plugin.installed());
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"plugin\"") == 1);  // a refused plugin is named on the line
+  // Through the plugin hook service itself: the refusal names the plugin by the owner the service gives it.
+  std::uint32_t handle = 0;
+  Captured().clear();
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+                                         LiveNoteOf(so).c_str(), TimesThunk::EntryAddress(), TimesThunk::OriginalOut(),
+                                         &handle) == NEVR_SLOT_HOOK_REFUSED);
+  QCHECK(handle == 0 && !slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"plugin:q15t\"") == 1);
+
+  // A second entry on the slot is refused too: neither would be the newest.
+  GotHook second;
+  Captured().clear();
+  QCHECK_STATUS(InstallAsmEntry(second, AddTarget(so, "entry2"), kEntryRecordTwo, &g_entryNextTwo), GotStatus::kSlotHeldByEntry);
+  QCHECK(g_entryNextTwo == nullptr && !second.installed());
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"entry2\"") == 1);
+  QCHECK(*r.slot == EntryAddress());
+  QCHECK(m.callAdd(3, 4) == 1007);
+
+  // The rule ends with the entry: once it is removed, a handler joins.
+  QCHECK_STATUS(entry.Remove(), GotStatus::kOk);
+  QCHECK_STATUS(Install(above, AddTarget(so, "times"), TimesThunk::EntryAddress(), TimesThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 14);
+  QCHECK_STATUS(above.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 7);
+  dlclose(m.handle);
+}
+
+// An entry installs above the handlers already on its slot and calls the newest of them. When one of those leaves, the
+// manager republishes the word the entry reads (the entry is the handler that called it), so the next call goes to what the
+// leaver called, and the slot is not written. Both ways a handler leaves are shown: Remove and Forget.
+void AnEntryAboveAHandlerFollowsItsRelink() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  AddThunk::Arm(kAddPlus100);
+  for (const bool forget : {false, true}) {
+    g_entryNext = nullptr;
+    GotHook handler;
+    QCHECK_STATUS(Install(handler, AddTarget(so, "add"), AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+    GotHook entry;
+    Captured().clear();
+    QCHECK_STATUS(InstallEntry(entry, AddTarget(so, "entry")), GotStatus::kOk);
+    QCHECK(Count(LogLevel::kInfo, "\"owner\":\"entry\",\"position\":2,\"chain_length\":2,\"next_owner\":\"add\"") == 1);
+    QCHECK(g_entryNext == AddThunk::EntryAddress());
+    QCHECK(m.callAdd(3, 4) == 1107);  // EntryContinuation(AddPlus100(game(3, 4)))
+    if (forget) {
+      handler.Forget();
+    } else {
+      QCHECK_STATUS(handler.Remove(), GotStatus::kOk);
+    }
+    QCHECK(g_entryNext == m.realAdd);        // republished: the entry now calls the game's function
+    QCHECK(*r.slot == EntryAddress());       // the slot was not written
+    QCHECK(m.callAdd(3, 4) == 1007);
+    QCHECK_STATUS(entry.Remove(), GotStatus::kOk);
+    QCHECK(*r.slot == m.realAdd);
+    QCHECK(m.callAdd(3, 4) == 7);
+    QCHECK(Errors() == 0);
+  }
+  dlclose(m.handle);
+}
+
+void* g_nextSeenAtEntryStore = nullptr;
+void EntryPublishObserver(void**, void* value, StorePhase phase) {
+  if (phase == StorePhase::kBeforeStore && value == EntryAddress()) {
+    g_nextSeenAtEntryStore = __atomic_load_n(&g_entryNext, __ATOMIC_ACQUIRE);
+  }
+}
+
+// The entry reads its word at the first call it can get, which is the instant the slot changes: the word holds the game's
+// function by then. Observed at the store itself, so it does not depend on timing.
+void AnEntrysNextWordIsPublishedBeforeTheSlotChanges() {
+  Prepare();
+  g_entryNext = nullptr;
+  g_nextSeenAtEntryStore = nullptr;
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  SetStoreObserver(&EntryPublishObserver);
+  GotHook hook;
+  QCHECK_STATUS(InstallEntry(hook, AddTarget(so, "entry")), GotStatus::kOk);
+  SetStoreObserver(nullptr);
+  QCHECK(g_nextSeenAtEntryStore == m.realAdd);
+  QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  dlclose(m.handle);
+}
+
+// A record is how the frame sensor finds an entry's C++ continuation, so only a record in the nevr_hook_records section is
+// installed. One built at run time is refused at Error; a missing word to publish through is refused before anything is read.
+void AnEntryNeedsARecordInTheSectionAndAWordToPublish() {
+  Prepare();
+  g_entryNext = nullptr;
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  QCHECK(IsRecordedAsmEntry(kEntryRecord));
+  const AsmEntryRecord<decltype(&EntryFn), decltype(&EntryContinuation)> runtimeRecord =
+      HookRecordAccess::MakeAsmEntry(&EntryFn, &EntryContinuation);
+  QCHECK(!IsRecordedAsmEntry(runtimeRecord));
+  GotHook hook;
+  Captured().clear();
+  QCHECK_STATUS(InstallAsmEntry(hook, AddTarget(so, "entry"), runtimeRecord, &g_entryNext), GotStatus::kBadArgument);
+  QCHECK(Count(LogLevel::kError, "record_not_in_nevr_hook_records") == 1);
+  QCHECK(!hook.installed() && g_entryNext == nullptr && *r.slot == m.realAdd);
+
+  Captured().clear();
+  QCHECK_STATUS(InstallAsmEntry(hook, AddTarget(so, "entry"), kEntryRecord, nullptr), GotStatus::kBadArgument);
+  QCHECK(!hook.installed() && *r.slot == m.realAdd);
+  QCHECK(m.callAdd(3, 4) == 7);
+  dlclose(m.handle);
+}
+
+void NewStatusesHaveDistinctTokens() {
+  const GotStatus all[] = {GotStatus::kPinRequired, GotStatus::kSlotClaimed, GotStatus::kExecutableMapping,
+                           GotStatus::kSlotHeldByEntry};
+  const char* const want[] = {"pin_required", "slot_claimed", "executable_mapping", "slot_held_by_entry"};
+  for (std::size_t i = 0; i < 4; ++i) QCHECK(std::strcmp(GotStatusName(all[i]), want[i]) == 0);
 }
 
 void AfterStoreClobberObserver(void** slot, void*, StorePhase phase) {
@@ -2620,6 +3262,21 @@ int main(int argc, char** argv) {
   RegistryLedgerIsBounded();
   RegistrySelfCheckNamesTheHookThatLost();
   CriticalTargetIsTheSameTargetWithAPriority();
+  Abs64Resolution();
+  Abs64WordsInstallPinnedAndChain();
+  DataSlotStoresOnlyOverItsExpectedValueAndIsPutBack();
+  DataSlotRefusesWhatIsNotData();
+  DataSlotAcceptsADataObjectWhoseAddressIsInAnExecutableSegment();
+  DataSlotRefusesAnExecutableReadOnlyPageBeforeChangingItsProtection();
+  AHookOnASlotBlocksADataWriteOnIt();
+  DataSlotRestoreLeavesAChangedSlotAndAGoneModule();
+  DataSlotsShareTheRegistryAndItsReserve();
+  AnAsmEntryInstallsAndIsRemoved();
+  ALaterHandlerOnAnEntrysSlotIsRefusedNamingTheEntry();
+  AnEntryAboveAHandlerFollowsItsRelink();
+  AnEntrysNextWordIsPublishedBeforeTheSlotChanges();
+  AnEntryNeedsARecordInTheSectionAndAWordToPublish();
+  NewStatusesHaveDistinctTokens();
   ArmRefusesARecordOutsideTheSection();
   PoisonedSlotIsKeptWhenMapsAreUnreadable();
   AFailedLiveStoreSetsMayBeLive();

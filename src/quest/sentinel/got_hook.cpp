@@ -60,6 +60,12 @@ struct Link {
   // Our entry was stored in this slot and may still be reachable through it (another writer overwrote or chained it): it
   // is never given back by a handle, so a retry cannot publish that foreign hook as the original and build a call cycle.
   bool poisoned = false;
+  // A data write (GotDataSlot), not a hook: `hookFn` is the value stored, `original` the value it replaced, `originalOut` null. It
+  // is the only entry its slot holds.
+  bool data = false;
+  // A reviewed assembly entry (callback_thunk.h rule 7): it acts on the game's own call site, so it is the newest entry of its
+  // slot for as long as it is there, and JoinLocked refuses any later one.
+  bool entry = false;
 };
 Link g_links[kRegistryCapacity] = {};
 std::size_t g_linkCount = 0;
@@ -73,6 +79,12 @@ std::atomic<StoreObserver> g_storeObserver{nullptr};
 std::atomic<ProtectFn> g_protect{nullptr};
 std::atomic<BuildIdAliasFn> g_buildIdAlias{nullptr};
 std::atomic<const char*> g_serviceSideBuildId{nullptr};
+std::atomic<const RelocNumbers*> g_relocNumbers{nullptr};  // test seam: null means the host architecture's (kNativeRelocs)
+
+const RelocNumbers& CurrentRelocs() {
+  const RelocNumbers* const set = g_relocNumbers.load(std::memory_order_acquire);
+  return set != nullptr ? *set : kNativeRelocs;
+}
 
 int Protect(void* addr, std::size_t length, int prot) {
   const ProtectFn fn = g_protect.load(std::memory_order_acquire);
@@ -139,6 +151,13 @@ bool AnyPoisonedOn(void** slot) {
   return false;
 }
 
+bool AnyDataOn(void** slot) {
+  for (std::size_t i = 0; i < g_linkCount; ++i) {
+    if (g_links[i].slot == slot && g_links[i].data) return true;
+  }
+  return false;
+}
+
 // Removes entry `index` and keeps the registration order of the rest.
 void EraseLinkAt(std::size_t index) {
   for (std::size_t i = index; i + 1 < g_linkCount; ++i) g_links[i] = g_links[i + 1];
@@ -167,6 +186,18 @@ void RecordRefusalLocked(const GotTarget& target) {
     CopyName(lost.symbol, sizeof(lost.symbol), target.symbol);
     lost.critical = critical;
   }
+}
+
+// Under the lock: whether the registry has an entry for a hook of `target`'s priority (a critical one may use the reserve). A
+// refusal is counted and named in the ledger.
+GotStatus CheckRoomLocked(const GotTarget& target) {
+  const bool critical = target.priority == HookPriority::kCritical;
+  const std::size_t limit = critical ? kRegistryCapacity : kRegistryCapacity - kCriticalReserve;
+  if (g_linkCount >= limit) {
+    RecordRefusalLocked(target);
+    return GotStatus::kRegistryFull;
+  }
+  return GotStatus::kOk;
 }
 
 // ---- module lookup ----------------------------------------------------------
@@ -341,13 +372,13 @@ enum class StoreOutcome { kNotStored, kStored, kStoredMayBeLive };
 
 // Replaces `expected` with `value` in `slot`, and only if the slot still holds
 // `expected`: a hook someone chained on top, or any other writer, is never
-// overwritten. A RELRO page is made writable for the store and protected
+// overwritten. `refuseExecutable` (a data write) refuses a slot whose live mapping is executable. A RELRO page is made writable for the store and protected
 // read-only again. The caller holds the process-wide lock for the whole sequence.
 // If the page cannot be re-protected the store is undone (compare-and-swap, so
 // only our own value is rolled back) and re-protection is retried. `relroReadOnly`
 // is the fallback for the protection to restore when /proc/self/maps is unreadable.
 GotStatus WriteSlotLocked(void** slot, void* expected, void* value, bool relroReadOnly,
-                          int* savedErrno, StoreOutcome* outcome) {
+                          int* savedErrno, StoreOutcome* outcome, bool refuseExecutable = false) {
   *outcome = StoreOutcome::kNotStored;
   if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != expected) return GotStatus::kSlotChanged;
   const PageRange pages = PagesOf(slot);
@@ -355,6 +386,8 @@ GotStatus WriteSlotLocked(void** slot, void* expected, void* value, bool relroRe
   // same page may have it writable right now, and a value sampled earlier could
   // describe that transient state.
   const int live = LiveProtection(slot);
+  // A data write (GotDataSlot) stores nowhere that code may run from; checked on the protection read here, under the lock.
+  if (refuseExecutable && live >= 0 && (live & PROT_EXEC) != 0) return GotStatus::kExecutableMapping;
   const bool restoreReadOnly = live >= 0 ? (live & PROT_WRITE) == 0 : relroReadOnly;
   if (restoreReadOnly &&
       Protect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ | PROT_WRITE) != 0) {
@@ -435,17 +468,51 @@ struct RelaTable {
 struct Matches {
   std::uint64_t first = 0;
   std::int64_t firstAddend = 0;
+  std::uint8_t firstType = 0;  // ELF64_ST_TYPE of the symbol the first slot's relocation names
   std::size_t distinct = 0;  // saturates at 2
   bool pinnedFound = false;
   std::int64_t pinnedAddend = 0;
+  std::uint8_t pinnedType = 0;
   bool any = false;
   bool otherKind = false;
 };
 
 }  // namespace
 
+namespace {
+
+// The relocation type a target of `kind` asks for.
+std::uint32_t WantedRelocType(RelocKind kind, const RelocNumbers& relocs) {
+  switch (kind) {
+    case RelocKind::kJumpSlot: return relocs.jumpSlot;
+    case RelocKind::kGlobDat:  return relocs.globDat;
+    case RelocKind::kAbs64:    return relocs.abs64;
+  }
+  return relocs.globDat;
+}
+
+// A relocation type the scan reads for `kind`'s symbol but does not ask for, so a symbol that is relocated only under it is
+// reported as the wrong type (kWrongRelocationType) rather than as absent. A JUMP_SLOT or GLOB_DAT target reads the other of the
+// two; an ABS64 target reads both. An ABS64 word named by a JUMP_SLOT or GLOB_DAT target's symbol is not read: those kinds
+// reported such a symbol as absent before ABS64 existed, and still do.
+bool IsOtherRelocType(RelocKind kind, std::uint32_t type, const RelocNumbers& relocs) {
+  switch (kind) {
+    case RelocKind::kJumpSlot: return type == relocs.globDat;
+    case RelocKind::kGlobDat:  return type == relocs.jumpSlot;
+    case RelocKind::kAbs64:    return type == relocs.jumpSlot || type == relocs.globDat;
+  }
+  return false;
+}
+
+}  // namespace
+
 const char* RelocKindName(RelocKind kind) {
-  return kind == RelocKind::kJumpSlot ? "jump_slot" : "glob_dat";
+  switch (kind) {
+    case RelocKind::kJumpSlot: return "jump_slot";
+    case RelocKind::kGlobDat:  return "glob_dat";
+    case RelocKind::kAbs64:    return "abs64";
+  }
+  return "unknown";
 }
 
 const char* GotStatusName(GotStatus status) {
@@ -475,6 +542,10 @@ const char* GotStatusName(GotStatus status) {
     case GotStatus::kSlotChanged:          return "slot_changed";
     case GotStatus::kRegistryFull:         return "registry_full";
     case GotStatus::kSlotPoisoned:         return "slot_poisoned";
+    case GotStatus::kPinRequired:          return "pin_required";
+    case GotStatus::kSlotClaimed:          return "slot_claimed";
+    case GotStatus::kExecutableMapping:    return "executable_mapping";
+    case GotStatus::kSlotHeldByEntry:      return "slot_held_by_entry";
   }
   return "unknown";
 }
@@ -606,10 +677,7 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
   const bool bindNow = (flags & DF_BIND_NOW) != 0 || (flags1 & DF_1_NOW) != 0;
   if (target.kind == RelocKind::kJumpSlot && !bindNow) return fail(GotStatus::kLazyBinding);
 
-  const std::uint32_t wantedType =
-      target.kind == RelocKind::kJumpSlot ? relocs.jumpSlot : relocs.globDat;
-  const std::uint32_t otherType =
-      target.kind == RelocKind::kJumpSlot ? relocs.globDat : relocs.jumpSlot;
+  const std::uint32_t wantedType = WantedRelocType(target.kind, relocs);
   const std::size_t symbolLen = std::strlen(target.symbol);
 
   Matches matches;
@@ -617,7 +685,7 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
     for (std::size_t i = 0; i < table.count; ++i) {
       const Elf64_Rela& rel = table.entries[i];
       const std::uint32_t type = ELF64_R_TYPE(rel.r_info);
-      if (type != wantedType && type != otherType) continue;
+      if (type != wantedType && !IsOtherRelocType(target.kind, type, relocs)) continue;
       const std::uint32_t symIndex = ELF64_R_SYM(rel.r_info);
       if (symIndex == 0) continue;
       const std::uintptr_t symAt = symBase + static_cast<std::uintptr_t>(symIndex) * sizeof(Elf64_Sym);
@@ -634,10 +702,12 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
         if (rel.r_offset == *target.slotVaddr) {
           matches.pinnedFound = true;
           matches.pinnedAddend = rel.r_addend;
+          matches.pinnedType = ELF64_ST_TYPE(symbols[symIndex].st_info);
         }
       } else if (matches.distinct == 0) {
         matches.first = rel.r_offset;
         matches.firstAddend = rel.r_addend;
+        matches.firstType = ELF64_ST_TYPE(symbols[symIndex].st_info);
         matches.distinct = 1;
       } else if (rel.r_offset != matches.first) {
         matches.distinct = 2;
@@ -650,25 +720,31 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
   }
   std::uint64_t chosenVaddr = 0;
   std::int64_t chosenAddend = 0;
+  std::uint8_t chosenType = 0;
   if (target.slotVaddr.has_value()) {
     if (!matches.pinnedFound) return fail(GotStatus::kSlotOffsetMismatch);
     chosenVaddr = *target.slotVaddr;
     chosenAddend = matches.pinnedAddend;
+    chosenType = matches.pinnedType;
   } else {
     if (matches.distinct > 1) return fail(GotStatus::kAmbiguousRelocation);
+    if (target.kind == RelocKind::kAbs64) return fail(GotStatus::kPinRequired);  // a vtable word is named by its address
     chosenVaddr = matches.first;
     chosenAddend = matches.firstAddend;
+    chosenType = matches.firstType;
   }
   if (chosenAddend != 0) return fail(GotStatus::kUnsupportedAddend);
 
   const std::uint64_t vaddr = chosenVaddr;
   if (vaddr % kSlotSize != 0) return fail(GotStatus::kSlotMisaligned);
   bool writable = false;
+  bool executableSegment = false;
   for (std::size_t i = 0; i < image.phnum; ++i) {
     const Elf64_Phdr& ph = image.phdr[i];
     if (ph.p_type == PT_LOAD && (ph.p_flags & PF_W) != 0 && vaddr >= ph.p_vaddr &&
         vaddr - ph.p_vaddr <= ph.p_memsz && kSlotSize <= ph.p_memsz - (vaddr - ph.p_vaddr)) {
       writable = true;
+      if ((ph.p_flags & PF_X) != 0) executableSegment = true;
     }
   }
   if (!writable) return fail(GotStatus::kSlotOutsideImage);
@@ -682,6 +758,8 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
   }
   result.slotVaddr = vaddr;
   result.slot = reinterpret_cast<void**>(image.base + static_cast<std::uintptr_t>(vaddr));
+  result.inExecutableSegment = executableSegment;
+  result.symbolType = chosenType;
   result.status = GotStatus::kOk;
   return result;
 }
@@ -711,7 +789,7 @@ constexpr std::size_t kChainTextCapacity = 256;
 // What a value in a slot reads as in a refusal line (DescribeSlotValue).
 constexpr std::size_t kValueTextCapacity = 96;
 // Every field an install refusal line carries; a field that does not apply reads "(none)".
-constexpr std::size_t kInstallRefusalFields = 15;
+constexpr std::size_t kInstallRefusalFields = 16;
 
 // The one failure record of a remove. Module names and build IDs are public identifiers; nothing here is a credential.
 void LogFailure(const char* op, const GotTarget& t, GotStatus status, const char* stage, int err) {
@@ -738,6 +816,14 @@ const char* RefusalReason(GotStatus status) {
       return "the slot changed between the check and the store";
     case GotStatus::kRegistryFull:
       return "the hook registry has no room for this hook";
+    case GotStatus::kPinRequired:
+      return "an abs64 target names its slot by a pinned link-time address, and this one has none";
+    case GotStatus::kSlotClaimed:
+      return "the slot already holds a registry entry, and a data write holds its slot alone";
+    case GotStatus::kExecutableMapping:
+      return "a data write may not touch an executable mapping or a code pointer; a code pointer is a hook";
+    case GotStatus::kSlotHeldByEntry:
+      return "the newest hook on this slot is an assembly entry, which acts on the game's call site and must stay the newest";
     case GotStatus::kBuildIdMismatch:
       return "the module's build ID is not the one the target expects";
     default:
@@ -756,8 +842,8 @@ long long DescribeChain(void** slot, char* out, std::size_t capacity) {
     if (g_links[i].slot != slot) continue;
     if (used + 1 >= capacity) break;
     const char* const separator = count == 0 ? "" : ">";
-    const int wrote = std::snprintf(out + used, capacity - used, "%s%s%s", separator, g_links[i].owner,
-                                    g_links[i].poisoned ? "(poisoned)" : "");
+    const int wrote = std::snprintf(out + used, capacity - used, "%s%s%s%s", separator, g_links[i].owner,
+                                    g_links[i].entry ? "(asm_entry)" : "", g_links[i].poisoned ? "(poisoned)" : "");
     if (wrote > 0) {
       const std::size_t n = static_cast<std::size_t>(wrote);
       used += n < capacity - used ? n : capacity - used - 1;
@@ -796,12 +882,14 @@ void DescribeSlotValue(void** slot, const void* value, std::uintptr_t bias, char
   std::snprintf(out, capacity, "%s", "not in the module");
 }
 
-// The refusal of an install: one Warning line that names the slot, the chain on it and the reason (logging.md Rule 6).
+// The refusal of an install: one Warning line that names the hook that lost (its owner: a plugin's id for the plugin hook
+// service), the slot, the chain on it and the reason (logging.md Rule 6).
 // `slot` is null when the module or its slot did not resolve; `slotVaddr` and `bias` (the module's load base) are 0 then.
 // `expected` is the value the install waited for, for kOriginalMismatch and kSlotChanged (null when it has none); the value
 // in the slot is read here. `actualBuildId` is set only for a build-ID mismatch.
 void LogInstallRefusal(const GotTarget& t, GotStatus status, const char* stage, int err, void** slot,
-                       std::uintptr_t slotVaddr, std::uintptr_t bias, const void* expected, const char* actualBuildId) {
+                       std::uintptr_t slotVaddr, std::uintptr_t bias, const void* expected, const char* actualBuildId,
+                       const char* op = "install") {
   char slotText[19] = "(unresolved)";
   char chain[kChainTextCapacity] = "(none)";
   char expectedText[kValueTextCapacity] = "(none)";
@@ -818,13 +906,14 @@ void LogInstallRefusal(const GotTarget& t, GotStatus status, const char* stage, 
   // LogField has no default constructor, so the array is initialised whole. Every field is on every line; a field that
   // does not apply reads "(none)".
   const LogField fields[kInstallRefusalFields] = {
-      LogField("op", "install"),
+      LogField("op", op),
       LogField("status", GotStatusName(status)),
       LogField("reason", RefusalReason(status)),
       LogField("stage", stage),
       LogField("module", t.module),
       LogField("symbol", t.symbol),
       LogField("reloc", RelocKindName(t.kind)),
+      LogField("owner", t.owner != nullptr ? t.owner : "(unnamed)"),
       LogField("errno", err),
       LogField("slot_vaddr", slotText),
       LogField("chain", chain),
@@ -840,7 +929,7 @@ void LogInstallRefusal(const GotTarget& t, GotStatus status, const char* stage, 
 // The refusal for want of room: one line that names the hook that lost, its slot and chain, and what that costs. A critical
 // hook that finds no room is Error: the reserve exists for it, so the loss is a defect to see, not a condition to ride out.
 // The registry is a budget (hook_budget.h): a line like this one means the budget no longer covers the build.
-void LogRegistryFull(const GotTarget& t, void** slot, std::uintptr_t slotVaddr) {
+void LogRegistryFull(const GotTarget& t, void** slot, std::uintptr_t slotVaddr, const char* op = "install") {
   const RegistryStats stats = RegistrySnapshot();
   const bool critical = t.priority == HookPriority::kCritical;
   char slotText[19] = "(unresolved)";
@@ -851,7 +940,7 @@ void LogRegistryFull(const GotTarget& t, void** slot, std::uintptr_t slotVaddr) 
     length = DescribeChain(slot, chain, sizeof(chain));
   }
   LogFields(critical ? LogLevel::kError : LogLevel::kWarn, "got_hook",
-            {{"op", "install"}, {"status", "registry_full"}, {"reason", RefusalReason(GotStatus::kRegistryFull)},
+            {{"op", op}, {"status", "registry_full"}, {"reason", RefusalReason(GotStatus::kRegistryFull)},
              {"module", t.module}, {"symbol", t.symbol}, {"reloc", RelocKindName(t.kind)},
              {"priority", critical ? "critical" : "normal"}, {"slot_vaddr", slotText}, {"chain", chain},
              {"chain_length", length},
@@ -886,7 +975,7 @@ GotStatus Resolve(const GotTarget& target, ImageLookup lookup, Prepared* out) {
       return GotStatus::kBuildIdMismatch;
     }
   }
-  out->resolution = ResolveSlot(out->image, target, kNativeRelocs);
+  out->resolution = ResolveSlot(out->image, target, CurrentRelocs());
   if (out->resolution.status != GotStatus::kOk) return out->resolution.status;
   out->observed = __atomic_load_n(out->resolution.slot, __ATOMIC_ACQUIRE);
   out->plausible = target.expectedOriginal == nullptr && out->observed != nullptr && IsExecutableAddress(out->observed);
@@ -897,11 +986,17 @@ GotStatus Resolve(const GotTarget& target, ImageLookup lookup, Prepared* out) {
 // registers its entry. On kOk, `*expectedSlot` is the value the store must find (the game's value for a first handler,
 // the chain's newest hook otherwise), `*newOriginal` is the value the new hook calls, and the entry is registered; the
 // caller publishes `*newOriginal` through `originalOut` before it stores.
-GotStatus JoinLocked(const Prepared& p, const GotTarget& target, void* hookFn, void** originalOut,
+GotStatus JoinLocked(const Prepared& p, const GotTarget& target, void* hookFn, void** originalOut, bool asmEntry,
                      void** expectedSlot, void** newOriginal, Joined* joined) {
   void** const slot = p.resolution.slot;
+  if (AnyDataOn(slot)) return GotStatus::kSlotClaimed;  // a data write holds the slot alone
   if (AnyPoisonedOn(slot)) return GotStatus::kSlotPoisoned;
   if (FindLink(slot, hookFn) != kNone) return GotStatus::kAlreadyInstalled;
+  // An assembly entry is the newest hook on its slot or it passes every call through (callback_thunk.h rule 7): nothing joins
+  // above it.
+  if (const std::size_t newestIndex = NewestOn(slot); newestIndex != kNone && g_links[newestIndex].entry) {
+    return GotStatus::kSlotHeldByEntry;
+  }
   const std::size_t oldest = OldestOn(slot);
   if (oldest == kNone) {
     // A first handler: the game's value must still be in the slot, as it was when the module was resolved.
@@ -931,12 +1026,7 @@ GotStatus JoinLocked(const Prepared& p, const GotTarget& target, void* hookFn, v
     *newOriginal = newest;
     CopyOwner(joined->nextOwner, g_links[newestIndex].owner);
   }
-  const bool critical = target.priority == HookPriority::kCritical;
-  const std::size_t limit = critical ? kRegistryCapacity : kRegistryCapacity - kCriticalReserve;
-  if (g_linkCount >= limit) {
-    RecordRefusalLocked(target);
-    return GotStatus::kRegistryFull;
-  }
+  if (const GotStatus room = CheckRoomLocked(target); room != GotStatus::kOk) return room;
   std::size_t onSlot = 0;
   for (std::size_t i = 0; i < g_linkCount; ++i) {
     if (g_links[i].slot == slot) ++onSlot;
@@ -947,6 +1037,7 @@ GotStatus JoinLocked(const Prepared& p, const GotTarget& target, void* hookFn, v
   entry.hookFn = hookFn;
   entry.original = *newOriginal;
   entry.originalOut = originalOut;
+  entry.entry = asmEntry;
   CopyOwner(entry.owner, target.owner);
   if (g_linkCount > g_highWater) g_highWater = g_linkCount;
   joined->position = onSlot + 1;
@@ -997,6 +1088,10 @@ void SetServiceSideBuildId(const char* liveNote) noexcept {
 
 BuildIdAliasFn SetBuildIdAlias(BuildIdAliasFn fn) {
   return g_buildIdAlias.exchange(fn, std::memory_order_acq_rel);
+}
+
+const RelocNumbers* SetRelocNumbers(const RelocNumbers* numbers) {
+  return g_relocNumbers.exchange(numbers, std::memory_order_acq_rel);
 }
 
 ProtectFn SetProtectFunction(ProtectFn fn) {
@@ -1060,6 +1155,15 @@ StoreObserver SetStoreObserver(StoreObserver observer) {
 
 GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** originalOut,
                            ImageLookup lookup) {
+  return InstallImpl(target, hookFn, originalOut, lookup, /*asmEntry=*/false);
+}
+
+GotStatus GotHook::InstallEntry(const GotTarget& target, void* entryFn, void** nextOut, ImageLookup lookup) {
+  return InstallImpl(target, entryFn, nextOut, lookup, /*asmEntry=*/true);
+}
+
+GotStatus GotHook::InstallImpl(const GotTarget& target, void* hookFn, void** originalOut, ImageLookup lookup,
+                               bool asmEntry) {
   if (target.module == nullptr || target.symbol == nullptr || hookFn == nullptr ||
       originalOut == nullptr || lookup == nullptr) {
     LogInstallRefusal(target, GotStatus::kBadArgument, "arguments", 0, nullptr, 0, 0, nullptr, nullptr);
@@ -1093,7 +1197,7 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
     stage = nevr::hook::AttachPublished(
         originalOut,
         [&](void** original) {
-          status = JoinLocked(prepared, target, hookFn, originalOut, &expected, &newOriginal, &joined);
+          status = JoinLocked(prepared, target, hookFn, originalOut, asmEntry, &expected, &newOriginal, &joined);
           if (status != GotStatus::kOk) return false;
           *original = newOriginal;
           return true;
@@ -1154,59 +1258,80 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
              {"chain_length", static_cast<long long>(joined.length)},
              first ? LogField("original_offset",
                               HexString(originalOffset, reinterpret_cast<std::uintptr_t>(newOriginal) - image_.base))
-                   : LogField("next_owner", joined.nextOwner)});
+                   : LogField("next_owner", joined.nextOwner),
+             LogField("kind", asmEntry ? "asm_entry" : "handler")});
   return GotStatus::kOk;
 }
+
+namespace {
+
+// What ReleaseEntry did to the handle that asked.
+struct Released {
+  bool handleReleased = false;  // the registry no longer holds the entry: the handle is done, whatever the status
+  std::size_t position = 0;     // where the entry sat on its chain before it left (1 = the oldest)
+};
+
+// The shared half of GotHook::Remove and GotDataSlot::Restore: revalidates the module, then takes the entry for (slot, hookFn)
+// out of the registry, writing the value it called back into the slot (compare-and-swap, under the write lock: a hook chained on
+// top of ours, or a module reloaded at the same base, leaves kSlotChanged and the slot untouched). Logs the failure record of
+// `op`; the caller logs success.
+GotStatus ReleaseEntry(const char* op, const GotTarget& target, const ElfImage& image, ImageLookup lookup, void** slot,
+                       void* hookFn, bool restoreReadOnly, Released* released) {
+  ElfImage now;
+  SlotResolution again;
+  const bool present = lookup(target.module, &now) && now.base == image.base;
+  if (present) again = ResolveSlot(now, target, CurrentRelocs());
+  if (!present || again.status != GotStatus::kOk || again.slot != slot) {
+    // The module is gone or moved: the slot memory is not ours to write. The hook went with it, so its entry is released
+    // and the handle with it.
+    {
+      const Lock lock;
+      ForgetLinkLocked(slot, hookFn);
+    }
+    released->handleReleased = true;
+    LogFailure(op, target, GotStatus::kModuleChanged, "revalidate", 0);
+    return GotStatus::kModuleChanged;
+  }
+  int savedErrno = 0;
+  StoreOutcome outcome = StoreOutcome::kNotStored;
+  GotStatus status = GotStatus::kOk;
+  {
+    const Lock lock;
+    released->position = PositionLocked(slot, hookFn);
+    status = UnlinkLocked(slot, hookFn, restoreReadOnly, &savedErrno, &outcome);
+  }
+  if (status == GotStatus::kNotInstalled) {
+    // The registry no longer has this handle's entry, so there is nothing left to hold: the handle is released.
+    released->handleReleased = true;
+    LogFailure(op, target, status, "registry", 0);
+    return status;
+  }
+  if (status != GotStatus::kOk) {
+    LogFailure(op, target, status, "restore", savedErrno);
+    return status;
+  }
+  released->handleReleased = true;
+  return GotStatus::kOk;
+}
+
+}  // namespace
 
 GotStatus GotHook::Remove() {
   if (!installed_) {
     LogFields(LogLevel::kWarn, "got_hook", {{"op", "remove"}, {"status", "not_installed"}});
     return GotStatus::kNotInstalled;
   }
-  ElfImage now;
-  SlotResolution again;
-  const bool present = lookup_(target_.module, &now) && now.base == image_.base;
-  if (present) again = ResolveSlot(now, target_, kNativeRelocs);
-  if (!present || again.status != GotStatus::kOk || again.slot != slot_) {
-    // The module is gone or moved: the slot memory is not ours to write. The hook went with it, so its entry is released
-    // and the handle with it.
-    {
-      const Lock lock;
-      ForgetLinkLocked(slot_, hookFn_);
-    }
-    installed_ = false;
-    LogFailure("remove", target_, GotStatus::kModuleChanged, "revalidate", 0);
-    return GotStatus::kModuleChanged;
-  }
-  // Compare-and-swap under the write lock (UnlinkLocked): a hook chained on top of ours, or a module reloaded at the same
-  // base, leaves kSlotChanged and the slot untouched.
-  int savedErrno = 0;
-  StoreOutcome outcome = StoreOutcome::kNotStored;
-  GotStatus status = GotStatus::kOk;
-  std::size_t position = 0;  // where the entry sat on its chain before it left (1 = the oldest)
-  {
-    const Lock lock;
-    position = PositionLocked(slot_, hookFn_);
-    status = UnlinkLocked(slot_, hookFn_, restoreReadOnly_, &savedErrno, &outcome);
-  }
-  if (status == GotStatus::kNotInstalled) {
-    // The registry no longer has this handle's entry, so there is nothing left to hold: the handle is released.
-    installed_ = false;
-    LogFailure("remove", target_, status, "registry", 0);
-    return status;
-  }
-  if (status != GotStatus::kOk) {
-    LogFailure("remove", target_, status, "restore", savedErrno);
-    return status;
-  }
-  installed_ = false;
+  Released released;
+  const GotStatus status = ReleaseEntry("remove", target_, image_, lookup_, slot_, hookFn_, restoreReadOnly_, &released);
+  if (released.handleReleased) installed_ = false;
+  if (status != GotStatus::kOk) return status;
   char chain[kChainTextCapacity] = "(none)";
   const long long remaining = DescribeChain(slot_, chain, sizeof(chain));
   LogFields(LogLevel::kInfo, "got_hook",
             {{"op", "remove"}, {"status", "ok"}, {"module", target_.module},
              {"symbol", target_.symbol}, {"reloc", RelocKindName(target_.kind)},
              {"owner", target_.owner != nullptr ? target_.owner : "(unnamed)"},
-             {"position", static_cast<long long>(position)}, {"chain", chain}, {"chain_length", remaining}});
+             {"position", static_cast<long long>(released.position)}, {"chain", chain}, {"chain_length", remaining}});
   return GotStatus::kOk;
 }
 
@@ -1219,6 +1344,136 @@ void GotHook::Forget() {
   installed_ = false;
   LogFields(LogLevel::kWarn, "got_hook",
             {{"op", "forget"}, {"status", "ok"}, {"module", target_.module},
+             {"symbol", target_.symbol}, {"reloc", RelocKindName(target_.kind)}});
+}
+
+GotStatus GotDataSlot::Write(const GotTarget& target, const void* expected, void* value, ImageLookup lookup) {
+  constexpr const char* kOp = "data_write";
+  if (target.module == nullptr || target.symbol == nullptr || expected == nullptr || value == nullptr || lookup == nullptr) {
+    LogInstallRefusal(target, GotStatus::kBadArgument, "arguments", 0, nullptr, 0, 0, nullptr, nullptr, kOp);
+    return GotStatus::kBadArgument;
+  }
+  if (written_) {
+    LogInstallRefusal(target, GotStatus::kAlreadyInstalled, "handle", 0, slot_,
+                      reinterpret_cast<std::uintptr_t>(slot_) - image_.base, image_.base, nullptr, nullptr, kOp);
+    return GotStatus::kAlreadyInstalled;
+  }
+  // The kind of slot a data pointer lives in (ADR 0046 rule 2).
+  if (target.kind != RelocKind::kGlobDat) {
+    LogInstallRefusal(target, GotStatus::kBadArgument, "kind", 0, nullptr, 0, 0, nullptr, nullptr, kOp);
+    return GotStatus::kBadArgument;
+  }
+  // A code pointer as the new value is a hook's business (InstallThunk, with the chain). Asked outside the lock: the loader's own
+  // lock is taken to answer.
+  if (IsExecutableAddress(value)) {
+    LogInstallRefusal(target, GotStatus::kExecutableMapping, "new_value", 0, nullptr, 0, 0, nullptr, nullptr, kOp);
+    return GotStatus::kExecutableMapping;
+  }
+  Prepared prepared;
+  GotStatus status = Resolve(target, lookup, &prepared);
+  if (status != GotStatus::kOk) {
+    LogInstallRefusal(target, status, "resolve", 0, nullptr, 0, 0, nullptr,
+                      status == GotStatus::kBuildIdMismatch ? prepared.actualBuildId : nullptr, kOp);
+    return status;
+  }
+  void** const slot = prepared.resolution.slot;
+  void* const wanted = const_cast<void*>(expected);  // compared and stored over, never written through
+  // Only a slot whose relocation names a data object is data. The symbol decides, not the address `expected` lies at: libr15's
+  // .rodata is inside its executable segment, so every data object there has an address in an executable segment. A function holds
+  // a code pointer, and so does a NOTYPE symbol: the linker types a weak reference nothing defined (libr15's `getentropy`) that
+  // way, and the loader fills its slot with libc's function. Every other data slot of the game libraries names an OBJECT.
+  if (prepared.resolution.symbolType != STT_OBJECT) {
+    LogInstallRefusal(target, GotStatus::kExecutableMapping, "symbol_type", 0, slot, prepared.resolution.slotVaddr,
+                      prepared.image.base, wanted, nullptr, kOp);
+    return GotStatus::kExecutableMapping;
+  }
+  if (prepared.resolution.inExecutableSegment) {
+    LogInstallRefusal(target, GotStatus::kExecutableMapping, "segment", 0, slot, prepared.resolution.slotVaddr,
+                      prepared.image.base, wanted, nullptr, kOp);
+    return GotStatus::kExecutableMapping;
+  }
+
+  int savedErrno = 0;
+  StoreOutcome outcome = StoreOutcome::kNotStored;
+  const char* stage = "claim";
+  {
+    // The claim, the registry entry and the store are one step under the lock, so no hook can join the slot between them.
+    const Lock lock;
+    if (OldestOn(slot) != kNone) {
+      status = GotStatus::kSlotClaimed;
+    } else if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != wanted) {
+      status = GotStatus::kOriginalMismatch;
+    } else if (status = CheckRoomLocked(target); status == GotStatus::kOk) {
+      Link& entry = g_links[g_linkCount++];
+      entry = Link{};
+      entry.slot = slot;
+      entry.hookFn = value;
+      entry.original = wanted;
+      entry.data = true;
+      CopyOwner(entry.owner, target.owner);
+      if (g_linkCount > g_highWater) g_highWater = g_linkCount;
+      stage = "store";
+      status = WriteSlotLocked(slot, wanted, value, prepared.resolution.restoreReadOnly, &savedErrno, &outcome,
+                               /*refuseExecutable=*/true);
+      // A value stored and then overwritten by another writer is theirs now; a data word has no chain to poison, so the
+      // entry goes whenever the write did not succeed.
+      if (status != GotStatus::kOk) EraseLinkLocked(slot, value);
+    }
+  }
+  if (status != GotStatus::kOk) {
+    if (status == GotStatus::kRegistryFull) {
+      LogRegistryFull(target, slot, prepared.resolution.slotVaddr, kOp);
+    } else {
+      LogInstallRefusal(target, status, stage, savedErrno, slot, prepared.resolution.slotVaddr, prepared.image.base,
+                        wanted, nullptr, kOp);
+    }
+    return status;
+  }
+  target_ = target;
+  lookup_ = lookup;
+  image_ = prepared.image;
+  slot_ = slot;
+  value_ = value;
+  restoreReadOnly_ = prepared.resolution.restoreReadOnly;
+  written_ = true;
+  // Debug: pointer values are allowed here (logging.md), and the line says both what the slot held and what it holds now.
+  char vaddr[19], bias[19], was[19], now[19];
+  LogFields(LogLevel::kDebug, "got_hook",
+            {{"op", kOp}, {"status", "ok"}, {"module", target.module}, {"symbol", target.symbol},
+             {"reloc", RelocKindName(target.kind)}, {"slot_vaddr", HexString(vaddr, prepared.resolution.slotVaddr)},
+             {"load_bias", HexString(bias, image_.base)}, {"owner", target.owner != nullptr ? target.owner : "(unnamed)"},
+             {"expected", HexString(was, reinterpret_cast<std::uintptr_t>(wanted))},
+             {"value", HexString(now, reinterpret_cast<std::uintptr_t>(value))}});
+  return GotStatus::kOk;
+}
+
+GotStatus GotDataSlot::Restore() {
+  if (!written_) {
+    LogFields(LogLevel::kWarn, "got_hook", {{"op", "data_restore"}, {"status", "not_installed"}});
+    return GotStatus::kNotInstalled;
+  }
+  Released released;
+  const GotStatus status = ReleaseEntry("data_restore", target_, image_, lookup_, slot_, value_, restoreReadOnly_, &released);
+  if (released.handleReleased) written_ = false;
+  if (status != GotStatus::kOk) return status;
+  char vaddr[19];
+  LogFields(LogLevel::kDebug, "got_hook",
+            {{"op", "data_restore"}, {"status", "ok"}, {"module", target_.module}, {"symbol", target_.symbol},
+             {"reloc", RelocKindName(target_.kind)},
+             {"slot_vaddr", HexString(vaddr, reinterpret_cast<std::uintptr_t>(slot_) - image_.base)},
+             {"owner", target_.owner != nullptr ? target_.owner : "(unnamed)"}});
+  return GotStatus::kOk;
+}
+
+void GotDataSlot::Forget() {
+  if (!written_) return;
+  {
+    const Lock lock;
+    ForgetLinkLocked(slot_, value_);
+  }
+  written_ = false;
+  LogFields(LogLevel::kWarn, "got_hook",
+            {{"op", "data_forget"}, {"status", "ok"}, {"module", target_.module},
              {"symbol", target_.symbol}, {"reloc", RelocKindName(target_.kind)}});
 }
 

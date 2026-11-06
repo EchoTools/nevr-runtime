@@ -7,6 +7,8 @@
 void TestHook_InitResourceOverrides(void (*original)(void*));
 void TestHook_SetOriginal(void (*original)(void*));
 void TestHook_RegisterInitialOverrides(const wchar_t* cache_dir);
+/// The _overrides/ scan of one directory; returns the number of files that failed to register.
+size_t TestHook_RegisterOverrideFilesIn(const char* override_dir);
 void TestHook_SetDeregisterWaitMs(unsigned ms);
 unsigned long long TestHook_DeregisterTimeouts();
 void TestHook_RunResourceCallback(void* callback_data);
@@ -44,6 +46,9 @@ void InstallResourceOverride();
 /// own buffer when it is no larger and is otherwise not served, with a Warning. The cache and `_overrides/` key the same.
 /// A texture's descriptor (buffer 0) and payload (buffer 1) are two entries: a payload of another size than the game's
 /// needs its descriptor entry too. Before #1421 an entry keyed by either on-disk type matched nothing.
+/// The label follows resource_label.h (1 to 64 bytes of printable ASCII, no double quote or backslash); any other label,
+/// a null one included, is refused with a Warning that gives its length and the rule, and nothing is registered. The same
+/// holds for RegisterResourceTransform (it returns false) and RegisterResourceOverrideFromFile.
 void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
                               const void* data, uint64_t size,
                               const char* label);

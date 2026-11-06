@@ -21,7 +21,7 @@ namespace nevr::assets {
 
 enum class RegisterStatus : int {
     Ok = 0,
-    BadArgument = 1,    // null/empty data, a zero type or name, or a size the engine's u32 sizes cannot carry
+    BadArgument = 1,    // null/empty data, a zero type or name, a size the engine's u32 sizes cannot carry, or a label outside the label rule
     Duplicate = 2,      // this (type, name) is already registered
     AlreadyLoaded = 3,  // the engine has already loaded this (type, name); too late to change what it reads
 };

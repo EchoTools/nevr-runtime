@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <nlohmann/json.hpp>
 
 #include "nevr/plugin_interface.h"
@@ -74,12 +78,36 @@ TEST(AssetRegistry, RejectsArgumentsTheEngineCannotUse) {
     EXPECT_EQ(r.Count(), 0u);
 }
 
-TEST(AssetRegistry, ANullLabelIsAnEmptyLabel) {
+// #2225: a label comes from a plugin and is written into log lines and the login's JSON, so one outside the label rule
+// (resource_label.h: 1 to 64 bytes of printable ASCII, no double quote or backslash) is refused where it enters.
+TEST(AssetRegistry, ALabelOutsideTheRuleIsRefusedAndNothingIsStored) {
+    const std::vector<std::pair<const char*, std::string>> bad = {
+        {"newline", "lbl-a\nb"},
+        {"carriage return", "lbl-a\rb"},
+        {"control byte", std::string("lbl-a\x01") + "b"},
+        {"DEL", "lbl-a\x7f" "b"},
+        {"non-ASCII", "lbl-caf\xc3\xa9"},
+        {"invalid UTF-8", "lbl-\xff\xc3("},
+        {"double quote", "lbl-a\"b"},
+        {"backslash", "lbl-a\\b"},
+        {"empty", ""},
+        {"65 bytes", std::string(65, 'q')},
+    };
     Registry r;
-    ASSERT_EQ(r.Register(kType, kNameA, kBlob, sizeof(kBlob), nullptr), RegisterStatus::Ok);
-    Asset a;
-    ASSERT_TRUE(r.Find(kType, kNameA, &a));
-    EXPECT_TRUE(a.label.empty());
+    for (const auto& entry : bad) {
+        SCOPED_TRACE(entry.first);
+        EXPECT_EQ(r.Register(kType, kNameA, kBlob, sizeof(kBlob), entry.second.c_str()), RegisterStatus::BadArgument);
+    }
+    EXPECT_EQ(r.Register(kType, kNameA, kBlob, sizeof(kBlob), nullptr), RegisterStatus::BadArgument) << "null";
+    EXPECT_EQ(r.Count(), 0u);
+    EXPECT_TRUE(r.Empty());
+    EXPECT_EQ(r.ReportJson(), "[]");
+}
+
+TEST(AssetRegistry, TheLabelRuleAcceptsTheLongestAndTheLabelsPluginsUse) {
+    Registry r;
+    EXPECT_EQ(r.Register(kType, kNameA, kBlob, sizeof(kBlob), std::string(64, 'q').c_str()), RegisterStatus::Ok);
+    EXPECT_EQ(r.Register(kType, kNameB, kOtherBlob, sizeof(kOtherBlob), "example-asset"), RegisterStatus::Ok);
 }
 
 TEST(AssetRegistry, DeregisterTakesTheAssetsInsideTheRangeOnly) {
@@ -133,14 +161,6 @@ TEST(AssetRegistry, ReportIsAnArrayInRegistrationOrder) {
     EXPECT_EQ(j[0]["bytes"], 64u);
     EXPECT_EQ(j[1]["label"], "level_b");
     EXPECT_EQ(j[1]["bytes"], 10u);
-}
-
-TEST(AssetRegistry, ReportSurvivesALabelThatIsNotUtf8) {
-    Registry r;
-    ASSERT_EQ(r.Register(kType, kNameA, kBlob, sizeof(kBlob), "bad\xff\xfe label"), RegisterStatus::Ok);
-    nlohmann::json j;
-    ASSERT_NO_THROW(j = nlohmann::json::parse(r.ReportJson()));
-    EXPECT_EQ(j.size(), 1u);
 }
 
 TEST(AssetRegistry, StatusNamesAreStableForLogsAndPlugins) {
