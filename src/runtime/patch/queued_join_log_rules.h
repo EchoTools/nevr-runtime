@@ -110,7 +110,7 @@ inline const char* LeaveConsequence(LeaveResult r) {
     case LeaveResult::StartedNothingQueued:
       return "the game left its session and a join request was sent with no queued id";
     case LeaveResult::NotStarted:
-      return "the game left its session but sent no join request; the queued join is gone";
+      return "the game left its session but sent no join request; the queued id stays in the buffer and a later Leave For Match could still send it";
   }
   return "";
 }
@@ -130,7 +130,7 @@ constexpr bool IsDrop(std::int32_t from, std::int32_t to) {
 
 inline std::string FormatDropLine(const nevr_lobby_frame::Guid& session, std::int32_t to, const char* by) {
   return std::string("[NEVR.MATCH] queued join dropped session=") + SessionText(session) +
-         " status_to=" + std::to_string(to) + " by=" + by + " (no join request was sent for the queued session)";
+         " status_to=" + std::to_string(to) + " by=" + by + " (no join request was sent for the queued session; its id stays in the buffer and a later Leave For Match could still send it)";
 }
 
 }  // namespace nevr_queued_join_log
