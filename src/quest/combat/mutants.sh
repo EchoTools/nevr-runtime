@@ -13,7 +13,9 @@
 # Build jobs. Every build the script starts is capped at CMAKE_BUILD_PARALLEL_LEVEL jobs (default 4; ninja's own default is the core count
 # plus two, and a full-tree compile at that width was oom-killed in the 6 GiB build slice). The final rebuild covers only the targets the
 # run built (not the whole tree), and each build prints its peak memory (`peak_mib`, the build's own cgroup `memory.peak`, or `n/a` when
-# the host exposes none), so a run shows what it cost.
+# the host exposes none), so a run shows what it cost. A failed rebuild prints the first error lines of its log. The rebuild is of those
+# targets alone because a rebuild of the whole group also builds every other program in it, and one of those can fail to link for a reason
+# that has nothing to do with the module under test (another unit's row not yet in that program's source list).
 #
 # Run it in the build slice, from the repository root's checkout, after `just test-quest-combat` has configured the tree:
 #   systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G src/quest/combat/mutants.sh sendguard
@@ -106,6 +108,7 @@ for pair in $(printf '%s' "$touched" | tr '|' '\n' | tr ' ' ',' | grep ,); do
     echo "mutants.sh $module: rebuilt $d $t, $(grep -o 'peak_mib=.*' "$backup/rebuild.log" | tail -n 1)"
   else
     echo "mutants.sh $module: the rebuild of $d $t after the run failed, $(grep -o 'peak_mib=.*' "$backup/rebuild.log" | tail -n 1)" >&2
+    grep -E "error|FAILED|undefined reference" "$backup/rebuild.log" | head -n 8 >&2
     rebuilt=1
   fi
 done
