@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip and combat.force. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, combat.force, combat.heaps and combat.memsys. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -185,6 +185,18 @@ combat:
   # the variant, the build kind, the answer, why, and what became of this key (`force`: not_asked, honoured, redundant or refused).
   # Default (absent): false.
   # force: true
+
+  # Quest only. A boolean. The four heap sizes (the game's resource, System, GPU and game-space heaps) are raised before the game allocates them,
+  # in the q15t and combat APKs (the sizes: 320, 640 (512 on a Quest 2), 512 and 128 MiB). `false` leaves the game's own sizes. A value that is not a
+  # boolean is ignored with a warning in the sentinel log that names the key. Read once at launch; the sentinel log line `combat_heaps_install` says
+  # what the game reads after the step. Default (absent): true.
+  # heaps: false
+
+  # Quest only. A boolean. The render-target layout pool is made with 1024 slots instead of 512 and a log line says whether android_main started after
+  # the sizes were set, in the q15t and combat APKs. `false` leaves the game's pool and also leaves the System heap size (see `heaps`) as the game
+  # has it, because the heap and the pool are one memory change. A value that is not a boolean is ignored with a warning that names the key. Read once at
+  # launch; the sentinel log lines `combat_memsys_install` and `combat_memsys_witness` report it. Default (absent): true.
+  # memsys: false
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints

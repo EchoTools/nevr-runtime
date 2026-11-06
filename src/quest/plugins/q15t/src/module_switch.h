@@ -1,10 +1,10 @@
 // A per-module off switch: an empty file `<name>` in the plugin's data directory turns the module off (the source build's
-// "off = memsys.off" convention; weapon_arm.cpp's `t26arm.off` is the same idea). The directory is the one weapon_arm.cpp
+// "off = <module>.off" convention; weapon_arm.cpp's `t26arm.off` is the same idea). The directory is the one weapon_arm.cpp
 // uses: /sdcard/Android/data/<package>/files/q15t, the package name read from /proc/self/cmdline.
 //
 // Header-only and constructor-free (an inline char array is constant-initialised): the repack's static-init check refuses
 // a plugin with a namespace-scope constructor. A directory that cannot be worked out (no package name) reads as "no
-// switch present": the module stays ON, which is the source build's default for memsys.
+// switch present": the module stays ON, which is the source build's default.
 #pragma once
 
 #include <unistd.h>

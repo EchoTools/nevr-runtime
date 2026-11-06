@@ -9,7 +9,9 @@ add_library(nevr_quest_combat STATIC
   combat_active.cpp
   combat_install.cpp
   equip_refire.cpp
-  match_tags.cpp)
+  heaps.cpp
+  match_tags.cpp
+  memsys.cpp)
 target_include_directories(nevr_quest_combat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_compile_options(nevr_quest_combat PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)

@@ -16,6 +16,8 @@
 
 #include "hook_log.h"
 #include "quest/combat/combat_active.h"
+#include "quest/combat/heaps.h"
+#include "quest/combat/memsys.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -205,22 +207,26 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
   Done();
 }
 
-// The real steps, with the table as it ships: no module has moved in yet, so each phase writes its one line with no modules, and says
-// that nothing of combat's is installed in it.
-void TheShippedTableIsEmptyAndEachStepSaysSo() {
+// The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and nothing has a normal one yet. No
+// libr15 is loaded in this process, so each module refuses with its fixed token and the line names both; the normal phase writes its one
+// line with no modules.
+void TheShippedTableHoldsHeapsThenMemsysInTheEarlyPhase() {
+  nevr_quest::combat::heaps::ResetForTest();
+  nevr_quest::combat::memsys::ResetForTest();
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
-  QCHECK(early.ran && early.modules == 0 && normal.ran && normal.modules == 0);
+  QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
+  QCHECK(normal.ran && normal.modules == 0);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
     QCHECK(Has(lines[0].text, "\"phase\":\"early\"") && Has(lines[1].text, "\"phase\":\"normal\""));
-    for (const Line& l : lines) {
-      QCHECK(l.level == sentinel::LogLevel::kInfo);
-      QCHECK(Has(l.text, "\"modules\":0") && Has(l.text, "\"results\":\"\""));
-      QCHECK(Has(l.text, "no combat module has a step in this phase yet; nothing of combat's is installed"));
-    }
+    QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
+    QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
+    QCHECK(lines[1].level == sentinel::LogLevel::kInfo);
+    QCHECK(Has(lines[1].text, "\"modules\":0") && Has(lines[1].text, "\"results\":\"\""));
+    QCHECK(Has(lines[1].text, "no combat module has a step in this phase yet; nothing of combat's is installed"));
   }
   Done();
 }
@@ -285,6 +291,19 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     QCHECK(Has(lines[1].text, "\"force\":1") && Has(lines[1].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[2].text, "\"force\":0") && Has(lines[2].text, "\"force_source\":\"config\""));
     QCHECK(Has(lines[1].text, "\"msg\":"));
+    // The module switches: on by default, each with its source.
+    QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
+  }
+  g_lines.clear();
+  cfg.heaps = {false, nevr_quest::Source::kFile};
+  cfg.memsys = {true, nevr_quest::Source::kFile};
+  combat::LogConfig(cfg);
+  const std::vector<Line> switches = Lines("combat_config");
+  QCHECK(switches.size() == 1U);
+  if (switches.size() == 1U) {
+    QCHECK(Has(switches[0].text, "\"heaps\":0") && Has(switches[0].text, "\"heaps_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
   }
   Done();
 }
@@ -300,7 +319,7 @@ int main() {
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
-  TheShippedTableIsEmptyAndEachStepSaysSo();
+  TheShippedTableHoldsHeapsThenMemsysInTheEarlyPhase();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();

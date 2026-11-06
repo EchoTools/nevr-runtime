@@ -295,6 +295,18 @@ class TheConstructorBeginNamesTheBuild(unittest.TestCase):
         self.assertIn("nevr_quest::integration::ResolveCombatActive(cfg.combat.force.on);", body)
         self.assertLess(body.index("sentinel::InitActivation();"), body.index("ResolveCombatActive("))
 
+    def test_the_combat_switches_reach_the_modules_before_the_gate_is_resolved(self):
+        # The registration table's rows read their module's `combat:` switch from combat::SetConfig, which the configuration step calls
+        # (with the `combat_config` line) before the gate is resolved and long before the early install step.
+        entry = strip_comments(read("entry.cpp"))
+        log = extract_braced_function(entry, "void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept {")
+        self.assertIn("nevr_quest::combat::SetConfig(config);", log)
+        self.assertLess(log.index("SetConfig(config)"), log.index("LogConfig(config)"))
+        steps = strip_comments((ROOT / "src/quest/integration/production_steps.cpp").read_text())
+        body = extract_braced_function(steps, "const nevr_quest::ResolvedConfig& ResolveConfig() override {")
+        self.assertIn("nevr_quest::integration::LogCombatConfig(cfg.combat);", body)
+        self.assertLess(body.index("LogCombatConfig(cfg.combat)"), body.index("ResolveCombatActive("))
+
     def test_the_variant_and_the_combat_gate_are_built_into_the_sentinel(self):
         self.assertIn("../sentinel/build_variant.cpp", (ROOT / "src/quest/integration/CMakeLists.txt").read_text())
         self.assertIn("combat_active.cpp", (ROOT / "src/quest/combat/CMakeLists.txt").read_text())

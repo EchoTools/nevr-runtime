@@ -558,26 +558,26 @@ _quest-apk store_apk *args: (_heavy-guard "_quest-apk" args) _build-guard _requi
 quest-autopilot-apk store_apk=env("NEVR_STORE_APK"): build-android
     just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so "" "" "" "" "" libnevr_autopilot.so "" "" "" ""
 
-# The q15t plugin libraries (#1546, src/quest/plugins/q15t/README.md): libq15t.so and libq15t_early.so, built with the android-arm64
-# preset, each through the plugin static-init check (tools/check_quest_static_init.sh --plugin) and the emulated-TLS check
-# (src/quest/tests/q15t/check/no_emutls.sh: thread_local allocates on a thread's first use under API 26), checks that each names the
+# The q15t plugin library (#1546, src/quest/plugins/q15t/README.md): libq15t.so, built with the android-arm64
+# preset, through the plugin static-init check (tools/check_quest_static_init.sh --plugin) and the emulated-TLS check
+# (src/quest/tests/q15t/check/no_emutls.sh: thread_local allocates on a thread's first use under API 26), checks that it names the
 # pinned libr15 build id and that libq15t.so carries the shipped defaults (the config marker in plugin.cpp), all on the build tree's
-# files, and only then copies them to build/quest-q15t/ (a refused build leaves nothing there) and prints the sha256 of each.
-# No release or package-dev APK carries them; the variant and combat recipes (release-quest-variant-apk, release-quest-combat-apk)
+# files, and only then copies it to build/quest-q15t/ (a refused build leaves nothing there) and prints its sha256.
+# No release or package-dev APK carries it; the variant and combat recipes (release-quest-variant-apk, release-quest-combat-apk)
 # run this recipe in the tag's checkout and package its output, so these checks guard what ships.
 build-quest-q15t: configure-android
     #!/usr/bin/env bash
     set -euo pipefail
-    cmake --build build/android-arm64 --target nevr_q15t nevr_q15t_early -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    cmake --build build/android-arm64 --target nevr_q15t -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     built=build/android-arm64/integration/q15t
     out=build/quest-q15t
     mkdir -p "$out"
     # Nothing an earlier build left may sit where the repacks read while this build's libraries are checked.
-    rm -f "$out/libq15t.so" "$out/libq15t_early.so"
+    rm -f "$out/libq15t.so"
     id=$(sed -n 's/.*kLibR15StockBuildId = "\([0-9a-f]*\)".*/\1/p' src/quest/sentinel/pinned_targets.h)
     [ -n "$id" ] || { echo "build-quest-q15t: no kLibR15StockBuildId in src/quest/sentinel/pinned_targets.h" >&2; exit 1; }
-    # Every check runs on the build tree's file; the libraries are copied to $out only after all of them pass.
-    for lib in libq15t.so libq15t_early.so; do
+    # Every check runs on the build tree's file; the library is copied to $out only after all of them pass.
+    for lib in libq15t.so; do
         [ -f "$built/$lib" ] || { echo "build-quest-q15t: $built/$lib was not built" >&2; exit 1; }
         tools/check_quest_static_init.sh --plugin "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" "$built/$lib"
         src/quest/tests/q15t/check/no_emutls.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" "$built/$lib" "$lib"
@@ -585,8 +585,8 @@ build-quest-q15t: configure-android
     done
     grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 hz_level=1 build_id=$id" "$built/libq15t.so" \
         || { echo "build-quest-q15t: libq15t.so does not carry the shipped defaults (q15t-config marker)" >&2; exit 1; }
-    cp "$built/libq15t.so" "$built/libq15t_early.so" "$out/"
-    (cd "$out" && sha256sum libq15t.so libq15t_early.so)
+    cp "$built/libq15t.so" "$out/"
+    (cd "$out" && sha256sum libq15t.so)
 
 # The game's NDK, r21b (tools/game_ndk.pin; evidence in docs/reference/quest-game-ndk.md). The store APK's Quest binaries were built
 # with it, so a build that is compared with them uses it: the combat script libraries (build-quest-combat-libs). Downloads the
@@ -674,7 +674,7 @@ release-quest-apk tag reference_apk=env("NEVR_QUEST_REFERENCE_APK"): (_release-q
 # repack of the store game with the same release loader asset, plus the q15t plugin library the tag's own source builds: this recipe
 # runs `just build-quest-q15t` in the checkout (HEAD is the tag's commit, checked below) and packages build/quest-q15t/libq15t.so, so
 # the library is the tag's build output with that recipe's checks behind it (static init, emulated TLS, libr15 build ID, shipped
-# defaults). libq15t_early.so is not packaged: in the variant it would load after android_main read the heap sizes it exists to set.
+# defaults). The heap sizes and the render-target pool are the sentinel's own early step (src/quest/combat/heaps.h), not a library.
 # No library is an argument: a path passed where the store APK goes is refused. Everything `release-quest-apk` checks is
 # checked here too, with the same tag and clone rules and the same refusals under this recipe's name. Writes
 # build/quest-release/<tag>/variant/nevr-runtime-<tag>-q15t-quest.apk and its .sha256 beside, in sha256sum format. The APK is
@@ -684,7 +684,7 @@ release-quest-apk tag reference_apk=env("NEVR_QUEST_REFERENCE_APK"): (_release-q
 release-quest-variant-apk tag store_apk=env("NEVR_STORE_APK") pack="" pack_meta="": (_release-quest-apk "release-quest-variant-apk" tag store_apk "q15t" pack pack_meta)
 
 # The combat APK of a release: the same repack as release-quest-apk, from the same loader asset, with the q15t libraries the tag's
-# own source builds (`just build-quest-q15t` in the checkout, as for the variant): libq15t.so, and libq15t_early.so as an early plugin.
+# own source builds (`just build-quest-q15t` in the checkout, as for the variant): libq15t.so.
 # It is written to build/quest-release/<tag>/combat/ under the release's own name,
 # `libs` is a directory of script libraries and their SHA256SUMS: `build/quest-combat-libs/libs`, which `just build-quest-combat-libs` writes.
 # nevr-runtime-<tag>-quest.apk, with its .sha256 beside. It uploads nothing and never tags. `pack` and `pack_meta` as for the variant.
@@ -740,20 +740,16 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     python3 tools/package_release.py quest-library --lib "$out/loader/libovrplatformloader.so" --version "$ver" --commit "$tag_commit"
     # The q15t libraries are the tag's own build (HEAD is the tag's commit, above): `just build-quest-q15t` builds them and runs its
     # library checks, and the repack packages that output. Its sha256 lines go to stderr: stdout is the APK's sha256 line only.
-    # The combat APK runs libq15t_early.so in the early phase, before android_main reads the heap sizes (src/quest/plugins/q15t/README.md);
-    # the variant does not carry it (it would load after those sizes are read).
-    plugin=""; early=""
+    # Neither variant carries an early plugin: the heap sizes and the render-target pool are set by the sentinel's own early combat step
+    # (src/quest/combat/heaps.h), before android_main reads them.
+    plugin=""
     if [ -n "$variant" ]; then
         echo "$label: building the q15t libraries of $tag at ${head:0:7} (just build-quest-q15t)" >&2
         just build-quest-q15t >&2
         plugin="build/quest-q15t/libq15t.so"
-        if [ "$variant" = combat ]; then
-            plugin="$plugin:build/quest-q15t/libq15t_early.so"
-            early="libq15t_early.so"
-        fi
     fi
     # The variant word names the APK to the sentinel (stamped by the repack, docs/adr/0040 rule 1): empty for the release APK.
-    just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "$early" "" "$pack" "$pack_meta" "$libs" "$variant"
+    just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "" "" "$pack" "$pack_meta" "$libs" "$variant"
     python3 -I tools/quest_release_loader.py verify-apk --apk "$out/repack/r15_nevr-sentinel_signed.apk" --sha256 "$loader_sha"
     if [ -z "$variant" ]; then
         python3 -I tools/quest_release_base.py check-release --apk "$out/repack/r15_nevr-sentinel_signed.apk" --base "$base" >&2

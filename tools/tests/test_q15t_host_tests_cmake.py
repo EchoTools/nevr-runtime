@@ -49,7 +49,6 @@ HOST_TESTS = frozenset(
         "droneguard.droneguard_test",
         "dronekill.dronekill_test",
         "dronemuzzle.dronemuzzle_test",
-        "early.early_test",
         "ec.ec_test",
         "ec.ec_page_symbol",
         "ec.ec_page_test",
@@ -61,12 +60,10 @@ HOST_TESTS = frozenset(
         "fxtrail.fxtrail_test",
         "game_tick.game_tick_test",
         "gunconnect.gunconnect_test",
-        "heaps.heaps_test",
         "hudmeter.hudmeter_test",
         "impactsnd.impactsnd_test",
         "instmodel.instmodel_test",
         "levelname.levelname_test",
-        "memsys.memsys_test",
         "meshstep.meshstep_test",
         "music.music_test",
         "peerclamp.peerclamp_test",
@@ -122,7 +119,7 @@ HOST_TESTS = frozenset(
 # q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack
 # checks and one for each module that keeps per-thread state (bvh, dronekill, impactsnd, powerboost, sensorwd)
 ARM64_OBJECTS = frozenset(
-    "bvh decals dronekill dronemuzzle impactsnd plugin_early hudmeter instmodel music pfx pfxtev powerboost sensorwd shaderstep shieldgamma tablestep".split()
+    "bvh decals dronekill dronemuzzle impactsnd hudmeter instmodel music pfx pfxtev powerboost sensorwd shaderstep shieldgamma tablestep".split()
 )
 # the checks that read an object or run a freestanding program, registered by hand in a module file
 NDK_CHECKS = {
