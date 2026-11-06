@@ -69,8 +69,11 @@ inline void SendGoal(telemetry::v2::EchoArenaFrame* frame, telemetry::v2::Role t
 // data, written by different systems, so nothing shows the record changes in the same tick as the score: it
 // may still be the previous goal's when a score rises, and both scores may rise in one snapshot. So a goal is
 // a rise of one team's score: its team is that team and its point amount the rise. The record gives the
-// scorer, assist, disc speed and distance only when it names that team and is not the record an earlier goal
-// took; until then the goal waits, up to kGoalRecordWaitFrames read frames, and then goes out without them.
+// scorer, assist, disc speed and distance when it names that team and is not the record an earlier goal took;
+// until then the goal waits, up to kGoalRecordWaitFrames read frames. After the wait a record that names that
+// team with the goal's points is the goal's own: the record's disc speed is one value in every record (measured
+// live, echovr.exe 34.4.631547.1), so the same player scoring the same points again for the same team writes a
+// record equal to the last goal's in every compared field. Any other record leaves the goal without them.
 inline void DetectGoals(const TelemetrySnapshot& curr, const TelemetrySnapshot& prev, TelemetryEventState& state,
                         telemetry::v2::EchoArenaFrame* frame) {
   const telemetry::v2::Role teams[2] = {telemetry::v2::ROLE_BLUE_TEAM, telemetry::v2::ROLE_ORANGE_TEAM};
@@ -98,7 +101,13 @@ inline void DetectGoals(const TelemetrySnapshot& curr, const TelemetrySnapshot& 
       state.lastGoalRecord = record;
       pending = TelemetryEventState::PendingGoal{};
     } else if (pending.framesWaited >= kGoalRecordWaitFrames) {
-      SendGoal(frame, teams[t], pending.pointAmount, nullptr);
+      const bool recordIsARepeat = RoleFromLastScoreTeam(record.team) == teams[t] &&
+                                   static_cast<uint32_t>(record.pointAmount) == pending.pointAmount;
+      SendGoal(frame, teams[t], pending.pointAmount, recordIsARepeat ? &record : nullptr);
+      if (recordIsARepeat) {
+        state.lastGoalRecordSet = true;
+        state.lastGoalRecord = record;
+      }
       pending = TelemetryEventState::PendingGoal{};
     }
   }
