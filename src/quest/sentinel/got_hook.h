@@ -128,7 +128,7 @@ enum class GotStatus : std::uint8_t {
   kSlotPoisoned,           // a failed Install left our entry possibly reachable through this slot
   kPinRequired,            // an ABS64 target names its slot by a pinned link-time address, and this one has none
   kSlotClaimed,            // the slot already holds a registry entry a data write may not share, or a data write holds it
-  kExecutableMapping,      // a data write's slot, expected value or new value is in an executable mapping (a code pointer is a hook)
+  kExecutableMapping,      // a data write's slot names a function or is in an executable mapping, or its new value is a code address (a code pointer is a hook)
 };
 
 // Stable tokens for log lines and tests.
@@ -232,6 +232,7 @@ struct SlotResolution {
   void** slot = nullptr;            // runtime address (base applied)
   bool restoreReadOnly = false;     // slot page is RELRO: protect read-only after a write
   bool inExecutableSegment = false; // the slot's PT_LOAD is executable as well as writable (a data write refuses it)
+  std::uint8_t symbolType = 0;      // ELF64_ST_TYPE of the symbol the slot's relocation names (STT_FUNC: the slot holds a code pointer)
 };
 
 // Resolves a target to its slot inside `image` without reading or writing the
@@ -291,6 +292,11 @@ MapsOpener SetMapsOpener(MapsOpener opener);
 enum class StorePhase { kBeforeStore, kAfterStore };
 using StoreObserver = void (*)(void** slot, void* value, StorePhase phase);
 StoreObserver SetStoreObserver(StoreObserver observer);
+
+// Test seam: the relocation numbers Install, Write and Remove resolve slots with (default: the host architecture's, kNativeRelocs).
+// A test that resolves a real AArch64 image on an x86-64 host passes kAarch64Relocs; the pointer must stay valid while it is set.
+// Returns the previous setting (nullptr: the default).
+const RelocNumbers* SetRelocNumbers(const RelocNumbers* numbers);
 
 // Test seam for the page-protection call (default: mprotect). Used to make a
 // re-protect fail deterministically. Returns the previous function.
@@ -358,18 +364,25 @@ class GotHook {
 // makes, so the page-protection call stays in this file (N151).
 //
 // The slot resolves as a hook's does (GotTarget: module, symbol, kind, build ID, optional pin; `expectedOriginal` is not read, the
-// `expected` argument of Write is the check) and takes one registry entry, a normal one unless the target is Critical(). Write
-// stores only over `expected`, under the process-wide lock, and refuses:
-//   - an `expected` or `value` that is an address in an executable mapping: a slot that holds a code pointer is a hook, installed
-//     with InstallThunk, and a code pointer stored here would skip the chain (kExecutableMapping);
+// `expected` argument of Write is the check) and takes one registry entry, a normal one unless the target is Critical(). The kind
+// is kGlobDat: a slot that holds the address of a data symbol (ADR 0046 rule 2); any other kind is kBadArgument. Write stores only
+// over `expected`, under the process-wide lock, and refuses:
+//   - a slot whose relocation names a function (STT_FUNC or STT_GNU_IFUNC): it holds a code pointer, which is a hook's business,
+//     installed with InstallThunk so the chain sees it (kExecutableMapping, stage `symbol_type`). The symbol decides, not the
+//     address: libr15's .rodata lies inside its executable segment, so a data object's address is an address in an executable
+//     segment, and the heap descriptors the first user writes over are such objects;
+//   - a `value` that is an address in an executable segment of a loaded module: a code pointer stored here would skip the chain
+//     (kExecutableMapping, stage `new_value`). `value` is therefore writable storage of the caller's, not a const object the
+//     linker places in an R E segment;
 //   - a slot in an executable mapping: its live protection in /proc/self/maps has x, or its PT_LOAD is flagged executable
-//     (kExecutableMapping);
+//     (kExecutableMapping, stages `store` and `segment`);
 //   - a slot that already holds a registry entry, a hook's chain or another data write (kSlotClaimed); a hook that asks for a
 //     slot a data write holds is refused the same way;
 //   - a slot that does not hold `expected` (kOriginalMismatch).
-// One Debug line records a write and one a restore; a refusal is one Warning line that names the slot (logging.md Rules 6 and 13).
-// A failed Write holds no entry and leaves the slot as it found it, except that a store another writer overwrote right after ours
-// is theirs.
+// One Debug line records a write and one a restore; a refusal is one Warning line that names the slot and the stage (logging.md
+// Rules 6 and 13). A failed Write holds no entry and leaves the slot as it found it, except that a store another writer
+// overwrote right after ours is theirs. It never poisons an entry, where ADR 0019 section 5 (iii) does for a failed restore: a data
+// word has no chain through which a stored value could be called, so there is nothing to keep unreachable.
 class GotDataSlot {
  public:
   constexpr GotDataSlot() = default;

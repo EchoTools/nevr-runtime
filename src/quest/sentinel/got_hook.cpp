@@ -76,6 +76,12 @@ std::atomic<StoreObserver> g_storeObserver{nullptr};
 std::atomic<ProtectFn> g_protect{nullptr};
 std::atomic<BuildIdAliasFn> g_buildIdAlias{nullptr};
 std::atomic<const char*> g_serviceSideBuildId{nullptr};
+std::atomic<const RelocNumbers*> g_relocNumbers{nullptr};  // test seam: null means the host architecture's (kNativeRelocs)
+
+const RelocNumbers& CurrentRelocs() {
+  const RelocNumbers* const set = g_relocNumbers.load(std::memory_order_acquire);
+  return set != nullptr ? *set : kNativeRelocs;
+}
 
 int Protect(void* addr, std::size_t length, int prot) {
   const ProtectFn fn = g_protect.load(std::memory_order_acquire);
@@ -459,9 +465,11 @@ struct RelaTable {
 struct Matches {
   std::uint64_t first = 0;
   std::int64_t firstAddend = 0;
+  std::uint8_t firstType = 0;  // ELF64_ST_TYPE of the symbol the first slot's relocation names
   std::size_t distinct = 0;  // saturates at 2
   bool pinnedFound = false;
   std::int64_t pinnedAddend = 0;
+  std::uint8_t pinnedType = 0;
   bool any = false;
   bool otherKind = false;
 };
@@ -690,10 +698,12 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
         if (rel.r_offset == *target.slotVaddr) {
           matches.pinnedFound = true;
           matches.pinnedAddend = rel.r_addend;
+          matches.pinnedType = ELF64_ST_TYPE(symbols[symIndex].st_info);
         }
       } else if (matches.distinct == 0) {
         matches.first = rel.r_offset;
         matches.firstAddend = rel.r_addend;
+        matches.firstType = ELF64_ST_TYPE(symbols[symIndex].st_info);
         matches.distinct = 1;
       } else if (rel.r_offset != matches.first) {
         matches.distinct = 2;
@@ -706,15 +716,18 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
   }
   std::uint64_t chosenVaddr = 0;
   std::int64_t chosenAddend = 0;
+  std::uint8_t chosenType = 0;
   if (target.slotVaddr.has_value()) {
     if (!matches.pinnedFound) return fail(GotStatus::kSlotOffsetMismatch);
     chosenVaddr = *target.slotVaddr;
     chosenAddend = matches.pinnedAddend;
+    chosenType = matches.pinnedType;
   } else {
     if (matches.distinct > 1) return fail(GotStatus::kAmbiguousRelocation);
     if (target.kind == RelocKind::kAbs64) return fail(GotStatus::kPinRequired);  // a vtable word is named by its address
     chosenVaddr = matches.first;
     chosenAddend = matches.firstAddend;
+    chosenType = matches.firstType;
   }
   if (chosenAddend != 0) return fail(GotStatus::kUnsupportedAddend);
 
@@ -742,6 +755,7 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
   result.slotVaddr = vaddr;
   result.slot = reinterpret_cast<void**>(image.base + static_cast<std::uintptr_t>(vaddr));
   result.inExecutableSegment = executableSegment;
+  result.symbolType = chosenType;
   result.status = GotStatus::kOk;
   return result;
 }
@@ -953,7 +967,7 @@ GotStatus Resolve(const GotTarget& target, ImageLookup lookup, Prepared* out) {
       return GotStatus::kBuildIdMismatch;
     }
   }
-  out->resolution = ResolveSlot(out->image, target, kNativeRelocs);
+  out->resolution = ResolveSlot(out->image, target, CurrentRelocs());
   if (out->resolution.status != GotStatus::kOk) return out->resolution.status;
   out->observed = __atomic_load_n(out->resolution.slot, __ATOMIC_ACQUIRE);
   out->plausible = target.expectedOriginal == nullptr && out->observed != nullptr && IsExecutableAddress(out->observed);
@@ -1060,6 +1074,10 @@ void SetServiceSideBuildId(const char* liveNote) noexcept {
 
 BuildIdAliasFn SetBuildIdAlias(BuildIdAliasFn fn) {
   return g_buildIdAlias.exchange(fn, std::memory_order_acq_rel);
+}
+
+const RelocNumbers* SetRelocNumbers(const RelocNumbers* numbers) {
+  return g_relocNumbers.exchange(numbers, std::memory_order_acq_rel);
 }
 
 ProtectFn SetProtectFunction(ProtectFn fn) {
@@ -1238,7 +1256,7 @@ GotStatus ReleaseEntry(const char* op, const GotTarget& target, const ElfImage& 
   ElfImage now;
   SlotResolution again;
   const bool present = lookup(target.module, &now) && now.base == image.base;
-  if (present) again = ResolveSlot(now, target, kNativeRelocs);
+  if (present) again = ResolveSlot(now, target, CurrentRelocs());
   if (!present || again.status != GotStatus::kOk || again.slot != slot) {
     // The module is gone or moved: the slot memory is not ours to write. The hook went with it, so its entry is released
     // and the handle with it.
@@ -1316,10 +1334,15 @@ GotStatus GotDataSlot::Write(const GotTarget& target, const void* expected, void
                       reinterpret_cast<std::uintptr_t>(slot_) - image_.base, image_.base, nullptr, nullptr, kOp);
     return GotStatus::kAlreadyInstalled;
   }
-  // A code pointer, in the slot or as the new value, is a hook's business (InstallThunk, with the chain). Asked outside the lock:
-  // the loader's own lock is taken to answer.
-  if (IsExecutableAddress(expected) || IsExecutableAddress(value)) {
-    LogInstallRefusal(target, GotStatus::kExecutableMapping, "arguments", 0, nullptr, 0, 0, nullptr, nullptr, kOp);
+  // The kind of slot a data pointer lives in (ADR 0046 rule 2).
+  if (target.kind != RelocKind::kGlobDat) {
+    LogInstallRefusal(target, GotStatus::kBadArgument, "kind", 0, nullptr, 0, 0, nullptr, nullptr, kOp);
+    return GotStatus::kBadArgument;
+  }
+  // A code pointer as the new value is a hook's business (InstallThunk, with the chain). Asked outside the lock: the loader's own
+  // lock is taken to answer.
+  if (IsExecutableAddress(value)) {
+    LogInstallRefusal(target, GotStatus::kExecutableMapping, "new_value", 0, nullptr, 0, 0, nullptr, nullptr, kOp);
     return GotStatus::kExecutableMapping;
   }
   Prepared prepared;
@@ -1331,6 +1354,13 @@ GotStatus GotDataSlot::Write(const GotTarget& target, const void* expected, void
   }
   void** const slot = prepared.resolution.slot;
   void* const wanted = const_cast<void*>(expected);  // compared and stored over, never written through
+  // A slot whose relocation names a function holds a code pointer. The symbol decides, not the address `expected` lies at: libr15's
+  // .rodata is inside its executable segment, so every data object there has an address in an executable segment.
+  if (prepared.resolution.symbolType == STT_FUNC || prepared.resolution.symbolType == STT_GNU_IFUNC) {
+    LogInstallRefusal(target, GotStatus::kExecutableMapping, "symbol_type", 0, slot, prepared.resolution.slotVaddr,
+                      prepared.image.base, wanted, nullptr, kOp);
+    return GotStatus::kExecutableMapping;
+  }
   if (prepared.resolution.inExecutableSegment) {
     LogInstallRefusal(target, GotStatus::kExecutableMapping, "segment", 0, slot, prepared.resolution.slotVaddr,
                       prepared.image.base, wanted, nullptr, kOp);
@@ -1380,12 +1410,14 @@ GotStatus GotDataSlot::Write(const GotTarget& target, const void* expected, void
   value_ = value;
   restoreReadOnly_ = prepared.resolution.restoreReadOnly;
   written_ = true;
-  char vaddr[19], bias[19], expectedOffset[19];
+  // Debug: pointer values are allowed here (logging.md), and the line says both what the slot held and what it holds now.
+  char vaddr[19], bias[19], was[19], now[19];
   LogFields(LogLevel::kDebug, "got_hook",
             {{"op", kOp}, {"status", "ok"}, {"module", target.module}, {"symbol", target.symbol},
              {"reloc", RelocKindName(target.kind)}, {"slot_vaddr", HexString(vaddr, prepared.resolution.slotVaddr)},
              {"load_bias", HexString(bias, image_.base)}, {"owner", target.owner != nullptr ? target.owner : "(unnamed)"},
-             {"expected_offset", HexString(expectedOffset, reinterpret_cast<std::uintptr_t>(wanted) - image_.base)}});
+             {"expected", HexString(was, reinterpret_cast<std::uintptr_t>(wanted))},
+             {"value", HexString(now, reinterpret_cast<std::uintptr_t>(value))}});
   return GotStatus::kOk;
 }
 

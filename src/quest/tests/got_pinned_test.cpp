@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "got_hook.h"
+#include "hook_log.h"
 #include "login_title_hook.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
@@ -137,6 +138,83 @@ constexpr RealDataSlot kRealDataSlots[] = {
     {"_ZN10NRadEngine24kR15GameSpaceMemoryQuestE", 0x3715198},
 };
 
+// The .dynsym entry of `symbol`, or false when absent.
+bool DynamicSymbol(const LoadedElf& elf, const char* symbol, Elf64_Sym* out) {
+  const std::vector<char>& b = elf.bytes;
+  Elf64_Ehdr eh;
+  std::memcpy(&eh, b.data(), sizeof(eh));
+  if (eh.e_shoff == 0 || eh.e_shoff + eh.e_shnum * sizeof(Elf64_Shdr) > b.size()) return false;
+  std::vector<Elf64_Shdr> sh(eh.e_shnum);
+  std::memcpy(sh.data(), b.data() + eh.e_shoff, eh.e_shnum * sizeof(Elf64_Shdr));
+  for (const Elf64_Shdr& s : sh) {
+    if (s.sh_type != SHT_DYNSYM || s.sh_link >= sh.size()) continue;
+    const Elf64_Shdr& str = sh[s.sh_link];
+    for (std::uint64_t off = 0; off + sizeof(Elf64_Sym) <= s.sh_size; off += sizeof(Elf64_Sym)) {
+      Elf64_Sym sym;
+      std::memcpy(&sym, b.data() + s.sh_offset + off, sizeof(sym));
+      if (sym.st_name < str.sh_size && std::strcmp(b.data() + str.sh_offset + sym.st_name, symbol) == 0) {
+        *out = sym;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The value .dynsym gives `symbol` (its link-time address), or 0 when absent.
+std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
+  Elf64_Sym sym;
+  return DynamicSymbol(elf, symbol, &sym) ? sym.st_value : 0;
+}
+
+const LoadedElf* g_dataSlotElf = nullptr;
+bool DataSlotLookup(const char*, ElfImage* out) {
+  *out = g_dataSlotElf->image;
+  return true;
+}
+void QuietSink(LogLevel, const char*) {}
+std::uint64_t g_ourHeapValue = 0;
+
+// The heap descriptors the first data-slot user writes over are DATA objects, and the file puts them inside its executable
+// PT_LOAD (.rodata is in the first segment, which is R E): an address cannot tell them from code, the symbol the relocation names
+// can. The slot's value is the symbol's address, as the loader's GLOB_DAT relocation stores it. The write runs on the private copy
+// this test laid out in memory (nothing is written to the host file): the whole of GotDataSlot::Write against the real layout, its
+// build-ID check, the symbol type, the segment, the registry and the compare-and-swap, then Restore.
+void CheckRealDataSlotWrite(const LoadedElf& elf, const RealDataSlot& d) {
+  Elf64_Sym sym;
+  if (!DynamicSymbol(elf, d.symbol, &sym)) {
+    std::fprintf(stderr, "libr15 %s: not in .dynsym\n", d.symbol);
+    QCHECK(false);
+    return;
+  }
+  QCHECK(ELF64_ST_TYPE(sym.st_info) == STT_OBJECT);
+  bool inExecutableLoad = false;
+  for (const Elf64_Phdr& ph : elf.phdrs) {
+    if (ph.p_type == PT_LOAD && (ph.p_flags & PF_X) != 0 && sym.st_value >= ph.p_vaddr && sym.st_value - ph.p_vaddr < ph.p_memsz) {
+      inExecutableLoad = true;
+    }
+  }
+  QCHECK(inExecutableLoad);
+  const GotTarget target{pinned::kLibR15, d.symbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, d.vaddr};
+  const SlotResolution at = ResolveSlot(elf.image, target, kAarch64Relocs);
+  QCHECK_STATUS(at.status, GotStatus::kOk);
+  QCHECK(at.symbolType == STT_OBJECT && !at.inExecutableSegment);
+
+  void* const gameValue = reinterpret_cast<void*>(elf.image.base + sym.st_value);
+  void** const slot = reinterpret_cast<void**>(elf.image.base + d.vaddr);
+  *slot = gameValue;  // what the loader stores for a GLOB_DAT relocation
+  g_dataSlotElf = &elf;
+  const RelocNumbers* const previousRelocs = SetRelocNumbers(&kAarch64Relocs);  // the image is AArch64, the host is not
+  const LogSink previous = SetLogSink(&QuietSink);
+  GotDataSlot data;
+  QCHECK_STATUS(data.Write(target, gameValue, &g_ourHeapValue, &DataSlotLookup), GotStatus::kOk);
+  QCHECK(*slot == &g_ourHeapValue);
+  QCHECK_STATUS(data.Restore(), GotStatus::kOk);
+  QCHECK(*slot == gameValue);
+  SetLogSink(previous);
+  SetRelocNumbers(previousRelocs);
+}
+
 void CheckRealAbs64Words(const LoadedElf& elf) {
   for (const RealAbs64Word& w : kRealAbs64Words) {
     const GotTarget pinned{pinned::kLibR15, w.symbol, RelocKind::kAbs64, pinned::kLibR15StockBuildId, w.vaddr};
@@ -165,29 +243,8 @@ void CheckRealAbs64Words(const LoadedElf& elf) {
   }
   for (const RealDataSlot& d : kRealDataSlots) {
     CheckTarget(elf, GotTarget{pinned::kLibR15, d.symbol, RelocKind::kGlobDat, pinned::kLibR15StockBuildId, d.vaddr}, d.symbol);
+    CheckRealDataSlotWrite(elf, d);
   }
-}
-
-// The value .dynsym gives `symbol` (its link-time address), or 0 when absent.
-std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
-  const std::vector<char>& b = elf.bytes;
-  Elf64_Ehdr eh;
-  std::memcpy(&eh, b.data(), sizeof(eh));
-  if (eh.e_shoff == 0 || eh.e_shoff + eh.e_shnum * sizeof(Elf64_Shdr) > b.size()) return 0;
-  std::vector<Elf64_Shdr> sh(eh.e_shnum);
-  std::memcpy(sh.data(), b.data() + eh.e_shoff, eh.e_shnum * sizeof(Elf64_Shdr));
-  for (const Elf64_Shdr& s : sh) {
-    if (s.sh_type != SHT_DYNSYM || s.sh_link >= sh.size()) continue;
-    const Elf64_Shdr& str = sh[s.sh_link];
-    for (std::uint64_t off = 0; off + sizeof(Elf64_Sym) <= s.sh_size; off += sizeof(Elf64_Sym)) {
-      Elf64_Sym sym;
-      std::memcpy(&sym, b.data() + s.sh_offset + off, sizeof(sym));
-      if (sym.st_name < str.sh_size && std::strcmp(b.data() + str.sh_offset + sym.st_name, symbol) == 0) {
-        return sym.st_value;
-      }
-    }
-  }
-  return 0;
 }
 
 // True when a NOBITS section (.bss) of the file holds [vaddr, vaddr + size).

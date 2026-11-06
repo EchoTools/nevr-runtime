@@ -1159,6 +1159,7 @@ struct SynthSpec {
   std::uint64_t jmprelSizeAdjust = 0;
   bool readOnlyBacking = false;  // map the image from a read-only shared file mapping
   bool executableData = false;   // the writable PT_LOAD is flagged R W X (the live mapping is not changed)
+  std::uint8_t symType = STT_NOTYPE;  // ELF64_ST_TYPE of alpha and beta (STT_OBJECT for a data symbol, STT_FUNC for a function)
 };
 
 struct SynthImage {
@@ -1187,6 +1188,8 @@ void Build(const SynthSpec& spec, void* originalValue, SynthImage* out) {
   Elf64_Sym syms[3] = {};
   syms[1].st_name = 1;
   syms[2].st_name = 7;
+  syms[1].st_info = ELF64_ST_INFO(STB_GLOBAL, spec.symType);
+  syms[2].st_info = ELF64_ST_INFO(STB_GLOBAL, spec.symType);
   put(kSymtab, syms, sizeof(syms));
 
   std::vector<Elf64_Rela> jmprel, rela;
@@ -2079,17 +2082,50 @@ void DataSlotRefusesWhatIsNotData() {
   Prepare();
   const std::size_t used = RegistrySnapshot().used;
   void* const code = reinterpret_cast<void*>(&AddImpl);
-  {  // a code address as the expected value (the slot holds a code pointer: a hook) or as the new value
+  for (const std::uint8_t type : {STT_FUNC, STT_GNU_IFUNC}) {
+    // A slot whose relocation names a function holds a code pointer (a hook), whatever the value says.
+    SynthSpec spec = DataSpec();
+    spec.symType = type;
     SynthImage img;
-    Build(DataSpec(), code, &img);
+    Build(spec, code, &img);
     g_synth = &img;
     void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
     GotDataSlot slot;
     Captured().clear();
     QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), code, &g_dataB, SynthLookup), GotStatus::kExecutableMapping);
-    QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), &g_dataA, code, SynthLookup), GotStatus::kExecutableMapping);
     QCHECK(!slot.written() && *relro == code && RegistrySnapshot().used == used);
-    QCHECK(Count(LogLevel::kWarn, "\"op\":\"data_write\",\"status\":\"executable_mapping\"") == 2);
+    QCHECK(Count(LogLevel::kWarn, "\"op\":\"data_write\",\"status\":\"executable_mapping\",") == 1);
+    QCHECK(Count(LogLevel::kWarn, "\"stage\":\"symbol_type\"") == 1);
+    GotTarget unpinned = DataTarget("beta", kRelroSlot);  // the symbol alone names the slot: the type is read there too
+    unpinned.slotVaddr = std::nullopt;
+    QCHECK_STATUS(slot.Write(unpinned, code, &g_dataB, SynthLookup), GotStatus::kExecutableMapping);
+    QCHECK(!slot.written() && *relro == code && RegistrySnapshot().used == used);
+    g_synth = nullptr;
+  }
+  {  // a code address as the new value is a code pointer stored in a data slot
+    SynthImage img;
+    Build(DataSpec(), &g_dataA, &img);
+    g_synth = &img;
+    void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+    GotDataSlot slot;
+    Captured().clear();
+    QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), &g_dataA, code, SynthLookup), GotStatus::kExecutableMapping);
+    QCHECK(!slot.written() && *relro == &g_dataA && RegistrySnapshot().used == used);
+    QCHECK(Count(LogLevel::kWarn, "\"stage\":\"new_value\"") == 1);
+    g_synth = nullptr;
+  }
+  {  // only a data slot's kind: a JUMP_SLOT or ABS64 word is a hook's
+    SynthImage img;
+    Build(DataSpec(), &g_dataA, &img);
+    g_synth = &img;
+    GotDataSlot slot;
+    Captured().clear();
+    for (const RelocKind kind : {RelocKind::kJumpSlot, RelocKind::kAbs64}) {
+      GotTarget t = DataTarget("beta", kRelroSlot);
+      t.kind = kind;
+      QCHECK_STATUS(slot.Write(t, &g_dataA, &g_dataB, SynthLookup), GotStatus::kBadArgument);
+    }
+    QCHECK(Count(LogLevel::kWarn, "\"stage\":\"kind\"") == 2 && !slot.written() && RegistrySnapshot().used == used);
     g_synth = nullptr;
   }
   {  // a slot in a mapping that is executable now
@@ -2129,6 +2165,87 @@ void DataSlotRefusesWhatIsNotData() {
     QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kModuleNotLoaded);
     QCHECK(!slot.written() && RegistrySnapshot().used == used);
   }
+}
+
+// libr15's .rodata lies inside its first, executable PT_LOAD, so the four heap descriptors (data objects the slots point at) have
+// addresses in an executable segment. The symbol the relocation names says data from code, not the address. The synthetic stand-in is
+// an OBJECT symbol whose slot holds an address that the loader lists as executable (a function of this test binary).
+void DataSlotAcceptsADataObjectWhoseAddressIsInAnExecutableSegment() {
+  Prepare();
+  const std::size_t used = RegistrySnapshot().used;
+  void* const inExecutableSegment = reinterpret_cast<void*>(&AddImpl);
+  for (const std::uint8_t type : {STT_OBJECT, STT_NOTYPE}) {
+    SynthSpec spec = DataSpec();
+    spec.symType = type;
+    SynthImage img;
+    Build(spec, inExecutableSegment, &img);
+    g_synth = &img;
+    QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
+    void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+    GotDataSlot slot;
+    Captured().clear();
+    QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), inExecutableSegment, &g_dataB, SynthLookup), GotStatus::kOk);
+    QCHECK(slot.written() && *relro == &g_dataB && Errors() == 0 && Count(LogLevel::kWarn, "\"op\":\"data_write\"") == 0);
+    QCHECK_STATUS(slot.Restore(), GotStatus::kOk);
+    QCHECK(*relro == inExecutableSegment && RegistrySnapshot().used == used);
+    g_synth = nullptr;
+  }
+}
+
+int g_protectCalls = 0;
+int CountingProtect(void* addr, std::size_t length, int prot) {
+  ++g_protectCalls;
+  return mprotect(addr, length, prot);
+}
+
+// A read-only executable page is refused before any protection change: the check comes first, so no page is made writable (losing
+// its x) and left that way (N151).
+void DataSlotRefusesAnExecutableReadOnlyPageBeforeChangingItsProtection() {
+  Prepare();
+  const std::size_t used = RegistrySnapshot().used;
+  SynthImage img;
+  Build(DataSpec(), &g_dataA, &img);
+  g_synth = &img;
+  QCHECK(mprotect(static_cast<char*>(img.mem) + kPage, 3 * kPage, PROT_READ | PROT_EXEC) == 0);
+  void** const plain = reinterpret_cast<void**>(img.image.base + kPlainSlot);
+  QCHECK(PagePerms(plain) == "r-xp");
+  g_protectCalls = 0;
+  const ProtectFn previous = SetProtectFunction(&CountingProtect);
+  GotDataSlot slot;
+  Captured().clear();
+  QCHECK_STATUS(slot.Write(DataTarget("alpha", kPlainSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kExecutableMapping);
+  SetProtectFunction(previous);
+  QCHECK(g_protectCalls == 0);
+  QCHECK(!slot.written() && *plain == &g_dataA && PagePerms(plain) == "r-xp" && RegistrySnapshot().used == used);
+  QCHECK(Count(LogLevel::kWarn, "\"stage\":\"store\"") == 1);
+  g_synth = nullptr;
+}
+
+// A hook on a slot blocks a data write on it, as a data write blocks a hook (DataSlotStoresOnlyOverItsExpectedValueAndIsPutBack).
+void AHookOnASlotBlocksADataWriteOnIt() {
+  Prepare();
+  const std::size_t used = RegistrySnapshot().used;
+  SynthImage img;
+  Build(DataSpec(), reinterpret_cast<void*>(&AddImpl), &img);
+  g_synth = &img;
+  void** const relro = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+  GotTarget hookTarget = DataTarget("beta", kRelroSlot);
+  hookTarget.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
+  GotHook hook;
+  void* original = nullptr;
+  QCHECK_STATUS(Install(hook, hookTarget, reinterpret_cast<void*>(&SubImpl), &original, SynthLookup), GotStatus::kOk);
+  GotDataSlot slot;
+  Captured().clear();
+  // `expected` is a value the slot does not hold, so only the entry can be what refuses it as claimed.
+  QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), &g_dataA, &g_dataB, SynthLookup), GotStatus::kSlotClaimed);
+  QCHECK(!slot.written() && *relro == reinterpret_cast<void*>(&SubImpl) && RegistrySnapshot().used == used + 1);
+  QCHECK(Count(LogLevel::kWarn, "\"op\":\"data_write\",\"status\":\"slot_claimed\"") == 1);
+  QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  QCHECK_STATUS(slot.Write(DataTarget("beta", kRelroSlot), reinterpret_cast<void*>(&AddImpl), &g_dataB, SynthLookup),
+                GotStatus::kOk);
+  QCHECK_STATUS(slot.Restore(), GotStatus::kOk);
+  QCHECK(*relro == reinterpret_cast<void*>(&AddImpl) && RegistrySnapshot().used == used);
+  g_synth = nullptr;
 }
 
 void DataSlotRestoreLeavesAChangedSlotAndAGoneModule() {
@@ -2940,6 +3057,9 @@ int main(int argc, char** argv) {
   Abs64WordsInstallPinnedAndChain();
   DataSlotStoresOnlyOverItsExpectedValueAndIsPutBack();
   DataSlotRefusesWhatIsNotData();
+  DataSlotAcceptsADataObjectWhoseAddressIsInAnExecutableSegment();
+  DataSlotRefusesAnExecutableReadOnlyPageBeforeChangingItsProtection();
+  AHookOnASlotBlocksADataWriteOnIt();
   DataSlotRestoreLeavesAChangedSlotAndAGoneModule();
   DataSlotsShareTheRegistryAndItsReserve();
   NewStatusesHaveDistinctTokens();
