@@ -326,11 +326,14 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
             " (the text is kept as written; a key that uses one counts as unset)");
   }
   if (cfg.DuplicateKeyCount() != 0 || cfg.UnknownKeyCount() != 0) {
-    // Counts only (#583): the first value of a duplicate is the one read, and an unknown key is ignored.
+    // The counts and the key names (#583, #2244), never a value: the first value of a duplicate is the one read, and an
+    // unknown key is ignored.
     Add(r, LogLevel::kWarn,
         "config file=" + path + " duplicates=" + std::to_string(cfg.DuplicateKeyCount()) +
             " unknown_nested=" + std::to_string(cfg.UnknownKeyCount()) +
-            " (a duplicate key's first value is read; an unknown key is ignored; no names or values are logged)");
+            " (a duplicate key's first value is read; an unknown key is ignored) duplicate_keys=" +
+            nevr::JoinKeyNamesForLog(cfg.DuplicateKeyNames()) +
+            " unknown_keys=" + nevr::JoinKeyNamesForLog(cfg.UnknownKeyNames()));
   }
   for (const KeySpec& k : kKeys) {
     bool unsetBare = false;

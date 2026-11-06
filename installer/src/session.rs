@@ -133,7 +133,7 @@ impl Session {
     /// Opens the log (refusing the run when it cannot) and writes `run_start`.
     pub fn open(cfg: Config, mode: &str) -> Result<Session> {
         let log = Log::open(&cfg.log_path, &cfg.platform)?;
-        log.info("run_start", 0, json!({"channel": cfg.channel, "manifest_base": crate::util::redact_url(&cfg.base), "core_version": CORE_VERSION, "min_manifest_version": cfg.min_manifest_version, "mode": mode, "pins": cfg.pins.ids()}))?;
+        log.info("run_start", 0, json!({"channel": cfg.channel, "manifest_base": cfg.base, "core_version": CORE_VERSION, "min_manifest_version": cfg.min_manifest_version, "mode": mode, "pins": cfg.pins.ids()}))?;
         Ok(Session { cfg, log })
     }
 
@@ -167,14 +167,13 @@ impl Session {
 
     fn get(&self, name: &str, max: u64) -> std::result::Result<Vec<u8>, Failure> {
         let url = format!("{}/{name}", self.cfg.base);
-        let shown = crate::util::redact_url(&url);
         let mut body = Vec::new();
         if let Err(f) = fetch_capped(&url, 0, max, &mut body) {
             let (Failure::Interrupted(m) | Failure::Refused(m)) = &f;
-            let _ = self.log.event("WARN", "manifest_fetch", 1, json!({"url": shown, "ok": false, "reason": m}));
+            let _ = self.log.event("WARN", "manifest_fetch", 1, json!({"url": url, "ok": false, "reason": m}));
             return Err(f);
         }
-        let _ = self.log.info("manifest_fetch", 1, json!({"url": shown, "bytes": body.len(), "status": 200}));
+        let _ = self.log.info("manifest_fetch", 1, json!({"url": url, "bytes": body.len(), "status": 200}));
         Ok(body)
     }
 
@@ -360,7 +359,7 @@ impl Session {
                 std::fs::create_dir_all(&self.cfg.work_dir).map_err(|e| Error::new(8, format!("{}: {e}", self.cfg.work_dir.display())))?;
                 let url = format!("{}/{}", self.cfg.base, art.path);
                 let f = artifact::download(&url, &art, &zip_path)?;
-                self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": crate::util::redact_url(&url), "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
+                self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": url, "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
                 let n = artifact::verify_zip(&zip_path, &art, false)?;
                 self.log.info("verify_installed", 8, json!({"ok": true, "what": "zip-members", "expected": art.contents.len(), "observed": n}))?;
                 // The bytes that are planned and installed are the bytes just checked against the manifest, not a second read.

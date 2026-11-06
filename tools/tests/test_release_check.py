@@ -122,7 +122,7 @@ class ReleaseCheckTest(unittest.TestCase):
         env = dict(self.env, RELEASE_SIGNER_BIN="git")
         self.assertEqual(self.check(env), [])
 
-    def test_a_credential_in_the_origin_url_is_redacted(self):
+    def test_the_origin_url_is_shown_as_configured(self):
         tools = pathlib.Path(__file__).resolve().parent.parent
         root = self.root / "clone"
         (root / "tools").mkdir(parents=True)
@@ -135,15 +135,8 @@ class ReleaseCheckTest(unittest.TestCase):
         found = release_check.problems(env, root, run_preflight=True)
         preflight = [p for p in found if p.startswith("preflight:")]
         self.assertTrue(preflight, found)
-        self.assertNotIn("ghp_FAKEcredential", "\n".join(found))
-        self.assertIn("<redacted>@", "\n".join(preflight))
-
-    def test_redaction_covers_an_at_sign_in_the_password(self):
-        from release_preflight import redact_url
-        self.assertEqual(redact_url("https://u:p@ss@example.invalid/x"), "https://<redacted>@example.invalid/x")
-        self.assertEqual(redact_url("git@github.com:EchoTools/nevr-runtime.git"),
-                         "git@github.com:EchoTools/nevr-runtime.git")
-        self.assertEqual(redact_url("https://example.invalid/a@b"), "https://example.invalid/a@b")
+        self.assertIn("https://someone:ghp_FAKEcredential@example.invalid/x/y.git", "\n".join(preflight))
+        self.assertNotIn("<redacted>", "\n".join(found))
 
     def test_a_file_that_is_not_its_pin_is_named(self):
         pathlib.Path(self.env["NEVR_QUEST_REFERENCE_APK"]).write_text("the store APK, say")

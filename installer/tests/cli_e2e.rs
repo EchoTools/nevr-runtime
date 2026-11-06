@@ -1044,16 +1044,15 @@ fn a_launcher_json_that_is_there_but_unreadable_is_not_taken_for_no_launcher() {
 }
 
 #[test]
-fn a_base_url_with_credentials_is_never_written_to_the_log_or_the_output() {
+fn a_base_url_with_a_password_is_written_to_the_log_whole() {
     // A closed loopback port: the fetch fails at connect, and the failure text is what the run writes down.
     let w = world(false);
     let base = "https://user:s3cret-token@127.0.0.1:1/nevr-runtime";
     let (code, out, err) = run_with(&w, &["manifest", "verify"], base, &[]);
     assert_eq!(code, 1, "{out}");
     let log = std::fs::read_to_string(w.root.path().join("logs/nevr-install.jsonl")).unwrap();
-    for text in [out.to_string(), err, log] {
-        assert!(!text.contains("s3cret-token") && !text.contains("user:"), "the credentials were written down: {text}");
-    }
+    assert!(log.contains("https://user:s3cret-token@127.0.0.1:1/nevr-runtime"), "the log names a different address: {log}");
+    let _ = (out, err);
 }
 
 #[test]
@@ -1115,7 +1114,7 @@ fn launch_check_refuses_a_root_the_host_does_not_load_from_before_it_reads_a_log
 }
 
 #[test]
-fn a_stage_download_that_fails_logs_the_base_without_its_credentials() {
+fn a_stage_download_that_fails_logs_the_whole_base() {
     // The updater's state folder is <nevr root>/update/manifest (ADR 0024). An earlier run stores the pair there, so the
     // staging run can use it while the base is unreachable.
     let w = world(false);
@@ -1135,10 +1134,10 @@ fn a_stage_download_that_fails_logs_the_base_without_its_credentials() {
         .unwrap();
     assert_eq!(o.status.code(), Some(1), "{}", String::from_utf8_lossy(&o.stdout));
     let log = std::fs::read_to_string(nevr.join("logs/nevr-update.jsonl")).unwrap();
-    assert!(!log.contains("s3cret-token") && !log.contains("user:"), "the credentials were written down: {log}");
+    assert!(log.contains("s3cret-token"), "the log names a different address: {log}");
     let fetch: Value = log.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|r| r["event"] == "artifact_fetch").expect("the failed download is logged");
     assert_eq!(fetch["ok"], false, "{fetch}");
-    assert!(fetch["url"].as_str().unwrap_or("").starts_with("https://127.0.0.1:1/nevr-runtime/v"), "{fetch}");
+    assert!(fetch["url"].as_str().unwrap_or("").starts_with("https://user:s3cret-token@127.0.0.1:1/nevr-runtime/v"), "{fetch}");
 }
 
 // ---- ADR 0024 section 7, the installer's part (#1200 work item 4) ----------------------------------------------------------

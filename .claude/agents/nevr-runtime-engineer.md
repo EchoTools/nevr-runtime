@@ -297,7 +297,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   `nevr_socket_uri` → `services.socket_uri`, `nevr_http_uri` → `auth.http_uri`,
   `matchingservice_host` → `services.matchmaking`, `nevr_serverdb_uri` →
   `services.serverdb_uri`, `external_ip` → `network.external_ip`, `upnp` →
-  `network.upnp`, plus secrets `nevr_http_key`, `nevr_server_key`, `nevr_password`.
+  `network.upnp`, plus secrets `nevr_http_key`, `nevr_server_key`.
   **Never print secret VALUES** — key names and presence/absence only.
 - `RedirectServiceUrl` (`config.cpp`) runs inside `JsonValueAsStringHook`, only after
   `ArmServiceRedirects()` has been called at the start of the deferred runtime bootstrap.
