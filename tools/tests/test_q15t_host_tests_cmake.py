@@ -43,8 +43,6 @@ HOST_TESTS = frozenset(
         "custctx.custctx_test",
         "decals.decals_test",
         "droneguard.droneguard_test",
-        "dronekill.dronekill_test",
-        "dronemuzzle.dronemuzzle_test",
         "ec.ec_test",
         "ec.ec_page_symbol",
         "ec.ec_page_test",
@@ -89,8 +87,6 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_SHIELDGAMMA_2",
         "wiring.wiring_caps_DRONEGUARD",
         "wiring.wiring_caps_PEERCLAMP",
-        "wiring.wiring_caps_DRONEKILL",
-        "wiring.wiring_caps_DRONEMUZZLE",
         "wiring.wiring_caps_GUNCONNECT",
         "wiring.wiring_caps_AIBOTS",
         "wiring.wiring_caps_BVH",
@@ -104,13 +100,12 @@ HOST_TESTS = frozenset(
     ]
 )
 # q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack
-# checks and one for each module that keeps per-thread state (bvh, dronekill, impactsnd, powerboost, sensorwd)
+# checks and one for each module that keeps per-thread state (bvh, impactsnd, powerboost, sensorwd)
 ARM64_OBJECTS = frozenset(
-    "bvh decals dronekill dronemuzzle impactsnd hudmeter instmodel music powerboost sensorwd shaderstep shieldgamma tablestep".split()
+    "bvh decals impactsnd hudmeter instmodel music powerboost sensorwd shaderstep shieldgamma tablestep".split()
 )
 # the checks that read an object or run a freestanding program, registered by hand in a module file
 NDK_CHECKS = {
-    "mod/dronemuzzle.cmake": ["dronemuzzle.arm64_thunks"],
     "mod/powerboost.cmake": ["powerboost.arm64_thunk_disassembly", "powerboost.pb_thunk_qemu"],
 }
 

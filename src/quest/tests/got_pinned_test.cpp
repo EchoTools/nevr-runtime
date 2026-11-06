@@ -28,6 +28,8 @@
 #include "login_title_hook.h"
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/dronekill_targets.h"
+#include "quest/combat/dronemuzzle_targets.h"
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/memsys_targets.h"
@@ -394,6 +396,46 @@ void CheckRealHeapsAndMemsys(const LoadedElf& elf) {
   QCHECK(allocSiteIsPinned && initSiteIsPinned);  // the instruction at each return address is among the pinned words
 }
 
+// dronekill's and dronemuzzle's pins (src/quest/combat/dronekill_targets.h, dronemuzzle_targets.h) against the real libr15: the six JUMP_SLOTs resolve
+// at their pins, each symbol is defined at the function the pin calls real, the comparator's slot is the BinarySearch lambda's, and FireBulletLocal's
+// two calls are the `bl`s whose return addresses the entries compare x30 with (0x97b7910e bl WorldTeleport's stub at 0x210c228, 0x97b8b260 bl
+// FireBullet's at 0x210c2a0; the words after them, 0x9105e3e0 and 0xf9400268, are the call sites).
+void CheckRealDrones(const LoadedElf& elf) {
+  namespace dk = nevr_quest::combat::dronekill;
+  namespace dm = nevr_quest::combat::dronemuzzle;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  const struct {
+    const char* symbol;
+    std::uint64_t slot, fn;
+    const char* what;
+  } slots[] = {{dk::kActorSymbol, dk::kPins.actorSlot, dk::kPins.actorFn, "libr15 SComponentNodeUtils::Actor JUMP_SLOT"},
+               {dk::kEnterSymbol, dk::kPins.enterSlot, dk::kPins.enterFn, "libr15 CEnableComponentNode::Enter JUMP_SLOT"},
+               {dk::kFireSymbol, dk::kPins.fireSlot, dk::kPins.fireFn, "libr15 CR15NetAutoTargetCS::FireBulletLocal JUMP_SLOT"},
+               {dk::kAttackSymbol, dk::kPins.attackSlot, dk::kPins.attackFn, "libr15 CR15NetAutoTargetCS::AttackTarget JUMP_SLOT"},
+               {dm::kTeleportSymbol, dm::kPins.teleportSlot, dm::kPins.teleportFn, "libr15 CncaGameSpace::WorldTeleport JUMP_SLOT"},
+               {dm::kFireSymbol, dm::kPins.fireSlot, dm::kPins.fireFn, "libr15 CR15NetBulletCS::FireBullet JUMP_SLOT"}};
+  for (const auto& s : slots) {
+    CheckTarget(elf, GotTarget{pinned::kLibR15, s.symbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, s.slot}, s.what);
+    CheckDefinedAt(elf, s.symbol, s.fn);
+  }
+  CheckTarget(elf,
+              GotTarget{pinned::kLibR15, "_ZZN10NRadEngine12BinarySearchINS_10CSimpleKeyItNS_12SComponentIDEEEPS3_S2_EEjRKT0_yRKT1_RyENKUlRS3_RKS2_E_clESC_SE_",
+                        RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, dk::kPins.cmpSlot},
+              "libr15 BinarySearch comparator JUMP_SLOT");
+  const struct {
+    std::uint64_t vaddr;
+    std::uint32_t word;
+  } words[] = {{dm::kPins.teleportRet - 4, 0x97b7910e}, {dm::kPins.teleportRet, 0x9105e3e0}, {dm::kPins.fireRet - 4, 0x97b8b260}, {dm::kPins.fireRet, 0xf9400268}};
+  for (const auto& w : words) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + w.vaddr, sizeof(have));
+    if (have != w.word) {
+      std::fprintf(stderr, "libr15 dronemuzzle call-site word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(w.vaddr), have, w.word);
+      QCHECK(false);
+    }
+  }
+}
+
 // The headset gates' pins (src/quest/combat/headset_gates_targets.h) against the real libr15: both JUMP_SLOTs resolve at their pins, the symbols are the
 // functions the pins call real (defined at the pinned addresses), each caller range's return-address site is inside its range and among the pinned
 // words, and every pinned word is the one in the file.
@@ -639,6 +681,7 @@ int main(int argc, char** argv) {
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
   CheckRealHeadsetGates(r15);
+  CheckRealDrones(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

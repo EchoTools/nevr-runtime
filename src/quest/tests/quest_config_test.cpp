@@ -1275,7 +1275,10 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
                       {"gate_link", &nevr_quest::CombatConfig::gateLink, true},
                       // The particle-renderer gate and the event-effect decision (#2188): on unless the file says false.
                       {"pfx", &nevr_quest::CombatConfig::pfx, true},
-                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true}};
+                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true},
+                      // The drone modules (#2187): on unless the file says false.
+                      {"dronekill", &nevr_quest::CombatConfig::dronekill, true},
+                      {"dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);

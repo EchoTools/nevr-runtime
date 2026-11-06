@@ -1,9 +1,16 @@
-// Host test of dronemuzzle.cpp (rows R49 / R50): the plain functions the arm64 thunks call, the install of both GOT words, and the
-// frame-time tick, against a fake slot page and fake real functions (real mprotect, /proc/self/maps, SafeRead).
+// Host test of dronemuzzle (src/quest/combat/dronemuzzle.cpp, #2187): the continuations the two entries call, the install of both entries by the
+// real GotHook into two JUMP_SLOTs of a libr15 image built in memory, the frame-time tick, both orders against another handler on a slot, and the
+// step's refusals.
 //
-// The naked arm64 thunks cannot run on this host: here the two slots get HOST STAND-INS (below) that do what the thunks do in C++ (compare
-// the return address with the thunk's word, then either call the plain function or jump to the next function). What the thunks themselves
-// are is checked by src/quest/tests/q15t/mod/dronemuzzle.cmake (NDK cross-compile; instruction words and relocations compared with the source build's).
+// On the host the entries are the C++ stand-ins dronemuzzle.cpp builds there (the same decision: the return address, then the continuation or the
+// next word); the arm64 entries are the top-level asm() of dronemuzzle_entry.inc, which src/quest/combat/check/dronemuzzle.sh disassembles,
+// checks for ldar and runs under qemu (src/quest/tests/dronemuzzle_qemu.cpp).
+//
+// Moved from the q15t plugin's dronemuzzle_test: the core's oracle, the teleport, the frame tick, the bullet record and the tracer cap are the same
+// checks. What changed is the fixture (an image and the manager's install, not a slot page and a swap; the call sites the entries act on are
+// calibrated as before), the log lines (sentinel records, rendered as in dronekill_test), and the install cases: the plugin's "no arm64 thunk"
+// refusals have no counterpart (the entries are always built), and a slot the manager cannot write is outside the image's writable segment. New
+// here: the entry above a handler that was on the slot first, a handler refused above the entry (#2219), and the step's needs_dronekill_shot.
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -16,13 +23,17 @@
 #include <string>
 #include <vector>
 
-#include "dronekill.h"
-#include "dronemuzzle.h"
-#include "dronemuzzle_core.h"
-#include "nevr/plugin_interface.h"
-#include "plugin_log.h"
+#include "quest/combat/combat_tick.h"
+#include "quest/combat/dronekill.h"
+#include "quest/combat/dronemuzzle.h"
+#include "quest/combat/dronemuzzle_core.h"
+#include "quest/sentinel/hook_install.h"
+#include "quest/sentinel/hook_log.h"
+#include "quest/tests/combat_libr15_image.h"
 
-using namespace q15t;
+using namespace nevr_quest::combat::dronemuzzle;
+namespace dk = nevr_quest::combat::dronekill;
+using sentinel::GotStatus;
 
 static int g_fail = 0;
 #define CHECK(cond, ...)                               \
@@ -40,10 +51,45 @@ struct Line {
   std::string text;
 };
 static std::vector<Line> g_lines;
-static void FakeLog(const char* id, uint32_t level, const char* msg, const NevrLogField* f, uint32_t n) {
-  std::string t = std::string("plugin=") + id + " " + msg;
-  for (uint32_t i = 0; i < n; ++i) t += std::string(" ") + f[i].key + "=" + f[i].value;
-  g_lines.push_back({level, t});
+// A sentinel record as the plugin test's lines read: `<event> key=value ...` (string values unquoted), at the plugin's level numbers (1 Info,
+// 2 Warning, 3 Error, 0 Debug), so a check names an event or a field.
+static std::string Render(const char* json) {
+  std::string out, key;
+  const char* p = json;
+  bool first = true;
+  while (*p != 0) {
+    if (*p != '"') {
+      ++p;
+      continue;
+    }
+    std::string k;
+    for (++p; *p != 0 && *p != '"'; ++p) k += *p;
+    if (*p == '"') ++p;
+    while (*p == ':' || *p == ' ') ++p;
+    std::string v;
+    if (*p == '"') {
+      for (++p; *p != 0 && *p != '"'; ++p) {
+        if (*p == '\\' && p[1] != 0) ++p;
+        v += *p;
+      }
+      if (*p == '"') ++p;
+    } else {
+      while (*p != 0 && *p != ',' && *p != '}') v += *p++;
+    }
+    if (k == "ts_ms" || k == "level" || k == "ts") continue;
+    if (k == "event") {
+      out = v + out;
+      first = false;
+      continue;
+    }
+    out += " " + k + "=" + v;
+  }
+  (void)first;
+  return out;
+}
+static void Sink(sentinel::LogLevel level, const char* line) {
+  const uint32_t lv = level == sentinel::LogLevel::kInfo ? 1 : level == sentinel::LogLevel::kWarn ? 2 : level == sentinel::LogLevel::kError ? 3 : 0;
+  g_lines.push_back({lv, Render(line)});
 }
 static int CountLine(const char* needle, int level = -1) {
   int n = 0;
@@ -85,12 +131,12 @@ void TrigSpawn(const float* root, double yaw, double pitch, double speed, double
   const double dt = frame_dt < 1.0 / 120.0 ? 1.0 / 120.0 : frame_dt > 1.0 / 30.0 ? 1.0 / 30.0 : frame_dt;
   const double back = std::fmin(speed * dt, 0.25);
   for (int k = 0; k < 3; ++k)
-    out[k] = root[k] + q15t::dm::kMuzzle[0] * X[k] + q15t::dm::kMuzzle[1] * Y[k] + q15t::dm::kMuzzle[2] * Z[k] - back * Z[k];
+    out[k] = root[k] + dm::kMuzzle[0] * X[k] + dm::kMuzzle[1] * Y[k] + dm::kMuzzle[2] * Z[k] - back * Z[k];
 }
 }  // namespace ref
 
 static void TestCore() {
-  using namespace q15t::dm;
+  using namespace dm;
   unsigned x = 777;
   auto rnd = [&x]() {
     x = x * 1103515245u + 12345u;
@@ -194,18 +240,6 @@ static uint64_t FakeFireReal(uint8_t* bcs, uint64_t handle, const void* gun, flo
   return 0x5678;
 }
 
-// the host stand-ins for the two thunks: the same decision in C++
-__attribute__((noinline)) static uint64_t HostTpThunk(void* gs, uint64_t actor, const uint8_t* pose, uint64_t reason) {
-  const uintptr_t ret = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
-  if (ret == q15t_dm_tp_ret.load(std::memory_order_acquire)) return q15t_dm_teleport(gs, actor, pose, reason);
-  return reinterpret_cast<TpFn>(q15t_dm_tp_next.load(std::memory_order_acquire))(gs, actor, pose, reason);
-}
-__attribute__((noinline)) static uint64_t HostFireThunk(uint8_t* bcs, uint64_t handle, const void* gun, float speed, const void* quat, const void* vel,
-                                                       uint64_t remote, uint64_t flag) {
-  const uintptr_t ret = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
-  if (ret == q15t_dm_fire_ret.load(std::memory_order_acquire)) return q15t_dm_fire(bcs, handle, gun, speed, quat, vel, remote, flag);
-  return reinterpret_cast<FireFn>(q15t_dm_fire_next.load(std::memory_order_acquire))(bcs, handle, gun, speed, quat, vel, remote, flag);
-}
 // the return-address recorders used to calibrate the "FireBulletLocal" call sites below
 static uintptr_t g_rec_tp = 0, g_rec_fire = 0;
 __attribute__((noinline)) static uint64_t RecTp(void*, uint64_t, const uint8_t*, uint64_t) {
@@ -238,29 +272,34 @@ static uint64_t g_now_ns = 5000000000ull;
 static uint64_t ClkNs() { return g_now_ns; }
 
 static uintptr_t g_base = 0;
-static uintptr_t* g_w = nullptr;
+using combat_test::Image;
+static Image g_image;
+static constexpr uint64_t kRw = Image::kRwStart;
+static constexpr uint64_t kSlotTp = kRw + 0x20, kSlotFire = kRw + 0x28, kExecFire = 0x2028, kExecTp = 0x2020;
+static uintptr_t& W(uint64_t vaddr) { return *reinterpret_cast<uintptr_t*>(g_base + vaddr); }
 static uintptr_t V(const void* fn) { return reinterpret_cast<uintptr_t>(fn) - g_base; }
+static bool Lookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_image.Present() || std::strcmp(module, sentinel::pinned::kLibR15) != 0) return false;
+  *out = g_image.Elf();
+  return true;
+}
+static uint64_t g_tpSlot = kSlotTp, g_fireSlot = kSlotFire;
 
-static void NewPage(bool fire_in_exec_page) {
-  void* p = mmap(nullptr, 2 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  g_w = static_cast<uintptr_t*>(p);
-  g_base = reinterpret_cast<uintptr_t>(p);
-  g_w[0x20 / 8] = reinterpret_cast<uintptr_t>(&FakeTeleport);
-  if (fire_in_exec_page) g_w[0x1028 / 8] = reinterpret_cast<uintptr_t>(&FakeFireReal);
-  else g_w[0x28 / 8] = reinterpret_cast<uintptr_t>(&FakeFireReal);
-  mprotect(p, 4096, PROT_READ);
-  mprotect(static_cast<char*>(p) + 4096, 4096, fire_in_exec_page ? (PROT_READ | PROT_EXEC) : PROT_READ);
+// A fresh libr15 image whose two JUMP_SLOTs hold the fakes; a slot `outside` the writable segment the manager refuses to write.
+static void NewPage(bool fire_outside, bool tp_outside = false) {
+  g_tpSlot = tp_outside ? kExecTp : kSlotTp;
+  g_fireSlot = fire_outside ? kExecFire : kSlotFire;
+  g_image.Build({{kTeleportSymbol, g_tpSlot, false, false, 0}, {kFireSymbol, g_fireSlot, false, false, 0}});
+  g_base = g_image.Base();
+  W(g_tpSlot) = reinterpret_cast<uintptr_t>(&FakeTeleport);
+  W(g_fireSlot) = reinterpret_cast<uintptr_t>(&FakeFireReal);
 }
 
-static DroneMuzzleSlots Slots(bool fire_in_exec_page = false) {
+static Pins Slots() {
   // calibrate: the return addresses of the "In" call sites
   TpIn(&RecTp, nullptr);
   FireIn(&RecFire);
-  return {0x20, V(reinterpret_cast<void*>(&FakeTeleport)), g_rec_tp - g_base, fire_in_exec_page ? 0x1028u : 0x28u,
-          V(reinterpret_cast<void*>(&FakeFireReal)), g_rec_fire - g_base};
-}
-static DroneMuzzleWrappers Wrappers() {
-  return {reinterpret_cast<uintptr_t>(&HostTpThunk), reinterpret_cast<uintptr_t>(&HostFireThunk)};
+  return {g_tpSlot, V(reinterpret_cast<void*>(&FakeTeleport)), g_rec_tp - g_base, g_fireSlot, V(reinterpret_cast<void*>(&FakeFireReal)), g_rec_fire - g_base};
 }
 
 static void BuildBullet() {
@@ -273,27 +312,28 @@ static void BuildBullet() {
   g_index[(kHandle & 0xffff) * 2] = 1;  // slot 1
 }
 
-static DroneMuzzleInstall Setup() {
-  ResetDroneMuzzleForTest();
-  ResetDroneKillForTest();
+static Result Setup() {
+  ResetForTest();
+  dk::ResetForTest();
   g_lines.clear();
   g_tp.clear();
   g_fire.clear();
   g_now_ns = 5000000000ull;
-  SetDroneMuzzleClockForTest(&ClkNs);
+  SetClockForTest(&ClkNs);
   BuildBullet();
   NewPage(false);
-  SetDroneKillShotActiveForTest(true);
-  return InstallDroneMuzzle(g_base, Slots(), Wrappers());
+  dk::SetShotActiveForTest(true);
+  dk::SetScopeForTest(true);  // a combat map is loaded: the frame tick times frames
+  return InstallAt(&Lookup, Slots());
 }
 
-static TpFn TpSlot() { return reinterpret_cast<TpFn>(g_w[0x20 / 8]); }
-static FireFn FireSlot() { return reinterpret_cast<FireFn>(g_w[0x28 / 8]); }
+static TpFn TpSlot() { return reinterpret_cast<TpFn>(W(g_tpSlot)); }
+static FireFn FireSlot() { return reinterpret_cast<FireFn>(W(g_fireSlot)); }
 static void Shot(float x, float y, float z, int remote = 0) {
   const float v[3] = {x, y, z};
-  SetDroneKillShotForTest(v, remote);
+  dk::SetShotForTest(v, remote);
 }
-static void NoShot() { SetDroneKillShotForTest(nullptr, 0); }
+static void NoShot() { dk::SetShotForTest(nullptr, 0); }
 
 alignas(16) static uint8_t g_pose[32];
 static void SetPose(float px, float py, float pz) {
@@ -304,120 +344,163 @@ static void SetPose(float px, float py, float pz) {
 
 // ================================================================ tests
 static void TestInstallPinned() {
-  ResetDroneMuzzleForTest();
+  const Pins& k = kPins;
+  CHECK(k.teleportSlot == 0x36cfa18 && k.teleportFn == 0x180a384 && k.teleportRet == 0x210c22c, "teleport constants");
+  CHECK(k.fireSlot == 0x36f3cf8 && k.fireFn == 0x210c9c4 && k.fireRet == 0x210c2a4, "fire constants");
+  CHECK(std::strcmp(kTeleportSymbol, "_ZN10NRadEngine13CncaGameSpace13WorldTeleportENS_6SActorENS_8CTransfQENS_24EComponentTeleportReasonE") == 0 &&
+            std::strcmp(kFireSymbol, "_ZN10NRadEngine8NRadGame15CR15NetBulletCS10FireBulletENS_18SCompactPoolHandleENS_16CComponentHandleINS0_12CR15NetGunCSEEEfRKNS_11CQuaternionERKNS_8C3VectorEjj") == 0,
+        "the symbols are the readelf names");
+  // the production slots on an image holding them; the functions are the fakes (an original must be code)
+  ResetForTest();
   g_lines.clear();
-  SetDroneKillShotActiveForTest(true);
-  const size_t sz = 0x3800000;
-  void* p = mmap(nullptr, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-  const uintptr_t base = reinterpret_cast<uintptr_t>(p);
-  auto put = [&](uintptr_t slot, uintptr_t fn) {
-    const uintptr_t v = base + fn;
-    memcpy(static_cast<char*>(p) + slot, &v, 8);
-  };
-  put(0x36cfa18, 0x180a384);  // R49 WorldTeleport
-  put(0x36f3cf8, 0x210c9c4);  // R50 FireBullet
-  mprotect(p, sz, PROT_READ);
-  const DroneMuzzleSlots& k = kDroneMuzzlePinned;
-  CHECK(k.teleport_slot == 0x36cfa18 && k.teleport_fn == 0x180a384 && k.teleport_ret == 0x210c22c, "teleport constants");
-  CHECK(k.fire_slot == 0x36f3cf8 && k.fire_fn == 0x210c9c4 && k.fire_ret == 0x210c2a4, "fire constants");
-  const DroneMuzzleInstall r = InstallDroneMuzzle(base, kDroneMuzzlePinned, Wrappers());
-  CHECK(r.ok && r.teleport.status == SwapStatus::kOk && r.fire.status == SwapStatus::kOk && r.shot_source, "pinned install");
-  uintptr_t a, b;
-  memcpy(&a, static_cast<char*>(p) + 0x36cfa18, 8);
-  memcpy(&b, static_cast<char*>(p) + 0x36f3cf8, 8);
-  CHECK(a == reinterpret_cast<uintptr_t>(&HostTpThunk) && b == reinterpret_cast<uintptr_t>(&HostFireThunk), "the words are not the wrappers");
-  CHECK(q15t_dm_tp_ret.load() == base + 0x210c22c && q15t_dm_fire_ret.load() == base + 0x210c2a4, "return words: %llx %llx",
-        (unsigned long long)q15t_dm_tp_ret.load(), (unsigned long long)q15t_dm_fire_ret.load());
-  CHECK(q15t_dm_tp_next.load() == base + 0x180a384 && q15t_dm_fire_next.load() == base + 0x210c9c4, "next words");
-  CHECK(CountLine("dronemuzzle hook install", 1) == 2 && HasLine("dronemuzzle: on (QA)", 1), "install lines");
+  g_image.Build({{kTeleportSymbol, k.teleportSlot, false, false, 0}, {kFireSymbol, k.fireSlot, false, false, 0}});
+  g_base = g_image.Base();
+  W(k.teleportSlot) = reinterpret_cast<uintptr_t>(&FakeTeleport);
+  W(k.fireSlot) = reinterpret_cast<uintptr_t>(&FakeFireReal);
+  Pins pins = k;
+  pins.teleportFn = V(reinterpret_cast<void*>(&FakeTeleport));
+  pins.fireFn = V(reinterpret_cast<void*>(&FakeFireReal));
+  const Result r = InstallAt(&Lookup, pins);
+  CHECK(r.ok && r.teleport == GotStatus::kOk && r.fire == GotStatus::kOk, "pinned install");
+  CHECK(W(k.teleportSlot) == reinterpret_cast<uintptr_t>(&nevr_combat_dm_tp_entry) && W(k.fireSlot) == reinterpret_cast<uintptr_t>(&nevr_combat_dm_fire_entry),
+        "the words are not the entries");
+  const Words w = WordsForTest();
+  CHECK(w.teleportRet == g_base + 0x210c22c && w.fireRet == g_base + 0x210c2a4, "return words: %llx %llx", (unsigned long long)w.teleportRet,
+        (unsigned long long)w.fireRet);
+  CHECK(w.teleportNext == reinterpret_cast<uintptr_t>(&FakeTeleport) && w.fireNext == reinterpret_cast<uintptr_t>(&FakeFireReal), "next words");
+  CHECK(CountLine("combat_dronemuzzle_hook", 1) == 2 && HasLine("result=installed", 1), "install lines");
   CHECK(HasLine("muzzle_x=0.000024") && HasLine("muzzle_y=0.075634") && HasLine("muzzle_z=0.147283") && HasLine("back_max_m=0.250000"),
-        "the on (QA) line lacks a muzzle constant or the back-off cap");
-  munmap(p, sz);
+        "the install line lacks a muzzle constant or the back-off cap");
+  ResetForTest();
 }
 
 static void TestInstallRefusals() {
-  // no thunk (the host's own default: only arm64 has them)
-  ResetDroneMuzzleForTest();
+  // a slot that does not hold the pinned function: nothing installed
+  ResetForTest();
   g_lines.clear();
   NewPage(false);
-  DroneMuzzleInstall r = InstallDroneMuzzle(g_base, Slots(), DroneMuzzleThunks());
-#if defined(__aarch64__)
-  CHECK(DroneMuzzleThunks().teleport != 0 && DroneMuzzleThunks().fire != 0 && DroneMuzzleThunks().teleport != DroneMuzzleThunks().fire, "arm64 thunks");
-#else
-  CHECK(!r.ok && HasLine("no arm64 thunk on this architecture", 3), "host default wrappers: refusal not loud");
-  CHECK(g_w[0x20 / 8] == reinterpret_cast<uintptr_t>(&FakeTeleport), "a word was swapped without a thunk");
-#endif
-  // a slot that does not hold the pinned function: nothing swapped
-  ResetDroneMuzzleForTest();
-  g_lines.clear();
-  NewPage(false);
-  DroneMuzzleSlots s = Slots();
-  mprotect(g_w, 4096, PROT_READ | PROT_WRITE);
-  g_w[0x28 / 8] = 0x4242420;
-  mprotect(g_w, 4096, PROT_READ);
-  r = InstallDroneMuzzle(g_base, s, Wrappers());
-  CHECK(!r.ok && r.fire.status == SwapStatus::kUnexpectedOriginal && g_w[0x20 / 8] == reinterpret_cast<uintptr_t>(&FakeTeleport) && g_w[0x28 / 8] == 0x4242420,
-        "foreign slot word: a word changed");
-  CHECK(HasLine("dronemuzzle: OFF, nothing changed", 3) && q15t_dm_tp_next.load() == 0, "refusal not loud / next set");
-  // the second word cannot be swapped (executable page): the first is put back
-  ResetDroneMuzzleForTest();
+  Pins s = Slots();
+  W(g_fireSlot) = reinterpret_cast<uintptr_t>(&FakeTeleport);  // code, but not FireBullet
+  Result r = InstallAt(&Lookup, s);
+  CHECK(!r.ok && r.fire == GotStatus::kOriginalMismatch && W(g_tpSlot) == reinterpret_cast<uintptr_t>(&FakeTeleport) &&
+            W(g_fireSlot) == reinterpret_cast<uintptr_t>(&FakeTeleport),
+        "foreign slot word: a word changed (%s)", sentinel::GotStatusName(r.fire));
+  CHECK(HasLine("result=refused", 3) && WordsForTest().teleportRet == 0 && WordsForTest().fireRet == 0, "refusal not loud / words left set");
+  // the second entry cannot be installed (outside the writable segment): the first is removed
+  ResetForTest();
   g_lines.clear();
   NewPage(true);
-  r = InstallDroneMuzzle(g_base, Slots(true), Wrappers());
-  CHECK(!r.ok && r.fire.status == SwapStatus::kExecutablePage, "exec page: %s", StatusName(r.fire.status));
-  CHECK(g_w[0x20 / 8] == reinterpret_cast<uintptr_t>(&FakeTeleport), "WorldTeleport's word was not put back");
-  CHECK(HasLine("dronemuzzle: the FireBullet swap failed") && HasLine("teleport_put_back=1"), "rollback not reported");
-  CHECK(HasLine("dronemuzzle hook install", 3), "the failed swap was not an ERROR line");
-  // only one of the two thunks: refused, nothing swapped
-  for (int which = 0; which < 2; ++which) {
-    ResetDroneMuzzleForTest();
+  r = InstallAt(&Lookup, Slots());
+  CHECK(!r.ok && r.fire == GotStatus::kSlotOutsideImage, "outside: %s", sentinel::GotStatusName(r.fire));
+  CHECK(W(g_tpSlot) == reinterpret_cast<uintptr_t>(&FakeTeleport), "WorldTeleport's entry was not removed");
+  CHECK(HasLine("combat_dronemuzzle_rollback") && HasLine("teleport_removed=1"), "rollback not reported");
+  CHECK(HasLine("combat_dronemuzzle_hook", 3), "the failed install was not an Error line");
+  // WorldTeleport's entry cannot be installed: FireBullet's is not touched either
+  ResetForTest();
+  g_lines.clear();
+  NewPage(false, true);
+  r = InstallAt(&Lookup, Slots());
+  CHECK(!r.ok && r.teleport == GotStatus::kSlotOutsideImage, "teleport outside: %s", sentinel::GotStatusName(r.teleport));
+  CHECK(W(g_fireSlot) == reinterpret_cast<uintptr_t>(&FakeFireReal) && r.fire == GotStatus::kNotInstalled, "FireBullet's entry went in after WorldTeleport's failed");
+  CHECK(HasLine("combat_dronemuzzle_hook", 3) && HasLine("result=refused", 3), "the failed WorldTeleport install was not loud");
+  // no libr15 loaded: refused, nothing set
+  ResetForTest();
+  g_lines.clear();
+  NewPage(false);
+  r = InstallAt([](const char*, sentinel::ElfImage*) { return false; }, Slots());
+  CHECK(!r.ok && std::strcmp(r.status, "module_not_loaded") == 0 && W(g_tpSlot) == reinterpret_cast<uintptr_t>(&FakeTeleport) &&
+            WordsForTest().teleportRet == 0,
+        "no libr15: %s", r.status);
+  // a build that is not the pinned one: refused, nothing set
+  ResetForTest();
+  g_lines.clear();
+  g_image.Build({{kTeleportSymbol, kSlotTp, false, false, 0}, {kFireSymbol, kSlotFire, false, false, 0}}, "0000000000000000000000000000000000000000");
+  g_base = g_image.Base();
+  W(kSlotTp) = reinterpret_cast<uintptr_t>(&FakeTeleport);
+  W(kSlotFire) = reinterpret_cast<uintptr_t>(&FakeFireReal);
+  r = InstallAt(&Lookup, Slots());
+  CHECK(!r.ok && std::strcmp(r.status, "build_id_mismatch") == 0 && W(kSlotTp) == reinterpret_cast<uintptr_t>(&FakeTeleport), "another build: %s", r.status);
+  // the continuations before any install (no next function): return 0, call nothing
+  ResetForTest();
+  g_tp.clear();
+  g_fire.clear();
+  CHECK(nevr_combat_dm_teleport(nullptr, 0, nullptr, 0) == 0 && nevr_combat_dm_fire(nullptr, 0, nullptr, 0.0f, nullptr, nullptr, 0, 0) == 0 &&
+            g_tp.empty() && g_fire.empty(),
+        "a continuation ran with no next function");
+  // the step: off, dronekill's shot missing, a second install
+  ResetForTest();
+  dk::ResetForTest();
+  nevr_quest::combat::tick::ResetForTest();
+  g_lines.clear();
+  NewPage(false);
+  const Pins pins = Slots();
+  SetInstallForTest(&Lookup, &pins);
+  nevr_quest::combat::ModuleResult m = Install(false);
+  CHECK(!m.installed && std::strcmp(m.status, "off") == 0 && HasLine("combat_dronemuzzle_install result=off", 1) &&
+            W(g_tpSlot) == reinterpret_cast<uintptr_t>(&FakeTeleport),
+        "off");
+  m = Install(true);
+  CHECK(!m.installed && std::strcmp(m.status, "needs_dronekill_shot") == 0 && W(g_tpSlot) == reinterpret_cast<uintptr_t>(&FakeTeleport) &&
+            nevr_quest::combat::tick::Count() == 0,
+        "no dronekill shot: %s", m.status);
+  dk::SetShotActiveForTest(true);
+  m = Install(true);
+  CHECK(m.installed && std::strcmp(m.status, "installed") == 0 && nevr_quest::combat::tick::Count() == 1, "on: %s", m.status);
+  m = Install(true);
+  CHECK(!m.installed && std::strcmp(m.status, "already_ran") == 0, "a second step: %s", m.status);
+  nevr_quest::combat::tick::ResetForTest();
+  ResetForTest();
+  dk::ResetForTest();
+}
+
+// Another handler on WorldTeleport's slot (a CallbackThunk, as another module's would be). Installed first: the entry goes in above it, acts
+// on FireBulletLocal's call and calls it as the next word for every call. Installed after the entry: refused (slot_held_by_entry), the entry
+// stays the newest and keeps acting.
+struct OtherTag {};
+using OtherThunk = sentinel::CallbackThunk<OtherTag, uint64_t(void*, uint64_t, const uint8_t*, uint64_t)>;
+static int g_otherCalls = 0;
+static uint64_t OtherHandler(OtherThunk::Fn original, void* gs, uint64_t actor, const uint8_t* pose, uint64_t reason) noexcept {
+  ++g_otherCalls;
+  return original(gs, actor, pose, reason);
+}
+NEVR_HOOK_RECORD(kOtherHook, OtherThunk, &OtherHandler);
+
+static void TestAnotherHandlerOnTheSlot() {
+  for (const bool otherFirst : {true, false}) {
+    ResetForTest();
+    dk::ResetForTest();
+    OtherThunk::Reset();
     g_lines.clear();
+    g_tp.clear();
     NewPage(false);
-    DroneMuzzleWrappers w = Wrappers();
-    if (which == 0) w.teleport = 0;
-    else w.fire = 0;
-    r = InstallDroneMuzzle(g_base, Slots(), w);
-    CHECK(!r.ok && HasLine("no arm64 thunk on this architecture", 3) && g_w[0x20 / 8] == reinterpret_cast<uintptr_t>(&FakeTeleport) &&
-              g_w[0x28 / 8] == reinterpret_cast<uintptr_t>(&FakeFireReal),
-          "one thunk missing (%d): installed", which);
+    const Pins pins = Slots();
+    sentinel::GotHook other;
+    sentinel::GotTarget target = Target(kTeleportSymbol, pins.teleportSlot, g_base, pins.teleportFn);
+    target.owner = "test_other";
+    OtherThunk::Arm(kOtherHook);
+    if (otherFirst) CHECK(sentinel::InstallThunk<OtherThunk>(other, target, &Lookup) == GotStatus::kOk, "the other handler did not install first");
+    const Result r = InstallAt(&Lookup, pins);
+    CHECK(r.ok, "%s: the entry did not install (%s)", otherFirst ? "other first" : "entry first", sentinel::GotStatusName(r.teleport));
+    if (!otherFirst) {
+      const GotStatus refused = sentinel::InstallThunk<OtherThunk>(other, target, &Lookup);
+      CHECK(refused == GotStatus::kSlotHeldByEntry, "a handler joined above the entry: %s", sentinel::GotStatusName(refused));
+    }
+    CHECK(W(g_tpSlot) == reinterpret_cast<uintptr_t>(&nevr_combat_dm_tp_entry), "the entry is not the newest");
+    g_otherCalls = 0;
+    SetPose(10, 20, 30);
+    Shot(0, 0, 120);
+    CHECK(TpIn(TpSlot(), g_pose) == 0x1234 && g_tp.size() == 1 && g_tp[0].pose != g_pose, "the entry did not act on FireBulletLocal's call");
+    CHECK(TpOut(TpSlot(), g_pose) == 0x1234 && g_tp.size() == 2 && g_tp[1].pose == g_pose, "another caller's call was changed");
+    CHECK(g_otherCalls == (otherFirst ? 2 : 0), "the other handler ran %d times", g_otherCalls);
+    NoShot();
+    other.Forget();
+    OtherThunk::Reset();
+    ResetForTest();
   }
-  // WorldTeleport's word cannot be swapped (executable page): FireBullet's is not touched either
-  ResetDroneMuzzleForTest();
-  g_lines.clear();
-  NewPage(true);
-  {
-    mprotect(g_w + 4096 / 8, 4096, PROT_READ | PROT_WRITE);
-    g_w[0x1020 / 8] = reinterpret_cast<uintptr_t>(&FakeTeleport);
-    mprotect(g_w + 4096 / 8, 4096, PROT_READ | PROT_EXEC);
-    mprotect(g_w, 4096, PROT_READ | PROT_WRITE);
-    g_w[0x28 / 8] = reinterpret_cast<uintptr_t>(&FakeFireReal);
-    mprotect(g_w, 4096, PROT_READ);
-    DroneMuzzleSlots sl = Slots(false);
-    sl.teleport_slot = 0x1020;
-    r = InstallDroneMuzzle(g_base, sl, Wrappers());
-  }
-  CHECK(!r.ok && r.teleport.status == SwapStatus::kExecutablePage, "teleport in an executable page: %s", StatusName(r.teleport.status));
-  CHECK(g_w[0x28 / 8] == reinterpret_cast<uintptr_t>(&FakeFireReal), "FireBullet's word was swapped after WorldTeleport's failed");
-  CHECK(HasLine("dronemuzzle hook install", 3) && HasLine("dronemuzzle: OFF, nothing changed", 3), "the failed WorldTeleport swap was not loud");
-  // the plain functions before any install (no next function): return 0, call nothing
-  ResetDroneMuzzleForTest();
-  CHECK(q15t_dm_teleport(nullptr, 0, nullptr, 0) == 0 && q15t_dm_fire(nullptr, 0, nullptr, 0.0f, nullptr, nullptr, 0, 0) == 0, "a plain function ran with no next function");
-  // the first word cannot be swapped: nothing else is touched
-  ResetDroneMuzzleForTest();
-  g_lines.clear();
-  r = InstallDroneMuzzle(0, kDroneMuzzlePinned, Wrappers());
-  CHECK(!r.ok && HasLine("no base address", 3), "base 0");
-  // no shot source (dronekill off): installed, but loud
-  ResetDroneMuzzleForTest();
-  ResetDroneKillForTest();
-  g_lines.clear();
-  NewPage(false);
-  r = InstallDroneMuzzle(g_base, Slots(), Wrappers());
-  CHECK(r.ok && !r.shot_source && HasLine("dronemuzzle: on (QA)", 2) && HasLine("the thunks only pass through"), "no shot source not reported");
 }
 
 static void TestTeleport() {
-  DroneMuzzleInstall r = Setup();
+  Result r = Setup();
   CHECK(r.ok, "install");
   // not a drone shot (the accessor is null): the call goes through with its arguments, result and pose pointer untouched
   NoShot();
@@ -425,7 +508,7 @@ static void TestTeleport() {
   CHECK(TpIn(TpSlot(), g_pose) == 0x1234, "result");
   CHECK(g_tp.size() == 1 && g_tp[0].gs == reinterpret_cast<void*>(0xa0) && g_tp[0].actor == 0xb0 && g_tp[0].pose == g_pose && g_tp[0].reason == 0xc0,
         "not a drone shot: arguments");
-  CHECK(GetDroneMuzzleStats().shots == 0, "counted a shot");
+  CHECK(CurrentStats().shots == 0, "counted a shot");
   // a drone shot from FireBulletLocal's call site: the pose goes on as a moved COPY
   g_tp.clear();
   Shot(0, 0, 120, 1);
@@ -445,11 +528,11 @@ static void TestTeleport() {
         got[1], got[2], spawn[0], spawn[1], spawn[2]);
   CHECK(memcmp(g_tp[0].copy, before, 0x10) == 0 && memcmp(g_tp[0].copy + 0x1c, before + 0x1c, 4) == 0, "the quaternion / scale bytes changed");
   CHECK(g_tp[0].gs == reinterpret_cast<void*>(0xa0) && g_tp[0].actor == 0xb0 && g_tp[0].reason == 0xc0, "other arguments");
-  CHECK(GetDroneMuzzleStats().shots == 1 && HasLine("dronemuzzle: shot") && HasLine("remote=1") && HasLine("velocity=0.000000 0.000000 120.000000"), "shot line");
+  CHECK(CurrentStats().shots == 1 && HasLine("combat_dronemuzzle_shot") && HasLine("remote=1") && HasLine("velocity=0.000000 0.000000 120.000000"), "shot line");
   // the same drone shot from any OTHER caller: untouched
   g_tp.clear();
   CHECK(TpOut(TpSlot(), g_pose) == 0x1234 && g_tp.size() == 1 && g_tp[0].pose == g_pose, "another caller's pose was moved");
-  CHECK(GetDroneMuzzleStats().shots == 1, "another caller counted");
+  CHECK(CurrentStats().shots == 1, "another caller counted");
   // |v| ~ 0: untouched
   g_tp.clear();
   Shot(0, 0, 5e-5f);
@@ -463,9 +546,9 @@ static void TestTeleport() {
   // shot lines are capped at 40, the counter goes on
   g_lines.clear();
   for (int i = 0; i < 45; ++i) TpIn(TpSlot(), g_pose);
-  CHECK(CountLine("dronemuzzle: shot", 1) == 39, "shot lines after 45 more: %d", CountLine("dronemuzzle: shot", 1));  // shots 2..40 are written
-  CHECK(CountLine("dronemuzzle: log cap reached", 1) == 1, "cap line");
-  CHECK(GetDroneMuzzleStats().shots == 46, "shots %u", GetDroneMuzzleStats().shots);
+  CHECK(CountLine("combat_dronemuzzle_shot", 1) == 39, "shot lines after 45 more: %d", CountLine("combat_dronemuzzle_shot", 1));  // shots 2..40 are written
+  CHECK(CountLine("combat_dronemuzzle_cap", 1) == 1, "cap line");
+  CHECK(CurrentStats().shots == 46, "shots %u", CurrentStats().shots);
   NoShot();
 }
 
@@ -491,7 +574,7 @@ static void TestFrameTick() {
   {  // the first tick only records the time: a 20 ms "frame" since the epoch is not a frame
     Setup();
     g_now_ns = 20000000ull;
-    DroneMuzzleTick(0);
+    Tick(0);
     const float root0[3] = {0, 0, 0}, v0[3] = {0, 0, 3};
     float d0[3];
     CHECK(dm::MuzzleMove(root0, v0, 1.0f / 90.0f, d0), "expected default");
@@ -502,10 +585,10 @@ static void TestFrameTick() {
   SetPose(0, 0, 0);
   const float root[3] = {0, 0, 0}, v[3] = {0, 0, 3};
   float avg = 1.0f / 90.0f;
-  DroneMuzzleTick(0);  // the first call only records the time
+  Tick(0);  // the first call only records the time
   for (int i = 0; i < 60; ++i) {
     g_now_ns += 16666667ull;  // 60 fps
-    DroneMuzzleTick(0);
+    Tick(0);
     avg = dm::FrameDt(avg, 0.016666667f);
   }
   float want[3];
@@ -520,11 +603,52 @@ static void TestFrameTick() {
   // a hitch (>= 0.1 s) leaves the average alone
   const float before = got[2];
   g_now_ns += 500000000ull;
-  DroneMuzzleTick(0);
+  Tick(0);
   g_tp.clear();
   TpIn(TpSlot(), g_pose);
   memcpy(got, g_tp[0].copy + 0x10, 12);
   CHECK(std::fabs(got[2] - before) < 1e-7f, "a 0.5 s hitch fed the average");
+  NoShot();
+}
+
+// Out of a combat map (dronekill's scope) the tick reads no clock and forgets the last frame: the first frame back only records the time.
+static int g_clockReads = 0;
+static uint64_t CountingClk() {
+  ++g_clockReads;
+  return g_now_ns;
+}
+static void TestFrameTickOutOfScope() {
+  Setup();
+  SetClockForTest(&CountingClk);
+  g_clockReads = 0;
+  dk::SetScopeForTest(false);
+  for (int i = 0; i < 10; ++i) {
+    g_now_ns += 16666667ull;
+    Tick(0);
+  }
+  CHECK(g_clockReads == 0, "the tick read the clock %d times out of scope", g_clockReads);
+  dk::SetScopeForTest(true);
+  Tick(0);  // records the time only
+  g_now_ns += 16666667ull;
+  Tick(0);
+  CHECK(g_clockReads == 2, "in scope: %d clock reads", g_clockReads);
+  dk::SetScopeForTest(false);
+  Tick(0);
+  dk::SetScopeForTest(true);
+  g_now_ns += 50000000ull;  // 50 ms out of scope: a frame time the average would take, but not one frame
+  Tick(0);
+  g_now_ns += 16666667ull;
+  Tick(0);
+  Shot(0, 0, 3);
+  SetPose(0, 0, 0);
+  g_tp.clear();
+  TpIn(TpSlot(), g_pose);
+  float got[3] = {0, 0, 0};
+  if (!g_tp.empty()) memcpy(got, g_tp[0].copy + 0x10, 12);
+  const float root[3] = {0, 0, 0}, v[3] = {0, 0, 3};
+  float want[3];
+  CHECK(dm::MuzzleMove(root, v, dm::FrameDt(dm::FrameDt(1.0f / 90.0f, 0.016666667f), 0.016666667f), want), "expected");
+  CHECK(std::fabs(got[2] - want[2]) < 1e-6f, "the frames around the time out of scope: got %f want %f", got[2], want[2]);
   NoShot();
 }
 
@@ -559,7 +683,7 @@ static void TestFire() {
     if (!ours && g_records[i] != 0xA5) canary = false;
   }
   CHECK(canary, "bytes outside the three fields were written");
-  CHECK(HasLine("dronemuzzle: drone bullet tracer starts at the drone") && HasLine("x=7.000000"), "tracer line");
+  CHECK(HasLine("combat_dronemuzzle_tracer") && HasLine("x=7.000000"), "tracer line");
   // another caller of FireBullet with the same drone shot: untouched
   BuildBullet();
   CHECK(FireOut(FireSlot()) == 0x5678, "result 3");
@@ -621,25 +745,23 @@ static void TestTracerCap() {
     BuildBullet();
     FireIn(FireSlot());
   }
-  CHECK(CountLine("dronemuzzle: drone bullet tracer") == 3, "tracer lines %d", CountLine("dronemuzzle: drone bullet tracer"));
-  CHECK(CountLine("dronemuzzle: log cap reached", 1) == 1 && HasLine("kind=tracer"), "tracer cap line");
-  CHECK(GetDroneMuzzleStats().tracers == 8, "tracers counted %u", GetDroneMuzzleStats().tracers);
+  CHECK(CountLine("combat_dronemuzzle_tracer") == 3, "tracer lines %d", CountLine("combat_dronemuzzle_tracer"));
+  CHECK(CountLine("combat_dronemuzzle_cap", 1) == 1 && HasLine("kind=tracer"), "tracer cap line");
+  CHECK(CurrentStats().tracers == 8, "tracers counted %u", CurrentStats().tracers);
   NoShot();
 }
 
 int main() {
-  NevrGameContext ctx{};
-  ctx.ctx_size = sizeof ctx;
-  ctx.plugin_id = "q15t";
-  ctx.log = &FakeLog;
-  SetLogContext(&ctx);
+  sentinel::SetLogSink(&Sink);
   TestCore();
   TestInstallPinned();
   Dump("pinned install");
   TestInstallRefusals();
   Dump("refusals (last scenario)");
+  TestAnotherHandlerOnTheSlot();
   TestTeleport();
   TestFrameTick();
+  TestFrameTickOutOfScope();
   TestFire();
   TestTracerCap();
   Dump("tracer cap scenario");
