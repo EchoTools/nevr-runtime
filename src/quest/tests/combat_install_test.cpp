@@ -16,8 +16,10 @@
 
 #include "hook_log.h"
 #include "quest/combat/combat_active.h"
+#include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
+#include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -217,9 +219,10 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  // The normal step runs the tick (combat_tick.h) first and the refresh-rate rule after it (#2172). On the host no libr15 is loaded, so the
-  // tick is refused and named; the rule installs (it registers its callback for a tick that may come later), and the pfx gate and the event-effect decision, which hook nothing, install after it (#2188).
-  QCHECK(normal.ran && normal.modules == 4 && normal.installed == 3 && normal.failed == 1);
+  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the headset gates (#2180) and, last, the pfx gate and
+  // the event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick and the gates are refused and named; the rule
+  // installs (it registers its callback for a tick that may come later), and so do the two decisions.
+  QCHECK(normal.ran && normal.modules == 5 && normal.installed == 3 && normal.failed == 2);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -227,7 +230,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed pfx=installed pfxtev=installed\""));
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed gates=module_not_loaded pfx=installed pfxtev=installed\""));
   }
   Done();
 }
@@ -348,6 +351,78 @@ void TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection() {
   Done();
 }
 
+// The headset gates' keys have a line of their own (a log line is one 768-byte buffer): the defaults, each from the default; a key the file gave.
+void TheGatesKeysHaveALineOfTheirOwn() {
+  Process(bv::Variant::kCombat);
+  sentinel::SetLogSink(&Capture);
+  nevr_quest::CombatConfig cfg;
+  QCHECK(cfg.gatePerm.on && cfg.gateBots.on && cfg.gateLink.on && cfg.gateLinkLibs.source == nevr_quest::Source::kAbsent);
+  combat::LogConfig(cfg);
+  cfg.gateBots = {false, nevr_quest::Source::kFile};
+  cfg.gateLinkLibs.source = nevr_quest::Source::kFile;
+  combat::LogConfig(cfg);
+  const std::vector<Line> lines = Lines("combat_config_gates");
+  QCHECK(lines.size() == 2U);
+  if (lines.size() == 2U) {
+    QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Has(lines[0].text, "\"gate_perm\":1") && Has(lines[0].text, "\"gate_perm_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"gate_bots\":1") && Has(lines[0].text, "\"gate_bots_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"gate_link\":1") && Has(lines[0].text, "\"gate_link_source\":\"default\""));
+    QCHECK(Has(lines[0].text, "\"gate_link_libs_source\":\"default\""));
+    QCHECK(Has(lines[1].text, "\"gate_bots\":0") && Has(lines[1].text, "\"gate_bots_source\":\"config\""));
+    QCHECK(Has(lines[1].text, "\"gate_link_libs_source\":\"config\""));
+    QCHECK(Has(lines[0].text, "\"msg\":"));  // no line is cut: the last field is there
+  }
+  // `combat_config` itself still ends in its message (the buffer holds it).
+  const std::vector<Line> main = Lines("combat_config");
+  QCHECK(main.size() == 2U && Has(main[0].text, "\"msg\":"));
+  Done();
+}
+
+// The gates row reads its keys from the resolved section: all three off is the module's `off`, and a configured policy text reaches the module.
+void TheGatesRowReadsItsKeysFromTheResolvedSection() {
+  Process(bv::Variant::kCombat);
+  nevr_quest::combat::headset_gates::ResetForTest();  // the shipped-table test above ran the module once
+  nevr_quest::CombatConfig off;
+  off.gatePerm = {false, nevr_quest::Source::kFile};
+  off.gateBots = {false, nevr_quest::Source::kFile};
+  off.gateLink = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(off);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "gates=off"));
+  Done();
+
+  // A libr15 holding the pinned words and slots, and a policy text the file gave: the menu gate's policy line says "config" and carries the text.
+  Process(bv::Variant::kCombat);
+  combat_test::Image image;
+  namespace hg = nevr_quest::combat::headset_gates;
+  image.Build({{hg::kPartySymbol, hg::kPins.partySlot, false, false, hg::kPins.partyFn},
+               {hg::kHeadsetSymbol, hg::kPins.headsetSlot, false, false, hg::kPins.headsetFn}});
+  for (const hg::Word& w : hg::kWords) image.Put<std::uint32_t>(w.vaddr, w.word);
+  *image.Slot(hg::kPins.partySlot) = reinterpret_cast<void*>(image.Base() + hg::kPins.partyFn);
+  *image.Slot(hg::kPins.headsetSlot) = reinterpret_cast<void*>(image.Base() + hg::kPins.headsetFn);
+  static const combat_test::Image* g_image = nullptr;
+  g_image = &image;
+  hg::ResetForTest();
+  hg::SetImageLookupForTest([](const char*, sentinel::ElfImage* out) {
+    *out = g_image->Elf();
+    return true;
+  });
+  nevr_quest::CombatConfig cfg;
+  std::strcpy(cfg.gateLinkLibs.text, "0e4384a5 1703a89b");
+  cfg.gateLinkLibs.source = nevr_quest::Source::kFile;
+  combat::SetConfig(cfg);
+  combat::InstallNormal();
+  const std::vector<Line> policy = Lines("combat_gates_link_policy");
+  QCHECK(policy.size() == 1U && Has(policy[0].text, "\"libs\":\"0e4384a5 1703a89b\"") && Has(policy[0].text, "\"source\":\"config\""));
+  QCHECK(Has(Lines("combat_install")[0].text, "gates=installed"));
+  hg::ResetForTest();
+
+  hg::ResetForTest();
+  image.Drop();
+  Done();
+}
+
 // The pfx gate and the event-effect decision read their keys from the resolved section (#2188): on with the defaults, off by the file's word.
 void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   Process(bv::Variant::kCombat);
@@ -399,6 +474,8 @@ int main() {
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();
   TheRefreshRateRowReadsItsThreeKeysFromTheResolvedSection();
+  TheGatesKeysHaveALineOfTheirOwn();
+  TheGatesRowReadsItsKeysFromTheResolvedSection();
   ThePfxRowsReadTheirKeysFromTheResolvedSection();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());

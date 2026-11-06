@@ -1,1 +1,0 @@
-q15t_host_test(combat_gates_test TEST combat_gates_test.cpp)

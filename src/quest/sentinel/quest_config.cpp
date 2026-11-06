@@ -5,6 +5,7 @@
 #include "runtime/patch/invite_config.h"
 
 #include <array>
+#include <cstring>
 #include <exception>
 #include <optional>
 #include <string_view>
@@ -49,6 +50,10 @@ constexpr const char* kCombatMemsysKey = "combat.memsys";         // Quest only 
 constexpr const char* kCombatRefreshRateKey = "combat.refresh_rate";                  // Quest only (default true, #2172)
 constexpr const char* kCombatRefreshRateLobbyKey = "combat.refresh_rate_lobby";        // Quest only (default FALSE, #2172: arena shares the lobby)
 constexpr const char* kCombatRefreshRateQuest2Key = "combat.refresh_rate_quest2_72";   // Quest only (default true, #2172)
+constexpr const char* kCombatGatePermKey = "combat.gate_perm";            // Quest only (default true, #2180)
+constexpr const char* kCombatGateBotsKey = "combat.gate_bots";            // Quest only (default true, #2180)
+constexpr const char* kCombatGateLinkKey = "combat.gate_link";            // Quest only (default true, #2180)
+constexpr const char* kCombatGateLinkLibsKey = "combat.gate_link_libs";   // Quest only (default: the 21 libraries of the combat entries, #2180)
 constexpr const char* kCombatPfxKey = "combat.pfx";                // Quest only (default true, #2188)
 constexpr const char* kCombatPfxtevKey = "combat.pfxtev";          // Quest only (default true, #2188)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
@@ -311,6 +316,27 @@ CombatSwitch ReadCombatSwitch(const nevr::NevrConfig& cfg, const char* key, Load
   return {on, given ? Source::kFile : Source::kAbsent};
 }
 
+// A folded combat module's text value (#2180). A string: that text, from the file (an empty one is kept: the module reads it as "none"). A text
+// longer than the buffer, or a value that is not a string, keeps the module's default with a Warning that names the key. The text is never logged.
+CombatText ReadCombatText(const nevr::NevrConfig& cfg, const char* key, LoadResult& r) {
+  CombatText out;
+  const std::optional<std::string> value = cfg.GetString(key);
+  if (!value) {
+    if (cfg.Kind(key) != nevr::NodeKind::kAbsent) {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_a_string (default stays)");
+    }
+    return out;
+  }
+  if (value->size() >= kCombatTextMax) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=too_long (default stays)");
+    return out;
+  }
+  std::memcpy(out.text, value->data(), value->size());
+  out.text[value->size()] = '\0';
+  out.source = Source::kFile;
+  return out;
+}
+
 // Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
 void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& path) {
   if (!cfg.UnsetBareVars().empty()) {
@@ -363,6 +389,10 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.refreshRate = ReadCombatSwitch(cfg, kCombatRefreshRateKey, r);
   r.config.combat.refreshRateLobby = ReadCombatSwitch(cfg, kCombatRefreshRateLobbyKey, r, /*fallback=*/false);
   r.config.combat.refreshRateQuest2At72 = ReadCombatSwitch(cfg, kCombatRefreshRateQuest2Key, r);
+  r.config.combat.gatePerm = ReadCombatSwitch(cfg, kCombatGatePermKey, r);
+  r.config.combat.gateBots = ReadCombatSwitch(cfg, kCombatGateBotsKey, r);
+  r.config.combat.gateLink = ReadCombatSwitch(cfg, kCombatGateLinkKey, r);
+  r.config.combat.gateLinkLibs = ReadCombatText(cfg, kCombatGateLinkLibsKey, r);
   r.config.combat.pfx = ReadCombatSwitch(cfg, kCombatPfxKey, r);
   r.config.combat.pfxtev = ReadCombatSwitch(cfg, kCombatPfxtevKey, r);
   r.config.plugins = cfg.Plugins();

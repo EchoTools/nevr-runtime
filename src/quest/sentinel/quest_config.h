@@ -154,6 +154,14 @@ struct CombatSwitch {
   Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, on
 };
 
+// A folded combat module's text value (`combat.gate_link_libs`). `source` is kFile when the file gave a string (an empty one included: it means
+// "none"); otherwise the module's default stands and `text` is empty. A fixed buffer, so the configuration stays trivially copyable.
+inline constexpr std::size_t kCombatTextMax = 640;
+struct CombatText {
+  char text[kCombatTextMax] = {};
+  Source source = Source::kAbsent;
+};
+
 // The `combat:` section (docs/adr/0046 rule 4): one member per key, each defaulting to the shipped behaviour. The keys are `force` and, for
 // each folded module, its switch; a module's unit adds its member here, with the row in KnownSections (src/core/nevr_config.cpp), the
 // example config and the `combat_config` line (combat/combat_install.h).
@@ -164,6 +172,10 @@ struct CombatConfig {
   CombatSwitch refreshRate{true, Source::kAbsent};            // `combat.refresh_rate`: the level rate rule (off: the game's rate always)
   CombatSwitch refreshRateLobby{false, Source::kAbsent};      // `combat.refresh_rate_lobby`: the combat lobby asks for the level rate too (default OFF: arena shares the lobby levels)
   CombatSwitch refreshRateQuest2At72{true, Source::kAbsent};  // `combat.refresh_rate_quest2_72`: a Quest 2's level rate is 72, not 90 (combat/refresh_rate.h)
+  CombatSwitch gatePerm{true, Source::kAbsent};   // `combat.gate_perm`: a Quest in a party may use combat (combat/headset_gates.h)
+  CombatSwitch gateBots{true, Source::kAbsent};   // `combat.gate_bots`: a combat match picks the combat bot body (only where levelname is installed)
+  CombatSwitch gateLink{true, Source::kAbsent};   // `combat.gate_link`: the combat menus are not told this is a Quest
+  CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
   CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
   CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
 };

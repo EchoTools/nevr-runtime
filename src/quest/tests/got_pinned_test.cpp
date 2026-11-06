@@ -28,6 +28,7 @@
 #include "login_title_hook.h"
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/memsys_targets.h"
 #include "pinned_targets.h"
@@ -393,6 +394,43 @@ void CheckRealHeapsAndMemsys(const LoadedElf& elf) {
   QCHECK(allocSiteIsPinned && initSiteIsPinned);  // the instruction at each return address is among the pinned words
 }
 
+// The headset gates' pins (src/quest/combat/headset_gates_targets.h) against the real libr15: both JUMP_SLOTs resolve at their pins, the symbols are the
+// functions the pins call real (defined at the pinned addresses), each caller range's return-address site is inside its range and among the pinned
+// words, and every pinned word is the one in the file.
+void CheckRealHeadsetGates(const LoadedElf& elf) {
+  namespace hg = nevr_quest::combat::headset_gates;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  CheckTarget(elf, GotTarget{pinned::kLibR15, hg::kPartySymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, hg::kPins.partySlot},
+              "libr15 CR15NetGame::PartyMemberHeadsetType JUMP_SLOT");
+  CheckTarget(elf, GotTarget{pinned::kLibR15, hg::kHeadsetSymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, hg::kPins.headsetSlot},
+              "libr15 CVR::HeadsetType JUMP_SLOT");
+  CheckDefinedAt(elf, hg::kPartySymbol, hg::kPins.partyFn);
+  CheckDefinedAt(elf, hg::kHeadsetSymbol, hg::kPins.headsetFn);
+  for (const hg::Word& w : hg::kWords) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + w.vaddr, sizeof(have));
+    if (have != w.word) {
+      std::fprintf(stderr, "libr15 headset gate word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(w.vaddr), have, w.word);
+      QCHECK(false);
+    }
+  }
+  // The bot gate's condition: the LoadLevelName vtable word is the slot levelname's own table pins as an ABS64 relocation of CR15Game::LoadLevelName, and
+  // the stock function is levelname's kFnVaddr. kRealAbs64Words above is what checks the slot; these are its values, and the symbol is defined at the stock address.
+  QCHECK(hg::kPins.levelNameSlot == 0x362ef90 && hg::kPins.levelNameStock == 0x1202ecc);
+  CheckDefinedAt(elf, "_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", hg::kPins.levelNameStock);  // the stock function the slot holds
+  // The call sites: the return address of each gate's call is in its range, and the instruction there is pinned.
+  const struct {
+    std::uint64_t site, lo, hi;
+  } sites[] = {{0x232c814, hg::kPins.permLo, hg::kPins.permHi}, {0x124dd44, hg::kPins.botsLo, hg::kPins.botsHi}, {0x202baa4, hg::kPins.linkLo, hg::kPins.linkHi}};
+  for (const auto& site : sites) {
+    QCHECK(site.site >= site.lo && site.site < site.hi);
+    bool pinnedWord = false;
+    for (const hg::Word& w : hg::kWords) pinnedWord = pinnedWord || w.vaddr == site.site;
+    QCHECK(pinnedWord);
+  }
+  // The Bind's frame: `stp x19, x30, [sp, #0x10]` after `sub sp, sp, #0x20` puts the caller's address at sp + 0x18.
+  QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
+}
 
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
@@ -600,6 +638,7 @@ int main(int argc, char** argv) {
   CheckRealAbs64Words(r15);
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
+  CheckRealHeadsetGates(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
