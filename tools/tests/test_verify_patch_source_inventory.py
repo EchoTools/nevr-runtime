@@ -65,6 +65,10 @@ EXPECTED_PATCH_SOURCES = (
 )
 
 
+def accepted_fixture_sources() -> tuple[str, ...]:
+    return EXPECTED_PATCH_SOURCES
+
+
 class VerifyPatchSourceInventoryTest(unittest.TestCase):
     def make_fixture(
         self,
@@ -108,6 +112,13 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"patch-source-inventory: OK count={len(EXPECTED_PATCH_SOURCES)}", result.stdout)
+
+    def test_the_acceptance_fixture_takes_the_checkers_list(self):
+        # A PR that adds a source edits the checker's list and PATCHES_SOURCES, and nothing else. The fixture the
+        # acceptance tests build must follow the checker's list: a copy of the list here is a third place to edit.
+        added = "patch/added_by_one_pr.cpp"
+        with mock.patch.object(verifier, "EXPECTED_PATCH_SOURCES", verifier.EXPECTED_PATCH_SOURCES + (added,)):
+            self.assertIn(added, accepted_fixture_sources())
 
     def test_a_source_added_to_both_lists_passes_with_no_count_to_edit(self):
         # Two PRs that each add one source each add it to EXPECTED_PATCH_SOURCES and to PATCHES_SOURCES. A count
