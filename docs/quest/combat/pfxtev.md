@@ -36,7 +36,7 @@ words, an atomic load and, up to the cap, one log line. `pfxtev_test` prints the
 ## Not yet wired (#1631)
 
 Nothing calls `Allows` or `AllowsIn`. The renderer that creates effects is the `pfx` gate's consumer (`docs/quest/combat/pfx.md`), which is not in the
-runtime. Until it lands, the switch has no effect on a headset.
+runtime. Until #1631 lands, the switch has no effect on a headset.
 
 ## Not observed on a headset
 
