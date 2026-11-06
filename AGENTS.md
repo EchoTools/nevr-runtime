@@ -713,8 +713,13 @@ your seat name, for example `claude-main` or `codex`.
   remove when <condition>"` and `git config branch.<branch>.description "<same>"`.
 - **Scratch is per agent.** Files you create by hand go under `~/src/nevr-runtime-work/<agent>/`;
   files the repo's own tools write at the work root stay where they are. When you are done,
-  delete the scripts, copies and build output you created, outright, not into the user's trash.
-  A run's logs and evidence are kept until their end (next bullet). Never delete by pattern across the shared directory.
+  delete the scripts, copies and build output you created, not into the user's trash, in one of two ways:
+  move each finished item, by its exact path, into one holding directory (`<work root>/<seat>/to-delete/`), list
+  what is in it, then remove that single directory in one command; or write the deletions to a script (`set -eu`,
+  one `rm` per exact absolute path, no globs), read it back and check that every path is yours and under the work
+  root, then run it. Never an inline `rm -rf`, including the last step of a chained cleanup: a rerun of it removes
+  whatever the path names then (#2270). A run's logs and evidence are kept until their end (next bullet). Never
+  delete by pattern across the shared directory.
 - **Everything in the work root has a named end.** The work root is `~/src/nevr-runtime-work`
   (`$NEVR_WORK_ROOT`): the default scratch location of every seat and every tool. Every file or directory a seat
   creates there has a named end when it is made: a game copy ends when its test ends; a run's output ends when the PR
