@@ -76,7 +76,6 @@ sentinel::GotStatus InstallStatusAt(sentinel::ImageLookup lookup) noexcept {
     g_vptr.store(image.base + targets::kGameVptrVaddr, std::memory_order_release);
     status = sentinel::InstallThunk<Thunk>(g_hook, targets::Target(), lookup);
   }
-  if (status != sentinel::GotStatus::kOk) Thunk::Disarm();  // a slot that did not take the thunk is never called; the handler stays off with it
   const bool ok = status == sentinel::GotStatus::kOk;
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "combat_tick_install",
                       {{"result", ok ? "installed" : "refused"},
