@@ -342,9 +342,10 @@ its journal), `RuntimeLoader::LoadAtStart` (`runtime_load.cpp`: the swap, the lo
   at `done` writes `owned`, `current` and `pending.json` from those, never from a re-read that can fail on a file another
   program holds: a file that is gone is skipped, one that is only held is still recorded. A journal without them (an
   older one) falls back to reading, and a file that cannot be read leaves the cleanup for the next start.
-- **Every start on a pending release says so** (`update_trial`): `counted` with the new `boot_attempts`, or `not_counted`
-  with why (a runtime in use, a swap's cleanup finished, a runtime the host cannot open for write, a count that could
-  not be written).
+- **A start that loads a pending release without deciding a rollback says so** (`update_trial`): `counted` with the new
+  `boot_attempts`, or `not_counted` with why (a runtime in use, a swap's cleanup finished, a runtime the host cannot open
+  for write, a count that could not be written). A start that decides a rollback writes `update_rollback` instead
+  (`rolled_back`, `deferred`, `failed`, `blocked`), never both.
 - **When the previous release cannot be restored in the same start**, the failed release stays in the root and is marked
   (`failed_reason`; the first failure stays), so the next start tries again; the `update_rollback` record of a runtime in use
   says whether the mark was made (`marked`).
@@ -393,7 +394,7 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | runtime | `update published` | `version`, `files` |
 | host | `update_swap` | `outcome` (`swapped`, `deferred`, `blocked`, `discarded`, `recovered`), `reason`, `from`, `to`, `files` (path, sha256), `elapsed_ms` |
 | host | `update_rollback` | `mode` (`in_process`, `next_start`), `reason`, `from` (the failed release), `to` (the restored one), `outcome` (`rolled_back`, `scheduled`, `deferred`, `failed`, `blocked`, `discarded`), `boot_attempts`, `files`, `elapsed_ms` |
-| host | `update_trial` | one per start on a pending release: `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`), `release`, `boot_attempts` (after the start), `elapsed_ms` |
+| host | `update_trial` | one per start that loads a pending release without deciding a rollback (a rollback decision writes `update_rollback`): `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`), `release`, `boot_attempts` (after the start), `elapsed_ms` |
 | host | `crash_marker` | `outcome` (`written`, `failed`), `win32_error`, `path`, `thread` |
 | runtime | `update confirmed` | `version`, `after_ms`, `role` (`client`, `server`) |
 

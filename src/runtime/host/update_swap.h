@@ -97,8 +97,10 @@ UpdateResult RunUpdateAtStart(const wchar_t* runtime_path, BootstrapDiagnostics&
 /// is marked (`failed_reason` in pending.json, the first failure stays) so the next start tries again: no_previous,
 /// previous_unverified, rollback_blocked (a link, a stranger's file, an unreadable previous file), runtime_in_use,
 /// runtime_not_writable, and a rollback that could not move a file (move_failed; its journal is completed first).
-/// Not marked, because there is nothing to try again: lock_timeout, reparse_point on update\, state_unreadable and
-/// pending_unreadable (the record cannot be read or written). Never throws.
+/// Not marked, because the record cannot be read or written, or the root is not in a state a mark helps: lock_timeout,
+/// reparse_point (update\ itself, or update\staging, previous, failed or plugins\ is a link), a recovery of an earlier
+/// journal that stops or leaves its journal in place (the recovery's own result is returned), state_unreadable and
+/// pending_unreadable. Never throws.
 UpdateResult RollBackInProcess(const wchar_t* runtime_path, BootstrapDiagnostics& diagnostics, UpdateLock& lock,
                                const char* reason) noexcept;
 /// R1 for a runtime that was mapped and then failed (missing entry, null descriptor, ABI rejected, initialize failed):
