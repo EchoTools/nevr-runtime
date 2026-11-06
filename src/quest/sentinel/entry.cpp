@@ -23,6 +23,7 @@
 #include "login_title_hook.h"
 #include "core/crash_report.h"
 #include "quest/combat/combat_active.h"
+#include "quest/combat/combat_install.h"
 #include "quest/combat/equip_refire.h"
 #include "quest/combat/match_tags.h"
 #include "build_variant.h"
@@ -274,6 +275,14 @@ bool InstallPluginMainLevel() noexcept { return nevr_quest::main_level::Install(
 // The gate on the folded combat modules (#2170, combat/combat_active.h): the answer is made here, once the configuration is resolved, from
 // the variant the constructor recorded, this build's kind and the configuration's combat.force. entry.cpp holds nevr_build::kIsDev.
 void ResolveCombatActive(bool forceAsked) noexcept { nevr_quest::combat::Resolve(nevr_build::kIsDev, forceAsked); }
+
+// The combat area's steps (#2171, combat/combat_install.h): each asks combat::Active() itself, so a call that reaches one in a process
+// where combat does not run installs nothing and says so once.
+bool CombatActive() noexcept { return nevr_quest::combat::Active(); }
+bool InstallCombatEarly() noexcept { return nevr_quest::combat::InstallEarly().ran; }
+bool InstallCombatNormal() noexcept { return nevr_quest::combat::InstallNormal().ran; }
+void NoteCombatNotStarted(const char* reason) noexcept { nevr_quest::combat::NoteNormalNotStarted(reason); }
+void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept { nevr_quest::combat::LogConfig(config); }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

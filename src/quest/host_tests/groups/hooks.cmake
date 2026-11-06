@@ -231,28 +231,10 @@ nevr_ht_obj(o_hooks_nevr_config GROUP hooks HOST SRC src/core/nevr_config.cpp)
 # the real libr15.
 nevr_ht_test(hand_pose_log_hook_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_YAML_LIB} OBJS o_hooks_nevr_config ${_core} ${_ident}
   SRC src/quest/tests/hand_pose_log_hook_test.cpp src/quest/sentinel/hand_pose_log_hook.cpp)
-# Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
-# CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
-# 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
-# the real libr15.
-nevr_ht_test(match_tag_default_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
-  SRC src/quest/tests/match_tag_default_test.cpp src/quest/combat/match_tags.cpp)
 # The variant stamp the sentinel reads beside its own library before its first line (#2170, build_variant.h): each word, the empty file,
 # a missing file, an unknown or padded word, a file too long, a link and a directory, read from a temporary directory.
 nevr_ht_test(build_variant_test GROUP hooks ${_hf} TIMEOUT 120
   SRC src/quest/tests/build_variant_test.cpp src/quest/sentinel/build_variant.cpp)
-# The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
-# combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.
-nevr_ht_test(combat_active_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core}
-  SRC src/quest/tests/combat_active_test.cpp src/quest/combat/combat_active.cpp src/quest/sentinel/build_variant.cpp)
-# The equipment re-fire (#2121): the real wrappers through the six thunks, installed by the real GotHook into the six words of a libr15
-# image built in memory (JUMP_SLOT and GLOB_DAT of the three setters), against models of the setters, the change handlers, NetGameMT,
-# CR15NetGame::UserId and the component. The shared rule is the header's GTest; here are the words hooked, each word's own original
-# with the game's three arguments, the slot's own handler, the net game probe, a word that is not the setter refused alone, a pin that
-# differs refusing the module before any word is touched, the other refusals, and the golden lines. got_pinned_test resolves the six
-# relocations and the code pins in the real libr15.
-nevr_ht_test(equip_refire_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
-  SRC src/quest/tests/equip_refire_test.cpp src/quest/combat/equip_refire.cpp src/quest/invite/frame_dispatch.cpp)
 # The grey default irradiance texture (#2091, #1737 U25): the real handlers through the two thunk entries against models of
 # CGEngineResources::Initialize and of the image upload helper. The texel is substituted for the default 3D texture during
 # Initialize only; every other call of the helper, and Initialize's status, pass through. got_pinned_test pins the slot and the

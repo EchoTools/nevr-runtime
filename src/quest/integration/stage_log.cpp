@@ -31,7 +31,8 @@ StepLevel StepLogLevel(const char* state, const char* reason) noexcept {
   if (r == "counters_refused") return StepLevel::kError;
   const std::string_view off = "_off";
   const bool featureOff = r.size() >= off.size() && r.substr(r.size() - off.size()) == off;
-  if (featureOff || r == "nothing_to_install_after_load") return StepLevel::kInfo;
+  // `combat_inactive`: a plain release carries no combat step, which is the build's state and not a fault (combat_active says why).
+  if (featureOff || r == "nothing_to_install_after_load" || r == "combat_inactive") return StepLevel::kInfo;
   return StepLevel::kWarn;
 }
 

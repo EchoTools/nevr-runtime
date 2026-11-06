@@ -40,7 +40,7 @@ class TheMatchTagsHookIsWired(unittest.TestCase):
 
     def test_the_combat_target_is_built_without_exceptions_and_hidden(self):
         cmake = read("src/quest/combat/CMakeLists.txt")
-        self.assertRegex(cmake, r"add_library\(nevr_quest_combat STATIC\s+combat_active\.cpp\s+equip_refire\.cpp\s+match_tags\.cpp\)")
+        self.assertRegex(cmake, r"add_library\(nevr_quest_combat STATIC\s+combat_active\.cpp\s+combat_install\.cpp\s+equip_refire\.cpp\s+match_tags\.cpp\)")
         options = re.search(r"target_compile_options\(nevr_quest_combat PRIVATE([^)]*)\)", cmake)
         self.assertIsNotNone(options)
         for flag in ("-Wall", "-Wextra", "-Werror", "-fno-exceptions", "-fvisibility=hidden"):
@@ -68,11 +68,11 @@ class TheMatchTagsHookIsWired(unittest.TestCase):
         )
         self.assertEqual(body.count("nevr_quest::combat::match_tags::Install();"), 1)
 
-    def test_the_host_test_is_a_target_of_the_hooks_group(self):
-        cmake = read("src/quest/host_tests/groups/hooks.cmake")
+    def test_the_host_test_is_a_target_of_the_combat_group(self):
+        cmake = read("src/quest/host_tests/groups/combat.cmake")
         self.assertRegex(
             cmake,
-            r"nevr_ht_test\(match_tag_default_test GROUP hooks[^)]*src/quest/tests/match_tag_default_test\.cpp"
+            r"nevr_ht_test\(match_tag_default_test GROUP combat[^)]*src/quest/tests/match_tag_default_test\.cpp"
             r"\s+src/quest/combat/match_tags\.cpp\)",
         )
 

@@ -1,5 +1,5 @@
 # Combat behaviour the Quest sentinel changes in the game (#1737 plan 6a Q3): one file per behaviour, namespace
-# nevr_quest::combat::<module>, log events combat_<module>_*, host tests in host_tests/groups/hooks.cmake. Included from
+# nevr_quest::combat::<module>, log events combat_<module>_*, host tests in host_tests/groups/combat.cmake (`just test-quest-combat`). Included from
 # src/quest/CMakeLists.txt after the sentinel, whose GOT backend it hooks through (nevr_quest_got_hook).
 #
 # Every file here runs on the hook path: it includes sentinel/callback_thunk.h, so it is built without exceptions (the contract
@@ -7,6 +7,7 @@
 # warnings-as-errors flags its siblings use. The sentinel links this target; --exclude-libs keeps it out of the export set.
 add_library(nevr_quest_combat STATIC
   combat_active.cpp
+  combat_install.cpp
   equip_refire.cpp
   match_tags.cpp)
 target_include_directories(nevr_quest_combat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")

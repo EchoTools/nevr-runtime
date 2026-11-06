@@ -1153,55 +1153,49 @@ void InviteCodesNeedsLoginAndAServiceAddress() {
 void CombatForceIsNotAskedUnlessTheFileSaysTrue() {
   {  // no file, an empty file, a section with no key: not asked, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
-    CHECK(!none.config.combatForce.on && none.config.combatForce.source != Source::kFile);
-    CHECK(EventsContain(none, "config key=combat.force force=0 source=default"));
+    CHECK(!none.config.combat.force.on && none.config.combat.force.source != Source::kFile);
     CHECK(!HasLevel(none, LogLevel::kWarn) && !HasLevel(none, LogLevel::kError));
     for (const char* text : {"", "version: 1\n", "combat: {}\n", "combat:\n"}) {
       const LoadResult r = Load(Full(), text);
       CHECK(!r.fileRejected);
-      CHECK(!r.config.combatForce.on && r.config.combatForce.source != Source::kFile);
-      CHECK(EventsContain(r, "config key=combat.force force=0 source=default"));
+      CHECK(!r.config.combat.force.on && r.config.combat.force.source != Source::kFile);
       CHECK(!HasLevel(r, LogLevel::kWarn));
     }
   }
   for (const char* word : {"true", "yes", "True"}) {  // asked, by the file; `combat` is a known section, so the file is not rejected
     const LoadResult r = Load(Full(), std::string("combat:\n  force: ") + word + "\n");
     CHECK(!r.fileRejected);
-    CHECK(r.config.combatForce.on && r.config.combatForce.source == Source::kFile);
-    CHECK(EventsContain(r, "config key=combat.force force=1 source=config"));
+    CHECK(r.config.combat.force.on && r.config.combat.force.source == Source::kFile);
     CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
     CHECK(!EventsContain(r, "unknown_nested=") && !EventsContain(r, "rejected"));
     CHECK(DefaultsOnly(r.config.requested) && DefaultsOnly(r.config.effective));  // no feature moves
   }
   for (const char* word : {"false", "no"}) {  // not asked, but the file said so
     const LoadResult r = Load(Full(), std::string("combat:\n  force: ") + word + "\n");
-    CHECK(!r.config.combatForce.on && r.config.combatForce.source == Source::kFile);
-    CHECK(EventsContain(r, "config key=combat.force force=0 source=config"));
+    CHECK(!r.config.combat.force.on && r.config.combat.force.source == Source::kFile);
     CHECK(!HasLevel(r, LogLevel::kWarn));
   }
   for (const char* text : {"combat:\n  force: maybe\n", "combat:\n  force: 2\n", "combat:\n  force: [true]\n",
                            "combat:\n  force: {a: 1}\n", "combat:\n  force:\n"}) {  // a value nobody meant: not asked
     const LoadResult r = Load(Full(), text);
     CHECK(!r.fileRejected);
-    CHECK(!r.config.combatForce.on && r.config.combatForce.source != Source::kFile);
+    CHECK(!r.config.combat.force.on && r.config.combat.force.source != Source::kFile);
     CHECK(EventsWithAreAtLevel(r, "config file key=combat.force rejected reason=", LogLevel::kWarn));
-    CHECK(EventsContain(r, "config key=combat.force force=0 source=default"));
     CHECK(!EventsContain(r, "maybe") && !HasLevel(r, LogLevel::kError));
   }
   {  // an unset ${VAR} is named by its reason
     const LoadResult r = Load(Full(), "combat:\n  force: ${NEVR_QUEST_TEST_UNSET_COMBAT_FORCE}\n");
-    CHECK(!r.config.combatForce.on && r.config.combatForce.source != Source::kFile);
+    CHECK(!r.config.combat.force.on && r.config.combat.force.source != Source::kFile);
     CHECK(EventsWithAreAtLevel(r, "config file key=combat.force rejected reason=unset_variable", LogLevel::kWarn));
   }
   {  // a file rejected as a whole contributes nothing, this key included
     const LoadResult r = Load(Full(), "combat:\n  force: true\nnot_a_section: 1\n");
     CHECK(r.fileRejected);
-    CHECK(!r.config.combatForce.on && r.config.combatForce.source != Source::kFile);
-    CHECK(EventsContain(r, "config key=combat.force force=0 source=default"));
+    CHECK(!r.config.combat.force.on && r.config.combat.force.source != Source::kFile);
   }
   {  // the section is not a mapping: not asked
     const LoadResult r = Load(Full(), "combat: true\n");
-    CHECK(!r.config.combatForce.on && r.config.combatForce.source != Source::kFile);
+    CHECK(!r.config.combat.force.on && r.config.combat.force.source != Source::kFile);
   }
 }
 

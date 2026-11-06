@@ -1856,6 +1856,31 @@ test-quest-q15t module="":
     (ulimit -v "${Q15T_TEST_VMEM_KB:-2097152}" && ctest --preset q15t-ndk-checks "${ctest_ndk_args[@]}")
     echo "test-quest-q15t: all q15t host tests and arm64 checks pass"
 
+# The combat area's host tests (src/quest/combat, docs/adr/0046-combat-is-part-of-the-quest-runtime.md): the gate, the two install
+# steps and each module, built without exceptions as the sentinel links them (src/quest/host_tests/groups/combat.cmake). A module's
+# test programs have its name in theirs: `just test-quest-combat <module>` runs those, then the module's arm64 checks. The arm64
+# checks are the scripts src/quest/combat/check/<module>.sh (the NDK, and qemu where a thunk is run); each stops with its own message
+# when what it needs is missing, and the recipe runs every script there is when no module is named. No headset. Fail-close.
+test-quest-combat module="": _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    module="{{ module }}"
+    (cd src/quest && cmake --preset quest-host-combat && cmake --build --preset quest-host-combat)
+    if [ -n "$module" ]; then
+      (cd src/quest && ctest --preset quest-host-combat -R "$module")
+    else
+      (cd src/quest && ctest --preset quest-host-combat)
+    fi
+    ran=0
+    shopt -s nullglob
+    for check in src/quest/combat/check/*.sh; do
+      name="$(basename "$check" .sh)"
+      [ -z "$module" ] || [ "$name" = "$module" ] || continue
+      bash "$check"
+      ran=$((ran + 1))
+    done
+    echo "test-quest-combat: the combat host tests pass; $ran arm64 check script(s) ran"
+
 # The Quest autopilot plugin on the host (#1202, docs/adr/0025-quest-autopilot-route.md): the route grammar, every
 # derived bit and limit, the clock, the filter against a fake clock, the event ring (two producers), and the plugin's
 # exports against a fake host with a real route file and its real reporter thread; and every shipped route file
@@ -2027,6 +2052,7 @@ verify *args: (_heavy-guard "verify" args)
         test-quest-autopilot \
         test-quest-obb \
         test-quest-q15t \
+        test-quest-combat \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.

@@ -292,7 +292,7 @@ class TheConstructorBeginNamesTheBuild(unittest.TestCase):
         self.assertIn("nevr_quest::combat::Resolve(nevr_build::kIsDev, forceAsked);", resolve)
         steps = strip_comments((ROOT / "src/quest/integration/production_steps.cpp").read_text())
         body = extract_braced_function(steps, "const nevr_quest::ResolvedConfig& ResolveConfig() override {")
-        self.assertIn("nevr_quest::integration::ResolveCombatActive(cfg.combatForce.on);", body)
+        self.assertIn("nevr_quest::integration::ResolveCombatActive(cfg.combat.force.on);", body)
         self.assertLess(body.index("sentinel::InitActivation();"), body.index("ResolveCombatActive("))
 
     def test_the_variant_and_the_combat_gate_are_built_into_the_sentinel(self):

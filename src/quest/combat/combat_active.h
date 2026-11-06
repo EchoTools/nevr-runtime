@@ -17,7 +17,7 @@
  * match_tags.h (name tags on by default, #2090) and equip_refire.h (the equipment change event sent again, #2121) install on every launch.
  *
  * Lines (sentinel log), one per process:
- *   {"event":"combat_active","variant":"none|q15t|combat|perf-probe","kind":"dev|release","active":"true|false",
+ *   {"event":"combat_active","variant":"none|q15t|combat|perf-probe","kind":"dev|release","active":1|0,
  *    "reason":"variant|forced|not_a_combat_variant","force":"not_asked|honoured|redundant|refused","msg":"<what follows>"}
  * Warning when `force` is `refused` (a release build was asked to force combat on), Info otherwise.
  *
@@ -64,6 +64,9 @@ void SetVariant(build_variant::Variant variant) noexcept;
 // Makes the answer from the variant SetVariant recorded (a plain release when none was) and logs the combat_active line. Called once the
 // configuration is resolved, with `nevr_build::kIsDev` and the configuration's combat.force. A second call changes nothing and logs nothing.
 void Resolve(bool devBuild, bool forceAsked) noexcept;
+
+// The variant SetVariant recorded (kNone until it was called): the word the combat_install lines name beside the answer.
+build_variant::Variant RecordedVariant() noexcept;
 
 // True when the folded combat modules run in this process. False until Resolve has been called.
 bool Active() noexcept;

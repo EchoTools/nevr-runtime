@@ -3,14 +3,19 @@
 // before the single reporter start, the isolation of one failing piece from the others, the post-load
 // policy, the identity source, the social switch and the frame tap. Fakes stand in for every library.
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <new>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -55,7 +60,14 @@ struct FakeSteps final : Steps {
   // Per step: true = report failure, "throw" = throw.
   std::vector<std::string> failing;
   std::vector<std::string> throwing;
-  bool loginArg = false, mmArg = false, pluginsArg = false;
+  bool loginArg = false, mmArg = false, pluginsArg = false, combatArg = false;
+  // The combat area (#2171): whether combat::Active() answers true, whether asking throws, what the finish was told.
+  bool combatActive = false;
+  bool combatActiveThrows = false;
+  int combatAsked = 0;
+  int combatFinishCalls = 0;
+  std::string combatFinishReason;
+  bool combatFinishThrows = false;
   PluginCounts plugins;  // what the plan answers (#438)
   int planCalls = 0;
   int finishCalls = 0;
@@ -102,6 +114,18 @@ struct FakeSteps final : Steps {
     return plugins;
   }
   bool RunEarlyPlugins() override { return Step("plugins_early"); }
+  bool CombatActive() override {
+    ++combatAsked;
+    if (combatActiveThrows) throw std::runtime_error("injected");
+    return combatActive;
+  }
+  bool InstallCombatEarly() override { return Step("combat_early"); }
+  void FinishCombat(const char* reason) override {
+    ++combatFinishCalls;
+    combatFinishReason = reason;
+    calls.emplace_back("combat_finish");
+    if (combatFinishThrows) throw std::runtime_error("injected");
+  }
   void FinishPlugins(const char* reason) override {
     ++finishCalls;
     finishReason = reason;
@@ -165,10 +189,11 @@ struct FakeSteps final : Steps {
   bool StartBridge() override { return Step("bridge"); }
   bool InstallRedirect() override { return Step("redirect"); }
   bool InstallSocial() override { return Step("social"); }
-  bool InstallDlopenHook(bool login, bool mm, bool plugins) override {
+  bool InstallDlopenHook(bool login, bool mm, bool plugins, bool combat) override {
     loginArg = login;
     mmArg = mm;
     pluginsArg = plugins;
+    combatArg = combat;
     dlopenArgsSeen = true;
     return Step("dlopen");
   }
@@ -223,15 +248,16 @@ void TestFullStackOrder() {
   s.devBuild = true;
   s.config.effective.clockLevels = true;
   s.plugins = {1, 1};
+  s.combatActive = true;  // a combat run: its early step sits after the early plugin pass (#2171)
   s.inviteWanted = true;  // the observer's step runs in the full stack (and is the one step this test turns on)
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(s.clockLevelsArgSeen && s.clockLevelsOverrideArg);
   const std::vector<std::string> want = {"arm",       "config",     "plugins_plan", "reg_clock",  "reg_redirect", "reg_dlopen",
                                          "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "attach",
-                                         "plugins_early", "clock",     "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "wizard_metric", "clock_levels", "irradiance", "token",      "prompt",       "bridge",
+                                         "plugins_early", "combat_early", "clock",     "frame_dispatch", "obb", "process_end", "crash_first", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "wizard_metric", "clock_levels", "irradiance", "token",      "prompt",       "bridge",
                                          "redirect",  "social",     "dlopen",     "hwdump",     "pns_provider"};
   QCHECK(s.calls == want);
-  QCHECK(s.loginArg && s.mmArg && s.pluginsArg);
+  QCHECK(s.loginArg && s.mmArg && s.pluginsArg && s.combatArg);
   for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) QCHECK(r.steps[i].state == StepState::kOk);
 }
 
@@ -300,6 +326,7 @@ void TestHwDumpIsIndependentAndContained() {
     // The resource request hook (#871) runs in every build; devBuild decides only its log lines.
     s.devBuild = true;
     s.plugins = {1, 0};  // and no early plugin means a skipped early pass (#438)
+    s.combatActive = true;  // the combat area's early step is ok here too (#2171)
     s.inviteWanted = true;  // the observer's step (#966) is ok here: the loop below asks every step before hwdump to be kOk
     if (std::strcmp(mode, "fail") == 0) s.failing = {"hwdump"}; else s.throwing = {"hwdump"};
     const ConstructorReport r = RunConstructorSequence(s);
@@ -1401,6 +1428,166 @@ void TestThePluginPassRunsOutsideThePolicyLockAndNeverReentersItself() {
   QCHECK(g_statsSeenInside == 1);  // the outer call was counted before the plugins ran
 }
 
+// ---- the combat slot of the post-load policy (#2171) -----------------------------------------------------------------------
+
+int g_combatRuns = 0;
+std::thread::id g_combatThread;
+std::uint64_t g_pluginsSettledSeenByCombat = 99;
+std::uint64_t g_combatSettledSeenByCombat = 99;
+int g_combatReentries = 0;
+bool g_combatReenters = false;
+
+ActionResult FakeCombat() noexcept {
+  ++g_combatRuns;
+  g_order.emplace_back("combat");
+  g_combatThread = std::this_thread::get_id();
+  const PostLoadStats stats = PostLoadStatsView();  // takes the policy's lock: combat runs outside it
+  g_pluginsSettledSeenByCombat = stats.pluginsSettled;
+  g_combatSettledSeenByCombat = stats.combatSettled;
+  if (g_combatReenters) {
+    int inner = 0;
+    AfterDlopen("libfromcombat.so", &inner);
+    ++g_combatReentries;
+  }
+  return {Settle::kDone, "fake_combat"};
+}
+
+void ResetCombat(ActionFn login, ActionFn mm, ActionFn plugins, ActionFn combat) {
+  ResetPlugins(login, mm, plugins);
+  g_combatRuns = 0;
+  g_combatThread = std::thread::id();
+  g_pluginsSettledSeenByCombat = g_combatSettledSeenByCombat = 99;
+  g_combatReentries = 0;
+  g_combatReenters = false;
+  PostLoadActions a;
+  a.login = login;
+  a.matchmaking = mm;
+  a.plugins = plugins;
+  a.combat = combat;
+  SetPostLoadActions(a);
+}
+
+// The combat action runs after the plugin action has returned and its settled flag is set, on the thread that ran the plugins, once; the
+// login and matchmaking installs came first.
+void TestTheCombatActionRunsAfterThePluginActionHasReturned() {
+  int dummy = 0;
+  ResetCombat(&OrderedLogin, &OrderedMatchmaking, &FakePlugins, &FakeCombat);
+  QCHECK(PostLoadPending());
+  AfterDlopen("libc++_shared.so", &dummy);
+  QCHECK((g_order == std::vector<std::string>{"login", "matchmaking", "plugins", "combat"}));
+  QCHECK(g_pluginRuns == 1 && g_combatRuns == 1);
+  QCHECK(g_pluginsSettledSeenByCombat == 1);  // the plugin pass was settled before combat started
+  QCHECK(g_combatSettledSeenByCombat == 0);
+  QCHECK(g_combatThread == std::this_thread::get_id());
+  QCHECK(PostLoadStatsView().combatSettled == 1 && PostLoadStatsView().pluginsSettled == 1);
+  QCHECK(!PostLoadPending());
+  AfterDlopen("libpnsovr.so", &dummy);
+  QCHECK(g_pluginRuns == 1 && g_combatRuns == 1);  // once each
+}
+
+// With no plugin action the combat action has the moment to itself: the first non-null dlopen, once, and a failed dlopen is no moment.
+void TestTheCombatActionRunsAloneWhenNoPluginIsPlanned() {
+  int dummy = 0;
+  ResetCombat(nullptr, nullptr, nullptr, &FakeCombat);
+  QCHECK(PostLoadPending());
+  AfterDlopen("libfoo.so", nullptr);
+  QCHECK(g_combatRuns == 0 && PostLoadStatsView().combatSettled == 0);
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_combatRuns == 1 && PostLoadStatsView().combatSettled == 1);
+  QCHECK(g_pluginsSettledSeenByCombat == 0);
+  QCHECK(!PostLoadPending());
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_combatRuns == 1);
+  // Not requested: nothing runs and nothing is pending.
+  ResetCombat(nullptr, nullptr, nullptr, nullptr);
+  QCHECK(!PostLoadPending());
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_combatRuns == 0 && PostLoadStatsView().combatSettled == 0);
+}
+
+// A dlopen the plugin pass makes comes back through the hook on its thread: it neither starts combat inside the plugin pass nor runs
+// it twice. A dlopen the combat action makes does not start it again.
+void TestACombatActionNeverRunsInsideThePluginPassOrTwice() {
+  int dummy = 0;
+  ResetCombat(nullptr, nullptr, &FakePlugins, &FakeCombat);
+  g_pluginReenters = true;
+  g_combatReenters = true;
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_pluginRuns == 1 && g_pluginReentries == 1);
+  QCHECK(g_combatRuns == 1 && g_combatReentries == 1);
+  QCHECK((g_order == std::vector<std::string>{"plugins", "combat"}));  // the plugin's inner dlopen did not run combat early
+}
+
+// Two threads: A is held inside the plugin action; B's dlopen returns without running the combat action (and without running the plugins
+// again); when A's action returns, A runs the combat action, once, on its own thread.
+std::mutex g_gateMutex;
+std::condition_variable g_gateCv;
+bool g_pluginInside = false;
+bool g_pluginMayReturn = false;
+bool g_gateTimedOut = false;
+
+ActionResult HeldPlugins() noexcept {
+  ++g_pluginRuns;
+  g_order.emplace_back("plugins");
+  std::unique_lock<std::mutex> lock(g_gateMutex);
+  g_pluginInside = true;
+  g_gateCv.notify_all();
+  // A deadline, not a sleep: a pass that is never released is a failure of the test, not a hang.
+  if (!g_gateCv.wait_for(lock, std::chrono::seconds(30), [] { return g_pluginMayReturn; })) g_gateTimedOut = true;
+  return {Settle::kDone, "held_plugins"};
+}
+
+void TestASecondThreadNeverRunsCombatWhileThePluginActionIsHeld() {
+  ResetCombat(nullptr, nullptr, &HeldPlugins, &FakeCombat);
+  g_pluginInside = g_pluginMayReturn = g_gateTimedOut = false;
+  std::thread::id threadA;
+  std::thread a([&] {
+    int dummy = 0;
+    threadA = std::this_thread::get_id();
+    AfterDlopen("libA.so", &dummy);
+  });
+  {
+    std::unique_lock<std::mutex> lock(g_gateMutex);
+    QCHECK(g_gateCv.wait_for(lock, std::chrono::seconds(30), [] { return g_pluginInside; }));
+  }
+  {
+    int dummy = 0;
+    AfterDlopen("libB.so", &dummy);  // thread B: returns at once
+    AfterDlopen("libB2.so", &dummy);
+  }
+  QCHECK(g_combatRuns == 0);   // B did not run combat
+  QCHECK(g_pluginRuns == 1);   // nor the plugin pass again
+  QCHECK(PostLoadStatsView().combatSettled == 0 && PostLoadPending());
+  {
+    const std::lock_guard<std::mutex> lock(g_gateMutex);
+    g_pluginMayReturn = true;
+  }
+  g_gateCv.notify_all();
+  a.join();
+  QCHECK(!g_gateTimedOut);
+  QCHECK(g_combatRuns == 1);                 // A ran it, once
+  QCHECK(g_combatThread == threadA);         // on the thread that ran the plugins
+  QCHECK(g_pluginsSettledSeenByCombat == 1);
+  QCHECK((g_order == std::vector<std::string>{"plugins", "combat"}));
+  int dummy = 0;
+  AfterDlopen("libC.so", &dummy);
+  QCHECK(g_combatRuns == 1 && g_pluginRuns == 1);
+  QCHECK(!PostLoadPending());
+}
+
+// The combat slot does not disturb the other actions: a login that retries is still retried, and the combat action waits for no module.
+void TestTheCombatActionDoesNotWaitForTheOtherActionsToSettle() {
+  int dummy = 0;
+  ResetCombat(&FakeLogin, nullptr, nullptr, &FakeCombat);
+  g_loginRuns = 0;
+  g_loginSettle = Settle::kRetryLater;
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_loginRuns == 1 && g_combatRuns == 1);
+  QCHECK(PostLoadPending());  // the login still wants a retry
+  AfterDlopen("libfoo2.so", &dummy);
+  QCHECK(g_loginRuns == 2 && g_combatRuns == 1);
+}
+
 void TestPostLoadGiveUpEndsOnlyThatAction() {
   int dummy = 0;
   ResetPostLoad(&ThrowingLogin, &FakeMatchmaking, Settle::kGiveUp, Settle::kRetryLater);
@@ -2007,6 +2194,138 @@ void TestNormalEntriesEndWhenTheDlopenHookCannotBeLive() {
   }
 }
 
+// ---- the combat area's two install steps (#2171, docs/adr/0046 rule 6) ----------------------------------------------------
+
+// A plain release (combat::Active() false) sets nothing: no early step, no dlopen hook of its own, no counters for it, nothing to end
+// when the hook is not live. The early step is skipped with a reason that says why, at Info (it is the state of the build, not a fault).
+void TestCombatInactiveInstallsNothingAndSkipsWithAReason() {
+  FakeSteps s = FakeSteps::With(false, false, false, false);
+  const ConstructorReport r = RunConstructorSequence(s);
+  QCHECK(s.combatAsked >= 1);  // the sequence asks the gate, it does not assume
+  QCHECK(r.at(StepId::kInstallCombatEarly).state == StepState::kSkipped);
+  QCHECK(std::strcmp(r.at(StepId::kInstallCombatEarly).reason, "combat_inactive") == 0);
+  QCHECK(std::strcmp(StepName(StepId::kInstallCombatEarly), "install_combat_early") == 0);
+  QCHECK(StepLogLevel("skipped", "combat_inactive") == StepLevel::kInfo);
+  QCHECK(!s.Ran("combat_early") && !s.Ran("reg_dlopen") && !s.Ran("dlopen"));
+  QCHECK(!s.combatArg && s.combatFinishCalls == 0);
+  // The login and redirect installs ride the hook as before, and the hook is not asked for combat.
+  FakeSteps on = FakeSteps::With(true, true, true, true);
+  RunConstructorSequence(on);
+  QCHECK(on.loginArg && on.mmArg && !on.combatArg);
+  QCHECK(on.combatFinishCalls == 0);
+}
+
+// A question that cannot be answered is combat off: the folded modules install only on a yes.
+void TestACombatQuestionThatThrowsIsCombatOff() {
+  FakeSteps s = FakeSteps::With(false, false, false, false);
+  s.combatActive = true;
+  s.combatActiveThrows = true;
+  const ConstructorReport r = RunConstructorSequence(s);
+  QCHECK(r.at(StepId::kInstallCombatEarly).state == StepState::kSkipped);
+  QCHECK(!s.Ran("combat_early") && !s.Ran("dlopen") && !s.combatArg);
+}
+
+// A combat run with login off and no plugin planned still gets the dlopen hook: its counters register before the one reporter start, the
+// hook installs, and it is asked for the combat action alone.
+void TestCombatActiveWantsTheDlopenHookOnItsOwn() {
+  FakeSteps s = FakeSteps::With(false, false, false, false);
+  s.combatActive = true;
+  const ConstructorReport r = RunConstructorSequence(s);
+  QCHECK(s.Ran("reg_dlopen") && s.Ran("dlopen"));
+  QCHECK(r.at(StepId::kInstallDlopenHook).state == StepState::kOk);
+  QCHECK(s.combatArg && !s.loginArg && !s.mmArg && !s.pluginsArg);
+  QCHECK(s.Index("reg_dlopen") < s.Index("reporter"));
+  QCHECK(s.combatFinishCalls == 0);
+  QCHECK(r.at(StepId::kInstallCombatEarly).state == StepState::kOk);
+}
+
+// The early step runs once, after Attach and after the early plugin pass (the plugin installs first on a slot both touch, ADR 0046 rule
+// 7), and before the clock hook.
+void TestTheEarlyCombatStepRunsAfterAttachAndBeforeTheClockHook() {
+  FakeSteps s = FakeSteps::With(false, false, false, false);
+  s.combatActive = true;
+  RunConstructorSequence(s);
+  QCHECK(s.Index("attach") == s.Index("reporter") + 1);
+  QCHECK(s.Index("combat_early") == s.Index("attach") + 1);
+  QCHECK(s.Index("clock") == s.Index("combat_early") + 1);
+  QCHECK(std::count(s.calls.begin(), s.calls.end(), "combat_early") == 1);
+  FakeSteps p = FakeSteps::With(false, false, false, false);
+  p.combatActive = true;
+  p.plugins = {1, 0};
+  RunConstructorSequence(p);
+  QCHECK(p.Index("attach") < p.Index("plugins_early"));
+  QCHECK(p.Index("plugins_early") < p.Index("combat_early"));
+  QCHECK(p.Index("combat_early") < p.Index("clock"));
+}
+
+// The login and matchmaking installs, the plugin pass and the combat step all ride the one hook, each told apart.
+void TestCombatRidesTheSameDlopenHookAsTheOtherInstalls() {
+  FakeSteps s = FakeSteps::With(true, true, true, true);
+  s.combatActive = true;
+  s.plugins = {0, 2};
+  RunConstructorSequence(s);
+  QCHECK(s.loginArg && s.mmArg && s.pluginsArg && s.combatArg);
+  FakeSteps plain = FakeSteps::With(false, false, false, false);
+  plain.combatActive = true;
+  plain.plugins = {0, 1};
+  RunConstructorSequence(plain);
+  QCHECK(plain.pluginsArg && plain.combatArg && !plain.loginArg && !plain.mmArg);
+}
+
+// When the hook cannot be live (counters refused, the step fails, the step throws) the combat step has no moment to run in: one record
+// says `not_started` with the reason, as the plugin entries do; the plugin entries get their own. A finish that throws is contained.
+void TestTheCombatStepEndsWhenTheDlopenHookCannotBeLive() {
+  for (const char* which : {"reg_dlopen", "dlopen"}) {
+    for (const bool throws : {false, true}) {
+      FakeSteps s = FakeSteps::With(false, false, false, false);
+      s.combatActive = true;
+      s.plugins = {0, 1};
+      (throws ? s.throwing : s.failing) = {which};
+      RunConstructorSequence(s);
+      QCHECK(s.combatFinishCalls == 1);
+      QCHECK(s.combatFinishReason == "post_load_hook_unavailable");
+      QCHECK(s.finishCalls == 1 && s.finishReason == "post_load_hook_unavailable");
+    }
+  }
+  {  // no plugin planned: the combat record is the only one
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    s.combatActive = true;
+    s.failing = {"dlopen"};
+    RunConstructorSequence(s);
+    QCHECK(s.combatFinishCalls == 1 && s.finishCalls == 0);
+  }
+  {  // combat off and a hook that is not live: nothing is owed to combat
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    s.plugins = {0, 1};
+    s.failing = {"dlopen"};
+    RunConstructorSequence(s);
+    QCHECK(s.combatFinishCalls == 0 && s.finishCalls == 1);
+  }
+  {  // a finish that throws is contained: the later steps run
+    FakeSteps s = FakeSteps::With(false, false, false, true);
+    s.config.effective.hwdump = true;
+    s.combatActive = true;
+    s.failing = {"reg_dlopen"};
+    s.combatFinishThrows = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(s.combatFinishCalls == 1);
+    QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
+  }
+}
+
+// A failing or throwing early step leaves every other step as it was, and the post-load moment is still asked for.
+void TestAFailingCombatEarlyStepNeverMovesAnotherStep() {
+  for (const bool throws : {false, true}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.combatActive = true;
+    (throws ? s.throwing : s.failing) = {"combat_early"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallCombatEarly).state == (throws ? StepState::kThrew : StepState::kFailed));
+    QCHECK(s.Ran("clock") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen") && s.Ran("credits"));
+    QCHECK(s.combatArg);
+  }
+}
+
 void TestStepLogLevels() {
   QCHECK(StepLogLevel("ok", "ok") == StepLevel::kInfo);
   QCHECK(StepLogLevel("skipped", "social_off") == StepLevel::kInfo);
@@ -2185,6 +2504,13 @@ int main() {
   TestANormalPluginEntryWantsTheDlopenHookOnItsOwn();
   TestThePluginPassRidesTheSameDlopenHookAsTheOtherInstalls();
   TestNormalEntriesEndWhenTheDlopenHookCannotBeLive();
+  TestCombatInactiveInstallsNothingAndSkipsWithAReason();
+  TestACombatQuestionThatThrowsIsCombatOff();
+  TestCombatActiveWantsTheDlopenHookOnItsOwn();
+  TestTheEarlyCombatStepRunsAfterAttachAndBeforeTheClockHook();
+  TestCombatRidesTheSameDlopenHookAsTheOtherInstalls();
+  TestTheCombatStepEndsWhenTheDlopenHookCannotBeLive();
+  TestAFailingCombatEarlyStepNeverMovesAnotherStep();
   TestFullStackOrder();
   TestHwDumpIsIndependentAndContained();
   TestPnsProviderGates();
@@ -2226,6 +2552,11 @@ int main() {
   TestThePluginPassRunsOnceOnTheFirstDlopenAfterTheOtherInstalls();
   TestThePluginPassWaitsForAHandleAndNeedsNoOtherAction();
   TestThePluginPassRunsOutsideThePolicyLockAndNeverReentersItself();
+  TestTheCombatActionRunsAfterThePluginActionHasReturned();
+  TestTheCombatActionRunsAloneWhenNoPluginIsPlanned();
+  TestACombatActionNeverRunsInsideThePluginPassOrTwice();
+  TestASecondThreadNeverRunsCombatWhileThePluginActionIsHeld();
+  TestTheCombatActionDoesNotWaitForTheOtherActionsToSettle();
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();
   TestIdentitySourceAnswers();

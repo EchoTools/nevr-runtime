@@ -75,7 +75,7 @@ void Resolve(bool devBuild, bool forceAsked) noexcept {
   if (decision.force == ForceOutcome::kRefused) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_active",
                         {{"variant", build_variant::VariantName(variant)}, {"kind", devBuild ? "dev" : "release"},
-                         {"active", decision.active ? "true" : "false"}, {"reason", ReasonName(decision.reason)},
+                         {"active", decision.active ? 1 : 0}, {"reason", ReasonName(decision.reason)},
                          {"force", ForceName(decision.force)},
                          {"msg", decision.active
                                      ? "combat.force is honoured in development builds only and is ignored here; folded combat modules install in this run because of the variant"
@@ -84,8 +84,12 @@ void Resolve(bool devBuild, bool forceAsked) noexcept {
   }
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_active",
                       {{"variant", build_variant::VariantName(variant)}, {"kind", devBuild ? "dev" : "release"},
-                       {"active", decision.active ? "true" : "false"}, {"reason", ReasonName(decision.reason)},
+                       {"active", decision.active ? 1 : 0}, {"reason", ReasonName(decision.reason)},
                        {"force", ForceName(decision.force)}, {"msg", consequence}});
+}
+
+build_variant::Variant RecordedVariant() noexcept {
+  return static_cast<build_variant::Variant>(g_variant.load(std::memory_order_acquire));
 }
 
 bool Active() noexcept { return g_active.load(std::memory_order_acquire) != 0; }
