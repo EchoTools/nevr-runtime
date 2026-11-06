@@ -11,10 +11,14 @@
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/impactsnd.h"
+#include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/meshstep.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/combat/shaderstep.h"
+#include "quest/combat/tablestep.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -32,6 +36,10 @@ ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on)
 ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
+ModuleResult MeshstepNormal() noexcept { return meshstep::Install(g_config.meshstep.on); }
+ModuleResult TablestepNormal() noexcept { return tablestep::Install(g_config.tablestep.on); }
+ModuleResult InstmodelNormal() noexcept { return instmodel::Install(g_config.instmodel.on); }
+ModuleResult ShaderstepNormal() noexcept { return shaderstep::Install(g_config.shaderstep.on); }
 
 ModuleResult ImpactsndNormal() noexcept { return impactsnd::Install(g_config.impactsnd.on, g_config.impactsndWrite.on); }
 ModuleResult DecalsNormal() noexcept {
@@ -64,13 +72,20 @@ constexpr std::array kModules{
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
-    // impactsnd, then decals (#2183), in the plugin's order: decals' Shutdown handler chains above impactsnd's, so impactsnd installs first. Both act
-    // only in combat levels (impactsnd.h, decals.h).
-    Module{"impactsnd", nullptr, &ImpactsndNormal, nullptr, "combat.impactsnd", &nevr_quest::CombatConfig::impactsnd, "combat.impactsnd_write",
+    // The resource table steps (#2177), in the plugin's order: meshstep, tablestep, instmodel, shaderstep. Each acts only while a combat map is
+    // loaded (table_step.h), so they read the game the tick verified: they come after the tick's row.
+    Module{"meshstep", nullptr, &MeshstepNormal, "combat.meshstep", &nevr_quest::CombatConfig::meshstep},
+    // impactsnd (#2183) sits where the plugin installed it, after meshstep and before the other table steps; it acts only in combat levels (impactsnd.h).
+    Module{"impactsnd", nullptr, &ImpactsndNormal, "combat.impactsnd", &nevr_quest::CombatConfig::impactsnd, "combat.impactsnd_write",
            &nevr_quest::CombatConfig::impactsndWrite},
-    Module{"decals", nullptr, &DecalsNormal, nullptr, "combat.decals", &nevr_quest::CombatConfig::decals, "combat.decals_flip_u",
+    Module{"tablestep", nullptr, &TablestepNormal, "combat.tablestep", &nevr_quest::CombatConfig::tablestep},
+    Module{"instmodel", nullptr, &InstmodelNormal, "combat.instmodel", &nevr_quest::CombatConfig::instmodel},
+    Module{"shaderstep", nullptr, &ShaderstepNormal, "combat.shaderstep", &nevr_quest::CombatConfig::shaderstep},
+    // decals (#2183): last of the plugin's table steps; its Shutdown handler chains above impactsnd's, so impactsnd's row comes first. It acts only in combat
+    // levels (decals.h); decals_flip_v is read by the module and reported on its table line.
+    Module{"decals", nullptr, &DecalsNormal, "combat.decals", &nevr_quest::CombatConfig::decals, "combat.decals_flip_u",
            &nevr_quest::CombatConfig::decalsFlipU},
-    // gates (#2180): the plugin installed them after its tick and its modules; they register the tick callback the bot gate reads the game from.
+    // gates (#2180): the plugin installed them after its tick and its modules (after the table steps above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
@@ -141,7 +156,7 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     std::snprintf(msg, sizeof(msg), "no combat module has a step in this phase yet; nothing of combat's is installed");
   } else {
     char off[64] = "";
-    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off by %s config key", outcome.off, outcome.off == 1 ? "its" : "their");
+    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off or with nothing to act on", outcome.off);
     std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s%s", outcome.installed, outcome.modules, off,
                   outcome.failed == 0 ? "" : "; the others keep the game's own behaviour");
   }
@@ -161,15 +176,6 @@ const Module* ShippedModules(std::size_t* count) noexcept {
 Outcome InstallEarly() noexcept { return RunPhase(Phase::kEarly, kModules.data(), kModules.size()); }
 
 Outcome InstallNormal() noexcept { return RunPhase(Phase::kNormal, kModules.data(), kModules.size()); }
-
-void RunEnd(const Module* table, std::size_t count) noexcept {
-  if (!Active() || StateOf(Phase::kNormal).load(std::memory_order_acquire) != kDone) return;  // nothing was installed
-  for (std::size_t i = 0; i < count; ++i) {
-    if (table[i].end != nullptr) table[i].end();
-  }
-}
-
-void NoteProcessEnd() noexcept { RunEnd(kModules.data(), kModules.size()); }
 
 void NoteNormalNotStarted(const char* reasonToken) noexcept {
   if (!Active()) return;  // combat does not run here: nothing was owed
@@ -197,6 +203,19 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
+  // One record per module switch, from the registration table (combat_install.h).
+  for (const Module& module : kModules) {
+    const struct {
+      const char* key;
+      nevr_quest::CombatSwitch nevr_quest::CombatConfig::* member;
+    } switches[] = {{module.switchKey, module.switchMember}, {module.switchKey2, module.switchMember2}};
+    for (const auto& s : switches) {
+      if (s.member == nullptr) continue;
+      const nevr_quest::CombatSwitch& sw = config.*s.member;
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                          {{"module", module.name}, {"key", s.key}, {"on", sw.on ? 1 : 0}, {"source", source(sw.source)}});
+    }
+  }
   // A log line is one fixed 768-byte buffer (sentinel/hook_log.cpp): the headset gates' keys are a line of their own, so no line is cut.
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_gates",
                       {{"gate_perm", config.gatePerm.on ? 1 : 0}, {"gate_perm_source", source(config.gatePerm.source)},
@@ -204,20 +223,6 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"gate_link", config.gateLink.on ? 1 : 0}, {"gate_link_source", source(config.gateLink.source)},
                        {"gate_link_libs_source", source(config.gateLinkLibs.source)},
                        {"msg", "the headset gates' keys (src/quest/combat/headset_gates.h); gate_link_libs is a text and is never logged, only where it came from"}});
-  // One record per module switch, generated from the registration table (combat_install.h): a unit adds a row, never a key on a line that one
-  // sentinel line (768 bytes) cannot hold.
-  for (const Module& module : kModules) {
-    const struct {
-      const char* key;
-      nevr_quest::CombatSwitch nevr_quest::CombatConfig::* member;
-    } switches[] = {{module.switchKey, module.switchMember}, {module.switchKey2, module.switchMember2}};
-    for (const auto& sw : switches) {
-      if (sw.key == nullptr || sw.member == nullptr) continue;
-      const nevr_quest::CombatSwitch& value = config.*sw.member;
-      sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
-                          {{"module", module.name}, {"key", sw.key}, {"on", value.on ? 1 : 0}, {"source", source(value.source)}});
-    }
-  }
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }

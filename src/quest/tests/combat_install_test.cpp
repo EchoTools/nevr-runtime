@@ -20,7 +20,11 @@
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/impactsnd.h"
+#include "quest/combat/instmodel.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/meshstep.h"
+#include "quest/combat/shaderstep.h"
+#include "quest/combat/tablestep.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
@@ -214,18 +218,23 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
 // The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and nothing has a normal one yet. No
 // libr15 is loaded in this process, so each module refuses with its fixed token and the line names both; the normal phase writes its one
 // line with no modules.
-void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal() {
+void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal() {
   nevr_quest::combat::heaps::ResetForTest();
   nevr_quest::combat::memsys::ResetForTest();
+  nevr_quest::combat::meshstep::ResetForTest();
+  nevr_quest::combat::tablestep::ResetForTest();
+  nevr_quest::combat::instmodel::ResetForTest();
+  nevr_quest::combat::shaderstep::ResetForTest();
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the headset gates (#2180) and, last, the pfx gate and
-  // the event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick and the gates are refused and named; the rule
-  // installs (it registers its callback for a tick that may come later), and so do the two decisions. The impact sounds (#2183) are refused like the
-  // other hooks (no libr15), and the level decals, on by default, find no decals.bin and are off: counted apart, neither installed nor failed.
-  QCHECK(normal.ran && normal.modules == 7 && normal.installed == 3 && normal.failed == 3 && normal.off == 1);
+  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the four resource table steps in the plugin's order
+  // (#2177) with the impact sounds (#2183) after the first and the level decals after the last, the headset gates (#2180) and, last, the pfx gate and the
+  // event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick, the table steps, the impact sounds and the gates are
+  // refused and named; the rule installs (it registers its callback for a tick that may come later), and so do the two decisions; the level decals, on by
+  // default, find no decals.bin and are off: counted apart, neither installed nor failed.
+  QCHECK(normal.ran && normal.modules == 11 && normal.installed == 3 && normal.failed == 7 && normal.off == 1);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -233,7 +242,9 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed impactsnd=module_not_loaded decals=no_table gates=module_not_loaded pfx=installed pfxtev=installed\""));
+    QCHECK(Has(lines[1].text,
+               "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded impactsnd=module_not_loaded tablestep=module_not_loaded "
+               "instmodel=module_not_loaded shaderstep=module_not_loaded decals=no_table gates=module_not_loaded pfx=installed pfxtev=installed\""));
   }
   Done();
 }
@@ -311,6 +322,8 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     // The module switches: on by default, each with its source.
     QCHECK(Has(lines[0].text, "\"heaps\":1") && Has(lines[0].text, "\"heaps_source\":\"default\""));
     QCHECK(Has(lines[0].text, "\"memsys\":1") && Has(lines[0].text, "\"memsys_source\":\"default\""));
+    // The four resource table steps (#2177) are records of their own (combat_config_switch), not keys of this full line.
+    QCHECK(!Has(lines[0].text, "meshstep") && !Has(lines[0].text, "tablestep"));
   }
   g_lines.clear();
   cfg.heaps = {false, nevr_quest::Source::kFile};
@@ -321,6 +334,44 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   if (switches.size() == 1U) {
     QCHECK(Has(switches[0].text, "\"heaps\":0") && Has(switches[0].text, "\"heaps_source\":\"config\""));
     QCHECK(Has(switches[0].text, "\"memsys\":1") && Has(switches[0].text, "\"memsys_source\":\"config\""));
+    QCHECK(Has(switches[0].text, "\"msg\":"));  // the line is not cut off: one sentinel line holds 768 bytes
+  }
+  // The four resource table steps (#2177): one `combat_config_switch` record each, generated from the registration table. instmodel, shaderstep and
+  // tablestep and meshstep are on by default, each with its source; the file's word where it gave one.
+  g_lines.clear();
+  nevr_quest::CombatConfig tables;
+  combat::LogConfig(tables);
+  tables.meshstep = {false, nevr_quest::Source::kFile};
+  tables.tablestep = {false, nevr_quest::Source::kFile};
+  combat::LogConfig(tables);
+  const std::vector<Line> all = Lines("combat_config_switch");
+  QCHECK(all.size() == 16U);  // eight per call: the four table steps, impactsnd and its write key, decals and its flip key (#2183)
+  const char* const order[] = {"meshstep", "tablestep", "instmodel", "shaderstep"};
+  std::vector<Line> records;  // the four table steps' records, in the table's order
+  for (const Line& l : all) {
+    for (const char* name : order) {
+      if (Has(l.text, std::string("\"module\":\"") + name + "\"")) records.push_back(l);
+    }
+  }
+  // impactsnd and decals: one record for each of their two keys, the file's word where it gave one (#2183)
+  QCHECK(Has(all[1].text, "\"module\":\"impactsnd\"") && Has(all[1].text, "\"key\":\"combat.impactsnd\"") && Has(all[1].text, "\"on\":1,\"source\":\"default\""));
+  QCHECK(Has(all[2].text, "\"key\":\"combat.impactsnd_write\"") && Has(all[2].text, "\"on\":1,\"source\":\"default\""));
+  QCHECK(Has(all[6].text, "\"module\":\"decals\"") && Has(all[6].text, "\"key\":\"combat.decals\"") && Has(all[6].text, "\"on\":1,\"source\":\"default\""));
+  QCHECK(Has(all[7].text, "\"key\":\"combat.decals_flip_u\"") && Has(all[7].text, "\"on\":0,\"source\":\"default\""));
+  const char* const wantFirst[] = {"\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
+                                   "\"on\":1,\"source\":\"default\""};
+  const char* const wantSecond[] = {"\"on\":0,\"source\":\"config\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
+                                    "\"on\":1,\"source\":\"default\""};
+  if (records.size() == 8U) {
+    for (std::size_t i = 0; i < 4; ++i) {
+      for (std::size_t call = 0; call < 2; ++call) {
+        const Line& line = records[call * 4 + i];
+        QCHECK(line.level == sentinel::LogLevel::kInfo);
+        QCHECK(line.text.substr(line.text.find("\"event\"")) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + order[i] + "\",\"key\":\"combat." + order[i] +
+                                        "\"," + (call == 0 ? wantFirst[i] : wantSecond[i]) + "}");
+        QCHECK(line.text.size() < 200);
+      }
+    }
   }
   Done();
 }
@@ -469,7 +520,7 @@ void TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection() {
   Process(bv::Variant::kCombat);
   combat::SetConfig(nevr_quest::CombatConfig{});
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "impactsnd=module_not_loaded decals=no_table"));  // no libr15 on the host, and no decals.bin
+  QCHECK(Has(Lines("combat_install")[0].text, "impactsnd=module_not_loaded") && Has(Lines("combat_install")[0].text, "decals=no_table"));  // no libr15 on the host, and no decals.bin
   QCHECK(Lines("combat_impactsnd_refused").size() == 1U);
   QCHECK(Lines("combat_decals_install").size() == 1U && Has(Lines("combat_decals_install")[0].text, "\"reason\":\"no_table\""));
   Done();
@@ -478,7 +529,7 @@ void TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection() {
   impactOff.impactsnd = {false, nevr_quest::Source::kFile};
   combat::SetConfig(impactOff);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "impactsnd=off_config decals=no_table"));
+  QCHECK(Has(Lines("combat_install")[0].text, "impactsnd=off_config") && Has(Lines("combat_install")[0].text, "decals=no_table"));
   QCHECK(Lines("combat_impactsnd_refused").empty() && Has(Lines("combat_impactsnd_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   Process(bv::Variant::kCombat);
@@ -486,7 +537,7 @@ void TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection() {
   decalsOff.decals = {false, nevr_quest::Source::kFile};
   combat::SetConfig(decalsOff);
   combat::InstallNormal();
-  QCHECK(Has(Lines("combat_install")[0].text, "impactsnd=module_not_loaded decals=off_config"));
+  QCHECK(Has(Lines("combat_install")[0].text, "impactsnd=module_not_loaded") && Has(Lines("combat_install")[0].text, "decals=off_config"));
   QCHECK(Has(Lines("combat_decals_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   // The config switch records: one for each key a row names, with the value and where it came from.
@@ -531,7 +582,7 @@ int main() {
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
-  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal();
+  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTableStepsNormal();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();

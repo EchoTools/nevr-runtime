@@ -8,7 +8,6 @@
 #include "aibots.h"
 #include "bvh.h"
 #include "custctx.h"
-#include "meshstep.h"
 #include "droneguard.h"
 #include "dronekill.h"
 #include "dronemuzzle.h"
@@ -19,7 +18,6 @@
 #include "game_tick.h"
 #include "gunconnect.h"
 #include "hudmeter.h"
-#include "instmodel.h"
 #include "levelname.h"
 #include "boosterpool.h"
 #include "music.h"
@@ -28,10 +26,8 @@
 #include "powerboost.h"
 #include "script_redirect.h"
 #include "sensorwd.h"
-#include "shaderstep.h"
 #include "shieldgamma.h"
 #include "sendguard.h"
-#include "tablestep.h"
 #include "module_switch.h"
 #include "voipdrop.h"
 #include "wallfire.h"
@@ -96,17 +92,11 @@
 #ifndef Q15T_HUDMETER
 #define Q15T_HUDMETER 0
 #endif
-#ifndef Q15T_TABLESTEP  // issue #1552: shader-set table growth step 32 -> 1 (tablestep.cpp)
-#define Q15T_TABLESTEP 0
-#endif
 #ifndef Q15T_SENDGUARD  // script send to a game space that is not loaded: dropped, not faulted (sendguard.cpp)
 #define Q15T_SENDGUARD 0
 #endif
 #ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
 #define Q15T_SHIELDGAMMA 0
-#endif
-#ifndef Q15T_SHADERSTEP
-#define Q15T_SHADERSTEP 0
 #endif
 #ifndef Q15T_MUSIC
 #define Q15T_MUSIC 0
@@ -114,8 +104,6 @@
 #ifndef Q15T_SENSORWD
 #define Q15T_SENSORWD 0
 #endif
-#ifndef Q15T_INSTMODEL  // CGInstancedModelResource's constructor with growth step 1 (instmodel.h)
-#define Q15T_INSTMODEL 0
 #endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
@@ -206,9 +194,6 @@ constexpr char kCompiledModules[] =
 #if Q15T_SHIELDGAMMA
     "shieldgamma "
 #endif
-#if Q15T_TABLESTEP
-    "tablestep "
-#endif
 #if Q15T_SENDGUARD
     "sendguard "
 #endif
@@ -222,11 +207,6 @@ constexpr char kCompiledModules[] =
 #if Q15T_SENSORWD
     "sensorwd "
 #endif
-#if Q15T_INSTMODEL
-    "instmodel "
-#endif
-#if Q15T_SHADERSTEP
-    "shaderstep "
 #endif
     "";
 
@@ -347,9 +327,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #if Q15T_CUSTCTX
   ReportModule("custctx", InstallCustCtx(base));
 #endif
-#if Q15T_MESHSTEP
-  ReportModule("meshstep", InstallMeshStep(base));
-#endif
 #if Q15T_DRONEGUARD
   ReportModule("droneguard", InstallDroneGuard(base));
 #endif
@@ -426,9 +403,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #if Q15T_SHIELDGAMMA
   ReportModule("shieldgamma", InstallShieldGamma(base, (Q15T_SHIELDGAMMA & 1) != 0, (Q15T_SHIELDGAMMA & 2) != 0));
 #endif
-#if Q15T_TABLESTEP
-  ReportModule("tablestep", InstallTableStep(base));
-#endif
 #if Q15T_SENDGUARD
   ReportModule("sendguard", InstallSendGuard(base));
 #endif
@@ -447,11 +421,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   ReportModule("sensorwd", InstallSensorWd(base));
   AddModuleTick("sensorwd", &SensorWdTick, &want_tick);  // one bool test per frame when the install was refused
 #endif
-#if Q15T_INSTMODEL
-  ReportModule("instmodel", InstallInstModel(base));  // no tick: the swapped constructor does its work when the object is built
-#endif
-#if Q15T_SHADERSTEP
-  ReportModule("shaderstep", InstallShaderStep(base));
 #endif
 #if Q15T_MUSIC
   {

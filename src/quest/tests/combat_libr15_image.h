@@ -20,14 +20,14 @@
 namespace combat_test {
 
 // One relocation of the image: the symbol it names (a data object or a function), the slot, and whether it is a GLOB_DAT word or a
-// JUMP_SLOT.
+// JUMP_SLOT (or, with `abs64`, an R_AARCH64_ABS64 word of a vtable or factory table, which the manager hooks as a class C word).
 struct Reloc {
   const char* symbol;
   std::uint64_t slot;
   bool globDat;
   bool object;          // STT_OBJECT, else STT_FUNC
   std::uint64_t value;  // the symbol's address (st_value)
-  bool abs64 = false;   // an R_AARCH64_ABS64 word (a vtable entry) instead of a JUMP_SLOT or GLOB_DAT word; it goes in the same table as GLOB_DAT
+  bool abs64 = false;   // an ABS64 relocation, whatever `globDat` says
 };
 
 class Image {
@@ -65,10 +65,9 @@ class Image {
       dynstr.push_back('\0');
       Elf64_Rela rel{};
       rel.r_offset = r.slot;
-      rel.r_info = ELF64_R_INFO(static_cast<Elf64_Xword>(i + 1), r.abs64     ? sentinel::kNativeRelocs.abs64
-                                                                  : r.globDat ? sentinel::kNativeRelocs.globDat
-                                                                              : sentinel::kNativeRelocs.jumpSlot);
-      (r.globDat || r.abs64 ? rela : jmprel).push_back(rel);
+      const std::uint32_t type = r.abs64 ? sentinel::kNativeRelocs.abs64 : (r.globDat ? sentinel::kNativeRelocs.globDat : sentinel::kNativeRelocs.jumpSlot);
+      rel.r_info = ELF64_R_INFO(static_cast<Elf64_Xword>(i + 1), type);
+      (r.abs64 || r.globDat ? rela : jmprel).push_back(rel);
     }
     QCHECK(dynstr.size() < kDynsymAt - kDynstrAt);
     QCHECK(syms.size() * sizeof(Elf64_Sym) < kJmprelAt - kDynsymAt);
