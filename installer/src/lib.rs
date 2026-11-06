@@ -16,4 +16,5 @@ pub mod pc;
 pub mod quest;
 pub mod session;
 pub mod stage;
+pub mod update_state;
 pub mod util;
