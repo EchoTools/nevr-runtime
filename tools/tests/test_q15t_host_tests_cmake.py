@@ -36,12 +36,9 @@ HOST_TESTS = frozenset(
     [
         "core.host_test_0",
         "core.host_test_1",
-        "core.gates_test",
-        "core.library_name_test",
         "aibots.aibots_test",
         "bvh.bvh_core_test",
         "bvh.bvh_test",
-        "combat_gates.combat_gates_test",
         "custctx.custctx_test",
         "decals.decals_test",
         "droneguard.droneguard_test",
@@ -64,8 +61,6 @@ HOST_TESTS = frozenset(
         "meshstep.meshstep_test",
         "music.music_test",
         "peerclamp.peerclamp_test",
-        "pfx.pfx_test",
-        "pfxtev.pfxtev_test",
         "powerboost.powerboost_test",
         "script_redirect.script_redirect_test",
         "sensorwd.sensorwd_test",
@@ -78,9 +73,6 @@ HOST_TESTS = frozenset(
         "weapon_arm.t26_test",
         "wiring.wiring_test",
         "wiring.wiring_bvh_only",
-        "wiring.wiring_gate_link",
-        "wiring.wiring_gate_link_bots",
-        "wiring.wiring_gate_bots_levelname_file_ignored",
         "wiring.wiring_caps_none",
         "wiring.wiring_caps_FXTRAIL",
         "wiring.wiring_caps_VOIPDROP",
@@ -102,9 +94,6 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_BVH",
         "wiring.wiring_caps_WALLFIRE",
         "wiring.wiring_caps_T26",
-        "wiring.wiring_caps_GATE_LINK",
-        "wiring.wiring_caps_GATE_PERM",
-        "wiring.wiring_caps_GATE_BOTS",
         "wiring.wiring_caps_POWERBOOST_1",
         "wiring.wiring_caps_POWERBOOST_2",
         "wiring.wiring_caps_POWERBOOST_3",
@@ -114,7 +103,7 @@ HOST_TESTS = frozenset(
 # q15t_arm64_object(<src name>): the NDK static-initializer test and the emulated-TLS test for each of these, one per module the repack
 # checks and one for each module that keeps per-thread state (bvh, dronekill, impactsnd, powerboost, sensorwd)
 ARM64_OBJECTS = frozenset(
-    "bvh decals dronekill dronemuzzle impactsnd hudmeter instmodel music pfx pfxtev powerboost sensorwd shaderstep shieldgamma tablestep".split()
+    "bvh decals dronekill dronemuzzle impactsnd hudmeter instmodel music powerboost sensorwd shaderstep shieldgamma tablestep".split()
 )
 # the checks that read an object or run a freestanding program, registered by hand in a module file
 NDK_CHECKS = {

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <atomic>
 #include <mutex>
 
 #include "abi/echovr.h"
@@ -73,7 +74,6 @@ constexpr std::array<std::uint8_t, 32> kFindSlotPrologue = {0x48, 0x89, 0x5c, 0x
                                                             0x89, 0x74, 0x24, 0x20, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83,
                                                             0xec, 0x30, 0x66, 0x83, 0xb9, 0xdc, 0x00, 0x00, 0x00, 0x00};
 
-using SetterFn = void (*)(void* component, std::uint32_t handle, std::uint64_t value);
 using HandlerFn = void (*)(void* component, std::uint32_t handle);
 using NetGameFn = void* (*)(void* contextArg);
 using FindSlotFn = std::uint32_t* (*)(void* game, std::uint32_t* out, std::uint64_t* key);
@@ -83,6 +83,7 @@ HandlerFn g_handler[kSlotCount] = {};
 NetGameFn g_netGame = nullptr;
 FindSlotFn g_findSlot = nullptr;
 bool g_installed = false;
+std::atomic<SlotFilter> g_filter{nullptr};
 
 std::mutex g_lock;
 Tracker g_tracker;  // guarded by g_lock
@@ -137,6 +138,7 @@ struct PcEnv {
 
 template <std::size_t I>
 void SetterHook(void* component, std::uint32_t handle, std::uint64_t value) {
+  if (const SlotFilter filter = g_filter.load(std::memory_order_acquire)) value = filter(static_cast<int>(I), component, handle, value);
   PcEnv env;
   OnSetter(env, g_tracker, kRows[I].slot, reinterpret_cast<std::uintptr_t>(component), handle, value, g_isServer != FALSE,
            [&] { g_original[I](component, handle, value); });
@@ -213,6 +215,17 @@ void Install(std::uintptr_t gameBase) {
       "stillness)\n",
       installed == static_cast<int>(kSlotCount) ? "info" : "warn", installed, kSlotCount,
       static_cast<unsigned long long>(kSettleMs));
+}
+
+bool SetSlotFilter(SlotFilter filter) {
+  if (!g_installed) return false;
+  g_filter.store(filter, std::memory_order_release);
+  return true;
+}
+
+SetterFn OriginalSetter(int slot) {
+  if (!g_installed || slot < 0 || slot >= static_cast<int>(kSlotCount)) return nullptr;
+  return g_original[slot];
 }
 
 void OnFrame() {

@@ -47,10 +47,11 @@ runm ln_no_lib_check     $L "s/  if (lookup == nullptr || !lookup(sentinel::pinn
 # the rows and the key that reach the module (combat_install.cpp, quest_config.cpp, nevr_config.cpp)
 CI=src/quest/combat/combat_install.cpp
 runm ci_levelname_switch $CI "s/levelname::Install(g_config.levelname.on)/levelname::Install(true)/" quest-host-combat combat_install_test
-runm ci_levelname_row    $CI "s/    Module{\"levelname\", nullptr, \&LevelNameNormal},/    Module{\"levelname\", \&LevelNameNormal, nullptr},/" quest-host-combat combat_install_test
-runm ci_config_line      $CI "s/{\"levelname\", config.levelname.on ? 1 : 0}, {\"levelname_source\", source(config.levelname.source)},//" quest-host-combat combat_install_test
+runm ci_levelname_row    $CI "s/    Module{\"levelname\", nullptr, \&LevelNameNormal, /    Module{\"levelname\", \&LevelNameNormal, nullptr, /" quest-host-combat combat_install_test
+runm ci_switch_no_key    $CI "s/LevelNameNormal, \"combat.levelname\", \&nevr_quest::CombatConfig::levelname}/LevelNameNormal}/" quest-host-combat combat_install_test
+runm ci_switch_wrong_key $CI "s/\"combat.levelname\", \&nevr_quest::CombatConfig::levelname}/\"combat.levelnames\", \&nevr_quest::CombatConfig::levelname}/" quest-host-combat combat_install_test
 QC=src/quest/sentinel/quest_config.cpp
 runm qc_levelname_read   $QC "s/  r.config.combat.levelname = ReadCombatSwitch(cfg, kCombatLevelNameKey, r);/  (void)kCombatLevelNameKey;/" quest-host-shared quest_config_test
 runm qc_levelname_key    $QC "s/kCombatLevelNameKey = \"combat.levelname\";/kCombatLevelNameKey = \"combat.levelnames\";/" quest-host-shared quest_config_test
 runm qc_levelname_default $QC "s/  r.config.combat.levelname = ReadCombatSwitch(cfg, kCombatLevelNameKey, r);/  r.config.combat.levelname = ReadCombatSwitch(cfg, kCombatLevelNameKey, r, false);/" quest-host-shared quest_config_test
-runm nc_levelname_known  src/core/nevr_config.cpp "s/\"refresh_rate_quest2_72\", \"levelname\"}}/\"refresh_rate_quest2_72\"}}/" quest-host-shared quest_config_test
+runm nc_levelname_known  src/core/nevr_config.cpp "s/\"refresh_rate_quest2_72\", \"levelname\", /\"refresh_rate_quest2_72\", /" quest-host-shared quest_config_test

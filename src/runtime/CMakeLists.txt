@@ -47,6 +47,15 @@ set(PATCHES_SOURCES
     "lifecycle/game_image_guard.cpp"
     "lifecycle/runtime_entry.cpp"
     "lifecycle/runtime_exports.cpp"
+    # PC self-update, the runtime's half (ADR 0024, sections 3 and 6; #1200): the decisions, the check and the confirmation, the
+    # worker's threads, and the binding to the process (the core's C ABI, the verifier, the log). The names and the digest are the
+    # host's units, compiled into both DLLs as game_image_guard and the verifier are.
+    "lifecycle/update_policy.cpp"
+    "lifecycle/update_run.cpp"
+    "lifecycle/update_worker.cpp"
+    "lifecycle/update_process.cpp"
+    "host/update_names.cpp"
+    "host/file_digest.cpp"
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
     "lifecycle/boot.cpp"
@@ -74,6 +83,13 @@ set(PATCHES_SOURCES
     "lifecycle/crash_report_win_common.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
+    # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
+    "combat/combat.cpp"
+    "combat/cat_compat.cpp"
+    "combat/write_gate.cpp"
+    "combat/dronefix.cpp"
+    "combat/powerboost.cpp"
+    "combat/veilnet.cpp"
     "hook/export_trace_thunk.cpp"
     "hook/export_tracer.cpp"
     "lifecycle/state_machine.cpp"
@@ -149,6 +165,8 @@ set(PATCHES_SOURCES
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
     "log/builtin_filter.cpp"
+    # #2245: the game's error dialog; the lines it logs are recorded at error.
+    "log/error_dialog_level.cpp"
     "log/symcache.cpp"
     "log/symcache_data.cpp"
     "log/url_diagnostics.cpp"
@@ -315,6 +333,13 @@ set(PATCHES_HEADERS
 )
 
 add_library(nevr_runtime SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS})
+# he_is_the_cat's three EchoCombat files (runtime/combat/combat.h), ported nearly as he wrote them. Their MSVC
+# __try/__except blocks are EC_TRY/EC_EXCEPT (cat_compat.h): a setjmp, so GCC warns (-Wclobbered) for every local that
+# is live across it. A local is stale after a fault only if the block wrote it before the fault and code after the
+# block reads it; that is not audited block by block here, and replacing EC_TRY with checked reads is listed as debt
+# for the careful path in the PR that adds this. Every other warning stays an error for these files.
+set_source_files_properties(combat/dronefix.cpp combat/powerboost.cpp combat/veilnet.cpp
+  PROPERTIES COMPILE_OPTIONS "-Wno-clobbered")
 
 target_compile_definitions(nevr_runtime PRIVATE NEVR_USE_MINHOOK PROTOBUF_STATIC_LIB)
 
@@ -354,6 +379,75 @@ find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile
 
 find_package(ZLIB REQUIRED)  # server/lobby_settings_relay.cpp inflates the game service's lobby settings frame (#905)
 target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd ZLIB::ZLIB CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32 crypt32 advapi32)
+
+# The core install method (installer/, ADR 0023), statically linked into nevr-runtime.dll for the update worker (ADR 0024, section 3: one
+# signed file, no extra DLL for the plugin gate to verify). Cargo builds the staticlib from the committed Cargo.lock, locked, for the
+# toolchain's own Windows target; the runtime links it and the system libraries rustc names for it (`--print native-static-libs`).
+# NEVR_UPDATE_CORE is ON when cargo is found and OFF when it is not (a configure-time warning says so); -DNEVR_UPDATE_CORE=ON makes a
+# missing cargo an error, -DNEVR_UPDATE_CORE=OFF skips the core. A runtime built without it ends every check in
+# `update check action=failed reason=core_open_failed`, one line per launch, and never updates.
+# A version run of build.yml links a prebuilt library (NEVR_INSTALL_LIB) the core-library job builds; the build job has no Rust toolchain.
+set(NEVR_UPDATE_CORE AUTO CACHE STRING "Link the Rust core install method into nevr-runtime.dll for PC self-update: ON, OFF or AUTO (on when cargo is found)")
+set_property(CACHE NEVR_UPDATE_CORE PROPERTY STRINGS AUTO ON OFF)
+set(NEVR_INSTALL_LIB "" CACHE FILEPATH "A prebuilt core library to link instead of building it with cargo (build.yml's core-library job hands one over)")
+set(NEVR_UPDATE_CORE_ENABLED OFF)
+if(NOT NEVR_UPDATE_CORE STREQUAL "OFF")
+  if(NEVR_INSTALL_LIB)
+    if(NOT EXISTS "${NEVR_INSTALL_LIB}")
+      message(FATAL_ERROR "NEVR_INSTALL_LIB names ${NEVR_INSTALL_LIB}, which does not exist")
+    endif()
+    set(NEVR_UPDATE_CORE_ENABLED ON)
+  else()
+    find_program(NEVR_CARGO cargo HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin")
+    if(NEVR_CARGO)
+      set(NEVR_UPDATE_CORE_ENABLED ON)
+    elseif(NEVR_UPDATE_CORE STREQUAL "ON")
+      message(FATAL_ERROR "NEVR_UPDATE_CORE=ON: nevr-runtime.dll links the Rust core install method (ADR 0024) and neither cargo nor NEVR_INSTALL_LIB was given. "
+                          "Install a Rust toolchain with the x86_64-pc-windows-gnu target.")
+    else()
+      message(WARNING "cargo was not found: nevr-runtime.dll is built WITHOUT the core install method and will never update itself "
+                      "(ADR 0024). Install a Rust toolchain, or pass -DNEVR_UPDATE_CORE=OFF to silence this.")
+    endif()
+  endif()
+endif()
+if(NEVR_UPDATE_CORE_ENABLED)
+  if(MSVC)
+    set(NEVR_INSTALL_TARGET "x86_64-pc-windows-msvc")
+    set(NEVR_INSTALL_LIB_NAME "nevr_install.lib")
+  else()
+    set(NEVR_INSTALL_TARGET "x86_64-pc-windows-gnu")
+    set(NEVR_INSTALL_LIB_NAME "libnevr_install.a")
+  endif()
+  if(NOT NEVR_INSTALL_LIB)
+  string(TOUPPER "${NEVR_INSTALL_TARGET}" NEVR_INSTALL_TARGET_UPPER)
+  string(REPLACE "-" "_" NEVR_INSTALL_TARGET_UPPER "${NEVR_INSTALL_TARGET_UPPER}")
+  set(NEVR_INSTALL_DIR "${CMAKE_BINARY_DIR}/installer-lib")
+  set(NEVR_INSTALL_LIB "${NEVR_INSTALL_DIR}/${NEVR_INSTALL_TARGET}/release/${NEVR_INSTALL_LIB_NAME}")
+  file(GLOB_RECURSE NEVR_INSTALL_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/installer/src/*.rs")
+  set(NEVR_INSTALL_ENV "")
+  if(NOT MSVC)
+    list(APPEND NEVR_INSTALL_ENV "CARGO_TARGET_${NEVR_INSTALL_TARGET_UPPER}_LINKER=${CMAKE_C_COMPILER}")
+  endif()
+  add_custom_command(
+    OUTPUT "${NEVR_INSTALL_LIB}"
+    COMMAND ${CMAKE_COMMAND} -E env ${NEVR_INSTALL_ENV}
+            "${NEVR_CARGO}" build --locked --release --target ${NEVR_INSTALL_TARGET} --lib
+            --manifest-path "${CMAKE_SOURCE_DIR}/installer/Cargo.toml" --target-dir "${NEVR_INSTALL_DIR}"
+    DEPENDS ${NEVR_INSTALL_SOURCES} "${CMAKE_SOURCE_DIR}/installer/Cargo.toml" "${CMAKE_SOURCE_DIR}/installer/Cargo.lock"
+            "${CMAKE_SOURCE_DIR}/installer/pinned-keys.txt"
+    COMMENT "Building the core install method (installer/) for nevr-runtime.dll"
+    VERBATIM)
+  add_custom_target(nevr_install_core DEPENDS "${NEVR_INSTALL_LIB}")
+  endif()
+  add_library(nevr_install STATIC IMPORTED GLOBAL)
+  set_target_properties(nevr_install PROPERTIES IMPORTED_LOCATION "${NEVR_INSTALL_LIB}"
+    INTERFACE_LINK_LIBRARIES "bcrypt;advapi32;kernel32;ntdll;userenv;ws2_32;dbghelp")
+  if(TARGET nevr_install_core)
+    add_dependencies(nevr_install nevr_install_core)
+  endif()
+  target_link_libraries(nevr_runtime PRIVATE nevr_install)
+  target_compile_definitions(nevr_runtime PRIVATE NEVR_UPDATE_CORE_LINKED=1)
+endif()
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -1775,6 +1869,23 @@ if(BUILD_TESTING)
     add_dependencies(test_dll_load_hook nevr_export_trace_fixture)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
 
+    # The combat module's write gate (runtime/combat/write_gate.h): a write that overlaps a range the runtime hooked
+    # (HookGuard) or wrote (ProcessMemcpy) is refused. Links the real guard and the real Log().
+    add_executable(test_combat_write_gate tests/test_combat_write_gate.cpp combat/write_gate.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_combat_write_gate.cpp combat/write_gate.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_combat_write_gate PRIVATE NEVR_TEST_HOOKS)
+    target_include_directories(test_combat_write_gate PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_write_gate PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_combat_write_gate DISCOVERY_MODE PRE_TEST)
+
+    # The combat module's group defaults and the balance transform's merge (runtime/combat): pure headers.
+    add_executable(test_combat_settings tests/test_combat_settings.cpp)
+    set_source_files_properties(tests/test_combat_settings.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_combat_settings PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_settings PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_combat_settings DISCOVERY_MODE PRE_TEST)
+
     # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
     add_executable(test_boot_log_routing tests/test_boot_log_routing.cpp log/boot_log_tee.cpp)
     set_source_files_properties(tests/test_boot_log_routing.cpp log/boot_log_tee.cpp
@@ -1833,6 +1944,31 @@ if(BUILD_TESTING)
     target_link_libraries(test_plugin_tree PRIVATE
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
     gtest_discover_tests(test_plugin_tree DISCOVERY_MODE PRE_TEST)
+
+    # The runtime's half of PC self-update (ADR 0024, sections 3 and 6; #1200): the decisions, the check, the confirmation and
+    # the worker's threads, against a fake core in a temp nevr root. Compiles no game stub, no Log and no core (Rust).
+    add_executable(test_update_worker
+      tests/test_update_worker.cpp
+      lifecycle/update_policy.cpp
+      lifecycle/update_run.cpp
+      lifecycle/update_worker.cpp
+      host/update_names.cpp)
+    set_source_files_properties(tests/test_update_worker.cpp lifecycle/update_policy.cpp lifecycle/update_run.cpp
+      lifecycle/update_worker.cpp host/update_names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_update_worker PRIVATE -Werror)
+    target_include_directories(test_update_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_update_worker PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_update_worker DISCOVERY_MODE PRE_TEST)
+
+    # The Rust core linked into a MinGW C++ binary and called from a worker thread (ADR 0024, "What is not known"): the same staticlib and
+    # system libraries nevr-runtime.dll links.
+    if(NEVR_UPDATE_CORE_ENABLED)
+      add_executable(test_update_core_link tests/test_update_core_link.cpp)
+      set_source_files_properties(tests/test_update_core_link.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+      target_include_directories(test_update_core_link PRIVATE ${CMAKE_SOURCE_DIR})
+      target_link_libraries(test_update_core_link PRIVATE GTest::gtest GTest::gtest_main nevr_install)
+      gtest_discover_tests(test_update_core_link DISCOVERY_MODE PRE_TEST)
+    endif()
 
     # plugin_trust tests (ADR 0010, #741): the pinned root matches its digest, the policy is well formed.
     add_executable(test_plugin_trust
@@ -2115,11 +2251,11 @@ if(BUILD_TESTING)
     # test_rate_limiter.cpp (#894, header-only log/rate_limiter.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_run_log_record.cpp tests/test_error_dialog_depth.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_run_log_record.cpp tests/test_error_dialog_depth.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)
+    target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_crash_recovery DISCOVERY_MODE PRE_TEST)
   endif()
 endif()

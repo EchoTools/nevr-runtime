@@ -170,10 +170,10 @@ graphics:
   # hand_flip: true
 
 # ---------------------------------------------------------------------------
-# combat — the combat modules built into the Quest runtime
+# combat — the combat modules built into the Quest runtime, and EchoCombat built into the PC runtime
 #
-# Reader: src/quest/sentinel/quest_config.cpp (Quest), gated by src/quest/combat/combat_active.h. The PC accepts the section and reads
-# nothing from it.
+# Reader: src/quest/sentinel/quest_config.cpp (Quest), gated by src/quest/combat/combat_active.h; on PC, src/runtime/combat/combat.cpp
+# reads the EchoCombat keys below (drone ... clean_exit, settings) and nothing else of the section.
 # ---------------------------------------------------------------------------
 
 combat:
@@ -214,11 +214,54 @@ combat:
   # Quest only. A boolean. The game's global level, global_mp, loads at full size in the q15t and combat APKs instead of the cut
   # `global_mp_lowspec` a Quest gets (src/quest/combat/levelname.h), together with the booster pool's companion (boosterpool.h): the combat bot body
   # exists only in the full level. The global level loads once after login, before any lobby, so it cannot be limited to combat: an arena match on
-  # such an APK runs with the full global level too. `false` leaves the game's cut level (the q15t plugin's bot-body gate, which needs the full
-  # level, does not follow this key yet: KNOWN-WRONG #2180). A value that is not a boolean is ignored with a warning in the sentinel log that
-  # names the key. Read once at launch; the sentinel log lines `combat_levelname_install` and `combat_boosterpool_install` report it. Default
+  # such an APK runs with the full global level too. `false` leaves the game's cut level, and the bot-body gate (`gate_bots`, below), which needs the full
+  # level, then leaves the game's own bot choice, because it asks the game's LoadLevelName slot. A value that is not a boolean is ignored with a warning in the sentinel log that
+  # names the key. Read once at launch; the sentinel log lines `combat_levelname_install` and `combat_boosterpool_install` report it, and one `combat_config_switch` record says what was read. Default
   # (absent): true. The plugin's kill file `levelname.off` is not read; one found is a warning that names this key.
   # levelname: false
+
+  # The three headset gates of the combat modules (src/quest/combat/headset_gates.h): the game branches on "this is a Quest headset" in three places that
+  # a Quest running combat has to skip. Quest only; they run where the combat modules run (see `force`). Booleans, read once at launch; a value that
+  # is not a boolean keeps the default, with a warning in the sentinel log that names the key. The sentinel log lines `combat_config`,
+  # `combat_gates_install`, `combat_gates_answered`, `combat_gates_scoped_out` and `combat_gates_headset_bind` say what was read and what each gate did.
+  # gate_perm: false leaves the game's rule that a party member on a Quest may not use combat. Default (absent): true.
+  # gate_perm: false
+  # gate_bots: false leaves the game's rule that a Quest gets the arena bot. The gate acts only while a combat map or the combat lobby is loaded, and only
+  # where the full-size global_mp is in use (the combat bot exists only there; the gate checks the game's LoadLevelName slot). Default (absent): true.
+  # gate_bots: false
+  # gate_link: false leaves the combat menus telling the player this is a Quest (which locks the combat cards). Default (absent): true.
+  # gate_link: false
+  # gate_link_libs: which script libraries the menu gate answers: `all`, `none`, or file names (or fragments of them) separated by commas or spaces,
+  # at most 639 characters. A library that is not named gets the game's own answer. Default (absent): the 21 libraries of the combat entries.
+  # gate_link_libs: "none"
+
+  # Quest only. A boolean. The particle-renderer gate (src/quest/combat/pfx.h): the switch the particle renderer reads, open in combat maps only and
+  # shut in an Echo Arena level, in every lobby and everywhere else. The renderer itself is not in the runtime yet, so `true` changes nothing in the
+  # game today; the sentinel log line `combat_pfx_install` says what was read. `false` keeps the gate shut. A value that is not a boolean keeps the
+  # default, with a warning in the sentinel log that names the key. Read once at launch. Default (absent): true.
+  # pfx: false
+
+  # Quest only. A boolean. The event-effect decision of the particle renderer (src/quest/combat/pfxtev.h): its six event effects may be created in
+  # combat maps only. Nothing asks until the renderer is in the runtime, so `true` changes nothing in the game today; the sentinel log line
+  # `combat_pfxtev_install` says what was read. `false` refuses the six. A value that is not a boolean keeps the default, with a warning that names the
+  # key. Read once at launch. Default (absent): true.
+  # pfxtev: false
+
+  # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
+  # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard
+  # runs whatever these say. Party guns, payload speed, a client's own damage bonus and CombatBots are never on.
+  # drone: false            # DRONE. Default: true.
+  # overcharge: false       # OVERCHARGE. Default: true.
+  # medigun: true           # MEDIGUN (needs overcharge and veil; a client follows its server's answer). Default: false.
+  # veil: false             # UMBRAL VEIL and the combat net. Default: true.
+  # match_control: false    # RULES, LOADOUTS, SERIES-10, PAUSE, END MATCH, MAP SWITCH (needs veil). Default: true.
+  # balance: false          # Cat's weapon tuning merged into the stock mp_weapon_settings as it loads. Default: true.
+  # clean_exit: true        # Ends the process at the engine teardown instead of running it. Default: false.
+  # settings:               # Cat's PowerBoost.ini values, <section>.<key>, with his defaults when absent
+  #   buff:
+  #     self_damage: 2
+  #   cone:
+  #     link_window_ms: 500
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
@@ -298,13 +341,12 @@ services:
 
   # Dedicated server only: the ServerDB token route the server registers through, dialed with the server's
   # access token as `Authorization: Bearer` (docs/adr/0001-serverdb-token-auth.md); guilds and regions are added
-  # as query parameters. Without it a server with auth.password registers through socket_uri with
-  # identity.discord_id and auth.password in the query; a server with no auth.password (it signed in by device
-  # code) registers on the token route at socket_uri, so it needs no configuration. A server with none of
-  # serverdb, serverdb_uri, or socket_uri plus identity.discord_id stops at registration:
+  # as query parameters. Without it a server (signed in by device code) registers on the token route at
+  # socket_uri, so it needs no configuration. A server with none of serverdb, serverdb_uri, or socket_uri
+  # stops at registration:
   # `no ServerDB URI: set services.serverdb_uri`.
   # The route taken is logged: `[NEVR.GAMESERVER] serverdb route=<explicit|token|url_params|none> ...`.
-  # Default (absent): socket_uri for a server with no auth.password; none for a server with one.
+  # Default (absent): socket_uri.
   # Not a secret.
   # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration, flat key nevr_serverdb_uri)
   # serverdb_uri: "ws://g.echovrce.com:80/nevr"
@@ -408,7 +450,8 @@ network:
 # identity — server identity fields sent during ServerDB registration
 #
 # These identify the server instance to the community infrastructure.
-# All keys are optional but a server without them will fail to register.
+# All keys are optional. A server that signs in by device code takes its identity from the
+# access token and needs none of them.
 #
 # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration),
 #         src/runtime/compat/ws_bridge.cpp
@@ -416,10 +459,11 @@ network:
 
 identity:
   # Discord user ID of the server owner. Sent as a query parameter in the
-  # ServerDB WebSocket URI. Required for server registration.
+  # ServerDB WebSocket URI on the legacy (URL-parameter) registration route only; a device-code server
+  # does not use it.
   # Absent: the server registers through services.serverdb_uri, and with neither it stops at registration.
   # Not a secret, but personally identifying — do not commit to public repos.
-  # discord_id: "${NEVR_DISCORD_ID:?discord_id is required for server registration}"
+  # discord_id: "<the Discord id of the server owner>"
 
 # ---------------------------------------------------------------------------
 # auth — authentication and API endpoint configuration
@@ -464,12 +508,9 @@ auth:
   # SECRET — use env-var substitution in production.
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
-  # Server password. Sent as a query parameter in the ServerDB WebSocket URI (the key the runtime reads is auth.password).
-  # Optional; absent means the server signs in by device code like a client: at startup it prints a code and the
-  # page that takes it on the console (standard error), waits for the approval, asks for a new code when one runs
-  # out, and keeps the token in the sign-in cache of the nevr root, so a restart needs no new code.
-  # SECRET — use env-var substitution in production.
-  # password: "${NEVR_PASSWORD:?password is required}"
+  # A dedicated server needs no username or password: it signs in by device code. At startup it prints a code and
+  # the page that takes it on the console (standard error) and in the log, waits for the approval, asks for a new
+  # code when one runs out, and keeps the token in the sign-in cache of the nevr root, so a restart needs no new code.
 
 # ---------------------------------------------------------------------------
 # guilds — guild filter for server registration
@@ -573,6 +614,29 @@ arena:
 # Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook)
 # ---------------------------------------------------------------------------
 # exitonerror: true
+
+# ---------------------------------------------------------------------------
+# update — PC self-update (ADR 0024)
+#
+# Once per launch, after start-up, the runtime asks the signed manifest which release its channel names. When that is a
+# different release it downloads it, checks every byte against the manifest and the release signer's Authenticode signature,
+# and stages it under update\ in the nEVR root (%LOCALAPPDATA%\nevr\echovr). The host puts it in place at the next launch and
+# loads it; a release that does not start is replaced by the one that did. Nothing is written to the game folder. The check
+# runs on its own thread: the game never waits for it. A build made for development never updates.
+#
+#   enabled   false turns the check off (a release the host already swapped in is still confirmed). The "-no-update" flag
+#             does the same for one run. Absent: true.
+#   channel   The release channel to follow (for example "beta" or "stable"). Absent: the channel the installer recorded,
+#             else the core's default. The "update check" log line names the channel and where it came from
+#             (channel_source: config, state or default).
+#
+# Not secrets.
+# Reader: src/runtime/lifecycle/service_config.cpp (NevrCfgUpdateEnabled, NevrCfgUpdateChannel),
+#         src/runtime/lifecycle/update_worker.cpp
+# ---------------------------------------------------------------------------
+# update:
+#   enabled: true
+#   channel: beta
 
 # ---------------------------------------------------------------------------
 # plugins — plugin loading and configuration

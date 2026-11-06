@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "core/logging.h"
+#include "runtime/hook/write_ranges.h"
 
 namespace {
 
@@ -297,6 +298,26 @@ int VerifyAll(const char* context) {
 }
 
 int RecordedCount() { return static_cast<int>(InterlockedCompareExchange(&g_recorded, 0, 0)); }
+
+bool FindOverlap(const void* start, std::size_t length, Overlap* hit) {
+  if (start == nullptr || length == 0) return false;
+  const auto s = reinterpret_cast<std::uintptr_t>(start);
+  const LONG used = SlotsInUse();
+  for (LONG i = 0; i < used; i++) {
+    Snapshot snap{};
+    if (!ReadSlot(i, snap)) continue;
+    const auto t = reinterpret_cast<std::uintptr_t>(snap.target);
+    if (!nevr_write_ranges::Overlaps(s, length, t, kSnapshotBytes)) continue;
+    if (hit != nullptr) *hit = Overlap{t, static_cast<std::size_t>(kSnapshotBytes), snap.name, "hook"};
+    return true;
+  }
+  nevr_write_ranges::Range r{};
+  if (nevr_write_ranges::FindOverlap(s, length, &r)) {
+    if (hit != nullptr) *hit = Overlap{r.start, r.length, r.name, "write"};
+    return true;
+  }
+  return false;
+}
 
 int DroppedCount() { return static_cast<int>(InterlockedCompareExchange(&g_dropped, 0, 0)); }
 

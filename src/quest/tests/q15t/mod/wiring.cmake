@@ -1,7 +1,7 @@
 # plugin.cpp's wiring of the modules: (1) every option on against a fake image (names, levels, return value, tick count);
 # (2) the capability matrix, one plugin.cpp per option. Module objects are compiled once, with the plugin's own flags.
 if(NOT Q15T_ARM64)
-  set(_wmods plugin_log script_redirect import_hook combat_map game_tick safe_read headset_gates got_swap weapon_arm gamespace fxtrail voipdrop custctx droneguard peerclamp gunconnect aibots bvh wallfire impactsnd ec ecfx dronekill dronemuzzle powerboost hudmeter shieldgamma music sensorwd decals)
+  set(_wmods plugin_log script_redirect import_hook combat_map game_tick safe_read got_swap weapon_arm gamespace fxtrail voipdrop custctx droneguard peerclamp gunconnect aibots bvh wallfire impactsnd ec ecfx dronekill dronemuzzle powerboost hudmeter shieldgamma music sensorwd decals)
   set(_wsources "")
   foreach(m IN LISTS _wmods)
     list(APPEND _wsources "${Q15T_PLUGIN_SRC}/${m}.cpp")
@@ -27,13 +27,6 @@ endfunction()
 wiring_program(wiring_test ${_wall} Q15T_T26=0 ${_wslots} ${_wbuild})
 # (1b) only bvh on: its tick is the only registration, and it alone must make InitEx install the game tick
 wiring_program(wiring_bvh_only WIRING_BVH_ONLY Q15T_BVH=1 ${_wslots} ${_wbuild})
-# (1c) the headset caller-range gates alone: the link gate, and the link gate with the bots gate
-wiring_program(wiring_gate_link WIRING_GATE_LINK_ONLY Q15T_GATE_LINK=1 ${_wslots} ${_wbuild})
-# the bots gate needs levelname (combat_gates.h), which is the runtime's now: the plugin takes it as met, and a levelname.off in the data directory
-# turns nothing off
-wiring_program(wiring_gate_link_bots WIRING_GATE_LINK_ONLY EXPECT_BOTS Q15T_GATE_LINK=1 Q15T_GATE_BOTS=1 ${_wslots} ${_wbuild})
-wiring_program(wiring_gate_bots_levelname_file_ignored WIRING_GATE_LINK_ONLY EXPECT_BOTS WIRING_LEVELNAME_OFF Q15T_GATE_LINK=1 Q15T_GATE_BOTS=1 ${_wslots} ${_wbuild})
-
 # capability matrix: <label> <expect ALTERS_GAMEPLAY> <expect NETWORK> <defines>...; nothing else on
 function(wiring_caps label alters network)
   string(MAKE_C_IDENTIFIER "${label}" id)
@@ -45,7 +38,7 @@ foreach(c FXTRAIL VOIPDROP CUSTCTX IMPACTSND ECFX HUDMETER MUSIC SENSORWD DECALS
 endforeach()
 wiring_caps(SHIELDGAMMA=1 0 0 Q15T_SHIELDGAMMA=1)
 wiring_caps(SHIELDGAMMA=2 0 0 Q15T_SHIELDGAMMA=2)
-foreach(c DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE GUNCONNECT AIBOTS BVH WALLFIRE T26 GATE_LINK GATE_PERM GATE_BOTS)
+foreach(c DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE GUNCONNECT AIBOTS BVH WALLFIRE T26)
   wiring_caps(${c} 1 0 Q15T_${c}=1)
 endforeach()
 foreach(c 1 2 3)

@@ -12,7 +12,7 @@ NUMBERING RULE (the same on every machine, derived from the version string alone
     versionCode = major * 10^7 + minor * 10^5 + patch * 10^3 + slot
 
     a release       X.Y.Z                  slot 999
-    a development   X.Y.Z-dev.N+<sha>      slot N      (N = commits since the nearest release tag, 0..998)
+    a development   X.Y.Z-dev.N+<sha>      slot N      (N = commits since the highest reachable release tag, 0..998)
 
   The version is the one cmake/set_project_version_from_git.cmake writes into the build (kVersion in
   nevr_build_info.h). That makes the codes follow semantic-version precedence: a development build of X.Y.Z sits

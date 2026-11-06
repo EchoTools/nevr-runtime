@@ -32,7 +32,7 @@ Both steps ask `combat::Active()` and install nothing when it is false. A plain 
    plugin installed it. The order is explicit; decals stays after impactsnd.
 2. Every hook goes through the hook manager (`InstallThunk` and its siblings). A module writes no code pointer and no data pointer of a
    game library any other way (ADR 0046 C1).
-3. A module's switch is a key under `combat:` in `config.yaml`, read by `quest_config` and reported by the `combat_config` line. No file under
+3. A module's switch is a key under `combat:` in `config.yaml`, read by `quest_config` and reported by one `combat_config_switch` record, generated from the module's row in the registration table (`Module::switchKey`, `combat_install.h`). No file under
    the app's files directory turns a module on or off (ADR 0046 C2). The key set is `KnownSections` in `src/core/nevr_config.cpp`,
    `CombatConfig` in `src/quest/sentinel/quest_config.h` and `docs/reference/example-config.yaml`.
 4. A module's install function is `noexcept`, returns whether it installed and a fixed status token, and writes its own lines

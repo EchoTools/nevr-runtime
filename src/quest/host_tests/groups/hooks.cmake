@@ -250,6 +250,11 @@ nevr_ht_test(hand_flip_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_YAML_LIB}
 # and the fill and the leaks in the log.
 nevr_ht_test(vk_free_guard_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/vk_free_guard_test.cpp src/quest/sentinel/vk_free_guard.cpp)
+# A GPU allocation libr15 reports as made with no memory (#2262): the real handler through the thunk entry against a model of
+# CGRawInterfaceVK::Allocate that does not read vkAllocateMemory's result and a model of CreateDeviceResource that binds what it
+# returns; the pinned words refused when one differs; the refusals in the log with the free-range table's fill.
+nevr_ht_test(vk_alloc_check_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+  SRC src/quest/tests/vk_alloc_check_test.cpp src/quest/sentinel/vk_alloc_check.cpp src/quest/sentinel/vk_free_guard.cpp)
 # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
 # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone). The handler
 # includes the build-tree header generated/nevr_build_info.h; a stub stands in for it here.
@@ -290,7 +295,8 @@ nevr_ht_test(render_config_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core
   SRC src/quest/tests/render_config_hook_test.cpp src/quest/sentinel/render_config_hook.cpp
       src/quest/sentinel/texture_quality_hook.cpp src/quest/sentinel/clock_levels_hook.cpp
       src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_tick.cpp src/quest/combat/combat_install.cpp src/quest/combat/levelname.cpp src/quest/combat/boosterpool.cpp
-      src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp)
+      src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/headset_gates.cpp)
 # The log-only resource request hook (#871): the real handler through the thunk entry against a stand-in for
 # FillResourceFileRequest that fills a request the way the pinned function does.
 nevr_ht_test(resource_request_hook_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}

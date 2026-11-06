@@ -22,8 +22,8 @@ inline bool ShouldInstallProvider(bool /*isWine*/) { return true; }
 inline bool ProvidesCapture(bool isServer) { return !isServer; }
 
 inline const char* BootLine(bool installed, bool isWine) {
-  if (!installed) return "[NEVR.MIC] provider not installed\n";
-  return isWine ? "[NEVR.MIC] provider installed: Wine\n" : "[NEVR.MIC] provider installed: native Windows\n";
+  if (!installed) return "[NEVR.MIC] info; provider not installed\n";
+  return isWine ? "[NEVR.MIC] info; provider installed: Wine\n" : "[NEVR.MIC] info; provider installed: native Windows\n";
 }
 
 }  // namespace nevr_mic_policy

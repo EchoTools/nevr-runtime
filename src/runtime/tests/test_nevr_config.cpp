@@ -707,6 +707,7 @@ TEST(NevrConfig, DuplicateKeysAreCountedAndTheFirstValueIsRead) {
       "social:\n  facade: true\n  facade: false\n");
   EXPECT_EQ(cfg.DuplicateKeyCount(), 2u);
   EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  EXPECT_EQ(cfg.DuplicateKeyNames(), (std::vector<std::string>{"services.socket_uri", "social.facade"}));
   EXPECT_EQ(cfg.GetString("services.socket_uri").value_or(""), "wss://first.example/x");
   EXPECT_EQ(cfg.GetBool("social.facade").value_or(false), true);
 }
@@ -720,6 +721,8 @@ TEST(NevrConfig, UnknownKeysUnderKnownSectionsAreCounted) {
       "profiles:\n  anything_goes: 1\n");
   EXPECT_EQ(cfg.UnknownKeyCount(), 2u);
   EXPECT_EQ(cfg.DuplicateKeyCount(), 0u);
+  EXPECT_EQ(cfg.UnknownKeyNames(),
+            (std::vector<std::string>{"services.loginservice_host", "social.send_presense_to_meta"}));
 }
 
 // #1156: network.invite_codes is on the schema, so the key that turns the invite feature on is never flagged as unknown.
@@ -736,22 +739,25 @@ TEST(NevrConfig, ACleanFileCountsNothing) {
   EXPECT_EQ(cfg.DuplicateKeyCount(), 0u);
 }
 
-// #583: the PC's one Warning per load names the counts and no key or value.
-TEST(NevrConfig, ShapeWarningCarriesCountsOnly) {
+// #583, #2244: the PC's one Warning per load names the counts and the names of the keys, and never a value (a value can
+// be auth.password).
+TEST(NevrConfig, ShapeWarningNamesTheKeysAndNeverAValue) {
   ASSERT_TRUE(EnsureScratchConfigDirectory());
   ScopedScratchFile file(ScratchConfigPath("shape-warning-config"));
   {
     std::ofstream output(file.path(), std::ios::binary);
     ASSERT_TRUE(output.is_open());
-    output << "social:\n  facade: true\n  facade: false\n  send_presense: false\n";
+    output << "social:\n  facade: true\n  facade: false\n  send_presense: false\n"
+              "auth:\n  password: hunter2-first\n  password: hunter2-second\n  passwrd: hunter2-typo\n";
   }
   testing::internal::CaptureStderr();
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFileOrFail(file.path(), /*is_server=*/false);
   const std::string logged = testing::internal::GetCapturedStderr();
   EXPECT_FALSE(cfg.Empty());
-  EXPECT_NE(logged.find("[NEVR.CONFIG] config.yaml has duplicates=1 unknown_nested=1"), std::string::npos) << logged;
-  EXPECT_EQ(logged.find("send_presense"), std::string::npos) << logged;
-  EXPECT_EQ(logged.find("facade"), std::string::npos) << logged;
+  EXPECT_NE(logged.find("[NEVR.CONFIG] config.yaml has duplicates=2 unknown_nested=2"), std::string::npos) << logged;
+  EXPECT_NE(logged.find("duplicate_keys=social.facade,auth.password"), std::string::npos) << logged;
+  EXPECT_NE(logged.find("unknown_keys=auth.passwrd,social.send_presense"), std::string::npos) << logged;
+  EXPECT_EQ(logged.find("hunter2"), std::string::npos) << logged;
 }
 
 // #583: every key the Quest reads is on the schema, so the unknown-key count never flags a key a build uses. The
@@ -763,7 +769,8 @@ TEST(NevrConfig, KnownPathsCoverEveryKeyTheQuestReads) {
       "social.facade",       "social.send_presence_to_meta", "diagnostics.hardware_dump",
       "diagnostics.ui_event_probe", "diagnostics.pnsrad_provider", "diagnostics.clock_levels_override",
       "graphics.texture_quality", "graphics.hand_flip", "combat.force", "combat.heaps", "combat.memsys",
-      "combat.refresh_rate", "combat.refresh_rate_lobby", "combat.refresh_rate_quest2_72", "combat.levelname"};
+      "combat.refresh_rate", "combat.refresh_rate_lobby", "combat.refresh_rate_quest2_72", "combat.levelname", "combat.pfx", "combat.pfxtev",
+      "combat.gate_perm", "combat.gate_bots", "combat.gate_link", "combat.gate_link_libs"};
   for (const std::string& path : questReads) {
     EXPECT_NE(std::find(known.begin(), known.end(), path), known.end()) << path << " is read but not on the schema";
   }

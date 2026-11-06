@@ -42,8 +42,6 @@ runm wiring wire_drop_music        src/plugin.cpp "s/const InstallResult r = Ins
 runm wiring wire_music_tick_always src/plugin.cpp "s/    if (r.status == SwapStatus::kOk) AddModuleTick(\"music\", \&MusicTick, \&want_tick);/    AddModuleTick(\"music\", \&MusicTick, \&want_tick);/"
 runm wiring wire_drop_sensorwd     src/plugin.cpp "s/^  ReportModule(\"sensorwd\", InstallSensorWd(base));//"
 runm wiring wire_drop_sensorwd_tick src/plugin.cpp "s/^  AddModuleTick(\"sensorwd\", \&SensorWdTick, \&want_tick);.*//"
-runm wiring wire_levelname_file_read src/plugin.cpp "s/^  gateOff.levelname = false;/  (void)gateOff;/"
-runm wiring wire_bots_without_levelname src/plugin.cpp "s|/\*levelname=\*/true|/*levelname=*/false|"
 runm wiring wire_drop_gc_tick      src/plugin.cpp "s/^  ReportModuleTick(\"gunconnect\", AddGameTick(\&GunConnectTick), \&want_tick);//"
 runm wiring wire_drop_ai_tick      src/plugin.cpp "s/^  ReportModuleTick(\"aibots\", AddGameTick(\&AiBotsTick), \&want_tick);//"
 runm wiring wire_tick_early        src/plugin.cpp "s/^  if (want_tick) {\$/  if (false) {/"

@@ -8,9 +8,12 @@
 #include "quest/combat/boosterpool.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/levelname.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/pfx.h"
+#include "quest/combat/pfxtev.h"
 #include "quest/combat/refresh_rate.h"
 #include "quest/sentinel/hook_log.h"
 
@@ -34,6 +37,17 @@ ModuleResult RefreshRateNormal() noexcept {
 ModuleResult LevelNameNormal() noexcept { return levelname::Install(g_config.levelname.on); }
 ModuleResult BoosterPoolNormal() noexcept { return boosterpool::Install(g_config.levelname.on, levelname::Installed()); }
 
+ModuleResult GatesNormal() noexcept {
+  headset_gates::Switches switches;
+  switches.perm = g_config.gatePerm.on;
+  switches.bots = g_config.gateBots.on;
+  switches.link = g_config.gateLink.on;
+  switches.linkLibs = g_config.gateLinkLibs.source == nevr_quest::Source::kFile ? g_config.gateLinkLibs.text : nullptr;
+  return headset_gates::Install(switches);
+}
+ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
+ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
+
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
 //   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
@@ -46,8 +60,13 @@ constexpr std::array kModules{
     Module{"tick", nullptr, &tick::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
     // levelname, then boosterpool (#2181): the plugin installed the pair together, the level name first.
-    Module{"levelname", nullptr, &LevelNameNormal},
+    Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname},
     Module{"boosterpool", nullptr, &BoosterPoolNormal},
+    // gates (#2180): the plugin installed them after its tick and its modules; they register the tick callback the bot gate reads the game from.
+    Module{"gates", nullptr, &GatesNormal},
+    // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
+    Module{"pfx", nullptr, &PfxNormal},
+    Module{"pfxtev", nullptr, &PfxtevNormal},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -148,9 +167,24 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"refresh_rate_lobby", config.refreshRateLobby.on ? 1 : 0}, {"refresh_rate_lobby_source", source(config.refreshRateLobby.source)},
                        {"refresh_rate_quest2_72", config.refreshRateQuest2At72.on ? 1 : 0},
                        {"refresh_rate_quest2_72_source", source(config.refreshRateQuest2At72.source)},
-                       {"levelname", config.levelname.on ? 1 : 0}, {"levelname_source", source(config.levelname.source)},
+                       {"pfx", config.pfx.on ? 1 : 0}, {"pfx_source", source(config.pfx.source)},
+                       {"pfxtev", config.pfxtev.on ? 1 : 0}, {"pfxtev_source", source(config.pfxtev.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
+  // One record per module switch, from the registration table (combat_install.h).
+  for (const Module& module : kModules) {
+    if (module.switchMember == nullptr) continue;
+    const nevr_quest::CombatSwitch& sw = config.*module.switchMember;
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_switch",
+                        {{"module", module.name}, {"key", module.switchKey}, {"on", sw.on ? 1 : 0}, {"source", source(sw.source)}});
+  }
+  // A log line is one fixed 768-byte buffer (sentinel/hook_log.cpp): the headset gates' keys are a line of their own, so no line is cut.
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_gates",
+                      {{"gate_perm", config.gatePerm.on ? 1 : 0}, {"gate_perm_source", source(config.gatePerm.source)},
+                       {"gate_bots", config.gateBots.on ? 1 : 0}, {"gate_bots_source", source(config.gateBots.source)},
+                       {"gate_link", config.gateLink.on ? 1 : 0}, {"gate_link_source", source(config.gateLink.source)},
+                       {"gate_link_libs_source", source(config.gateLinkLibs.source)},
+                       {"msg", "the headset gates' keys (src/quest/combat/headset_gates.h); gate_link_libs is a text and is never logged, only where it came from"}});
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }

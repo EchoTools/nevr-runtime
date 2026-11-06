@@ -15,8 +15,8 @@
  * going to an arena or a combat match, and the loaded-level answer (combat_level.h) is "none" at that moment, so this module cannot be scoped by
  * level. On a q15t or combat APK an arena match runs with the full-size global level too, when `combat.levelname` is on (the default). The
  * handler does nothing for any other level, and a lowspec-clear game is not touched. See docs/quest/combat/levelname.md ("What an arena match
- * gets") for the cost and what is not measured. `combat.levelname: false` leaves the game's cut level (and, with it, boosterpool.h and the q15t
- * plugin's bot-body gate, which needs the full level, KNOWN-WRONG #2180).
+ * gets") for the cost and what is not measured. `combat.levelname: false` leaves the game's cut level (and, with it, boosterpool.h and the bot-body
+ * gate, which needs the full level: headset_gates.h "The bot gate" reads this module's slot, the CR15Game word, and acts only where it is not the stock function).
  *
  * Which APKs. The q15t and combat variants (`combat::Active()`); every other APK keeps the game's own level name.
  *

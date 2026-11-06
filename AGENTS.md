@@ -385,8 +385,6 @@ Every branch an agent creates has a documented deletion point from the moment it
 
 ## Build Commands
 
-Heavy recipes (`verify`, the full builds and full test suites; the list is in `tools/tests/test_heavy_guard.py`) do not run from a Claude session: run the one test you changed instead.
-
 ```sh
 just                    # Show available recipes
 just configure          # Configure CMake only
@@ -406,8 +404,6 @@ just generate-certs     # Generate CA hierarchy for code signing
 ```
 
 ### Quest APK
-
-Run these from your own shell. `tools/heavy_guard.py` refuses them inside a Claude Code session.
 
 Set these in the shell, never as arguments (a passphrase on the command line shows in `ps`):
 
@@ -454,7 +450,7 @@ gh release edit v<x.y.z> --draft=false            # 5. publish, only after the d
 ```
 
 A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`); every other build
-stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. The build goes through one
+stamps `<next>-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. The build goes through one
 packaging path (the sealed Windows zip, attested, and the Quest library; the release body (a header, a player line and one line per file, no hash) is written after signing; the `.tar.zst` archives stay a workflow artifact). Nothing in a file depends on the pre-release flag:
 promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` (the host) and `nevr-runtime.dll` (the runtime) each carry one
 identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit; the two literals are equal, and only the runtime carries the plugin-trust literal and the embedded defaults.
@@ -1297,44 +1293,6 @@ All dependencies declared in one file at the project root:
 - The OpenXR loader is a system dependency or vendored, not from vcpkg.
 - Oculus SDK headers are replicated from the target binary — not a
   vcpkg dependency.
-
----
-
-## Justfile
-
-Every project MUST have a `justfile` with at minimum:
-
-```makefile
-default_preset := if os() == "linux" { "mingw-release" } else { "release" }
-preset := env("PRESET", default_preset)
-
-default:
-    @just --list
-
-configure: _vcpkg-mingw
-    @cmake --preset {{ preset }}
-
-build: configure
-    @cmake --build --preset {{ preset }}
-
-verbose-build: configure
-    cmake --build --preset {{ preset }}
-
-dist: build
-    @cmake --build --preset {{ preset }} --target dist
-
-clean:
-    rm -rf build/ dist/
-
-_vcpkg-mingw:
-    #!/usr/bin/env bash
-    if [[ "{{ preset }}" == mingw-* ]]; then
-        cd "$VCPKG_ROOT"
-        ./vcpkg install --triplet=x64-mingw-static \
-            --x-manifest-root="{{ justfile_directory() }}" \
-            --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed"
-    fi
-```
 
 ---
 

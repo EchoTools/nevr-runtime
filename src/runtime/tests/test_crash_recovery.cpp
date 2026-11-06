@@ -158,10 +158,10 @@ TEST(VehPolicy, InstallsOnServersAndNativeClientsOnly) {
 
 TEST(VehPolicy, BootLineSaysInstalledOnlyWhenInstalled) {
   using nevr_veh_policy::InstallResult;
-  EXPECT_STREQ(nevr_veh_policy::BootLine(InstallResult::Installed), "[NEVR.CRASH] veh installed\n");
+  EXPECT_STREQ(nevr_veh_policy::BootLine(InstallResult::Installed), "[NEVR.CRASH] info; veh installed\n");
   EXPECT_STREQ(nevr_veh_policy::BootLine(InstallResult::DeferredWine),
-               "[NEVR.CRASH] veh deferred reason=wine_cli_unknown\n");
-  EXPECT_STREQ(nevr_veh_policy::BootLine(InstallResult::Failed), "[NEVR.CRASH] veh install failed\n");
+               "[NEVR.CRASH] info; veh deferred reason=wine_cli_unknown\n");
+  EXPECT_STREQ(nevr_veh_policy::BootLine(InstallResult::Failed), "[NEVR.CRASH] warn; veh install failed\n");
 }
 
 TEST(VehPolicy, WineClientBootLineNeverClaimsInstalled) {

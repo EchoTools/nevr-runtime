@@ -11,8 +11,8 @@ import (
 
 func TestTheTwoModulesAreNormalRowsAfterTheRefreshRateAndTheBoosterNeedsLevelname(t *testing.T) {
 	table := stripComments(read(t, "src/quest/combat/combat_install.cpp"))
-	before(t, table, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`, `Module{"levelname", nullptr, &LevelNameNormal}`)
-	before(t, table, `Module{"levelname", nullptr, &LevelNameNormal}`, `Module{"boosterpool", nullptr, &BoosterPoolNormal}`)
+	before(t, table, `Module{"refresh_rate", nullptr, &RefreshRateNormal}`, `Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname}`)
+	before(t, table, `Module{"levelname", nullptr, &LevelNameNormal, "combat.levelname", &nevr_quest::CombatConfig::levelname}`, `Module{"boosterpool", nullptr, &BoosterPoolNormal}`)
 	rows := body(t, table, "ModuleResult BoosterPoolNormal()")
 	if !strings.Contains(rows, "levelname::Installed()") || !strings.Contains(rows, "g_config.levelname.on") {
 		t.Errorf("the booster pool's row does not ask for levelname's install and the key: %s", rows)
@@ -45,8 +45,8 @@ func TestTheKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.T) {
 	if !strings.Contains(schema, `"levelname"}}`) {
 		t.Error("the schema's combat section does not name levelname")
 	}
-	if !strings.Contains(line, `"levelname_source"`) {
-		t.Error("the combat_config line does not name levelname")
+	if !strings.Contains(line, `"combat_config_switch"`) || strings.Contains(line, `"levelname_source"`) {
+		t.Error("levelname's switch is not reported by the generated combat_config_switch record (and must not be a field of the combat_config line)")
 	}
 	if !strings.Contains(example, "\n  # levelname: ") {
 		t.Error("the example config does not document combat.levelname")
@@ -89,9 +89,8 @@ func TestThePluginCarriesNeitherModuleAndItsMarkerLostTheField(t *testing.T) {
 	if !exists(t, "docs/quest/combat/levelname.md") || exists(t, "docs/quest/q15t/modules/levelname.md") {
 		t.Error("the module doc is not where the combat docs live")
 	}
-	// the bot-body gate still depends on the full level, which the runtime loads: the plugin takes it as met and ignores the kill file
-	rawPlugin := read(t, "src/quest/plugins/q15t/src/plugin.cpp")
-	if !strings.Contains(plugin, "gateOff.levelname = false") || !strings.Contains(rawPlugin, "/*levelname=*/true") {
-		t.Error("the plugin's bot-body gate does not take levelname as met (KNOWN-WRONG #2180)")
+	// the bot-body gate (headset_gates.cpp) reads the game's LoadLevelName slot, which levelname's hook takes; the plugin decides nothing about it
+	if strings.Contains(plugin, "DecideCombatGates") || strings.Contains(plugin, "gateOff") {
+		t.Error("plugin.cpp still decides the bot-body gate")
 	}
 }

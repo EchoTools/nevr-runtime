@@ -3,10 +3,10 @@
 #
 #   nevr_version_numeric(<out> <major> <minor> <patch> <distance>)
 #       Sets <out> to "major,minor,patch,distance", the 4-part number a Windows version needs, after checking that
-#       each part fits 16 bits. The parts are the nearest release tag's own numbers and the commit distance from it
-#       (set_project_version_from_git.cmake: PROJECT_VERSION_MAJOR/MINOR/PATCH/TWEAK), so a release is X.Y.Z.0 and a
-#       development build X.Y.Z.<distance>: the number sorts like the semver string, after the tag and before the
-#       next release (a development build exactly on a tag, distance 0, has the tag's number).
+#       each part fits 16 bits. The parts are set by set_project_version_from_git.cmake (PROJECT_VERSION_MAJOR/MINOR/PATCH/
+#       TWEAK): a release is X.Y.Z.0, and a development build of <next> is the release just below <next> with the
+#       commit distance from the base tag as the fourth part (6.17.0-dev.4 is 6.16.65535.4), so the number sorts like
+#       the semver string, after the release before it and before <next> (tools/pe_version_info.py numeric_version).
 #   nevr_add_version_info(<target> FILE_DESCRIPTION <text> ORIGINAL_FILENAME <file name> TYPE DLL|APP)
 #       Fills cmake/nevr_version_info.rc.in from PROJECT_VERSION and adds it to <target>; the RC language is enabled
 #       by the root CMakeLists.txt. tools/pe_version_info.py pins the result and `just verify` reads it back.

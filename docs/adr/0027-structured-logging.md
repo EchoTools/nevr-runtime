@@ -272,11 +272,11 @@ and its text is never built at run time.
 - A value that must stay private but must be matched across records (an invite code) is passed to `Fp`, which writes 8
   hex digits of a hash salted with the run id as `<key>_fp`; `CodeFingerprint` in `src/runtime/patch/invite_wizard.h` is
   the precedent (FNV-1a over a salt that differs from run to run).
-- A URL is `Str(key, RedactUrlForDiagnostics(url))` (`src/runtime/log/url_diagnostics.h`). A secret config value is never a
-  field; its presence is (`Bool("nevr_http_key_set", ...)`).
+- A URL is `Str(key, UrlForDiagnostics(url))` (`src/runtime/log/url_diagnostics.h`), which writes the URL whole (userinfo, query and
+  fragment included) on one line. A secret config value is never a field; its presence is (`Bool("nevr_http_key_set", ...)`).
 - The source check fails a call whose arguments contain `what()` or a JSON `dump(`, or a `Str` whose key is `token`,
   `password`, `secret`, `authorization`, `cookie`, `body`, `response`, `payload` or `what`, or a `Str` whose key names a URL
-  (`uri`, `url`, `*_uri`, `*_url`) and whose value does not pass through the redacting formatter. slog's `LogValuer` is the
+  (`uri`, `url`, `*_uri`, `*_url`) and whose value does not pass through the URL formatter. slog's `LogValuer` is the
   precedent for making the safe value the one a type produces ("the Value returned from its LogValue method is used").
 
 ### 5. Where a record goes

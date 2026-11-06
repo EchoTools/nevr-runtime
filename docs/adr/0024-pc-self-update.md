@@ -13,8 +13,10 @@ Status: proposed. Tracking issue: #1200. Builds on ADR 0012 (the static install 
 of "Layout". **It amends ADR 0008 in one place:** the host and the runtime that run together agree on the ABI's major, and
 are not always one release ("Relation to other records"). Of the "Order of work", step 1 (the core's `pc stage`, #1209) is
 built, and so is step 2: the swap (#2104: section 4) and the rest of the host's half (#2105: section 6, the rollback, the
-crash marker and the capability word). Steps 3 to 5 are not built. The runtime and the plugins load from the
-root (#855, #856). "What is not known" lists what no measurement covers.
+crash marker and the capability word), and so is step 3 (the installer's part: section 7), and step 4, the runtime's half (the
+worker, the two config keys and the flag, the confirmation and the static link of the core: "As built, the worker" under section 3 and
+"As built, the confirmation" under section 6). Step 5 is not built. The runtime and the plugins load from the root (#855, #856). "What is
+not known" lists what no measurement covers.
 
 ## Requirement
 
@@ -108,7 +110,7 @@ flowchart TD
     E -->|no| F[core: fetch windows-zip, step 8 on it and every member]
     F -->|any check fails| X4[staging removed, nothing published]
     F --> G[runtime: Authenticode on each staged file, production policy with denylist]
-    G -->|fails| X5[staging removed, version quarantined]
+    G -->|fails| X5[staging removed, discard counted in the core's stage state]
     G --> H[runtime: publish staged.json, last]
 ```
 
@@ -144,6 +146,53 @@ second `windows-zip`, is a refusal. The CLI gets the same operation as `install-
 operator can run it without the game. The core is linked into `nevr-runtime.dll` as a static library: one signed file, no
 extra DLL for the plugin gate to verify. The runtime owns `staged.json` because the Authenticode check sits between the
 core's work and the publish, which takes the lock.
+
+**As built, the worker (#1200).** The runtime's half is `src/runtime/lifecycle/update_policy.cpp` (the decisions, pure),
+`src/runtime/lifecycle/update_run.cpp` (the check and the confirmation, with every dependency passed in), `src/runtime/lifecycle/update_worker.cpp` (the threads) and
+`src/runtime/lifecycle/update_process.cpp` (the binding to the core, the verifier, the log and the process); the names and the digest are the host's
+units (`host/update_names.cpp`, `host/file_digest.cpp`), compiled into both DLLs.
+
+- **When.** `RunDeferredRuntimeBootstrap` calls `nevr_update::StartProcessWorker` last, after the log line `runtime bootstrap
+  complete` and after the command line is parsed (so `-no-update` has been read). Nothing starts from `DllMain`, `initialize`
+  or the host.
+- **One decision per launch, one line.** `Decide` names the first reason in this order: `dev_build`, `flag`, `config`,
+  `host_cannot_swap`; the line is `update disabled reason=<word>`. A dev build and a host that cannot swap start no thread. A
+  flag or a config key that is off starts the confirmation thread only.
+- **Two threads, independent.** The check thread runs `RunCheck` once and ends. The confirmation thread waits on an event the
+  per-frame dispatcher sets (`nevr_update::OnFrame`, one atomic compare per dispatch) 10 s after its first call, then runs
+  `UpdateConfirm` once. A check stuck inside the core, which cannot be cancelled, never keeps a swapped release from being
+  confirmed. The process's worker is never destroyed: a destructor at `DLL_PROCESS_DETACH` would join them under the loader lock.
+- **The bound.** The core's own timeouts are 20 s to connect and 60 s per read, and it has no cap on the whole stage. The
+  worker enforces the 120 s: a result that arrives after it is not published (`update check action=failed reason=timeout`). The
+  thread itself cannot be stopped and ends with the process.
+- **The order of the check.** `update\` or `update\staging` a link: `blocked reason=reparse_point`. A `update\pending.json`:
+  `none reason=release_pending`, with nothing fetched (section 6, Q1). Then `state.json` is read for the installer's channel and
+  the quarantine, the core is opened with `{"platform": "pc", "nevr_root": <root as UTF-8>, "channel"?}` (the core derives its state,
+  log and download folders from `nevr_root`), the manifest is fetched, `NevrPcStage` runs with the running runtime's version (from
+  its `NEVR-BUILD` literal) and sha256 and the quarantine, and the run is ended and closed on every path. The result must parse
+  inside the host's vocabulary (`runtime/host/update_names.h`: a version, a plain member path, 64 lowercase hex) or it is
+  `failed reason=bad_result`. `none` and `blocked` from the core are logged and publish nothing. For `staged`, each file is
+  verified (`update verify`) with `nevr_plugin_trust::ProductionPolicy()`, the denylist included; one that fails removes
+  `update\staging\<version>` and ends in `blocked reason=verify_failed`. Then the lock (5 s), a second look for `pending.json`,
+  and `staged.json` by rename, last.
+- **The reasons.** `failed`: `core_open_failed`, `network` (the manifest could not be fetched), `manifest_check` (the core's
+  text names `FAIL step N`), `stage_failed`, `timeout`, `bad_result`, `lock_unavailable`, `publish_failed`,
+  `root_unconvertible`, `running_runtime_unreadable`, `internal_error`. The core's own error text is never a log field (logging
+  Rule 4); it is in `logs\nevr-update.jsonl`.
+- **F5.** A staged file that fails Authenticode is a discard, not a quarantine: the flowchart and F5 say the same thing. When the
+  verifier refuses a file, the staging is removed and the runtime tells the core (`NevrPcDiscard`, `install-nevr-runtime pc discard`):
+  the core records the release's version and runtime sha256 in `update\manifest\discards.json`, and the next `NevrPcStage` answers `none`
+  with the reason `discarded` and fetches nothing, until the channel names other bytes. A file that could not be read (a scanner's lock)
+  is not a verdict and records nothing: the next launch tries again. The runtime still writes only `UpdateConfirm`'s keys to
+  `state.json` (section 8, item 8). Lines: `update discard` with `version` and `recorded`.
+- **Late results.** A result that arrives after the 120 s, or turns late while it is verified, removes its staging folder as well as
+  publishing nothing.
+- **No root.** Without `%LOCALAPPDATA%` the worker starts no thread and says `update disabled reason=no_root` at Warning: neither the check
+  nor the confirmation may look for the update folder at the root of a drive.
+- **The core is linked.** `NEVR_UPDATE_CORE` in `src/runtime/CMakeLists.txt` builds `installer/` as a static library with cargo and
+  links it, with the system libraries rustc names. `test_update_core_link` calls it from a worker thread under Wine. A version run of
+  `build.yml` links a library the `core-library` job builds and hands over as an artifact (`NEVR_INSTALL_LIB`); the build job has no Rust
+  toolchain and waits for that job before it configures.
 
 ### 4. The swap
 
@@ -362,6 +411,15 @@ its journal), `RuntimeLoader::LoadAtStart` (`runtime_load.cpp`: the swap, the lo
   rewrites it. Q3: a root runtime with no `NEVR-BUILD` version blocks the swap (section 4, item 9). Q4: a rollback
   deferred because the runtime is in use increments nothing. Q5: a start that "stops" stops the game (`update_blocked`).
 
+**As built, the confirmation (#1200).** `UpdateConfirm` (`src/runtime/lifecycle/update_run.cpp`) reads `update\pending.json` (at most 64 KiB, the
+host's cap): absent is `update confirm skipped reason=no_pending` and creates nothing. A record whose `to.sha256` is not the
+sha256 of the file this process loaded is `not_the_pending_release`. Otherwise it takes the lock (5 s), reads the record again,
+reads `state.json` (absent is `{}`; one that is not an object, or cannot be read, is `state_unreadable` and is not written over),
+writes it by rename with `current` set to `{version, runtime_sha256}` and every other key kept, removes `pending.json` and then
+`crashed`, and logs `update confirmed` with the process's role. `state.json` goes first, so a kill between the two leaves a
+pending record that names the confirmed runtime, which the host drops as stale. The confirmation runs whether or not checks are
+enabled.
+
 Limits stated here, not solved: a client and a server share one confirmation, so a release that starts on a client but fails
 on a server after the mark is not rolled back (the log line `update confirmed` carries the process's role, and a server
 operator has `update.enabled: false`); a withdrawn release that the channel replaces with an older one is rolled back and
@@ -377,6 +435,28 @@ installer's release is the baseline and nothing older competes with it. The quar
 touch `update\`. The channel precedence is `update.channel` in `config.yaml`, then `state.json`, then the core's default;
 every `update check` line carries `channel_source`, so a player whose config disagrees with the installer shows it in the log.
 
+**As built.** `installer/src/update_state.rs`, called from `Session::pc` after the files are installed and read back.
+- **When.** After every `pc install` that ends `installed`, and after one that ends `unchanged` (the release in the root is
+  already the package's: it is the baseline as much as a fresh install is, and a reinstall after a failed update must clear what
+  the failure left, step 3 of "Order of work"). `pc plan` and `pc uninstall` never come here.
+- **The lock** is `update\lock` opened as the host opens it (share mode 0, delete on close; elsewhere an exclusive file lock),
+  retried every 100 ms for up to 30 s on any failure to open it, as the host retries (a lock file another process has delete-pending answers access denied, not a sharing violation). The channel is the run's (`--channel`, else the core's default).
+- **Order.** The lock; `state.json` is read; then the removals (`swap.json`, `pending.json`, `crashed`, `staged.json`, `staging\`,
+  `previous\`, `failed\`, in that order: the journal goes first, so a start never undoes a half swap over the new baseline);
+  then `state.json` is written by a temporary file and a rename. `work\` and `manifest\` are the core's and stay.
+- **What `state.json` becomes.** `channel`; `current` (the release and its runtime sha256); `owned` (the runtime at its new
+  sha256, then every plugin the earlier file listed: the installer does not touch `plugins\`); `discards` and `quarantine` as
+  they were. A file the host would not use (not an object, nested deeper than 16, over 64 KiB, an `owned`, `discards` or
+  `quarantine` of the wrong shape, an `owned` path or a `discards` key outside the host's name rules (`update_names.cpp`: no leading or trailing `.`, no device name), the rules `ValidState` applies) is replaced by one built from the baseline,
+  and its quarantine is lost with it (`state_before=rebuilt`). A file that is there and cannot be read is not written over.
+- **Links.** `update\` or `state.json` as a link stops the run (`reparse_point`); a link among the removals is removed and never
+  followed (`outcome=link_removed`).
+- **A failure** leaves the installed files installed and ends the run `0`: the install worked and the game runs, but the host
+  would stop at its next start on what an earlier update left. It is never silent: an ERROR `update_state` line, and a
+  WARNING in the end reason (the CLI prints it on standard error) saying self-update is off until the next install, with the
+  reason. The line is `update_state ok=false reason=<lock_timeout, lock_failed, reparse_point, not_a_folder, create_failed,
+  state_unreadable, clear_failed, state_write_failed, log_failed>`.
+
 ### 8. Logging
 
 A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag is added to the table of
@@ -385,18 +465,23 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 
 | Where | Event | Fields |
 | --- | --- | --- |
-| runtime | `update disabled` | `reason` (`dev_build`, `flag`, `config`, `host_cannot_swap`) |
-| runtime | `update check` | `channel`, `channel_source`, `current`, `target`, `direction`, `action` (`none`, `staged`, `blocked`, `failed`), `reason`, `elapsed_ms` |
+| runtime | `update disabled` | `reason` (`dev_build`, `no_root` when `%LOCALAPPDATA%` is not set, `flag`, `config`, `host_cannot_swap`; `no_root` is a Warning, the rest Info) |
+| runtime | `update discard` | `version`, `recorded`, `reason` (`verify_failed`): the verifier refused a staged release and the core was told (Warning when it could not be recorded) |
+| runtime | `update check` | `channel` (`core_default` when none was named), `channel_source` (`config`, `state`, `default`), `current`, `target`, `direction`, `action` (`none`, `staged`, `blocked`, `failed`), `reason`, `config_channel_rejected` when `update.channel` is not a channel name, `elapsed_ms` |
 | core | `manifest_check`, `release_selected`, `artifact_fetch` | as ADR 0023 section 5; a cut-off download is `artifact_fetch ok=false reason=short_body bytes=<n> size=<n>` |
 | core | `stage_member` | `path`, `size`, `sha256`, `ok`, `reason` |
 | core | `stage_end` | `version`, `files`, `ok`, `reason`, `elapsed_ms` |
-| runtime | `update verify` | `path`, `ok`, `reason` (the verifier's text) |
+| runtime | `update verify` | `path`, `version`, `ok`, `reason` (the verifier's text; `accepted` when it is) |
 | runtime | `update published` | `version`, `files` |
+| core | `update_lock` | `ok`, `wait_ms`, `path`; on a failure `reason`, `detail`, `waited_ms` |
+| core | `update_clear` | `name`, `path`, `outcome` (`removed`, `absent`, `link_removed`, `failed`), `reason` on a failure; one per thing a baseline looks at |
+| core | `update_state` | `ok`, `channel`, `version`, `runtime_sha256`, `state_before` (`absent`, `read`, `rebuilt`), `rebuilt_reason`, `owned`, `quarantine`, `lock_wait_ms`; on a failure `reason` and `detail` |
 | host | `update_swap` | `outcome` (`swapped`, `deferred`, `blocked`, `discarded`, `recovered`), `reason`, `from`, `to`, `files` (path, sha256), `elapsed_ms` |
 | host | `update_rollback` | `mode` (`in_process`, `next_start`), `reason`, `from` (the failed release), `to` (the restored one), `outcome` (`rolled_back`, `scheduled`, `deferred`, `failed`, `blocked`, `discarded`), `boot_attempts`, `files`, `elapsed_ms` |
 | host | `update_trial` | one per start that loads a pending release without deciding a rollback (a rollback decision writes `update_rollback`): `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`), `release`, `boot_attempts` (after the start), `elapsed_ms` |
 | host | `crash_marker` | `outcome` (`written`, `failed`), `win32_error`, `path`, `thread` |
 | runtime | `update confirmed` | `version`, `after_ms`, `role` (`client`, `server`) |
+| runtime | `update confirm skipped` | `reason` (`no_pending`, `not_the_pending_release`, `pending_unreadable`, `state_unreadable`, `lock_unavailable`, `write_failed`, `running_runtime_unreadable`, `internal_error`), `version` when the record named one |
 
 The host's `versions` record (ADR 0012) already names what ran; a swapped start also carries `update_swap` ahead of it, so a
 report shows both the move and its result. A start that falls back in process (R1) writes a second `versions` record after
@@ -508,8 +593,11 @@ Falsifiers: any member extracted that `contents` does not list; any download whe
 - Whether the Windows zip's `BugSplat64.dll` and the installed host can differ in ABI major without the installer. The
   load catches it; whether it ever happens is a release-process question.
 - Plugins: no real input exists (unsigned, and none in the zip), and they do not load from the root until #856.
-- That the Rust core links into the MinGW runtime DLL and runs from a worker thread without a runtime of its own, under Wine
-  and on Windows. The CLI is built for `x86_64-pc-windows-gnu`; its static library has not been linked into a MinGW C++ DLL.
+- That the Rust core runs from a worker thread on native Windows. Under Wine 11.21 it links into a MinGW C++ binary and answers
+  from a thread that is not the main one: the version, a refused configuration, a manifest fetch from an empty folder and an https
+  fetch to a closed port each come back as a status (`test_update_core_link`), and `nevr-runtime.dll` links it. The DLL gains the
+  imports `bcrypt.dll`, `bcryptprimitives.dll`, `userenv.dll` and `api-ms-win-core-synch-l1-2-0.dll`; whether each resolves on
+  the oldest Windows the game runs on is not measured.
 - Whether a player who wants to stay on a build should be able to pin it. `update.enabled: false` stops all updates; a pin to
   one release is not offered.
 - The in-game notice to a player (a release that needs the installer, a rollback that happened). Every case is in the log;

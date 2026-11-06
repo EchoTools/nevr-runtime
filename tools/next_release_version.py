@@ -88,19 +88,14 @@ def next_version(version: tuple[int, int, int], bump: int) -> tuple[int, int, in
     return (major, minor, patch + 1)
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--repo", default=".", help="the repository (default: the current directory)")
-    parser.add_argument("--rev", default="HEAD", help="the commit the release is cut from (default: HEAD)")
-    args = parser.parse_args(argv)
-    try:
-        tag, version = base_tag(args.repo, args.rev)
-        log = git(args.repo, "log", "--format=%H%x1f%B%x1e", f"{tag}..{args.rev}")
-        existing = set(git(args.repo, "tag", "--list", "v*").split())
-    except Failure as failure:
-        report("fail", reason=str(failure))
-        return 2
-    report("base", base=tag, rev=args.rev)
+def resolve(repo: str, rev: str) -> tuple:
+    """(base tag, base version, commits since it with their bumps, highest bump, next version or None).
+
+    Raises Failure when git cannot be read, there is no release tag, or the computed tag exists off `rev`."""
+    tag, version = base_tag(repo, rev)
+    log = git(repo, "log", "--format=%H%x1f%B%x1e", f"{tag}..{rev}")
+    existing = set(git(repo, "tag", "--list", "v*").split())
+    commits = []
     highest = NONE
     for record in log.split("\x1e"):
         record = record.strip("\n")
@@ -109,18 +104,35 @@ def main(argv: list[str]) -> int:
         sha, _, message = record.partition("\x1f")
         bump = bump_of(message)
         highest = max(highest, bump)
-        subject = message.splitlines()[0] if message else ""
-        report("commit", commit=sha[:12], bump=NAMES[bump], subject=subject)
+        commits.append((sha, bump, message.splitlines()[0] if message else ""))
     if highest == NONE:
-        report("nothing_to_release", base=tag, reason="no feat, fix, perf or breaking change")
-        return 1
+        return tag, version, commits, highest, None
     result = "v%d.%d.%d" % next_version(version, highest)
     if result in existing:
-        report("fail", reason=f"tag {result} already exists but is not reachable from {args.rev}")
+        raise Failure(f"tag {result} already exists but is not reachable from {rev}")
+    return tag, version, commits, highest, result
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--repo", default=".", help="the repository (default: the current directory)")
+    parser.add_argument("--rev", default="HEAD", help="the commit the release is cut from (default: HEAD)")
+    args = parser.parse_args(argv)
+    try:
+        tag, _, commits, highest, result = resolve(args.repo, args.rev)
+    except Failure as failure:
+        report("fail", reason=str(failure))
         return 2
+    report("base", base=tag, rev=args.rev)
+    for sha, bump, subject in commits:
+        report("commit", commit=sha[:12], bump=NAMES[bump], subject=subject)
+    if result is None:
+        report("nothing_to_release", base=tag, reason="no feat, fix, perf or breaking change")
+        return 1
     report("next", bump=NAMES[highest], next=result)
     print(result)
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
