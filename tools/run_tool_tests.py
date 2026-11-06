@@ -340,13 +340,34 @@ def given_workers(args: list):
 
 
 SUITE_DIR = pathlib.Path(__file__).resolve().parent / "tests"
-# The pytest options that take their value as the next argument (`--opt value`; `--opt=value` and `-xVALUE` are one
-# argument and start with a dash). A value is not a test path.
+# Every option of the pytest this suite runs under (with `-p xdist -p randomly`, as the runner starts it): those that
+# take a value (`--opt value`; `--opt=value` and `-xVALUE` are one argument; `--debug` and `--cache-show` take an optional
+# one, which the classifier reads as given) and those that do not. `tools/tests/test_run_tool_tests_memory.py` compares
+# both with pytest's own parser, so a new pytest option fails a test and does not pass for a test path.
 VALUE_OPTIONS = frozenset((
-    "--deselect", "--ignore", "--ignore-glob", "--rootdir", "--basetemp", "--confcutdir", "-c", "--config-file", "-k", "-m",
-    "-o", "--override-ini", "-p", "-n", "--numprocesses", "--maxfail", "-W", "--durations", "--durations-min", "--tb", "-r",
-    "--randomly-seed", "--import-mode", "--log-level", "--color", "--junitxml", "--junit-xml", "--dist", "--tx",
-    "--max-worker-restart", "--lfnf", "--capture", "--show-capture", "--assert", "--cache-show", "--pyargs-dir"))
+    "--assert", "--basetemp", "--cache-show", "--capture", "--code-highlight", "--color", "--confcutdir",
+    "--config-file", "--debug", "--deselect", "--dist", "--doctest-glob", "--doctest-report", "--durations",
+    "--durations-min", "--ignore", "--ignore-glob", "--import-mode", "--junit-prefix", "--junit-xml", "--junitprefix",
+    "--junitxml", "--last-failed-no-failures", "--lfnf", "--log-auto-indent", "--log-cli-date-format",
+    "--log-cli-format", "--log-cli-level", "--log-date-format", "--log-disable", "--log-file",
+    "--log-file-date-format", "--log-file-format", "--log-file-level", "--log-file-mode", "--log-format",
+    "--log-level", "--max-warnings", "--max-worker-restart", "--maxfail", "--maxprocesses", "--maxschedchunk",
+    "--numprocesses", "--override-ini", "--pastebin", "--pdbcls", "--px", "--pythonwarnings", "--randomly-seed",
+    "--report-chars", "--rootdir", "--rsyncdir", "--rsyncignore", "--show-capture", "--tb", "--testrunuid", "--tx",
+    "--verbosity", "-W", "-c", "-k", "-m", "-n", "-o", "-p", "-r"))
+FLAG_OPTIONS = frozenset((
+    "--cache-clear", "--co", "--collect-in-virtualenv", "--collect-only", "--collectonly",
+    "--continue-on-collection-errors", "--disable-plugin-autoload", "--disable-pytest-warnings", "--disable-warnings",
+    "--doctest-continue-on-failure", "--doctest-ignore-import-errors", "--doctest-modules", "--exitfirst",
+    "--failed-first", "--ff", "--fixtures", "--fixtures-per-test", "--force-short-summary", "--full-trace",
+    "--fulltrace", "--funcargs", "--help", "--keep-duplicates", "--keepduplicates", "--last-failed", "--lf",
+    "--loadscope-reorder", "--markers", "--new-first", "--nf", "--no-fold-skipped", "--no-header",
+    "--no-loadscope-reorder", "--no-showlocals", "--no-summary", "--noconftest", "--pdb", "--pyargs", "--quiet",
+    "--randomly-dont-reorganize", "--randomly-dont-reset-seed", "--runxfail", "--setup-only", "--setup-plan",
+    "--setup-show", "--setuponly", "--setupplan", "--setupshow", "--showlocals", "--stepwise", "--stepwise-reset",
+    "--stepwise-skip", "--strict", "--strict-config", "--strict-markers", "--sw", "--sw-reset", "--sw-skip",
+    "--trace", "--trace-config", "--traceconfig", "--verbose", "--version", "--xfail-tb", "-V", "-d", "-h", "-l",
+    "-q", "-s", "-v", "-x"))
 # More test files than this named on the command line are the suite file by file.
 SUBSET_MAX_FILES = 20
 
@@ -354,24 +375,42 @@ SUBSET_MAX_FILES = 20
 def is_subset(args: list) -> bool:
     """True when the arguments name a few test paths and so run a small part of the suite; such a run takes no lock.
 
-    Only the positional arguments count: the options are skipped, and so is the value of an option that takes one
-    (VALUE_OPTIONS, in the space-separated form). A positional argument names a path when what precedes any `::` exists.
-    The run is the whole suite when no positional argument names a path (the default run, or only options such as
+    Only the positional arguments count: the options are skipped, and so is the value of an option that takes one (the
+    next argument unless it is an option). A positional argument names a path when what precedes any `::` exists. The
+    run is the whole suite when no positional argument names a path (the default run, or only options such as
     `--deselect` and `--ignore`, which collect from the root), when one is `tools/tests` or a directory above it
-    (`tools`, `.`), or when more than SUBSET_MAX_FILES are named (the suite file by file). A path outside the
-    repository, as a temporary suite is, makes a subset. When in doubt a run is the whole suite: the lock is the safe
-    side."""
+    (`tools`, `.`), when more than SUBSET_MAX_FILES are named (the suite file by file), and when an option is not one
+    pytest is known to have (VALUE_OPTIONS, FLAG_OPTIONS): the value of an option the classifier does not know could be
+    a path that is not a test path. A path outside the repository, as a temporary suite is, makes a subset. When in
+    doubt a run is the whole suite: the lock is the safe side."""
     paths = []
     skip = False
+    options_end = False
     for tok in args:
         if skip:
             skip = False
-        elif tok.startswith("-"):
-            skip = tok in VALUE_OPTIONS
-        else:
+            if not tok.startswith("-"):
+                continue
+        if options_end or not tok.startswith("-"):
             target = tok.split("::", 1)[0]
             if target and os.path.exists(target):
                 paths.append(pathlib.Path(target).resolve())
+        elif tok == "--":
+            options_end = True
+        elif tok.startswith("--"):
+            name, attached, _ = tok.partition("=")
+            if name in VALUE_OPTIONS:
+                skip = not attached
+            elif name not in FLAG_OPTIONS:
+                return False
+        else:  # -x, -xyz (flags, the last of which may take the next argument), -kEXPR (a value attached)
+            for i, letter in enumerate(tok[1:]):
+                option = "-" + letter
+                if option in VALUE_OPTIONS:
+                    skip = i == len(tok) - 2
+                    break
+                if option not in FLAG_OPTIONS:
+                    return False
     if not paths or len(paths) > SUBSET_MAX_FILES:
         return False
     return not any(p == SUITE_DIR or p in SUITE_DIR.parents for p in paths)

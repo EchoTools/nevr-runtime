@@ -148,7 +148,9 @@ class SubsetTest(Tmp):
                      [str(self.root)], [one], [f"{one}::RunToolTestsRecord::test_x"], ["-k", "test_a", one],
                      ["-n", "2", one], ["-q", "--deselect", f"{self.HEAVY}::HeavyGuardTest::test_x", one],
                      [str(self.file), str(self.module.SUITE_DIR / "test_run_tool_tests.py")],
-                     files[:self.module.SUBSET_MAX_FILES]):
+                     files[:self.module.SUBSET_MAX_FILES], ["-vv", one], ["-qk", "expr", one], ["-kexpr", one],
+                     ["--tb=short", one], ["--", one], ["--log-file", str(self.file), one],
+                     ["--debug", "-q", one]):
             with self.subTest(args=args[:3]):
                 self.assertTrue(self.module.is_subset(args))
 
@@ -160,9 +162,52 @@ class SubsetTest(Tmp):
                      ["--deselect", f"{self.HEAVY}::HeavyGuardTest::test_second_run_waits_for_first"],
                      ["-q", "--ignore", self.HEAVY], ["-q", f"--ignore={self.HEAVY}"], ["--rootdir", "."],
                      ["-q", "--basetemp", "/var/tmp"], ["-o", "cache_dir=tools"], ["-p", "tools"],
-                     files, files[:self.module.SUBSET_MAX_FILES + 1]):
+                     files, files[:self.module.SUBSET_MAX_FILES + 1],
+                     # an option's value is no test path, however the option is spelled
+                     ["--log-file", str(self.file)], ["--debug", str(self.file)], ["--rsyncdir", "tools"],
+                     ["--doctest-glob", str(self.file)], ["--pythonwarnings", str(self.file)],
+                     ["--last-failed-no-failures", str(self.file)],
+                     # an option the classifier does not know could take a path: the lock is the safe side
+                     ["--made-up-option", str(self.file)], ["--made-up=1", "tools/tests/test_run_tool_tests.py"],
+                     ["--made-up-option", "tools/tests/test_run_tool_tests.py"], ["-Z", "tools/tests/test_run_tool_tests.py"],
+                     ["-qZ", "tools/tests/test_run_tool_tests.py"],
+                     ["--debug", "--made-up", "tools/tests/test_run_tool_tests.py"]):
             with self.subTest(args=args[:3]):
                 self.assertFalse(self.module.is_subset(args))
+
+
+class SubsetOptionsTest(Tmp):
+    def test_after_two_dashes_an_argument_that_starts_with_a_dash_is_a_path(self):
+        (self.root / "-t.py").write_text("")
+        before = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, before)
+        self.assertTrue(self.module.is_subset(["--", "-t.py"]))
+        self.assertFalse(self.module.is_subset(["-t.py"]))  # -t is no option pytest has
+
+    @unittest.skipIf(importlib.util.find_spec("pytest") is None, "pytest is not installed")
+    def test_the_option_lists_are_pytests_own(self):
+        # Every option pytest has, with the plugins the runner loads and none of the others, is in the list that says
+        # whether it takes a value; a new pytest option is a failing test and not a path in disguise.
+        code = (
+            "import _pytest.config, json\n"
+            "plugins = [p for p in ('xdist', 'randomly') if __import__('importlib.util').util.find_spec("
+            "{'xdist': 'xdist', 'randomly': 'pytest_randomly'}[p])]\n"
+            "args = [a for p in plugins for a in ('-p', p)]\n"
+            "config = _pytest.config._prepareconfig(args)\n"
+            "value, flag = set(), set()\n"
+            "for action in config._parser.optparser._actions:\n"
+            "    for option in action.option_strings:\n"
+            "        (flag if action.nargs == 0 else value).add(option)\n"
+            "print(json.dumps({'value': sorted(value), 'flag': sorted(flag)}))\n")
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
+                              env=dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        have = json.loads(done.stdout)
+        self.assertEqual(sorted(set(have["value"]) - self.module.VALUE_OPTIONS), [])
+        self.assertEqual(sorted(set(have["flag"]) - self.module.FLAG_OPTIONS), [])
+        self.assertEqual(sorted(set(have["value"]) & self.module.FLAG_OPTIONS), [])
+        self.assertEqual(sorted(set(have["flag"]) & self.module.VALUE_OPTIONS), [])
 
 
 class OwnCgroupTest(Tmp):
