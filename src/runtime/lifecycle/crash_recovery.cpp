@@ -44,6 +44,7 @@
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/patch/resource_override.h"
+#include "runtime/log/error_dialog_depth.h"
 
 // N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) and
 // its setjmp PRODUCER (GameMainWrapperHook) share this jmp_buf and both live in
@@ -126,6 +127,9 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
   g_gameLoopJmpBufValid.store(crashCount == 0, std::memory_order_release);
 
   if (crashCount > 0) {
+    // #2245: the longjmp ran no destructor, so a mark the game's error dialog set on this thread is cleared here;
+    // otherwise every later line of the thread would be recorded at error.
+    nevr_error_dialog::ResetAfterLongjmp();
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] game loop crash recovered count=%d recovery=exhausted outcome=server_hold "
         "(game loop will not run again; broadcaster/HTTP API stay up for a supervisor to "
