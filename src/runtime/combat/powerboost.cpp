@@ -83,6 +83,7 @@
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
+#include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -858,19 +859,15 @@ bool InstallCone(uint8_t *base) {
         LogWarning("cone patch refused at +0x%llx: it overlaps a range the runtime owns", (unsigned long long)RADIUS_RVA);
         return false;
     }
-    DWORD old;
-    if (!VirtualProtect(site, sizeof(jump), PAGE_EXECUTE_READWRITE, &old)) {
-        LogWarning("VirtualProtect failed (error %lu) at +0x%llx -- cone not patched", GetLastError(),
-            (unsigned long long)RADIUS_RVA);
+    memcpy(g_radius_saved, site, sizeof(jump));         // put back by NvrPluginShutdown
+    // nEVR port: written through ProcessMemcpy, which records the range in the runtime's registry (write_ranges.h).
+    DWORD error = 0;
+    if (!ProcessMemcpy(site, jump, sizeof(jump), &error, "PowerBoost cone jump")) {
+        LogWarning("cone patch failed (error %lu) at +0x%llx -- cone not patched", error, (unsigned long long)RADIUS_RVA);
         return false;
     }
-    memcpy(g_radius_saved, site, sizeof(jump));         // put back by NvrPluginShutdown
     g_radius_site = site;
-    memcpy(site, jump, sizeof(jump));
-    DWORD ignored;
-    if (!VirtualProtect(site, sizeof(jump), old, &ignored))
-        LogWarning("VirtualProtect could not restore the page protection (error %lu)", GetLastError());
-    FlushInstructionCache(GetCurrentProcess(), site, sizeof(jump));
+    Log("cone patched at +0x%llx", (unsigned long long)RADIUS_RVA);   // nEVR port: the address in the applied line
     return true;
 }
 

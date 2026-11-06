@@ -21,6 +21,7 @@ bool Install(std::uintptr_t gameBase);
 /// nothing. The combat module is the one user (runtime/combat): one owner per function, so it rides this detour instead of
 /// detouring the function a second time. Installs the detour alone when Install has not (a server, where Install is not
 /// called), without the wizard observer. Returns false when the detour could not be installed (the observer is then not set).
+/// A null observer removes it and installs nothing.
 using EventObserver = void (*)(std::uint64_t space, const std::uint64_t* event);
 bool InstallEventObserver(std::uintptr_t gameBase, EventObserver observer);
 

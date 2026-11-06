@@ -116,6 +116,10 @@ bool EnsureHook(std::uintptr_t gameBase) {
 nevr_invite_choices::State& Choices() { return g_choices; }
 
 bool InstallEventObserver(std::uintptr_t gameBase, EventObserver observer) {
+  if (observer == nullptr) {  // removing the observer installs nothing
+    g_eventObserver.store(nullptr, std::memory_order_release);
+    return true;
+  }
   if (!EnsureHook(gameBase)) return false;
   g_eventObserver.store(observer, std::memory_order_release);
   return true;

@@ -64,6 +64,7 @@
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
+#include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -122,6 +123,8 @@ constexpr uint32_t ANSWER_MEDIGUN = 1;
 bool g_medigun_on_server = false;               // server: [server] medigun (nEVR port: combat.medigun)
 bool g_match_control = false;                   // nEVR port: combat.match_control
 bool g_quick_exit = false;                      // nEVR port: the clean exit is in place
+bool g_dispatch_hooked = false;                 // nEVR port: HookDispatch succeeded
+bool g_slots_hooked = false;                    // nEVR port: HookClassicSlots succeeded
 
 struct Shared {
     volatile LONG tokens;
@@ -1753,9 +1756,9 @@ void ApplyPause() {
 }
 
 bool HookDispatch() {
-    if (memcmp(g_base + SET_ALPHA_RVA, kSetAlphaHead, sizeof(kSetAlphaHead)) ||
-        memcmp(g_base + SET_TEXT_RVA, kSetTextHead, sizeof(kSetTextHead))) return false;
-    if (memcmp(g_base + DISPATCH_EVENT_RVA, kDispatchHead, sizeof(kDispatchHead))) return false;
+    // nEVR port: SetText and DispatchEventToSession are the runtime's detours, whose owners checked their prologues;
+    // their first bytes are the runtime's jump, so kSetTextHead and kDispatchHead are not compared here.
+    if (memcmp(g_base + SET_ALPHA_RVA, kSetAlphaHead, sizeof(kSetAlphaHead))) return false;
     // nEVR port: the runtime owns DispatchEventToSession; its function behind the detour raises events from here.
     g_real_dispatch = (dispatch_fn)nevr_party_invite_gate::InstallDispatchObserver((std::uintptr_t)g_base, &ObserveDispatch);
     if (!g_real_dispatch) { LogWarning("DispatchEventToSession observer not installed: the runtime's detour is not in place"); return false; }
@@ -1767,8 +1770,8 @@ bool HookDispatch() {
         DetourAttach(&(PVOID &)g_real_dce, (PVOID)HookedDCE);
     }
     const bool inner_hooks = true;                   // clients too: the map buttons' events
-    if (inner_hooks && !memcmp(g_base + DCE_INNER_RVA, kDceInnerHead, sizeof(kDceInnerHead)) &&
-        !memcmp(g_base + DCE_INNER2_RVA, kDceInner2Head, sizeof(kDceInner2Head))) {
+    // nEVR port: +0x50FB60 is the runtime's detour (its owner checked it), so kDceInner2Head is not compared.
+    if (inner_hooks && !memcmp(g_base + DCE_INNER_RVA, kDceInnerHead, sizeof(kDceInnerHead))) {
         g_real_dce_inner = (dce_inner_fn)(g_base + DCE_INNER_RVA);
         DetourAttach(&(PVOID &)g_real_dce_inner, (PVOID)HookedDceInner);
         // nEVR port: +0x50FB60 is the runtime's SendComponentEvent detour: observed, not detoured again.
@@ -2618,17 +2621,15 @@ void InstallCaptureTime() {
         LogWarning("capture time patch refused at +0x%llx: it overlaps a range the runtime owns", (unsigned long long)CAPTURE_DT_RVA);
         return;
     }
-    DWORD old;
-    if (!VirtualProtect(site, sizeof(jump), PAGE_EXECUTE_READWRITE, &old)) {
-        LogWarning("capture time: VirtualProtect failed (error %lu) at +0x%llx, not patched", GetLastError(),   // nEVR port
-            (unsigned long long)CAPTURE_DT_RVA);
+    // nEVR port: written through ProcessMemcpy, which records the range in the runtime's registry (write_ranges.h).
+    DWORD error = 0;
+    if (!ProcessMemcpy(site, jump, sizeof(jump), &error, "VeilNet capture time jump")) {
+        LogWarning("capture time: patch failed (error %lu) at +0x%llx, not patched", error, (unsigned long long)CAPTURE_DT_RVA);
         return;
     }
-    memcpy(site, jump, sizeof(jump));
-    VirtualProtect(site, sizeof(jump), old, &old);
-    FlushInstructionCache(GetCurrentProcess(), site, sizeof(jump));
     g_capture_patched = site;
-    Log("capture time: progress follows the RULES page's CAPTURE TIME (mailbox %#x)", mb + CAPTURE_SLOT);
+    Log("capture time: progress follows the RULES page's CAPTURE TIME (mailbox %#x, +0x%llx)", mb + CAPTURE_SLOT,
+        (unsigned long long)CAPTURE_DT_RVA);
 }
 
 // --- PAYLOAD SPEED ---------------------------------------------------------------------------
@@ -2779,8 +2780,8 @@ bool Install(bool server) {
     g_base = (uint8_t *)GetModuleHandleW(nullptr);
     if (uint32_t mb = RulesMailboxRva(g_base)) g_rules = g_base + mb;
     RateText(g_rules ? g_rules[RATE_SHOWN] : 0);         // the POINT RATE row's text (1.0x until told)
-    if (g_match_control) InstallCaptureTime();         // nEVR port: RULES capture time and PAUSE are match control
-    // nEVR port: InstallPayloadSpeed() is never called: Cat parked the payload rule (unfinished).
+    // nEVR port: InstallPayloadSpeed() is never called: Cat parked the payload rule (unfinished). The capture time patch
+    // (match control) is written below, once the combat net's hooks are committed.
     g_shared = (Shared *)(g_base + TOKEN_RVA);
     g_point = (Shared *)(g_base + POINT_TOKEN_RVA);
     g_loc = (Shared *)(g_base + LOC_TOKEN_RVA);
@@ -2794,15 +2795,20 @@ bool Install(bool server) {
     LONG rc = DetourTransactionCommit();
     if (rc != NO_ERROR) { LogWarning("hooking sendto / recvfrom failed (%ld): UMBRAL VEIL stays local", rc); return false; }
     g_hooked = true;
+    if (g_match_control) InstallCaptureTime();         // nEVR port: RULES capture time and PAUSE are match control
     Log(g_server ? "server: relaying UMBRAL VEIL over the game's own connection"
                  : "client: UMBRAL VEIL goes over the game's own connection");
     if (!g_server && g_match_control) Log(HookApplyItem() ? "SERIES-10 ONLY: LoadAndApplyItem / ApplyItem hooked"
                                        : "SERIES-10 ONLY: unexpected echovr.exe build, chassis not swapped");
-    Log(HookDispatch() ? "LOADOUTS / PAUSE: event dispatch hooked"
-                                      : "LOADOUTS: unexpected echovr.exe build, stations not redrawn");
-    if (g_match_control)                                // nEVR port: LOADOUTS is match control
-    Log(HookClassicSlots() ? "LOADOUTS: equipment slot setters filtered (the runtime's hooks)"
-                           : "LOADOUTS: the runtime's slot setter hooks are not in place, equipment not enforced");
+    g_dispatch_hooked = HookDispatch();                 // nEVR port: kept, so the feature line says whether it is in
+    if (g_dispatch_hooked) Log("LOADOUTS / PAUSE: event dispatch hooked");
+    else LogWarning("LOADOUTS / PAUSE: event dispatch not hooked (a SetAlpha head mismatch, or a runtime detour it rides is "
+                    "not in place; see the lines above): stations not redrawn, PAUSE, END MATCH and MAP SWITCH off");
+    if (g_match_control) {                              // nEVR port: LOADOUTS is match control
+    g_slots_hooked = HookClassicSlots();
+    Log(g_slots_hooked ? "LOADOUTS: equipment slot setters filtered (the runtime's hooks)"
+                       : "LOADOUTS: the runtime's slot setter hooks are not in place, equipment not enforced");
+    }
     g_stop = false;
     g_tick = CreateThread(nullptr, 0, Tick, nullptr, 0, nullptr);
     return true;
@@ -2904,14 +2910,12 @@ void InstallQuickExit() {
             (unsigned long long)TEARDOWN_CALL_RVA);
         return;
     }
-    DWORD old;
-    if (!VirtualProtect(call, 5, PAGE_EXECUTE_READWRITE, &old)) {
-        LogWarning("clean exit: VirtualProtect failed (error %lu), the game exits as stock", GetLastError());   // nEVR port
+    // nEVR port: written through ProcessMemcpy, which records the range in the runtime's registry (write_ranges.h).
+    DWORD error = 0;
+    if (!ProcessMemcpy(call + 1, &rel, 4, &error, "VeilNet clean exit call rel32")) {
+        LogWarning("clean exit: patch failed (error %lu), the game exits as stock", error);
         return;
     }
-    memcpy(call + 1, &rel, 4);
-    VirtualProtect(call, 5, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), call, 5);
     done = true;
     g_quick_exit = true;                                  // nEVR port
     Log("clean exit: the engine's teardown is skipped once the game has shut down (+0x%llx)", (unsigned long long)TEARDOWN_CALL_RVA);
@@ -2940,7 +2944,9 @@ bool StartCleanExit() {
 
 bool Started() { return g_hooked; }
 
-bool MatchControlStarted() { return g_hooked && g_match_control; }
+bool MatchControlStarted() { return g_hooked && g_match_control && g_dispatch_hooked && g_slots_hooked; }
+
+bool EventDispatchHooked() { return g_dispatch_hooked; }
 
 bool CleanExitInstalled() { return g_quick_exit; }
 

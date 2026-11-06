@@ -1,7 +1,7 @@
 #pragma once
 
 // Balance values as a transform of the stock mp_weapon_settings (a CJsonResourceWin10: a 0x220-byte header whose u64 at +8
-// is the body's length, then the minified JSON body). Pure: test_combat_balance.cpp drives it on synthetic resources.
+// is the body's length, then the minified JSON body). Pure: test_combat_settings.cpp drives it on synthetic resources.
 // The merge is the one Cat's tools/apply_config.py makes: every key of the values whose name does not start with `_` is
 // set; a nested object is merged into the object of the same name (made when absent); a value equal to the stock one is
 // left and not counted.

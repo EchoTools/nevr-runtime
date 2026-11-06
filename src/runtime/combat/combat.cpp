@@ -136,7 +136,11 @@ void Install(std::uintptr_t gameBase, bool isServer) {
     const bool veil = veilWanted && veilnet::Start(isServer, match, at(Group::kMedigun).on);
     LogGroup(spec(Group::kVeil), at(Group::kVeil), veil, !cells ? cellsRefused : "sendto_recvfrom_hooks_not_installed");
     LogGroup(spec(Group::kMatchControl), at(Group::kMatchControl), veilnet::MatchControlStarted(),
-             !at(Group::kVeil).on ? "needs_combat.veil" : !cells ? cellsRefused : "combat_net_not_started");
+             !at(Group::kVeil).on ? "needs_combat.veil"
+             : !cells             ? cellsRefused
+             : !veil              ? "combat_net_not_started"
+             : !veilnet::EventDispatchHooked() ? "event_dispatch_not_hooked"
+                                               : "slot_setter_filter_not_installed");
 
     const bool overcharge = at(Group::kOvercharge).on && cells && powerboost::Start(isServer, at(Group::kMedigun).on);
     LogGroup(spec(Group::kOvercharge), at(Group::kOvercharge), overcharge,

@@ -39,6 +39,7 @@
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
+#include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -1668,17 +1669,13 @@ void InstallMuzzle(uintptr_t base) {
             (unsigned long long)FIRE_GET_CALL_RVA);
         return;
     }
-    DWORD old;
-    if (!VirtualProtect(site + 1, 4, PAGE_EXECUTE_READWRITE, &old)) {
-        LogWarning("VirtualProtect failed (error %lu) at +0x%llx -- not patched, bullets stay at the root", GetLastError(),
+    // nEVR port: written through ProcessMemcpy, which records the range in the runtime's registry (write_ranges.h).
+    DWORD error = 0;
+    if (!ProcessMemcpy(site + 1, &rel, 4, &error, "DroneFix muzzle call rel32")) {
+        LogWarning("muzzle patch failed (error %lu) at +0x%llx -- bullets stay at the root", error,
             (unsigned long long)FIRE_GET_CALL_RVA);
         return;
     }
-    memcpy(site + 1, &rel, 4);
-    DWORD ignored;
-    if (!VirtualProtect(site + 1, 4, old, &ignored))
-        LogWarning("VirtualProtect could not restore the page protection (error %lu)", GetLastError());
-    FlushInstructionCache(GetCurrentProcess(), site, 5);
     g_fire_site = site;
     Log("drone bullets fire from the muzzle (%.4f %.4f %.4f) (+0x%llx)", MUZZLE[0], MUZZLE[1], MUZZLE[2],
         (unsigned long long)FIRE_GET_CALL_RVA);

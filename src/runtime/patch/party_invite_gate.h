@@ -33,7 +33,7 @@ void Install(std::uintptr_t gameBase);
 /// owner per function, so it rides this detour instead of detouring the function a second time. Installs the detour alone
 /// when Install has not (the social facade is off), without the invite gate or the trace, and returns the game's function
 /// behind it for a caller that raises events itself, or null when the detour could not be installed (the observer is then
-/// not set).
+/// not set). A null observer removes it and installs nothing.
 using DispatchObserver = void (*)(void* netGame, std::uint64_t eventId);
 using DispatchEventFn = void (*)(void* netGame, std::uint64_t eventId);
 DispatchEventFn InstallDispatchObserver(std::uintptr_t gameBase, DispatchObserver observer);

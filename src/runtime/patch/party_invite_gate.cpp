@@ -249,6 +249,10 @@ bool EnsureDispatchHook(std::uintptr_t gameBase) {
 }  // namespace
 
 DispatchEventFn InstallDispatchObserver(std::uintptr_t gameBase, DispatchObserver observer) {
+  if (observer == nullptr) {  // removing the observer installs nothing
+    g_dispatchObserver.store(nullptr, std::memory_order_release);
+    return g_originalDispatch;
+  }
   if (!EnsureDispatchHook(gameBase)) return nullptr;
   g_dispatchObserver.store(observer, std::memory_order_release);
   return g_originalDispatch;

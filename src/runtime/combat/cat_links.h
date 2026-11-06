@@ -34,6 +34,8 @@ bool StartCleanExit();
 void Stop();
 bool Started();
 bool MatchControlStarted();
+/// The event dispatch hooks (stations redraw, PAUSE, the map buttons) are in place.
+bool EventDispatchHooked();
 bool CleanExitInstalled();
 void DroneKilled(std::uint32_t index);
 void Medigun(std::uint32_t id);
