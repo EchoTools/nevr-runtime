@@ -14,6 +14,7 @@ that they ship to every APK (`match_tags`, `equip_refire`).
 | `<module>.{h,cpp}` | One module: namespace `nevr_quest::combat::<module>`, log events `combat_<module>_*`. |
 | `<module>_targets.h` | The module's pinned slots, each checked by the module's own pinned test (`src/quest/tests/<module>_pinned_test.cpp`, run by `just test-quest-hooks-pinned`-style recipes against the store APK). |
 | `check/<module>.sh` | The module's arm64 checks (the NDK, and qemu where a thunk is run). `just test-quest-combat` runs them after the host tests. |
+| `mutants.sh`, `mutants.d/<module>.sh` | The module's mutation run: `src/quest/combat/mutants.sh <module>` applies each `runm <name> <file> <sed>` line of the module's list to the checkout, builds `<module>_test` and runs it; a mutant is killed when the test fails, a mutant that does not compile is not a kill, and the file is put back after each. Not part of `just test-quest-combat`. |
 
 ## When a module installs
 

@@ -10,13 +10,17 @@ add_library(nevr_quest_combat STATIC
   combat_install.cpp
   combat_level.cpp
   combat_tick.cpp
-  combat_level.cpp
-  combat_tick.cpp
+  custctx.cpp
+  droneguard.cpp
   equip_refire.cpp
+  fxtrail.cpp
   heaps.cpp
+  level_scope.cpp
   match_tags.cpp
   memsys.cpp
-  refresh_rate.cpp)
+  peerclamp.cpp
+  refresh_rate.cpp
+  voipdrop.cpp)
 target_include_directories(nevr_quest_combat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_compile_options(nevr_quest_combat PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)

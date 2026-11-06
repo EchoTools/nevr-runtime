@@ -19,8 +19,14 @@ set(_cident o_combat_id_libr15_identity o_combat_id_libr15_patch_identity o_comb
 foreach(f got_hook hook_log hook_report)
   nevr_ht_obj(o_combat_${f} GROUP combat NOEXC INCS ${_csent} SRC src/quest/sentinel/${f}.cpp)
 endforeach()
-set(_ccore o_combat_got_hook o_combat_hook_log o_combat_hook_report)
+# The files folder, weakly (a test that names a folder of its own defines it and wins): the modules that moved from the q15t plugin name it.
+nevr_ht_obj(o_combat_files_dir GROUP combat NOEXC INCS ${_csent} SRC src/quest/tests/files_dir_stub.cpp)
+set(_ccore o_combat_got_hook o_combat_hook_log o_combat_hook_report o_combat_files_dir)
 set(_cf NOEXC PTHREAD DL INCS ${_csent})
+# The crash and timing guards (#2178) and the level scope they share: every program that links the registration table
+# (combat_install.cpp) links these, because the table names them (and the tick and the level answer, which the scope needs).
+set(_cguards src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/quest/combat/custctx.cpp src/quest/combat/droneguard.cpp
+    src/quest/combat/peerclamp.cpp src/quest/combat/level_scope.cpp)
 
 # The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
 # combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.
@@ -30,7 +36,7 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # combat runs in this process, one `combat_install` line per phase, a plain release that installs nothing and says so once, the
 # not_started record, and the `combat_config` line.
 nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} ${_cident}
-  SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/combat_install_test.cpp ${_cguards} src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
@@ -62,7 +68,7 @@ nevr_ht_test(memsys_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ciden
 # android_main. Before the first allocation it governs (the witness precedes the model's heap reads; a late run is the control), once, only in
 # the variants the gate allows (and a development build forced on), and each shipped row reads its switch.
 nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
-  SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/heap_step_test.cpp ${_cguards} src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp)
 # The game-thread tick (#2172, docs/adr/0046; docs/adr/0039): the real thunk and GotHook against the JUMP_SLOT of a libr15 image built in
@@ -72,7 +78,7 @@ nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
 # plugin's refusal.
 nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   INCS src/quest/plugins/q15t/src
-  SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+  SRC src/quest/tests/combat_tick_test.cpp ${_cguards} src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
       src/quest/plugins/q15t/src/game_tick.cpp src/quest/plugins/q15t/src/import_hook.cpp src/quest/plugins/q15t/src/got_swap.cpp
@@ -81,10 +87,23 @@ nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
 # through the tick, the lobbies arena players use, the legacy kill files, the release case (the game's own rate, nothing logged or registered).
 nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
-      src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp
+      ${_cguards} src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp
       src/quest/sentinel/build_variant.cpp)
 # What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
 # combat lobby and an Echo Arena level, each id checked against the CSymbol64 of its name; the lobbies arena players use are no class; an arena
 # level wins; a gamespace of another game, an absurd count and an unreadable game are no level.
 nevr_ht_test(combat_level_test GROUP combat ${_cf} TIMEOUT 120
   SRC src/quest/tests/combat_level_test.cpp src/quest/combat/combat_level.cpp)
+
+# The level scope (#2178): what the guards that act only in a combat level ask. Published from the combat tick, so a combat map, the combat
+# lobby and an Echo Arena level (which wins) are told apart without a read in the handler.
+nevr_ht_test(level_scope_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/level_scope_test.cpp src/quest/combat/level_scope.cpp src/quest/combat/combat_level.cpp
+      src/quest/combat/combat_tick.cpp src/quest/combat/combat_install.cpp ${_cguards} src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp
+      src/quest/combat/memsys.cpp src/quest/combat/refresh_rate.cpp src/quest/sentinel/build_variant.cpp)
+# fxtrail (#2178): the real handler through the thunk, installed into the JUMP_SLOT of a libr15 image built in memory, against a model of
+# CParticleEffectCS; acts only while a combat map is loaded (the real level scope against a model of the game's gamespace tables).
+nevr_ht_test(fxtrail_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/fxtrail_test.cpp ${_cguards} src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
+      src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/memsys.cpp
+      src/quest/combat/refresh_rate.cpp src/quest/sentinel/build_variant.cpp)

@@ -7,9 +7,14 @@
 
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/custctx.h"
+#include "quest/combat/droneguard.h"
+#include "quest/combat/fxtrail.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/peerclamp.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/combat/voipdrop.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -28,6 +33,12 @@ ModuleResult RefreshRateNormal() noexcept {
   return refresh_rate::Install(g_config.refreshRate.on, g_config.refreshRateLobby.on, g_config.refreshRateQuest2At72.on);
 }
 
+ModuleResult FxtrailNormal() noexcept { return fxtrail::Install(g_config.fxtrail.on); }
+ModuleResult VoipdropNormal() noexcept { return voipdrop::Install(g_config.voipdrop.on); }
+ModuleResult CustctxNormal() noexcept { return custctx::Install(g_config.custctx.on); }
+ModuleResult DroneguardNormal() noexcept { return droneguard::Install(g_config.droneguard.on, g_config.droneguardStage1.on); }
+ModuleResult PeerclampNormal() noexcept { return peerclamp::Install(g_config.peerclamp.on); }
+
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else; the count is deduced.
 //   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
@@ -39,6 +50,13 @@ constexpr std::array kModules{
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
+    // the crash and timing guards (#2178), in the plugin's order: fxtrail, voipdrop, custctx, (meshstep: F10), droneguard, peerclamp. Each writes its
+    // counts at the end of the process.
+    Module{"fxtrail", nullptr, &FxtrailNormal, &fxtrail::NoteEnd},
+    Module{"voipdrop", nullptr, &VoipdropNormal, &voipdrop::NoteEnd},
+    Module{"custctx", nullptr, &CustctxNormal, &custctx::NoteEnd},
+    Module{"droneguard", nullptr, &DroneguardNormal, &droneguard::NoteEnd},
+    Module{"peerclamp", nullptr, &PeerclampNormal, &peerclamp::NoteEnd},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -83,7 +101,9 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     if (fn == nullptr) continue;
     const ModuleResult result = fn();
     ++outcome.modules;
-    if (result.installed) {
+    if (result.off) {
+      ++outcome.off;
+    } else if (result.installed) {
       ++outcome.installed;
     } else {
       ++outcome.failed;
@@ -102,20 +122,36 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
   if (outcome.modules == 0) {
     std::snprintf(msg, sizeof(msg), "no combat module has a step in this phase yet; nothing of combat's is installed");
   } else {
-    std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s", outcome.installed, outcome.modules,
+    char off[64] = "";
+    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off by %s config key", outcome.off, outcome.off == 1 ? "its" : "their");
+    std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s%s", outcome.installed, outcome.modules, off,
                   outcome.failed == 0 ? "" : "; the others keep the game's own behaviour");
   }
   sentinel::LogFields(outcome.failed == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install",
                       {{"phase", PhaseName(phase)}, {"state", "ran"}, {"variant", build_variant::VariantName(RecordedVariant())},
                        {"active", 1}, {"active_reason", ReasonName(ActiveReason())}, {"modules", outcome.modules},
-                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"results", results},
+                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"results", results},
                        {"results_truncated", truncated ? 1 : 0}, {"msg", msg}});
   return outcome;
+}
+
+const Module* ShippedModules(std::size_t* count) noexcept {
+  *count = kModules.size();
+  return kModules.data();
 }
 
 Outcome InstallEarly() noexcept { return RunPhase(Phase::kEarly, kModules.data(), kModules.size()); }
 
 Outcome InstallNormal() noexcept { return RunPhase(Phase::kNormal, kModules.data(), kModules.size()); }
+
+void RunEnd(const Module* table, std::size_t count) noexcept {
+  if (!Active() || StateOf(Phase::kNormal).load(std::memory_order_acquire) != kDone) return;  // nothing was installed
+  for (std::size_t i = 0; i < count; ++i) {
+    if (table[i].end != nullptr) table[i].end();
+  }
+}
+
+void NoteProcessEnd() noexcept { RunEnd(kModules.data(), kModules.size()); }
 
 void NoteNormalNotStarted(const char* reasonToken) noexcept {
   if (!Active()) return;  // combat does not run here: nothing was owed
@@ -141,6 +177,16 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
                        {"refresh_rate_quest2_72_source", source(config.refreshRateQuest2At72.source)},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
                                "honours it (see combat_active); a module's own key set to false turns that module off"}});
+  // The crash and timing guards' keys are their own line: the sentinel's line buffer is fixed (hook_log.cpp, kLineCapacity), and one line for every
+  // key would cut its tail.
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config_guards",
+                      {{"fxtrail", config.fxtrail.on ? 1 : 0}, {"fxtrail_source", source(config.fxtrail.source)},
+                       {"voipdrop", config.voipdrop.on ? 1 : 0}, {"voipdrop_source", source(config.voipdrop.source)},
+                       {"custctx", config.custctx.on ? 1 : 0}, {"custctx_source", source(config.custctx.source)},
+                       {"droneguard", config.droneguard.on ? 1 : 0}, {"droneguard_source", source(config.droneguard.source)},
+                       {"droneguard_stage1", config.droneguardStage1.on ? 1 : 0}, {"droneguard_stage1_source", source(config.droneguardStage1.source)},
+                       {"peerclamp", config.peerclamp.on ? 1 : 0}, {"peerclamp_source", source(config.peerclamp.source)},
+                       {"msg", "a guard's own key set to false turns that guard off; the guards run where the combat modules run"}});
 }
 
 void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }
