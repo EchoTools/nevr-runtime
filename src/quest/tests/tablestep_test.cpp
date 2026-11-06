@@ -204,6 +204,31 @@ void EveryOtherScopeLeavesTheGamesObjectAlone() {
   End1();
 }
 
+// The resources of a combat map are built while its gamespace is still loading (in the in-flight table only, not yet in the two tables): that is a
+// combat match, and an Echo Arena level that is loading is not, whatever else is loaded.
+void AMapThatIsStillLoadingIsACombatMatchAndAnArenaLevelThatIsLoadingIsNot() {
+  for (const Where where : {Where::kCombatMapLoading, Where::kCombatMapLoadingAfterCombatLobby}) {
+    Begin1();
+    Build();
+    SetWhere(where);
+    QCHECK(tbs::InstallAt(&Lookup, g_pins, true).installed);
+    void* const obj = SlotFn()(nullptr, nullptr);
+    QCHECK(obj != nullptr && StepOf(obj) == 1 && tbs::CurrentStats().rewritten == 1 && tbs::CurrentStats().stock == 0);
+    std::free(obj);
+    End1();
+  }
+  for (const Where where : {Where::kArenaLoadingAfterCombat, Where::kArenaAndCombatLoading}) {
+    Begin1();
+    Build();
+    SetWhere(where);
+    QCHECK(tbs::InstallAt(&Lookup, g_pins, true).installed);
+    void* const obj = SlotFn()(nullptr, nullptr);
+    QCHECK(obj != nullptr && StepOf(obj) == 0x20 && tbs::CurrentStats().rewritten == 0 && tbs::CurrentStats().stock == 1);
+    std::free(obj);
+    End1();
+  }
+}
+
 // Each change of the loaded level writes one counts line with what the level that ended cost (see meshstep_test).
 void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
   Begin1();
@@ -220,7 +245,7 @@ void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
   QCHECK(counts.size() == 1U);
   if (counts.size() == 1U) {
     QCHECK(counts[0].level == sentinel::LogLevel::kInfo);
-    QCHECK(Golden(counts[0].text) == CountsText("combat_tablestep_counts", LevelHex("mpl_combat_gauss"), "combat", 0, 2));
+    QCHECK(Golden(counts[0].text) == CountsText("combat_tablestep_counts", LevelHex("mpl_combat_gauss"), "mpl_combat_gauss", "combat", 0, 2));
   }
   std::free(SlotFn()(nullptr, nullptr));
   std::free(SlotFn()(nullptr, nullptr));
@@ -228,7 +253,7 @@ void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
   std::free(SlotFn()(nullptr, nullptr));
   counts = Lines("combat_tablestep_counts");
   QCHECK(counts.size() == 2U);
-  if (counts.size() == 2U) QCHECK(Golden(counts[1].text) == CountsText("combat_tablestep_counts", LevelHex("mpl_arena_a"), "other", 3, 0));
+  if (counts.size() == 2U) QCHECK(Golden(counts[1].text) == CountsText("combat_tablestep_counts", LevelHex("mpl_arena_a"), "mpl_arena_a", "other", 3, 0));
   End1();
 }
 
@@ -332,6 +357,7 @@ int main() {
   AStepThatIsNotTheStockValueIsLeftAloneAndWarnedAboutOnce();
   ANullResultIsReturnedAsItIs();
   EveryOtherScopeLeavesTheGamesObjectAlone();
+  AMapThatIsStillLoadingIsACombatMatchAndAnArenaLevelThatIsLoadingIsNot();
   ALevelChangeWritesTheCountsOfTheLevelThatEnded();
   AnInstallRefusalLeavesTheWordAlone();
   TheSwitchAndASecondStepInstallNothing();

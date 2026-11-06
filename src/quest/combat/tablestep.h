@@ -12,8 +12,7 @@
  *
  * Arena (docs/adr/0046). Arena and combat run on the same APK. What changes for an arena match: nothing the player sees or the game
  * computes; the object is the game's. What it costs there: each CreateInstance asks the loaded levels once (`table_step::CurrentScope`, a
- * seven process_vm_readv calls with one gamespace loaded: four for the
- * two tables, three for each gamespace) and runs the game's function; it runs once per shader set the game creates, on a loading thread, never
+ * seven process_vm_readv calls with one gamespace loaded, four for the two tables and three for each gamespace, plus two for the in-flight table and three for each fiber in it) and runs the game's function; it runs once per shader set the game creates, on a loading thread, never
  * per frame. The creations an arena level costs are counted per level change (`combat_tablestep_counts`);
  * not yet read on a headset.
  *

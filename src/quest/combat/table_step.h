@@ -8,7 +8,9 @@
  * Scope (the arena rule of docs/adr/0046). Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in,
  * and a step of 1 costs a table a reallocation for every entry added, a price arena has no reason to pay. The modules act only while the
  * game's loaded levels say combat: `combat::level::Classify` (combat_level.h) over the CR15Game the combat tick verified (tick::Game), with
- * the lobby rule off. A combat map loaded and no Echo Arena level loaded is `kCombat`; an Echo Arena level wins over a combat map still loaded
+ * the lobby rule off and the gamespaces still loading included (a level is stored in its gamespace before the level's resources are built, and the
+ * gamespace enters CR15Game's two tables only after, so without the in-flight table the modules would see nothing of the level whose resources they
+ * act on; combat_level.h Scan `inFlight`). A combat map loaded or loading and no Echo Arena level loaded is `kCombat`; an Echo Arena level, loaded or loading, wins over a combat map still loaded
  * during a transition, so the resources an arena match builds on the way out of combat are stock. Every other answer, the lobbies arena players
  * use included, is `kOther`, and a resource built before the tick has verified the game is `kUnknown`: both build the game's own object. The
  * answer is read at each construction and never cached, because the resources of a level are built right after the level is stored and a
@@ -54,7 +56,7 @@ using CountsFn = Counts (*)() noexcept;
 // Registers a module's counters under its summary event (`combat_<module>_counts`; the string must outlive the process). On each change of the
 // loaded level, CurrentScope writes one Info line per registered module with the counts since the previous line, so a headset log says how many
 // objects an arena level cost and how many a combat level changed (ADR 0038). A module with nothing to report since the last line writes none.
-// Fields: `level` (CSymbol64 of the level that ended, 0 when none), `scope` (its scope), `left_alone`, `changed`. At most kMaxCounted modules.
+// Fields: `level` (CSymbol64 of the level that ended, 0 when none) and `level_name` (its name when combat_level knows it, else "other"), `scope` (its scope), `left_alone`, `changed`. At most kMaxCounted modules.
 inline constexpr std::size_t kMaxCounted = 8;
 void RegisterCounts(const char* event, CountsFn fn) noexcept;
 

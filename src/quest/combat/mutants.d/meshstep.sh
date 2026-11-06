@@ -117,3 +117,17 @@ runm ts_counts_level_field  $TS "s/{\"level\", sentinel::HexString(levelText, le
 runm ts_counts_level_debug  $TS "s/sentinel::LogFields(sentinel::LogLevel::kInfo, r.event,/sentinel::LogFields(sentinel::LogLevel::kDebug, r.event,/"
 runm ts_register_dedup      $TS "s/g_counted\[i\].event == event || std::strcmp(g_counted\[i\].event, event) == 0/false/"
 runm ts_note_not_called     $TS "s/^  NoteScope(scope, level);\$/  (void)\&NoteScope; (void)level;/"
+# the in-flight gamespaces (combat_level.cpp, combat_level_targets.h; asked by the scope): a combat map that is only loading is a combat match
+LV=src/quest/combat/combat_level.cpp
+LT=src/quest/combat/combat_level_targets.h
+runm ts_inflight_not_asked  $TS "s/&level, \/\*inFlight=\*\/true)/\&level, \/*inFlight=*\/false)/"
+runm lv_inflight_ignored    $LV "s/^  if (inFlight) ScanInFlight(out, game);\$/  (void)inFlight; (void)\&ScanInFlight;/"
+runm lv_fiber_rows_offset   $LT "s/kFiberRows = 0x1ed8,/kFiberRows = 0x1ee0,/"
+runm lv_fiber_count_offset  $LT "s/kFiberCount = 0x1f08,/kFiberCount = 0x1f10,/"
+runm lv_fiber_gs_offset     $LT "s/kFiberGamespace = 0x30;/kFiberGamespace = 0x38;/"
+runm lv_fiber_stride        $LV "s/rows + i \* sizeof(std::uintptr_t)/rows + i/"
+runm lv_fiber_count_cap     $LV "s/  if (!ok || rows == 0 || count > kMaxGamespaces) return;/  if (!ok || rows == 0) return;/"
+runm lv_fiber_rows_unchecked $LV "s/  if (!ok || rows == 0 || count > kMaxGamespaces) return;/  if (!ok || count > kMaxGamespaces) return;/"
+runm lv_arena_wins_not      $LV "s/  if (IsEchoArenaLevel(current) \&\& !out.echoArena) {/  if (IsEchoArenaLevel(current) \&\& !out.echoArena \&\& !out.combatMap) {/"
+runm lv_name_dropped        $LV "s/    if (named.id == level) return named.name;/    if (named.id == level + 1) return named.name;/"
+runm ts_level_name_field    $TS "s/{\"level_name\", name != nullptr ? name : \"other\"}/{\"level_name\", \"other\"}/"

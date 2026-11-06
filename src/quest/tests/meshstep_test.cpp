@@ -330,6 +330,35 @@ void EveryOtherScopeIsTheGamesOwnConstructor() {
   }
 }
 
+// The resources of a combat map are built while its gamespace is still loading (in the in-flight table only, not yet in the two tables): that is a
+// combat match, and an Echo Arena level that is loading is not, whatever else is loaded.
+void AMapThatIsStillLoadingIsACombatMatchAndAnArenaLevelThatIsLoadingIsNot() {
+  for (const Where where : {Where::kCombatMapLoading, Where::kCombatMapLoadingAfterCombatLobby}) {
+    Begin1();
+    Build();
+    SetWhere(where);
+    QCHECK(ms::InstallAt(&Lookup, g_pins, &g_fns, true).installed);
+    std::uint64_t init[3] = {0, 1, 2};
+    std::free(Construct(init));
+    QCHECK(g_stockCalls == 0 && g_blockCalls == 11 && ms::CurrentStats().built == 1);
+    End1();
+  }
+  for (const Where where : {Where::kArenaLoadingAfterCombat, Where::kArenaAndCombatLoading}) {
+    Begin1();
+    Build();
+    SetWhere(where);
+    QCHECK(ms::InstallAt(&Lookup, g_pins, &g_fns, true).installed);
+    std::uint64_t init[3] = {0, 1, 2};
+    std::uint8_t* const obj = Construct(init);
+    std::uint8_t* const ref = ReferenceObject(init);
+    QCHECK(g_stockCalls == 1 && g_blockCalls == 0 && ms::CurrentStats().stock == 1);
+    QCHECK(obj != nullptr && ref != nullptr && std::memcmp(obj, ref, kObjectBytes) == 0);
+    std::free(ref);
+    std::free(obj);
+    End1();
+  }
+}
+
 // Each change of the loaded level writes one counts line per module with what the level that ended cost: the objects left as the game made them
 // and the objects changed. Nothing is written for a level that built nothing, and none before the level changes (the arena cost is measurable).
 void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
@@ -347,7 +376,7 @@ void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
   QCHECK(counts.size() == 1U);
   if (counts.size() == 1U) {
     QCHECK(counts[0].level == sentinel::LogLevel::kInfo);
-    QCHECK(Golden(counts[0].text) == CountsText("combat_meshstep_counts", LevelHex("mpl_combat_gauss"), "combat", 0, 2));
+    QCHECK(Golden(counts[0].text) == CountsText("combat_meshstep_counts", LevelHex("mpl_combat_gauss"), "mpl_combat_gauss", "combat", 0, 2));
   }
   std::free(Construct(init));
   std::free(Construct(init));
@@ -355,7 +384,7 @@ void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
   std::free(Construct(init));
   counts = Lines("combat_meshstep_counts");
   QCHECK(counts.size() == 2U);
-  if (counts.size() == 2U) QCHECK(Golden(counts[1].text) == CountsText("combat_meshstep_counts", LevelHex("mpl_arena_a"), "other", 3, 0));
+  if (counts.size() == 2U) QCHECK(Golden(counts[1].text) == CountsText("combat_meshstep_counts", LevelHex("mpl_arena_a"), "mpl_arena_a", "other", 3, 0));
   // The counts are since the previous line, not since the start: two more with nothing loaded, then the arena again.
   std::free(Construct(init));
   std::free(Construct(init));
@@ -363,7 +392,7 @@ void ALevelChangeWritesTheCountsOfTheLevelThatEnded() {
   std::free(Construct(init));
   counts = Lines("combat_meshstep_counts");
   QCHECK(counts.size() == 3U);
-  if (counts.size() == 3U) QCHECK(Golden(counts[2].text) == CountsText("combat_meshstep_counts", "0x0000000000000000", "other", 3, 0));
+  if (counts.size() == 3U) QCHECK(Golden(counts[2].text) == CountsText("combat_meshstep_counts", "0x0000000000000000", "other", "other", 3, 0));
   End1();
 }
 
@@ -382,7 +411,7 @@ void WhatWasBuiltBeforeAnyGameWasKnownIsReportedWhenOneIs() {
   std::free(Construct(init));
   const std::vector<Line> counts = Lines("combat_meshstep_counts");
   QCHECK(counts.size() == 1U);
-  if (counts.size() == 1U) QCHECK(Golden(counts[0].text) == CountsText("combat_meshstep_counts", "0x0000000000000000", "unknown", 2, 0));
+  if (counts.size() == 1U) QCHECK(Golden(counts[0].text) == CountsText("combat_meshstep_counts", "0x0000000000000000", "other", "unknown", 2, 0));
   End1();
 }
 
@@ -570,6 +599,7 @@ int main() {
   APinWordThatCannotBeReadIsAMismatch();
   ACombatMatchBuildsTheMeshListInTheStockOrderWithStepOne();
   EveryOtherScopeIsTheGamesOwnConstructor();
+  AMapThatIsStillLoadingIsACombatMatchAndAnArenaLevelThatIsLoadingIsNot();
   ALevelChangeWritesTheCountsOfTheLevelThatEnded();
   WhatWasBuiltBeforeAnyGameWasKnownIsReportedWhenOneIs();
   ARegistrationIsKeptOnce();

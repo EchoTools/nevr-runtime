@@ -17,6 +17,18 @@ constexpr std::uintptr_t kRowGamespace = 8;
 constexpr std::uintptr_t kGamespaceOwner = pin::kGamespaceOwnerOffset;
 constexpr std::uintptr_t kGamespaceLevel = pin::kGamespaceLevelOffset;
 
+struct NamedLevel {
+  std::uint64_t id;
+  const char* name;
+};
+constexpr NamedLevel kNames[] = {
+    {0x43e2da7914642604ULL, "mpl_combat_dyson"}, {0x42670f2bed45703cULL, "mpl_combat_combustion"}, {0xdf5ca7b7dfa383d4ULL, "mpl_combat_fission"},
+    {0x43e2da7a0c623a19ULL, "mpl_combat_gauss"}, {0xcb9977f7fc2b4526ULL, "mpl_lobby_b_combat"},      {0x576ed3f8428ebc4bULL, "mpl_arena_a"},
+    {0x7691d78d414c5701ULL, "mpl_arena_a_lowspec"}, {0x576ed3f8428ebc48ULL, "mpl_arena_b"},         {0x3f20b99c97955721ULL, "mpl_tutorial_a"},
+    {0x5763ceff4e96bc48ULL, "mpl_lobby_b"},      {0xd09afd15b1c75c04ULL, "mpl_lobby_b2"},           {0x05361c73bb73db19ULL, "mpl_lobby_b2_lowspec"},
+    {0x6daa00a6d33d44b7ULL, "mpl_lobby_b_arena"}, {0xcb9967f7f220453eULL, "mpl_lobby_b_social"},
+};
+
 template <std::size_t N>
 bool In(std::uint64_t level, const std::uint64_t (&set)[N]) noexcept {
   for (const std::uint64_t v : set) {
@@ -31,7 +43,49 @@ bool IsCombatMap(std::uint64_t level) noexcept { return In(level, kCombatLevels)
 bool IsCombatLobby(std::uint64_t level) noexcept { return level == kCombatLobby; }
 bool IsEchoArenaLevel(std::uint64_t level) noexcept { return In(level, kEchoArenaLevels); }
 
-Loaded Scan(std::uintptr_t game) noexcept {
+const char* LevelName(std::uint64_t level) noexcept {
+  for (const NamedLevel& named : kNames) {
+    if (named.id == level) return named.name;
+  }
+  return nullptr;
+}
+
+namespace {
+
+void Note(Loaded& out, std::uint64_t current) noexcept {
+  if (IsEchoArenaLevel(current) && !out.echoArena) {
+    out.echoArena = true;
+    out.echoArenaLevel = current;
+  } else if (IsCombatMap(current) && !out.combatMap) {
+    out.combatMap = true;
+    out.combatMapLevel = current;
+  } else if (IsCombatLobby(current) && !out.combatLobby) {
+    out.combatLobby = true;
+    out.combatLobbyLevel = current;
+  }
+}
+
+// The gamespaces still being loaded: the init fibers' gamespaces, whose level is stored before their resources are built.
+void ScanInFlight(Loaded& out, std::uintptr_t game) noexcept {
+  bool ok = true;
+  const auto rows = SafeRead<std::uintptr_t>(game + pin::kFiberRows, &ok);
+  const auto count = SafeRead<std::uint64_t>(game + pin::kFiberCount, &ok);
+  if (!ok || rows == 0 || count > kMaxGamespaces) return;
+  for (std::uint64_t i = 0; i < count; ++i) {
+    bool rowOk = true;
+    const auto fiber = SafeRead<std::uintptr_t>(rows + i * sizeof(std::uintptr_t), &rowOk);
+    if (!rowOk || fiber == 0) continue;
+    const auto gamespace = SafeRead<std::uintptr_t>(fiber + pin::kFiberGamespace, &rowOk);
+    if (!rowOk || gamespace == 0) continue;  // the fiber table is this game's own, so there is no owner to check
+    const auto current = SafeRead<std::uint64_t>(gamespace + kGamespaceLevel, &rowOk);
+    if (!rowOk) continue;
+    Note(out, current);
+  }
+}
+
+}  // namespace
+
+Loaded Scan(std::uintptr_t game, bool inFlight) noexcept {
   Loaded out;
   for (const auto& table : kTables) {
     bool ok = true;
@@ -45,23 +99,15 @@ Loaded Scan(std::uintptr_t game) noexcept {
       if (SafeRead<std::uintptr_t>(gamespace + kGamespaceOwner, &rowOk) != game || !rowOk) continue;
       const auto current = SafeRead<std::uint64_t>(gamespace + kGamespaceLevel, &rowOk);
       if (!rowOk) continue;
-      if (IsEchoArenaLevel(current) && !out.echoArena) {
-        out.echoArena = true;
-        out.echoArenaLevel = current;
-      } else if (IsCombatMap(current) && !out.combatMap) {
-        out.combatMap = true;
-        out.combatMapLevel = current;
-      } else if (IsCombatLobby(current) && !out.combatLobby) {
-        out.combatLobby = true;
-        out.combatLobbyLevel = current;
-      }
+      Note(out, current);
     }
   }
+  if (inFlight) ScanInFlight(out, game);
   return out;
 }
 
-Kind Classify(std::uintptr_t game, bool lobby, std::uint64_t* level) noexcept {
-  const Loaded loaded = Scan(game);
+Kind Classify(std::uintptr_t game, bool lobby, std::uint64_t* level, bool inFlight) noexcept {
+  const Loaded loaded = Scan(game, inFlight);
   if (loaded.echoArena) {  // an Echo Arena level wins, whatever else is loaded and whether or not the lobby rule is on
     *level = loaded.echoArenaLevel;
     return Kind::kEchoArena;

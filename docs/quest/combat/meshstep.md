@@ -30,13 +30,13 @@ Switch: `combat.meshstep` in `config.yaml` (default `false`: the plugin's copy n
 
 ## Scope (arena shares the APK)
 
-The handler acts only when `table_step::CurrentScope()` says `combat`: a combat map is loaded and no Echo Arena level is
-(`combat_level.h` `Classify`, lobby rule off, over the CR15Game the combat tick verified). An Echo Arena level wins over a combat map still
+The handler acts only when `table_step::CurrentScope()` says `combat`: a combat map is loaded or loading and no Echo Arena level is
+(`combat_level.h` `Classify`, lobby rule off, in-flight gamespaces included, over the CR15Game the combat tick verified). An Echo Arena level wins over a combat map still
 loaded during a transition. The lobbies arena players use, the combat lobby, nothing loaded, and no game verified yet are `other` or `unknown`:
 the game's constructor runs. The scope is read at each construction and never cached.
 
 For an arena match on the combat APK: the player sees nothing different and the game computes the same, since the constructor is the game's.
-The added work is one scope read per mesh list built (seven `process_vm_readv` calls with one gamespace loaded) on a loading thread, never per
+The added work is one scope read per mesh list built (seven `process_vm_readv` calls with one gamespace loaded, plus two for the in-flight table and three for each fiber in it) on a loading thread, never per
 frame. What an arena level costs is counted per level change (`combat_meshstep_counts`); it has not been read on a headset yet.
 
 ## Refusals (all loud, nothing hooked)
@@ -65,14 +65,16 @@ byte for byte, each refusal, the kill file, the golden lines. `src/quest/combat/
 (`src/quest/combat/mutants.sh meshstep`). The slot, the function and every pinned word are checked against the real file by `got_pinned_test`
 (`just test-quest-hooks-pinned`, which needs the store APK).
 
-## When the level is stored
+## When the level is in the scope
 
-`CncaGameSpace::LoadLevel` (ELF 0x17e5484) stores the level at gamespace + 0x58 (`str x22,[x19,#0x58]` at 0x17e54ec) before it calls
-`CResourceInstance::LoadAndInit` (0x17e55d4) and `CArchiveLoader::LoadArchiveAsync` (0x17e56a4), which are where the level's resources come from
-[INFERENCE from the call order in this one function; the constructors of those resources were not followed]. Not shown: that the gamespace is
-already in CR15Game's tables (which the scope reads) when the store happens, and that no resource of the level is built earlier. If either is
-false the modules do nothing in combat with every line green, which is why the headset row below requires `built`/`first`/`steps` lines during a
-combat map load.
+`CncaGameSpace::LoadLevel` (ELF 0x17e5484) stores the level at gamespace + 0x58 (0x17e54ec) and then builds the level's resources
+(`CResourceInstance::LoadAndInit` 0x17e55d4, `CArchiveLoader::LoadArchiveAsync` 0x17e56a4, the component systems). The gamespace enters
+CR15Game's two tables, which `combat_level` has always read, only after: `CGameSpaceInitFiber::Run` (0x17e4d34) sets the fiber's done bit
+(0x17e4d6c) after `LoadLevel` returns, and `UpdateGameSpaceInit` (0x17ecc7c) inserts the gamespace at 0x17ed480 on the path that bit opens. While the
+resources are built, the gamespace is in the in-flight table only: rows of init-fiber pointers at game + 0x1ed8, count at + 0x1f08, the fiber's
+gamespace at fiber + 0x30. The scope reads it too (`combat_level` `Scan(game, inFlight)`, four pinned instruction words), so a combat map that is
+loading counts, and an Echo Arena level that is loading wins. [FACT as read from the code; that the four resource classes are built inside the
+window is INFERENCE.] Not shown on a headset: that the fiber table holds the gamespace at the time the resources are built.
 
 ## Headset check (log only)
 
@@ -81,4 +83,4 @@ Arena match: `combat_meshstep_stock` with `"scope":"other"` and no `combat_meshs
 Falsifiers: `combat_meshstep_pin` (the libr15 differs from the pins), `"reason":"vtable_unreadable"`, an `installed` line with no `built` line
 after a combat map loads (the constructor does not run through the slot, or runs before the install).
 
-Required for the headset row: `combat_meshstep_built` during a combat map load (with `combat.meshstep: true` in `config.yaml` for this row; the key defaults to false); `combat_meshstep_counts` lines at the level changes, with `changed` above 0 for the combat level and `left_alone` for the arena one.
+Required for the headset row: `combat_meshstep_built` during a combat map load (with `combat.meshstep: true` in `config.yaml` for this row; the key defaults to false); `combat_meshstep_counts` lines at the level changes (`level_name` says which level ended), with `changed` above 0 for the combat level and `left_alone` for the arena one. The last level of a session has no line, because nothing ends it: load another level after the combat map to get its line.

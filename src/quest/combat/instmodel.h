@@ -10,8 +10,7 @@
  * constructor's stores reads a step, so the object after the handler is the object a constructor with `mov w20,#1` would build.
  *
  * Arena (docs/adr/0046). Arena and combat run on the same APK. What changes for an arena match: nothing the player sees or the game
- * computes; the object is the game's. What it costs there: each construction asks the loaded levels once (`table_step::CurrentScope`, seven process_vm_readv calls
- * with one gamespace loaded: four for the two tables, three for each gamespace) and then runs the game's constructor; it runs once per instanced-model resource the game builds, on a loading
+ * computes; the object is the game's. What it costs there: each construction asks the loaded levels once (`table_step::CurrentScope`, seven process_vm_readv calls with one gamespace loaded, four for the two tables and three for each gamespace, plus two for the in-flight table and three for each fiber in it) and then runs the game's constructor; it runs once per instanced-model resource the game builds, on a loading
  * thread, never per frame. The constructions an arena level costs are counted per level change
  * (`combat_instmodel_counts`); not yet read on a headset.
  *

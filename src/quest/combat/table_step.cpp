@@ -45,8 +45,9 @@ void WriteCounts(Scope scope, std::uint64_t level) noexcept {
     r.lastLeft = now.leftAlone;
     r.lastChanged = now.changed;
     char levelText[19];
+    const char* const name = level::LevelName(level);
     sentinel::LogFields(sentinel::LogLevel::kInfo, r.event,
-                        {{"level", sentinel::HexString(levelText, level)}, {"scope", ScopeName(scope)}, {"left_alone", left}, {"changed", changed},
+                        {{"level", sentinel::HexString(levelText, level)}, {"level_name", name != nullptr ? name : "other"}, {"scope", ScopeName(scope)}, {"left_alone", left}, {"changed", changed},
                          {"msg", "objects built since the last level change, by the scope that was then loaded: left as the game made them, and changed"}});
   }
 }
@@ -106,7 +107,7 @@ Scope CurrentScope() noexcept {
   g_scopeReads.fetch_add(1, std::memory_order_relaxed);
   std::uint64_t level = 0;
   // The lobby rule is off: only a combat map counts, and an Echo Arena level that is loaded wins over it (combat_level.h).
-  const Scope scope = level::Classify(game, /*lobby=*/false, &level) == level::Kind::kCombatOrLobby ? Scope::kCombat : Scope::kOther;
+  const Scope scope = level::Classify(game, /*lobby=*/false, &level, /*inFlight=*/true) == level::Kind::kCombatOrLobby ? Scope::kCombat : Scope::kOther;
   NoteScope(scope, level);
   return scope;
 }

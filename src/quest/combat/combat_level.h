@@ -28,7 +28,12 @@ struct Loaded {
   std::uint64_t combatLobbyLevel = 0;
   std::uint64_t echoArenaLevel = 0;
 };
-Loaded Scan(std::uintptr_t game) noexcept;
+//
+// `inFlight` also reads the gamespaces still being loaded: CncaGame's init-fiber table (rows game+0x1ed8, count +0x1f08, the fiber's gamespace at
+// +0x30). A gamespace enters the two tables above only after its level's resources are built, but the level is stored in it before, so a caller that
+// acts while resources are built (the table-step modules) needs this source; the same rules apply to a level found there, an Echo Arena level
+// winning wherever it is found. Callers that decide per frame on a level that is up (refresh_rate, pfx) leave it false and see what they always did.
+Loaded Scan(std::uintptr_t game, bool inFlight = false) noexcept;
 
 // What the loaded gamespaces decide: an Echo Arena level is kEchoArena and wins always; else a combat map (or, with `lobby`, the combat lobby)
 // is kCombatOrLobby; anything else, every other lobby level included, is kNone.
@@ -39,7 +44,10 @@ bool IsCombatLobby(std::uint64_t level) noexcept;
 bool IsEchoArenaLevel(std::uint64_t level) noexcept;
 
 // What the loaded levels of `game` decide; `level` gets the deciding level's CSymbol64 (0 when none).
-Kind Classify(std::uintptr_t game, bool lobby, std::uint64_t* level) noexcept;
+Kind Classify(std::uintptr_t game, bool lobby, std::uint64_t* level, bool inFlight = false) noexcept;
+
+// The name of a level this file knows (a combat map, the combat lobby, an Echo Arena level, the other lobbies), or nullptr.
+const char* LevelName(std::uint64_t level) noexcept;
 
 // True when one of the game's gamespaces holds a combat map (never a lobby or arena level); `level` gets it (0 when none).
 bool CombatMapLoaded(std::uintptr_t game, std::uint64_t* level) noexcept;
