@@ -53,7 +53,7 @@ is not covered.
   arguments (`voipdrop_test`: the arguments, the free-page case, head 0, every doubt). An arena match with free memory sees no change; on a plain release the module installs nothing.
 - **Cost.** `ReceiveVoip` runs once per remote voice packet; the rate per frame is not known, and `combat_voipdrop_stats` counts it (`packets`, `probed`, `dropped`; written at the end of the
   process and every 16384 packets). In the common case each packet pays the thunk's counter, two relaxed atomic increments and one `process_vm_readv` (the free-head read). Only a packet
-  whose table needs a page pays the second read, three game calls and the context restore. Host numbers for the common path are in the pull request that moved it. Not measured on a headset.
+  whose table needs a page pays the second read, three game calls and the context restore. Host numbers for the common path (x86-64, -O2, 5,000,000 calls through the installed thunk, three repeats, a temporary benchmark that is not committed): about 840 to 895 ns added per packet over a 2 to 4 ns direct call, almost all of it the one `process_vm_readv`; at that figure the guard stays inside ADR 0038's 10 us per hook up to about 11 packets per frame, and the rate is what `combat_voipdrop_stats` measures. Not measured on a headset.
 
 ## Gate: no file hash
 

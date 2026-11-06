@@ -54,7 +54,7 @@ The handler (a `CallbackThunk` on the slot, installed by the hook manager): call
 - **Cost.** `EffectTime` runs once per effect handle per query; how often per frame is not known: `combat_fxtrail_stats` counts every call (`calls`) and those made in a combat map
   (`in_combat`), written at the end of the process and every 16384 combat-map calls, so a headset run gives the rate (ADR 0038). In arena each call pays the thunk's counter and one atomic
   load; the scope's tick adds one clock read per frame and, every half second, one `level::Scan` (two table reads and, per gamespace, three more `process_vm_readv` reads). In a combat map
-  each call also pays up to four `process_vm_readv` calls (the plugin's cost, kept). Host numbers: see the pull request that moved it. Not measured on a headset.
+  each call also pays up to four `process_vm_readv` calls (the plugin's cost, kept). Host numbers (x86-64, -O2, 2,000,000 calls through the installed thunk on a libr15 image built in memory, a stand-in `EffectTime`, three runs, a temporary benchmark that is not committed, on a machine that was building at the time): an unhooked slot 1.5 to 2.5 ns per call; hooked, in an Echo Arena level, 5.5 to 11.2 ns per call (4 to 9 ns added); hooked, in a combat map, 3.1 to 3.4 us per call (the four reads). At 3.4 us the guard stays inside ADR 0038's 10 us per hook up to about 3 calls per frame in a combat map; the rate is what `combat_fxtrail_stats` measures. Not measured on a headset.
 
 ## Gate: no file hash
 
