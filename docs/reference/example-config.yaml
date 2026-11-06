@@ -317,13 +317,12 @@ services:
 
   # Dedicated server only: the ServerDB token route the server registers through, dialed with the server's
   # access token as `Authorization: Bearer` (docs/adr/0001-serverdb-token-auth.md); guilds and regions are added
-  # as query parameters. Without it a server with auth.password registers through socket_uri with
-  # identity.discord_id and auth.password in the query; a server with no auth.password (it signed in by device
-  # code) registers on the token route at socket_uri, so it needs no configuration. A server with none of
-  # serverdb, serverdb_uri, or socket_uri plus identity.discord_id stops at registration:
+  # as query parameters. Without it a server (signed in by device code) registers on the token route at
+  # socket_uri, so it needs no configuration. A server with none of serverdb, serverdb_uri, or socket_uri
+  # stops at registration:
   # `no ServerDB URI: set services.serverdb_uri`.
   # The route taken is logged: `[NEVR.GAMESERVER] serverdb route=<explicit|token|url_params|none> ...`.
-  # Default (absent): socket_uri for a server with no auth.password; none for a server with one.
+  # Default (absent): socket_uri.
   # Not a secret.
   # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration, flat key nevr_serverdb_uri)
   # serverdb_uri: "ws://g.echovrce.com:80/nevr"
@@ -427,7 +426,8 @@ network:
 # identity — server identity fields sent during ServerDB registration
 #
 # These identify the server instance to the community infrastructure.
-# All keys are optional but a server without them will fail to register.
+# All keys are optional. A server that signs in by device code takes its identity from the
+# access token and needs none of them.
 #
 # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration),
 #         src/runtime/compat/ws_bridge.cpp
@@ -435,10 +435,11 @@ network:
 
 identity:
   # Discord user ID of the server owner. Sent as a query parameter in the
-  # ServerDB WebSocket URI. Required for server registration.
+  # ServerDB WebSocket URI on the legacy (URL-parameter) registration route only; a device-code server
+  # does not use it.
   # Absent: the server registers through services.serverdb_uri, and with neither it stops at registration.
   # Not a secret, but personally identifying — do not commit to public repos.
-  # discord_id: "${NEVR_DISCORD_ID:?discord_id is required for server registration}"
+  # discord_id: "<the Discord id of the server owner>"
 
 # ---------------------------------------------------------------------------
 # auth — authentication and API endpoint configuration
@@ -483,12 +484,9 @@ auth:
   # SECRET — use env-var substitution in production.
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
-  # Server password. Sent as a query parameter in the ServerDB WebSocket URI (the key the runtime reads is auth.password).
-  # Optional; absent means the server signs in by device code like a client: at startup it prints a code and the
-  # page that takes it on the console (standard error), waits for the approval, asks for a new code when one runs
-  # out, and keeps the token in the sign-in cache of the nevr root, so a restart needs no new code.
-  # SECRET — use env-var substitution in production.
-  # password: "${NEVR_PASSWORD:?password is required}"
+  # A dedicated server needs no username or password: it signs in by device code. At startup it prints a code and
+  # the page that takes it on the console (standard error) and in the log, waits for the approval, asks for a new
+  # code when one runs out, and keeps the token in the sign-in cache of the nevr root, so a restart needs no new code.
 
 # ---------------------------------------------------------------------------
 # guilds — guild filter for server registration
