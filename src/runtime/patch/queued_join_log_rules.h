@@ -79,35 +79,38 @@ inline std::string FormatSuccessLine(std::int32_t before, std::int32_t after, co
          " action=" + ActionName(v.action) + " reason=" + v.reason + " (" + ActionConsequence(v.action) + ")";
 }
 
-enum class LeaveResult { Started, NotStarted, NothingQueued };
+// The game's "Leave For Match" runs LeaveGame (whose lobby End sets the status to 0) and then, when its own conditions
+// allow, StartSessionJoin on the queue buffer. StartSessionJoin always switches to 8 and sends the request, whether or not
+// an id was queued, so the status after says whether a join went out; the queue says whether it was for a queued id.
+enum class LeaveResult { Started, StartedNothingQueued, NotStarted };
 
 inline const char* LeaveResultName(LeaveResult r) {
   switch (r) {
     case LeaveResult::Started:
       return "started";
+    case LeaveResult::StartedNothingQueued:
+      return "started_nothing_queued";
     case LeaveResult::NotStarted:
       return "not_started";
-    case LeaveResult::NothingQueued:
-      return "nothing_queued";
   }
   return "not_started";
 }
 
-// queuedBefore / queuedAfter: whether the queue buffer held a session id (not the game's invalid id) before and after
-// the game's "Leave For Match" ran.
-inline LeaveResult ClassifyLeave(bool queuedBefore, bool queuedAfter) {
-  if (!queuedBefore) return LeaveResult::NothingQueued;
-  return queuedAfter ? LeaveResult::NotStarted : LeaveResult::Started;
+// queuedBefore: whether the queue buffer held a session id (not the game's invalid id) when Leave For Match began.
+// statusAfter: the lobby status when it returned.
+inline LeaveResult ClassifyLeave(bool queuedBefore, std::int32_t statusAfter) {
+  if (statusAfter != kStatusJoining) return LeaveResult::NotStarted;
+  return queuedBefore ? LeaveResult::Started : LeaveResult::StartedNothingQueued;
 }
 
 inline const char* LeaveConsequence(LeaveResult r) {
   switch (r) {
     case LeaveResult::Started:
       return "the game left its session and sent the queued join request";
+    case LeaveResult::StartedNothingQueued:
+      return "the game left its session and a join request was sent with no queued id";
     case LeaveResult::NotStarted:
-      return "the game's own conditions held the join back and it is still queued";
-    case LeaveResult::NothingQueued:
-      return "no join was queued, so nothing was sent";
+      return "the game left its session but sent no join request; the queued join is gone";
   }
   return "";
 }
@@ -119,14 +122,15 @@ inline std::string FormatLeaveLine(LeaveResult result, const nevr_lobby_frame::G
          " status_after=" + std::to_string(after) + " (" + LeaveConsequence(result) + ")";
 }
 
-// A queued join is dropped when the status leaves 7 for anything but 8 (8 is the join starting, the acted-on line).
+// A queued join is dropped when the status leaves 7 for anything but 8 (8 is the join starting, the acted-on line). It
+// leaves through SwitchTo, or through the lobby's End, which writes 0 directly (echovr.exe 0x14016230f); `by` names which.
 constexpr bool IsDrop(std::int32_t from, std::int32_t to) {
   return from == kStatusQueued && to != kStatusQueued && to != kStatusJoining;
 }
 
-inline std::string FormatDropLine(const nevr_lobby_frame::Guid& session, std::int32_t to) {
+inline std::string FormatDropLine(const nevr_lobby_frame::Guid& session, std::int32_t to, const char* by) {
   return std::string("[NEVR.MATCH] queued join dropped session=") + SessionText(session) +
-         " status_to=" + std::to_string(to) + " (no join request was sent for the queued session)";
+         " status_to=" + std::to_string(to) + " by=" + by + " (no join request was sent for the queued session)";
 }
 
 }  // namespace nevr_queued_join_log

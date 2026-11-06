@@ -42,6 +42,14 @@ constexpr std::array<std::uint8_t, 18> kSwitchToPrologue = {0x48, 0x89, 0x5C, 0x
                                                             0x20, 0x55, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57};
 using SwitchToFn = void (*)(void* lobby, std::int32_t status);
 
+// CR15NetClientLobby::End(lobby) (echovr.exe 0x140162230): PUSH RBX,RDI,R14; SUB RSP,0x30; XOR EDX,EDX; MOV [RSP+0x60],R15.
+// It writes status 0 straight into the lobby (0x14016230f), not through SwitchTo, and the game's LeaveGame calls it through
+// the lobby's vtable. SwitchTo calls it for a few other statuses, never from 7. It runs when a session ends, not per frame.
+constexpr std::uint64_t kEndVA = 0x140162230;
+constexpr std::array<std::uint8_t, 16> kEndPrologue = {0x40, 0x53, 0x57, 0x41, 0x56, 0x48, 0x83, 0xEC,
+                                                       0x30, 0x33, 0xD2, 0x4C, 0x89, 0x7C, 0x24, 0x60};
+using EndFn = void (*)(void* lobby);
+
 // The game's invalid SUuid (echovr.exe 0x142100b20, 16 bytes): what "Leave For Match" writes over the queued id.
 constexpr std::uint64_t kInvalidIdVA = 0x142100B20;
 
@@ -55,6 +63,10 @@ std::uintptr_t g_gameBase = 0;
 SuccessCbFn g_originalSuccessCb = nullptr;
 LeaveForMatchFn g_originalLeaveForMatch = nullptr;
 SwitchToFn g_originalSwitchTo = nullptr;
+EndFn g_originalEnd = nullptr;
+// Non-zero while this thread is inside the game's Leave For Match: the End its LeaveGame runs is the join being acted
+// on, which the acted-on record states, not a drop.
+thread_local int t_inLeaveForMatch = 0;
 Guid g_invalidId{};  // read at Install; the leave and drop hooks are installed only when it was readable
 
 std::int32_t ReadStatus(const void* lobby) {
@@ -98,11 +110,12 @@ void LeaveForMatchHook(void* netGame) {
   const std::int32_t statusBefore = ReadStatus(lobby);
   bool queuedBefore = false;
   const Guid session = ReadQueuedId(lobby, &queuedBefore);
+  ++t_inLeaveForMatch;
   g_originalLeaveForMatch(netGame);
-  bool queuedAfter = false;
-  ReadQueuedId(lobby, &queuedAfter);
-  const LeaveResult result = ClassifyLeave(queuedBefore, queuedAfter);
-  Log(EchoVR::LogLevel::Info, "%s", FormatLeaveLine(result, session, statusBefore, ReadStatus(lobby)).c_str());
+  --t_inLeaveForMatch;
+  const std::int32_t statusAfter = ReadStatus(lobby);
+  const LeaveResult result = ClassifyLeave(queuedBefore, statusAfter);
+  Log(EchoVR::LogLevel::Info, "%s", FormatLeaveLine(result, session, statusBefore, statusAfter).c_str());
 }
 
 void SwitchToHook(void* lobby, std::int32_t status) {
@@ -111,7 +124,15 @@ void SwitchToHook(void* lobby, std::int32_t status) {
   bool queued = false;
   const Guid session = drop ? ReadQueuedId(lobby, &queued) : Guid{};
   g_originalSwitchTo(lobby, status);
-  if (drop) Log(EchoVR::LogLevel::Info, "%s", FormatDropLine(session, status).c_str());
+  if (drop) Log(EchoVR::LogLevel::Info, "%s", FormatDropLine(session, status, "SwitchTo").c_str());
+}
+
+void EndHook(void* lobby) {
+  const bool drop = t_inLeaveForMatch == 0 && ReadStatus(lobby) == kStatusQueued;
+  bool queued = false;
+  const Guid session = drop ? ReadQueuedId(lobby, &queued) : Guid{};
+  g_originalEnd(lobby);
+  if (drop) Log(EchoVR::LogLevel::Info, "%s", FormatDropLine(session, ReadStatus(lobby), "End").c_str());
 }
 
 std::string HexBytes(const void* address, std::size_t count) {
@@ -162,6 +183,7 @@ void Install(std::uintptr_t gameBase) {
               reinterpret_cast<PVOID>(&LeaveForMatchHook), "LeaveForMatch");
   HookChecked(kSwitchToVA, kSwitchToPrologue, g_originalSwitchTo, reinterpret_cast<PVOID>(&SwitchToHook),
               "NetClientLobbySwitchTo");
+  HookChecked(kEndVA, kEndPrologue, g_originalEnd, reinterpret_cast<PVOID>(&EndHook), "NetClientLobbyEnd");
 }
 
 }  // namespace nevr_queued_join_log
