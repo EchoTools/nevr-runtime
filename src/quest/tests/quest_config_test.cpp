@@ -1268,7 +1268,10 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
   };
   const Key keys[] = {{"refresh_rate", &nevr_quest::CombatConfig::refreshRate, true},
                       {"refresh_rate_lobby", &nevr_quest::CombatConfig::refreshRateLobby, false},
-                      {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true}};
+                      {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true},
+                      // The particle-renderer gate and the event-effect decision (#2188): on unless the file says false.
+                      {"pfx", &nevr_quest::CombatConfig::pfx, true},
+                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);
