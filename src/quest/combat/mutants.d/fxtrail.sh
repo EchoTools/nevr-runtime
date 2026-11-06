@@ -69,7 +69,7 @@ QC=src/quest/sentinel/quest_config.cpp
 runm fx_qc_default_off     $QC "s/  r.config.combat.fxtrail = ReadCombatSwitch(cfg, kCombatFxtrailKey, r);/  r.config.combat.fxtrail = ReadCombatSwitch(cfg, kCombatFxtrailKey, r, false);/" quest-host-shared quest_config_test
 runm fx_qc_key_typo        $QC "s/kCombatFxtrailKey = \"combat.fxtrail\";/kCombatFxtrailKey = \"combat.fxtrails\";/" quest-host-shared quest_config_test
 runm fx_qc_not_assigned    $QC "s/  r.config.combat.fxtrail = ReadCombatSwitch(cfg, kCombatFxtrailKey, r);/  (void)ReadCombatSwitch(cfg, kCombatFxtrailKey, r);/" quest-host-shared quest_config_test
-runm fx_nc_known_key       src/core/nevr_config.cpp "s/\"refresh_rate_quest2_72\", \"fxtrail\", /\"refresh_rate_quest2_72\", /" quest-host-shared quest_config_test
+runm fx_nc_known_key       src/core/nevr_config.cpp "s/\"pfxtev\", \"fxtrail\", \"voipdrop\",/\"pfxtev\", \"voipdrop\",/" quest-host-shared quest_config_test
 # the shared helpers every guard uses: the pinned-word check (pinned_words.h) and the legacy switch file (legacy_switch.h)
 PW=src/quest/combat/pinned_words.h
 runm sh_pw_never_mismatch  $PW "s/    if (!ok || word != pins\[i\].word) {/    if (false) {/"

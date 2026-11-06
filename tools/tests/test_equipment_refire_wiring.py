@@ -93,7 +93,10 @@ class Wiring(unittest.TestCase):
         body = text[text.index("void SetterHook") : text.index("void HexBytes")]
         body = " ".join(body.split())
         want = (
-            "void SetterHook(void* component, std::uint32_t handle, std::uint64_t value) { PcEnv env; "
+            "void SetterHook(void* component, std::uint32_t handle, std::uint64_t value) { "
+            # #2242: the one filter the combat module's LOADOUTS rides (SetSlotFilter), ahead of the tracking
+            "if (const SlotFilter filter = g_filter.load(std::memory_order_acquire)) value = filter(static_cast<int>(I), component, handle, value); "
+            "PcEnv env; "
             "OnSetter(env, g_tracker, kRows[I].slot, reinterpret_cast<std::uintptr_t>(component), handle, value, g_isServer != FALSE, "
             "[&] { g_original[I](component, handle, value); }); }"
         )

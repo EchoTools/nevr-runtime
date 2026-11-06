@@ -89,4 +89,4 @@ QC=src/quest/sentinel/quest_config.cpp
 runm vd_qc_default_off     $QC "s/  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r);/  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r, false);/" quest-host-shared quest_config_test
 runm vd_qc_key_typo        $QC "s/kCombatVoipdropKey = \"combat.voipdrop\";/kCombatVoipdropKey = \"combat.voipdrops\";/" quest-host-shared quest_config_test
 runm vd_qc_not_assigned    $QC "s/  r.config.combat.voipdrop = ReadCombatSwitch(cfg, kCombatVoipdropKey, r);/  (void)ReadCombatSwitch(cfg, kCombatVoipdropKey, r);/" quest-host-shared quest_config_test
-runm vd_nc_known_key       src/core/nevr_config.cpp "s/\"fxtrail\", \"voipdrop\", /\"fxtrail\", /" quest-host-shared quest_config_test
+runm vd_nc_known_key       src/core/nevr_config.cpp "s/\"fxtrail\", \"voipdrop\",/\"fxtrail\",/" quest-host-shared quest_config_test

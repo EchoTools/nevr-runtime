@@ -132,6 +132,7 @@ for row.
 | `[NEVR.MENU]`         | Menu text the runtime sets: the nEVR version on the menu's versions panel (`patch/menu_version_label.h`) |
 | `[NEVR.SPLASH]`       | A button press skips the splash screen: the Continue element going live, each skip with the button id and how long the button was live (`patch/splash_skip.h`) |
 | `[NEVR.EQUIP]`        | The equipment change the game drops, applied again (`patch/equipment_refire_rules.h` is the one definition, `patch/equipment_refire.h` the PC hooks, #2121): at boot one Debug `equipment setter hook installed` line per slot, one aggregate `equipment re-fire hooks: N of 3 installed`, and on a pinned-check failure a Warning `equipment re-fire hook not installed: <name> va=.. reason=bytes_mismatch first_difference=.. expected=.. actual=..` plus an aggregate of 0 (Rule 6); per setter call a Debug `equipment change` record with the verdict (`tracked`, `unchanged`, `not_local`, `server`, `unreadable`) and `read`, `changed`, `local`; per re-fire one Info `equipment re-fired` line with `slot`, the value's name, `handle`, `changes` and `quiet_ms`, or `equipment re-fire skipped` with the `reason` (`component_unreadable`, `component_replaced`, `record_gone`, `record_changed_elsewhere`, `not_local`). Quest (`quest/combat/equip_refire.h`): the sentinel writes `combat_equip_refire_install` (one record, six per-word statuses `weapon_jump` ... `ordnance_glob`), `combat_equip_refire_change` (Debug, with a `word` field `jump_slot` or `glob_dat`, capped at 256 per process and then one `combat_equip_refire_change_cap` Warning), `combat_equip_refire_refired` and `combat_equip_refire_skipped`, with the field names above |
+| `[NEVR.COMBAT]`      | The EchoCombat module (`runtime/combat/combat.h`: he_is_the_cat's DroneFix, PowerBoost and VeilNet, ported): one line per feature group at install (`feature enabled`, `feature off`, `feature refused ... reason=`, and `feature disabled` for the four never on), a `combat module started` summary, `hook applied` / `hook refused` per detour with `module`, `name`, `va` and `rva`, `overlap refused` with the write's range and the runtime's range it met (`runtime/combat/write_gate.h`), and `balance applied` / `balance not applied` per load of mp_weapon_settings. Cat's own lines carry `module=<dronefix|powerboost|veilnet>` and keep his caps (Debug 5000, Info 20000 lines a module, then one Warning) |
 | `[NEVR.UITEXTURE]`    | UI, splash and menu textures at their top mip: one line per UI texture naming the mip requested (`patch/ui_texture_mips.h`) |
 | `[NEVR.UI]`           | The UI text writer (`patch/ui_text.h`, `patch/ui_text_writer.h`, #896): `text writer ready`/`off` with the three pins, one `text written` or `text dropped` line per request with `actor`, `element`, `bytes` and `attempts`, and `text first write` with the writing thread and the game-loop thread. A text is never logged, only its size |
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
@@ -204,6 +205,16 @@ built in a fixed buffer (`JsonLine`, no heap, no lock) and written with one `Wri
 |         | state, pointer values, hex dumps, per-frame counters, per-connection         |            |
 |         | diagnostics. The individual boot-step lines (`[NEVR.BOOT] installing X`)    |            |
 |         | live here; INFO gets the summary (`boot complete: N hooks`).                |            |
+
+**The level a record carries.** A record's `level` is the level its line was given, mapped in one place,
+`src/core/log_level.h` (`nevr_log_level`): the game's CLog levels and `EchoVR::LogLevel` are one numbering (1 debug,
+2 info, 4 warning, 8 error; echovr.exe `CLog::DefaultHandler` 0x1400eba20), written `debug`, `info`, `warn`, `error`.
+A level with no name is written `unknown` with the number beside it (`level_raw` in the filter's record,
+`log/run_log_record.h`; `unknown; level_raw=<n>` after the tag of a boot line); it is never written `info`, and
+`min_level` never drops it. A boot line states its level after its tag (Rule 12); one that states none is recorded
+`unknown`. The game's error dialog (echovr.exe 0x1400ea730, the box that says the game cannot start) logs its title
+and message at info; the runtime hooks it (`log/error_dialog_level.h`), and a line logged while it runs is recorded at
+`error` with `game_level` keeping the level the game gave it.
 
 **Anti-patterns by level:**
 

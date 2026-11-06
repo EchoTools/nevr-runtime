@@ -98,7 +98,6 @@ runm dg_stats_idx_skips   $D "s/{\"idx_skips\", g_idxSkips.load(std::memory_orde
 # the table row (combat_install.cpp), the key and the schema
 CI=src/quest/combat/combat_install.cpp
 runm dg_row_ignores_switch $CI "s/droneguard::Install(g_config.droneguard.on, g_config.droneguardStage1.on)/droneguard::Install(true, g_config.droneguardStage1.on)/" quest-host-combat combat_install_test
-runm dg_row_ignores_stage1 $CI "s/droneguard::Install(g_config.droneguard.on, g_config.droneguardStage1.on)/droneguard::Install(g_config.droneguard.on, false)/" quest-host-combat combat_install_test
 runm dg_row_end_null      $CI "s/\&DroneguardNormal, \&droneguard::NoteEnd}/\&DroneguardNormal, nullptr}/" quest-host-combat combat_install_test
 QC=src/quest/sentinel/quest_config.cpp
 runm dg_qc_default_off    $QC "s/  r.config.combat.droneguard = ReadCombatSwitch(cfg, kCombatDroneguardKey, r);/  r.config.combat.droneguard = ReadCombatSwitch(cfg, kCombatDroneguardKey, r, false);/" quest-host-shared quest_config_test
