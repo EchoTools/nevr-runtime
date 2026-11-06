@@ -319,6 +319,36 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15GetInputTrackingState(), "libr15 vrapi_GetInputTrackingState JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CR15GameC1(), "libr15 CR15Game::CR15Game (C1) JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CR15GameC2(), "libr15 CR15Game::CR15Game (C2) JUMP_SLOT");
+  // The equipment re-fire (#2121, combat/equip_refire.h): each of the three setters is held by both a JUMP_SLOT and a GLOB_DAT word, so
+  // the symbol alone names a slot of each kind (CheckTarget would expect the other kind to be absent). Each word resolves at its pin
+  // and alone, a pin off by one slot is refused, the setter is the symbol the .dynsym defines at its address, and the code the wrappers'
+  // reads and the two lookups rest on (and the three change handlers' entries) is the pinned words.
+  for (std::size_t slot = 0; slot < 3; ++slot) {
+    for (const RelocKind kind : {RelocKind::kJumpSlot, RelocKind::kGlobDat}) {
+      const GotTarget target = pinned::LibR15EquipmentSetter(slot, kind);
+      const SlotResolution at = ResolveSlot(r15.image, target, kAarch64Relocs);
+      if (at.status != GotStatus::kOk) std::fprintf(stderr, "target: libr15 equipment setter %zu %s\n", slot, RelocKindName(kind));
+      QCHECK_STATUS(at.status, GotStatus::kOk);
+      QCHECK(at.slotVaddr == *target.slotVaddr);
+      GotTarget alone = target;
+      alone.slotVaddr = std::nullopt;
+      const SlotResolution only = ResolveSlot(r15.image, alone, kAarch64Relocs);
+      QCHECK_STATUS(only.status, GotStatus::kOk);
+      QCHECK(only.slotVaddr == at.slotVaddr);
+      GotTarget shifted = target;
+      shifted.slotVaddr = *target.slotVaddr + 8;
+      QCHECK_STATUS(ResolveSlot(r15.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+    }
+    CheckDefinedAt(r15, pinned::kEquipmentSetters[slot].symbol, pinned::kEquipmentSetters[slot].vaddr);
+  }
+  for (std::size_t i = 0; i < pinned::kEquipmentRefireCodeCount; ++i) {
+    const pinned::PinnedCode& block = pinned::kEquipmentRefireCode[i];
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block.vaddr, block.code, block.words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the words at %#llx differ from the pinned ones\n", block.name,
+                   static_cast<unsigned long long>(block.vaddr));
+      QCHECK(false);
+    }
+  }
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

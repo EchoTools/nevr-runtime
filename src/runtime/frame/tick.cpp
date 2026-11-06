@@ -43,6 +43,7 @@
 #include "runtime/lifecycle/crash_recovery.h"  // EnsureStackReserve
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/log/builtin_filter.h"
+#include "runtime/patch/equipment_refire.h"
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
@@ -170,6 +171,8 @@ void DispatchPerFrameWork(uint64_t nowUs) {
         // #1278: the invite answers become texts first, so the writer below can write them in the same frame.
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_invite_apply::OnFrame();
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_ui_text::OnFrame();
+        // #2121: the equipment change handlers send events into the game's scripts, so they run on the loop's thread too.
+        if (loop != 0 && loop == GetCurrentThreadId()) nevr_equipment_refire::OnFrame();
     }
 
 #ifdef NEVR_SCENARIO_CONTROL

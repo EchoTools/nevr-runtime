@@ -1232,4 +1232,84 @@ inline constexpr PinnedCode kDefault3dTextureTexel = {"Initialize: add x5, sp, #
 inline constexpr PinnedCode kDefault3dTextureFormat = {"Initialize: mov w2, #9", 0x183f2bcULL, {0x52800122, 0, 0, 0, 0, 0}, 1};
 inline constexpr PinnedCode kDefault3dTextureCall = {"Initialize: bl upload helper", 0x183f2d0ULL, {0x94026f30, 0, 0, 0, 0, 0}, 1};
 
+// The equipment re-fire (#2121, combat/equip_refire.h). CR15NetPlayerEquipmentCS keeps the equipment of every player and has three setters,
+// one per slot, each called with (component x0, SCompactPoolHandle x1, CSymbol64 x2) and returning nothing: SetWeaponSlot,
+// SetAbilitySlot and SetGrenadeSlot. Each is defined in libr15 itself (ELF vaddrs 0x217ca84, 0x217cde4, 0x217cf90; the disassembly
+// lists them 0x100000 higher) and is reached two ways. A direct call goes through its PLT stub (disassembly 0x1038c30, 0x1046430, 0x1002e50:
+// the JUMP_SLOT; R15NetPlayerEquipmentSetAbilitySlotNode calls the stub at disassembly 0x24df2f4). A call a script node queues carries the
+// function's address in the queued functor, which the node loads from a GLOB_DAT word: the same node (disassembly 0x24df194; the load
+// at 0x24df32c is `adrp x8, 0x3827000; ldr x8, [x8, #0xb38]`) and CR15NetPlayerSetEquipmentNode::Enter (disassembly 0x242e5c8; the load
+// at 0x242e81c is the same two instructions) read SetAbilitySlot's GLOB_DAT word, ELF 0x3727b38. `readelf -rW` on the store file names the
+// setters in exactly these six relocations:
+//   R_AARCH64_JUMP_SLOT 0x36f3d00 SetWeaponSlot    R_AARCH64_GLOB_DAT 0x37233e8 SetWeaponSlot
+//   R_AARCH64_JUMP_SLOT 0x36fa900 SetAbilitySlot   R_AARCH64_GLOB_DAT 0x3727b38 SetAbilitySlot
+//   R_AARCH64_JUMP_SLOT 0x36d8e10 SetGrenadeSlot   R_AARCH64_GLOB_DAT 0x3711db8 SetGrenadeSlot
+// Other data xrefs ReVault lists for the setters are not slots: eh_frame data (disassembly 0x35e7268, 0x35e72e0, 0x35e7310), 4-aligned
+// tables (0x33c551c, 0x33c5534, 0x33c553c) and seven code addresses (0x221cdac to 0x24df524) that hold `00 80 80 3c`, not a pointer.
+// All six are hooked: a change reaches the setter through either word. The handle is the low 32 bits of x1 (the setters mask it).
+// `handler` is the slot's change handler (HandleWeaponChange 0x217afb4, HandleAbilityChange 0x217b124, HandleGrenadeChange 0x217b1dc;
+// void(component x0, handle x1)), which the re-fire calls; it is not hooked.
+using EquipmentSetterSig = void(void* self, std::uint32_t handle, std::uint64_t value);
+template <int Slot, int Word>
+struct LibR15EquipmentSetterTag {};
+// Slot 0 weapon, 1 tac mod, 2 ordnance; word 0 JUMP_SLOT, 1 GLOB_DAT. One thunk per hooked word (callback_thunk.h).
+template <int Slot, int Word>
+using LibR15EquipmentSetterThunk = CallbackThunk<LibR15EquipmentSetterTag<Slot, Word>, EquipmentSetterSig>;
+
+struct EquipmentSetterPin {
+  const char* symbol;
+  std::uint64_t vaddr;
+  std::uint64_t handler;
+  std::uint64_t jumpSlot;
+  std::uint64_t globDatSlot;
+};
+inline constexpr EquipmentSetterPin kEquipmentSetters[3] = {
+    {"_ZN10NRadEngine8NRadGame24CR15NetPlayerEquipmentCS13SetWeaponSlotENS_18SCompactPoolHandleENS_9CSymbol64E", 0x217ca84ULL, 0x217afb4ULL,
+     0x36f3d00ULL, 0x37233e8ULL},
+    {"_ZN10NRadEngine8NRadGame24CR15NetPlayerEquipmentCS14SetAbilitySlotENS_18SCompactPoolHandleENS_9CSymbol64E", 0x217cde4ULL, 0x217b124ULL,
+     0x36fa900ULL, 0x3727b38ULL},
+    {"_ZN10NRadEngine8NRadGame24CR15NetPlayerEquipmentCS14SetGrenadeSlotENS_18SCompactPoolHandleENS_9CSymbol64E", 0x217cf90ULL, 0x217b1dcULL,
+     0x36d8e10ULL, 0x3711db8ULL},
+};
+
+// Slot `slot` (0 to 2) of kEquipmentSetters, through its JUMP_SLOT or its GLOB_DAT word.
+inline GotTarget LibR15EquipmentSetter(std::size_t slot, RelocKind kind) {
+  const EquipmentSetterPin& pin = kEquipmentSetters[slot];
+  return {kLibR15, pin.symbol, kind, LibR15PatchedBuildId(), kind == RelocKind::kJumpSlot ? pin.jumpSlot : pin.globDatSlot};
+}
+
+// The two game functions the re-fire calls to find the local player (not hooked, no slot of their own to pin; reached the way
+// QuitOnError is: the build ID, then these words, then base + the address).
+//   NetGameMT 0x12027d4:           mov w8, #0x8510; ldr x0, [x0, x8]; ret   (x0 = *(context + 8) -> the net game)
+//   CR15NetGame::UserId 0x125a9b8: (x0 net game, x1 and x2 the SActorGUID's two words) -> w0 the player's slot handle
+inline constexpr std::uint64_t kNetGameMTVaddr = 0x12027d4ULL;
+inline constexpr std::uint64_t kUserIdVaddr = 0x125a9b8ULL;
+using NetGameMTSig = std::uintptr_t(std::uintptr_t context_arg);
+using UserIdSig = std::uint32_t(void* net_game, std::uint64_t key0, std::uint64_t key1);
+
+// The words the wrappers' reads and the two calls were derived from, read from the store file before any slot is touched. A setter
+// reads the index table (+0xc8), the record array (+0xf8) and the 0x58-byte record's slot value (+0x18, +0x20, +0x28); SetAbilitySlot's tail
+// reads the component context (+0x80), the net game argument (context +8), the actor key (context +0x58) and the link table (+0x100), as
+// the three setters and handlers do; the handlers start with the same index-table read.
+inline constexpr PinnedCode kEquipmentRefireCode[] = {
+    {"SetWeaponSlot: prologue", 0x217ca84ULL, {0xd10243ff, 0xa9046bfb, 0xa90563f9, 0xa9065bf7, 0xa90753f5, 0xa9087bf3}, 6},
+    {"SetWeaponSlot: index table, records, record stride", 0x217ca9cULL, {0xf9406408, 0x92403c29, 0xd37ef538, 0xf9407c1a, 0x78786919, 0x52800b08}, 6},
+    {"SetWeaponSlot: weapon value compare", 0x217cab4ULL, {0x9b086b28, 0xf8418d09, 0xeb02013f, 0, 0, 0}, 3},
+    {"SetAbilitySlot: prologue", 0x217cde4ULL, {0xd10243ff, 0xa9046bfb, 0xa90563f9, 0xa9065bf7, 0xa90753f5, 0xa9087bf3}, 6},
+    {"SetAbilitySlot: index table, records, record stride", 0x217cdfcULL, {0xf9406408, 0x92403c29, 0xd37ef538, 0xf9407c1a, 0x78786919, 0x52800b08}, 6},
+    {"SetAbilitySlot: tac mod value compare", 0x217ce14ULL, {0x9b086b28, 0xf8420d09, 0xeb02013f, 0, 0, 0}, 3},
+    {"SetAbilitySlot: context and net game argument", 0x217ceccULL, {0xf9404269, 0xf9406668, 0xf9407e74, 0xf9400520, 0x78786915, 0}, 5},
+    {"SetAbilitySlot: link table and actor key", 0x217cee4ULL, {0xf9406668, 0xf9408269, 0xf940426a, 0xaa0003f3, 0x78786908, 0xf9402d41}, 6},
+    {"SetGrenadeSlot: prologue", 0x217cf90ULL, {0xd101c3ff, 0xf90023f6, 0xa90553f5, 0xa9067bf3, 0, 0}, 4},
+    {"SetGrenadeSlot: index table, records, record stride", 0x217cfa0ULL, {0xf9406408, 0x92403c29, 0xd37ef534, 0xf9407c16, 0x78746915, 0x52800b08}, 6},
+    {"SetGrenadeSlot: ordnance value compare", 0x217cfb8ULL, {0x9b085aa8, 0xf8428d09, 0xeb02013f, 0, 0, 0}, 3},
+    {"HandleWeaponChange: entry and index table", 0x217afb4ULL, {0xa9bd5bf7, 0xa90153f5, 0xa9027bf3, 0xf9406408, 0x92403c29, 0xd37ef529}, 6},
+    {"HandleAbilityChange: entry and index table", 0x217b124ULL, {0xa9bd5bf7, 0xa90153f5, 0xa9027bf3, 0xf9406408, 0x92403c29, 0xd37ef529}, 6},
+    {"HandleGrenadeChange: entry and index table", 0x217b1dcULL, {0xa9bd5bf7, 0xa90153f5, 0xa9027bf3, 0xf9406408, 0x92403c29, 0xd37ef529}, 6},
+    {"NetGameMT", 0x12027d4ULL, {0x5290a208, 0xf8686800, 0xd65f03c0, 0, 0, 0}, 3},
+    {"CR15NetGame::UserId: entry and actor key", 0x125a9b8ULL, {0xd10103ff, 0xa90253f5, 0xa9037bf3, 0xa9000be1, 0x7941b808, 0}, 5},
+};
+inline constexpr std::size_t kEquipmentRefireCodeCount = sizeof(kEquipmentRefireCode) / sizeof(kEquipmentRefireCode[0]);
+
+
 }  // namespace sentinel::pinned
