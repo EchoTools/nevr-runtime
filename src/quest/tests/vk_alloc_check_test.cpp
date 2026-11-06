@@ -254,6 +254,24 @@ void TheBlockArrayBoundDecidesBetweenARefusalAndTheGamesCrash() {
   sentinel::SetLogSink(&CaptureLine);
 }
 
+// Past the bound the game's result is exactly what the game's Allocate left (the null handle, its offset and its end), and no
+// error is made: the game crashes in the bind as it did before the hook.
+void ALetThroughLeavesTheGamesResultAndMakesNoError() {
+  for (const bool blockFull : {true, false}) {
+    Reset();
+    Arm();
+    g_device = Device::kOutOfMemory;
+    g_blockCount = blockFull ? check::kBlockRefuseBelow : 10;
+    g_tableCount = blockFull ? 10 : nevr_quest::vk_hole::kGuardFrom;
+    const check::MemoryRequirements reqs = {0x2000, 0x100, 1};
+    check::AllocatedBase base = {};
+    QCHECK(Entry()(&reqs, 1, 1, 1, 0, &base) == 0);
+    QCHECK(g_errorCalls == 0);
+    QCHECK(base.memory == 0 && base.offset == kOffset && base.end == kOffset + 0x2000);
+    QCHECK(check::CurrentCounts().let_through == 1 && check::CurrentCounts().refused == 0);
+  }
+}
+
 // The free-range array's bound is the free guard's: below it a refusal, at it the game's result.
 void TheFreeRangeArrayBoundDecidesToo() {
   Reset();
@@ -409,6 +427,7 @@ int main() {
   TheLogSaysWhatWasRefusedAndHowFullTheTableWas();
   AZeroErrorCodeIsLoudEveryTime();
   TheBlockArrayBoundDecidesBetweenARefusalAndTheGamesCrash();
+  ALetThroughLeavesTheGamesResultAndMakesNoError();
   TheFreeRangeArrayBoundDecidesToo();
   AnUnreadableCountLetsTheGamesResultThrough();
   TheMarginIsTwiceTheFreeGuardsHeadroom();
