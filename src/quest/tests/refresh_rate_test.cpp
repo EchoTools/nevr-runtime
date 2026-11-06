@@ -277,6 +277,10 @@ void ThePlainReleaseHasNoOwnerAndTheGamesRateIsUntouched() {
     rr::Note(120.0f, 120.0f, 0);
     QCHECK(Lines("combat_refresh_rate_request").empty());
     QCHECK(rr::CurrentStats().requests == 0);
+    // Nothing else changed: no request kept, no level state, no switch, and the tick's table is empty.
+    const rr::Stats stats = rr::CurrentStats();
+    QCHECK(stats.switches == 0 && stats.lastAsked == -1.0f && stats.lastSent == -1.0f && !stats.inLevel);
+    QCHECK(combat::tick::Count() == 0);
     Frame();
     QCHECK(g_asks.empty());  // the tick never asks: the game's rate stays
     // Even a step that is reached anyway installs nothing and registers no tick.
