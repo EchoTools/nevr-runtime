@@ -482,7 +482,7 @@ release-check:
     tools/release_check.py
 
 # A LOCAL package: the Windows zip and the Quest APK from a CLEAN tree at HEAD, in build/package-dev/<sha>/.
-# Every non-tag build stamps a DEVELOPMENT version, X.Y.(Z+1)-dev.<N>+<sha> (cmake/set_project_version_from_git.cmake),
+# Every non-tag build stamps a DEVELOPMENT version, <next>-dev.<N>+<sha> (cmake/set_project_version_from_git.cmake),
 # and the files are named nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-*: this recipe cannot produce a release. A release
 # is a vX.Y.Z tag built by CI (.github/workflows/build.yml); its version is exactly the tag.
 # Both builds embed config/public-defaults.env (git-ignored: copy it from the main checkout or from the

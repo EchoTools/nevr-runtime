@@ -57,7 +57,7 @@ time, under the owner's go.
 - **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is computed,
   not chosen: `python3 tools/next_release_version.py` prints it from the feat, fix and perf commits (a breaking change counts
   only on those types) since the newest `vX.Y.Z` tag reachable from `origin/main` (`docs/standards/planning.md`, "Release
-  versions"). Every other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from; it is never
+  versions"). Every other build stamps `<next>-dev.<N>+<sha>`, where `<next>` is the release the commits since the highest reachable tag lead to (`tools/next_release_version.py`), which sorts after that tag and before `<next>`; it is never
   released.
 - **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), on `origin/main`. Created by step 4, never before it.
   **A patch release of an older version** is the one exception: when `main` has moved on and the fix has to reach players
