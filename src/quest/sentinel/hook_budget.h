@@ -1,6 +1,6 @@
-/* The hook registry's budget: every GotHook handle the Quest source declares, per file.
+/* The hook registry's budget: every GotHook and GotDataSlot handle the Quest source declares, per file.
  *
- * A handle reserves one entry of the registry (got_hook.h, kRegistryCapacity) when it installs, so the handles declared in
+ * A handle reserves one entry of the registry (got_hook.h, kRegistryCapacity) when it installs or writes, so the handles declared in
  * the source are an upper bound on what the build can hold at once. The registry was 64 entries and nothing summed the
  * hooks against it: the crash handler's provider-library hooks (#1618) were the ones that no longer fitted, and the entry
  * they took was the matchmaking redirect's. Now the sum is a compile-time fact:
@@ -26,7 +26,7 @@ namespace sentinel {
 
 struct HookBudgetRow {
   const char* file;       // relative to src/quest
-  std::size_t handles;    // GotHook objects the file declares (an array counts its size, a macro its uses)
+  std::size_t handles;    // GotHook and GotDataSlot objects the file declares (an array counts its size, a macro its uses)
   std::size_t critical;   // of those, how many install with HookPriority::kCritical
 };
 
