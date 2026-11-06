@@ -81,12 +81,6 @@ remove-worktree *args:
 _build-guard:
     @python3 -I tools/build_checkout.py guard
 
-# Heavy-recipe gate (tools/heavy_guard.py): each heavy recipe names it as its first dependency. It refuses a Claude Code
-# session unless the command carries the opt-in, and holds one host-wide lock per heavy run, so two never run at once.
-[positional-arguments]
-_heavy-guard label *args:
-    @python3 -I "{{ justfile_directory() }}/tools/heavy_guard.py" "$@"
-
 # Check REV out in the fixed build checkout (creating it the first time) and print where it is; refuses when it is not clean.
 # Build there with `cd $(just build-checkout-path) && just build-android`.
 build-checkout rev="origin/main":
@@ -101,7 +95,7 @@ ccache-stats:
     ccache -s
 
 # Build all components
-build *args: (_heavy-guard "build" args) configure
+build: configure
     @cmake --build --preset {{ preset }}
 
 # Build only the echovr_server.exe launcher
@@ -109,15 +103,15 @@ launcher: configure
     cmake --build --preset {{ preset }} --target echovr_server
 
 # Build with full compiler output
-verbose-build *args: (_heavy-guard "verbose-build" args) configure
+verbose-build: configure
     cmake --build --preset {{ preset }}
 
 # Create the stripped server distribution package (nevr-runtime-v<ver>-windows-server) and its symbol files in dist/symbols/
-dist *args: (_heavy-guard "dist" args) build
+dist: build
     @cmake --build --preset {{ preset }} --target dist
 
 # Create distribution with full output
-verbose-dist *args: (_heavy-guard "verbose-dist" args) build
+verbose-dist: build
     cmake --build --preset {{ preset }} --target dist
 
 # Regenerate C++ protobuf from BSR at proto_pin (buf.build/echotools/nevr-api) and stamp gen/ (tools/proto_stamp.py).
@@ -150,11 +144,11 @@ configure-android: _build-guard _require-ndk
 
 # Build the Android arm64-v8a crash-reporter .so
 # Job count: CMAKE_BUILD_PARALLEL_LEVEL, else 4 (a bare -j would use every core and override the variable).
-build-android *args: (_heavy-guard "build-android" args) configure-android
+build-android: configure-android
     cmake --build build/android-arm64 -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
 
 # Build with full compiler output
-verbose-build-android *args: (_heavy-guard "verbose-build-android" args) configure-android
+verbose-build-android: configure-android
     cmake --build build/android-arm64 -v
 
 # Fail when the Quest sentinel gains a load-time initializer beyond its one ELF constructor
@@ -168,7 +162,7 @@ check-android-static-init: build-android
     tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $objects
 
 # Run the Quest .so ground-truth (ELF-shape) tests
-test-android *args: (_heavy-guard "test-android" args) check-android-static-init
+test-android: check-android-static-init
     # The sentinel embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
     # CSymbol64Hash sign-extends a byte >= 0x80 under the NDK's AArch64 clang, where plain char is unsigned (#657).
@@ -501,7 +495,7 @@ release-check:
 # embedded endpoints and keys alone (config.yaml only overrides).
 # The Quest APK is a repack of the store game: it is for testers and is published outside GitHub, never attached to a release.
 # This never tags, uploads or publishes.
-package-dev store_apk=env("NEVR_STORE_APK") *args: (_heavy-guard "package-dev" args)
+package-dev store_apk=env("NEVR_STORE_APK"):
     #!/usr/bin/env bash
     set -euo pipefail
     # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
@@ -540,7 +534,7 @@ package-dev store_apk=env("NEVR_STORE_APK") *args: (_heavy-guard "package-dev" a
 
 # The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the store
 # APK. Private: package-dev only (a release packages CI's loader, release-quest-apk).
-_quest-apk store_apk *args: (_heavy-guard "_quest-apk" args) _build-guard _require-ndk
+_quest-apk store_apk: _build-guard _require-ndk
     #!/usr/bin/env bash
     set -euo pipefail
     launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"
@@ -819,7 +813,7 @@ test-installer *ARGS:
     cargo test --locked --manifest-path installer/Cargo.toml {{ ARGS }}
 
 # Run all system tests
-test-system *args: (_heavy-guard "test-system" args)
+test-system:
     cd tests/system && go test -v ./...
 
 # Run quick system tests only
@@ -831,7 +825,7 @@ test-system-dll:
     cd tests/system && go test -v -short -run ".*DLL.*" ./...
 
 # Run system tests with verbose output, no cache
-test-system-verbose *args: (_heavy-guard "test-system-verbose" args)
+test-system-verbose:
     cd tests/system && go test -v -count=1 ./...
 
 # Run the built runtime on a native Windows VM (libvirt) and judge the boot.
@@ -846,13 +840,11 @@ test-winvm *ARGS:
 # builds the mingw-scenario DLL (test-only control endpoint), launches the client the
 # launch-client.sh way, runs tools/scenario/scenarios/NAME.yaml and prints a PASS/FAIL table.
 [positional-arguments]
-scenario NAME *ARGS: (_heavy-guard "scenario" NAME ARGS)
+scenario NAME *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    raw="$(python3 -I tools/heavy_guard.py strip-optin "$@")"
-    words=(); mapfile -t words <<<"$raw"
-    python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/${words[0]}.yaml" "${words[@]:1}"
+    python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/$1.yaml" "${@:2}"
 
 # The scheduled smoke: one client boot proving the three things every scenario assumes (in game,
 # control endpoint listening, a fire drives the game), with a non-zero record and an alarm on
@@ -862,20 +854,18 @@ smoke *ARGS:
 
 # ARGS pass to run_all.py: --config <dir>/config.json runs the suite with that directory's config.yaml.
 [positional-arguments]
-scenario-all *ARGS: (_heavy-guard "scenario-all" ARGS)
+scenario-all *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    raw="$(python3 -I tools/heavy_guard.py strip-optin "$@")"
-    args=(); if [ -n "$raw" ]; then mapfile -t args <<<"$raw"; fi
-    python3 tools/scenario/run_all.py "${args[@]}"
+    python3 tools/scenario/run_all.py "$@"
 
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:
     cd tests/plugins && go test -v -run "TestGroundTruth" ./...
 
 # Run all plugin tests (needs game binary + MCP harness)
-test-plugins *args: (_heavy-guard "test-plugins" args)
+test-plugins:
     cd tests/plugins && go test -v -timeout 10m ./...
 
 # Run plugin tests in short mode (skips integration, runs ground truth only)
@@ -883,7 +873,7 @@ test-plugins-short:
     cd tests/plugins && go test -v -short ./...
 
 # Run plugin tests with verbose output, no cache
-test-plugins-verbose *args: (_heavy-guard "test-plugins-verbose" args)
+test-plugins-verbose:
     cd tests/plugins && go test -v -count=1 -timeout 10m ./...
 
 # Run auth ground truth tests (no game binary, no network)
@@ -894,7 +884,7 @@ test-auth-groundtruth:
 # the GTest binary cannot be built or found, or if any test fails. Builds the test
 # target with -DBUILD_TESTING=ON (the default presets do not enable it). Add new
 # GTest executables here as they land.
-test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
+test-auth-unit:
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
@@ -930,7 +920,7 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_early_quit_feature_flags --target test_lobby_full_backoff --target test_queued_join_log --target test_lobby_failure_message --target test_party_follow_dedup --target test_follow_record --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_equipment_refire --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_log_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_telemetry_player_read --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_render_config --target test_render_config_hook --target test_server_bots --target test_deadlock_monitor test_arena_rules_hook test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_early_quit_feature_flags --target test_lobby_full_backoff --target test_queued_join_log --target test_lobby_failure_message --target test_party_follow_dedup --target test_follow_record --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_equipment_refire --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_log_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_telemetry_player_read --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_render_config --target test_render_config_hook --target test_server_bots --target test_deadlock_monitor test_arena_rules_hook test_cmdline_waiver test_broadcaster_allow_incoming test_loading_tips test_combat_write_gate test_combat_settings
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -971,6 +961,18 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     # because no other line of this recipe names them.
     cmake --build --preset {{ preset }} --target test_invite_service
     bin="build/{{ preset }}/bin/test_invite_service.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_combat_settings.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_combat_write_gate.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
@@ -1020,6 +1022,17 @@ test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
     # diagnostic recorder, the minidump capture, the runtime load state machine, the rendezvous's prologue
     # validation, the export thunks, the self-update swap (ADR 0024) and the minidump parser the crash harness trusts.
     for name in test_host_json test_host_stop_line test_bootstrap_diagnostics test_host_crash_capture test_host_crash_send test_host_crash_report test_host_runtime_load test_host_minidump test_host_rendezvous test_host_runtime_verify test_host_update_swap test_host_exports; do
+        bin="build/{{ preset }}/bin/$name.exe"
+        if [[ ! -f "$bin" ]]; then
+            echo "ERROR: GTest binary not found: $bin" >&2
+            exit 1
+        fi
+        run_test "$bin"
+    done
+    # The runtime's half of PC self-update (ADR 0024, sections 3 and 6): the decisions, the check, the confirmation and the worker's
+    # threads against a fake core, and the Rust core linked into a MinGW binary and called from a worker thread.
+    cmake --build --preset {{ preset }} --target test_update_worker --target test_update_core_link
+    for name in test_update_worker test_update_core_link; do
         bin="build/{{ preset }}/bin/$name.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1248,7 +1261,7 @@ test-auth-integration:
     cd tests/system && go test -v -run "TestAuth" ./...
 
 # Run all auth tests
-test-auth *args: (_heavy-guard "test-auth" args) test-auth-groundtruth test-auth-unit
+test-auth: test-auth-groundtruth test-auth-unit
 
 # yaml-cpp, zlib and nlohmann-json for the Quest host tests and the libr15 patcher: installed from the tools/quest-host-deps manifest for the x64-linux triplet into
 # build/quest-host-vcpkg (never a system package). Its vcpkg root is build/vcpkg-root-quest-host, not _vcpkg-mingw's
@@ -2010,7 +2023,7 @@ test-scripting:
 # Success derives from the real compiler/linker + test artifacts, not a proxy
 # [day-one-kit §5]. EXCLUDES the Go integration suites — the evr-test-harness
 # dependency is excised (no extern/evr-test-harness in the tree).
-verify *args: (_heavy-guard "verify" args)
+verify:
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT

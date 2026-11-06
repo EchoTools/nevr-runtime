@@ -155,23 +155,31 @@ void EnterNode(WalkBudget& budget, std::size_t depth, const YAML::Mark& mark) {
 // yaml-cpp (measured — services/network/arena became unreadable after `auth`,
 // the one section whose values actually changed). So interpolation is applied
 // lazily at read time (GetString etc.); this walk only validates. Bounded by `budget`.
-// It also counts, into `duplicates`, each key that repeats within its mapping (#583): it already visits every
-// mapping, so the count costs no second walk and no node budget.
+// It also counts, into `duplicates`, each key that repeats within its mapping (#583), and records the key's dotted path
+// (`path` is the mapping's own; never a value): it already visits every mapping, so the count costs no second walk and
+// no node budget.
 void ValidateInterpolation(const YAML::Node& node, UnsetSink unset, WalkBudget& budget, std::size_t depth,
-                           std::size_t& duplicates) {
+                           std::size_t& duplicates, std::vector<std::string>& duplicateNames,
+                           const std::string& path) {
   EnterNode(budget, depth, node.Mark());
   switch (node.Type()) {
     case YAML::NodeType::Scalar:
       (void)InterpolateString(node.Scalar(), unset, node.Mark());  // may throw
       break;
     case YAML::NodeType::Sequence:
-      for (const auto& child : node) ValidateInterpolation(child, unset, budget, depth + 1, duplicates);
+      for (const auto& child : node)
+        ValidateInterpolation(child, unset, budget, depth + 1, duplicates, duplicateNames, path);
       break;
     case YAML::NodeType::Map: {
       std::set<std::string> seen;
       for (const auto& kv : node) {
-        if (kv.first.IsScalar() && !seen.insert(kv.first.Scalar()).second) ++duplicates;
-        ValidateInterpolation(kv.second, unset, budget, depth + 1, duplicates);
+        const std::string childPath =
+            kv.first.IsScalar() ? (path.empty() ? kv.first.Scalar() : path + "." + kv.first.Scalar()) : path;
+        if (kv.first.IsScalar() && !seen.insert(kv.first.Scalar()).second) {
+          ++duplicates;
+          duplicateNames.push_back(childPath);
+        }
+        ValidateInterpolation(kv.second, unset, budget, depth + 1, duplicates, duplicateNames, childPath);
       }
       break;
     }
@@ -231,12 +239,19 @@ void ValidateTopLevel(const YAML::Node& root) {
   }
 }
 
+// The PC's EchoCombat keys in the combat section (src/runtime/combat/combat_settings.h, #2242): its group switches and
+// `settings`, which holds Cat's ini values.
+std::map<std::string, std::set<std::string>> WithPcCombatKeys(std::map<std::string, std::set<std::string>> sections) {
+  sections["combat"].insert({"drone", "overcharge", "medigun", "veil", "match_control", "balance", "clean_exit", "settings"});
+  return sections;
+}
+
 // The keys each known section holds, for every reader of either build (#583). The PC reads a key through
 // service_map.cpp (FlatKeyToYamlPath) or a direct getter; the Quest reads its keys through quest_config.cpp.
 // A key missing here is ignored by the reader, so it is counted as unknown. Keep it in step with those readers:
 // test_service_map (MigratedYamlPaths) and test_nevr_config (the Quest list) fail when a read key is missing.
 const std::map<std::string, std::set<std::string>>& KnownSections() {
-  static const std::map<std::string, std::set<std::string>> kSections = {
+  static const std::map<std::string, std::set<std::string>> kSections = WithPcCombatKeys({
       {"identity", {"discord_id"}},
       {"auth", {"http_uri", "http_key", "server_key", "password"}},
       {"services",
@@ -252,14 +267,14 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       {"social", {"facade", "send_presence_to_meta"}},
       {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override", "frame_stats"}},
       {"graphics", {"texture_quality", "hand_flip"}},
-      {"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72"}},
-  };
+      {"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "pfx", "pfxtev"}},
+  });
   return kSections;
 }
 
-// Keys under a known section that no reader reads, counted once per key. An `x-` key is an extension and is not
-// counted, as at the top level. A section that is not a mapping has no keys to count.
-std::size_t CountUnknownNestedKeys(const YAML::Node& root) {
+// Keys under a known section that no reader reads, counted once per key, with each key's dotted path in `names`. An
+// `x-` key is an extension and is not counted, as at the top level. A section that is not a mapping has no keys to count.
+std::size_t CountUnknownNestedKeys(const YAML::Node& root, std::vector<std::string>& names) {
   std::size_t unknown = 0;
   for (const auto& section : KnownSections()) {
     const YAML::Node node = ChildByKey(root, section.first);
@@ -267,11 +282,13 @@ std::size_t CountUnknownNestedKeys(const YAML::Node& root) {
     for (const auto& kv : node) {
       if (!kv.first.IsScalar()) {
         ++unknown;
+        names.push_back(section.first + ".(not a plain key)");
         continue;
       }
       const std::string key = kv.first.Scalar();
       if (key.rfind("x-", 0) == 0 || section.second.count(key) != 0) continue;
       ++unknown;
+      names.push_back(section.first + "." + key);
     }
   }
   return unknown;
@@ -415,8 +432,8 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
   std::set<std::string> unsetBare;
   WalkBudget budget;
   // fail loud NOW on an unset ${VAR:?}; does not mutate raw
-  ValidateInterpolation(raw, &unsetBare, budget, 0, cfg.duplicateKeys_);
-  cfg.unknownKeys_ = CountUnknownNestedKeys(raw);
+  ValidateInterpolation(raw, &unsetBare, budget, 0, cfg.duplicateKeys_, cfg.duplicateKeyNames_, "");
+  cfg.unknownKeys_ = CountUnknownNestedKeys(raw, cfg.unknownKeyNames_);
   cfg.unsetBareVars_.assign(unsetBare.begin(), unsetBare.end());
   cfg.impl_->root = raw;       // store the parsed tree; scalars interpolate at read time
   ParsePlugins(cfg.impl_->root, cfg.plugins_, budget);
@@ -1021,6 +1038,22 @@ std::vector<std::string> NevrConfig::GetStringList(const std::string& path) cons
   } else if (n.IsScalar()) {
     out.push_back(InterpolateString(n.Scalar()));
   }
+  return out;
+}
+
+std::string JoinKeyNamesForLog(const std::vector<std::string>& names) {
+  constexpr std::size_t kMaxNames = 20;
+  constexpr std::size_t kMaxNameChars = 64;
+  std::string out;
+  for (std::size_t i = 0; i < names.size() && i < kMaxNames; ++i) {
+    if (i != 0) out += ',';
+    const std::string& name = names[i];
+    for (std::size_t c = 0; c < name.size() && c < kMaxNameChars; ++c) {
+      const unsigned char ch = static_cast<unsigned char>(name[c]);
+      out += (ch > 0x20 && ch < 0x7f) ? static_cast<char>(ch) : '?';
+    }
+  }
+  if (names.size() > kMaxNames) out += ",+" + std::to_string(names.size() - kMaxNames) + " more";
   return out;
 }
 

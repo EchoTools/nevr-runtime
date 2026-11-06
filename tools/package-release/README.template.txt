@@ -39,17 +39,14 @@ Running a dedicated server
        .\echovr_server.exe
   It starts echovr.exe -server -headless -no-console from its own folder and passes any arguments on. A server
   takes the game service's addresses and public API key from the build, as a player's game does (issue #843),
-  so its config file needs only its own account.
-  Create %LOCALAPPDATA%\nevr\echovr\config.yaml (the nEVR folder install.ps1 uses). The smallest one that works:
-
-       auth:
-         password: "<the password of your server account>"
-       identity:
-         discord_id: "<the Discord id of your server account>"
-
-  The password goes in auth.password. A server does not read auth.server_key. A server signs in with the
-  account's refresh token when it has one, and with auth.password otherwise. To run it against another service,
-  set services.socket_uri, auth.http_uri and auth.http_key in the same file too. The server logs in, registers
+  so it needs no config file to sign in.
+  A server signs in by device code, with no username or password. At startup it prints a code and the page
+  that takes it on the console and in the log (the full code and the URL). On any machine, open that URL, enter
+  the code and approve it once. The server then continues on its own, keeps its session in the nEVR folder and
+  refreshes it itself, so a restart needs no new code; a code that runs out is replaced by a new one. To run it
+  against another service, create %LOCALAPPDATA%\nevr\echovr\config.yaml (the nEVR folder install.ps1 uses) and
+  set services.socket_uri, auth.http_uri and auth.http_key in it. A server does not read auth.server_key. The server
+  signs in, registers
   with the game service, and logs "requested game server registration" and then "Received registration success
   via protobuf"; every step is in the log (see Logs). Stop it with Ctrl+C in its console: the log then says "Graceful shutdown
   initiated". services.socket_uri: "" with services.allow_offline_server: true starts a server with no service at all (it never

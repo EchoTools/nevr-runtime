@@ -96,7 +96,7 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
     }
   });
 
-  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.TELEMETRY] Connecting to ", uri);
+  const std::string diagnostic = nevr_log_diagnostics::FormatUrlDiagnostic("[NEVR.TELEMETRY] Connecting to ", uri);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
   m_ws->start();
   return true;

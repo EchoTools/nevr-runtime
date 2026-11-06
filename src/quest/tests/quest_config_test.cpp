@@ -760,20 +760,27 @@ void TextureQualityIsTheDefaultUnlessTheFileNamesAnotherLevel() {
   }
 }
 
-// #583: a duplicate key and an unknown key under a known section are counted into one Warning that names no key and no
-// value; a file with neither logs no count line.
+// #583, #2244: a duplicate key and an unknown key under a known section are counted into one Warning that names the keys
+// and no value; a file with neither logs no count line.
 void DuplicateAndUnknownKeysAreCountedInOneWarning() {
   {
     const LoadResult r = Load(Full(), "social:\n  facade: true\n  facade: false\n  send_presense: false\n");
     CHECK(!r.fileRejected);
     CHECK(EventsWithAreAtLevel(r, "duplicates=1 unknown_nested=1 (", LogLevel::kWarn));
-    CHECK(!EventsContain(r, "send_presense"));
+    CHECK(EventsContain(r, "duplicate_keys=social.facade"));
+    CHECK(EventsContain(r, "unknown_keys=social.send_presense"));
     CHECK(CountLevel(r, LogLevel::kWarn) == 1);
   }
   {
     const LoadResult r = Load(Full(), "social:\n  send_presence_to_meta: false\n");
     CHECK(!EventsContain(r, "duplicates="));
     CHECK(!EventsContain(r, "unknown_nested="));
+    CHECK(!EventsContain(r, "duplicate_keys="));
+  }
+  {  // a value is never logged: auth.password can be one
+    const LoadResult r = Load(Full(), "auth:\n  password: hunter2-first\n  password: hunter2-second\n");
+    CHECK(EventsContain(r, "duplicate_keys=auth.password"));
+    CHECK(!EventsContain(r, "hunter2"));
   }
 }
 
@@ -799,13 +806,13 @@ void AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey() {
   }
   {  // the real key alone, an empty section, other sections' keys: no such warning
     for (const char* text : {"graphics:\n  texture_quality: low\n", "graphics: {}\n", "diagnostics:\n  quality: 1\n"}) {
-      CHECK(!EventsContain(Load(Full(), text), "unknown_key"));
+      CHECK(!EventsContain(Load(Full(), text), "reason=unknown_key"));
     }
   }
-  {  // a long or odd name is described, never echoed
+  {  // a long or odd name is described on its own line, and named whole (to 64 bytes) in the count line (#2244)
     const LoadResult r = Load(Full(), "graphics:\n  " + std::string(40, 'k') + ": 1\n");
     CHECK(EventsContain(r, "reason=unknown_key name=(longer than 32 bytes) ("));
-    CHECK(!EventsContain(r, std::string(40, 'k')));
+    CHECK(EventsContain(r, "unknown_keys=graphics." + std::string(40, 'k')));
   }
   {  // a file full of them cannot flood the log: 8 are named, one line counts the rest
     std::string yaml = "graphics:\n";
@@ -1261,7 +1268,10 @@ void CombatRefreshRateKeysDefaultAsTheRuleNeedsAndTheFileDecides() {
   };
   const Key keys[] = {{"refresh_rate", &nevr_quest::CombatConfig::refreshRate, true},
                       {"refresh_rate_lobby", &nevr_quest::CombatConfig::refreshRateLobby, false},
-                      {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true}};
+                      {"refresh_rate_quest2_72", &nevr_quest::CombatConfig::refreshRateQuest2At72, true},
+                      // The particle-renderer gate and the event-effect decision (#2188): on unless the file says false.
+                      {"pfx", &nevr_quest::CombatConfig::pfx, true},
+                      {"pfxtev", &nevr_quest::CombatConfig::pfxtev, true}};
   {  // no file, an empty file, a section with no key: the default, from the default, nothing said
     const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
     for (const Key& k : keys) CHECK((none.config.combat.*k.member).on == k.defaultOn && (none.config.combat.*k.member).source != Source::kFile);

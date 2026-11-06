@@ -27,7 +27,6 @@
 #include "boosterpool.h"
 #include "music.h"
 #include "peerclamp.h"
-#include "pfx.h"
 #include "plugin_log.h"
 #include "powerboost.h"
 #include "script_redirect.h"
@@ -163,9 +162,6 @@
 #ifndef Q15T_DECALS  // the level decals of decals.bin as dynamic-mesh quads (decals.h); after impactsnd: it chains on the Shutdown wrapper
 #define Q15T_DECALS 0
 #endif
-#ifndef Q15T_PFX  // the particle-effect renderer's gate, read by the pfx* modules (pfx.h, issue #1631)
-#define Q15T_PFX 0
-#endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
 #ifndef Q15T_SLOT_EXCLUSIVEUPDATEGAME
@@ -284,9 +280,6 @@ constexpr char kCompiledModules[] =
 #if Q15T_DECALS
     "decals "
 #endif
-#if Q15T_PFX
-    "pfx "
-#endif
     "";
 
 // One structured line per module install: INFO when it installed, INFO when its own off switch kept it out (reason "off" or
@@ -400,9 +393,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
                               {"levelname", gates.levelname ? "on" : "off"},   {"levelname_reason", gates.levelname ? "installing" : gates.levelname_reason}};
     Log(NEVR_LOG_INFO, "q15t_combat_gates_install: which combat gates this run installs (a Quest gets combat permission, the combat bot body, the full global_mp)", f, 6);
   }
-#if Q15T_PFX
-  InitPfxGate();  // the gate every pfx* module reads; logs its own "pfx gate" line (pfx.h)
-#endif
   bool want_tick = false;
   [[maybe_unused]] const std::uintptr_t base = ctx->base_addr;
   // The modules, in an order the docs fix: wallfire after bvh; ecfx, powerboost's net tick and dronekill's kill feed after ec;
