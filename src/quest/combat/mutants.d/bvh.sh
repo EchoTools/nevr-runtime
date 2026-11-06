@@ -138,7 +138,7 @@ runm bvh_pin_allowed_n    src/quest/combat/bvh_targets.h "s/    3};/    2};/"
 runm bvh_pin_symbol       src/quest/combat/bvh_targets.h "s/CBVHTree8ShutdownEv/CBVHTree8ShutdowNEv/"
 runm bvh_target_owner     src/quest/combat/bvh_targets.h "s/target.expectedOriginal = reinterpret_cast<const void\*>(base + slot.fn);//"
 # -- the module's row and its keys elsewhere
-runm bvh_row_missing      src/quest/combat/combat_install.cpp "s/^    Module{\"bvh\", nullptr, \&BvhNormal},//" quest-host-combat combat_install_test
+runm bvh_row_missing      src/quest/combat/combat_install.cpp "s/Module{\"bvh\", nullptr, \&BvhNormal},/Module{\"bvh\", \&BvhNormal, nullptr},/" quest-host-combat combat_install_test
 runm bvh_row_switch_gate  src/quest/combat/combat_install.cpp "s/  switches.gate = g_config.bvhGate.on;/  switches.gate = true;/" quest-host-combat combat_install_test
 runm bvh_default_off      src/quest/sentinel/quest_config.h "s/  CombatSwitch bvh{true, Source::kAbsent};/  CombatSwitch bvh{false, Source::kAbsent};/" quest-host-shared quest_config_test
 runm bvh_gate_default_off src/quest/sentinel/quest_config.h "s/  CombatSwitch bvhGate{true, Source::kAbsent};/  CombatSwitch bvhGate{false, Source::kAbsent};/" quest-host-shared quest_config_test

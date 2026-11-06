@@ -1,8 +1,8 @@
 # Module `wallfire`: no shot through a wall (hooks R26-R28 of the reference build)
 
 Pinned build: libr15 build id b243509c08ce677aeb95fa348016949b3fc45230 (disassembly VA = ELF vaddr + 0x100000).
-Origin: the reference build's `runtime/native/afkxr/afk_wallfire.cpp` (the rule :1-13, the pins :34-36, the default :17,78); the commit is in
-`docs/audits/2026-11-05-q15t-origin-citations.md`. The module is Ducky's (kotorvr's q15t-upstream): every address below is in upstream's `afk_wallfire.cpp`.
+Origin: the reference build's runtime/native/afkxr/afk_wallfire.cpp (the rule :1-13, the pins :34-36, the default :17,78); the commit is in
+`docs/audits/2026-11-05-q15t-origin-citations.md`. The module is Ducky's (kotorvr's q15t-upstream): every address below is in upstream's afk_wallfire.cpp.
 Code: `src/quest/combat/wallfire.h`, `wallfire.cpp`, `wallfire_targets.h`. Test: `src/quest/tests/wallfire_test.cpp` (the real bvh module on an image built in
 memory, a synthetic room mesh), `src/quest/tests/got_pinned_test.cpp` (the pins against the real libr15).
 **Depends on `bvh`** (`bvh::TreeInstalled()`): without the static BVH answering `CBVHTree::Occluded` the segment query is never blocked, so wallfire installs
@@ -25,10 +25,10 @@ nothing (`bvh_not_installed`, Warning). Both default to true; `combat.wallfire: 
 
 ## 2. What it does, and the mechanism
 
-PC and Quest run the same `CR15NetGunCS::FireGunLocal` (`afk_wallfire.cpp:1-4`). Before a shot it builds an
+PC and Quest run the same `CR15NetGunCS::FireGunLocal` (afk_wallfire.cpp:1-4). Before a shot it builds an
 `SPhQueryCollisionRequest` on its stack for the segment player position -> muzzle position, calls `QueryCollision` and, on a hit, returns
 without firing. On the PC the query sees the static level; on the Quest it reaches physics bodies only (the static level lives in
-CBVHTree, compiled out on Android and served by `bvh`), so a hand or muzzle through a wall fires (`afk_wallfire.cpp:1-10`).
+CBVHTree, compiled out on Android and served by `bvh`), so a hand or muzzle through a wall fires (afk_wallfire.cpp:1-10).
 
 `OnQuery(original, caller, gs, req, id)` (a `kCaller` thunk):
 1. is told its return address (the slot's PLT stub is `adrp; ldr; add; br`, so it is the caller's); with no combat map loaded it calls the game's function and returns; else it runs the game's `QueryCollision`;
@@ -71,7 +71,7 @@ the writable segments is refused and nothing is hooked). Lines: `combat_wallfire
 dependency), `combat_wallfire_blocked` for each of the first 16 blocked shots and then at each power of two (with the segment), `combat_wallfire_skipped` (Warning,
 once). Counters (`GetCounters`): `atSite`, `checked`, `blocked`, `skippedNan`, `skippedGame`. Per call nothing is logged beyond those.
 
-Switch (config.yaml, `combat:`): `wallfire` (default true, as upstream, `afk_wallfire.cpp:17,78`). The plugin's `wallfire.off` is no longer read; one found is a
+Switch (config.yaml, `combat:`): `wallfire` (default true, as upstream, afk_wallfire.cpp:17,78). The plugin's `wallfire.off` is no longer read; one found is a
 Warning (`combat_wallfire_legacy_switch`) that names the key.
 
 **Scope (arena shares the APK).** The check acts only at FireGunLocal's site and only while `bvh::InCombatMap()` (bvh.md section 4). Elsewhere the thunk is the game's
@@ -87,7 +87,7 @@ function, a load, a test and a return.
 - **Request layout (the segment is the first 24 bytes)**: the stores that fill it, the disassembly:
   `225563c str x10, [sp, #0x30]` (floats 0, 1), `2255648 str w11, [sp, #0x38]` (float 2), `225564c stur x9, [sp, #0x3c]` (floats 3, 4),
   `2255650 str w10, [sp, #0x44]` (float 5): six consecutive floats at sp + 0x30 .. 0x47, which is `req[0..5]`. That they are "player position" and
-  "muzzle position" is the source's statement (`afk_wallfire.cpp:2-4`: `ComputeMuzzleXF`), not re-derived; either way the query is
+  "muzzle position" is the source's statement (afk_wallfire.cpp:2-4: `ComputeMuzzleXF`), not re-derived; either way the query is
   the same segment the stock physics query was given.
 - **QueryCollision returns a bool**: `19067d0 ldr w8,[x19,#0x88]; cmn w8,#1; cset w0, ne` (the request's result word is -1 for "nothing"), so
   the wrapper's `bool` return is the same ABI.

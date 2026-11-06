@@ -71,7 +71,7 @@ runm wf_seg_floats        src/quest/combat/wallfire_targets.h "s/kReqSegFloats =
 runm wf_symbol            src/quest/combat/wallfire_targets.h "s/QueryCollisionERNS_24/QueryCollisioNERNS_24/"
 runm wf_target_expected   src/quest/combat/wallfire_targets.h "s/  target.expectedOriginal = reinterpret_cast<const void\*>(base + pins.queryFn);//"
 # -- the module's row and key elsewhere
-runm wf_row_missing       src/quest/combat/combat_install.cpp "s/^    Module{\"wallfire\", nullptr, \&WallfireNormal},//" quest-host-combat combat_install_test
+runm wf_row_missing       src/quest/combat/combat_install.cpp "s/Module{\"wallfire\", nullptr, \&WallfireNormal},/Module{\"wallfire\", \&WallfireNormal, nullptr},/" quest-host-combat combat_install_test
 runm wf_row_switch        src/quest/combat/combat_install.cpp "s/  return wallfire::Install(g_config.wallfire.on, g_config.wallfire.source == nevr_quest::Source::kFile);/  return wallfire::Install(true, false);/" quest-host-combat combat_install_test
 runm wf_default_off       src/quest/sentinel/quest_config.h "s/  CombatSwitch wallfire{true, Source::kAbsent};/  CombatSwitch wallfire{false, Source::kAbsent};/" quest-host-shared quest_config_test
 runm wf_key_name          src/quest/sentinel/quest_config.cpp "s/kCombatWallfireKey = \"combat.wallfire\"/kCombatWallfireKey = \"combat.wallfir\"/" quest-host-shared quest_config_test

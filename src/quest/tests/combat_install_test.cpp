@@ -7,6 +7,7 @@
 //
 // Built and run by `just test-quest-combat`.
 
+#include "quest/combat/bvh.h"
 #include "quest/combat/combat_install.h"
 
 #include <cstdio>
@@ -19,6 +20,7 @@
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/memsys.h"
+#include "quest/combat/wallfire.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
 
@@ -460,6 +462,40 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
 
 }  // namespace
 
+// The static BVH's and the wall-fire check's rows read their four keys from the resolved section (#2182): each key the file turned off reaches its module
+// (the module logs the value it was handed before it looks for a libr15, so the host sees it), and the default is on.
+void TheBvhRowsReadTheirKeysFromTheResolvedSection() {
+  nevr_quest::combat::bvh::ResetForTest();
+  nevr_quest::combat::wallfire::ResetForTest();
+  Process(bv::Variant::kCombat);
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "bvh=module_not_loaded wallfire=bvh_not_installed"));
+  QCHECK(Has(Lines("combat_config_switch")[0].text, "\"key\":\"combat.bvh\",\"on\":1,\"source\":\"default\""));
+  QCHECK(Lines("combat_config_switch").size() == 4U);
+  Done();
+  nevr_quest::combat::bvh::ResetForTest();
+  nevr_quest::combat::wallfire::ResetForTest();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig off;
+  off.bvh = {false, nevr_quest::Source::kFile};
+  off.bvhGate = {false, nevr_quest::Source::kFile};
+  off.bvhTouch = {false, nevr_quest::Source::kFile};
+  off.wallfire = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(off);
+  combat::InstallNormal();
+  const std::vector<Line> keys = Lines("combat_config_switch");
+  QCHECK(keys.size() == 4U);
+  if (keys.size() == 4U) {
+    QCHECK(Has(keys[0].text, "\"key\":\"combat.bvh\",\"on\":0,\"source\":\"config\""));
+    QCHECK(Has(keys[1].text, "\"key\":\"combat.bvh_gate\",\"on\":0,\"source\":\"config\""));
+    QCHECK(Has(keys[2].text, "\"key\":\"combat.bvh_touch\",\"on\":0,\"source\":\"config\""));
+    QCHECK(Has(keys[3].text, "\"key\":\"combat.wallfire\",\"on\":0,\"source\":\"config\""));
+  }
+  QCHECK(Has(Lines("combat_install")[0].text, "bvh=off_config wallfire=off_config"));
+  Done();
+}
+
 int main() {
   NamesAreStableTokens();
   EachPhaseRunsItsModulesInTableOrder();
@@ -477,6 +513,7 @@ int main() {
   TheGatesKeysHaveALineOfTheirOwn();
   TheGatesRowReadsItsKeysFromTheResolvedSection();
   ThePfxRowsReadTheirKeysFromTheResolvedSection();
+  TheBvhRowsReadTheirKeysFromTheResolvedSection();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

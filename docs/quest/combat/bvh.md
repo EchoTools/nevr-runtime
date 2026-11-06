@@ -1,9 +1,9 @@
 # Module `bvh`: a real static raycast tree for CBVHTree (hooks R20-R25 of the reference build)
 
 Pinned build: libr15 build id b243509c08ce677aeb95fa348016949b3fc45230 (disassembly VA = ELF vaddr + 0x100000).
-Origin: the reference build's `runtime/native/afkxr/afk_bvh.cpp` (slot table :93-99, allowed call sites :103-110, the gate :38-57, the default :121,365-367)
-and `afk_bvh_core.h` (the format); the commit is in `docs/audits/2026-11-05-q15t-origin-citations.md`. The module is Ducky's (kotorvr's q15t-upstream): every
-address below is in upstream's `afk_bvh.cpp`.
+Origin: the reference build's runtime/native/afkxr/afk_bvh.cpp (slot table :93-99, allowed call sites :103-110, the gate :38-57, the default :121,365-367)
+and afk_bvh_core.h (the format); the commit is in `docs/audits/2026-11-05-q15t-origin-citations.md`. The module is Ducky's (kotorvr's q15t-upstream): every
+address below is in upstream's afk_bvh.cpp.
 Code: `src/quest/combat/bvh_core.h` (pure traversal and header parse), `src/quest/combat/bvh.h`, `bvh.cpp` (the handlers and the install), `bvh_targets.h`
 (the pins and the thunks). Tests: `src/quest/tests/bvh_core_test.cpp` (synthetic meshes), `src/quest/tests/bvh_test.cpp` (the real thunks and manager on an image
 built in memory), `src/quest/tests/bvh_build.h` (test-only tree builder), `src/quest/tests/got_pinned_test.cpp` (the pins against the real libr15).
@@ -63,8 +63,8 @@ function, a different libr15, a slot outside the writable segments) removes the 
 manager's status. Touch goes in last, and its refusal is an Error line but not fatal. One `combat_bvh_install` line states the result and the hook count.
 The scope's refresh rides the combat tick: with no room in the tick table the module refuses (`tick_table_full`) rather than install and never answer.
 
-Switches (config.yaml, `combat:`): `bvh` (default true, as upstream, `afk_bvh.cpp:121` "ON BY DEFAULT", `:365-367` off only with `debug.echoquestcombat.bvh=0`),
-`bvh_gate` (true, `afk_bvh.cpp:278-279,300`), `bvh_touch` (true, `afk_bvh.cpp:307-327`). The plugin's kill files `bvh.off`, `bvhgate.off` and `bvhtouch.keep` are no
+Switches (config.yaml, `combat:`): `bvh` (default true, as upstream, afk_bvh.cpp:121 "ON BY DEFAULT", `:365-367` off only with `debug.echoquestcombat.bvh=0`),
+`bvh_gate` (true, afk_bvh.cpp:278-279,300), `bvh_touch` (true, afk_bvh.cpp:307-327). The plugin's kill files `bvh.off`, `bvhgate.off` and `bvhtouch.keep` are no
 longer read; one found is a Warning (`combat_bvh_legacy_switch`) that names the key.
 
 ## 3. Evidence: the structures read, each offset quoted and checked
@@ -163,7 +163,7 @@ The gate is installed first: until it is in no cast is marked, so a tree built a
 **Scope (arena shares the APK).** Every query hook calls the game's function while `InCombatMap()` is false. The value is a relaxed atomic the combat tick refreshes
 four times a second from `combat_level.h` `Scan` (a combat map is loaded and no Echo Arena level is; an arena level that is loaded wins). The word starts false, so
 nothing is combat before the first look. The arena path of a query is that load, a test and a tail call of the game's function. KNOWN-WRONG #2246: this is the
-module's own cached answer; `combat_scope.h` (F19) is the shared one and this module switches to it when it lands (it also fails closed when the tick stops;
+module's own cached answer; combat_scope (F19) is the shared one and this module switches to it when it lands (it also fails closed when the tick stops;
 this one does not: with no frames there are no casts).
 
 
@@ -179,7 +179,7 @@ this one does not: with no frames there are no casts).
 
 ## 6. Differences from the reference build
 
-1. **Root reference from the header (+0x40)**, not "node 0" (`afk_bvh_core.h:14`). The PC builds its traverser from `param_2 + 0x40` (section 3). For a tree whose root
+1. **Root reference from the header (+0x40)**, not "node 0" (afk_bvh_core.h:14). The PC builds its traverser from `param_2 + 0x40` (section 3). For a tree whose root
    is node 0 the result is identical; for any other it is the correct one. Logged as `root_ref`.
 2. **A cycle budget**: the traversal stops after `2 * nodes + 2` pops and answers "miss". A well-formed tree pops each node and leaf once; a malformed tree with
    a loop would otherwise spin. Also: stack depth over 128, an index outside the node or triangle block, a leaf past the triangle block: "miss".
