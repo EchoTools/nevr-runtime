@@ -121,7 +121,7 @@ class WorkflowStructureTest(unittest.TestCase):
     def test_the_job_graph_is_drafts_guard_build_quest_seal_repack_publish(self):
         jobs = load()[0]["jobs"]
         # `drafts` lists the tag's releases for a dispatch on a tag (write token, no checkout); guard reads it
-        self.assertEqual(list(jobs), ["drafts", "guard", "installer", "build", "quest", "seal", "repack", "publish"])
+        self.assertEqual(list(jobs), ["drafts", "guard", "installer", "core-library", "build", "quest", "seal", "repack", "publish"])
         self.assertEqual(jobs["guard"]["needs"], "drafts")
         # the core installer is its own job off the guard, built for a release event or a dispatch on a tag, and build
         # waits for its artifact in a step rather than through `needs` (#1770)
@@ -129,6 +129,12 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("!cancelled()", jobs["installer"]["if"])
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["installer"]["if"])
         self.assertIn("github.event_name == 'release' || github.ref_type == 'tag'", jobs["installer"]["if"])
+        # the core as a static library for nevr-runtime.dll is the same kind of job (ADR 0024 section 3): off the guard, only on a
+        # version run, and build waits for its artifact in a step before it configures
+        self.assertEqual(jobs["core-library"]["needs"], "guard")
+        self.assertIn("!cancelled()", jobs["core-library"]["if"])
+        self.assertIn("needs.guard.outputs.built != 'true'", jobs["core-library"]["if"])
+        self.assertIn("github.event_name == 'release' || github.ref_type == 'tag'", jobs["core-library"]["if"])
         self.assertEqual(jobs["build"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["build"]["if"])
         self.assertEqual(jobs["seal"]["needs"], "build")
