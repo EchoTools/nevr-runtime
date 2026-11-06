@@ -870,7 +870,7 @@ your seat name, for example `claude-main` or `codex`.
     mv <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json <copy>/to-delete/
     for d in <copy>/echovr/bin/win10/plugins <copy>/echovr/.wineprefix/drive_c/users/*/AppData/Local/nevr/echovr/plugins; do if [ -d "$d" ]; then mv "$d" "<copy>/to-delete/$(echo "$d" | tr / _)"; fi; done
     find <copy>/echovr -name '.credentials.json*' ! -type d -print
-    find <copy>/echovr -name '.credentials.json*' ! -type d -exec mv -t <copy>/to-delete {} +
+    find <copy>/echovr -name '.credentials.json*' ! -type d -exec sh -c 'd=$1; shift; for f; do mv -- "$f" "$d/$(printf %s "$f" | tr / _)"; done' sh <copy>/to-delete {} +
     COPY=$(readlink -f <copy>) find <copy> -type l -exec sh -c 'for l; do t=$(readlink -f "$l"); case "$t" in "$COPY"/*) ;; *) echo "$l -> $t";; esac; done' sh {} +
     ```
     The first `find` lists the sign-in files: those in `_local` (with their `.bak` and `.prod-bak` backups) and the
