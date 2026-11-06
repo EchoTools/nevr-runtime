@@ -244,6 +244,13 @@ void WhatIsLoadingDecidesBetweenCombatAndTheRest() {
     const lv::Loaded loaded = lv::Scan(GameAddress(), true);
     QCHECK(loaded.loading == 1 && !loaded.loadingCombatMap && !loaded.loadingCombatLobby);
   }
+  ClearGame();  // a gamespace that has just started loading holds the constructor's -1 as its level: it is loading nothing yet, so the loaded combat map reads as before
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
+  PutInFlight(0, ~0ULL);
+  QCHECK(lv::Classify(GameAddress(), false, &level, true) == lv::Kind::kCombatOrLobby && level == CSymbol64Hash("mpl_combat_gauss"));
+  QCHECK(lv::Scan(GameAddress(), true).loading == 0);
+  PutInFlight(1, CSymbol64Hash("mpl_lobby_b"));  // and with a real one beside it, the real one counts
+  QCHECK(lv::Classify(GameAddress(), false, &level, true) == lv::Kind::kNone && lv::Scan(GameAddress(), true).loading == 1);
   ClearGame();  // a level whose name is not stored yet (0) is loading too
   PutLevel(0, 0, CSymbol64Hash("mpl_combat_gauss"));
   PutInFlight(0, 0);

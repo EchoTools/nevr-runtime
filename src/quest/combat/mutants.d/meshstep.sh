@@ -136,3 +136,4 @@ runm lv_loading_not_deciding $LV "s/  if (inFlight \&\& loaded.loading > 0) {/  
 runm lv_order_swapped       $LV "/^  if (inFlight) ScanInFlight(out, game);\$/{s/.*/  ScanLoaded(out, game);/;b};/^  ScanLoaded(out, game);\$/s/.*/  if (inFlight) ScanInFlight(out, game);/"
 # not listed: lv_lobby_loading_combat (the lobby rule while a combat lobby loads) is not asked by the table steps (lobby=false); combat_level_test kills it
 runm lv_loading_counted_not $LV "s/^    ++out.loading;\$//"
+runm lv_fresh_fiber_counted $LV "s/^    if (current == kLevelNotStored) continue;.*\$//"

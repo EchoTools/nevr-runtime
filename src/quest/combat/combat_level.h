@@ -46,7 +46,8 @@ Loaded Scan(std::uintptr_t game, bool inFlight = false) noexcept;
 // What the loaded gamespaces decide: an Echo Arena level is kEchoArena and wins always; else a combat map (or, with `lobby`, the combat lobby)
 // is kCombatOrLobby; anything else, every other lobby level included, is kNone. With `inFlight`, when any gamespace is still loading the levels
 // loading decide between combat and the rest (the resources being built are theirs): a lobby arena players use that is loading while a combat map is
-// still loaded is kNone, and a combat map loading while a lobby is loaded is kCombatOrLobby. An Echo Arena level, loaded or loading, still wins.
+// still loaded is kNone, and a combat map loading while a lobby is loaded is kCombatOrLobby. A loading gamespace whose level is not stored yet (-1,
+// the constructor's value) is not counted as loading. An Echo Arena level, loaded or loading, still wins.
 enum class Kind { kNone, kCombatOrLobby, kEchoArena };
 
 bool IsCombatMap(std::uint64_t level) noexcept;

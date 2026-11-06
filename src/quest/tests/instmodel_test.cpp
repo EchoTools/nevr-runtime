@@ -243,7 +243,7 @@ void TheStepLinesAreCappedAtSixteen() {
 // The resources of a combat map are built while its gamespace is still loading (in the in-flight table only, not yet in the two tables): that is a
 // combat match, and an Echo Arena level that is loading is not, whatever else is loaded.
 void AMapThatIsStillLoadingIsACombatMatchAndAnArenaLevelThatIsLoadingIsNot() {
-  for (const Where where : {Where::kCombatMapLoading, Where::kCombatMapLoadingAfterCombatLobby}) {
+  for (const Where where : {Where::kCombatMapLoading, Where::kCombatMapLoadingAfterCombatLobby, Where::kCombatMapAndAFreshFiber}) {
     Begin1();
     Build();
     SetWhere(where);

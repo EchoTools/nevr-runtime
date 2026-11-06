@@ -15,6 +15,7 @@ constexpr std::uint64_t kEchoArenaLevels[4] = {0x576ed3f8428ebc4bULL, 0x7691d78d
 namespace pin = targets;
 constexpr std::uintptr_t kTables[2][2] = {{pin::kTable0Rows, pin::kTable0Count}, {pin::kTable1Rows, pin::kTable1Count}};
 constexpr std::uint64_t kMaxGamespaces = 64;
+constexpr std::uint64_t kLevelNotStored = ~0ULL;  // CncaGameSpace's constructor leaves the level -1 until LoadLevel stores it (0x17e54ec)
 constexpr std::uintptr_t kRowGamespace = 8;
 constexpr std::uintptr_t kGamespaceOwner = pin::kGamespaceOwnerOffset;
 constexpr std::uintptr_t kGamespaceLevel = pin::kGamespaceLevelOffset;
@@ -87,6 +88,7 @@ void ScanInFlight(Loaded& out, std::uintptr_t game) noexcept {
     if (!rowOk || gamespace == 0) continue;  // the fiber table is this game's own, so there is no owner to check
     const auto current = SafeRead<std::uint64_t>(gamespace + kGamespaceLevel, &rowOk);
     if (!rowOk) continue;
+    if (current == kLevelNotStored) continue;  // just started: the gamespace's level is still the constructor's -1, so it is loading nothing yet
     ++out.loading;
     if (IsCombatMap(current) && !out.loadingCombatMap) {
       out.loadingCombatMap = true;
