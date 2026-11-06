@@ -126,6 +126,8 @@ func TestAddedSplitsNewEntriesByWhetherTheyCarryAReason(t *testing.T) {
 		{"tools/d.py", ""},
 		{"tools/e.py", "   "},
 		{"tools/f.py", "short"},
+		{"tools/g.py", "0123456789"},   // exactly the shortest reason
+		{"tools/h.py", "   short    "}, // long only by its padding
 	}
 	with, without := Added(old, now)
 	paths := func(es []Entry) string {
@@ -135,7 +137,7 @@ func TestAddedSplitsNewEntriesByWhetherTheyCarryAReason(t *testing.T) {
 		}
 		return strings.Join(out, ",")
 	}
-	if paths(with) != "tools/c.py" || paths(without) != "tools/d.py,tools/e.py,tools/f.py" {
+	if paths(with) != "tools/c.py,tools/g.py" || paths(without) != "tools/d.py,tools/e.py,tools/f.py,tools/h.py" {
 		t.Errorf("with %q, without %q", paths(with), paths(without))
 	}
 	if with, without := Added(old, now[:2]); len(with)+len(without) != 0 {
