@@ -253,7 +253,7 @@ Stats CurrentStats() noexcept {
 }
 
 void SetAskForTest(AskFn fn) noexcept { g_ask.store(fn, std::memory_order_release); }
-void SetLegacyDirForTest(const char* dir) noexcept { legacy::SetDirForTest(dir); }
+void SetLegacyDirForTest(const char* dir) noexcept { legacy::SetDirectoryForTest(dir); }
 void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept { g_lookup.store(lookup, std::memory_order_release); }
 void SetQuest2ForTest(int quest2) noexcept { g_quest2Override.store(quest2, std::memory_order_relaxed); }
 void SetClockForTest(double (*clock)() noexcept) noexcept { g_clock.store(clock, std::memory_order_release); }

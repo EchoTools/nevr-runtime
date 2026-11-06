@@ -177,6 +177,8 @@ struct CombatConfig {
   CombatSwitch gateLink{true, Source::kAbsent};   // `combat.gate_link`: the combat menus are not told this is a Quest
   CombatSwitch levelname{true, Source::kAbsent};  // `combat.levelname`: the full-size global_mp loads (the bot-body gate needs it)
   CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
+  CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
+  CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
 };
 
 struct LogEvent {

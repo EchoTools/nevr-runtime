@@ -177,14 +177,14 @@ void Begin() {
   g_lines.clear();
   hg::ResetForTest();
   nevr_quest::combat::tick::ResetForTest();
-  nevr_quest::combat::legacy::SetDirForTest(nullptr);
+  nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
   LoadLevels({});
   sentinel::SetLogSink(&Capture);
 }
 void End() {
   hg::ResetForTest();
   nevr_quest::combat::tick::ResetForTest();
-  nevr_quest::combat::legacy::SetDirForTest(nullptr);
+  nevr_quest::combat::legacy::SetDirectoryForTest(nullptr);
   g_image.Drop();
   sentinel::SetLogSink(nullptr);
 }
@@ -713,7 +713,7 @@ void ALegacySwitchFileIsAWarningAndChangesNothing() {
   Begin();
   Build();
   CombatMapLoaded();
-  nevr_quest::combat::legacy::SetDirForTest(dir);
+  nevr_quest::combat::legacy::SetDirectoryForTest(dir);
   QCHECK(Installed(AllLibs()));
   const std::vector<Line> legacy = Lines("combat_gates_legacy_switch");
   QCHECK(legacy.size() == 3U);

@@ -1,8 +1,7 @@
-/* The q15t plugin's data directory, for the one thing a folded combat module still does with it: look for the plugin's old switch files and
- * say, in a Warning, that they are no longer read (docs/adr/0046 C2). Header only.
- *
- * The directory is /sdcard/Android/data/<package>/files/q15t, the package from /proc/self/cmdline (the plugin's own rule). A module never
- * creates, reads the content of, or acts on a file there.
+/* The q15t plugin's kill files, which the folded combat modules no longer read (docs/adr/0046 C2): a module that replaces a plugin switch
+ * asks here whether the old file is still in the plugin's data directory, so it can warn and name the `combat:` key that replaces it.
+ * Header only; the directory is the plugin's own, /sdcard/Android/data/<package>/files/q15t, with the package from /proc/self/cmdline.
+ * Built with -fno-exceptions, like every combat translation unit.
  */
 #pragma once
 
@@ -16,10 +15,10 @@
 namespace nevr_quest::combat::legacy {
 
 inline std::atomic<bool> g_dirSet{false};
-inline char g_dir[300] = "";  // tests only (SetDirForTest)
+inline char g_dir[300] = "";  // tests only (SetDirectoryForTest)
 
-// Production: the plugin's data directory. A test: the directory it set. False when none can be named.
-inline bool Dir(char* out, std::size_t n) noexcept {
+// The plugin's data directory, or the test's. False when none can be named.
+inline bool Directory(char* out, std::size_t n) noexcept {
   if (g_dirSet.load(std::memory_order_acquire)) {
     std::snprintf(out, n, "%s", g_dir);
     return true;
@@ -36,17 +35,17 @@ inline bool Dir(char* out, std::size_t n) noexcept {
   return true;
 }
 
-// True when `<dir>/<file>` exists. Never creates anything.
+// True when `file` is in the plugin's data directory.
 inline bool Present(const char* file) noexcept {
   char dir[300] = {};
-  if (!Dir(dir, sizeof(dir))) return false;
+  if (!Directory(dir, sizeof(dir))) return false;
   char path[400];
   std::snprintf(path, sizeof(path), "%s/%s", dir, file);
   return access(path, F_OK) == 0;
 }
 
-// nullptr or "" restores production.
-inline void SetDirForTest(const char* dir) noexcept {
+// The directory to look in (nullptr or "" restores production).
+inline void SetDirectoryForTest(const char* dir) noexcept {
   std::snprintf(g_dir, sizeof(g_dir), "%s", dir != nullptr ? dir : "");
   g_dirSet.store(dir != nullptr && dir[0] != '\0', std::memory_order_release);
 }
