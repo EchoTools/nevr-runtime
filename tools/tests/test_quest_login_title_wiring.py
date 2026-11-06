@@ -49,7 +49,7 @@ class TheTitleHookIsWired(unittest.TestCase):
 
     def test_the_install_is_a_post_load_action_wanted_with_the_login(self):
         steps = read("src/quest/integration/production_steps.cpp")
-        body = extract_braced_function(steps, "bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) override {")
+        body = extract_braced_function(steps, "bool InstallDlopenHook(bool login, bool matchmaking, bool plugins, bool combat) override {")
         self.assertRegex(body, r"if \(login\) actions\.loginTitle = &LoginTitleAction;")
         action = extract_braced_function(steps, "ActionResult LoginTitleAction() noexcept {")
         self.assertIn("nevr_quest::integration::InstallLoginTitleHook()", action)

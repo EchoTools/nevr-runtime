@@ -70,7 +70,7 @@ class TheRuleIsTheSharedHeaders(unittest.TestCase):
 class TheModuleIsWired(unittest.TestCase):
     def test_the_combat_target_builds_it(self):
         cmake = read("src/quest/combat/CMakeLists.txt")
-        self.assertRegex(cmake, r"add_library\(nevr_quest_combat STATIC\s+combat_active\.cpp\s+equip_refire\.cpp\s+match_tags\.cpp\)")
+        self.assertRegex(cmake, r"add_library\(nevr_quest_combat STATIC\s+combat_active\.cpp\s+combat_install\.cpp\s+equip_refire\.cpp\s+match_tags\.cpp\)")
 
     def test_the_budget_has_its_six_handles(self):
         self.assertIn('{"combat/equip_refire.cpp", 6, 0}', read("src/quest/sentinel/hook_budget.h"))
@@ -87,11 +87,11 @@ class TheModuleIsWired(unittest.TestCase):
             body.index("nevr_quest::combat::match_tags::Install();"), body.index("nevr_quest::combat::equip_refire::Install();")
         )
 
-    def test_the_host_test_is_a_target_of_the_hooks_group(self):
-        cmake = read("src/quest/host_tests/groups/hooks.cmake")
+    def test_the_host_test_is_a_target_of_the_combat_group(self):
+        cmake = read("src/quest/host_tests/groups/combat.cmake")
         self.assertRegex(
             cmake,
-            r"nevr_ht_test\(equip_refire_test GROUP hooks[^)]*src/quest/tests/equip_refire_test\.cpp"
+            r"nevr_ht_test\(equip_refire_test GROUP combat[^)]*src/quest/tests/equip_refire_test\.cpp"
             r"\s+src/quest/combat/equip_refire\.cpp\s+src/quest/invite/frame_dispatch\.cpp\)",
         )
 

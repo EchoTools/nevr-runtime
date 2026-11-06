@@ -4,7 +4,7 @@
 // process state a hook reads (Resolve, Active), so a variant read wrong shows here: a plain release turning combat on, or a combat APK
 // running without it.
 //
-// Built and run by `just test-quest-hooks`.
+// Built and run by `just test-quest-combat`.
 
 #include "quest/combat/combat_active.h"
 
@@ -176,6 +176,21 @@ void NoVariantSetIsAPlainRelease() {
   QCHECK(combat::ActiveReason() == R::kNotACombatVariant);
 }
 
+// The variant the combat_install lines name is the one SetVariant recorded, before and after the answer is made.
+void TheRecordedVariantIsTheOneSet() {
+  combat::ResetForTest();
+  QCHECK(combat::RecordedVariant() == bv::Variant::kNone);
+  for (const bv::Variant variant : kVariants) {
+    combat::ResetForTest();
+    const sentinel::LogSink previous = sentinel::SetLogSink(&Capture);
+    combat::SetVariant(variant);
+    QCHECK(combat::RecordedVariant() == variant);
+    combat::Resolve(false, false);
+    sentinel::SetLogSink(previous);
+    QCHECK(combat::RecordedVariant() == variant);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -188,6 +203,7 @@ int main() {
   EachVariantResolvesToItsAnswerAndIsLoggedOnce();
   TheAnswerIsOnePerProcess();
   NoVariantSetIsAPlainRelease();
+  TheRecordedVariantIsTheOneSet();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_active_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

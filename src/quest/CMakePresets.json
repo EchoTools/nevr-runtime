@@ -114,6 +114,12 @@
             "binaryDir": "${sourceDir}/../../build/quest-host-hooks"
         },
         {
+            "name": "quest-host-combat",
+            "displayName": "Quest host tests: test-quest-combat",
+            "inherits": "quest-host-base",
+            "binaryDir": "${sourceDir}/../../build/quest-host-combat"
+        },
+        {
             "name": "quest-host-redirect",
             "displayName": "Quest host tests: test-quest-redirect",
             "inherits": "quest-host-base",
@@ -264,6 +270,13 @@
             "configurePreset": "quest-host-hooks",
             "targets": [
                 "host-tests-hooks"
+            ]
+        },
+        {
+            "name": "quest-host-combat",
+            "configurePreset": "quest-host-combat",
+            "targets": [
+                "host-tests-combat"
             ]
         },
         {
@@ -446,6 +459,21 @@
             "filter": {
                 "include": {
                     "label": "^hooks$"
+                }
+            }
+        },
+        {
+            "name": "quest-host-combat",
+            "configurePreset": "quest-host-combat",
+            "output": {
+                "verbosity": "verbose"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "filter": {
+                "include": {
+                    "label": "^combat$"
                 }
             }
         },

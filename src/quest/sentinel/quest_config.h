@@ -42,7 +42,7 @@
 // `combat.force` (#2170, docs/adr/0046 rule 5) is a boolean: `true` asks for the folded combat modules to run whatever the APK's
 // variant. Absent, it is not asked (from the default). A value that is no boolean (a word, a number, a list, a mapping, a key with no
 // value, an unset ${VAR}) is not asked, with one Warning that names the key, never the value. Only a development build honours it
-// (combat::Decide); a release build refuses it with a Warning of its own. The configuration reads and reports the request, nothing more.
+// (combat::Decide); a release build refuses it with a Warning of its own. The configuration reads the request, nothing more; the `combat_config` line reports it (combat/combat_install.h).
 #pragma once
 
 #include <cstddef>
@@ -144,6 +144,13 @@ struct CombatForceChoice {
   Source source = Source::kAbsent;  // kFile: the file gave the value (true or false); anything else: the default, not asked
 };
 
+// The `combat:` section (docs/adr/0046 rule 4): one member per key, each defaulting to the shipped behaviour. Today the one key is
+// `force`; each folded module adds its switch here, with the row in KnownSections (src/core/nevr_config.cpp), the example config and the
+// `combat_config` line (combat/combat_install.h).
+struct CombatConfig {
+  CombatForceChoice force;
+};
+
 struct LogEvent {
   LogLevel level;
   std::string message;  // never contains a configured value, only key and feature names; the one exception is a rejected
@@ -159,7 +166,7 @@ struct ResolvedConfig {
   Features effective;  // requested, after prerequisite checks
   TextureChoice textureQuality;
   HandFlipChoice handFlip;
-  CombatForceChoice combatForce;
+  CombatConfig combat;
   // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
   // plans from it (quest/plugin/plugin_runtime.h).
   std::vector<nevr::PluginSpec> plugins;
@@ -190,8 +197,6 @@ const char* SourceName(Source source);
 const char* TextureSourceName(const TextureChoice& choice);
 // "config" when the file gave the hand flip value, else "default".
 const char* HandFlipSourceName(const HandFlipChoice& choice);
-// "config" when the file gave the value, "default" otherwise (the log's source word).
-const char* CombatForceSourceName(const CombatForceChoice& choice);
 
 // The shared redirect policy (runtime/lifecycle/service_redirect) gated by the redirect and bridge
 // features. nullopt leaves the game's original value untouched.

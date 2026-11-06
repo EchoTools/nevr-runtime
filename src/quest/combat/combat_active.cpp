@@ -88,6 +88,10 @@ void Resolve(bool devBuild, bool forceAsked) noexcept {
                        {"force", ForceName(decision.force)}, {"msg", consequence}});
 }
 
+build_variant::Variant RecordedVariant() noexcept {
+  return static_cast<build_variant::Variant>(g_variant.load(std::memory_order_acquire));
+}
+
 bool Active() noexcept { return g_active.load(std::memory_order_acquire) != 0; }
 
 Reason ActiveReason() noexcept { return static_cast<Reason>(g_reason.load(std::memory_order_acquire)); }

@@ -290,7 +290,7 @@ void ReadCombatForce(const nevr::NevrConfig& cfg, LoadResult& r) {
     Add(r, LogLevel::kWarn, std::string("config file key=") + kCombatForceKey + " rejected reason=not_a_boolean (default stays)");
   }
   const bool on = ReadBool(cfg, kCombatForceKey, false, r);
-  r.config.combatForce = {on, given ? Source::kFile : Source::kAbsent};
+  r.config.combat.force = {on, given ? Source::kFile : Source::kAbsent};
 }
 
 // Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
@@ -441,9 +441,7 @@ void ReportState(LoadResult& r) {
   Add(r, LogLevel::kInfo,
       std::string("config key=") + kHandFlipKey + " flip=" + (r.config.handFlip.on ? "1" : "0") +
           " source=" + HandFlipSourceName(r.config.handFlip));
-  Add(r, LogLevel::kInfo,
-      std::string("config key=") + kCombatForceKey + " force=" + (r.config.combatForce.on ? "1" : "0") +
-          " source=" + CombatForceSourceName(r.config.combatForce));
+  // The `combat:` keys are reported once, as the structured `combat_config` line (combat/combat_install.h LogConfig), not here.
   for (const FeatureSpec& f : kFeatures) {
     Add(r, LogLevel::kInfo,
         std::string("feature=") + f.name + " requested=" + (r.config.requested.*f.flag ? "on" : "off") +
@@ -513,8 +511,6 @@ const char* SourceName(Source source) {
 const char* TextureSourceName(const TextureChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
 
 const char* HandFlipSourceName(const HandFlipChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
-
-const char* CombatForceSourceName(const CombatForceChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
 
 std::optional<std::string> ResolveQuestRedirect(const ResolvedConfig& config, const std::string& url,
                                            bool bridgeReady, unsigned bridgePort) {

@@ -9,7 +9,7 @@
 // alone; the line is written once per construction with the golden fields; a slot that cannot be found refuses with its status in
 // the install line.
 //
-// Built and run by `just test-quest-hooks`.
+// Built and run by `just test-quest-combat`.
 
 #include <cstddef>
 #include <cstdint>

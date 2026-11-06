@@ -55,6 +55,7 @@ const char* StepName(StepId id) {
     case StepId::kStartReporter: return "start_reporter";
     case StepId::kAttachLibR15: return "attach_libr15";
     case StepId::kRunEarlyPlugins: return "run_early_plugins";
+    case StepId::kInstallCombatEarly: return "install_combat_early";
     case StepId::kInstallClockHook: return "install_clock_hook";
     case StepId::kInstallFrameDispatch: return "install_frame_dispatch";
     case StepId::kInstallObbSkip: return "install_obb_skip";
@@ -149,13 +150,21 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       return true;
     });
     const bool pluginsNormal = plugins.normal > 0;
+    // The combat area (#2171): asked once, after the configuration made the answer. Both of its steps follow it; a question that cannot be
+    // answered is combat off (the folded modules install only on a yes).
+    bool combatNormal = false;
+    try {
+      combatNormal = steps.CombatActive();
+    } catch (const std::exception&) {
+      combatNormal = false;
+    }
 
     const bool wantRedirect = want.redirect;
     const bool wantBridge = want.bridge;
     const bool wantLogin = want.login;
     const bool wantSocial = want.social;  // the config package already requires login for it
     const bool wantTokenAuth = wantBridge || wantLogin;
-    const bool wantDlopen = wantLogin || wantRedirect || pluginsNormal;
+    const bool wantDlopen = wantLogin || wantRedirect || pluginsNormal || combatNormal;
 
     // 3: every counter, before the one StartReporter. A refused registration turns off only the piece
     // whose counters those are.
@@ -226,6 +235,14 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Run(StepId::kRunEarlyPlugins, [&] { return steps.RunEarlyPlugins(); });
     } else {
       r.Skip(StepId::kRunEarlyPlugins, "early_plugins_off");
+    }
+
+    // The combat area's early install step (#2171): after the early plugin pass, so a slot both touch is the plugin's first (ADR 0046
+    // rule 7), and before the clock hook. Only where combat runs; a plain release skips it and says why.
+    if (combatNormal) {
+      r.Run(StepId::kInstallCombatEarly, [&] { return steps.InstallCombatEarly(); });
+    } else {
+      r.Skip(StepId::kInstallCombatEarly, "combat_inactive");
     }
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
@@ -391,24 +408,32 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // bridge reaches) and token auth; the matchmaking redirect needs the redirect installed.
     const bool loginWanted = wantLogin && loginCounters && bridgeOk && tokenOk;
     const bool matchmakingWanted = redirectOk;
-    // The normal plugin pass has no moment but the first post-load call: when the hook that makes it cannot be live, the
-    // entries still waiting end as `not_started` now (#438), not at the end of the process.
+    // The normal plugin pass and the combat step have no moment but the first post-load call: when the hook that makes it cannot be live,
+    // the entries still waiting end as `not_started` now (#438, #2171), not at the end of the process.
     bool dlopenLive = false;
     if (!wantDlopen) {
       r.Skip(StepId::kInstallDlopenHook, "login_and_redirect_off");
     } else if (!dlopenCounters) {
       r.Skip(StepId::kInstallDlopenHook, "counters_refused");
-    } else if (!loginWanted && !matchmakingWanted && !pluginsNormal) {
+    } else if (!loginWanted && !matchmakingWanted && !pluginsNormal && !combatNormal) {
       r.Skip(StepId::kInstallDlopenHook, "nothing_to_install_after_load");
     } else {
       dlopenLive = r.Run(StepId::kInstallDlopenHook,
-                         [&] { return steps.InstallDlopenHook(loginWanted, matchmakingWanted, pluginsNormal); });
+                         [&] { return steps.InstallDlopenHook(loginWanted, matchmakingWanted, pluginsNormal, combatNormal); });
     }
     if (pluginsNormal && !dlopenLive) {
       try {
         steps.FinishPlugins(nevr_quest::plugin::reason::kPostLoadHookUnavailable);
       } catch (const std::exception&) {
         // Contained like every step: the entries are ended again when the process does.
+      }
+    }
+    // The combat step has no moment but the first post-load call either: one record, `not_started`, with the same reason.
+    if (combatNormal && !dlopenLive) {
+      try {
+        steps.FinishCombat(nevr_quest::plugin::reason::kPostLoadHookUnavailable);
+      } catch (const std::exception&) {
+        // Contained like every step: the record is written again, once, when the process ends.
       }
     }
 

@@ -15,7 +15,7 @@
 // The model setters write the record's slot and nothing else: the setter's own inline event is the game's, so every handler call
 // counted here is a re-fire.
 //
-// Built and run by `just test-quest-hooks`.
+// Built and run by `just test-quest-combat`.
 
 #include <elf.h>
 #include <sys/mman.h>

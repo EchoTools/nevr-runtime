@@ -65,6 +65,9 @@ void SetVariant(build_variant::Variant variant) noexcept;
 // configuration is resolved, with `nevr_build::kIsDev` and the configuration's combat.force. A second call changes nothing and logs nothing.
 void Resolve(bool devBuild, bool forceAsked) noexcept;
 
+// The variant SetVariant recorded (kNone until it was called): the word the combat_install lines name beside the answer.
+build_variant::Variant RecordedVariant() noexcept;
+
 // True when the folded combat modules run in this process. False until Resolve has been called.
 bool Active() noexcept;
 // Why Active() is what it is; kUnresolved until Resolve has been called.
