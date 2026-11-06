@@ -5,8 +5,8 @@ its body: the lines indented under it, and the blank lines between them. The bod
 (another header, a variable, a column-0 comment or the end of the file). Header forms in the justfile include:
 
     verify:                                             plain
-    verify *args: (_heavy-guard "verify" args)          variadic parameter, a dependency in parentheses
-    _quest-apk store_apk *args: (_heavy-guard ...) dep  parameter and several dependencies
+    verify *args: (_gate "verify" args)          variadic parameter, a dependency in parentheses
+    _quest-apk store_apk *args: (_gate ...) dep  parameter and several dependencies
     build-checkout rev="origin/main":                   a parameter with a default
 
 A `[positional-arguments]` attribute line above a header is not part of the header and not part of the body.

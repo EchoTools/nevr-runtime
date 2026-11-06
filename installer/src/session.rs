@@ -372,6 +372,12 @@ impl Session {
         self.log.info("plan", 9, json!({"decision": plan.decision, "reasons": plan.reasons, "action": plan.action.map(|a| format!("{a:?}")), "installed": {"host_sha256": observed.target_sha, "runtime_sha256": observed.runtime_sha}, "nevr_root": layout.root.display().to_string()}))?;
         let report = plan.to_json();
         let ended = match plan.outcome {
+            // The release in place is this package: it is the baseline too, so a reinstall after a failed update clears what the
+            // failure left (ADR 0024, "Order of work" step 3). A plan changes nothing.
+            pc::Outcome::Unchanged if install => match self.reset_update_state(&layout.root, &v, &pkg.runtime_sha()) {
+                Ok(()) => self.end("unchanged", &plan.reasons.join("; "))?,
+                Err(why) => self.end("unchanged", &update_reset_failed(&plan.reasons.join("; "), &why))?,
+            },
             pc::Outcome::Unchanged => self.end("unchanged", &plan.reasons.join("; "))?,
             pc::Outcome::NeedsUser => self.end("needs-user", &plan.reasons.join("; "))?,
             pc::Outcome::Proceed if !install => self.end("unchanged", "plan only: nothing was changed")?,
@@ -380,15 +386,22 @@ impl Session {
                 // From here the folders have changed (or been put back): a log that cannot be written is reported in the
                 // end, never allowed to turn the run into `unchanged`.
                 if end.state == "installed" {
+                    // The installed release is the update baseline (ADR 0024, section 7). A failure leaves the files installed and
+                    // asks the player: the host would stop at its next start on what an earlier update left in `update\`.
+                    let update = self.reset_update_state(&layout.root, &v, &pkg.runtime_sha());
                     // The files are installed and read back; the installer's own record of it is informational, so a
                     // failure to write it is reported, not turned into a failed install.
-                    match self.write_record(&v, &m, &Some(art.clone()), &None, false) {
-                        Ok(()) => self.end_after_change(end.state, &end.reason, false),
+                    let (state, reason, failed) = match self.write_record(&v, &m, &Some(art.clone()), &None, false) {
+                        Ok(()) => ("installed", end.reason.clone(), false),
                         Err(e) => {
                             let lost = self.log.error("install_record", 9, json!({"ok": false, "reason": e.to_string()})).err();
                             let reason = format!("installed, but install-record.json was not written: {e}");
-                            self.end_after_change("installed", &match lost { Some(l) => format!("{reason}; and the log could not record it: {l}"), None => reason }, false)
+                            ("installed", match lost { Some(l) => format!("{reason}; and the log could not record it: {l}"), None => reason }, false)
                         }
+                    };
+                    match update {
+                        Ok(()) => self.end_after_change(state, &reason, failed),
+                        Err(why) => self.end_after_change(state, &update_reset_failed(&reason, &why), failed),
                     }
                 } else {
                     self.end_after_change(end.state, &end.reason, end.state == "unchanged")
@@ -396,6 +409,13 @@ impl Session {
             }
         };
         Ok((ended, report))
+    }
+
+    /// ADR 0024, section 7: records this install's channel and release in `<root>\update\state.json` and clears what an
+    /// earlier self-update left. Each decision is a log line (`update_lock`, `update_clear`, `update_state`).
+    fn reset_update_state(&self, root: &Path, version: &str, runtime_sha256: &str) -> std::result::Result<(), crate::update_state::Stop> {
+        let b = crate::update_state::Baseline { channel: &self.cfg.channel, version, runtime_sha256 };
+        crate::update_state::reset(root, &b, &self.log, crate::update_state::LOCK_TIMEOUT)
     }
 
     /// The nevr root a PC run acts on is the folder the host loads from. Any other root is refused, with the reason in the
@@ -501,6 +521,13 @@ impl Session {
 /// The two files the PC plan installs, read from the zip. The zip is read into memory once and hashed whole against the
 /// manifest, then each member is hashed against `contents`: what is returned is exactly what the manifest names, even if
 /// the file on disk was swapped after `verify_zip` looked at it.
+/// The end reason of a run whose files are as they should be but whose update folder could not be reset: the install worked
+/// and the game runs, so the run ends 0, and the reason (printed on the console by the CLI) says loudly that self-update is off.
+fn update_reset_failed(done: &str, why: &crate::update_state::Stop) -> String {
+    let done = if done.is_empty() { String::new() } else { format!("{done}. ") };
+    format!("{done}WARNING: self-update is off until the next install: the update folder could not be reset ({why}). Close every game and server, fix the cause and run the installer again")
+}
+
 pub fn read_package(zip_path: &Path, art: &Artifact, version: &str) -> Result<pc::Package> {
     use std::io::Read;
     let bytes = std::fs::read(zip_path).map_err(|e| Error::new(9, format!("{}: {e}", zip_path.display())))?;
