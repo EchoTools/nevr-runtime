@@ -412,7 +412,7 @@ static void ApplyPnsradLoad(uintptr_t base) {
     // Optional diagnostics: MinHook suspends every other thread, so the frame tick installs them.
     s_pendingDiagnostics.NoteLoaded(base);
 
-    Log(EchoVR::LogLevel::Info,
+    Log(s_pnsradFail == 0 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] pnsrad module patches: %d succeeded, %d failed — social layer "
         "(friends/party/login) %s",
         s_pnsradOk, s_pnsradFail,

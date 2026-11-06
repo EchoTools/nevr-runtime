@@ -51,7 +51,7 @@ bool IsKnownPollStatus(std::string_view status) {
   return status == "authorization_pending" || status == "pending" || status == "expired" || status == "verified";
 }
 
-std::string PollBodyPrefix(std::string_view body, std::string_view code, std::size_t max_chars) {
+std::string PollBodyPrefix(std::string_view body, std::string_view, std::size_t max_chars) {
   // A body that holds tokens is never echoed; neither is one that merely contains a token-shaped field.
   for (const char* secret : {"access_token", "refresh_token", "\"token\""}) {
     if (body.find(secret) != std::string_view::npos) {
@@ -61,11 +61,6 @@ std::string PollBodyPrefix(std::string_view body, std::string_view code, std::si
   std::string out;
   out.reserve(max_chars);
   for (std::size_t i = 0; i < body.size() && out.size() < max_chars;) {
-    if (!code.empty() && body.compare(i, code.size(), code) == 0) {
-      out += "<code>";
-      i += code.size();
-      continue;
-    }
     const unsigned char c = static_cast<unsigned char>(body[i]);
     out += (c < 0x20 || c == 0x7f) ? '.' : static_cast<char>(c);
     ++i;

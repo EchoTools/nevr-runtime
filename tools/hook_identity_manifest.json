@@ -28,6 +28,11 @@
       "prologue": "4883ec284885c974"
     },
     {
+      "va": "0x1400EA730",
+      "name": "GAME_ERROR_DIALOG",
+      "prologue": "48895c240848896c"
+    },
+    {
       "va": "0x1400EAEF0",
       "name": "EchoVR::GetProcAddress",
       "prologue": "4881eca800000048"

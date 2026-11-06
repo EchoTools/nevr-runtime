@@ -42,7 +42,7 @@ std::uint64_t SetTextHook(void* canvas, std::uint32_t handle, std::uint64_t item
 void Install(std::uintptr_t gameBase) {
   void* target = nevr::ResolveVA_Checked(gameBase, kSetTextVA);
   if (!nevr::ValidatePrologue(target, kSetTextPrologue.data(), kSetTextPrologue.size())) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.MENU] CCanvasUICS::SetText hook skipped va=0x%llx reason=prologue_mismatch\n",
+    nevr_boot_log_tee::TeeFprintf("[NEVR.MENU] warn; CCanvasUICS::SetText hook skipped va=0x%llx reason=prologue_mismatch\n",
                                   static_cast<unsigned long long>(kSetTextVA));
     return;
   }
@@ -50,7 +50,7 @@ void Install(std::uintptr_t gameBase) {
   g_label = FitLabel(full);
   g_originalSetText = reinterpret_cast<SetTextFn>(target);
   if (PatchDetour(&g_originalSetText, reinterpret_cast<PVOID>(&SetTextHook), "CCanvasUICS::SetText")) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.MENU] CCanvasUICS::SetText hook installed va=0x%llx label=%s full_label=%s\n",
+    nevr_boot_log_tee::TeeFprintf("[NEVR.MENU] info; CCanvasUICS::SetText hook installed va=0x%llx label=%s full_label=%s\n",
                                   static_cast<unsigned long long>(kSetTextVA), g_label.c_str(), full.c_str());
   }
 }
