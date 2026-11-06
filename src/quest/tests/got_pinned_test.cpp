@@ -415,8 +415,9 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
     }
   }
   // The bot gate's condition: the LoadLevelName vtable word is the slot levelname's own table pins as an ABS64 relocation of CR15Game::LoadLevelName, and
-  // the stock function is levelname's kFnVaddr. kRealAbs64Words above is what checks the slot; these are its values.
+  // the stock function is levelname's kFnVaddr. kRealAbs64Words above is what checks the slot; these are its values, and the symbol is defined at the stock address.
   QCHECK(hg::kPins.levelNameSlot == 0x362ef90 && hg::kPins.levelNameStock == 0x1202ecc);
+  CheckDefinedAt(elf, "_ZNK10NRadEngine8NRadGame8CR15Game13LoadLevelNameENS_9CSymbol64E", hg::kPins.levelNameStock);  // the stock function the slot holds
   // The call sites: the return address of each gate's call is in its range, and the instruction there is pinned.
   const struct {
     std::uint64_t site, lo, hi;
