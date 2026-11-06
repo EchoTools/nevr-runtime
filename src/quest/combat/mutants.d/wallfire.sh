@@ -75,3 +75,6 @@ runm wf_default_off       src/quest/sentinel/quest_config.h "s/  CombatSwitch wa
 runm wf_key_name          src/quest/sentinel/quest_config.cpp "s/kCombatWallfireKey = \"combat.wallfire\"/kCombatWallfireKey = \"combat.wallfir\"/" quest-host-shared quest_config_test
 runm wf_row_key           src/quest/combat/combat_install.cpp "s/\"combat.wallfire\", \&nevr_quest::CombatConfig::wallfire}/\"combat.wallfir\", \&nevr_quest::CombatConfig::wallfire}/" quest-host-combat combat_install_test
 runm wf_row_member        src/quest/combat/combat_install.cpp "s/\"combat.wallfire\", \&nevr_quest::CombatConfig::wallfire}/\"combat.wallfire\", \&nevr_quest::CombatConfig::bvh}/" quest-host-combat combat_install_test
+# -- the arena path pays nothing: a read, or a level scan, before the scope test is counted
+runm wf_arena_read src/quest/combat/wallfire.cpp "s/  if (!bvh::InCombatMap()) return original(gs, req, id);/  { std::uint8_t probe; SafeRead(gs + 8, \&probe, 1); }\n  if (!bvh::InCombatMap()) return original(gs, req, id);/"
+runm wf_arena_scan src/quest/combat/wallfire.cpp "1s/^/#include \"quest\/combat\/combat_level.h\"\n/;s/  if (!bvh::InCombatMap()) return original(gs, req, id);/  level::Scan(0);\n  if (!bvh::InCombatMap()) return original(gs, req, id);/"

@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -26,6 +27,7 @@
 
 #include "nevr/symbol_hash.h"
 #include "quest/combat/bvh.h"
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/safe_read.h"
@@ -150,6 +152,8 @@ void LoadLevels(std::initializer_list<const char*> names) {
   g_levels.words[kTable0 / 8] = reinterpret_cast<std::uintptr_t>(g_levels.table0);
   g_levels.words[kCount0 / 8] = static_cast<std::uintptr_t>(row);
 }
+std::atomic<std::uint64_t> g_reads{0}, g_scans{0};
+void CountScan() { g_scans.fetch_add(1); }
 double g_now = 100.0;
 double Clock() noexcept { return g_now; }
 void Look() {
@@ -444,8 +448,16 @@ void WithoutACombatMapTheGamesAnswerStands() {
   LoadLevels({"mpl_arena_a"});
   Look();
   QCHECK(!bvh::InCombatMap());
+  g_reads = 0;
+  g_scans = 0;
+  nevr_quest::combat::SetReadCounterForTest(&g_reads);
+  nevr_quest::combat::level::SetScanSeamForTest(&CountScan);
   QCHECK(!CallQuerySite(gs, Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));  // a segment through the wall is not refused
-  QCHECK(g_stockQuery == 1 && g_stubCalls == 0 && g_gameCalls == 0);
+  QCHECK(!CallQueryOther(gs, Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));
+  nevr_quest::combat::SetReadCounterForTest(nullptr);
+  nevr_quest::combat::level::SetScanSeamForTest(nullptr);
+  QCHECK(g_reads == 0 && g_scans == 0);  // the arena path reads no game memory and scans no level
+  QCHECK(g_stockQuery == 2 && g_stubCalls == 0 && g_gameCalls == 0);
   QCHECK(C().atSite == 0 && C().checked == 0 && C().blocked == 0);
   LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});  // an arena level that is loaded wins
   Look();

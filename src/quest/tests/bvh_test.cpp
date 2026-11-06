@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -26,7 +27,9 @@
 #include <vector>
 
 #include "nevr/symbol_hash.h"
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/safe_read.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/tests/bvh_build.h"
 #include "quest/tests/combat_libr15_image.h"
@@ -160,6 +163,20 @@ void LoadLevels(std::initializer_list<const char*> names) {
   }
   g_game.words[kTable0 / 8] = reinterpret_cast<std::uintptr_t>(g_game.table0);
   g_game.words[kCount0 / 8] = static_cast<std::uintptr_t>(row);
+}
+
+// What a path costs, counted: every SafeRead and every level scan goes through a counter behind its test seam (safe_read.h, combat_level.h).
+std::atomic<std::uint64_t> g_reads{0}, g_scans{0};
+void CountScan() { g_scans.fetch_add(1); }
+void StartCounting() {
+  g_reads = 0;
+  g_scans = 0;
+  nevr_quest::combat::SetReadCounterForTest(&g_reads);
+  nevr_quest::combat::level::SetScanSeamForTest(&CountScan);
+}
+void StopCounting() {
+  nevr_quest::combat::SetReadCounterForTest(nullptr);
+  nevr_quest::combat::level::SetScanSeamForTest(nullptr);
 }
 
 // The tick's clock: one second per look, so every Tick that asks for a look gets one.
@@ -572,10 +589,13 @@ void WithoutACombatMapEveryHookCallsTheGamesFunction() {
   const auto allStock = [&]() {
     const int int0 = g_stockInt, occ0 = g_stockOcc, touch0 = g_stockTouch, gate0 = g_stockGate;
     void* gs = nullptr;
+    StartCounting();
     QCHECK(!CallInt(&cbvh, kDown, hit));
     QCHECK(!OccludedSlot()(&cbvh, a, out));
     QCHECK(TouchSlot()(nullptr, nullptr, nullptr, nullptr));  // StockTouch answers true: the replaced one would answer false
     QCHECK(!CallGateAllowedSite(reinterpret_cast<const void*>(0x77), kDown, hit, &gs));
+    StopCounting();
+    QCHECK(g_reads == 0 && g_scans == 0);  // the arena path of all four hooks reads no game memory and scans no level
     QCHECK(g_stockInt == int0 + 2 && g_stockOcc == occ0 + 1 && g_stockTouch == touch0 + 1 && g_stockGate == gate0 + 1);  // the gate's own stock cast reaches Intersect too
     const bvh::Counters c = bvh::GetCounters();
     QCHECK(c.intersect == 0 && c.occluded == 0 && c.touch == 0 && c.gated == 0 && c.stock == 0);
