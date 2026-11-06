@@ -101,7 +101,7 @@ DeviceFlowResult RunFlow(const DeviceFlowOps& ops, const std::string& login_url,
     const nevr_token_auth::DevicePollResponse response = ops.poll(code);
     {
       // One Info line per poll (#397): the wait is otherwise silent, and a loop that polls and is told
-      // "pending" cannot be told from one that does not run. The body prefix is already masked.
+      // "pending" cannot be told from one that does not run. The body prefix withholds token bodies.
       static const char* const kNames[] = {"pending", "verified", "expired", "error"};
       log(LogLevel::Info,
           "[NEVR.AUTH] poll #" + std::to_string(++pollsSent) + " http=" +

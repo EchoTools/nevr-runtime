@@ -1182,6 +1182,12 @@ const char* nevr_token_auth::TokenAuthReadiness(bool is_server, bool has_device_
     return auth_ok ? "ok" : "failed";
 }
 
+std::string nevr_token_auth::TokenAuthReadinessLine(bool is_server, bool has_device_auth,
+                                                    bool server_password_sign_in, bool auth_ok) {
+    return std::string("[NEVR.MODULE] token_auth initialized mode=") + (is_server ? "server" : "client") +
+           " auth=" + TokenAuthReadiness(is_server, has_device_auth, server_password_sign_in, auth_ok);
+}
+
 std::string nevr_token_auth::ServerSignInPromptLine(const std::string& code, const std::string& loginUrl) {
     const std::string page = loginUrl + "?code=" + code;
     nlohmann::json line;
@@ -1279,6 +1285,7 @@ void nevr_token_auth::Shutdown() {
     // this is a structurally-guaranteed no-op there — say so instead of
     // logging the same "complete" line regardless of whether anything ran.
     const bool wasActive = (s_auth != nullptr);
+    s_serverPasswordSignIn = false;
     AuthSnapshot stoppingSnapshot;
     stoppingSnapshot.readiness = AuthReadiness::Stopping;
     (void)s_snapshotStore.Publish(std::move(stoppingSnapshot));
@@ -1330,9 +1337,8 @@ NEVR_MODULE_API int token_auth_Init(const NevrModuleContext* ctx) {
     // platform_compat_Init (tls=%s createdir=%s msxml6=%s). Servers skip
     // device-code auth (early return in nevr_token_auth::Init): "password" when auth.password is the sign-in, else "n/a".
     const bool authOk = !nevr_token_auth::GetToken().empty();
-    Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized mode=%s auth=%s",
-        is_server ? "server" : "client",
-        nevr_token_auth::TokenAuthReadiness(is_server, s_auth != nullptr, s_serverPasswordSignIn, authOk));
+    Log(EchoVR::LogLevel::Info, "%s",
+        nevr_token_auth::TokenAuthReadinessLine(is_server, s_auth != nullptr, s_serverPasswordSignIn, authOk).c_str());
     return 0;
 }
 

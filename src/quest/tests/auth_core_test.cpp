@@ -649,7 +649,7 @@ TEST(session_device_login_succeeds_publishes_the_token_and_persists_only_the_ref
   CHECK(presenter.cleared.load() >= 1);
   CHECK_EQ(http.Count("poll"), 3);
   const std::string all = log.All();
-  CHECK(all.find("DEVCODE") == std::string::npos);
+  CHECK(all.find("?code=DEVCODE") != std::string::npos);  // the code is in the log; the tokens are not
   CHECK(all.find("rt-dev") == std::string::npos);
   CHECK(all.find("eyJ") == std::string::npos);
   CHECK(all.find("http_key") == std::string::npos);
@@ -683,7 +683,7 @@ TEST(session_poll_line_reports_a_server_error_status_and_no_unknown_status_warni
   const std::string all = log.All();
   CHECK(all.find("poll #1 http=503 status=pending") != std::string::npos);
   CHECK(all.find("unknown status") == std::string::npos);
-  CHECK(all.find("DEVCODE") == std::string::npos);
+  CHECK(all.find("?code=DEVCODE") != std::string::npos);
   s.Stop();
 }
 
@@ -1106,7 +1106,7 @@ TEST(a_four_character_dashless_code_is_shown_whole) {
   CHECK(text.find("K7RX-") == std::string::npos);  // no dash appended
 }
 
-TEST(session_device_login_with_a_four_character_code_presents_it_and_never_logs_it) {
+TEST(session_device_login_with_a_four_character_code_presents_it_and_logs_it_in_full) {
   FakeClock clock;
   FakeHttp http;
   FakeStore store;
@@ -1120,8 +1120,8 @@ TEST(session_device_login_with_a_four_character_code_presents_it_and_never_logs_
   CHECK_EQ(presenter.presented.load(), 1);
   CHECK_EQ(presenter.last_url, std::string("https://login.test/device?code=K7RX"));
   const std::string all = log.All();
-  CHECK(all.find("K7RX") == std::string::npos);
-  CHECK(all.find("<4 chars masked>") != std::string::npos);
+  CHECK(all.find("?code=K7RX") != std::string::npos);
+  CHECK(all.find("masked") == std::string::npos);
   s.Stop();
 }
 
@@ -1269,8 +1269,8 @@ TEST(while_the_player_is_asked_to_sign_in_the_game_text_holds_the_current_code_a
   CHECK(mode == prompt_board::Mode::kNotice);
   CHECK_EQ(BoardTitle(), std::string(kSignedInTitle));
   CHECK(!std::filesystem::exists(JoinPath(dir, "device_login.txt")));
-  CHECK(log.All().find("FIRSTCODE") == std::string::npos);
-  CHECK(log.All().find("SECONDCODE") == std::string::npos);
+  CHECK(log.All().find("FIRSTCODE") != std::string::npos);
+  CHECK(log.All().find("SECONDCODE") != std::string::npos);
   CHECK_EQ(log.Count(LogLevel::Info, R"("what":"code")"), size_t(2));
   CHECK_EQ(log.Count(LogLevel::Info, R"("what":"signed_in")"), size_t(1));
   CHECK_EQ(log.Count(LogLevel::Info, R"("mechanism":"file","path")"), size_t(2));
@@ -1767,8 +1767,8 @@ TEST(session_an_expired_device_code_is_replaced_and_the_prompt_stays_up_until_th
   CHECK_EQ(clock.Sleeps(), 3);
   CHECK_EQ(log.Count(LogLevel::Info, "the device code ran out without a sign-in; requesting a new one (code 2 of 6)"),
            size_t(1));
-  CHECK(log.All().find("FIRSTCODE") == std::string::npos);
-  CHECK(log.All().find("SECONDCODE") == std::string::npos);
+  CHECK(log.All().find("FIRSTCODE") != std::string::npos);
+  CHECK(log.All().find("SECONDCODE") != std::string::npos);
   s.Stop();
 }
 

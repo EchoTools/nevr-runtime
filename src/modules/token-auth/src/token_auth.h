@@ -32,6 +32,8 @@ std::string ServerFlowRefusedLine();
 // The `auth=` value of the module's readiness line: "password" for a server that signs in with auth.password (its
 // sign-in follows, so it is not "n/a"), "n/a" for a server with no token auth, else ok or failed.
 const char* TokenAuthReadiness(bool is_server, bool has_device_auth, bool server_password_sign_in, bool auth_ok);
+// The module's readiness Info line, whole: `[NEVR.MODULE] token_auth initialized mode=<server|client> auth=<value>`.
+std::string TokenAuthReadinessLine(bool is_server, bool has_device_auth, bool server_password_sign_in, bool auth_ok);
 
 struct ConsoleWrite {
     bool ok = false;

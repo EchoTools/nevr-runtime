@@ -888,6 +888,10 @@ TEST(DeviceAuthFlow, AnUnknownStatusIsAWarningAndStillPending) {
 TEST(DeviceAuthFlow, ServerPasswordSignInLineSaysWhatTheServerDoes) {
   EXPECT_EQ(nevr_token_auth::ServerPasswordSignInLine(),
             "[NEVR.AUTH] server signs in with auth.password from config.yaml; no device code needed");
+  EXPECT_EQ(nevr_token_auth::TokenAuthReadinessLine(true, false, true, false),
+            "[NEVR.MODULE] token_auth initialized mode=server auth=password");
+  EXPECT_EQ(nevr_token_auth::TokenAuthReadinessLine(false, true, false, true),
+            "[NEVR.MODULE] token_auth initialized mode=client auth=ok");
   EXPECT_STREQ(nevr_token_auth::TokenAuthReadiness(true, false, true, false), "password");
   EXPECT_STREQ(nevr_token_auth::TokenAuthReadiness(true, false, false, false), "n/a");
   EXPECT_STREQ(nevr_token_auth::TokenAuthReadiness(true, true, false, true), "ok");
