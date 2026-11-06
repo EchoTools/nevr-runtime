@@ -67,23 +67,23 @@ The memory (#2195). The run reads the cgroup it runs in (`/proc/self/cgroup`; th
 above it, so a slice counts every scope's kills and says nothing about this run. The end record carries `memory`: the
 cgroup's `memory.peak` read through a descriptor reset when the run starts (`peak_since` is `run start`; where the
 kernel refuses the reset it is `cgroup creation`, the lifetime peak, which a fresh scope makes the run's), the cgroup's
-`oom` and `oom_kill` events counted over the run (`memory.events.local`, `memory.events` where a tree has no such
-file), and `oom_killed` with `oom_killed_in`: true when the run's own cgroup saw an oom_kill. The SIGTERM that systemd
+`oom` and `oom_kill` events counted over the run (`memory.events.local`: kills of processes directly in that cgroup,
+not in a cgroup below it, which a run's scope does not have; `memory.events` where a tree has no such file), and `oom_killed` with `oom_killed_in`: true when the run's own cgroup saw an oom_kill. The SIGTERM that systemd
 sends the rest of a scope the kernel killed in is then that, not an interrupt. A `test-tools: memory ...` line precedes
 the end line in the log, and `oom_killed=<cgroup>` follows the end line's `rc`.
 
-The lock. A run of the whole suite (no arguments, or none naming a test path other than tools/tests itself) is one at a
-time per log directory: an exclusive flock on <log dir>/run.lock, taken before the start record and held until the run
-ends. A run given test paths (a subset) is small and does not wait behind a whole suite: it takes no lock and its
-records say `lock: {"taken": false, "reason": "subset"}`. The default log directory is the same for every checkout on a machine, so the lock is
-machine-wide; a run with a log directory of its own has a lock of its own. The file names the holder (pid, checkout,
-start) while it runs. A run that finds it held says who holds it on stderr and waits up to $NEVR_TEST_LOCK_WAIT_S
-(default 5400); both records carry `lock` (`taken`, `state`, `contended`, `holder`, `wait_s`, `deadline_s`, `handoff`). Past the
-deadline the run does not start: exit 75 and a `lock_timeout` record that names the holder then. A SIGINT, SIGTERM or
-SIGHUP during the wait stops it the same way: exit 128 + the signal and a `lock_wait_interrupted` record. A caller that
-holds the lock itself and runs more after the runner (a wrapper) sets $NEVR_TEST_LOCK_HELD to the lock file: the run
-does not take it again and records `state` `held_by_caller`; a variable that names another file is ignored, and one
-that names a lock nobody holds is taken here, each with a `WARN` line and a note in `handoff`.
+The lock. A run of the whole suite is one at a time per log directory: an exclusive flock on <log dir>/run.lock,
+taken before the start record and held until the run ends. A run is a subset, and takes no lock, when its positional
+arguments name between one and SUBSET_MAX_FILES test paths and none is tools/tests or a directory above it (`is_subset`:
+options and the values of the options that take one are not paths, so `--deselect X`, `--ignore X`, `--rootdir .`,
+`tools`, `.` and a list of every test file all run the whole suite); its records say
+`lock: {"taken": false, "reason": "subset"}`. The default log directory is the same for every checkout on a machine, so
+the lock is machine-wide; a run with a log directory of its own has a lock of its own. The file names the holder (pid,
+checkout, start) while it runs. A run that finds it held says who holds it on stderr and waits up to
+$NEVR_TEST_LOCK_WAIT_S (default 5400); both records carry `lock` (`taken`, `state`, `contended`, `holder`, `wait_s`,
+`deadline_s`; `taken` is true only for a run that holds the lock). Past the deadline the run does not start: exit 75 and
+a `lock_timeout` record that names the holder then. A SIGINT, SIGTERM or SIGHUP during the wait stops it the same way:
+exit 128 + the signal and a `lock_wait_interrupted` record.
 
 The environment. pytest is started with a fixed one, so a run gives the same answer for whoever starts it:
 `HERMETIC_SET` (no user or system git configuration, a fixed identity, no commit or tag signing, `main` as the
@@ -340,16 +340,41 @@ def given_workers(args: list):
 
 
 SUITE_DIR = pathlib.Path(__file__).resolve().parent / "tests"
+# The pytest options that take their value as the next argument (`--opt value`; `--opt=value` and `-xVALUE` are one
+# argument and start with a dash). A value is not a test path.
+VALUE_OPTIONS = frozenset((
+    "--deselect", "--ignore", "--ignore-glob", "--rootdir", "--basetemp", "--confcutdir", "-c", "--config-file", "-k", "-m",
+    "-o", "--override-ini", "-p", "-n", "--numprocesses", "--maxfail", "-W", "--durations", "--durations-min", "--tb", "-r",
+    "--randomly-seed", "--import-mode", "--log-level", "--color", "--junitxml", "--junit-xml", "--dist", "--tx",
+    "--max-worker-restart", "--lfnf", "--capture", "--show-capture", "--assert", "--cache-show", "--pyargs-dir"))
+# More test files than this named on the command line are the suite file by file.
+SUBSET_MAX_FILES = 20
 
 
 def is_subset(args: list) -> bool:
-    """True when the arguments name test paths and not the whole suite: a file or directory that exists (a `::` node id
-    is cut off), none of them `tools/tests` itself. Such a run is small and does not take the lock. No path (the
-    default run, or only options) is the whole suite. An option's value that happens to be an existing path
-    (`--rootdir .`) counts as a path: that run does not lock, which costs nothing but the serialization."""
-    paths = [pathlib.Path(tok.split("::", 1)[0]).resolve() for tok in args
-             if not tok.startswith("-") and tok.split("::", 1)[0] and os.path.exists(tok.split("::", 1)[0])]
-    return bool(paths) and SUITE_DIR not in paths
+    """True when the arguments name a few test paths and so run a small part of the suite; such a run takes no lock.
+
+    Only the positional arguments count: the options are skipped, and so is the value of an option that takes one
+    (VALUE_OPTIONS, in the space-separated form). A positional argument names a path when what precedes any `::` exists.
+    The run is the whole suite when no positional argument names a path (the default run, or only options such as
+    `--deselect` and `--ignore`, which collect from the root), when one is `tools/tests` or a directory above it
+    (`tools`, `.`), or when more than SUBSET_MAX_FILES are named (the suite file by file). A path outside the
+    repository, as a temporary suite is, makes a subset. When in doubt a run is the whole suite: the lock is the safe
+    side."""
+    paths = []
+    skip = False
+    for tok in args:
+        if skip:
+            skip = False
+        elif tok.startswith("-"):
+            skip = tok in VALUE_OPTIONS
+        else:
+            target = tok.split("::", 1)[0]
+            if target and os.path.exists(target):
+                paths.append(pathlib.Path(target).resolve())
+    if not paths or len(paths) > SUBSET_MAX_FILES:
+        return False
+    return not any(p == SUITE_DIR or p in SUITE_DIR.parents for p in paths)
 
 
 def logical_cpus() -> int:
@@ -505,49 +530,37 @@ class MachineLock:
     record until the run ends (or the process does: a killed run frees it). Every seat on a machine shares the default
     log directory, so the lock is machine-wide; a test that keeps its records in a directory of its own has a lock of
     its own, so a run a test starts never waits for the run that started the test. The file holds the holder's pid and
-    checkout while it runs, for the line a waiting run prints and the record of one that gives up.
-
-    A caller that already holds the lock (a wrapper that goes on to run something else after the runner) says so with
-    $NEVR_TEST_LOCK_HELD=<the lock file>: the runner then does not take it again, and records it as held by its caller.
-    The claim is checked: a lock nobody holds is taken here, and the record says the claim was wrong."""
+    checkout while it runs, for the line a waiting run prints and the record of one that gives up."""
 
     def __init__(self):
         self.fd = None
         self.info = None
 
-    def acquire(self, log_dir: pathlib.Path, deadline_s: float, handoff=None) -> dict:
-        """Take the lock, waiting up to `deadline_s`. Returns {"path", "state", "contended" (another run held it when
-        this one asked), "holder" (who held it then), "wait_s", "deadline_s", "handoff", "signal"}; `state` is
-        `acquired`, `held_by_caller`, `timeout` or `interrupted` (a SIGINT, SIGTERM or SIGHUP came while it waited, named
-        by `signal`). A lock file that cannot be opened raises OSError."""
+    def acquire(self, log_dir: pathlib.Path, deadline_s: float) -> dict:
+        """Take the lock, waiting up to `deadline_s`. Returns {"taken" (this run holds the lock), "path", "state",
+        "contended" (another run held it when this one asked), "holder" (who held it then), "wait_s", "deadline_s",
+        "signal"}; `state` is `acquired`, `timeout` or `interrupted` (a SIGINT, SIGTERM or SIGHUP came while it waited,
+        named by `signal`). A lock file that cannot be opened raises OSError."""
         path = log_dir / LOCK_NAME
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)  # close-on-exec: pytest does not inherit it
         started = time.monotonic()
-        info = {"taken": True, "path": str(path), "state": "acquired", "contended": False, "holder": None, "wait_s": 0.0,
-                "deadline_s": deadline_s, "handoff": None, "signal": None}
-        claimed = bool(handoff) and os.path.realpath(handoff) == os.path.realpath(path)
-        if handoff and not claimed:
-            info["handoff"] = f"ignored: $NEVR_TEST_LOCK_HELD names {handoff}, not {path}"
+        info = {"taken": False, "path": str(path), "state": "acquired", "contended": False, "holder": None,
+                "wait_s": 0.0, "deadline_s": deadline_s, "signal": None}
         previous = self.catch_signals()
         keep = False
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 keep = True
-                if claimed:
-                    info["handoff"] = "wrong: $NEVR_TEST_LOCK_HELD names this lock but nobody held it; taken here"
             except BlockingIOError:
+                info["contended"] = True
                 info["holder"] = lock_holder(path)
-                if claimed:
-                    info["state"], info["handoff"] = "held_by_caller", "held by the caller"
+                report(f"test-tools: waiting for the machine-wide test lock {path} (holder: "
+                       f"{json.dumps(info['holder'])}); giving up after {deadline_s:g} s")
+                if self.block(fd, deadline_s):
+                    keep = True
                 else:
-                    info["contended"] = True
-                    report(f"test-tools: waiting for the machine-wide test lock {path} (holder: "
-                           f"{json.dumps(info['holder'])}); giving up after {deadline_s:g} s")
-                    if self.block(fd, deadline_s):
-                        keep = True
-                    else:
-                        info["state"], info["holder"] = "timeout", lock_holder(path)
+                    info["state"], info["holder"] = "timeout", lock_holder(path)
         except LockInterrupted as exc:
             info["state"], info["signal"], info["holder"] = "interrupted", signal_name(exc.signum), lock_holder(path)
             keep = False
@@ -559,6 +572,7 @@ class MachineLock:
             os.close(fd)
             self.info = info
             return info
+        info["taken"] = True
         os.ftruncate(fd, 0)
         os.pwrite(fd, json.dumps({"pid": os.getpid(), "checkout": git("rev-parse", "--show-toplevel"),
                                   "start": datetime.datetime.now(datetime.timezone.utc).isoformat()}).encode(), 0)
@@ -906,12 +920,10 @@ def run_locked(argv: list, lock: MachineLock) -> int:
         lock_info = {"taken": False, "reason": "subset"}
     else:
         try:
-            lock_info = lock.acquire(log_dir, LOCK_WAIT_S, os.environ.get("NEVR_TEST_LOCK_HELD"))
+            lock_info = lock.acquire(log_dir, LOCK_WAIT_S)
         except OSError as exc:
             print(f"test-tools: FAIL cannot take the machine-wide test lock in {log_dir}: {exc}", file=sys.stderr)
             return 2
-    if lock_info.get("handoff") is not None and lock_info["handoff"].startswith(("wrong", "ignored")):
-        report(f"test-tools: WARN {lock_info['handoff']}")
     if lock_info.get("state") in ("timeout", "interrupted"):
         stopped = (f"the machine-wide test lock {lock_info['path']} was not free after {lock_info['wait_s']:g} s (the "
                    f"deadline is $NEVR_TEST_LOCK_WAIT_S, {LOCK_WAIT_S:g} s)" if lock_info["state"] == "timeout" else

@@ -68,17 +68,17 @@ def test_the_lock_is_held_by_the_runner_and_not_by_pytest():
 '''
 
 # Takes the lock the way the runner does, in a process of its own: the arguments are the log directory, the deadline in
-# seconds, the handoff ("-" for none) and the seconds to stay alive after the lock is taken, counted from the start
-# (a timer left running past the deadline would end this process); prints what `acquire` returned.
+# seconds and the seconds to stay alive after the lock is taken, counted from the start (a timer left running past the
+# deadline would end this process); prints what `acquire` returned.
 ACQUIRE_SCRIPT = '''
 import importlib.util, json, pathlib, sys, time
 spec = importlib.util.spec_from_file_location("run_tool_tests", {script!r})
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
-log_dir, deadline, handoff, stay = sys.argv[1], float(sys.argv[2]), sys.argv[3], float(sys.argv[4])
+log_dir, deadline, stay = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
 start = time.monotonic()
 lock = m.MachineLock()
-info = lock.acquire(pathlib.Path(log_dir), deadline, None if handoff == "-" else handoff)
+info = lock.acquire(pathlib.Path(log_dir), deadline)
 while time.monotonic() < start + stay:
     time.sleep(0.05)
 print(json.dumps(info))
@@ -128,21 +128,40 @@ class Tmp(unittest.TestCase):
 
 
 class SubsetTest(Tmp):
-    def test_arguments_that_name_test_paths_are_a_subset(self):
-        file = self.root / "test_x.py"
-        file.write_text("")
-        for args in ([str(file)], ["-q", "-p", "no:cacheprovider", str(file)], [f"{file}::test_a"],
-                     [str(self.root)], [str(file), str(self.module.SUITE_DIR / "test_run_tool_tests.py")]):
-            with self.subTest(args=args):
+    """Which command lines run the whole suite (and so take the lock), classified from the repository root."""
+
+    HEAVY = "tools/tests/test_heavy_guard.py"
+
+    def setUp(self):
+        super().setUp()
+        self.file = self.root / "test_x.py"
+        self.file.write_text("")
+        before = os.getcwd()
+        os.chdir(REPO)
+        self.addCleanup(os.chdir, before)
+
+    def test_a_few_test_paths_are_a_subset(self):
+        one = "tools/tests/test_run_tool_tests.py"
+        files = sorted(str(p) for p in self.module.SUITE_DIR.glob("test_*.py"))
+        self.assertGreater(len(files), self.module.SUBSET_MAX_FILES + 1)
+        for args in ([str(self.file)], ["-q", "-p", "no:cacheprovider", str(self.file)], [f"{self.file}::test_a"],
+                     [str(self.root)], [one], [f"{one}::RunToolTestsRecord::test_x"], ["-k", "test_a", one],
+                     ["-n", "2", one], ["-q", "--deselect", f"{self.HEAVY}::HeavyGuardTest::test_x", one],
+                     [str(self.file), str(self.module.SUITE_DIR / "test_run_tool_tests.py")],
+                     files[:self.module.SUBSET_MAX_FILES]):
+            with self.subTest(args=args[:3]):
                 self.assertTrue(self.module.is_subset(args))
 
-    def test_the_whole_suite_is_no_path_or_the_suites_directory(self):
-        file = self.root / "test_x.py"
-        file.write_text("")
-        for args in ([], ["-q"], ["-q", "-p", "no:cacheprovider", "-k", "test_a"], [str(self.root / "absent.py")],
-                     [str(self.module.SUITE_DIR)], ["-q", str(self.module.SUITE_DIR) + "/"],
-                     [str(file), str(self.module.SUITE_DIR)]):
-            with self.subTest(args=args):
+    def test_every_command_line_that_runs_the_whole_suite_takes_the_lock(self):
+        files = sorted(str(p) for p in self.module.SUITE_DIR.glob("test_*.py"))
+        for args in ([], ["-q"], ["-k", "test_a"], ["-q", "-p", "no:cacheprovider"], [str(self.root / "absent.py")],
+                     ["tools/tests"], [str(self.module.SUITE_DIR)], ["-q", str(self.module.SUITE_DIR) + "/"],
+                     ["tools"], ["."], [str(REPO)], [str(self.file), str(self.module.SUITE_DIR)],
+                     ["--deselect", f"{self.HEAVY}::HeavyGuardTest::test_second_run_waits_for_first"],
+                     ["-q", "--ignore", self.HEAVY], ["-q", f"--ignore={self.HEAVY}"], ["--rootdir", "."],
+                     ["-q", "--basetemp", "/var/tmp"], ["-o", "cache_dir=tools"], ["-p", "tools"],
+                     files, files[:self.module.SUBSET_MAX_FILES + 1]):
+            with self.subTest(args=args[:3]):
                 self.assertFalse(self.module.is_subset(args))
 
 
@@ -224,9 +243,9 @@ class MemoryWatchTest(Tmp):
 class MachineLockTest(Tmp):
     """The lock itself. A wait with a deadline runs in a process of its own, with a timeout."""
 
-    def acquire(self, deadline: float, handoff: str = "-", stay: float = 0.0, log_dir: Path = None) -> dict:
+    def acquire(self, deadline: float, stay: float = 0.0, log_dir: Path = None) -> dict:
         done = subprocess.run([sys.executable, "-c", ACQUIRE_SCRIPT.format(script=str(SCRIPT)),
-                               str(log_dir or self.root), str(deadline), handoff, str(stay)],
+                               str(log_dir or self.root), str(deadline), str(stay)],
                               capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         return json.loads(done.stdout)
@@ -253,7 +272,8 @@ class MachineLockTest(Tmp):
         self.assertEqual((holder["pid"], holder["checkout"]), (os.getpid(), self.module.git("rev-parse", "--show-toplevel")))
         self.assertIn("start", holder)
         waited = self.acquire(0.2)
-        self.assertEqual((waited["state"], waited["contended"], waited["holder"]), ("timeout", True, holder))
+        self.assertEqual((waited["state"], waited["contended"], waited["holder"], waited["taken"]),
+                         ("timeout", True, holder, False))
         first.release()
         self.assertEqual((self.root / "run.lock").read_text(), "")
 
@@ -264,7 +284,7 @@ class MachineLockTest(Tmp):
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         os.write(fd, json.dumps({"pid": 4242}).encode())
         proc = subprocess.Popen([sys.executable, "-c", ACQUIRE_SCRIPT.format(script=str(SCRIPT)), str(self.root),
-                                 "1.0", "-", "0"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                 "1.0", "0"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
         waiting = proc.stderr.readline()
         self.assertIn('"pid": 4242', waiting)
@@ -288,7 +308,7 @@ class MachineLockTest(Tmp):
         first = self.module.MachineLock()
         first.acquire(self.root, 5)
         proc = subprocess.Popen([sys.executable, "-c", ACQUIRE_SCRIPT.format(script=str(SCRIPT)), str(self.root),
-                                 "1.0", "-", "1.6"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                 "1.0", "1.6"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
         self.assertIn("waiting for the machine-wide test lock", proc.stderr.readline())
         first.release()
@@ -302,7 +322,7 @@ class MachineLockTest(Tmp):
         for name in ("SIGTERM", "SIGINT", "SIGHUP"):
             with self.subTest(signal=name):
                 proc = subprocess.Popen([sys.executable, "-c", ACQUIRE_SCRIPT.format(script=str(SCRIPT)),
-                                         str(self.root), "60", "-", "0"], stdout=subprocess.PIPE,
+                                         str(self.root), "60", "0"], stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, text=True)
                 self.addCleanup(lambda p=proc: p.poll() is None and p.kill())
                 self.assertIn("waiting for the machine-wide test lock", proc.stderr.readline())
@@ -311,33 +331,8 @@ class MachineLockTest(Tmp):
                 self.assertEqual(proc.returncode, 0, stdout + stderr)
                 self.assertNotIn("Traceback", stderr)
                 info = json.loads(stdout)
-                self.assertEqual((info["state"], info["signal"]), ("interrupted", name))
+                self.assertEqual((info["state"], info["signal"], info["taken"]), ("interrupted", name, False))
         first.release()
-
-    def test_a_lock_the_caller_holds_is_not_taken_again(self):
-        first = self.module.MachineLock()
-        first.acquire(self.root, 5)
-        path = str(self.root / "run.lock")
-        before = (self.root / "run.lock").read_text()
-        info = self.acquire(0.2, handoff=path)
-        self.assertEqual((info["state"], info["contended"], info["handoff"]), ("held_by_caller", False,
-                                                                              "held by the caller"))
-        self.assertEqual(info["holder"]["pid"], os.getpid())
-        self.assertEqual((self.root / "run.lock").read_text(), before)  # the caller's holder stays
-        first.release()
-
-    def test_a_handoff_that_names_another_file_is_ignored(self):
-        first = self.module.MachineLock()
-        first.acquire(self.root, 5)
-        info = self.acquire(0.2, handoff=str(self.root / "other.lock"))
-        self.assertEqual(info["state"], "timeout")
-        self.assertTrue(info["handoff"].startswith("ignored"), info)
-        first.release()
-
-    def test_a_handoff_for_a_lock_nobody_holds_is_taken_here_and_says_so(self):
-        info = self.acquire(0.2, handoff=str(self.root / "run.lock"))
-        self.assertEqual(info["state"], "acquired")
-        self.assertTrue(info["handoff"].startswith("wrong"), info)
 
 
 @unittest.skipIf(own_cgroup_path() is None, "no cgroup v2 line in /proc/self/cgroup")
@@ -374,8 +369,7 @@ class RunnerTest(unittest.TestCase):
         env = dict(os.environ, NEVR_TEST_LOG_DIR=str(self.logs), NEVR_TEST_WORKERS="0",
                    NEVR_TEST_CGROUP_ROOT=str(self.cgroups))
         for name in ("PYTEST_ADDOPTS", "PYTEST_DISABLE_PLUGIN_AUTOLOAD", "PYTEST_XDIST_AUTO_NUM_WORKERS",
-                     "PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT", "PYTEST_XDIST_TESTRUNUID",
-                     "NEVR_TEST_LOCK_HELD"):
+                     "PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT", "PYTEST_XDIST_TESTRUNUID"):
             env.pop(name, None)
         env.update({k: v for k, v in extra.items() if v is not None})
         for name in [k for k, v in extra.items() if v is None]:
@@ -580,7 +574,7 @@ class RunnerTest(unittest.TestCase):
         self.hold_lock({"pid": 4242, "checkout": "/the/other/checkout"})
         result = self.run_whole(NEVR_TEST_LOCK_WAIT_S="0.5")
         self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
-        self.assertEqual(self.records("lock_timeout")[0]["lock"]["taken"], True)
+        self.assertEqual(self.records("lock_timeout")[0]["lock"]["taken"], False)
 
     def test_a_run_that_cannot_get_the_lock_by_its_deadline_is_refused_and_names_who_holds_it(self):
         holder = self.popen_holder()
@@ -594,7 +588,8 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(self.records("start")[0]["event"], "start")  # the holder's own
         refused = self.records("lock_timeout")
         self.assertEqual(len(refused), 1)
-        self.assertEqual((refused[0]["lock"]["state"], refused[0]["lock"]["deadline_s"]), ("timeout", 0.5))
+        self.assertEqual((refused[0]["lock"]["state"], refused[0]["lock"]["deadline_s"], refused[0]["lock"]["taken"]),
+                         ("timeout", 0.5, False))
         self.assertGreaterEqual(refused[0]["lock"]["wait_s"], 0.5)
         self.assertEqual((refused[0]["lock"]["holder"]["pid"], refused[0]["lock"]["holder"]["checkout"]),
                          (holder.pid, str(REPO)))
@@ -622,7 +617,8 @@ class RunnerTest(unittest.TestCase):
         stdout, stderr = proc.communicate(timeout=120)
         self.assertEqual(proc.returncode, 0, stdout + stderr)
         lock = self.records("start")[0]["lock"]
-        self.assertEqual((lock["state"], lock["deadline_s"], lock["contended"]), ("acquired", 60, True))
+        self.assertEqual((lock["state"], lock["deadline_s"], lock["contended"], lock["taken"]),
+                         ("acquired", 60, True, True))
         self.assertEqual(lock["holder"], {"pid": 4242, "checkout": "/the/other/checkout"})
         self.assertGreater(lock["wait_s"], 0)
 
@@ -643,7 +639,8 @@ class RunnerTest(unittest.TestCase):
                 stopped = self.records("lock_wait_interrupted")
                 self.assertEqual(len(stopped), 1)
                 lock = stopped[0]["lock"]
-                self.assertEqual((lock["state"], lock["signal"], lock["holder"]["pid"]), ("interrupted", name, 4242))
+                self.assertEqual((lock["state"], lock["signal"], lock["holder"]["pid"], lock["taken"]),
+                                 ("interrupted", name, 4242, False))
                 self.assertGreater(lock["wait_s"], 0)
 
     def test_the_lock_is_held_during_the_run_and_pytest_does_not_inherit_it(self):
@@ -670,32 +667,6 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         start = [json.loads(line) for line in (other / "runs.jsonl").read_text().splitlines()][0]
         self.assertEqual((start["lock"]["path"], start["lock"]["contended"]), (str(other / "run.lock"), False))
-
-    def test_a_lock_the_caller_holds_is_recorded_as_held_by_the_caller(self):
-        self.hold_lock({"pid": 4242, "checkout": "/the/caller"})
-        path = self.logs / "run.lock"
-        before = path.read_text()
-        result = self.run_whole(NEVR_TEST_LOCK_HELD=str(path), NEVR_TEST_LOCK_WAIT_S="0.5")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for record in self.records("start") + self.records():
-            lock = record["lock"]
-            self.assertEqual((lock["state"], lock["contended"], lock["handoff"]), ("held_by_caller", False,
-                                                                                  "held by the caller"))
-            self.assertEqual(lock["holder"]["pid"], 4242)
-        self.assertNotIn("waiting for the machine-wide test lock", result.stderr)
-        self.assertEqual(path.read_text(), before)  # the caller's holder is untouched by the run's end too
-
-    def test_a_handoff_that_names_another_file_or_a_free_lock_is_not_believed(self):
-        self.hold_lock({"pid": 4242, "checkout": "/the/caller"})
-        result = self.run_whole(NEVR_TEST_LOCK_HELD=str(self.root / "elsewhere.lock"), NEVR_TEST_LOCK_WAIT_S="0.5")
-        self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
-        self.assertEqual(self.records("lock_timeout")[0]["lock"]["handoff"].split(":")[0], "ignored")
-        self.assertIn("test-tools: WARN ignored: $NEVR_TEST_LOCK_HELD names ", result.stderr)
-        self.logs = self.root / "free-logs"
-        result = self.run_whole(NEVR_TEST_LOCK_HELD=str(self.logs / "run.lock"))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("test-tools: WARN wrong: $NEVR_TEST_LOCK_HELD names this lock but nobody held it", result.stderr)
-        self.assertEqual(self.records("start")[0]["lock"]["state"], "acquired")
 
     def test_a_lock_wait_that_is_not_a_positive_number_of_seconds_refuses_the_run(self):
         for value in ("0", "inf", "soon"):
