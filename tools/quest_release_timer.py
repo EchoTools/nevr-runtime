@@ -21,38 +21,38 @@ Given the published release's tag, this tool finishes the release:
   check_jobs       the jobs that publish all succeeded (a green run with a skipped job is a failure)
   verify_live      `verify-manifest --live` lists the tag on beta, and the manifest it verified lists the carried game data
   variant_*        the unlisted variant APK, below
-  cleanup          the worktree, the signer snapshot and the variant scratch, by exact path
+  cleanup          the worktree and the signer snapshot, by exact path
 
 The variant. Every release also gets an unlisted second APK, nevr-runtime-<tag>-q15t-quest.apk, in the same run, built
-from the release's own loader asset plus two plugin libraries from a private build and published beside the main APK. It
-is optional: the environment may hold NEVR_VARIANT_DIR (the directory with the two libraries) and
-NEVR_VARIANT_PINS (a `sha256sum`-format file with one line per library). With both unset a run logs one
-`variant_not_configured` and does nothing else; with exactly one set, or with a pins file that has a missing, extra,
-duplicate or malformed line, or with a library that is missing or whose sha256 differs from its pin, the variant fails
-loudly (a failure, never a skip). The variant steps run after the main release is complete (published, listed and verified
-live) and never before:
+from the release's own loader asset plus the q15t plugin library the tag's own source builds, and published beside the main
+APK. The library is built, never supplied: `just release-quest-variant-apk` runs `just build-quest-q15t` in the tag's worktree
+(its static-init, emulated-TLS, libr15 build ID and shipped-defaults checks included) and packages build/quest-q15t/libq15t.so.
+The build needs an Android NDK (ANDROID_NDK_HOME), a vcpkg checkout (VCPKG_ROOT; the configure installs the arm64-android ports
+of src/quest/vcpkg.json) and config/public-defaults.env in the checkout the timer runs from; a run that lacks one is refused
+before any step, with a line that names it. The variant steps run after the main release is complete (published, listed and
+verified live) and never before:
 
-  variant_exists   (a listed tag only) the host's variant pair: 404 for the APK is absent (it is built and published); an
-                   APK that is there (200, not HTML) is listed only when its `.sha256` is there too, is the one line
-                   `<sha256>  <variant name>` and states the sha256 of the APK as the host serves it (`variant_listed`,
-                   nothing built); a missing, malformed or disagreeing sidecar, and any other answer, is a failure that
-                   names the files and rebuilds nothing, because an upload never replaces an object
-  variant_pins     each library is copied into a private scratch directory (mode 0700, files 0600), the COPY is hashed
-                   and compared with its pin, and the copies are what is packaged; the log names the file, its size and
-                   its pin, never a directory
-  variant_build    `just release-quest-variant-apk` in the same worktree, configure and build slice as the main build; for
-                   a tag that was already listed the run makes the worktree and the configure itself. Its output goes to
-                   the 0600 file <work>/variant-<tag>-build.log, kept when the step fails and removed when the variant is
-                   done
-  variant_publish  tools/publish_quest_apk.py --variant: R2 and the public host only, no signer, no manifest claim
+  variant_exists     (a listed tag only) the host's variant pair: 404 for the APK is absent (it is built and published); an
+                     APK that is there (200, not HTML) is listed only when its `.sha256` is there too, is the one line
+                     `<sha256>  <variant name>` and states the sha256 of the APK as the host serves it (`variant_listed`,
+                     nothing built); a missing, malformed or disagreeing sidecar, and any other answer, is a failure that
+                     names the files and rebuilds nothing, because an upload never replaces an object
+  variant_configure  `just configure-android` in the tag's worktree (the Quest build tree and its vcpkg ports), in the same
+                     slice as the main build; for a tag that was already listed the run makes the worktree and the PC configure
+                     itself first
+  variant_build      `just release-quest-variant-apk` in the same worktree. Its output goes to the 0600 file
+                     <work>/variant-<tag>-build.log, kept when the step fails and removed when the variant is done. After it
+                     the run writes one `variant_library` record per packaged library (libq15t.so): its size, its sha256 and
+                     the libr15 build ID the build put in it (the q15t-config marker); a library the build did not write, or
+                     one without that marker, fails this step before anything is published
+  variant_publish    tools/publish_quest_apk.py --variant: R2 and the public host only, no signer, no manifest claim
 
 A failure of a variant step carries the step, the program and its exit code, never a tail of the program's output (the
 plugin check prints the plugin's own symbol names); variant_build's failure names the 0600 file.
 
 A failing variant step is recorded as `failed` with its step name, exits 1 and
 counts toward the same three tries, but the main release is by then complete and nothing of it is undone. `done` is written
-only when the variant is done as well, so the next run (the tag is listed by then) builds only the variant. NEVR_VARIANT_DIR
-and NEVR_VARIANT_PINS are never given to a command and their values are replaced by <redacted> in anything written. Every
+only when the variant is done as well, so the next run (the tag is listed by then) builds only the variant. Every
 `failed` and `refused` record carries `part`: "main" until the main release is complete (`main_complete` is written then, once,
 and a run whose tag has it starts as "variant"), "variant"
 after that; the record that the timer gave up on a tag says which part it was. An exception no step expected is recorded as a
@@ -68,9 +68,11 @@ a failure, and that log is the record of each run. A failed step exits 1 and nam
 (with the last failed step and its part) before the run exits 0. `--tag vX.Y.Z --reset-failures` records `failures_reset` for that tag and does
 nothing else; only the failures after the newest one count toward the three. The R2 credential goes only to publish_apk and
 variant_publish, and the GitHub token only to publish_apk and the dispatch: every other command gets an environment without them. The environment is
-the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY), NEVR_RCLONE_REMOTE, RELEASE_PUBLIC_BASE and
-NEVR_QUEST_REFERENCE_APK (the reference build `just release-quest-apk` repacks, #1994); a missing one
-is a refusal that names it. No value is printed or logged: every value read from the environment, and the GitHub token, is
+the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY), NEVR_RCLONE_REMOTE, RELEASE_PUBLIC_BASE,
+NEVR_QUEST_REFERENCE_APK (the reference build `just release-quest-apk` repacks, #1994), NEVR_STORE_APK (the store APK the variant is
+repacked from, a file), ANDROID_NDK_HOME and VCPKG_ROOT (the Quest
+build); a missing one, an ANDROID_NDK_HOME that is not an NDK r26d (its source.properties says another revision), a VCPKG_ROOT that is not a vcpkg checkout, and a checkout without
+config/public-defaults.env are refusals that name it. No value is printed or logged: every value read from the environment, and the GitHub token, is
 replaced by <redacted> in anything written.
 """
 
@@ -90,6 +92,8 @@ import time
 import traceback
 import urllib.error
 import urllib.request
+import zipfile
+import zlib
 from collections.abc import Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -98,15 +102,23 @@ from release_preflight import commit_of, parse_ls_remote  # noqa: E402 - the pre
 
 # QUEST_RELEASE_SIGNER_REPO is the path of a local clone of the release-signer repository (build_signer builds from its main).
 # NEVR_QUEST_REFERENCE_APK is the reference build the release APK is repacked from (`just release-quest-apk`, #1994).
+# NEVR_STORE_APK is the store APK the variant is repacked from (`just release-quest-variant-apk`); it is read after the main release
+# is published, so a run without it is refused before that, as for the build inputs below.
+# ANDROID_NDK_HOME and VCPKG_ROOT are the Quest build's inputs (`just configure-android`, `just build-quest-q15t`): the variant is built
+# from the tag, so a run without them is refused before the main release is published, not after.
 REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE",
-                "NEVR_RCLONE_REMOTE", "QUEST_RELEASE_SIGNER_REPO", "NEVR_QUEST_REFERENCE_APK")
+                "NEVR_RCLONE_REMOTE", "QUEST_RELEASE_SIGNER_REPO", "NEVR_QUEST_REFERENCE_APK", "NEVR_STORE_APK", "ANDROID_NDK_HOME", "VCPKG_ROOT")
 SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "NEVR_RCLONE_REMOTE")
-# The optional variant: where the private libraries are and the file of their pins. They are redacted like a secret and
-# never given to a command; the timer reads them itself.
-VARIANT_ENV = ("NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS")
+# What a set ANDROID_NDK_HOME / VCPKG_ROOT must hold for the Quest build to find it (src/quest/CMakePresets.json, the justfile's recipes).
+NDK_REVISION = re.compile(r"26\.3\.[0-9]+")  # r26d's Pkg.Revision in the NDK's source.properties (the revision is 26.3.x, never r26a-c)
+NDK_FILES = ("build/cmake/android.toolchain.cmake", "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm")
+VCPKG_FILE = "scripts/buildsystems/vcpkg.cmake"
+PUBLIC_DEFAULTS = "config/public-defaults.env"  # in the checkout the timer runs from: `just worktree-setup` copies it into the tag's worktree
 VARIANT = "q15t"
-VARIANT_LIBRARIES = ("libq15t.so", "libq15t_early.so")
-PIN_LINE = re.compile(r"([0-9a-fA-F]{64})  (\S+)")  # `sha256sum` output: the digest, two spaces, the name
+VARIANT_LIBRARIES = ("libq15t.so",)  # what the variant APK carries; libq15t_early.so is built and not packaged there
+APK_LIBRARY_DIR = "lib/arm64-v8a/"  # where android-repack-apk puts a plugin library in the APK
+# The marker the build puts in libq15t.so (src/quest/plugins/q15t/src/plugin.cpp, read back by `just build-quest-q15t`): the libr15 build ID.
+LIBRARY_MARKER = re.compile(rb"q15t-config [^\x00]*?build_id=([0-9a-f]{16,64})")
 MANIFEST_PATH = "nevr-runtime/manifest.json"
 USER_AGENT = "nevr-runtime-quest-release-timer"  # the release host answers 403 to the default agent
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")  # always fullmatch: `$` would pass a trailing newline
@@ -122,7 +134,6 @@ APK_LIMIT = 4 << 30  # the most the variant APK check reads from the host
 SIDECAR_LIMIT = 4096
 SIDECAR_LINE = re.compile(r"([0-9a-f]{64})  (\S+)\n?")  # what `sha256sum` writes, one line
 READ_CHUNK = 1 << 20
-SCRATCH_MARKER = ".made-by-quest-release-timer"  # in the variant scratch directory this timer makes, and only in it
 SIGNER_BINARY = "release-signer"  # what build_signer builds; its `verify-manifest --live` prints the live manifest on stdout
 # Programs whose stdout is remote content, never a log field (docs/standards/logging.md, Rule 4).
 REMOTE_OUTPUT_PROGRAMS = frozenset({"curl", "gh", SIGNER_BINARY})
@@ -140,6 +151,49 @@ class StepFailure(Failure):
 
 class Refusal(StepFailure):
     """A precondition that is not met (a dirty checkout, a checkout not at origin/main): logged as `refused`, never counted."""
+
+
+def repo_path(env: dict[str, str]) -> pathlib.Path:
+    """The checkout the timer runs from (QUEST_RELEASE_REPO, else the clone this script sits in)."""
+    return pathlib.Path(env.get("QUEST_RELEASE_REPO") or pathlib.Path(__file__).resolve().parents[1])
+
+
+def ndk_revision(ndk: pathlib.Path) -> str | None:
+    """The `Pkg.Revision` of an NDK directory's source.properties, None when the file or the key is absent or unreadable."""
+    try:
+        text = (ndk / "source.properties").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    found = re.search(r"^Pkg\.Revision[ \t]*=[ \t]*(\S+)[ \t]*$", text, re.MULTILINE)
+    return found.group(1) if found else None
+
+
+def build_input_problems(env: dict[str, str]) -> list[tuple[str, str]]:
+    """What the Quest build cannot find, as (name, sentence) pairs: an ANDROID_NDK_HOME that is not an NDK r26d (its source.properties says another revision), a VCPKG_ROOT that is not
+    a vcpkg checkout, a NEVR_STORE_APK that is not a file, and a checkout without config/public-defaults.env. An unset variable is not reported here (REQUIRED_ENV
+    names it). The sentence names what is missing relative to the variable, never the variable's value."""
+    problems = []
+    ndk = env.get("ANDROID_NDK_HOME")
+    if ndk:
+        lacking = [name for name in NDK_FILES if not (pathlib.Path(ndk) / name).is_file()]
+        revision = ndk_revision(pathlib.Path(ndk))
+        if revision is None:
+            lacking.append("source.properties with a Pkg.Revision")
+        if lacking:
+            problems.append(("ANDROID_NDK_HOME", f"ANDROID_NDK_HOME is not an Android NDK r26d directory (it lacks {', '.join(lacking)})"))
+        elif not NDK_REVISION.fullmatch(revision):
+            problems.append(("ANDROID_NDK_HOME", f"ANDROID_NDK_HOME is not an Android NDK r26d directory (its source.properties says "
+                                                 f"Pkg.Revision {revision}, r26d is 26.3.x)"))
+    vcpkg = env.get("VCPKG_ROOT")
+    if vcpkg and not (pathlib.Path(vcpkg) / VCPKG_FILE).is_file():
+        problems.append(("VCPKG_ROOT", f"VCPKG_ROOT is not a vcpkg checkout (it lacks {VCPKG_FILE})"))
+    store = env.get("NEVR_STORE_APK")
+    if store and not pathlib.Path(store).is_file():
+        problems.append(("NEVR_STORE_APK", "NEVR_STORE_APK is not a file (the variant is repacked from the store APK)"))
+    if not (repo_path(env) / PUBLIC_DEFAULTS).is_file():
+        problems.append((PUBLIC_DEFAULTS, f"{PUBLIC_DEFAULTS} is missing from the checkout the timer runs from "
+                                          "(copy config/public-defaults.env.example and fill in the four public values)"))
+    return problems
 
 
 def work_root(env: dict[str, str]) -> pathlib.Path:
@@ -177,18 +231,17 @@ def read_events(path: pathlib.Path) -> list[dict]:
 class Timer:
     def __init__(self, env: dict[str, str], runner: Runner, sleep: Callable[[float], None], log: Log) -> None:
         self.env, self.runner, self.sleep, self.log = env, runner, sleep, log
-        self.secrets = [env[name] for name in (*SECRET_ENV, *VARIANT_ENV) if env.get(name)]
+        self.secrets = [env[name] for name in SECRET_ENV if env.get(name)]
         self.r2 = {name: env[name] for name in SECRET_ENV if env.get(name)}
         self.token = ""
         self.gh = env.get("GH_BIN", "gh")
-        self.repo = pathlib.Path(env.get("QUEST_RELEASE_REPO") or pathlib.Path(__file__).resolve().parents[1])
+        self.repo = repo_path(env)
         self.signer_repo = pathlib.Path(env["QUEST_RELEASE_SIGNER_REPO"])  # REQUIRED_ENV: main() refuses a run without it
         self.work = work_root(env)
         # What every command gets. The R2 credential and the GitHub token are added by the one or two steps that use them.
-        self.child = {k: v for k, v in env.items() if k not in SECRET_ENV and k not in VARIANT_ENV and k != "GH_TOKEN"}
+        self.child = {k: v for k, v in env.items() if k not in SECRET_ENV and k != "GH_TOKEN"}
         self.part = "main"  # what a failure now belongs to: the main release, or the variant that follows it
         self.main_done = False  # the tag's history has `main_complete`: only the variant is left, whatever beta lists
-        self.scratch_made = False  # this run made the variant scratch directory
 
     def redact(self, text: str) -> str:
         for secret in self.secrets:
@@ -379,11 +432,9 @@ class Timer:
         try:
             self._release_steps(tag, version, worktree, signer_dir, tarball, extra_file, made)
         except Exception:  # a StepFailure, or anything a step did not expect: what this run made is removed either way
-            self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=False,
-                         scratch=self.variant_scratch(tag) if self.scratch_made else None)
+            self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=False)
             raise
-        self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=True,
-                     scratch=self.variant_scratch(tag) if self.scratch_made else None)
+        self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=True)
 
     def _release_steps(self, tag: str, version: str, worktree: pathlib.Path, signer_dir: pathlib.Path,
                        tarball: pathlib.Path, extra_file: pathlib.Path, made: dict) -> None:
@@ -484,109 +535,9 @@ class Timer:
         self.ok("configure")
         return build_env
 
-    def variant_scratch(self, tag: str) -> pathlib.Path:
-        return self.work / f"variant-{tag}"
-
-    def sweep_scratch(self, tag: str) -> None:
-        """Remove the private copies a killed run left: the scratch directory of the tag, when it carries this timer's marker.
-        A link, or a directory without the marker, is not ours and is never touched. The marker goes last (the files first,
-        then the marker, then the directory), so a sweep that fails part way leaves a directory that is still marked and is
-        retried by the next run."""
-        scratch = self.variant_scratch(tag)
-        marker = scratch / SCRATCH_MARKER
-        if scratch.is_symlink() or not scratch.is_dir() or marker.is_symlink() or not marker.is_file():
-            return
-        try:
-            for child in scratch.iterdir():
-                if child.name == SCRATCH_MARKER:
-                    continue
-                if child.is_dir() and not child.is_symlink():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-            marker.unlink()
-            scratch.rmdir()
-        except OSError as error:
-            raise StepFailure("cleanup", f"cannot remove the scratch a killed run left: {error.strerror}") from error
-        self.log.event("variant_scratch_removed", reason="left by a run that did not finish")
-
     @staticmethod
     def variant_apk_name(tag: str) -> str:
         return f"nevr-runtime-{tag}-{VARIANT}-quest.apk"
-
-    def variant_settings(self) -> tuple[pathlib.Path, pathlib.Path] | None:
-        """The directory and the pins file, None when the variant is not configured (both unset or empty). Exactly one set is
-        a failure: a half-configured variant is never silently skipped."""
-        values = [self.env.get(name, "") for name in VARIANT_ENV]
-        if not any(values):
-            return None
-        unset = [name for name, value in zip(VARIANT_ENV, values) if not value]
-        if unset:
-            raise StepFailure("variant_pins", f"{unset[0]} is not set and the other variable of the pair is: the variant "
-                                              f"needs {' and '.join(VARIANT_ENV)}")
-        return pathlib.Path(values[0]), pathlib.Path(values[1])
-
-    def read_pins(self, pins_path: pathlib.Path) -> dict[str, str]:
-        """{library: sha256} from a `sha256sum`-format file with exactly one line per library. Every problem is named once, by
-        line number or by library, and never by the path or by text from the file."""
-        step = "variant_pins"
-        try:
-            text = pins_path.read_text(encoding="utf-8")
-        except OSError as error:
-            raise StepFailure(step, f"the pins file cannot be read: {error.strerror}") from error
-        except ValueError as error:
-            raise StepFailure(step, "the pins file is not UTF-8 text") from error
-        pins: dict[str, str] = {}
-        problems = []
-        for number, line in enumerate(text.splitlines(), 1):
-            found = PIN_LINE.fullmatch(line)
-            if not found:
-                problems.append(f"pins line {number} is not '<sha256>  <name>'")
-            elif found.group(2) not in VARIANT_LIBRARIES:
-                problems.append(f"pins line {number} names no variant library")
-            elif found.group(2) in pins:
-                problems.append(f"pins name {found.group(2)} twice (line {number})")
-            else:
-                pins[found.group(2)] = found.group(1).lower()
-        problems += [f"no pin for {name}" for name in VARIANT_LIBRARIES if name not in pins]
-        if problems:
-            raise StepFailure(step, "; ".join(problems))
-        return pins
-
-    def variant_pins(self, tag: str, directory: pathlib.Path, pins_path: pathlib.Path) -> list[pathlib.Path]:
-        """Copy each library into a private scratch directory, hash the COPY, hold it to its pin, and return the copies, which
-        are what is packaged: a file that changes after this is not what is built. A failure names the file."""
-        step = "variant_pins"
-        pins = self.read_pins(pins_path)
-        scratch = self.variant_scratch(tag)
-        if ":" in str(scratch):
-            raise StepFailure(step, "the scratch directory's path holds a colon, which separates the libraries in the recipe")
-        try:
-            scratch.mkdir(mode=0o700)  # a directory of that name that is not this timer's is never removed: this fails
-            self.scratch_made = True
-            scratch.chmod(0o700)
-            os.close(os.open(scratch / SCRATCH_MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-        except OSError as error:
-            raise StepFailure(step, f"cannot make the scratch directory: {error.strerror}") from error
-        copies = []
-        for name in VARIANT_LIBRARIES:
-            copy = scratch / name
-            try:
-                with (directory / name).open("rb") as source:
-                    with os.fdopen(os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as target:
-                        shutil.copyfileobj(source, target)
-                copy.chmod(0o600)
-                digest, size = sha256_file(copy)
-            except FileNotFoundError as error:
-                raise StepFailure(step, f"{name} is missing from the variant directory") from error
-            except OSError as error:
-                raise StepFailure(step, f"{name} cannot be read: {error.strerror}") from error
-            if digest != pins[name]:
-                raise StepFailure(step, f"{name} does not match its pin: its sha256 is {digest}, the pin is {pins[name]}")
-            self.log.event("variant_library", name=name, size=size, sha256=pins[name])
-            copies.append(copy)
-        self.ok(step, count=len(copies))
-        return copies
 
     def get_object(self, step: str, url: str, limit: int, keep: bool = False) -> tuple[int, str, str, bytes, bool]:
         """GET `url` without following a redirect: (status, content type, sha256 of the body as it streamed in, the body when
@@ -693,11 +644,6 @@ class Timer:
         """The variant, after the main release is complete. `build_env` is the environment of the build the main release just
         made, whose worktree and configure the variant reuses; None when the tag was already listed, which asks the host first
         and, when the variant is absent, makes its own worktree and configure. A failure here never undoes the release."""
-        settings = self.variant_settings()
-        if settings is None:
-            self.log.event("variant_not_configured", reason="NEVR_VARIANT_DIR and NEVR_VARIANT_PINS are unset, so no variant "
-                                                            "APK is built for this release")
-            return
         if build_env is None:
             listed = self.variant_exists(tag)
             self.ok("variant_exists", listed=listed, apk=self.variant_apk_name(tag))
@@ -705,13 +651,16 @@ class Timer:
                 self.log.event("variant_listed", apk=self.variant_apk_name(tag))
                 self.forget_build_log(tag)
                 return
-        copies = self.variant_pins(tag, *settings)
-        if build_env is None:
             self.make_worktree(tag, worktree, made)
             build_env = self.prepare_build(worktree)
-        self.cmd("variant_build", ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G",
-                                   "just", "release-quest-variant-apk", tag, ":".join(str(copy) for copy in copies)],
-                 worktree, build_env, output_file=self.variant_build_log(tag))
+        slice_command = ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G"]
+        # The Quest build tree and its vcpkg ports, in the tag's worktree; the recipe configures again and finds them in place.
+        self.cmd("variant_configure", [*slice_command, "just", "configure-android"], worktree, build_env)
+        self.ok("variant_configure")
+        # The recipe builds the q15t library from the tag (`just build-quest-q15t`) and packages it: no library is handed in.
+        self.cmd("variant_build", [*slice_command, "just", "release-quest-variant-apk", tag], worktree, build_env,
+                 output_file=self.variant_build_log(tag))
+        self.record_libraries(tag, worktree)
         self.ok("variant_build", apk=self.variant_apk_name(tag))
         # Only the R2 credential: the variant has no signer and no manifest claim. The publish tool's own log has its reasons.
         self.cmd("variant_publish", ["python3", "tools/publish_quest_apk.py", tag, "--variant", VARIANT], worktree, dict(self.r2),
@@ -719,8 +668,49 @@ class Timer:
         self.ok("variant_publish", apk=self.variant_apk_name(tag))
         self.forget_build_log(tag)
 
+    def record_libraries(self, tag: str, worktree: pathlib.Path) -> None:
+        """One `variant_library` record per packaged library, read out of the signed APK the recipe wrote (the file that is
+        published) and held to the library the build wrote in the tag's worktree: a library in the APK that is not that file
+        fails the build step, so the record is of what is published. The record carries the APK library's size, sha256 and the
+        libr15 build ID in its config marker. A library or APK that is missing, unreadable or without the marker fails the
+        step too (nothing is published from an APK whose library cannot be named)."""
+        step = "variant_build"
+        built = worktree / "build" / "quest-q15t"
+        apk_name = self.variant_apk_name(tag)
+        apk_path = worktree / "build" / "quest-release" / tag / "variant" / apk_name
+        records = []
+        for name in VARIANT_LIBRARIES:
+            try:
+                data = (built / name).read_bytes()
+            except FileNotFoundError as error:
+                raise StepFailure(step, f"{name} is not in build/quest-q15t after the build") from error
+            except OSError as error:
+                raise StepFailure(step, f"{name} cannot be read: {error.strerror}") from error
+            entry = APK_LIBRARY_DIR + name
+            try:
+                with zipfile.ZipFile(apk_path) as apk:
+                    try:
+                        published = apk.read(entry)
+                    except KeyError as error:
+                        raise StepFailure(step, f"{apk_name} has no {entry}") from error
+            except FileNotFoundError as error:
+                raise StepFailure(step, f"{apk_name} is not in build/quest-release/{tag}/variant after the build") from error
+            except (OSError, zipfile.BadZipFile, zlib.error, NotImplementedError, RuntimeError) as error:
+                raise StepFailure(step, f"{apk_name} cannot be read as an APK: {type(error).__name__}") from error
+            built_digest, published_digest = hashlib.sha256(data).hexdigest(), hashlib.sha256(published).hexdigest()
+            if built_digest != published_digest:
+                raise StepFailure(step, f"{entry} in {apk_name} is not the library the build wrote: the APK has sha256 "
+                                        f"{published_digest}, build/quest-q15t/{name} has {built_digest}")
+            found = LIBRARY_MARKER.search(published)
+            if not found:
+                raise StepFailure(step, f"{name} carries no q15t-config marker with a build_id")
+            records.append({"name": name, "source": f"{apk_name}:{entry}", "size": len(published), "sha256": published_digest,
+                            "libr15_build_id": found.group(1).decode("ascii")})
+        for record in records:
+            self.log.event("variant_library", **record)
+
     def cleanup(self, worktree: pathlib.Path | None, signer_dir: pathlib.Path, tarball: pathlib.Path,
-                extra_file: pathlib.Path, raising: bool, scratch: pathlib.Path | None = None) -> None:
+                extra_file: pathlib.Path, raising: bool) -> None:
         """Remove exactly what this run made. A failed removal is logged either way; it fails the run only when the
         release itself succeeded, so it never hides the failure that came first."""
         problems = []
@@ -731,8 +721,6 @@ class Timer:
         try:
             if signer_dir.exists():
                 shutil.rmtree(signer_dir)
-            if scratch is not None and scratch.exists():
-                shutil.rmtree(scratch)
             tarball.unlink(missing_ok=True)
             extra_file.unlink(missing_ok=True)
         except OSError as error:
@@ -767,9 +755,11 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
             log.event("failures_reset", cleared=cleared)
             return 0
         missing = [name for name in REQUIRED_ENV if not env.get(name)]
-        if missing:
-            log.event("refused", missing=missing, part="main")
-            raise Failure(f"refused: set {', '.join(missing)}")
+        invalid = build_input_problems(env)
+        if missing or invalid:
+            parts = ([f"set {', '.join(missing)}"] if missing else []) + [sentence for _, sentence in invalid]
+            log.event("refused", missing=[*missing, *(name for name, _ in invalid)], part="main")
+            raise Failure(f"refused: {'; '.join(parts)}")
         timer = Timer(env, runner, sleep, log)
         lock = take_lock(timer.work)
         if lock is None:
@@ -788,9 +778,7 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         log.base["tag"] = tag
         history = [e for e in read_events(path) if e.get("tag") == tag]
         timer.main_done = any(e.get("event") == "main_complete" for e in history)
-        # Before the sweep, so a failure of it carries the right part.
         timer.part = "variant" if timer.main_done else "main"
-        timer.sweep_scratch(tag)
         if any(e.get("event") == "done" for e in history):
             log.event("nothing_to_do", reason="done")
             return 0
@@ -839,7 +827,7 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
 
 def take_lock(work: pathlib.Path) -> int | None:
     """A non-blocking exclusive lock on <work>/timer.lock for the life of the process, so two hand `--tag` runs never work
-    at once: one would sweep the other's scratch or publish twice. None when it is held."""
+    at once: both would publish the same tag. None when it is held."""
     work.mkdir(parents=True, exist_ok=True)
     fd = os.open(work / "timer.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
