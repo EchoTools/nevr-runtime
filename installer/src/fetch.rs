@@ -2,7 +2,6 @@
 //! are not followed, and a range request is accepted only as a `206` for exactly the range asked.
 //! `file://` bases read a local directory, for tests and for an offline mirror: the signature and hashes still decide.
 
-use crate::util::{redact_text, redact_url};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -30,17 +29,15 @@ fn is_loopback_http(url: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost")
 }
 
-// Every message below names the URL only through `redact_url` / `redact_text`: a base can carry credentials (`--base`),
-// and a diagnostic is logged (logging standard, Rule 4). The request itself keeps the URL it was given.
+// Every message below names the URL whole (#2244).
 fn open(url: &str, start: u64) -> Result<Box<dyn Read>, Failure> {
-    let shown = redact_url(url);
     if let Some(path) = url.strip_prefix("file://") {
-        let mut f = File::open(path).map_err(|e| Failure::Refused(format!("{shown}: {e}")))?;
-        f.seek(SeekFrom::Start(start)).map_err(|e| Failure::Refused(format!("{shown}: {e}")))?;
+        let mut f = File::open(path).map_err(|e| Failure::Refused(format!("{url}: {e}")))?;
+        f.seek(SeekFrom::Start(start)).map_err(|e| Failure::Refused(format!("{url}: {e}")))?;
         return Ok(Box::new(f));
     }
     if !(url.starts_with("https://") || is_loopback_http(url)) {
-        return Err(Failure::Refused(format!("{shown}: only https is fetched (http only for the local machine)")));
+        return Err(Failure::Refused(format!("{url}: only https is fetched (http only for the local machine)")));
     }
     let agent = ureq::AgentBuilder::new()
         .redirects(0)
@@ -53,8 +50,8 @@ fn open(url: &str, start: u64) -> Result<Box<dyn Read>, Failure> {
     }
     let resp = match req.call() {
         Ok(r) => r,
-        Err(ureq::Error::Status(code, _)) => return Err(Failure::Refused(format!("{shown}: HTTP status {code}"))),
-        Err(e) => return Err(Failure::Interrupted(format!("could not fetch {shown}: {}", redact_text(&e.to_string(), url)))),
+        Err(ureq::Error::Status(code, _)) => return Err(Failure::Refused(format!("{url}: HTTP status {code}"))),
+        Err(e) => return Err(Failure::Interrupted(format!("could not fetch {url}: {e}"))),
     };
     let ok = if start == 0 {
         resp.status() == 200
@@ -62,7 +59,7 @@ fn open(url: &str, start: u64) -> Result<Box<dyn Read>, Failure> {
         resp.status() == 206 && resp.header("Content-Range").is_some_and(|r| r.starts_with(&format!("bytes {start}-")))
     };
     if !ok {
-        return Err(Failure::Refused(format!("{shown}: HTTP status {} is not the answer to a request starting at {start}", resp.status())));
+        return Err(Failure::Refused(format!("{url}: HTTP status {} is not the answer to a request starting at {start}", resp.status())));
     }
     Ok(Box::new(resp.into_reader()))
 }
@@ -74,7 +71,7 @@ pub fn fetch_capped(url: &str, start: u64, max_total: u64, sink: &mut dyn Write)
     let mut reader = open(url, start)?.take(room + 1);
     let (mut size, mut buf) = (0u64, vec![0u8; 65536]);
     loop {
-        let n = reader.read(&mut buf).map_err(|e| Failure::Interrupted(format!("{}: {}", redact_url(url), redact_text(&e.to_string(), url))))?;
+        let n = reader.read(&mut buf).map_err(|e| Failure::Interrupted(format!("{url}: {e}")))?;
         if n == 0 {
             return Ok(size);
         }
@@ -104,18 +101,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_refused_base_names_the_url_without_its_credentials_or_query() {
+    fn a_refused_base_names_the_whole_url() {
         let url = "http://user:s3cret-token@example.com/nevr-runtime/x?token=T";
         let mut sink = Vec::new();
         let Err(Failure::Refused(msg)) = fetch_capped(url, 0, 10, &mut sink) else { panic!("an http base that is not loopback is refused") };
-        assert!(!msg.contains("s3cret-token") && !msg.contains("user:") && !msg.contains("token=T"), "{msg}");
-        assert!(msg.contains("http://example.com/nevr-runtime/x"), "{msg}");
+        assert!(msg.contains("http://user:s3cret-token@example.com/nevr-runtime/x?token=T"), "{msg}");
     }
 
     #[test]
-    fn a_missing_local_base_names_the_path_without_its_query() {
+    fn a_missing_local_base_names_the_path_with_its_query() {
         let mut sink = Vec::new();
         let Err(Failure::Refused(msg)) = fetch_capped("file:///definitely/not/here/x?token=T", 0, 10, &mut sink) else { panic!("a missing file is refused") };
-        assert!(!msg.contains("token=T"), "{msg}");
+        assert!(msg.contains("/definitely/not/here/x?token=T"), "{msg}");
     }
 }

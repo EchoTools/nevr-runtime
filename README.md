@@ -272,6 +272,7 @@ Arguments the runtime reads from the game's command line (`--name` works as well
 | `-telemetry-diag` | Log telemetry diagnostics every second |
 | `-timestamps` | Prefix log lines with timestamps |
 | `-upnp` | Enable UPnP port forwarding |
+| `-no-update` | Do not check for a newer release in this run (`update.enabled: false` in `config.yaml` does it for every run). A release the host already swapped in is still confirmed. The `update disabled` line in the log says which applied |
 | `-require-signed-plugins` | Load only plugins signed through the release pipeline and refuse the rest. Without it, plugins load whether or not they are signed. The `plugin trust:` line in the log states which applied |
 
 ### Runtime-loaded modules

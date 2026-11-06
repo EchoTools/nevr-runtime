@@ -482,7 +482,7 @@ release-check:
     tools/release_check.py
 
 # A LOCAL package: the Windows zip and the Quest APK from a CLEAN tree at HEAD, in build/package-dev/<sha>/.
-# Every non-tag build stamps a DEVELOPMENT version, X.Y.(Z+1)-dev.<N>+<sha> (cmake/set_project_version_from_git.cmake),
+# Every non-tag build stamps a DEVELOPMENT version, <next>-dev.<N>+<sha> (cmake/set_project_version_from_git.cmake),
 # and the files are named nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-*: this recipe cannot produce a release. A release
 # is a vX.Y.Z tag built by CI (.github/workflows/build.yml); its version is exactly the tag.
 # Both builds embed config/public-defaults.env (git-ignored: copy it from the main checkout or from the
@@ -1022,6 +1022,17 @@ test-auth-unit:
     # diagnostic recorder, the minidump capture, the runtime load state machine, the rendezvous's prologue
     # validation, the export thunks, the self-update swap (ADR 0024) and the minidump parser the crash harness trusts.
     for name in test_host_json test_host_stop_line test_bootstrap_diagnostics test_host_crash_capture test_host_crash_send test_host_crash_report test_host_runtime_load test_host_minidump test_host_rendezvous test_host_runtime_verify test_host_update_swap test_host_exports; do
+        bin="build/{{ preset }}/bin/$name.exe"
+        if [[ ! -f "$bin" ]]; then
+            echo "ERROR: GTest binary not found: $bin" >&2
+            exit 1
+        fi
+        run_test "$bin"
+    done
+    # The runtime's half of PC self-update (ADR 0024, sections 3 and 6): the decisions, the check, the confirmation and the worker's
+    # threads against a fake core, and the Rust core linked into a MinGW binary and called from a worker thread.
+    cmake --build --preset {{ preset }} --target test_update_worker --target test_update_core_link
+    for name in test_update_worker test_update_core_link; do
         bin="build/{{ preset }}/bin/$name.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2

@@ -20,35 +20,35 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
         self.assertNotIn("RedactPasswordInUri", source)
         self.assertIn("[NEVR.GAMESERVER] constructed serverdb URI for token auth:", source)
         self.assertIn("[NEVR.GAMESERVER] failed to initiate WebSocket connection uri=", source)
-        self.assertIn("nevr_log_diagnostics::FormatRedactedUrlDiagnostic(", source)
+        self.assertIn("nevr_log_diagnostics::FormatUrlDiagnostic(", source)
 
     def test_server_connection_logs_use_formatted_redaction(self):
         self.assert_source_contains(
             "src/runtime/server/websocket_client.cpp",
-            'nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.SERVERDB] Connecting to ServerDB at ", uri)',
+            'nevr_log_diagnostics::FormatUrlDiagnostic("[NEVR.SERVERDB] Connecting to ServerDB at ", uri)',
         )
         self.assert_source_contains(
             "src/runtime/server/telemetry_streamer.cpp",
-            'nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.TELEMETRY] Connecting to ", uri)',
+            'nevr_log_diagnostics::FormatUrlDiagnostic("[NEVR.TELEMETRY] Connecting to ", uri)',
         )
 
     def test_bridge_remote_url_logs_use_formatted_redaction(self):
         self.assert_source_contains(
             "src/runtime/compat/ws_bridge.cpp",
-            'nevr_log_diagnostics::FormatRedactedUrlDiagnostic(\n        "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: "',
-            'nevr_log_diagnostics::FormatRedactedUrlDiagnostic(\n        "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): "',
-            'nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: "',
-            'nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(\n      "[NEVR.WS] Proxy listening on "',
+            'nevr_log_diagnostics::FormatUrlDiagnostic(\n        "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: "',
+            'nevr_log_diagnostics::FormatUrlDiagnostic(\n        "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): "',
+            'nevr_log_diagnostics::FormatUrlDiagnostic("[NEVR.WS] Proxy remote target: "',
+            'nevr_log_diagnostics::FormatUrlPairDiagnostic(\n      "[NEVR.WS] Proxy listening on "',
         )
 
     def test_config_redirect_relay_and_override_logs_use_formatted_redaction(self):
         self.assert_source_contains(
             "src/runtime/lifecycle/config.cpp",
-            'nevr_log_diagnostics::FormatRedactedUrlDiagnostic(\n        "[NEVR.PATCH] Service override ["',
-            'nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(\n      "[NEVR.PATCH] auto-relay ["',
-            'nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(\n          "[NEVR.PATCH] HTTP(S) connection redirected: "',
-            'nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(\n      "[NEVR.PATCH] service redirect key="',
-            'nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(\n          "[NEVR.PATCH] config override key="',
+            'nevr_log_diagnostics::FormatUrlDiagnostic(\n        "[NEVR.PATCH] Service override ["',
+            'nevr_log_diagnostics::FormatUrlPairDiagnostic(\n      "[NEVR.PATCH] auto-relay ["',
+            'nevr_log_diagnostics::FormatUrlPairDiagnostic(\n          "[NEVR.PATCH] HTTP(S) connection redirected: "',
+            'nevr_log_diagnostics::FormatUrlPairDiagnostic(\n      "[NEVR.PATCH] service redirect key="',
+            'nevr_log_diagnostics::FormatUrlPairDiagnostic(\n          "[NEVR.PATCH] config override key="',
         )
 
     def test_json_lookup_pre_redirect_path_does_not_log_or_parse_urls(self):
@@ -70,7 +70,7 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
             "if (overrideOutcome.action == nevr::lifecycle::LoginRedirectOverrideAction::UseOverride)",
             hook,
         )
-        self.assertIn("nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(", hook)
+        self.assertIn("nevr_log_diagnostics::FormatUrlPairDiagnostic(", hook)
         self.assertIn("overrideOutcome.value ? overrideOutcome.value : \"\"", hook)
         self.assertIn("return const_cast<CHAR*>(overrideOutcome.value);", hook)
         self.assertIn("Log(EchoVR::LogLevel::Info, \"%s\", diagnostic.c_str());", hook)

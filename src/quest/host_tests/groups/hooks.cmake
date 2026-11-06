@@ -250,6 +250,11 @@ nevr_ht_test(hand_flip_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_YAML_LIB}
 # and the fill and the leaks in the log.
 nevr_ht_test(vk_free_guard_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/vk_free_guard_test.cpp src/quest/sentinel/vk_free_guard.cpp)
+# A GPU allocation libr15 reports as made with no memory (#2262): the real handler through the thunk entry against a model of
+# CGRawInterfaceVK::Allocate that does not read vkAllocateMemory's result and a model of CreateDeviceResource that binds what it
+# returns; the pinned words refused when one differs; the refusals in the log with the free-range table's fill.
+nevr_ht_test(vk_alloc_check_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+  SRC src/quest/tests/vk_alloc_check_test.cpp src/quest/sentinel/vk_alloc_check.cpp src/quest/sentinel/vk_free_guard.cpp)
 # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
 # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone). The handler
 # includes the build-tree header generated/nevr_build_info.h; a stub stands in for it here.

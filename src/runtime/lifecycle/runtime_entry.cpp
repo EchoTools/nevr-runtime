@@ -1,5 +1,7 @@
 #include "runtime/lifecycle/runtime_entry.h"
 
+#include <atomic>
+
 #include "abi/echovr.h"
 #include "core/logging.h"
 #include "runtime/lifecycle/crash_recovery.h"
@@ -10,6 +12,8 @@
 namespace nevr_runtime_entry {
 namespace {
 
+std::atomic<bool> g_hostCanSwap{false};
+
 // Called once by the host's wrapper detour, on the game's main thread after the CRT is up and
 // outside the loader lock. A nonzero return is a failed load: the host stops the game (RuntimeRendezvous::StopGame).
 std::int32_t Initialize(const NevrHostContext* host) {
@@ -19,6 +23,7 @@ std::int32_t Initialize(const NevrHostContext* host) {
     if (status != nevr_runtime_abi::Status::kOk) {
       return static_cast<std::int32_t>(status) + 1;  // never 0
     }
+    g_hostCanSwap.store(nevr_runtime_abi::HostCanSwap(host), std::memory_order_release);  // read only through HostCanSwap's size check
     InitializeGameModule(host->game_module);
     ArmGameMain(host);
     Log(EchoVR::LogLevel::Info, "[NEVR.BOOT] runtime initialized from the host's wrapper detour");
@@ -40,6 +45,8 @@ const NevrRuntimeApi g_api = [] {
 }  // namespace
 
 const NevrRuntimeApi* GetRuntimeApi() { return &g_api; }
+
+bool HostCanSwap() { return g_hostCanSwap.load(std::memory_order_acquire); }
 
 }  // namespace nevr_runtime_entry
 

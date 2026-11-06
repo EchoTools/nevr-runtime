@@ -73,7 +73,12 @@ class ReleaseWorkflowInstallerSymbolsTest(unittest.TestCase):
     def test_the_installer_is_built_once_under_the_new_name_and_copied_once_to_the_old_one(self):
         """#1492: one build, one link step. The old name is a cp of the built file in the packaging step."""
         text = (REPO / ".github" / "workflows" / "build.yml").read_text()
-        self.assertEqual(len(re.findall(r"cargo\"? build", text)), 1, "one build of the installer")
+        builds = re.findall(r"cargo\"? build[^\n]*", text)
+        # the installer exe is built once; the other cargo build is the core as a static library for nevr-runtime.dll
+        # (ADR 0024 section 3), which makes no exe and is built once, in its own job
+        self.assertEqual(len([b for b in builds if "--bin install-nevr-runtime " in b + " "]), 1, "one build of the installer")
+        self.assertEqual(len([b for b in builds if "--lib " in b + " "]), 1, "one build of the core library")
+        self.assertEqual(len(builds), 2, "no other cargo build")
         self.assertIn("--bin install-nevr-runtime ", text)
         self.assertIn("release/install-nevr-runtime.exe", text)
         copies = [line.strip() for line in text.splitlines() if re.match(r"\s*cp\b.*nevr-install\.exe", line)]

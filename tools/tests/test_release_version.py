@@ -1,8 +1,9 @@
 """The version of a build comes from git tags only: plain semver.
 
 A CI build exactly on the tag vX.Y.Z stamps exactly X.Y.Z. Every other build stamps
-X.Y.(Z+1)-dev.<N>+<sha>, which sorts after the tag it descends from and before the next release
-(semver.org items 9-11). Pre-release tags such as the v4.0.0-rc.1 history tag are never a base.
+<next>-dev.<N>+<sha>, where <next> is the version tools/next_release_version.py computes from the commits
+since the highest reachable release tag, <N> counts those commits, and the build sorts after that tag and
+before the release it leads to (semver.org items 9-11). Pre-release tags such as the v4.0.0-rc.1 history tag are never a base.
 
 The REAL function runs: cmake/set_project_version_from_git.cmake in a scratch git repository with real
 tags, configured by cmake (not a hand-set PROJECT_VERSION).
@@ -15,9 +16,12 @@ import re
 import shutil
 import subprocess
 import tempfile
+import sys
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+import release_preflight  # noqa: E402
 VERSION_CMAKE = REPO / "cmake" / "set_project_version_from_git.cmake"
 
 CMAKELISTS = f"""cmake_minimum_required(VERSION 3.20)
@@ -109,8 +113,8 @@ class ReleaseVersionTest(unittest.TestCase):
     def tag(self, name):
         git(self.src, "tag", "-a", "-m", name, name)
 
-    def child(self):
-        git(self.src, "commit", "-q", "--allow-empty", "-m", "child")
+    def child(self, message="child"):
+        git(self.src, "commit", "-q", "--allow-empty", "-m", message)
 
     def sha(self):
         return git(self.src, "rev-parse", "--short", "HEAD").stdout.strip()
@@ -148,6 +152,70 @@ class ReleaseVersionTest(unittest.TestCase):
         self.child()
         self.assertEqual(self.version(), f"5.0.1-dev.2+{self.sha()}")
 
+    def test_a_feature_since_the_tag_makes_the_dev_build_the_next_minor(self):
+        self.tag("v5.0.0")
+        self.child("feat: a feature")
+        self.child("fix: a fix")
+        self.assertEqual(self.version(), f"5.1.0-dev.2+{self.sha()}")
+
+    def test_a_fix_since_the_tag_makes_the_dev_build_the_next_patch(self):
+        self.tag("v5.0.0")
+        self.child("fix: a fix")
+        self.assertEqual(self.version(), f"5.0.1-dev.1+{self.sha()}")
+
+    def test_a_breaking_change_since_the_tag_makes_the_dev_build_the_next_major(self):
+        self.tag("v5.2.3")
+        self.child("feat!: a break")
+        self.assertEqual(self.version(), f"6.0.0-dev.1+{self.sha()}")
+
+    def test_a_release_tag_on_another_branch_does_not_pull_the_version_down(self):
+        """The defect (#2267): v5.0.1 is not an ancestor of main, so main's base is v5.0.0; main's
+        development builds must still name the release they lead to, 5.1.0, above the released 5.0.1."""
+        self.tag("v5.0.0")
+        git(self.src, "checkout", "-q", "-b", "side")
+        self.child("fix: released from the side branch")
+        self.tag("v5.0.1")
+        git(self.src, "checkout", "-q", "main")
+        self.child("feat: on main")
+        dev = self.version()
+        self.assertEqual(dev, f"5.1.0-dev.1+{self.sha()}")
+        self.assertEqual(semver_key_cmp("5.0.1", dev), -1)
+
+    def test_the_computed_next_tag_existing_off_the_branch_fails_loudly(self):
+        self.tag("v5.0.0")
+        git(self.src, "checkout", "-q", "-b", "side")
+        self.child("feat: released from the side branch")
+        self.tag("v5.1.0")
+        git(self.src, "checkout", "-q", "main")
+        self.child("feat: on main")
+        rc, version, out = self.configure()
+        self.assertNotEqual(rc, 0, out)
+        self.assertIsNone(version)
+        self.assertIn("v5.1.0 already exists", out)
+
+    def test_the_release_preflight_names_the_version_the_build_stamps(self):
+        """release_preflight checks the versionCode limits on the version it predicts; it must be cmake's."""
+        self.tag("v5.0.0")
+        for message in ("child", "fix: a fix", "feat: a feature", "feat!: a break"):
+            with self.subTest(message=message):
+                self.child(message)
+                self.assertEqual(release_preflight.next_build_version(str(self.src)), (self.version(), None))
+
+    def test_the_release_preflight_agrees_when_a_release_tag_is_on_another_branch(self):
+        self.tag("v5.0.0")
+        git(self.src, "checkout", "-q", "-b", "side")
+        self.child("fix: released from the side branch")
+        self.tag("v5.0.1")
+        git(self.src, "checkout", "-q", "main")
+        self.child("feat: on main")
+        stamped = self.version()
+        self.assertEqual(stamped, f"5.1.0-dev.1+{self.sha()}")
+        self.assertEqual(release_preflight.next_build_version(str(self.src)), (stamped, None))
+
+    def test_the_release_preflight_on_a_tag_names_the_release(self):
+        self.tag("v5.0.0")
+        self.assertEqual(release_preflight.next_build_version(str(self.src)), ("5.0.0", None))
+
     def test_the_next_tag_is_the_new_base(self):
         self.tag("v5.0.0")
         self.child()
@@ -184,7 +252,7 @@ class ReleaseVersionTest(unittest.TestCase):
         self.child()
         self.assertEqual(self.version(), f"3.3.1-dev.2+{self.sha()}")  # v4.0.0-rc.1 is ignored
 
-    def test_before_the_first_new_tag_a_dev_build_takes_the_nearest_release_tag(self):
+    def test_before_the_first_new_tag_a_dev_build_takes_the_highest_reachable_release_tag(self):
         self.tag("v3.3.0")
         self.child()
         self.child()
@@ -194,26 +262,24 @@ class ReleaseVersionTest(unittest.TestCase):
         rc, version, out = self.configure()
         self.assertNotEqual(rc, 0)
         self.assertIsNone(version)
-        self.assertIn("no v<X>.<Y>.<Z> tag is reachable", out)
+        self.assertIn("no release tag (vX.Y.Z) is reachable", out)
 
     def test_only_a_pre_release_tag_is_no_tag_at_all(self):
         self.tag("v4.0.0-rc.1")
         rc, version, out = self.configure()
         self.assertNotEqual(rc, 0)
-        self.assertIn("no v<X>.<Y>.<Z> tag is reachable", out)
+        self.assertIn("no release tag (vX.Y.Z) is reachable", out)
 
-    def test_a_tag_that_is_not_plain_semver_fails_in_the_parser_not_with_a_half_version(self):
-        """`vnext` is filtered out by --match "v[0-9]*" and exercises the no-tag branch (above). These pass
-        the glob, so describe returns them and the PARSE-failure branch is the one that must stop the
-        build: leading zeros and build metadata are not release versions."""
+    def test_a_tag_that_is_not_plain_semver_is_no_tag_at_all(self):
+        """Leading zeros and build metadata are not release versions: next_release_version.py does not take
+        them as a base, so with no other tag the build stops."""
         for tag in ("v05.0.0", "v5.00.0", "v5.0.00", "v5.0.0+x"):
             with self.subTest(tag=tag):
                 git(self.src, "tag", "-a", "-m", tag, tag)
                 rc, version, out = self.configure()
                 self.assertNotEqual(rc, 0, out)
                 self.assertIsNone(version)
-                self.assertIn("cannot parse `git describe` output", out)
-                self.assertIn(tag, out)
+                self.assertIn("no release tag (vX.Y.Z) is reachable", out)
                 git(self.src, "tag", "-d", tag)
 
     # --- precedence, with the real comparator --------------------------------------------------------

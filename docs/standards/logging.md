@@ -141,6 +141,7 @@ for row.
 | `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU and the rating score the auto-selector reads (`gpu_score`), headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines, a one-time `settings_trace` line, and one `gpu_score kept|filled|unrated` line a run, which says the score the selector read and, when unrated, why (`patch/render_config.h`, `patch/render_config_hook.h`, `patch/gpu_score.h`, ADR 0022, #1419) |
 | `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records, in the run's main log (Rule 17): attach decisions, runtime load, crash dump, crash report send (`event` `crash_send`, #1689), the console notice that follows a `game_stop` (`event` `console_notice`, #1533: `reason`, and `written`, whether a console took the plain line), self-update's swap at start (`event` `update_swap`, ADR 0024 section 8: `outcome`, `reason`, `from`, `to`, `files`, `elapsed_ms`), its rollback of a release that did not start (`event` `update_rollback`: `mode`, `outcome`, `reason`, `from` the failed release, `to` the restored one, `boot_attempts`, `files`, `elapsed_ms`; `event` `update_trial`: one per start that loads a pending release without deciding a rollback, `outcome` `counted` or `not_counted`, `reason`, `release`, `boot_attempts`) and the crash capture's marker for it (`event` `crash_marker`: `outcome`, `win32_error`, `path`, `thread`). The value of the record's `tag` field; the host writes no `Log()` line |
 | `[NEVR.STOP]`         | The one line the `BugSplat64.dll` host writes to standard error when it stops the game or leaves it running without `nevr-runtime.dll` (`runtime/host/stop_line.h`, #1252), with the same facts in the host log. The value of the line's `tag` field; fields and exit codes in "The `NEVR.STOP` line" below |
+| `[NEVR.UPDATE]`       | The runtime's half of PC self-update (`lifecycle/update_*.cpp`, ADR 0024 sections 3, 6 and 8, #1200): `update disabled reason=<dev_build\|flag\|config\|host_cannot_swap\|no_root>` once per run; one `update check` line per check with `channel`, `channel_source`, `current`, `target`, `direction`, `action` (`none`, `staged`, `blocked`, `failed`), `reason` and `elapsed_ms`; `update verify` per staged file with `path`, `version`, `ok` and the verifier's `reason`; `update published` with `version` and `files`; `update confirmed` with `version`, `after_ms` and `role`; `update confirm skipped` with the `reason`. A reason is a word; the core's own error text is never a field (Rule 4), it is in `logs\nevr-update.jsonl` (`[NEVR.INSTALL]`) |
 | `[NEVR.LOGSEND]`      | The player log upload (`core/log_send.h`, ADR 0030, #1788): one Info line per tap with the file names and sizes, one Info line with the status and the code, a Warning with the status and the transport error or HTTP status on a failure. Never the text of a log, the body or the answer |
 | `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |
 | `[NEVR.QUESTBUILD]`   | The Quest store build's host tools (`nevr_quest_obb_extract`, `tools/quest_store_build.py`, `tools/quest_store_install.py`, ADR 0042): one JSON line per step on standard output, with `schema`, `ts`, `level`, `tag`, `event` and the step's own fields (digests, byte counts, `ms`); a refusal is the event `refused` with a `code` and a `detail`. Never a key, a passphrase or file contents |
@@ -266,7 +267,7 @@ Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket connected uri=%s conn_i
 
 // AFTER, structured (ADR 0027): the event, the tag and each field are JSON keys
 Log(Level::Info, Tag::GameServer, "websocket_connected",
-    {Str("uri", RedactUrlForDiagnostics(uri)), Int("conn_id", connIndex)});
+    {Str("uri", UrlForDiagnostics(uri)), Int("conn_id", connIndex)});
 ```
 
 **Where:** This rule applies to every `Log()` call site.
@@ -340,8 +341,9 @@ HTTP response bodies, JSON parser exception text, protobuf error messages,
 WebSocket close/error reasons, and callback exception text can echo secrets or
 user supplied content. Do not log these values, even at Debug. Keep the
 operational signal by logging numeric status/error codes, bounded byte counts,
-retry counts, and stable event markers. URL diagnostics must use the redacted
-formatters and omit query and fragment data. Preserve the original response
+retry counts, and stable event markers. A URL is logged whole, through
+`UrlForDiagnostics` (userinfo, query and fragment included; control characters
+are written as %XX so one URL is one line). Preserve the original response
 and request bytes for protocol handling; this rule changes diagnostics only.
 
 ### Rule 5: Noise is a defect
@@ -537,11 +539,11 @@ Log(EchoVR::LogLevel::Error,
 
 Every config decision that affects runtime behavior SHALL be logged at
 INFO level when it is loaded. Log the key and a safe summary, not secret
-values or unredacted URLs. This includes:
+values. This includes:
 
 - CLI flags (`-server`, `-headless`, `-timestep`, `-telemetry`).
-- Config-file overrides (arena round time, mercy score, and redacted service URLs).
-- Service redirects (each key and redacted source/destination URL).
+- Config-file overrides (arena round time, mercy score, and service URLs).
+- Service redirects (each key and its source and destination URL).
 - Module/plugin load decisions (loaded, skipped, failed).
 
 The log is the only record of what configuration decisions the process is
@@ -755,7 +757,7 @@ structured call (ADR 0027) writes as its own key.
 | Login success | `"[NEVR.WS] LOGIN SUCCESS"` | `"[NEVR.WS] login success xpid=%s conn=%d session=%s"` |
 | Login failure | `"[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s"` | `"[NEVR.WS] login failed status=%llu message_bytes=%zu"` |
 | Hook failure | `"[wave0] FAILED to hook fcn.0x%llX"` | `"[NEVR.PATCH] hook failed name=%s va=0x%llX expected=%s actual=%s"` |
-| Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` (URLs redacted) |
+| Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` |
 | Module loaded | `"[NEVR.MODULE] Loaded: %s"` | `"[NEVR.MODULE] loaded name=%s path=%s"` |
 | Plugin loaded | `"[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)"` | Already compliant — carries name, version, API version |
 | Plugin line | `fprintf(stderr, "[my_plugin] hook failed %d", rc)` | `PluginLogFields(NEVR_LOG_WARNING, "hook failed", {{"error", "5"}})` -> `"[NEVR.PLUGIN] plugin=my_plugin hook failed error=5"` |

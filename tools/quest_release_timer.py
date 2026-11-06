@@ -63,7 +63,7 @@ check_listed, no dispatch), so a beta that moved never makes the main release ru
 a non-blocking lock on <work>/timer.lock; one that finds it held records `busy` and exits 0 having done nothing.
 
 Every step appends a JSON line to $XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl; a log that cannot be written is
-a failure, and that log is the record of each run. A failed step exits 1 and names itself, with the redacted tail of the failing command's stderr and of its stdout (not the stdout of curl, gh or the signer, which is remote content). A refusal
+a failure, and that log is the record of each run. A failed step exits 1 and names itself, with the tail of the failing command's stderr and of its stdout (not the stdout of curl, gh or the signer, which is remote content). A refusal
 (`refused`: a dirty or stale checkout, a tag origin does not have) exits 1 and is not counted. A tag that has failed three times is not retried, and says so in a `skipped_after_failures` record
 (with the last failed step and its part) before the run exits 0. `--tag vX.Y.Z --reset-failures` records `failures_reset` for that tag and does
 nothing else; only the failures after the newest one count toward the three. The R2 credential goes only to publish_apk and
@@ -72,8 +72,7 @@ the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KE
 NEVR_QUEST_REFERENCE_APK (the reference build `just release-quest-apk` repacks, #1994), NEVR_STORE_APK (the store APK the variant is
 repacked from, a file), ANDROID_NDK_HOME and VCPKG_ROOT (the Quest
 build); a missing one, an ANDROID_NDK_HOME that is not an NDK r26d (its source.properties says another revision), a VCPKG_ROOT that is not a vcpkg checkout, and a checkout without
-config/public-defaults.env are refusals that name it. No value is printed or logged: every value read from the environment, and the GitHub token, is
-replaced by <redacted> in anything written.
+config/public-defaults.env are refusals that name it. Nothing written is masked.
 """
 
 import argparse
@@ -231,7 +230,6 @@ def read_events(path: pathlib.Path) -> list[dict]:
 class Timer:
     def __init__(self, env: dict[str, str], runner: Runner, sleep: Callable[[float], None], log: Log) -> None:
         self.env, self.runner, self.sleep, self.log = env, runner, sleep, log
-        self.secrets = [env[name] for name in SECRET_ENV if env.get(name)]
         self.r2 = {name: env[name] for name in SECRET_ENV if env.get(name)}
         self.token = ""
         self.gh = env.get("GH_BIN", "gh")
@@ -243,15 +241,10 @@ class Timer:
         self.part = "main"  # what a failure now belongs to: the main release, or the variant that follows it
         self.main_done = False  # the tag's history has `main_complete`: only the variant is left, whatever beta lists
 
-    def redact(self, text: str) -> str:
-        for secret in self.secrets:
-            text = text.replace(secret, "<redacted>")
-        return text
-
     def cmd(self, step: str, argv: list[str], cwd: pathlib.Path | str | None = None, extra: dict | None = None,
             ok_codes: tuple[int, ...] = (0,), quiet: bool = False,
             output_file: pathlib.Path | None = None) -> subprocess.CompletedProcess:
-        """Run a command. A failure carries the program, its exit code and the redacted tails of its output, unless `quiet`
+        """Run a command. A failure carries the program, its exit code and the tails of its output, unless `quiet`
         (the program and the exit code only) or `output_file` (the whole output goes to that 0600 file, whose path the
         failure names): a variant step's output can hold what the private build prints."""
         env = {**self.child, **(extra or {})}
@@ -268,7 +261,7 @@ class Timer:
         return result
 
     def keep_output(self, step: str, path: pathlib.Path, result: subprocess.CompletedProcess) -> None:
-        """The command's whole output, redacted, in a file that is 0600 from the moment it is opened (a run replaces it)."""
+        """The command's whole output, in a file that is 0600 from the moment it is opened (a run replaces it)."""
         try:
             # A previous file (or a link planted in its place) is removed, and the new one is made exclusively, 0600, without
             # following a link, so nothing is written through a path somebody else controls.
@@ -279,20 +272,19 @@ class Timer:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as handle:
-                handle.write(f"exit {result.returncode}\n--- stderr ---\n{self.redact(result.stderr or '')}\n"
-                             f"--- stdout ---\n{self.redact(result.stdout or '')}\n")
+                handle.write(f"exit {result.returncode}\n--- stderr ---\n{result.stderr or ''}\n"
+                             f"--- stdout ---\n{result.stdout or ''}\n")
         except OSError as error:
             raise StepFailure(step, f"cannot write the output file: {error.strerror}") from error
 
     def tails(self, program: str, result: subprocess.CompletedProcess) -> str:
         """` stderr: <tail> | stdout: <tail>`, an empty stream left out, and no stdout of a program in
-        REMOTE_OUTPUT_PROGRAMS (or the gh binary in use). The secrets go before the cut, so a secret the cut would split
-        leaves no fragment."""
+        REMOTE_OUTPUT_PROGRAMS (or the gh binary in use)."""
         name = pathlib.Path(program).name
         remote = name in REMOTE_OUTPUT_PROGRAMS or name == pathlib.Path(self.gh).name
         parts = []
         for label, text in (("stderr", result.stderr), ("stdout", "" if remote else result.stdout)):
-            tail = self.redact(text or "")[-TAIL:].strip()
+            tail = (text or "")[-TAIL:].strip()
             if tail:
                 parts.append(f"{label}: {tail}")
         return (" " + " | ".join(parts)) if parts else ""
@@ -717,7 +709,7 @@ class Timer:
         if worktree is not None:
             result = self.runner(["just", "remove-worktree", str(worktree)], cwd=str(self.repo), env=self.child)
             if result.returncode != 0:
-                problems.append(f"remove-worktree exited {result.returncode}: {self.redact((result.stderr or '')[-TAIL:])}")
+                problems.append(f"remove-worktree exited {result.returncode}: {(result.stderr or '')[-TAIL:]}")
         try:
             if signer_dir.exists():
                 shutil.rmtree(signer_dir)
@@ -771,7 +763,6 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         token = timer.cmd("token", [timer.gh, "auth", "token"]).stdout.strip()
         if not token:
             raise StepFailure("token", f"{timer.gh} auth token printed nothing")
-        timer.secrets.append(token)
         timer.token = token
         log.event("step_ok", step="token")
         tag = args.tag

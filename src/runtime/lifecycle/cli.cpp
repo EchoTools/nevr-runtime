@@ -72,6 +72,10 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-upnp", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-upnp", "[NEVR] Enable UPnP port forwarding");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-no-update", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-no-update",
+      "[NEVR] Do not check for a newer release in this run (config.yaml update.enabled: false does it for every run)");
+
   EchoVR::AddArgSyntax(pArgSyntax, "-require-signed-plugins", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-require-signed-plugins",
       "[NEVR] Load only plugins signed through the release pipeline; refuse the rest (default: unsigned plugins load). "

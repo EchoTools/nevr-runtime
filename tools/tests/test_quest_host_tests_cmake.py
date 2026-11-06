@@ -124,6 +124,7 @@ PROGRAMS = {
         "texture_menu_test",
         "texture_quality_hook_test",
         "unparsable_identity_test",
+        "vk_alloc_check_test",
         "vk_ext_window_test",
         "vk_free_guard_test",
         "wizard_metric_hook_test",
