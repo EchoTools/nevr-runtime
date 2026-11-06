@@ -298,8 +298,8 @@ void TelemetryStreamer::RunDiagnostics() {
   const nevr_telemetry_player::PlayerReadResult read =
       nevr_telemetry_player::ReadPlayers(reinterpret_cast<const uint8_t*>(ngBase), &m_diagSnapshot);
   Log(EchoVR::LogLevel::Debug,
-      "[TELEMETRY.DIAG] players=%u not_players=%u slot_out_of_range=%u no_identity=%u duplicate_slot=%u",
-      m_diagSnapshot.playerCount, read.notPlayers, read.slotOutOfRange, read.noIdentity, read.duplicateSlot);
+      "[TELEMETRY.DIAG] players=%u not_players=%u slot_out_of_range=%u not_in_handle_table=%u no_identity=%u",
+      m_diagSnapshot.playerCount, read.notPlayers, read.slotOutOfRange, read.notInHandleTable, read.noIdentity);
 
   // --- Disc state ---
   if (gsd) {
@@ -496,14 +496,15 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
   // Players by game slot: identity from the lobby, stats from the slot's block (telemetry_player_read.h)
   const nevr_telemetry_player::PlayerReadResult read =
       nevr_telemetry_player::ReadPlayers(reinterpret_cast<const uint8_t*>(netGameBase), snap);
-  const unsigned leftOut = read.slotOutOfRange + read.noIdentity + read.duplicateSlot;
+  const unsigned leftOut = read.slotOutOfRange + read.notInHandleTable + read.noIdentity;
   if (leftOut != 0 && !m_leftOutWarned) {
     m_leftOutWarned = true;
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.TELEMETRY] players left out of the stream session_id=%s slot_out_of_range=%u no_identity=%u "
-        "duplicate_slot=%u: a game slot of %u or more, a slot with no entry in the lobby's entrant table, or a slot "
-        "an earlier entrant holds; their frames and events are not sent (logged once per session)",
-        m_sessionId.c_str(), read.slotOutOfRange, read.noIdentity, read.duplicateSlot,
+        "[NEVR.TELEMETRY] players left out of the stream session_id=%s slot_out_of_range=%u not_in_handle_table=%u "
+        "no_identity=%u: a game slot of %u or more, an entrant its slot's handle-table entry does not name (empty, "
+        "or naming another entrant), or a slot with no entry in the lobby's entrant table; their frames and events "
+        "are not sent (logged once per session)",
+        m_sessionId.c_str(), read.slotOutOfRange, read.notInHandleTable, read.noIdentity,
         nevr_telemetry_player::kMaxSlots);
   }
 

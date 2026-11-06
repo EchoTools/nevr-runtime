@@ -37,7 +37,7 @@ struct TelemetrySnapshot {
   // Indexed by game slot (the entrant word's low 5 bits), not by the net game's entrant array order.
   // flags and teamIndex come from the net-game entrant; accountId, displayName and ping from the lobby
   // entrant at the same slot (telemetry_player_read.h). present: a player (team 0 to 2) whose slot is below
-  // 16 and has an entry in the lobby's entrant table.
+  // 16, whose slot's handle-table entry names it, and whose slot has an entry in the lobby's entrant table.
   struct PlayerInfo {
     bool present;
     uint16_t flags;
@@ -105,6 +105,18 @@ constexpr uint16_t ENTRANT_SLOT_MASK = 0x1F;
 constexpr uint16_t ENTRANT_TEAM_SHIFT = 10;
 constexpr uint16_t ENTRANT_TEAM_MASK = 0x7;
 constexpr uint16_t ENTRANT_TEAM_LAST_PLAYER = 2;
+
+// The net game's handle table: 16 entries { u16 entrant index, u16 generation } at CR15NetGame + 0x138,
+// indexed by game slot. The /session writer turns an entrant's slot into a handle and reads the entrant the
+// table names (0x140156522 `and ax, 0x1f`, 0x140156537 generation `[ng + slot*4 + 0x13a]`, 0x140156548
+// `cmp bx, 0x10; jae`, 0x140156557 generation 0xffff skips, 0x140156564 generation compare, 0x140156572
+// entrant `[ng + slot*4 + 0x138]`, 0xffff skips, 0x140156584 that entrant's record is read). GetUserName by
+// handle (0x1401c9a20) makes the same checks before it names a player, else "[INVALID]".
+constexpr uint64_t SLOT_HANDLE_TABLE_OFFSET = 0x138;
+constexpr uint64_t SLOT_HANDLE_ENTRANT = 0x0;
+constexpr uint64_t SLOT_HANDLE_GENERATION = 0x2;
+constexpr uint64_t SLOT_HANDLE_STRIDE = 4;
+constexpr uint16_t SLOT_HANDLE_NONE = 0xFFFF;
 
 // The lobby: the CNSLobby (EchoVR::Lobby) at *(CR15NetGame + 0x40) + 0x18 (echovr.exe 0x1401b3a94
 // `mov rcx, [rax + 0x40]`, 0x1401b3aa8 `add rcx, 0x18`; CR15NetGame hands the same object to LoadServerSupport,

@@ -5,6 +5,8 @@
 // from nevr_game_offsets, so a wrong constant in the shipped header fails here:
 //   - net-game entrants at +0x178, stride 0x250, count u16 at +0xE2; the first word holds the game slot in
 //     bits 0-4 and the team in bits 10-12; a team above 2 is not a player;
+//   - the handle table at +0x138: 16 entries { u16 entrant, u16 generation } by game slot; an entrant is read
+//     only when its slot's entry names it, and an entry whose entrant or generation is 0xffff names none;
 //   - each stat { u32 type, value, u32 count } at netGame + slot * 0x4D08 + off; type 5 is value / count;
 //     possession time is a float;
 //   - the lobby is *(netGame + 0x40) + 0x18; its entrant table (0xD8 per slot, by game slot) is at +0x360,
@@ -25,6 +27,8 @@ namespace {
 constexpr uint64_t kEntrants = 0x178;
 constexpr uint64_t kEntrantStride = 0x250;
 constexpr uint64_t kEntrantCount = 0xE2;
+constexpr uint64_t kHandleTable = 0x138;  // { u16 entrant, u16 generation } per slot, 4 bytes each
+constexpr uint16_t kNoHandle = 0xFFFF;
 constexpr uint64_t kLobbyPointer = 0x40;
 constexpr uint64_t kSlotStride = 0x4D08;
 constexpr uint64_t kLobbyTable = 0x18 + 0x360;
@@ -42,7 +46,12 @@ class NetGame {
  public:
   // The lobby region is the 0x18 bytes before the CNSLobby and an EchoVR::Lobby, which the reader reads
   // through; its table holds 16 entrants unless a test says otherwise.
-  NetGame() : bytes_(0x60000, 0), lobby_(0x18 + sizeof(EchoVR::Lobby), 0) { SetLobby(16); }
+  // The handle table starts empty (0xffff); setting an entrant names it in its slot's entry unless an earlier
+  // entrant holds that slot, as a game with one record per slot has it.
+  NetGame() : bytes_(0x60000, 0), lobby_(0x18 + sizeof(EchoVR::Lobby), 0) {
+    SetLobby(16);
+    for (uint8_t slot = 0; slot < 16; slot++) SetHandle(slot, kNoHandle, kNoHandle);
+  }
 
   template <typename T>
   void Put(std::vector<uint8_t>& buf, uint64_t off, T value) {
@@ -52,10 +61,23 @@ class NetGame {
 
   void SetEntrants(const std::vector<uint16_t>& words) {
     Put<uint16_t>(bytes_, kEntrantCount, static_cast<uint16_t>(words.size()));
-    for (size_t i = 0; i < words.size(); i++) Put<uint16_t>(bytes_, kEntrants + i * kEntrantStride, words[i]);
+    for (size_t i = 0; i < words.size(); i++) SetEntrantWord(i, words[i]);
   }
   void SetEntrantCount(uint16_t count) { Put<uint16_t>(bytes_, kEntrantCount, count); }
-  void SetEntrantWord(size_t index, uint16_t word) { Put<uint16_t>(bytes_, kEntrants + index * kEntrantStride, word); }
+  void SetEntrantWord(size_t index, uint16_t word) {
+    Put<uint16_t>(bytes_, kEntrants + index * kEntrantStride, word);
+    const uint8_t slot = word & 0x1F;
+    if (slot < 16 && HandleEntrant(slot) == kNoHandle) SetHandle(slot, static_cast<uint16_t>(index), 1);
+  }
+  void SetHandle(uint8_t slot, uint16_t entrant, uint16_t generation) {
+    Put<uint16_t>(bytes_, kHandleTable + slot * 4, entrant);
+    Put<uint16_t>(bytes_, kHandleTable + slot * 4 + 2, generation);
+  }
+  uint16_t HandleEntrant(uint8_t slot) const {
+    uint16_t entrant;
+    std::memcpy(&entrant, bytes_.data() + kHandleTable + slot * 4, sizeof(entrant));
+    return entrant;
+  }
 
   void SetStat(uint8_t slot, uint64_t off, uint32_t type, uint32_t value, uint32_t count) {
     const uint64_t at = slot * kSlotStride + off;
@@ -285,19 +307,65 @@ TEST(TelemetryPlayerRead, NoLobbyOrNoTableLeavesEveryPlayerOut) {
   EXPECT_EQ(nevr_telemetry_player::LobbyEntrantsOf(ng.data()).count, 0u);
 }
 
-TEST(TelemetryPlayerRead, OfTwoEntrantsWithOneSlotTheFirstIsKept) {
+TEST(TelemetryPlayerRead, OfTwoEntrantsWithOneSlotTheOneTheHandleTableNamesIsRead) {
   NetGame ng;
   ng.SetEntrants({Word(4, 0), Word(4, 1), Word(6, 2)});
   ng.SetLobbyEntrant(4, 40, "four", 3);
+  ng.SetStat(4, kStuns, 1, 2, 0);
   nevr_telemetry_player::PlayerReadResult result;
-  const TelemetrySnapshot snap = Read(ng, &result);
+  TelemetrySnapshot snap = Read(ng, &result);
   EXPECT_TRUE(snap.playerInfo[4].present);
   EXPECT_EQ(snap.playerInfo[4].teamIndex, 0);
   EXPECT_EQ(snap.playerInfo[4].flags, Word(4, 0));
   EXPECT_EQ(snap.playerInfo[4].accountId, 40u);
   EXPECT_TRUE(snap.playerInfo[6].present);
   EXPECT_EQ(snap.playerCount, 2);
-  EXPECT_EQ(result.duplicateSlot, 1);
+  EXPECT_EQ(result.notInHandleTable, 1);
+
+  // The table names the second record: it is the one read, whatever its place in the array.
+  ng.SetHandle(4, 1, 1);
+  snap = Read(ng, &result);
+  EXPECT_TRUE(snap.playerInfo[4].present);
+  EXPECT_EQ(snap.playerInfo[4].teamIndex, 1);
+  EXPECT_EQ(snap.playerInfo[4].flags, Word(4, 1));
+  EXPECT_EQ(snap.playerInfo[4].accountId, 40u);
+  EXPECT_EQ(snap.stats[4].stuns, 2u);
+  EXPECT_EQ(snap.playerCount, 2);
+  EXPECT_EQ(result.notInHandleTable, 1);
+}
+
+TEST(TelemetryPlayerRead, AnEntrantWhoseSlotEntryIsEmptyIsCountedAndLeftOut) {
+  NetGame ng;
+  ng.SetEntrants({Word(2, 0), Word(5, 1), Word(7, 0)});
+  ng.SetLobbyEntrant(2, 20, "two", 1);
+  ng.SetLobbyEntrant(5, 50, "five", 1);
+  ng.SetLobbyEntrant(7, 70, "seven", 1);
+  ng.SetHandle(2, kNoHandle, 1);   // no entrant
+  ng.SetHandle(5, 1, kNoHandle);   // names entrant 1, but the generation says the handle is invalid
+  ng.SetStat(2, kStuns, 1, 3, 0);
+  nevr_telemetry_player::PlayerReadResult result;
+  const TelemetrySnapshot snap = Read(ng, &result);
+  EXPECT_FALSE(snap.playerInfo[2].present);
+  EXPECT_EQ(snap.playerInfo[2].accountId, 0u);
+  EXPECT_EQ(snap.stats[2].stuns, 0u);
+  EXPECT_FALSE(snap.playerInfo[5].present);
+  EXPECT_TRUE(snap.playerInfo[7].present);
+  EXPECT_EQ(snap.playerInfo[7].accountId, 70u);
+  EXPECT_EQ(snap.playerCount, 1);
+  EXPECT_EQ(result.notInHandleTable, 2);
+  EXPECT_EQ(result.noIdentity, 0);
+  EXPECT_EQ(result.slotOutOfRange, 0);
+}
+
+TEST(TelemetryPlayerRead, AnEntrantTheTableDoesNotNameIsLeftOutEvenWithItsSlotFree) {
+  NetGame ng;
+  ng.SetEntrants({Word(3, 0)});
+  ng.SetHandle(3, 9, 1);  // entry 3 names entrant 9, a record past the count
+  nevr_telemetry_player::PlayerReadResult result;
+  const TelemetrySnapshot snap = Read(ng, &result);
+  EXPECT_FALSE(snap.playerInfo[3].present);
+  EXPECT_EQ(snap.playerCount, 0);
+  EXPECT_EQ(result.notInHandleTable, 1);
 }
 
 }  // namespace

@@ -102,20 +102,33 @@ inline LobbyEntrants LobbyEntrantsOf(const uint8_t* netGame) {
   return entrants;
 }
 
+// The entrant the net game's handle table names for a game slot (below kMaxSlots), or SLOT_HANDLE_NONE when
+// the entry is empty: its generation or its entrant index is 0xffff (0x140156557, 0x140156572).
+inline uint16_t HandleTableEntrant(const uint8_t* netGame, uint8_t slot) {
+  namespace off = nevr_game_offsets;
+  const uint64_t entry = off::SLOT_HANDLE_TABLE_OFFSET + slot * off::SLOT_HANDLE_STRIDE;
+  const uint16_t generation = ReadAt<uint16_t>(netGame, entry + off::SLOT_HANDLE_GENERATION);
+  const uint16_t entrant = ReadAt<uint16_t>(netGame, entry + off::SLOT_HANDLE_ENTRANT);
+  if (generation == off::SLOT_HANDLE_NONE) return off::SLOT_HANDLE_NONE;
+  return entrant;
+}
+
 // What ReadPlayers left out: entrants of a team above 2 (the server's own entrant is team 4), as /session
-// does; and players it could not send: a slot at or past kMaxSlots, a slot with no entry in the lobby's
-// entrant table (no account id or name), and a slot an earlier entrant already holds.
+// does; and players it could not send: a slot at or past kMaxSlots, an entrant its slot's handle-table entry
+// does not name (an empty entry, or one that names another entrant: a stale or second record of that slot),
+// and a slot with no entry in the lobby's entrant table (no account id or name). The handle table names one
+// entrant per slot, so no two entrants are read into one slot.
 struct PlayerReadResult {
   uint16_t notPlayers = 0;
   uint16_t slotOutOfRange = 0;
+  uint16_t notInHandleTable = 0;
   uint16_t noIdentity = 0;
-  uint16_t duplicateSlot = 0;
 };
 
 // Fills a cleared snapshot's playerInfo and stats by game slot (an absent slot keeps present == false) and
-// counts the players read in snap->playerCount. The identity (account id, name, ping) is the lobby entrant at
-// the same slot; a player whose slot is past the lobby's table is left out, and of two entrants with one slot
-// the first is kept.
+// counts the players read in snap->playerCount. Entrant i is read only when its slot's handle-table entry
+// names i, as the /session writer reads the entrant the table names. The identity (account id, name, ping) is
+// the lobby entrant at the same slot; a player whose slot is past the lobby's table is left out.
 inline PlayerReadResult ReadPlayers(const uint8_t* netGame, TelemetrySnapshot* snap) {
   namespace off = nevr_game_offsets;
   PlayerReadResult result;
@@ -136,16 +149,16 @@ inline PlayerReadResult ReadPlayers(const uint8_t* netGame, TelemetrySnapshot* s
       result.slotOutOfRange++;
       continue;
     }
+    if (HandleTableEntrant(netGame, slot) != i) {
+      result.notInHandleTable++;
+      continue;
+    }
     if (slot >= lobby.count) {  // count is 0 when there is no table
       result.noIdentity++;
       continue;
     }
 
     auto& info = snap->playerInfo[slot];
-    if (info.present) {
-      result.duplicateSlot++;
-      continue;
-    }
     info.present = true;
     info.flags = word;
     info.teamIndex = team;
