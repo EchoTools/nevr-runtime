@@ -8,8 +8,10 @@ build (build id from `src/quest/sentinel/pinned_targets.h`, `kLibR15StockBuildId
   reads the heap sizes, so they are their own library and, when packaged, an `early` plugin. Whether the early phase runs on a
   headset is ADR 0019 P10 and P14; the loader refuses the entry loudly (`early_unsupported`) when it does not.
 
-Neither library is in a release or package-dev APK. `just build-quest-q15t` builds them; the unlisted variant APK
-(`release-quest-variant-apk`, RELEASING.md) packages them.
+Neither library is in a release or package-dev APK. `just build-quest-q15t` builds them. The unlisted variant APK
+(`release-quest-variant-apk`, RELEASING.md) packages `libq15t.so`, and the combat APK (`release-quest-combat-apk`) packages both
+libraries, `libq15t_early.so` as an early plugin; each recipe runs `build-quest-q15t` in the tag's checkout, so a packaged library
+is that tag's build output, behind that recipe's checks.
 
 ## Layout
 
