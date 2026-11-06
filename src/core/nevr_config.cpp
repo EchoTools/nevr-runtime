@@ -252,7 +252,8 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       {"social", {"facade", "send_presence_to_meta"}},
       {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override", "frame_stats"}},
       {"graphics", {"texture_quality", "hand_flip"}},
-      {"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72"}},
+      {"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72",
+                 "gate_perm", "gate_bots", "gate_link", "gate_link_libs", "levelname"}},
   };
   return kSections;
 }

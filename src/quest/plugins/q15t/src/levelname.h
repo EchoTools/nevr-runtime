@@ -13,7 +13,7 @@
 //
 // Companion: `boosterpool` (boosterpool.h, the same option) keeps the plain pooled-actor name in AllocateExclusive. Without it
 // the full global_mp crashes the match (docs/quest/q15t/modules/levelname.md). Option macro: Q15T_LEVELNAME, default ON, kill file
-// levelname.off (combat_gates.h); a full-size global_mp must be in the pack.
+// levelname.off; a full-size global_mp must be in the pack.
 #pragma once
 
 #include <cstdint>

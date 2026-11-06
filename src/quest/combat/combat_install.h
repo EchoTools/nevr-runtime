@@ -29,7 +29,9 @@
  * The config line (`combat_config`, ADR 0046 rule 4): one Info line with each `combat:` key's value and where it came from, written by
  * the constructor's configuration step: `force`, and each module's switch (`heaps`, `memsys`, ...) as `<module>` and `<module>_source`
  * (`config` when the file gave it, `default` otherwise). The step also hands the configuration to SetConfig, which the registration table's
- * rows read for their module's switch.
+ * rows read for their module's switch. A log line is one fixed 768-byte buffer (sentinel/hook_log.cpp), so a module whose keys do not fit the line
+ * reports them on a line of its own, next to it: `combat_config_gates` (the headset gates and `levelname`, with the same `<key>` and `<key>_source`
+ * fields; `gate_link_libs` is a text and is never logged, only its source).
  *
  * Built with -fno-exceptions, like every combat translation unit.
  */

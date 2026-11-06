@@ -19,7 +19,6 @@
 #include "fxtrail.h"
 #include "game_tick.h"
 #include "gunconnect.h"
-#include "headset_gates.h"
 #include "hudmeter.h"
 #include "impactsnd.h"
 #include "instmodel.h"
@@ -36,7 +35,7 @@
 #include "shieldgamma.h"
 #include "sendguard.h"
 #include "tablestep.h"
-#include "combat_gates.h"
+#include "module_switch.h"
 #include "voipdrop.h"
 #include "wallfire.h"
 #include "weapon_arm.h"
@@ -44,44 +43,8 @@
 #ifndef Q15T_BUILD_ID
 #define Q15T_BUILD_ID "b243509c08ce677aeb95fa348016949b3fc45230"
 #endif
-// Gameplay gates (off in the perf arms): the party-permissions expression and the bot-body chooser stop treating the
-// Quest headset as a reason to refuse combat / pick the arena bot. ELF vaddrs of the pinned build (readelf -rW, disassembly).
-#ifndef Q15T_GATE_PERM
-#define Q15T_GATE_PERM 0
-#endif
-#ifndef Q15T_GATE_BOTS
-#define Q15T_GATE_BOTS 0
-#endif
-#ifndef Q15T_SLOT_PARTYMEMBERHEADSETTYPE
-#define Q15T_SLOT_PARTYMEMBERHEADSETTYPE 0x36fd880ULL
-#define Q15T_REAL_PARTYMEMBERHEADSETTYPE 0x129b168ULL
-#endif
-#ifndef Q15T_SLOT_HEADSETTYPE
-#define Q15T_SLOT_HEADSETTYPE 0x36f9fd8ULL
-#define Q15T_REAL_HEADSETTYPE 0x1a6f164ULL
-#endif
-#ifndef Q15T_PERM_FN_LO
-#define Q15T_PERM_FN_LO 0x232c794ULL
-#define Q15T_PERM_FN_HI 0x232c854ULL
-#endif
-// The menu gate (default ON in the player build): CVR::HeadsetType's answer to the headset-type expression's Bind (ELF 0x202ba74..0x202bac8,
-// disassembly 0x212ba74, 84 bytes) is the PC build's Link kind (4), so the Bind sets the link flag and not the Quest flag and no menu script is told it runs on a Quest headset (R1_functions.md:90).
-#ifndef Q15T_GATE_LINK
-#define Q15T_GATE_LINK 0
-#endif
 #ifndef Q15T_LEVELNAME
 #define Q15T_LEVELNAME 0
-#endif
-#ifndef Q15T_LINK_GATE_LIBS
-#define Q15T_LINK_GATE_LIBS "none"  // the CMake default names the combat menu scripts
-#endif
-#ifndef Q15T_LINK_FN_LO
-#define Q15T_LINK_FN_LO 0x202ba74ULL
-#define Q15T_LINK_FN_HI 0x202bac8ULL
-#endif
-#ifndef Q15T_BOTS_FN_LO
-#define Q15T_BOTS_FN_LO 0x124dd38ULL
-#define Q15T_BOTS_FN_HI 0x124e004ULL
 #endif
 // T-26: a new profile starts with the gun on the right hand, once per user id (weapon_arm.h). Plugin behaviour.
 #ifndef Q15T_T26
@@ -190,7 +153,6 @@ NEVR_DECLARE_SUPPORTED_BUILD_IDS(Q15T_BUILD_ID);
 #define Q15T_MARK_STR(x) Q15T_MARK_STR2(x)
 extern "C" __attribute__((used, retain, visibility("hidden"))) const char q15t_config_marker[] =
     "q15t-config ec_words=[" Q15T_MARK_EC_WORDS "] ecfx_default_on=" Q15T_MARK_STR(Q15T_ECFX_DEFAULT_ON)
-    " gate_link=" Q15T_MARK_STR(Q15T_GATE_LINK) " gate_perm=" Q15T_MARK_STR(Q15T_GATE_PERM) " gate_bots=" Q15T_MARK_STR(Q15T_GATE_BOTS)
     " levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " build_id=" Q15T_BUILD_ID;
 
 namespace {
@@ -370,8 +332,6 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   if (Q15T_WALLFIRE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // no shot through a wall
   if (Q15T_LEVELNAME) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the full-size global_mp loads
   if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;  // EC network datagrams; tac-mod list; drone kill feed
-  if (Q15T_GATE_LINK) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the menus stop treating the headset as a Quest
-  if (Q15T_GATE_PERM || Q15T_GATE_BOTS) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_ALTERS_RULES;
   return caps;
 }
 
@@ -391,15 +351,9 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   }
   RegisterScriptRedirect(ctx);  // the combat libraries (#1737): all or nothing; plugin init runs after the first hooked dlopen
                                // returns a handle (script_redirect.h, Register), so loads before that are not redirected
-  // The three combat gates (combat_gates.h): what is built, less what a kill file turns off; the bot-body gate only with levelname.
-  [[maybe_unused]] const CombatGatesChoice gates =
-      DecideCombatGates({Q15T_GATE_PERM != 0, Q15T_GATE_BOTS != 0, Q15T_LEVELNAME != 0}, ReadCombatGatesOffFiles());
-  {
-    const NevrLogField f[] = {{"gate_perm", gates.perm ? "on" : "off"},        {"gate_perm_reason", gates.perm ? "installing" : gates.perm_reason},
-                              {"gate_bots", gates.bots ? "on" : "off"},        {"gate_bots_reason", gates.bots ? "installing" : gates.bots_reason},
-                              {"levelname", gates.levelname ? "on" : "off"},   {"levelname_reason", gates.levelname ? "installing" : gates.levelname_reason}};
-    Log(NEVR_LOG_INFO, "q15t_combat_gates_install: which combat gates this run installs (a Quest gets combat permission, the combat bot body, the full global_mp)", f, 6);
-  }
+  // levelname and its companion boosterpool: built in, less the kill file `levelname.off` (the runtime's headset gates read `combat.levelname`
+  // for the same fact: the bot-body gate needs the full-size global_mp that levelname loads).
+  [[maybe_unused]] const bool levelname_on = Q15T_LEVELNAME != 0 && !ModuleSwitchPresent("levelname.off");
 #if Q15T_PFX
   InitPfxGate();  // the gate every pfx* module reads; logs its own "pfx gate" line (pfx.h)
 #endif
@@ -507,12 +461,12 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   ReportModule("sendguard", InstallSendGuard(base));
 #endif
 #if Q15T_LEVELNAME
-  if (gates.levelname) {
+  if (levelname_on) {
     ReportModule("levelname", InstallLevelName(base));
     ReportModule("boosterpool", InstallBoosterPool(base));  // the companion word row, as a GOT hook (boosterpool.h)
   } else {
     InstallResult off;
-    off.reason = gates.levelname_reason;  // "off_file": levelname.off turns the pair off together
+    off.reason = "off_file";  // levelname.off turns the pair off together
     ReportModule("levelname", off);
     ReportModule("boosterpool", off);
   }
@@ -562,39 +516,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
     const KV ticks[] = {{"registered", GameTickCount()}, {"max", kMaxGameTicks}};
     LogNums(NEVR_LOG_INFO, "game tick callbacks", ticks, 2);
   }
-#if Q15T_GATE_PERM
-  if (gates.perm) {
-    ReportModule("gate_perm", InstallPartyHeadsetGate(ctx->base_addr, Q15T_SLOT_PARTYMEMBERHEADSETTYPE, {Q15T_PERM_FN_LO, Q15T_PERM_FN_HI},
-                                                      Q15T_REAL_PARTYMEMBERHEADSETTYPE));
-  } else {
-    InstallResult off;
-    off.reason = gates.perm_reason;
-    ReportModule("gate_perm", off);
-  }
-#endif
-#if Q15T_GATE_BOTS || Q15T_GATE_LINK
-  // The link gate answers only the script libraries the policy names (headset_gates.h): the build's list, or the first line of
-  // <data directory>/gate_libs.txt when that file exists ("all", "none", or name fragments such as "0e4384a5 1703a89b").
-  {
-    char spec[640] = Q15T_LINK_GATE_LIBS;
-    const char* source = "build default";
-#if Q15T_EC
-    char line[640];
-    if (EcReadDataLine("gate_libs.txt", line, sizeof line)) {
-      std::memcpy(spec, line, sizeof spec);
-      source = "gate_libs.txt";
-    }
-#endif
-    SetLinkGateLibs(spec);
-    const NevrLogField f[] = {{"libs", spec[0] != 0 ? spec : "none"}, {"source", source}};
-    Log(NEVR_LOG_INFO, "headset link gate policy", f, 2);
-  }
-  // One wrapper on the one CVR::HeadsetType slot serves both gates; a gate that is off gets an empty caller range.
-  Report("CVR::HeadsetType (caller-range gates)",
-         InstallHeadsetGate(ctx->base_addr, Q15T_SLOT_HEADSETTYPE,
-                            gates.bots ? CallerRange{Q15T_BOTS_FN_LO, Q15T_BOTS_FN_HI} : CallerRange{0, 0}, Q15T_REAL_HEADSETTYPE,
-                            Q15T_GATE_LINK ? CallerRange{Q15T_LINK_FN_LO, Q15T_LINK_FN_HI} : CallerRange{0, 0}, kLinkHeadset));
-#endif
   // Always 0 from here: a non-zero return makes the loader dlclose the plugin, which is fatal once any word is swapped. A module's
   // refusal is its ERROR line above, never this return value.
   return 0;
