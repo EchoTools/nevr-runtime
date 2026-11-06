@@ -164,6 +164,12 @@ struct CombatConfig {
   CombatSwitch refreshRate{true, Source::kAbsent};            // `combat.refresh_rate`: the level rate rule (off: the game's rate always)
   CombatSwitch refreshRateLobby{false, Source::kAbsent};      // `combat.refresh_rate_lobby`: the combat lobby asks for the level rate too (default OFF: arena shares the lobby levels)
   CombatSwitch refreshRateQuest2At72{true, Source::kAbsent};  // `combat.refresh_rate_quest2_72`: a Quest 2's level rate is 72, not 90 (combat/refresh_rate.h)
+  CombatSwitch fxtrail;     // `combat.fxtrail`: a bullet's trail effect that has no instance ends its trail (combat/fxtrail.h)
+  CombatSwitch voipdrop;    // `combat.voipdrop`: a voice packet whose table page cannot be allocated is dropped (combat/voipdrop.h)
+  CombatSwitch custctx;     // `combat.custctx`: three guards on the lobby cosmetics renderer (combat/custctx.h)
+  CombatSwitch droneguard;  // `combat.droneguard`: the drone's follow update is skipped while its target is null (combat/droneguard.h)
+  CombatSwitch droneguardStage1{false, Source::kAbsent};  // `combat.droneguard_stage1`: also skip a stale cached player (default OFF; needs droneguard)
+  CombatSwitch peerclamp;   // `combat.peerclamp`: a peer's last-received stamp above "now" is pulled down to "now" (combat/peerclamp.h)
   CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
   CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
 };

@@ -1,13 +1,12 @@
 # plugin.cpp's wiring of the modules, judged by mod/wiring.cmake (tests/wiring_test.cpp); the tick table, judged by mod/game_tick.cmake.
 # Not mutated: InitGunConnect / InitAiBots (they only store the base, which the host cannot observe: no libr15 is loaded), and the
 # success branches of dronekill, dronemuzzle and powerboost (they need the real libr15 to resolve their engine functions).
-for _m in DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE AIBOTS GUNCONNECT BVH WALLFIRE LEVELNAME; do
+for _m in DRONEKILL DRONEMUZZLE AIBOTS GUNCONNECT BVH WALLFIRE LEVELNAME; do
   runm wiring "wire_caps_$(echo "$_m" | tr 'A-Z' 'a-z')" src/plugin.cpp "s/if (Q15T_$_m) caps |=/if (false) caps |=/"
 done
 runm wiring wire_caps_powerboost1  src/plugin.cpp "s/if (Q15T_POWERBOOST > 0) caps/if (Q15T_POWERBOOST > 1) caps/"
 runm wiring wire_caps_ec_gameplay  src/plugin.cpp "s/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_NETWORK;/"
 runm wiring wire_caps_ec_network   src/plugin.cpp "s/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;/"
-runm wiring wire_caps_over_fxtrail src/plugin.cpp "s/if (Q15T_BVH) caps/if (Q15T_BVH || Q15T_FXTRAIL) caps/"
 runm wiring wire_caps_over_ecfx    src/plugin.cpp "s/if (Q15T_EC) caps/if (Q15T_EC || Q15T_ECFX) caps/"
 runm wiring wire_caps_over_hudmeter src/plugin.cpp "s/if (Q15T_AIBOTS) caps/if (Q15T_AIBOTS || Q15T_HUDMETER) caps/"
 runm wiring wire_init_nonzero      src/plugin.cpp "/never this return value\./{n;s/return 0;/return 1;/}"
@@ -20,11 +19,6 @@ runm wiring wire_status_hidden     src/plugin.cpp "s/{\"status\", off ? \"off\" 
 runm wiring wire_modules_unlisted  src/plugin.cpp "s/{\"modules\", kCompiledModules}};/{\"modules\", \"\"}};/"
 runm wiring wire_tick_not_wanted   src/plugin.cpp "s/    \*want_tick = true;\$/    (void)want_tick;/"
 runm wiring wire_tick_count_hidden src/plugin.cpp "s/{\"registered\", GameTickCount()}/{\"registered\", 0}/"
-runm wiring wire_drop_fxtrail      src/plugin.cpp "s/^  ReportModule(\"fxtrail\", InstallFxTrail(base));//"
-runm wiring wire_drop_voipdrop     src/plugin.cpp "s/^  ReportModule(\"voipdrop\", InstallVoipDrop(base));//"
-runm wiring wire_drop_custctx      src/plugin.cpp "s/^  ReportModule(\"custctx\", InstallCustCtx(base));//"
-runm wiring wire_drop_droneguard   src/plugin.cpp "s/^  ReportModule(\"droneguard\", InstallDroneGuard(base));//"
-runm wiring wire_drop_peerclamp    src/plugin.cpp "s/^  ReportModule(\"peerclamp\", InstallPeerClamp(base));//"
 runm wiring wire_drop_bvh          src/plugin.cpp "s/const InstallResult r = InstallBvh(base);/const InstallResult r{};/"
 runm wiring wire_drop_bvh_tick     src/plugin.cpp "s/    if (r.status == SwapStatus::kOk) AddModuleTick(\"bvh\", \&BvhTick, \&want_tick);//"
 runm wiring wire_drop_wallfire     src/plugin.cpp "s/^  ReportModule(\"wallfire\", InstallWallfire(base));.*//"

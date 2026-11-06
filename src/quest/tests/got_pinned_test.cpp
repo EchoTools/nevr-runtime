@@ -28,8 +28,13 @@
 #include "login_title_hook.h"
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/combat_tick_targets.h"
+#include "quest/combat/custctx_targets.h"
+#include "quest/combat/droneguard_targets.h"
+#include "quest/combat/fxtrail_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/memsys_targets.h"
+#include "quest/combat/peerclamp_targets.h"
+#include "quest/combat/voipdrop_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/game_login_failures.h"
@@ -394,6 +399,49 @@ void CheckRealHeapsAndMemsys(const LoadedElf& elf) {
 }
 
 
+// The crash and timing guards' pins (#2178, src/quest/combat/{fxtrail,voipdrop,custctx,droneguard,peerclamp}_targets.h) against the real libr15: each
+// JUMP_SLOT resolves at its pin and alone, names a function defined at the pinned address, and every pinned code word is the one in the file.
+void CheckGuardWords(const LoadedElf& elf, const char* what, const nevr_quest::combat::PinnedWord* words, std::size_t count) {
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  for (std::size_t i = 0; i < count; ++i) {
+    std::uint32_t have = 0;
+    std::memcpy(&have, mem + words[i].vaddr, sizeof(have));
+    if (have != words[i].word) {
+      std::fprintf(stderr, "libr15 %s word at %#llx is %#x, pinned %#x\n", what, static_cast<unsigned long long>(words[i].vaddr), have, words[i].word);
+      QCHECK(false);
+    }
+  }
+}
+
+void CheckGuardSlot(const LoadedElf& elf, const char* symbol, std::uint64_t slot, std::uint64_t fn, const char* what) {
+  CheckTarget(elf, GotTarget{pinned::kLibR15, symbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, slot}, what);
+  CheckDefinedAt(elf, symbol, fn);
+}
+
+void CheckRealCrashGuards(const LoadedElf& elf) {
+  namespace fx = nevr_quest::combat::fxtrail;
+  namespace vd = nevr_quest::combat::voipdrop;
+  namespace cc = nevr_quest::combat::custctx;
+  namespace dg = nevr_quest::combat::droneguard;
+  namespace pc = nevr_quest::combat::peerclamp;
+  CheckGuardSlot(elf, fx::kEffectTimeSymbol, fx::kEffectTimeSlotVaddr, fx::kEffectTimeVaddr, "libr15 CParticleEffectCS::EffectTime JUMP_SLOT");
+  CheckGuardWords(elf, "fxtrail", fx::kWords, fx::kWordCount);
+  CheckGuardSlot(elf, vd::kReceiveVoipSymbol, vd::kReceiveVoipSlotVaddr, vd::kReceiveVoipVaddr, "libr15 CR15NetVoipReceiverCS::ReceiveVoip JUMP_SLOT");
+  CheckGuardWords(elf, "voipdrop", vd::kWords, vd::kWordCount);
+  CheckGuardSlot(elf, cc::kLoadSymbol, cc::kPins.slotLoad, cc::kPins.fnLoad, "libr15 CR15NetCustomizationRenderer::LoadMeshData JUMP_SLOT");
+  CheckGuardSlot(elf, cc::kDestroySymbol, cc::kPins.slotDestroy, cc::kPins.fnDestroy, "libr15 CR15NetCustomizationRenderer::DestroyContext JUMP_SLOT");
+  CheckGuardSlot(elf, cc::kGrowSymbol, cc::kPins.slotGrow, cc::kPins.fnGrow, "libr15 CTableXT<SR15NetCustomDrawData>::Grow JUMP_SLOT");
+  CheckDefinedAt(elf, cc::kResizeSymbol, cc::kPins.fnResize);
+  CheckGuardWords(elf, "custctx", cc::kWords, cc::kWordCount);
+  CheckGuardSlot(elf, dg::kFollowSymbol, dg::kFollowSlotVaddr, dg::kFollowVaddr, "libr15 CR15NetFollowPlayerCS::Follow JUMP_SLOT");
+  CheckDefinedAt(elf, dg::kRefreshCacheSymbol, dg::kRefreshCacheVaddr);
+  CheckDefinedAt(elf, dg::kIsValidSymbol, dg::kIsValidVaddr);
+  CheckGuardWords(elf, "droneguard", dg::kWords, dg::kWordCount);
+  CheckGuardWords(elf, "droneguard stage 1", dg::kIdxWords, dg::kIdxWordCount);
+  CheckGuardSlot(elf, pc::kCleanupSymbol, pc::kCleanupSlotVaddr, pc::kCleanupVaddr, "libr15 SBroadcasterData::CleanupPeers JUMP_SLOT");
+  CheckGuardWords(elf, "peerclamp", pc::kWords, pc::kWordCount);
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -576,6 +624,7 @@ int main(int argc, char** argv) {
   CheckRealAbs64Words(r15);
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
+  CheckRealCrashGuards(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

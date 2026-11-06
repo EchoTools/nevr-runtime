@@ -65,6 +65,11 @@ void Process(bv::Variant variant) {
   g_lines.clear();  // the combat_active line is combat_active_test's
 }
 
+std::string Golden(const std::string& line) {
+  const std::size_t at = line.find("\"event\"");
+  return at == std::string::npos ? line : line.substr(at);
+}
+
 void Done() { sentinel::SetLogSink(nullptr); }
 
 const combat::Module kTable[] = {
@@ -210,16 +215,17 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
 // The real steps, with the table as it ships: heaps and memsys have an early step, in that order, and nothing has a normal one yet. No
 // libr15 is loaded in this process, so each module refuses with its fixed token and the line names both; the normal phase writes its one
 // line with no modules.
-void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal() {
+void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheGuardsNormal() {
   nevr_quest::combat::heaps::ResetForTest();
   nevr_quest::combat::memsys::ResetForTest();
   Process(bv::Variant::kCombat);
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  // The normal step runs the tick (combat_tick.h) first and the refresh-rate rule after it (#2172). On the host no libr15 is loaded, so the
-  // tick is refused and named; the rule installs (it registers its callback for a tick that may come later), and the pfx gate and the event-effect decision, which hook nothing, install after it (#2188).
-  QCHECK(normal.ran && normal.modules == 4 && normal.installed == 3 && normal.failed == 1);
+  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172) and the five crash and timing guards after that
+  // (#2178); the pfx gate and the event-effect decision, which hook nothing, install last (#2188). On the host no libr15 is loaded, so the tick and each guard are refused and named; the rule installs (it registers its callback
+  // for a tick that may come later).
+  QCHECK(normal.ran && normal.modules == 9 && normal.installed == 3 && normal.failed == 6 && normal.off == 0);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -227,8 +233,102 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed pfx=installed pfxtev=installed\""));
+    QCHECK(Has(lines[1].text,
+              "\"results\":\"tick=module_not_loaded refresh_rate=installed fxtrail=module_not_loaded voipdrop=module_not_loaded "
+              "custctx=module_not_loaded droneguard=module_not_loaded peerclamp=module_not_loaded pfx=installed pfxtev=installed\""));
   }
+  Done();
+}
+
+// The guards' rows (#2178): the plugin's order after the refresh-rate rule, a normal-phase step and an end-of-process step each, no early step.
+void TheGuardRowsAreNormalPhaseRowsInThePluginsOrderEachWithAnEndStep() {
+  std::size_t count = 0;
+  const combat::Module* const table = combat::ShippedModules(&count);
+  const char* const want[] = {"heaps", "memsys", "tick", "refresh_rate", "fxtrail", "voipdrop", "custctx", "droneguard", "peerclamp", "pfx", "pfxtev"};
+  QCHECK(count == 11);
+  for (std::size_t i = 0; i < count && i < 11; ++i) QCHECK(std::strcmp(table[i].name, want[i]) == 0);
+  for (std::size_t i = 4; i < 9; ++i) QCHECK(table[i].early == nullptr && table[i].normal != nullptr && table[i].end != nullptr);
+}
+
+// Each guard's row reads its own switch: a key set to false is counted off, named `off_config`, and no other guard moves.
+void EachGuardRowReadsItsOwnSwitch() {
+  struct Case {
+    const char* name;
+    nevr_quest::CombatSwitch nevr_quest::CombatConfig::*member;
+  };
+  const Case cases[] = {{"fxtrail", &nevr_quest::CombatConfig::fxtrail},     {"voipdrop", &nevr_quest::CombatConfig::voipdrop},
+                        {"custctx", &nevr_quest::CombatConfig::custctx},     {"droneguard", &nevr_quest::CombatConfig::droneguard},
+                        {"peerclamp", &nevr_quest::CombatConfig::peerclamp}};
+  for (const Case& c : cases) {
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig cfg;
+    cfg.*c.member = {false, nevr_quest::Source::kFile};
+    combat::SetConfig(cfg);
+    const combat::Outcome o = combat::InstallNormal();
+    QCHECK(o.ran && o.off == 1 && o.failed == 5);  // the tick and the four other guards are refused on the host; this one is off
+    const std::vector<Line> lines = Lines("combat_install");
+    QCHECK(lines.size() == 1U && Has(lines[0].text, std::string(c.name) + "=off_config"));
+    for (const Case& other : cases) {
+      if (&other != &c && lines.size() == 1U) QCHECK(Has(lines[0].text, std::string(other.name) + "=module_not_loaded"));
+    }
+    Done();
+  }
+  {  // the second stage of droneguard is its own key: it moves nothing of the first
+    Process(bv::Variant::kCombat);
+    nevr_quest::CombatConfig cfg;
+    cfg.droneguardStage1 = {true, nevr_quest::Source::kFile};
+    combat::SetConfig(cfg);
+    const combat::Outcome o = combat::InstallNormal();
+    QCHECK(o.ran && o.off == 0 && o.failed == 6);
+    Done();
+  }
+}
+
+// The end of the process asks every row's end step; with no guard installed (no libr15 on the host) none writes a stats line.
+void TheEndOfTheProcessWritesNoStatsForAGuardThatIsNotInstalled() {
+  Process(bv::Variant::kCombat);
+  combat::InstallNormal();
+  g_lines.clear();
+  combat::NoteProcessEnd();
+  for (const char* event : {"combat_fxtrail_stats", "combat_voipdrop_stats", "combat_custctx_stats", "combat_droneguard_stats", "combat_peerclamp_stats"}) {
+    QCHECK(Lines(event).empty());
+  }
+  Done();
+}
+
+// Each guard's switch is one `combat_config_switch` record, generated from the table: module, key, value and source (droneguard has two).
+void TheGuardKeysAreLoggedAsOneSwitchRecordEachWithTheirSources() {
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig cfg;
+  cfg.fxtrail = {false, nevr_quest::Source::kFile};
+  cfg.voipdrop = {true, nevr_quest::Source::kFile};  // each key a different value or source than its neighbours, so a row naming a neighbour's member is seen
+  cfg.custctx = {false, nevr_quest::Source::kAbsent};
+  cfg.droneguard = {true, nevr_quest::Source::kAbsent};
+  cfg.droneguardStage1 = {true, nevr_quest::Source::kFile};
+  cfg.peerclamp = {false, nevr_quest::Source::kFile};
+  combat::LogConfig(cfg);
+  combat::LogConfig(nevr_quest::CombatConfig{});
+  const std::vector<Line> lines = Lines("combat_config_switch");
+  QCHECK(lines.size() == 12U);
+  struct Want {
+    const char* module;
+    const char* key;
+    int on;
+    const char* source;
+  };
+  const Want first[] = {{"fxtrail", "combat.fxtrail", 0, "config"},         {"voipdrop", "combat.voipdrop", 1, "config"},
+                        {"custctx", "combat.custctx", 0, "default"},        {"droneguard", "combat.droneguard", 1, "default"},
+                        {"droneguard", "combat.droneguard_stage1", 1, "config"}, {"peerclamp", "combat.peerclamp", 0, "config"}};
+  const Want second[] = {{"fxtrail", "combat.fxtrail", 1, "default"},         {"voipdrop", "combat.voipdrop", 1, "default"},
+                         {"custctx", "combat.custctx", 1, "default"},         {"droneguard", "combat.droneguard", 1, "default"},
+                         {"droneguard", "combat.droneguard_stage1", 0, "default"}, {"peerclamp", "combat.peerclamp", 1, "default"}};
+  for (std::size_t i = 0; i < 12U && lines.size() == 12U; ++i) {
+    const Want& w = i < 6 ? first[i] : second[i - 6];
+    QCHECK(lines[i].level == sentinel::LogLevel::kInfo);
+    QCHECK(Golden(lines[i].text) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + w.module + "\",\"key\":\"" + w.key +
+                                        "\",\"on\":" + std::to_string(w.on) + ",\"source\":\"" + w.source + "\"}");
+  }
+  QCHECK(Lines("combat_config_guards").empty());
   Done();
 }
 
@@ -394,7 +494,11 @@ int main() {
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
-  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal();
+  TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheGuardsNormal();
+  TheGuardRowsAreNormalPhaseRowsInThePluginsOrderEachWithAnEndStep();
+  EachGuardRowReadsItsOwnSwitch();
+  TheEndOfTheProcessWritesNoStatsForAGuardThatIsNotInstalled();
+  TheGuardKeysAreLoggedAsOneSwitchRecordEachWithTheirSources();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();

@@ -1,0 +1,634 @@
+// Host test of droneguard (src/quest/combat/droneguard.cpp, #2178): the real handler through the thunk, installed by the real GotHook into the
+// JUMP_SLOT of a libr15 image built in memory, and called the way the game calls it: through the slot. The game side is a model: a fake
+// CR15NetFollowPlayerCS (target at +0x140, the player handle's cache at +0x148 / +0x16c / +0x188 / +0x190), a stand-in for Follow, and fake
+// RefreshCache / IsComponentValid.
+//
+// What it pins (the q15t plugin's droneguard_test assertions, on the new fixture): a set target reaches the game's Follow with the same arguments, a null
+// target never does (one first-skip line, a total every 600th skip at most 8 times, a target-set line when it arrives), the state line on a change of the
+// cache (at most 16, read-only), an unreadable system goes to Follow, stage 1 refreshes first and then skips on idx ffff, handle-sys 0 or a refused index
+// (reading the cache the refresh just wrote), the missing or misplaced engine functions and a changed stage-1 word leave the null half only with one Error
+// line, a slot that does not hold Follow is refused and left alone, every stage-0 word flipped in turn (and an unreadable one) refuses the install. New with
+// the move: the switch, stage 1 never tried when the guard is off, the statuses, the stats lines, the missing image and build ID, and that the guard acts in
+// every level (it has no level scope).
+//
+// Built and run by `just test-quest-combat`.
+
+#include "quest/combat/droneguard.h"
+
+#include <sys/mman.h>
+
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/combat_log_capture.h"
+#include "quest/tests/combat_pin_check.h"
+#include "quest/tests/test_check.h"
+
+namespace {
+
+namespace dg = nevr_quest::combat::droneguard;
+namespace pinned = sentinel::pinned;
+using combat_test::Has;
+using combat_test::Image;
+using combat_test::Line;
+using combat_test::Lines;
+using nevr_quest::combat::ModuleResult;
+using nevr_quest::combat::PinnedWord;
+
+using FollowFn = void (*)(void*, std::uint64_t);
+
+// ---- the fake engine ------------------------------------------------------------------------------------------------------------
+
+alignas(16) std::uint8_t g_cs[0x200];
+void Put64(std::size_t off, std::uint64_t v) { std::memcpy(g_cs + off, &v, 8); }
+void Put32(std::size_t off, std::uint32_t v) { std::memcpy(g_cs + off, &v, 4); }
+
+constexpr std::uintptr_t kSys = 0x5000, kTarget = 0x6000;
+int g_realCalls = 0;
+void* g_realCs = nullptr;
+std::uint64_t g_realHandle = 0;
+extern "C" __attribute__((noinline)) void RealFollow(void* cs, std::uint64_t handle) {
+  ++g_realCalls;
+  g_realCs = cs;
+  g_realHandle = handle;
+}
+extern "C" __attribute__((noinline)) void OtherFollow(void*, std::uint64_t) {}
+
+// RefreshCache fake: records the handle it got and, like the engine, rewrites the cache (sys / idx) from the test's wish.
+int g_refreshCalls = 0;
+void* g_refreshArg = nullptr;
+std::uintptr_t g_afterSys = kSys;
+std::uint32_t g_afterIdx = 0x00070003;
+int g_validCalls = 0;
+const void* g_validSys = nullptr;
+std::uint64_t g_validIdx = 0;
+bool g_valid = true;
+void* g_poison = nullptr;  // when set, the refresh makes this page unreadable instead of rewriting the cache
+void FRefresh(void* handle) {
+  ++g_refreshCalls;
+  g_refreshArg = handle;
+  if (g_poison != nullptr) {
+    mprotect(g_poison, 4096, PROT_NONE);
+    return;
+  }
+  Put64(0x188, g_afterSys);
+  Put32(0x190, g_afterIdx);
+}
+bool FValid(const void* sys, std::uint64_t idx) {
+  ++g_validCalls;
+  g_validSys = sys;
+  g_validIdx = idx;
+  return g_valid;
+}
+dg::EngineFns Fns() {
+  dg::EngineFns f{};
+  f.refresh = &FRefresh;
+  f.isValid = &FValid;
+  return f;
+}
+
+void World(std::uintptr_t target) {
+  std::memset(g_cs, 0, sizeof(g_cs));
+  Put64(0x140, target);
+  Put64(0x188, kSys);
+  Put32(0x190, 0x00070003);
+  g_cs[0x16c] = 0;
+  g_realCalls = g_refreshCalls = g_validCalls = 0;
+  g_afterSys = kSys;
+  g_afterIdx = 0x00070003;
+  g_valid = true;
+}
+
+// ---- the libr15 image ----------------------------------------------------------------------------------------------------------
+
+Image g_image;
+dg::Pins g_pins = dg::kPins;
+bool Lookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_image.Present() || std::strcmp(module, pinned::kLibR15) != 0) return false;
+  *out = g_image.Elf();
+  return true;
+}
+
+// A libr15 holding the pinned words (both stages) and the slot, which holds `slotWord` (the stand-in when 0).
+void Build(std::uintptr_t slotWord = 0) {
+  g_pins = dg::kPins;
+  g_image.Build({{dg::kFollowSymbol, g_pins.slot, false, false, g_pins.fn}});
+  // base + fn is the stand-in's address: the real function is not in the image, so the pin holds the stand-in's offset.
+  g_pins.fn = reinterpret_cast<std::uintptr_t>(&RealFollow) - g_image.Base();
+  for (const PinnedWord& w : dg::kWords) g_image.Put<std::uint32_t>(w.vaddr, w.word);
+  for (const PinnedWord& w : dg::kIdxWords) g_image.Put<std::uint32_t>(w.vaddr, w.word);
+  *g_image.Slot(g_pins.slot) = slotWord != 0 ? reinterpret_cast<void*>(slotWord) : reinterpret_cast<void*>(&RealFollow);
+}
+FollowFn Slot() { return reinterpret_cast<FollowFn>(*g_image.Slot(g_pins.slot)); }
+bool Hooked() { return *g_image.Slot(g_pins.slot) == dg::FollowThunk::EntryAddress(); }
+bool SlotIsTheGames() { return *g_image.Slot(g_pins.slot) == reinterpret_cast<void*>(&RealFollow); }
+
+void Begin() {
+  combat_test::StartCapture();
+  dg::ResetForTest();
+  Build();
+}
+void End() {
+  dg::ResetForTest();
+  g_image.Drop();
+  combat_test::StopCapture();
+}
+
+ModuleResult Install(bool on, bool stage1, const dg::EngineFns* fns) { return dg::InstallAt(&Lookup, g_pins, on, stage1, fns); }
+
+// A fresh world with the guard installed (stage 1 as asked, with the fake engine functions); returns the hooked entry.
+FollowFn Installed(bool stage1) {
+  End();
+  Begin();
+  const dg::EngineFns f = Fns();
+  const ModuleResult r = Install(true, stage1, &f);
+  QCHECK(r.installed && Hooked());
+  return Slot();
+}
+
+// ---- the tests ------------------------------------------------------------------------------------------------------------------
+
+void ThePinsAreTheReadelfAndDisassemblyPins() {
+  QCHECK(dg::kFollowSlotVaddr == 0x36f1218 && dg::kFollowVaddr == 0x2149764 && dg::kRefreshCacheVaddr == 0x1210848 && dg::kIsValidVaddr == 0x1cdb3e0);
+  QCHECK(std::strcmp(dg::kFollowSymbol, "_ZN10NRadEngine8NRadGame21CR15NetFollowPlayerCS6FollowENS_18SCompactPoolHandleE") == 0);
+  QCHECK(std::strcmp(dg::kRefreshCacheSymbol, "_ZNK10NRadEngine16CComponentHandleINS_8NRadGame15CR15PlayerNavCSEE12RefreshCacheEv") == 0);
+  QCHECK(std::strcmp(dg::kIsValidSymbol, "_ZNK10NRadEngine8NRadGame15CR15PlayerNavCS16IsComponentValidENS_18SCompactPoolHandleE") == 0);
+  QCHECK(dg::kOffTarget == 0x140 && dg::kOffHandle == 0x148 && dg::kOffHandleFlags == 0x16c && dg::kOffHandleSys == 0x188 && dg::kOffHandleIdx == 0x190);
+  static const PinnedWord kWant[4] = {{0x21497bc, 0xf940a274}, {0x2149744, 0x97b7a7c7}, {0x21497cc, 0xb9419261}, {0x214980c, 0x79432268}};
+  QCHECK(dg::kWordCount == 4);
+  for (std::size_t i = 0; i < 4; ++i) QCHECK(dg::kWords[i].vaddr == kWant[i].vaddr && dg::kWords[i].word == kWant[i].word);
+  QCHECK(combat_test::Fingerprint(dg::kWords, dg::kWordCount) == combat_test::Fingerprint(kWant, 4));
+  static const PinnedWord kWantIdx[3] = {{0x21497c8, 0x97b70b0a}, {0x1cdb3e0, 0x7941e008}, {0x1cdb3f8, 0x6b41413f}};
+  QCHECK(dg::kIdxWordCount == 3);
+  for (std::size_t i = 0; i < 3; ++i) QCHECK(dg::kIdxWords[i].vaddr == kWantIdx[i].vaddr && dg::kIdxWords[i].word == kWantIdx[i].word);
+  QCHECK(combat_test::Fingerprint(dg::kIdxWords, dg::kIdxWordCount) == combat_test::Fingerprint(kWantIdx, 3));
+}
+
+// ---- stage 0 ----
+
+void TheThunkTakesTheSlotAndTheLineSaysSo() {
+  Begin();
+  const ModuleResult r = Install(true, false, nullptr);
+  QCHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off && Hooked());
+  const std::vector<Line> install = Lines("combat_droneguard_install");
+  QCHECK(install.size() == 1U && Lines("combat_droneguard_stage1").empty());
+  if (install.size() == 1U) {
+    QCHECK(install[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(combat_test::Golden(install[0].text) ==
+           "\"event\":\"combat_droneguard_install\",\"result\":\"installed\",\"reason\":\"ok\",\"hook\":\"ok\",\"stage1\":\"off\","
+           "\"consequence\":\"the drone's follow update is skipped while its target is null instead of crashing the game, in every level\"}");
+  }
+  End();
+}
+
+// 1. A target that is set: the game's function with the same arguments, nothing skipped, stage 1 never touched.
+void ASetTargetReachesTheGamesFollowUntouched() {
+  const FollowFn hook = Installed(false);
+  World(kTarget);
+  hook(g_cs, 0xabcd1234ULL);
+  QCHECK(g_realCalls == 1 && g_realCs == g_cs && g_realHandle == 0xabcd1234ULL);
+  QCHECK(g_refreshCalls == 0 && g_validCalls == 0);
+  QCHECK(dg::CurrentStats().skips == 0 && Lines("combat_droneguard_skip").empty());
+  End();
+}
+
+// 2. A null target: Follow is not called; one first-skip line; a total at every 600th skip, at most 8.
+void ANullTargetIsNeverFollowedAndIsCounted() {
+  const FollowFn hook = Installed(false);
+  World(0);
+  hook(g_cs, 1);
+  QCHECK(g_realCalls == 0 && dg::CurrentStats().skips == 1);
+  const std::vector<Line> first = Lines("combat_droneguard_skip");
+  QCHECK(first.size() == 1U);
+  if (first.size() == 1U) QCHECK(first[0].level == sentinel::LogLevel::kInfo && Has(first[0].text, "\"cs\":\"0x"));
+  for (int i = 0; i < 598; ++i) hook(g_cs, 1);
+  QCHECK(Lines("combat_droneguard_skips").empty() && Lines("combat_droneguard_skip").size() == 1U);
+  hook(g_cs, 1);
+  const std::vector<Line> totals = Lines("combat_droneguard_skips");
+  QCHECK(totals.size() == 1U && Has(totals[0].text, "\"skips\":600}"));
+  for (int i = 0; i < 600 * 9; ++i) hook(g_cs, 1);
+  QCHECK(Lines("combat_droneguard_skips").size() == 8U);
+  QCHECK(g_realCalls == 0);
+  End();
+}
+
+// 3. The target arrives: one target-set line with the skip count, Follow runs; a later null starts a new first-skip line.
+void TheTargetArrivingEndsTheRunOfSkips() {
+  const FollowFn hook = Installed(false);
+  World(0);
+  for (int i = 0; i < 3; ++i) hook(g_cs, 1);
+  combat_test::Captured().clear();
+  const std::uint64_t skips = dg::CurrentStats().skips;
+  QCHECK(skips == 3);
+  Put64(0x140, kTarget);
+  hook(g_cs, 5);
+  hook(g_cs, 6);
+  QCHECK(g_realCalls == 2 && g_realHandle == 6);
+  const std::vector<Line> set = Lines("combat_droneguard_target_set");
+  QCHECK(set.size() == 1U && set[0].level == sentinel::LogLevel::kInfo && Has(set[0].text, "\"skips\":3"));
+  Put64(0x140, 0);
+  hook(g_cs, 7);
+  QCHECK(Lines("combat_droneguard_skip").size() == 1U);
+  End();
+}
+
+// 4. State lines: the first call and every change of (index, flags, target null, system null), at most 16; read-only.
+void TheStateLineFollowsTheCacheAndIsCapped() {
+  const FollowFn hook = Installed(false);
+  World(kTarget);
+  hook(g_cs, 1);
+  hook(g_cs, 1);
+  QCHECK(Lines("combat_droneguard_state").size() == 1U);
+  const std::vector<Line> state = Lines("combat_droneguard_state");
+  QCHECK(state.size() == 1U && state[0].level == sentinel::LogLevel::kInfo &&
+         Has(state[0].text, "\"target\":\"set\",\"handle_sys\":\"set\",\"idx_unresolved\":\"no\",\"raw190\":\"00070003\",\"flags16c\":\"00\""));
+  auto count = [] { return Lines("combat_droneguard_state").size(); };
+  auto last = [] {
+    const std::vector<Line> l = Lines("combat_droneguard_state");
+    return l.empty() ? std::string() : l.back().text;
+  };
+  Put32(0x190, 0x0007ffff);
+  hook(g_cs, 1);
+  QCHECK(count() == 2U && Has(last(), "\"idx_unresolved\":\"yes\",\"raw190\":\"0007ffff\""));
+  g_cs[0x16c] = 2;
+  hook(g_cs, 1);
+  QCHECK(Has(last(), "\"flags16c\":\"02\""));
+  Put64(0x188, 0);
+  hook(g_cs, 1);
+  QCHECK(Has(last(), "\"handle_sys\":\"0\""));
+  Put64(0x140, 0);
+  hook(g_cs, 1);
+  QCHECK(Has(last(), "\"target\":\"0\",\"handle_sys\":\"0\""));
+  for (std::uint32_t i = 0; i < 40; ++i) {
+    Put32(0x190, 0x00100000 + i);
+    hook(g_cs, 1);
+  }
+  QCHECK(count() == 16U);
+  End();
+}
+
+// 5. Doubt: a null component goes to Follow, and the guard reads nothing else. (An unreadable non-null component faults in Follow's own first
+// instruction, `ldr x8,[x0,#0xc8]`, with or without the guard.)
+void ANullSystemGoesToFollow() {
+  const FollowFn hook = Installed(true);
+  World(kTarget);
+  hook(nullptr, 9);
+  QCHECK(g_realCalls == 1 && g_refreshCalls == 0 && dg::CurrentStats().skips == 0);
+  End();
+}
+
+// ---- stage 1 ----
+
+void AHealthyPlayerIsRefreshedThenChecked() {
+  const FollowFn hook = Installed(true);
+  const std::vector<Line> stage1 = Lines("combat_droneguard_stage1");
+  QCHECK(stage1.size() == 1U && stage1[0].level == sentinel::LogLevel::kInfo && Has(stage1[0].text, "\"result\":\"on\""));
+  const std::vector<Line> install = Lines("combat_droneguard_install");
+  QCHECK(install.size() == 1U && Has(install[0].text, "\"stage1\":\"on\""));
+  World(kTarget);
+  hook(g_cs, 0x77);
+  QCHECK(g_refreshCalls == 1 && g_refreshArg == g_cs + 0x148);
+  QCHECK(g_validCalls == 1 && g_validSys == reinterpret_cast<const void*>(kTarget) && g_validIdx == 0x00070003);
+  QCHECK(g_realCalls == 1 && g_realHandle == 0x77 && dg::CurrentStats().idxSkips == 0);
+  // the null half still comes first: no refresh when the target is null
+  World(0);
+  hook(g_cs, 1);
+  QCHECK(g_refreshCalls == 0 && g_realCalls == 0);
+  End();
+}
+
+// The index word after the refresh decides: the cache the refresh just wrote, not the one before.
+void TheCacheTheRefreshWroteDecides() {
+  const FollowFn hook = Installed(true);
+  World(kTarget);
+  g_afterIdx = 0x0007ffff;  // the refresh leaves the index unresolved
+  hook(g_cs, 1);
+  QCHECK(g_realCalls == 0 && g_validCalls == 0 && dg::CurrentStats().idxSkips == 1);
+  const std::vector<Line> first = Lines("combat_droneguard_idx_skip");
+  QCHECK(first.size() == 1U && first[0].level == sentinel::LogLevel::kInfo && Has(first[0].text, "\"why\":\"idx ffff\""));
+  World(kTarget);
+  g_afterIdx = 0xffff;  // only the low 16 bits count: generation 0 and index ffff
+  hook(g_cs, 1);
+  QCHECK(g_realCalls == 0);
+  World(kTarget);
+  g_afterIdx = 0x0001fffe;  // not unresolved
+  hook(g_cs, 1);
+  QCHECK(g_realCalls == 1);
+  World(kTarget);
+  g_afterSys = 0;  // the cached system is 0
+  hook(g_cs, 1);
+  QCHECK(g_realCalls == 0 && g_validCalls == 0);
+  const std::vector<Line> reasons = Lines("combat_droneguard_idx_skip");
+  QCHECK(!reasons.empty() && Has(reasons.back().text, "\"why\":\"handle-sys 0\""));
+  End();
+}
+
+// IsComponentValid refuses the cached index: skipped; resolved again: one resolved line, once.
+void ARefusedIndexIsSkippedUntilThePlayerResolves() {
+  const FollowFn hook = Installed(true);
+  World(kTarget);
+  hook(g_cs, 1);  // a healthy call: no run of idx skips yet
+  World(kTarget);
+  g_valid = false;
+  hook(g_cs, 1);
+  QCHECK(g_realCalls == 0 && g_validCalls == 1);
+  const std::vector<Line> skip = Lines("combat_droneguard_idx_skip");
+  QCHECK(skip.size() == 1U && Has(skip[0].text, "\"why\":\"refused but cached\""));
+  combat_test::Captured().clear();
+  World(kTarget);
+  hook(g_cs, 1);
+  QCHECK(g_realCalls == 1);
+  const std::vector<Line> resolved = Lines("combat_droneguard_idx_resolved");
+  QCHECK(resolved.size() == 1U && resolved[0].level == sentinel::LogLevel::kInfo && Has(resolved[0].text, "\"idx_skips\":1"));
+  hook(g_cs, 1);
+  QCHECK(Lines("combat_droneguard_idx_resolved").size() == 1U);
+  End();
+}
+
+// The cache becomes unreadable right after the refresh: doubt, Follow runs.
+void ACacheThatTurnsUnreadableAfterTheRefreshGoesToFollow() {
+  const FollowFn hook = Installed(true);
+  auto* pg = static_cast<std::uint8_t*>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+  World(kTarget);
+  std::memcpy(pg + 0x140, g_cs + 0x140, 0x60);
+  g_poison = pg;
+  hook(pg, 1);
+  g_poison = nullptr;
+  QCHECK(g_realCalls == 1 && g_refreshCalls == 1 && dg::CurrentStats().idxSkips == 0);
+  munmap(pg, 4096);
+  End();
+}
+
+// Idx skip totals: every 600th, at most 8.
+void TheIdxSkipTotalsAreEvery600thAtMostEight() {
+  const FollowFn hook = Installed(true);
+  World(kTarget);
+  g_afterIdx = 0xffff;
+  for (int i = 0; i < 600; ++i) hook(g_cs, 1);
+  const std::vector<Line> totals = Lines("combat_droneguard_idx_skips");
+  QCHECK(totals.size() == 1U && Has(totals[0].text, "\"idx_skips\":600"));
+  for (int i = 0; i < 600 * 9; ++i) hook(g_cs, 1);
+  QCHECK(Lines("combat_droneguard_idx_skips").size() == 8U);
+  End();
+}
+
+// Stage 1 asked, engine functions missing or half missing: one Error line, the null half only.
+void StageOneWithoutItsFunctionsLeavesTheNullHalfOnly() {
+  Begin();
+  ModuleResult r = Install(true, true, nullptr);
+  QCHECK(r.installed && std::strcmp(r.status, "installed_null_half") == 0 && Hooked());
+  std::vector<Line> stage1 = Lines("combat_droneguard_stage1");
+  QCHECK(stage1.size() == 1U && stage1[0].level == sentinel::LogLevel::kError && Has(stage1[0].text, "\"result\":\"null_half_only\"") &&
+         Has(stage1[0].text, "\"reason\":\"engine_functions_missing\""));
+  std::vector<Line> install = Lines("combat_droneguard_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo && Has(install[0].text, "\"stage1\":\"null_half_only\""));
+  World(kTarget);
+  Slot()(g_cs, 1);
+  QCHECK(g_realCalls == 1 && g_refreshCalls == 0);
+  End();
+  Begin();
+  dg::EngineFns half{};
+  half.refresh = &FRefresh;
+  r = Install(true, true, &half);
+  QCHECK(r.installed && std::strcmp(r.status, "installed_null_half") == 0);
+  World(kTarget);
+  Slot()(g_cs, 1);
+  QCHECK(g_realCalls == 1 && g_refreshCalls == 0);
+  End();
+  Begin();
+  half = dg::EngineFns{};
+  half.isValid = &FValid;
+  r = Install(true, true, &half);
+  QCHECK(r.installed && std::strcmp(r.status, "installed_null_half") == 0 && Lines("combat_droneguard_stage1").size() == 1U);
+  End();
+}
+
+// A changed (or unreadable) stage-1 word leaves the null half only and names the pin.
+void AChangedStageOneWordLeavesTheNullHalfOnlyAndNamesIt() {
+  for (std::size_t i = 0; i < dg::kIdxWordCount; ++i) {
+    Begin();
+    const std::uint32_t good = g_image.Get<std::uint32_t>(dg::kIdxWords[i].vaddr);
+    const std::uint32_t flipped = good ^ 0x00010000U;
+    g_image.Put<std::uint32_t>(dg::kIdxWords[i].vaddr, flipped);
+    const dg::EngineFns f = Fns();
+    const ModuleResult r = Install(true, true, &f);
+    QCHECK(r.installed && std::strcmp(r.status, "installed_null_half") == 0 && Hooked());
+    const std::vector<Line> stage1 = Lines("combat_droneguard_stage1");
+    QCHECK(stage1.size() == 1U);
+    if (stage1.size() == 1U) {
+      char at[19];
+      char found[19];
+      char want[19];
+      QCHECK(stage1[0].level == sentinel::LogLevel::kError && Has(stage1[0].text, "\"reason\":\"pinned_word_mismatch\""));
+      QCHECK(Has(stage1[0].text, std::string("\"pin\":\"") + sentinel::HexString(at, dg::kIdxWords[i].vaddr) + "\""));
+      QCHECK(Has(stage1[0].text, std::string("\"found\":\"") + sentinel::HexString(found, flipped) + "\""));
+      QCHECK(Has(stage1[0].text, std::string("\"expected\":\"") + sentinel::HexString(want, good) + "\""));
+    }
+    World(kTarget);
+    Slot()(g_cs, 1);
+    QCHECK(g_realCalls == 1 && g_refreshCalls == 0 && g_validCalls == 0);  // the null half works, stage 1 does not run
+    End();
+  }
+  {  // an unreadable stage-1 word (IsComponentValid's page, away from the stage-0 words)
+    Begin();
+    const std::uintptr_t page = (g_image.Base() + dg::kIdxWords[1].vaddr) & ~static_cast<std::uintptr_t>(0xfff);
+    QCHECK(mprotect(reinterpret_cast<void*>(page), 0x1000, PROT_NONE) == 0);
+    const dg::EngineFns f = Fns();
+    const ModuleResult r = Install(true, true, &f);
+    mprotect(reinterpret_cast<void*>(page), 0x1000, PROT_READ | PROT_WRITE);
+    QCHECK(r.installed && std::strcmp(r.status, "installed_null_half") == 0);
+    const std::vector<Line> stage1 = Lines("combat_droneguard_stage1");
+    QCHECK(stage1.size() == 1U && Has(stage1[0].text, "\"found\":\"unreadable\""));
+    End();
+  }
+}
+
+// The address check on what dlsym would return, and the resolver on a host with no game library.
+void TheEnginesExportsMustBeAtTheirPinnedAddresses() {
+  dg::EngineFns got{};
+  const std::uintptr_t b = 0x7000000000ULL;
+  QCHECK(dg::EngineExportsMatch(b, reinterpret_cast<void*>(b + dg::kRefreshCacheVaddr), reinterpret_cast<void*>(b + dg::kIsValidVaddr), &got) &&
+         got.refresh == reinterpret_cast<void (*)(void*)>(b + dg::kRefreshCacheVaddr) &&
+         got.isValid == reinterpret_cast<bool (*)(const void*, std::uint64_t)>(b + dg::kIsValidVaddr));
+  QCHECK(!dg::EngineExportsMatch(b, reinterpret_cast<void*>(b + 0x1210840), reinterpret_cast<void*>(b + dg::kIsValidVaddr), &got));
+  QCHECK(!dg::EngineExportsMatch(b, reinterpret_cast<void*>(b + dg::kRefreshCacheVaddr), reinterpret_cast<void*>(b + 0x1cdb3e8), &got));
+  QCHECK(!dg::EngineExportsMatch(b, nullptr, nullptr, &got));
+  QCHECK(!dg::ResolveEngineFns(b, &got));  // no libr15 is loaded in this process
+}
+
+// A slot that does not hold Follow is refused and left alone; so is a word that points at other code.
+void ASlotThatDoesNotHoldFollowIsRefusedAndLeftAlone() {
+  Begin();
+  Build(0x4242420);
+  ModuleResult r = Install(true, false, nullptr);
+  QCHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0);
+  QCHECK(*g_image.Slot(g_pins.slot) == reinterpret_cast<void*>(0x4242420));
+  const std::vector<Line> install = Lines("combat_droneguard_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kError && Has(install[0].text, "\"result\":\"refused\"") &&
+         Has(install[0].text, "\"reason\":\"slot_refused\"") && Has(install[0].text, "\"hook\":\"original_mismatch\""));
+  End();
+  Begin();
+  Build(reinterpret_cast<std::uintptr_t>(&OtherFollow));
+  r = Install(true, false, nullptr);
+  QCHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0);
+  QCHECK(*g_image.Slot(g_pins.slot) == reinterpret_cast<void*>(&OtherFollow));
+  End();
+}
+
+// A refused install leaves no stage 1 behind: a later install of the null half alone does not run it.
+void ARefusedInstallLeavesNoStageOneBehind() {
+  Begin();
+  Build(0x4242420);
+  const dg::EngineFns f = Fns();
+  QCHECK(!Install(true, true, &f).installed);
+  Build();  // the slot holds Follow now
+  QCHECK(Install(true, false, nullptr).installed);
+  World(kTarget);
+  Slot()(g_cs, 1);
+  QCHECK(g_realCalls == 1 && g_refreshCalls == 0 && g_validCalls == 0);
+  End();
+}
+
+// The switch: off installs nothing, tries no stage 1 and says so.
+void TheSwitchOffInstallsNothingAndSaysSo() {
+  Begin();
+  const dg::EngineFns f = Fns();
+  const ModuleResult r = Install(false, true, &f);  // stage 1 asked, but the guard is off
+  QCHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0 && SlotIsTheGames());
+  QCHECK(Lines("combat_droneguard_stage1").empty());
+  const std::vector<Line> install = Lines("combat_droneguard_install");
+  QCHECK(install.size() == 1U && install[0].level == sentinel::LogLevel::kInfo);
+  if (install.size() == 1U) {
+    QCHECK(combat_test::Golden(install[0].text) ==
+           "\"event\":\"combat_droneguard_install\",\"result\":\"off\",\"reason\":\"off_config\",\"consequence\":\"combat.droneguard is false: the "
+           "game's own Follow runs for every component, and a drone with no orbit target faults it\"}");
+  }
+  End();
+}
+
+// The image: not loaded, no build ID, another build.
+void AMissingOrOtherImageInstallsNothing() {
+  Begin();
+  QCHECK(std::strcmp(dg::InstallAt(nullptr, g_pins, true, false, nullptr).status, "module_not_loaded") == 0);
+  g_image.Drop();
+  QCHECK(std::strcmp(Install(true, false, nullptr).status, "module_not_loaded") == 0);
+  Build();
+  g_image.Build({}, pinned::kLibR15StockBuildId);
+  QCHECK(std::strcmp(Install(true, false, nullptr).status, "build_id_mismatch") == 0);
+  g_image.Build({}, nullptr, /*note=*/false);
+  QCHECK(std::strcmp(Install(true, false, nullptr).status, "no_build_id") == 0);
+  const std::vector<Line> lines = Lines("combat_droneguard_install");
+  QCHECK(lines.size() == 4U);
+  for (const Line& l : lines) QCHECK(l.level == sentinel::LogLevel::kError && Has(l.text, "\"result\":\"refused\""));
+  End();
+}
+
+// The stage-0 words: every one flipped in turn (and an unreadable one) refuses the install before the slot is touched.
+void EveryPinnedWordGatesTheInstall() {
+  Begin();
+  combat_test::EveryPinIsRefused(
+      "combat_droneguard_install", dg::kWords, dg::kWordCount, g_image,
+      [] {
+        combat_test::StartCapture();
+        dg::ResetForTest();
+        Build();
+      },
+      [] { return Install(true, true, nullptr); }, [] { return SlotIsTheGames(); });
+  End();
+}
+
+// A second install: the slot already holds the hook, nothing is installed again.
+void ASecondInstallDoesNothing() {
+  Begin();
+  QCHECK(Install(true, false, nullptr).installed);
+  const ModuleResult again = Install(true, false, nullptr);
+  QCHECK(!again.installed && Hooked());
+  End();
+}
+
+// The guard acts in every level: it has no level scope, so the model of an arena level changes nothing (the target is null, Follow is not called).
+void TheGuardHasNoLevelScope() {
+  const FollowFn hook = Installed(false);
+  World(0);
+  hook(g_cs, 1);  // no scope::Tick has ever run in this process image of the test: a level-scoped guard would let this through
+  QCHECK(g_realCalls == 0 && dg::CurrentStats().skips == 1);
+  End();
+}
+
+// The stats: a Debug line every kStatsEvery calls, the Info line at the end of the process only when the guard is installed.
+void TheStatsAreWrittenEveryKStatsEveryCallsAndAtTheEnd() {
+  const FollowFn hook = Installed(false);
+  World(kTarget);
+  for (unsigned i = 0; i < dg::kStatsEvery - 1; ++i) hook(g_cs, 1);
+  QCHECK(Lines("combat_droneguard_stats").empty());
+  hook(g_cs, 1);
+  std::vector<Line> stats = Lines("combat_droneguard_stats");
+  QCHECK(stats.size() == 1U && stats[0].level == sentinel::LogLevel::kDebug && Has(stats[0].text, "\"final\":0") &&
+         Has(stats[0].text, "\"calls\":16384,\"skips\":0,\"idx_skips\":0"));
+  dg::NoteEnd();
+  stats = Lines("combat_droneguard_stats");
+  QCHECK(stats.size() == 2U && stats[1].level == sentinel::LogLevel::kInfo && Has(stats[1].text, "\"final\":1"));
+  End();
+  Begin();  // not installed: no final line
+  dg::NoteEnd();
+  QCHECK(Lines("combat_droneguard_stats").empty());
+  End();
+}
+
+// The final stats count both kinds of skip.
+void TheFinalStatsCountBothKindsOfSkip() {
+  const FollowFn hook = Installed(true);
+  World(0);
+  hook(g_cs, 1);
+  hook(g_cs, 1);
+  World(kTarget);
+  g_afterIdx = 0xffff;
+  hook(g_cs, 1);
+  hook(g_cs, 1);
+  hook(g_cs, 1);
+  QCHECK(dg::CurrentStats().skips == 2 && dg::CurrentStats().idxSkips == 3 && dg::CurrentStats().calls == 5);
+  dg::NoteEnd();
+  const std::vector<Line> stats = Lines("combat_droneguard_stats");
+  QCHECK(stats.size() == 1U && Has(stats[0].text, "\"calls\":5,\"skips\":2,\"idx_skips\":3,\"final\":1"));
+  End();
+}
+
+}  // namespace
+
+int main() {
+  ThePinsAreTheReadelfAndDisassemblyPins();
+  TheThunkTakesTheSlotAndTheLineSaysSo();
+  ASetTargetReachesTheGamesFollowUntouched();
+  ANullTargetIsNeverFollowedAndIsCounted();
+  TheTargetArrivingEndsTheRunOfSkips();
+  TheStateLineFollowsTheCacheAndIsCapped();
+  ANullSystemGoesToFollow();
+  AHealthyPlayerIsRefreshedThenChecked();
+  TheCacheTheRefreshWroteDecides();
+  ARefusedIndexIsSkippedUntilThePlayerResolves();
+  ACacheThatTurnsUnreadableAfterTheRefreshGoesToFollow();
+  TheIdxSkipTotalsAreEvery600thAtMostEight();
+  StageOneWithoutItsFunctionsLeavesTheNullHalfOnly();
+  AChangedStageOneWordLeavesTheNullHalfOnlyAndNamesIt();
+  TheEnginesExportsMustBeAtTheirPinnedAddresses();
+  ASlotThatDoesNotHoldFollowIsRefusedAndLeftAlone();
+  ARefusedInstallLeavesNoStageOneBehind();
+  TheSwitchOffInstallsNothingAndSaysSo();
+  AMissingOrOtherImageInstallsNothing();
+  EveryPinnedWordGatesTheInstall();
+  ASecondInstallDoesNothing();
+  TheGuardHasNoLevelScope();
+  TheStatsAreWrittenEveryKStatsEveryCallsAndAtTheEnd();
+  TheFinalStatsCountBothKindsOfSkip();
+  if (quest_test::Failures() != 0) {
+    std::fprintf(stderr, "droneguard_test: %d check(s) failed\n", quest_test::Failures());
+    return 1;
+  }
+  std::puts("droneguard_test: all checks passed");
+  return 0;
+}

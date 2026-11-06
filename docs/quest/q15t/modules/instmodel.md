@@ -12,7 +12,7 @@ in the q15t data directory. Issue #1554.
   (0x1a079a0, 0x1a079c0, 0x1a079e0, 0x1a07a00, 0x1a07a20, 0x1a07a3c).
 - Those eight fields are the growth steps of eight CTableXT members. Member n has its CMemBlock at 0x78, 0xb0, 0xe8, 0x120, 0x158,
   0x190, 0x1c8, 0x200 (each built by a `CMemBlock` constructor call at 0x1a0790c..0x1a07a38), its step at +0x20 and its capacity
-  (zeroed by the constructor) at +0x28. The same layout is `DrawTable` in `src/quest/plugins/q15t/src/custctx.cpp`.
+  (zeroed by the constructor) at +0x28. The same layout is `DrawTable` in `src/quest/combat/custctx.cpp`.
 - Callers: the constructor is reached only through a PLT stub at VA 0xfdcb00 (`adrp x16,0x37c5000; ldr x17,[x16,#0xc68]; add x16,x16,#0xc68;
   br x17`), so the GOT word is VA 0x37c5c68 (ELF 0x36c5c68). The stub's callers are `ConstructInstance` (0x1a076dc), `CreateInstance`
   (0x1a077b0) and `FUN_0190772c` (0x1a0772c). the disassembly's data xrefs to 0x1a078dc at 0x338803c, 0x34fb2f0 and 0x37c5c68 are not

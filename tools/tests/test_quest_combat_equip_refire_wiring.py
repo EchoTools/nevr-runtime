@@ -235,10 +235,25 @@ class TheGroupTheRecipeAndTheVerifyEntryExist(unittest.TestCase):
         self.assertRegex(justfile, r"\ntest-quest-combat module=\"\":")
 
     def test_the_config_section_has_its_key_and_the_example_config_shows_it(self):
-        self.assertIn(
-            '{"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "pfx", "pfxtev"}}',
-            read("src/core/nevr_config.cpp"),
-        )
+        schema = read("src/core/nevr_config.cpp")
+        section = schema[schema.index('{"combat",') :].split("}},")[0]
+        for key in (
+            "force",
+            "heaps",
+            "memsys",
+            "refresh_rate",
+            "refresh_rate_lobby",
+            "refresh_rate_quest2_72",
+            "fxtrail",
+            "voipdrop",
+            "custctx",
+            "droneguard",
+            "droneguard_stage1",
+            "peerclamp",
+            "pfx",
+            "pfxtev",
+        ):
+            self.assertIn('"%s"' % key, section)
         self.assertRegex(read("docs/reference/example-config.yaml"), r"\ncombat:\n")
 
 

@@ -11,7 +11,7 @@ Disassembly, libr15 (ELF vaddr = disassembly VA - 0x100000), build b243509c08ce6
   and disassembly read in the disassembly this session). It allocates a 0xb0-byte object, fills its presence and resource words, runs
   the `CMemBlock` constructor on the CTableXT at object `+0x78`, and then writes the table's growth step.
 - The growth step is `mov w8,#0x20` at `0x1a07130` (word `0x52800408`), stored by `str x8,[x19,#0x98]` at `0x1a07138`. The
-  table's step is at its `+0x20`, so the object's `+0x98`; the layout matches the `DrawTable` of `custctx.cpp`.
+  table's step is at its `+0x20`, so the object's `+0x98`; the layout matches the `DrawTable` of `src/quest/combat/custctx.cpp`.
 - One data word holds the address of `CreateInstance`: ELF vaddr `0x365ddd0`, the `CFactory<CGShaderSetResource>` vtable word. In the
   pinned `libr15.so` it is the only dynamic relocation whose target is `0x190707c` (`readelf -r -W libr15.so`: `R_AARCH64_ABS64` at
   `0x365ddd0`, symbol `_ZN10NRadEngine8CFactoryINS_19CGShaderSetResourceEE14CreateInstanceEPNS_13CPresenceInitE`); the words at

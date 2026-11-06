@@ -3,7 +3,7 @@
 // The factory's ConstructInstance (disassembly libr15 0x1a06f4c, ELF 0x1906f4c, 304 bytes) builds a shader-set resource in
 // place and stores the table's growth step at object+0x98 (disassembly 0x1a07000: `mov w8,#0x20`, `str x8,[x19,#0x98]`).
 // The table is the CTableXT at object+0x78: its CMemBlock is first, the step at +0x20, the capacity at +0x28 (the same
-// layout custctx's DrawTable reads). This module wraps the factory's virtual ConstructInstance: it calls the game's
+// layout src/quest/combat/custctx.cpp's DrawTable reads). This module wraps the factory's virtual ConstructInstance: it calls the game's
 // own constructor unchanged and then writes 1 to the step of the object it built, after reading that the game wrote 0x20.
 //
 // The wrapped slot is vtable slot 1 of the factory's vtable, which the factory's destructor (disassembly 0x1a06ef0) points
