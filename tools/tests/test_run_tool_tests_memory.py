@@ -198,6 +198,7 @@ class SubsetTest(Tmp):
                      [f"--config-file={ini}", one],
                      ["-o", "addopts=tools/tests", one], ["-qo", "addopts=tools/tests", one],
                      ["-oaddopts=tools/tests", one], ["-qoaddopts=tools/tests", one],
+                     ["-o=addopts=tools/tests", one], ["-qo=addopts=tools/tests", one],
                      ["--override-ini", "addopts=tools/tests", one], ["--override-ini=addopts=tools/tests", one]):
             with self.subTest(args=args):
                 self.assertFalse(self.module.is_subset(args, {}))

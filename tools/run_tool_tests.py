@@ -393,8 +393,8 @@ def is_subset(args: list, environ) -> bool:
     whenever the classifier cannot see what pytest will collect: an option that is not one pytest is known to have
     (VALUE_OPTIONS, FLAG_OPTIONS), whose value could be a path; any token that starts with `@` (argparse reads the file
     it names as more arguments, wherever the token stands); a config file (`-c`, `--config-file`) or an `addopts`
-    override (`-o addopts=...`), either of which can name any path; a positional argument in $PYTEST_ADDOPTS; and a
-    $PYTEST_ADDOPTS that cannot be split. Anything in doubt locks."""
+    override (`-o addopts=...`, `-o=addopts=...`), either of which can name any path; a positional argument in
+    $PYTEST_ADDOPTS; and a $PYTEST_ADDOPTS that cannot be split. Anything in doubt locks."""
     try:
         addopts = shlex.split(environ.get("PYTEST_ADDOPTS", ""))
     except ValueError:
@@ -437,7 +437,8 @@ def is_subset(args: list, environ) -> bool:
                     return False
                 if option in VALUE_OPTIONS:
                     value = tok[i + 2:]
-                    if option in OVERRIDE_INI_OPTIONS and value.startswith("addopts"):
+                    # argparse drops the `=` of `-o=VALUE` and `-qo=VALUE`
+                    if option in OVERRIDE_INI_OPTIONS and value.removeprefix("=").startswith("addopts"):
                         return False
                     skip = None if value else option
                     break
