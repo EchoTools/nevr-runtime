@@ -240,8 +240,8 @@ class JustfileWiringTest(unittest.TestCase):
 
     def test_the_guard_runs_before_every_configure_that_can_use_the_cache(self):
         self.assertRegex(JUSTFILE, r"(?m)^_build-guard:\n    @python3 -I tools/build_checkout\.py guard$")
-        # The dependencies are the words after the header's colon; a recipe's own variadic parameter and the
-        # guard's opt-in call `(_heavy-guard "name" args)` do not change which words are dependencies.
+        # The dependencies are the words after the header's colon; a recipe's own variadic parameter and
+        # a parenthesised dependency call does not change which words are dependencies.
         for name in ("configure", "configure-android", "_quest-apk"):
             header = just_recipe.header(JUSTFILE, name)
             self.assertIsNotNone(header, name)

@@ -385,8 +385,6 @@ Every branch an agent creates has a documented deletion point from the moment it
 
 ## Build Commands
 
-Heavy recipes (`verify`, the full builds and full test suites; the list is in `tools/tests/test_heavy_guard.py`) do not run from a Claude session: run the one test you changed instead.
-
 ```sh
 just                    # Show available recipes
 just configure          # Configure CMake only
@@ -406,8 +404,6 @@ just generate-certs     # Generate CA hierarchy for code signing
 ```
 
 ### Quest APK
-
-Run these from your own shell. `tools/heavy_guard.py` refuses them inside a Claude Code session.
 
 Set these in the shell, never as arguments (a passphrase on the command line shows in `ps`):
 

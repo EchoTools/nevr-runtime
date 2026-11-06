@@ -130,7 +130,7 @@ class Tmp(unittest.TestCase):
 class SubsetTest(Tmp):
     """Which command lines run the whole suite (and so take the lock), classified from the repository root."""
 
-    HEAVY = "tools/tests/test_heavy_guard.py"
+    HEAVY = "tools/tests/test_just_recipe.py"
 
     def setUp(self):
         super().setUp()
@@ -146,7 +146,7 @@ class SubsetTest(Tmp):
         self.assertGreater(len(files), self.module.SUBSET_MAX_FILES + 1)
         for args in ([str(self.file)], ["-q", "-p", "no:cacheprovider", str(self.file)], [f"{self.file}::test_a"],
                      [str(self.root)], [one], [f"{one}::RunToolTestsRecord::test_x"], ["-k", "test_a", one],
-                     ["-n", "2", one], ["-q", "--deselect", f"{self.HEAVY}::HeavyGuardTest::test_x", one],
+                     ["-n", "2", one], ["-q", "--deselect", f"{self.HEAVY}::HeaderTest::test_x", one],
                      [str(self.file), str(self.module.SUITE_DIR / "test_run_tool_tests.py")],
                      files[:self.module.SUBSET_MAX_FILES], ["-vv", one], ["-qk", "expr", one], ["-kexpr", one],
                      ["--tb=short", one], ["--", one], ["--log-file", str(self.file), one],
@@ -162,7 +162,7 @@ class SubsetTest(Tmp):
         for args in ([], ["-q"], ["-k", "test_a"], ["-q", "-p", "no:cacheprovider"], [str(self.root / "absent.py")],
                      ["tools/tests"], [str(self.module.SUITE_DIR)], ["-q", str(self.module.SUITE_DIR) + "/"],
                      ["tools"], ["."], [str(REPO)], [str(self.file), str(self.module.SUITE_DIR)],
-                     ["--deselect", f"{self.HEAVY}::HeavyGuardTest::test_second_run_waits_for_first"],
+                     ["--deselect", f"{self.HEAVY}::HeaderTest::test_a_plain_header_is_found"],
                      ["-q", "--ignore", self.HEAVY], ["-q", f"--ignore={self.HEAVY}"], ["--rootdir", "."],
                      ["-q", "--basetemp", "/var/tmp"], ["-o", "cache_dir=tools"], ["-p", "tools"],
                      files, files[:self.module.SUBSET_MAX_FILES + 1],

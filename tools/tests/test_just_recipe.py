@@ -1,6 +1,6 @@
 """The shared justfile recipe finder (just_recipe.py) finds a recipe whatever its header form (#1910).
 
-The header forms are the ones the justfile uses now (`name *args: (_heavy-guard "name" args)`, a parameter with a
+The header forms are the ones a justfile may use (`name *args: (_gate "name" args)`, a parameter with a
 default, several dependencies) and the plain `name:`. The old finder matched only `^name:\\n`, which is why eleven test
 files reported their recipe missing after #1871 changed the headers.
 """
@@ -19,9 +19,9 @@ preset := env("PRESET", "mingw-release")
 plain:
     echo plain
 
-# Variadic parameter, the heavy guard as a dependency in parentheses.
+# Variadic parameter, a gate as a dependency in parentheses.
 [positional-arguments]
-guarded *args: (_heavy-guard "guarded" args)
+guarded *args: (_gate "guarded" args)
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -33,10 +33,10 @@ with-default rev="origin/main": plain guarded
     echo "$rev"
 
 # Column-0 comment ends the body above.
-test-auth *args: (_heavy-guard "test-auth" args) plain
+test-auth *args: (_gate "test-auth" args) plain
     echo auth
 
-test-auth-unit *args: (_heavy-guard "test-auth-unit" args)
+test-auth-unit *args: (_gate "test-auth-unit" args)
     echo unit
 """
 
@@ -46,15 +46,15 @@ class HeaderTest(unittest.TestCase):
         self.assertEqual(just_recipe.header(TEXT, "plain"), "plain:")
 
     def test_a_variadic_header_with_a_guard_dependency_is_found(self):
-        self.assertEqual(just_recipe.header(TEXT, "guarded"), 'guarded *args: (_heavy-guard "guarded" args)')
+        self.assertEqual(just_recipe.header(TEXT, "guarded"), 'guarded *args: (_gate "guarded" args)')
 
     def test_a_parameter_with_a_default_and_dependencies_is_found(self):
         self.assertEqual(just_recipe.header(TEXT, "with-default"), 'with-default rev="origin/main": plain guarded')
 
     def test_a_name_that_prefixes_another_recipe_finds_its_own_header(self):
-        self.assertEqual(just_recipe.header(TEXT, "test-auth"), 'test-auth *args: (_heavy-guard "test-auth" args) plain')
+        self.assertEqual(just_recipe.header(TEXT, "test-auth"), 'test-auth *args: (_gate "test-auth" args) plain')
         self.assertEqual(just_recipe.header(TEXT, "test-auth-unit"),
-                         'test-auth-unit *args: (_heavy-guard "test-auth-unit" args)')
+                         'test-auth-unit *args: (_gate "test-auth-unit" args)')
 
     def test_an_assignment_is_not_a_recipe(self):
         self.assertIsNone(just_recipe.header(TEXT, "preset"))
