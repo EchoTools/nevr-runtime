@@ -148,14 +148,12 @@ STUB_Q15T_BUILD = """build-quest-q15t:
     [ -z "${FAIL_Q15T:-}" ] || { echo "build-quest-q15t: stand-in failure" >&2; exit 1; }
     mkdir -p build/quest-q15t
     printf 'libq15t built from the tag' > build/quest-q15t/libq15t.so
-    printf 'libq15t_early built from the tag' > build/quest-q15t/libq15t_early.so
-    (cd build/quest-q15t && sha256sum libq15t.so libq15t_early.so)
+    (cd build/quest-q15t && sha256sum libq15t.so)
 """
 # What the variant and the combat recipes hand the repack: the libraries their own tag's build wrote (paths relative to the checkout).
 BUILT = "build/quest-q15t/libq15t.so"
-BUILT_EARLY = "build/quest-q15t/libq15t_early.so"
 # The old call shape, `<tag> <plugins> <store>`: a plugin library passed in.
-PLUGINS = "/priv/libq15t.so:/priv/libq15t_early.so"
+PLUGINS = "/priv/libq15t.so:/priv/other.so"
 # The repack with the script-library parameter (M5): it records the library directory it was given.
 STUB_REPACK_LIBS = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
     #!/usr/bin/env bash
@@ -359,15 +357,15 @@ class RecipesRun(unittest.TestCase):
                 self.assertEqual(len(result.stdout.splitlines()), 1, "stdout is the APK's sha256 line only")
                 self.assertIn("libq15t.so", result.stderr, "the build's sha256 lines are on stderr, in the run's output")
 
-    def test_the_variant_apk_does_not_carry_libq15t_early_and_the_combat_apk_carries_it_as_early(self):
+    def test_neither_variant_apk_packages_an_early_plugin(self):
+        """The heap sizes and the render-target pool are the sentinel's own early step, so the repack is given one library and no early name."""
         self.use_pack_stub()
         self.assertEqual(self.variant().returncode, 0)
         self.assertEqual(self.combat().returncode, 0)
         variant, combat = [c for c in self.calls_made() if c.startswith("repack ")]
-        self.assertNotIn("libq15t_early", variant)
-        self.assertIn(f"plugin={BUILT} ", variant)
-        self.assertIn("others=[||||]", variant, "no early plugin in the variant")
-        self.assertIn("others=[|||libq15t_early.so|]", combat)
+        for apk in (variant, combat):
+            self.assertIn(f"plugin={BUILT} ", apk)
+            self.assertIn("others=[||||]", apk, "no early plugin")
 
     def test_a_failing_q15t_build_stops_before_the_repack_and_writes_no_apk(self):
         for name, run in (("variant", self.variant), ("combat", self.combat)):
@@ -405,24 +403,23 @@ class RecipesRun(unittest.TestCase):
         self.assertFalse((self.dir / "build" / "quest-release" / "v1.2.3" / "variant").exists())
         self.assertFalse((self.dir / "build" / "quest-release" / "v1.2.3" / name).exists())
 
-    def test_the_combat_recipe_names_libq15t_early_as_the_early_plugin_and_nothing_else_does(self):
+    def test_no_recipe_names_an_early_plugin(self):
         self.use_pack_stub()
         self.assertEqual(self.combat().returncode, 0)
         self.assertEqual(self.variant().returncode, 0)
         self.assertEqual(self.release().returncode, 0)
         repack = [c for c in self.calls_made() if c.startswith("repack ")]
-        self.assertEqual(repack[0], f"repack apk={self.store} plugin={BUILT}:{BUILT_EARLY} version=1.2.3 "
-                         "others=[|||libq15t_early.so|] pack= pack_meta=")
+        self.assertEqual(repack[0], f"repack apk={self.store} plugin={BUILT} version=1.2.3 others=[||||] pack= pack_meta=")
         self.assertEqual(repack[1], f"repack apk={self.store} plugin={BUILT} version=1.2.3 others=[||||] pack= pack_meta=")
         # The release APK alone is repacked from the reference base (#1994); the combat APK and the variant keep the store APK.
         self.assertEqual(repack[2], "repack apk=build/quest-release/v1.2.3/base/reference-r15.apk plugin= version=1.2.3 "
                          "others=[||||] pack= pack_meta=")
 
-    def test_the_combat_recipe_with_a_pack_passes_the_early_plugin_with_the_pack(self):
+    def test_the_combat_recipe_with_a_pack_passes_the_pack_and_no_early_plugin(self):
         self.use_pack_stub()
         result = self.combat("v1.2.3", "/p/pack.zip", "/p/meta.json")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"repack apk={self.store} plugin={BUILT}:{BUILT_EARLY} version=1.2.3 others=[|||libq15t_early.so|] "
+        self.assertIn(f"repack apk={self.store} plugin={BUILT} version=1.2.3 others=[||||] "
                       "pack=/p/pack.zip pack_meta=/p/meta.json", self.calls_made())
 
     def test_the_combat_recipe_refuses_a_non_release_tag_in_its_own_name_and_builds_nothing(self):
@@ -499,7 +496,7 @@ class BuildQuestQ15t(unittest.TestCase):
         text = recipe("build-quest-q15t")
         body = text.split("#!/usr/bin/env bash\n", 1)[1]
         script = "".join(line[4:] if line.startswith("    ") else line for line in body.splitlines(keepends=True))
-        script = script.replace('cmake --build build/android-arm64 --target nevr_q15t nevr_q15t_early -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"',
+        script = script.replace('cmake --build build/android-arm64 --target nevr_q15t -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"',
                                 "true  # the build itself is not under test")
         self.assertIn("true  # the build", script)
         (self.root / "recipe.sh").write_text("#!/usr/bin/env bash\n" + script)
@@ -519,14 +516,13 @@ class BuildQuestQ15t(unittest.TestCase):
     def build(self, marker=None, **env):
         marker = self.MARKER.format(id=self.ID) if marker is None else marker
         (self.built / "libq15t.so").write_bytes(b"\0lib\0" + marker.encode() + b"\0" + self.ID.encode())
-        (self.built / "libq15t_early.so").write_bytes(b"\0early\0" + self.ID.encode())
         return subprocess.run(["bash", str(self.root / "recipe.sh")], cwd=self.root, capture_output=True, text=True,
                               env={**os.environ, "ANDROID_NDK_HOME": str(self.root / "ndk"), **env})
 
     def test_a_library_that_passes_every_check_is_copied_and_hashed(self):
         result = self.build()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(sorted(p.name for p in self.out.iterdir()), ["libq15t.so", "libq15t_early.so"])
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), ["libq15t.so"])
         self.assertIn("libq15t.so", result.stdout)
 
     def test_a_library_a_check_refuses_never_sits_where_the_repack_reads(self):
@@ -544,7 +540,6 @@ class BuildQuestQ15t(unittest.TestCase):
     def test_a_library_an_earlier_build_left_is_removed_before_the_checks(self):
         self.out.mkdir(parents=True)
         (self.out / "libq15t.so").write_bytes(b"an earlier build")
-        (self.out / "libq15t_early.so").write_bytes(b"an earlier build")
         result = self.build(FAIL_STATIC_INIT="1")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(list(self.out.glob("*.so")), [], "a refused build leaves nothing for the repack to take")

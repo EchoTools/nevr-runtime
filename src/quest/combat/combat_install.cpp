@@ -6,16 +6,31 @@
 #include <cstring>
 
 #include "quest/combat/combat_active.h"
+#include "quest/combat/heaps.h"
+#include "quest/combat/memsys.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
 
 namespace {
 
-// The registration table, in install order (combat_install.h, "The table"). Empty until a module moves in; each module's unit replaces
-// this line with `constexpr std::array kModules{Module{...}, ...}` (the count is deduced) and adds its row at the position the q15t plugin
-// installed it, and nowhere else.
-constexpr std::array<Module, 0> kModules{};
+// The configuration the rows read their switch from (SetConfig). A plain object: it is written once on the constructor's thread before
+// either step runs, and the normal step's thread is ordered after it by the post-load action's atomics.
+nevr_quest::CombatConfig g_config;
+
+// A row's install function reads its module's switch here, so a module's own code takes the switch as an argument and a host test
+// drives it without a configuration.
+ModuleResult HeapsEarly() noexcept { return heaps::Install(g_config.heaps.on, g_config.memsys.on); }
+ModuleResult MemsysEarly() noexcept { return memsys::Install(g_config.memsys.on); }
+
+// The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
+// plugin installed it, and nowhere else; the count is deduced.
+//   heaps, then memsys: the heap sizes are ours before the pool and the witness hook go in (the plugin's order); both are early,
+//   before android_main reads the sizes.
+constexpr std::array kModules{
+    Module{"heaps", &HeapsEarly, nullptr},
+    Module{"memsys", &MemsysEarly, nullptr},
+};
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
 // thread, the normal step on the thread that returned from the game's first dlopen, and the process end on a helper thread.
@@ -108,11 +123,16 @@ void NoteNormalNotStarted(const char* reasonToken) noexcept {
 void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_config",
                       {{"force", config.force.on ? 1 : 0}, {"force_source", config.force.source == nevr_quest::Source::kFile ? "config" : "default"},
+                       {"heaps", config.heaps.on ? 1 : 0}, {"heaps_source", config.heaps.source == nevr_quest::Source::kFile ? "config" : "default"},
+                       {"memsys", config.memsys.on ? 1 : 0}, {"memsys_source", config.memsys.source == nevr_quest::Source::kFile ? "config" : "default"},
                        {"msg", "combat.force asks for the folded combat modules whatever the APK's variant; only a development build "
-                               "honours it (see combat_active)"}});
+                               "honours it (see combat_active); a module's own key set to false turns that module off"}});
 }
 
+void SetConfig(const nevr_quest::CombatConfig& config) noexcept { g_config = config; }
+
 void ResetInstallForTest() noexcept {
+  g_config = nevr_quest::CombatConfig{};
   StateOf(Phase::kEarly).store(kNotYet, std::memory_order_release);
   StateOf(Phase::kNormal).store(kNotYet, std::memory_order_release);
   g_inactiveSaid.store(false, std::memory_order_release);

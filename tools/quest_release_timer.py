@@ -115,7 +115,7 @@ NDK_FILES = ("build/cmake/android.toolchain.cmake", "toolchains/llvm/prebuilt/li
 VCPKG_FILE = "scripts/buildsystems/vcpkg.cmake"
 PUBLIC_DEFAULTS = "config/public-defaults.env"  # in the checkout the timer runs from: `just worktree-setup` copies it into the tag's worktree
 VARIANT = "q15t"
-VARIANT_LIBRARIES = ("libq15t.so",)  # what the variant APK carries; libq15t_early.so is built and not packaged there
+VARIANT_LIBRARIES = ("libq15t.so",)  # what the variant APK carries: the one q15t plugin library
 APK_LIBRARY_DIR = "lib/arm64-v8a/"  # where android-repack-apk puts a plugin library in the APK
 # The marker the build puts in libq15t.so (src/quest/plugins/q15t/src/plugin.cpp, read back by `just build-quest-q15t`): the libr15 build ID.
 LIBRARY_MARKER = re.compile(rb"q15t-config [^\x00]*?build_id=([0-9a-f]{16,64})")

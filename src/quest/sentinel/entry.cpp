@@ -282,7 +282,10 @@ bool CombatActive() noexcept { return nevr_quest::combat::Active(); }
 bool InstallCombatEarly() noexcept { return nevr_quest::combat::InstallEarly().ran; }
 bool InstallCombatNormal() noexcept { return nevr_quest::combat::InstallNormal().ran; }
 void NoteCombatNotStarted(const char* reason) noexcept { nevr_quest::combat::NoteNormalNotStarted(reason); }
-void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept { nevr_quest::combat::LogConfig(config); }
+void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept {
+  nevr_quest::combat::SetConfig(config);  // the modules' switches, read by the install steps that follow
+  nevr_quest::combat::LogConfig(config);
+}
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
