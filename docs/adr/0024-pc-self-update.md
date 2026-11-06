@@ -13,7 +13,7 @@ Status: proposed. Tracking issue: #1200. Builds on ADR 0012 (the static install 
 of "Layout". **It amends ADR 0008 in one place:** the host and the runtime that run together agree on the ABI's major, and
 are not always one release ("Relation to other records"). Of the "Order of work", step 1 (the core's `pc stage`, #1209) is
 built, and so is step 2: the swap (#2104: section 4) and the rest of the host's half (#2105: section 6, the rollback, the
-crash marker and the capability word). Steps 3 to 5 are not built. The runtime and the plugins load from the
+crash marker and the capability word), and so is step 3 (the installer's part: section 7). Steps 4 and 5 are not built. The runtime and the plugins load from the
 root (#855, #856). "What is not known" lists what no measurement covers.
 
 ## Requirement
@@ -377,6 +377,26 @@ installer's release is the baseline and nothing older competes with it. The quar
 touch `update\`. The channel precedence is `update.channel` in `config.yaml`, then `state.json`, then the core's default;
 every `update check` line carries `channel_source`, so a player whose config disagrees with the installer shows it in the log.
 
+**As built.** `installer/src/update_state.rs`, called from `Session::pc` after the files are installed and read back.
+- **When.** After every `pc install` that ends `installed`, and after one that ends `unchanged` (the release in the root is
+  already the package's: it is the baseline as much as a fresh install is, and a reinstall after a failed update must clear what
+  the failure left, step 3 of "Order of work"). `pc plan` and `pc uninstall` never come here.
+- **The lock** is `update\lock` opened as the host opens it (share mode 0, delete on close; elsewhere an exclusive file lock),
+  retried every 100 ms for up to 30 s. The channel is the run's (`--channel`, else the core's default).
+- **Order.** The lock; `state.json` is read; then the removals (`swap.json`, `pending.json`, `crashed`, `staged.json`, `staging\`,
+  `previous\`, `failed\`, in that order: the journal goes first, so a start never undoes a half swap over the new baseline);
+  then `state.json` is written by a temporary file and a rename. `work\` and `manifest\` are the core's and stay.
+- **What `state.json` becomes.** `channel`; `current` (the release and its runtime sha256); `owned` (the runtime at its new
+  sha256, then every plugin the earlier file listed: the installer does not touch `plugins\`); `discards` and `quarantine` as
+  they were. A file the host would not use (not an object, nested deeper than 16, over 64 KiB, an `owned`, `discards` or
+  `quarantine` of the wrong shape, an `owned` path outside the member vocabulary) is replaced by one built from the baseline,
+  and its quarantine is lost with it (`state_before=rebuilt`). A file that is there and cannot be read is not written over.
+- **Links.** `update\` or `state.json` as a link stops the run (`reparse_point`); a link among the removals is removed and never
+  followed (`outcome=link_removed`).
+- **A failure** leaves the installed files installed and ends the run `needs-user` (exit 2): the host would stop at its next start
+  on what an earlier update left. The line is `update_state ok=false reason=<lock_timeout, lock_failed, reparse_point,
+  not_a_folder, create_failed, state_unreadable, clear_failed, state_write_failed, log_failed>`.
+
 ### 8. Logging
 
 A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag is added to the table of
@@ -392,6 +412,9 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | core | `stage_end` | `version`, `files`, `ok`, `reason`, `elapsed_ms` |
 | runtime | `update verify` | `path`, `ok`, `reason` (the verifier's text) |
 | runtime | `update published` | `version`, `files` |
+| core | `update_lock` | `ok`, `wait_ms`, `path`; on a failure `reason`, `detail`, `waited_ms` |
+| core | `update_clear` | `name`, `path`, `outcome` (`removed`, `absent`, `link_removed`, `failed`), `reason` on a failure; one per thing a baseline looks at |
+| core | `update_state` | `ok`, `channel`, `version`, `runtime_sha256`, `state_before` (`absent`, `read`, `rebuilt`), `rebuilt_reason`, `owned`, `quarantine`, `lock_wait_ms`; on a failure `reason` and `detail` |
 | host | `update_swap` | `outcome` (`swapped`, `deferred`, `blocked`, `discarded`, `recovered`), `reason`, `from`, `to`, `files` (path, sha256), `elapsed_ms` |
 | host | `update_rollback` | `mode` (`in_process`, `next_start`), `reason`, `from` (the failed release), `to` (the restored one), `outcome` (`rolled_back`, `scheduled`, `deferred`, `failed`, `blocked`, `discarded`), `boot_attempts`, `files`, `elapsed_ms` |
 | host | `update_trial` | one per start that loads a pending release without deciding a rollback (a rollback decision writes `update_rollback`): `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`), `release`, `boot_attempts` (after the start), `elapsed_ms` |

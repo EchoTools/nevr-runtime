@@ -88,7 +88,7 @@ fn world_full(version: &str, manifest_version: u64, tamper_sig: bool, serve_zip:
             "sha256": sha256_hex(b"data"), "game_data": {"data_version": "1", "echo_build": "2"},
             "contents": [{"path": "_data/x", "sha256": sha256_hex(b"abc"), "size": 3}]}));
     }
-    let m = manifest_json(manifest_version, json!({"channels": {"beta": version}, "releases": {version: {"artifacts": artifacts}}}));
+    let m = manifest_json(manifest_version, json!({"channels": {"beta": version, "stable": version}, "releases": {version: {"artifacts": artifacts}}}));
     let mut sig = sign(keys.path(), &k, &m, false);
     if tamper_sig {
         let mut m2 = m.clone();
@@ -1139,4 +1139,193 @@ fn a_stage_download_that_fails_logs_the_base_without_its_credentials() {
     let fetch: Value = log.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|r| r["event"] == "artifact_fetch").expect("the failed download is logged");
     assert_eq!(fetch["ok"], false, "{fetch}");
     assert!(fetch["url"].as_str().unwrap_or("").starts_with("https://127.0.0.1:1/nevr-runtime/v"), "{fetch}");
+}
+
+// ---- ADR 0024 section 7, the installer's part (#1200 work item 4) ----------------------------------------------------------
+
+/// A file at `rel` under the nevr root's `update` folder, its folders made.
+fn put_update(w: &World, rel: &str, bytes: &[u8]) {
+    let p = w.nevr.path().join("update").join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, bytes).unwrap();
+}
+
+fn update_path(w: &World, rel: &str) -> std::path::PathBuf {
+    w.nevr.path().join("update").join(rel)
+}
+
+fn state_json(w: &World) -> Value {
+    serde_json::from_slice(&std::fs::read(update_path(w, "state.json")).expect("update/state.json is written")).unwrap()
+}
+
+/// What an earlier self-update left behind: a half-done swap, a pending release that crashed, a staged release and the
+/// two generations the host keeps, plus the files this installer must leave alone (the core's own folders).
+fn stale_update_folder(w: &World) {
+    put_update(w, "swap.json", br#"{"kind":"swap","from":"0.9.0","to":"0.9.1","phase":"in","out":["nevr-runtime.dll"],"in":["nevr-runtime.dll"]}"#);
+    put_update(w, "staged.json", br#"{"version":"0.9.2","files":[]}"#);
+    put_update(w, "pending.json", br#"{"to":{"version":"0.9.1"},"from":{"version":"0.9.0"},"boot_attempts":2,"failed_reason":"init_failed"}"#);
+    put_update(w, "crashed", b"");
+    put_update(w, "staging/0.9.2/nevr-runtime.dll", b"staged runtime");
+    put_update(w, "previous/0.9.0/nevr-runtime.dll", b"previous runtime");
+    put_update(w, "failed/0.8.0/nevr-runtime.dll", b"failed runtime");
+    put_update(w, "work/windows.zip.part", b"half a download");
+    put_update(w, "manifest/manifest.json", b"the updater's own copy");
+    let state = json!({
+        "channel": "stable",
+        "current": {"version": "0.9.0", "runtime_sha256": "a".repeat(64)},
+        "owned": [{"path": "nevr-runtime.dll", "sha256": "a".repeat(64)}, {"path": "plugins/kept.dll", "sha256": "b".repeat(64)}],
+        "discards": {"0.9.2": 2},
+        "quarantine": [{"version": "0.9.1", "runtime_sha256": "c".repeat(64), "reason": "init_failed", "time": "2026-11-01T00:00:00Z"}]
+    });
+    put_update(w, "state.json", state.to_string().as_bytes());
+}
+
+fn update_records(w: &World, event: &str) -> Vec<Value> {
+    records(w).into_iter().filter(|r| r["event"] == event).collect()
+}
+
+#[test]
+fn pc_install_records_the_channel_and_the_installed_release_in_update_state() {
+    let w = world(false);
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap(), "--channel", "stable"]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    let s = state_json(&w);
+    assert_eq!(s["channel"], "stable", "{s}");
+    assert_eq!(s["current"], json!({"version": "1.0.0", "runtime_sha256": sha256_hex(RT)}), "{s}");
+    assert_eq!(s["owned"], json!([{"path": "nevr-runtime.dll", "sha256": sha256_hex(RT)}]), "the runtime is always owned: {s}");
+    let written = update_records(&w, "update_state");
+    assert_eq!(written.len(), 1, "one line says what the installer recorded");
+    assert_eq!((written[0]["ok"].clone(), written[0]["channel"].clone(), written[0]["version"].clone()), (json!(true), json!("stable"), json!("1.0.0")));
+    assert_eq!(written[0]["runtime_sha256"], sha256_hex(RT));
+}
+
+#[test]
+fn pc_install_clears_a_stale_staging_and_previous_folder_and_keeps_the_quarantine() {
+    let w = world(false);
+    stale_update_folder(&w);
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap(), "--channel", "beta"]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    for gone in ["swap.json", "staged.json", "pending.json", "crashed", "staging", "previous", "failed"] {
+        assert!(!update_path(&w, gone).exists(), "{gone} is cleared");
+    }
+    assert!(update_path(&w, "work/windows.zip.part").exists() && update_path(&w, "manifest/manifest.json").exists(), "the core's own folders are not the installer's to clear");
+    let s = state_json(&w);
+    assert_eq!(s["quarantine"][0]["version"], "0.9.1", "the quarantine stays: {s}");
+    assert_eq!(s["discards"], json!({"0.9.2": 2}), "{s}");
+    assert_eq!(s["channel"], "beta", "the channel of this install replaces the one recorded before: {s}");
+    assert_eq!(s["current"]["version"], "1.0.0");
+    assert_eq!(s["owned"], json!([{"path": "nevr-runtime.dll", "sha256": sha256_hex(RT)}, {"path": "plugins/kept.dll", "sha256": "b".repeat(64)}]), "a plugin self-update placed stays owned: {s}");
+    let cleared: Vec<String> = update_records(&w, "update_clear").iter().filter(|r| r["outcome"] == "removed").map(|r| r["name"].as_str().unwrap().to_string()).collect();
+    let mut want = vec!["swap.json", "pending.json", "crashed", "staged.json", "staging", "previous", "failed"];
+    want.sort();
+    let mut got = cleared.clone();
+    got.sort();
+    assert_eq!(got, want, "one line for each thing removed: {cleared:?}");
+}
+
+#[test]
+fn a_reinstall_of_the_release_already_in_place_still_clears_a_pending_release_and_a_journal() {
+    // ADR 0024, "Order of work" step 3: without this the stop text of a failed update (reinstall) leaves the start stopping.
+    let w = world(false);
+    let dir = w.game.path().to_str().unwrap();
+    assert_eq!(run(&w, &["pc", "install", "--dir", dir]).0, 0);
+    put_update(&w, "swap.json", br#"{"kind":"swap","from":"0.9.0","to":"1.0.0","phase":"in","out":[],"in":[]}"#);
+    put_update(&w, "pending.json", br#"{"to":{"version":"1.0.0"},"from":{"version":"0.9.0"},"boot_attempts":1,"failed_reason":"init_failed"}"#);
+    put_update(&w, "previous/0.9.0/nevr-runtime.dll", b"previous runtime");
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", dir]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("unchanged")), "{out} {err}");
+    for gone in ["swap.json", "pending.json", "previous"] {
+        assert!(!update_path(&w, gone).exists(), "{gone} is cleared by a reinstall of the same release");
+    }
+    assert_eq!(state_json(&w)["current"]["version"], "1.0.0");
+}
+
+#[test]
+fn pc_plan_writes_nothing_under_update() {
+    let w = world(false);
+    let (code, _, _) = run(&w, &["pc", "plan", "--dir", w.game.path().to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!w.nevr.path().join("update").exists(), "a plan changes nothing");
+}
+
+#[test]
+fn a_state_json_that_does_not_parse_is_rebuilt_and_the_line_says_so() {
+    let w = world(false);
+    put_update(&w, "state.json", b"{ this is not json");
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap(), "--channel", "beta"]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    assert_eq!(state_json(&w)["channel"], "beta");
+    let line = &update_records(&w, "update_state")[0];
+    assert_eq!((line["state_before"].clone(), line["ok"].clone()), (json!("rebuilt"), json!(true)), "{line}");
+}
+
+#[test]
+fn a_state_json_that_parses_but_the_host_would_not_use_is_rebuilt_too() {
+    let w = world(false);
+    put_update(&w, "state.json", br#"{"channel":"beta","owned":{"nevr-runtime.dll":"x"},"quarantine":[{"version":"0.9.1"}]}"#);
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    let line = &update_records(&w, "update_state")[0];
+    assert_eq!((line["state_before"].clone(), line["rebuilt_reason"].clone()), (json!("rebuilt"), json!("owned is not a list")), "{line}");
+    assert!(state_json(&w).get("quarantine").is_none(), "a damaged file's quarantine is not trusted");
+}
+
+#[test]
+fn a_state_json_that_cannot_be_read_is_not_written_over_and_the_run_asks_the_player() {
+    let w = world(false);
+    std::fs::create_dir_all(update_path(&w, "state.json")).unwrap(); // a folder where the file goes: the open fails, the file is not "damaged"
+    put_update(&w, "pending.json", br#"{"to":{"version":"1.0.0"}}"#);
+    let (code, out, _) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("update"), "{out}");
+    assert!(update_path(&w, "state.json").is_dir() && update_path(&w, "pending.json").exists(), "nothing under update was changed");
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), HOST, "the install itself is done and stays");
+    let line = &update_records(&w, "update_state")[0];
+    assert_eq!(line["ok"], false, "{line}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_in_the_update_folder_is_removed_and_never_followed() {
+    let w = world(false);
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("precious"), b"not ours").unwrap();
+    std::fs::create_dir_all(w.nevr.path().join("update")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), update_path(&w, "previous")).unwrap();
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    assert!(std::fs::symlink_metadata(update_path(&w, "previous")).is_err(), "the link is gone");
+    assert_eq!(std::fs::read(elsewhere.path().join("precious")).unwrap(), b"not ours", "what it pointed at is untouched");
+    assert!(update_records(&w, "update_clear").iter().any(|r| r["name"] == "previous" && r["outcome"] == "link_removed"));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_update_folder_that_is_itself_a_link_is_refused_before_anything_in_it_is_touched() {
+    let w = world(false);
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("pending.json"), b"{}").unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), w.nevr.path().join("update")).unwrap();
+    let (code, out, _) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(elsewhere.path().join("pending.json").exists() && !elsewhere.path().join("state.json").exists());
+    assert_eq!(update_records(&w, "update_state")[0]["reason"], "reparse_point");
+}
+
+#[test]
+fn an_update_lock_another_process_holds_makes_the_install_wait_and_the_line_says_how_long() {
+    let w = world(false);
+    std::fs::create_dir_all(update_path(&w, "")).unwrap();
+    let holder = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(update_path(&w, "lock")).unwrap();
+    holder.lock().unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        drop(holder);
+    });
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+    release.join().unwrap();
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    let line = &update_records(&w, "update_lock")[0];
+    assert_eq!(line["ok"], true, "{line}");
+    assert!(line["wait_ms"].as_u64().unwrap() >= 500, "the install waited for the holder: {line}");
 }
