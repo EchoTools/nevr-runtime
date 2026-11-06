@@ -2302,10 +2302,219 @@ void DataSlotsShareTheRegistryAndItsReserve() {
   g_synth = nullptr;
 }
 
+// ---- reviewed assembly entries (docs/adr/0046 rule 2) ---------------------------------------------------------------------
+
+// Stand-ins for a reviewed assembly entry. The real ones are arm64 functions in a top-level asm() block: they read their next pointer with an
+// acquire load (`ldar`) at every call, act on the caller's registers, and continue in a C++ function. These do the same in C++,
+// which is all the manager sees of an entry: an address, a word it publishes, and a record.
+void* g_entryNext = nullptr;
+void* g_entryNextTwo = nullptr;
+int EntryContinuation(int result) noexcept { return result + 1000; }
+int EntryFn(int a, int b) {
+  const auto next = reinterpret_cast<int (*)(int, int)>(__atomic_load_n(&g_entryNext, __ATOMIC_ACQUIRE));
+  return EntryContinuation(next(a, b));
+}
+int EntryFnTwo(int a, int b) {
+  const auto next = reinterpret_cast<int (*)(int, int)>(__atomic_load_n(&g_entryNextTwo, __ATOMIC_ACQUIRE));
+  return EntryContinuation(next(a, b));
+}
+NEVR_ASM_ENTRY_RECORD(kEntryRecord, EntryFn, EntryContinuation);
+NEVR_ASM_ENTRY_RECORD(kEntryRecordTwo, EntryFnTwo, EntryContinuation);
+
+GotStatus InstallEntry(GotHook& hook, const GotTarget& target, void** next = &g_entryNext) {
+  return InstallAsmEntry(hook, target, kEntryRecord, next);
+}
+
+GotTarget AddTarget(const char* so, const char* owner) {
+  return GotTarget{so, "fx_add", RelocKind::kJumpSlot}.Owned(owner);
+}
+
+void* EntryAddress() { return reinterpret_cast<void*>(&EntryFn); }
+
+// An entry installs through its own path: the next word it reads holds the game's function before the slot changes, the slot
+// holds the entry, and the install is one record that says it is an assembly entry. Removing it puts the game's function back.
+void AnAsmEntryInstallsAndIsRemoved() {
+  Prepare();
+  g_entryNext = nullptr;
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  GotHook hook;
+  QCHECK_STATUS(InstallEntry(hook, AddTarget(so, "entry")), GotStatus::kOk);
+  QCHECK(hook.installed());
+  QCHECK(g_entryNext == m.realAdd);
+  QCHECK(*r.slot == EntryAddress());
+  QCHECK(m.callAdd(3, 4) == 1007);  // EntryContinuation(game(3, 4))
+  QCHECK(Count(LogLevel::kInfo, "\"owner\":\"entry\",\"position\":1,\"chain_length\":1") == 1);
+  QCHECK(Count(LogLevel::kInfo, "\"kind\":\"asm_entry\"") == 1);
+  QCHECK(Errors() == 0);
+  Captured().clear();
+  QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  QCHECK(*r.slot == m.realAdd);
+  QCHECK(m.callAdd(3, 4) == 7);
+  QCHECK(Errors() == 0);
+  // An ordinary hook's install record says it is not an entry.
+  AddThunk::Arm(kAddPlus100);
+  GotHook plain;
+  Captured().clear();
+  QCHECK_STATUS(Install(plain, AddTarget(so, "plain"), AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK(Count(LogLevel::kInfo, "\"kind\":\"handler\"") == 1 && Count(LogLevel::kInfo, "\"kind\":\"asm_entry\"") == 0);
+  QCHECK_STATUS(plain.Remove(), GotStatus::kOk);
+  dlclose(m.handle);
+}
+
+// An entry acts only when its caller is the game's own call site, so it stays the newest handler on its slot: a hook that asked
+// to join above it would call it from its own frame, and the entry would pass every call through. The refusal is a Warning
+// that names the chain with the entry in it, whichever install path asked; nothing is published and nothing is stored.
+void ALaterHandlerOnAnEntrysSlotIsRefusedNamingTheEntry() {
+  Prepare();
+  g_entryNext = nullptr;
+  g_entryNextTwo = nullptr;
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  TimesThunk::Arm(kTimesTwo);
+  GotHook entry;
+  QCHECK_STATUS(InstallEntry(entry, AddTarget(so, "entry")), GotStatus::kOk);
+
+  GotHook above;
+  void* out = nullptr;
+  Captured().clear();
+  QCHECK_STATUS(Install(above, AddTarget(so, "times"), TimesThunk::EntryAddress(), &out), GotStatus::kSlotHeldByEntry);
+  QCHECK(out == nullptr && !above.installed());
+  QCHECK(*r.slot == EntryAddress());
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"times\"") == 1);  // the hook that lost is named
+  QCHECK(Count(LogLevel::kWarn, "\"chain\":\"entry(asm_entry)\",\"chain_length\":1") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the newest hook on this slot is an assembly entry") == 1);
+  QCHECK(Errors() == 0);
+
+  // The plugin hook service's install is refused the same way.
+  GotHook plugin;
+  Captured().clear();
+  QCHECK_STATUS(PluginHandlerInstaller::Install(plugin, AddTarget(so, "plugin"), reinterpret_cast<void*>(&AddImpl), &out),
+                GotStatus::kSlotHeldByEntry);
+  QCHECK(out == nullptr && !plugin.installed());
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"plugin\"") == 1);  // a refused plugin is named on the line
+  // Through the plugin hook service itself: the refusal names the plugin by the owner the service gives it.
+  std::uint32_t handle = 0;
+  Captured().clear();
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+                                         LiveNoteOf(so).c_str(), TimesThunk::EntryAddress(), TimesThunk::OriginalOut(),
+                                         &handle) == NEVR_SLOT_HOOK_REFUSED);
+  QCHECK(handle == 0 && !slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"plugin:q15t\"") == 1);
+
+  // A second entry on the slot is refused too: neither would be the newest.
+  GotHook second;
+  Captured().clear();
+  QCHECK_STATUS(InstallAsmEntry(second, AddTarget(so, "entry2"), kEntryRecordTwo, &g_entryNextTwo), GotStatus::kSlotHeldByEntry);
+  QCHECK(g_entryNextTwo == nullptr && !second.installed());
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"entry2\"") == 1);
+  QCHECK(*r.slot == EntryAddress());
+  QCHECK(m.callAdd(3, 4) == 1007);
+
+  // The rule ends with the entry: once it is removed, a handler joins.
+  QCHECK_STATUS(entry.Remove(), GotStatus::kOk);
+  QCHECK_STATUS(Install(above, AddTarget(so, "times"), TimesThunk::EntryAddress(), TimesThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 14);
+  QCHECK_STATUS(above.Remove(), GotStatus::kOk);
+  QCHECK(m.callAdd(3, 4) == 7);
+  dlclose(m.handle);
+}
+
+// An entry installs above the handlers already on its slot and calls the newest of them. When one of those leaves, the
+// manager republishes the word the entry reads (the entry is the handler that called it), so the next call goes to what the
+// leaver called, and the slot is not written. Both ways a handler leaves are shown: Remove and Forget.
+void AnEntryAboveAHandlerFollowsItsRelink() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  AddThunk::Arm(kAddPlus100);
+  for (const bool forget : {false, true}) {
+    g_entryNext = nullptr;
+    GotHook handler;
+    QCHECK_STATUS(Install(handler, AddTarget(so, "add"), AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+    GotHook entry;
+    Captured().clear();
+    QCHECK_STATUS(InstallEntry(entry, AddTarget(so, "entry")), GotStatus::kOk);
+    QCHECK(Count(LogLevel::kInfo, "\"owner\":\"entry\",\"position\":2,\"chain_length\":2,\"next_owner\":\"add\"") == 1);
+    QCHECK(g_entryNext == AddThunk::EntryAddress());
+    QCHECK(m.callAdd(3, 4) == 1107);  // EntryContinuation(AddPlus100(game(3, 4)))
+    if (forget) {
+      handler.Forget();
+    } else {
+      QCHECK_STATUS(handler.Remove(), GotStatus::kOk);
+    }
+    QCHECK(g_entryNext == m.realAdd);        // republished: the entry now calls the game's function
+    QCHECK(*r.slot == EntryAddress());       // the slot was not written
+    QCHECK(m.callAdd(3, 4) == 1007);
+    QCHECK_STATUS(entry.Remove(), GotStatus::kOk);
+    QCHECK(*r.slot == m.realAdd);
+    QCHECK(m.callAdd(3, 4) == 7);
+    QCHECK(Errors() == 0);
+  }
+  dlclose(m.handle);
+}
+
+void* g_nextSeenAtEntryStore = nullptr;
+void EntryPublishObserver(void**, void* value, StorePhase phase) {
+  if (phase == StorePhase::kBeforeStore && value == EntryAddress()) {
+    g_nextSeenAtEntryStore = __atomic_load_n(&g_entryNext, __ATOMIC_ACQUIRE);
+  }
+}
+
+// The entry reads its word at the first call it can get, which is the instant the slot changes: the word holds the game's
+// function by then. Observed at the store itself, so it does not depend on timing.
+void AnEntrysNextWordIsPublishedBeforeTheSlotChanges() {
+  Prepare();
+  g_entryNext = nullptr;
+  g_nextSeenAtEntryStore = nullptr;
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  SetStoreObserver(&EntryPublishObserver);
+  GotHook hook;
+  QCHECK_STATUS(InstallEntry(hook, AddTarget(so, "entry")), GotStatus::kOk);
+  SetStoreObserver(nullptr);
+  QCHECK(g_nextSeenAtEntryStore == m.realAdd);
+  QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  dlclose(m.handle);
+}
+
+// A record is how the frame sensor finds an entry's C++ continuation, so only a record in the nevr_hook_records section is
+// installed. One built at run time is refused at Error; a missing word to publish through is refused before anything is read.
+void AnEntryNeedsARecordInTheSectionAndAWordToPublish() {
+  Prepare();
+  g_entryNext = nullptr;
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  QCHECK(IsRecordedAsmEntry(kEntryRecord));
+  const AsmEntryRecord<decltype(&EntryFn), decltype(&EntryContinuation)> runtimeRecord =
+      HookRecordAccess::MakeAsmEntry(&EntryFn, &EntryContinuation);
+  QCHECK(!IsRecordedAsmEntry(runtimeRecord));
+  GotHook hook;
+  Captured().clear();
+  QCHECK_STATUS(InstallAsmEntry(hook, AddTarget(so, "entry"), runtimeRecord, &g_entryNext), GotStatus::kBadArgument);
+  QCHECK(Count(LogLevel::kError, "record_not_in_nevr_hook_records") == 1);
+  QCHECK(!hook.installed() && g_entryNext == nullptr && *r.slot == m.realAdd);
+
+  Captured().clear();
+  QCHECK_STATUS(InstallAsmEntry(hook, AddTarget(so, "entry"), kEntryRecord, nullptr), GotStatus::kBadArgument);
+  QCHECK(!hook.installed() && *r.slot == m.realAdd);
+  QCHECK(m.callAdd(3, 4) == 7);
+  dlclose(m.handle);
+}
+
 void NewStatusesHaveDistinctTokens() {
-  const GotStatus all[] = {GotStatus::kPinRequired, GotStatus::kSlotClaimed, GotStatus::kExecutableMapping};
-  const char* const want[] = {"pin_required", "slot_claimed", "executable_mapping"};
-  for (std::size_t i = 0; i < 3; ++i) QCHECK(std::strcmp(GotStatusName(all[i]), want[i]) == 0);
+  const GotStatus all[] = {GotStatus::kPinRequired, GotStatus::kSlotClaimed, GotStatus::kExecutableMapping,
+                           GotStatus::kSlotHeldByEntry};
+  const char* const want[] = {"pin_required", "slot_claimed", "executable_mapping", "slot_held_by_entry"};
+  for (std::size_t i = 0; i < 4; ++i) QCHECK(std::strcmp(GotStatusName(all[i]), want[i]) == 0);
 }
 
 void AfterStoreClobberObserver(void** slot, void*, StorePhase phase) {
@@ -3062,6 +3271,11 @@ int main(int argc, char** argv) {
   AHookOnASlotBlocksADataWriteOnIt();
   DataSlotRestoreLeavesAChangedSlotAndAGoneModule();
   DataSlotsShareTheRegistryAndItsReserve();
+  AnAsmEntryInstallsAndIsRemoved();
+  ALaterHandlerOnAnEntrysSlotIsRefusedNamingTheEntry();
+  AnEntryAboveAHandlerFollowsItsRelink();
+  AnEntrysNextWordIsPublishedBeforeTheSlotChanges();
+  AnEntryNeedsARecordInTheSectionAndAWordToPublish();
   NewStatusesHaveDistinctTokens();
   ArmRefusesARecordOutsideTheSection();
   PoisonedSlotIsKeptWhenMapsAreUnreadable();
