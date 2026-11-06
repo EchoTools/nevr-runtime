@@ -36,7 +36,7 @@ func TestFramesAsmProbesWrongEntriesFail(t *testing.T) {
 		{"x19_unsaved", "x30 kept in x19 and the caller's x19 never saved", []string{"leaves the entry with callee-saved x19 not the caller's value"}},
 		{"x29_not_restored", "the epilogue reloads x30 and leaves x29 in the dead frame", []string{"leaves the entry with callee-saved x29 not the caller's value"}},
 		{"bl_clobbers_br", "a br through a caller-saved register the bl overwrote", []string{"jumps through x9, last set by `bl ", "which is not an acquire load"}},
-		{"slot_overwrite", "a spill over the slot x30 was saved in", []string{"overwrites x30, which the entry has not saved", "leaves the entry with x30 not the caller's return address"}},
+		{"slot_overwrite", "a spill over the slot x30 was saved in", []string{"overwrites x30, whose save in the stack slot was destroyed by `stp x0, x1, [sp, #0x8] at ", "leaves the entry with x30 not the caller's return address"}},
 		{"slot_revived", "a second bl relying on a slot sp has passed", []string{"the bl at ", "overwrites x30, which the entry has not saved"}},
 		{"fde_short", ".cfi_endproc before the bl", []string{"no unwind row covers the bl", "the unwind table ends at"}},
 		{"ret_reg", "ret x1", []string{"returns through x1, not x30"}},

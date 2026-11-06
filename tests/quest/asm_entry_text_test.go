@@ -250,10 +250,12 @@ type asmState struct {
 	slot             int64  // that address is also in the stack slot CFA+slot ...
 	slotSaved        bool   // ... when this is set (the slot is live while it is at or above sp)
 	slotDead         bool   // sp has been above the slot: it is not the entry's to rely on again
+	slotKilledBy     string // the write to memory that destroyed the save (empty: none did)
 	raReg            string // ... or in this callee-saved register (empty: in none)
 	regs             map[string]regSrc
-	csWritten        map[string]bool  // callee-saved registers (x19..x29) that no longer hold the caller's value
-	csSlot           map[string]int64 // the stack slot each was stored in while it still held the caller's value
+	csWritten        map[string]bool   // callee-saved registers (x19..x29) that no longer hold the caller's value
+	csSlot           map[string]int64  // the stack slot each was stored in while it still held the caller's value
+	csKilledBy       map[string]string // the write to memory that destroyed each callee-saved save
 }
 
 func (s asmState) clone() asmState {
@@ -262,7 +264,10 @@ func (s asmState) clone() asmState {
 	for k, v := range s.regs {
 		n.regs[k] = v
 	}
-	n.csWritten, n.csSlot = map[string]bool{}, map[string]int64{}
+	n.csWritten, n.csSlot, n.csKilledBy = map[string]bool{}, map[string]int64{}, map[string]string{}
+	for k, v := range s.csKilledBy {
+		n.csKilledBy[k] = v
+	}
 	for k, v := range s.csWritten {
 		n.csWritten[k] = v
 	}
@@ -278,8 +283,8 @@ func (s asmState) key() string {
 		regs = append(regs, fmt.Sprintf("%s=%t/%s", k, v.acq, v.by))
 	}
 	sort.Strings(regs)
-	return fmt.Sprintf("%d/%t %d/%t %t %d/%t/%t %s %v %v %v", s.sp, s.spKnown, s.fp, s.fpKnown, s.x30Orig, s.slot, s.slotSaved, s.slotDead,
-		s.raReg, regs, s.csWritten, s.csSlot)
+	return fmt.Sprintf("%d/%t %d/%t %t %d/%t/%t %s %v %v %v %q %v", s.sp, s.spKnown, s.fp, s.fpKnown, s.x30Orig, s.slot, s.slotSaved, s.slotDead,
+		s.raReg, regs, s.csWritten, s.csSlot, s.slotKilledBy, s.csKilledBy)
 }
 
 // The places the caller's return address is kept at this point, as the unwind table names them: the live stack slot ("c-8") and
@@ -296,7 +301,17 @@ func (s asmState) savedLocs() []string {
 }
 
 func joinStates(a, b asmState) asmState {
-	n := asmState{regs: map[string]regSrc{}, csWritten: map[string]bool{}, csSlot: map[string]int64{}}
+	n := asmState{regs: map[string]regSrc{}, csWritten: map[string]bool{}, csSlot: map[string]int64{}, csKilledBy: map[string]string{}}
+	n.slotKilledBy = a.slotKilledBy
+	if n.slotKilledBy == "" {
+		n.slotKilledBy = b.slotKilledBy
+	}
+	for r, by := range b.csKilledBy {
+		n.csKilledBy[r] = by
+	}
+	for r, by := range a.csKilledBy {
+		n.csKilledBy[r] = by
+	}
 	for r := range a.csWritten {
 		n.csWritten[r] = true
 	}
@@ -386,25 +401,29 @@ func transfer(in asmInsn, s asmState) asmState {
 	if writesMemory(m) {
 		at, known := memoryTarget(in, s)
 		size := storeBytes(in)
+		by := fmt.Sprintf("%s %s at %#x", m, in.ops, in.addr)
 		if s.slotSaved && (!known || overlaps(at, size, s.slot)) {
-			n.slotSaved = false
+			n.slotSaved, n.slotKilledBy = false, by
 		}
 		for r, sl := range s.csSlot {
 			if !known || overlaps(at, size, sl) {
 				delete(n.csSlot, r)
+				n.csKilledBy[r] = by
 			}
 		}
 	}
 	// x30 stored on the stack: the slot it lands in, if it holds the caller's address. So is each callee-saved register stored
 	// while it still holds the caller's value.
-	if strings.HasPrefix(m, "st") && onStack {
+	// A store-exclusive may not store at all (it fails when the exclusive monitor was lost), so it is never a save.
+	if strings.HasPrefix(m, "st") && onStack && !statusFirst(m) {
 		for idx, tok := range dataOperands(in) {
 			slot := addr + int64(8*idx)
 			switch r := gpReg(tok); {
 			case tok == "x30" && s.x30Orig:
-				n.slot, n.slotSaved, n.slotDead = slot, true, false
+				n.slot, n.slotSaved, n.slotDead, n.slotKilledBy = slot, true, false, ""
 			case tok != "" && tok[0] == 'x' && (calleeSaved(r) || r == "x29") && !s.csWritten[r]:
 				n.csSlot[r] = slot
+				delete(n.csKilledBy, r)
 			}
 		}
 	}
@@ -489,6 +508,27 @@ func transfer(in asmInsn, s asmState) asmState {
 		}
 	}
 	return n
+}
+
+// The stores that destroyed the saves of the callee-saved registers named, for the message.
+func killers(s asmState, regs []string) string {
+	var out []string
+	for _, r := range regs {
+		if by, ok := s.csKilledBy[r]; ok {
+			out = append(out, fmt.Sprintf("%s's save was destroyed by `%s`", r, by))
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(out, "; ") + ")"
+}
+
+func killedSave(s asmState) string {
+	if s.slotKilledBy != "" {
+		return " (its save in the stack slot was destroyed by `" + s.slotKilledBy + "`)"
+	}
+	return ""
 }
 
 func orU(rule string) string {
@@ -598,7 +638,7 @@ func asmEntryTextErrors(e asmEntryText) []string {
 		return i, ok
 	}
 	if len(e.insns) > 0 {
-		flow(0, asmState{spKnown: true, x30Orig: true, regs: map[string]regSrc{}, csWritten: map[string]bool{}, csSlot: map[string]int64{}})
+		flow(0, asmState{spKnown: true, x30Orig: true, regs: map[string]regSrc{}, csWritten: map[string]bool{}, csSlot: map[string]int64{}, csKilledBy: map[string]string{}})
 	}
 	for len(queue) > 0 {
 		i := queue[0]
@@ -672,7 +712,7 @@ func asmEntryTextErrors(e asmEntryText) []string {
 			fail("the %s at %#x leaves the entry with sp %d bytes below the caller's: the frame it pushed is still on the stack", what, in.addr, -s.sp)
 		}
 		if !s.x30Orig {
-			fail("the %s at %#x leaves the entry with x30 not the caller's return address: a call overwrote it and nothing reloaded it", what, in.addr)
+			fail("the %s at %#x leaves the entry with x30 not the caller's return address: a call overwrote it and nothing reloaded it%s", what, in.addr, killedSave(s))
 		}
 		var cs []string
 		for r := range s.csWritten {
@@ -680,7 +720,7 @@ func asmEntryTextErrors(e asmEntryText) []string {
 		}
 		sort.Strings(cs)
 		if len(cs) > 0 {
-			fail("the %s at %#x leaves the entry with callee-saved %s not the caller's value: the entry saves each one it writes in its frame and reloads it from there", what, in.addr, strings.Join(cs, ", "))
+			fail("the %s at %#x leaves the entry with callee-saved %s not the caller's value: the entry saves each one it writes in its frame and reloads it from there%s", what, in.addr, strings.Join(cs, ", "), killers(s, cs))
 		}
 	}
 	branchesToCont := 0
@@ -761,6 +801,8 @@ func asmEntryTextErrors(e asmEntryText) []string {
 				switch {
 				case !s.spKnown:
 					fail("the sensor cannot follow sp to the bl at %#x", in.addr)
+				case len(s.savedLocs()) == 0 && s.slotKilledBy != "":
+					fail("the bl at %#x overwrites x30, whose save in the stack slot was destroyed by `%s`", in.addr, s.slotKilledBy)
 				case len(s.savedLocs()) == 0:
 					fail("the bl at %#x overwrites x30, which the entry has not saved (in a live stack slot at or above sp, or in a callee-saved register)", in.addr)
 				}
@@ -1201,17 +1243,19 @@ func TestAsmEntryTextAStoreOverASaveSlotDestroysIt(t *testing.T) {
 	body := func(store string) asmEntryText {
 		return entryOf(rows, "stp x29, x30, [sp, #-0x20]!", "mov x29, sp", store, "bl 0x2000 <cont>", "ldp x29, x30, [sp], #0x20", "ret")
 	}
+	mustFail(t, "the exit names the store that destroyed x30's save", body("stp x0, x1, [sp, #8]"),
+		"the ret at 0x1014 leaves the entry with x30 not the caller's return address: a call overwrote it and nothing reloaded it (its save in the stack slot was destroyed by `stp x0, x1, [sp, #8] at 0x1008`)")
 	for _, c := range []struct{ what, store, want string }{
-		{"a pair over the slot", "stp x0, x1, [sp, #8]", "overwrites x30, which the entry has not saved"},
-		{"a word half over the slot", "str w0, [sp, #12]", "overwrites x30, which the entry has not saved"},
-		{"a vector over the slot", "str q0, [sp, #8]", "overwrites x30, which the entry has not saved"},
-		{"a store through the frame pointer", "str xzr, [x29, #8]", "overwrites x30, which the entry has not saved"},
-		{"a store through a register that may point anywhere", "str x0, [x1]", "overwrites x30, which the entry has not saved"},
-		{"a swap over the slot", "swp x0, x1, [sp, #8]", "overwrites x30, which the entry has not saved"},
-		{"a store-exclusive over the slot", "stxr w2, x0, [sp, #8]", "overwrites x30, which the entry has not saved"},
-		{"a store over x29's slot", "str x0, [sp]", "callee-saved x29 not the caller's value"},
-		{"a compare-and-swap over the slot", "casal x0, x1, [sp, #8]", "overwrites x30, which the entry has not saved"},
-		{"an atomic add over the slot", "ldadd x0, x1, [sp, #8]", "overwrites x30, which the entry has not saved"},
+		{"a pair over the slot", "stp x0, x1, [sp, #8]", "whose save in the stack slot was destroyed by `" + "stp x0, x1, [sp, #8]" + " at 0x1008`"},
+		{"a word half over the slot", "str w0, [sp, #12]", "whose save in the stack slot was destroyed by `" + "str w0, [sp, #12]" + " at 0x1008`"},
+		{"a vector over the slot", "str q0, [sp, #8]", "whose save in the stack slot was destroyed by `" + "str q0, [sp, #8]" + " at 0x1008`"},
+		{"a store through the frame pointer", "str xzr, [x29, #8]", "whose save in the stack slot was destroyed by `" + "str xzr, [x29, #8]" + " at 0x1008`"},
+		{"a store through a register that may point anywhere", "str x0, [x1]", "whose save in the stack slot was destroyed by `" + "str x0, [x1]" + " at 0x1008`"},
+		{"a swap over the slot", "swp x0, x1, [sp, #8]", "whose save in the stack slot was destroyed by `" + "swp x0, x1, [sp, #8]" + " at 0x1008`"},
+		{"a store-exclusive over the slot", "stxr w2, x0, [sp, #8]", "whose save in the stack slot was destroyed by `" + "stxr w2, x0, [sp, #8]" + " at 0x1008`"},
+		{"a store over x29's slot", "str x0, [sp]", "x29's save was destroyed by `str x0, [sp] at 0x1008`"},
+		{"a compare-and-swap over the slot", "casal x0, x1, [sp, #8]", "whose save in the stack slot was destroyed by `" + "casal x0, x1, [sp, #8]" + " at 0x1008`"},
+		{"an atomic add over the slot", "ldadd x0, x1, [sp, #8]", "whose save in the stack slot was destroyed by `" + "ldadd x0, x1, [sp, #8]" + " at 0x1008`"},
 	} {
 		mustFail(t, c.what, body(c.store), c.want)
 	}
@@ -1226,10 +1270,23 @@ func TestAsmEntryTextAStoreOverASaveSlotDestroysIt(t *testing.T) {
 	}
 	for _, store := range []string{"str x0, [sp, #4]", "str q0, [sp]", "str d0, [sp, #4]"} {
 		mustFail(t, store+" reaching into the slot", entryOf(narrow, "sub sp, sp, #0x10", "stur x30, [sp, #8]", store, "bl 0x2000 <cont>", "ldur x30, [sp, #8]",
-			"add sp, sp, #0x10", "ret"), "overwrites x30, which the entry has not saved")
+			"add sp, sp, #0x10", "ret"), "whose save in the stack slot was destroyed by `"+store+" at 0x1008`")
 	}
 	mustFail(t, "a halfword inside the slot", entryOf(narrow, "sub sp, sp, #0x10", "stur x30, [sp, #8]", "str h0, [sp, #10]", "bl 0x2000 <cont>",
-		"ldur x30, [sp, #8]", "add sp, sp, #0x10", "ret"), "overwrites x30, which the entry has not saved")
+		"ldur x30, [sp, #8]", "add sp, sp, #0x10", "ret"), "whose save in the stack slot was destroyed by `str h0, [sp, #10] at 0x1008`")
+	// The same for a callee-saved register: x29 saved, destroyed, saved again, written and never reloaded names no store.
+	got := errorsOf(entryOf(nil, "stp x29, x30, [sp, #-0x10]!", "str xzr, [sp]", "stp x29, x30, [sp, #-0x10]!", "mov x29, sp", "ldr x30, [sp, #8]",
+		"add sp, sp, #0x20", "ret"))
+	if !strings.Contains(got, "callee-saved x29 not the caller's value") || strings.Contains(got, "destroyed by") {
+		t.Errorf("x29 saved again after a store destroyed the first save must not name that store, got:\n%s", got)
+	}
+	// A store-exclusive's status register is not stored: the data alone is as wide as it is.
+	mustPass(t, "stxr w2, x0, [sp] below the slot", entryOf(narrow, "sub sp, sp, #0x10", "stur x30, [sp, #8]", "stxr w2, x0, [sp]", "bl 0x2000 <cont>",
+		"ldur x30, [sp, #8]", "add sp, sp, #0x10", "ret"))
+	// The store that destroyed a save is named once, and not for a save made after it.
+	mustFail(t, "a save made again after a store destroyed the first", entryOf(nil, "stp x29, x30, [sp, #-0x10]!", "str xzr, [sp, #8]",
+		"stp x29, x30, [sp, #-0x10]!", "ldp x29, x30, [sp], #0x10", "ldp x29, x30, [sp], #0x10", "bl 0x2000 <cont>", "ret"),
+		"the bl at 0x1014 overwrites x30, which the entry has not saved")
 	// A callee-saved register is the caller's again only by a reload from the slot, which sp must not have passed.
 	mustFail(t, "x19 reloaded from a slot sp passed", entryOf(nil, "stp x19, x30, [sp, #-0x10]!", "mov x19, x0", "bl 0x2000 <cont>",
 		"ldp xzr, x30, [sp], #0x10", "sub sp, sp, #0x10", "ldr x19, [sp]", "add sp, sp, #0x10", "ret"), "callee-saved x19 not the caller's value")
@@ -1277,8 +1334,8 @@ func TestAsmEntryTextJudgesAtomicsAsLoadsAndTracksTheRegisterTheyWrite(t *testin
 	}
 	mustFail(t, "stxr status in the br register", entryOf(rows, "ldar x16, [x17]", "stxr w16, x0, [x1]", "br x16"), "last set by `stxr w16, x0, [x1]`")
 	mustFail(t, "stxr status in x30", entryOf(rows, "stxr w30, x0, [x1]", "ret"), "the ret at 0x1004 leaves the entry with x30 not the caller's return address")
-	// The status is not a data register: x30 stored by a store-exclusive is saved at the address, not one slot above it.
-	mustPass(t, "x30 saved by a store-exclusive", entryOf(
+	// A store-exclusive never creates a save: without a load-exclusive before it, it does not store.
+	mustFail(t, "x30 saved by a store-exclusive", entryOf(
 		[]cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}, {loc: 0x1004, cfa: "sp+16", ra: "u"}, {loc: 0x1008, cfa: "sp+16", ra: "c-16"}, {loc: 0x1014, cfa: "sp+0", ra: "u"}},
 		"sub sp, sp, #0x10", "stxr w2, x30, [sp]", "bl 0x2000 <cont>", "ldr x30, [sp]", "add sp, sp, #0x10", "ret"))
 }
@@ -1317,4 +1374,12 @@ func TestAsmEntryTextJoinsSavesAndDeadSlots(t *testing.T) {
 	// Only a full register is a save: the low half of x19 is not x19.
 	mustFail(t, "x19 saved as w19", entryOf(nil, "str w19, [sp, #-0x10]!", "mov x19, x0", "ldr x19, [sp], #0x10", "ret"),
 		"callee-saved x19 not the caller's value")
+}
+
+// The store that destroyed a save is still named after two paths meet, when only one of them ran it.
+func TestAsmEntryTextNamesTheStoreThatDestroyedASaveAfterAJoin(t *testing.T) {
+	mustFail(t, "x30's slot destroyed on one path", entryOf(nil, "stp x29, x30, [sp, #-0x10]!", "cbnz x0, 0x1010 <e+0x10>", "str xzr, [sp, #8]", "nop",
+		"bl 0x2000 <cont>", "ret"), "the bl at 0x1010 overwrites x30, whose save in the stack slot was destroyed by `str xzr, [sp, #8] at 0x1008`")
+	mustFail(t, "x29's slot destroyed on one path", entryOf(nil, "stp x29, x30, [sp, #-0x10]!", "cbnz x0, 0x1010 <e+0x10>", "str xzr, [sp]", "nop",
+		"mov x29, sp", "ldr x30, [sp, #8]", "add sp, sp, #0x10", "ret"), "x29's save was destroyed by `str xzr, [sp] at 0x1008`")
 }
