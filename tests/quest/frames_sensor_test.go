@@ -34,10 +34,11 @@ import (
 // continuation and everything it calls directly are checked like a handler's, and the entry itself must have an FDE
 // under "zR" (an entry written in a top-level asm() block with no CFI has none). An FDE under "zR" is not yet one that
 // describes the frame: NDK clang gives an __attribute__((naked)) function an FDE whose one row is CFA=sp, and that row
-// stays in force after the body's stp and across its bl. So the entry's own text is read too (asmEntryTextErrors): at
-// each bl, the row in force must give the CFA and the saved x30 that the instructions before it imply; every word it
-// loads from outside its stack is an acquire load, so is what its br jumps through; and the only function it branches
-// to is its record's continuation. A record whose entry is neither a thunk Entry nor in reviewedAsmEntries fails, so
+// stays in force after the body's stp and across its bl. So the entry's own text is read too (asmEntryTextErrors, asm_entry_text_test.go):
+// along every path the unwind row in force at each instruction must give the CFA that the instructions before it imply,
+// and at each bl the place x30 is kept; every word it loads from outside its stack is an acquire load, so is what its
+// br jumps through on every path; whatever leaves the entry leaves with the caller's sp and x30; and the only function
+// it branches to is its record's continuation. A record whose entry is neither a thunk Entry nor in reviewedAsmEntries fails, so
 // adding an entry is a reviewed change to the list below, and the list names an entry only while the library carries
 // its record.
 //
@@ -302,204 +303,13 @@ func probeExe(t *testing.T, name string) string {
 	return p
 }
 
-// ---- a reviewed assembly entry's own text (callback_thunk.h rule 7) ----------------------------------
-
-// One instruction of an entry, as llvm-objdump prints it. `target` is a direct branch's destination (0 otherwise).
-type asmInsn struct {
-	addr      uint64
-	mnem, ops string
-	target    uint64
-}
-
-// One row of an FDE's unwind table, as readelf --debug-dump=frames-interp prints it: the CFA rule ("sp+16", "x29+16") and
-// the return-address column ("c-8": saved at CFA-8; "u": no rule, so x30 is taken to hold it).
-type cfiRow struct {
-	loc     uint64
-	cfa, ra string
-}
-
-// An entry and what the sensor reads of it: its text, the rows of its FDE (nil: no FDE; the walk reports that too) and the
-// continuation its record names.
-type asmEntryText struct {
-	name       string
-	start, end uint64
-	insns      []asmInsn
-	rows       []cfiRow
-	cont       uint64
-	contName   string
-}
+// ---- a reviewed assembly entry's own text (callback_thunk.h rule 7; the check is in asm_entry_text_test.go) ------------
 
 var (
-	insnRe      = regexp.MustCompile(`^\s+([0-9a-f]+):\s+(\S+)(?:\s+(.*?))?\s*$`)
-	branchTgtRe = regexp.MustCompile(`0x([0-9a-f]+) <`)
-	loadBaseRe  = regexp.MustCompile(`\[(\w+)`)
-	spPreRe     = regexp.MustCompile(`\[sp, #(-?(?:0x)?[0-9a-f]+)\]!$`)
-	spPostRe    = regexp.MustCompile(`\[sp\], #(-?(?:0x)?[0-9a-f]+)$`)
-	spOffRe     = regexp.MustCompile(`\[sp(?:, #(-?(?:0x)?[0-9a-f]+))?\]$`)
-	spArithRe   = regexp.MustCompile(`^sp, sp, #((?:0x)?[0-9a-f]+)$`)
-	fpAddRe     = regexp.MustCompile(`^x29, sp, #((?:0x)?[0-9a-f]+)$`)
-	cieHdrRe    = regexp.MustCompile(`^([0-9a-f]+) [0-9a-f]+ [0-9a-f]+ CIE`)
-	fdeHdrRe    = regexp.MustCompile(`^[0-9a-f]+ [0-9a-f]+ [0-9a-f]+ FDE cie=([0-9a-f]+) pc=([0-9a-f]+)\.\.([0-9a-f]+)`)
-	cfiRowRe    = regexp.MustCompile(`^([0-9a-f]{8,16}) +(\S+)(.*)$`)
+	cieHdrRe = regexp.MustCompile(`^([0-9a-f]+) [0-9a-f]+ [0-9a-f]+ CIE`)
+	fdeHdrRe = regexp.MustCompile(`^[0-9a-f]+ [0-9a-f]+ [0-9a-f]+ FDE cie=([0-9a-f]+) pc=([0-9a-f]+)\.\.([0-9a-f]+)`)
+	cfiRowRe = regexp.MustCompile(`^([0-9a-f]{8,16}) +(\S+)(.*)$`)
 )
-
-func isDirectBranch(mnem string) bool {
-	switch mnem {
-	case "b", "bl", "cbz", "cbnz", "tbz", "tbnz":
-		return true
-	}
-	return strings.HasPrefix(mnem, "b.")
-}
-
-// The register an instruction writes as its first operand. A store's and a compare's first operand is read, not written; an
-// instruction with no register operand (a hint, a branch to a label) yields what is not a register name.
-func writtenReg(in asmInsn) string {
-	switch {
-	case strings.HasPrefix(in.mnem, "st"), in.mnem == "cmp", in.mnem == "cmn", in.mnem == "tst", in.mnem == "ccmp", in.mnem == "ccmn":
-		return ""
-	}
-	first, _, _ := strings.Cut(in.ops, ",")
-	return strings.TrimSpace(first)
-}
-
-func imm(s string) int64 {
-	v, err := strconv.ParseInt(s, 0, 64)
-	if err != nil {
-		return 0
-	}
-	return v
-}
-
-// What is wrong with an entry's own text: rule 7's acquire loads, the branch to the record's continuation, and at each bl the
-// unwind row in force, against sp and the slot x30 is saved in as the instructions before the bl leave them (sp is followed
-// in address order: an entry is straight-line code with forward branches). The row checked is the one in force at the bl:
-// while the continuation runs, the unwinder looks the entry's frame up at its return address minus one, which is the bl.
-func asmEntryTextErrors(e asmEntryText) []string {
-	var errs []string
-	fail := func(format string, args ...any) {
-		errs = append(errs, e.name+": "+fmt.Sprintf(format, args...))
-	}
-	sp, fp := int64(0), int64(0) // sp and x29, as offsets from the entry's own sp (the CFA)
-	spKnown, fpKnown := true, false
-	raSlot, raSaved := int64(0), false
-	branchesToCont := 0
-	for i, in := range e.insns {
-		// Loads. A word the entry reads from outside its own stack is published by a release store; it is read with an
-		// acquire load (ldar), or the load can return the value from before the store.
-		if strings.HasPrefix(in.mnem, "ld") {
-			base := "pc"
-			if m := loadBaseRe.FindStringSubmatch(in.ops); m != nil {
-				base = m[1]
-			}
-			if base != "sp" && !strings.HasPrefix(in.mnem, "lda") {
-				fail("%s %s at %#x is a plain load of a published word: an entry reads every such word with ldar", in.mnem, in.ops, in.addr)
-			}
-		}
-		switch {
-		case in.mnem == "br":
-			// What the entry jumps through must have come from an acquire load (its next word).
-			reg := strings.TrimSpace(in.ops)
-			by := ""
-			for j := i - 1; j >= 0; j-- {
-				if w := writtenReg(e.insns[j]); w == reg || (len(reg) > 1 && w == "w"+reg[1:]) {
-					by = e.insns[j].mnem + " " + e.insns[j].ops
-					if !strings.HasPrefix(e.insns[j].mnem, "lda") {
-						fail("the br at %#x jumps through %s, last set by `%s`, which is not an acquire load (the next word is read with ldar)", in.addr, reg, by)
-					}
-					break
-				}
-			}
-			if by == "" {
-				fail("the br at %#x jumps through %s, which the entry never loads", in.addr, reg)
-			}
-		case in.mnem == "blr":
-			fail("the blr at %#x calls through a register: an entry calls its record's continuation directly, so the sensor can see it", in.addr)
-		case isDirectBranch(in.mnem) && in.target != 0 && (in.target < e.start || in.target >= e.end):
-			if in.target != e.cont {
-				fail("the %s at %#x branches to %#x, not to its record's continuation %s (%#x)", in.mnem, in.addr, in.target, e.contName, e.cont)
-			} else {
-				branchesToCont++
-			}
-			if in.mnem == "bl" {
-				var row *cfiRow
-				for k := range e.rows {
-					if e.rows[k].loc <= in.addr {
-						row = &e.rows[k]
-					}
-				}
-				switch {
-				case row == nil:
-					fail("no unwind row covers the bl at %#x", in.addr)
-				case !spKnown:
-					fail("the sensor cannot follow sp to the bl at %#x", in.addr)
-				default:
-					want := fmt.Sprintf("sp+%d", -sp)
-					if row.cfa != want && !(fpKnown && row.cfa == fmt.Sprintf("x29+%d", -fp)) {
-						fail("at the bl at %#x sp is %d bytes below the entry's, but the unwind row there gives CFA=%s (want %s): an unwinder walking out of the continuation would read the caller's frame at the wrong address", in.addr, -sp, row.cfa, want)
-					}
-					if !raSaved {
-						fail("the bl at %#x overwrites x30, which the entry has not saved", in.addr)
-					} else if wantRA := fmt.Sprintf("c%d", raSlot); row.ra != wantRA {
-						fail("at the bl at %#x x30 is saved at CFA%d, but the unwind row there gives ra=%s (want %s): an unwinder would take the return address from the wrong place", in.addr, raSlot, row.ra, wantRA)
-					}
-				}
-			}
-		}
-
-		// x30 saved on the stack: the slot it lands in, relative to the CFA.
-		if strings.HasPrefix(in.mnem, "st") && spKnown {
-			regs := strings.Split(in.ops, ",")
-			mem := ""
-			if at := strings.Index(in.ops, "["); at >= 0 {
-				mem = in.ops[at:]
-			}
-			for idx, r := range regs {
-				if strings.TrimSpace(r) != "x30" || strings.Contains(r, "[") {
-					continue
-				}
-				switch {
-				case spPreRe.MatchString(mem):
-					raSlot, raSaved = sp+imm(spPreRe.FindStringSubmatch(mem)[1])+int64(8*idx), true
-				case spOffRe.MatchString(mem):
-					raSlot, raSaved = sp+imm(spOffRe.FindStringSubmatch(mem)[1])+int64(8*idx), true
-				}
-			}
-		}
-		// sp: pre- and post-index writeback on sp, add and sub of an immediate, mov from x29. Any other write to sp is not followed.
-		switch {
-		case spPreRe.MatchString(in.ops):
-			sp += imm(spPreRe.FindStringSubmatch(in.ops)[1])
-		case spPostRe.MatchString(in.ops):
-			sp += imm(spPostRe.FindStringSubmatch(in.ops)[1])
-		case writtenReg(in) == "sp":
-			switch {
-			case in.mnem == "sub" && spArithRe.MatchString(in.ops):
-				sp -= imm(spArithRe.FindStringSubmatch(in.ops)[1])
-			case in.mnem == "add" && spArithRe.MatchString(in.ops):
-				sp += imm(spArithRe.FindStringSubmatch(in.ops)[1])
-			case in.mnem == "mov" && in.ops == "sp, x29" && fpKnown:
-				sp = fp
-			default:
-				spKnown = false
-			}
-		}
-		// x29, when it is set from sp: a CFA rule may be based on it.
-		if writtenReg(in) == "x29" {
-			switch {
-			case in.mnem == "mov" && in.ops == "x29, sp":
-				fp, fpKnown = sp, spKnown
-			case in.mnem == "add" && fpAddRe.MatchString(in.ops):
-				fp, fpKnown = sp+imm(fpAddRe.FindStringSubmatch(in.ops)[1]), spKnown
-			default:
-				fpKnown = false
-			}
-		}
-	}
-	if branchesToCont == 0 {
-		fail("never branches to its record's continuation %s (%#x) with a direct bl or b", e.contName, e.cont)
-	}
-	return errs
-}
 
 // The unwind rows of the FDEs starting at `starts`, from readelf's interpreted table. An FDE with no instructions has no table
 // of its own: its one row is its CIE's initial rule, at the FDE's start. An address in `starts` with no FDE is absent.
@@ -909,7 +719,7 @@ func TestFramesProbeAsmEntryPlainLoadFails(t *testing.T) {
 	a, _ := probeAsm(t, "ldr")
 	errs := asmEntryErrors(t, probeExe(t, "frames_asm_probe_ldr"), a, nil)
 	got := strings.Join(errs, "\n")
-	if strings.Count(got, "is a plain load of a published word") != 2 || !strings.Contains(got, "which is not an acquire load") {
+	if strings.Count(got, "is not an acquire load of a published word") != 2 || !strings.Contains(got, "which is not an acquire load") {
 		t.Fatalf("frames_asm_probe_ldr: both plain loads and the br through one must be reported, got:\n%s", got)
 	}
 	if strings.Contains(got, "CFA=") || strings.Contains(got, "ra=") {
@@ -933,108 +743,5 @@ func TestFramesProbeAsmEntryMustCallItsRecordsContinuation(t *testing.T) {
 	got := strings.Join(asmEntryErrors(t, probeExe(t, "frames_asm_probe_ok"), a, nil), "\n")
 	if !strings.Contains(got, "not to its record's continuation") || !strings.Contains(got, "never branches to its record's continuation") {
 		t.Fatalf("a record naming another function as the continuation must fail, got:\n%s", got)
-	}
-}
-
-func insns(start uint64, lines ...string) []asmInsn {
-	var out []asmInsn
-	for i, l := range lines {
-		mnem, ops, _ := strings.Cut(l, " ")
-		in := asmInsn{addr: start + uint64(4*i), mnem: mnem, ops: ops}
-		if isDirectBranch(mnem) {
-			if m := branchTgtRe.FindStringSubmatch(ops); m != nil {
-				in.target, _ = strconv.ParseUint(m[1], 16, 64)
-			}
-		}
-		out = append(out, in)
-	}
-	return out
-}
-
-// The headset trampoline's shape: no load, no frame, a tail branch to the continuation with sp and x30 untouched. It passes.
-func TestAsmEntryTextAcceptsATailBranchEntry(t *testing.T) {
-	e := asmEntryText{name: "tramp", start: 0x1000, end: 0x1010, cont: 0x2000, contName: "dispatch",
-		insns: insns(0x1000, "bti c", "mov x0, sp", "mov x1, x30", "b 0x2000 <dispatch>"),
-		rows:  []cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}}}
-	if errs := asmEntryTextErrors(e); len(errs) != 0 {
-		t.Fatalf("a tail-branch entry must pass, got %v", errs)
-	}
-}
-
-// sp is followed through a pre-index store, a frame pointer set from sp, a sub, a restore from the frame pointer and a
-// post-index load, and a CFA rule based on x29 is accepted when it matches: three calls, each checked against its own frame.
-func TestAsmEntryTextFollowsSpAndTheFramePointer(t *testing.T) {
-	e := asmEntryText{name: "fp", start: 0x1000, end: 0x1030, cont: 0x2000, contName: "cont",
-		insns: insns(0x1000,
-			"stp x29, x30, [sp, #-0x20]!", // 0x1000: sp -32, x30 at CFA-24
-			"mov x29, sp",                 // 0x1004: x29 = CFA-32
-			"sub sp, sp, #0x10",           // 0x1008: sp -48
-			"bl 0x2000 <cont>",            // 0x100c: CFA = x29+32 = sp+48
-			"mov sp, x29",                 // 0x1010: sp -32
-			"bl 0x2000 <cont>",            // 0x1014: CFA = x29+32 = sp+32
-			"ldp x29, x30, [sp], #0x20",   // 0x1018: sp 0
-			"stp x29, x30, [sp, #-0x10]!", // 0x101c: sp -16, x30 at CFA-8
-			"bl 0x2000 <cont>",            // 0x1020: CFA = sp+16
-			"ldp x29, x30, [sp], #0x10",
-			"ret"),
-		rows: []cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}, {loc: 0x1004, cfa: "x29+32", ra: "c-24"},
-			{loc: 0x1020, cfa: "sp+16", ra: "c-8"}, {loc: 0x1028, cfa: "sp+0", ra: "u"}}}
-	if errs := asmEntryTextErrors(e); len(errs) != 0 {
-		t.Fatalf("the three frames match their rows and must pass, got %v", errs)
-	}
-	e.rows[1].cfa = "x29+16"
-	if errs := asmEntryTextErrors(e); len(errs) != 2 || !strings.Contains(errs[0], "want sp+48") || !strings.Contains(errs[1], "want sp+32") {
-		t.Fatalf("a frame-pointer CFA at the wrong offset must fail at both calls under it, got %v", errs)
-	}
-	// x29 set by an add from sp.
-	add := asmEntryText{name: "fpadd", start: 0x1000, end: 0x1010, cont: 0x2000, contName: "cont",
-		insns: insns(0x1000, "stp x29, x30, [sp, #-0x20]!", "add x29, sp, #0x10", "bl 0x2000 <cont>"),
-		rows:  []cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}, {loc: 0x1004, cfa: "x29+16", ra: "c-24"}}}
-	if errs := asmEntryTextErrors(add); len(errs) != 0 {
-		t.Fatalf("add x29, sp, #16 under a 32-byte frame: CFA=x29+16 must pass, got %v", errs)
-	}
-}
-
-func TestAsmEntryTextRejectsWhatItCannotFollow(t *testing.T) {
-	base := func(lines ...string) asmEntryText {
-		return asmEntryText{name: "e", start: 0x1000, end: 0x1100, cont: 0x2000, contName: "cont", insns: insns(0x1000, lines...),
-			rows: []cfiRow{{loc: 0x1000, cfa: "sp+0", ra: "u"}, {loc: 0x1004, cfa: "sp+16", ra: "c-8"}}}
-	}
-	for _, c := range []struct {
-		what  string
-		lines []string
-		want  string
-	}{
-		{"a call through a register", []string{"stp x29, x30, [sp, #-0x10]!", "blr x8", "b 0x2000 <cont>"}, "calls through a register"},
-		{"an sp write it cannot follow", []string{"stp x29, x30, [sp, #-0x10]!", "sub sp, sp, x9", "bl 0x2000 <cont>"}, "cannot follow sp"},
-		{"a bl with x30 not saved", []string{"sub sp, sp, #0x10", "bl 0x2000 <cont>"}, "has not saved"},
-		{"a br through a register it never loads", []string{"br x17", "stp x29, x30, [sp, #-0x10]!", "bl 0x2000 <cont>"}, "never loads"},
-		{"a bl to another function", []string{"stp x29, x30, [sp, #-0x10]!", "bl 0x3000 <other>"}, "not to its record's continuation"},
-		{"a b to another function", []string{"b 0x3000 <other>"}, "the b at 0x1000 branches to 0x3000"},
-		{"a b.ne out of the entry", []string{"b.ne 0x3000 <other>"}, "the b.ne at 0x1000 branches to 0x3000"},
-		{"a cbz out of the entry", []string{"cbz x0, 0x3000 <other>"}, "the cbz at 0x1000 branches to 0x3000"},
-		{"a cbnz out of the entry", []string{"cbnz x0, 0x3000 <other>"}, "the cbnz at 0x1000 branches to 0x3000"},
-		{"a tbz out of the entry", []string{"tbz w0, #0x3, 0x3000 <other>"}, "the tbz at 0x1000 branches to 0x3000"},
-		{"a tbnz out of the entry", []string{"tbnz w0, #0x3, 0x3000 <other>"}, "the tbnz at 0x1000 branches to 0x3000"},
-		{"a plain load through the pc", []string{"ldr x16, 0x4000 <word>", "b 0x2000 <cont>"}, "ldr x16, 0x4000 <word> at 0x1000 is a plain load"},
-	} {
-		got := strings.Join(asmEntryTextErrors(base(c.lines...)), "\n")
-		if !strings.Contains(got, c.want) {
-			t.Errorf("%s: want an error containing %q, got:\n%s", c.what, c.want, got)
-		}
-	}
-	// The same frame written with an offset store (no writeback), a sub and an add is followed exactly; a load from the stack is
-	// not a published word.
-	ok := base("sub sp, sp, #0x20", "add sp, sp, #0x10", "stp x29, x30, [sp]", "bl 0x2000 <cont>", "ldp x29, x30, [sp]",
-		"add sp, sp, #0x10", "ret")
-	ok.rows[1].loc = 0x1008
-	if errs := asmEntryTextErrors(ok); len(errs) != 0 {
-		t.Errorf("sub sp 32, add sp 16, stp x29, x30, [sp]: CFA=sp+16, ra=c-8 must pass, got %v", errs)
-	}
-	// A store or a compare of the jump register reads it: the register is still the one the ldar set.
-	reads := base("adr x16, 0x4000 <word>", "ldar x16, [x16]", "cmp x16, x0", "cmn x16, #0x1", "tst x16, #0x1",
-		"ccmp x16, x0, #0x0, eq", "ccmn x16, #0x1, #0x0, ne", "str x16, [x1]", "br x16", "b 0x2000 <cont>")
-	if errs := asmEntryTextErrors(reads); len(errs) != 0 {
-		t.Errorf("a compare or a store of x16 does not set it, got %v", errs)
 	}
 }

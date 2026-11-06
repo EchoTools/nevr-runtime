@@ -209,6 +209,42 @@ foreach(variant ok bad nocfi naked ldr)
   target_compile_options(frames_asm_probe_${variant} PRIVATE -Wall -Wextra -Werror)
 endforeach()
 
+# The assembly-entry check's other controls (tests/quest frames_sensor_test.go). Each links the ok helper and differs from
+# frames_asm_probe_ok only in the entry's text, so one thing is wrong, or right, in each:
+#   tailb_sp  secondbl  below_sp  local_bl  path_br  ldadd_ret  cfi_only_at_bl   a wrong entry the sensor MUST fail
+#   x30_in_x19                                                                   a correct entry (x30 kept in x19) it MUST pass
+# and the plugin's four entries (frames_asm_probe_real.cpp): real_naked as the plugin writes them (the sensor MUST fail them),
+# real_moved as top-level asm() with CFI and ldar loads (it MUST pass them), real_moved_pbldr with powerboost's plain ldr (#2216;
+# it MUST fail that entry).
+foreach(variant tailb_sp secondbl below_sp local_bl path_br ldadd_ret cfi_only_at_bl x30_in_x19)
+  add_executable(frames_asm_probe_${variant}
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_asm_probes/${variant}.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_helper_ok.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_asm_probes/${variant}.cpp"
+                              PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+  target_include_directories(frames_asm_probe_${variant} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel" "${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+  target_link_libraries(frames_asm_probe_${variant} PRIVATE nevr_quest_got_hook)
+  target_compile_options(frames_asm_probe_${variant} PRIVATE -Wall -Wextra -Werror)
+endforeach()
+
+foreach(variant real_naked real_moved real_moved_pbldr)
+  add_executable(frames_asm_probe_${variant}
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_asm_probe_real.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_helper_ok.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_asm_probe_real.cpp"
+                              PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+  if(variant STREQUAL "real_naked")
+    target_compile_definitions(frames_asm_probe_real_naked PRIVATE PROBE_REAL_NAKED=1)
+  elseif(variant STREQUAL "real_moved_pbldr")
+    target_compile_definitions(frames_asm_probe_real_moved_pbldr PRIVATE PROBE_REAL_PLAIN_LDR=1)
+  endif()
+  target_include_directories(frames_asm_probe_${variant} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel" "${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+  target_link_libraries(frames_asm_probe_${variant} PRIVATE nevr_quest_got_hook)
+  target_compile_options(frames_asm_probe_${variant} PRIVATE -Wall -Wextra -Werror)
+endforeach()
+
 # The sentinel links the integration, and with it every library package. (Defined here because the
 # integration is the first place all of them exist; CMake resolves the target name at generate time.)
 target_link_libraries(ovrplatformloader PRIVATE nevr_quest_integration)
