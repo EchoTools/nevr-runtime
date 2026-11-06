@@ -489,6 +489,27 @@ void TheCombatOnlyModeDoesNotCountTheLobby() {
   Done();
 }
 
+// The gate is the owner's first word, not only the release's absence of a published rule: with the rule published and a level loaded, a
+// process where combat is not active answers the game's own rate and writes nothing.
+void TheGateComesBeforeThePublishedRule() {
+  World(bv::Variant::kCombat);
+  rr::InstallNormal();
+  GameAsks(120.0f);
+  PutLevel(0, 0, CSymbol64Hash("mpl_combat_dyson"));
+  Frame();
+  QCHECK(g_asks.size() == 1U && rr::CurrentStats().inLevel);
+  QCHECK(rr::Choose(kOvr, 120.0f) == 90.0f);  // active: kept at the level rate
+  combat::ResetForTest();
+  combat::SetVariant(bv::Variant::kNone);
+  combat::Resolve(/*devBuild=*/false, /*forceAsked=*/false);
+  QCHECK(!combat::Active());
+  g_lines.clear();
+  QCHECK(rr::Choose(kOvr, 120.0f) == 120.0f);  // not active: the game's own rate, whatever the rule holds
+  rr::Note(120.0f, 120.0f, 0);
+  QCHECK(Lines("combat_refresh_rate_request").empty());
+  Done();
+}
+
 // The production re-ask: it reads the word now in vrapi_SetDisplayRefreshRate's slot of libr15 at every ask and calls it, so a hook installed on
 // the slot after the module installed (the render-configuration thunk) sees the call. A missing image or an empty word asks nothing and
 // answers -1.
@@ -583,6 +604,7 @@ int main() {
   TheRuleOffNeverChangesARateAndLogsTheWitness();
   TheCombatOnlyModeDoesNotCountTheLobby();
   TheProductionReaskCallsTheWordNowInTheSlot();
+  TheGateComesBeforeThePublishedRule();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "refresh_rate_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
