@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "quest/combat/bvh.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/headset_gates.h"
@@ -13,6 +14,7 @@
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
 #include "quest/combat/refresh_rate.h"
+#include "quest/combat/wallfire.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::combat {
@@ -39,6 +41,19 @@ ModuleResult GatesNormal() noexcept {
   switches.linkLibs = g_config.gateLinkLibs.source == nevr_quest::Source::kFile ? g_config.gateLinkLibs.text : nullptr;
   return headset_gates::Install(switches);
 }
+ModuleResult BvhNormal() noexcept {
+  bvh::Switches switches;
+  switches.bvh = g_config.bvh.on;
+  switches.gate = g_config.bvhGate.on;
+  switches.touch = g_config.bvhTouch.on;
+  switches.bvhFromConfig = g_config.bvh.source == nevr_quest::Source::kFile;
+  switches.gateFromConfig = g_config.bvhGate.source == nevr_quest::Source::kFile;
+  switches.touchFromConfig = g_config.bvhTouch.source == nevr_quest::Source::kFile;
+  return bvh::Install(switches);
+}
+ModuleResult WallfireNormal() noexcept {
+  return wallfire::Install(g_config.wallfire.on, g_config.wallfire.source == nevr_quest::Source::kFile);
+}
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
 
@@ -55,6 +70,10 @@ constexpr std::array kModules{
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
     // gates (#2180): the plugin installed them after its tick and its modules; they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
+    // bvh, then wallfire (#2182): the plugin installed them after its tick modules; wallfire needs the tree's four hooks, and both register or read
+    // the scope the tick refreshes.
+    Module{"bvh", nullptr, &BvhNormal},
+    Module{"wallfire", nullptr, &WallfireNormal},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
     Module{"pfx", nullptr, &PfxNormal},
     Module{"pfxtev", nullptr, &PfxtevNormal},

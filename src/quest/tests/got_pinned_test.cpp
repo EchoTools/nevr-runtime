@@ -26,11 +26,13 @@
 #include "got_hook.h"
 #include "hook_log.h"
 #include "login_title_hook.h"
+#include "quest/combat/bvh_targets.h"
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/combat_tick_targets.h"
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/memsys_targets.h"
+#include "quest/combat/wallfire_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/game_login_failures.h"
@@ -432,6 +434,39 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
 }
 
+// The static BVH's and the wall-fire check's pins (src/quest/combat/bvh_targets.h, wallfire_targets.h) against the real libr15: the six bvh JUMP_SLOTs and the
+// QueryCollision JUMP_SLOT resolve at their pins, each symbol is defined at the function the pin calls real, the StaticRaycastOccluded slot (read, not hooked)
+// resolves, FireGunLocal's site word and the three allowed call sites' return addresses are what the pins say.
+void CheckRealBvhAndWallfire(const LoadedElf& elf) {
+  namespace bv = nevr_quest::combat::bvh;
+  namespace wf = nevr_quest::combat::wallfire;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  const struct {
+    const char* symbol;
+    const char* name;
+    bv::Slot slot;
+  } bvhSlots[] = {{bv::kInitSymbol, "libr15 CBVHTree::Initialize JUMP_SLOT", bv::kPins.init},
+                  {bv::kShutSymbol, "libr15 CBVHTree::Shutdown JUMP_SLOT", bv::kPins.shutdown},
+                  {bv::kIntersectSymbol, "libr15 CBVHTree::Intersect JUMP_SLOT", bv::kPins.intersect},
+                  {bv::kOccludedSymbol, "libr15 CBVHTree::Occluded JUMP_SLOT", bv::kPins.occluded},
+                  {bv::kTouchSymbol, "libr15 CR15TouchInteractQuery::RayQueryStatic JUMP_SLOT", bv::kPins.touch},
+                  {bv::kGateSymbol, "libr15 CncaGameSpace::StaticRaycast JUMP_SLOT", bv::kPins.gate}};
+  for (const auto& b : bvhSlots) {
+    CheckTarget(elf, GotTarget{pinned::kLibR15, b.symbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, b.slot.slot}, b.name);
+    CheckDefinedAt(elf, b.symbol, b.slot.fn);
+  }
+  CheckTarget(elf, GotTarget{pinned::kLibR15, wf::kQuerySymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, wf::kPins.querySlot},
+              "libr15 CncaGameSpace::QueryCollision JUMP_SLOT");
+  CheckDefinedAt(elf, wf::kQuerySymbol, wf::kPins.queryFn);
+  std::uint32_t site = 0;
+  std::memcpy(&site, mem + wf::kPins.site, sizeof(site));
+  if (site != wf::kPins.siteWord) {
+    std::fprintf(stderr, "libr15 FireGunLocal site word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(wf::kPins.site), site,
+                 wf::kPins.siteWord);
+    QCHECK(false);
+  }
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -639,6 +674,7 @@ int main(int argc, char** argv) {
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
   CheckRealHeadsetGates(r15);
+  CheckRealBvhAndWallfire(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

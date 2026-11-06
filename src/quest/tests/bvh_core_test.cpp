@@ -1,15 +1,15 @@
-// Host test of the pure BVH code (src/quest/plugins/q15t/src/bvh_core.h): synthetic meshes in the game's Embree BVH2<Triangle4> format, built by
-// src/quest/tests/q15t/bvh_build.h. No game-derived bytes. Ray hits, misses and occlusion against known geometry, a random soup against two
+// Host test of the pure BVH code (src/quest/combat/bvh_core.h): synthetic meshes in the game's Embree BVH2<Triangle4> format, built by
+// src/quest/tests/bvh_build.h. No game-derived bytes. Ray hits, misses and occlusion against known geometry, a random soup against two
 // brute-force references, degenerate input, malformed trees, and the node / stack / size limits.
 #include <math.h>
 
 #include <cstdio>
 #include <vector>
 
-#include "bvh_build.h"
-#include "bvh_core.h"
+#include "quest/tests/bvh_build.h"
+#include "quest/combat/bvh_core.h"
 
-using namespace q15t::bvh;
+using namespace nevr_quest::combat::bvh;
 
 static int g_fail = 0;
 #define CHECK(cond, ...)                                \

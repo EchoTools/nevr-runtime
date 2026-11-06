@@ -219,10 +219,10 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
   const combat::Outcome early = combat::InstallEarly();
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
-  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the headset gates (#2180) and, last, the pfx gate and
+  // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the headset gates (#2180), the static BVH and the wall-fire check (#2182: the BVH is refused for want of a libr15, and the wall-fire check for want of the BVH) and, last, the pfx gate and
   // the event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick and the gates are refused and named; the rule
   // installs (it registers its callback for a tick that may come later), and so do the two decisions.
-  QCHECK(normal.ran && normal.modules == 5 && normal.installed == 3 && normal.failed == 2);
+  QCHECK(normal.ran && normal.modules == 7 && normal.installed == 3 && normal.failed == 4);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -230,7 +230,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed gates=module_not_loaded pfx=installed pfxtev=installed\""));
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed gates=module_not_loaded bvh=module_not_loaded wallfire=bvh_not_installed pfx=installed pfxtev=installed\""));
   }
   Done();
 }
