@@ -2,6 +2,8 @@
 
 #include <atomic>
 
+#include <atomic>
+
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/safe_read.h"
 
@@ -123,7 +125,17 @@ void ScanLoaded(Loaded& out, std::uintptr_t game) noexcept {
 
 void SetScanSeamForTest(void (*seam)()) noexcept { g_seam.store(seam, std::memory_order_release); }
 
+#ifdef NEVR_COMBAT_COUNT_READS
+namespace {
+std::atomic<std::uint64_t> g_scans{0};
+}
+std::uint64_t ScanCountForTest() noexcept { return g_scans.load(std::memory_order_relaxed); }
+#endif
+
 Loaded Scan(std::uintptr_t game, bool inFlight) noexcept {
+#ifdef NEVR_COMBAT_COUNT_READS
+  g_scans.fetch_add(1, std::memory_order_relaxed);
+#endif
   Loaded out;
   if (inFlight) ScanInFlight(out, game);
   Between();

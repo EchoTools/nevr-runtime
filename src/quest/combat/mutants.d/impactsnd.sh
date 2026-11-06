@@ -157,3 +157,9 @@ runm im_thread_cap_value     $C 's/kThreadLines = 24;/kThreadLines = 1000;/'
 runm im_depth_not_restored   $C 's/^  g_tShutdownDepth.Set(depth);$/  (void)depth;/'
 runm im_depth_not_incremented $C 's/^  g_tShutdownDepth.Set(depth + 1);$//'
 # the rows (R-pins) in the real library
+# an arena match pays nothing, by count: a read or a scan before the scope test is killed by the counters (the arena path makes none)
+runm im_arena_read_in_tick     $C 's/^  if (!g_on.load(std::memory_order_acquire)) return;$/  if (!g_on.load(std::memory_order_acquire)) return;\n  { std::uintptr_t probe = 0; SafeRead(g_base + kSoundSettingsVa, \&probe, sizeof probe); }/'
+runm im_arena_scan_in_tick     $C 's/^  if (!g_on.load(std::memory_order_acquire)) return;$/  if (!g_on.load(std::memory_order_acquire)) return;\n  { std::uint64_t lv = 0; level::Classify(g_game.load(), true, \&lv); }/'
+runm im_arena_read_in_shutdown $C 's/  if (outer \&\& g_scoped.load(std::memory_order_acquire)) {.*$/  if (outer) {/'
+runm im_load_scans_twice       $C 's/const Scope scope = DecideScope();/const Scope scope = (DecideScope(), DecideScope());/'
+runm im_load_no_inflight       $C 's/\&level, \/\*inFlight=\*\/true)/\&level, false)/'

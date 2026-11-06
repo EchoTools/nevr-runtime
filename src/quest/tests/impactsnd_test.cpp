@@ -31,6 +31,7 @@
 
 #include "nevr/symbol_hash.h"
 #include "quest/combat/combat_level.h"
+#include "quest/combat/safe_read.h"
 #include "quest/combat/impactsnd.h"
 #include "quest/combat/impactsnd_targets.h"
 #include "quest/sentinel/hook_log.h"
@@ -154,6 +155,7 @@ static bool Lookup(const char* module, sentinel::ElfImage* out) {
 
 // ---- the fake CR15Game: the two gamespace tables as the module reads them (offsets spelled here, not taken from the header) ----
 constexpr std::size_t kTable0 = 0x1f48, kCount0 = 0x1f78, kGamespaceOwner = 0x8, kGamespaceLevel = 0x58;
+constexpr std::size_t kFiberRows = 0x1ed8, kFiberCount = 0x1f08, kFiberGamespace = 0x30;
 struct Gamespace {
   std::uintptr_t words[0x60 / 8 + 1] = {};
 };
@@ -161,9 +163,24 @@ struct Game {
   std::uintptr_t words[0x2000 / 8] = {};
   std::uintptr_t table0[8][2] = {};
   Gamespace spaces[8];
+  std::uintptr_t fiberRows[4] = {};  // the init-fiber table: gamespaces still loading
+  std::uintptr_t fibers[4][8] = {};
+  Gamespace flight[4];
 };
 static Game g_game;
 static uintptr_t GameAddress() { return reinterpret_cast<std::uintptr_t>(g_game.words); }
+// A gamespace still loading: its init fiber is in the table at game + 0x1ed8 and it is in neither of the two loaded tables (CR15NetBulletCS::Initialize, the
+// caller of LoadSoundSettings, runs while the level's resources are built, before the gamespace enters the loaded tables).
+static void PutInFlight(const char* name, int row = 0) {
+  Gamespace& gs = g_game.flight[row];
+  gs.words[kGamespaceOwner / 8] = GameAddress();
+  gs.words[kGamespaceLevel / 8] = static_cast<std::uintptr_t>(EchoVR::CSymbol64Hash(name));
+  g_game.fibers[row][kFiberGamespace / 8] = reinterpret_cast<std::uintptr_t>(&gs);
+  g_game.fiberRows[row] = reinterpret_cast<std::uintptr_t>(g_game.fibers[row]);
+  g_game.words[kFiberRows / 8] = reinterpret_cast<std::uintptr_t>(g_game.fiberRows);
+  std::uintptr_t& count = g_game.words[kFiberCount / 8];
+  if (static_cast<std::uintptr_t>(row) + 1 > count) count = static_cast<std::uintptr_t>(row) + 1;
+}
 static void LoadLevels(std::initializer_list<const char*> names) {
   g_game = Game{};
   int row = 0;
@@ -839,6 +856,77 @@ static void TestRebuiltLoaderNeedsItsConditions() {
   CallLoader();
   CHECK(g_loader_calls == 1 && g_loadCalls == 0, "an unpinned stub: the rebuilt loader ran");
 }
+
+// The loader runs while the level is still loading: the gamespace is in the init-fiber table and not yet in the loaded tables (the real order). A combat map
+// that is loading is repaired, an arena level that is loading is not, and a combat map loading while an arena lobby is loaded is repaired too.
+static void TestScopeSeesALevelStillLoading() {
+  Fresh();
+  LoadLevels({});
+  PutInFlight("mpl_combat_dyson");
+  impactsnd::SetGameForTest(GameAddress());
+  Install();
+  CallLoader();
+  CHECK(impactsnd::GetStats().scoped && impactsnd::GetStats().scopedLoads == 1 && AllRight() && HasLine("scope=combat"), "a combat map that is loading was not repaired");
+  Fresh();
+  LoadLevels({"mpl_lobby_b"});
+  PutInFlight("mpl_combat_gauss");
+  impactsnd::SetGameForTest(GameAddress());
+  Install();
+  CallLoader();
+  CHECK(impactsnd::GetStats().scoped, "a combat map loading beside an arena lobby was not repaired");
+  Fresh();
+  LoadLevels({});
+  PutInFlight("mpl_arena_a");
+  impactsnd::SetGameForTest(GameAddress());
+  Install();
+  CallLoader();
+  CHECK(!impactsnd::GetStats().scoped && CountRight() == 0 && HasLine("scope=other_level"), "an arena level that is loading was repaired");
+  Fresh();
+  LoadLevels({"mpl_combat_dyson"});
+  PutInFlight("mpl_arena_b");
+  impactsnd::SetGameForTest(GameAddress());
+  Install();
+  CallLoader();
+  CHECK(!impactsnd::GetStats().scoped && CountRight() == 0, "an arena level loading beside a combat map was repaired");
+}
+
+// An arena match pays nothing, by count (not only by what the game receives): the tick, the Shutdown handler and the quiet frames make no read and no
+// scan; a load makes the one scan that decides it (the decision once per level change) and nothing besides it.
+static void TestArenaPaysNothingByCount() {
+  Fresh();
+  LoadLevels({"mpl_arena_a"});
+  impactsnd::SetGameForTest(GameAddress());
+  Install();
+  g_load_mode = kLoadNothing;
+  const uint64_t reads0 = nevr_quest::combat::ReadCountForTest(), scans0 = nevr_quest::combat::level::ScanCountForTest();
+  for (int i = 0; i < 300; ++i) impactsnd::Tick(GameAddress());
+  CHECK(nevr_quest::combat::ReadCountForTest() == reads0 && nevr_quest::combat::level::ScanCountForTest() == scans0,
+        "300 arena frames made %llu reads and %llu scans", (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads0),
+        (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans0));
+  for (int i = 0; i < 5; ++i) CallShutdown(1);
+  CHECK(nevr_quest::combat::ReadCountForTest() == reads0 && nevr_quest::combat::level::ScanCountForTest() == scans0,
+        "5 arena Shutdowns made %llu reads and %llu scans", (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads0),
+        (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans0));
+  // one load: exactly the reads of the one scan that decides it
+  std::uint64_t level = 0;
+  const uint64_t r1 = nevr_quest::combat::ReadCountForTest();
+  nevr_quest::combat::level::Classify(GameAddress(), true, &level, true);
+  const uint64_t readsOfOneDecision = nevr_quest::combat::ReadCountForTest() - r1;
+  const uint64_t reads1 = nevr_quest::combat::ReadCountForTest(), scans1 = nevr_quest::combat::level::ScanCountForTest();
+  CallLoader();
+  CHECK(nevr_quest::combat::level::ScanCountForTest() - scans1 == 1, "an arena load made %llu scans", (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans1));
+  CHECK(nevr_quest::combat::ReadCountForTest() - reads1 == readsOfOneDecision, "an arena load made %llu reads, its one decision costs %llu",
+        (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads1), (unsigned long long)readsOfOneDecision);
+  // and after a combat level's table is live, the Shutdown that frees it reads the global once to end the scope
+  LoadLevels({"mpl_combat_dyson"});
+  impactsnd::SetGameForTest(GameAddress());
+  g_load_mode = kLoad15;
+  CallLoader();
+  const uint64_t reads2 = nevr_quest::combat::ReadCountForTest();
+  CallShutdown(1);
+  CHECK(nevr_quest::combat::ReadCountForTest() > reads2 && !impactsnd::GetStats().scoped, "the Shutdown of a combat table did not end the scope by a read");
+}
+
 // The tick hands the module the game; the scope is marked by a combat load and cleared when the game frees the table.
 static void TestScopeFollowsTheTable() {
   Fresh();
@@ -1525,6 +1613,8 @@ int main() {
   TestCombatLevelsAreRepaired();
   TestScopeFailsClosed();
   TestScopeFollowsTheTable();
+  TestScopeSeesALevelStillLoading();
+  TestArenaPaysNothingByCount();
   TestTickOnlyAsksOnceASecond();
   TestScopeLineBudget();
   TestRebuiltLoaderInACombatLevel();

@@ -104,7 +104,6 @@
 #ifndef Q15T_SENSORWD
 #define Q15T_SENSORWD 0
 #endif
-#endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
 #ifndef Q15T_SLOT_EXCLUSIVEUPDATEGAME
@@ -206,7 +205,6 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_SENSORWD
     "sensorwd "
-#endif
 #endif
     "";
 
@@ -420,7 +418,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #if Q15T_SENSORWD
   ReportModule("sensorwd", InstallSensorWd(base));
   AddModuleTick("sensorwd", &SensorWdTick, &want_tick);  // one bool test per frame when the install was refused
-#endif
 #endif
 #if Q15T_MUSIC
   {

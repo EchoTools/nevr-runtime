@@ -85,3 +85,5 @@ runm dm_update_hook_not_armed $C 's/^  UpdateThunk::Arm(kUpdateRecord);$//'
 runm dm_shutdown_hook_not_armed $C 's/^  ShutdownThunk::Arm(kShutdownRecord);$//'
 runm dm_install_status       $C 's/return {false, sentinel::GotStatusName(updateStatus)};/return {true, "installed"};/'
 runm dm_update_original_late $C 's/^  original(sys);$/  if (g_on.load(std::memory_order_acquire)) { pthread_mutex_lock(\&g_mu); g_host.Tick(sys, NowMs()); pthread_mutex_unlock(\&g_mu); }\n  original(sys);/'
+# an arena match pays nothing, by count: a read before the scope test of the update handler is killed by the counters
+runm dm_arena_read_in_update  $C 's/^  original(sys);$/  original(sys); { std::uintptr_t probe = 0; SafeRead(sys, \&probe, sizeof probe); }/'

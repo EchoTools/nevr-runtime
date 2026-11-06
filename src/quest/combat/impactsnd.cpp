@@ -457,7 +457,7 @@ Scope DecideScope() noexcept {
   const std::uintptr_t game = g_game.load(std::memory_order_acquire);
   if (game == 0) return Scope::kNoGame;
   std::uint64_t level = 0;
-  return level::Classify(game, /*lobby=*/true, &level) == level::Kind::kCombatOrLobby ? Scope::kCombat : Scope::kOtherLevel;
+  return level::Classify(game, /*lobby=*/true, &level, /*inFlight=*/true) == level::Kind::kCombatOrLobby ? Scope::kCombat : Scope::kOtherLevel;
 }
 
 void NoteScope(Scope scope, const char* loader) noexcept {
@@ -518,7 +518,7 @@ std::uint64_t OnShutdown(ShutdownThunk::Fn original, std::uint64_t self) noexcep
   if (outer) pthread_mutex_unlock(&g_tableMu);
   g_tShutdownDepth.Set(depth);
   g_shutdowns.fetch_add(1, std::memory_order_relaxed);
-  if (outer) {
+  if (outer && g_scoped.load(std::memory_order_acquire)) {  // no table of a combat level: no read (an arena match makes none)
     std::uintptr_t map = 0;
     SafeRead(g_base + kSoundSettingsVa, &map, sizeof map);
     if (map == 0) g_scoped.store(false, std::memory_order_release);

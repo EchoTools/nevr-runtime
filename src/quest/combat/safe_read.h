@@ -7,14 +7,24 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
 namespace nevr_quest::combat {
 
+#ifdef NEVR_COMBAT_COUNT_READS
+// Host tests built with NEVR_COMBAT_COUNT_READS count every read, so a test of the arena path can assert that it made none (the shipped build has no counter).
+inline std::atomic<std::uint64_t> g_readCount{0};
+inline std::uint64_t ReadCountForTest() noexcept { return g_readCount.load(std::memory_order_relaxed); }
+#endif
+
 // Copies `length` bytes at `address` into `out`. False when any byte could not be read (nothing is promised about `out` then), for a
 // zero or implausible address, and for a range that wraps.
 inline bool SafeRead(std::uintptr_t address, void* out, std::size_t length) noexcept {
+#ifdef NEVR_COMBAT_COUNT_READS
+  g_readCount.fetch_add(1, std::memory_order_relaxed);
+#endif
   if (length == 0) return true;
   if (address < 0x10000 || address > 0x0000ffffffffffffULL - length) return false;
   iovec local{out, length};

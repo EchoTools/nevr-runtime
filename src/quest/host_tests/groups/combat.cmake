@@ -145,10 +145,10 @@ nevr_ht_test(pfxtev_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # Shutdown, a fake clock and a fake CR15Game that says which level is loaded. Every assertion of the plugin's test about the table, the loaders, the tick and
 # the lock; the install checks (D is read and never written, the write switch); and the scope: an arena level, an arena lobby, a transition with an arena
 # level, no game and an unreadable game all get the game's own loader and a tick that sleeps.
-nevr_ht_test(impactsnd_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(impactsnd_test GROUP combat ${_cf} DEFS NEVR_COMBAT_COUNT_READS=1 TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/impactsnd_test.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
 # The level decals (#2183, #1619; docs/adr/0046): the table parser, the per-system state machine and the real handlers over a stand-in engine (a fake bullet
 # system, allocator, node, mesh and vertex buffer) through the real GotHook into the GLOB_DAT word of UpdateMovement and the Shutdown vtable word, chained above
 # impactsnd's. The scope: a game space in an arena level (or an arena lobby) draws and creates nothing and is read again once a second.
-nevr_ht_test(decals_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(decals_test GROUP combat ${_cf} DEFS NEVR_COMBAT_COUNT_READS=1 TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/decals_test.cpp src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)

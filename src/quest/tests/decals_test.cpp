@@ -25,6 +25,7 @@
 #include "quest/combat/decals.h"
 #include "quest/combat/decals_targets.h"
 #include "quest/combat/legacy_switch.h"
+#include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
@@ -996,8 +997,13 @@ void TestArenaScope(const std::string& dir) {
     CHECK(Install(table.c_str(), &api).installed, "install (%s)", name);
     Sys s;
     MakeSys(&s, EchoVR::CSymbol64Hash(name));
-    for (int i = 0; i < 50; ++i) UpdateSlot()(s.addr());
+    UpdateSlot()(s.addr());  // the first look reads the space's level
+    const uint64_t reads0 = nevr_quest::combat::ReadCountForTest(), scans0 = nevr_quest::combat::level::ScanCountForTest();
+    for (int i = 0; i < 49; ++i) UpdateSlot()(s.addr());
     CHECK(E.real_updates == 50, "%s: the game's update ran %d times", name, E.real_updates);
+    CHECK(nevr_quest::combat::ReadCountForTest() == reads0 && nevr_quest::combat::level::ScanCountForTest() == scans0,
+          "%s: 49 quiet arena updates made %llu reads and %llu scans", name, (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads0),
+          (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans0));
     CHECK(Index("alloc") < 0 && E.nodes_used == 0 && Index("map") < 0 && Index("init") < 0, "%s: an arena or lobby level made or drew a node", name);
     CHECK(CountLines("decals: game space") == 1 && CountLines("acts=0") == 1, "%s: one game-space line that says it does not act", name);
     CHECK(dc::CountersForTest().nodes_made == 0 && dc::CountersForTest().drawn_quads == 0, "%s: counters", name);
