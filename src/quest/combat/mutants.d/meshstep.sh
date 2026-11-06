@@ -85,8 +85,8 @@ runm ms_installed_status    $S "s/return Done(\"installed\", \"ok\", \"installed
 runm ms_pin_line_have_text  $S "s/readable ? sentinel::HexString(haveText, have)/readable ? sentinel::HexString(haveText, bad->word)/"
 runm ms_pin_line_vaddr      $S "s/{\"vaddr\", sentinel::HexString(at, bad->vaddr)},/{\"vaddr\", sentinel::HexString(at, bad->word)},/"
 # the shared scope (table_step.cpp): the lobby rule is off, an arena level wins, no game is no read
-runm ts_lobby_rule_on       $TS "s/level::Classify(game, \/\*lobby=\*\/false, \&level)/level::Classify(game, \/*lobby=*\/true, \&level)/"
-runm ts_any_kind_acts       $TS "s/level::Classify(game, \/\*lobby=\*\/false, \&level) == level::Kind::kCombatOrLobby ? Scope::kCombat : Scope::kOther;/level::Classify(game, \/*lobby=*\/false, \&level) != level::Kind::kNone ? Scope::kCombat : Scope::kOther;/"
+runm ts_lobby_rule_on       $TS "s/\/\*lobby=\*\/false, \&level, \/\*inFlight=\*\/true/\/*lobby=*\/true, \&level, \/*inFlight=*\/true/"
+runm ts_any_kind_acts       $TS "s/\&level, \/\*inFlight=\*\/true) == level::Kind::kCombatOrLobby ? Scope::kCombat/\&level, \/*inFlight=*\/true) != level::Kind::kNone ? Scope::kCombat/"
 runm ts_combat_map_alone    $TS "s/level::Classify(game, \/\*lobby=\*\/false, \&level, \/\*inFlight=\*\/true) == level::Kind::kCombatOrLobby/level::CombatMapLoaded(game, \&level)/"
 runm ts_no_game_is_read     $TS "s/^  if (game == 0) return Scope::kUnknown;.*\$//"
 runm ts_no_game_is_combat   $TS "s/  if (game == 0) return Scope::kUnknown;/  if (game == 0) return Scope::kCombat;/"
