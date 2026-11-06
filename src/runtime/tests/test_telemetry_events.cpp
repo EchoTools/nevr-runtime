@@ -310,6 +310,47 @@ TEST(TelemetryEvents, ASecondRiseWithTheFirstGoalsRecordUnchangedWaits) {
   EXPECT_FLOAT_EQ(goals[0].distance_thrown(), 3.0f);
 }
 
+TEST(TelemetryEvents, ARepeatGoalWhoseRecordLooksLikeTheLastOneGetsItsFieldsAfterTheWait) {
+  // Measured on a live match (echovr.exe 34.4.631547.1): the record's disc speed is the same value in every
+  // record, so the same player scoring the same points twice in a row for one team writes a record that equals
+  // the last goal's in team, points, speed and scorer. Only its distance tells it apart.
+  TelemetrySnapshot a = Empty(), b = Empty(), c = Empty();
+  b.orangePoints = 3;
+  b.lastScore = Goal(1, 0x0407, 10.67f);  // slot 7, 3 points
+  b.lastScore.pointAmount = 3;
+  b.lastScore.discSpeed = -204845580000.0f;
+  c = b;
+  c.orangePoints = 6;                     // slot 7 again, 3 points again
+  c.lastScore.distanceThrown = 26.89f;
+  const auto frames = DetectOver({a, b, c, c, c, c, c});
+  ASSERT_EQ(Count(frames[0], EchoEvent::kGoalScored), 1);
+  EXPECT_EQ(Count(frames[1], EchoEvent::kGoalScored), 0);
+  EXPECT_EQ(Count(frames[2], EchoEvent::kGoalScored), 0);
+  EXPECT_EQ(Count(frames[3], EchoEvent::kGoalScored), 0);
+  const auto goals = Goals(frames[4]);
+  ASSERT_EQ(goals.size(), 1u);
+  EXPECT_EQ(goals[0].team(), telemetry::v2::ROLE_ORANGE_TEAM);
+  EXPECT_EQ(goals[0].point_amount(), 3);
+  EXPECT_EQ(goals[0].scorer_slot(), 7);
+  EXPECT_FLOAT_EQ(goals[0].distance_thrown(), 26.89f);
+  EXPECT_EQ(Count(frames[5], EchoEvent::kGoalScored), 0);
+}
+
+TEST(TelemetryEvents, AfterTheWaitARecordOfThisTeamWithOtherPointsStillGivesNoFields) {
+  TelemetrySnapshot a = Empty(), b = Empty(), c = Empty();
+  b.bluePoints = 2;
+  b.lastScore = Goal(0, 0x0405, 19.8f);  // blue, 2 points
+  c = b;
+  c.bluePoints = 5;                      // blue rises by 3; the record stays the 2-point goal's
+  const auto frames = DetectOver({a, b, c, c, c, c});
+  ASSERT_EQ(Count(frames[0], EchoEvent::kGoalScored), 1);
+  const auto goals = Goals(frames[4]);
+  ASSERT_EQ(goals.size(), 1u);
+  EXPECT_EQ(goals[0].team(), telemetry::v2::ROLE_BLUE_TEAM);
+  EXPECT_EQ(goals[0].point_amount(), 3);
+  ExpectNoRecordFields(goals[0]);
+}
+
 TEST(TelemetryEvents, AFrameThatWasNotReadIsNotAFrameAGoalWaited) {
   TelemetrySnapshot a = Empty();
   a.lastScore = Goal(0, 0x0403, 7.0f);
