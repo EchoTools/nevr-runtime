@@ -2304,7 +2304,7 @@ void DataSlotsShareTheRegistryAndItsReserve() {
 
 // ---- reviewed assembly entries (docs/adr/0046 rule 2) ---------------------------------------------------------------------
 
-// Stand-ins for a reviewed assembly entry. The real ones are naked arm64 functions: they read their next pointer with an
+// Stand-ins for a reviewed assembly entry. The real ones are arm64 functions in a top-level asm() block: they read their next pointer with an
 // acquire load (`ldar`) at every call, act on the caller's registers, and continue in a C++ function. These do the same in C++,
 // which is all the manager sees of an entry: an address, a word it publishes, and a record.
 void* g_entryNext = nullptr;
@@ -2384,6 +2384,7 @@ void ALaterHandlerOnAnEntrysSlotIsRefusedNamingTheEntry() {
   QCHECK(out == nullptr && !above.installed());
   QCHECK(*r.slot == EntryAddress());
   QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"times\"") == 1);  // the hook that lost is named
   QCHECK(Count(LogLevel::kWarn, "\"chain\":\"entry(asm_entry)\",\"chain_length\":1") == 1);
   QCHECK(Count(LogLevel::kWarn, "\"reason\":\"the newest hook on this slot is an assembly entry") == 1);
   QCHECK(Errors() == 0);
@@ -2395,6 +2396,16 @@ void ALaterHandlerOnAnEntrysSlotIsRefusedNamingTheEntry() {
                 GotStatus::kSlotHeldByEntry);
   QCHECK(out == nullptr && !plugin.installed());
   QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"plugin\"") == 1);  // a refused plugin is named on the line
+  // Through the plugin hook service itself: the refusal names the plugin by the owner the service gives it.
+  std::uint32_t handle = 0;
+  Captured().clear();
+  QCHECK(slot_hook::RegisterSlotHookWith(&FindLoadedImage, "q15t", so, "fx_add", NEVR_SLOT_RELOC_JUMP_SLOT,
+                                         LiveNoteOf(so).c_str(), TimesThunk::EntryAddress(), TimesThunk::OriginalOut(),
+                                         &handle) == NEVR_SLOT_HOOK_REFUSED);
+  QCHECK(handle == 0 && !slot_hook::HoldsHandleOf("q15t"));
+  QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"plugin:q15t\"") == 1);
 
   // A second entry on the slot is refused too: neither would be the newest.
   GotHook second;
@@ -2402,6 +2413,7 @@ void ALaterHandlerOnAnEntrysSlotIsRefusedNamingTheEntry() {
   QCHECK_STATUS(InstallAsmEntry(second, AddTarget(so, "entry2"), kEntryRecordTwo, &g_entryNextTwo), GotStatus::kSlotHeldByEntry);
   QCHECK(g_entryNextTwo == nullptr && !second.installed());
   QCHECK(Count(LogLevel::kWarn, "\"status\":\"slot_held_by_entry\"") == 1);
+  QCHECK(Count(LogLevel::kWarn, "\"owner\":\"entry2\"") == 1);
   QCHECK(*r.slot == EntryAddress());
   QCHECK(m.callAdd(3, 4) == 1007);
 

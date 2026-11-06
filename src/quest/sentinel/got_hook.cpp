@@ -789,7 +789,7 @@ constexpr std::size_t kChainTextCapacity = 256;
 // What a value in a slot reads as in a refusal line (DescribeSlotValue).
 constexpr std::size_t kValueTextCapacity = 96;
 // Every field an install refusal line carries; a field that does not apply reads "(none)".
-constexpr std::size_t kInstallRefusalFields = 15;
+constexpr std::size_t kInstallRefusalFields = 16;
 
 // The one failure record of a remove. Module names and build IDs are public identifiers; nothing here is a credential.
 void LogFailure(const char* op, const GotTarget& t, GotStatus status, const char* stage, int err) {
@@ -882,7 +882,8 @@ void DescribeSlotValue(void** slot, const void* value, std::uintptr_t bias, char
   std::snprintf(out, capacity, "%s", "not in the module");
 }
 
-// The refusal of an install: one Warning line that names the slot, the chain on it and the reason (logging.md Rule 6).
+// The refusal of an install: one Warning line that names the hook that lost (its owner: a plugin's id for the plugin hook
+// service), the slot, the chain on it and the reason (logging.md Rule 6).
 // `slot` is null when the module or its slot did not resolve; `slotVaddr` and `bias` (the module's load base) are 0 then.
 // `expected` is the value the install waited for, for kOriginalMismatch and kSlotChanged (null when it has none); the value
 // in the slot is read here. `actualBuildId` is set only for a build-ID mismatch.
@@ -912,6 +913,7 @@ void LogInstallRefusal(const GotTarget& t, GotStatus status, const char* stage, 
       LogField("module", t.module),
       LogField("symbol", t.symbol),
       LogField("reloc", RelocKindName(t.kind)),
+      LogField("owner", t.owner != nullptr ? t.owner : "(unnamed)"),
       LogField("errno", err),
       LogField("slot_vaddr", slotText),
       LogField("chain", chain),
