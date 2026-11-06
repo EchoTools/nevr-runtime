@@ -64,3 +64,7 @@ runm ai_word src/quest/combat/aibots_targets.h 's/kEnableFirstWord = 0xd100c3ffU
 
 # Not listed: the offsets and the in-game state in aibots_targets.h and netgame_targets.h are tied to their pinned instruction words by static_assert, so a bent constant
 # does not compile (the compiler is the check; mutants.sh counts that as no kill). got_pinned_test checks the words against the store libr15.
+# By count (the arena test counts SafeRead calls and level scans): a scan on every look, and a read before the look's own.
+A=src/quest/combat/aibots.cpp
+runm ai_scan_every_look $A 's/^void Look(std::uintptr_t game, double now) noexcept {$/void Look(std::uintptr_t game, double now) noexcept {\n  (void)level::Scan(game);/'
+runm ai_extra_read_every_look $A 's/^void Look(std::uintptr_t game, double now) noexcept {$/void Look(std::uintptr_t game, double now) noexcept {\n  bool probe = true;\n  (void)SafeRead<std::uint8_t>(game, \&probe);/'

@@ -76,3 +76,7 @@ runm gc_key_arm_misnamed $Q 's/kCombatWeaponArmKey = "combat.weapon_arm"/kCombat
 runm gc_key_scenario_misnamed $Q 's/kCombatAibotsScenarioKey = "combat.aibots_scenario"/kCombatAibotsScenarioKey = "combat.aibots_scen"/' quest-host-shared quest_config_test
 runm gc_key_scenario_unread $Q 's/r.config.combat.aibotsScenario = ReadCombatText(cfg, kCombatAibotsScenarioKey, r);/;/' quest-host-shared quest_config_test
 runm gc_key_not_on_schema src/core/nevr_config.cpp 's/"gunconnect", "aibots", "aibots_scenario", "weapon_arm"}/"gunconnect", "aibots", "aibots_scenario"}/' quest-host-shared quest_config_test
+G=src/quest/combat/gunconnect.cpp
+# By count (the arena test counts SafeRead calls and level scans): a read, or a scan, made before the scope test.
+runm gc_read_before_scope $G 's/^  if (!InScope(game)) {$/  (void)ReadLocal(game);\n  if (!InScope(game)) {/'
+runm gc_scan_before_scope $G 's/^  if (!InScope(game)) {$/  (void)level::Scan(game);\n  if (!InScope(game)) {/'

@@ -56,6 +56,7 @@ const char* LevelName(std::uint64_t level) noexcept {
 namespace {
 
 std::atomic<void (*)()> g_seam{nullptr};
+std::atomic<std::uint32_t> g_scans{0};
 
 void Between() noexcept {
   if (const auto seam = g_seam.load(std::memory_order_acquire)) seam();
@@ -123,7 +124,10 @@ void ScanLoaded(Loaded& out, std::uintptr_t game) noexcept {
 
 void SetScanSeamForTest(void (*seam)()) noexcept { g_seam.store(seam, std::memory_order_release); }
 
+std::uint32_t ScanCalls() noexcept { return g_scans.load(std::memory_order_relaxed); }
+
 Loaded Scan(std::uintptr_t game, bool inFlight) noexcept {
+  g_scans.fetch_add(1, std::memory_order_relaxed);
   Loaded out;
   if (inFlight) ScanInFlight(out, game);
   Between();

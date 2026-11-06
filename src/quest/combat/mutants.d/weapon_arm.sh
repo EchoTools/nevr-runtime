@@ -40,3 +40,8 @@ runm wa_gs_direct_off src/quest/combat/weapon_arm_targets.h 's/kGamespaceDirect 
 runm wa_gs_queue_off src/quest/combat/weapon_arm_targets.h 's/kGamespaceQueue = 0x170/kGamespaceQueue = 0x178/'
 runm wa_cs_slot_off src/quest/combat/weapon_arm_targets.h 's/kCsSlot = 0x130/kCsSlot = 0x132/'
 runm wa_cs_gen_off src/quest/combat/weapon_arm_targets.h 's/kCsGenerations = 0xc8/kCsGenerations = 0xd0/'
+# By count (the arena test counts SafeRead calls and level scans): a read, or a scan, before the scope test, and a scan before the marker is looked at.
+W=src/quest/combat/weapon_arm.cpp
+runm wa_read_before_scope $W 's/^  if (!InScope(game)) {$/  { gamespace::CompSys pre[1]; (void)gamespace::FindComponentSystems(game, wt::kEquipCsKey, g_base + wt::kEquipCsVptrVaddr, pre, 1); }\n  if (!InScope(game)) {/'
+runm wa_scan_before_scope $W 's/^  if (!InScope(game)) {$/  (void)level::Scan(game);\n  if (!InScope(game)) {/'
+runm wa_scan_before_marker $W 's/^  g_passes.fetch_add(1, std::memory_order_relaxed);$/  g_passes.fetch_add(1, std::memory_order_relaxed);\n  (void)level::Scan(game);/'

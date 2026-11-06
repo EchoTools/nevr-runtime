@@ -7,14 +7,21 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
 namespace nevr_quest::combat {
 
+// How many reads have been asked for, in this process: a relaxed counter beside a system call, read by the host tests to show that a module added no read
+// on a path it must leave alone (an arena level). Nothing in production reads it.
+inline std::atomic<std::uint32_t> g_safeReadCalls{0};
+inline std::uint32_t SafeReadCalls() noexcept { return g_safeReadCalls.load(std::memory_order_relaxed); }
+
 // Copies `length` bytes at `address` into `out`. False when any byte could not be read (nothing is promised about `out` then), for a
 // zero or implausible address, and for a range that wraps.
 inline bool SafeRead(std::uintptr_t address, void* out, std::size_t length) noexcept {
+  g_safeReadCalls.fetch_add(1, std::memory_order_relaxed);
   if (length == 0) return true;
   if (address < 0x10000 || address > 0x0000ffffffffffffULL - length) return false;
   iovec local{out, length};

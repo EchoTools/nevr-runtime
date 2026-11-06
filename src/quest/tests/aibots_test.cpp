@@ -26,9 +26,11 @@
 
 #include "nevr/symbol_hash.h"
 #include "quest/combat/aibots_targets.h"
+#include "quest/combat/combat_level.h"
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/legacy_switch.h"
 #include "quest/combat/netgame_targets.h"
+#include "quest/combat/safe_read.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
@@ -514,6 +516,28 @@ void AnEchoArenaLevelIsLeftAlone() {  // 15
   CHECK(g_calls.size() == 1, "the combat lobby stopped the call");
 }
 
+// By count: an arena match (the game's own combat flag is 0, no bots) costs the look's four reads and nothing else: no level scan, no read of the scenarios.
+void AnArenaMatchIsFourReadsALookAndNoScan() {
+  for (const char* name : {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a"}) {
+    Reset();
+    SetLevels({CSymbol64Hash(name)});
+    Put<std::uint8_t>(g_net, 0x6341b, 0);
+    SetCount(0);
+    const std::uint32_t reads0 = nevr_quest::combat::SafeReadCalls(), scans0 = nevr_quest::combat::level::ScanCalls();
+    Run(9);
+    const std::uint32_t looks = ai::CurrentStats().looks;
+    CHECK(looks >= 35 && g_calls.empty(), "%s: %u looks, %zu calls", name, looks, g_calls.size());
+    CHECK(nevr_quest::combat::level::ScanCalls() == scans0, "%s: %u level scans in an arena match", name, nevr_quest::combat::level::ScanCalls() - scans0);
+    CHECK(nevr_quest::combat::SafeReadCalls() - reads0 == looks * 4, "%s: %u reads for %u looks, wanted 4 each", name, nevr_quest::combat::SafeReadCalls() - reads0, looks);
+  }
+  // No net game at all (between matches): one read a look.
+  Reset();
+  g_game[0x8510 / 8] = 0;
+  const std::uint32_t reads1 = nevr_quest::combat::SafeReadCalls();
+  Run(4);
+  CHECK(nevr_quest::combat::SafeReadCalls() - reads1 == ai::CurrentStats().looks, "no net game: %u reads for %u looks", nevr_quest::combat::SafeReadCalls() - reads1, ai::CurrentStats().looks);
+}
+
 void TheInstallOnAnImage() {  // 16
   combat_test::Image image;
   static combat_test::Image* sImage;
@@ -617,6 +641,7 @@ int main() {
   TheScenarioKey();
   AReleaseBuildReadsNoRequestFile();
   AnEchoArenaLevelIsLeftAlone();
+  AnArenaMatchIsFourReadsALookAndNoScan();
   TheInstallOnAnImage();
   TheCostOfALook();
   ClearDir();
