@@ -144,7 +144,7 @@ void EachVariantResolvesToItsAnswerAndIsLoggedOnce() {
     QCHECK(Has(line.text, "\"event\":\"combat_active\""));
     QCHECK(Has(line.text, (std::string("\"variant\":\"") + bv::VariantName(row.variant) + "\"").c_str()));
     QCHECK(Has(line.text, (std::string("\"kind\":\"") + (row.dev ? "dev" : "release") + "\"").c_str()));
-    QCHECK(Has(line.text, (std::string("\"active\":\"") + (row.active ? "true" : "false") + "\"").c_str()));
+    QCHECK(Has(line.text, (std::string("\"active\":") + (row.active ? "1" : "0") + ",").c_str()));
     QCHECK(Has(line.text, (std::string("\"reason\":\"") + combat::ReasonName(row.reason) + "\"").c_str()));
     QCHECK(Has(line.text, (std::string("\"force\":\"") + combat::ForceName(row.outcome) + "\"").c_str()));
     // the line says what follows from it
