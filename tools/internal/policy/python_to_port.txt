@@ -17,7 +17,6 @@ tools/game_folder_invariant.py	ported by its unit of #2132
 tools/gen_hwdump_vk_fields.py	ported by its unit of #2132
 tools/gen_plugin_signature_fixtures.py	ported by its unit of #2132
 tools/gen_symbol_corpus.py	ported by its unit of #2132
-tools/heavy_guard.py	ported by its unit of #2132
 tools/host_stop_cause.py	ported by its unit of #2132
 tools/install_game_ndk.py	ported by its unit of #2132
 tools/log_call_census.py	ported by its unit of #2132
@@ -118,7 +117,6 @@ tools/tests/test_game_pids.py	ported by its unit of #2132
 tools/tests/test_game_targets_prologue.py	ported by its unit of #2132
 tools/tests/test_gitenv.py	ported by its unit of #2132
 tools/tests/test_header_include_order.py	ported by its unit of #2132
-tools/tests/test_heavy_guard.py	ported by its unit of #2132
 tools/tests/test_host_build_literal.py	ported by its unit of #2132
 tools/tests/test_host_dbghelp_preload.py	ported by its unit of #2132
 tools/tests/test_host_log_mutex_creation.py	ported by its unit of #2132
@@ -243,6 +241,7 @@ tools/tests/test_run_tool_tests_memory.py	ported by its unit of #2132 (tests the
 tools/tests/test_runtime_dll_name.py	ported by its unit of #2132
 tools/tests/test_runtime_lifecycle_invariants.py	ported by its unit of #2132
 tools/tests/test_sample_config_sensor.py	ported by its unit of #2132
+tools/tests/test_scenario_recipe_args.py	ported by its unit of #2132
 tools/tests/test_score_log_markers.py	ported by its unit of #2132
 tools/tests/test_seed_build_tree.py	ported by its unit of #2132
 tools/tests/test_server_bots_wiring.py	ported by its unit of #2132
