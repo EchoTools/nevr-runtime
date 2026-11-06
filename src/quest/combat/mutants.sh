@@ -3,7 +3,12 @@
 # source in this checkout, builds the module's host test (the `combat` group, build/quest-host-combat) and runs it. A mutant is killed when
 # the build succeeds and the test fails. A mutant that does not compile is reported as NOT A KILL (the build, not the test, said no), and a
 # mutant the test passes SURVIVED. The file is put back from a copy taken before the run (and its modification time moved, so ninja
-# rebuilds it) after every mutant and when the script ends, however it ends. Exit status: 0 when every mutant was killed, 1 otherwise.
+# rebuilds it) after every mutant and when the script ends, however it ends. Exit status: 0 when every mutant was killed and at least one ran;
+# 1 when one survived, did not compile or the final rebuild failed; 2 when none ran (a filter that matches nothing, or an empty list).
+#
+# A line of the list is `runm <name> <file> <sed> [<build dir under build/> <test target>]`. The two last words name another host-test
+# build and program when the mutated file is shared (combat_install.cpp, quest_config.cpp: `quest-host-shared quest_config_test`); the
+# default is this group's build and `<module>_test`.
 #
 # Run it in the build slice, from the repository root's checkout, after `just test-quest-combat` has configured the tree:
 #   systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G src/quest/combat/mutants.sh sendguard
@@ -32,7 +37,8 @@ notkill=0
 killed=0
 # runm <name> <file relative to the repository root> <sed expression>
 runm() {
-  local name="$1" file="$2" expr="$3"
+  local name="$1" file="$2" expr="$3" dir="${4:-quest-host-combat}" target="${5:-${module}_test}"
+  local bdir="$root/build/$dir"
   if [ -n "$only" ] && ! [[ "$name" =~ $only ]]; then return 0; fi
   cp -p -- "$root/$file" "$backup/file"
   current="$file"
@@ -44,10 +50,10 @@ runm() {
     return 0
   fi
   touch -- "$root/$file"
-  if ! cmake --build "$build" --target "${module}_test" >"$backup/build.log" 2>&1; then
+  if ! cmake --build "$bdir" --target "$target" >"$backup/build.log" 2>&1; then
     echo "MUTANT $name: NOT A KILL, it does not compile"
     notkill=$((notkill + 1))
-  elif ctest --test-dir "$build" -R "^${module}_test$" >"$backup/test.log" 2>&1; then
+  elif ctest --test-dir "$bdir" -R "^${target}\$" >"$backup/test.log" 2>&1; then
     echo "MUTANT $name: SURVIVED"
     survived=$((survived + 1))
   else
@@ -58,7 +64,15 @@ runm() {
 }
 # shellcheck source=/dev/null
 source "$list"
-# Rebuild the restored tree once, so the build directory is left as the checkout has it.
-cmake --build "$build" --target "${module}_test" >/dev/null 2>&1
+# Rebuild the restored tree once, so the build directories are left as the checkout has it; a failure here is a failure of the run.
+rebuilt=0
+for d in quest-host-combat quest-host-shared; do
+  [ -f "$root/build/$d/build.ninja" ] || continue
+  cmake --build "$root/build/$d" >/dev/null 2>&1 || { echo "mutants.sh $module: the rebuild of $d after the run failed" >&2; rebuilt=1; }
+done
 echo "mutants.sh $module: $killed killed, $survived survived, $notkill not a kill"
-[ "$survived" -eq 0 ] && [ "$notkill" -eq 0 ]
+if [ $((killed + survived + notkill)) -eq 0 ]; then
+  echo "mutants.sh $module: no mutant ran (the filter '${only}' matches none, or the list is empty)" >&2
+  exit 2
+fi
+[ "$survived" -eq 0 ] && [ "$notkill" -eq 0 ] && [ "$rebuilt" -eq 0 ]

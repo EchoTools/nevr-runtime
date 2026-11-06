@@ -8,6 +8,7 @@
 
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
+#include "quest/sentinel/sentinel_log.h"
 
 namespace nevr_quest::combat::sendguard {
 
@@ -48,10 +49,23 @@ bool NamedLevelAbsent(const void* context, const std::uint64_t* data) noexcept {
   return lookup(space, data[0]) == nullptr;
 }
 
+// The counts so far. Debug while the process runs, Info once at its end.
+void LogStats(bool final) noexcept {
+  sentinel::LogFields(final ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kDebug, "combat_sendguard_stats",
+                      {{"passed", g_passed.load(std::memory_order_relaxed)},
+                       {"dropped", g_dropped.load(std::memory_order_relaxed)},
+                       {"final", final ? 1 : 0},
+                       {"consequence", "passed is the sends that reached the game's own function, dropped the sends to a game space that is "
+                                       "not loaded; their sum over the run's time is the call rate of CSendEventNode::Enter"}});
+}
+
 // Written after the lookup returned and instead of the call to the stock function, so no game frame is live above it.
 void LogDrop(const std::uint64_t* data) noexcept {
   const unsigned n = g_dropped.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (n > kDropLines) return;
+  if (n > kDropLines) {
+    if ((n & (kStatsDropEvery - 1)) == 0) LogStats(false);  // the drops after the eighth leave a trace
+    return;
+  }
   char level[19];
   char event[19];
   char actor[19];
@@ -60,7 +74,8 @@ void LogDrop(const std::uint64_t* data) noexcept {
                        {"level_key", sentinel::HexString(level, data[0])},
                        {"event_key", sentinel::HexString(event, data[1])},
                        {"actor_key", sentinel::HexString(actor, data[2])},
-                       {"consequence", "the send was dropped: the game space the node names is not loaded (the stock function would fault)"}});
+                       {"consequence", "the send was dropped: the game space the node names is not loaded (the stock function would fault, or "
+                                       "report a missing actor, which is now not reported)"}});
 }
 
 void EnterHandler(EnterThunk::Fn original, void* context, const void* data) noexcept {
@@ -69,8 +84,10 @@ void EnterHandler(EnterThunk::Fn original, void* context, const void* data) noex
     LogDrop(node);
     return;
   }
-  g_passed.fetch_add(1, std::memory_order_relaxed);
+  const unsigned n = g_passed.fetch_add(1, std::memory_order_relaxed) + 1;
   original(context, data);
+  // After the game's function returned, so no game frame is live above the log.
+  if ((n & (kStatsEvery - 1)) == 0) LogStats(false);
 }
 
 NEVR_HOOK_RECORD(kEnterHook, EnterThunk, &EnterHandler);
@@ -118,7 +135,7 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool enabled, const char* l
                         {{"result", "off"},
                          {"reason", "off_config"},
                          {"consequence", "combat.sendguard is false: a send to a game space that is not loaded reaches the stock function"}});
-    return {true, "off_config"};
+    return {false, "off_config", true};
   }
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(pinned::kLibR15, &image)) return Refused("module_not_loaded", nullptr);
@@ -147,7 +164,14 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, bool enabled, const char* l
 }
 
 ModuleResult Install() noexcept {
-  return InstallAt(&sentinel::FindLoadedImage, combat::Config().sendguard.on, kLegacySwitchDir);
+  char dir[320];
+  const int wrote = std::snprintf(dir, sizeof(dir), "%s/%s", sentinel::FilesDir(), kLegacySwitchSubdir);
+  const bool fits = wrote >= 0 && static_cast<std::size_t>(wrote) < sizeof(dir);
+  return InstallAt(&sentinel::FindLoadedImage, combat::Config().sendguard.on, fits ? dir : nullptr);
+}
+
+void NoteEnd() noexcept {
+  if (g_hook.installed()) LogStats(true);
 }
 
 Stats CurrentStats() noexcept { return {g_dropped.load(std::memory_order_relaxed), g_passed.load(std::memory_order_relaxed)}; }

@@ -16,7 +16,7 @@ namespace {
 // The registration table, in install order (combat_install.h, "The table"). Each module's unit adds its row at the position the q15t
 // plugin installed it, and nowhere else. The count is deduced.
 constexpr std::array kModules{
-    Module{"sendguard", nullptr, &sendguard::Install},
+    Module{"sendguard", nullptr, &sendguard::Install, &sendguard::NoteEnd},
 };
 
 // Per phase: 0 not yet, 1 ran or was found inactive, 2 ended as not started. One atomic each: the early step runs on the constructor's
@@ -61,7 +61,9 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     if (fn == nullptr) continue;
     const ModuleResult result = fn();
     ++outcome.modules;
-    if (result.installed) {
+    if (result.off) {
+      ++outcome.off;
+    } else if (result.installed) {
       ++outcome.installed;
     } else {
       ++outcome.failed;
@@ -80,20 +82,36 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
   if (outcome.modules == 0) {
     std::snprintf(msg, sizeof(msg), "no combat module has a step in this phase yet; nothing of combat's is installed");
   } else {
-    std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s", outcome.installed, outcome.modules,
+    char off[64] = "";
+    if (outcome.off != 0) std::snprintf(off, sizeof(off), "; %zu off by %s config key", outcome.off, outcome.off == 1 ? "its" : "their");
+    std::snprintf(msg, sizeof(msg), "%zu of %zu combat modules installed in this phase%s%s", outcome.installed, outcome.modules, off,
                   outcome.failed == 0 ? "" : "; the others keep the game's own behaviour");
   }
   sentinel::LogFields(outcome.failed == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_install",
                       {{"phase", PhaseName(phase)}, {"state", "ran"}, {"variant", build_variant::VariantName(RecordedVariant())},
                        {"active", 1}, {"active_reason", ReasonName(ActiveReason())}, {"modules", outcome.modules},
-                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"results", results},
+                       {"installed", outcome.installed}, {"failed", outcome.failed}, {"off", outcome.off}, {"results", results},
                        {"results_truncated", truncated ? 1 : 0}, {"msg", msg}});
   return outcome;
+}
+
+const Module* ShippedModules(std::size_t* count) noexcept {
+  *count = kModules.size();
+  return kModules.data();
 }
 
 Outcome InstallEarly() noexcept { return RunPhase(Phase::kEarly, kModules.data(), kModules.size()); }
 
 Outcome InstallNormal() noexcept { return RunPhase(Phase::kNormal, kModules.data(), kModules.size()); }
+
+void RunEnd(const Module* table, std::size_t count) noexcept {
+  if (!Active() || StateOf(Phase::kNormal).load(std::memory_order_acquire) != kDone) return;  // nothing was installed
+  for (std::size_t i = 0; i < count; ++i) {
+    if (table[i].end != nullptr) table[i].end();
+  }
+}
+
+void NoteProcessEnd() noexcept { RunEnd(kModules.data(), kModules.size()); }
 
 void NoteNormalNotStarted(const char* reasonToken) noexcept {
   if (!Active()) return;  // combat does not run here: nothing was owed

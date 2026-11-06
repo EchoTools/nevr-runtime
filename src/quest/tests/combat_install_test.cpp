@@ -18,6 +18,11 @@
 #include "quest/combat/combat_active.h"
 #include "quest/tests/test_check.h"
 
+// sendguard's table row reads the sentinel's files folder (the plugin's old switch file); the test names a folder that does not exist.
+namespace sentinel {
+const char* FilesDir() { return "/nonexistent-nevr-files"; }
+}  // namespace sentinel
+
 namespace {
 
 namespace bv = nevr_quest::build_variant;
@@ -50,6 +55,9 @@ combat::ModuleResult NormalA() noexcept { g_calls.emplace_back("a_normal"); retu
 combat::ModuleResult NormalImpact() noexcept { g_calls.emplace_back("impactsnd"); return Ok(); }
 combat::ModuleResult NormalDecals() noexcept { g_calls.emplace_back("decals"); return Ok(); }
 combat::ModuleResult NormalFails() noexcept { g_calls.emplace_back("fails"); return Refused(); }
+combat::ModuleResult NormalOff() noexcept { g_calls.emplace_back("off"); return {false, "off_config", true}; }
+void EndA() noexcept { g_calls.emplace_back("a_end"); }
+void EndB() noexcept { g_calls.emplace_back("b_end"); }
 
 // Combat runs in this process (a combat APK) or does not (a plain release).
 void Process(bv::Variant variant) {
@@ -112,6 +120,49 @@ void EachPhaseWritesOneAggregateLine() {
     QCHECK(Has(l.text, "\"results\":\"alpha=installed impactsnd=installed decals=installed\""));
     QCHECK(Has(l.text, "\"msg\":\"3 of 3 combat modules installed in this phase\""));
   }
+  Done();
+}
+
+// A module switched off by its key is counted apart: neither installed nor failed, the line stays Info, and the message says so.
+void AModuleSwitchedOffByItsKeyIsCountedApart() {
+  Process(bv::Variant::kCombat);
+  const combat::Module table[] = {{"alpha", nullptr, &NormalA}, {"switched", nullptr, &NormalOff}};
+  const combat::Outcome o = combat::RunPhase(combat::Phase::kNormal, table, 2);
+  QCHECK(o.ran && o.modules == 2 && o.installed == 1 && o.failed == 0 && o.off == 1);
+  std::vector<Line> lines = Lines("combat_install");
+  QCHECK(lines.size() == 1U);
+  if (lines.size() == 1U) {
+    QCHECK(lines[0].level == sentinel::LogLevel::kInfo);
+    QCHECK(Has(lines[0].text, "\"modules\":2,\"installed\":1,\"failed\":0,\"off\":1,"));
+    QCHECK(Has(lines[0].text, "\"results\":\"alpha=installed switched=off_config\""));
+    QCHECK(Has(lines[0].text, "\"msg\":\"1 of 2 combat modules installed in this phase; 1 off by its config key\""));
+  }
+  // Every module off: nothing was installed, and the line says 0 of 1, not 1 of 1.
+  Process(bv::Variant::kCombat);
+  const combat::Module only[] = {{"switched", nullptr, &NormalOff}};
+  const combat::Outcome none = combat::RunPhase(combat::Phase::kNormal, only, 1);
+  QCHECK(none.modules == 1 && none.installed == 0 && none.failed == 0 && none.off == 1);
+  lines = Lines("combat_install");
+  QCHECK(lines.size() == 1U && lines[0].level == sentinel::LogLevel::kInfo);
+  if (lines.size() == 1U) QCHECK(Has(lines[0].text, "\"msg\":\"0 of 1 combat modules installed in this phase; 1 off by its config key\""));
+  Done();
+}
+
+// The end of the process: each module's end step runs in table order, once combat runs here and its normal step ran; never before the step
+// ran, and never in a plain release.
+void TheEndOfTheProcessRunsEachModulesEndStep() {
+  const combat::Module table[] = {{"a", nullptr, &NormalA, &EndA}, {"none", nullptr, &NormalDecals}, {"b", nullptr, &NormalImpact, &EndB}};
+  Process(bv::Variant::kCombat);
+  combat::RunEnd(table, 3);
+  QCHECK(g_calls.empty());  // the normal step has not run
+  combat::RunPhase(combat::Phase::kNormal, table, 3);
+  g_calls.clear();
+  combat::RunEnd(table, 3);
+  QCHECK((g_calls == std::vector<std::string>{"a_end", "b_end"}));
+  Process(bv::Variant::kNone);
+  combat::RunPhase(combat::Phase::kNormal, table, 3);
+  combat::RunEnd(table, 3);
+  QCHECK(g_calls.empty());
   Done();
 }
 
@@ -205,6 +256,17 @@ void ALongListIsCutAndSaysSoWhileTheCountsStayExact() {
   Done();
 }
 
+// The shipped table's rows: sendguard installs in the normal phase only and has an end-of-process step.
+void TheShippedTableRowsAreWiredToTheirSteps() {
+  std::size_t count = 0;
+  const combat::Module* table = combat::ShippedModules(&count);
+  QCHECK(count == 1);
+  if (count == 1) {
+    QCHECK(std::strcmp(table[0].name, "sendguard") == 0);
+    QCHECK(table[0].early == nullptr && table[0].normal != nullptr && table[0].end != nullptr);
+  }
+}
+
 // The shipped table: sendguard has a step in the normal phase and none in the early one (#2179). On the host there is no libr15 to hook,
 // so its row reports the refusal, and the line says so at Warning.
 void TheShippedTableHoldsSendguardInTheNormalPhase() {
@@ -226,6 +288,21 @@ void TheShippedTableHoldsSendguardInTheNormalPhase() {
   Done();
 }
 
+// The shipped table with combat.sendguard false: the row answers off, and the phase line counts it apart (0 installed, 0 failed, 1 off).
+void TheShippedRowSwitchedOffByTheConfigIsCountedAsOff() {
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig cfg;
+  cfg.sendguard = {false, nevr_quest::Source::kFile};
+  combat::LogConfig(cfg);
+  g_lines.clear();
+  const combat::Outcome normal = combat::InstallNormal();
+  QCHECK(normal.ran && normal.modules == 1 && normal.installed == 0 && normal.failed == 0 && normal.off == 1);
+  const std::vector<Line> lines = Lines("combat_install");
+  QCHECK(lines.size() == 1U && lines[0].level == sentinel::LogLevel::kInfo);
+  if (lines.size() == 1U) QCHECK(Has(lines[0].text, "\"results\":\"sendguard=off_config\""));
+  Done();
+}
+
 // The real steps in a plain release: nothing installs, and the one line is the skip.
 void TheRealStepsConsultTheGate() {
   Process(bv::Variant::kNone);
@@ -233,6 +310,9 @@ void TheRealStepsConsultTheGate() {
   QCHECK(!combat::InstallNormal().ran);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 1U);
+  QCHECK(Lines("combat_sendguard_install").empty() && Lines("combat_sendguard_stats").empty());  // no module of combat's ran or spoke
+  combat::NoteProcessEnd();
+  QCHECK(Lines("combat_sendguard_stats").empty());
   Done();
 }
 
@@ -303,12 +383,16 @@ int main() {
   NamesAreStableTokens();
   EachPhaseRunsItsModulesInTableOrder();
   EachPhaseWritesOneAggregateLine();
+  AModuleSwitchedOffByItsKeyIsCountedApart();
+  TheEndOfTheProcessRunsEachModulesEndStep();
   AFailingModuleIsNamedAndTheOthersStillInstall();
   APlainReleaseInstallsNothingAndSaysSoOnce();
   NothingInstallsBeforeTheAnswerIsMade();
   APhaseRunsOnce();
   ALongListIsCutAndSaysSoWhileTheCountsStayExact();
+  TheShippedTableRowsAreWiredToTheirSteps();
   TheShippedTableHoldsSendguardInTheNormalPhase();
+  TheShippedRowSwitchedOffByTheConfigIsCountedAsOff();
   TheRealStepsConsultTheGate();
   ANormalStepThatNeverRanIsRecordedAsNotStartedOnce();
   TheConfigLineNamesEachKeyItsValueAndItsSource();

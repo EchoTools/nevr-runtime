@@ -15,6 +15,7 @@
 
 #include <elf.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cstddef>
@@ -28,6 +29,12 @@
 #include "quest/combat/combat_install.h"
 #include "quest/combat/sendguard.h"
 #include "quest/tests/test_check.h"
+
+// The sentinel's files folder, which the module's production path reads through sentinel::FilesDir(): the test names a folder of its own.
+static std::string g_filesDir;
+namespace sentinel {
+const char* FilesDir() { return g_filesDir.c_str(); }
+}  // namespace sentinel
 
 namespace {
 
@@ -359,7 +366,7 @@ void ASendToAnUnloadedGameSpaceIsDropped() {
   QCHECK(OneLine("combat_sendguard_dropped") ==
          "\"event\":\"combat_sendguard_dropped\",\"n\":1,\"level_key\":\"0x0000000000000077\",\"event_key\":\"0x0000000000000088\","
          "\"actor_key\":\"0x0000000000000099\",\"consequence\":\"the send was dropped: the game space the node names is not loaded "
-         "(the stock function would fault)\"}");
+         "(the stock function would fault, or report a missing actor, which is now not reported)\"}");
   QCHECK(LinesOf("combat_sendguard_dropped")[0].level == sentinel::LogLevel::kInfo);
   Finish();
 }
@@ -454,6 +461,11 @@ void AWordThatIsNotEnterIsRefused() {
   QCHECK(*SlotPtr() == reinterpret_cast<void*>(&ModelEnter));
   QCHECK(Has(OneLine("combat_sendguard_install"), "\"result\":\"refused\",\"hook\":\"original_mismatch\""));
   QCHECK(LinesOf("combat_sendguard_install")[0].level == sentinel::LogLevel::kError);
+  // The refused slot leaves the handler off: the thunk, called by itself, goes straight to the original and does not guard.
+  const std::uint64_t data[3] = {0x77, 1, 2};
+  g_lookupAnswer = nullptr;
+  reinterpret_cast<EnterFn*>(sg::EnterThunk::EntryAddress())(g_ctx, data);
+  QCHECK(g_enterCalls == 1 && g_lookupCalls == 0 && sg::CurrentStats().dropped == 0);
   Finish();
 }
 
@@ -494,7 +506,7 @@ void TheOtherRefusalsSayWhy() {
 // and the status are what the sendguard row of the combat_install line shows.
 void TheSwitchTurnsTheModuleOff() {
   const combat::ModuleResult r = InstallFresh(ImageOptions{}, /*enabled=*/false);
-  QCHECK(r.installed && std::strcmp(r.status, "off_config") == 0);
+  QCHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0);  // off is its own answer: not installed, not failed
   QCHECK(*SlotPtr() == StockWord());
   QCHECK(OneLine("combat_sendguard_install") ==
          "\"event\":\"combat_sendguard_install\",\"result\":\"off\",\"reason\":\"off_config\","
@@ -526,7 +538,7 @@ void TheOldSwitchFileChangesNothingAndIsToldSo() {
   QCHECK(LinesOf("combat_sendguard_legacy_switch")[0].level == sentinel::LogLevel::kWarn);
   Finish();
   const combat::ModuleResult off = InstallFresh(ImageOptions{}, false, dir.c_str());
-  QCHECK(off.installed && std::strcmp(off.status, "off_config") == 0 && LinesOf("combat_sendguard_legacy_switch").size() == 1);
+  QCHECK(off.off && std::strcmp(off.status, "off_config") == 0 && LinesOf("combat_sendguard_legacy_switch").size() == 1);
   Finish();
   unlink(file.c_str());
   rmdir(dir.c_str());
@@ -544,8 +556,73 @@ void TheTablesRowReadsTheResolvedConfiguration() {
   cfg.sendguard = {false, nevr_quest::Source::kFile};
   combat::LogConfig(cfg);
   r = sg::Install();
-  QCHECK(r.installed && std::strcmp(r.status, "off_config") == 0);
+  QCHECK(r.off && !r.installed && std::strcmp(r.status, "off_config") == 0);
   combat::ResetInstallForTest();
+  Finish();
+}
+
+// The counts: Debug every kStatsEvery passes and every kStatsDropEvery drops after the eighth, Info once at the end of the process, and nothing
+// at the end when the wrapper is not installed.
+void TheCountsAreWrittenSoAHeadsetRunGivesTheRate() {
+  QCHECK(InstallFresh().installed);
+  g_lines.clear();
+  const std::uint64_t pass[3] = {kNoLevel, 1, 2};
+  for (unsigned i = 0; i < sg::kStatsEvery - 1; ++i) CallThroughSlot(g_ctx, pass);
+  QCHECK(LinesOf("combat_sendguard_stats").empty());
+  CallThroughSlot(g_ctx, pass);
+  QCHECK(OneLine("combat_sendguard_stats") ==
+         "\"event\":\"combat_sendguard_stats\",\"passed\":16384,\"dropped\":0,\"final\":0,\"consequence\":\"passed is the sends that reached "
+         "the game's own function, dropped the sends to a game space that is not loaded; their sum over the run's time is the call rate of "
+         "CSendEventNode::Enter\"}");
+  QCHECK(LinesOf("combat_sendguard_stats")[0].level == sentinel::LogLevel::kDebug);
+  g_lines.clear();
+  const std::uint64_t drop[3] = {0x77, 1, 2};
+  for (unsigned i = 0; i < sg::kStatsDropEvery; ++i) CallThroughSlot(g_ctx, drop);
+  QCHECK(LinesOf("combat_sendguard_dropped").size() == sg::kDropLines);  // the ninth and later drops write no dropped line ...
+  QCHECK(LinesOf("combat_sendguard_stats").size() == 1);                // ... the 1024th leaves the count
+  QCHECK(Has(LinesOf("combat_sendguard_stats")[0].text, "\"passed\":16384,\"dropped\":1024,\"final\":0"));
+  g_lines.clear();
+  sg::NoteEnd();
+  QCHECK(LinesOf("combat_sendguard_stats").size() == 1);
+  QCHECK(Has(LinesOf("combat_sendguard_stats")[0].text, "\"passed\":16384,\"dropped\":1024,\"final\":1"));
+  QCHECK(LinesOf("combat_sendguard_stats")[0].level == sentinel::LogLevel::kInfo);
+  Finish();
+  // Not installed (a refused slot, or off): nothing at the end.
+  InstallFresh(ImageOptions{nullptr, true, 0, nullptr});
+  g_lines.clear();
+  sg::NoteEnd();
+  QCHECK(g_lines.empty());
+  Finish();
+  InstallFresh(ImageOptions{}, false);
+  g_lines.clear();
+  sg::NoteEnd();
+  QCHECK(g_lines.empty());
+  Finish();
+}
+
+// The table's row finds the old switch file where the plugin kept it: below the sentinel's files folder, in q15t.
+void TheProductionPathLooksWhereThePluginKeptItsSwitchFile() {
+  char tmpl[] = "/tmp/nevr-sendguard-files-XXXXXX";
+  QCHECK(mkdtemp(tmpl) != nullptr);
+  g_filesDir = tmpl;
+  const std::string sub = g_filesDir + "/q15t";
+  QCHECK(mkdir(sub.c_str(), 0700) == 0);
+  Reset();
+  combat::ResetInstallForTest();
+  combat::ModuleResult r = sg::Install();
+  QCHECK(!r.installed && LinesOf("combat_sendguard_legacy_switch").empty());  // no file: no Warning
+  const std::string file = sub + "/sendguard.off";
+  FILE* f = std::fopen(file.c_str(), "w");
+  QCHECK(f != nullptr);
+  if (f != nullptr) std::fclose(f);
+  g_lines.clear();
+  r = sg::Install();
+  QCHECK(LinesOf("combat_sendguard_legacy_switch").size() == 1);
+  QCHECK(LinesOf("combat_sendguard_legacy_switch")[0].level == sentinel::LogLevel::kWarn);
+  unlink(file.c_str());
+  rmdir(sub.c_str());
+  rmdir(g_filesDir.c_str());
+  g_filesDir.clear();
   Finish();
 }
 
@@ -566,6 +643,8 @@ int main() {
   TheSwitchTurnsTheModuleOff();
   TheOldSwitchFileChangesNothingAndIsToldSo();
   TheTablesRowReadsTheResolvedConfiguration();
+  TheCountsAreWrittenSoAHeadsetRunGivesTheRate();
+  TheProductionPathLooksWhereThePluginKeptItsSwitchFile();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "sendguard_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

@@ -24,11 +24,11 @@ runm sg_null_chain         $S "s/  if (x9 == nullptr) return false;/  (void)x9;/
 # the original is called with the node's own arguments, and passes are counted
 runm sg_arg_swap           $S "s/  original(context, data);/  original(const_cast<void*>(data), context);/"
 runm sg_arg_null_data      $S "s/  original(context, data);/  original(context, nullptr);/"
-runm sg_pass_not_counted   $S "s/g_passed.fetch_add(1, std::memory_order_relaxed);/g_passed.fetch_add(0, std::memory_order_relaxed);/"
+runm sg_pass_not_counted   $S "s/const unsigned n = g_passed.fetch_add(1, std::memory_order_relaxed) + 1;/const unsigned n = g_passed.fetch_add(0, std::memory_order_relaxed) + 1;/"
 # the log: every drop counted, the first kDropLines written, each key named
 runm sg_drop_not_counted   $S "s/const unsigned n = g_dropped.fetch_add(1, std::memory_order_relaxed) + 1;/const unsigned n = g_dropped.fetch_add(0, std::memory_order_relaxed) + 1;/"
 runm sg_drop_lines_cap     $H "s/kDropLines = 8;/kDropLines = 9;/"
-runm sg_drop_no_cap        $S "s/  if (n > kDropLines) return;/  (void)kDropLines;/"
+runm sg_drop_no_cap        $S "s/  if (n > kDropLines) {/  if (false \&\& n > kDropLines) {/"
 runm sg_drop_level_key     $S "s/sentinel::HexString(level, data\[0\])/sentinel::HexString(level, data[1])/"
 runm sg_drop_event_key     $S "s/sentinel::HexString(event, data\[1\])/sentinel::HexString(event, data[2])/"
 runm sg_drop_actor_key     $S "s/sentinel::HexString(actor, data\[2\])/sentinel::HexString(actor, data[0])/"
@@ -58,10 +58,43 @@ runm sg_pin_row_dropped    $T "s/    {\"Enter: bl GameSpaceMT\", 0x2725abcULL, {
 # the switch and the old switch file
 runm sg_off_ignored        $S "s/  if (!enabled) {/  if (!enabled \&\& false) {/"
 runm sg_off_inverted       $S "s/  if (!enabled) {/  if (enabled) {/"
-runm sg_off_reports_failed $S "s/    return {true, \"off_config\"};/    return {false, \"off_config\"};/"
 runm sg_off_not_logged     $S "s/{\"result\", \"off\"},/{\"result\", \"on\"},/"
 runm sg_legacy_not_told    $S "s/  if (LegacySwitchPresent(legacySwitchDir)) {/  if (false \&\& LegacySwitchPresent(legacySwitchDir)) {/"
 runm sg_legacy_always      $S "s/ \&\& access(path, F_OK) == 0;/;/"
 runm sg_legacy_turns_off   $S "s/  if (!enabled) {/  if (!enabled || LegacySwitchPresent(legacySwitchDir)) {/"
 runm sg_legacy_quiet       $S "s/sentinel::LogLevel::kWarn, \"combat_sendguard_legacy_switch\"/sentinel::LogLevel::kInfo, \"combat_sendguard_legacy_switch\"/"
 runm sg_row_ignores_config $S "s/combat::Config().sendguard.on/true/"
+# the counts: a Debug line every kStatsEvery passes and kStatsDropEvery drops, one Info line at the end when the wrapper is installed
+runm sg_stats_pass_never   $S "s/  if ((n \& (kStatsEvery - 1)) == 0) LogStats(false);/  (void)n;/"
+runm sg_stats_pass_early   $S "s/  if ((n \& (kStatsEvery - 1)) == 0) LogStats(false);/  if ((n \& (kStatsEvery \/ 2 - 1)) == 0) LogStats(false);/"
+runm sg_stats_drop_never   $S "s/    if ((n \& (kStatsDropEvery - 1)) == 0) LogStats(false);  \/\/ the drops after the eighth leave a trace/    (void)n;/"
+runm sg_stats_final_flag   $S "s/{\"final\", final ? 1 : 0},/{\"final\", 0},/"
+runm sg_stats_level        $S "s/final ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kDebug, \"combat_sendguard_stats\"/sentinel::LogLevel::kInfo, \"combat_sendguard_stats\"/"
+runm sg_stats_passed_field $S "s/{{\"passed\", g_passed.load(std::memory_order_relaxed)},/{{\"passed\", g_dropped.load(std::memory_order_relaxed)},/"
+runm sg_end_always         $S "s/  if (g_hook.installed()) LogStats(true);/  LogStats(true);/"
+runm sg_end_never          $S "s/  if (g_hook.installed()) LogStats(true);/  (void)g_hook;/"
+# off is its own answer; the refused slot leaves the handler off; the old switch file is looked for below the files folder
+runm sg_off_is_installed   $S "s/    return {false, \"off_config\", true};/    return {true, \"off_config\", true};/"
+runm sg_off_not_off        $S "s/    return {false, \"off_config\", true};/    return {false, \"off_config\", false};/"
+runm sg_refused_stays_armed $S "s/  if (!installed \&\& !g_hook.installed()) EnterThunk::Disarm();/  (void)g_hook;/"
+runm sg_legacy_subdir      $H "s/kLegacySwitchSubdir = \"q15t\";/kLegacySwitchSubdir = \"q15x\";/"
+runm sg_legacy_not_looked  $S "s/fits ? dir : nullptr);/fits ? nullptr : nullptr);/"
+# the shared files this module changed (each built and run in its own test)
+CI=src/quest/combat/combat_install.cpp
+runm ci_off_as_installed   $CI "s/    if (result.off) {/    if (false) {/" quest-host-combat combat_install_test
+runm ci_off_not_in_line    $CI "s/{\"failed\", outcome.failed}, {\"off\", outcome.off},/{\"failed\", outcome.failed},/" quest-host-combat combat_install_test
+runm ci_off_no_message     $CI "s/    if (outcome.off != 0) std::snprintf/    if (false) std::snprintf/" quest-host-combat combat_install_test
+runm ci_end_before_step    $CI "s/ || StateOf(Phase::kNormal).load(std::memory_order_acquire) != kDone) return;  \/\/ nothing was installed/) return;/" quest-host-combat combat_install_test
+runm ci_end_when_inactive  $CI "s/  if (!Active() || StateOf(Phase::kNormal)/  if (StateOf(Phase::kNormal)/" quest-host-combat combat_install_test
+runm ci_end_not_called     $CI "s/    if (table\[i\].end != nullptr) table\[i\].end();/    (void)table;/" quest-host-combat combat_install_test
+runm ci_row_end_null       $CI "s/&sendguard::Install, \&sendguard::NoteEnd}/\&sendguard::Install, nullptr}/" quest-host-combat combat_install_test
+runm ci_row_early          $CI "s/Module{\"sendguard\", nullptr, \&sendguard::Install,/Module{\"sendguard\", \&sendguard::Install, nullptr,/" quest-host-combat combat_install_test
+runm ci_config_not_kept    $CI "s/^  g_config = config;\$//" quest-host-combat combat_install_test
+runm ci_config_line_value  $CI "s/{\"sendguard\", config.sendguard.on ? 1 : 0},/{\"sendguard\", 1},/" quest-host-combat combat_install_test
+QC=src/quest/sentinel/quest_config.cpp
+runm qc_default_off        $QC "s/const bool on = ReadBool(cfg, key, true, r);/const bool on = ReadBool(cfg, key, false, r);/" quest-host-shared quest_config_test
+runm qc_key_typo           $QC "s/kCombatSendguardKey = \"combat.sendguard\";/kCombatSendguardKey = \"combat.sendguards\";/" quest-host-shared quest_config_test
+runm qc_not_assigned       $QC "s/  r.config.combat.sendguard = ReadCombatSwitch(cfg, kCombatSendguardKey, r);/  (void)ReadCombatSwitch(cfg, kCombatSendguardKey, r);/" quest-host-shared quest_config_test
+runm qc_source_absent      $QC "s/return {on, given ? Source::kFile : Source::kAbsent};/return {on, given ? Source::kAbsent : Source::kAbsent};/" quest-host-shared quest_config_test
+runm qc_no_kind_warn       $QC "s/  if (!cfg.GetString(key) \&\& cfg.Kind(key) != nevr::NodeKind::kAbsent) {/  if (false) {/" quest-host-shared quest_config_test
+runm nc_known_key          src/core/nevr_config.cpp "s/{\"combat\", {\"force\", \"sendguard\"}},/{\"combat\", {\"force\"}},/" quest-host-shared quest_config_test
