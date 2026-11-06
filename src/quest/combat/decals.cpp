@@ -1,4 +1,4 @@
-#include "decals.h"
+#include "quest/combat/decals.h"
 
 #include <dlfcn.h>
 #include <pthread.h>
@@ -8,20 +8,25 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <new>
 
-#include "module_switch.h"
-#include "plugin_log.h"
-#include "safe_read.h"
+#include "quest/combat/combat_level_targets.h"
+#include "quest/combat/decals_targets.h"
+#include "quest/combat/legacy_switch.h"
+#include "quest/combat/safe_read.h"
+#include "quest/sentinel/hook_install.h"
+#include "quest/sentinel/hook_log.h"
 
-namespace q15t {
+namespace nevr_quest::combat::decals {
+
 namespace {
 
-using namespace decals;
+using sentinel::LogLevel;
 
-// Engine layout the module reads and writes (docs/quest/q15t/modules/decals.md, "Engine facts").
+// Engine layout the module reads and writes (docs/quest/combat/decals.md, "Engine facts").
 constexpr std::uintptr_t kSysAllocator = 0x30;   // CR15NetBulletCS: its CAllocator*
 constexpr std::uintptr_t kSysSpace = 0x80;       // CR15NetBulletCS: the CncaGameSpace that owns it
-constexpr std::uintptr_t kSpaceLevel = 0x58;     // CncaGameSpace: the CSymbol64 of the level it loaded
+constexpr std::uintptr_t kSpaceLevel = level::targets::kGamespaceLevelOffset;  // CncaGameSpace: the CSymbol64 of the level it loaded
 constexpr std::size_t kNodeBytes = 0x2048;       // sizeof(CDynamicMeshNode)
 constexpr std::uintptr_t kNodeMesh = 0xa8;       // CDynamicMeshNode: its CGDynamicMesh
 constexpr std::uintptr_t kNodeVertexCount = 0x98, kNodeIndexCount = 0xa0;
@@ -31,14 +36,13 @@ constexpr std::size_t kVtDestructor = 0x0, kVtLink = 0x58, kVtVisible = 0x60;  /
 constexpr std::size_t kVtAlloc = 0x10, kVtFree = 0x38;                         // CAllocator vtable byte offsets
 constexpr int kNodeLineCap = 64;
 
-constexpr const char kUpdateSymbol[] = "_ZN10NRadEngine8NRadGame15CR15NetBulletCS14UpdateMovementEv";
-
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;  // the bullet systems of several game spaces update on their own threads
 Table g_table;
 Host g_host;
-DecalsApi g_api;
+Api g_api;
 std::uint16_t g_idx[12 * kMaxNodeQuads];
-std::atomic<std::uintptr_t> g_real_update{0}, g_real_shutdown{0};
+sentinel::GotHook g_updateHook;
+sentinel::GotHook g_shutdownHook;
 std::atomic<bool> g_on{false};
 std::atomic<int> g_node_lines{0};
 
@@ -61,22 +65,22 @@ void SetVisible(std::uintptr_t node, std::uint32_t on) {
 
 bool OpLevelOf(void*, std::uintptr_t sys, std::uint64_t* level) {
   bool ok = true;
-  const auto space = Rd<std::uintptr_t>(sys + kSysSpace, &ok);
+  const auto space = SafeRead<std::uintptr_t>(sys + kSysSpace, &ok);
   if (!ok || space == 0) return false;
-  const auto l = Rd<std::uint64_t>(space + kSpaceLevel, &ok);
+  const auto l = SafeRead<std::uint64_t>(space + kSpaceLevel, &ok);
   if (!ok || l == 0 || l == ~0ull) return false;  // the constructor leaves -1 there until LoadLevel stores the level's symbol
   *level = l;
   return true;
 }
 
 std::uintptr_t OpCreate(void*, std::uintptr_t sys, const Group& g, int* rc, std::uintptr_t* tried, bool* blended) {
-  const DecalsApi& a = g_api;
+  const Api& a = g_api;
   *rc = -1;
   *tried = 0;
   *blended = false;
   if (*a.gs_initialized == 0 || *a.mem_context == nullptr) return 0;  // graphics are not up yet: the next try
   bool ok = true;
-  void* const alloc = reinterpret_cast<void*>(Rd<std::uintptr_t>(sys + kSysAllocator, &ok));
+  void* const alloc = reinterpret_cast<void*>(SafeRead<std::uintptr_t>(sys + kSysAllocator, &ok));
   if (!ok || alloc == nullptr) return 0;
   void* const prev = a.mem_current();
   a.mem_set(alloc);
@@ -89,9 +93,9 @@ std::uintptr_t OpCreate(void*, std::uintptr_t sys, const Group& g, int* rc, std:
   a.ctor(node);
   Vt<void (*)(void*, void*)>(node, kVtLink)(node, nullptr);
   Vt<void (*)(void*, std::uint32_t)>(node, kVtVisible)(node, 0);
-  const DecalsVertexFormat fmt = a.vertex_format();
+  const VertexFormat fmt = a.vertex_format();
   void** const ctx = *a.mem_context;
-  const DecalsMeshInit in{g.mat, 4ull * g.n, 12ull * g.n, 2, 1, 0, 0, ctx[0], ctx[1], g_idx, nullptr};
+  const MeshInit in{g.mat, 4ull * g.n, 12ull * g.n, 2, 1, 0, 0, ctx[0], ctx[1], g_idx, nullptr};
   char* const mesh = static_cast<char*>(node) + kNodeMesh;
   *rc = a.init(mesh, &fmt, &in);
   if (*rc != 0) {  // the node is destroyed and freed again
@@ -116,14 +120,14 @@ std::uintptr_t OpCreate(void*, std::uintptr_t sys, const Group& g, int* rc, std:
 }
 
 void OpDestroy(void*, std::uintptr_t sys, std::uintptr_t nodeAddr) {
-  const DecalsApi& a = g_api;
+  const Api& a = g_api;
   void* const node = reinterpret_cast<void*>(nodeAddr);
   bool ok = true;
-  void* const alloc = reinterpret_cast<void*>(Rd<std::uintptr_t>(sys + kSysAllocator, &ok));
+  void* const alloc = reinterpret_cast<void*>(SafeRead<std::uintptr_t>(sys + kSysAllocator, &ok));
   if (!ok || alloc == nullptr) {  // the system's allocator is gone: nothing can free the node
-    char n[24], s[24];
-    const NevrLogField f[] = {{"system", Hex(s, sizeof s, sys)}, {"node", Hex(n, sizeof n, nodeAddr)}};
-    Log(NEVR_LOG_WARNING, "decals: a node could not be destroyed, its system's allocator is unreadable; the engine keeps it", f, 2);
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_decals_node_destroy_failed",
+                        {{"system", static_cast<long long>(sys)}, {"node", static_cast<long long>(nodeAddr)},
+                         {"msg", "a node could not be destroyed because its system's allocator is unreadable; the engine keeps it"}});
     return;
   }
   Vt<void (*)(void*, std::uint32_t)>(node, kVtVisible)(node, 0);
@@ -136,7 +140,7 @@ void OpDestroy(void*, std::uintptr_t sys, std::uintptr_t nodeAddr) {
 }
 
 bool OpDraw(void*, std::uintptr_t nodeAddr, const Group& g) {
-  const DecalsApi& a = g_api;
+  const Api& a = g_api;
   void* const mesh = reinterpret_cast<void*>(nodeAddr + kNodeMesh);
   Vtx* const v = static_cast<Vtx*>(a.map(mesh));
   if (v == nullptr) return false;
@@ -153,16 +157,13 @@ void OpHide(void*, std::uintptr_t nodeAddr) { SetVisible(nodeAddr, 0); }
 std::uintptr_t OpCreateLogged(void* user, std::uintptr_t sys, const Group& g, int* rc, std::uintptr_t* tried, bool* blended) {
   const std::uintptr_t node = OpCreate(user, sys, g, rc, tried, blended);
   if (g_node_lines.fetch_add(1, std::memory_order_relaxed) < kNodeLineCap) {
-    char n[24], m[24], q[24], r[24], bl[24], s[24];
-    const NevrLogField f[] = {{"system", Hex(s, sizeof s, sys)},
-                              {"node", Hex(n, sizeof n, *tried)},
-                              {"material", Hex(m, sizeof m, g.mat)},
-                              {"quads", Dec(q, sizeof q, g.n)},
-                              {"rc", Dec(r, sizeof r, *rc)},
-                              {"blend", Dec(bl, sizeof bl, *blended ? static_cast<long long>(g.blend) : 0)}};
-    Log(node != 0 ? NEVR_LOG_INFO : NEVR_LOG_WARNING,
-        node != 0 ? "decals: node made" : "decals: node not made (rc is the engine's answer, 0 when the graphics were not up yet; the group stays off)",
-        f, 6);
+    char m[19];
+    sentinel::LogFields(node != 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "combat_decals_node",
+                        {{"made", node != 0 ? 1 : 0}, {"system", static_cast<long long>(sys)}, {"node", static_cast<long long>(*tried)},
+                         {"material", sentinel::HexString(m, g.mat)}, {"quads", g.n}, {"rc", *rc},
+                         {"blend", *blended ? static_cast<long long>(g.blend) : 0},
+                         {"msg", node != 0 ? "a decal node was made for a group of the level"
+                                           : "a decal node was not made (rc is the engine's answer, 0 when the graphics were not up yet); the group stays off"}});
   }
   return node;
 }
@@ -204,22 +205,22 @@ bool ReadFile(const char* path, std::uint8_t** out, std::size_t* len, const char
 int CandidatePaths(char (*out)[400], int max) {
   int n = 0;
   char dir[300];
-  if (n < max && ModuleDataDir(dir, sizeof dir)) std::snprintf(out[n++], 400, "%s/decals.bin", dir);
+  if (n < max && legacy::Directory(dir, sizeof dir)) std::snprintf(out[n++], 400, "%s/decals.bin", dir);
   char pkg[200];
-  if (ModulePackageName(pkg, sizeof pkg)) {
+  if (legacy::PackageName(pkg, sizeof pkg)) {
     if (n < max) std::snprintf(out[n++], 400, "/sdcard/Android/data/%s/files/afk/decals.bin", pkg);
     if (n < max) std::snprintf(out[n++], 400, "/sdcard/Android/media/%s/files/afk/decals.bin", pkg);
   }
   return n;
 }
 
-bool Resolve(DecalsApi* a, std::uintptr_t* update_fn) {
+bool Resolve(Api* a) {
   void* const h = dlopen("libr15.so", RTLD_NOW | RTLD_NOLOAD);
   if (h == nullptr) return false;
   auto S = [h](const char* name) { return dlsym(h, name); };
   a->ctor = reinterpret_cast<void (*)(void*)>(S("_ZN10NRadEngine16CDynamicMeshNodeC1Ev"));
-  a->vertex_format = reinterpret_cast<DecalsVertexFormat (*)()>(S("_ZN10NRadEngine15SDynamicMeshVtx12VertexFormatEv"));
-  a->init = reinterpret_cast<int (*)(void*, const DecalsVertexFormat*, const DecalsMeshInit*)>(
+  a->vertex_format = reinterpret_cast<VertexFormat (*)()>(S("_ZN10NRadEngine15SDynamicMeshVtx12VertexFormatEv"));
+  a->init = reinterpret_cast<int (*)(void*, const VertexFormat*, const MeshInit*)>(
       S("_ZN10NRadEngine13CGDynamicMesh10InitializeERKNS_14CGVertexFormatERKNS_17SGDynamicMeshInitE"));
   a->map = reinterpret_cast<void* (*)(void*)>(S("_ZN10NRadEngine13CGDynamicMesh11MapVerticesEv"));
   a->unmap = reinterpret_cast<void (*)(void*)>(S("_ZN10NRadEngine13CGDynamicMesh13UnmapVerticesEv"));
@@ -228,60 +229,73 @@ bool Resolve(DecalsApi* a, std::uintptr_t* update_fn) {
   a->mem_set = reinterpret_cast<void (*)(void*)>(S("_ZN10NRadEngine14CMemoryContext10SetCurrentEPNS_10CAllocatorE"));
   a->mem_context = reinterpret_cast<void***>(S("_ZN10NRadEngine14CMemoryContext7contextE"));
   a->gs_initialized = reinterpret_cast<const std::uint32_t*>(S("_ZN10NRadEngine3CGS11initializedE"));
-  *update_fn = reinterpret_cast<std::uintptr_t>(S(kUpdateSymbol));
   return true;
 }
 
-bool Complete(const DecalsApi& a) {
+bool Complete(const Api& a) {
   return a.ctor && a.vertex_format && a.init && a.map && a.unmap && a.shutdown && a.mem_current && a.mem_set && a.mem_context &&
          a.gs_initialized;
 }
 
-// ---- the wrappers ----------------------------------------------------------------------------------------------------
+// ---- the handlers ----------------------------------------------------------------------------------------------------
 
-void UpdateWrapper(std::uintptr_t sys) {
-  const auto real = reinterpret_cast<void (*)(std::uintptr_t)>(g_real_update.load(std::memory_order_acquire));
-  if (real != nullptr) real(sys);  // the game's own update first: the nodes are drawn from the state it leaves
+using UpdateSig = void(std::uintptr_t sys);
+using ShutdownSig = std::uint64_t(std::uint64_t self);
+struct UpdateTag {};
+struct ShutdownTag {};
+using UpdateThunk = sentinel::CallbackThunk<UpdateTag, UpdateSig>;
+using ShutdownThunk = sentinel::CallbackThunk<ShutdownTag, ShutdownSig>;
+
+// The game's own update first: the nodes are drawn from the state it leaves.
+void OnUpdate(UpdateThunk::Fn original, std::uintptr_t sys) noexcept {
+  original(sys);
   if (!g_on.load(std::memory_order_acquire)) return;
   pthread_mutex_lock(&g_mu);
   g_host.Tick(sys, NowMs());
   pthread_mutex_unlock(&g_mu);
 }
 
-// A virtual method: x0 = this, and the earlier wrapper or the real function's value is returned untouched.
-std::uint64_t ShutdownWrapper(std::uint64_t self) {
+// A virtual method: x0 = this, and the earlier handler's or the game's value is returned untouched.
+std::uint64_t OnShutdown(ShutdownThunk::Fn original, std::uint64_t self) noexcept {
   if (g_on.load(std::memory_order_acquire)) {
     pthread_mutex_lock(&g_mu);
     g_host.Shutdown(static_cast<std::uintptr_t>(self));  // our nodes go before the system does
     pthread_mutex_unlock(&g_mu);
   }
-  const auto real = reinterpret_cast<std::uint64_t (*)(std::uint64_t)>(g_real_shutdown.load(std::memory_order_acquire));
-  return real != nullptr ? real(self) : 0;  // not reachable: the slot is swapped only after g_real_shutdown is set
+  return original(self);
 }
 
-InstallResult Refused(const char* reason, SwapStatus status = SwapStatus::kNullSlot) {
-  InstallResult r;
-  r.status = status;
-  r.reason = reason;
-  return r;
+NEVR_HOOK_RECORD(kUpdateRecord, UpdateThunk, &OnUpdate);
+NEVR_HOOK_RECORD(kShutdownRecord, ShutdownThunk, &OnShutdown);
+
+ModuleResult Refused(const char* reason, LogLevel level, const char* msg) noexcept {
+  sentinel::LogFields(level, "combat_decals_install", {{"result", level == LogLevel::kInfo ? "off" : "refused"}, {"status", reason}, {"reason", reason}, {"msg", msg}});
+  return {false, reason, level == LogLevel::kInfo};
+}
+
+void WarnLegacy(const char* file, const char* key) noexcept {
+  if (!legacy::Present(file)) return;
+  sentinel::LogFields(LogLevel::kWarn, "combat_decals_legacy_switch",
+                      {{"file", file}, {"replaced_by", key},
+                       {"msg", "the plugin's switch file is no longer read and changes nothing; set the combat key in config.yaml instead"}});
 }
 
 }  // namespace
 
-InstallResult InstallDecalsAt(std::uintptr_t base, std::uintptr_t update_slot, std::uintptr_t update_real, std::uintptr_t shutdown_slot,
-                              std::uintptr_t shutdown_real, const char* table_path, const DecalsApi* api) {
-  if (ModuleSwitchPresent("decals.off")) {
-    const NevrLogField f[] = {{"why", "decals.off present in the q15t data directory"}};
-    Log(NEVR_LOG_INFO, "decals off", f, 1);
-    return Refused("off_file");
+ModuleResult InstallAt(const Switches& switches, sentinel::ImageLookup lookup, const char* tablePath, const Api* api) noexcept {
+  WarnLegacy("decals.off", "combat.decals: false");
+  WarnLegacy("decalflipu.on", "combat.decals_flip_u: true");
+  WarnLegacy("decalflipv.on", "combat.decals_flip_v: true");
+  if (!switches.on) {
+    sentinel::LogFields(LogLevel::kInfo, "combat_decals_install",
+                        {{"result", "off"}, {"status", "off_config"}, {"reason", "off_config"}, {"switch", "combat.decals"},
+                         {"msg", "combat.decals is false: nothing is drawn and no hook is installed"}});
+    return {false, "off_config", true};
   }
-  // A second install would reset the live state (the node records, the counters) and, when its slot check then refuses, switch the
-  // module off: refuse before anything is touched, with the first install still running.
-  if (g_on.load(std::memory_order_acquire)) {
-    const NevrLogField f[] = {{"why", "decals is already installed; the running install is left as it is"}};
-    Log(NEVR_LOG_WARNING, "decals refused: already installed", f, 1);
-    return Refused("already_installed", SwapStatus::kUnexpectedOriginal);
-  }
+  // A second install would reset the live state (the node records, the counters) and, when its slot check then refuses, switch the module off: refuse
+  // before anything is touched, with the first install still running.
+  if (g_on.load(std::memory_order_acquire))
+    return Refused("already_installed", LogLevel::kWarn, "decals is already installed; the running install is left as it is");
   // 1. the table
   char found[400] = "";
   char searched[1300] = "";
@@ -289,10 +303,10 @@ InstallResult InstallDecalsAt(std::uintptr_t base, std::uintptr_t update_slot, s
   std::size_t len = 0;
   const char* why = "absent";
   const char* problem = nullptr;  // the first file that exists and could not be used: not the same as no file
-  if (table_path != nullptr) {
-    std::snprintf(searched, sizeof searched, "%s", table_path);
-    if (ReadFile(table_path, &bytes, &len, &why)) {
-      std::snprintf(found, sizeof found, "%s", table_path);
+  if (tablePath != nullptr) {
+    std::snprintf(searched, sizeof searched, "%s", tablePath);
+    if (ReadFile(tablePath, &bytes, &len, &why)) {
+      std::snprintf(found, sizeof found, "%s", tablePath);
     } else if (std::strcmp(why, "absent") != 0) {
       problem = why;
     }
@@ -311,64 +325,51 @@ InstallResult InstallDecalsAt(std::uintptr_t base, std::uintptr_t update_slot, s
     }
   }
   if (bytes == nullptr && problem != nullptr) {
-    const NevrLogField f[] = {{"searched", searched}, {"why", problem}};
-    Log(NEVR_LOG_ERROR, "decals refused: a decals.bin exists but cannot be read, nothing is drawn", f, 2);
-    return Refused("table_unreadable");
+    sentinel::LogFields(LogLevel::kError, "combat_decals_install",
+                        {{"result", "refused"}, {"status", "table_unreadable"}, {"reason", "table_unreadable"}, {"why", problem},
+                         {"msg", "a decals.bin exists but cannot be read, so nothing is drawn"}});
+    return {false, "table_unreadable"};
   }
   if (bytes == nullptr) {
-    const NevrLogField f[] = {{"searched", searched}, {"why", why}};
-    Log(NEVR_LOG_INFO, "decals off: no readable decals.bin (the module draws nothing without the content pack's table)", f, 2);
-    return Refused("off");
+    sentinel::LogFields(LogLevel::kInfo, "combat_decals_install",
+                        {{"result", "off"}, {"status", "no_table"}, {"reason", "no_table"}, {"why", why},
+                         {"msg", "no readable decals.bin: the module draws nothing without the content pack's table and installs no hook"}});
+    return {false, "no_table", true};
   }
-  const bool flip_u = ModuleSwitchPresent("decalflipu.on"), flip_v = ModuleSwitchPresent("decalflipv.on");
   Table table;
-  const LoadResult lr = ParseTable(bytes, len, flip_u, flip_v, &table);
+  const LoadResult lr = ParseTable(bytes, len, switches.flipU, switches.flipV, &table);
   delete[] bytes;
   if (lr != LoadResult::kOk || table.count == 0) {
-    char l[24];
-    const NevrLogField f[] = {{"path", found}, {"reason", lr != LoadResult::kOk ? LoadResultName(lr) : "no_groups"}, {"bytes", Dec(l, sizeof l, static_cast<long long>(len))}};
-    Log(NEVR_LOG_ERROR, "decals refused: decals.bin is not a usable table, nothing is drawn", f, 3);
+    const char* reason = lr != LoadResult::kOk ? LoadResultName(lr) : "no_groups";
+    sentinel::LogFields(LogLevel::kError, "combat_decals_install",
+                        {{"result", "refused"}, {"status", lr != LoadResult::kOk ? "bad_table" : "empty_table"}, {"reason", reason}, {"bytes", len},
+                         {"msg", "decals.bin is not a usable table, so nothing is drawn"}});
     FreeTable(&table);
-    return Refused(lr != LoadResult::kOk ? "bad_table" : "empty_table");
+    return {false, lr != LoadResult::kOk ? "bad_table" : "empty_table"};
   }
   // 2. the engine calls
-  DecalsApi resolved;
-  std::uintptr_t update_fn = 0;
-  const DecalsApi* use = api;
+  Api resolved;
+  const Api* use = api;
   if (use == nullptr) {
-    if (!Resolve(&resolved, &update_fn) || !Complete(resolved)) {
-      const NevrLogField f[] = {{"path", found}};
-      Log(NEVR_LOG_ERROR, "decals refused: libr15.so is not loaded or lacks an export the draw path needs (not the pinned build?)", f, 1);
+    if (!Resolve(&resolved) || !Complete(resolved)) {
+      sentinel::LogFields(LogLevel::kError, "combat_decals_install",
+                          {{"result", "refused"}, {"status", "engine_export_missing"}, {"reason", "engine_export_missing"},
+                           {"msg", "libr15.so is not loaded or lacks an export the draw path needs (not the pinned build?), so nothing is drawn"}});
       FreeTable(&table);
-      return Refused("engine_export_missing");
+      return {false, "engine_export_missing"};
     }
     use = &resolved;
-    if (update_fn == 0) {
-      const NevrLogField f[] = {{"symbol", kUpdateSymbol}};
-      Log(NEVR_LOG_ERROR, "decals refused: CR15NetBulletCS::UpdateMovement is not exported (not the pinned build?)", f, 1);
-      FreeTable(&table);
-      return Refused("update_symbol_missing");
-    }
-    if (update_real == 0) update_real = update_fn != 0 ? update_fn - base : 0;
-    if (update_fn != 0 && update_fn != base + update_real) {  // the pinned vaddr and the exported name must be one function
-      char want[24], got[24];
-      const NevrLogField f[] = {{"symbol", kUpdateSymbol}, {"exported_at", Hex(got, sizeof got, update_fn)},
-                                {"pinned_at", Hex(want, sizeof want, base + update_real)}};
-      Log(NEVR_LOG_ERROR, "decals refused: CR15NetBulletCS::UpdateMovement is not where the pin says (not the pinned build?)", f, 3);
-      FreeTable(&table);
-      return Refused("update_symbol_mismatch");
-    }
   } else if (!Complete(*use)) {
     FreeTable(&table);
-    return Refused("engine_export_missing");
+    return Refused("engine_export_missing", LogLevel::kError, "the engine calls given are incomplete, so nothing is drawn");
   }
-  if (update_real == 0) {
-    const NevrLogField f[] = {{"symbol", kUpdateSymbol}};
-    Log(NEVR_LOG_ERROR, "decals refused: CR15NetBulletCS::UpdateMovement is not exported, so its slot cannot be checked", f, 1);
+  sentinel::ElfImage image{};
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) {
     FreeTable(&table);
-    return Refused("update_symbol_missing");
+    return Refused("module_not_loaded", LogLevel::kError, "libr15.so is not loaded, so no hook can be installed and nothing is drawn");
   }
-  // 3. the state: set before either wrapper can run
+  const std::uintptr_t base = image.base;
+  // 3. the state: set before either handler can run
   FreeTable(&g_table);
   g_table = table;
   g_api = *use;
@@ -383,58 +384,45 @@ InstallResult InstallDecalsAt(std::uintptr_t base, std::uintptr_t update_slot, s
   g_node_lines.store(0);
   g_on.store(true, std::memory_order_release);
   // 4. Shutdown first (a node must never outlive its system), then the update that makes nodes
-  const InstallResult rs = InstallChainedImportHook(base, shutdown_slot, reinterpret_cast<std::uintptr_t>(&ShutdownWrapper), &g_real_shutdown,
-                                                    shutdown_real);
-  char sl[24], ss[24];
-  {
-    const NevrLogField f[] = {{"hook", "CR15NetBulletCS::Shutdown (vtable word, chained)"}, {"slot_vaddr", Hex(sl, sizeof sl, shutdown_slot)},
-                              {"status", StatusName(rs.status)}, {"reason", rs.reason}};
-    Log(rs.status == SwapStatus::kOk ? NEVR_LOG_INFO : NEVR_LOG_ERROR, "decals shutdown wrapper", f, 4);
-  }
-  if (rs.status != SwapStatus::kOk) {
+  ShutdownThunk::Arm(kShutdownRecord);
+  const sentinel::GotStatus shutdownStatus = sentinel::InstallThunk<ShutdownThunk>(g_shutdownHook, ShutdownTarget(base), lookup);
+  sentinel::LogFields(shutdownStatus == sentinel::GotStatus::kOk ? LogLevel::kInfo : LogLevel::kError, "combat_decals_hook",
+                      {{"hook", "shutdown"}, {"status", sentinel::GotStatusName(shutdownStatus)}, {"slot", "vtable_word_chained"}});
+  if (shutdownStatus != sentinel::GotStatus::kOk) {
     g_on.store(false, std::memory_order_release);
-    return rs;
+    return {false, sentinel::GotStatusName(shutdownStatus)};
   }
-  const InstallResult ru = InstallImportHook("CR15NetBulletCS::UpdateMovement", base, update_slot,
-                                             reinterpret_cast<std::uintptr_t>(&UpdateWrapper), &g_real_update, update_real);
-  {
-    const NevrLogField f[] = {{"hook", "CR15NetBulletCS::UpdateMovement (data slot)"}, {"slot_vaddr", Hex(ss, sizeof ss, update_slot)},
-                              {"status", StatusName(ru.status)}, {"reason", ru.reason}};
-    Log(ru.status == SwapStatus::kOk ? NEVR_LOG_INFO : NEVR_LOG_ERROR, "decals update wrapper", f, 4);
+  UpdateThunk::Arm(kUpdateRecord);
+  const sentinel::GotStatus updateStatus = sentinel::InstallThunk<UpdateThunk>(g_updateHook, UpdateTarget(base), lookup);
+  sentinel::LogFields(updateStatus == sentinel::GotStatus::kOk ? LogLevel::kInfo : LogLevel::kError, "combat_decals_hook",
+                      {{"hook", "update"}, {"status", sentinel::GotStatusName(updateStatus)}, {"slot", "glob_dat"}});
+  if (updateStatus != sentinel::GotStatus::kOk) {
+    g_on.store(false, std::memory_order_release);  // the Shutdown handler stays in and passes through
+    return {false, sentinel::GotStatusName(updateStatus)};
   }
-  if (ru.status != SwapStatus::kOk) {
-    g_on.store(false, std::memory_order_release);  // the Shutdown wrapper stays in and passes through
-    return ru;
-  }
-  char gcount[24], qcount[24], tcount[24], trail[24];
-  const NevrLogField f[] = {{"path", found},
-                            {"groups", Dec(gcount, sizeof gcount, g_table.count)},
-                            {"quads", Dec(qcount, sizeof qcount, g_table.total_quads)},
-                            {"groups_cut_to_160_quads", Dec(tcount, sizeof tcount, g_table.truncated_groups)},
-                            {"trailing_bytes", Dec(trail, sizeof trail, static_cast<long long>(g_table.trailing_bytes))},
-                            {"flip_u", flip_u ? "1" : "0"},
-                            {"flip_v", flip_v ? "1" : "0"}};
-  Log(NEVR_LOG_INFO, "decals on: the static level decals are drawn from the table in dynamic-mesh nodes", f, 7);
-  InstallResult ok;
-  ok.status = SwapStatus::kOk;
-  ok.real_resolved = true;
-  return ok;
+  sentinel::LogFields(LogLevel::kInfo, "combat_decals_table",
+                      {{"path", found}, {"groups", g_table.count}, {"quads", g_table.total_quads}, {"groups_cut_to_160_quads", g_table.truncated_groups},
+                       {"trailing_bytes", g_table.trailing_bytes}, {"flip_u", switches.flipU ? 1 : 0}, {"flip_v", switches.flipV ? 1 : 0}});
+  sentinel::LogFields(LogLevel::kInfo, "combat_decals_install",
+                      {{"result", "installed"}, {"status", "installed"}, {"reason", "ok"}, {"switch", "combat.decals"},
+                       {"msg", "the static level decals are drawn from the table in dynamic-mesh nodes, in combat levels only"}});
+  return {true, "installed"};
 }
 
-InstallResult InstallDecals(std::uintptr_t base) {
-  return InstallDecalsAt(base, kDecalsUpdateSlot, kDecalsUpdateReal, kDecalsShutdownSlot, kDecalsShutdownReal, nullptr, nullptr);
-}
+ModuleResult Install(const Switches& switches) noexcept { return InstallAt(switches, sentinel::FindLoadedImage, nullptr, nullptr); }
 
-const Counters& DecalsCountersForTest() { return g_host.counters; }
+const Counters& CountersForTest() noexcept { return g_host.counters; }
 
-void ResetDecalsForTest() {
+void ResetForTest() noexcept {
   g_on.store(false);
-  g_real_update.store(0);
-  g_real_shutdown.store(0);
+  g_updateHook.Forget();
+  g_shutdownHook.Forget();
+  UpdateThunk::Reset();
+  ShutdownThunk::Reset();
   FreeTable(&g_table);
   g_host = Host();
-  g_api = DecalsApi();
+  g_api = Api();
   g_node_lines.store(0);
 }
 
-}  // namespace q15t
+}  // namespace nevr_quest::combat::decals

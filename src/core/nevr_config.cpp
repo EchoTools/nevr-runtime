@@ -268,7 +268,8 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override", "frame_stats"}},
       {"graphics", {"texture_quality", "hand_flip"}},
       {"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "pfx", "pfxtev",
-                 "gate_perm", "gate_bots", "gate_link", "gate_link_libs"}},
+                 "gate_perm", "gate_bots", "gate_link", "gate_link_libs", "impactsnd", "impactsnd_write", "decals",
+                 "decals_flip_u", "decals_flip_v"}},
   });
   return kSections;
 }

@@ -1,12 +1,16 @@
-# Module `decals` (issue #1619)
+# Module `decals`: the level decals of the combat levels
 
-Files: `src/quest/plugins/q15t/src/decals.{h,cpp}`, `src/quest/plugins/q15t/src/decals_core.h`, `src/quest/tests/q15t/decals_test.cpp`, `src/quest/tests/q15t/mod/decals.cmake`,
-`src/quest/tests/q15t/mutants.d/decals.sh`; the chained hook it needs is `InstallChainedImportHook` in `src/quest/plugins/q15t/src/import_hook.{h,cpp}`.
+Files: `src/quest/combat/decals.{h,cpp}`, `src/quest/combat/decals_core.h` (the table, the level rule and the state machine, game-free), `src/quest/combat/decals_targets.h`
+(the pins), `src/quest/tests/decals_test.cpp`, `src/quest/tests/got_pinned_test.cpp`, `src/quest/combat/mutants.d/decals.sh`. The module is a step of the sentinel's normal
+combat step (`src/quest/combat/combat_install.cpp`), registered after `impactsnd`: it runs in the `q15t` and `combat` APKs and in no other.
 
-Option macro: `Q15T_DECALS`, default **ON**; the module is inert (one INFO line, reason `off`) when no `decals.bin` is found, so a build
-or an install without the content pack is unchanged. Kill file: `decals.off` in the plugin data directory (`module_switch.h`).
-API: `InstallResult InstallDecals(std::uintptr_t base)`; seam `InstallDecalsAt(base, update_slot, update_real, shutdown_slot,
-shutdown_real, table_path, api)`. No tick of the game-tick table: the module rides the bullet system's own update.
+Switches (`config.yaml`, `combat:`): `decals` (default true: it draws nothing and installs no hook without a `decals.bin`), `decals_flip_u` and `decals_flip_v`
+(default false; mirror the uv inside each quad). The plugin's `decals.off`, `decalflipu.on` and `decalflipv.on` are no longer read: one found in the plugin's data
+directory is a Warning (`combat_decals_legacy_switch`) that names the key. `decals.bin` is a data file and is read where it was.
+
+Origin: the reference build's static level decals (the reference build's `afk_fx` source, the `fxdecal` block `:4540-4606`: `decals.bin`, the `ADC1` table, the dynamic-mesh nodes, the bullet
+system's UpdateMovement and Shutdown as the host), by way of the q15t plugin's decals module, which this moves. The slots `0x370dbc8`, `0x36933e8` and the function
+`0x2124290` are in that file (upstream's numbering is the ELF vaddr used here). The level scope below is ours.
 
 ## What it does
 
@@ -16,14 +20,14 @@ The module draws each group as one dynamic-mesh node (`CDynamicMeshNode`, up to 
 survives culling from any side) in the game space of that level.
 
 Which node a game space gets: every group whose level is the game space's level, plus the groups of the war room (the drop ships) when
-the game space is a combat arena (`mpl_combat_dyson`, `_combustion`, `_fission`, `_gauss`). When a game space whose level is the war
+the game space is a combat arena (`mpl_combat_dyson`, `_combustion`, `_fission`, `_gauss`: `combat_level.h` `IsCombatMap`, the one list of combat maps). When a game space whose level is the war
 room exists, the arena's copy of the war room's groups is hidden, so the ships are drawn once.
 
 ## The table
 
-Searched in this order, the first readable file wins (the line `decals off: no readable decals.bin` names every path searched):
+Searched in this order, the first readable file wins (the `combat_decals_install` line `reason: no_table` is written when none is readable):
 
-1. `<plugin data dir>/decals.bin`, the data directory being `/sdcard/Android/data/<package>/files/q15t`;
+1. the plugin's old data directory, `decals.bin`, being `/sdcard/Android/data/<package>/files/q15t`;
 2. `/sdcard/Android/data/<package>/files/afk/decals.bin`;
 3. `/sdcard/Android/media/<package>/files/afk/decals.bin`.
 
@@ -43,12 +47,12 @@ infinity in any coordinate or uv. A file that exists and cannot be read, or is o
 groups, `groups_cut_to_160_quads`); trailing bytes after the last group are counted (`trailing_bytes`) and ignored. A table with no
 groups is refused (`empty_table`).
 
-`decalflipu.on` and `decalflipv.on` in the plugin data directory mirror the uv inside each quad (the orientation of the bake's uv is
+`combat.decals_flip_u` and `combat.decals_flip_v` mirror the uv inside each quad (the orientation of the bake's uv is
 inferred, not read): u swaps corners 0 and 1, 3 and 2; v swaps 0 and 3, 1 and 2.
 
 ## Mechanism (no code word written)
 
-Two data-slot wrappers on the bullet component system `CR15NetBulletCS`, which every game space has:
+Two handlers, through the hook manager, on the bullet component system `CR15NetBulletCS`, which every game space has:
 
 | Hook | Slot (ELF vaddr) | Holds | Wrapper |
 | --- | --- | --- | --- |
@@ -57,13 +61,12 @@ Two data-slot wrappers on the bullet component system `CR15NetBulletCS`, which e
 
 The update slot is the word `R15NetRegisterComponentSystemUpdates` reads (one `ldr` at ELF `0x21e68a8`, in the exported function at
 `0x21e4b74`) and hands to `CncaGameSpace::RegisterUpdate` as the member-function pointer of `UpdateMovement`, when a game space creates
-its component systems at level load. The plugin loads before any level does, so the wrapper is what gets registered. The callback is
+its component systems at level load. The combat step runs before any level loads, so the handler is what gets registered. The callback is
 `void()` on the component system (`this` in x0).
 
-`Shutdown` is also wrapped by `impactsnd` (the vtable word `0x36933e8`). `InstallDecals` runs after `InstallImpactSnd`, and its Shutdown
-wrapper is installed with `InstallChainedImportHook`: the word must be the game's own function or an address in this plugin library's
-executable mapping (the earlier wrapper), and whichever it is becomes the function the decals wrapper calls. A word anywhere else is
-refused (`slot_not_stock_or_own`). The Shutdown wrapper goes in first; if it is refused nothing else is swapped. If the update wrapper is
+`Shutdown` is also hooked by `impactsnd` (the vtable word `0x36933e8`). The `decals` row runs after the `impactsnd` row, and its Shutdown
+handler joins that word's chain above impactsnd's (`got_hook.h`, the first handler on a slot and the chain): it calls impactsnd's, which calls the game's. A
+word that holds neither the game's function nor the chain's newest hook is refused (`original_mismatch`). The Shutdown wrapper goes in first; if it is refused nothing else is swapped. If the update wrapper is
 refused the Shutdown wrapper stays and only passes through.
 
 Per bullet system, on its update (the update thread of its game space; one mutex serialises the module's state):
@@ -120,35 +123,47 @@ Read in the pinned library (GNU build id `b243509c08ce677aeb95fa348016949b3fc452
 
 ## Logging (AGENTS.md)
 
-INFO `decals on` (path, groups, quads, groups cut to 160 quads, trailing bytes, flips) and one line a wrapper (`decals update wrapper`,
-`decals shutdown wrapper`: slot, status, reason); ERROR when a refusal leaves the module out (`bad_table`, `engine_export_missing`,
-`update_symbol_mismatch`, a wrapper refused) with the reason; `decals: game space` once a system; `decals: node made` / `decals: node
-not made` (WARNING, with `rc`, the engine's answer) for the first 64 nodes of a run; `decals: window` every 10 s of drawing (frames,
-nodes, quads); `decals: level changed ...` and `decals: bullet system shutdown, its nodes are destroyed` with the system and the count.
-The per-frame path writes no line.
+Info `combat_decals_table` (path, groups, quads, groups cut to 160 quads, trailing bytes, `flip_u`, `flip_v`), one `combat_decals_hook` per hook (`hook`:
+`update` or `shutdown`, `status`) and one `combat_decals_install` (`result`: `installed`, `off` or `refused`; `status`; `reason`); Error when a refusal leaves
+the module out (`bad_table`, `empty_table`, `table_unreadable`, `engine_export_missing`, `module_not_loaded`, a hook refused) with the reason; Info `combat_decals_game_space`
+once a system (`level`, `acts`, groups, quads); `combat_decals_node` (`made`, Warning with `rc`, the engine's answer, when not made) for the first 64 nodes of
+a run; `combat_decals_window` every 10 s of drawing (frames, nodes, quads); `combat_decals_level_changed` and `combat_decals_system_shutdown` with the system and
+the count; Warning `combat_decals_legacy_switch` for each plugin switch file found. The per-frame path writes no line.
 
-## Switches
+## Switches and the level scope
 
-`decals.off` (module out), `decalflipu.on`, `decalflipv.on` (uv mirror), all in the plugin data directory.
+`combat.decals`, `combat.decals_flip_u`, `combat.decals_flip_v` (above). The module acts on a game space only when that space's own level is a combat map
+(`combat_level.h` `IsCombatMap`) or the war room (`mpl_combat_war_room`, the drop ship, which is no arena level). A table group that names any other level, an
+arena level included, is never drawn, and a game space in an arena level, an arena lobby or the combat lobby creates no node. The SDK's `LevelGate`
+(`sdk/include/nevr/level_gate.h`) is the PC plugin API's gate over the host's main level; the q15t plugin never used it for decals, so nothing moves off it and
+it stays for plugins.
+
+### Arena cost (ADR 0038)
+
+`UpdateMovement` runs once per rendered frame for each bullet system (one per game space), so in an arena match with the module on and a `decals.bin` present each
+call is the game's function, a mutex, a lookup of the system's record and a compare of the clock. The record of a game space that does not act reads its level
+(two `process_vm_readv` calls) once a second (`kInertRecheckMs`), not on every update; a combat game space reads it on every update, as the plugin did. With
+`combat.decals` false, or no `decals.bin`, nothing is hooked and an arena match pays nothing. The measured host numbers are in the pull request that moved the
+module.
 
 ## Prediction (written before any headset run)
 
 On the pinned build with the content pack's `decals.bin` and its material pairs in place, in a combat match: the log shows
-`decals on ... groups=<n> quads=<m>` at start, `decals update wrapper ... status=ok`, `decals shutdown wrapper ... status=ok`; at the
-first update of each combat game space `decals: game space ... level=0x43e2da7914642604` (dyson; combustion `0x42670f2bed45703c`,
-fission `0xdf5ca7b7dfa383d4`, gauss `0x43e2da7a0c623a19`) with the groups of that level, then one `decals: node made ... rc=0 blend=<1|7|11>`
-a group within about 5 s of the graphics coming up, then a `decals: window` line every 10 s. The decals are visible on the walls as
-additive or lit stencils. At the end of the match `decals: bullet system shutdown, its nodes are destroyed nodes_destroyed=<groups>` and
-no crash. A group whose material pair is missing from the pack logs `node not made ... rc=<n>` three times, 5 s apart, and stays off.
+`combat_decals_table` (`groups`, `quads`) at start, `combat_decals_hook` `update` and `shutdown` with `status: ok`; at the
+first update of each combat game space `combat_decals_game_space` (`acts: 1`, `level` 0x43e2da7914642604 (dyson; combustion `0x42670f2bed45703c`,
+fission `0xdf5ca7b7dfa383d4`, gauss `0x43e2da7a0c623a19`) with the groups of that level, then one `combat_decals_node` (`made: 1`, `rc: 0`, `blend` 1, 7 or 11)
+a group within about 5 s of the graphics coming up, then a `combat_decals_window` line every 10 s. The decals are visible on the walls as
+additive or lit stencils. At the end of the match `combat_decals_system_shutdown` (`nodes_destroyed` = the groups) and
+no crash. A group whose material pair is missing from the pack logs `combat_decals_node` `made: 0` with `rc` three times, 5 s apart, and stays off.
 
 ## Falsifiers
 
-- `decals refused ... bad_table` or `engine_export_missing` on the pinned build: the table or the export list is not what the module
+- `combat_decals_install` `bad_table` or `engine_export_missing` on the pinned build: the table or the export list is not what the module
   was written for; nothing is swapped.
-- `decals shutdown wrapper ... status=unexpected_original reason=slot_not_stock_or_own`: another library wrapped the vtable word.
-- `node made ... rc=0` for every group and nothing on the walls: the vertices are written but the node does not draw (the index count,
-  the visibility, the blend or the camera culling); `blend=0` on the line says the blend word was not the pool's 0.
-- The decals are mirrored: `decalflipu.on` / `decalflipv.on`.
+- `combat_decals_hook` `shutdown` with `status: original_mismatch`: another library wrapped the vtable word.
+- `combat_decals_node` `made: 1`, `rc: 0` for every group and nothing on the walls: the vertices are written but the node does not draw (the index count,
+  the visibility, the blend or the camera culling); `blend: 0` on the line says the blend word was not the pool's 0.
+- The decals are mirrored: `combat.decals_flip_u` / `combat.decals_flip_v`.
 - A crash in `CDynamicMeshNode` code at the end of a match or a level change: a node outlived its system or its allocator.
 - A hitch or a drop in frame rate in a combat arena: the per-update vertex rewrite (160 quads x 4 vertices a node at most).
 
@@ -165,4 +180,5 @@ no crash. A group whose material pair is missing from the pack logs `node not ma
   blocked on the module's lock; the engine's own shutdown of a dynamic-mesh system makes the same calls.
 - A node whose system's allocator cannot be read at shutdown is not freed (a WARNING says so); the engine keeps it.
 - The scheduler's call of the registered `UpdateMovement` (only the registration was read).
-- The decals on a headset: no run yet; the prediction above is the test.
+- The decals on a headset: no run yet (the five headset logs read `decals off: no readable decals.bin`); the prediction above is the test. Whether the combat
+  APK's content pack carries a `decals.bin`: nothing in this repository names one, so without it the module installs nothing and draws nothing.

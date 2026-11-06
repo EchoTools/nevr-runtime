@@ -1,10 +1,15 @@
-# impactsnd: bullet impact sounds (rows R12 to R16, and R17: the Shutdown lock)
+# Module `impactsnd`: bullet impact sounds (rows R12 to R16, and R17: the Shutdown lock)
 
-Port of the source build's `the source build's impactsnd` (v1 to v6) to a plugin module. Files: `src/impactsnd.{h,cpp}`,
-`src/quest/tests/q15t/impactsnd_test.cpp`, `src/quest/tests/q15t/mod/impactsnd.cmake`, `src/quest/tests/q15t/mutants.d/impactsnd.sh`. Pinned build: libr15 build id
-`b243509c08ce677aeb95fa348016949b3fc45230` (the disassembly). ELF vaddr = disassembly VA - 0x100000. Source citations are
-`the source build's impactsnd:<line>`; disassembly citations are quoted from read-only queries (scratch SQL, a source-build note not in this tree,
-run with the contract's recipe).
+Files: `src/quest/combat/impactsnd.{h,cpp}`, `src/quest/combat/impactsnd_targets.h` (the pins), `src/quest/combat/thread_word.h`,
+`src/quest/tests/impactsnd_test.cpp`, `src/quest/tests/got_pinned_test.cpp`, `src/quest/combat/mutants.d/impactsnd.sh`. The module is a step of the sentinel's
+normal combat step (`src/quest/combat/combat_install.cpp`), registered before `decals`: it runs in the `q15t` and `combat` APKs and in no other. Switches
+(`config.yaml`, `combat:`): `impactsnd` and `impactsnd_write` (default true each; false reads and logs the table and writes nothing to it).
+
+Origin: the reference build's the reference build's `afk_impactsnd` source (v1 to v6; rows R12 to R16), by way of the q15t plugin's impactsnd module, which this moves. Every pinned
+address of the module is in that file: D `0x37af8d0` (`:74`), `kSoundSettings` `0x37af6a0` (`:75`), the hit-code words `0x21208b4`... (`:79-80`),
+`LoadSoundSettings` `0x2121d04` (`:86`), the rows' ids (`:103-119`) (upstream's numbering is the ELF vaddr used here; the disassembly's is 0x100000 higher). R17,
+the table lock around `CR15NetBulletCS::Shutdown`, is ours. Pinned build: libr15 build id `b243509c08ce677aeb95fa348016949b3fc45230` (the disassembly).
+ELF vaddr = disassembly VA - 0x100000. Source citations in the text below are `afk_impactsnd:<line>`.
 
 ## The problem
 
@@ -32,7 +37,7 @@ read as `*(byte *)(kSoundSettings + 7) & 1` = map+0x38 bit 0, the Sort call foll
 | Row | What | ELF vaddr | disassembly VA | Built |
 |---|---|---|---|---|
 | R12 | `kSoundSettings` (.bss, `_ZN10NRadEngine8NRadGame15CR15NetBulletCS14kSoundSettingsE`, OBJECT 8) and its GLOB_DAT slot | `0x37af6a0`; slot `0x370fa70` | `0x38af6a0`; `0x380fa70` | yes (read; GLOB_DAT word cross-checked) |
-| R13 | `D`, the "default" symbol word the hit code reads (.bss) | `0x37af8d0` | `0x38af8d0` | yes (write only when it reads 0) |
+| R13 | `D`, the "default" symbol word the hit code reads (.bss) | `0x37af8d0` | `0x38af8d0` | read and logged; never written (the module is refused when it reads 0) |
 | R14 | `LoadSoundSettings` (`..CR15NetBulletCS17LoadSoundSettingsEv`, FUNC 808) and its JUMP_SLOT | fn `0x2121d04`; slot `0x36fa3c0` | fn `0x2221d04`; slot `0x37fa3c0` | yes (GOT wrapper, after-load pass) |
 | R15 | the four hit-code words | `0x21208b4 / b8 / bc / c8` | `0x22208b4 / b8 / bc / c8` | checked, never changed |
 | R16 | the five `.text` words of `kPatch` in `LoadSoundSettings` | `0x2121da8 / e2c / e30 / ea0 / eb0` | `0x2221da8 / e2c / e30 / ea0 / eb0` | NOT built: needs a word patch |
@@ -164,18 +169,19 @@ All five equal the source's `old` words (`:91-95`).
 four words with `source-build safe_read`, compares each with `kCode*` and returns a bool; a mismatch logs `OFF ... nothing written` and
 `source-build impactsnd_install` returns (`:478`). The only stores to the library in the whole file are the D store (`:485`, `.bss`),
 the row id stores (`:311`, heap) and the five `kPatch` stores in `PatchLoader` (`:456`, R16). The module checks the same four
-words in `InstallImpactSnd` (`src/quest/plugins/q15t/src/impactsnd.cpp:356-364`), refuses the whole module on a difference, and never writes them: R15
+words in `InstallImpactSnd` (`src/quest/combat/impactsnd.cpp`, `InstallAt`), refuses the whole module on a difference, and never writes them: R15
 needs no word patch. (R1_functions.md classes it "needs-code-patch" because the site is code; that classification is about where
 the words are, not about a change.)
 
-**R12 / R13 (the D write).** `InstallImpactSnd` reads the GLOB_DAT word at `base + 0x370fa70` and requires it to hold
-`base + 0x37af6a0` (the relocated address of `kSoundSettings`, a cross-check of R12 against the running process), reads D, and
-stores `CSymbol64("default") = 0x2fd38a995f615b9e` only when D reads 0 and the build is not a nowrite build
-(`src/quest/plugins/q15t/src/impactsnd.cpp:351-409`). Build option `-DQ15T_IMPACTSND_NOWRITE=1` is the source's `nowrite=1`: D and the rows are read and
-logged, never written; the wrapper and the tick still run (they observe). The test seam `SetImpactSndNoWriteForTest` flips it.
-The value is also checked in the test against the engine's own hash (`abi/symbol_hash.h`, `CSymbol64Hash("default")`).
+**R12 / R13 (D is read, never written).** `InstallAt` reads the GLOB_DAT word at `base + 0x370fa70` and requires it to hold `base + 0x37af6a0` (the relocated
+address of `kSoundSettings`, a cross-check of R12 against the running process) and reads D. The library's own static initialiser stores D (disassembly
+`_INIT_355`, `0x10712fc`), and eight of eight headset starts read it set (`was=2fd38a995f615b9e ... action="left alone (not 0)"`), so the plugin's store, which ran only
+when D read 0, never ran. The module keeps no store to D (the hook manager has no route for an unrelocated `.bss` word, ADR 0046 C1): a D that reads 0 refuses the module
+(`default_symbol_zero`), because the hit code's second lookup cannot match and no row write repairs that. The `combat.impactsnd_write` key is the source's `nowrite=1`:
+the table is read and logged, never written; the handlers and the tick still run (they observe). The value is also checked in the test against the engine's
+own hash (`CSymbol64Hash("default")`).
 
-**The ids rewrite (the tick, R12).** `ImpactSndTick` (a `TickFn`, register with `AddGameTick`; the main seat wires it) polls the
+**The ids rewrite (the tick, R12).** `Tick` (a `TickFn` the module registers with the combat tick, `combat_tick.h`) polls the
 table at most 4 times a second, exactly the source's `Tick`/`IdsTick` (`:387-416`, `:322-385`): first the count line (the count
 is logged `kSettleS` = 2 s after it is first non-zero, or after `kWaitS` = 600 s since install with what is there), then the
 watch for the whole process. Per table instance: the same data pointer and count on two consecutive polls, then a re-read of
@@ -206,8 +212,7 @@ the loader wrapper, the tick and Shutdown is logged (see Behaviour).
 
 **R14 (the GOT wrapper): built, decision.** Source: the loader "fills the table row by row on the load; its thread is not
 proven" (`:387-388`), so the source polls (`kPollS` 0.25 s, 2 s settle, two stable polls, a re-read), and its v4/v5 comments
-record that the first hits of each table post id 1 while the poll catches up. In the plugin the swap of one JUMP_SLOT is the
-same data-page mechanism as the other modules, and it gives an exact moment: the wrapper calls the real loader, then (after it
+record that the first hits of each table post id 1 while the poll catches up. The hook on one JUMP_SLOT gives an exact moment: the wrapper calls the real loader, then (after it
 returned, so the table is complete and no hit has used it) reads the table and runs the same `RowPass` once. Reasons it is worth
 having: (1) the window in which a hit posts id 1 closes (tick-only: at least the 2 s settle plus two polls after the table
 appears); (2) the loader's row count is read at that moment on the loader's own thread, so every launch's log says whether R16
@@ -223,24 +228,24 @@ the tick's once-per-table unsorted pass does not repeat it; a pass the lock or t
 ## Behaviour
 
 - Install, once: four hit-code words checked, GLOB_DAT word checked, D read (and written only if 0), the Shutdown word swapped,
-  the LoadSoundSettings slot swapped. One line each: `impactsnd on` (D was/now/action), `impactsnd shutdown wrapper`
-  (status, `row_writes=enabled` or ERROR `DISABLED (read and log only)`), `impactsnd load wrapper` (status, mode), or
-  `impactsnd OFF: nothing written` (ERROR, with reason, vaddr, read, pinned). Any refusal before the wrapper: nothing is written and the tick does nothing.
-- Each `LoadSoundSettings` return: `impactsnd LoadSoundSettings returned` (table, rows, flags, `word_patch`), then
-  `impactsnd ids` when rows were rewritten (`when=load/unsorted`, rows, known, rewrote, right, left, `found_ids`).
-- Tick: `impactsnd table` once (rows, map set/null, after_s, default_symbol as read then, `word_patch`; WARNING for a count
-  that is neither 5 nor 15), `impactsnd ids` for any pass that wrote (`tick/unsorted`, `tick/sorted`), `impactsnd no table now`
-  once per disappearance of the table, `impactsnd table still unsorted` once per table after 600 s.
-- Threads: `impactsnd thread` the first time the tick, the loader wrapper or the Shutdown wrapper runs on a thread (and when a role
+  the LoadSoundSettings slot swapped. One line each: `combat_impactsnd_default_symbol` (D, whether it matches), `combat_impactsnd_hook` for `shutdown`
+  (status, `row_writes`) and `load` (status, mode), `combat_impactsnd_rebuild` and one `combat_impactsnd_install`, or
+  `combat_impactsnd_refused` (ERROR, with reason, vaddr, read, pinned). Any refusal before the wrapper: nothing is written and the tick does nothing.
+- Each `LoadSoundSettings` return: `combat_impactsnd_load` (table, rows, flags, `word_patch`), then
+  `combat_impactsnd_ids` when rows were rewritten (`when=load/unsorted`, rows, known, rewrote, right, left, `found_ids`).
+- Tick: `combat_impactsnd_table` once (rows, map set/null, after_s, default_symbol as read then, `word_patch`; WARNING for a count
+  that is neither 5 nor 15), `combat_impactsnd_ids` for any pass that wrote (`tick/unsorted`, `tick/sorted`), `combat_impactsnd_no_table`
+  once per disappearance of the table, `combat_impactsnd_unsorted_wait` once per table after 600 s.
+- Threads: `combat_impactsnd_thread` the first time the tick, the loader wrapper or the Shutdown wrapper runs on a thread (and when a role
   moves): `role`, `tid` (gettid), and the last tid seen in each role (`tick_tid`, `loader_tid`, `shutdown_tid`, 0 = not seen yet),
-  so one headset run shows whether they share a thread. `impactsnd CR15NetBulletCS::Shutdown returned` (the global's value then).
-  `impactsnd row pass skipped, nothing written` (why: lock busy, or the table changed or was freed before the write).
+  so one headset run shows whether they share a thread. `combat_impactsnd_shutdown_returned` (the global's value then).
+  `combat_impactsnd_row_pass_skipped` (why: lock busy, or the table changed or was freed before the write).
 - Log budgets: non-writing lines 12 per process, writing passes 200 per process; the first line over a budget is one WARNING
-  that names it, then silence (counters in `GetImpactSndStats()` keep counting); thread lines 24. Every line is structured through `Log`.
+  that names it, then silence (counters in `GetStats()` keep counting); thread lines 24. Every line is structured through `Log`.
 
 ## R16, rebuilt (the loader in C++; no code page is written)
 
-The word patch below is not used. `LoadSoundSettings` is rebuilt in `src/quest/plugins/q15t/src/impactsnd.cpp` and runs in
+The word patch below is not used. `LoadSoundSettings` is rebuilt in `src/quest/combat/impactsnd.cpp` and runs in
 place of the stock one: the JUMP_SLOT (`0x36fa3c0`) points at the wrapper, which calls `RebuildUnderLock`, then the after-load
 pass. The rebuilt body walks the same file (`/json/r14/config|mp_sound_settings.json`) with the same calls, in the same order,
 and appends the same fields to the same table; the difference is the scratch. The stock loader's `{key, id}` scratch is at
@@ -258,7 +263,7 @@ kept. The rebuilt loader keeps the path in its own 512-byte buffer and the key a
   which the module's keys were already checked against.
 - Calls: each target is the stock loader's direct-call stub (ELF = disassembly VA - 0x100000), the same stub the stock `bl` jumps
   through. Each stub's first word is pinned in `kRebuildCallees` and read from the disassembly (`adrp x16`), and the rebuild is enabled
-  only when all seven match and the Shutdown wrapper is in (`impactsnd LoadSoundSettings rebuild`, `mode=`). The nowrite build keeps
+  only when all seven match and the Shutdown wrapper is in (`combat_impactsnd_rebuild`, `mode=`). `combat.impactsnd_write: false` keeps
   the stock loader.
 - Signatures, from the disassembly (libr15): `CJson::Next(char const*, void*) const` (0x10a0c30), `CJson::NameAt(void*) const`
   (0x10a0cdc), `CJson::TString(void*, char*) const` with the fallback as a third register (the stock call passes `""`'s address
@@ -267,131 +272,41 @@ kept. The rebuilt loader keeps the path in its own 512-byte buffer and the key a
 - Not verified here: the CJson object size (16 bytes is inferred from the stock frame: the path buffer starts at sp+0x220 and
   the ctor runs after it is filled), the TString fallback semantics (read as the value when the key is missing), and whether
   `CMemBlock::Resize` ignores its third register. The headset run below settles these.
-- Logs: `impactsnd LoadSoundSettings rebuilt` (`table`, `rows`, `json_result`, `loader=reconstructed`), then the usual
-  `impactsnd LoadSoundSettings returned` with `rows=15 word_patch=in_effect` expected.
+- Logs: `combat_impactsnd_rebuilt` (`table`, `rows`, `json_result`, `loader=reconstructed`), then the usual
+  `combat_impactsnd_load` with `rows=15 word_patch=in_effect` expected.
 
 **Headset check (3 lines):** `adb logcat | grep -E "impactsnd (LoadSoundSettings rebuild|LoadSoundSettings rebuilt|LoadSoundSettings returned|ids)"`
 at a combat level load. Expect `mode=reconstructed`, `rows=15`, `json_result=0`, `word_patch=in_effect`, and no
 `Cannot find default impact sound for bullet type` on hits. Falsifier: `mode=stock` (a stub check failed: `missing_callee`
 names it), or `rows` neither 15 nor 5.
 
-## What is lost without R16 (superseded: the rebuilt loader above writes all 15 rows)
+## Scope and arena cost
 
-The loader then builds 5 rows, the `player` row of each gun (source `:19-23`, `:49`; the device read of v1/v2 saw count 5).
-This module is correct in that state: the 5 rows are rewritten to the Wwise ids, D is guarded, the log says `rows=5
-word_patch=absent`. What does not happen:
+Arena and combat run on the same APK, and the bullet system, its impact table and these two game functions exist in an arena match too. The module acts only
+where a combat level is loaded (`combat_level.h` `Classify`, the combat lobby on: an Echo Arena level that is loaded wins, and the lobbies arena players use
+are no class):
 
-1. 10 of the 15 rows never exist: the `barrier` row and the `default` row of each of the 5 guns.
-2. The hit code's second lookup (`D ^ gunSym`, disassembly `0x22208b0..0x2220960`) misses on every hit, so
-   `Cannot find default impact sound for bullet type ...` keeps logging on every hit for every gun, and no default (`geo`)
-   impact sound plays on world or non-player hits.
-3. The first lookup for a `barrier` target misses (no row): no shield-impact sound.
-4. Still working: the `player` row's `play_bullet_impact_player` (and `_quark` for smg) event on player hits, once rewritten. The
-   D guard is moot without default rows.
-5. The plugin cannot restore the missing rows: adding rows would mean growing the engine's `CTable` and re-sorting through the
-   engine's allocator (not built, no evidence for it); re-keying the five `player` rows to `default` would break the player
-   lookup and rewrites keys, which the source never does. So R16 is the only way to get rows 6 to 15.
+| Where | What the module does |
+|---|---|
+| `LoadSoundSettings` in a combat map or the combat lobby | the rebuilt loader, or the stock loader and the after-load pass; marks the scope |
+| `LoadSoundSettings` in any other level, no game seen yet, an unreadable game | the game's own loader and nothing else; one `combat_impactsnd_scope` line (`scope`: `other_level`, `no_game`; `loader`: `game`); the table keeps the game's rows and ids |
+| `Shutdown`, any level | takes the table lock around the game's function; the scope ends when the game has cleared the global |
+| the tick, no table of a combat level live | one atomic load of the game and one of the scope flag, per frame |
+| the tick, a combat table live | the poll, four times a second |
 
-## R16 word-patch spec for the main seat
-
-Five 32-bit words, all in one 4 KiB page (disassembly page `0x2221000`, ELF `0x2121000`), no control flow changes. Stock words
-read from the disassembly (above) and verified against the source; replacement words exactly as the source's `kPatch` (`:90-96`), and
-disassembled here with the NDK's clang and `llvm-objdump` (a scratch listing, not in this tree) to confirm the
-instruction each encodes:
-
-| Disassembly VA | ELF vaddr | stock word | stock insn | replacement word | replacement insn |
-|---|---|---|---|---|---|
-| `0x2221da8` | `0x2121da8` | `0x91003116` | `add x22, x8, #0xc` (x8 = sp+0x10) | `0x910033f6` | `add x22, sp, #0xc` (the pad fill) |
-| `0x2221e2c` | `0x2121e2c` | `0xb9401bea` | `ldr w10, [sp, #0x18]` | `0xb9400bea` | `ldr w10, [sp, #8]` (the id into the table) |
-| `0x2221e30` | `0x2121e30` | `0xf9400beb` | `ldr x11, [sp, #0x10]` | `0xf94003eb` | `ldr x11, [sp]` (the key into the table) |
-| `0x2221ea0` | `0x2121ea0` | `0xb9001be0` | `str w0, [sp, #0x18]` | `0xb9000be0` | `str w0, [sp, #8]` (the id) |
-| `0x2221eb0` | `0x2121eb0` | `0xf9000bfc` | `str x28, [sp, #0x10]` | `0xf90003fc` | `str x28, [sp]` (the key) |
-
-The effect (source `:19-24`): the loader's row scratch `{key, id, pad}` moves from `sp+0x10 / 0x18 / 0x1c`, where it sits
-on top of the path string `bullet_impact|<gun>` handed to the next `CJson::Next`, to the frame's unused `sp+0x0..0xf`. The
-claim that `sp+0x0..0xf` is unused is the source's (AUD-7 GP-1..GP-9); I read only that the five stock words match.
-When to apply it: before the first `LoadSoundSettings` call. The table appears about 114 s after launch (source `:32-33`), and
-the loader's only caller runs at the combat level load, so a patch applied at plugin init is early enough. The source also
-checked, before writing, that the table was not built yet (map null or count 0) and refused otherwise (`:441-448`): the same
-guard belongs on the word-patch row. After the patch, the module's own lines read `rows=15 word_patch=in_effect`; the source's
-`STOP: patched launch but count=<n>, not 15` (`:411-413`) is this module's `impactsnd table` WARNING for a count that is neither
-5 nor 15, since the plugin does not know whether the main seat's patch was applied. Back-out is a launch without the row.
-
-## Prediction (written before any headset run)
-
-P1. `impactsnd on ... was=<non-zero> now=<same> action=left alone (not 0)`. Basis: the disassembly shows `_INIT_355` storing D
-(`0x10712fc`) and the source's device read found D set. Falsifier: `was=0 action=wrote` (D is not set at plugin init; then the
-write is the fix and the disassembly reading is incomplete), or `was` non-zero and not `2fd38a995f615b9e` (the hit code would look
-up another key; the module leaves it alone by rule, and the lookup stays wrong: the line is the evidence).
-
-P2. `impactsnd load wrapper ... status=ok mode=after-load pass + tick`. Falsifier: any other status (for the Shutdown wrapper too: `impactsnd shutdown wrapper status=ok row_writes=enabled`; anything
-else means rows are not written, and the ERROR line names why), or no
-`impactsnd LoadSoundSettings returned` line at the combat level load (about 114 s after launch): the slot is not what
-`Initialize` calls through, or the load runs before the plugin loads.
-
-P3. At the combat level load, without R16: `impactsnd LoadSoundSettings returned ... rows=5 flags=00000001 word_patch=absent`,
-then `impactsnd ids ... when=load/unsorted rows=5 known=5 rewrote=5 right=0 left=0 found_ids=00000001,00000001,...` (five
-times). With R16: `rows=15 word_patch=in_effect`, `rewrote=15`. Falsifiers: `found_ids` not all `00000001` (the id-1 cause, RE-28, is
-wrong or only partly right: the ids rewrite would be moot or incomplete); `rows` neither 5 nor 15; `flags` bit 0 clear at load
-(sorted at load: `when=load/sorted`, harmless, but the "no hit before the rewrite" premise changes); `rewrote` below
-`known` with `left>0` (stores did not take: a racing sort or a non-writable heap page).
-
-P4. About 2 s after the table appears: `impactsnd table rows=5|15 word_patch=... default_symbol=2fd38a995f615b9e`. After the
-first hit sorts the table, no further `impactsnd ids` line. Falsifier: a later `when=tick/sorted` line with `rewrote>0`:
-something put the stock ids back or a store landed in a neighbour row (the module repairs it, and the line is the evidence).
-
-P5. Audio and the engine log in a fight. Without R16: the player-hit impact event plays for assault, scout, rocket, rifle and
-smg; `Cannot find default impact sound for bullet type` still appears on every hit; no shield or default impact sound. With R16:
-that message stops for the five guns (chain and magnum have no row on the PC either and keep logging, source `:16-17`), and
-player, shield and default impact events all play. Falsifiers: the message absent without R16 (rows exist: contradicts
-`rows=5`), or still present with R16 and `rows=15` and `default_symbol=2fd38a995f615b9e` (the default lookup misses for another
-reason: the rows' keys are not `sym(default) ^ sym(gun)` in the live table).
-
-P6. Threads. `impactsnd thread` lines for the three roles. Prediction: tick = the game thread; the loader wrapper and the
-Shutdown wrapper are the thread that runs level load and unload, which I expect to be the game thread too (the loader's only
-caller is a level component system's `Initialize`), but that is NOT established: the source says "the THREAD of the load / unload
-is not proven" (`:239-241`), and the lock exists because of that. Falsifier: any role on a different `tid` from `tick_tid` means
-the unprotected source would have raced; with the lock, the line `impactsnd row pass skipped ... table lock busy` or `table
-changed or freed before the write` appears only if a pass and a Shutdown actually overlapped.
-
-## Not built, and why
-
-- R16, the loader's five `.text` words: a code change; the contract forbids it in a module. Specified above. This module
-  writes no code page at any point: its only stores are D (`.bss`, `rw-`, checked in `/proc/self/maps`), the row ids (heap, under
-  the lock), and the two data-word swaps through `got_swap.cpp` (which refuses an executable page). The module has no
-  `mprotect`, `PROT_EXEC`, `__builtin___clear_cache` or `memcpy` into the library.
-- Adding the 10 missing rows without R16, or re-keying: see "What is lost without R16".
-- The source's early log of "loader patched=" and `STOP` line: the module cannot know the main seat's patch state; replaced by
-  the row-count inference in the `word_patch` field.
-- The source's switches (`isnd.off`, `isnd.on`, `setprop ... isnd`, `patch=1`, `ids=1`, `early=1`): ids and early are always on
-  (the source's default form, v6); `nowrite` is the compile-time option `Q15T_IMPACTSND_NOWRITE`; the on/off switch is the
-  main seat's option `Q15T_IMPACTSND`.
-
-## Wiring for the main seat (plugin.cpp, CMakeLists.txt; not edited here)
-
-- Source file `src/quest/plugins/q15t/src/impactsnd.cpp`. Option `Q15T_IMPACTSND`, default ON (the source build's default since v6).
-- In `NevrPluginInitEx`, before `InstallGameTick`: `Report("impactsnd (LoadSoundSettings)", InstallImpactSnd(ctx->base_addr));`
-  and `want_tick = AddGameTick(&ImpactSndTick) || want_tick;`. `Report` prints the wrapper's status; the module's own lines carry
-  the details. The module writes game data (D, table ids); capability flags are the main seat's call.
-- Optional: `-DQ15T_IMPACTSND_NOWRITE=1` for a read-and-log-only build.
-- Link `-pthread` (the module uses `pthread_mutex_t`; no namespace-scope constructor and no `__cxa_atexit` reference: checked on
-  host and NDK aarch64 objects, `readelf` finds no `.init_array`/`.ctors`).
-- `src/quest/tests/q15t/mod/impactsnd.cmake` is picked up by `just test-quest-q15t` and `just test-quest-q15t impactsnd`.
+Cost in an arena match, per ADR 0038: a load is one `Classify` (two table reads of the game, each `process_vm_readv`) once per game-space load, then the game's own
+loader; a Shutdown is one uncontended mutex lock and unlock and two pthread-key accesses, once per bullet system teardown; the tick callback is two relaxed/acquire
+loads and a branch, once per rendered frame, no system call and no clock read. When the load handler could not be hooked the tick asks the levels itself once a
+second (a degraded mode that the `combat_impactsnd_hook` Error names). The measured host numbers are in the pull request that moved the module.
 
 ## Tests and mutants
 
-`src/quest/tests/q15t/impactsnd_test.cpp` builds a fake image (an anonymous mapping that holds the pinned vaddrs: code words, the GLOB_DAT
-word, `.bss` words, a read-only slot page, an executable trampoline at the loader's address) and a fake table on the host heap.
-It checks, among others: the 15 keys against the engine's `CSymbol64Hash` and the 15 ids against an independent FNV-1 32 (the helper itself is
-checked on the published vectors `""`, `"a"`, `"foobar"`); each of the four code words wrong, unreadable, the GLOB_DAT
-mismatch, D unreadable / read-only / executable; the slot refused (tick-only mode); the wrapper on 15-row, 5-row, sorted,
-foreign-key, empty and over-cap tables with the return value passed through and keys, order and pads untouched; every
-poll-gating, stability, re-read (count, data, map, sort bit, table freed), once-per-table, fix-up (neighbour id, foreign id),
-nowrite, log-budget and count-line rule. The race tests (two threads): a fake Shutdown (called through the swapped vtable word) that frees the table (poisons its rows,
-clears the global) while a row pass is mid-flight (a stage-2 hook parks the pass inside its row loop until the other thread is in
-the wrapper, then gives it 150 ms); the test fails if any row store follows the free or if Shutdown ran before the pass finished
-(15 of 15 rows right at free). Without the lock (today's code has none) the free lands mid-pass and the test reports row stores
-after the free. Also: Shutdown between a pass's validation and its lock (the global cleared; another table published; count, data
-or the map object changed), the lock held by a Shutdown (the tick returns within 150 ms and writes nothing), a nested Shutdown, a
-refused Shutdown slot (rows read and logged, never written), and the thread lines (same tid across roles, a different tid for a
-Shutdown on another thread, a budget of 24). `src/quest/tests/q15t/mutants.d/impactsnd.sh` carries one mutant per rule.
+`src/quest/tests/impactsnd_test.cpp` builds a libr15 image in memory that holds the pinned vaddrs (code words, the GLOB_DAT word, `.bss` words, the
+load JUMP_SLOT, the Shutdown ABS64 word, an executable trampoline at each function's address), the real `GotHook` installing the real thunks into it, a fake
+table on the host heap and a fake CR15Game that says which level is loaded. It checks the 15 keys against the engine's `CSymbol64Hash` and the 15 ids against an
+independent FNV-1 32; each of the four code words wrong, unreadable, the GLOB_DAT mismatch, D unreadable or 0; the slots refused; the switch off; the write
+switch off; the handlers on 15-row, 5-row, sorted, foreign-key, empty and over-cap tables with the return value passed through and keys, order and pads untouched;
+every poll-gating, stability, re-read, once-per-table, fix-up, read-only, log-budget and count-line rule; the race tests (a Shutdown that frees the table while a row
+pass is mid-flight, between a pass's validation and its lock, a lock held, nested, per-thread depth); the thread lines; and the scope (every arena level and lobby, a
+transition with an arena level, no game, an unreadable game, the combat levels, the scope ending with the table). `got_pinned_test.cpp` resolves the three relocations
+and every pinned word in the real libr15. `src/quest/combat/mutants.d/impactsnd.sh` carries one mutant per rule (`src/quest/combat/mutants.sh impactsnd`).

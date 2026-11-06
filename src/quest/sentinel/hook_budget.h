@@ -35,9 +35,11 @@ inline constexpr std::size_t kGrowthHeadroom = 32;
 
 inline constexpr HookBudgetRow kHookBudget[] = {
     {"combat/combat_tick.cpp", 1, 0},
+    {"combat/decals.cpp", 2, 0},
     {"combat/equip_refire.cpp", 6, 0},
     {"combat/headset_gates.cpp", 2, 0},
     {"combat/heaps.cpp", 4, 0},
+    {"combat/impactsnd.cpp", 2, 0},
     {"combat/match_tags.cpp", 2, 0},
     {"combat/memsys.cpp", 2, 0},
     {"diag/hwdump_install.cpp", 18, 0},

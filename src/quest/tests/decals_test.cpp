@@ -1,8 +1,13 @@
-// Host test of decals (src/quest/plugins/q15t/src/decals.{h,cpp}, decals_core.h; issue #1619). Three layers:
+// Host test of the level-decals module (src/quest/combat/decals.{h,cpp}, decals_core.h, #2183; moved from the q15t plugin's decals, #1619). Three layers:
 //   1. the table file: the parser's refusals, the uv flips, the blend, the level gate, the index and vertex fill;
-//   2. the per-system state machine (decals::Host) over stand-in operations: gating, retries, level changes, shutdown, the war room;
-//   3. the real installer and wrappers over a stand-in engine: slot words on a fake data page, a fake bullet system, allocator, node,
-//      mesh and vertex buffer laid out as the module reads them. Real SafeRead, real mprotect, real files.
+//   2. the per-system state machine (decals::Host) over stand-in operations: gating, retries, level changes, shutdown, the war room, and the scope (a game
+//      space in a level that is not a combat map or the war room draws and creates nothing, and its level is read once a second, not on every update);
+//   3. the real installer and handlers over a stand-in engine: the real GotHook into the GLOB_DAT word of UpdateMovement and the Shutdown vtable word of a libr15
+//      image built in memory, a fake bullet system, allocator, node, mesh and vertex buffer laid out as the module reads them. Real SafeRead, real files.
+// What moved with the module is every assertion of the plugin's test; what changed is the fixture (the manager's slots, the structured lines, the
+// `combat.decals` keys in place of the switch files) and what is new: the scope and the chain above impactsnd's Shutdown handler.
+//
+// Built and run by `just test-quest-combat`.
 #include <dlfcn.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -15,11 +20,14 @@
 #include <string>
 #include <vector>
 
-#include "decals.h"
-#include "module_switch.h"
-#include "nevr/plugin_interface.h"
 #include "nevr/symbol_hash.h"
-#include "plugin_log.h"
+#include "quest/combat/combat_level.h"
+#include "quest/combat/decals.h"
+#include "quest/combat/decals_targets.h"
+#include "quest/combat/legacy_switch.h"
+#include "quest/sentinel/hook_install.h"
+#include "quest/sentinel/hook_log.h"
+#include "quest/tests/combat_libr15_image.h"
 
 static int g_fail = 0;
 #define CHECK(cond, ...)                                \
@@ -33,25 +41,57 @@ static int g_fail = 0;
   } while (0)
 
 struct Line {
-  uint32_t level;
+  int level;  // 0 debug, 1 info, 2 warning, 3 error
   std::string text;
 };
 static std::vector<Line> g_lines;
-static void FakeLog(const char* id, uint32_t level, const char* msg, const NevrLogField* f, uint32_t n) {
-  std::string t = std::string("plugin=") + id + " " + msg;
-  for (uint32_t i = 0; i < n; ++i) t += std::string(" ") + f[i].key + "=" + f[i].value;
-  g_lines.push_back({level, t});
+static void Capture(sentinel::LogLevel level, const char* line) {
+  const int l = level == sentinel::LogLevel::kInfo ? 1 : level == sentinel::LogLevel::kWarn ? 2 : level == sentinel::LogLevel::kError ? 3 : 0;
+  g_lines.push_back({l, line});
+}
+// The plugin's `key=value` needles are matched against the record's fields; its message words against the events that replace them.
+static std::string Needle(const char* needle) {
+  static const struct {
+    const char* from;
+    const char* to;
+  } kEvents[] = {
+      {"decals: game space", "\"event\":\"combat_decals_game_space\""},
+      {"level changed under a bullet system", "\"event\":\"combat_decals_level_changed\""},
+      {"more bullet systems than the table keeps", "\"event\":\"combat_decals_systems_full\""},
+      {"decals: window", "\"event\":\"combat_decals_window\""},
+      {"decals on", "\"event\":\"combat_decals_table\""},
+      {"decals shutdown wrapper", "\"event\":\"combat_decals_hook\",\"hook\":\"shutdown\""},
+      {"decals update wrapper", "\"event\":\"combat_decals_hook\",\"hook\":\"update\""},
+      {"decals: node made", "\"event\":\"combat_decals_node\",\"made\":1"},
+      {"node not made", "\"event\":\"combat_decals_node\",\"made\":0"},
+      {"bullet system shutdown, its nodes are destroyed", "\"event\":\"combat_decals_system_shutdown\""},
+      {"decals off: no readable decals.bin", "\"reason\":\"no_table\""},
+      {"decals refused: decals.bin is not a usable table", "\"reason\":\"bad_table\""},
+  };
+  std::string s = needle;
+  for (const auto& e : kEvents)
+    if (s.compare(0, std::strlen(e.from), e.from) == 0) return e.to + s.substr(std::strlen(e.from));
+  const size_t eq = s.find('=');
+  if (eq == std::string::npos) return s;
+  const std::string key = s.substr(0, eq), val = s.substr(eq + 1);
+  if (key == "level") return "\"level\":\"" + val;
+  if (!val.empty() && val.find_first_not_of("0123456789") == std::string::npos) return "\"" + key + "\":" + val;
+  return "\"" + key + "\":\"" + val;
 }
 static int CountLines(const char* needle, int level = -1) {
+  const std::string n = Needle(needle);
   int c = 0;
   for (const auto& l : g_lines)
-    if (l.text.find(needle) != std::string::npos && (level < 0 || static_cast<int>(l.level) == level)) ++c;
+    if (l.text.find(n) != std::string::npos && (level < 0 || l.level == level)) ++c;
   return c;
 }
 
-using namespace q15t::decals;
+using namespace nevr_quest::combat::decals;
+namespace level = nevr_quest::combat::level;
+namespace combat = nevr_quest::combat;
+namespace dc = nevr_quest::combat::decals;
 
-// ---- 1. the table ----------------------------------------------------------------------------------------------------
+// ---- 1 and 2. the table and the state machine ----------------------------------------------------------------------------------
 
 namespace {
 
@@ -101,9 +141,14 @@ void TestTable() {
   // the level symbols are the SDK's hash of the level names
   CHECK(kLevelWarRoom == EchoVR::CSymbol64Hash("mpl_combat_war_room"), "war room symbol %016llx",
         static_cast<unsigned long long>(EchoVR::CSymbol64Hash("mpl_combat_war_room")));
-  CHECK(kCombatLevels[0] == EchoVR::CSymbol64Hash("mpl_combat_dyson") && kCombatLevels[1] == EchoVR::CSymbol64Hash("mpl_combat_combustion") &&
-            kCombatLevels[2] == EchoVR::CSymbol64Hash("mpl_combat_fission") && kCombatLevels[3] == EchoVR::CSymbol64Hash("mpl_combat_gauss"),
-        "a combat level symbol is not the SDK's hash of its name");
+  // the combat maps are combat_level.h's, the one answer to "is this combat?"; this module keeps no list of its own
+  for (const char* name : {"mpl_combat_dyson", "mpl_combat_combustion", "mpl_combat_fission", "mpl_combat_gauss"})
+    CHECK(nevr_quest::combat::level::IsCombatMap(EchoVR::CSymbol64Hash(name)), "%s is not a combat map", name);
+  for (const char* name : {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a", "mpl_lobby_b", "mpl_lobby_b_combat", "mpl_combat_war_room"})
+    CHECK(!nevr_quest::combat::level::IsCombatMap(EchoVR::CSymbol64Hash(name)), "%s is a combat map", name);
+  CHECK(ActsIn(kDyson) && ActsIn(kLevelWarRoom) && !ActsIn(EchoVR::CSymbol64Hash("mpl_arena_a")) && !ActsIn(EchoVR::CSymbol64Hash("mpl_lobby_b_combat")) &&
+            !ActsIn(0) && !ActsIn(~0ull),
+        "the levels the module acts in: combat maps and the war room");
 
   // a good table: two groups, the second longer than a node holds
   std::vector<GroupIn> in(2);
@@ -223,12 +268,14 @@ struct Fake {
   std::vector<std::pair<uintptr_t, int>> made;   // sys, group mat low bits
   std::vector<uintptr_t> destroyed, hidden, drawn;
   bool draw_ok = true;
+  int level_reads = 0;   // how often the module asked for a game space's level
 };
 
 int SysIndex(uintptr_t sys) { return static_cast<int>(sys / 0x1000) - 1; }
 bool FLevelOf(void* u, uintptr_t sys, uint64_t* level) {
   Fake* f = static_cast<Fake*>(u);
   const int i = SysIndex(sys);
+  ++f->level_reads;
   if (!f->has_level[i]) return false;
   *level = f->levels[i];
   return true;
@@ -442,10 +489,50 @@ void TestHost() {
     CHECK(CountLines("decals: window") == 1 && CountLines("frames=2") == 1, "one window line with the frames counted");
     delete h;
   }
+
+  {  // the scope (arena shares the APK): a game space in a level that is not a combat map or the war room creates and draws nothing, even when the
+     // table names that level, and its level is read once a second, not on every update
+    const uint64_t kArena = EchoVR::CSymbol64Hash("mpl_arena_a"), kLobby = EchoVR::CSymbol64Hash("mpl_lobby_b_combat");
+    std::vector<GroupIn> ia(3);
+    ia[0] = {kArena, 0x44, 0, {MakeQuad(5)}};
+    ia[1] = {kLobby, 0x45, 0, {MakeQuad(6)}};
+    ia[2] = {kDyson, 0x55, 0, {MakeQuad(7)}};
+    Table ta;
+    CHECK(Parse(Bytes(ia), &ta) == LoadResult::kOk, "scope table");
+    for (uint64_t lvl : {kArena, kLobby, EchoVR::CSymbol64Hash("mpl_lobby_b"), uint64_t{0x1234}}) {
+      Fake f;
+      f.levels[0] = lvl;
+      f.has_level[0] = true;
+      Host* h = NewHost(&f, &ta);
+      g_lines.clear();
+      h->Tick(0x1000, 100);
+      CHECK(f.made.empty() && f.drawn.empty() && h->node_n == 0 && h->counters.nodes_made == 0, "level %llx: a node was made or drawn", static_cast<unsigned long long>(lvl));
+      CHECK(CountLines("decals: game space") == 1 && CountLines("acts=0") == 1 && h->sys_n == 1, "level %llx: one game-space line that says it does not act", static_cast<unsigned long long>(lvl));
+      CHECK(f.level_reads == 1, "level %llx: first look reads the level once (%d)", static_cast<unsigned long long>(lvl), f.level_reads);
+      for (int64_t t2 = 110; t2 < 100 + kInertRecheckMs; t2 += 16) h->Tick(0x1000, t2);  // sixty frames inside the second
+      CHECK(f.level_reads == 1 && f.made.empty(), "level %llx: the level was read again inside the second (%d reads)", static_cast<unsigned long long>(lvl), f.level_reads);
+      h->Tick(0x1000, 100 + kInertRecheckMs);
+      CHECK(f.level_reads == 2 && f.made.empty(), "level %llx: not read again after the second (%d reads)", static_cast<unsigned long long>(lvl), f.level_reads);
+      // the space becomes a combat map (the level changes under it): its nodes are made on the next look
+      f.levels[0] = kDyson;
+      h->Tick(0x1000, 100 + 2 * kInertRecheckMs);
+      CHECK(f.made.size() == 1 && f.made[0].second == 0x55 && CountLines("level changed under a bullet system") == 1, "level %llx: a space that became a combat map made no node", static_cast<unsigned long long>(lvl));
+      delete h;
+    }
+    // a combat space is read on every update (a level change is seen at once)
+    Fake f2;
+    f2.levels[0] = kDyson;
+    f2.has_level[0] = true;
+    Host* h2 = NewHost(&f2, &ta);
+    for (int i = 0; i < 10; ++i) h2->Tick(0x1000, 100 + i);
+    CHECK(f2.level_reads == 10, "a combat space reads its level on every update (%d)", f2.level_reads);
+    delete h2;
+    FreeTable(&ta);
+  }
   FreeTable(&t);
 }
 
-// ---- 3. the installer and the wrappers over a stand-in engine --------------------------------------------------------------------
+// ---- 3. the installer and the handlers over a stand-in engine ---------------------------------------------------------------------
 
 // The stand-in engine. Every object is laid out as the module reads it.
 constexpr size_t kNodeSize = 0x2048;
@@ -510,13 +597,13 @@ void FVisible(void* node, uint32_t on) {
   const int i = NodeIndex(node);
   if (i >= 0) E.visible[i] = on;
 }
-q15t::DecalsVertexFormat FFormat() {
+nevr_quest::combat::decals::VertexFormat FFormat() {
   E.calls.push_back("format");
-  q15t::DecalsVertexFormat f;
+  nevr_quest::combat::decals::VertexFormat f;
   std::memset(f.raw, 0x7e, sizeof f.raw);
   return f;
 }
-int FInit(void* mesh, const q15t::DecalsVertexFormat* fmt, const q15t::DecalsMeshInit* in) {
+int FInit(void* mesh, const nevr_quest::combat::decals::VertexFormat* fmt, const nevr_quest::combat::decals::MeshInit* in) {
   E.calls.push_back("init");
   E.init_mesh = mesh;
   E.init_material = in->material;
@@ -541,6 +628,7 @@ void FShutdownNode(void*) { E.calls.push_back("node_shutdown"); }
 void* FMemCurrent() { return E.current; }
 void FMemSet(void* a) { E.mem_sets.push_back(a); }
 
+
 // The game's functions the slots hold
 __attribute__((noinline)) void FakeUpdateMovement(uintptr_t) { ++E.real_updates; }
 __attribute__((noinline)) uint64_t FakeShutdown(uint64_t self) {
@@ -548,15 +636,8 @@ __attribute__((noinline)) uint64_t FakeShutdown(uint64_t self) {
   E.calls.push_back("real_shutdown");
   return self + 1;
 }
-// what impactsnd's wrapper looks like to the module: a function of this same library that calls on
-static uintptr_t g_earlier_real = 0;
-__attribute__((noinline)) uint64_t EarlierWrapper(uint64_t self) {
-  ++E.earlier_shutdowns;
-  return reinterpret_cast<uint64_t (*)(uint64_t)>(g_earlier_real)(self);
-}
-
-q15t::DecalsApi MakeApi() {
-  q15t::DecalsApi a;
+dc::Api MakeApi() {
+  dc::Api a;
   a.ctor = &FCtor;
   a.vertex_format = &FFormat;
   a.init = &FInit;
@@ -584,32 +665,70 @@ void ResetEngine() {
   E.ctx_ptr = E.ctx_array;
 }
 
-// a fake bullet system: +0x30 allocator, +0x80 game space; a game space: +0x58 level
+// ---- the image: the pinned update (GLOB_DAT) and Shutdown (ABS64) words, and a trampoline at each function's address ----
+combat_test::Image g_image;
+uintptr_t g_base = 0;
+bool Lookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_image.Present() || std::strcmp(module, sentinel::pinned::kLibR15) != 0) return false;
+  *out = g_image.Elf();
+  return true;
+}
+void Tramp(uintptr_t va, void* target) {  // movabs rax, <target>; jmp rax, on a page made executable and never written afterwards
+  uint8_t code[12] = {0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xe0};
+  const uint64_t t = reinterpret_cast<uint64_t>(target);
+  std::memcpy(code + 2, &t, 8);
+  std::memcpy(reinterpret_cast<void*>(g_base + va), code, sizeof code);
+  mprotect(reinterpret_cast<void*>((g_base + va) & ~0xfffull), 0x1000, PROT_READ | PROT_EXEC);
+}
+void W64(uintptr_t va, uint64_t v) { *reinterpret_cast<uint64_t*>(g_base + va) = v; }
+uint64_t R64(uintptr_t va) { return *reinterpret_cast<uint64_t*>(g_base + va); }
+void BuildImage() {
+  g_image.Build({{dc::kUpdateSymbol, dc::kUpdateSlotVa, true, false, dc::kUpdateRealVa},
+                 {dc::kShutdownSymbol, dc::kShutdownSlotVa, false, false, dc::kShutdownRealVa, true}});
+  g_base = g_image.Base();
+  Tramp(dc::kUpdateRealVa, reinterpret_cast<void*>(&FakeUpdateMovement));
+  Tramp(dc::kShutdownRealVa, reinterpret_cast<void*>(&FakeShutdown));
+  W64(dc::kUpdateSlotVa, g_base + dc::kUpdateRealVa);
+  W64(dc::kShutdownSlotVa, g_base + dc::kShutdownRealVa);
+}
+void Fresh() {
+  dc::ResetForTest();
+  ResetEngine();
+  g_lines.clear();
+  BuildImage();
+}
+
+// What impactsnd's Shutdown handler looks like to the module: a handler on the same word that counts and calls on.
+struct EarlierTag {};
+using EarlierThunk = sentinel::CallbackThunk<EarlierTag, uint64_t(uint64_t)>;
+uint64_t OnEarlier(EarlierThunk::Fn original, uint64_t self) noexcept {
+  ++E.earlier_shutdowns;
+  return original(self);
+}
+NEVR_HOOK_RECORD(kEarlierRecord, EarlierThunk, &OnEarlier);
+sentinel::GotHook g_earlierHook;
+void InstallEarlier() {
+  EarlierThunk::Arm(kEarlierRecord);
+  sentinel::GotTarget t(sentinel::pinned::kLibR15, dc::kShutdownSymbol, sentinel::RelocKind::kAbs64, sentinel::pinned::LibR15PatchedBuildId(), dc::kShutdownSlotVa);
+  t.expectedOriginal = reinterpret_cast<const void*>(g_base + dc::kShutdownRealVa);
+  CHECK(sentinel::InstallThunk<EarlierThunk>(g_earlierHook, t.Owned("test_earlier"), &Lookup) == sentinel::GotStatus::kOk, "the earlier handler did not install");
+}
+void ForgetEarlier() {
+  g_earlierHook.Forget();
+  EarlierThunk::Reset();
+}
+
 struct Sys {
   alignas(16) uintptr_t w[0x20] = {};
   alignas(16) uintptr_t gs[0x20] = {};
   uintptr_t addr() { return reinterpret_cast<uintptr_t>(w); }
 };
-void MakeSys(Sys* s, uint64_t level) {
+void MakeSys(Sys* s, uint64_t lvl) {
   std::memset(s->w, 0, sizeof s->w);
   std::memset(s->gs, 0, sizeof s->gs);
   s->w[0x30 / 8] = reinterpret_cast<uintptr_t>(E.alloc_obj);
   s->w[0x80 / 8] = reinterpret_cast<uintptr_t>(s->gs);
-  s->gs[0x58 / 8] = level;
-}
-
-struct Page {
-  uintptr_t* w;
-  uintptr_t base;
-};
-Page MakePage(uintptr_t update_word, uintptr_t shutdown_word) {
-  void* p = mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  if (p == MAP_FAILED) std::abort();
-  auto* w = static_cast<uintptr_t*>(p);
-  w[4] = update_word;    // slot at 0x20
-  w[5] = shutdown_word;  // slot at 0x28
-  mprotect(p, 4096, PROT_READ);
-  return {w, reinterpret_cast<uintptr_t>(p)};
+  s->gs[0x58 / 8] = lvl;
 }
 
 std::string WriteFile(const std::string& dir, const char* name, const std::vector<uint8_t>& b) {
@@ -627,29 +746,36 @@ int Index(const char* name, int from = 0) {
   return -1;
 }
 
+using UpdateFn = void (*)(uintptr_t);
+using ShutFn = uint64_t (*)(uint64_t);
+UpdateFn UpdateSlot() { return reinterpret_cast<UpdateFn>(R64(dc::kUpdateSlotVa)); }
+ShutFn ShutSlot() { return reinterpret_cast<ShutFn>(R64(dc::kShutdownSlotVa)); }
+combat::ModuleResult Install(const char* table, const dc::Api* api, bool on = true, bool fu = false, bool fv = false) {
+  dc::Switches sw;
+  sw.on = on;
+  sw.flipU = fu;
+  sw.flipV = fv;
+  return dc::InstallAt(sw, &Lookup, table, api);
+}
+
 void TestInstall(const std::string& dir) {
-  using UpdateFn = void (*)(uintptr_t);
-  using ShutFn = uint64_t (*)(uint64_t);
-  const q15t::DecalsApi api = MakeApi();
+  const dc::Api api = MakeApi();
   std::vector<GroupIn> in(2);
   in[0] = {kDyson, 0x1111, 7, {MakeQuad(1), MakeQuad(10), MakeQuad(20)}};
   in[1] = {kLevelWarRoom, 0x2222, 0, {MakeQuad(50)}};
   const std::string table = WriteFile(dir, "decals.bin", Bytes(in));
-  q15t::SetModuleSwitchDirForTest(dir.c_str());
+  combat::legacy::SetDirectoryForTest(dir.c_str());
   g_lines.clear();
-  const uintptr_t kUp = reinterpret_cast<uintptr_t>(&FakeUpdateMovement), kSh = reinterpret_cast<uintptr_t>(&FakeShutdown);
 
   // ---- the slots
-  q15t::ResetDecalsForTest();
-  ResetEngine();
-  Page pg = MakePage(kUp, kSh);
-  q15t::InstallResult r = q15t::InstallDecalsAt(pg.base, 0x20, kUp - pg.base, 0x28, kSh - pg.base, table.c_str(), &api);
-  CHECK(r.status == q15t::SwapStatus::kOk, "install: %s %s", q15t::StatusName(r.status), r.reason);
-  CHECK(pg.w[4] != kUp && pg.w[5] != kSh, "both slot words are replaced");
-  CHECK(CountLines("decals on", 1) == 1 && CountLines("groups=2") >= 1 && CountLines("quads=4") >= 1, "the install line carries the table's counts");
-  CHECK(CountLines("decals shutdown wrapper", 1) == 1 && CountLines("decals update wrapper", 1) == 1, "one INFO line a wrapper");
-  const UpdateFn update = reinterpret_cast<UpdateFn>(pg.w[4]);
-  const ShutFn shutdown = reinterpret_cast<ShutFn>(pg.w[5]);
+  Fresh();
+  combat::ModuleResult r = Install(table.c_str(), &api);
+  CHECK(r.installed && !r.off && std::strcmp(r.status, "installed") == 0, "install: %s", r.status);
+  CHECK(R64(dc::kUpdateSlotVa) != g_base + dc::kUpdateRealVa && R64(dc::kShutdownSlotVa) != g_base + dc::kShutdownRealVa, "both slot words are replaced");
+  CHECK(CountLines("decals on", 1) == 1 && CountLines("groups=2") >= 1 && CountLines("quads=4") >= 1, "the table line carries the table's counts");
+  CHECK(CountLines("decals shutdown wrapper", 1) == 1 && CountLines("decals update wrapper", 1) == 1, "one INFO line a hook");
+  const UpdateFn update = UpdateSlot();
+  const ShutFn shutdown = ShutSlot();
 
   // ---- the first update: the game's own update runs, then the nodes are made and drawn
   Sys s1;
@@ -665,7 +791,6 @@ void TestInstall(const std::string& dir) {
   const uint16_t want_idx[12] = {0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2};
   CHECK(std::memcmp(E.init_idx_head, want_idx, sizeof want_idx) == 0, "Initialize got the index table");
   CHECK(E.init_mesh == static_cast<void*>(E.nodes[1] + 0xa8), "the mesh is the node + 0xa8");
-  // the order of calls of the first node
   const int c_alloc = Index("alloc"), c_ctor = Index("ctor"), c_link = Index("link"), c_fmt = Index("format"), c_init = Index("init");
   CHECK(c_alloc >= 0 && c_alloc < c_ctor && c_ctor < c_link && c_link < c_fmt && c_fmt < c_init, "alloc, ctor, link, format, init in order");
   CHECK(E.mem_sets.size() >= 2 && E.mem_sets[0] == static_cast<void*>(E.alloc_obj) && E.mem_sets[1] == E.current,
@@ -683,7 +808,6 @@ void TestInstall(const std::string& dir) {
   CHECK(CountLines("decals: node made") == 2, "one line a node");
   CHECK(Index("map") > Index("init") && Index("unmap") > Index("map"), "the vertices are mapped after the node exists");
   CHECK(Index("BAD_FORMAT") < 0, "Initialize got the format VertexFormat returned");
-  // the last drawn group is group 1 (1 quad): vbuf holds its 4 vertices
   CHECK(E.vbuf[0].p[0] == 50.0f && E.vbuf[3].uv[1] == 50.0f + 34.0f && E.vbuf[0].c0 == 0xffffffffu, "the vertex buffer holds the group's quad");
 
   // ---- the second update does not make nodes again
@@ -691,7 +815,7 @@ void TestInstall(const std::string& dir) {
   update(s1.addr());
   CHECK(E.nodes_used == nodes_before && E.real_updates == 2, "a second update makes no node");
 
-  // ---- Shutdown: the nodes are destroyed first, in the engine's order, then the earlier function runs
+  // ---- Shutdown: the nodes are destroyed first, in the engine's order, then the game's function runs
   E.calls.clear();
   E.mem_sets.clear();
   const uint64_t ret = shutdown(s1.addr());
@@ -703,14 +827,13 @@ void TestInstall(const std::string& dir) {
   CHECK(E.mem_sets.size() == 4 && E.mem_sets[0] == static_cast<void*>(E.alloc_obj) && E.mem_sets[1] == E.current &&
             E.mem_sets[2] == static_cast<void*>(E.alloc_obj) && E.mem_sets[3] == E.current,
         "per node the allocator is current while it is destroyed and the context is put back: %zu sets", E.mem_sets.size());
-  // the slot already holds our wrapper (a second install): refused, not chained on itself
+  // a second install over our own handlers: refused, not chained on itself
   {
-    const q15t::InstallResult again = q15t::InstallDecalsAt(pg.base, 0x20, kUp - pg.base, 0x28, kSh - pg.base, table.c_str(), &api);
-    CHECK(again.status == q15t::SwapStatus::kUnexpectedOriginal && std::strcmp(again.reason, "already_installed") == 0,
-          "a second install over our own wrapper: %s %s", q15t::StatusName(again.status), again.reason);
+    const combat::ModuleResult again = Install(table.c_str(), &api);
+    CHECK(!again.installed && std::strcmp(again.status, "already_installed") == 0, "a second install over our own handlers: %s", again.status);
   }
   CHECK(CountLines("bullet system shutdown, its nodes are destroyed") == 1, "the teardown is logged");
-  CHECK(q15t::DecalsCountersForTest().nodes_destroyed == 2, "counter");
+  CHECK(dc::CountersForTest().nodes_destroyed == 2, "counter");
 
   // ---- a node whose render state is not the pool's 0 is left alone
   ResetEngine();
@@ -723,154 +846,162 @@ void TestInstall(const std::string& dir) {
   shutdown(s2.addr());
 
   // ---- a game space that has not loaded its level yet (the constructor leaves -1 in it): nothing is made
-  q15t::ResetDecalsForTest();
-  ResetEngine();
-  Page pgA = MakePage(kUp, kSh);
-  CHECK(q15t::InstallDecalsAt(pgA.base, 0x20, kUp - pgA.base, 0x28, kSh - pgA.base, table.c_str(), &api).status == q15t::SwapStatus::kOk, "install A");
+  Fresh();
+  CHECK(Install(table.c_str(), &api).installed, "install A");
   Sys sa;
   MakeSys(&sa, ~0ull);
-  reinterpret_cast<UpdateFn>(pgA.w[4])(sa.addr());
+  UpdateSlot()(sa.addr());
   CHECK(Index("alloc") < 0 && E.real_updates == 1, "level -1: the real update runs, no node is made");
 
   // ---- Initialize fails: no node is kept, the node is destroyed in the engine's order, and the next tries are made
-  q15t::ResetDecalsForTest();
-  ResetEngine();
-  g_lines.clear();
-  Page pg2 = MakePage(kUp, kSh);
-  CHECK(q15t::InstallDecalsAt(pg2.base, 0x20, kUp - pg2.base, 0x28, kSh - pg2.base, table.c_str(), &api).status == q15t::SwapStatus::kOk, "reinstall");
-  const UpdateFn update2 = reinterpret_cast<UpdateFn>(pg2.w[4]);
+  Fresh();
+  CHECK(Install(table.c_str(), &api).installed, "reinstall");
   E.init_rc = 3;
   Sys s3;
   MakeSys(&s3, kDyson);
-  update2(s3.addr());
+  UpdateSlot()(s3.addr());
   CHECK(E.freed.size() == 2 && Index("node_shutdown") >= 0 && Index("dtor") >= 0, "a node whose Initialize fails is shut down, destructed and freed");
   CHECK(CountLines("node not made", 2) == 2 && CountLines("rc=3") == 2, "each failure is a Warning with the engine's answer");
   CHECK(Index("map") < 0, "nothing is drawn");
 
   // ---- graphics not up: no node, no allocation
-  q15t::ResetDecalsForTest();
-  ResetEngine();
+  Fresh();
   E.gs_initialized = 0;
-  Page pg3 = MakePage(kUp, kSh);
-  CHECK(q15t::InstallDecalsAt(pg3.base, 0x20, kUp - pg3.base, 0x28, kSh - pg3.base, table.c_str(), &api).status == q15t::SwapStatus::kOk, "install 3");
+  CHECK(Install(table.c_str(), &api).installed, "install 3");
   Sys s4;
   MakeSys(&s4, kDyson);
-  reinterpret_cast<UpdateFn>(pg3.w[4])(s4.addr());
+  UpdateSlot()(s4.addr());
   CHECK(Index("alloc") < 0 && E.nodes_used == 0, "CGS not initialized: nothing allocated");
 
   // ---- a vertex buffer that cannot be mapped: not drawn, not shown again
-  q15t::ResetDecalsForTest();
-  ResetEngine();
+  Fresh();
   E.map_fails = true;
-  Page pg4 = MakePage(kUp, kSh);
-  CHECK(q15t::InstallDecalsAt(pg4.base, 0x20, kUp - pg4.base, 0x28, kSh - pg4.base, table.c_str(), &api).status == q15t::SwapStatus::kOk, "install 4");
+  CHECK(Install(table.c_str(), &api).installed, "install 4");
   Sys s5;
   MakeSys(&s5, kDyson);
-  reinterpret_cast<UpdateFn>(pg4.w[4])(s5.addr());
+  UpdateSlot()(s5.addr());
   CHECK(Index("map") >= 0 && Index("unmap") < 0 && Index("visible1") < 0, "map failed: no unmap, nothing shown");
 
-  // ---- Shutdown chains on an earlier wrapper of this library (impactsnd's) and still calls the game's function through it
-  q15t::ResetDecalsForTest();
-  ResetEngine();
-  g_earlier_real = kSh;
-  Page pg5 = MakePage(kUp, reinterpret_cast<uintptr_t>(&EarlierWrapper));
-  r = q15t::InstallDecalsAt(pg5.base, 0x20, kUp - pg5.base, 0x28, kSh - pg5.base, table.c_str(), &api);
-  CHECK(r.status == q15t::SwapStatus::kOk, "install over an earlier wrapper: %s %s", q15t::StatusName(r.status), r.reason);
+  // ---- Shutdown chains on an earlier handler (impactsnd's) and still calls the game's function through it
+  Fresh();
+  InstallEarlier();
+  r = Install(table.c_str(), &api);
+  CHECK(r.installed, "install over an earlier handler: %s", r.status);
   Sys s6;
   MakeSys(&s6, kDyson);
-  reinterpret_cast<UpdateFn>(pg5.w[4])(s6.addr());
-  const uint64_t ret2 = reinterpret_cast<ShutFn>(pg5.w[5])(s6.addr());
-  CHECK(E.earlier_shutdowns == 1 && E.real_shutdowns == 1 && ret2 == s6.addr() + 1, "our wrapper calls the earlier one, which calls the game's");
-  CHECK(Index("free") >= 0 && Index("free") < Index("real_shutdown"), "our nodes are freed before the earlier wrapper runs");
+  UpdateSlot()(s6.addr());
+  const uint64_t ret2 = ShutSlot()(s6.addr());
+  CHECK(E.earlier_shutdowns == 1 && E.real_shutdowns == 1 && ret2 == s6.addr() + 1, "our handler calls the earlier one, which calls the game's");
+  CHECK(Index("free") >= 0 && Index("free") < Index("real_shutdown"), "our nodes are freed before the earlier handler runs");
+  ForgetEarlier();
 
   // ---- Shutdown slot holds something else: refused, the update slot is not touched, nothing runs
-  q15t::ResetDecalsForTest();
-  ResetEngine();
-  g_lines.clear();
-  void* const libc_fn = dlsym(RTLD_DEFAULT, "getpid");
-  Page pg6 = MakePage(kUp, reinterpret_cast<uintptr_t>(libc_fn));
-  r = q15t::InstallDecalsAt(pg6.base, 0x20, kUp - pg6.base, 0x28, kSh - pg6.base, table.c_str(), &api);
-  CHECK(r.status == q15t::SwapStatus::kUnexpectedOriginal && std::strcmp(r.reason, "slot_not_stock_or_own") == 0,
-        "a word in another library: %s %s", q15t::StatusName(r.status), r.reason);
-  CHECK(pg6.w[4] == kUp && pg6.w[5] == reinterpret_cast<uintptr_t>(libc_fn), "neither slot was touched");
+  Fresh();
+  W64(dc::kShutdownSlotVa, reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "getpid")));
+  r = Install(table.c_str(), &api);
+  CHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0, "a word in another library: %s", r.status);
+  CHECK(R64(dc::kUpdateSlotVa) == g_base + dc::kUpdateRealVa, "the update slot was not touched");
   CHECK(CountLines("decals shutdown wrapper", 3) == 1, "one ERROR line");
-  // a word in a data mapping of this very library is not code: refused
-  q15t::ResetDecalsForTest();
-  ResetEngine();
-  Page pg6b = MakePage(kUp, reinterpret_cast<uintptr_t>(&E.gs_initialized));
-  r = q15t::InstallDecalsAt(pg6b.base, 0x20, kUp - pg6b.base, 0x28, kSh - pg6b.base, table.c_str(), &api);
-  CHECK(r.status == q15t::SwapStatus::kUnexpectedOriginal && std::strcmp(r.reason, "slot_not_stock_or_own") == 0,
-        "a word in this library's data: %s %s", q15t::StatusName(r.status), r.reason);
 
-  // ---- the update slot holds something else: refused
-  q15t::ResetDecalsForTest();
-  ResetEngine();
-  Page pg7 = MakePage(kUp + 8, kSh);
-  r = q15t::InstallDecalsAt(pg7.base, 0x20, kUp - pg7.base, 0x28, kSh - pg7.base, table.c_str(), &api);
-  CHECK(r.status == q15t::SwapStatus::kUnexpectedOriginal, "update slot not the game's function: %s", q15t::StatusName(r.status));
-  CHECK(pg7.w[4] == kUp + 8, "the update slot is untouched");
-  // the Shutdown wrapper that did go in passes through and makes no node
-  const ShutFn sh7 = reinterpret_cast<ShutFn>(pg7.w[5]);
+  // ---- the update slot holds something else: refused; the Shutdown handler that did go in passes through and makes no node
+  Fresh();
+  W64(dc::kUpdateSlotVa, g_base + dc::kUpdateRealVa + 8);
+  r = Install(table.c_str(), &api);
+  CHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0, "update slot not the game's function: %s", r.status);
+  CHECK(R64(dc::kUpdateSlotVa) == g_base + dc::kUpdateRealVa + 8, "the update slot is untouched");
   Sys s7;
   MakeSys(&s7, kDyson);
-  CHECK(sh7(s7.addr()) == s7.addr() + 1 && Index("free") < 0, "with the module out, the Shutdown wrapper only passes through");
+  CHECK(ShutSlot()(s7.addr()) == s7.addr() + 1 && Index("free") < 0, "with the module out, the Shutdown handler only passes through");
 
   // ---- the table: absent, refused, switched off
-  q15t::ResetDecalsForTest();
-  ResetEngine();
-  g_lines.clear();
-  Page pg8 = MakePage(kUp, kSh);
-  r = q15t::InstallDecalsAt(pg8.base, 0x20, kUp - pg8.base, 0x28, kSh - pg8.base, (dir + "/nope.bin").c_str(), &api);
-  CHECK(r.status != q15t::SwapStatus::kOk && std::strcmp(r.reason, "off") == 0 && pg8.w[4] == kUp && pg8.w[5] == kSh, "no table: off, slots untouched");
-  CHECK(CountLines("decals off: no readable decals.bin", 1) == 1, "one INFO line says what was searched");
+  Fresh();
+  r = Install((dir + "/nope.bin").c_str(), &api);
+  CHECK(!r.installed && r.off && std::strcmp(r.status, "no_table") == 0 && R64(dc::kUpdateSlotVa) == g_base + dc::kUpdateRealVa, "no table: off, slots untouched");
+  CHECK(CountLines("decals off: no readable decals.bin", 1) == 1, "one INFO line says no table was found");
   std::vector<uint8_t> broken = Bytes(in);
   broken[0] = 'X';
   const std::string bad = WriteFile(dir, "bad.bin", broken);
-  r = q15t::InstallDecalsAt(pg8.base, 0x20, kUp - pg8.base, 0x28, kSh - pg8.base, bad.c_str(), &api);
-  CHECK(std::strcmp(r.reason, "bad_table") == 0 && pg8.w[4] == kUp && CountLines("decals refused: decals.bin is not a usable table", 3) == 1,
-        "a bad table: refused with an ERROR line, slots untouched (%s)", r.reason);
+  r = Install(bad.c_str(), &api);
+  CHECK(!r.installed && !r.off && std::strcmp(r.status, "bad_table") == 0 && CountLines("status=bad_table", 3) == 1 && CountLines("reason=bad_magic", 3) == 1,
+        "a bad table: refused with an ERROR line (%s)", r.status);
   std::vector<GroupIn> none;
   const std::string empty = WriteFile(dir, "empty.bin", Bytes(none));
-  r = q15t::InstallDecalsAt(pg8.base, 0x20, kUp - pg8.base, 0x28, kSh - pg8.base, empty.c_str(), &api);
-  CHECK(std::strcmp(r.reason, "empty_table") == 0, "a table with no groups: %s", r.reason);
+  r = Install(empty.c_str(), &api);
+  CHECK(std::strcmp(r.status, "empty_table") == 0, "a table with no groups: %s", r.status);
   // the search without a path: the plugin data directory's decals.bin
-  Page pg9 = MakePage(kUp, kSh);
-  r = q15t::InstallDecalsAt(pg9.base, 0x20, kUp - pg9.base, 0x28, kSh - pg9.base, nullptr, &api);
-  CHECK(r.status == q15t::SwapStatus::kOk, "found in the data directory: %s %s", q15t::StatusName(r.status), r.reason);
-  // decals.off
-  q15t::ResetDecalsForTest();
-  const std::string off = WriteFile(dir, "decals.off", {});
-  Page pg10 = MakePage(kUp, kSh);
-  r = q15t::InstallDecalsAt(pg10.base, 0x20, kUp - pg10.base, 0x28, kSh - pg10.base, table.c_str(), &api);
-  CHECK(std::strcmp(r.reason, "off_file") == 0 && pg10.w[4] == kUp, "decals.off keeps the module out");
-  std::remove(off.c_str());
+  r = Install(nullptr, &api);
+  CHECK(r.installed, "found in the data directory: %s", r.status);
+  // combat.decals false
+  Fresh();
+  r = Install(table.c_str(), &api, /*on=*/false);
+  CHECK(!r.installed && r.off && std::strcmp(r.status, "off_config") == 0 && R64(dc::kUpdateSlotVa) == g_base + dc::kUpdateRealVa, "combat.decals false keeps the module out");
   // an engine that lacks an entry: refused
-  q15t::DecalsApi missing = api;
+  dc::Api missing = api;
   missing.init = nullptr;
-  r = q15t::InstallDecalsAt(pg10.base, 0x20, kUp - pg10.base, 0x28, kSh - pg10.base, table.c_str(), &missing);
-  CHECK(std::strcmp(r.reason, "engine_export_missing") == 0 && pg10.w[4] == kUp, "a missing engine entry refuses the module");
-  q15t::ResetDecalsForTest();
+  r = Install(table.c_str(), &missing);
+  CHECK(std::strcmp(r.status, "engine_export_missing") == 0 && R64(dc::kUpdateSlotVa) == g_base + dc::kUpdateRealVa, "a missing engine entry refuses the module");
+  // no libr15
+  r = dc::InstallAt(dc::Switches{true, false, false}, nullptr, table.c_str(), &api);
+  CHECK(std::strcmp(r.status, "module_not_loaded") == 0, "no libr15: %s", r.status);
+  // the plugin's switch files are warned about and changed nothing
+  Fresh();
+  WriteFile(dir, "decals.off", {});
+  WriteFile(dir, "decalflipu.on", {});
+  WriteFile(dir, "decalflipv.on", {});
+  r = Install(table.c_str(), &api);
+  CHECK(r.installed, "the legacy kill file still keeps the module out: %s", r.status);
+  CHECK(CountLines("\"event\":\"combat_decals_legacy_switch\"", 2) == 3 && CountLines("file=decals.off") == 1 && CountLines("file=decalflipu.on") == 1 &&
+            CountLines("file=decalflipv.on") == 1,
+        "one Warning a legacy file");
+  CHECK(CountLines("flip_u=0") == 1 && CountLines("flip_v=0") == 1, "the flip files were read");
+  std::remove((dir + "/decals.off").c_str());
+  std::remove((dir + "/decalflipu.on").c_str());
+  std::remove((dir + "/decalflipv.on").c_str());
+  // the keys flip the uv
+  Fresh();
+  Install(table.c_str(), &api, true, true, true);
+  CHECK(CountLines("flip_u=1") == 1 && CountLines("flip_v=1") == 1, "the flip keys are in the table line");
+  dc::ResetForTest();
+}
+
+// ---- the scope: arena shares the APK, so a game space in an arena level creates and draws nothing ----
+
+void TestArenaScope(const std::string& dir) {
+  const dc::Api api = MakeApi();
+  std::vector<GroupIn> in(2);
+  in[0] = {kDyson, 0x1111, 0, {MakeQuad(1)}};
+  in[1] = {EchoVR::CSymbol64Hash("mpl_arena_a"), 0x2222, 0, {MakeQuad(2)}};  // a table that names an arena level
+  const std::string table = WriteFile(dir, "scope.bin", Bytes(in));
+  for (const char* name : {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a", "mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b_combat"}) {
+    Fresh();
+    CHECK(Install(table.c_str(), &api).installed, "install (%s)", name);
+    Sys s;
+    MakeSys(&s, EchoVR::CSymbol64Hash(name));
+    for (int i = 0; i < 50; ++i) UpdateSlot()(s.addr());
+    CHECK(E.real_updates == 50, "%s: the game's update ran %d times", name, E.real_updates);
+    CHECK(Index("alloc") < 0 && E.nodes_used == 0 && Index("map") < 0 && Index("init") < 0, "%s: an arena or lobby level made or drew a node", name);
+    CHECK(CountLines("decals: game space") == 1 && CountLines("acts=0") == 1, "%s: one game-space line that says it does not act", name);
+    CHECK(dc::CountersForTest().nodes_made == 0 && dc::CountersForTest().drawn_quads == 0, "%s: counters", name);
+    // Shutdown still passes through, and finds no node
+    CHECK(ShutSlot()(s.addr()) == s.addr() + 1 && Index("free") < 0, "%s: Shutdown", name);
+  }
 }
 
 }  // namespace
 
 int main() {
-  NevrGameContext ctx{};
-  ctx.ctx_size = sizeof ctx;
-  ctx.plugin_id = "q15t";
-  ctx.log = &FakeLog;
-  q15t::SetLogContext(&ctx);
-  char tmpl[] = "/tmp/q15t-decals-XXXXXX";
+  sentinel::SetLogSink(&Capture);
+  char tmpl[] = "/tmp/combat-decals-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) return 2;
   const std::string dir = tmpl;
 
-  CHECK(q15t::kDecalsUpdateSlot == 0x370dbc8 && q15t::kDecalsUpdateReal == 0x2124290 && q15t::kDecalsShutdownSlot == 0x36933e8 &&
-            q15t::kDecalsShutdownReal == 0x21226f0,
+  CHECK(dc::kUpdateSlotVa == 0x370dbc8 && dc::kUpdateRealVa == 0x2124290 && dc::kShutdownSlotVa == 0x36933e8 && dc::kShutdownRealVa == 0x21226f0,
         "pinned addresses changed");
 
   TestTable();
   TestHost();
   TestInstall(dir);
+  TestArenaScope(dir);
 
   std::string cmd = "rm -rf " + dir;
   if (std::system(cmd.c_str()) != 0) std::printf("note: could not remove %s\n", dir.c_str());

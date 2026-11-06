@@ -8,7 +8,6 @@
 #include "aibots.h"
 #include "bvh.h"
 #include "custctx.h"
-#include "decals.h"
 #include "meshstep.h"
 #include "droneguard.h"
 #include "dronekill.h"
@@ -20,7 +19,6 @@
 #include "game_tick.h"
 #include "gunconnect.h"
 #include "hudmeter.h"
-#include "impactsnd.h"
 #include "instmodel.h"
 #include "levelname.h"
 #include "boosterpool.h"
@@ -80,9 +78,6 @@
 #ifndef Q15T_WALLFIRE  // needs Q15T_BVH
 #define Q15T_WALLFIRE 0
 #endif
-#ifndef Q15T_IMPACTSND
-#define Q15T_IMPACTSND 0
-#endif
 #ifndef Q15T_EC
 #define Q15T_EC 0
 #endif
@@ -121,9 +116,6 @@
 #endif
 #ifndef Q15T_INSTMODEL  // CGInstancedModelResource's constructor with growth step 1 (instmodel.h)
 #define Q15T_INSTMODEL 0
-#endif
-#ifndef Q15T_DECALS  // the level decals of decals.bin as dynamic-mesh quads (decals.h); after impactsnd: it chains on the Shutdown wrapper
-#define Q15T_DECALS 0
 #endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
@@ -193,9 +185,6 @@ constexpr char kCompiledModules[] =
 #if Q15T_WALLFIRE
     "wallfire "
 #endif
-#if Q15T_IMPACTSND
-    "impactsnd "
-#endif
 #if Q15T_EC
     "ec "
 #endif
@@ -238,9 +227,6 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_SHADERSTEP
     "shaderstep "
-#endif
-#if Q15T_DECALS
-    "decals "
 #endif
     "";
 
@@ -312,7 +298,7 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   uint32_t caps = NEVR_PLUGIN_CAP_HOOKS_ENGINE;
   if (Q15T_T26) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   // Modules that change what a player experiences or what the game computes (per their docs: droneguard and peerclamp say so; the
-  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), impactsnd (sound ids), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and
+  // others skip, add or answer game logic). Not here: fxtrail, voipdrop, custctx (crash guards), music (audio events), sensorwd (a stuck scanner sphere), hudmeter and
   // shieldgamma (what is drawn), ecfx (rides ec).
   if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
@@ -379,10 +365,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #endif
 #if Q15T_WALLFIRE
   ReportModule("wallfire", InstallWallfire(base));  // refuses itself (bvh_not_installed) when bvh did not install
-#endif
-#if Q15T_IMPACTSND
-  ReportModule("impactsnd", InstallImpactSnd(base));
-  AddModuleTick("impactsnd", &ImpactSndTick, &want_tick);  // the tick does nothing when the install was refused
 #endif
   [[maybe_unused]] bool ec_on = false;
 #if Q15T_EC
@@ -470,9 +452,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #endif
 #if Q15T_SHADERSTEP
   ReportModule("shaderstep", InstallShaderStep(base));
-#endif
-#if Q15T_DECALS
-  ReportModule("decals", InstallDecals(base));  // after impactsnd: its Shutdown wrapper chains on impactsnd's
 #endif
 #if Q15T_MUSIC
   {

@@ -1,31 +1,43 @@
-// Host test of impactsnd (src/quest/plugins/q15t/src/impactsnd.cpp) against a fake game image: an anonymous mapping that holds the pinned ELF vaddrs
-// (hit-code words, the kSoundSettings GLOB_DAT word, the .bss words D and kSoundSettings, the LoadSoundSettings JUMP_SLOT
-// on a read-only page, a trampoline at the loader's address) and a fake impact table on the host heap laid out as the game's
-// (map+0x00 data, +0x30 count, +0x38 flags; 16-byte rows {u64 key, u32 id, pad}). Real SafeRead, real mprotect, real
-// /proc/self/maps, a fake clock.
+// Host test of the impact-sound module (src/quest/combat/impactsnd.cpp, #2183; moved from the q15t plugin's impactsnd): the real handlers through the
+// two thunks, installed by the real GotHook into the JUMP_SLOT of LoadSoundSettings and the vtable word (ABS64) of CR15NetBulletCS::Shutdown of a libr15
+// image built in memory that holds the pinned ELF vaddrs (the hit-code words, the kSoundSettings GLOB_DAT word, the .bss words D and kSoundSettings, a
+// trampoline at each function's address) and a fake impact table on the host heap laid out as the game's (map+0x00 data, +0x30 count, +0x38 flags;
+// 16-byte rows {u64 key, u32 id, pad}). Real SafeRead, a fake clock, and a fake CR15Game (the two gamespace tables, read by process_vm_readv as in
+// production) that says which level is loaded.
+//
+// What moved with the module is every assertion of the plugin's test about the table, the loaders, the tick and the lock. What changed is the
+// fixture (the manager's slots, the structured lines), the install checks (D is read and never written; the nowrite build option is the switch
+// `combat.impactsnd_write`), and what is new: the scope. Arena shares the APK, so the load handler runs the game's own loader and the tick sleeps
+// unless a combat level is loaded.
+//
+// Built and run by `just test-quest-combat`.
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
-#include <mutex>
-#include <thread>
-
-#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "nevr/symbol_hash.h"
-#include "nevr/plugin_interface.h"
-#include "impactsnd.h"
-#include "key_hog.h"
-#include "plugin_log.h"
+#include "quest/combat/combat_level.h"
+#include "quest/combat/impactsnd.h"
+#include "quest/combat/impactsnd_targets.h"
+#include "quest/sentinel/hook_log.h"
+#include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/q15t/key_hog.h"
+
+namespace impactsnd = nevr_quest::combat::impactsnd;
 
 static int g_fail = 0;
 #define CHECK(cond, ...)                                \
@@ -38,23 +50,85 @@ static int g_fail = 0;
     }                                                   \
   } while (0)
 
+// ---- the log: every line the module writes is one JSON object; a needle written as the plugin's `key=value` tokens is matched against its fields ----
 struct Line {
-  uint32_t level;
+  int level;  // 0 debug, 1 info, 2 warning, 3 error
   std::string text;
 };
 static std::vector<Line> g_lines;
 static std::mutex g_lines_mu;  // the module logs from several threads
-static void FakeLog(const char* id, uint32_t level, const char* msg, const NevrLogField* f, uint32_t n) {
-  std::string t = std::string("plugin=") + id + " " + msg;
-  for (uint32_t i = 0; i < n; ++i) t += std::string(" ") + f[i].key + "=" + f[i].value;
+static void Capture(sentinel::LogLevel level, const char* line) {
+  const int l = level == sentinel::LogLevel::kInfo ? 1 : level == sentinel::LogLevel::kWarn ? 2 : level == sentinel::LogLevel::kError ? 3 : 0;
   std::lock_guard<std::mutex> lock(g_lines_mu);
-  g_lines.push_back({level, t});
+  g_lines.push_back({l, line});
+}
+// The event words of the plugin's lines and the events that replace them.
+static std::string Needle(const char* needle) {
+  static const struct {
+    const char* from;
+    const char* to;
+  } kEvents[] = {
+      {"impactsnd table still unsorted", "combat_impactsnd_unsorted_wait"},
+      {"impactsnd table unsorted with keys outside the 15", "combat_impactsnd_unsorted_foreign_keys"},
+      {"impactsnd table", "combat_impactsnd_table"},
+      {"impactsnd ids", "combat_impactsnd_ids"},
+      {"impactsnd no table now", "combat_impactsnd_no_table"},
+      {"impactsnd row pass skipped", "combat_impactsnd_row_pass_skipped"},
+      {"impactsnd LoadSoundSettings returned", "combat_impactsnd_load"},
+      {"impactsnd LoadSoundSettings rebuilt", "combat_impactsnd_rebuilt"},
+      {"impactsnd CR15NetBulletCS::Shutdown returned", "combat_impactsnd_shutdown_returned"},
+      {"impactsnd thread", "combat_impactsnd_thread"},
+      {"impactsnd OFF: nothing written", "combat_impactsnd_refused"},
+      {"impactsnd load wrapper", "combat_impactsnd_hook\",\"hook\":\"load"},
+      {"impactsnd shutdown wrapper", "combat_impactsnd_hook\",\"hook\":\"shutdown"},
+      {"impactsnd on", "combat_impactsnd_default_symbol"},
+      {"log cap reached", "combat_impactsnd_log_cap"},
+  };
+  std::string s = needle;
+  for (const auto& e : kEvents) {
+    if (s.compare(0, std::strlen(e.from), e.from) == 0) return std::string("\"event\":\"") + e.to + "\"" + s.substr(std::strlen(e.from));
+  }
+  if (s.find('=') == std::string::npos) return s;
+  // `key=value` tokens; a word without '=' after one continues its value ("where=after LoadSoundSettings")
+  std::vector<std::pair<std::string, std::string>> kv;
+  size_t at = 0;
+  while (at < s.size()) {
+    size_t end = s.find(' ', at);
+    if (end == std::string::npos) end = s.size();
+    const std::string tok = s.substr(at, end - at);
+    at = end + 1;
+    const size_t eq = tok.find('=');
+    if (eq != std::string::npos) kv.emplace_back(tok.substr(0, eq), tok.substr(eq + 1));
+    else if (!kv.empty()) kv.back().second += " " + tok;
+  }
+  std::string out;
+  for (size_t k = 0; k < kv.size(); ++k) {
+    const std::string& key = kv[k].first;
+    std::string val = kv[k].second;
+    const bool last = k + 1 == kv.size();  // the last string value is a prefix: its closing quote is left off
+    const bool digits = !val.empty() && val.find_first_not_of("0123456789") == std::string::npos && (val == "0" || val[0] != '0');
+    const bool hex = (key == "table_global_now" || key == "table" || key == "data" || key == "map" || key == "default_symbol" || key == "vaddr" || key == "read" ||
+                      key == "pinned" || key == "value") &&
+                     !val.empty() && val.find_first_not_of("0123456789abcdef") == std::string::npos;
+    if (!out.empty()) out += ',';
+    if (hex) {
+      while (val.size() < 16) val = "0" + val;
+      out += "\"" + key + "\":\"0x" + val + (last ? "" : "\"");
+    } else if (digits) {
+      out += "\"" + key + "\":" + val;
+    } else {
+      out += "\"" + key + "\":\"" + val + (last ? "" : "\"");
+    }
+  }
+  return out;
 }
 static int CountLines(const char* needle, int level = -1) {
-  int n = 0;
+  const std::string n = Needle(needle);
+  int c = 0;
+  std::lock_guard<std::mutex> lock(g_lines_mu);
   for (const auto& l : g_lines)
-    if (l.text.find(needle) != std::string::npos && (level < 0 || (int)l.level == level)) ++n;
-  return n;
+    if (l.text.find(n) != std::string::npos && (level < 0 || l.level == level)) ++c;
+  return c;
 }
 static bool HasLine(const char* needle, int level = -1) { return CountLines(needle, level) > 0; }
 
@@ -64,14 +138,46 @@ static const uintptr_t kShutSlotVa = 0x36933e8, kShutFnVa = 0x21226f0;  // CR15N
 static const uintptr_t kCodeVa[4] = {0x21208b4, 0x21208b8, 0x21208bc, 0x21208c8};
 static const uint32_t kCodeWord[4] = {0xf9401ac1, 0xb4000541, 0xf000b468, 0xf944691b};
 static const uint64_t kDefaultSym = 0x2fd38a995f615b9eull;
-static const size_t kImgSize = 0x37b1000;
 static const uint32_t kStock = 1;
 
 // ---- the fake game image ----
+static combat_test::Image g_image;
 static uintptr_t g_base = 0;
 static void W64(uintptr_t va, uint64_t v) { *reinterpret_cast<uint64_t*>(g_base + va) = v; }
 static uint64_t R64(uintptr_t va) { return *reinterpret_cast<uint64_t*>(g_base + va); }
 static uint32_t R32(uintptr_t va) { return *reinterpret_cast<uint32_t*>(g_base + va); }
+static bool Lookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_image.Present() || std::strcmp(module, sentinel::pinned::kLibR15) != 0) return false;
+  *out = g_image.Elf();
+  return true;
+}
+
+// ---- the fake CR15Game: the two gamespace tables as the module reads them (offsets spelled here, not taken from the header) ----
+constexpr std::size_t kTable0 = 0x1f48, kCount0 = 0x1f78, kGamespaceOwner = 0x8, kGamespaceLevel = 0x58;
+struct Gamespace {
+  std::uintptr_t words[0x60 / 8 + 1] = {};
+};
+struct Game {
+  std::uintptr_t words[0x2000 / 8] = {};
+  std::uintptr_t table0[8][2] = {};
+  Gamespace spaces[8];
+};
+static Game g_game;
+static uintptr_t GameAddress() { return reinterpret_cast<std::uintptr_t>(g_game.words); }
+static void LoadLevels(std::initializer_list<const char*> names) {
+  g_game = Game{};
+  int row = 0;
+  for (const char* name : names) {
+    Gamespace& gs = g_game.spaces[row];
+    gs.words[kGamespaceOwner / 8] = GameAddress();
+    gs.words[kGamespaceLevel / 8] = static_cast<std::uintptr_t>(EchoVR::CSymbol64Hash(name));
+    g_game.table0[row][0] = 0x5555;
+    g_game.table0[row][1] = reinterpret_cast<std::uintptr_t>(&gs);
+    ++row;
+  }
+  g_game.words[kTable0 / 8] = reinterpret_cast<std::uintptr_t>(g_game.table0);
+  g_game.words[kCount0 / 8] = static_cast<std::uintptr_t>(row);
+}
 
 // ---- the fake table ----
 struct Row {
@@ -85,15 +191,20 @@ alignas(16) static uint8_t g_map[0x40];
 alignas(16) static uint8_t g_map2[0x40];
 static size_t g_n = 0;
 
-static const q15t::ImpactSndRow* Known(size_t* n) { return q15t::ImpactSndRows(n); }
+static const impactsnd::Row* Known(size_t* n) { return impactsnd::Rows(n); }
 static uint64_t& MapData() { return *reinterpret_cast<uint64_t*>(g_map); }
 static uint64_t& MapCount() { return *reinterpret_cast<uint64_t*>(g_map + 0x30); }
 static uint32_t& MapFlags() { return *reinterpret_cast<uint32_t*>(g_map + 0x38); }
-static void Publish() { W64(kSettingsVa, reinterpret_cast<uintptr_t>(g_map)); }
+static void PublishRaw() { W64(kSettingsVa, reinterpret_cast<uintptr_t>(g_map)); }
+// the table appears as a combat level's load makes it: the tick's watch starts (the arena tests publish with PublishRaw and mark nothing)
+static void Publish() {
+  PublishRaw();
+  impactsnd::SetScopedForTest(true);
+}
 static void Unpublish() { W64(kSettingsVa, 0); }
 static void SetTable(const std::vector<size_t>& idx, uint32_t id, bool unsorted) {  // idx into kIds, in this order
   size_t n = 0;
-  const q15t::ImpactSndRow* k = Known(&n);
+  const impactsnd::Row* k = Known(&n);
   g_n = idx.size();
   for (size_t i = 0; i < idx.size(); ++i) g_rows[i] = {k[idx[i]].key, id, kPad};
   MapData() = reinterpret_cast<uint64_t>(g_rows);
@@ -117,7 +228,7 @@ static uint32_t IdOfKey(uint64_t key) {
 }
 static uint32_t WantOf(uint64_t key) {
   size_t n = 0;
-  const q15t::ImpactSndRow* k = Known(&n);
+  const impactsnd::Row* k = Known(&n);
   for (size_t i = 0; i < n; ++i)
     if (k[i].key == key) return k[i].id;
   return 0;
@@ -150,17 +261,17 @@ static const uint64_t kLoaderReturn = 0x1234abcdull;
 static uint64_t FakeLoader() {
   ++g_loader_calls;
   switch (g_load_mode) {
-    case kLoad15: SetTable(All(), kStock, true); Publish(); break;
-    case kLoad5: SetTable(Players(), kStock, true); Publish(); break;
-    case kLoad15Sorted: SetTable(All(), kStock, true); SortRows(); Publish(); break;
+    case kLoad15: SetTable(All(), kStock, true); PublishRaw(); break;
+    case kLoad5: SetTable(Players(), kStock, true); PublishRaw(); break;
+    case kLoad15Sorted: SetTable(All(), kStock, true); SortRows(); PublishRaw(); break;
     case kLoadForeign:
       SetTable(All(), kStock, true);
       g_rows[g_n++] = {0xdeadbeefcafef00dull, kStock, kPad};
       MapCount() = g_n;
-      Publish();
+      PublishRaw();
       break;
     case kLoadNothing: Unpublish(); break;
-    case kLoadHuge: SetTable(All(), kStock, true); MapCount() = 1000; Publish(); break;
+    case kLoadHuge: SetTable(All(), kStock, true); MapCount() = 1000; PublishRaw(); break;
   }
   return kLoaderReturn;
 }
@@ -203,7 +314,7 @@ static bool PoisonIntact() {
 static double g_now = 100.0;
 static double Clock() { return g_now; }
 static void Poll() {  // one tick at the current fake time, then 0.25 s later
-  q15t::ImpactSndTick(0);
+  impactsnd::Tick(GameAddress());
   g_now += 0.25;
 }
 static void Polls(int n) {
@@ -217,17 +328,19 @@ static void Warm() {
 }
 
 static void BuildImage() {
-  if (g_base != 0) munmap(reinterpret_cast<void*>(g_base), kImgSize);
-  void* p = mmap(nullptr, kImgSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-  if (p == MAP_FAILED) std::abort();
-  g_base = reinterpret_cast<uintptr_t>(p);
+  const std::vector<combat_test::Reloc> relocs = {
+      {"_ZN10NRadEngine8NRadGame15CR15NetBulletCS17LoadSoundSettingsEv", kSlotVa, false, false, kFnVa},
+      {"_ZN10NRadEngine8NRadGame15CR15NetBulletCS8ShutdownEv", kShutSlotVa, false, false, kShutFnVa, true},
+  };
+  g_image.Build(relocs);
+  g_base = g_image.Base();
   for (int i = 0; i < 4; ++i) *reinterpret_cast<uint32_t*>(g_base + kCodeVa[i]) = kCodeWord[i];
   W64(kSettingsGotVa, g_base + kSettingsVa);
-  W64(kDefaultVa, 0);
+  W64(kDefaultVa, kDefaultSym);
   W64(kSettingsVa, 0);
   W64(kSlotVa, g_base + kFnVa);
   W64(kShutSlotVa, g_base + kShutFnVa);
-  // a trampoline at the loader's address: movabs rax, FakeLoader; jmp rax (the page is executable, never written afterwards)
+  // a trampoline at each function's address: movabs rax, <fake>; jmp rax (the page is made executable and never written afterwards)
   uint8_t code[12] = {0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xe0};
   const uint64_t target = reinterpret_cast<uint64_t>(&FakeLoader);
   std::memcpy(code + 2, &target, 8);
@@ -238,16 +351,17 @@ static void BuildImage() {
   std::memcpy(code2 + 2, &target2, 8);
   std::memcpy(reinterpret_cast<void*>(g_base + kShutFnVa), code2, sizeof code2);
   mprotect(reinterpret_cast<void*>((g_base + kShutFnVa) & ~0xfffull), 0x1000, PROT_READ | PROT_EXEC);
-  mprotect(reinterpret_cast<void*>((g_base + kSlotVa) & ~0xfffull), 0x1000, PROT_READ);      // RELRO
-  mprotect(reinterpret_cast<void*>((g_base + kShutSlotVa) & ~0xfffull), 0x1000, PROT_READ);  // RELRO
 }
 
 static std::vector<uint32_t> g_code_before;
-static void Fresh() {  // a new image, new table, a reset module; not installed
+static void Fresh() {  // a new image, new table, a reset module, a combat level loaded; not installed
   g_lines.clear();
-  q15t::ResetImpactSndForTest();
-  q15t::SetImpactSndClockForTest(&Clock);
+  impactsnd::ResetForTest();
+  sentinel::SetLogSink(&Capture);
+  impactsnd::SetClockForTest(&Clock);
   BuildImage();
+  LoadLevels({"mpl_combat_dyson"});
+  impactsnd::SetGameForTest(GameAddress());
   std::memset(g_rows, 0, sizeof g_rows);
   std::memset(g_map, 0, sizeof g_map);
   g_n = 0;
@@ -261,11 +375,12 @@ static void Fresh() {  // a new image, new table, a reset module; not installed
   g_shut_self = 0;
   g_right_at_free = 0;
 }
-static q15t::InstallResult Install() { return q15t::InstallImpactSnd(g_base); }
-static void Setup() {
+static nevr_quest::combat::ModuleResult Install(bool write = true) { return impactsnd::InstallAt(true, write, &Lookup); }
+static void Setup() {  // installed, and a table a combat level loaded is live (the tests of the tick's watch start there)
   Fresh();
-  const q15t::InstallResult r = Install();
-  CHECK(r.status == q15t::SwapStatus::kOk, "setup install: %s %s", q15t::StatusName(r.status), r.reason);
+  const nevr_quest::combat::ModuleResult r = Install();
+  CHECK(r.installed, "setup install: %s", r.status);
+  impactsnd::SetScopedForTest(true);
 }
 typedef uint64_t (*LoaderFn)();
 static uint64_t CallLoader() { return reinterpret_cast<LoaderFn>(R64(kSlotVa))(); }
@@ -285,7 +400,7 @@ static void TestConstants() {
   CHECK(Fnv1("") == 0x811c9dc5u && Fnv1("a") == 0x050c5d7eu && Fnv1("foobar") == 0x31f0b262u, "FNV-1 helper wrong: %08x %08x %08x",
         Fnv1(""), Fnv1("a"), Fnv1("foobar"));
   size_t n = 0;
-  const q15t::ImpactSndRow* rows = Known(&n);
+  const impactsnd::Row* rows = Known(&n);
   CHECK(n == 15, "%zu rows", n);
   const char* guns[5] = {"assault", "scout", "rocket", "rifle", "smg"};
   const char* subs[3] = {"player", "barrier", "default"};
@@ -294,7 +409,7 @@ static void TestConstants() {
     for (int s = 0; s < 3; ++s) {
       std::string name = ev[s];
       if (g == 4) name += "_quark";  // smg uses the _quark events
-      const q15t::ImpactSndRow& r = rows[g * 3 + s];
+      const impactsnd::Row& r = rows[g * 3 + s];
       const uint64_t key = EchoVR::CSymbol64Hash(subs[s]) ^ EchoVR::CSymbol64Hash(guns[g]);
       CHECK(r.key == key, "row %d (%s %s): key %016llx, CSymbol64 says %016llx", g * 3 + s, guns[g], subs[s], (unsigned long long)r.key,
             (unsigned long long)key);
@@ -303,140 +418,265 @@ static void TestConstants() {
     }
   for (size_t i = 0; i < n; ++i)
     for (size_t j = i + 1; j < n; ++j) CHECK(rows[i].key != rows[j].key, "duplicate key rows %zu %zu", i, j);
-  CHECK(q15t::kImpactDefaultSymbol == EchoVR::CSymbol64Hash("default") && q15t::kImpactDefaultSymbol == kDefaultSym,
+  CHECK(impactsnd::kDefaultSym == EchoVR::CSymbol64Hash("default") && impactsnd::kDefaultSym == kDefaultSym,
         "default symbol %016llx", (unsigned long long)EchoVR::CSymbol64Hash("default"));
   CHECK(rows[0].id != kStock && rows[5].id != kStock, "a known id equals the stock id");
 }
 
-static void TestInstallWritesD() {
+// ---- the install: what it checks, what it hooks, what it never writes ----
+
+static void TestInstall() {
   Fresh();
   g_code_before.clear();
   for (int i = 0; i < 4; ++i) g_code_before.push_back(R32(kCodeVa[i]));
-  const q15t::InstallResult r = Install();
-  CHECK(r.status == q15t::SwapStatus::kOk, "install: %s %s", q15t::StatusName(r.status), r.reason);
+  const nevr_quest::combat::ModuleResult r = Install();
+  CHECK(r.installed && std::strcmp(r.status, "installed") == 0 && !r.off, "install: %s", r.status);
   CHECK(R64(kDefaultVa) == kDefaultSym, "D reads %016llx", (unsigned long long)R64(kDefaultVa));
-  CHECK(R64(kSlotVa) != g_base + kFnVa && R64(kSlotVa) != 0, "slot not swapped");
-  q15t::Mapping m;
-  CHECK(q15t::FindMapping(g_base + kSlotVa, &m) && std::strcmp(m.perms, "r--p") == 0, "slot page perms %s (RELRO not restored)", m.perms);
+  CHECK(R64(kSlotVa) != g_base + kFnVa && R64(kSlotVa) != 0, "load slot not hooked");
+  CHECK(R64(kShutSlotVa) != g_base + kShutFnVa && R64(kShutSlotVa) != 0, "Shutdown slot not hooked");
   for (int i = 0; i < 4; ++i) CHECK(R32(kCodeVa[i]) == g_code_before[i], "hit-code word %d changed", i);
   CHECK(R64(kSettingsGotVa) == g_base + kSettingsVa, "GOT word changed");
-  CHECK(HasLine("impactsnd on") && HasLine("action=wrote") && HasLine("was=0") && HasLine("now=2fd38a995f615b9e"), "no D line");
-  CHECK(HasLine("impactsnd load wrapper") && HasLine("status=ok", 1), "no wrapper line");
-  CHECK(q15t::GetImpactSndStats().on && q15t::GetImpactSndStats().writers_ok, "not on / writers off");
-  CHECK(R64(kShutSlotVa) != g_base + kShutFnVa && R64(kShutSlotVa) != 0, "Shutdown slot not swapped");
-  CHECK(q15t::FindMapping(g_base + kShutSlotVa, &m) && std::strcmp(m.perms, "r--p") == 0, "Shutdown slot page perms %s (RELRO not restored)", m.perms);
-  CHECK(HasLine("impactsnd shutdown wrapper") && HasLine("row_writes=enabled", 1), "no Shutdown wrapper line");
-  // the module's own default bytes are not touched on a second look: D already set -> left alone
+  CHECK(HasLine("impactsnd on") && HasLine("matches=1") && HasLine("value=2fd38a995f615b9e"), "no D line");
+  CHECK(HasLine("impactsnd load wrapper") && HasLine("status=ok", 1), "no load hook line");
+  CHECK(impactsnd::GetStats().on && impactsnd::GetStats().writersOk, "not on / writers off");
+  CHECK(HasLine("impactsnd shutdown wrapper") && HasLine("row_writes=enabled", 1), "no Shutdown hook line");
+  CHECK(CountLines("\"event\":\"combat_impactsnd_install\"", 1) == 1 && HasLine("result=installed") && HasLine("row_writes=enabled") && HasLine("rebuild=stock"),
+        "no install line (rebuild is stock here: the fake image pins none of the loader's callee stubs)");
+  // a D that is not the "default" symbol but is not 0 is left alone, and the line says it does not match
   Fresh();
   W64(kDefaultVa, 0x1111222233334444ull);
   Install();
   CHECK(R64(kDefaultVa) == 0x1111222233334444ull, "a non-zero D was overwritten");
-  CHECK(HasLine("action=left alone (not 0)") && HasLine("was=1111222233334444"), "no left-alone line");
+  CHECK(HasLine("impactsnd on") && HasLine("matches=0") && HasLine("value=1111222233334444"), "no D line");
 }
 
-static void TestNowriteBuild() {
+// combat.impactsnd false: nothing is touched, nothing is hooked, the module answers off and says why
+static void TestOffByTheSwitch() {
   Fresh();
-  q15t::SetImpactSndNoWriteForTest(true);
-  Install();
-  CHECK(R64(kDefaultVa) == 0, "nowrite: D written");
-  CHECK(HasLine("action=left alone (nowrite build)") && HasLine("nowrite_build=1"), "nowrite: no D line");
-  CHECK(R64(kSlotVa) != g_base + kFnVa, "nowrite: the wrapper (an observer) must still be installed");
+  const nevr_quest::combat::ModuleResult r = impactsnd::InstallAt(false, true, &Lookup);
+  CHECK(!r.installed && std::strcmp(r.status, "off_config") == 0, "off: %s", r.status);
+  CHECK(R64(kSlotVa) == g_base + kFnVa && R64(kShutSlotVa) == g_base + kShutFnVa && !impactsnd::GetStats().on, "off: a slot was hooked");
+  CHECK(HasLine("result=off") && HasLine("reason=off_config"), "off: no line");
+  SetTable(All(), kStock, false);
+  Publish();
+  Polls(12);
+  CHECK(CountRight() == 0 && impactsnd::GetStats().polls == 0, "off: the tick ran");
+}
+
+// combat.impactsnd_write false: the module reads and logs the table and writes nothing to it; the loader hook and the tick still run
+static void TestWriteSwitchOff() {
+  Fresh();
+  const nevr_quest::combat::ModuleResult r = Install(false);
+  CHECK(r.installed, "read-only install: %s", r.status);
+  CHECK(HasLine("rebuild=stock") && HasLine("row_writes=disabled"), "read-only: the rebuilt loader or the writes are on");
+  CHECK(R64(kSlotVa) != g_base + kFnVa, "read-only: the load hook (an observer) must still be installed");
+  impactsnd::SetScopedForTest(true);
   // a table is found and logged, never written, and the line comes once
   SetTable(All(), kStock, false);
   Publish();
   Polls(20);
-  CHECK(AllRight() == false && CountRight() == 0, "nowrite: ids written (%zu right)", CountRight());
-  CHECK(CountLines("impactsnd ids (nowrite build") == 1, "nowrite: %d lines", CountLines("impactsnd ids (nowrite build"));
-  CHECK(q15t::GetImpactSndStats().rows_written == 0, "nowrite: rows_written %u", q15t::GetImpactSndStats().rows_written);
-  // and through the wrapper
+  CHECK(AllRight() == false && CountRight() == 0, "read-only: ids written (%zu right)", CountRight());
+  CHECK(CountLines("mode=read_only_switch") == 1, "read-only: %d lines", CountLines("mode=read_only_switch"));
+  CHECK(impactsnd::GetStats().rowsWritten == 0, "read-only: rowsWritten %u", impactsnd::GetStats().rowsWritten);
+  // and through the load handler
   Fresh();
-  q15t::SetImpactSndNoWriteForTest(true);
-  Install();
+  Install(false);
   CallLoader();
-  CHECK(CountRight() == 0 && g_loader_calls == 1 && g_n == 15, "nowrite wrapper: ids written / loader not called");
-  CHECK(CountLines("impactsnd ids (nowrite build") == 1 && HasLine("when=load/unsorted"), "nowrite wrapper: no read line");
+  CHECK(CountRight() == 0 && g_loader_calls == 1 && g_n == 15, "read-only handler: ids written / loader not called");
+  CHECK(CountLines("mode=read_only_switch") == 1 && HasLine("when=load/unsorted"), "read-only handler: no read line");
 }
 
-// No pthread key left for the Shutdown wrapper's per-thread depth: the install refuses before it writes anything. Runs before any
-// successful install, because a key made by one stays for the process.
+// No pthread key left for the Shutdown handler's per-thread depth: the install refuses before it hooks anything. Runs before any successful
+// install, because a key made by one stays for the process.
 static void TestNoThreadKey() {
   // a module refused for a word that is not the pinned one has made no key: the install below, with no key left, must still be refused
   Fresh();
   *reinterpret_cast<uint32_t*>(g_base + kCodeVa[0]) = kCodeWord[0] ^ 0x1;
-  CHECK(std::strcmp(Install().reason, "hit_code_word_mismatch") == 0, "the pin mismatch was not refused");
+  CHECK(std::strcmp(Install().status, "hit_code_word_mismatch") == 0, "the pin mismatch was not refused");
   Fresh();
   KeyHog hog;
-  const q15t::InstallResult r = Install();
-  CHECK(r.status != q15t::SwapStatus::kOk && std::strcmp(r.reason, "no_thread_key") == 0, "no key: %s %s", q15t::StatusName(r.status), r.reason);
-  CHECK(R64(kDefaultVa) == 0 && R64(kSlotVa) == g_base + kFnVa && R64(kShutSlotVa) == g_base + kShutFnVa, "no key: D written or a slot swapped");
+  const nevr_quest::combat::ModuleResult r = Install();
+  CHECK(!r.installed && std::strcmp(r.status, "no_thread_key") == 0, "no key: %s", r.status);
+  CHECK(R64(kSlotVa) == g_base + kFnVa && R64(kShutSlotVa) == g_base + kShutFnVa, "no key: a slot was hooked");
   const std::string code = "error=" + std::to_string(EAGAIN);  // what pthread_key_create answers when the process has no key left
-  CHECK(HasLine("impactsnd OFF: nothing written", 3) && HasLine("no pthread key") && HasLine(code.c_str()), "no key: not loud, or no error code");
-  CHECK(!HasLine("vaddr=") && !HasLine("pinned="), "no key: the line carries address fields that mean nothing here");
+  CHECK(HasLine("impactsnd OFF: nothing written", 3) && HasLine("reason=no_thread_key") && HasLine(code.c_str()), "no key: not loud, or no error code");
+  for (const auto& l : g_lines)
+    CHECK(l.text.find("combat_impactsnd_refused") == std::string::npos || (l.text.find("\"vaddr\"") == std::string::npos && l.text.find("\"pinned\"") == std::string::npos),
+          "no key: the line carries address fields that mean nothing here");
   SetTable(All(), kStock, false);
   Publish();
   Polls(8);
-  CHECK(q15t::GetImpactSndStats().polls == 0 && !q15t::GetImpactSndStats().on && CountRight() == 0, "no key: the tick ran");
+  CHECK(impactsnd::GetStats().polls == 0 && !impactsnd::GetStats().on && CountRight() == 0, "no key: the tick ran");
 }
 
 static void TestRefusals() {
   for (int w = 0; w < 4; ++w) {  // each of the four hit-code words, wrong in turn
     Fresh();
     *reinterpret_cast<uint32_t*>(g_base + kCodeVa[w]) = kCodeWord[w] ^ 0x1;
-    const q15t::InstallResult r = Install();
-    CHECK(r.status != q15t::SwapStatus::kOk && std::strcmp(r.reason, "hit_code_word_mismatch") == 0, "word %d: %s %s", w, q15t::StatusName(r.status),
-          r.reason);
-    CHECK(R64(kDefaultVa) == 0, "word %d: D written", w);
-    CHECK(R64(kSlotVa) == g_base + kFnVa, "word %d: slot swapped", w);
+    const nevr_quest::combat::ModuleResult r = Install();
+    CHECK(!r.installed && std::strcmp(r.status, "hit_code_word_mismatch") == 0, "word %d: %s", w, r.status);
+    CHECK(R64(kSlotVa) == g_base + kFnVa && R64(kShutSlotVa) == g_base + kShutFnVa, "word %d: slot hooked", w);
     CHECK(HasLine("impactsnd OFF: nothing written", 3) && HasLine("written=0"), "word %d: not loud", w);
     SetTable(All(), kStock, false);
     Publish();
     Polls(8);
-    CHECK(q15t::GetImpactSndStats().polls == 0 && !q15t::GetImpactSndStats().on && CountRight() == 0, "word %d: the tick ran", w);
+    CHECK(impactsnd::GetStats().polls == 0 && !impactsnd::GetStats().on && CountRight() == 0, "word %d: the tick ran", w);
   }
   // the code page unreadable: refused, no fault
   Fresh();
   mprotect(reinterpret_cast<void*>((g_base + kCodeVa[0]) & ~0xfffull), 0x1000, PROT_NONE);
-  CHECK(Install().status != q15t::SwapStatus::kOk && R64(kDefaultVa) == 0, "unreadable code page not refused");
+  CHECK(!Install().installed && R64(kSlotVa) == g_base + kFnVa, "unreadable code page not refused");
+  mprotect(reinterpret_cast<void*>((g_base + kCodeVa[0]) & ~0xfffull), 0x1000, PROT_READ | PROT_WRITE);
   // the kSoundSettings GLOB_DAT word does not point at the object this module reads
   Fresh();
   W64(kSettingsGotVa, g_base + kSettingsVa + 8);
-  const q15t::InstallResult r = Install();
-  CHECK(r.status != q15t::SwapStatus::kOk && std::strcmp(r.reason, "ksoundsettings_got_mismatch") == 0 && R64(kDefaultVa) == 0 &&
-            R64(kSlotVa) == g_base + kFnVa,
-        "GOT mismatch: %s %s", q15t::StatusName(r.status), r.reason);
+  const nevr_quest::combat::ModuleResult r = Install();
+  CHECK(!r.installed && std::strcmp(r.status, "ksoundsettings_got_mismatch") == 0 && R64(kSlotVa) == g_base + kFnVa, "GOT mismatch: %s", r.status);
   // D unreadable
   Fresh();
   mprotect(reinterpret_cast<void*>((g_base + kDefaultVa) & ~0xfffull), 0x1000, PROT_NONE);
-  CHECK(std::strcmp(Install().reason, "default_symbol_unreadable") == 0, "unreadable D not refused");
-  // D reads 0 but its page is read-only: refused, never faults
+  CHECK(std::strcmp(Install().status, "default_symbol_unreadable") == 0, "unreadable D not refused");
+  mprotect(reinterpret_cast<void*>((g_base + kDefaultVa) & ~0xfffull), 0x1000, PROT_READ | PROT_WRITE);
+  // D reads 0: the hit code's second lookup cannot match and no row write repairs it, so the module is refused, and D is not written
   Fresh();
-  mprotect(reinterpret_cast<void*>((g_base + kDefaultVa) & ~0xfffull), 0x1000, PROT_READ);
-  const q15t::InstallResult r2 = Install();
-  CHECK(std::strcmp(r2.reason, "default_symbol_page_not_rw") == 0 && R64(kDefaultVa) == 0 && R64(kSlotVa) == g_base + kFnVa,
-        "read-only D page: %s", r2.reason);
-  // D reads 0 but its page is executable-writable: refused too
+  W64(kDefaultVa, 0);
+  const nevr_quest::combat::ModuleResult r2 = Install();
+  CHECK(!r2.installed && std::strcmp(r2.status, "default_symbol_zero") == 0 && R64(kDefaultVa) == 0 && R64(kSlotVa) == g_base + kFnVa, "D 0: %s", r2.status);
+  // no libr15 loaded
   Fresh();
-  mprotect(reinterpret_cast<void*>((g_base + kDefaultVa) & ~0xfffull), 0x1000, PROT_READ | PROT_WRITE | PROT_EXEC);
-  const q15t::InstallResult r3 = Install();
-  CHECK(std::strcmp(r3.reason, "default_symbol_page_not_rw") == 0 && R64(kDefaultVa) == 0, "rwx D page written: %s", r3.reason);
+  CHECK(std::strcmp(impactsnd::InstallAt(true, true, nullptr).status, "module_not_loaded") == 0, "no lookup not refused");
 }
 
+// The load slot holds something that is not the loader: refused, left alone; the Shutdown hook (installed first) stays, and the tick still
+// repairs a combat level's table.
 static void TestSlotRefused() {
   Fresh();
-  mprotect(reinterpret_cast<void*>((g_base + kSlotVa) & ~0xfffull), 0x1000, PROT_READ | PROT_WRITE);
   W64(kSlotVa, 0x4242420);  // not the loader
-  mprotect(reinterpret_cast<void*>((g_base + kSlotVa) & ~0xfffull), 0x1000, PROT_READ);
-  const q15t::InstallResult r = Install();
-  CHECK(r.status == q15t::SwapStatus::kUnexpectedOriginal, "foreign slot: %s", q15t::StatusName(r.status));
+  const nevr_quest::combat::ModuleResult r = Install();
+  CHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0, "foreign slot: %s", r.status);
   CHECK(R64(kSlotVa) == 0x4242420, "foreign slot word changed");
-  CHECK(R64(kDefaultVa) == kDefaultSym, "tick-only mode must still write D");
-  CHECK(HasLine("impactsnd load wrapper") && HasLine("mode=tick only", 3), "no ERROR for the refused wrapper");
-  // tick-only mode works: sorted table, two stable polls
+  CHECK(R64(kDefaultVa) == kDefaultSym, "D changed");
+  CHECK(HasLine("impactsnd load wrapper") && HasLine("mode=tick_only", 3), "no ERROR for the refused load hook");
+  // tick-only mode works: with no load handler to mark a combat level's table the tick asks the levels itself; sorted table, two stable polls
   SetTable(All(), kStock, false);
   Publish();
-  Warm();
-  Polls(3);
+  Polls(12);
   CHECK(AllRight(), "tick-only: ids not written (%zu right)", CountRight());
+  // ... and an arena match in the same mode is left alone
+  Fresh();
+  LoadLevels({"mpl_arena_a"});
+  impactsnd::SetGameForTest(GameAddress());
+  W64(kSlotVa, 0x4242420);
+  Install();
+  SetTable(All(), kStock, false);
+  PublishRaw();
+  Polls(40);
+  CHECK(CountRight() == 0 && impactsnd::GetStats().polls == 0, "tick-only mode in an arena match wrote (%zu right, %u polls)", CountRight(), impactsnd::GetStats().polls);
+}
+
+static void TestShutdownSlotRefused() {
+  Fresh();
+  W64(kShutSlotVa, 0x4242420);  // not Shutdown
+  const nevr_quest::combat::ModuleResult r = Install();
+  CHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0, "foreign Shutdown slot: %s", r.status);
+  CHECK(R64(kShutSlotVa) == 0x4242420, "foreign slot word changed");
+  CHECK(HasLine("impactsnd shutdown wrapper") && HasLine("row_writes=disabled", 3), "no ERROR for the refused Shutdown hook");
+  CHECK(!impactsnd::GetStats().writersOk && R64(kDefaultVa) == kDefaultSym, "writersOk / D");
+  // the module reads and logs, never writes: through the load handler and through the tick
+  impactsnd::SetScopedForTest(true);
+  CallLoader();
+  CHECK(CountRight() == 0 && HasLine("mode=read_only_no_shutdown_handler"), "loader pass wrote with writers disabled (%zu)", CountRight());
+  SetTable(All(), kStock, false);
+  Publish();
+  Polls(24);
+  CHECK(CountRight() == 0 && impactsnd::GetStats().rowsWritten == 0, "tick wrote with writers disabled (%zu)", CountRight());
+  CHECK(CountLines("mode=read_only_no_shutdown_handler") == 1, "read-only line %d times", CountLines("mode=read_only_no_shutdown_handler"));
+}
+
+// ---- the scope: arena shares the APK, so only a combat level is repaired ----
+
+static const char* const kNotCombat[] = {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a", "mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b_arena",
+                                         "mpl_lobby_b_social"};
+
+// A load in a level that is not a combat one runs the game's loader and nothing else: the table keeps the game's own rows and ids.
+static void TestArenaLoadIsTheGamesOwn() {
+  for (const char* level : kNotCombat) {
+    Fresh();
+    LoadLevels({level});
+    Install();
+    g_load_mode = kLoad15;
+    const uint64_t rv = CallLoader();
+    CHECK(rv == kLoaderReturn && g_loader_calls == 1, "%s: the game's loader result %llx, calls %d", level, (unsigned long long)rv, g_loader_calls);
+    CHECK(CountRight() == 0 && g_n == 15 && MapFlags() == 1u, "%s: the table was touched (%zu right)", level, CountRight());
+    const impactsnd::Stats s = impactsnd::GetStats();
+    CHECK(s.loads == 1 && s.scopedLoads == 0 && s.passes == 0 && !s.scoped, "%s: stats l%u s%u p%u scoped %d", level, s.loads, s.scopedLoads, s.passes, s.scoped);
+    CHECK(HasLine("\"event\":\"combat_impactsnd_scope\"") && HasLine("scope=other_level") && HasLine("loader=game"), "%s: no scope line", level);
+    CHECK(!HasLine("\"event\":\"combat_impactsnd_load\"") && !HasLine("\"event\":\"combat_impactsnd_ids\""), "%s: a combat line in an arena load", level);
+    Polls(40);  // the tick sleeps: no poll, no read of the table
+    CHECK(impactsnd::GetStats().polls == 0 && CountRight() == 0, "%s: the tick polled (%u)", level, impactsnd::GetStats().polls);
+    SetTable(All(), kStock, false);
+    Polls(40);
+    CHECK(impactsnd::GetStats().polls == 0 && CountRight() == 0, "%s: the tick wrote a table nobody marked", level);
+  }
+}
+
+// The levels that are combat's: the four maps and the combat lobby.
+static void TestCombatLevelsAreRepaired() {
+  for (const char* level : {"mpl_combat_dyson", "mpl_combat_combustion", "mpl_combat_fission", "mpl_combat_gauss", "mpl_lobby_b_combat"}) {
+    Fresh();
+    LoadLevels({level});
+    impactsnd::SetGameForTest(GameAddress());
+    Install();
+    CallLoader();
+    CHECK(AllRight() && CountRight() == 15, "%s: %zu of 15 right", level, CountRight());
+    const impactsnd::Stats s = impactsnd::GetStats();
+    CHECK(s.loads == 1 && s.scopedLoads == 1 && s.scoped, "%s: stats l%u s%u scoped %d", level, s.loads, s.scopedLoads, s.scoped);
+    CHECK(HasLine("scope=combat") && HasLine("loader=stock"), "%s: no scope line", level);
+  }
+}
+
+// An Echo Arena level that is loaded wins over a combat level still loaded during a transition; no game seen yet, and a game that cannot be read, are no level.
+static void TestScopeFailsClosed() {
+  Fresh();
+  LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});
+  impactsnd::SetGameForTest(GameAddress());
+  Install();
+  CallLoader();
+  CHECK(CountRight() == 0 && !impactsnd::GetStats().scoped && HasLine("scope=other_level"), "a transition with an arena level was repaired");
+  Fresh();
+  Install();
+  impactsnd::SetGameForTest(0);  // the tick has not run yet
+  CallLoader();
+  CHECK(CountRight() == 0 && !impactsnd::GetStats().scoped && HasLine("scope=no_game") && g_loader_calls == 1, "no game seen: repaired, or the loader skipped");
+  Fresh();
+  Install();
+  impactsnd::SetGameForTest(0x1000);  // an address nothing is mapped at
+  CallLoader();
+  CHECK(CountRight() == 0 && !impactsnd::GetStats().scoped && HasLine("scope=other_level") && g_loader_calls == 1, "an unreadable game was repaired");
+}
+
+// The tick hands the module the game; the scope is marked by a combat load and cleared when the game frees the table.
+static void TestScopeFollowsTheTable() {
+  Fresh();
+  Install();
+  impactsnd::SetGameForTest(0);
+  impactsnd::Tick(GameAddress());  // the tick records the game
+  CallLoader();
+  CHECK(impactsnd::GetStats().scoped && AllRight(), "the game the tick recorded was not used");
+  Polls(12);
+  CHECK(impactsnd::GetStats().polls > 0, "a combat table is not watched");
+  const uint32_t before = impactsnd::GetStats().polls;
+  CallShutdown(1);  // the game frees the table and clears the global
+  CHECK(!impactsnd::GetStats().scoped, "the scope outlived the table");
+  Polls(12);
+  CHECK(impactsnd::GetStats().polls == before, "the tick polled after the table was freed (%u -> %u)", before, impactsnd::GetStats().polls);
+  // a Shutdown that leaves the global set (another system still holds the table) keeps the scope
+  CallLoader();
+  CHECK(impactsnd::GetStats().scoped, "a second combat load did not mark the scope");
+  g_shut_mode = kShutHold;
+  g_hold_release = true;
+  CallShutdown(2);
+  CHECK(impactsnd::GetStats().scoped, "a Shutdown that left the table cleared the scope");
 }
 
 static void TestWrapperUnsorted15() {
@@ -448,23 +688,23 @@ static void TestWrapperUnsorted15() {
   CHECK(AllRight() && CountRight() == 15, "after the load: %zu of 15 right", CountRight());
   std::vector<Row> after = Snap();
   size_t n = 0;
-  const q15t::ImpactSndRow* k = Known(&n);
+  const impactsnd::Row* k = Known(&n);
   bool order = after.size() == 15;
   for (size_t i = 0; order && i < 15; ++i) order = after[i].key == k[i].key && after[i].pad == kPad;
   CHECK(order, "keys, order or pads changed by the write");
   CHECK(MapFlags() == 1u && MapCount() == 15, "flags/count touched");
-  const q15t::ImpactSndStats s = q15t::GetImpactSndStats();
-  CHECK(s.loads == 1 && s.passes == 1 && s.rows_written == 15 && s.rows_left == 0, "stats l%u p%u w%u r%u", s.loads, s.passes, s.rows_written,
-        s.rows_left);
+  const impactsnd::Stats s = impactsnd::GetStats();
+  CHECK(s.loads == 1 && s.passes == 1 && s.rowsWritten == 15 && s.rowsLeft == 0, "stats l%u p%u w%u r%u", s.loads, s.passes, s.rowsWritten,
+        s.rowsLeft);
   CHECK(HasLine("impactsnd LoadSoundSettings returned") && HasLine("word_patch=in_effect") && HasLine("rows=15"), "no loader line");
   CHECK(HasLine("impactsnd ids") && HasLine("when=load/unsorted") && HasLine("rewrote=15") && HasLine("found_ids=00000001,00000001"), "no ids line");
   // the tick afterwards does not repeat the unsorted pass; after the first hit's sort nothing is left to write
   Polls(10);
-  CHECK(q15t::GetImpactSndStats().passes == 1, "the tick repeated the unsorted pass: %u", q15t::GetImpactSndStats().passes);
+  CHECK(impactsnd::GetStats().passes == 1, "the tick repeated the unsorted pass: %u", impactsnd::GetStats().passes);
   SortRows();
   Polls(10);
-  CHECK(AllRight() && q15t::GetImpactSndStats().passes == 1 && CountLines("impactsnd ids") == 1, "sorted table: extra pass (%u)",
-        q15t::GetImpactSndStats().passes);
+  CHECK(AllRight() && impactsnd::GetStats().passes == 1 && CountLines("impactsnd ids") == 1, "sorted table: extra pass (%u)",
+        impactsnd::GetStats().passes);
   // the table count line, from the tick: 15 rows = the word patch is in effect
   CHECK(HasLine("impactsnd table") && HasLine("word_patch=in_effect") && HasLine("default_symbol=2fd38a995f615b9e"), "no table line");
   CHECK(CountLines("impactsnd table") == 1, "table line %d times", CountLines("impactsnd table"));
@@ -492,7 +732,7 @@ static void TestWrapperForeignKey() {
   Setup();
   g_load_mode = kLoadForeign;
   CallLoader();
-  CHECK(CountRight() == 0 && q15t::GetImpactSndStats().passes == 0, "unsorted table with a key outside the 15 was written at load");
+  CHECK(CountRight() == 0 && impactsnd::GetStats().passes == 0, "unsorted table with a key outside the 15 was written at load");
   Polls(12);
   CHECK(CountRight() == 0 && CountLines("keys outside the 15") == 1, "unsorted foreign table written by the tick / note %d times", CountLines("keys outside the 15"));
   // the first hit sorts it: now the known rows are written, the foreign row never
@@ -507,7 +747,7 @@ static void TestWrapperNoTable() {
   Setup();
   g_load_mode = kLoadNothing;
   const uint64_t rv = CallLoader();
-  CHECK(rv == kLoaderReturn && q15t::GetImpactSndStats().loads == 1 && q15t::GetImpactSndStats().passes == 0, "no table at load");
+  CHECK(rv == kLoaderReturn && impactsnd::GetStats().loads == 1 && impactsnd::GetStats().passes == 0, "no table at load");
   CHECK(HasLine("impactsnd no table now") && HasLine("where=after LoadSoundSettings"), "no note");
 }
 
@@ -544,14 +784,14 @@ static void TestPollGate() {
   Setup();
   SetTable(All(), kStock, false);
   Publish();
-  q15t::ImpactSndTick(0);
-  q15t::ImpactSndTick(0);
+  impactsnd::Tick(GameAddress());
+  impactsnd::Tick(GameAddress());
   g_now += 0.2;
-  q15t::ImpactSndTick(0);
-  CHECK(q15t::GetImpactSndStats().polls == 1, "polls %u within 0.25 s", q15t::GetImpactSndStats().polls);
+  impactsnd::Tick(GameAddress());
+  CHECK(impactsnd::GetStats().polls == 1, "polls %u within 0.25 s", impactsnd::GetStats().polls);
   g_now += 0.05;
-  q15t::ImpactSndTick(0);
-  CHECK(q15t::GetImpactSndStats().polls == 2, "polls %u after 0.25 s", q15t::GetImpactSndStats().polls);
+  impactsnd::Tick(GameAddress());
+  CHECK(impactsnd::GetStats().polls == 2, "polls %u after 0.25 s", impactsnd::GetStats().polls);
 }
 
 static void TestTickUnsorted() {
@@ -564,16 +804,16 @@ static void TestTickUnsorted() {
   Poll();
   CHECK(CountRight() == 15, "unsorted table not written on the second poll: %zu", CountRight());
   CHECK(HasLine("when=tick/unsorted"), "no tick/unsorted line");
-  const uint32_t passes = q15t::GetImpactSndStats().passes;
+  const uint32_t passes = impactsnd::GetStats().passes;
   Polls(8);
-  CHECK(q15t::GetImpactSndStats().passes == passes, "unsorted table passed more than once");
+  CHECK(impactsnd::GetStats().passes == passes, "unsorted table passed more than once");
   // the engine puts the stock ids back into the same table (a reload at the same address) after it was gone: written again
   Unpublish();
   Polls(2);
   SetTable(All(), kStock, true);
   Publish();
   Polls(3);
-  CHECK(CountRight() == 15 && q15t::GetImpactSndStats().passes == passes + 1, "new table at the same address not rewritten (%zu right)", CountRight());
+  CHECK(CountRight() == 15 && impactsnd::GetStats().passes == passes + 1, "new table at the same address not rewritten (%zu right)", CountRight());
 }
 
 static void TestTickSorted() {
@@ -588,7 +828,7 @@ static void TestTickSorted() {
   CHECK(HasLine("when=tick/sorted"), "no tick/sorted line");
   const std::vector<Row> before = Snap();
   Polls(6);
-  CHECK(q15t::GetImpactSndStats().passes == 1 && CountLines("impactsnd ids") == 1, "a pass with nothing to write logged");
+  CHECK(impactsnd::GetStats().passes == 1 && CountLines("impactsnd ids") == 1, "a pass with nothing to write logged");
   CHECK(KeysAndPadsIntact(before), "snapshot");
 }
 
@@ -608,7 +848,7 @@ static void TestSortRaceFixups() {
   Polls(4);
   CHECK(g_rows[0].id == want0 && g_rows[4].id == want4, "fix-ups: row0 %08x row4 %08x", g_rows[0].id, g_rows[4].id);
   CHECK(g_rows[7].id == 0x777, "a foreign id was overwritten: %08x", g_rows[7].id);
-  CHECK(q15t::GetImpactSndStats().rows_left == 1, "left %u", q15t::GetImpactSndStats().rows_left);
+  CHECK(impactsnd::GetStats().rowsLeft == 1, "left %u", impactsnd::GetStats().rowsLeft);
 }
 
 static void TestRowsOutsideTable() {
@@ -654,8 +894,8 @@ static void TestTableShapes() {
 
 static void TestNowriteTick() {
   Fresh();
-  q15t::SetImpactSndNoWriteForTest(true);
-  Install();
+  Install(false);
+  impactsnd::SetScopedForTest(true);
   SetTable(All(), kStock, true);
   Publish();
   Polls(24);
@@ -711,23 +951,23 @@ static void TestChangedUnderUs() {
       SetTable(All(), kStock, unsorted != 0);
       Publish();
       Warm();
-      q15t::SetImpactSndHookForTest(&Hk);
+      impactsnd::SetHookForTest(&Hk);
       g_hook_stage1 = 0;
       Poll();
       g_hook_mode = mode;
       Poll();  // stable: the hook changes the table before the re-read
       CHECK(g_hook_stage1 == 1, "unsorted %d mode %d: hook ran %d times", unsorted, mode, g_hook_stage1);
       CHECK(CountRight() == 0, "unsorted %d mode %d: written although the table changed under the poll (%zu)", unsorted, mode, CountRight());
-      CHECK(q15t::GetImpactSndStats().skipped == 0 && q15t::GetImpactSndStats().passes == 0,
+      CHECK(impactsnd::GetStats().skipped == 0 && impactsnd::GetStats().passes == 0,
             "unsorted %d mode %d: the poll's own re-read must stop it before a pass starts (skipped %u)", unsorted, mode,
-            q15t::GetImpactSndStats().skipped);
+            impactsnd::GetStats().skipped);
       // restore and let the polls settle: it is written eventually
       MapCount() = 15;
       if (unsorted) MapFlags() |= 1u;
       else MapFlags() &= ~1u;
       MapData() = reinterpret_cast<uint64_t>(g_rows);
       Publish();
-      q15t::SetImpactSndHookForTest(nullptr);
+      impactsnd::SetHookForTest(nullptr);
       Polls(5);
       CHECK(CountRight() == 15, "unsorted %d mode %d: not written after the table settled (%zu)", unsorted, mode, CountRight());
     }
@@ -739,13 +979,13 @@ static void TestReadBack() {
   Warm();
   g_hook_stage2 = 0;
   g_hook_armed2 = true;
-  q15t::SetImpactSndHookForTest(&Hk);
+  impactsnd::SetHookForTest(&Hk);
   Polls(2);
-  q15t::SetImpactSndHookForTest(nullptr);
+  impactsnd::SetHookForTest(nullptr);
   g_hook_armed2 = false;
   CHECK(g_hook_stage2 == 15, "stage 2 hook ran %d times", g_hook_stage2);
-  const q15t::ImpactSndStats s = q15t::GetImpactSndStats();
-  CHECK(s.rows_written == 14 && s.rows_left == 1, "lost store counted: written %u left %u", s.rows_written, s.rows_left);
+  const impactsnd::Stats s = impactsnd::GetStats();
+  CHECK(s.rowsWritten == 14 && s.rowsLeft == 1, "lost store counted: written %u left %u", s.rowsWritten, s.rowsLeft);
   CHECK(HasLine("rewrote=14") && HasLine("left=1"), "lost store not in the line");
   Polls(4);  // the next sorted pass puts it right (a known id sitting in the wrong row)
   CHECK(AllRight(), "the lost store was not repaired: %zu right", CountRight());
@@ -774,17 +1014,7 @@ static void TestLogCaps() {
   }
   CHECK(CountLines("impactsnd ids") == 200, "%d write lines (cap 200)", CountLines("impactsnd ids"));
   CHECK(CountLines("log cap reached", 2) == 1 && HasLine("lines=ids"), "write cap not announced once");
-  CHECK(q15t::GetImpactSndStats().passes == 210, "passes %u (counting goes on past the cap)", q15t::GetImpactSndStats().passes);
-}
-
-static void TestDReadBack() {
-  Fresh();
-  g_hook_d = 0xbad;
-  q15t::SetImpactSndHookForTest(&Hk);
-  Install();
-  q15t::SetImpactSndHookForTest(nullptr);
-  g_hook_d = 0;
-  CHECK(HasLine("action=wrote, READ-BACK DIFFERS") && HasLine("impactsnd on", 3), "a lost D store is not an ERROR");
+  CHECK(impactsnd::GetStats().passes == 210, "passes %u (counting goes on past the cap)", impactsnd::GetStats().passes);
 }
 
 static void TestCountZeroTableWaits() {
@@ -809,8 +1039,8 @@ static void TestUnsortedDoneOnce() {
   CHECK(CountRight() == 0, "the tick rewrote an unsorted table the loader pass had written (%zu right)", CountRight());
   SortRows();  // the first hit sorts it: the sorted pass repairs it
   Polls(4);
-  CHECK(CountRight() == 15 && q15t::GetImpactSndStats().passes == 2, "sorted pass after the sort: %zu right, %u passes", CountRight(),
-        q15t::GetImpactSndStats().passes);
+  CHECK(CountRight() == 15 && impactsnd::GetStats().passes == 2, "sorted pass after the sort: %zu right, %u passes", CountRight(),
+        impactsnd::GetStats().passes);
   // the tick's own early pass is also once per table
   Setup();
   SetTable(All(), kStock, true);
@@ -820,7 +1050,7 @@ static void TestUnsortedDoneOnce() {
   CHECK(CountRight() == 15, "tick early pass");
   for (size_t i = 0; i < g_n; ++i) g_rows[i].id = kStock;
   Polls(12);
-  CHECK(CountRight() == 0 && q15t::GetImpactSndStats().passes == 1, "tick early pass repeated (%zu right)", CountRight());
+  CHECK(CountRight() == 0 && impactsnd::GetStats().passes == 1, "tick early pass repeated (%zu right)", CountRight());
 }
 
 static void TestTableGoneOnce() {
@@ -838,7 +1068,7 @@ static void TestWrapperHuge() {
   Setup();
   g_load_mode = kLoadHuge;
   CallLoader();
-  CHECK(CountRight() == 0 && q15t::GetImpactSndStats().passes == 0 && HasLine("impactsnd no table now") && HasLine("count=1000") &&
+  CHECK(CountRight() == 0 && impactsnd::GetStats().passes == 0 && HasLine("impactsnd no table now") && HasLine("count=1000") &&
             HasLine("where=after LoadSoundSettings"),
         "a count over the cap at load");
 }
@@ -891,7 +1121,7 @@ static size_t CountRight2() {
 }
 static void SetRows2() {
   size_t n = 0;
-  const q15t::ImpactSndRow* k = Known(&n);
+  const impactsnd::Row* k = Known(&n);
   for (size_t i = 0; i < 15; ++i) g_rows2[i] = {k[i].key, kStock, kPad};
 }
 
@@ -917,14 +1147,14 @@ static void TestShutdownRace() {
     g_b_started = true;
     CallShutdown(0x1234);
   });
-  q15t::SetImpactSndHookForTest(&HkRace);
+  impactsnd::SetHookForTest(&HkRace);
   Poll();  // the pass starts; Shutdown starts on the other thread while it is writing
   b.join();
-  q15t::SetImpactSndHookForTest(nullptr);
+  impactsnd::SetHookForTest(nullptr);
   CHECK(g_in_flight, "the race never started");
   CHECK(g_uaf == 0, "%d row stores after the table was freed", g_uaf.load());
   CHECK(g_freed && g_right_at_free == 15, "Shutdown ran before the pass finished: %zu of 15 right when it freed", g_right_at_free);
-  CHECK(g_shut_calls == 1 && g_shut_self == 0x1234 && q15t::GetImpactSndStats().shutdowns == 1, "Shutdown calls %d", g_shut_calls.load());
+  CHECK(g_shut_calls == 1 && g_shut_self == 0x1234 && impactsnd::GetStats().shutdowns == 1, "Shutdown calls %d", g_shut_calls.load());
   CHECK(HasLine("impactsnd CR15NetBulletCS::Shutdown returned") && HasLine("table_global_now=0"), "no Shutdown line");
 }
 
@@ -944,14 +1174,14 @@ static void TestBetweenValidationAndLock() {
       SetRows2();
       Publish();
       Warm();
-      q15t::SetImpactSndHookForTest(&Hk);
+      impactsnd::SetHookForTest(&Hk);
       Poll();
       g_hook4_mode = mode;
       Poll();  // validated, stable, then the hook changes the world before the lock is taken
-      q15t::SetImpactSndHookForTest(nullptr);
+      impactsnd::SetHookForTest(nullptr);
       CHECK(g_uaf == 0, "unsorted %d mode %d: stores into a freed table", unsorted, mode);
-      CHECK(q15t::GetImpactSndStats().skipped == 1 && q15t::GetImpactSndStats().passes == 0 && HasLine("impactsnd row pass skipped"),
-            "unsorted %d mode %d: skipped %u passes %u", unsorted, mode, q15t::GetImpactSndStats().skipped, q15t::GetImpactSndStats().passes);
+      CHECK(impactsnd::GetStats().skipped == 1 && impactsnd::GetStats().passes == 0 && HasLine("impactsnd row pass skipped"),
+            "unsorted %d mode %d: skipped %u passes %u", unsorted, mode, impactsnd::GetStats().skipped, impactsnd::GetStats().passes);
       if (mode == 1) {
         CHECK(PoisonIntact() && g_freed, "unsorted %d mode 1: the freed table was written", unsorted);
         continue;
@@ -974,11 +1204,11 @@ static void TestBetweenValidationAndLock() {
   // the loader's pass is skipped the same way, and is not marked done either
   Setup();
   g_load_mode = kLoad15;
-  q15t::SetImpactSndHookForTest(&Hk);
+  impactsnd::SetHookForTest(&Hk);
   g_hook4_mode = 3;
   CallLoader();
-  q15t::SetImpactSndHookForTest(nullptr);
-  CHECK(CountRight() == 0 && q15t::GetImpactSndStats().skipped == 1, "loader pass over a changed table: %zu right", CountRight());
+  impactsnd::SetHookForTest(nullptr);
+  CHECK(CountRight() == 0 && impactsnd::GetStats().skipped == 1, "loader pass over a changed table: %zu right", CountRight());
   MapCount() = 15;
   Polls(24);
   CHECK(CountRight() == 15, "the tick did not take over after the loader's pass was skipped (%zu)", CountRight());
@@ -998,7 +1228,7 @@ static void TestLockBusy() {  // a Shutdown holds the lock: the tick does not wa
   Poll();
   const long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
   CHECK(ms < 150, "the tick waited %ld ms for the lock", ms);
-  CHECK(CountRight() == 0 && q15t::GetImpactSndStats().skipped == 1 && HasLine("table lock busy"), "written or not skipped while the lock was held");
+  CHECK(CountRight() == 0 && impactsnd::GetStats().skipped == 1 && HasLine("table lock busy"), "written or not skipped while the lock was held");
   g_hold_release = true;
   b.join();
   g_shut_mode = kShutFree;
@@ -1052,26 +1282,6 @@ static void TestShutdownDepthIsPerThread() {
   CHECK(g_shut_calls == 3 && second_done, "the second Shutdown never ran once the lock was free (%d calls)", g_shut_calls.load());
 }
 
-static void TestShutdownSlotRefused() {
-  Fresh();
-  mprotect(reinterpret_cast<void*>((g_base + kShutSlotVa) & ~0xfffull), 0x1000, PROT_READ | PROT_WRITE);
-  W64(kShutSlotVa, 0x4242420);  // not Shutdown
-  mprotect(reinterpret_cast<void*>((g_base + kShutSlotVa) & ~0xfffull), 0x1000, PROT_READ);
-  const q15t::InstallResult r = Install();
-  CHECK(r.status == q15t::SwapStatus::kUnexpectedOriginal, "foreign Shutdown slot: %s", q15t::StatusName(r.status));
-  CHECK(R64(kShutSlotVa) == 0x4242420, "foreign slot word changed");
-  CHECK(HasLine("impactsnd shutdown wrapper") && HasLine("row_writes=DISABLED", 3), "no ERROR for the refused Shutdown wrapper");
-  CHECK(!q15t::GetImpactSndStats().writers_ok && R64(kDefaultVa) == kDefaultSym, "writers_ok / D");
-  // the module reads and logs, never writes: through the loader wrapper and through the tick
-  CallLoader();
-  CHECK(CountRight() == 0 && HasLine("impactsnd ids (row writes disabled"), "loader pass wrote with writers disabled (%zu)", CountRight());
-  SetTable(All(), kStock, false);
-  Publish();
-  Polls(24);
-  CHECK(CountRight() == 0 && q15t::GetImpactSndStats().rows_written == 0, "tick wrote with writers disabled (%zu)", CountRight());
-  CHECK(CountLines("impactsnd ids (row writes disabled") == 1, "read-only line %d times", CountLines("impactsnd ids (row writes disabled"));
-}
-
 static long Gettid() { return static_cast<long>(syscall(SYS_gettid)); }
 static void TestThreadLines() {
   Setup();
@@ -1117,18 +1327,20 @@ int main() {
     std::printf("FAIL: impactsnd_test watchdog: 60 s without finishing (hang)\n");
     std::_Exit(2);
   }).detach();
-  NevrGameContext ctx{};
-  ctx.ctx_size = sizeof ctx;
-  ctx.plugin_id = "q15t";
-  ctx.log = &FakeLog;
-  q15t::SetLogContext(&ctx);
+  sentinel::SetLogSink(&Capture);
 
   TestNoThreadKey();
   TestConstants();
-  TestInstallWritesD();
-  TestNowriteBuild();
+  TestInstall();
+  TestOffByTheSwitch();
+  TestWriteSwitchOff();
   TestRefusals();
   TestSlotRefused();
+  TestShutdownSlotRefused();
+  TestArenaLoadIsTheGamesOwn();
+  TestCombatLevelsAreRepaired();
+  TestScopeFailsClosed();
+  TestScopeFollowsTheTable();
   TestWrapperUnsorted15();
   TestWrapper5Rows();
   TestWrapperSortedAtLoad();
@@ -1145,7 +1357,6 @@ int main() {
   TestChangedUnderUs();
   TestReadBack();
   TestLogCaps();
-  TestDReadBack();
   TestCountZeroTableWaits();
   TestUnsortedDoneOnce();
   TestTableGoneOnce();
@@ -1158,7 +1369,6 @@ int main() {
   TestLockBusy();
   TestShutdownNested();
   TestShutdownDepthIsPerThread();
-  TestShutdownSlotRefused();
   TestThreadLines();
 
   if (g_fail == 0) std::printf("impactsnd_test: all checks passed\n");

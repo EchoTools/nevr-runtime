@@ -16,8 +16,10 @@
 
 #include "hook_log.h"
 #include "quest/combat/combat_active.h"
+#include "quest/combat/decals.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
+#include "quest/combat/impactsnd.h"
 #include "quest/combat/memsys.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/test_check.h"
@@ -221,8 +223,9 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
   // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the headset gates (#2180) and, last, the pfx gate and
   // the event-effect decision, which hook nothing (#2188). On the host no libr15 is loaded, so the tick and the gates are refused and named; the rule
-  // installs (it registers its callback for a tick that may come later), and so do the two decisions.
-  QCHECK(normal.ran && normal.modules == 5 && normal.installed == 3 && normal.failed == 2);
+  // installs (it registers its callback for a tick that may come later), and so do the two decisions. The impact sounds (#2183) are refused like the
+  // other hooks (no libr15), and the level decals, on by default, find no decals.bin and are off: counted apart, neither installed nor failed.
+  QCHECK(normal.ran && normal.modules == 7 && normal.installed == 3 && normal.failed == 3 && normal.off == 1);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -230,7 +233,7 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickThenTheRefreshRateNormal(
     QCHECK(lines[0].level == sentinel::LogLevel::kWarn);
     QCHECK(Has(lines[0].text, "\"results\":\"heaps=module_not_loaded memsys=module_not_loaded\""));
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
-    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed gates=module_not_loaded pfx=installed pfxtev=installed\""));
+    QCHECK(Has(lines[1].text, "\"results\":\"tick=module_not_loaded refresh_rate=installed impactsnd=module_not_loaded decals=no_table gates=module_not_loaded pfx=installed pfxtev=installed\""));
   }
   Done();
 }
@@ -458,6 +461,65 @@ void ThePfxRowsReadTheirKeysFromTheResolvedSection() {
   Done();
 }
 
+// The impact sounds and the level decals (#2183) read their keys from the resolved section: impactsnd on by default and decals on by default (inert without a
+// decals.bin, which a host has none of), each off by the file's word alone, and a `combat_config_switch` record for each key of the two rows.
+void TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection() {
+  namespace impactsnd = nevr_quest::combat::impactsnd;
+  impactsnd::ResetForTest();
+  Process(bv::Variant::kCombat);
+  combat::SetConfig(nevr_quest::CombatConfig{});
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "impactsnd=module_not_loaded decals=no_table"));  // no libr15 on the host, and no decals.bin
+  QCHECK(Lines("combat_impactsnd_refused").size() == 1U);
+  QCHECK(Lines("combat_decals_install").size() == 1U && Has(Lines("combat_decals_install")[0].text, "\"reason\":\"no_table\""));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig impactOff;
+  impactOff.impactsnd = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(impactOff);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "impactsnd=off_config decals=no_table"));
+  QCHECK(Lines("combat_impactsnd_refused").empty() && Has(Lines("combat_impactsnd_install")[0].text, "\"reason\":\"off_config\""));
+  Done();
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig decalsOff;
+  decalsOff.decals = {false, nevr_quest::Source::kFile};
+  combat::SetConfig(decalsOff);
+  combat::InstallNormal();
+  QCHECK(Has(Lines("combat_install")[0].text, "impactsnd=module_not_loaded decals=off_config"));
+  QCHECK(Has(Lines("combat_decals_install")[0].text, "\"reason\":\"off_config\""));
+  Done();
+  // The config switch records: one for each key a row names, with the value and where it came from.
+  Process(bv::Variant::kCombat);
+  nevr_quest::CombatConfig cfg;
+  cfg.impactsndWrite = {false, nevr_quest::Source::kFile};
+  cfg.decalsFlipU = {true, nevr_quest::Source::kFile};
+  combat::LogConfig(cfg);
+  const std::vector<Line> sw = Lines("combat_config_switch");
+  auto find = [&sw](const char* key) -> std::string {
+    for (const Line& l : sw) {
+      if (Has(l.text, std::string("\"key\":\"") + key + "\"")) return l.text;
+    }
+    return std::string();
+  };
+  QCHECK(Has(find("combat.impactsnd"), "\"module\":\"impactsnd\"") && Has(find("combat.impactsnd"), "\"on\":1") && Has(find("combat.impactsnd"), "\"source\":\"default\""));
+  QCHECK(Has(find("combat.impactsnd_write"), "\"on\":0") && Has(find("combat.impactsnd_write"), "\"source\":\"config\""));
+  QCHECK(Has(find("combat.decals"), "\"module\":\"decals\"") && Has(find("combat.decals"), "\"on\":1") && Has(find("combat.decals"), "\"source\":\"default\""));
+  QCHECK(Has(find("combat.decals_flip_u"), "\"on\":1") && Has(find("combat.decals_flip_u"), "\"source\":\"config\""));
+  // The table's order: impactsnd before decals (decals' Shutdown handler chains above impactsnd's), both after the tick.
+  std::size_t n = 0;
+  const combat::Module* table = combat::ShippedModules(&n);
+  std::size_t tick = n, impact = n, decals = n;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (std::strcmp(table[i].name, "tick") == 0) tick = i;
+    if (std::strcmp(table[i].name, "impactsnd") == 0) impact = i;
+    if (std::strcmp(table[i].name, "decals") == 0) decals = i;
+  }
+  QCHECK(tick < impact && impact < decals && decals < n);
+  QCHECK(table[impact].early == nullptr && table[impact].normal != nullptr && table[decals].early == nullptr && table[decals].normal != nullptr);
+  Done();
+}
+
 }  // namespace
 
 int main() {
@@ -477,6 +539,7 @@ int main() {
   TheGatesKeysHaveALineOfTheirOwn();
   TheGatesRowReadsItsKeysFromTheResolvedSection();
   ThePfxRowsReadTheirKeysFromTheResolvedSection();
+  TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "combat_install_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

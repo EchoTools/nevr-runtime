@@ -27,6 +27,7 @@ struct Reloc {
   bool globDat;
   bool object;          // STT_OBJECT, else STT_FUNC
   std::uint64_t value;  // the symbol's address (st_value)
+  bool abs64 = false;   // an R_AARCH64_ABS64 word (a vtable entry) instead of a JUMP_SLOT or GLOB_DAT word; it goes in the same table as GLOB_DAT
 };
 
 class Image {
@@ -64,8 +65,10 @@ class Image {
       dynstr.push_back('\0');
       Elf64_Rela rel{};
       rel.r_offset = r.slot;
-      rel.r_info = ELF64_R_INFO(static_cast<Elf64_Xword>(i + 1), r.globDat ? sentinel::kNativeRelocs.globDat : sentinel::kNativeRelocs.jumpSlot);
-      (r.globDat ? rela : jmprel).push_back(rel);
+      rel.r_info = ELF64_R_INFO(static_cast<Elf64_Xword>(i + 1), r.abs64     ? sentinel::kNativeRelocs.abs64
+                                                                  : r.globDat ? sentinel::kNativeRelocs.globDat
+                                                                              : sentinel::kNativeRelocs.jumpSlot);
+      (r.globDat || r.abs64 ? rela : jmprel).push_back(rel);
     }
     QCHECK(dynstr.size() < kDynsymAt - kDynstrAt);
     QCHECK(syms.size() * sizeof(Elf64_Sym) < kJmprelAt - kDynsymAt);

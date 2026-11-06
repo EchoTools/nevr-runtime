@@ -56,6 +56,11 @@ constexpr const char* kCombatGateLinkKey = "combat.gate_link";            // Que
 constexpr const char* kCombatGateLinkLibsKey = "combat.gate_link_libs";   // Quest only (default: the 21 libraries of the combat entries, #2180)
 constexpr const char* kCombatPfxKey = "combat.pfx";                // Quest only (default true, #2188)
 constexpr const char* kCombatPfxtevKey = "combat.pfxtev";          // Quest only (default true, #2188)
+constexpr const char* kCombatImpactsndKey = "combat.impactsnd";            // Quest only (default true, #2183)
+constexpr const char* kCombatImpactsndWriteKey = "combat.impactsnd_write";  // Quest only (default true, #2183)
+constexpr const char* kCombatDecalsKey = "combat.decals";                  // Quest only (default true, #2183: upstream fxdecal.on; inert without decals.bin)
+constexpr const char* kCombatDecalsFlipUKey = "combat.decals_flip_u";      // Quest only (default false, #2183)
+constexpr const char* kCombatDecalsFlipVKey = "combat.decals_flip_v";      // Quest only (default false, #2183)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
 // unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
@@ -395,6 +400,11 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.gateLinkLibs = ReadCombatText(cfg, kCombatGateLinkLibsKey, r);
   r.config.combat.pfx = ReadCombatSwitch(cfg, kCombatPfxKey, r);
   r.config.combat.pfxtev = ReadCombatSwitch(cfg, kCombatPfxtevKey, r);
+  r.config.combat.impactsnd = ReadCombatSwitch(cfg, kCombatImpactsndKey, r);
+  r.config.combat.impactsndWrite = ReadCombatSwitch(cfg, kCombatImpactsndWriteKey, r);
+  r.config.combat.decals = ReadCombatSwitch(cfg, kCombatDecalsKey, r);
+  r.config.combat.decalsFlipU = ReadCombatSwitch(cfg, kCombatDecalsFlipUKey, r, /*fallback=*/false);
+  r.config.combat.decalsFlipV = ReadCombatSwitch(cfg, kCombatDecalsFlipVKey, r, /*fallback=*/false);
   r.config.plugins = cfg.Plugins();
 }
 

@@ -1,6 +1,6 @@
-// The platform-free half of the `decals` module (docs/quest/q15t/modules/decals.md): the table file, the level gate, the vertex
-// fill and the per-system state machine. Nothing here calls the game: the caller passes the five operations (`Ops`), so the host
-// tests drive every rule with stand-ins and the plugin passes the real draw calls.
+// The game-free half of the `decals` module (decals.h, docs/quest/combat/decals.md): the table file, the level gate, the vertex fill and the
+// per-system state machine. Nothing here calls the game: the caller passes the five operations (`Ops`), so the host tests drive every rule with
+// stand-ins and the module passes the real draw calls. Built with -fno-exceptions, like every combat translation unit.
 //
 // decals.bin (little endian), as the bake writes it:
 //   char magic[4] = "ADC1"; u32 groups
@@ -15,10 +15,10 @@
 #include <cstring>
 #include <new>
 
-#include "plugin_log.h"
+#include "quest/combat/combat_level.h"
+#include "quest/sentinel/hook_log.h"
 
-namespace q15t {
-namespace decals {
+namespace nevr_quest::combat::decals {
 
 constexpr std::uint32_t kMaxGroups = 256;       // sanity caps on the file: a table above them is refused whole
 constexpr std::uint32_t kMaxFileQuads = 4096;   // per group
@@ -32,10 +32,9 @@ constexpr std::int64_t kWindowMs = 10000;
 
 constexpr std::size_t kFileHeaderBytes = 8, kGroupHeaderBytes = 24, kQuadFloats = 20, kQuadBytes = 80;
 
-// CSymbol64 of the level names the table refers to (checked against the SDK's hash in tests/q15t/decals_test.cpp).
+// CSymbol64 of the war room's level name (checked against the SDK's hash in decals_test.cpp). The four combat maps are combat_level.h's.
 constexpr std::uint64_t kLevelWarRoom = 0x08a1af9e108def0bull;  // mpl_combat_war_room
-constexpr std::uint64_t kCombatLevels[4] = {0x43e2da7914642604ull, 0x42670f2bed45703cull, 0xdf5ca7b7dfa383d4ull,
-                                            0x43e2da7a0c623a19ull};  // mpl_combat_dyson, _combustion, _fission, _gauss
+constexpr std::int64_t kInertRecheckMs = 1000;  // a game space whose level is not a combat one has its level read again after this long
 
 // One vertex of a dynamic mesh (SDynamicMeshVtx, 44 bytes: position, normal, tangent, uv, two colours).
 struct Vtx {
@@ -186,16 +185,14 @@ inline LoadResult ParseTable(const std::uint8_t* b, std::size_t len, bool flip_u
   return LoadResult::kOk;
 }
 
-inline bool IsCombatLevel(std::uint64_t l) {
-  for (std::uint64_t c : kCombatLevels)
-    if (c == l) return true;
-  return false;
-}
+// The levels the module acts in (arena shares the APK, so a table that names any other level draws nothing there): a combat map (combat_level.h,
+// the one answer to "is this combat?") and the war room, which is combat's drop ship and no arena level. The combat lobby is not one: nothing is drawn there.
+inline bool ActsIn(std::uint64_t level) { return level::IsCombatMap(level) || level == kLevelWarRoom; }
 
 // A group is drawn in the game space of its own level; the war room's (the drop ships') also in a combat arena's, because it is not
 // known that the ships load as a game space of their own.
 inline bool Applies(std::uint64_t group_level, std::uint64_t level) {
-  return group_level == level || (group_level == kLevelWarRoom && IsCombatLevel(level));
+  return group_level == level || (group_level == kLevelWarRoom && level::IsCombatMap(level));
 }
 
 // Both windings of every quad (the donor material is single-sided and the decal's facing is not known, so exactly one of the two
@@ -251,20 +248,15 @@ struct SysRec {
   int tries = 0;
   std::int64_t next = 0;
   bool done = false;
+  bool inert = false;         // the level is not one the module acts in: nothing is made, and the level is read again only every kInertRecheckMs
+  std::int64_t recheck = 0;   // inert: the time of the next read of the level
 };
 
 struct Counters {
   std::uint64_t systems_seen = 0, nodes_made = 0, nodes_failed = 0, nodes_destroyed = 0, level_changes = 0, ticks = 0, drawn_quads = 0;
 };
 
-inline const char* Hex(char* buf, std::size_t n, std::uint64_t v) {
-  std::snprintf(buf, n, "0x%llx", static_cast<unsigned long long>(v));
-  return buf;
-}
-inline const char* Dec(char* buf, std::size_t n, long long v) {
-  std::snprintf(buf, n, "%lld", v);
-  return buf;
-}
+using sentinel::HexString;
 
 struct Host {
   const Table* table = nullptr;
@@ -308,17 +300,20 @@ struct Host {
   // The update of bullet system `sys` (the game-space update thread of that system); the caller holds the module's lock.
   void Tick(std::uintptr_t sys, std::int64_t now_ms) {
     if (table == nullptr || table->count == 0) return;
+    SysRec* ds = Find(sys);
+    // A game space in a level the module does not act in (an arena match, which shares the APK) has its level read again once a second, not on every
+    // update: the path of an arena frame is this lookup, one compare and a return.
+    if (ds != nullptr && ds->inert && now_ms < ds->recheck) return;
     std::uint64_t level = 0;
     if (!ops.level_of(ops.user, sys, &level)) return;
     ++counters.ticks;
-    SysRec* ds = Find(sys);
     if (ds != nullptr && ds->level != level) {  // the system outlived a level change: its nodes go, and it is gated again
       const int gone = DropNodes(sys);
       ++counters.level_changes;
-      char s[24], a[24], b[24], n[24];
-      const NevrLogField f[] = {{"system", Hex(s, sizeof s, sys)}, {"level_from", Hex(a, sizeof a, ds->level)},
-                                {"level_to", Hex(b, sizeof b, level)}, {"nodes_destroyed", Dec(n, sizeof n, gone)}};
-      Log(NEVR_LOG_INFO, "decals: level changed under a bullet system, its nodes are destroyed", f, 4);
+      char a[19], b[19];
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_decals_level_changed",
+                          {{"system", static_cast<long long>(sys)}, {"level_from", HexString(a, ds->level)}, {"level_to", HexString(b, level)},
+                           {"nodes_destroyed", gone}, {"msg", "the level changed under a bullet system, so its decal nodes are destroyed"}});
       Forget(ds);
       ds = nullptr;
     }
@@ -326,9 +321,9 @@ struct Host {
       if (sys_n >= kMaxSystems) {
         if (!told_full) {
           told_full = true;
-          char s[24], m[24];
-          const NevrLogField f[] = {{"system", Hex(s, sizeof s, sys)}, {"max", Dec(m, sizeof m, kMaxSystems)}};
-          Log(NEVR_LOG_WARNING, "decals: more bullet systems than the table keeps, this one draws no decals", f, 2);
+          sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_decals_systems_full",
+                              {{"system", static_cast<long long>(sys)}, {"max", kMaxSystems},
+                               {"msg", "more bullet systems than the table keeps, so this one draws no decals"}});
         }
         return;
       }
@@ -336,6 +331,7 @@ struct Host {
       *ds = SysRec();
       ds->sys = sys;
       ds->level = level;
+      ds->inert = !ActsIn(level);
       ++counters.systems_seen;
       if (level == kLevelWarRoom) ++war_room_systems;
       int ng = 0;
@@ -345,10 +341,15 @@ struct Host {
           ++ng;
           nq += table->groups[i].n;
         }
-      char s[24], l[24], g[24], q[24];
-      const NevrLogField f[] = {{"system", Hex(s, sizeof s, sys)}, {"level", Hex(l, sizeof l, level)},
-                                {"groups", Dec(g, sizeof g, ng)}, {"quads", Dec(q, sizeof q, nq)}};
-      Log(NEVR_LOG_INFO, "decals: game space", f, 4);
+      char l[19];
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_decals_game_space",
+                          {{"system", static_cast<long long>(sys)}, {"level", HexString(l, level)}, {"acts", ds->inert ? 0 : 1},
+                           {"groups", ng}, {"quads", nq},
+                           {"msg", ds->inert ? "not a combat level: this game space draws no decals" : "a combat level: this game space draws its groups"}});
+    }
+    if (ds->inert) {
+      ds->recheck = now_ms + kInertRecheckMs;
+      return;
     }
     if (!ds->done && ds->tries < kMaxTries && now_ms >= ds->next) {
       ++ds->tries;
@@ -398,10 +399,8 @@ struct Host {
     ++frames;
     if (now_ms - win_at >= kWindowMs) {
       if (win_at != 0) {
-        char fr[24], nn[24], q[24];
-        const NevrLogField f[] = {{"frames", Dec(fr, sizeof fr, frames)}, {"nodes", Dec(nn, sizeof nn, node_n)},
-                                  {"quads", Dec(q, sizeof q, win_quads)}};
-        Log(NEVR_LOG_INFO, "decals: window", f, 3);
+        sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_decals_window",
+                            {{"frames", frames}, {"nodes", node_n}, {"quads", win_quads}, {"msg", "the last window's frames, nodes and quads drawn"}});
       }
       win_at = now_ms;
       frames = win_quads = 0;
@@ -419,12 +418,11 @@ struct Host {
       }
     }
     if (gone != 0) {
-      char s[24], n[24];
-      const NevrLogField f[] = {{"system", Hex(s, sizeof s, sys)}, {"nodes_destroyed", Dec(n, sizeof n, gone)}};
-      Log(NEVR_LOG_INFO, "decals: bullet system shutdown, its nodes are destroyed", f, 2);
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_decals_system_shutdown",
+                          {{"system", static_cast<long long>(sys)}, {"nodes_destroyed", gone},
+                           {"msg", "a bullet system is shutting down, so its decal nodes are destroyed first"}});
     }
   }
 };
 
-}  // namespace decals
-}  // namespace q15t
+}  // namespace nevr_quest::combat::decals

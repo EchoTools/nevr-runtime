@@ -12,9 +12,11 @@ add_library(nevr_quest_combat STATIC
   combat_tick.cpp
   combat_level.cpp
   combat_tick.cpp
+  decals.cpp
   equip_refire.cpp
   headset_gates.cpp
   heaps.cpp
+  impactsnd.cpp
   match_tags.cpp
   memsys.cpp
   pfx.cpp

@@ -28,8 +28,6 @@ runm wiring wire_drop_peerclamp    src/plugin.cpp "s/^  ReportModule(\"peerclamp
 runm wiring wire_drop_bvh          src/plugin.cpp "s/const InstallResult r = InstallBvh(base);/const InstallResult r{};/"
 runm wiring wire_drop_bvh_tick     src/plugin.cpp "s/    if (r.status == SwapStatus::kOk) AddModuleTick(\"bvh\", \&BvhTick, \&want_tick);//"
 runm wiring wire_drop_wallfire     src/plugin.cpp "s/^  ReportModule(\"wallfire\", InstallWallfire(base));.*//"
-runm wiring wire_drop_impactsnd    src/plugin.cpp "s/^  ReportModule(\"impactsnd\", InstallImpactSnd(base));//"
-runm wiring wire_drop_impact_tick  src/plugin.cpp "s/^  AddModuleTick(\"impactsnd\", \&ImpactSndTick, \&want_tick);.*//"
 runm wiring wire_drop_ec           src/plugin.cpp "s/const InstallResult r = InstallEc(base);/const InstallResult r{};/"
 runm wiring wire_drop_ecfx         src/plugin.cpp "s/^  ReportModule(\"ecfx\", InstallEcfx(base));//"
 runm wiring wire_drop_dronekill    src/plugin.cpp "s/if (!ResolveDroneKillFns(base, \&fns)) {/if (false) {/"

@@ -15,7 +15,6 @@ option(Q15T_GUNCONNECT "gunconnect (R17-R19): the local player's guns get Connec
 option(Q15T_AIBOTS "aibots (R40): Practice AI bots get a scenario each combat match. Source: default ON; tick" ON)
 option(Q15T_BVH "bvh (R20-R25): a real static raycast tree for CBVHTree. Source: on by default (kill file bvh.off); tick" ON)
 option(Q15T_WALLFIRE "wallfire (R26-R28): no shot through a wall; needs Q15T_BVH. Source: on by default (kill file wallfire.off)" ON)
-option(Q15T_IMPACTSND "impactsnd (R12-R15): the impact table gets its Wwise ids. Source: default ON since v6; tick" ON)
 # EC and ECFX: compiled in by default and inert until the source build's own switch file exists in the plugin data directory (ec.on,
 # ec_preset1.on, ec_preset2.on, ec_preset3.on; neutronfx.on for ecfx), or Q15T_EC_DEFAULT_WORDS names words. The doc states no option default; the
 # source build gates them by those files, so ON with no switch file installs no word (it publishes the zeroed re33_ec_page and logs "ec: off").
@@ -43,7 +42,6 @@ option(Q15T_INSTMODEL "instmodel (disassembly 0x1a078dc): CGInstancedModelResour
 # shieldgamma: a bitmask, 1 = gamma (a TEST switch, off in the source), 2 = tube mirror (the ship form, on in the source).
 set(Q15T_SHIELDGAMMA 2 CACHE STRING "shieldgamma (R58) bitmask: 1 gamma, 2 tube mirror, 0 not built. Source default: mirror on, gamma off")
 set_property(CACHE Q15T_SHIELDGAMMA PROPERTY STRINGS 0 1 2 3)
-option(Q15T_IMPACTSND_NOWRITE "impactsnd: read and log only, no row is written" OFF)
 # tablestep (issue #1552): the shader-set resource table's growth step 32 -> 1 (CFactory<CGShaderSetResource>::CreateInstance, disassembly
 # libr15 0x1a0707c, a wrapper on its three data slots). Source: the shipped variant's word row (extra_rows: 0) is not in the APK, so
 # this is the plugin's own. Off file: tablestep.off in the plugin data directory.
@@ -51,10 +49,6 @@ option(Q15T_TABLESTEP "tablestep (#1552): shader-set table growth step 32 -> 1 b
 # sendguard: CSendEventNode::Enter (disassembly libr15 0x2825a80) faults on a send to a game space that is not loaded (the menu gate lets the menu
 # reach such a send on a Quest without the combat content pack). A wrapper on its data slots drops that send with a log line. Off file: sendguard.off.
 option(Q15T_SENDGUARD "sendguard: a script send to a game space that is not loaded is dropped, not faulted, by a wrapper on CSendEventNode::Enter's data slots" ON)
-# decals (issue #1619): the combat levels' static decals, which the Quest renderer cannot draw, as quads in dynamic-mesh nodes from the
-# content pack's decals.bin. ON, and inert (one INFO line, reason "off") when no decals.bin is found. Off file: decals.off. Needs impactsnd's
-# Shutdown wrapper to be installed first when Q15T_IMPACTSND is on (plugin.cpp installs it in that order; the wrapper chains on it).
-option(Q15T_DECALS "decals (#1619): the level decals of decals.bin drawn as dynamic-mesh quads on the bullet system's update, torn down on its Shutdown" ON)
 
 if(Q15T_WALLFIRE AND NOT Q15T_BVH)
   message(FATAL_ERROR "Q15T_WALLFIRE needs Q15T_BVH (wallfire refuses without the static BVH answering Occluded)")
@@ -82,7 +76,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/script_redirect.cpp src/import_hook.cpp src/combat_map.cpp src/game_tick.cpp src/safe_read.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
-foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL DECALS)
+foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -122,12 +116,12 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_T26=$<BOOL:${Q15T_T26}>
   Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}> Q15T_MESHSTEP=$<BOOL:${Q15T_MESHSTEP}>
   Q15T_GUNCONNECT=$<BOOL:${Q15T_GUNCONNECT}> Q15T_AIBOTS=$<BOOL:${Q15T_AIBOTS}> Q15T_BVH=$<BOOL:${Q15T_BVH}>
-  Q15T_WALLFIRE=$<BOOL:${Q15T_WALLFIRE}> Q15T_IMPACTSND=$<BOOL:${Q15T_IMPACTSND}> Q15T_EC=$<BOOL:${Q15T_EC}> Q15T_ECFX=$<BOOL:${Q15T_ECFX}>
+  Q15T_WALLFIRE=$<BOOL:${Q15T_WALLFIRE}> Q15T_EC=$<BOOL:${Q15T_EC}> Q15T_ECFX=$<BOOL:${Q15T_ECFX}>
   Q15T_DRONEGUARD=$<BOOL:${Q15T_DRONEGUARD}> Q15T_DRONEGUARD_IDX=$<BOOL:${Q15T_DRONEGUARD_IDX}> Q15T_PEERCLAMP=$<BOOL:${Q15T_PEERCLAMP}>
   Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
   Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
-  Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}> Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
-  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}>)
+  Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
+  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}>)
 if(NOT "${Q15T_EC_DEFAULT_WORDS}" STREQUAL "")
   target_compile_definitions(nevr_q15t PRIVATE "Q15T_EC_DEFAULT_WORDS=\"${Q15T_EC_DEFAULT_WORDS}\"")
 endif()
