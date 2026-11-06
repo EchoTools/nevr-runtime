@@ -416,14 +416,14 @@ void ALegacySwitchFileIsAWarningAndChangesNothing() {
   Begin();
   Build();
   nevr_quest::combat::legacy::SetDirectoryForTest(g_dir.c_str());
-  for (const char* f : {"bvh.off", "bvhtouch.keep"}) {  // only two of the three are there: only those two are named
+  for (const char* f : {"bvh.off", "bvhgate.off", "bvhtouch.keep"}) {
     FILE* file = std::fopen((g_dir + "/" + f).c_str(), "w");
     if (file != nullptr) std::fclose(file);
   }
-  QCHECK(Installed(On()));  // no file turns the module off or its touch hook off
-  QCHECK(Count(Event("combat_bvh_legacy_switch"), kWarn) == 2);
-  QCHECK(Count("\"file\":\"bvhgate.off\"") == 0);
+  QCHECK(Installed(On()));  // no file turns the module off, its gate off or its touch hook off
+  QCHECK(Count(Event("combat_bvh_legacy_switch"), kWarn) == 3);
   QCHECK(Count("\"file\":\"bvh.off\",\"replaced_by\":\"combat.bvh: false\"") == 1);
+  QCHECK(Count("\"file\":\"bvhgate.off\",\"replaced_by\":\"combat.bvh_gate: false\"") == 1);
   QCHECK(Count("\"file\":\"bvhtouch.keep\",\"replaced_by\":\"combat.bvh_touch: false\"") == 1);
   QCHECK(Count("\"hooks\":6,\"gate\":1,\"touch\":1") == 1);
   for (const char* f : {"bvh.off", "bvhgate.off", "bvhtouch.keep"}) unlink((g_dir + "/" + f).c_str());
