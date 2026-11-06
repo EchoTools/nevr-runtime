@@ -373,8 +373,8 @@ void ScriptRedirectIsOfferedByBothApis() {
   sr::ResetForTest();
 }
 
-// The hook service (#2001) is offered by the development API only. The release API offers none until q15t moves onto it
-// (#2002): its two members are null there, and struct_size still covers them. A plugin checks both, so on a release host
+// The hook service (#2001) is offered by the development API only. The release API offers none (ADR 0046: the plugin that would
+// have used it is folded into the runtime): its two members are null there, and struct_size still covers them. A plugin checks both, so on a release host
 // the service reads as not offered rather than as a call through a null pointer.
 void SlotHookIsOfferedByTheDevApiOnly() {
   const NevrQuestHostApi* release = is::HostApi(false);
