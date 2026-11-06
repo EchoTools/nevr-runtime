@@ -1,17 +1,18 @@
-// Ported from the source build's dronekill_core (<source build>/the source build's dronekill_core,
-// RE-33 E-N1 stage 0, EC-NATIVES stage 1): the platform-free part of
-// dronekill.cpp: the libr15 shape checks (vtable thunks / bodies), the drone group table (rules R1' / R2 / R3), the F3 touch
-// table, the F5 gun table and the F7 chase table. Nothing here calls the game or reads game memory. Verbatim from the source
-// build except: the namespace (q15t::dk) and the 'K' ring (the source's recvfrom thread pushes into it; here DroneKillOnKilled
-// does the table work itself, see dronekill.cpp) and Comp's members, which carry initializers so that the tables are constant-initialised
-// (the repack refuses a plugin with a static constructor). The shape tables were compared with the disassembly (docs/quest/q15t/modules/dronekill.md).
+// The platform-free part of dronekill (dronekill.h): the libr15 shape checks (vtable thunks / bodies), the drone group table (rules R1' / R2 /
+// R3), the F3 touch table, the F5 gun table and the F7 chase table. Nothing here calls the game or reads game memory.
+//
+// Origin. The reference build's `runtime/native/afkxr/afk_dronekill_core.h` (kotorvr's q15t-upstream; 325 of this file's 354 distinct lines
+// are that file's), which ports EchoCombat `c14c3e0a` `plugin/dronefix.cpp` ("df"): the groups df 434-560 (Newest df 461-468), TouchLive
+// df 778-793, the touch rule df 731-835 (Deployed df 772, LockedOn df 810-826), the gun table df 700-729 and the chase table df 1037-1095
+// (df 1077-1082). The differences from that file: the namespace, the 'K' ring (the reference build's recvfrom thread pushes into it; here
+// dronekill::OnKilled does the table work itself) and Comp's members, which carry initializers so that the tables are constant-initialised
+// (no static constructor in the sentinel). The shape tables were compared with the disassembly (docs/quest/combat/dronekill.md).
 #pragma once
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
 
-namespace q15t {
-namespace dk {
+namespace nevr_quest::combat::dronekill::dk {
 
 constexpr uint64_t kDroneActor = 0x10e40287a9bf5a13ull;    // the drone actor's symbol (upstream)
 constexpr uint64_t kDamageable = 0xc9dc08cfc2f5920full;    // R14NetDamageable: its ON = a drone release = a new group
@@ -443,5 +444,4 @@ struct ChaseTable {
     }
 };
 
-}  // namespace dk
-}  // namespace q15t
+}  // namespace nevr_quest::combat::dronekill::dk

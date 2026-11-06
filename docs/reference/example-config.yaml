@@ -238,6 +238,18 @@ combat:
   # key. Read once at launch. Default (absent): true.
   # pfxtev: false
 
+  # Quest only. A boolean. A combat drone's rules (src/quest/combat/dronekill.h): a drone the server says died goes off, a drone that has
+  # locked on stays grabbable until it fires, its gun, satellite and port show as one, it chases its target, and its shot's velocity is handed
+  # to dronemuzzle. They act only while a combat map is loaded; in every other level the hooks only call the game's function. The sentinel log
+  # line `combat_dronekill_install` says what was read. `false` installs nothing. A value that is not a boolean keeps the default, with a
+  # warning that names the key. Read once at launch. Default (absent): true.
+  # dronekill: false
+
+  # Quest only. A boolean. A combat drone's bullets leave its gun, not its root (src/quest/combat/dronemuzzle.h). It needs dronekill (above):
+  # with dronekill off it installs nothing and says so (`needs_dronekill_shot`). `false` installs nothing. A value that is not a boolean keeps
+  # the default, with a warning that names the key. Read once at launch. Default (absent): true.
+  # dronemuzzle: false
+
   # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
   # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard
   # runs whatever these say. Party guns, payload speed, a client's own damage bonus and CombatBots are never on.
