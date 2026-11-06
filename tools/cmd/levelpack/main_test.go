@@ -113,8 +113,14 @@ type world struct {
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	return newWorldOf(t, stockA, stockB)
+}
+
+// newWorldOf is a world whose stock chunk holds items instead of stockA and stockB.
+func newWorldOf(t *testing.T, items ...item) *world {
+	t.Helper()
 	w := &world{t: t, dir: t.TempDir()}
-	plain, recs := lay(0, 16, stockA, stockB)
+	plain, recs := lay(0, 16, items...)
 	frame := rawFrame(plain)
 	w.pkg0 = frame
 	w.chunks = []chunk{{Package: 0, FileOffset: 0, Compressed: uint32(len(frame)), Decompressed: uint32(len(plain))}}
@@ -618,6 +624,47 @@ func TestTheReaderKeepsTheChunksItReadLast(t *testing.T) {
 	}
 	if len(rd.kept) != keptChunks {
 		t.Errorf("the reader holds %d decoded chunks, want at most %d", len(rd.kept), keptChunks)
+	}
+}
+
+func TestAnOverrideTheRuntimeWouldNeverApplyIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		k    key
+		want string
+	}{
+		{"a mip", key{mipType, 0x600}, "a texture's streamed mip is read by the texture streaming, which an override does not reach"},
+		{"a script", key{scriptType, 0x700}, "a script is a DLL the game loads by name, so a level pack carries none"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			w := newWorld(t)
+			w.addChunk(levelRoot, archive)
+			r := w.run("-override", c.k.String())
+			if r.code != 1 || !strings.Contains(r.stderr, "-override "+c.k.String()+": "+c.want) {
+				t.Errorf("exit %d: %s", r.code, r.stderr)
+			}
+		})
+	}
+}
+
+func TestATexturePayloadOverrideLargerThanTheGamesIsRefused(t *testing.T) {
+	t.Parallel()
+	payload := item{key{textureGpuType, 0x300}, fill(64, 'g')}
+	larger := newWorldOf(t, payload)
+	larger.addChunk(item{payload.k, fill(96, 'G')})
+	larger.addChunk(levelRoot, archive)
+	r := larger.run("-override", payload.k.String())
+	if r.code != 1 || !strings.Contains(r.stderr, "the export's texture payload is 96 bytes, the game's 64") {
+		t.Errorf("exit %d: %s", r.code, r.stderr)
+	}
+
+	same := newWorldOf(t, payload)
+	same.addChunk(item{payload.k, fill(64, 'G')})
+	same.addChunk(levelRoot, archive)
+	if r := same.run("-override", payload.k.String()); r.code != 0 || r.rep.Overrides != 1 {
+		t.Errorf("a payload no larger than the game's: exit %d, overrides %d: %s", r.code, r.rep.Overrides, r.stderr)
 	}
 }
 

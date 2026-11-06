@@ -416,11 +416,13 @@ func parseArchive(b []byte) (archiveBody, bool) {
 	return a, true
 }
 
-// On-disk types the runtime's registry checks (src/runtime/patch/resource_set_registry.h).
+// On-disk types the runtime's registry checks (src/runtime/patch/resource_set_registry.h), and the mip type, which no
+// override reaches.
 const (
 	scriptType     = 0x991421b41de58370 // CScriptResourceWin10: the game loads a script as a DLL by name
 	textureType    = 0x4a4c32c49300b8a0 // CGTextureResourceWin10: the 256-byte descriptor
 	textureGpuType = 0xbeac1969cb7b8861 // CGTextureResourceWin10GPU: the pixel payload
+	mipType        = 0xae49fad43254367a // RawTexturePackfileWin10: a texture's streamed mips (docs/engine/asset-system.md)
 	maxArchive     = 0x80000            // the registry's largest archive record
 )
 

@@ -6,8 +6,10 @@
 // records, and the package files it names. levelpack compares it with the game's stock manifests (and, for a stock
 // record the repack moved, the stock bytes). A record the game does not have goes into the set. A stock record the
 // repack moved but did not change is dropped. A stock record whose bytes changed is listed in the report, and goes into
-// the set as an override only when -override names it. A stock record at the same place in the same chunk as in the
-// stock manifest is taken as unchanged, and its bytes are not read.
+// the set as an override only when -override names it. An override the runtime would never apply is refused: an
+// archive or a texture's streamed mip (read on paths an override does not reach), a script, and a texture payload
+// larger than the game's. A stock record at the same place in the same chunk as in the stock manifest is taken as
+// unchanged, and its bytes are not read.
 //
 // Before the set is kept, it is checked with the rules the runtime's parser applies, every frame is decoded to the
 // length its chunk states, each repacked record and override is compared with the export's bytes, and the set is put
@@ -333,8 +335,13 @@ func pack(o options, log *slog.Logger) (*report, error) {
 	rep := &report{Manifest: o.manifest, Out: o.out, StockEdited: []edited{}, Levels: []string{}, LevelsWithoutArchive: []string{}}
 	overrides := map[key]bool{}
 	for _, k := range o.overrides {
-		if k.Type == archiveType {
+		switch k.Type {
+		case archiveType:
 			return nil, fmt.Errorf("-override %s: an archive is read by the archive loader, which an override does not reach", k)
+		case mipType:
+			return nil, fmt.Errorf("-override %s: a texture's streamed mip is read by the texture streaming, which an override does not reach", k)
+		case scriptType:
+			return nil, fmt.Errorf("-override %s: a script is a DLL the game loads by name, so a level pack carries none (the runtime refuses a script record in a set for the same reason)", k)
 		}
 		overrides[k] = true
 	}
@@ -369,6 +376,9 @@ func pack(o options, log *slog.Logger) (*report, error) {
 			continue
 		}
 		included := overrides[r.Key]
+		if included && r.Key.Type == textureGpuType && r.Size > s.rec.Size {
+			return nil, fmt.Errorf("-override %s: the export's texture payload is %d bytes, the game's %d; the runtime writes a payload over the game's own buffer only when it is no larger", r.Key, r.Size, s.rec.Size)
+		}
 		rep.StockEdited = append(rep.StockEdited, edited{Key: r.Key.String(), StockSize: s.rec.Size, Size: r.Size, Included: included})
 		if included {
 			b := append([]byte(nil), theirs...)
