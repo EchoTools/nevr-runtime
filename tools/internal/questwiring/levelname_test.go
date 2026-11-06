@@ -42,7 +42,7 @@ func TestTheKeyIsReadKnownLoggedAndDocumentedAndDefaultsOn(t *testing.T) {
 	if !strings.Contains(reader, `"combat.levelname"`) || !strings.Contains(reader, "ReadCombatSwitch(cfg, kCombatLevelNameKey, r)") {
 		t.Error("the reader does not read combat.levelname with the default fallback (on)")
 	}
-	if !strings.Contains(schema, `"levelname"}}`) {
+	if !strings.Contains(schema, `"refresh_rate_quest2_72", "levelname", `) {
 		t.Error("the schema's combat section does not name levelname")
 	}
 	if !strings.Contains(line, `"combat_config_switch"`) || strings.Contains(line, `"levelname_source"`) {
