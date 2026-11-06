@@ -25,6 +25,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from collections.abc import Callable
 from unittest import mock
 
@@ -43,9 +44,12 @@ SECRETS = {
 }
 TOKEN = "sentinel-gh-token"
 STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "worktree", "build_slot", "configure", "build_apk",
-         "publish_apk", "dispatch", "watch", "check_jobs", "verify_live", "cleanup"]
+         "publish_apk", "dispatch", "watch", "check_jobs", "verify_live", "variant_configure", "variant_build", "variant_publish",
+         "cleanup"]
 CARRIED = {"name": "echovr-data-fc2eedeacc50.zip", "kind": "game-data", "platform": "android-arm64", "size": 937395400}
 PC_DATA = {"name": "echovr-data-win10-0123456789ab.zip", "kind": "game-data", "platform": "windows-x86_64", "size": 5120}
+NDK_PROPERTIES = "Pkg.Desc = Android NDK\nPkg.Revision = 26.3.11579264\n"  # r26d
+APK_LIBRARY_ENTRY = "lib/arm64-v8a/libq15t.so"  # where android-repack-apk puts a plugin library in the APK
 HEAD = "c0ffee" + "0" * 34
 # name -> (object, peeled commit or None): the tags the checkout holds, and the same tags on origin
 TAGS = {"v5.16.1": ("1" * 40, None), "v5.17.0": ("2" * 40, "3" * 40)}
@@ -74,6 +78,12 @@ class Fake:
         self.jobs = [{"name": name, "conclusion": "success"} for name in PUBLISHING_JOBS]
         self.local_tags: dict = dict(TAGS)  # what the checkout holds
         self.remote_tags: dict = dict(TAGS)  # what origin holds
+        self.library: bytes | None = None  # what the variant build writes to build/quest-q15t/libq15t.so (None: the default library)
+        self.writes_library = True  # False: the variant build exits 0 and writes nothing
+        self.apk_library: bytes | None = None  # what the APK the recipe wrote carries as libq15t.so (None: the build's library)
+        self.apk_entry = APK_LIBRARY_ENTRY  # the entry name the library is under in that APK
+        self.writes_apk = True  # False: the recipe exits 0 and writes no APK
+        self.apk_bytes: bytes | None = None  # the file the recipe writes instead of an APK
     def step_of(self, argv: list[str]) -> str:
         joined = " ".join(argv)
         repo = f"{self.root}/repo"
@@ -86,7 +96,8 @@ class Fake:
             ("rev-parse origin/main", "build_signer.rev"), (" archive ", "build_signer.archive"), ("tar -xf", "build_signer.tar"),
             ("go build", "build_signer.go"), ("verify-manifest", "verify"), (" fetch origin tag ", "worktree.fetch"),
             ("^{commit}", "worktree.rev"), ("worktree add", "worktree.add"), ("worktree-setup", "worktree.setup"),
-            ("pgrep", "build_slot"), ("just configure", "configure"), ("release-quest-apk", "build_apk"),
+            ("pgrep", "build_slot"), ("just configure-android", "variant_configure"), ("just configure", "configure"),
+            ("release-quest-apk", "build_apk"),
             ("release-quest-variant-apk", "variant_build"), (" --variant ", "variant_publish"),
             ("publish_quest_apk.py", "publish_apk"),
             ("workflow run", "dispatch"), ("run watch", "watch"), ("run view", "check_jobs"),
@@ -103,6 +114,20 @@ class Fake:
         top = step.split(".")[0]
         if self.fail and self.fail in (step, top):
             return completed(argv, 2, "", f"{step} broke")
+        if step == "variant_build" and self.writes_library and cwd:
+            built = pathlib.Path(cwd) / "build" / "quest-q15t"
+            built.mkdir(parents=True, exist_ok=True)
+            data = library_bytes("libq15t.so") if self.library is None else self.library
+            (built / "libq15t.so").write_bytes(data)
+            if self.writes_apk:
+                tag = argv[-1]  # `just release-quest-variant-apk <tag>`
+                out = pathlib.Path(cwd) / "build" / "quest-release" / tag / "variant"
+                out.mkdir(parents=True, exist_ok=True)
+                if self.apk_bytes is not None:
+                    (out / f"nevr-runtime-{tag}-q15t-quest.apk").write_bytes(self.apk_bytes)
+                else:
+                    with zipfile.ZipFile(out / f"nevr-runtime-{tag}-q15t-quest.apk", "w") as apk:
+                        apk.writestr(self.apk_entry, data if self.apk_library is None else self.apk_library)
         if step in self.overrides:
             return self.overrides[step](argv)
         if step == "checkout.status":
@@ -178,9 +203,28 @@ class TimerCase(unittest.TestCase):
         self.env = {**SECRETS, "RELEASE_PUBLIC_BASE": "https://release.invalid", "GH_BIN": "gh-fake",
                     "XDG_STATE_HOME": str(self.root / "state"), "QUEST_RELEASE_WORK_ROOT": str(self.root / "work"),
                     "QUEST_RELEASE_REPO": str(self.root / "repo"), "QUEST_RELEASE_SIGNER_REPO": str(self.root / "signer"),
-                    "NEVR_QUEST_REFERENCE_APK": str(self.root / "reference.apk"), "PATH": "/usr/bin"}
+                    "NEVR_QUEST_REFERENCE_APK": str(self.root / "reference.apk"), "NEVR_STORE_APK": str(self.root / "store.apk"),
+                    "PATH": "/usr/bin",
+                    "ANDROID_NDK_HOME": str(self.root / "ndk"), "VCPKG_ROOT": str(self.root / "vcpkg")}
+        # The build inputs of the Quest libraries (BuildInputs): an NDK, a vcpkg checkout, and the public defaults the build embeds.
+        for directory, file in (("ndk", "build/cmake/android.toolchain.cmake"), ("ndk", "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"),
+                                ("vcpkg", "scripts/buildsystems/vcpkg.cmake"), ("repo", "config/public-defaults.env")):
+            path = self.root / directory / file
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("")
+        (self.root / "store.apk").write_bytes(b"store apk")  # NEVR_STORE_APK: the variant recipe repacks it (a file, not a directory)
+        (self.root / "ndk" / "source.properties").write_text(NDK_PROPERTIES)
         self.log = self.root / "state" / "nevr-runtime" / "quest-release-timer.jsonl"
         self.sleeps: list[float] = []
+
+    def keep_defaults_out_of_git(self, repo: pathlib.Path) -> None:
+        """The public defaults file is git-ignored in the real checkout; a repository a test makes ignores it too, and has it."""
+        (repo / "config").mkdir(exist_ok=True)
+        (repo / "config" / "public-defaults.env").write_text("")
+        exclude = repo / ".git" / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a", encoding="utf-8") as handle:
+            handle.write("/config/public-defaults.env\n")
 
     def run_timer(self, fake: Fake, *args: str, env: dict | None = None) -> int:
         """The timer needs `--tag`; a test that names none is about TAG."""
@@ -429,9 +473,11 @@ class SkipsWhatIsDone(TimerCase):
         self.assertIn("nothing_to_do", self.names())
 
     def test_a_tag_the_live_manifest_already_lists_is_marked_done_without_a_build(self) -> None:
+        host = PublicHost(self)
+        host.mode = "present"  # the variant pair is on the host too
         fake = Fake(self.root)
         fake.beta = TAG[1:]
-        self.assertEqual(self.run_timer(fake), 0)
+        self.assertEqual(self.run_timer(fake, env={**self.env, "RELEASE_PUBLIC_BASE": host.base}), 0)
         self.assertNotIn("worktree.add", fake.steps())
         self.assertNotIn("build_apk", fake.steps())
         self.assertIn("already_listed", self.names())
@@ -458,7 +504,7 @@ class SkipsWhatIsDone(TimerCase):
 
 
 class CredentialsPerStep(TimerCase):
-    def test_only_the_publish_gets_the_r2_credentials_and_only_it_and_the_dispatch_get_the_token(self) -> None:
+    def test_only_the_publishes_get_the_r2_credentials_and_only_the_publish_and_the_dispatch_get_the_token(self) -> None:
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
         for call in fake.calls:
@@ -466,7 +512,7 @@ class CredentialsPerStep(TimerCase):
             step = call["step"]
             leaked_r2 = sorted(set(SECRETS) & set(env))
             with self.subTest(step=step):
-                if step == "publish_apk":
+                if step in ("publish_apk", "variant_publish"):
                     self.assertEqual(leaked_r2, sorted(SECRETS))
                 else:
                     self.assertEqual(leaked_r2, [], f"{step} was given R2 credentials")
@@ -479,7 +525,7 @@ class CredentialsPerStep(TimerCase):
         fake = Fake(self.root)
         env = {**self.env, "GH_TOKEN": "sentinel-ambient-token"}
         self.assertEqual(self.run_timer(fake, env=env), 0)
-        for step in ("build_apk", "worktree.setup", "build_signer.go", "cleanup.worktree"):
+        for step in ("build_apk", "variant_configure", "variant_build", "worktree.setup", "build_signer.go", "cleanup.worktree"):
             call = next(c for c in fake.calls if c["step"] == step)
             self.assertTrue(set(SECRETS).isdisjoint(call["env"]), step)
             self.assertNotIn("GH_TOKEN", call["env"], step)
@@ -1033,8 +1079,10 @@ class TagsAgreeWithThePreflight(TimerCase):
         """A clone whose HEAD is origin's main; v1.0.0 (lightweight) and v1.1.0 (annotated) are on origin; with
         `offenders`, v2.0.0 and v2.1.0 exist only here and v3.0.0 points at another commit than on origin."""
         origin, clone = self.root / "origin.git", self.root / "repo"
+        shutil.rmtree(clone)  # the setUp's stand-in checkout, which only held the defaults file
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
         subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True, capture_output=True)
+        self.keep_defaults_out_of_git(clone)
         self.git(clone, "checkout", "-q", "-b", "main")
         self.git(clone, "commit", "-q", "--allow-empty", "-m", "one")
         first = self.git(clone, "rev-parse", "HEAD")
@@ -1186,11 +1234,12 @@ class RealProcess(TimerCase):
     def real_checkout(self) -> pathlib.Path:
         """A clean git checkout whose origin/main is its own HEAD, so the checkout step passes with real git."""
         repo = self.root / "repo"
-        repo.mkdir()
+        repo.mkdir(exist_ok=True)
         git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
         for argv in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "x"],
                      ["remote", "add", "origin", str(repo)]):
             subprocess.run([*git, *argv], check=True, capture_output=True)
+        self.keep_defaults_out_of_git(repo)
         return repo
 
     def test_a_checkout_that_is_not_a_repository_is_logged_and_exits_1(self) -> None:
@@ -1221,17 +1270,18 @@ class RealProcess(TimerCase):
 
 VARIANT = "q15t"
 VARIANT_APK = f"nevr-runtime-{TAG}-{VARIANT}-quest.apk"
-LIBRARIES = ("libq15t.so", "libq15t_early.so")
-# Unique strings in the names of the private directory and the pins file: nothing a run writes or runs may carry them.
-VDIR_MARK = "VARIANTDIRMARK-6f1c2a"
-PINS_MARK = "PINSFILEMARK-9d4e7b"
+LIBRARIES = ("libq15t.so",)  # what the variant APK carries (libq15t_early.so is built and not packaged)
+BUILD_ID = "0123456789abcdef0123456789abcdef01234567"
 MAIN_STEPS = ["checkout", "tags", "token", "build_signer", "check_listed", "worktree", "build_slot", "configure",
               "build_apk", "publish_apk", "dispatch", "watch", "check_jobs", "verify_live"]
 
 
 def library_bytes(name: str) -> bytes:
-    """A synthetic library: random bytes, the same on every run."""
-    return random.Random(name).randbytes(4096)
+    """A synthetic library as the build writes it: random bytes, the same on every run, and the config marker the real library
+    carries (src/quest/plugins/q15t/src/plugin.cpp) with the libr15 build ID it was built for."""
+    marker = (f"q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 gate_perm=1 gate_bots=1 levelname=1 "
+              f"hz_level=1 build_id={BUILD_ID}").encode()
+    return random.Random(name).randbytes(4096) + b"\0" + marker + b"\0"
 
 
 HOST_APK = b"apk bytes the host serves"
@@ -1352,27 +1402,12 @@ class RawHost:
 
 
 class VariantCase(TimerCase):
-    """A timer whose environment names the variant's directory and pins file, and a public host the test controls."""
+    """A timer with a public host the test controls; the variant is always built (its inputs are the build inputs)."""
 
     def setUp(self) -> None:
         super().setUp()
-        self.vdir = self.root / VDIR_MARK
-        self.vdir.mkdir()
-        self.pins = self.root / f"{PINS_MARK}.txt"
-        for name in LIBRARIES:
-            (self.vdir / name).write_bytes(library_bytes(name))
-        self.write_pins()
         self.host = PublicHost(self)
-        self.env = {**self.env, "NEVR_VARIANT_DIR": str(self.vdir), "NEVR_VARIANT_PINS": str(self.pins),
-                    "RELEASE_PUBLIC_BASE": self.host.base}
-        self.scratch = self.root / "work" / f"variant-{TAG}"
-
-    @staticmethod
-    def pin_line(name: str, data: bytes | None = None) -> str:
-        return f"{hashlib.sha256(library_bytes(name) if data is None else data).hexdigest()}  {name}"
-
-    def write_pins(self, *lines: str) -> None:
-        self.pins.write_text("\n".join(lines or [self.pin_line(name) for name in LIBRARIES]) + "\n")
+        self.env = {**self.env, "RELEASE_PUBLIC_BASE": self.host.base}
 
     def run_captured(self, fake: Fake, *args: str, env: dict | None = None) -> tuple[int, str]:
         err = io.StringIO()
@@ -1386,21 +1421,13 @@ class VariantCase(TimerCase):
     def failed(self) -> list[dict]:
         return [e for e in self.events() if e["event"] == "failed"]
 
-    def assert_no_private_path(self, *texts: str) -> None:
-        for text in texts:
-            for private in (VDIR_MARK, PINS_MARK, str(self.vdir), str(self.pins)):
-                self.assertNotIn(private, text)
-
-    def assert_nothing_private_anywhere(self, fake: Fake, stderr: str) -> None:
-        self.assert_no_private_path(self.log.read_text(), stderr, json.dumps(fake.calls, default=str))
-
 
 class VariantAfterTheMainRelease(VariantCase):
     def test_a_configured_run_builds_and_publishes_the_variant_after_the_main_release_is_complete(self) -> None:
         fake = Fake(self.root)
         code, stderr = self.run_captured(fake)
         self.assertEqual((code, stderr), (0, ""))
-        self.assertEqual(self.step_oks(), [*MAIN_STEPS, "variant_pins", "variant_build", "variant_publish", "cleanup"])
+        self.assertEqual(self.step_oks(), [*MAIN_STEPS, "variant_configure", "variant_build", "variant_publish", "cleanup"])
         self.assertEqual(self.names()[-1], "done")
         self.assertNotIn("variant_not_configured", self.names())
         steps = fake.steps()
@@ -1408,27 +1435,25 @@ class VariantAfterTheMainRelease(VariantCase):
         self.assertLess(steps.index("variant_build"), steps.index("variant_publish"))
         self.assertLess(steps.index("variant_publish"), steps.index("cleanup.worktree"))
 
-    def test_the_main_events_are_the_same_with_and_without_the_variant(self) -> None:
-        def main_events(case_events: list[dict]) -> list[dict]:
-            return [{k: v for k, v in e.items() if k not in ("ts", "pid")} for e in case_events
-                    if not str(e.get("step", "")).startswith("variant_") and not str(e["event"]).startswith("variant_")]
-
-        self.assertEqual(self.run_timer(Fake(self.root)), 0)
-        with_variant = main_events(self.events())
-        self.log.unlink()
-        env = {k: v for k, v in self.env.items() if not k.startswith("NEVR_VARIANT_")}
-        self.assertEqual(self.run_timer(Fake(self.root), env=env), 0)
-        without = [e for e in main_events(self.events()) if e["event"] != "variant_not_configured"]
-        self.assertEqual(with_variant, without)
-
-    def test_one_record_per_library_names_the_file_its_size_and_its_pin_and_never_a_directory(self) -> None:
-        self.assertEqual(self.run_timer(Fake(self.root)), 0)
-        records = [e for e in self.events() if e["event"] == "variant_library"]
-        self.assertEqual([(e["name"], e["size"], e["sha256"]) for e in records],
-                         [(name, 4096, hashlib.sha256(library_bytes(name)).hexdigest()) for name in LIBRARIES])
-        pins_ok = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "variant_pins")
-        self.assertEqual(pins_ok["count"], 2)
-        self.assert_no_private_path(self.log.read_text())
+    def test_the_variant_configures_the_android_build_in_the_tags_worktree_before_it_builds(self) -> None:
+        """The libraries are built from the tag: `just configure-android` (the NDK build, its vcpkg ports) runs in the worktree, in the
+        slice, with the build inputs in the environment and no credential, then the recipe builds."""
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        steps = fake.steps()
+        self.assertLess(steps.index("variant_configure"), steps.index("variant_build"))
+        self.assertLess(steps.index("configure"), steps.index("variant_configure"), "after the PC configure the main build needed")
+        configure = next(c for c in fake.calls if c["step"] == "variant_configure")
+        build = next(c for c in fake.calls if c["step"] == "variant_build")
+        self.assertEqual(configure["argv"][:6], ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G"])
+        self.assertEqual(configure["argv"][6:], ["just", "configure-android"])
+        self.assertEqual(configure["cwd"], build["cwd"])
+        for name in ("ANDROID_NDK_HOME", "VCPKG_ROOT"):
+            self.assertEqual(configure["env"][name], self.env[name], name)
+            self.assertEqual(build["env"][name], self.env[name], name)
+        self.assertEqual(sorted(set(SECRETS) & set(configure["env"])), [])
+        self.assertNotIn("GH_TOKEN", configure["env"])
+        self.assertEqual(build["argv"][6:], ["just", "release-quest-variant-apk", TAG], "no library is given to the recipe")
 
     def test_the_variant_reuses_the_worktree_the_configure_and_the_build_slot(self) -> None:
         fake = Fake(self.root)
@@ -1445,28 +1470,6 @@ class VariantAfterTheMainRelease(VariantCase):
         self.assertEqual(variant["env"], build["env"])
         self.assertEqual(self.host.requests, [], "a tag the run just published needs no look at the host")
 
-    def test_the_build_gets_checked_copies_in_a_private_scratch_directory_not_the_originals(self) -> None:
-        seen: dict = {}
-
-        def build(argv: list[str]) -> subprocess.CompletedProcess:
-            paths = [pathlib.Path(p) for p in argv[-1].split(":")]
-            seen["paths"] = paths
-            seen["dir_mode"] = stat.S_IMODE(paths[0].parent.stat().st_mode)
-            seen["file_modes"] = [stat.S_IMODE(p.stat().st_mode) for p in paths]
-            seen["bytes"] = [p.read_bytes() for p in paths]
-            return completed(argv)
-
-        fake = Fake(self.root, overrides={"variant_build": build})
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual([p.name for p in seen["paths"]], list(LIBRARIES))
-        self.assertEqual({p.parent for p in seen["paths"]}, {self.scratch})
-        self.assertNotEqual(self.scratch, self.vdir)
-        self.assertEqual(seen["dir_mode"], 0o700)
-        self.assertEqual(seen["file_modes"], [0o600, 0o600])
-        self.assertEqual(seen["bytes"], [library_bytes(name) for name in LIBRARIES])
-        self.assertFalse(self.scratch.exists(), "the copies are removed by exact path when the run ends")
-        self.assertTrue(all((self.vdir / name).exists() for name in LIBRARIES), "the originals are not touched")
-
     def test_the_variant_publish_gets_the_r2_credential_and_no_token_and_the_build_neither(self) -> None:
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
@@ -1480,26 +1483,9 @@ class VariantAfterTheMainRelease(VariantCase):
         self.assertEqual(sorted(set(SECRETS) & set(build["env"])), [])
         self.assertNotIn("GH_TOKEN", build["env"])
 
-    def test_no_command_is_given_the_directory_or_the_pins_file(self) -> None:
-        fake = Fake(self.root)
-        self.assertEqual(self.run_timer(fake), 0)
-        for call in fake.calls:
-            with self.subTest(step=call["step"]):
-                self.assertTrue({"NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS"}.isdisjoint(call["env"] or {}))
-        self.assert_no_private_path(json.dumps(fake.calls, default=str))
-
-    def test_a_value_of_the_variant_environment_in_a_failing_commands_output_is_redacted(self) -> None:
-        leak = {"variant_build": lambda argv: completed(argv, 1, f"read {self.vdir} and {self.pins}", f"in {self.vdir}")}
-        fake = Fake(self.root, overrides=leak)
-        code, stderr = self.run_captured(fake)
-        self.assertEqual(code, 1)
-        output = (self.root / "work" / f"variant-{TAG}-build.log").read_text()
-        self.assertIn("<redacted>", output, "the output file is redacted like everything written")
-        self.assert_no_private_path(output, self.log.read_text(), stderr)
-
     def test_the_variant_steps_log_through_the_same_log_with_the_tag(self) -> None:
         self.assertEqual(self.run_timer(Fake(self.root)), 0)
-        for step in ("variant_pins", "variant_build", "variant_publish"):
+        for step in ("variant_configure", "variant_build", "variant_publish"):
             [record] = [e for e in self.events() if e["event"] == "step_ok" and e["step"] == step]
             self.assertEqual(record["tag"], TAG)
         publish = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "variant_publish")
@@ -1514,10 +1500,9 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
         for once in ("dispatch", "watch", "publish_apk", "build_apk"):
             self.assertEqual(fake.steps().count(once), 1, once)
         self.assertIn("cleanup.worktree", fake.steps(), "the worktree is still removed")
-        self.assertFalse(self.scratch.exists())
 
     def test_a_failing_variant_step_after_a_complete_release_exits_1_and_names_itself(self) -> None:
-        for step in ("variant_build", "variant_publish"):
+        for step in ("variant_configure", "variant_build", "variant_publish"):
             with self.subTest(step=step):
                 self.log.unlink(missing_ok=True)
                 fake = Fake(self.root, fail=step)
@@ -1528,15 +1513,14 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
                 self.assertNotIn("done", self.names())
                 self.assertEqual([e for e in self.events() if e["event"] == "refused"], [])
                 self.assert_release_stands(fake)
-                self.assert_nothing_private_anywhere(fake, stderr)
 
-    def test_a_variant_pin_failure_after_a_complete_release_leaves_the_release_standing(self) -> None:
-        (self.vdir / LIBRARIES[0]).write_bytes(library_bytes(LIBRARIES[0]) + b"x")
+    def test_a_library_the_build_did_not_write_after_a_complete_release_leaves_the_release_standing(self) -> None:
         fake = Fake(self.root)
+        fake.writes_library = False
         code, stderr = self.run_captured(fake)
         self.assertEqual(code, 1)
-        self.assertEqual([e["step"] for e in self.failed()], ["variant_pins"])
-        self.assertNotIn("variant_build", fake.steps())
+        self.assertEqual([e["step"] for e in self.failed()], ["variant_build"])
+        self.assertNotIn("variant_publish", fake.steps(), "an APK whose library cannot be recorded is not published")
         self.assertNotIn("done", self.names())
         self.assert_release_stands(fake)
 
@@ -1580,162 +1564,118 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
         self.assertIn("skipped_after_failures", self.names())
 
 
-class VariantPins(VariantCase):
-    """A pin that does not hold is a loud variant failure that names the FILE, never the directory."""
+class VariantLibraries(VariantCase):
+    """The variant packages the library the tag's own build wrote. The run records that file's sha256 and the libr15 build ID the
+    build put in it (`variant_library`), so the APK can be compared with the build; a library the build did not write, or one that
+    carries no build ID, fails the variant before anything is published."""
 
-    def refused_with(self, want: str, fake: Fake | None = None) -> str:
-        fake = fake or Fake(self.root)
+    def libraries(self) -> list[dict]:
+        return [e for e in self.events() if e["event"] == "variant_library"]
+
+    def test_one_record_per_packaged_library_names_the_file_its_size_its_sha256_and_the_build_id(self) -> None:
+        self.assertEqual(self.run_timer(Fake(self.root)), 0)
+        data = library_bytes("libq15t.so")
+        self.assertEqual([(e["name"], e["size"], e["sha256"], e["libr15_build_id"]) for e in self.libraries()],
+                         [("libq15t.so", len(data), hashlib.sha256(data).hexdigest(), BUILD_ID)])
+        self.assertEqual([e["name"] for e in self.libraries()], list(LIBRARIES), "libq15t_early.so is not in the variant APK")
+
+    def test_the_record_is_of_the_file_the_build_wrote_not_of_a_fixed_one(self) -> None:
+        other = library_bytes("another build") .replace(BUILD_ID.encode(), b"f" * 40)
+        fake = Fake(self.root)
+        fake.library = other
+        self.assertEqual(self.run_timer(fake), 0)
+        [record] = self.libraries()
+        self.assertEqual((record["sha256"], record["libr15_build_id"], record["size"]), (hashlib.sha256(other).hexdigest(), "f" * 40, len(other)))
+
+    def test_the_records_are_written_after_the_build_and_before_the_publish(self) -> None:
+        self.assertEqual(self.run_timer(Fake(self.root)), 0)
+        events = [(e["event"], e.get("step")) for e in self.events()]
+        built, library, published = ("step_ok", "variant_build"), ("variant_library", None), ("step_ok", "variant_publish")
+        self.assertLess(events.index(library), events.index(built))
+        self.assertLess(events.index(built), events.index(published))
+
+    def test_a_build_that_wrote_no_library_fails_the_build_step_and_names_the_file(self) -> None:
+        fake = Fake(self.root)
+        fake.writes_library = False
         code, stderr = self.run_captured(fake)
-        self.assertEqual(code, 1, stderr)
-        [failure] = self.failed()
-        self.assertEqual(failure["step"], "variant_pins")
-        self.assertIn(want, failure["error"])
-        self.assertNotIn("variant_build", fake.steps(), "nothing is built from a library that did not hold")
-        self.assertNotIn("done", self.names())
-        self.assertFalse(self.scratch.exists())
-        self.assertEqual(fake.live_beta(), TAG[1:], "the main release is published whatever the pins say")
-        self.assert_nothing_private_anywhere(fake, stderr)
-        return failure["error"]
-
-    def test_a_pin_that_differs_by_one_byte_names_the_file_and_both_digests(self) -> None:
-        data = library_bytes(LIBRARIES[1])
-        self.write_pins(self.pin_line(LIBRARIES[0]), self.pin_line(LIBRARIES[1], data[:-1] + bytes([data[-1] ^ 1])))
-        error = self.refused_with(LIBRARIES[1])
-        self.assertIn(hashlib.sha256(data).hexdigest(), error)
-
-    def test_a_library_that_changed_after_it_was_pinned_is_refused(self) -> None:
-        (self.vdir / LIBRARIES[0]).write_bytes(library_bytes(LIBRARIES[0])[:-1])
-        self.refused_with(LIBRARIES[0])
-
-    def test_a_missing_pin_line_names_the_library(self) -> None:
-        self.write_pins(self.pin_line(LIBRARIES[0]))
-        self.refused_with(f"no pin for {LIBRARIES[1]}")
-
-    def test_an_extra_pin_line_is_refused_and_does_not_echo_its_name(self) -> None:
-        self.write_pins(*(self.pin_line(n) for n in LIBRARIES), f"{'a' * 64}  /secret/{VDIR_MARK}/libother.so")
-        error = self.refused_with("pins line 3")
-        self.assertNotIn("libother", error)
-
-    def test_a_duplicate_pin_line_is_refused(self) -> None:
-        self.write_pins(*(self.pin_line(n) for n in LIBRARIES), self.pin_line(LIBRARIES[0]))
-        self.refused_with(f"pins name {LIBRARIES[0]} twice")
-
-    def test_a_malformed_pin_line_is_refused_by_its_line_number(self) -> None:
-        for bad in ("not a pin", f"{'a' * 63}  {LIBRARIES[1]}", f"{'a' * 64} {LIBRARIES[1]}", f"{'g' * 64}  {LIBRARIES[1]}", ""):
-            with self.subTest(line=bad):
-                self.log.unlink(missing_ok=True)
-                self.write_pins(self.pin_line(LIBRARIES[0]), bad)
-                self.refused_with("pins line 2")
-
-    def test_a_missing_library_file_names_it(self) -> None:
-        (self.vdir / LIBRARIES[1]).unlink()
-        self.refused_with(f"{LIBRARIES[1]} is missing")
-
-    def test_a_library_that_cannot_be_read_is_named_without_the_path_the_system_reports(self) -> None:
-        (self.vdir / LIBRARIES[0]).unlink()
-        (self.vdir / LIBRARIES[0]).mkdir()  # reading a directory fails with an error that names the path
-        self.refused_with(f"{LIBRARIES[0]} cannot be read")
-
-    def test_an_empty_pins_file_and_an_unreadable_one_are_refused(self) -> None:
-        self.pins.write_text("")
-        self.refused_with(f"no pin for {LIBRARIES[0]}")
-        self.log.unlink()
-        self.pins.unlink()
-        self.refused_with("the pins file cannot be read")
-
-    def test_one_of_the_two_variables_alone_is_a_failure_that_names_the_variable(self) -> None:
-        for unset, other in (("NEVR_VARIANT_PINS", "NEVR_VARIANT_DIR"), ("NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS")):
-            with self.subTest(unset=unset):
-                self.log.unlink(missing_ok=True)
-                env = {k: v for k, v in self.env.items() if k != unset}
-                fake = Fake(self.root)
-                code, stderr = self.run_captured(fake, env=env)
-                self.assertEqual(code, 1)
-                [failure] = self.failed()
-                self.assertEqual(failure["step"], "variant_pins")
-                self.assertIn(unset, failure["error"])
-                self.assertNotIn("variant_build", fake.steps())
-                self.assert_nothing_private_anywhere(fake, stderr)
-                self.assertNotIn("variant_not_configured", self.names())
-
-    def test_an_empty_value_is_unset(self) -> None:
-        env = {**self.env, "NEVR_VARIANT_DIR": "", "NEVR_VARIANT_PINS": ""}
-        fake = Fake(self.root)
-        self.assertEqual(self.run_timer(fake, env=env), 0)
-        self.assertIn("variant_not_configured", self.names())
-
-    def test_pins_in_upper_case_hex_are_the_same_pins(self) -> None:
-        self.write_pins(*(self.pin_line(n).upper().replace(n.upper(), n) for n in LIBRARIES))
-        self.assertEqual(self.run_timer(Fake(self.root)), 0)
-
-    def variant_pins_directly(self) -> timer.Timer:
-        log = timer.Log(self.log, TAG)
-        self.addCleanup(log.close)
-        subject = timer.Timer(self.env, Fake(self.root), self.sleeps.append, log)
-        subject.work.mkdir(parents=True, exist_ok=True)
-        return subject
-
-    def test_a_restrictive_umask_leaves_the_scratch_usable_and_the_modes_exact(self) -> None:
-        subject = self.variant_pins_directly()
-        old = os.umask(0o277)
-        try:
-            copies = subject.variant_pins(TAG, self.vdir, self.pins)
-        finally:
-            os.umask(old)
-        self.assertEqual(stat.S_IMODE(self.scratch.stat().st_mode), 0o700)
-        self.assertEqual([stat.S_IMODE(c.stat().st_mode) for c in copies], [0o600, 0o600])
-
-    def test_a_library_changed_after_it_was_copied_is_neither_checked_nor_packaged(self) -> None:
-        subject = self.variant_pins_directly()
-        real, original = shutil.copyfileobj, self.vdir / LIBRARIES[0]
-
-        def copy_then_change(source, target, *args):  # noqa: ANN001, ANN002 - shutil.copyfileobj's own signature
-            real(source, target, *args)
-            original.write_bytes(b"changed after the copy was made")
-
-        with mock.patch.object(timer.shutil, "copyfileobj", side_effect=copy_then_change):
-            copies = subject.variant_pins(TAG, self.vdir, self.pins)
-        self.assertEqual([c.parent for c in copies], [self.scratch, self.scratch])
-        self.assertEqual(copies[0].read_bytes(), library_bytes(LIBRARIES[0]), "the copy is what was pinned")
-        self.assertNotEqual(original.read_bytes(), library_bytes(LIBRARIES[0]))
-
-    def test_a_scratch_directory_left_by_a_killed_run_of_this_timer_is_replaced(self) -> None:
-        self.scratch.mkdir(parents=True)
-        (self.scratch / timer.SCRATCH_MARKER).write_text("")
-        (self.scratch / "stale.so").write_bytes(b"left over")
-        (self.scratch / LIBRARIES[0]).write_bytes(b"left over")
-        self.assertEqual(self.run_timer(Fake(self.root)), 0)
-        self.assertFalse(self.scratch.exists())
-
-    def test_a_directory_of_that_name_without_the_marker_is_never_removed_and_the_pins_step_says_so(self) -> None:
-        self.scratch.mkdir(parents=True)
-        (self.scratch / "not-ours.txt").write_text("kept")
-        fake = Fake(self.root)
-        code, _ = self.run_captured(fake)
         self.assertEqual(code, 1)
-        self.assertEqual([e["step"] for e in self.failed()], ["variant_pins"])
-        self.assertIn("cannot make the scratch directory", self.failed()[0]["error"])
-        self.assertEqual((self.scratch / "not-ours.txt").read_text(), "kept")
-        self.assertNotIn("variant_build", fake.steps())
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_build")
+        self.assertIn("libq15t.so is not in build/quest-q15t after the build", failure["error"])
+        self.assertEqual(self.libraries(), [])
+        self.assertNotIn("variant_publish", fake.steps())
+        self.assertIn("quest-release-timer: variant_build:", stderr)
 
-    def test_the_scratch_directory_carries_the_marker_while_the_build_runs(self) -> None:
-        seen: dict = {}
+    def test_a_library_with_no_config_marker_or_no_build_id_is_a_failure_of_the_build_step(self) -> None:
+        for name, data in (("no marker", b"\x7fELF" + b"x" * 100),
+                           ("no build id", b"q15t-config ec_words=[types=VPTO] gate_link=1\0")):
+            with self.subTest(name):
+                self.log.unlink(missing_ok=True)
+                fake = Fake(self.root)
+                fake.library = data
+                self.assertEqual(self.run_timer(fake), 1)
+                [failure] = self.failed()
+                self.assertEqual(failure["step"], "variant_build")
+                self.assertIn("libq15t.so carries no q15t-config marker with a build_id", failure["error"])
+                self.assertEqual(self.libraries(), [])
+                self.assertNotIn("variant_publish", fake.steps())
 
-        def build(argv: list[str]) -> subprocess.CompletedProcess:
-            seen["marker"] = (self.scratch / timer.SCRATCH_MARKER).is_file()
-            seen["files"] = sorted(path.name for path in self.scratch.iterdir())
-            return completed(argv)
-
-        self.assertEqual(self.run_timer(Fake(self.root, overrides={"variant_build": build})), 0)
-        self.assertTrue(seen["marker"])
-        self.assertEqual(seen["files"], sorted([timer.SCRATCH_MARKER, *LIBRARIES]))
-
-    def test_a_scratch_path_with_a_colon_is_refused_because_the_recipe_splits_on_it(self) -> None:
-        env = {**self.env, "QUEST_RELEASE_WORK_ROOT": str(self.root / "wo:rk")}
+    def test_the_record_is_of_the_library_in_the_apk_that_is_published(self) -> None:
         fake = Fake(self.root)
-        self.assertEqual(self.run_timer(fake, env=env), 1)
-        self.assertEqual(self.failed()[0]["step"], "variant_pins")
-        self.assertNotIn("variant_build", fake.steps())
+        self.assertEqual(self.run_timer(fake), 0)
+        [record] = self.libraries()
+        self.assertEqual(record["source"], f"{VARIANT_APK}:{APK_LIBRARY_ENTRY}")
+
+    def test_a_library_in_the_apk_that_is_not_the_one_the_build_wrote_is_a_failure_of_the_build_step(self) -> None:
+        fake = Fake(self.root)
+        fake.apk_library = library_bytes("a stale library")
+        code, stderr = self.run_captured(fake)
+        self.assertEqual(code, 1)
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_build")
+        self.assertIn(f"{APK_LIBRARY_ENTRY} in {VARIANT_APK} is not the library the build wrote", failure["error"])
+        self.assertIn(hashlib.sha256(library_bytes("libq15t.so")).hexdigest(), failure["error"])
+        self.assertIn(hashlib.sha256(library_bytes("a stale library")).hexdigest(), failure["error"])
+        self.assertEqual(self.libraries(), [])
+        self.assertNotIn("variant_publish", fake.steps(), "an APK that does not carry the build's library is not published")
+
+    def test_an_apk_without_the_library_entry_is_a_failure_of_the_build_step(self) -> None:
+        fake = Fake(self.root)
+        fake.apk_entry = "lib/arm64-v8a/libother.so"
+        self.assertEqual(self.run_timer(fake), 1)
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_build")
+        self.assertIn(f"{VARIANT_APK} has no {APK_LIBRARY_ENTRY}", failure["error"])
+        self.assertNotIn("variant_publish", fake.steps())
+
+    def test_a_recipe_that_wrote_no_apk_is_a_failure_of_the_build_step(self) -> None:
+        fake = Fake(self.root)
+        fake.writes_apk = False
+        self.assertEqual(self.run_timer(fake), 1)
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_build")
+        self.assertIn(f"{VARIANT_APK} is not in build/quest-release/{TAG}/variant after the build", failure["error"])
+        self.assertNotIn("variant_publish", fake.steps())
+
+    def test_a_file_that_is_not_a_zip_is_a_failure_of_the_build_step(self) -> None:
+        fake = Fake(self.root)
+        fake.apk_bytes = b"not a zip"
+        self.assertEqual(self.run_timer(fake), 1)
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_build")
+        self.assertIn(f"{VARIANT_APK} cannot be read as an APK", failure["error"])
+
+    def test_a_failed_build_records_no_library_even_when_an_old_file_is_there(self) -> None:
+        fake = Fake(self.root, fail="variant_build")
+        self.assertEqual(self.run_timer(fake), 1)
+        self.assertEqual(self.libraries(), [])
+
+    def test_a_library_in_the_marker_of_a_prefix_of_the_id_is_read_whole(self) -> None:
+        fake = Fake(self.root)
+        fake.library = b"\0q15t-config ec_words=[types=VPTO equip hide] gate_link=1 build_id=" + BUILD_ID.encode() + b"\0rest"
+        self.assertEqual(self.run_timer(fake), 0)
+        [record] = self.libraries()
+        self.assertEqual(record["libr15_build_id"], BUILD_ID)
 
 
 class VariantOfAListedRelease(VariantCase):
@@ -1751,7 +1691,8 @@ class VariantOfAListedRelease(VariantCase):
         code, stderr = self.run_captured(fake)
         self.assertEqual((code, stderr), (0, ""))
         self.assertEqual(self.step_oks(), ["checkout", "tags", "token", "build_signer", "check_listed", "variant_exists",
-                                           "variant_pins", "worktree", "build_slot", "configure", "variant_build", "variant_publish", "cleanup"])
+                                           "worktree", "build_slot", "configure", "variant_configure", "variant_build",
+                                           "variant_publish", "cleanup"])
         self.assertEqual(self.host.requests, [("GET", f"/nevr-runtime/{TAG}/{VARIANT_APK}")])
         self.assertEqual(self.host.agents, [timer.USER_AGENT], "the release host answers 403 to the default agent")
         [asked] = [e for e in self.events() if e["event"] == "step_ok" and e["step"] == "variant_exists"]
@@ -1766,8 +1707,6 @@ class VariantOfAListedRelease(VariantCase):
         self.assertEqual(next(c for c in fake.calls if c["step"] == "variant_build")["cwd"], added["argv"][-2])
         self.assertEqual(self.names()[-1], "done")
         self.assertIn("already_listed", self.names())
-        self.assert_nothing_private_anywhere(fake, stderr)
-        self.assertFalse(self.scratch.exists())
 
     def test_the_second_manifest_publish_never_happens(self) -> None:
         fake = self.listed()
@@ -1792,17 +1731,6 @@ class VariantOfAListedRelease(VariantCase):
         self.assertNotIn("variant_library", self.names())
         self.assertEqual(self.names()[-1], "done")
 
-    def test_a_pin_that_does_not_hold_matters_only_when_there_is_something_to_build(self) -> None:
-        self.host.mode = "present"
-        (self.vdir / LIBRARIES[0]).unlink()
-        self.assertEqual(self.run_timer(self.listed()), 0)
-        self.host.mode = "absent"
-        self.log.unlink()
-        fake = self.listed()
-        self.assertEqual(self.run_timer(fake), 1)
-        self.assertEqual(self.failed()[0]["step"], "variant_pins")
-        self.assertNotIn("worktree.add", fake.steps(), "no worktree is made for a variant that cannot be built")
-
     def test_other_answers_are_failures_that_build_nothing_and_never_done(self) -> None:
         for mode, want in (("html", "HTML"), ("error", "500"), ("forbidden", "403"), ("redirect", "302"),
                            ("nocontent", "204")):
@@ -1819,7 +1747,6 @@ class VariantOfAListedRelease(VariantCase):
                 self.assertIn(VARIANT_APK, failure["error"])
                 self.assertNotIn("worktree.add", fake.steps())
                 self.assertNotIn("done", self.names())
-                self.assert_nothing_private_anywhere(fake, stderr)
 
     def test_a_host_that_cannot_be_reached_is_a_failure(self) -> None:
         env = {**self.env, "RELEASE_PUBLIC_BASE": "http://127.0.0.1:1"}
@@ -1835,7 +1762,6 @@ class VariantOfAListedRelease(VariantCase):
         self.assertEqual([e["step"] for e in self.failed()], ["variant_build"])
         self.assertIn("cleanup.worktree", fake.steps())
         self.assertNotIn("done", self.names())
-        self.assertFalse(self.scratch.exists())
 
 
 class VariantPairCheck(VariantCase):
@@ -1863,7 +1789,6 @@ class VariantPairCheck(VariantCase):
             self.assertNotIn(never, fake.steps(), "nothing is rebuilt or republished")
         self.assertNotIn("done", self.names())
         self.assertNotIn("variant_listed", self.names())
-        self.assert_nothing_private_anywhere(fake, stderr)
         return failure
 
     def test_a_pair_that_agrees_is_listed_and_nothing_is_built(self) -> None:
@@ -2108,34 +2033,25 @@ class VariantPartOfTheRelease(VariantCase):
         self.assertEqual([e["part"] for e in self.events() if e["event"] == "refused"], ["main"])
 
     def test_a_failure_after_the_main_release_is_the_variant(self) -> None:
-        for step in ("variant_pins", "variant_build", "variant_publish"):
+        for step in ("variant_configure", "variant_build", "variant_publish"):
             with self.subTest(step=step):
                 self.log.unlink(missing_ok=True)
-                if step == "variant_pins":
-                    (self.vdir / LIBRARIES[0]).write_bytes(b"changed")
-                    fake = Fake(self.root)
-                else:
-                    fake = Fake(self.root, fail=step)
-                self.assertEqual(self.run_timer(fake), 1)
+                self.assertEqual(self.run_timer(Fake(self.root, fail=step)), 1)
                 self.assertEqual([e["part"] for e in self.failed()], ["variant"])
-                (self.vdir / LIBRARIES[0]).write_bytes(library_bytes(LIBRARIES[0]))
 
     def test_everything_in_the_already_listed_path_is_the_variant(self) -> None:
-        for step in ("configure", "worktree", "build_slot", "variant_exists", "variant_pins"):
+        for step in ("configure", "worktree", "build_slot", "variant_exists", "variant_configure"):
             with self.subTest(step=step):
                 self.log.unlink(missing_ok=True)
                 self.host.mode = "absent"
                 if step == "variant_exists":
                     self.host.mode = "error"
-                if step == "variant_pins":
-                    (self.vdir / LIBRARIES[0]).write_bytes(b"changed")
                 fake = self.listed()
-                fake.fail = step if step not in ("variant_exists", "variant_pins") else ""
+                fake.fail = step if step != "variant_exists" else ""
                 if step == "build_slot":
                     fake.ninja = [2]
                 self.assertEqual(self.run_timer(fake), 1)
                 self.assertEqual([(e["step"], e["part"]) for e in self.failed()], [(step, "variant")])
-                (self.vdir / LIBRARIES[0]).write_bytes(library_bytes(LIBRARIES[0]))
 
     def test_the_skip_after_a_configure_failure_in_the_already_listed_path_is_the_variant(self) -> None:
         for _ in range(3):
@@ -2177,12 +2093,7 @@ class MainComplete(VariantCase):
         names = self.names()
         self.assertEqual(names.count("main_complete"), 1)
         self.assertLess(names.index("main_complete"), self.events().index(next(
-            e for e in self.events() if e["event"] == "step_ok" and e["step"] == "variant_pins")))
-
-    def test_it_is_written_even_when_the_variant_is_not_configured(self) -> None:
-        env = {k: v for k, v in self.env.items() if not k.startswith("NEVR_VARIANT_")}
-        self.assertEqual(self.run_timer(Fake(self.root), env=env), 0)
-        self.assertEqual(self.names().count("main_complete"), 1)
+            e for e in self.events() if e["event"] == "step_ok" and e["step"] == "variant_configure")))
 
     def test_a_variant_only_retry_runs_neither_the_signer_nor_check_listed(self) -> None:
         self.assertEqual(self.run_timer(Fake(self.root, fail="variant_build")), 1)
@@ -2257,8 +2168,8 @@ class VariantOnlyAfterTheMainRelease(VariantCase):
         self.assertEqual((code, stderr), (0, ""))
         for never in self.MAIN_ONLY:
             self.assertNotIn(never, fake.steps(), never)
-        self.assertEqual(self.step_oks(), ["checkout", "tags", "token", "variant_exists", "variant_pins", "worktree", "build_slot",
-                                           "configure", "variant_build", "variant_publish", "cleanup"])
+        self.assertEqual(self.step_oks(), ["checkout", "tags", "token", "variant_exists", "worktree", "build_slot",
+                                           "configure", "variant_configure", "variant_build", "variant_publish", "cleanup"])
         self.assertEqual(self.names()[-1], "done")
         self.assertEqual(self.names().count("main_complete"), 1, "written once")
 
@@ -2307,9 +2218,6 @@ class RunLock(TimerCase):
 
     def test_a_run_that_finds_the_lock_held_does_nothing_and_says_so(self) -> None:
         self.hold()
-        scratch = self.root / "work" / f"variant-{TAG}"
-        scratch.mkdir()
-        (scratch / timer.SCRATCH_MARKER).write_text("")
         fake = Fake(self.root)
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
@@ -2319,7 +2227,6 @@ class RunLock(TimerCase):
         self.assertIn("lock", busy["reason"])
         self.assertEqual(len(err.getvalue().splitlines()), 1)
         self.assertIn("busy", err.getvalue())
-        self.assertTrue(scratch.exists(), "the live run's scratch is not swept by a run that did not get the lock")
         self.assertNotIn("done", self.names())
 
     def test_the_reset_does_not_wait_for_the_lock(self) -> None:
@@ -2494,7 +2401,7 @@ class UnexpectedExceptions(VariantCase):
     """Anything a step does not expect is recorded as `unexpected`, counted, cleaned up after, and exits 1."""
 
     def boom(self, argv: list[str]) -> subprocess.CompletedProcess:
-        raise RuntimeError(f"boom with {VDIR_MARK} and {SECRETS['R2_SECRET_ACCESS_KEY']}")
+        raise RuntimeError(f"boom with {SECRETS['R2_SECRET_ACCESS_KEY']}")
 
     def test_an_exception_in_a_variant_step_is_recorded_cleaned_up_after_and_exit_1(self) -> None:
         fake = Fake(self.root, overrides={"variant_build": self.boom})
@@ -2507,10 +2414,8 @@ class UnexpectedExceptions(VariantCase):
         self.assertNotIn("Traceback", stderr)
         for where in (self.log.read_text(), stderr):
             self.assertNotIn("boom", where, "the text of an unexpected exception is not copied")
-            self.assertNotIn(VDIR_MARK, where)
             self.assertNotIn(SECRETS["R2_SECRET_ACCESS_KEY"], where)
         self.assertIn("cleanup.worktree", fake.steps(), "the worktree is removed")
-        self.assertFalse(self.scratch.exists(), "the private copies are removed")
         self.assertNotIn("done", self.names())
 
     def test_an_exception_in_the_main_release_is_main(self) -> None:
@@ -2645,154 +2550,127 @@ class ResetFailures(TimerCase):
         self.assertNotIn("failures_reset", self.names())
 
 
-class ScratchOnlyWhatThisRunMade(TimerCase):
-    """The variant scratch directory is removed only when this run made it: an unconfigured run must not delete a
-    directory of that name that something else put there."""
+class BuildInputs(TimerCase):
+    """The Quest libraries are built from the tag, so a run needs an NDK, a vcpkg checkout and the public defaults the build embeds.
+    A run that lacks one is refused with a line that names it, before any command runs (the main release is published first, and
+    cannot be undone if the variant then has no way to build)."""
 
-    def foreign(self) -> pathlib.Path:
-        scratch = self.root / "work" / f"variant-{TAG}"
-        scratch.mkdir(parents=True)
-        (scratch / "not-ours.txt").write_text("kept")
-        return scratch
+    DEFAULTS = "config/public-defaults.env"
 
-    def test_an_unconfigured_run_of_a_new_tag_leaves_a_directory_it_did_not_make(self) -> None:
-        scratch = self.foreign()
-        self.assertEqual(self.run_timer(Fake(self.root)), 0)
-        self.assertEqual((scratch / "not-ours.txt").read_text(), "kept")
-
-    def test_an_unconfigured_run_of_a_listed_tag_leaves_it_too(self) -> None:
-        scratch = self.foreign()
+    def refused(self, env: dict) -> tuple[str, dict]:
         fake = Fake(self.root)
-        fake.beta = TAG[1:]
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertTrue((scratch / "not-ours.txt").exists())
-
-    def marked(self) -> pathlib.Path:
-        scratch = self.root / "work" / f"variant-{TAG}"
-        scratch.mkdir(parents=True)
-        (scratch / timer.SCRATCH_MARKER).write_text("")
-        (scratch / "libq15t.so").write_bytes(b"a private copy of a killed run")
-        return scratch
-
-    def test_a_directory_of_this_timer_left_by_a_killed_run_is_removed_by_any_run(self) -> None:
-        for listed in (False, True):
-            with self.subTest(listed=listed):
-                scratch = self.marked()
-                fake = Fake(self.root)
-                fake.beta = TAG[1:] if listed else "5.16.1"
-                self.log.unlink(missing_ok=True)
-                self.assertEqual(self.run_timer(fake), 0)
-                self.assertFalse(scratch.exists())
-                self.assertIn("variant_scratch_removed", self.names())
-
-    def test_a_marked_directory_is_removed_even_when_the_run_fails_early(self) -> None:
-        scratch = self.marked()
-        self.assertEqual(self.run_timer(Fake(self.root, fail="build_signer")), 1)
-        self.assertFalse(scratch.exists())
-
-    def test_a_marker_that_is_a_link_does_not_count(self) -> None:
-        scratch = self.root / "work" / f"variant-{TAG}"
-        scratch.mkdir(parents=True)
-        elsewhere = self.root / "marker-target"
-        elsewhere.write_text("")
-        (scratch / timer.SCRATCH_MARKER).symlink_to(elsewhere)
-        (scratch / "keep.txt").write_text("kept")
-        self.assertEqual(self.run_timer(Fake(self.root)), 0)
-        self.assertTrue((scratch / "keep.txt").exists())
-
-    def fail_removing(self, name: str):
-        real = os.unlink
-
-        def unlink(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003 - os.unlink's own signature
-            if pathlib.Path(path).name == name:
-                raise PermissionError(13, "Permission denied")
-            return real(path, *args, **kwargs)
-
-        return mock.patch.object(timer.os, "unlink", side_effect=unlink)
-
-    def test_a_sweep_that_fails_part_way_leaves_the_marker_so_the_next_run_retries(self) -> None:
-        scratch = self.marked()
-        (scratch / "libq15t_early.so").write_bytes(b"another private copy")
-        with self.fail_removing("libq15t_early.so"):
-            code = self.run_timer(Fake(self.root))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = self.run_timer(fake, env=env)
         self.assertEqual(code, 1)
-        self.assertEqual([e["step"] for e in self.events() if e["event"] == "failed"], ["cleanup"])
-        self.assertTrue((scratch / timer.SCRATCH_MARKER).is_file(), "the directory is still marked, so it is still ours to retry")
-        self.assertNotIn("variant_scratch_removed", self.names())
-        fake = Fake(self.root)
-        self.assertEqual(self.run_timer(fake), 0)
-        self.assertFalse(scratch.exists())
-        self.assertIn("variant_scratch_removed", self.names())
+        self.assertEqual(fake.calls, [], "refused before any step runs: no git, no token, no signer")
+        self.assertEqual([e["event"] for e in self.events()], ["start", "refused"])
+        return err.getvalue(), self.events()[1]
 
-    def test_a_sweep_removes_the_marker_after_the_files_and_the_directory_after_the_marker(self) -> None:
-        scratch = self.marked()
-        order: list[str] = []
-        real = os.unlink
-
-        def unlink(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
-            order.append(pathlib.Path(path).name)
-            return real(path, *args, **kwargs)
-
-        with mock.patch.object(timer.os, "unlink", side_effect=unlink):
-            self.assertEqual(self.run_timer(Fake(self.root)), 0)
-        self.assertLess(order.index("libq15t.so"), order.index(timer.SCRATCH_MARKER))
-
-    def test_a_sweep_that_fails_is_the_part_the_tag_was_in(self) -> None:
-        for complete, part in ((False, "main"), (True, "variant")):
-            with self.subTest(complete=complete):
+    def test_each_unset_build_variable_is_named(self) -> None:
+        for name in ("ANDROID_NDK_HOME", "VCPKG_ROOT"):
+            with self.subTest(name=name):
                 self.log.unlink(missing_ok=True)
-                shutil.rmtree(self.root / "work", ignore_errors=True)
-                scratch = self.marked()
-                if complete:
-                    self.write_log({"event": "main_complete", "tag": TAG})
-                with self.fail_removing("libq15t.so"):
-                    self.assertEqual(self.run_timer(Fake(self.root)), 1)
-                self.assertEqual([(e["step"], e["part"]) for e in self.events() if e["event"] == "failed"], [("cleanup", part)])
+                stderr, record = self.refused({k: v for k, v in self.env.items() if k != name})
+                self.assertIn(f"refused: set {name}", stderr)
+                self.assertEqual((record["missing"], record["part"]), ([name], "main"))
 
-    def test_a_link_to_a_marked_directory_is_not_followed(self) -> None:
-        target = self.root / "elsewhere"
-        target.mkdir()
-        (target / timer.SCRATCH_MARKER).write_text("")
-        (target / "keep.txt").write_text("kept")
-        (self.root / "work").mkdir(parents=True)
-        (self.root / "work" / f"variant-{TAG}").symlink_to(target)
-        self.assertEqual(self.run_timer(Fake(self.root)), 0)
-        self.assertEqual((target / "keep.txt").read_text(), "kept")
+    def test_an_empty_build_variable_is_unset(self) -> None:
+        stderr, record = self.refused({**self.env, "ANDROID_NDK_HOME": ""})
+        self.assertIn("refused: set ANDROID_NDK_HOME", stderr)
 
-    def test_an_unconfigured_run_that_fails_leaves_it_too(self) -> None:
-        scratch = self.foreign()
-        self.assertEqual(self.run_timer(Fake(self.root, fail="publish_apk")), 1)
-        self.assertTrue((scratch / "not-ours.txt").exists())
+    def test_a_directory_that_is_not_an_ndk_is_refused_naming_the_variable_and_what_it_lacks(self) -> None:
+        for lacks in ("build/cmake/android.toolchain.cmake", "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"):
+            with self.subTest(lacks=lacks):
+                self.log.unlink(missing_ok=True)
+                (self.root / "ndk" / lacks).unlink()
+                stderr, record = self.refused(self.env)
+                self.assertIn("ANDROID_NDK_HOME", stderr)
+                self.assertIn(lacks, stderr)
+                self.assertEqual(record["missing"], ["ANDROID_NDK_HOME"])
+                (self.root / "ndk" / lacks).write_text("")
 
+    def test_a_directory_that_is_not_a_vcpkg_checkout_is_refused_naming_the_variable_and_what_it_lacks(self) -> None:
+        (self.root / "vcpkg" / "scripts" / "buildsystems" / "vcpkg.cmake").unlink()
+        stderr, record = self.refused(self.env)
+        self.assertIn("VCPKG_ROOT", stderr)
+        self.assertIn("scripts/buildsystems/vcpkg.cmake", stderr)
+        self.assertEqual(record["missing"], ["VCPKG_ROOT"])
 
-class VariantNotConfigured(TimerCase):
-    """The machine without the private build keeps working: one record per run, and nothing else."""
+    def test_missing_public_defaults_are_refused_naming_the_file(self) -> None:
+        (self.root / "repo" / self.DEFAULTS).unlink()
+        stderr, record = self.refused(self.env)
+        self.assertIn(self.DEFAULTS, stderr)
+        self.assertIn("public-defaults.env.example", stderr, "the line says where the file comes from")
+        self.assertEqual(record["missing"], [self.DEFAULTS])
 
-    def test_a_new_tag_runs_the_main_release_and_says_once_that_the_variant_is_off(self) -> None:
+    def test_every_missing_input_is_named_in_one_refusal(self) -> None:
+        (self.root / "repo" / self.DEFAULTS).unlink()
+        env = {k: v for k, v in self.env.items() if k not in ("ANDROID_NDK_HOME", "R2_BUCKET")}
+        env["VCPKG_ROOT"] = str(self.root / "no-such-vcpkg")
+        stderr, record = self.refused(env)
+        self.assertEqual(len(stderr.splitlines()), 1)
+        for want in ("R2_BUCKET", "ANDROID_NDK_HOME", "VCPKG_ROOT", self.DEFAULTS):
+            self.assertIn(want, stderr)
+        self.assertEqual(sorted(record["missing"]), sorted(["R2_BUCKET", "ANDROID_NDK_HOME", "VCPKG_ROOT", self.DEFAULTS]))
+
+    def test_an_unset_store_apk_is_named_before_any_step_runs(self) -> None:
+        stderr, record = self.refused({k: v for k, v in self.env.items() if k != "NEVR_STORE_APK"})
+        self.assertIn("refused: set NEVR_STORE_APK", stderr)
+        self.assertEqual((record["missing"], record["part"]), (["NEVR_STORE_APK"], "main"))
+
+    def test_a_store_apk_that_is_not_a_file_is_refused_naming_the_variable(self) -> None:
+        for name, value in (("a directory", str(self.root / "ndk")), ("absent", str(self.root / "no-such.apk"))):
+            with self.subTest(name):
+                self.log.unlink(missing_ok=True)
+                stderr, record = self.refused({**self.env, "NEVR_STORE_APK": value})
+                self.assertIn("NEVR_STORE_APK is not a file", stderr)
+                self.assertEqual(record["missing"], ["NEVR_STORE_APK"])
+                self.assertNotIn(value, stderr, "the sentence names the variable, never its value")
+
+    def test_an_ndk_of_another_revision_is_refused_though_it_has_the_files(self) -> None:
+        for revision in ("21.1.6352462", "25.2.9519653", "27.0.12077973"):
+            with self.subTest(revision):
+                self.log.unlink(missing_ok=True)
+                (self.root / "ndk" / "source.properties").write_text(f"Pkg.Revision = {revision}\n")
+                stderr, record = self.refused(self.env)
+                self.assertIn("ANDROID_NDK_HOME is not an Android NDK r26d directory", stderr)
+                self.assertIn(revision, stderr, "the line says which revision it found")
+                self.assertEqual(record["missing"], ["ANDROID_NDK_HOME"])
+
+    def test_an_ndk_with_no_source_properties_is_refused(self) -> None:
+        (self.root / "ndk" / "source.properties").unlink()
+        stderr, record = self.refused(self.env)
+        self.assertIn("source.properties", stderr)
+        self.assertEqual(record["missing"], ["ANDROID_NDK_HOME"])
+
+    def test_every_r26_revision_is_accepted(self) -> None:
+        for revision in ("26.3.11579264", "26.3.99999999"):
+            with self.subTest(revision):
+                (self.root / "ndk" / "source.properties").write_text(f"Pkg.Desc = Android NDK\nPkg.Revision = {revision}\n")
+                self.assertEqual(timer.build_input_problems(self.env), [])
+
+    def test_a_refusal_is_not_counted_toward_the_three_tries(self) -> None:
+        env = {k: v for k, v in self.env.items() if k != "VCPKG_ROOT"}
+        for _ in range(4):
+            self.assertEqual(self.run_timer(Fake(self.root), env=env), 1)
+        self.assertEqual([e for e in self.events() if e["event"] == "failed"], [])
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual([e["step"] for e in self.events() if e["event"] == "step_ok"], STEPS)
-        [off] = [e for e in self.events() if e["event"] == "variant_not_configured"]
-        self.assertIn("NEVR_VARIANT_DIR", off["reason"])
-        self.assertIn("NEVR_VARIANT_PINS", off["reason"])
         self.assertEqual(self.names()[-1], "done")
-        for step in ("variant_build", "variant_publish"):
-            self.assertNotIn(step, fake.steps())
 
-    def test_a_listed_tag_says_so_makes_no_request_and_is_done(self) -> None:
-        host = PublicHost(self)
-        env = {**self.env, "RELEASE_PUBLIC_BASE": host.base}
+    def test_a_run_with_every_input_runs_the_variant(self) -> None:
         fake = Fake(self.root)
-        fake.beta = TAG[1:]
-        self.assertEqual(self.run_timer(fake, env=env), 0)
-        self.assertEqual(self.names().count("variant_not_configured"), 1)
-        self.assertEqual(host.requests, [])
-        self.assertNotIn("worktree.add", fake.steps())
-        self.assertEqual(self.names()[-1], "done")
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("variant_build", fake.steps())
+
+    def test_the_reset_does_not_need_the_build_inputs(self) -> None:
+        env = {"XDG_STATE_HOME": self.env["XDG_STATE_HOME"]}
+        self.assertEqual(self.run_timer(Fake(self.root), "--tag", TAG, "--reset-failures", env=env), 0)
 
 
 FAKE_TOOL = r'''#!PYTHON
-import hashlib, json, os, pathlib, shutil, sys, tarfile
+import hashlib, json, os, pathlib, shutil, sys, tarfile, zipfile
 
 name = os.path.basename(sys.argv[0])
 args = sys.argv[1:]
@@ -2828,12 +2706,17 @@ elif name == "systemd-run":
     os.execvp(rest[0], rest)
 elif name == "just":
     if args[0] == "release-quest-variant-apk":
-        digests = b"".join(hashlib.sha256(pathlib.Path(p).read_bytes()).digest() for p in args[2].split(":"))
+        # The recipe builds the libraries from the checkout (`just build-quest-q15t`) and packages them: no library is an argument.
+        assert len(args) == 2, args
+        built = pathlib.Path("build/quest-q15t")
+        built.mkdir(parents=True)
+        (built / "libq15t.so").write_bytes(bytes.fromhex(os.environ["FAKE_LIBRARY"]))
         out = pathlib.Path("build/quest-release") / args[1] / "variant"
         out.mkdir(parents=True)
-        apk = b"a stand-in for the variant APK " + digests
         file = f"nevr-runtime-{args[1]}-q15t-quest.apk"
-        (out / file).write_bytes(apk)
+        with zipfile.ZipFile(out / file, "w") as archive:
+            archive.writestr("lib/arm64-v8a/libq15t.so", (built / "libq15t.so").read_bytes())
+        apk = (out / file).read_bytes()
         (out / f"{file}.sha256").write_text(f"{hashlib.sha256(apk).hexdigest()}  {file}\n")
     elif args[0] == "remove-worktree":
         shutil.rmtree(args[1])
@@ -2851,13 +2734,6 @@ class VariantRealProcess(TimerCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.vdir = self.root / VDIR_MARK
-        self.vdir.mkdir()
-        for name in LIBRARIES:
-            (self.vdir / name).write_bytes(library_bytes(name))
-        self.pins = self.root / f"{PINS_MARK}.txt"
-        self.pins.write_text("".join(f"{hashlib.sha256(library_bytes(n)).hexdigest()}  {n}\n" for n in LIBRARIES))
-        (self.root / "repo").mkdir()  # the checkout the timer runs from: its commands run with it as the working directory
         self.bin = self.root / "bin"
         self.bin.mkdir()
         for tool in ("git", "gh-fake", "go", "tar", "pgrep", "systemd-run", "just", "rclone"):
@@ -2875,7 +2751,7 @@ class VariantRealProcess(TimerCase):
                         "GH_BIN": str(self.bin / "gh-fake"), "CALLS": str(self.calls), "FAKE_TAG": TAG,
                         "FAKE_SERVE": str(self.served / "nevr-runtime" / TAG), "FAKE_TOOLS": str(ROOT / "tools"),
                         "RELEASE_PUBLIC_BASE": f"http://127.0.0.1:{server.server_address[1]}",
-                        "NEVR_VARIANT_DIR": str(self.vdir), "NEVR_VARIANT_PINS": str(self.pins)}
+                        "FAKE_LIBRARY": library_bytes("libq15t.so").hex()}
         self.publish_log = self.root / "state" / "nevr-runtime" / "publish-quest-apk.jsonl"
 
     def start(self) -> subprocess.CompletedProcess:
@@ -2885,22 +2761,16 @@ class VariantRealProcess(TimerCase):
     def tool_calls(self) -> list[dict]:
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
 
-    def assert_nothing_private(self, result: subprocess.CompletedProcess) -> None:
-        texts = [result.stdout, result.stderr, self.log.read_text(), self.calls.read_text()]
-        if self.publish_log.exists():
-            texts.append(self.publish_log.read_text())
-        for text in texts:
-            for private in (VDIR_MARK, PINS_MARK):
-                self.assertNotIn(private, text)
-
     def test_a_listed_release_gets_its_variant_through_the_real_timer_and_the_real_publish_tool(self) -> None:
         result = self.start()
         self.assertEqual((result.returncode, result.stderr), (0, ""))
         self.assertEqual([e["step"] for e in self.events() if e["event"] == "step_ok"],
-                         ["checkout", "tags", "token", "build_signer", "check_listed", "variant_exists", "variant_pins", "worktree",
-                          "build_slot", "configure", "variant_build", "variant_publish", "cleanup"])
+                         ["checkout", "tags", "token", "build_signer", "check_listed", "variant_exists", "worktree",
+                          "build_slot", "configure", "variant_configure", "variant_build", "variant_publish", "cleanup"])
+        data = library_bytes("libq15t.so")
         libraries = [e for e in self.events() if e["event"] == "variant_library"]
-        self.assertEqual([(e["name"], e["size"]) for e in libraries], [(n, 4096) for n in LIBRARIES])
+        self.assertEqual([(e["name"], e["size"], e["sha256"], e["libr15_build_id"]) for e in libraries],
+                         [("libq15t.so", len(data), hashlib.sha256(data).hexdigest(), BUILD_ID)])
         self.assertEqual(self.names()[-1], "done")
         publish = [json.loads(line) for line in self.publish_log.read_text().splitlines()]
         self.assertEqual([e["event"] for e in publish],
@@ -2911,22 +2781,20 @@ class VariantRealProcess(TimerCase):
         apk = (self.served / "nevr-runtime" / TAG / VARIANT_APK).read_bytes()
         self.assertEqual((self.served / "nevr-runtime" / TAG / f"{VARIANT_APK}.sha256").read_text(),
                          f"{hashlib.sha256(apk).hexdigest()}  {VARIANT_APK}\n")
+        with zipfile.ZipFile(io.BytesIO(apk)) as archive:
+            self.assertEqual(archive.read("lib/arm64-v8a/libq15t.so"), data, "the APK carries the library the build wrote")
         signer = [c["args"] for c in self.tool_calls() if c["tool"] == "signer"]
         self.assertEqual(signer, [["verify-manifest", "--live"]], "the signer only reads the manifest: no claim, no put")
-        self.assert_nothing_private(result)
+        just = [c["args"][0] for c in self.tool_calls() if c["tool"] == "just"]
+        self.assertEqual(just, ["worktree-setup", "configure", "configure-android", "release-quest-variant-apk", "remove-worktree"])
 
-    def test_a_pin_that_does_not_hold_stops_the_variant_and_names_the_file_in_the_real_output(self) -> None:
-        data = library_bytes(LIBRARIES[1])
-        (self.vdir / LIBRARIES[1]).write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+    def test_a_missing_build_input_stops_the_real_timer_before_it_runs_a_command(self) -> None:
+        self.run_env.pop("ANDROID_NDK_HOME")
         result = self.start()
         self.assertEqual(result.returncode, 1)
-        self.assertIn(f"quest-release-timer: variant_pins: {LIBRARIES[1]} does not match its pin", result.stderr)
-        [failure] = [e for e in self.events() if e["event"] == "failed"]
-        self.assertEqual(failure["step"], "variant_pins")
-        self.assertNotIn("variant_build", [c["args"][0] for c in self.tool_calls() if c["tool"] == "just"])
-        self.assertEqual(list((self.served / "nevr-runtime" / TAG).iterdir()), [])
-        self.assertNotIn("done", self.names())
-        self.assert_nothing_private(result)
+        self.assertIn("refused: set ANDROID_NDK_HOME", result.stderr)
+        self.assertEqual([e["event"] for e in self.events()], ["start", "refused"])
+        self.assertFalse(self.calls.exists(), "no command ran")
 
     def test_a_published_variant_is_found_on_the_host_and_nothing_is_built_again(self) -> None:
         self.assertEqual(self.start().returncode, 0)
@@ -2942,12 +2810,16 @@ class ReleasingDoc(unittest.TestCase):
     def test_the_doc_and_the_module_docstring_state_the_variant_steps_the_environment_and_the_failure_rule(self) -> None:
         text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
         section = text.split("## The Quest half of a release", 1)[1].split("\n## ", 1)[0]
-        for want in ("variant_pins", "variant_build", "variant_publish", "variant_exists", "variant_listed",
-                     "NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS", "variant_not_configured",
-                     "never blocks", "release-quest-variant-apk", "--variant"):
+        for want in ("variant_configure", "variant_build", "variant_publish", "variant_exists", "variant_listed",
+                     "never blocks", "release-quest-variant-apk", "--variant", "variant_library",
+                     "ANDROID_NDK_HOME", "VCPKG_ROOT", "config/public-defaults.env", "build-quest-q15t"):
             self.assertIn(want, section)
-        for want in ("variant_pins", "variant_build", "variant_publish", "NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS"):
+        for want in ("variant_configure", "variant_build", "variant_publish", "variant_library",
+                     "ANDROID_NDK_HOME", "VCPKG_ROOT", "config/public-defaults.env"):
             self.assertIn(want, timer.__doc__)
+        for gone in ("NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS", "variant_not_configured", "variant_pins", "private build"):
+            self.assertNotIn(gone, section)
+            self.assertNotIn(gone, timer.__doc__)
 
     def test_the_doc_states_the_pair_check_its_repair_the_build_log_the_part_and_the_reset(self) -> None:
         text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
@@ -2958,9 +2830,11 @@ class ReleasingDoc(unittest.TestCase):
             self.assertIn(want, section)
         self.assertNotIn("`variant_publish` record in", section)
         self.assertNotIn("when that worktree still exists", section)
-        for want in ("run that gets past the checkout, tags and token steps", "timer.lock", "`busy`", "variant-only", "could not confirm"):
+        for want in ("timer.lock", "`busy`", "variant-only", "could not confirm"):
             self.assertIn(want, section)
-        self.assertIn("`.made-by-quest-release-timer`", section)
+        for gone in (".made-by-quest-release-timer", "variant_scratch_removed", "scratch"):
+            self.assertNotIn(gone, section)
+            self.assertNotIn(gone, timer.__doc__)
         self.assertNotIn("A tag that beta already lists is done.", section)
         for stale in ("the live manifest already lists the tag: done, nothing to build",
                       "The R2 credential goes only to publish_apk,"):

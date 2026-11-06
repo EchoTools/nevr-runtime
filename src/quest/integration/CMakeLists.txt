@@ -165,7 +165,7 @@ target_compile_options(nevr_autopilot_plugin PRIVATE -Wall -Wextra -Werror -fno-
 target_link_options(nevr_autopilot_plugin PRIVATE -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL)
 
 # The q15t plugin (#1546): libq15t.so and libq15t_early.so, built here and carried by no APK the release or package-dev recipes
-# build; `just build-quest-q15t` builds them, and the variant recipe packages them.
+# build; `just build-quest-q15t` builds them, the variant recipe packages `libq15t.so` and the combat recipe packages both.
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../plugins/q15t" "${CMAKE_CURRENT_BINARY_DIR}/q15t")
 
 # Sensor controls, never run: tests/quest frames_sensor_test.go reads them. Both hooks have a handler that

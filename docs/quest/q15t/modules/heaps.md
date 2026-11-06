@@ -154,5 +154,5 @@ executable page; `heaps.off`; `memsys.off` skipping only R07; base 0; no chainin
 Built into its own library, `libq15t_early.so` (`src/quest/plugins/q15t/src/plugin_early.cpp`, CMake option `Q15T_EARLY`, default ON, OFF in the test arms), together
 with `memsys`, and listed as its own `early: true` entry (`src/quest/plugins/q15t/README.md`). `heaps.off` / `memsys.off` still apply. Host test:
 `src/quest/tests/q15t/early_test.cpp` (`src/quest/tests/q15t/mod/early.cmake`). Unverified until a headset runs it: ADR 0019 P10 (does the early phase run, is the slot
-relocated at that point). The repack recipe takes ONE plugin file (`just android-repack-apk ... <plugin .so>`), so shipping this library
-next to `libq15t.so` needs a repack that takes two; until then the early library is built and tested but not in any APK.
+relocated at that point). The combat APK (`just release-quest-combat-apk`) packages this library next to `libq15t.so` and marks it `early`; the variant APK
+carries `libq15t.so` only, because an early library packaged as an ordinary plugin would load after `android_main` read the heap sizes.
