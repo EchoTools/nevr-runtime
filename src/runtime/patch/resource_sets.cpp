@@ -89,6 +89,7 @@ StockHasFn g_testStockHas = nullptr;
 std::uint64_t g_testStockRecords = 0;
 std::uint64_t (*g_testNow)() = nullptr;
 bool g_testThrow = false;
+std::wstring g_testFilePath;  // non-empty: the file registration opens instead of the plugin's own
 #endif
 
 std::uint64_t NowMs() {
@@ -185,7 +186,8 @@ std::string LevelList(const Set& set) {
 }
 
 // Reads `length` bytes at `offset` of `file` into `out`. False when a read fails or comes up short; `error` is the
-// read's GetLastError, or 0 for a short read (end of file).
+// read's GetLastError, and ERROR_HANDLE_EOF when the file ends first: a read that names its offset fails with that
+// code at the end of the file, and a read that returns no bytes means the same.
 bool ReadFileAt(HANDLE file, std::uint64_t offset, std::size_t length, std::vector<unsigned char>* out, DWORD* error) {
   out->assign(length, 0);
   std::size_t done = 0;
@@ -200,7 +202,7 @@ bool ReadFileAt(HANDLE file, std::uint64_t offset, std::size_t length, std::vect
       return false;
     }
     if (got == 0) {
-      *error = 0;
+      *error = ERROR_HANDLE_EOF;
       return false;
     }
     done += got;
@@ -307,6 +309,9 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
                    "GetModuleFileNameW error " + std::to_string(GetLastError()));
   }
   path.resize(pathLength);
+#ifdef NEVR_TEST_HOOKS
+  if (!g_testFilePath.empty()) path = g_testFilePath;
+#endif
   // Read-only, and deny-write: the file the game's reader reads cannot change under the running game.
   FileHandle file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr));
@@ -320,7 +325,9 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
       break;
     case FileCheck::kReadFailed:
       return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "file_read",
-                     "ReadFile error " + std::to_string(readError) + " (0: the file ends before the set)");
+                     readError == ERROR_HANDLE_EOF
+                         ? std::string("the plugin's file ends before the offset its headers name for the set's bytes")
+                         : "ReadFile error " + std::to_string(readError));
     case FileCheck::kDiffers:
       return Refused(pluginId, label, NEVR_RESOURCES_NOT_IN_FILE, "file_differs",
                      "the plugin's file does not hold the mapped bytes at the offset its headers name");
@@ -354,7 +361,6 @@ void MountLocked(std::uint64_t stockRecords, MountReport* report, std::vector<co
   *report = g_registry.Mount(StockView{&StockHasThunk, nullptr, stockRecords});
   *mounted = g_registry.MountedSets();
   if (const nevr_shadow::Shadow* shadow = g_registry.shadow()) {
-    g_lastSummaryMs.store(NowMs());  // the first read window starts at the mount
     g_published.store(new Published(shadow, mounted->size()), std::memory_order_release);
   }
   g_mountDeferred.store(false);
@@ -617,6 +623,7 @@ void ResetForTest() {
   g_testStockRecords = 0;
   g_testNow = nullptr;
   g_testThrow = false;
+  g_testFilePath.clear();
 }
 
 void SetStockForTest(StockHasFn has, std::uint64_t records) {
@@ -631,6 +638,8 @@ void SetClockForTest(std::uint64_t (*now)()) {
 }
 
 void SetThrowForTest(bool on) { g_testThrow = on; }
+
+void SetFilePathForTest(const wchar_t* path) { g_testFilePath = path != nullptr ? path : L""; }
 #endif
 
 }  // namespace nevr_resource_sets

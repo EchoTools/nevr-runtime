@@ -154,6 +154,16 @@ bool TestLogContains(const std::string& needle) {
                      });
 }
 
+// The logged lines that contain `needle`, one per line, for an assertion's failure message.
+std::string TestLogLinesWith(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  std::string lines;
+  for (const std::string& message : g_testLogMessages) {
+    if (message.find(needle) != std::string::npos) lines += message + "\n";
+  }
+  return lines.empty() ? "no line contains " + needle : lines;
+}
+
 // Every line with the level it was logged at, for tests that pin the level (#598).
 std::vector<std::pair<EchoVR::LogLevel, std::string>> g_testLogLeveled;
 
@@ -2871,6 +2881,7 @@ TEST_F(PluginResourceSetTest, ThePluginRegistersItsSetFromInitAndTheBadRegistrat
   EXPECT_EQ(ResourcesFixtureStatus(2), NEVR_RESOURCES_NOT_IN_FILE) << "writable data";
   EXPECT_EQ(ResourcesFixtureStatus(3), NEVR_RESOURCES_NOT_IN_FILE) << "read-only data with a relocated pointer";
   EXPECT_EQ(ResourcesFixtureStatus(4), NEVR_RESOURCES_BAD_ARGUMENT) << "a label with a newline";
+  EXPECT_EQ(ResourcesFixtureStatus(5), NEVR_RESOURCES_NOT_IN_FILE) << "another module's bytes";
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
                                      "[NEVR.RESOURCE] resource set registered plugin=levels label=\"fixture levels\" "
                                      "records=3 chunks=1 levels=1 overrides=1"));
@@ -2878,6 +2889,7 @@ TEST_F(PluginResourceSetTest, ThePluginRegistersItsSetFromInitAndTheBadRegistrat
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "label=\"writable\" status=2 reason=writable_section"));
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "label=\"relocated\" status=2 reason=relocated"));
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "label=\"two?lines\" status=1 reason=bad_label"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "label=\"elsewhere\" status=2 reason=not_in_image"));
   EXPECT_FALSE(TestLogContains("two\nlines")) << "a label's newline never reaches the log";
 }
 
@@ -2946,11 +2958,73 @@ TEST_F(PluginResourceSetTest, AnInitThatFailsDropsTheSetItRegisteredAndItsOverri
   g_resourceStock.insert({kFixtureOverrideType, kFixtureOverrideName});
   Plan(R"({"fail":"1"})");
   LoadPlugins();
-  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  EXPECT_TRUE(TestLogContains("[NEVR.RESOURCE] resource set registered plugin=levels label=\"fixture levels\""))
+      << TestLogLinesWith("fixture levels");
   EXPECT_TRUE(TestLogContains("[NEVR.RESOURCE] resource sets dropped plugin=levels count=1"));
+  // The fixture has a shutdown export, so the loader releases it after the failed init: its set no longer holds the
+  // file, and nothing of the module is left to answer.
+  EXPECT_TRUE(TestLogContains("shutdown after failed init code=1 completed; module released"));
+  EXPECT_EQ(ResourcesFixtureStatus(0), -1000) << "the module is still loaded";
   Mount();
   EXPECT_EQ(nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh), nullptr);
   EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
+}
+
+TEST_F(PluginResourceSetTest, AnArgumentWithFlagsIsRefusedBeforeAnythingElseIsChecked) {
+  static const unsigned char bytes[64] = {};
+  NevrResourcesDesc desc = {};
+  desc.struct_size = sizeof(desc);
+  desc.flags = 1;
+  desc.data = bytes;
+  desc.size = sizeof(bytes);
+  desc.label = "flags";
+  EXPECT_EQ(nevr_resource_sets::HostRegisterResources("levels", &desc), NEVR_RESOURCES_BAD_ARGUMENT);
+  EXPECT_TRUE(TestLogContains("label=\"flags\" status=1 reason=bad_argument"));
+}
+
+// The plugin's file, copied and changed: what the host reads from it must be what the image maps.
+std::filesystem::path FixtureCopy(const char* name, bool flipInSet, bool cutBeforeSet) {
+  const HMODULE self = GetModuleHandleA(nullptr);
+  char exe[MAX_PATH] = {};
+  GetModuleFileNameA(self, exe, MAX_PATH);
+  const std::filesystem::path source = std::filesystem::path(exe).parent_path() / "plugins" / "test_plugin_resources.dll";
+  std::ifstream in(source, std::ios::binary);
+  std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const std::string text(bytes.begin(), bytes.end());
+  const std::size_t at = text.find("NEVRRES1");
+  if (at == std::string::npos) return {};
+  if (flipInSet) bytes[at + 20] ^= 0x01;  // a byte of the set's header, inside the first MiB the host compares
+  if (cutBeforeSet) bytes.resize(at);
+  const std::filesystem::path copy = std::filesystem::temp_directory_path() / name;
+  std::ofstream out(copy, std::ios::binary | std::ios::trunc);
+  out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  return copy;
+}
+
+TEST_F(PluginResourceSetTest, APluginFileThatDoesNotHoldTheMappedBytesIsRefused) {
+  const std::filesystem::path differs = FixtureCopy("nevr_test_resources_differs.dll", true, false);
+  ASSERT_FALSE(differs.empty());
+  nevr_resource_sets::SetFilePathForTest(differs.wstring().c_str());
+  Plan();
+  LoadPlugins();
+  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_NOT_IN_FILE);
+  EXPECT_TRUE(TestLogContains("label=\"fixture levels\" status=2 reason=file_differs"));
+  UnloadPlugins();
+  nevr_resource_sets::ResetForTest();
+  nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
+  std::filesystem::remove(differs);
+
+  const std::filesystem::path cut = FixtureCopy("nevr_test_resources_cut.dll", false, true);
+  ASSERT_FALSE(cut.empty());
+  nevr_resource_sets::SetFilePathForTest(cut.wstring().c_str());
+  Plan();
+  LoadPlugins();
+  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_NOT_IN_FILE);
+  EXPECT_TRUE(TestLogContains("label=\"fixture levels\" status=2 reason=file_read "
+                              "detail=\"the plugin's file ends before the offset its headers name"))
+      << TestLogLinesWith("fixture levels");
+  UnloadPlugins();
+  std::filesystem::remove(cut);
 }
 
 TEST_F(PluginResourceSetTest, ARegistrationFromOutsideThePluginsInitIsRefused) {
@@ -3039,10 +3113,10 @@ TEST_F(PluginResourceSetTest, TheResolverHookFillsASetsKeyFromTheShadowAndOtherK
   nevr::assets::CallRequestHookForTest(&callers, kFixtureMeshType, 0x9999ULL);
   EXPECT_EQ(g_requestManager, &callers) << "any other key goes to the caller's manager";
 
-  // Two reads in the window that started at the mount (the hook's and the comparison's).
-  g_resourceNow += 10000;
+  // Two reads in the window that started at the mount (the hook's and the comparison's), a 12 s window.
+  g_resourceNow += 12000;
   nevr_resource_sets::OnFrame(true);
-  EXPECT_TRUE(TestLogContains("resource set reads plugin=levels label=\"fixture levels\" served=2 window_ms=10000"));
+  EXPECT_TRUE(TestLogContains("resource set reads plugin=levels label=\"fixture levels\" served=2 window_ms=12000"));
 
   // A key the game's manifest gains after the mount is the game's, and the first one is named.
   g_resourceStock.insert({kFixtureMeshType, kFixtureMesh});

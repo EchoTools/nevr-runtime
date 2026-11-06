@@ -57,6 +57,8 @@ void SetStockForTest(StockHasFn has, std::uint64_t records);
 void SetClockForTest(std::uint64_t (*now)());
 // Makes the next registrations throw std::bad_alloc inside the host, before any check.
 void SetThrowForTest(bool on);
+// The file registration opens and compares instead of the plugin's own (null: the plugin's own).
+void SetFilePathForTest(const wchar_t* path);
 #endif
 
 }  // namespace nevr_resource_sets

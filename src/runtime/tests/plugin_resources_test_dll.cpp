@@ -109,8 +109,8 @@ WithPointer g_withPointer = {&g_withPointer, {}};
 extern const WithPointer kRelocated;
 NEVR_RESOURCE_SET_SECTION const WithPointer kRelocated = {&kRelocated, {}};
 
-constexpr int kRegistrations = 5;
-int32_t g_status[kRegistrations] = {-99, -99, -99, -99, -99};
+constexpr int kRegistrations = 6;
+int32_t g_status[kRegistrations] = {-99, -99, -99, -99, -99, -99};
 
 }  // namespace
 
@@ -127,12 +127,19 @@ extern "C" __declspec(dllexport) int NevrPluginInitEx(const NevrGameContext* ctx
   g_status[2] = NevrRegisterEmbeddedResources(ctx, &g_withPointer, sizeof(g_withPointer), "writable").status;
   g_status[3] = NevrRegisterEmbeddedResources(ctx, &kRelocated, sizeof(kRelocated), "relocated").status;
   g_status[4] = NevrRegisterEmbeddedResources(ctx, kSet.data(), kSet.size(), "two\nlines").status;
+  // Bytes in another module's image (kernel32's): never the plugin's own file.
+  const auto* elsewhere = reinterpret_cast<const unsigned char*>(GetModuleHandleA("kernel32.dll"));
+  g_status[5] = NevrRegisterEmbeddedResources(ctx, elsewhere + 0x1000, 64, "elsewhere").status;
   const bool fail = args != nullptr && std::strstr(args, "\"fail\":\"1\"") != nullptr;
   return fail ? 1 : 0;
 }
 
+// A shutdown export, so the loader releases this DLL after a failed init instead of keeping it for the process: a
+// kept copy would answer the next test's status reads.
+extern "C" __declspec(dllexport) void NevrPluginShutdown() {}
+
 // Test reads: the status of registration `which` (0 the set, 1 the repeat, 2 the writable block, 3 the relocated
-// block, 4 the bad label), and the set's bytes.
+// block, 4 the bad label, 5 another module's bytes), and the set's bytes.
 extern "C" __declspec(dllexport) int32_t NevrTestPluginResourcesStatus(uint32_t which) {
   return which < static_cast<uint32_t>(kRegistrations) ? g_status[which] : -98;
 }

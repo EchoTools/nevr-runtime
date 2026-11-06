@@ -7,6 +7,7 @@
 #include <zstd.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <set>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "core/resource_shadow.h"
+#include "nevr/pc/plugin_resources.h"
 #include "nevr/resource_set.h"
 #include "runtime/patch/image_file_range.h"
 #include "runtime/patch/resource_set_registry.h"
@@ -112,6 +114,8 @@ TEST(ResourceSetFormat, EachRuleTheReaderNeedsIsARefusal) {
        }},
       {"chunk size", Problem::kChunkSize, [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.ChunkAt(0) + 12, 0); }},
       {"record chunk", Problem::kRecordChunk, [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(1) + 0x10, 7); }},
+      {"record chunk equal to the count", Problem::kRecordChunk,
+       [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(1) + 0x10, 1); }},
       {"record range", Problem::kRecordRange,
        [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(2) + 0x18, 100000); }},
       {"alignment", Problem::kRecordAlignment, [](SetBuilder& b, std::vector<unsigned char>& v) { SetU32(&v, b.RecordAt(2) + 0x1c, 12); }},
@@ -197,6 +201,11 @@ TEST(ResourceSetFormat, OverridesAreCheckedForRangeDuplicatesAndRecordKeys) {
   }
   {
     SetBuilder b = LevelSet();
+    b.AddOverride(9, 9, {});
+    EXPECT_EQ(ParseProblem(b.Build()), Problem::kOverrideRange) << "an override of 0 bytes replaces nothing";
+  }
+  {
+    SetBuilder b = LevelSet();
     b.AddOverride(kLevelRootType, kLevel, Bytes(4, 1));
     EXPECT_EQ(ParseProblem(b.Build()), Problem::kOverrideIsRecord);
   }
@@ -233,6 +242,51 @@ TEST(ResourceSetRegistry, AMountedSetIsFoundThroughTheShadowAtItsFileOffset) {
   EXPECT_EQ(found.size, 200u);
   EXPECT_GE(found.chunk, nevr_shadow::kFirstChunkIndex);
   EXPECT_EQ(registry.MountedLevels(), std::vector<std::uint64_t>{kLevel});
+}
+
+TEST(ResourceSetRegistry, ASetThatDoesNotParseIsRefusedNamingTheRule) {
+  std::vector<unsigned char> bytes = LevelSet().Build();
+  bytes[7] = '2';
+  Registry registry;
+  const nevr_resource_sets::Outcome o = registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0);
+  EXPECT_EQ(o.refusal, Refusal::kFormat);
+  EXPECT_EQ(o.detail, "magic at index 0");
+  EXPECT_EQ(registry.held(), 0u);
+}
+
+TEST(ResourceSetRegistry, AnArchiveWhoseDependencyCountRunsPastItsEndIsRefused) {
+  SetBuilder b;
+  const std::uint32_t c = b.AddChunk();
+  b.AddRecord(kLevelRootType, kLevel, Bytes(64, 1), c);
+  std::vector<unsigned char> archive = Archive({}, {});
+  archive[0] = 0xFF;  // 255 dependencies in a 16-byte archive
+  b.AddRecord(kArchiveType, kLevel, archive, c);
+  const std::vector<unsigned char> bytes = b.Build();
+  Registry registry;
+  const nevr_resource_sets::Outcome o = registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0);
+  EXPECT_EQ(o.refusal, Refusal::kArchive);
+  EXPECT_NE(o.detail.find("does not parse"), std::string::npos) << o.detail;
+}
+
+// The SDK's helper with a host from before v9: its context ends before register_resources, so the helper does not
+// call it (it would read past the context).
+int g_registerCalls = 0;
+int32_t CountingRegister(const char*, const NevrResourcesDesc*) {
+  ++g_registerCalls;
+  return NEVR_RESOURCES_OK;
+}
+
+TEST(ResourceSetSdk, AnOlderHostsContextIsNotCalledThrough) {
+  static const unsigned char set[8] = {};
+  NevrGameContext ctx = {};
+  ctx.register_resources = &CountingRegister;
+  ctx.ctx_size = static_cast<decltype(ctx.ctx_size)>(offsetof(NevrGameContext, register_resources));
+  g_registerCalls = 0;
+  EXPECT_EQ(NevrRegisterEmbeddedResources(&ctx, set, sizeof(set), "old host").status, -1);
+  EXPECT_EQ(g_registerCalls, 0);
+  ctx.ctx_size = static_cast<decltype(ctx.ctx_size)>(sizeof(ctx));
+  EXPECT_EQ(NevrRegisterEmbeddedResources(&ctx, set, sizeof(set), "v9 host").status, NEVR_RESOURCES_OK);
+  EXPECT_EQ(g_registerCalls, 1);
 }
 
 TEST(ResourceSetRegistry, ARecordTheGameLoadsAsADllByNameIsRefused) {
