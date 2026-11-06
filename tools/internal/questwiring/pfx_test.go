@@ -1,7 +1,6 @@
 package questwiring
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -20,11 +19,7 @@ func TestThePfxModulesHookNothingAndRegisterNoTick(t *testing.T) {
 			}
 		}
 	}
-	pfx := stripComments(read(t, "src/quest/combat/pfx.cpp"))
-	if !regexp.MustCompile(`constexpr bool kWithCombatLobby = false;`).MatchString(pfx) &&
-		regexp.MustCompile(`level::Classify\(game, kWithCombatLobby,`).MatchString(pfx) {
-		t.Error("pfx scopes the gate by anything but a combat map (the lobby rule must be off)")
-	}
+	// Which levels the gate is shut on (the combat lobby and the lobbies arena players use included) is pfx_test's, driven through a fake game.
 	if strings.Contains(read(t, "src/quest/sentinel/hook_budget.h"), "pfx") {
 		t.Error("hook_budget.h has a row for a module that installs no hook")
 	}

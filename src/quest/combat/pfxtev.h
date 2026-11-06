@@ -9,16 +9,17 @@
  * its own `InitPfxTev`, so its file changed nothing either.)
  *
  * Arena (same APK). The event ids are combat effects. `AllowsIn(id, inCombatMap)` answers false for one of the six outside a combat map
- * whatever the switch says, so an arena match, which loads none of them, never has one created; `inCombatMap` is `pfx::InCombatMap(game)`
- * taken at a level change. `Allows(id)` is the same decision with no level known, for a caller that has asked the gate (`pfx::GateOpenIn`)
- * already. An id that is not one of the six is not this switch's: true.
+ * whatever the switch says, so an arena match, which loads none of them, never has one created. It is the only decision call: none skips the level.
+ * `inCombatMap` is the cached map-only answer taken at a level change (pfx.h "Callers"), never a scan per create. An id that is not one of the
+ * six is not this switch's: true.
  *
  * Frequency (ADR 0038). The install runs once. A decision is an array scan of six words, an atomic load and, up to the 64-line cap, one
  * log line; no caller exists in the tree, so today none runs on any frame, in arena or in combat. pfxtev_test prints the cost of a decision.
  *
- * Origin. The plugin's `pfxtev.cpp` (#1683). The six ids and the switch's place in the renderer come from the reference build's event tier
- * (`kTierIds` of its `afk_pfx.cpp`, read as text; docs/quest/combat/pfxtev.md). Nothing is copied: the ids are six symbol hashes and the
- * decision is written here.
+ * Origin. The plugin's `pfxtev.cpp` (#1683). The six ids and the switch's place in the renderer come from the event tier of kotorvr's
+ * echoquest-combat repository (commit c5a67e8): `kTierIds` at native/afkxr/afk_pfx.cpp:1914, the event row at :1915-1916, and the level gate at
+ * runtime/native/afkxr/afk_pfx.cpp:1943-1955 (read as text; docs/quest/combat/pfxtev.md). Nothing is copied: the ids are six symbol hashes (each
+ * the CSymbol64 of an effect name, checked by pfxtev_test) and the decision is written here.
  *
  * Lines (sentinel log):
  *   install   {"event":"combat_pfxtev_install","state":"on|off","reason":"default|off_config","switch":"combat.pfxtev","msg":".."}
@@ -47,9 +48,8 @@ inline constexpr std::size_t kIdCount = sizeof kIds / sizeof kIds[0];
 // The module's normal step: stores the switch, writes the install line and warns for the plugin's kill file. Until it runs the switch is on.
 ModuleResult Install(bool configOn) noexcept;
 
-// True when the renderer may create `id`, with no level known: an event id is true while the switch is on; any other id is true.
-bool Allows(std::uint64_t id) noexcept;
-// The same, scoped to combat maps: an event id is refused outside one whatever the switch says.
+// True when the renderer may create `id` given whether a combat map is loaded: an event id is refused outside one whatever the switch says; any
+// other id is true. There is no call that skips the level: the answer needs `inCombatMap` (the cached map-only answer, see pfx.h "Callers").
 bool AllowsIn(std::uint64_t id, bool inCombatMap) noexcept;
 
 struct Stats {

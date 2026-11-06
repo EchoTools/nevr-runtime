@@ -4,9 +4,8 @@ Files: `src/quest/combat/pfx.{h,cpp}`, `src/quest/tests/pfx_test.cpp`, `src/ques
 (`src/quest/combat/combat_install.h`): it runs in the `q15t` and `combat` APKs and in no other. Switch in `config.yaml` (docs/adr/0046 rule 4):
 `combat.pfx`, true unless the file says false.
 
-Origin: the gate reconstructs the reference build's renderer switch, `On()` in its particle-renderer source file (`afk_pfx`); the plugin's version (#1682) was
-reconstructed from it and is the one this module replaces. `docs/audits/2026-11-05-q15t-origin-citations.md` holds no line number for `On()`, so none
-is cited here (not established).
+Origin: the gate reconstructs the renderer switch of kotorvr's echoquest-combat repository (commit c5a67e8): `On()` at native/afkxr/afk_pfx.cpp:6958, and the
+level gate at runtime/native/afkxr/afk_pfx.cpp:1943-1955. The plugin's version (#1682) was reconstructed from it and is the one this module replaces.
 
 ## What the gate decides
 
@@ -26,14 +25,15 @@ use are shut. The plugin's gate was on in every level; nothing read it, so no be
 from running in an arena match.
 
 `pfx_test` shows the gate open on the four combat maps and shut on `mpl_arena_a`, `mpl_arena_a_lowspec`, `mpl_arena_b`, `mpl_tutorial_a`, the lobbies
-(`mpl_lobby_b`, `mpl_lobby_b_social`, `mpl_lobby_b_arena`, `mpl_lobby_b_combat`), a transition that still holds an arena level, an unreadable game and
+(`mpl_lobby_b`, `mpl_lobby_b2`, `mpl_lobby_b2_lowspec`, `mpl_lobby_b_social`, `mpl_lobby_b_arena`, `mpl_lobby_b_combat`), a transition that still holds an arena level, an unreadable game and
 the switch off.
 
 ## Cost (ADR 0038)
 
 No frame runs this module: the install step runs once per process and no caller of `GateOn` or `GateOpenIn` exists in the tree. A caller takes
 `GateOpenIn` (or `InCombatMap`) at a level change and keeps the answer; `InCombatMap` is the level scan, a few `process_vm_readv` reads, and is not for
-a per-frame call. `pfx_test` prints the measured host cost of both calls; on the machine that built this change `GateOn` took about 10 ns and `InCombatMap` about
+a per-frame or per-create call: the renderer creates about 3,450 effects while a lobby loads, so its caller takes the cached map-only answer of combat_scope
+(#2246 adds `InCombatMap()` there), never this scan. `pfx_test` prints the measured host cost of both calls; on the machine that built this change `GateOn` took about 10 ns and `InCombatMap` about
 3 µs per call (x86 host, in an arena level, not a headset).
 
 ## What is not ported

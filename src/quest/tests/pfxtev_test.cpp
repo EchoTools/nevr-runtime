@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "nevr/symbol_hash.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/test_check.h"
 
@@ -49,12 +50,20 @@ void Fresh() {
 
 constexpr std::uint64_t kNonEvent = 0x66497bb6ull;  // not an event id: never gated by this switch
 
-void TheEventTierHasSixIds() { QCHECK(tev::kIdCount == 6); }
+// Each id is the CSymbol64 of the name of its effect, so a changed bit in the table is caught (the count alone would not).
+void TheEventTierHasSixIdsThatAreTheHashesOfTheirEffectNames() {
+  QCHECK(tev::kIdCount == 6);
+  const char* const names[] = {"pfx_test_combat_plrdeath_s10_torso_follow", "pfx_test_combat_plrdeath_s10_leg1_follow",
+                               "pfx_test_combat_plrdeath_s10_leg2_follow",  "pfx_test_combat_plrdeath_s10_head_follow",
+                               "pfx_test_combat_plrdeath_s10_arm2_follow",  "pfx_test_combat_plrdeath_s10_arm1_follow"};
+  QCHECK(sizeof(names) / sizeof(names[0]) == tev::kIdCount);
+  for (std::size_t i = 0; i < tev::kIdCount; ++i) QCHECK(tev::kIds[i] == EchoVR::CSymbol64Hash(names[i]));
+}
 
 // Default on before the install (the decision is taken, then the counters and lines are cleared).
 void TheSwitchIsOnBeforeTheInstall() {
   Fresh();
-  QCHECK(tev::Allows(tev::kIds[0]));
+  QCHECK(tev::AllowsIn(tev::kIds[0], true));
   Fresh();
 }
 
@@ -62,8 +71,8 @@ void WithTheSwitchOnEveryEventIdIsAllowedAndEachDecisionIsOneLine() {
   Fresh();
   QCHECK(tev::Install(true).installed);
   QCHECK(Count("combat_pfxtev_install", kInfo) == 1);
-  for (std::size_t i = 0; i < tev::kIdCount; ++i) QCHECK(tev::Allows(tev::kIds[i]));
-  QCHECK(tev::Allows(kNonEvent));  // a non-event id is not gated
+  for (std::size_t i = 0; i < tev::kIdCount; ++i) QCHECK(tev::AllowsIn(tev::kIds[i], true));
+  QCHECK(tev::AllowsIn(kNonEvent, true));  // a non-event id is not gated
   QCHECK(Count("combat_pfxtev_decision", kInfo) == 6);  // one INFO line per event-id decision, none for the non-event id
   QCHECK(tev::CurrentStats().allowed == 6 && tev::CurrentStats().refused == 0);
 }
@@ -73,15 +82,15 @@ void WithTheSwitchOffEveryEventIdIsRefusedAndTheNonEventPasses() {
   const nevr_quest::combat::ModuleResult r = tev::Install(false);
   QCHECK(!r.installed && std::string(r.status) == "off_config");
   QCHECK(Count("combat_pfxtev_install", kInfo) == 1);  // a choice, not a failure
-  for (std::size_t i = 0; i < tev::kIdCount; ++i) QCHECK(!tev::Allows(tev::kIds[i]));
-  QCHECK(tev::Allows(kNonEvent));
+  for (std::size_t i = 0; i < tev::kIdCount; ++i) QCHECK(!tev::AllowsIn(tev::kIds[i], true));
+  QCHECK(tev::AllowsIn(kNonEvent, true));
   QCHECK(tev::CurrentStats().refused == 6 && tev::CurrentStats().allowed == 0);
 }
 
 void PastTheCapOneWarningIsWrittenAndTheRestAreOnlyCounted() {
   Fresh();
   tev::Install(true);
-  for (int i = 0; i < 100; ++i) tev::Allows(tev::kIds[0]);
+  for (int i = 0; i < 100; ++i) tev::AllowsIn(tev::kIds[0], true);
   QCHECK(Count("combat_pfxtev_decision", kInfo) == 64);
   QCHECK(Count("combat_pfxtev_log_cap", kWarn) == 1);
   QCHECK(tev::CurrentStats().allowed == 100);
@@ -118,7 +127,7 @@ void TheKillFileIsNotReadAndIsWarnedAbout() {
   Fresh();
   tev::SetLegacyDirForTest(dir);
   tev::Install(true);
-  QCHECK(tev::Allows(tev::kIds[0]));  // the file turned nothing off
+  QCHECK(tev::AllowsIn(tev::kIds[0], true));  // the file turned nothing off
   QCHECK(Count("combat_pfxtev_legacy_switch", kWarn) == 1);
   bool named = false;
   for (const Line& l : g_lines) {
@@ -153,7 +162,7 @@ void PrintTheCostOfADecision() {
 
 int main() {
   const sentinel::LogSink previous = sentinel::SetLogSink(&Capture);
-  TheEventTierHasSixIds();
+  TheEventTierHasSixIdsThatAreTheHashesOfTheirEffectNames();
   TheSwitchIsOnBeforeTheInstall();
   WithTheSwitchOnEveryEventIdIsAllowedAndEachDecisionIsOneLine();
   WithTheSwitchOffEveryEventIdIsRefusedAndTheNonEventPasses();

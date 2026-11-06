@@ -64,8 +64,6 @@ ModuleResult Install(bool configOn) noexcept {
   return {configOn, configOn ? "installed" : "off_config"};
 }
 
-bool Allows(std::uint64_t id) noexcept { return Decide(id, /*inCombatMap=*/true); }
-
 bool AllowsIn(std::uint64_t id, bool inCombatMap) noexcept { return Decide(id, inCombatMap); }
 
 Stats CurrentStats() noexcept { return Stats{g_allowed.load(std::memory_order_relaxed), g_refused.load(std::memory_order_relaxed)}; }

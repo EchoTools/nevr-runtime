@@ -3,13 +3,14 @@
 Files: `src/quest/combat/pfxtev.{h,cpp}`, `src/quest/tests/pfxtev_test.cpp`, `src/quest/combat/legacy_switch.h`. A normal combat step, in the `q15t` and
 `combat` APKs only. Switch in `config.yaml` (docs/adr/0046 rule 4): `combat.pfxtev`, true unless the file says false.
 
-Origin: the id list and the switch's place in the renderer come from the reference build's event tier, `kTierIds` of its particle-renderer source file (`afk_pfx`), read as text; the
-kill switch there is `pfxtev.on`, a test-only switch that the working build ships on. Nothing is copied: the ids are six symbol hashes and the decision is
-written here. `docs/audits/2026-11-05-q15t-origin-citations.md` holds no line number for `kTierIds`, so none is cited (not established).
+Origin: the id list and the switch's place in the renderer come from the event tier of kotorvr's echoquest-combat repository (commit c5a67e8): `kTierIds` at
+native/afkxr/afk_pfx.cpp:1914 (the event row at :1915-1916) and the level gate at runtime/native/afkxr/afk_pfx.cpp:1943-1955, read as text; the kill switch there
+is `pfxtev.on`, a test-only switch that the working build ships on. Nothing is copied: the ids are six symbol hashes, each the CSymbol64 of an effect name, and the
+decision is written here.
 
 ## What it decides
 
-Six effect ids (`kIds`) are GPU events: an effect on an events graph that spawns child effects. `Allows(id)` and `AllowsIn(id, inCombatMap)` answer whether
+Six effect ids (`kIds`) are GPU events: an effect on an events graph that spawns child effects. `AllowsIn(id, inCombatMap)` answers whether
 the renderer may create one:
 
 - an id that is not one of the six: allowed (this switch does not gate it), and no line;
@@ -17,7 +18,7 @@ the renderer may create one:
 - one of the six with `combat.pfxtev: false`: refused, the same line;
 - one of the six outside a combat map (`AllowsIn(id, false)`): refused whatever the switch says, `reason` `level`.
 
-The switch is on by default. The install step stores it and writes one `combat_pfxtev_install` line. Past 64 decision lines per process one Warning,
+The switch is on by default. The install step stores it and writes one `combat_pfxtev_install` line. Nothing calls the decision without the level. Past 64 decision lines per process one Warning,
 `combat_pfxtev_log_cap`, is written and the rest are only counted (`CurrentStats()`). The plugin's kill file `pfxtev.off` is no longer read; one found in
 the plugin's data directory is a Warning, `combat_pfxtev_legacy_switch`. (The plugin never called its own `InitPfxTev`, so that file changed nothing
 before either.)

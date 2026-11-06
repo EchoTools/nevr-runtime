@@ -11,14 +11,19 @@
  * Arena (same APK). Arena and combat run on the same APK, so the APK does not say which one a player is in; the loaded level does. The gate
  * a consumer asks is `GateOpenIn(game)`: open only while the switch is on and the loaded levels hold a combat map and no Echo Arena level
  * (combat_level.h; the combat lobby and the lobbies arena players use are shut). A consumer takes the answer when the level changes and
- * keeps it; it does not call this per frame (`InCombatMap` reads the game's gamespace tables with process_vm_readv).
+ * keeps it; it does not call this per frame or per effect create (`InCombatMap` reads the game's gamespace tables with process_vm_readv).
  *
  * Frequency (ADR 0038). The install runs once per process. `GateOn` is one atomic load. `InCombatMap` is the level scan: a few
  * process_vm_readv reads, meant for a level change. No caller exists in the tree (the renderer is #1631), so today the gate adds nothing to any
  * frame, in arena or in combat; pfx_test measures the cost of both calls so the first caller starts from a number.
  *
- * Origin. The plugin's `pfx.cpp` (#1682), whose gate reconstructs the reference build's renderer switch (`On()` in its `afk_pfx.cpp`, which
- * the plugin's docs cite; docs/quest/combat/pfx.md). Nothing is copied.
+ * Origin. The plugin's `pfx.cpp` (#1682), whose gate reconstructs the renderer switch of kotorvr's echoquest-combat repository (commit
+ * c5a67e8): `On()` at native/afkxr/afk_pfx.cpp:6958, and the level gate at runtime/native/afkxr/afk_pfx.cpp:1943-1955 (docs/quest/combat/pfx.md).
+ * Nothing is copied.
+ *
+ * Callers (#1631). The renderer's caller runs once per effect create (about 3,450 creates while a lobby loads), so it MUST NOT call `InCombatMap`
+ * or `GateOpenIn` (the direct level scan, about 3 us a call) per create. It takes the cached map-only answer of combat_scope, which a level change
+ * refreshes; that replaces `InCombatMap` here once #2246 adds `combat_scope::InCombatMap()`.
  *
  * Lines (sentinel log):
  *   install  {"event":"combat_pfx_install","state":"on|off","reason":"default|off_config","switch":"combat.pfx","scope":"combat_map","msg":".."}

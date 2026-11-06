@@ -153,8 +153,8 @@ void TheGateIsOpenOnACombatMapOnlyAndShutInArena() {
     QCHECK(pfx::InCombatMap(GameAddress()));
     QCHECK(pfx::GateOpenIn(GameAddress()));
   }
-  for (const char* other : {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a", "mpl_lobby_b", "mpl_lobby_b_social",
-                            "mpl_lobby_b_arena", "mpl_lobby_b_combat"}) {
+  for (const char* other : {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a", "mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b2_lowspec",
+                            "mpl_lobby_b_social", "mpl_lobby_b_arena", "mpl_lobby_b_combat"}) {
     LoadLevels({other});
     QCHECK(!pfx::InCombatMap(GameAddress()));
     QCHECK(!pfx::GateOpenIn(GameAddress()));
