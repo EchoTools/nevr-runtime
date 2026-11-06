@@ -347,14 +347,11 @@ MountReport Registry::Mount(const StockView& stock) {
 
 void Registry::KeepOnlyMounted() {
   std::vector<std::unique_ptr<Set>> kept;
-  std::uint64_t chunks = 0;
   for (std::unique_ptr<Set>& set : sets_) {
     if (std::find(mountedOrder_.begin(), mountedOrder_.end(), set.get()) == mountedOrder_.end()) continue;
-    chunks += set->chunks.size();
     kept.push_back(std::move(set));  // the Set itself does not move: mountedOrder_'s pointers stay good
   }
   sets_ = std::move(kept);
-  heldChunks_ = chunks;
 }
 
 std::vector<std::int64_t> Registry::Abandon() {

@@ -346,7 +346,6 @@ bool ManagerHas(const void* manager, uint64_t type, uint64_t name) {
 
 std::vector<AssetManifestKey> AssetManifestKeys() {
     std::vector<AssetManifestKey> keys;
-    if (Global().Empty()) return keys;
     for (const Asset& asset : Global().Snapshot()) {
         keys.push_back({asset.type, asset.name, asset.label});
         keys.push_back({nevr_resource_key::OnDiskType(asset.type, 0), asset.name, asset.label});
@@ -371,16 +370,21 @@ RegisterStatus RegisterPluginAsset(uint64_t type, uint64_t name, const void* dat
     Global().SetLoadedProbe(&EngineHasLoaded);
     const std::string printable = nevr_resource_sets::Printable(label);  // the label as the log lines carry it
     const char* shown = printable.c_str();
-    // #2161: a key a plugin's resource set holds is the set's; the two would be served by different hooks.
-    if (nevr_resource_sets::HoldsKey(type, name)) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.ASSET] register refused label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s (a plugin's "
-            "resource set holds this key)",
-            shown, static_cast<unsigned long long>(type), static_cast<unsigned long long>(name),
-            static_cast<unsigned long long>(size), ToString(RegisterStatus::Duplicate));
-        return RegisterStatus::Duplicate;
+    RegisterStatus status = RegisterStatus::Ok;
+    {
+        // #2161: a resource a plugin's resource set holds is the set's; the two would be served by different hooks.
+        // The check and the Register hold the lock a set's registration holds over its check of the assets and its Add.
+        const std::unique_lock<std::mutex> claim = nevr_resource_sets::LockKeyClaims();
+        if (nevr_resource_sets::HoldsKey(type, name)) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.ASSET] register refused label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s (a "
+                "plugin's resource set holds this key)",
+                shown, static_cast<unsigned long long>(type), static_cast<unsigned long long>(name),
+                static_cast<unsigned long long>(size), ToString(RegisterStatus::Duplicate));
+            return RegisterStatus::Duplicate;
+        }
+        status = Global().Register(type, name, data, size, label);
     }
-    const RegisterStatus status = Global().Register(type, name, data, size, label);
     if (status != RegisterStatus::Ok) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.ASSET] register refused label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s", shown,

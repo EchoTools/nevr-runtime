@@ -2841,6 +2841,20 @@ uint64_t __cdecl RecordingRequest(void* manager, uint64_t, uint64_t, uint64_t, u
   return 0;
 }
 
+// A plugin asset registered on another thread while a set's registration is between its check of the assets and its
+// Add (SetBeforeAddForTest runs this there): the other thread is given 200 ms to take the set's level root.
+const unsigned char kRacingAssetBytes[16] = {};
+std::atomic<int> g_racingStatus{-1};
+std::thread* g_racing = nullptr;
+void StartRacingAsset() {
+  if (g_racing != nullptr) return;  // the first registration's only
+  g_racing = new std::thread([] {
+    g_racingStatus = static_cast<int>(
+        nevr::assets::RegisterPluginAsset(kLevelResourceType, kFixtureLevel, kRacingAssetBytes, 16, "racing"));
+  });
+  for (int i = 0; i < 40 && g_racingStatus.load() == -1; ++i) Sleep(5);
+}
+
 int32_t ResourcesFixtureStatus(uint32_t which) {
   const HMODULE plugin = GetModuleHandleA("test_plugin_resources.dll");
   if (plugin == nullptr) return -1000;
@@ -3361,13 +3375,49 @@ TEST_F(PluginResourceSetTest, APluginAssetAndAResourceSetNeverHoldOneKey) {
   nevr_resource_sets::ResetForTest();
   nevr_resource_sets::SetStockForTest(&ResourceStockHas, 69651);
 
-  // The set first: an asset with one of its keys is refused.
+  // The set first: an asset with one of its keys is refused. With no game base the engine's "already loaded" probe
+  // answers no, so a registration the set's check let through would reach the registry.
   Plan();
   LoadPlugins();
   ASSERT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  CHAR* const base = EchoVR::g_GameBaseAddress;
+  EchoVR::g_GameBaseAddress = nullptr;
   EXPECT_EQ(nevr::assets::RegisterPluginAsset(kFixtureMeshType, kFixtureMesh, assetBytes, sizeof(assetBytes), "late"),
             nevr::assets::RegisterStatus::Duplicate);
+  EchoVR::g_GameBaseAddress = base;
   EXPECT_TRUE(TestLogContains("a plugin's resource set holds this key"));
+  nevr::assets::DeregisterPluginAssets(assetBytes, assetBytes + sizeof(assetBytes));
+}
+
+TEST_F(PluginResourceSetTest, AnAssetRegisteredWhileASetIsAddedWaitsForTheAddAndIsRefused) {
+  g_racingStatus = -1;
+  g_racing = nullptr;
+  CHAR* const base = EchoVR::g_GameBaseAddress;
+  EchoVR::g_GameBaseAddress = nullptr;  // the racing asset's "already loaded" probe answers no
+  nevr_resource_sets::SetBeforeAddForTest(&StartRacingAsset);
+  Plan();
+  LoadPlugins();
+  ASSERT_NE(g_racing, nullptr) << "no registration reached its Add";
+  g_racing->join();
+  delete g_racing;
+  g_racing = nullptr;
+  EchoVR::g_GameBaseAddress = base;
+  EXPECT_EQ(ResourcesFixtureStatus(0), NEVR_RESOURCES_OK);
+  EXPECT_EQ(g_racingStatus.load(), static_cast<int>(nevr::assets::RegisterStatus::Duplicate))
+      << "the asset took the set's level root while the set was being added";
+  nevr::assets::DeregisterPluginAssets(kRacingAssetBytes, kRacingAssetBytes + 16);
+}
+
+TEST_F(PluginResourceSetTest, AReadServedRightAfterThePublishIsCountedInAWindowThatStartsAtTheMount) {
+  nevr_resource_sets::SetAfterPublishForTest([] { nevr_resource_sets::ManagerFor(nullptr, kFixtureMeshType, kFixtureMesh); });
+  Plan();
+  LoadPlugins();
+  Mount();
+  EXPECT_FALSE(TestLogContains("resource set reads")) << TestLogLinesWith("resource set reads");
+  g_resourceNow += 10000;
+  nevr_resource_sets::OnFrame(true);
+  EXPECT_TRUE(TestLogContains("resource set reads plugin=levels label=\"fixture levels\" served=1 window_ms=10000"))
+      << TestLogLinesWith("resource set reads");
 }
 
 // A plugin asset is keyed by its logical type (the submit hook matches CResource + 0x28) and a set's record by the

@@ -64,6 +64,9 @@ constexpr std::uint64_t kLateMs = 60000;
 constexpr std::size_t kMaxLabel = 64;
 
 std::mutex g_mutex;  // the registry, the init state and the mount
+// A set's check of the plugin assets and its Add; a plugin asset's check of the sets and its Register (LockKeyClaims).
+// Taken before g_mutex and before the asset registry's own lock, never after either.
+std::mutex g_keyMutex;
 Registry g_registry;
 std::atomic<Published*> g_published{nullptr};
 std::atomic<bool> g_mountDeferred{false};
@@ -97,6 +100,8 @@ std::uint64_t g_testStockRecords = 0;
 std::uint64_t (*g_testNow)() = nullptr;
 bool g_testThrow = false;
 MountThrowAt g_testMountThrow = MountThrowAt::kNowhere;
+void (*g_testBeforeAdd)() = nullptr;
+void (*g_testAfterPublish)() = nullptr;
 bool g_testNoResolverHook = false;
 bool g_testThrowAfterOpen = false;
 std::wstring g_testFilePath;  // non-empty: the file registration opens instead of the plugin's own
@@ -222,7 +227,7 @@ bool ReadFileAt(HANDLE file, std::uint64_t offset, std::size_t length, std::vect
       *error = GetLastError();
       return false;
     }
-    if (got == 0) {
+    if (got == 0) {  // a positioned read of a file fails at its end instead; without this a read of 0 would loop
       *error = ERROR_HANDLE_EOF;
       return false;
     }
@@ -313,18 +318,6 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
                    std::string(nevr_resource_set::ProblemName(parsed.problem)) + " at index " +
                        std::to_string(parsed.index));
   }
-  // A resource a plugin asset (NEVR_RegisterAsset) is: the asset hook would serve one and the resolver the other.
-  const std::vector<nevr::assets::AssetManifestKey> assetKeys = nevr::assets::AssetManifestKeys();
-  for (std::uint32_t i = 0; i < view.record_count() && !assetKeys.empty(); ++i) {
-    const nevr_resource_set::Record r = view.RecordAt(i);
-    for (const nevr::assets::AssetManifestKey& key : assetKeys) {
-      if (key.type == r.type && key.name == r.name) {
-        return Refused(pluginId, label, NEVR_RESOURCES_COLLIDES, RefusalName(Refusal::kCollides),
-                       KeyText(r.type, r.name) + " owner=asset:" + Printable(key.label.c_str()));
-      }
-    }
-  }
-
   std::wstring path(32768, L'\0');
   const DWORD pathLength = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
   if (pathLength == 0 || pathLength >= path.size()) {
@@ -361,7 +354,24 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
 
   Outcome outcome;
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    // The check of the plugin assets and the Add hold one lock, which a plugin asset's registration holds over its
+    // check of the sets and its Register: a set and an asset never both take one resource (the asset hook would serve
+    // one and the resolver the other).
+    const std::lock_guard<std::mutex> claim(g_keyMutex);
+    const std::vector<nevr::assets::AssetManifestKey> assetKeys = nevr::assets::AssetManifestKeys();
+    for (std::uint32_t i = 0; i < view.record_count() && !assetKeys.empty(); ++i) {
+      const nevr_resource_set::Record r = view.RecordAt(i);
+      for (const nevr::assets::AssetManifestKey& key : assetKeys) {
+        if (key.type == r.type && key.name == r.name) {
+          return Refused(pluginId, label, NEVR_RESOURCES_COLLIDES, RefusalName(Refusal::kCollides),
+                         KeyText(r.type, r.name) + " owner=asset:" + Printable(key.label.c_str()));
+        }
+      }
+    }
+#ifdef NEVR_TEST_HOOKS
+    if (g_testBeforeAdd != nullptr) g_testBeforeAdd();
+#endif
+    const std::lock_guard<std::mutex> lock(g_mutex);
     outcome = g_registry.Add(pluginId, label, bytes, desc->size,
                              static_cast<std::int64_t>(reinterpret_cast<intptr_t>(file.get())), range.file_offset);
     if (outcome.ok()) file.release();  // the registry holds it now
@@ -395,6 +405,9 @@ void MountLocked(std::uint64_t stockRecords, MountReport* report, std::vector<co
     // the publish and this frame's summary is then counted in a window that has a start.
     g_lastSummaryMs.store(NowMs());
     g_published.store(new Published(shadow, mounted->size()), std::memory_order_release);
+#ifdef NEVR_TEST_HOOKS
+    if (g_testAfterPublish != nullptr) g_testAfterPublish();
+#endif
   }
   g_mountDeferred.store(false);
 }
@@ -686,6 +699,8 @@ const void* ManagerFor(const void* manager, std::uint64_t type, std::uint64_t na
   return published->shadow->manager();
 }
 
+std::unique_lock<std::mutex> LockKeyClaims() { return std::unique_lock<std::mutex>(g_keyMutex); }
+
 bool HoldsKey(std::uint64_t type, std::uint64_t name) {
   std::lock_guard<std::mutex> lock(g_mutex);
   return g_registry.Holds(type, name) || g_registry.Holds(nevr_resource_key::OnDiskType(type, 0), name) ||
@@ -741,6 +756,8 @@ void ResetForTest() {
   g_testNow = nullptr;
   g_testThrow = false;
   g_testMountThrow = MountThrowAt::kNowhere;
+  g_testBeforeAdd = nullptr;
+  g_testAfterPublish = nullptr;
   g_testNoResolverHook = false;
   g_testThrowAfterOpen = false;
   g_testFilePath.clear();
@@ -764,6 +781,10 @@ void SetMountThrowForTest(MountThrowAt where) { g_testMountThrow = where; }
 void SetNoResolverHookForTest(bool on) { g_testNoResolverHook = on; }
 
 void SetThrowAfterOpenForTest(bool on) { g_testThrowAfterOpen = on; }
+
+void SetBeforeAddForTest(void (*hook)()) { g_testBeforeAdd = hook; }
+
+void SetAfterPublishForTest(void (*hook)()) { g_testAfterPublish = hook; }
 
 void SetFilePathForTest(const wchar_t* path) { g_testFilePath = path != nullptr ? path : L""; }
 #endif

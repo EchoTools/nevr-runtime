@@ -5,6 +5,7 @@
 // hook (plugin_assets.cpp, Hook_Request) asks for each request. The checks and the shadow are resource_set_registry.h.
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,10 @@ void OnFrame(bool onLoopThread);
 // allocation, no log line.
 const void* ManagerFor(const void* manager, std::uint64_t type, std::uint64_t name);
 
+// The lock a set's registration holds over its check of the plugin assets and its Add. A plugin asset's registration
+// holds it over its check of the sets (HoldsKey) and its Register, so a set and an asset never both take one resource.
+std::unique_lock<std::mutex> LockKeyClaims();
+
 // True when a set registered this run holds the resource a plugin asset keyed (type, name) would be: a set's record
 // carries that key or an on-disk key of the asset's logical type (nevr_resource_key::OnDiskType, buffer 0 or 1). A
 // plugin asset may not take it.
@@ -70,6 +75,10 @@ void SetMountThrowForTest(MountThrowAt where);
 void SetNoResolverHookForTest(bool on);
 // Makes the next registrations throw std::bad_alloc once the plugin's file is open.
 void SetThrowAfterOpenForTest(bool on);
+// Runs `hook` in each registration between its check of the plugin assets and its Add, under the key lock.
+void SetBeforeAddForTest(void (*hook)());
+// Runs `hook` at the mount right after the sets are published, before the frame's read summary.
+void SetAfterPublishForTest(void (*hook)());
 // The file registration opens and compares instead of the plugin's own (null: the plugin's own).
 void SetFilePathForTest(const wchar_t* path);
 #endif

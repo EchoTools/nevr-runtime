@@ -160,7 +160,9 @@ class Registry {
   std::unique_ptr<nevr_shadow::Shadow> shadow_;
   std::vector<const Set*> mountedOrder_;
   std::uint64_t indexSpace_;
-  std::uint64_t heldChunks_ = 0;  // the chunks of the held sets, against the shadow's index space
+  // The chunks of the held sets, against the shadow's index space; read only before the mount (an Add after it is
+  // kTooLate).
+  std::uint64_t heldChunks_ = 0;
   bool mounted_ = false;
 };
 
