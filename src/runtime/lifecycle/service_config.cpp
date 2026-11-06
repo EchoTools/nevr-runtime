@@ -460,6 +460,15 @@ int NevrCfgFrameStatsMode(int* recognised) {
   return static_cast<int>(mode);
 }
 
+const char* NevrCfgCombatValue(const char* path) {
+  return AccessorBoundary("NevrCfgCombatValue", [&]() -> const char* {
+    if (path == nullptr) return nullptr;
+    const std::optional<std::string> value = NevrCfg().GetString(std::string("combat.") + path);
+    if (!value) return nullptr;
+    return InternCStr(*value, "NevrCfgCombatValue");
+  });
+}
+
 const char* NevrCfgCaptureDevice() {
   return AccessorBoundary("NevrCfgCaptureDevice", [&]() -> const char* {
     const std::optional<std::string> device = NevrCfg().GetString("audio.capture_device");
