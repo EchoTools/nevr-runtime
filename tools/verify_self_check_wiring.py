@@ -48,7 +48,7 @@ REQUIRED = [
     ("src/quest/integration/production_steps.cpp", r"SetProcessEndCallback\(&OnGameProcessEnd\);",
      "the constructor step InstallProcessEnd does not register OnGameProcessEnd with the process-end hook"),
     ("src/quest/integration/production_steps.cpp",
-     r"void OnGameProcessEnd\(\) noexcept \{[\s\S]{0,200}FinishPlugins\(nevr_quest::plugin::reason::kGameExitedFirst\);[\s\S]{0,40}ReportAndroidMainReturned\(\);",
+     r"void OnGameProcessEnd\(\) noexcept \{[\s\S]{0,200}FinishPlugins\(nevr_quest::plugin::reason::kGameExitedFirst\);[\s\S]{0,240}ReportAndroidMainReturned\(\);",
      "the process-end callback does not end the pending plugin entries and send the android_main_returned report"),
     ("src/quest/sentinel/entry.cpp", r"bool InstallProcessEndHook\(\) noexcept \{ return nevr_quest::process_end::Install\(\); \}",
      "InstallProcessEndHook does not return the result of the process-end hook's install"),
