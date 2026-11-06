@@ -270,6 +270,10 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 	for _, msg := range recordEntryErrors(art.graph.names, thunkEntries, art.recordEntries, reviewedAsmEntries) {
 		t.Error(msg)
 	}
+	// A reviewed assembly entry's own text: its acquire loads, the branch to its record's continuation, its unwind rows at each bl.
+	for _, msg := range asmEntryErrors(t, soPath(t), art, thunkEntries) {
+		t.Error(msg)
+	}
 
 	v := walkHookFrames(art.graph)
 	for _, msg := range v.violations {

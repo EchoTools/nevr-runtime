@@ -63,9 +63,10 @@
  *      sentinel-only frames that are not live across a call into game code (a helper that does
  *      its throwing work, catches, and returns before the handler touches the game).
  *   4. A hook is installed only through InstallThunk<Thunk> (hook_install.h). The raw
- *      GotHook::Install taking an arbitrary function pointer is private. Three callers reach it: the
- *      test access class (tests/), which TestRawInstallOnlyInTests pins, the plugin hook service's
- *      install (got_hook.h; #2001, ADR 0034) and the assembly-entry installer of rule 7. A plugin's handler is a plain
+ *      GotHook::Install taking an arbitrary function pointer is private. Two callers reach it: the
+ *      test access class (tests/), which TestRawInstallOnlyInTests pins, and the plugin hook service's
+ *      install (got_hook.h; #2001, ADR 0034). The assembly-entry installer of rule 7 reaches the private
+ *      GotHook::InstallEntry, which nothing else calls. A plugin's handler is a plain
  *      function built outside this sensor's build, so the service installs it as one, and
  *      plugin_interface.h (register_slot_hook) states that rule for plugins.
  *   5. Helpers. A function a handler calls directly and that can be on the stack across the
@@ -81,25 +82,36 @@
  *   7. An assembly entry is the one hook that is not a CallbackThunk. A few game functions are hooked by code that needs
  *      what a thunk's handler cannot see: the caller's return address as it is in x30, its sp, or a callee-saved register
  *      (the entry acts only when x30 is a given call site of the game, and passes every other call on untouched). Such an
- *      entry is a naked arm64 function declared by a record, NEVR_ASM_ENTRY_RECORD(name, entry, continuation), which names
- *      the entry and the C++ function it calls. It is installed through InstallAsmEntry (hook_install.h) and nothing else;
- *      the installer, AsmEntryInstaller, is the manager's fourth friend, and TestRawInstallOnlyInTests lets only
- *      src/quest/combat/ name it. What an entry owes, which the sensor and the manager enforce where they can and a
- *      reviewer enforces where they cannot:
+ *      entry is an arm64 function written in a top-level asm() block, never an __attribute__((naked)) function, and
+ *      declared by a record, NEVR_ASM_ENTRY_RECORD(name, entry, continuation), which names the entry and the C++ function
+ *      it calls. (NDK clang gives a naked function an FDE whose one row is the CIE's CFA=sp, which stays in force after
+ *      the body moves sp and across its `bl`: an unwinder walking out of the continuation then reads the wrong CFA and
+ *      return address. A top-level block has exactly the CFI it writes.) It is installed through InstallAsmEntry
+ *      (hook_install.h) and nothing else; the installer, AsmEntryInstaller, is the manager's fourth friend, and
+ *      TestRawInstallOnlyInTests lets only src/quest/combat/ name it. What an entry owes, which the sensor and the
+ *      manager enforce where they can and a reviewer enforces where they cannot:
  *        - its next word is a pointer-sized object that the install is given (the nextOut argument) and that holds the
- *          function to call in place of the game's. The entry, or its continuation, loads it with acquire semantics (`ldar`
- *          in assembly) at every call and never caches it. The manager publishes the word with a release store before the
- *          slot changes, and again whenever the hook it calls leaves the chain (Remove or Forget);
- *        - a call the entry does not act on goes on untouched: the entry jumps (`br`) to the word with x0..x7, x30 and sp as
- *          the caller left them, using x16 only, so the hook it calls sees the game as the caller. A call it acts on gets a
- *          frame, a `bl` to the continuation and a return. An entry that acts on every call (it passes the caller's sp and
- *          x30 to its continuation and continues there with x30 unchanged) has no pass-through path;
- *        - it carries CFI (`.cfi_startproc`, `.cfi_def_cfa_offset`, `.cfi_offset`, `.cfi_endproc`), so it has an FDE under
- *          the personality-free "zR" CIE and a game exception can unwind through it (the sensor fails an entry with no FDE);
+ *          function to call in place of the game's. The entry (or, for an entry with no pass-through path, its
+ *          continuation) loads it at every call with an acquire load (`ldar`) and never caches it, and loads every other
+ *          word the install publishes (a call-site word) the same way. The manager publishes the next word with a release
+ *          store before the slot changes, and again whenever the hook it calls leaves the chain (Remove or Forget). The
+ *          sensor fails a plain load the entry makes from anything but its own stack, and a `br` through a register that
+ *          an acquire load did not set;
+ *        - a call the entry does not act on goes on untouched: the entry jumps (`br`) to the word with every argument
+ *          register (x0..x7, x8, v0..v7), x30 and sp as the caller left them, using x16 only, so the hook it calls sees the
+ *          game as the caller. A call it acts on gets a frame, a `bl` to the continuation and a return. An entry that acts
+ *          on every call (it passes the caller's sp and x30 to its continuation and branches there, `b`, with x30
+ *          unchanged) has no pass-through path. The only function the entry branches to is its record's continuation, by
+ *          a direct `bl` or `b`, which the sensor checks;
+ *        - it carries CFI (`.cfi_startproc`, `.cfi_def_cfa_offset`, `.cfi_offset`, `.cfi_endproc`) that describes its
+ *          frame, so it has an FDE under the personality-free "zR" CIE and a game exception can unwind through it. The
+ *          sensor fails an entry with no FDE, and at each `bl` it follows sp and the slot x30 is saved in through the
+ *          entry's text and fails a row whose CFA or return-address rule does not match them;
  *        - the continuation and what it calls are rule 1 and rule 5 code. The entry's record is the sensor's root.
  *      An entry acts on the game's call site, so it must be the newest handler on its slot: a hook above it would call it
  *      from the hook's own frame, and it would pass every call through. The manager refuses a later handler on its slot
- *      (kSlotHeldByEntry, a Warning that names the chain with the entry in it); the entry itself may install above handlers.
+ *      (kSlotHeldByEntry, a Warning that names the refused hook's owner and the chain with the entry in it); the entry itself
+ *      may install above handlers.
  *
  * Limits, stated so nobody mistakes the checks for a proof. The sensor exists to catch an honest
  * mistake in a package that uses this API; it is not a barrier against someone working around it
@@ -139,8 +151,8 @@
       ::sentinel::HookRecordAccess::Make<Thunk>(Thunk::EntryFn(), handlerFn)
 
 // Declares a reviewed assembly entry (rule 7): records {entry, continuation} in the same section, so the frame sensor starts
-// from both. `entryFn` is the naked entry's name, `continuationFn` the C++ function it calls. The record is what
-// InstallAsmEntry takes.
+// from both. `entryFn` is the entry's name (a top-level asm() function), `continuationFn` the C++ function it calls. The
+// record is what InstallAsmEntry takes.
 #define NEVR_ASM_ENTRY_RECORD(name, entryFn, continuationFn)                                              \
   NEVR_HOOK_RECORD_ATTRS constexpr auto name = ::sentinel::HookRecordAccess::MakeAsmEntry(&(entryFn), &(continuationFn))
 

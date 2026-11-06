@@ -61,8 +61,9 @@ struct AsmEntryInstaller {
 
 // Installs a reviewed assembly entry into `target`'s slot. `nextOut` is the word the entry (or its continuation) loads with
 // acquire semantics at every call: it holds the function the entry calls in place of the game's (the game's, or the newest hook
-// already on the slot) before the slot changes, and the manager republishes it when that hook leaves. The slot's newest hook is the entry from then until its Remove: a later install
-// on the slot is refused (kSlotHeldByEntry).
+// already on the slot) before the slot changes, and the manager republishes it when that hook leaves. The slot's newest hook
+// is the entry from then until it leaves the chain (its Remove or Forget): a later install on the slot is refused
+// (kSlotHeldByEntry).
 template <typename Entry, typename Continuation>
 GotStatus InstallAsmEntry(GotHook& hook, const GotTarget& target, const AsmEntryRecord<Entry, Continuation>& record,
                           void** nextOut, ImageLookup lookup = FindLoadedImage) {

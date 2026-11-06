@@ -183,12 +183,13 @@ foreach(variant ok bad)
 endforeach()
 
 # The same controls for a reviewed assembly entry (sentinel/callback_thunk.h rule 7): the entry's record names the entry and the
-# C++ continuation the sensor walks. In ok the entry carries CFI and the helper is annotated; in bad the helper is live across the
-# call; in nocfi the entry has no FDE.
-foreach(variant ok bad nocfi)
-  set(_helper ${variant})
-  if(variant STREQUAL "nocfi")
-    set(_helper ok)
+# C++ continuation the sensor walks. In ok the entry's CFI describes its frame and the helper is annotated; in bad the helper is
+# live across the call; in nocfi the entry has no FDE; in naked it is an __attribute__((naked)) function, whose FDE does not
+# describe its frame; in ldr it reads its words with a plain load.
+foreach(variant ok bad nocfi naked ldr)
+  set(_helper ok)
+  if(variant STREQUAL "bad")
+    set(_helper bad)
   endif()
   add_executable(frames_asm_probe_${variant}
     "${CMAKE_CURRENT_SOURCE_DIR}/../tests/frames_probe_asm.cpp"
@@ -197,6 +198,10 @@ foreach(variant ok bad nocfi)
                               PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
   if(variant STREQUAL "nocfi")
     target_compile_definitions(frames_asm_probe_nocfi PRIVATE PROBE_NO_CFI=1)
+  elseif(variant STREQUAL "naked")
+    target_compile_definitions(frames_asm_probe_naked PRIVATE PROBE_NAKED=1)
+  elseif(variant STREQUAL "ldr")
+    target_compile_definitions(frames_asm_probe_ldr PRIVATE PROBE_PLAIN_LDR=1)
   endif()
   target_include_directories(frames_asm_probe_${variant} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel" "${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_SOURCE_DIR}/../..")

@@ -58,12 +58,14 @@
  * registry.
  *
  * Assembly entries. A few hooks cannot be a CallbackThunk because they read what the thunk's handler cannot see: the caller's
- * x30, sp or a callee-saved register. Such a hook is a reviewed naked entry (callback_thunk.h rule 7) installed through
+ * x30, sp or a callee-saved register. Such a hook is a reviewed assembly entry (callback_thunk.h rule 7) installed through
  * InstallAsmEntry (hook_install.h) and the friend AsmEntryInstaller. It joins the chain like any hook (it may sit above the
  * handlers already on its slot, and it calls the newest of them), reads the word it calls with acquire semantics at every
  * call, and the manager publishes that word before the slot changes and again when the hook it calls leaves. It acts on the game's own call
  * site, so it must stay the newest hook on its slot: a later install on that slot, a handler's or another entry's, is refused
- * with kSlotHeldByEntry, a Warning that names the chain with the entry marked (asm_entry). The rule ends with the entry's Remove.
+ * with kSlotHeldByEntry, a Warning that names the refused hook's owner and the chain with the entry marked (asm_entry). The
+ * rule ends when the entry leaves the chain: its Remove (which forgets the link when it finds the module gone or moved)
+ * or its Forget.
  *
  * Install and Remove log exactly one structured line (hook_log.h) and return a
  * status; a failed Install leaves the slot and its page protection as they were
