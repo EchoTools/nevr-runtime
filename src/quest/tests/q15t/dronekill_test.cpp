@@ -5,16 +5,19 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "dronekill.h"
 #include "dronekill_core.h"
+#include "key_hog.h"
 #include "nevr/plugin_interface.h"
 #include "plugin_log.h"
 
@@ -467,6 +470,7 @@ struct EnterCall {
 static std::vector<EnterCall> g_enters;
 static bool g_enter_calls_actor = true;
 static uint64_t g_other_actor_first = 0;  // call Actor for this other actor before Enter's own
+static bool g_enter_actor_on_other_thread = false;  // while the real Enter runs, another thread calls Actor for the drone (other out-values)
 
 struct DisCall {
   void* sys;
@@ -517,6 +521,18 @@ static void FakeEnter(void* node, const ND* d) {
   uint64_t actor = 0;
   unsigned fl = 0;
   auto aw = reinterpret_cast<ActorFn>(ActorWrapPtr());
+  if (g_enter_actor_on_other_thread) {
+    g_enter_actor_on_other_thread = false;
+    const uint64_t keep = g_actor_val;
+    g_actor_val = 0xB0B;  // the other thread's Actor reports another actor than this Enter's
+    std::thread([aw] {
+      void* sp2 = nullptr;
+      uint64_t actor2 = 0;
+      unsigned fl2 = 0;
+      aw(nullptr, nullptr, dk::kDroneActor, &sp2, &actor2, &fl2);
+    }).join();
+    g_actor_val = keep;
+  }
   if (g_other_actor_first != 0) aw(nullptr, nullptr, g_other_actor_first, &sp, &actor, &fl);
   if (g_actor_bad_out) {
     aw(nullptr, nullptr, d->actor, reinterpret_cast<void**>(0x10), reinterpret_cast<void*>(0x10), &fl);
@@ -571,6 +587,7 @@ struct FireCall {
   int after_remote;
 };
 static std::vector<FireCall> g_fires;
+static bool g_other_thread_saw_no_shot = false;  // set by the thread FakeFire starts for cs 0x8001
 static void FakeFire(void* cs, uint32_t h, DkC3 v, uint32_t remote) {
   g_ev.push_back("fire");
   FireCall c{cs, h, v, remote, false, {0, 0, 0}, -1, {0, 0, 0}, -1};
@@ -583,6 +600,16 @@ static void FakeFire(void* cs, uint32_t h, DkC3 v, uint32_t remote) {
   }
   const size_t mine = g_fires.size();
   g_fires.push_back(c);
+  if (cs == reinterpret_cast<void*>(0x8001)) {  // another thread, outside any shot, reads the accessor and then makes a shot of its own
+    std::thread([] {
+      g_other_thread_saw_no_shot = DroneKillShotVelocity(nullptr) == nullptr;
+      reinterpret_cast<FireFn>(g_w[g_fire_slot / 8])(reinterpret_cast<void*>(0x8002), 3, DkC3{4, 5, 6}, 0);
+    }).join();
+    int rem2 = -1;
+    const float* a2 = DroneKillShotVelocity(&rem2);
+    if (a2 != nullptr) memcpy(g_fires[mine].after, a2, sizeof g_fires[mine].after);
+    g_fires[mine].after_remote = rem2;
+  }
   if (cs == reinterpret_cast<void*>(0x7001)) {  // a shot inside a shot (nested test)
     FireFn inner = reinterpret_cast<FireFn>(g_w[g_fire_slot / 8]);
     inner(reinterpret_cast<void*>(0x7002), 9, DkC3{1, 2, 3}, 1);
@@ -780,6 +807,7 @@ static DroneKillInstall Reset(DroneKillWords words, bool install = true) {
   g_local_handle = 0;
   g_enter_calls_actor = true;
   g_other_actor_first = 0;
+  g_enter_actor_on_other_thread = false;
   g_enter_deref = true;
   g_space_now = g_spacemem;
   g_ms = 1000;
@@ -841,6 +869,28 @@ static DroneKillWords Only(bool kill, bool lockon, bool gun, bool chase, bool sh
 }
 
 // ================================================================ tests
+// No pthread key left for the wrappers' per-thread state: the install refuses before it swaps anything. Runs before any successful
+// install, because a key made by one stays for the process.
+static void TestNoThreadKey() {
+  // a module refused for a slot that does not hold the pinned function has made no key: the install below, with no key left, must still
+  // be refused for the key
+  Reset(DroneKillWords{}, false);
+  mprotect(g_w, 4096, PROT_READ | PROT_WRITE);
+  g_w[0x38 / 8] = 0x4242420;
+  mprotect(g_w, 4096, PROT_READ);
+  CHECK(!InstallDroneKill(g_base, DroneKillWords{}, Fns(), Slots()).ok && HasLine("a slot does not hold the pinned function"),
+        "the slot mismatch was not refused");
+  KeyHog hog;
+  const DroneKillInstall r = Reset(Only(true, true, true, true, true));
+  CHECK(!r.ok, "installed with no pthread key");
+  CHECK(g_w[0x20 / 8] == reinterpret_cast<uintptr_t>(&FakeActor) && g_w[0x28 / 8] == reinterpret_cast<uintptr_t>(&FakeEnter) &&
+            g_w[g_fire_slot / 8] == reinterpret_cast<uintptr_t>(&FakeFire) && g_w[0x38 / 8] == reinterpret_cast<uintptr_t>(&FakeAttack),
+        "no key: a word was swapped");
+  const std::string code = "error=" + std::to_string(EAGAIN);  // what pthread_key_create answers when the process has no key left
+  CHECK(HasLine("dronekill: OFF, nothing changed", 3) && HasLine("no pthread key") && HasLine(code.c_str()), "no key: the refusal is not loud, or carries no error code");
+  CHECK(!DroneKillShotActive(), "no key: shot active");
+}
+
 static void TestInstallPinned() {
   ResetDroneKillForTest();
   g_lines.clear();
@@ -1118,6 +1168,54 @@ static void TestDroneEnterKill() {
   CHECK(!HasLine("dronekill: component") && !HasLine("dronekill: release"), "R3: the Enter was logged as an ordinary one too");
   DroneKillTick(0);
   CHECK(g_dis.size() == 1 && g_dis[0].sys == g_snd, "R3: not disabled again");
+}
+
+// The wrappers' state is per thread: what one thread is in the middle of is not seen by another thread's calls.
+static void TestStateIsPerThread() {
+  // the capture: another thread's Actor call for the drone, while this thread is inside a drone Enter, is not this Enter's
+  DroneKillInstall r = Reset(DroneKillWords{});
+  CHECK(r.ok, "install");
+  ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
+  g_enter_actor_on_other_thread = true;
+  CallEnter(&d);
+  CHECK(g_drone_actor_calls == 2, "Actor calls for the drone: %d, want the other thread's and this Enter's", g_drone_actor_calls);
+  CHECK(g_comp_calls > 0 && g_bad_actor == 0, "the Enter took the other thread's actor (%d Component calls on another actor)", g_bad_actor);
+  CHECK(HasLine("dronekill: release (damageable on)") && HasLine("group=1"), "release line");
+
+  // the shot: another thread outside any shot sees none, a shot of its own sees its own values, and this thread's are back after it
+  r = Reset(Only(false, false, false, false, true));
+  CHECK(r.ok, "install");
+  g_other_thread_saw_no_shot = false;
+  CallFire(reinterpret_cast<void*>(0x8001), 2, DkC3{1, 2, 3}, 1);
+  CHECK(g_other_thread_saw_no_shot, "another thread saw this thread's shot");
+  CHECK(g_fires.size() == 2 && g_fires[1].cs == reinterpret_cast<void*>(0x8002), "the other thread's shot did not reach the real call");
+  CHECK(g_fires.size() == 2 && g_fires[1].acc_non_null && g_fires[1].acc[0] == 4 && g_fires[1].acc[1] == 5 && g_fires[1].acc[2] == 6 && g_fires[1].acc_remote == 0,
+        "the other thread's shot did not see its own values");
+  CHECK(g_fires.size() == 2 && g_fires[0].after[0] == 1 && g_fires[0].after[1] == 2 && g_fires[0].after[2] == 3 && g_fires[0].after_remote == 1,
+        "this thread's shot was changed by the other thread's");
+  CHECK(DroneKillShotVelocity(nullptr) == nullptr, "accessor non-null after the shots");
+  // the test seam is per thread as well: it answers on the thread that set it
+  const float v[3] = {7, 8, 9};
+  SetDroneKillShotForTest(v, 1);
+  int rem = -1;
+  const float* a = DroneKillShotVelocity(&rem);
+  CHECK(a != nullptr && a[0] == 7 && a[2] == 9 && rem == 1, "the seam does not answer on its own thread");
+  bool other_none = false;
+  std::thread([&] { other_none = DroneKillShotVelocity(nullptr) == nullptr; }).join();
+  CHECK(other_none, "the seam answered on another thread");
+  SetDroneKillShotForTest(nullptr, 0);
+  CHECK(DroneKillShotVelocity(nullptr) == nullptr, "the seam did not clear");
+
+  // the tick guard: a tick on another thread, while this thread is inside its tick, runs (the guard stops only this thread's re-entry)
+  r = Reset(DroneKillWords{});
+  CHECK(r.ok, "install");
+  ND s = Drone(kSound, kSound, 1);
+  CallEnter(&d);
+  CallEnter(&s);
+  DroneKillOnKilled(kDmgHandle & 0xffff);
+  g_dis_hook = [] { std::thread([] { DroneKillTick(0); }).join(); };
+  DroneKillTick(0);
+  CHECK(GetDroneKillStats().due_runs == 2, "the tick on another thread did not run (%u runs)", GetDroneKillStats().due_runs);
 }
 
 static void TestKillRules() {
@@ -1595,6 +1693,10 @@ static void TestLockOn() {
 static void TestFire() {
   Reset(Only(false, false, false, false, true));
   CHECK(DroneKillShotVelocity(nullptr) == nullptr, "accessor non-null outside a shot");
+  {
+    int untouched = 77;  // outside a shot the accessor answers null and leaves *remote alone
+    CHECK(DroneKillShotVelocity(&untouched) == nullptr && untouched == 77, "accessor outside a shot wrote *remote (%d)", untouched);
+  }
   CallFire(reinterpret_cast<void*>(0x6001), 0x00020003, DkC3{1, 2, 3}, 1);
   CHECK(g_fires.size() == 1, "fires");
   const FireCall& c = g_fires[0];
@@ -1891,11 +1993,13 @@ int main() {
   SetLogContext(&ctx);
   TestCore();
   TestPinnedConstants();
+  TestNoThreadKey();
   TestInstallPinned();
   TestInstallVariants();
   TestWrappersWithoutReal();
   TestEnterOther();
   TestDroneEnterKill();
+  TestStateIsPerThread();
   TestKillRules();
   TestEnterLookups();
   TestGun();

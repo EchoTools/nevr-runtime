@@ -159,7 +159,8 @@ not decompiled here); the writes are limited to these fields, and a wrong offset
 The tree answers only the casts it was added for (bullets, AI patrol); every other cast misses as on the stock Quest
 (the source build's bvh:38-57: other callers take any hit as "within the segment" with `tmax = inf`, which grabs, hand reaches, cutters and
 auto-target misread). Mechanism (`GateWrapper`): the wrapper reads its return address; if `ret - base` is one of the three allowed
-values it sets a `thread_local` mark, calls the real `StaticRaycast`, and restores the mark that was there before. `IntersectWrapper`
+values it sets a per-thread mark (a `ThreadWord`, a pthread key made at install: the API 26 toolchain emulates `thread_local`, which allocates on a thread's
+first use, and a hooked call must not), calls the real `StaticRaycast`, and restores the mark that was there before. `IntersectWrapper`
 answers from the tree only when the mark is set (gate on); any other Intersect is passed to the stock function (a miss).
 Properties the tests check: a cast from an unlisted site never uses the tree; the mark does not leak past the cast; a nested unlisted
 cast inside an allowed one is gated and the outer one still answers afterwards; a different thread is not marked; a direct

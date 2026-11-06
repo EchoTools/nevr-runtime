@@ -194,3 +194,5 @@ runm sensorwd wp_slot_found_zero     src/word_pins.h 's/static_cast<unsigned lon
 runm sensorwd wp_slot_expected_wrong src/word_pins.h 's/static_cast<unsigned long long>(base + real_vaddr));/static_cast<unsigned long long>(real_vaddr));/'
 runm sensorwd wp_slot_quiet          src/word_pins.h 's/Log(NEVR_LOG_ERROR, message, f, 7);/(void)message; (void)f;/'
 runm sensorwd wp_slot_info           src/word_pins.h 's/Log(NEVR_LOG_ERROR, message, f, 7);/Log(NEVR_LOG_INFO, message, f, 7);/'
+# the thread id is read from the thread each time: a cache shared by every thread reports the first thread's id for all of them
+runm sensorwd tid_cached_shared      src/sensorwd.cpp 's/  const long tid = static_cast<long>(gettid());.*$/  static long shared = 0;\n  if (shared == 0) shared = static_cast<long>(gettid());\n  const long tid = shared;/'

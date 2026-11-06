@@ -26,6 +26,8 @@ trap 'rm -rf -- "${scratch:?}"' EXIT
 only="${Q15T_MUTANTS_ONLY:-}"
 wanted() { [ -z "${Q15T_MUTANTS_NAME:-}" ] || [[ "$1" =~ $Q15T_MUTANTS_NAME ]]; }
 survived=0
+# What a per-thread word becomes in a "shared across threads" mutant: one value for every thread, same interface as q15t::ThreadWord.
+SHARED_WORD='struct SharedWord { bool Create() { return true; } std::uintptr_t Get() const { return v; } void Set(std::uintptr_t x) { v = x; } std::uintptr_t v = 0; }'
 # judge <dir> <module>: configure, build and run the host tests of the scratch copy <dir> ({src,q15t}); with a module, only that module's.
 # Succeeds when every test passes, so a SURVIVED mutant is a success here. A runaway dies alone under the address-space cap.
 judge() {

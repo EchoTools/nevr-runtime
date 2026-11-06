@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -15,6 +16,7 @@
 
 #include "bvh.h"
 #include "bvh_build.h"
+#include "key_hog.h"
 #include "nevr/plugin_interface.h"
 #include "plugin_log.h"
 
@@ -230,6 +232,23 @@ int main() {
     CHECK(p.gate.slot == 0x36c0288 && p.gate.fn == 0x18066e4, "R24 pin");
     CHECK(p.touch.slot == 0x36f37d8 && p.touch.fn == 0x20cf414, "R25 pin");
     CHECK(p.n_allowed == 3 && p.allowed[0] == 0x12b2b4c && p.allowed[1] == 0x12b2bc4 && p.allowed[2] == 0x12c0a54, "allowed call sites");
+  }
+
+  // ---------------------------------------------------------------- 0b. no pthread key left for the per-thread allowed mark: the install refuses and swaps nothing
+  Reset();
+  {
+    World w = MakeWorld(0, false);
+    g_page = reinterpret_cast<uintptr_t*>(w.mem);
+    uintptr_t before[6];
+    for (int i = 0; i < 6; ++i) before[i] = g_page[0x20 / 8 + i];
+    KeyHog hog;
+    const auto r = q15t::InstallBvhAt(w.base, w.pins);
+    CHECK(r.status != q15t::SwapStatus::kOk && std::strcmp(r.reason, "no_thread_key") == 0 && !q15t::BvhTreeInstalled(), "no key: %s %s",
+          q15t::StatusName(r.status), r.reason);
+    for (int i = 0; i < 6; ++i) CHECK(g_page[0x20 / 8 + i] == before[i], "no key: slot %d was swapped", i);
+    const std::string code = "error=" + std::to_string(EAGAIN);  // what pthread_key_create answers when the process has no key left
+    CHECK(Count("bvh refused: nothing changed", 3) == 1 && Count("reason=no_thread_key") == 1 && Count(code.c_str()) == 1, "no key: the refusal is not logged with its error code");
+    CHECK(Count("status=") == 0, "no key: the refusal names a swap status (%d)", Count("status="));
   }
 
   // ---------------------------------------------------------------- 1. install: six slots, one line each, stock words kept
