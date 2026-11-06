@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "bvh.h"
-#include "equiprefire.h"
 #include "nevr/plugin_interface.h"
 #include "fxtrail.h"
 #include "wallfire.h"
@@ -211,12 +210,6 @@ int main() {
   for (uintptr_t s : kLevelNameSlots) *reinterpret_cast<uintptr_t*>(base + s) = base + 0x1202ecc;
   // boosterpool: the GOT word of the AllocatePooledActor import holds its pinned function (ELF 0x18037c4)
   *reinterpret_cast<uintptr_t*>(base + 0x36cd1f8) = base + 0x18037c4;
-  // equiprefire: its 24 code words are the pinned ones and its six data words hold the three setters, so it installs and registers a tick
-  for (const auto& pin : q15t::kEquipRefireWordPins) *reinterpret_cast<uint32_t*>(base + pin.va) = pin.want;
-  for (int i = 0; i < 3; ++i) {
-    *reinterpret_cast<uintptr_t*>(base + q15t::kEquipRefirePinned.jump_slot[i]) = base + q15t::kEquipRefirePinned.setter[i];
-    *reinterpret_cast<uintptr_t*>(base + q15t::kEquipRefirePinned.glob_dat[i]) = base + q15t::kEquipRefirePinned.setter[i];
-  }
   // fxtrail: its eleven code words are the pinned ones, so its off switch (set below) is what stops it
   for (const auto& pin : q15t::kFxTrailWordPins) *reinterpret_cast<uint32_t*>(base + pin.va) = pin.want;
   // bvh: its six slots hold their pinned functions. wallfire (installed after it): the query slot, the occluded slot, the site word.
@@ -254,7 +247,7 @@ int main() {
   CHECK(clock_now != reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels), "the clock slot was not swapped: the run proves nothing");
 
   // every compiled module is named in the init record
-  const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "equiprefire", "gunconnect", "aibots",
+  const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
                         "bvh",      "wallfire",   "impactsnd", "ec",         "ecfx",       "dronekill",  "dronemuzzle",
                         "powerboost", "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
   const std::string init = FindLine("q15t init");
@@ -266,7 +259,7 @@ int main() {
   }
 
   // what must have installed, been switched off, or refused, on this image
-  const char* kInstalled[] = {"bvh", "wallfire", "levelname", "boosterpool", "equiprefire"};
+  const char* kInstalled[] = {"bvh", "wallfire", "levelname", "boosterpool"};
   const char* kArmed[] = {"gunconnect", "aibots"};
   const char* kOff[] = {"ec", "ecfx", "fxtrail"};
   struct Refusal {
@@ -318,9 +311,9 @@ int main() {
     if (g_lines[i].text.find("module install module=ecfx ") != std::string::npos) at_ecfx = i;
   CHECK(at_ecfx > at_ec, "ecfx (line %zu) must be installed after ec (line %zu)", at_ecfx, at_ec);
 
-  // the tick table: hz (the refresh tick), gunconnect, aibots, impactsnd, sensorwd, bvh and equiprefire register; dronekill, dronemuzzle, powerboost and
+  // the tick table: hz (the refresh tick), gunconnect, aibots, impactsnd, sensorwd and bvh register; dronekill, dronemuzzle, powerboost and
   // weapon_arm did not install here, so they register nothing. The tick is installed once, after every registration.
-  CHECK(CountLines("game tick callbacks registered=7 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
+  CHECK(CountLines("game tick callbacks registered=6 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
   CHECK(CountLines("hook install hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok", 1) == 1, "the game tick was not installed ok");
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
   CHECK(CountLines("game tick callbacks") == 1, "more than one tick install record");
@@ -336,7 +329,7 @@ int main() {
 
   std::remove(off_file.c_str());
   rmdir(dir);
-  if (g_fail == 0) std::printf("wiring_test: all checks pass (22 modules named, 5 installed, 3 off, 12 refusals at ERROR, InitEx returned 0)\n");
+  if (g_fail == 0) std::printf("wiring_test: all checks pass (21 modules named, 4 installed, 3 off, 12 refusals at ERROR, InitEx returned 0)\n");
   else {
     for (const auto& l : g_lines) std::printf("  [%u] %s\n", l.level, l.text.c_str());
     std::printf("wiring_test: %d failure(s)\n", g_fail);

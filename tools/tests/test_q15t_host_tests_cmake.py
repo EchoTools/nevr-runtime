@@ -47,7 +47,6 @@ HOST_TESTS = frozenset(
         "custctx.custctx_test",
         "decals.decals_test",
         "droneguard.droneguard_test",
-        "equiprefire.equiprefire_test",
         "dronekill.dronekill_test",
         "dronemuzzle.dronemuzzle_test",
         "early.early_test",
@@ -101,7 +100,6 @@ HOST_TESTS = frozenset(
         "wiring.wiring_caps_SHIELDGAMMA_2",
         "wiring.wiring_caps_DRONEGUARD",
         "wiring.wiring_caps_PEERCLAMP",
-        "wiring.wiring_caps_EQUIPREFIRE",
         "wiring.wiring_caps_DRONEKILL",
         "wiring.wiring_caps_DRONEMUZZLE",
         "wiring.wiring_caps_GUNCONNECT",
@@ -122,7 +120,7 @@ HOST_TESTS = frozenset(
 )
 # q15t_arm64_object(<src name>): the NDK static-initializer test for each of these, one per module the repack checks
 ARM64_OBJECTS = frozenset(
-    "decals dronekill dronemuzzle equiprefire plugin_early hudmeter instmodel music pfx pfxtev powerboost sensorwd shaderstep shieldgamma tablestep".split()
+    "decals dronekill dronemuzzle plugin_early hudmeter instmodel music pfx pfxtev powerboost sensorwd shaderstep shieldgamma tablestep".split()
 )
 # the checks that read an object or run a freestanding program, registered by hand in a module file
 NDK_CHECKS = {

@@ -232,6 +232,14 @@ nevr_ht_test(hand_pose_log_hook_test GROUP hooks ${_hf} TIMEOUT 120 LIBS ${NEVR_
 # the real libr15.
 nevr_ht_test(match_tag_default_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
   SRC src/quest/tests/match_tag_default_test.cpp src/quest/combat/match_tags.cpp)
+# The equipment re-fire (#2121): the real wrappers through the six thunks, installed by the real GotHook into the six words of a libr15
+# image built in memory (JUMP_SLOT and GLOB_DAT of the three setters), against models of the setters, the change handlers, NetGameMT,
+# CR15NetGame::UserId and the component. The shared rule is the header's GTest; here are the words hooked, each word's own original
+# with the game's three arguments, the slot's own handler, the net game probe, a word that is not the setter refused alone, a pin that
+# differs refusing the module before any word is touched, the other refusals, and the golden lines. got_pinned_test resolves the six
+# relocations and the code pins in the real libr15.
+nevr_ht_test(equip_refire_test GROUP hooks ${_hf} TIMEOUT 120 OBJS ${_core} ${_ident}
+  SRC src/quest/tests/equip_refire_test.cpp src/quest/combat/equip_refire.cpp src/quest/invite/frame_dispatch.cpp)
 # The grey default irradiance texture (#2091, #1737 U25): the real handlers through the two thunk entries against models of
 # CGEngineResources::Initialize and of the image upload helper. The texel is substituted for the default 3D texture during
 # Initialize only; every other call of the helper, and Initialize's status, pass through. got_pinned_test pins the slot and the

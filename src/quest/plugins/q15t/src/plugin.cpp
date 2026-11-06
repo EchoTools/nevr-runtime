@@ -12,7 +12,6 @@
 #include "decals.h"
 #include "meshstep.h"
 #include "droneguard.h"
-#include "equiprefire.h"
 #include "dronekill.h"
 #include "dronemuzzle.h"
 #include "ec.h"
@@ -159,9 +158,6 @@
 #ifndef Q15T_SENDGUARD  // script send to a game space that is not loaded: dropped, not faulted (sendguard.cpp)
 #define Q15T_SENDGUARD 0
 #endif
-#ifndef Q15T_EQUIPREFIRE  // an equipment change the scripts dropped is applied again once the slot is still (equiprefire.cpp, #2121)
-#define Q15T_EQUIPREFIRE 0
-#endif
 #ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
 #define Q15T_SHIELDGAMMA 0
 #endif
@@ -282,9 +278,6 @@ constexpr char kCompiledModules[] =
 #if Q15T_SENDGUARD
     "sendguard "
 #endif
-#if Q15T_EQUIPREFIRE
-    "equiprefire "
-#endif
 #if Q15T_LEVELNAME
     "levelname "
     "boosterpool "
@@ -383,7 +376,6 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   // shieldgamma (what is drawn), ecfx (rides ec).
   if (Q15T_DRONEGUARD) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_EQUIPREFIRE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the game's change handler runs once more, so the slot's scripts act on the last choice
   if (Q15T_DRONEKILL) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_DRONEMUZZLE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_POWERBOOST > 0) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
@@ -541,13 +533,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* arg
 #endif
 #if Q15T_SENDGUARD
   ReportModule("sendguard", InstallSendGuard(base));
-#endif
-#if Q15T_EQUIPREFIRE
-  {
-    const InstallResult r = InstallEquipRefire(base);
-    ReportModule("equiprefire", r);
-    if (r.status == SwapStatus::kOk) AddModuleTick("equiprefire", &EquipRefireTick, &want_tick);  // the tick runs the handler; none without a swapped word
-  }
 #endif
 #if Q15T_LEVELNAME
   if (gates.levelname) {
