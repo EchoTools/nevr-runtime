@@ -198,7 +198,7 @@ int main() {
 
   // every compiled module is named in the init record
   const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
-                        "bvh",      "wallfire",   "impactsnd", "dronekill",  "dronemuzzle",
+                        "bvh",      "wallfire",   "impactsnd",
                         "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
   const std::string init = FindLine("q15t init");
   for (const char* m : kAll) {
@@ -217,8 +217,8 @@ int main() {
     const char* reason;  // the reason token the record must carry
   };
   const Refusal kRefused[] = {{"voipdrop", "word_pin_mismatch"}, {"custctx", "word_pin_mismatch"},  {"droneguard", "word_pin_mismatch"},
-                              {"peerclamp", "word_pin_mismatch"}, {"music", "word_pin_mismatch"}, {"sensorwd", "word_pin_mismatch"}, {"impactsnd", "hit_code_word_mismatch"}, {"dronekill", "engine_export_missing"},
-                              {"dronemuzzle", "needs_dronekill_shot"}, {"hudmeter", "unexpected_original"},
+                              {"peerclamp", "word_pin_mismatch"}, {"music", "word_pin_mismatch"}, {"sensorwd", "word_pin_mismatch"}, {"impactsnd", "hit_code_word_mismatch"},
+                              {"hudmeter", "unexpected_original"},
                               {"shieldgamma", "unexpected_original"}};
   for (const char* m : kInstalled)
     CHECK(CountLines(std::string("module install module=") + m + " status=ok", 1) == 1, "module %s did not report status=ok at INFO", m);
@@ -255,13 +255,12 @@ int main() {
   CHECK(at_bvh != 0 && at_wall > at_bvh, "wallfire (line %zu) must be installed after bvh (line %zu)", at_wall, at_bvh);
   CHECK(at_tick > at_mod_last, "the game tick (line %zu) must be installed after the last module (line %zu)", at_tick, at_mod_last);
 
-  // the tick table: gunconnect, aibots, impactsnd, sensorwd and bvh register; dronekill, dronemuzzle and
-  // weapon_arm did not install here, so they register nothing. The tick is installed once, after every registration.
+  // the tick table: gunconnect, aibots, impactsnd, sensorwd and bvh register;   // weapon_arm did not install here, so it registers nothing. The tick is installed once, after every registration.
   CHECK(CountLines("game tick callbacks registered=5 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
   CHECK(CountLines("hook install hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok", 1) == 1, "the game tick was not installed ok");
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
   CHECK(CountLines("game tick callbacks") == 1, "more than one tick install record");
-  CHECK(CountLines("module install FAILED") == 11, "%d FAILED lines, want 11", CountLines("module install FAILED"));
+  CHECK(CountLines("module install FAILED") == 9, "%d FAILED lines, want 9", CountLines("module install FAILED"));
 
   // one frame through the swapped tick slot, as CncaGame::Render calls it: the registered callbacks of gunconnect and aibots run
   // (each starts, finds no game library on the host and says so once, at ERROR)

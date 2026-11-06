@@ -9,6 +9,8 @@
 #include "quest/combat/combat_tick.h"
 #include "quest/combat/ec.h"
 #include "quest/combat/ecfx.h"
+#include "quest/combat/dronekill.h"
+#include "quest/combat/dronemuzzle.h"
 #include "quest/combat/headset_gates.h"
 #include "quest/combat/heaps.h"
 #include "quest/combat/instmodel.h"
@@ -59,6 +61,8 @@ ModuleResult GatesNormal() noexcept {
   return headset_gates::Install(switches);
 }
 ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
+ModuleResult DronekillNormal() noexcept { return dronekill::Install(g_config.dronekill.on); }
+ModuleResult DronemuzzleNormal() noexcept { return dronemuzzle::Install(g_config.dronemuzzle.on); }
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
 
@@ -82,7 +86,10 @@ constexpr std::array kModules{
     // ec, then ecfx (#2187): the EC client first, then the modules that ride its net tick; plugin.cpp's order.
     Module{"ec", nullptr, &EcNormal, "combat.ec", &nevr_quest::CombatConfig::ec},
     Module{"ecfx", nullptr, &EcfxNormal, "combat.ecfx", &nevr_quest::CombatConfig::ecfx},
-    // dronekill, dronemuzzle: the drones part adds its rows here.
+    // dronekill, then dronemuzzle (#2187): the plugin's order (after ec, whose kill feed dronekill registers with; dronemuzzle needs dronekill's shot).
+    Module{"dronekill", nullptr, &DronekillNormal, "combat.dronekill", &nevr_quest::CombatConfig::dronekill},
+    Module{"dronemuzzle", nullptr, &DronemuzzleNormal, "combat.dronemuzzle", &nevr_quest::CombatConfig::dronemuzzle},
+    // powerboost last of the five: its link / unlink sends hang on ec's net tick.
     Module{"powerboost", nullptr, &PowerboostNormal},
     // gates (#2180): the plugin installed them after its tick and its modules (after the table steps and the EC modules above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
@@ -123,7 +130,7 @@ Outcome RunPhase(Phase phase, const Module* table, std::size_t count) noexcept {
     if (!g_inactiveSaid.exchange(true, std::memory_order_acq_rel)) WriteSkipped(phase);
     return outcome;
   }
-  char results[320];
+  char results[400];  // 14 modules at their longest status are 337 bytes; the line holds 768
   results[0] = '\0';
   std::size_t used = 0;
   bool truncated = false;

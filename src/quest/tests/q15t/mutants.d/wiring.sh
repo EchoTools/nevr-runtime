@@ -1,13 +1,9 @@
 # plugin.cpp's wiring of the modules, judged by mod/wiring.cmake (tests/wiring_test.cpp); the tick table, judged by mod/game_tick.cmake.
 # Not mutated: InitGunConnect / InitAiBots (they only store the base, which the host cannot observe: no libr15 is loaded), and the
-# success branches of dronekill and dronemuzzle (they need the real libr15 to resolve their engine functions).
-for _m in DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE AIBOTS GUNCONNECT BVH WALLFIRE LEVELNAME; do
+for _m in DRONEGUARD PEERCLAMP AIBOTS GUNCONNECT BVH WALLFIRE LEVELNAME; do
   runm wiring "wire_caps_$(echo "$_m" | tr 'A-Z' 'a-z')" src/plugin.cpp "s/if (Q15T_$_m) caps |=/if (false) caps |=/"
 done
-runm wiring wire_caps_ec_gameplay  src/plugin.cpp "s/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_NETWORK;/"
-runm wiring wire_caps_ec_network   src/plugin.cpp "s/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;/"
 runm wiring wire_caps_over_fxtrail src/plugin.cpp "s/if (Q15T_BVH) caps/if (Q15T_BVH || Q15T_FXTRAIL) caps/"
-runm wiring wire_caps_over_ecfx    src/plugin.cpp "s/if (Q15T_EC) caps/if (Q15T_EC || Q15T_ECFX) caps/"
 runm wiring wire_caps_over_hudmeter src/plugin.cpp "s/if (Q15T_AIBOTS) caps/if (Q15T_AIBOTS || Q15T_HUDMETER) caps/"
 runm wiring wire_init_nonzero      src/plugin.cpp "/never this return value\./{n;s/return 0;/return 1;/}"
 runm wiring wire_failure_quiet     src/plugin.cpp "s/Log(ok || off ? NEVR_LOG_INFO : NEVR_LOG_ERROR,/Log(NEVR_LOG_INFO,/"
@@ -31,8 +27,6 @@ runm wiring wire_drop_impactsnd    src/plugin.cpp "s/^  ReportModule(\"impactsnd
 runm wiring wire_drop_impact_tick  src/plugin.cpp "s/^  AddModuleTick(\"impactsnd\", \&ImpactSndTick, \&want_tick);.*//"
 runm wiring wire_drop_ec           src/plugin.cpp "s/const InstallResult r = InstallEc(base);/const InstallResult r{};/"
 runm wiring wire_drop_ecfx         src/plugin.cpp "s/^  ReportModule(\"ecfx\", InstallEcfx(base));//"
-runm wiring wire_drop_dronekill    src/plugin.cpp "s/if (!ResolveDroneKillFns(base, \&fns)) {/if (false) {/"
-runm wiring wire_drop_dronemuzzle  src/plugin.cpp "s/if (!DroneKillShotActive()) {/if (false) {/"
 runm wiring wire_drop_hudmeter     src/plugin.cpp "s/^  ReportModule(\"hudmeter\", InstallHudmeter(base));//"
 runm wiring wire_drop_shieldgamma  src/plugin.cpp "s/^  ReportModule(\"shieldgamma\", InstallShieldGamma.*//"
 runm wiring wire_shield_bits       src/plugin.cpp "s/(Q15T_SHIELDGAMMA \& 1) != 0, (Q15T_SHIELDGAMMA \& 2) != 0/(Q15T_SHIELDGAMMA \& 2) != 0, (Q15T_SHIELDGAMMA \& 1) != 0/"

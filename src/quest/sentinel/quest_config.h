@@ -197,6 +197,8 @@ struct CombatConfig {
   CombatText ecWords;   // `combat.ec_words`: the EC client's words; unset: `types=VPTO equip hide` (combat/ec.h)
   CombatSwitch ecfx;    // `combat.ecfx`: the NEUTRON effects drain on the EC client's net tick (combat/ecfx.h)
   CombatInt powerboostStage{3, Source::kAbsent};  // `combat.powerboost_stage`: POWER BOOST's stage, 0 off .. 3 swallow + cone (combat/powerboost.h)
+  CombatSwitch dronekill{true, Source::kAbsent};    // `combat.dronekill`: a combat drone's kill, lock-on, gun, chase and shot rules (combat/dronekill.h)
+  CombatSwitch dronemuzzle{true, Source::kAbsent};  // `combat.dronemuzzle`: a drone's bullets leave its gun; needs dronekill's shot (combat/dronemuzzle.h)
 };
 
 struct LogEvent {

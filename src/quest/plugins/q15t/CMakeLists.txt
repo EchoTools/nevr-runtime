@@ -15,14 +15,13 @@ option(Q15T_AIBOTS "aibots (R40): Practice AI bots get a scenario each combat ma
 option(Q15T_BVH "bvh (R20-R25): a real static raycast tree for CBVHTree. Source: on by default (kill file bvh.off); tick" ON)
 option(Q15T_WALLFIRE "wallfire (R26-R28): no shot through a wall; needs Q15T_BVH. Source: on by default (kill file wallfire.off)" ON)
 option(Q15T_IMPACTSND "impactsnd (R12-R15): the impact table gets its Wwise ids. Source: default ON since v6; tick" ON)
-# ec and ecfx (the EC network client and NEUTRON effects) are the runtime's: src/quest/combat/ec.h, keys combat.ec, combat.ec_words, combat.ecfx.
-# TEST ONLY in the source build, but on in its wave19a on-list (droneguard, peerclamp, dronekill, dronemuzzle, hudmeter, powerboost): ON here.
+# ec and ecfx (the EC network client and NEUTRON effects), POWER BOOST, dronekill and dronemuzzle are the runtime's: src/quest/combat/, keys combat.ec, combat.ec_words,
+# combat.ecfx, combat.powerboost_stage, combat.dronekill, combat.dronemuzzle.
+# TEST ONLY in the source build, but on in its wave19a on-list (droneguard, peerclamp, hudmeter): ON here.
 # Droneguard's second stage, the levelname pair and the gate options below stay OFF (not in the on-list, or they need content in the pack).
 option(Q15T_DRONEGUARD "droneguard (R35): skip a per-frame Follow call. Source: TEST ONLY; on in the wave19a on-list" ON)
 option(Q15T_DRONEGUARD_IDX "droneguard stage 1 (needs Q15T_DRONEGUARD). Source: TEST ONLY" OFF)
 option(Q15T_PEERCLAMP "peerclamp (R36): clamp a peer's stamp in CleanupPeers. Source: TEST ONLY; on in the wave19a on-list" ON)
-option(Q15T_DRONEKILL "dronekill (R45,R47,R48): drone kill / lock-on / gun / chase / shot, all five words. Source: TEST ONLY (dronekill2.on); on in the wave19a on-list; tick" ON)
-option(Q15T_DRONEMUZZLE "dronemuzzle (R49,R50): a drone's bullets leave its gun; needs Q15T_DRONEKILL. Source: TEST ONLY; on in the wave19a on-list; tick" ON)
 option(Q15T_HUDMETER "hudmeter (R57): the wrist HUD's weapon-slot heat fill stops being 0 x 0. Source: hudmeter.on; on in the wave19a on-list" ON)
 option(Q15T_MUSIC "music (T-48): the combat music is stopped when a match ends or a new one starts, so instances do not stack. Source: default ON; tick" ON)
 option(Q15T_SENSORWD "sensorwd (T-07): a scanner sphere still enabled 6 s after its enable is turned off again. Source: default ON (on-list); tick" ON)
@@ -42,8 +41,6 @@ option(Q15T_DECALS "decals (#1619): the level decals of decals.bin drawn as dyna
 if(Q15T_WALLFIRE AND NOT Q15T_BVH)
   message(FATAL_ERROR "Q15T_WALLFIRE needs Q15T_BVH (wallfire refuses without the static BVH answering Occluded)")
 endif()
-if(Q15T_DRONEMUZZLE AND NOT Q15T_DRONEKILL)
-  message(FATAL_ERROR "Q15T_DRONEMUZZLE needs Q15T_DRONEKILL (the thunks act only inside a drone shot dronekill reports)")
 endif()
 if(Q15T_DRONEGUARD_IDX AND NOT Q15T_DRONEGUARD)
   message(FATAL_ERROR "Q15T_DRONEGUARD_IDX needs Q15T_DRONEGUARD")
@@ -56,7 +53,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/script_redirect.cpp src/import_hook.cpp src/combat_map.cpp src/game_tick.cpp src/safe_read.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
-foreach(m FXTRAIL VOIPDROP CUSTCTX GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD DECALS)
+foreach(m FXTRAIL VOIPDROP CUSTCTX GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND DRONEGUARD PEERCLAMP HUDMETER LEVELNAME MUSIC SENSORWD DECALS)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -89,7 +86,6 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_GUNCONNECT=$<BOOL:${Q15T_GUNCONNECT}> Q15T_AIBOTS=$<BOOL:${Q15T_AIBOTS}> Q15T_BVH=$<BOOL:${Q15T_BVH}>
   Q15T_WALLFIRE=$<BOOL:${Q15T_WALLFIRE}> Q15T_IMPACTSND=$<BOOL:${Q15T_IMPACTSND}>
   Q15T_DRONEGUARD=$<BOOL:${Q15T_DRONEGUARD}> Q15T_DRONEGUARD_IDX=$<BOOL:${Q15T_DRONEGUARD_IDX}> Q15T_PEERCLAMP=$<BOOL:${Q15T_PEERCLAMP}>
-  Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}>
   Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
   Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}>
   Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}>)

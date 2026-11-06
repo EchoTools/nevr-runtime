@@ -12,6 +12,8 @@ add_library(nevr_quest_combat STATIC
   combat_tick.cpp
   combat_level.cpp
   combat_tick.cpp
+  dronekill.cpp
+  dronemuzzle.cpp
   ec.cpp
   ecfx.cpp
   equip_refire.cpp

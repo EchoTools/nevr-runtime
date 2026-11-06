@@ -1,7 +1,14 @@
-// Host test of dronekill.cpp (rows R45 / R47 / R48 + the Actor slot): the real module code against a fake game library laid out as
-// the module reads it (component systems with the real read-shape words, a fake auto-target system for chase), a fake slot page for the
-// GOT swaps (real mprotect, real /proc/self/maps), real SafeRead. The calls into game code through vtable slots are replaced through
-// the module's test seam (a slot's words are aarch64 data on the host); everything else is the module as it ships.
+// Host test of dronekill (src/quest/combat/dronekill.cpp, #2187): the real module and its four CallbackThunks, installed by the real GotHook into
+// four JUMP_SLOTs of a libr15 image built in memory (combat_libr15_image.h), called through the slots, against a fake game laid out as the module
+// reads it (component systems with the real read-shape words, a fake auto-target system for chase), real SafeRead (process_vm_readv). The calls
+// into game code through vtable slots are replaced through the module's test seam (a slot's words are aarch64 data on the host).
+//
+// Moved from the q15t plugin's dronekill_test: the assertions on what the module does are the same. What changed is the fixture (the plugin's
+// fake slot page is a libr15 image and the manager's install; a slot the manager cannot write is one outside the image's writable segment, where
+// the plugin test used an executable page), the log lines (sentinel records; the text a check looks for is the record's event and fields, see
+// Render), the API names (namespace nevr_quest::combat::dronekill), and the scope: a combat map is loaded and the module's tick has seen it before a
+// test drives a drone (Reset). New here: an Echo Arena level, a lobby and no level at all, where every hook only calls the game's function, the
+// scope line, and the production step's refusals.
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -15,13 +22,19 @@
 #include <thread>
 #include <vector>
 
-#include "dronekill.h"
-#include "dronekill_core.h"
-#include "key_hog.h"
-#include "nevr/plugin_interface.h"
-#include "plugin_log.h"
+#include "nevr/symbol_hash.h"
+#include "quest/combat/combat_level.h"
+#include "quest/combat/combat_tick.h"
+#include "quest/combat/dronekill.h"
+#include "quest/combat/dronekill_core.h"
+#include "quest/combat/safe_read.h"
+#include "quest/sentinel/hook_log.h"
+#include "quest/tests/combat_libr15_image.h"
+#include "quest/tests/ec_stub.h"
+#include "quest/tests/q15t/key_hog.h"
 
-using namespace q15t;
+using namespace nevr_quest::combat::dronekill;
+using sentinel::GotStatus;
 
 static int g_fail = 0;
 #define CHECK(cond, ...)                               \
@@ -40,10 +53,45 @@ struct Line {
   std::string text;
 };
 static std::vector<Line> g_lines;
-static void FakeLog(const char* id, uint32_t level, const char* msg, const NevrLogField* f, uint32_t n) {
-  std::string t = std::string("plugin=") + id + " " + msg;
-  for (uint32_t i = 0; i < n; ++i) t += std::string(" ") + f[i].key + "=" + f[i].value;
-  g_lines.push_back({level, t});
+// A sentinel record as the plugin test's lines read: `<event> key=value ...` (string values unquoted), at the plugin's level numbers (1 Info,
+// 2 Warning, 3 Error, 0 Debug), so a check names an event or a field.
+static std::string Render(const char* json) {
+  std::string out, key;
+  const char* p = json;
+  bool first = true;
+  while (*p != 0) {
+    if (*p != '"') {
+      ++p;
+      continue;
+    }
+    std::string k;
+    for (++p; *p != 0 && *p != '"'; ++p) k += *p;
+    if (*p == '"') ++p;
+    while (*p == ':' || *p == ' ') ++p;
+    std::string v;
+    if (*p == '"') {
+      for (++p; *p != 0 && *p != '"'; ++p) {
+        if (*p == '\\' && p[1] != 0) ++p;
+        v += *p;
+      }
+      if (*p == '"') ++p;
+    } else {
+      while (*p != 0 && *p != ',' && *p != '}') v += *p++;
+    }
+    if (k == "ts_ms" || k == "level" || k == "ts") continue;
+    if (k == "event") {
+      out = v + out;
+      first = false;
+      continue;
+    }
+    out += " " + k + "=" + v;
+  }
+  (void)first;
+  return out;
+}
+static void Sink(sentinel::LogLevel level, const char* line) {
+  const uint32_t lv = level == sentinel::LogLevel::kInfo ? 1 : level == sentinel::LogLevel::kWarn ? 2 : level == sentinel::LogLevel::kError ? 3 : 0;
+  g_lines.push_back({lv, Render(line)});
 }
 static int CountLine(const char* needle, int level = -1) {
   int n = 0;
@@ -60,7 +108,7 @@ static void Dump(const char* title) {  // Q15T_TEST_VERBOSE=1: the module's own 
 
 // ================================================================ the core (ported from the source's host test)
 static void TestCore() {
-  using namespace q15t::dk;
+  using namespace dk;
   CHECK(ThunkOk(kThunk), "kThunk");
   uint32_t t[kThunkWords];
   memcpy(t, kThunk, sizeof t);
@@ -377,9 +425,9 @@ static uint64_t Fnv(const uint32_t* w, size_t n) {
 
 // The facts the module's behaviour hangs on, as literals: the other tests refer to these constants by name, so a changed value
 // would carry the tests with it. The tables and offsets are the source build's (the source build's dronekill_core); the shape tables were
-// compared with the disassembly (docs/quest/q15t/modules/dronekill.md); the hashes are of the tables as read there.
+// compared with the disassembly (docs/quest/combat/dronekill.md); the hashes are of the tables as read there.
 static void TestPinnedConstants() {
-  using namespace q15t::dk;
+  using namespace dk;
   CHECK(Fnv(kThunk, kThunkWords) == 0xa11a9be513e9cbecull, "kThunk changed");
   CHECK(Fnv(kBody, kBodyWords) == 0xa5c7bf27867c1289ull, "kBody changed");
   CHECK(Fnv(kDis, kDisWords) == 0xa47320eb0b3d04beull, "kDis changed");
@@ -400,6 +448,7 @@ static void TestPinnedConstants() {
         "gun symbols");
   CHECK(kNetPhysics == 0x8FEE6557F995E4A3ull && kNetPhysicsPhys == 0x170, "net physics");
   CHECK(kJoinMs == 5000 && kPendingMs == 3000 && kSwallowMs == 25000 && kDueMs == 2000 && kLockMs == 120000 && kChaseMs == 100, "times");
+  CHECK(kScopeFrames == 32, "the scope is asked every 32 frames");
   CHECK(kGroupComps == 20 && kGroups == 8 && kPending == 20 && kTouches == 16 && kGuns == 32 && kChases == 16, "table sizes");
   CHECK(kChaseSpeed == 7.0f && kChaseDistance == 7.0f && kChaseGain == 2.0f && kChaseAbove == 0.5f, "chase constants");
   CHECK(kAtIdx == 0xc8 && kAtRecs == 0xf8 && kAtStride == 0x90 && kAtTransforms == 0x130 && kAtPhysics == 0x138, "auto-target offsets");
@@ -424,8 +473,15 @@ static uint64_t g_ms = 1000;
 static uint64_t Clk() { return g_ms; }
 
 static uintptr_t g_base = 0;
-static uintptr_t* g_w = nullptr;
-static uintptr_t g_fire_slot = 0x30;
+// The four slots in the image's writable segment (g_fire_slot moves below it, out of the image's writable part, to make an install fail), the
+// comparator's slot beside them.
+using combat_test::Image;
+static Image g_image;
+static constexpr uint64_t kRw = Image::kRwStart;
+static constexpr uint64_t kSlotActor = kRw + 0x20, kSlotEnter = kRw + 0x28, kSlotFire = kRw + 0x30, kSlotAttack = kRw + 0x38, kSlotCmp = kRw + 0x40;
+static constexpr uint64_t kExecFire = 0x2030, kExecAttack = 0x2038;  // in the image's R|X segment: the manager refuses them (slot_outside_image)
+static uintptr_t& W(uint64_t vaddr) { return *reinterpret_cast<uintptr_t*>(g_base + vaddr); }
+static uintptr_t g_fire_slot = 0;
 static std::vector<std::string> g_ev;
 
 alignas(16) static uint32_t g_thunk_words[dk::kThunkWords], g_body_words[dk::kBodyWords], g_dis_words[dk::kDisWords], g_en_words[dk::kEnWords];
@@ -456,6 +512,7 @@ static int g_nsys = 0;
 static CompEnt g_comps[16];
 static int g_ncomps = 0;
 static uint32_t g_actor_ret = 1;
+static uint32_t g_actor_seen = 0;  // what the Enter fake got back from its own Actor call (through the slot)
 static uint64_t g_actor_val = 0;       // the SActor the fake Actor reports (0 = kActorId)
 static bool g_actor_bad_out = false;   // Enter hands Actor unreadable out-pointers; the fake writes nothing
 static bool g_actor_twice = false;     // Enter calls Actor for the drone twice; the second call reports another space and actor
@@ -470,7 +527,8 @@ struct EnterCall {
 static std::vector<EnterCall> g_enters;
 static bool g_enter_calls_actor = true;
 static uint64_t g_other_actor_first = 0;  // call Actor for this other actor before Enter's own
-static bool g_enter_actor_on_other_thread = false;  // while the real Enter runs, another thread calls Actor for the drone (other out-values)
+static bool g_enter_actor_on_other_thread = false;
+static const ND* g_nested_first = nullptr;  // the fake Enter enters this drone node (through the slot) before its own Actor call  // while the real Enter runs, another thread calls Actor for the drone (other out-values)
 
 struct DisCall {
   void* sys;
@@ -486,7 +544,7 @@ static bool SameNd(const ND& a, const ND& b) {
 }
 static void W64(uint8_t* p, size_t off, uint64_t v) { memcpy(p + off, &v, 8); }
 
-static uintptr_t ActorWrapPtr() { return g_w[0x20 / 8]; }
+static uintptr_t ActorWrapPtr() { return W(kSlotActor); }
 static uint32_t FakeActor(const void*, const void*, uint64_t sym, void** sp, void* actor_out, unsigned*) {
   ++g_actor_calls;
   g_ev.push_back("actor");
@@ -533,12 +591,17 @@ static void FakeEnter(void* node, const ND* d) {
     }).join();
     g_actor_val = keep;
   }
+  if (g_nested_first != nullptr) {
+    const ND* const inner = g_nested_first;
+    g_nested_first = nullptr;
+    reinterpret_cast<EnterFn>(W(kSlotEnter))(node, inner);
+  }
   if (g_other_actor_first != 0) aw(nullptr, nullptr, g_other_actor_first, &sp, &actor, &fl);
   if (g_actor_bad_out) {
     aw(nullptr, nullptr, d->actor, reinterpret_cast<void**>(0x10), reinterpret_cast<void*>(0x10), &fl);
     return;
   }
-  aw(nullptr, nullptr, d->actor, &sp, &actor, &fl);
+  g_actor_seen = aw(nullptr, nullptr, d->actor, &sp, &actor, &fl);
   if (g_actor_twice) aw(nullptr, nullptr, d->actor, &sp, &actor, &fl);
 }
 
@@ -592,7 +655,7 @@ static void FakeFire(void* cs, uint32_t h, DkC3 v, uint32_t remote) {
   g_ev.push_back("fire");
   FireCall c{cs, h, v, remote, false, {0, 0, 0}, -1, {0, 0, 0}, -1};
   int rem = -1;
-  const float* a = DroneKillShotVelocity(&rem);
+  const float* a = ShotVelocity(&rem);
   if (a != nullptr) {
     c.acc_non_null = true;
     memcpy(c.acc, a, sizeof c.acc);
@@ -602,19 +665,19 @@ static void FakeFire(void* cs, uint32_t h, DkC3 v, uint32_t remote) {
   g_fires.push_back(c);
   if (cs == reinterpret_cast<void*>(0x8001)) {  // another thread, outside any shot, reads the accessor and then makes a shot of its own
     std::thread([] {
-      g_other_thread_saw_no_shot = DroneKillShotVelocity(nullptr) == nullptr;
-      reinterpret_cast<FireFn>(g_w[g_fire_slot / 8])(reinterpret_cast<void*>(0x8002), 3, DkC3{4, 5, 6}, 0);
+      g_other_thread_saw_no_shot = ShotVelocity(nullptr) == nullptr;
+      reinterpret_cast<FireFn>(W(g_fire_slot))(reinterpret_cast<void*>(0x8002), 3, DkC3{4, 5, 6}, 0);
     }).join();
     int rem2 = -1;
-    const float* a2 = DroneKillShotVelocity(&rem2);
+    const float* a2 = ShotVelocity(&rem2);
     if (a2 != nullptr) memcpy(g_fires[mine].after, a2, sizeof g_fires[mine].after);
     g_fires[mine].after_remote = rem2;
   }
   if (cs == reinterpret_cast<void*>(0x7001)) {  // a shot inside a shot (nested test)
-    FireFn inner = reinterpret_cast<FireFn>(g_w[g_fire_slot / 8]);
+    FireFn inner = reinterpret_cast<FireFn>(W(g_fire_slot));
     inner(reinterpret_cast<void*>(0x7002), 9, DkC3{1, 2, 3}, 1);
     int rem2 = -1;
-    const float* a2 = DroneKillShotVelocity(&rem2);
+    const float* a2 = ShotVelocity(&rem2);
     if (a2 != nullptr) memcpy(g_fires[mine].after, a2, sizeof g_fires[mine].after);
     g_fires[mine].after_remote = rem2;
   }
@@ -673,8 +736,8 @@ static uint32_t FakeLocal(const void* sys, uint32_t handle) {
   return g_local_ret;
 }
 
-static DroneKillFns Fns() {
-  DroneKillFns f;
+static Fns FakeFns() {
+  Fns f;
   f.find = &FakeFind;
   f.l2w = &FakeL2w;
   f.primary = &FakePrimary;
@@ -683,28 +746,71 @@ static DroneKillFns Fns() {
   f.local = &FakeLocal;
   return f;
 }
-static const DroneKillCalls g_calls = {&FakeComponent, &FakeEnable, &FakeDisable};
+static const Calls g_calls = {&FakeComponent, &FakeEnable, &FakeDisable};
+
+// ---- the image, the levels ----
+// The four slots in the image's writable segment (g_fire_slot moves below it, out of the image's writable part, to make an install fail), the
+// comparator's slot beside them.
+static bool Lookup(const char* module, sentinel::ElfImage* out) {
+  if (!g_image.Present() || std::strcmp(module, sentinel::pinned::kLibR15) != 0) return false;
+  *out = g_image.Elf();
+  return true;
+}
+static bool NoLookup(const char*, sentinel::ElfImage*) { return false; }
+
+// CR15Game's two gamespace tables and a gamespace's level, where combat_level.cpp reads them (the offsets spelled here, as in headset_gates_test).
+constexpr size_t kTable0 = 0x1f48, kCount0 = 0x1f78, kGamespaceOwner = 0x8, kGamespaceLevel = 0x58;
+struct Gamespace {
+  uintptr_t words[0x60 / 8 + 1] = {};
+};
+struct Game {
+  uintptr_t words[0x2000 / 8] = {};
+  uintptr_t table0[8][2] = {};
+  Gamespace spaces[8];
+};
+static Game g_game;
+static uintptr_t GameAddress() { return reinterpret_cast<uintptr_t>(g_game.words); }
+static void LoadLevels(std::initializer_list<const char*> names) {
+  g_game = Game{};
+  int row = 0;
+  for (const char* name : names) {
+    Gamespace& gs = g_game.spaces[row];
+    gs.words[kGamespaceOwner / 8] = GameAddress();
+    gs.words[kGamespaceLevel / 8] = static_cast<uintptr_t>(EchoVR::CSymbol64Hash(name));
+    g_game.table0[row][0] = 0x5555;
+    g_game.table0[row][1] = reinterpret_cast<uintptr_t>(&gs);
+    ++row;
+  }
+  g_game.words[kTable0 / 8] = reinterpret_cast<uintptr_t>(g_game.table0);
+  g_game.words[kCount0 / 8] = static_cast<uintptr_t>(row);
+}
 
 static uintptr_t V(const void* fn) { return reinterpret_cast<uintptr_t>(fn) - g_base; }
-static DroneKillSlots Slots() {
-  return {0x20, V(reinterpret_cast<void*>(&FakeActor)), 0x28, V(reinterpret_cast<void*>(&FakeEnter)), g_fire_slot,
-          V(reinterpret_cast<void*>(&FakeFire)),        0x38, V(reinterpret_cast<void*>(&FakeAttack)), 0x40, 0x1234,
+static Pins Slots() {
+  return {kSlotActor, V(reinterpret_cast<void*>(&FakeActor)), kSlotEnter, V(reinterpret_cast<void*>(&FakeEnter)), g_fire_slot,
+          V(reinterpret_cast<void*>(&FakeFire)), kSlotAttack, V(reinterpret_cast<void*>(&FakeAttack)), kSlotCmp, 0x1234,
           reinterpret_cast<uintptr_t>(g_plt_marker) - g_base};
 }
 
-// a fresh slot page (page 0: the slots; page 1: a second page for a slot that must live elsewhere)
+// A fresh libr15 image whose four JUMP_SLOTs hold the fakes (the fire slot outside the writable segment when `fire_in_exec_page`), and an
+// attack relocation outside it too (kExecAttack), for the rollback case.
 static void NewPage(bool fire_in_exec_page) {
-  void* p = mmap(nullptr, 2 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  g_w = static_cast<uintptr_t*>(p);
-  g_base = reinterpret_cast<uintptr_t>(p);
-  g_fire_slot = fire_in_exec_page ? 0x1030 : 0x30;
-  g_w[0x20 / 8] = reinterpret_cast<uintptr_t>(&FakeActor);
-  g_w[0x28 / 8] = reinterpret_cast<uintptr_t>(&FakeEnter);
-  g_w[g_fire_slot / 8] = reinterpret_cast<uintptr_t>(&FakeFire);
-  g_w[0x38 / 8] = reinterpret_cast<uintptr_t>(&FakeAttack);
-  g_w[0x40 / 8] = g_base + 0x1234;
-  mprotect(p, 4096, PROT_READ);
-  mprotect(static_cast<char*>(p) + 4096, 4096, fire_in_exec_page ? (PROT_READ | PROT_EXEC) : PROT_READ);
+  g_fire_slot = fire_in_exec_page ? kExecFire : kSlotFire;
+  g_image.Build({{kActorSymbol, kSlotActor, false, false, 0}, {kEnterSymbol, kSlotEnter, false, false, 0},
+                 {kFireSymbol, g_fire_slot, false, false, 0}, {kAttackSymbol, fire_in_exec_page ? kExecAttack : kSlotAttack, false, false, 0}});
+  g_base = g_image.Base();
+  W(kSlotActor) = reinterpret_cast<uintptr_t>(&FakeActor);
+  W(kSlotEnter) = reinterpret_cast<uintptr_t>(&FakeEnter);
+  W(g_fire_slot) = reinterpret_cast<uintptr_t>(&FakeFire);
+  W(kSlotAttack) = reinterpret_cast<uintptr_t>(&FakeAttack);
+  W(kSlotCmp) = g_base + 0x1234;
+}
+
+// The install, then the scope a combat map gives (Reset loads one): the module's first tick asks combat_level and keeps the answer.
+static Result InstallDroneKill(Words words, const Fns& fns, const Pins& pins) {
+  const Result r = InstallAt(&Lookup, pins, words, fns);
+  if (r.ok) SetScopeForTest(true);
+  return r;
 }
 
 static uint8_t* MakeSys(uint64_t sym) {
@@ -784,8 +890,8 @@ static void BuildChase() {
 
 static void SetFlag(uint32_t v) { memcpy(g_gs + dk::kOwnerFlag, &v, 4); }
 
-static DroneKillInstall Reset(DroneKillWords words, bool install = true) {
-  ResetDroneKillForTest();
+static Result Reset(Words words, bool install = true) {
+  ResetForTest();
   g_lines.clear();
   g_ev.clear();
   g_enters.clear();
@@ -846,20 +952,21 @@ static DroneKillInstall Reset(DroneKillWords words, bool install = true) {
   comp(g_model, dk::kPort, 0x00070009);
   comp(g_np, dk::kNetPhysics, 0x0001000a);
   BuildChase();
-  SetDroneKillCallsForTest(&g_calls);
-  SetDroneKillClockForTest(&Clk);
-  if (!install) return DroneKillInstall{};
-  return InstallDroneKill(g_base, words, Fns(), Slots());
+  SetCallsForTest(&g_calls);
+  SetClockForTest(&Clk);
+  LoadLevels({"mpl_combat_dyson"});
+  if (!install) return Result{};
+  return InstallDroneKill(words, FakeFns(), Slots());
 }
 
-static void CallEnter(const ND* d) { reinterpret_cast<EnterFn>(g_w[0x28 / 8])(g_node, d); }
-static void CallFire(void* cs, uint32_t h, DkC3 v, uint32_t remote) { reinterpret_cast<FireFn>(g_w[g_fire_slot / 8])(cs, h, v, remote); }
-static void CallAttack(void* cs, uint32_t h) { reinterpret_cast<AttackFn>(g_w[0x38 / 8])(cs, h); }
+static void CallEnter(const ND* d) { reinterpret_cast<EnterFn>(W(kSlotEnter))(g_node, d); }
+static void CallFire(void* cs, uint32_t h, DkC3 v, uint32_t remote) { reinterpret_cast<FireFn>(W(g_fire_slot))(cs, h, v, remote); }
+static void CallAttack(void* cs, uint32_t h) { reinterpret_cast<AttackFn>(W(kSlotAttack))(cs, h); }
 static ND Drone(uint64_t sys, uint64_t comp, uint32_t en) { return ND{dk::kDroneActor, 0, sys, comp, en}; }
 static const uint32_t kDmgHandle = 0x00050011;  // index 0x11
 
-static DroneKillWords Only(bool kill, bool lockon, bool gun, bool chase, bool shot) {
-  DroneKillWords w;
+static Words Only(bool kill, bool lockon, bool gun, bool chase, bool shot) {
+  Words w;
   w.kill = kill;
   w.lockon = lockon;
   w.gun = gun;
@@ -874,175 +981,164 @@ static DroneKillWords Only(bool kill, bool lockon, bool gun, bool chase, bool sh
 static void TestNoThreadKey() {
   // a module refused for a slot that does not hold the pinned function has made no key: the install below, with no key left, must still
   // be refused for the key
-  Reset(DroneKillWords{}, false);
-  mprotect(g_w, 4096, PROT_READ | PROT_WRITE);
-  g_w[0x38 / 8] = 0x4242420;
-  mprotect(g_w, 4096, PROT_READ);
-  CHECK(!InstallDroneKill(g_base, DroneKillWords{}, Fns(), Slots()).ok && HasLine("a slot does not hold the pinned function"),
+  Reset(Words{}, false);
+  W(kSlotAttack) = 0x4242420;
+  CHECK(!InstallDroneKill(Words{}, FakeFns(), Slots()).ok && HasLine("a slot does not hold the pinned function"),
         "the slot mismatch was not refused");
   KeyHog hog;
-  const DroneKillInstall r = Reset(Only(true, true, true, true, true));
+  const Result r = Reset(Only(true, true, true, true, true));
   CHECK(!r.ok, "installed with no pthread key");
-  CHECK(g_w[0x20 / 8] == reinterpret_cast<uintptr_t>(&FakeActor) && g_w[0x28 / 8] == reinterpret_cast<uintptr_t>(&FakeEnter) &&
-            g_w[g_fire_slot / 8] == reinterpret_cast<uintptr_t>(&FakeFire) && g_w[0x38 / 8] == reinterpret_cast<uintptr_t>(&FakeAttack),
+  CHECK(W(kSlotActor) == reinterpret_cast<uintptr_t>(&FakeActor) && W(kSlotEnter) == reinterpret_cast<uintptr_t>(&FakeEnter) &&
+            W(g_fire_slot) == reinterpret_cast<uintptr_t>(&FakeFire) && W(kSlotAttack) == reinterpret_cast<uintptr_t>(&FakeAttack),
         "no key: a word was swapped");
   const std::string code = "error=" + std::to_string(EAGAIN);  // what pthread_key_create answers when the process has no key left
-  CHECK(HasLine("dronekill: OFF, nothing changed", 3) && HasLine("no pthread key") && HasLine(code.c_str()), "no key: the refusal is not loud, or carries no error code");
-  CHECK(!DroneKillShotActive(), "no key: shot active");
+  CHECK(HasLine("result=refused", 3) && HasLine("no pthread key") && HasLine(code.c_str()), "no key: the refusal is not loud, or carries no error code");
+  CHECK(!ShotActive(), "no key: shot active");
 }
 
 static void TestInstallPinned() {
-  ResetDroneKillForTest();
+  ResetForTest();
   g_lines.clear();
-  const size_t sz = 0x3800000;  // the pinned vaddrs reach 0x36f91f8
-  void* p = mmap(nullptr, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-  CHECK(p != MAP_FAILED, "mmap");
-  const uintptr_t base = reinterpret_cast<uintptr_t>(p);
-  auto put = [&](uintptr_t slot, uintptr_t fn) {
-    const uintptr_t v = base + fn;
-    memcpy(static_cast<char*>(p) + slot, &v, 8);
-  };
-  put(0x36e2080, 0x2059714);  // Actor
-  put(0x36cacf8, 0x263b700);  // R45 Enter
-  put(0x36c37a8, 0x210bff8);  // R48 FireBulletLocal
-  put(0x36e6610, 0x210b8c4);  // R47 AttackTarget
-  put(0x36f91f0, 0x1524cb4);  // comparator
-  mprotect(p, sz, PROT_READ);
-  const DroneKillSlots& k = kDroneKillPinned;
-  CHECK(k.actor_slot == 0x36e2080 && k.actor_fn == 0x2059714, "actor constants");
-  CHECK(k.enter_slot == 0x36cacf8 && k.enter_fn == 0x263b700, "enter constants");
-  CHECK(k.fire_slot == 0x36c37a8 && k.fire_fn == 0x210bff8, "fire constants");
-  CHECK(k.attack_slot == 0x36e6610 && k.attack_fn == 0x210b8c4, "attack constants");
-  CHECK(k.cmp_slot == 0x36f91f0 && k.cmp_fn == 0x1524cb4 && k.cmp_plt == 0xf43610, "comparator constants");
-  const DroneKillInstall r = InstallDroneKill(base, DroneKillWords{}, Fns());
-  CHECK(r.ok && r.actor.status == SwapStatus::kOk && r.enter.status == SwapStatus::kOk && r.fire.status == SwapStatus::kOk &&
-            r.attack.status == SwapStatus::kOk,
-        "pinned install");
-  CHECK(r.comparator_ok && r.needs_tick, "comparator / needs_tick");
-  auto word = [&](uintptr_t slot) {
-    uintptr_t v;
-    memcpy(&v, static_cast<char*>(p) + slot, 8);
-    return v;
-  };
-  CHECK(word(0x36e2080) != base + 0x2059714 && word(0x36cacf8) != base + 0x263b700 && word(0x36c37a8) != base + 0x210bff8 &&
-            word(0x36e6610) != base + 0x210b8c4,
+  const Pins& k = kPins;
+  CHECK(k.actorSlot == 0x36e2080 && k.actorFn == 0x2059714, "actor constants");
+  CHECK(k.enterSlot == 0x36cacf8 && k.enterFn == 0x263b700, "enter constants");
+  CHECK(k.fireSlot == 0x36c37a8 && k.fireFn == 0x210bff8, "fire constants");
+  CHECK(k.attackSlot == 0x36e6610 && k.attackFn == 0x210b8c4, "attack constants");
+  CHECK(k.cmpSlot == 0x36f91f0 && k.cmpFn == 0x1524cb4 && k.cmpPlt == 0xf43610, "comparator constants");
+  CHECK(std::strcmp(kActorSymbol, "_ZN10NRadEngine19SComponentNodeUtils5ActorERKNS_13SScriptThreadERKNS_15CncaGameSpaceMTENS_9CSymbol64ERPS4_RNS_6SActorERj") == 0 &&
+            std::strcmp(kEnterSymbol, "_ZN10NRadEngine20CEnableComponentNode5EnterERKNS_24SEnableComponentNodeDataE") == 0 &&
+            std::strcmp(kFireSymbol, "_ZN10NRadEngine8NRadGame19CR15NetAutoTargetCS15FireBulletLocalENS_18SCompactPoolHandleENS_8C3VectorEj") == 0 &&
+            std::strcmp(kAttackSymbol, "_ZN10NRadEngine8NRadGame19CR15NetAutoTargetCS12AttackTargetENS_18SCompactPoolHandleE") == 0,
+        "the symbols are the readelf names");
+  // the production pins on an image holding them: the four slots hold base + the pinned functions (the fakes stand at those addresses: the
+  // manager requires an executable original, so the image's own code segment is not one; the fakes are placed by pins below)
+  g_image.Build({{kActorSymbol, k.actorSlot, false, false, k.actorFn}, {kEnterSymbol, k.enterSlot, false, false, k.enterFn},
+                 {kFireSymbol, k.fireSlot, false, false, k.fireFn}, {kAttackSymbol, k.attackSlot, false, false, k.attackFn}});
+  g_base = g_image.Base();
+  Pins pins = k;  // the production slots; the functions are the fakes'
+  pins.actorFn = V(reinterpret_cast<void*>(&FakeActor));
+  pins.enterFn = V(reinterpret_cast<void*>(&FakeEnter));
+  pins.fireFn = V(reinterpret_cast<void*>(&FakeFire));
+  pins.attackFn = V(reinterpret_cast<void*>(&FakeAttack));
+  W(k.actorSlot) = reinterpret_cast<uintptr_t>(&FakeActor);
+  W(k.enterSlot) = reinterpret_cast<uintptr_t>(&FakeEnter);
+  W(k.fireSlot) = reinterpret_cast<uintptr_t>(&FakeFire);
+  W(k.attackSlot) = reinterpret_cast<uintptr_t>(&FakeAttack);
+  W(k.cmpSlot) = g_base + k.cmpFn;
+  const Result r = InstallDroneKill(Words{}, FakeFns(), pins);
+  CHECK(r.ok && r.actor == GotStatus::kOk && r.enter == GotStatus::kOk && r.fire == GotStatus::kOk && r.attack == GotStatus::kOk, "pinned install");
+  CHECK(r.comparatorOk && r.needsTick, "comparator / needs_tick");
+  CHECK(W(k.actorSlot) != reinterpret_cast<uintptr_t>(&FakeActor) && W(k.enterSlot) != reinterpret_cast<uintptr_t>(&FakeEnter) &&
+            W(k.fireSlot) != reinterpret_cast<uintptr_t>(&FakeFire) && W(k.attackSlot) != reinterpret_cast<uintptr_t>(&FakeAttack),
         "a word was not swapped");
-  CHECK(word(0x36f91f0) == base + 0x1524cb4, "the comparator slot is read only");
-  CHECK(CountLine("dronekill hook install", 1) == 4, "four INFO install lines, got %d", CountLine("dronekill hook install", 1));
-  CHECK(HasLine("dronekill: on (QA)", 1) && HasLine("k_feed=none in the plugin"), "summary line");
-  CHECK(DroneKillShotActive(), "shot active");
-  munmap(p, sz);
+  CHECK(W(k.cmpSlot) == g_base + k.cmpFn, "the comparator slot is read only");
+  CHECK(CountLine("combat_dronekill_hook", 1) == 4, "four INFO install lines, got %d", CountLine("combat_dronekill_hook", 1));
+  CHECK(HasLine("result=installed", 1) && HasLine("combat_dronekill_install"), "summary line");
+  CHECK(ShotActive(), "shot active");
+  ResetForTest();
 }
 
 static void TestInstallVariants() {
   // kill only: FireBulletLocal / AttackTarget words stay; the tick is needed
-  DroneKillInstall r = Reset(Only(true, false, false, false, false));
-  CHECK(r.ok && r.needs_tick && g_w[g_fire_slot / 8] == reinterpret_cast<uintptr_t>(&FakeFire) && g_w[0x38 / 8] == reinterpret_cast<uintptr_t>(&FakeAttack),
+  Result r = Reset(Only(true, false, false, false, false));
+  CHECK(r.ok && r.needsTick && W(g_fire_slot) == reinterpret_cast<uintptr_t>(&FakeFire) && W(kSlotAttack) == reinterpret_cast<uintptr_t>(&FakeAttack),
         "kill only wraps fire/attack");
-  CHECK(g_w[0x20 / 8] != reinterpret_cast<uintptr_t>(&FakeActor) && g_w[0x28 / 8] != reinterpret_cast<uintptr_t>(&FakeEnter), "actor+enter swapped");
-  CHECK(!DroneKillShotActive(), "shot active without lockon/shot");
+  CHECK(W(kSlotActor) != reinterpret_cast<uintptr_t>(&FakeActor) && W(kSlotEnter) != reinterpret_cast<uintptr_t>(&FakeEnter), "actor+enter swapped");
+  CHECK(!ShotActive(), "shot active without lockon/shot");
   // shot only: fire swapped, no tick needed
   r = Reset(Only(false, false, false, false, true));
-  CHECK(r.ok && !r.needs_tick && g_w[g_fire_slot / 8] != reinterpret_cast<uintptr_t>(&FakeFire) && g_w[0x38 / 8] == reinterpret_cast<uintptr_t>(&FakeAttack) &&
-            DroneKillShotActive(),
+  CHECK(r.ok && !r.needsTick && W(g_fire_slot) != reinterpret_cast<uintptr_t>(&FakeFire) && W(kSlotAttack) == reinterpret_cast<uintptr_t>(&FakeAttack) &&
+            ShotActive(),
         "shot only");
   // lockon alone swaps fire
   r = Reset(Only(false, true, false, false, false));
-  CHECK(r.ok && g_w[g_fire_slot / 8] != reinterpret_cast<uintptr_t>(&FakeFire) && DroneKillShotActive(), "lockon swaps fire");
+  CHECK(r.ok && W(g_fire_slot) != reinterpret_cast<uintptr_t>(&FakeFire) && ShotActive(), "lockon swaps fire");
   // chase swaps attack
   r = Reset(Only(false, false, false, true, false));
-  CHECK(r.ok && g_w[0x38 / 8] != reinterpret_cast<uintptr_t>(&FakeAttack) && g_w[g_fire_slot / 8] == reinterpret_cast<uintptr_t>(&FakeFire), "chase swaps attack only");
-  CHECK(r.needs_tick, "chase alone needs the tick");
+  CHECK(r.ok && W(kSlotAttack) != reinterpret_cast<uintptr_t>(&FakeAttack) && W(g_fire_slot) == reinterpret_cast<uintptr_t>(&FakeFire), "chase swaps attack only");
+  CHECK(r.needsTick, "chase alone needs the tick");
   r = Reset(Only(false, false, true, false, false));
-  CHECK(r.ok && !r.needs_tick, "gun alone needs no tick");
+  CHECK(r.ok && !r.needsTick, "gun alone needs no tick");
 
   // a slot that does not hold the pinned function: nothing is swapped (all or none), loud
-  r = Reset(DroneKillWords{}, false);
-  {
-    uintptr_t* w = g_w;
-    mprotect(w, 4096, PROT_READ | PROT_WRITE);
-    w[0x38 / 8] = 0x4242420;  // AttackTarget's word
-    mprotect(w, 4096, PROT_READ);
-  }
-  r = InstallDroneKill(g_base, DroneKillWords{}, Fns(), Slots());
-  CHECK(!r.ok && r.attack.status == SwapStatus::kUnexpectedOriginal, "foreign slot word accepted");
-  CHECK(g_w[0x20 / 8] == reinterpret_cast<uintptr_t>(&FakeActor) && g_w[0x28 / 8] == reinterpret_cast<uintptr_t>(&FakeEnter) &&
-            g_w[g_fire_slot / 8] == reinterpret_cast<uintptr_t>(&FakeFire) && g_w[0x38 / 8] == 0x4242420,
+  r = Reset(Words{}, false);
+  W(kSlotAttack) = 0x4242420;  // AttackTarget's word
+  r = InstallDroneKill(Words{}, FakeFns(), Slots());
+  CHECK(!r.ok && r.attack == GotStatus::kOriginalMismatch, "foreign slot word accepted");
+  CHECK(W(kSlotActor) == reinterpret_cast<uintptr_t>(&FakeActor) && W(kSlotEnter) == reinterpret_cast<uintptr_t>(&FakeEnter) &&
+            W(g_fire_slot) == reinterpret_cast<uintptr_t>(&FakeFire) && W(kSlotAttack) == 0x4242420,
         "a word changed although the install was refused");
-  CHECK(HasLine("dronekill hook install", 3) && HasLine("dronekill: OFF, nothing changed", 3), "refusal not loud");
-  CHECK(!DroneKillShotActive(), "shot active after a refusal");
+  CHECK(HasLine("combat_dronekill_hook", 3) && HasLine("result=refused", 3), "refusal not loud");
+  CHECK(!ShotActive(), "shot active after a refusal");
 
   // the third swap fails (FireBulletLocal's slot is in an executable page): the two earlier words are put back
-  r = Reset(DroneKillWords{}, false);
+  r = Reset(Words{}, false);
   NewPage(true);  // a fresh page whose fire slot lives in an executable page
-  r = InstallDroneKill(g_base, DroneKillWords{}, Fns(), Slots());
-  CHECK(!r.ok && r.fire.status == SwapStatus::kExecutablePage, "exec page accepted: %s", StatusName(r.fire.status));
-  CHECK(g_w[0x20 / 8] == reinterpret_cast<uintptr_t>(&FakeActor) && g_w[0x28 / 8] == reinterpret_cast<uintptr_t>(&FakeEnter),
+  r = InstallDroneKill(Words{}, FakeFns(), Slots());
+  CHECK(!r.ok && r.fire == GotStatus::kSlotOutsideImage, "exec page accepted: %s", sentinel::GotStatusName(r.fire));
+  CHECK(W(kSlotActor) == reinterpret_cast<uintptr_t>(&FakeActor) && W(kSlotEnter) == reinterpret_cast<uintptr_t>(&FakeEnter),
         "the earlier swaps were not put back");
-  CHECK(HasLine("the earlier words were put back", 2), "rollback not reported as a WARNING");
-  CHECK(HasLine("dronekill hook install", 3), "the failed swap was not an ERROR line");
-  CHECK(!DroneKillShotActive(), "shot active after a failed swap");
+  CHECK(HasLine("combat_dronekill_rollback", 2), "rollback not reported as a WARNING");
+  CHECK(HasLine("combat_dronekill_hook", 3), "the failed swap was not an ERROR line");
+  CHECK(!ShotActive(), "shot active after a failed swap");
 
   // a swap that fails after a hook that is not wanted (fire): the rollback skips it, so it ends quiet (WARNING, every word back)
   r = Reset(Only(true, false, true, true, false), false);
   NewPage(true);
   {
-    mprotect(g_w + 4096 / 8, 4096, PROT_READ | PROT_WRITE);
-    g_w[0x1038 / 8] = reinterpret_cast<uintptr_t>(&FakeAttack);
-    mprotect(g_w + 4096 / 8, 4096, PROT_READ | PROT_EXEC);
-    DroneKillSlots sl = Slots();
-    sl.attack_slot = 0x1038;
-    r = InstallDroneKill(g_base, Only(true, false, true, true, false), Fns(), sl);
+    W(kExecAttack) = reinterpret_cast<uintptr_t>(&FakeAttack);
+    Pins sl = Slots();
+    sl.attackSlot = kExecAttack;
+    r = InstallDroneKill(Only(true, false, true, true, false), FakeFns(), sl);
   }
-  CHECK(!r.ok && r.attack.status == SwapStatus::kExecutablePage, "attack in an executable page: %s", StatusName(r.attack.status));
-  CHECK(g_w[0x20 / 8] == reinterpret_cast<uintptr_t>(&FakeActor) && g_w[0x28 / 8] == reinterpret_cast<uintptr_t>(&FakeEnter), "earlier words not put back");
-  CHECK(HasLine("the earlier words were put back", 2) && !HasLine("the earlier words were put back", 3), "the unwanted hook was rolled back");
+  CHECK(!r.ok && r.attack == GotStatus::kSlotOutsideImage, "attack in an executable page: %s", sentinel::GotStatusName(r.attack));
+  CHECK(W(kSlotActor) == reinterpret_cast<uintptr_t>(&FakeActor) && W(kSlotEnter) == reinterpret_cast<uintptr_t>(&FakeEnter), "earlier words not put back");
+  CHECK(HasLine("combat_dronekill_rollback", 2) && !HasLine("combat_dronekill_rollback", 3), "the unwanted hook was rolled back");
 
   // FindComponentSystemMT not resolved: refuse
-  r = Reset(DroneKillWords{}, false);
-  DroneKillFns none{};
-  r = InstallDroneKill(g_base, DroneKillWords{}, none, Slots());
-  CHECK(!r.ok && HasLine("FindComponentSystemMT is not resolved", 3) && g_w[0x28 / 8] == reinterpret_cast<uintptr_t>(&FakeEnter), "no find");
+  r = Reset(Words{}, false);
+  Fns none{};
+  r = InstallDroneKill(Words{}, none, Slots());
+  CHECK(!r.ok && HasLine("FindComponentSystemMT is not resolved", 3) && W(kSlotEnter) == reinterpret_cast<uintptr_t>(&FakeEnter), "no find");
 
   // the same module twice: refused
-  r = Reset(DroneKillWords{});
+  r = Reset(Words{});
   CHECK(r.ok, "install");
-  const DroneKillInstall r2 = InstallDroneKill(g_base, DroneKillWords{}, Fns(), Slots());
-  CHECK(!r2.ok && HasLine("already installed", 3), "second install accepted");
+  const Result r2 = InstallDroneKill(Words{}, FakeFns(), Slots());
+  CHECK(!r2.ok && HasLine("already_ran", 3), "second install accepted");
 
   // chase without its functions: chase off, loud, the rest installs
-  r = Reset(DroneKillWords{}, false);
-  DroneKillFns f = Fns();
+  r = Reset(Words{}, false);
+  Fns f = FakeFns();
   f.local = nullptr;
-  r = InstallDroneKill(g_base, DroneKillWords{}, f, Slots());
-  CHECK(r.ok && HasLine("dronekill: chase OFF", 3) && g_w[0x38 / 8] == reinterpret_cast<uintptr_t>(&FakeAttack), "chase without IsLocallyControlled");
+  r = InstallDroneKill(Words{}, f, Slots());
+  CHECK(r.ok && HasLine("combat_dronekill_chase_off", 3) && W(kSlotAttack) == reinterpret_cast<uintptr_t>(&FakeAttack), "chase without IsLocallyControlled");
 
-  // base 0
+  // no libr15 loaded
+  ResetForTest();
   g_lines.clear();
-  r = InstallDroneKill(0, DroneKillWords{}, Fns(), Slots());
-  CHECK(!r.ok && HasLine("no base address", 3), "base 0");
+  r = InstallAt(&NoLookup, Slots(), Words{}, FakeFns());
+  CHECK(!r.ok && HasLine("module_not_loaded", 3), "base 0");
   // each function chase calls, missing: chase off, loud
   for (int which = 0; which < 5; ++which) {
-    r = Reset(DroneKillWords{}, false);
-    DroneKillFns ff = Fns();
+    r = Reset(Words{}, false);
+    Fns ff = FakeFns();
     if (which == 0) ff.l2w = nullptr;
     if (which == 1) ff.primary = nullptr;
     if (which == 2) ff.resolve = nullptr;
     if (which == 3) ff.set_vel = nullptr;
     if (which == 4) ff.local = nullptr;
-    r = InstallDroneKill(g_base, DroneKillWords{}, ff, Slots());
-    CHECK(r.ok && HasLine("dronekill: chase OFF", 3) && g_w[0x38 / 8] == reinterpret_cast<uintptr_t>(&FakeAttack), "chase wrapped without function %d", which);
+    r = InstallDroneKill(Words{}, ff, Slots());
+    CHECK(r.ok && HasLine("combat_dronekill_chase_off", 3) && W(kSlotAttack) == reinterpret_cast<uintptr_t>(&FakeAttack), "chase wrapped without function %d", which);
   }
 
   // the comparator's slot does not hold the comparator: loud; Component() look-ups off
-  r = Reset(DroneKillWords{}, false);
+  r = Reset(Words{}, false);
   {
-    mprotect(g_w, 4096, PROT_READ | PROT_WRITE);
-    g_w[0x40 / 8] = 0x99;
-    mprotect(g_w, 4096, PROT_READ);
+    W(kSlotCmp) = 0x99;
   }
-  r = InstallDroneKill(g_base, DroneKillWords{}, Fns(), Slots());
-  CHECK(r.ok && !r.comparator_ok && HasLine("the comparator slot does not hold its function", 2), "comparator warning");
+  r = InstallDroneKill(Words{}, FakeFns(), Slots());
+  CHECK(r.ok && !r.comparatorOk && HasLine("the comparator slot does not hold its function", 2), "comparator warning");
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&d);
   CHECK(g_comp_calls == 0 && HasLine("not looked up"), "Component() called with the comparator slot wrong");
@@ -1053,8 +1149,8 @@ static void TestInstallVariants() {
     const uintptr_t v[6] = {0x1804a10, 0x16f6ef0, 0x1677d34, 0x19a27ac, 0x167bec0, 0x2175630};
     const void* a[6];
     for (int i = 0; i < 6; ++i) a[i] = reinterpret_cast<const void*>(b + v[i]);
-    DroneKillFns o{};
-    CHECK(ResolveDroneKillFnsFromAddressesForTest(b, a, &o) && o.find != nullptr && o.l2w != nullptr && o.primary != nullptr && o.resolve != nullptr &&
+    Fns o{};
+    CHECK(ResolveFnsFromAddressesForTest(b, a, &o) && o.find != nullptr && o.l2w != nullptr && o.primary != nullptr && o.resolve != nullptr &&
               o.set_vel != nullptr && o.local != nullptr,
           "the pinned addresses were refused");
     CHECK(reinterpret_cast<uintptr_t>(o.find) == b + v[0] && reinterpret_cast<uintptr_t>(o.local) == b + v[5], "functions in the wrong order");
@@ -1062,24 +1158,24 @@ static void TestInstallVariants() {
       const void* c[6];
       memcpy(c, a, sizeof c);
       c[bad] = reinterpret_cast<const void*>(b + v[bad] + 4);
-      DroneKillFns o2{};
+      Fns o2{};
       g_lines.clear();
-      CHECK(!ResolveDroneKillFnsFromAddressesForTest(b, c, &o2) && o2.find == nullptr && HasLine("not at its pinned address", 3), "function %d at the wrong address accepted", bad);
+      CHECK(!ResolveFnsFromAddressesForTest(b, c, &o2) && o2.find == nullptr && HasLine("not at its pinned address", 3), "function %d at the wrong address accepted", bad);
       c[bad] = nullptr;
-      CHECK(!ResolveDroneKillFnsFromAddressesForTest(b, c, &o2), "function %d missing accepted", bad);
+      CHECK(!ResolveFnsFromAddressesForTest(b, c, &o2), "function %d missing accepted", bad);
     }
   }
 
   // functions are resolved from the game library: none on the host
-  DroneKillFns out{};
+  Fns out{};
   g_lines.clear();
-  CHECK(!ResolveDroneKillFns(0x7000000000ull, &out) && HasLine("libr15.so is not loaded", 3) && out.find == nullptr, "resolve on the host");
+  CHECK(!ResolveFns(0x7000000000ull, &out) && HasLine("libr15.so is not loaded", 3) && out.find == nullptr, "resolve on the host");
 }
 
 // A wrapper called before its real function is known (the module reset under a live slot) calls nothing and faults nothing.
 static void TestWrappersWithoutReal() {
-  Reset(DroneKillWords{});
-  auto aw = reinterpret_cast<ActorFn>(g_w[0x20 / 8]);
+  Reset(Words{});
+  auto aw = reinterpret_cast<ActorFn>(W(kSlotActor));
   void* sp = nullptr;
   uint64_t actor = 0;
   unsigned fl = 0;
@@ -1088,7 +1184,7 @@ static void TestWrappersWithoutReal() {
   g_actor_ret = 7;
   CHECK(aw(nullptr, nullptr, dk::kDroneActor, &sp, &actor, &fl) == 7, "the Actor wrapper changed the result");
   CHECK(aw(nullptr, nullptr, 0x1234, &sp, &actor, &fl) == 1, "the Actor wrapper changed another actor's result");
-  ResetDroneKillForTest();
+  ResetForTest();
   g_actor_calls = 0;
   g_enters.clear();
   g_fires.clear();
@@ -1102,13 +1198,13 @@ static void TestWrappersWithoutReal() {
 }
 
 static void TestEnterOther() {
-  Reset(DroneKillWords{});
+  Reset(Words{});
   ND d{0x1234, 0, dk::kDamageable, dk::kDamageable, 1};
   CallEnter(&d);
   CHECK(g_enters.size() == 1 && g_enters[0].data == &d && g_enters[0].node == g_node && SameNd(g_enters[0].copy, d), "args to the real Enter");
   CHECK(g_find_calls == 0 && g_comp_calls == 0, "work done for another actor");
-  CHECK(!HasLine("dronekill: component") && !HasLine("dronekill: release") && !HasLine("enter note"), "a line for another actor");
-  const DroneKillStats s = GetDroneKillStats();
+  CHECK(!HasLine("combat_dronekill_component") && !HasLine("combat_dronekill_release") && !HasLine("combat_dronekill_note"), "a line for another actor");
+  const Stats s = CurrentStats();
   CHECK(s.enter_other == 1 && s.enter_drone == 0, "counters %u/%u", s.enter_other, s.enter_drone);
   // an unreadable data pointer: the real Enter is reached with it, nothing else
   g_enter_deref = false;
@@ -1123,37 +1219,43 @@ static void TestEnterOther() {
 }
 
 static void TestDroneEnterKill() {
-  DroneKillInstall r = Reset(DroneKillWords{});
+  Result r = Reset(Words{});
   CHECK(r.ok, "install");
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&d);
-  CHECK(GetDroneKillStats().enter_drone == 1 && GetDroneKillStats().enter_other == 0, "drone Enter counters");
+  CHECK(CurrentStats().enter_drone == 1 && CurrentStats().enter_other == 0, "drone Enter counters");
   CHECK(g_enters.size() == 1 && g_enters[0].data == &d && SameNd(g_enters[0].copy, d), "the real Enter got other arguments");
   CHECK(g_ev.size() >= 4 && g_ev[0] == "enter" && g_ev[1] == "actor" && g_ev[2] == "find" && g_ev[3] == "component", "order: the real Enter first, then the look-ups");
   CHECK(g_bad_actor == 0, "Component() got another actor");
-  CHECK(HasLine("dronekill: release (damageable on)", 1) && HasLine("index=17") && HasLine("group=1"), "release line");
+  CHECK(CurrentStats().capturing == 0, "a drone Enter is still counted in flight after it returned");
+  g_actor_ret = 7;
+  ND seen = Drone(kSound, kSound, 0);
+  CallEnter(&seen);
+  CHECK(g_actor_seen == 7, "inside a drone Enter, Actor's result changed: %u", g_actor_seen);
+  g_actor_ret = 1;
+  CHECK(HasLine("combat_dronekill_release", 1) && HasLine("index=17") && HasLine("group=1"), "release line");
   ND s = Drone(kSound, kSound, 1);
   CallEnter(&s);
-  CHECK(HasLine("dronekill: component") && HasLine("to=group 1"), "the sound joins the group");
+  CHECK(HasLine("combat_dronekill_component") && HasLine("to=group 1"), "the sound joins the group");
   ND off = Drone(kSound, kSound, 0);
   CallEnter(&off);
   CHECK(HasLine("enable=off") && HasLine("to=(off)"), "an OFF enter is only noted");
-  CHECK(!HasLine("dronekill: touch deployed"), "a non-touch OFF enter was taken for a touch release");
+  CHECK(!HasLine("step=deployed"), "a non-touch OFF enter was taken for a touch release");
 
   // K: the group is shut down at the tick, the disables go through DisableComponent(handle, 1)
-  DroneKillOnKilled(0xabcd0011u);
-  CHECK(HasLine("dronekill: K") && HasLine("group shut down") && HasLine("dronekill: K index=17 tid="), "K line");
+  OnKilled(0xabcd0011u);
+  CHECK(HasLine("combat_dronekill_k ") && HasLine("result=shut_down") && HasLine("combat_dronekill_k index=17 tid="), "K line");
   CHECK(g_dis.empty(), "disabled in the K thread");
-  DroneKillTick(0);
-  CHECK(HasLine("dronekill: tick running (first call)", 1), "first tick line");
+  Tick(GameAddress());
+  CHECK(HasLine("combat_dronekill_tick_first", 1), "first tick line");
   CHECK(g_dis.size() == 2, "disables at the tick: %zu", g_dis.size());  // the damageable and the sound (the OFF enter did not join)
   CHECK(g_dis.size() >= 2 && g_dis[0].sys == g_dmg && g_dis[0].handle == kDmgHandle && g_dis[0].cat == 1 && !g_dis[0].enable, "first disable");
   CHECK(g_dis.size() >= 2 && g_dis[1].sys == g_snd && g_dis[1].handle == 0x00060006 && g_dis[1].cat == 1, "second disable");
-  CHECK(HasLine("dronekill: component off") && HasLine("result=OFF"), "off lines");
+  CHECK(HasLine("combat_dronekill_off") && HasLine("result=OFF"), "off lines");
   const size_t nd = g_dis.size();
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.size() == nd, "disabled again");
-  CHECK(GetDroneKillStats().due_runs == 1 && GetDroneKillStats().ticks == 2, "tick counters");
+  CHECK(CurrentStats().due_runs == 1 && CurrentStats().ticks == 2, "tick counters");
   Dump("drone Enter, K, tick");
 
   // R3: the script turns a component of the dead group on again: it is off again at the next tick. The verdict on the DisableComponent
@@ -1164,23 +1266,53 @@ static void TestDroneEnterKill() {
   g_ms += 5000;
   g_lines.clear();
   CallEnter(&again);
-  CHECK(HasLine("dronekill: re-enabled in a dead group") && HasLine("off again at the next tick"), "R3 line");
-  CHECK(!HasLine("dronekill: component") && !HasLine("dronekill: release"), "R3: the Enter was logged as an ordinary one too");
-  DroneKillTick(0);
+  CHECK(HasLine("combat_dronekill_reenabled") && HasLine("action=off_at_next_tick"), "R3 line");
+  CHECK(!HasLine("combat_dronekill_component") && !HasLine("combat_dronekill_release"), "R3: the Enter was logged as an ordinary one too");
+  Tick(GameAddress());
   CHECK(g_dis.size() == 1 && g_dis[0].sys == g_snd, "R3: not disabled again");
+}
+
+static void TestNestedEnter() {
+  {  // a drone node whose actor symbol is readable and whose enable word is not: the game's Enter alone, nothing read past the readable part
+    Reset(Words{});
+    const size_t pg = 4096;
+    uint8_t* m = static_cast<uint8_t*>(mmap(nullptr, 2 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    mprotect(m + pg, pg, PROT_NONE);
+    uint8_t* const tail = m + pg - 0x20;  // actor, space, system, component readable; enable (+0x20) in the PROT_NONE page
+    const uint64_t drone = dk::kDroneActor;
+    memcpy(tail, &drone, 8);
+    g_enter_deref = false;
+    g_ev.clear();
+    g_find_calls = 0;
+    CallEnter(reinterpret_cast<const ND*>(tail));
+    CHECK(g_ev.size() == 1 && g_ev[0] == "enter-bad-pointer" && g_find_calls == 0, "a node cut by a page was read past its readable part");
+    g_enter_deref = true;
+    munmap(m, 2 * pg);
+  }
+  Reset(Words{});
+  {  // a drone Enter inside a drone Enter: when the inner one returns, the outer one's capture is armed again for its own Actor call
+    const uint32_t tracked = CurrentStats().enter_drone;
+    ND inner = Drone(kSound, kSound, 0);
+    g_nested_first = &inner;
+    g_lines.clear();
+    ND outer = Drone(dk::kR14Touch, dk::kR14Touch, 1);
+    CallEnter(&outer);
+    CHECK(CurrentStats().enter_drone == tracked + 2, "the nested Enters were not both drone Enters");
+    CHECK(CountLine("no actor (Enter found none") == 0, "the outer Enter lost its capture to the inner one: %d notes", CountLine("no actor (Enter found none"));
+  }
 }
 
 // The wrappers' state is per thread: what one thread is in the middle of is not seen by another thread's calls.
 static void TestStateIsPerThread() {
   // the capture: another thread's Actor call for the drone, while this thread is inside a drone Enter, is not this Enter's
-  DroneKillInstall r = Reset(DroneKillWords{});
+  Result r = Reset(Words{});
   CHECK(r.ok, "install");
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   g_enter_actor_on_other_thread = true;
   CallEnter(&d);
   CHECK(g_drone_actor_calls == 2, "Actor calls for the drone: %d, want the other thread's and this Enter's", g_drone_actor_calls);
   CHECK(g_comp_calls > 0 && g_bad_actor == 0, "the Enter took the other thread's actor (%d Component calls on another actor)", g_bad_actor);
-  CHECK(HasLine("dronekill: release (damageable on)") && HasLine("group=1"), "release line");
+  CHECK(HasLine("combat_dronekill_release") && HasLine("group=1"), "release line");
 
   // the shot: another thread outside any shot sees none, a shot of its own sees its own values, and this thread's are back after it
   r = Reset(Only(false, false, false, false, true));
@@ -1193,149 +1325,153 @@ static void TestStateIsPerThread() {
         "the other thread's shot did not see its own values");
   CHECK(g_fires.size() == 2 && g_fires[0].after[0] == 1 && g_fires[0].after[1] == 2 && g_fires[0].after[2] == 3 && g_fires[0].after_remote == 1,
         "this thread's shot was changed by the other thread's");
-  CHECK(DroneKillShotVelocity(nullptr) == nullptr, "accessor non-null after the shots");
+  CHECK(ShotVelocity(nullptr) == nullptr, "accessor non-null after the shots");
   // the test seam is per thread as well: it answers on the thread that set it
   const float v[3] = {7, 8, 9};
-  SetDroneKillShotForTest(v, 1);
+  SetShotForTest(v, 1);
   int rem = -1;
-  const float* a = DroneKillShotVelocity(&rem);
+  const float* a = ShotVelocity(&rem);
   CHECK(a != nullptr && a[0] == 7 && a[2] == 9 && rem == 1, "the seam does not answer on its own thread");
   bool other_none = false;
-  std::thread([&] { other_none = DroneKillShotVelocity(nullptr) == nullptr; }).join();
+  std::thread([&] { other_none = ShotVelocity(nullptr) == nullptr; }).join();
   CHECK(other_none, "the seam answered on another thread");
-  SetDroneKillShotForTest(nullptr, 0);
-  CHECK(DroneKillShotVelocity(nullptr) == nullptr, "the seam did not clear");
+  SetShotForTest(nullptr, 0);
+  CHECK(ShotVelocity(nullptr) == nullptr, "the seam did not clear");
 
   // the tick guard: a tick on another thread, while this thread is inside its tick, runs (the guard stops only this thread's re-entry)
-  r = Reset(DroneKillWords{});
+  r = Reset(Words{});
   CHECK(r.ok, "install");
   ND s = Drone(kSound, kSound, 1);
   CallEnter(&d);
   CallEnter(&s);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
-  g_dis_hook = [] { std::thread([] { DroneKillTick(0); }).join(); };
-  DroneKillTick(0);
-  CHECK(GetDroneKillStats().due_runs == 2, "the tick on another thread did not run (%u runs)", GetDroneKillStats().due_runs);
+  OnKilled(kDmgHandle & 0xffff);
+  g_dis_hook = [] { std::thread([] { Tick(GameAddress()); }).join(); };
+  Tick(GameAddress());
+  CHECK(CurrentStats().due_runs == 2, "the tick on another thread did not run (%u runs)", CurrentStats().due_runs);
 }
 
 static void TestKillRules() {
   // a K for an index no live group has
-  Reset(DroneKillWords{});
+  Reset(Words{});
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&d);
-  DroneKillOnKilled(0x99);
-  CHECK(HasLine("NO live group has that index") && HasLine("live_groups=1"), "K without a group");
-  DroneKillTick(0);
+  OnKilled(0x99);
+  CHECK(HasLine("result=no_live_group") && HasLine("live_groups=1"), "K without a group");
+  Tick(GameAddress());
   CHECK(g_dis.empty(), "disabled for a K that matched no group");
   // 16 bits of the index are compared
-  DroneKillOnKilled(0xabcd0000u | (kDmgHandle & 0xffff));
-  CHECK(HasLine("group shut down"), "the high 16 bits must not matter");
+  OnKilled(0xabcd0000u | (kDmgHandle & 0xffff));
+  CHECK(HasLine("result=shut_down"), "the high 16 bits must not matter");
 
   // no kill word: the K is only recorded
   Reset(Only(false, true, true, true, true));
   CallEnter(&d);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
-  CHECK(HasLine("would be shut down (nothing done)"), "no-kill K line");
-  DroneKillTick(0);
+  OnKilled(kDmgHandle & 0xffff);
+  CHECK(HasLine("result=would_shut_down"), "no-kill K line");
+  Tick(GameAddress());
   CHECK(g_dis.empty(), "disabled without the kill word");
 
   // the invoke-immediate word is 0: Enter would queue here, we never do: nothing is disabled, it waits; due bits expire after 2 s
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
   ND s = Drone(kSound, kSound, 1);
   CallEnter(&s);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   SetFlag(0);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty(), "disabled outside the window");
   CHECK(HasLine("waiting_invoke_immediate_0=2", 2), "waiting not reported");
   SetFlag(1);
   g_ms += 1000;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.size() == 2, "disables after the window opened: %zu", g_dis.size());
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   SetFlag(0);
-  DroneKillTick(0);
+  Tick(GameAddress());
   SetFlag(1);
   g_ms += 2001;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty() && HasLine("expired=1"), "an expired due bit still acted");
 
   // a tick that is re-entered from inside an engine call does nothing the second time
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
   CallEnter(&s);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
-  g_dis_hook = [] { DroneKillTick(0); };
-  DroneKillTick(0);
+  OnKilled(kDmgHandle & 0xffff);
+  g_dis_hook = [] { Tick(GameAddress()); };
+  Tick(GameAddress());
   CHECK(g_dis.size() == 2, "a re-entered tick disabled again: %zu calls", g_dis.size());
-  CHECK(GetDroneKillStats().due_runs == 1, "re-entered tick ran");
+  CHECK(CurrentStats().due_runs == 1, "re-entered tick ran");
 
   // no kill word: a component of a dead group that is enabled again is only noted, nothing is made due
   Reset(Only(false, true, true, true, true));
   CallEnter(&d);
   CallEnter(&s);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   CallEnter(&s);
-  CHECK(HasLine("would be off again (no kill word)"), "R3 without the kill word");
-  DroneKillTick(0);
-  CHECK(GetDroneKillStats().due_runs == 0 && g_dis.empty(), "the tick ran for a group that nothing marked due");
+  CHECK(HasLine("action=none_no_kill_word"), "R3 without the kill word");
+  Tick(GameAddress());
+  CHECK(CurrentStats().due_runs == 0 && g_dis.empty(), "the tick ran for a group that nothing marked due");
 
   // the system's game space was unreadable at the Enter: nothing to compare later
-  Reset(DroneKillWords{});
+  Reset(Words{});
   W64(g_dmg, dk::kSysOwner, 0);
   CallEnter(&d);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
-  DroneKillTick(0);
+  OnKilled(kDmgHandle & 0xffff);
+  Tick(GameAddress());
   CHECK(g_dis.empty() && HasLine("no game space recorded"), "disabled with no recorded game space");
 
   // the system's vtable changed to one whose Component() is not the read shape
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   memcpy(g_vtable2, g_vtable, sizeof g_vtable);
   memcpy(g_thunk_bad, g_thunk_words, sizeof g_thunk_bad);
   g_thunk_bad[2] ^= 0x400;
   g_vtable2[dk::kVtComponent / 8] = reinterpret_cast<uintptr_t>(g_thunk_bad);
   W64(g_dmg, 0, reinterpret_cast<uintptr_t>(g_vtable2));
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty() && HasLine("Component() not the read shape"), "disabled through an unknown Component()");
+  g_comp_calls = 0;  // the verdict is cached per vtable: a second drone Enter on that system is still not looked up
+  g_lines.clear();
+  CallEnter(&d);
+  CHECK(g_comp_calls == 0 && HasLine("not looked up"), "a vtable refused once was looked up the second time");
 
   // the system moved to another game space since the Enter: skipped for good
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   W64(g_dmg, dk::kSysOwner, reinterpret_cast<uintptr_t>(g_gs2));
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty() && HasLine("system's game space changed"), "disabled in another game space");
   // the system is not found again
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   g_syss[0].sym = 0;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty() && HasLine("system not found again in its game space"), "disabled although the system is gone");
   // the handle changed
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   g_comps[0].handle += 0x10000;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty() && HasLine("handle changed"), "disabled although the handle changed");
   // DisableComponent is not the read shape
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   g_dis_words[dk::kDisWords - 1] = 0xd65f03c0;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty() && HasLine("DisableComponent not the read shape"), "disabled through an unknown body");
 }
 
 static void TestEnterLookups() {
   // Actor not called by the real Enter / returns 0 / another actor's call first
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_enter_calls_actor = false;
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&d);
@@ -1347,31 +1483,31 @@ static void TestEnterLookups() {
   g_actor_ret = 1;
   g_other_actor_first = 0x999;
   CallEnter(&d);
-  CHECK(HasLine("dronekill: release (damageable on)") && g_bad_actor == 0, "another actor's call was taken for Enter's own");
+  CHECK(HasLine("combat_dronekill_release") && g_bad_actor == 0, "another actor's call was taken for Enter's own");
   g_other_actor_first = 0;
 
   // no such system / no component / wrong shapes
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_syss[0].sym = 0;
   CallEnter(&d);
   CHECK(HasLine("no such system in the actor's game space"), "no system");
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_ncomps = 0;
   CallEnter(&d);
-  CHECK(HasLine("no component under that name") && !HasLine("dronekill: release"), "no component");
-  Reset(DroneKillWords{});
+  CHECK(HasLine("no component under that name") && !HasLine("combat_dronekill_release"), "no component");
+  Reset(Words{});
   g_thunk_words[2] ^= 0x400;
   CallEnter(&d);
   CHECK(HasLine("not looked up") && g_comp_calls == 0, "Component thunk shape");
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_body_words[10] = 0xf9000008;
   CallEnter(&d);
   CHECK(HasLine("not looked up") && g_comp_calls == 0, "Component body shape");
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_body_words[dk::kBodyBl] += 1;  // a bl that does not reach the comparator's PLT stub
   CallEnter(&d);
   CHECK(HasLine("not looked up") && g_comp_calls == 0, "Component body: bl target");
-  Reset(DroneKillWords{});
+  Reset(Words{});
   {
     // a tagged (odd) vtable pointer whose slots, read at +1, would hold the right words: still refused
     alignas(16) static uint8_t oddvt[0x400];
@@ -1382,31 +1518,31 @@ static void TestEnterLookups() {
     CHECK(HasLine("not looked up") && g_comp_calls == 0, "odd vtable");
   }
   // Actor says yes but its out-pointers cannot be read: no capture
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_actor_bad_out = true;
   CallEnter(&d);
   CHECK(HasLine("no actor (Enter found none") && g_find_calls == 0, "unreadable Actor outputs were used");
   // Actor called twice for the drone: the first call's capture stands
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_actor_twice = true;
   CallEnter(&d);
-  CHECK(HasLine("dronekill: release (damageable on)") && g_bad_actor == 0, "the second Actor call replaced the capture (bad actor calls %d)", g_bad_actor);
+  CHECK(HasLine("combat_dronekill_release") && g_bad_actor == 0, "the second Actor call replaced the capture (bad actor calls %d)", g_bad_actor);
   // a component handle whose index is 0xffff is none, whatever its generation
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_comps[0].handle = 0x0007ffff;
   CallEnter(&d);
-  CHECK(HasLine("no component under that name") && !HasLine("dronekill: release"), "an 0xffff index with a generation taken for a component");
+  CHECK(HasLine("no component under that name") && !HasLine("combat_dronekill_release"), "an 0xffff index with a generation taken for a component");
   // an OFF damageable is an ordinary component line, not a release; a first component with no group waits as pending
-  Reset(DroneKillWords{});
+  Reset(Words{});
   ND dmg_off = Drone(dk::kDamageable, dk::kDamageable, 0);
   CallEnter(&dmg_off);
-  CHECK(HasLine("dronekill: component") && HasLine("enable=off") && !HasLine("dronekill: release"), "a damageable OFF logged as a release");
-  Reset(DroneKillWords{});
+  CHECK(HasLine("combat_dronekill_component") && HasLine("enable=off") && !HasLine("combat_dronekill_release"), "a damageable OFF logged as a release");
+  Reset(Words{});
   ND snd_on = Drone(kSound, kSound, 1);
   CallEnter(&snd_on);
   CHECK(HasLine("to=pending"), "a component with no group is pending");
   // the shape verdict is cached per vtable: the second Enter reads no words again (a corrupted body after the first is not seen)
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
   g_body_words[10] = 0xf9000008;
   g_comp_calls = 0;
@@ -1415,43 +1551,50 @@ static void TestEnterLookups() {
   CHECK(g_comp_calls == 1, "the shape check was not cached: %d component calls", g_comp_calls);
 
   // the log of one kind stops at its cap, once, loudly
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_enter_calls_actor = false;
   for (int i = 0; i < 30; ++i) CallEnter(&d);
-  CHECK(CountLine("dronekill: enter note") == 24, "note cap: %d", CountLine("dronekill: enter note"));
-  CHECK(CountLine("dronekill: log cap reached") == 1, "cap line %d", CountLine("dronekill: log cap reached"));
+  CHECK(CountLine("combat_dronekill_note") == 24, "note cap: %d", CountLine("combat_dronekill_note"));
+  CHECK(CountLine("combat_dronekill_cap") == 1, "cap line %d", CountLine("combat_dronekill_cap"));
 
   // every capped kind stops at its own number
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
   for (int i = 0; i < 200; ++i) CallEnter(&snd_on);
-  CHECK(CountLine("dronekill: release") + CountLine("dronekill: component") == 160, "enter lines: %d", CountLine("dronekill: release") + CountLine("dronekill: component"));
+  CHECK(CountLine("combat_dronekill_release") + CountLine("combat_dronekill_component") == 160, "enter lines: %d", CountLine("combat_dronekill_release") + CountLine("combat_dronekill_component"));
   CHECK(CountLine("kind=enter") == 1, "enter cap line");
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&d);
   CallEnter(&snd_on);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   for (int i = 0; i < 80; ++i) CallEnter(&snd_on);
-  CHECK(CountLine("re-enabled in a dead group") == 64 && CountLine("kind=off") == 1, "off lines: %d", CountLine("re-enabled in a dead group"));
-  Reset(DroneKillWords{});
+  CHECK(CountLine("combat_dronekill_reenabled") == 64 && CountLine("kind=off") == 1, "off lines: %d", CountLine("combat_dronekill_reenabled"));
+  Reset(Words{});
   CallEnter(&d);
-  for (int i = 0; i < 60; ++i) DroneKillOnKilled(0x99);
-  CHECK(CountLine("dronekill: K") == 48 && CountLine("kind=k") == 1, "K lines: %d", CountLine("dronekill: K"));
-  Reset(DroneKillWords{});
+  for (int i = 0; i < 60; ++i) OnKilled(0x99);
+  CHECK(CountLine("combat_dronekill_k ") == 48 && CountLine("kind=k") == 1, "K lines: %d", CountLine("combat_dronekill_k "));
+  Reset(Words{});
   ND gun_on = Drone(dk::kNcaModel, dk::kGun, 1);
   for (int i = 0; i < 100; ++i) CallEnter(&gun_on);
-  CHECK(CountLine("dronekill: gun mirrored") == 96 && CountLine("kind=f357") == 1, "gun lines: %d", CountLine("dronekill: gun mirrored"));
+  CHECK(CountLine("step=mirrored") == 96 && CountLine("kind=f357") == 1, "gun lines: %d", CountLine("step=mirrored"));
 
   // the K feed and the tick before an install are inert
-  ResetDroneKillForTest();
+  ResetForTest();
   g_lines.clear();
-  DroneKillOnKilled(1);
-  DroneKillTick(0);
-  CHECK(g_lines.empty() && GetDroneKillStats().ticks == 0, "inert before install");
+  OnKilled(1);
+  Tick(GameAddress());
+  CHECK(g_lines.empty() && CurrentStats().ticks == 0, "inert before install");
 }
 
 static void TestGun() {
-  Reset(DroneKillWords{});
+  {  // a port Enter for a drone whose gun state is not known yet: only the script's own Enter, the state as the script gave it
+    Reset(Words{});
+    g_enters.clear();
+    ND port = Drone(dk::kNcaModel, dk::kPort, 1);
+    CallEnter(&port);
+    CHECK(g_enters.size() == 1 && g_enters[0].data == &port, "a port with no known gun state got %zu real Enters", g_enters.size());
+  }
+  Reset(Words{});
   ND drone_dmg = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&drone_dmg);  // records the drone's group (not needed for the gun)
   g_enters.clear();
@@ -1466,7 +1609,7 @@ static void TestGun() {
     CHECK(g_enters[2].copy.component == dk::kPort && g_enters[2].copy.enable == 1, "port copy");
     CHECK(gun.component == dk::kGun && gun.enable == 1, "the script's data was written");
   }
-  CHECK(HasLine("dronekill: gun mirrored") && HasLine("gun=shown"), "gun line");
+  CHECK(HasLine("step=mirrored") && HasLine("gun=shown"), "gun line");
   // hidden: the same
   g_enters.clear();
   ND gun0 = Drone(dk::kNcaModel, dk::kGun, 0);
@@ -1478,7 +1621,7 @@ static void TestGun() {
     if (g_comps[i].sym == dk::kPort) g_comps[i].sym = 0;
   ND gun1 = Drone(dk::kNcaModel, dk::kGun, 1);
   CallEnter(&gun1);
-  CHECK(g_enters.size() == 2 && g_enters[1].copy.component == dk::kSatellite && HasLine("not mirrored"), "no port: %zu enters", g_enters.size());
+  CHECK(g_enters.size() == 2 && g_enters[1].copy.component == dk::kSatellite && HasLine("step=missing"), "no port: %zu enters", g_enters.size());
   for (int i = 0; i < g_ncomps; ++i)
     if (g_comps[i].sym == 0) g_comps[i].sym = dk::kPort;
 
@@ -1490,18 +1633,18 @@ static void TestGun() {
   ND port0 = Drone(dk::kNcaModel, dk::kPort, 0);
   CallEnter(&port0);
   CHECK(g_enters.size() == 2 && g_enters[1].copy.component == dk::kPort && g_enters[1].copy.enable == 1 && g_enters[1].data != &port0, "port follows the gun");
-  CHECK(HasLine("dronekill: port follows the gun"), "port line");
+  CHECK(HasLine("step=port_follows"), "port line");
   g_enters.clear();
   ND port1 = Drone(dk::kNcaModel, dk::kPort, 1);
   CallEnter(&port1);
   CHECK(g_enters.size() == 1, "port equal to the gun: %zu enters", g_enters.size());
   // unknown gun state (another game's actor... a fresh table): nothing extra
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_enters.clear();
   CallEnter(&port0);
   CHECK(g_enters.size() == 1, "port with no known gun state: %zu enters", g_enters.size());
   // the gun's symbols in another system are not the gun
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_comps[g_ncomps++] = {g_snd, dk::kGun, 0x00060012};  // the other system has a "gun" and the mirror targets too
   g_idxtab[0x12 * 2] = 0x12;
   g_comps[g_ncomps++] = {g_snd, dk::kSatellite, 0x00060010};
@@ -1513,10 +1656,10 @@ static void TestGun() {
   CallEnter(&not_gun);
   CHECK(g_enters.size() == 1, "a component named like the gun in another system was mirrored");
   // a K clears the gun's state (upstream Shutdown's SetGun(DRONE_ACTOR, 0))
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&drone_dmg);
   CallEnter(&gun2);
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   g_enters.clear();
   ND port2 = Drone(dk::kNcaModel, dk::kPort, 1);
   CallEnter(&port2);
@@ -1527,7 +1670,7 @@ static void TestGun() {
   CallEnter(&gun);
   CHECK(g_enters.size() == 1, "gun mirrored without the word");
   // a drone Enter in another game space clears the gun state (a level change)
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&gun2);
   g_space_now = g_spacemem2;
   CallEnter(&drone_dmg);
@@ -1538,136 +1681,136 @@ static void TestGun() {
 }
 
 static void TestLockOn() {
-  DroneKillInstall r = Reset(DroneKillWords{});
+  Result r = Reset(Words{});
   CHECK(r.ok, "install");
   ND dmg = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&dmg);  // the drone's live group (its actor)
   ND t0 = Drone(dk::kR14Touch, dk::kR14Touch, 0);
   CallEnter(&t0);  // the script made it ungrabbable
-  CHECK(HasLine("dronekill: touch deployed"), "no deployed line");
+  CHECK(HasLine("step=deployed"), "no deployed line");
   g_dis.clear();
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty(), "touch on again before the script's disable was applied (mask bit clear)");
   g_masks[0x5] |= 1;  // the script's disable is applied
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.size() == 1 && g_dis[0].enable && g_dis[0].sys == g_touch && g_dis[0].handle == 0x00010005 && g_dis[0].cat == 1, "on again: %zu calls", g_dis.size());
-  CHECK(HasLine("dronekill: touch on again") && HasLine("on again: grabbable until it locks on"), "on-again line");
+  CHECK(HasLine("step=on_again") && HasLine("result=on tid="), "on-again line");
   // EnableComponent's body is read once per vtable: a body that changes later is not read again
   g_en_words[dk::kEnWords - 1] = 0xd61f0040;
   g_dis.clear();
   CallEnter(&t0);
   g_masks[0x5] |= 1;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.size() == 1 && g_dis[0].enable, "the EnableComponent verdict was not cached: %zu calls", g_dis.size());
   g_en_words[dk::kEnWords - 1] = 0xd65f03c0;
   // the drone's first shot: the touch goes off at the next tick, only while the drone is live
   g_dis.clear();
   CallFire(reinterpret_cast<void*>(0x6001), 0x00020003, DkC3{0, 0, 1}, 0);
   CHECK(g_fires.size() == 1, "fire not passed on");
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.size() == 1 && !g_dis[0].enable && g_dis[0].sys == g_touch && g_dis[0].cat == 1, "locked on: %zu calls", g_dis.size());
-  CHECK(HasLine("dronekill: touch locked on") && HasLine("result=off"), "locked-on line");
+  CHECK(HasLine("step=locked_on") && HasLine("result=off"), "locked-on line");
   // a second shot of the same drone does nothing more
   g_dis.clear();
   CallFire(reinterpret_cast<void*>(0x6001), 0x00020003, DkC3{0, 0, 1}, 0);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty(), "second shot disabled again");
 
   // the invoke-immediate word is 0: it waits (the script's disable is applied but we never queue)
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallEnter(&t0);
   g_masks[0x5] |= 1;
   SetFlag(0);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty(), "enabled outside the window");
   SetFlag(1);
   g_ms += 500;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.size() == 1 && g_dis[0].enable, "on again after the window opened");
 
   // a dead drone: the touch is left alone
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallEnter(&t0);
   g_masks[0x5] |= 1;
-  DroneKillTick(0);
+  Tick(GameAddress());
   g_dis.clear();
-  DroneKillOnKilled(kDmgHandle & 0xffff);
+  OnKilled(kDmgHandle & 0xffff);
   CallFire(reinterpret_cast<void*>(0x6001), 0x00020003, DkC3{0, 0, 1}, 0);
   g_dis.clear();
-  DroneKillTick(0);
+  Tick(GameAddress());
   size_t offs = 0;
   for (const auto& c : g_dis)
     if (c.sys == g_touch && !c.enable) ++offs;
   CHECK(offs == 0 && HasLine("belongs to no live drone"), "a dead drone's touch was disabled: %zu", offs);
 
   // EnableComponent is not the read shape: skipped for good
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallEnter(&t0);
   g_masks[0x5] |= 1;
   g_en_words[dk::kEnWords - 1] = 0xd61f0040;  // a tail call (br x2) for the ret
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty() && HasLine("EnableComponent not the read shape"), "enabled through an unknown body");
 
   // a script's ENABLE of the touch is not a release
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   {
     ND t1 = Drone(dk::kR14Touch, dk::kR14Touch, 1);
     CallEnter(&t1);
-    CHECK(!HasLine("dronekill: touch deployed"), "an ON touch Enter was taken for a release");
+    CHECK(!HasLine("step=deployed"), "an ON touch Enter was taken for a release");
   }
   // the touch's system moved to another game space: skipped for good
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallEnter(&t0);
   g_masks[0x5] |= 1;
   W64(g_touch, dk::kSysOwner, reinterpret_cast<uintptr_t>(g_gs2));
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty() && HasLine("system's game space changed"), "the touch was enabled in another game space");
   // its disable mask cannot be read
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallEnter(&t0);
   g_masks[0x5] |= 1;
   W64(g_touch, dk::MaskOffsets(dk::kEn).idx, 0);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty() && HasLine("disable mask unreadable"), "the touch was enabled with an unreadable mask");
   // skipped for good is DONE, not HELD: a later shot binds nothing
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallEnter(&t0);
   g_masks[0x5] |= 1;
   g_en_words[dk::kEnWords - 1] = 0xd61f0040;
-  DroneKillTick(0);
+  Tick(GameAddress());
   g_en_words[dk::kEnWords - 1] = 0xd65f03c0;
   CallFire(reinterpret_cast<void*>(0x6001), 0x00020003, DkC3{0, 0, 1}, 0);
   g_dis.clear();
-  DroneKillTick(0);
-  CHECK(g_dis.empty() && !HasLine("dronekill: touch locked on"), "a record that was skipped for good locked on");
+  Tick(GameAddress());
+  CHECK(g_dis.empty() && !HasLine("step=locked_on"), "a record that was skipped for good locked on");
   // a drone Enter in another game space is a level change: the touch records go
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallEnter(&t0);
   g_masks[0x5] |= 1;
   g_space_now = g_spacemem2;
   CallEnter(&dmg);
   g_space_now = g_spacemem;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.empty(), "a touch record survived a level change");
   // ... but a second drone Enter in the same game space is not
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallEnter(&t0);
   ND snd = Drone(kSound, kSound, 1);
   CallEnter(&snd);
   g_masks[0x5] |= 1;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.size() == 1 && g_dis[0].enable, "a touch record was cleared by a drone Enter in the same game space");
   // the touch belongs to a live drone through its group's components, not only its actor
-  Reset(DroneKillWords{});
+  Reset(Words{});
   g_actor_val = 0xaaa1;
   CallEnter(&dmg);
   ND t_on = Drone(dk::kR14Touch, dk::kR14Touch, 1);
@@ -1675,10 +1818,10 @@ static void TestLockOn() {
   g_actor_val = 0xbbb2;
   CallEnter(&t0);  // the release arrives under another actor
   g_masks[0x5] |= 1;
-  DroneKillTick(0);
+  Tick(GameAddress());
   g_dis.clear();
   CallFire(reinterpret_cast<void*>(0x6001), 0x00020003, DkC3{0, 0, 1}, 0);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_dis.size() == 1 && !g_dis[0].enable && g_dis[0].sys == g_touch, "a component of a live group was not live (%zu calls)", g_dis.size());
 
   // no lockon word: nothing is tracked, the touch is not re-enabled
@@ -1686,26 +1829,26 @@ static void TestLockOn() {
   CallEnter(&dmg);
   CallEnter(&t0);
   g_masks[0x5] |= 1;
-  DroneKillTick(0);
-  CHECK(g_dis.empty() && !HasLine("dronekill: touch deployed"), "touch handled without the lockon word");
+  Tick(GameAddress());
+  CHECK(g_dis.empty() && !HasLine("step=deployed"), "touch handled without the lockon word");
 }
 
 static void TestFire() {
   Reset(Only(false, false, false, false, true));
-  CHECK(DroneKillShotVelocity(nullptr) == nullptr, "accessor non-null outside a shot");
+  CHECK(ShotVelocity(nullptr) == nullptr, "accessor non-null outside a shot");
   {
     int untouched = 77;  // outside a shot the accessor answers null and leaves *remote alone
-    CHECK(DroneKillShotVelocity(&untouched) == nullptr && untouched == 77, "accessor outside a shot wrote *remote (%d)", untouched);
+    CHECK(ShotVelocity(&untouched) == nullptr && untouched == 77, "accessor outside a shot wrote *remote (%d)", untouched);
   }
   CallFire(reinterpret_cast<void*>(0x6001), 0x00020003, DkC3{1, 2, 3}, 1);
   CHECK(g_fires.size() == 1, "fires");
   const FireCall& c = g_fires[0];
   CHECK(c.cs == reinterpret_cast<void*>(0x6001) && c.handle == 0x00020003 && c.v.x == 1 && c.v.y == 2 && c.v.z == 3 && c.remote == 1, "args to the real FireBulletLocal");
   CHECK(c.acc_non_null && c.acc[0] == 1 && c.acc[1] == 2 && c.acc[2] == 3 && c.acc_remote == 1, "accessor inside the real call");
-  CHECK(DroneKillShotVelocity(nullptr) == nullptr, "accessor non-null after the shot");
+  CHECK(ShotVelocity(nullptr) == nullptr, "accessor non-null after the shot");
   CallFire(reinterpret_cast<void*>(0x6001), 1, DkC3{4, 5, 6}, 0);
   CHECK(g_fires[1].acc_remote == 0 && g_fires[1].acc[0] == 4, "second shot / local");
-  CHECK(GetDroneKillStats().fires == 2, "fire counter");
+  CHECK(CurrentStats().fires == 2, "fire counter");
   // a shot inside a shot: the outer shot's values are back after the inner returns
   g_fires.clear();
   CallFire(reinterpret_cast<void*>(0x7001), 8, DkC3{7, 8, 9}, 0);
@@ -1714,13 +1857,13 @@ static void TestFire() {
   CHECK(g_fires.size() == 2 && g_fires[1].acc[0] == 1 && g_fires[1].acc[1] == 2 && g_fires[1].acc[2] == 3 && g_fires[1].acc_remote == 1, "inner shot's values");
   CHECK(g_fires.size() == 2 && g_fires[0].after[0] == 7 && g_fires[0].after[1] == 8 && g_fires[0].after[2] == 9, "the outer values are not back after the inner shot");
   CHECK(g_fires.size() == 2 && g_fires[0].after_remote == 0, "the outer shot's remote flag is not back after the inner shot (%d)", g_fires[0].after_remote);
-  CHECK(DroneKillShotVelocity(nullptr) == nullptr, "accessor non-null after the nested shots");
+  CHECK(ShotVelocity(nullptr) == nullptr, "accessor non-null after the nested shots");
   // nothing is tracked for lock-on without its word: no table work
   CHECK(!HasLine("touch"), "touch lines without lockon");
 }
 
 static void TestChase() {
-  DroneKillInstall r = Reset(DroneKillWords{});
+  Result r = Reset(Words{});
   CHECK(r.ok, "install");
   ND dmg = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&dmg);  // a drone Enter: records the game space seen with this physics system's owner
@@ -1729,33 +1872,33 @@ static void TestChase() {
   float want[3], dist = 0;
   const float q[3] = {10, 0, 0};
   CHECK(dk::ChaseVelocity(g_me_pos, q, want, &dist), "expected velocity");
-  CHECK(HasLine("dronekill: chase") && HasLine("locally_controlled=1"), "chase line");
-  CHECK(GetDroneKillStats().attacks == 1, "attack counter");
+  CHECK(HasLine("combat_dronekill_chase ") && HasLine("locally_controlled=1"), "chase line");
+  CHECK(CurrentStats().attacks == 1, "attack counter");
   CHECK(g_primary_bodies.size() == 1 && g_primary_bodies[0] == 9, "the target's body handle is the damageable record's +0xc");
   CHECK(g_l2w.size() == 1 && g_l2w[0].transforms == g_xf_me && g_l2w[0].handle == 0x77, "the drone's transform handle is the record's +0x7c");
   CHECK(g_local_sys == g_np && g_local_handle == 0x0001000a, "IsLocallyControlled got the net physics component's handle");
   CHECK(g_setvels.empty(), "velocity set in the attack call (only at the tick)");
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.size() == 1, "set_vel calls: %zu", g_setvels.size());
   if (g_setvels.size() == 1) {
     CHECK(g_setvels[0].physics == g_phys && g_setvels[0].handle == kPhysH, "set_vel target");
     CHECK(std::fabs(g_setvels[0].v.x - want[0]) < 1e-5f && std::fabs(g_setvels[0].v.y - want[1]) < 1e-5f && std::fabs(g_setvels[0].v.z - want[2]) < 1e-5f,
           "velocity (%f %f %f) want (%f %f %f)", g_setvels[0].v.x, g_setvels[0].v.y, g_setvels[0].v.z, want[0], want[1], want[2]);
   }
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.size() == 1, "one write per AttackTarget");
   Dump("chase");
 
   // the body position is the one read; the transform is the fallback
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   g_target_pos[0] = 0;
   g_target_pos[1] = 0;
   g_target_pos[2] = 30;  // the l2w answer for the target; the body at +0x8f8 says (10,0,0)
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.size() == 1 && std::fabs(g_setvels[0].v.x - want[0]) < 1e-5f, "the body's position was not preferred");
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   g_have_body = false;
   float p2[3] = {0, 0, 30}, want2[3];
@@ -1764,53 +1907,53 @@ static void TestChase() {
   g_target_pos[2] = 30;
   CHECK(dk::ChaseVelocity(g_me_pos, p2, want2), "expected 2");
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.size() == 1 && std::fabs(g_setvels[0].v.z - want2[2]) < 1e-5f, "the transform fallback");
   CHECK(g_l2w.size() == 2 && g_l2w[1].transforms == g_xf_target && g_l2w[1].handle == 0x55, "the fallback's transform handle is the damageable record's +8");
 
   // the fallback's transform system pointer is null: nothing is computed, no call with a null system
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   g_have_body = false;
   W64(g_ts, dk::kDmXf, 0);
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty() && g_l2w.size() == 1, "a null transform system was used (%zu l2w calls)", g_l2w.size());
   // the drone's own transform system pointer is null
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   W64(g_cs, dk::kAtTransforms, 0);
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty() && g_l2w.empty(), "a null transform system was passed to the game (%zu l2w calls)", g_l2w.size());
   // the auto-target system's own game space is unreadable
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   W64(g_cs, dk::kSysOwner, 0);
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written with no game space for the auto-target system");
   // the real AttackTarget acquires the target: the record is read after it, not before
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   (g_recsA + 2 * dk::kAtStride)[dk::kAtHasTarget] = 0;
   g_attack_sets_target = true;
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.size() == 1, "the target AttackTarget just acquired was not chased (%zu)", g_setvels.size());
   // on the target: the two positions coincide, nothing is written
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   {
     const float on[3] = {0, -dk::kChaseAbove, 0};
     memcpy(g_body + dk::kBodyPos, on, sizeof on);
   }
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "a zero velocity was written for a drone on its target");
 
   // the physics system's game space is not the one recorded for any drone component: not local
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   W64(g_phys, dk::kSysOwner, reinterpret_cast<uintptr_t>(g_gs2));
   {
@@ -1818,80 +1961,80 @@ static void TestChase() {
     memcpy(g_gs2 + dk::kOwnerFlag, &one, 4);
   }
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written for a physics system whose game space no drone component was seen in");
   // the net physics component's physics system is another one
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   W64(g_np, dk::kNetPhysicsPhys, 0x1234);
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written although the net physics component belongs to another physics system");
   // the physics record has no owner actor
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   W64(g_owners, 2 * 16, 0);
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written for a physics record with no owner");
   // another peer controls the drone: nothing is written (fails closed)
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   g_local_ret = 0;
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty() && HasLine("locally_controlled=0"), "set although not locally controlled");
   // the game space of the physics system was never seen: not local
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty() && g_find_calls == 0, "set although no game space was recorded for the owner (%d finds)", g_find_calls);
   // the drone has no R14NetPhysics component: upstream-exact, treated as local
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   for (int i = 0; i < g_ncomps; ++i)
     if (g_comps[i].sym == dk::kNetPhysics) g_comps[i].sym = 0;
   g_local_ret = 0;
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.size() == 1, "no net physics: %zu writes", g_setvels.size());
 
   // outside the invoke-immediate window: nothing is written, and it is not retried (one write per AttackTarget)
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallAttack(g_cs, kAtHandle);
   SetFlag(0);
-  DroneKillTick(0);
+  Tick(GameAddress());
   SetFlag(1);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written outside the window");
   // older than kChaseMs at the tick
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallAttack(g_cs, kAtHandle);
   g_ms += dk::kChaseMs;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "a stale velocity was written");
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallAttack(g_cs, kAtHandle);
   g_ms += dk::kChaseMs - 1;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.size() == 1, "a fresh velocity was dropped");
   // the physics handle's generation changed between the attack and the tick: not the same drone
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallAttack(g_cs, kAtHandle);
   g_idxP[(kPhysH & 0xffff) * 2 + 1] = 9;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written to a recycled physics handle");
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallAttack(g_cs, kAtHandle);
   g_idxA[(kAtHandle & 0xffff) * 2 + 1] = 9;  // the auto-target handle recycled
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written for a recycled auto-target handle");
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallAttack(g_cs, kAtHandle);
   W64(g_phys, dk::kSysOwner, reinterpret_cast<uintptr_t>(g_gs2));  // the physics system's game space changed
@@ -1899,51 +2042,51 @@ static void TestChase() {
     const uint32_t one = 1;
     memcpy(g_gs2 + dk::kOwnerFlag, &one, 4);  // and that one is inside its window
   }
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written after the physics system's owner changed");
   // the auto-target system's game space changed
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallAttack(g_cs, kAtHandle);
   W64(g_cs, dk::kSysOwner, reinterpret_cast<uintptr_t>(g_gs));
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written after the auto-target system's owner changed");
   // the record's physics handle changed
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallAttack(g_cs, kAtHandle);
   {
     const uint32_t other = 0x00010009;
     memcpy(g_recsA + 2 * dk::kAtStride + dk::kAtPhysIdx, &other, 4);
   }
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written after the record's physics handle changed");
   // the auto-target system's physics pointer changed
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallAttack(g_cs, kAtHandle);
   W64(g_cs, dk::kAtPhysics, reinterpret_cast<uintptr_t>(g_gs));
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "written after the physics pointer changed");
   // a stale velocity also stops the drone being "moving": a later lost target writes no stop
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   CallAttack(g_cs, kAtHandle);
   g_ms += dk::kChaseMs;
-  DroneKillTick(0);
+  Tick(GameAddress());
   (g_recsA + 2 * dk::kAtStride)[dk::kAtHasTarget] = 0;
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "a stop was written for a drone whose velocity had gone stale");
   // one write per AttackTarget even while the tick keeps running for something else (a touch waiting for its disable)
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   ND touch_off = Drone(dk::kR14Touch, dk::kR14Touch, 0);
   CallEnter(&touch_off);
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
-  DroneKillTick(0);
-  DroneKillTick(0);
+  Tick(GameAddress());
+  Tick(GameAddress());
+  Tick(GameAddress());
   CHECK(g_setvels.size() == 1, "a velocity was written again by a later tick: %zu", g_setvels.size());
   // a level change drops the chase records, with the chase word alone
   Reset(Only(false, false, false, true, false));
@@ -1952,45 +2095,249 @@ static void TestChase() {
   g_space_now = g_spacemem2;
   CallEnter(&dmg);
   g_space_now = g_spacemem;
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "a chase record survived a level change");
   // the chase log line stops at 8, once, loudly
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   for (int i = 0; i < 12; ++i) {
     CallAttack(g_cs, kAtHandle);
-    DroneKillTick(0);
+    Tick(GameAddress());
   }
-  CHECK(CountLine("dronekill: chase") == 8 && CountLine("kind=chase") == 1, "chase lines: %d", CountLine("dronekill: chase"));
+  CHECK(CountLine("combat_dronekill_chase ") == 8 && CountLine("kind=chase") == 1, "chase lines: %d", CountLine("combat_dronekill_chase "));
 
   // the target is lost: a resting drone writes nothing; a moving one is stopped with a zero velocity
-  Reset(DroneKillWords{});
+  Reset(Words{});
   CallEnter(&dmg);
   (g_recsA + 2 * dk::kAtStride)[dk::kAtHasTarget] = 0;
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.empty(), "a resting drone with no target was written");
   (g_recsA + 2 * dk::kAtStride)[dk::kAtHasTarget] = 1;
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.size() == 1, "moving");
   (g_recsA + 2 * dk::kAtStride)[dk::kAtHasTarget] = 0;
   CallAttack(g_cs, kAtHandle);
-  DroneKillTick(0);
+  Tick(GameAddress());
   CHECK(g_setvels.size() == 2 && g_setvels[1].v.x == 0 && g_setvels[1].v.y == 0 && g_setvels[1].v.z == 0, "no stop after the target was lost: %zu", g_setvels.size());
-  CHECK(CountLine("dronekill: chase") == 1, "the stop was logged as a chase (%d lines)", CountLine("dronekill: chase"));
+  CHECK(CountLine("combat_dronekill_chase ") == 1, "the stop was logged as a chase (%d lines)", CountLine("combat_dronekill_chase "));
 
   // no chase word: AttackTarget is not wrapped, nothing is set
   Reset(Only(true, true, true, false, true));
-  CHECK(g_w[0x38 / 8] == reinterpret_cast<uintptr_t>(&FakeAttack), "attack wrapped without chase");
+  CHECK(W(kSlotAttack) == reinterpret_cast<uintptr_t>(&FakeAttack), "attack wrapped without chase");
+}
+
+// ================================================================ arena (same APK): out of a combat map every hook only calls the game's function
+static void ExpectInert(const char* where) {
+  g_lines.clear();
+  g_ev.clear();
+  g_enters.clear();
+  g_fires.clear();
+  g_attacks.clear();
+  g_dis.clear();
+  g_setvels.clear();
+  g_find_calls = g_comp_calls = 0;
+  const Stats before = CurrentStats();
+  // what follows is the arena path: no read of game memory and no scan of the levels on any hook (the scope was refreshed before this), counted
+  nevr_quest::combat::ResetSafeReadCallsForTest();
+  nevr_quest::combat::level::ResetScanCallsForTest();
+  ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
+  CallEnter(&d);
+  ND touch = Drone(dk::kR14Touch, dk::kR14Touch, 0);
+  CallEnter(&touch);
+  CHECK(g_enters.size() == 2 && g_enters[0].data == &d && SameNd(g_enters[0].copy, d), "%s: the game's Enter was not called as the caller called it", where);
+  CHECK(g_find_calls == 0 && g_comp_calls == 0, "%s: a drone Enter was looked up (%d finds, %d components)", where, g_find_calls, g_comp_calls);
+  void* sp = nullptr;
+  uint64_t actor = 0;
+  unsigned fl = 0;
+  g_actor_ret = 7;
+  CHECK(reinterpret_cast<ActorFn>(W(kSlotActor))(nullptr, nullptr, dk::kDroneActor, &sp, &actor, &fl) == 7, "%s: Actor's result changed", where);
+  CallFire(reinterpret_cast<void*>(0x6001), 1, DkC3{1, 2, 3}, 0);
+  CHECK(g_fires.size() == 1 && !g_fires[0].acc_non_null, "%s: a shot frame was made (dronemuzzle would act)", where);
+  g_attack_sets_target = true;
+  CallAttack(g_cs, kAtHandle);
+  CHECK(g_attacks.size() == 1, "%s: the game's AttackTarget was not called", where);
+  OnKilled(0x11);
+  CHECK(nevr_quest::combat::SafeReadCallsForTest() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0,
+        "%s: %llu reads and %llu scans on the arena path of the hooks", where,
+        static_cast<unsigned long long>(nevr_quest::combat::SafeReadCallsForTest()),
+        static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
+  const uint32_t ticksBefore = CurrentStats().ticks;
+  nevr_quest::combat::level::ResetScanCallsForTest();
+  for (uint32_t i = 0; i < 2 * kScopeFrames + 1; ++i) Tick(GameAddress());  // two more asks of the level: the same answer says nothing
+  uint64_t asks = 0;  // the tick scans only on its own cadence: one level ask per kScopeFrames frames, nothing else
+  for (uint32_t n = ticksBefore; n < ticksBefore + 2 * kScopeFrames + 1; ++n) asks += n % kScopeFrames == 0 ? 1 : 0;
+  CHECK(nevr_quest::combat::level::ScanCallsForTest() == asks, "%s: the tick scanned %llu times in %u frames, want %llu", where,
+        static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()), 2 * kScopeFrames + 1, static_cast<unsigned long long>(asks));
+  const Stats after = CurrentStats();
+  CHECK(after.enter_drone == before.enter_drone && after.enter_other == before.enter_other && after.fires == before.fires &&
+            after.attacks == before.attacks && after.due_runs == before.due_runs,
+        "%s: a hook counted work it did", where);
+  CHECK(g_dis.empty() && g_setvels.empty(), "%s: a component was turned off or a velocity set", where);
+  CHECK(g_lines.empty(), "%s: %zu dronekill lines", where, g_lines.size());
+  for (const auto& l : g_lines) std::printf("  line: %s\n", l.text.c_str());
+}
+
+static void TestArenaLevelsAreLeftAlone() {
+  for (const char* level : {"mpl_arena_a", "mpl_lobby_b2", "mpl_lobby_b_combat", ""}) {
+    Result r = Reset(Words{});
+    CHECK(r.ok, "install");
+    if (level[0] != 0) LoadLevels({level});
+    else LoadLevels({});
+    g_lines.clear();
+    Tick(GameAddress());  // the first tick asks the level
+    CHECK(!InCombatScope(), "%s: in scope", level);
+    CHECK(HasLine("combat_dronekill_scope in_combat=0", 1), "%s: no scope line", level);
+    ExpectInert(level[0] != 0 ? level : "no level");
+  }
+  // a combat map: in scope, one line saying so
+  Reset(Words{});
+  SetScopeForTest(false);
+  g_lines.clear();
+  Tick(GameAddress());
+  CHECK(InCombatScope() && HasLine("combat_dronekill_scope in_combat=1", 1), "a combat map is not the scope");
+  // no game (0): out of scope
+  Reset(Words{});
+  Tick(0);
+  CHECK(!InCombatScope(), "no game is in scope");
+}
+
+// A combat map, then an arena level: the dead group the server named is not turned off in the arena, the tables are empty, and the line on the way
+// out carries each hook's calls over the combat scope; back on a combat map the module acts again.
+static void TestScopeEndsAtTheLevelChange() {
+  Result r = Reset(Words{});
+  CHECK(r.ok, "install");
+  g_lines.clear();
+  Tick(GameAddress());  // the first tick: the combat map, the scope stays
+  CHECK(InCombatScope(), "the combat map is not the scope");
+  ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
+  CallEnter(&d);
+  OnKilled(0x11);
+  CHECK(HasLine("result=shut_down"), "the K did not shut the group down");
+  LoadLevels({"mpl_arena_a"});
+  for (uint32_t i = 1; i < kScopeFrames; ++i) Tick(GameAddress());  // in scope until the next ask: the due work runs
+  const size_t inScope = g_dis.size();
+  CHECK(inScope == 1, "the dead group was not turned off while the combat map was the scope (%zu)", inScope);
+  ND s = Drone(kSound, kSound, 1);
+  CallEnter(&s);  // the dead group's component on again: due at the next tick
+  g_lines.clear();
+  g_dis.clear();
+  Tick(GameAddress());  // the 32nd: the arena level
+  CHECK(!InCombatScope() && HasLine("combat_dronekill_scope in_combat=0", 1) && HasLine("enter_calls="), "the scope line on the way out");
+  CHECK(g_dis.empty(), "a component was turned off in the arena");
+  ExpectInert("after the change");
+  // back to a combat map: it acts again
+  LoadLevels({"mpl_combat_fission"});
+  g_lines.clear();
+  g_dis.clear();
+  for (uint32_t i = 0; i < kScopeFrames; ++i) Tick(GameAddress());
+  CHECK(InCombatScope() && HasLine("combat_dronekill_scope in_combat=1", 1), "back on a combat map: not in scope");
+  // the arena scope's line counts the calls made in it: ExpectInert made two Enter calls (the fake Enter calls Actor once each), one Actor of its
+  // own, one FireBulletLocal and one AttackTarget
+  CHECK(HasLine("actor_calls=3 enter_calls=2 fire_calls=1 attack_calls=1"), "the scope line does not count the arena scope's calls");
+  CHECK(g_dis.empty(), "back on a combat map: the group the server named in the earlier combat scope was turned off");
+  g_find_calls = 0;
+  CallEnter(&d);
+  CHECK(g_find_calls > 0 && HasLine("combat_dronekill_release"), "back on a combat map: the drone was not looked up");
+  // the tables were emptied when the scope ended: the server's 'K' for the group of the earlier combat scope finds none, and nothing ran due
+  const uint32_t runs = CurrentStats().due_runs;
+  g_lines.clear();
+  OnKilled(0x11);
+  Tick(GameAddress());
+  CHECK(HasLine("result=shut_down"), "the new drone's group is not the one the K names");
+  CHECK(CurrentStats().due_runs == runs + 1, "due work ran %u times", CurrentStats().due_runs - runs);
+  ResetForTest();
+  Reset(Words{});
+  g_lines.clear();
+  CallEnter(&d);
+  OnKilled(0x11);
+  LoadLevels({"mpl_arena_a"});
+  for (uint32_t i = 0; i < kScopeFrames + 1; ++i) Tick(GameAddress());  // out at the 33rd tick (n = 32)
+  LoadLevels({"mpl_combat_dyson"});
+  const uint32_t before = CurrentStats().due_runs;
+  for (uint32_t i = 0; i < kScopeFrames; ++i) Tick(GameAddress());  // back in at n = 64, then one tick in scope
+  g_lines.clear();
+  OnKilled(0x11);
+  CHECK(HasLine("result=no_live_group"), "the group of the earlier combat scope is still in the table");
+  CHECK(CurrentStats().due_runs == before, "due work from the earlier combat scope ran %u times", CurrentStats().due_runs - before);
+  // a group still live when the scope ended is gone too
+  ResetForTest();
+  Reset(Words{});
+  CallEnter(&d);
+  LoadLevels({"mpl_arena_a"});
+  for (uint32_t i = 0; i < kScopeFrames + 1; ++i) Tick(GameAddress());
+  LoadLevels({"mpl_combat_dyson"});
+  for (uint32_t i = 0; i < kScopeFrames; ++i) Tick(GameAddress());
+  CHECK(InCombatScope(), "not back in scope");
+  g_lines.clear();
+  OnKilled(0x11);
+  CHECK(HasLine("result=no_live_group"), "a live group of the earlier combat scope is still in the table");
+}
+
+// The production step: the switch, the tick, the kill feed, the refusals.
+static void TestProductionStep() {
+  Reset(Words{}, false);
+  nevr_quest::combat::tick::ResetForTest();
+  ec_stub::Reset();
+  const nevr_quest::combat::ModuleResult off = Install(false);
+  CHECK(!off.installed && std::strcmp(off.status, "off") == 0 && HasLine("combat_dronekill_install result=off", 1), "off");
+  CHECK(W(kSlotEnter) == reinterpret_cast<uintptr_t>(&FakeEnter) && nevr_quest::combat::tick::Count() == 0 && ec_stub::DroneKilled() == nullptr,
+        "off installed something");
+  const Pins pins = Slots();
+  const Fns fns = FakeFns();
+  SetInstallForTest(&Lookup, &pins, &fns);
+  const nevr_quest::combat::ModuleResult on = Install(true);
+  CHECK(on.installed && std::strcmp(on.status, "installed") == 0, "on: %s", on.status);
+  CHECK(nevr_quest::combat::tick::Count() == 1 && ec_stub::DroneKilled() == &OnKilled && HasLine("combat_dronekill_link"), "tick / kill feed");
+  CHECK(W(kSlotEnter) != reinterpret_cast<uintptr_t>(&FakeEnter), "the Enter slot was not hooked");
+  CHECK(!InCombatScope(), "in scope before any tick");
+  const nevr_quest::combat::ModuleResult again = Install(true);
+  CHECK(nevr_quest::combat::tick::Count() == 1, "a second step registered the tick again");
+  CHECK(!again.installed && std::strcmp(again.status, "already_ran") == 0, "a second step: %s", again.status);
+  // the kill feed through ec: a 'K' reaches the module
+  Tick(GameAddress());
+  ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
+  CallEnter(&d);
+  ec_stub::DroneKilled()(0x11);
+  CHECK(HasLine("result=shut_down"), "the K through ec's handler did not reach the kill rule");
+  // no libr15: refused, nothing registered
+  Reset(Words{}, false);
+  nevr_quest::combat::tick::ResetForTest();
+  ec_stub::Reset();
+  SetInstallForTest(&NoLookup, nullptr, nullptr);
+  const nevr_quest::combat::ModuleResult none = Install(true);
+  CHECK(!none.installed && std::strcmp(none.status, "module_not_loaded") == 0 && nevr_quest::combat::tick::Count() == 0 && ec_stub::DroneKilled() == nullptr,
+        "no libr15: %s", none.status);
+  // the functions resolved from the real library: none on the host
+  Reset(Words{}, false);
+  SetInstallForTest(&Lookup, &pins, nullptr);
+  const nevr_quest::combat::ModuleResult noFns = Install(true);
+  CHECK(!noFns.installed && std::strcmp(noFns.status, "engine_export_missing") == 0, "no functions: %s", noFns.status);
+  // the step on a build that is not the pinned one: refused, no kill feed
+  Reset(Words{}, false);
+  nevr_quest::combat::tick::ResetForTest();
+  ec_stub::Reset();
+  g_image.Build({{kActorSymbol, kSlotActor, false, false, 0}}, "0000000000000000000000000000000000000000");
+  SetInstallForTest(&Lookup, &pins, &fns);
+  const nevr_quest::combat::ModuleResult wrong = Install(true);
+  CHECK(!wrong.installed && std::strcmp(wrong.status, "build_id_mismatch") == 0 && ec_stub::DroneKilled() == nullptr, "another build's step: %s", wrong.status);
+  // a 'K' before the install: nothing
+  ResetForTest();
+  SetScopeForTest(true);
+  g_lines.clear();
+  OnKilled(0x11);
+  CHECK(g_lines.empty(), "a K before the install was logged");
+  // a build that is not the pinned one
+  Reset(Words{}, false);
+  g_image.Build({{kActorSymbol, kSlotActor, false, false, 0}}, "0000000000000000000000000000000000000000");
+  CHECK(std::strcmp(InstallAt(&Lookup, Slots(), Words{}, FakeFns()).status, "build_id_mismatch") == 0, "another build");
+  nevr_quest::combat::tick::ResetForTest();
+  ResetForTest();
 }
 
 int main() {
-  NevrGameContext ctx{};
-  ctx.ctx_size = sizeof ctx;
-  ctx.plugin_id = "q15t";
-  ctx.log = &FakeLog;
-  SetLogContext(&ctx);
+  sentinel::SetLogSink(&Sink);
   TestCore();
   TestPinnedConstants();
   TestNoThreadKey();
@@ -1999,6 +2346,7 @@ int main() {
   TestWrappersWithoutReal();
   TestEnterOther();
   TestDroneEnterKill();
+  TestNestedEnter();
   TestStateIsPerThread();
   TestKillRules();
   TestEnterLookups();
@@ -2006,6 +2354,9 @@ int main() {
   TestLockOn();
   TestFire();
   TestChase();
+  TestArenaLevelsAreLeftAlone();
+  TestScopeEndsAtTheLevelChange();
+  TestProductionStep();
   if (g_fail == 0) std::printf("dronekill_test: all checks passed\n");
   else std::printf("dronekill_test: %d failure(s)\n", g_fail);
   return g_fail == 0 ? 0 : 1;

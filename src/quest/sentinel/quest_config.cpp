@@ -64,6 +64,8 @@ constexpr const char* kCombatEcKey = "combat.ec";                  // Quest only
 constexpr const char* kCombatEcWordsKey = "combat.ec_words";       // Quest only (default: types=VPTO equip hide, #2187)
 constexpr const char* kCombatEcfxKey = "combat.ecfx";              // Quest only (default true, #2187)
 constexpr const char* kCombatPowerboostStageKey = "combat.powerboost_stage";  // Quest only (an integer 0..3, default 3, #2187)
+constexpr const char* kCombatDronekillKey = "combat.dronekill";      // Quest only (default true, #2187)
+constexpr const char* kCombatDronemuzzleKey = "combat.dronemuzzle";  // Quest only (default true, #2187)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
 // unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
@@ -427,6 +429,8 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.ecWords = ReadCombatText(cfg, kCombatEcWordsKey, r);
   r.config.combat.ecfx = ReadCombatSwitch(cfg, kCombatEcfxKey, r);
   r.config.combat.powerboostStage = ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 3, 3, r);
+  r.config.combat.dronekill = ReadCombatSwitch(cfg, kCombatDronekillKey, r);
+  r.config.combat.dronemuzzle = ReadCombatSwitch(cfg, kCombatDronemuzzleKey, r);
   r.config.plugins = cfg.Plugins();
 }
 

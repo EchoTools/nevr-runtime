@@ -24,7 +24,7 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), droneguard, peerclamp, dronekill (all five words), dronemuzzle, hudmeter, `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
+- On: fxtrail, voipdrop, custctx, gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), droneguard, peerclamp, hudmeter, `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
   (`Q15T_T26`), and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
 - The three headset gates (party permissions, bot body, menu link) are not this plugin's: the runtime owns them
   (`src/quest/combat/headset_gates.h`). Their switches are the `combat:` keys `gate_perm`, `gate_bots`, `gate_link`, `gate_link_libs` in
@@ -35,6 +35,8 @@ The build defaults are the shipped behaviour; none of them depends on a config o
 - POWER BOOST is not this plugin's: the runtime owns its five words (`src/quest/combat/powerboost.h`). Its switch is the `combat:` key
   `powerboost_stage` (0 to 3, default 3: swallow and cone) in `config.yaml`.
 - Off: droneguard's second stage (`Q15T_DRONEGUARD_IDX`).
+- dronekill and dronemuzzle are not this plugin's: the runtime owns them (`src/quest/combat/dronekill.h`, `src/quest/combat/dronemuzzle.h`).
+  Their switches are the `combat:` keys `dronekill` and `dronemuzzle` in `config.yaml`.
 - The refresh-rate rule (90 Hz, 72 on a Quest 2, on combat maps and in the lobby) and the clock levels are not this plugin's: the runtime
   owns them (`src/quest/combat/refresh_rate.h`, `src/quest/sentinel/clock_levels_hook.h`). The rule's switches are the `combat:` keys
   `refresh_rate`, `refresh_rate_lobby` and `refresh_rate_quest2_72` in `config.yaml`, and the clock raise is

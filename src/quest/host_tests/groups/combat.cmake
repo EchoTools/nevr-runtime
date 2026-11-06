@@ -22,8 +22,9 @@ endforeach()
 set(_ccore o_combat_got_hook o_combat_hook_log o_combat_hook_report)
 set(_cf NOEXC PTHREAD DL INCS ${_csent} DEFS NEVR_COMBAT_READ_COUNTERS)
 # The EC client and what it brings into a program that links the registration table (#2187): its NEUTRON effects, the sentinel's page and
-# the module-loaded observer table it registers with.
-set(_cec src/quest/combat/ec.cpp src/quest/combat/ecfx.cpp src/quest/sentinel/ec_page.cpp src/quest/integration/module_observers.cpp)
+# the module-loaded observer table it registers with, and the two drone modules whose rows sit beside them (dronekill registers with the EC client).
+set(_cec src/quest/combat/ec.cpp src/quest/combat/ecfx.cpp src/quest/sentinel/ec_page.cpp src/quest/integration/module_observers.cpp
+         src/quest/combat/dronekill.cpp src/quest/combat/dronemuzzle.cpp)
 # The resource table-step modules (#2177) and what they share. combat_install.cpp's table names them, so every program that links it takes them,
 # and they read the game's levels through the combat tick and the level answer (table_step.cpp), which those programs already link.
 set(_ctables src/quest/combat/meshstep.cpp src/quest/combat/instmodel.cpp src/quest/combat/shaderstep.cpp src/quest/combat/tablestep.cpp
@@ -185,3 +186,16 @@ nevr_ht_test(ecfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
       src/quest/integration/module_observers.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
   ARGS full $<TARGET_FILE:ecfx_stub_full>)
 nevr_ht_rerun(ecfx_test_missing ecfx_test GROUP combat ARGS missing $<TARGET_FILE:ecfx_stub_missing>)
+# dronekill (#2187, docs/adr/0046): the real handlers through the four CallbackThunks, installed by the real GotHook into four JUMP_SLOTs of a libr15
+# image built in memory, against a fake game laid out as the module reads it. The group, touch, gun and chase rules, the kill feed, all-or-none
+# installs, the per-thread state, and the scope: on an Echo Arena level, a lobby or no level every hook only calls the game's function. The EC
+# client is the stand-in ec_stub.cpp. got_pinned_test resolves the four relocations in the real libr15.
+nevr_ht_test(dronekill_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/dronekill_test.cpp src/quest/combat/dronekill.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
+      src/quest/tests/ec_stub.cpp)
+# dronemuzzle (#2187): the two entries (on the host, the C++ stand-ins the module builds there) through the real GotHook into two JUMP_SLOTs of a
+# libr15 image built in memory, called from FireBulletLocal's call site and from another; the continuations' rules, the frame tick, both orders
+# against another handler on the slot (#2219), the refusals. The arm64 entries are check/dronemuzzle.sh's (disassembly, ldar, qemu).
+nevr_ht_test(dronemuzzle_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/dronemuzzle_test.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/dronekill.cpp src/quest/combat/combat_level.cpp
+      src/quest/combat/combat_tick.cpp src/quest/tests/ec_stub.cpp)

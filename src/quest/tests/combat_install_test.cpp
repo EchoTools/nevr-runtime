@@ -230,11 +230,11 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
   const combat::Outcome normal = combat::InstallNormal();
   QCHECK(early.ran && early.modules == 2 && early.installed == 0 && early.failed == 2);
   // The normal step runs the tick (combat_tick.h) first, the refresh-rate rule after it (#2172), the four resource table steps in the plugin's order
-  // (#2177), the EC client and POWER BOOST (#2187), the headset gates (#2180) and, last, the pfx gate and the event-effect decision, which hook nothing
+  // (#2177), the EC client and POWER BOOST (#2187), dronekill and dronemuzzle (#2187), the headset gates (#2180) and, last, the pfx gate and the event-effect decision, which hook nothing
   // (#2188). On the host no libr15 is loaded, so the tick, the table steps, the EC client, POWER BOOST (at its default stage 3) and the gates are
   // refused and named (NEUTRON effects refuse without the client); the rule installs (it registers its callback for a tick that may come later), and so do
   // the two decisions.
-  QCHECK(normal.ran && normal.modules == 12 && normal.installed == 3 && normal.failed == 9);
+  QCHECK(normal.ran && normal.modules == 14 && normal.installed == 3 && normal.failed == 11);
   const std::vector<Line> lines = Lines("combat_install");
   QCHECK(lines.size() == 2U);
   if (lines.size() == 2U) {
@@ -244,7 +244,8 @@ void TheShippedTableHoldsHeapsThenMemsysEarlyAndTheTickTheRefreshRateAndTheTable
     QCHECK(lines[1].level == sentinel::LogLevel::kWarn);  // the refused tick makes the line a Warning
     QCHECK(Has(lines[1].text,
                "\"results\":\"tick=module_not_loaded refresh_rate=installed meshstep=module_not_loaded tablestep=module_not_loaded instmodel=module_not_loaded "
-               "shaderstep=module_not_loaded ec=module_not_loaded ecfx=needs_ec powerboost=module_not_loaded gates=module_not_loaded pfx=installed pfxtev=installed\""));
+               "shaderstep=module_not_loaded ec=module_not_loaded ecfx=needs_ec dronekill=module_not_loaded dronemuzzle=needs_dronekill_shot "
+               "powerboost=module_not_loaded gates=module_not_loaded pfx=installed pfxtev=installed\""));
   }
   Done();
 }
@@ -345,16 +346,16 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   tables.tablestep = {false, nevr_quest::Source::kFile};
   combat::LogConfig(tables);
   const std::vector<Line> records = Lines("combat_config_switch");
-  QCHECK(records.size() == 16U);  // eight per call, in the table's order: the four table steps, ec, ecfx, then the two keys that are not a boolean
+  QCHECK(records.size() == 20U);  // ten per call, in the table's order: the four table steps, ec, ecfx, dronekill, dronemuzzle, then the two keys that are not a boolean
   const char* const order[] = {"meshstep", "tablestep", "instmodel", "shaderstep"};
   const char* const wantFirst[] = {"\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
                                    "\"on\":1,\"source\":\"default\""};
   const char* const wantSecond[] = {"\"on\":0,\"source\":\"config\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
                                     "\"on\":1,\"source\":\"default\""};
-  if (records.size() == 16U) {
+  if (records.size() == 20U) {
     for (std::size_t i = 0; i < 4; ++i) {
       for (std::size_t call = 0; call < 2; ++call) {
-        const Line& line = records[call * 8 + i];
+        const Line& line = records[call * 10 + i];
         QCHECK(line.level == sentinel::LogLevel::kInfo);
         QCHECK(line.text.substr(line.text.find("\"event\"")) == std::string("\"event\":\"combat_config_switch\",\"module\":\"") + order[i] + "\",\"key\":\"combat." + order[i] +
                                         "\"," + (call == 0 ? wantFirst[i] : wantSecond[i]) + "}");
@@ -363,11 +364,13 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
     }
     // the EC client and POWER BOOST (#2187): ec and ecfx are rows of the table; the words and the stage are records of their own
     for (std::size_t call = 0; call < 2; ++call) {
-      const auto at = [&](std::size_t k) { return records[call * 8 + k].text.substr(records[call * 8 + k].text.find("\"event\"")); };
+      const auto at = [&](std::size_t k) { return records[call * 10 + k].text.substr(records[call * 10 + k].text.find("\"event\"")); };
       QCHECK(at(4) == "\"event\":\"combat_config_switch\",\"module\":\"ec\",\"key\":\"combat.ec\",\"on\":1,\"source\":\"default\"}");
       QCHECK(at(5) == "\"event\":\"combat_config_switch\",\"module\":\"ecfx\",\"key\":\"combat.ecfx\",\"on\":1,\"source\":\"default\"}");
-      QCHECK(at(6) == "\"event\":\"combat_config_switch\",\"module\":\"ec\",\"key\":\"combat.ec_words\",\"on\":1,\"source\":\"default\"}");
-      QCHECK(at(7) == "\"event\":\"combat_config_switch\",\"module\":\"powerboost\",\"key\":\"combat.powerboost_stage\",\"stage\":3,\"on\":1,\"source\":\"default\"}");
+      QCHECK(at(6) == "\"event\":\"combat_config_switch\",\"module\":\"dronekill\",\"key\":\"combat.dronekill\",\"on\":1,\"source\":\"default\"}");
+      QCHECK(at(7) == "\"event\":\"combat_config_switch\",\"module\":\"dronemuzzle\",\"key\":\"combat.dronemuzzle\",\"on\":1,\"source\":\"default\"}");
+      QCHECK(at(8) == "\"event\":\"combat_config_switch\",\"module\":\"ec\",\"key\":\"combat.ec_words\",\"on\":1,\"source\":\"default\"}");
+      QCHECK(at(9) == "\"event\":\"combat_config_switch\",\"module\":\"powerboost\",\"key\":\"combat.powerboost_stage\",\"stage\":3,\"on\":1,\"source\":\"default\"}");
     }
   }
   Done();

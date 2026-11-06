@@ -67,6 +67,8 @@ PROGRAMS = {
         "ec_page_test",
         "ec_test",
         "ecfx_test",
+        "dronekill_test",
+        "dronemuzzle_test",
         "equip_refire_test",
         "headset_gates_library_name_test",
         "headset_gates_test",
