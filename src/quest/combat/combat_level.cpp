@@ -2,8 +2,6 @@
 
 #include <atomic>
 
-#include <atomic>
-
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/safe_read.h"
 

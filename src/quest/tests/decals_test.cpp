@@ -984,6 +984,34 @@ void TestInstall(const std::string& dir) {
   dc::ResetForTest();
 }
 
+// A game space whose level is not stored yet (the constructor leaves 0 or -1) has no record; its updates are throttled the same way: no read on each frame.
+static void TestNoLevelYetIsThrottled(const std::string& dir) {
+  const dc::Api api = MakeApi();
+  std::vector<GroupIn> in(1);
+  in[0] = {kDyson, 0x1111, 0, {MakeQuad(1)}};
+  const std::string table = WriteFile(dir, "nolevel.bin", Bytes(in));
+  Fresh();
+  CHECK(Install(table.c_str(), &api).installed, "install");
+  Sys s;
+  MakeSys(&s, 0);
+  UpdateSlot()(s.addr());
+  const uint64_t reads0 = nevr_quest::combat::ReadCountForTest();
+  for (int i = 0; i < 49; ++i) UpdateSlot()(s.addr());
+  CHECK(nevr_quest::combat::ReadCountForTest() == reads0 && dc::CountersForTest().tick_calls == 1, "no level yet: %llu reads and %llu calls in 49 updates",
+        (unsigned long long)(nevr_quest::combat::ReadCountForTest() - reads0), (unsigned long long)dc::CountersForTest().tick_calls);
+  // after the skip the space is looked at again, and a space that has become a combat map is found
+  s.gs[0x58 / 8] = kDyson;
+  for (int i = 0; i < 70; ++i) UpdateSlot()(s.addr());
+  CHECK(dc::CountersForTest().tick_calls >= 2, "the throttled space was never looked at again");
+  // a combat space is looked at on every update, and Shutdown forgets the entry
+  Fresh();
+  CHECK(Install(table.c_str(), &api).installed, "install");
+  Sys c;
+  MakeSys(&c, kDyson);
+  for (int i = 0; i < 10; ++i) UpdateSlot()(c.addr());
+  CHECK(dc::CountersForTest().tick_calls == 10, "a combat space ran the state machine %llu times in 10 updates", (unsigned long long)dc::CountersForTest().tick_calls);
+}
+
 // ---- the scope: arena shares the APK, so a game space in an arena level creates and draws nothing ----
 
 void TestArenaScope(const std::string& dir) {
@@ -1006,6 +1034,9 @@ void TestArenaScope(const std::string& dir) {
           (unsigned long long)(nevr_quest::combat::level::ScanCountForTest() - scans0));
     CHECK(Index("alloc") < 0 && E.nodes_used == 0 && Index("map") < 0 && Index("init") < 0, "%s: an arena or lobby level made or drew a node", name);
     CHECK(CountLines("decals: game space") == 1 && CountLines("acts=0") == 1, "%s: one game-space line that says it does not act", name);
+    // the module's lock, its clock and its state machine are reached by the first update and not by the 49 quiet ones (a few relaxed loads each)
+    CHECK(dc::CountersForTest().tick_calls == 1, "%s: the state machine ran %llu times in 50 arena updates", name,
+          (unsigned long long)dc::CountersForTest().tick_calls);
     CHECK(dc::CountersForTest().nodes_made == 0 && dc::CountersForTest().drawn_quads == 0, "%s: counters", name);
     // Shutdown still passes through, and finds no node
     CHECK(ShutSlot()(s.addr()) == s.addr() + 1 && Index("free") < 0, "%s: Shutdown", name);
@@ -1027,6 +1058,7 @@ int main() {
   TestHost();
   TestInstall(dir);
   TestArenaScope(dir);
+  TestNoLevelYetIsThrottled(dir);
 
   std::string cmd = "rm -rf " + dir;
   if (std::system(cmd.c_str()) != 0) std::printf("note: could not remove %s\n", dir.c_str());

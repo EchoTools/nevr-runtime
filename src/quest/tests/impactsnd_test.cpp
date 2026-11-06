@@ -927,6 +927,30 @@ static void TestArenaPaysNothingByCount() {
   CHECK(nevr_quest::combat::ReadCountForTest() > reads2 && !impactsnd::GetStats().scoped, "the Shutdown of a combat table did not end the scope by a read");
 }
 
+// A combat match ends but the combat map's bullet system still holds the table (the global stays set); the arena lobby's load then runs the game's own
+// loader. The scope of the combat load ends with that load: the tick does not poll, and writes no id into the table the arena match uses.
+static void TestAnArenaLoadEndsTheScopeOfAnEarlierCombatLoad() {
+  Fresh();
+  Install();
+  CallLoader();  // a combat load: scoped
+  CHECK(impactsnd::GetStats().scoped, "the combat load did not mark the scope");
+  g_shut_mode = kShutHold;  // a Shutdown that leaves the table, as when another system still holds it
+  g_hold_release = true;
+  CallShutdown(1);
+  CHECK(impactsnd::GetStats().scoped, "a Shutdown that left the table cleared the scope");
+  LoadLevels({"mpl_arena_a"});
+  impactsnd::SetGameForTest(GameAddress());
+  g_shut_mode = kShutFree;
+  g_load_mode = kLoad5;  // the arena lobby's stock load: five rows, every id the stock one, unsorted
+  CallLoader();
+  CHECK(!impactsnd::GetStats().scoped && HasLine("scope=other_level"), "the arena load left the earlier combat scope on");
+  SortRows();  // the first hit's sort
+  const uint32_t polls0 = impactsnd::GetStats().polls;
+  Polls(40);
+  CHECK(impactsnd::GetStats().polls == polls0 && CountRight() == 0, "the tick polled the arena table (%u polls) or wrote ids into it (%zu right)",
+        impactsnd::GetStats().polls - polls0, CountRight());
+}
+
 // The tick hands the module the game; the scope is marked by a combat load and cleared when the game frees the table.
 static void TestScopeFollowsTheTable() {
   Fresh();
@@ -1579,6 +1603,10 @@ static void TestThreadLines() {
   CHECK(other != me && other != 0, "test threads");
   // a thread-line budget: 30 live threads, 24 lines and one WARNING
   Setup();
+  g_shut_mode = kShutHold;  // the table stays, so the scope stays: a Shutdown that frees it ends the scope, and an arena teardown notes no thread
+  g_hold_release = true;
+  SetTable(All(), kStock, false);
+  Publish();
   std::atomic<bool> go{false};
   std::vector<std::thread> ts;
   for (int i = 0; i < 30; ++i)
@@ -1613,6 +1641,7 @@ int main() {
   TestCombatLevelsAreRepaired();
   TestScopeFailsClosed();
   TestScopeFollowsTheTable();
+  TestAnArenaLoadEndsTheScopeOfAnEarlierCombatLoad();
   TestScopeSeesALevelStillLoading();
   TestArenaPaysNothingByCount();
   TestTickOnlyAsksOnceASecond();

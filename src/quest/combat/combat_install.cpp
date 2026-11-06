@@ -82,9 +82,9 @@ constexpr std::array kModules{
     Module{"instmodel", nullptr, &InstmodelNormal, "combat.instmodel", &nevr_quest::CombatConfig::instmodel},
     Module{"shaderstep", nullptr, &ShaderstepNormal, "combat.shaderstep", &nevr_quest::CombatConfig::shaderstep},
     // decals (#2183): last of the plugin's table steps; its Shutdown handler chains above impactsnd's, so impactsnd's row comes first. It acts only in combat
-    // levels (decals.h); decals_flip_v is read by the module and reported on its table line.
+    // levels (decals.h).
     Module{"decals", nullptr, &DecalsNormal, "combat.decals", &nevr_quest::CombatConfig::decals, "combat.decals_flip_u",
-           &nevr_quest::CombatConfig::decalsFlipU},
+           &nevr_quest::CombatConfig::decalsFlipU, "combat.decals_flip_v", &nevr_quest::CombatConfig::decalsFlipV},
     // gates (#2180): the plugin installed them after its tick and its modules (after the table steps above); they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.
@@ -208,7 +208,7 @@ void LogConfig(const nevr_quest::CombatConfig& config) noexcept {
     const struct {
       const char* key;
       nevr_quest::CombatSwitch nevr_quest::CombatConfig::* member;
-    } switches[] = {{module.switchKey, module.switchMember}, {module.switchKey2, module.switchMember2}};
+    } switches[] = {{module.switchKey, module.switchMember}, {module.switchKey2, module.switchMember2}, {module.switchKey3, module.switchMember3}};
     for (const auto& s : switches) {
       if (s.member == nullptr) continue;
       const nevr_quest::CombatSwitch& sw = config.*s.member;

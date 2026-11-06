@@ -140,11 +140,12 @@ it stays for plugins.
 
 ### Arena cost (ADR 0038)
 
-`UpdateMovement` runs once per rendered frame for each bullet system (one per game space), so in an arena match with the module on and a `decals.bin` present each
-call is the game's function, a mutex, a lookup of the system's record and a compare of the clock. The record of a game space that does not act reads its level
-(two `process_vm_readv` calls) once a second (`kInertRecheckMs`), not on every update; a combat game space reads it on every update, as the plugin did. With
-`combat.decals` false, or no `decals.bin`, nothing is hooked and an arena match pays nothing. The measured host numbers are in the pull request that moved the
-module.
+`UpdateMovement` runs once per rendered frame for each bullet system (one per game space). A game space that does not act (an arena level, or no readable
+level yet) is skipped for 64 updates at a time by a lock-free per-system entry that the update which looked at it sets (`QuickSkip`): the arena frame is the
+game's function, a few relaxed loads and a branch, with no lock, no clock and no read. After the skip the space is looked at again (the state machine, under
+the module's lock, with the clock), and the Host's own rule still reads the level of a space that does not act at most once a second. A combat game space
+is looked at on every update, as the plugin did. With `combat.decals` false, or no `decals.bin`, nothing is hooked and an arena match pays nothing. The
+host tests count the state-machine calls and the reads (0 reads and 1 call in 50 arena updates). The measured numbers are in the pull request.
 
 ## Prediction (written before any headset run)
 

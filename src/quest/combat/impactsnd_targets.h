@@ -1,8 +1,9 @@
 /* The pinned slots, data words, code words and callee stubs of the impact-sound module (impactsnd.h).
  *
  * Every address is an ELF virtual address in the store libr15 (build ID in pinned_targets.h, `LibR15PatchedBuildId`); the disassembly's address
- * is the ELF address plus 0x100000. src/quest/tests/got_pinned_test.cpp checks the two relocations, the GLOB_DAT word of kSoundSettings, the
- * hit-code words, the stub words and D against the real file (`just test-quest-hooks-pinned`, which needs the store APK).
+ * is the ELF address plus 0x100000. src/quest/tests/got_pinned_test.cpp checks the relocation, the GLOB_DAT word of kSoundSettings, the
+ * hit-code words and the stub words against the real file; D is .bss, so the file holds no value for it (its one store is libr15's static initialiser
+ * `_INIT_355`, disassembly 0x10712fc, and the module reads it at run time) (`just test-quest-hooks-pinned`, which needs the store APK).
  *
  *   CR15NetBulletCS::LoadSoundSettings  JUMP_SLOT 0x36fa3c0 -> 0x2121d04   (`readelf -rW`; FUNC, 808 bytes; one caller, Initialize, through the PLT stub)
  *   CR15NetBulletCS::Shutdown           ABS64     0x36933e8 -> 0x21226f0   (a vtable word in .data.rel.ro; FUNC, 348 bytes)

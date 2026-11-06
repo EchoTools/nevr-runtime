@@ -44,7 +44,7 @@ using JsonLoadFn = int (*)(void* self, const char* path);
 using JsonNextFn = void* (*)(void* self, const char* name, const void* from);
 using JsonNameAtFn = const char* (*)(void* self, const void* node);
 using JsonTStringFn = const char* (*)(void* self, const void* node, const char* fallback);
-using MemBlockResizeFn = void (*)(void* self, std::uint32_t bytes, int keep);
+using MemBlockResizeFn = void (*)(void* self, std::uint64_t bytes, int keep);
 constexpr const char* kImpactPath = "bullet_impact";
 constexpr const char* kWhizzbyPath = "bullet_whizzby";
 // the stock SPrintF("%s|%s", "/json/r14/config", "mp_sound_settings.json")
@@ -385,7 +385,8 @@ void AppendRow(std::uintptr_t table, std::uint64_t key, std::uint32_t id) noexce
   std::uint64_t count = words[6];
   if (cap <= count) {
     const std::uint64_t grow = std::max(cap, words[4]);
-    Callee<MemBlockResizeFn>(kIdxResize)(reinterpret_cast<void*>(table), static_cast<std::uint32_t>((grow + cap) * 0x10), 1);
+    Callee<MemBlockResizeFn>(kIdxResize)(reinterpret_cast<void*>(table), (grow + cap) * 0x10, 1);
+    cap = words[5];  // the stock code reads the capacity and the count again after the call (ldp x9, x8, [x26, #0x28])
     count = words[6];
     words[5] = cap + grow;
   }
@@ -477,6 +478,9 @@ std::uint64_t OnLoad(LoadThunk::Fn original) noexcept {
   g_loads.fetch_add(1, std::memory_order_relaxed);
   const Scope scope = DecideScope();
   if (scope != Scope::kCombat) {
+    // This load is the game's own, and the table it makes or extends is not a combat level's: the scope of an earlier combat load (a table that another bullet
+    // system still held when the combat map left) ends here, so the tick does not write ids into this table.
+    g_scoped.store(false, std::memory_order_release);
     const std::uint64_t r = original();
     NoteScope(scope, "game");
     return r;
@@ -509,7 +513,7 @@ std::uint64_t OnLoad(LoadThunk::Fn original) noexcept {
 // does, and none starts until it has returned. A nested call on the same thread does not take the lock again. When the global reads 0 afterwards the table
 // is gone, and so is the scope.
 std::uint64_t OnShutdown(ShutdownThunk::Fn original, std::uint64_t self) noexcept {
-  NoteThread(kRoleShutdown);
+  if (g_scoped.load(std::memory_order_relaxed)) NoteThread(kRoleShutdown);  // no syscall in an arena teardown
   const std::uintptr_t depth = g_tShutdownDepth.Get();
   const bool outer = depth == 0;
   g_tShutdownDepth.Set(depth + 1);
@@ -655,7 +659,7 @@ ModuleResult InstallAt(bool on, bool write, sentinel::ImageLookup lookup) noexce
     sentinel::LogFields(LogLevel::kInfo, "combat_impactsnd_install",
                         {{"result", "off"}, {"reason", "off_config"}, {"switch", "combat.impactsnd"},
                          {"msg", "combat.impactsnd is false: the game keeps its own impact table and sounds"}});
-    return {false, "off_config"};
+    return {false, "off_config", true};
   }
   g_write = write;
   sentinel::ElfImage image{};

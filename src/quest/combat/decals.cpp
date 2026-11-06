@@ -246,12 +246,60 @@ struct ShutdownTag {};
 using UpdateThunk = sentinel::CallbackThunk<UpdateTag, UpdateSig>;
 using ShutdownThunk = sentinel::CallbackThunk<ShutdownTag, ShutdownSig>;
 
+// A game space that has nothing to draw (an arena level, or no readable level yet) is skipped for kQuickSkipCalls updates without the module's lock, the
+// clock or a read: one entry per bullet system, kept by the update that looked at it. The arena frame is then a few relaxed loads and a branch. A skipped
+// space is looked at again after the skip, so a space that becomes a combat level is found within kQuickSkipCalls updates (and the Host's own once-a-second
+// rule still bounds how often its level is read).
+constexpr std::uint32_t kQuickSkipCalls = 64;
+std::atomic<std::uintptr_t> g_quickSys[kMaxSystems] = {};
+std::atomic<std::uint32_t> g_quickSkip[kMaxSystems] = {};
+
+bool QuickSkip(std::uintptr_t sys) noexcept {
+  for (int i = 0; i < kMaxSystems; ++i) {
+    if (g_quickSys[i].load(std::memory_order_relaxed) != sys) continue;
+    const std::uint32_t n = g_quickSkip[i].load(std::memory_order_relaxed);
+    if (n == 0) return false;
+    g_quickSkip[i].store(n - 1, std::memory_order_relaxed);
+    return true;
+  }
+  return false;
+}
+
+// Under g_mu.
+void QuickSet(std::uintptr_t sys, bool quiet) noexcept {
+  int free = -1;
+  for (int i = 0; i < kMaxSystems; ++i) {
+    const std::uintptr_t have = g_quickSys[i].load(std::memory_order_relaxed);
+    if (have == sys) {
+      g_quickSkip[i].store(quiet ? kQuickSkipCalls : 0, std::memory_order_relaxed);
+      return;
+    }
+    if (have == 0 && free < 0) free = i;
+  }
+  if (quiet && free >= 0) {
+    g_quickSkip[free].store(kQuickSkipCalls, std::memory_order_relaxed);
+    g_quickSys[free].store(sys, std::memory_order_relaxed);
+  }
+}
+
+// Under g_mu.
+void QuickDrop(std::uintptr_t sys) noexcept {
+  for (int i = 0; i < kMaxSystems; ++i) {
+    if (g_quickSys[i].load(std::memory_order_relaxed) == sys) {
+      g_quickSkip[i].store(0, std::memory_order_relaxed);
+      g_quickSys[i].store(0, std::memory_order_relaxed);
+    }
+  }
+}
+
 // The game's own update first: the nodes are drawn from the state it leaves.
 void OnUpdate(UpdateThunk::Fn original, std::uintptr_t sys) noexcept {
   original(sys);
   if (!g_on.load(std::memory_order_acquire)) return;
+  if (QuickSkip(sys)) return;
   pthread_mutex_lock(&g_mu);
   g_host.Tick(sys, NowMs());
+  QuickSet(sys, g_host.Quiet(sys));
   pthread_mutex_unlock(&g_mu);
 }
 
@@ -260,6 +308,7 @@ std::uint64_t OnShutdown(ShutdownThunk::Fn original, std::uint64_t self) noexcep
   if (g_on.load(std::memory_order_acquire)) {
     pthread_mutex_lock(&g_mu);
     g_host.Shutdown(static_cast<std::uintptr_t>(self));  // our nodes go before the system does
+    QuickDrop(static_cast<std::uintptr_t>(self));
     pthread_mutex_unlock(&g_mu);
   }
   return original(self);
@@ -423,6 +472,10 @@ void ResetForTest() noexcept {
   g_host = Host();
   g_api = Api();
   g_node_lines.store(0);
+  for (int i = 0; i < kMaxSystems; ++i) {
+    g_quickSys[i].store(0);
+    g_quickSkip[i].store(0);
+  }
 }
 
 }  // namespace nevr_quest::combat::decals

@@ -253,7 +253,7 @@ struct SysRec {
 };
 
 struct Counters {
-  std::uint64_t systems_seen = 0, nodes_made = 0, nodes_failed = 0, nodes_destroyed = 0, level_changes = 0, ticks = 0, drawn_quads = 0;
+  std::uint64_t tick_calls = 0, systems_seen = 0, nodes_made = 0, nodes_failed = 0, nodes_destroyed = 0, level_changes = 0, ticks = 0, drawn_quads = 0;
 };
 
 using sentinel::HexString;
@@ -299,6 +299,7 @@ struct Host {
 
   // The update of bullet system `sys` (the game-space update thread of that system); the caller holds the module's lock.
   void Tick(std::uintptr_t sys, std::int64_t now_ms) {
+    ++counters.tick_calls;
     if (table == nullptr || table->count == 0) return;
     SysRec* ds = Find(sys);
     // A game space in a level the module does not act in (an arena match, which shares the APK) has its level read again once a second, not on every
@@ -405,6 +406,13 @@ struct Host {
       win_at = now_ms;
       frames = win_quads = 0;
     }
+  }
+
+  // True when `sys` has nothing to draw now and need not be looked at on every update: its game space is in a level the module does not act in, or has no
+  // readable level yet (no record). The handler skips such a system's updates without the lock (decals.cpp QuickSkip).
+  bool Quiet(std::uintptr_t sys) {
+    const SysRec* r = Find(sys);
+    return r == nullptr || r->inert;
   }
 
   // Bullet system `sys` is shutting down: its nodes go first, then the record of it.

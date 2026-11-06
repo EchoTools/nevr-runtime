@@ -163,3 +163,11 @@ runm im_arena_scan_in_tick     $C 's/^  if (!g_on.load(std::memory_order_acquire
 runm im_arena_read_in_shutdown $C 's/  if (outer \&\& g_scoped.load(std::memory_order_acquire)) {.*$/  if (outer) {/'
 runm im_load_scans_twice       $C 's/const Scope scope = DecideScope();/const Scope scope = (DecideScope(), DecideScope());/'
 runm im_load_no_inflight       $C 's/\&level, \/\*inFlight=\*\/true)/\&level, false)/'
+
+# an arena load ends the scope of an earlier combat load; a module off by its key is counted off; the Shutdown thread note is not an arena syscall
+runm im_arena_load_keeps_scope2 $C 's/^    g_scoped.store(false, std::memory_order_release);$/    (void)0;/'
+runm im_off_counted_failed     $C 's/return {false, "off_config", true};/return {false, "off_config"};/'
+runm im_shutdown_thread_always $C 's/if (g_scoped.load(std::memory_order_relaxed)) NoteThread(kRoleShutdown);/NoteThread(kRoleShutdown);/' quest-host-combat impactsnd_test
+runm ci_off_field_dropped      src/quest/combat/combat_install.cpp 's/ {"off", outcome.off},//' quest-host-combat combat_install_test
+runm ci_off_not_counted        src/quest/combat/combat_install.cpp 's/^    if (result.off) {$/    if (false) {/' quest-host-combat combat_install_test
+runm ci_key3_dropped           src/quest/combat/combat_install.cpp 's/{module.switchKey3, module.switchMember3}/{nullptr, nullptr}/' quest-host-combat combat_install_test

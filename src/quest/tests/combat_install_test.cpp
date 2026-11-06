@@ -345,7 +345,7 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   tables.tablestep = {false, nevr_quest::Source::kFile};
   combat::LogConfig(tables);
   const std::vector<Line> all = Lines("combat_config_switch");
-  QCHECK(all.size() == 16U);  // eight per call: the four table steps, impactsnd and its write key, decals and its flip key (#2183)
+  QCHECK(all.size() == 18U);  // nine per call: the four table steps, impactsnd and its write key, decals and its two flip keys (#2183)
   const char* const order[] = {"meshstep", "tablestep", "instmodel", "shaderstep"};
   std::vector<Line> records;  // the four table steps' records, in the table's order
   for (const Line& l : all) {
@@ -358,6 +358,7 @@ void TheConfigLineNamesEachKeyItsValueAndItsSource() {
   QCHECK(Has(all[2].text, "\"key\":\"combat.impactsnd_write\"") && Has(all[2].text, "\"on\":1,\"source\":\"default\""));
   QCHECK(Has(all[6].text, "\"module\":\"decals\"") && Has(all[6].text, "\"key\":\"combat.decals\"") && Has(all[6].text, "\"on\":1,\"source\":\"default\""));
   QCHECK(Has(all[7].text, "\"key\":\"combat.decals_flip_u\"") && Has(all[7].text, "\"on\":0,\"source\":\"default\""));
+  QCHECK(Has(all[8].text, "\"module\":\"decals\"") && Has(all[8].text, "\"key\":\"combat.decals_flip_v\"") && Has(all[8].text, "\"on\":0,\"source\":\"default\""));
   const char* const wantFirst[] = {"\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"", "\"on\":1,\"source\":\"default\"",
                                    "\"on\":1,\"source\":\"default\""};
   const char* const wantSecond[] = {"\"on\":0,\"source\":\"config\"", "\"on\":0,\"source\":\"config\"", "\"on\":1,\"source\":\"default\"",
@@ -530,6 +531,9 @@ void TheImpactsndAndDecalsRowsReadTheirKeysFromTheResolvedSection() {
   combat::SetConfig(impactOff);
   combat::InstallNormal();
   QCHECK(Has(Lines("combat_install")[0].text, "impactsnd=off_config") && Has(Lines("combat_install")[0].text, "decals=no_table"));
+  // a module off by its key is off, not failed: the phase line counts it apart (impactsnd by its key, decals for want of a decals.bin), and the six
+  // modules that cannot install on a host without a libr15 (the tick, the four table steps, the gates) are the failed ones
+  QCHECK(Has(Lines("combat_install")[0].text, "\"off\":2") && Has(Lines("combat_install")[0].text, "\"failed\":6"));
   QCHECK(Lines("combat_impactsnd_refused").empty() && Has(Lines("combat_impactsnd_install")[0].text, "\"reason\":\"off_config\""));
   Done();
   Process(bv::Variant::kCombat);

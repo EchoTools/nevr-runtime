@@ -87,3 +87,13 @@ runm dm_install_status       $C 's/return {false, sentinel::GotStatusName(update
 runm dm_update_original_late $C 's/^  original(sys);$/  if (g_on.load(std::memory_order_acquire)) { pthread_mutex_lock(\&g_mu); g_host.Tick(sys, NowMs()); pthread_mutex_unlock(\&g_mu); }\n  original(sys);/'
 # an arena match pays nothing, by count: a read before the scope test of the update handler is killed by the counters
 runm dm_arena_read_in_update  $C 's/^  original(sys);$/  original(sys); { std::uintptr_t probe = 0; SafeRead(sys, \&probe, sizeof probe); }/'
+
+# the quiet-space skip: an arena space, or one with no level yet, reaches the lock, the clock and the state machine once per skip, not on every update
+runm dm_quick_skip_off         $C 's/^  if (QuickSkip(sys)) return;$/  if (false \&\& QuickSkip(sys)) return;/'
+runm dm_quick_never_set        $C 's/QuickSet(sys, g_host.Quiet(sys));/QuickSet(sys, false);/'
+runm dm_quick_always_quiet     $C 's/QuickSet(sys, g_host.Quiet(sys));/QuickSet(sys, true);/'
+runm dm_quick_skip_forever     $C 's/g_quickSkip\[i\].store(n - 1, std::memory_order_relaxed);/(void)n;/'
+runm dm_quiet_no_record        $K 's/return r == nullptr || r->inert;/return r != nullptr \&\& r->inert;/'
+runm dm_quiet_never            $K 's/return r == nullptr || r->inert;/return false \&\& r == nullptr;/'
+runm dm_quick_drop_skipped     $C 's/^    QuickDrop(static_cast<std::uintptr_t>(self));$//'
+runm dm_flip_v_key_dropped     src/quest/combat/combat_install.cpp 's/"combat.decals_flip_v", \&nevr_quest::CombatConfig::decalsFlipV/nullptr, nullptr/' quest-host-combat combat_install_test

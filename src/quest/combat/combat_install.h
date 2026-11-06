@@ -67,8 +67,10 @@ struct Module {
   InstallFn normal;
   const char* switchKey = nullptr;                                          // e.g. "combat.meshstep"; null: reported on the `combat_config` line
   nevr_quest::CombatSwitch nevr_quest::CombatConfig::* switchMember = nullptr;
-  const char* switchKey2 = nullptr;  // a module's second key (impactsnd_write, decals_flip_u), reported the same way
+  const char* switchKey2 = nullptr;  // a module's second and third keys (impactsnd_write; decals_flip_u and decals_flip_v), each reported the same way
   nevr_quest::CombatSwitch nevr_quest::CombatConfig::* switchMember2 = nullptr;
+  const char* switchKey3 = nullptr;
+  nevr_quest::CombatSwitch nevr_quest::CombatConfig::* switchMember3 = nullptr;
 };
 
 // What a phase did. `ran` is false when it did not run (combat is off in this process, or the phase already ran or was ended).

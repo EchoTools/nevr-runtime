@@ -289,7 +289,7 @@ are no class):
 | Where | What the module does |
 |---|---|
 | `LoadSoundSettings` in a combat map or the combat lobby | the rebuilt loader, or the stock loader and the after-load pass; marks the scope |
-| `LoadSoundSettings` in any other level, no game seen yet, an unreadable game | the game's own loader and nothing else; one `combat_impactsnd_scope` line (`scope`: `other_level`, `no_game`; `loader`: `game`); the table keeps the game's rows and ids |
+| `LoadSoundSettings` in any other level, no game seen yet, an unreadable game | the game's own loader and nothing else, and the scope of an earlier combat load ends (the table it leaves may be one that another bullet system still holds); one `combat_impactsnd_scope` line (`scope`: `other_level`, `no_game`; `loader`: `game`); the table keeps the game's rows and ids |
 | `Shutdown`, any level | takes the table lock around the game's function; the scope ends when the game has cleared the global |
 | the tick, no table of a combat level live | one atomic load of the game and one of the scope flag, per frame |
 | the tick, a combat table live | the poll, four times a second |
@@ -297,7 +297,7 @@ are no class):
 Cost in an arena match, per ADR 0038: a load is one `Classify` (two table reads of the game, each `process_vm_readv`) once per game-space load, then the game's own
 loader; a Shutdown is one uncontended mutex lock and unlock and two pthread-key accesses, once per bullet system teardown; the tick callback is two relaxed/acquire
 loads and a branch, once per rendered frame, no system call and no clock read. When the load handler could not be hooked the tick asks the levels itself once a
-second (a degraded mode that the `combat_impactsnd_hook` Error names). The measured host numbers are in the pull request that moved the module.
+second (a degraded mode that the `combat_impactsnd_hook` Error names). The measured host numbers are in the pull request that moved the module. The table global is one for the process: when a combat map's bullet system is still alive while an arena lobby loads, the arena match uses the table that the combat load rebuilt (15 rows). The module writes no id into it after the arena load (the scope ended), and the rows are already right.
 
 ## Tests and mutants
 
