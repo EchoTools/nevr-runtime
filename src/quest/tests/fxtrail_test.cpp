@@ -58,7 +58,7 @@ alignas(16) std::uint16_t g_index[8];
 struct Data {
   std::uint8_t b[0x18];
 };
-alignas(16) Data g_data[6];
+alignas(16) Data g_data[0x120];
 
 int g_realCalls = 0;
 const void* g_realCs = nullptr;
@@ -83,7 +83,7 @@ void World(std::uintptr_t mine, std::uintptr_t others) {
   g_cs[0xc8 / 8] = reinterpret_cast<std::uintptr_t>(g_index);
   g_cs[0xf8 / 8] = reinterpret_cast<std::uintptr_t>(g_data);
   g_index[4] = 3;  // the u16 at byte 4 * 2
-  for (int i = 0; i < 6; ++i) SetInstance(i, others);
+  for (int i = 0; i < 0x120; ++i) SetInstance(i, others);
   SetInstance(3, mine);
   g_realCalls = 0;
 }
@@ -187,6 +187,12 @@ void AnEffectWithAnInstanceKeepsTheGamesValue() {
   const float t = Slot()(g_cs, kHandle);
   QCHECK(t == kRealTime);
   QCHECK(g_realCalls == 1 && fx::CurrentStats().ended == 0 && fx::CurrentStats().inCombat == 1);
+  {  // the data index is a u16 (a handle whose entry is past 255 is found): handle index 3 -> data[0x103], whose instance is set; data[3] has none
+    World(0, 0);
+    g_index[6] = 0x103;
+    SetInstance(0x103, 0x77);
+    QCHECK(Slot()(g_cs, 3ULL | (7ULL << 16)) == kRealTime && fx::CurrentStats().ended == 0);
+  }
   End();
 }
 
@@ -307,7 +313,7 @@ void ASlotThatDoesNotHoldEffectTimeIsRefusedAndLeftAlone() {
   r = Install();
   QCHECK(!r.installed && std::strcmp(r.status, "original_mismatch") == 0);
   QCHECK(*g_image.Slot(g_pins.slot) == reinterpret_cast<void*>(&OtherFn));
-  QCHECK(Slot()(g_cs, kHandle) == 9.0f);  // the other function still answers: the thunk is disarmed
+  QCHECK(Slot()(g_cs, kHandle) == 9.0f);  // the other function still answers: the slot was left alone
   End();
 }
 

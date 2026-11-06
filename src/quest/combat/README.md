@@ -11,6 +11,8 @@ that they ship to every APK (`match_tags`, `equip_refire`).
 | --- | --- |
 | `combat_active.{h,cpp}` | The gate: `combat::Active()`, from the APK's variant and `combat.force` (a development build only). |
 | `combat_install.{h,cpp}` | The two install steps, `InstallEarly()` and `InstallNormal()`, the registration table they run, the `combat_install` line each writes, and the `combat_config` line. |
+| `level_scope.{h,cpp}` | Which level class is loaded, published from the combat tick for the modules that act only in a combat level (`InCombatMap`, `InCombatMapOrLobby`; an Echo Arena level wins). |
+| `pinned_words.h`, `legacy_switch.h` | The shared pinned-word row and its check; the check for a q15t switch file a moved module no longer reads (a Warning that names the `combat:` key). |
 | `<module>.{h,cpp}` | One module: namespace `nevr_quest::combat::<module>`, log events `combat_<module>_*`. |
 | `<module>_targets.h` | The module's pinned slots, each checked by the module's own pinned test (`src/quest/tests/<module>_pinned_test.cpp`, run by `just test-quest-hooks-pinned`-style recipes against the store APK). |
 | `check/<module>.sh` | The module's arm64 checks (the NDK, and qemu where a thunk is run). `just test-quest-combat` runs them after the host tests. |
@@ -46,3 +48,8 @@ Both steps ask `combat::Active()` and install nothing when it is false. A plain 
 7. A module's host test is a program in the `combat` group with the module's name in its own, so `just test-quest-combat <module>` finds it.
 8. An early function does not touch a slot that `libq15t.so` installs at its normal pass. The early step runs before the plugin's hooks are in,
    so it would take the slot first and q15t would refuse it (the #2000 shape); such a module installs in the normal step, after the plugin pass.
+9. Arena and combat share the APK, so `combat::Active()` does not keep a module out of an arena match. A module's header and doc say which of two it is, with the
+   evidence. A guard that only stops a crash in code arena shares acts in every level (a level look lags a level change, and the fault does not wait for it): it
+   asks nothing of `level_scope.h` and says why. A module that changes a value the game computes, or writes the game's memory, acts only while a combat level is loaded:
+   its handler asks `level_scope.h` first, before it reads any game memory, so an arena match pays one atomic load, and a host test shows it doing nothing on every arena level.
+   Each says what an arena match pays per call and per frame, with the counting that gives it.

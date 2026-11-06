@@ -111,8 +111,6 @@ ModuleResult InstallAt(sentinel::ImageLookup lookup, const Pins& pins, bool on, 
   EffectTimeThunk::Arm(kEffectTimeRecord);
   const sentinel::GotStatus status = sentinel::InstallThunk<EffectTimeThunk>(g_hook, target, lookup);
   const bool installed = status == sentinel::GotStatus::kOk;
-  // A refused slot keeps the game's call as it is; the handler goes off with it.
-  if (!installed && !g_hook.installed()) EffectTimeThunk::Disarm();
   sentinel::LogFields(installed ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "combat_fxtrail_install",
                       {{"result", installed ? "installed" : "refused"}, {"reason", installed ? "ok" : "slot_refused"},
                        {"hook", sentinel::GotStatusName(status)}, {"scope", "combat_map"},
