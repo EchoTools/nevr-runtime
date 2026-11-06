@@ -30,23 +30,28 @@ and is built by its CMake, so the boundary separates nothing. What it costs:
   whose plugin libraries a recipe takes from outside the tree (`release-quest-variant-apk <tag> <plugins>`, the release timer's
   `NEVR_VARIANT_DIR`); a test project of 128 files beside the `test-quest-*` groups.
 
-`src/quest/combat/` already holds combat behaviour built into the sentinel and hooked through the manager (`match_tags.cpp`), which
-installs on every launch (`src/quest/sentinel/entry.cpp`, `InstallPermissionWaitHook`).
+`src/quest/combat/` already holds combat behaviour built into the sentinel and hooked through the manager (`match_tags.cpp`,
+`equip_refire.cpp`), which install on every launch (`src/quest/sentinel/entry.cpp`, `InstallPermissionWaitHook`).
 
 ## Decision
 
+This section decides names that are not in the tree today: `combat::Active()`, `combat_config`, `combat.force`, the `combat:`
+section of `config.yaml`, the `combat` host-test group, `test-quest-combat`, and the sentinel's export of `re33_ec_page`. The units of
+#2168 create them.
+
 1. **Combat is runtime code.** Each combat behaviour is a module in `src/quest/combat/` (target `nevr_quest_combat`, namespace
-   `nevr_quest::combat::<module>`, log events `combat_<module>_*`), linked into the sentinel and tested in the `combat` host-test group.
+   `nevr_quest::combat::<module>`, log events `combat_<module>_*`), linked into the sentinel and tested in a `combat` host-test group.
    The q15t plugin is removed when its last module has moved. The plugin loader, its manifest, the hook service and the script-redirect
-   registry stay: they serve third-party plugins (ADR 0019).
+   registry stay: they serve third-party plugins (ADR 0019). The hook service stays in the development API only, as today; the release
+   API stays without it, because the plugin that would have used it (#2002) is folded into the runtime instead.
 2. **Every combat hook goes through the manager.** A named JUMP_SLOT or GLOB_DAT is a pinned target installed with `InstallThunk`. The
    manager gains three operations, each under its lock and registry, with the expected original and one log line: a pinned ABS64
-   target (a vtable or factory word that names a symbol, class C); a checked write of a data slot (a GLOB_DAT that holds a data pointer,
+   target (a vtable or factory word that names a symbol); a checked write of a data slot (a GLOB_DAT that holds a data pointer,
    ADR 0019 section 5 (iii), kept in the manager's file by N151); and an install path for a reviewed assembly entry that needs its
    caller's registers, declared by a record the frame sensor walks, which stays the newest handler on its slot.
 3. **One owner per behaviour.** The clock levels belong to the sentinel's `clock_levels`; q15t's clock module is deleted and its
    `args: {clock: raise}` is `diagnostics.clock_levels_override: true`. The refresh rate belongs to the combat refresh-rate rule, a
-   decision the render-configuration handler asks, as it asks `clock_levels`; render_config observes. The handler runs in every APK, so
+   decision the render-configuration handler asks, as it asks `clock_levels`; render_config logs the value applied. The handler runs in every APK, so
    the rule answers with the game's own rate unless `combat::Active()` (rule 5). Headset facts come from the identity step (ADR 0031
    decision 4), not from a module's own reads.
 4. **Switches are `config.yaml` keys** under a `combat:` section, one per module and one per option, each defaulting to the shipped
@@ -56,7 +61,7 @@ installs on every launch (`src/quest/sentinel/entry.cpp`, `InstallPermissionWait
 5. **The folded modules run in the q15t and combat variants only.** The packaging step writes the APK's variant word (ADR 0040 rule 1);
    the sentinel reads it before its first line, writes it in that line beside the build kind (`nevr_build::kIsDev`, unchanged), and
    `combat::Active()` is true for `q15t` and `combat`. Modules folded from q15t install only when it is true; a development build may
-   force it with `combat.force`, a release build may not. Combat-area code that ships to every APK (`match_tags`) is outside this gate
+   force it with `combat.force`, a release build may not. Combat-area code that ships to every APK (`match_tags`, `equip_refire`) is outside this gate
    and says so in its header. The combat code is compiled into every sentinel, so the release loader asset serves every variant.
 6. **Install moments are the plugin's.** Modules that must precede `android_main` install in a constructor step after Attach and before
    the clock hook; the rest install in a post-load action of their own, right after the normal plugin pass when there is one, at the
@@ -82,7 +87,7 @@ Scope: `src/quest`, `justfile`, `tools/`, `config/`.
 - **C1.** A combat module that writes a code pointer or a data pointer of a game library other than through the manager (ADR 0034 H1,
   H2); after the fold, a plugin under `src/quest/plugins/` that hooks libr15 other than through the host's hook service.
 - **C2.** A switch of a folded module read from anything but `config.yaml`: a file-existence check under the app's files directory that
-  turns behaviour on or off.
+  turns behaviour on or off, other than the player-state files of rule 4.
 - **C3.** A module folded from q15t that installs, or a folded decision that a sentinel hook asks and that answers anything but the
   game's own value, in a run whose variant is not `q15t` or `combat`, except a development build with `combat.force`.
 - **C4.** A combat module and another module that both change the same behaviour (ADR 0039 O1).
@@ -95,9 +100,9 @@ Scope: `src/quest`, `justfile`, `tools/`, `config/`.
   leaves N151's allowlist; #2002 is superseded.
 - heaps and memsys stop depending on ADR 0019 P10.
 - The release timer and the variant recipes stop reading libraries from outside the tree (part of #2009, ADR 0035 P4).
-- `test-quest-q15t` becomes `test-quest-combat`.
-- The sentinel exports `re33_ec_page` for the EC script libraries, a third dynamic export, defined outside the archive that
-  `--exclude-libs` hides.
+- `test-quest-q15t` is replaced by `test-quest-combat`.
+- The sentinel will export `re33_ec_page` for the EC script libraries, a third dynamic export, defined outside the archive that
+  `--exclude-libs` hides; the export allowlist test (`TestExportAllowlist`) gains it in the same change.
 - `config.yaml` gains a top-level `combat` key; an older runtime rejects a file that has it.
 
 ## Alternatives
