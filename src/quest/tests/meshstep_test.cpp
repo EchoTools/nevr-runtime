@@ -343,6 +343,17 @@ void AMapThatIsStillLoadingIsACombatMatchAndAnArenaLevelThatIsLoadingIsNot() {
     QCHECK(g_stockCalls == 0 && g_blockCalls == 11 && ms::CurrentStats().built == 1);
     End1();
   }
+  {  // a fiber count the scope does not trust (more than 64) is no level
+    Begin1();
+    Build();
+    SetWhere(Where::kCombatMapLoading);
+    g_game.words[kFiberCount / 8] = 65;
+    QCHECK(ms::InstallAt(&Lookup, g_pins, &g_fns, true).installed);
+    std::uint64_t init[3] = {0, 1, 2};
+    std::free(Construct(init));
+    QCHECK(g_stockCalls == 1 && ms::CurrentStats().built == 0);
+    End1();
+  }
   for (const Where where : {Where::kArenaLoadingAfterCombat, Where::kArenaAndCombatLoading}) {
     Begin1();
     Build();

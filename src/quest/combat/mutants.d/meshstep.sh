@@ -87,7 +87,7 @@ runm ms_pin_line_vaddr      $S "s/{\"vaddr\", sentinel::HexString(at, bad->vaddr
 # the shared scope (table_step.cpp): the lobby rule is off, an arena level wins, no game is no read
 runm ts_lobby_rule_on       $TS "s/level::Classify(game, \/\*lobby=\*\/false, \&level)/level::Classify(game, \/*lobby=*\/true, \&level)/"
 runm ts_any_kind_acts       $TS "s/level::Classify(game, \/\*lobby=\*\/false, \&level) == level::Kind::kCombatOrLobby ? Scope::kCombat : Scope::kOther;/level::Classify(game, \/*lobby=*\/false, \&level) != level::Kind::kNone ? Scope::kCombat : Scope::kOther;/"
-runm ts_combat_map_alone    $TS "s/level::Classify(game, \/\*lobby=\*\/false, \&level) == level::Kind::kCombatOrLobby ? Scope::kCombat : Scope::kOther;/level::CombatMapLoaded(game, \&level) ? Scope::kCombat : Scope::kOther;/"
+runm ts_combat_map_alone    $TS "s/level::Classify(game, \/\*lobby=\*\/false, \&level, \/\*inFlight=\*\/true) == level::Kind::kCombatOrLobby/level::CombatMapLoaded(game, \&level)/"
 runm ts_no_game_is_read     $TS "s/^  if (game == 0) return Scope::kUnknown;.*\$//"
 runm ts_no_game_is_combat   $TS "s/  if (game == 0) return Scope::kUnknown;/  if (game == 0) return Scope::kCombat;/"
 runm ts_reads_not_counted   $TS "s/g_scopeReads.fetch_add(1, std::memory_order_relaxed);/g_scopeReads.fetch_add(0, std::memory_order_relaxed);/"
@@ -118,16 +118,14 @@ runm ts_counts_level_debug  $TS "s/sentinel::LogFields(sentinel::LogLevel::kInfo
 runm ts_register_dedup      $TS "s/g_counted\[i\].event == event || std::strcmp(g_counted\[i\].event, event) == 0/false/"
 runm ts_note_not_called     $TS "s/^  NoteScope(scope, level);\$/  (void)\&NoteScope; (void)level;/"
 # the in-flight gamespaces (combat_level.cpp, combat_level_targets.h; asked by the scope): a combat map that is only loading is a combat match
+# not listed: a changed fiber offset in combat_level_targets.h does not compile (the static_asserts tie it to the pinned instruction word), and lv_fiber_rows_unchecked
+# is equivalent (a null rows pointer reads nothing)
 LV=src/quest/combat/combat_level.cpp
 LT=src/quest/combat/combat_level_targets.h
 runm ts_inflight_not_asked  $TS "s/&level, \/\*inFlight=\*\/true)/\&level, \/*inFlight=*\/false)/"
 runm lv_inflight_ignored    $LV "s/^  if (inFlight) ScanInFlight(out, game);\$/  (void)inFlight; (void)\&ScanInFlight;/"
-runm lv_fiber_rows_offset   $LT "s/kFiberRows = 0x1ed8,/kFiberRows = 0x1ee0,/"
-runm lv_fiber_count_offset  $LT "s/kFiberCount = 0x1f08,/kFiberCount = 0x1f10,/"
-runm lv_fiber_gs_offset     $LT "s/kFiberGamespace = 0x30;/kFiberGamespace = 0x38;/"
 runm lv_fiber_stride        $LV "s/rows + i \* sizeof(std::uintptr_t)/rows + i/"
 runm lv_fiber_count_cap     $LV "s/  if (!ok || rows == 0 || count > kMaxGamespaces) return;/  if (!ok || rows == 0) return;/"
-runm lv_fiber_rows_unchecked $LV "s/  if (!ok || rows == 0 || count > kMaxGamespaces) return;/  if (!ok || count > kMaxGamespaces) return;/"
 runm lv_arena_wins_not      $LV "s/  if (IsEchoArenaLevel(current) \&\& !out.echoArena) {/  if (IsEchoArenaLevel(current) \&\& !out.echoArena \&\& !out.combatMap) {/"
 runm lv_name_dropped        $LV "s/    if (named.id == level) return named.name;/    if (named.id == level + 1) return named.name;/"
-runm ts_level_name_field    $TS "s/{\"level_name\", name != nullptr ? name : \"other\"}/{\"level_name\", \"other\"}/"
+runm ts_level_name_field    $TS "s/name != nullptr ? name : \"other\"/(void)name, \"other\"/"
