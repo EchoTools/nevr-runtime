@@ -30,6 +30,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/credits_text.cpp",
     "patch/deadlock_monitor.cpp",
     "patch/early_quit_lockout.cpp",
+    "patch/equipment_refire.cpp",
     "patch/evrp_package.cpp",
     "patch/gpu_score.cpp",
     "patch/headless_graphics.cpp",

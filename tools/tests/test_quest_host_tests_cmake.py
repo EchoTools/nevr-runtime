@@ -73,6 +73,7 @@ PROGRAMS = {
         "crash_first_hook_test",
         "credits_text_test",
         "embedding_check",
+        "equip_refire_test",
         "frame_dispatch_test",
         "got_hook_test",
         "hand_flip_test",
