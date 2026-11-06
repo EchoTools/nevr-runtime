@@ -866,12 +866,13 @@ your seat name, for example `claude-main` or `codex`.
   - **Make it safe.** Move out what a run must not start with, list every sign-in file, then list every link that
     leaves the copy:
     ```sh
-    mkdir -p <copy>/to-delete   # move every path this block names into it, then rm -r -- <copy>/to-delete (Scratch is per agent)
+    mkdir -p <copy>/to-delete   # move every path this block names into it; the last line removes that directory (Scratch is per agent)
     mv <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json <copy>/to-delete/
     for d in <copy>/echovr/bin/win10/plugins <copy>/echovr/.wineprefix/drive_c/users/*/AppData/Local/nevr/echovr/plugins; do if [ -d "$d" ]; then mv "$d" "<copy>/to-delete/$(echo "$d" | tr / _)"; fi; done
     find <copy>/echovr -name '.credentials.json*' ! -type d -print
-    find <copy>/echovr -name '.credentials.json*' ! -type d -exec mv -t <copy>/to-delete {} +
+    find <copy>/echovr -name '.credentials.json*' ! -type d -exec sh -c 'd=$1; shift; for f; do mv -- "$f" "$d/$(printf %s "$f" | tr / _)"; done' sh <copy>/to-delete {} +
     COPY=$(readlink -f <copy>) find <copy> -type l -exec sh -c 'for l; do t=$(readlink -f "$l"); case "$t" in "$COPY"/*) ;; *) echo "$l -> $t";; esac; done' sh {} +
+    rm -r -- <copy>/to-delete
     ```
     The first `find` lists the sign-in files: those in `_local` (with their `.bak` and `.prod-bak` backups) and the
     nevr root cache in the Wine prefix (`.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr/`). The last
