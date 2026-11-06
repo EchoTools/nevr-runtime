@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "quest/combat/combat_tick.h"
+#include "quest/combat/legacy_switch.h"
 #include "quest/combat/level_scope.h"
 #include "quest/tests/combat_game_model.h"
 #include "quest/tests/combat_libr15_image.h"
@@ -347,6 +348,15 @@ void TheLegacySwitchFileIsOnlyToldAbout() {
   rmdir(dir.c_str());
 }
 
+// The production directory the plugin's switch files were in: the sentinel's files folder and `q15t`; a buffer that is too small is no directory.
+void TheLegacyDirectoryIsTheFilesFolderAndQ15t() {
+  char dir[320];
+  QCHECK(nevr_quest::combat::LegacySwitchDir(dir, sizeof(dir)) && std::strcmp(dir, "/nonexistent/nevr-files-for-host-tests/q15t") == 0);
+  char small[8];
+  QCHECK(!nevr_quest::combat::LegacySwitchDir(small, sizeof(small)));
+  QCHECK(!nevr_quest::combat::LegacySwitchFilePresent(nullptr, "fxtrail.off") && !nevr_quest::combat::LegacySwitchFilePresent(dir, nullptr));
+}
+
 // 7. combat.fxtrail: false installs nothing and says so.
 void TheSwitchOffInstallsNothingAndSaysSo() {
   Begin();
@@ -451,6 +461,7 @@ int main() {
   TheGuardFollowsTheLoadedLevelAtTheNextLook();
   ASlotThatDoesNotHoldEffectTimeIsRefusedAndLeftAlone();
   TheLegacySwitchFileIsOnlyToldAbout();
+  TheLegacyDirectoryIsTheFilesFolderAndQ15t();
   TheSwitchOffInstallsNothingAndSaysSo();
   AMissingOrOtherImageInstallsNothing();
   EveryPinnedWordGatesTheInstall();

@@ -105,7 +105,7 @@ func TestOnlyFxtrailAndPeerclampAreScopedByLevelAndTheOthersActInEveryLevelOnPur
 			if asks {
 				t.Errorf("%s is a crash-only guard and acts in every level, but it asks the level scope", g.name)
 			}
-			if !strings.Contains(header, "every level") {
+			if !strings.Contains(strings.ToLower(header), "every level") {
 				t.Errorf("%s.h does not say that it acts in every level and why", g.name)
 			}
 			continue
@@ -116,12 +116,12 @@ func TestOnlyFxtrailAndPeerclampAreScopedByLevelAndTheOthersActInEveryLevelOnPur
 		if !strings.Contains(header, "Arena") {
 			t.Errorf("%s.h has no Arena paragraph", g.name)
 		}
-		// the scope is read before any game memory: arena pays one atomic load and reads nothing
-		handler := stripComments(code)
-		at := strings.Index(handler, g.scope)
+		// the scope is asked before any game memory is read in the handler that asks it: arena pays one atomic load and reads nothing
+		at := strings.Index(code, g.scope)
+		start := strings.LastIndex(code[:at], "\n}\n") // the end of the function before the handler: helpers above it are not the handler
 		for _, needle := range []string{"SafeRead(", "SafeRead<"} {
-			if r := strings.Index(handler, needle); r >= 0 && r < at {
-				t.Errorf("%s reads game memory (%s) before it asks the level scope", g.name, needle)
+			if r := strings.Index(code[start+1:at], needle); r >= 0 {
+				t.Errorf("%s reads game memory (%s) in the handler before it asks the level scope", g.name, needle)
 			}
 		}
 	}

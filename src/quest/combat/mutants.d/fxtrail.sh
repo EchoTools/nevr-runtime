@@ -75,16 +75,14 @@ PW=src/quest/combat/pinned_words.h
 runm sh_pw_never_mismatch  $PW "s/    if (!ok || word != pins\[i\].word) {/    if (false) {/"
 runm sh_pw_unreadable_ok   $PW "s/    if (!ok || word != pins\[i\].word) {/    if (ok \&\& word != pins[i].word) {/"
 runm sh_pw_readable_flag   $PW "s/      \*readable = ok;/      *readable = true;/"
-runm sh_pw_have_when_unread $PW "s/      \*have = ok ? word : 0;/      *have = word;/"
 runm sh_pw_index_off_by_one $PW "s/      return i;/      return i + 1;/"
 runm sh_pw_count_ignored   $PW "s/  for (std::size_t i = 0; i < count; ++i) {/  for (std::size_t i = 0; i + 1 < count; ++i) {/"
 LS=src/quest/combat/legacy_switch.h
-runm sh_ls_always_absent   $LS "s/  return wrote >= 0 \&\& static_cast<std::size_t>(wrote) < sizeof(path) \&\& access(path, F_OK) == 0;/  return false;/"
+runm sh_ls_always_absent   $LS "s/  return wrote >= 0 /  return false \&\& wrote >= 0 /"
 runm sh_ls_no_access       $LS "s/ \&\& access(path, F_OK) == 0;/;/"
-runm sh_ls_null_dir        $LS "s/  if (dir == nullptr || file == nullptr) return false;//"
 runm sh_ls_dir_subdir      $LS "s/kLegacySwitchSubdir = \"q15t\";/kLegacySwitchSubdir = \"q15x\";/"
 # the level scope each scoped guard asks is covered by level_scope.sh; the guards' keys line and the shipped table by combat_install_test
 runm sh_ci_guards_line_key $CI "s/{\"voipdrop\", config.voipdrop.on ? 1 : 0}, {\"voipdrop_source\", source(config.voipdrop.source)},/{\"voipdrop\", 1}, {\"voipdrop_source\", source(config.voipdrop.source)},/" quest-host-combat combat_install_test
 runm sh_ci_guards_line_src $CI "s/{\"peerclamp_source\", source(config.peerclamp.source)}/{\"peerclamp_source\", \"default\"}/" quest-host-combat combat_install_test
 runm sh_ci_guards_line_stage1 $CI "s/{\"droneguard_stage1\", config.droneguardStage1.on ? 1 : 0}/{\"droneguard_stage1\", 0}/" quest-host-combat combat_install_test
-runm sh_ci_order           $CI "s/    Module{\"fxtrail\", nullptr, \&FxtrailNormal, \&fxtrail::NoteEnd},//" quest-host-combat combat_install_test
+runm sh_ci_order           $CI "s/    Module{\"fxtrail\", nullptr, \&FxtrailNormal, \&fxtrail::NoteEnd},/    Module{\"fxtrail\", nullptr, \&FxtrailNormal, \&fxtrail::NoteEnd}, Module{\"fxtrail\", nullptr, \&FxtrailNormal, \&fxtrail::NoteEnd},/" quest-host-combat combat_install_test

@@ -114,6 +114,8 @@ void StartRegistersTheTickOnceAndSaysWhenTheTableIsFull() {
   QCHECK(tick::Count() == 0);
   QCHECK(scope::Start() && tick::Count() == 1);
   QCHECK(scope::Start() && scope::Start() && tick::Count() == 1);  // once per process, whichever module asks
+  Begin();  // a reset forgets the registration: the next Start registers again
+  QCHECK(scope::Start() && tick::Count() == 1);
   Begin();
   for (std::size_t i = 0; i < tick::kMaxCallbacks; ++i) QCHECK(tick::Add([](std::uintptr_t) noexcept {}));
   QCHECK(!scope::Start() && tick::Count() == tick::kMaxCallbacks);
