@@ -393,9 +393,11 @@ every `update check` line carries `channel_source`, so a player whose config dis
   and its quarantine is lost with it (`state_before=rebuilt`). A file that is there and cannot be read is not written over.
 - **Links.** `update\` or `state.json` as a link stops the run (`reparse_point`); a link among the removals is removed and never
   followed (`outcome=link_removed`).
-- **A failure** leaves the installed files installed and ends the run `needs-user` (exit 2): the host would stop at its next start
-  on what an earlier update left. The line is `update_state ok=false reason=<lock_timeout, lock_failed, reparse_point,
-  not_a_folder, create_failed, state_unreadable, clear_failed, state_write_failed, log_failed>`.
+- **A failure** leaves the installed files installed and ends the run `0`: the install worked and the game runs, but the host
+  would stop at its next start on what an earlier update left. It is never silent: an ERROR `update_state` line, and a
+  WARNING in the end reason (the CLI prints it on standard error) saying self-update is off until the next install, with the
+  reason. The line is `update_state ok=false reason=<lock_timeout, lock_failed, reparse_point, not_a_folder, create_failed,
+  state_unreadable, clear_failed, state_write_failed, log_failed>`.
 
 ### 8. Logging
 

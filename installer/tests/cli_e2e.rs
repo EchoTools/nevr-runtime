@@ -1275,9 +1275,12 @@ fn a_state_json_that_cannot_be_read_is_not_written_over_and_the_run_asks_the_pla
     let w = world(false);
     std::fs::create_dir_all(update_path(&w, "state.json")).unwrap(); // a folder where the file goes: the open fails, the file is not "damaged"
     put_update(&w, "pending.json", br#"{"to":{"version":"1.0.0"}}"#);
-    let (code, out, _) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
-    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
-    assert!(out["reason"].as_str().unwrap().contains("update"), "{out}");
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("WARNING: self-update is off until the next install"), "{out}");
+    assert!(err.contains("self-update is off"), "the console says so too: {err}");
+    let bad = update_records(&w, "update_state");
+    assert_eq!((bad[0]["level"].clone(), bad[0]["reason"].clone()), (json!("ERROR"), json!("state_unreadable")), "{bad:?}");
     assert!(update_path(&w, "state.json").is_dir() && update_path(&w, "pending.json").exists(), "nothing under update was changed");
     assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), HOST, "the install itself is done and stays");
     let line = &update_records(&w, "update_state")[0];
@@ -1307,7 +1310,7 @@ fn an_update_folder_that_is_itself_a_link_is_refused_before_anything_in_it_is_to
     std::fs::write(elsewhere.path().join("pending.json"), b"{}").unwrap();
     std::os::unix::fs::symlink(elsewhere.path(), w.nevr.path().join("update")).unwrap();
     let (code, out, _) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
-    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out}");
     assert!(elsewhere.path().join("pending.json").exists() && !elsewhere.path().join("state.json").exists());
     assert_eq!(update_records(&w, "update_state")[0]["reason"], "reparse_point");
 }

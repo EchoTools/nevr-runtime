@@ -376,7 +376,7 @@ impl Session {
             // failure left (ADR 0024, "Order of work" step 3). A plan changes nothing.
             pc::Outcome::Unchanged if install => match self.reset_update_state(&layout.root, &v, &pkg.runtime_sha()) {
                 Ok(()) => self.end("unchanged", &plan.reasons.join("; "))?,
-                Err(why) => self.end("needs-user", &update_reset_failed("unchanged", &why))?,
+                Err(why) => self.end("unchanged", &update_reset_failed(&plan.reasons.join("; "), &why))?,
             },
             pc::Outcome::Unchanged => self.end("unchanged", &plan.reasons.join("; "))?,
             pc::Outcome::NeedsUser => self.end("needs-user", &plan.reasons.join("; "))?,
@@ -401,7 +401,7 @@ impl Session {
                     };
                     match update {
                         Ok(()) => self.end_after_change(state, &reason, failed),
-                        Err(why) => self.end_after_change("needs-user", &update_reset_failed("installed", &why), false),
+                        Err(why) => self.end_after_change(state, &update_reset_failed(&reason, &why), failed),
                     }
                 } else {
                     self.end_after_change(end.state, &end.reason, end.state == "unchanged")
@@ -521,9 +521,11 @@ impl Session {
 /// The two files the PC plan installs, read from the zip. The zip is read into memory once and hashed whole against the
 /// manifest, then each member is hashed against `contents`: what is returned is exactly what the manifest names, even if
 /// the file on disk was swapped after `verify_zip` looked at it.
-/// The end reason of a run whose files are as they should be but whose update folder could not be reset.
-fn update_reset_failed(files: &str, why: &crate::update_state::Stop) -> String {
-    format!("the release is {files}, but the update folder could not be reset ({why}); the game may stop at its next start until it is: close every game and server, fix the cause and run the installer again")
+/// The end reason of a run whose files are as they should be but whose update folder could not be reset: the install worked
+/// and the game runs, so the run ends 0, and the reason (printed on the console by the CLI) says loudly that self-update is off.
+fn update_reset_failed(done: &str, why: &crate::update_state::Stop) -> String {
+    let done = if done.is_empty() { String::new() } else { format!("{done}. ") };
+    format!("{done}WARNING: self-update is off until the next install: the update folder could not be reset ({why}). Close every game and server, fix the cause and run the installer again")
 }
 
 pub fn read_package(zip_path: &Path, art: &Artifact, version: &str) -> Result<pc::Package> {
