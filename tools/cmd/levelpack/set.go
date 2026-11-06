@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -21,7 +22,10 @@ const (
 	setOverrideBytes = 0x18
 	blockLimit       = 0x80000 // the reader's block cache: a record of at most this sits in a chunk of at most this
 	zstdMagic        = 0xFD2FB528
-	maxSetBytes      = 0xFFFFFFFF // every offset in the set is a u32
+	maxAlignment     = 0x1000 // the game's manifests use 4, 16, 2048 and 4096
+	// Every offset in the set is a u32, and the runtime adds the set's offset in the plugin's file to each chunk's: the
+	// set leaves 64 MiB below 4 GiB for the plugin's own code and data before its section.
+	maxSetBytes = 0xFFFFFFFF - 64<<20
 )
 
 var setMagic = []byte("NEVRRES1")
@@ -78,7 +82,7 @@ func writeSet(w io.Writer, plan setPlan) (uint64, error) {
 		at += uint64(len(o.Bytes))
 	}
 	if at > maxSetBytes {
-		return 0, fmt.Errorf("the set would be %d bytes; its offsets are u32, so it must stay under 4 GiB", at)
+		return 0, fmt.Errorf("the set would be %d bytes; it must stay under %d (4 GiB less 64 MiB for the plugin's own file)", at, uint64(maxSetBytes))
 	}
 
 	head := make([]byte, overrideTable+uint64(len(plan.Overrides))*setOverrideBytes)
@@ -197,6 +201,9 @@ func validateSet(r io.ReaderAt, size uint64) error {
 		off := uint64(binary.LittleEndian.Uint32(p[4:]))
 		n := uint64(binary.LittleEndian.Uint32(p[8:]))
 		decompressed[i] = binary.LittleEndian.Uint32(p[12:])
+		if binary.LittleEndian.Uint32(p[0:]) != 0 {
+			return fmt.Errorf("chunk_reserved at index %d", i)
+		}
 		if n < 4 || !inside(off, n) {
 			return fmt.Errorf("chunk_range at index %d", i)
 		}
@@ -216,6 +223,8 @@ func validateSet(r io.ReaderAt, size uint64) error {
 		return err
 	}
 	seen := map[key]bool{}
+	inChunk := make([]int, chunks)
+	holdsLarge := make([]bool, chunks)
 	for i := uint64(0); i < records; i++ {
 		p := rt[i*setRecordBytes:]
 		k := key{binary.LittleEndian.Uint64(p[0:]), binary.LittleEndian.Uint64(p[8:])}
@@ -230,7 +239,7 @@ func validateSet(r io.ReaderAt, size uint64) error {
 		if off > d || n > d-off { // a record of 0 bytes is allowed: the game's manifest holds 2,515
 			return fmt.Errorf("record_range at index %d", i)
 		}
-		if align == 0 || align&(align-1) != 0 {
+		if align == 0 || align&(align-1) != 0 || align > maxAlignment {
 			return fmt.Errorf("record_alignment at index %d", i)
 		}
 		if n <= blockLimit {
@@ -239,11 +248,20 @@ func validateSet(r io.ReaderAt, size uint64) error {
 			}
 		} else if off != 0 || n != d {
 			return fmt.Errorf("record_not_alone at index %d", i)
+		} else {
+			holdsLarge[c] = true
 		}
+		inChunk[c]++
 		if seen[k] {
 			return fmt.Errorf("duplicate at index %d", i)
 		}
 		seen[k] = true
+	}
+	for i := uint64(0); i < records; i++ {
+		c := binary.LittleEndian.Uint32(rt[i*setRecordBytes+0x10:])
+		if holdsLarge[c] && inChunk[c] > 1 {
+			return fmt.Errorf("record_not_alone at index %d", i)
+		}
 	}
 	ot, err := read(overrideTable, overrides*setOverrideBytes)
 	if err != nil {
@@ -271,11 +289,11 @@ func validateSet(r io.ReaderAt, size uint64) error {
 
 // verifySet decodes every frame of a set that validateSet passed and checks it holds the decompressed length its chunk
 // states, then compares each record and override named in want with the bytes the set serves for it. It returns the
-// frames decoded and the keys compared.
-func verifySet(r io.ReaderAt, size uint64, dec *zstd.Decoder, want map[key][]byte) (int, int, error) {
+// frames decoded, the keys compared, and the set's records with the bytes of each archive record.
+func verifySet(r io.ReaderAt, size uint64, dec *zstd.Decoder, want map[key][]byte) (int, int, *served, error) {
 	head := make([]byte, setHeaderBytes)
 	if _, err := r.ReadAt(head, 0); err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	records := uint64(binary.LittleEndian.Uint32(head[0x0c:]))
 	chunks := uint64(binary.LittleEndian.Uint32(head[0x10:]))
@@ -287,19 +305,22 @@ func verifySet(r io.ReaderAt, size uint64, dec *zstd.Decoder, want map[key][]byt
 	}
 	rt, err := table(binary.LittleEndian.Uint64(head[0x18:]), records*setRecordBytes)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	ct, err := table(binary.LittleEndian.Uint64(head[0x20:]), chunks*setChunkBytes)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	ot, err := table(binary.LittleEndian.Uint64(head[0x28:]), overrides*setOverrideBytes)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	byChunk := map[uint64][]int{}
+	sv := &served{archives: map[uint64][]byte{}}
 	for i := uint64(0); i < records; i++ {
-		c := uint64(binary.LittleEndian.Uint32(rt[i*setRecordBytes+0x10:]))
+		q := rt[i*setRecordBytes:]
+		sv.keys = append(sv.keys, key{binary.LittleEndian.Uint64(q[0:]), binary.LittleEndian.Uint64(q[8:])})
+		c := uint64(binary.LittleEndian.Uint32(q[0x10:]))
 		byChunk[c] = append(byChunk[c], int(i))
 	}
 	compared := 0
@@ -307,26 +328,30 @@ func verifySet(r io.ReaderAt, size uint64, dec *zstd.Decoder, want map[key][]byt
 		p := ct[c*setChunkBytes:]
 		frame, err := table(uint64(binary.LittleEndian.Uint32(p[4:])), uint64(binary.LittleEndian.Uint32(p[8:])))
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 		stated := binary.LittleEndian.Uint32(p[12:])
 		plain, err := dec.DecodeAll(frame, make([]byte, 0, stated))
 		if err != nil {
-			return 0, 0, fmt.Errorf("chunk %d does not decode: %w", c, err)
+			return 0, 0, nil, fmt.Errorf("chunk %d does not decode: %w", c, err)
 		}
 		if uint32(len(plain)) != stated {
-			return 0, 0, fmt.Errorf("chunk %d decodes to %d bytes, its entry says %d", c, len(plain), stated)
+			return 0, 0, nil, fmt.Errorf("chunk %d decodes to %d bytes, its entry says %d", c, len(plain), stated)
 		}
 		for _, i := range byChunk[c] {
 			q := rt[uint64(i)*setRecordBytes:]
 			k := key{binary.LittleEndian.Uint64(q[0:]), binary.LittleEndian.Uint64(q[8:])}
+			off := binary.LittleEndian.Uint32(q[0x14:])
+			got := plain[off : off+binary.LittleEndian.Uint32(q[0x18:])]
+			if k.Type == archiveType {
+				sv.archives[k.Name] = append([]byte(nil), got...)
+			}
 			w, ok := want[k]
 			if !ok {
 				continue
 			}
-			off := binary.LittleEndian.Uint32(q[0x14:])
-			if !bytes.Equal(plain[off:off+binary.LittleEndian.Uint32(q[0x18:])], w) {
-				return 0, 0, fmt.Errorf("record %s: the set serves other bytes than the export holds", k)
+			if !bytes.Equal(got, w) {
+				return 0, 0, nil, fmt.Errorf("record %s: the set serves other bytes than the export holds", k)
 			}
 			compared++
 		}
@@ -340,12 +365,128 @@ func verifySet(r io.ReaderAt, size uint64, dec *zstd.Decoder, want map[key][]byt
 		}
 		got, err := table(uint64(binary.LittleEndian.Uint32(q[0x10:])), uint64(binary.LittleEndian.Uint32(q[0x14:])))
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 		if !bytes.Equal(got, w) {
-			return 0, 0, fmt.Errorf("override %s: the set holds other bytes than the export", k)
+			return 0, 0, nil, fmt.Errorf("override %s: the set holds other bytes than the export", k)
 		}
 		compared++
 	}
-	return int(chunks), compared, nil
+	return int(chunks), compared, sv, nil
+}
+
+// served is what a written set serves: its record keys, and the bytes of each of its archive records by name.
+type served struct {
+	keys     []key
+	archives map[uint64][]byte
+}
+
+// archiveBody is an archive's dependency names and entries (docs/engine/asset-system.md, "Archives").
+type archiveBody struct {
+	deps    []uint64
+	entries []key
+}
+
+// parseArchive reads an archive's body: u32 D, D x u64 dependencies, u32 N, N x (u64 type, u64 name); the type table
+// after them is not read. It is the runtime's ParseArchive (src/runtime/patch/resource_set_registry.cpp).
+func parseArchive(b []byte) (archiveBody, bool) {
+	var a archiveBody
+	if len(b) < 4 {
+		return a, false
+	}
+	at := uint64(4)
+	n := uint64(binary.LittleEndian.Uint32(b))
+	if n > (uint64(len(b))-at)/8 {
+		return a, false
+	}
+	for i := uint64(0); i < n; i, at = i+1, at+8 {
+		a.deps = append(a.deps, binary.LittleEndian.Uint64(b[at:]))
+	}
+	if uint64(len(b))-at < 4 {
+		return a, false
+	}
+	m := uint64(binary.LittleEndian.Uint32(b[at:]))
+	at += 4
+	if m > (uint64(len(b))-at)/16 {
+		return a, false
+	}
+	for i := uint64(0); i < m; i, at = i+1, at+16 {
+		a.entries = append(a.entries, key{binary.LittleEndian.Uint64(b[at:]), binary.LittleEndian.Uint64(b[at+8:])})
+	}
+	return a, true
+}
+
+// On-disk types the runtime's registry checks (src/runtime/patch/resource_set_registry.h).
+const (
+	scriptType     = 0x991421b41de58370 // CScriptResourceWin10: the game loads a script as a DLL by name
+	textureType    = 0x4a4c32c49300b8a0 // CGTextureResourceWin10: the 256-byte descriptor
+	textureGpuType = 0xbeac1969cb7b8861 // CGTextureResourceWin10GPU: the pixel payload
+	maxArchive     = 0x80000            // the registry's largest archive record
+)
+
+// servableProblems applies the checks the runtime's registry makes before it serves a set (Add and Mount in
+// src/runtime/patch/resource_set_registry.cpp) to what a written set serves, with stockHas answering for the game's
+// manifests. It returns every problem, sorted; none means the runtime will take the set.
+func servableProblems(sv *served, stockHas func(key) bool) []string {
+	var problems []string
+	has := map[key]bool{}
+	for _, k := range sv.keys {
+		has[k] = true
+	}
+	resolves := func(k key) bool { return has[k] || stockHas(k) }
+	parsed := map[uint64]archiveBody{}
+	for _, k := range sv.keys {
+		switch k.Type {
+		case scriptType:
+			problems = append(problems, fmt.Sprintf("script record %s: the game loads a script as a DLL by name", k))
+		case textureType:
+			if !has[key{textureGpuType, k.Name}] {
+				problems = append(problems, fmt.Sprintf("texture %s without its payload record", k))
+			}
+		case archiveType:
+			b := sv.archives[k.Name]
+			if len(b) > maxArchive {
+				problems = append(problems, fmt.Sprintf("archive %s is %d bytes; the runtime reads at most %d", k, len(b), maxArchive))
+				continue
+			}
+			a, ok := parseArchive(b)
+			if !ok {
+				problems = append(problems, fmt.Sprintf("archive %s does not parse", k))
+				continue
+			}
+			parsed[k.Name] = a
+		}
+	}
+	// Each level: its archive and every archive it depends on, through the set, list only what the set or the game
+	// has; an archive the game has ends the walk there.
+	for _, k := range sv.keys {
+		if k.Type != levelRootType {
+			continue
+		}
+		pending := []uint64{k.Name}
+		seen := map[uint64]bool{}
+		for len(pending) > 0 {
+			name := pending[len(pending)-1]
+			pending = pending[:len(pending)-1]
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			a, ok := parsed[name]
+			if !ok {
+				if !has[key{archiveType, name}] && !stockHas(key{archiveType, name}) {
+					problems = append(problems, fmt.Sprintf("level 0x%016x depends on archive 0x%016x, which neither the set nor the game has", k.Name, name))
+				}
+				continue
+			}
+			for _, e := range a.entries {
+				if !resolves(e) {
+					problems = append(problems, fmt.Sprintf("level 0x%016x: archive 0x%016x lists %s, which neither the set nor the game has", k.Name, name, e))
+				}
+			}
+			pending = append(pending, a.deps...)
+		}
+	}
+	sort.Strings(problems)
+	return problems
 }

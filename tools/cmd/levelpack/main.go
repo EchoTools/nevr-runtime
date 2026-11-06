@@ -10,7 +10,10 @@
 // stock manifest is taken as unchanged, and its bytes are not read.
 //
 // Before the set is kept, it is checked with the rules the runtime's parser applies, every frame is decoded to the
-// length its chunk states, and each repacked record and override is compared with the export's bytes.
+// length its chunk states, each repacked record and override is compared with the export's bytes, and the set is put
+// through the checks the runtime's registry makes before it serves one: no script record, every texture with its
+// payload, every archive readable, and every level's archives, through the set, listing only what the set or the stock
+// manifests have. Pass every manifest the game loads at boot with -stock: a key of one left out counts as new.
 //
 //	levelpack -manifest <export manifest> -packages <dir> [-package N=<file>]... \
 //	          -stock <stock manifest>... -stock-packages <dir> [-override 0x<type>:0x<name>]... \
@@ -172,11 +175,16 @@ type report struct {
 	StockEdited          []edited `json:"stock_edited"`
 	Levels               []string `json:"levels"`
 	LevelsWithoutArchive []string `json:"levels_without_archive"`
+	Problems             []string `json:"problems,omitempty"`
 }
 
 type reader struct {
 	dec   *zstd.Decoder
 	files map[string]*os.File
+	// The last chunk decoded: a repack's moved stock records come chunk after chunk, several in one.
+	lastPath  string
+	lastChunk chunk
+	lastPlain []byte
 }
 
 func (r *reader) open(path string) (*os.File, error) {
@@ -193,6 +201,9 @@ func (r *reader) open(path string) (*os.File, error) {
 
 // plain returns chunk c of the package at path, decompressed.
 func (r *reader) plain(path string, c chunk) ([]byte, error) {
+	if r.lastPlain != nil && r.lastPath == path && r.lastChunk == c {
+		return r.lastPlain, nil
+	}
 	f, err := r.open(path)
 	if err != nil {
 		return nil, err
@@ -208,6 +219,7 @@ func (r *reader) plain(path string, c chunk) ([]byte, error) {
 	if uint32(len(out)) != c.Decompressed {
 		return nil, fmt.Errorf("%s at %d: the frame decodes to %d bytes, the manifest says %d", path, c.FileOffset, len(out), c.Decompressed)
 	}
+	r.lastPath, r.lastChunk, r.lastPlain = path, c, out
 	return out, nil
 }
 
@@ -301,6 +313,9 @@ func pack(o options, log *slog.Logger) (*report, error) {
 	rep := &report{Manifest: o.manifest, Out: o.out, StockEdited: []edited{}, Levels: []string{}, LevelsWithoutArchive: []string{}}
 	overrides := map[key]bool{}
 	for _, k := range o.overrides {
+		if k.Type == archiveType {
+			return nil, fmt.Errorf("-override %s: an archive is read by the archive loader, which an override does not reach", k)
+		}
 		overrides[k] = true
 	}
 	var plan setPlan
@@ -423,13 +438,28 @@ func pack(o options, log *slog.Logger) (*report, error) {
 	}
 	verr := validateSet(check, size)
 	var frames, compared int
+	var sv *served
 	if verr == nil {
-		frames, compared, verr = verifySet(check, size, dec, want)
+		frames, compared, sv, verr = verifySet(check, size, dec, want)
 	}
 	check.Close()
 	if verr != nil {
 		os.Remove(tmp)
 		return nil, fmt.Errorf("the written set does not check: %w", verr)
+	}
+	if problems := servableProblems(sv, func(k key) bool { _, ok := stock[k]; return ok }); len(problems) > 0 {
+		os.Remove(tmp)
+		rep.Problems = problems
+		js, _ := json.MarshalIndent(rep, "", "  ")
+		if err := os.WriteFile(o.report, append(js, '\n'), 0o644); err != nil {
+			return nil, err
+		}
+		shown := problems
+		if len(shown) > 20 {
+			shown = shown[:20]
+		}
+		return nil, fmt.Errorf("the runtime would refuse this set (%d problems, all in %s):\n  %s", len(problems), o.report,
+			strings.Join(shown, "\n  "))
 	}
 	if err := os.Rename(tmp, o.out); err != nil {
 		return nil, err

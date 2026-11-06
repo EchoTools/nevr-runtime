@@ -74,12 +74,29 @@ type item struct {
 
 func fill(n int, b byte) []byte { return bytes.Repeat([]byte{b}, n) }
 
+// archiveBytes is an archive's body (docs/engine/asset-system.md, "Archives"): its dependencies, its entries, an empty
+// type table and a closing 0.
+func archiveBytes(deps []uint64, entries []key) []byte {
+	b := binary.LittleEndian.AppendUint32(nil, uint32(len(deps)))
+	for _, d := range deps {
+		b = binary.LittleEndian.AppendUint64(b, d)
+	}
+	b = binary.LittleEndian.AppendUint32(b, uint32(len(entries)))
+	for _, e := range entries {
+		b = binary.LittleEndian.AppendUint64(b, e.Type)
+		b = binary.LittleEndian.AppendUint64(b, e.Name)
+	}
+	b = binary.LittleEndian.AppendUint32(b, 0)
+	return binary.LittleEndian.AppendUint32(b, 0)
+}
+
 var (
 	stockA    = item{key{0x1111, 0xa}, fill(100, 'a')}
 	stockB    = item{key{0x1111, 0xb}, fill(50, 'b')}
 	levelRoot = item{key{levelRootType, 0x100}, fill(64, 'L')}
-	archive   = item{key{archiveType, 0x100}, fill(40, 'R')}
-	texture   = item{key{0x2222, 0x300}, fill(200, 'T')}
+	// The level's archive: it depends on itself (a cycle the walk ends) and lists its root. 40 bytes.
+	archive = item{key{archiveType, 0x100}, archiveBytes([]uint64{0x100}, []key{{levelRootType, 0x100}})}
+	texture = item{key{0x2222, 0x300}, fill(200, 'T')}
 )
 
 // world is a stock manifest of one chunk (stockA, stockB) in package 0, and an export that starts as the same manifest
@@ -505,6 +522,95 @@ func TestAManifestTheGameCouldNotReadIsRefused(t *testing.T) {
 	}
 }
 
+func TestASetTheRuntimesRegistryWouldRefuseIsNotKeptAndItsProblemsAreListed(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		extra []item
+		want  string
+	}{
+		{"script", []item{{key{scriptType, 1}, fill(16, 'S')}}, "script record 0x991421b41de58370:0x0000000000000001"},
+		{"texture", []item{{key{textureType, 2}, fill(256, 'D')}}, "texture 0x4a4c32c49300b8a0:0x0000000000000002 without its payload record"},
+		{"unresolved", []item{{key{archiveType, 0x100}, archiveBytes(nil, []key{{0x2222, 0x999}})}},
+			"level 0x0000000000000100: archive 0x0000000000000100 lists 0x0000000000002222:0x0000000000000999"},
+	} {
+		w := newWorld(t)
+		items := []item{levelRoot}
+		if c.name == "unresolved" {
+			items = append(items, c.extra...)
+		} else {
+			items = append(items, archive)
+			items = append(items, c.extra...)
+		}
+		w.addChunk(items...)
+		r := w.run()
+		if r.code != 1 || !strings.Contains(r.stderr, "the runtime would refuse this set (1 problems") ||
+			!strings.Contains(r.stderr, c.want) {
+			t.Errorf("%s: exit %d: %s", c.name, r.code, r.stderr)
+		}
+		js, err := os.ReadFile(filepath.Join(w.dir, "out", "levels.nevrres.json"))
+		if err != nil {
+			t.Fatalf("%s: no report: %v", c.name, err)
+		}
+		var rep report
+		if json.Unmarshal(js, &rep) != nil || len(rep.Problems) != 1 || !strings.Contains(rep.Problems[0], c.want) {
+			t.Errorf("%s: report problems = %v", c.name, rep.Problems)
+		}
+	}
+}
+
+func TestAnOverrideOfAnArchiveIsRefused(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	w.addChunk(levelRoot, archive)
+	r := w.run("-override", key{archiveType, 0x500}.String())
+	if r.code != 1 || !strings.Contains(r.stderr, "an archive is read by the archive loader, which an override does not reach") {
+		t.Errorf("exit %d: %s", r.code, r.stderr)
+	}
+}
+
+func TestServableProblemsAreTheRuntimesRegistryRules(t *testing.T) {
+	t.Parallel()
+	const L, D = 0x100, 0x200 // a level, and an archive it depends on
+	stock := map[key]bool{{0x1111, 1}: true, {archiveType, 0x300}: true}
+	stockHas := func(k key) bool { return stock[k] }
+	set := func(archives map[uint64][]byte, extra ...key) *served {
+		sv := &served{archives: archives}
+		for name := range archives {
+			sv.keys = append(sv.keys, key{archiveType, name})
+		}
+		sv.keys = append(sv.keys, key{levelRootType, L})
+		return &served{keys: append(sv.keys, extra...), archives: archives}
+	}
+	for _, c := range []struct {
+		name string
+		sv   *served
+		want []string
+	}{
+		{"an entry the game has", set(map[uint64][]byte{L: archiveBytes(nil, []key{{0x1111, 1}})}), nil},
+		{"an entry the set has", set(map[uint64][]byte{L: archiveBytes(nil, []key{{0x2222, 9}})}, key{0x2222, 9}), nil},
+		{"an entry nothing has", set(map[uint64][]byte{L: archiveBytes(nil, []key{{0x2222, 9}})}),
+			[]string{"level 0x0000000000000100: archive 0x0000000000000100 lists 0x0000000000002222:0x0000000000000009, which neither the set nor the game has"}},
+		{"a dependency the game has ends the walk", set(map[uint64][]byte{L: archiveBytes([]uint64{0x300}, nil)}), nil},
+		{"a dependency nothing has", set(map[uint64][]byte{L: archiveBytes([]uint64{0x400}, nil)}),
+			[]string{"level 0x0000000000000100 depends on archive 0x0000000000000400, which neither the set nor the game has"}},
+		{"a dependency in the set is walked", set(map[uint64][]byte{L: archiveBytes([]uint64{D}, nil), D: archiveBytes([]uint64{L}, []key{{0x2222, 7}})}),
+			[]string{"level 0x0000000000000100: archive 0x0000000000000200 lists 0x0000000000002222:0x0000000000000007, which neither the set nor the game has"}},
+		{"an archive that does not parse", set(map[uint64][]byte{L: {1, 0, 0, 0}}),
+			[]string{"archive 0x2a41cf1c1d9e5d32:0x0000000000000100 does not parse"}},
+		{"an archive over the limit", set(map[uint64][]byte{L: append(archiveBytes(nil, nil), make([]byte, maxArchive)...)}),
+			[]string{"archive 0x2a41cf1c1d9e5d32:0x0000000000000100 is 524304 bytes; the runtime reads at most 524288"}},
+		{"a script", set(map[uint64][]byte{L: archiveBytes(nil, nil)}, key{scriptType, 5}),
+			[]string{"script record 0x991421b41de58370:0x0000000000000005: the game loads a script as a DLL by name"}},
+		{"a texture and its payload", set(map[uint64][]byte{L: archiveBytes(nil, nil)}, key{textureType, 6}, key{textureGpuType, 6}), nil},
+	} {
+		got := servableProblems(c.sv, stockHas)
+		if strings.Join(got, "|") != strings.Join(c.want, "|") {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestARunIsRecordedInTheToolsLog(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -601,6 +707,15 @@ func TestValidateSetAppliesTheRuntimesRules(t *testing.T) {
 		{"duplicate", func(s []byte) []byte { copy(s[rec(s, 1):rec(s, 1)+16], s[rec(s, 0):rec(s, 0)+16]); return s }},
 		{"override_range", func(s []byte) []byte { u32(s, ovr(s, 0)+0x14, 0); return s }},
 		{"override_is_record", func(s []byte) []byte { copy(s[ovr(s, 0):ovr(s, 0)+16], s[rec(s, 0):rec(s, 0)+16]); return s }},
+		{"chunk_reserved", func(s []byte) []byte { u32(s, chk(s, 0), 1); return s }},
+		{"record_alignment", func(s []byte) []byte { u32(s, rec(s, 0)+0x1c, 0x2000); return s }}, // over 4096
+		{"", func(s []byte) []byte { u32(s, rec(s, 0)+0x1c, 0x1000); return s }},                 // 4096 is the game's largest
+		{"record_not_alone", func(s []byte) []byte { // two large records claim chunk 1's whole bytes
+			u32(s, rec(s, 1)+0x10, 1)
+			u32(s, rec(s, 1)+0x14, 0)
+			u32(s, rec(s, 1)+0x18, blockLimit+1)
+			return s
+		}},
 	}
 	for _, c := range cases {
 		set := c.mutate(goodSet(t))
@@ -639,26 +754,26 @@ func TestVerifySetDecodesEveryFrameAndComparesTheBytesItWasGiven(t *testing.T) {
 	defer dec.Close()
 	set := goodSet(t)
 	want := map[key][]byte{{1, 2}: fill(4, 7), {2, 1}: []byte("override")}
-	frames, compared, err := verifySet(bytes.NewReader(set), uint64(len(set)), dec, want)
-	if err != nil || frames != 2 || compared != 2 {
-		t.Errorf("verifySet = %d frames, %d compared, %v", frames, compared, err)
+	frames, compared, sv, err := verifySet(bytes.NewReader(set), uint64(len(set)), dec, want)
+	if err != nil || frames != 2 || compared != 2 || len(sv.keys) != 3 {
+		t.Errorf("verifySet = %d frames, %d compared, %v, %v", frames, compared, sv, err)
 	}
 
 	want[key{1, 2}] = fill(4, 9)
-	if _, _, err := verifySet(bytes.NewReader(set), uint64(len(set)), dec, want); err == nil ||
+	if _, _, _, err := verifySet(bytes.NewReader(set), uint64(len(set)), dec, want); err == nil ||
 		!strings.Contains(err.Error(), "record 0x0000000000000001:0x0000000000000002: the set serves other bytes") {
 		t.Errorf("a record with other bytes: %v", err)
 	}
 	want[key{1, 2}] = fill(4, 7)
 	want[key{2, 1}] = []byte("Override")
-	if _, _, err := verifySet(bytes.NewReader(set), uint64(len(set)), dec, want); err == nil ||
+	if _, _, _, err := verifySet(bytes.NewReader(set), uint64(len(set)), dec, want); err == nil ||
 		!strings.Contains(err.Error(), "override 0x0000000000000002:0x0000000000000001") {
 		t.Errorf("an override with other bytes: %v", err)
 	}
 
 	short := goodSet(t)
 	binary.LittleEndian.PutUint32(short[binary.LittleEndian.Uint64(short[0x20:])+12:], 21) // the frame holds 20
-	if _, _, err := verifySet(bytes.NewReader(short), uint64(len(short)), dec, nil); err == nil ||
+	if _, _, _, err := verifySet(bytes.NewReader(short), uint64(len(short)), dec, nil); err == nil ||
 		!strings.Contains(err.Error(), "chunk 0 decodes to 20 bytes, its entry says 21") {
 		t.Errorf("a frame shorter than its entry: %v", err)
 	}
