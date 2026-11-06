@@ -62,8 +62,9 @@ const outsideSection = "nevr_outside_game_call"
 // caller's registers untouched, and a personality-free continuation; the sensor checks the ldar loads, the CFI rows at each bl
 // and the branch to the continuation). The combat modules that need one add its name here, in the change that moves them.
 var reviewedAsmEntries = []*regexp.Regexp{
-	regexp.MustCompile(`^nevr_combat_headset_tramp$`), // src/quest/combat/headset_gates_entry.inc: CVR::HeadsetType (bot-body and menu gates)
-	regexp.MustCompile(`^nevr_combat_party_tramp$`),   // src/quest/combat/headset_gates_entry.inc: PartyMemberHeadsetType (party-permissions gate)
+	regexp.MustCompile(`^nevr_combat_headset_tramp$`),    // src/quest/combat/headset_gates_entry.inc: CVR::HeadsetType (bot-body and menu gates)
+	regexp.MustCompile(`^nevr_combat_party_tramp$`),      // src/quest/combat/headset_gates_entry.inc: PartyMemberHeadsetType (party-permissions gate)
+	regexp.MustCompile(`^nevr_combat_pb_resolve_entry$`), // src/quest/combat/powerboost_thunk.inc: CPhTarget::ResolveBody (the POWER BOOST cone)
 }
 
 // What is wrong with the library's hook records, as messages. `names` maps a function start to its symbol, `thunkEntries`

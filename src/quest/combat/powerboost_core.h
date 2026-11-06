@@ -1,13 +1,17 @@
-// powerboost_core.h: the platform-free part of powerboost.cpp. A port, rule for rule, of the source build's
-// <source build>/the source build's powerboost_core (RE-39 E-N2; the source build's tools,
-// audit items PC-1..PC-10; stage 2 PB-1..PB-9): the marker
-// decode of EC's POWER BOOST (upstream rules U1 / U2), the link line's repeat filter, the cone
-// and the link / unlink markers. Tested by src/quest/tests/q15t/powerboost_test.cpp. Nothing here calls the game.
+// powerboost_core.h: the platform-free part of powerboost.cpp (src/quest/combat/powerboost.h): the marker decode of EC's POWER BOOST,
+// the link line's repeat filter, the cone and the link / unlink markers. Nothing here calls the game. Tested by
+// src/quest/tests/powerboost_test.cpp.
+//
+// Origin (docs/audits/2026-11-05-q15t-origin-citations.md rows 255-272): the reference build's runtime/native/afkxr/afk_powerboost_core.h
+// (the whole file, at 1357409), rule for rule; the rules it ports are EchoCombat c14c3e0a plugin/powerboost.cpp: the bands and the
+// unlink marker :108,111-112,330-333,501-502; the cone geometry :466-479 (Rotate, AngleTo) and :575-577 (the angle in the radius); the
+// cone constants :551-552 (slack, minimum interval), :565 (bubble reuse), :585 (the owner's 0.3 m); the cone decision :587-608; the use
+// state :338-345, :488-492; the link marker :500-502.
 #pragma once
 #include <math.h>
 #include <stdint.h>
 
-namespace q15t {
+namespace nevr_quest::combat::powerboost {
 namespace pbcore {
 
 // A heal amount of 1,000,000 or more is never a heal: base + v, v = dr_permille * 1000 + seconds.
@@ -156,4 +160,4 @@ inline float LinkMarker(const UseState& u, bool linked, uint64_t now) {
 }
 
 }  // namespace pbcore
-}  // namespace q15t
+}  // namespace nevr_quest::combat::powerboost

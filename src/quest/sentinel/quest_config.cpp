@@ -56,6 +56,7 @@ constexpr const char* kCombatGateLinkKey = "combat.gate_link";            // Que
 constexpr const char* kCombatGateLinkLibsKey = "combat.gate_link_libs";   // Quest only (default: the 21 libraries of the combat entries, #2180)
 constexpr const char* kCombatPfxKey = "combat.pfx";                // Quest only (default true, #2188)
 constexpr const char* kCombatPfxtevKey = "combat.pfxtev";          // Quest only (default true, #2188)
+constexpr const char* kCombatPowerboostStageKey = "combat.powerboost_stage";  // Quest only (an integer 0..3, default 3, #2187)
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 // Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
 // unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
@@ -337,6 +338,22 @@ CombatText ReadCombatText(const nevr::NevrConfig& cfg, const char* key, LoadResu
   return out;
 }
 
+// A folded combat module's integer (#2187). An integer in [lo, hi]: that value, from the file. Absent: the default. Anything else (not an
+// integer, or outside the range): the default, with a Warning that names the key.
+CombatInt ReadCombatInt(const nevr::NevrConfig& cfg, const char* key, int lo, int hi, int fallback, LoadResult& r) {
+  if (cfg.Kind(key) == nevr::NodeKind::kAbsent) return {fallback, Source::kAbsent};
+  const std::optional<std::int64_t> value = cfg.GetInt(key);
+  if (!value) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_an_integer (default stays)");
+    return {fallback, Source::kAbsent};
+  }
+  if (*value < lo || *value > hi) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=out_of_range (default stays)");
+    return {fallback, Source::kAbsent};
+  }
+  return {static_cast<int>(*value), Source::kFile};
+}
+
 // Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
 void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& path) {
   if (!cfg.UnsetBareVars().empty()) {
@@ -395,6 +412,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   r.config.combat.gateLinkLibs = ReadCombatText(cfg, kCombatGateLinkLibsKey, r);
   r.config.combat.pfx = ReadCombatSwitch(cfg, kCombatPfxKey, r);
   r.config.combat.pfxtev = ReadCombatSwitch(cfg, kCombatPfxtevKey, r);
+  r.config.combat.powerboostStage = ReadCombatInt(cfg, kCombatPowerboostStageKey, 0, 3, 3, r);
   r.config.plugins = cfg.Plugins();
 }
 

@@ -31,6 +31,7 @@
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/memsys_targets.h"
+#include "quest/combat/powerboost_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/game_login_failures.h"
@@ -432,6 +433,69 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
 }
 
+// POWER BOOST's pins (src/quest/combat/powerboost_targets.h) against the real libr15: the five hooked words (four JUMP_SLOTs and Heal's GLOB_DAT)
+// and the two called functions' JUMP_SLOTs resolve at their pins, each symbol is defined at its pinned function, the cone's call site is the `bl`
+// word, its return address is the next instruction, and that `bl` reaches the PLT stub that loads ResolveBody's slot (adrp x16 + ldr x17).
+void CheckRealPowerboost(const LoadedElf& elf) {
+  namespace pb = nevr_quest::combat::powerboost;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  const pb::Pins& p = pb::kPins;
+  const struct {
+    const char* symbol;
+    RelocKind kind;
+    std::uint64_t slot, fn;
+    const char* what;
+  } rows[] = {{pb::kNodeSymbol, RelocKind::kJumpSlot, p.nodeSlot, p.nodeFn, "libr15 CR15NetDamageableHealNode::Enter JUMP_SLOT"},
+              {pb::kHealSymbol, RelocKind::kJumpSlot, p.healSlot, p.healFn, "libr15 CR15NetDamageableCS::Heal JUMP_SLOT"},
+              {pb::kHealSymbol, RelocKind::kGlobDat, p.healGlobDat, p.healFn, "libr15 CR15NetDamageableCS::Heal GLOB_DAT"},
+              {pb::kLinkSymbol, RelocKind::kJumpSlot, p.linkSlot, p.linkFn, "libr15 CR15NetHealBubbleCS::SetTargetInsideBubble JUMP_SLOT"},
+              {pb::kSendSymbol, RelocKind::kJumpSlot, p.sendSlot, p.sendFn, "libr15 CR15NetDamageableCS::DamageFromClient JUMP_SLOT"},
+              {pb::kResolveSymbol, RelocKind::kJumpSlot, p.resolveSlot, p.resolveFn, "libr15 CPhTarget::ResolveBody JUMP_SLOT"},
+              {pb::kPrimarySymbol, RelocKind::kJumpSlot, p.primarySlot, p.primaryFn, "libr15 CPhysicsCS::PrimaryBody JUMP_SLOT"}};
+  for (const auto& row : rows) {
+    const GotTarget target{pinned::kLibR15, row.symbol, row.kind, pinned::kLibR15StockBuildId, row.slot};
+    // Heal and DamageFromClient are held by a JUMP_SLOT and a GLOB_DAT word each, so the symbol names a slot of each kind (CheckTarget would
+    // expect the other kind to be absent): the word resolves at its pin and alone, and a pin off by one slot is refused.
+    const bool bothKinds = row.symbol == pb::kHealSymbol || row.symbol == pb::kSendSymbol;
+    if (!bothKinds) {
+      CheckTarget(elf, target, row.what);
+    } else {
+      const SlotResolution at = ResolveSlot(elf.image, target, kAarch64Relocs);
+      if (at.status != GotStatus::kOk) std::fprintf(stderr, "target: %s\n", row.what);
+      QCHECK_STATUS(at.status, GotStatus::kOk);
+      QCHECK(at.slotVaddr == row.slot && at.restoreReadOnly);
+      GotTarget alone = target;
+      alone.slotVaddr = std::nullopt;
+      const SlotResolution only = ResolveSlot(elf.image, alone, kAarch64Relocs);
+      QCHECK_STATUS(only.status, GotStatus::kOk);
+      QCHECK(only.slotVaddr == at.slotVaddr);
+      GotTarget shifted = target;
+      shifted.slotVaddr = row.slot + 8;
+      QCHECK_STATUS(ResolveSlot(elf.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+    }
+    CheckDefinedAt(elf, row.symbol, row.fn);
+  }
+  std::uint32_t call = 0;
+  std::memcpy(&call, mem + p.coneCall, sizeof(call));
+  QCHECK(call == pb::kConeCallWord);
+  QCHECK(p.coneRet == p.coneCall + 4);
+  // the `bl`'s target: imm26 sign-extended, times 4
+  const std::int64_t imm = static_cast<std::int64_t>(static_cast<std::int32_t>((call & 0x03ffffffU) << 6) >> 6) * 4;
+  const std::uint64_t stub = static_cast<std::uint64_t>(static_cast<std::int64_t>(p.coneCall) + imm);
+  std::uint32_t adrp = 0, ldr = 0;
+  std::memcpy(&adrp, mem + stub, sizeof(adrp));
+  std::memcpy(&ldr, mem + stub + 4, sizeof(ldr));
+  QCHECK((adrp & 0x9f00001fU) == 0x90000010U);  // adrp x16
+  QCHECK((ldr & 0xffc003ffU) == 0xf9400211U);   // ldr x17, [x16, #imm12 * 8]
+  const std::uint64_t page = ((static_cast<std::uint64_t>((adrp >> 5) & 0x7ffffU) << 2) | ((adrp >> 29) & 3U)) << 12;
+  const std::uint64_t slot = ((stub & ~std::uint64_t{0xfff}) + page) + ((ldr >> 10) & 0xfffU) * 8;
+  if (slot != p.resolveSlot) {
+    std::fprintf(stderr, "libr15 the cone's bl reaches a stub at %#llx that loads %#llx, not ResolveBody's slot\n", static_cast<unsigned long long>(stub),
+                 static_cast<unsigned long long>(slot));
+    QCHECK(false);
+  }
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -639,6 +703,7 @@ int main(int argc, char** argv) {
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
   CheckRealHeadsetGates(r15);
+  CheckRealPowerboost(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

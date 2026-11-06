@@ -33,7 +33,8 @@ nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} 
   SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
-      src/quest/combat/headset_gates.cpp)
+      src/quest/combat/headset_gates.cpp
+      src/quest/combat/powerboost.cpp src/quest/tests/ec_contract_stub.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
 # CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
 # 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
@@ -66,7 +67,8 @@ nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
   SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
-      src/quest/combat/headset_gates.cpp)
+      src/quest/combat/headset_gates.cpp
+      src/quest/combat/powerboost.cpp src/quest/tests/ec_contract_stub.cpp)
 # The game-thread tick (#2172, docs/adr/0046; docs/adr/0039): the real thunk and GotHook against the JUMP_SLOT of a libr15 image built in
 # memory. The callback table, the vptr check (read once per object, not once per frame), and who owns the slot on each variant (plain release,
 # combat, q15t) in both orders against the q15t plugin's own tick code (game_tick.cpp, import_hook.cpp, got_swap.cpp, linked from the plugin):
@@ -78,6 +80,7 @@ nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
       src/quest/combat/headset_gates.cpp
+      src/quest/combat/powerboost.cpp src/quest/tests/ec_contract_stub.cpp
       src/quest/plugins/q15t/src/game_tick.cpp src/quest/plugins/q15t/src/import_hook.cpp src/quest/plugins/q15t/src/got_swap.cpp
       src/quest/plugins/q15t/src/safe_read.cpp src/quest/plugins/q15t/src/plugin_log.cpp)
 # The refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3): the decision, the keys, the session from the arena to a combat map and back
@@ -85,6 +88,7 @@ nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
 nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
       src/quest/combat/headset_gates.cpp
+      src/quest/combat/powerboost.cpp src/quest/tests/ec_contract_stub.cpp
       src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp
       src/quest/sentinel/build_variant.cpp)
 # What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
@@ -113,5 +117,13 @@ nevr_ht_test(pfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
   SRC src/quest/tests/pfx_test.cpp src/quest/combat/pfx.cpp src/quest/combat/combat_level.cpp)
 # The event-effect decision (#2188, #1642; docs/adr/0046): the switch, the six ids, the non-event pass-through, one line per decision up to the cap,
 # the plugin's `pfxtev.off` file not read and warned about, and the scope: an event id is created on a combat map only.
+# POWER BOOST (#2187, docs/adr/0046; docs/quest/combat/powerboost.md): the real thunks and the real entry through the real GotHook into the five words
+# of a libr15 image built in memory, called through the slots against fakes of the engine functions. The marker decode, the three stages, the hold,
+# the cone and the link / unlink markers; all three stage-1 words or none; each refusal and its stage; the entry newest on its slot; and the arena
+# scope: nothing acts while an Echo Arena level, an arena lobby or no level is loaded, and the level is asked once every 32 frames, never per call.
+# got_pinned_test resolves the five relocations, the two called functions and the cone's call word in the real libr15.
+nevr_ht_test(powerboost_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/powerboost_test.cpp src/quest/combat/powerboost.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
+      src/quest/tests/ec_contract_stub.cpp)
 nevr_ht_test(pfxtev_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
   SRC src/quest/tests/pfxtev_test.cpp src/quest/combat/pfxtev.cpp)

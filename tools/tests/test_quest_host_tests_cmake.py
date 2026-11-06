@@ -74,6 +74,7 @@ PROGRAMS = {
         "refresh_rate_test",
         "pfx_test",
         "pfxtev_test",
+        "powerboost_test",
     ),
     "data": (
         "data_step_test",

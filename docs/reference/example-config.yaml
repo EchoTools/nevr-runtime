@@ -238,6 +238,13 @@ combat:
   # key. Read once at launch. Default (absent): true.
   # pfxtev: false
 
+  # Quest only. An integer 0..3. POWER BOOST, the client half of an EchoCombat server's POWER BOOST (src/quest/combat/powerboost.h): 0 installs
+  # nothing; 1 only records the markers the server puts in the heal channel; 2 also keeps them from reaching the game as heals and tells the server
+  # a use; 3 also unlinks a target outside the booster's cone. It acts only while a combat map or the combat lobby is loaded. A value that is not
+  # an integer in 0..3 keeps the default, with a warning that names the key. The sentinel log line `combat_powerboost_install` says which stage is on.
+  # Read once at launch. Default (absent): 3.
+  # powerboost_stage: 0
+
   # PC only: he_is_the_cat's EchoCombat, built into the runtime (src/runtime/combat/combat_settings.h). Booleans, read once at boot; a value
   # that is not a boolean keeps the default and the [NEVR.COMBAT] feature line says `source=unrecognised`. The drone follow crash guard
   # runs whatever these say. Party guns, payload speed, a client's own damage bonus and CombatBots are never on.

@@ -12,6 +12,7 @@
 #include "quest/combat/memsys.h"
 #include "quest/combat/pfx.h"
 #include "quest/combat/pfxtev.h"
+#include "quest/combat/powerboost.h"
 #include "quest/combat/refresh_rate.h"
 #include "quest/sentinel/hook_log.h"
 
@@ -39,6 +40,7 @@ ModuleResult GatesNormal() noexcept {
   switches.linkLibs = g_config.gateLinkLibs.source == nevr_quest::Source::kFile ? g_config.gateLinkLibs.text : nullptr;
   return headset_gates::Install(switches);
 }
+ModuleResult PowerboostNormal() noexcept { return powerboost::Install(g_config.powerboostStage.value); }
 ModuleResult PfxNormal() noexcept { return pfx::Install(g_config.pfx.on); }
 ModuleResult PfxtevNormal() noexcept { return pfxtev::Install(g_config.pfxtev.on); }
 
@@ -53,6 +55,8 @@ constexpr std::array kModules{
     // it from its own step, which may come before or after the tick's install.
     Module{"tick", nullptr, &tick::InstallNormal},
     Module{"refresh_rate", nullptr, &RefreshRateNormal},
+    // ec, ecfx, dronekill, dronemuzzle, powerboost (#2187): the plugin's order; powerboost's link / unlink sends hang on ec's net tick.
+    Module{"powerboost", nullptr, &PowerboostNormal},
     // gates (#2180): the plugin installed them after its tick and its modules; they register the tick callback the bot gate reads the game from.
     Module{"gates", nullptr, &GatesNormal},
     // pfx, then pfxtev (#2188): a decision and no hook, so after the modules that install one; the event ids sit under the gate.

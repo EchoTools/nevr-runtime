@@ -1,10 +1,9 @@
 # plugin.cpp's wiring of the modules, judged by mod/wiring.cmake (tests/wiring_test.cpp); the tick table, judged by mod/game_tick.cmake.
 # Not mutated: InitGunConnect / InitAiBots (they only store the base, which the host cannot observe: no libr15 is loaded), and the
-# success branches of dronekill, dronemuzzle and powerboost (they need the real libr15 to resolve their engine functions).
+# success branches of dronekill and dronemuzzle (they need the real libr15 to resolve their engine functions).
 for _m in DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE AIBOTS GUNCONNECT BVH WALLFIRE LEVELNAME; do
   runm wiring "wire_caps_$(echo "$_m" | tr 'A-Z' 'a-z')" src/plugin.cpp "s/if (Q15T_$_m) caps |=/if (false) caps |=/"
 done
-runm wiring wire_caps_powerboost1  src/plugin.cpp "s/if (Q15T_POWERBOOST > 0) caps/if (Q15T_POWERBOOST > 1) caps/"
 runm wiring wire_caps_ec_gameplay  src/plugin.cpp "s/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_NETWORK;/"
 runm wiring wire_caps_ec_network   src/plugin.cpp "s/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;/if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;/"
 runm wiring wire_caps_over_fxtrail src/plugin.cpp "s/if (Q15T_BVH) caps/if (Q15T_BVH || Q15T_FXTRAIL) caps/"
@@ -34,7 +33,6 @@ runm wiring wire_drop_ec           src/plugin.cpp "s/const InstallResult r = Ins
 runm wiring wire_drop_ecfx         src/plugin.cpp "s/^  ReportModule(\"ecfx\", InstallEcfx(base));//"
 runm wiring wire_drop_dronekill    src/plugin.cpp "s/if (!ResolveDroneKillFns(base, \&fns)) {/if (false) {/"
 runm wiring wire_drop_dronemuzzle  src/plugin.cpp "s/if (!DroneKillShotActive()) {/if (false) {/"
-runm wiring wire_drop_powerboost   src/plugin.cpp "s/const InstallResult r = InstallPowerboost(base, Q15T_POWERBOOST, net_tick);/const InstallResult r{};/"
 runm wiring wire_drop_hudmeter     src/plugin.cpp "s/^  ReportModule(\"hudmeter\", InstallHudmeter(base));//"
 runm wiring wire_drop_shieldgamma  src/plugin.cpp "s/^  ReportModule(\"shieldgamma\", InstallShieldGamma.*//"
 runm wiring wire_shield_bits       src/plugin.cpp "s/(Q15T_SHIELDGAMMA \& 1) != 0, (Q15T_SHIELDGAMMA \& 2) != 0/(Q15T_SHIELDGAMMA \& 2) != 0, (Q15T_SHIELDGAMMA \& 1) != 0/"
