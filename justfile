@@ -797,9 +797,18 @@ quest-install *args: build-installer
 # test paths takes none) on at most 8 workers by default (#2195). Exit code is pytest's, except 2 for a record that
 # cannot be kept, 75 for a lock not free in time, and 128 + the signal for an interrupt, 130 for CTRL+C
 # (tools/run_tool_tests.py). Args replace the default `-q tools/tests` (#913).
+# Then, whatever the Python run did, the Go tests of tools/ (ADR 0044): build/go-tools/test-go-tools runs the Python
+# command after `--`, then `go test -json` in tools/ (-C tools) with a hermetic environment, keeps its stream as <stem>-go.jsonl beside the
+# run's log, appends go_start and go_end to runs.jsonl, and ends with one line naming each failed half. ARGS go to the
+# Python runner only; the Go half always runs the module.
 [positional-arguments]
-test-tools *ARGS:
-    python3 tools/run_tool_tests.py "$@"
+test-tools *ARGS: go-tools
+    build/go-tools/test-go-tools -C tools -- python3 tools/run_tool_tests.py "$@"
+
+# Build the Go tools of tools/go.mod (ADR 0044) into build/go-tools/; a recipe that runs one depends on this and runs
+# build/go-tools/<name>.
+go-tools:
+    go -C tools build -trimpath -o ../build/go-tools/ ./cmd/...
 
 # The core installer (installer/, ADR 0023): library, CLI and C ABI tests. The build is locked to the committed
 # Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
@@ -3058,7 +3067,9 @@ verify *args: (_heavy-guard "verify" args)
     # for 1145 tests on the CI runner (#1004, release build 40454435804, killed at 600 s with exit 124).
     # The suite's fixed environment (tools/run_tool_tests.py HERMETIC_SET and HERMETIC_UNSET; a test holds the two equal):
     # no user git configuration or signing key, a fixed identity, no display.
-    timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    # Both halves run, the Go one whatever the Python one did, and the last line names each half that failed.
+    just go-tools
+    build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
