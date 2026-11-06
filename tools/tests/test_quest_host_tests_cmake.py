@@ -63,6 +63,7 @@ PROGRAMS = {
         "combat_install_test",
         "equip_refire_test",
         "match_tag_default_test",
+        "sendguard_test",
     ),
     "data": (
         "data_step_test",

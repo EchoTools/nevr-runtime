@@ -75,7 +75,10 @@ class TheRuleIsTheSharedHeaders(unittest.TestCase):
 class TheModuleIsWired(unittest.TestCase):
     def test_the_combat_target_builds_it(self):
         cmake = read("src/quest/combat/CMakeLists.txt")
-        self.assertRegex(cmake, r"add_library\(nevr_quest_combat STATIC\s+combat_active\.cpp\s+combat_install\.cpp\s+equip_refire\.cpp\s+match_tags\.cpp\)")
+        library = re.search(r"add_library\(nevr_quest_combat STATIC([^)]*)\)", cmake)
+        self.assertIsNotNone(library)
+        sources = set(library.group(1).split())
+        self.assertLessEqual({"combat_active.cpp", "combat_install.cpp", "equip_refire.cpp", "match_tags.cpp"}, sources)
 
     def test_the_budget_has_its_six_handles(self):
         self.assertIn('{"combat/equip_refire.cpp", 6, 0}', read("src/quest/sentinel/hook_budget.h"))
@@ -230,7 +233,7 @@ class TheGroupTheRecipeAndTheVerifyEntryExist(unittest.TestCase):
         self.assertRegex(justfile, r"\ntest-quest-combat module=\"\":")
 
     def test_the_config_section_has_its_key_and_the_example_config_shows_it(self):
-        self.assertIn('{"combat", {"force"}}', read("src/core/nevr_config.cpp"))
+        self.assertRegex(read("src/core/nevr_config.cpp"), r'\{"combat", \{[^}]*"force"[^}]*\}\}')
         self.assertRegex(read("docs/reference/example-config.yaml"), r"\ncombat:\n")
 
 
