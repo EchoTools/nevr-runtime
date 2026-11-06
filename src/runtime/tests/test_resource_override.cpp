@@ -609,6 +609,46 @@ TEST_F(CachedOverrides, AOneByteFlippedCachedFileIsRefusedLoggedAndNeverDelivere
   EXPECT_FALSE(TestLogContains("override applied"));
 }
 
+// #2215: a cache index entry whose label is outside the label rule is refused, counted, and its bytes are in no line.
+TEST_F(CachedOverrides, AnIndexEntryWithALabelOutsideTheRuleIsRefusedAndItsBytesAreInNoLine) {
+  const std::string sha = Cache(Image(64, 3), kSplashType, kSplashName, "lbl-a\nb\xc3\xa9");
+  EXPECT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 0u);
+  EXPECT_TRUE(TestLogContains("entries=1 loaded=0 refused=1 missing=0"));
+  EXPECT_FALSE(TestLogLinesContaining("cache refused entry=cache status=1 reason=bad_label label_bytes=").empty());
+  EXPECT_TRUE(TestLogLinesContaining("lbl-").empty()) << "the label's bytes reached a line";
+  EXPECT_TRUE(TestLogLinesContaining("cache hit").empty());
+  EXPECT_EQ(ShutdownResourceOverride().registered, 0u) << "nothing is registered";
+  EXPECT_FALSE(sha.empty());
+}
+
+// The _overrides/ scan labels a file by its parsed hashes, so a player's file is never refused over its name.
+TEST(ResourceOverride, AnOverrideFileWithALongOrNonAsciiNameStillInstalls) {
+  char tmp[MAX_PATH] = {};
+  ASSERT_NE(GetTempPathA(MAX_PATH, tmp), 0u);
+  const std::string dir = std::string(tmp) + "nevr-override-files-" + std::to_string(GetCurrentProcessId());
+  CreateDirectoryA(dir.c_str(), nullptr);
+  const std::vector<std::string> names = {
+      "0x00000000000000aa.0x00000000000000bb.caf\xc3\xa9" + std::string(70, 'n') + ".bin",  // long and non-ASCII
+      "0x00000000000000cc.bin",                                                               // plain
+  };
+  for (const std::string& name : names) {
+    std::ofstream file(dir + "\\" + name, std::ios::binary);
+    file << "bytes";
+    ASSERT_TRUE(file.good()) << name;
+  }
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  ClearTestLogs();
+  EXPECT_EQ(TestHook_RegisterOverrideFilesIn(dir.c_str()), 0u) << "no file is refused over its name";
+  EXPECT_TRUE(TestLogLinesContaining("reason=bad_label").empty());
+  EXPECT_TRUE(TestLogContains("Registered file override: file:0x00000000000000aa.0x00000000000000bb"));
+  EXPECT_TRUE(TestLogContains("Registered file override: file:0x0000000000000000.0x00000000000000cc"));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 2u);
+  TestHook_SetOriginal(nullptr);
+  TestHook_CloseResourceOverrides();
+  for (const std::string& name : names) DeleteFileA((dir + "\\" + name).c_str());
+  RemoveDirectoryA(dir.c_str());
+}
+
 TEST_F(CachedOverrides, AnIndexedBlobThatIsNotInTheCacheIsReportedMissing) {
   const std::string sha = Cache(Image(64, 2), kSplashType, kSplashName, "cache_splash");
   ASSERT_NE(DeleteFileW(nevr_asset_cache::BlobPath(dir_, sha).c_str()), 0);

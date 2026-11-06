@@ -7,6 +7,8 @@
 void TestHook_InitResourceOverrides(void (*original)(void*));
 void TestHook_SetOriginal(void (*original)(void*));
 void TestHook_RegisterInitialOverrides(const wchar_t* cache_dir);
+/// The _overrides/ scan of one directory; returns the number of files that failed to register.
+size_t TestHook_RegisterOverrideFilesIn(const char* override_dir);
 void TestHook_SetDeregisterWaitMs(unsigned ms);
 unsigned long long TestHook_DeregisterTimeouts();
 void TestHook_RunResourceCallback(void* callback_data);

@@ -733,6 +733,34 @@ static void RegisterInitialOverrides(const wchar_t* cache_dir) {
     RegisterCachedResourceOverrides(cache_dir);
 }
 
+/* Registers every file of `overrideDir` whose name parses as 0x<name> or 0x<type>.0x<name> (ParseOverrideFileName). The
+ * label is built from the parsed hashes, never from the file's name: a player's file name may be long or not ASCII, and
+ * the label rule (resource_label.h) must not refuse a file over its name. Returns the number that failed to register. */
+static size_t RegisterOverrideFilesIn(const char* overrideDir) {
+    size_t failed = 0;
+    WIN32_FIND_DATAA fd;
+    char searchPattern[MAX_PATH];
+    snprintf(searchPattern, sizeof(searchPattern), "%s\\*", overrideDir);
+    HANDLE hFind = FindFirstFileA(searchPattern, &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        const char* name = fd.cFileName;
+
+        uint64_t type_h = 0, name_h = 0;
+        if (!ParseOverrideFileName(name, &type_h, &name_h)) continue;
+
+        char filePath[MAX_PATH];
+        snprintf(filePath, sizeof(filePath), "%s\\%s", overrideDir, name);
+        char label[64];
+        snprintf(label, sizeof(label), "file:0x%016llx.0x%016llx", static_cast<unsigned long long>(type_h),
+                 static_cast<unsigned long long>(name_h));
+        if (!RegisterResourceOverrideFromFileImpl(type_h, name_h, filePath, label)) failed++;
+    } while (FindNextFileA(hFind, &fd));
+    FindClose(hFind);
+    return failed;
+}
+
 void InstallResourceOverride() {
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
@@ -755,26 +783,7 @@ void InstallResourceOverride() {
     char overrideDir[MAX_PATH];
     snprintf(overrideDir, sizeof(overrideDir), "%s_overrides", moduleDir);
 
-    WIN32_FIND_DATAA fd;
-    char searchPattern[MAX_PATH];
-    snprintf(searchPattern, sizeof(searchPattern), "%s\\*", overrideDir);
-    HANDLE hFind = FindFirstFileA(searchPattern, &fd);
-    if (hFind != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-            const char* name = fd.cFileName;
-
-            uint64_t type_h = 0, name_h = 0;
-            if (!ParseOverrideFileName(name, &type_h, &name_h)) continue;
-
-            char filePath[MAX_PATH];
-            snprintf(filePath, sizeof(filePath), "%s\\%s", overrideDir, name);
-            if (!RegisterResourceOverrideFromFileImpl(type_h, name_h, filePath, name)) {
-                overridesFailed++;
-            }
-        } while (FindNextFileA(hFind, &fd));
-        FindClose(hFind);
-    }
+    overridesFailed += RegisterOverrideFilesIn(overrideDir);
 
     /* Install hook if overrides exist; otherwise keep g_overrides alive
      * for plugins that register overrides later via the exported API. */
@@ -992,6 +1001,7 @@ void TestHook_InitResourceOverrides(void (*original)(void*)) {
 }
 
 void TestHook_RegisterInitialOverrides(const wchar_t* cache_dir) { RegisterInitialOverrides(cache_dir); }
+size_t TestHook_RegisterOverrideFilesIn(const char* override_dir) { return RegisterOverrideFilesIn(override_dir); }
 void TestHook_SetDeregisterWaitMs(unsigned ms) { g_deregister_wait_ms = ms; }
 unsigned long long TestHook_DeregisterTimeouts() { return g_deregister_timeouts; }
 
