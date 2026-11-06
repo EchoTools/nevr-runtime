@@ -62,8 +62,6 @@ HOST_TESTS = frozenset(
         "levelname.levelname_test",
         "meshstep.meshstep_test",
         "music.music_test",
-        "pfx.pfx_test",
-        "pfxtev.pfxtev_test",
         "powerboost.powerboost_test",
         "script_redirect.script_redirect_test",
         "sensorwd.sensorwd_test",
