@@ -33,9 +33,10 @@ def by_name(results, name):
 class FixtureProvenanceTest(unittest.TestCase):
     """tools/winvm/README.md asks for a fixture taken from a real run: a captured log, not a
     hand-edited one. The healthy-boot capture is CRLF throughout (it came off the Windows VM) and its
-    bridge warning is the wording that build printed. One edit is known: the capture's first line was
-    `boot log opened run=...` run onto the next line (the tee wrote no newline, #653); the fixture splits
-    it, so it does not teach the fixed bug."""
+    bridge warning is the wording that build printed. Two edits are known. The first: the capture's first
+    line was `boot log opened run=...` run onto the next line (the tee wrote no newline, #653); the fixture
+    splits it, so it does not teach the fixed bug. The second deletes the one line that announced POSIX
+    signal handlers, which main does not log, so the fixture does not teach a handler the runtime lacks."""
 
     def test_healthy_boot_is_an_unedited_windows_capture(self):
         raw = (FIX / "healthy_boot.txt").read_bytes()
