@@ -13,9 +13,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
@@ -24,6 +26,25 @@ import (
 // The fake `go`: prints the file "stdout" beside it to standard output and "stderr" to standard error, and exits with
 // the number in "exit" (0 when there is none). A test writes those files before it runs the tool.
 func scripted(c *testkit.Call) int {
+	if raw, err := os.ReadFile(filepath.Join(c.FakeDir, "probe-lock")); err == nil {
+		// Notes whether the lock file named in "probe-lock" is held by someone else while this half runs.
+		seen := "free\n"
+		if f, err := os.OpenFile(string(raw), os.O_RDWR, 0); err == nil {
+			if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+				seen = "held\n"
+			}
+			f.Close()
+		}
+		if out, err := os.OpenFile(filepath.Join(c.FakeDir, "lock-seen"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644); err == nil {
+			out.WriteString(seen)
+			out.Close()
+		}
+	}
+	if _, err := os.Stat(filepath.Join(c.FakeDir, "read-stdin")); err == nil {
+		// Reads its standard input to the end: on a terminal that nobody types on, that never ends.
+		data, _ := io.ReadAll(c.Stdin)
+		fmt.Fprintf(c.Stdout, "stdin-ended after %d bytes\n", len(data))
+	}
 	if _, err := os.Stat(filepath.Join(c.FakeDir, "leave-process")); err == nil {
 		// Exit 0 leaving a child that holds our standard output and error open.
 		child := exec.Command("sleep", "60")
@@ -970,11 +991,12 @@ func TestAPythonHalfThatLeavesAProcessHoldingItsOutputKeepsItsRealExitStatusAndN
 		t.Errorf("a finished Python half was reported as failed:\nstdout %s\nstderr %s", stdout, stderr)
 	}
 	raw, _ := os.ReadFile(filepath.Join(r.py.Dir(), "child.pid"))
-	mustHave(t, stderr, "still holds its output", "pid "+string(raw), "sleep")
+	// The line names the process by its command line, not only by its short name ("sleep").
+	mustHave(t, stderr, "still holds its output", "pid "+string(raw)+" sleep 60")
 	if d := time.Since(start); d > 20*time.Second {
 		t.Errorf("took %v", d)
 	}
-	if left, _ := r.records()[1]["leftover"].([]any); len(left) != 1 || !strings.Contains(left[0].(string), "sleep") {
+	if left, _ := r.records()[1]["leftover"].([]any); len(left) != 1 || !strings.Contains(left[0].(string), "sleep 60") {
 		t.Errorf("go_end leftover = %v", r.records()[1]["leftover"])
 	}
 }
@@ -1077,5 +1099,258 @@ func TestGoStillRunningAfterItsGraceIsKilled(t *testing.T) {
 		}
 	case <-t.Context().Done():
 		t.Fatal("the run did not end")
+	}
+}
+
+// ---- the machine-wide test lock is held across both halves (R3-N3) ----
+
+func (r *rig) probeLock() string {
+	r.t.Helper()
+	path := filepath.Join(r.logDir, lockName)
+	r.script(r.py, "probe-lock", path)
+	r.script(r.fake, "probe-lock", path)
+	return path
+}
+
+func seenLock(t *testing.T, f *testkit.FakeCommand) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(f.Dir(), "lock-seen"))
+	if err != nil {
+		return "not run"
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+func TestAWholeSuiteRunHoldsTheMachineLockWhileBothHalvesRunAndReleasesItAfter(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	path := r.probeLock()
+	if code, out, errb := r.run("--", "python3", "tools/run_tool_tests.py"); code != 0 {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errb)
+	}
+	if got := seenLock(t, r.py); got != "held" {
+		t.Errorf("during the Python half the lock was %q, want held", got)
+	}
+	if got := seenLock(t, r.fake); got != "held" {
+		t.Errorf("during the Go half the lock was %q, want held (the lock must cover both halves)", got)
+	}
+	if raw, _ := os.ReadFile(path); len(raw) != 0 {
+		t.Errorf("the lock file still names a holder after the run: %q", raw)
+	}
+	f, _ := os.Open(path)
+	defer f.Close()
+	// A fork by a parallel test may hold the descriptor's file description for the moment before its exec closes it.
+	testkit.WaitFor(t, "the lock to be free after the run", func() bool {
+		return syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
+	})
+}
+
+func TestTheLockFileNamesTheToolAndItsPidSoTheRunnerKnowsTheLockIsItsOwn(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	path := filepath.Join(r.logDir, lockName)
+	r.script(r.fake, "wait-sigint", "") // the Go half stays up, with the lock held, until the test cancels
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan int, 1)
+	var out, errb bytes.Buffer
+	go func() {
+		done <- runWith(defaultOptions, ctx, []string{"--", "python3"}, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
+	}()
+	testkit.WaitFor(t, "the go fake to wait", func() bool {
+		_, err := os.Stat(filepath.Join(r.fake.Dir(), "ready"))
+		return err == nil
+	})
+	held, _ := os.ReadFile(path)
+	cancel()
+	<-done
+	var rec struct {
+		Pid  int    `json:"pid"`
+		Tool string `json:"tool"`
+	}
+	if err := json.Unmarshal(held, &rec); err != nil || rec.Tool != "test-go-tools" || rec.Pid != os.Getpid() {
+		t.Errorf("lock file %q: want this process (pid %d) named as test-go-tools (err %v)", held, os.Getpid(), err)
+	}
+}
+
+func TestARunGivenArgumentsTakesNoLockHere(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.probeLock()
+	if code, _, errb := r.run("--", "python3", "tools/run_tool_tests.py", "tools/tests/test_x.py"); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errb)
+	}
+	if py, gor := seenLock(t, r.py), seenLock(t, r.fake); py != "free" || gor != "free" {
+		t.Errorf("a run that names test paths held the lock: python %q, go %q", py, gor)
+	}
+}
+
+func TestAGoOnlyRunTakesNoLock(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.probeLock()
+	if code, _, errb := r.run(); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errb)
+	}
+	if got := seenLock(t, r.fake); got != "free" {
+		t.Errorf("a run with no Python half held the lock: %q", got)
+	}
+}
+
+// hold takes the lock file the way another run does, in a descriptor of the test's own.
+func hold(t *testing.T, path string) (release func()) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(`{"pid": 1, "checkout": "another"}`)
+	var once sync.Once
+	rel := func() { once.Do(func() { f.Truncate(0); f.Close() }) }
+	t.Cleanup(rel)
+	return rel
+}
+
+func TestAWholeSuiteRunThatCannotGetTheLockInTimeExits75WithoutRunningEitherHalf(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	hold(t, filepath.Join(r.logDir, lockName))
+	r.env = append(r.env, "NEVR_TEST_LOCK_WAIT_S=0.2")
+	code, _, errb := r.run("--", "python3")
+	if code != 75 {
+		t.Errorf("exit %d, want 75", code)
+	}
+	mustHave(t, errb, "was not free after", "another", "did not start")
+	if len(r.py.Calls(t)) != 0 || len(r.fake.Calls(t)) != 0 {
+		t.Error("a half ran without the lock")
+	}
+}
+
+func TestAWholeSuiteRunWaitsForTheLockAndThenRunsBothHalves(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	release := hold(t, filepath.Join(r.logDir, lockName))
+	done := make(chan int, 1)
+	var out bytes.Buffer
+	var errb syncBuffer
+	go func() {
+		done <- runWith(defaultOptions, t.Context(), []string{"--", "python3"}, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
+	}()
+	testkit.WaitFor(t, "the run to say it waits", func() bool { return strings.Contains(errb.String(), "waiting for the machine-wide test lock") })
+	if len(r.py.Calls(t)) != 0 {
+		t.Error("the Python half ran before the lock was free")
+	}
+	release()
+	select {
+	case code := <-done:
+		if code != 0 || len(r.py.Calls(t)) != 1 || len(r.fake.Calls(t)) != 1 {
+			t.Errorf("exit %d, python calls %d, go calls %d", code, len(r.py.Calls(t)), len(r.fake.Calls(t)))
+		}
+	case <-t.Context().Done():
+		t.Fatal("the run did not end after the lock was released")
+	}
+}
+
+func TestACancelWhileWaitingForTheLockEndsTheRunWith130(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	hold(t, filepath.Join(r.logDir, lockName))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan int, 1)
+	var out bytes.Buffer
+	var errb syncBuffer
+	go func() {
+		done <- runWith(defaultOptions, ctx, []string{"--", "python3"}, testkit.Getenv(r.env), strings.NewReader(""), &out, &errb)
+	}()
+	testkit.WaitFor(t, "the run to say it waits", func() bool { return strings.Contains(errb.String(), "waiting for the machine-wide test lock") })
+	cancel()
+	if code := <-done; code != 130 || len(r.py.Calls(t)) != 0 {
+		t.Errorf("exit %d, python calls %d", code, len(r.py.Calls(t)))
+	}
+}
+
+func TestALockWaitThatIsNotAPositiveNumberIsAUsageError(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{"soon", "0", "-3", "NaN"} {
+		r := newRig(t, passingStream(), 0)
+		r.env = append(r.env, "NEVR_TEST_LOCK_WAIT_S="+bad)
+		code, _, errb := r.run("--", "python3")
+		if code != 2 || !strings.Contains(errb, "NEVR_TEST_LOCK_WAIT_S") || len(r.py.Calls(t)) != 0 {
+			t.Errorf("%q: exit %d, stderr %q", bad, code, errb)
+		}
+	}
+}
+
+// syncBuffer is a bytes.Buffer a test reads while the run writes it.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// ---- a terminal is not the Python half's input (R3-N1) ----
+
+// pty opens a pseudo-terminal pair; the slave end is a terminal that nobody types on.
+func pty(t *testing.T) (slave *os.File) {
+	t.Helper()
+	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Skipf("no /dev/ptmx: %v", err)
+	}
+	t.Cleanup(func() { master.Close() })
+	var unlock, n uint32
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, master.Fd(), syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock))); e != 0 {
+		t.Skipf("TIOCSPTLCK: %v", e)
+	}
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, master.Fd(), syscall.TIOCGPTN, uintptr(unsafe.Pointer(&n))); e != 0 {
+		t.Skipf("TIOCGPTN: %v", e)
+	}
+	slave, err = os.OpenFile("/dev/pts/"+strconv.Itoa(int(n)), os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Skipf("cannot open the pty slave: %v", err)
+	}
+	t.Cleanup(func() { slave.Close() })
+	return slave
+}
+
+func TestAPythonHalfThatReadsStandardInputGetsEndOfFileWhenTheCallersInputIsATerminal(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.script(r.py, "read-stdin", "")
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	var out, errb bytes.Buffer
+	code := runWith(defaultOptions, ctx, []string{"--", "python3"}, testkit.Getenv(r.env), pty(t), &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "stdin-ended after 0 bytes") {
+		t.Errorf("exit %d (a read of the terminal never ends), stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+}
+
+func TestAPythonHalfThatReadsStandardInputStillGetsAPipeTheCallerGaveIt(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.script(r.py, "read-stdin", "")
+	var out, errb bytes.Buffer
+	code := run(t.Context(), []string{"--", "python3"}, testkit.Getenv(r.env), strings.NewReader("abc"), &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "stdin-ended after 3 bytes") {
+		t.Errorf("exit %d, stdout %q", code, out.String())
 	}
 }

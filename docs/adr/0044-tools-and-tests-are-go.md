@@ -195,6 +195,9 @@ The Python tools import four third-party libraries. Each has a Go counterpart:
   signal the tool itself received (a terminal's CTRL+C, a SIGTERM) is an interrupt that skips the Go half; a Python half
   that dies by another signal, or exits 130 by itself, still gets the Go half and both are named. A Python half that
   exits and leaves a process holding its output keeps its real exit status, and the process is named.
+  A run of the whole suite holds the Python runner's machine-wide test lock across both halves, so two runs' Go halves
+  do not overlap either; the Python half's standard input is the caller's unless that is a terminal, which it is not
+  (the half is in a process group of its own, where a terminal read would stop it for good).
 - One language and one runner for the tool suite; pytest and pytest-xdist leave the quick check when the last unit
   lands, and `just verify` runs `go test` over `tools/`.
 - A contributor needs Go 1.25 or later (for `testing/synctest`). Go is already needed to build: `configure` depends on

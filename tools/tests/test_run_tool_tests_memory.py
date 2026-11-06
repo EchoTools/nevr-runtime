@@ -344,6 +344,25 @@ class MachineLockTest(Tmp):
         self.addCleanup(lock.release)
         self.assertEqual({s: signal.getsignal(s) for s in before}, before)
 
+    def test_a_lock_the_parent_test_go_tools_holds_is_this_runs_and_is_not_waited_for(self):
+        first = self.module.MachineLock()
+        first.acquire(self.root, 5)
+        self.addCleanup(first.release)
+        # The Go tool names itself in the file it writes; this test is that parent of the run it starts.
+        (self.root / "run.lock").write_text(json.dumps({"pid": os.getpid(), "tool": "test-go-tools"}))
+        inherited = self.acquire(0.2)  # a deadline that a wait on the held lock would hit
+        self.assertEqual((inherited["state"], inherited["taken"], inherited["contended"]), ("inherited", False, False))
+        self.assertIn("test-go-tools", inherited["reason"])
+
+    def test_a_lock_a_test_go_tools_that_is_not_the_parent_holds_is_waited_for(self):
+        first = self.module.MachineLock()
+        first.acquire(self.root, 5)
+        self.addCleanup(first.release)
+        (self.root / "run.lock").write_text(json.dumps({"pid": os.getpid() + 1, "tool": "test-go-tools"}))
+        self.assertEqual(self.acquire(0.2)["state"], "timeout")
+        (self.root / "run.lock").write_text(json.dumps({"pid": os.getpid(), "checkout": "x"}))  # the parent, not the Go tool
+        self.assertEqual(self.acquire(0.2)["state"], "timeout")
+
     def test_a_released_lock_is_free_for_the_next_run(self):
         first = self.module.MachineLock()
         self.assertEqual(first.acquire(self.root, 5)["state"], "acquired")

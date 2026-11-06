@@ -14,6 +14,16 @@
 // runs.jsonl. The run ends with one line that names each failed half, and the exit code is the Python half's when it
 // failed, else go's.
 //
+// A run of the whole suite (the Python command is the runner alone: nothing follows its script) holds the machine-wide
+// test lock of tools/run_tool_tests.py (an exclusive flock on <log dir>/run.lock, waited for up to
+// $NEVR_TEST_LOCK_WAIT_S, 5400 s by default; exit 75 when it is not free in time) across both halves, so two seats' Go
+// halves never overlap either. The lock file names this tool as its holder, which is how the runner, whose parent this is,
+// knows the lock is already its own and does not wait for it. A run given test paths or other arguments takes no lock
+// here, as the runner decides for itself.
+//
+// The Python command's standard input is the caller's, except a terminal, which is replaced by /dev/null: the command
+// runs in a process group of its own, so a read of the terminal would stop it for good (SIGTTIN).
+//
 // The stream is <stem>-go.jsonl in $NEVR_TEST_LOG_DIR, else test-runs/tools-tests in the work root ($NEVR_WORK_ROOT,
 // else ~/src/nevr-runtime-work), where <stem> is the Python run's file stem (read from its "test-tools: log <path>"
 // line, so the two halves of one run share a name), or a stem of its own. Exit codes: as above; 2 when the run could not
@@ -42,6 +52,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
@@ -69,9 +80,11 @@ type options struct {
 	interruptGrace time.Duration
 	// goGrace is the same for go test.
 	goGrace time.Duration
+	// lockWait is how long a whole-suite run waits for the machine-wide lock when $NEVR_TEST_LOCK_WAIT_S is unset.
+	lockWait time.Duration
 }
 
-var defaultOptions = options{leftoverDelay: 10 * time.Second, interruptGrace: 90 * time.Second, goGrace: 30 * time.Second}
+var defaultOptions = options{leftoverDelay: 10 * time.Second, interruptGrace: 90 * time.Second, goGrace: 30 * time.Second, lockWait: 5400 * time.Second}
 
 func runWith(opts options, ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return runlog.Run("test-go-tools", getenv, stderr, func(log *slog.Logger) int {
@@ -119,6 +132,13 @@ func testTools(opts options, ctx context.Context, args []string, getenv func(str
 	}
 
 	pyRC, stem, leftover := -1, "", []string(nil)
+	if hasPy && wholeSuite(pyCmd) {
+		lock, code := takeLock(ctx, opts, dir, getenv, stderr, log)
+		if code != 0 {
+			return code
+		}
+		defer lock.release()
+	}
 	if hasPy {
 		pyRC, stem, leftover = runPython(opts, ctx, pyCmd, getenv, dir, stdin, stdout, stderr)
 		log.Info("python half", "cmd", pyCmd, "exit", pyRC, "stem", stem, "leftover", leftover)
@@ -264,7 +284,7 @@ func runPython(opts options, ctx context.Context, argv []string, getenv func(str
 	}
 	scan := &lineScan{prefix: pythonLogPrefix}
 	cmd := exec.Command(path, argv[1:]...)
-	cmd.Stdin = stdin
+	cmd.Stdin = stdinFor(stdin)
 	cmd.Stdout = io.MultiWriter(stdout, scan)
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -613,4 +633,111 @@ func plural(word string, n int) string {
 		return word
 	}
 	return word + "s"
+}
+
+// stdinFor is the input the Python half is given: the caller's, except a terminal. The half runs in a process group that is
+// not the terminal's foreground group, so its first read of the terminal would stop it with SIGTTIN and the run would never
+// end; /dev/null gives that read an end of file instead (a nil Reader is /dev/null to os/exec).
+func stdinFor(in io.Reader) io.Reader {
+	if f, ok := in.(*os.File); ok && isTerminal(f) {
+		return nil
+	}
+	return in
+}
+
+// isTerminal reports whether f is a terminal (the TCGETS ioctl succeeds on it).
+func isTerminal(f *os.File) bool {
+	var t syscall.Termios
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&t)))
+	return errno == 0
+}
+
+// lockName is the machine-wide lock's file in the log directory, the Python runner's (LOCK_NAME).
+const lockName = "run.lock"
+
+// wholeSuite is true for the Python command that runs the whole suite: the runner's script and nothing after it. Any
+// argument may name test paths, which the runner answers without a lock, so a run with arguments takes none here.
+func wholeSuite(pyCmd []string) bool { return len(pyCmd) <= 2 }
+
+// heldLock is the lock file held open: the flock is the open file description's, so it ends with release or the process.
+type heldLock struct{ f *os.File }
+
+func (l *heldLock) release() {
+	if l == nil || l.f == nil {
+		return
+	}
+	l.f.Truncate(0) // the file names no holder once the run ends
+	l.f.Close()
+}
+
+// takeLock takes the machine-wide lock and writes the holder into the file, waiting up to $NEVR_TEST_LOCK_WAIT_S (5400 s).
+// It returns the exit code of a run that must not start: 2 for a wait that is not a number or a lock file that cannot be
+// opened, 75 when the lock was not free in time, 130 when this tool was interrupted while it waited.
+func takeLock(ctx context.Context, opts options, dir string, getenv func(string) string, stderr io.Writer, log *slog.Logger) (*heldLock, int) {
+	wait := opts.lockWait
+	if v := getenv("NEVR_TEST_LOCK_WAIT_S"); v != "" {
+		sec, err := strconv.ParseFloat(v, 64)
+		if err != nil || !(sec > 0) || sec > 1e7 {
+			fmt.Fprintf(stderr, "test-tools: FAIL $NEVR_TEST_LOCK_WAIT_S=%q is not a positive number of seconds\n", v)
+			return nil, exitSetup
+		}
+		wait = time.Duration(sec * float64(time.Second))
+	}
+	path := filepath.Join(dir, lockName)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644) // close-on-exec: the Python half does not inherit it
+	if err != nil {
+		fmt.Fprintf(stderr, "test-tools: FAIL cannot take the machine-wide test lock in %s: %v\n", dir, err)
+		log.Error("no lock file", "path", path, "error", err.Error())
+		return nil, exitSetup
+	}
+	start := time.Now()
+	contended := false
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		contended = true
+		fmt.Fprintf(stderr, "test-tools: waiting for the machine-wide test lock %s (holder: %s); giving up after %s\n", path, holderText(path), wait)
+		got := make(chan error, 1)
+		go func() { got <- syscall.Flock(int(f.Fd()), syscall.LOCK_EX) }()
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case err = <-got:
+		case <-timer.C:
+			abandon(f, got)
+			fmt.Fprintf(stderr, "test-tools: FAIL the machine-wide test lock %s was not free after %s (the deadline is $NEVR_TEST_LOCK_WAIT_S); it is held by %s, so this run did not start\n", path, wait, holderText(path))
+			log.Error("lock timeout", "path", path, "wait", wait.String())
+			return nil, 75
+		case <-ctx.Done():
+			abandon(f, got)
+			fmt.Fprintf(stderr, "test-tools: FAIL interrupted while waiting for the machine-wide test lock %s, so this run did not start\n", path)
+			return nil, 130
+		}
+		if err != nil {
+			f.Close()
+			fmt.Fprintf(stderr, "test-tools: FAIL cannot take the machine-wide test lock %s: %v\n", path, err)
+			return nil, exitSetup
+		}
+	}
+	holder, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "tool": "test-go-tools", "start": time.Now().UTC().Format(time.RFC3339)})
+	f.Truncate(0)
+	f.WriteAt(holder, 0)
+	log.Info("test lock held across both halves", "path", path, "contended", contended, "wait_ms", time.Since(start).Milliseconds())
+	return &heldLock{f}, 0
+}
+
+// abandon gives up a lock request whose flock call is still blocked: the descriptor is closed by the goroutine once the call
+// returns, so a lock won after the deadline is dropped at once.
+func abandon(f *os.File, got <-chan error) {
+	go func() {
+		<-got
+		f.Close()
+	}()
+}
+
+// holderText is what the lock file says about its holder, for the line a waiting run prints.
+func holderText(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
+		return "unknown"
+	}
+	return string(bytes.TrimSpace(raw))
 }
