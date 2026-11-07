@@ -487,7 +487,7 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
 
 // The static BVH's and the wall-fire check's pins (src/quest/combat/bvh_targets.h, wallfire_targets.h) against the real libr15: the six bvh JUMP_SLOTs and the
 // QueryCollision JUMP_SLOT resolve at their pins, each symbol is defined at the function the pin calls real, the StaticRaycastOccluded slot (read, not hooked)
-// resolves, FireGunLocal's site word and the three allowed call sites' return addresses are what the pins say.
+// resolves, FireGunLocal's site word is the pinned one, and the word before each of the three allowed return addresses is a `bl` to StaticRaycast's PLT stub.
 void CheckRealBvhAndWallfire(const LoadedElf& elf) {
   namespace bv = nevr_quest::combat::bvh;
   namespace wf = nevr_quest::combat::wallfire;
@@ -515,6 +515,30 @@ void CheckRealBvhAndWallfire(const LoadedElf& elf) {
     std::fprintf(stderr, "libr15 FireGunLocal site word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(wf::kPins.site), site,
                  wf::kPins.siteWord);
     QCHECK(false);
+  }
+  // StaticRaycastOccluded: its JUMP_SLOT (read, never hooked) resolves at the pin and the function is defined there; CncaGame's own function (the word at its
+  // vtable +0x278) is defined at the pin.
+  const char* const kGsOccluded = "_ZNK10NRadEngine13CncaGameSpace21StaticRaycastOccludedERKNS_8C3VectorES3_";
+  CheckTarget(elf, GotTarget{pinned::kLibR15, kGsOccluded, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, wf::kPins.occludedSlot},
+              "libr15 CncaGameSpace::StaticRaycastOccluded JUMP_SLOT");
+  CheckDefinedAt(elf, kGsOccluded, wf::kPins.occludedFn);
+  CheckDefinedAt(elf, "_ZNK10NRadEngine8CncaGame21StaticRaycastOccludedERKNS_8C3VectorES3_", wf::kPins.gameOccluded);
+  // The three allowed return addresses: the word before each is a `bl` to StaticRaycast's PLT stub (ELF 0xed1740, the disassembly's 0xfd1740).
+  constexpr std::int64_t kStaticRaycastStub = 0xed1740;
+  QCHECK(bv::kPins.allowedCount == 3);
+  for (int i = 0; i < bv::kPins.allowedCount; ++i) {
+    const std::uint64_t ret = bv::kPins.allowed[i];
+    std::uint32_t word = 0;
+    std::memcpy(&word, mem + ret - 4, sizeof(word));
+    const bool isBl = (word >> 26) == 0x25;  // BL imm26
+    std::int64_t imm = static_cast<std::int64_t>(word & 0x03ffffffU);
+    if ((imm & 0x02000000) != 0) imm -= 0x04000000;
+    const std::int64_t target = static_cast<std::int64_t>(ret) - 4 + imm * 4;
+    if (!isBl || target != kStaticRaycastStub) {
+      std::fprintf(stderr, "libr15 allowed call site %#llx: word %#x is not a bl to StaticRaycast's stub (target %#llx)\n",
+                   static_cast<unsigned long long>(ret), word, static_cast<unsigned long long>(target));
+      QCHECK(false);
+    }
   }
 }
 

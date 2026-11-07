@@ -26,8 +26,8 @@ runm wf_game_published    src/quest/combat/wallfire.cpp "s/  g_gameOccluded.stor
 runm wf_installed_line    src/quest/combat/wallfire.cpp "s/                      {{\"result\", \"installed\"}, {\"reason\", \"ok\"},/                      {{\"result\", \"installed\"}, {\"reason\", \"fine\"},/"
 runm wf_installed_result  src/quest/combat/wallfire.cpp "s/  return {true, \"installed\"};/  return {true, \"on\"};/"
 # -- the thunk
-runm wf_scope             src/quest/combat/wallfire.cpp "s/  if (!bvh::InCombatMap()) return original(gs, req, id);/  (void)0;/"
-runm wf_scope_inverted    src/quest/combat/wallfire.cpp "s/  if (!bvh::InCombatMap()) return original(gs, req, id);/  if (bvh::InCombatMap()) return original(gs, req, id);/"
+runm wf_scope             src/quest/combat/wallfire.cpp "s/  if (!bvh::InCombatOrLobby()) return original(gs, req, id);/  (void)0;/"
+runm wf_scope_inverted    src/quest/combat/wallfire.cpp "s/  if (!bvh::InCombatOrLobby()) return original(gs, req, id);/  if (bvh::InCombatOrLobby()) return original(gs, req, id);/"
 runm wf_ret_compare       src/quest/combat/wallfire.cpp "s/  if (ret != g_site.load(std::memory_order_relaxed) || r || gs == 0) return r;/  if (r || gs == 0) return r;/"
 runm wf_ret_never         src/quest/combat/wallfire.cpp "s/  if (ret != g_site.load(std::memory_order_relaxed) || r || gs == 0) return r;/  if (true) return r;/"
 runm wf_stock_hit         src/quest/combat/wallfire.cpp "s/  if (ret != g_site.load(std::memory_order_relaxed) || r || gs == 0) return r;/  if (ret != g_site.load(std::memory_order_relaxed) || gs == 0) return r;/"
@@ -53,8 +53,6 @@ runm wf_log_first         src/quest/combat/wallfire.cpp "s/constexpr std::uint64
 runm wf_log_pow2          src/quest/combat/wallfire.cpp "s/ || (n \& (n - 1)) == 0) LogBlocked/ || (n \& (n - 1)) == 1) LogBlocked/"
 runm wf_log_every         src/quest/combat/wallfire.cpp "s/  if (n <= kLogFirst || (n \& (n - 1)) == 0) LogBlocked(n, seg);/  LogBlocked(n, seg);/"
 runm wf_log_segment       src/quest/combat/wallfire.cpp "s/static_cast<double>(s\[3\]), static_cast<double>(s\[4\]), static_cast<double>(s\[5\]));/static_cast<double>(s[4]), static_cast<double>(s[3]), static_cast<double>(s[5]));/"
-runm wf_game_null         src/quest/combat/wallfire.cpp "s/  if (game == 0) return false;/  (void)0;/"
-runm wf_vtbl_null         src/quest/combat/wallfire.cpp "s/  if (vptr == 0) return false;/  (void)0;/"
 runm wf_game_fn           src/quest/combat/wallfire.cpp "s/ == g_gameOccluded.load(std::memory_order_relaxed);/ != 0;/"
 # -- the pins
 runm wf_pin_slot          src/quest/combat/wallfire_targets.h "s/0x36e0c38ULL, 0x1806784ULL/0x36e0c30ULL, 0x1806784ULL/"
@@ -76,5 +74,9 @@ runm wf_key_name          src/quest/sentinel/quest_config.cpp "s/kCombatWallfire
 runm wf_row_key           src/quest/combat/combat_install.cpp "s/\"combat.wallfire\", \&nevr_quest::CombatConfig::wallfire}/\"combat.wallfir\", \&nevr_quest::CombatConfig::wallfire}/" quest-host-combat combat_install_test
 runm wf_row_member        src/quest/combat/combat_install.cpp "s/\"combat.wallfire\", \&nevr_quest::CombatConfig::wallfire}/\"combat.wallfire\", \&nevr_quest::CombatConfig::bvh}/" quest-host-combat combat_install_test
 # -- the arena path pays nothing: a read, or a level scan, before the scope test is counted
-runm wf_arena_read src/quest/combat/wallfire.cpp "s/  if (!bvh::InCombatMap()) return original(gs, req, id);/  { std::uint8_t probe; SafeRead(gs + 8, \&probe, 1); }\n  if (!bvh::InCombatMap()) return original(gs, req, id);/"
-runm wf_arena_scan src/quest/combat/wallfire.cpp "1s/^/#include \"quest\/combat\/combat_level.h\"\n/;s/  if (!bvh::InCombatMap()) return original(gs, req, id);/  level::Scan(0);\n  if (!bvh::InCombatMap()) return original(gs, req, id);/"
+runm wf_arena_read src/quest/combat/wallfire.cpp "s/  if (!bvh::InCombatOrLobby()) return original(gs, req, id);/  { std::uint8_t probe; SafeRead(gs + 8, \&probe, 1); }\n  if (!bvh::InCombatOrLobby()) return original(gs, req, id);/"
+runm wf_arena_scan src/quest/combat/wallfire.cpp "1s/^/#include \"quest\/combat\/combat_level.h\"\n/;s/  if (!bvh::InCombatOrLobby()) return original(gs, req, id);/  level::Scan(0);\n  if (!bvh::InCombatOrLobby()) return original(gs, req, id);/"
+# -- the game chain is read with SafeRead (the game's QueryCollision never reads `this`)
+runm wf_chain_gs_plain    src/quest/combat/wallfire.cpp "s/  if (!SafeRead(gs + kGsGame, \&game, sizeof(game))) return false;/  game = *reinterpret_cast<const std::uintptr_t*>(gs + kGsGame);/"
+runm wf_chain_game_plain  src/quest/combat/wallfire.cpp "s/  if (!SafeRead(game, \&vptr, sizeof(vptr))) return false;/  if (game == 0) return false;\n  vptr = *reinterpret_cast<const std::uintptr_t*>(game);/"
+runm wf_chain_vtbl_plain  src/quest/combat/wallfire.cpp "s/  return SafeRead(vptr + kGameVtblSlot, \&fn, sizeof(fn)) \&\& fn == g_gameOccluded.load(std::memory_order_relaxed);/  if (vptr == 0) return false;\n  fn = *reinterpret_cast<const std::uintptr_t*>(vptr + kGameVtblSlot);\n  return fn == g_gameOccluded.load(std::memory_order_relaxed);/"

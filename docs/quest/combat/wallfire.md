@@ -31,7 +31,7 @@ without firing. On the PC the query sees the static level; on the Quest it reach
 CBVHTree, compiled out on Android and served by `bvh`), so a hand or muzzle through a wall fires (afk_wallfire.cpp:1-10).
 
 `OnQuery(original, caller, gs, req, id)` (a `kCaller` thunk):
-1. is told its return address (the slot's PLT stub is `adrp; ldr; add; br`, so it is the caller's); with no combat map loaded it calls the game's function and returns; else it runs the game's `QueryCollision`;
+1. is told its return address (the slot's PLT stub is `adrp; ldr; add; br`, so it is the caller's); with no combat map or combat lobby loaded (or a look older than a second) it calls the game's function and returns; else it runs the game's `QueryCollision`;
 2. returns the stock answer unless **all** hold: the return address is `base + 0x215566c`, the stock answer was "nothing", `gs != 0`;
 3. copies the 24 bytes at `req` as six floats, the segment start xyz and end xyz; any non-finite value: the stock answer (counter `skipped_nan`);
 4. checks the game structure the call will walk (below); if it is not as pinned: the stock answer, counter `skipped_game`, one WARNING;
@@ -61,8 +61,10 @@ and its body ends with the call into `bvh`'s R23 wrapper:
 
 so the query ends in `CBVHTree::Occluded(tree, a', b')` where a', b' are the two points after the function's own arithmetic (`0x18f2740..0x18f2754`, not decoded here).
 
-The extra check (ours, `GameIsPinned`): `*(gs + 8)` is the CncaGame, `*game` its vtable pointer, and `[vtable + 0x278]` must equal `base + 0x17f2614`. A null
-game or vtable pointer is the stock answer. The three loads are plain: the stub called next reads the same three words. Nothing is remembered between shots.
+The extra check (ours, `GameIsPinned`): `*(gs + 8)` is the CncaGame, `*game` its vtable pointer, and `[vtable + 0x278]` must equal `base + 0x17f2614`. The three
+words are read with `SafeRead`: the game's own `QueryCollision` never reads `this` (`0x19067a0 mov x0, sp` overwrites it in the prologue), so no dereference of the
+game's backs them. An unreadable word, or a null pointer of the chain, is the stock answer (counter `skippedGame`). Nothing is remembered between shots. The request
+is a plain load: it is the game's caller's stack frame (`0x2255660 add x1, sp, #0x30`).
 
 Install (`InstallAt`): the legacy `wallfire.off` file is warned about; the switch is reported by the configuration step, one generated `combat_config_switch` record (the table row `wallfire`); off is one Info line
 (`combat_wallfire_install` `off_config`); `bvh` installed; the word at the R27 site reads `0x3941b3e8` (`site_word` Error otherwise); the R28 slot holds
@@ -74,7 +76,7 @@ once). Counters (`GetCounters`): `atSite`, `checked`, `blocked`, `skippedNan`, `
 Switch (config.yaml, `combat:`): `wallfire` (default true, as upstream, afk_wallfire.cpp:17,78). The plugin's `wallfire.off` is no longer read; one found is a
 Warning (`combat_wallfire_legacy_switch`) that names the key.
 
-**Scope (arena shares the APK).** The check acts only at FireGunLocal's site and only while `bvh::InCombatMap()` (bvh.md section 4). Elsewhere the thunk is the game's
+**Scope (arena shares the APK).** The check acts only at FireGunLocal's site and only while `bvh::InCombatOrLobby()` (bvh.md section 4). Elsewhere the thunk is the game's
 function, a load, a test and a return.
 
 ## 3. Evidence
@@ -115,8 +117,8 @@ are refused in the open; a crash in `OnQuery` or the stub; any `combat_wallfire_
 
 - No word patch, no data file. No logged headset window shows a blocked shot.
 - **Unverified**: the meaning of the two request points (player position, muzzle) beyond the reference's comment; that `FireGunLocal` is the only function that calls
-  `QueryCollision` from this site (the return-address check makes the answer independent of that); that `gs` and the request are valid pointers whenever the
-  game's own `QueryCollision` returned "nothing" at that site (the reason the loads are plain).
+  `QueryCollision` from this site (the return-address check makes the answer independent of that); that `gs` is a readable
+  gamespace at that site (the game's `QueryCollision` never reads it, so the chain is read with `SafeRead`). The request is the caller's stack frame.
 - **Differences from the reference**: `GameIsPinned` (above); the `combat:` key instead of a kill file; structured logs; the scope; the call goes to the pinned function by
   address (the reference resolves the same address with `dlsym` and checks it equals `base + 0x18066f4`).
 - **The tree must exist**: bvh's Occluded hook answers only for a CBVHTree it built at Initialize. A level whose tree was initialised before the module installed
@@ -130,16 +132,16 @@ Measured on the development host (x86-64, g++ -O2), not on a headset (a tree of 
 
 | Path | Per call |
 |---|---|
-| a shot at FireGunLocal's site on a combat map (the game's query, the check, the traversal) | about 1.6 us |
-| QueryCollision from another caller on a combat map | 5.8 ns, against 1.7 ns for the function alone |
-| QueryCollision from the site with no combat map loaded (arena) | 4.1 ns, against 1.7 ns for the function alone |
+| a shot at FireGunLocal's site on a combat map (the game's query, the three `SafeRead`s of the game chain, the check, the traversal) | about 3.2 us (1.7 us of it the three reads) |
+| QueryCollision from another caller on a combat map (a true scope reads the clock to test its age) | 9.3 ns, against 1.7 ns for the function alone |
+| QueryCollision from the site with no combat map or combat lobby loaded (arena) | 4.4 ns, against 1.7 ns for the function alone |
 
 Rates: a shot at the site is a gun shot (a few a second per gun); the rate of QueryCollision calls from other callers, in arena and in combat, is not measured on a
-headset. The former code added four `process_vm_readv` calls (about 0.5 us each) to every shot at the site; the loads are plain now.
+headset. The three `SafeRead`s of the game chain (about 0.5 us each) are the same reads the plugin made, less the request, which is a plain load.
 
 ## 8. Tests and mutants
 
 `just test-quest-combat wallfire` runs `wallfire_test`: a stock hit passes through, a clear segment is not blocked, a segment through each wall is, another call
 site gets the stock answer, a null gamespace, a non-finite segment and every wrong game structure get the stock answer, the log volume, the refusals and what
-they leave alone, the switch and its lines, the legacy file, and the scope (no combat map, no check; an arena level beside a combat map).
+they leave alone, the switch, the legacy file, an unreadable gamespace, game or vtable, and the scope (no combat map, no check; an arena level beside a combat map; a lobby arena players use).
 Mutants: `src/quest/combat/mutants.d/wallfire.sh`, run with `src/quest/combat/mutants.sh wallfire`.

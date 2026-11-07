@@ -140,6 +140,7 @@ extern "C" __attribute__((noinline)) bool StockGate(const void* self, const void
 // CR15Game's gamespace table and a gamespace's level, laid out where combat_level.cpp reads them (the offsets are spelled here, not taken from
 // the header), read by process_vm_readv as in production.
 constexpr std::size_t kTable0 = 0x1f48, kCount0 = 0x1f78, kGamespaceOwner = 0x8, kGamespaceLevel = 0x58;
+constexpr std::size_t kFiberRows = 0x1ed8, kFiberCount = 0x1f08, kFiberGamespace = 0x30;
 struct Gamespace {
   std::uintptr_t words[0x60 / 8 + 1] = {};
 };
@@ -147,11 +148,16 @@ struct Game {
   std::uintptr_t words[0x2000 / 8] = {};
   std::uintptr_t table0[8][2] = {};
   Gamespace spaces[8];
+  std::uintptr_t fiberTable[4] = {};     // game + 0x1ed8: the init fibers of the gamespaces still loading
+  std::uintptr_t fibers[4][0x40 / 8] = {};  // a fiber's gamespace is at fiber + 0x30
+  Gamespace loading[4];
 };
 Game g_game;
+int g_loadingCount = 0;
 std::uintptr_t GameAddress() { return reinterpret_cast<std::uintptr_t>(g_game.words); }
 void LoadLevels(std::initializer_list<const char*> names) {
   g_game = Game{};
+  g_loadingCount = 0;
   int row = 0;
   for (const char* name : names) {
     Gamespace& gs = g_game.spaces[row];
@@ -177,6 +183,21 @@ void StartCounting() {
 void StopCounting() {
   nevr_quest::combat::SetReadCounterForTest(nullptr);
   nevr_quest::combat::level::SetScanSeamForTest(nullptr);
+}
+
+// A gamespace still loading `name`: an init fiber in the game's fiber table, in neither of the two loaded tables.
+void AddLoading(const char* name) {
+  const int i = g_loadingCount++;
+  g_game.loading[i].words[kGamespaceLevel / 8] = static_cast<std::uintptr_t>(CSymbol64Hash(name));
+  g_game.fibers[i][kFiberGamespace / 8] = reinterpret_cast<std::uintptr_t>(&g_game.loading[i]);
+  g_game.fiberTable[i] = reinterpret_cast<std::uintptr_t>(g_game.fibers[i]);
+  g_game.words[kFiberRows / 8] = reinterpret_cast<std::uintptr_t>(g_game.fiberTable);
+  g_game.words[kFiberCount / 8] = static_cast<std::uintptr_t>(g_loadingCount);
+}
+std::string LevelHex(const char* name) {
+  char buf[24];
+  std::snprintf(buf, sizeof(buf), "0x%016llx", static_cast<unsigned long long>(CSymbol64Hash(name)));
+  return buf;
 }
 
 // The tick's clock: one second per look, so every Tick that asks for a look gets one.
@@ -339,7 +360,7 @@ void TheInstallSwapsTheSlotsAndStatesItOnce() {
   for (int i = 0; i < 6; ++i) before[i] = SlotWord(slots[i]->slot);
   LoadLevels({"mpl_combat_dyson"});
   bvh::Tick(GameAddress());  // a tick before the install looks at nothing: the scope stays shut
-  QCHECK(!bvh::InCombatMap());
+  QCHECK(!bvh::InCombatOrLobby());
   QCHECK(Installed(On()));
   QCHECK(bvh::TreeInstalled());
   for (int i = 0; i < 6; ++i) QCHECK(SlotWord(slots[i]->slot) != before[i]);
@@ -445,7 +466,7 @@ void ACombatMapGetsTheTreesAnswers() {
   Build();
   QCHECK(Installed(Gateless()));
   EnterCombat();
-  QCHECK(bvh::InCombatMap());
+  QCHECK(bvh::InCombatOrLobby());
   QCHECK(Count(Event("combat_bvh_scope"), kInfo) == 1 && Count("\"from\":0,\"to\":1") == 1);
   Look();  // the same answer again: no second line
   QCHECK(Count(Event("combat_bvh_scope")) == 1);
@@ -581,7 +602,7 @@ void WithoutACombatMapEveryHookCallsTheGamesFunction() {
   bt::Resource res = RoomResource(true);
   std::uint64_t cbvh = 0;
   g_cbvhSelf = &cbvh;
-  // The trees are built whatever the level (the build is data, no answer): an Initialize before the first look still gets its tree.
+  // No game has been seen by the tick yet, so nothing is known about the level being loaded: an Initialize before the first look still gets its tree.
   InitSlot()(&cbvh, res.bytes.data());
   QCHECK(cbvh != 0 && bvh::TreeCount() == 1 && g_stockInit == 1);
   std::uint8_t hit[0x44] = {};
@@ -601,26 +622,26 @@ void WithoutACombatMapEveryHookCallsTheGamesFunction() {
     QCHECK(c.intersect == 0 && c.occluded == 0 && c.touch == 0 && c.gated == 0 && c.stock == 0);
     QCHECK(bvh::LastGateReturnForTest() == 0);  // the gate did nothing at all
   };
-  QCHECK(!bvh::InCombatMap());  // no look yet: nothing is combat
+  QCHECK(!bvh::InCombatOrLobby());  // no look yet: nothing is combat
   allStock();
   LoadLevels({});
   Look();
   allStock();
   EnterArena();
-  QCHECK(!bvh::InCombatMap());
+  QCHECK(!bvh::InCombatOrLobby());
   allStock();
   LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});  // an arena level that is loaded wins over any other still loaded
   Look();
-  QCHECK(!bvh::InCombatMap());
+  QCHECK(!bvh::InCombatOrLobby());
   allStock();
-  LoadLevels({"mpl_lobby_b_combat"});  // the combat lobby is not a combat map
+  LoadLevels({"mpl_lobby_b"});  // a lobby arena players use is no combat class
   Look();
-  QCHECK(!bvh::InCombatMap());
+  QCHECK(!bvh::InCombatOrLobby());
   allStock();
   // the combat map comes back: the answers come back with it, and the change is one line each way
   g_lines.clear();
   EnterCombat();
-  QCHECK(bvh::InCombatMap());
+  QCHECK(bvh::InCombatOrLobby());
   QCHECK(!CallInt(&cbvh, kDown, hit) && bvh::GetCounters().gated == 1);  // the hook acts again: this direct cast is kept off the tree by the gate
   EnterArena();
   QCHECK(Count(Event("combat_bvh_scope")) == 2 && Count("\"from\":0,\"to\":1") == 1 && Count("\"from\":1,\"to\":0") == 1);
@@ -634,14 +655,113 @@ void TheScopeIsLookedAtFourTimesASecond() {
   LoadLevels({"mpl_combat_dyson"});
   g_now = 100.0;
   bvh::Tick(GameAddress());  // the first look
-  QCHECK(bvh::InCombatMap());
+  QCHECK(bvh::InCombatOrLobby());
   LoadLevels({"mpl_arena_a"});
   g_now = 100.1;
   bvh::Tick(GameAddress());  // inside the quarter second: no look
-  QCHECK(bvh::InCombatMap());
+  QCHECK(bvh::InCombatOrLobby());
   g_now = 100.3;
   bvh::Tick(GameAddress());
-  QCHECK(!bvh::InCombatMap());
+  QCHECK(!bvh::InCombatOrLobby());
+  End();
+}
+
+// The combat lobby is in scope (the plugin answered there too), a lobby arena players use is not, and an arena level that is loaded wins over both.
+void TheCombatLobbyIsInScope() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  LoadLevels({"mpl_lobby_b_combat"});
+  Look();
+  QCHECK(bvh::InCombatOrLobby());
+  bt::Resource res = RoomResource(true);
+  std::uint64_t cbvh = 0;
+  g_cbvhSelf = &cbvh;
+  InitSlot()(&cbvh, res.bytes.data());
+  std::uint8_t hit[0x44] = {};
+  QCHECK(cbvh != 0 && CallInt(&cbvh, kDown, hit));
+  LoadLevels({"mpl_lobby_b_combat", "mpl_arena_a"});
+  Look();
+  QCHECK(!bvh::InCombatOrLobby() && !CallInt(&cbvh, kDown, hit));
+  End();
+}
+
+// The scope fails closed: a look older than a second is not believed, so a tick that stopped leaves every hook calling the game's function.
+void AStalledTickFailsClosed() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  EnterCombat();
+  bt::Resource res = RoomResource(true);
+  std::uint64_t cbvh = 0;
+  g_cbvhSelf = &cbvh;
+  InitSlot()(&cbvh, res.bytes.data());
+  std::uint8_t hit[0x44] = {};
+  const float a[3] = {0, 0, 0}, out[3] = {0, 0, 5.2f};
+  QCHECK(bvh::InCombatOrLobby() && CallInt(&cbvh, kDown, hit) && OccludedSlot()(&cbvh, a, out));
+  g_now += 1.0;  // exactly a second after the look: still believed
+  QCHECK(bvh::InCombatOrLobby());
+  g_now += 0.01;  // no Tick since: the look is stale
+  QCHECK(!bvh::InCombatOrLobby());
+  const int int0 = g_stockInt, occ0 = g_stockOcc, touch0 = g_stockTouch;
+  QCHECK(!CallInt(&cbvh, kDown, hit) && !OccludedSlot()(&cbvh, a, out) && TouchSlot()(nullptr, nullptr, nullptr, nullptr));
+  QCHECK(g_stockInt == int0 + 1 && g_stockOcc == occ0 + 1 && g_stockTouch == touch0 + 1);  // the game's functions answered
+  g_now += 5.0;
+  QCHECK(!bvh::InCombatOrLobby());  // and it stays shut for as long as the tick is gone
+  Look();  // the tick comes back
+  QCHECK(bvh::InCombatOrLobby() && CallInt(&cbvh, kDown, hit));
+  End();
+}
+
+// The tree is built only for a combat map or the combat lobby (loaded or loading), or when the game has not been seen; the log names the level.
+void ALevelThatIsNotCombatGetsNoTree() {
+  Begin();
+  Build();
+  QCHECK(Installed(Gateless()));
+  bt::Resource res = RoomResource(true);
+  const auto init = [&](std::uint64_t* word) {
+    *word = 0x55;
+    g_lines.clear();
+    InitSlot()(word, res.bytes.data());
+  };
+  std::uint64_t cbvh = 0;
+  QCHECK(bvh::GetCounters().treesSkipped == 0);
+  // an Echo Arena level loaded, a lobby arena players use loaded, the same with a combat map beside an arena level: no tree, no table entry
+  for (const char* name : {"mpl_arena_a", "mpl_lobby_b"}) {
+    LoadLevels({name});
+    Look();
+    init(&cbvh);
+    QCHECK(cbvh == 0 && bvh::TreeCount() == 0);
+    const bool arena = std::strcmp(name, "mpl_arena_a") == 0;
+    QCHECK(Count("\"result\":\"skipped\"", kInfo) == 1 && Count(std::string("\"scope\":\"") + (arena ? "arena" : "other") + "\"") == 1);
+    // the level is named when the scan classifies it (an Echo Arena level); a lobby arena players use is no class, so it is level 0 with scope "other"
+    QCHECK(Count(std::string("\"level\":\"") + (arena ? LevelHex(name) : std::string("0x0000000000000000")) + "\"") == 1);
+  }
+  LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});
+  Look();
+  init(&cbvh);
+  QCHECK(cbvh == 0 && Count("\"scope\":\"arena\"") == 1);
+  QCHECK(bvh::GetCounters().treesSkipped == 3 && bvh::GetCounters().treesBuilt == 0 && g_stockInit == 3);  // the game's Initialize ran each time
+  // a combat map loaded, the combat lobby loaded: built, and the level is named
+  for (const char* name : {"mpl_combat_dyson", "mpl_lobby_b_combat"}) {
+    LoadLevels({name});
+    Look();
+    init(&cbvh);
+    QCHECK(cbvh != 0);
+    QCHECK(Count("\"result\":\"built\"", kInfo) == 1 && Count("\"scope\":\"combat\"") == 1 && Count(std::string("\"level\":\"") + LevelHex(name) + "\"") == 1);
+  }
+  // a combat map still loading beside a lobby arena players use: the resources being built are the combat map's (the scan reads the init fibers)
+  LoadLevels({"mpl_lobby_b"});
+  AddLoading("mpl_combat_dyson");
+  Look();
+  init(&cbvh);
+  QCHECK(cbvh != 0 && Count("\"scope\":\"combat\"") == 1);
+  // an arena level still loading beside a combat map: arena wins
+  LoadLevels({"mpl_combat_dyson"});
+  AddLoading("mpl_arena_a");
+  Look();
+  init(&cbvh);
+  QCHECK(cbvh == 0 && Count("\"scope\":\"arena\"") == 1);
   End();
 }
 
@@ -966,7 +1086,7 @@ void TheSummaryIsOneLineEveryTenSecondsWhenACounterMoved() {
 }  // namespace
 
 int main() {
-  QCHECK(!bvh::InCombatMap());  // before anything: no combat map is known, so the hooks would call the game's functions
+  QCHECK(!bvh::InCombatOrLobby());  // before anything: no combat map is known, so the hooks would call the game's functions
   char tmpl[] = "/tmp/combat-bvh-XXXXXX";
   if (mkdtemp(tmpl) == nullptr) return 2;
   g_dir = tmpl;
@@ -979,6 +1099,9 @@ int main() {
   ACombatMapGetsTheTreesAnswers();
   WithoutACombatMapEveryHookCallsTheGamesFunction();
   TheScopeIsLookedAtFourTimesASecond();
+  TheCombatLobbyIsInScope();
+  AStalledTickFailsClosed();
+  ALevelThatIsNotCombatGetsNoTree();
   AnInitializeThatIsRefusedLeavesNoTreeAndSaysWhy();
   TheTableHolds64TreesAndTheSameDataReusesItsEntry();
   TheCallersGateAnswersTheListedCastsOnly();

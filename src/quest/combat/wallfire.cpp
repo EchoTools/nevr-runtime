@@ -31,14 +31,14 @@ std::atomic<std::uint64_t> g_atSite{0}, g_checked{0}, g_blocked{0}, g_nan{0}, g_
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
 std::atomic<const Pins*> g_pinsOverride{nullptr};
 
-// CncaGameSpace -> CncaGame -> vtable -> [+0x278] is the pinned CncaGame::StaticRaycastOccluded; false (the game's answer) otherwise. The
-// StaticRaycastOccluded stub the check calls next reads the same three words, so they are plain loads after a null test.
+// CncaGameSpace -> CncaGame -> vtable -> [+0x278] is the pinned CncaGame::StaticRaycastOccluded; false (the game's answer) otherwise.
 bool GameIsPinned(std::uintptr_t gs) noexcept {
-  const std::uintptr_t game = *reinterpret_cast<const std::uintptr_t*>(gs + kGsGame);
-  if (game == 0) return false;
-  const std::uintptr_t vptr = *reinterpret_cast<const std::uintptr_t*>(game);
-  if (vptr == 0) return false;
-  return *reinterpret_cast<const std::uintptr_t*>(vptr + kGameVtblSlot) == g_gameOccluded.load(std::memory_order_relaxed);
+  std::uintptr_t game = 0, vptr = 0, fn = 0;
+  // Three SafeReads (about 1.5 us a shot): the game's QueryCollision never reads `this`, so nothing the game does on this path backs these words. A null
+  // pointer of the chain fails the next read.
+  if (!SafeRead(gs + kGsGame, &game, sizeof(game))) return false;
+  if (!SafeRead(game, &vptr, sizeof(vptr))) return false;
+  return SafeRead(vptr + kGameVtblSlot, &fn, sizeof(fn)) && fn == g_gameOccluded.load(std::memory_order_relaxed);
 }
 
 void LogBlocked(std::uint64_t n, const float* s) noexcept {
@@ -58,7 +58,7 @@ void LogSkippedGame() noexcept {
 
 // QueryCollision(this = the gamespace, the request, the CPhId): the game's function runs first. `caller` is the instruction after the game's call.
 bool OnQuery(QueryThunk::Fn original, const void* caller, std::uintptr_t gs, std::uintptr_t req, std::uint64_t id) noexcept {
-  if (!bvh::InCombatMap()) return original(gs, req, id);
+  if (!bvh::InCombatOrLobby()) return original(gs, req, id);
   const std::uintptr_t ret = reinterpret_cast<std::uintptr_t>(caller);
   const std::uintptr_t base = g_base.load(std::memory_order_relaxed);
   g_lastReturn.store(ret - base, std::memory_order_relaxed);

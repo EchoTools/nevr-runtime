@@ -12,7 +12,7 @@
  * The four tree hooks are installed together or not at all, and the gate with them unless it is switched off; the touch hook is separate (its
  * refusal is an Error and the module goes on).
  *
- * Switches (docs/adr/0046 C2): `combat.bvh` (default true, as the reference build has it: afk_bvh.cpp "ON BY DEFAULT"; the answers are scoped to combat maps),
+ * Switches (docs/adr/0046 C2): `combat.bvh` (default true, as the reference build has it: afk_bvh.cpp "ON BY DEFAULT"; the answers are scoped to combat maps and the combat lobby),
  * `combat.bvh_gate` (true: only the three listed callers' casts use the tree) and `combat.bvh_touch` (true: touch rays are answered with a miss).
  * The plugin's kill files `bvh.off`, `bvhgate.off`, `bvhtouch.keep` are no longer read: one found in the plugin's data directory is a Warning
  * (`combat_bvh_legacy_switch`) that names the key that replaces it.
@@ -22,16 +22,23 @@
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h).
  *
  * Arena (same APK). Arena and combat run on the same APK, so `combat::Active()` does not say which one a player is in. Every query hook answers
- * the game's own function while no combat map is loaded: `InCombatMap()` below is a value the game-thread tick refreshes (4 times a second, from
- * combat_level.h `Scan`), so the arena path of a query is one relaxed load, a test and a tail call of the game's function. Trees are built at load
- * whatever the level (the build is a parse of the game's own data and a table entry, no copy; the arena levels ship empty resources, which log
- * `combat_bvh_tree` `none`), so this module does not depend on the level being in combat_level's tables while it loads; only the answers are scoped.
- * KNOWN-WRONG #2246: the scope here is this module's own cached answer. combat_scope.h (F19) is the shared one; this module switches to it when
- * it lands, and the value then also fails closed when the tick stops (this one does not: with no frames there are no casts).
+ * the game's own function while no combat map and no combat lobby is loaded, or while an Echo Arena level is (it wins): `InCombatOrLobby()` below is a
+ * value the game-thread tick refreshes four times a second from combat_level.h (`Classify`, loaded levels), and it fails closed, a look older than
+ * kStaleAfterSeconds is not believed, so a tick that stopped leaves every hook calling the game's function. The arena path of a query is one relaxed
+ * load of a false value, a test and a tail call. The combat lobby is in scope because the plugin answered there; a lobby arena players use is not.
+ * Initialize builds a tree only for a combat map or the combat lobby, loaded or still loading (`Classify(game, true, ..., inFlight)`), or when the tick has
+ * not shown the module a game yet (then nothing is known about the level and it builds); any other level logs `combat_bvh_tree` `skipped` with the scope
+ * it found and its level, and its CBVHTree keeps the word 0, so the game's function answers for it and the page probes of a build are not paid.
+ * KNOWN-WRONG #2246: the scope here is this module's own cached answer. combat_scope.h (F19) is the shared one; this module switches to it when it lands.
+ * The tick's look scans the level tables in every level, arena included, four times a second (about 20 microseconds a second on the host).
  *
- * Reads. A reference argument the game's caller formed (the ray, the segment's two points, the hit, this) is read with plain loads: the
- * caller dereferences the same objects, and a system call (process_vm_readv) per cast would cost more than the traversal. The game's resource
- * (the header and both blocks, which nothing else reads before us) is probed once, when the tree is built, with process_vm_readv (safe_read.h).
+ * Reads. Each plain load is backed by the game's own dereference of the same object on that path (disassembly of the stock libr15): the ray of
+ * Intersect is read from the caller's CRay by CncaGame::StaticRaycast, which passes its own stack copy on (0x18f23c4, 0x18f2510); LocalStaticRaycast
+ * passes the caller's ray through unread, and its one caller (DetectStaticBox) builds the ray on its stack. The two points of Occluded are read by
+ * CncaGame::StaticRaycastOccluded, which passes its own copies on (0x18f2660, 0x18f27b4); LocalStaticRaycastOccluded passes its caller's pointers on
+ * unread and has no static caller, so that path relies on the references being valid, as C++ guarantees. The CBVHTree word is read from the
+ * CStaticRaycastCS the game found that frame (the game does not read +0x148 itself). The game's resource (the header and both blocks, which nothing else
+ * reads before us) is probed once, when the tree is built, with process_vm_readv (safe_read.h).
  *
  * Frequency (ADR 0038). Initialize and Shutdown run once per level load (a handful in a session). Intersect and Occluded run once per cast the
  * game makes against its static level: by the AI's patrol update and by bullets (the three callers in bvh_targets.h) and, with the gate off, by every
@@ -47,7 +54,7 @@
  *             registration table by the configuration step (combat_install.h); the module writes none
  *   install   {"event":"combat_bvh_install","result":"installed|off|refused","reason":"..","hooks":<n>,"gate":0|1,"touch":0|1,"allowed_casts":<n>,"msg":".."}
  *             Info for installed and off (`reason` `off_config`), Error for a refusal (`reason` is the cause, `hook` the one that stopped it).
- *   tree      {"event":"combat_bvh_tree","result":"built|none|refused","why":"..","data":"0x..","triangle4":<n>,"nodes":<n>,"root_ref":"0x.."}
+ *   tree      {"event":"combat_bvh_tree","result":"built|none|refused|skipped","why":"..","data":"0x..","triangle4":<n>,"nodes":<n>,"root_ref":"0x..","level":"0x..","scope":"combat|arena|other|unknown"}
  *   hit       {"event":"combat_bvh_first_hit",...} and {"event":"combat_bvh_first_block",...}  once each: the first answered hit and blocked segment
  *   summary   {"event":"combat_bvh_summary","window_s":10,"intersect":..,"occluded":..,..,"us_per_cast_avg":"..","us_per_cast_max":".."}  every 10 s a counter moved
  *   scope     {"event":"combat_bvh_scope","from":0|1,"to":0|1,"level":"0x.."}  Info, one per change of the answer
@@ -68,12 +75,19 @@
 namespace nevr_quest::combat::bvh {
 
 namespace detail {
-// Whether a combat map is loaded and no Echo Arena level is, as of the last look. Written by the tick's callback, read by any thread.
-inline std::atomic<bool> g_inCombatMap{false};
+// Whether a combat map or the combat lobby is loaded and no Echo Arena level is, as of the last look. Written by the tick's callback, read by any thread.
+inline std::atomic<bool> g_inCombatOrLobby{false};
 }  // namespace detail
 
-// True while a combat map is loaded and no Echo Arena level is. One relaxed load.
-inline bool InCombatMap() noexcept { return detail::g_inCombatMap.load(std::memory_order_relaxed); }
+// Whether the last look is recent enough to be believed (kStaleAfterSeconds). Out of line: it reads the clock.
+bool LookIsFresh() noexcept;
+
+// How old a look may be and still be believed: the tick looks four times a second, so a look older than this means the tick has stopped.
+inline constexpr double kStaleAfterSeconds = 1.0;
+
+// True while a combat map or the combat lobby is loaded and no Echo Arena level is, and the look that said so is at most kStaleAfterSeconds old. The
+// arena path (a value of false) is one relaxed load; only a true answer reads the clock.
+inline bool InCombatOrLobby() noexcept { return detail::g_inCombatOrLobby.load(std::memory_order_relaxed) && LookIsFresh(); }
 
 // The `combat:` keys the step reads.
 struct Switches {
@@ -94,6 +108,7 @@ bool TreeInstalled() noexcept;
 struct Counters {
   std::uint64_t treesBuilt;     // Initialize calls that produced a tree
   std::uint64_t treesRefused;   // Initialize calls that did not (no geometry, bad sizes, unreadable, table full)
+  std::uint64_t treesSkipped;   // Initialize calls for a level that is not a combat map or the combat lobby: no tree is built
   std::uint64_t intersect;      // casts answered from a tree
   std::uint64_t intersectHit;
   std::uint64_t occluded;
@@ -105,7 +120,7 @@ struct Counters {
 Counters GetCounters() noexcept;
 int TreeCount() noexcept;  // entries in use in the tree table (cap 64)
 
-// The combat tick's callback (combat_tick.h): refreshes `InCombatMap()` and writes the 10 s summary. One clock compare per frame otherwise.
+// The combat tick's callback (combat_tick.h): refreshes `InCombatOrLobby()` and writes the 10 s summary. One clock compare per frame otherwise.
 void Tick(std::uintptr_t game) noexcept;
 
 // ---- test support ------------------------------------------------------------------------------------------------------
@@ -116,7 +131,7 @@ void SetImageLookupForTest(sentinel::ImageLookup lookup) noexcept;
 void SetPinsForTest(const Pins* pins) noexcept;
 // The clock the tick reads, in seconds; nullptr restores CLOCK_MONOTONIC.
 void SetClockForTest(double (*clock)() noexcept) noexcept;
-// The return address (an ELF vaddr) of the last StaticRaycast the gate saw while a combat map was loaded.
+// The return address (an ELF vaddr) of the last StaticRaycast the gate saw while a combat map or the combat lobby was loaded.
 std::uintptr_t LastGateReturnForTest() noexcept;
 // The switches the last Install was given (the registration table's row reads them from the configuration).
 Switches LastSwitchesForTest() noexcept;

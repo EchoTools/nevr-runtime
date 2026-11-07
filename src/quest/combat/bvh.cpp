@@ -49,13 +49,15 @@ std::atomic<const Pins*> g_pinsOverride{nullptr};
 std::atomic<double (*)() noexcept> g_clock{nullptr};
 std::atomic<int> g_lastSwitches{0};  // bit 0 bvh, 1 gate, 2 touch: what the last Install was given (a test seam)
 
-std::atomic<std::uint64_t> g_built{0}, g_refused{0}, g_int{0}, g_intHit{0}, g_occ{0}, g_occHit{0}, g_gated{0}, g_touch{0}, g_stock{0};
+std::atomic<std::uint64_t> g_skipped{0}, g_built{0}, g_refused{0}, g_int{0}, g_intHit{0}, g_occ{0}, g_occHit{0}, g_gated{0}, g_touch{0}, g_stock{0};
 std::atomic<std::uint64_t> g_ns{0}, g_maxNs{0};
 std::atomic<bool> g_firstHit{false}, g_firstBlock{false};
 // The tick's: game thread only.
 double g_nextSummary = 0;
 double g_nextLook = 0;
 std::atomic<std::uint64_t> g_scopeLevel{0};
+std::atomic<double> g_lookedAt{0.0};         // the clock of the last look (seconds)
+std::atomic<std::uintptr_t> g_game{0};       // the CR15Game the tick last called with: what Initialize asks about the level it is loading
 
 // One pointer-sized value per thread, for code that runs inside a hooked game call, in place of `thread_local` (the Quest build targets API 26,
 // where the compiler emulates thread_local: a thread's first use allocates, and a hooked call must not allocate). A pthread key keeps its value in
@@ -120,26 +122,31 @@ bool Readable(std::uint64_t addr, std::uint64_t bytes) noexcept {
   return true;
 }
 
+// The level Initialize was called for, as far as the scan knows: its CSymbol64 (0 when unknown) and a token for the class the scope test put it in.
+struct LoadingLevel {
+  std::uint64_t id = 0;
+  const char* scope = "unknown";  // "combat" (a combat map or the combat lobby), "arena" (an Echo Arena level), "other" (any other level), "unknown" (no game seen yet)
+};
 void LogTree(sentinel::LogLevel level, const char* result, std::uint64_t data, const char* why, long long tri4, long long nodes,
-             std::uint64_t root) noexcept {
-  char d[19], r[19];
+             std::uint64_t root, const LoadingLevel& loading) noexcept {
+  char d[19], r[19], lv[19];
   sentinel::LogFields(level, "combat_bvh_tree",
                       {{"result", result}, {"data", sentinel::HexString(d, data)}, {"why", why}, {"triangle4", tri4}, {"nodes", nodes},
-                       {"root_ref", sentinel::HexString(r, root)}});
+                       {"root_ref", sentinel::HexString(r, root)}, {"level", sentinel::HexString(lv, loading.id)}, {"scope", loading.scope}});
 }
 
 // ---- Initialize / Shutdown ----
-void BuildTree(void* self, const void* data) noexcept {
+void BuildTree(void* self, const void* data, const LoadingLevel& loading) noexcept {
   const std::uint64_t d = reinterpret_cast<std::uintptr_t>(data);
   if (data == nullptr) {
     g_refused.fetch_add(1, std::memory_order_relaxed);
-    LogTree(sentinel::LogLevel::kInfo, "none", 0, "no data", 0, 0, 0);
+    LogTree(sentinel::LogLevel::kInfo, "none", 0, "no data", 0, 0, 0, loading);
     return;
   }
   std::uint8_t hdr[kHeaderSize];
   if (!SafeRead(static_cast<std::uintptr_t>(d), hdr, sizeof(hdr))) {
     g_refused.fetch_add(1, std::memory_order_relaxed);
-    LogTree(sentinel::LogLevel::kWarn, "refused", d, "header unreadable", 0, 0, 0);
+    LogTree(sentinel::LogLevel::kWarn, "refused", d, "header unreadable", 0, 0, 0, loading);
     return;
   }
   Tree t;
@@ -149,12 +156,12 @@ void BuildTree(void* self, const void* data) noexcept {
     g_refused.fetch_add(1, std::memory_order_relaxed);
     // an all-empty resource is what a level without static geometry ships: not a fault
     const bool empty = std::strcmp(why, "empty") == 0;
-    LogTree(empty ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "none", d, why, 0, 0, 0);
+    LogTree(empty ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "none", d, why, 0, 0, 0, loading);
     return;
   }
   if (!Readable(b.tri_ptr, b.tri_bytes) || !Readable(b.node_ptr, b.node_bytes)) {
     g_refused.fetch_add(1, std::memory_order_relaxed);
-    LogTree(sentinel::LogLevel::kWarn, "refused", d, "block unreadable", t.ntris, t.nnodes, static_cast<std::uint32_t>(t.root));
+    LogTree(sentinel::LogLevel::kWarn, "refused", d, "block unreadable", t.ntris, t.nnodes, static_cast<std::uint32_t>(t.root), loading);
     return;
   }
   int slot = -1;
@@ -170,20 +177,33 @@ void BuildTree(void* self, const void* data) noexcept {
   pthread_mutex_unlock(&g_treeMutex);
   if (slot < 0) {
     g_refused.fetch_add(1, std::memory_order_relaxed);
-    LogTree(sentinel::LogLevel::kError, "refused", d, "tree table full", t.ntris, t.nnodes, static_cast<std::uint32_t>(t.root));
+    LogTree(sentinel::LogLevel::kError, "refused", d, "tree table full", t.ntris, t.nnodes, static_cast<std::uint32_t>(t.root), loading);
     return;
   }
   *static_cast<const Tree**>(self) = &g_trees[slot].tree;
   g_built.fetch_add(1, std::memory_order_relaxed);
-  LogTree(sentinel::LogLevel::kInfo, "built", d, "", t.ntris, t.nnodes, static_cast<std::uint32_t>(t.root));
+  LogTree(sentinel::LogLevel::kInfo, "built", d, "", t.ntris, t.nnodes, static_cast<std::uint32_t>(t.root), loading);
 }
 
-// The game's Initialize runs first; then the tree is built from the data it was given. Built whatever the level (see the header).
+// The game's Initialize runs first; then, when the level being loaded is a combat map or the combat lobby (or the game has not been seen yet, so nothing is known
+// about it), the tree is built from the data it was given. A level that is an Echo Arena level or any other level is skipped: its CBVHTree keeps the word 0
+// and the game's function answers for it, and the build's page probes (about a millisecond for a level with geometry) are not paid.
 void OnInitialize(InitThunk::Fn original, void* self, const void* data) noexcept {
   original(self, data);
   if (self == nullptr) return;
   *static_cast<const Tree**>(self) = nullptr;
-  BuildTree(self, data);
+  LoadingLevel loading;
+  const std::uintptr_t game = g_game.load(std::memory_order_acquire);
+  if (game != 0) {
+    const level::Kind kind = level::Classify(game, /*lobby=*/true, &loading.id, /*inFlight=*/true);
+    loading.scope = kind == level::Kind::kCombatOrLobby ? "combat" : kind == level::Kind::kEchoArena ? "arena" : "other";
+    if (kind != level::Kind::kCombatOrLobby) {
+      g_skipped.fetch_add(1, std::memory_order_relaxed);
+      LogTree(sentinel::LogLevel::kInfo, "skipped", reinterpret_cast<std::uintptr_t>(data), "not a combat level", 0, 0, 0, loading);
+      return;
+    }
+  }
+  BuildTree(self, data, loading);
 }
 
 void OnShutdown(ShutThunk::Fn original, void* self) noexcept {
@@ -223,7 +243,7 @@ void LogFirstBlock(const float* a, const float* b) noexcept {
 // ---- Intersect ----
 // With no combat map loaded the game's function answers (the arena path). The ray is the caller's CRay (six floats: origin, direction).
 bool OnIntersect(IntersectThunk::Fn original, const void* self, const float* ray, std::uint8_t* hit) noexcept {
-  if (!InCombatMap()) return original(self, ray, hit);
+  if (!InCombatOrLobby()) return original(self, ray, hit);
   if (g_gateOn.load(std::memory_order_relaxed) && g_mark.Get() == 0) {  // not a cast the tree is for: the stock miss
     g_gated.fetch_add(1, std::memory_order_relaxed);
     return original(self, ray, hit);
@@ -255,7 +275,7 @@ bool OnIntersect(IntersectThunk::Fn original, const void* self, const float* ray
 // ---- Occluded ----
 // The segment from `a` to `b` (C3Vectors, three floats each).
 bool OnOccluded(OccludedThunk::Fn original, const void* self, const float* a, const float* b) noexcept {
-  if (!InCombatMap()) return original(self, a, b);
+  if (!InCombatOrLobby()) return original(self, a, b);
   const Tree* t = TreeOf(self);
   if (t == nullptr) {
     g_stock.fetch_add(1, std::memory_order_relaxed);
@@ -279,14 +299,14 @@ bool OnOccluded(OccludedThunk::Fn original, const void* self, const float* a, co
 
 // ---- Touch: CR15TouchInteractQuery::RayQueryStatic as on the stock Quest: a miss, nothing written (disassembly 0x21cf458: cbz w0 -> epilogue) ----
 bool OnTouch(TouchThunk::Fn original, const void* a, const void* b, void* c, float* d) noexcept {
-  if (!InCombatMap()) return original(a, b, c, d);
+  if (!InCombatOrLobby()) return original(a, b, c, d);
   g_touch.fetch_add(1, std::memory_order_relaxed);
   return false;
 }
 
 // ---- Gate: the callers' gate. `caller` is the instruction after the game's call. ----
 bool OnGate(GateThunk::Fn original, const void* caller, const void* self, const void* ray, void* hit, void** gs) noexcept {
-  if (!InCombatMap()) return original(self, ray, hit, gs);
+  if (!InCombatOrLobby()) return original(self, ray, hit, gs);
   const std::uint64_t ret = reinterpret_cast<std::uintptr_t>(caller) - g_base.load(std::memory_order_relaxed);
   g_lastGateReturn.store(ret, std::memory_order_relaxed);
   bool allowed = false;
@@ -444,8 +464,8 @@ ModuleResult Install(const Switches& switches) noexcept {
 bool TreeInstalled() noexcept { return g_installed.load(std::memory_order_acquire); }
 
 Counters GetCounters() noexcept {
-  return {g_built.load(),  g_refused.load(), g_int.load(), g_intHit.load(), g_occ.load(),
-          g_occHit.load(), g_gated.load(),   g_touch.load(), g_stock.load()};
+  return {g_built.load(),  g_refused.load(), g_skipped.load(), g_int.load(), g_intHit.load(), g_occ.load(),
+          g_occHit.load(), g_gated.load(),   g_touch.load(),   g_stock.load()};
 }
 
 int TreeCount() noexcept {
@@ -471,29 +491,32 @@ void LogSummary() noexcept {
                        {"msg", "casts answered from the level's static BVH in this window; stock counts calls the game's function answered"}});
 }
 
-void LookAtLevels(std::uintptr_t game) noexcept {
-  const level::Loaded loaded = level::Scan(game);
-  const bool in = loaded.combatMap && !loaded.echoArena;
-  const bool before = detail::g_inCombatMap.load(std::memory_order_relaxed);
+void LookAtLevels(std::uintptr_t game, double now) noexcept {
+  std::uint64_t levelId = 0;
+  const bool in = level::Classify(game, /*lobby=*/true, &levelId) == level::Kind::kCombatOrLobby;
+  const bool before = detail::g_inCombatOrLobby.load(std::memory_order_relaxed);
+  g_lookedAt.store(now, std::memory_order_relaxed);  // every look ages from here, whether or not the answer changed
   if (in == before) return;
-  detail::g_inCombatMap.store(in, std::memory_order_relaxed);
-  const std::uint64_t levelId = in ? loaded.combatMapLevel : 0;
+  detail::g_inCombatOrLobby.store(in, std::memory_order_relaxed);
   g_scopeLevel.store(levelId, std::memory_order_relaxed);
   char lv[19];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_bvh_scope",
                       {{"from", before ? 1 : 0}, {"to", in ? 1 : 0}, {"level", sentinel::HexString(lv, levelId)},
-                       {"msg", in ? "a combat map is loaded: casts are answered from its static BVH"
-                                  : "no combat map is loaded: the game's own answers stand"}});
+                       {"msg", in ? "a combat map or the combat lobby is loaded: casts are answered from its static BVH"
+                                  : "no combat map or combat lobby is loaded: the game's own answers stand"}});
 }
 
 }  // namespace
 
+bool LookIsFresh() noexcept { return NowSeconds() - g_lookedAt.load(std::memory_order_relaxed) <= kStaleAfterSeconds; }
+
 void Tick(std::uintptr_t game) noexcept {
   if (!g_installed.load(std::memory_order_acquire)) return;
   const double now = NowSeconds();
+  g_game.store(game, std::memory_order_release);
   if (now >= g_nextLook) {
     g_nextLook = now + kLookEverySeconds;
-    LookAtLevels(game);
+    LookAtLevels(game, now);
   }
   if (now < g_nextSummary) return;
   g_nextSummary = now + kSummaryEverySeconds;
@@ -541,7 +564,10 @@ void ResetForTest() noexcept {
   g_nextSummary = 0;
   g_nextLook = 0;
   g_scopeLevel.store(0);
-  detail::g_inCombatMap.store(false);
+  g_lookedAt.store(0.0);
+  g_game.store(0);
+  g_skipped.store(0);
+  detail::g_inCombatOrLobby.store(false);
   g_mark.Set(0);
 }
 

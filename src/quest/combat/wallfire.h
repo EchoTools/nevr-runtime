@@ -13,12 +13,12 @@
  *
  * Which APKs (ADR 0046 rule 5). The q15t and combat variants only (the normal step of combat_install.h), after bvh in the registration table.
  *
- * Arena (same APK). The check acts only at FireGunLocal's call site and only while `bvh::InCombatMap()`; the arena path of a QueryCollision call
+ * Arena (same APK). The check acts only at FireGunLocal's call site and only while `bvh::InCombatOrLobby()` (a combat map or the combat lobby, a fresh look); the arena path of a QueryCollision call
  * is the game's function, a compare of the caller with the site and a return.
  *
- * Reads. The request and the gamespace are the objects the game's caller formed and the stub called next dereferences: gs+8, the game and its
- * vtable are read with plain loads, each after a null test (the stub reads the same chain). The code word at the site and the occluded slot are read
- * once, at install, with process_vm_readv.
+ * Reads. The request is the game's caller's stack frame (0x2255660 add x1, sp, #0x30): a plain load. The game's QueryCollision never reads `this`
+ * (0x19067a0 mov x0, sp), so nothing the game does on this path backs `gs+8`, the game or its vtable +0x278: those three words are read with
+ * SafeRead (about 1.5 us a shot, at the site only, after the scope test). The code word at the site and the occluded slot are read once, at install.
  *
  * Frequency (ADR 0038). QueryCollision runs once per collision query of the game's (the rate in arena and combat is not measured on a headset);
  * the check runs once per shot the stock query let through, a few a second per gun. Measured per call on the host: docs/quest/combat/wallfire.md "Cost".

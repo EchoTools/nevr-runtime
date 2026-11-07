@@ -409,6 +409,12 @@ void ShotsFromTheSiteAreCheckedOnACombatMap() {
   // the game's structures: each wrong one gets the stock answer
   FakeGs badGs = {0, 0, 0, 0};  // no CncaGame
   QCHECK(!CallQuerySite(reinterpret_cast<std::uintptr_t>(&badGs), Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));
+  FakeGs wild = {0, 0x1000, 0, 0};  // a CncaGame that cannot be read
+  QCHECK(!CallQuerySite(reinterpret_cast<std::uintptr_t>(&wild), Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));
+  FakeGame wildVtable = {0x1000, {}};  // a vtable pointer that cannot be read
+  FakeGs gsWildVtable = {0, reinterpret_cast<std::uintptr_t>(&wildVtable), 0, 0};
+  QCHECK(!CallQuerySite(reinterpret_cast<std::uintptr_t>(&gsWildVtable), Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));
+  QCHECK(!CallQuerySite(0x1000, Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));  // a gamespace that cannot be read
   FakeGame nov = {0, {}};
   FakeGs gsNov = {0, reinterpret_cast<std::uintptr_t>(&nov), 0, 0};
   QCHECK(!CallQuerySite(reinterpret_cast<std::uintptr_t>(&gsNov), Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));  // a game without a vtable
@@ -419,7 +425,7 @@ void ShotsFromTheSiteAreCheckedOnACombatMap() {
   QCHECK(!CallQuerySite(reinterpret_cast<std::uintptr_t>(&gsOther), Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));
   QCHECK(Count(Event("combat_wallfire_skipped"), kWarn) == 1);  // once
   c = C();
-  QCHECK(c.skippedGame == 3 && c.checked == 5 && g_stubCalls == 5);
+  QCHECK(c.skippedGame == 6 && c.checked == 5 && g_stubCalls == 5);
   // the pinned game still works after the others, and a vtable whose slot changes later is checked again
   QCHECK(CallQuerySite(gs, Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));
   QCHECK(!CallQuerySite(reinterpret_cast<std::uintptr_t>(&gsOther), Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff));
@@ -447,7 +453,7 @@ void WithoutACombatMapTheGamesAnswerStands() {
   const std::uintptr_t gs = reinterpret_cast<std::uintptr_t>(&g_gs);
   LoadLevels({"mpl_arena_a"});
   Look();
-  QCHECK(!bvh::InCombatMap());
+  QCHECK(!bvh::InCombatOrLobby());
   g_reads = 0;
   g_scans = 0;
   nevr_quest::combat::SetReadCounterForTest(&g_reads);
@@ -459,6 +465,10 @@ void WithoutACombatMapTheGamesAnswerStands() {
   QCHECK(g_reads == 0 && g_scans == 0);  // the arena path reads no game memory and scans no level
   QCHECK(g_stockQuery == 2 && g_stubCalls == 0 && g_gameCalls == 0);
   QCHECK(C().atSite == 0 && C().checked == 0 && C().blocked == 0);
+  LoadLevels({"mpl_lobby_b"});  // a lobby arena players use is no combat class
+  Look();
+  QCHECK(!bvh::InCombatOrLobby());
+  QCHECK(!CallQuerySite(gs, Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff) && g_stubCalls == 0);
   LoadLevels({"mpl_combat_dyson", "mpl_arena_a"});  // an arena level that is loaded wins
   Look();
   QCHECK(!CallQuerySite(gs, Req(0, 0, 0, 0, 0, 5.2f), 0xffffffff) && g_stubCalls == 0);

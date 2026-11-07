@@ -37,15 +37,17 @@ Initialize; the module reads the two memory blocks that header points at (triang
 byte is written to a file, embedded or copied (the tree table keeps only the header's two pointers and sizes, never the geometry).
 
 Per hook:
-- **Initialize** `OnInitialize(original, self, data)`: calls the game's function, zeroes the 8-byte word, then `BuildTree`: `SafeRead` the 0x50-byte header;
+- **Initialize** `OnInitialize(original, self, data)`: calls the game's function, zeroes the 8-byte word, then, when the level being loaded is a combat map or the combat lobby (see Scope below), `BuildTree`: `SafeRead` the 0x50-byte header;
   `Parse` (block sizes are multiples of 0xe0 / 0x40, bounded, non-zero, addresses do not wrap or sit in the null page; a block pointer of 0 means the block
   follows the header, as in the resource file); probe that every page of both blocks reads (`Readable`); take an entry of a 64-entry static table (the same
   data address reuses its entry; the 65th distinct tree is refused with an Error line) and store `&entry.tree` in the CBVHTree word. Refusals leave the word 0,
-  so the stock miss stands, and log why (`combat_bvh_tree` `none` for no geometry, `refused` for a layout or memory doubt). This runs at level load, in every
-  level; it needs no level answer (an arena level ships an empty resource and logs `none`), so the module does not depend on the level being in
-  `combat_level`'s tables while it loads.
+  so the stock miss stands, and log why (`combat_bvh_tree` `none` for no geometry, `refused` for a layout or memory doubt). Every `combat_bvh_tree` record names the
+  level the scan found (`level`) and its class (`scope`: `combat`, `arena`, `other`, or `unknown` before the tick has shown the module a game, when it builds). A
+  level that is not a combat map or the combat lobby is `skipped` (Info): no scan-free page probes are paid for it (about a millisecond for a level with
+  geometry on the host), and its CBVHTree keeps the word 0. The scan reads the gamespaces still loading as well (`inFlight`), because Initialize runs while the
+  level's resources are built, before the level is in the loaded tables; this is the same source the table-step modules use.
 - **Shutdown**: the game's function, then the word is cleared. A later cast finds no tree and takes the stock miss.
-- **Intersect**: while no combat map is loaded (section 4) the game's function answers. Else the gate (section 4); then `TreeOf(self)` reads the CBVHTree word
+- **Intersect**: while no combat map or combat lobby is loaded (section 4) the game's function answers. Else the gate (section 4); then `TreeOf(self)` reads the CBVHTree word
   and accepts it only if it is one of the table's entries (aligned, inside the table); the ray (6 floats) is copied; `Trace`, nearest hit, `t in (0, inf)` in
   units of the direction (Embree 1.0); on a hit, writes SBVHHit `id0 +0`, `id1 +4`, `u +8`, `v +0xc`, `t +0x10` and the unit normal at `+0x38` and nothing
   else; a miss writes nothing. Any doubt (no tree, a word that is not a table entry) calls the game's function.
@@ -160,11 +162,13 @@ cast inside an allowed one is gated and the outer one still answers afterwards; 
 `CBVHTree::Intersect` with no marked cast is gated; Occluded is not gated.
 The gate is installed first: until it is in no cast is marked, so a tree built a moment later answers none.
 
-**Scope (arena shares the APK).** Every query hook calls the game's function while `InCombatMap()` is false. The value is a relaxed atomic the combat tick refreshes
-four times a second from `combat_level.h` `Scan` (a combat map is loaded and no Echo Arena level is; an arena level that is loaded wins). The word starts false, so
-nothing is combat before the first look. The arena path of a query is that load, a test and a tail call of the game's function. KNOWN-WRONG #2246: this is the
-module's own cached answer; combat_scope (F19) is the shared one and this module switches to it when it lands (it also fails closed when the tick stops;
-this one does not: with no frames there are no casts).
+**Scope (arena shares the APK).** Every query hook calls the game's function while `InCombatOrLobby()` is false. The value is a relaxed atomic the combat tick refreshes
+four times a second from `combat_level.h` (`Classify` of the loaded levels with the combat lobby: a combat map or the combat lobby is loaded and no Echo Arena level
+is; an arena level that is loaded wins; a lobby arena players use is no class). The word starts false, so nothing is combat before the first look, and it fails
+closed: a look older than one second is not believed (`kStaleAfterSeconds`), so a tick that stopped leaves every hook calling the game's function. The arena path
+of a query is one relaxed load of a false value, a test and a tail call of the game's function; only a true value reads the clock. The combat lobby is in scope
+because the q15t plugin answered in every level; the levels left out are the Echo Arena levels and the lobbies arena players use. KNOWN-WRONG #2246: this is the
+module's own cached answer; combat_scope (F19) is the shared one and this module switches to it when it lands.
 
 
 ## 5. Behaviour
@@ -184,12 +188,16 @@ this one does not: with no frames there are no casts).
 2. **A cycle budget**: the traversal stops after `2 * nodes + 2` pops and answers "miss". A well-formed tree pops each node and leaf once; a malformed tree with
    a loop would otherwise spin. Also: stack depth over 128, an index outside the node or triangle block, a leaf past the triangle block: "miss".
 3. **Non-finite or zero-direction rays hit nothing** (`Ray::ok`).
-4. **Reads.** The header and both blocks are probed with `process_vm_readv` once, at Initialize. The arguments of a cast (this, the ray, the two points) are plain
-   loads: the caller formed them and dereferences them, and a system call per cast cost more than the traversal (section 10).
+4. **Reads.** The header and both blocks are probed with `process_vm_readv` once, at Initialize. The arguments of a cast are plain loads, each backed by a
+   dereference the game makes of the same object (stock libr15 disassembly): Intersect's ray is read from the caller's CRay by `CncaGame::StaticRaycast`
+   (0x18f23c4), which passes its own stack copy on (0x18f2510); `LocalStaticRaycast` passes it through unread and its one caller (`DetectStaticBox`) builds it on its
+   stack. Occluded's two points are read by `CncaGame::StaticRaycastOccluded` (0x18f2660), which passes its own copies on (0x18f27b4); `LocalStaticRaycastOccluded`
+   passes its caller's pointers through unread and has no static caller, so that path relies on the references being valid. The CBVHTree word is read from the
+   object the game found that frame (the game does not read +0x148 itself). A system call per cast cost more than the traversal (section 10).
 5. **The CBVHTree word must be one of our 64 table entries**; any other value takes the game's function. A re-Initialize on the same data address reuses its entry.
 6. **Switches are `combat:` keys** (no system properties, no kill files).
 7. **All-or-none install with rollback through the manager**, and the gate installed first.
-8. **Scope: combat maps only** (section 4).
+8. **Scope: combat maps and the combat lobby only, with a fresh look** (section 4); a tree only for those levels.
 9. **No `1e-20` clamp on a zero direction component**: IEEE division by zero gives +-inf and the slab test is exact for it.
 10. **Structured logging** (`combat_bvh_*` records); counters only on the per-call path, plus one line for the first hit and the first blocked segment.
 
@@ -203,8 +211,8 @@ windows of the logged session, `touch_kept_off` 374 and 1176 per 10 s); the head
 
 On a combat APK built at a tag after this unit (or a development APK repacked with the `combat` variant word, or `combat.force: true`), in a combat match:
 1. `combat_bvh_install` `result` `installed`, `hooks` 6, `allowed_casts` 3.
-2. At level load one `combat_bvh_tree` `built` per CBVHResource with `triangle4` and `nodes` non-zero (the logged combat levels: 36864/24633, 4096/4097, 53815/31572).
-3. `combat_bvh_scope` `to` 1 at the combat map and `to` 0 on leaving it.
+2. At level load one `combat_bvh_tree` `built` per CBVHResource with `triangle4` and `nodes` non-zero (the sizes seen in one logged session: 36864/24633, 4096/4097, 53815/31572; the log does not name their levels, so the first headset run reads `level` and `scope` in these records).
+3. `combat_bvh_scope` `to` 1 at the combat map (and the combat lobby) and `to` 0 on leaving it; no `built` record with `scope` other than `combat`, and `skipped` records for the arena levels and the other lobbies.
 4. The acting lines: `combat_bvh_first_hit` (`mesh` >= 0, `tri` >= 0, `t` positive, a unit `normal`) and `combat_bvh_summary` with `intersect` > 0, `intersect_hit` > 0,
    `gated_off` > 0, `stock` 0 or tiny; shots at a wall do not pass (`occluded_blocked` > 0).
 
@@ -236,8 +244,10 @@ Measured on the development host (x86-64, g++ -O2, one thread), not on a headset
 | one `process_vm_readv` of 24 bytes (what each argument read cost before) | 487 ns | the former code made 2 per Intersect and 3 per Occluded |
 
 Per-frame cost in an arena match: the sum over calls of about 1 ns (a relaxed load, a test and a tail call), so a thousand calls a frame at 90 Hz would be
-about 1 us a frame. Unmeasured: the real call rate in arena (the headset logs carry none). The tick adds a clock read per frame and, four times a second, a scan of
-the game's two level tables (a handful of `process_vm_readv` calls).
+about 1 us a frame. Unmeasured: the real call rate in arena (the headset logs carry none). The tick adds a clock read per frame and, four times a second in every
+level, arena included, a scan of the game's level tables: 4 + 3 x N `process_vm_readv` calls for N gamespaces, about 5 us a scan with one gamespace on the host,
+so about 20 us a second of game-thread time. A level load that is not a combat level pays one scan and no page probes. For a combat level the page probes of the
+build cost about 1.2 ms (the 36,864-record tree) to 1.7 ms (the 53,815-record tree) on the host.
 
 ## 11. Tests and mutants
 
@@ -245,7 +255,8 @@ the game's two level tables (a handful of `process_vm_readv` calls).
 `t`/`u`/`v`/normal, open range ends, a room at several leaf sizes, a random soup against two brute-force references, degenerate and malformed trees, the stack
 and cycle limits, empty children, a node reference past the block) and `bvh_test` (the real thunks through the real manager into an image built in memory; the
 hooks called through their slots; the gate from two call sites and two threads; refusals and rollback; the 64-entry table; unreadable and half-mapped blocks;
-the switches and their lines; the legacy files; the scope: every hook calls the game's function with no combat map, with an arena level beside a combat map, with
-the combat lobby; the 10 s summary; the pinned constants).
+the switches; the legacy files; the scope: every hook calls the game's function with no combat map, with an arena level beside a combat map, with a lobby arena
+players use; the combat lobby is in scope; a stalled tick fails closed (the clock moves with no tick); a level that is not a combat level gets no tree, a loading
+combat map does; the arena paths make no read and no scan; the 10 s summary; the pinned constants).
 Mutants: `src/quest/combat/mutants.d/bvh_core.sh` (rules of `bvh_core.h`, target `bvh_core_test`) and `src/quest/combat/mutants.d/bvh.sh` (rules of `bvh.cpp`,
 `bvh.h`, `bvh_targets.h`), run with `src/quest/combat/mutants.sh bvh` and `bvh_core`.
