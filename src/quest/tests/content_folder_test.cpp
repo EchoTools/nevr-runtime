@@ -253,6 +253,16 @@ TEST(AFolderWithoutContentJsonIsRefused) {
   CHECK_EQ(d.detail, rig.content + "/echocombat/content.json");
 }
 
+TEST(AContentJsonThatIsNoRegularFileIsRefusedAsMissing) {
+  // A device (here a link to /dev/null) reads as an empty file; only a regular file is a descriptor.
+  Rig rig;
+  MakeDirs(rig.content + "/echocombat");
+  CHECK(::symlink("/dev/null", (rig.content + "/echocombat/content.json").c_str()) == 0);
+  const Decision d = rig.Run();
+  CheckRefused(rig, d, "no_content_json");
+  CHECK_EQ(d.detail, rig.content + "/echocombat/content.json");
+}
+
 TEST(AMalformedContentJsonIsRefusedWithItsReason) {
   Rig rig;
   rig.MakePack("echocombat", false, [](nlohmann::json& j) { j["format"] = 2; });
