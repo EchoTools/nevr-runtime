@@ -159,6 +159,14 @@ The only host is `evr.echo.taxi`. A request for the APK under any other director
 from it proves nothing. A fetch counts only when it comes from `evr.echo.taxi`, is not a redirect, is not `text/html`, and
 has the size and SHA-256 you expected (the `.sha256` file holds one `sha256sum` line for the APK's name).
 
+The arena APK (the store APK with the release's loader and no combat) is beside it, listed in the manifest as the kind
+`quest-apk-arena`, with its own SHA-256 file:
+
+```
+https://evr.echo.taxi/nevr-runtime/v<version>/nevr-runtime-v<version>-arena-quest.apk
+https://evr.echo.taxi/nevr-runtime/v<version>/nevr-runtime-v<version>-arena-quest.apk.sha256
+```
+
 `just publish-quest-apk vX.Y.Z` puts both files there and makes this check against the public host before it exits 0
 (RELEASING.md, "The Quest APK"). Nothing else writes to that location, and a published name is never overwritten.
 

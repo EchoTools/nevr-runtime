@@ -114,6 +114,7 @@ bool CombatActive() noexcept;
 bool InstallCombatEarly() noexcept;
 bool InstallCombatNormal() noexcept;  // true when the step ran (false: combat is off here, or the step was already ended)
 void NoteCombatNotStarted(const char* reason) noexcept;
+void NoteCombatProcessEnd() noexcept;  // each combat module's end-of-process line (combat::NoteProcessEnd)
 void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept;
 
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real

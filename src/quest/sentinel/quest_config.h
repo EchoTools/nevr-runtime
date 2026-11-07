@@ -186,6 +186,11 @@ struct CombatConfig {
   CombatText gateLinkLibs;                        // `combat.gate_link_libs`: which script libraries the menu gate answers; unset: the module's 21
   CombatSwitch pfx;     // `combat.pfx`: the particle-renderer gate, open in combat maps only (combat/pfx.h)
   CombatSwitch pfxtev;  // `combat.pfxtev`: the event-effect id decision, combat maps only (combat/pfxtev.h)
+  CombatSwitch bvh{true, Source::kAbsent};       // `combat.bvh`: the static BVH answers casts on combat maps only (combat/bvh.h)
+  CombatSwitch bvhGate{true, Source::kAbsent};   // `combat.bvh_gate`: only the three listed callers' casts use the tree
+  CombatSwitch bvhTouch{true, Source::kAbsent};  // `combat.bvh_touch`: touch rays are answered with a miss, as the stock Quest does
+  CombatSwitch wallfire{true, Source::kAbsent};  // `combat.wallfire`: a shot through a wall is refused on combat maps; needs combat.bvh (combat/wallfire.h)
+  CombatSwitch sendguard;  // `combat.sendguard`: a send to a game space that is not loaded is dropped, not faulted (combat/sendguard.h)
 };
 
 struct LogEvent {

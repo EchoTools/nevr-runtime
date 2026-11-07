@@ -1,4 +1,4 @@
-// Test-only: builds Embree BVH2<Triangle4> trees (the game's static BVH format, src/quest/plugins/q15t/src/bvh_core.h) from synthetic triangles, and
+// Test-only: builds Embree BVH2<Triangle4> trees (the game's static BVH format, src/quest/combat/bvh_core.h) from synthetic triangles, and
 // lays them out as a CBVHResource's SBVHTreeData. Nothing here is game-derived: every mesh is made by the tests.
 #pragma once
 
@@ -8,12 +8,12 @@
 #include <utility>
 #include <vector>
 
-#include "bvh_core.h"
+#include "quest/combat/bvh_core.h"
 
 namespace bt {
 
-using q15t::bvh::Node;
-using q15t::bvh::Tri4;
+using nevr_quest::combat::bvh::Node;
+using nevr_quest::combat::bvh::Tri4;
 
 struct TriIn {
   float a[3], b[3], c[3];
@@ -178,12 +178,12 @@ struct Resource {
 inline Resource MakeResource(const Built& b, bool fixed_ptrs) {
   Resource r;
   const uint64_t s0 = b.tris.size() * sizeof(Tri4), s1 = b.nodes.size() * sizeof(Node);
-  r.bytes.assign(q15t::bvh::kHeaderSize + s0 + s1, 0);
+  r.bytes.assign(nevr_quest::combat::bvh::kHeaderSize + s0 + s1, 0);
   uint8_t* d = r.bytes.data();
-  std::memcpy(d + q15t::bvh::kHeaderSize, b.tris.data(), s0);
-  std::memcpy(d + q15t::bvh::kHeaderSize + s0, b.nodes.data(), s1);
-  const uint64_t p0 = fixed_ptrs ? reinterpret_cast<uintptr_t>(d + q15t::bvh::kHeaderSize) : 0;
-  const uint64_t p1 = fixed_ptrs ? reinterpret_cast<uintptr_t>(d + q15t::bvh::kHeaderSize + s0) : 0;
+  std::memcpy(d + nevr_quest::combat::bvh::kHeaderSize, b.tris.data(), s0);
+  std::memcpy(d + nevr_quest::combat::bvh::kHeaderSize + s0, b.nodes.data(), s1);
+  const uint64_t p0 = fixed_ptrs ? reinterpret_cast<uintptr_t>(d + nevr_quest::combat::bvh::kHeaderSize) : 0;
+  const uint64_t p1 = fixed_ptrs ? reinterpret_cast<uintptr_t>(d + nevr_quest::combat::bvh::kHeaderSize + s0) : 0;
   std::memcpy(d + 0x00, &p0, 8);
   std::memcpy(d + 0x08, &s0, 8);
   std::memcpy(d + 0x20, &p1, 8);
