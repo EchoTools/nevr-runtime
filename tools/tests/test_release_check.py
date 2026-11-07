@@ -126,7 +126,7 @@ class ReleaseCheckTest(unittest.TestCase):
         tools = pathlib.Path(__file__).resolve().parent.parent
         root = self.root / "clone"
         (root / "tools").mkdir(parents=True)
-        for name in ("release_preflight.py", "quest_apk_version.py"):
+        for name in ("release_preflight.py", "quest_apk_version.py", "next_release_version.py"):
             shutil.copy(tools / name, root / "tools" / name)
         subprocess.run(["git", "init", "-q", str(root)], check=True)
         subprocess.run(["git", "-C", str(root), "remote", "add", "origin",

@@ -2,7 +2,7 @@
 
 A release is a version plus GitHub's pre-release flag. The packaging path has NO flag input and no word of
 the zip, its SHA256SUMS, the release notes or SIGNING.txt depends on it: promoting a release changes no byte.
-A local build is a development build (X.Y.(Z+1)-dev.N+sha) and is packaged under a dev name.
+A local build is a development build (<next>-dev.N+sha) and is packaged under a dev name.
 """
 
 import hashlib

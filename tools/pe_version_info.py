@@ -14,10 +14,10 @@ Windows host and no binutils.
 value, or a version other than the one the DLL's own NEVR-BUILD literal states (or --version) exits 1. Exit 0
 means every field of both files is exactly what EXPECTED_FILES and the version say.
 
-The 4-part numeric version Windows needs is MAJOR.MINOR.PATCH.DISTANCE of the nearest release tag: a release
-`X.Y.Z` is X.Y.Z.0 and a development build `X.Y.(Z+1)-dev.N+sha` is X.Y.Z.N, so the number sorts like the semver
-string: after the tag it descends from and before the next release. (A development build exactly on a tag, distance
-0, has the tag's number; it differs from the release in its strings.)
+The 4-part numeric version Windows needs: a release `X.Y.Z` is X.Y.Z.0 and a development build `X.Y.Z-dev.N+sha`
+is the release just below X.Y.Z with N in the fourth part: `X.Y.(Z+1)-dev.N` is X.Y.Z.N, `X.(Y+1).0-dev.N` is
+X.Y.65535.N and `(X+1).0.0-dev.N` is X.65535.65535.N, so the number sorts like the semver string: after the
+release before it and before the release it leads to.
 """
 from __future__ import annotations
 
@@ -233,7 +233,9 @@ def read_version_info(path) -> VersionInfo:
 
 
 def numeric_version(version: str) -> tuple:
-    """The 4-part number for a version string: X.Y.Z -> (X, Y, Z, 0); X.Y.(Z+1)-dev.N+sha -> (X, Y, Z, N)."""
+    """The 4-part number for a version string: X.Y.Z -> (X, Y, Z, 0); X.Y.(Z+1)-dev.N+sha -> (X, Y, Z, N);
+    X.(Y+1).0-dev.N+sha -> (X, Y, 65535, N); (X+1).0.0-dev.N+sha -> (X, 65535, 65535, N). The same rule is in
+    cmake/set_project_version_from_git.cmake."""
     match = VERSION.match(version)
     if not match:
         raise PeVersionError(f"'{version}' is neither X.Y.Z nor X.Y.Z-dev.N+sha")
@@ -241,9 +243,14 @@ def numeric_version(version: str) -> tuple:
     if match[4] is None:
         parts = (major, minor, patch, 0)
     else:
-        if patch < 1:
-            raise PeVersionError(f"development version '{version}': the patch of X.Y.(Z+1) is at least 1")
-        parts = (major, minor, patch - 1, int(match[4]))
+        if patch > 0:
+            parts = (major, minor, patch - 1, int(match[4]))
+        elif minor > 0:
+            parts = (major, minor - 1, 0xFFFF, int(match[4]))
+        elif major > 0:
+            parts = (major - 1, 0xFFFF, 0xFFFF, int(match[4]))
+        else:
+            raise PeVersionError(f"development version '{version}': there is no release below 0.0.0")
     if max(parts) > 0xFFFF:
         raise PeVersionError(f"version '{version}' has a part above 65535, which a Windows version cannot hold")
     return parts

@@ -463,11 +463,11 @@ class ReleasePreflightTest(unittest.TestCase):
         env = self.shimmed(f"printf '%s\\n' \"$*\" >> '{argv_log}'")
         result = self.run_preflight("--tag", "v3.3.0", env=env)
         self.assertEqual(result.returncode, 0, result.stdout)
-        allowed = {"rev-parse", "config", "status", "for-each-ref", "ls-remote", "rev-list", "describe"}
+        allowed = {"rev-parse", "config", "status", "for-each-ref", "ls-remote", "rev-list", "tag", "log"}
         calls = argv_log.read_text().splitlines()
         self.assertTrue(calls, "the shim saw no git call: the sensor is blind")
         for call in calls:
-            self.assertIn(call.split()[0], allowed, f"a git call outside the read-only list: {call}")
+            self.assertIn(call.split()[2] if call.startswith("-C ") else call.split()[0], allowed, f"a git call outside the read-only list: {call}")
 
     # --- the versionCode early warning (tools/quest_apk_version.py): the version the next build would stamp ------
 
@@ -563,10 +563,10 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         calls = argv_log.read_text().splitlines()
         self.assertTrue(calls, "the shim saw no git call: the sensor is blind")
-        allowed = {"rev-parse", "config", "status", "for-each-ref", "ls-remote", "rev-list", "describe"}
+        allowed = {"rev-parse", "config", "status", "for-each-ref", "ls-remote", "rev-list", "tag", "log"}
         for call in calls:
             words = call.split()
-            while words and words[0] == "-c":
+            while words and words[0] in ("-c", "-C"):
                 words = words[2:]
             self.assertIn(words[0], allowed, f"a git call outside the read-only list: {call}")
             if words[0] == "config":
