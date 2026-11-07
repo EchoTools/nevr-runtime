@@ -26,17 +26,20 @@
 #include "got_hook.h"
 #include "hook_log.h"
 #include "login_title_hook.h"
+#include "quest/combat/bvh_targets.h"
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/combat_tick_targets.h"
 #include "quest/combat/headset_gates_targets.h"
 #include "quest/combat/heaps_targets.h"
 #include "quest/combat/instmodel_targets.h"
 #include "quest/combat/memsys_targets.h"
+#include "quest/combat/wallfire_targets.h"
 #include "quest/combat/meshstep_targets.h"
 #include "quest/combat/shaderstep_targets.h"
 #include "quest/combat/tablestep_targets.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
+#include "quest/combat/sendguard_targets.h"
 #include "quest/game_login_failures.h"
 #include "quest/login/login_rewrite.h"
 #include "quest/tests/test_check.h"
@@ -483,6 +486,63 @@ void CheckRealHeadsetGates(const LoadedElf& elf) {
   QCHECK(hg::kBindSavedLrOffset == 0x10 + sizeof(std::uint64_t));
 }
 
+// The static BVH's and the wall-fire check's pins (src/quest/combat/bvh_targets.h, wallfire_targets.h) against the real libr15: the six bvh JUMP_SLOTs and the
+// QueryCollision JUMP_SLOT resolve at their pins, each symbol is defined at the function the pin calls real, the StaticRaycastOccluded slot (read, not hooked)
+// resolves, FireGunLocal's site word is the pinned one, and the word before each of the three allowed return addresses is a `bl` to StaticRaycast's PLT stub.
+void CheckRealBvhAndWallfire(const LoadedElf& elf) {
+  namespace bv = nevr_quest::combat::bvh;
+  namespace wf = nevr_quest::combat::wallfire;
+  const unsigned char* const mem = static_cast<const unsigned char*>(elf.mem);
+  const struct {
+    const char* symbol;
+    const char* name;
+    bv::Slot slot;
+  } bvhSlots[] = {{bv::kInitSymbol, "libr15 CBVHTree::Initialize JUMP_SLOT", bv::kPins.init},
+                  {bv::kShutSymbol, "libr15 CBVHTree::Shutdown JUMP_SLOT", bv::kPins.shutdown},
+                  {bv::kIntersectSymbol, "libr15 CBVHTree::Intersect JUMP_SLOT", bv::kPins.intersect},
+                  {bv::kOccludedSymbol, "libr15 CBVHTree::Occluded JUMP_SLOT", bv::kPins.occluded},
+                  {bv::kTouchSymbol, "libr15 CR15TouchInteractQuery::RayQueryStatic JUMP_SLOT", bv::kPins.touch},
+                  {bv::kGateSymbol, "libr15 CncaGameSpace::StaticRaycast JUMP_SLOT", bv::kPins.gate}};
+  for (const auto& b : bvhSlots) {
+    CheckTarget(elf, GotTarget{pinned::kLibR15, b.symbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, b.slot.slot}, b.name);
+    CheckDefinedAt(elf, b.symbol, b.slot.fn);
+  }
+  CheckTarget(elf, GotTarget{pinned::kLibR15, wf::kQuerySymbol, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, wf::kPins.querySlot},
+              "libr15 CncaGameSpace::QueryCollision JUMP_SLOT");
+  CheckDefinedAt(elf, wf::kQuerySymbol, wf::kPins.queryFn);
+  std::uint32_t site = 0;
+  std::memcpy(&site, mem + wf::kPins.site, sizeof(site));
+  if (site != wf::kPins.siteWord) {
+    std::fprintf(stderr, "libr15 FireGunLocal site word at %#llx is %#x, pinned %#x\n", static_cast<unsigned long long>(wf::kPins.site), site,
+                 wf::kPins.siteWord);
+    QCHECK(false);
+  }
+  // StaticRaycastOccluded: its JUMP_SLOT (read, never hooked) resolves at the pin and the function is defined there; CncaGame's own function (the word at its
+  // vtable +0x278) is defined at the pin.
+  const char* const kGsOccluded = "_ZNK10NRadEngine13CncaGameSpace21StaticRaycastOccludedERKNS_8C3VectorES3_";
+  CheckTarget(elf, GotTarget{pinned::kLibR15, kGsOccluded, RelocKind::kJumpSlot, pinned::kLibR15StockBuildId, wf::kPins.occludedSlot},
+              "libr15 CncaGameSpace::StaticRaycastOccluded JUMP_SLOT");
+  CheckDefinedAt(elf, kGsOccluded, wf::kPins.occludedFn);
+  CheckDefinedAt(elf, "_ZNK10NRadEngine8CncaGame21StaticRaycastOccludedERKNS_8C3VectorES3_", wf::kPins.gameOccluded);
+  // The three allowed return addresses: the word before each is a `bl` to StaticRaycast's PLT stub (ELF 0xed1740, the disassembly's 0xfd1740).
+  constexpr std::int64_t kStaticRaycastStub = 0xed1740;
+  QCHECK(bv::kPins.allowedCount == 3);
+  for (int i = 0; i < bv::kPins.allowedCount; ++i) {
+    const std::uint64_t ret = bv::kPins.allowed[i];
+    std::uint32_t word = 0;
+    std::memcpy(&word, mem + ret - 4, sizeof(word));
+    const bool isBl = (word >> 26) == 0x25;  // BL imm26
+    std::int64_t imm = static_cast<std::int64_t>(word & 0x03ffffffU);
+    if ((imm & 0x02000000) != 0) imm -= 0x04000000;
+    const std::int64_t target = static_cast<std::int64_t>(ret) - 4 + imm * 4;
+    if (!isBl || target != kStaticRaycastStub) {
+      std::fprintf(stderr, "libr15 allowed call site %#llx: word %#x is not a bl to StaticRaycast's stub (target %#llx)\n",
+                   static_cast<unsigned long long>(ret), word, static_cast<unsigned long long>(target));
+      QCHECK(false);
+    }
+  }
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -686,11 +746,39 @@ int main(int argc, char** argv) {
       QCHECK(false);
     }
   }
+  // The send guard (#2179, combat/sendguard.h): the one JUMP_SLOT of CSendEventNode::Enter resolves at its pin and alone, the symbol is
+  // defined at the address the module compares the slot with, and the ten code pins (the reads it repeats, the faulting load and the
+  // GameSpaceMT stub) are the words in the file. The second word the old plugin swapped, ELF 0x356a6b0, is Enter's unwind record: its eight
+  // bytes are an FDE's pc_begin and range, it is not a slot of this symbol, and the module has no target for it.
+  CheckTarget(r15, nevr_quest::combat::sendguard::EnterTarget(), "libr15 CSendEventNode::Enter JUMP_SLOT");
+  CheckDefinedAt(r15, nevr_quest::combat::sendguard::kEnterSymbol, nevr_quest::combat::sendguard::kEnterVaddr);
+  for (std::size_t i = 0; i < nevr_quest::combat::sendguard::kCodeCount; ++i) {
+    const pinned::PinnedCode& block = nevr_quest::combat::sendguard::kCode[i];
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + block.vaddr, block.code, block.words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: the words at %#llx differ from the pinned ones\n", block.name,
+                   static_cast<unsigned long long>(block.vaddr));
+      QCHECK(false);
+    }
+  }
+  {
+    constexpr std::uint64_t kUnwindRecord = 0x356a6b0ULL;
+    const unsigned char* const record = static_cast<const unsigned char*>(r15.mem) + kUnwindRecord;
+    std::int32_t pcBegin = 0;
+    std::uint32_t range = 0;
+    std::memcpy(&pcBegin, record, sizeof(pcBegin));
+    std::memcpy(&range, record + 4, sizeof(range));
+    QCHECK(kUnwindRecord + static_cast<std::int64_t>(pcBegin) == nevr_quest::combat::sendguard::kEnterVaddr);
+    QCHECK(range == 476);  // Enter's size
+    GotTarget notASlot = nevr_quest::combat::sendguard::EnterTarget();
+    notASlot.slotVaddr = kUnwindRecord;
+    QCHECK_STATUS(ResolveSlot(r15.image, notASlot, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+  }
   CheckRealAbs64Words(r15);
   CheckRealNotypeSlotIsRefused(r15);
   CheckRealHeapsAndMemsys(r15);
   CheckRealTableSteps(r15);
   CheckRealHeadsetGates(r15);
+  CheckRealBvhAndWallfire(r15);
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");

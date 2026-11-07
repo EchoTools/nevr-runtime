@@ -1,10 +1,10 @@
 // Ray queries against the game's own static BVH (CBVHResource / SBVHTreeData), for bvh.cpp and the host tests. Pure C++:
 // no game memory is read here, no Android, no allocation. (Port of the source build's bvh_core; the differences are
-// listed in docs/quest/q15t/modules/bvh.md section 6.)
+// listed in docs/quest/combat/bvh.md section 6.)
 //
 // Format: Embree 1.0 BVH2<Triangle4> as the game ships it. Every offset below is checked against the disassembly: libr15
 // (CMemBlock / SBVHTreeData / CStaticRaycastCS) and echovr.exe (the Embree traversal FUN_14135f9a0 and the tree
-// setup FUN_14070f6e0); see docs/quest/q15t/modules/bvh.md section 3.
+// setup FUN_14070f6e0); see docs/quest/combat/bvh.md section 3.
 //   SBVHTreeData (0x50 bytes): CMemBlock triangles {ptr +0x00, size +0x08}, CMemBlock nodes {ptr +0x20, size +0x28},
 //     u32 root reference +0x40. Sizes are in bytes.
 //   Triangle4 (0xe0 bytes): v0, e1, e2, Ng as x[4] y[4] z[4] each, then id0[4], id1[4].
@@ -18,7 +18,7 @@
 #include <stdint.h>
 #include <string.h>
 
-namespace q15t {
+namespace nevr_quest::combat {
 namespace bvh {
 
 struct Node {
@@ -234,4 +234,4 @@ done:
 }
 
 }  // namespace bvh
-}  // namespace q15t
+}  // namespace nevr_quest::combat
