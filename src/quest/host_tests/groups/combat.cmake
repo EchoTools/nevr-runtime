@@ -37,11 +37,23 @@ nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # The two install steps (#2171, docs/adr/0046 rule 6): one registration table per phase in its own order, only when combat::Active() says
 # combat runs in this process, one `combat_install` line per phase, a plain release that installs nothing and says so once, the
 # not_started record, and the `combat_config` line.
-nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} ${_cident}
+nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
-      src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
-      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables})
+      src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp
+      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp)
+# Sendguard (#2179): the real wrapper through the thunk's entry into the one JUMP_SLOT of a libr15 image built in memory, against models of
+# CSendEventNode::Enter and the GameSpaceMT lookup and the node's context. A send to a game space that is not loaded dropped and the
+# stock function not called, a loaded one passed with its own arguments, no level and each null link left to the stock function, the drop
+# line cap and the exact count, each of the 13 pinned words refusing the module before the slot is touched, a foreign word and the
+# other refusals, the one changed word (no other byte of the image, the unwind record the plugin took for a slot included), the off key
+# and the old switch file's Warning, and the table's row reading the resolved configuration. got_pinned_test resolves the relocation
+# and the pins in the real libr15.
+nevr_ht_test(sendguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/sendguard_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
+      src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
+      src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp
+      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp)
 # Combat name tags on by default (#2090): the real handlers through the two constructor thunks' entries against a stand-in for the
 # CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
 # 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
@@ -74,7 +86,7 @@ nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
   SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
-      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables})
+      src/quest/combat/sendguard.cpp src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp)
 # The game-thread tick (#2172, docs/adr/0046; docs/adr/0039): the real thunk and GotHook against the JUMP_SLOT of a libr15 image built in
 # memory. The callback table, the vptr check (read once per object, not once per frame), and who owns the slot on each variant (plain release,
 # combat, q15t) in both orders against the q15t plugin's own tick code (game_tick.cpp, import_hook.cpp, got_swap.cpp, linked from the plugin):
@@ -85,16 +97,16 @@ nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
   SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
-      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec}
+      src/quest/combat/sendguard.cpp src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
       src/quest/plugins/q15t/src/game_tick.cpp src/quest/plugins/q15t/src/import_hook.cpp src/quest/plugins/q15t/src/got_swap.cpp
       src/quest/plugins/q15t/src/safe_read.cpp src/quest/plugins/q15t/src/plugin_log.cpp ${_ctables})
 # The refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3): the decision, the keys, the session from the arena to a combat map and back
 # through the tick, the lobbies arena players use, the legacy kill files, the release case (the game's own rate, nothing logged or registered).
 nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
-      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec}
+      src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cec} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp
       src/quest/combat/combat_install.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp
-      src/quest/sentinel/build_variant.cpp ${_ctables})
+      src/quest/combat/sendguard.cpp src/quest/sentinel/build_variant.cpp ${_ctables})
 # What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
 # combat lobby and an Echo Arena level, each id checked against the CSymbol64 of its name; the lobbies arena players use are no class; an arena
 # level wins; a gamespace of another game, an absurd count and an unreadable game are no level.
@@ -199,3 +211,20 @@ nevr_ht_test(dronekill_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
 nevr_ht_test(dronemuzzle_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/dronemuzzle_test.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/dronekill.cpp src/quest/combat/combat_level.cpp
       src/quest/combat/combat_tick.cpp src/quest/tests/ec_stub.cpp)
+# The pure BVH code (#2182, moved from the q15t plugin's bvh_core_test): synthetic meshes in the game's Embree BVH2<Triangle4> format, ray hits, misses and
+# occlusion against known geometry, a random soup against two brute-force references, degenerate input, malformed trees, the node / stack / size limits.
+nevr_ht_test(bvh_core_test GROUP combat NOEXC TIMEOUT 120
+  SRC src/quest/tests/bvh_core_test.cpp)
+# The static BVH (#2182; docs/adr/0046): the real thunks through the real GotHook into the six JUMP_SLOTs of a libr15 image built in memory, called
+# through their slots against fake stock functions. The answers (nearest hit, segment test, the hit's fields), Initialize's refusals and their lines, the
+# 64-entry table, the callers' gate and its per-thread mark, the 10 s summary, all-or-none install and its rollback, the touch answer, and the scope:
+# every hook calls the game's function while no combat map is loaded (arena shares the APK), the switches and their lines, the legacy kill files.
+# got_pinned_test resolves the six relocations in the real libr15.
+nevr_ht_test(bvh_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/bvh_test.cpp src/quest/combat/bvh.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
+# The wall-fire check (#2182; docs/adr/0046): the real thunk on the QueryCollision slot of the image, on top of the real bvh module, called from two call sites
+# against the engine's stub, a fake CncaGame and a synthetic room. A stock hit passes through, a clear segment is not blocked, a segment through each wall is,
+# another call site gets the stock answer, every wrong game structure and a non-finite segment get the stock answer, the log volume, the refusals and what they
+# leave alone, the switch and its lines, and the scope: no combat map, no check. got_pinned_test resolves the two relocations and the site word.
+nevr_ht_test(wallfire_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+  SRC src/quest/tests/wallfire_test.cpp src/quest/combat/wallfire.cpp src/quest/combat/bvh.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)

@@ -9,6 +9,7 @@
 // Render), the API names (namespace nevr_quest::combat::dronekill), and the scope: a combat map is loaded and the module's tick has seen it before a
 // test drives a drone (Reset). New here: an Echo Arena level, a lobby and no level at all, where every hook only calls the game's function, the
 // scope line, and the production step's refusals.
+#include <atomic>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -32,6 +33,16 @@
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/ec_stub.h"
 #include "quest/tests/q15t/key_hog.h"
+
+// The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
+namespace {
+std::atomic<std::uint64_t> g_arenaReads{0};
+[[maybe_unused]] void StartReadCount() {
+  g_arenaReads.store(0);
+  nevr_quest::combat::SetReadCounterForTest(&g_arenaReads);
+}
+[[maybe_unused]] std::uint64_t ReadCount() { return g_arenaReads.load(); }
+}  // namespace
 
 using namespace nevr_quest::combat::dronekill;
 using sentinel::GotStatus;
@@ -2140,7 +2151,7 @@ static void ExpectInert(const char* where) {
   g_find_calls = g_comp_calls = 0;
   const Stats before = CurrentStats();
   // what follows is the arena path: no read of game memory and no scan of the levels on any hook (the scope was refreshed before this), counted
-  nevr_quest::combat::ResetSafeReadCallsForTest();
+  StartReadCount();
   nevr_quest::combat::level::ResetScanCallsForTest();
   ND d = Drone(dk::kDamageable, dk::kDamageable, 1);
   CallEnter(&d);
@@ -2159,9 +2170,9 @@ static void ExpectInert(const char* where) {
   CallAttack(g_cs, kAtHandle);
   CHECK(g_attacks.size() == 1, "%s: the game's AttackTarget was not called", where);
   OnKilled(0x11);
-  CHECK(nevr_quest::combat::SafeReadCallsForTest() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0,
+  CHECK(ReadCount() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0,
         "%s: %llu reads and %llu scans on the arena path of the hooks", where,
-        static_cast<unsigned long long>(nevr_quest::combat::SafeReadCallsForTest()),
+        static_cast<unsigned long long>(ReadCount()),
         static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
   const uint32_t ticksBefore = CurrentStats().ticks;
   nevr_quest::combat::level::ResetScanCallsForTest();

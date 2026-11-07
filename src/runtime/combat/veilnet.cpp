@@ -64,6 +64,9 @@
 #include "runtime/combat/cat_compat.h"  // nEVR port: first, for winsock2.h before windows.h
 #include "runtime/combat/cat_links.h"   // nEVR port: the other two files, in place of GetProcAddress
 #include "runtime/combat/write_gate.h"  // nEVR port
+#include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
+#include "runtime/combat/match_type.h"  // nEVR port (#2289)
+#include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -99,7 +102,7 @@ constexpr uintptr_t LOC_TOKEN_RVA = 0x2104d20;
 constexpr uintptr_t LOC_COUNTER_RVA = 0x2104d40;
 constexpr uintptr_t OC_TOKEN_RVA = 0x2104ca8;
 constexpr uintptr_t OC_COUNTER_RVA = 0x2104ca4;
-constexpr uintptr_t EQUIP_RVA = 0x2104e80;          // tools/equip_guard.py: +00 equipped, +08 writer, +10 skips
+constexpr uintptr_t EQUIP_RVA = nevr_combat::kEquipCellRva;  // nEVR port (#600), equip_cell.h: +00 equipped, +08 writer, +10 skips
 constexpr uintptr_t POINT_FIRED_RVA = 0x2104d44;    // POINTs whose stun went off here
 constexpr ULONGLONG TOKEN_LIFE = 15000000;      // 1.5 s, in 100 ns
 constexpr uint32_t MAGIC = 0x4c564345;          // "ECVL"
@@ -538,7 +541,7 @@ constexpr uint32_t WANT_PAUSE = 0x20;           // in +13: a PAUSE ask, bit 0 th
 
 // --- END MATCH (private matches) ------------------------------------------------------------
 // A client asks with F8 (its Echo window in front): 'C' WANT_END. The server, in a private match
-// only (its "[NETLOBBY] Starting session (gametype ...private...)" log line), until the game's
+// only (nEVR port (#2289): from SessionGameType(), combat/match_type.h), until the game's
 // nevt_game_over goes out (or END_GIVE_UP_MS):
 //   * blue captures the point as if a blue player stood on it (game thread, EndMatchCapture): each
 //     capture volume not owned by blue gets what the engine's capture tick writes when a capture
@@ -558,7 +561,18 @@ constexpr uint64_t SYM_CAPTUREPOINT = 0xeedeff1586bd8846ull;     // "capturepoin
 constexpr ULONGLONG END_EVERY_MS = 300, END_GIVE_UP_MS = 180000, END_RESCAN_MS = 2000;
 constexpr float END_POINTS = 9999.0f;
 constexpr float END_TOTAL = 60.0f;               // unlock 1 s, capture 0 (instant)
-volatile LONG g_private_match = -1;             // server: -1 unknown, 0 / 1 from the session log
+// nEVR port (#2289): the match type comes from the session game type the runtime stores (combat/match_type.h), not from
+// the game's session log line, which echovr.exe logs and this module does not watch. The last privacy logged, so each
+// change is one line: -1 none logged yet, else a MatchPrivacy value.
+volatile LONG g_privacy_logged = -1;
+nevr_combat::MatchPrivacy SessionPrivacy() {
+    const std::optional<std::string> type = nevr_arena_round_time::SessionGameType();
+    const nevr_combat::MatchPrivacy privacy = nevr_combat::PrivacyOf(type);
+    if (InterlockedExchange(&g_privacy_logged, (LONG)privacy) != (LONG)privacy)
+        Log("session game type %s: %s (MAP SWITCH and END MATCH %s)", type ? type->c_str() : "none",
+            nevr_combat::PrivacyText(privacy), privacy == nevr_combat::MatchPrivacy::kPrivate ? "allowed" : "refused");
+    return privacy;
+}
 volatile ULONGLONG g_end_until = 0, g_end_next = 0, g_end_scanned = 0;
 volatile LONG g_end_written = 0;                 // times the points were written
 uint8_t *g_end_point = nullptr;                  // the point script's data (cached)
@@ -821,18 +835,19 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         }
         if (p.type == 'C' && (p.id & 0xF0000000) == WANT_MAP && (p.id & 0xF) < MAP_COUNT) {   // a map button
             int k = (int)(p.id & 0xF);
-            if (g_private_match != 1) {
+            const nevr_combat::MatchPrivacy privacy = SessionPrivacy();   // nEVR port (#2289)
+            if (privacy != nevr_combat::MatchPrivacy::kPrivate) {
                 Log("MAP SWITCH to %s asked by %s: refused (%s)", kMapNames[k], Addr(from, buf, sizeof(buf)),
-                    g_private_match == 0 ? "not a private match" : "match type unknown");
+                    nevr_combat::PrivacyText(privacy));
             } else if (!g_map_want && !g_map_announce && !g_map_leaving) {
                 g_map_want = k + 1;
                 Log("MAP SWITCH to %s asked by %s", kMapNames[k], Addr(from, buf, sizeof(buf)));
             }
         }
         if (p.type == 'C' && p.id == WANT_END) {                             // F8: END MATCH
-            if (g_private_match != 1) {
-                Log("END MATCH asked by %s: refused (%s)", Addr(from, buf, sizeof(buf)),
-                    g_private_match == 0 ? "not a private match" : "match type unknown");
+            const nevr_combat::MatchPrivacy privacy = SessionPrivacy();   // nEVR port (#2289)
+            if (privacy != nevr_combat::MatchPrivacy::kPrivate) {
+                Log("END MATCH asked by %s: refused (%s)", Addr(from, buf, sizeof(buf)), nevr_combat::PrivacyText(privacy));
             } else if (!g_end_until) {
                 ULONGLONG now = GetTickCount64();
                 g_end_written = 0;
@@ -2301,7 +2316,12 @@ DWORD WINAPI Tick(LPVOID) {
     ULONGLONG next_hello = 0, next_pick = 0, next_hook = 0, next_tacmods = 0;
     uint8_t seen_classic_requests = g_rules ? g_rules[CLASSIC_REQUESTS] : 0;
     bool f8_was = false;
+    ULONGLONG next_privacy = 0;                          // nEVR port (#2289)
     while (!g_stop) {
+        if (g_server && GetTickCount64() >= next_privacy) {   // nEVR port (#2289): once a second, so the match type's
+            next_privacy = GetTickCount64() + 1000;              // change line shows as a session starts or ends
+            SessionPrivacy();
+        }
         Sleep(10);                                       // (5 ms: 200 wakeups a second, for checks that need far fewer)
         if (g_server && g_end_until) EndMatchStep();     // server: F8 END MATCH
 #ifdef ECHOCOMBAT_LOG
@@ -2440,19 +2460,9 @@ uint64_t AbilitySymbol(const char *name, size_t n) {
     return 0;
 }
 
-constexpr char kSessionFmt[] = "[NETLOBBY] Starting session (gametype ";
+// nEVR port (#2289): his reader of the game's session line ("[NETLOBBY] Starting session (gametype ") is gone. echovr.exe
+// logs that line and this module does not watch echovr.exe's logger, so it never ran; SessionPrivacy() reads the type.
 void SawLog(const char *fmt, va_list args) {
-    if (fmt && g_server && !strncmp(fmt, kSessionFmt, sizeof(kSessionFmt) - 1)) {
-        va_list copy = args;
-        const char *gametype = va_arg(copy, const char *);
-        EC_TRY {
-            g_private_match = gametype && strstr(gametype, "private") ? 1 : 0;
-            Log("session gametype %s: %s match", gametype ? gametype : "?", g_private_match ? "private" : "public");
-        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-            g_private_match = -1;
-        }
-        return;
-    }
     if (!fmt || strcmp(fmt, kProfileFmt) != 0) return;
     va_list copy = args;
     const char *json = va_arg(copy, const char *);
@@ -2930,7 +2940,7 @@ int __cdecl VeilNet_MedigunAllowed() {
 
 // nEVR port: the plugin's exports and DllMain are replaced by these, which runtime/combat/combat.cpp calls. The server's
 // MEDIGUN answer is combat.medigun, not PowerBoost.ini [server] medigun; the clean exit is installed only when
-// combat.clean_exit is on, where Cat installed it on every start.
+// combat.clean_exit is on (its default, as Cat installed it on every start).
 bool Start(bool is_server, bool match_control, bool medigun_server) {
     g_match_control = match_control;
     g_medigun_on_server = medigun_server;

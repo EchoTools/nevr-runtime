@@ -12,10 +12,8 @@
 #include <string>
 #include <vector>
 
-#include "bvh.h"
 #include "nevr/plugin_interface.h"
 #include "fxtrail.h"
-#include "wallfire.h"
 
 extern "C" {
 NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext*, const char*);
@@ -33,8 +31,8 @@ static int g_fail = 0;
     }                                                    \
   } while (0)
 
-#if defined(WIRING_BVH_ONLY)
-// only Q15T_BVH on (no T-26): the bvh tick alone must register and make InitEx install the game tick
+#if defined(WIRING_TICK_ONLY)
+// only Q15T_IMPACTSND on (no T-26): its tick (registered whatever its install says) alone must register and make InitEx install the game tick
 extern "C" __attribute__((noinline, visibility("default"))) void FakeExclusiveUpdateGame(void*) {}
 extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetClockLevels(void*, int32_t, int32_t) { return 0; }
 extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetDisplayRefreshRate(void*, float) { return 0; }
@@ -63,9 +61,6 @@ int main() {
   w[2] = reinterpret_cast<uintptr_t>(&vrapi_SetClockLevels);
   w[3] = reinterpret_cast<uintptr_t>(&vrapi_SetDisplayRefreshRate);
   w[4] = reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame);
-  const q15t::BvhPins& bp = q15t::kBvhPinned;
-  for (const q15t::BvhHookSlot* h : {&bp.init, &bp.shutdown, &bp.intersect, &bp.occluded, &bp.touch, &bp.gate})
-    *reinterpret_cast<uintptr_t*>(base + h->slot) = base + h->fn;
   mprotect(p, kImage, PROT_READ);
   NevrGameContext ctx{};
   ctx.base_addr = base;
@@ -89,9 +84,9 @@ int main() {
     if (l.find("game tick callbacks registered=1 max=16") != std::string::npos) ticks = true;
     if (l.find("hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok") != std::string::npos) tick_hook = true;
   }
-  CHECK(ticks && tick_hook, "bvh alone must register one tick and install the game tick (ticks=%d hook=%d)", ticks, tick_hook);
+  CHECK(ticks && tick_hook, "impactsnd alone must register one tick and install the game tick (ticks=%d hook=%d)", ticks, tick_hook);
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
-  if (g_fail == 0) std::printf("wiring_test (bvh only): all checks pass (one tick registered, game tick installed)\n");
+  if (g_fail == 0) std::printf("wiring_test (tick only): all checks pass (one tick registered, game tick installed)\n");
   return g_fail == 0 ? 0 : 1;
 }
 #elif defined(WIRING_CAPS_ONLY)
@@ -156,14 +151,6 @@ int main() {
   *reinterpret_cast<uintptr_t*>(base + 0x36cd1f8) = base + 0x18037c4;
   // fxtrail: its eleven code words are the pinned ones, so its off switch (set below) is what stops it
   for (const auto& pin : q15t::kFxTrailWordPins) *reinterpret_cast<uint32_t*>(base + pin.va) = pin.want;
-  // bvh: its six slots hold their pinned functions. wallfire (installed after it): the query slot, the occluded slot, the site word.
-  const q15t::BvhPins& bp = q15t::kBvhPinned;
-  for (const q15t::BvhHookSlot* h : {&bp.init, &bp.shutdown, &bp.intersect, &bp.occluded, &bp.touch, &bp.gate})
-    *reinterpret_cast<uintptr_t*>(base + h->slot) = base + h->fn;
-  const q15t::WallfirePins& wp = q15t::kWallfirePinned;
-  *reinterpret_cast<uintptr_t*>(base + wp.query_slot) = base + wp.query_fn;
-  *reinterpret_cast<uintptr_t*>(base + wp.occluded_slot) = base + wp.occluded_fn;
-  *reinterpret_cast<uint32_t*>(base + wp.site) = wp.site_word;
   mprotect(p, kImage, PROT_READ);
 
   // fxtrail's own off switch (fxtrail.off in the data directory): a choice, so INFO status=off, not an ERROR
@@ -198,8 +185,7 @@ int main() {
 
   // every compiled module is named in the init record
   const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
-                        "bvh",      "wallfire",   "impactsnd",
-                        "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
+                        "impactsnd", "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
   const std::string init = FindLine("q15t init");
   for (const char* m : kAll) {
     CHECK(init.find(std::string(m) + " ") != std::string::npos, "q15t init line does not list module %s: %s", m, init.c_str());
@@ -209,7 +195,7 @@ int main() {
   }
 
   // what must have installed, been switched off, or refused, on this image
-  const char* kInstalled[] = {"bvh", "wallfire", "levelname", "boosterpool"};
+  const char* kInstalled[] = {"levelname", "boosterpool"};
   const char* kArmed[] = {"gunconnect", "aibots"};
   const char* kOff[] = {"fxtrail"};
   struct Refusal {
@@ -238,25 +224,20 @@ int main() {
         FindLine("shieldgamma: OFF").c_str());
   // what the installs did to the image
   CHECK(w_slot(base, q15t::kFxTrailSlot) == 0, "fxtrail was off: its slot must be untouched");
-  CHECK(w_slot(base, bp.init.slot) != base + bp.init.fn && w_slot(base, bp.gate.slot) != base + bp.gate.fn, "bvh: its slots were not swapped");
-  CHECK(w_slot(base, wp.query_slot) != base + wp.query_fn, "wallfire (after bvh) did not swap its slot");
   CHECK(w_slot(base, 0x362ef90) != base + 0x1202ecc, "levelname: its slot was not swapped");
   CHECK(w_slot(base, 0x36cd1f8) != base + 0x18037c4, "boosterpool: its GOT slot was not swapped");
-  CHECK(CountLines("wallfire on:") == 1 && CountLines("bvh on:") == 1, "bvh and wallfire did not both log 'on'");
-  // order: wallfire is installed after bvh (it refuses as bvh_not_installed otherwise), and the tick comes after every module
-  size_t at_bvh = 0, at_wall = 0, at_tick = 0, at_mod_last = 0;
+  // order: the tick comes after every module
+  size_t at_tick = 0, at_mod_last = 0;
   for (size_t i = 0; i < g_lines.size(); ++i) {
     const std::string& t = g_lines[i].text;
-    if (t.find("module install module=bvh ") != std::string::npos) at_bvh = i;
-    if (t.find("module install module=wallfire ") != std::string::npos) at_wall = i;
     if (t.find("hook=CncaGame::ExclusiveUpdateGame") != std::string::npos) at_tick = i;
     if (t.find("module install") != std::string::npos) at_mod_last = i;
   }
-  CHECK(at_bvh != 0 && at_wall > at_bvh, "wallfire (line %zu) must be installed after bvh (line %zu)", at_wall, at_bvh);
   CHECK(at_tick > at_mod_last, "the game tick (line %zu) must be installed after the last module (line %zu)", at_tick, at_mod_last);
 
-  // the tick table: gunconnect, aibots, impactsnd, sensorwd and bvh register;   // weapon_arm did not install here, so it registers nothing. The tick is installed once, after every registration.
-  CHECK(CountLines("game tick callbacks registered=5 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
+  // the tick table: gunconnect, aibots, impactsnd and sensorwd register; weapon_arm did not install here, so it registers nothing.
+  // The tick is installed once, after every registration.
+  CHECK(CountLines("game tick callbacks registered=4 max=16", 1) == 1, "tick count line: %s", FindLine("game tick callbacks").c_str());
   CHECK(CountLines("hook install hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok", 1) == 1, "the game tick was not installed ok");
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
   CHECK(CountLines("game tick callbacks") == 1, "more than one tick install record");
@@ -272,7 +253,7 @@ int main() {
 
   std::remove(off_file.c_str());
   rmdir(dir);
-  if (g_fail == 0) std::printf("wiring_test: all checks pass (20 modules named, 4 installed, 3 off, 11 refusals at ERROR, InitEx returned 0)\n");
+  if (g_fail == 0) std::printf("wiring_test: all checks pass (14 modules named, 2 installed, 2 armed, 1 off, 9 refusals at ERROR, InitEx returned 0)\n");
   else {
     for (const auto& l : g_lines) std::printf("  [%u] %s\n", l.level, l.text.c_str());
     std::printf("wiring_test: %d failure(s)\n", g_fail);

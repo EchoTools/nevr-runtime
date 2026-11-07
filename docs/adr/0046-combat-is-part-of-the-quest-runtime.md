@@ -65,6 +65,8 @@ section of `config.yaml`, the `combat` host-test group, `test-quest-combat`, and
    `combat::Active()` is true for `q15t` and `combat`. Modules folded from q15t install only when it is true; a development build may
    force it with `combat.force`, a release build may not. Combat-area code that ships to every APK (`match_tags`, `equip_refire`) is outside this gate
    and says so in its header. The combat code is compiled into every sentinel, so the release loader asset serves every variant.
+   The `arena` variant (the store APK with the release's loader and no plugin, listed in the manifest beside the combat APK, #2298) is
+   no combat variant: `combat::Active()` is false for it, and a release build cannot force it.
 6. **Install moments are the plugin's.** Modules that must precede `android_main` install in a constructor step after Attach and before
    the clock hook; the rest install in a post-load action of their own, right after the normal plugin pass when there is one, at the
    first post-load call.

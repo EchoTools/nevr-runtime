@@ -417,6 +417,7 @@ void OnGameProcessEnd() noexcept {
   InviteShutdown();  // a request in flight returns at once; the worker is joined before the report
   nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
   nevr_quest::integration::NoteCombatNotStarted(nevr_quest::plugin::reason::kGameExitedFirst);  // writes nothing unless combat runs here and its step never ran
+  nevr_quest::integration::NoteCombatProcessEnd();  // the combat modules' final counts; nothing unless combat runs here and its step ran
   ReportAndroidMainReturned();
 }
 

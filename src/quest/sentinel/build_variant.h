@@ -7,7 +7,8 @@
 // its first log line, so the first line names the variant and nothing is read from the game or the configuration to learn it.
 //
 // The words. `q15t` and `combat` are the APKs that carry the q15t libraries and, with them, the folded combat modules
-// (combat/combat_active.h); `perf-probe` is the measurement build (ADR 0037), which carries no combat. An empty file is a plain
+// (combat/combat_active.h); `perf-probe` is the measurement build (ADR 0037), which carries no combat; `arena` is the release's APK built from the store APK, which
+// carries no combat and no plugin (#2298). An empty file is a plain
 // release. A word is compared exactly: a different case, a padded word, an unknown word or a file longer than kMaxStampBytes is
 // never read as a variant; it reads as no variant, with `StampSource::kInvalid` and the reason, so a stamp that is wrong costs the
 // variant's behaviour and says so, never the reverse. A missing file is `kAbsent`: every APK this sentinel ships in is stamped by the
@@ -32,7 +33,7 @@ inline constexpr const char* kStampFile = "libnevr_build_variant.so";
 // The longest word is `perf-probe` (10 bytes); a file past this is not a stamp.
 inline constexpr std::size_t kMaxStampBytes = 32;
 
-enum class Variant { kNone, kQ15t, kCombat, kPerfProbe };
+enum class Variant { kNone, kQ15t, kCombat, kPerfProbe, kArena };
 enum class StampSource { kStamp, kAbsent, kUnreadable, kInvalid };
 
 struct Stamp {
@@ -43,7 +44,7 @@ struct Stamp {
   const char* why = "";
 };
 
-// "none", "q15t", "combat" or "perf-probe": the value of the log's `variant` field.
+// "none", "q15t", "combat", "perf-probe" or "arena": the value of the log's `variant` field.
 const char* VariantName(Variant variant) noexcept;
 // "stamp", "absent", "unreadable" or "invalid": the value of the log's `variant_source` field.
 const char* SourceName(StampSource source) noexcept;

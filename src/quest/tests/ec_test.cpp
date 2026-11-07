@@ -13,6 +13,7 @@
 // counted or ticked; the arena lobbies; the 250 ms cadence), the refusals' tokens, the observer install, a library mapped again.
 //
 // Built and run by `just test-quest-combat ec`.
+#include <atomic>
 #include <dlfcn.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -41,6 +42,16 @@
 #include "quest/sentinel/ec_page.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
+
+// The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
+namespace {
+std::atomic<std::uint64_t> g_arenaReads{0};
+[[maybe_unused]] void StartReadCount() {
+  g_arenaReads.store(0);
+  nevr_quest::combat::SetReadCounterForTest(&g_arenaReads);
+}
+[[maybe_unused]] std::uint64_t ReadCount() { return g_arenaReads.load(); }
+}  // namespace
 
 using namespace nevr_quest::combat::ec;
 using namespace nevr_quest::combat::ec::core;
@@ -1247,7 +1258,7 @@ static void ArenaTests() {
   CHECK(HasLine("\"in_scope\":0,\"level_class\":\"echo_arena\""), "no scope line for arena");
   OnNetTick(&NetTick);
   g_tick_calls = 0;
-  nevr_quest::combat::ResetSafeReadCallsForTest();  // the arena path from here: no read of game memory, no scan of the levels (the count, not only what the game gets)
+  StartReadCount();  // the arena path from here: no read of game memory, no scan of the levels (the count, not only what the game gets)
   nevr_quest::combat::level::ResetScanCallsForTest();
   GameTalks();
   CHECK(StatsNow().sends == 0 && !StatsNow().haveServer, "a send in arena was counted");
@@ -1257,8 +1268,8 @@ static void ArenaTests() {
   g_in.push_back(Veil('T', 99));
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 16 && g_recv_calls == 1, "an EC datagram in arena was consumed");
   CHECK(StatsNow().tokens == 0 && StatsNow().passed == 0 && StatsNow().consumed == 0 && g_tick_calls == 0, "arena: counted, tokened or ticked");
-  CHECK(nevr_quest::combat::SafeReadCallsForTest() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0, "arena: %llu reads and %llu scans on the arena path",
-        static_cast<unsigned long long>(nevr_quest::combat::SafeReadCallsForTest()), static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
+  CHECK(ReadCount() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0, "arena: %llu reads and %llu scans on the arena path",
+        static_cast<unsigned long long>(ReadCount()), static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
   // the arena lobbies are no combat level either
   for (const char* lobby : {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b_arena", "mpl_lobby_b_social"}) {
     LoadLevels({lobby});

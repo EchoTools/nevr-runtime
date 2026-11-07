@@ -1,1 +1,0 @@
-Public Arena matches on community servers use the game's own round length and pause the clock for goals again, instead of the 8:00 clock that ran through them.

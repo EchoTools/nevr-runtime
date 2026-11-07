@@ -11,7 +11,7 @@ namespace q15t {
 
 using TickFn = void (*)(std::uintptr_t game);
 
-// Up to kMaxGameTicks callbacks (16: refresh, weapon_arm, gunconnect, aibots, impactsnd and bvh can
+// Up to kMaxGameTicks callbacks (16: weapon_arm, gunconnect, aibots, impactsnd, music and sensorwd, plugin.cpp's six callers, can
 // all be on at once, 6); false when full. Register before InstallGameTick.
 inline constexpr int kMaxGameTicks = 16;
 bool AddGameTick(TickFn fn);

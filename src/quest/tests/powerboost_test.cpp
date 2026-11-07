@@ -14,6 +14,7 @@
 // Built and run by `just test-quest-combat powerboost`.
 #include "quest/combat/powerboost.h"
 
+#include <atomic>
 #include <cerrno>
 #include <cmath>
 #include <cstdint>
@@ -33,6 +34,16 @@
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/q15t/key_hog.h"
 #include "quest/tests/test_check.h"
+
+// The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
+namespace {
+std::atomic<std::uint64_t> g_arenaReads{0};
+[[maybe_unused]] void StartReadCount() {
+  g_arenaReads.store(0);
+  nevr_quest::combat::SetReadCounterForTest(&g_arenaReads);
+}
+[[maybe_unused]] std::uint64_t ReadCount() { return g_arenaReads.load(); }
+}  // namespace
 
 namespace {
 
@@ -959,7 +970,7 @@ int main() {
     CHECK(!pb::InScope(), "arena (%s): in scope", level != nullptr ? level : "no game");
     g_lines.clear();
     const pb::Stats before = pb::CurrentStats();
-    cb::ResetSafeReadCallsForTest();  // what follows is the arena path: no read of game memory, no scan of the levels (count, not only the game's view)
+    StartReadCount();  // what follows is the arena path: no read of game memory, no scan of the levels (count, not only the game's view)
     level::ResetScanCallsForTest();
     g_node_heals = true;
     NodeData d = Data(1250030.0f, 5);
@@ -975,8 +986,8 @@ int main() {
     const PhTarget ta{{1, 0, 0}};
     const uint8_t* body = pb::ConeAtForTest(&ta, g_frame, reinterpret_cast<uintptr_t>(g_dcs));
     pb::NetTick();
-    CHECK(cb::SafeReadCallsForTest() == 0 && level::ScanCallsForTest() == 0, "arena (%s): %llu reads and %llu scans on the arena path",
-          level != nullptr ? level : "no game", static_cast<unsigned long long>(cb::SafeReadCallsForTest()),
+    CHECK(ReadCount() == 0 && level::ScanCallsForTest() == 0, "arena (%s): %llu reads and %llu scans on the arena path",
+          level != nullptr ? level : "no game", static_cast<unsigned long long>(ReadCount()),
           static_cast<unsigned long long>(level::ScanCallsForTest()));
     CHECK(g_heals.size() == 3 && g_heals[0].amount == 1250030.0f && g_heals[1].amount == 1250030.0f && g_heals[2].amount == 1250030.0f,
           "arena (%s): a heal was swallowed or changed (%zu heals)", level != nullptr ? level : "no game", g_heals.size());

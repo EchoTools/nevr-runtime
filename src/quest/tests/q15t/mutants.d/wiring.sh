@@ -1,9 +1,9 @@
 # plugin.cpp's wiring of the modules, judged by mod/wiring.cmake (tests/wiring_test.cpp); the tick table, judged by mod/game_tick.cmake.
-# Not mutated: InitGunConnect / InitAiBots (they only store the base, which the host cannot observe: no libr15 is loaded), and the
-for _m in DRONEGUARD PEERCLAMP AIBOTS GUNCONNECT BVH WALLFIRE LEVELNAME; do
+# Not mutated: InitGunConnect / InitAiBots (they only store the base, which the host cannot observe: no libr15 is loaded).
+for _m in DRONEGUARD PEERCLAMP AIBOTS GUNCONNECT LEVELNAME; do
   runm wiring "wire_caps_$(echo "$_m" | tr 'A-Z' 'a-z')" src/plugin.cpp "s/if (Q15T_$_m) caps |=/if (false) caps |=/"
 done
-runm wiring wire_caps_over_fxtrail src/plugin.cpp "s/if (Q15T_BVH) caps/if (Q15T_BVH || Q15T_FXTRAIL) caps/"
+runm wiring wire_caps_over_fxtrail src/plugin.cpp "s/if (Q15T_GUNCONNECT) caps/if (Q15T_GUNCONNECT || Q15T_FXTRAIL) caps/"
 runm wiring wire_caps_over_hudmeter src/plugin.cpp "s/if (Q15T_AIBOTS) caps/if (Q15T_AIBOTS || Q15T_HUDMETER) caps/"
 runm wiring wire_init_nonzero      src/plugin.cpp "/never this return value\./{n;s/return 0;/return 1;/}"
 runm wiring wire_failure_quiet     src/plugin.cpp "s/Log(ok || off ? NEVR_LOG_INFO : NEVR_LOG_ERROR,/Log(NEVR_LOG_INFO,/"
@@ -20,9 +20,6 @@ runm wiring wire_drop_voipdrop     src/plugin.cpp "s/^  ReportModule(\"voipdrop\
 runm wiring wire_drop_custctx      src/plugin.cpp "s/^  ReportModule(\"custctx\", InstallCustCtx(base));//"
 runm wiring wire_drop_droneguard   src/plugin.cpp "s/^  ReportModule(\"droneguard\", InstallDroneGuard(base));//"
 runm wiring wire_drop_peerclamp    src/plugin.cpp "s/^  ReportModule(\"peerclamp\", InstallPeerClamp(base));//"
-runm wiring wire_drop_bvh          src/plugin.cpp "s/const InstallResult r = InstallBvh(base);/const InstallResult r{};/"
-runm wiring wire_drop_bvh_tick     src/plugin.cpp "s/    if (r.status == SwapStatus::kOk) AddModuleTick(\"bvh\", \&BvhTick, \&want_tick);//"
-runm wiring wire_drop_wallfire     src/plugin.cpp "s/^  ReportModule(\"wallfire\", InstallWallfire(base));.*//"
 runm wiring wire_drop_impactsnd    src/plugin.cpp "s/^  ReportModule(\"impactsnd\", InstallImpactSnd(base));//"
 runm wiring wire_drop_impact_tick  src/plugin.cpp "s/^  AddModuleTick(\"impactsnd\", \&ImpactSndTick, \&want_tick);.*//"
 runm wiring wire_drop_ec           src/plugin.cpp "s/const InstallResult r = InstallEc(base);/const InstallResult r{};/"

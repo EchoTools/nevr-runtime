@@ -33,6 +33,16 @@
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
 
+// The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
+namespace {
+std::atomic<std::uint64_t> g_arenaReads{0};
+[[maybe_unused]] void StartReadCount() {
+  g_arenaReads.store(0);
+  nevr_quest::combat::SetReadCounterForTest(&g_arenaReads);
+}
+[[maybe_unused]] std::uint64_t ReadCount() { return g_arenaReads.load(); }
+}  // namespace
+
 using namespace nevr_quest::combat::dronemuzzle;
 namespace dk = nevr_quest::combat::dronekill;
 using sentinel::GotStatus;
@@ -664,12 +674,12 @@ static void TestArenaPaysNothing() {
   SetPose(1, 2, 3);
   g_tp.clear();
   g_fire.clear();
-  nevr_quest::combat::ResetSafeReadCallsForTest();
+  StartReadCount();
   nevr_quest::combat::level::ResetScanCallsForTest();
   CHECK(TpIn(TpSlot(), g_pose) == 0x1234 && TpOut(TpSlot(), g_pose) == 0x1234 && FireIn(FireSlot()) == 0x5678 && FireOut(FireSlot()) == 0x5678, "results");
   for (int i = 0; i < 10; ++i) Tick(0);
-  CHECK(nevr_quest::combat::SafeReadCallsForTest() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0, "arena: %llu reads and %llu scans",
-        static_cast<unsigned long long>(nevr_quest::combat::SafeReadCallsForTest()), static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
+  CHECK(ReadCount() == 0 && nevr_quest::combat::level::ScanCallsForTest() == 0, "arena: %llu reads and %llu scans",
+        static_cast<unsigned long long>(ReadCount()), static_cast<unsigned long long>(nevr_quest::combat::level::ScanCallsForTest()));
   CHECK(g_tp.size() == 2 && g_tp[0].pose == g_pose && g_tp[1].pose == g_pose && g_fire.size() == 2, "arena: a call was changed");
   float v3[3];
   memcpy(v3, Rec() + 0x11c, 12);

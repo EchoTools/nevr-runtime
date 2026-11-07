@@ -1,0 +1,1 @@
+On PC combat servers, OVERCHARGE and MEDIGUN use he_is_the_cat's released values.

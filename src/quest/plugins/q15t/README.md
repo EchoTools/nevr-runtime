@@ -24,8 +24,10 @@ tag's checkout, so the packaged library is that tag's build output, behind that 
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, sendguard, decals (#1619; draws nothing until a `decals.bin` is found), droneguard, peerclamp, hudmeter, `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
+- On: fxtrail, voipdrop, custctx, gunconnect, aibots, impactsnd, music, sensorwd, decals (#1619; draws nothing until a `decals.bin` is found), droneguard, peerclamp, hudmeter, `Q15T_SHIELDGAMMA=2`, the new-profile gun hand
   (`Q15T_T26`), and levelname with boosterpool (`Q15T_LEVELNAME`, kill file `levelname.off`).
+- The static BVH and the wall-fire check are not this plugin's: the runtime owns them (`src/quest/combat/bvh.h`, `src/quest/combat/wallfire.h`). Their
+  switches are the `combat:` keys `bvh`, `bvh_gate`, `bvh_touch` and `wallfire` in `config.yaml` (all on by default); no kill file switches either.
 - The three headset gates (party permissions, bot body, menu link) are not this plugin's: the runtime owns them
   (`src/quest/combat/headset_gates.h`). Their switches are the `combat:` keys `gate_perm`, `gate_bots`, `gate_link`, `gate_link_libs` in
   `config.yaml`; no kill file or data file switches any of the three gates. The bot-body gate acts only where this plugin's levelname is installed

@@ -6,7 +6,6 @@
 #include <cstring>
 
 #include "aibots.h"
-#include "bvh.h"
 #include "custctx.h"
 #include "decals.h"
 #include "droneguard.h"
@@ -24,10 +23,8 @@
 #include "script_redirect.h"
 #include "sensorwd.h"
 #include "shieldgamma.h"
-#include "sendguard.h"
 #include "module_switch.h"
 #include "voipdrop.h"
-#include "wallfire.h"
 #include "weapon_arm.h"
 
 #ifndef Q15T_BUILD_ID
@@ -65,20 +62,11 @@
 #ifndef Q15T_AIBOTS
 #define Q15T_AIBOTS 0
 #endif
-#ifndef Q15T_BVH
-#define Q15T_BVH 0
-#endif
-#ifndef Q15T_WALLFIRE  // needs Q15T_BVH
-#define Q15T_WALLFIRE 0
-#endif
 #ifndef Q15T_IMPACTSND
 #define Q15T_IMPACTSND 0
 #endif
 #ifndef Q15T_HUDMETER
 #define Q15T_HUDMETER 0
-#endif
-#ifndef Q15T_SENDGUARD  // script send to a game space that is not loaded: dropped, not faulted (sendguard.cpp)
-#define Q15T_SENDGUARD 0
 #endif
 #ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
 #define Q15T_SHIELDGAMMA 0
@@ -145,12 +133,6 @@ constexpr char kCompiledModules[] =
 #if Q15T_AIBOTS
     "aibots "
 #endif
-#if Q15T_BVH
-    "bvh "
-#endif
-#if Q15T_WALLFIRE
-    "wallfire "
-#endif
 #if Q15T_IMPACTSND
     "impactsnd "
 #endif
@@ -159,9 +141,6 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_SHIELDGAMMA
     "shieldgamma "
-#endif
-#if Q15T_SENDGUARD
-    "sendguard "
 #endif
 #if Q15T_LEVELNAME
     "levelname "
@@ -252,8 +231,6 @@ NEVR_PLUGIN_API uint32_t NevrPluginGetCapabilities(void) {
   if (Q15T_PEERCLAMP) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_AIBOTS) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
   if (Q15T_GUNCONNECT) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;
-  if (Q15T_BVH) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;       // walls block line of sight, bullets and AI
-  if (Q15T_WALLFIRE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // no shot through a wall
   if (Q15T_LEVELNAME) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the full-size global_mp loads
   return caps;
 }
@@ -279,7 +256,7 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
   [[maybe_unused]] const bool levelname_on = Q15T_LEVELNAME != 0 && !ModuleSwitchPresent("levelname.off");
   bool want_tick = false;
   [[maybe_unused]] const std::uintptr_t base = ctx->base_addr;
-  // The modules, in an order the docs fix: wallfire after bvh (ec, ecfx, powerboost, dronekill and dronemuzzle are the runtime's, src/quest/combat/).
+  // The modules, in an order the docs fix (bvh, wallfire, ec, ecfx, powerboost, dronekill and dronemuzzle are the runtime's, src/quest/combat/).
   // Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
   // ReportModule puts its name and result in the init record. Nothing here changes what InitEx returns (see the end).
 #if Q15T_FXTRAIL
@@ -297,16 +274,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #if Q15T_PEERCLAMP
   ReportModule("peerclamp", InstallPeerClamp(base));
 #endif
-#if Q15T_BVH
-  {
-    const InstallResult r = InstallBvh(base);
-    ReportModule("bvh", r);
-    if (r.status == SwapStatus::kOk) AddModuleTick("bvh", &BvhTick, &want_tick);
-  }
-#endif
-#if Q15T_WALLFIRE
-  ReportModule("wallfire", InstallWallfire(base));  // refuses itself (bvh_not_installed) when bvh did not install
-#endif
 #if Q15T_IMPACTSND
   ReportModule("impactsnd", InstallImpactSnd(base));
   AddModuleTick("impactsnd", &ImpactSndTick, &want_tick);  // the tick does nothing when the install was refused
@@ -316,9 +283,6 @@ NEVR_PLUGIN_API int NevrPluginInitEx(const NevrGameContext* ctx, const char* /*a
 #endif
 #if Q15T_SHIELDGAMMA
   ReportModule("shieldgamma", InstallShieldGamma(base, (Q15T_SHIELDGAMMA & 1) != 0, (Q15T_SHIELDGAMMA & 2) != 0));
-#endif
-#if Q15T_SENDGUARD
-  ReportModule("sendguard", InstallSendGuard(base));
 #endif
 #if Q15T_LEVELNAME
   if (levelname_on) {
